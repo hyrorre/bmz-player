@@ -8,9 +8,10 @@ pub mod bms_loader;
 pub mod db;
 pub mod hasher;
 pub mod player;
+pub mod judge;
 
 #[allow(non_camel_case_types)]
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub enum Judge {
     LN_PUSHING_PGREAT_EARLY = -20,
     LN_PUSHING_GREAT_EARLY = -19,
@@ -46,7 +47,7 @@ pub enum Rank {
 }
 
 #[allow(non_camel_case_types)]
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq, Eq, Ord, PartialOrd)]
 pub enum Mode {
     #[default]
     BEAT_5K = 0,
@@ -55,6 +56,12 @@ pub enum Mode {
     BEAT_14K = 3,
     POPN_5K = 4,
     POPN_9K = 5,
+}
+
+impl Mode {
+    pub fn is_bms(&self) -> bool {
+        *self <= Mode::BEAT_14K
+    }
 }
 
 #[allow(non_camel_case_types)]
