@@ -1,6 +1,0 @@
-[submodule "assets/skins/beatoraja"]
-	path = assets/skins/beatoraja
-	url = git@github.com:exch-bms2/beatoraja.git
-[submodule "assets/skins/ADFX02"]
-	path = assets/skins/ADFX02
-	url = git@github.com:AoiRic/ADFX02.git
