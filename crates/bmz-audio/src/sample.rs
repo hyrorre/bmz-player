@@ -47,6 +47,18 @@ impl DecodedSample {
             }
         }
     }
+
+    pub fn sample_stereo_linear(&self, position: f64) -> (f32, f32) {
+        let frame = position.floor().max(0.0) as usize;
+        let frac = (position - frame as f64) as f32;
+        let (left_a, right_a) = self.sample_stereo(frame);
+        let (left_b, right_b) = self.sample_stereo(frame + 1);
+        (lerp(left_a, left_b, frac), lerp(right_a, right_b, frac))
+    }
+}
+
+fn lerp(a: f32, b: f32, t: f32) -> f32 {
+    a + (b - a) * t
 }
 
 #[cfg(test)]
@@ -63,5 +75,12 @@ mod tests {
 
         assert_eq!(bank.get(SoundId(2)).unwrap().sample_stereo(0), (0.5, 0.5));
         assert!(bank.get(SoundId(1)).is_none());
+    }
+
+    #[test]
+    fn sample_stereo_linear_interpolates_between_frames() {
+        let sample = DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![0.0, 1.0] };
+
+        assert_eq!(sample.sample_stereo_linear(0.5), (0.5, 0.5));
     }
 }

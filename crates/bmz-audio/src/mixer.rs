@@ -58,7 +58,7 @@ impl MixerState {
                     break;
                 }
 
-                let (mut left, mut right) = sample.sample_stereo(sample_frame);
+                let (mut left, mut right) = sample.sample_stereo_linear(voice.sample_position);
                 left *= voice.sound.volume * pan_left(voice.sound.pan);
                 right *= voice.sound.volume * pan_right(voice.sound.pan);
 
@@ -133,7 +133,7 @@ mod tests {
 
         mixer.mix_stereo(&bank, 0, &mut output);
 
-        assert_eq!(output, vec![0.25, 0.25, 0.25, 0.25, 0.5, 0.5, 0.5, 0.5]);
+        assert_eq!(output, vec![0.25, 0.25, 0.375, 0.375, 0.5, 0.5, 0.625, 0.625]);
         assert!(!mixer.voices.is_empty());
     }
 }
