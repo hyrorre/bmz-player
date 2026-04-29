@@ -8,6 +8,7 @@ use crate::config::profile_config::ProfileConfig;
 use crate::config::save::{save_app_config, save_profile_config};
 use crate::paths::{AppPaths, ProfilePaths, resolve_app_paths, resolve_profile_paths};
 use crate::storage::library_db::LibraryDatabase;
+use crate::storage::scan::{ScanReport, scan_song_roots};
 use crate::storage::score_db::ScoreDatabase;
 
 pub struct BootstrappedApp {
@@ -17,6 +18,7 @@ pub struct BootstrappedApp {
     pub profile_paths: ProfilePaths,
     pub library_db: LibraryDatabase,
     pub score_db: ScoreDatabase,
+    pub startup_scan: Option<ScanReport>,
 }
 
 pub fn bootstrap() -> Result<BootstrappedApp> {
@@ -31,7 +33,17 @@ pub fn bootstrap() -> Result<BootstrappedApp> {
     crate::storage::migration::migrate_library_db(&app_paths.library_db)?;
     crate::storage::migration::migrate_score_db(&profile_paths.score_db)?;
 
-    let library_db = LibraryDatabase::open(&app_paths.library_db)?;
+    let mut library_db = LibraryDatabase::open(&app_paths.library_db)?;
+    let startup_scan = if app_config.scan.auto_rescan_on_startup {
+        Some(scan_song_roots(
+            &mut library_db,
+            &app_config.songs.roots,
+            &app_config.scan,
+            now_unix_seconds(),
+        )?)
+    } else {
+        None
+    };
     let score_db = ScoreDatabase::open(&profile_paths.score_db)?;
 
     Ok(BootstrappedApp {
@@ -41,6 +53,7 @@ pub fn bootstrap() -> Result<BootstrappedApp> {
         profile_paths,
         library_db,
         score_db,
+        startup_scan,
     })
 }
 
