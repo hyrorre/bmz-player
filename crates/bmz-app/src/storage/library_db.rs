@@ -101,6 +101,33 @@ impl LibraryDatabase {
         tx.commit()?;
         Ok(())
     }
+
+    pub fn upsert_root(&mut self, path: &Path, enabled: bool, recursive: bool) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO roots (path, enabled, recursive)
+            VALUES (?1, ?2, ?3)
+            ON CONFLICT(path) DO UPDATE SET
+                enabled = excluded.enabled,
+                recursive = excluded.recursive",
+            params![path_to_string(path), enabled, recursive],
+        )?;
+
+        self.conn
+            .query_row(
+                "SELECT id FROM roots WHERE path = ?1",
+                params![path_to_string(path)],
+                |row| row.get(0),
+            )
+            .map_err(Into::into)
+    }
+
+    pub fn update_root_scanned_at(&mut self, root_id: i64, scanned_at: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE roots SET last_scan_at = ?1 WHERE id = ?2",
+            params![scanned_at, root_id],
+        )?;
+        Ok(())
+    }
 }
 
 fn upsert_chart_file(conn: &Connection, record: &ChartImportRecord<'_>) -> Result<i64> {
@@ -425,5 +452,30 @@ mod tests {
 
         assert_eq!(count, 1);
         assert_eq!(code, "MissingWavDefinition");
+    }
+
+    #[test]
+    fn upsert_root_updates_existing_row() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase::from_connection(conn);
+
+        let first = db.upsert_root(Path::new("/songs"), true, true).unwrap();
+        let second = db.upsert_root(Path::new("/songs"), false, false).unwrap();
+        db.update_root_scanned_at(first, 42).unwrap();
+
+        let (count, enabled, recursive, last_scan_at): (u32, bool, bool, i64) = db
+            .conn()
+            .query_row("SELECT COUNT(*), enabled, recursive, last_scan_at FROM roots", [], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })
+            .unwrap();
+
+        assert_eq!(first, second);
+        assert_eq!(count, 1);
+        assert!(!enabled);
+        assert!(!recursive);
+        assert_eq!(last_scan_at, 42);
     }
 }
