@@ -3,6 +3,7 @@ use std::sync::Arc;
 use bmz_audio::clock::AudioClock;
 use bmz_audio::queue::{AudioScheduler, ScheduledSound};
 use bmz_chart::model::PlayableChart;
+use bmz_core::judge::Judge;
 use bmz_core::time::TimeUs;
 
 use crate::autoplay::AutoplayController;
@@ -120,6 +121,35 @@ pub fn apply_judge_outcome(
     events
 }
 
+pub fn schedule_keysounds(
+    session: &GameSession,
+    judgements: &[JudgementEvent],
+    audio: &mut dyn AudioScheduler,
+) {
+    for event in judgements {
+        if !plays_keysound(event.judge) {
+            continue;
+        }
+        let Some(note_id) = event.note_id else {
+            continue;
+        };
+        let Some(sound_id) = session.chart.note_by_id(note_id).and_then(|note| note.sound) else {
+            continue;
+        };
+
+        audio.schedule(ScheduledSound {
+            start_frame: session.audio_clock.time_to_output_frame(event.time),
+            sound_id,
+            volume: 1.0,
+            pan: 0.0,
+        });
+    }
+}
+
+fn plays_keysound(judge: Judge) -> bool {
+    matches!(judge, Judge::PGreat | Judge::Great | Judge::Good | Judge::Bad)
+}
+
 pub fn process_human_inputs(session: &mut GameSession) -> Vec<JudgementEvent> {
     let ctx = InputTimingContext {
         audio_clock: &session.audio_clock,
@@ -193,6 +223,7 @@ pub fn advance_session_frame(
         judgements.extend(process_replay_inputs(session, times.audio_now));
         judgements.extend(process_autoplay_inputs(session, times.audio_now));
         judgements.extend(process_misses(session, times.audio_now));
+        schedule_keysounds(session, &judgements, audio);
 
         if should_finish(session, times.audio_now) {
             session.state = PlayState::Finished;
@@ -206,4 +237,111 @@ pub fn should_finish(session: &GameSession, audio_now: TimeUs) -> bool {
     session.judge.is_exhausted(&session.chart)
         && session.bgm_scheduler.is_done(&session.chart)
         && audio_now.0 > session.chart.end_time.0 + SESSION_END_MARGIN_US
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicU64;
+
+    use bmz_chart::model::{ChartMetadata, NoteEvent, NoteKind, SoundAssetRef};
+    use bmz_core::chart::ChartIdentity;
+    use bmz_core::ids::{NoteId, SoundId};
+    use bmz_core::lane::Lane;
+    use bmz_core::time::{ChartTick, TimeUs};
+
+    use crate::input::backend::NullInputBackend;
+    use crate::input::binding::LaneBinding;
+    use crate::input::system::InputSystem;
+    use crate::input::translator::DefaultInputTranslator;
+    use crate::judge::model::JudgeWindow;
+
+    use super::*;
+
+    #[derive(Default)]
+    struct TestAudio {
+        scheduled: Vec<ScheduledSound>,
+    }
+
+    impl AudioScheduler for TestAudio {
+        fn schedule(&mut self, sound: ScheduledSound) {
+            self.scheduled.push(sound);
+        }
+    }
+
+    #[test]
+    fn advance_session_frame_schedules_autoplay_keysounds() {
+        let mut session = session_with_autoplay(chart_with_keysound());
+        let mut audio = TestAudio::default();
+
+        let frame = advance_session_frame(&mut session, &mut audio);
+
+        assert_eq!(frame.judgements.len(), 1);
+        assert_eq!(audio.scheduled.len(), 1);
+        assert_eq!(audio.scheduled[0].sound_id, SoundId(7));
+        assert_eq!(audio.scheduled[0].start_frame, 0);
+    }
+
+    fn session_with_autoplay(chart: PlayableChart) -> GameSession {
+        let chart = Arc::new(chart);
+        GameSession {
+            chart: Arc::clone(&chart),
+            audio_clock: AudioClock {
+                sample_rate: 48_000,
+                start_output_frame: 0,
+                chart_zero_time_us: 0,
+                current_frame: Arc::new(AtomicU64::new(0)),
+                running: false,
+            },
+            input_system: InputSystem {
+                backend: Box::new(NullInputBackend),
+                translator: Box::new(DefaultInputTranslator {
+                    binding: LaneBinding { entries: Vec::new() },
+                }),
+            },
+            judge: JudgeEngine::new(JudgeWindow {
+                pgreat_us: 16_000,
+                great_us: 40_000,
+                good_us: 80_000,
+                bad_us: 120_000,
+                empty_poor_fast_us: 500_000,
+                empty_poor_slow_us: 200_000,
+            }),
+            score: ScoreState::default(),
+            gauge: GaugeState::new(bmz_core::clear::GaugeType::Normal, 160.0, chart.total_notes),
+            replay_recorder: ReplayRecorder::default(),
+            replay_player: None,
+            autoplay: Some(AutoplayController::default()),
+            bgm_scheduler: BgmScheduler::default(),
+            offsets: PlayOffsets { input_offset_us: 0, visual_offset_us: 0 },
+            input_timestamp_anchor: None,
+            state: PlayState::Ready,
+        }
+    }
+
+    fn chart_with_keysound() -> PlayableChart {
+        let note = NoteEvent {
+            id: NoteId(1),
+            lane: Lane::Key1,
+            kind: NoteKind::Tap,
+            tick: ChartTick(0),
+            time: TimeUs(0),
+            sound: Some(SoundId(7)),
+        };
+        let mut lane_notes = std::array::from_fn(|_| Vec::new());
+        lane_notes[Lane::Key1.index()].push(note);
+
+        PlayableChart {
+            identity: ChartIdentity { file_md5: [0; 16], file_sha256: [0; 32] },
+            metadata: ChartMetadata::default(),
+            lane_notes,
+            long_notes: Vec::new(),
+            bgm_events: Vec::new(),
+            timing_events: Vec::new(),
+            bar_lines: Vec::new(),
+            sounds: vec![SoundAssetRef { id: SoundId(7), path: "sound.wav".into() }],
+            total_notes: 1,
+            end_time: TimeUs(0),
+        }
+    }
 }

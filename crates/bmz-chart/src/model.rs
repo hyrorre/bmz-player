@@ -109,4 +109,8 @@ impl PlayableChart {
     pub fn notes_for_lane(&self, lane: Lane) -> &[NoteEvent] {
         &self.lane_notes[lane.index()]
     }
+
+    pub fn note_by_id(&self, id: NoteId) -> Option<&NoteEvent> {
+        self.lane_notes.iter().flatten().find(|note| note.id == id)
+    }
 }
