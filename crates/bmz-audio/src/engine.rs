@@ -10,6 +10,14 @@ pub struct AudioEngine {
 }
 
 impl AudioEngine {
+    pub fn new(output_sample_rate: u32) -> Self {
+        Self {
+            queue: ScheduledSoundQueue::new(),
+            mixer: MixerState::new(output_sample_rate),
+            samples: SampleBank::default(),
+        }
+    }
+
     pub fn insert_sample(&mut self, id: bmz_core::ids::SoundId, sample: DecodedSample) {
         self.samples.insert(id, sample);
     }
