@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use anyhow::Result;
+use bmz_chart::import::error::ImportWarning;
 use bmz_chart::model::{NoteKind, PlayableChart, TimingEventKind};
 use rusqlite::{Connection, OptionalExtension, params};
 
@@ -27,6 +28,11 @@ impl LibraryDatabase {
         let conn = Connection::open(path)?;
         configure_connection(&conn)?;
         Ok(Self { conn })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_connection(conn: Connection) -> Self {
+        Self { conn }
     }
 
     pub fn conn(&self) -> &Connection {
@@ -58,6 +64,42 @@ impl LibraryDatabase {
             )
             .optional()
             .map_err(Into::into)
+    }
+
+    pub fn chart_file_id_by_path(&self, path: &Path) -> Result<Option<i64>> {
+        self.conn
+            .query_row(
+                "SELECT id FROM chart_files WHERE path = ?1",
+                params![path_to_string(path)],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    pub fn replace_import_warnings(
+        &mut self,
+        chart_file_id: i64,
+        warnings: &[ImportWarning],
+        created_at: i64,
+    ) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "DELETE FROM chart_import_warnings WHERE chart_file_id = ?1",
+            params![chart_file_id],
+        )?;
+
+        for warning in warnings {
+            let (code, message) = warning_details(warning);
+            tx.execute(
+                "INSERT INTO chart_import_warnings (chart_file_id, code, message, created_at)
+                VALUES (?1, ?2, ?3, ?4)",
+                params![chart_file_id, code, message, created_at],
+            )?;
+        }
+
+        tx.commit()?;
+        Ok(())
     }
 }
 
@@ -232,6 +274,50 @@ fn folder_path(path: &Path) -> String {
     path.parent().map(path_to_string).unwrap_or_default()
 }
 
+fn warning_details(warning: &ImportWarning) -> (&'static str, String) {
+    match warning {
+        ImportWarning::EncodingFallback => {
+            ("EncodingFallback", "decoded chart as Shift_JIS".to_string())
+        }
+        ImportWarning::TextReplacementOccurred => {
+            ("TextReplacementOccurred", "text decoder replaced invalid bytes".to_string())
+        }
+        ImportWarning::UnsupportedCommand { command } => {
+            ("UnsupportedCommand", format!("unsupported command: {command}"))
+        }
+        ImportWarning::UnsupportedChannel { channel } => {
+            ("UnsupportedChannel", format!("unsupported channel: {channel}"))
+        }
+        ImportWarning::MissingWavDefinition { key } => {
+            ("MissingWavDefinition", format!("missing WAV definition: {key}"))
+        }
+        ImportWarning::MissingSoundFile { path } => {
+            ("MissingSoundFile", format!("missing sound file: {}", path_to_string(path)))
+        }
+        ImportWarning::MissingBpmDefinition { key } => {
+            ("MissingBpmDefinition", format!("missing BPM definition: {key}"))
+        }
+        ImportWarning::MissingStopDefinition { key } => {
+            ("MissingStopDefinition", format!("missing STOP definition: {key}"))
+        }
+        ImportWarning::SuspiciousMeasureLength { measure } => {
+            ("SuspiciousMeasureLength", format!("suspicious measure length: {measure}"))
+        }
+        ImportWarning::LnobjWithoutStart { lane } => {
+            ("LnobjWithoutStart", format!("LNOBJ without start on lane {lane:?}"))
+        }
+        ImportWarning::UnterminatedLongNote { lane } => {
+            ("UnterminatedLongNote", format!("unterminated long note on lane {lane:?}"))
+        }
+        ImportWarning::ConflictingLongNoteSyntax { lane } => {
+            ("ConflictingLongNoteSyntax", format!("conflicting long note syntax on lane {lane:?}"))
+        }
+        ImportWarning::DuplicateDefinition { name } => {
+            ("DuplicateDefinition", format!("duplicate definition: {name}"))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use bmz_chart::hash::compute_chart_identity;
@@ -297,5 +383,47 @@ mod tests {
         assert_eq!(title, "song");
         assert_eq!(mode, "7K");
         assert_eq!(ln_type, "");
+    }
+
+    #[test]
+    fn replace_import_warnings_replaces_previous_rows() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase { conn };
+        let chart = chart("song");
+        let record = ChartImportRecord {
+            root_id: None,
+            file_path: Path::new("/songs/song.bms"),
+            file_size: 123,
+            modified_at: 1,
+            scanned_at: 2,
+            chart: &chart,
+        };
+        db.upsert_chart_import(&record).unwrap();
+        let chart_file_id = db.chart_file_id_by_path(record.file_path).unwrap().unwrap();
+
+        db.replace_import_warnings(
+            chart_file_id,
+            &[ImportWarning::UnsupportedChannel { channel: 99 }],
+            3,
+        )
+        .unwrap();
+        db.replace_import_warnings(
+            chart_file_id,
+            &[ImportWarning::MissingWavDefinition { key: 10 }],
+            4,
+        )
+        .unwrap();
+
+        let (count, code): (u32, String) = db
+            .conn()
+            .query_row("SELECT COUNT(*), MAX(code) FROM chart_import_warnings", [], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .unwrap();
+
+        assert_eq!(count, 1);
+        assert_eq!(code, "MissingWavDefinition");
     }
 }
