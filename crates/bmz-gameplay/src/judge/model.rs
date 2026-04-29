@@ -47,4 +47,5 @@ pub struct ActiveLongNote {
 pub struct LaneJudgeState {
     pub next_note_index: usize,
     pub active_long: Option<ActiveLongNote>,
+    pub last_press_time: Option<TimeUs>,
 }

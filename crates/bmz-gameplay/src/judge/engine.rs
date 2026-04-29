@@ -40,7 +40,7 @@ impl JudgeEngine {
                     break;
                 };
 
-                if now.0 <= note.time.0 + self.windows.empty_poor_slow_us {
+                if now.0 <= note.time.0 + self.windows.bad_us {
                     break;
                 }
 
@@ -86,13 +86,19 @@ impl JudgeEngine {
         let Some((idx, note)) =
             next_press_reference_note(chart, input.lane, lane_state.next_note_index)
         else {
-            return JudgeOutcome::default();
+            return classify_empty_poor_from_last_press(
+                lane_state.last_press_time,
+                input,
+                self.windows,
+            )
+            .unwrap_or_default();
         };
 
         let delta = input.time.0 - note.time.0;
 
         if let Some(judge) = classify_normal_delta(delta, self.windows) {
             lane_state.next_note_index = idx + 1;
+            lane_state.last_press_time = Some(note.time);
 
             if note.kind == NoteKind::LongStart {
                 if let Some(active) = make_active_long(chart, note.id) {
@@ -111,6 +117,12 @@ impl JudgeEngine {
                 }],
                 consumed_input: true,
             };
+        }
+
+        if let Some(outcome) =
+            classify_empty_poor_from_last_press(lane_state.last_press_time, input, self.windows)
+        {
+            return outcome;
         }
 
         if delta > self.windows.bad_us && delta <= self.windows.empty_poor_slow_us {
@@ -212,6 +224,25 @@ fn empty_poor(lane: Lane, side: TimingSide, delta: TimeUs, time: TimeUs) -> Judg
         }],
         consumed_input: false,
     }
+}
+
+fn classify_empty_poor_from_last_press(
+    last_press_time: Option<TimeUs>,
+    input: InputEvent,
+    windows: JudgeWindow,
+) -> Option<JudgeOutcome> {
+    let note_time = last_press_time?;
+    let delta = input.time.0 - note_time.0;
+
+    if delta >= 0 && delta <= windows.empty_poor_slow_us {
+        return Some(empty_poor(input.lane, TimingSide::Slow, TimeUs(delta), input.time));
+    }
+
+    if delta < 0 && (-delta) <= windows.empty_poor_fast_us {
+        return Some(empty_poor(input.lane, TimingSide::Fast, TimeUs(delta), input.time));
+    }
+
+    None
 }
 
 #[cfg(test)]
@@ -325,12 +356,30 @@ mod tests {
     }
 
     #[test]
-    fn miss_waits_until_slow_empty_poor_window_has_passed() {
+    fn double_press_after_normal_judge_is_slow_empty_poor() {
         let chart = chart_with_tap(TimeUs(1_000_000));
         let mut engine = JudgeEngine::new(windows());
 
-        let still_candidate = engine.process_misses(&chart, TimeUs(1_190_000));
-        let missed = engine.process_misses(&chart, TimeUs(1_210_000));
+        let first = engine.process_input(&chart, press_at(TimeUs(1_000_000)));
+        let second = engine.process_input(&chart, press_at(TimeUs(1_005_000)));
+
+        assert_eq!(first.events[0].judge, Judge::PGreat);
+        assert_eq!(first.events[0].note_id, Some(NoteId(1)));
+        assert!(!second.consumed_input);
+        assert_eq!(second.events.len(), 1);
+        assert_eq!(second.events[0].judge, Judge::EmptyPoor);
+        assert_eq!(second.events[0].side, TimingSide::Slow);
+        assert_eq!(second.events[0].note_id, None);
+        assert_eq!(engine.lanes[Lane::Key1.index()].next_note_index, 1);
+    }
+
+    #[test]
+    fn miss_is_reported_after_bad_window() {
+        let chart = chart_with_tap(TimeUs(1_000_000));
+        let mut engine = JudgeEngine::new(windows());
+
+        let still_candidate = engine.process_misses(&chart, TimeUs(1_110_000));
+        let missed = engine.process_misses(&chart, TimeUs(1_130_000));
 
         assert!(still_candidate.events.is_empty());
         assert_eq!(missed.events.len(), 1);
