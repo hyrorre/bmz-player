@@ -23,6 +23,17 @@ pub trait SampleLoader {
     fn load(&mut self, path: &Path) -> Result<DecodedSample, SampleLoadError>;
 }
 
+#[derive(Debug, Default)]
+pub struct WavSampleLoader;
+
+impl SampleLoader for WavSampleLoader {
+    fn load(&mut self, path: &Path) -> Result<DecodedSample, SampleLoadError> {
+        let bytes = std::fs::read(path)
+            .map_err(|source| SampleLoadError::Io { path: path.to_path_buf(), source })?;
+        decode_wav(path, &bytes)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct LoadedSampleReport {
     pub path: PathBuf,
@@ -58,6 +69,112 @@ fn load_asset(
             status: LoadedSampleStatus::Failed(error.to_string()),
         },
     }
+}
+
+fn decode_wav(path: &Path, bytes: &[u8]) -> Result<DecodedSample, SampleLoadError> {
+    if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        return Err(decode_error(path, "not a RIFF/WAVE file"));
+    }
+
+    let mut offset = 12;
+    let mut format: Option<WavFormat> = None;
+    let mut data: Option<&[u8]> = None;
+
+    while offset + 8 <= bytes.len() {
+        let id = &bytes[offset..offset + 4];
+        let len = le_u32(&bytes[offset + 4..offset + 8]) as usize;
+        offset += 8;
+        if offset + len > bytes.len() {
+            return Err(decode_error(path, "chunk extends past end of file"));
+        }
+
+        let chunk = &bytes[offset..offset + len];
+        match id {
+            b"fmt " => format = Some(parse_wav_format(path, chunk)?),
+            b"data" => data = Some(chunk),
+            _ => {}
+        }
+        offset += len + (len % 2);
+    }
+
+    let format = format.ok_or_else(|| decode_error(path, "missing fmt chunk"))?;
+    let data = data.ok_or_else(|| decode_error(path, "missing data chunk"))?;
+    let frames = decode_wav_frames(path, format, data)?;
+    Ok(DecodedSample { channels: format.channels, sample_rate: format.sample_rate, frames })
+}
+
+#[derive(Debug, Clone, Copy)]
+struct WavFormat {
+    audio_format: u16,
+    channels: u16,
+    sample_rate: u32,
+    bits_per_sample: u16,
+}
+
+fn parse_wav_format(path: &Path, chunk: &[u8]) -> Result<WavFormat, SampleLoadError> {
+    if chunk.len() < 16 {
+        return Err(decode_error(path, "fmt chunk is too short"));
+    }
+
+    let format = WavFormat {
+        audio_format: le_u16(&chunk[0..2]),
+        channels: le_u16(&chunk[2..4]),
+        sample_rate: le_u32(&chunk[4..8]),
+        bits_per_sample: le_u16(&chunk[14..16]),
+    };
+
+    if format.channels == 0 {
+        return Err(decode_error(path, "channel count is zero"));
+    }
+
+    Ok(format)
+}
+
+fn decode_wav_frames(
+    path: &Path,
+    format: WavFormat,
+    data: &[u8],
+) -> Result<Vec<f32>, SampleLoadError> {
+    match (format.audio_format, format.bits_per_sample) {
+        (1, 8) => Ok(data.iter().map(|sample| (*sample as f32 - 128.0) / 128.0).collect()),
+        (1, 16) => {
+            if data.len() % 2 != 0 {
+                return Err(decode_error(path, "16-bit PCM data length is odd"));
+            }
+            Ok(data
+                .chunks_exact(2)
+                .map(|sample| i16::from_le_bytes([sample[0], sample[1]]) as f32 / 32768.0)
+                .collect())
+        }
+        (3, 32) => {
+            if data.len() % 4 != 0 {
+                return Err(decode_error(path, "32-bit float data length is not divisible by 4"));
+            }
+            Ok(data
+                .chunks_exact(4)
+                .map(|sample| f32::from_le_bytes([sample[0], sample[1], sample[2], sample[3]]))
+                .collect())
+        }
+        _ => Err(decode_error(
+            path,
+            format!(
+                "unsupported WAV format {} with {} bits per sample",
+                format.audio_format, format.bits_per_sample
+            ),
+        )),
+    }
+}
+
+fn decode_error(path: &Path, message: impl Into<String>) -> SampleLoadError {
+    SampleLoadError::Decode { path: path.to_path_buf(), message: message.into() }
+}
+
+fn le_u16(bytes: &[u8]) -> u16 {
+    u16::from_le_bytes([bytes[0], bytes[1]])
+}
+
+fn le_u32(bytes: &[u8]) -> u32 {
+    u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
 }
 
 #[cfg(test)]
@@ -104,6 +221,42 @@ mod tests {
         assert!(engine.samples.get(SoundId(2)).is_none());
     }
 
+    #[test]
+    fn wav_loader_decodes_pcm16_mono() {
+        let path = write_temp_wav(&[
+            wav_header(1, 1, 44_100, 16, 4).as_slice(),
+            &[0x00, 0x00, 0xff, 0x7f],
+        ]);
+        let mut loader = WavSampleLoader;
+
+        let sample = loader.load(&path).unwrap();
+
+        assert_eq!(sample.channels, 1);
+        assert_eq!(sample.sample_rate, 44_100);
+        assert_eq!(sample.frames.len(), 2);
+        assert_eq!(sample.frames[0], 0.0);
+        assert!((sample.frames[1] - 0.9999695).abs() < 0.00001);
+
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn wav_loader_decodes_float32_stereo() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&0.25_f32.to_le_bytes());
+        data.extend_from_slice(&(-0.5_f32).to_le_bytes());
+        let path =
+            write_temp_wav(&[wav_header(3, 2, 48_000, 32, data.len() as u32).as_slice(), &data]);
+        let mut loader = WavSampleLoader;
+
+        let sample = loader.load(&path).unwrap();
+
+        assert_eq!(sample.channels, 2);
+        assert_eq!(sample.sample_stereo(0), (0.25, -0.5));
+
+        std::fs::remove_file(path).unwrap();
+    }
+
     fn chart() -> PlayableChart {
         PlayableChart {
             identity: compute_chart_identity(b"samples"),
@@ -124,5 +277,46 @@ mod tests {
             total_notes: 0,
             end_time: TimeUs(0),
         }
+    }
+
+    fn wav_header(
+        audio_format: u16,
+        channels: u16,
+        sample_rate: u32,
+        bits_per_sample: u16,
+        data_len: u32,
+    ) -> Vec<u8> {
+        let byte_rate = sample_rate * channels as u32 * bits_per_sample as u32 / 8;
+        let block_align = channels * bits_per_sample / 8;
+        let riff_len = 36 + data_len;
+        let mut out = Vec::new();
+        out.extend_from_slice(b"RIFF");
+        out.extend_from_slice(&riff_len.to_le_bytes());
+        out.extend_from_slice(b"WAVE");
+        out.extend_from_slice(b"fmt ");
+        out.extend_from_slice(&16_u32.to_le_bytes());
+        out.extend_from_slice(&audio_format.to_le_bytes());
+        out.extend_from_slice(&channels.to_le_bytes());
+        out.extend_from_slice(&sample_rate.to_le_bytes());
+        out.extend_from_slice(&byte_rate.to_le_bytes());
+        out.extend_from_slice(&block_align.to_le_bytes());
+        out.extend_from_slice(&bits_per_sample.to_le_bytes());
+        out.extend_from_slice(b"data");
+        out.extend_from_slice(&data_len.to_le_bytes());
+        out
+    }
+
+    fn write_temp_wav(parts: &[&[u8]]) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "bmz-audio-wav-{}-{}.wav",
+            std::process::id(),
+            parts.iter().map(|part| part.len()).sum::<usize>()
+        ));
+        let mut bytes = Vec::new();
+        for part in parts {
+            bytes.extend_from_slice(part);
+        }
+        std::fs::write(&path, bytes).unwrap();
+        path
     }
 }
