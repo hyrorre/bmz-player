@@ -89,6 +89,7 @@ fn parse_command_line(
         "GENRE" => metadata.genre = value.to_string(),
         "PLAYLEVEL" => metadata.play_level = value.to_string(),
         "DIFFICULTY" => metadata.difficulty_name = value.to_string(),
+        "RANK" | "PLAYER" | "LNTYPE" | "LNMODE" => {}
         "STAGEFILE" => metadata.stage_file = value.to_string(),
         "PREVIEW" => metadata.preview_file = value.to_string(),
         "TOTAL" => metadata.total = value.parse::<f64>().ok(),
@@ -100,32 +101,89 @@ fn parse_command_line(
         "LNOBJ" => *lnobj_wav_key = parse_base36_key(value),
         _ if command_upper.starts_with("WAV") && command_upper.len() == 5 => {
             if let Some(key) = parse_base36_key(&command_upper[3..]) {
-                resources.wavs.push(WavDef { key, path: value.into() });
+                replace_or_push_wav(resources, WavDef { key, path: value.into() }, warnings);
             }
         }
         _ if command_upper.starts_with("BMP") && command_upper.len() == 5 => {
             if let Some(key) = parse_base36_key(&command_upper[3..]) {
-                resources.bmps.push(BmpDef { key, path: value.into() });
+                replace_or_push_bmp(resources, BmpDef { key, path: value.into() }, warnings);
             }
         }
         _ if command_upper.starts_with("BPM") && command_upper.len() == 5 => {
             if let (Some(key), Ok(bpm)) =
                 (parse_base36_key(&command_upper[3..]), value.parse::<f64>())
             {
-                resources.bpm_table.push(BpmDef { key, bpm });
+                replace_or_push_bpm(resources, BpmDef { key, bpm }, warnings);
             }
         }
         _ if command_upper.starts_with("STOP") && command_upper.len() == 6 => {
             if let (Some(key), Ok(value)) =
                 (parse_base36_key(&command_upper[4..]), value.parse::<u64>())
             {
-                resources.stop_table.push(StopDef { key, value });
+                replace_or_push_stop(resources, StopDef { key, value }, warnings);
             }
         }
         _ => warnings.push(ImportWarning::UnsupportedCommand { command: command.to_string() }),
     }
 
     Ok(())
+}
+
+fn replace_or_push_wav(
+    resources: &mut IntermediateResources,
+    value: WavDef,
+    warnings: &mut Vec<ImportWarning>,
+) {
+    if let Some(existing) = resources.wavs.iter_mut().find(|existing| existing.key == value.key) {
+        warnings.push(ImportWarning::DuplicateDefinition { name: format!("WAV{:02X}", value.key) });
+        *existing = value;
+    } else {
+        resources.wavs.push(value);
+    }
+}
+
+fn replace_or_push_bmp(
+    resources: &mut IntermediateResources,
+    value: BmpDef,
+    warnings: &mut Vec<ImportWarning>,
+) {
+    if let Some(existing) = resources.bmps.iter_mut().find(|existing| existing.key == value.key) {
+        warnings.push(ImportWarning::DuplicateDefinition { name: format!("BMP{:02X}", value.key) });
+        *existing = value;
+    } else {
+        resources.bmps.push(value);
+    }
+}
+
+fn replace_or_push_bpm(
+    resources: &mut IntermediateResources,
+    value: BpmDef,
+    warnings: &mut Vec<ImportWarning>,
+) {
+    if let Some(existing) =
+        resources.bpm_table.iter_mut().find(|existing| existing.key == value.key)
+    {
+        warnings.push(ImportWarning::DuplicateDefinition { name: format!("BPM{:02X}", value.key) });
+        *existing = value;
+    } else {
+        resources.bpm_table.push(value);
+    }
+}
+
+fn replace_or_push_stop(
+    resources: &mut IntermediateResources,
+    value: StopDef,
+    warnings: &mut Vec<ImportWarning>,
+) {
+    if let Some(existing) =
+        resources.stop_table.iter_mut().find(|existing| existing.key == value.key)
+    {
+        warnings
+            .push(ImportWarning::DuplicateDefinition { name: format!("STOP{:02X}", value.key) });
+        *existing = value;
+    } else {
+        resources.stop_table.push(value);
+    }
 }
 
 fn parse_channel_line(
@@ -400,5 +458,29 @@ mod tests {
             chart.measures[2].start_tick,
             ChartTick(TICKS_PER_MEASURE as u64 / 2 + TICKS_PER_MEASURE as u64)
         );
+    }
+
+    #[test]
+    fn duplicate_resource_definitions_replace_previous_value() {
+        let text = "\
+#PLAYER 1
+#RANK 2
+#WAV01 old.wav
+#WAV01 new.wav
+";
+        let mut warnings = Vec::new();
+
+        let chart = parse_bms_text(text, &mut warnings).unwrap();
+
+        assert_eq!(chart.resources.wavs.len(), 1);
+        assert_eq!(chart.resources.wavs[0].path, std::path::PathBuf::from("new.wav"));
+        assert!(warnings.iter().any(|warning| matches!(
+            warning,
+            ImportWarning::DuplicateDefinition { name } if name == "WAV01"
+        )));
+        assert!(!warnings.iter().any(|warning| matches!(
+            warning,
+            ImportWarning::UnsupportedCommand { command } if command == "PLAYER" || command == "RANK"
+        )));
     }
 }
