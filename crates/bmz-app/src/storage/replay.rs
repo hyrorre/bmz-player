@@ -1,7 +1,7 @@
 use std::io::Write;
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use bmz_core::replay::ReplayEvent;
 use bmz_gameplay::replay::ReplayPlayer;
 use serde::{Deserialize, Serialize};
@@ -51,6 +51,14 @@ pub fn load_replay_player(path: &Path) -> Result<ReplayPlayer> {
     Ok(ReplayPlayer { events: replay.events, next_index: 0 })
 }
 
+pub fn load_replay_player_for_chart(path: &Path, chart_sha256: [u8; 32]) -> Result<ReplayPlayer> {
+    let replay = load_replay(path)?;
+    if replay.chart_sha256_bytes()? != chart_sha256 {
+        bail!("replay chart hash does not match selected chart");
+    }
+    Ok(ReplayPlayer { events: replay.events, next_index: 0 })
+}
+
 pub fn replay_file_name(chart_sha256: [u8; 32], played_at: i64) -> String {
     format!("{}-{played_at}.toml", hex_encode(&chart_sha256))
 }
@@ -63,6 +71,33 @@ fn hex_encode(bytes: &[u8]) -> String {
         out.push(HEX[(byte & 0x0f) as usize] as char);
     }
     out
+}
+
+impl ReplayFile {
+    pub fn chart_sha256_bytes(&self) -> Result<[u8; 32]> {
+        hex_decode_32(&self.chart_sha256)
+    }
+}
+
+fn hex_decode_32(value: &str) -> Result<[u8; 32]> {
+    if value.len() != 64 {
+        bail!("expected 64 hex characters");
+    }
+
+    let mut out = [0_u8; 32];
+    for (index, chunk) in value.as_bytes().chunks_exact(2).enumerate() {
+        out[index] = (hex_digit(chunk[0])? << 4) | hex_digit(chunk[1])?;
+    }
+    Ok(out)
+}
+
+fn hex_digit(byte: u8) -> Result<u8> {
+    match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'a'..=b'f' => Ok(byte - b'a' + 10),
+        b'A'..=b'F' => Ok(byte - b'A' + 10),
+        _ => bail!("invalid hex digit"),
+    }
 }
 
 #[cfg(test)]
@@ -127,6 +162,22 @@ mod tests {
 
         assert_eq!(player.next_index, 0);
         assert_eq!(player.events, replay.events);
+
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn load_replay_player_for_chart_rejects_mismatched_hash() {
+        let path = std::env::temp_dir().join(format!(
+            "bmz-replay-player-mismatch-{}-{}.toml",
+            std::process::id(),
+            TimeUs(44).0
+        ));
+        let replay = ReplayFile::new([2; 32], 1_700_000_052, None, Vec::new());
+        save_replay(&path, &replay).unwrap();
+
+        assert!(load_replay_player_for_chart(&path, [3; 32]).is_err());
+        assert!(load_replay_player_for_chart(&path, [2; 32]).is_ok());
 
         std::fs::remove_file(path).unwrap();
     }
