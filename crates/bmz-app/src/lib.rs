@@ -1,4 +1,5 @@
 pub mod app;
+pub mod audio;
 pub mod bootstrap;
 pub mod config;
 pub mod paths;
