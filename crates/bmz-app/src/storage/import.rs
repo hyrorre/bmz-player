@@ -73,6 +73,8 @@ mod tests {
 #00099:01
 ",
         );
+        let key_path = path.parent().unwrap().join("key.wav");
+        write_file(&key_path, b"");
 
         let imported = import_chart_file(&mut db, &path, None, 1_700_000_010).unwrap();
 
@@ -90,7 +92,8 @@ mod tests {
         assert_eq!(title, "Storage Import");
         assert_eq!(warning_code, "UnsupportedChannel");
 
-        std::fs::remove_file(path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_file(key_path).unwrap();
     }
 
     fn write_temp_bms(text: &str) -> std::path::PathBuf {
@@ -101,5 +104,11 @@ mod tests {
         file.write_all(text.as_bytes()).unwrap();
         file.sync_all().unwrap();
         path
+    }
+
+    fn write_file(path: &Path, bytes: &[u8]) {
+        let mut file = std::fs::File::create(path).unwrap();
+        file.write_all(bytes).unwrap();
+        file.sync_all().unwrap();
     }
 }

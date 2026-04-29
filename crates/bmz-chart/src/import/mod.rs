@@ -57,6 +57,9 @@ mod tests {
 #00111:01
 ";
         let path = write_temp_bms(text);
+        let base_dir = path.parent().unwrap().to_path_buf();
+        write_temp_file(&base_dir.join("key.wav"));
+        write_temp_file(&base_dir.join("bgm.wav"));
 
         let result = import_bms_chart(&path, None).unwrap();
         let expected_identity = compute_chart_identity(text.as_bytes());
@@ -89,7 +92,9 @@ mod tests {
             TimingEventKind::Stop { duration_us } if duration_us == 100_000
         )));
 
-        std::fs::remove_file(path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_file(base_dir.join("key.wav")).unwrap();
+        std::fs::remove_file(base_dir.join("bgm.wav")).unwrap();
     }
 
     fn write_temp_bms(text: &str) -> std::path::PathBuf {
@@ -100,5 +105,11 @@ mod tests {
         file.write_all(text.as_bytes()).unwrap();
         file.sync_all().unwrap();
         path
+    }
+
+    fn write_temp_file(path: &Path) {
+        let mut file = std::fs::File::create(path).unwrap();
+        file.write_all(b"").unwrap();
+        file.sync_all().unwrap();
     }
 }

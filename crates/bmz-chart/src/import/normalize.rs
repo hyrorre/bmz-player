@@ -53,12 +53,12 @@ struct PlayableChartDraft {
 }
 
 pub fn normalize_chart(
-    _source_path: &Path,
+    source_path: &Path,
     intermediate: IntermediateChart,
     warnings: &mut Vec<ImportWarning>,
 ) -> Result<PlayableChart, ImportError> {
     let metadata = normalize_metadata(&intermediate.metadata);
-    let sound_table = build_sound_table(&intermediate);
+    let sound_table = build_sound_table(source_path, &intermediate, warnings);
     let tick_objects = materialize_tick_objects(&intermediate)?;
     let tick_timing_events = collect_timing_events(&intermediate, warnings)?;
     let timing_map =
@@ -113,14 +113,23 @@ fn normalize_metadata(input: &IntermediateMetadata) -> ChartMetadata {
     }
 }
 
-fn build_sound_table(intermediate: &IntermediateChart) -> SoundTable {
+fn build_sound_table(
+    source_path: &Path,
+    intermediate: &IntermediateChart,
+    warnings: &mut Vec<ImportWarning>,
+) -> SoundTable {
     let mut by_wav_key = HashMap::new();
     let mut assets = Vec::new();
+    let base_dir = source_path.parent().unwrap_or_else(|| Path::new(""));
 
     for wav in &intermediate.resources.wavs {
         let id = SoundId(assets.len() as u32);
+        let path = if wav.path.is_absolute() { wav.path.clone() } else { base_dir.join(&wav.path) };
+        if !path.exists() {
+            warnings.push(ImportWarning::MissingSoundFile { path: path.clone() });
+        }
         by_wav_key.insert(wav.key, id);
-        assets.push(SoundAssetRef { id, path: wav.path.clone() });
+        assets.push(SoundAssetRef { id, path });
     }
 
     SoundTable { by_wav_key, assets }
