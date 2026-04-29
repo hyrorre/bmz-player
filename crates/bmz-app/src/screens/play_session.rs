@@ -71,6 +71,7 @@ pub fn build_game_session(
         autoplay,
         bgm_scheduler: BgmScheduler::default(),
         offsets: play_offsets_from_profile(profile),
+        input_timestamp_anchor: None,
         state: PlayState::Ready,
     }
 }

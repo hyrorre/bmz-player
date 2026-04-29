@@ -8,7 +8,7 @@ use bmz_core::time::TimeUs;
 use crate::autoplay::AutoplayController;
 use crate::gauge::GaugeState;
 use crate::input::system::InputSystem;
-use crate::input::translator::InputTimingContext;
+use crate::input::translator::{InputTimestampAnchor, InputTimingContext};
 use crate::judge::engine::JudgeEngine;
 use crate::judge::model::{JudgeOutcome, JudgementEvent};
 use crate::replay::{ReplayPlayer, ReplayRecorder};
@@ -55,6 +55,7 @@ pub struct GameSession {
     pub autoplay: Option<AutoplayController>,
     pub bgm_scheduler: BgmScheduler,
     pub offsets: PlayOffsets,
+    pub input_timestamp_anchor: Option<InputTimestampAnchor>,
     pub state: PlayState,
 }
 
@@ -123,7 +124,7 @@ pub fn process_human_inputs(session: &mut GameSession) -> Vec<JudgementEvent> {
     let ctx = InputTimingContext {
         audio_clock: &session.audio_clock,
         offsets: session.offsets,
-        timestamp_anchor: None,
+        timestamp_anchor: session.input_timestamp_anchor,
     };
     let inputs = session.input_system.collect_game_inputs(&ctx);
     let mut judgements = Vec::new();
