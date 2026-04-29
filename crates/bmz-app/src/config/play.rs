@@ -1,9 +1,11 @@
 use bmz_core::clear::GaugeType;
 use bmz_core::lane::Lane;
+use bmz_gameplay::input::backend::PhysicalControl;
+use bmz_gameplay::input::binding::{BindingEntry, LaneBinding};
 use bmz_gameplay::judge::model::JudgeWindow;
 use bmz_gameplay::session::PlayOffsets;
 
-use super::profile_config::{GaugeTypeConfig, LaneConfig, ProfileConfig};
+use super::profile_config::{GaugeTypeConfig, LaneConfig, ProfileConfig, ProfileInputConfig};
 
 pub const DEFAULT_JUDGE_WINDOW: JudgeWindow = JudgeWindow {
     pgreat_us: 16_000,
@@ -45,6 +47,31 @@ pub fn lane_from_config(config: LaneConfig) -> Lane {
     }
 }
 
+pub fn lane_binding_from_profile_input(input: &ProfileInputConfig) -> LaneBinding {
+    LaneBinding {
+        entries: input
+            .bindings
+            .iter()
+            .map(|entry| BindingEntry {
+                device: None,
+                control: control_from_config(&entry.device, &entry.control),
+                lane: lane_from_config(entry.lane),
+            })
+            .collect(),
+    }
+}
+
+fn control_from_config(device: &str, control: &str) -> PhysicalControl {
+    match device.to_ascii_lowercase().as_str() {
+        "gamepad" => PhysicalControl::GamepadButton(control.to_string()),
+        "hid" => control
+            .parse::<u32>()
+            .map(PhysicalControl::HidButton)
+            .unwrap_or_else(|_| PhysicalControl::KeyboardKey(control.to_string())),
+        _ => PhysicalControl::KeyboardKey(control.to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -66,5 +93,18 @@ mod tests {
     fn maps_profile_enums_to_runtime_types() {
         assert_eq!(gauge_type_from_config(GaugeTypeConfig::Hard), GaugeType::Hard);
         assert_eq!(lane_from_config(LaneConfig::Key7), Lane::Key7);
+    }
+
+    #[test]
+    fn maps_profile_input_bindings_to_lane_binding() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+
+        let binding = lane_binding_from_profile_input(&profile.input);
+
+        assert_eq!(binding.entries.len(), 8);
+        assert!(binding.entries.iter().any(|entry| {
+            entry.lane == Lane::Scratch
+                && entry.control == PhysicalControl::KeyboardKey("LShift".to_string())
+        }));
     }
 }

@@ -27,7 +27,7 @@ pub struct PlayDefaultsConfig {
     pub auto_play: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum GaugeTypeConfig {
     AssistEasy,
@@ -38,7 +38,7 @@ pub enum GaugeTypeConfig {
     Hazard,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum RandomOptionConfig {
     Off,
@@ -48,7 +48,7 @@ pub enum RandomOptionConfig {
     SRandom,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum LaneEffectConfig {
     Off,
@@ -57,7 +57,7 @@ pub enum LaneEffectConfig {
     HiddenSudden,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum AssistOptionConfig {
     None,
@@ -72,7 +72,7 @@ pub struct JudgeConfig {
     pub judge_algorithm: JudgeAlgorithmConfig,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum JudgeAlgorithmConfig {
     Combo,
@@ -103,14 +103,14 @@ pub struct BindingConfigEntry {
     pub lane: LaneConfig,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum ScratchInputMode {
     Normal,
     AnyDirection,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum LaneConfig {
     Scratch,
@@ -140,7 +140,7 @@ pub struct RivalEntry {
     pub ir_user_id: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum RivalSourceConfig {
     None,
