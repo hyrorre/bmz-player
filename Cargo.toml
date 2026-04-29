@@ -1,0 +1,35 @@
+[workspace]
+members = [
+    "crates/bmz-core",
+    "crates/bmz-chart",
+    "crates/bmz-audio",
+    "crates/bmz-gameplay",
+    "crates/bmz-render",
+    "crates/bmz-app",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+license = "MIT OR Apache-2.0"
+authors = ["hyrorre"]
+
+[workspace.dependencies]
+anyhow = "1.0"
+thiserror = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+md5 = "0.7"
+sha2 = "0.10"
+encoding_rs = "0.8"
+
+cpal = "0.15"
+wgpu = "0.20"
+winit = "0.30"

@@ -1,0 +1,172 @@
+use std::path::Path;
+
+use anyhow::Result;
+use rusqlite::Connection;
+
+use super::common::configure_connection;
+
+pub struct Migration {
+    pub version: i32,
+    pub statements: &'static [&'static str],
+}
+
+pub fn migrate_library_db(path: &Path) -> Result<()> {
+    let mut conn = Connection::open(path)?;
+    configure_connection(&conn)?;
+    run_migrations(&mut conn, LIBRARY_MIGRATIONS)
+}
+
+pub fn migrate_score_db(path: &Path) -> Result<()> {
+    let mut conn = Connection::open(path)?;
+    configure_connection(&conn)?;
+    run_migrations(&mut conn, SCORE_MIGRATIONS)
+}
+
+pub fn run_migrations(conn: &mut Connection, migrations: &[Migration]) -> Result<()> {
+    let current_version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+
+    for migration in migrations {
+        if migration.version > current_version {
+            let tx = conn.transaction()?;
+            for stmt in migration.statements {
+                tx.execute_batch(stmt)?;
+            }
+            tx.pragma_update(None, "user_version", migration.version)?;
+            tx.commit()?;
+        }
+    }
+
+    Ok(())
+}
+
+pub const LIBRARY_MIGRATIONS: &[Migration] = &[Migration {
+    version: 1,
+    statements: &[
+        "CREATE TABLE roots (
+            id INTEGER PRIMARY KEY,
+            path TEXT NOT NULL UNIQUE,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            recursive INTEGER NOT NULL DEFAULT 1,
+            last_scan_at INTEGER
+        );",
+        "CREATE TABLE chart_files (
+            id INTEGER PRIMARY KEY,
+            root_id INTEGER,
+            path TEXT NOT NULL UNIQUE,
+            file_size INTEGER NOT NULL,
+            modified_at INTEGER NOT NULL,
+            md5 BLOB NOT NULL,
+            sha256 BLOB NOT NULL,
+            scanned_at INTEGER NOT NULL,
+            parse_status INTEGER NOT NULL,
+            FOREIGN KEY(root_id) REFERENCES roots(id)
+        );",
+        "CREATE TABLE charts (
+            id INTEGER PRIMARY KEY,
+            sha256 BLOB NOT NULL UNIQUE,
+            md5 BLOB NOT NULL,
+            title TEXT NOT NULL,
+            subtitle TEXT NOT NULL,
+            artist TEXT NOT NULL,
+            subartist TEXT NOT NULL,
+            genre TEXT NOT NULL,
+            difficulty_name TEXT NOT NULL,
+            play_level TEXT NOT NULL,
+            mode TEXT NOT NULL,
+            total_notes INTEGER NOT NULL,
+            initial_bpm REAL NOT NULL,
+            min_bpm REAL,
+            max_bpm REAL,
+            length_ms INTEGER,
+            ln_type INTEGER,
+            has_bga INTEGER NOT NULL DEFAULT 0,
+            has_long_notes INTEGER NOT NULL DEFAULT 0,
+            has_mines INTEGER NOT NULL DEFAULT 0,
+            folder_path TEXT NOT NULL,
+            stage_file TEXT NOT NULL,
+            preview_file TEXT NOT NULL,
+            import_version INTEGER NOT NULL
+        );",
+        "CREATE TABLE chart_file_links (
+            chart_id INTEGER NOT NULL,
+            chart_file_id INTEGER NOT NULL,
+            PRIMARY KEY(chart_id, chart_file_id),
+            FOREIGN KEY(chart_id) REFERENCES charts(id),
+            FOREIGN KEY(chart_file_id) REFERENCES chart_files(id)
+        );",
+        "CREATE TABLE chart_import_warnings (
+            id INTEGER PRIMARY KEY,
+            chart_file_id INTEGER NOT NULL,
+            code TEXT NOT NULL,
+            message TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY(chart_file_id) REFERENCES chart_files(id)
+        );",
+        "CREATE INDEX idx_chart_files_sha256 ON chart_files(sha256);",
+        "CREATE INDEX idx_chart_files_root_id ON chart_files(root_id);",
+        "CREATE INDEX idx_charts_title ON charts(title);",
+        "CREATE INDEX idx_charts_artist ON charts(artist);",
+        "CREATE INDEX idx_charts_folder_path ON charts(folder_path);",
+        "CREATE INDEX idx_charts_mode ON charts(mode);",
+    ],
+}];
+
+pub const SCORE_MIGRATIONS: &[Migration] = &[Migration {
+    version: 1,
+    statements: &[
+        "CREATE TABLE score_history (
+            id INTEGER PRIMARY KEY,
+            chart_sha256 BLOB NOT NULL,
+            played_at INTEGER NOT NULL,
+            clear_type INTEGER NOT NULL,
+            gauge_type INTEGER,
+            gauge_value REAL NOT NULL,
+            total_notes INTEGER NOT NULL,
+            ex_score INTEGER NOT NULL,
+            max_combo INTEGER NOT NULL,
+            fast_pgreat INTEGER NOT NULL,
+            slow_pgreat INTEGER NOT NULL,
+            fast_great INTEGER NOT NULL,
+            slow_great INTEGER NOT NULL,
+            fast_good INTEGER NOT NULL,
+            slow_good INTEGER NOT NULL,
+            fast_bad INTEGER NOT NULL,
+            slow_bad INTEGER NOT NULL,
+            fast_poor INTEGER NOT NULL,
+            slow_poor INTEGER NOT NULL,
+            fast_empty_poor INTEGER NOT NULL,
+            slow_empty_poor INTEGER NOT NULL,
+            random_seed INTEGER,
+            gauge_option INTEGER,
+            assist_mask INTEGER NOT NULL DEFAULT 0,
+            autoplay INTEGER NOT NULL DEFAULT 0,
+            replay_path TEXT NOT NULL
+        );",
+        "CREATE TABLE score_best (
+            chart_sha256 BLOB PRIMARY KEY,
+            clear_type INTEGER NOT NULL,
+            gauge_type INTEGER,
+            gauge_value REAL NOT NULL,
+            ex_score INTEGER NOT NULL,
+            max_combo INTEGER NOT NULL,
+            fast_pgreat INTEGER NOT NULL,
+            slow_pgreat INTEGER NOT NULL,
+            fast_great INTEGER NOT NULL,
+            slow_great INTEGER NOT NULL,
+            fast_good INTEGER NOT NULL,
+            slow_good INTEGER NOT NULL,
+            fast_bad INTEGER NOT NULL,
+            slow_bad INTEGER NOT NULL,
+            fast_poor INTEGER NOT NULL,
+            slow_poor INTEGER NOT NULL,
+            fast_empty_poor INTEGER NOT NULL,
+            slow_empty_poor INTEGER NOT NULL,
+            played_at INTEGER NOT NULL,
+            replay_path TEXT NOT NULL
+        );",
+        "CREATE INDEX idx_score_history_chart_sha256 ON score_history(chart_sha256);",
+        "CREATE INDEX idx_score_history_played_at ON score_history(played_at DESC);",
+        "CREATE INDEX idx_score_best_clear_type ON score_best(clear_type);",
+        "CREATE INDEX idx_score_best_ex_score ON score_best(ex_score DESC);",
+    ],
+}];

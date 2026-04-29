@@ -1,0 +1,13 @@
+[package]
+name = "bmz-render"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+wgpu.workspace = true
+
+bmz-core = { path = "../bmz-core" }
+bmz-chart = { path = "../bmz-chart" }
+bmz-gameplay = { path = "../bmz-gameplay" }
