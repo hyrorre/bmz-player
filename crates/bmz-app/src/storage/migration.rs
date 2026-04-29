@@ -58,7 +58,7 @@ pub const LIBRARY_MIGRATIONS: &[Migration] = &[Migration {
             md5 BLOB NOT NULL,
             sha256 BLOB NOT NULL,
             scanned_at INTEGER NOT NULL,
-            parse_status INTEGER NOT NULL,
+            parse_status TEXT NOT NULL,
             FOREIGN KEY(root_id) REFERENCES roots(id)
         );",
         "CREATE TABLE charts (
@@ -78,7 +78,7 @@ pub const LIBRARY_MIGRATIONS: &[Migration] = &[Migration {
             min_bpm REAL,
             max_bpm REAL,
             length_ms INTEGER,
-            ln_type INTEGER,
+            ln_type TEXT NOT NULL,
             has_bga INTEGER NOT NULL DEFAULT 0,
             has_long_notes INTEGER NOT NULL DEFAULT 0,
             has_mines INTEGER NOT NULL DEFAULT 0,
