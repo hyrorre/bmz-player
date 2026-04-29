@@ -40,7 +40,7 @@ impl JudgeEngine {
                     break;
                 };
 
-                if now.0 <= note.time.0 + self.windows.bad_us {
+                if now.0 <= note.time.0 + self.windows.empty_poor_slow_us {
                     break;
                 }
 
@@ -211,5 +211,132 @@ fn empty_poor(lane: Lane, side: TimingSide, delta: TimeUs, time: TimeUs) -> Judg
             time,
         }],
         consumed_input: false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bmz_chart::model::{ChartMetadata, SoundAssetRef, SoundEvent};
+    use bmz_core::chart::ChartIdentity;
+    use bmz_core::input::InputSource;
+
+    use super::*;
+
+    fn windows() -> JudgeWindow {
+        JudgeWindow {
+            pgreat_us: 16_000,
+            great_us: 40_000,
+            good_us: 80_000,
+            bad_us: 120_000,
+            empty_poor_fast_us: 500_000,
+            empty_poor_slow_us: 200_000,
+        }
+    }
+
+    fn chart_with_tap(time: TimeUs) -> PlayableChart {
+        let lane = Lane::Key1;
+        let note = NoteEvent {
+            id: NoteId(1),
+            lane,
+            kind: NoteKind::Tap,
+            tick: Default::default(),
+            time,
+            sound: None,
+        };
+        let mut lane_notes = std::array::from_fn(|_| Vec::new());
+        lane_notes[lane.index()].push(note);
+
+        PlayableChart {
+            identity: ChartIdentity { file_md5: [0; 16], file_sha256: [0; 32] },
+            metadata: ChartMetadata::default(),
+            lane_notes,
+            long_notes: Vec::new(),
+            bgm_events: Vec::<SoundEvent>::new(),
+            timing_events: Vec::new(),
+            bar_lines: Vec::new(),
+            sounds: Vec::<SoundAssetRef>::new(),
+            total_notes: 1,
+            end_time: time,
+        }
+    }
+
+    fn press_at(time: TimeUs) -> InputEvent {
+        InputEvent { source: InputSource::Human, lane: Lane::Key1, kind: InputKind::Press, time }
+    }
+
+    #[test]
+    fn normal_window_consumes_note() {
+        let chart = chart_with_tap(TimeUs(1_000_000));
+        let mut engine = JudgeEngine::new(windows());
+
+        let outcome = engine.process_input(&chart, press_at(TimeUs(1_030_000)));
+
+        assert!(outcome.consumed_input);
+        assert_eq!(outcome.events.len(), 1);
+        assert_eq!(outcome.events[0].judge, Judge::Great);
+        assert_eq!(outcome.events[0].side, TimingSide::Slow);
+        assert_eq!(outcome.events[0].note_id, Some(NoteId(1)));
+        assert_eq!(engine.lanes[Lane::Key1.index()].next_note_index, 1);
+    }
+
+    #[test]
+    fn slow_empty_poor_does_not_consume_note() {
+        let chart = chart_with_tap(TimeUs(1_000_000));
+        let mut engine = JudgeEngine::new(windows());
+
+        let outcome = engine.process_input(&chart, press_at(TimeUs(1_150_000)));
+
+        assert!(!outcome.consumed_input);
+        assert_eq!(outcome.events.len(), 1);
+        assert_eq!(outcome.events[0].judge, Judge::EmptyPoor);
+        assert_eq!(outcome.events[0].side, TimingSide::Slow);
+        assert_eq!(outcome.events[0].note_id, None);
+        assert_eq!(engine.lanes[Lane::Key1.index()].next_note_index, 0);
+    }
+
+    #[test]
+    fn fast_empty_poor_does_not_consume_note() {
+        let chart = chart_with_tap(TimeUs(1_000_000));
+        let mut engine = JudgeEngine::new(windows());
+
+        let outcome = engine.process_input(&chart, press_at(TimeUs(700_000)));
+
+        assert!(!outcome.consumed_input);
+        assert_eq!(outcome.events.len(), 1);
+        assert_eq!(outcome.events[0].judge, Judge::EmptyPoor);
+        assert_eq!(outcome.events[0].side, TimingSide::Fast);
+        assert_eq!(outcome.events[0].note_id, None);
+        assert_eq!(engine.lanes[Lane::Key1.index()].next_note_index, 0);
+    }
+
+    #[test]
+    fn outside_empty_poor_windows_is_unjudged() {
+        let chart = chart_with_tap(TimeUs(1_000_000));
+        let mut engine = JudgeEngine::new(windows());
+
+        let too_late = engine.process_input(&chart, press_at(TimeUs(1_250_000)));
+        let too_early = engine.process_input(&chart, press_at(TimeUs(400_000)));
+
+        assert!(too_late.events.is_empty());
+        assert!(!too_late.consumed_input);
+        assert!(too_early.events.is_empty());
+        assert!(!too_early.consumed_input);
+        assert_eq!(engine.lanes[Lane::Key1.index()].next_note_index, 0);
+    }
+
+    #[test]
+    fn miss_waits_until_slow_empty_poor_window_has_passed() {
+        let chart = chart_with_tap(TimeUs(1_000_000));
+        let mut engine = JudgeEngine::new(windows());
+
+        let still_candidate = engine.process_misses(&chart, TimeUs(1_190_000));
+        let missed = engine.process_misses(&chart, TimeUs(1_210_000));
+
+        assert!(still_candidate.events.is_empty());
+        assert_eq!(missed.events.len(), 1);
+        assert_eq!(missed.events[0].judge, Judge::Poor);
+        assert_eq!(missed.events[0].side, TimingSide::Slow);
+        assert_eq!(missed.events[0].note_id, Some(NoteId(1)));
+        assert_eq!(engine.lanes[Lane::Key1.index()].next_note_index, 1);
     }
 }
