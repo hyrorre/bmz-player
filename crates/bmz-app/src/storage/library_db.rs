@@ -170,6 +170,22 @@ impl LibraryDatabase {
         let rows = stmt.query_map(params![limit, offset], chart_list_item_from_row)?;
         rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
     }
+
+    pub fn primary_chart_file_path(&self, chart_id: i64) -> Result<Option<String>> {
+        self.conn
+            .query_row(
+                "SELECT chart_files.path
+                FROM chart_file_links
+                JOIN chart_files ON chart_files.id = chart_file_links.chart_file_id
+                WHERE chart_file_links.chart_id = ?1
+                ORDER BY chart_files.path COLLATE NOCASE
+                LIMIT 1",
+                params![chart_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(Into::into)
+    }
 }
 
 fn chart_list_item_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChartListItem> {
@@ -577,5 +593,30 @@ mod tests {
         assert_eq!(charts[0].title, "Alpha");
         assert_eq!(charts[1].title, "beta");
         assert_eq!(charts[0].mode, "7K");
+    }
+
+    #[test]
+    fn primary_chart_file_path_returns_linked_file() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase::from_connection(conn);
+        let chart = chart("song");
+        let chart_id = db
+            .upsert_chart_import(&ChartImportRecord {
+                root_id: None,
+                file_path: Path::new("/songs/song.bms"),
+                file_size: 1,
+                modified_at: 1,
+                scanned_at: 1,
+                chart: &chart,
+            })
+            .unwrap();
+
+        assert_eq!(
+            db.primary_chart_file_path(chart_id).unwrap(),
+            Some("/songs/song.bms".to_string())
+        );
+        assert_eq!(db.primary_chart_file_path(chart_id + 1).unwrap(), None);
     }
 }
