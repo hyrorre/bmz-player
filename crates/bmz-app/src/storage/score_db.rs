@@ -66,6 +66,21 @@ pub struct BestScoreSummary {
     pub replay_path: String,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScoreHistoryEntry {
+    pub id: i64,
+    pub chart_sha256: [u8; 32],
+    pub played_at: i64,
+    pub clear_type: String,
+    pub gauge_type: String,
+    pub gauge_value: f32,
+    pub total_notes: u32,
+    pub ex_score: u32,
+    pub max_combo: u32,
+    pub autoplay: bool,
+    pub replay_path: String,
+}
+
 impl ScoreDatabase {
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)?;
@@ -136,6 +151,28 @@ impl ScoreDatabase {
 
         Ok(out)
     }
+
+    pub fn recent_history(&self, limit: u32, offset: u32) -> Result<Vec<ScoreHistoryEntry>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT
+                id,
+                chart_sha256,
+                played_at,
+                clear_type,
+                gauge_type,
+                gauge_value,
+                total_notes,
+                ex_score,
+                max_combo,
+                autoplay,
+                replay_path
+            FROM score_history
+            ORDER BY played_at DESC, id DESC
+            LIMIT ?1 OFFSET ?2",
+        )?;
+        let rows = stmt.query_map(params![limit, offset], score_history_entry_from_row)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
+    }
 }
 
 fn best_score_summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<BestScoreSummary> {
@@ -152,6 +189,26 @@ fn best_score_summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Best
         max_combo: row.get(5)?,
         played_at: row.get(6)?,
         replay_path: row.get(7)?,
+    })
+}
+
+fn score_history_entry_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ScoreHistoryEntry> {
+    let sha256_blob: Vec<u8> = row.get(1)?;
+    let mut chart_sha256 = [0_u8; 32];
+    chart_sha256.copy_from_slice(&sha256_blob[..32]);
+
+    Ok(ScoreHistoryEntry {
+        id: row.get(0)?,
+        chart_sha256,
+        played_at: row.get(2)?,
+        clear_type: row.get(3)?,
+        gauge_type: row.get(4)?,
+        gauge_value: row.get(5)?,
+        total_notes: row.get(6)?,
+        ex_score: row.get(7)?,
+        max_combo: row.get(8)?,
+        autoplay: row.get(9)?,
+        replay_path: row.get(10)?,
     })
 }
 
@@ -469,5 +526,31 @@ mod tests {
         assert!(record.autoplay);
         assert_eq!(record.gauge_option, "Hard");
         assert_eq!(record.replay_path, "");
+    }
+
+    #[test]
+    fn recent_history_returns_newest_scores_first() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut db = ScoreDatabase::from_connection(conn);
+        let mut older = record(20, ClearType::Normal);
+        older.played_at = 1;
+        older.chart_sha256 = [1; 32];
+        let mut newer = record(10, ClearType::Easy);
+        newer.played_at = 2;
+        newer.chart_sha256 = [2; 32];
+        newer.autoplay = true;
+
+        db.insert_score(&older).unwrap();
+        db.insert_score(&newer).unwrap();
+
+        let history = db.recent_history(10, 0).unwrap();
+
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].chart_sha256, [2; 32]);
+        assert_eq!(history[0].played_at, 2);
+        assert!(history[0].autoplay);
+        assert_eq!(history[1].chart_sha256, [1; 32]);
     }
 }
