@@ -2,6 +2,7 @@ use std::path::Path;
 
 use anyhow::Result;
 use bmz_core::clear::{ClearType, GaugeType};
+use bmz_gameplay::result::PlayResult;
 use bmz_gameplay::score::ScoreState;
 use rusqlite::{Connection, OptionalExtension, params};
 
@@ -25,6 +26,32 @@ pub struct ScoreRecord {
     pub assist_mask: u32,
     pub autoplay: bool,
     pub replay_path: String,
+}
+
+impl ScoreRecord {
+    pub fn from_play_result(
+        result: &PlayResult,
+        played_at: i64,
+        random_seed: Option<i64>,
+        gauge_option: impl Into<String>,
+        assist_mask: u32,
+        replay_path: impl Into<String>,
+    ) -> Self {
+        Self {
+            chart_sha256: result.chart_sha256,
+            played_at,
+            clear_type: result.clear_type,
+            gauge_type: Some(result.gauge_type),
+            gauge_value: result.gauge_value,
+            total_notes: result.total_notes,
+            score: result.score.clone(),
+            random_seed,
+            gauge_option: gauge_option.into(),
+            assist_mask,
+            autoplay: result.autoplay,
+            replay_path: replay_path.into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -315,6 +342,7 @@ mod tests {
     use bmz_core::lane::Lane;
     use bmz_core::time::TimeUs;
     use bmz_gameplay::judge::model::JudgementEvent;
+    use bmz_gameplay::result::PlayResult;
     use bmz_gameplay::score::ScoreState;
 
     use super::*;
@@ -415,5 +443,31 @@ mod tests {
         assert_eq!(scores[0].gauge_type, "");
         assert_eq!(scores[1].chart_sha256, [1; 32]);
         assert_eq!(scores[1].replay_path, "replay/one.bzr");
+    }
+
+    #[test]
+    fn score_record_can_be_built_from_play_result() {
+        let result = PlayResult {
+            chart_sha256: [9; 32],
+            clear_type: ClearType::Normal,
+            gauge_type: GaugeType::Hard,
+            gauge_value: 76.5,
+            total_notes: 1,
+            score: score_with_ex_score(2),
+            autoplay: true,
+        };
+
+        let record =
+            ScoreRecord::from_play_result(&result, 1_700_000_040, Some(123), "Hard", 0, "");
+
+        assert_eq!(record.chart_sha256, [9; 32]);
+        assert_eq!(record.played_at, 1_700_000_040);
+        assert_eq!(record.clear_type, ClearType::Normal);
+        assert_eq!(record.gauge_type, Some(GaugeType::Hard));
+        assert_eq!(record.gauge_value, 76.5);
+        assert_eq!(record.score.ex_score(), 2);
+        assert!(record.autoplay);
+        assert_eq!(record.gauge_option, "Hard");
+        assert_eq!(record.replay_path, "");
     }
 }
