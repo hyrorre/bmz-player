@@ -3,6 +3,8 @@ use std::sync::atomic::AtomicU64;
 
 use anyhow::{Context, Result, bail};
 use bmz_audio::clock::AudioClock;
+use bmz_audio::engine::AudioEngine;
+use bmz_audio::loader::{LoadedSampleReport, SampleLoader, WavSampleLoader, load_chart_samples};
 use bmz_chart::import::import_bms_chart;
 use bmz_chart::model::PlayableChart;
 use bmz_gameplay::autoplay::AutoplayController;
@@ -27,6 +29,12 @@ pub struct PlaySessionOptions {
     pub autoplay: bool,
     pub replay_player: Option<ReplayPlayer>,
     pub sample_rate: u32,
+}
+
+pub struct PreparedPlaySession {
+    pub session: GameSession,
+    pub audio: AudioEngine,
+    pub sample_report: Vec<LoadedSampleReport>,
 }
 
 impl Default for PlaySessionOptions {
@@ -90,13 +98,45 @@ pub fn load_game_session_for_chart(
     Ok(build_game_session(Arc::new(import.chart), profile, options))
 }
 
+pub fn build_audio_engine_for_chart(
+    chart: &PlayableChart,
+    sample_rate: u32,
+    loader: &mut dyn SampleLoader,
+) -> (AudioEngine, Vec<LoadedSampleReport>) {
+    let mut audio = AudioEngine::new(sample_rate);
+    let sample_report = load_chart_samples(&mut audio, chart, loader);
+    (audio, sample_report)
+}
+
+pub fn load_prepared_play_session_for_chart(
+    library_db: &LibraryDatabase,
+    chart_id: i64,
+    profile: &ProfileConfig,
+    options: PlaySessionOptions,
+) -> Result<PreparedPlaySession> {
+    let Some(path) = library_db.primary_chart_file_path(chart_id)? else {
+        bail!("chart file not found for chart id {chart_id}");
+    };
+    let import = import_bms_chart(std::path::Path::new(&path), None)
+        .with_context(|| format!("failed to import chart file: {path}"))?;
+    let chart = Arc::new(import.chart);
+    let mut loader = WavSampleLoader;
+    let (audio, sample_report) =
+        build_audio_engine_for_chart(&chart, options.sample_rate, &mut loader);
+    let session = build_game_session(chart, profile, options);
+
+    Ok(PreparedPlaySession { session, audio, sample_report })
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
+    use bmz_audio::loader::LoadedSampleStatus;
     use bmz_chart::hash::compute_chart_identity;
-    use bmz_chart::model::{ChartMetadata, PlayableChart};
+    use bmz_chart::model::{ChartMetadata, PlayableChart, SoundAssetRef};
     use bmz_core::clear::GaugeType;
+    use bmz_core::ids::SoundId;
     use bmz_core::time::TimeUs;
     use rusqlite::Connection;
 
@@ -160,6 +200,50 @@ mod tests {
         std::fs::remove_file(path).unwrap();
     }
 
+    #[test]
+    fn load_prepared_play_session_for_chart_loads_audio_samples() {
+        let (path, wav_path) = write_temp_bms_with_wav(
+            "\
+#TITLE Prepared
+#BPM 120
+#WAV01 test.wav
+#00011:01
+",
+        );
+        let imported = import_bms_chart(&path, None).unwrap();
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut library_db = LibraryDatabase::from_connection(conn);
+        let chart_id = library_db
+            .upsert_chart_import(&ChartImportRecord {
+                root_id: None,
+                file_path: &path,
+                file_size: 1,
+                modified_at: 1,
+                scanned_at: 1,
+                chart: &imported.chart,
+            })
+            .unwrap();
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+
+        let prepared = load_prepared_play_session_for_chart(
+            &library_db,
+            chart_id,
+            &profile,
+            PlaySessionOptions::default(),
+        )
+        .unwrap();
+
+        assert_eq!(prepared.session.chart.metadata.title, "Prepared");
+        assert_eq!(prepared.audio.mixer.output_sample_rate, 48_000);
+        assert!(matches!(prepared.sample_report[0].status, LoadedSampleStatus::Loaded));
+        assert!(prepared.audio.samples.get(SoundId(0)).is_some());
+
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_file(wav_path).unwrap();
+    }
+
     fn chart() -> PlayableChart {
         PlayableChart {
             identity: compute_chart_identity(b"session"),
@@ -174,7 +258,7 @@ mod tests {
             bgm_events: Vec::new(),
             timing_events: Vec::new(),
             bar_lines: Vec::new(),
-            sounds: Vec::new(),
+            sounds: Vec::<SoundAssetRef>::new(),
             total_notes: 1,
             end_time: TimeUs(0),
         }
@@ -187,5 +271,46 @@ mod tests {
             .join(format!("bmz-play-session-{}-{stamp}.bms", std::process::id()));
         std::fs::write(&path, text).unwrap();
         path
+    }
+
+    fn write_temp_bms_with_wav(text: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let stamp =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir();
+        let bms_path = dir.join(format!("bmz-prepared-session-{}-{stamp}.bms", std::process::id()));
+        let wav_name = format!("bmz-prepared-session-{}-{stamp}.wav", std::process::id());
+        let wav_path = dir.join(&wav_name);
+        std::fs::write(&bms_path, text.replace("test.wav", &wav_name)).unwrap();
+        std::fs::write(
+            &wav_path,
+            [wav_header(1, 1, 48_000, 16, 2).as_slice(), &[0x00, 0x40]].concat(),
+        )
+        .unwrap();
+        (bms_path, wav_path)
+    }
+
+    fn wav_header(
+        format: u16,
+        channels: u16,
+        sample_rate: u32,
+        bits: u16,
+        data_len: u32,
+    ) -> Vec<u8> {
+        let byte_rate = sample_rate * channels as u32 * bits as u32 / 8;
+        let block_align = channels * bits / 8;
+        let mut out = Vec::new();
+        out.extend_from_slice(b"RIFF");
+        out.extend_from_slice(&(36 + data_len).to_le_bytes());
+        out.extend_from_slice(b"WAVEfmt ");
+        out.extend_from_slice(&16_u32.to_le_bytes());
+        out.extend_from_slice(&format.to_le_bytes());
+        out.extend_from_slice(&channels.to_le_bytes());
+        out.extend_from_slice(&sample_rate.to_le_bytes());
+        out.extend_from_slice(&byte_rate.to_le_bytes());
+        out.extend_from_slice(&block_align.to_le_bytes());
+        out.extend_from_slice(&bits.to_le_bytes());
+        out.extend_from_slice(b"data");
+        out.extend_from_slice(&data_len.to_le_bytes());
+        out
     }
 }
