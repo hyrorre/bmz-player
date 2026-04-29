@@ -27,6 +27,18 @@ pub struct ScoreRecord {
     pub replay_path: String,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct BestScoreSummary {
+    pub chart_sha256: [u8; 32],
+    pub clear_type: String,
+    pub gauge_type: String,
+    pub gauge_value: f32,
+    pub ex_score: u32,
+    pub max_combo: u32,
+    pub played_at: i64,
+    pub replay_path: String,
+}
+
 impl ScoreDatabase {
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)?;
@@ -61,6 +73,54 @@ impl ScoreDatabase {
             .optional()
             .map_err(Into::into)
     }
+
+    pub fn best_scores_for_charts(
+        &self,
+        chart_sha256s: &[[u8; 32]],
+    ) -> Result<Vec<BestScoreSummary>> {
+        let mut out = Vec::new();
+        let mut stmt = self.conn.prepare(
+            "SELECT
+                chart_sha256,
+                clear_type,
+                gauge_type,
+                gauge_value,
+                ex_score,
+                max_combo,
+                played_at,
+                replay_path
+            FROM score_best
+            WHERE chart_sha256 = ?1",
+        )?;
+
+        for sha256 in chart_sha256s {
+            if let Some(summary) = stmt
+                .query_row(params![sha256.as_slice()], best_score_summary_from_row)
+                .optional()?
+            {
+                out.push(summary);
+            }
+        }
+
+        Ok(out)
+    }
+}
+
+fn best_score_summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<BestScoreSummary> {
+    let sha256_blob: Vec<u8> = row.get(0)?;
+    let mut chart_sha256 = [0_u8; 32];
+    chart_sha256.copy_from_slice(&sha256_blob[..32]);
+
+    Ok(BestScoreSummary {
+        chart_sha256,
+        clear_type: row.get(1)?,
+        gauge_type: row.get(2)?,
+        gauge_value: row.get(3)?,
+        ex_score: row.get(4)?,
+        max_combo: row.get(5)?,
+        played_at: row.get(6)?,
+        replay_path: row.get(7)?,
+    })
 }
 
 fn insert_score_history(conn: &Connection, record: &ScoreRecord) -> Result<()> {
@@ -325,5 +385,30 @@ mod tests {
         db.insert_score(&record(30, ClearType::Easy)).unwrap();
 
         assert_eq!(db.best_ex_score([7; 32]).unwrap(), Some(30));
+    }
+
+    #[test]
+    fn best_scores_for_charts_returns_existing_scores() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut db = ScoreDatabase { conn };
+        let mut first = record(20, ClearType::Normal);
+        first.chart_sha256 = [1; 32];
+        first.replay_path = "replay/one.bzr".to_string();
+        let mut second = record(10, ClearType::Easy);
+        second.chart_sha256 = [2; 32];
+        second.gauge_type = None;
+
+        db.insert_score(&first).unwrap();
+        db.insert_score(&second).unwrap();
+
+        let scores = db.best_scores_for_charts(&[[2; 32], [3; 32], [1; 32]]).unwrap();
+
+        assert_eq!(scores.len(), 2);
+        assert_eq!(scores[0].chart_sha256, [2; 32]);
+        assert_eq!(scores[0].gauge_type, "");
+        assert_eq!(scores[1].chart_sha256, [1; 32]);
+        assert_eq!(scores[1].replay_path, "replay/one.bzr");
     }
 }
