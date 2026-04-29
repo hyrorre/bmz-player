@@ -120,7 +120,11 @@ pub fn apply_judge_outcome(
 }
 
 pub fn process_human_inputs(session: &mut GameSession) -> Vec<JudgementEvent> {
-    let ctx = InputTimingContext { audio_clock: &session.audio_clock, offsets: session.offsets };
+    let ctx = InputTimingContext {
+        audio_clock: &session.audio_clock,
+        offsets: session.offsets,
+        timestamp_anchor: None,
+    };
     let inputs = session.input_system.collect_game_inputs(&ctx);
     let mut judgements = Vec::new();
     for input in inputs {
