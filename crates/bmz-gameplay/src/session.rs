@@ -10,7 +10,7 @@ use crate::gauge::GaugeState;
 use crate::input::system::InputSystem;
 use crate::input::translator::InputTimingContext;
 use crate::judge::engine::JudgeEngine;
-use crate::judge::model::JudgeOutcome;
+use crate::judge::model::{JudgeOutcome, JudgementEvent};
 use crate::replay::{ReplayPlayer, ReplayRecorder};
 use crate::score::ScoreState;
 
@@ -63,6 +63,13 @@ pub struct FrameOutput<TSnapshot> {
     pub state: PlayState,
 }
 
+#[derive(Debug, Clone)]
+pub struct SessionFrame {
+    pub times: FrameTimes,
+    pub judgements: Vec<JudgementEvent>,
+    pub state: PlayState,
+}
+
 impl BgmScheduler {
     pub fn schedule_until(
         &mut self,
@@ -99,43 +106,95 @@ pub fn compute_frame_times(session: &GameSession) -> FrameTimes {
     FrameTimes { audio_now, render_now, audio_schedule_until }
 }
 
-pub fn apply_judge_outcome(session: &mut GameSession, outcome: JudgeOutcome) {
+pub fn apply_judge_outcome(
+    session: &mut GameSession,
+    outcome: JudgeOutcome,
+) -> Vec<JudgementEvent> {
+    let mut events = Vec::with_capacity(outcome.events.len());
     for event in outcome.events {
         session.score.apply(&event);
         session.gauge.apply_judge(event.judge, 1.0);
+        events.push(event);
     }
+    events
 }
 
-pub fn process_human_inputs(session: &mut GameSession) {
+pub fn process_human_inputs(session: &mut GameSession) -> Vec<JudgementEvent> {
     let ctx = InputTimingContext { audio_clock: &session.audio_clock, offsets: session.offsets };
     let inputs = session.input_system.collect_game_inputs(&ctx);
+    let mut judgements = Vec::new();
     for input in inputs {
         session.replay_recorder.record(input);
         let outcome = session.judge.process_input(&session.chart, input);
-        apply_judge_outcome(session, outcome);
+        judgements.extend(apply_judge_outcome(session, outcome));
     }
+    judgements
 }
 
-pub fn process_replay_inputs(session: &mut GameSession, audio_now: TimeUs) {
+pub fn process_replay_inputs(session: &mut GameSession, audio_now: TimeUs) -> Vec<JudgementEvent> {
     let Some(player) = &mut session.replay_player else {
-        return;
+        return Vec::new();
     };
 
+    let mut judgements = Vec::new();
     for input in player.poll_until(audio_now) {
         let outcome = session.judge.process_input(&session.chart, input);
-        apply_judge_outcome(session, outcome);
+        judgements.extend(apply_judge_outcome(session, outcome));
     }
+    judgements
 }
 
-pub fn process_autoplay_inputs(session: &mut GameSession, audio_now: TimeUs) {
+pub fn process_autoplay_inputs(
+    session: &mut GameSession,
+    audio_now: TimeUs,
+) -> Vec<JudgementEvent> {
     let Some(auto) = &mut session.autoplay else {
-        return;
+        return Vec::new();
     };
 
+    let mut judgements = Vec::new();
     for input in auto.poll_until(&session.chart, audio_now) {
         let outcome = session.judge.process_input(&session.chart, input);
-        apply_judge_outcome(session, outcome);
+        judgements.extend(apply_judge_outcome(session, outcome));
     }
+    judgements
+}
+
+pub fn process_misses(session: &mut GameSession, audio_now: TimeUs) -> Vec<JudgementEvent> {
+    let outcome = session.judge.process_misses(&session.chart, audio_now);
+    apply_judge_outcome(session, outcome)
+}
+
+pub fn advance_session_frame(
+    session: &mut GameSession,
+    audio: &mut dyn AudioScheduler,
+) -> SessionFrame {
+    if session.state == PlayState::Ready {
+        session.state = PlayState::Playing;
+    }
+
+    let times = compute_frame_times(session);
+    let mut judgements = Vec::new();
+
+    if session.state == PlayState::Playing {
+        session.bgm_scheduler.schedule_until(
+            &session.chart,
+            &session.audio_clock,
+            times.audio_schedule_until,
+            audio,
+        );
+
+        judgements.extend(process_human_inputs(session));
+        judgements.extend(process_replay_inputs(session, times.audio_now));
+        judgements.extend(process_autoplay_inputs(session, times.audio_now));
+        judgements.extend(process_misses(session, times.audio_now));
+
+        if should_finish(session, times.audio_now) {
+            session.state = PlayState::Finished;
+        }
+    }
+
+    SessionFrame { times, judgements, state: session.state }
 }
 
 pub fn should_finish(session: &GameSession, audio_now: TimeUs) -> bool {
