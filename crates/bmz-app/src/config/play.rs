@@ -3,7 +3,7 @@ use bmz_core::lane::Lane;
 use bmz_gameplay::input::backend::PhysicalControl;
 use bmz_gameplay::input::binding::{BindingEntry, LaneBinding};
 use bmz_gameplay::judge::model::JudgeWindow;
-use bmz_gameplay::session::PlayOffsets;
+use bmz_gameplay::session::{PlayAudioMix, PlayOffsets};
 
 use super::profile_config::{GaugeTypeConfig, LaneConfig, ProfileConfig, ProfileInputConfig};
 
@@ -20,6 +20,14 @@ pub fn play_offsets_from_profile(profile: &ProfileConfig) -> PlayOffsets {
     PlayOffsets {
         input_offset_us: profile.judge.input_offset_us,
         visual_offset_us: profile.judge.visual_offset_us,
+    }
+}
+
+pub fn audio_mix_from_profile(profile: &ProfileConfig) -> PlayAudioMix {
+    PlayAudioMix {
+        master_volume: profile.audio_mix.master_volume,
+        key_volume: profile.audio_mix.key_volume,
+        bgm_volume: profile.audio_mix.bgm_volume,
     }
 }
 
@@ -87,6 +95,20 @@ mod tests {
 
         assert_eq!(offsets.input_offset_us, -1_000);
         assert_eq!(offsets.visual_offset_us, 2_000);
+    }
+
+    #[test]
+    fn maps_profile_audio_mix() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.audio_mix.master_volume = 0.8;
+        profile.audio_mix.key_volume = 0.7;
+        profile.audio_mix.bgm_volume = 0.6;
+
+        let mix = audio_mix_from_profile(&profile);
+
+        assert_eq!(mix.master_volume, 0.8);
+        assert_eq!(mix.key_volume, 0.7);
+        assert_eq!(mix.bgm_volume, 0.6);
     }
 
     #[test]

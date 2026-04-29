@@ -33,6 +33,13 @@ pub struct PlayOffsets {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub struct PlayAudioMix {
+    pub master_volume: f32,
+    pub key_volume: f32,
+    pub bgm_volume: f32,
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct FrameTimes {
     pub audio_now: TimeUs,
     pub render_now: TimeUs,
@@ -56,6 +63,7 @@ pub struct GameSession {
     pub autoplay: Option<AutoplayController>,
     pub bgm_scheduler: BgmScheduler,
     pub offsets: PlayOffsets,
+    pub audio_mix: PlayAudioMix,
     pub input_timestamp_anchor: Option<InputTimestampAnchor>,
     pub state: PlayState,
 }
@@ -78,6 +86,7 @@ impl BgmScheduler {
         chart: &PlayableChart,
         clock: &AudioClock,
         until: TimeUs,
+        volume: f32,
         audio: &mut dyn AudioScheduler,
     ) {
         while let Some(event) = chart.bgm_events.get(self.next_index) {
@@ -88,7 +97,7 @@ impl BgmScheduler {
             audio.schedule(ScheduledSound {
                 start_frame: clock.time_to_output_frame(event.time),
                 sound_id: event.sound,
-                volume: 1.0,
+                volume: volume.clamp(0.0, 1.0),
                 pan: 0.0,
             });
 
@@ -140,7 +149,8 @@ pub fn schedule_keysounds(
         audio.schedule(ScheduledSound {
             start_frame: session.audio_clock.time_to_output_frame(event.time),
             sound_id,
-            volume: 1.0,
+            volume: (session.audio_mix.master_volume * session.audio_mix.key_volume)
+                .clamp(0.0, 1.0),
             pan: 0.0,
         });
     }
@@ -216,6 +226,7 @@ pub fn advance_session_frame(
             &session.chart,
             &session.audio_clock,
             times.audio_schedule_until,
+            session.audio_mix.master_volume * session.audio_mix.bgm_volume,
             audio,
         );
 
@@ -244,7 +255,7 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::AtomicU64;
 
-    use bmz_chart::model::{ChartMetadata, NoteEvent, NoteKind, SoundAssetRef};
+    use bmz_chart::model::{ChartMetadata, NoteEvent, NoteKind, SoundAssetRef, SoundEvent};
     use bmz_core::chart::ChartIdentity;
     use bmz_core::ids::{NoteId, SoundId};
     use bmz_core::lane::Lane;
@@ -272,6 +283,8 @@ mod tests {
     #[test]
     fn advance_session_frame_schedules_autoplay_keysounds() {
         let mut session = session_with_autoplay(chart_with_keysound());
+        session.audio_mix.master_volume = 0.5;
+        session.audio_mix.key_volume = 0.25;
         let mut audio = TestAudio::default();
 
         let frame = advance_session_frame(&mut session, &mut audio);
@@ -280,6 +293,21 @@ mod tests {
         assert_eq!(audio.scheduled.len(), 1);
         assert_eq!(audio.scheduled[0].sound_id, SoundId(7));
         assert_eq!(audio.scheduled[0].start_frame, 0);
+        assert_eq!(audio.scheduled[0].volume, 0.125);
+    }
+
+    #[test]
+    fn advance_session_frame_schedules_bgm_with_mix_volume() {
+        let mut session = session_with_autoplay(chart_with_bgm());
+        session.audio_mix.master_volume = 0.5;
+        session.audio_mix.bgm_volume = 0.75;
+        let mut audio = TestAudio::default();
+
+        advance_session_frame(&mut session, &mut audio);
+
+        assert_eq!(audio.scheduled.len(), 1);
+        assert_eq!(audio.scheduled[0].sound_id, SoundId(3));
+        assert_eq!(audio.scheduled[0].volume, 0.375);
     }
 
     fn session_with_autoplay(chart: PlayableChart) -> GameSession {
@@ -314,6 +342,7 @@ mod tests {
             autoplay: Some(AutoplayController::default()),
             bgm_scheduler: BgmScheduler::default(),
             offsets: PlayOffsets { input_offset_us: 0, visual_offset_us: 0 },
+            audio_mix: PlayAudioMix { master_volume: 1.0, key_volume: 1.0, bgm_volume: 1.0 },
             input_timestamp_anchor: None,
             state: PlayState::Ready,
         }
@@ -341,6 +370,21 @@ mod tests {
             bar_lines: Vec::new(),
             sounds: vec![SoundAssetRef { id: SoundId(7), path: "sound.wav".into() }],
             total_notes: 1,
+            end_time: TimeUs(0),
+        }
+    }
+
+    fn chart_with_bgm() -> PlayableChart {
+        PlayableChart {
+            identity: ChartIdentity { file_md5: [0; 16], file_sha256: [0; 32] },
+            metadata: ChartMetadata::default(),
+            lane_notes: std::array::from_fn(|_| Vec::new()),
+            long_notes: Vec::new(),
+            bgm_events: vec![SoundEvent { tick: ChartTick(0), time: TimeUs(0), sound: SoundId(3) }],
+            timing_events: Vec::new(),
+            bar_lines: Vec::new(),
+            sounds: vec![SoundAssetRef { id: SoundId(3), path: "bgm.wav".into() }],
+            total_notes: 0,
             end_time: TimeUs(0),
         }
     }

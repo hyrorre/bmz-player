@@ -16,8 +16,8 @@ use bmz_gameplay::session::{BgmScheduler, GameSession, PlayState};
 use std::sync::Arc;
 
 use crate::config::play::{
-    DEFAULT_JUDGE_WINDOW, gauge_type_from_config, lane_binding_from_profile_input,
-    play_offsets_from_profile,
+    DEFAULT_JUDGE_WINDOW, audio_mix_from_profile, gauge_type_from_config,
+    lane_binding_from_profile_input, play_offsets_from_profile,
 };
 use crate::config::profile_config::ProfileConfig;
 use crate::storage::library_db::LibraryDatabase;
@@ -71,6 +71,7 @@ pub fn build_game_session(
         autoplay,
         bgm_scheduler: BgmScheduler::default(),
         offsets: play_offsets_from_profile(profile),
+        audio_mix: audio_mix_from_profile(profile),
         input_timestamp_anchor: None,
         state: PlayState::Ready,
     }
@@ -150,6 +151,7 @@ mod tests {
         assert_eq!(session.gauge.selected, GaugeType::Normal);
         assert!(session.autoplay.is_some());
         assert_eq!(session.offsets.input_offset_us, 123);
+        assert_eq!(session.audio_mix.master_volume, 1.0);
         assert_eq!(session.audio_clock.sample_rate, 48_000);
     }
 
