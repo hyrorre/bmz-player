@@ -202,18 +202,26 @@ fn object_kind_from_channel(
     token: &str,
     warnings: &mut Vec<ImportWarning>,
 ) -> Option<IntermediateObjectKind> {
-    let key = parse_base36_key(token)?;
     match channel {
-        1 => Some(IntermediateObjectKind::Bgm { wav_key: key }),
-        3 => Some(IntermediateObjectKind::SetBpm { bpm: key as f64 }),
-        8 => Some(IntermediateObjectKind::SetExtendedBpm { bpm_key: key }),
-        9 => Some(IntermediateObjectKind::Stop { stop_key: key }),
-        11 | 12 | 13 | 14 | 15 | 16 | 18 | 19 => visible_lane(channel)
-            .map(|lane| IntermediateObjectKind::VisibleNote { lane, wav_key: Some(key) }),
-        31 | 32 | 33 | 34 | 35 | 36 | 38 | 39 => visible_lane(channel - 20)
-            .map(|lane| IntermediateObjectKind::InvisibleNote { lane, wav_key: Some(key) }),
-        51 | 52 | 53 | 54 | 55 | 56 | 58 | 59 => visible_lane(channel - 40)
-            .map(|lane| IntermediateObjectKind::LongChannelNote { lane, wav_key: Some(key) }),
+        1 => Some(IntermediateObjectKind::Bgm { wav_key: parse_base36_key(token)? }),
+        3 => Some(IntermediateObjectKind::SetBpm { bpm: parse_hex_key(token)? as f64 }),
+        8 => Some(IntermediateObjectKind::SetExtendedBpm { bpm_key: parse_base36_key(token)? }),
+        9 => Some(IntermediateObjectKind::Stop { stop_key: parse_base36_key(token)? }),
+        11 | 12 | 13 | 14 | 15 | 16 | 18 | 19 => {
+            let key = parse_base36_key(token)?;
+            visible_lane(channel)
+                .map(|lane| IntermediateObjectKind::VisibleNote { lane, wav_key: Some(key) })
+        }
+        31 | 32 | 33 | 34 | 35 | 36 | 38 | 39 => {
+            let key = parse_base36_key(token)?;
+            visible_lane(channel - 20)
+                .map(|lane| IntermediateObjectKind::InvisibleNote { lane, wav_key: Some(key) })
+        }
+        51 | 52 | 53 | 54 | 55 | 56 | 58 | 59 => {
+            let key = parse_base36_key(token)?;
+            visible_lane(channel - 40)
+                .map(|lane| IntermediateObjectKind::LongChannelNote { lane, wav_key: Some(key) })
+        }
         _ => {
             warnings.push(ImportWarning::UnsupportedChannel { channel });
             None
@@ -320,6 +328,15 @@ fn parse_base36_key(value: &str) -> Option<u16> {
     Some(out)
 }
 
+fn parse_hex_key(value: &str) -> Option<u16> {
+    let value = value.trim();
+    if value.len() != 2 {
+        return None;
+    }
+
+    u16::from_str_radix(value, 16).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use bmz_core::lane::Lane;
@@ -338,6 +355,7 @@ mod tests {
 #STOP01 192
 #00011:0100
 #00019:000A
+#00103:96
 #00108:0100
 #00109:0001
 ";
@@ -351,6 +369,10 @@ mod tests {
         assert_eq!(chart.resources.wavs.len(), 2);
         assert_eq!(chart.resources.bpm_table[0].bpm, 180.0);
         assert_eq!(chart.resources.stop_table[0].value, 192);
+        assert!(chart.objects.iter().any(|object| matches!(
+            object.kind,
+            IntermediateObjectKind::SetBpm { bpm } if bpm == 150.0
+        )));
         assert!(chart.objects.iter().any(|object| matches!(
             object.kind,
             IntermediateObjectKind::VisibleNote { lane: Lane::Key1, wav_key: Some(1) }

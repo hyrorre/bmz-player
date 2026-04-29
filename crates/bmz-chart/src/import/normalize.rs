@@ -87,7 +87,11 @@ pub fn normalize_chart(
     }
 
     draft.bgm_events = build_bgm_events(&tick_objects, &timing_map, &sound_table, warnings);
-    draft.timing_events = build_timing_events(&tick_timing_events, &timing_map);
+    draft.timing_events = build_timing_events(
+        intermediate.metadata.initial_bpm.max(1.0),
+        &tick_timing_events,
+        &timing_map,
+    );
     draft.bar_lines = build_bar_lines(&intermediate.measures, &timing_map);
 
     Ok(finalize_playable_chart(draft))
@@ -374,21 +378,37 @@ fn build_bgm_events(
         .collect()
 }
 
-fn build_timing_events(events: &[TickTimingEvent], timing_map: &TimingMap) -> Vec<TimingEvent> {
+fn build_timing_events(
+    initial_bpm: f64,
+    events: &[TickTimingEvent],
+    timing_map: &TimingMap,
+) -> Vec<TimingEvent> {
+    let mut events = events.to_vec();
+    events.sort_by_key(|event| {
+        (
+            event.tick,
+            match event.kind {
+                TickTimingEventKind::StopRaw { .. } => 0,
+                TickTimingEventKind::SetBpm(_) => 1,
+            },
+        )
+    });
+
+    let mut bpm = initial_bpm;
     events
         .iter()
-        .map(|event| TimingEvent {
-            tick: event.tick,
-            time: timing_map.tick_to_time(event.tick),
-            kind: match event.kind {
-                TickTimingEventKind::SetBpm(bpm) => TimingEventKind::BpmChange { bpm },
-                TickTimingEventKind::StopRaw { value } => TimingEventKind::Stop {
-                    duration_us: crate::timing::stop_raw_to_us(
-                        value,
-                        timing_map.bpm_at_tick(event.tick),
-                    ),
-                },
-            },
+        .map(|event| {
+            let kind = match event.kind {
+                TickTimingEventKind::SetBpm(next_bpm) => {
+                    bpm = next_bpm;
+                    TimingEventKind::BpmChange { bpm: next_bpm }
+                }
+                TickTimingEventKind::StopRaw { value } => {
+                    TimingEventKind::Stop { duration_us: crate::timing::stop_raw_to_us(value, bpm) }
+                }
+            };
+
+            TimingEvent { tick: event.tick, time: timing_map.tick_to_time(event.tick), kind }
         })
         .collect()
 }
