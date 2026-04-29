@@ -59,6 +59,18 @@ pub struct GaugeState {
 }
 
 impl GaugeState {
+    pub fn new(selected: GaugeType, total: f64, total_notes: u32) -> Self {
+        let gauges = default_gauge_definitions()
+            .iter()
+            .map(|definition| {
+                let definition = compile_gauge_definition(definition, total, total_notes);
+                SingleGaugeState { value: definition.init, definition }
+            })
+            .collect();
+
+        Self { selected, original: selected, gauges }
+    }
+
     pub fn current(&self) -> &SingleGaugeState {
         self.gauges
             .iter()
@@ -155,5 +167,103 @@ fn apply_modifier(value: f32, modifier: GaugeModifier, total: f64, total_notes: 
             }
         }
         GaugeModifier::ModifyDamage => value,
+    }
+}
+
+pub fn default_gauge_definitions() -> &'static [GaugeDefinition] {
+    &[
+        GaugeDefinition {
+            gauge_type: GaugeType::AssistEasy,
+            clear_type: Some(ClearType::AssistEasy),
+            modifier: GaugeModifier::Total,
+            min: 0.0,
+            max: 100.0,
+            init: 20.0,
+            border: 60.0,
+            values: [0.16, 0.16, 0.0, -1.2, -2.0, -0.5],
+            guts: NORMAL_GUTS,
+        },
+        GaugeDefinition {
+            gauge_type: GaugeType::Easy,
+            clear_type: Some(ClearType::Easy),
+            modifier: GaugeModifier::Total,
+            min: 0.0,
+            max: 100.0,
+            init: 20.0,
+            border: 80.0,
+            values: [0.16, 0.16, 0.0, -2.0, -3.0, -1.0],
+            guts: NORMAL_GUTS,
+        },
+        GaugeDefinition {
+            gauge_type: GaugeType::Normal,
+            clear_type: Some(ClearType::Normal),
+            modifier: GaugeModifier::Total,
+            min: 0.0,
+            max: 100.0,
+            init: 20.0,
+            border: 80.0,
+            values: [0.16, 0.16, 0.0, -4.0, -6.0, -2.0],
+            guts: NORMAL_GUTS,
+        },
+        GaugeDefinition {
+            gauge_type: GaugeType::Hard,
+            clear_type: Some(ClearType::Hard),
+            modifier: GaugeModifier::LimitIncrement,
+            min: 0.0,
+            max: 100.0,
+            init: 100.0,
+            border: 1.0,
+            values: [0.15, 0.15, 0.0, -5.0, -9.0, -3.0],
+            guts: HARD_GUTS,
+        },
+        GaugeDefinition {
+            gauge_type: GaugeType::ExHard,
+            clear_type: Some(ClearType::ExHard),
+            modifier: GaugeModifier::LimitIncrement,
+            min: 0.0,
+            max: 100.0,
+            init: 100.0,
+            border: 1.0,
+            values: [0.15, 0.15, 0.0, -8.0, -18.0, -6.0],
+            guts: HARD_GUTS,
+        },
+        GaugeDefinition {
+            gauge_type: GaugeType::Hazard,
+            clear_type: None,
+            modifier: GaugeModifier::None,
+            min: 0.0,
+            max: 100.0,
+            init: 100.0,
+            border: 1.0,
+            values: [0.0, 0.0, 0.0, -100.0, -100.0, -100.0],
+            guts: &[],
+        },
+    ]
+}
+
+const NORMAL_GUTS: &[(f32, f32)] = &[(30.0, 0.5), (50.0, 0.7)];
+const HARD_GUTS: &[(f32, f32)] = &[(30.0, 0.6), (50.0, 0.8)];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn creates_selected_gauge_state_from_defaults() {
+        let gauge = GaugeState::new(GaugeType::Hard, 160.0, 1000);
+
+        assert_eq!(gauge.selected, GaugeType::Hard);
+        assert_eq!(gauge.current().definition.gauge_type, GaugeType::Hard);
+        assert_eq!(gauge.current().value, 100.0);
+    }
+
+    #[test]
+    fn hazard_fails_on_any_damage_judge() {
+        let mut gauge = GaugeState::new(GaugeType::Hazard, 160.0, 1000);
+
+        gauge.apply_judge(Judge::Bad, 1.0);
+
+        assert_eq!(gauge.current().value, 0.0);
+        assert!(!gauge.current().is_qualified());
     }
 }
