@@ -3,6 +3,7 @@ use std::path::Path;
 
 use anyhow::Result;
 use bmz_core::replay::ReplayEvent;
+use bmz_gameplay::replay::ReplayPlayer;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,6 +44,11 @@ pub fn save_replay(path: &Path, replay: &ReplayFile) -> Result<()> {
 pub fn load_replay(path: &Path) -> Result<ReplayFile> {
     let text = std::fs::read_to_string(path)?;
     Ok(toml::from_str(&text)?)
+}
+
+pub fn load_replay_player(path: &Path) -> Result<ReplayPlayer> {
+    let replay = load_replay(path)?;
+    Ok(ReplayPlayer { events: replay.events, next_index: 0 })
 }
 
 pub fn replay_file_name(chart_sha256: [u8; 32], played_at: i64) -> String {
@@ -100,5 +106,28 @@ mod tests {
             replay_file_name([0xab; 32], 12),
             "abababababababababababababababababababababababababababababababab-12.toml"
         );
+    }
+
+    #[test]
+    fn load_replay_player_builds_replay_player() {
+        let path = std::env::temp_dir().join(format!(
+            "bmz-replay-player-{}-{}.toml",
+            std::process::id(),
+            TimeUs(43).0
+        ));
+        let replay = ReplayFile::new(
+            [2; 32],
+            1_700_000_051,
+            None,
+            vec![ReplayEvent { lane: Lane::Key2, kind: InputKind::Release, time: TimeUs(2_000) }],
+        );
+        save_replay(&path, &replay).unwrap();
+
+        let player = load_replay_player(&path).unwrap();
+
+        assert_eq!(player.next_index, 0);
+        assert_eq!(player.events, replay.events);
+
+        std::fs::remove_file(path).unwrap();
     }
 }
