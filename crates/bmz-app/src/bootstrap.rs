@@ -24,7 +24,7 @@ pub fn bootstrap() -> Result<BootstrappedApp> {
     app_paths.ensure_dirs()?;
 
     let app_config = load_or_create_app_config(&app_paths)?;
-    let profile_paths = resolve_profile_paths(&app_paths, &app_config.active_profile);
+    let profile_paths = resolve_profile_paths(&app_paths, &app_config.active_profile)?;
     profile_paths.ensure_dirs()?;
     let profile_config = load_or_create_profile_config(&profile_paths, &app_config.active_profile)?;
 
