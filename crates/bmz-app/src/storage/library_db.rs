@@ -40,6 +40,14 @@ pub struct ChartListItem {
     pub folder_path: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FailedChartFile {
+    pub chart_file_id: i64,
+    pub path: String,
+    pub message: String,
+    pub scanned_at: i64,
+}
+
 impl LibraryDatabase {
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)?;
@@ -229,6 +237,32 @@ impl LibraryDatabase {
             )
             .optional()
             .map_err(Into::into)
+    }
+
+    pub fn list_failed_chart_files(&self, limit: u32, offset: u32) -> Result<Vec<FailedChartFile>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT
+                chart_files.id,
+                chart_files.path,
+                COALESCE(chart_import_warnings.message, ''),
+                chart_files.scanned_at
+            FROM chart_files
+            LEFT JOIN chart_import_warnings
+                ON chart_import_warnings.chart_file_id = chart_files.id
+            WHERE chart_files.parse_status = 'Failed'
+            ORDER BY chart_files.scanned_at DESC, chart_files.path COLLATE NOCASE
+            LIMIT ?1 OFFSET ?2",
+        )?;
+        let rows = stmt.query_map(params![limit, offset], |row| {
+            Ok(FailedChartFile {
+                chart_file_id: row.get(0)?,
+                path: row.get(1)?,
+                message: row.get(2)?,
+                scanned_at: row.get(3)?,
+            })
+        })?;
+
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
     }
 }
 
@@ -689,5 +723,22 @@ mod tests {
 
         assert_eq!(status, "Failed");
         assert_eq!(code, "ImportFailed");
+    }
+
+    #[test]
+    fn list_failed_chart_files_returns_failures() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase::from_connection(conn);
+        db.upsert_failed_chart_file(None, Path::new("/songs/broken.bms"), 10, 1, 2, "broken")
+            .unwrap();
+
+        let failed = db.list_failed_chart_files(10, 0).unwrap();
+
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0].path, "/songs/broken.bms");
+        assert_eq!(failed[0].message, "broken");
+        assert_eq!(failed[0].scanned_at, 2);
     }
 }
