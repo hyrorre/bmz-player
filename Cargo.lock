@@ -233,6 +233,7 @@ name = "bmz-audio"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bmz-chart",
  "bmz-core",
  "cpal",
  "thiserror 1.0.69",
