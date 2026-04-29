@@ -23,6 +23,23 @@ pub struct ChartImportRecord<'a> {
     pub chart: &'a PlayableChart,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChartListItem {
+    pub chart_id: i64,
+    pub sha256: [u8; 32],
+    pub title: String,
+    pub subtitle: String,
+    pub artist: String,
+    pub difficulty_name: String,
+    pub play_level: String,
+    pub mode: String,
+    pub total_notes: u32,
+    pub initial_bpm: f64,
+    pub min_bpm: f64,
+    pub max_bpm: f64,
+    pub folder_path: String,
+}
+
 impl LibraryDatabase {
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)?;
@@ -128,6 +145,53 @@ impl LibraryDatabase {
         )?;
         Ok(())
     }
+
+    pub fn list_charts(&self, limit: u32, offset: u32) -> Result<Vec<ChartListItem>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT
+                id,
+                sha256,
+                title,
+                subtitle,
+                artist,
+                difficulty_name,
+                play_level,
+                mode,
+                total_notes,
+                initial_bpm,
+                COALESCE(min_bpm, initial_bpm),
+                COALESCE(max_bpm, initial_bpm),
+                folder_path
+            FROM charts
+            ORDER BY title COLLATE NOCASE, artist COLLATE NOCASE, play_level COLLATE NOCASE
+            LIMIT ?1 OFFSET ?2",
+        )?;
+
+        let rows = stmt.query_map(params![limit, offset], chart_list_item_from_row)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
+    }
+}
+
+fn chart_list_item_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChartListItem> {
+    let sha256_blob: Vec<u8> = row.get(1)?;
+    let mut sha256 = [0_u8; 32];
+    sha256.copy_from_slice(&sha256_blob[..32]);
+
+    Ok(ChartListItem {
+        chart_id: row.get(0)?,
+        sha256,
+        title: row.get(2)?,
+        subtitle: row.get(3)?,
+        artist: row.get(4)?,
+        difficulty_name: row.get(5)?,
+        play_level: row.get(6)?,
+        mode: row.get(7)?,
+        total_notes: row.get(8)?,
+        initial_bpm: row.get(9)?,
+        min_bpm: row.get(10)?,
+        max_bpm: row.get(11)?,
+        folder_path: row.get(12)?,
+    })
 }
 
 fn upsert_chart_file(conn: &Connection, record: &ChartImportRecord<'_>) -> Result<i64> {
@@ -477,5 +541,41 @@ mod tests {
         assert!(!enabled);
         assert!(!recursive);
         assert_eq!(last_scan_at, 42);
+    }
+
+    #[test]
+    fn list_charts_orders_by_title() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase::from_connection(conn);
+        let alpha = chart("Alpha");
+        let beta = chart("beta");
+
+        db.upsert_chart_import(&ChartImportRecord {
+            root_id: None,
+            file_path: Path::new("/songs/beta.bms"),
+            file_size: 1,
+            modified_at: 1,
+            scanned_at: 1,
+            chart: &beta,
+        })
+        .unwrap();
+        db.upsert_chart_import(&ChartImportRecord {
+            root_id: None,
+            file_path: Path::new("/songs/alpha.bms"),
+            file_size: 1,
+            modified_at: 1,
+            scanned_at: 1,
+            chart: &alpha,
+        })
+        .unwrap();
+
+        let charts = db.list_charts(10, 0).unwrap();
+
+        assert_eq!(charts.len(), 2);
+        assert_eq!(charts[0].title, "Alpha");
+        assert_eq!(charts[1].title, "beta");
+        assert_eq!(charts[0].mode, "7K");
     }
 }
