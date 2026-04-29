@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::time::UNIX_EPOCH;
 
 use anyhow::Result;
 
@@ -51,7 +52,17 @@ pub fn scan_song_roots(
                 }
                 Err(error) => {
                     report.summary.failed += 1;
-                    report.failures.push(ScanFailure { path, message: error.to_string() });
+                    let message = error.to_string();
+                    let (file_size, modified_at) = file_metadata_for_failure(&path);
+                    db.upsert_failed_chart_file(
+                        Some(root_id),
+                        &path,
+                        file_size,
+                        modified_at,
+                        scanned_at,
+                        &message,
+                    )?;
+                    report.failures.push(ScanFailure { path, message });
                 }
             }
         }
@@ -116,6 +127,19 @@ fn is_hidden(path: &Path) -> bool {
         .and_then(|name| name.to_str())
         .map(|name| name.starts_with('.'))
         .unwrap_or(false)
+}
+
+fn file_metadata_for_failure(path: &Path) -> (u64, i64) {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return (0, 0);
+    };
+    let modified_at = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0);
+    (metadata.len(), modified_at)
 }
 
 #[cfg(test)]
@@ -193,6 +217,43 @@ mod tests {
             db.conn().query_row("SELECT last_scan_at FROM roots", [], |row| row.get(0)).unwrap();
         assert_eq!(title, "Scan Song");
         assert_eq!(last_scan_at, 1_700_000_020);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn scan_song_roots_records_failed_imports() {
+        let root = make_temp_dir("scan-failed");
+        write_file(&root.join("broken.bms"), "#TITLE Broken\n#00011:0\n");
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase::from_connection(conn);
+        let roots = vec![PathEntry {
+            path: root.to_string_lossy().into_owned(),
+            enabled: true,
+            recursive: true,
+        }];
+
+        let report = scan_song_roots(&mut db, &roots, &scan_config(), 1_700_000_021).unwrap();
+
+        assert_eq!(report.summary.files_seen, 1);
+        assert_eq!(report.summary.imported, 0);
+        assert_eq!(report.summary.failed, 1);
+
+        let (status, warning): (String, String) = db
+            .conn()
+            .query_row(
+                "SELECT chart_files.parse_status, chart_import_warnings.code
+                FROM chart_files
+                JOIN chart_import_warnings ON chart_import_warnings.chart_file_id = chart_files.id",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "Failed");
+        assert_eq!(warning, "ImportFailed");
 
         std::fs::remove_dir_all(root).unwrap();
     }

@@ -146,6 +146,50 @@ impl LibraryDatabase {
         Ok(())
     }
 
+    pub fn upsert_failed_chart_file(
+        &mut self,
+        root_id: Option<i64>,
+        file_path: &Path,
+        file_size: u64,
+        modified_at: i64,
+        scanned_at: i64,
+        message: &str,
+    ) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO chart_files (
+                root_id,
+                path,
+                file_size,
+                modified_at,
+                md5,
+                sha256,
+                scanned_at,
+                parse_status
+            ) VALUES (?1, ?2, ?3, ?4, x'', x'', ?5, 'Failed')
+            ON CONFLICT(path) DO UPDATE SET
+                root_id = excluded.root_id,
+                file_size = excluded.file_size,
+                modified_at = excluded.modified_at,
+                scanned_at = excluded.scanned_at,
+                parse_status = excluded.parse_status",
+            params![root_id, path_to_string(file_path), file_size as i64, modified_at, scanned_at,],
+        )?;
+        let chart_file_id =
+            self.chart_file_id_by_path(file_path)?.expect("failed chart file exists");
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "DELETE FROM chart_import_warnings WHERE chart_file_id = ?1",
+            params![chart_file_id],
+        )?;
+        tx.execute(
+            "INSERT INTO chart_import_warnings (chart_file_id, code, message, created_at)
+            VALUES (?1, 'ImportFailed', ?2, ?3)",
+            params![chart_file_id, message, scanned_at],
+        )?;
+        tx.commit()?;
+        Ok(chart_file_id)
+    }
+
     pub fn list_charts(&self, limit: u32, offset: u32) -> Result<Vec<ChartListItem>> {
         let mut stmt = self.conn.prepare(
             "SELECT
@@ -618,5 +662,32 @@ mod tests {
             Some("/songs/song.bms".to_string())
         );
         assert_eq!(db.primary_chart_file_path(chart_id + 1).unwrap(), None);
+    }
+
+    #[test]
+    fn upsert_failed_chart_file_records_failure_status_and_warning() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase::from_connection(conn);
+
+        let chart_file_id = db
+            .upsert_failed_chart_file(None, Path::new("/songs/broken.bms"), 10, 1, 2, "broken")
+            .unwrap();
+
+        let (status, code): (String, String) = db
+            .conn()
+            .query_row(
+                "SELECT chart_files.parse_status, chart_import_warnings.code
+                FROM chart_files
+                JOIN chart_import_warnings ON chart_import_warnings.chart_file_id = chart_files.id
+                WHERE chart_files.id = ?1",
+                params![chart_file_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+
+        assert_eq!(status, "Failed");
+        assert_eq!(code, "ImportFailed");
     }
 }
