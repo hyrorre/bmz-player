@@ -29,3 +29,12 @@ pub trait InputBackend {
     fn update(&mut self) {}
     fn drain_events(&mut self) -> Vec<DeviceInputEvent>;
 }
+
+#[derive(Debug, Default)]
+pub struct NullInputBackend;
+
+impl InputBackend for NullInputBackend {
+    fn drain_events(&mut self) -> Vec<DeviceInputEvent> {
+        Vec::new()
+    }
+}
