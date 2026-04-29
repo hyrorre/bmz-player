@@ -16,6 +16,24 @@ pub enum ClearType {
     Max = 10,
 }
 
+impl ClearType {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NoPlay => "NoPlay",
+            Self::Failed => "Failed",
+            Self::AssistEasy => "AssistEasy",
+            Self::LightAssistEasy => "LightAssistEasy",
+            Self::Easy => "Easy",
+            Self::Normal => "Normal",
+            Self::Hard => "Hard",
+            Self::ExHard => "ExHard",
+            Self::FullCombo => "FullCombo",
+            Self::Perfect => "Perfect",
+            Self::Max => "Max",
+        }
+    }
+}
+
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GaugeType {
@@ -28,4 +46,20 @@ pub enum GaugeType {
     Class = 6,
     ExClass = 7,
     ExHardClass = 8,
+}
+
+impl GaugeType {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::AssistEasy => "AssistEasy",
+            Self::Easy => "Easy",
+            Self::Normal => "Normal",
+            Self::Hard => "Hard",
+            Self::ExHard => "ExHard",
+            Self::Hazard => "Hazard",
+            Self::Class => "Class",
+            Self::ExClass => "ExClass",
+            Self::ExHardClass => "ExHardClass",
+        }
+    }
 }
