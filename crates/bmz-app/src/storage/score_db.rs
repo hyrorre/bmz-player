@@ -46,6 +46,11 @@ impl ScoreDatabase {
         Ok(Self { conn })
     }
 
+    #[cfg(test)]
+    pub(crate) fn from_connection(conn: Connection) -> Self {
+        Self { conn }
+    }
+
     pub fn conn(&self) -> &Connection {
         &self.conn
     }
