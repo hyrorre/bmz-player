@@ -38,3 +38,43 @@ impl InputBackend for NullInputBackend {
         Vec::new()
     }
 }
+
+#[derive(Debug, Default)]
+pub struct BufferedInputBackend {
+    events: Vec<DeviceInputEvent>,
+}
+
+impl BufferedInputBackend {
+    pub fn push(&mut self, event: DeviceInputEvent) {
+        self.events.push(event);
+    }
+
+    pub fn extend(&mut self, events: impl IntoIterator<Item = DeviceInputEvent>) {
+        self.events.extend(events);
+    }
+}
+
+impl InputBackend for BufferedInputBackend {
+    fn drain_events(&mut self) -> Vec<DeviceInputEvent> {
+        std::mem::take(&mut self.events)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn buffered_backend_drains_queued_events() {
+        let mut backend = BufferedInputBackend::default();
+        backend.push(DeviceInputEvent {
+            device: DeviceId(1),
+            control: PhysicalControl::KeyboardKey("Z".to_string()),
+            kind: InputKind::Press,
+            timestamp: DeviceTimestamp::Unknown,
+        });
+
+        assert_eq!(backend.drain_events().len(), 1);
+        assert!(backend.drain_events().is_empty());
+    }
+}
