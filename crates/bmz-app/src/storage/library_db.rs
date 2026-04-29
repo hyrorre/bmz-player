@@ -48,6 +48,13 @@ pub struct FailedChartFile {
     pub scanned_at: i64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChartFileFingerprint {
+    pub file_size: u64,
+    pub modified_at: i64,
+    pub import_version: i64,
+}
+
 impl LibraryDatabase {
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)?;
@@ -263,6 +270,31 @@ impl LibraryDatabase {
         })?;
 
         rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn chart_file_fingerprint(&self, path: &Path) -> Result<Option<ChartFileFingerprint>> {
+        self.conn
+            .query_row(
+                "SELECT chart_files.file_size, chart_files.modified_at, COALESCE(charts.import_version, 0)
+                FROM chart_files
+                LEFT JOIN chart_file_links
+                    ON chart_file_links.chart_file_id = chart_files.id
+                LEFT JOIN charts
+                    ON charts.id = chart_file_links.chart_id
+                WHERE chart_files.path = ?1
+                LIMIT 1",
+                params![path_to_string(path)],
+                |row| {
+                    let file_size: i64 = row.get(0)?;
+                    Ok(ChartFileFingerprint {
+                        file_size: file_size.max(0) as u64,
+                        modified_at: row.get(1)?,
+                        import_version: row.get(2)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(Into::into)
     }
 }
 
@@ -740,5 +772,32 @@ mod tests {
         assert_eq!(failed[0].path, "/songs/broken.bms");
         assert_eq!(failed[0].message, "broken");
         assert_eq!(failed[0].scanned_at, 2);
+    }
+
+    #[test]
+    fn chart_file_fingerprint_reads_imported_file_metadata() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase::from_connection(conn);
+        let chart = chart("song");
+        db.upsert_chart_import(&ChartImportRecord {
+            root_id: None,
+            file_path: Path::new("/songs/song.bms"),
+            file_size: 123,
+            modified_at: 456,
+            scanned_at: 789,
+            chart: &chart,
+        })
+        .unwrap();
+
+        assert_eq!(
+            db.chart_file_fingerprint(Path::new("/songs/song.bms")).unwrap(),
+            Some(ChartFileFingerprint {
+                file_size: 123,
+                modified_at: 456,
+                import_version: CHART_IMPORT_VERSION,
+            })
+        );
     }
 }

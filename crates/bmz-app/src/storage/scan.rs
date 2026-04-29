@@ -6,7 +6,7 @@ use anyhow::Result;
 use crate::config::app_config::{PathEntry, ScanConfig};
 
 use super::import::import_chart_file;
-use super::library_db::LibraryDatabase;
+use super::library_db::{CHART_IMPORT_VERSION, ChartFileFingerprint, LibraryDatabase};
 
 #[derive(Debug, Clone, Default)]
 pub struct ScanSummary {
@@ -14,6 +14,7 @@ pub struct ScanSummary {
     pub files_seen: u32,
     pub imported: u32,
     pub failed: u32,
+    pub skipped: u32,
     pub warnings: u32,
 }
 
@@ -45,6 +46,11 @@ pub fn scan_song_roots(
 
         for path in files {
             report.summary.files_seen += 1;
+            let (file_size, modified_at) = file_metadata_for_failure(&path);
+            if is_unchanged(db, &path, file_size, modified_at)? {
+                report.summary.skipped += 1;
+                continue;
+            }
             match import_chart_file(db, &path, Some(root_id), scanned_at) {
                 Ok(imported) => {
                     report.summary.imported += 1;
@@ -53,7 +59,6 @@ pub fn scan_song_roots(
                 Err(error) => {
                     report.summary.failed += 1;
                     let message = error.to_string();
-                    let (file_size, modified_at) = file_metadata_for_failure(&path);
                     db.upsert_failed_chart_file(
                         Some(root_id),
                         &path,
@@ -71,6 +76,19 @@ pub fn scan_song_roots(
     }
 
     Ok(report)
+}
+
+fn is_unchanged(
+    db: &LibraryDatabase,
+    path: &Path,
+    file_size: u64,
+    modified_at: i64,
+) -> Result<bool> {
+    let Some(fingerprint) = db.chart_file_fingerprint(path)? else {
+        return Ok(false);
+    };
+    Ok(fingerprint
+        == ChartFileFingerprint { file_size, modified_at, import_version: CHART_IMPORT_VERSION })
 }
 
 pub fn discover_chart_files(
@@ -210,6 +228,7 @@ mod tests {
         assert_eq!(report.summary.files_seen, 1);
         assert_eq!(report.summary.imported, 1);
         assert_eq!(report.summary.failed, 0);
+        assert_eq!(report.summary.skipped, 0);
 
         let title: String =
             db.conn().query_row("SELECT title FROM charts", [], |row| row.get(0)).unwrap();
@@ -254,6 +273,39 @@ mod tests {
             .unwrap();
         assert_eq!(status, "Failed");
         assert_eq!(warning, "ImportFailed");
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn scan_song_roots_skips_unchanged_imported_files() {
+        let root = make_temp_dir("scan-skip");
+        let path = root.join("song.bms");
+        write_file(
+            &path,
+            "\
+#TITLE Skip Song
+#BPM 120
+#00011:01
+",
+        );
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase::from_connection(conn);
+        let roots = vec![PathEntry {
+            path: root.to_string_lossy().into_owned(),
+            enabled: true,
+            recursive: true,
+        }];
+
+        let first = scan_song_roots(&mut db, &roots, &scan_config(), 1_700_000_022).unwrap();
+        let second = scan_song_roots(&mut db, &roots, &scan_config(), 1_700_000_023).unwrap();
+
+        assert_eq!(first.summary.imported, 1);
+        assert_eq!(second.summary.imported, 0);
+        assert_eq!(second.summary.skipped, 1);
 
         std::fs::remove_dir_all(root).unwrap();
     }
