@@ -1,6 +1,3 @@
-use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
-
 use anyhow::{Context, Result, bail};
 use bmz_audio::clock::AudioClock;
 use bmz_audio::engine::AudioEngine;
@@ -16,6 +13,7 @@ use bmz_gameplay::judge::engine::JudgeEngine;
 use bmz_gameplay::replay::{ReplayPlayer, ReplayRecorder};
 use bmz_gameplay::score::ScoreState;
 use bmz_gameplay::session::{BgmScheduler, GameSession, PlayState};
+use std::sync::Arc;
 
 use crate::config::play::{
     DEFAULT_JUDGE_WINDOW, gauge_type_from_config, lane_binding_from_profile_input,
@@ -64,13 +62,7 @@ pub fn build_game_session(
             chart.total_notes,
         ),
         judge: JudgeEngine::new(DEFAULT_JUDGE_WINDOW),
-        audio_clock: AudioClock {
-            sample_rate: options.sample_rate,
-            start_output_frame: 0,
-            chart_zero_time_us: 0,
-            current_frame: Arc::new(AtomicU64::new(0)),
-            running: false,
-        },
+        audio_clock: AudioClock::stopped(options.sample_rate),
         chart,
         input_system,
         score: ScoreState::default(),

@@ -71,13 +71,7 @@ impl CpalBackend {
             _ => build_output_stream::<f32>(&device, &config, engine, Arc::clone(&current_frame))?,
         };
 
-        let clock = AudioClock {
-            sample_rate,
-            start_output_frame: 0,
-            chart_zero_time_us: 0,
-            current_frame,
-            running: false,
-        };
+        let clock = AudioClock::with_position(sample_rate, 0, 0, current_frame, false);
 
         Ok(CpalOutput { stream, clock })
     }
