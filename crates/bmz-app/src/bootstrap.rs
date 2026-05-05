@@ -7,10 +7,14 @@ use crate::config::load::{load_app_config, load_profile_config};
 use crate::config::profile_config::ProfileConfig;
 use crate::config::save::{save_app_config, save_profile_config};
 use crate::paths::{AppPaths, ProfilePaths, resolve_app_paths, resolve_profile_paths};
-use crate::screens::play_start::{PlayStartOptions, start_running_play_session_for_chart};
+use crate::screens::play_start::{
+    PlayStartOptions, start_running_play_session_for_chart,
+    start_running_play_session_for_chart_with_input_backend,
+};
 use crate::storage::library_db::LibraryDatabase;
 use crate::storage::scan::{ScanReport, scan_song_roots};
 use crate::storage::score_db::ScoreDatabase;
+use bmz_gameplay::input::backend::InputBackend;
 
 pub struct BootstrappedApp {
     pub app_config: AppConfig,
@@ -34,6 +38,22 @@ impl BootstrappedApp {
             &self.profile_config,
             chart_id,
             options,
+        )
+    }
+
+    pub fn start_play_for_chart_with_input_backend(
+        &self,
+        chart_id: i64,
+        options: PlayStartOptions,
+        input_backend: Box<dyn InputBackend>,
+    ) -> Result<crate::audio::RunningPlaySession> {
+        start_running_play_session_for_chart_with_input_backend(
+            &self.library_db,
+            &self.app_config,
+            &self.profile_config,
+            chart_id,
+            options,
+            input_backend,
         )
     }
 }

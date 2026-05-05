@@ -6,7 +6,7 @@ use bmz_chart::import::import_bms_chart;
 use bmz_chart::model::PlayableChart;
 use bmz_gameplay::autoplay::AutoplayController;
 use bmz_gameplay::gauge::GaugeState;
-use bmz_gameplay::input::backend::NullInputBackend;
+use bmz_gameplay::input::backend::{InputBackend, NullInputBackend};
 use bmz_gameplay::input::system::InputSystem;
 use bmz_gameplay::input::translator::DefaultInputTranslator;
 use bmz_gameplay::judge::engine::JudgeEngine;
@@ -46,10 +46,19 @@ pub fn build_game_session(
     profile: &ProfileConfig,
     options: PlaySessionOptions,
 ) -> GameSession {
+    build_game_session_with_input_backend(chart, profile, options, Box::new(NullInputBackend))
+}
+
+pub fn build_game_session_with_input_backend(
+    chart: Arc<PlayableChart>,
+    profile: &ProfileConfig,
+    options: PlaySessionOptions,
+    input_backend: Box<dyn InputBackend>,
+) -> GameSession {
     let gauge_type = gauge_type_from_config(profile.play.gauge);
     let autoplay = (profile.play.auto_play || options.autoplay).then(AutoplayController::default);
     let input_system = InputSystem {
-        backend: Box::new(NullInputBackend),
+        backend: input_backend,
         translator: Box::new(DefaultInputTranslator {
             binding: lane_binding_from_profile_input(&profile.input),
         }),
@@ -84,12 +93,33 @@ pub fn load_game_session_for_chart(
     profile: &ProfileConfig,
     options: PlaySessionOptions,
 ) -> Result<GameSession> {
+    load_game_session_for_chart_with_input_backend(
+        library_db,
+        chart_id,
+        profile,
+        options,
+        Box::new(NullInputBackend),
+    )
+}
+
+pub fn load_game_session_for_chart_with_input_backend(
+    library_db: &LibraryDatabase,
+    chart_id: i64,
+    profile: &ProfileConfig,
+    options: PlaySessionOptions,
+    input_backend: Box<dyn InputBackend>,
+) -> Result<GameSession> {
     let Some(path) = library_db.primary_chart_file_path(chart_id)? else {
         bail!("chart file not found for chart id {chart_id}");
     };
     let import = import_bms_chart(std::path::Path::new(&path), None)
         .with_context(|| format!("failed to import chart file: {path}"))?;
-    Ok(build_game_session(Arc::new(import.chart), profile, options))
+    Ok(build_game_session_with_input_backend(
+        Arc::new(import.chart),
+        profile,
+        options,
+        input_backend,
+    ))
 }
 
 pub fn build_audio_engine_for_chart(
@@ -108,6 +138,22 @@ pub fn load_prepared_play_session_for_chart(
     profile: &ProfileConfig,
     options: PlaySessionOptions,
 ) -> Result<PreparedPlaySession> {
+    load_prepared_play_session_for_chart_with_input_backend(
+        library_db,
+        chart_id,
+        profile,
+        options,
+        Box::new(NullInputBackend),
+    )
+}
+
+pub fn load_prepared_play_session_for_chart_with_input_backend(
+    library_db: &LibraryDatabase,
+    chart_id: i64,
+    profile: &ProfileConfig,
+    options: PlaySessionOptions,
+    input_backend: Box<dyn InputBackend>,
+) -> Result<PreparedPlaySession> {
     let Some(path) = library_db.primary_chart_file_path(chart_id)? else {
         bail!("chart file not found for chart id {chart_id}");
     };
@@ -117,7 +163,7 @@ pub fn load_prepared_play_session_for_chart(
     let mut loader = WavSampleLoader;
     let (audio, sample_report) =
         build_audio_engine_for_chart(&chart, options.sample_rate, &mut loader);
-    let session = build_game_session(chart, profile, options);
+    let session = build_game_session_with_input_backend(chart, profile, options, input_backend);
 
     Ok(PreparedPlaySession { session, audio, sample_report })
 }
@@ -131,7 +177,13 @@ mod tests {
     use bmz_chart::model::{ChartMetadata, PlayableChart, SoundAssetRef};
     use bmz_core::clear::GaugeType;
     use bmz_core::ids::SoundId;
+    use bmz_core::input::InputKind;
+    use bmz_core::lane::Lane;
     use bmz_core::time::TimeUs;
+    use bmz_gameplay::input::backend::{
+        BufferedInputBackend, DeviceId, DeviceInputEvent, DeviceTimestamp, PhysicalControl,
+    };
+    use bmz_gameplay::input::translator::InputTimingContext;
     use rusqlite::Connection;
 
     use super::*;
@@ -154,6 +206,35 @@ mod tests {
         assert_eq!(session.offsets.input_offset_us, 123);
         assert_eq!(session.audio_mix.master_volume, 1.0);
         assert_eq!(session.audio_clock.sample_rate, 48_000);
+    }
+
+    #[test]
+    fn build_game_session_accepts_custom_input_backend() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut backend = BufferedInputBackend::default();
+        backend.push(DeviceInputEvent {
+            device: DeviceId(1),
+            control: PhysicalControl::KeyboardKey("Z".to_string()),
+            kind: InputKind::Press,
+            timestamp: DeviceTimestamp::Unknown,
+        });
+        let chart = Arc::new(chart());
+        let mut session = build_game_session_with_input_backend(
+            chart,
+            &profile,
+            PlaySessionOptions::default(),
+            Box::new(backend),
+        );
+        let ctx = InputTimingContext {
+            audio_clock: &session.audio_clock,
+            offsets: session.offsets,
+            timestamp_anchor: None,
+        };
+
+        let inputs = session.input_system.collect_game_inputs(&ctx);
+
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0].lane, Lane::Key1);
     }
 
     #[test]

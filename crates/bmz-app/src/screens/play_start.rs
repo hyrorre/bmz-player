@@ -1,11 +1,14 @@
 use anyhow::Result;
 use bmz_core::time::TimeUs;
+use bmz_gameplay::input::backend::{InputBackend, NullInputBackend};
 use bmz_gameplay::replay::ReplayPlayer;
 
 use crate::audio::{RunningPlaySession, open_prepared_play_audio};
 use crate::config::app_config::AppConfig;
 use crate::config::profile_config::ProfileConfig;
-use crate::screens::play_session::{PlaySessionOptions, load_prepared_play_session_for_chart};
+use crate::screens::play_session::{
+    PlaySessionOptions, load_prepared_play_session_for_chart_with_input_backend,
+};
 use crate::storage::library_db::LibraryDatabase;
 
 #[derive(Debug, Clone, Default)]
@@ -33,10 +36,33 @@ pub fn start_running_play_session_for_chart(
     chart_id: i64,
     start_options: PlayStartOptions,
 ) -> Result<RunningPlaySession> {
+    start_running_play_session_for_chart_with_input_backend(
+        library_db,
+        app_config,
+        profile,
+        chart_id,
+        start_options,
+        Box::new(NullInputBackend),
+    )
+}
+
+pub fn start_running_play_session_for_chart_with_input_backend(
+    library_db: &LibraryDatabase,
+    app_config: &AppConfig,
+    profile: &ProfileConfig,
+    chart_id: i64,
+    start_options: PlayStartOptions,
+    input_backend: Box<dyn InputBackend>,
+) -> Result<RunningPlaySession> {
     let chart_zero_time = start_options.chart_zero_time;
     let session_options = play_session_options_from_start(app_config, start_options);
-    let prepared =
-        load_prepared_play_session_for_chart(library_db, chart_id, profile, session_options)?;
+    let prepared = load_prepared_play_session_for_chart_with_input_backend(
+        library_db,
+        chart_id,
+        profile,
+        session_options,
+        input_backend,
+    )?;
     let mut running = open_prepared_play_audio(&app_config.audio, prepared)?;
     running.start(chart_zero_time)?;
     Ok(running)
