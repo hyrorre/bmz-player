@@ -78,6 +78,11 @@ impl WinitApp {
                     event_loop.exit();
                     return;
                 }
+                tracing::info!(
+                    width = size.width,
+                    height = size.height,
+                    "window and renderer surface ready"
+                );
                 self.window = Some(window);
             }
             Err(error) => {
@@ -163,18 +168,22 @@ impl WinitApp {
         match dev_scene_action(physical_key, state, repeat) {
             Some(DevSceneAction::SampleSelect) => {
                 self.dev_scene = Some(sample_select_scene());
+                tracing::info!("showing sample select scene");
                 true
             }
             Some(DevSceneAction::SamplePlay) => {
                 self.dev_scene = Some(sample_play_scene());
+                tracing::info!("showing sample play scene");
                 true
             }
             Some(DevSceneAction::SampleResult) => {
                 self.dev_scene = Some(sample_result_scene());
+                tracing::info!("showing sample result scene");
                 true
             }
             Some(DevSceneAction::Clear) if self.dev_scene.is_some() => {
                 self.dev_scene = None;
+                tracing::info!("leaving sample scene");
                 true
             }
             _ => false,
