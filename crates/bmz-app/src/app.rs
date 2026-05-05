@@ -1,6 +1,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
+use bmz_render::renderer::Renderer;
 use bmz_render::scene::{AppSceneSnapshot, ResultSnapshot, SelectSnapshot};
 use bmz_render::snapshot::RenderSnapshot;
 use winit::application::ApplicationHandler;
@@ -32,6 +33,7 @@ struct WinitApp {
     finished_play: Option<FinishedPlaySession>,
     last_play_snapshot: Option<RenderSnapshot>,
     select_rows: Vec<SelectChartRow>,
+    renderer: Renderer,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -53,6 +55,7 @@ impl WinitApp {
             finished_play: None,
             last_play_snapshot: None,
             select_rows,
+            renderer: Renderer::default(),
         })
     }
 
@@ -194,6 +197,13 @@ impl WinitApp {
             }
         }
     }
+
+    fn render_current_scene(&mut self) {
+        let scene = self.scene_snapshot();
+        if let Err(error) = self.renderer.render_scene(scene) {
+            tracing::error!(%error, "failed to render scene");
+        }
+    }
 }
 
 impl ApplicationHandler for WinitApp {
@@ -215,7 +225,7 @@ impl ApplicationHandler for WinitApp {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::KeyboardInput { event, .. } => self.route_keyboard_input(&event),
             WindowEvent::RedrawRequested => {
-                let _scene = self.scene_snapshot();
+                self.render_current_scene();
                 self.advance_active_play();
             }
             _ => {}
