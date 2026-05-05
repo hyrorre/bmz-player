@@ -8,8 +8,10 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowAttributes, WindowId};
 
 use crate::bootstrap::{self, BootstrappedApp};
+use crate::screens::play_finish::FinishedPlaySession;
 use crate::screens::play_loop::{PlayAdvanceOutcome, advance_running_play_session_until_result};
 use crate::screens::play_start::{PlayStartOptions, StartedWinitPlaySession};
+use crate::screens::result_model::ResultSummary;
 use crate::screens::select_model::load_select_chart_rows;
 
 pub fn run() -> Result<()> {
@@ -25,11 +27,19 @@ struct WinitApp {
     boot: BootstrappedApp,
     window: Option<Window>,
     active_play: Option<StartedWinitPlaySession>,
+    finished_play: Option<FinishedPlaySession>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum AppViewState {
+    Select,
+    Play,
+    Result(ResultSummary),
 }
 
 impl WinitApp {
     fn new(boot: BootstrappedApp) -> Self {
-        Self { boot, window: None, active_play: None }
+        Self { boot, window: None, active_play: None, finished_play: None }
     }
 
     fn ensure_window(&mut self, event_loop: &ActiveEventLoop) {
@@ -49,9 +59,28 @@ impl WinitApp {
         }
     }
 
+    fn view_state(&self) -> AppViewState {
+        if self.active_play.is_some() {
+            return AppViewState::Play;
+        }
+
+        if let Some(finished) = &self.finished_play {
+            return AppViewState::Result(finished.summary.clone());
+        }
+
+        AppViewState::Select
+    }
+
     fn route_keyboard_input(&mut self, event: &winit::event::KeyEvent) {
         if let Some(active_play) = &self.active_play {
             active_play.input.handle_key_event(event);
+            return;
+        }
+
+        if self.finished_play.is_some() {
+            if should_leave_result(event.physical_key, event.state, event.repeat) {
+                self.finished_play = None;
+            }
             return;
         }
 
@@ -79,6 +108,7 @@ impl WinitApp {
         {
             Ok(active_play) => {
                 self.active_play = Some(active_play);
+                self.finished_play = None;
             }
             Err(error) => {
                 tracing::error!(chart_id = row.chart.chart_id, %error, "failed to start play");
@@ -99,8 +129,9 @@ impl WinitApp {
             now_unix_seconds(),
         ) {
             Ok(PlayAdvanceOutcome::Playing(_)) => {}
-            Ok(PlayAdvanceOutcome::Finished { .. }) => {
+            Ok(PlayAdvanceOutcome::Finished { finished, .. }) => {
                 self.active_play = None;
+                self.finished_play = Some(finished);
             }
             Err(error) => {
                 tracing::error!(%error, "failed to advance play session");
@@ -128,7 +159,10 @@ impl ApplicationHandler for WinitApp {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::KeyboardInput { event, .. } => self.route_keyboard_input(&event),
-            WindowEvent::RedrawRequested => self.advance_active_play(),
+            WindowEvent::RedrawRequested => {
+                let _view_state = self.view_state();
+                self.advance_active_play();
+            }
             _ => {}
         }
     }
@@ -155,6 +189,12 @@ fn should_start_play_from_select(
     state == ElementState::Pressed
         && !repeat
         && matches!(physical_key, PhysicalKey::Code(KeyCode::Enter | KeyCode::Space))
+}
+
+fn should_leave_result(physical_key: PhysicalKey, state: ElementState, repeat: bool) -> bool {
+    state == ElementState::Pressed
+        && !repeat
+        && matches!(physical_key, PhysicalKey::Code(KeyCode::Enter | KeyCode::Escape))
 }
 
 #[cfg(test)]
@@ -189,6 +229,39 @@ mod tests {
         ));
         assert!(!should_start_play_from_select(
             PhysicalKey::Code(KeyCode::KeyZ),
+            ElementState::Pressed,
+            false
+        ));
+    }
+
+    #[test]
+    fn result_leave_key_accepts_enter_and_escape_press() {
+        assert!(should_leave_result(
+            PhysicalKey::Code(KeyCode::Enter),
+            ElementState::Pressed,
+            false
+        ));
+        assert!(should_leave_result(
+            PhysicalKey::Code(KeyCode::Escape),
+            ElementState::Pressed,
+            false
+        ));
+    }
+
+    #[test]
+    fn result_leave_key_rejects_releases_repeats_and_other_keys() {
+        assert!(!should_leave_result(
+            PhysicalKey::Code(KeyCode::Enter),
+            ElementState::Released,
+            false
+        ));
+        assert!(!should_leave_result(
+            PhysicalKey::Code(KeyCode::Escape),
+            ElementState::Pressed,
+            true
+        ));
+        assert!(!should_leave_result(
+            PhysicalKey::Code(KeyCode::Space),
             ElementState::Pressed,
             false
         ));
