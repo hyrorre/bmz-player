@@ -19,6 +19,25 @@ pub enum PlayAdvanceOutcome {
     Finished { frame: FrameOutput<RenderSnapshot>, finished: FinishedPlaySession },
 }
 
+impl PlayAdvanceOutcome {
+    pub fn frame(&self) -> &FrameOutput<RenderSnapshot> {
+        match self {
+            Self::Playing(frame) | Self::Finished { frame, .. } => frame,
+        }
+    }
+
+    pub fn finished(&self) -> Option<&FinishedPlaySession> {
+        match self {
+            Self::Playing(_) => None,
+            Self::Finished { finished, .. } => Some(finished),
+        }
+    }
+
+    pub fn is_finished(&self) -> bool {
+        self.finished().is_some()
+    }
+}
+
 pub fn advance_play_screen(
     session: &mut GameSession,
     audio: &mut dyn AudioScheduler,
@@ -194,6 +213,9 @@ mod tests {
         .unwrap();
 
         assert!(matches!(outcome, PlayAdvanceOutcome::Finished { .. }));
+        assert!(outcome.is_finished());
+        assert!(outcome.finished().is_some());
+        assert_eq!(outcome.frame().state, PlayState::Finished);
 
         std::fs::remove_dir_all(root).unwrap();
     }
