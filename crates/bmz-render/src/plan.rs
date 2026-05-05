@@ -2,7 +2,7 @@ use bmz_core::lane::{LANE_COUNT, Lane};
 
 use crate::scene::AppSceneSnapshot;
 use crate::snapshot::RenderSnapshot;
-use crate::text::{BitmapTextStyle, push_bitmap_text};
+use crate::text::{BitmapTextStyle, TextRenderer};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DrawPlan {
@@ -60,11 +60,12 @@ impl Color {
 
 fn plan_select(chart_count: u32, selected_title: &str) -> DrawPlan {
     let mut commands = Vec::new();
+    let text = TextRenderer;
     commands.push(DrawCommand::Rect {
         rect: Rect { x: 0.06, y: 0.08, width: 0.88, height: 0.08 },
         color: Color::rgb(0.08, 0.11, 0.13),
     });
-    push_bitmap_text(
+    text.push_text(
         &mut commands,
         "SELECT",
         BitmapTextStyle { x: 0.08, y: 0.105, cell: 0.009, color: Color::rgb(0.82, 0.9, 0.95) },
@@ -81,7 +82,7 @@ fn plan_select(chart_count: u32, selected_title: &str) -> DrawPlan {
             },
         });
         if selected {
-            push_bitmap_text(
+            text.push_text(
                 &mut commands,
                 &display_title(selected_title),
                 BitmapTextStyle {
@@ -107,6 +108,7 @@ fn plan_select(chart_count: u32, selected_title: &str) -> DrawPlan {
 
 fn plan_play(snapshot: &RenderSnapshot) -> DrawPlan {
     let mut commands = Vec::new();
+    let text = TextRenderer;
     let board = Rect { x: 0.18, y: 0.05, width: 0.64, height: 0.9 };
     commands.push(DrawCommand::Rect { rect: board, color: Color::rgb(0.025, 0.025, 0.028) });
     commands.push(DrawCommand::Rect {
@@ -151,18 +153,19 @@ fn plan_play(snapshot: &RenderSnapshot) -> DrawPlan {
     push_judge_line(&mut commands, board);
     push_gauge(&mut commands, snapshot.gauge);
     push_combo_panel(&mut commands, snapshot.combo);
-    push_play_text(&mut commands, snapshot);
+    push_play_text(&text, &mut commands, snapshot);
 
     DrawPlan { clear: Color::rgb(0.0, 0.0, 0.0), commands }
 }
 
 fn plan_result(ex_score: u32, ex_score_rate: f32, max_combo: u32, gauge_value: f32) -> DrawPlan {
     let mut commands = Vec::new();
+    let text = TextRenderer;
     commands.push(DrawCommand::Rect {
         rect: Rect { x: 0.1, y: 0.16, width: 0.8, height: 0.18 },
         color: Color::rgb(0.16, 0.13, 0.11),
     });
-    push_bitmap_text(
+    text.push_text(
         &mut commands,
         "RESULT",
         BitmapTextStyle { x: 0.14, y: 0.205, cell: 0.014, color: Color::rgb(0.95, 0.9, 0.8) },
@@ -181,17 +184,17 @@ fn plan_result(ex_score: u32, ex_score_rate: f32, max_combo: u32, gauge_value: f
             color: Color::rgb(0.09, 0.08, 0.075),
         });
     }
-    push_bitmap_text(
+    text.push_text(
         &mut commands,
         &format!("EX {}", ex_score),
         BitmapTextStyle { x: 0.16, y: 0.565, cell: 0.008, color: Color::rgb(0.86, 0.9, 0.92) },
     );
-    push_bitmap_text(
+    text.push_text(
         &mut commands,
         &format!("MAX {}", max_combo),
         BitmapTextStyle { x: 0.34, y: 0.565, cell: 0.008, color: Color::rgb(0.86, 0.9, 0.92) },
     );
-    push_bitmap_text(
+    text.push_text(
         &mut commands,
         &format!("GAUGE {}", gauge_value.round() as u32),
         BitmapTextStyle { x: 0.52, y: 0.565, cell: 0.008, color: Color::rgb(0.86, 0.9, 0.92) },
@@ -231,21 +234,21 @@ fn push_combo_panel(commands: &mut Vec<DrawCommand>, combo: u32) {
     });
 }
 
-fn push_play_text(commands: &mut Vec<DrawCommand>, snapshot: &RenderSnapshot) {
+fn push_play_text(text: &TextRenderer, commands: &mut Vec<DrawCommand>, snapshot: &RenderSnapshot) {
     if snapshot.combo > 0 {
-        push_bitmap_text(
+        text.push_text(
             commands,
             &snapshot.combo.to_string(),
             BitmapTextStyle { x: 0.38, y: 0.18, cell: 0.01, color: Color::rgb(0.94, 0.98, 1.0) },
         );
     }
-    push_bitmap_text(
+    text.push_text(
         commands,
         &format!("G{}", snapshot.gauge.round() as u32),
         BitmapTextStyle { x: 0.885, y: 0.08, cell: 0.007, color: Color::rgb(0.8, 0.92, 0.86) },
     );
     if let Some(judgement) = snapshot.recent_judgements.last() {
-        push_bitmap_text(
+        text.push_text(
             commands,
             &judgement.text,
             BitmapTextStyle { x: 0.38, y: 0.245, cell: 0.006, color: Color::rgb(0.96, 0.92, 0.54) },
