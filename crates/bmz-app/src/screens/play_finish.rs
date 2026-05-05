@@ -4,8 +4,16 @@ use bmz_gameplay::session::{GameSession, PlayState};
 
 use crate::config::profile_config::ReplayConfig;
 use crate::paths::ProfilePaths;
+use crate::screens::result_model::ResultSummary;
 use crate::storage::play_result::{StorePlayResultRequest, StoredPlayResult, store_play_result};
 use crate::storage::score_db::ScoreDatabase;
+
+#[derive(Debug, Clone)]
+pub struct FinishedPlaySession {
+    pub result: PlayResult,
+    pub stored: StoredPlayResult,
+    pub summary: ResultSummary,
+}
 
 pub fn play_result_from_session(session: &GameSession) -> PlayResult {
     PlayResult::from_states(
@@ -24,9 +32,19 @@ pub fn store_session_result(
     session: &GameSession,
     played_at: i64,
 ) -> Result<StoredPlayResult> {
+    Ok(finish_session_result(score_db, profile_paths, replay_config, session, played_at)?.stored)
+}
+
+pub fn finish_session_result(
+    score_db: &mut ScoreDatabase,
+    profile_paths: &ProfilePaths,
+    replay_config: &ReplayConfig,
+    session: &GameSession,
+    played_at: i64,
+) -> Result<FinishedPlaySession> {
     ensure_storable_state(session.state)?;
     let result = play_result_from_session(session);
-    store_play_result(
+    let stored = store_play_result(
         score_db,
         profile_paths,
         replay_config,
@@ -38,7 +56,10 @@ pub fn store_session_result(
             assist_mask: 0,
             replay_events: session.replay_recorder.events.clone(),
         },
-    )
+    )?;
+    let summary = ResultSummary::from_play_result(&result, &stored);
+
+    Ok(FinishedPlaySession { result, stored, summary })
 }
 
 fn ensure_storable_state(state: PlayState) -> Result<()> {
@@ -119,6 +140,37 @@ mod tests {
         assert!(stored.score_history_id > 0);
         assert!(!stored.replay_path.is_empty());
         assert!(root.join(&stored.replay_path).exists());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn finish_session_result_returns_summary() {
+        let root = make_temp_dir("finish-summary");
+        let paths = ProfilePaths {
+            root_dir: root.clone(),
+            profile_toml: root.join("profile.toml"),
+            score_db: root.join("score.db"),
+            replay_dir: root.join("replay"),
+        };
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut score_db = ScoreDatabase::from_connection(conn);
+        let replay_config = ReplayConfig {
+            auto_save: true,
+            save_failed_runs: true,
+            save_autoplay_runs: false,
+            compress: false,
+        };
+        let session = session();
+
+        let finished =
+            finish_session_result(&mut score_db, &paths, &replay_config, &session, 1_700_000_102)
+                .unwrap();
+
+        assert_eq!(finished.summary.score_history_id, finished.stored.score_history_id);
+        assert_eq!(finished.summary.clear_type, finished.result.clear_type);
 
         std::fs::remove_dir_all(root).unwrap();
     }
