@@ -1,7 +1,8 @@
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use bmz_render::renderer::Renderer;
+use bmz_render::renderer::{Renderer, SurfaceSize};
 use bmz_render::scene::{AppSceneSnapshot, ResultSnapshot, SelectSnapshot};
 use bmz_render::snapshot::RenderSnapshot;
 use winit::application::ApplicationHandler;
@@ -28,7 +29,7 @@ pub fn run() -> Result<()> {
 
 struct WinitApp {
     boot: BootstrappedApp,
-    window: Option<Window>,
+    window: Option<Arc<Window>>,
     active_play: Option<StartedWinitPlaySession>,
     finished_play: Option<FinishedPlaySession>,
     last_play_snapshot: Option<RenderSnapshot>,
@@ -67,6 +68,13 @@ impl WinitApp {
         let attributes = WindowAttributes::default().with_title("bmz-player");
         match event_loop.create_window(attributes) {
             Ok(window) => {
+                let window = Arc::new(window);
+                let size = surface_size_for_window(&window);
+                if let Err(error) = self.renderer.attach_surface(Arc::clone(&window), size) {
+                    tracing::error!(%error, "failed to initialize renderer surface");
+                    event_loop.exit();
+                    return;
+                }
                 self.window = Some(window);
             }
             Err(error) => {
@@ -217,13 +225,17 @@ impl ApplicationHandler for WinitApp {
         window_id: WindowId,
         event: WindowEvent,
     ) {
-        if self.window.as_ref().map(Window::id) != Some(window_id) {
+        if self.window.as_ref().map(|window| window.id()) != Some(window_id) {
             return;
         }
 
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::KeyboardInput { event, .. } => self.route_keyboard_input(&event),
+            WindowEvent::Resized(size) => {
+                self.renderer
+                    .resize_surface(SurfaceSize { width: size.width, height: size.height });
+            }
             WindowEvent::RedrawRequested => {
                 self.render_current_scene();
                 self.advance_active_play();
@@ -237,6 +249,11 @@ impl ApplicationHandler for WinitApp {
             window.request_redraw();
         }
     }
+}
+
+fn surface_size_for_window(window: &Window) -> SurfaceSize {
+    let size = window.inner_size();
+    SurfaceSize { width: size.width, height: size.height }
 }
 
 fn now_unix_seconds() -> i64 {
