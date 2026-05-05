@@ -70,6 +70,7 @@ pub struct GameSession {
     pub state: PlayState,
 }
 
+#[derive(Debug, Clone)]
 pub struct FrameOutput<TSnapshot> {
     pub render_snapshot: TSnapshot,
     pub state: PlayState,
