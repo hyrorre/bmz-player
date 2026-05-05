@@ -1,3 +1,5 @@
+use std::sync::{Arc, Mutex};
+
 use bmz_core::input::InputKind;
 use bmz_gameplay::input::backend::{
     BufferedInputBackend, DeviceId, DeviceInputEvent, DeviceTimestamp, InputBackend,
@@ -8,39 +10,40 @@ use winit::keyboard::{KeyCode, NativeKeyCode, PhysicalKey};
 
 pub const W_KEYBOARD_DEVICE_ID: DeviceId = DeviceId(0);
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct WinitInputBackend {
-    buffer: BufferedInputBackend,
+    buffer: Arc<Mutex<BufferedInputBackend>>,
 }
 
 impl WinitInputBackend {
-    pub fn handle_key_parts(
-        &mut self,
-        physical_key: PhysicalKey,
-        state: ElementState,
-        repeat: bool,
-    ) {
+    pub fn handle_key_parts(&self, physical_key: PhysicalKey, state: ElementState, repeat: bool) {
         if let Some(event) = physical_key_to_device_input(physical_key, state, repeat) {
-            self.push_event(event);
+            self.push_shared_event(event);
         }
     }
 
-    pub fn handle_key_event(&mut self, event: &KeyEvent) {
+    pub fn handle_key_event(&self, event: &KeyEvent) {
         if let Some(event) = key_event_to_device_input(event) {
-            self.push_event(event);
+            self.push_shared_event(event);
+        }
+    }
+
+    fn push_shared_event(&self, event: DeviceInputEvent) {
+        if let Ok(mut buffer) = self.buffer.lock() {
+            buffer.push_event(event);
         }
     }
 }
 
 impl InputBackend for WinitInputBackend {
     fn drain_events(&mut self) -> Vec<DeviceInputEvent> {
-        self.buffer.drain_events()
+        self.buffer.lock().map(|mut buffer| buffer.drain_events()).unwrap_or_default()
     }
 }
 
 impl InputEventSink for WinitInputBackend {
     fn push_event(&mut self, event: DeviceInputEvent) {
-        self.buffer.push_event(event);
+        self.push_shared_event(event);
     }
 }
 
@@ -228,5 +231,21 @@ mod tests {
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].kind, InputKind::Press);
         assert_eq!(events[1].kind, InputKind::Release);
+    }
+
+    #[test]
+    fn cloned_winit_input_backend_shares_events() {
+        let event_source = WinitInputBackend::default();
+        let mut game_backend = event_source.clone();
+
+        event_source.handle_key_parts(
+            PhysicalKey::Code(KeyCode::KeyZ),
+            ElementState::Pressed,
+            false,
+        );
+
+        let events = game_backend.drain_events();
+        assert_eq!(events.len(), 1);
+        assert!(game_backend.drain_events().is_empty());
     }
 }
