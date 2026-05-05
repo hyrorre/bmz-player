@@ -7,7 +7,9 @@ use bmz_render::snapshot::RenderSnapshot;
 use crate::audio::RunningPlaySession;
 use crate::config::profile_config::ReplayConfig;
 use crate::paths::ProfilePaths;
-use crate::screens::play_finish::{FinishedPlaySession, finish_session_result};
+use crate::screens::play_finish::{
+    FinishedPlaySession, finish_session_result, finish_session_result_once,
+};
 use crate::screens::play_snapshot::build_render_snapshot;
 use crate::storage::score_db::ScoreDatabase;
 
@@ -66,16 +68,36 @@ pub fn advance_running_play_session_until_result(
     replay_config: &ReplayConfig,
     played_at: i64,
 ) -> Result<PlayAdvanceOutcome> {
+    if let Some(finished) = running.finished.clone() {
+        return Ok(PlayAdvanceOutcome::Finished {
+            frame: current_play_frame(&running.session),
+            finished,
+        });
+    }
+
     let mut audio =
         running.audio.engine.lock().map_err(|_| anyhow!("audio engine lock poisoned"))?;
-    advance_play_screen_until_result(
-        &mut running.session,
-        &mut *audio,
-        score_db,
-        profile_paths,
-        replay_config,
-        played_at,
-    )
+    let frame = advance_play_screen(&mut running.session, &mut *audio);
+    if matches!(frame.state, PlayState::Finished | PlayState::Failed) {
+        let finished = finish_session_result_once(
+            &mut running.finished,
+            score_db,
+            profile_paths,
+            replay_config,
+            &running.session,
+            played_at,
+        )?;
+        return Ok(PlayAdvanceOutcome::Finished { frame, finished });
+    }
+
+    Ok(PlayAdvanceOutcome::Playing(frame))
+}
+
+fn current_play_frame(session: &GameSession) -> FrameOutput<RenderSnapshot> {
+    let times = bmz_gameplay::session::compute_frame_times(session);
+    let render_snapshot =
+        build_render_snapshot(session, times.render_now, &session.recent_judgements);
+    FrameOutput { render_snapshot, state: session.state }
 }
 
 #[cfg(test)]

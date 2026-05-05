@@ -62,6 +62,24 @@ pub fn finish_session_result(
     Ok(FinishedPlaySession { result, stored, summary })
 }
 
+pub fn finish_session_result_once(
+    cached: &mut Option<FinishedPlaySession>,
+    score_db: &mut ScoreDatabase,
+    profile_paths: &ProfilePaths,
+    replay_config: &ReplayConfig,
+    session: &GameSession,
+    played_at: i64,
+) -> Result<FinishedPlaySession> {
+    if let Some(finished) = cached.clone() {
+        return Ok(finished);
+    }
+
+    let finished =
+        finish_session_result(score_db, profile_paths, replay_config, session, played_at)?;
+    *cached = Some(finished.clone());
+    Ok(finished)
+}
+
 fn ensure_storable_state(state: PlayState) -> Result<()> {
     match state {
         PlayState::Finished | PlayState::Failed => Ok(()),
@@ -171,6 +189,53 @@ mod tests {
 
         assert_eq!(finished.summary.score_history_id, finished.stored.score_history_id);
         assert_eq!(finished.summary.clear_type, finished.result.clear_type);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn finish_session_result_once_reuses_cached_result() {
+        let root = make_temp_dir("finish-once");
+        let paths = ProfilePaths {
+            root_dir: root.clone(),
+            profile_toml: root.join("profile.toml"),
+            score_db: root.join("score.db"),
+            replay_dir: root.join("replay"),
+        };
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut score_db = ScoreDatabase::from_connection(conn);
+        let replay_config = ReplayConfig {
+            auto_save: true,
+            save_failed_runs: true,
+            save_autoplay_runs: false,
+            compress: false,
+        };
+        let session = session();
+        let mut cached = None;
+
+        let first = finish_session_result_once(
+            &mut cached,
+            &mut score_db,
+            &paths,
+            &replay_config,
+            &session,
+            1_700_000_103,
+        )
+        .unwrap();
+        let second = finish_session_result_once(
+            &mut cached,
+            &mut score_db,
+            &paths,
+            &replay_config,
+            &session,
+            1_700_000_104,
+        )
+        .unwrap();
+
+        assert_eq!(first.stored.score_history_id, second.stored.score_history_id);
+        assert_eq!(score_db.recent_history(10, 0).unwrap().len(), 1);
 
         std::fs::remove_dir_all(root).unwrap();
     }

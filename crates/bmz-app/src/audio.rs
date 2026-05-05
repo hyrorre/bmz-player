@@ -8,6 +8,7 @@ use bmz_audio::loader::LoadedSampleReport;
 use bmz_gameplay::session::GameSession;
 
 use crate::config::app_config::{AudioBackend, AudioConfig};
+use crate::screens::play_finish::FinishedPlaySession;
 use crate::screens::play_session::PreparedPlaySession;
 
 pub struct AppAudioOutput {
@@ -19,6 +20,7 @@ pub struct RunningPlaySession {
     pub session: GameSession,
     pub audio: AppAudioOutput,
     pub sample_report: Vec<LoadedSampleReport>,
+    pub finished: Option<FinishedPlaySession>,
 }
 
 impl AppAudioOutput {
@@ -43,7 +45,7 @@ pub fn open_prepared_play_audio(
     let mut session = prepared.session;
     session.audio_clock = audio.clock();
 
-    Ok(RunningPlaySession { session, audio, sample_report: prepared.sample_report })
+    Ok(RunningPlaySession { session, audio, sample_report: prepared.sample_report, finished: None })
 }
 
 fn ensure_default_device_supported(config: &AudioConfig) -> Result<()> {
