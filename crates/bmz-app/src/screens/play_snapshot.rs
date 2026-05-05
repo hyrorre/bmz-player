@@ -23,7 +23,8 @@ pub fn build_render_snapshot(
     };
 
     for lane in Lane::ALL {
-        for note in session.chart.notes_for_lane(lane) {
+        let next_note_index = session.judge.lanes[lane.index()].next_note_index;
+        for note in session.chart.notes_for_lane(lane).iter().skip(next_note_index) {
             if let Some(y) = note_y(note.time, render_now) {
                 snapshot.visible_notes[lane.index()].push(VisibleNote { lane, time: note.time, y });
             }
@@ -111,6 +112,18 @@ mod tests {
         assert_eq!(snapshot.visible_notes[Lane::Key1.index()].len(), 1);
         assert_eq!(snapshot.visible_notes[Lane::Key1.index()][0].y, 360.0);
         assert_eq!(snapshot.recent_judgements[0].text, "EMPTY POOR SLOW");
+    }
+
+    #[test]
+    fn build_render_snapshot_hides_consumed_notes() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+        session.judge.lanes[Lane::Key1.index()].next_note_index = 1;
+
+        let snapshot = build_render_snapshot(&session, TimeUs(0), &[]);
+
+        assert!(snapshot.visible_notes[Lane::Key1.index()].is_empty());
     }
 
     fn chart() -> PlayableChart {
