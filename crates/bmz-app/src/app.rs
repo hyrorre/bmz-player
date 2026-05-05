@@ -3,6 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use bmz_render::renderer::{Renderer, SurfaceSize};
+use bmz_render::sample::{sample_play_scene, sample_result_scene, sample_select_scene};
 use bmz_render::scene::{AppSceneSnapshot, ResultSnapshot, SelectSnapshot};
 use bmz_render::snapshot::RenderSnapshot;
 use winit::application::ApplicationHandler;
@@ -35,6 +36,7 @@ struct WinitApp {
     last_play_snapshot: Option<RenderSnapshot>,
     select_rows: Vec<SelectChartRow>,
     renderer: Renderer,
+    dev_scene: Option<AppSceneSnapshot>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -57,6 +59,7 @@ impl WinitApp {
             last_play_snapshot: None,
             select_rows,
             renderer: Renderer::default(),
+            dev_scene: None,
         })
     }
 
@@ -97,6 +100,10 @@ impl WinitApp {
     }
 
     fn scene_snapshot(&self) -> AppSceneSnapshot {
+        if let Some(scene) = &self.dev_scene {
+            return scene.clone();
+        }
+
         match self.view_state() {
             AppViewState::Select => AppSceneSnapshot::Select(self.select_snapshot()),
             AppViewState::Play => {
@@ -124,6 +131,10 @@ impl WinitApp {
     }
 
     fn route_keyboard_input(&mut self, event: &winit::event::KeyEvent) {
+        if self.route_dev_scene_key(event.physical_key, event.state, event.repeat) {
+            return;
+        }
+
         if let Some(active_play) = &self.active_play {
             active_play.input.handle_key_event(event);
             return;
@@ -140,6 +151,33 @@ impl WinitApp {
 
         if should_start_play_from_select(event.physical_key, event.state, event.repeat) {
             self.start_first_select_chart();
+        }
+    }
+
+    fn route_dev_scene_key(
+        &mut self,
+        physical_key: PhysicalKey,
+        state: ElementState,
+        repeat: bool,
+    ) -> bool {
+        match dev_scene_action(physical_key, state, repeat) {
+            Some(DevSceneAction::SampleSelect) => {
+                self.dev_scene = Some(sample_select_scene());
+                true
+            }
+            Some(DevSceneAction::SamplePlay) => {
+                self.dev_scene = Some(sample_play_scene());
+                true
+            }
+            Some(DevSceneAction::SampleResult) => {
+                self.dev_scene = Some(sample_result_scene());
+                true
+            }
+            Some(DevSceneAction::Clear) if self.dev_scene.is_some() => {
+                self.dev_scene = None;
+                true
+            }
+            _ => false,
         }
     }
 
@@ -279,6 +317,32 @@ fn should_leave_result(physical_key: PhysicalKey, state: ElementState, repeat: b
         && matches!(physical_key, PhysicalKey::Code(KeyCode::Enter | KeyCode::Escape))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DevSceneAction {
+    SampleSelect,
+    SamplePlay,
+    SampleResult,
+    Clear,
+}
+
+fn dev_scene_action(
+    physical_key: PhysicalKey,
+    state: ElementState,
+    repeat: bool,
+) -> Option<DevSceneAction> {
+    if state != ElementState::Pressed || repeat {
+        return None;
+    }
+
+    match physical_key {
+        PhysicalKey::Code(KeyCode::F1) => Some(DevSceneAction::SampleSelect),
+        PhysicalKey::Code(KeyCode::F2) => Some(DevSceneAction::SamplePlay),
+        PhysicalKey::Code(KeyCode::F3) => Some(DevSceneAction::SampleResult),
+        PhysicalKey::Code(KeyCode::Escape) => Some(DevSceneAction::Clear),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -347,5 +411,41 @@ mod tests {
             ElementState::Pressed,
             false
         ));
+    }
+
+    #[test]
+    fn dev_scene_keys_map_to_sample_scenes() {
+        assert_eq!(
+            dev_scene_action(PhysicalKey::Code(KeyCode::F1), ElementState::Pressed, false),
+            Some(DevSceneAction::SampleSelect)
+        );
+        assert_eq!(
+            dev_scene_action(PhysicalKey::Code(KeyCode::F2), ElementState::Pressed, false),
+            Some(DevSceneAction::SamplePlay)
+        );
+        assert_eq!(
+            dev_scene_action(PhysicalKey::Code(KeyCode::F3), ElementState::Pressed, false),
+            Some(DevSceneAction::SampleResult)
+        );
+        assert_eq!(
+            dev_scene_action(PhysicalKey::Code(KeyCode::Escape), ElementState::Pressed, false),
+            Some(DevSceneAction::Clear)
+        );
+    }
+
+    #[test]
+    fn dev_scene_keys_ignore_releases_repeats_and_other_keys() {
+        assert_eq!(
+            dev_scene_action(PhysicalKey::Code(KeyCode::F1), ElementState::Released, false),
+            None
+        );
+        assert_eq!(
+            dev_scene_action(PhysicalKey::Code(KeyCode::F1), ElementState::Pressed, true),
+            None
+        );
+        assert_eq!(
+            dev_scene_action(PhysicalKey::Code(KeyCode::KeyZ), ElementState::Pressed, false),
+            None
+        );
     }
 }
