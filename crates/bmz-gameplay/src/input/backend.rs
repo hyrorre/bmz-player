@@ -30,6 +30,16 @@ pub trait InputBackend {
     fn drain_events(&mut self) -> Vec<DeviceInputEvent>;
 }
 
+pub trait InputEventSink {
+    fn push_event(&mut self, event: DeviceInputEvent);
+
+    fn extend_events(&mut self, events: impl IntoIterator<Item = DeviceInputEvent>) {
+        for event in events {
+            self.push_event(event);
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct NullInputBackend;
 
@@ -46,17 +56,23 @@ pub struct BufferedInputBackend {
 
 impl BufferedInputBackend {
     pub fn push(&mut self, event: DeviceInputEvent) {
-        self.events.push(event);
+        self.push_event(event);
     }
 
     pub fn extend(&mut self, events: impl IntoIterator<Item = DeviceInputEvent>) {
-        self.events.extend(events);
+        self.extend_events(events);
     }
 }
 
 impl InputBackend for BufferedInputBackend {
     fn drain_events(&mut self) -> Vec<DeviceInputEvent> {
         std::mem::take(&mut self.events)
+    }
+}
+
+impl InputEventSink for BufferedInputBackend {
+    fn push_event(&mut self, event: DeviceInputEvent) {
+        self.events.push(event);
     }
 }
 
@@ -67,7 +83,7 @@ mod tests {
     #[test]
     fn buffered_backend_drains_queued_events() {
         let mut backend = BufferedInputBackend::default();
-        backend.push(DeviceInputEvent {
+        backend.push_event(DeviceInputEvent {
             device: DeviceId(1),
             control: PhysicalControl::KeyboardKey("Z".to_string()),
             kind: InputKind::Press,
@@ -76,5 +92,27 @@ mod tests {
 
         assert_eq!(backend.drain_events().len(), 1);
         assert!(backend.drain_events().is_empty());
+    }
+
+    #[test]
+    fn input_event_sink_extends_buffered_backend() {
+        let mut backend = BufferedInputBackend::default();
+
+        backend.extend_events([
+            DeviceInputEvent {
+                device: DeviceId(1),
+                control: PhysicalControl::KeyboardKey("Z".to_string()),
+                kind: InputKind::Press,
+                timestamp: DeviceTimestamp::Unknown,
+            },
+            DeviceInputEvent {
+                device: DeviceId(1),
+                control: PhysicalControl::KeyboardKey("Z".to_string()),
+                kind: InputKind::Release,
+                timestamp: DeviceTimestamp::Unknown,
+            },
+        ]);
+
+        assert_eq!(backend.drain_events().len(), 2);
     }
 }
