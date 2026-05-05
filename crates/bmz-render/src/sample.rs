@@ -1,0 +1,71 @@
+use bmz_core::lane::Lane;
+use bmz_core::time::TimeUs;
+
+use crate::scene::{AppSceneSnapshot, ResultSnapshot, SelectSnapshot};
+use crate::snapshot::{DisplayJudgement, RenderSnapshot, VisibleBarLine, VisibleNote};
+
+pub fn sample_select_scene() -> AppSceneSnapshot {
+    AppSceneSnapshot::Select(SelectSnapshot {
+        chart_count: 7,
+        selected_index: 0,
+        selected_chart_id: Some(1),
+        selected_title: "Sample BMS".to_string(),
+    })
+}
+
+pub fn sample_play_scene() -> AppSceneSnapshot {
+    let mut snapshot =
+        RenderSnapshot { time: TimeUs(12_345_000), combo: 1234, gauge: 82.0, ..Default::default() };
+
+    for (index, lane) in Lane::ALL.into_iter().enumerate() {
+        snapshot.visible_notes[lane.index()].push(VisibleNote {
+            lane,
+            time: TimeUs(12_500_000 + index as i64 * 80_000),
+            y: 0.18 + index as f32 * 0.08,
+        });
+    }
+    snapshot.visible_notes[Lane::Key2.index()].push(VisibleNote {
+        lane: Lane::Key2,
+        time: TimeUs(13_200_000),
+        y: 0.86,
+    });
+    snapshot.bar_lines.push(VisibleBarLine { time: TimeUs(12_000_000), y: 0.25 });
+    snapshot.bar_lines.push(VisibleBarLine { time: TimeUs(13_000_000), y: 0.78 });
+    snapshot
+        .recent_judgements
+        .push(DisplayJudgement { text: "PGREAT".to_string(), time: TimeUs(12_300_000) });
+
+    AppSceneSnapshot::Play(snapshot)
+}
+
+pub fn sample_result_scene() -> AppSceneSnapshot {
+    AppSceneSnapshot::Result(ResultSnapshot {
+        clear_type: bmz_core::clear::ClearType::Normal,
+        ex_score: 1888,
+        ex_score_rate: 0.944,
+        max_combo: 777,
+        gauge_value: 84.0,
+        total_notes: 1000,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::plan::DrawPlan;
+
+    use super::*;
+
+    #[test]
+    fn sample_play_scene_builds_non_empty_draw_plan() {
+        let plan = DrawPlan::from_scene(&sample_play_scene());
+
+        assert!(plan.commands.len() > 20);
+    }
+
+    #[test]
+    fn sample_scenes_cover_all_scene_kinds() {
+        assert!(matches!(sample_select_scene(), AppSceneSnapshot::Select(_)));
+        assert!(matches!(sample_play_scene(), AppSceneSnapshot::Play(_)));
+        assert!(matches!(sample_result_scene(), AppSceneSnapshot::Result(_)));
+    }
+}
