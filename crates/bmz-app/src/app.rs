@@ -2,13 +2,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use winit::application::ApplicationHandler;
-use winit::event::WindowEvent;
+use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowAttributes, WindowId};
 
 use crate::bootstrap::{self, BootstrappedApp};
 use crate::screens::play_loop::{PlayAdvanceOutcome, advance_running_play_session_until_result};
-use crate::screens::play_start::StartedWinitPlaySession;
+use crate::screens::play_start::{PlayStartOptions, StartedWinitPlaySession};
+use crate::screens::select_model::load_select_chart_rows;
 
 pub fn run() -> Result<()> {
     let boot = bootstrap::bootstrap()?;
@@ -48,11 +50,40 @@ impl WinitApp {
     }
 
     fn route_keyboard_input(&mut self, event: &winit::event::KeyEvent) {
-        let Some(active_play) = &self.active_play else {
+        if let Some(active_play) = &self.active_play {
+            active_play.input.handle_key_event(event);
+            return;
+        }
+
+        if should_start_play_from_select(event.physical_key, event.state, event.repeat) {
+            self.start_first_select_chart();
+        }
+    }
+
+    fn start_first_select_chart(&mut self) {
+        let rows = match load_select_chart_rows(&self.boot.library_db, &self.boot.score_db, 1, 0) {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::error!(%error, "failed to load select chart rows");
+                return;
+            }
+        };
+        let Some(row) = rows.first() else {
+            tracing::warn!("no chart is available to start");
             return;
         };
 
-        active_play.input.handle_key_event(event);
+        match self
+            .boot
+            .start_play_for_chart_with_winit_input(row.chart.chart_id, PlayStartOptions::default())
+        {
+            Ok(active_play) => {
+                self.active_play = Some(active_play);
+            }
+            Err(error) => {
+                tracing::error!(chart_id = row.chart.chart_id, %error, "failed to start play");
+            }
+        }
     }
 
     fn advance_active_play(&mut self) {
@@ -114,4 +145,52 @@ fn now_unix_seconds() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs() as i64)
         .unwrap_or(0)
+}
+
+fn should_start_play_from_select(
+    physical_key: PhysicalKey,
+    state: ElementState,
+    repeat: bool,
+) -> bool {
+    state == ElementState::Pressed
+        && !repeat
+        && matches!(physical_key, PhysicalKey::Code(KeyCode::Enter | KeyCode::Space))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn select_start_key_accepts_enter_and_space_press() {
+        assert!(should_start_play_from_select(
+            PhysicalKey::Code(KeyCode::Enter),
+            ElementState::Pressed,
+            false
+        ));
+        assert!(should_start_play_from_select(
+            PhysicalKey::Code(KeyCode::Space),
+            ElementState::Pressed,
+            false
+        ));
+    }
+
+    #[test]
+    fn select_start_key_rejects_releases_repeats_and_other_keys() {
+        assert!(!should_start_play_from_select(
+            PhysicalKey::Code(KeyCode::Enter),
+            ElementState::Released,
+            false
+        ));
+        assert!(!should_start_play_from_select(
+            PhysicalKey::Code(KeyCode::Enter),
+            ElementState::Pressed,
+            true
+        ));
+        assert!(!should_start_play_from_select(
+            PhysicalKey::Code(KeyCode::KeyZ),
+            ElementState::Pressed,
+            false
+        ));
+    }
 }
