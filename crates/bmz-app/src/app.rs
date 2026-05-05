@@ -7,7 +7,7 @@ use bmz_render::sample::{sample_play_scene, sample_result_scene, sample_select_s
 use bmz_render::scene::{AppSceneSnapshot, ResultSnapshot, SelectSnapshot};
 use bmz_render::snapshot::RenderSnapshot;
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, WindowEvent};
+use winit::event::{ElementState, StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowAttributes, WindowId};
@@ -25,6 +25,7 @@ pub fn run() -> Result<()> {
     event_loop.set_control_flow(ControlFlow::Poll);
 
     let mut app = WinitApp::new(boot)?;
+    tracing::info!("starting winit event loop");
     event_loop.run_app(&mut app).context("winit event loop failed")
 }
 
@@ -81,6 +82,7 @@ impl WinitApp {
         match event_loop.create_window(attributes) {
             Ok(window) => {
                 let window = Arc::new(window);
+                window.set_visible(true);
                 let size = surface_size_for_window(&window);
                 if let Err(error) = self.renderer.attach_surface(Arc::clone(&window), size) {
                     tracing::error!(%error, "failed to initialize renderer surface");
@@ -92,6 +94,7 @@ impl WinitApp {
                     height = size.height,
                     "window and renderer surface ready"
                 );
+                window.request_redraw();
                 self.window = Some(window);
                 self.update_window_title_for_scene(AppSceneKind::Select);
             }
@@ -297,7 +300,15 @@ impl WinitApp {
 }
 
 impl ApplicationHandler for WinitApp {
+    fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) {
+        if cause == StartCause::Init {
+            tracing::info!("winit app init");
+            self.ensure_window(event_loop);
+        }
+    }
+
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        tracing::info!("winit app resumed");
         self.ensure_window(event_loop);
     }
 
