@@ -37,6 +37,7 @@ struct WinitApp {
     select_rows: Vec<SelectChartRow>,
     renderer: Renderer,
     dev_scene: Option<AppSceneSnapshot>,
+    last_scene_kind: Option<AppSceneKind>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -44,6 +45,13 @@ enum AppViewState {
     Select,
     Play,
     Result(ResultSummary),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AppSceneKind {
+    Select,
+    Play,
+    Result,
 }
 
 impl WinitApp {
@@ -60,6 +68,7 @@ impl WinitApp {
             select_rows,
             renderer: Renderer::default(),
             dev_scene: None,
+            last_scene_kind: None,
         })
     }
 
@@ -84,6 +93,7 @@ impl WinitApp {
                     "window and renderer surface ready"
                 );
                 self.window = Some(window);
+                self.update_window_title_for_scene(AppSceneKind::Select);
             }
             Err(error) => {
                 tracing::error!(%error, "failed to create window");
@@ -255,6 +265,8 @@ impl WinitApp {
 
     fn render_current_scene(&mut self) {
         let scene = self.scene_snapshot();
+        let scene_kind = scene_kind(&scene);
+        self.update_window_title_for_scene(scene_kind);
         match self.renderer.render_scene_status(scene) {
             Ok(RenderSurfaceStatus::Rendered)
             | Ok(RenderSurfaceStatus::SkippedNoSurface)
@@ -269,6 +281,18 @@ impl WinitApp {
                 tracing::error!(%error, "failed to present render scene");
             }
         }
+    }
+
+    fn update_window_title_for_scene(&mut self, scene_kind: AppSceneKind) {
+        if self.last_scene_kind == Some(scene_kind) {
+            return;
+        }
+
+        self.last_scene_kind = Some(scene_kind);
+        if let Some(window) = &self.window {
+            window.set_title(window_title_for_scene(scene_kind));
+        }
+        tracing::info!(scene = ?scene_kind, title = window_title_for_scene(scene_kind), "app scene active");
     }
 }
 
@@ -335,6 +359,22 @@ fn should_leave_result(physical_key: PhysicalKey, state: ElementState, repeat: b
     state == ElementState::Pressed
         && !repeat
         && matches!(physical_key, PhysicalKey::Code(KeyCode::Enter | KeyCode::Escape))
+}
+
+fn scene_kind(scene: &AppSceneSnapshot) -> AppSceneKind {
+    match scene {
+        AppSceneSnapshot::Select(_) => AppSceneKind::Select,
+        AppSceneSnapshot::Play(_) => AppSceneKind::Play,
+        AppSceneSnapshot::Result(_) => AppSceneKind::Result,
+    }
+}
+
+fn window_title_for_scene(scene_kind: AppSceneKind) -> &'static str {
+    match scene_kind {
+        AppSceneKind::Select => "bmz-player - Select",
+        AppSceneKind::Play => "bmz-player - Play",
+        AppSceneKind::Result => "bmz-player - Result",
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -467,5 +507,19 @@ mod tests {
             dev_scene_action(PhysicalKey::Code(KeyCode::KeyZ), ElementState::Pressed, false),
             None
         );
+    }
+
+    #[test]
+    fn scene_kind_maps_scene_variants() {
+        assert_eq!(scene_kind(&sample_select_scene()), AppSceneKind::Select);
+        assert_eq!(scene_kind(&sample_play_scene()), AppSceneKind::Play);
+        assert_eq!(scene_kind(&sample_result_scene()), AppSceneKind::Result);
+    }
+
+    #[test]
+    fn window_title_uses_scene_name() {
+        assert_eq!(window_title_for_scene(AppSceneKind::Select), "bmz-player - Select");
+        assert_eq!(window_title_for_scene(AppSceneKind::Play), "bmz-player - Play");
+        assert_eq!(window_title_for_scene(AppSceneKind::Result), "bmz-player - Result");
     }
 }
