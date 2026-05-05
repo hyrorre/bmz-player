@@ -13,6 +13,7 @@ pub enum AppSceneSnapshot {
 pub struct SelectSnapshot {
     pub chart_count: u32,
     pub selected_index: u32,
+    pub selected_chart_id: Option<i64>,
     pub selected_title: String,
 }
 

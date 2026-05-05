@@ -14,14 +14,14 @@ use crate::screens::play_finish::FinishedPlaySession;
 use crate::screens::play_loop::{PlayAdvanceOutcome, advance_running_play_session_until_result};
 use crate::screens::play_start::{PlayStartOptions, StartedWinitPlaySession};
 use crate::screens::result_model::ResultSummary;
-use crate::screens::select_model::load_select_chart_rows;
+use crate::screens::select_model::{SelectChartRow, load_select_chart_rows};
 
 pub fn run() -> Result<()> {
     let boot = bootstrap::bootstrap()?;
     let event_loop = EventLoop::new().context("failed to create event loop")?;
     event_loop.set_control_flow(ControlFlow::Poll);
 
-    let mut app = WinitApp::new(boot);
+    let mut app = WinitApp::new(boot)?;
     event_loop.run_app(&mut app).context("winit event loop failed")
 }
 
@@ -31,6 +31,7 @@ struct WinitApp {
     active_play: Option<StartedWinitPlaySession>,
     finished_play: Option<FinishedPlaySession>,
     last_play_snapshot: Option<RenderSnapshot>,
+    select_rows: Vec<SelectChartRow>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -41,14 +42,18 @@ enum AppViewState {
 }
 
 impl WinitApp {
-    fn new(boot: BootstrappedApp) -> Self {
-        Self {
+    fn new(boot: BootstrappedApp) -> Result<Self> {
+        let select_rows = load_select_chart_rows(&boot.library_db, &boot.score_db, 100, 0)
+            .context("failed to load initial select chart rows")?;
+
+        Ok(Self {
             boot,
             window: None,
             active_play: None,
             finished_play: None,
             last_play_snapshot: None,
-        }
+            select_rows,
+        })
     }
 
     fn ensure_window(&mut self, event_loop: &ActiveEventLoop) {
@@ -82,7 +87,7 @@ impl WinitApp {
 
     fn scene_snapshot(&self) -> AppSceneSnapshot {
         match self.view_state() {
-            AppViewState::Select => AppSceneSnapshot::Select(SelectSnapshot::default()),
+            AppViewState::Select => AppSceneSnapshot::Select(self.select_snapshot()),
             AppViewState::Play => {
                 AppSceneSnapshot::Play(self.last_play_snapshot.clone().unwrap_or_default())
             }
@@ -97,6 +102,16 @@ impl WinitApp {
         }
     }
 
+    fn select_snapshot(&self) -> SelectSnapshot {
+        let selected = self.select_rows.first();
+        SelectSnapshot {
+            chart_count: self.select_rows.len() as u32,
+            selected_index: 0,
+            selected_chart_id: selected.map(|row| row.chart.chart_id),
+            selected_title: selected.map(|row| row.chart.title.clone()).unwrap_or_default(),
+        }
+    }
+
     fn route_keyboard_input(&mut self, event: &winit::event::KeyEvent) {
         if let Some(active_play) = &self.active_play {
             active_play.input.handle_key_event(event);
@@ -107,6 +122,7 @@ impl WinitApp {
             if should_leave_result(event.physical_key, event.state, event.repeat) {
                 self.finished_play = None;
                 self.last_play_snapshot = None;
+                self.refresh_select_rows();
             }
             return;
         }
@@ -117,21 +133,17 @@ impl WinitApp {
     }
 
     fn start_first_select_chart(&mut self) {
-        let rows = match load_select_chart_rows(&self.boot.library_db, &self.boot.score_db, 1, 0) {
-            Ok(rows) => rows,
-            Err(error) => {
-                tracing::error!(%error, "failed to load select chart rows");
-                return;
-            }
-        };
-        let Some(row) = rows.first() else {
+        if self.select_rows.is_empty() {
+            self.refresh_select_rows();
+        }
+
+        let Some(row) = self.select_rows.first() else {
             tracing::warn!("no chart is available to start");
             return;
         };
+        let chart_id = row.chart.chart_id;
 
-        match self
-            .boot
-            .start_play_for_chart_with_winit_input(row.chart.chart_id, PlayStartOptions::default())
+        match self.boot.start_play_for_chart_with_winit_input(chart_id, PlayStartOptions::default())
         {
             Ok(active_play) => {
                 self.active_play = Some(active_play);
@@ -139,7 +151,18 @@ impl WinitApp {
                 self.last_play_snapshot = None;
             }
             Err(error) => {
-                tracing::error!(chart_id = row.chart.chart_id, %error, "failed to start play");
+                tracing::error!(chart_id, %error, "failed to start play");
+            }
+        }
+    }
+
+    fn refresh_select_rows(&mut self) {
+        match load_select_chart_rows(&self.boot.library_db, &self.boot.score_db, 100, 0) {
+            Ok(rows) => {
+                self.select_rows = rows;
+            }
+            Err(error) => {
+                tracing::error!(%error, "failed to refresh select chart rows");
             }
         }
     }
