@@ -2,6 +2,7 @@ use bmz_core::lane::{LANE_COUNT, Lane};
 
 use crate::scene::AppSceneSnapshot;
 use crate::snapshot::RenderSnapshot;
+use crate::text::{BitmapTextStyle, push_bitmap_text};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DrawPlan {
@@ -33,9 +34,16 @@ pub struct Color {
 impl DrawPlan {
     pub fn from_scene(scene: &AppSceneSnapshot) -> Self {
         match scene {
-            AppSceneSnapshot::Select(snapshot) => plan_select(snapshot.chart_count),
+            AppSceneSnapshot::Select(snapshot) => {
+                plan_select(snapshot.chart_count, &snapshot.selected_title)
+            }
             AppSceneSnapshot::Play(snapshot) => plan_play(snapshot),
-            AppSceneSnapshot::Result(snapshot) => plan_result(snapshot.ex_score_rate),
+            AppSceneSnapshot::Result(snapshot) => plan_result(
+                snapshot.ex_score,
+                snapshot.ex_score_rate,
+                snapshot.max_combo,
+                snapshot.gauge_value,
+            ),
         }
     }
 }
@@ -50,12 +58,17 @@ impl Color {
     }
 }
 
-fn plan_select(chart_count: u32) -> DrawPlan {
+fn plan_select(chart_count: u32, selected_title: &str) -> DrawPlan {
     let mut commands = Vec::new();
     commands.push(DrawCommand::Rect {
         rect: Rect { x: 0.06, y: 0.08, width: 0.88, height: 0.08 },
         color: Color::rgb(0.08, 0.11, 0.13),
     });
+    push_bitmap_text(
+        &mut commands,
+        "SELECT",
+        BitmapTextStyle { x: 0.08, y: 0.105, cell: 0.009, color: Color::rgb(0.82, 0.9, 0.95) },
+    );
     let row_count = chart_count.clamp(1, 7);
     for row in 0..row_count {
         let selected = row == 0;
@@ -67,6 +80,18 @@ fn plan_select(chart_count: u32) -> DrawPlan {
                 Color::rgb(0.075, 0.09, 0.1)
             },
         });
+        if selected {
+            push_bitmap_text(
+                &mut commands,
+                &display_title(selected_title),
+                BitmapTextStyle {
+                    x: 0.1,
+                    y: 0.222,
+                    cell: 0.006,
+                    color: Color::rgb(0.9, 0.96, 0.98),
+                },
+            );
+        }
         commands.push(DrawCommand::Rect {
             rect: Rect { x: 0.78, y: 0.2 + row as f32 * 0.09, width: 0.14, height: 0.065 },
             color: if selected {
@@ -126,16 +151,22 @@ fn plan_play(snapshot: &RenderSnapshot) -> DrawPlan {
     push_judge_line(&mut commands, board);
     push_gauge(&mut commands, snapshot.gauge);
     push_combo_panel(&mut commands, snapshot.combo);
+    push_play_text(&mut commands, snapshot);
 
     DrawPlan { clear: Color::rgb(0.0, 0.0, 0.0), commands }
 }
 
-fn plan_result(ex_score_rate: f32) -> DrawPlan {
+fn plan_result(ex_score: u32, ex_score_rate: f32, max_combo: u32, gauge_value: f32) -> DrawPlan {
     let mut commands = Vec::new();
     commands.push(DrawCommand::Rect {
         rect: Rect { x: 0.1, y: 0.16, width: 0.8, height: 0.18 },
         color: Color::rgb(0.16, 0.13, 0.11),
     });
+    push_bitmap_text(
+        &mut commands,
+        "RESULT",
+        BitmapTextStyle { x: 0.14, y: 0.205, cell: 0.014, color: Color::rgb(0.95, 0.9, 0.8) },
+    );
     commands.push(DrawCommand::Rect {
         rect: Rect { x: 0.14, y: 0.42, width: 0.72, height: 0.045 },
         color: Color::rgb(0.065, 0.06, 0.058),
@@ -150,6 +181,21 @@ fn plan_result(ex_score_rate: f32) -> DrawPlan {
             color: Color::rgb(0.09, 0.08, 0.075),
         });
     }
+    push_bitmap_text(
+        &mut commands,
+        &format!("EX {}", ex_score),
+        BitmapTextStyle { x: 0.16, y: 0.565, cell: 0.008, color: Color::rgb(0.86, 0.9, 0.92) },
+    );
+    push_bitmap_text(
+        &mut commands,
+        &format!("MAX {}", max_combo),
+        BitmapTextStyle { x: 0.34, y: 0.565, cell: 0.008, color: Color::rgb(0.86, 0.9, 0.92) },
+    );
+    push_bitmap_text(
+        &mut commands,
+        &format!("GAUGE {}", gauge_value.round() as u32),
+        BitmapTextStyle { x: 0.52, y: 0.565, cell: 0.008, color: Color::rgb(0.86, 0.9, 0.92) },
+    );
 
     DrawPlan { clear: Color::rgb(0.025, 0.02, 0.018), commands }
 }
@@ -183,6 +229,43 @@ fn push_combo_panel(commands: &mut Vec<DrawCommand>, combo: u32) {
         rect: Rect { x: 0.425 - width / 2.0, y: 0.16, width, height: 0.07 },
         color: if combo > 0 { Color::rgb(0.14, 0.18, 0.2) } else { Color::rgb(0.055, 0.06, 0.065) },
     });
+}
+
+fn push_play_text(commands: &mut Vec<DrawCommand>, snapshot: &RenderSnapshot) {
+    if snapshot.combo > 0 {
+        push_bitmap_text(
+            commands,
+            &snapshot.combo.to_string(),
+            BitmapTextStyle { x: 0.38, y: 0.18, cell: 0.01, color: Color::rgb(0.94, 0.98, 1.0) },
+        );
+    }
+    push_bitmap_text(
+        commands,
+        &format!("G{}", snapshot.gauge.round() as u32),
+        BitmapTextStyle { x: 0.885, y: 0.08, cell: 0.007, color: Color::rgb(0.8, 0.92, 0.86) },
+    );
+    if let Some(judgement) = snapshot.recent_judgements.last() {
+        push_bitmap_text(
+            commands,
+            &judgement.text,
+            BitmapTextStyle { x: 0.38, y: 0.245, cell: 0.006, color: Color::rgb(0.96, 0.92, 0.54) },
+        );
+    }
+}
+
+fn display_title(title: &str) -> String {
+    let ascii: String = title
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, ' ' | '-' | '.' | '/' | ':') {
+                ch
+            } else {
+                '?'
+            }
+        })
+        .take(24)
+        .collect();
+    if ascii.is_empty() { "NO TITLE".to_string() } else { ascii }
 }
 
 fn gauge_color(gauge: f32) -> Color {
@@ -245,12 +328,22 @@ mod tests {
             ..Default::default()
         }));
 
-        assert_eq!(plan.commands.len(), 1 + 7 * 2);
+        let selected_row_color = Color::rgb(0.22, 0.28, 0.31);
+        let row_color = Color::rgb(0.075, 0.09, 0.1);
+        let row_count = plan
+            .commands
+            .iter()
+            .filter(|command| matches!(
+                command,
+                DrawCommand::Rect { color, .. } if *color == selected_row_color || *color == row_color
+            ))
+            .count();
+        assert_eq!(row_count, 7);
     }
 
     #[test]
     fn result_plan_clamps_ex_score_bar() {
-        let plan = plan_result(1.5);
+        let plan = plan_result(0, 1.5, 0, 0.0);
 
         assert!(plan.commands.iter().any(|command| matches!(
             command,
@@ -283,5 +376,11 @@ mod tests {
         assert_eq!(gauge_color(90.0), Color::rgb(0.35, 0.9, 0.6));
         assert_eq!(gauge_color(50.0), Color::rgb(0.9, 0.78, 0.35));
         assert_eq!(gauge_color(10.0), Color::rgb(0.9, 0.32, 0.32));
+    }
+
+    #[test]
+    fn display_title_falls_back_and_sanitizes_non_ascii() {
+        assert_eq!(display_title(""), "NO TITLE");
+        assert_eq!(display_title("AあB"), "A?B");
     }
 }
