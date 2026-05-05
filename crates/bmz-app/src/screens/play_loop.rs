@@ -123,6 +123,7 @@ fn pause_running_audio_after_finish(running: &mut RunningPlaySession) {
 
     match running.audio.pause() {
         Ok(()) => {
+            running.session.audio_clock = running.audio.clock();
             running.audio_paused_after_finish = true;
         }
         Err(error) => {

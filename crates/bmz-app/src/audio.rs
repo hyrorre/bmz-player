@@ -5,6 +5,7 @@ use bmz_audio::backend::cpal::{CpalBackend, CpalOutput, SharedAudioEngine};
 use bmz_audio::clock::AudioClock;
 use bmz_audio::engine::AudioEngine;
 use bmz_audio::loader::LoadedSampleReport;
+use bmz_core::time::TimeUs;
 use bmz_gameplay::session::GameSession;
 
 use crate::config::app_config::{AudioBackend, AudioConfig};
@@ -31,6 +32,25 @@ impl AppAudioOutput {
 
     pub fn pause(&mut self) -> Result<()> {
         self.output.pause().context("failed to pause audio output")
+    }
+
+    pub fn play(&mut self, chart_zero_time: TimeUs) -> Result<()> {
+        self.output.play(chart_zero_time).context("failed to start audio output")
+    }
+}
+
+impl RunningPlaySession {
+    pub fn start(&mut self, chart_zero_time: TimeUs) -> Result<()> {
+        self.audio.play(chart_zero_time)?;
+        self.session.audio_clock = self.audio.clock();
+        self.audio_paused_after_finish = false;
+        Ok(())
+    }
+
+    pub fn pause_audio(&mut self) -> Result<()> {
+        self.audio.pause()?;
+        self.session.audio_clock = self.audio.clock();
+        Ok(())
     }
 }
 
