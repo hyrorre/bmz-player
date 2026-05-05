@@ -1,6 +1,8 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
+use bmz_render::scene::{AppSceneSnapshot, ResultSnapshot, SelectSnapshot};
+use bmz_render::snapshot::RenderSnapshot;
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
@@ -28,6 +30,7 @@ struct WinitApp {
     window: Option<Window>,
     active_play: Option<StartedWinitPlaySession>,
     finished_play: Option<FinishedPlaySession>,
+    last_play_snapshot: Option<RenderSnapshot>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -39,7 +42,13 @@ enum AppViewState {
 
 impl WinitApp {
     fn new(boot: BootstrappedApp) -> Self {
-        Self { boot, window: None, active_play: None, finished_play: None }
+        Self {
+            boot,
+            window: None,
+            active_play: None,
+            finished_play: None,
+            last_play_snapshot: None,
+        }
     }
 
     fn ensure_window(&mut self, event_loop: &ActiveEventLoop) {
@@ -71,6 +80,23 @@ impl WinitApp {
         AppViewState::Select
     }
 
+    fn scene_snapshot(&self) -> AppSceneSnapshot {
+        match self.view_state() {
+            AppViewState::Select => AppSceneSnapshot::Select(SelectSnapshot::default()),
+            AppViewState::Play => {
+                AppSceneSnapshot::Play(self.last_play_snapshot.clone().unwrap_or_default())
+            }
+            AppViewState::Result(summary) => AppSceneSnapshot::Result(ResultSnapshot {
+                clear_type: summary.clear_type,
+                ex_score: summary.ex_score,
+                ex_score_rate: summary.ex_score_rate(),
+                max_combo: summary.max_combo,
+                gauge_value: summary.gauge_value,
+                total_notes: summary.total_notes,
+            }),
+        }
+    }
+
     fn route_keyboard_input(&mut self, event: &winit::event::KeyEvent) {
         if let Some(active_play) = &self.active_play {
             active_play.input.handle_key_event(event);
@@ -80,6 +106,7 @@ impl WinitApp {
         if self.finished_play.is_some() {
             if should_leave_result(event.physical_key, event.state, event.repeat) {
                 self.finished_play = None;
+                self.last_play_snapshot = None;
             }
             return;
         }
@@ -109,6 +136,7 @@ impl WinitApp {
             Ok(active_play) => {
                 self.active_play = Some(active_play);
                 self.finished_play = None;
+                self.last_play_snapshot = None;
             }
             Err(error) => {
                 tracing::error!(chart_id = row.chart.chart_id, %error, "failed to start play");
@@ -128,14 +156,18 @@ impl WinitApp {
             &self.boot.profile_config.replay,
             now_unix_seconds(),
         ) {
-            Ok(PlayAdvanceOutcome::Playing(_)) => {}
-            Ok(PlayAdvanceOutcome::Finished { finished, .. }) => {
+            Ok(PlayAdvanceOutcome::Playing(frame)) => {
+                self.last_play_snapshot = Some(frame.render_snapshot);
+            }
+            Ok(PlayAdvanceOutcome::Finished { frame, finished }) => {
+                self.last_play_snapshot = Some(frame.render_snapshot);
                 self.active_play = None;
                 self.finished_play = Some(finished);
             }
             Err(error) => {
                 tracing::error!(%error, "failed to advance play session");
                 self.active_play = None;
+                self.last_play_snapshot = None;
             }
         }
     }
@@ -160,7 +192,7 @@ impl ApplicationHandler for WinitApp {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::KeyboardInput { event, .. } => self.route_keyboard_input(&event),
             WindowEvent::RedrawRequested => {
-                let _view_state = self.view_state();
+                let _scene = self.scene_snapshot();
                 self.advance_active_play();
             }
             _ => {}
