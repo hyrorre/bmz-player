@@ -1,6 +1,6 @@
-use anyhow::Result;
+use anyhow::{Result, bail};
 use bmz_gameplay::result::PlayResult;
-use bmz_gameplay::session::GameSession;
+use bmz_gameplay::session::{GameSession, PlayState};
 
 use crate::config::profile_config::ReplayConfig;
 use crate::paths::ProfilePaths;
@@ -24,6 +24,7 @@ pub fn store_session_result(
     session: &GameSession,
     played_at: i64,
 ) -> Result<StoredPlayResult> {
+    ensure_storable_state(session.state)?;
     let result = play_result_from_session(session);
     store_play_result(
         score_db,
@@ -38,6 +39,13 @@ pub fn store_session_result(
             replay_events: session.replay_recorder.events.clone(),
         },
     )
+}
+
+fn ensure_storable_state(state: PlayState) -> Result<()> {
+    match state {
+        PlayState::Finished | PlayState::Failed => Ok(()),
+        PlayState::Ready | PlayState::Playing => bail!("play session is not finished yet"),
+    }
 }
 
 #[cfg(test)]
@@ -111,6 +119,36 @@ mod tests {
         assert!(stored.score_history_id > 0);
         assert!(!stored.replay_path.is_empty());
         assert!(root.join(&stored.replay_path).exists());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn store_session_result_rejects_unfinished_session() {
+        let root = make_temp_dir("unfinished-session");
+        let paths = ProfilePaths {
+            root_dir: root.clone(),
+            profile_toml: root.join("profile.toml"),
+            score_db: root.join("score.db"),
+            replay_dir: root.join("replay"),
+        };
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut score_db = ScoreDatabase::from_connection(conn);
+        let replay_config = ReplayConfig {
+            auto_save: true,
+            save_failed_runs: true,
+            save_autoplay_runs: false,
+            compress: false,
+        };
+        let mut session = session();
+        session.state = PlayState::Playing;
+
+        let result =
+            store_session_result(&mut score_db, &paths, &replay_config, &session, 1_700_000_101);
+
+        assert!(result.is_err());
 
         std::fs::remove_dir_all(root).unwrap();
     }
