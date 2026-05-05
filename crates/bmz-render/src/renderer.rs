@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
@@ -6,7 +7,7 @@ use std::thread;
 
 use anyhow::{Context, Result, anyhow};
 
-use crate::plan::DrawPlan;
+use crate::plan::{DrawCommand, DrawPlan};
 use crate::scene::AppSceneSnapshot;
 
 #[derive(Default)]
@@ -33,6 +34,9 @@ struct WgpuRenderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
+    rect_pipeline: wgpu::RenderPipeline,
+    rect_buffer: Option<wgpu::Buffer>,
+    rect_buffer_capacity: usize,
 }
 
 impl Renderer {
@@ -62,12 +66,11 @@ impl Renderer {
 
     pub fn render_scene(&mut self, scene: AppSceneSnapshot) -> Result<()> {
         let plan = DrawPlan::from_scene(&scene);
-        let clear_color = plan.clear.to_wgpu();
         self.last_scene = Some(scene);
         self.last_plan = Some(plan);
 
         if let Some(gpu) = &mut self.gpu {
-            gpu.render_clear(clear_color)?;
+            gpu.render_plan(self.last_plan.as_ref().expect("plan was just stored"))?;
         }
 
         Ok(())
@@ -118,8 +121,17 @@ impl WgpuRenderer {
             .get_default_config(&adapter, size.width, size.height)
             .ok_or_else(|| anyhow!("surface is not supported by the selected adapter"))?;
         surface.configure(&device, &config);
+        let rect_pipeline = create_rect_pipeline(&device, config.format);
 
-        Ok(Self { surface, device, queue, config })
+        Ok(Self {
+            surface,
+            device,
+            queue,
+            config,
+            rect_pipeline,
+            rect_buffer: None,
+            rect_buffer_capacity: 0,
+        })
     }
 
     fn resize(&mut self, size: SurfaceSize) {
@@ -128,7 +140,15 @@ impl WgpuRenderer {
         self.surface.configure(&self.device, &self.config);
     }
 
-    fn render_clear(&mut self, color: wgpu::Color) -> Result<()> {
+    fn render_plan(&mut self, plan: &DrawPlan) -> Result<()> {
+        let rects = encode_rects(plan);
+        self.ensure_rect_buffer(rects.len());
+        if let Some(buffer) = &self.rect_buffer {
+            if !rects.is_empty() {
+                self.queue.write_buffer(buffer, 0, &rects);
+            }
+        }
+
         let output = match self.surface.get_current_texture() {
             Ok(output) => output,
             Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
@@ -143,13 +163,13 @@ impl WgpuRenderer {
             label: Some("bmz-render clear encoder"),
         });
         {
-            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("bmz-render clear pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(color),
+                        load: wgpu::LoadOp::Clear(plan.clear.to_wgpu()),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -157,12 +177,139 @@ impl WgpuRenderer {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
+            if let Some(buffer) = &self.rect_buffer {
+                let instance_count = (rects.len() / RECT_INSTANCE_BYTES) as u32;
+                if instance_count > 0 {
+                    pass.set_pipeline(&self.rect_pipeline);
+                    pass.set_vertex_buffer(0, buffer.slice(..rects.len() as u64));
+                    pass.draw(0..6, 0..instance_count);
+                }
+            }
         }
         self.queue.submit(Some(encoder.finish()));
         output.present();
         Ok(())
     }
+
+    fn ensure_rect_buffer(&mut self, used_bytes: usize) {
+        if used_bytes == 0 || used_bytes <= self.rect_buffer_capacity {
+            return;
+        }
+
+        let capacity = used_bytes.next_power_of_two();
+        self.rect_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("bmz-render rect instance buffer"),
+            size: capacity as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }));
+        self.rect_buffer_capacity = capacity;
+    }
 }
+
+const RECT_INSTANCE_FLOATS: usize = 8;
+const RECT_INSTANCE_BYTES: usize = RECT_INSTANCE_FLOATS * std::mem::size_of::<f32>();
+
+fn encode_rects(plan: &DrawPlan) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for command in &plan.commands {
+        let DrawCommand::Rect { rect, color } = command;
+        for value in [rect.x, rect.y, rect.width, rect.height, color.r, color.g, color.b, color.a] {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    bytes
+}
+
+fn create_rect_pipeline(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+) -> wgpu::RenderPipeline {
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("bmz-render rect shader"),
+        source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(RECT_SHADER)),
+    });
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("bmz-render rect pipeline layout"),
+        bind_group_layouts: &[],
+        push_constant_ranges: &[],
+    });
+
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("bmz-render rect pipeline"),
+        layout: Some(&layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: "vs_main",
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            buffers: &[wgpu::VertexBufferLayout {
+                array_stride: RECT_INSTANCE_BYTES as u64,
+                step_mode: wgpu::VertexStepMode::Instance,
+                attributes: &[
+                    wgpu::VertexAttribute {
+                        offset: 0,
+                        shader_location: 0,
+                        format: wgpu::VertexFormat::Float32x4,
+                    },
+                    wgpu::VertexAttribute {
+                        offset: 16,
+                        shader_location: 1,
+                        format: wgpu::VertexFormat::Float32x4,
+                    },
+                ],
+            }],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: "fs_main",
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview: None,
+    })
+}
+
+const RECT_SHADER: &str = r#"
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) color: vec4<f32>,
+};
+
+@vertex
+fn vs_main(
+    @builtin(vertex_index) vertex_index: u32,
+    @location(0) rect: vec4<f32>,
+    @location(1) color: vec4<f32>,
+) -> VertexOutput {
+    var corners = array<vec2<f32>, 6>(
+        vec2<f32>(0.0, 0.0),
+        vec2<f32>(1.0, 0.0),
+        vec2<f32>(0.0, 1.0),
+        vec2<f32>(0.0, 1.0),
+        vec2<f32>(1.0, 0.0),
+        vec2<f32>(1.0, 1.0),
+    );
+    let local = corners[vertex_index];
+    let pos01 = rect.xy + local * rect.zw;
+
+    var out: VertexOutput;
+    out.position = vec4<f32>(pos01.x * 2.0 - 1.0, 1.0 - pos01.y * 2.0, 0.0, 1.0);
+    out.color = color;
+    return out;
+}
+
+@fragment
+fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+    return input.color;
+}
+"#;
 
 fn block_on<T>(future: impl Future<Output = T>) -> T {
     let waker = noop_waker();
