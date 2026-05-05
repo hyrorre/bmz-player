@@ -376,4 +376,16 @@ mod tests {
 
         assert_ne!(select.clear, play.clear);
     }
+
+    #[test]
+    fn encode_rects_writes_one_instance_per_rect_command() {
+        let plan = DrawPlan::from_scene(&AppSceneSnapshot::Select(SelectSnapshot {
+            chart_count: 1,
+            ..Default::default()
+        }));
+
+        let bytes = encode_rects(&plan);
+
+        assert_eq!(bytes.len(), plan.commands.len() * RECT_INSTANCE_BYTES);
+    }
 }
