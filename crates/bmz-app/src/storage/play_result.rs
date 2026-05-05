@@ -1,4 +1,5 @@
 use anyhow::Result;
+use bmz_core::clear::ClearType;
 use bmz_core::replay::ReplayEvent;
 use bmz_gameplay::result::PlayResult;
 
@@ -59,7 +60,9 @@ pub fn store_play_result(
 }
 
 fn should_save_replay(config: &ReplayConfig, result: &PlayResult) -> bool {
-    config.auto_save && (!result.autoplay || config.save_autoplay_runs)
+    config.auto_save
+        && (!result.autoplay || config.save_autoplay_runs)
+        && (result.clear_type != ClearType::Failed || config.save_failed_runs)
 }
 
 #[cfg(test)]
@@ -153,6 +156,49 @@ mod tests {
             &result,
             StorePlayResultRequest {
                 played_at: 1_700_000_061,
+                random_seed: None,
+                gauge_option: String::new(),
+                assist_mask: 0,
+                replay_events: Vec::new(),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(stored.replay_path, "");
+        assert!(!paths.replay_dir.exists());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn store_play_result_skips_failed_replay_when_disabled() {
+        let root = make_temp_dir("store-failed-result");
+        let paths = ProfilePaths {
+            root_dir: root.clone(),
+            profile_toml: root.join("profile.toml"),
+            score_db: root.join("score.db"),
+            replay_dir: root.join("replay"),
+        };
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut score_db = ScoreDatabase::from_connection(conn);
+        let config = ReplayConfig {
+            auto_save: true,
+            save_failed_runs: false,
+            save_autoplay_runs: false,
+            compress: false,
+        };
+        let mut result = play_result(false);
+        result.clear_type = ClearType::Failed;
+
+        let stored = store_play_result(
+            &mut score_db,
+            &paths,
+            &config,
+            &result,
+            StorePlayResultRequest {
+                played_at: 1_700_000_062,
                 random_seed: None,
                 gauge_option: String::new(),
                 assist_mask: 0,

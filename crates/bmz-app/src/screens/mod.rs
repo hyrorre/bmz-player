@@ -1,4 +1,5 @@
 pub mod play;
+pub mod play_finish;
 pub mod play_loop;
 pub mod play_session;
 pub mod play_snapshot;
