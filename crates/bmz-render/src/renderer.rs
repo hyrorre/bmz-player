@@ -6,11 +6,13 @@ use std::thread;
 
 use anyhow::{Context, Result, anyhow};
 
+use crate::plan::DrawPlan;
 use crate::scene::AppSceneSnapshot;
 
 #[derive(Default)]
 pub struct Renderer {
     last_scene: Option<AppSceneSnapshot>,
+    last_plan: Option<DrawPlan>,
     gpu: Option<WgpuRenderer>,
 }
 
@@ -59,8 +61,10 @@ impl Renderer {
     }
 
     pub fn render_scene(&mut self, scene: AppSceneSnapshot) -> Result<()> {
-        let clear_color = clear_color_for_scene(&scene);
+        let plan = DrawPlan::from_scene(&scene);
+        let clear_color = plan.clear.to_wgpu();
         self.last_scene = Some(scene);
+        self.last_plan = Some(plan);
 
         if let Some(gpu) = &mut self.gpu {
             gpu.render_clear(clear_color)?;
@@ -72,12 +76,17 @@ impl Renderer {
     pub fn last_scene(&self) -> Option<&AppSceneSnapshot> {
         self.last_scene.as_ref()
     }
+
+    pub fn last_plan(&self) -> Option<&DrawPlan> {
+        self.last_plan.as_ref()
+    }
 }
 
 impl fmt::Debug for Renderer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Renderer")
             .field("last_scene", &self.last_scene)
+            .field("last_plan", &self.last_plan)
             .field("gpu_attached", &self.gpu.is_some())
             .finish()
     }
@@ -155,14 +164,6 @@ impl WgpuRenderer {
     }
 }
 
-fn clear_color_for_scene(scene: &AppSceneSnapshot) -> wgpu::Color {
-    match scene {
-        AppSceneSnapshot::Select(_) => wgpu::Color { r: 0.02, g: 0.025, b: 0.03, a: 1.0 },
-        AppSceneSnapshot::Play(_) => wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 },
-        AppSceneSnapshot::Result(_) => wgpu::Color { r: 0.025, g: 0.02, b: 0.018, a: 1.0 },
-    }
-}
-
 fn block_on<T>(future: impl Future<Output = T>) -> T {
     let waker = noop_waker();
     let mut context = TaskContext::from_waker(&waker);
@@ -211,6 +212,7 @@ mod tests {
         renderer.render_scene(scene.clone()).unwrap();
 
         assert_eq!(renderer.last_scene(), Some(&scene));
+        assert!(renderer.last_plan().is_some());
     }
 
     #[test]
@@ -222,9 +224,9 @@ mod tests {
 
     #[test]
     fn scene_clear_colors_are_distinct() {
-        let select = clear_color_for_scene(&AppSceneSnapshot::Select(SelectSnapshot::default()));
-        let play = clear_color_for_scene(&AppSceneSnapshot::Play(Default::default()));
+        let select = DrawPlan::from_scene(&AppSceneSnapshot::Select(SelectSnapshot::default()));
+        let play = DrawPlan::from_scene(&AppSceneSnapshot::Play(Default::default()));
 
-        assert_ne!(select, play);
+        assert_ne!(select.clear, play.clear);
     }
 }
