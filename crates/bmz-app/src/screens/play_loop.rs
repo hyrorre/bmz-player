@@ -12,7 +12,8 @@ pub fn advance_play_screen(
     audio: &mut dyn AudioScheduler,
 ) -> FrameOutput<RenderSnapshot> {
     let frame = advance_session_frame(session, audio);
-    let render_snapshot = build_render_snapshot(session, frame.times.render_now, &frame.judgements);
+    let render_snapshot =
+        build_render_snapshot(session, frame.times.render_now, &session.recent_judgements);
     FrameOutput { render_snapshot, state: frame.state }
 }
 

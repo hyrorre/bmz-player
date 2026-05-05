@@ -17,6 +17,7 @@ use crate::score::ScoreState;
 
 pub const AUDIO_SCHEDULE_AHEAD_US: i64 = 100_000;
 pub const SESSION_END_MARGIN_US: i64 = 500_000;
+pub const JUDGEMENT_DISPLAY_US: i64 = 800_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayState {
@@ -61,6 +62,7 @@ pub struct GameSession {
     pub replay_recorder: ReplayRecorder,
     pub replay_player: Option<ReplayPlayer>,
     pub autoplay: Option<AutoplayController>,
+    pub recent_judgements: Vec<JudgementEvent>,
     pub bgm_scheduler: BgmScheduler,
     pub offsets: PlayOffsets,
     pub audio_mix: PlayAudioMix,
@@ -160,6 +162,11 @@ fn plays_keysound(judge: Judge) -> bool {
     matches!(judge, Judge::PGreat | Judge::Great | Judge::Good | Judge::Bad)
 }
 
+pub fn update_recent_judgements(session: &mut GameSession, events: &[JudgementEvent], now: TimeUs) {
+    session.recent_judgements.extend(events.iter().cloned());
+    session.recent_judgements.retain(|event| now.0 <= event.time.0 + JUDGEMENT_DISPLAY_US);
+}
+
 pub fn process_human_inputs(session: &mut GameSession) -> Vec<JudgementEvent> {
     let ctx = InputTimingContext {
         audio_clock: &session.audio_clock,
@@ -235,6 +242,7 @@ pub fn advance_session_frame(
         judgements.extend(process_autoplay_inputs(session, times.audio_now));
         judgements.extend(process_misses(session, times.audio_now));
         schedule_keysounds(session, &judgements, audio);
+        update_recent_judgements(session, &judgements, times.render_now);
 
         if should_finish(session, times.audio_now) {
             session.state = PlayState::Finished;
@@ -258,6 +266,7 @@ mod tests {
     use bmz_chart::model::{ChartMetadata, NoteEvent, NoteKind, SoundAssetRef, SoundEvent};
     use bmz_core::chart::ChartIdentity;
     use bmz_core::ids::{NoteId, SoundId};
+    use bmz_core::judge::TimingSide;
     use bmz_core::lane::Lane;
     use bmz_core::time::{ChartTick, TimeUs};
 
@@ -294,6 +303,7 @@ mod tests {
         assert_eq!(audio.scheduled[0].sound_id, SoundId(7));
         assert_eq!(audio.scheduled[0].start_frame, 0);
         assert_eq!(audio.scheduled[0].volume, 0.125);
+        assert_eq!(session.recent_judgements.len(), 1);
     }
 
     #[test]
@@ -308,6 +318,24 @@ mod tests {
         assert_eq!(audio.scheduled.len(), 1);
         assert_eq!(audio.scheduled[0].sound_id, SoundId(3));
         assert_eq!(audio.scheduled[0].volume, 0.375);
+    }
+
+    #[test]
+    fn update_recent_judgements_expires_old_events() {
+        let mut session = session_with_autoplay(chart_with_keysound());
+        let event = JudgementEvent {
+            note_id: Some(NoteId(1)),
+            lane: Lane::Key1,
+            judge: Judge::PGreat,
+            side: TimingSide::Slow,
+            delta: TimeUs(0),
+            time: TimeUs(0),
+        };
+
+        update_recent_judgements(&mut session, &[event], TimeUs(0));
+        update_recent_judgements(&mut session, &[], TimeUs(JUDGEMENT_DISPLAY_US + 1));
+
+        assert!(session.recent_judgements.is_empty());
     }
 
     fn session_with_autoplay(chart: PlayableChart) -> GameSession {
@@ -340,6 +368,7 @@ mod tests {
             replay_recorder: ReplayRecorder::default(),
             replay_player: None,
             autoplay: Some(AutoplayController::default()),
+            recent_judgements: Vec::new(),
             bgm_scheduler: BgmScheduler::default(),
             offsets: PlayOffsets { input_offset_us: 0, visual_offset_us: 0 },
             audio_mix: PlayAudioMix { master_volume: 1.0, key_volume: 1.0, bgm_volume: 1.0 },

@@ -69,6 +69,7 @@ pub fn build_game_session(
         replay_recorder: ReplayRecorder::default(),
         replay_player: options.replay_player,
         autoplay,
+        recent_judgements: Vec::new(),
         bgm_scheduler: BgmScheduler::default(),
         offsets: play_offsets_from_profile(profile),
         audio_mix: audio_mix_from_profile(profile),
