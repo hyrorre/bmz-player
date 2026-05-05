@@ -102,6 +102,7 @@ where
     T: ::cpal::SizedSample + OutputSample,
 {
     let channels = config.channels as usize;
+    let mut stereo_scratch = Vec::new();
     device.build_output_stream(
         config,
         move |data: &mut [T], _| {
@@ -111,7 +112,7 @@ where
             }
 
             let start_frame = current_frame.load(Ordering::Relaxed);
-            render_output(data, channels, start_frame, &engine);
+            render_output(data, channels, start_frame, &engine, &mut stereo_scratch);
             current_frame.fetch_add((data.len() / channels) as u64, Ordering::Relaxed);
         },
         move |error| {
@@ -126,18 +127,21 @@ fn render_output<T: OutputSample>(
     channels: usize,
     output_start_frame: u64,
     engine: &SharedAudioEngine,
+    stereo: &mut Vec<f32>,
 ) {
     if channels == 0 {
         return;
     }
 
     let frames = data.len() / channels;
-    let mut stereo = vec![0.0; frames * 2];
+    stereo.resize(frames * 2, 0.0);
     if let Ok(mut engine) = engine.lock() {
-        engine.render_stereo(output_start_frame, &mut stereo);
+        engine.render_stereo(output_start_frame, stereo);
+    } else {
+        stereo.fill(0.0);
     }
 
-    write_interleaved_output(data, channels, &stereo);
+    write_interleaved_output(data, channels, stereo);
 }
 
 fn write_interleaved_output<T: OutputSample>(data: &mut [T], channels: usize, stereo: &[f32]) {
@@ -204,5 +208,18 @@ mod tests {
         write_interleaved_output(&mut output, 3, &[0.25, 0.75, -0.5, 0.25]);
 
         assert_eq!(output, vec![0.25, 0.75, 0.0, -0.5, 0.25, 0.0]);
+    }
+
+    #[test]
+    fn render_output_reuses_scratch_buffer() {
+        let engine = Arc::new(Mutex::new(AudioEngine::default()));
+        let mut output = vec![1.0_f32; 4];
+        let mut scratch = Vec::with_capacity(16);
+
+        render_output(&mut output, 2, 0, &engine, &mut scratch);
+
+        assert_eq!(output, vec![0.0, 0.0, 0.0, 0.0]);
+        assert_eq!(scratch.len(), 4);
+        assert!(scratch.capacity() >= 16);
     }
 }
