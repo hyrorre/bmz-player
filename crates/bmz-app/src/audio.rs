@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use bmz_audio::backend::cpal::{CpalBackend, CpalOutput, SharedAudioEngine};
 use bmz_audio::clock::AudioClock;
 use bmz_audio::engine::AudioEngine;
@@ -21,11 +21,16 @@ pub struct RunningPlaySession {
     pub audio: AppAudioOutput,
     pub sample_report: Vec<LoadedSampleReport>,
     pub finished: Option<FinishedPlaySession>,
+    pub audio_paused_after_finish: bool,
 }
 
 impl AppAudioOutput {
     pub fn clock(&self) -> AudioClock {
         self.output.clock.clone()
+    }
+
+    pub fn pause(&mut self) -> Result<()> {
+        self.output.pause().context("failed to pause audio output")
     }
 }
 
@@ -45,7 +50,13 @@ pub fn open_prepared_play_audio(
     let mut session = prepared.session;
     session.audio_clock = audio.clock();
 
-    Ok(RunningPlaySession { session, audio, sample_report: prepared.sample_report, finished: None })
+    Ok(RunningPlaySession {
+        session,
+        audio,
+        sample_report: prepared.sample_report,
+        finished: None,
+        audio_paused_after_finish: false,
+    })
 }
 
 fn ensure_default_device_supported(config: &AudioConfig) -> Result<()> {

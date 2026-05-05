@@ -88,15 +88,18 @@ pub fn advance_running_play_session_until_result(
     played_at: i64,
 ) -> Result<PlayAdvanceOutcome> {
     if let Some(finished) = running.finished.clone() {
+        pause_running_audio_after_finish(running);
         return Ok(PlayAdvanceOutcome::Finished {
             frame: current_play_frame(&running.session),
             finished,
         });
     }
 
-    let mut audio =
-        running.audio.engine.lock().map_err(|_| anyhow!("audio engine lock poisoned"))?;
-    let frame = advance_play_screen(&mut running.session, &mut *audio);
+    let frame = {
+        let mut audio =
+            running.audio.engine.lock().map_err(|_| anyhow!("audio engine lock poisoned"))?;
+        advance_play_screen(&mut running.session, &mut *audio)
+    };
     if matches!(frame.state, PlayState::Finished | PlayState::Failed) {
         let finished = finish_session_result_once(
             &mut running.finished,
@@ -106,10 +109,26 @@ pub fn advance_running_play_session_until_result(
             &running.session,
             played_at,
         )?;
+        pause_running_audio_after_finish(running);
         return Ok(PlayAdvanceOutcome::Finished { frame, finished });
     }
 
     Ok(PlayAdvanceOutcome::Playing(frame))
+}
+
+fn pause_running_audio_after_finish(running: &mut RunningPlaySession) {
+    if running.audio_paused_after_finish {
+        return;
+    }
+
+    match running.audio.pause() {
+        Ok(()) => {
+            running.audio_paused_after_finish = true;
+        }
+        Err(error) => {
+            tracing::warn!(%error, "failed to pause audio output after play finished");
+        }
+    }
 }
 
 fn current_play_frame(session: &GameSession) -> FrameOutput<RenderSnapshot> {

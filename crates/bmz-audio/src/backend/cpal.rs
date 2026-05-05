@@ -81,14 +81,19 @@ impl CpalOutput {
     pub fn play(&mut self, chart_zero_time: TimeUs) -> Result<(), CpalBackendError> {
         self.clock.chart_zero_time_us = chart_zero_time.0;
         self.clock.start_output_frame = self.clock.current_frame.load(Ordering::Relaxed);
-        self.clock.running = true;
         self.stream.play()?;
+        self.clock.running = true;
         Ok(())
     }
 
     pub fn pause(&mut self) -> Result<(), ::cpal::PauseStreamError> {
+        if !self.clock.running {
+            return Ok(());
+        }
+
+        self.stream.pause()?;
         self.clock.running = false;
-        self.stream.pause()
+        Ok(())
     }
 }
 
