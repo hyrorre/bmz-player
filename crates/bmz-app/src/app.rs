@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use bmz_render::renderer::{Renderer, SurfaceSize};
+use bmz_render::renderer::{RenderSurfaceStatus, Renderer, SurfaceSize};
 use bmz_render::sample::{sample_play_scene, sample_result_scene, sample_select_scene};
 use bmz_render::scene::{AppSceneSnapshot, ResultSnapshot, SelectSnapshot};
 use bmz_render::snapshot::RenderSnapshot;
@@ -246,8 +246,19 @@ impl WinitApp {
 
     fn render_current_scene(&mut self) {
         let scene = self.scene_snapshot();
-        if let Err(error) = self.renderer.render_scene(scene) {
-            tracing::error!(%error, "failed to render scene");
+        match self.renderer.render_scene_status(scene) {
+            Ok(RenderSurfaceStatus::Rendered)
+            | Ok(RenderSurfaceStatus::SkippedNoSurface)
+            | Ok(RenderSurfaceStatus::SkippedZeroSize) => {}
+            Ok(RenderSurfaceStatus::Reconfigured) => {
+                tracing::debug!("renderer surface reconfigured");
+            }
+            Ok(RenderSurfaceStatus::TimedOut) => {
+                tracing::debug!("renderer surface acquisition timed out");
+            }
+            Err(error) => {
+                tracing::error!(%error, "failed to present render scene");
+            }
         }
     }
 }

@@ -23,6 +23,15 @@ pub struct SurfaceSize {
     pub height: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenderSurfaceStatus {
+    Rendered,
+    SkippedNoSurface,
+    SkippedZeroSize,
+    Reconfigured,
+    TimedOut,
+}
+
 impl SurfaceSize {
     pub fn is_drawable(self) -> bool {
         self.width > 0 && self.height > 0
@@ -65,15 +74,26 @@ impl Renderer {
     }
 
     pub fn render_scene(&mut self, scene: AppSceneSnapshot) -> Result<()> {
+        self.render_scene_status(scene).map(|_| ())
+    }
+
+    pub fn render_scene_status(&mut self, scene: AppSceneSnapshot) -> Result<RenderSurfaceStatus> {
         let plan = DrawPlan::from_scene(&scene);
         self.last_scene = Some(scene);
         self.last_plan = Some(plan);
 
-        if let Some(gpu) = &mut self.gpu {
-            gpu.render_plan(self.last_plan.as_ref().expect("plan was just stored"))?;
-        }
+        self.render_last_plan()
+    }
 
-        Ok(())
+    pub fn render_last_plan(&mut self) -> Result<RenderSurfaceStatus> {
+        let Some(gpu) = &mut self.gpu else {
+            return Ok(RenderSurfaceStatus::SkippedNoSurface);
+        };
+        let Some(plan) = &self.last_plan else {
+            return Ok(RenderSurfaceStatus::SkippedNoSurface);
+        };
+
+        gpu.render_plan(plan)
     }
 
     pub fn last_scene(&self) -> Option<&AppSceneSnapshot> {
@@ -135,12 +155,20 @@ impl WgpuRenderer {
     }
 
     fn resize(&mut self, size: SurfaceSize) {
+        if !size.is_drawable() {
+            return;
+        }
+
         self.config.width = size.width;
         self.config.height = size.height;
-        self.surface.configure(&self.device, &self.config);
+        self.configure_surface();
     }
 
-    fn render_plan(&mut self, plan: &DrawPlan) -> Result<()> {
+    fn render_plan(&mut self, plan: &DrawPlan) -> Result<RenderSurfaceStatus> {
+        if !(SurfaceSize { width: self.config.width, height: self.config.height }).is_drawable() {
+            return Ok(RenderSurfaceStatus::SkippedZeroSize);
+        }
+
         let rects = encode_rects(plan);
         self.ensure_rect_buffer(rects.len());
         if let Some(buffer) = &self.rect_buffer {
@@ -152,11 +180,13 @@ impl WgpuRenderer {
         let output = match self.surface.get_current_texture() {
             Ok(output) => output,
             Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                self.surface.configure(&self.device, &self.config);
-                return Ok(());
+                self.configure_surface();
+                return Ok(RenderSurfaceStatus::Reconfigured);
             }
-            Err(wgpu::SurfaceError::Timeout) => return Ok(()),
-            Err(error) => return Err(error).context("failed to acquire surface texture"),
+            Err(wgpu::SurfaceError::Timeout) => return Ok(RenderSurfaceStatus::TimedOut),
+            Err(wgpu::SurfaceError::OutOfMemory) => {
+                return Err(anyhow!("wgpu surface is out of memory"));
+            }
         };
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -188,7 +218,7 @@ impl WgpuRenderer {
         }
         self.queue.submit(Some(encoder.finish()));
         output.present();
-        Ok(())
+        Ok(RenderSurfaceStatus::Rendered)
     }
 
     fn ensure_rect_buffer(&mut self, used_bytes: usize) {
@@ -204,6 +234,10 @@ impl WgpuRenderer {
             mapped_at_creation: false,
         }));
         self.rect_buffer_capacity = capacity;
+    }
+
+    fn configure_surface(&self) {
+        self.surface.configure(&self.device, &self.config);
     }
 }
 
@@ -367,6 +401,17 @@ mod tests {
         assert!(SurfaceSize { width: 1, height: 1 }.is_drawable());
         assert!(!SurfaceSize { width: 0, height: 1 }.is_drawable());
         assert!(!SurfaceSize { width: 1, height: 0 }.is_drawable());
+    }
+
+    #[test]
+    fn rendering_without_surface_is_skipped() {
+        let mut renderer = Renderer::default();
+        let scene = AppSceneSnapshot::Select(SelectSnapshot::default());
+
+        assert_eq!(
+            renderer.render_scene_status(scene).unwrap(),
+            RenderSurfaceStatus::SkippedNoSurface
+        );
     }
 
     #[test]
