@@ -39,6 +39,7 @@ impl DrawPlan {
             }
             AppSceneSnapshot::Play(snapshot) => plan_play(snapshot),
             AppSceneSnapshot::Result(snapshot) => plan_result(
+                snapshot.clear_type.as_str(),
                 snapshot.ex_score,
                 snapshot.ex_score_rate,
                 snapshot.max_combo,
@@ -69,6 +70,11 @@ fn plan_select(chart_count: u32, selected_title: &str) -> DrawPlan {
         &mut commands,
         "SELECT",
         BitmapTextStyle { x: 0.08, y: 0.105, cell: 0.009, color: Color::rgb(0.82, 0.9, 0.95) },
+    );
+    text.push_text(
+        &mut commands,
+        &format!("CHARTS {}", chart_count),
+        BitmapTextStyle { x: 0.78, y: 0.112, cell: 0.005, color: Color::rgb(0.62, 0.78, 0.84) },
     );
     let row_count = chart_count.clamp(1, 7);
     for row in 0..row_count {
@@ -101,7 +107,29 @@ fn plan_select(chart_count: u32, selected_title: &str) -> DrawPlan {
                 Color::rgb(0.055, 0.065, 0.072)
             },
         });
+        if selected {
+            text.push_text(
+                &mut commands,
+                "READY",
+                BitmapTextStyle {
+                    x: 0.805,
+                    y: 0.222,
+                    cell: 0.0055,
+                    color: Color::rgb(0.74, 0.88, 0.9),
+                },
+            );
+        }
     }
+    text.push_text(
+        &mut commands,
+        "ENTER START",
+        BitmapTextStyle { x: 0.08, y: 0.86, cell: 0.006, color: Color::rgb(0.88, 0.9, 0.86) },
+    );
+    text.push_text(
+        &mut commands,
+        "F1 SELECT  F2 PLAY  F3 RESULT",
+        BitmapTextStyle { x: 0.08, y: 0.895, cell: 0.005, color: Color::rgb(0.58, 0.67, 0.7) },
+    );
 
     DrawPlan { clear: Color::rgb(0.02, 0.025, 0.03), commands }
 }
@@ -158,7 +186,13 @@ fn plan_play(snapshot: &RenderSnapshot) -> DrawPlan {
     DrawPlan { clear: Color::rgb(0.0, 0.0, 0.0), commands }
 }
 
-fn plan_result(ex_score: u32, ex_score_rate: f32, max_combo: u32, gauge_value: f32) -> DrawPlan {
+fn plan_result(
+    clear_type: &str,
+    ex_score: u32,
+    ex_score_rate: f32,
+    max_combo: u32,
+    gauge_value: f32,
+) -> DrawPlan {
     let mut commands = Vec::new();
     let text = TextRenderer;
     commands.push(DrawCommand::Rect {
@@ -169,6 +203,11 @@ fn plan_result(ex_score: u32, ex_score_rate: f32, max_combo: u32, gauge_value: f
         &mut commands,
         "RESULT",
         BitmapTextStyle { x: 0.14, y: 0.205, cell: 0.014, color: Color::rgb(0.95, 0.9, 0.8) },
+    );
+    text.push_text(
+        &mut commands,
+        &display_label(clear_type, 18),
+        BitmapTextStyle { x: 0.55, y: 0.22, cell: 0.008, color: Color::rgb(0.84, 0.93, 0.9) },
     );
     commands.push(DrawCommand::Rect {
         rect: Rect { x: 0.14, y: 0.42, width: 0.72, height: 0.045 },
@@ -198,6 +237,11 @@ fn plan_result(ex_score: u32, ex_score_rate: f32, max_combo: u32, gauge_value: f
         &mut commands,
         &format!("GAUGE {}", gauge_value.round() as u32),
         BitmapTextStyle { x: 0.52, y: 0.565, cell: 0.008, color: Color::rgb(0.86, 0.9, 0.92) },
+    );
+    text.push_text(
+        &mut commands,
+        "ENTER OR ESC",
+        BitmapTextStyle { x: 0.14, y: 0.76, cell: 0.006, color: Color::rgb(0.74, 0.78, 0.8) },
     );
 
     DrawPlan { clear: Color::rgb(0.025, 0.02, 0.018), commands }
@@ -257,7 +301,11 @@ fn push_play_text(text: &TextRenderer, commands: &mut Vec<DrawCommand>, snapshot
 }
 
 fn display_title(title: &str) -> String {
-    let ascii: String = title
+    display_label(title, 24)
+}
+
+fn display_label(text: &str, max_chars: usize) -> String {
+    let ascii: String = text
         .chars()
         .map(|ch| {
             if ch.is_ascii_alphanumeric() || matches!(ch, ' ' | '-' | '.' | '/' | ':') {
@@ -266,7 +314,7 @@ fn display_title(title: &str) -> String {
                 '?'
             }
         })
-        .take(24)
+        .take(max_chars)
         .collect();
     if ascii.is_empty() { "NO TITLE".to_string() } else { ascii }
 }
@@ -346,7 +394,7 @@ mod tests {
 
     #[test]
     fn result_plan_clamps_ex_score_bar() {
-        let plan = plan_result(0, 1.5, 0, 0.0);
+        let plan = plan_result("Normal", 0, 1.5, 0, 0.0);
 
         assert!(plan.commands.iter().any(|command| matches!(
             command,
@@ -385,5 +433,11 @@ mod tests {
     fn display_title_falls_back_and_sanitizes_non_ascii() {
         assert_eq!(display_title(""), "NO TITLE");
         assert_eq!(display_title("AあB"), "A?B");
+    }
+
+    #[test]
+    fn display_label_sanitizes_and_truncates_text() {
+        assert_eq!(display_label("FullCombo!!", 8), "FullComb");
+        assert_eq!(display_label("A_B", 8), "A?B");
     }
 }
