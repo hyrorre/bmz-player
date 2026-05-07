@@ -5,6 +5,9 @@ use crate::scene::{AppSceneSnapshot, SelectRowSnapshot};
 use crate::snapshot::RenderSnapshot;
 use crate::text::{BitmapTextStyle, TextRenderer};
 
+const JUDGE_LINE_Y_RATIO: f32 = 0.86;
+const NOTE_HEIGHT: f32 = 0.018;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct DrawPlan {
     pub clear: Color,
@@ -273,9 +276,14 @@ fn plan_play(snapshot: &RenderSnapshot) -> DrawPlan {
         }
 
         for note in &snapshot.visible_notes[lane_index] {
-            let y = board.y + (1.0 - note.y.clamp(0.0, 1.0)) * board.height;
+            let y = note_rect_y(board, note.y);
             commands.push(DrawCommand::Rect {
-                rect: Rect { x: x + lane_width * 0.08, y, width: lane_width * 0.84, height: 0.018 },
+                rect: Rect {
+                    x: x + lane_width * 0.08,
+                    y,
+                    width: lane_width * 0.84,
+                    height: NOTE_HEIGHT,
+                },
                 color: note_color(lane),
             });
         }
@@ -283,7 +291,7 @@ fn plan_play(snapshot: &RenderSnapshot) -> DrawPlan {
 
     push_receptors(&mut commands, board, lane_width);
     for bar in &snapshot.bar_lines {
-        let y = board.y + (1.0 - bar.y.clamp(0.0, 1.0)) * board.height;
+        let y = play_object_y(board, bar.y);
         commands.push(DrawCommand::Rect {
             rect: Rect { x: board.x, y, width: board.width, height: 0.004 },
             color: Color::rgb(0.45, 0.48, 0.5),
@@ -361,11 +369,24 @@ fn plan_result(
 }
 
 fn push_judge_line(commands: &mut Vec<DrawCommand>, board: Rect) {
-    let line_y = board.y + board.height * 0.86;
+    let line_y = judge_line_y(board);
     commands.push(DrawCommand::Rect {
         rect: Rect { x: board.x, y: line_y, width: board.width, height: 0.006 },
         color: Color::rgb(0.96, 0.92, 0.54),
     });
+}
+
+fn note_rect_y(board: Rect, progress_to_hit: f32) -> f32 {
+    (play_object_y(board, progress_to_hit) - NOTE_HEIGHT / 2.0).max(board.y)
+}
+
+fn play_object_y(board: Rect, progress_to_hit: f32) -> f32 {
+    let judge_y = judge_line_y(board);
+    judge_y - progress_to_hit.clamp(0.0, 1.0) * (judge_y - board.y)
+}
+
+fn judge_line_y(board: Rect) -> f32 {
+    board.y + board.height * JUDGE_LINE_Y_RATIO
 }
 
 fn push_receptors(commands: &mut Vec<DrawCommand>, board: Rect, lane_width: f32) {
@@ -795,8 +816,15 @@ mod tests {
             })
             .collect();
 
-        assert!(note_ys.iter().any(|y| approx_eq(*y, 0.275)));
-        assert!(note_ys.iter().any(|y| approx_eq(*y, 0.725)));
+        assert!(note_ys.iter().any(|y| approx_eq(*y, 0.2345)));
+        assert!(note_ys.iter().any(|y| approx_eq(*y, 0.6215)));
+    }
+
+    #[test]
+    fn play_plan_places_hit_timing_note_on_judge_line() {
+        let board = Rect { x: 0.18, y: 0.05, width: 0.64, height: 0.9 };
+
+        assert!(approx_eq(note_rect_y(board, 0.0) + NOTE_HEIGHT / 2.0, judge_line_y(board)));
     }
 
     #[test]
