@@ -294,6 +294,7 @@ fn plan_play(snapshot: &RenderSnapshot) -> DrawPlan {
     push_combo_panel(&mut commands, snapshot.combo);
     push_play_text(&text, &mut commands, snapshot);
     push_lane_text(&text, &mut commands, board, lane_width);
+    push_judgement_history(&text, &mut commands, snapshot);
 
     DrawPlan { clear: Color::rgb(0.0, 0.0, 0.0), commands }
 }
@@ -510,6 +511,40 @@ fn push_play_status_text(
     );
 }
 
+fn push_judgement_history(
+    text: &TextRenderer,
+    commands: &mut Vec<DrawCommand>,
+    snapshot: &RenderSnapshot,
+) {
+    if snapshot.recent_judgements.is_empty() {
+        return;
+    }
+
+    commands.push(DrawCommand::Rect {
+        rect: Rect { x: 0.885, y: 0.17, width: 0.09, height: 0.19 },
+        color: Color::rgb(0.03, 0.035, 0.038),
+    });
+    text.push_text(
+        commands,
+        "JUDGE",
+        BitmapTextStyle { x: 0.897, y: 0.188, cell: 0.004, color: Color::rgb(0.5, 0.62, 0.64) },
+    );
+
+    for (index, judgement) in snapshot.recent_judgements.iter().rev().take(4).enumerate() {
+        let y = 0.225 + index as f32 * 0.032;
+        text.push_text(
+            commands,
+            &judgement_history_label(judgement),
+            BitmapTextStyle {
+                x: 0.897,
+                y,
+                cell: 0.0038,
+                color: judgement_history_color(&judgement.text),
+            },
+        );
+    }
+}
+
 fn format_delta_ms(delta_us: i64) -> String {
     let sign = if delta_us < 0 { "-" } else { "+" };
     format!("{}{}MS", sign, delta_us.abs() / 1_000)
@@ -553,6 +588,48 @@ fn judge_flash_color(text: &str, alpha: f32) -> Color {
         Color::rgba(0.85, 0.9, 0.45, alpha)
     } else {
         Color::rgba(1.0, 0.28, 0.32, alpha)
+    }
+}
+
+fn judgement_history_label(judgement: &crate::snapshot::DisplayJudgement) -> String {
+    format!("{} {}", judge_short_label(&judgement.text), side_short_label(&judgement.text))
+}
+
+fn judge_short_label(text: &str) -> &'static str {
+    if text.starts_with("PGREAT") {
+        "PG"
+    } else if text.starts_with("GREAT") {
+        "GR"
+    } else if text.starts_with("GOOD") {
+        "GD"
+    } else if text.starts_with("BAD") {
+        "BD"
+    } else if text.starts_with("EMPTY POOR") {
+        "EP"
+    } else if text.starts_with("POOR") {
+        "PR"
+    } else {
+        "??"
+    }
+}
+
+fn side_short_label(text: &str) -> &'static str {
+    if text.ends_with("FAST") {
+        "F"
+    } else if text.ends_with("SLOW") {
+        "S"
+    } else {
+        "-"
+    }
+}
+
+fn judgement_history_color(text: &str) -> Color {
+    if text.starts_with("PGREAT") || text.starts_with("GREAT") {
+        Color::rgb(0.64, 0.9, 0.98)
+    } else if text.starts_with("GOOD") {
+        Color::rgb(0.84, 0.88, 0.48)
+    } else {
+        Color::rgb(0.96, 0.4, 0.44)
     }
 }
 
@@ -773,6 +850,27 @@ mod tests {
     }
 
     #[test]
+    fn play_plan_includes_recent_judgement_history_panel() {
+        let snapshot = RenderSnapshot {
+            time: TimeUs(1_000_000),
+            recent_judgements: vec![DisplayJudgement {
+                lane: Lane::Key2,
+                text: "EMPTY POOR SLOW".to_string(),
+                delta_us: 50_000,
+                time: TimeUs(980_000),
+            }],
+            ..Default::default()
+        };
+
+        let plan = DrawPlan::from_scene(&AppSceneSnapshot::Play(snapshot));
+
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Rect { rect, color } if rect.x == 0.885 && rect.y == 0.17 && *color == Color::rgb(0.03, 0.035, 0.038)
+        )));
+    }
+
+    #[test]
     fn lane_flash_expires_old_judgements() {
         let snapshot = RenderSnapshot {
             time: TimeUs(1_000_000),
@@ -858,6 +956,16 @@ mod tests {
     }
 
     #[test]
+    fn judgement_history_label_abbreviates_judges_and_sides() {
+        assert_eq!(history_label("PGREAT FAST"), "PG F");
+        assert_eq!(history_label("GREAT SLOW"), "GR S");
+        assert_eq!(history_label("GOOD FAST"), "GD F");
+        assert_eq!(history_label("BAD SLOW"), "BD S");
+        assert_eq!(history_label("POOR FAST"), "PR F");
+        assert_eq!(history_label("EMPTY POOR SLOW"), "EP S");
+    }
+
+    #[test]
     fn clear_type_label_abbreviates_long_names() {
         assert_eq!(clear_type_label("Normal"), "NORMAL");
         assert_eq!(clear_type_label("LightAssistEasy"), "LAEASY");
@@ -876,5 +984,14 @@ mod tests {
                 ex_score: (index == 0).then_some(1234),
             })
             .collect()
+    }
+
+    fn history_label(text: &str) -> String {
+        judgement_history_label(&DisplayJudgement {
+            lane: Lane::Key1,
+            text: text.to_string(),
+            delta_us: 0,
+            time: TimeUs(0),
+        })
     }
 }
