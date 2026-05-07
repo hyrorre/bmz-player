@@ -3,7 +3,9 @@ use bmz_core::lane::Lane;
 use bmz_core::time::TimeUs;
 use bmz_gameplay::judge::model::JudgementEvent;
 use bmz_gameplay::session::GameSession;
-use bmz_render::snapshot::{DisplayJudgement, RenderSnapshot, VisibleBarLine, VisibleNote};
+use bmz_render::snapshot::{
+    DisplayInput, DisplayJudgement, RenderSnapshot, VisibleBarLine, VisibleNote,
+};
 
 pub const DEFAULT_LOOKAHEAD_US: i64 = 2_000_000;
 pub const DEFAULT_LANE_HEIGHT: f32 = 720.0;
@@ -22,6 +24,11 @@ pub fn build_render_snapshot(
         past_notes: session.score.past_notes,
         gauge: session.gauge.current().value,
         visible_notes: std::array::from_fn(|_| Vec::new()),
+        recent_inputs: session
+            .recent_inputs
+            .iter()
+            .map(|input| DisplayInput { lane: input.lane, time: input.time })
+            .collect(),
         recent_judgements: recent_judgements.iter().map(display_judgement).collect(),
         bar_lines: Vec::new(),
     };
@@ -119,6 +126,7 @@ mod tests {
         assert_eq!(snapshot.ex_score, 0);
         assert_eq!(snapshot.total_notes, 1);
         assert_eq!(snapshot.past_notes, 0);
+        assert!(snapshot.recent_inputs.is_empty());
         assert_eq!(snapshot.visible_notes[Lane::Key1.index()].len(), 1);
         assert_eq!(snapshot.visible_notes[Lane::Key1.index()][0].y, 360.0);
         assert_eq!(snapshot.recent_judgements[0].lane, Lane::Key1);
@@ -136,6 +144,27 @@ mod tests {
         let snapshot = build_render_snapshot(&session, TimeUs(0), &[]);
 
         assert!(snapshot.visible_notes[Lane::Key1.index()].is_empty());
+    }
+
+    #[test]
+    fn build_render_snapshot_copies_recent_inputs() {
+        use bmz_core::input::{InputEvent, InputKind, InputSource};
+
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+        session.recent_inputs.push(InputEvent {
+            lane: Lane::Key3,
+            kind: InputKind::Press,
+            time: TimeUs(42_000),
+            source: InputSource::Human,
+        });
+
+        let snapshot = build_render_snapshot(&session, TimeUs(50_000), &[]);
+
+        assert_eq!(snapshot.recent_inputs.len(), 1);
+        assert_eq!(snapshot.recent_inputs[0].lane, Lane::Key3);
+        assert_eq!(snapshot.recent_inputs[0].time, TimeUs(42_000));
     }
 
     fn chart() -> PlayableChart {

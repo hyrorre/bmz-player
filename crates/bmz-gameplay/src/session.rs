@@ -3,6 +3,7 @@ use std::sync::Arc;
 use bmz_audio::clock::AudioClock;
 use bmz_audio::queue::{AudioScheduler, ScheduledSound};
 use bmz_chart::model::PlayableChart;
+use bmz_core::input::{InputEvent, InputKind};
 use bmz_core::judge::Judge;
 use bmz_core::time::TimeUs;
 
@@ -18,6 +19,7 @@ use crate::score::ScoreState;
 pub const AUDIO_SCHEDULE_AHEAD_US: i64 = 100_000;
 pub const SESSION_END_MARGIN_US: i64 = 500_000;
 pub const JUDGEMENT_DISPLAY_US: i64 = 800_000;
+pub const INPUT_DISPLAY_US: i64 = 160_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayState {
@@ -62,6 +64,7 @@ pub struct GameSession {
     pub replay_recorder: ReplayRecorder,
     pub replay_player: Option<ReplayPlayer>,
     pub autoplay: Option<AutoplayController>,
+    pub recent_inputs: Vec<InputEvent>,
     pub recent_judgements: Vec<JudgementEvent>,
     pub bgm_scheduler: BgmScheduler,
     pub offsets: PlayOffsets,
@@ -168,6 +171,13 @@ pub fn update_recent_judgements(session: &mut GameSession, events: &[JudgementEv
     session.recent_judgements.retain(|event| now.0 <= event.time.0 + JUDGEMENT_DISPLAY_US);
 }
 
+pub fn update_recent_inputs(session: &mut GameSession, inputs: &[InputEvent], now: TimeUs) {
+    session
+        .recent_inputs
+        .extend(inputs.iter().copied().filter(|input| input.kind == InputKind::Press));
+    session.recent_inputs.retain(|input| now.0 <= input.time.0 + INPUT_DISPLAY_US);
+}
+
 pub fn process_human_inputs(session: &mut GameSession) -> Vec<JudgementEvent> {
     let ctx = InputTimingContext {
         audio_clock: &session.audio_clock,
@@ -175,6 +185,7 @@ pub fn process_human_inputs(session: &mut GameSession) -> Vec<JudgementEvent> {
         timestamp_anchor: session.input_timestamp_anchor,
     };
     let inputs = session.input_system.collect_game_inputs(&ctx);
+    update_recent_inputs(session, &inputs, session.audio_clock.now());
     let mut judgements = Vec::new();
     for input in inputs {
         session.replay_recorder.record(input);
@@ -267,6 +278,7 @@ mod tests {
     use bmz_chart::model::{ChartMetadata, NoteEvent, NoteKind, SoundAssetRef, SoundEvent};
     use bmz_core::chart::ChartIdentity;
     use bmz_core::ids::{NoteId, SoundId};
+    use bmz_core::input::InputSource;
     use bmz_core::judge::TimingSide;
     use bmz_core::lane::Lane;
     use bmz_core::time::{ChartTick, TimeUs};
@@ -339,6 +351,32 @@ mod tests {
         assert!(session.recent_judgements.is_empty());
     }
 
+    #[test]
+    fn update_recent_inputs_keeps_presses_and_expires_old_events() {
+        let mut session = session_with_autoplay(chart_with_keysound());
+        let inputs = [
+            InputEvent {
+                lane: Lane::Key1,
+                kind: InputKind::Press,
+                time: TimeUs(10_000),
+                source: InputSource::Human,
+            },
+            InputEvent {
+                lane: Lane::Key2,
+                kind: InputKind::Release,
+                time: TimeUs(20_000),
+                source: InputSource::Human,
+            },
+        ];
+
+        update_recent_inputs(&mut session, &inputs, TimeUs(10_000));
+        assert_eq!(session.recent_inputs.len(), 1);
+        assert_eq!(session.recent_inputs[0].lane, Lane::Key1);
+        update_recent_inputs(&mut session, &[], TimeUs(10_000 + INPUT_DISPLAY_US + 1));
+
+        assert!(session.recent_inputs.is_empty());
+    }
+
     fn session_with_autoplay(chart: PlayableChart) -> GameSession {
         let chart = Arc::new(chart);
         GameSession {
@@ -369,6 +407,7 @@ mod tests {
             replay_recorder: ReplayRecorder::default(),
             replay_player: None,
             autoplay: Some(AutoplayController::default()),
+            recent_inputs: Vec::new(),
             recent_judgements: Vec::new(),
             bgm_scheduler: BgmScheduler::default(),
             offsets: PlayOffsets { input_offset_us: 0, visual_offset_us: 0 },

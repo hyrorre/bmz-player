@@ -291,6 +291,7 @@ mod tests {
             replay_recorder: ReplayRecorder::default(),
             replay_player: None,
             autoplay: None,
+            recent_inputs: Vec::new(),
             recent_judgements: Vec::new(),
             bgm_scheduler: BgmScheduler::default(),
             offsets: PlayOffsets { input_offset_us: 0, visual_offset_us: 0 },

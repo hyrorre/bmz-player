@@ -468,12 +468,29 @@ fn format_time(time: TimeUs) -> String {
 }
 
 fn lane_flash_color(snapshot: &RenderSnapshot, lane: Lane) -> Option<Color> {
+    if let Some(judgement_color) = judgement_lane_flash_color(snapshot, lane) {
+        return Some(judgement_color);
+    }
+
+    input_lane_flash_color(snapshot, lane)
+}
+
+fn judgement_lane_flash_color(snapshot: &RenderSnapshot, lane: Lane) -> Option<Color> {
     let judgement = snapshot.recent_judgements.iter().rev().find(|judgement| {
         judgement.lane == lane && (0..=220_000).contains(&(snapshot.time.0 - judgement.time.0))
     })?;
     let age_us = (snapshot.time.0 - judgement.time.0).max(0) as f32;
     let alpha = (1.0 - age_us / 220_000.0).clamp(0.0, 1.0) * 0.55;
     Some(judge_flash_color(&judgement.text, alpha))
+}
+
+fn input_lane_flash_color(snapshot: &RenderSnapshot, lane: Lane) -> Option<Color> {
+    let input = snapshot.recent_inputs.iter().rev().find(|input| {
+        input.lane == lane && (0..=140_000).contains(&(snapshot.time.0 - input.time.0))
+    })?;
+    let age_us = (snapshot.time.0 - input.time.0).max(0) as f32;
+    let alpha = (1.0 - age_us / 140_000.0).clamp(0.0, 1.0) * 0.32;
+    Some(Color::rgba(0.95, 0.98, 1.0, alpha))
 }
 
 fn judge_flash_color(text: &str, alpha: f32) -> Color {
@@ -528,7 +545,9 @@ mod tests {
     use bmz_core::lane::Lane;
     use bmz_core::time::TimeUs;
 
-    use crate::snapshot::{DisplayJudgement, RenderSnapshot, VisibleBarLine, VisibleNote};
+    use crate::snapshot::{
+        DisplayInput, DisplayJudgement, RenderSnapshot, VisibleBarLine, VisibleNote,
+    };
 
     use super::*;
 
@@ -671,6 +690,33 @@ mod tests {
         };
 
         assert_eq!(lane_flash_color(&snapshot, Lane::Key2), None);
+    }
+
+    #[test]
+    fn play_plan_flashes_recent_input_lane_without_judgement() {
+        let snapshot = RenderSnapshot {
+            time: TimeUs(1_000_000),
+            recent_inputs: vec![DisplayInput { lane: Lane::Key4, time: TimeUs(930_000) }],
+            ..Default::default()
+        };
+
+        let plan = DrawPlan::from_scene(&AppSceneSnapshot::Play(snapshot));
+
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Rect { color, .. } if *color == Color::rgba(0.95, 0.98, 1.0, 0.16)
+        )));
+    }
+
+    #[test]
+    fn input_lane_flash_expires_old_inputs() {
+        let snapshot = RenderSnapshot {
+            time: TimeUs(1_000_000),
+            recent_inputs: vec![DisplayInput { lane: Lane::Key4, time: TimeUs(800_000) }],
+            ..Default::default()
+        };
+
+        assert_eq!(input_lane_flash_color(&snapshot, Lane::Key4), None);
     }
 
     #[test]

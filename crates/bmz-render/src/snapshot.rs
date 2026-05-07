@@ -11,6 +11,7 @@ pub struct RenderSnapshot {
     pub past_notes: u32,
     pub gauge: f32,
     pub visible_notes: [Vec<VisibleNote>; LANE_COUNT],
+    pub recent_inputs: Vec<DisplayInput>,
     pub recent_judgements: Vec<DisplayJudgement>,
     pub bar_lines: Vec<VisibleBarLine>,
 }
@@ -27,6 +28,12 @@ pub struct DisplayJudgement {
     pub lane: Lane,
     pub text: String,
     pub delta_us: i64,
+    pub time: TimeUs,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DisplayInput {
+    pub lane: Lane,
     pub time: TimeUs,
 }
 

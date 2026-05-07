@@ -78,6 +78,7 @@ pub fn build_game_session_with_input_backend(
         replay_recorder: ReplayRecorder::default(),
         replay_player: options.replay_player,
         autoplay,
+        recent_inputs: Vec::new(),
         recent_judgements: Vec::new(),
         bgm_scheduler: BgmScheduler::default(),
         offsets: play_offsets_from_profile(profile),
