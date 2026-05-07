@@ -2,6 +2,10 @@ use bmz_core::lane::{LANE_COUNT, Lane};
 use bmz_core::time::TimeUs;
 
 use crate::scene::{AppSceneSnapshot, SelectRowSnapshot};
+use crate::skin::{
+    Animation, BlendMode, NumberSlot, SkinDefinition, SkinObject, SkinObjectId, SkinPhase,
+    SkinPlacement, SkinRenderContext, SkinSource, TextSlot, append_skin_render_items,
+};
 use crate::snapshot::{DisplayJudgeCounts, RenderSnapshot};
 use crate::text::{BitmapTextStyle, TextRenderer};
 
@@ -324,6 +328,7 @@ fn plan_play(snapshot: &RenderSnapshot) -> DrawPlan {
     push_judge_line(&mut commands, board);
     push_gauge(&mut commands, snapshot.gauge);
     push_combo_panel(&mut commands, snapshot.combo);
+    push_default_play_skin(&mut commands, snapshot);
     push_play_text(&text, &mut commands, snapshot);
     push_lane_text(&text, &mut commands, board, lane_width);
     push_judgement_history(&text, &mut commands, snapshot);
@@ -506,24 +511,12 @@ fn push_combo_panel(commands: &mut Vec<DrawCommand>, combo: u32) {
 fn push_play_text(text: &TextRenderer, commands: &mut Vec<DrawCommand>, snapshot: &RenderSnapshot) {
     push_play_status_text(text, commands, snapshot);
     push_judge_count_text(text, commands, snapshot);
-    if snapshot.combo > 0 {
-        text.push_text(
-            commands,
-            &snapshot.combo.to_string(),
-            BitmapTextStyle { x: 0.38, y: 0.18, cell: 0.01, color: Color::rgb(0.94, 0.98, 1.0) },
-        );
-    }
     text.push_text(
         commands,
         &format!("G{}", snapshot.gauge.round() as u32),
         BitmapTextStyle { x: 0.885, y: 0.08, cell: 0.007, color: Color::rgb(0.8, 0.92, 0.86) },
     );
     if let Some(judgement) = snapshot.recent_judgements.last() {
-        text.push_text(
-            commands,
-            &judgement.text,
-            BitmapTextStyle { x: 0.38, y: 0.245, cell: 0.006, color: Color::rgb(0.96, 0.92, 0.54) },
-        );
         text.push_text(
             commands,
             &format_delta_ms(judgement.delta_us),
@@ -534,6 +527,75 @@ fn push_play_text(text: &TextRenderer, commands: &mut Vec<DrawCommand>, snapshot
                 color: Color::rgb(0.72, 0.82, 0.86),
             },
         );
+    }
+}
+
+fn push_default_play_skin(commands: &mut Vec<DrawCommand>, snapshot: &RenderSnapshot) {
+    let skin = default_play_skin(snapshot);
+    let judge_text = snapshot
+        .recent_judgements
+        .last()
+        .map(|judgement| judgement.text.clone())
+        .unwrap_or_default();
+    let text_values = [(TextSlot::Judge, judge_text)];
+    let number_values = [
+        (NumberSlot::Combo, snapshot.combo as i64),
+        (NumberSlot::Gauge, snapshot.gauge.round() as i64),
+        (NumberSlot::Hispeed, (snapshot.hispeed * 100.0).round() as i64),
+    ];
+    let items = skin.resolve(&SkinRenderContext {
+        phase: SkinPhase::Play,
+        elapsed_ms: (snapshot.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+        text: &text_values,
+        numbers: &number_values,
+    });
+    append_skin_render_items(commands, &items);
+}
+
+fn default_play_skin(snapshot: &RenderSnapshot) -> SkinDefinition {
+    let mut objects = Vec::new();
+    if snapshot.combo > 0 {
+        objects.push(SkinObject {
+            id: SkinObjectId(1),
+            source: SkinSource::Number {
+                slot: NumberSlot::Combo,
+                style: TextStyle {
+                    size: 0.05,
+                    color: Color::rgb(0.94, 0.98, 1.0),
+                    layer: TextLayer::Skin,
+                },
+                digits: 0,
+            },
+            placements: vec![skin_placement(Rect { x: 0.38, y: 0.18, width: 0.18, height: 0.07 })],
+        });
+    }
+
+    if snapshot.recent_judgements.last().is_some() {
+        objects.push(SkinObject {
+            id: SkinObjectId(2),
+            source: SkinSource::Text {
+                slot: TextSlot::Judge,
+                style: TextStyle {
+                    size: 0.03,
+                    color: Color::rgb(0.96, 0.92, 0.54),
+                    layer: TextLayer::Skin,
+                },
+            },
+            placements: vec![skin_placement(Rect { x: 0.38, y: 0.245, width: 0.3, height: 0.04 })],
+        });
+    }
+
+    SkinDefinition { objects }
+}
+
+fn skin_placement(rect: Rect) -> SkinPlacement {
+    SkinPlacement {
+        phase: SkinPhase::Play,
+        time_ms: 0,
+        rect,
+        alpha: 1.0,
+        blend: BlendMode::Normal,
+        animation: Animation::none(),
     }
 }
 
@@ -1090,6 +1152,33 @@ mod tests {
         assert!(plan.commands.iter().any(|command| matches!(
             command,
             DrawCommand::Rect { color, .. } if *color == receptor_color(Lane::Key2)
+        )));
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Text { text, style, .. }
+                if text == "1234" && style.layer == TextLayer::Skin
+        )));
+    }
+
+    #[test]
+    fn play_plan_routes_recent_judge_text_through_default_skin() {
+        let snapshot = RenderSnapshot {
+            time: TimeUs(1_000_000),
+            recent_judgements: vec![DisplayJudgement {
+                lane: Lane::Key2,
+                text: "PGREAT FAST".to_string(),
+                delta_us: -3_000,
+                time: TimeUs(920_000),
+            }],
+            ..Default::default()
+        };
+
+        let plan = DrawPlan::from_scene(&AppSceneSnapshot::Play(snapshot));
+
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Text { text, style, .. }
+                if text == "PGREAT FAST" && style.layer == TextLayer::Skin
         )));
     }
 

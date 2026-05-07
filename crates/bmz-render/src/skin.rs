@@ -1,4 +1,4 @@
-use crate::plan::{Color, Point, Rect, TextStyle};
+use crate::plan::{Color, DrawCommand, Point, Rect, TextStyle};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SkinObjectId(pub u32);
@@ -11,6 +11,19 @@ pub struct SkinObject {
     pub id: SkinObjectId,
     pub source: SkinSource,
     pub placements: Vec<SkinPlacement>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SkinDefinition {
+    pub objects: Vec<SkinObject>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SkinRenderContext<'a> {
+    pub phase: SkinPhase,
+    pub elapsed_ms: i32,
+    pub text: &'a [(TextSlot, String)],
+    pub numbers: &'a [(NumberSlot, i64)],
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -137,6 +150,45 @@ impl SkinObject {
     }
 }
 
+impl SkinDefinition {
+    pub fn resolve(&self, context: &SkinRenderContext<'_>) -> Vec<SkinRenderItem> {
+        self.objects
+            .iter()
+            .flat_map(|object| {
+                object.resolve(
+                    context.phase,
+                    context.elapsed_ms,
+                    |slot| lookup_text(context.text, slot),
+                    |slot| lookup_number(context.numbers, slot),
+                )
+            })
+            .collect()
+    }
+}
+
+pub fn append_skin_render_items(commands: &mut Vec<DrawCommand>, items: &[SkinRenderItem]) {
+    for item in items {
+        match item {
+            SkinRenderItem::Rect { rect, color, .. } => {
+                commands.push(DrawCommand::Rect { rect: *rect, color: *color });
+            }
+            SkinRenderItem::Text { origin, text, style, .. } => {
+                if !text.is_empty() {
+                    commands.push(DrawCommand::Text {
+                        origin: *origin,
+                        text: text.clone(),
+                        style: *style,
+                    });
+                }
+            }
+            SkinRenderItem::Image { .. } => {
+                // Texture commands are represented in the skin model now; the wgpu image
+                // pipeline will consume them once texture asset loading lands.
+            }
+        }
+    }
+}
+
 impl SkinPlacement {
     fn resolve(&self, elapsed_ms: i32) -> ResolvedPlacement {
         let Some(frame) = self.animation.sample(elapsed_ms) else {
@@ -186,6 +238,22 @@ fn format_number(value: i64, digits: u8) -> String {
     } else {
         format!("{:0width$}", value.max(0), width = digits as usize)
     }
+}
+
+fn lookup_text(values: &[(TextSlot, String)], slot: TextSlot) -> String {
+    values
+        .iter()
+        .find(|(candidate, _)| *candidate == slot)
+        .map(|(_, value)| value.clone())
+        .unwrap_or_default()
+}
+
+fn lookup_number(values: &[(NumberSlot, i64)], slot: NumberSlot) -> i64 {
+    values
+        .iter()
+        .find(|(candidate, _)| *candidate == slot)
+        .map(|(_, value)| *value)
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -251,5 +319,64 @@ mod tests {
         };
 
         assert_eq!(placement.resolve(120).rect.x, 0.2);
+    }
+
+    #[test]
+    fn skin_definition_resolves_context_values() {
+        let skin = SkinDefinition {
+            objects: vec![SkinObject {
+                id: SkinObjectId(1),
+                source: SkinSource::Text {
+                    slot: TextSlot::Judge,
+                    style: TextStyle {
+                        size: 0.04,
+                        color: Color::rgb(1.0, 1.0, 1.0),
+                        layer: TextLayer::Skin,
+                    },
+                },
+                placements: vec![SkinPlacement {
+                    phase: SkinPhase::Play,
+                    time_ms: 0,
+                    rect: Rect { x: 0.3, y: 0.4, width: 0.2, height: 0.05 },
+                    alpha: 1.0,
+                    blend: BlendMode::Normal,
+                    animation: Animation::none(),
+                }],
+            }],
+        };
+        let context = SkinRenderContext {
+            phase: SkinPhase::Play,
+            elapsed_ms: 12,
+            text: &[(TextSlot::Judge, "PGREAT FAST".to_string())],
+            numbers: &[],
+        };
+
+        let items = skin.resolve(&context);
+
+        assert!(matches!(&items[0], SkinRenderItem::Text { text, .. } if text == "PGREAT FAST"));
+    }
+
+    #[test]
+    fn append_skin_render_items_skips_images_until_texture_pipeline_exists() {
+        let mut commands = Vec::new();
+        append_skin_render_items(
+            &mut commands,
+            &[
+                SkinRenderItem::Rect {
+                    rect: Rect { x: 0.0, y: 0.0, width: 0.1, height: 0.1 },
+                    color: Color::rgb(1.0, 1.0, 1.0),
+                    blend: BlendMode::Normal,
+                },
+                SkinRenderItem::Image {
+                    texture: SkinTextureId(1),
+                    rect: Rect { x: 0.0, y: 0.0, width: 0.1, height: 0.1 },
+                    uv: TextureRegion { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+                    tint: Color::rgb(1.0, 1.0, 1.0),
+                    blend: BlendMode::Normal,
+                },
+            ],
+        );
+
+        assert_eq!(commands.len(), 1);
     }
 }
