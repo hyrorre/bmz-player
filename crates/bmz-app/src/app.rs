@@ -21,6 +21,7 @@ use crate::screens::result_model::ResultSummary;
 use crate::screens::select_model::{SelectChartRow, load_select_chart_rows};
 
 const BOOT_PLAY_SAMPLE_ENV: &str = "BMZ_BOOT_PLAY_SAMPLE";
+const AUTOPLAY_ON_START_ENV: &str = "BMZ_AUTOPLAY_ON_START";
 const SMOKE_EXIT_AFTER_FRAMES_ENV: &str = "BMZ_SMOKE_EXIT_AFTER_FRAMES";
 const SAMPLE_PLAYABLE_TITLE: &str = "BMZ Sample Playable";
 
@@ -46,6 +47,7 @@ struct WinitApp {
     renderer: Renderer,
     dev_scene: Option<AppSceneSnapshot>,
     last_scene_kind: Option<AppSceneKind>,
+    autoplay_on_start: bool,
     smoke_exit_after_frames: Option<u32>,
     rendered_frames: u32,
 }
@@ -83,6 +85,7 @@ impl WinitApp {
             renderer: Renderer::default(),
             dev_scene: None,
             last_scene_kind: None,
+            autoplay_on_start: autoplay_on_start_from_env(),
             smoke_exit_after_frames: smoke_exit_after_frames_from_env(),
             rendered_frames: 0,
         };
@@ -230,8 +233,7 @@ impl WinitApp {
     }
 
     fn start_chart(&mut self, chart_id: i64) {
-        match self.boot.start_play_for_chart_with_winit_input(chart_id, PlayStartOptions::default())
-        {
+        match self.boot.start_play_for_chart_with_winit_input(chart_id, self.play_start_options()) {
             Ok(active_play) => {
                 self.active_play = Some(active_play);
                 self.finished_play = None;
@@ -242,6 +244,10 @@ impl WinitApp {
                 tracing::error!(chart_id, %error, "failed to start play");
             }
         }
+    }
+
+    fn play_start_options(&self) -> PlayStartOptions {
+        PlayStartOptions { autoplay: self.autoplay_on_start, ..Default::default() }
     }
 
     fn retry_last_chart(&mut self) {
@@ -451,10 +457,29 @@ fn boot_play_sample_from_env() -> bool {
     parse_boot_play_sample(env::var(BOOT_PLAY_SAMPLE_ENV).ok().as_deref())
 }
 
+fn autoplay_on_start_from_env() -> bool {
+    let autoplay = parse_autoplay_on_start(env::var(AUTOPLAY_ON_START_ENV).ok().as_deref());
+    if autoplay {
+        tracing::info!(env = AUTOPLAY_ON_START_ENV, "autoplay enabled for started charts");
+    }
+    autoplay
+}
+
 fn parse_boot_play_sample(value: Option<&str>) -> bool {
     matches!(
         value.map(str::trim).map(str::to_ascii_lowercase).as_deref(),
         Some("1" | "true" | "yes" | "on" | "sample")
+    )
+}
+
+fn parse_autoplay_on_start(value: Option<&str>) -> bool {
+    parse_truthy_env(value)
+}
+
+fn parse_truthy_env(value: Option<&str>) -> bool {
+    matches!(
+        value.map(str::trim).map(str::to_ascii_lowercase).as_deref(),
+        Some("1" | "true" | "yes" | "on")
     )
 }
 
@@ -796,6 +821,22 @@ mod tests {
         assert!(!parse_boot_play_sample(Some("")));
         assert!(!parse_boot_play_sample(Some("0")));
         assert!(!parse_boot_play_sample(Some("false")));
+    }
+
+    #[test]
+    fn autoplay_on_start_env_accepts_truthy_values() {
+        assert!(parse_autoplay_on_start(Some("1")));
+        assert!(parse_autoplay_on_start(Some(" true ")));
+        assert!(parse_autoplay_on_start(Some("yes")));
+        assert!(parse_autoplay_on_start(Some("on")));
+    }
+
+    #[test]
+    fn autoplay_on_start_env_rejects_empty_and_other_values() {
+        assert!(!parse_autoplay_on_start(None));
+        assert!(!parse_autoplay_on_start(Some("")));
+        assert!(!parse_autoplay_on_start(Some("0")));
+        assert!(!parse_autoplay_on_start(Some("sample")));
     }
 
     #[test]
