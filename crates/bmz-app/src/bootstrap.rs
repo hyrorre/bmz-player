@@ -1,8 +1,9 @@
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 
-use crate::config::app_config::AppConfig;
+use crate::config::app_config::{AppConfig, PathEntry};
 use crate::config::load::{load_app_config, load_profile_config};
 use crate::config::profile_config::ProfileConfig;
 use crate::config::save::{save_app_config, save_profile_config};
@@ -86,15 +87,11 @@ pub fn bootstrap() -> Result<BootstrappedApp> {
     crate::storage::migration::migrate_score_db(&profile_paths.score_db)?;
 
     let mut library_db = LibraryDatabase::open(&app_paths.library_db)?;
-    let startup_scan = if app_config.scan.auto_rescan_on_startup {
-        Some(scan_song_roots(
-            &mut library_db,
-            &app_config.songs.roots,
-            &app_config.scan,
-            now_unix_seconds(),
-        )?)
-    } else {
+    let scan_roots = startup_scan_roots(&app_config, bundled_sample_song_root().as_deref());
+    let startup_scan = if scan_roots.is_empty() {
         None
+    } else {
+        Some(scan_song_roots(&mut library_db, &scan_roots, &app_config.scan, now_unix_seconds())?)
     };
     let score_db = ScoreDatabase::open(&profile_paths.score_db)?;
 
@@ -119,6 +116,29 @@ fn load_or_create_app_config(paths: &AppPaths) -> Result<AppConfig> {
     Ok(config)
 }
 
+fn startup_scan_roots(app_config: &AppConfig, sample_root: Option<&Path>) -> Vec<PathEntry> {
+    let mut roots = if app_config.scan.auto_rescan_on_startup {
+        app_config.songs.roots.clone()
+    } else {
+        Vec::new()
+    };
+
+    if let Some(sample_root) = sample_root {
+        let sample_root = sample_root.to_string_lossy().into_owned();
+        if !roots.iter().any(|root| root.path == sample_root) {
+            roots.push(PathEntry { path: sample_root, enabled: true, recursive: true });
+        }
+    }
+
+    roots
+}
+
+fn bundled_sample_song_root() -> Option<PathBuf> {
+    let root =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/songs").canonicalize().ok()?;
+    root.is_dir().then_some(root)
+}
+
 fn load_or_create_profile_config(paths: &ProfilePaths, profile_id: &str) -> Result<ProfileConfig> {
     if paths.profile_toml.exists() {
         return load_profile_config(&paths.profile_toml);
@@ -135,4 +155,84 @@ fn now_unix_seconds() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs() as i64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use rusqlite::Connection;
+
+    use super::*;
+    use crate::storage::common::configure_connection;
+    use crate::storage::migration::{LIBRARY_MIGRATIONS, run_migrations};
+
+    #[test]
+    fn startup_scan_roots_includes_sample_root_when_auto_scan_is_disabled() {
+        let config = AppConfig::default();
+
+        let roots = startup_scan_roots(&config, Some(Path::new("/samples")));
+
+        assert_eq!(roots.len(), 1);
+        assert_eq!(roots[0].path, "/samples");
+        assert!(roots[0].enabled);
+        assert!(roots[0].recursive);
+    }
+
+    #[test]
+    fn startup_scan_roots_keeps_user_roots_when_auto_scan_is_enabled() {
+        let mut config = AppConfig::default();
+        config.scan.auto_rescan_on_startup = true;
+        config.songs.roots.push(PathEntry {
+            path: "/songs".to_string(),
+            enabled: true,
+            recursive: false,
+        });
+
+        let roots = startup_scan_roots(&config, Some(Path::new("/samples")));
+
+        assert_eq!(roots.len(), 2);
+        assert_eq!(roots[0].path, "/songs");
+        assert_eq!(roots[1].path, "/samples");
+    }
+
+    #[test]
+    fn startup_scan_roots_deduplicates_sample_root() {
+        let mut config = AppConfig::default();
+        config.scan.auto_rescan_on_startup = true;
+        config.songs.roots.push(PathEntry {
+            path: "/samples".to_string(),
+            enabled: true,
+            recursive: false,
+        });
+
+        let roots = startup_scan_roots(&config, Some(Path::new("/samples")));
+
+        assert_eq!(roots.len(), 1);
+        assert!(!roots[0].recursive);
+    }
+
+    #[test]
+    fn bundled_sample_root_imports_playable_chart() {
+        let sample_root = bundled_sample_song_root().expect("sample song root should exist");
+        let config = AppConfig::default();
+        let roots = startup_scan_roots(&config, Some(&sample_root));
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase::from_connection(conn);
+
+        let report = scan_song_roots(&mut db, &roots, &config.scan, 1_700_000_100).unwrap();
+
+        assert_eq!(report.summary.failed, 0);
+        assert!(report.summary.imported >= 1);
+        let (title, total_notes): (String, u32) = db
+            .conn()
+            .query_row(
+                "SELECT title, total_notes FROM charts WHERE title = 'BMZ Sample Playable'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(title, "BMZ Sample Playable");
+        assert!(total_notes > 0);
+    }
 }

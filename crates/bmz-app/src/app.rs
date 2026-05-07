@@ -326,6 +326,7 @@ impl WinitApp {
 
         self.rendered_frames = self.rendered_frames.saturating_add(1);
         if self.rendered_frames >= exit_after_frames {
+            self.smoke_exit_after_frames = None;
             tracing::info!(
                 frames = self.rendered_frames,
                 "smoke exit frame count reached; leaving event loop"
