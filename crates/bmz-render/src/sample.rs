@@ -44,6 +44,7 @@ pub fn sample_play_scene() -> AppSceneSnapshot {
     snapshot.bar_lines.push(VisibleBarLine { time: TimeUs(12_000_000), y: 0.25 });
     snapshot.bar_lines.push(VisibleBarLine { time: TimeUs(13_000_000), y: 0.78 });
     snapshot.recent_judgements.push(DisplayJudgement {
+        lane: Lane::Key3,
         text: "PGREAT FAST".to_string(),
         delta_us: -12_000,
         time: TimeUs(12_300_000),

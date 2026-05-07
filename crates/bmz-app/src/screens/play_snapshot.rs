@@ -56,6 +56,7 @@ fn note_y(note_time: TimeUs, render_now: TimeUs) -> Option<f32> {
 
 fn display_judgement(event: &JudgementEvent) -> DisplayJudgement {
     DisplayJudgement {
+        lane: event.lane,
         text: format!("{}{}", judge_text(event.judge), side_suffix(event.side)),
         delta_us: event.delta.0,
         time: event.time,
@@ -120,6 +121,7 @@ mod tests {
         assert_eq!(snapshot.past_notes, 0);
         assert_eq!(snapshot.visible_notes[Lane::Key1.index()].len(), 1);
         assert_eq!(snapshot.visible_notes[Lane::Key1.index()][0].y, 360.0);
+        assert_eq!(snapshot.recent_judgements[0].lane, Lane::Key1);
         assert_eq!(snapshot.recent_judgements[0].text, "EMPTY POOR SLOW");
         assert_eq!(snapshot.recent_judgements[0].delta_us, 5_000);
     }

@@ -24,6 +24,7 @@ pub struct VisibleNote {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DisplayJudgement {
+    pub lane: Lane,
     pub text: String,
     pub delta_us: i64,
     pub time: TimeUs,

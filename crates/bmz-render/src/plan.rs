@@ -55,6 +55,10 @@ impl Color {
         Self { r, g, b, a: 1.0 }
     }
 
+    pub const fn rgba(r: f32, g: f32, b: f32, a: f32) -> Self {
+        Self { r, g, b, a }
+    }
+
     pub const fn to_wgpu(self) -> wgpu::Color {
         wgpu::Color { r: self.r as f64, g: self.g as f64, b: self.b as f64, a: self.a as f64 }
     }
@@ -256,6 +260,17 @@ fn plan_play(snapshot: &RenderSnapshot) -> DrawPlan {
             rect: Rect { x, y: board.y, width: lane_width, height: board.height },
             color,
         });
+        if let Some(color) = lane_flash_color(snapshot, lane) {
+            commands.push(DrawCommand::Rect {
+                rect: Rect {
+                    x: x + lane_width * 0.04,
+                    y: board.y + board.height * 0.76,
+                    width: lane_width * 0.92,
+                    height: board.height * 0.18,
+                },
+                color,
+            });
+        }
 
         for note in &snapshot.visible_notes[lane_index] {
             let y = board.y + (1.0 - note.y.clamp(0.0, 1.0)) * board.height;
@@ -452,6 +467,25 @@ fn format_time(time: TimeUs) -> String {
     format!("{:02}:{:02}", seconds / 60, seconds % 60)
 }
 
+fn lane_flash_color(snapshot: &RenderSnapshot, lane: Lane) -> Option<Color> {
+    let judgement = snapshot.recent_judgements.iter().rev().find(|judgement| {
+        judgement.lane == lane && (0..=220_000).contains(&(snapshot.time.0 - judgement.time.0))
+    })?;
+    let age_us = (snapshot.time.0 - judgement.time.0).max(0) as f32;
+    let alpha = (1.0 - age_us / 220_000.0).clamp(0.0, 1.0) * 0.55;
+    Some(judge_flash_color(&judgement.text, alpha))
+}
+
+fn judge_flash_color(text: &str, alpha: f32) -> Color {
+    if text.starts_with("PGREAT") || text.starts_with("GREAT") {
+        Color::rgba(0.55, 0.9, 1.0, alpha)
+    } else if text.starts_with("GOOD") {
+        Color::rgba(0.85, 0.9, 0.45, alpha)
+    } else {
+        Color::rgba(1.0, 0.28, 0.32, alpha)
+    }
+}
+
 fn display_title(title: &str) -> String {
     display_label(title, 24)
 }
@@ -494,7 +528,7 @@ mod tests {
     use bmz_core::lane::Lane;
     use bmz_core::time::TimeUs;
 
-    use crate::snapshot::{RenderSnapshot, VisibleBarLine, VisibleNote};
+    use crate::snapshot::{DisplayJudgement, RenderSnapshot, VisibleBarLine, VisibleNote};
 
     use super::*;
 
@@ -603,6 +637,43 @@ mod tests {
     }
 
     #[test]
+    fn play_plan_flashes_recent_judgement_lane() {
+        let snapshot = RenderSnapshot {
+            time: TimeUs(1_000_000),
+            recent_judgements: vec![DisplayJudgement {
+                lane: Lane::Key2,
+                text: "PGREAT FAST".to_string(),
+                delta_us: -3_000,
+                time: TimeUs(920_000),
+            }],
+            ..Default::default()
+        };
+
+        let plan = DrawPlan::from_scene(&AppSceneSnapshot::Play(snapshot));
+
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Rect { color, .. } if *color == judge_flash_color("PGREAT FAST", 0.35)
+        )));
+    }
+
+    #[test]
+    fn lane_flash_expires_old_judgements() {
+        let snapshot = RenderSnapshot {
+            time: TimeUs(1_000_000),
+            recent_judgements: vec![DisplayJudgement {
+                lane: Lane::Key2,
+                text: "BAD SLOW".to_string(),
+                delta_us: 88_000,
+                time: TimeUs(700_000),
+            }],
+            ..Default::default()
+        };
+
+        assert_eq!(lane_flash_color(&snapshot, Lane::Key2), None);
+    }
+
+    #[test]
     fn gauge_color_reflects_life_thresholds() {
         assert_eq!(gauge_color(90.0), Color::rgb(0.35, 0.9, 0.6));
         assert_eq!(gauge_color(50.0), Color::rgb(0.9, 0.78, 0.35));
@@ -626,6 +697,13 @@ mod tests {
         assert_eq!(format_delta_ms(-12_345), "-12MS");
         assert_eq!(format_delta_ms(8_999), "+8MS");
         assert_eq!(format_time(TimeUs(65_000_000)), "01:05");
+    }
+
+    #[test]
+    fn judge_flash_color_reflects_judge_family() {
+        assert_eq!(judge_flash_color("GREAT SLOW", 0.5), Color::rgba(0.55, 0.9, 1.0, 0.5));
+        assert_eq!(judge_flash_color("GOOD FAST", 0.5), Color::rgba(0.85, 0.9, 0.45, 0.5));
+        assert_eq!(judge_flash_color("POOR SLOW", 0.5), Color::rgba(1.0, 0.28, 0.32, 0.5));
     }
 
     #[test]
