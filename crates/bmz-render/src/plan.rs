@@ -1,4 +1,5 @@
 use bmz_core::lane::{LANE_COUNT, Lane};
+use bmz_core::time::TimeUs;
 
 use crate::scene::{AppSceneSnapshot, SelectRowSnapshot};
 use crate::snapshot::RenderSnapshot;
@@ -373,6 +374,7 @@ fn push_combo_panel(commands: &mut Vec<DrawCommand>, combo: u32) {
 }
 
 fn push_play_text(text: &TextRenderer, commands: &mut Vec<DrawCommand>, snapshot: &RenderSnapshot) {
+    push_play_status_text(text, commands, snapshot);
     if snapshot.combo > 0 {
         text.push_text(
             commands,
@@ -391,7 +393,63 @@ fn push_play_text(text: &TextRenderer, commands: &mut Vec<DrawCommand>, snapshot
             &judgement.text,
             BitmapTextStyle { x: 0.38, y: 0.245, cell: 0.006, color: Color::rgb(0.96, 0.92, 0.54) },
         );
+        text.push_text(
+            commands,
+            &format_delta_ms(judgement.delta_us),
+            BitmapTextStyle {
+                x: 0.405,
+                y: 0.282,
+                cell: 0.0045,
+                color: Color::rgb(0.72, 0.82, 0.86),
+            },
+        );
     }
+}
+
+fn push_play_status_text(
+    text: &TextRenderer,
+    commands: &mut Vec<DrawCommand>,
+    snapshot: &RenderSnapshot,
+) {
+    commands.push(DrawCommand::Rect {
+        rect: Rect { x: 0.05, y: 0.08, width: 0.11, height: 0.24 },
+        color: Color::rgb(0.035, 0.04, 0.044),
+    });
+    text.push_text(
+        commands,
+        &format!("EX {}", snapshot.ex_score),
+        BitmapTextStyle { x: 0.065, y: 0.105, cell: 0.0055, color: Color::rgb(0.82, 0.9, 0.92) },
+    );
+    text.push_text(
+        commands,
+        &format!("MAX {}", snapshot.max_combo),
+        BitmapTextStyle { x: 0.065, y: 0.15, cell: 0.0055, color: Color::rgb(0.82, 0.9, 0.92) },
+    );
+    text.push_text(
+        commands,
+        &format!("NOTE {}", snapshot.past_notes.min(snapshot.total_notes)),
+        BitmapTextStyle { x: 0.065, y: 0.195, cell: 0.005, color: Color::rgb(0.68, 0.78, 0.8) },
+    );
+    text.push_text(
+        commands,
+        &format!("/{}", snapshot.total_notes),
+        BitmapTextStyle { x: 0.065, y: 0.235, cell: 0.005, color: Color::rgb(0.68, 0.78, 0.8) },
+    );
+    text.push_text(
+        commands,
+        &format_time(snapshot.time),
+        BitmapTextStyle { x: 0.065, y: 0.28, cell: 0.0045, color: Color::rgb(0.48, 0.62, 0.66) },
+    );
+}
+
+fn format_delta_ms(delta_us: i64) -> String {
+    let sign = if delta_us < 0 { "-" } else { "+" };
+    format!("{}{}MS", sign, delta_us.abs() / 1_000)
+}
+
+fn format_time(time: TimeUs) -> String {
+    let seconds = (time.0.max(0) / 1_000_000) as u32;
+    format!("{:02}:{:02}", seconds / 60, seconds % 60)
 }
 
 fn display_title(title: &str) -> String {
@@ -514,7 +572,15 @@ mod tests {
 
     #[test]
     fn play_plan_includes_judge_line_gauge_and_combo_panel() {
-        let snapshot = RenderSnapshot { combo: 1234, gauge: 82.0, ..Default::default() };
+        let snapshot = RenderSnapshot {
+            combo: 1234,
+            max_combo: 1234,
+            ex_score: 2000,
+            total_notes: 1200,
+            past_notes: 900,
+            gauge: 82.0,
+            ..Default::default()
+        };
 
         let plan = DrawPlan::from_scene(&AppSceneSnapshot::Play(snapshot));
 
@@ -529,6 +595,10 @@ mod tests {
         assert!(plan.commands.iter().any(|command| matches!(
             command,
             DrawCommand::Rect { rect, color } if rect.width >= 0.2 && *color == Color::rgb(0.14, 0.18, 0.2)
+        )));
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Rect { rect, color } if rect.x == 0.05 && rect.width == 0.11 && *color == Color::rgb(0.035, 0.04, 0.044)
         )));
     }
 
@@ -549,6 +619,13 @@ mod tests {
     fn display_label_sanitizes_and_truncates_text() {
         assert_eq!(display_label("FullCombo!!", 8), "FullComb");
         assert_eq!(display_label("A_B", 8), "A?B");
+    }
+
+    #[test]
+    fn play_text_formats_delta_and_time() {
+        assert_eq!(format_delta_ms(-12_345), "-12MS");
+        assert_eq!(format_delta_ms(8_999), "+8MS");
+        assert_eq!(format_time(TimeUs(65_000_000)), "01:05");
     }
 
     #[test]

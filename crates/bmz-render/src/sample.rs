@@ -43,9 +43,11 @@ pub fn sample_play_scene() -> AppSceneSnapshot {
     });
     snapshot.bar_lines.push(VisibleBarLine { time: TimeUs(12_000_000), y: 0.25 });
     snapshot.bar_lines.push(VisibleBarLine { time: TimeUs(13_000_000), y: 0.78 });
-    snapshot
-        .recent_judgements
-        .push(DisplayJudgement { text: "PGREAT".to_string(), time: TimeUs(12_300_000) });
+    snapshot.recent_judgements.push(DisplayJudgement {
+        text: "PGREAT FAST".to_string(),
+        delta_us: -12_000,
+        time: TimeUs(12_300_000),
+    });
 
     AppSceneSnapshot::Play(snapshot)
 }

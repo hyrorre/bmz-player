@@ -16,6 +16,10 @@ pub fn build_render_snapshot(
     let mut snapshot = RenderSnapshot {
         time: render_now,
         combo: session.score.combo,
+        max_combo: session.score.max_combo,
+        ex_score: session.score.ex_score(),
+        total_notes: session.chart.total_notes,
+        past_notes: session.score.past_notes,
         gauge: session.gauge.current().value,
         visible_notes: std::array::from_fn(|_| Vec::new()),
         recent_judgements: recent_judgements.iter().map(display_judgement).collect(),
@@ -53,6 +57,7 @@ fn note_y(note_time: TimeUs, render_now: TimeUs) -> Option<f32> {
 fn display_judgement(event: &JudgementEvent) -> DisplayJudgement {
     DisplayJudgement {
         text: format!("{}{}", judge_text(event.judge), side_suffix(event.side)),
+        delta_us: event.delta.0,
         time: event.time,
     }
 }
@@ -109,9 +114,14 @@ mod tests {
         let snapshot = build_render_snapshot(&session, TimeUs(0), &judgements);
 
         assert_eq!(snapshot.combo, 0);
+        assert_eq!(snapshot.max_combo, 0);
+        assert_eq!(snapshot.ex_score, 0);
+        assert_eq!(snapshot.total_notes, 1);
+        assert_eq!(snapshot.past_notes, 0);
         assert_eq!(snapshot.visible_notes[Lane::Key1.index()].len(), 1);
         assert_eq!(snapshot.visible_notes[Lane::Key1.index()][0].y, 360.0);
         assert_eq!(snapshot.recent_judgements[0].text, "EMPTY POOR SLOW");
+        assert_eq!(snapshot.recent_judgements[0].delta_us, 5_000);
     }
 
     #[test]

@@ -5,6 +5,10 @@ use bmz_core::time::TimeUs;
 pub struct RenderSnapshot {
     pub time: TimeUs,
     pub combo: u32,
+    pub max_combo: u32,
+    pub ex_score: u32,
+    pub total_notes: u32,
+    pub past_notes: u32,
     pub gauge: f32,
     pub visible_notes: [Vec<VisibleNote>; LANE_COUNT],
     pub recent_judgements: Vec<DisplayJudgement>,
@@ -21,6 +25,7 @@ pub struct VisibleNote {
 #[derive(Debug, Clone, PartialEq)]
 pub struct DisplayJudgement {
     pub text: String,
+    pub delta_us: i64,
     pub time: TimeUs,
 }
 
