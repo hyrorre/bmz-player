@@ -159,6 +159,7 @@ fn now_unix_seconds() -> i64 {
 
 #[cfg(test)]
 mod tests {
+    use bmz_chart::import::import_bms_chart;
     use rusqlite::Connection;
 
     use super::*;
@@ -213,6 +214,12 @@ mod tests {
     #[test]
     fn bundled_sample_root_imports_playable_chart() {
         let sample_root = bundled_sample_song_root().expect("sample song root should exist");
+        let sample_chart = sample_root.join("sample-playable").join("sample-playable.bms");
+        let import = import_bms_chart(&sample_chart, None).unwrap();
+        assert!(import.warnings.is_empty());
+        assert_eq!(import.chart.sounds.len(), 1);
+        assert!(import.chart.sounds[0].path.exists());
+
         let config = AppConfig::default();
         let roots = startup_scan_roots(&config, Some(&sample_root));
         let mut conn = Connection::open_in_memory().unwrap();
