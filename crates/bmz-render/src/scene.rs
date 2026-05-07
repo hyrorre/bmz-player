@@ -15,6 +15,17 @@ pub struct SelectSnapshot {
     pub selected_index: u32,
     pub selected_chart_id: Option<i64>,
     pub selected_title: String,
+    pub rows: Vec<SelectRowSnapshot>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SelectRowSnapshot {
+    pub index: u32,
+    pub title: String,
+    pub artist: String,
+    pub play_level: String,
+    pub clear_type: String,
+    pub ex_score: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

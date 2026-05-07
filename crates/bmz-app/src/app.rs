@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use bmz_render::renderer::{RenderSurfaceStatus, Renderer, SurfaceSize};
 use bmz_render::sample::{sample_play_scene, sample_result_scene, sample_select_scene};
-use bmz_render::scene::{AppSceneSnapshot, ResultSnapshot, SelectSnapshot};
+use bmz_render::scene::{AppSceneSnapshot, ResultSnapshot, SelectRowSnapshot, SelectSnapshot};
 use bmz_render::snapshot::RenderSnapshot;
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, StartCause, WindowEvent};
@@ -39,6 +39,7 @@ struct WinitApp {
     finished_play: Option<FinishedPlaySession>,
     last_play_snapshot: Option<RenderSnapshot>,
     select_rows: Vec<SelectChartRow>,
+    selected_index: usize,
     renderer: Renderer,
     dev_scene: Option<AppSceneSnapshot>,
     last_scene_kind: Option<AppSceneKind>,
@@ -72,6 +73,7 @@ impl WinitApp {
             finished_play: None,
             last_play_snapshot: None,
             select_rows,
+            selected_index: 0,
             renderer: Renderer::default(),
             dev_scene: None,
             last_scene_kind: None,
@@ -146,12 +148,13 @@ impl WinitApp {
     }
 
     fn select_snapshot(&self) -> SelectSnapshot {
-        let selected = self.select_rows.first();
+        let selected = self.select_rows.get(self.selected_index);
         SelectSnapshot {
             chart_count: self.select_rows.len() as u32,
-            selected_index: 0,
+            selected_index: self.selected_index as u32,
             selected_chart_id: selected.map(|row| row.chart.chart_id),
             selected_title: selected.map(|row| row.chart.title.clone()).unwrap_or_default(),
+            rows: select_snapshot_rows(&self.select_rows, self.selected_index, 7),
         }
     }
 
@@ -174,53 +177,43 @@ impl WinitApp {
             return;
         }
 
-        if should_start_play_from_select(event.physical_key, event.state, event.repeat) {
-            self.start_first_select_chart();
+        if let Some(action) = select_action(event.physical_key, event.state, event.repeat) {
+            match action {
+                SelectAction::Start => self.start_selected_chart(),
+                SelectAction::MovePrevious => self.move_selection(-1),
+                SelectAction::MoveNext => self.move_selection(1),
+            }
         }
     }
 
-    fn route_dev_scene_key(
-        &mut self,
-        physical_key: PhysicalKey,
-        state: ElementState,
-        repeat: bool,
-    ) -> bool {
-        match dev_scene_action(physical_key, state, repeat) {
-            Some(DevSceneAction::SampleSelect) => {
-                self.dev_scene = Some(sample_select_scene());
-                tracing::info!("showing sample select scene");
-                true
-            }
-            Some(DevSceneAction::SamplePlay) => {
-                self.dev_scene = Some(sample_play_scene());
-                tracing::info!("showing sample play scene");
-                true
-            }
-            Some(DevSceneAction::SampleResult) => {
-                self.dev_scene = Some(sample_result_scene());
-                tracing::info!("showing sample result scene");
-                true
-            }
-            Some(DevSceneAction::Clear) if self.dev_scene.is_some() => {
-                self.dev_scene = None;
-                tracing::info!("leaving sample scene");
-                true
-            }
-            _ => false,
-        }
-    }
-
-    fn start_first_select_chart(&mut self) {
+    fn move_selection(&mut self, delta: isize) {
         if self.select_rows.is_empty() {
             self.refresh_select_rows();
         }
+        if self.select_rows.is_empty() {
+            return;
+        }
 
-        let Some(row) = self.select_rows.first() else {
+        let max_index = self.select_rows.len() - 1;
+        self.selected_index = self.selected_index.saturating_add_signed(delta).clamp(0, max_index);
+    }
+
+    fn start_selected_chart(&mut self) {
+        if self.select_rows.is_empty() {
+            self.refresh_select_rows();
+        }
+        if self.selected_index >= self.select_rows.len() {
+            self.selected_index = self.select_rows.len().saturating_sub(1);
+        }
+
+        let Some(row) = self.select_rows.get(self.selected_index) else {
             tracing::warn!("no chart is available to start");
             return;
         };
-        let chart_id = row.chart.chart_id;
+        self.start_chart(row.chart.chart_id);
+    }
 
+    fn start_chart(&mut self, chart_id: i64) {
         match self.boot.start_play_for_chart_with_winit_input(chart_id, PlayStartOptions::default())
         {
             Ok(active_play) => {
@@ -238,6 +231,9 @@ impl WinitApp {
         match load_select_chart_rows(&self.boot.library_db, &self.boot.score_db, 100, 0) {
             Ok(rows) => {
                 self.select_rows = rows;
+                if self.selected_index >= self.select_rows.len() {
+                    self.selected_index = self.select_rows.len().saturating_sub(1);
+                }
             }
             Err(error) => {
                 tracing::error!(%error, "failed to refresh select chart rows");
@@ -290,6 +286,37 @@ impl WinitApp {
             Err(error) => {
                 tracing::error!(%error, "failed to present render scene");
             }
+        }
+    }
+
+    fn route_dev_scene_key(
+        &mut self,
+        physical_key: PhysicalKey,
+        state: ElementState,
+        repeat: bool,
+    ) -> bool {
+        match dev_scene_action(physical_key, state, repeat) {
+            Some(DevSceneAction::SampleSelect) => {
+                self.dev_scene = Some(sample_select_scene());
+                tracing::info!("showing sample select scene");
+                true
+            }
+            Some(DevSceneAction::SamplePlay) => {
+                self.dev_scene = Some(sample_play_scene());
+                tracing::info!("showing sample play scene");
+                true
+            }
+            Some(DevSceneAction::SampleResult) => {
+                self.dev_scene = Some(sample_result_scene());
+                tracing::info!("showing sample result scene");
+                true
+            }
+            Some(DevSceneAction::Clear) if self.dev_scene.is_some() => {
+                self.dev_scene = None;
+                tracing::info!("leaving sample scene");
+                true
+            }
+            _ => false,
         }
     }
 
@@ -397,14 +424,64 @@ fn parse_smoke_exit_after_frames(value: Option<&str>) -> Option<u32> {
     value.parse::<u32>().ok().map(|frames| frames.max(1))
 }
 
-fn should_start_play_from_select(
+fn select_snapshot_rows(
+    rows: &[SelectChartRow],
+    selected_index: usize,
+    visible_limit: usize,
+) -> Vec<SelectRowSnapshot> {
+    if rows.is_empty() || visible_limit == 0 {
+        return Vec::new();
+    }
+
+    let selected_index = selected_index.min(rows.len() - 1);
+    let half_window = visible_limit / 2;
+    let max_start = rows.len().saturating_sub(visible_limit);
+    let start = selected_index.saturating_sub(half_window).min(max_start);
+    let end = (start + visible_limit).min(rows.len());
+
+    rows[start..end]
+        .iter()
+        .enumerate()
+        .map(|(offset, row)| {
+            let index = start + offset;
+            SelectRowSnapshot {
+                index: index as u32,
+                title: row.chart.title.clone(),
+                artist: row.chart.artist.clone(),
+                play_level: row.chart.play_level.clone(),
+                clear_type: row
+                    .best_score
+                    .as_ref()
+                    .map(|score| score.clear_type.clone())
+                    .unwrap_or_default(),
+                ex_score: row.best_score.as_ref().map(|score| score.ex_score),
+            }
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SelectAction {
+    Start,
+    MovePrevious,
+    MoveNext,
+}
+
+fn select_action(
     physical_key: PhysicalKey,
     state: ElementState,
     repeat: bool,
-) -> bool {
-    state == ElementState::Pressed
-        && !repeat
-        && matches!(physical_key, PhysicalKey::Code(KeyCode::Enter | KeyCode::Space))
+) -> Option<SelectAction> {
+    if state != ElementState::Pressed || repeat {
+        return None;
+    }
+
+    match physical_key {
+        PhysicalKey::Code(KeyCode::Enter | KeyCode::Space) => Some(SelectAction::Start),
+        PhysicalKey::Code(KeyCode::ArrowUp) => Some(SelectAction::MovePrevious),
+        PhysicalKey::Code(KeyCode::ArrowDown) => Some(SelectAction::MoveNext),
+        _ => None,
+    }
 }
 
 fn should_leave_result(physical_key: PhysicalKey, state: ElementState, repeat: bool) -> bool {
@@ -457,39 +534,41 @@ fn dev_scene_action(
 
 #[cfg(test)]
 mod tests {
+    use crate::storage::library_db::ChartListItem;
+    use crate::storage::score_db::BestScoreSummary;
+
     use super::*;
 
     #[test]
-    fn select_start_key_accepts_enter_and_space_press() {
-        assert!(should_start_play_from_select(
-            PhysicalKey::Code(KeyCode::Enter),
-            ElementState::Pressed,
-            false
-        ));
-        assert!(should_start_play_from_select(
-            PhysicalKey::Code(KeyCode::Space),
-            ElementState::Pressed,
-            false
-        ));
+    fn select_action_maps_start_and_vertical_movement() {
+        assert_eq!(
+            select_action(PhysicalKey::Code(KeyCode::Enter), ElementState::Pressed, false),
+            Some(SelectAction::Start)
+        );
+        assert_eq!(
+            select_action(PhysicalKey::Code(KeyCode::ArrowUp), ElementState::Pressed, false),
+            Some(SelectAction::MovePrevious)
+        );
+        assert_eq!(
+            select_action(PhysicalKey::Code(KeyCode::ArrowDown), ElementState::Pressed, false),
+            Some(SelectAction::MoveNext)
+        );
     }
 
     #[test]
-    fn select_start_key_rejects_releases_repeats_and_other_keys() {
-        assert!(!should_start_play_from_select(
-            PhysicalKey::Code(KeyCode::Enter),
-            ElementState::Released,
-            false
-        ));
-        assert!(!should_start_play_from_select(
-            PhysicalKey::Code(KeyCode::Enter),
-            ElementState::Pressed,
-            true
-        ));
-        assert!(!should_start_play_from_select(
-            PhysicalKey::Code(KeyCode::KeyZ),
-            ElementState::Pressed,
-            false
-        ));
+    fn select_action_rejects_releases_repeats_and_other_keys() {
+        assert_eq!(
+            select_action(PhysicalKey::Code(KeyCode::ArrowDown), ElementState::Released, false),
+            None
+        );
+        assert_eq!(
+            select_action(PhysicalKey::Code(KeyCode::ArrowDown), ElementState::Pressed, true),
+            None
+        );
+        assert_eq!(
+            select_action(PhysicalKey::Code(KeyCode::KeyZ), ElementState::Pressed, false),
+            None
+        );
     }
 
     #[test]
@@ -591,5 +670,72 @@ mod tests {
     #[test]
     fn smoke_exit_after_frames_clamps_zero_to_one_redraw() {
         assert_eq!(parse_smoke_exit_after_frames(Some("0")), Some(1));
+    }
+
+    #[test]
+    fn select_snapshot_rows_centers_selection_and_copies_score_summary() {
+        let rows: Vec<SelectChartRow> = (0..10)
+            .map(|index| {
+                let mut row = select_chart_row(index);
+                if index == 5 {
+                    row.best_score = Some(best_score(1234));
+                }
+                row
+            })
+            .collect();
+
+        let snapshot_rows = select_snapshot_rows(&rows, 5, 7);
+
+        assert_eq!(snapshot_rows.len(), 7);
+        assert_eq!(snapshot_rows[0].index, 2);
+        assert_eq!(snapshot_rows[3].index, 5);
+        assert_eq!(snapshot_rows[3].title, "Title 5");
+        assert_eq!(snapshot_rows[3].clear_type, "Normal");
+        assert_eq!(snapshot_rows[3].ex_score, Some(1234));
+    }
+
+    #[test]
+    fn select_snapshot_rows_clamps_near_edges() {
+        let rows: Vec<SelectChartRow> = (0..4).map(select_chart_row).collect();
+
+        let snapshot_rows = select_snapshot_rows(&rows, 99, 7);
+
+        assert_eq!(snapshot_rows.len(), 4);
+        assert_eq!(snapshot_rows[0].index, 0);
+        assert_eq!(snapshot_rows[3].index, 3);
+    }
+
+    fn select_chart_row(index: usize) -> SelectChartRow {
+        SelectChartRow {
+            chart: ChartListItem {
+                chart_id: index as i64,
+                sha256: [index as u8; 32],
+                title: format!("Title {index}"),
+                subtitle: String::new(),
+                artist: format!("Artist {index}"),
+                difficulty_name: String::new(),
+                play_level: index.to_string(),
+                mode: "7K".to_string(),
+                total_notes: 100,
+                initial_bpm: 128.0,
+                min_bpm: 128.0,
+                max_bpm: 128.0,
+                folder_path: String::new(),
+            },
+            best_score: None,
+        }
+    }
+
+    fn best_score(ex_score: u32) -> BestScoreSummary {
+        BestScoreSummary {
+            chart_sha256: [0; 32],
+            clear_type: "Normal".to_string(),
+            gauge_type: "Normal".to_string(),
+            gauge_value: 80.0,
+            ex_score,
+            max_combo: 100,
+            played_at: 1,
+            replay_path: String::new(),
+        }
     }
 }

@@ -1,15 +1,27 @@
 use bmz_core::lane::Lane;
 use bmz_core::time::TimeUs;
 
-use crate::scene::{AppSceneSnapshot, ResultSnapshot, SelectSnapshot};
+use crate::scene::{AppSceneSnapshot, ResultSnapshot, SelectRowSnapshot, SelectSnapshot};
 use crate::snapshot::{DisplayJudgement, RenderSnapshot, VisibleBarLine, VisibleNote};
 
 pub fn sample_select_scene() -> AppSceneSnapshot {
+    let rows = (0..7)
+        .map(|index| SelectRowSnapshot {
+            index,
+            title: format!("Sample BMS {}", index + 1),
+            artist: "bmz".to_string(),
+            play_level: (index + 1).to_string(),
+            clear_type: if index == 0 { "Normal".to_string() } else { String::new() },
+            ex_score: (index == 0).then_some(1888),
+        })
+        .collect();
+
     AppSceneSnapshot::Select(SelectSnapshot {
         chart_count: 7,
         selected_index: 0,
         selected_chart_id: Some(1),
         selected_title: "Sample BMS".to_string(),
+        rows,
     })
 }
 

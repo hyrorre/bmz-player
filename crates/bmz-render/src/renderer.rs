@@ -388,6 +388,7 @@ mod tests {
             selected_index: 0,
             selected_chart_id: Some(7),
             selected_title: "test".to_string(),
+            rows: Vec::new(),
         });
 
         renderer.render_scene(scene.clone()).unwrap();

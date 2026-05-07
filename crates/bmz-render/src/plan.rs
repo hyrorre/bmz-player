@@ -1,6 +1,6 @@
 use bmz_core::lane::{LANE_COUNT, Lane};
 
-use crate::scene::AppSceneSnapshot;
+use crate::scene::{AppSceneSnapshot, SelectRowSnapshot};
 use crate::snapshot::RenderSnapshot;
 use crate::text::{BitmapTextStyle, TextRenderer};
 
@@ -35,7 +35,7 @@ impl DrawPlan {
     pub fn from_scene(scene: &AppSceneSnapshot) -> Self {
         match scene {
             AppSceneSnapshot::Select(snapshot) => {
-                plan_select(snapshot.chart_count, &snapshot.selected_title)
+                plan_select(snapshot.chart_count, snapshot.selected_index, &snapshot.rows)
             }
             AppSceneSnapshot::Play(snapshot) => plan_play(snapshot),
             AppSceneSnapshot::Result(snapshot) => plan_result(
@@ -59,7 +59,7 @@ impl Color {
     }
 }
 
-fn plan_select(chart_count: u32, selected_title: &str) -> DrawPlan {
+fn plan_select(chart_count: u32, selected_index: u32, rows: &[SelectRowSnapshot]) -> DrawPlan {
     let mut commands = Vec::new();
     let text = TextRenderer;
     commands.push(DrawCommand::Rect {
@@ -76,9 +76,10 @@ fn plan_select(chart_count: u32, selected_title: &str) -> DrawPlan {
         &format!("CHARTS {}", chart_count),
         BitmapTextStyle { x: 0.78, y: 0.112, cell: 0.005, color: Color::rgb(0.62, 0.78, 0.84) },
     );
-    let row_count = chart_count.clamp(1, 7);
-    for row in 0..row_count {
-        let selected = row == 0;
+    let visible_rows = rows.len().max(1).min(7);
+    for row in 0..visible_rows {
+        let snapshot_row = rows.get(row);
+        let selected = snapshot_row.map(|row| row.index == selected_index).unwrap_or(row == 0);
         commands.push(DrawCommand::Rect {
             rect: Rect { x: 0.08, y: 0.2 + row as f32 * 0.09, width: 0.68, height: 0.065 },
             color: if selected {
@@ -90,12 +91,23 @@ fn plan_select(chart_count: u32, selected_title: &str) -> DrawPlan {
         if selected {
             text.push_text(
                 &mut commands,
-                &display_title(selected_title),
+                &display_title(snapshot_row.map(|row| row.title.as_str()).unwrap_or_default()),
                 BitmapTextStyle {
                     x: 0.1,
-                    y: 0.222,
+                    y: 0.222 + row as f32 * 0.09,
                     cell: 0.006,
                     color: Color::rgb(0.9, 0.96, 0.98),
+                },
+            );
+        } else if let Some(snapshot_row) = snapshot_row {
+            text.push_text(
+                &mut commands,
+                &display_title(&snapshot_row.title),
+                BitmapTextStyle {
+                    x: 0.1,
+                    y: 0.222 + row as f32 * 0.09,
+                    cell: 0.005,
+                    color: Color::rgb(0.58, 0.66, 0.68),
                 },
             );
         }
@@ -108,21 +120,33 @@ fn plan_select(chart_count: u32, selected_title: &str) -> DrawPlan {
             },
         });
         if selected {
+            let status = row_status_label(snapshot_row);
             text.push_text(
                 &mut commands,
-                "READY",
+                &status,
                 BitmapTextStyle {
                     x: 0.805,
-                    y: 0.222,
+                    y: 0.222 + row as f32 * 0.09,
                     cell: 0.0055,
                     color: Color::rgb(0.74, 0.88, 0.9),
+                },
+            );
+        } else if let Some(snapshot_row) = snapshot_row {
+            text.push_text(
+                &mut commands,
+                &row_status_label(Some(snapshot_row)),
+                BitmapTextStyle {
+                    x: 0.805,
+                    y: 0.222 + row as f32 * 0.09,
+                    cell: 0.0045,
+                    color: Color::rgb(0.38, 0.46, 0.48),
                 },
             );
         }
     }
     text.push_text(
         &mut commands,
-        "ENTER START",
+        "UP DOWN SELECT  ENTER START",
         BitmapTextStyle { x: 0.08, y: 0.86, cell: 0.006, color: Color::rgb(0.88, 0.9, 0.86) },
     );
     text.push_text(
@@ -132,6 +156,19 @@ fn plan_select(chart_count: u32, selected_title: &str) -> DrawPlan {
     );
 
     DrawPlan { clear: Color::rgb(0.02, 0.025, 0.03), commands }
+}
+
+fn row_status_label(row: Option<&SelectRowSnapshot>) -> String {
+    let Some(row) = row else {
+        return "EMPTY".to_string();
+    };
+    if let Some(ex_score) = row.ex_score {
+        format!("EX {}", ex_score)
+    } else if !row.play_level.is_empty() {
+        format!("LV {}", display_label(&row.play_level, 4))
+    } else {
+        "READY".to_string()
+    }
 }
 
 fn plan_play(snapshot: &RenderSnapshot) -> DrawPlan {
@@ -376,6 +413,7 @@ mod tests {
     fn select_plan_clamps_visible_rows() {
         let plan = DrawPlan::from_scene(&AppSceneSnapshot::Select(crate::scene::SelectSnapshot {
             chart_count: 20,
+            rows: select_rows(20),
             ..Default::default()
         }));
 
@@ -390,6 +428,21 @@ mod tests {
             ))
             .count();
         assert_eq!(row_count, 7);
+    }
+
+    #[test]
+    fn select_plan_renders_empty_row_when_no_rows_are_available() {
+        let plan = DrawPlan::from_scene(&AppSceneSnapshot::Select(Default::default()));
+
+        let selected_row_color = Color::rgb(0.22, 0.28, 0.31);
+        let row_count = plan
+            .commands
+            .iter()
+            .filter(|command| {
+                matches!(command, DrawCommand::Rect { color, .. } if *color == selected_row_color)
+            })
+            .count();
+        assert_eq!(row_count, 1);
     }
 
     #[test]
@@ -439,5 +492,18 @@ mod tests {
     fn display_label_sanitizes_and_truncates_text() {
         assert_eq!(display_label("FullCombo!!", 8), "FullComb");
         assert_eq!(display_label("A_B", 8), "A?B");
+    }
+
+    fn select_rows(count: u32) -> Vec<crate::scene::SelectRowSnapshot> {
+        (0..count)
+            .map(|index| crate::scene::SelectRowSnapshot {
+                index,
+                title: format!("Title {index}"),
+                artist: String::new(),
+                play_level: index.to_string(),
+                clear_type: String::new(),
+                ex_score: None,
+            })
+            .collect()
     }
 }
