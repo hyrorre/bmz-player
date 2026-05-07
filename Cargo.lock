@@ -275,10 +275,12 @@ dependencies = [
 name = "bmz-render"
 version = "0.1.0"
 dependencies = [
+ "ab_glyph",
  "anyhow",
  "bmz-chart",
  "bmz-core",
  "bmz-gameplay",
+ "tracing",
  "wgpu",
 ]
 

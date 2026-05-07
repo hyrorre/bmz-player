@@ -3,6 +3,7 @@ pub mod plan;
 pub mod renderer;
 pub mod sample;
 pub mod scene;
+pub mod skin;
 pub mod snapshot;
 pub mod text;
 pub mod ui;

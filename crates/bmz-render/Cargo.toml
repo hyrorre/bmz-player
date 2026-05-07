@@ -6,6 +6,8 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+ab_glyph = "0.2.32"
+tracing.workspace = true
 wgpu.workspace = true
 
 bmz-core = { path = "../bmz-core" }

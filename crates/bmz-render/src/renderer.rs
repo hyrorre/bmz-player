@@ -5,9 +5,10 @@ use std::pin::Pin;
 use std::task::{Context as TaskContext, Poll, RawWaker, RawWakerVTable, Waker};
 use std::thread;
 
+use ab_glyph::{Font, FontArc, Glyph, PxScale, ScaleFont, point};
 use anyhow::{Context, Result, anyhow};
 
-use crate::plan::{DrawCommand, DrawPlan};
+use crate::plan::{Color, DrawCommand, DrawPlan, Point, TextStyle};
 use crate::scene::AppSceneSnapshot;
 
 #[derive(Default)]
@@ -46,6 +47,15 @@ struct WgpuRenderer {
     rect_pipeline: wgpu::RenderPipeline,
     rect_buffer: Option<wgpu::Buffer>,
     rect_buffer_capacity: usize,
+    text_pipeline: wgpu::RenderPipeline,
+    text_bind_group_layout: wgpu::BindGroupLayout,
+    text_sampler: wgpu::Sampler,
+    text_texture: Option<wgpu::Texture>,
+    text_texture_view: Option<wgpu::TextureView>,
+    text_texture_size: AtlasSize,
+    text_buffer: Option<wgpu::Buffer>,
+    text_buffer_capacity: usize,
+    font: Option<FontArc>,
 }
 
 impl Renderer {
@@ -142,6 +152,9 @@ impl WgpuRenderer {
             .ok_or_else(|| anyhow!("surface is not supported by the selected adapter"))?;
         surface.configure(&device, &config);
         let rect_pipeline = create_rect_pipeline(&device, config.format);
+        let text_bind_group_layout = create_text_bind_group_layout(&device);
+        let text_sampler = create_text_sampler(&device);
+        let text_pipeline = create_text_pipeline(&device, config.format, &text_bind_group_layout);
 
         Ok(Self {
             surface,
@@ -151,6 +164,15 @@ impl WgpuRenderer {
             rect_pipeline,
             rect_buffer: None,
             rect_buffer_capacity: 0,
+            text_pipeline,
+            text_bind_group_layout,
+            text_sampler,
+            text_texture: None,
+            text_texture_view: None,
+            text_texture_size: AtlasSize::default(),
+            text_buffer: None,
+            text_buffer_capacity: 0,
+            font: load_default_font(),
         })
     }
 
@@ -170,12 +192,14 @@ impl WgpuRenderer {
         }
 
         let rects = encode_rects(plan);
+        let text_frame = self.build_text_frame(plan);
         self.ensure_rect_buffer(rects.len());
         if let Some(buffer) = &self.rect_buffer {
             if !rects.is_empty() {
                 self.queue.write_buffer(buffer, 0, &rects);
             }
         }
+        self.upload_text_frame(&text_frame);
 
         let output = match self.surface.get_current_texture() {
             Ok(output) => output,
@@ -189,6 +213,7 @@ impl WgpuRenderer {
             }
         };
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let text_bind_group = self.text_bind_group();
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("bmz-render clear encoder"),
         });
@@ -215,6 +240,20 @@ impl WgpuRenderer {
                     pass.draw(0..6, 0..instance_count);
                 }
             }
+            if let Some(bind_group) = &text_bind_group {
+                if let Some(buffer) = &self.text_buffer {
+                    let instance_count = (text_frame.instances.len() / TEXT_INSTANCE_BYTES) as u32;
+                    if instance_count > 0 {
+                        pass.set_pipeline(&self.text_pipeline);
+                        pass.set_bind_group(0, bind_group, &[]);
+                        pass.set_vertex_buffer(
+                            0,
+                            buffer.slice(..text_frame.instances.len() as u64),
+                        );
+                        pass.draw(0..6, 0..instance_count);
+                    }
+                }
+            }
         }
         self.queue.submit(Some(encoder.finish()));
         output.present();
@@ -239,16 +278,285 @@ impl WgpuRenderer {
     fn configure_surface(&self) {
         self.surface.configure(&self.device, &self.config);
     }
+
+    fn build_text_frame(&self, plan: &DrawPlan) -> TextFrame {
+        let Some(font) = &self.font else {
+            return TextFrame::default();
+        };
+        build_text_frame(
+            plan,
+            font,
+            SurfaceSize { width: self.config.width, height: self.config.height },
+        )
+    }
+
+    fn upload_text_frame(&mut self, frame: &TextFrame) {
+        self.ensure_text_buffer(frame.instances.len());
+        if let Some(buffer) = &self.text_buffer {
+            if !frame.instances.is_empty() {
+                self.queue.write_buffer(buffer, 0, &frame.instances);
+            }
+        }
+
+        if frame.pixels.is_empty() || frame.size.width == 0 || frame.size.height == 0 {
+            return;
+        }
+
+        self.ensure_text_texture(frame.size);
+        let texture = self.text_texture.as_ref().expect("text texture exists after ensure");
+        self.queue.write_texture(
+            wgpu::ImageCopyTexture {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &frame.pixels,
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(frame.size.width),
+                rows_per_image: Some(frame.size.height),
+            },
+            wgpu::Extent3d {
+                width: frame.size.width,
+                height: frame.size.height,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+
+    fn ensure_text_buffer(&mut self, used_bytes: usize) {
+        if used_bytes == 0 || used_bytes <= self.text_buffer_capacity {
+            return;
+        }
+
+        let capacity = used_bytes.next_power_of_two();
+        self.text_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("bmz-render text instance buffer"),
+            size: capacity as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }));
+        self.text_buffer_capacity = capacity;
+    }
+
+    fn ensure_text_texture(&mut self, size: AtlasSize) {
+        if self.text_texture_size == size && self.text_texture.is_some() {
+            return;
+        }
+
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("bmz-render text atlas"),
+            size: wgpu::Extent3d {
+                width: size.width,
+                height: size.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        self.text_texture = Some(texture);
+        self.text_texture_view = Some(view);
+        self.text_texture_size = size;
+    }
+
+    fn text_bind_group(&self) -> Option<wgpu::BindGroup> {
+        let view = self.text_texture_view.as_ref()?;
+        Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("bmz-render text bind group"),
+            layout: &self.text_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.text_sampler),
+                },
+            ],
+        }))
+    }
 }
 
 const RECT_INSTANCE_FLOATS: usize = 8;
 const RECT_INSTANCE_BYTES: usize = RECT_INSTANCE_FLOATS * std::mem::size_of::<f32>();
+const TEXT_INSTANCE_FLOATS: usize = 12;
+const TEXT_INSTANCE_BYTES: usize = TEXT_INSTANCE_FLOATS * std::mem::size_of::<f32>();
+const TEXT_ATLAS_WIDTH: u32 = 1024;
+const TEXT_ATLAS_PADDING: u32 = 1;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct AtlasSize {
+    width: u32,
+    height: u32,
+}
+
+#[derive(Debug, Default)]
+struct TextFrame {
+    size: AtlasSize,
+    pixels: Vec<u8>,
+    instances: Vec<u8>,
+}
 
 fn encode_rects(plan: &DrawPlan) -> Vec<u8> {
     let mut bytes = Vec::new();
     for command in &plan.commands {
-        let DrawCommand::Rect { rect, color } = command;
+        let DrawCommand::Rect { rect, color } = command else {
+            continue;
+        };
         for value in [rect.x, rect.y, rect.width, rect.height, color.r, color.g, color.b, color.a] {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    bytes
+}
+
+fn build_text_frame(plan: &DrawPlan, font: &FontArc, surface: SurfaceSize) -> TextFrame {
+    if !surface.is_drawable() {
+        return TextFrame::default();
+    }
+
+    let mut builder = TextAtlasBuilder::new(TEXT_ATLAS_WIDTH);
+    for command in &plan.commands {
+        let DrawCommand::Text { origin, text, style } = command else {
+            continue;
+        };
+        builder.push_text(origin, text, *style, font, surface);
+    }
+    builder.finish()
+}
+
+struct TextAtlasBuilder {
+    width: u32,
+    pen_x: u32,
+    pen_y: u32,
+    row_height: u32,
+    pixels: Vec<u8>,
+    quads: Vec<TextQuad>,
+}
+
+struct TextQuad {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    atlas_origin: (u32, u32),
+    glyph_width: u32,
+    glyph_height: u32,
+    color: Color,
+}
+
+impl TextAtlasBuilder {
+    fn new(width: u32) -> Self {
+        Self { width, pen_x: 0, pen_y: 0, row_height: 0, pixels: Vec::new(), quads: Vec::new() }
+    }
+
+    fn push_text(
+        &mut self,
+        origin: &Point,
+        text: &str,
+        style: TextStyle,
+        font: &FontArc,
+        surface: SurfaceSize,
+    ) {
+        let px_size = (style.size * surface.height as f32).max(1.0);
+        let scale = PxScale::from(px_size);
+        let scaled_font = font.as_scaled(scale);
+        let mut cursor_x = origin.x * surface.width as f32;
+        let baseline_y = origin.y * surface.height as f32 + scaled_font.ascent();
+
+        for ch in text.chars() {
+            let glyph_id = font.glyph_id(ch);
+            let advance = scaled_font.h_advance(glyph_id);
+            let glyph = Glyph { id: glyph_id, scale, position: point(cursor_x, baseline_y) };
+            if let Some(outlined) = font.outline_glyph(glyph) {
+                let bounds = outlined.px_bounds();
+                let glyph_width = bounds.width().ceil().max(0.0) as u32;
+                let glyph_height = bounds.height().ceil().max(0.0) as u32;
+                if glyph_width > 0 && glyph_height > 0 {
+                    let atlas_origin = self.reserve(glyph_width, glyph_height);
+                    outlined.draw(|x, y, coverage| {
+                        let dst_x = atlas_origin.0 + x;
+                        let dst_y = atlas_origin.1 + y;
+                        let index = (dst_y * self.width + dst_x) as usize;
+                        if let Some(pixel) = self.pixels.get_mut(index) {
+                            *pixel = ((*pixel as f32).max(coverage * 255.0)) as u8;
+                        }
+                    });
+                    self.quads.push(TextQuad {
+                        x: bounds.min.x / surface.width as f32,
+                        y: bounds.min.y / surface.height as f32,
+                        width: glyph_width as f32 / surface.width as f32,
+                        height: glyph_height as f32 / surface.height as f32,
+                        atlas_origin,
+                        glyph_width,
+                        glyph_height,
+                        color: style.color,
+                    });
+                }
+            }
+            cursor_x += advance;
+        }
+    }
+
+    fn reserve(&mut self, glyph_width: u32, glyph_height: u32) -> (u32, u32) {
+        let padded_width = glyph_width + TEXT_ATLAS_PADDING * 2;
+        let padded_height = glyph_height + TEXT_ATLAS_PADDING * 2;
+        if self.pen_x + padded_width > self.width {
+            self.pen_x = 0;
+            self.pen_y += self.row_height;
+            self.row_height = 0;
+        }
+
+        let origin = (self.pen_x + TEXT_ATLAS_PADDING, self.pen_y + TEXT_ATLAS_PADDING);
+        self.pen_x += padded_width;
+        self.row_height = self.row_height.max(padded_height);
+        self.ensure_height(self.pen_y + self.row_height);
+        origin
+    }
+
+    fn ensure_height(&mut self, height: u32) {
+        let needed = (self.width * height) as usize;
+        if self.pixels.len() < needed {
+            self.pixels.resize(needed, 0);
+        }
+    }
+
+    fn atlas_height(&self) -> u32 {
+        (self.pen_y + self.row_height).max(1)
+    }
+
+    fn finish(mut self) -> TextFrame {
+        let height = self.atlas_height();
+        self.pixels.resize((self.width * height) as usize, 0);
+        let instances = encode_text_quads(&self.quads, self.width, height);
+        TextFrame { size: AtlasSize { width: self.width, height }, pixels: self.pixels, instances }
+    }
+}
+
+fn encode_text_quads(quads: &[TextQuad], atlas_width: u32, atlas_height: u32) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(quads.len() * TEXT_INSTANCE_BYTES);
+    for quad in quads {
+        for value in [
+            quad.x,
+            quad.y,
+            quad.width,
+            quad.height,
+            quad.atlas_origin.0 as f32 / atlas_width as f32,
+            quad.atlas_origin.1 as f32 / atlas_height as f32,
+            quad.glyph_width as f32 / atlas_width as f32,
+            quad.glyph_height as f32 / atlas_height as f32,
+            quad.color.r,
+            quad.color.g,
+            quad.color.b,
+            quad.color.a,
+        ] {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
     }
@@ -310,6 +618,104 @@ fn create_rect_pipeline(
     })
 }
 
+fn create_text_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("bmz-render text bind group layout"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+        ],
+    })
+}
+
+fn create_text_sampler(device: &wgpu::Device) -> wgpu::Sampler {
+    device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("bmz-render text sampler"),
+        address_mode_u: wgpu::AddressMode::ClampToEdge,
+        address_mode_v: wgpu::AddressMode::ClampToEdge,
+        address_mode_w: wgpu::AddressMode::ClampToEdge,
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        mipmap_filter: wgpu::FilterMode::Nearest,
+        ..Default::default()
+    })
+}
+
+fn create_text_pipeline(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+    bind_group_layout: &wgpu::BindGroupLayout,
+) -> wgpu::RenderPipeline {
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("bmz-render text shader"),
+        source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(TEXT_SHADER)),
+    });
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("bmz-render text pipeline layout"),
+        bind_group_layouts: &[bind_group_layout],
+        push_constant_ranges: &[],
+    });
+
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("bmz-render text pipeline"),
+        layout: Some(&layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: "vs_main",
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            buffers: &[wgpu::VertexBufferLayout {
+                array_stride: TEXT_INSTANCE_BYTES as u64,
+                step_mode: wgpu::VertexStepMode::Instance,
+                attributes: &[
+                    wgpu::VertexAttribute {
+                        offset: 0,
+                        shader_location: 0,
+                        format: wgpu::VertexFormat::Float32x4,
+                    },
+                    wgpu::VertexAttribute {
+                        offset: 16,
+                        shader_location: 1,
+                        format: wgpu::VertexFormat::Float32x4,
+                    },
+                    wgpu::VertexAttribute {
+                        offset: 32,
+                        shader_location: 2,
+                        format: wgpu::VertexFormat::Float32x4,
+                    },
+                ],
+            }],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: "fs_main",
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview: None,
+    })
+}
+
 const RECT_SHADER: &str = r#"
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -344,6 +750,77 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     return input.color;
 }
 "#;
+
+const TEXT_SHADER: &str = r#"
+@group(0) @binding(0)
+var text_atlas: texture_2d<f32>;
+@group(0) @binding(1)
+var text_sampler: sampler;
+
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) color: vec4<f32>,
+};
+
+@vertex
+fn vs_main(
+    @builtin(vertex_index) vertex_index: u32,
+    @location(0) rect: vec4<f32>,
+    @location(1) uv_rect: vec4<f32>,
+    @location(2) color: vec4<f32>,
+) -> VertexOutput {
+    var corners = array<vec2<f32>, 6>(
+        vec2<f32>(0.0, 0.0),
+        vec2<f32>(1.0, 0.0),
+        vec2<f32>(0.0, 1.0),
+        vec2<f32>(0.0, 1.0),
+        vec2<f32>(1.0, 0.0),
+        vec2<f32>(1.0, 1.0),
+    );
+    let local = corners[vertex_index];
+    let pos01 = rect.xy + local * rect.zw;
+
+    var out: VertexOutput;
+    out.position = vec4<f32>(pos01.x * 2.0 - 1.0, 1.0 - pos01.y * 2.0, 0.0, 1.0);
+    out.uv = uv_rect.xy + local * uv_rect.zw;
+    out.color = color;
+    return out;
+}
+
+@fragment
+fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+    let alpha = textureSample(text_atlas, text_sampler, input.uv).r;
+    return vec4<f32>(input.color.rgb, input.color.a * alpha);
+}
+"#;
+
+fn load_default_font() -> Option<FontArc> {
+    for path in default_font_candidates() {
+        let Ok(bytes) = std::fs::read(path) else {
+            continue;
+        };
+        match FontArc::try_from_vec(bytes) {
+            Ok(font) => return Some(font),
+            Err(error) => tracing::warn!(%error, path, "failed to load default render font"),
+        }
+    }
+    tracing::warn!("no default render font found; text draw commands will be skipped");
+    None
+}
+
+fn default_font_candidates() -> &'static [&'static str] {
+    &[
+        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/System/Library/Fonts/Helvetica.ttc",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+        "C:\\Windows\\Fonts\\segoeui.ttf",
+        "C:\\Windows\\Fonts\\arial.ttf",
+    ]
+}
 
 fn block_on<T>(future: impl Future<Output = T>) -> T {
     let waker = noop_waker();
@@ -431,7 +908,12 @@ mod tests {
         }));
 
         let bytes = encode_rects(&plan);
+        let rect_count = plan
+            .commands
+            .iter()
+            .filter(|command| matches!(command, DrawCommand::Rect { .. }))
+            .count();
 
-        assert_eq!(bytes.len(), plan.commands.len() * RECT_INSTANCE_BYTES);
+        assert_eq!(bytes.len(), rect_count * RECT_INSTANCE_BYTES);
     }
 }

@@ -17,6 +17,7 @@ pub struct DrawPlan {
 #[derive(Debug, Clone, PartialEq)]
 pub enum DrawCommand {
     Rect { rect: Rect, color: Color },
+    Text { origin: Point, text: String, style: TextStyle },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -25,6 +26,25 @@ pub struct Rect {
     pub y: f32,
     pub width: f32,
     pub height: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Point {
+    pub x: f32,
+    pub y: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextStyle {
+    pub size: f32,
+    pub color: Color,
+    pub layer: TextLayer,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextLayer {
+    Ui,
+    Skin,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -940,7 +960,7 @@ mod tests {
 
         assert!(plan.commands.iter().any(|command| matches!(
             command,
-            DrawCommand::Rect { color, .. } if *color == Color::rgb(0.74, 0.88, 0.9)
+            DrawCommand::Text { style, .. } if style.color == Color::rgb(0.74, 0.88, 0.9)
         )));
     }
 
@@ -1014,7 +1034,7 @@ mod tests {
 
         assert!(plan.commands.iter().any(|command| matches!(
             command,
-            DrawCommand::Rect { color, .. } if *color == Color::rgb(0.72, 0.84, 0.86)
+            DrawCommand::Text { style, .. } if style.color == Color::rgb(0.72, 0.84, 0.86)
         )));
         assert_eq!(format_percent(0.754), "75%");
     }
@@ -1091,11 +1111,11 @@ mod tests {
 
         assert!(plan.commands.iter().any(|command| matches!(
             command,
-            DrawCommand::Rect { color, .. } if *color == Color::rgb(0.66, 0.92, 0.98)
+            DrawCommand::Text { style, .. } if style.color == Color::rgb(0.66, 0.92, 0.98)
         )));
         assert!(plan.commands.iter().any(|command| matches!(
             command,
-            DrawCommand::Rect { color, .. } if *color == Color::rgb(0.96, 0.4, 0.44)
+            DrawCommand::Text { style, .. } if style.color == Color::rgb(0.96, 0.4, 0.44)
         )));
     }
 

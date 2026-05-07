@@ -1,4 +1,4 @@
-use crate::plan::{Color, DrawCommand, Rect};
+use crate::plan::{Color, DrawCommand, Point, Rect, TextLayer, TextStyle};
 
 pub const GLYPH_WIDTH: usize = 3;
 pub const GLYPH_HEIGHT: usize = 5;
@@ -16,8 +16,24 @@ pub struct TextRenderer;
 
 impl TextRenderer {
     pub fn push_text(&self, commands: &mut Vec<DrawCommand>, text: &str, style: BitmapTextStyle) {
-        push_bitmap_text(commands, text, style);
+        push_text_command(commands, text, style);
     }
+}
+
+pub fn push_text_command(commands: &mut Vec<DrawCommand>, text: &str, style: BitmapTextStyle) {
+    if text.is_empty() {
+        return;
+    }
+
+    commands.push(DrawCommand::Text {
+        origin: Point { x: style.x, y: style.y },
+        text: text.to_string(),
+        style: TextStyle {
+            size: style.cell * GLYPH_HEIGHT as f32,
+            color: style.color,
+            layer: TextLayer::Ui,
+        },
+    });
 }
 
 pub fn push_bitmap_text(commands: &mut Vec<DrawCommand>, text: &str, style: BitmapTextStyle) {
@@ -128,7 +144,7 @@ mod tests {
     }
 
     #[test]
-    fn text_renderer_delegates_to_bitmap_text() {
+    fn text_renderer_emits_text_command() {
         let mut commands = Vec::new();
         let renderer = TextRenderer;
 
@@ -138,6 +154,6 @@ mod tests {
             BitmapTextStyle { x: 0.0, y: 0.0, cell: 0.01, color: Color::rgb(1.0, 1.0, 1.0) },
         );
 
-        assert!(!commands.is_empty());
+        assert!(matches!(commands.first(), Some(DrawCommand::Text { text, .. }) if text == "OK"));
     }
 }
