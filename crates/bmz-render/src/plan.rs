@@ -353,7 +353,7 @@ fn plan_result(
     );
     text.push_text(
         &mut commands,
-        "ENTER OR ESC",
+        "R RETRY  ENTER/ESC SELECT",
         BitmapTextStyle { x: 0.14, y: 0.76, cell: 0.006, color: Color::rgb(0.74, 0.78, 0.8) },
     );
 

@@ -40,6 +40,7 @@ struct WinitApp {
     active_play: Option<StartedWinitPlaySession>,
     finished_play: Option<FinishedPlaySession>,
     last_play_snapshot: Option<RenderSnapshot>,
+    last_started_chart_id: Option<i64>,
     select_rows: Vec<SelectChartRow>,
     selected_index: usize,
     renderer: Renderer,
@@ -76,6 +77,7 @@ impl WinitApp {
             active_play: None,
             finished_play: None,
             last_play_snapshot: None,
+            last_started_chart_id: None,
             select_rows,
             selected_index: 0,
             renderer: Renderer::default(),
@@ -183,10 +185,11 @@ impl WinitApp {
         }
 
         if self.finished_play.is_some() {
-            if should_leave_result(event.physical_key, event.state, event.repeat) {
-                self.finished_play = None;
-                self.last_play_snapshot = None;
-                self.refresh_select_rows();
+            if let Some(action) = result_action(event.physical_key, event.state, event.repeat) {
+                match action {
+                    ResultAction::Retry => self.retry_last_chart(),
+                    ResultAction::Leave => self.leave_result(),
+                }
             }
             return;
         }
@@ -233,11 +236,26 @@ impl WinitApp {
                 self.active_play = Some(active_play);
                 self.finished_play = None;
                 self.last_play_snapshot = None;
+                self.last_started_chart_id = Some(chart_id);
             }
             Err(error) => {
                 tracing::error!(chart_id, %error, "failed to start play");
             }
         }
+    }
+
+    fn retry_last_chart(&mut self) {
+        let Some(chart_id) = self.last_started_chart_id else {
+            tracing::warn!("no previous chart is available to retry");
+            return;
+        };
+        self.start_chart(chart_id);
+    }
+
+    fn leave_result(&mut self) {
+        self.finished_play = None;
+        self.last_play_snapshot = None;
+        self.refresh_select_rows();
     }
 
     fn refresh_select_rows(&mut self) {
@@ -542,10 +560,26 @@ fn moved_select_index(current_index: usize, row_count: usize, select_move: Selec
     }
 }
 
-fn should_leave_result(physical_key: PhysicalKey, state: ElementState, repeat: bool) -> bool {
-    state == ElementState::Pressed
-        && !repeat
-        && matches!(physical_key, PhysicalKey::Code(KeyCode::Enter | KeyCode::Escape))
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResultAction {
+    Retry,
+    Leave,
+}
+
+fn result_action(
+    physical_key: PhysicalKey,
+    state: ElementState,
+    repeat: bool,
+) -> Option<ResultAction> {
+    if state != ElementState::Pressed || repeat {
+        return None;
+    }
+
+    match physical_key {
+        PhysicalKey::Code(KeyCode::KeyR) => Some(ResultAction::Retry),
+        PhysicalKey::Code(KeyCode::Enter | KeyCode::Escape) => Some(ResultAction::Leave),
+        _ => None,
+    }
 }
 
 fn scene_kind(scene: &AppSceneSnapshot) -> AppSceneKind {
@@ -650,36 +684,35 @@ mod tests {
     }
 
     #[test]
-    fn result_leave_key_accepts_enter_and_escape_press() {
-        assert!(should_leave_result(
-            PhysicalKey::Code(KeyCode::Enter),
-            ElementState::Pressed,
-            false
-        ));
-        assert!(should_leave_result(
-            PhysicalKey::Code(KeyCode::Escape),
-            ElementState::Pressed,
-            false
-        ));
+    fn result_action_accepts_retry_and_leave_keys() {
+        assert_eq!(
+            result_action(PhysicalKey::Code(KeyCode::KeyR), ElementState::Pressed, false),
+            Some(ResultAction::Retry)
+        );
+        assert_eq!(
+            result_action(PhysicalKey::Code(KeyCode::Enter), ElementState::Pressed, false),
+            Some(ResultAction::Leave)
+        );
+        assert_eq!(
+            result_action(PhysicalKey::Code(KeyCode::Escape), ElementState::Pressed, false),
+            Some(ResultAction::Leave)
+        );
     }
 
     #[test]
-    fn result_leave_key_rejects_releases_repeats_and_other_keys() {
-        assert!(!should_leave_result(
-            PhysicalKey::Code(KeyCode::Enter),
-            ElementState::Released,
-            false
-        ));
-        assert!(!should_leave_result(
-            PhysicalKey::Code(KeyCode::Escape),
-            ElementState::Pressed,
-            true
-        ));
-        assert!(!should_leave_result(
-            PhysicalKey::Code(KeyCode::Space),
-            ElementState::Pressed,
-            false
-        ));
+    fn result_action_rejects_releases_repeats_and_other_keys() {
+        assert_eq!(
+            result_action(PhysicalKey::Code(KeyCode::KeyR), ElementState::Released, false),
+            None
+        );
+        assert_eq!(
+            result_action(PhysicalKey::Code(KeyCode::Escape), ElementState::Pressed, true),
+            None
+        );
+        assert_eq!(
+            result_action(PhysicalKey::Code(KeyCode::Space), ElementState::Pressed, false),
+            None
+        );
     }
 
     #[test]
