@@ -66,6 +66,8 @@ pub fn sample_result_scene() -> AppSceneSnapshot {
         max_combo: 777,
         gauge_value: 84.0,
         total_notes: 1000,
+        score_history_id: 42,
+        replay_saved: true,
     })
 }
 

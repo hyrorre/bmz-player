@@ -48,6 +48,9 @@ impl DrawPlan {
                 snapshot.ex_score_rate,
                 snapshot.max_combo,
                 snapshot.gauge_value,
+                snapshot.total_notes,
+                snapshot.score_history_id,
+                snapshot.replay_saved,
             ),
         }
     }
@@ -314,6 +317,9 @@ fn plan_result(
     ex_score_rate: f32,
     max_combo: u32,
     gauge_value: f32,
+    total_notes: u32,
+    score_history_id: i64,
+    replay_saved: bool,
 ) -> DrawPlan {
     let mut commands = Vec::new();
     let text = TextRenderer;
@@ -362,8 +368,28 @@ fn plan_result(
     );
     text.push_text(
         &mut commands,
+        &format!("RATE {}", format_percent(ex_score_rate)),
+        BitmapTextStyle { x: 0.16, y: 0.69, cell: 0.006, color: Color::rgb(0.72, 0.84, 0.86) },
+    );
+    text.push_text(
+        &mut commands,
+        &format!("NOTES {}", total_notes),
+        BitmapTextStyle { x: 0.34, y: 0.69, cell: 0.006, color: Color::rgb(0.72, 0.84, 0.86) },
+    );
+    text.push_text(
+        &mut commands,
+        &format!("ID {}", score_history_id.max(0)),
+        BitmapTextStyle { x: 0.52, y: 0.69, cell: 0.006, color: Color::rgb(0.72, 0.84, 0.86) },
+    );
+    text.push_text(
+        &mut commands,
+        if replay_saved { "REPLAY SAVED" } else { "REPLAY NONE" },
+        BitmapTextStyle { x: 0.68, y: 0.69, cell: 0.005, color: Color::rgb(0.66, 0.78, 0.76) },
+    );
+    text.push_text(
+        &mut commands,
         "R RETRY  ENTER/ESC SELECT",
-        BitmapTextStyle { x: 0.14, y: 0.76, cell: 0.006, color: Color::rgb(0.74, 0.78, 0.8) },
+        BitmapTextStyle { x: 0.14, y: 0.8, cell: 0.006, color: Color::rgb(0.74, 0.78, 0.8) },
     );
 
     DrawPlan { clear: Color::rgb(0.025, 0.02, 0.018), commands }
@@ -629,6 +655,10 @@ fn push_judgement_history(
 fn format_delta_ms(delta_us: i64) -> String {
     let sign = if delta_us < 0 { "-" } else { "+" };
     format!("{}{}MS", sign, delta_us.abs() / 1_000)
+}
+
+fn format_percent(rate: f32) -> String {
+    format!("{}%", (rate.clamp(0.0, 1.0) * 100.0).round() as u32)
 }
 
 fn format_time(time: TimeUs) -> String {
@@ -932,12 +962,23 @@ mod tests {
 
     #[test]
     fn result_plan_clamps_ex_score_bar() {
-        let plan = plan_result("Normal", 0, 1.5, 0, 0.0);
+        let plan = plan_result("Normal", 0, 1.5, 0, 0.0, 100, 1, true);
 
         assert!(plan.commands.iter().any(|command| matches!(
             command,
             DrawCommand::Rect { rect, color } if rect.width == 0.72 && *color == Color::rgb(0.55, 0.78, 0.86)
         )));
+    }
+
+    #[test]
+    fn result_plan_includes_extended_summary_text() {
+        let plan = plan_result("Normal", 1500, 0.75, 500, 82.0, 1000, 42, true);
+
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Rect { color, .. } if *color == Color::rgb(0.72, 0.84, 0.86)
+        )));
+        assert_eq!(format_percent(0.754), "75%");
     }
 
     #[test]

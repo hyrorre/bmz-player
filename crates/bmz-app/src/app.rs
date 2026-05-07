@@ -169,6 +169,8 @@ impl WinitApp {
                 max_combo: summary.max_combo,
                 gauge_value: summary.gauge_value,
                 total_notes: summary.total_notes,
+                score_history_id: summary.score_history_id,
+                replay_saved: !summary.replay_path.is_empty(),
             }),
         }
     }

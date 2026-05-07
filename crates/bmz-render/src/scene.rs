@@ -36,6 +36,8 @@ pub struct ResultSnapshot {
     pub max_combo: u32,
     pub gauge_value: f32,
     pub total_notes: u32,
+    pub score_history_id: i64,
+    pub replay_saved: bool,
 }
 
 impl ResultSnapshot {
@@ -59,6 +61,8 @@ mod tests {
             max_combo: 10,
             gauge_value: 100.0,
             total_notes: 10,
+            score_history_id: 1,
+            replay_saved: true,
         };
 
         assert!(snapshot.is_full_combo());
@@ -73,6 +77,8 @@ mod tests {
             max_combo: 0,
             gauge_value: 100.0,
             total_notes: 0,
+            score_history_id: 1,
+            replay_saved: true,
         };
 
         assert!(!snapshot.is_full_combo());
