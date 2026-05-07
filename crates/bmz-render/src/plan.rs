@@ -102,7 +102,7 @@ fn plan_select(chart_count: u32, selected_index: u32, rows: &[SelectRowSnapshot]
     }
     text.push_text(
         &mut commands,
-        "UP DOWN SELECT  ENTER START",
+        "UP DOWN PAGE HOME END  ENTER START",
         BitmapTextStyle { x: 0.08, y: 0.86, cell: 0.006, color: Color::rgb(0.88, 0.9, 0.86) },
     );
     text.push_text(

@@ -180,13 +180,12 @@ impl WinitApp {
         if let Some(action) = select_action(event.physical_key, event.state, event.repeat) {
             match action {
                 SelectAction::Start => self.start_selected_chart(),
-                SelectAction::MovePrevious => self.move_selection(-1),
-                SelectAction::MoveNext => self.move_selection(1),
+                SelectAction::Move(select_move) => self.move_selection(select_move),
             }
         }
     }
 
-    fn move_selection(&mut self, delta: isize) {
+    fn move_selection(&mut self, select_move: SelectMove) {
         if self.select_rows.is_empty() {
             self.refresh_select_rows();
         }
@@ -194,8 +193,8 @@ impl WinitApp {
             return;
         }
 
-        let max_index = self.select_rows.len() - 1;
-        self.selected_index = self.selected_index.saturating_add_signed(delta).clamp(0, max_index);
+        self.selected_index =
+            moved_select_index(self.selected_index, self.select_rows.len(), select_move);
     }
 
     fn start_selected_chart(&mut self) {
@@ -463,8 +462,17 @@ fn select_snapshot_rows(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SelectAction {
     Start,
-    MovePrevious,
-    MoveNext,
+    Move(SelectMove),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SelectMove {
+    Previous,
+    Next,
+    PagePrevious,
+    PageNext,
+    First,
+    Last,
 }
 
 fn select_action(
@@ -478,9 +486,29 @@ fn select_action(
 
     match physical_key {
         PhysicalKey::Code(KeyCode::Enter | KeyCode::Space) => Some(SelectAction::Start),
-        PhysicalKey::Code(KeyCode::ArrowUp) => Some(SelectAction::MovePrevious),
-        PhysicalKey::Code(KeyCode::ArrowDown) => Some(SelectAction::MoveNext),
+        PhysicalKey::Code(KeyCode::ArrowUp) => Some(SelectAction::Move(SelectMove::Previous)),
+        PhysicalKey::Code(KeyCode::ArrowDown) => Some(SelectAction::Move(SelectMove::Next)),
+        PhysicalKey::Code(KeyCode::PageUp) => Some(SelectAction::Move(SelectMove::PagePrevious)),
+        PhysicalKey::Code(KeyCode::PageDown) => Some(SelectAction::Move(SelectMove::PageNext)),
+        PhysicalKey::Code(KeyCode::Home) => Some(SelectAction::Move(SelectMove::First)),
+        PhysicalKey::Code(KeyCode::End) => Some(SelectAction::Move(SelectMove::Last)),
         _ => None,
+    }
+}
+
+fn moved_select_index(current_index: usize, row_count: usize, select_move: SelectMove) -> usize {
+    if row_count == 0 {
+        return 0;
+    }
+
+    let max_index = row_count - 1;
+    match select_move {
+        SelectMove::Previous => current_index.saturating_sub(1),
+        SelectMove::Next => current_index.saturating_add(1).min(max_index),
+        SelectMove::PagePrevious => current_index.saturating_sub(7),
+        SelectMove::PageNext => current_index.saturating_add(7).min(max_index),
+        SelectMove::First => 0,
+        SelectMove::Last => max_index,
     }
 }
 
@@ -547,11 +575,31 @@ mod tests {
         );
         assert_eq!(
             select_action(PhysicalKey::Code(KeyCode::ArrowUp), ElementState::Pressed, false),
-            Some(SelectAction::MovePrevious)
+            Some(SelectAction::Move(SelectMove::Previous))
         );
         assert_eq!(
             select_action(PhysicalKey::Code(KeyCode::ArrowDown), ElementState::Pressed, false),
-            Some(SelectAction::MoveNext)
+            Some(SelectAction::Move(SelectMove::Next))
+        );
+    }
+
+    #[test]
+    fn select_action_maps_page_and_edge_movement() {
+        assert_eq!(
+            select_action(PhysicalKey::Code(KeyCode::PageUp), ElementState::Pressed, false),
+            Some(SelectAction::Move(SelectMove::PagePrevious))
+        );
+        assert_eq!(
+            select_action(PhysicalKey::Code(KeyCode::PageDown), ElementState::Pressed, false),
+            Some(SelectAction::Move(SelectMove::PageNext))
+        );
+        assert_eq!(
+            select_action(PhysicalKey::Code(KeyCode::Home), ElementState::Pressed, false),
+            Some(SelectAction::Move(SelectMove::First))
+        );
+        assert_eq!(
+            select_action(PhysicalKey::Code(KeyCode::End), ElementState::Pressed, false),
+            Some(SelectAction::Move(SelectMove::Last))
         );
     }
 
@@ -703,6 +751,23 @@ mod tests {
         assert_eq!(snapshot_rows.len(), 4);
         assert_eq!(snapshot_rows[0].index, 0);
         assert_eq!(snapshot_rows[3].index, 3);
+    }
+
+    #[test]
+    fn moved_select_index_moves_by_single_page_and_edges() {
+        assert_eq!(moved_select_index(4, 10, SelectMove::Previous), 3);
+        assert_eq!(moved_select_index(4, 10, SelectMove::Next), 5);
+        assert_eq!(moved_select_index(8, 10, SelectMove::Next), 9);
+        assert_eq!(moved_select_index(8, 10, SelectMove::PagePrevious), 1);
+        assert_eq!(moved_select_index(4, 10, SelectMove::PagePrevious), 0);
+        assert_eq!(moved_select_index(2, 10, SelectMove::PageNext), 9);
+        assert_eq!(moved_select_index(0, 10, SelectMove::Last), 9);
+        assert_eq!(moved_select_index(9, 10, SelectMove::First), 0);
+    }
+
+    #[test]
+    fn moved_select_index_handles_empty_rows() {
+        assert_eq!(moved_select_index(9, 0, SelectMove::Last), 0);
     }
 
     fn select_chart_row(index: usize) -> SelectChartRow {
