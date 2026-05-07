@@ -20,7 +20,9 @@ use crate::screens::play_start::{PlayStartOptions, StartedWinitPlaySession};
 use crate::screens::result_model::ResultSummary;
 use crate::screens::select_model::{SelectChartRow, load_select_chart_rows};
 
+const BOOT_PLAY_SAMPLE_ENV: &str = "BMZ_BOOT_PLAY_SAMPLE";
 const SMOKE_EXIT_AFTER_FRAMES_ENV: &str = "BMZ_SMOKE_EXIT_AFTER_FRAMES";
+const SAMPLE_PLAYABLE_TITLE: &str = "BMZ Sample Playable";
 
 pub fn run() -> Result<()> {
     let boot = bootstrap::bootstrap()?;
@@ -65,8 +67,10 @@ impl WinitApp {
     fn new(boot: BootstrappedApp) -> Result<Self> {
         let select_rows = load_select_chart_rows(&boot.library_db, &boot.score_db, 100, 0)
             .context("failed to load initial select chart rows")?;
+        let boot_sample_chart_id =
+            boot_play_sample_from_env().then(|| sample_playable_chart_id(&select_rows)).flatten();
 
-        Ok(Self {
+        let mut app = Self {
             boot,
             window: None,
             active_play: None,
@@ -79,7 +83,17 @@ impl WinitApp {
             last_scene_kind: None,
             smoke_exit_after_frames: smoke_exit_after_frames_from_env(),
             rendered_frames: 0,
-        })
+        };
+        if let Some(chart_id) = boot_sample_chart_id {
+            tracing::info!(
+                env = BOOT_PLAY_SAMPLE_ENV,
+                chart_id,
+                "booting directly into bundled sample chart"
+            );
+            app.start_chart(chart_id);
+        }
+
+        Ok(app)
     }
 
     fn ensure_window(&mut self, event_loop: &ActiveEventLoop) {
@@ -415,6 +429,17 @@ fn smoke_exit_after_frames_from_env() -> Option<u32> {
     frames
 }
 
+fn boot_play_sample_from_env() -> bool {
+    parse_boot_play_sample(env::var(BOOT_PLAY_SAMPLE_ENV).ok().as_deref())
+}
+
+fn parse_boot_play_sample(value: Option<&str>) -> bool {
+    matches!(
+        value.map(str::trim).map(str::to_ascii_lowercase).as_deref(),
+        Some("1" | "true" | "yes" | "on" | "sample")
+    )
+}
+
 fn parse_smoke_exit_after_frames(value: Option<&str>) -> Option<u32> {
     let value = value?.trim();
     if value.is_empty() {
@@ -458,6 +483,10 @@ fn select_snapshot_rows(
             }
         })
         .collect()
+}
+
+fn sample_playable_chart_id(rows: &[SelectChartRow]) -> Option<i64> {
+    rows.iter().find(|row| row.chart.title == SAMPLE_PLAYABLE_TITLE).map(|row| row.chart.chart_id)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -719,6 +748,36 @@ mod tests {
     #[test]
     fn smoke_exit_after_frames_clamps_zero_to_one_redraw() {
         assert_eq!(parse_smoke_exit_after_frames(Some("0")), Some(1));
+    }
+
+    #[test]
+    fn boot_play_sample_env_accepts_explicit_truthy_values() {
+        assert!(parse_boot_play_sample(Some("1")));
+        assert!(parse_boot_play_sample(Some(" true ")));
+        assert!(parse_boot_play_sample(Some("sample")));
+    }
+
+    #[test]
+    fn boot_play_sample_env_rejects_empty_and_other_values() {
+        assert!(!parse_boot_play_sample(None));
+        assert!(!parse_boot_play_sample(Some("")));
+        assert!(!parse_boot_play_sample(Some("0")));
+        assert!(!parse_boot_play_sample(Some("false")));
+    }
+
+    #[test]
+    fn sample_playable_chart_id_finds_bundled_sample_by_title() {
+        let mut rows: Vec<SelectChartRow> = (0..3).map(select_chart_row).collect();
+        rows[1].chart.title = SAMPLE_PLAYABLE_TITLE.to_string();
+
+        assert_eq!(sample_playable_chart_id(&rows), Some(1));
+    }
+
+    #[test]
+    fn sample_playable_chart_id_returns_none_without_sample() {
+        let rows: Vec<SelectChartRow> = (0..3).map(select_chart_row).collect();
+
+        assert_eq!(sample_playable_chart_id(&rows), None);
     }
 
     #[test]
