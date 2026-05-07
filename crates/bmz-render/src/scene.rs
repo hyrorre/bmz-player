@@ -1,6 +1,6 @@
 use bmz_core::clear::ClearType;
 
-use crate::snapshot::RenderSnapshot;
+use crate::snapshot::{DisplayJudgeCounts, RenderSnapshot};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AppSceneSnapshot {
@@ -36,6 +36,7 @@ pub struct ResultSnapshot {
     pub max_combo: u32,
     pub gauge_value: f32,
     pub total_notes: u32,
+    pub judge_counts: DisplayJudgeCounts,
     pub score_history_id: i64,
     pub replay_saved: bool,
 }
@@ -61,6 +62,7 @@ mod tests {
             max_combo: 10,
             gauge_value: 100.0,
             total_notes: 10,
+            judge_counts: DisplayJudgeCounts::default(),
             score_history_id: 1,
             replay_saved: true,
         };
@@ -77,6 +79,7 @@ mod tests {
             max_combo: 0,
             gauge_value: 100.0,
             total_notes: 0,
+            judge_counts: DisplayJudgeCounts::default(),
             score_history_id: 1,
             replay_saved: true,
         };

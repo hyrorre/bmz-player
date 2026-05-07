@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use bmz_render::renderer::{RenderSurfaceStatus, Renderer, SurfaceSize};
 use bmz_render::sample::{sample_play_scene, sample_result_scene, sample_select_scene};
 use bmz_render::scene::{AppSceneSnapshot, ResultSnapshot, SelectRowSnapshot, SelectSnapshot};
-use bmz_render::snapshot::RenderSnapshot;
+use bmz_render::snapshot::{DisplayJudgeCounts, RenderSnapshot};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
@@ -169,6 +169,14 @@ impl WinitApp {
                 max_combo: summary.max_combo,
                 gauge_value: summary.gauge_value,
                 total_notes: summary.total_notes,
+                judge_counts: DisplayJudgeCounts {
+                    pgreat: summary.judge_counts.pgreat,
+                    great: summary.judge_counts.great,
+                    good: summary.judge_counts.good,
+                    bad: summary.judge_counts.bad,
+                    poor: summary.judge_counts.poor,
+                    empty_poor: summary.judge_counts.empty_poor,
+                },
                 score_history_id: summary.score_history_id,
                 replay_saved: !summary.replay_path.is_empty(),
             }),

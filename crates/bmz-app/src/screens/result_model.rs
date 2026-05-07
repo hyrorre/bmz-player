@@ -1,5 +1,6 @@
 use bmz_core::clear::ClearType;
 use bmz_gameplay::result::PlayResult;
+use bmz_gameplay::score::JudgeCounts;
 
 use crate::storage::play_result::StoredPlayResult;
 
@@ -10,8 +11,32 @@ pub struct ResultSummary {
     pub max_combo: u32,
     pub gauge_value: f32,
     pub total_notes: u32,
+    pub judge_counts: ResultJudgeCounts,
     pub replay_path: String,
     pub score_history_id: i64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ResultJudgeCounts {
+    pub pgreat: u32,
+    pub great: u32,
+    pub good: u32,
+    pub bad: u32,
+    pub poor: u32,
+    pub empty_poor: u32,
+}
+
+impl ResultJudgeCounts {
+    fn from_judge_counts(judges: &JudgeCounts) -> Self {
+        Self {
+            pgreat: judges.fast_pgreat + judges.slow_pgreat,
+            great: judges.fast_great + judges.slow_great,
+            good: judges.fast_good + judges.slow_good,
+            bad: judges.fast_bad + judges.slow_bad,
+            poor: judges.fast_poor + judges.slow_poor,
+            empty_poor: judges.fast_empty_poor + judges.slow_empty_poor,
+        }
+    }
 }
 
 impl ResultSummary {
@@ -22,6 +47,7 @@ impl ResultSummary {
             max_combo: result.score.max_combo,
             gauge_value: result.gauge_value,
             total_notes: result.total_notes,
+            judge_counts: ResultJudgeCounts::from_judge_counts(&result.score.judges),
             replay_path: stored.replay_path.clone(),
             score_history_id: stored.score_history_id,
         }
@@ -47,6 +73,12 @@ mod tests {
     fn result_summary_uses_play_and_storage_values() {
         let mut score = ScoreState::default();
         score.max_combo = 12;
+        score.judges.fast_pgreat = 2;
+        score.judges.slow_great = 3;
+        score.judges.fast_good = 4;
+        score.judges.slow_bad = 5;
+        score.judges.fast_poor = 6;
+        score.judges.slow_empty_poor = 7;
         let result = PlayResult {
             chart_sha256: [1; 32],
             clear_type: ClearType::Normal,
@@ -66,5 +98,9 @@ mod tests {
         assert_eq!(summary.gauge_value, 82.0);
         assert_eq!(summary.score_history_id, 9);
         assert_eq!(summary.replay_path, "replay/test.toml");
+        assert_eq!(
+            summary.judge_counts,
+            ResultJudgeCounts { pgreat: 2, great: 3, good: 4, bad: 5, poor: 6, empty_poor: 7 }
+        );
     }
 }

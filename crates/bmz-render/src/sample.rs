@@ -2,7 +2,9 @@ use bmz_core::lane::Lane;
 use bmz_core::time::TimeUs;
 
 use crate::scene::{AppSceneSnapshot, ResultSnapshot, SelectRowSnapshot, SelectSnapshot};
-use crate::snapshot::{DisplayJudgement, RenderSnapshot, VisibleBarLine, VisibleNote};
+use crate::snapshot::{
+    DisplayJudgeCounts, DisplayJudgement, RenderSnapshot, VisibleBarLine, VisibleNote,
+};
 
 pub fn sample_select_scene() -> AppSceneSnapshot {
     let rows = (0..7)
@@ -66,6 +68,14 @@ pub fn sample_result_scene() -> AppSceneSnapshot {
         max_combo: 777,
         gauge_value: 84.0,
         total_notes: 1000,
+        judge_counts: DisplayJudgeCounts {
+            pgreat: 777,
+            great: 334,
+            good: 22,
+            bad: 3,
+            poor: 5,
+            empty_poor: 9,
+        },
         score_history_id: 42,
         replay_saved: true,
     })

@@ -2,7 +2,7 @@ use bmz_core::lane::{LANE_COUNT, Lane};
 use bmz_core::time::TimeUs;
 
 use crate::scene::{AppSceneSnapshot, SelectRowSnapshot};
-use crate::snapshot::RenderSnapshot;
+use crate::snapshot::{DisplayJudgeCounts, RenderSnapshot};
 use crate::text::{BitmapTextStyle, TextRenderer};
 
 const JUDGE_LINE_Y_RATIO: f32 = 0.86;
@@ -49,6 +49,7 @@ impl DrawPlan {
                 snapshot.max_combo,
                 snapshot.gauge_value,
                 snapshot.total_notes,
+                &snapshot.judge_counts,
                 snapshot.score_history_id,
                 snapshot.replay_saved,
             ),
@@ -318,6 +319,7 @@ fn plan_result(
     max_combo: u32,
     gauge_value: f32,
     total_notes: u32,
+    judge_counts: &DisplayJudgeCounts,
     score_history_id: i64,
     replay_saved: bool,
 ) -> DrawPlan {
@@ -369,30 +371,55 @@ fn plan_result(
     text.push_text(
         &mut commands,
         &format!("RATE {}", format_percent(ex_score_rate)),
-        BitmapTextStyle { x: 0.16, y: 0.69, cell: 0.006, color: Color::rgb(0.72, 0.84, 0.86) },
+        BitmapTextStyle { x: 0.16, y: 0.675, cell: 0.006, color: Color::rgb(0.72, 0.84, 0.86) },
     );
     text.push_text(
         &mut commands,
         &format!("NOTES {}", total_notes),
-        BitmapTextStyle { x: 0.34, y: 0.69, cell: 0.006, color: Color::rgb(0.72, 0.84, 0.86) },
+        BitmapTextStyle { x: 0.34, y: 0.675, cell: 0.006, color: Color::rgb(0.72, 0.84, 0.86) },
     );
     text.push_text(
         &mut commands,
         &format!("ID {}", score_history_id.max(0)),
-        BitmapTextStyle { x: 0.52, y: 0.69, cell: 0.006, color: Color::rgb(0.72, 0.84, 0.86) },
+        BitmapTextStyle { x: 0.52, y: 0.675, cell: 0.006, color: Color::rgb(0.72, 0.84, 0.86) },
     );
     text.push_text(
         &mut commands,
         if replay_saved { "REPLAY SAVED" } else { "REPLAY NONE" },
-        BitmapTextStyle { x: 0.68, y: 0.69, cell: 0.005, color: Color::rgb(0.66, 0.78, 0.76) },
+        BitmapTextStyle { x: 0.68, y: 0.675, cell: 0.005, color: Color::rgb(0.66, 0.78, 0.76) },
     );
+    for (index, label) in result_judge_labels(judge_counts).into_iter().enumerate() {
+        let column = index % 3;
+        let row = index / 3;
+        text.push_text(
+            &mut commands,
+            &label,
+            BitmapTextStyle {
+                x: 0.16 + column as f32 * 0.18,
+                y: 0.735 + row as f32 * 0.045,
+                cell: 0.006,
+                color: Color::rgb(0.78, 0.82, 0.8),
+            },
+        );
+    }
     text.push_text(
         &mut commands,
         "R RETRY  ENTER/ESC SELECT",
-        BitmapTextStyle { x: 0.14, y: 0.8, cell: 0.006, color: Color::rgb(0.74, 0.78, 0.8) },
+        BitmapTextStyle { x: 0.14, y: 0.86, cell: 0.006, color: Color::rgb(0.74, 0.78, 0.8) },
     );
 
     DrawPlan { clear: Color::rgb(0.025, 0.02, 0.018), commands }
+}
+
+fn result_judge_labels(judge_counts: &DisplayJudgeCounts) -> [String; 6] {
+    [
+        format!("PG {}", judge_counts.pgreat),
+        format!("GR {}", judge_counts.great),
+        format!("GD {}", judge_counts.good),
+        format!("BD {}", judge_counts.bad),
+        format!("PR {}", judge_counts.poor),
+        format!("EP {}", judge_counts.empty_poor),
+    ]
 }
 
 fn push_judge_line(commands: &mut Vec<DrawCommand>, board: Rect) {
@@ -962,7 +989,8 @@ mod tests {
 
     #[test]
     fn result_plan_clamps_ex_score_bar() {
-        let plan = plan_result("Normal", 0, 1.5, 0, 0.0, 100, 1, true);
+        let plan =
+            plan_result("Normal", 0, 1.5, 0, 0.0, 100, &DisplayJudgeCounts::default(), 1, true);
 
         assert!(plan.commands.iter().any(|command| matches!(
             command,
@@ -972,13 +1000,37 @@ mod tests {
 
     #[test]
     fn result_plan_includes_extended_summary_text() {
-        let plan = plan_result("Normal", 1500, 0.75, 500, 82.0, 1000, 42, true);
+        let plan = plan_result(
+            "Normal",
+            1500,
+            0.75,
+            500,
+            82.0,
+            1000,
+            &DisplayJudgeCounts::default(),
+            42,
+            true,
+        );
 
         assert!(plan.commands.iter().any(|command| matches!(
             command,
             DrawCommand::Rect { color, .. } if *color == Color::rgb(0.72, 0.84, 0.86)
         )));
         assert_eq!(format_percent(0.754), "75%");
+    }
+
+    #[test]
+    fn result_judge_labels_include_all_counts() {
+        let labels = result_judge_labels(&DisplayJudgeCounts {
+            pgreat: 1,
+            great: 2,
+            good: 3,
+            bad: 4,
+            poor: 5,
+            empty_poor: 6,
+        });
+
+        assert_eq!(labels, ["PG 1", "GR 2", "GD 3", "BD 4", "PR 5", "EP 6"]);
     }
 
     #[test]
