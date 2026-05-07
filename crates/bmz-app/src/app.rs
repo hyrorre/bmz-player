@@ -23,6 +23,7 @@ use crate::screens::select_model::{SelectChartRow, load_select_chart_rows};
 const BOOT_PLAY_SAMPLE_ENV: &str = "BMZ_BOOT_PLAY_SAMPLE";
 const AUTOPLAY_ON_START_ENV: &str = "BMZ_AUTOPLAY_ON_START";
 const SMOKE_EXIT_AFTER_FRAMES_ENV: &str = "BMZ_SMOKE_EXIT_AFTER_FRAMES";
+const SMOKE_EXIT_ON_RESULT_ENV: &str = "BMZ_SMOKE_EXIT_ON_RESULT";
 const SAMPLE_PLAYABLE_TITLE: &str = "BMZ Sample Playable";
 
 pub fn run() -> Result<()> {
@@ -49,6 +50,7 @@ struct WinitApp {
     last_scene_kind: Option<AppSceneKind>,
     autoplay_on_start: bool,
     smoke_exit_after_frames: Option<u32>,
+    smoke_exit_on_result: bool,
     rendered_frames: u32,
 }
 
@@ -87,6 +89,7 @@ impl WinitApp {
             last_scene_kind: None,
             autoplay_on_start: autoplay_on_start_from_env(),
             smoke_exit_after_frames: smoke_exit_after_frames_from_env(),
+            smoke_exit_on_result: smoke_exit_on_result_from_env(),
             rendered_frames: 0,
         };
         if let Some(chart_id) = boot_sample_chart_id {
@@ -358,6 +361,13 @@ impl WinitApp {
     }
 
     fn handle_smoke_exit_after_redraw(&mut self, event_loop: &ActiveEventLoop) {
+        if self.smoke_exit_on_result && self.finished_play.is_some() {
+            self.smoke_exit_on_result = false;
+            tracing::info!("smoke result reached; leaving event loop");
+            event_loop.exit();
+            return;
+        }
+
         let Some(exit_after_frames) = self.smoke_exit_after_frames else {
             return;
         };
@@ -453,6 +463,15 @@ fn smoke_exit_after_frames_from_env() -> Option<u32> {
     frames
 }
 
+fn smoke_exit_on_result_from_env() -> bool {
+    let exit_on_result =
+        parse_smoke_exit_on_result(env::var(SMOKE_EXIT_ON_RESULT_ENV).ok().as_deref());
+    if exit_on_result {
+        tracing::info!(env = SMOKE_EXIT_ON_RESULT_ENV, "smoke auto-exit on result enabled");
+    }
+    exit_on_result
+}
+
 fn boot_play_sample_from_env() -> bool {
     parse_boot_play_sample(env::var(BOOT_PLAY_SAMPLE_ENV).ok().as_deref())
 }
@@ -473,6 +492,10 @@ fn parse_boot_play_sample(value: Option<&str>) -> bool {
 }
 
 fn parse_autoplay_on_start(value: Option<&str>) -> bool {
+    parse_truthy_env(value)
+}
+
+fn parse_smoke_exit_on_result(value: Option<&str>) -> bool {
     parse_truthy_env(value)
 }
 
@@ -806,6 +829,22 @@ mod tests {
     #[test]
     fn smoke_exit_after_frames_clamps_zero_to_one_redraw() {
         assert_eq!(parse_smoke_exit_after_frames(Some("0")), Some(1));
+    }
+
+    #[test]
+    fn smoke_exit_on_result_env_accepts_truthy_values() {
+        assert!(parse_smoke_exit_on_result(Some("1")));
+        assert!(parse_smoke_exit_on_result(Some(" true ")));
+        assert!(parse_smoke_exit_on_result(Some("yes")));
+        assert!(parse_smoke_exit_on_result(Some("on")));
+    }
+
+    #[test]
+    fn smoke_exit_on_result_env_rejects_empty_and_other_values() {
+        assert!(!parse_smoke_exit_on_result(None));
+        assert!(!parse_smoke_exit_on_result(Some("")));
+        assert!(!parse_smoke_exit_on_result(Some("0")));
+        assert!(!parse_smoke_exit_on_result(Some("result")));
     }
 
     #[test]
