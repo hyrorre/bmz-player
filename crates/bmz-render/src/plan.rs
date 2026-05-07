@@ -303,6 +303,7 @@ fn plan_play(snapshot: &RenderSnapshot) -> DrawPlan {
     push_play_text(&text, &mut commands, snapshot);
     push_lane_text(&text, &mut commands, board, lane_width);
     push_judgement_history(&text, &mut commands, snapshot);
+    push_start_overlay(&text, &mut commands, snapshot);
 
     DrawPlan { clear: Color::rgb(0.0, 0.0, 0.0), commands }
 }
@@ -463,6 +464,31 @@ fn push_play_text(text: &TextRenderer, commands: &mut Vec<DrawCommand>, snapshot
     }
 }
 
+fn push_start_overlay(
+    text: &TextRenderer,
+    commands: &mut Vec<DrawCommand>,
+    snapshot: &RenderSnapshot,
+) {
+    let Some(label) = start_overlay_label(snapshot.time) else {
+        return;
+    };
+    let cell = 0.018;
+    text.push_text(
+        commands,
+        label,
+        BitmapTextStyle {
+            x: 0.5 - label_width(label, cell) / 2.0,
+            y: 0.385,
+            cell,
+            color: if label == "READY" {
+                Color::rgb(0.74, 0.88, 0.9)
+            } else {
+                Color::rgb(0.96, 0.92, 0.54)
+            },
+        },
+    );
+}
+
 fn push_judge_count_text(
     text: &TextRenderer,
     commands: &mut Vec<DrawCommand>,
@@ -608,6 +634,14 @@ fn format_delta_ms(delta_us: i64) -> String {
 fn format_time(time: TimeUs) -> String {
     let seconds = (time.0.max(0) / 1_000_000) as u32;
     format!("{:02}:{:02}", seconds / 60, seconds % 60)
+}
+
+fn start_overlay_label(time: TimeUs) -> Option<&'static str> {
+    match time.0 {
+        ..=999_999 => Some("READY"),
+        1_000_000..=1_599_999 => Some("GO"),
+        _ => None,
+    }
 }
 
 fn lane_flash_color(snapshot: &RenderSnapshot, lane: Lane) -> Option<Color> {
@@ -830,6 +864,27 @@ mod tests {
         let board = Rect { x: 0.18, y: 0.05, width: 0.64, height: 0.9 };
 
         assert!(approx_eq(note_rect_y(board, 0.0) + NOTE_HEIGHT / 2.0, judge_line_y(board)));
+    }
+
+    #[test]
+    fn start_overlay_label_covers_opening_window() {
+        assert_eq!(start_overlay_label(TimeUs(0)), Some("READY"));
+        assert_eq!(start_overlay_label(TimeUs(999_999)), Some("READY"));
+        assert_eq!(start_overlay_label(TimeUs(1_000_000)), Some("GO"));
+        assert_eq!(start_overlay_label(TimeUs(1_599_999)), Some("GO"));
+        assert_eq!(start_overlay_label(TimeUs(1_600_000)), None);
+    }
+
+    #[test]
+    fn play_plan_includes_ready_overlay_at_start() {
+        let snapshot = RenderSnapshot { time: TimeUs(0), ..Default::default() };
+
+        let plan = DrawPlan::from_scene(&AppSceneSnapshot::Play(snapshot));
+
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Rect { color, .. } if *color == Color::rgb(0.74, 0.88, 0.9)
+        )));
     }
 
     #[test]
