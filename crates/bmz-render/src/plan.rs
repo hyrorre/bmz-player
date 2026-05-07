@@ -80,69 +80,25 @@ fn plan_select(chart_count: u32, selected_index: u32, rows: &[SelectRowSnapshot]
     for row in 0..visible_rows {
         let snapshot_row = rows.get(row);
         let selected = snapshot_row.map(|row| row.index == selected_index).unwrap_or(row == 0);
+        let row_y = 0.2 + row as f32 * 0.09;
         commands.push(DrawCommand::Rect {
-            rect: Rect { x: 0.08, y: 0.2 + row as f32 * 0.09, width: 0.68, height: 0.065 },
+            rect: Rect { x: 0.08, y: row_y, width: 0.68, height: 0.065 },
             color: if selected {
                 Color::rgb(0.22, 0.28, 0.31)
             } else {
                 Color::rgb(0.075, 0.09, 0.1)
             },
         });
-        if selected {
-            text.push_text(
-                &mut commands,
-                &display_title(snapshot_row.map(|row| row.title.as_str()).unwrap_or_default()),
-                BitmapTextStyle {
-                    x: 0.1,
-                    y: 0.222 + row as f32 * 0.09,
-                    cell: 0.006,
-                    color: Color::rgb(0.9, 0.96, 0.98),
-                },
-            );
-        } else if let Some(snapshot_row) = snapshot_row {
-            text.push_text(
-                &mut commands,
-                &display_title(&snapshot_row.title),
-                BitmapTextStyle {
-                    x: 0.1,
-                    y: 0.222 + row as f32 * 0.09,
-                    cell: 0.005,
-                    color: Color::rgb(0.58, 0.66, 0.68),
-                },
-            );
-        }
+        push_select_title_text(&text, &mut commands, snapshot_row, row_y, selected);
         commands.push(DrawCommand::Rect {
-            rect: Rect { x: 0.78, y: 0.2 + row as f32 * 0.09, width: 0.14, height: 0.065 },
+            rect: Rect { x: 0.78, y: row_y, width: 0.14, height: 0.065 },
             color: if selected {
                 Color::rgb(0.16, 0.21, 0.23)
             } else {
                 Color::rgb(0.055, 0.065, 0.072)
             },
         });
-        if selected {
-            let status = row_status_label(snapshot_row);
-            text.push_text(
-                &mut commands,
-                &status,
-                BitmapTextStyle {
-                    x: 0.805,
-                    y: 0.222 + row as f32 * 0.09,
-                    cell: 0.0055,
-                    color: Color::rgb(0.74, 0.88, 0.9),
-                },
-            );
-        } else if let Some(snapshot_row) = snapshot_row {
-            text.push_text(
-                &mut commands,
-                &row_status_label(Some(snapshot_row)),
-                BitmapTextStyle {
-                    x: 0.805,
-                    y: 0.222 + row as f32 * 0.09,
-                    cell: 0.0045,
-                    color: Color::rgb(0.38, 0.46, 0.48),
-                },
-            );
-        }
+        push_select_score_text(&text, &mut commands, snapshot_row, row_y, selected);
     }
     text.push_text(
         &mut commands,
@@ -158,16 +114,117 @@ fn plan_select(chart_count: u32, selected_index: u32, rows: &[SelectRowSnapshot]
     DrawPlan { clear: Color::rgb(0.02, 0.025, 0.03), commands }
 }
 
+fn push_select_title_text(
+    text: &TextRenderer,
+    commands: &mut Vec<DrawCommand>,
+    row: Option<&SelectRowSnapshot>,
+    row_y: f32,
+    selected: bool,
+) {
+    let title = display_title(row.map(|row| row.title.as_str()).unwrap_or_default());
+    text.push_text(
+        commands,
+        &title,
+        BitmapTextStyle {
+            x: 0.1,
+            y: row_y + if selected { 0.016 } else { 0.022 },
+            cell: if selected { 0.006 } else { 0.005 },
+            color: if selected {
+                Color::rgb(0.9, 0.96, 0.98)
+            } else {
+                Color::rgb(0.58, 0.66, 0.68)
+            },
+        },
+    );
+
+    let Some(row) = row else {
+        return;
+    };
+    if selected && !row.artist.is_empty() {
+        text.push_text(
+            commands,
+            &display_label(&row.artist, 30),
+            BitmapTextStyle {
+                x: 0.1,
+                y: row_y + 0.046,
+                cell: 0.0035,
+                color: Color::rgb(0.58, 0.71, 0.73),
+            },
+        );
+    }
+}
+
+fn push_select_score_text(
+    text: &TextRenderer,
+    commands: &mut Vec<DrawCommand>,
+    row: Option<&SelectRowSnapshot>,
+    row_y: f32,
+    selected: bool,
+) {
+    let status = row_status_label(row);
+    text.push_text(
+        commands,
+        &status,
+        BitmapTextStyle {
+            x: 0.805,
+            y: row_y + if selected { 0.016 } else { 0.018 },
+            cell: if selected { 0.0055 } else { 0.0045 },
+            color: if selected {
+                Color::rgb(0.74, 0.88, 0.9)
+            } else {
+                Color::rgb(0.38, 0.46, 0.48)
+            },
+        },
+    );
+
+    let Some(row) = row else {
+        return;
+    };
+    if let Some(ex_score) = row.ex_score {
+        text.push_text(
+            commands,
+            &format!("EX {}", ex_score),
+            BitmapTextStyle {
+                x: 0.805,
+                y: row_y + 0.043,
+                cell: if selected { 0.004 } else { 0.0035 },
+                color: if selected {
+                    Color::rgb(0.86, 0.9, 0.82)
+                } else {
+                    Color::rgb(0.35, 0.42, 0.38)
+                },
+            },
+        );
+    }
+}
+
 fn row_status_label(row: Option<&SelectRowSnapshot>) -> String {
     let Some(row) = row else {
         return "EMPTY".to_string();
     };
-    if let Some(ex_score) = row.ex_score {
-        format!("EX {}", ex_score)
+    let clear_type = clear_type_label(&row.clear_type);
+    if !clear_type.is_empty() {
+        clear_type.to_string()
     } else if !row.play_level.is_empty() {
         format!("LV {}", display_label(&row.play_level, 4))
     } else {
         "READY".to_string()
+    }
+}
+
+fn clear_type_label(clear_type: &str) -> &'static str {
+    match clear_type {
+        "Failed" => "FAILED",
+        "AssistEasy" => "AEASY",
+        "LightAssistEasy" => "LAEASY",
+        "Easy" => "EASY",
+        "Normal" => "NORMAL",
+        "Hard" => "HARD",
+        "ExHard" => "EXHARD",
+        "FullCombo" => "FC",
+        "Perfect" => "PERFECT",
+        "Max" => "MAX",
+        _ => "",
     }
 }
 
@@ -494,15 +551,23 @@ mod tests {
         assert_eq!(display_label("A_B", 8), "A?B");
     }
 
+    #[test]
+    fn clear_type_label_abbreviates_long_names() {
+        assert_eq!(clear_type_label("Normal"), "NORMAL");
+        assert_eq!(clear_type_label("LightAssistEasy"), "LAEASY");
+        assert_eq!(clear_type_label("FullCombo"), "FC");
+        assert_eq!(clear_type_label(""), "");
+    }
+
     fn select_rows(count: u32) -> Vec<crate::scene::SelectRowSnapshot> {
         (0..count)
             .map(|index| crate::scene::SelectRowSnapshot {
                 index,
                 title: format!("Title {index}"),
-                artist: String::new(),
+                artist: format!("Artist {index}"),
                 play_level: index.to_string(),
-                clear_type: String::new(),
-                ex_score: None,
+                clear_type: if index == 0 { "Normal".to_string() } else { String::new() },
+                ex_score: (index == 0).then_some(1234),
             })
             .collect()
     }
