@@ -281,6 +281,7 @@ fn plan_play(snapshot: &RenderSnapshot) -> DrawPlan {
         }
     }
 
+    push_receptors(&mut commands, board, lane_width);
     for bar in &snapshot.bar_lines {
         let y = board.y + (1.0 - bar.y.clamp(0.0, 1.0)) * board.height;
         commands.push(DrawCommand::Rect {
@@ -292,6 +293,7 @@ fn plan_play(snapshot: &RenderSnapshot) -> DrawPlan {
     push_gauge(&mut commands, snapshot.gauge);
     push_combo_panel(&mut commands, snapshot.combo);
     push_play_text(&text, &mut commands, snapshot);
+    push_lane_text(&text, &mut commands, board, lane_width);
 
     DrawPlan { clear: Color::rgb(0.0, 0.0, 0.0), commands }
 }
@@ -365,6 +367,23 @@ fn push_judge_line(commands: &mut Vec<DrawCommand>, board: Rect) {
     });
 }
 
+fn push_receptors(commands: &mut Vec<DrawCommand>, board: Rect, lane_width: f32) {
+    let receptor_y = board.y + board.height * 0.825;
+    for lane in Lane::ALL {
+        let lane_index = lane.index();
+        let x = board.x + lane_index as f32 * lane_width;
+        commands.push(DrawCommand::Rect {
+            rect: Rect {
+                x: x + lane_width * 0.1,
+                y: receptor_y,
+                width: lane_width * 0.8,
+                height: 0.026,
+            },
+            color: receptor_color(lane),
+        });
+    }
+}
+
 fn push_gauge(commands: &mut Vec<DrawCommand>, gauge: f32) {
     let frame = Rect { x: 0.84, y: 0.08, width: 0.035, height: 0.82 };
     let fill = gauge.clamp(0.0, 100.0) / 100.0;
@@ -416,6 +435,40 @@ fn push_play_text(text: &TextRenderer, commands: &mut Vec<DrawCommand>, snapshot
                 y: 0.282,
                 cell: 0.0045,
                 color: Color::rgb(0.72, 0.82, 0.86),
+            },
+        );
+    }
+}
+
+fn push_lane_text(
+    text: &TextRenderer,
+    commands: &mut Vec<DrawCommand>,
+    board: Rect,
+    lane_width: f32,
+) {
+    for lane in Lane::ALL {
+        let lane_index = lane.index();
+        let center_x = board.x + lane_index as f32 * lane_width + lane_width / 2.0;
+        let label = lane_label(lane);
+        text.push_text(
+            commands,
+            label,
+            BitmapTextStyle {
+                x: center_x - label_width(label, 0.0035) / 2.0,
+                y: board.y + 0.018,
+                cell: 0.0035,
+                color: Color::rgb(0.45, 0.55, 0.58),
+            },
+        );
+        let key = lane_key_label(lane);
+        text.push_text(
+            commands,
+            key,
+            BitmapTextStyle {
+                x: center_x - label_width(key, 0.004) / 2.0,
+                y: board.y + board.height * 0.9,
+                cell: 0.004,
+                color: Color::rgb(0.78, 0.86, 0.84),
             },
         );
     }
@@ -532,12 +585,51 @@ fn gauge_color(gauge: f32) -> Color {
     }
 }
 
+fn receptor_color(lane: Lane) -> Color {
+    match lane {
+        Lane::Scratch => Color::rgb(0.22, 0.34, 0.3),
+        Lane::Key1 | Lane::Key3 | Lane::Key5 | Lane::Key7 => Color::rgb(0.24, 0.26, 0.28),
+        Lane::Key2 | Lane::Key4 | Lane::Key6 => Color::rgb(0.14, 0.26, 0.36),
+    }
+}
+
 fn note_color(lane: Lane) -> Color {
     match lane {
         Lane::Scratch => Color::rgb(0.45, 0.7, 0.62),
         Lane::Key1 | Lane::Key3 | Lane::Key5 | Lane::Key7 => Color::rgb(0.82, 0.86, 0.9),
         Lane::Key2 | Lane::Key4 | Lane::Key6 => Color::rgb(0.35, 0.68, 0.95),
     }
+}
+
+fn lane_label(lane: Lane) -> &'static str {
+    match lane {
+        Lane::Scratch => "SC",
+        Lane::Key1 => "1",
+        Lane::Key2 => "2",
+        Lane::Key3 => "3",
+        Lane::Key4 => "4",
+        Lane::Key5 => "5",
+        Lane::Key6 => "6",
+        Lane::Key7 => "7",
+    }
+}
+
+fn lane_key_label(lane: Lane) -> &'static str {
+    match lane {
+        Lane::Scratch => "LS",
+        Lane::Key1 => "Z",
+        Lane::Key2 => "S",
+        Lane::Key3 => "X",
+        Lane::Key4 => "D",
+        Lane::Key5 => "C",
+        Lane::Key6 => "F",
+        Lane::Key7 => "V",
+    }
+}
+
+fn label_width(label: &str, cell: f32) -> f32 {
+    let chars = label.chars().count() as f32;
+    if chars == 0.0 { 0.0 } else { (chars * 3.0 + (chars - 1.0)) * cell }
 }
 
 #[cfg(test)]
@@ -653,6 +745,10 @@ mod tests {
             command,
             DrawCommand::Rect { rect, color } if rect.x == 0.05 && rect.width == 0.11 && *color == Color::rgb(0.035, 0.04, 0.044)
         )));
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Rect { color, .. } if *color == receptor_color(Lane::Key2)
+        )));
     }
 
     #[test]
@@ -724,6 +820,15 @@ mod tests {
         assert_eq!(gauge_color(90.0), Color::rgb(0.35, 0.9, 0.6));
         assert_eq!(gauge_color(50.0), Color::rgb(0.9, 0.78, 0.35));
         assert_eq!(gauge_color(10.0), Color::rgb(0.9, 0.32, 0.32));
+    }
+
+    #[test]
+    fn lane_text_labels_match_default_bindings() {
+        assert_eq!(lane_label(Lane::Scratch), "SC");
+        assert_eq!(lane_label(Lane::Key7), "7");
+        assert_eq!(lane_key_label(Lane::Scratch), "LS");
+        assert_eq!(lane_key_label(Lane::Key1), "Z");
+        assert_eq!(lane_key_label(Lane::Key7), "V");
     }
 
     #[test]
