@@ -770,6 +770,36 @@ mod tests {
     }
 
     #[test]
+    fn play_plan_maps_normalized_note_y_to_distinct_screen_positions() {
+        let mut snapshot = RenderSnapshot::default();
+        snapshot.visible_notes[Lane::Key1.index()].push(VisibleNote {
+            lane: Lane::Key1,
+            time: TimeUs(1_000),
+            y: 0.75,
+        });
+        snapshot.visible_notes[Lane::Key1.index()].push(VisibleNote {
+            lane: Lane::Key1,
+            time: TimeUs(2_000),
+            y: 0.25,
+        });
+
+        let plan = DrawPlan::from_scene(&AppSceneSnapshot::Play(snapshot));
+        let note_ys: Vec<f32> = plan
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Rect { rect, color } if *color == note_color(Lane::Key1) => {
+                    Some(rect.y)
+                }
+                _ => None,
+            })
+            .collect();
+
+        assert!(note_ys.iter().any(|y| approx_eq(*y, 0.275)));
+        assert!(note_ys.iter().any(|y| approx_eq(*y, 0.725)));
+    }
+
+    #[test]
     fn select_plan_has_non_empty_commands() {
         let plan = DrawPlan::from_scene(&AppSceneSnapshot::Select(Default::default()));
 
@@ -1053,5 +1083,9 @@ mod tests {
             delta_us: 0,
             time: TimeUs(0),
         })
+    }
+
+    fn approx_eq(actual: f32, expected: f32) -> bool {
+        (actual - expected).abs() < 0.0001
     }
 }

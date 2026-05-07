@@ -8,7 +8,6 @@ use bmz_render::snapshot::{
 };
 
 pub const DEFAULT_LOOKAHEAD_US: i64 = 2_000_000;
-pub const DEFAULT_LANE_HEIGHT: f32 = 720.0;
 
 pub fn build_render_snapshot(
     session: &GameSession,
@@ -59,7 +58,7 @@ fn note_y(note_time: TimeUs, render_now: TimeUs) -> Option<f32> {
     }
 
     let progress = delta as f32 / DEFAULT_LOOKAHEAD_US as f32;
-    Some(progress * DEFAULT_LANE_HEIGHT)
+    Some(progress)
 }
 
 fn display_judge_counts(session: &GameSession) -> DisplayJudgeCounts {
@@ -141,10 +140,23 @@ mod tests {
         assert_eq!(snapshot.past_notes, 0);
         assert!(snapshot.recent_inputs.is_empty());
         assert_eq!(snapshot.visible_notes[Lane::Key1.index()].len(), 1);
-        assert_eq!(snapshot.visible_notes[Lane::Key1.index()][0].y, 360.0);
+        assert_eq!(snapshot.visible_notes[Lane::Key1.index()][0].y, 0.5);
         assert_eq!(snapshot.recent_judgements[0].lane, Lane::Key1);
         assert_eq!(snapshot.recent_judgements[0].text, "EMPTY POOR SLOW");
         assert_eq!(snapshot.recent_judgements[0].delta_us, 5_000);
+    }
+
+    #[test]
+    fn build_render_snapshot_normalizes_note_y_to_visible_range() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let session =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+
+        let early = build_render_snapshot(&session, TimeUs(0), &[]);
+        let later = build_render_snapshot(&session, TimeUs(750_000), &[]);
+
+        assert_eq!(early.visible_notes[Lane::Key1.index()][0].y, 0.5);
+        assert_eq!(later.visible_notes[Lane::Key1.index()][0].y, 0.125);
     }
 
     #[test]
