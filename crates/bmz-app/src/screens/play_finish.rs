@@ -296,6 +296,7 @@ mod tests {
             bgm_scheduler: BgmScheduler::default(),
             offsets: PlayOffsets { input_offset_us: 0, visual_offset_us: 0 },
             audio_mix: PlayAudioMix { master_volume: 1.0, key_volume: 1.0, bgm_volume: 1.0 },
+            hispeed: 2.0,
             input_timestamp_anchor: None,
             state: PlayState::Finished,
         }

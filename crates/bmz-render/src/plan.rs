@@ -531,7 +531,7 @@ fn push_play_status_text(
     snapshot: &RenderSnapshot,
 ) {
     commands.push(DrawCommand::Rect {
-        rect: Rect { x: 0.05, y: 0.08, width: 0.11, height: 0.24 },
+        rect: Rect { x: 0.05, y: 0.08, width: 0.11, height: 0.285 },
         color: Color::rgb(0.035, 0.04, 0.044),
     });
     text.push_text(
@@ -558,6 +558,11 @@ fn push_play_status_text(
         commands,
         &format_time(snapshot.time),
         BitmapTextStyle { x: 0.065, y: 0.28, cell: 0.0045, color: Color::rgb(0.48, 0.62, 0.66) },
+    );
+    text.push_text(
+        commands,
+        &format!("HS {:.2}", snapshot.hispeed),
+        BitmapTextStyle { x: 0.065, y: 0.32, cell: 0.0045, color: Color::rgb(0.72, 0.82, 0.8) },
     );
 }
 

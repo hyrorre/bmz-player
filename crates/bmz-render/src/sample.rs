@@ -26,8 +26,13 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
 }
 
 pub fn sample_play_scene() -> AppSceneSnapshot {
-    let mut snapshot =
-        RenderSnapshot { time: TimeUs(12_345_000), combo: 1234, gauge: 82.0, ..Default::default() };
+    let mut snapshot = RenderSnapshot {
+        time: TimeUs(12_345_000),
+        combo: 1234,
+        gauge: 82.0,
+        hispeed: 2.0,
+        ..Default::default()
+    };
 
     for (index, lane) in Lane::ALL.into_iter().enumerate() {
         snapshot.visible_notes[lane.index()].push(VisibleNote {

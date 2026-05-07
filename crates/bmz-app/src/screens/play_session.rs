@@ -83,9 +83,14 @@ pub fn build_game_session_with_input_backend(
         bgm_scheduler: BgmScheduler::default(),
         offsets: play_offsets_from_profile(profile),
         audio_mix: audio_mix_from_profile(profile),
+        hispeed: clamp_hispeed(profile.lane.hispeed),
         input_timestamp_anchor: None,
         state: PlayState::Ready,
     }
+}
+
+fn clamp_hispeed(hispeed: f32) -> f32 {
+    hispeed.clamp(0.5, 10.0)
 }
 
 pub fn load_game_session_for_chart(
@@ -207,6 +212,19 @@ mod tests {
         assert_eq!(session.offsets.input_offset_us, 123);
         assert_eq!(session.audio_mix.master_volume, 1.0);
         assert_eq!(session.audio_clock.sample_rate, 48_000);
+        assert_eq!(session.hispeed, 2.0);
+    }
+
+    #[test]
+    fn build_game_session_clamps_profile_hispeed() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.lane.hispeed = 11.0;
+        let high = build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+        profile.lane.hispeed = 0.25;
+        let low = build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+
+        assert_eq!(high.hispeed, 10.0);
+        assert_eq!(low.hispeed, 0.5);
     }
 
     #[test]

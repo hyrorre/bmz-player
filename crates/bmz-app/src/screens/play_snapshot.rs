@@ -23,6 +23,7 @@ pub fn build_render_snapshot(
         past_notes: session.score.past_notes,
         judge_counts: display_judge_counts(session),
         gauge: session.gauge.current().value,
+        hispeed: session.hispeed,
         visible_notes: std::array::from_fn(|_| Vec::new()),
         recent_inputs: session
             .recent_inputs
@@ -36,14 +37,14 @@ pub fn build_render_snapshot(
     for lane in Lane::ALL {
         let next_note_index = session.judge.lanes[lane.index()].next_note_index;
         for note in session.chart.notes_for_lane(lane).iter().skip(next_note_index) {
-            if let Some(y) = note_y(note.time, render_now) {
+            if let Some(y) = note_y(note.time, render_now, session.hispeed) {
                 snapshot.visible_notes[lane.index()].push(VisibleNote { lane, time: note.time, y });
             }
         }
     }
 
     for bar in &session.chart.bar_lines {
-        if let Some(y) = note_y(bar.time, render_now) {
+        if let Some(y) = note_y(bar.time, render_now, session.hispeed) {
             snapshot.bar_lines.push(VisibleBarLine { time: bar.time, y });
         }
     }
@@ -51,14 +52,14 @@ pub fn build_render_snapshot(
     snapshot
 }
 
-fn note_y(note_time: TimeUs, render_now: TimeUs) -> Option<f32> {
+fn note_y(note_time: TimeUs, render_now: TimeUs, hispeed: f32) -> Option<f32> {
     let delta = note_time.0 - render_now.0;
-    if !(0..=DEFAULT_LOOKAHEAD_US).contains(&delta) {
+    if delta < 0 {
         return None;
     }
 
-    let progress = delta as f32 / DEFAULT_LOOKAHEAD_US as f32;
-    Some(progress)
+    let progress = delta as f32 * hispeed / DEFAULT_LOOKAHEAD_US as f32;
+    (progress <= 1.0).then_some(progress)
 }
 
 fn display_judge_counts(session: &GameSession) -> DisplayJudgeCounts {
@@ -120,8 +121,9 @@ mod tests {
     #[test]
     fn build_render_snapshot_filters_visible_notes_and_formats_judgements() {
         let profile = ProfileConfig::new_default("default", "Default", 1);
-        let session =
+        let mut session =
             build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+        session.hispeed = 1.0;
         let judgements = vec![JudgementEvent {
             note_id: Some(NoteId(1)),
             lane: Lane::Key1,
@@ -149,14 +151,28 @@ mod tests {
     #[test]
     fn build_render_snapshot_normalizes_note_y_to_visible_range() {
         let profile = ProfileConfig::new_default("default", "Default", 1);
-        let session =
+        let mut session =
             build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+        session.hispeed = 1.0;
 
         let early = build_render_snapshot(&session, TimeUs(0), &[]);
         let later = build_render_snapshot(&session, TimeUs(750_000), &[]);
 
         assert_eq!(early.visible_notes[Lane::Key1.index()][0].y, 0.5);
         assert_eq!(later.visible_notes[Lane::Key1.index()][0].y, 0.125);
+    }
+
+    #[test]
+    fn build_render_snapshot_applies_hispeed_to_note_positions() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+        session.hispeed = 2.0;
+
+        let snapshot = build_render_snapshot(&session, TimeUs(0), &[]);
+
+        assert_eq!(snapshot.hispeed, 2.0);
+        assert_eq!(snapshot.visible_notes[Lane::Key1.index()][0].y, 1.0);
     }
 
     #[test]

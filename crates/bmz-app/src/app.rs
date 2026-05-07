@@ -189,7 +189,13 @@ impl WinitApp {
             return;
         }
 
-        if let Some(active_play) = &self.active_play {
+        if let Some(active_play) = &mut self.active_play {
+            if let Some(change) = hispeed_action(event.physical_key, event.state, event.repeat) {
+                active_play.running.session.hispeed =
+                    adjusted_hispeed(active_play.running.session.hispeed, change);
+                tracing::info!(hispeed = active_play.running.session.hispeed, "adjusted hispeed");
+                return;
+            }
             active_play.input.handle_key_event(event);
             return;
         }
@@ -569,6 +575,36 @@ enum ResultAction {
     Leave,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HispeedChange {
+    Down,
+    Up,
+}
+
+fn hispeed_action(
+    physical_key: PhysicalKey,
+    state: ElementState,
+    _repeat: bool,
+) -> Option<HispeedChange> {
+    if state != ElementState::Pressed {
+        return None;
+    }
+
+    match physical_key {
+        PhysicalKey::Code(KeyCode::ArrowLeft) => Some(HispeedChange::Down),
+        PhysicalKey::Code(KeyCode::ArrowRight) => Some(HispeedChange::Up),
+        _ => None,
+    }
+}
+
+fn adjusted_hispeed(current: f32, change: HispeedChange) -> f32 {
+    let delta = match change {
+        HispeedChange::Down => -0.25,
+        HispeedChange::Up => 0.25,
+    };
+    ((current + delta) * 4.0).round().clamp(2.0, 40.0) / 4.0
+}
+
 fn result_action(
     physical_key: PhysicalKey,
     state: ElementState,
@@ -716,6 +752,38 @@ mod tests {
             result_action(PhysicalKey::Code(KeyCode::Space), ElementState::Pressed, false),
             None
         );
+    }
+
+    #[test]
+    fn hispeed_action_maps_left_and_right_presses() {
+        assert_eq!(
+            hispeed_action(PhysicalKey::Code(KeyCode::ArrowLeft), ElementState::Pressed, false),
+            Some(HispeedChange::Down)
+        );
+        assert_eq!(
+            hispeed_action(PhysicalKey::Code(KeyCode::ArrowRight), ElementState::Pressed, false),
+            Some(HispeedChange::Up)
+        );
+    }
+
+    #[test]
+    fn hispeed_action_rejects_releases_and_other_keys() {
+        assert_eq!(
+            hispeed_action(PhysicalKey::Code(KeyCode::ArrowLeft), ElementState::Released, false),
+            None
+        );
+        assert_eq!(
+            hispeed_action(PhysicalKey::Code(KeyCode::ArrowUp), ElementState::Pressed, false),
+            None
+        );
+    }
+
+    #[test]
+    fn adjusted_hispeed_steps_by_quarter_and_clamps_range() {
+        assert_eq!(adjusted_hispeed(2.0, HispeedChange::Up), 2.25);
+        assert_eq!(adjusted_hispeed(2.0, HispeedChange::Down), 1.75);
+        assert_eq!(adjusted_hispeed(10.0, HispeedChange::Up), 10.0);
+        assert_eq!(adjusted_hispeed(0.5, HispeedChange::Down), 0.5);
     }
 
     #[test]
