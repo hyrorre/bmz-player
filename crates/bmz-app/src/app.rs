@@ -1,8 +1,7 @@
-use std::env;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use bmz_render::renderer::{RenderSurfaceStatus, Renderer, SurfaceSize};
 use bmz_render::sample::{sample_play_scene, sample_result_scene, sample_select_scene};
 use bmz_render::scene::{AppSceneSnapshot, ResultSnapshot, SelectRowSnapshot, SelectSnapshot};
@@ -20,20 +19,67 @@ use crate::screens::play_start::{PlayStartOptions, StartedWinitPlaySession};
 use crate::screens::result_model::ResultSummary;
 use crate::screens::select_model::{SelectChartRow, load_select_chart_rows};
 
-const BOOT_PLAY_SAMPLE_ENV: &str = "BMZ_BOOT_PLAY_SAMPLE";
-const AUTOPLAY_ON_START_ENV: &str = "BMZ_AUTOPLAY_ON_START";
-const SMOKE_EXIT_AFTER_FRAMES_ENV: &str = "BMZ_SMOKE_EXIT_AFTER_FRAMES";
-const SMOKE_EXIT_ON_RESULT_ENV: &str = "BMZ_SMOKE_EXIT_ON_RESULT";
+const BOOT_PLAY_SAMPLE_ARG: &str = "--boot-play-sample";
+const AUTOPLAY_ON_START_ARG: &str = "--autoplay-on-start";
+const SMOKE_EXIT_AFTER_FRAMES_ARG: &str = "--smoke-exit-after-frames";
+const SMOKE_EXIT_ON_RESULT_ARG: &str = "--smoke-exit-on-result";
 const SAMPLE_PLAYABLE_TITLE: &str = "BMZ Sample Playable";
 
 pub fn run() -> Result<()> {
+    run_with_options(AppOptions::default())
+}
+
+pub fn run_with_options(options: AppOptions) -> Result<()> {
     let boot = bootstrap::bootstrap()?;
     let event_loop = EventLoop::new().context("failed to create event loop")?;
     event_loop.set_control_flow(ControlFlow::Poll);
 
-    let mut app = WinitApp::new(boot)?;
+    let mut app = WinitApp::new(boot, options)?;
     tracing::info!("starting winit event loop");
     event_loop.run_app(&mut app).context("winit event loop failed")
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AppOptions {
+    pub boot_play_sample: bool,
+    pub autoplay_on_start: bool,
+    pub smoke_exit_after_frames: Option<u32>,
+    pub smoke_exit_on_result: bool,
+}
+
+impl AppOptions {
+    pub fn parse_args<I, S>(args: I) -> Result<Self>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let mut options = Self::default();
+        let mut args = args.into_iter().peekable();
+
+        while let Some(arg) = args.next() {
+            let arg = arg.as_ref();
+            if let Some(value) = arg.strip_prefix("--smoke-exit-after-frames=") {
+                options.smoke_exit_after_frames = Some(parse_smoke_exit_after_frames_value(value)?);
+                continue;
+            }
+
+            match arg {
+                BOOT_PLAY_SAMPLE_ARG => options.boot_play_sample = true,
+                AUTOPLAY_ON_START_ARG => options.autoplay_on_start = true,
+                SMOKE_EXIT_ON_RESULT_ARG => options.smoke_exit_on_result = true,
+                SMOKE_EXIT_AFTER_FRAMES_ARG => {
+                    let Some(value) = args.next() else {
+                        bail!("{SMOKE_EXIT_AFTER_FRAMES_ARG} requires a frame count");
+                    };
+                    options.smoke_exit_after_frames =
+                        Some(parse_smoke_exit_after_frames_value(value.as_ref())?);
+                }
+                _ => bail!("unknown argument: {arg}"),
+            }
+        }
+
+        Ok(options)
+    }
 }
 
 struct WinitApp {
@@ -69,11 +115,12 @@ enum AppSceneKind {
 }
 
 impl WinitApp {
-    fn new(boot: BootstrappedApp) -> Result<Self> {
+    fn new(boot: BootstrappedApp, options: AppOptions) -> Result<Self> {
         let select_rows = load_select_chart_rows(&boot.library_db, &boot.score_db, 100, 0)
             .context("failed to load initial select chart rows")?;
         let boot_sample_chart_id =
-            boot_play_sample_from_env().then(|| sample_playable_chart_id(&select_rows)).flatten();
+            options.boot_play_sample.then(|| sample_playable_chart_id(&select_rows)).flatten();
+        log_startup_options(&options);
 
         let mut app = Self {
             boot,
@@ -87,14 +134,14 @@ impl WinitApp {
             renderer: Renderer::default(),
             dev_scene: None,
             last_scene_kind: None,
-            autoplay_on_start: autoplay_on_start_from_env(),
-            smoke_exit_after_frames: smoke_exit_after_frames_from_env(),
-            smoke_exit_on_result: smoke_exit_on_result_from_env(),
+            autoplay_on_start: options.autoplay_on_start,
+            smoke_exit_after_frames: options.smoke_exit_after_frames,
+            smoke_exit_on_result: options.smoke_exit_on_result,
             rendered_frames: 0,
         };
         if let Some(chart_id) = boot_sample_chart_id {
             tracing::info!(
-                env = BOOT_PLAY_SAMPLE_ENV,
+                arg = BOOT_PLAY_SAMPLE_ARG,
                 chart_id,
                 "booting directly into bundled sample chart"
             );
@@ -454,65 +501,28 @@ fn now_unix_seconds() -> i64 {
         .unwrap_or(0)
 }
 
-fn smoke_exit_after_frames_from_env() -> Option<u32> {
-    let value = env::var(SMOKE_EXIT_AFTER_FRAMES_ENV).ok();
-    let frames = parse_smoke_exit_after_frames(value.as_deref());
-    if let Some(frames) = frames {
-        tracing::info!(env = SMOKE_EXIT_AFTER_FRAMES_ENV, frames, "smoke auto-exit enabled");
+fn log_startup_options(options: &AppOptions) {
+    if options.autoplay_on_start {
+        tracing::info!(arg = AUTOPLAY_ON_START_ARG, "autoplay enabled for started charts");
     }
-    frames
-}
-
-fn smoke_exit_on_result_from_env() -> bool {
-    let exit_on_result =
-        parse_smoke_exit_on_result(env::var(SMOKE_EXIT_ON_RESULT_ENV).ok().as_deref());
-    if exit_on_result {
-        tracing::info!(env = SMOKE_EXIT_ON_RESULT_ENV, "smoke auto-exit on result enabled");
+    if let Some(frames) = options.smoke_exit_after_frames {
+        tracing::info!(arg = SMOKE_EXIT_AFTER_FRAMES_ARG, frames, "smoke auto-exit enabled");
     }
-    exit_on_result
-}
-
-fn boot_play_sample_from_env() -> bool {
-    parse_boot_play_sample(env::var(BOOT_PLAY_SAMPLE_ENV).ok().as_deref())
-}
-
-fn autoplay_on_start_from_env() -> bool {
-    let autoplay = parse_autoplay_on_start(env::var(AUTOPLAY_ON_START_ENV).ok().as_deref());
-    if autoplay {
-        tracing::info!(env = AUTOPLAY_ON_START_ENV, "autoplay enabled for started charts");
+    if options.smoke_exit_on_result {
+        tracing::info!(arg = SMOKE_EXIT_ON_RESULT_ARG, "smoke auto-exit on result enabled");
     }
-    autoplay
 }
 
-fn parse_boot_play_sample(value: Option<&str>) -> bool {
-    matches!(
-        value.map(str::trim).map(str::to_ascii_lowercase).as_deref(),
-        Some("1" | "true" | "yes" | "on" | "sample")
-    )
-}
-
-fn parse_autoplay_on_start(value: Option<&str>) -> bool {
-    parse_truthy_env(value)
-}
-
-fn parse_smoke_exit_on_result(value: Option<&str>) -> bool {
-    parse_truthy_env(value)
-}
-
-fn parse_truthy_env(value: Option<&str>) -> bool {
-    matches!(
-        value.map(str::trim).map(str::to_ascii_lowercase).as_deref(),
-        Some("1" | "true" | "yes" | "on")
-    )
-}
-
-fn parse_smoke_exit_after_frames(value: Option<&str>) -> Option<u32> {
-    let value = value?.trim();
+fn parse_smoke_exit_after_frames_value(value: &str) -> Result<u32> {
+    let value = value.trim();
     if value.is_empty() {
-        return None;
+        bail!("{SMOKE_EXIT_AFTER_FRAMES_ARG} requires a frame count");
     }
 
-    value.parse::<u32>().ok().map(|frames| frames.max(1))
+    let frames = value.parse::<u32>().with_context(|| {
+        format!("invalid frame count for {SMOKE_EXIT_AFTER_FRAMES_ARG}: {value}")
+    })?;
+    Ok(frames.max(1))
 }
 
 fn select_snapshot_rows(
@@ -814,68 +824,41 @@ mod tests {
     }
 
     #[test]
-    fn smoke_exit_after_frames_parses_positive_counts() {
-        assert_eq!(parse_smoke_exit_after_frames(Some("3")), Some(3));
-        assert_eq!(parse_smoke_exit_after_frames(Some(" 12 ")), Some(12));
+    fn app_options_parse_flags() {
+        let options = AppOptions::parse_args([
+            "--boot-play-sample",
+            "--autoplay-on-start",
+            "--smoke-exit-after-frames",
+            "12",
+            "--smoke-exit-on-result",
+        ])
+        .unwrap();
+
+        assert!(options.boot_play_sample);
+        assert!(options.autoplay_on_start);
+        assert_eq!(options.smoke_exit_after_frames, Some(12));
+        assert!(options.smoke_exit_on_result);
     }
 
     #[test]
-    fn smoke_exit_after_frames_ignores_empty_and_invalid_values() {
-        assert_eq!(parse_smoke_exit_after_frames(None), None);
-        assert_eq!(parse_smoke_exit_after_frames(Some("")), None);
-        assert_eq!(parse_smoke_exit_after_frames(Some("abc")), None);
+    fn app_options_parse_equals_form() {
+        let options = AppOptions::parse_args(["--smoke-exit-after-frames=3"]).unwrap();
+
+        assert_eq!(options.smoke_exit_after_frames, Some(3));
     }
 
     #[test]
-    fn smoke_exit_after_frames_clamps_zero_to_one_redraw() {
-        assert_eq!(parse_smoke_exit_after_frames(Some("0")), Some(1));
+    fn app_options_clamps_zero_frame_count_to_one() {
+        let options = AppOptions::parse_args(["--smoke-exit-after-frames", "0"]).unwrap();
+
+        assert_eq!(options.smoke_exit_after_frames, Some(1));
     }
 
     #[test]
-    fn smoke_exit_on_result_env_accepts_truthy_values() {
-        assert!(parse_smoke_exit_on_result(Some("1")));
-        assert!(parse_smoke_exit_on_result(Some(" true ")));
-        assert!(parse_smoke_exit_on_result(Some("yes")));
-        assert!(parse_smoke_exit_on_result(Some("on")));
-    }
-
-    #[test]
-    fn smoke_exit_on_result_env_rejects_empty_and_other_values() {
-        assert!(!parse_smoke_exit_on_result(None));
-        assert!(!parse_smoke_exit_on_result(Some("")));
-        assert!(!parse_smoke_exit_on_result(Some("0")));
-        assert!(!parse_smoke_exit_on_result(Some("result")));
-    }
-
-    #[test]
-    fn boot_play_sample_env_accepts_explicit_truthy_values() {
-        assert!(parse_boot_play_sample(Some("1")));
-        assert!(parse_boot_play_sample(Some(" true ")));
-        assert!(parse_boot_play_sample(Some("sample")));
-    }
-
-    #[test]
-    fn boot_play_sample_env_rejects_empty_and_other_values() {
-        assert!(!parse_boot_play_sample(None));
-        assert!(!parse_boot_play_sample(Some("")));
-        assert!(!parse_boot_play_sample(Some("0")));
-        assert!(!parse_boot_play_sample(Some("false")));
-    }
-
-    #[test]
-    fn autoplay_on_start_env_accepts_truthy_values() {
-        assert!(parse_autoplay_on_start(Some("1")));
-        assert!(parse_autoplay_on_start(Some(" true ")));
-        assert!(parse_autoplay_on_start(Some("yes")));
-        assert!(parse_autoplay_on_start(Some("on")));
-    }
-
-    #[test]
-    fn autoplay_on_start_env_rejects_empty_and_other_values() {
-        assert!(!parse_autoplay_on_start(None));
-        assert!(!parse_autoplay_on_start(Some("")));
-        assert!(!parse_autoplay_on_start(Some("0")));
-        assert!(!parse_autoplay_on_start(Some("sample")));
+    fn app_options_reject_invalid_arguments() {
+        assert!(AppOptions::parse_args(["--unknown"]).is_err());
+        assert!(AppOptions::parse_args(["--smoke-exit-after-frames"]).is_err());
+        assert!(AppOptions::parse_args(["--smoke-exit-after-frames", "abc"]).is_err());
     }
 
     #[test]
