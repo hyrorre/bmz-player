@@ -1,3 +1,4 @@
+use std::env;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -19,6 +20,8 @@ use crate::screens::play_start::{PlayStartOptions, StartedWinitPlaySession};
 use crate::screens::result_model::ResultSummary;
 use crate::screens::select_model::{SelectChartRow, load_select_chart_rows};
 
+const SMOKE_EXIT_AFTER_FRAMES_ENV: &str = "BMZ_SMOKE_EXIT_AFTER_FRAMES";
+
 pub fn run() -> Result<()> {
     let boot = bootstrap::bootstrap()?;
     let event_loop = EventLoop::new().context("failed to create event loop")?;
@@ -39,6 +42,8 @@ struct WinitApp {
     renderer: Renderer,
     dev_scene: Option<AppSceneSnapshot>,
     last_scene_kind: Option<AppSceneKind>,
+    smoke_exit_after_frames: Option<u32>,
+    rendered_frames: u32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -70,6 +75,8 @@ impl WinitApp {
             renderer: Renderer::default(),
             dev_scene: None,
             last_scene_kind: None,
+            smoke_exit_after_frames: smoke_exit_after_frames_from_env(),
+            rendered_frames: 0,
         })
     }
 
@@ -286,6 +293,21 @@ impl WinitApp {
         }
     }
 
+    fn handle_smoke_exit_after_redraw(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(exit_after_frames) = self.smoke_exit_after_frames else {
+            return;
+        };
+
+        self.rendered_frames = self.rendered_frames.saturating_add(1);
+        if self.rendered_frames >= exit_after_frames {
+            tracing::info!(
+                frames = self.rendered_frames,
+                "smoke exit frame count reached; leaving event loop"
+            );
+            event_loop.exit();
+        }
+    }
+
     fn update_window_title_for_scene(&mut self, scene_kind: AppSceneKind) {
         if self.last_scene_kind == Some(scene_kind) {
             return;
@@ -332,6 +354,7 @@ impl ApplicationHandler for WinitApp {
             WindowEvent::RedrawRequested => {
                 self.render_current_scene();
                 self.advance_active_play();
+                self.handle_smoke_exit_after_redraw(event_loop);
             }
             _ => {}
         }
@@ -354,6 +377,24 @@ fn now_unix_seconds() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs() as i64)
         .unwrap_or(0)
+}
+
+fn smoke_exit_after_frames_from_env() -> Option<u32> {
+    let value = env::var(SMOKE_EXIT_AFTER_FRAMES_ENV).ok();
+    let frames = parse_smoke_exit_after_frames(value.as_deref());
+    if let Some(frames) = frames {
+        tracing::info!(env = SMOKE_EXIT_AFTER_FRAMES_ENV, frames, "smoke auto-exit enabled");
+    }
+    frames
+}
+
+fn parse_smoke_exit_after_frames(value: Option<&str>) -> Option<u32> {
+    let value = value?.trim();
+    if value.is_empty() {
+        return None;
+    }
+
+    value.parse::<u32>().ok().map(|frames| frames.max(1))
 }
 
 fn should_start_play_from_select(
@@ -532,5 +573,23 @@ mod tests {
         assert_eq!(window_title_for_scene(AppSceneKind::Select), "bmz-player - Select");
         assert_eq!(window_title_for_scene(AppSceneKind::Play), "bmz-player - Play");
         assert_eq!(window_title_for_scene(AppSceneKind::Result), "bmz-player - Result");
+    }
+
+    #[test]
+    fn smoke_exit_after_frames_parses_positive_counts() {
+        assert_eq!(parse_smoke_exit_after_frames(Some("3")), Some(3));
+        assert_eq!(parse_smoke_exit_after_frames(Some(" 12 ")), Some(12));
+    }
+
+    #[test]
+    fn smoke_exit_after_frames_ignores_empty_and_invalid_values() {
+        assert_eq!(parse_smoke_exit_after_frames(None), None);
+        assert_eq!(parse_smoke_exit_after_frames(Some("")), None);
+        assert_eq!(parse_smoke_exit_after_frames(Some("abc")), None);
+    }
+
+    #[test]
+    fn smoke_exit_after_frames_clamps_zero_to_one_redraw() {
+        assert_eq!(parse_smoke_exit_after_frames(Some("0")), Some(1));
     }
 }
