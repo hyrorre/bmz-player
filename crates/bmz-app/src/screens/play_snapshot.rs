@@ -4,7 +4,7 @@ use bmz_core::time::TimeUs;
 use bmz_gameplay::judge::model::JudgementEvent;
 use bmz_gameplay::session::GameSession;
 use bmz_render::snapshot::{
-    DisplayInput, DisplayJudgement, RenderSnapshot, VisibleBarLine, VisibleNote,
+    DisplayInput, DisplayJudgeCounts, DisplayJudgement, RenderSnapshot, VisibleBarLine, VisibleNote,
 };
 
 pub const DEFAULT_LOOKAHEAD_US: i64 = 2_000_000;
@@ -22,6 +22,7 @@ pub fn build_render_snapshot(
         ex_score: session.score.ex_score(),
         total_notes: session.chart.total_notes,
         past_notes: session.score.past_notes,
+        judge_counts: display_judge_counts(session),
         gauge: session.gauge.current().value,
         visible_notes: std::array::from_fn(|_| Vec::new()),
         recent_inputs: session
@@ -59,6 +60,18 @@ fn note_y(note_time: TimeUs, render_now: TimeUs) -> Option<f32> {
 
     let progress = delta as f32 / DEFAULT_LOOKAHEAD_US as f32;
     Some(progress * DEFAULT_LANE_HEIGHT)
+}
+
+fn display_judge_counts(session: &GameSession) -> DisplayJudgeCounts {
+    let judges = &session.score.judges;
+    DisplayJudgeCounts {
+        pgreat: judges.fast_pgreat + judges.slow_pgreat,
+        great: judges.fast_great + judges.slow_great,
+        good: judges.fast_good + judges.slow_good,
+        bad: judges.fast_bad + judges.slow_bad,
+        poor: judges.fast_poor + judges.slow_poor,
+        empty_poor: judges.fast_empty_poor + judges.slow_empty_poor,
+    }
 }
 
 fn display_judgement(event: &JudgementEvent) -> DisplayJudgement {
@@ -165,6 +178,34 @@ mod tests {
         assert_eq!(snapshot.recent_inputs.len(), 1);
         assert_eq!(snapshot.recent_inputs[0].lane, Lane::Key3);
         assert_eq!(snapshot.recent_inputs[0].time, TimeUs(42_000));
+    }
+
+    #[test]
+    fn build_render_snapshot_sums_judge_counts() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+        session.score.apply(&JudgementEvent {
+            note_id: Some(NoteId(1)),
+            lane: Lane::Key1,
+            judge: Judge::PGreat,
+            side: TimingSide::Fast,
+            delta: TimeUs(-1_000),
+            time: TimeUs(1_000),
+        });
+        session.score.apply(&JudgementEvent {
+            note_id: None,
+            lane: Lane::Key1,
+            judge: Judge::EmptyPoor,
+            side: TimingSide::Slow,
+            delta: TimeUs(40_000),
+            time: TimeUs(2_000),
+        });
+
+        let snapshot = build_render_snapshot(&session, TimeUs(0), &[]);
+
+        assert_eq!(snapshot.judge_counts.pgreat, 1);
+        assert_eq!(snapshot.judge_counts.empty_poor, 1);
     }
 
     fn chart() -> PlayableChart {

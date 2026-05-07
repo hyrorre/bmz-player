@@ -410,6 +410,7 @@ fn push_combo_panel(commands: &mut Vec<DrawCommand>, combo: u32) {
 
 fn push_play_text(text: &TextRenderer, commands: &mut Vec<DrawCommand>, snapshot: &RenderSnapshot) {
     push_play_status_text(text, commands, snapshot);
+    push_judge_count_text(text, commands, snapshot);
     if snapshot.combo > 0 {
         text.push_text(
             commands,
@@ -437,6 +438,34 @@ fn push_play_text(text: &TextRenderer, commands: &mut Vec<DrawCommand>, snapshot
                 cell: 0.0045,
                 color: Color::rgb(0.72, 0.82, 0.86),
             },
+        );
+    }
+}
+
+fn push_judge_count_text(
+    text: &TextRenderer,
+    commands: &mut Vec<DrawCommand>,
+    snapshot: &RenderSnapshot,
+) {
+    commands.push(DrawCommand::Rect {
+        rect: Rect { x: 0.05, y: 0.36, width: 0.11, height: 0.235 },
+        color: Color::rgb(0.032, 0.036, 0.04),
+    });
+
+    let rows = [
+        ("PG", snapshot.judge_counts.pgreat, Color::rgb(0.66, 0.92, 0.98)),
+        ("GR", snapshot.judge_counts.great, Color::rgb(0.66, 0.92, 0.98)),
+        ("GD", snapshot.judge_counts.good, Color::rgb(0.84, 0.88, 0.48)),
+        ("BD", snapshot.judge_counts.bad, Color::rgb(0.94, 0.56, 0.36)),
+        ("PR", snapshot.judge_counts.poor, Color::rgb(0.96, 0.4, 0.44)),
+        ("EP", snapshot.judge_counts.empty_poor, Color::rgb(0.96, 0.4, 0.44)),
+    ];
+
+    for (index, (label, count, color)) in rows.into_iter().enumerate() {
+        text.push_text(
+            commands,
+            &format!("{label} {count}"),
+            BitmapTextStyle { x: 0.065, y: 0.382 + index as f32 * 0.032, cell: 0.004, color },
         );
     }
 }
@@ -715,7 +744,8 @@ mod tests {
     use bmz_core::time::TimeUs;
 
     use crate::snapshot::{
-        DisplayInput, DisplayJudgement, RenderSnapshot, VisibleBarLine, VisibleNote,
+        DisplayInput, DisplayJudgeCounts, DisplayJudgement, RenderSnapshot, VisibleBarLine,
+        VisibleNote,
     };
 
     use super::*;
@@ -824,7 +854,37 @@ mod tests {
         )));
         assert!(plan.commands.iter().any(|command| matches!(
             command,
+            DrawCommand::Rect { rect, color } if rect.x == 0.05 && rect.y == 0.36 && *color == Color::rgb(0.032, 0.036, 0.04)
+        )));
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
             DrawCommand::Rect { color, .. } if *color == receptor_color(Lane::Key2)
+        )));
+    }
+
+    #[test]
+    fn play_plan_includes_judge_count_text() {
+        let snapshot = RenderSnapshot {
+            judge_counts: DisplayJudgeCounts {
+                pgreat: 2,
+                great: 1,
+                good: 1,
+                bad: 1,
+                poor: 1,
+                empty_poor: 3,
+            },
+            ..Default::default()
+        };
+
+        let plan = DrawPlan::from_scene(&AppSceneSnapshot::Play(snapshot));
+
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Rect { color, .. } if *color == Color::rgb(0.66, 0.92, 0.98)
+        )));
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Rect { color, .. } if *color == Color::rgb(0.96, 0.4, 0.44)
         )));
     }
 

@@ -9,11 +9,22 @@ pub struct RenderSnapshot {
     pub ex_score: u32,
     pub total_notes: u32,
     pub past_notes: u32,
+    pub judge_counts: DisplayJudgeCounts,
     pub gauge: f32,
     pub visible_notes: [Vec<VisibleNote>; LANE_COUNT],
     pub recent_inputs: Vec<DisplayInput>,
     pub recent_judgements: Vec<DisplayJudgement>,
     pub bar_lines: Vec<VisibleBarLine>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DisplayJudgeCounts {
+    pub pgreat: u32,
+    pub great: u32,
+    pub good: u32,
+    pub bad: u32,
+    pub poor: u32,
+    pub empty_poor: u32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
