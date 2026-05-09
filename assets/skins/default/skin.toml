@@ -62,7 +62,7 @@ scale = "stretch"
 [play.gauge_frame]
 texture = 8
 uv = { x = 0.0, y = 0.0, width = 1.0, height = 1.0 }
-scale = "stretch"
+scale = "nine_slice"
 border = { left = 0.18, right = 0.18, top = 0.06, bottom = 0.06 }
 
 [play.gauge_fill]
@@ -73,11 +73,11 @@ scale = "stretch"
 [play.combo_panel]
 texture = 10
 uv = { x = 0.0, y = 0.0, width = 1.0, height = 1.0 }
-scale = "stretch"
+scale = "nine_slice"
 border = { left = 0.08, right = 0.08, top = 0.18, bottom = 0.18 }
 
 [play.combo_panel_inactive]
 texture = 11
 uv = { x = 0.0, y = 0.0, width = 1.0, height = 1.0 }
-scale = "stretch"
+scale = "nine_slice"
 border = { left = 0.08, right = 0.08, top = 0.18, bottom = 0.18 }

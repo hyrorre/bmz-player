@@ -480,6 +480,8 @@ fn push_judge_line(skin_manifest: &SkinManifest, commands: &mut Vec<DrawCommand>
             uv: image.uv,
             tint: skin_image_tint(Lane::Key1),
             blend: BlendMode::Normal,
+            scale: image.scale,
+            border: image.border,
         }],
     );
 }
@@ -521,6 +523,8 @@ fn push_receptors(
                 uv: receptor.uv,
                 tint: skin_image_tint(lane),
                 blend: BlendMode::Normal,
+                scale: receptor.scale,
+                border: receptor.border,
             }],
         );
     }
@@ -540,6 +544,8 @@ fn push_gauge(skin_manifest: &SkinManifest, commands: &mut Vec<DrawCommand>, gau
                 uv: frame_image.uv,
                 tint: Color::rgb(1.0, 1.0, 1.0),
                 blend: BlendMode::Normal,
+                scale: frame_image.scale,
+                border: frame_image.border,
             },
             SkinRenderItem::Image {
                 texture: SkinTextureId(fill_image.texture),
@@ -552,6 +558,8 @@ fn push_gauge(skin_manifest: &SkinManifest, commands: &mut Vec<DrawCommand>, gau
                 uv: fill_image.uv,
                 tint: gauge_color(gauge),
                 blend: BlendMode::Normal,
+                scale: fill_image.scale,
+                border: fill_image.border,
             },
         ],
     );
@@ -568,6 +576,8 @@ fn push_combo_panel(skin_manifest: &SkinManifest, commands: &mut Vec<DrawCommand
             uv: image.uv,
             tint: Color::rgb(1.0, 1.0, 1.0),
             blend: BlendMode::Normal,
+            scale: image.scale,
+            border: image.border,
         }],
     );
 }
@@ -631,6 +641,8 @@ fn push_default_note_skin(
             uv: note.uv,
             tint: skin_image_tint(lane),
             blend: BlendMode::Normal,
+            scale: note.scale,
+            border: note.border,
         }],
     );
 }
@@ -1253,11 +1265,19 @@ mod tests {
         )));
         assert!(plan.commands.iter().any(|command| matches!(
             command,
-            DrawCommand::Image { rect, texture, tint, .. }
-                if *texture == DEFAULT_COMBO_PANEL_TEXTURE
-                    && rect.width >= 0.2
-                    && *tint == Color::rgb(1.0, 1.0, 1.0)
+            DrawCommand::Image { texture, tint, .. }
+                if *texture == DEFAULT_COMBO_PANEL_TEXTURE && *tint == Color::rgb(1.0, 1.0, 1.0)
         )));
+        assert_eq!(
+            plan.commands
+                .iter()
+                .filter(|command| matches!(
+                    command,
+                    DrawCommand::Image { texture, .. } if *texture == DEFAULT_COMBO_PANEL_TEXTURE
+                ))
+                .count(),
+            9
+        );
         assert!(plan.commands.iter().any(|command| matches!(
             command,
             DrawCommand::Rect { rect, color } if rect.x == 0.05 && rect.width == 0.11 && *color == Color::rgb(0.035, 0.04, 0.044)

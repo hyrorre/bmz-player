@@ -182,9 +182,26 @@ pub struct Keyframe {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SkinRenderItem {
-    Image { texture: SkinTextureId, rect: Rect, uv: TextureRegion, tint: Color, blend: BlendMode },
-    Text { origin: Point, text: String, style: TextStyle, blend: BlendMode },
-    Rect { rect: Rect, color: Color, blend: BlendMode },
+    Image {
+        texture: SkinTextureId,
+        rect: Rect,
+        uv: TextureRegion,
+        tint: Color,
+        blend: BlendMode,
+        scale: SkinImageScale,
+        border: Option<SkinImageBorder>,
+    },
+    Text {
+        origin: Point,
+        text: String,
+        style: TextStyle,
+        blend: BlendMode,
+    },
+    Rect {
+        rect: Rect,
+        color: Color,
+        blend: BlendMode,
+    },
 }
 
 impl SkinObject {
@@ -207,6 +224,8 @@ impl SkinObject {
                         uv: *uv,
                         tint: Color::rgba(1.0, 1.0, 1.0, resolved.alpha),
                         blend: resolved.blend,
+                        scale: SkinImageScale::Stretch,
+                        border: None,
                     },
                     SkinSource::Text { slot, style } => SkinRenderItem::Text {
                         origin: Point { x: resolved.rect.x, y: resolved.rect.y },
@@ -360,12 +379,100 @@ pub fn append_skin_render_items(commands: &mut Vec<DrawCommand>, items: &[SkinRe
                     });
                 }
             }
-            SkinRenderItem::Image { texture, rect, uv, tint, .. } => {
+            SkinRenderItem::Image { texture, rect, uv, tint, scale, border, .. } => {
+                append_skin_image_command(commands, *texture, *rect, *uv, *tint, *scale, *border);
+            }
+        }
+    }
+}
+
+fn append_skin_image_command(
+    commands: &mut Vec<DrawCommand>,
+    texture: SkinTextureId,
+    rect: Rect,
+    uv: TextureRegion,
+    tint: Color,
+    scale: SkinImageScale,
+    border: Option<SkinImageBorder>,
+) {
+    match (scale, border) {
+        (SkinImageScale::NineSlice, Some(border)) => {
+            append_nine_slice_image_commands(commands, texture, rect, uv, tint, border);
+        }
+        _ => commands.push(DrawCommand::Image {
+            rect,
+            uv: UvRect { x: uv.x, y: uv.y, width: uv.width, height: uv.height },
+            texture: TextureId(texture.0),
+            tint,
+        }),
+    }
+}
+
+fn append_nine_slice_image_commands(
+    commands: &mut Vec<DrawCommand>,
+    texture: SkinTextureId,
+    rect: Rect,
+    uv: TextureRegion,
+    tint: Color,
+    border: SkinImageBorder,
+) {
+    if rect.width <= 0.0 || rect.height <= 0.0 || uv.width <= 0.0 || uv.height <= 0.0 {
+        return;
+    }
+
+    let left = border.left.clamp(0.0, 0.5);
+    let right = border.right.clamp(0.0, 0.5);
+    let top = border.top.clamp(0.0, 0.5);
+    let bottom = border.bottom.clamp(0.0, 0.5);
+    if left + right >= 1.0 || top + bottom >= 1.0 {
+        commands.push(DrawCommand::Image {
+            rect,
+            uv: UvRect { x: uv.x, y: uv.y, width: uv.width, height: uv.height },
+            texture: TextureId(texture.0),
+            tint,
+        });
+        return;
+    }
+
+    let xs = [
+        rect.x,
+        rect.x + rect.width * left,
+        rect.x + rect.width * (1.0 - right),
+        rect.x + rect.width,
+    ];
+    let ys = [
+        rect.y,
+        rect.y + rect.height * top,
+        rect.y + rect.height * (1.0 - bottom),
+        rect.y + rect.height,
+    ];
+    let us = [uv.x, uv.x + uv.width * left, uv.x + uv.width * (1.0 - right), uv.x + uv.width];
+    let vs = [uv.y, uv.y + uv.height * top, uv.y + uv.height * (1.0 - bottom), uv.y + uv.height];
+
+    for row in 0..3 {
+        for column in 0..3 {
+            let piece = Rect {
+                x: xs[column],
+                y: ys[row],
+                width: xs[column + 1] - xs[column],
+                height: ys[row + 1] - ys[row],
+            };
+            let piece_uv = UvRect {
+                x: us[column],
+                y: vs[row],
+                width: us[column + 1] - us[column],
+                height: vs[row + 1] - vs[row],
+            };
+            if piece.width > 0.0
+                && piece.height > 0.0
+                && piece_uv.width > 0.0
+                && piece_uv.height > 0.0
+            {
                 commands.push(DrawCommand::Image {
-                    rect: *rect,
-                    uv: UvRect { x: uv.x, y: uv.y, width: uv.width, height: uv.height },
+                    rect: piece,
+                    uv: piece_uv,
                     texture: TextureId(texture.0),
-                    tint: *tint,
+                    tint,
                 });
             }
         }
@@ -556,12 +663,57 @@ mod tests {
                     uv: TextureRegion { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
                     tint: Color::rgb(1.0, 1.0, 1.0),
                     blend: BlendMode::Normal,
+                    scale: SkinImageScale::Stretch,
+                    border: None,
                 },
             ],
         );
 
         assert_eq!(commands.len(), 2);
         assert!(matches!(commands[1], DrawCommand::Image { texture: TextureId(1), .. }));
+    }
+
+    #[test]
+    fn append_skin_render_items_expands_nine_slice_images() {
+        let mut commands = Vec::new();
+        append_skin_render_items(
+            &mut commands,
+            &[SkinRenderItem::Image {
+                texture: SkinTextureId(10),
+                rect: Rect { x: 0.1, y: 0.2, width: 0.6, height: 0.3 },
+                uv: TextureRegion { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+                tint: Color::rgb(1.0, 1.0, 1.0),
+                blend: BlendMode::Normal,
+                scale: SkinImageScale::NineSlice,
+                border: Some(SkinImageBorder { left: 0.1, right: 0.2, top: 0.25, bottom: 0.25 }),
+            }],
+        );
+
+        assert_eq!(commands.len(), 9);
+        assert!(matches!(
+            commands[0],
+            DrawCommand::Image {
+                rect: Rect { x: 0.1, y: 0.2, width, height },
+                uv: UvRect { x: 0.0, y: 0.0, width: uv_width, height: uv_height },
+                texture: TextureId(10),
+                ..
+            } if approx_eq(width, 0.06)
+                && approx_eq(height, 0.075)
+                && approx_eq(uv_width, 0.1)
+                && approx_eq(uv_height, 0.25)
+        ));
+        assert!(matches!(
+            commands[4],
+            DrawCommand::Image {
+                rect: Rect { width, height, .. },
+                uv: UvRect { width: uv_width, height: uv_height, .. },
+                texture: TextureId(10),
+                ..
+            } if approx_eq(width, 0.42)
+                && approx_eq(height, 0.15)
+                && approx_eq(uv_width, 0.7)
+                && approx_eq(uv_height, 0.5)
+        ));
     }
 
     #[test]
@@ -715,12 +867,18 @@ mod tests {
         assert_eq!(judge_line.texture, 7);
         assert_eq!(judge_line.uv, TextureRegion::default());
         assert_eq!(gauge_frame.texture, 8);
-        assert_eq!(gauge_frame.scale, SkinImageScale::Stretch);
+        assert_eq!(gauge_frame.scale, SkinImageScale::NineSlice);
         assert!(gauge_frame.border.is_some());
         assert_eq!(gauge_fill.texture, 9);
         assert_eq!(combo_panel.texture, 10);
+        assert_eq!(combo_panel.scale, SkinImageScale::NineSlice);
         assert!(combo_panel.border.is_some());
         assert_eq!(combo_panel_inactive.texture, 11);
+        assert_eq!(combo_panel_inactive.scale, SkinImageScale::NineSlice);
         assert!(combo_panel_inactive.border.is_some());
+    }
+
+    fn approx_eq(actual: f32, expected: f32) -> bool {
+        (actual - expected).abs() < 0.0001
     }
 }
