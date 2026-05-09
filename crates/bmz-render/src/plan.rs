@@ -297,6 +297,7 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
     let text = TextRenderer;
     let skin_manifest = skin.manifest();
     let board = Rect { x: 0.18, y: 0.05, width: 0.64, height: 0.9 };
+    append_skin_render_items(&mut commands, &skin.static_document_items());
     commands.push(DrawCommand::Rect { rect: board, color: Color::rgb(0.025, 0.025, 0.028) });
     commands.push(DrawCommand::Rect {
         rect: Rect { x: board.x - 0.006, y: board.y, width: 0.006, height: board.height },

@@ -498,22 +498,61 @@ pub struct SkinAnimationDef {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkinContext {
     manifest: SkinManifest,
+    document: Option<SkinDocument>,
+    document_sources: HashMap<String, SkinDocumentTexture>,
 }
 
 impl Default for SkinContext {
     fn default() -> Self {
-        Self { manifest: default_skin_manifest() }
+        Self {
+            manifest: default_skin_manifest(),
+            document: None,
+            document_sources: HashMap::new(),
+        }
     }
 }
 
 impl SkinContext {
     pub fn from_manifest(manifest: SkinManifest) -> Self {
-        Self { manifest }
+        Self { manifest, document: None, document_sources: HashMap::new() }
+    }
+
+    pub fn from_manifest_and_document(
+        manifest: SkinManifest,
+        document: SkinDocument,
+        document_sources: impl IntoIterator<Item = SkinDocumentTexture>,
+    ) -> Self {
+        Self {
+            manifest,
+            document: Some(document),
+            document_sources: document_sources
+                .into_iter()
+                .map(|source| (source.source_id.clone(), source))
+                .collect(),
+        }
     }
 
     pub fn manifest(&self) -> &SkinManifest {
         &self.manifest
     }
+
+    pub fn document(&self) -> Option<&SkinDocument> {
+        self.document.as_ref()
+    }
+
+    pub fn static_document_items(&self) -> Vec<SkinRenderItem> {
+        let Some(document) = &self.document else {
+            return Vec::new();
+        };
+        document.static_image_render_items(&self.document_sources)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SkinDocumentTexture {
+    pub source_id: String,
+    pub texture: SkinTextureId,
+    pub source_size: SkinImageSize,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -820,6 +859,51 @@ impl SkinDocument {
 
     pub fn image_map(&self) -> HashMap<&str, &SkinImageDef> {
         self.image.iter().map(|image| (image.id.as_str(), image)).collect()
+    }
+
+    pub fn static_image_render_items(
+        &self,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Vec<SkinRenderItem> {
+        let images = self.image_map();
+        self.destination
+            .iter()
+            .filter(|destination| destination.timer.is_none())
+            .filter(|destination| destination.op.is_empty())
+            .filter(|destination| destination.draw.is_empty())
+            .filter_map(|destination| {
+                let image = images.get(destination.id.as_str())?;
+                let source = sources.get(&image.src)?;
+                let frame = resolve_destination_first_frame(destination)?;
+                let source_width = source.source_size.width.max(1.0);
+                let source_height = source.source_size.height.max(1.0);
+                Some(SkinRenderItem::Image {
+                    texture: source.texture,
+                    rect: Rect {
+                        x: frame.x as f32 / self.w.max(1) as f32,
+                        y: frame.y as f32 / self.h.max(1) as f32,
+                        width: frame.w as f32 / self.w.max(1) as f32,
+                        height: frame.h as f32 / self.h.max(1) as f32,
+                    },
+                    uv: TextureRegion {
+                        x: image.x as f32 / source_width,
+                        y: image.y as f32 / source_height,
+                        width: image.w as f32 / source_width,
+                        height: image.h as f32 / source_height,
+                    },
+                    tint: Color::rgba(
+                        frame.r as f32 / 255.0,
+                        frame.g as f32 / 255.0,
+                        frame.b as f32 / 255.0,
+                        frame.a as f32 / 255.0,
+                    ),
+                    blend: if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal },
+                    scale: SkinImageScale::Stretch,
+                    border: None,
+                    source_size: Some(source.source_size),
+                })
+            })
+            .collect()
     }
 }
 
@@ -1410,6 +1494,66 @@ fn lookup_number(values: &[(NumberSlot, i64)], slot: NumberSlot) -> i64 {
         .find(|(candidate, _)| *candidate == slot)
         .map(|(_, value)| *value)
         .unwrap_or_default()
+}
+
+fn resolve_destination_first_frame(destination: &SkinDestinationDef) -> Option<ResolvedSkinFrame> {
+    let mut frame = ResolvedSkinFrame::default();
+    for animation in &destination.dst {
+        apply_skin_animation(&mut frame, animation);
+        if frame.time == 0 {
+            return Some(frame);
+        }
+    }
+    destination.dst.first().map(|_| frame)
+}
+
+fn apply_skin_animation(frame: &mut ResolvedSkinFrame, animation: &SkinAnimationDef) {
+    if let Some(time) = animation.time {
+        frame.time = time;
+    }
+    if let Some(x) = animation.x {
+        frame.x = x;
+    }
+    if let Some(y) = animation.y {
+        frame.y = y;
+    }
+    if let Some(w) = animation.w {
+        frame.w = w;
+    }
+    if let Some(h) = animation.h {
+        frame.h = h;
+    }
+    if let Some(a) = animation.a {
+        frame.a = a;
+    }
+    if let Some(r) = animation.r {
+        frame.r = r;
+    }
+    if let Some(g) = animation.g {
+        frame.g = g;
+    }
+    if let Some(b) = animation.b {
+        frame.b = b;
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ResolvedSkinFrame {
+    time: i32,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    a: i32,
+    r: i32,
+    g: i32,
+    b: i32,
+}
+
+impl Default for ResolvedSkinFrame {
+    fn default() -> Self {
+        Self { time: 0, x: 0, y: 0, w: 0, h: 0, a: 255, r: 255, g: 255, b: 255 }
+    }
 }
 
 fn default_skin_canvas_width() -> u32 {
@@ -2038,6 +2182,60 @@ mod tests {
         assert_eq!(document.destination.len(), 1);
         assert_eq!(document.destination[0].id, "included");
         assert_eq!(document.destination[0].dst[0].x, Some(1));
+    }
+
+    #[test]
+    fn skin_document_resolves_static_image_destinations() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 1280,
+                "h": 720,
+                "source": [{ "id": 1, "path": "system.png" }],
+                "image": [{ "id": "panel", "src": 1, "x": 16, "y": 32, "w": 64, "h": 128 }],
+                "destination": [
+                    { "id": "panel", "blend": 2, "dst": [
+                        { "x": 128, "y": 72, "w": 256, "h": 144, "a": 128, "r": 64 }
+                    ]},
+                    { "id": "panel", "timer": 1, "dst": [{ "x": 0, "y": 0, "w": 1, "h": 1 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "1".to_string(),
+            SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 256.0, height: 512.0 },
+            },
+        )]);
+
+        let items = document.static_image_render_items(&sources);
+
+        assert_eq!(items.len(), 1);
+        assert!(matches!(
+            items[0],
+            SkinRenderItem::Image {
+                texture: SkinTextureId(42),
+                rect: Rect { x, y, width, height },
+                uv: TextureRegion { x: u, y: v, width: uv_width, height: uv_height },
+                tint: Color { r, a, .. },
+                blend: BlendMode::Add,
+                ..
+            } if approx_eq(x, 0.1)
+                && approx_eq(y, 0.1)
+                && approx_eq(width, 0.2)
+                && approx_eq(height, 0.2)
+                && approx_eq(u, 16.0 / 256.0)
+                && approx_eq(v, 32.0 / 512.0)
+                && approx_eq(uv_width, 64.0 / 256.0)
+                && approx_eq(uv_height, 128.0 / 512.0)
+                && approx_eq(r, 64.0 / 255.0)
+                && approx_eq(a, 128.0 / 255.0)
+        ));
     }
 
     #[test]
