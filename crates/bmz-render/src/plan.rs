@@ -5,7 +5,7 @@ use crate::scene::{AppSceneSnapshot, SelectRowSnapshot};
 use crate::skin::{
     Animation, BlendMode, NumberSlot, SkinDefinition, SkinObject, SkinObjectId, SkinPhase,
     SkinPlacement, SkinRenderContext, SkinRenderItem, SkinSource, SkinTextureId, TextSlot,
-    TextureRegion, append_skin_render_items,
+    append_skin_render_items, default_skin_manifest,
 };
 use crate::snapshot::{DisplayJudgeCounts, RenderSnapshot};
 use crate::text::{BitmapTextStyle, TextRenderer};
@@ -563,12 +563,13 @@ fn push_default_play_skin(commands: &mut Vec<DrawCommand>, snapshot: &RenderSnap
 }
 
 fn push_default_note_skin(commands: &mut Vec<DrawCommand>, lane: Lane, rect: Rect) {
+    let note = default_skin_manifest().play_note_image();
     append_skin_render_items(
         commands,
         &[SkinRenderItem::Image {
-            texture: SkinTextureId(DEFAULT_NOTE_TEXTURE.0),
+            texture: SkinTextureId(note.texture),
             rect,
-            uv: TextureRegion { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+            uv: note.uv,
             tint: note_color(lane),
             blend: BlendMode::Normal,
         }],

@@ -1,3 +1,7 @@
 [[textures]]
 id = 1
 path = "note.png"
+
+[play.note]
+texture = 1
+uv = { x = 0.0, y = 0.0, width = 1.0, height = 1.0 }

@@ -23,16 +23,30 @@ pub struct SkinDefinition {
     pub objects: Vec<SkinObject>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct SkinManifest {
     #[serde(default)]
     pub textures: Vec<SkinTextureManifest>,
+    #[serde(default)]
+    pub play: SkinPlayManifest,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct SkinTextureManifest {
     pub id: u32,
     pub path: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct SkinPlayManifest {
+    pub note: Option<SkinImageManifest>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+pub struct SkinImageManifest {
+    pub texture: u32,
+    #[serde(default)]
+    pub uv: TextureRegion,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,12 +71,18 @@ pub enum SkinSource {
     Rect { color: Color },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
 pub struct TextureRegion {
     pub x: f32,
     pub y: f32,
     pub width: f32,
     pub height: f32,
+}
+
+impl Default for TextureRegion {
+    fn default() -> Self {
+        Self { x: 0.0, y: 0.0, width: 1.0, height: 1.0 }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -208,6 +228,18 @@ impl SkinManifest {
             })
             .collect()
     }
+
+    pub fn play_note_image(&self) -> SkinImageManifest {
+        self.play.note.unwrap_or(SkinImageManifest {
+            texture: crate::plan::DEFAULT_NOTE_TEXTURE.0,
+            uv: TextureRegion::default(),
+        })
+    }
+}
+
+pub fn default_skin_manifest() -> SkinManifest {
+    toml::from_str(include_str!("../../../assets/skins/default/skin.toml"))
+        .expect("bundled default skin manifest must parse")
 }
 
 pub fn append_skin_render_items(commands: &mut Vec<DrawCommand>, items: &[SkinRenderItem]) {
@@ -436,6 +468,9 @@ mod tests {
             [[textures]]
             id = 1
             path = "note.png"
+
+            [play.note]
+            texture = 1
             "#,
         )
         .unwrap();
@@ -444,5 +479,15 @@ mod tests {
 
         assert_eq!(textures[0].id, TextureId(1));
         assert_eq!(textures[0].path, PathBuf::from("/skin/default/note.png"));
+        assert_eq!(manifest.play_note_image().texture, 1);
+    }
+
+    #[test]
+    fn bundled_default_skin_manifest_defines_note_image() {
+        let manifest = default_skin_manifest();
+        let note = manifest.play_note_image();
+
+        assert_eq!(note.texture, 1);
+        assert_eq!(note.uv, TextureRegion::default());
     }
 }
