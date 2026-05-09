@@ -341,12 +341,13 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
 
         for note in &snapshot.visible_notes[lane_index] {
             let y = note_rect_y(board, note.y);
-            push_default_note_skin(
-                &skin_manifest,
-                &mut commands,
-                lane,
-                Rect { x: x + lane_width * 0.08, y, width: lane_width * 0.84, height: NOTE_HEIGHT },
-            );
+            let rect =
+                Rect { x: x + lane_width * 0.08, y, width: lane_width * 0.84, height: NOTE_HEIGHT };
+            if let Some(item) = skin.document_note_item(lane, rect) {
+                append_skin_render_items(&mut commands, &[item]);
+            } else {
+                push_default_note_skin(&skin_manifest, &mut commands, lane, rect);
+            }
         }
     }
 

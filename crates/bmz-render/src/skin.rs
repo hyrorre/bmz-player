@@ -546,6 +546,11 @@ impl SkinContext {
         };
         document.static_image_render_items(&self.document_sources, state)
     }
+
+    pub fn document_note_item(&self, lane: Lane, rect: Rect) -> Option<SkinRenderItem> {
+        let document = self.document.as_ref()?;
+        document.note_image_render_item(lane, rect, &self.document_sources)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -926,6 +931,48 @@ impl SkinDocument {
                 selected.map(|item| item.op)
             })
             .collect()
+    }
+
+    pub fn note_image_render_item(
+        &self,
+        lane: Lane,
+        rect: Rect,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Option<SkinRenderItem> {
+        let note = self.note.as_ref()?;
+        let image_id = note.note.get(beatoraja_7k_note_index(lane))?;
+        let image = self.image.iter().find(|image| image.id == *image_id)?;
+        let source = sources.get(&image.src)?;
+        let source_width = source.source_size.width.max(1.0);
+        let source_height = source.source_size.height.max(1.0);
+        Some(SkinRenderItem::Image {
+            texture: source.texture,
+            rect,
+            uv: TextureRegion {
+                x: image.x as f32 / source_width,
+                y: image.y as f32 / source_height,
+                width: image.w as f32 / source_width,
+                height: image.h as f32 / source_height,
+            },
+            tint: Color::rgb(1.0, 1.0, 1.0),
+            blend: BlendMode::Normal,
+            scale: SkinImageScale::Stretch,
+            border: None,
+            source_size: Some(source.source_size),
+        })
+    }
+}
+
+fn beatoraja_7k_note_index(lane: Lane) -> usize {
+    match lane {
+        Lane::Key1 => 0,
+        Lane::Key2 => 1,
+        Lane::Key3 => 2,
+        Lane::Key4 => 3,
+        Lane::Key5 => 4,
+        Lane::Key6 => 5,
+        Lane::Key7 => 6,
+        Lane::Scratch => 7,
     }
 }
 
@@ -2460,6 +2507,68 @@ mod tests {
             matches!(late[0], SkinRenderItem::Image { rect: Rect { x, width, .. }, tint: Color { a, .. }, .. }
                 if approx_eq(x, 0.6) && approx_eq(width, 0.2) && approx_eq(a, 128.0 / 255.0))
         );
+    }
+
+    #[test]
+    fn skin_document_resolves_lane_note_images() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "source": [{ "id": 1, "path": "notes.png" }],
+                "image": [
+                    { "id": "note-w", "src": 1, "x": 0, "y": 0, "w": 20, "h": 10 },
+                    { "id": "note-b", "src": 1, "x": 20, "y": 0, "w": 10, "h": 10 },
+                    { "id": "note-s", "src": 1, "x": 30, "y": 0, "w": 30, "h": 10 }
+                ],
+                "note": {
+                    "id": "notes",
+                    "note": ["note-w", "note-b", "note-w", "note-b", "note-w", "note-b", "note-w", "note-s"]
+                }
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "1".to_string(),
+            SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 100.0, height: 50.0 },
+            },
+        )]);
+
+        let key2 = document
+            .note_image_render_item(
+                Lane::Key2,
+                Rect { x: 0.0, y: 0.0, width: 0.1, height: 0.1 },
+                &sources,
+            )
+            .unwrap();
+        let scratch = document
+            .note_image_render_item(
+                Lane::Scratch,
+                Rect { x: 0.0, y: 0.0, width: 0.1, height: 0.1 },
+                &sources,
+            )
+            .unwrap();
+
+        assert!(matches!(
+            key2,
+            SkinRenderItem::Image {
+                texture: SkinTextureId(42),
+                uv: TextureRegion { x, width, .. },
+                ..
+            } if approx_eq(x, 0.2) && approx_eq(width, 0.1)
+        ));
+        assert!(matches!(
+            scratch,
+            SkinRenderItem::Image {
+                texture: SkinTextureId(42),
+                uv: TextureRegion { x, width, .. },
+                ..
+            } if approx_eq(x, 0.3) && approx_eq(width, 0.3)
+        ));
     }
 
     #[test]
