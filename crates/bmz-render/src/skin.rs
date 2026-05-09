@@ -4,8 +4,8 @@ use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
 use bmz_core::lane::Lane;
-use serde::{Deserialize, Deserializer};
 use serde::de::{Error as DeError, Visitor};
+use serde::{Deserialize, Deserializer};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::assets::load_png_rgba;
@@ -504,11 +504,7 @@ pub struct SkinContext {
 
 impl Default for SkinContext {
     fn default() -> Self {
-        Self {
-            manifest: default_skin_manifest(),
-            document: None,
-            document_sources: HashMap::new(),
-        }
+        Self { manifest: default_skin_manifest(), document: None, document_sources: HashMap::new() }
     }
 }
 
@@ -1134,7 +1130,12 @@ fn expand_json_skin_value(
                         continue;
                     }
                 }
-                expanded.push(expand_json_skin_value(item, current_dir, root_dir, enabled_options)?);
+                expanded.push(expand_json_skin_value(
+                    item,
+                    current_dir,
+                    root_dir,
+                    enabled_options,
+                )?);
             }
             Ok(JsonValue::Array(expanded))
         }
@@ -1175,9 +1176,8 @@ fn expand_json_skin_value(
 }
 
 fn load_included_json(include: &JsonValue, current_dir: &Path, root_dir: &Path) -> Result<PathBuf> {
-    let include = include
-        .as_str()
-        .ok_or_else(|| anyhow::anyhow!("skin json include must be a string"))?;
+    let include =
+        include.as_str().ok_or_else(|| anyhow::anyhow!("skin json include must be a string"))?;
     let path = current_dir.join(include);
     let canonical_root = root_dir
         .canonicalize()
@@ -2266,10 +2266,7 @@ mod tests {
         path.push(format!(
             "{name}-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
         ));
         path
     }
