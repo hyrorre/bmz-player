@@ -12,11 +12,13 @@ use anyhow::{Context, Result, anyhow};
 use crate::assets::{RgbaImageAsset, load_png_rgba};
 use crate::plan::{Color, DrawCommand, DrawPlan, Point, TextStyle, TextureId};
 use crate::scene::AppSceneSnapshot;
+use crate::skin::SkinContext;
 
 #[derive(Default)]
 pub struct Renderer {
     last_scene: Option<AppSceneSnapshot>,
     last_plan: Option<DrawPlan>,
+    skin_context: SkinContext,
     pending_textures: Vec<PendingTexture>,
     gpu: Option<WgpuRenderer>,
 }
@@ -138,6 +140,10 @@ impl Renderer {
         self.upsert_image_asset(id, &asset)
     }
 
+    pub fn set_skin_context(&mut self, skin_context: SkinContext) {
+        self.skin_context = skin_context;
+    }
+
     pub fn resize_surface(&mut self, size: SurfaceSize) {
         let Some(gpu) = &mut self.gpu else {
             return;
@@ -154,7 +160,7 @@ impl Renderer {
     }
 
     pub fn render_scene_status(&mut self, scene: AppSceneSnapshot) -> Result<RenderSurfaceStatus> {
-        let plan = DrawPlan::from_scene(&scene);
+        let plan = DrawPlan::from_scene_with_skin(&scene, &self.skin_context);
         self.last_scene = Some(scene);
         self.last_plan = Some(plan);
 

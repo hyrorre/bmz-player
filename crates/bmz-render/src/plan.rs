@@ -3,9 +3,9 @@ use bmz_core::time::TimeUs;
 
 use crate::scene::{AppSceneSnapshot, SelectRowSnapshot};
 use crate::skin::{
-    Animation, BlendMode, NumberSlot, SkinDefinition, SkinManifest, SkinObject, SkinObjectId,
-    SkinPhase, SkinPlacement, SkinRenderContext, SkinRenderItem, SkinSource, SkinTextureId,
-    TextSlot, append_skin_render_items, default_skin_manifest,
+    Animation, BlendMode, NumberSlot, SkinContext, SkinDefinition, SkinManifest, SkinObject,
+    SkinObjectId, SkinPhase, SkinPlacement, SkinRenderContext, SkinRenderItem, SkinSource,
+    SkinTextureId, TextSlot, append_skin_render_items,
 };
 use crate::snapshot::{DisplayJudgeCounts, RenderSnapshot};
 use crate::text::{BitmapTextStyle, TextRenderer};
@@ -85,11 +85,15 @@ pub struct Color {
 
 impl DrawPlan {
     pub fn from_scene(scene: &AppSceneSnapshot) -> Self {
+        Self::from_scene_with_skin(scene, &SkinContext::default())
+    }
+
+    pub fn from_scene_with_skin(scene: &AppSceneSnapshot, skin: &SkinContext) -> Self {
         match scene {
             AppSceneSnapshot::Select(snapshot) => {
                 plan_select(snapshot.chart_count, snapshot.selected_index, &snapshot.rows)
             }
-            AppSceneSnapshot::Play(snapshot) => plan_play(snapshot),
+            AppSceneSnapshot::Play(snapshot) => plan_play(snapshot, skin),
             AppSceneSnapshot::Result(snapshot) => plan_result(
                 snapshot.clear_type.as_str(),
                 snapshot.ex_score,
@@ -288,10 +292,10 @@ fn clear_type_label(clear_type: &str) -> &'static str {
     }
 }
 
-fn plan_play(snapshot: &RenderSnapshot) -> DrawPlan {
+fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
     let mut commands = Vec::new();
     let text = TextRenderer;
-    let skin_manifest = default_skin_manifest();
+    let skin_manifest = skin.manifest();
     let board = Rect { x: 0.18, y: 0.05, width: 0.64, height: 0.9 };
     commands.push(DrawCommand::Rect { rect: board, color: Color::rgb(0.025, 0.025, 0.028) });
     commands.push(DrawCommand::Rect {
@@ -1090,6 +1094,31 @@ mod tests {
         assert!(plan.commands.iter().any(|command| matches!(
             command,
             DrawCommand::Image { texture, .. } if *texture == DEFAULT_KEY_EVEN_NOTE_TEXTURE
+        )));
+    }
+
+    #[test]
+    fn play_plan_uses_supplied_skin_context() {
+        let manifest: SkinManifest = toml::from_str(
+            r#"
+            [play.note]
+            texture = 42
+            "#,
+        )
+        .unwrap();
+        let skin = SkinContext::from_manifest(manifest);
+        let mut snapshot = RenderSnapshot::default();
+        snapshot.visible_notes[Lane::Key1.index()].push(VisibleNote {
+            lane: Lane::Key1,
+            time: TimeUs(1_000),
+            y: 0.5,
+        });
+
+        let plan = DrawPlan::from_scene_with_skin(&AppSceneSnapshot::Play(snapshot), &skin);
+
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Image { texture, .. } if *texture == TextureId(42)
         )));
     }
 

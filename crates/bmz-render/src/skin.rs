@@ -27,6 +27,27 @@ pub struct SkinDefinition {
     pub objects: Vec<SkinObject>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct SkinContext {
+    manifest: SkinManifest,
+}
+
+impl Default for SkinContext {
+    fn default() -> Self {
+        Self { manifest: default_skin_manifest() }
+    }
+}
+
+impl SkinContext {
+    pub fn from_manifest(manifest: SkinManifest) -> Self {
+        Self { manifest }
+    }
+
+    pub fn manifest(&self) -> &SkinManifest {
+        &self.manifest
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct SkinManifest {
     #[serde(default)]

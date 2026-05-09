@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use bmz_render::renderer::{RenderSurfaceStatus, Renderer, SurfaceSize};
 use bmz_render::sample::{sample_play_scene, sample_result_scene, sample_select_scene};
 use bmz_render::scene::{AppSceneSnapshot, ResultSnapshot, SelectRowSnapshot, SelectSnapshot};
-use bmz_render::skin::SkinManifest;
+use bmz_render::skin::{SkinContext, SkinManifest};
 use bmz_render::snapshot::{DisplayJudgeCounts, RenderSnapshot};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, StartCause, WindowEvent};
@@ -430,6 +430,7 @@ fn load_default_skin_textures(renderer: &mut Renderer) {
             return;
         }
     };
+    renderer.set_skin_context(SkinContext::from_manifest(manifest.clone()));
 
     for texture in manifest.resolve_textures(&skin_root) {
         match renderer.load_png_texture(texture.id, &texture.path) {
