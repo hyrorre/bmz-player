@@ -556,6 +556,11 @@ impl SkinContext {
         let document = self.document.as_ref()?;
         document.gauge_render_items(gauge, elapsed_ms, &self.document_sources)
     }
+
+    pub fn document_judge_item(&self, judge: &str, elapsed_ms: i32) -> Option<SkinRenderItem> {
+        let document = self.document.as_ref()?;
+        document.judge_image_render_item(judge, elapsed_ms, &self.document_sources)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1012,6 +1017,23 @@ impl SkinDocument {
         Some(items)
     }
 
+    pub fn judge_image_render_item(
+        &self,
+        judge: &str,
+        elapsed_ms: i32,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Option<SkinRenderItem> {
+        let judge_index = judge_image_index(judge)?;
+        let judge = self.judge.first()?;
+        let destination = judge.images.get(judge_index)?;
+        let frame = resolve_destination_frame_until_end(destination, elapsed_ms)?;
+        self.image_render_item(
+            &destination.id,
+            normalize_skin_frame_rect(frame, self.w, self.h),
+            sources,
+        )
+    }
+
     fn image_render_item(
         &self,
         image_id: &str,
@@ -1050,6 +1072,23 @@ fn beatoraja_7k_note_index(lane: Lane) -> usize {
         Lane::Key6 => 5,
         Lane::Key7 => 6,
         Lane::Scratch => 7,
+    }
+}
+
+fn judge_image_index(judge: &str) -> Option<usize> {
+    let judge = judge.trim();
+    if judge.starts_with("PGREAT") {
+        Some(0)
+    } else if judge.starts_with("GREAT") {
+        Some(1)
+    } else if judge.starts_with("GOOD") {
+        Some(2)
+    } else if judge.starts_with("BAD") {
+        Some(3)
+    } else if judge.starts_with("POOR") || judge.starts_with("EMPTY") {
+        Some(4)
+    } else {
+        None
     }
 }
 
@@ -1705,6 +1744,17 @@ fn resolve_destination_frame(
         }
     }
     resolved.or_else(|| destination.dst.first().map(|_| frame))
+}
+
+fn resolve_destination_frame_until_end(
+    destination: &SkinDestinationDef,
+    elapsed_ms: i32,
+) -> Option<ResolvedSkinFrame> {
+    let last_time = destination.dst.iter().filter_map(|animation| animation.time).max()?;
+    if elapsed_ms > last_time {
+        return None;
+    }
+    resolve_destination_frame(destination, elapsed_ms)
 }
 
 fn apply_skin_animation(frame: &mut ResolvedSkinFrame, animation: &SkinAnimationDef) {
@@ -2713,6 +2763,63 @@ mod tests {
                 && approx_eq(uv_width, 0.05)));
         assert!(matches!(items[1], SkinRenderItem::Image { rect: Rect { x, .. }, .. }
                 if approx_eq(x, 0.5)));
+    }
+
+    #[test]
+    fn skin_document_resolves_judge_images_by_label() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "judge.png" }],
+                "image": [
+                    { "id": "judgef-pg", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10 },
+                    { "id": "judgef-gr", "src": 1, "x": 10, "y": 0, "w": 10, "h": 10 },
+                    { "id": "judgef-gd", "src": 1, "x": 20, "y": 0, "w": 10, "h": 10 },
+                    { "id": "judgef-bd", "src": 1, "x": 30, "y": 0, "w": 10, "h": 10 },
+                    { "id": "judgef-pr", "src": 1, "x": 40, "y": 0, "w": 10, "h": 10 },
+                    { "id": "judgef-ms", "src": 1, "x": 50, "y": 0, "w": 10, "h": 10 }
+                ],
+                "judge": [{
+                    "id": "judge",
+                    "images": [
+                        { "id": "judgef-pg", "dst": [{ "time": 0, "x": 0, "y": 10, "w": 20, "h": 10 }, { "time": 500 }] },
+                        { "id": "judgef-gr", "dst": [{ "time": 0, "x": 0, "y": 10, "w": 20, "h": 10 }, { "time": 500 }] },
+                        { "id": "judgef-gd", "dst": [{ "time": 0, "x": 0, "y": 10, "w": 20, "h": 10 }, { "time": 500 }] },
+                        { "id": "judgef-bd", "dst": [{ "time": 0, "x": 0, "y": 10, "w": 20, "h": 10 }, { "time": 500 }] },
+                        { "id": "judgef-pr", "dst": [{ "time": 0, "x": 0, "y": 10, "w": 20, "h": 10 }, { "time": 500 }] },
+                        { "id": "judgef-ms", "dst": [{ "time": 0, "x": 0, "y": 10, "w": 20, "h": 10 }, { "time": 500 }] }
+                    ]
+                }]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "1".to_string(),
+            SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 100.0, height: 100.0 },
+            },
+        )]);
+
+        let pgreat = document.judge_image_render_item("PGREAT FAST", 120, &sources).unwrap();
+        let poor = document.judge_image_render_item("POOR SLOW", 120, &sources).unwrap();
+        let expired = document.judge_image_render_item("PGREAT", 600, &sources);
+
+        assert!(matches!(pgreat, SkinRenderItem::Image {
+                uv: TextureRegion { x, .. },
+                rect: Rect { y, width, .. },
+                ..
+            } if approx_eq(x, 0.0) && approx_eq(y, 0.1) && approx_eq(width, 0.2)));
+        assert!(matches!(poor, SkinRenderItem::Image {
+                uv: TextureRegion { x, .. },
+                ..
+            } if approx_eq(x, 0.4)));
+        assert!(expired.is_none());
     }
 
     #[test]

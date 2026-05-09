@@ -368,7 +368,7 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
         (snapshot.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32,
     );
     push_combo_panel(&skin_manifest, &mut commands, snapshot.combo);
-    push_default_play_skin(&mut commands, snapshot);
+    push_default_play_skin(skin, &mut commands, snapshot);
     push_play_text(&text, &mut commands, snapshot);
     push_lane_text(&text, &mut commands, board, lane_width);
     push_judgement_history(&text, &mut commands, snapshot);
@@ -638,13 +638,25 @@ fn push_play_text(text: &TextRenderer, commands: &mut Vec<DrawCommand>, snapshot
     }
 }
 
-fn push_default_play_skin(commands: &mut Vec<DrawCommand>, snapshot: &RenderSnapshot) {
+fn push_default_play_skin(
+    skin_context: &SkinContext,
+    commands: &mut Vec<DrawCommand>,
+    snapshot: &RenderSnapshot,
+) {
     let skin = default_play_skin(snapshot);
-    let judge_text = snapshot
-        .recent_judgements
-        .last()
-        .map(|judgement| judgement.text.clone())
-        .unwrap_or_default();
+    let recent_judgement = snapshot.recent_judgements.last();
+    let judge_text = recent_judgement.map(|judgement| judgement.text.clone()).unwrap_or_default();
+    let judge_image = recent_judgement.and_then(|judgement| {
+        skin_context.document_judge_item(
+            &judgement.text,
+            ((snapshot.time.0 - judgement.time.0) / 1_000).clamp(i32::MIN as i64, i32::MAX as i64)
+                as i32,
+        )
+    });
+    let has_judge_image = judge_image.is_some();
+    if let Some(judge_image) = judge_image {
+        append_skin_render_items(commands, &[judge_image]);
+    }
     let text_values = [(TextSlot::Judge, judge_text)];
     let number_values = [
         (NumberSlot::Combo, snapshot.combo as i64),
@@ -657,6 +669,14 @@ fn push_default_play_skin(commands: &mut Vec<DrawCommand>, snapshot: &RenderSnap
         text: &text_values,
         numbers: &number_values,
     });
+    let items = if has_judge_image {
+        items
+            .into_iter()
+            .filter(|item| !matches!(item, SkinRenderItem::Text { text, .. } if text == &text_values[0].1))
+            .collect::<Vec<_>>()
+    } else {
+        items
+    };
     append_skin_render_items(commands, &items);
 }
 
