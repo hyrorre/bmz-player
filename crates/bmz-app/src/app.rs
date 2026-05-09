@@ -424,7 +424,7 @@ fn load_default_skin_textures(renderer: &mut Renderer) {
     let skin_root = default_skin_root();
     let manifest_path = skin_root.join("skin.toml");
     let manifest = match SkinManifest::load(&manifest_path) {
-        Ok(manifest) => manifest,
+        Ok(manifest) => manifest.with_texture_source_sizes(&skin_root),
         Err(error) => {
             tracing::warn!(path = %manifest_path.display(), %error, "failed to load default skin manifest; using fallback textures");
             return;

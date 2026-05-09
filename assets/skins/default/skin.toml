@@ -61,27 +61,23 @@ scale = "stretch"
 
 [play.gauge_frame]
 texture = 8
-source_size = { width = 12.0, height = 48.0 }
 uv = { x = 0.0, y = 0.0, width = 1.0, height = 1.0 }
 scale = "nine_slice"
 border = { left = 2.0, right = 2.0, top = 3.0, bottom = 3.0, unit = "pixels" }
 
 [play.gauge_fill]
 texture = 9
-source_size = { width = 8.0, height = 48.0 }
 uv = { x = 0.0, y = 0.0, width = 1.0, height = 1.0 }
 scale = "stretch"
 
 [play.combo_panel]
 texture = 10
-source_size = { width = 48.0, height = 16.0 }
 uv = { x = 0.0, y = 0.0, width = 1.0, height = 1.0 }
 scale = "nine_slice"
 border = { left = 4.0, right = 4.0, top = 3.0, bottom = 3.0, unit = "pixels" }
 
 [play.combo_panel_inactive]
 texture = 11
-source_size = { width = 48.0, height = 16.0 }
 uv = { x = 0.0, y = 0.0, width = 1.0, height = 1.0 }
 scale = "nine_slice"
 border = { left = 4.0, right = 4.0, top = 3.0, bottom = 3.0, unit = "pixels" }

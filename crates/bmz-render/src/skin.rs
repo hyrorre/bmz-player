@@ -1,9 +1,12 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
 use bmz_core::lane::Lane;
 use serde::Deserialize;
 
+use crate::assets::load_png_rgba;
 use crate::plan::{Color, DrawCommand, Point, Rect, TextStyle, TextureId, UvRect};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -326,6 +329,31 @@ impl SkinManifest {
             .collect()
     }
 
+    pub fn with_texture_source_sizes(mut self, base_dir: &Path) -> Self {
+        let sizes = self.texture_source_sizes(base_dir);
+        fill_image_source_size(&mut self.play.note, &sizes);
+        fill_image_source_size(&mut self.play.receptor, &sizes);
+        fill_image_source_size(&mut self.play.judge_line, &sizes);
+        fill_image_source_size(&mut self.play.gauge_frame, &sizes);
+        fill_image_source_size(&mut self.play.gauge_fill, &sizes);
+        fill_image_source_size(&mut self.play.combo_panel, &sizes);
+        fill_image_source_size(&mut self.play.combo_panel_inactive, &sizes);
+        self
+    }
+
+    fn texture_source_sizes(&self, base_dir: &Path) -> HashMap<u32, SkinImageSize> {
+        self.resolve_textures(base_dir)
+            .into_iter()
+            .filter_map(|texture| {
+                let asset = load_png_rgba(&texture.path).ok()?;
+                Some((
+                    texture.id.0,
+                    SkinImageSize { width: asset.width as f32, height: asset.height as f32 },
+                ))
+            })
+            .collect()
+    }
+
     pub fn play_note_image(&self) -> SkinImageManifest {
         self.play.note.unwrap_or(SkinImageManifest {
             texture: crate::plan::DEFAULT_NOTE_TEXTURE.0,
@@ -406,8 +434,31 @@ impl SkinManifest {
 }
 
 pub fn default_skin_manifest() -> SkinManifest {
-    toml::from_str(include_str!("../../../assets/skins/default/skin.toml"))
-        .expect("bundled default skin manifest must parse")
+    static DEFAULT_SKIN_MANIFEST: OnceLock<SkinManifest> = OnceLock::new();
+    DEFAULT_SKIN_MANIFEST
+        .get_or_init(|| {
+            let manifest: SkinManifest =
+                toml::from_str(include_str!("../../../assets/skins/default/skin.toml"))
+                    .expect("bundled default skin manifest must parse");
+            manifest.with_texture_source_sizes(&default_skin_root())
+        })
+        .clone()
+}
+
+fn default_skin_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/skins/default")
+}
+
+fn fill_image_source_size(
+    image: &mut Option<SkinImageManifest>,
+    sizes: &HashMap<u32, SkinImageSize>,
+) {
+    let Some(image) = image else {
+        return;
+    };
+    if image.source_size.is_none() {
+        image.source_size = sizes.get(&image.texture).copied();
+    }
 }
 
 pub fn append_skin_render_items(commands: &mut Vec<DrawCommand>, items: &[SkinRenderItem]) {
