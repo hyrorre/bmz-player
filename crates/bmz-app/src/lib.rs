@@ -6,4 +6,5 @@ pub mod config;
 pub mod input;
 pub mod paths;
 pub mod screens;
+pub mod skin_loader;
 pub mod storage;

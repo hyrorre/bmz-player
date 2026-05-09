@@ -5,7 +5,6 @@ use anyhow::{Context, Result};
 use bmz_render::renderer::{RenderSurfaceStatus, Renderer, SurfaceSize};
 use bmz_render::sample::{sample_play_scene, sample_result_scene, sample_select_scene};
 use bmz_render::scene::{AppSceneSnapshot, ResultSnapshot, SelectRowSnapshot, SelectSnapshot};
-use bmz_render::skin::{SkinContext, SkinManifest};
 use bmz_render::snapshot::{DisplayJudgeCounts, RenderSnapshot};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, StartCause, WindowEvent};
@@ -23,6 +22,7 @@ use crate::screens::play_loop::{PlayAdvanceOutcome, advance_running_play_session
 use crate::screens::play_start::{PlayStartOptions, StartedWinitPlaySession};
 use crate::screens::result_model::ResultSummary;
 use crate::screens::select_model::{SelectChartRow, load_select_chart_rows};
+use crate::skin_loader::apply_default_skin;
 
 const SAMPLE_PLAYABLE_TITLE: &str = "BMZ Sample Playable";
 
@@ -421,31 +421,9 @@ impl WinitApp {
 }
 
 fn load_default_skin_textures(renderer: &mut Renderer) {
-    let skin_root = default_skin_root();
-    let manifest_path = skin_root.join("skin.toml");
-    let manifest = match SkinManifest::load(&manifest_path) {
-        Ok(manifest) => manifest.with_texture_source_sizes(&skin_root),
-        Err(error) => {
-            tracing::warn!(path = %manifest_path.display(), %error, "failed to load default skin manifest; using fallback textures");
-            return;
-        }
-    };
-    renderer.set_skin_context(SkinContext::from_manifest(manifest.clone()));
-
-    for texture in manifest.resolve_textures(&skin_root) {
-        match renderer.load_png_texture(texture.id, &texture.path) {
-            Ok(()) => {
-                tracing::info!(texture_id = texture.id.0, path = %texture.path.display(), "loaded default skin texture")
-            }
-            Err(error) => {
-                tracing::warn!(texture_id = texture.id.0, path = %texture.path.display(), %error, "failed to load default skin texture; using fallback")
-            }
-        }
+    if let Err(error) = apply_default_skin(renderer) {
+        tracing::warn!(%error, "failed to apply default skin; using fallback textures");
     }
-}
-
-fn default_skin_root() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/skins/default")
 }
 
 impl ApplicationHandler for WinitApp {
@@ -707,6 +685,9 @@ fn dev_scene_action(
 
 #[cfg(test)]
 mod tests {
+    use bmz_render::skin::SkinManifest;
+
+    use crate::skin_loader::default_skin_root;
     use crate::storage::library_db::ChartListItem;
     use crate::storage::score_db::BestScoreSummary;
 
