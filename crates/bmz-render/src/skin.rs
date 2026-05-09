@@ -537,10 +537,14 @@ impl SkinContext {
     }
 
     pub fn static_document_items(&self) -> Vec<SkinRenderItem> {
+        self.static_document_items_for_state(SkinDrawState::default())
+    }
+
+    pub fn static_document_items_for_state(&self, state: SkinDrawState) -> Vec<SkinRenderItem> {
         let Some(document) = &self.document else {
             return Vec::new();
         };
-        document.static_image_render_items(&self.document_sources)
+        document.static_image_render_items(&self.document_sources, state)
     }
 }
 
@@ -549,6 +553,11 @@ pub struct SkinDocumentTexture {
     pub source_id: String,
     pub texture: SkinTextureId,
     pub source_size: SkinImageSize,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct SkinDrawState {
+    pub gauge: f32,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -860,13 +869,14 @@ impl SkinDocument {
     pub fn static_image_render_items(
         &self,
         sources: &HashMap<String, SkinDocumentTexture>,
+        state: SkinDrawState,
     ) -> Vec<SkinRenderItem> {
         let images = self.image_map();
         self.destination
             .iter()
             .filter(|destination| destination.timer.is_none())
             .filter(|destination| destination.op.is_empty())
-            .filter(|destination| destination.draw.is_empty())
+            .filter(|destination| eval_skin_draw_condition(&destination.draw, state))
             .filter_map(|destination| {
                 let image = images.get(destination.id.as_str())?;
                 let source = sources.get(&image.src)?;
@@ -1494,6 +1504,48 @@ fn lookup_number(values: &[(NumberSlot, i64)], slot: NumberSlot) -> i64 {
         .find(|(candidate, _)| *candidate == slot)
         .map(|(_, value)| *value)
         .unwrap_or_default()
+}
+
+fn eval_skin_draw_condition(condition: &str, state: SkinDrawState) -> bool {
+    let condition = condition.trim();
+    if condition.is_empty() {
+        return true;
+    }
+
+    condition
+        .split("&&")
+        .flat_map(|segment| segment.split(" and "))
+        .all(|term| eval_skin_draw_term(term.trim(), state).unwrap_or(false))
+}
+
+fn eval_skin_draw_term(term: &str, state: SkinDrawState) -> Option<bool> {
+    let operators = [">=", "<=", "==", "!=", ">", "<"];
+    for operator in operators {
+        let Some(index) = term.find(operator) else {
+            continue;
+        };
+        let left = term[..index].trim();
+        let right = term[index + operator.len()..].trim();
+        let left = eval_skin_draw_operand(left, state)?;
+        let right = eval_skin_draw_operand(right, state)?;
+        return Some(match operator {
+            ">=" => left >= right,
+            "<=" => left <= right,
+            "==" => (left - right).abs() < f32::EPSILON,
+            "!=" => (left - right).abs() >= f32::EPSILON,
+            ">" => left > right,
+            "<" => left < right,
+            _ => false,
+        });
+    }
+    None
+}
+
+fn eval_skin_draw_operand(operand: &str, state: SkinDrawState) -> Option<f32> {
+    match operand {
+        "gauge()" | "gauge" => Some(state.gauge),
+        value => value.parse::<f32>().ok(),
+    }
 }
 
 fn resolve_destination_first_frame(destination: &SkinDestinationDef) -> Option<ResolvedSkinFrame> {
@@ -2213,7 +2265,7 @@ mod tests {
             },
         )]);
 
-        let items = document.static_image_render_items(&sources);
+        let items = document.static_image_render_items(&sources, SkinDrawState::default());
 
         assert_eq!(items.len(), 1);
         assert!(matches!(
@@ -2236,6 +2288,53 @@ mod tests {
                 && approx_eq(r, 64.0 / 255.0)
                 && approx_eq(a, 128.0 / 255.0)
         ));
+    }
+
+    #[test]
+    fn skin_document_evaluates_safe_gauge_draw_conditions() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "system.png" }],
+                "image": [{ "id": "panel", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10 }],
+                "destination": [
+                    { "id": "panel", "draw": "gauge() >= 75", "dst": [{ "x": 0, "y": 0, "w": 10, "h": 10 }] },
+                    { "id": "panel", "draw": "gauge() >= 50 and gauge() < 75", "dst": [{ "x": 10, "y": 0, "w": 10, "h": 10 }] },
+                    { "id": "panel", "draw": "gauge() < 25", "dst": [{ "x": 20, "y": 0, "w": 10, "h": 10 }] },
+                    { "id": "panel", "draw": "unknown() > 0", "dst": [{ "x": 30, "y": 0, "w": 10, "h": 10 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "1".to_string(),
+            SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 10.0, height: 10.0 },
+            },
+        )]);
+
+        let high = document.static_image_render_items(&sources, SkinDrawState { gauge: 80.0 });
+        let middle = document.static_image_render_items(&sources, SkinDrawState { gauge: 60.0 });
+        let low = document.static_image_render_items(&sources, SkinDrawState { gauge: 10.0 });
+
+        assert_eq!(high.len(), 1);
+        assert_eq!(middle.len(), 1);
+        assert_eq!(low.len(), 1);
+        assert!(
+            matches!(high[0], SkinRenderItem::Image { rect: Rect { x, .. }, .. } if approx_eq(x, 0.0))
+        );
+        assert!(
+            matches!(middle[0], SkinRenderItem::Image { rect: Rect { x, .. }, .. } if approx_eq(x, 0.1))
+        );
+        assert!(
+            matches!(low[0], SkinRenderItem::Image { rect: Rect { x, .. }, .. } if approx_eq(x, 0.2))
+        );
     }
 
     #[test]
