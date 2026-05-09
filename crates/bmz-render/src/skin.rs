@@ -872,10 +872,11 @@ impl SkinDocument {
         state: SkinDrawState,
     ) -> Vec<SkinRenderItem> {
         let images = self.image_map();
+        let enabled_options = self.enabled_options();
         self.destination
             .iter()
             .filter(|destination| destination.timer.is_none())
-            .filter(|destination| destination.op.is_empty())
+            .filter(|destination| test_skin_ops(&destination.op, &enabled_options))
             .filter(|destination| eval_skin_draw_condition(&destination.draw, state))
             .filter_map(|destination| {
                 let image = images.get(destination.id.as_str())?;
@@ -908,6 +909,20 @@ impl SkinDocument {
                     border: None,
                     source_size: Some(source.source_size),
                 })
+            })
+            .collect()
+    }
+
+    pub fn enabled_options(&self) -> Vec<i32> {
+        self.property
+            .iter()
+            .filter_map(|property| {
+                let selected = if property.def.is_empty() {
+                    property.item.first()
+                } else {
+                    property.item.iter().find(|item| item.name == property.def)
+                };
+                selected.map(|item| item.op)
             })
             .collect()
     }
@@ -1238,6 +1253,10 @@ fn test_json_option_number(option: i32, enabled_options: &[i32]) -> bool {
     } else {
         !enabled_options.contains(&-option)
     }
+}
+
+fn test_skin_ops(ops: &[i32], enabled_options: &[i32]) -> bool {
+    ops.iter().all(|op| test_json_option_number(*op, enabled_options))
 }
 
 fn default_enabled_options(value: &JsonValue) -> Vec<i32> {
@@ -2334,6 +2353,53 @@ mod tests {
         );
         assert!(
             matches!(low[0], SkinRenderItem::Image { rect: Rect { x, .. }, .. } if approx_eq(x, 0.2))
+        );
+    }
+
+    #[test]
+    fn skin_document_evaluates_destination_option_conditions() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "property": [
+                    { "name": "Play Side", "item": [
+                        { "name": "1P", "op": 920 },
+                        { "name": "2P", "op": 921 }
+                    ]},
+                    { "name": "Score Graph", "def": "On", "item": [
+                        { "name": "Off", "op": 900 },
+                        { "name": "On", "op": 901 }
+                    ]}
+                ],
+                "source": [{ "id": 1, "path": "system.png" }],
+                "image": [{ "id": "panel", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10 }],
+                "destination": [
+                    { "id": "panel", "op": [920, 901], "dst": [{ "x": 0, "y": 0, "w": 10, "h": 10 }] },
+                    { "id": "panel", "op": [921], "dst": [{ "x": 10, "y": 0, "w": 10, "h": 10 }] },
+                    { "id": "panel", "op": [-901], "dst": [{ "x": 20, "y": 0, "w": 10, "h": 10 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "1".to_string(),
+            SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 10.0, height: 10.0 },
+            },
+        )]);
+
+        let items = document.static_image_render_items(&sources, SkinDrawState::default());
+
+        assert_eq!(document.enabled_options(), [920, 901]);
+        assert_eq!(items.len(), 1);
+        assert!(
+            matches!(items[0], SkinRenderItem::Image { rect: Rect { x, .. }, .. } if approx_eq(x, 0.0))
         );
     }
 
