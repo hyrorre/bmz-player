@@ -301,6 +301,7 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
         &mut commands,
         &skin.static_document_items_for_state(crate::skin::SkinDrawState {
             elapsed_ms: (snapshot.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+            combo: snapshot.combo,
             gauge: snapshot.gauge,
         }),
     );

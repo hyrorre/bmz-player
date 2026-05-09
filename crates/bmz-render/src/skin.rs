@@ -578,6 +578,7 @@ pub struct SkinDocumentTexture {
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct SkinDrawState {
     pub elapsed_ms: i32,
+    pub combo: u32,
     pub gauge: f32,
 }
 
@@ -900,37 +901,48 @@ impl SkinDocument {
             .filter(|destination| test_skin_ops(&destination.op, &enabled_options))
             .filter(|destination| eval_skin_draw_condition(&destination.draw, state))
             .filter_map(|destination| {
-                let image = images.get(destination.id.as_str())?;
-                let source = sources.get(&image.src)?;
                 let frame = resolve_destination_frame(destination, state.elapsed_ms)?;
-                let source_width = source.source_size.width.max(1.0);
-                let source_height = source.source_size.height.max(1.0);
-                Some(SkinRenderItem::Image {
-                    texture: source.texture,
-                    rect: Rect {
-                        x: frame.x as f32 / self.w.max(1) as f32,
-                        y: frame.y as f32 / self.h.max(1) as f32,
-                        width: frame.w as f32 / self.w.max(1) as f32,
-                        height: frame.h as f32 / self.h.max(1) as f32,
-                    },
-                    uv: TextureRegion {
-                        x: image.x as f32 / source_width,
-                        y: image.y as f32 / source_height,
-                        width: image.w as f32 / source_width,
-                        height: image.h as f32 / source_height,
-                    },
-                    tint: Color::rgba(
-                        frame.r as f32 / 255.0,
-                        frame.g as f32 / 255.0,
-                        frame.b as f32 / 255.0,
-                        frame.a as f32 / 255.0,
-                    ),
-                    blend: if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal },
-                    scale: SkinImageScale::Stretch,
-                    border: None,
-                    source_size: Some(source.source_size),
-                })
+                if let Some(image) = images.get(destination.id.as_str()) {
+                    let source = sources.get(&image.src)?;
+                    let source_width = source.source_size.width.max(1.0);
+                    let source_height = source.source_size.height.max(1.0);
+                    return Some(vec![SkinRenderItem::Image {
+                        texture: source.texture,
+                        rect: normalize_skin_frame_rect(frame, self.w, self.h),
+                        uv: TextureRegion {
+                            x: image.x as f32 / source_width,
+                            y: image.y as f32 / source_height,
+                            width: image.w as f32 / source_width,
+                            height: image.h as f32 / source_height,
+                        },
+                        tint: Color::rgba(
+                            frame.r as f32 / 255.0,
+                            frame.g as f32 / 255.0,
+                            frame.b as f32 / 255.0,
+                            frame.a as f32 / 255.0,
+                        ),
+                        blend: if destination.blend == 2 {
+                            BlendMode::Add
+                        } else {
+                            BlendMode::Normal
+                        },
+                        scale: SkinImageScale::Stretch,
+                        border: None,
+                        source_size: Some(source.source_size),
+                    }]);
+                }
+
+                let value = self.value.iter().find(|value| value.id == destination.id)?;
+                let number = skin_state_number(value.ref_id, state)?;
+                Some(self.value_number_render_items(
+                    &value.id,
+                    number,
+                    ResolvedSkinFrame::default(),
+                    frame,
+                    sources,
+                ))
             })
+            .flatten()
             .collect()
     }
 
@@ -989,7 +1001,10 @@ impl SkinDocument {
             destination.id == gauge_def.id
                 && destination.timer.is_none()
                 && test_skin_ops(&destination.op, &enabled_options)
-                && eval_skin_draw_condition(&destination.draw, SkinDrawState { elapsed_ms, gauge })
+                && eval_skin_draw_condition(
+                    &destination.draw,
+                    SkinDrawState { elapsed_ms, combo: 0, gauge },
+                )
         })?;
         let frame = resolve_destination_frame(destination, elapsed_ms)?;
         let rect = normalize_skin_frame_rect(frame, self.w, self.h);
@@ -1834,6 +1849,14 @@ fn eval_skin_draw_operand(operand: &str, state: SkinDrawState) -> Option<f32> {
     }
 }
 
+fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
+    match ref_id {
+        75 => Some(state.combo as i64),
+        107 => Some(state.gauge.round() as i64),
+        _ => None,
+    }
+}
+
 fn resolve_destination_frame(
     destination: &SkinDestinationDef,
     elapsed_ms: i32,
@@ -2643,12 +2666,18 @@ mod tests {
             },
         )]);
 
-        let high = document
-            .static_image_render_items(&sources, SkinDrawState { elapsed_ms: 0, gauge: 80.0 });
-        let middle = document
-            .static_image_render_items(&sources, SkinDrawState { elapsed_ms: 0, gauge: 60.0 });
-        let low = document
-            .static_image_render_items(&sources, SkinDrawState { elapsed_ms: 0, gauge: 10.0 });
+        let high = document.static_image_render_items(
+            &sources,
+            SkinDrawState { elapsed_ms: 0, combo: 0, gauge: 80.0 },
+        );
+        let middle = document.static_image_render_items(
+            &sources,
+            SkinDrawState { elapsed_ms: 0, combo: 0, gauge: 60.0 },
+        );
+        let low = document.static_image_render_items(
+            &sources,
+            SkinDrawState { elapsed_ms: 0, combo: 0, gauge: 10.0 },
+        );
 
         assert_eq!(high.len(), 1);
         assert_eq!(middle.len(), 1);
@@ -2741,12 +2770,18 @@ mod tests {
             },
         )]);
 
-        let early = document
-            .static_image_render_items(&sources, SkinDrawState { elapsed_ms: 50, gauge: 0.0 });
-        let middle = document
-            .static_image_render_items(&sources, SkinDrawState { elapsed_ms: 150, gauge: 0.0 });
-        let late = document
-            .static_image_render_items(&sources, SkinDrawState { elapsed_ms: 250, gauge: 0.0 });
+        let early = document.static_image_render_items(
+            &sources,
+            SkinDrawState { elapsed_ms: 50, combo: 0, gauge: 0.0 },
+        );
+        let middle = document.static_image_render_items(
+            &sources,
+            SkinDrawState { elapsed_ms: 150, combo: 0, gauge: 0.0 },
+        );
+        let late = document.static_image_render_items(
+            &sources,
+            SkinDrawState { elapsed_ms: 250, combo: 0, gauge: 0.0 },
+        );
 
         assert!(
             matches!(early[0], SkinRenderItem::Image { rect: Rect { x, width, .. }, tint: Color { a, .. }, .. }
@@ -2987,6 +3022,54 @@ mod tests {
                 uv: TextureRegion { x: u, .. },
                 ..
             } if approx_eq(x, 0.4) && approx_eq(u, 0.3)));
+    }
+
+    #[test]
+    fn skin_document_resolves_static_value_destinations() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "number.png" }],
+                "value": [
+                    { "id": "combo", "src": 1, "x": 0, "y": 0, "w": 100, "h": 10, "divx": 10, "digit": 3, "ref": 75 },
+                    { "id": "unknown", "src": 1, "x": 0, "y": 0, "w": 100, "h": 10, "divx": 10, "digit": 3, "ref": 9999 }
+                ],
+                "destination": [
+                    { "id": "combo", "dst": [{ "x": 10, "y": 20, "w": 5, "h": 10 }] },
+                    { "id": "unknown", "dst": [{ "x": 10, "y": 40, "w": 5, "h": 10 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "1".to_string(),
+            SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 100.0, height: 100.0 },
+            },
+        )]);
+
+        let items = document.static_image_render_items(
+            &sources,
+            SkinDrawState { elapsed_ms: 0, combo: 45, gauge: 0.0 },
+        );
+
+        assert_eq!(items.len(), 2);
+        assert!(matches!(items[0], SkinRenderItem::Image {
+                rect: Rect { x, y, .. },
+                uv: TextureRegion { x: u, .. },
+                ..
+            } if approx_eq(x, 0.1) && approx_eq(y, 0.2) && approx_eq(u, 0.4)));
+        assert!(matches!(items[1], SkinRenderItem::Image {
+                rect: Rect { x, .. },
+                uv: TextureRegion { x: u, .. },
+                ..
+            } if approx_eq(x, 0.15) && approx_eq(u, 0.5)));
     }
 
     #[test]
