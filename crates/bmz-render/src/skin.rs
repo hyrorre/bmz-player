@@ -4,7 +4,9 @@ use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
 use bmz_core::lane::Lane;
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
+use serde::de::{Error as DeError, Visitor};
+use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::assets::load_png_rgba;
 use crate::plan::{Color, DrawCommand, Point, Rect, TextStyle, TextureId, UvRect};
@@ -25,6 +27,472 @@ pub struct SkinObject {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SkinDefinition {
     pub objects: Vec<SkinObject>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SkinDocument {
+    #[serde(default, rename = "type")]
+    pub skin_type: i32,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub author: String,
+    #[serde(default = "default_skin_canvas_width")]
+    pub w: u32,
+    #[serde(default = "default_skin_canvas_height")]
+    pub h: u32,
+    #[serde(default)]
+    pub fadeout: i32,
+    #[serde(default)]
+    pub input: i32,
+    #[serde(default)]
+    pub scene: i32,
+    #[serde(default)]
+    pub close: i32,
+    #[serde(default)]
+    pub loadend: i32,
+    #[serde(default)]
+    pub playstart: i32,
+    #[serde(default = "default_judgetimer")]
+    pub judgetimer: i32,
+    #[serde(default)]
+    pub finishmargin: i32,
+    #[serde(default)]
+    pub category: Vec<SkinCategoryDef>,
+    #[serde(default)]
+    pub property: Vec<SkinPropertyDef>,
+    #[serde(default)]
+    pub filepath: Vec<SkinFilepathDef>,
+    #[serde(default)]
+    pub offset: Vec<SkinOffsetDef>,
+    #[serde(default)]
+    pub source: Vec<SkinSourceDef>,
+    #[serde(default)]
+    pub font: Vec<SkinFontDef>,
+    #[serde(default)]
+    pub image: Vec<SkinImageDef>,
+    #[serde(default)]
+    pub imageset: Vec<SkinImageSetDef>,
+    #[serde(default)]
+    pub value: Vec<SkinValueDef>,
+    #[serde(default)]
+    pub text: Vec<SkinTextDef>,
+    #[serde(default)]
+    pub slider: Vec<SkinSliderDef>,
+    #[serde(default)]
+    pub graph: Vec<SkinGraphDef>,
+    pub note: Option<SkinNoteSetDef>,
+    pub gauge: Option<SkinGaugeDef>,
+    #[serde(default)]
+    pub judge: Vec<SkinJudgeDef>,
+    pub bga: Option<SkinBgaDef>,
+    #[serde(default)]
+    pub destination: Vec<SkinDestinationDef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SkinCategoryDef {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub item: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SkinPropertyDef {
+    #[serde(default)]
+    pub category: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub item: Vec<SkinPropertyItemDef>,
+    #[serde(default)]
+    pub def: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SkinPropertyItemDef {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub op: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SkinFilepathDef {
+    #[serde(default)]
+    pub category: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub def: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SkinOffsetDef {
+    #[serde(default)]
+    pub category: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub id: i32,
+    #[serde(default)]
+    pub x: bool,
+    #[serde(default)]
+    pub y: bool,
+    #[serde(default)]
+    pub w: bool,
+    #[serde(default)]
+    pub h: bool,
+    #[serde(default)]
+    pub r: bool,
+    #[serde(default)]
+    pub a: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SkinSourceDef {
+    #[serde(default, deserialize_with = "deserialize_skin_id")]
+    pub id: String,
+    #[serde(default)]
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SkinFontDef {
+    #[serde(default, deserialize_with = "deserialize_skin_id")]
+    pub id: String,
+    #[serde(default)]
+    pub path: String,
+    #[serde(default, rename = "type")]
+    pub font_type: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SkinImageDef {
+    #[serde(default, deserialize_with = "deserialize_skin_id")]
+    pub id: String,
+    #[serde(default, deserialize_with = "deserialize_skin_id")]
+    pub src: String,
+    #[serde(default)]
+    pub x: i32,
+    #[serde(default)]
+    pub y: i32,
+    #[serde(default)]
+    pub w: i32,
+    #[serde(default)]
+    pub h: i32,
+    #[serde(default = "default_grid_division")]
+    pub divx: i32,
+    #[serde(default = "default_grid_division")]
+    pub divy: i32,
+    #[serde(default)]
+    pub timer: Option<i32>,
+    #[serde(default)]
+    pub cycle: i32,
+    #[serde(default)]
+    pub len: i32,
+    #[serde(default, rename = "ref")]
+    pub ref_id: i32,
+    #[serde(default)]
+    pub click: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SkinImageSetDef {
+    #[serde(default, deserialize_with = "deserialize_skin_id")]
+    pub id: String,
+    #[serde(default, rename = "ref")]
+    pub ref_id: i32,
+    #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
+    pub images: Vec<String>,
+    #[serde(default)]
+    pub click: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SkinValueDef {
+    #[serde(default, deserialize_with = "deserialize_skin_id")]
+    pub id: String,
+    #[serde(default, deserialize_with = "deserialize_skin_id")]
+    pub src: String,
+    #[serde(default)]
+    pub x: i32,
+    #[serde(default)]
+    pub y: i32,
+    #[serde(default)]
+    pub w: i32,
+    #[serde(default)]
+    pub h: i32,
+    #[serde(default = "default_grid_division")]
+    pub divx: i32,
+    #[serde(default = "default_grid_division")]
+    pub divy: i32,
+    #[serde(default)]
+    pub timer: Option<i32>,
+    #[serde(default)]
+    pub cycle: i32,
+    #[serde(default)]
+    pub align: i32,
+    #[serde(default)]
+    pub digit: i32,
+    #[serde(default)]
+    pub padding: i32,
+    #[serde(default)]
+    pub zeropadding: i32,
+    #[serde(default)]
+    pub space: i32,
+    #[serde(default, rename = "ref")]
+    pub ref_id: i32,
+    #[serde(default)]
+    pub offset: Vec<SkinValueDef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SkinTextDef {
+    #[serde(default, deserialize_with = "deserialize_skin_id")]
+    pub id: String,
+    #[serde(default, deserialize_with = "deserialize_skin_id")]
+    pub font: String,
+    #[serde(default)]
+    pub size: i32,
+    #[serde(default)]
+    pub align: i32,
+    #[serde(default)]
+    pub ref_id: i32,
+    #[serde(default, rename = "constantText")]
+    pub constant_text: String,
+    #[serde(default)]
+    pub wrapping: bool,
+    #[serde(default)]
+    pub overflow: i32,
+    #[serde(default, rename = "outlineColor")]
+    pub outline_color: String,
+    #[serde(default, rename = "outlineWidth")]
+    pub outline_width: f32,
+    #[serde(default, rename = "shadowColor")]
+    pub shadow_color: String,
+    #[serde(default, rename = "shadowOffsetX")]
+    pub shadow_offset_x: f32,
+    #[serde(default, rename = "shadowOffsetY")]
+    pub shadow_offset_y: f32,
+    #[serde(default, rename = "shadowSmoothness")]
+    pub shadow_smoothness: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SkinSliderDef {
+    #[serde(default, deserialize_with = "deserialize_skin_id")]
+    pub id: String,
+    #[serde(default, deserialize_with = "deserialize_skin_id")]
+    pub src: String,
+    #[serde(default)]
+    pub x: i32,
+    #[serde(default)]
+    pub y: i32,
+    #[serde(default)]
+    pub w: i32,
+    #[serde(default)]
+    pub h: i32,
+    #[serde(default = "default_grid_division")]
+    pub divx: i32,
+    #[serde(default = "default_grid_division")]
+    pub divy: i32,
+    #[serde(default)]
+    pub timer: Option<i32>,
+    #[serde(default)]
+    pub cycle: i32,
+    #[serde(default)]
+    pub angle: i32,
+    #[serde(default)]
+    pub range: i32,
+    #[serde(default, rename = "type")]
+    pub slider_type: i32,
+    #[serde(default = "default_true")]
+    pub changeable: bool,
+    #[serde(default, rename = "isRefNum")]
+    pub is_ref_num: bool,
+    #[serde(default)]
+    pub min: i32,
+    #[serde(default)]
+    pub max: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SkinGraphDef {
+    #[serde(default, deserialize_with = "deserialize_skin_id")]
+    pub id: String,
+    #[serde(default, deserialize_with = "deserialize_skin_id")]
+    pub src: String,
+    #[serde(default)]
+    pub x: i32,
+    #[serde(default)]
+    pub y: i32,
+    #[serde(default)]
+    pub w: i32,
+    #[serde(default)]
+    pub h: i32,
+    #[serde(default = "default_grid_division")]
+    pub divx: i32,
+    #[serde(default = "default_grid_division")]
+    pub divy: i32,
+    #[serde(default)]
+    pub timer: Option<i32>,
+    #[serde(default)]
+    pub cycle: i32,
+    #[serde(default = "default_graph_angle")]
+    pub angle: i32,
+    #[serde(default, rename = "type")]
+    pub graph_type: i32,
+    #[serde(default, rename = "isRefNum")]
+    pub is_ref_num: bool,
+    #[serde(default)]
+    pub min: i32,
+    #[serde(default)]
+    pub max: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SkinNoteSetDef {
+    #[serde(default, deserialize_with = "deserialize_skin_id")]
+    pub id: String,
+    #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
+    pub note: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
+    pub lnstart: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
+    pub lnend: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
+    pub lnbody: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
+    pub lnactive: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
+    pub hcnstart: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
+    pub hcnend: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
+    pub hcnbody: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
+    pub hcnactive: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
+    pub hcndamage: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
+    pub hcnreactive: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
+    pub mine: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
+    pub hidden: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
+    pub processed: Vec<String>,
+    #[serde(default)]
+    pub dst: Vec<SkinAnimationDef>,
+    #[serde(default)]
+    pub group: Vec<SkinDestinationDef>,
+    #[serde(default)]
+    pub bpm: Vec<SkinDestinationDef>,
+    #[serde(default)]
+    pub stop: Vec<SkinDestinationDef>,
+    #[serde(default)]
+    pub time: Vec<SkinDestinationDef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SkinGaugeDef {
+    #[serde(default, deserialize_with = "deserialize_skin_id")]
+    pub id: String,
+    #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
+    pub nodes: Vec<String>,
+    #[serde(default = "default_gauge_parts")]
+    pub parts: i32,
+    #[serde(default, rename = "type")]
+    pub gauge_type: i32,
+    #[serde(default = "default_gauge_range")]
+    pub range: i32,
+    #[serde(default = "default_gauge_cycle")]
+    pub cycle: i32,
+    #[serde(default)]
+    pub starttime: i32,
+    #[serde(default = "default_gauge_endtime")]
+    pub endtime: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SkinJudgeDef {
+    #[serde(default, deserialize_with = "deserialize_skin_id")]
+    pub id: String,
+    #[serde(default)]
+    pub index: i32,
+    #[serde(default)]
+    pub images: Vec<SkinDestinationDef>,
+    #[serde(default)]
+    pub numbers: Vec<SkinDestinationDef>,
+    #[serde(default)]
+    pub shift: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SkinBgaDef {
+    #[serde(default, deserialize_with = "deserialize_skin_id")]
+    pub id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SkinDestinationDef {
+    #[serde(default, deserialize_with = "deserialize_skin_id")]
+    pub id: String,
+    #[serde(default)]
+    pub blend: i32,
+    #[serde(default)]
+    pub filter: i32,
+    #[serde(default)]
+    pub timer: Option<i32>,
+    #[serde(default, rename = "loop")]
+    pub loop_time: i32,
+    #[serde(default)]
+    pub center: i32,
+    #[serde(default)]
+    pub offset: i32,
+    #[serde(default)]
+    pub offsets: Vec<i32>,
+    #[serde(default = "default_stretch")]
+    pub stretch: i32,
+    #[serde(default)]
+    pub op: Vec<i32>,
+    #[serde(default)]
+    pub draw: String,
+    #[serde(default)]
+    pub dst: Vec<SkinAnimationDef>,
+    #[serde(rename = "mouseRect")]
+    pub mouse_rect: Option<SkinRectDef>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub struct SkinRectDef {
+    #[serde(default)]
+    pub x: i32,
+    #[serde(default)]
+    pub y: i32,
+    #[serde(default)]
+    pub w: i32,
+    #[serde(default)]
+    pub h: i32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub struct SkinAnimationDef {
+    pub time: Option<i32>,
+    pub x: Option<i32>,
+    pub y: Option<i32>,
+    pub w: Option<i32>,
+    pub h: Option<i32>,
+    pub acc: Option<i32>,
+    pub a: Option<i32>,
+    pub r: Option<i32>,
+    pub g: Option<i32>,
+    pub b: Option<i32>,
+    pub angle: Option<i32>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -330,6 +798,31 @@ impl SkinDefinition {
     }
 }
 
+impl SkinDocument {
+    pub fn load_beatoraja_json(path: &Path) -> Result<Self> {
+        let raw = load_json_value(path)?;
+        let options = default_enabled_options(&raw);
+        Self::load_beatoraja_json_with_options(path, &options)
+    }
+
+    pub fn load_beatoraja_json_with_options(path: &Path, enabled_options: &[i32]) -> Result<Self> {
+        let raw = load_json_value(path)?;
+        let root = path.parent().unwrap_or_else(|| Path::new("."));
+        let expanded = expand_json_skin_value(raw, root, root, enabled_options)
+            .with_context(|| format!("failed to expand skin json: {}", path.display()))?;
+        serde_json::from_value(expanded)
+            .with_context(|| format!("failed to parse skin json: {}", path.display()))
+    }
+
+    pub fn source_map(&self) -> HashMap<&str, &SkinSourceDef> {
+        self.source.iter().map(|source| (source.id.as_str(), source)).collect()
+    }
+
+    pub fn image_map(&self) -> HashMap<&str, &SkinImageDef> {
+        self.image.iter().map(|image| (image.id.as_str(), image)).collect()
+    }
+}
+
 impl SkinManifest {
     pub fn load(path: &Path) -> Result<Self> {
         let text = std::fs::read_to_string(path)
@@ -452,6 +945,231 @@ impl SkinManifest {
             },
         )
     }
+}
+
+fn load_json_value(path: &Path) -> Result<JsonValue> {
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read skin json: {}", path.display()))?;
+    let text = strip_json_trailing_commas(&text);
+    serde_json::from_str(&text)
+        .with_context(|| format!("failed to parse skin json: {}", path.display()))
+}
+
+fn strip_json_trailing_commas(input: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    let mut in_string = false;
+    let mut escaped = false;
+
+    while let Some(ch) = chars.next() {
+        if in_string {
+            output.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        if ch == '"' {
+            in_string = true;
+            output.push(ch);
+            continue;
+        }
+
+        if ch == ',' {
+            let mut lookahead = chars.clone();
+            while matches!(lookahead.peek(), Some(next) if next.is_whitespace()) {
+                lookahead.next();
+            }
+            if matches!(lookahead.peek(), Some(']' | '}')) {
+                continue;
+            }
+        }
+
+        output.push(ch);
+    }
+
+    output
+}
+
+fn expand_json_skin_value(
+    value: JsonValue,
+    current_dir: &Path,
+    root_dir: &Path,
+    enabled_options: &[i32],
+) -> Result<JsonValue> {
+    match value {
+        JsonValue::Array(items) => {
+            let mut expanded = Vec::new();
+            for item in items {
+                if let JsonValue::Object(object) = &item {
+                    if let Some(include) = object.get("include") {
+                        let included = load_included_json(include, current_dir, root_dir)?;
+                        let included_dir = included.parent().unwrap_or(current_dir);
+                        let included_value = expand_json_skin_value(
+                            load_json_value(&included)?,
+                            included_dir,
+                            root_dir,
+                            enabled_options,
+                        )?;
+                        match included_value {
+                            JsonValue::Array(values) => expanded.extend(values),
+                            other => expanded.push(other),
+                        }
+                        continue;
+                    }
+                    if object.contains_key("if")
+                        && (object.contains_key("value") || object.contains_key("values"))
+                    {
+                        if test_json_option(object.get("if"), enabled_options) {
+                            if let Some(value) = object.get("value") {
+                                expanded.push(expand_json_skin_value(
+                                    value.clone(),
+                                    current_dir,
+                                    root_dir,
+                                    enabled_options,
+                                )?);
+                            }
+                            if let Some(values) = object.get("values") {
+                                let values = expand_json_skin_value(
+                                    values.clone(),
+                                    current_dir,
+                                    root_dir,
+                                    enabled_options,
+                                )?;
+                                match values {
+                                    JsonValue::Array(values) => expanded.extend(values),
+                                    other => expanded.push(other),
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                }
+                expanded.push(expand_json_skin_value(item, current_dir, root_dir, enabled_options)?);
+            }
+            Ok(JsonValue::Array(expanded))
+        }
+        JsonValue::Object(mut object) => {
+            if let Some(include) = object.get("include") {
+                let included = load_included_json(include, current_dir, root_dir)?;
+                let included_dir = included.parent().unwrap_or(current_dir);
+                return expand_json_skin_value(
+                    load_json_value(&included)?,
+                    included_dir,
+                    root_dir,
+                    enabled_options,
+                );
+            }
+            if object.contains_key("if") && object.contains_key("value") {
+                return if test_json_option(object.get("if"), enabled_options) {
+                    expand_json_skin_value(
+                        object.remove("value").unwrap_or(JsonValue::Null),
+                        current_dir,
+                        root_dir,
+                        enabled_options,
+                    )
+                } else {
+                    Ok(JsonValue::Null)
+                };
+            }
+            let mut expanded = JsonMap::new();
+            for (key, value) in object {
+                expanded.insert(
+                    key,
+                    expand_json_skin_value(value, current_dir, root_dir, enabled_options)?,
+                );
+            }
+            Ok(JsonValue::Object(expanded))
+        }
+        other => Ok(other),
+    }
+}
+
+fn load_included_json(include: &JsonValue, current_dir: &Path, root_dir: &Path) -> Result<PathBuf> {
+    let include = include
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("skin json include must be a string"))?;
+    let path = current_dir.join(include);
+    let canonical_root = root_dir
+        .canonicalize()
+        .with_context(|| format!("failed to canonicalize skin root: {}", root_dir.display()))?;
+    let canonical_path = path
+        .canonicalize()
+        .with_context(|| format!("failed to canonicalize skin include: {}", path.display()))?;
+    anyhow::ensure!(
+        canonical_path.starts_with(&canonical_root),
+        "skin include escapes skin root: {}",
+        path.display()
+    );
+    Ok(canonical_path)
+}
+
+fn test_json_option(option: Option<&JsonValue>, enabled_options: &[i32]) -> bool {
+    let Some(option) = option else {
+        return true;
+    };
+    match option {
+        JsonValue::Number(number) => number.as_i64().is_some_and(|value| {
+            test_json_option_number(i32::try_from(value).unwrap_or(i32::MIN), enabled_options)
+        }),
+        JsonValue::Array(values) => values.iter().all(|value| match value {
+            JsonValue::Number(number) => number.as_i64().is_some_and(|value| {
+                test_json_option_number(i32::try_from(value).unwrap_or(i32::MIN), enabled_options)
+            }),
+            JsonValue::Array(or_values) => or_values.iter().any(|or_value| {
+                let JsonValue::Number(number) = or_value else {
+                    return false;
+                };
+                number.as_i64().is_some_and(|value| {
+                    test_json_option_number(
+                        i32::try_from(value).unwrap_or(i32::MIN),
+                        enabled_options,
+                    )
+                })
+            }),
+            _ => false,
+        }),
+        _ => false,
+    }
+}
+
+fn test_json_option_number(option: i32, enabled_options: &[i32]) -> bool {
+    if option >= 0 {
+        enabled_options.contains(&option)
+    } else {
+        !enabled_options.contains(&-option)
+    }
+}
+
+fn default_enabled_options(value: &JsonValue) -> Vec<i32> {
+    let Some(properties) = value.get("property").and_then(JsonValue::as_array) else {
+        return Vec::new();
+    };
+    properties.iter().filter_map(default_property_option).collect()
+}
+
+fn default_property_option(property: &JsonValue) -> Option<i32> {
+    let items = property.get("item")?.as_array()?;
+    let default_name = property.get("def").and_then(JsonValue::as_str).unwrap_or_default();
+    if let Some(default_item) = items.iter().find(|item| {
+        !default_name.is_empty()
+            && item.get("name").and_then(JsonValue::as_str).is_some_and(|name| name == default_name)
+    }) {
+        return default_item
+            .get("op")
+            .and_then(JsonValue::as_i64)
+            .and_then(|op| i32::try_from(op).ok());
+    }
+    items
+        .first()
+        .and_then(|item| item.get("op"))
+        .and_then(JsonValue::as_i64)
+        .and_then(|op| i32::try_from(op).ok())
 }
 
 pub fn default_skin_manifest() -> SkinManifest {
@@ -692,6 +1410,147 @@ fn lookup_number(values: &[(NumberSlot, i64)], slot: NumberSlot) -> i64 {
         .find(|(candidate, _)| *candidate == slot)
         .map(|(_, value)| *value)
         .unwrap_or_default()
+}
+
+fn default_skin_canvas_width() -> u32 {
+    1280
+}
+
+fn default_skin_canvas_height() -> u32 {
+    720
+}
+
+fn default_judgetimer() -> i32 {
+    1
+}
+
+fn default_grid_division() -> i32 {
+    1
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_graph_angle() -> i32 {
+    1
+}
+
+fn default_gauge_parts() -> i32 {
+    50
+}
+
+fn default_gauge_range() -> i32 {
+    3
+}
+
+fn default_gauge_cycle() -> i32 {
+    33
+}
+
+fn default_gauge_endtime() -> i32 {
+    500
+}
+
+fn default_stretch() -> i32 {
+    -1
+}
+
+fn deserialize_skin_id<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserializer.deserialize_any(SkinIdVisitor)
+}
+
+fn deserialize_skin_id_vec<'de, D>(deserializer: D) -> std::result::Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct SkinIdVecVisitor;
+
+    impl<'de> Visitor<'de> for SkinIdVecVisitor {
+        type Value = Vec<String>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a list of skin ids")
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> std::result::Result<Self::Value, A::Error>
+        where
+            A: serde::de::SeqAccess<'de>,
+        {
+            let mut ids = Vec::new();
+            while let Some(id) = seq.next_element_seed(SkinIdSeed)? {
+                ids.push(id);
+            }
+            Ok(ids)
+        }
+    }
+
+    deserializer.deserialize_seq(SkinIdVecVisitor)
+}
+
+struct SkinIdSeed;
+
+impl<'de> serde::de::DeserializeSeed<'de> for SkinIdSeed {
+    type Value = String;
+
+    fn deserialize<D>(self, deserializer: D) -> std::result::Result<Self::Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserialize_skin_id(deserializer)
+    }
+}
+
+struct SkinIdVisitor;
+
+impl<'de> Visitor<'de> for SkinIdVisitor {
+    type Value = String;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a string or numeric skin id")
+    }
+
+    fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+    where
+        E: DeError,
+    {
+        Ok(value.to_string())
+    }
+
+    fn visit_string<E>(self, value: String) -> std::result::Result<Self::Value, E>
+    where
+        E: DeError,
+    {
+        Ok(value)
+    }
+
+    fn visit_i64<E>(self, value: i64) -> std::result::Result<Self::Value, E>
+    where
+        E: DeError,
+    {
+        Ok(value.to_string())
+    }
+
+    fn visit_u64<E>(self, value: u64) -> std::result::Result<Self::Value, E>
+    where
+        E: DeError,
+    {
+        Ok(value.to_string())
+    }
+
+    fn visit_f64<E>(self, value: f64) -> std::result::Result<Self::Value, E>
+    where
+        E: DeError,
+    {
+        if value.fract() == 0.0 {
+            Ok(format!("{value:.0}"))
+        } else {
+            Err(E::custom("skin id numbers must be integers"))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1101,7 +1960,119 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn skin_document_normalizes_numeric_and_string_ids() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "source": [
+                    { "id": 100, "path": "a.png" },
+                    { "id": "100", "path": "b.png" }
+                ],
+                "image": [
+                    { "id": 200, "src": 100, "x": 0, "y": 0, "w": 8, "h": 8 },
+                    { "id": "300", "src": "100", "x": 8, "y": 0, "w": 8, "h": 8 }
+                ],
+                "imageset": [
+                    { "id": "set", "images": [200, "300"] }
+                ],
+                "destination": [
+                    { "id": 200, "dst": [{ "x": 0, "y": 0, "w": 8, "h": 8 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(document.source[0].id, "100");
+        assert_eq!(document.source[1].id, "100");
+        assert_eq!(document.image[0].id, "200");
+        assert_eq!(document.image[0].src, "100");
+        assert_eq!(document.image[1].src, "100");
+        assert_eq!(document.imageset[0].images, ["200", "300"]);
+        assert_eq!(document.destination[0].id, "200");
+    }
+
+    #[test]
+    fn skin_document_expands_conditions_and_includes() {
+        let root = unique_test_dir("bmz-skin-json");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("included.json"),
+            r#"
+            [
+                { "id": "included", "src": "1", "x": 0, "y": 0, "w": 8, "h": 8, },
+                { "if": -901, "value": { "id": "disabled", "src": "1" } }
+            ]
+            "#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("skin.json"),
+            r#"
+            {
+                "type": 0,
+                "property": [
+                    { "name": "Graph", "def": "On", "item": [
+                        { "name": "Off", "op": 900 },
+                        { "name": "On", "op": 901 }
+                    ]}
+                ],
+                "source": [{ "id": 1, "path": "system.png" }],
+                "image": { "include": "included.json" },
+                "destination": [
+                    { "if": 901, "value": { "id": "included", "dst": [{ "x": 1, "y": 2, "w": 3, "h": 4 }] } },
+                    { "if": -901, "value": { "id": "disabled", "dst": [{ "x": 0, "y": 0, "w": 1, "h": 1 }] } }
+                ],
+            }
+            "#,
+        )
+        .unwrap();
+
+        let document = SkinDocument::load_beatoraja_json(&root.join("skin.json")).unwrap();
+
+        assert_eq!(document.source[0].id, "1");
+        assert_eq!(document.image.len(), 1);
+        assert_eq!(document.image[0].id, "included");
+        assert_eq!(document.destination.len(), 1);
+        assert_eq!(document.destination[0].id, "included");
+        assert_eq!(document.destination[0].dst[0].x, Some(1));
+    }
+
+    #[test]
+    fn bundled_beatoraja_default_play7_json_loads_when_available() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/beatoraja/skin/default/play7.json");
+        if !path.is_file() {
+            return;
+        }
+
+        let document = SkinDocument::load_beatoraja_json(&path).unwrap();
+
+        assert_eq!(document.name, "beatoraja default");
+        assert_eq!(document.w, 1280);
+        assert_eq!(document.h, 720);
+        assert!(document.source_map().contains_key("7"));
+        assert!(document.image_map().contains_key("note-w"));
+        assert_eq!(document.note.as_ref().unwrap().id, "notes");
+        assert!(!document.destination.is_empty());
+    }
+
     fn approx_eq(actual: f32, expected: f32) -> bool {
         (actual - expected).abs() < 0.0001
+    }
+
+    fn unique_test_dir(name: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        path
     }
 }
