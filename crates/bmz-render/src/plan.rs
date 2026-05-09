@@ -13,6 +13,8 @@ use crate::text::{BitmapTextStyle, TextRenderer};
 const JUDGE_LINE_Y_RATIO: f32 = 0.86;
 const NOTE_HEIGHT: f32 = 0.018;
 pub const DEFAULT_NOTE_TEXTURE: TextureId = TextureId(1);
+pub const DEFAULT_KEY_EVEN_NOTE_TEXTURE: TextureId = TextureId(2);
+pub const DEFAULT_SCRATCH_NOTE_TEXTURE: TextureId = TextureId(3);
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DrawPlan {
@@ -567,10 +569,10 @@ fn push_default_note_skin(commands: &mut Vec<DrawCommand>, lane: Lane, rect: Rec
     append_skin_render_items(
         commands,
         &[SkinRenderItem::Image {
-            texture: SkinTextureId(note.texture),
+            texture: SkinTextureId(note.texture_for_lane(lane)),
             rect,
             uv: note.uv,
-            tint: note_color(lane),
+            tint: note_tint(lane),
             blend: BlendMode::Normal,
         }],
     );
@@ -922,12 +924,8 @@ fn receptor_color(lane: Lane) -> Color {
     }
 }
 
-fn note_color(lane: Lane) -> Color {
-    match lane {
-        Lane::Scratch => Color::rgb(0.45, 0.7, 0.62),
-        Lane::Key1 | Lane::Key3 | Lane::Key5 | Lane::Key7 => Color::rgb(0.82, 0.86, 0.9),
-        Lane::Key2 | Lane::Key4 | Lane::Key6 => Color::rgb(0.35, 0.68, 0.95),
-    }
+fn note_tint(_lane: Lane) -> Color {
+    Color::rgb(1.0, 1.0, 1.0)
 }
 
 fn lane_label(lane: Lane) -> &'static str {
@@ -988,7 +986,43 @@ mod tests {
         assert!(plan.commands.len() >= LANE_COUNT + 3);
         assert!(plan.commands.iter().any(|command| matches!(
             command,
-            DrawCommand::Image { tint, .. } if *tint == note_color(Lane::Key1)
+            DrawCommand::Image { texture, tint, .. }
+                if *texture == DEFAULT_NOTE_TEXTURE && *tint == note_tint(Lane::Key1)
+        )));
+    }
+
+    #[test]
+    fn play_plan_uses_note_textures_by_lane() {
+        let mut snapshot = RenderSnapshot::default();
+        snapshot.visible_notes[Lane::Scratch.index()].push(VisibleNote {
+            lane: Lane::Scratch,
+            time: TimeUs(1_000),
+            y: 0.5,
+        });
+        snapshot.visible_notes[Lane::Key1.index()].push(VisibleNote {
+            lane: Lane::Key1,
+            time: TimeUs(1_000),
+            y: 0.5,
+        });
+        snapshot.visible_notes[Lane::Key2.index()].push(VisibleNote {
+            lane: Lane::Key2,
+            time: TimeUs(1_000),
+            y: 0.5,
+        });
+
+        let plan = DrawPlan::from_scene(&AppSceneSnapshot::Play(snapshot));
+
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Image { texture, .. } if *texture == DEFAULT_SCRATCH_NOTE_TEXTURE
+        )));
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Image { texture, .. } if *texture == DEFAULT_NOTE_TEXTURE
+        )));
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Image { texture, .. } if *texture == DEFAULT_KEY_EVEN_NOTE_TEXTURE
         )));
     }
 
@@ -1011,7 +1045,7 @@ mod tests {
             .commands
             .iter()
             .filter_map(|command| match command {
-                DrawCommand::Image { rect, tint, .. } if *tint == note_color(Lane::Key1) => {
+                DrawCommand::Image { rect, texture, .. } if *texture == DEFAULT_NOTE_TEXTURE => {
                     Some(rect.y)
                 }
                 _ => None,

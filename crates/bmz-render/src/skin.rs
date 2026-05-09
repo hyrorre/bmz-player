@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use bmz_core::lane::Lane;
 use serde::Deserialize;
 
 use crate::plan::{Color, DrawCommand, Point, Rect, TextStyle, TextureId, UvRect};
@@ -45,8 +46,20 @@ pub struct SkinPlayManifest {
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
 pub struct SkinImageManifest {
     pub texture: u32,
+    pub key_even_texture: Option<u32>,
+    pub scratch_texture: Option<u32>,
     #[serde(default)]
     pub uv: TextureRegion,
+}
+
+impl SkinImageManifest {
+    pub fn texture_for_lane(self, lane: Lane) -> u32 {
+        match lane {
+            Lane::Scratch => self.scratch_texture.unwrap_or(self.texture),
+            Lane::Key2 | Lane::Key4 | Lane::Key6 => self.key_even_texture.unwrap_or(self.texture),
+            Lane::Key1 | Lane::Key3 | Lane::Key5 | Lane::Key7 => self.texture,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -232,6 +245,8 @@ impl SkinManifest {
     pub fn play_note_image(&self) -> SkinImageManifest {
         self.play.note.unwrap_or(SkinImageManifest {
             texture: crate::plan::DEFAULT_NOTE_TEXTURE.0,
+            key_even_texture: None,
+            scratch_texture: None,
             uv: TextureRegion::default(),
         })
     }
@@ -469,8 +484,18 @@ mod tests {
             id = 1
             path = "note.png"
 
+            [[textures]]
+            id = 2
+            path = "note-blue.png"
+
+            [[textures]]
+            id = 3
+            path = "note-red.png"
+
             [play.note]
             texture = 1
+            key_even_texture = 2
+            scratch_texture = 3
             "#,
         )
         .unwrap();
@@ -479,7 +504,12 @@ mod tests {
 
         assert_eq!(textures[0].id, TextureId(1));
         assert_eq!(textures[0].path, PathBuf::from("/skin/default/note.png"));
-        assert_eq!(manifest.play_note_image().texture, 1);
+        assert_eq!(textures[1].id, TextureId(2));
+        assert_eq!(textures[1].path, PathBuf::from("/skin/default/note-blue.png"));
+        assert_eq!(textures[2].id, TextureId(3));
+        assert_eq!(textures[2].path, PathBuf::from("/skin/default/note-red.png"));
+        assert_eq!(manifest.play_note_image().texture_for_lane(Lane::Key2), 2);
+        assert_eq!(manifest.play_note_image().texture_for_lane(Lane::Scratch), 3);
     }
 
     #[test]
@@ -488,6 +518,11 @@ mod tests {
         let note = manifest.play_note_image();
 
         assert_eq!(note.texture, 1);
+        assert_eq!(note.texture_for_lane(Lane::Key1), 1);
+        assert_eq!(note.texture_for_lane(Lane::Key2), 2);
+        assert_eq!(note.texture_for_lane(Lane::Key4), 2);
+        assert_eq!(note.texture_for_lane(Lane::Key6), 2);
+        assert_eq!(note.texture_for_lane(Lane::Scratch), 3);
         assert_eq!(note.uv, TextureRegion::default());
     }
 }

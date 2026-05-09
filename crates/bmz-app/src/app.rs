@@ -714,6 +714,8 @@ mod tests {
     #[test]
     fn default_skin_note_texture_exists() {
         assert!(default_skin_root().join("note.png").is_file());
+        assert!(default_skin_root().join("note-blue.png").is_file());
+        assert!(default_skin_root().join("note-red.png").is_file());
     }
 
     #[test]
@@ -723,6 +725,18 @@ mod tests {
 
         assert!(
             manifest.textures.iter().any(|texture| texture.id == 1 && texture.path == "note.png")
+        );
+        assert!(
+            manifest
+                .textures
+                .iter()
+                .any(|texture| texture.id == 2 && texture.path == "note-blue.png")
+        );
+        assert!(
+            manifest
+                .textures
+                .iter()
+                .any(|texture| texture.id == 3 && texture.path == "note-red.png")
         );
     }
 
