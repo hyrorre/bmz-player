@@ -1,3 +1,8 @@
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result};
+use serde::Deserialize;
+
 use crate::plan::{Color, DrawCommand, Point, Rect, TextStyle, TextureId, UvRect};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -16,6 +21,24 @@ pub struct SkinObject {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SkinDefinition {
     pub objects: Vec<SkinObject>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SkinManifest {
+    #[serde(default)]
+    pub textures: Vec<SkinTextureManifest>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SkinTextureManifest {
+    pub id: u32,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedSkinTexture {
+    pub id: TextureId,
+    pub path: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -161,6 +184,27 @@ impl SkinDefinition {
                     |slot| lookup_text(context.text, slot),
                     |slot| lookup_number(context.numbers, slot),
                 )
+            })
+            .collect()
+    }
+}
+
+impl SkinManifest {
+    pub fn load(path: &Path) -> Result<Self> {
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("failed to read skin manifest: {}", path.display()))?;
+        toml::from_str(&text)
+            .with_context(|| format!("failed to parse skin manifest: {}", path.display()))
+    }
+
+    pub fn resolve_textures(&self, base_dir: &Path) -> Vec<ResolvedSkinTexture> {
+        self.textures
+            .iter()
+            .map(|texture| {
+                let path = Path::new(&texture.path);
+                let path =
+                    if path.is_absolute() { path.to_path_buf() } else { base_dir.join(path) };
+                ResolvedSkinTexture { id: TextureId(texture.id), path }
             })
             .collect()
     }
@@ -383,5 +427,22 @@ mod tests {
 
         assert_eq!(commands.len(), 2);
         assert!(matches!(commands[1], DrawCommand::Image { texture: TextureId(1), .. }));
+    }
+
+    #[test]
+    fn skin_manifest_resolves_relative_texture_paths() {
+        let manifest: SkinManifest = toml::from_str(
+            r#"
+            [[textures]]
+            id = 1
+            path = "note.png"
+            "#,
+        )
+        .unwrap();
+
+        let textures = manifest.resolve_textures(Path::new("/skin/default"));
+
+        assert_eq!(textures[0].id, TextureId(1));
+        assert_eq!(textures[0].path, PathBuf::from("/skin/default/note.png"));
     }
 }

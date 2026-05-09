@@ -8,6 +8,8 @@ license.workspace = true
 anyhow.workspace = true
 ab_glyph = "0.2.32"
 png = "0.17"
+serde.workspace = true
+toml.workspace = true
 tracing.workspace = true
 wgpu.workspace = true
 

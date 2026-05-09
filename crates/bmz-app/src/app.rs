@@ -2,10 +2,10 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use bmz_render::plan::DEFAULT_NOTE_TEXTURE;
 use bmz_render::renderer::{RenderSurfaceStatus, Renderer, SurfaceSize};
 use bmz_render::sample::{sample_play_scene, sample_result_scene, sample_select_scene};
 use bmz_render::scene::{AppSceneSnapshot, ResultSnapshot, SelectRowSnapshot, SelectSnapshot};
+use bmz_render::skin::SkinManifest;
 use bmz_render::snapshot::{DisplayJudgeCounts, RenderSnapshot};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, StartCause, WindowEvent};
@@ -421,11 +421,24 @@ impl WinitApp {
 }
 
 fn load_default_skin_textures(renderer: &mut Renderer) {
-    let note_path = default_skin_root().join("note.png");
-    match renderer.load_png_texture(DEFAULT_NOTE_TEXTURE, &note_path) {
-        Ok(()) => tracing::info!(path = %note_path.display(), "loaded default note texture"),
+    let skin_root = default_skin_root();
+    let manifest_path = skin_root.join("skin.toml");
+    let manifest = match SkinManifest::load(&manifest_path) {
+        Ok(manifest) => manifest,
         Err(error) => {
-            tracing::warn!(path = %note_path.display(), %error, "failed to load default note texture; using fallback")
+            tracing::warn!(path = %manifest_path.display(), %error, "failed to load default skin manifest; using fallback textures");
+            return;
+        }
+    };
+
+    for texture in manifest.resolve_textures(&skin_root) {
+        match renderer.load_png_texture(texture.id, &texture.path) {
+            Ok(()) => {
+                tracing::info!(texture_id = texture.id.0, path = %texture.path.display(), "loaded default skin texture")
+            }
+            Err(error) => {
+                tracing::warn!(texture_id = texture.id.0, path = %texture.path.display(), %error, "failed to load default skin texture; using fallback")
+            }
         }
     }
 }
@@ -701,6 +714,16 @@ mod tests {
     #[test]
     fn default_skin_note_texture_exists() {
         assert!(default_skin_root().join("note.png").is_file());
+    }
+
+    #[test]
+    fn default_skin_manifest_exists() {
+        let manifest_path = default_skin_root().join("skin.toml");
+        let manifest = SkinManifest::load(&manifest_path).unwrap();
+
+        assert!(
+            manifest.textures.iter().any(|texture| texture.id == 1 && texture.path == "note.png")
+        );
     }
 
     #[test]

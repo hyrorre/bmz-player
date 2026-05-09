@@ -287,6 +287,8 @@ dependencies = [
  "bmz-core",
  "bmz-gameplay",
  "png",
+ "serde",
+ "toml",
  "tracing",
  "wgpu",
 ]
