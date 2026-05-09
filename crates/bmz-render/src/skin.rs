@@ -557,6 +557,7 @@ pub struct SkinDocumentTexture {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct SkinDrawState {
+    pub elapsed_ms: i32,
     pub gauge: f32,
 }
 
@@ -881,7 +882,7 @@ impl SkinDocument {
             .filter_map(|destination| {
                 let image = images.get(destination.id.as_str())?;
                 let source = sources.get(&image.src)?;
-                let frame = resolve_destination_first_frame(destination)?;
+                let frame = resolve_destination_frame(destination, state.elapsed_ms)?;
                 let source_width = source.source_size.width.max(1.0);
                 let source_height = source.source_size.height.max(1.0);
                 Some(SkinRenderItem::Image {
@@ -1567,15 +1568,19 @@ fn eval_skin_draw_operand(operand: &str, state: SkinDrawState) -> Option<f32> {
     }
 }
 
-fn resolve_destination_first_frame(destination: &SkinDestinationDef) -> Option<ResolvedSkinFrame> {
+fn resolve_destination_frame(
+    destination: &SkinDestinationDef,
+    elapsed_ms: i32,
+) -> Option<ResolvedSkinFrame> {
     let mut frame = ResolvedSkinFrame::default();
+    let mut resolved = None;
     for animation in &destination.dst {
         apply_skin_animation(&mut frame, animation);
-        if frame.time == 0 {
-            return Some(frame);
+        if frame.time <= elapsed_ms {
+            resolved = Some(frame);
         }
     }
-    destination.dst.first().map(|_| frame)
+    resolved.or_else(|| destination.dst.first().map(|_| frame))
 }
 
 fn apply_skin_animation(frame: &mut ResolvedSkinFrame, animation: &SkinAnimationDef) {
@@ -2338,9 +2343,12 @@ mod tests {
             },
         )]);
 
-        let high = document.static_image_render_items(&sources, SkinDrawState { gauge: 80.0 });
-        let middle = document.static_image_render_items(&sources, SkinDrawState { gauge: 60.0 });
-        let low = document.static_image_render_items(&sources, SkinDrawState { gauge: 10.0 });
+        let high = document
+            .static_image_render_items(&sources, SkinDrawState { elapsed_ms: 0, gauge: 80.0 });
+        let middle = document
+            .static_image_render_items(&sources, SkinDrawState { elapsed_ms: 0, gauge: 60.0 });
+        let low = document
+            .static_image_render_items(&sources, SkinDrawState { elapsed_ms: 0, gauge: 10.0 });
 
         assert_eq!(high.len(), 1);
         assert_eq!(middle.len(), 1);
@@ -2400,6 +2408,57 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert!(
             matches!(items[0], SkinRenderItem::Image { rect: Rect { x, .. }, .. } if approx_eq(x, 0.0))
+        );
+    }
+
+    #[test]
+    fn skin_document_samples_destination_keyframes_by_elapsed_time() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "system.png" }],
+                "image": [{ "id": "panel", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10 }],
+                "destination": [
+                    { "id": "panel", "dst": [
+                        { "time": 0, "x": 0, "y": 0, "w": 10, "h": 10 },
+                        { "time": 100, "x": 30, "a": 128 },
+                        { "time": 200, "x": 60, "w": 20 }
+                    ]}
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "1".to_string(),
+            SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 10.0, height: 10.0 },
+            },
+        )]);
+
+        let early = document
+            .static_image_render_items(&sources, SkinDrawState { elapsed_ms: 50, gauge: 0.0 });
+        let middle = document
+            .static_image_render_items(&sources, SkinDrawState { elapsed_ms: 150, gauge: 0.0 });
+        let late = document
+            .static_image_render_items(&sources, SkinDrawState { elapsed_ms: 250, gauge: 0.0 });
+
+        assert!(
+            matches!(early[0], SkinRenderItem::Image { rect: Rect { x, width, .. }, tint: Color { a, .. }, .. }
+                if approx_eq(x, 0.0) && approx_eq(width, 0.1) && approx_eq(a, 1.0))
+        );
+        assert!(
+            matches!(middle[0], SkinRenderItem::Image { rect: Rect { x, width, .. }, tint: Color { a, .. }, .. }
+                if approx_eq(x, 0.3) && approx_eq(width, 0.1) && approx_eq(a, 128.0 / 255.0))
+        );
+        assert!(
+            matches!(late[0], SkinRenderItem::Image { rect: Rect { x, width, .. }, tint: Color { a, .. }, .. }
+                if approx_eq(x, 0.6) && approx_eq(width, 0.2) && approx_eq(a, 128.0 / 255.0))
         );
     }
 
