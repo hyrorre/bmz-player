@@ -1,4 +1,4 @@
-use crate::plan::{Color, DrawCommand, Point, Rect, TextStyle};
+use crate::plan::{Color, DrawCommand, Point, Rect, TextStyle, TextureId, UvRect};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SkinObjectId(pub u32);
@@ -181,9 +181,13 @@ pub fn append_skin_render_items(commands: &mut Vec<DrawCommand>, items: &[SkinRe
                     });
                 }
             }
-            SkinRenderItem::Image { .. } => {
-                // Texture commands are represented in the skin model now; the wgpu image
-                // pipeline will consume them once texture asset loading lands.
+            SkinRenderItem::Image { texture, rect, uv, tint, .. } => {
+                commands.push(DrawCommand::Image {
+                    rect: *rect,
+                    uv: UvRect { x: uv.x, y: uv.y, width: uv.width, height: uv.height },
+                    texture: TextureId(texture.0),
+                    tint: *tint,
+                });
             }
         }
     }
@@ -357,7 +361,7 @@ mod tests {
     }
 
     #[test]
-    fn append_skin_render_items_skips_images_until_texture_pipeline_exists() {
+    fn append_skin_render_items_emits_image_commands() {
         let mut commands = Vec::new();
         append_skin_render_items(
             &mut commands,
@@ -377,6 +381,7 @@ mod tests {
             ],
         );
 
-        assert_eq!(commands.len(), 1);
+        assert_eq!(commands.len(), 2);
+        assert!(matches!(commands[1], DrawCommand::Image { texture: TextureId(1), .. }));
     }
 }

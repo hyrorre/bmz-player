@@ -4,7 +4,8 @@ use bmz_core::time::TimeUs;
 use crate::scene::{AppSceneSnapshot, SelectRowSnapshot};
 use crate::skin::{
     Animation, BlendMode, NumberSlot, SkinDefinition, SkinObject, SkinObjectId, SkinPhase,
-    SkinPlacement, SkinRenderContext, SkinSource, TextSlot, append_skin_render_items,
+    SkinPlacement, SkinRenderContext, SkinRenderItem, SkinSource, SkinTextureId, TextSlot,
+    TextureRegion, append_skin_render_items,
 };
 use crate::snapshot::{DisplayJudgeCounts, RenderSnapshot};
 use crate::text::{BitmapTextStyle, TextRenderer};
@@ -21,6 +22,7 @@ pub struct DrawPlan {
 #[derive(Debug, Clone, PartialEq)]
 pub enum DrawCommand {
     Rect { rect: Rect, color: Color },
+    Image { rect: Rect, uv: UvRect, texture: TextureId, tint: Color },
     Text { origin: Point, text: String, style: TextStyle },
 }
 
@@ -37,6 +39,17 @@ pub struct Point {
     pub x: f32,
     pub y: f32,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct UvRect {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TextureId(pub u32);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TextStyle {
@@ -305,15 +318,11 @@ fn plan_play(snapshot: &RenderSnapshot) -> DrawPlan {
 
         for note in &snapshot.visible_notes[lane_index] {
             let y = note_rect_y(board, note.y);
-            commands.push(DrawCommand::Rect {
-                rect: Rect {
-                    x: x + lane_width * 0.08,
-                    y,
-                    width: lane_width * 0.84,
-                    height: NOTE_HEIGHT,
-                },
-                color: note_color(lane),
-            });
+            push_default_note_skin(
+                &mut commands,
+                lane,
+                Rect { x: x + lane_width * 0.08, y, width: lane_width * 0.84, height: NOTE_HEIGHT },
+            );
         }
     }
 
@@ -550,6 +559,19 @@ fn push_default_play_skin(commands: &mut Vec<DrawCommand>, snapshot: &RenderSnap
         numbers: &number_values,
     });
     append_skin_render_items(commands, &items);
+}
+
+fn push_default_note_skin(commands: &mut Vec<DrawCommand>, lane: Lane, rect: Rect) {
+    append_skin_render_items(
+        commands,
+        &[SkinRenderItem::Image {
+            texture: SkinTextureId(0),
+            rect,
+            uv: TextureRegion { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+            tint: note_color(lane),
+            blend: BlendMode::Normal,
+        }],
+    );
 }
 
 fn default_play_skin(snapshot: &RenderSnapshot) -> SkinDefinition {
@@ -964,7 +986,7 @@ mod tests {
         assert!(plan.commands.len() >= LANE_COUNT + 3);
         assert!(plan.commands.iter().any(|command| matches!(
             command,
-            DrawCommand::Rect { color, .. } if *color == note_color(Lane::Key1)
+            DrawCommand::Image { tint, .. } if *tint == note_color(Lane::Key1)
         )));
     }
 
@@ -987,7 +1009,7 @@ mod tests {
             .commands
             .iter()
             .filter_map(|command| match command {
-                DrawCommand::Rect { rect, color } if *color == note_color(Lane::Key1) => {
+                DrawCommand::Image { rect, tint, .. } if *tint == note_color(Lane::Key1) => {
                     Some(rect.y)
                 }
                 _ => None,
