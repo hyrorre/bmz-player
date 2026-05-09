@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
@@ -8,13 +9,14 @@ use std::thread;
 use ab_glyph::{Font, FontArc, Glyph, PxScale, ScaleFont, point};
 use anyhow::{Context, Result, anyhow};
 
-use crate::plan::{Color, DrawCommand, DrawPlan, Point, TextStyle};
+use crate::plan::{Color, DrawCommand, DrawPlan, Point, TextStyle, TextureId};
 use crate::scene::AppSceneSnapshot;
 
 #[derive(Default)]
 pub struct Renderer {
     last_scene: Option<AppSceneSnapshot>,
     last_plan: Option<DrawPlan>,
+    pending_textures: Vec<PendingTexture>,
     gpu: Option<WgpuRenderer>,
 }
 
@@ -39,6 +41,20 @@ impl SurfaceSize {
     }
 }
 
+fn validate_rgba_texture(width: u32, height: u32, rgba: &[u8]) -> Result<()> {
+    if width == 0 || height == 0 {
+        return Err(anyhow!("texture dimensions must be non-zero"));
+    }
+    let expected = width as usize * height as usize * 4;
+    if rgba.len() != expected {
+        return Err(anyhow!(
+            "rgba texture length mismatch: expected {expected} bytes, got {}",
+            rgba.len()
+        ));
+    }
+    Ok(())
+}
+
 struct WgpuRenderer {
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
@@ -50,8 +66,7 @@ struct WgpuRenderer {
     image_pipeline: wgpu::RenderPipeline,
     image_bind_group_layout: wgpu::BindGroupLayout,
     image_sampler: wgpu::Sampler,
-    fallback_image_texture: wgpu::Texture,
-    fallback_image_texture_view: wgpu::TextureView,
+    image_textures: HashMap<TextureId, GpuTexture>,
     image_buffer: Option<wgpu::Buffer>,
     image_buffer_capacity: usize,
     text_pipeline: wgpu::RenderPipeline,
@@ -65,6 +80,19 @@ struct WgpuRenderer {
     font: Option<FontArc>,
 }
 
+#[derive(Debug, Clone)]
+struct PendingTexture {
+    id: TextureId,
+    width: u32,
+    height: u32,
+    rgba: Vec<u8>,
+}
+
+struct GpuTexture {
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+}
+
 impl Renderer {
     pub fn attach_surface<T>(&mut self, window: T, size: SurfaceSize) -> Result<()>
     where
@@ -75,7 +103,27 @@ impl Renderer {
             return Ok(());
         }
 
-        self.gpu = Some(WgpuRenderer::new(window, size)?);
+        let mut gpu = WgpuRenderer::new(window, size)?;
+        for texture in self.pending_textures.drain(..) {
+            gpu.upsert_rgba_texture(texture.id, texture.width, texture.height, &texture.rgba);
+        }
+        self.gpu = Some(gpu);
+        Ok(())
+    }
+
+    pub fn upsert_rgba_texture(
+        &mut self,
+        id: TextureId,
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+    ) -> Result<()> {
+        validate_rgba_texture(width, height, &rgba)?;
+        if let Some(gpu) = &mut self.gpu {
+            gpu.upsert_rgba_texture(id, width, height, &rgba);
+        } else {
+            self.pending_textures.push(PendingTexture { id, width, height, rgba });
+        }
         Ok(())
     }
 
@@ -163,8 +211,7 @@ impl WgpuRenderer {
         let image_sampler = create_image_sampler(&device);
         let image_pipeline =
             create_image_pipeline(&device, config.format, &image_bind_group_layout);
-        let (fallback_image_texture, fallback_image_texture_view) =
-            create_fallback_image_texture(&device, &queue);
+        let image_textures = create_default_image_textures(&device, &queue);
         let text_bind_group_layout = create_text_bind_group_layout(&device);
         let text_sampler = create_text_sampler(&device);
         let text_pipeline = create_text_pipeline(&device, config.format, &text_bind_group_layout);
@@ -180,8 +227,7 @@ impl WgpuRenderer {
             image_pipeline,
             image_bind_group_layout,
             image_sampler,
-            fallback_image_texture,
-            fallback_image_texture_view,
+            image_textures,
             image_buffer: None,
             image_buffer_capacity: 0,
             text_pipeline,
@@ -212,7 +258,8 @@ impl WgpuRenderer {
         }
 
         let rects = encode_rects(plan);
-        let images = encode_images(plan);
+        let image_batches = encode_image_batches(plan);
+        let images_len = image_batches.iter().map(|batch| batch.instances.len()).sum();
         let text_frame = self.build_text_frame(plan);
         self.ensure_rect_buffer(rects.len());
         if let Some(buffer) = &self.rect_buffer {
@@ -220,10 +267,14 @@ impl WgpuRenderer {
                 self.queue.write_buffer(buffer, 0, &rects);
             }
         }
-        self.ensure_image_buffer(images.len());
+        self.ensure_image_buffer(images_len);
         if let Some(buffer) = &self.image_buffer {
-            if !images.is_empty() {
-                self.queue.write_buffer(buffer, 0, &images);
+            if images_len > 0 {
+                let mut offset = 0;
+                for batch in &image_batches {
+                    self.queue.write_buffer(buffer, offset, &batch.instances);
+                    offset += batch.instances.len() as u64;
+                }
             }
         }
         self.upload_text_frame(&text_frame);
@@ -240,7 +291,8 @@ impl WgpuRenderer {
             }
         };
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let image_bind_group = self.image_bind_group();
+        let image_bind_groups: Vec<_> =
+            image_batches.iter().map(|batch| self.image_bind_group(batch.texture)).collect();
         let text_bind_group = self.text_bind_group();
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("bmz-render clear encoder"),
@@ -269,12 +321,17 @@ impl WgpuRenderer {
                 }
             }
             if let Some(buffer) = &self.image_buffer {
-                let instance_count = (images.len() / IMAGE_INSTANCE_BYTES) as u32;
-                if instance_count > 0 {
-                    pass.set_pipeline(&self.image_pipeline);
-                    pass.set_bind_group(0, &image_bind_group, &[]);
-                    pass.set_vertex_buffer(0, buffer.slice(..images.len() as u64));
-                    pass.draw(0..6, 0..instance_count);
+                let mut offset = 0_u64;
+                for (batch, bind_group) in image_batches.iter().zip(image_bind_groups.iter()) {
+                    let instance_count = (batch.instances.len() / IMAGE_INSTANCE_BYTES) as u32;
+                    if instance_count > 0 {
+                        let end = offset + batch.instances.len() as u64;
+                        pass.set_pipeline(&self.image_pipeline);
+                        pass.set_bind_group(0, bind_group, &[]);
+                        pass.set_vertex_buffer(0, buffer.slice(offset..end));
+                        pass.draw(0..6, 0..instance_count);
+                        offset = end;
+                    }
                 }
             }
             if let Some(bind_group) = &text_bind_group {
@@ -435,15 +492,23 @@ impl WgpuRenderer {
         }))
     }
 
-    fn image_bind_group(&self) -> wgpu::BindGroup {
-        let _keep_texture_alive = &self.fallback_image_texture;
+    fn upsert_rgba_texture(&mut self, id: TextureId, width: u32, height: u32, rgba: &[u8]) {
+        let texture = create_rgba_texture(&self.device, &self.queue, id, width, height, rgba);
+        self.image_textures.insert(id, texture);
+    }
+
+    fn image_bind_group(&self, texture_id: TextureId) -> wgpu::BindGroup {
+        let texture = self.image_textures.get(&texture_id).unwrap_or_else(|| {
+            self.image_textures.get(&TextureId(0)).expect("fallback texture is registered")
+        });
+        let _keep_texture_alive = &texture.texture;
         self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("bmz-render fallback image bind group"),
+            label: Some("bmz-render image bind group"),
             layout: &self.image_bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&self.fallback_image_texture_view),
+                    resource: wgpu::BindingResource::TextureView(&texture.view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -476,6 +541,12 @@ struct TextFrame {
     instances: Vec<u8>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ImageBatch {
+    texture: TextureId,
+    instances: Vec<u8>,
+}
+
 fn encode_rects(plan: &DrawPlan) -> Vec<u8> {
     let mut bytes = Vec::new();
     for command in &plan.commands {
@@ -489,12 +560,20 @@ fn encode_rects(plan: &DrawPlan) -> Vec<u8> {
     bytes
 }
 
-fn encode_images(plan: &DrawPlan) -> Vec<u8> {
-    let mut bytes = Vec::new();
+fn encode_image_batches(plan: &DrawPlan) -> Vec<ImageBatch> {
+    let mut batches = Vec::new();
     for command in &plan.commands {
-        let DrawCommand::Image { rect, uv, tint, .. } = command else {
+        let DrawCommand::Image { rect, uv, texture, tint } = command else {
             continue;
         };
+        let batch_index = batches
+            .iter()
+            .position(|batch: &ImageBatch| batch.texture == *texture)
+            .unwrap_or_else(|| {
+                batches.push(ImageBatch { texture: *texture, instances: Vec::new() });
+                batches.len() - 1
+            });
+        let batch = &mut batches[batch_index];
         for value in [
             rect.x,
             rect.y,
@@ -509,10 +588,10 @@ fn encode_images(plan: &DrawPlan) -> Vec<u8> {
             tint.b,
             tint.a,
         ] {
-            bytes.extend_from_slice(&value.to_le_bytes());
+            batch.instances.extend_from_slice(&value.to_le_bytes());
         }
     }
-    bytes
+    batches
 }
 
 fn build_text_frame(plan: &DrawPlan, font: &FontArc, surface: SurfaceSize) -> TextFrame {
@@ -753,13 +832,29 @@ fn create_image_sampler(device: &wgpu::Device) -> wgpu::Sampler {
     })
 }
 
-fn create_fallback_image_texture(
+fn create_default_image_textures(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-) -> (wgpu::Texture, wgpu::TextureView) {
+) -> HashMap<TextureId, GpuTexture> {
+    let mut textures = HashMap::new();
+    textures.insert(
+        TextureId(0),
+        create_rgba_texture(device, queue, TextureId(0), 1, 1, &[255, 255, 255, 255]),
+    );
+    textures
+}
+
+fn create_rgba_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    id: TextureId,
+    width: u32,
+    height: u32,
+    rgba: &[u8],
+) -> GpuTexture {
     let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("bmz-render fallback image texture"),
-        size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+        label: Some("bmz-render image texture"),
+        size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -774,12 +869,17 @@ fn create_fallback_image_texture(
             origin: wgpu::Origin3d::ZERO,
             aspect: wgpu::TextureAspect::All,
         },
-        &[255, 255, 255, 255],
-        wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(4), rows_per_image: Some(1) },
-        wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+        rgba,
+        wgpu::ImageDataLayout {
+            offset: 0,
+            bytes_per_row: Some(width * 4),
+            rows_per_image: Some(height),
+        },
+        wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
     );
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-    (texture, view)
+    tracing::debug!(texture_id = id.0, width, height, "registered render image texture");
+    GpuTexture { texture, view }
 }
 
 fn create_image_pipeline(
@@ -1186,19 +1286,36 @@ mod tests {
     }
 
     #[test]
-    fn encode_images_writes_one_instance_per_image_command() {
+    fn encode_image_batches_groups_instances_by_texture() {
         let plan = DrawPlan {
             clear: Color::rgb(0.0, 0.0, 0.0),
-            commands: vec![DrawCommand::Image {
-                rect: crate::plan::Rect { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
-                uv: crate::plan::UvRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
-                texture: crate::plan::TextureId(0),
-                tint: Color::rgb(1.0, 1.0, 1.0),
-            }],
+            commands: vec![
+                DrawCommand::Image {
+                    rect: crate::plan::Rect { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
+                    uv: crate::plan::UvRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+                    texture: crate::plan::TextureId(0),
+                    tint: Color::rgb(1.0, 1.0, 1.0),
+                },
+                DrawCommand::Image {
+                    rect: crate::plan::Rect { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
+                    uv: crate::plan::UvRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+                    texture: crate::plan::TextureId(7),
+                    tint: Color::rgb(1.0, 1.0, 1.0),
+                },
+            ],
         };
 
-        let bytes = encode_images(&plan);
+        let batches = encode_image_batches(&plan);
 
-        assert_eq!(bytes.len(), IMAGE_INSTANCE_BYTES);
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].instances.len(), IMAGE_INSTANCE_BYTES);
+        assert_eq!(batches[1].instances.len(), IMAGE_INSTANCE_BYTES);
+    }
+
+    #[test]
+    fn validate_rgba_texture_rejects_invalid_payloads() {
+        assert!(validate_rgba_texture(1, 1, &[255, 255, 255, 255]).is_ok());
+        assert!(validate_rgba_texture(0, 1, &[255, 255, 255, 255]).is_err());
+        assert!(validate_rgba_texture(1, 1, &[255]).is_err());
     }
 }
