@@ -557,9 +557,14 @@ impl SkinContext {
         document.gauge_render_items(gauge, elapsed_ms, &self.document_sources)
     }
 
-    pub fn document_judge_item(&self, judge: &str, elapsed_ms: i32) -> Option<SkinRenderItem> {
+    pub fn document_judge_items(
+        &self,
+        judge: &str,
+        combo: u32,
+        elapsed_ms: i32,
+    ) -> Option<Vec<SkinRenderItem>> {
         let document = self.document.as_ref()?;
-        document.judge_image_render_item(judge, elapsed_ms, &self.document_sources)
+        document.judge_render_items(judge, combo, elapsed_ms, &self.document_sources)
     }
 }
 
@@ -1017,21 +1022,107 @@ impl SkinDocument {
         Some(items)
     }
 
+    pub fn judge_render_items(
+        &self,
+        judge: &str,
+        combo: u32,
+        elapsed_ms: i32,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Option<Vec<SkinRenderItem>> {
+        let judge_index = judge_image_index(judge)?;
+        let judge = self.judge.first()?;
+        let image_destination = judge.images.get(judge_index)?;
+        let image_frame = resolve_destination_frame_until_end(image_destination, elapsed_ms)?;
+        let mut items = vec![self.image_render_item(
+            &image_destination.id,
+            normalize_skin_frame_rect(image_frame, self.w, self.h),
+            sources,
+        )?];
+        if combo > 0 {
+            if let Some(number_destination) = judge.numbers.get(judge_index) {
+                if let Some(number_frame) =
+                    resolve_destination_frame_until_end(number_destination, elapsed_ms)
+                {
+                    items.extend(self.value_number_render_items(
+                        &number_destination.id,
+                        combo as i64,
+                        image_frame,
+                        number_frame,
+                        sources,
+                    ));
+                }
+            }
+        }
+        Some(items)
+    }
+
     pub fn judge_image_render_item(
         &self,
         judge: &str,
         elapsed_ms: i32,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<SkinRenderItem> {
-        let judge_index = judge_image_index(judge)?;
-        let judge = self.judge.first()?;
-        let destination = judge.images.get(judge_index)?;
-        let frame = resolve_destination_frame_until_end(destination, elapsed_ms)?;
-        self.image_render_item(
-            &destination.id,
-            normalize_skin_frame_rect(frame, self.w, self.h),
-            sources,
-        )
+        self.judge_render_items(judge, 0, elapsed_ms, sources)?.into_iter().next()
+    }
+
+    fn value_number_render_items(
+        &self,
+        value_id: &str,
+        number: i64,
+        base_frame: ResolvedSkinFrame,
+        frame: ResolvedSkinFrame,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Vec<SkinRenderItem> {
+        let Some(value) = self.value.iter().find(|value| value.id == value_id) else {
+            return Vec::new();
+        };
+        let Some(source) = sources.get(&value.src) else {
+            return Vec::new();
+        };
+        let source_width = source.source_size.width.max(1.0);
+        let source_height = source.source_size.height.max(1.0);
+        let divx = value.divx.max(1);
+        let divy = value.divy.max(1);
+        let cell_width_px = value.w as f32 / divx as f32;
+        let cell_height_px = value.h as f32 / divy as f32;
+        if cell_width_px <= 0.0 || cell_height_px <= 0.0 {
+            return Vec::new();
+        }
+        let digits =
+            display_number_digits(number, value.digit.max(0) as usize, value.zeropadding != 0);
+        let digit_width = frame.w as f32 / self.w.max(1) as f32;
+        let digit_height = frame.h as f32 / self.h.max(1) as f32;
+        let origin_x = (base_frame.x + frame.x) as f32 / self.w.max(1) as f32;
+        let origin_y = (base_frame.y + frame.y) as f32 / self.h.max(1) as f32;
+
+        digits
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, digit)| {
+                let source_column = digit as i32 % divx;
+                let source_row = digit as i32 / divx;
+                Some(SkinRenderItem::Image {
+                    texture: source.texture,
+                    rect: Rect {
+                        x: origin_x + digit_width * index as f32,
+                        y: origin_y,
+                        width: digit_width,
+                        height: digit_height,
+                    },
+                    uv: TextureRegion {
+                        x: (value.x as f32 + cell_width_px * source_column as f32) / source_width,
+                        y: (value.y as f32 + cell_height_px * source_row as f32) / source_height,
+                        width: cell_width_px / source_width,
+                        height: cell_height_px / source_height,
+                    },
+                    tint: Color::rgb(1.0, 1.0, 1.0),
+                    blend: BlendMode::Normal,
+                    scale: SkinImageScale::Stretch,
+                    border: None,
+                    source_size: Some(source.source_size),
+                })
+            })
+            .collect()
     }
 
     fn image_render_item(
@@ -1671,6 +1762,18 @@ fn format_number(value: i64, digits: u8) -> String {
     } else {
         format!("{:0width$}", value.max(0), width = digits as usize)
     }
+}
+
+fn display_number_digits(value: i64, max_digits: usize, zero_pad: bool) -> Vec<u8> {
+    let mut text = if zero_pad && max_digits > 0 {
+        format!("{:0width$}", value.max(0), width = max_digits)
+    } else {
+        value.max(0).to_string()
+    };
+    if max_digits > 0 && text.len() > max_digits {
+        text = text[text.len() - max_digits..].to_string();
+    }
+    text.bytes().filter(|byte| byte.is_ascii_digit()).map(|byte| byte - b'0').collect()
 }
 
 fn lookup_text(values: &[(TextSlot, String)], slot: TextSlot) -> String {
@@ -2820,6 +2923,70 @@ mod tests {
                 ..
             } if approx_eq(x, 0.4)));
         assert!(expired.is_none());
+    }
+
+    #[test]
+    fn skin_document_resolves_judge_number_images() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "judge.png" }],
+                "image": [
+                    { "id": "judgef-pg", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10 }
+                ],
+                "value": [
+                    { "id": "judgen-pg", "src": 1, "x": 0, "y": 20, "w": 100, "h": 10, "divx": 10, "digit": 3 }
+                ],
+                "judge": [{
+                    "id": "judge",
+                    "images": [
+                        { "id": "judgef-pg", "dst": [{ "time": 0, "x": 10, "y": 10, "w": 20, "h": 10 }, { "time": 500 }] }
+                    ],
+                    "numbers": [
+                        { "id": "judgen-pg", "dst": [{ "time": 0, "x": 20, "y": 5, "w": 5, "h": 10 }, { "time": 500 }] }
+                    ]
+                }]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "1".to_string(),
+            SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 100.0, height: 100.0 },
+            },
+        )]);
+
+        let items = document.judge_render_items("PGREAT", 123, 100, &sources).unwrap();
+
+        assert_eq!(items.len(), 4);
+        assert!(matches!(items[1], SkinRenderItem::Image {
+                rect: Rect { x, y, width, height },
+                uv: TextureRegion { x: u, y: v, width: uv_width, height: uv_height },
+                ..
+            } if approx_eq(x, 0.3)
+                && approx_eq(y, 0.15)
+                && approx_eq(width, 0.05)
+                && approx_eq(height, 0.1)
+                && approx_eq(u, 0.1)
+                && approx_eq(v, 0.2)
+                && approx_eq(uv_width, 0.1)
+                && approx_eq(uv_height, 0.1)));
+        assert!(matches!(items[2], SkinRenderItem::Image {
+                rect: Rect { x, .. },
+                uv: TextureRegion { x: u, .. },
+                ..
+            } if approx_eq(x, 0.35) && approx_eq(u, 0.2)));
+        assert!(matches!(items[3], SkinRenderItem::Image {
+                rect: Rect { x, .. },
+                uv: TextureRegion { x: u, .. },
+                ..
+            } if approx_eq(x, 0.4) && approx_eq(u, 0.3)));
     }
 
     #[test]

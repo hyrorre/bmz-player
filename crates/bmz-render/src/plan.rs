@@ -647,15 +647,16 @@ fn push_default_play_skin(
     let recent_judgement = snapshot.recent_judgements.last();
     let judge_text = recent_judgement.map(|judgement| judgement.text.clone()).unwrap_or_default();
     let judge_image = recent_judgement.and_then(|judgement| {
-        skin_context.document_judge_item(
+        skin_context.document_judge_items(
             &judgement.text,
+            snapshot.combo,
             ((snapshot.time.0 - judgement.time.0) / 1_000).clamp(i32::MIN as i64, i32::MAX as i64)
                 as i32,
         )
     });
     let has_judge_image = judge_image.is_some();
-    if let Some(judge_image) = judge_image {
-        append_skin_render_items(commands, &[judge_image]);
+    if let Some(judge_items) = judge_image {
+        append_skin_render_items(commands, &judge_items);
     }
     let text_values = [(TextSlot::Judge, judge_text)];
     let number_values = [
@@ -672,7 +673,10 @@ fn push_default_play_skin(
     let items = if has_judge_image {
         items
             .into_iter()
-            .filter(|item| !matches!(item, SkinRenderItem::Text { text, .. } if text == &text_values[0].1))
+            .filter(|item| {
+                !matches!(item, SkinRenderItem::Text { text, .. } if text == &text_values[0].1)
+                    && !matches!(item, SkinRenderItem::Text { text, .. } if text == &snapshot.combo.to_string())
+            })
             .collect::<Vec<_>>()
     } else {
         items
