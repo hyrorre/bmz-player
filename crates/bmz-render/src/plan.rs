@@ -19,6 +19,10 @@ pub const DEFAULT_RECEPTOR_TEXTURE: TextureId = TextureId(4);
 pub const DEFAULT_KEY_EVEN_RECEPTOR_TEXTURE: TextureId = TextureId(5);
 pub const DEFAULT_SCRATCH_RECEPTOR_TEXTURE: TextureId = TextureId(6);
 pub const DEFAULT_JUDGE_LINE_TEXTURE: TextureId = TextureId(7);
+pub const DEFAULT_GAUGE_FRAME_TEXTURE: TextureId = TextureId(8);
+pub const DEFAULT_GAUGE_FILL_TEXTURE: TextureId = TextureId(9);
+pub const DEFAULT_COMBO_PANEL_TEXTURE: TextureId = TextureId(10);
+pub const DEFAULT_COMBO_PANEL_INACTIVE_TEXTURE: TextureId = TextureId(11);
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DrawPlan {
@@ -344,8 +348,8 @@ fn plan_play(snapshot: &RenderSnapshot) -> DrawPlan {
         });
     }
     push_judge_line(&skin_manifest, &mut commands, board);
-    push_gauge(&mut commands, snapshot.gauge);
-    push_combo_panel(&mut commands, snapshot.combo);
+    push_gauge(&skin_manifest, &mut commands, snapshot.gauge);
+    push_combo_panel(&skin_manifest, &mut commands, snapshot.combo);
     push_default_play_skin(&mut commands, snapshot);
     push_play_text(&text, &mut commands, snapshot);
     push_lane_text(&text, &mut commands, board, lane_width);
@@ -522,27 +526,50 @@ fn push_receptors(
     }
 }
 
-fn push_gauge(commands: &mut Vec<DrawCommand>, gauge: f32) {
+fn push_gauge(skin_manifest: &SkinManifest, commands: &mut Vec<DrawCommand>, gauge: f32) {
     let frame = Rect { x: 0.84, y: 0.08, width: 0.035, height: 0.82 };
     let fill = gauge.clamp(0.0, 100.0) / 100.0;
-    commands.push(DrawCommand::Rect { rect: frame, color: Color::rgb(0.06, 0.065, 0.07) });
-    commands.push(DrawCommand::Rect {
-        rect: Rect {
-            x: frame.x + 0.006,
-            y: frame.y + frame.height * (1.0 - fill),
-            width: frame.width - 0.012,
-            height: frame.height * fill,
-        },
-        color: gauge_color(gauge),
-    });
+    let frame_image = skin_manifest.play_gauge_frame_image();
+    let fill_image = skin_manifest.play_gauge_fill_image();
+    append_skin_render_items(
+        commands,
+        &[
+            SkinRenderItem::Image {
+                texture: SkinTextureId(frame_image.texture),
+                rect: frame,
+                uv: frame_image.uv,
+                tint: Color::rgb(1.0, 1.0, 1.0),
+                blend: BlendMode::Normal,
+            },
+            SkinRenderItem::Image {
+                texture: SkinTextureId(fill_image.texture),
+                rect: Rect {
+                    x: frame.x + 0.006,
+                    y: frame.y + frame.height * (1.0 - fill),
+                    width: frame.width - 0.012,
+                    height: frame.height * fill,
+                },
+                uv: fill_image.uv,
+                tint: gauge_color(gauge),
+                blend: BlendMode::Normal,
+            },
+        ],
+    );
 }
 
-fn push_combo_panel(commands: &mut Vec<DrawCommand>, combo: u32) {
+fn push_combo_panel(skin_manifest: &SkinManifest, commands: &mut Vec<DrawCommand>, combo: u32) {
     let width = if combo >= 1000 { 0.2 } else { 0.15 };
-    commands.push(DrawCommand::Rect {
-        rect: Rect { x: 0.425 - width / 2.0, y: 0.16, width, height: 0.07 },
-        color: if combo > 0 { Color::rgb(0.14, 0.18, 0.2) } else { Color::rgb(0.055, 0.06, 0.065) },
-    });
+    let image = skin_manifest.play_combo_panel_image(combo > 0);
+    append_skin_render_items(
+        commands,
+        &[SkinRenderItem::Image {
+            texture: SkinTextureId(image.texture),
+            rect: Rect { x: 0.425 - width / 2.0, y: 0.16, width, height: 0.07 },
+            uv: image.uv,
+            tint: Color::rgb(1.0, 1.0, 1.0),
+            blend: BlendMode::Normal,
+        }],
+    );
 }
 
 fn push_play_text(text: &TextRenderer, commands: &mut Vec<DrawCommand>, snapshot: &RenderSnapshot) {
@@ -1216,11 +1243,20 @@ mod tests {
         )));
         assert!(plan.commands.iter().any(|command| matches!(
             command,
-            DrawCommand::Rect { color, .. } if *color == gauge_color(82.0)
+            DrawCommand::Image { texture, tint, .. }
+                if *texture == DEFAULT_GAUGE_FRAME_TEXTURE && *tint == Color::rgb(1.0, 1.0, 1.0)
         )));
         assert!(plan.commands.iter().any(|command| matches!(
             command,
-            DrawCommand::Rect { rect, color } if rect.width >= 0.2 && *color == Color::rgb(0.14, 0.18, 0.2)
+            DrawCommand::Image { texture, tint, .. }
+                if *texture == DEFAULT_GAUGE_FILL_TEXTURE && *tint == gauge_color(82.0)
+        )));
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Image { rect, texture, tint, .. }
+                if *texture == DEFAULT_COMBO_PANEL_TEXTURE
+                    && rect.width >= 0.2
+                    && *tint == Color::rgb(1.0, 1.0, 1.0)
         )));
         assert!(plan.commands.iter().any(|command| matches!(
             command,

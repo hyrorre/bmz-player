@@ -26,6 +26,22 @@ path = "receptor-red.png"
 id = 7
 path = "judge-line.png"
 
+[[textures]]
+id = 8
+path = "gauge-frame.png"
+
+[[textures]]
+id = 9
+path = "gauge-fill.png"
+
+[[textures]]
+id = 10
+path = "combo-panel.png"
+
+[[textures]]
+id = 11
+path = "combo-panel-inactive.png"
+
 [play.note]
 texture = 1
 key_even_texture = 2
@@ -41,3 +57,27 @@ uv = { x = 0.0, y = 0.0, width = 1.0, height = 1.0 }
 [play.judge_line]
 texture = 7
 uv = { x = 0.0, y = 0.0, width = 1.0, height = 1.0 }
+scale = "stretch"
+
+[play.gauge_frame]
+texture = 8
+uv = { x = 0.0, y = 0.0, width = 1.0, height = 1.0 }
+scale = "stretch"
+border = { left = 0.18, right = 0.18, top = 0.06, bottom = 0.06 }
+
+[play.gauge_fill]
+texture = 9
+uv = { x = 0.0, y = 0.0, width = 1.0, height = 1.0 }
+scale = "stretch"
+
+[play.combo_panel]
+texture = 10
+uv = { x = 0.0, y = 0.0, width = 1.0, height = 1.0 }
+scale = "stretch"
+border = { left = 0.08, right = 0.08, top = 0.18, bottom = 0.18 }
+
+[play.combo_panel_inactive]
+texture = 11
+uv = { x = 0.0, y = 0.0, width = 1.0, height = 1.0 }
+scale = "stretch"
+border = { left = 0.08, right = 0.08, top = 0.18, bottom = 0.18 }

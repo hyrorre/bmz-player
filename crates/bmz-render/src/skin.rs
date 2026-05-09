@@ -43,6 +43,10 @@ pub struct SkinPlayManifest {
     pub note: Option<SkinImageManifest>,
     pub receptor: Option<SkinImageManifest>,
     pub judge_line: Option<SkinImageManifest>,
+    pub gauge_frame: Option<SkinImageManifest>,
+    pub gauge_fill: Option<SkinImageManifest>,
+    pub combo_panel: Option<SkinImageManifest>,
+    pub combo_panel_inactive: Option<SkinImageManifest>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
@@ -52,6 +56,9 @@ pub struct SkinImageManifest {
     pub scratch_texture: Option<u32>,
     #[serde(default)]
     pub uv: TextureRegion,
+    #[serde(default)]
+    pub scale: SkinImageScale,
+    pub border: Option<SkinImageBorder>,
 }
 
 impl SkinImageManifest {
@@ -62,6 +69,22 @@ impl SkinImageManifest {
             Lane::Key1 | Lane::Key3 | Lane::Key5 | Lane::Key7 => self.texture,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkinImageScale {
+    #[default]
+    Stretch,
+    NineSlice,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+pub struct SkinImageBorder {
+    pub left: f32,
+    pub right: f32,
+    pub top: f32,
+    pub bottom: f32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -250,6 +273,8 @@ impl SkinManifest {
             key_even_texture: None,
             scratch_texture: None,
             uv: TextureRegion::default(),
+            scale: SkinImageScale::Stretch,
+            border: None,
         })
     }
 
@@ -259,6 +284,8 @@ impl SkinManifest {
             key_even_texture: None,
             scratch_texture: None,
             uv: TextureRegion::default(),
+            scale: SkinImageScale::Stretch,
+            border: None,
         })
     }
 
@@ -268,7 +295,48 @@ impl SkinManifest {
             key_even_texture: None,
             scratch_texture: None,
             uv: TextureRegion::default(),
+            scale: SkinImageScale::Stretch,
+            border: None,
         })
+    }
+
+    pub fn play_gauge_frame_image(&self) -> SkinImageManifest {
+        self.play.gauge_frame.unwrap_or(SkinImageManifest {
+            texture: crate::plan::DEFAULT_GAUGE_FRAME_TEXTURE.0,
+            key_even_texture: None,
+            scratch_texture: None,
+            uv: TextureRegion::default(),
+            scale: SkinImageScale::Stretch,
+            border: None,
+        })
+    }
+
+    pub fn play_gauge_fill_image(&self) -> SkinImageManifest {
+        self.play.gauge_fill.unwrap_or(SkinImageManifest {
+            texture: crate::plan::DEFAULT_GAUGE_FILL_TEXTURE.0,
+            key_even_texture: None,
+            scratch_texture: None,
+            uv: TextureRegion::default(),
+            scale: SkinImageScale::Stretch,
+            border: None,
+        })
+    }
+
+    pub fn play_combo_panel_image(&self, active: bool) -> SkinImageManifest {
+        if active { self.play.combo_panel } else { self.play.combo_panel_inactive }.unwrap_or(
+            SkinImageManifest {
+                texture: if active {
+                    crate::plan::DEFAULT_COMBO_PANEL_TEXTURE.0
+                } else {
+                    crate::plan::DEFAULT_COMBO_PANEL_INACTIVE_TEXTURE.0
+                },
+                key_even_texture: None,
+                scratch_texture: None,
+                uv: TextureRegion::default(),
+                scale: SkinImageScale::Stretch,
+                border: None,
+            },
+        )
     }
 }
 
@@ -528,6 +596,22 @@ mod tests {
             id = 7
             path = "judge-line.png"
 
+            [[textures]]
+            id = 8
+            path = "gauge-frame.png"
+
+            [[textures]]
+            id = 9
+            path = "gauge-fill.png"
+
+            [[textures]]
+            id = 10
+            path = "combo-panel.png"
+
+            [[textures]]
+            id = 11
+            path = "combo-panel-inactive.png"
+
             [play.note]
             texture = 1
             key_even_texture = 2
@@ -540,6 +624,24 @@ mod tests {
 
             [play.judge_line]
             texture = 7
+            scale = "stretch"
+
+            [play.gauge_frame]
+            texture = 8
+            scale = "nine_slice"
+            border = { left = 0.18, right = 0.18, top = 0.06, bottom = 0.06 }
+
+            [play.gauge_fill]
+            texture = 9
+            scale = "stretch"
+
+            [play.combo_panel]
+            texture = 10
+            scale = "nine_slice"
+
+            [play.combo_panel_inactive]
+            texture = 11
+            scale = "stretch"
             "#,
         )
         .unwrap();
@@ -560,11 +662,29 @@ mod tests {
         assert_eq!(textures[5].path, PathBuf::from("/skin/default/receptor-red.png"));
         assert_eq!(textures[6].id, TextureId(7));
         assert_eq!(textures[6].path, PathBuf::from("/skin/default/judge-line.png"));
+        assert_eq!(textures[7].id, TextureId(8));
+        assert_eq!(textures[7].path, PathBuf::from("/skin/default/gauge-frame.png"));
+        assert_eq!(textures[8].id, TextureId(9));
+        assert_eq!(textures[8].path, PathBuf::from("/skin/default/gauge-fill.png"));
+        assert_eq!(textures[9].id, TextureId(10));
+        assert_eq!(textures[9].path, PathBuf::from("/skin/default/combo-panel.png"));
+        assert_eq!(textures[10].id, TextureId(11));
+        assert_eq!(textures[10].path, PathBuf::from("/skin/default/combo-panel-inactive.png"));
         assert_eq!(manifest.play_note_image().texture_for_lane(Lane::Key2), 2);
         assert_eq!(manifest.play_note_image().texture_for_lane(Lane::Scratch), 3);
         assert_eq!(manifest.play_receptor_image().texture_for_lane(Lane::Key2), 5);
         assert_eq!(manifest.play_receptor_image().texture_for_lane(Lane::Scratch), 6);
         assert_eq!(manifest.play_judge_line_image().texture, 7);
+        assert_eq!(manifest.play_gauge_frame_image().texture, 8);
+        assert_eq!(manifest.play_gauge_frame_image().scale, SkinImageScale::NineSlice);
+        assert_eq!(
+            manifest.play_gauge_frame_image().border,
+            Some(SkinImageBorder { left: 0.18, right: 0.18, top: 0.06, bottom: 0.06 })
+        );
+        assert_eq!(manifest.play_gauge_fill_image().texture, 9);
+        assert_eq!(manifest.play_combo_panel_image(true).texture, 10);
+        assert_eq!(manifest.play_combo_panel_image(true).scale, SkinImageScale::NineSlice);
+        assert_eq!(manifest.play_combo_panel_image(false).texture, 11);
     }
 
     #[test]
@@ -573,6 +693,10 @@ mod tests {
         let note = manifest.play_note_image();
         let receptor = manifest.play_receptor_image();
         let judge_line = manifest.play_judge_line_image();
+        let gauge_frame = manifest.play_gauge_frame_image();
+        let gauge_fill = manifest.play_gauge_fill_image();
+        let combo_panel = manifest.play_combo_panel_image(true);
+        let combo_panel_inactive = manifest.play_combo_panel_image(false);
 
         assert_eq!(note.texture, 1);
         assert_eq!(note.texture_for_lane(Lane::Key1), 1);
@@ -590,5 +714,13 @@ mod tests {
         assert_eq!(receptor.uv, TextureRegion::default());
         assert_eq!(judge_line.texture, 7);
         assert_eq!(judge_line.uv, TextureRegion::default());
+        assert_eq!(gauge_frame.texture, 8);
+        assert_eq!(gauge_frame.scale, SkinImageScale::Stretch);
+        assert!(gauge_frame.border.is_some());
+        assert_eq!(gauge_fill.texture, 9);
+        assert_eq!(combo_panel.texture, 10);
+        assert!(combo_panel.border.is_some());
+        assert_eq!(combo_panel_inactive.texture, 11);
+        assert!(combo_panel_inactive.border.is_some());
     }
 }

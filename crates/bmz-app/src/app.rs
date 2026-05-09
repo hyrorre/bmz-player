@@ -720,6 +720,10 @@ mod tests {
         assert!(default_skin_root().join("receptor-blue.png").is_file());
         assert!(default_skin_root().join("receptor-red.png").is_file());
         assert!(default_skin_root().join("judge-line.png").is_file());
+        assert!(default_skin_root().join("gauge-frame.png").is_file());
+        assert!(default_skin_root().join("gauge-fill.png").is_file());
+        assert!(default_skin_root().join("combo-panel.png").is_file());
+        assert!(default_skin_root().join("combo-panel-inactive.png").is_file());
     }
 
     #[test]
@@ -765,6 +769,30 @@ mod tests {
                 .textures
                 .iter()
                 .any(|texture| texture.id == 7 && texture.path == "judge-line.png")
+        );
+        assert!(
+            manifest
+                .textures
+                .iter()
+                .any(|texture| texture.id == 8 && texture.path == "gauge-frame.png")
+        );
+        assert!(
+            manifest
+                .textures
+                .iter()
+                .any(|texture| texture.id == 9 && texture.path == "gauge-fill.png")
+        );
+        assert!(
+            manifest
+                .textures
+                .iter()
+                .any(|texture| texture.id == 10 && texture.path == "combo-panel.png")
+        );
+        assert!(
+            manifest
+                .textures
+                .iter()
+                .any(|texture| texture.id == 11 && texture.path == "combo-panel-inactive.png")
         );
     }
 
