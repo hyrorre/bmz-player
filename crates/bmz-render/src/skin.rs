@@ -9,7 +9,7 @@ use serde::{Deserialize, Deserializer};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::assets::load_png_rgba;
-use crate::plan::{Color, DrawCommand, Point, Rect, TextStyle, TextureId, UvRect};
+use crate::plan::{Color, DrawCommand, Point, Rect, TextLayer, TextStyle, TextureId, UvRect};
 use crate::snapshot::DisplayJudgeCounts;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -261,7 +261,7 @@ pub struct SkinTextDef {
     pub size: i32,
     #[serde(default)]
     pub align: i32,
-    #[serde(default)]
+    #[serde(default, rename = "ref")]
     pub ref_id: i32,
     #[serde(default, rename = "constantText")]
     pub constant_text: String,
@@ -542,10 +542,18 @@ impl SkinContext {
     }
 
     pub fn static_document_items_for_state(&self, state: SkinDrawState) -> Vec<SkinRenderItem> {
+        self.static_document_items_for_state_and_text(state, SkinTextState::default())
+    }
+
+    pub fn static_document_items_for_state_and_text(
+        &self,
+        state: SkinDrawState,
+        text: SkinTextState<'_>,
+    ) -> Vec<SkinRenderItem> {
         let Some(document) = &self.document else {
             return Vec::new();
         };
-        document.static_image_render_items(&self.document_sources, state)
+        document.static_render_items(&self.document_sources, state, text)
     }
 
     pub fn document_note_item(&self, lane: Lane, rect: Rect) -> Option<SkinRenderItem> {
@@ -586,6 +594,15 @@ pub struct SkinDrawState {
     pub past_notes: u32,
     pub judge_counts: DisplayJudgeCounts,
     pub gauge: f32,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SkinTextState<'a> {
+    pub title: &'a str,
+    pub subtitle: &'a str,
+    pub artist: &'a str,
+    pub subartist: &'a str,
+    pub genre: &'a str,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -899,6 +916,15 @@ impl SkinDocument {
         sources: &HashMap<String, SkinDocumentTexture>,
         state: SkinDrawState,
     ) -> Vec<SkinRenderItem> {
+        self.static_render_items(sources, state, SkinTextState::default())
+    }
+
+    pub fn static_render_items(
+        &self,
+        sources: &HashMap<String, SkinDocumentTexture>,
+        state: SkinDrawState,
+        text_state: SkinTextState<'_>,
+    ) -> Vec<SkinRenderItem> {
         let images = self.image_map();
         let enabled_options = self.enabled_options();
         self.destination
@@ -938,15 +964,19 @@ impl SkinDocument {
                     }]);
                 }
 
-                let value = self.value.iter().find(|value| value.id == destination.id)?;
-                let number = skin_state_number(value.ref_id, state)?;
-                Some(self.value_number_render_items(
-                    &value.id,
-                    number,
-                    ResolvedSkinFrame::default(),
-                    frame,
-                    sources,
-                ))
+                if let Some(value) = self.value.iter().find(|value| value.id == destination.id) {
+                    let number = skin_state_number(value.ref_id, state)?;
+                    return Some(self.value_number_render_items(
+                        &value.id,
+                        number,
+                        ResolvedSkinFrame::default(),
+                        frame,
+                        sources,
+                    ));
+                }
+
+                let text = self.text.iter().find(|text| text.id == destination.id)?;
+                self.text_render_item(text, frame, text_state).map(|item| vec![item])
             })
             .flatten()
             .collect()
@@ -1170,6 +1200,36 @@ impl SkinDocument {
             scale: SkinImageScale::Stretch,
             border: None,
             source_size: Some(source.source_size),
+        })
+    }
+
+    fn text_render_item(
+        &self,
+        text: &SkinTextDef,
+        frame: ResolvedSkinFrame,
+        state: SkinTextState<'_>,
+    ) -> Option<SkinRenderItem> {
+        let content = skin_state_text(text, state);
+        if content.is_empty() {
+            return None;
+        }
+        Some(SkinRenderItem::Text {
+            origin: Point {
+                x: frame.x as f32 / self.w.max(1) as f32,
+                y: frame.y as f32 / self.h.max(1) as f32,
+            },
+            text: content,
+            style: TextStyle {
+                size: frame.h.max(text.size).max(1) as f32 / self.h.max(1) as f32,
+                color: Color::rgba(
+                    frame.r as f32 / 255.0,
+                    frame.g as f32 / 255.0,
+                    frame.b as f32 / 255.0,
+                    frame.a as f32 / 255.0,
+                ),
+                layer: TextLayer::Ui,
+            },
+            blend: BlendMode::Normal,
         })
     }
 }
@@ -1898,6 +1958,31 @@ fn score_rate_parts(ex_score: u32, total_notes: u32) -> (u32, u32) {
 
 fn gauge_after_dot(gauge: f32) -> u32 {
     if gauge > 0.0 && gauge < 0.1 { 1 } else { ((gauge.max(0.0) * 10.0) as u32) % 10 }
+}
+
+fn skin_state_text(text: &SkinTextDef, state: SkinTextState<'_>) -> String {
+    if !text.constant_text.is_empty() {
+        return text.constant_text.clone();
+    }
+    match text.ref_id {
+        10 => state.title.to_string(),
+        11 => state.subtitle.to_string(),
+        12 => full_label(state.title, state.subtitle),
+        13 => state.genre.to_string(),
+        14 => state.artist.to_string(),
+        15 => state.subartist.to_string(),
+        16 => full_label(state.artist, state.subartist),
+        _ => String::new(),
+    }
+}
+
+fn full_label(primary: &str, secondary: &str) -> String {
+    match (primary.is_empty(), secondary.is_empty()) {
+        (true, true) => String::new(),
+        (false, true) => primary.to_string(),
+        (true, false) => secondary.to_string(),
+        (false, false) => format!("{primary} {secondary}"),
+    }
 }
 
 fn resolve_destination_frame(
@@ -3113,6 +3198,57 @@ mod tests {
                 uv: TextureRegion { x: u, .. },
                 ..
             } if approx_eq(x, 0.15) && approx_eq(u, 0.5)));
+    }
+
+    #[test]
+    fn skin_document_resolves_static_text_destinations() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "text": [
+                    { "id": "title", "size": 8, "ref": 12 },
+                    { "id": "genre", "size": 6, "ref": 13 },
+                    { "id": "constant", "size": 5, "constantText": "READY" }
+                ],
+                "destination": [
+                    { "id": "title", "dst": [{ "x": 10, "y": 20, "h": 10, "r": 128, "g": 200, "b": 255 }] },
+                    { "id": "genre", "dst": [{ "x": 10, "y": 40, "h": 6 }] },
+                    { "id": "constant", "dst": [{ "x": 10, "y": 60, "h": 5, "a": 128 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        let items = document.static_render_items(
+            &HashMap::new(),
+            SkinDrawState::default(),
+            SkinTextState {
+                title: "Song",
+                subtitle: "Another",
+                genre: "Techno",
+                ..SkinTextState::default()
+            },
+        );
+
+        assert_eq!(items.len(), 3);
+        assert!(matches!(&items[0], SkinRenderItem::Text {
+                origin: Point { x, y },
+                text,
+                style,
+                ..
+            } if approx_eq(*x, 0.1)
+                && approx_eq(*y, 0.2)
+                && text == "Song Another"
+                && approx_eq(style.size, 0.1)
+                && style.color == Color::rgba(128.0 / 255.0, 200.0 / 255.0, 1.0, 1.0)));
+        assert!(matches!(&items[1], SkinRenderItem::Text { text, .. } if text == "Techno"));
+        assert!(
+            matches!(&items[2], SkinRenderItem::Text { text, style, .. } if text == "READY" && approx_eq(style.color.a, 128.0 / 255.0))
+        );
     }
 
     #[test]

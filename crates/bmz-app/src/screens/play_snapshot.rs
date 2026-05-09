@@ -16,6 +16,11 @@ pub fn build_render_snapshot(
 ) -> RenderSnapshot {
     let mut snapshot = RenderSnapshot {
         time: render_now,
+        title: session.chart.metadata.title.clone(),
+        subtitle: session.chart.metadata.subtitle.clone(),
+        artist: session.chart.metadata.artist.clone(),
+        subartist: session.chart.metadata.subartist.clone(),
+        genre: session.chart.metadata.genre.clone(),
         combo: session.score.combo,
         max_combo: session.score.max_combo,
         ex_score: session.score.ex_score(),

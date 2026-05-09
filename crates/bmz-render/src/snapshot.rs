@@ -4,6 +4,11 @@ use bmz_core::time::TimeUs;
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RenderSnapshot {
     pub time: TimeUs,
+    pub title: String,
+    pub subtitle: String,
+    pub artist: String,
+    pub subartist: String,
+    pub genre: String,
     pub combo: u32,
     pub max_combo: u32,
     pub ex_score: u32,

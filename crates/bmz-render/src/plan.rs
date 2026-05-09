@@ -5,7 +5,7 @@ use crate::scene::{AppSceneSnapshot, SelectRowSnapshot};
 use crate::skin::{
     Animation, BlendMode, NumberSlot, SkinContext, SkinDefinition, SkinManifest, SkinObject,
     SkinObjectId, SkinPhase, SkinPlacement, SkinRenderContext, SkinRenderItem, SkinSource,
-    SkinTextureId, TextSlot, append_skin_render_items,
+    SkinTextState, SkinTextureId, TextSlot, append_skin_render_items,
 };
 use crate::snapshot::{DisplayJudgeCounts, RenderSnapshot};
 use crate::text::{BitmapTextStyle, TextRenderer};
@@ -299,16 +299,26 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
     let board = Rect { x: 0.18, y: 0.05, width: 0.64, height: 0.9 };
     append_skin_render_items(
         &mut commands,
-        &skin.static_document_items_for_state(crate::skin::SkinDrawState {
-            elapsed_ms: (snapshot.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32,
-            combo: snapshot.combo,
-            max_combo: snapshot.max_combo,
-            ex_score: snapshot.ex_score,
-            total_notes: snapshot.total_notes,
-            past_notes: snapshot.past_notes,
-            judge_counts: snapshot.judge_counts,
-            gauge: snapshot.gauge,
-        }),
+        &skin.static_document_items_for_state_and_text(
+            crate::skin::SkinDrawState {
+                elapsed_ms: (snapshot.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64)
+                    as i32,
+                combo: snapshot.combo,
+                max_combo: snapshot.max_combo,
+                ex_score: snapshot.ex_score,
+                total_notes: snapshot.total_notes,
+                past_notes: snapshot.past_notes,
+                judge_counts: snapshot.judge_counts,
+                gauge: snapshot.gauge,
+            },
+            SkinTextState {
+                title: &snapshot.title,
+                subtitle: &snapshot.subtitle,
+                artist: &snapshot.artist,
+                subartist: &snapshot.subartist,
+                genre: &snapshot.genre,
+            },
+        ),
     );
     commands.push(DrawCommand::Rect { rect: board, color: Color::rgb(0.025, 0.025, 0.028) });
     commands.push(DrawCommand::Rect {
