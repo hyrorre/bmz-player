@@ -12,6 +12,7 @@ use crate::text::{BitmapTextStyle, TextRenderer};
 
 const JUDGE_LINE_Y_RATIO: f32 = 0.86;
 const NOTE_HEIGHT: f32 = 0.018;
+pub const DEFAULT_NOTE_TEXTURE: TextureId = TextureId(1);
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DrawPlan {
@@ -565,7 +566,7 @@ fn push_default_note_skin(commands: &mut Vec<DrawCommand>, lane: Lane, rect: Rec
     append_skin_render_items(
         commands,
         &[SkinRenderItem::Image {
-            texture: SkinTextureId(0),
+            texture: SkinTextureId(DEFAULT_NOTE_TEXTURE.0),
             rect,
             uv: TextureRegion { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
             tint: note_color(lane),

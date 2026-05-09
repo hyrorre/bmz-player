@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
+use bmz_render::plan::DEFAULT_NOTE_TEXTURE;
 use bmz_render::renderer::{RenderSurfaceStatus, Renderer, SurfaceSize};
 use bmz_render::sample::{sample_play_scene, sample_result_scene, sample_select_scene};
 use bmz_render::scene::{AppSceneSnapshot, ResultSnapshot, SelectRowSnapshot, SelectSnapshot};
@@ -79,6 +80,9 @@ impl WinitApp {
             options.boot_play_sample.then(|| sample_playable_chart_id(&select_rows)).flatten();
         log_startup_options(&options);
 
+        let mut renderer = Renderer::default();
+        load_default_skin_textures(&mut renderer);
+
         let mut app = Self {
             boot,
             window: None,
@@ -88,7 +92,7 @@ impl WinitApp {
             last_started_chart_id: None,
             select_rows,
             selected_index: 0,
-            renderer: Renderer::default(),
+            renderer,
             dev_scene: None,
             last_scene_kind: None,
             autoplay_on_start: options.autoplay_on_start,
@@ -416,6 +420,20 @@ impl WinitApp {
     }
 }
 
+fn load_default_skin_textures(renderer: &mut Renderer) {
+    let note_path = default_skin_root().join("note.png");
+    match renderer.load_png_texture(DEFAULT_NOTE_TEXTURE, &note_path) {
+        Ok(()) => tracing::info!(path = %note_path.display(), "loaded default note texture"),
+        Err(error) => {
+            tracing::warn!(path = %note_path.display(), %error, "failed to load default note texture; using fallback")
+        }
+    }
+}
+
+fn default_skin_root() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/skins/default")
+}
+
 impl ApplicationHandler for WinitApp {
     fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) {
         if cause == StartCause::Init {
@@ -679,6 +697,11 @@ mod tests {
     use crate::storage::score_db::BestScoreSummary;
 
     use super::*;
+
+    #[test]
+    fn default_skin_note_texture_exists() {
+        assert!(default_skin_root().join("note.png").is_file());
+    }
 
     #[test]
     fn select_action_maps_start_and_vertical_movement() {
