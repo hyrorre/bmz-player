@@ -551,6 +551,11 @@ impl SkinContext {
         let document = self.document.as_ref()?;
         document.note_image_render_item(lane, rect, &self.document_sources)
     }
+
+    pub fn document_gauge_items(&self, gauge: f32, elapsed_ms: i32) -> Option<Vec<SkinRenderItem>> {
+        let document = self.document.as_ref()?;
+        document.gauge_render_items(gauge, elapsed_ms, &self.document_sources)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -942,6 +947,78 @@ impl SkinDocument {
         let note = self.note.as_ref()?;
         let image_id = note.note.get(beatoraja_7k_note_index(lane))?;
         let image = self.image.iter().find(|image| image.id == *image_id)?;
+        let source = sources.get(&image.src)?;
+        let source_width = source.source_size.width.max(1.0);
+        let source_height = source.source_size.height.max(1.0);
+        Some(SkinRenderItem::Image {
+            texture: source.texture,
+            rect,
+            uv: TextureRegion {
+                x: image.x as f32 / source_width,
+                y: image.y as f32 / source_height,
+                width: image.w as f32 / source_width,
+                height: image.h as f32 / source_height,
+            },
+            tint: Color::rgb(1.0, 1.0, 1.0),
+            blend: BlendMode::Normal,
+            scale: SkinImageScale::Stretch,
+            border: None,
+            source_size: Some(source.source_size),
+        })
+    }
+
+    pub fn gauge_render_items(
+        &self,
+        gauge: f32,
+        elapsed_ms: i32,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Option<Vec<SkinRenderItem>> {
+        let gauge_def = self.gauge.as_ref()?;
+        let enabled_options = self.enabled_options();
+        let destination = self.destination.iter().find(|destination| {
+            destination.id == gauge_def.id
+                && destination.timer.is_none()
+                && test_skin_ops(&destination.op, &enabled_options)
+                && eval_skin_draw_condition(&destination.draw, SkinDrawState { elapsed_ms, gauge })
+        })?;
+        let frame = resolve_destination_frame(destination, elapsed_ms)?;
+        let rect = normalize_skin_frame_rect(frame, self.w, self.h);
+        let filled =
+            (gauge.clamp(0.0, 100.0) / 100.0 * gauge_def.parts.max(1) as f32).round() as i32;
+        let node_id = gauge_def.nodes.first()?;
+        let mut items = Vec::new();
+        for index in 0..filled {
+            let part_rect = if rect.width >= rect.height {
+                let part_width = rect.width / gauge_def.parts.max(1) as f32;
+                Rect {
+                    x: rect.x + part_width * index as f32,
+                    y: rect.y,
+                    width: part_width,
+                    height: rect.height,
+                }
+            } else {
+                let part_height = rect.height / gauge_def.parts.max(1) as f32;
+                Rect {
+                    x: rect.x,
+                    y: rect.y + rect.height - part_height * (index + 1) as f32,
+                    width: rect.width,
+                    height: part_height,
+                }
+            };
+            if let Some(item) = self.image_render_item(node_id, part_rect, sources) {
+                items.push(item);
+            }
+        }
+        Some(items)
+    }
+
+    fn image_render_item(
+        &self,
+        image_id: &str,
+        rect: Rect,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Option<SkinRenderItem> {
+        let image = self.image.iter().find(|image| image.id == image_id)?;
         let source = sources.get(&image.src)?;
         let source_width = source.source_size.width.max(1.0);
         let source_height = source.source_size.height.max(1.0);
@@ -1657,6 +1734,29 @@ fn apply_skin_animation(frame: &mut ResolvedSkinFrame, animation: &SkinAnimation
     }
     if let Some(b) = animation.b {
         frame.b = b;
+    }
+}
+
+fn normalize_skin_frame_rect(
+    frame: ResolvedSkinFrame,
+    canvas_width: u32,
+    canvas_height: u32,
+) -> Rect {
+    let width = frame.w as f32 / canvas_width.max(1) as f32;
+    let height = frame.h as f32 / canvas_height.max(1) as f32;
+    Rect {
+        x: if width < 0.0 {
+            frame.x as f32 / canvas_width.max(1) as f32 + width
+        } else {
+            frame.x as f32 / canvas_width.max(1) as f32
+        },
+        y: if height < 0.0 {
+            frame.y as f32 / canvas_height.max(1) as f32 + height
+        } else {
+            frame.y as f32 / canvas_height.max(1) as f32
+        },
+        width: width.abs(),
+        height: height.abs(),
     }
 }
 
@@ -2569,6 +2669,50 @@ mod tests {
                 ..
             } if approx_eq(x, 0.3) && approx_eq(width, 0.3)
         ));
+    }
+
+    #[test]
+    fn skin_document_resolves_gauge_nodes_into_parts() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "gauge.png" }],
+                "image": [{ "id": "gauge-node", "src": 1, "x": 10, "y": 0, "w": 5, "h": 10 }],
+                "gauge": { "id": "gauge", "nodes": ["gauge-node"], "parts": 4 },
+                "destination": [
+                    { "id": "gauge", "dst": [{ "x": 80, "y": 10, "w": -40, "h": 10 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "1".to_string(),
+            SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 100.0, height: 100.0 },
+            },
+        )]);
+
+        let items = document.gauge_render_items(50.0, 0, &sources).unwrap();
+
+        assert_eq!(items.len(), 2);
+        assert!(matches!(items[0], SkinRenderItem::Image {
+                rect: Rect { x, y, width, height },
+                uv: TextureRegion { x: u, width: uv_width, .. },
+                ..
+            } if approx_eq(x, 0.4)
+                && approx_eq(y, 0.1)
+                && approx_eq(width, 0.1)
+                && approx_eq(height, 0.1)
+                && approx_eq(u, 0.1)
+                && approx_eq(uv_width, 0.05)));
+        assert!(matches!(items[1], SkinRenderItem::Image { rect: Rect { x, .. }, .. }
+                if approx_eq(x, 0.5)));
     }
 
     #[test]

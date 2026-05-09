@@ -360,7 +360,13 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
         });
     }
     push_judge_line(&skin_manifest, &mut commands, board);
-    push_gauge(&skin_manifest, &mut commands, snapshot.gauge);
+    push_gauge(
+        skin,
+        &skin_manifest,
+        &mut commands,
+        snapshot.gauge,
+        (snapshot.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+    );
     push_combo_panel(&skin_manifest, &mut commands, snapshot.combo);
     push_default_play_skin(&mut commands, snapshot);
     push_play_text(&text, &mut commands, snapshot);
@@ -544,7 +550,18 @@ fn push_receptors(
     }
 }
 
-fn push_gauge(skin_manifest: &SkinManifest, commands: &mut Vec<DrawCommand>, gauge: f32) {
+fn push_gauge(
+    skin: &SkinContext,
+    skin_manifest: &SkinManifest,
+    commands: &mut Vec<DrawCommand>,
+    gauge: f32,
+    elapsed_ms: i32,
+) {
+    if let Some(items) = skin.document_gauge_items(gauge, elapsed_ms) {
+        append_skin_render_items(commands, &items);
+        return;
+    }
+
     let frame = Rect { x: 0.84, y: 0.08, width: 0.035, height: 0.82 };
     let fill = gauge.clamp(0.0, 100.0) / 100.0;
     let frame_image = skin_manifest.play_gauge_frame_image();
