@@ -10,8 +10,26 @@ path = "note-blue.png"
 id = 3
 path = "note-red.png"
 
+[[textures]]
+id = 4
+path = "receptor.png"
+
+[[textures]]
+id = 5
+path = "receptor-blue.png"
+
+[[textures]]
+id = 6
+path = "receptor-red.png"
+
 [play.note]
 texture = 1
 key_even_texture = 2
 scratch_texture = 3
+uv = { x = 0.0, y = 0.0, width = 1.0, height = 1.0 }
+
+[play.receptor]
+texture = 4
+key_even_texture = 5
+scratch_texture = 6
 uv = { x = 0.0, y = 0.0, width = 1.0, height = 1.0 }

@@ -3,9 +3,9 @@ use bmz_core::time::TimeUs;
 
 use crate::scene::{AppSceneSnapshot, SelectRowSnapshot};
 use crate::skin::{
-    Animation, BlendMode, NumberSlot, SkinDefinition, SkinObject, SkinObjectId, SkinPhase,
-    SkinPlacement, SkinRenderContext, SkinRenderItem, SkinSource, SkinTextureId, TextSlot,
-    append_skin_render_items, default_skin_manifest,
+    Animation, BlendMode, NumberSlot, SkinDefinition, SkinManifest, SkinObject, SkinObjectId,
+    SkinPhase, SkinPlacement, SkinRenderContext, SkinRenderItem, SkinSource, SkinTextureId,
+    TextSlot, append_skin_render_items, default_skin_manifest,
 };
 use crate::snapshot::{DisplayJudgeCounts, RenderSnapshot};
 use crate::text::{BitmapTextStyle, TextRenderer};
@@ -15,6 +15,9 @@ const NOTE_HEIGHT: f32 = 0.018;
 pub const DEFAULT_NOTE_TEXTURE: TextureId = TextureId(1);
 pub const DEFAULT_KEY_EVEN_NOTE_TEXTURE: TextureId = TextureId(2);
 pub const DEFAULT_SCRATCH_NOTE_TEXTURE: TextureId = TextureId(3);
+pub const DEFAULT_RECEPTOR_TEXTURE: TextureId = TextureId(4);
+pub const DEFAULT_KEY_EVEN_RECEPTOR_TEXTURE: TextureId = TextureId(5);
+pub const DEFAULT_SCRATCH_RECEPTOR_TEXTURE: TextureId = TextureId(6);
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DrawPlan {
@@ -283,6 +286,7 @@ fn clear_type_label(clear_type: &str) -> &'static str {
 fn plan_play(snapshot: &RenderSnapshot) -> DrawPlan {
     let mut commands = Vec::new();
     let text = TextRenderer;
+    let skin_manifest = default_skin_manifest();
     let board = Rect { x: 0.18, y: 0.05, width: 0.64, height: 0.9 };
     commands.push(DrawCommand::Rect { rect: board, color: Color::rgb(0.025, 0.025, 0.028) });
     commands.push(DrawCommand::Rect {
@@ -322,6 +326,7 @@ fn plan_play(snapshot: &RenderSnapshot) -> DrawPlan {
         for note in &snapshot.visible_notes[lane_index] {
             let y = note_rect_y(board, note.y);
             push_default_note_skin(
+                &skin_manifest,
                 &mut commands,
                 lane,
                 Rect { x: x + lane_width * 0.08, y, width: lane_width * 0.84, height: NOTE_HEIGHT },
@@ -329,7 +334,7 @@ fn plan_play(snapshot: &RenderSnapshot) -> DrawPlan {
         }
     }
 
-    push_receptors(&mut commands, board, lane_width);
+    push_receptors(&skin_manifest, &mut commands, board, lane_width);
     for bar in &snapshot.bar_lines {
         let y = play_object_y(board, bar.y);
         commands.push(DrawCommand::Rect {
@@ -480,20 +485,32 @@ fn judge_line_y(board: Rect) -> f32 {
     board.y + board.height * JUDGE_LINE_Y_RATIO
 }
 
-fn push_receptors(commands: &mut Vec<DrawCommand>, board: Rect, lane_width: f32) {
+fn push_receptors(
+    skin_manifest: &SkinManifest,
+    commands: &mut Vec<DrawCommand>,
+    board: Rect,
+    lane_width: f32,
+) {
+    let receptor = skin_manifest.play_receptor_image();
     let receptor_y = board.y + board.height * 0.825;
     for lane in Lane::ALL {
         let lane_index = lane.index();
         let x = board.x + lane_index as f32 * lane_width;
-        commands.push(DrawCommand::Rect {
-            rect: Rect {
-                x: x + lane_width * 0.1,
-                y: receptor_y,
-                width: lane_width * 0.8,
-                height: 0.026,
-            },
-            color: receptor_color(lane),
-        });
+        append_skin_render_items(
+            commands,
+            &[SkinRenderItem::Image {
+                texture: SkinTextureId(receptor.texture_for_lane(lane)),
+                rect: Rect {
+                    x: x + lane_width * 0.1,
+                    y: receptor_y,
+                    width: lane_width * 0.8,
+                    height: 0.026,
+                },
+                uv: receptor.uv,
+                tint: skin_image_tint(lane),
+                blend: BlendMode::Normal,
+            }],
+        );
     }
 }
 
@@ -564,15 +581,20 @@ fn push_default_play_skin(commands: &mut Vec<DrawCommand>, snapshot: &RenderSnap
     append_skin_render_items(commands, &items);
 }
 
-fn push_default_note_skin(commands: &mut Vec<DrawCommand>, lane: Lane, rect: Rect) {
-    let note = default_skin_manifest().play_note_image();
+fn push_default_note_skin(
+    skin_manifest: &SkinManifest,
+    commands: &mut Vec<DrawCommand>,
+    lane: Lane,
+    rect: Rect,
+) {
+    let note = skin_manifest.play_note_image();
     append_skin_render_items(
         commands,
         &[SkinRenderItem::Image {
             texture: SkinTextureId(note.texture_for_lane(lane)),
             rect,
             uv: note.uv,
-            tint: note_tint(lane),
+            tint: skin_image_tint(lane),
             blend: BlendMode::Normal,
         }],
     );
@@ -916,15 +938,7 @@ fn gauge_color(gauge: f32) -> Color {
     }
 }
 
-fn receptor_color(lane: Lane) -> Color {
-    match lane {
-        Lane::Scratch => Color::rgb(0.22, 0.34, 0.3),
-        Lane::Key1 | Lane::Key3 | Lane::Key5 | Lane::Key7 => Color::rgb(0.24, 0.26, 0.28),
-        Lane::Key2 | Lane::Key4 | Lane::Key6 => Color::rgb(0.14, 0.26, 0.36),
-    }
-}
-
-fn note_tint(_lane: Lane) -> Color {
+fn skin_image_tint(_lane: Lane) -> Color {
     Color::rgb(1.0, 1.0, 1.0)
 }
 
@@ -987,7 +1001,7 @@ mod tests {
         assert!(plan.commands.iter().any(|command| matches!(
             command,
             DrawCommand::Image { texture, tint, .. }
-                if *texture == DEFAULT_NOTE_TEXTURE && *tint == note_tint(Lane::Key1)
+                if *texture == DEFAULT_NOTE_TEXTURE && *tint == skin_image_tint(Lane::Key1)
         )));
     }
 
@@ -1209,7 +1223,13 @@ mod tests {
         )));
         assert!(plan.commands.iter().any(|command| matches!(
             command,
-            DrawCommand::Rect { color, .. } if *color == receptor_color(Lane::Key2)
+            DrawCommand::Image { texture, tint, .. }
+                if *texture == DEFAULT_KEY_EVEN_RECEPTOR_TEXTURE && *tint == skin_image_tint(Lane::Key2)
+        )));
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Image { texture, tint, .. }
+                if *texture == DEFAULT_SCRATCH_RECEPTOR_TEXTURE && *tint == skin_image_tint(Lane::Scratch)
         )));
         assert!(plan.commands.iter().any(|command| matches!(
             command,

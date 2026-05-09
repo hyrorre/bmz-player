@@ -41,6 +41,7 @@ pub struct SkinTextureManifest {
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct SkinPlayManifest {
     pub note: Option<SkinImageManifest>,
+    pub receptor: Option<SkinImageManifest>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
@@ -245,6 +246,15 @@ impl SkinManifest {
     pub fn play_note_image(&self) -> SkinImageManifest {
         self.play.note.unwrap_or(SkinImageManifest {
             texture: crate::plan::DEFAULT_NOTE_TEXTURE.0,
+            key_even_texture: None,
+            scratch_texture: None,
+            uv: TextureRegion::default(),
+        })
+    }
+
+    pub fn play_receptor_image(&self) -> SkinImageManifest {
+        self.play.receptor.unwrap_or(SkinImageManifest {
+            texture: crate::plan::DEFAULT_RECEPTOR_TEXTURE.0,
             key_even_texture: None,
             scratch_texture: None,
             uv: TextureRegion::default(),
@@ -492,10 +502,27 @@ mod tests {
             id = 3
             path = "note-red.png"
 
+            [[textures]]
+            id = 4
+            path = "receptor.png"
+
+            [[textures]]
+            id = 5
+            path = "receptor-blue.png"
+
+            [[textures]]
+            id = 6
+            path = "receptor-red.png"
+
             [play.note]
             texture = 1
             key_even_texture = 2
             scratch_texture = 3
+
+            [play.receptor]
+            texture = 4
+            key_even_texture = 5
+            scratch_texture = 6
             "#,
         )
         .unwrap();
@@ -508,14 +535,23 @@ mod tests {
         assert_eq!(textures[1].path, PathBuf::from("/skin/default/note-blue.png"));
         assert_eq!(textures[2].id, TextureId(3));
         assert_eq!(textures[2].path, PathBuf::from("/skin/default/note-red.png"));
+        assert_eq!(textures[3].id, TextureId(4));
+        assert_eq!(textures[3].path, PathBuf::from("/skin/default/receptor.png"));
+        assert_eq!(textures[4].id, TextureId(5));
+        assert_eq!(textures[4].path, PathBuf::from("/skin/default/receptor-blue.png"));
+        assert_eq!(textures[5].id, TextureId(6));
+        assert_eq!(textures[5].path, PathBuf::from("/skin/default/receptor-red.png"));
         assert_eq!(manifest.play_note_image().texture_for_lane(Lane::Key2), 2);
         assert_eq!(manifest.play_note_image().texture_for_lane(Lane::Scratch), 3);
+        assert_eq!(manifest.play_receptor_image().texture_for_lane(Lane::Key2), 5);
+        assert_eq!(manifest.play_receptor_image().texture_for_lane(Lane::Scratch), 6);
     }
 
     #[test]
-    fn bundled_default_skin_manifest_defines_note_image() {
+    fn bundled_default_skin_manifest_defines_play_lane_images() {
         let manifest = default_skin_manifest();
         let note = manifest.play_note_image();
+        let receptor = manifest.play_receptor_image();
 
         assert_eq!(note.texture, 1);
         assert_eq!(note.texture_for_lane(Lane::Key1), 1);
@@ -524,5 +560,12 @@ mod tests {
         assert_eq!(note.texture_for_lane(Lane::Key6), 2);
         assert_eq!(note.texture_for_lane(Lane::Scratch), 3);
         assert_eq!(note.uv, TextureRegion::default());
+        assert_eq!(receptor.texture, 4);
+        assert_eq!(receptor.texture_for_lane(Lane::Key1), 4);
+        assert_eq!(receptor.texture_for_lane(Lane::Key2), 5);
+        assert_eq!(receptor.texture_for_lane(Lane::Key4), 5);
+        assert_eq!(receptor.texture_for_lane(Lane::Key6), 5);
+        assert_eq!(receptor.texture_for_lane(Lane::Scratch), 6);
+        assert_eq!(receptor.uv, TextureRegion::default());
     }
 }

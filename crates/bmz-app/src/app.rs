@@ -716,6 +716,9 @@ mod tests {
         assert!(default_skin_root().join("note.png").is_file());
         assert!(default_skin_root().join("note-blue.png").is_file());
         assert!(default_skin_root().join("note-red.png").is_file());
+        assert!(default_skin_root().join("receptor.png").is_file());
+        assert!(default_skin_root().join("receptor-blue.png").is_file());
+        assert!(default_skin_root().join("receptor-red.png").is_file());
     }
 
     #[test]
@@ -737,6 +740,24 @@ mod tests {
                 .textures
                 .iter()
                 .any(|texture| texture.id == 3 && texture.path == "note-red.png")
+        );
+        assert!(
+            manifest
+                .textures
+                .iter()
+                .any(|texture| texture.id == 4 && texture.path == "receptor.png")
+        );
+        assert!(
+            manifest
+                .textures
+                .iter()
+                .any(|texture| texture.id == 5 && texture.path == "receptor-blue.png")
+        );
+        assert!(
+            manifest
+                .textures
+                .iter()
+                .any(|texture| texture.id == 6 && texture.path == "receptor-red.png")
         );
     }
 
