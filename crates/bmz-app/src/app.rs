@@ -719,6 +719,7 @@ mod tests {
         assert!(default_skin_root().join("receptor.png").is_file());
         assert!(default_skin_root().join("receptor-blue.png").is_file());
         assert!(default_skin_root().join("receptor-red.png").is_file());
+        assert!(default_skin_root().join("judge-line.png").is_file());
     }
 
     #[test]
@@ -758,6 +759,12 @@ mod tests {
                 .textures
                 .iter()
                 .any(|texture| texture.id == 6 && texture.path == "receptor-red.png")
+        );
+        assert!(
+            manifest
+                .textures
+                .iter()
+                .any(|texture| texture.id == 7 && texture.path == "judge-line.png")
         );
     }
 

@@ -18,6 +18,7 @@ pub const DEFAULT_SCRATCH_NOTE_TEXTURE: TextureId = TextureId(3);
 pub const DEFAULT_RECEPTOR_TEXTURE: TextureId = TextureId(4);
 pub const DEFAULT_KEY_EVEN_RECEPTOR_TEXTURE: TextureId = TextureId(5);
 pub const DEFAULT_SCRATCH_RECEPTOR_TEXTURE: TextureId = TextureId(6);
+pub const DEFAULT_JUDGE_LINE_TEXTURE: TextureId = TextureId(7);
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DrawPlan {
@@ -342,7 +343,7 @@ fn plan_play(snapshot: &RenderSnapshot) -> DrawPlan {
             color: Color::rgb(0.45, 0.48, 0.5),
         });
     }
-    push_judge_line(&mut commands, board);
+    push_judge_line(&skin_manifest, &mut commands, board);
     push_gauge(&mut commands, snapshot.gauge);
     push_combo_panel(&mut commands, snapshot.combo);
     push_default_play_skin(&mut commands, snapshot);
@@ -464,12 +465,19 @@ fn result_judge_labels(judge_counts: &DisplayJudgeCounts) -> [String; 6] {
     ]
 }
 
-fn push_judge_line(commands: &mut Vec<DrawCommand>, board: Rect) {
+fn push_judge_line(skin_manifest: &SkinManifest, commands: &mut Vec<DrawCommand>, board: Rect) {
+    let image = skin_manifest.play_judge_line_image();
     let line_y = judge_line_y(board);
-    commands.push(DrawCommand::Rect {
-        rect: Rect { x: board.x, y: line_y, width: board.width, height: 0.006 },
-        color: Color::rgb(0.96, 0.92, 0.54),
-    });
+    append_skin_render_items(
+        commands,
+        &[SkinRenderItem::Image {
+            texture: SkinTextureId(image.texture),
+            rect: Rect { x: board.x, y: line_y, width: board.width, height: 0.006 },
+            uv: image.uv,
+            tint: skin_image_tint(Lane::Key1),
+            blend: BlendMode::Normal,
+        }],
+    );
 }
 
 fn note_rect_y(board: Rect, progress_to_hit: f32) -> f32 {
@@ -1203,7 +1211,8 @@ mod tests {
 
         assert!(plan.commands.iter().any(|command| matches!(
             command,
-            DrawCommand::Rect { color, .. } if *color == Color::rgb(0.96, 0.92, 0.54)
+            DrawCommand::Image { texture, tint, .. }
+                if *texture == DEFAULT_JUDGE_LINE_TEXTURE && *tint == skin_image_tint(Lane::Key1)
         )));
         assert!(plan.commands.iter().any(|command| matches!(
             command,

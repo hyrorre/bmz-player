@@ -42,6 +42,7 @@ pub struct SkinTextureManifest {
 pub struct SkinPlayManifest {
     pub note: Option<SkinImageManifest>,
     pub receptor: Option<SkinImageManifest>,
+    pub judge_line: Option<SkinImageManifest>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
@@ -255,6 +256,15 @@ impl SkinManifest {
     pub fn play_receptor_image(&self) -> SkinImageManifest {
         self.play.receptor.unwrap_or(SkinImageManifest {
             texture: crate::plan::DEFAULT_RECEPTOR_TEXTURE.0,
+            key_even_texture: None,
+            scratch_texture: None,
+            uv: TextureRegion::default(),
+        })
+    }
+
+    pub fn play_judge_line_image(&self) -> SkinImageManifest {
+        self.play.judge_line.unwrap_or(SkinImageManifest {
+            texture: crate::plan::DEFAULT_JUDGE_LINE_TEXTURE.0,
             key_even_texture: None,
             scratch_texture: None,
             uv: TextureRegion::default(),
@@ -514,6 +524,10 @@ mod tests {
             id = 6
             path = "receptor-red.png"
 
+            [[textures]]
+            id = 7
+            path = "judge-line.png"
+
             [play.note]
             texture = 1
             key_even_texture = 2
@@ -523,6 +537,9 @@ mod tests {
             texture = 4
             key_even_texture = 5
             scratch_texture = 6
+
+            [play.judge_line]
+            texture = 7
             "#,
         )
         .unwrap();
@@ -541,10 +558,13 @@ mod tests {
         assert_eq!(textures[4].path, PathBuf::from("/skin/default/receptor-blue.png"));
         assert_eq!(textures[5].id, TextureId(6));
         assert_eq!(textures[5].path, PathBuf::from("/skin/default/receptor-red.png"));
+        assert_eq!(textures[6].id, TextureId(7));
+        assert_eq!(textures[6].path, PathBuf::from("/skin/default/judge-line.png"));
         assert_eq!(manifest.play_note_image().texture_for_lane(Lane::Key2), 2);
         assert_eq!(manifest.play_note_image().texture_for_lane(Lane::Scratch), 3);
         assert_eq!(manifest.play_receptor_image().texture_for_lane(Lane::Key2), 5);
         assert_eq!(manifest.play_receptor_image().texture_for_lane(Lane::Scratch), 6);
+        assert_eq!(manifest.play_judge_line_image().texture, 7);
     }
 
     #[test]
@@ -552,6 +572,7 @@ mod tests {
         let manifest = default_skin_manifest();
         let note = manifest.play_note_image();
         let receptor = manifest.play_receptor_image();
+        let judge_line = manifest.play_judge_line_image();
 
         assert_eq!(note.texture, 1);
         assert_eq!(note.texture_for_lane(Lane::Key1), 1);
@@ -567,5 +588,7 @@ mod tests {
         assert_eq!(receptor.texture_for_lane(Lane::Key6), 5);
         assert_eq!(receptor.texture_for_lane(Lane::Scratch), 6);
         assert_eq!(receptor.uv, TextureRegion::default());
+        assert_eq!(judge_line.texture, 7);
+        assert_eq!(judge_line.uv, TextureRegion::default());
     }
 }
