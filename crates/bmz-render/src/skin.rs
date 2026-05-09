@@ -575,6 +575,18 @@ impl SkinContext {
         let document = self.document.as_ref()?;
         document.judge_render_items(judge, combo, elapsed_ms, &self.document_sources)
     }
+
+    pub fn document_lane_effect_items(
+        &self,
+        lane: Lane,
+        judge: &str,
+        elapsed_ms: i32,
+    ) -> Vec<SkinRenderItem> {
+        let Some(document) = self.document.as_ref() else {
+            return Vec::new();
+        };
+        document.imageset_render_items_for_lane(lane, judge, elapsed_ms, &self.document_sources)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1116,6 +1128,34 @@ impl SkinDocument {
         self.judge_render_items(judge, 0, elapsed_ms, sources)?.into_iter().next()
     }
 
+    pub fn imageset_render_items_for_lane(
+        &self,
+        lane: Lane,
+        judge: &str,
+        elapsed_ms: i32,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Vec<SkinRenderItem> {
+        let enabled_options = self.enabled_options();
+        self.imageset
+            .iter()
+            .filter(|imageset| imageset_ref_lane(imageset.ref_id) == Some(lane))
+            .filter_map(|imageset| {
+                let destination = self.destination.iter().find(|destination| {
+                    destination.id == imageset.id
+                        && destination.timer.is_some()
+                        && test_skin_ops(&destination.op, &enabled_options)
+                })?;
+                let frame = resolve_destination_frame_until_end(destination, elapsed_ms)?;
+                let image_id = imageset_judge_image_id(imageset, judge)?;
+                self.image_render_item(
+                    &image_id,
+                    normalize_skin_frame_rect(frame, self.w, self.h),
+                    sources,
+                )
+            })
+            .collect()
+    }
+
     fn value_number_render_items(
         &self,
         value_id: &str,
@@ -1245,6 +1285,33 @@ fn beatoraja_7k_note_index(lane: Lane) -> usize {
         Lane::Key7 => 6,
         Lane::Scratch => 7,
     }
+}
+
+fn imageset_ref_lane(ref_id: i32) -> Option<Lane> {
+    match ref_id {
+        500 => Some(Lane::Scratch),
+        501 => Some(Lane::Key1),
+        502 => Some(Lane::Key2),
+        503 => Some(Lane::Key3),
+        504 => Some(Lane::Key4),
+        505 => Some(Lane::Key5),
+        506 => Some(Lane::Key6),
+        507 => Some(Lane::Key7),
+        _ => None,
+    }
+}
+
+fn imageset_judge_image_id(imageset: &SkinImageSetDef, judge: &str) -> Option<String> {
+    let len = imageset.images.len();
+    if len == 0 {
+        return None;
+    }
+    let index = if len == 2 {
+        usize::from(judge.trim().starts_with("PGREAT"))
+    } else {
+        judge_image_index(judge).unwrap_or(0).min(len - 1)
+    };
+    imageset.images.get(index).cloned()
 }
 
 fn judge_image_index(judge: &str) -> Option<usize> {
@@ -3150,6 +3217,65 @@ mod tests {
                 uv: TextureRegion { x: u, .. },
                 ..
             } if approx_eq(x, 0.4) && approx_eq(u, 0.3)));
+    }
+
+    #[test]
+    fn skin_document_resolves_lane_imageset_effects() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "effect.png" }],
+                "image": [
+                    { "id": "normal", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10 },
+                    { "id": "pgreat", "src": 1, "x": 10, "y": 0, "w": 10, "h": 10 },
+                    { "id": "good", "src": 1, "x": 20, "y": 0, "w": 10, "h": 10 }
+                ],
+                "imageset": [
+                    { "id": "beam1", "ref": 501, "images": ["normal", "pgreat"] },
+                    { "id": "bomb1", "ref": 501, "images": ["normal", "pgreat", "good"] },
+                    { "id": "beam2", "ref": 502, "images": ["normal", "pgreat"] }
+                ],
+                "destination": [
+                    { "id": "beam1", "timer": 51, "dst": [{ "time": 0, "x": 10, "y": 20, "w": 20, "h": 10 }, { "time": 100 }] },
+                    { "id": "bomb1", "timer": 51, "dst": [{ "time": 0, "x": 30, "y": 20, "w": 20, "h": 10 }, { "time": 100 }] },
+                    { "id": "beam2", "timer": 52, "dst": [{ "time": 0, "x": 50, "y": 20, "w": 20, "h": 10 }, { "time": 100 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "1".to_string(),
+            SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 100.0, height: 100.0 },
+            },
+        )]);
+
+        let pgreat = document.imageset_render_items_for_lane(Lane::Key1, "PGREAT", 50, &sources);
+        let good = document.imageset_render_items_for_lane(Lane::Key1, "GOOD", 50, &sources);
+        let expired = document.imageset_render_items_for_lane(Lane::Key1, "PGREAT", 150, &sources);
+
+        assert_eq!(pgreat.len(), 2);
+        assert!(matches!(pgreat[0], SkinRenderItem::Image {
+                rect: Rect { x, .. },
+                uv: TextureRegion { x: u, .. },
+                ..
+            } if approx_eq(x, 0.1) && approx_eq(u, 0.1)));
+        assert!(matches!(good[0], SkinRenderItem::Image {
+                uv: TextureRegion { x: u, .. },
+                ..
+            } if approx_eq(u, 0.0)));
+        assert!(matches!(good[1], SkinRenderItem::Image {
+                rect: Rect { x, .. },
+                uv: TextureRegion { x: u, .. },
+                ..
+            } if approx_eq(x, 0.3) && approx_eq(u, 0.2)));
+        assert!(expired.is_empty());
     }
 
     #[test]

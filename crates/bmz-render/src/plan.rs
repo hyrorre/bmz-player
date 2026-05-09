@@ -383,6 +383,7 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
         snapshot.gauge,
         (snapshot.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32,
     );
+    push_document_lane_effects(skin, &mut commands, snapshot);
     push_combo_panel(&skin_manifest, &mut commands, snapshot.combo);
     push_default_play_skin(skin, &mut commands, snapshot);
     push_play_text(&text, &mut commands, snapshot);
@@ -630,6 +631,20 @@ fn push_combo_panel(skin_manifest: &SkinManifest, commands: &mut Vec<DrawCommand
             source_size: image.source_size,
         }],
     );
+}
+
+fn push_document_lane_effects(
+    skin_context: &SkinContext,
+    commands: &mut Vec<DrawCommand>,
+    snapshot: &RenderSnapshot,
+) {
+    for judgement in &snapshot.recent_judgements {
+        let elapsed_ms = ((snapshot.time.0 - judgement.time.0) / 1_000)
+            .clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+        let items =
+            skin_context.document_lane_effect_items(judgement.lane, &judgement.text, elapsed_ms);
+        append_skin_render_items(commands, &items);
+    }
 }
 
 fn push_play_text(text: &TextRenderer, commands: &mut Vec<DrawCommand>, snapshot: &RenderSnapshot) {
