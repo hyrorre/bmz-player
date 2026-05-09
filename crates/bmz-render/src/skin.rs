@@ -54,6 +54,7 @@ pub struct SkinImageManifest {
     pub texture: u32,
     pub key_even_texture: Option<u32>,
     pub scratch_texture: Option<u32>,
+    pub source_size: Option<SkinImageSize>,
     #[serde(default)]
     pub uv: TextureRegion,
     #[serde(default)]
@@ -71,6 +72,12 @@ impl SkinImageManifest {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+pub struct SkinImageSize {
+    pub width: f32,
+    pub height: f32,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SkinImageScale {
@@ -85,6 +92,37 @@ pub struct SkinImageBorder {
     pub right: f32,
     pub top: f32,
     pub bottom: f32,
+    #[serde(default)]
+    pub unit: SkinImageBorderUnit,
+}
+
+impl SkinImageBorder {
+    fn normalized(self, source_size: Option<SkinImageSize>) -> Option<Self> {
+        match self.unit {
+            SkinImageBorderUnit::Normalized => Some(self),
+            SkinImageBorderUnit::Pixels => {
+                let size = source_size?;
+                if size.width <= 0.0 || size.height <= 0.0 {
+                    return None;
+                }
+                Some(Self {
+                    left: self.left / size.width,
+                    right: self.right / size.width,
+                    top: self.top / size.height,
+                    bottom: self.bottom / size.height,
+                    unit: SkinImageBorderUnit::Normalized,
+                })
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkinImageBorderUnit {
+    #[default]
+    Normalized,
+    Pixels,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -190,6 +228,7 @@ pub enum SkinRenderItem {
         blend: BlendMode,
         scale: SkinImageScale,
         border: Option<SkinImageBorder>,
+        source_size: Option<SkinImageSize>,
     },
     Text {
         origin: Point,
@@ -226,6 +265,7 @@ impl SkinObject {
                         blend: resolved.blend,
                         scale: SkinImageScale::Stretch,
                         border: None,
+                        source_size: None,
                     },
                     SkinSource::Text { slot, style } => SkinRenderItem::Text {
                         origin: Point { x: resolved.rect.x, y: resolved.rect.y },
@@ -291,6 +331,7 @@ impl SkinManifest {
             texture: crate::plan::DEFAULT_NOTE_TEXTURE.0,
             key_even_texture: None,
             scratch_texture: None,
+            source_size: None,
             uv: TextureRegion::default(),
             scale: SkinImageScale::Stretch,
             border: None,
@@ -302,6 +343,7 @@ impl SkinManifest {
             texture: crate::plan::DEFAULT_RECEPTOR_TEXTURE.0,
             key_even_texture: None,
             scratch_texture: None,
+            source_size: None,
             uv: TextureRegion::default(),
             scale: SkinImageScale::Stretch,
             border: None,
@@ -313,6 +355,7 @@ impl SkinManifest {
             texture: crate::plan::DEFAULT_JUDGE_LINE_TEXTURE.0,
             key_even_texture: None,
             scratch_texture: None,
+            source_size: None,
             uv: TextureRegion::default(),
             scale: SkinImageScale::Stretch,
             border: None,
@@ -324,6 +367,7 @@ impl SkinManifest {
             texture: crate::plan::DEFAULT_GAUGE_FRAME_TEXTURE.0,
             key_even_texture: None,
             scratch_texture: None,
+            source_size: None,
             uv: TextureRegion::default(),
             scale: SkinImageScale::Stretch,
             border: None,
@@ -335,6 +379,7 @@ impl SkinManifest {
             texture: crate::plan::DEFAULT_GAUGE_FILL_TEXTURE.0,
             key_even_texture: None,
             scratch_texture: None,
+            source_size: None,
             uv: TextureRegion::default(),
             scale: SkinImageScale::Stretch,
             border: None,
@@ -351,6 +396,7 @@ impl SkinManifest {
                 },
                 key_even_texture: None,
                 scratch_texture: None,
+                source_size: None,
                 uv: TextureRegion::default(),
                 scale: SkinImageScale::Stretch,
                 border: None,
@@ -379,8 +425,19 @@ pub fn append_skin_render_items(commands: &mut Vec<DrawCommand>, items: &[SkinRe
                     });
                 }
             }
-            SkinRenderItem::Image { texture, rect, uv, tint, scale, border, .. } => {
-                append_skin_image_command(commands, *texture, *rect, *uv, *tint, *scale, *border);
+            SkinRenderItem::Image {
+                texture, rect, uv, tint, scale, border, source_size, ..
+            } => {
+                append_skin_image_command(
+                    commands,
+                    *texture,
+                    *rect,
+                    *uv,
+                    *tint,
+                    *scale,
+                    *border,
+                    *source_size,
+                );
             }
         }
     }
@@ -394,10 +451,19 @@ fn append_skin_image_command(
     tint: Color,
     scale: SkinImageScale,
     border: Option<SkinImageBorder>,
+    source_size: Option<SkinImageSize>,
 ) {
     match (scale, border) {
         (SkinImageScale::NineSlice, Some(border)) => {
-            append_nine_slice_image_commands(commands, texture, rect, uv, tint, border);
+            append_nine_slice_image_commands(
+                commands,
+                texture,
+                rect,
+                uv,
+                tint,
+                border,
+                source_size,
+            );
         }
         _ => commands.push(DrawCommand::Image {
             rect,
@@ -415,11 +481,21 @@ fn append_nine_slice_image_commands(
     uv: TextureRegion,
     tint: Color,
     border: SkinImageBorder,
+    source_size: Option<SkinImageSize>,
 ) {
     if rect.width <= 0.0 || rect.height <= 0.0 || uv.width <= 0.0 || uv.height <= 0.0 {
         return;
     }
 
+    let Some(border) = border.normalized(source_size) else {
+        commands.push(DrawCommand::Image {
+            rect,
+            uv: UvRect { x: uv.x, y: uv.y, width: uv.width, height: uv.height },
+            texture: TextureId(texture.0),
+            tint,
+        });
+        return;
+    };
     let left = border.left.clamp(0.0, 0.5);
     let right = border.right.clamp(0.0, 0.5);
     let top = border.top.clamp(0.0, 0.5);
@@ -665,6 +741,7 @@ mod tests {
                     blend: BlendMode::Normal,
                     scale: SkinImageScale::Stretch,
                     border: None,
+                    source_size: None,
                 },
             ],
         );
@@ -685,7 +762,14 @@ mod tests {
                 tint: Color::rgb(1.0, 1.0, 1.0),
                 blend: BlendMode::Normal,
                 scale: SkinImageScale::NineSlice,
-                border: Some(SkinImageBorder { left: 0.1, right: 0.2, top: 0.25, bottom: 0.25 }),
+                border: Some(SkinImageBorder {
+                    left: 0.1,
+                    right: 0.2,
+                    top: 0.25,
+                    bottom: 0.25,
+                    unit: SkinImageBorderUnit::Normalized,
+                }),
+                source_size: None,
             }],
         );
 
@@ -713,6 +797,43 @@ mod tests {
                 && approx_eq(height, 0.15)
                 && approx_eq(uv_width, 0.7)
                 && approx_eq(uv_height, 0.5)
+        ));
+    }
+
+    #[test]
+    fn append_skin_render_items_expands_pixel_based_nine_slice_images() {
+        let mut commands = Vec::new();
+        append_skin_render_items(
+            &mut commands,
+            &[SkinRenderItem::Image {
+                texture: SkinTextureId(8),
+                rect: Rect { x: 0.2, y: 0.1, width: 0.36, height: 0.48 },
+                uv: TextureRegion { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+                tint: Color::rgb(1.0, 1.0, 1.0),
+                blend: BlendMode::Normal,
+                scale: SkinImageScale::NineSlice,
+                border: Some(SkinImageBorder {
+                    left: 2.0,
+                    right: 2.0,
+                    top: 3.0,
+                    bottom: 3.0,
+                    unit: SkinImageBorderUnit::Pixels,
+                }),
+                source_size: Some(SkinImageSize { width: 12.0, height: 48.0 }),
+            }],
+        );
+
+        assert_eq!(commands.len(), 9);
+        assert!(matches!(
+            commands[0],
+            DrawCommand::Image {
+                rect: Rect { width, height, .. },
+                uv: UvRect { width: uv_width, height: uv_height, .. },
+                ..
+            } if approx_eq(width, 0.06)
+                && approx_eq(height, 0.03)
+                && approx_eq(uv_width, 2.0 / 12.0)
+                && approx_eq(uv_height, 3.0 / 48.0)
         ));
     }
 
@@ -780,19 +901,23 @@ mod tests {
 
             [play.gauge_frame]
             texture = 8
+            source_size = { width = 12.0, height = 48.0 }
             scale = "nine_slice"
-            border = { left = 0.18, right = 0.18, top = 0.06, bottom = 0.06 }
+            border = { left = 2.0, right = 2.0, top = 3.0, bottom = 3.0, unit = "pixels" }
 
             [play.gauge_fill]
             texture = 9
+            source_size = { width = 8.0, height = 48.0 }
             scale = "stretch"
 
             [play.combo_panel]
             texture = 10
+            source_size = { width = 48.0, height = 16.0 }
             scale = "nine_slice"
 
             [play.combo_panel_inactive]
             texture = 11
+            source_size = { width = 48.0, height = 16.0 }
             scale = "stretch"
             "#,
         )
@@ -830,8 +955,18 @@ mod tests {
         assert_eq!(manifest.play_gauge_frame_image().texture, 8);
         assert_eq!(manifest.play_gauge_frame_image().scale, SkinImageScale::NineSlice);
         assert_eq!(
+            manifest.play_gauge_frame_image().source_size,
+            Some(SkinImageSize { width: 12.0, height: 48.0 })
+        );
+        assert_eq!(
             manifest.play_gauge_frame_image().border,
-            Some(SkinImageBorder { left: 0.18, right: 0.18, top: 0.06, bottom: 0.06 })
+            Some(SkinImageBorder {
+                left: 2.0,
+                right: 2.0,
+                top: 3.0,
+                bottom: 3.0,
+                unit: SkinImageBorderUnit::Pixels,
+            })
         );
         assert_eq!(manifest.play_gauge_fill_image().texture, 9);
         assert_eq!(manifest.play_combo_panel_image(true).texture, 10);
@@ -868,14 +1003,30 @@ mod tests {
         assert_eq!(judge_line.uv, TextureRegion::default());
         assert_eq!(gauge_frame.texture, 8);
         assert_eq!(gauge_frame.scale, SkinImageScale::NineSlice);
-        assert!(gauge_frame.border.is_some());
+        assert_eq!(gauge_frame.source_size, Some(SkinImageSize { width: 12.0, height: 48.0 }));
+        assert!(matches!(
+            gauge_frame.border,
+            Some(SkinImageBorder { unit: SkinImageBorderUnit::Pixels, .. })
+        ));
         assert_eq!(gauge_fill.texture, 9);
+        assert_eq!(gauge_fill.source_size, Some(SkinImageSize { width: 8.0, height: 48.0 }));
         assert_eq!(combo_panel.texture, 10);
         assert_eq!(combo_panel.scale, SkinImageScale::NineSlice);
-        assert!(combo_panel.border.is_some());
+        assert_eq!(combo_panel.source_size, Some(SkinImageSize { width: 48.0, height: 16.0 }));
+        assert!(matches!(
+            combo_panel.border,
+            Some(SkinImageBorder { unit: SkinImageBorderUnit::Pixels, .. })
+        ));
         assert_eq!(combo_panel_inactive.texture, 11);
         assert_eq!(combo_panel_inactive.scale, SkinImageScale::NineSlice);
-        assert!(combo_panel_inactive.border.is_some());
+        assert_eq!(
+            combo_panel_inactive.source_size,
+            Some(SkinImageSize { width: 48.0, height: 16.0 })
+        );
+        assert!(matches!(
+            combo_panel_inactive.border,
+            Some(SkinImageBorder { unit: SkinImageBorderUnit::Pixels, .. })
+        ));
     }
 
     fn approx_eq(actual: f32, expected: f32) -> bool {

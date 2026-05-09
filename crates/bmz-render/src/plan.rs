@@ -482,6 +482,7 @@ fn push_judge_line(skin_manifest: &SkinManifest, commands: &mut Vec<DrawCommand>
             blend: BlendMode::Normal,
             scale: image.scale,
             border: image.border,
+            source_size: image.source_size,
         }],
     );
 }
@@ -525,6 +526,7 @@ fn push_receptors(
                 blend: BlendMode::Normal,
                 scale: receptor.scale,
                 border: receptor.border,
+                source_size: receptor.source_size,
             }],
         );
     }
@@ -546,6 +548,7 @@ fn push_gauge(skin_manifest: &SkinManifest, commands: &mut Vec<DrawCommand>, gau
                 blend: BlendMode::Normal,
                 scale: frame_image.scale,
                 border: frame_image.border,
+                source_size: frame_image.source_size,
             },
             SkinRenderItem::Image {
                 texture: SkinTextureId(fill_image.texture),
@@ -560,6 +563,7 @@ fn push_gauge(skin_manifest: &SkinManifest, commands: &mut Vec<DrawCommand>, gau
                 blend: BlendMode::Normal,
                 scale: fill_image.scale,
                 border: fill_image.border,
+                source_size: fill_image.source_size,
             },
         ],
     );
@@ -578,6 +582,7 @@ fn push_combo_panel(skin_manifest: &SkinManifest, commands: &mut Vec<DrawCommand
             blend: BlendMode::Normal,
             scale: image.scale,
             border: image.border,
+            source_size: image.source_size,
         }],
     );
 }
@@ -643,6 +648,7 @@ fn push_default_note_skin(
             blend: BlendMode::Normal,
             scale: note.scale,
             border: note.border,
+            source_size: note.source_size,
         }],
     );
 }
