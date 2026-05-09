@@ -10,6 +10,7 @@ use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::assets::load_png_rgba;
 use crate::plan::{Color, DrawCommand, Point, Rect, TextStyle, TextureId, UvRect};
+use crate::snapshot::DisplayJudgeCounts;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SkinObjectId(pub u32);
@@ -579,6 +580,11 @@ pub struct SkinDocumentTexture {
 pub struct SkinDrawState {
     pub elapsed_ms: i32,
     pub combo: u32,
+    pub max_combo: u32,
+    pub ex_score: u32,
+    pub total_notes: u32,
+    pub past_notes: u32,
+    pub judge_counts: DisplayJudgeCounts,
     pub gauge: f32,
 }
 
@@ -1003,7 +1009,7 @@ impl SkinDocument {
                 && test_skin_ops(&destination.op, &enabled_options)
                 && eval_skin_draw_condition(
                     &destination.draw,
-                    SkinDrawState { elapsed_ms, combo: 0, gauge },
+                    SkinDrawState { elapsed_ms, gauge, ..SkinDrawState::default() },
                 )
         })?;
         let frame = resolve_destination_frame(destination, elapsed_ms)?;
@@ -1851,10 +1857,47 @@ fn eval_skin_draw_operand(operand: &str, state: SkinDrawState) -> Option<f32> {
 
 fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
     match ref_id {
-        75 => Some(state.combo as i64),
-        107 => Some(state.gauge.round() as i64),
+        71 | 101 | 171 => Some(state.ex_score as i64),
+        72 => Some(state.total_notes as i64 * 2),
+        74 | 106 | 333 => Some(state.total_notes as i64),
+        75 | 105 | 174 => Some(state.max_combo as i64),
+        76 => Some((state.judge_counts.bad + state.judge_counts.poor) as i64),
+        80 | 110 => Some(state.judge_counts.pgreat as i64),
+        81 | 111 => Some(state.judge_counts.great as i64),
+        82 | 112 => Some(state.judge_counts.good as i64),
+        83 | 113 => Some(state.judge_counts.bad as i64),
+        84 | 114 => Some(state.judge_counts.poor as i64),
+        85 => judge_rate_int(state.judge_counts.pgreat, state.total_notes),
+        86 => judge_rate_int(state.judge_counts.great, state.total_notes),
+        87 => judge_rate_int(state.judge_counts.good, state.total_notes),
+        88 => judge_rate_int(state.judge_counts.bad, state.total_notes),
+        89 => judge_rate_int(state.judge_counts.poor, state.total_notes),
+        102 | 115 | 155 => Some(score_rate_parts(state.ex_score, state.total_notes).0 as i64),
+        103 | 116 | 156 => Some(score_rate_parts(state.ex_score, state.total_notes).1 as i64),
+        104 => Some(state.combo as i64),
+        107 => Some(state.gauge.floor() as i64),
+        407 => Some(gauge_after_dot(state.gauge) as i64),
+        420 => Some(state.judge_counts.empty_poor as i64),
+        425 | 427 => Some((state.judge_counts.bad + state.judge_counts.poor) as i64),
+        426 => Some(state.judge_counts.poor as i64),
         _ => None,
     }
+}
+
+fn judge_rate_int(count: u32, total_notes: u32) -> Option<i64> {
+    (total_notes > 0).then_some(count as i64 * 100 / total_notes as i64)
+}
+
+fn score_rate_parts(ex_score: u32, total_notes: u32) -> (u32, u32) {
+    if total_notes == 0 {
+        return (0, 0);
+    }
+    let rate_tenths = ex_score.saturating_mul(1000) / total_notes.saturating_mul(2).max(1);
+    (rate_tenths / 10, rate_tenths % 10)
+}
+
+fn gauge_after_dot(gauge: f32) -> u32 {
+    if gauge > 0.0 && gauge < 0.1 { 1 } else { ((gauge.max(0.0) * 10.0) as u32) % 10 }
 }
 
 fn resolve_destination_frame(
@@ -2668,15 +2711,15 @@ mod tests {
 
         let high = document.static_image_render_items(
             &sources,
-            SkinDrawState { elapsed_ms: 0, combo: 0, gauge: 80.0 },
+            SkinDrawState { elapsed_ms: 0, gauge: 80.0, ..SkinDrawState::default() },
         );
         let middle = document.static_image_render_items(
             &sources,
-            SkinDrawState { elapsed_ms: 0, combo: 0, gauge: 60.0 },
+            SkinDrawState { elapsed_ms: 0, gauge: 60.0, ..SkinDrawState::default() },
         );
         let low = document.static_image_render_items(
             &sources,
-            SkinDrawState { elapsed_ms: 0, combo: 0, gauge: 10.0 },
+            SkinDrawState { elapsed_ms: 0, gauge: 10.0, ..SkinDrawState::default() },
         );
 
         assert_eq!(high.len(), 1);
@@ -2772,15 +2815,15 @@ mod tests {
 
         let early = document.static_image_render_items(
             &sources,
-            SkinDrawState { elapsed_ms: 50, combo: 0, gauge: 0.0 },
+            SkinDrawState { elapsed_ms: 50, ..SkinDrawState::default() },
         );
         let middle = document.static_image_render_items(
             &sources,
-            SkinDrawState { elapsed_ms: 150, combo: 0, gauge: 0.0 },
+            SkinDrawState { elapsed_ms: 150, ..SkinDrawState::default() },
         );
         let late = document.static_image_render_items(
             &sources,
-            SkinDrawState { elapsed_ms: 250, combo: 0, gauge: 0.0 },
+            SkinDrawState { elapsed_ms: 250, ..SkinDrawState::default() },
         );
 
         assert!(
@@ -3034,7 +3077,7 @@ mod tests {
                 "h": 100,
                 "source": [{ "id": 1, "path": "number.png" }],
                 "value": [
-                    { "id": "combo", "src": 1, "x": 0, "y": 0, "w": 100, "h": 10, "divx": 10, "digit": 3, "ref": 75 },
+                    { "id": "combo", "src": 1, "x": 0, "y": 0, "w": 100, "h": 10, "divx": 10, "digit": 3, "ref": 104 },
                     { "id": "unknown", "src": 1, "x": 0, "y": 0, "w": 100, "h": 10, "divx": 10, "digit": 3, "ref": 9999 }
                 ],
                 "destination": [
@@ -3056,7 +3099,7 @@ mod tests {
 
         let items = document.static_image_render_items(
             &sources,
-            SkinDrawState { elapsed_ms: 0, combo: 45, gauge: 0.0 },
+            SkinDrawState { elapsed_ms: 0, combo: 45, ..SkinDrawState::default() },
         );
 
         assert_eq!(items.len(), 2);
@@ -3070,6 +3113,46 @@ mod tests {
                 uv: TextureRegion { x: u, .. },
                 ..
             } if approx_eq(x, 0.15) && approx_eq(u, 0.5)));
+    }
+
+    #[test]
+    fn skin_state_number_maps_play_value_refs() {
+        let state = SkinDrawState {
+            combo: 12,
+            max_combo: 45,
+            ex_score: 167,
+            total_notes: 100,
+            judge_counts: DisplayJudgeCounts {
+                pgreat: 30,
+                great: 20,
+                good: 10,
+                bad: 4,
+                poor: 3,
+                empty_poor: 2,
+            },
+            gauge: 78.6,
+            ..SkinDrawState::default()
+        };
+
+        assert_eq!(skin_state_number(71, state), Some(167));
+        assert_eq!(skin_state_number(72, state), Some(200));
+        assert_eq!(skin_state_number(74, state), Some(100));
+        assert_eq!(skin_state_number(75, state), Some(45));
+        assert_eq!(skin_state_number(76, state), Some(7));
+        assert_eq!(skin_state_number(102, state), Some(83));
+        assert_eq!(skin_state_number(103, state), Some(5));
+        assert_eq!(skin_state_number(104, state), Some(12));
+        assert_eq!(skin_state_number(107, state), Some(78));
+        assert_eq!(skin_state_number(407, state), Some(6));
+        assert_eq!(skin_state_number(110, state), Some(30));
+        assert_eq!(skin_state_number(111, state), Some(20));
+        assert_eq!(skin_state_number(112, state), Some(10));
+        assert_eq!(skin_state_number(113, state), Some(4));
+        assert_eq!(skin_state_number(114, state), Some(3));
+        assert_eq!(skin_state_number(420, state), Some(2));
+        assert_eq!(skin_state_number(425, state), Some(7));
+        assert_eq!(skin_state_number(426, state), Some(3));
+        assert_eq!(skin_state_number(427, state), Some(7));
     }
 
     #[test]

@@ -18,7 +18,7 @@ pub struct RenderSnapshot {
     pub bar_lines: Vec<VisibleBarLine>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DisplayJudgeCounts {
     pub pgreat: u32,
     pub great: u32,
