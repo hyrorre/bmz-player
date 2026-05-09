@@ -9,6 +9,7 @@ use std::thread;
 use ab_glyph::{Font, FontArc, Glyph, PxScale, ScaleFont, point};
 use anyhow::{Context, Result, anyhow};
 
+use crate::assets::{RgbaImageAsset, load_png_rgba};
 use crate::plan::{Color, DrawCommand, DrawPlan, Point, TextStyle, TextureId};
 use crate::scene::AppSceneSnapshot;
 
@@ -125,6 +126,16 @@ impl Renderer {
             self.pending_textures.push(PendingTexture { id, width, height, rgba });
         }
         Ok(())
+    }
+
+    pub fn upsert_image_asset(&mut self, id: TextureId, asset: &RgbaImageAsset) -> Result<()> {
+        asset.validate()?;
+        self.upsert_rgba_texture(id, asset.width, asset.height, asset.pixels.clone())
+    }
+
+    pub fn load_png_texture(&mut self, id: TextureId, path: &std::path::Path) -> Result<()> {
+        let asset = load_png_rgba(path)?;
+        self.upsert_image_asset(id, &asset)
     }
 
     pub fn resize_surface(&mut self, size: SurfaceSize) {
@@ -1317,5 +1328,17 @@ mod tests {
         assert!(validate_rgba_texture(1, 1, &[255, 255, 255, 255]).is_ok());
         assert!(validate_rgba_texture(0, 1, &[255, 255, 255, 255]).is_err());
         assert!(validate_rgba_texture(1, 1, &[255]).is_err());
+    }
+
+    #[test]
+    fn renderer_queues_texture_assets_before_surface_attach() {
+        let mut renderer = Renderer::default();
+        let asset =
+            crate::assets::RgbaImageAsset { width: 1, height: 1, pixels: vec![255, 0, 0, 255] };
+
+        renderer.upsert_image_asset(crate::plan::TextureId(9), &asset).unwrap();
+
+        assert_eq!(renderer.pending_textures.len(), 1);
+        assert_eq!(renderer.pending_textures[0].id, crate::plan::TextureId(9));
     }
 }

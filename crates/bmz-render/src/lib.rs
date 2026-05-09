@@ -1,3 +1,4 @@
+pub mod assets;
 pub mod lane;
 pub mod plan;
 pub mod renderer;
