@@ -61,15 +61,23 @@ pub fn apply_beatoraja_json_skin(renderer: &mut Renderer, skin_path: &Path) -> R
     let mut next_texture_id = 10_000;
 
     for source in &document.source {
-        if source.path.contains('*') || !source.path.to_ascii_lowercase().ends_with(".png") {
+        let Some(source_path) = resolve_json_skin_source_path(skin_root, &source.path, &document)
+        else {
             tracing::debug!(
                 source_id = %source.id,
                 path = %source.path,
                 "skipping unresolved beatoraja skin source"
             );
             continue;
+        };
+        if !source_path.to_string_lossy().to_ascii_lowercase().ends_with(".png") {
+            tracing::debug!(
+                source_id = %source.id,
+                path = %source_path.display(),
+                "skipping unsupported beatoraja skin source"
+            );
+            continue;
         }
-        let source_path = skin_root.join(&source.path);
         let asset = match load_png_rgba(&source_path) {
             Ok(asset) => asset,
             Err(error) => {
@@ -111,6 +119,61 @@ pub fn apply_beatoraja_json_skin(renderer: &mut Renderer, skin_path: &Path) -> R
     Ok(())
 }
 
+fn resolve_json_skin_source_path(
+    skin_root: &Path,
+    source_path: &str,
+    document: &SkinDocument,
+) -> Option<PathBuf> {
+    let normalized = source_path.replace('\\', "/");
+    if !normalized.contains('*') {
+        return Some(skin_root.join(normalized));
+    }
+
+    let preferred = document
+        .filepath
+        .iter()
+        .find(|filepath| filepath.path.replace('\\', "/") == normalized)
+        .and_then(|filepath| (!filepath.def.is_empty()).then_some(filepath.def.as_str()));
+    resolve_wildcard_path(skin_root, &normalized, preferred)
+}
+
+fn resolve_wildcard_path(
+    skin_root: &Path,
+    pattern: &str,
+    preferred: Option<&str>,
+) -> Option<PathBuf> {
+    let star = pattern.find('*')?;
+    let (prefix, suffix_with_star) = pattern.split_at(star);
+    let suffix = &suffix_with_star[1..];
+    let slash = prefix.rfind('/').map(|index| index + 1).unwrap_or(0);
+    let (directory, filename_prefix) = prefix.split_at(slash);
+    let directory = skin_root.join(directory);
+    let mut candidates = std::fs::read_dir(directory)
+        .ok()?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.is_file())
+        .filter(|path| {
+            let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+                return false;
+            };
+            file_name.starts_with(filename_prefix) && file_name.ends_with(suffix)
+        })
+        .collect::<Vec<_>>();
+    candidates.sort();
+
+    if let Some(preferred) = preferred {
+        if let Some(candidate) = candidates.iter().find(|path| {
+            let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+            let stem = path.file_stem().and_then(|name| name.to_str()).unwrap_or_default();
+            file_name == preferred || stem == preferred
+        }) {
+            return Some(candidate.clone());
+        }
+    }
+
+    candidates.into_iter().next()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -138,5 +201,50 @@ mod tests {
         let mut renderer = Renderer::default();
 
         apply_beatoraja_json_skin(&mut renderer, &skin_path).unwrap();
+    }
+
+    #[test]
+    fn wildcard_skin_source_prefers_filepath_default() {
+        let root = unique_test_dir("bmz-json-source");
+        std::fs::create_dir_all(root.join("parts")).unwrap();
+        std::fs::write(root.join("parts/default.png"), []).unwrap();
+        std::fs::write(root.join("parts/blue.png"), []).unwrap();
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "filepath": [
+                    { "name": "Parts", "path": "parts/*.png", "def": "blue" }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        let resolved = resolve_json_skin_source_path(&root, "parts/*.png", &document).unwrap();
+
+        assert_eq!(resolved.file_name().and_then(|name| name.to_str()), Some("blue.png"));
+    }
+
+    #[test]
+    fn wildcard_skin_source_falls_back_to_first_match() {
+        let root = unique_test_dir("bmz-json-source");
+        std::fs::create_dir_all(root.join("parts")).unwrap();
+        std::fs::write(root.join("parts/b.png"), []).unwrap();
+        std::fs::write(root.join("parts/a.png"), []).unwrap();
+        let document: SkinDocument = serde_json::from_str("{}").unwrap();
+
+        let resolved = resolve_json_skin_source_path(&root, "parts/*.png", &document).unwrap();
+
+        assert_eq!(resolved.file_name().and_then(|name| name.to_str()), Some("a.png"));
+    }
+
+    fn unique_test_dir(name: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        path
     }
 }
