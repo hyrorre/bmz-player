@@ -606,6 +606,7 @@ pub struct SkinDrawState {
     pub past_notes: u32,
     pub judge_counts: DisplayJudgeCounts,
     pub gauge: f32,
+    pub play_progress: f32,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -987,8 +988,15 @@ impl SkinDocument {
                     ));
                 }
 
-                let text = self.text.iter().find(|text| text.id == destination.id)?;
-                self.text_render_item(text, frame, text_state).map(|item| vec![item])
+                if let Some(text) = self.text.iter().find(|text| text.id == destination.id) {
+                    if let Some(item) = self.text_render_item(text, frame, text_state) {
+                        return Some(vec![item]);
+                    }
+                }
+
+                let slider = self.slider.iter().find(|slider| slider.id == destination.id)?;
+                self.slider_render_item(slider, destination, frame, state, sources)
+                    .map(|item| vec![item])
             })
             .flatten()
             .collect()
@@ -1270,6 +1278,49 @@ impl SkinDocument {
                 layer: TextLayer::Ui,
             },
             blend: BlendMode::Normal,
+        })
+    }
+
+    fn slider_render_item(
+        &self,
+        slider: &SkinSliderDef,
+        destination: &SkinDestinationDef,
+        frame: ResolvedSkinFrame,
+        state: SkinDrawState,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Option<SkinRenderItem> {
+        let progress = skin_slider_progress(slider.slider_type, state)?;
+        let source = sources.get(&slider.src)?;
+        let source_width = source.source_size.width.max(1.0);
+        let source_height = source.source_size.height.max(1.0);
+        let mut frame = frame;
+        let offset = (slider.range as f32 * progress).round() as i32;
+        match slider.angle {
+            0 => frame.x += offset,
+            1 => frame.x -= offset,
+            2 => frame.y -= offset,
+            3 => frame.y += offset,
+            _ => {}
+        }
+        Some(SkinRenderItem::Image {
+            texture: source.texture,
+            rect: normalize_skin_frame_rect(frame, self.w, self.h),
+            uv: TextureRegion {
+                x: slider.x as f32 / source_width,
+                y: slider.y as f32 / source_height,
+                width: slider.w as f32 / source_width,
+                height: slider.h as f32 / source_height,
+            },
+            tint: Color::rgba(
+                frame.r as f32 / 255.0,
+                frame.g as f32 / 255.0,
+                frame.b as f32 / 255.0,
+                frame.a as f32 / 255.0,
+            ),
+            blend: if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal },
+            scale: SkinImageScale::Stretch,
+            border: None,
+            source_size: Some(source.source_size),
         })
     }
 }
@@ -2025,6 +2076,13 @@ fn score_rate_parts(ex_score: u32, total_notes: u32) -> (u32, u32) {
 
 fn gauge_after_dot(gauge: f32) -> u32 {
     if gauge > 0.0 && gauge < 0.1 { 1 } else { ((gauge.max(0.0) * 10.0) as u32) % 10 }
+}
+
+fn skin_slider_progress(slider_type: i32, state: SkinDrawState) -> Option<f32> {
+    match slider_type {
+        6 => Some(state.play_progress.clamp(0.0, 1.0)),
+        _ => None,
+    }
 }
 
 fn skin_state_text(text: &SkinTextDef, state: SkinTextState<'_>) -> String {
@@ -3426,6 +3484,58 @@ mod tests {
         assert!(
             matches!(&items[2], SkinRenderItem::Text { text, style, .. } if text == "READY" && approx_eq(style.color.a, 128.0 / 255.0))
         );
+    }
+
+    #[test]
+    fn skin_document_resolves_music_progress_slider() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "system.png" }],
+                "slider": [
+                    { "id": "progress", "src": 1, "x": 10, "y": 20, "w": 5, "h": 6, "angle": 2, "range": 40, "type": 6 },
+                    { "id": "unknown", "src": 1, "x": 10, "y": 20, "w": 5, "h": 6, "angle": 0, "range": 40, "type": 999 }
+                ],
+                "destination": [
+                    { "id": "progress", "blend": 2, "dst": [{ "x": 30, "y": 80, "w": 5, "h": 6 }] },
+                    { "id": "unknown", "dst": [{ "x": 30, "y": 80, "w": 5, "h": 6 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "1".to_string(),
+            SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 100.0, height: 100.0 },
+            },
+        )]);
+
+        let items = document.static_image_render_items(
+            &sources,
+            SkinDrawState { play_progress: 0.25, ..SkinDrawState::default() },
+        );
+
+        assert_eq!(items.len(), 1);
+        assert!(matches!(items[0], SkinRenderItem::Image {
+                rect: Rect { x, y, width, height },
+                uv: TextureRegion { x: u, y: v, width: uw, height: uh },
+                blend,
+                ..
+            } if approx_eq(x, 0.3)
+                && approx_eq(y, 0.7)
+                && approx_eq(width, 0.05)
+                && approx_eq(height, 0.06)
+                && approx_eq(u, 0.1)
+                && approx_eq(v, 0.2)
+                && approx_eq(uw, 0.05)
+                && approx_eq(uh, 0.06)
+                && blend == BlendMode::Add));
     }
 
     #[test]

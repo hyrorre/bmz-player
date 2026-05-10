@@ -4,6 +4,7 @@ use bmz_core::time::TimeUs;
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RenderSnapshot {
     pub time: TimeUs,
+    pub duration: TimeUs,
     pub title: String,
     pub subtitle: String,
     pub artist: String,

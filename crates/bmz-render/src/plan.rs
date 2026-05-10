@@ -310,6 +310,7 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
                 past_notes: snapshot.past_notes,
                 judge_counts: snapshot.judge_counts,
                 gauge: snapshot.gauge,
+                play_progress: play_progress(snapshot),
             },
             SkinTextState {
                 title: &snapshot.title,
@@ -631,6 +632,14 @@ fn push_combo_panel(skin_manifest: &SkinManifest, commands: &mut Vec<DrawCommand
             source_size: image.source_size,
         }],
     );
+}
+
+fn play_progress(snapshot: &RenderSnapshot) -> f32 {
+    if snapshot.duration.0 <= 0 {
+        0.0
+    } else {
+        (snapshot.time.0 as f32 / snapshot.duration.0 as f32).clamp(0.0, 1.0)
+    }
 }
 
 fn push_document_lane_effects(

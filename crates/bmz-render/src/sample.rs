@@ -30,6 +30,7 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
 pub fn sample_play_scene() -> AppSceneSnapshot {
     let mut snapshot = RenderSnapshot {
         time: TimeUs(12_345_000),
+        duration: TimeUs(90_000_000),
         title: "BMZ Sample Playable".to_string(),
         artist: "bmz".to_string(),
         genre: "BMS".to_string(),

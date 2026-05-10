@@ -16,6 +16,7 @@ pub fn build_render_snapshot(
 ) -> RenderSnapshot {
     let mut snapshot = RenderSnapshot {
         time: render_now,
+        duration: session.chart.end_time,
         title: session.chart.metadata.title.clone(),
         subtitle: session.chart.metadata.subtitle.clone(),
         artist: session.chart.metadata.artist.clone(),
