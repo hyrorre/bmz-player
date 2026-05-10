@@ -667,6 +667,22 @@ impl TextAtlasBuilder {
         let mut scale = PxScale::from(px_size);
         let mut scaled_font = font.as_scaled(scale);
         let mut text_width = text_width_px(&text, font, &scaled_font);
+        if style.wrapping && max_width > 0.0 {
+            let lines = wrap_text_to_width(&text, font, &scaled_font, max_width);
+            let line_height = (scaled_font.ascent() - scaled_font.descent()
+                + scaled_font.line_gap())
+            .max(px_size);
+            let origin_x = origin.x * surface.width as f32;
+            let first_baseline_y = origin.y * surface.height as f32 + scaled_font.ascent();
+            for (index, line) in lines.iter().enumerate() {
+                let line_width = text_width_px(line, font, &scaled_font);
+                let baseline_y = first_baseline_y + line_height * index as f32;
+                self.push_text_line(
+                    origin_x, baseline_y, line, line_width, scale, style, font, surface,
+                );
+            }
+            return;
+        }
         if max_width > 0.0 && text_width > max_width {
             match style.overflow {
                 TextOverflow::Overflow => {}
@@ -687,14 +703,32 @@ impl TextAtlasBuilder {
                 }
             }
         }
+        let cursor_x = origin.x * surface.width as f32;
+        let baseline_y = origin.y * surface.height as f32 + scaled_font.ascent();
+
+        self.push_text_line(cursor_x, baseline_y, &text, text_width, scale, style, font, surface);
+    }
+
+    fn push_text_line(
+        &mut self,
+        origin_x: f32,
+        baseline_y: f32,
+        text: &str,
+        text_width: f32,
+        scale: PxScale,
+        style: TextStyle,
+        font: &FontArc,
+        surface: SurfaceSize,
+    ) {
+        let scaled_font = font.as_scaled(scale);
+        let max_width = style.max_width.max(0.0) * surface.width as f32;
         let align_offset = match style.align {
             TextAlign::Left => 0.0,
             TextAlign::Center if max_width > 0.0 => (max_width - text_width) / 2.0,
             TextAlign::Right if max_width > 0.0 => max_width - text_width,
             _ => 0.0,
         };
-        let mut cursor_x = origin.x * surface.width as f32 + align_offset.max(0.0);
-        let baseline_y = origin.y * surface.height as f32 + scaled_font.ascent();
+        let mut cursor_x = origin_x + align_offset.max(0.0);
 
         for ch in text.chars() {
             let glyph_id = font.glyph_id(ch);
@@ -767,6 +801,30 @@ impl TextAtlasBuilder {
 
 fn text_width_px<F: Font>(text: &str, font: &FontArc, scaled_font: &impl ScaleFont<F>) -> f32 {
     text.chars().map(|ch| scaled_font.h_advance(font.glyph_id(ch))).sum()
+}
+
+fn wrap_text_to_width<F: Font>(
+    text: &str,
+    font: &FontArc,
+    scaled_font: &impl ScaleFont<F>,
+    max_width: f32,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    for source_line in text.split('\n') {
+        let mut line = String::new();
+        let mut width = 0.0;
+        for ch in source_line.chars() {
+            let advance = scaled_font.h_advance(font.glyph_id(ch));
+            if !line.is_empty() && width + advance > max_width {
+                lines.push(std::mem::take(&mut line));
+                width = 0.0;
+            }
+            line.push(ch);
+            width += advance;
+        }
+        lines.push(line);
+    }
+    lines
 }
 
 fn truncate_text_to_width<F: Font>(
@@ -1318,6 +1376,17 @@ mod tests {
         assert!(SurfaceSize { width: 1, height: 1 }.is_drawable());
         assert!(!SurfaceSize { width: 0, height: 1 }.is_drawable());
         assert!(!SurfaceSize { width: 1, height: 0 }.is_drawable());
+    }
+
+    #[test]
+    fn text_wrapping_splits_lines_by_max_width() {
+        let Some(font) = load_default_font() else { return };
+        let scale = PxScale::from(16.0);
+        let scaled_font = font.as_scaled(scale);
+        let one_char_width = text_width_px("W", &font, &scaled_font);
+        let lines = wrap_text_to_width("WWW", &font, &scaled_font, one_char_width * 1.5);
+
+        assert_eq!(lines, vec!["W", "W", "W"]);
     }
 
     #[test]

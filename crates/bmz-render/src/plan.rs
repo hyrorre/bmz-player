@@ -70,6 +70,7 @@ pub struct TextStyle {
     pub align: TextAlign,
     pub max_width: f32,
     pub overflow: TextOverflow,
+    pub wrapping: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -782,6 +783,7 @@ fn default_play_skin(snapshot: &RenderSnapshot) -> SkinDefinition {
                     align: TextAlign::Left,
                     max_width: 0.0,
                     overflow: TextOverflow::Overflow,
+                    wrapping: false,
                 },
                 digits: 0,
             },
@@ -801,6 +803,7 @@ fn default_play_skin(snapshot: &RenderSnapshot) -> SkinDefinition {
                     align: TextAlign::Left,
                     max_width: 0.0,
                     overflow: TextOverflow::Overflow,
+                    wrapping: false,
                 },
             },
             placements: vec![skin_placement(Rect { x: 0.38, y: 0.245, width: 0.3, height: 0.04 })],

@@ -35,6 +35,7 @@ pub fn push_text_command(commands: &mut Vec<DrawCommand>, text: &str, style: Bit
             align: TextAlign::Left,
             max_width: 0.0,
             overflow: TextOverflow::Overflow,
+            wrapping: false,
         },
     });
 }

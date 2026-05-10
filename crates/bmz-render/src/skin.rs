@@ -1323,6 +1323,7 @@ impl SkinDocument {
                 align: skin_text_align(text.align),
                 max_width: frame.w.max(0) as f32 / self.w.max(1) as f32,
                 overflow: skin_text_overflow(text.overflow),
+                wrapping: text.wrapping,
             },
             blend: BlendMode::Normal,
         })
@@ -2483,6 +2484,7 @@ mod tests {
                     align: TextAlign::Left,
                     max_width: 0.0,
                     overflow: TextOverflow::Overflow,
+                    wrapping: false,
                 },
                 digits: 4,
             },
@@ -2546,6 +2548,7 @@ mod tests {
                         align: TextAlign::Left,
                         max_width: 0.0,
                         overflow: TextOverflow::Overflow,
+                        wrapping: false,
                     },
                 },
                 placements: vec![SkinPlacement {
@@ -3553,7 +3556,7 @@ mod tests {
                 "w": 100,
                 "h": 100,
                 "text": [
-                    { "id": "title", "size": 8, "align": 1, "ref": 12 },
+                    { "id": "title", "size": 8, "align": 1, "wrapping": true, "ref": 12 },
                     { "id": "genre", "size": 6, "align": 2, "overflow": 1, "ref": 13 },
                     { "id": "constant", "size": 5, "constantText": "READY" }
                 ],
@@ -3589,6 +3592,7 @@ mod tests {
                 && text == "Song Another"
                 && approx_eq(style.size, 0.1)
                 && style.align == TextAlign::Center
+                && style.wrapping
                 && approx_eq(style.max_width, 0.5)
                 && style.color == Color::rgba(128.0 / 255.0, 200.0 / 255.0, 1.0, 1.0)));
         assert!(matches!(&items[1], SkinRenderItem::Text { text, style, .. }
