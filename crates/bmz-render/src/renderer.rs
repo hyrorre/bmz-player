@@ -10,7 +10,9 @@ use ab_glyph::{Font, FontArc, Glyph, PxScale, ScaleFont, point};
 use anyhow::{Context, Result, anyhow};
 
 use crate::assets::{RgbaImageAsset, load_png_rgba};
-use crate::plan::{Color, DrawCommand, DrawPlan, Point, TextAlign, TextStyle, TextureId};
+use crate::plan::{
+    Color, DrawCommand, DrawPlan, Point, TextAlign, TextOverflow, TextStyle, TextureId,
+};
 use crate::scene::AppSceneSnapshot;
 use crate::skin::SkinContext;
 
@@ -659,11 +661,32 @@ impl TextAtlasBuilder {
         font: &FontArc,
         surface: SurfaceSize,
     ) {
-        let px_size = (style.size * surface.height as f32).max(1.0);
-        let scale = PxScale::from(px_size);
-        let scaled_font = font.as_scaled(scale);
-        let text_width = text_width_px(text, font, &scaled_font);
+        let mut px_size = (style.size * surface.height as f32).max(1.0);
         let max_width = style.max_width.max(0.0) * surface.width as f32;
+        let mut text = std::borrow::Cow::Borrowed(text);
+        let mut scale = PxScale::from(px_size);
+        let mut scaled_font = font.as_scaled(scale);
+        let mut text_width = text_width_px(&text, font, &scaled_font);
+        if max_width > 0.0 && text_width > max_width {
+            match style.overflow {
+                TextOverflow::Overflow => {}
+                TextOverflow::Shrink => {
+                    px_size = (px_size * max_width / text_width).max(1.0);
+                    scale = PxScale::from(px_size);
+                    scaled_font = font.as_scaled(scale);
+                    text_width = text_width_px(&text, font, &scaled_font);
+                }
+                TextOverflow::Truncate => {
+                    text = std::borrow::Cow::Owned(truncate_text_to_width(
+                        &text,
+                        font,
+                        &scaled_font,
+                        max_width,
+                    ));
+                    text_width = text_width_px(&text, font, &scaled_font);
+                }
+            }
+        }
         let align_offset = match style.align {
             TextAlign::Left => 0.0,
             TextAlign::Center if max_width > 0.0 => (max_width - text_width) / 2.0,
@@ -744,6 +767,25 @@ impl TextAtlasBuilder {
 
 fn text_width_px<F: Font>(text: &str, font: &FontArc, scaled_font: &impl ScaleFont<F>) -> f32 {
     text.chars().map(|ch| scaled_font.h_advance(font.glyph_id(ch))).sum()
+}
+
+fn truncate_text_to_width<F: Font>(
+    text: &str,
+    font: &FontArc,
+    scaled_font: &impl ScaleFont<F>,
+    max_width: f32,
+) -> String {
+    let mut width = 0.0;
+    let mut result = String::new();
+    for ch in text.chars() {
+        let advance = scaled_font.h_advance(font.glyph_id(ch));
+        if width + advance > max_width {
+            break;
+        }
+        width += advance;
+        result.push(ch);
+    }
+    result
 }
 
 fn encode_text_quads(quads: &[TextQuad], atlas_width: u32, atlas_height: u32) -> Vec<u8> {

@@ -10,7 +10,8 @@ use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::assets::load_png_rgba;
 use crate::plan::{
-    Color, DrawCommand, Point, Rect, TextAlign, TextLayer, TextStyle, TextureId, UvRect,
+    Color, DrawCommand, Point, Rect, TextAlign, TextLayer, TextOverflow, TextStyle, TextureId,
+    UvRect,
 };
 use crate::snapshot::DisplayJudgeCounts;
 
@@ -1321,6 +1322,7 @@ impl SkinDocument {
                 layer: TextLayer::Ui,
                 align: skin_text_align(text.align),
                 max_width: frame.w.max(0) as f32 / self.w.max(1) as f32,
+                overflow: skin_text_overflow(text.overflow),
             },
             blend: BlendMode::Normal,
         })
@@ -2178,6 +2180,14 @@ fn skin_text_align(align: i32) -> TextAlign {
     }
 }
 
+fn skin_text_overflow(overflow: i32) -> TextOverflow {
+    match overflow {
+        1 => TextOverflow::Shrink,
+        2 => TextOverflow::Truncate,
+        _ => TextOverflow::Overflow,
+    }
+}
+
 fn skin_state_text(text: &SkinTextDef, state: SkinTextState<'_>) -> String {
     if !text.constant_text.is_empty() {
         return text.constant_text.clone();
@@ -2472,6 +2482,7 @@ mod tests {
                     layer: TextLayer::Skin,
                     align: TextAlign::Left,
                     max_width: 0.0,
+                    overflow: TextOverflow::Overflow,
                 },
                 digits: 4,
             },
@@ -2534,6 +2545,7 @@ mod tests {
                         layer: TextLayer::Skin,
                         align: TextAlign::Left,
                         max_width: 0.0,
+                        overflow: TextOverflow::Overflow,
                     },
                 },
                 placements: vec![SkinPlacement {
@@ -3542,7 +3554,7 @@ mod tests {
                 "h": 100,
                 "text": [
                     { "id": "title", "size": 8, "align": 1, "ref": 12 },
-                    { "id": "genre", "size": 6, "align": 2, "ref": 13 },
+                    { "id": "genre", "size": 6, "align": 2, "overflow": 1, "ref": 13 },
                     { "id": "constant", "size": 5, "constantText": "READY" }
                 ],
                 "destination": [
@@ -3580,7 +3592,10 @@ mod tests {
                 && approx_eq(style.max_width, 0.5)
                 && style.color == Color::rgba(128.0 / 255.0, 200.0 / 255.0, 1.0, 1.0)));
         assert!(matches!(&items[1], SkinRenderItem::Text { text, style, .. }
-                if text == "Techno" && style.align == TextAlign::Right && approx_eq(style.max_width, 0.4)));
+                if text == "Techno"
+                    && style.align == TextAlign::Right
+                    && style.overflow == TextOverflow::Shrink
+                    && approx_eq(style.max_width, 0.4)));
         assert!(
             matches!(&items[2], SkinRenderItem::Text { text, style, .. } if text == "READY" && approx_eq(style.color.a, 128.0 / 255.0))
         );
