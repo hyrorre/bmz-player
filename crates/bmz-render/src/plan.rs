@@ -67,12 +67,21 @@ pub struct TextStyle {
     pub size: f32,
     pub color: Color,
     pub layer: TextLayer,
+    pub align: TextAlign,
+    pub max_width: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextLayer {
     Ui,
     Skin,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextAlign {
+    Left,
+    Center,
+    Right,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -762,6 +771,8 @@ fn default_play_skin(snapshot: &RenderSnapshot) -> SkinDefinition {
                     size: 0.05,
                     color: Color::rgb(0.94, 0.98, 1.0),
                     layer: TextLayer::Skin,
+                    align: TextAlign::Left,
+                    max_width: 0.0,
                 },
                 digits: 0,
             },
@@ -778,6 +789,8 @@ fn default_play_skin(snapshot: &RenderSnapshot) -> SkinDefinition {
                     size: 0.03,
                     color: Color::rgb(0.96, 0.92, 0.54),
                     layer: TextLayer::Skin,
+                    align: TextAlign::Left,
+                    max_width: 0.0,
                 },
             },
             placements: vec![skin_placement(Rect { x: 0.38, y: 0.245, width: 0.3, height: 0.04 })],

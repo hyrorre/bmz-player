@@ -9,7 +9,9 @@ use serde::{Deserialize, Deserializer};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::assets::load_png_rgba;
-use crate::plan::{Color, DrawCommand, Point, Rect, TextLayer, TextStyle, TextureId, UvRect};
+use crate::plan::{
+    Color, DrawCommand, Point, Rect, TextAlign, TextLayer, TextStyle, TextureId, UvRect,
+};
 use crate::snapshot::DisplayJudgeCounts;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1317,6 +1319,8 @@ impl SkinDocument {
                     frame.a as f32 / 255.0,
                 ),
                 layer: TextLayer::Ui,
+                align: skin_text_align(text.align),
+                max_width: frame.w.max(0) as f32 / self.w.max(1) as f32,
             },
             blend: BlendMode::Normal,
         })
@@ -2166,6 +2170,14 @@ fn skin_timer_active(timer: Option<i32>, state: SkinDrawState) -> bool {
     }
 }
 
+fn skin_text_align(align: i32) -> TextAlign {
+    match align {
+        1 => TextAlign::Center,
+        2 => TextAlign::Right,
+        _ => TextAlign::Left,
+    }
+}
+
 fn skin_state_text(text: &SkinTextDef, state: SkinTextState<'_>) -> String {
     if !text.constant_text.is_empty() {
         return text.constant_text.clone();
@@ -2458,6 +2470,8 @@ mod tests {
                     size: 0.04,
                     color: Color::rgb(1.0, 1.0, 1.0),
                     layer: TextLayer::Skin,
+                    align: TextAlign::Left,
+                    max_width: 0.0,
                 },
                 digits: 4,
             },
@@ -2518,6 +2532,8 @@ mod tests {
                         size: 0.04,
                         color: Color::rgb(1.0, 1.0, 1.0),
                         layer: TextLayer::Skin,
+                        align: TextAlign::Left,
+                        max_width: 0.0,
                     },
                 },
                 placements: vec![SkinPlacement {
@@ -3525,13 +3541,13 @@ mod tests {
                 "w": 100,
                 "h": 100,
                 "text": [
-                    { "id": "title", "size": 8, "ref": 12 },
-                    { "id": "genre", "size": 6, "ref": 13 },
+                    { "id": "title", "size": 8, "align": 1, "ref": 12 },
+                    { "id": "genre", "size": 6, "align": 2, "ref": 13 },
                     { "id": "constant", "size": 5, "constantText": "READY" }
                 ],
                 "destination": [
-                    { "id": "title", "dst": [{ "x": 10, "y": 20, "h": 10, "r": 128, "g": 200, "b": 255 }] },
-                    { "id": "genre", "dst": [{ "x": 10, "y": 40, "h": 6 }] },
+                    { "id": "title", "dst": [{ "x": 10, "y": 20, "w": 50, "h": 10, "r": 128, "g": 200, "b": 255 }] },
+                    { "id": "genre", "dst": [{ "x": 10, "y": 40, "w": 40, "h": 6 }] },
                     { "id": "constant", "dst": [{ "x": 10, "y": 60, "h": 5, "a": 128 }] }
                 ]
             }
@@ -3560,8 +3576,11 @@ mod tests {
                 && approx_eq(*y, 0.2)
                 && text == "Song Another"
                 && approx_eq(style.size, 0.1)
+                && style.align == TextAlign::Center
+                && approx_eq(style.max_width, 0.5)
                 && style.color == Color::rgba(128.0 / 255.0, 200.0 / 255.0, 1.0, 1.0)));
-        assert!(matches!(&items[1], SkinRenderItem::Text { text, .. } if text == "Techno"));
+        assert!(matches!(&items[1], SkinRenderItem::Text { text, style, .. }
+                if text == "Techno" && style.align == TextAlign::Right && approx_eq(style.max_width, 0.4)));
         assert!(
             matches!(&items[2], SkinRenderItem::Text { text, style, .. } if text == "READY" && approx_eq(style.color.a, 128.0 / 255.0))
         );

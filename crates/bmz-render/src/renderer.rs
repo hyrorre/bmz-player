@@ -10,7 +10,7 @@ use ab_glyph::{Font, FontArc, Glyph, PxScale, ScaleFont, point};
 use anyhow::{Context, Result, anyhow};
 
 use crate::assets::{RgbaImageAsset, load_png_rgba};
-use crate::plan::{Color, DrawCommand, DrawPlan, Point, TextStyle, TextureId};
+use crate::plan::{Color, DrawCommand, DrawPlan, Point, TextAlign, TextStyle, TextureId};
 use crate::scene::AppSceneSnapshot;
 use crate::skin::SkinContext;
 
@@ -662,7 +662,15 @@ impl TextAtlasBuilder {
         let px_size = (style.size * surface.height as f32).max(1.0);
         let scale = PxScale::from(px_size);
         let scaled_font = font.as_scaled(scale);
-        let mut cursor_x = origin.x * surface.width as f32;
+        let text_width = text_width_px(text, font, &scaled_font);
+        let max_width = style.max_width.max(0.0) * surface.width as f32;
+        let align_offset = match style.align {
+            TextAlign::Left => 0.0,
+            TextAlign::Center if max_width > 0.0 => (max_width - text_width) / 2.0,
+            TextAlign::Right if max_width > 0.0 => max_width - text_width,
+            _ => 0.0,
+        };
+        let mut cursor_x = origin.x * surface.width as f32 + align_offset.max(0.0);
         let baseline_y = origin.y * surface.height as f32 + scaled_font.ascent();
 
         for ch in text.chars() {
@@ -732,6 +740,10 @@ impl TextAtlasBuilder {
         let instances = encode_text_quads(&self.quads, self.width, height);
         TextFrame { size: AtlasSize { width: self.width, height }, pixels: self.pixels, instances }
     }
+}
+
+fn text_width_px<F: Font>(text: &str, font: &FontArc, scaled_font: &impl ScaleFont<F>) -> f32 {
+    text.chars().map(|ch| scaled_font.h_advance(font.glyph_id(ch))).sum()
 }
 
 fn encode_text_quads(quads: &[TextQuad], atlas_width: u32, atlas_height: u32) -> Vec<u8> {

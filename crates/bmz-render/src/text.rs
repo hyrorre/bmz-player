@@ -1,4 +1,4 @@
-use crate::plan::{Color, DrawCommand, Point, Rect, TextLayer, TextStyle};
+use crate::plan::{Color, DrawCommand, Point, Rect, TextAlign, TextLayer, TextStyle};
 
 pub const GLYPH_WIDTH: usize = 3;
 pub const GLYPH_HEIGHT: usize = 5;
@@ -32,6 +32,8 @@ pub fn push_text_command(commands: &mut Vec<DrawCommand>, text: &str, style: Bit
             size: style.cell * GLYPH_HEIGHT as f32,
             color: style.color,
             layer: TextLayer::Ui,
+            align: TextAlign::Left,
+            max_width: 0.0,
         },
     });
 }
