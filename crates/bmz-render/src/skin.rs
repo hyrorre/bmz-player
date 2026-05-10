@@ -607,6 +607,7 @@ pub struct SkinDrawState {
     pub judge_counts: DisplayJudgeCounts,
     pub gauge: f32,
     pub play_progress: f32,
+    pub end_of_note: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -942,7 +943,7 @@ impl SkinDocument {
         let enabled_options = self.enabled_options();
         self.destination
             .iter()
-            .filter(|destination| destination.timer.is_none())
+            .filter(|destination| skin_timer_active(destination.timer, state))
             .filter(|destination| test_skin_ops(&destination.op, &enabled_options))
             .filter(|destination| eval_skin_draw_condition(&destination.draw, state))
             .filter_map(|destination| {
@@ -2082,6 +2083,14 @@ fn skin_slider_progress(slider_type: i32, state: SkinDrawState) -> Option<f32> {
     match slider_type {
         6 => Some(state.play_progress.clamp(0.0, 1.0)),
         _ => None,
+    }
+}
+
+fn skin_timer_active(timer: Option<i32>, state: SkinDrawState) -> bool {
+    match timer {
+        None => true,
+        Some(143) => state.end_of_note,
+        _ => false,
     }
 }
 
@@ -3536,6 +3545,52 @@ mod tests {
                 && approx_eq(uw, 0.05)
                 && approx_eq(uh, 0.06)
                 && blend == BlendMode::Add));
+    }
+
+    #[test]
+    fn skin_document_resolves_end_of_note_timer_destinations() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "system.png" }],
+                "image": [{ "id": "marker", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10 }],
+                "destination": [
+                    { "id": "marker", "timer": 143, "dst": [{ "x": 10, "y": 20, "w": 5, "h": 6 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "1".to_string(),
+            SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 100.0, height: 100.0 },
+            },
+        )]);
+
+        let hidden = document.static_image_render_items(
+            &sources,
+            SkinDrawState { end_of_note: false, ..SkinDrawState::default() },
+        );
+        let visible = document.static_image_render_items(
+            &sources,
+            SkinDrawState { end_of_note: true, ..SkinDrawState::default() },
+        );
+
+        assert!(hidden.is_empty());
+        assert_eq!(visible.len(), 1);
+        assert!(matches!(visible[0], SkinRenderItem::Image {
+                rect: Rect { x, y, width, height },
+                ..
+            } if approx_eq(x, 0.1)
+                && approx_eq(y, 0.2)
+                && approx_eq(width, 0.05)
+                && approx_eq(height, 0.06)));
     }
 
     #[test]

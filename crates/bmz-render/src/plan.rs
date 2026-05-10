@@ -311,6 +311,7 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
                 judge_counts: snapshot.judge_counts,
                 gauge: snapshot.gauge,
                 play_progress: play_progress(snapshot),
+                end_of_note: end_of_note(snapshot),
             },
             SkinTextState {
                 title: &snapshot.title,
@@ -640,6 +641,10 @@ fn play_progress(snapshot: &RenderSnapshot) -> f32 {
     } else {
         (snapshot.time.0 as f32 / snapshot.duration.0 as f32).clamp(0.0, 1.0)
     }
+}
+
+fn end_of_note(snapshot: &RenderSnapshot) -> bool {
+    snapshot.duration.0 > 0 && snapshot.time.0 >= snapshot.duration.0
 }
 
 fn push_document_lane_effects(
