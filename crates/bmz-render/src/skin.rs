@@ -2056,6 +2056,7 @@ fn resolve_destination_frame(
     destination: &SkinDestinationDef,
     elapsed_ms: i32,
 ) -> Option<ResolvedSkinFrame> {
+    let elapsed_ms = destination_animation_elapsed_ms(destination, elapsed_ms);
     let mut frame = ResolvedSkinFrame::default();
     let mut resolved = None;
     for animation in &destination.dst {
@@ -2071,11 +2072,22 @@ fn resolve_destination_frame_until_end(
     destination: &SkinDestinationDef,
     elapsed_ms: i32,
 ) -> Option<ResolvedSkinFrame> {
+    if destination.loop_time > 0 {
+        return resolve_destination_frame(destination, elapsed_ms);
+    }
     let last_time = destination.dst.iter().filter_map(|animation| animation.time).max()?;
     if elapsed_ms > last_time {
         return None;
     }
     resolve_destination_frame(destination, elapsed_ms)
+}
+
+fn destination_animation_elapsed_ms(destination: &SkinDestinationDef, elapsed_ms: i32) -> i32 {
+    if destination.loop_time > 0 {
+        elapsed_ms.rem_euclid(destination.loop_time)
+    } else {
+        elapsed_ms
+    }
 }
 
 fn apply_skin_animation(frame: &mut ResolvedSkinFrame, animation: &SkinAnimationDef) {
@@ -2990,6 +3002,45 @@ mod tests {
             matches!(late[0], SkinRenderItem::Image { rect: Rect { x, width, .. }, tint: Color { a, .. }, .. }
                 if approx_eq(x, 0.6) && approx_eq(width, 0.2) && approx_eq(a, 128.0 / 255.0))
         );
+    }
+
+    #[test]
+    fn skin_document_loops_destination_keyframes() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "system.png" }],
+                "image": [{ "id": "panel", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10 }],
+                "destination": [
+                    { "id": "panel", "loop": 300, "dst": [
+                        { "time": 0, "x": 0, "y": 0, "w": 10, "h": 10 },
+                        { "time": 100, "x": 30 },
+                        { "time": 200, "x": 60 }
+                    ]}
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "1".to_string(),
+            SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 10.0, height: 10.0 },
+            },
+        )]);
+
+        let wrapped = document.static_image_render_items(
+            &sources,
+            SkinDrawState { elapsed_ms: 350, ..SkinDrawState::default() },
+        );
+
+        assert!(matches!(wrapped[0], SkinRenderItem::Image { rect: Rect { x, .. }, .. }
+                if approx_eq(x, 0.0)));
     }
 
     #[test]
