@@ -82,6 +82,8 @@ pub struct SkinDocument {
     pub slider: Vec<SkinSliderDef>,
     #[serde(default)]
     pub graph: Vec<SkinGraphDef>,
+    #[serde(default, rename = "hiddenCover")]
+    pub hidden_cover: Vec<SkinHiddenCoverDef>,
     pub note: Option<SkinNoteSetDef>,
     pub gauge: Option<SkinGaugeDef>,
     #[serde(default)]
@@ -353,6 +355,34 @@ pub struct SkinGraphDef {
     pub min: i32,
     #[serde(default)]
     pub max: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SkinHiddenCoverDef {
+    #[serde(default, deserialize_with = "deserialize_skin_id")]
+    pub id: String,
+    #[serde(default, deserialize_with = "deserialize_skin_id")]
+    pub src: String,
+    #[serde(default)]
+    pub x: i32,
+    #[serde(default)]
+    pub y: i32,
+    #[serde(default)]
+    pub w: i32,
+    #[serde(default)]
+    pub h: i32,
+    #[serde(default = "default_grid_division")]
+    pub divx: i32,
+    #[serde(default = "default_grid_division")]
+    pub divy: i32,
+    #[serde(default)]
+    pub timer: Option<i32>,
+    #[serde(default)]
+    pub cycle: i32,
+    #[serde(default, rename = "disapearLine")]
+    pub disappear_line: i32,
+    #[serde(default = "default_true", rename = "isDisapearLineLinkLift")]
+    pub is_disappear_line_link_lift: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -995,8 +1025,18 @@ impl SkinDocument {
                     }
                 }
 
-                let slider = self.slider.iter().find(|slider| slider.id == destination.id)?;
-                self.slider_render_item(slider, destination, frame, state, sources)
+                if let Some(slider) = self.slider.iter().find(|slider| slider.id == destination.id)
+                {
+                    if let Some(item) =
+                        self.slider_render_item(slider, destination, frame, state, sources)
+                    {
+                        return Some(vec![item]);
+                    }
+                }
+
+                let hidden_cover =
+                    self.hidden_cover.iter().find(|cover| cover.id == destination.id)?;
+                self.hidden_cover_render_item(hidden_cover, destination, frame, sources)
                     .map(|item| vec![item])
             })
             .flatten()
@@ -1311,6 +1351,38 @@ impl SkinDocument {
                 y: slider.y as f32 / source_height,
                 width: slider.w as f32 / source_width,
                 height: slider.h as f32 / source_height,
+            },
+            tint: Color::rgba(
+                frame.r as f32 / 255.0,
+                frame.g as f32 / 255.0,
+                frame.b as f32 / 255.0,
+                frame.a as f32 / 255.0,
+            ),
+            blend: if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal },
+            scale: SkinImageScale::Stretch,
+            border: None,
+            source_size: Some(source.source_size),
+        })
+    }
+
+    fn hidden_cover_render_item(
+        &self,
+        cover: &SkinHiddenCoverDef,
+        destination: &SkinDestinationDef,
+        frame: ResolvedSkinFrame,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Option<SkinRenderItem> {
+        let source = sources.get(&cover.src)?;
+        let source_width = source.source_size.width.max(1.0);
+        let source_height = source.source_size.height.max(1.0);
+        Some(SkinRenderItem::Image {
+            texture: source.texture,
+            rect: normalize_skin_frame_rect(frame, self.w, self.h),
+            uv: TextureRegion {
+                x: cover.x as f32 / source_width,
+                y: cover.y as f32 / source_height,
+                width: cover.w as f32 / source_width,
+                height: cover.h as f32 / source_height,
             },
             tint: Color::rgba(
                 frame.r as f32 / 255.0,
@@ -3591,6 +3663,57 @@ mod tests {
                 && approx_eq(y, 0.2)
                 && approx_eq(width, 0.05)
                 && approx_eq(height, 0.06)));
+    }
+
+    #[test]
+    fn skin_document_resolves_hidden_cover_destinations() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 12, "path": "cover.png" }],
+                "hiddenCover": [
+                    { "id": "hidden-cover", "src": 12, "x": 10, "y": 20, "w": 30, "h": 40, "disapearLine": 140 }
+                ],
+                "destination": [
+                    { "id": "hidden-cover", "blend": 2, "dst": [{ "x": 20, "y": -40, "w": 30, "h": 40, "a": 128 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "12".to_string(),
+            SkinDocumentTexture {
+                source_id: "12".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 100.0, height: 100.0 },
+            },
+        )]);
+
+        let items = document.static_image_render_items(&sources, SkinDrawState::default());
+
+        assert_eq!(items.len(), 1);
+        assert!(matches!(items[0], SkinRenderItem::Image {
+                rect: Rect { x, y, width, height },
+                uv: TextureRegion { x: u, y: v, width: uw, height: uh },
+                tint: Color { a, .. },
+                blend,
+                ..
+            } if approx_eq(x, 0.2)
+                && approx_eq(y, -0.4)
+                && approx_eq(width, 0.3)
+                && approx_eq(height, 0.4)
+                && approx_eq(u, 0.1)
+                && approx_eq(v, 0.2)
+                && approx_eq(uw, 0.3)
+                && approx_eq(uh, 0.4)
+                && approx_eq(a, 128.0 / 255.0)
+                && blend == BlendMode::Add));
+        assert_eq!(document.hidden_cover[0].disappear_line, 140);
+        assert!(document.hidden_cover[0].is_disappear_line_link_lift);
     }
 
     #[test]
