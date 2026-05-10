@@ -71,6 +71,13 @@ pub struct TextStyle {
     pub max_width: f32,
     pub overflow: TextOverflow,
     pub wrapping: bool,
+    pub shadow: Option<TextShadow>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextShadow {
+    pub color: Color,
+    pub offset: Point,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -784,6 +791,7 @@ fn default_play_skin(snapshot: &RenderSnapshot) -> SkinDefinition {
                     max_width: 0.0,
                     overflow: TextOverflow::Overflow,
                     wrapping: false,
+                    shadow: None,
                 },
                 digits: 0,
             },
@@ -804,6 +812,7 @@ fn default_play_skin(snapshot: &RenderSnapshot) -> SkinDefinition {
                     max_width: 0.0,
                     overflow: TextOverflow::Overflow,
                     wrapping: false,
+                    shadow: None,
                 },
             },
             placements: vec![skin_placement(Rect { x: 0.38, y: 0.245, width: 0.3, height: 0.04 })],

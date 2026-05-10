@@ -661,6 +661,15 @@ impl TextAtlasBuilder {
         font: &FontArc,
         surface: SurfaceSize,
     ) {
+        if let Some(shadow) = style.shadow.filter(|shadow| shadow.color.a > 0.0) {
+            let mut shadow_style = style;
+            shadow_style.color = shadow.color;
+            shadow_style.shadow = None;
+            let shadow_origin =
+                Point { x: origin.x + shadow.offset.x, y: origin.y + shadow.offset.y };
+            self.push_text(&shadow_origin, text, shadow_style, font, surface);
+        }
+
         let mut px_size = (style.size * surface.height as f32).max(1.0);
         let max_width = style.max_width.max(0.0) * surface.width as f32;
         let mut text = std::borrow::Cow::Borrowed(text);
@@ -1387,6 +1396,35 @@ mod tests {
         let lines = wrap_text_to_width("WWW", &font, &scaled_font, one_char_width * 1.5);
 
         assert_eq!(lines, vec!["W", "W", "W"]);
+    }
+
+    #[test]
+    fn text_shadow_emits_extra_text_instances() {
+        let Some(font) = load_default_font() else { return };
+        let surface = SurfaceSize { width: 320, height: 240 };
+        let plan = DrawPlan {
+            clear: Color::rgb(0.0, 0.0, 0.0),
+            commands: vec![DrawCommand::Text {
+                origin: Point { x: 0.1, y: 0.1 },
+                text: "A".to_string(),
+                style: TextStyle {
+                    size: 0.1,
+                    color: Color::rgb(1.0, 1.0, 1.0),
+                    layer: crate::plan::TextLayer::Skin,
+                    align: TextAlign::Left,
+                    max_width: 0.0,
+                    overflow: TextOverflow::Overflow,
+                    wrapping: false,
+                    shadow: Some(crate::plan::TextShadow {
+                        color: Color::rgba(0.0, 0.0, 0.0, 0.5),
+                        offset: Point { x: 0.01, y: 0.01 },
+                    }),
+                },
+            }],
+        };
+        let frame = build_text_frame(&plan, &font, surface);
+
+        assert_eq!(frame.instances.len(), TEXT_INSTANCE_BYTES * 2);
     }
 
     #[test]

@@ -10,8 +10,8 @@ use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::assets::load_png_rgba;
 use crate::plan::{
-    Color, DrawCommand, Point, Rect, TextAlign, TextLayer, TextOverflow, TextStyle, TextureId,
-    UvRect,
+    Color, DrawCommand, Point, Rect, TextAlign, TextLayer, TextOverflow, TextShadow, TextStyle,
+    TextureId, UvRect,
 };
 use crate::snapshot::DisplayJudgeCounts;
 
@@ -1324,6 +1324,7 @@ impl SkinDocument {
                 max_width: frame.w.max(0) as f32 / self.w.max(1) as f32,
                 overflow: skin_text_overflow(text.overflow),
                 wrapping: text.wrapping,
+                shadow: skin_text_shadow(text, self.w, self.h),
             },
             blend: BlendMode::Normal,
         })
@@ -2018,7 +2019,14 @@ impl Animation {
 
 impl TextStyle {
     fn with_alpha(self, alpha: f32) -> Self {
-        Self { color: self.color.with_alpha(self.color.a * alpha), ..self }
+        Self {
+            color: self.color.with_alpha(self.color.a * alpha),
+            shadow: self.shadow.map(|shadow| TextShadow {
+                color: shadow.color.with_alpha(shadow.color.a * alpha),
+                ..shadow
+            }),
+            ..self
+        }
     }
 }
 
@@ -2187,6 +2195,33 @@ fn skin_text_overflow(overflow: i32) -> TextOverflow {
         2 => TextOverflow::Truncate,
         _ => TextOverflow::Overflow,
     }
+}
+
+fn skin_text_shadow(text: &SkinTextDef, skin_width: u32, skin_height: u32) -> Option<TextShadow> {
+    let color = skin_hex_color(&text.shadow_color)?;
+    if color.a <= 0.0 {
+        return None;
+    }
+    Some(TextShadow {
+        color,
+        offset: Point {
+            x: text.shadow_offset_x / skin_width.max(1) as f32,
+            y: text.shadow_offset_y / skin_height.max(1) as f32,
+        },
+    })
+}
+
+fn skin_hex_color(value: &str) -> Option<Color> {
+    let hex = value.trim().trim_start_matches('#');
+    if hex.len() != 6 && hex.len() != 8 {
+        return None;
+    }
+    let r = u8::from_str_radix(&hex[0..2], 16).ok()? as f32 / 255.0;
+    let g = u8::from_str_radix(&hex[2..4], 16).ok()? as f32 / 255.0;
+    let b = u8::from_str_radix(&hex[4..6], 16).ok()? as f32 / 255.0;
+    let a =
+        if hex.len() == 8 { u8::from_str_radix(&hex[6..8], 16).ok()? as f32 / 255.0 } else { 1.0 };
+    Some(Color::rgba(r, g, b, a))
 }
 
 fn skin_state_text(text: &SkinTextDef, state: SkinTextState<'_>) -> String {
@@ -2485,6 +2520,7 @@ mod tests {
                     max_width: 0.0,
                     overflow: TextOverflow::Overflow,
                     wrapping: false,
+                    shadow: None,
                 },
                 digits: 4,
             },
@@ -2549,6 +2585,7 @@ mod tests {
                         max_width: 0.0,
                         overflow: TextOverflow::Overflow,
                         wrapping: false,
+                        shadow: None,
                     },
                 },
                 placements: vec![SkinPlacement {
@@ -3556,7 +3593,7 @@ mod tests {
                 "w": 100,
                 "h": 100,
                 "text": [
-                    { "id": "title", "size": 8, "align": 1, "wrapping": true, "ref": 12 },
+                    { "id": "title", "size": 8, "align": 1, "wrapping": true, "shadowColor": "00000080", "shadowOffsetX": 2, "shadowOffsetY": 3, "ref": 12 },
                     { "id": "genre", "size": 6, "align": 2, "overflow": 1, "ref": 13 },
                     { "id": "constant", "size": 5, "constantText": "READY" }
                 ],
@@ -3593,6 +3630,10 @@ mod tests {
                 && approx_eq(style.size, 0.1)
                 && style.align == TextAlign::Center
                 && style.wrapping
+                && matches!(style.shadow, Some(TextShadow { color, offset })
+                    if color == Color::rgba(0.0, 0.0, 0.0, 128.0 / 255.0)
+                        && approx_eq(offset.x, 0.02)
+                        && approx_eq(offset.y, 0.03))
                 && approx_eq(style.max_width, 0.5)
                 && style.color == Color::rgba(128.0 / 255.0, 200.0 / 255.0, 1.0, 1.0)));
         assert!(matches!(&items[1], SkinRenderItem::Text { text, style, .. }
