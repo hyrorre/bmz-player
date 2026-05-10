@@ -664,10 +664,32 @@ impl TextAtlasBuilder {
         if let Some(shadow) = style.shadow.filter(|shadow| shadow.color.a > 0.0) {
             let mut shadow_style = style;
             shadow_style.color = shadow.color;
+            shadow_style.outline = None;
             shadow_style.shadow = None;
             let shadow_origin =
                 Point { x: origin.x + shadow.offset.x, y: origin.y + shadow.offset.y };
             self.push_text(&shadow_origin, text, shadow_style, font, surface);
+        }
+        if let Some(outline) = style.outline.filter(|outline| outline.color.a > 0.0) {
+            let mut outline_style = style;
+            outline_style.color = outline.color;
+            outline_style.outline = None;
+            outline_style.shadow = None;
+            let outline_y = outline.width;
+            let outline_x = outline.width * surface.height as f32 / surface.width as f32;
+            for (offset_x, offset_y) in [
+                (-outline_x, -outline_y),
+                (0.0, -outline_y),
+                (outline_x, -outline_y),
+                (-outline_x, 0.0),
+                (outline_x, 0.0),
+                (-outline_x, outline_y),
+                (0.0, outline_y),
+                (outline_x, outline_y),
+            ] {
+                let outline_origin = Point { x: origin.x + offset_x, y: origin.y + offset_y };
+                self.push_text(&outline_origin, text, outline_style, font, surface);
+            }
         }
 
         let mut px_size = (style.size * surface.height as f32).max(1.0);
@@ -1415,6 +1437,7 @@ mod tests {
                     max_width: 0.0,
                     overflow: TextOverflow::Overflow,
                     wrapping: false,
+                    outline: None,
                     shadow: Some(crate::plan::TextShadow {
                         color: Color::rgba(0.0, 0.0, 0.0, 0.5),
                         offset: Point { x: 0.01, y: 0.01 },
@@ -1425,6 +1448,36 @@ mod tests {
         let frame = build_text_frame(&plan, &font, surface);
 
         assert_eq!(frame.instances.len(), TEXT_INSTANCE_BYTES * 2);
+    }
+
+    #[test]
+    fn text_outline_emits_surrounding_text_instances() {
+        let Some(font) = load_default_font() else { return };
+        let surface = SurfaceSize { width: 320, height: 240 };
+        let plan = DrawPlan {
+            clear: Color::rgb(0.0, 0.0, 0.0),
+            commands: vec![DrawCommand::Text {
+                origin: Point { x: 0.1, y: 0.1 },
+                text: "A".to_string(),
+                style: TextStyle {
+                    size: 0.1,
+                    color: Color::rgb(1.0, 1.0, 1.0),
+                    layer: crate::plan::TextLayer::Skin,
+                    align: TextAlign::Left,
+                    max_width: 0.0,
+                    overflow: TextOverflow::Overflow,
+                    wrapping: false,
+                    outline: Some(crate::plan::TextOutline {
+                        color: Color::rgba(0.0, 0.0, 0.0, 0.5),
+                        width: 0.01,
+                    }),
+                    shadow: None,
+                },
+            }],
+        };
+        let frame = build_text_frame(&plan, &font, surface);
+
+        assert_eq!(frame.instances.len(), TEXT_INSTANCE_BYTES * 9);
     }
 
     #[test]

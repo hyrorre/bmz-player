@@ -10,8 +10,8 @@ use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::assets::load_png_rgba;
 use crate::plan::{
-    Color, DrawCommand, Point, Rect, TextAlign, TextLayer, TextOverflow, TextShadow, TextStyle,
-    TextureId, UvRect,
+    Color, DrawCommand, Point, Rect, TextAlign, TextLayer, TextOutline, TextOverflow, TextShadow,
+    TextStyle, TextureId, UvRect,
 };
 use crate::snapshot::DisplayJudgeCounts;
 
@@ -1324,6 +1324,7 @@ impl SkinDocument {
                 max_width: frame.w.max(0) as f32 / self.w.max(1) as f32,
                 overflow: skin_text_overflow(text.overflow),
                 wrapping: text.wrapping,
+                outline: skin_text_outline(text, self.h),
                 shadow: skin_text_shadow(text, self.w, self.h),
             },
             blend: BlendMode::Normal,
@@ -2021,6 +2022,10 @@ impl TextStyle {
     fn with_alpha(self, alpha: f32) -> Self {
         Self {
             color: self.color.with_alpha(self.color.a * alpha),
+            outline: self.outline.map(|outline| TextOutline {
+                color: outline.color.with_alpha(outline.color.a * alpha),
+                ..outline
+            }),
             shadow: self.shadow.map(|shadow| TextShadow {
                 color: shadow.color.with_alpha(shadow.color.a * alpha),
                 ..shadow
@@ -2209,6 +2214,17 @@ fn skin_text_shadow(text: &SkinTextDef, skin_width: u32, skin_height: u32) -> Op
             y: text.shadow_offset_y / skin_height.max(1) as f32,
         },
     })
+}
+
+fn skin_text_outline(text: &SkinTextDef, skin_height: u32) -> Option<TextOutline> {
+    if text.outline_width <= 0.0 {
+        return None;
+    }
+    let color = skin_hex_color(&text.outline_color)?;
+    if color.a <= 0.0 {
+        return None;
+    }
+    Some(TextOutline { color, width: text.outline_width / skin_height.max(1) as f32 })
 }
 
 fn skin_hex_color(value: &str) -> Option<Color> {
@@ -2520,6 +2536,7 @@ mod tests {
                     max_width: 0.0,
                     overflow: TextOverflow::Overflow,
                     wrapping: false,
+                    outline: None,
                     shadow: None,
                 },
                 digits: 4,
@@ -2585,6 +2602,7 @@ mod tests {
                         max_width: 0.0,
                         overflow: TextOverflow::Overflow,
                         wrapping: false,
+                        outline: None,
                         shadow: None,
                     },
                 },
@@ -3593,7 +3611,7 @@ mod tests {
                 "w": 100,
                 "h": 100,
                 "text": [
-                    { "id": "title", "size": 8, "align": 1, "wrapping": true, "shadowColor": "00000080", "shadowOffsetX": 2, "shadowOffsetY": 3, "ref": 12 },
+                    { "id": "title", "size": 8, "align": 1, "wrapping": true, "outlineColor": "ff000080", "outlineWidth": 1, "shadowColor": "00000080", "shadowOffsetX": 2, "shadowOffsetY": 3, "ref": 12 },
                     { "id": "genre", "size": 6, "align": 2, "overflow": 1, "ref": 13 },
                     { "id": "constant", "size": 5, "constantText": "READY" }
                 ],
@@ -3630,6 +3648,9 @@ mod tests {
                 && approx_eq(style.size, 0.1)
                 && style.align == TextAlign::Center
                 && style.wrapping
+                && matches!(style.outline, Some(TextOutline { color, width })
+                    if color == Color::rgba(1.0, 0.0, 0.0, 128.0 / 255.0)
+                        && approx_eq(width, 0.01))
                 && matches!(style.shadow, Some(TextShadow { color, offset })
                     if color == Color::rgba(0.0, 0.0, 0.0, 128.0 / 255.0)
                         && approx_eq(offset.x, 0.02)

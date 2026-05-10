@@ -71,7 +71,14 @@ pub struct TextStyle {
     pub max_width: f32,
     pub overflow: TextOverflow,
     pub wrapping: bool,
+    pub outline: Option<TextOutline>,
     pub shadow: Option<TextShadow>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextOutline {
+    pub color: Color,
+    pub width: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -791,6 +798,7 @@ fn default_play_skin(snapshot: &RenderSnapshot) -> SkinDefinition {
                     max_width: 0.0,
                     overflow: TextOverflow::Overflow,
                     wrapping: false,
+                    outline: None,
                     shadow: None,
                 },
                 digits: 0,
@@ -812,6 +820,7 @@ fn default_play_skin(snapshot: &RenderSnapshot) -> SkinDefinition {
                     max_width: 0.0,
                     overflow: TextOverflow::Overflow,
                     wrapping: false,
+                    outline: None,
                     shadow: None,
                 },
             },
