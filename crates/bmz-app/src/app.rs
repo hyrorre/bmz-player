@@ -84,8 +84,10 @@ impl WinitApp {
     fn new(boot: BootstrappedApp, options: AppOptions) -> Result<Self> {
         let folder_stack = initial_folder_stack(&boot.app_config);
         let select_items = load_items_for_stack(&boot, &folder_stack);
-        let boot_sample_chart_id =
-            options.boot_play_sample.then(|| sample_playable_chart_id(&select_items)).flatten();
+        let boot_sample_chart_id = options
+            .boot_play_sample
+            .then(|| boot.library_db.chart_id_by_title(SAMPLE_PLAYABLE_TITLE).ok().flatten())
+            .flatten();
         log_startup_options(&options);
 
         let assist_option =
@@ -678,15 +680,6 @@ fn select_snapshot_rows(
         .collect()
 }
 
-fn sample_playable_chart_id(items: &[SelectItem]) -> Option<i64> {
-    items.iter().find_map(|item| match item {
-        SelectItem::Chart(row) if row.chart.title == SAMPLE_PLAYABLE_TITLE => {
-            Some(row.chart.chart_id)
-        }
-        _ => None,
-    })
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SelectAction {
     EnterOrPlay,
@@ -1105,25 +1098,6 @@ mod tests {
         assert_eq!(window_title_for_scene(AppSceneKind::Select), "bmz-player - Select");
         assert_eq!(window_title_for_scene(AppSceneKind::Play), "bmz-player - Play");
         assert_eq!(window_title_for_scene(AppSceneKind::Result), "bmz-player - Result");
-    }
-
-    #[test]
-    fn sample_playable_chart_id_finds_bundled_sample_by_title() {
-        let mut rows: Vec<SelectItem> =
-            (0..3).map(|i| SelectItem::Chart(select_chart_row(i))).collect();
-        if let SelectItem::Chart(ref mut row) = rows[1] {
-            row.chart.title = SAMPLE_PLAYABLE_TITLE.to_string();
-        }
-
-        assert_eq!(sample_playable_chart_id(&rows), Some(1));
-    }
-
-    #[test]
-    fn sample_playable_chart_id_returns_none_without_sample() {
-        let rows: Vec<SelectItem> =
-            (0..3).map(|i| SelectItem::Chart(select_chart_row(i))).collect();
-
-        assert_eq!(sample_playable_chart_id(&rows), None);
     }
 
     #[test]
