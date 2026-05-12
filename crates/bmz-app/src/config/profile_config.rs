@@ -93,7 +93,13 @@ pub struct LaneViewConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProfileInputConfig {
     pub scratch_mode: ScratchInputMode,
+    #[serde(default = "default_start_key")]
+    pub start_key: String,
     pub bindings: Vec<BindingConfigEntry>,
+}
+
+fn default_start_key() -> String {
+    "Q".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,7 +116,7 @@ pub enum ScratchInputMode {
     AnyDirection,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum LaneConfig {
     Scratch,
@@ -204,6 +210,7 @@ impl ProfileConfig {
             },
             input: ProfileInputConfig {
                 scratch_mode: ScratchInputMode::Normal,
+                start_key: default_start_key(),
                 bindings: default_keyboard_bindings(),
             },
             rival: RivalConfig { active_rival: String::new(), entries: Vec::new() },

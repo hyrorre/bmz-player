@@ -231,12 +231,12 @@ fn plan_select(snapshot: &SelectSnapshot) -> DrawPlan {
     }
     text.push_text(
         &mut commands,
-        "UP DOWN  RIGHT/Z/X/C/V:ENTER  LEFT/S:BACK  ENTER START",
+        &snapshot.key_hint,
         BitmapTextStyle { x: 0.08, y: 0.86, cell: 0.006, color: Color::rgb(0.88, 0.9, 0.86) },
     );
     text.push_text(
         &mut commands,
-        "F1 SELECT  F2 PLAY  F3 RESULT   Q+Z:ARRANGE  Q+X:GAUGE  Q+C:ASSIST",
+        &snapshot.option_hint,
         BitmapTextStyle { x: 0.08, y: 0.895, cell: 0.005, color: Color::rgb(0.58, 0.67, 0.7) },
     );
 

@@ -17,7 +17,8 @@ use crate::cli::{
     AUTOPLAY_ON_START_ARG, AppOptions, BOOT_PLAY_SAMPLE_ARG, SMOKE_EXIT_AFTER_FRAMES_ARG,
     SMOKE_EXIT_ON_RESULT_ARG,
 };
-use crate::config::profile_config::GaugeTypeConfig;
+use crate::config::profile_config::{GaugeTypeConfig, LaneConfig, ProfileInputConfig};
+use crate::input::winit::physical_key_to_control;
 use crate::screens::play_finish::FinishedPlaySession;
 use crate::screens::play_loop::{PlayAdvanceOutcome, advance_running_play_session_until_result};
 use crate::screens::play_start::{PlayStartOptions, StartedWinitPlaySession};
@@ -61,6 +62,7 @@ struct WinitApp {
     arrange_option: ArrangeOption,
     gauge_option: GaugeTypeConfig,
     assist_option: AssistOption,
+    select_keys: SelectKeyBindings,
     smoke_exit_after_frames: Option<u32>,
     smoke_exit_on_result: bool,
     rendered_frames: u32,
@@ -93,6 +95,7 @@ impl WinitApp {
         let assist_option =
             if options.autoplay_on_start { AssistOption::Autoplay } else { AssistOption::Normal };
         let gauge_option = boot.profile_config.play.gauge;
+        let select_keys = SelectKeyBindings::from_profile(&boot.profile_config.input);
 
         let mut renderer = Renderer::default();
         load_default_skin_textures(&mut renderer);
@@ -114,6 +117,7 @@ impl WinitApp {
             arrange_option: ArrangeOption::Normal,
             gauge_option,
             assist_option,
+            select_keys,
             smoke_exit_after_frames: options.smoke_exit_after_frames,
             smoke_exit_on_result: options.smoke_exit_on_result,
             rendered_frames: 0,
@@ -227,6 +231,8 @@ impl WinitApp {
             gauge: gauge_option_as_str(self.gauge_option).to_string(),
             assist: self.assist_option.as_str().to_string(),
             current_folder,
+            key_hint: self.select_keys.key_hint.clone(),
+            option_hint: self.select_keys.option_hint.clone(),
         }
     }
 
@@ -256,41 +262,33 @@ impl WinitApp {
             return;
         }
 
-        // Track start button (Q) held state for option cycling
-        match (event.physical_key, event.state) {
-            (PhysicalKey::Code(KeyCode::KeyQ), ElementState::Pressed) => {
-                self.start_held = true;
+        // Track start button held state for option cycling
+        if let Some(control) = physical_key_name(event.physical_key) {
+            if control == self.select_keys.start {
+                self.start_held = event.state == ElementState::Pressed;
                 return;
             }
-            (PhysicalKey::Code(KeyCode::KeyQ), ElementState::Released) => {
-                self.start_held = false;
-                return;
-            }
-            _ => {}
         }
 
         if self.start_held {
             if event.state == ElementState::Pressed && !event.repeat {
-                match event.physical_key {
-                    PhysicalKey::Code(KeyCode::KeyZ) => {
+                if let Some(control) = physical_key_name(event.physical_key) {
+                    if self.select_keys.cycle_arrange.as_deref() == Some(&control) {
                         self.arrange_option = self.arrange_option.cycle();
                         tracing::info!(arrange = self.arrange_option.as_str(), "arrange option changed");
-                    }
-                    PhysicalKey::Code(KeyCode::KeyX) => {
+                    } else if self.select_keys.cycle_gauge.as_deref() == Some(&control) {
                         self.gauge_option = cycle_gauge_option(self.gauge_option);
                         tracing::info!(gauge = ?self.gauge_option, "gauge option changed");
-                    }
-                    PhysicalKey::Code(KeyCode::KeyC) => {
+                    } else if self.select_keys.cycle_assist.as_deref() == Some(&control) {
                         self.assist_option = self.assist_option.cycle();
                         tracing::info!(assist = self.assist_option.as_str(), "assist option changed");
                     }
-                    _ => {}
                 }
             }
             return;
         }
 
-        if let Some(action) = select_action(event.physical_key, event.state, event.repeat) {
+        if let Some(action) = select_action(event.physical_key, event.state, event.repeat, &self.select_keys) {
             match action {
                 SelectAction::EnterOrPlay => self.enter_or_play_selected(),
                 SelectAction::ExitFolder => self.exit_folder(),
@@ -701,31 +699,43 @@ fn select_action(
     physical_key: PhysicalKey,
     state: ElementState,
     repeat: bool,
+    bindings: &SelectKeyBindings,
 ) -> Option<SelectAction> {
     if state != ElementState::Pressed || repeat {
         return None;
     }
 
+    // Fixed system keys always apply regardless of key config
     match physical_key {
-        // Enter / confirm: Enter, Space, ArrowRight, Key1/3/5/7 (Z/X/C/V)
-        PhysicalKey::Code(
-            KeyCode::Enter
-            | KeyCode::Space
-            | KeyCode::ArrowRight
-            | KeyCode::KeyZ
-            | KeyCode::KeyX
-            | KeyCode::KeyC
-            | KeyCode::KeyV,
-        ) => Some(SelectAction::EnterOrPlay),
-        // Back / exit folder: ArrowLeft, Key2 (S)
-        PhysicalKey::Code(KeyCode::ArrowLeft | KeyCode::KeyS) => Some(SelectAction::ExitFolder),
-        PhysicalKey::Code(KeyCode::ArrowUp) => Some(SelectAction::Move(SelectMove::Previous)),
-        PhysicalKey::Code(KeyCode::ArrowDown) => Some(SelectAction::Move(SelectMove::Next)),
-        PhysicalKey::Code(KeyCode::PageUp) => Some(SelectAction::Move(SelectMove::PagePrevious)),
-        PhysicalKey::Code(KeyCode::PageDown) => Some(SelectAction::Move(SelectMove::PageNext)),
-        PhysicalKey::Code(KeyCode::Home) => Some(SelectAction::Move(SelectMove::First)),
-        PhysicalKey::Code(KeyCode::End) => Some(SelectAction::Move(SelectMove::Last)),
-        _ => None,
+        PhysicalKey::Code(KeyCode::Enter | KeyCode::Space | KeyCode::ArrowRight) => {
+            return Some(SelectAction::EnterOrPlay);
+        }
+        PhysicalKey::Code(KeyCode::ArrowLeft) => return Some(SelectAction::ExitFolder),
+        PhysicalKey::Code(KeyCode::ArrowUp) => {
+            return Some(SelectAction::Move(SelectMove::Previous));
+        }
+        PhysicalKey::Code(KeyCode::ArrowDown) => {
+            return Some(SelectAction::Move(SelectMove::Next));
+        }
+        PhysicalKey::Code(KeyCode::PageUp) => {
+            return Some(SelectAction::Move(SelectMove::PagePrevious));
+        }
+        PhysicalKey::Code(KeyCode::PageDown) => {
+            return Some(SelectAction::Move(SelectMove::PageNext));
+        }
+        PhysicalKey::Code(KeyCode::Home) => return Some(SelectAction::Move(SelectMove::First)),
+        PhysicalKey::Code(KeyCode::End) => return Some(SelectAction::Move(SelectMove::Last)),
+        _ => {}
+    }
+
+    // Binding-based lane keys
+    let control = physical_key_name(physical_key)?;
+    if bindings.is_enter(&control) {
+        Some(SelectAction::EnterOrPlay)
+    } else if bindings.is_back(&control) {
+        Some(SelectAction::ExitFolder)
+    } else {
+        None
     }
 }
 
@@ -839,10 +849,77 @@ fn dev_scene_action(
     }
 }
 
+fn physical_key_name(physical_key: PhysicalKey) -> Option<String> {
+    use bmz_gameplay::input::backend::PhysicalControl;
+    match physical_key_to_control(physical_key)? {
+        PhysicalControl::KeyboardKey(name) => Some(name),
+        _ => None,
+    }
+}
+
+struct SelectKeyBindings {
+    start: String,
+    enter: Vec<String>,
+    back: Vec<String>,
+    cycle_arrange: Option<String>,
+    cycle_gauge: Option<String>,
+    cycle_assist: Option<String>,
+    key_hint: String,
+    option_hint: String,
+}
+
+impl SelectKeyBindings {
+    fn from_profile(input: &ProfileInputConfig) -> Self {
+        let kb: Vec<_> = input.bindings.iter().filter(|e| e.device == "keyboard").collect();
+
+        let keys_for = |lane: LaneConfig| -> Vec<String> {
+            kb.iter().filter(|e| e.lane == lane).map(|e| e.control.clone()).collect()
+        };
+
+        let enter: Vec<String> = [LaneConfig::Key1, LaneConfig::Key3, LaneConfig::Key5, LaneConfig::Key7]
+            .iter()
+            .flat_map(|&l| keys_for(l))
+            .collect();
+        let back = keys_for(LaneConfig::Key2);
+        let cycle_arrange = keys_for(LaneConfig::Key1).into_iter().next();
+        let cycle_gauge = keys_for(LaneConfig::Key3).into_iter().next();
+        let cycle_assist = keys_for(LaneConfig::Key5).into_iter().next();
+        let start = input.start_key.clone();
+
+        let enter_str = if enter.is_empty() {
+            String::new()
+        } else {
+            format!("/{}", enter.join("/"))
+        };
+        let back_str = back.first().map(|k| format!("/{k}")).unwrap_or_default();
+        let key_hint =
+            format!("UP DOWN  RIGHT{enter_str}:ENTER  LEFT{back_str}:BACK  ENTER {start}");
+
+        let arrange_str = cycle_arrange.as_deref().unwrap_or("?");
+        let gauge_str = cycle_gauge.as_deref().unwrap_or("?");
+        let assist_str = cycle_assist.as_deref().unwrap_or("?");
+        let option_hint = format!(
+            "F1 SELECT  F2 PLAY  F3 RESULT   {start}+{arrange_str}:ARRANGE  \
+             {start}+{gauge_str}:GAUGE  {start}+{assist_str}:ASSIST"
+        );
+
+        Self { start, enter, back, cycle_arrange, cycle_gauge, cycle_assist, key_hint, option_hint }
+    }
+
+    fn is_enter(&self, control: &str) -> bool {
+        self.enter.iter().any(|k| k == control)
+    }
+
+    fn is_back(&self, control: &str) -> bool {
+        self.back.iter().any(|k| k == control)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use bmz_render::skin::SkinManifest;
 
+    use crate::config::profile_config::ProfileInputConfig;
     use crate::skin_loader::default_skin_root;
     use crate::storage::library_db::ChartListItem;
     use crate::storage::score_db::BestScoreSummary;
@@ -934,56 +1011,116 @@ mod tests {
         );
     }
 
+    fn default_select_keys() -> SelectKeyBindings {
+        use crate::config::profile_config::default_keyboard_bindings;
+        SelectKeyBindings::from_profile(&ProfileInputConfig {
+            scratch_mode: crate::config::profile_config::ScratchInputMode::Normal,
+            start_key: "Q".to_string(),
+            bindings: default_keyboard_bindings(),
+        })
+    }
+
     #[test]
     fn select_action_maps_start_and_vertical_movement() {
+        let keys = default_select_keys();
         assert_eq!(
-            select_action(PhysicalKey::Code(KeyCode::Enter), ElementState::Pressed, false),
+            select_action(PhysicalKey::Code(KeyCode::Enter), ElementState::Pressed, false, &keys),
             Some(SelectAction::EnterOrPlay)
         );
         assert_eq!(
-            select_action(PhysicalKey::Code(KeyCode::ArrowUp), ElementState::Pressed, false),
+            select_action(PhysicalKey::Code(KeyCode::ArrowUp), ElementState::Pressed, false, &keys),
             Some(SelectAction::Move(SelectMove::Previous))
         );
         assert_eq!(
-            select_action(PhysicalKey::Code(KeyCode::ArrowDown), ElementState::Pressed, false),
+            select_action(
+                PhysicalKey::Code(KeyCode::ArrowDown),
+                ElementState::Pressed,
+                false,
+                &keys
+            ),
             Some(SelectAction::Move(SelectMove::Next))
         );
     }
 
     #[test]
     fn select_action_maps_page_and_edge_movement() {
+        let keys = default_select_keys();
         assert_eq!(
-            select_action(PhysicalKey::Code(KeyCode::PageUp), ElementState::Pressed, false),
+            select_action(PhysicalKey::Code(KeyCode::PageUp), ElementState::Pressed, false, &keys),
             Some(SelectAction::Move(SelectMove::PagePrevious))
         );
         assert_eq!(
-            select_action(PhysicalKey::Code(KeyCode::PageDown), ElementState::Pressed, false),
+            select_action(
+                PhysicalKey::Code(KeyCode::PageDown),
+                ElementState::Pressed,
+                false,
+                &keys
+            ),
             Some(SelectAction::Move(SelectMove::PageNext))
         );
         assert_eq!(
-            select_action(PhysicalKey::Code(KeyCode::Home), ElementState::Pressed, false),
+            select_action(PhysicalKey::Code(KeyCode::Home), ElementState::Pressed, false, &keys),
             Some(SelectAction::Move(SelectMove::First))
         );
         assert_eq!(
-            select_action(PhysicalKey::Code(KeyCode::End), ElementState::Pressed, false),
+            select_action(PhysicalKey::Code(KeyCode::End), ElementState::Pressed, false, &keys),
             Some(SelectAction::Move(SelectMove::Last))
         );
     }
 
     #[test]
+    fn select_action_maps_configured_lane_keys() {
+        let keys = default_select_keys();
+        // Key1(Z), Key3(X), Key5(C), Key7(V) → EnterOrPlay
+        assert_eq!(
+            select_action(PhysicalKey::Code(KeyCode::KeyZ), ElementState::Pressed, false, &keys),
+            Some(SelectAction::EnterOrPlay)
+        );
+        assert_eq!(
+            select_action(PhysicalKey::Code(KeyCode::KeyV), ElementState::Pressed, false, &keys),
+            Some(SelectAction::EnterOrPlay)
+        );
+        // Key2(S) → ExitFolder
+        assert_eq!(
+            select_action(PhysicalKey::Code(KeyCode::KeyS), ElementState::Pressed, false, &keys),
+            Some(SelectAction::ExitFolder)
+        );
+    }
+
+    #[test]
     fn select_action_rejects_releases_repeats_and_other_keys() {
+        let keys = default_select_keys();
         assert_eq!(
-            select_action(PhysicalKey::Code(KeyCode::ArrowDown), ElementState::Released, false),
+            select_action(
+                PhysicalKey::Code(KeyCode::ArrowDown),
+                ElementState::Released,
+                false,
+                &keys
+            ),
             None
         );
         assert_eq!(
-            select_action(PhysicalKey::Code(KeyCode::ArrowDown), ElementState::Pressed, true),
+            select_action(
+                PhysicalKey::Code(KeyCode::ArrowDown),
+                ElementState::Pressed,
+                true,
+                &keys
+            ),
             None
         );
         assert_eq!(
-            select_action(PhysicalKey::Code(KeyCode::KeyA), ElementState::Pressed, false),
+            select_action(PhysicalKey::Code(KeyCode::KeyA), ElementState::Pressed, false, &keys),
             None
         );
+    }
+
+    #[test]
+    fn select_key_bindings_builds_correct_hints() {
+        let keys = default_select_keys();
+        assert!(keys.key_hint.contains("Z/X/C/V"), "enter keys in hint: {}", keys.key_hint);
+        assert!(keys.key_hint.contains("/S:BACK"), "back key in hint: {}", keys.key_hint);
+        assert!(keys.key_hint.contains(" Q"), "start key in hint: {}", keys.key_hint);
+        assert!(keys.option_hint.contains("Q+Z:ARRANGE"), "arrange in hint: {}", keys.option_hint);
     }
 
     #[test]

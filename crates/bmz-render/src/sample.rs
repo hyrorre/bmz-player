@@ -29,6 +29,9 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
         gauge: "NORMAL".to_string(),
         assist: "NORMAL".to_string(),
         current_folder: String::new(),
+        key_hint: "UP DOWN  RIGHT/Z/X/C/V:ENTER  LEFT/S:BACK".to_string(),
+        option_hint: "F1 SELECT  F2 PLAY  F3 RESULT   Q+Z:ARRANGE  Q+X:GAUGE  Q+C:ASSIST"
+            .to_string(),
     })
 }
 

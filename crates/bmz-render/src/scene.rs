@@ -20,6 +20,8 @@ pub struct SelectSnapshot {
     pub gauge: String,
     pub assist: String,
     pub current_folder: String,
+    pub key_hint: String,
+    pub option_hint: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
