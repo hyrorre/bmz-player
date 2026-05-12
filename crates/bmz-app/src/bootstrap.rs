@@ -78,7 +78,16 @@ pub fn bootstrap() -> Result<BootstrappedApp> {
     let app_paths = resolve_app_paths()?;
     app_paths.ensure_dirs()?;
 
-    let app_config = load_or_create_app_config(&app_paths)?;
+    let mut app_config = load_or_create_app_config(&app_paths)?;
+    if let Some(sample_root) = bundled_sample_song_root() {
+        let sample_root_str = sample_root.to_string_lossy().into_owned();
+        if !app_config.songs.roots.iter().any(|r| r.path == sample_root_str) {
+            app_config
+                .songs
+                .roots
+                .push(PathEntry { path: sample_root_str, enabled: true, recursive: true });
+        }
+    }
     let profile_paths = resolve_profile_paths(&app_paths, &app_config.active_profile)?;
     profile_paths.ensure_dirs()?;
     let profile_config = load_or_create_profile_config(&profile_paths, &app_config.active_profile)?;
