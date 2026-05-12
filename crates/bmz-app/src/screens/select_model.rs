@@ -42,29 +42,44 @@ pub fn root_folder_items(root_paths: &[String]) -> Vec<SelectItem> {
 }
 
 /// Loads folders and charts immediately under `folder_path`.
-/// Folders (immediate sub-directories) are listed first, followed by charts.
+/// Non-leaf folders are listed first, followed by charts.
+/// Leaf folders (subfolders that contain charts but no further subfolders) are
+/// flattened: their charts appear directly at this level instead of as a folder entry.
 pub fn load_select_items_in_folder(
     library_db: &LibraryDatabase,
     score_db: &ScoreDatabase,
     folder_path: &str,
 ) -> Result<Vec<SelectItem>> {
     let folder_names = library_db.list_child_folder_names(folder_path)?;
-    let charts = library_db.list_charts_in_folder(folder_path)?;
+    let direct_charts = library_db.list_charts_in_folder(folder_path)?;
 
-    let hashes: Vec<[u8; 32]> = charts.iter().map(|c| c.sha256).collect();
+    let mut non_leaf_folders: Vec<(String, String)> = Vec::new();
+    let mut all_charts = direct_charts;
+
+    for name in folder_names {
+        let child_path = format!("{}/{}", folder_path, name);
+        let child_sub_folders = library_db.list_child_folder_names(&child_path)?;
+        if child_sub_folders.is_empty() {
+            let leaf_charts = library_db.list_charts_in_folder(&child_path)?;
+            all_charts.extend(leaf_charts);
+        } else {
+            non_leaf_folders.push((child_path, name));
+        }
+    }
+
+    let hashes: Vec<[u8; 32]> = all_charts.iter().map(|c| c.sha256).collect();
     let mut score_map: HashMap<[u8; 32], BestScoreSummary> = score_db
         .best_scores_for_charts(&hashes)?
         .into_iter()
         .map(|s| (s.chart_sha256, s))
         .collect();
 
-    let mut items = Vec::with_capacity(folder_names.len() + charts.len());
+    let mut items = Vec::with_capacity(non_leaf_folders.len() + all_charts.len());
 
-    for name in folder_names {
-        let path = format!("{}/{}", folder_path, name);
+    for (path, name) in non_leaf_folders {
         items.push(SelectItem::Folder { path, name });
     }
-    for chart in charts {
+    for chart in all_charts {
         let best_score = score_map.remove(&chart.sha256);
         items.push(SelectItem::Chart(SelectChartRow { chart, best_score }));
     }
@@ -118,14 +133,39 @@ mod tests {
     }
 
     #[test]
-    fn load_select_items_in_folder_lists_sub_folders_before_charts() {
+    fn load_select_items_in_folder_flattens_leaf_subfolders() {
         let (mut library_db, score_db) = open_in_memory_dbs();
         let chart_a = chart("A");
         let chart_b = chart("B");
 
-        // chart_b is directly in /bms; chart_a is in a sub-folder
+        // chart_b directly in /bms; chart_a is in a leaf sub-folder (no deeper nesting)
         library_db
             .upsert_chart_import(&record_for_chart("/bms/genre/song_a.bms", &chart_a))
+            .unwrap();
+        library_db
+            .upsert_chart_import(&record_for_chart("/bms/song_b.bms", &chart_b))
+            .unwrap();
+
+        let items = load_select_items_in_folder(&library_db, &score_db, "/bms").unwrap();
+
+        // genre is a leaf folder so its chart appears directly, not as a Folder entry
+        assert_eq!(items.len(), 2);
+        assert!(items.iter().all(|i| matches!(i, SelectItem::Chart(_))));
+        let titles: Vec<_> =
+            items.iter().filter_map(|i| if let SelectItem::Chart(r) = i { Some(r.chart.title.as_str()) } else { None }).collect();
+        assert!(titles.contains(&"A"));
+        assert!(titles.contains(&"B"));
+    }
+
+    #[test]
+    fn load_select_items_in_folder_shows_non_leaf_subfolder_as_folder() {
+        let (mut library_db, score_db) = open_in_memory_dbs();
+        let chart_a = chart("A");
+        let chart_b = chart("B");
+
+        // genre/subgenre/song_a — genre has a subfolder so it is non-leaf
+        library_db
+            .upsert_chart_import(&record_for_chart("/bms/genre/subgenre/song_a.bms", &chart_a))
             .unwrap();
         library_db
             .upsert_chart_import(&record_for_chart("/bms/song_b.bms", &chart_b))
