@@ -77,12 +77,29 @@ impl LibraryDatabase {
 
     pub fn upsert_chart_import(&mut self, record: &ChartImportRecord<'_>) -> Result<i64> {
         let tx = self.conn.transaction()?;
+
         let chart_file_id = upsert_chart_file(&tx, record)?;
-        let chart_id = upsert_chart(&tx, record)?;
-        tx.execute(
-            "INSERT OR IGNORE INTO chart_file_links (chart_id, chart_file_id) VALUES (?1, ?2)",
-            params![chart_id, chart_file_id],
-        )?;
+
+        let existing_chart_id: Option<i64> = tx
+            .query_row(
+                "SELECT chart_id FROM chart_file_links WHERE chart_file_id = ?1",
+                params![chart_file_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        let chart_id = if let Some(existing_id) = existing_chart_id {
+            update_chart(&tx, existing_id, record)?;
+            existing_id
+        } else {
+            let new_id = insert_chart(&tx, record)?;
+            tx.execute(
+                "INSERT INTO chart_file_links (chart_id, chart_file_id) VALUES (?1, ?2)",
+                params![new_id, chart_file_id],
+            )?;
+            new_id
+        };
+
         tx.commit()?;
         Ok(chart_id)
     }
@@ -101,7 +118,7 @@ impl LibraryDatabase {
     pub fn chart_id_by_sha256(&self, sha256: [u8; 32]) -> Result<Option<i64>> {
         self.conn
             .query_row(
-                "SELECT id FROM charts WHERE sha256 = ?1",
+                "SELECT id FROM charts WHERE sha256 = ?1 LIMIT 1",
                 params![sha256.as_slice()],
                 |row| row.get(0),
             )
@@ -417,61 +434,19 @@ fn upsert_chart_file(conn: &Connection, record: &ChartImportRecord<'_>) -> Resul
     .map_err(Into::into)
 }
 
-fn upsert_chart(conn: &Connection, record: &ChartImportRecord<'_>) -> Result<i64> {
+fn insert_chart(conn: &Connection, record: &ChartImportRecord<'_>) -> Result<i64> {
     let chart = record.chart;
     let stats = ChartStats::from_chart(chart);
     conn.execute(
         "INSERT INTO charts (
-            sha256,
-            md5,
-            title,
-            subtitle,
-            artist,
-            subartist,
-            genre,
-            difficulty_name,
-            play_level,
-            mode,
-            total_notes,
-            initial_bpm,
-            min_bpm,
-            max_bpm,
-            length_ms,
-            ln_type,
-            has_bga,
-            has_long_notes,
-            has_mines,
-            folder_path,
-            stage_file,
-            preview_file,
-            import_version
+            sha256, md5, title, subtitle, artist, subartist, genre,
+            difficulty_name, play_level, mode, total_notes, initial_bpm,
+            min_bpm, max_bpm, length_ms, ln_type, has_bga, has_long_notes,
+            has_mines, folder_path, stage_file, preview_file, import_version
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, '7K', ?10, ?11, ?12, ?13,
             ?14, ?15, 0, ?16, ?17, ?18, ?19, ?20, ?21
-        )
-        ON CONFLICT(sha256) DO UPDATE SET
-            md5 = excluded.md5,
-            title = excluded.title,
-            subtitle = excluded.subtitle,
-            artist = excluded.artist,
-            subartist = excluded.subartist,
-            genre = excluded.genre,
-            difficulty_name = excluded.difficulty_name,
-            play_level = excluded.play_level,
-            mode = excluded.mode,
-            total_notes = excluded.total_notes,
-            initial_bpm = excluded.initial_bpm,
-            min_bpm = excluded.min_bpm,
-            max_bpm = excluded.max_bpm,
-            length_ms = excluded.length_ms,
-            ln_type = excluded.ln_type,
-            has_bga = excluded.has_bga,
-            has_long_notes = excluded.has_long_notes,
-            has_mines = excluded.has_mines,
-            folder_path = excluded.folder_path,
-            stage_file = excluded.stage_file,
-            preview_file = excluded.preview_file,
-            import_version = excluded.import_version",
+        )",
         params![
             chart.identity.file_sha256.as_slice(),
             chart.identity.file_md5.as_slice(),
@@ -496,13 +471,46 @@ fn upsert_chart(conn: &Connection, record: &ChartImportRecord<'_>) -> Result<i64
             CHART_IMPORT_VERSION,
         ],
     )?;
+    Ok(conn.last_insert_rowid())
+}
 
-    conn.query_row(
-        "SELECT id FROM charts WHERE sha256 = ?1",
-        params![chart.identity.file_sha256.as_slice()],
-        |row| row.get(0),
-    )
-    .map_err(Into::into)
+fn update_chart(conn: &Connection, chart_id: i64, record: &ChartImportRecord<'_>) -> Result<()> {
+    let chart = record.chart;
+    let stats = ChartStats::from_chart(chart);
+    conn.execute(
+        "UPDATE charts SET
+            sha256 = ?1, md5 = ?2, title = ?3, subtitle = ?4, artist = ?5,
+            subartist = ?6, genre = ?7, difficulty_name = ?8, play_level = ?9,
+            total_notes = ?10, initial_bpm = ?11, min_bpm = ?12, max_bpm = ?13,
+            length_ms = ?14, ln_type = ?15, has_long_notes = ?16, has_mines = ?17,
+            folder_path = ?18, stage_file = ?19, preview_file = ?20, import_version = ?21
+         WHERE id = ?22",
+        params![
+            chart.identity.file_sha256.as_slice(),
+            chart.identity.file_md5.as_slice(),
+            chart.metadata.title.as_str(),
+            chart.metadata.subtitle.as_str(),
+            chart.metadata.artist.as_str(),
+            chart.metadata.subartist.as_str(),
+            chart.metadata.genre.as_str(),
+            chart.metadata.difficulty_name.as_str(),
+            chart.metadata.play_level.as_str(),
+            chart.total_notes,
+            chart.metadata.initial_bpm,
+            stats.min_bpm,
+            stats.max_bpm,
+            chart.end_time.0 / 1_000,
+            stats.ln_type,
+            stats.has_long_notes,
+            stats.has_mines,
+            folder_path(record.file_path),
+            chart.metadata.stage_file.as_str(),
+            chart.metadata.preview_file.as_str(),
+            CHART_IMPORT_VERSION,
+            chart_id,
+        ],
+    )?;
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -601,6 +609,17 @@ mod tests {
 
     use super::*;
     use crate::storage::migration::{LIBRARY_MIGRATIONS, run_migrations};
+
+    fn record_for_chart<'a>(path: &'a str, c: &'a PlayableChart) -> ChartImportRecord<'a> {
+        ChartImportRecord {
+            root_id: None,
+            file_path: Path::new(path),
+            file_size: 1,
+            modified_at: 1,
+            scanned_at: 1,
+            chart: c,
+        }
+    }
 
     fn chart(title: &str) -> PlayableChart {
         PlayableChart {
@@ -830,6 +849,56 @@ mod tests {
         assert_eq!(failed[0].path, "/songs/broken.bms");
         assert_eq!(failed[0].message, "broken");
         assert_eq!(failed[0].scanned_at, 2);
+    }
+
+    #[test]
+    fn upsert_chart_import_updates_chart_in_place_when_content_changes() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase::from_connection(conn);
+
+        let v1 = chart("content-v1");
+        let id1 = db.upsert_chart_import(&record_for_chart("/songs/track.bms", &v1)).unwrap();
+
+        let v2 = chart("content-v2");
+        let id2 = db.upsert_chart_import(&record_for_chart("/songs/track.bms", &v2)).unwrap();
+
+        assert_eq!(id1, id2, "same path must return the same chart id");
+
+        let count: i64 =
+            db.conn().query_row("SELECT COUNT(*) FROM charts", [], |r| r.get(0)).unwrap();
+        assert_eq!(count, 1, "re-import of same path must not create an extra chart row");
+
+        let title: String = db
+            .conn()
+            .query_row("SELECT title FROM charts WHERE id = ?1", params![id2], |r| r.get(0))
+            .unwrap();
+        assert_eq!(title, "content-v2");
+
+        let link_count: i64 =
+            db.conn().query_row("SELECT COUNT(*) FROM chart_file_links", [], |r| r.get(0)).unwrap();
+        assert_eq!(link_count, 1);
+    }
+
+    #[test]
+    fn upsert_chart_import_creates_separate_charts_for_different_paths_with_same_sha256() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase::from_connection(conn);
+
+        let same_chart = chart("duplicate");
+        let id_a =
+            db.upsert_chart_import(&record_for_chart("/songs/a/track.bms", &same_chart)).unwrap();
+        let id_b =
+            db.upsert_chart_import(&record_for_chart("/songs/b/track.bms", &same_chart)).unwrap();
+
+        assert_ne!(id_a, id_b, "different paths must produce separate chart records");
+
+        let count: i64 =
+            db.conn().query_row("SELECT COUNT(*) FROM charts", [], |r| r.get(0)).unwrap();
+        assert_eq!(count, 2);
     }
 
     #[test]

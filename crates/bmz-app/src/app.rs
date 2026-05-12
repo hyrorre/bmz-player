@@ -17,8 +17,10 @@ use crate::cli::{
     AUTOPLAY_ON_START_ARG, AppOptions, BOOT_PLAY_SAMPLE_ARG, SMOKE_EXIT_AFTER_FRAMES_ARG,
     SMOKE_EXIT_ON_RESULT_ARG,
 };
+use crate::config::app_config::PathEntry;
 use crate::config::profile_config::{GaugeTypeConfig, LaneConfig, ProfileInputConfig};
 use crate::input::winit::physical_key_to_control;
+use crate::storage::scan::scan_song_roots;
 use crate::screens::play_finish::FinishedPlaySession;
 use crate::screens::play_loop::{PlayAdvanceOutcome, advance_running_play_session_until_result};
 use crate::screens::play_start::{PlayStartOptions, StartedWinitPlaySession};
@@ -262,6 +264,15 @@ impl WinitApp {
             return;
         }
 
+        if self.dev_scene.is_none()
+            && event.physical_key == PhysicalKey::Code(KeyCode::F2)
+            && event.state == ElementState::Pressed
+            && !event.repeat
+        {
+            self.rescan_and_reload();
+            return;
+        }
+
         // Track start button held state for option cycling
         if let Some(control) = physical_key_name(event.physical_key) {
             if control == self.select_keys.start {
@@ -379,6 +390,33 @@ impl WinitApp {
         if self.selected_index >= self.select_items.len() {
             self.selected_index = self.select_items.len().saturating_sub(1);
         }
+    }
+
+    fn rescan_and_reload(&mut self) {
+        let scan_roots: Vec<PathEntry> = if let Some(folder) = self.folder_stack.last() {
+            vec![PathEntry { path: folder.clone(), enabled: true, recursive: true }]
+        } else {
+            self.boot.app_config.songs.roots.iter().filter(|p| p.enabled).cloned().collect()
+        };
+
+        if !scan_roots.is_empty() {
+            match scan_song_roots(
+                &mut self.boot.library_db,
+                &scan_roots,
+                &self.boot.app_config.scan,
+                now_unix_seconds(),
+            ) {
+                Ok(report) => tracing::info!(
+                    imported = report.summary.imported,
+                    skipped = report.summary.skipped,
+                    failed = report.summary.failed,
+                    "F2 rescan complete"
+                ),
+                Err(error) => tracing::error!(%error, "F2 rescan failed"),
+            }
+        }
+
+        self.reload_select_items();
     }
 
     fn advance_active_play(&mut self) {
@@ -842,8 +880,8 @@ fn dev_scene_action(
 
     match physical_key {
         PhysicalKey::Code(KeyCode::F1) => Some(DevSceneAction::SampleSelect),
-        PhysicalKey::Code(KeyCode::F2) => Some(DevSceneAction::SamplePlay),
         PhysicalKey::Code(KeyCode::F3) => Some(DevSceneAction::SampleResult),
+        PhysicalKey::Code(KeyCode::F4) => Some(DevSceneAction::SamplePlay),
         PhysicalKey::Code(KeyCode::Escape) => Some(DevSceneAction::Clear),
         _ => None,
     }
@@ -899,8 +937,8 @@ impl SelectKeyBindings {
         let gauge_str = cycle_gauge.as_deref().unwrap_or("?");
         let assist_str = cycle_assist.as_deref().unwrap_or("?");
         let option_hint = format!(
-            "F1 SELECT  F2 PLAY  F3 RESULT   {start}+{arrange_str}:ARRANGE  \
-             {start}+{gauge_str}:GAUGE  {start}+{assist_str}:ASSIST"
+            "F1 SELECT  F2 RELOAD  F3 RESULT  F4 PLAY   \
+             {start}+{arrange_str}:ARRANGE  {start}+{gauge_str}:GAUGE  {start}+{assist_str}:ASSIST"
         );
 
         Self { start, enter, back, cycle_arrange, cycle_gauge, cycle_assist, key_hint, option_hint }
@@ -1120,6 +1158,8 @@ mod tests {
         assert!(keys.key_hint.contains("Z/X/C/V"), "enter keys in hint: {}", keys.key_hint);
         assert!(keys.key_hint.contains("/S:BACK"), "back key in hint: {}", keys.key_hint);
         assert!(keys.key_hint.contains(" Q"), "start key in hint: {}", keys.key_hint);
+        assert!(keys.option_hint.contains("F2 RELOAD"), "reload in hint: {}", keys.option_hint);
+        assert!(keys.option_hint.contains("F4 PLAY"), "play in hint: {}", keys.option_hint);
         assert!(keys.option_hint.contains("Q+Z:ARRANGE"), "arrange in hint: {}", keys.option_hint);
     }
 
@@ -1195,11 +1235,15 @@ mod tests {
         );
         assert_eq!(
             dev_scene_action(PhysicalKey::Code(KeyCode::F2), ElementState::Pressed, false),
-            Some(DevSceneAction::SamplePlay)
+            None
         );
         assert_eq!(
             dev_scene_action(PhysicalKey::Code(KeyCode::F3), ElementState::Pressed, false),
             Some(DevSceneAction::SampleResult)
+        );
+        assert_eq!(
+            dev_scene_action(PhysicalKey::Code(KeyCode::F4), ElementState::Pressed, false),
+            Some(DevSceneAction::SamplePlay)
         );
         assert_eq!(
             dev_scene_action(PhysicalKey::Code(KeyCode::Escape), ElementState::Pressed, false),
