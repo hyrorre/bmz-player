@@ -24,6 +24,9 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
         selected_chart_id: Some(1),
         selected_title: "Sample BMS".to_string(),
         rows,
+        arrange: "NORMAL".to_string(),
+        gauge: "NORMAL".to_string(),
+        assist: "NORMAL".to_string(),
     })
 }
 

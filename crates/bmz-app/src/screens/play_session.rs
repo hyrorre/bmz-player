@@ -3,7 +3,9 @@ use bmz_audio::clock::AudioClock;
 use bmz_audio::engine::AudioEngine;
 use bmz_audio::loader::{LoadedSampleReport, SampleLoader, WavSampleLoader, load_chart_samples};
 use bmz_chart::import::import_bms_chart;
-use bmz_chart::model::PlayableChart;
+use bmz_chart::model::{NoteEvent, PlayableChart};
+use bmz_core::clear::GaugeType;
+use bmz_core::lane::Lane;
 use bmz_gameplay::autoplay::AutoplayController;
 use bmz_gameplay::gauge::GaugeState;
 use bmz_gameplay::input::backend::{InputBackend, NullInputBackend};
@@ -14,12 +16,14 @@ use bmz_gameplay::replay::{ReplayPlayer, ReplayRecorder};
 use bmz_gameplay::score::ScoreState;
 use bmz_gameplay::session::{BgmScheduler, GameSession, PlayState};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::play::{
     DEFAULT_JUDGE_WINDOW, audio_mix_from_profile, gauge_type_from_config,
     lane_binding_from_profile_input, play_offsets_from_profile,
 };
 use crate::config::profile_config::ProfileConfig;
+use crate::select_options::ArrangeOption;
 use crate::storage::library_db::LibraryDatabase;
 
 #[derive(Debug, Clone)]
@@ -27,6 +31,8 @@ pub struct PlaySessionOptions {
     pub autoplay: bool,
     pub replay_player: Option<ReplayPlayer>,
     pub sample_rate: u32,
+    pub gauge_override: Option<GaugeType>,
+    pub arrange: ArrangeOption,
 }
 
 pub struct PreparedPlaySession {
@@ -37,7 +43,13 @@ pub struct PreparedPlaySession {
 
 impl Default for PlaySessionOptions {
     fn default() -> Self {
-        Self { autoplay: false, replay_player: None, sample_rate: 48_000 }
+        Self {
+            autoplay: false,
+            replay_player: None,
+            sample_rate: 48_000,
+            gauge_override: None,
+            arrange: ArrangeOption::Normal,
+        }
     }
 }
 
@@ -55,7 +67,8 @@ pub fn build_game_session_with_input_backend(
     options: PlaySessionOptions,
     input_backend: Box<dyn InputBackend>,
 ) -> GameSession {
-    let gauge_type = gauge_type_from_config(profile.play.gauge);
+    let gauge_type =
+        options.gauge_override.unwrap_or_else(|| gauge_type_from_config(profile.play.gauge));
     let autoplay = (profile.play.auto_play || options.autoplay).then(AutoplayController::default);
     let input_system = InputSystem {
         backend: input_backend,
@@ -165,13 +178,61 @@ pub fn load_prepared_play_session_for_chart_with_input_backend(
     };
     let import = import_bms_chart(std::path::Path::new(&path), None)
         .with_context(|| format!("failed to import chart file: {path}"))?;
-    let chart = Arc::new(import.chart);
+    let mut chart = import.chart;
+    apply_arrange(&mut chart, options.arrange);
+    let chart = Arc::new(chart);
     let mut loader = WavSampleLoader;
     let (audio, sample_report) =
         build_audio_engine_for_chart(&chart, options.sample_rate, &mut loader);
     let session = build_game_session_with_input_backend(chart, profile, options, input_backend);
 
     Ok(PreparedPlaySession { session, audio, sample_report })
+}
+
+fn apply_arrange(chart: &mut PlayableChart, arrange: ArrangeOption) {
+    let perm: [usize; 8] = match arrange {
+        ArrangeOption::Normal => return,
+        ArrangeOption::Mirror => [0, 7, 6, 5, 4, 3, 2, 1],
+        ArrangeOption::Random => {
+            let seed = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos() as u64)
+                .unwrap_or(12345);
+            random_lane_permutation(seed)
+        }
+    };
+    apply_lane_permutation(chart, &perm);
+}
+
+fn apply_lane_permutation(chart: &mut PlayableChart, perm: &[usize; 8]) {
+    let mut old_notes: Vec<Option<Vec<NoteEvent>>> =
+        (0..8).map(|i| Some(std::mem::take(&mut chart.lane_notes[i]))).collect();
+    for (new_idx, &old_idx) in perm.iter().enumerate() {
+        let new_lane = Lane::ALL[new_idx];
+        let notes = old_notes[old_idx].take().unwrap_or_default();
+        chart.lane_notes[new_idx] =
+            notes.into_iter().map(|mut n| { n.lane = new_lane; n }).collect();
+    }
+
+    let mut reverse = [0usize; 8];
+    for (new_idx, &old_idx) in perm.iter().enumerate() {
+        reverse[old_idx] = new_idx;
+    }
+    for ln in &mut chart.long_notes {
+        ln.lane = Lane::ALL[reverse[ln.lane as usize]];
+    }
+}
+
+fn random_lane_permutation(seed: u64) -> [usize; 8] {
+    let mut perm = [0usize, 1, 2, 3, 4, 5, 6, 7];
+    let mut rng = seed;
+    // Fisher-Yates shuffle on key lanes 1..=7, scratch stays at 0
+    for i in (2..=7).rev() {
+        rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        let j = 1 + ((rng >> 33) as usize % i);
+        perm.swap(i, j);
+    }
+    perm
 }
 
 #[cfg(test)]

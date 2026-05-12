@@ -1,7 +1,7 @@
 use bmz_core::lane::{LANE_COUNT, Lane};
 use bmz_core::time::TimeUs;
 
-use crate::scene::{AppSceneSnapshot, SelectRowSnapshot};
+use crate::scene::{AppSceneSnapshot, SelectRowSnapshot, SelectSnapshot};
 use crate::skin::{
     Animation, BlendMode, NumberSlot, SkinContext, SkinDefinition, SkinManifest, SkinObject,
     SkinObjectId, SkinPhase, SkinPlacement, SkinRenderContext, SkinRenderItem, SkinSource,
@@ -122,9 +122,7 @@ impl DrawPlan {
 
     pub fn from_scene_with_skin(scene: &AppSceneSnapshot, skin: &SkinContext) -> Self {
         match scene {
-            AppSceneSnapshot::Select(snapshot) => {
-                plan_select(snapshot.chart_count, snapshot.selected_index, &snapshot.rows)
-            }
+            AppSceneSnapshot::Select(snapshot) => plan_select(snapshot),
             AppSceneSnapshot::Play(snapshot) => plan_play(snapshot, skin),
             AppSceneSnapshot::Result(snapshot) => plan_result(
                 snapshot.clear_type.as_str(),
@@ -155,7 +153,11 @@ impl Color {
     }
 }
 
-fn plan_select(chart_count: u32, selected_index: u32, rows: &[SelectRowSnapshot]) -> DrawPlan {
+fn plan_select(snapshot: &SelectSnapshot) -> DrawPlan {
+    let chart_count = snapshot.chart_count;
+    let selected_index = snapshot.selected_index;
+    let rows = &snapshot.rows;
+
     let mut commands = Vec::new();
     let text = TextRenderer;
     commands.push(DrawCommand::Rect {
@@ -172,6 +174,21 @@ fn plan_select(chart_count: u32, selected_index: u32, rows: &[SelectRowSnapshot]
         &format!("CHARTS {}", chart_count),
         BitmapTextStyle { x: 0.78, y: 0.112, cell: 0.005, color: Color::rgb(0.62, 0.78, 0.84) },
     );
+
+    // Options bar
+    commands.push(DrawCommand::Rect {
+        rect: Rect { x: 0.06, y: 0.163, width: 0.88, height: 0.030 },
+        color: Color::rgb(0.05, 0.065, 0.08),
+    });
+    text.push_text(
+        &mut commands,
+        &format!(
+            "ARRANGE: {}   GAUGE: {}   ASSIST: {}",
+            snapshot.arrange, snapshot.gauge, snapshot.assist
+        ),
+        BitmapTextStyle { x: 0.08, y: 0.170, cell: 0.005, color: Color::rgb(0.72, 0.86, 0.92) },
+    );
+
     let visible_rows = rows.len().max(1).min(7);
     for row in 0..visible_rows {
         let snapshot_row = rows.get(row);
@@ -203,7 +220,7 @@ fn plan_select(chart_count: u32, selected_index: u32, rows: &[SelectRowSnapshot]
     );
     text.push_text(
         &mut commands,
-        "F1 SELECT  F2 PLAY  F3 RESULT",
+        "F1 SELECT  F2 PLAY  F3 RESULT   Q+Z:ARRANGE  Q+X:GAUGE  Q+C:ASSIST",
         BitmapTextStyle { x: 0.08, y: 0.895, cell: 0.005, color: Color::rgb(0.58, 0.67, 0.7) },
     );
 

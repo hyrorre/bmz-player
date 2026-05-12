@@ -17,11 +17,13 @@ use crate::cli::{
     AUTOPLAY_ON_START_ARG, AppOptions, BOOT_PLAY_SAMPLE_ARG, SMOKE_EXIT_AFTER_FRAMES_ARG,
     SMOKE_EXIT_ON_RESULT_ARG,
 };
+use crate::config::profile_config::GaugeTypeConfig;
 use crate::screens::play_finish::FinishedPlaySession;
 use crate::screens::play_loop::{PlayAdvanceOutcome, advance_running_play_session_until_result};
 use crate::screens::play_start::{PlayStartOptions, StartedWinitPlaySession};
 use crate::screens::result_model::ResultSummary;
 use crate::screens::select_model::{SelectChartRow, load_select_chart_rows};
+use crate::select_options::{ArrangeOption, AssistOption};
 use crate::skin_loader::apply_default_skin;
 
 const SAMPLE_PLAYABLE_TITLE: &str = "BMZ Sample Playable";
@@ -52,7 +54,10 @@ struct WinitApp {
     renderer: Renderer,
     dev_scene: Option<AppSceneSnapshot>,
     last_scene_kind: Option<AppSceneKind>,
-    autoplay_on_start: bool,
+    start_held: bool,
+    arrange_option: ArrangeOption,
+    gauge_option: GaugeTypeConfig,
+    assist_option: AssistOption,
     smoke_exit_after_frames: Option<u32>,
     smoke_exit_on_result: bool,
     rendered_frames: u32,
@@ -80,6 +85,10 @@ impl WinitApp {
             options.boot_play_sample.then(|| sample_playable_chart_id(&select_rows)).flatten();
         log_startup_options(&options);
 
+        let assist_option =
+            if options.autoplay_on_start { AssistOption::Autoplay } else { AssistOption::Normal };
+        let gauge_option = boot.profile_config.play.gauge;
+
         let mut renderer = Renderer::default();
         load_default_skin_textures(&mut renderer);
 
@@ -95,7 +104,10 @@ impl WinitApp {
             renderer,
             dev_scene: None,
             last_scene_kind: None,
-            autoplay_on_start: options.autoplay_on_start,
+            start_held: false,
+            arrange_option: ArrangeOption::Normal,
+            gauge_option,
+            assist_option,
             smoke_exit_after_frames: options.smoke_exit_after_frames,
             smoke_exit_on_result: options.smoke_exit_on_result,
             rendered_frames: 0,
@@ -195,6 +207,9 @@ impl WinitApp {
             selected_chart_id: selected.map(|row| row.chart.chart_id),
             selected_title: selected.map(|row| row.chart.title.clone()).unwrap_or_default(),
             rows: select_snapshot_rows(&self.select_rows, self.selected_index, 7),
+            arrange: self.arrange_option.as_str().to_string(),
+            gauge: gauge_option_as_str(self.gauge_option).to_string(),
+            assist: self.assist_option.as_str().to_string(),
         }
     }
 
@@ -219,6 +234,40 @@ impl WinitApp {
                 match action {
                     ResultAction::Retry => self.retry_last_chart(),
                     ResultAction::Leave => self.leave_result(),
+                }
+            }
+            return;
+        }
+
+        // Track start button (Q) held state for option cycling
+        match (event.physical_key, event.state) {
+            (PhysicalKey::Code(KeyCode::KeyQ), ElementState::Pressed) => {
+                self.start_held = true;
+                return;
+            }
+            (PhysicalKey::Code(KeyCode::KeyQ), ElementState::Released) => {
+                self.start_held = false;
+                return;
+            }
+            _ => {}
+        }
+
+        if self.start_held {
+            if event.state == ElementState::Pressed && !event.repeat {
+                match event.physical_key {
+                    PhysicalKey::Code(KeyCode::KeyZ) => {
+                        self.arrange_option = self.arrange_option.cycle();
+                        tracing::info!(arrange = self.arrange_option.as_str(), "arrange option changed");
+                    }
+                    PhysicalKey::Code(KeyCode::KeyX) => {
+                        self.gauge_option = cycle_gauge_option(self.gauge_option);
+                        tracing::info!(gauge = ?self.gauge_option, "gauge option changed");
+                    }
+                    PhysicalKey::Code(KeyCode::KeyC) => {
+                        self.assist_option = self.assist_option.cycle();
+                        tracing::info!(assist = self.assist_option.as_str(), "assist option changed");
+                    }
+                    _ => {}
                 }
             }
             return;
@@ -274,7 +323,12 @@ impl WinitApp {
     }
 
     fn play_start_options(&self) -> PlayStartOptions {
-        PlayStartOptions { autoplay: self.autoplay_on_start, ..Default::default() }
+        PlayStartOptions {
+            autoplay: self.assist_option == AssistOption::Autoplay,
+            gauge: Some(self.gauge_option),
+            arrange: self.arrange_option,
+            ..Default::default()
+        }
     }
 
     fn retry_last_chart(&mut self) {
@@ -493,6 +547,28 @@ fn log_startup_options(options: &AppOptions) {
     }
     if options.smoke_exit_on_result {
         tracing::info!(arg = SMOKE_EXIT_ON_RESULT_ARG, "smoke auto-exit on result enabled");
+    }
+}
+
+fn cycle_gauge_option(current: GaugeTypeConfig) -> GaugeTypeConfig {
+    match current {
+        GaugeTypeConfig::AssistEasy => GaugeTypeConfig::Easy,
+        GaugeTypeConfig::Easy => GaugeTypeConfig::Normal,
+        GaugeTypeConfig::Normal => GaugeTypeConfig::Hard,
+        GaugeTypeConfig::Hard => GaugeTypeConfig::ExHard,
+        GaugeTypeConfig::ExHard => GaugeTypeConfig::Hazard,
+        GaugeTypeConfig::Hazard => GaugeTypeConfig::AssistEasy,
+    }
+}
+
+fn gauge_option_as_str(gauge: GaugeTypeConfig) -> &'static str {
+    match gauge {
+        GaugeTypeConfig::AssistEasy => "A-EASY",
+        GaugeTypeConfig::Easy => "EASY",
+        GaugeTypeConfig::Normal => "NORMAL",
+        GaugeTypeConfig::Hard => "HARD",
+        GaugeTypeConfig::ExHard => "EX-HARD",
+        GaugeTypeConfig::Hazard => "HAZARD",
     }
 }
 

@@ -29,6 +29,14 @@ cargo test -p <crate-name>
 - `--smoke-exit-on-result` — exit automatically when the result screen is reached
 - `--smoke-exit-after-frames <N>` — exit after N rendered frames
 
+## Project context
+
+BMZ Player is a successor to LR2/beatoraja (BMS rhythm game players). beatoraja is open source and its source is kept at `.local/beatoraja/` as a compatibility reference. beatoraja-format skins are placed at `.local/skins/`. Both are globally gitignored and not committed.
+
+**Current division of work:**
+- Play screen skin features → being implemented in Codex
+- Select screen enhancements → Claude Code
+
 ## Architecture
 
 Cargo workspace with 6 domain crates under `crates/`:

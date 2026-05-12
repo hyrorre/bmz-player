@@ -16,6 +16,9 @@ pub struct SelectSnapshot {
     pub selected_chart_id: Option<i64>,
     pub selected_title: String,
     pub rows: Vec<SelectRowSnapshot>,
+    pub arrange: String,
+    pub gauge: String,
+    pub assist: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]

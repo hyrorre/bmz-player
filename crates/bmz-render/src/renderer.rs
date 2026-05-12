@@ -1394,6 +1394,7 @@ mod tests {
             selected_chart_id: Some(7),
             selected_title: "test".to_string(),
             rows: Vec::new(),
+            ..Default::default()
         });
 
         renderer.render_scene(scene.clone()).unwrap();

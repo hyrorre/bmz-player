@@ -5,11 +5,13 @@ use bmz_gameplay::replay::ReplayPlayer;
 
 use crate::audio::{RunningPlaySession, open_prepared_play_audio};
 use crate::config::app_config::AppConfig;
-use crate::config::profile_config::ProfileConfig;
+use crate::config::play::gauge_type_from_config;
+use crate::config::profile_config::{GaugeTypeConfig, ProfileConfig};
 use crate::input::winit::WinitInputBackend;
 use crate::screens::play_session::{
     PlaySessionOptions, load_prepared_play_session_for_chart_with_input_backend,
 };
+use crate::select_options::ArrangeOption;
 use crate::storage::library_db::LibraryDatabase;
 
 #[derive(Debug, Clone, Default)]
@@ -17,6 +19,9 @@ pub struct PlayStartOptions {
     pub autoplay: bool,
     pub replay_player: Option<ReplayPlayer>,
     pub chart_zero_time: TimeUs,
+    /// Override profile gauge type. None means use the profile default.
+    pub gauge: Option<GaugeTypeConfig>,
+    pub arrange: ArrangeOption,
 }
 
 pub struct StartedWinitPlaySession {
@@ -32,6 +37,8 @@ pub fn play_session_options_from_start(
         autoplay: start_options.autoplay,
         replay_player: start_options.replay_player,
         sample_rate: app_config.audio.sample_rate,
+        gauge_override: start_options.gauge.map(gauge_type_from_config),
+        arrange: start_options.arrange,
     }
 }
 
