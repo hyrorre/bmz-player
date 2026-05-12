@@ -19,6 +19,7 @@ pub struct SelectSnapshot {
     pub arrange: String,
     pub gauge: String,
     pub assist: String,
+    pub current_folder: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -29,6 +30,7 @@ pub struct SelectRowSnapshot {
     pub play_level: String,
     pub clear_type: String,
     pub ex_score: Option<u32>,
+    pub is_folder: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

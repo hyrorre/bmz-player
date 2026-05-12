@@ -230,6 +230,53 @@ impl LibraryDatabase {
         rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
     }
 
+    /// Returns distinct immediate child folder names directly under `parent_path`.
+    /// Only the last path component (name) is returned, not the full path.
+    pub fn list_child_folder_names(&self, parent_path: &str) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT child_name FROM (
+                SELECT CASE
+                    WHEN INSTR(rest, '/') > 0 THEN SUBSTR(rest, 1, INSTR(rest, '/') - 1)
+                    ELSE rest
+                END AS child_name
+                FROM (
+                    SELECT SUBSTR(folder_path, LENGTH(?1) + 2) AS rest
+                    FROM charts
+                    WHERE SUBSTR(folder_path, 1, LENGTH(?1) + 1) = ?1 || '/'
+                )
+            )
+            WHERE child_name != ''
+            ORDER BY child_name COLLATE NOCASE",
+        )?;
+        let rows = stmt.query_map(params![parent_path], |row| row.get(0))?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Returns charts whose `folder_path` exactly matches `folder_path`.
+    pub fn list_charts_in_folder(&self, folder_path: &str) -> Result<Vec<ChartListItem>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT
+                id,
+                sha256,
+                title,
+                subtitle,
+                artist,
+                difficulty_name,
+                play_level,
+                mode,
+                total_notes,
+                initial_bpm,
+                COALESCE(min_bpm, initial_bpm),
+                COALESCE(max_bpm, initial_bpm),
+                folder_path
+            FROM charts
+            WHERE folder_path = ?1
+            ORDER BY title COLLATE NOCASE, artist COLLATE NOCASE, play_level COLLATE NOCASE",
+        )?;
+        let rows = stmt.query_map(params![folder_path], chart_list_item_from_row)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     pub fn primary_chart_file_path(&self, chart_id: i64) -> Result<Option<String>> {
         self.conn
             .query_row(

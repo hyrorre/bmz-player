@@ -22,7 +22,9 @@ use crate::screens::play_finish::FinishedPlaySession;
 use crate::screens::play_loop::{PlayAdvanceOutcome, advance_running_play_session_until_result};
 use crate::screens::play_start::{PlayStartOptions, StartedWinitPlaySession};
 use crate::screens::result_model::ResultSummary;
-use crate::screens::select_model::{SelectChartRow, load_select_chart_rows};
+use crate::screens::select_model::{
+    SelectChartRow, SelectItem, load_select_items_in_folder, root_folder_items,
+};
 use crate::select_options::{ArrangeOption, AssistOption};
 use crate::skin_loader::apply_default_skin;
 
@@ -49,7 +51,8 @@ struct WinitApp {
     finished_play: Option<FinishedPlaySession>,
     last_play_snapshot: Option<RenderSnapshot>,
     last_started_chart_id: Option<i64>,
-    select_rows: Vec<SelectChartRow>,
+    select_items: Vec<SelectItem>,
+    folder_stack: Vec<String>,
     selected_index: usize,
     renderer: Renderer,
     dev_scene: Option<AppSceneSnapshot>,
@@ -79,10 +82,10 @@ enum AppSceneKind {
 
 impl WinitApp {
     fn new(boot: BootstrappedApp, options: AppOptions) -> Result<Self> {
-        let select_rows = load_select_chart_rows(&boot.library_db, &boot.score_db, 100, 0)
-            .context("failed to load initial select chart rows")?;
+        let folder_stack = initial_folder_stack(&boot.app_config);
+        let select_items = load_items_for_stack(&boot, &folder_stack);
         let boot_sample_chart_id =
-            options.boot_play_sample.then(|| sample_playable_chart_id(&select_rows)).flatten();
+            options.boot_play_sample.then(|| sample_playable_chart_id(&select_items)).flatten();
         log_startup_options(&options);
 
         let assist_option =
@@ -99,7 +102,8 @@ impl WinitApp {
             finished_play: None,
             last_play_snapshot: None,
             last_started_chart_id: None,
-            select_rows,
+            select_items,
+            folder_stack,
             selected_index: 0,
             renderer,
             dev_scene: None,
@@ -200,16 +204,27 @@ impl WinitApp {
     }
 
     fn select_snapshot(&self) -> SelectSnapshot {
-        let selected = self.select_rows.get(self.selected_index);
+        let selected = self.select_items.get(self.selected_index);
+        let current_folder = self
+            .folder_stack
+            .last()
+            .and_then(|p| std::path::Path::new(p).file_name())
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
         SelectSnapshot {
-            chart_count: self.select_rows.len() as u32,
+            chart_count: self.select_items.len() as u32,
             selected_index: self.selected_index as u32,
-            selected_chart_id: selected.map(|row| row.chart.chart_id),
-            selected_title: selected.map(|row| row.chart.title.clone()).unwrap_or_default(),
-            rows: select_snapshot_rows(&self.select_rows, self.selected_index, 7),
+            selected_chart_id: match selected {
+                Some(SelectItem::Chart(row)) => Some(row.chart.chart_id),
+                _ => None,
+            },
+            selected_title: selected.map(|i| i.display_name().to_string()).unwrap_or_default(),
+            rows: select_snapshot_rows(&self.select_items, self.selected_index, 7),
             arrange: self.arrange_option.as_str().to_string(),
             gauge: gauge_option_as_str(self.gauge_option).to_string(),
             assist: self.assist_option.as_str().to_string(),
+            current_folder,
         }
     }
 
@@ -275,37 +290,50 @@ impl WinitApp {
 
         if let Some(action) = select_action(event.physical_key, event.state, event.repeat) {
             match action {
-                SelectAction::Start => self.start_selected_chart(),
+                SelectAction::EnterOrPlay => self.enter_or_play_selected(),
+                SelectAction::ExitFolder => self.exit_folder(),
                 SelectAction::Move(select_move) => self.move_selection(select_move),
             }
         }
     }
 
     fn move_selection(&mut self, select_move: SelectMove) {
-        if self.select_rows.is_empty() {
-            self.refresh_select_rows();
+        if self.select_items.is_empty() {
+            self.reload_select_items();
         }
-        if self.select_rows.is_empty() {
+        if self.select_items.is_empty() {
             return;
         }
-
         self.selected_index =
-            moved_select_index(self.selected_index, self.select_rows.len(), select_move);
+            moved_select_index(self.selected_index, self.select_items.len(), select_move);
     }
 
-    fn start_selected_chart(&mut self) {
-        if self.select_rows.is_empty() {
-            self.refresh_select_rows();
+    fn enter_or_play_selected(&mut self) {
+        if self.select_items.is_empty() {
+            self.reload_select_items();
         }
-        if self.selected_index >= self.select_rows.len() {
-            self.selected_index = self.select_rows.len().saturating_sub(1);
+        match self.select_items.get(self.selected_index).cloned() {
+            Some(SelectItem::Folder { path, .. }) => {
+                self.folder_stack.push(path);
+                self.reload_select_items();
+                self.selected_index = 0;
+                tracing::info!(folder = ?self.folder_stack.last(), "entered folder");
+            }
+            Some(SelectItem::Chart(row)) => {
+                self.start_chart(row.chart.chart_id);
+            }
+            None => {
+                tracing::warn!("no item is available to select");
+            }
         }
+    }
 
-        let Some(row) = self.select_rows.get(self.selected_index) else {
-            tracing::warn!("no chart is available to start");
-            return;
-        };
-        self.start_chart(row.chart.chart_id);
+    fn exit_folder(&mut self) {
+        if self.folder_stack.pop().is_some() {
+            self.reload_select_items();
+            self.selected_index = 0;
+            tracing::info!(depth = self.folder_stack.len(), "exited folder");
+        }
     }
 
     fn start_chart(&mut self, chart_id: i64) {
@@ -342,20 +370,14 @@ impl WinitApp {
     fn leave_result(&mut self) {
         self.finished_play = None;
         self.last_play_snapshot = None;
-        self.refresh_select_rows();
+        self.reload_select_items();
     }
 
-    fn refresh_select_rows(&mut self) {
-        match load_select_chart_rows(&self.boot.library_db, &self.boot.score_db, 100, 0) {
-            Ok(rows) => {
-                self.select_rows = rows;
-                if self.selected_index >= self.select_rows.len() {
-                    self.selected_index = self.select_rows.len().saturating_sub(1);
-                }
-            }
-            Err(error) => {
-                tracing::error!(%error, "failed to refresh select chart rows");
-            }
+    fn reload_select_items(&mut self) {
+        let items = load_items_for_stack(&self.boot, &self.folder_stack);
+        self.select_items = items;
+        if self.selected_index >= self.select_items.len() {
+            self.selected_index = self.select_items.len().saturating_sub(1);
         }
     }
 
@@ -550,6 +572,42 @@ fn log_startup_options(options: &AppOptions) {
     }
 }
 
+fn initial_folder_stack(app_config: &crate::config::app_config::AppConfig) -> Vec<String> {
+    let enabled: Vec<String> = app_config
+        .songs
+        .roots
+        .iter()
+        .filter(|p| p.enabled)
+        .map(|p| p.path.clone())
+        .collect();
+    if enabled.len() == 1 { enabled } else { Vec::new() }
+}
+
+fn enabled_root_paths(app_config: &crate::config::app_config::AppConfig) -> Vec<String> {
+    app_config
+        .songs
+        .roots
+        .iter()
+        .filter(|p| p.enabled)
+        .map(|p| p.path.clone())
+        .collect()
+}
+
+fn load_items_for_stack(boot: &crate::bootstrap::BootstrappedApp, stack: &[String]) -> Vec<SelectItem> {
+    match stack.last() {
+        Some(folder) => {
+            match load_select_items_in_folder(&boot.library_db, &boot.score_db, folder) {
+                Ok(items) => items,
+                Err(error) => {
+                    tracing::error!(%error, "failed to load select items");
+                    Vec::new()
+                }
+            }
+        }
+        None => root_folder_items(&enabled_root_paths(&boot.app_config)),
+    }
+}
+
 fn cycle_gauge_option(current: GaugeTypeConfig) -> GaugeTypeConfig {
     match current {
         GaugeTypeConfig::AssistEasy => GaugeTypeConfig::Easy,
@@ -573,48 +631,66 @@ fn gauge_option_as_str(gauge: GaugeTypeConfig) -> &'static str {
 }
 
 fn select_snapshot_rows(
-    rows: &[SelectChartRow],
+    items: &[SelectItem],
     selected_index: usize,
     visible_limit: usize,
 ) -> Vec<SelectRowSnapshot> {
-    if rows.is_empty() || visible_limit == 0 {
+    if items.is_empty() || visible_limit == 0 {
         return Vec::new();
     }
 
-    let selected_index = selected_index.min(rows.len() - 1);
+    let selected_index = selected_index.min(items.len() - 1);
     let half_window = visible_limit / 2;
-    let max_start = rows.len().saturating_sub(visible_limit);
+    let max_start = items.len().saturating_sub(visible_limit);
     let start = selected_index.saturating_sub(half_window).min(max_start);
-    let end = (start + visible_limit).min(rows.len());
+    let end = (start + visible_limit).min(items.len());
 
-    rows[start..end]
+    items[start..end]
         .iter()
         .enumerate()
-        .map(|(offset, row)| {
+        .map(|(offset, item)| {
             let index = start + offset;
-            SelectRowSnapshot {
-                index: index as u32,
-                title: row.chart.title.clone(),
-                artist: row.chart.artist.clone(),
-                play_level: row.chart.play_level.clone(),
-                clear_type: row
-                    .best_score
-                    .as_ref()
-                    .map(|score| score.clear_type.clone())
-                    .unwrap_or_default(),
-                ex_score: row.best_score.as_ref().map(|score| score.ex_score),
+            match item {
+                SelectItem::Folder { name, .. } => SelectRowSnapshot {
+                    index: index as u32,
+                    title: name.clone(),
+                    artist: String::new(),
+                    play_level: String::new(),
+                    clear_type: String::new(),
+                    ex_score: None,
+                    is_folder: true,
+                },
+                SelectItem::Chart(row) => SelectRowSnapshot {
+                    index: index as u32,
+                    title: row.chart.title.clone(),
+                    artist: row.chart.artist.clone(),
+                    play_level: row.chart.play_level.clone(),
+                    clear_type: row
+                        .best_score
+                        .as_ref()
+                        .map(|score| score.clear_type.clone())
+                        .unwrap_or_default(),
+                    ex_score: row.best_score.as_ref().map(|score| score.ex_score),
+                    is_folder: false,
+                },
             }
         })
         .collect()
 }
 
-fn sample_playable_chart_id(rows: &[SelectChartRow]) -> Option<i64> {
-    rows.iter().find(|row| row.chart.title == SAMPLE_PLAYABLE_TITLE).map(|row| row.chart.chart_id)
+fn sample_playable_chart_id(items: &[SelectItem]) -> Option<i64> {
+    items.iter().find_map(|item| match item {
+        SelectItem::Chart(row) if row.chart.title == SAMPLE_PLAYABLE_TITLE => {
+            Some(row.chart.chart_id)
+        }
+        _ => None,
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SelectAction {
-    Start,
+    EnterOrPlay,
+    ExitFolder,
     Move(SelectMove),
 }
 
@@ -638,7 +714,18 @@ fn select_action(
     }
 
     match physical_key {
-        PhysicalKey::Code(KeyCode::Enter | KeyCode::Space) => Some(SelectAction::Start),
+        // Enter / confirm: Enter, Space, ArrowRight, Key1/3/5/7 (Z/X/C/V)
+        PhysicalKey::Code(
+            KeyCode::Enter
+            | KeyCode::Space
+            | KeyCode::ArrowRight
+            | KeyCode::KeyZ
+            | KeyCode::KeyX
+            | KeyCode::KeyC
+            | KeyCode::KeyV,
+        ) => Some(SelectAction::EnterOrPlay),
+        // Back / exit folder: ArrowLeft, Key2 (S)
+        PhysicalKey::Code(KeyCode::ArrowLeft | KeyCode::KeyS) => Some(SelectAction::ExitFolder),
         PhysicalKey::Code(KeyCode::ArrowUp) => Some(SelectAction::Move(SelectMove::Previous)),
         PhysicalKey::Code(KeyCode::ArrowDown) => Some(SelectAction::Move(SelectMove::Next)),
         PhysicalKey::Code(KeyCode::PageUp) => Some(SelectAction::Move(SelectMove::PagePrevious)),
@@ -858,7 +945,7 @@ mod tests {
     fn select_action_maps_start_and_vertical_movement() {
         assert_eq!(
             select_action(PhysicalKey::Code(KeyCode::Enter), ElementState::Pressed, false),
-            Some(SelectAction::Start)
+            Some(SelectAction::EnterOrPlay)
         );
         assert_eq!(
             select_action(PhysicalKey::Code(KeyCode::ArrowUp), ElementState::Pressed, false),
@@ -901,7 +988,7 @@ mod tests {
             None
         );
         assert_eq!(
-            select_action(PhysicalKey::Code(KeyCode::KeyZ), ElementState::Pressed, false),
+            select_action(PhysicalKey::Code(KeyCode::KeyA), ElementState::Pressed, false),
             None
         );
     }
@@ -1022,28 +1109,32 @@ mod tests {
 
     #[test]
     fn sample_playable_chart_id_finds_bundled_sample_by_title() {
-        let mut rows: Vec<SelectChartRow> = (0..3).map(select_chart_row).collect();
-        rows[1].chart.title = SAMPLE_PLAYABLE_TITLE.to_string();
+        let mut rows: Vec<SelectItem> =
+            (0..3).map(|i| SelectItem::Chart(select_chart_row(i))).collect();
+        if let SelectItem::Chart(ref mut row) = rows[1] {
+            row.chart.title = SAMPLE_PLAYABLE_TITLE.to_string();
+        }
 
         assert_eq!(sample_playable_chart_id(&rows), Some(1));
     }
 
     #[test]
     fn sample_playable_chart_id_returns_none_without_sample() {
-        let rows: Vec<SelectChartRow> = (0..3).map(select_chart_row).collect();
+        let rows: Vec<SelectItem> =
+            (0..3).map(|i| SelectItem::Chart(select_chart_row(i))).collect();
 
         assert_eq!(sample_playable_chart_id(&rows), None);
     }
 
     #[test]
     fn select_snapshot_rows_centers_selection_and_copies_score_summary() {
-        let rows: Vec<SelectChartRow> = (0..10)
+        let rows: Vec<SelectItem> = (0..10)
             .map(|index| {
                 let mut row = select_chart_row(index);
                 if index == 5 {
                     row.best_score = Some(best_score(1234));
                 }
-                row
+                SelectItem::Chart(row)
             })
             .collect();
 
@@ -1059,7 +1150,8 @@ mod tests {
 
     #[test]
     fn select_snapshot_rows_clamps_near_edges() {
-        let rows: Vec<SelectChartRow> = (0..4).map(select_chart_row).collect();
+        let rows: Vec<SelectItem> =
+            (0..4).map(|i| SelectItem::Chart(select_chart_row(i))).collect();
 
         let snapshot_rows = select_snapshot_rows(&rows, 99, 7);
 

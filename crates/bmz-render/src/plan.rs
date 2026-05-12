@@ -169,10 +169,22 @@ fn plan_select(snapshot: &SelectSnapshot) -> DrawPlan {
         "SELECT",
         BitmapTextStyle { x: 0.08, y: 0.105, cell: 0.009, color: Color::rgb(0.82, 0.9, 0.95) },
     );
+    if !snapshot.current_folder.is_empty() {
+        text.push_text(
+            &mut commands,
+            &format!("> {}", snapshot.current_folder),
+            BitmapTextStyle {
+                x: 0.225,
+                y: 0.108,
+                cell: 0.006,
+                color: Color::rgb(0.55, 0.72, 0.78),
+            },
+        );
+    }
     text.push_text(
         &mut commands,
-        &format!("CHARTS {}", chart_count),
-        BitmapTextStyle { x: 0.78, y: 0.112, cell: 0.005, color: Color::rgb(0.62, 0.78, 0.84) },
+        &format!("{}", chart_count),
+        BitmapTextStyle { x: 0.88, y: 0.112, cell: 0.005, color: Color::rgb(0.62, 0.78, 0.84) },
     );
 
     // Options bar
@@ -193,29 +205,33 @@ fn plan_select(snapshot: &SelectSnapshot) -> DrawPlan {
     for row in 0..visible_rows {
         let snapshot_row = rows.get(row);
         let selected = snapshot_row.map(|row| row.index == selected_index).unwrap_or(row == 0);
+        let is_folder = snapshot_row.map(|r| r.is_folder).unwrap_or(false);
         let row_y = 0.2 + row as f32 * 0.09;
+        let (left_bg, right_bg) = if is_folder {
+            if selected {
+                (Color::rgb(0.26, 0.21, 0.08), Color::rgb(0.20, 0.16, 0.06))
+            } else {
+                (Color::rgb(0.09, 0.075, 0.03), Color::rgb(0.07, 0.058, 0.023))
+            }
+        } else if selected {
+            (Color::rgb(0.22, 0.28, 0.31), Color::rgb(0.16, 0.21, 0.23))
+        } else {
+            (Color::rgb(0.075, 0.09, 0.1), Color::rgb(0.055, 0.065, 0.072))
+        };
         commands.push(DrawCommand::Rect {
             rect: Rect { x: 0.08, y: row_y, width: 0.68, height: 0.065 },
-            color: if selected {
-                Color::rgb(0.22, 0.28, 0.31)
-            } else {
-                Color::rgb(0.075, 0.09, 0.1)
-            },
+            color: left_bg,
         });
         push_select_title_text(&text, &mut commands, snapshot_row, row_y, selected);
         commands.push(DrawCommand::Rect {
             rect: Rect { x: 0.78, y: row_y, width: 0.14, height: 0.065 },
-            color: if selected {
-                Color::rgb(0.16, 0.21, 0.23)
-            } else {
-                Color::rgb(0.055, 0.065, 0.072)
-            },
+            color: right_bg,
         });
         push_select_score_text(&text, &mut commands, snapshot_row, row_y, selected);
     }
     text.push_text(
         &mut commands,
-        "UP DOWN PAGE HOME END  ENTER START",
+        "UP DOWN  RIGHT/Z/X/C/V:ENTER  LEFT/S:BACK  ENTER START",
         BitmapTextStyle { x: 0.08, y: 0.86, cell: 0.006, color: Color::rgb(0.88, 0.9, 0.86) },
     );
     text.push_text(
@@ -234,7 +250,15 @@ fn push_select_title_text(
     row_y: f32,
     selected: bool,
 ) {
+    let is_folder = row.map(|r| r.is_folder).unwrap_or(false);
     let title = display_title(row.map(|row| row.title.as_str()).unwrap_or_default());
+    let color = if is_folder {
+        if selected { Color::rgb(0.98, 0.88, 0.55) } else { Color::rgb(0.62, 0.54, 0.26) }
+    } else if selected {
+        Color::rgb(0.9, 0.96, 0.98)
+    } else {
+        Color::rgb(0.58, 0.66, 0.68)
+    };
     text.push_text(
         commands,
         &title,
@@ -242,14 +266,13 @@ fn push_select_title_text(
             x: 0.1,
             y: row_y + if selected { 0.016 } else { 0.022 },
             cell: if selected { 0.006 } else { 0.005 },
-            color: if selected {
-                Color::rgb(0.9, 0.96, 0.98)
-            } else {
-                Color::rgb(0.58, 0.66, 0.68)
-            },
+            color,
         },
     );
 
+    if is_folder {
+        return;
+    }
     let Some(row) = row else {
         return;
     };
@@ -274,6 +297,24 @@ fn push_select_score_text(
     row_y: f32,
     selected: bool,
 ) {
+    if row.map(|r| r.is_folder).unwrap_or(false) {
+        text.push_text(
+            commands,
+            ">",
+            BitmapTextStyle {
+                x: 0.838,
+                y: row_y + 0.016,
+                cell: 0.010,
+                color: if selected {
+                    Color::rgb(0.98, 0.85, 0.45)
+                } else {
+                    Color::rgb(0.52, 0.43, 0.18)
+                },
+            },
+        );
+        return;
+    }
+
     let status = row_status_label(row);
     text.push_text(
         commands,
@@ -1695,6 +1736,7 @@ mod tests {
                 play_level: index.to_string(),
                 clear_type: if index == 0 { "Normal".to_string() } else { String::new() },
                 ex_score: (index == 0).then_some(1234),
+                is_folder: false,
             })
             .collect()
     }

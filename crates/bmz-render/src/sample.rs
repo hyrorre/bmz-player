@@ -15,6 +15,7 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
             play_level: (index + 1).to_string(),
             clear_type: if index == 0 { "Normal".to_string() } else { String::new() },
             ex_score: (index == 0).then_some(1888),
+            is_folder: false,
         })
         .collect();
 
@@ -27,6 +28,7 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
         arrange: "NORMAL".to_string(),
         gauge: "NORMAL".to_string(),
         assist: "NORMAL".to_string(),
+        current_folder: String::new(),
     })
 }
 
