@@ -2272,14 +2272,19 @@ fn resolve_destination_frame(
 ) -> Option<ResolvedSkinFrame> {
     let elapsed_ms = destination_animation_elapsed_ms(destination, elapsed_ms);
     let mut frame = ResolvedSkinFrame::default();
-    let mut resolved = None;
+    let mut previous = None;
     for animation in &destination.dst {
         apply_skin_animation(&mut frame, animation);
         if frame.time <= elapsed_ms {
-            resolved = Some(frame);
+            previous = Some(frame);
+            continue;
         }
+        return Some(match previous {
+            Some(previous) => interpolate_skin_frame(previous, frame, elapsed_ms),
+            None => frame,
+        });
     }
-    resolved.or_else(|| destination.dst.first().map(|_| frame))
+    previous.or_else(|| destination.dst.first().map(|_| frame))
 }
 
 fn resolve_destination_frame_until_end(
@@ -2302,6 +2307,33 @@ fn destination_animation_elapsed_ms(destination: &SkinDestinationDef, elapsed_ms
     } else {
         elapsed_ms
     }
+}
+
+fn interpolate_skin_frame(
+    start: ResolvedSkinFrame,
+    end: ResolvedSkinFrame,
+    elapsed_ms: i32,
+) -> ResolvedSkinFrame {
+    let duration = end.time - start.time;
+    if duration <= 0 {
+        return end;
+    }
+    let t = ((elapsed_ms - start.time) as f32 / duration as f32).clamp(0.0, 1.0);
+    ResolvedSkinFrame {
+        time: elapsed_ms,
+        x: interpolate_i32(start.x, end.x, t),
+        y: interpolate_i32(start.y, end.y, t),
+        w: interpolate_i32(start.w, end.w, t),
+        h: interpolate_i32(start.h, end.h, t),
+        a: interpolate_i32(start.a, end.a, t),
+        r: interpolate_i32(start.r, end.r, t),
+        g: interpolate_i32(start.g, end.g, t),
+        b: interpolate_i32(start.b, end.b, t),
+    }
+}
+
+fn interpolate_i32(start: i32, end: i32, t: f32) -> i32 {
+    (start as f32 + (end - start) as f32 * t).round() as i32
 }
 
 fn apply_skin_animation(frame: &mut ResolvedSkinFrame, animation: &SkinAnimationDef) {
@@ -3220,11 +3252,11 @@ mod tests {
 
         assert!(
             matches!(early[0], SkinRenderItem::Image { rect: Rect { x, width, .. }, tint: Color { a, .. }, .. }
-                if approx_eq(x, 0.0) && approx_eq(width, 0.1) && approx_eq(a, 1.0))
+                if approx_eq(x, 0.15) && approx_eq(width, 0.1) && approx_eq(a, 192.0 / 255.0))
         );
         assert!(
             matches!(middle[0], SkinRenderItem::Image { rect: Rect { x, width, .. }, tint: Color { a, .. }, .. }
-                if approx_eq(x, 0.3) && approx_eq(width, 0.1) && approx_eq(a, 128.0 / 255.0))
+                if approx_eq(x, 0.45) && approx_eq(width, 0.15) && approx_eq(a, 128.0 / 255.0))
         );
         assert!(
             matches!(late[0], SkinRenderItem::Image { rect: Rect { x, width, .. }, tint: Color { a, .. }, .. }
@@ -3268,7 +3300,7 @@ mod tests {
         );
 
         assert!(matches!(wrapped[0], SkinRenderItem::Image { rect: Rect { x, .. }, .. }
-                if approx_eq(x, 0.0)));
+                if approx_eq(x, 0.15)));
     }
 
     #[test]
