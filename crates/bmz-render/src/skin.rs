@@ -2383,14 +2383,40 @@ fn gauge_after_dot(gauge: f32) -> u32 {
 /// Returns the graph bar fill ratio (0.0-1.0) for a given `BARGRAPH_*` type.
 fn graph_value(graph_type: i32, state: SkinDrawState) -> f32 {
     match graph_type {
-        102 => 1.0, // BARGRAPH_LOAD_PROGRESS: always complete during play
+        101 => state.play_progress, // BARGRAPH_MUSIC_PROGRESS: elapsed / total playtime
+        102 => 1.0,                 // BARGRAPH_LOAD_PROGRESS: always complete during play
         110 | 111 => {
             // BARGRAPH_SCORERATE / SCORERATE_FINAL: ex_score / max_ex_score
             let max = (state.total_notes * 2) as f32;
             if max > 0.0 { state.ex_score as f32 / max } else { 0.0 }
         }
+        // BARGRAPH_RATE_PGREAT..RATE_EXSCORE: judge count / past_notes (or total_notes)
+        140 => judge_rate(state.judge_counts.pgreat, state.past_notes),
+        141 => judge_rate(state.judge_counts.great, state.past_notes),
+        142 => judge_rate(state.judge_counts.good, state.past_notes),
+        143 => judge_rate(state.judge_counts.bad, state.past_notes),
+        144 => judge_rate(state.judge_counts.poor, state.past_notes),
+        145 => judge_rate(state.max_combo, state.total_notes),
+        146 => {
+            // BARGRAPH_RATE_SCORE: (pgreat + great*0.5) / total_notes
+            let max = (state.past_notes * 2) as f32;
+            if max > 0.0 {
+                (state.judge_counts.pgreat * 2 + state.judge_counts.great) as f32 / max
+            } else {
+                0.0
+            }
+        }
+        147 => {
+            // BARGRAPH_RATE_EXSCORE: ex_score so far / (past_notes * 2)
+            let max = (state.past_notes * 2) as f32;
+            if max > 0.0 { state.ex_score as f32 / max } else { 0.0 }
+        }
         _ => 0.0, // BARGRAPH_BESTSCORERATE, TARGETSCORERATE etc. need external data
     }
+}
+
+fn judge_rate(count: u32, total: u32) -> f32 {
+    if total > 0 { count as f32 / total as f32 } else { 0.0 }
 }
 
 fn skin_slider_progress(slider_type: i32, state: SkinDrawState) -> Option<f32> {
@@ -4919,6 +4945,67 @@ mod tests {
         let SkinRenderItem::Image { rect, .. } = &items[0] else { panic!() };
         // value=1.0 → full width = 640/1280 = 0.5
         assert!(approx_eq(rect.width, 640.0 / 1280.0), "full load bar width: got {}", rect.width);
+    }
+
+    #[test]
+    fn graph_music_progress_uses_play_progress() {
+        // BARGRAPH_MUSIC_PROGRESS (101): play_progress=0.75 → bar is 75% full
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "w": 1280, "h": 720,
+                "source": [{ "id": "bar-src", "path": "bar.png" }],
+                "graph": [{ "id": "music-bar", "src": "bar-src", "x": 0, "y": 0, "w": 100, "h": 8, "angle": 0, "type": 101 }],
+                "destination": [
+                    { "id": "music-bar", "dst": [{ "time": 0, "x": 0, "y": 0, "w": 1280, "h": 8 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        let sources = mock_source("bar-src", 100.0, 8.0);
+        let state = SkinDrawState { play_progress: 0.75, ..SkinDrawState::default() };
+        let items = document.static_image_render_items(&sources, state);
+
+        assert_eq!(items.len(), 1, "expected one music bar");
+        let SkinRenderItem::Image { rect, uv, .. } = &items[0] else { panic!() };
+        // value=0.75 → width = 1280/1280 * 0.75 = 0.75
+        assert!(approx_eq(rect.width, 0.75), "music bar width should be 0.75, got {}", rect.width);
+        assert!(approx_eq(uv.width, 0.75), "music bar uv.width should be 0.75, got {}", uv.width);
+    }
+
+    #[test]
+    fn graph_rate_pgreat_uses_judge_count_over_past_notes() {
+        // BARGRAPH_RATE_PGREAT (140): pgreat / past_notes
+        // pgreat=60, past_notes=100 → 0.6
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "w": 1280, "h": 720,
+                "source": [{ "id": "bar-src", "path": "bar.png" }],
+                "graph": [{ "id": "pg-bar", "src": "bar-src", "x": 0, "y": 0, "w": 100, "h": 8, "angle": 0, "type": 140 }],
+                "destination": [
+                    { "id": "pg-bar", "dst": [{ "time": 0, "x": 0, "y": 0, "w": 1000, "h": 8 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        let sources = mock_source("bar-src", 100.0, 8.0);
+        let state = SkinDrawState {
+            judge_counts: DisplayJudgeCounts { pgreat: 60, great: 30, ..Default::default() },
+            past_notes: 100,
+            total_notes: 200,
+            ..SkinDrawState::default()
+        };
+        let items = document.static_image_render_items(&sources, state);
+
+        assert_eq!(items.len(), 1);
+        let SkinRenderItem::Image { rect, .. } = &items[0] else { panic!() };
+        // value=0.6, dst_width = 1000/1280
+        assert!(approx_eq(rect.width, 1000.0 / 1280.0 * 0.6), "pg bar width: got {}", rect.width);
     }
 
     #[test]
