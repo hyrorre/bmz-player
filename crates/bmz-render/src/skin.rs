@@ -2276,6 +2276,7 @@ fn resolve_destination_frame(
     elapsed_ms: i32,
 ) -> Option<ResolvedSkinFrame> {
     let elapsed_ms = destination_animation_elapsed_ms(destination, elapsed_ms);
+    let acc = destination_interpolation_acc(destination);
     let mut frame = ResolvedSkinFrame::default();
     let mut previous = None;
     for animation in &destination.dst {
@@ -2285,7 +2286,7 @@ fn resolve_destination_frame(
             continue;
         }
         return Some(match previous {
-            Some(previous) => interpolate_skin_frame(previous, frame, elapsed_ms),
+            Some(previous) => interpolate_skin_frame(previous, frame, elapsed_ms, acc),
             None => frame,
         });
     }
@@ -2318,22 +2319,47 @@ fn interpolate_skin_frame(
     start: ResolvedSkinFrame,
     end: ResolvedSkinFrame,
     elapsed_ms: i32,
+    acc: i32,
 ) -> ResolvedSkinFrame {
     let duration = end.time - start.time;
     if duration <= 0 {
         return end;
     }
-    let t = ((elapsed_ms - start.time) as f32 / duration as f32).clamp(0.0, 1.0);
+    let t = eased_skin_frame_rate(
+        ((elapsed_ms - start.time) as f32 / duration as f32).clamp(0.0, 1.0),
+        acc,
+    );
     ResolvedSkinFrame {
         time: elapsed_ms,
         x: interpolate_i32(start.x, end.x, t),
         y: interpolate_i32(start.y, end.y, t),
         w: interpolate_i32(start.w, end.w, t),
         h: interpolate_i32(start.h, end.h, t),
+        acc: end.acc,
         a: interpolate_i32(start.a, end.a, t),
         r: interpolate_i32(start.r, end.r, t),
         g: interpolate_i32(start.g, end.g, t),
         b: interpolate_i32(start.b, end.b, t),
+    }
+}
+
+fn destination_interpolation_acc(destination: &SkinDestinationDef) -> i32 {
+    let mut frame = ResolvedSkinFrame::default();
+    for animation in &destination.dst {
+        apply_skin_animation(&mut frame, animation);
+        if frame.acc != 0 {
+            return frame.acc;
+        }
+    }
+    0
+}
+
+fn eased_skin_frame_rate(t: f32, acc: i32) -> f32 {
+    match acc {
+        1 => t * t,
+        2 => 1.0 - (t - 1.0) * (t - 1.0),
+        3 => 0.0,
+        _ => t,
     }
 }
 
@@ -2356,6 +2382,9 @@ fn apply_skin_animation(frame: &mut ResolvedSkinFrame, animation: &SkinAnimation
     }
     if let Some(h) = animation.h {
         frame.h = h;
+    }
+    if let Some(acc) = animation.acc {
+        frame.acc = acc;
     }
     if let Some(a) = animation.a {
         frame.a = a;
@@ -2401,6 +2430,7 @@ struct ResolvedSkinFrame {
     y: i32,
     w: i32,
     h: i32,
+    acc: i32,
     a: i32,
     r: i32,
     g: i32,
@@ -2409,7 +2439,7 @@ struct ResolvedSkinFrame {
 
 impl Default for ResolvedSkinFrame {
     fn default() -> Self {
-        Self { time: 0, x: 0, y: 0, w: 0, h: 0, a: 255, r: 255, g: 255, b: 255 }
+        Self { time: 0, x: 0, y: 0, w: 0, h: 0, acc: 0, a: 255, r: 255, g: 255, b: 255 }
     }
 }
 
@@ -3267,6 +3297,47 @@ mod tests {
             matches!(late[0], SkinRenderItem::Image { rect: Rect { x, width, .. }, tint: Color { a, .. }, .. }
                 if approx_eq(x, 0.6) && approx_eq(width, 0.2) && approx_eq(a, 128.0 / 255.0))
         );
+    }
+
+    #[test]
+    fn skin_document_applies_destination_acc_easing() {
+        let sources = HashMap::from([(
+            "1".to_string(),
+            SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 10.0, height: 10.0 },
+            },
+        )]);
+
+        for (acc, expected_x) in [(1, 0.25), (2, 0.75), (3, 0.0)] {
+            let document: SkinDocument = serde_json::from_str(&format!(
+                r#"
+                {{
+                    "type": 0,
+                    "w": 100,
+                    "h": 100,
+                    "source": [{{ "id": 1, "path": "system.png" }}],
+                    "image": [{{ "id": "panel", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10 }}],
+                    "destination": [
+                        {{ "id": "panel", "dst": [
+                            {{ "time": 0, "x": 0, "y": 0, "w": 10, "h": 10 }},
+                            {{ "time": 100, "x": 100, "acc": {acc} }}
+                        ]}}
+                    ]
+                }}
+                "#
+            ))
+            .unwrap();
+
+            let items = document.static_image_render_items(
+                &sources,
+                SkinDrawState { elapsed_ms: 50, ..SkinDrawState::default() },
+            );
+
+            assert!(matches!(items[0], SkinRenderItem::Image { rect: Rect { x, .. }, .. }
+                    if approx_eq(x, expected_x)));
+        }
     }
 
     #[test]

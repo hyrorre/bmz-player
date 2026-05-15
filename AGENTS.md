@@ -197,11 +197,11 @@ database:
 - image `divx/divy/cycle` によるUV frame animation
 - text `align`, `overflow`, `wrapping`, `shadow`, `outline`
 - TTF/OTF/TTC font loading
+- `.fnt` bitmap font loading
+- destination `acc` easing
 
 未対応/今後の候補:
 
-- `.fnt` bitmap font
-- destination `acc` easing
 - destination `center`, `offset`, `offsets`, `stretch`, `filter`
 - `graph` / score graph 系
 - BGA
