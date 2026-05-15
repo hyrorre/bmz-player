@@ -74,6 +74,7 @@ struct WgpuRenderer {
     image_pipeline: wgpu::RenderPipeline,
     image_bind_group_layout: wgpu::BindGroupLayout,
     image_sampler: wgpu::Sampler,
+    image_sampler_linear: wgpu::Sampler,
     image_textures: HashMap<TextureId, GpuTexture>,
     image_buffer: Option<wgpu::Buffer>,
     image_buffer_capacity: usize,
@@ -253,6 +254,7 @@ impl WgpuRenderer {
         let rect_pipeline = create_rect_pipeline(&device, config.format);
         let image_bind_group_layout = create_image_bind_group_layout(&device);
         let image_sampler = create_image_sampler(&device);
+        let image_sampler_linear = create_image_sampler_linear(&device);
         let image_pipeline =
             create_image_pipeline(&device, config.format, &image_bind_group_layout);
         let image_textures = create_default_image_textures(&device, &queue);
@@ -271,6 +273,7 @@ impl WgpuRenderer {
             image_pipeline,
             image_bind_group_layout,
             image_sampler,
+            image_sampler_linear,
             image_textures,
             image_buffer: None,
             image_buffer_capacity: 0,
@@ -340,8 +343,10 @@ impl WgpuRenderer {
             }
         };
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let image_bind_groups: Vec<_> =
-            image_batches.iter().map(|batch| self.image_bind_group(batch.texture)).collect();
+        let image_bind_groups: Vec<_> = image_batches
+            .iter()
+            .map(|batch| self.image_bind_group(batch.texture, batch.linear))
+            .collect();
         let text_bind_group = self.text_bind_group();
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("bmz-render clear encoder"),
@@ -550,11 +555,12 @@ impl WgpuRenderer {
         self.image_textures.insert(id, texture);
     }
 
-    fn image_bind_group(&self, texture_id: TextureId) -> wgpu::BindGroup {
+    fn image_bind_group(&self, texture_id: TextureId, linear: bool) -> wgpu::BindGroup {
         let texture = self.image_textures.get(&texture_id).unwrap_or_else(|| {
             self.image_textures.get(&TextureId(0)).expect("fallback texture is registered")
         });
         let _keep_texture_alive = &texture.texture;
+        let sampler = if linear { &self.image_sampler_linear } else { &self.image_sampler };
         self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("bmz-render image bind group"),
             layout: &self.image_bind_group_layout,
@@ -565,7 +571,7 @@ impl WgpuRenderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.image_sampler),
+                    resource: wgpu::BindingResource::Sampler(sampler),
                 },
             ],
         })
@@ -597,6 +603,7 @@ struct TextFrame {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ImageBatch {
     texture: TextureId,
+    linear: bool,
     instances: Vec<u8>,
 }
 
@@ -616,14 +623,20 @@ fn encode_rects(plan: &DrawPlan) -> Vec<u8> {
 fn encode_image_batches(plan: &DrawPlan) -> Vec<ImageBatch> {
     let mut batches = Vec::new();
     for command in &plan.commands {
-        let DrawCommand::Image { rect, uv, texture, tint } = command else {
+        let DrawCommand::Image { rect, uv, texture, tint, linear_filter } = command else {
             continue;
         };
         let batch_index = batches
             .iter()
-            .position(|batch: &ImageBatch| batch.texture == *texture)
+            .position(|batch: &ImageBatch| {
+                batch.texture == *texture && batch.linear == *linear_filter
+            })
             .unwrap_or_else(|| {
-                batches.push(ImageBatch { texture: *texture, instances: Vec::new() });
+                batches.push(ImageBatch {
+                    texture: *texture,
+                    linear: *linear_filter,
+                    instances: Vec::new(),
+                });
                 batches.len() - 1
             });
         let batch = &mut batches[batch_index];
@@ -1203,6 +1216,19 @@ fn create_image_sampler(device: &wgpu::Device) -> wgpu::Sampler {
         address_mode_w: wgpu::AddressMode::ClampToEdge,
         mag_filter: wgpu::FilterMode::Nearest,
         min_filter: wgpu::FilterMode::Nearest,
+        mipmap_filter: wgpu::FilterMode::Nearest,
+        ..Default::default()
+    })
+}
+
+fn create_image_sampler_linear(device: &wgpu::Device) -> wgpu::Sampler {
+    device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("bmz-render image sampler linear"),
+        address_mode_u: wgpu::AddressMode::ClampToEdge,
+        address_mode_v: wgpu::AddressMode::ClampToEdge,
+        address_mode_w: wgpu::AddressMode::ClampToEdge,
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
         mipmap_filter: wgpu::FilterMode::Nearest,
         ..Default::default()
     })
@@ -1808,12 +1834,14 @@ mod tests {
                     uv: crate::plan::UvRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
                     texture: crate::plan::TextureId(0),
                     tint: Color::rgb(1.0, 1.0, 1.0),
+                    linear_filter: false,
                 },
                 DrawCommand::Image {
                     rect: crate::plan::Rect { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
                     uv: crate::plan::UvRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
                     texture: crate::plan::TextureId(7),
                     tint: Color::rgb(1.0, 1.0, 1.0),
+                    linear_filter: false,
                 },
             ],
         };

@@ -641,6 +641,12 @@ pub struct SkinDrawState {
     pub gauge: f32,
     pub play_progress: f32,
     pub end_of_note: bool,
+    /// 各レーン(Scratch=0, Key1=1..Key7=7)のボムタイマー経過ms。Noneなら非アクティブ。
+    pub bomb_ms: [Option<i32>; 8],
+    /// 各レーンのkeyon(押下中ビーム)タイマー経過ms。Noneなら非アクティブ。
+    pub keyon_ms: [Option<i32>; 8],
+    /// 判定タイマー経過ms (TIMER_JUDGE_1P=46)。Noneなら非アクティブ。
+    pub judge_ms: Option<i32>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -857,6 +863,7 @@ pub enum SkinRenderItem {
         scale: SkinImageScale,
         border: Option<SkinImageBorder>,
         source_size: Option<SkinImageSize>,
+        linear_filter: bool,
     },
     Text {
         origin: Point,
@@ -894,6 +901,7 @@ impl SkinObject {
                         scale: SkinImageScale::Stretch,
                         border: None,
                         source_size: None,
+                        linear_filter: false,
                     },
                     SkinSource::Text { slot, style } => SkinRenderItem::Text {
                         origin: Point { x: resolved.rect.x, y: resolved.rect.y },
@@ -976,17 +984,17 @@ impl SkinDocument {
         let enabled_options = self.enabled_options();
         self.destination
             .iter()
-            .filter(|destination| skin_timer_active(destination.timer, state))
             .filter(|destination| test_skin_ops(&destination.op, &enabled_options))
             .filter(|destination| eval_skin_draw_condition(&destination.draw, state))
             .filter_map(|destination| {
-                let frame = resolve_destination_frame(destination, state.elapsed_ms)?;
+                let elapsed = skin_timer_elapsed_ms(destination.timer, state)?;
+                let frame = resolve_destination_frame(destination, elapsed)?;
                 if let Some(image) = images.get(destination.id.as_str()) {
                     let source = sources.get(&image.src)?;
                     let (rect, uv) = stretch_skin_image_geometry(
                         destination.stretch,
                         normalize_skin_frame_rect(frame, self.w, self.h),
-                        skin_image_texture_region(image, source.source_size, state.elapsed_ms),
+                        skin_image_texture_region(image, source.source_size, elapsed),
                         source.source_size,
                         self.w,
                         self.h,
@@ -1009,6 +1017,7 @@ impl SkinDocument {
                         scale: SkinImageScale::Stretch,
                         border: None,
                         source_size: Some(source.source_size),
+                        linear_filter: destination.filter != 0,
                     }]);
                 }
 
@@ -1078,6 +1087,7 @@ impl SkinDocument {
             scale: SkinImageScale::Stretch,
             border: None,
             source_size: Some(source.source_size),
+            linear_filter: false,
         })
     }
 
@@ -1122,7 +1132,9 @@ impl SkinDocument {
                     height: part_height,
                 }
             };
-            if let Some(item) = self.image_render_item(node_id, part_rect, elapsed_ms, sources) {
+            if let Some(item) =
+                self.image_render_item(node_id, part_rect, elapsed_ms, sources, 0, false)
+            {
                 items.push(item);
             }
         }
@@ -1145,6 +1157,8 @@ impl SkinDocument {
             normalize_skin_frame_rect(image_frame, self.w, self.h),
             elapsed_ms,
             sources,
+            image_destination.stretch,
+            image_destination.filter != 0,
         )?];
         if combo > 0
             && let Some(number_destination) = judge.numbers.get(judge_index)
@@ -1195,6 +1209,8 @@ impl SkinDocument {
                     normalize_skin_frame_rect(frame, self.w, self.h),
                     elapsed_ms,
                     sources,
+                    destination.stretch,
+                    destination.filter != 0,
                 )
             })
             .collect()
@@ -1255,6 +1271,7 @@ impl SkinDocument {
                     scale: SkinImageScale::Stretch,
                     border: None,
                     source_size: Some(source.source_size),
+                    linear_filter: false,
                 }
             })
             .collect()
@@ -1266,18 +1283,24 @@ impl SkinDocument {
         rect: Rect,
         elapsed_ms: i32,
         sources: &HashMap<String, SkinDocumentTexture>,
+        stretch: i32,
+        linear_filter: bool,
     ) -> Option<SkinRenderItem> {
         let image = self.image.iter().find(|image| image.id == image_id)?;
         let source = sources.get(&image.src)?;
+        let uv = skin_image_texture_region(image, source.source_size, elapsed_ms);
+        let (rect, uv) =
+            stretch_skin_image_geometry(stretch, rect, uv, source.source_size, self.w, self.h);
         Some(SkinRenderItem::Image {
             texture: source.texture,
             rect,
-            uv: skin_image_texture_region(image, source.source_size, elapsed_ms),
+            uv,
             tint: Color::rgb(1.0, 1.0, 1.0),
             blend: BlendMode::Normal,
             scale: SkinImageScale::Stretch,
             border: None,
             source_size: Some(source.source_size),
+            linear_filter,
         })
     }
 
@@ -1339,15 +1362,24 @@ impl SkinDocument {
             3 => frame.y += offset,
             _ => {}
         }
+        let uv = TextureRegion {
+            x: slider.x as f32 / source_width,
+            y: slider.y as f32 / source_height,
+            width: slider.w as f32 / source_width,
+            height: slider.h as f32 / source_height,
+        };
+        let (rect, uv) = stretch_skin_image_geometry(
+            destination.stretch,
+            normalize_skin_frame_rect(frame, self.w, self.h),
+            uv,
+            source.source_size,
+            self.w,
+            self.h,
+        );
         Some(SkinRenderItem::Image {
             texture: source.texture,
-            rect: normalize_skin_frame_rect(frame, self.w, self.h),
-            uv: TextureRegion {
-                x: slider.x as f32 / source_width,
-                y: slider.y as f32 / source_height,
-                width: slider.w as f32 / source_width,
-                height: slider.h as f32 / source_height,
-            },
+            rect,
+            uv,
             tint: Color::rgba(
                 frame.r as f32 / 255.0,
                 frame.g as f32 / 255.0,
@@ -1358,6 +1390,7 @@ impl SkinDocument {
             scale: SkinImageScale::Stretch,
             border: None,
             source_size: Some(source.source_size),
+            linear_filter: destination.filter != 0,
         })
     }
 
@@ -1371,15 +1404,24 @@ impl SkinDocument {
         let source = sources.get(&cover.src)?;
         let source_width = source.source_size.width.max(1.0);
         let source_height = source.source_size.height.max(1.0);
+        let uv = TextureRegion {
+            x: cover.x as f32 / source_width,
+            y: cover.y as f32 / source_height,
+            width: cover.w as f32 / source_width,
+            height: cover.h as f32 / source_height,
+        };
+        let (rect, uv) = stretch_skin_image_geometry(
+            destination.stretch,
+            normalize_skin_frame_rect(frame, self.w, self.h),
+            uv,
+            source.source_size,
+            self.w,
+            self.h,
+        );
         Some(SkinRenderItem::Image {
             texture: source.texture,
-            rect: normalize_skin_frame_rect(frame, self.w, self.h),
-            uv: TextureRegion {
-                x: cover.x as f32 / source_width,
-                y: cover.y as f32 / source_height,
-                width: cover.w as f32 / source_width,
-                height: cover.h as f32 / source_height,
-            },
+            rect,
+            uv,
             tint: Color::rgba(
                 frame.r as f32 / 255.0,
                 frame.g as f32 / 255.0,
@@ -1390,6 +1432,7 @@ impl SkinDocument {
             scale: SkinImageScale::Stretch,
             border: None,
             source_size: Some(source.source_size),
+            linear_filter: destination.filter != 0,
         })
     }
 }
@@ -1852,7 +1895,15 @@ pub fn append_skin_render_items(commands: &mut Vec<DrawCommand>, items: &[SkinRe
                 }
             }
             SkinRenderItem::Image {
-                texture, rect, uv, tint, scale, border, source_size, ..
+                texture,
+                rect,
+                uv,
+                tint,
+                scale,
+                border,
+                source_size,
+                linear_filter,
+                ..
             } => {
                 append_skin_image_command(
                     commands,
@@ -1863,6 +1914,7 @@ pub fn append_skin_render_items(commands: &mut Vec<DrawCommand>, items: &[SkinRe
                     *scale,
                     *border,
                     *source_size,
+                    *linear_filter,
                 );
             }
         }
@@ -1878,6 +1930,7 @@ fn append_skin_image_command(
     scale: SkinImageScale,
     border: Option<SkinImageBorder>,
     source_size: Option<SkinImageSize>,
+    linear_filter: bool,
 ) {
     match (scale, border) {
         (SkinImageScale::NineSlice, Some(border)) => {
@@ -1889,6 +1942,7 @@ fn append_skin_image_command(
                 tint,
                 border,
                 source_size,
+                linear_filter,
             );
         }
         _ => commands.push(DrawCommand::Image {
@@ -1896,6 +1950,7 @@ fn append_skin_image_command(
             uv: UvRect { x: uv.x, y: uv.y, width: uv.width, height: uv.height },
             texture: TextureId(texture.0),
             tint,
+            linear_filter,
         }),
     }
 }
@@ -1908,6 +1963,7 @@ fn append_nine_slice_image_commands(
     tint: Color,
     border: SkinImageBorder,
     source_size: Option<SkinImageSize>,
+    linear_filter: bool,
 ) {
     if rect.width <= 0.0 || rect.height <= 0.0 || uv.width <= 0.0 || uv.height <= 0.0 {
         return;
@@ -1919,6 +1975,7 @@ fn append_nine_slice_image_commands(
             uv: UvRect { x: uv.x, y: uv.y, width: uv.width, height: uv.height },
             texture: TextureId(texture.0),
             tint,
+            linear_filter,
         });
         return;
     };
@@ -1932,6 +1989,7 @@ fn append_nine_slice_image_commands(
             uv: UvRect { x: uv.x, y: uv.y, width: uv.width, height: uv.height },
             texture: TextureId(texture.0),
             tint,
+            linear_filter,
         });
         return;
     }
@@ -1975,6 +2033,7 @@ fn append_nine_slice_image_commands(
                     uv: piece_uv,
                     texture: TextureId(texture.0),
                     tint,
+                    linear_filter,
                 });
             }
         }
@@ -2192,11 +2251,15 @@ fn skin_slider_progress(slider_type: i32, state: SkinDrawState) -> Option<f32> {
     }
 }
 
-fn skin_timer_active(timer: Option<i32>, state: SkinDrawState) -> bool {
+fn skin_timer_elapsed_ms(timer: Option<i32>, state: SkinDrawState) -> Option<i32> {
     match timer {
-        None => true,
-        Some(143) => state.end_of_note,
-        _ => false,
+        None => Some(state.elapsed_ms),
+        Some(40 | 41) => Some(state.elapsed_ms),
+        Some(46) => state.judge_ms,
+        Some(50..=57) => state.bomb_ms[(timer.unwrap() - 50) as usize],
+        Some(100..=107) => state.keyon_ms[(timer.unwrap() - 100) as usize],
+        Some(143) => state.end_of_note.then_some(state.elapsed_ms),
+        _ => None,
     }
 }
 
@@ -2901,6 +2964,7 @@ mod tests {
                     scale: SkinImageScale::Stretch,
                     border: None,
                     source_size: None,
+                    linear_filter: false,
                 },
             ],
         );
@@ -2929,6 +2993,7 @@ mod tests {
                     unit: SkinImageBorderUnit::Normalized,
                 }),
                 source_size: None,
+                linear_filter: false,
             }],
         );
 
@@ -2979,6 +3044,7 @@ mod tests {
                     unit: SkinImageBorderUnit::Pixels,
                 }),
                 source_size: Some(SkinImageSize { width: 12.0, height: 48.0 }),
+                linear_filter: false,
             }],
         );
 
@@ -4241,6 +4307,191 @@ mod tests {
         assert!(document.image_map().contains_key("note-w"));
         assert_eq!(document.note.as_ref().unwrap().id, "notes");
         assert!(!document.destination.is_empty());
+    }
+
+    #[test]
+    fn stretch_applied_to_judge_destination() {
+        // stretch=9 (resize_about_center) should resize the image to its source dimensions
+        // centered on the destination rect.
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "effect.png" }],
+                "image": [{ "id": "judge-pg", "src": 1, "x": 0, "y": 0, "w": 50, "h": 20 }],
+                "judge": [{
+                    "id": "judge-1p",
+                    "index": 0,
+                    "images": [
+                        { "id": "judge-pg", "stretch": 9, "dst": [
+                            { "time": 0, "x": 0, "y": 0, "w": 100, "h": 100 }
+                        ]}
+                    ]
+                }]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "1".to_string(),
+            SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(5),
+                source_size: SkinImageSize { width: 50.0, height: 20.0 },
+            },
+        )]);
+
+        let items = document.judge_render_items("PGREAT", 0, 0, &sources).unwrap();
+
+        // stretch=9: resize_about_center places the 50x20 source centered in 100x100 destination.
+        // In normalized coords (canvas 100x100):
+        //   dest rect: x=0/100=0, y=0/100=0, w=100/100=1, h=100/100=1
+        //   source size: 50x20 pixels → w=50/100=0.5, h=20/100=0.2
+        //   centered: x = 0 + (1 - 0.5)*0.5 = 0.25, y = 0 + (1 - 0.2)*0.5 = 0.4
+        assert!(matches!(
+            items[0],
+            SkinRenderItem::Image {
+                rect: Rect { x, y, width, height },
+                ..
+            } if approx_eq(x, 0.25)
+                && approx_eq(y, 0.4)
+                && approx_eq(width, 0.5)
+                && approx_eq(height, 0.2)
+        ));
+    }
+
+    #[test]
+    fn filter_nonzero_destination_returns_linear_filter_item() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "system.png" }],
+                "image": [{ "id": "panel", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10 }],
+                "destination": [
+                    { "id": "panel", "filter": 1, "dst": [
+                        { "time": 0, "x": 0, "y": 0, "w": 10, "h": 10 }
+                    ]}
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "1".to_string(),
+            SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(3),
+                source_size: SkinImageSize { width: 10.0, height: 10.0 },
+            },
+        )]);
+
+        let items = document.static_image_render_items(&sources, SkinDrawState::default());
+
+        assert_eq!(items.len(), 1);
+        assert!(matches!(items[0], SkinRenderItem::Image { linear_filter: true, .. }));
+    }
+
+    #[test]
+    fn bomb_timer_activates_only_for_active_lane() {
+        // timer=51 maps to bomb Key1 (TIMER_BOMB_1P_KEY1 = 50 + Lane::Key1.index() = 51)
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "bomb.png" }],
+                "image": [{ "id": "bomb-img", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10 }],
+                "destination": [
+                    { "id": "bomb-img", "timer": 51, "dst": [
+                        { "time": 0, "x": 10, "y": 10, "w": 10, "h": 10 }
+                    ]}
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "1".to_string(),
+            SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(9),
+                source_size: SkinImageSize { width: 10.0, height: 10.0 },
+            },
+        )]);
+
+        // All lanes inactive → no items
+        let inactive_state = SkinDrawState::default();
+        let items_inactive = document.static_image_render_items(&sources, inactive_state);
+        assert_eq!(items_inactive.len(), 0, "should be empty when all bomb timers are None");
+
+        // Key1 (index=1) active → items returned
+        let mut active_bomb_ms = [None; 8];
+        active_bomb_ms[1] = Some(0); // Lane::Key1.index() = 1
+        let active_state = SkinDrawState { bomb_ms: active_bomb_ms, ..SkinDrawState::default() };
+        let items_active = document.static_image_render_items(&sources, active_state);
+        assert_eq!(items_active.len(), 1, "should have one item when Key1 bomb timer is active");
+    }
+
+    #[test]
+    fn judge_timer_elapsed_ms_selects_animation_frame() {
+        // timer=46 → TIMER_JUDGE_1P; two dst frames at time=0 and time=200
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "system.png" }],
+                "image": [{ "id": "panel", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10 }],
+                "destination": [
+                    { "id": "panel", "timer": 46, "dst": [
+                        { "time": 0,   "x": 0,   "y": 0, "w": 10, "h": 10 },
+                        { "time": 200, "x": 50,  "y": 0, "w": 10, "h": 10 }
+                    ]}
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "1".to_string(),
+            SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(2),
+                source_size: SkinImageSize { width: 10.0, height: 10.0 },
+            },
+        )]);
+
+        // judge_ms=Some(100) → between frame 0 and frame 200 → x should be 0.25 (interpolated)
+        let state_early = SkinDrawState { judge_ms: Some(100), ..SkinDrawState::default() };
+        let items_early = document.static_image_render_items(&sources, state_early);
+        assert_eq!(items_early.len(), 1);
+        assert!(
+            matches!(items_early[0], SkinRenderItem::Image { rect: Rect { x, .. }, .. }
+            if approx_eq(x, 0.25)),
+            "at judge_ms=100, x should interpolate to 0.25 (halfway between 0 and 0.5)"
+        );
+
+        // judge_ms=Some(300) → past last frame → last frame x=0.5
+        let state_late = SkinDrawState { judge_ms: Some(300), ..SkinDrawState::default() };
+        let items_late = document.static_image_render_items(&sources, state_late);
+        assert_eq!(items_late.len(), 1);
+        assert!(
+            matches!(items_late[0], SkinRenderItem::Image { rect: Rect { x, .. }, .. }
+            if approx_eq(x, 0.5)),
+            "at judge_ms=300 (past last frame), x should be at last frame x=0.5"
+        );
+
+        // judge_ms=None → no items (timer inactive)
+        let state_inactive = SkinDrawState { judge_ms: None, ..SkinDrawState::default() };
+        let items_inactive = document.static_image_render_items(&sources, state_inactive);
+        assert_eq!(items_inactive.len(), 0, "judge_ms=None should produce no items");
     }
 
     fn approx_eq(actual: f32, expected: f32) -> bool {

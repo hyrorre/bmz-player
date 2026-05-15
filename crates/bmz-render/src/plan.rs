@@ -33,7 +33,7 @@ pub struct DrawPlan {
 #[derive(Debug, Clone, PartialEq)]
 pub enum DrawCommand {
     Rect { rect: Rect, color: Color },
-    Image { rect: Rect, uv: UvRect, texture: TextureId, tint: Color },
+    Image { rect: Rect, uv: UvRect, texture: TextureId, tint: Color, linear_filter: bool },
     Text { origin: Point, text: String, style: TextStyle },
 }
 
@@ -388,6 +388,26 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
     let text = TextRenderer;
     let skin_manifest = skin.manifest();
     let board = Rect { x: 0.18, y: 0.05, width: 0.64, height: 0.9 };
+    let mut bomb_ms: [Option<i32>; 8] = [None; 8];
+    for j in &snapshot.recent_judgements {
+        let idx = j.lane.index();
+        let elapsed =
+            ((snapshot.time.0 - j.time.0) / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+        bomb_ms[idx] = Some(elapsed);
+    }
+
+    let mut keyon_ms: [Option<i32>; 8] = [None; 8];
+    for input in &snapshot.recent_inputs {
+        let idx = input.lane.index();
+        let elapsed = ((snapshot.time.0 - input.time.0) / 1_000)
+            .clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+        keyon_ms[idx] = Some(elapsed);
+    }
+
+    let judge_ms = snapshot.recent_judgements.last().map(|j| {
+        ((snapshot.time.0 - j.time.0) / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32
+    });
+
     append_skin_render_items(
         &mut commands,
         &skin.static_document_items_for_state_and_text(
@@ -403,6 +423,9 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
                 gauge: snapshot.gauge,
                 play_progress: play_progress(snapshot),
                 end_of_note: end_of_note(snapshot),
+                bomb_ms,
+                keyon_ms,
+                judge_ms,
             },
             SkinTextState {
                 title: &snapshot.title,
@@ -611,6 +634,7 @@ fn push_judge_line(skin_manifest: &SkinManifest, commands: &mut Vec<DrawCommand>
             scale: image.scale,
             border: image.border,
             source_size: image.source_size,
+            linear_filter: false,
         }],
     );
 }
@@ -655,6 +679,7 @@ fn push_receptors(
                 scale: receptor.scale,
                 border: receptor.border,
                 source_size: receptor.source_size,
+                linear_filter: false,
             }],
         );
     }
@@ -688,6 +713,7 @@ fn push_gauge(
                 scale: frame_image.scale,
                 border: frame_image.border,
                 source_size: frame_image.source_size,
+                linear_filter: false,
             },
             SkinRenderItem::Image {
                 texture: SkinTextureId(fill_image.texture),
@@ -703,6 +729,7 @@ fn push_gauge(
                 scale: fill_image.scale,
                 border: fill_image.border,
                 source_size: fill_image.source_size,
+                linear_filter: false,
             },
         ],
     );
@@ -722,6 +749,7 @@ fn push_combo_panel(skin_manifest: &SkinManifest, commands: &mut Vec<DrawCommand
             scale: image.scale,
             border: image.border,
             source_size: image.source_size,
+            linear_filter: false,
         }],
     );
 }
@@ -838,6 +866,7 @@ fn push_default_note_skin(
             scale: note.scale,
             border: note.border,
             source_size: note.source_size,
+            linear_filter: false,
         }],
     );
 }
