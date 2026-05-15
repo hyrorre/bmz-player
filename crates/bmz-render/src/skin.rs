@@ -256,7 +256,7 @@ pub struct SkinValueDef {
     pub offset: Vec<SkinValueDef>,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
 pub struct SkinTextDef {
     #[serde(default, deserialize_with = "deserialize_skin_id")]
     pub id: String,
@@ -5152,6 +5152,65 @@ mod tests {
         // When no recent judgement, 525 returns None
         let no_judge = SkinDrawState { judge_timing_ms: None, ..state };
         assert_eq!(skin_state_number(525, no_judge), None);
+    }
+
+    #[test]
+    fn skin_state_text_maps_string_refs() {
+        let state = SkinTextState {
+            title: "My Title",
+            subtitle: "Sub",
+            artist: "Artist Name",
+            subartist: "Feat. X",
+            genre: "TRANCE",
+        };
+
+        let make_text = |ref_id: i32| SkinTextDef {
+            id: "t".to_string(),
+            ref_id,
+            constant_text: String::new(),
+            ..SkinTextDef::default()
+        };
+
+        // STRING_TITLE (10)
+        assert_eq!(skin_state_text(&make_text(10), state), "My Title");
+        // STRING_SUBTITLE (11)
+        assert_eq!(skin_state_text(&make_text(11), state), "Sub");
+        // STRING_FULLTITLE (12) = title + " " + subtitle
+        assert_eq!(skin_state_text(&make_text(12), state), "My Title Sub");
+        // STRING_GENRE (13)
+        assert_eq!(skin_state_text(&make_text(13), state), "TRANCE");
+        // STRING_ARTIST (14)
+        assert_eq!(skin_state_text(&make_text(14), state), "Artist Name");
+        // STRING_SUBARTIST (15)
+        assert_eq!(skin_state_text(&make_text(15), state), "Feat. X");
+        // STRING_FULLARTIST (16) = artist + " " + subartist
+        assert_eq!(skin_state_text(&make_text(16), state), "Artist Name Feat. X");
+        // Unknown ref → empty
+        assert_eq!(skin_state_text(&make_text(99), state), "");
+    }
+
+    #[test]
+    fn skin_state_text_uses_constant_text_over_ref_id() {
+        let state = SkinTextState { title: "Ignored", ..SkinTextState::default() };
+        let text = SkinTextDef {
+            id: "t".to_string(),
+            ref_id: 10,
+            constant_text: "Hardcoded".to_string(),
+            ..SkinTextDef::default()
+        };
+        assert_eq!(skin_state_text(&text, state), "Hardcoded");
+    }
+
+    #[test]
+    fn full_label_handles_empty_components() {
+        // both empty
+        assert_eq!(full_label("", ""), "");
+        // only primary
+        assert_eq!(full_label("Title", ""), "Title");
+        // only secondary
+        assert_eq!(full_label("", "Sub"), "Sub");
+        // both present
+        assert_eq!(full_label("Title", "Sub"), "Title Sub");
     }
 
     fn mock_source(id: &str, width: f32, height: f32) -> HashMap<String, SkinDocumentTexture> {

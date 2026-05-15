@@ -282,6 +282,73 @@ mod tests {
         assert_eq!(snapshot.judge_counts.empty_poor, 1);
     }
 
+    #[test]
+    fn current_bpm_returns_initial_bpm_before_first_change() {
+        let chart = chart_with_bpm_changes();
+        // At time 0, before any BPM change
+        assert_eq!(current_bpm(&chart, TimeUs(0)), 120.0);
+    }
+
+    #[test]
+    fn current_bpm_returns_changed_bpm_after_event() {
+        let chart = chart_with_bpm_changes();
+        // BPM changes to 180 at t=500_000 µs
+        assert_eq!(current_bpm(&chart, TimeUs(500_000)), 180.0);
+        // BPM changes to 90 at t=1_000_000 µs
+        assert_eq!(current_bpm(&chart, TimeUs(1_000_000)), 90.0);
+        // After last change
+        assert_eq!(current_bpm(&chart, TimeUs(2_000_000)), 90.0);
+    }
+
+    #[test]
+    fn chart_min_bpm_returns_minimum_across_all_events() {
+        let chart = chart_with_bpm_changes();
+        // initial=120, events: 180, 90 → min=90
+        assert_eq!(chart_min_bpm(&chart), 90.0);
+    }
+
+    #[test]
+    fn chart_max_bpm_returns_maximum_across_all_events() {
+        let chart = chart_with_bpm_changes();
+        // initial=120, events: 180, 90 → max=180
+        assert_eq!(chart_max_bpm(&chart), 180.0);
+    }
+
+    #[test]
+    fn bpm_helpers_use_initial_bpm_when_no_timing_events() {
+        let chart = chart(); // no timing_events
+        assert_eq!(current_bpm(&chart, TimeUs(0)), 120.0);
+        assert_eq!(chart_min_bpm(&chart), 120.0);
+        assert_eq!(chart_max_bpm(&chart), 120.0);
+    }
+
+    fn chart_with_bpm_changes() -> PlayableChart {
+        use bmz_chart::model::{TimingEvent, TimingEventKind};
+        PlayableChart {
+            identity: compute_chart_identity(b"bpm-test"),
+            metadata: ChartMetadata { initial_bpm: 120.0, ..Default::default() },
+            lane_notes: std::array::from_fn(|_| Vec::new()),
+            long_notes: Vec::new(),
+            bgm_events: Vec::new(),
+            timing_events: vec![
+                TimingEvent {
+                    tick: ChartTick(0),
+                    time: TimeUs(500_000),
+                    kind: TimingEventKind::BpmChange { bpm: 180.0 },
+                },
+                TimingEvent {
+                    tick: ChartTick(0),
+                    time: TimeUs(1_000_000),
+                    kind: TimingEventKind::BpmChange { bpm: 90.0 },
+                },
+            ],
+            bar_lines: Vec::new(),
+            sounds: Vec::new(),
+            total_notes: 0,
+            end_time: TimeUs(2_000_000),
+        }
+    }
+
     fn chart() -> PlayableChart {
         let note = NoteEvent {
             id: NoteId(1),
