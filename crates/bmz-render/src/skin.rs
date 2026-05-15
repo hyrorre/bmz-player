@@ -898,13 +898,13 @@ impl SkinObject {
                     SkinSource::Text { slot, style } => SkinRenderItem::Text {
                         origin: Point { x: resolved.rect.x, y: resolved.rect.y },
                         text: text(*slot),
-                        style: style.with_alpha(resolved.alpha),
+                        style: style.clone().with_alpha(resolved.alpha),
                         blend: resolved.blend,
                     },
                     SkinSource::Number { slot, style, digits } => SkinRenderItem::Text {
                         origin: Point { x: resolved.rect.x, y: resolved.rect.y },
                         text: format_number(number(*slot), *digits),
-                        style: style.with_alpha(resolved.alpha),
+                        style: style.clone().with_alpha(resolved.alpha),
                         blend: resolved.blend,
                     },
                     SkinSource::Rect { color } => SkinRenderItem::Rect {
@@ -1312,6 +1312,7 @@ impl SkinDocument {
             },
             text: content,
             style: TextStyle {
+                font_id: (!text.font.is_empty()).then(|| text.font.clone()),
                 size: frame.h.max(text.size).max(1) as f32 / self.h.max(1) as f32,
                 color: Color::rgba(
                     frame.r as f32 / 255.0,
@@ -1860,7 +1861,7 @@ pub fn append_skin_render_items(commands: &mut Vec<DrawCommand>, items: &[SkinRe
                     commands.push(DrawCommand::Text {
                         origin: *origin,
                         text: text.clone(),
-                        style: *style,
+                        style: style.clone(),
                     });
                 }
             }
@@ -2529,6 +2530,7 @@ mod tests {
             source: SkinSource::Number {
                 slot: NumberSlot::ExScore,
                 style: TextStyle {
+                    font_id: None,
                     size: 0.04,
                     color: Color::rgb(1.0, 1.0, 1.0),
                     layer: TextLayer::Skin,
@@ -2595,6 +2597,7 @@ mod tests {
                 source: SkinSource::Text {
                     slot: TextSlot::Judge,
                     style: TextStyle {
+                        font_id: None,
                         size: 0.04,
                         color: Color::rgb(1.0, 1.0, 1.0),
                         layer: TextLayer::Skin,
@@ -3611,7 +3614,7 @@ mod tests {
                 "w": 100,
                 "h": 100,
                 "text": [
-                    { "id": "title", "size": 8, "align": 1, "wrapping": true, "outlineColor": "ff000080", "outlineWidth": 1, "shadowColor": "00000080", "shadowOffsetX": 2, "shadowOffsetY": 3, "ref": 12 },
+                    { "id": "title", "font": "main", "size": 8, "align": 1, "wrapping": true, "outlineColor": "ff000080", "outlineWidth": 1, "shadowColor": "00000080", "shadowOffsetX": 2, "shadowOffsetY": 3, "ref": 12 },
                     { "id": "genre", "size": 6, "align": 2, "overflow": 1, "ref": 13 },
                     { "id": "constant", "size": 5, "constantText": "READY" }
                 ],
@@ -3645,6 +3648,7 @@ mod tests {
             } if approx_eq(*x, 0.1)
                 && approx_eq(*y, 0.2)
                 && text == "Song Another"
+                && style.font_id.as_deref() == Some("main")
                 && approx_eq(style.size, 0.1)
                 && style.align == TextAlign::Center
                 && style.wrapping

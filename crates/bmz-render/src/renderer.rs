@@ -22,6 +22,7 @@ pub struct Renderer {
     last_plan: Option<DrawPlan>,
     skin_context: SkinContext,
     pending_textures: Vec<PendingTexture>,
+    fonts: HashMap<String, FontArc>,
     gpu: Option<WgpuRenderer>,
 }
 
@@ -142,6 +143,16 @@ impl Renderer {
         self.upsert_image_asset(id, &asset)
     }
 
+    pub fn load_font(&mut self, id: impl Into<String>, path: &std::path::Path) -> Result<()> {
+        let id = id.into();
+        let bytes = std::fs::read(path)
+            .with_context(|| format!("failed to read font: {}", path.display()))?;
+        let font = FontArc::try_from_vec(bytes)
+            .map_err(|error| anyhow!("failed to parse font {}: {error}", path.display()))?;
+        self.fonts.insert(id, font);
+        Ok(())
+    }
+
     pub fn set_skin_context(&mut self, skin_context: SkinContext) {
         self.skin_context = skin_context;
     }
@@ -177,7 +188,7 @@ impl Renderer {
             return Ok(RenderSurfaceStatus::SkippedNoSurface);
         };
 
-        gpu.render_plan(plan)
+        gpu.render_plan(plan, &self.fonts)
     }
 
     pub fn last_scene(&self) -> Option<&AppSceneSnapshot> {
@@ -271,7 +282,11 @@ impl WgpuRenderer {
         self.configure_surface();
     }
 
-    fn render_plan(&mut self, plan: &DrawPlan) -> Result<RenderSurfaceStatus> {
+    fn render_plan(
+        &mut self,
+        plan: &DrawPlan,
+        fonts: &HashMap<String, FontArc>,
+    ) -> Result<RenderSurfaceStatus> {
         if !(SurfaceSize { width: self.config.width, height: self.config.height }).is_drawable() {
             return Ok(RenderSurfaceStatus::SkippedZeroSize);
         }
@@ -279,7 +294,7 @@ impl WgpuRenderer {
         let rects = encode_rects(plan);
         let image_batches = encode_image_batches(plan);
         let images_len = image_batches.iter().map(|batch| batch.instances.len()).sum();
-        let text_frame = self.build_text_frame(plan);
+        let text_frame = self.build_text_frame(plan, fonts);
         self.ensure_rect_buffer(rects.len());
         if let Some(buffer) = &self.rect_buffer {
             if !rects.is_empty() {
@@ -407,13 +422,14 @@ impl WgpuRenderer {
         self.surface.configure(&self.device, &self.config);
     }
 
-    fn build_text_frame(&self, plan: &DrawPlan) -> TextFrame {
+    fn build_text_frame(&self, plan: &DrawPlan, fonts: &HashMap<String, FontArc>) -> TextFrame {
         let Some(font) = &self.font else {
             return TextFrame::default();
         };
         build_text_frame(
             plan,
             font,
+            fonts,
             SurfaceSize { width: self.config.width, height: self.config.height },
         )
     }
@@ -613,7 +629,12 @@ fn encode_image_batches(plan: &DrawPlan) -> Vec<ImageBatch> {
     batches
 }
 
-fn build_text_frame(plan: &DrawPlan, font: &FontArc, surface: SurfaceSize) -> TextFrame {
+fn build_text_frame(
+    plan: &DrawPlan,
+    default_font: &FontArc,
+    fonts: &HashMap<String, FontArc>,
+    surface: SurfaceSize,
+) -> TextFrame {
     if !surface.is_drawable() {
         return TextFrame::default();
     }
@@ -623,7 +644,9 @@ fn build_text_frame(plan: &DrawPlan, font: &FontArc, surface: SurfaceSize) -> Te
         let DrawCommand::Text { origin, text, style } = command else {
             continue;
         };
-        builder.push_text(origin, text, *style, font, surface);
+        let font =
+            style.font_id.as_ref().and_then(|font_id| fonts.get(font_id)).unwrap_or(default_font);
+        builder.push_text(origin, text, style.clone(), font, surface);
     }
     builder.finish()
 }
@@ -662,7 +685,7 @@ impl TextAtlasBuilder {
         surface: SurfaceSize,
     ) {
         if let Some(shadow) = style.shadow.filter(|shadow| shadow.color.a > 0.0) {
-            let mut shadow_style = style;
+            let mut shadow_style = style.clone();
             shadow_style.color = shadow.color;
             shadow_style.outline = None;
             shadow_style.shadow = None;
@@ -671,7 +694,7 @@ impl TextAtlasBuilder {
             self.push_text(&shadow_origin, text, shadow_style, font, surface);
         }
         if let Some(outline) = style.outline.filter(|outline| outline.color.a > 0.0) {
-            let mut outline_style = style;
+            let mut outline_style = style.clone();
             outline_style.color = outline.color;
             outline_style.outline = None;
             outline_style.shadow = None;
@@ -688,7 +711,7 @@ impl TextAtlasBuilder {
                 (outline_x, outline_y),
             ] {
                 let outline_origin = Point { x: origin.x + offset_x, y: origin.y + offset_y };
-                self.push_text(&outline_origin, text, outline_style, font, surface);
+                self.push_text(&outline_origin, text, outline_style.clone(), font, surface);
             }
         }
 
@@ -709,7 +732,14 @@ impl TextAtlasBuilder {
                 let line_width = text_width_px(line, font, &scaled_font);
                 let baseline_y = first_baseline_y + line_height * index as f32;
                 self.push_text_line(
-                    origin_x, baseline_y, line, line_width, scale, style, font, surface,
+                    origin_x,
+                    baseline_y,
+                    line,
+                    line_width,
+                    scale,
+                    style.clone(),
+                    font,
+                    surface,
                 );
             }
             return;
@@ -1431,6 +1461,7 @@ mod tests {
                 origin: Point { x: 0.1, y: 0.1 },
                 text: "A".to_string(),
                 style: TextStyle {
+                    font_id: None,
                     size: 0.1,
                     color: Color::rgb(1.0, 1.0, 1.0),
                     layer: crate::plan::TextLayer::Skin,
@@ -1446,7 +1477,7 @@ mod tests {
                 },
             }],
         };
-        let frame = build_text_frame(&plan, &font, surface);
+        let frame = build_text_frame(&plan, &font, &HashMap::new(), surface);
 
         assert_eq!(frame.instances.len(), TEXT_INSTANCE_BYTES * 2);
     }
@@ -1461,6 +1492,7 @@ mod tests {
                 origin: Point { x: 0.1, y: 0.1 },
                 text: "A".to_string(),
                 style: TextStyle {
+                    font_id: None,
                     size: 0.1,
                     color: Color::rgb(1.0, 1.0, 1.0),
                     layer: crate::plan::TextLayer::Skin,
@@ -1476,7 +1508,7 @@ mod tests {
                 },
             }],
         };
-        let frame = build_text_frame(&plan, &font, surface);
+        let frame = build_text_frame(&plan, &font, &HashMap::new(), surface);
 
         assert_eq!(frame.instances.len(), TEXT_INSTANCE_BYTES * 9);
     }

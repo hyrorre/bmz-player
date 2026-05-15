@@ -62,8 +62,9 @@ pub struct UvRect {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TextureId(pub u32);
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TextStyle {
+    pub font_id: Option<String>,
     pub size: f32,
     pub color: Color,
     pub layer: TextLayer,
@@ -849,6 +850,7 @@ fn default_play_skin(snapshot: &RenderSnapshot) -> SkinDefinition {
             source: SkinSource::Number {
                 slot: NumberSlot::Combo,
                 style: TextStyle {
+                    font_id: None,
                     size: 0.05,
                     color: Color::rgb(0.94, 0.98, 1.0),
                     layer: TextLayer::Skin,
@@ -871,6 +873,7 @@ fn default_play_skin(snapshot: &RenderSnapshot) -> SkinDefinition {
             source: SkinSource::Text {
                 slot: TextSlot::Judge,
                 style: TextStyle {
+                    font_id: None,
                     size: 0.03,
                     color: Color::rgb(0.96, 0.92, 0.54),
                     layer: TextLayer::Skin,

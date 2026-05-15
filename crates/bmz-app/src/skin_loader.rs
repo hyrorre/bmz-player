@@ -60,6 +60,35 @@ pub fn apply_beatoraja_json_skin(renderer: &mut Renderer, skin_path: &Path) -> R
     let mut document_textures = Vec::new();
     let mut next_texture_id = 10_000;
 
+    for font in &document.font {
+        if font.id.is_empty() || font.path.is_empty() {
+            continue;
+        }
+        let font_path = skin_root.join(font.path.replace('\\', "/"));
+        if !is_supported_font_path(&font_path) {
+            tracing::debug!(
+                font_id = %font.id,
+                path = %font_path.display(),
+                "skipping unsupported beatoraja skin font"
+            );
+            continue;
+        }
+        if let Err(error) = renderer.load_font(font.id.clone(), &font_path) {
+            tracing::warn!(
+                font_id = %font.id,
+                path = %font_path.display(),
+                %error,
+                "failed to load beatoraja skin font"
+            );
+        } else {
+            tracing::info!(
+                font_id = %font.id,
+                path = %font_path.display(),
+                "loaded beatoraja skin font"
+            );
+        }
+    }
+
     for source in &document.source {
         let Some(source_path) = resolve_json_skin_source_path(skin_root, &source.path, &document)
         else {
@@ -117,6 +146,16 @@ pub fn apply_beatoraja_json_skin(renderer: &mut Renderer, skin_path: &Path) -> R
         document_textures,
     ));
     Ok(())
+}
+
+fn is_supported_font_path(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .map(|extension| extension.to_ascii_lowercase())
+            .as_deref(),
+        Some("ttf" | "otf" | "ttc")
+    )
 }
 
 fn resolve_json_skin_source_path(
@@ -236,6 +275,15 @@ mod tests {
         let resolved = resolve_json_skin_source_path(&root, "parts/*.png", &document).unwrap();
 
         assert_eq!(resolved.file_name().and_then(|name| name.to_str()), Some("a.png"));
+    }
+
+    #[test]
+    fn supported_font_paths_match_vector_font_files() {
+        assert!(is_supported_font_path(Path::new("font.ttf")));
+        assert!(is_supported_font_path(Path::new("font.OTF")));
+        assert!(is_supported_font_path(Path::new("font.ttc")));
+        assert!(!is_supported_font_path(Path::new("font.fnt")));
+        assert!(!is_supported_font_path(Path::new("font.png")));
     }
 
     fn unique_test_dir(name: &str) -> PathBuf {
