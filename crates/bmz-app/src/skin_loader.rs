@@ -73,7 +73,12 @@ pub fn apply_beatoraja_json_skin(renderer: &mut Renderer, skin_path: &Path) -> R
             );
             continue;
         }
-        if let Err(error) = renderer.load_font(font.id.clone(), &font_path) {
+        let result = if is_bitmap_font_path(&font_path) {
+            renderer.load_bitmap_font(font.id.clone(), &font_path)
+        } else {
+            renderer.load_font(font.id.clone(), &font_path)
+        };
+        if let Err(error) = result {
             tracing::warn!(
                 font_id = %font.id,
                 path = %font_path.display(),
@@ -154,7 +159,17 @@ fn is_supported_font_path(path: &Path) -> bool {
             .and_then(|extension| extension.to_str())
             .map(|extension| extension.to_ascii_lowercase())
             .as_deref(),
-        Some("ttf" | "otf" | "ttc")
+        Some("ttf" | "otf" | "ttc" | "fnt")
+    )
+}
+
+fn is_bitmap_font_path(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .map(|extension| extension.to_ascii_lowercase())
+            .as_deref(),
+        Some("fnt")
     )
 }
 
@@ -278,12 +293,14 @@ mod tests {
     }
 
     #[test]
-    fn supported_font_paths_match_vector_font_files() {
+    fn supported_font_paths_include_vector_and_bitmap_fonts() {
         assert!(is_supported_font_path(Path::new("font.ttf")));
         assert!(is_supported_font_path(Path::new("font.OTF")));
         assert!(is_supported_font_path(Path::new("font.ttc")));
-        assert!(!is_supported_font_path(Path::new("font.fnt")));
+        assert!(is_supported_font_path(Path::new("font.fnt")));
         assert!(!is_supported_font_path(Path::new("font.png")));
+        assert!(is_bitmap_font_path(Path::new("font.fnt")));
+        assert!(!is_bitmap_font_path(Path::new("font.ttf")));
     }
 
     fn unique_test_dir(name: &str) -> PathBuf {

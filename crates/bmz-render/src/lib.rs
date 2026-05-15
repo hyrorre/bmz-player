@@ -1,4 +1,5 @@
 pub mod assets;
+pub mod bitmap_font;
 pub mod lane;
 pub mod plan;
 pub mod renderer;

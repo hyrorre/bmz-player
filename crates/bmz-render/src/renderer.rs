@@ -10,6 +10,7 @@ use ab_glyph::{Font, FontArc, Glyph, PxScale, ScaleFont, point};
 use anyhow::{Context, Result, anyhow};
 
 use crate::assets::{RgbaImageAsset, load_png_rgba};
+use crate::bitmap_font::{BitmapFont, load_bitmap_font};
 use crate::plan::{
     Color, DrawCommand, DrawPlan, Point, TextAlign, TextOverflow, TextStyle, TextureId,
 };
@@ -23,6 +24,7 @@ pub struct Renderer {
     skin_context: SkinContext,
     pending_textures: Vec<PendingTexture>,
     fonts: HashMap<String, FontArc>,
+    bitmap_fonts: HashMap<String, BitmapFont>,
     gpu: Option<WgpuRenderer>,
 }
 
@@ -153,6 +155,16 @@ impl Renderer {
         Ok(())
     }
 
+    pub fn load_bitmap_font(
+        &mut self,
+        id: impl Into<String>,
+        path: &std::path::Path,
+    ) -> Result<()> {
+        let font = load_bitmap_font(path)?;
+        self.bitmap_fonts.insert(id.into(), font);
+        Ok(())
+    }
+
     pub fn set_skin_context(&mut self, skin_context: SkinContext) {
         self.skin_context = skin_context;
     }
@@ -188,7 +200,7 @@ impl Renderer {
             return Ok(RenderSurfaceStatus::SkippedNoSurface);
         };
 
-        gpu.render_plan(plan, &self.fonts)
+        gpu.render_plan(plan, &self.fonts, &self.bitmap_fonts)
     }
 
     pub fn last_scene(&self) -> Option<&AppSceneSnapshot> {
@@ -205,6 +217,8 @@ impl fmt::Debug for Renderer {
         f.debug_struct("Renderer")
             .field("last_scene", &self.last_scene)
             .field("last_plan", &self.last_plan)
+            .field("font_count", &self.fonts.len())
+            .field("bitmap_font_count", &self.bitmap_fonts.len())
             .field("gpu_attached", &self.gpu.is_some())
             .finish()
     }
@@ -286,6 +300,7 @@ impl WgpuRenderer {
         &mut self,
         plan: &DrawPlan,
         fonts: &HashMap<String, FontArc>,
+        bitmap_fonts: &HashMap<String, BitmapFont>,
     ) -> Result<RenderSurfaceStatus> {
         if !(SurfaceSize { width: self.config.width, height: self.config.height }).is_drawable() {
             return Ok(RenderSurfaceStatus::SkippedZeroSize);
@@ -294,7 +309,7 @@ impl WgpuRenderer {
         let rects = encode_rects(plan);
         let image_batches = encode_image_batches(plan);
         let images_len = image_batches.iter().map(|batch| batch.instances.len()).sum();
-        let text_frame = self.build_text_frame(plan, fonts);
+        let text_frame = self.build_text_frame(plan, fonts, bitmap_fonts);
         self.ensure_rect_buffer(rects.len());
         if let Some(buffer) = &self.rect_buffer
             && !rects.is_empty()
@@ -419,7 +434,12 @@ impl WgpuRenderer {
         self.surface.configure(&self.device, &self.config);
     }
 
-    fn build_text_frame(&self, plan: &DrawPlan, fonts: &HashMap<String, FontArc>) -> TextFrame {
+    fn build_text_frame(
+        &self,
+        plan: &DrawPlan,
+        fonts: &HashMap<String, FontArc>,
+        bitmap_fonts: &HashMap<String, BitmapFont>,
+    ) -> TextFrame {
         let Some(font) = &self.font else {
             return TextFrame::default();
         };
@@ -427,6 +447,7 @@ impl WgpuRenderer {
             plan,
             font,
             fonts,
+            bitmap_fonts,
             SurfaceSize { width: self.config.width, height: self.config.height },
         )
     }
@@ -630,6 +651,7 @@ fn build_text_frame(
     plan: &DrawPlan,
     default_font: &FontArc,
     fonts: &HashMap<String, FontArc>,
+    bitmap_fonts: &HashMap<String, BitmapFont>,
     surface: SurfaceSize,
 ) -> TextFrame {
     if !surface.is_drawable() {
@@ -641,6 +663,12 @@ fn build_text_frame(
         let DrawCommand::Text { origin, text, style } = command else {
             continue;
         };
+        if let Some(bitmap_font) =
+            style.font_id.as_ref().and_then(|font_id| bitmap_fonts.get(font_id))
+        {
+            builder.push_bitmap_text(origin, text, style.clone(), bitmap_font, surface);
+            continue;
+        }
         let font =
             style.font_id.as_ref().and_then(|font_id| fonts.get(font_id)).unwrap_or(default_font);
         builder.push_text(origin, text, style.clone(), font, surface);
@@ -671,6 +699,138 @@ struct TextQuad {
 impl TextAtlasBuilder {
     fn new(width: u32) -> Self {
         Self { width, pen_x: 0, pen_y: 0, row_height: 0, pixels: Vec::new(), quads: Vec::new() }
+    }
+
+    fn push_bitmap_text(
+        &mut self,
+        origin: &Point,
+        text: &str,
+        style: TextStyle,
+        font: &BitmapFont,
+        surface: SurfaceSize,
+    ) {
+        if let Some(shadow) = style.shadow.filter(|shadow| shadow.color.a > 0.0) {
+            let mut shadow_style = style.clone();
+            shadow_style.color = shadow.color;
+            shadow_style.outline = None;
+            shadow_style.shadow = None;
+            let shadow_origin =
+                Point { x: origin.x + shadow.offset.x, y: origin.y + shadow.offset.y };
+            self.push_bitmap_text(&shadow_origin, text, shadow_style, font, surface);
+        }
+        if let Some(outline) = style.outline.filter(|outline| outline.color.a > 0.0) {
+            let mut outline_style = style.clone();
+            outline_style.color = outline.color;
+            outline_style.outline = None;
+            outline_style.shadow = None;
+            let outline_y = outline.width;
+            let outline_x = outline.width * surface.height as f32 / surface.width as f32;
+            for (offset_x, offset_y) in [
+                (-outline_x, -outline_y),
+                (0.0, -outline_y),
+                (outline_x, -outline_y),
+                (-outline_x, 0.0),
+                (outline_x, 0.0),
+                (-outline_x, outline_y),
+                (0.0, outline_y),
+                (outline_x, outline_y),
+            ] {
+                let outline_origin = Point { x: origin.x + offset_x, y: origin.y + offset_y };
+                self.push_bitmap_text(&outline_origin, text, outline_style.clone(), font, surface);
+            }
+        }
+
+        let mut scale =
+            (style.size * surface.height as f32 / font.line_height.max(1) as f32).max(0.01);
+        let mut text_width = bitmap_text_width_px(text, font, scale);
+        let max_width = style.max_width.max(0.0) * surface.width as f32;
+        let text = if max_width > 0.0 && text_width > max_width {
+            match style.overflow {
+                TextOverflow::Overflow => std::borrow::Cow::Borrowed(text),
+                TextOverflow::Shrink => {
+                    scale = (scale * max_width / text_width).max(0.01);
+                    std::borrow::Cow::Borrowed(text)
+                }
+                TextOverflow::Truncate => std::borrow::Cow::Owned(truncate_bitmap_text_to_width(
+                    text, font, max_width, scale,
+                )),
+            }
+        } else {
+            std::borrow::Cow::Borrowed(text)
+        };
+        text_width = bitmap_text_width_px(&text, font, scale);
+        let align_offset = match style.align {
+            TextAlign::Left => 0.0,
+            TextAlign::Center if max_width > 0.0 => (max_width - text_width) / 2.0,
+            TextAlign::Right if max_width > 0.0 => max_width - text_width,
+            _ => 0.0,
+        };
+        let mut cursor_x = origin.x * surface.width as f32 + align_offset.max(0.0);
+        let baseline_y = origin.y * surface.height as f32 + font.base as f32 * scale;
+
+        for ch in text.chars() {
+            let Some(glyph) = font.glyphs.get(&ch) else {
+                continue;
+            };
+            if glyph.width > 0 && glyph.height > 0 {
+                let Some(page) = font.pages.get(&glyph.page) else {
+                    cursor_x += glyph.xadvance as f32 * scale;
+                    continue;
+                };
+                let glyph_width = (glyph.width as f32 * scale).ceil().max(1.0) as u32;
+                let glyph_height = (glyph.height as f32 * scale).ceil().max(1.0) as u32;
+                let atlas_origin = self.reserve(glyph_width, glyph_height);
+                self.blit_bitmap_glyph(
+                    atlas_origin,
+                    glyph_width,
+                    glyph_height,
+                    *glyph,
+                    page,
+                    scale,
+                );
+                let x = (cursor_x + glyph.xoffset as f32 * scale) / surface.width as f32;
+                let y = (baseline_y - font.base as f32 * scale + glyph.yoffset as f32 * scale)
+                    / surface.height as f32;
+                self.quads.push(TextQuad {
+                    x,
+                    y,
+                    width: glyph_width as f32 / surface.width as f32,
+                    height: glyph_height as f32 / surface.height as f32,
+                    atlas_origin,
+                    glyph_width,
+                    glyph_height,
+                    color: style.color,
+                });
+            }
+            cursor_x += glyph.xadvance as f32 * scale;
+        }
+    }
+
+    fn blit_bitmap_glyph(
+        &mut self,
+        atlas_origin: (u32, u32),
+        glyph_width: u32,
+        glyph_height: u32,
+        glyph: crate::bitmap_font::BitmapFontGlyph,
+        page: &crate::bitmap_font::BitmapFontPage,
+        scale: f32,
+    ) {
+        for dst_y in 0..glyph_height {
+            for dst_x in 0..glyph_width {
+                let src_x = glyph.x + (dst_x as f32 / scale).floor() as u32;
+                let src_y = glyph.y + (dst_y as f32 / scale).floor() as u32;
+                if src_x >= page.image.width || src_y >= page.image.height {
+                    continue;
+                }
+                let src_index = ((src_y * page.image.width + src_x) * 4) as usize;
+                let alpha = page.image.pixels.get(src_index + 3).copied().unwrap_or(0);
+                let dst_index =
+                    ((atlas_origin.1 + dst_y) * self.width + atlas_origin.0 + dst_x) as usize;
+                if let Some(pixel) = self.pixels.get_mut(dst_index) {
+                    *pixel = (*pixel).max(alpha);
+                }
+            }
+        }
     }
 
     fn push_text(
@@ -859,6 +1019,35 @@ impl TextAtlasBuilder {
 
 fn text_width_px<F: Font>(text: &str, font: &FontArc, scaled_font: &impl ScaleFont<F>) -> f32 {
     text.chars().map(|ch| scaled_font.h_advance(font.glyph_id(ch))).sum()
+}
+
+fn bitmap_text_width_px(text: &str, font: &BitmapFont, scale: f32) -> f32 {
+    text.chars()
+        .filter_map(|ch| font.glyphs.get(&ch))
+        .map(|glyph| glyph.xadvance as f32 * scale)
+        .sum()
+}
+
+fn truncate_bitmap_text_to_width(
+    text: &str,
+    font: &BitmapFont,
+    max_width: f32,
+    scale: f32,
+) -> String {
+    let mut width = 0.0;
+    let mut result = String::new();
+    for ch in text.chars() {
+        let Some(glyph) = font.glyphs.get(&ch) else {
+            continue;
+        };
+        let advance = glyph.xadvance as f32 * scale;
+        if width + advance > max_width {
+            break;
+        }
+        width += advance;
+        result.push(ch);
+    }
+    result
 }
 
 fn wrap_text_to_width<F: Font>(
@@ -1474,7 +1663,7 @@ mod tests {
                 },
             }],
         };
-        let frame = build_text_frame(&plan, &font, &HashMap::new(), surface);
+        let frame = build_text_frame(&plan, &font, &HashMap::new(), &HashMap::new(), surface);
 
         assert_eq!(frame.instances.len(), TEXT_INSTANCE_BYTES * 2);
     }
@@ -1505,9 +1694,72 @@ mod tests {
                 },
             }],
         };
-        let frame = build_text_frame(&plan, &font, &HashMap::new(), surface);
+        let frame = build_text_frame(&plan, &font, &HashMap::new(), &HashMap::new(), surface);
 
         assert_eq!(frame.instances.len(), TEXT_INSTANCE_BYTES * 9);
+    }
+
+    #[test]
+    fn bitmap_font_text_uses_registered_font() {
+        let Some(default_font) = load_default_font() else { return };
+        let surface = SurfaceSize { width: 320, height: 240 };
+        let mut pages = HashMap::new();
+        pages.insert(
+            0,
+            crate::bitmap_font::BitmapFontPage {
+                id: 0,
+                path: std::path::PathBuf::from("page.png"),
+                image: crate::assets::RgbaImageAsset {
+                    width: 1,
+                    height: 1,
+                    pixels: vec![255, 255, 255, 255],
+                },
+            },
+        );
+        let mut glyphs = HashMap::new();
+        glyphs.insert(
+            'A',
+            crate::bitmap_font::BitmapFontGlyph {
+                id: 'A',
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+                xoffset: 0,
+                yoffset: 0,
+                xadvance: 1,
+                page: 0,
+            },
+        );
+        let mut bitmap_fonts = HashMap::new();
+        bitmap_fonts.insert(
+            "bitmap".to_string(),
+            BitmapFont { line_height: 10, base: 8, scale_width: 1, scale_height: 1, pages, glyphs },
+        );
+        let plan = DrawPlan {
+            clear: Color::rgb(0.0, 0.0, 0.0),
+            commands: vec![DrawCommand::Text {
+                origin: Point { x: 0.1, y: 0.1 },
+                text: "A".to_string(),
+                style: TextStyle {
+                    font_id: Some("bitmap".to_string()),
+                    size: 0.1,
+                    color: Color::rgb(1.0, 1.0, 1.0),
+                    layer: crate::plan::TextLayer::Skin,
+                    align: TextAlign::Left,
+                    max_width: 0.0,
+                    overflow: TextOverflow::Overflow,
+                    wrapping: false,
+                    outline: None,
+                    shadow: None,
+                },
+            }],
+        };
+
+        let frame = build_text_frame(&plan, &default_font, &HashMap::new(), &bitmap_fonts, surface);
+
+        assert_eq!(frame.instances.len(), TEXT_INSTANCE_BYTES);
+        assert!(frame.pixels.iter().any(|pixel| *pixel == 255));
     }
 
     #[test]
