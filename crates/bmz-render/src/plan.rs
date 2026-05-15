@@ -427,6 +427,10 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
                 keyon_ms,
                 judge_ms,
                 offset_lift_px: 0,
+                hispeed: snapshot.hispeed,
+                timeleft_ms: (snapshot.duration.0.saturating_sub(snapshot.time.0) / 1_000)
+                    .saturating_add(1_000)
+                    .clamp(0, i32::MAX as i64) as i32,
             },
             SkinTextState {
                 title: &snapshot.title,

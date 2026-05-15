@@ -687,6 +687,10 @@ pub struct SkinDrawState {
     pub judge_ms: Option<i32>,
     /// OFFSET_LIFT (id=3) の y 値 (skin canvas pixel 単位)。リフト量に応じて要素をシフトする。
     pub offset_lift_px: i32,
+    /// 現在のハイスピード倍率 (NUMBER_HISPEED=310, NUMBER_HISPEED_AFTERDOT=311 に使用)。
+    pub hispeed: f32,
+    /// 曲残り時間 ms (NUMBER_TIMELEFT_MINUTE=163, NUMBER_TIMELEFT_SECOND=164 に使用)。
+    pub timeleft_ms: i32,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -1288,12 +1292,25 @@ impl SkinDocument {
         if cell_width_px <= 0.0 || cell_height_px <= 0.0 {
             return Vec::new();
         }
-        let digits =
-            display_number_digits(number, value.digit.max(0) as usize, value.zeropadding != 0);
+        // `padding` は `zeropadding` の別名
+        let zero_pad = value.zeropadding != 0 || value.padding != 0;
+        let max_digits = value.digit.max(0) as usize;
+        let digits = display_number_digits(number, max_digits, zero_pad);
         let digit_width = frame.w as f32 / self.w.max(1) as f32;
         let digit_height = frame.h as f32 / self.h.max(1) as f32;
+        // 桁間スペース (space フィールド、px 単位)
+        let space_norm = value.space as f32 / self.w.max(1) as f32;
+        let digit_step = digit_width + space_norm;
         let origin_x = (base_frame.x + frame.x) as f32 / self.w.max(1) as f32;
         let origin_y = (base_frame.y + frame.y) as f32 / self.h.max(1) as f32;
+        // 先頭の空き桁数 (align のためのオフセット計算に使用)
+        let shiftbase = max_digits.saturating_sub(digits.len());
+        // align=0: 右寄せ (デフォルト), align=1: 左寄せ, align=2: 中央
+        let shift = match value.align {
+            1 => digit_step * shiftbase as f32,
+            2 => digit_step * shiftbase as f32 * 0.5,
+            _ => 0.0,
+        };
 
         digits
             .into_iter()
@@ -1304,7 +1321,7 @@ impl SkinDocument {
                 SkinRenderItem::Image {
                     texture: source.texture,
                     rect: Rect {
-                        x: origin_x + digit_width * index as f32,
+                        x: origin_x + digit_step * (shiftbase + index) as f32 - shift,
                         y: origin_y,
                         width: digit_width,
                         height: digit_height,
@@ -2243,6 +2260,10 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         104 => Some(state.combo as i64),
         107 => Some(state.gauge.floor() as i64),
         407 => Some(gauge_after_dot(state.gauge) as i64),
+        163 => Some((state.timeleft_ms / 60_000) as i64),
+        164 => Some(((state.timeleft_ms / 1_000) % 60) as i64),
+        310 => Some(state.hispeed.floor() as i64),
+        311 => Some(((state.hispeed * 100.0) as i64) % 100),
         420 => Some(state.judge_counts.empty_poor as i64),
         425 | 427 => Some((state.judge_counts.bad + state.judge_counts.poor) as i64),
         426 => Some(state.judge_counts.poor as i64),
@@ -4136,17 +4157,21 @@ mod tests {
             SkinDrawState { elapsed_ms: 0, combo: 45, ..SkinDrawState::default() },
         );
 
+        // combo=45 (2 digits), digit=3 → shiftbase=1, align=0 (right-aligned, default)
+        // digit_step = 5/100 = 0.05, origin_x = 10/100 = 0.1
+        // digit "4": x = 0.1 + 0.05 * (1+0) - 0 = 0.15
+        // digit "5": x = 0.1 + 0.05 * (1+1) - 0 = 0.20
         assert_eq!(items.len(), 2);
         assert!(matches!(items[0], SkinRenderItem::Image {
                 rect: Rect { x, y, .. },
                 uv: TextureRegion { x: u, .. },
                 ..
-            } if approx_eq(x, 0.1) && approx_eq(y, 0.2) && approx_eq(u, 0.4)));
+            } if approx_eq(x, 0.15) && approx_eq(y, 0.2) && approx_eq(u, 0.4)));
         assert!(matches!(items[1], SkinRenderItem::Image {
                 rect: Rect { x, .. },
                 uv: TextureRegion { x: u, .. },
                 ..
-            } if approx_eq(x, 0.15) && approx_eq(u, 0.5)));
+            } if approx_eq(x, 0.20) && approx_eq(u, 0.5)));
     }
 
     #[test]
@@ -4716,6 +4741,103 @@ mod tests {
             "expected y shifted by lift, got {}",
             rect_lifted.y
         );
+    }
+
+    #[test]
+    fn value_number_right_aligns_by_default() {
+        // 3-digit number "42" in a 5-digit area (align=0, default right-aligned)
+        // shiftbase=3 → first digit at position 3, second at 4
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "w": 1280, "h": 720,
+                "source": [{ "id": "src", "path": "num.png" }],
+                "value": [{ "id": "val", "src": "src", "x": 0, "y": 0, "w": 100, "h": 20, "divx": 10, "digit": 5, "ref": 104 }],
+                "destination": [
+                    { "id": "val", "dst": [{ "time": 0, "x": 0, "y": 0, "w": 20, "h": 20 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        let sources = mock_source("src", 100.0, 20.0);
+        // combo=42, total_notes=100 → ref 104 = combo = 42 → 2 digits
+        let state = SkinDrawState {
+            elapsed_ms: 0,
+            combo: 42,
+            total_notes: 100,
+            ..SkinDrawState::default()
+        };
+        let items = document.static_image_render_items(&sources, state);
+
+        // 2 digits in a 5-digit space, right-aligned: shiftbase=3
+        // digit_width = 20/1280, digit_step = digit_width (space=0)
+        // digit 0 ("4"): x = 0 + step * (3 + 0) - 0 = 3 * step
+        // digit 1 ("2"): x = 0 + step * (3 + 1) - 0 = 4 * step
+        assert_eq!(items.len(), 2);
+        let digit_width = 20.0 / 1280.0;
+        let SkinRenderItem::Image { rect: r0, .. } = &items[0] else { panic!() };
+        let SkinRenderItem::Image { rect: r1, .. } = &items[1] else { panic!() };
+        assert!(
+            approx_eq(r0.x, 3.0 * digit_width),
+            "first digit x={} expected {}",
+            r0.x,
+            3.0 * digit_width
+        );
+        assert!(
+            approx_eq(r1.x, 4.0 * digit_width),
+            "second digit x={} expected {}",
+            r1.x,
+            4.0 * digit_width
+        );
+    }
+
+    #[test]
+    fn value_number_left_aligns_when_align_1() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "w": 1280, "h": 720,
+                "source": [{ "id": "src", "path": "num.png" }],
+                "value": [{ "id": "val", "src": "src", "x": 0, "y": 0, "w": 100, "h": 20, "divx": 10, "digit": 5, "align": 1, "ref": 104 }],
+                "destination": [
+                    { "id": "val", "dst": [{ "time": 0, "x": 0, "y": 0, "w": 20, "h": 20 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        let sources = mock_source("src", 100.0, 20.0);
+        let state = SkinDrawState {
+            elapsed_ms: 0,
+            combo: 42,
+            total_notes: 100,
+            ..SkinDrawState::default()
+        };
+        let items = document.static_image_render_items(&sources, state);
+
+        // left-aligned: shift = 3 * step, digit 0 at 0, digit 1 at step
+        assert_eq!(items.len(), 2);
+        let digit_width = 20.0 / 1280.0;
+        let SkinRenderItem::Image { rect: r0, .. } = &items[0] else { panic!() };
+        let SkinRenderItem::Image { rect: r1, .. } = &items[1] else { panic!() };
+        assert!(approx_eq(r0.x, 0.0), "first digit x={} expected 0", r0.x);
+        assert!(approx_eq(r1.x, digit_width), "second digit x={} expected {}", r1.x, digit_width);
+    }
+
+    #[test]
+    fn skin_state_number_hispeed_and_timeleft() {
+        let state = SkinDrawState { hispeed: 1.5, timeleft_ms: 90_500, ..SkinDrawState::default() };
+        // NUMBER_HISPEED (310) = integer part = 1
+        assert_eq!(skin_state_number(310, state), Some(1));
+        // NUMBER_HISPEED_AFTERDOT (311) = decimal part × 100 = 50
+        assert_eq!(skin_state_number(311, state), Some(50));
+        // NUMBER_TIMELEFT_MINUTE (163) = 90500 / 60000 = 1
+        assert_eq!(skin_state_number(163, state), Some(1));
+        // NUMBER_TIMELEFT_SECOND (164) = (90500 / 1000) % 60 = 90 % 60 = 30
+        assert_eq!(skin_state_number(164, state), Some(30));
     }
 
     fn mock_source(id: &str, width: f32, height: f32) -> HashMap<String, SkinDocumentTexture> {
