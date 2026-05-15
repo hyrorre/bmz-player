@@ -983,17 +983,10 @@ impl SkinDocument {
                 let frame = resolve_destination_frame(destination, state.elapsed_ms)?;
                 if let Some(image) = images.get(destination.id.as_str()) {
                     let source = sources.get(&image.src)?;
-                    let source_width = source.source_size.width.max(1.0);
-                    let source_height = source.source_size.height.max(1.0);
                     return Some(vec![SkinRenderItem::Image {
                         texture: source.texture,
                         rect: normalize_skin_frame_rect(frame, self.w, self.h),
-                        uv: TextureRegion {
-                            x: image.x as f32 / source_width,
-                            y: image.y as f32 / source_height,
-                            width: image.w as f32 / source_width,
-                            height: image.h as f32 / source_height,
-                        },
+                        uv: skin_image_texture_region(image, source.source_size, state.elapsed_ms),
                         tint: Color::rgba(
                             frame.r as f32 / 255.0,
                             frame.g as f32 / 255.0,
@@ -1070,17 +1063,10 @@ impl SkinDocument {
         let image_id = note.note.get(beatoraja_7k_note_index(lane))?;
         let image = self.image.iter().find(|image| image.id == *image_id)?;
         let source = sources.get(&image.src)?;
-        let source_width = source.source_size.width.max(1.0);
-        let source_height = source.source_size.height.max(1.0);
         Some(SkinRenderItem::Image {
             texture: source.texture,
             rect,
-            uv: TextureRegion {
-                x: image.x as f32 / source_width,
-                y: image.y as f32 / source_height,
-                width: image.w as f32 / source_width,
-                height: image.h as f32 / source_height,
-            },
+            uv: skin_image_texture_region(image, source.source_size, 0),
             tint: Color::rgb(1.0, 1.0, 1.0),
             blend: BlendMode::Normal,
             scale: SkinImageScale::Stretch,
@@ -1130,7 +1116,7 @@ impl SkinDocument {
                     height: part_height,
                 }
             };
-            if let Some(item) = self.image_render_item(node_id, part_rect, sources) {
+            if let Some(item) = self.image_render_item(node_id, part_rect, elapsed_ms, sources) {
                 items.push(item);
             }
         }
@@ -1151,6 +1137,7 @@ impl SkinDocument {
         let mut items = vec![self.image_render_item(
             &image_destination.id,
             normalize_skin_frame_rect(image_frame, self.w, self.h),
+            elapsed_ms,
             sources,
         )?];
         if combo > 0 {
@@ -1202,6 +1189,7 @@ impl SkinDocument {
                 self.image_render_item(
                     &image_id,
                     normalize_skin_frame_rect(frame, self.w, self.h),
+                    elapsed_ms,
                     sources,
                 )
             })
@@ -1272,21 +1260,15 @@ impl SkinDocument {
         &self,
         image_id: &str,
         rect: Rect,
+        elapsed_ms: i32,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<SkinRenderItem> {
         let image = self.image.iter().find(|image| image.id == image_id)?;
         let source = sources.get(&image.src)?;
-        let source_width = source.source_size.width.max(1.0);
-        let source_height = source.source_size.height.max(1.0);
         Some(SkinRenderItem::Image {
             texture: source.texture,
             rect,
-            uv: TextureRegion {
-                x: image.x as f32 / source_width,
-                y: image.y as f32 / source_height,
-                width: image.w as f32 / source_width,
-                height: image.h as f32 / source_height,
-            },
+            uv: skin_image_texture_region(image, source.source_size, elapsed_ms),
             tint: Color::rgb(1.0, 1.0, 1.0),
             blend: BlendMode::Normal,
             scale: SkinImageScale::Stretch,
@@ -2166,6 +2148,33 @@ fn score_rate_parts(ex_score: u32, total_notes: u32) -> (u32, u32) {
     }
     let rate_tenths = ex_score.saturating_mul(1000) / total_notes.saturating_mul(2).max(1);
     (rate_tenths / 10, rate_tenths % 10)
+}
+
+fn skin_image_texture_region(
+    image: &SkinImageDef,
+    source_size: SkinImageSize,
+    elapsed_ms: i32,
+) -> TextureRegion {
+    let source_width = source_size.width.max(1.0);
+    let source_height = source_size.height.max(1.0);
+    let divx = image.divx.max(1);
+    let divy = image.divy.max(1);
+    let frame_count = divx * divy;
+    let frame_index = if image.cycle > 0 && frame_count > 1 {
+        (elapsed_ms.rem_euclid(image.cycle) * frame_count / image.cycle).min(frame_count - 1)
+    } else {
+        0
+    };
+    let cell_width = image.w as f32 / divx as f32;
+    let cell_height = image.h as f32 / divy as f32;
+    let source_column = frame_index % divx;
+    let source_row = frame_index / divx;
+    TextureRegion {
+        x: (image.x as f32 + cell_width * source_column as f32) / source_width,
+        y: (image.y as f32 + cell_height * source_row as f32) / source_height,
+        width: cell_width / source_width,
+        height: cell_height / source_height,
+    }
 }
 
 fn gauge_after_dot(gauge: f32) -> u32 {
@@ -3419,7 +3428,7 @@ mod tests {
                 "h": 100,
                 "source": [{ "id": 1, "path": "judge.png" }],
                 "image": [
-                    { "id": "judgef-pg", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10 },
+                    { "id": "judgef-pg", "src": 1, "x": 0, "y": 0, "w": 10, "h": 20, "divy": 2, "cycle": 100 },
                     { "id": "judgef-gr", "src": 1, "x": 10, "y": 0, "w": 10, "h": 10 },
                     { "id": "judgef-gd", "src": 1, "x": 20, "y": 0, "w": 10, "h": 10 },
                     { "id": "judgef-bd", "src": 1, "x": 30, "y": 0, "w": 10, "h": 10 },
@@ -3450,15 +3459,19 @@ mod tests {
             },
         )]);
 
-        let pgreat = document.judge_image_render_item("PGREAT FAST", 120, &sources).unwrap();
+        let pgreat = document.judge_image_render_item("PGREAT FAST", 175, &sources).unwrap();
         let poor = document.judge_image_render_item("POOR SLOW", 120, &sources).unwrap();
         let expired = document.judge_image_render_item("PGREAT", 600, &sources);
 
         assert!(matches!(pgreat, SkinRenderItem::Image {
-                uv: TextureRegion { x, .. },
+                uv: TextureRegion { x, y: u_y, height: u_height, .. },
                 rect: Rect { y, width, .. },
                 ..
-            } if approx_eq(x, 0.0) && approx_eq(y, 0.1) && approx_eq(width, 0.2)));
+            } if approx_eq(x, 0.0)
+                && approx_eq(u_y, 0.1)
+                && approx_eq(u_height, 0.1)
+                && approx_eq(y, 0.1)
+                && approx_eq(width, 0.2)));
         assert!(matches!(poor, SkinRenderItem::Image {
                 uv: TextureRegion { x, .. },
                 ..
