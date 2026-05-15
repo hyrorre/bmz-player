@@ -1,6 +1,6 @@
-# Development Notes for Codex
+# AGENTS.md
 
-このメモは、Codex でこのリポジトリを継続開発するときの作業入口です。実装前に構成と約束事を確認し、変更後はここにある検証コマンドを必要な粒度で実行してください。
+このメモは、Codex でこのリポジトリを継続開発するときの作業入口です。実装前に構成と約束事を確認し、変更後はここにある検証コマンドを実行してください。
 
 ## Project Goal
 
@@ -241,20 +241,29 @@ database:
 
 変更後:
 
-1. 小さい変更なら対象 crate のテストを実行する。
-2. render/skin 変更なら最低限 `cargo test -p bmz-render`。
-3. app loader / CLI / storage 変更なら `cargo test -p bmz-app <filter>` または `cargo test -p bmz-app`。
-4. 最後に `cargo check`。
-5. `git diff --stat` と `git status --short` で unrelated diff が無いことを確認する。
-6. Conventional Commits でコミットする。
+1. `cargo fmt --check` を実行する。
+2. `cargo check` を実行する。
+3. `cargo clippy` を実行する。
+4. `cargo test` を実行する。
+5. 追加で、変更箇所に応じた絞り込みテストを必要なら実行する。
+6. `git diff --stat` と `git status --short` で unrelated diff が無いことを確認する。
+7. Conventional Commits でコミットする。
 
 ## Common Verification Patterns
+
+required after every task:
+
+```bash
+cargo fmt --check
+cargo check
+cargo clippy
+cargo test
+```
 
 render/skin:
 
 ```bash
 cargo test -p bmz-render
-cargo check
 ```
 
 skin loader:
@@ -262,7 +271,6 @@ skin loader:
 ```bash
 cargo test -p bmz-app skin_loader
 cargo test -p bmz-render
-cargo check
 ```
 
 gameplay judge/score/gauge:
@@ -270,7 +278,6 @@ gameplay judge/score/gauge:
 ```bash
 cargo test -p bmz-gameplay
 cargo test -p bmz-core
-cargo check
 ```
 
 chart import/normalization:
@@ -278,7 +285,6 @@ chart import/normalization:
 ```bash
 cargo test -p bmz-chart
 cargo test -p bmz-app storage
-cargo check
 ```
 
 manual smoke:
