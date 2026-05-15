@@ -97,6 +97,7 @@ pub fn build_game_session_with_input_backend(
         offsets: play_offsets_from_profile(profile),
         audio_mix: audio_mix_from_profile(profile),
         hispeed: clamp_hispeed(profile.lane.hispeed),
+        lift: profile.lane.lift.clamp(0.0, 1.0),
         input_timestamp_anchor: None,
         state: PlayState::Ready,
     }

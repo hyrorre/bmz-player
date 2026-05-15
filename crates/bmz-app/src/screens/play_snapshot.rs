@@ -30,6 +30,7 @@ pub fn build_render_snapshot(
         judge_counts: display_judge_counts(session),
         gauge: session.gauge.current().value,
         hispeed: session.hispeed,
+        lift: session.lift,
         visible_notes: std::array::from_fn(|_| Vec::new()),
         recent_inputs: session
             .recent_inputs
