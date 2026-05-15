@@ -1094,6 +1094,12 @@ impl SkinDocument {
                     return Some(vec![item]);
                 }
 
+                if let Some(graph) = self.graph.iter().find(|g| g.id == destination.id) {
+                    return self
+                        .graph_render_item(graph, frame, state, sources)
+                        .map(|item| vec![item]);
+                }
+
                 let hidden_cover =
                     self.hidden_cover.iter().find(|cover| cover.id == destination.id)?;
                 self.hidden_cover_render_item(hidden_cover, destination, frame, sources)
@@ -1501,6 +1507,64 @@ impl SkinDocument {
             border: None,
             source_size: Some(source.source_size),
             linear_filter: destination.filter != 0,
+        })
+    }
+
+    fn graph_render_item(
+        &self,
+        graph: &SkinGraphDef,
+        frame: ResolvedSkinFrame,
+        state: SkinDrawState,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Option<SkinRenderItem> {
+        let source = sources.get(&graph.src)?;
+        let value = graph_value(graph.graph_type, state).clamp(0.0, 1.0);
+        let source_w = source.source_size.width.max(1.0);
+        let source_h = source.source_size.height.max(1.0);
+        let base_uv = TextureRegion {
+            x: graph.x as f32 / source_w,
+            y: graph.y as f32 / source_h,
+            width: graph.w as f32 / source_w,
+            height: graph.h as f32 / source_h,
+        };
+        let dst = normalize_skin_frame_rect(frame, self.w, self.h);
+        let (rect, uv) = if graph.angle == 1 {
+            // vertical: fill from bottom up
+            let clipped_h = dst.height * value;
+            let uv_offset = base_uv.height * (1.0 - value);
+            (
+                Rect { y: dst.y + dst.height - clipped_h, height: clipped_h, ..dst },
+                TextureRegion {
+                    y: base_uv.y + uv_offset,
+                    height: base_uv.height * value,
+                    ..base_uv
+                },
+            )
+        } else {
+            // horizontal: fill from left
+            (
+                Rect { width: dst.width * value, ..dst },
+                TextureRegion { width: base_uv.width * value, ..base_uv },
+            )
+        };
+        if rect.width <= 0.0 || rect.height <= 0.0 {
+            return None;
+        }
+        Some(SkinRenderItem::Image {
+            texture: source.texture,
+            rect,
+            uv,
+            tint: Color::rgba(
+                frame.r as f32 / 255.0,
+                frame.g as f32 / 255.0,
+                frame.b as f32 / 255.0,
+                frame.a as f32 / 255.0,
+            ),
+            blend: BlendMode::Normal,
+            scale: SkinImageScale::Stretch,
+            border: None,
+            source_size: Some(source.source_size),
+            linear_filter: false,
         })
     }
 }
@@ -2314,6 +2378,19 @@ fn skin_image_texture_region(
 
 fn gauge_after_dot(gauge: f32) -> u32 {
     if gauge > 0.0 && gauge < 0.1 { 1 } else { ((gauge.max(0.0) * 10.0) as u32) % 10 }
+}
+
+/// Returns the graph bar fill ratio (0.0-1.0) for a given `BARGRAPH_*` type.
+fn graph_value(graph_type: i32, state: SkinDrawState) -> f32 {
+    match graph_type {
+        102 => 1.0, // BARGRAPH_LOAD_PROGRESS: always complete during play
+        110 | 111 => {
+            // BARGRAPH_SCORERATE / SCORERATE_FINAL: ex_score / max_ex_score
+            let max = (state.total_notes * 2) as f32;
+            if max > 0.0 { state.ex_score as f32 / max } else { 0.0 }
+        }
+        _ => 0.0, // BARGRAPH_BESTSCORERATE, TARGETSCORERATE etc. need external data
+    }
 }
 
 fn skin_slider_progress(slider_type: i32, state: SkinDrawState) -> Option<f32> {
@@ -4774,6 +4851,74 @@ mod tests {
         let SkinRenderItem::Image { rect, .. } = &items[0] else { panic!() };
         // y=720 shifted by -360 → 360/720 = 0.5
         assert!(approx_eq(rect.y, 360.0 / 720.0), "expected y=0.5, got {}", rect.y);
+    }
+
+    #[test]
+    fn graph_renders_vertical_bar_proportional_to_score() {
+        // BARGRAPH_SCORERATE (110): ex_score / (total_notes * 2)
+        // total_notes=100, ex_score=100 → value=0.5
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "w": 1280, "h": 720,
+                "source": [{ "id": "bar-src", "path": "bar.png" }],
+                "graph": [{ "id": "score-bar", "src": "bar-src", "x": 0, "y": 0, "w": 100, "h": 200, "type": 110 }],
+                "destination": [
+                    { "id": "score-bar", "dst": [{ "time": 0, "x": 0, "y": 0, "w": 100, "h": 480 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        let sources = mock_source("bar-src", 100.0, 200.0);
+        let state = SkinDrawState { ex_score: 100, total_notes: 100, ..SkinDrawState::default() };
+        let items = document.static_image_render_items(&sources, state);
+
+        assert_eq!(items.len(), 1, "expected one graph bar");
+        let SkinRenderItem::Image { rect, uv, .. } = &items[0] else { panic!() };
+        // value=0.5 → height = 480/720 * 0.5, y = 480/720 * 0.5
+        let dst_h = 480.0 / 720.0;
+        assert!(
+            approx_eq(rect.height, dst_h * 0.5),
+            "bar height should be half: got {}",
+            rect.height
+        );
+        assert!(
+            approx_eq(rect.y, dst_h * 0.5),
+            "bar y should start at half-height: got {}",
+            rect.y
+        );
+        // UV should also be clipped to bottom half
+        assert!(approx_eq(uv.height, 0.5), "uv height should be 0.5, got {}", uv.height);
+        assert!(approx_eq(uv.y, 0.5), "uv y should be 0.5, got {}", uv.y);
+    }
+
+    #[test]
+    fn graph_renders_horizontal_bar_for_load_progress() {
+        // BARGRAPH_LOAD_PROGRESS (102): always 1.0
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "w": 1280, "h": 720,
+                "source": [{ "id": "bar-src", "path": "bar.png" }],
+                "graph": [{ "id": "load-bar", "src": "bar-src", "x": 0, "y": 0, "w": 100, "h": 8, "angle": 0, "type": 102 }],
+                "destination": [
+                    { "id": "load-bar", "dst": [{ "time": 0, "x": 0, "y": 0, "w": 640, "h": 8 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        let sources = mock_source("bar-src", 100.0, 8.0);
+        let state = SkinDrawState::default();
+        let items = document.static_image_render_items(&sources, state);
+
+        assert_eq!(items.len(), 1, "expected one load bar");
+        let SkinRenderItem::Image { rect, .. } = &items[0] else { panic!() };
+        // value=1.0 → full width = 640/1280 = 0.5
+        assert!(approx_eq(rect.width, 640.0 / 1280.0), "full load bar width: got {}", rect.width);
     }
 
     #[test]
