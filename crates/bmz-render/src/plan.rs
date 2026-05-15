@@ -407,6 +407,10 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
     let judge_ms = snapshot.recent_judgements.last().map(|j| {
         ((snapshot.time.0 - j.time.0) / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32
     });
+    let judge_timing_ms = snapshot
+        .recent_judgements
+        .last()
+        .map(|j| (j.delta_us / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32);
 
     append_skin_render_items(
         &mut commands,
@@ -438,6 +442,12 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
                 timeleft_ms: (snapshot.duration.0.saturating_sub(snapshot.time.0) / 1_000)
                     .saturating_add(1_000)
                     .clamp(0, i32::MAX as i64) as i32,
+                total_duration_ms: (snapshot.duration.0 / 1_000).clamp(0, i32::MAX as i64) as i32,
+                lane_cover: snapshot.lane_cover,
+                now_bpm: snapshot.now_bpm,
+                min_bpm: snapshot.min_bpm,
+                max_bpm: snapshot.max_bpm,
+                judge_timing_ms,
             },
             SkinTextState {
                 title: &snapshot.title,

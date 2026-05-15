@@ -1,3 +1,4 @@
+use bmz_chart::model::TimingEventKind;
 use bmz_core::judge::{Judge, TimingSide};
 use bmz_core::lane::Lane;
 use bmz_core::time::TimeUs;
@@ -32,6 +33,9 @@ pub fn build_render_snapshot(
         hispeed: session.hispeed,
         lift: session.lift,
         lane_cover: session.lane_cover,
+        now_bpm: current_bpm(&session.chart, render_now) as f32,
+        min_bpm: chart_min_bpm(&session.chart) as f32,
+        max_bpm: chart_max_bpm(&session.chart) as f32,
         visible_notes: std::array::from_fn(|_| Vec::new()),
         recent_inputs: session
             .recent_inputs
@@ -89,6 +93,40 @@ fn display_judgement(event: &JudgementEvent) -> DisplayJudgement {
         delta_us: event.delta.0,
         time: event.time,
     }
+}
+
+/// `render_now` の時点で有効な BPM を返す。
+fn current_bpm(chart: &bmz_chart::model::PlayableChart, render_now: TimeUs) -> f64 {
+    let mut bpm = chart.metadata.initial_bpm;
+    for event in &chart.timing_events {
+        if event.time > render_now {
+            break;
+        }
+        if let TimingEventKind::BpmChange { bpm: b } = event.kind {
+            bpm = b;
+        }
+    }
+    bpm
+}
+
+fn chart_min_bpm(chart: &bmz_chart::model::PlayableChart) -> f64 {
+    chart
+        .timing_events
+        .iter()
+        .filter_map(
+            |e| if let TimingEventKind::BpmChange { bpm } = e.kind { Some(bpm) } else { None },
+        )
+        .fold(chart.metadata.initial_bpm, f64::min)
+}
+
+fn chart_max_bpm(chart: &bmz_chart::model::PlayableChart) -> f64 {
+    chart
+        .timing_events
+        .iter()
+        .filter_map(
+            |e| if let TimingEventKind::BpmChange { bpm } = e.kind { Some(bpm) } else { None },
+        )
+        .fold(chart.metadata.initial_bpm, f64::max)
 }
 
 fn judge_text(judge: Judge) -> &'static str {

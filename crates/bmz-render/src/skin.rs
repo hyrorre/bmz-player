@@ -693,6 +693,18 @@ pub struct SkinDrawState {
     pub hispeed: f32,
     /// 曲残り時間 ms (NUMBER_TIMELEFT_MINUTE=163, NUMBER_TIMELEFT_SECOND=164 に使用)。
     pub timeleft_ms: i32,
+    /// 曲の合計長さ ms (NUMBER_DURATION=312 に使用)。
+    pub total_duration_ms: i32,
+    /// レーンカバー割合 0.0-1.0 (NUMBER_LANECOVER1=14 に使用)。0=なし, 1=全画面。
+    pub lane_cover: f32,
+    /// 現在 BPM (NUMBER_NOWBPM=160 に使用)。
+    pub now_bpm: f32,
+    /// 最小 BPM (NUMBER_MINBPM=91 に使用)。
+    pub min_bpm: f32,
+    /// 最大 BPM (NUMBER_MAXBPM=90 に使用)。
+    pub max_bpm: f32,
+    /// 最後の判定のタイミングずれ ms (VALUE_JUDGE_1P_DURATION=525 に使用)。Noneなら非表示。
+    pub judge_timing_ms: Option<i32>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -2330,6 +2342,15 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         164 => Some(((state.timeleft_ms / 1_000) % 60) as i64),
         310 => Some(state.hispeed.floor() as i64),
         311 => Some(((state.hispeed * 100.0) as i64) % 100),
+        312 => Some((state.total_duration_ms / 1_000) as i64),
+        // BPM 系: NUMBER_MAXBPM=90, NUMBER_MINBPM=91, NUMBER_NOWBPM=160
+        90 => Some(state.max_bpm.round() as i64),
+        91 => Some(state.min_bpm.round() as i64),
+        160 => Some(state.now_bpm.round() as i64),
+        // レーンカバー: NUMBER_LANECOVER1=14 (0-100%)
+        14 => Some((state.lane_cover.clamp(0.0, 1.0) * 100.0).round() as i64),
+        // 判定タイミングずれ: VALUE_JUDGE_1P_DURATION=525 (ms、絶対値)
+        525 => state.judge_timing_ms.map(|ms| ms.unsigned_abs() as i64),
         420 => Some(state.judge_counts.empty_poor as i64),
         425 | 427 => Some((state.judge_counts.bad + state.judge_counts.poor) as i64),
         426 => Some(state.judge_counts.poor as i64),
@@ -5103,6 +5124,34 @@ mod tests {
         assert_eq!(skin_state_number(163, state), Some(1));
         // NUMBER_TIMELEFT_SECOND (164) = (90500 / 1000) % 60 = 90 % 60 = 30
         assert_eq!(skin_state_number(164, state), Some(30));
+    }
+
+    #[test]
+    fn skin_state_number_bpm_lanecover_duration_timing() {
+        let state = SkinDrawState {
+            now_bpm: 148.7,
+            min_bpm: 80.0,
+            max_bpm: 200.3,
+            lane_cover: 0.25,
+            total_duration_ms: 183_000,
+            judge_timing_ms: Some(-3),
+            ..SkinDrawState::default()
+        };
+        // NUMBER_NOWBPM (160) = round(148.7) = 149
+        assert_eq!(skin_state_number(160, state), Some(149));
+        // NUMBER_MINBPM (91) = round(80.0) = 80
+        assert_eq!(skin_state_number(91, state), Some(80));
+        // NUMBER_MAXBPM (90) = round(200.3) = 200
+        assert_eq!(skin_state_number(90, state), Some(200));
+        // NUMBER_LANECOVER1 (14) = round(0.25 * 100) = 25
+        assert_eq!(skin_state_number(14, state), Some(25));
+        // NUMBER_DURATION (312) = 183000 / 1000 = 183
+        assert_eq!(skin_state_number(312, state), Some(183));
+        // VALUE_JUDGE_1P_DURATION (525) = abs(-3) = 3
+        assert_eq!(skin_state_number(525, state), Some(3));
+        // When no recent judgement, 525 returns None
+        let no_judge = SkinDrawState { judge_timing_ms: None, ..state };
+        assert_eq!(skin_state_number(525, no_judge), None);
     }
 
     fn mock_source(id: &str, width: f32, height: f32) -> HashMap<String, SkinDocumentTexture> {

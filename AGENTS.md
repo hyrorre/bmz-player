@@ -200,12 +200,13 @@ database:
 - `.fnt` bitmap font loading
 - destination `acc` easing
 - static image destination `stretch`
+- `graph` (type 101/102/110/111/140-147)
 
 未対応/今後の候補:
 
 - destination `center`, `offset`, `offsets`, `filter`
 - destination `stretch` for non-static image objects
-- `graph` / score graph 系
+- `graph` / score graph 系 (type 101/102/110/111/140-147 は実装済み。113/114/115 は best/target score が未実装のため 0.0 固定)
 - BGA
 - より正確な text outline/shadow。現在の outline は周囲8方向描画の近似です。
 - SDF/距離場フォント化
