@@ -3,6 +3,7 @@ use bmz_core::clear::ClearType;
 use crate::snapshot::{DisplayJudgeCounts, RenderSnapshot};
 
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub enum AppSceneSnapshot {
     Select(SelectSnapshot),
     Play(RenderSnapshot),

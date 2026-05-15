@@ -138,7 +138,7 @@ fn decode_wav_frames(
     match (format.audio_format, format.bits_per_sample) {
         (1, 8) => Ok(data.iter().map(|sample| (*sample as f32 - 128.0) / 128.0).collect()),
         (1, 16) => {
-            if data.len() % 2 != 0 {
+            if !data.len().is_multiple_of(2) {
                 return Err(decode_error(path, "16-bit PCM data length is odd"));
             }
             Ok(data
@@ -147,7 +147,7 @@ fn decode_wav_frames(
                 .collect())
         }
         (3, 32) => {
-            if data.len() % 4 != 0 {
+            if !data.len().is_multiple_of(4) {
                 return Err(decode_error(path, "32-bit float data length is not divisible by 4"));
             }
             Ok(data

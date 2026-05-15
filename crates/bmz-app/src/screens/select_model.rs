@@ -12,6 +12,7 @@ pub struct SelectChartRow {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub enum SelectItem {
     Folder { path: String, name: String },
     Chart(SelectChartRow),

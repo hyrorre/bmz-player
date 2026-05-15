@@ -200,14 +200,14 @@ fn resolve_wildcard_path(
         .collect::<Vec<_>>();
     candidates.sort();
 
-    if let Some(preferred) = preferred {
-        if let Some(candidate) = candidates.iter().find(|path| {
+    if let Some(preferred) = preferred
+        && let Some(candidate) = candidates.iter().find(|path| {
             let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
             let stem = path.file_stem().and_then(|name| name.to_str()).unwrap_or_default();
             file_name == preferred || stem == preferred
-        }) {
-            return Some(candidate.clone());
-        }
+        })
+    {
+        return Some(candidate.clone());
     }
 
     candidates.into_iter().next()

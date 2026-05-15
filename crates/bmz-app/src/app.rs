@@ -24,9 +24,7 @@ use crate::screens::play_finish::FinishedPlaySession;
 use crate::screens::play_loop::{PlayAdvanceOutcome, advance_running_play_session_until_result};
 use crate::screens::play_start::{PlayStartOptions, StartedWinitPlaySession};
 use crate::screens::result_model::ResultSummary;
-use crate::screens::select_model::{
-    SelectChartRow, SelectItem, load_select_items_in_folder, root_folder_items,
-};
+use crate::screens::select_model::{SelectItem, load_select_items_in_folder, root_folder_items};
 use crate::select_options::{ArrangeOption, AssistOption};
 use crate::skin_loader::apply_default_skin;
 use crate::storage::scan::scan_song_roots;
@@ -274,32 +272,30 @@ impl WinitApp {
         }
 
         // Track start button held state for option cycling
-        if let Some(control) = physical_key_name(event.physical_key) {
-            if control == self.select_keys.start {
-                self.start_held = event.state == ElementState::Pressed;
-                return;
-            }
+        if let Some(control) = physical_key_name(event.physical_key)
+            && control == self.select_keys.start
+        {
+            self.start_held = event.state == ElementState::Pressed;
+            return;
         }
 
         if self.start_held {
-            if event.state == ElementState::Pressed && !event.repeat {
-                if let Some(control) = physical_key_name(event.physical_key) {
-                    if self.select_keys.cycle_arrange.as_deref() == Some(&control) {
-                        self.arrange_option = self.arrange_option.cycle();
-                        tracing::info!(
-                            arrange = self.arrange_option.as_str(),
-                            "arrange option changed"
-                        );
-                    } else if self.select_keys.cycle_gauge.as_deref() == Some(&control) {
-                        self.gauge_option = cycle_gauge_option(self.gauge_option);
-                        tracing::info!(gauge = ?self.gauge_option, "gauge option changed");
-                    } else if self.select_keys.cycle_assist.as_deref() == Some(&control) {
-                        self.assist_option = self.assist_option.cycle();
-                        tracing::info!(
-                            assist = self.assist_option.as_str(),
-                            "assist option changed"
-                        );
-                    }
+            if event.state == ElementState::Pressed
+                && !event.repeat
+                && let Some(control) = physical_key_name(event.physical_key)
+            {
+                if self.select_keys.cycle_arrange.as_deref() == Some(&control) {
+                    self.arrange_option = self.arrange_option.cycle();
+                    tracing::info!(
+                        arrange = self.arrange_option.as_str(),
+                        "arrange option changed"
+                    );
+                } else if self.select_keys.cycle_gauge.as_deref() == Some(&control) {
+                    self.gauge_option = cycle_gauge_option(self.gauge_option);
+                    tracing::info!(gauge = ?self.gauge_option, "gauge option changed");
+                } else if self.select_keys.cycle_assist.as_deref() == Some(&control) {
+                    self.assist_option = self.assist_option.cycle();
+                    tracing::info!(assist = self.assist_option.as_str(), "assist option changed");
                 }
             }
             return;
@@ -956,6 +952,7 @@ mod tests {
     use bmz_render::skin::SkinManifest;
 
     use crate::config::profile_config::ProfileInputConfig;
+    use crate::screens::select_model::SelectChartRow;
     use crate::skin_loader::default_skin_root;
     use crate::storage::library_db::ChartListItem;
     use crate::storage::score_db::BestScoreSummary;

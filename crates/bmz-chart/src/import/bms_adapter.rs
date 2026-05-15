@@ -216,7 +216,7 @@ fn parse_channel_line(
         return Ok(true);
     }
 
-    if data.len() % 2 != 0 {
+    if !data.len().is_multiple_of(2) {
         return Err(ImportError::Parse {
             path: Default::default(),
             message: format!(

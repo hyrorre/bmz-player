@@ -1015,19 +1015,17 @@ impl SkinDocument {
                     ));
                 }
 
-                if let Some(text) = self.text.iter().find(|text| text.id == destination.id) {
-                    if let Some(item) = self.text_render_item(text, frame, text_state) {
-                        return Some(vec![item]);
-                    }
+                if let Some(text) = self.text.iter().find(|text| text.id == destination.id)
+                    && let Some(item) = self.text_render_item(text, frame, text_state)
+                {
+                    return Some(vec![item]);
                 }
 
                 if let Some(slider) = self.slider.iter().find(|slider| slider.id == destination.id)
-                {
-                    if let Some(item) =
+                    && let Some(item) =
                         self.slider_render_item(slider, destination, frame, state, sources)
-                    {
-                        return Some(vec![item]);
-                    }
+                {
+                    return Some(vec![item]);
                 }
 
                 let hidden_cover =
@@ -1140,20 +1138,18 @@ impl SkinDocument {
             elapsed_ms,
             sources,
         )?];
-        if combo > 0 {
-            if let Some(number_destination) = judge.numbers.get(judge_index) {
-                if let Some(number_frame) =
-                    resolve_destination_frame_until_end(number_destination, elapsed_ms)
-                {
-                    items.extend(self.value_number_render_items(
-                        &number_destination.id,
-                        combo as i64,
-                        image_frame,
-                        number_frame,
-                        sources,
-                    ));
-                }
-            }
+        if combo > 0
+            && let Some(number_destination) = judge.numbers.get(judge_index)
+            && let Some(number_frame) =
+                resolve_destination_frame_until_end(number_destination, elapsed_ms)
+        {
+            items.extend(self.value_number_render_items(
+                &number_destination.id,
+                combo as i64,
+                image_frame,
+                number_frame,
+                sources,
+            ));
         }
         Some(items)
     }
@@ -1229,10 +1225,10 @@ impl SkinDocument {
         digits
             .into_iter()
             .enumerate()
-            .filter_map(|(index, digit)| {
+            .map(|(index, digit)| {
                 let source_column = digit as i32 % divx;
                 let source_row = digit as i32 / divx;
-                Some(SkinRenderItem::Image {
+                SkinRenderItem::Image {
                     texture: source.texture,
                     rect: Rect {
                         x: origin_x + digit_width * index as f32,
@@ -1251,7 +1247,7 @@ impl SkinDocument {
                     scale: SkinImageScale::Stretch,
                     border: None,
                     source_size: Some(source.source_size),
-                })
+                }
             })
             .collect()
     }

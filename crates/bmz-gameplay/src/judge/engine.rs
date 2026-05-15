@@ -33,13 +33,9 @@ impl JudgeEngine {
         for lane in Lane::ALL {
             let lane_state = &mut self.lanes[lane.index()];
 
-            loop {
-                let Some((idx, note)) =
-                    next_press_reference_note(chart, lane, lane_state.next_note_index)
-                else {
-                    break;
-                };
-
+            while let Some((idx, note)) =
+                next_press_reference_note(chart, lane, lane_state.next_note_index)
+            {
                 if now.0 <= note.time.0 + self.windows.bad_us {
                     break;
                 }
@@ -55,18 +51,18 @@ impl JudgeEngine {
                 });
             }
 
-            if let Some(active) = lane_state.active_long {
-                if now.0 > active.end.end_time.0 + self.windows.bad_us {
-                    lane_state.active_long = None;
-                    outcome.events.push(JudgementEvent {
-                        note_id: Some(active.end.end_note_id),
-                        lane,
-                        judge: Judge::Poor,
-                        side: TimingSide::Slow,
-                        delta: TimeUs(now.0 - active.end.end_time.0),
-                        time: now,
-                    });
-                }
+            if let Some(active) = lane_state.active_long
+                && now.0 > active.end.end_time.0 + self.windows.bad_us
+            {
+                lane_state.active_long = None;
+                outcome.events.push(JudgementEvent {
+                    note_id: Some(active.end.end_note_id),
+                    lane,
+                    judge: Judge::Poor,
+                    side: TimingSide::Slow,
+                    delta: TimeUs(now.0 - active.end.end_time.0),
+                    time: now,
+                });
             }
         }
 
@@ -100,10 +96,10 @@ impl JudgeEngine {
             lane_state.next_note_index = idx + 1;
             lane_state.last_press_time = Some(note.time);
 
-            if note.kind == NoteKind::LongStart {
-                if let Some(active) = make_active_long(chart, note.id) {
-                    lane_state.active_long = Some(active);
-                }
+            if note.kind == NoteKind::LongStart
+                && let Some(active) = make_active_long(chart, note.id)
+            {
+                lane_state.active_long = Some(active);
             }
 
             return JudgeOutcome {

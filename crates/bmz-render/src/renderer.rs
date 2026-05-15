@@ -296,19 +296,19 @@ impl WgpuRenderer {
         let images_len = image_batches.iter().map(|batch| batch.instances.len()).sum();
         let text_frame = self.build_text_frame(plan, fonts);
         self.ensure_rect_buffer(rects.len());
-        if let Some(buffer) = &self.rect_buffer {
-            if !rects.is_empty() {
-                self.queue.write_buffer(buffer, 0, &rects);
-            }
+        if let Some(buffer) = &self.rect_buffer
+            && !rects.is_empty()
+        {
+            self.queue.write_buffer(buffer, 0, &rects);
         }
         self.ensure_image_buffer(images_len);
-        if let Some(buffer) = &self.image_buffer {
-            if images_len > 0 {
-                let mut offset = 0;
-                for batch in &image_batches {
-                    self.queue.write_buffer(buffer, offset, &batch.instances);
-                    offset += batch.instances.len() as u64;
-                }
+        if let Some(buffer) = &self.image_buffer
+            && images_len > 0
+        {
+            let mut offset = 0;
+            for batch in &image_batches {
+                self.queue.write_buffer(buffer, offset, &batch.instances);
+                offset += batch.instances.len() as u64;
             }
         }
         self.upload_text_frame(&text_frame);
@@ -368,18 +368,15 @@ impl WgpuRenderer {
                     }
                 }
             }
-            if let Some(bind_group) = &text_bind_group {
-                if let Some(buffer) = &self.text_buffer {
-                    let instance_count = (text_frame.instances.len() / TEXT_INSTANCE_BYTES) as u32;
-                    if instance_count > 0 {
-                        pass.set_pipeline(&self.text_pipeline);
-                        pass.set_bind_group(0, bind_group, &[]);
-                        pass.set_vertex_buffer(
-                            0,
-                            buffer.slice(..text_frame.instances.len() as u64),
-                        );
-                        pass.draw(0..6, 0..instance_count);
-                    }
+            if let Some(bind_group) = &text_bind_group
+                && let Some(buffer) = &self.text_buffer
+            {
+                let instance_count = (text_frame.instances.len() / TEXT_INSTANCE_BYTES) as u32;
+                if instance_count > 0 {
+                    pass.set_pipeline(&self.text_pipeline);
+                    pass.set_bind_group(0, bind_group, &[]);
+                    pass.set_vertex_buffer(0, buffer.slice(..text_frame.instances.len() as u64));
+                    pass.draw(0..6, 0..instance_count);
                 }
             }
         }
@@ -436,10 +433,10 @@ impl WgpuRenderer {
 
     fn upload_text_frame(&mut self, frame: &TextFrame) {
         self.ensure_text_buffer(frame.instances.len());
-        if let Some(buffer) = &self.text_buffer {
-            if !frame.instances.is_empty() {
-                self.queue.write_buffer(buffer, 0, &frame.instances);
-            }
+        if let Some(buffer) = &self.text_buffer
+            && !frame.instances.is_empty()
+        {
+            self.queue.write_buffer(buffer, 0, &frame.instances);
         }
 
         if frame.pixels.is_empty() || frame.size.width == 0 || frame.size.height == 0 {

@@ -14,6 +14,7 @@ use crate::screens::play_snapshot::build_render_snapshot;
 use crate::storage::score_db::ScoreDatabase;
 
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum PlayAdvanceOutcome {
     Playing(FrameOutput<RenderSnapshot>),
     Finished { frame: FrameOutput<RenderSnapshot>, finished: FinishedPlaySession },

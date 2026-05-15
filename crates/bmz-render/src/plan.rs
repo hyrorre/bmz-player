@@ -202,7 +202,7 @@ fn plan_select(snapshot: &SelectSnapshot) -> DrawPlan {
         BitmapTextStyle { x: 0.08, y: 0.170, cell: 0.005, color: Color::rgb(0.72, 0.86, 0.92) },
     );
 
-    let visible_rows = rows.len().max(1).min(7);
+    let visible_rows = rows.len().clamp(1, 7);
     for row in 0..visible_rows {
         let snapshot_row = rows.get(row);
         let selected = snapshot_row.map(|row| row.index == selected_index).unwrap_or(row == 0);
@@ -455,12 +455,12 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
             if let Some(item) = skin.document_note_item(lane, rect) {
                 append_skin_render_items(&mut commands, &[item]);
             } else {
-                push_default_note_skin(&skin_manifest, &mut commands, lane, rect);
+                push_default_note_skin(skin_manifest, &mut commands, lane, rect);
             }
         }
     }
 
-    push_receptors(&skin_manifest, &mut commands, board, lane_width);
+    push_receptors(skin_manifest, &mut commands, board, lane_width);
     for bar in &snapshot.bar_lines {
         let y = play_object_y(board, bar.y);
         commands.push(DrawCommand::Rect {
@@ -468,16 +468,16 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
             color: Color::rgb(0.45, 0.48, 0.5),
         });
     }
-    push_judge_line(&skin_manifest, &mut commands, board);
+    push_judge_line(skin_manifest, &mut commands, board);
     push_gauge(
         skin,
-        &skin_manifest,
+        skin_manifest,
         &mut commands,
         snapshot.gauge,
         (snapshot.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32,
     );
     push_document_lane_effects(skin, &mut commands, snapshot);
-    push_combo_panel(&skin_manifest, &mut commands, snapshot.combo);
+    push_combo_panel(skin_manifest, &mut commands, snapshot.combo);
     push_default_play_skin(skin, &mut commands, snapshot);
     push_play_text(&text, &mut commands, snapshot);
     push_lane_text(&text, &mut commands, board, lane_width);
