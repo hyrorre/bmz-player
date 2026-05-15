@@ -200,13 +200,16 @@ database:
 - `.fnt` bitmap font loading
 - destination `acc` easing
 - static image destination `stretch`
-- `graph` (type 101/102/110/111/140-147)
+- `graph` (type 101/102/110-115/140-147)
+- `SkinDrawState`: BPM (now/min/max), lane_cover, total_duration_ms, judge_timing_ms, best/target ex_score
+- `skin_state_number`: ref 14/90/91/107/121/150/160/163/164/310-312/407/420/425-427/525
+- `skin_state_text`: ref 10-16 (title/subtitle/genre/artist/subartist 系)
 
 未対応/今後の候補:
 
 - destination `center`, `offset`, `offsets`, `filter`
 - destination `stretch` for non-static image objects
-- `graph` / score graph 系 (type 101/102/110/111/140-147 は実装済み。113/114/115 は best/target score が未実装のため 0.0 固定)
+- `graph` / score graph 系 (type 101/102/110-115/140-147 は実装済み。best/target score は play_snapshot.rs で DB 連携 TODO)
 - BGA
 - より正確な text outline/shadow。現在の outline は周囲8方向描画の近似です。
 - SDF/距離場フォント化
