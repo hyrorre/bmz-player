@@ -497,7 +497,7 @@ pub struct SkinDestinationDef {
     #[serde(default)]
     pub draw: String,
     #[serde(default)]
-    pub dst: Vec<SkinAnimationDef>,
+    pub dst: Vec<SkinDstEntry>,
     #[serde(rename = "mouseRect")]
     pub mouse_rect: Option<SkinRectDef>,
 }
@@ -527,6 +527,44 @@ pub struct SkinAnimationDef {
     pub g: Option<i32>,
     pub b: Option<i32>,
     pub angle: Option<i32>,
+}
+
+/// A single entry in a destination `dst` array — either a plain animation frame or a
+/// conditional frame that is only included when all listed option IDs are enabled.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SkinDstEntry {
+    Frame(SkinAnimationDef),
+    /// `{"if": [...], "value": {...}}` or `{"if": [...], "values": [...]}`
+    Conditional {
+        if_ops: Vec<i32>,
+        frames: Vec<SkinAnimationDef>,
+    },
+}
+
+impl<'de> Deserialize<'de> for SkinDstEntry {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = JsonValue::deserialize(deserializer)?;
+        if value.get("if").is_some() {
+            let if_ops = parse_skin_dst_if_ops(value.get("if").unwrap());
+            let frames = if let Some(values_field) = value.get("values") {
+                serde_json::from_value::<Vec<SkinAnimationDef>>(values_field.clone())
+                    .unwrap_or_default()
+            } else if let Some(value_field) = value.get("value") {
+                serde_json::from_value::<SkinAnimationDef>(value_field.clone())
+                    .ok()
+                    .into_iter()
+                    .collect()
+            } else {
+                vec![]
+            };
+            Ok(SkinDstEntry::Conditional { if_ops, frames })
+        } else {
+            serde_json::from_value(value).map(SkinDstEntry::Frame).map_err(serde::de::Error::custom)
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -647,6 +685,8 @@ pub struct SkinDrawState {
     pub keyon_ms: [Option<i32>; 8],
     /// 判定タイマー経過ms (TIMER_JUDGE_1P=46)。Noneなら非アクティブ。
     pub judge_ms: Option<i32>,
+    /// OFFSET_LIFT (id=3) の y 値 (skin canvas pixel 単位)。リフト量に応じて要素をシフトする。
+    pub offset_lift_px: i32,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -988,7 +1028,10 @@ impl SkinDocument {
             .filter(|destination| eval_skin_draw_condition(&destination.draw, state))
             .filter_map(|destination| {
                 let elapsed = skin_timer_elapsed_ms(destination.timer, state)?;
-                let frame = resolve_destination_frame(destination, elapsed)?;
+                let mut frame = resolve_destination_frame(destination, elapsed, &enabled_options)?;
+                let (dx, dy) = skin_offset_shift(destination, state);
+                frame.x += dx;
+                frame.y += dy;
                 if let Some(image) = images.get(destination.id.as_str()) {
                     let source = sources.get(&image.src)?;
                     let (rect, uv) = stretch_skin_image_geometry(
@@ -1108,7 +1151,7 @@ impl SkinDocument {
                     SkinDrawState { elapsed_ms, gauge, ..SkinDrawState::default() },
                 )
         })?;
-        let frame = resolve_destination_frame(destination, elapsed_ms)?;
+        let frame = resolve_destination_frame(destination, elapsed_ms, &enabled_options)?;
         let rect = normalize_skin_frame_rect(frame, self.w, self.h);
         let filled =
             (gauge.clamp(0.0, 100.0) / 100.0 * gauge_def.parts.max(1) as f32).round() as i32;
@@ -1151,7 +1194,9 @@ impl SkinDocument {
         let judge_index = judge_image_index(judge)?;
         let judge = self.judge.first()?;
         let image_destination = judge.images.get(judge_index)?;
-        let image_frame = resolve_destination_frame_until_end(image_destination, elapsed_ms)?;
+        let enabled_options = self.enabled_options();
+        let image_frame =
+            resolve_destination_frame_until_end(image_destination, elapsed_ms, &enabled_options)?;
         let mut items = vec![self.image_render_item(
             &image_destination.id,
             normalize_skin_frame_rect(image_frame, self.w, self.h),
@@ -1162,8 +1207,11 @@ impl SkinDocument {
         )?];
         if combo > 0
             && let Some(number_destination) = judge.numbers.get(judge_index)
-            && let Some(number_frame) =
-                resolve_destination_frame_until_end(number_destination, elapsed_ms)
+            && let Some(number_frame) = resolve_destination_frame_until_end(
+                number_destination,
+                elapsed_ms,
+                &enabled_options,
+            )
         {
             items.extend(self.value_number_render_items(
                 &number_destination.id,
@@ -1202,7 +1250,8 @@ impl SkinDocument {
                         && destination.timer.is_some()
                         && test_skin_ops(&destination.op, &enabled_options)
                 })?;
-                let frame = resolve_destination_frame_until_end(destination, elapsed_ms)?;
+                let frame =
+                    resolve_destination_frame_until_end(destination, elapsed_ms, &enabled_options)?;
                 let image_id = imageset_judge_image_id(imageset, judge)?;
                 self.image_render_item(
                     &image_id,
@@ -2342,15 +2391,75 @@ fn full_label(primary: &str, secondary: &str) -> String {
     }
 }
 
+/// Parses the `if` field of a conditional dst entry into a flat list of required option IDs.
+/// Each ID is positive (must be enabled) or negative (must be disabled).
+/// Nested arrays (OR groups) are flattened to their first element for simplicity.
+fn parse_skin_dst_if_ops(value: &JsonValue) -> Vec<i32> {
+    match value {
+        JsonValue::Number(n) => n.as_i64().map(|n| vec![n as i32]).unwrap_or_default(),
+        JsonValue::Array(arr) => arr
+            .iter()
+            .flat_map(|v| match v {
+                JsonValue::Number(n) => n.as_i64().map(|n| vec![n as i32]).unwrap_or_default(),
+                JsonValue::Array(inner) => inner
+                    .iter()
+                    .find_map(|v2| v2.as_i64())
+                    .map(|n| vec![n as i32])
+                    .unwrap_or_default(),
+                _ => vec![],
+            })
+            .collect(),
+        _ => vec![],
+    }
+}
+
+fn test_skin_dst_if(if_ops: &[i32], enabled_options: &[i32]) -> bool {
+    if_ops.iter().all(|&op| test_json_option_number(op, enabled_options))
+}
+
+/// Expands a dst entry list into animation frames, filtering conditional entries by `enabled_options`.
+fn flatten_dst_entries(dst: &[SkinDstEntry], enabled_options: &[i32]) -> Vec<SkinAnimationDef> {
+    let mut result = Vec::new();
+    for entry in dst {
+        match entry {
+            SkinDstEntry::Frame(anim) => result.push(*anim),
+            SkinDstEntry::Conditional { if_ops, frames } => {
+                if test_skin_dst_if(if_ops, enabled_options) {
+                    result.extend(frames.iter().copied());
+                }
+            }
+        }
+    }
+    result
+}
+
+/// Returns the (x, y) shift in skin canvas pixels for the given destination's offset IDs.
+fn skin_offset_shift(destination: &SkinDestinationDef, state: SkinDrawState) -> (i32, i32) {
+    let mut dy = 0i32;
+    let all_offsets = destination.offsets.iter().copied().chain(if destination.offset != 0 {
+        Some(destination.offset)
+    } else {
+        None
+    });
+    for offset_id in all_offsets {
+        if offset_id == 3 {
+            dy += state.offset_lift_px;
+        }
+    }
+    (0, dy)
+}
+
 fn resolve_destination_frame(
     destination: &SkinDestinationDef,
     elapsed_ms: i32,
+    enabled_options: &[i32],
 ) -> Option<ResolvedSkinFrame> {
     let elapsed_ms = destination_animation_elapsed_ms(destination, elapsed_ms);
-    let acc = destination_interpolation_acc(destination);
+    let animations = flatten_dst_entries(&destination.dst, enabled_options);
+    let acc = destination_interpolation_acc_from_frames(&animations);
     let mut frame = ResolvedSkinFrame::default();
     let mut previous = None;
-    for animation in &destination.dst {
+    for animation in &animations {
         apply_skin_animation(&mut frame, animation);
         if frame.time <= elapsed_ms {
             previous = Some(frame);
@@ -2361,21 +2470,23 @@ fn resolve_destination_frame(
             None => frame,
         });
     }
-    previous.or_else(|| destination.dst.first().map(|_| frame))
+    previous.or_else(|| animations.first().map(|_| frame))
 }
 
 fn resolve_destination_frame_until_end(
     destination: &SkinDestinationDef,
     elapsed_ms: i32,
+    enabled_options: &[i32],
 ) -> Option<ResolvedSkinFrame> {
     if destination.loop_time > 0 {
-        return resolve_destination_frame(destination, elapsed_ms);
+        return resolve_destination_frame(destination, elapsed_ms, enabled_options);
     }
-    let last_time = destination.dst.iter().filter_map(|animation| animation.time).max()?;
+    let animations = flatten_dst_entries(&destination.dst, enabled_options);
+    let last_time = animations.iter().filter_map(|a| a.time).max()?;
     if elapsed_ms > last_time {
         return None;
     }
-    resolve_destination_frame(destination, elapsed_ms)
+    resolve_destination_frame(destination, elapsed_ms, enabled_options)
 }
 
 fn destination_animation_elapsed_ms(destination: &SkinDestinationDef, elapsed_ms: i32) -> i32 {
@@ -2414,9 +2525,9 @@ fn interpolate_skin_frame(
     }
 }
 
-fn destination_interpolation_acc(destination: &SkinDestinationDef) -> i32 {
+fn destination_interpolation_acc_from_frames(animations: &[SkinAnimationDef]) -> i32 {
     let mut frame = ResolvedSkinFrame::default();
-    for animation in &destination.dst {
+    for animation in animations {
         apply_skin_animation(&mut frame, animation);
         if frame.acc != 0 {
             return frame.acc;
@@ -3331,7 +3442,10 @@ mod tests {
         assert_eq!(document.image[0].id, "included");
         assert_eq!(document.destination.len(), 1);
         assert_eq!(document.destination[0].id, "included");
-        assert_eq!(document.destination[0].dst[0].x, Some(1));
+        let SkinDstEntry::Frame(frame) = &document.destination[0].dst[0] else {
+            panic!("expected Frame entry");
+        };
+        assert_eq!(frame.x, Some(1));
     }
 
     #[test]
@@ -4492,6 +4606,129 @@ mod tests {
         let state_inactive = SkinDrawState { judge_ms: None, ..SkinDrawState::default() };
         let items_inactive = document.static_image_render_items(&sources, state_inactive);
         assert_eq!(items_inactive.len(), 0, "judge_ms=None should produce no items");
+    }
+
+    #[test]
+    fn dst_if_value_selects_frame_by_enabled_option() {
+        // property: option 920 enabled (1P)
+        // destination dst has two conditional frames: one for 920, one for 921
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "w": 1280, "h": 720,
+                "property": [
+                    { "name": "Side", "def": "1P", "item": [
+                        { "name": "1P", "op": 920 },
+                        { "name": "2P", "op": 921 }
+                    ]}
+                ],
+                "source": [{ "id": "src", "path": "a.png" }],
+                "image": [{ "id": "img", "src": "src", "w": 10, "h": 10 }],
+                "destination": [
+                    { "id": "img", "dst": [
+                        { "if": [920], "value": { "time": 0, "x": 100, "y": 200, "w": 50, "h": 50 } },
+                        { "if": [921], "value": { "time": 0, "x": 900, "y": 200, "w": 50, "h": 50 } },
+                        { "time": 500 }
+                    ]}
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        let sources = mock_source("src", 10.0, 10.0);
+        let state = SkinDrawState::default();
+        let items = document.static_image_render_items(&sources, state);
+
+        // With option 920 (1P) enabled, x should be 100/1280
+        assert_eq!(items.len(), 1);
+        let SkinRenderItem::Image { rect, .. } = &items[0] else { panic!() };
+        assert!(approx_eq(rect.x, 100.0 / 1280.0), "expected 1P x position, got {}", rect.x);
+    }
+
+    #[test]
+    fn dst_if_value_uses_default_when_option_disabled() {
+        // No property → no enabled options → conditional frame skipped, only end frame {time:500}
+        // With elapsed=0 the element renders at the default position (0,0)
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "w": 1280, "h": 720,
+                "source": [{ "id": "src", "path": "a.png" }],
+                "image": [{ "id": "img", "src": "src", "w": 10, "h": 10 }],
+                "destination": [
+                    { "id": "img", "dst": [
+                        { "if": [920], "value": { "time": 0, "x": 100, "y": 200, "w": 50, "h": 50 } },
+                        { "time": 500 }
+                    ]}
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        let sources = mock_source("src", 10.0, 10.0);
+        let state = SkinDrawState::default();
+        let items = document.static_image_render_items(&sources, state);
+
+        // Conditional frame skipped → position defaults to (0,0); {time:500} still provides a frame
+        assert_eq!(items.len(), 1);
+        let SkinRenderItem::Image { rect, .. } = &items[0] else { panic!() };
+        assert!(approx_eq(rect.x, 0.0), "expected default x=0, got {}", rect.x);
+        assert!(approx_eq(rect.y, 0.0), "expected default y=0, got {}", rect.y);
+    }
+
+    #[test]
+    fn offset_lift_shifts_destination_y() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "w": 1280, "h": 720,
+                "source": [{ "id": "src", "path": "a.png" }],
+                "image": [{ "id": "img", "src": "src", "w": 10, "h": 10 }],
+                "destination": [
+                    { "id": "img", "offset": 3, "dst": [
+                        { "time": 0, "x": 100, "y": 200, "w": 50, "h": 50 }
+                    ]}
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        let sources = mock_source("src", 10.0, 10.0);
+        let state_no_lift = SkinDrawState { offset_lift_px: 0, ..SkinDrawState::default() };
+        let state_lifted = SkinDrawState { offset_lift_px: 72, ..SkinDrawState::default() };
+
+        let items_no_lift = document.static_image_render_items(&sources, state_no_lift);
+        let items_lifted = document.static_image_render_items(&sources, state_lifted);
+
+        assert_eq!(items_no_lift.len(), 1);
+        assert_eq!(items_lifted.len(), 1);
+
+        let SkinRenderItem::Image { rect: rect_no_lift, .. } = &items_no_lift[0] else { panic!() };
+        let SkinRenderItem::Image { rect: rect_lifted, .. } = &items_lifted[0] else { panic!() };
+
+        // With lift=72px on a 720h canvas: y shifts by 72/720 = 0.1
+        assert!(approx_eq(rect_no_lift.y, 200.0 / 720.0));
+        assert!(
+            approx_eq(rect_lifted.y, (200 + 72) as f32 / 720.0),
+            "expected y shifted by lift, got {}",
+            rect_lifted.y
+        );
+    }
+
+    fn mock_source(id: &str, width: f32, height: f32) -> HashMap<String, SkinDocumentTexture> {
+        let mut map = HashMap::new();
+        map.insert(
+            id.to_string(),
+            SkinDocumentTexture {
+                source_id: id.to_string(),
+                texture: SkinTextureId(9999),
+                source_size: SkinImageSize { width, height },
+            },
+        );
+        map
     }
 
     fn approx_eq(actual: f32, expected: f32) -> bool {

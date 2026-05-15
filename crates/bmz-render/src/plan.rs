@@ -426,6 +426,7 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
                 bomb_ms,
                 keyon_ms,
                 judge_ms,
+                offset_lift_px: 0,
             },
             SkinTextState {
                 title: &snapshot.title,
