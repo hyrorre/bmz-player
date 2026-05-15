@@ -31,6 +31,7 @@ pub fn build_render_snapshot(
         gauge: session.gauge.current().value,
         hispeed: session.hispeed,
         lift: session.lift,
+        lane_cover: session.lane_cover,
         visible_notes: std::array::from_fn(|_| Vec::new()),
         recent_inputs: session
             .recent_inputs

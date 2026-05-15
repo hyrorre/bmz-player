@@ -430,6 +430,10 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
                     let canvas_h = skin.document().map_or(720, |d| d.h) as f32;
                     (snapshot.lift * canvas_h).round() as i32
                 },
+                offset_lanecover_px: {
+                    let canvas_h = skin.document().map_or(720, |d| d.h) as f32;
+                    ((snapshot.lift - 1.0) * canvas_h * snapshot.lane_cover).round() as i32
+                },
                 hispeed: snapshot.hispeed,
                 timeleft_ms: (snapshot.duration.0.saturating_sub(snapshot.time.0) / 1_000)
                     .saturating_add(1_000)

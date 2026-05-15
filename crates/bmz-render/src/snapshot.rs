@@ -19,6 +19,7 @@ pub struct RenderSnapshot {
     pub gauge: f32,
     pub hispeed: f32,
     pub lift: f32,
+    pub lane_cover: f32,
     pub visible_notes: [Vec<VisibleNote>; LANE_COUNT],
     pub recent_inputs: Vec<DisplayInput>,
     pub recent_judgements: Vec<DisplayJudgement>,

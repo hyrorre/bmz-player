@@ -687,6 +687,8 @@ pub struct SkinDrawState {
     pub judge_ms: Option<i32>,
     /// OFFSET_LIFT (id=3) の y 値 (skin canvas pixel 単位)。リフト量に応じて要素をシフトする。
     pub offset_lift_px: i32,
+    /// OFFSET_LANECOVER (id=4) の y 値 (skin canvas pixel 単位)。レーンカバー位置インジケータのシフト。
+    pub offset_lanecover_px: i32,
     /// 現在のハイスピード倍率 (NUMBER_HISPEED=310, NUMBER_HISPEED_AFTERDOT=311 に使用)。
     pub hispeed: f32,
     /// 曲残り時間 ms (NUMBER_TIMELEFT_MINUTE=163, NUMBER_TIMELEFT_SECOND=164 に使用)。
@@ -2463,8 +2465,10 @@ fn skin_offset_shift(destination: &SkinDestinationDef, state: SkinDrawState) -> 
         None
     });
     for offset_id in all_offsets {
-        if offset_id == 3 {
-            dy += state.offset_lift_px;
+        match offset_id {
+            3 => dy += state.offset_lift_px,
+            4 => dy += state.offset_lanecover_px,
+            _ => {}
         }
     }
     (0, dy)
@@ -4741,6 +4745,35 @@ mod tests {
             "expected y shifted by lift, got {}",
             rect_lifted.y
         );
+    }
+
+    #[test]
+    fn offset_lanecover_shifts_destination_y() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "w": 1280, "h": 720,
+                "source": [{ "id": "src", "path": "a.png" }],
+                "image": [{ "id": "img", "src": "src", "w": 10, "h": 10 }],
+                "destination": [
+                    { "id": "img", "offset": 4, "dst": [
+                        { "time": 0, "x": 0, "y": 720, "w": 50, "h": 50 }
+                    ]}
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        let sources = mock_source("src", 10.0, 10.0);
+        // lanecover=0.5, lift=0 → offset_lanecover_px = (0-1)*720*0.5 = -360
+        let state = SkinDrawState { offset_lanecover_px: -360, ..SkinDrawState::default() };
+        let items = document.static_image_render_items(&sources, state);
+
+        assert_eq!(items.len(), 1);
+        let SkinRenderItem::Image { rect, .. } = &items[0] else { panic!() };
+        // y=720 shifted by -360 → 360/720 = 0.5
+        assert!(approx_eq(rect.y, 360.0 / 720.0), "expected y=0.5, got {}", rect.y);
     }
 
     #[test]
