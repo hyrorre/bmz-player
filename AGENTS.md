@@ -199,10 +199,12 @@ database:
 - TTF/OTF/TTC font loading
 - `.fnt` bitmap font loading
 - destination `acc` easing
+- static image destination `stretch`
 
 未対応/今後の候補:
 
-- destination `center`, `offset`, `offsets`, `stretch`, `filter`
+- destination `center`, `offset`, `offsets`, `filter`
+- destination `stretch` for non-static image objects
 - `graph` / score graph 系
 - BGA
 - より正確な text outline/shadow。現在の outline は周囲8方向描画の近似です。

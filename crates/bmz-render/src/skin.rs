@@ -983,10 +983,18 @@ impl SkinDocument {
                 let frame = resolve_destination_frame(destination, state.elapsed_ms)?;
                 if let Some(image) = images.get(destination.id.as_str()) {
                     let source = sources.get(&image.src)?;
+                    let (rect, uv) = stretch_skin_image_geometry(
+                        destination.stretch,
+                        normalize_skin_frame_rect(frame, self.w, self.h),
+                        skin_image_texture_region(image, source.source_size, state.elapsed_ms),
+                        source.source_size,
+                        self.w,
+                        self.h,
+                    );
                     return Some(vec![SkinRenderItem::Image {
                         texture: source.texture,
-                        rect: normalize_skin_frame_rect(frame, self.w, self.h),
-                        uv: skin_image_texture_region(image, source.source_size, state.elapsed_ms),
+                        rect,
+                        uv,
                         tint: Color::rgba(
                             frame.r as f32 / 255.0,
                             frame.g as f32 / 255.0,
@@ -2423,6 +2431,181 @@ fn normalize_skin_frame_rect(
     }
 }
 
+fn stretch_skin_image_geometry(
+    stretch: i32,
+    rect: Rect,
+    uv: TextureRegion,
+    source_size: SkinImageSize,
+    canvas_width: u32,
+    canvas_height: u32,
+) -> (Rect, TextureRegion) {
+    if stretch <= 0 || rect.width <= 0.0 || rect.height <= 0.0 {
+        return (rect, uv);
+    }
+
+    let canvas_width = canvas_width.max(1) as f32;
+    let canvas_height = canvas_height.max(1) as f32;
+    let source_width = (uv.width.abs() * source_size.width).max(1.0);
+    let source_height = (uv.height.abs() * source_size.height).max(1.0);
+    let rect_px = SkinPixelRect {
+        x: rect.x * canvas_width,
+        y: rect.y * canvas_height,
+        width: rect.width * canvas_width,
+        height: rect.height * canvas_height,
+    };
+
+    let (rect_px, uv) = match stretch {
+        1 => (fit_inner_rect(rect_px, source_width, source_height), uv),
+        2 => (fit_outer_rect(rect_px, source_width, source_height), uv),
+        3 => fit_outer_trimmed_rect(rect_px, uv, source_width, source_height),
+        4 => (fit_width_rect(rect_px, source_width, source_height), uv),
+        5 => fit_width_trimmed_rect(rect_px, uv, source_width, source_height),
+        6 => (fit_height_rect(rect_px, source_width, source_height), uv),
+        7 => fit_height_trimmed_rect(rect_px, uv, source_width, source_height),
+        8 => (fit_no_expanding_rect(rect_px, source_width, source_height), uv),
+        9 => (resize_about_center(rect_px, source_width, source_height), uv),
+        10 => fit_no_resize_trimmed_rect(rect_px, uv, source_width, source_height),
+        _ => (rect_px, uv),
+    };
+
+    (
+        Rect {
+            x: rect_px.x / canvas_width,
+            y: rect_px.y / canvas_height,
+            width: rect_px.width / canvas_width,
+            height: rect_px.height / canvas_height,
+        },
+        uv,
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct SkinPixelRect {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+}
+
+fn fit_inner_rect(rect: SkinPixelRect, source_width: f32, source_height: f32) -> SkinPixelRect {
+    let scale_x = rect.width / source_width;
+    let scale_y = rect.height / source_height;
+    if scale_x <= scale_y {
+        resize_about_center(rect, rect.width, source_height * scale_x)
+    } else {
+        resize_about_center(rect, source_width * scale_y, rect.height)
+    }
+}
+
+fn fit_outer_rect(rect: SkinPixelRect, source_width: f32, source_height: f32) -> SkinPixelRect {
+    let scale_x = rect.width / source_width;
+    let scale_y = rect.height / source_height;
+    if scale_x >= scale_y {
+        resize_about_center(rect, rect.width, source_height * scale_x)
+    } else {
+        resize_about_center(rect, source_width * scale_y, rect.height)
+    }
+}
+
+fn fit_width_rect(rect: SkinPixelRect, source_width: f32, source_height: f32) -> SkinPixelRect {
+    resize_about_center(rect, rect.width, source_height * rect.width / source_width)
+}
+
+fn fit_height_rect(rect: SkinPixelRect, source_width: f32, source_height: f32) -> SkinPixelRect {
+    resize_about_center(rect, source_width * rect.height / source_height, rect.height)
+}
+
+fn fit_no_expanding_rect(
+    rect: SkinPixelRect,
+    source_width: f32,
+    source_height: f32,
+) -> SkinPixelRect {
+    let scale = (rect.width / source_width).min(rect.height / source_height).min(1.0);
+    resize_about_center(rect, source_width * scale, source_height * scale)
+}
+
+fn fit_outer_trimmed_rect(
+    rect: SkinPixelRect,
+    uv: TextureRegion,
+    source_width: f32,
+    source_height: f32,
+) -> (SkinPixelRect, TextureRegion) {
+    let scale_x = rect.width / source_width;
+    let scale_y = rect.height / source_height;
+    if scale_x >= scale_y {
+        fit_height_or_trim(rect, uv, source_height * scale_x)
+    } else {
+        fit_width_or_trim(rect, uv, source_width * scale_y)
+    }
+}
+
+fn fit_width_trimmed_rect(
+    rect: SkinPixelRect,
+    uv: TextureRegion,
+    source_width: f32,
+    source_height: f32,
+) -> (SkinPixelRect, TextureRegion) {
+    let scale = rect.width / source_width;
+    fit_height_or_trim(rect, uv, source_height * scale)
+}
+
+fn fit_height_trimmed_rect(
+    rect: SkinPixelRect,
+    uv: TextureRegion,
+    source_width: f32,
+    source_height: f32,
+) -> (SkinPixelRect, TextureRegion) {
+    let scale = rect.height / source_height;
+    fit_width_or_trim(rect, uv, source_width * scale)
+}
+
+fn fit_no_resize_trimmed_rect(
+    rect: SkinPixelRect,
+    uv: TextureRegion,
+    source_width: f32,
+    source_height: f32,
+) -> (SkinPixelRect, TextureRegion) {
+    let (rect, uv) = fit_width_or_trim(rect, uv, source_width);
+    fit_height_or_trim(rect, uv, source_height)
+}
+
+fn fit_width_or_trim(
+    rect: SkinPixelRect,
+    uv: TextureRegion,
+    target_width: f32,
+) -> (SkinPixelRect, TextureRegion) {
+    if rect.width < target_width {
+        let visible_ratio = (rect.width / target_width).clamp(0.0, 1.0);
+        let trim = uv.width * (1.0 - visible_ratio) * 0.5;
+        (rect, TextureRegion { x: uv.x + trim, width: uv.width - trim * 2.0, ..uv })
+    } else {
+        (resize_about_center(rect, target_width, rect.height), uv)
+    }
+}
+
+fn fit_height_or_trim(
+    rect: SkinPixelRect,
+    uv: TextureRegion,
+    target_height: f32,
+) -> (SkinPixelRect, TextureRegion) {
+    if rect.height < target_height {
+        let visible_ratio = (rect.height / target_height).clamp(0.0, 1.0);
+        let trim = uv.height * (1.0 - visible_ratio) * 0.5;
+        (rect, TextureRegion { y: uv.y + trim, height: uv.height - trim * 2.0, ..uv })
+    } else {
+        (resize_about_center(rect, rect.width, target_height), uv)
+    }
+}
+
+fn resize_about_center(rect: SkinPixelRect, width: f32, height: f32) -> SkinPixelRect {
+    SkinPixelRect {
+        x: rect.x + (rect.width - width) * 0.5,
+        y: rect.y + (rect.height - height) * 0.5,
+        width,
+        height,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ResolvedSkinFrame {
     time: i32,
@@ -3136,6 +3319,75 @@ mod tests {
                 && approx_eq(uv_height, 128.0 / 512.0)
                 && approx_eq(r, 64.0 / 255.0)
                 && approx_eq(a, 128.0 / 255.0)
+        ));
+    }
+
+    #[test]
+    fn skin_document_applies_destination_stretch_to_static_images() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "system.png" }],
+                "image": [{ "id": "wide", "src": 1, "x": 0, "y": 0, "w": 200, "h": 100 }],
+                "destination": [
+                    { "id": "wide", "stretch": 1, "dst": [{ "x": 10, "y": 10, "w": 40, "h": 40 }] },
+                    { "id": "wide", "stretch": 3, "dst": [{ "x": 10, "y": 60, "w": 40, "h": 40 }] },
+                    { "id": "wide", "stretch": 9, "dst": [{ "x": 70, "y": 70, "w": 20, "h": 20 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "1".to_string(),
+            SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 200.0, height: 100.0 },
+            },
+        )]);
+
+        let items = document.static_image_render_items(&sources, SkinDrawState::default());
+
+        assert_eq!(items.len(), 3);
+        assert!(matches!(
+            items[0],
+            SkinRenderItem::Image {
+                rect: Rect { x, y, width, height },
+                uv: TextureRegion { x: u, width: uv_width, .. },
+                ..
+            } if approx_eq(x, 0.1)
+                && approx_eq(y, 0.2)
+                && approx_eq(width, 0.4)
+                && approx_eq(height, 0.2)
+                && approx_eq(u, 0.0)
+                && approx_eq(uv_width, 1.0)
+        ));
+        assert!(matches!(
+            items[1],
+            SkinRenderItem::Image {
+                rect: Rect { x, y, width, height },
+                uv: TextureRegion { x: u, width: uv_width, .. },
+                ..
+            } if approx_eq(x, 0.1)
+                && approx_eq(y, 0.6)
+                && approx_eq(width, 0.4)
+                && approx_eq(height, 0.4)
+                && approx_eq(u, 0.25)
+                && approx_eq(uv_width, 0.5)
+        ));
+        assert!(matches!(
+            items[2],
+            SkinRenderItem::Image {
+                rect: Rect { x, y, width, height },
+                ..
+            } if approx_eq(x, -0.2)
+                && approx_eq(y, 0.3)
+                && approx_eq(width, 2.0)
+                && approx_eq(height, 1.0)
         ));
     }
 
