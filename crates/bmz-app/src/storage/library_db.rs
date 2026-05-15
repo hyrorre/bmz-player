@@ -106,11 +106,9 @@ impl LibraryDatabase {
 
     pub fn chart_id_by_title(&self, title: &str) -> Result<Option<i64>> {
         self.conn
-            .query_row(
-                "SELECT id FROM charts WHERE title = ?1 LIMIT 1",
-                params![title],
-                |row| row.get(0),
-            )
+            .query_row("SELECT id FROM charts WHERE title = ?1 LIMIT 1", params![title], |row| {
+                row.get(0)
+            })
             .optional()
             .map_err(Into::into)
     }

@@ -40,17 +40,17 @@ pub fn run_migrations(conn: &mut Connection, migrations: &[Migration]) -> Result
 }
 
 pub const LIBRARY_MIGRATIONS: &[Migration] = &[
-Migration {
-    version: 1,
-    statements: &[
-        "CREATE TABLE roots (
+    Migration {
+        version: 1,
+        statements: &[
+            "CREATE TABLE roots (
             id INTEGER PRIMARY KEY,
             path TEXT NOT NULL UNIQUE,
             enabled INTEGER NOT NULL DEFAULT 1,
             recursive INTEGER NOT NULL DEFAULT 1,
             last_scan_at INTEGER
         );",
-        "CREATE TABLE chart_files (
+            "CREATE TABLE chart_files (
             id INTEGER PRIMARY KEY,
             root_id INTEGER,
             path TEXT NOT NULL UNIQUE,
@@ -62,7 +62,7 @@ Migration {
             parse_status TEXT NOT NULL,
             FOREIGN KEY(root_id) REFERENCES roots(id)
         );",
-        "CREATE TABLE charts (
+            "CREATE TABLE charts (
             id INTEGER PRIMARY KEY,
             sha256 BLOB NOT NULL UNIQUE,
             md5 BLOB NOT NULL,
@@ -88,14 +88,14 @@ Migration {
             preview_file TEXT NOT NULL,
             import_version INTEGER NOT NULL
         );",
-        "CREATE TABLE chart_file_links (
+            "CREATE TABLE chart_file_links (
             chart_id INTEGER NOT NULL,
             chart_file_id INTEGER NOT NULL,
             PRIMARY KEY(chart_id, chart_file_id),
             FOREIGN KEY(chart_id) REFERENCES charts(id),
             FOREIGN KEY(chart_file_id) REFERENCES chart_files(id)
         );",
-        "CREATE TABLE chart_import_warnings (
+            "CREATE TABLE chart_import_warnings (
             id INTEGER PRIMARY KEY,
             chart_file_id INTEGER NOT NULL,
             code TEXT NOT NULL,
@@ -103,23 +103,23 @@ Migration {
             created_at INTEGER NOT NULL,
             FOREIGN KEY(chart_file_id) REFERENCES chart_files(id)
         );",
-        "CREATE INDEX idx_chart_files_sha256 ON chart_files(sha256);",
-        "CREATE INDEX idx_chart_files_root_id ON chart_files(root_id);",
-        "CREATE INDEX idx_charts_title ON charts(title);",
-        "CREATE INDEX idx_charts_artist ON charts(artist);",
-        "CREATE INDEX idx_charts_folder_path ON charts(folder_path);",
-        "CREATE INDEX idx_charts_mode ON charts(mode);",
-    ],
-},
-Migration {
-    version: 2,
-    statements: &[
-        // Recreate charts without UNIQUE(sha256) and chart_file_links with UNIQUE(chart_file_id).
-        // Both tables are renamed first, then recreated, so FK constraints on the new tables
-        // are satisfied when data is copied (charts populated before chart_file_links).
-        "ALTER TABLE charts RENAME TO charts_old;",
-        "ALTER TABLE chart_file_links RENAME TO chart_file_links_old;",
-        "CREATE TABLE charts (
+            "CREATE INDEX idx_chart_files_sha256 ON chart_files(sha256);",
+            "CREATE INDEX idx_chart_files_root_id ON chart_files(root_id);",
+            "CREATE INDEX idx_charts_title ON charts(title);",
+            "CREATE INDEX idx_charts_artist ON charts(artist);",
+            "CREATE INDEX idx_charts_folder_path ON charts(folder_path);",
+            "CREATE INDEX idx_charts_mode ON charts(mode);",
+        ],
+    },
+    Migration {
+        version: 2,
+        statements: &[
+            // Recreate charts without UNIQUE(sha256) and chart_file_links with UNIQUE(chart_file_id).
+            // Both tables are renamed first, then recreated, so FK constraints on the new tables
+            // are satisfied when data is copied (charts populated before chart_file_links).
+            "ALTER TABLE charts RENAME TO charts_old;",
+            "ALTER TABLE chart_file_links RENAME TO chart_file_links_old;",
+            "CREATE TABLE charts (
             id INTEGER PRIMARY KEY,
             sha256 BLOB NOT NULL,
             md5 BLOB NOT NULL,
@@ -145,23 +145,23 @@ Migration {
             preview_file TEXT NOT NULL,
             import_version INTEGER NOT NULL
         );",
-        "CREATE TABLE chart_file_links (
+            "CREATE TABLE chart_file_links (
             chart_id INTEGER NOT NULL,
             chart_file_id INTEGER NOT NULL UNIQUE,
             PRIMARY KEY(chart_id, chart_file_id),
             FOREIGN KEY(chart_id) REFERENCES charts(id),
             FOREIGN KEY(chart_file_id) REFERENCES chart_files(id)
         );",
-        "INSERT INTO charts SELECT * FROM charts_old;",
-        "INSERT INTO chart_file_links SELECT * FROM chart_file_links_old;",
-        "DROP TABLE chart_file_links_old;",
-        "DROP TABLE charts_old;",
-        "CREATE INDEX idx_charts_title ON charts(title);",
-        "CREATE INDEX idx_charts_artist ON charts(artist);",
-        "CREATE INDEX idx_charts_folder_path ON charts(folder_path);",
-        "CREATE INDEX idx_charts_mode ON charts(mode);",
-    ],
-},
+            "INSERT INTO charts SELECT * FROM charts_old;",
+            "INSERT INTO chart_file_links SELECT * FROM chart_file_links_old;",
+            "DROP TABLE chart_file_links_old;",
+            "DROP TABLE charts_old;",
+            "CREATE INDEX idx_charts_title ON charts(title);",
+            "CREATE INDEX idx_charts_artist ON charts(artist);",
+            "CREATE INDEX idx_charts_folder_path ON charts(folder_path);",
+            "CREATE INDEX idx_charts_mode ON charts(mode);",
+        ],
+    },
 ];
 
 pub const SCORE_MIGRATIONS: &[Migration] = &[Migration {

@@ -20,7 +20,6 @@ use crate::cli::{
 use crate::config::app_config::PathEntry;
 use crate::config::profile_config::{GaugeTypeConfig, LaneConfig, ProfileInputConfig};
 use crate::input::winit::physical_key_to_control;
-use crate::storage::scan::scan_song_roots;
 use crate::screens::play_finish::FinishedPlaySession;
 use crate::screens::play_loop::{PlayAdvanceOutcome, advance_running_play_session_until_result};
 use crate::screens::play_start::{PlayStartOptions, StartedWinitPlaySession};
@@ -30,6 +29,7 @@ use crate::screens::select_model::{
 };
 use crate::select_options::{ArrangeOption, AssistOption};
 use crate::skin_loader::apply_default_skin;
+use crate::storage::scan::scan_song_roots;
 
 const SAMPLE_PLAYABLE_TITLE: &str = "BMZ Sample Playable";
 
@@ -286,20 +286,28 @@ impl WinitApp {
                 if let Some(control) = physical_key_name(event.physical_key) {
                     if self.select_keys.cycle_arrange.as_deref() == Some(&control) {
                         self.arrange_option = self.arrange_option.cycle();
-                        tracing::info!(arrange = self.arrange_option.as_str(), "arrange option changed");
+                        tracing::info!(
+                            arrange = self.arrange_option.as_str(),
+                            "arrange option changed"
+                        );
                     } else if self.select_keys.cycle_gauge.as_deref() == Some(&control) {
                         self.gauge_option = cycle_gauge_option(self.gauge_option);
                         tracing::info!(gauge = ?self.gauge_option, "gauge option changed");
                     } else if self.select_keys.cycle_assist.as_deref() == Some(&control) {
                         self.assist_option = self.assist_option.cycle();
-                        tracing::info!(assist = self.assist_option.as_str(), "assist option changed");
+                        tracing::info!(
+                            assist = self.assist_option.as_str(),
+                            "assist option changed"
+                        );
                     }
                 }
             }
             return;
         }
 
-        if let Some(action) = select_action(event.physical_key, event.state, event.repeat, &self.select_keys) {
+        if let Some(action) =
+            select_action(event.physical_key, event.state, event.repeat, &self.select_keys)
+        {
             match action {
                 SelectAction::EnterOrPlay => self.enter_or_play_selected(),
                 SelectAction::ExitFolder => self.exit_folder(),
@@ -611,27 +619,19 @@ fn log_startup_options(options: &AppOptions) {
 }
 
 fn initial_folder_stack(app_config: &crate::config::app_config::AppConfig) -> Vec<String> {
-    let enabled: Vec<String> = app_config
-        .songs
-        .roots
-        .iter()
-        .filter(|p| p.enabled)
-        .map(|p| p.path.clone())
-        .collect();
+    let enabled: Vec<String> =
+        app_config.songs.roots.iter().filter(|p| p.enabled).map(|p| p.path.clone()).collect();
     if enabled.len() == 1 { enabled } else { Vec::new() }
 }
 
 fn enabled_root_paths(app_config: &crate::config::app_config::AppConfig) -> Vec<String> {
-    app_config
-        .songs
-        .roots
-        .iter()
-        .filter(|p| p.enabled)
-        .map(|p| p.path.clone())
-        .collect()
+    app_config.songs.roots.iter().filter(|p| p.enabled).map(|p| p.path.clone()).collect()
 }
 
-fn load_items_for_stack(boot: &crate::bootstrap::BootstrappedApp, stack: &[String]) -> Vec<SelectItem> {
+fn load_items_for_stack(
+    boot: &crate::bootstrap::BootstrappedApp,
+    stack: &[String],
+) -> Vec<SelectItem> {
     match stack.last() {
         Some(folder) => {
             match load_select_items_in_folder(&boot.library_db, &boot.score_db, folder) {
@@ -914,21 +914,19 @@ impl SelectKeyBindings {
             kb.iter().filter(|e| e.lane == lane).map(|e| e.control.clone()).collect()
         };
 
-        let enter: Vec<String> = [LaneConfig::Key1, LaneConfig::Key3, LaneConfig::Key5, LaneConfig::Key7]
-            .iter()
-            .flat_map(|&l| keys_for(l))
-            .collect();
+        let enter: Vec<String> =
+            [LaneConfig::Key1, LaneConfig::Key3, LaneConfig::Key5, LaneConfig::Key7]
+                .iter()
+                .flat_map(|&l| keys_for(l))
+                .collect();
         let back = keys_for(LaneConfig::Key2);
         let cycle_arrange = keys_for(LaneConfig::Key1).into_iter().next();
         let cycle_gauge = keys_for(LaneConfig::Key3).into_iter().next();
         let cycle_assist = keys_for(LaneConfig::Key5).into_iter().next();
         let start = input.start_key.clone();
 
-        let enter_str = if enter.is_empty() {
-            String::new()
-        } else {
-            format!("/{}", enter.join("/"))
-        };
+        let enter_str =
+            if enter.is_empty() { String::new() } else { format!("/{}", enter.join("/")) };
         let back_str = back.first().map(|k| format!("/{k}")).unwrap_or_default();
         let key_hint =
             format!("UP DOWN  RIGHT{enter_str}:ENTER  LEFT{back_str}:BACK  ENTER {start}");

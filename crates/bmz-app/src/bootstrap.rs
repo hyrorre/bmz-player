@@ -82,10 +82,11 @@ pub fn bootstrap() -> Result<BootstrappedApp> {
     if let Some(sample_root) = bundled_sample_song_root() {
         let sample_root_str = sample_root.to_string_lossy().into_owned();
         if !app_config.songs.roots.iter().any(|r| r.path == sample_root_str) {
-            app_config
-                .songs
-                .roots
-                .push(PathEntry { path: sample_root_str, enabled: true, recursive: true });
+            app_config.songs.roots.push(PathEntry {
+                path: sample_root_str,
+                enabled: true,
+                recursive: true,
+            });
         }
     }
     let profile_paths = resolve_profile_paths(&app_paths, &app_config.active_profile)?;

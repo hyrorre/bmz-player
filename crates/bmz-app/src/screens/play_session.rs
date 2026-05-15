@@ -210,8 +210,13 @@ fn apply_lane_permutation(chart: &mut PlayableChart, perm: &[usize; 8]) {
     for (new_idx, &old_idx) in perm.iter().enumerate() {
         let new_lane = Lane::ALL[new_idx];
         let notes = old_notes[old_idx].take().unwrap_or_default();
-        chart.lane_notes[new_idx] =
-            notes.into_iter().map(|mut n| { n.lane = new_lane; n }).collect();
+        chart.lane_notes[new_idx] = notes
+            .into_iter()
+            .map(|mut n| {
+                n.lane = new_lane;
+                n
+            })
+            .collect();
     }
 
     let mut reverse = [0usize; 8];

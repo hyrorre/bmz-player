@@ -111,12 +111,8 @@ mod tests {
         let alpha = chart("Alpha");
         let beta = chart("Beta");
 
-        library_db
-            .upsert_chart_import(&record_for_chart("/songs/alpha.bms", &alpha))
-            .unwrap();
-        library_db
-            .upsert_chart_import(&record_for_chart("/songs/beta.bms", &beta))
-            .unwrap();
+        library_db.upsert_chart_import(&record_for_chart("/songs/alpha.bms", &alpha)).unwrap();
+        library_db.upsert_chart_import(&record_for_chart("/songs/beta.bms", &beta)).unwrap();
         score_db.insert_score(&score_for_chart(alpha.identity.file_sha256)).unwrap();
 
         let items = load_select_items_in_folder(&library_db, &score_db, "/songs").unwrap();
@@ -142,17 +138,19 @@ mod tests {
         library_db
             .upsert_chart_import(&record_for_chart("/bms/genre/song_a.bms", &chart_a))
             .unwrap();
-        library_db
-            .upsert_chart_import(&record_for_chart("/bms/song_b.bms", &chart_b))
-            .unwrap();
+        library_db.upsert_chart_import(&record_for_chart("/bms/song_b.bms", &chart_b)).unwrap();
 
         let items = load_select_items_in_folder(&library_db, &score_db, "/bms").unwrap();
 
         // genre is a leaf folder so its chart appears directly, not as a Folder entry
         assert_eq!(items.len(), 2);
         assert!(items.iter().all(|i| matches!(i, SelectItem::Chart(_))));
-        let titles: Vec<_> =
-            items.iter().filter_map(|i| if let SelectItem::Chart(r) = i { Some(r.chart.title.as_str()) } else { None }).collect();
+        let titles: Vec<_> = items
+            .iter()
+            .filter_map(|i| {
+                if let SelectItem::Chart(r) = i { Some(r.chart.title.as_str()) } else { None }
+            })
+            .collect();
         assert!(titles.contains(&"A"));
         assert!(titles.contains(&"B"));
     }
@@ -167,9 +165,7 @@ mod tests {
         library_db
             .upsert_chart_import(&record_for_chart("/bms/genre/subgenre/song_a.bms", &chart_a))
             .unwrap();
-        library_db
-            .upsert_chart_import(&record_for_chart("/bms/song_b.bms", &chart_b))
-            .unwrap();
+        library_db.upsert_chart_import(&record_for_chart("/bms/song_b.bms", &chart_b)).unwrap();
 
         let items = load_select_items_in_folder(&library_db, &score_db, "/bms").unwrap();
 
