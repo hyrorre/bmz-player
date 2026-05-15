@@ -36,6 +36,8 @@ pub fn build_render_snapshot(
         now_bpm: current_bpm(&session.chart, render_now) as f32,
         min_bpm: chart_min_bpm(&session.chart) as f32,
         max_bpm: chart_max_bpm(&session.chart) as f32,
+        best_ex_score: None,   // TODO: resolve from score DB before play
+        target_ex_score: None, // TODO: resolve from rival / target config
         visible_notes: std::array::from_fn(|_| Vec::new()),
         recent_inputs: session
             .recent_inputs

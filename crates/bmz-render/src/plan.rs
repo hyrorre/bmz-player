@@ -448,6 +448,8 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
                 min_bpm: snapshot.min_bpm,
                 max_bpm: snapshot.max_bpm,
                 judge_timing_ms,
+                best_ex_score: snapshot.best_ex_score,
+                target_ex_score: snapshot.target_ex_score,
             },
             SkinTextState {
                 title: &snapshot.title,

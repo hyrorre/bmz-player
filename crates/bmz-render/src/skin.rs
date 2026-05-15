@@ -705,6 +705,10 @@ pub struct SkinDrawState {
     pub max_bpm: f32,
     /// 最後の判定のタイミングずれ ms (VALUE_JUDGE_1P_DURATION=525 に使用)。Noneなら非表示。
     pub judge_timing_ms: Option<i32>,
+    /// 過去ベストスコアのexスコア (NUMBER_HIGHSCORE=150, BARGRAPH_BESTSCORERATE=113 に使用)。
+    pub best_ex_score: Option<u32>,
+    /// ターゲットスコアのexスコア (NUMBER_TARGET_SCORE=121, BARGRAPH_TARGETSCORERATE=115 に使用)。
+    pub target_ex_score: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -2351,6 +2355,9 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         14 => Some((state.lane_cover.clamp(0.0, 1.0) * 100.0).round() as i64),
         // 判定タイミングずれ: VALUE_JUDGE_1P_DURATION=525 (ms、絶対値)
         525 => state.judge_timing_ms.map(|ms| ms.unsigned_abs() as i64),
+        // ベストスコア / ターゲットスコア (DB から供給、未取得時は None)
+        150 => state.best_ex_score.map(|s| s as i64),
+        121 => state.target_ex_score.map(|s| s as i64),
         420 => Some(state.judge_counts.empty_poor as i64),
         425 | 427 => Some((state.judge_counts.bad + state.judge_counts.poor) as i64),
         426 => Some(state.judge_counts.poor as i64),
@@ -2432,7 +2439,35 @@ fn graph_value(graph_type: i32, state: SkinDrawState) -> f32 {
             let max = (state.past_notes * 2) as f32;
             if max > 0.0 { state.ex_score as f32 / max } else { 0.0 }
         }
-        _ => 0.0, // BARGRAPH_BESTSCORERATE, TARGETSCORERATE etc. need external data
+        // BARGRAPH_BESTSCORERATE_NOW (112): best_ex_score * past_notes / (total_notes^2 * 2)
+        112 => {
+            let max = (state.total_notes as f64).powi(2) * 2.0;
+            if max > 0.0 {
+                (state.best_ex_score.unwrap_or(0) as f64 * state.past_notes as f64 / max) as f32
+            } else {
+                0.0
+            }
+        }
+        // BARGRAPH_BESTSCORERATE (113): best_ex_score / (total_notes * 2)
+        113 => {
+            let max = (state.total_notes * 2) as f32;
+            if max > 0.0 { state.best_ex_score.unwrap_or(0) as f32 / max } else { 0.0 }
+        }
+        // BARGRAPH_TARGETSCORERATE_NOW (114): target_ex_score * past_notes / (total_notes^2 * 2)
+        114 => {
+            let max = (state.total_notes as f64).powi(2) * 2.0;
+            if max > 0.0 {
+                (state.target_ex_score.unwrap_or(0) as f64 * state.past_notes as f64 / max) as f32
+            } else {
+                0.0
+            }
+        }
+        // BARGRAPH_TARGETSCORERATE (115): target_ex_score / (total_notes * 2)
+        115 => {
+            let max = (state.total_notes * 2) as f32;
+            if max > 0.0 { state.target_ex_score.unwrap_or(0) as f32 / max } else { 0.0 }
+        }
+        _ => 0.0,
     }
 }
 
@@ -5152,6 +5187,72 @@ mod tests {
         // When no recent judgement, 525 returns None
         let no_judge = SkinDrawState { judge_timing_ms: None, ..state };
         assert_eq!(skin_state_number(525, no_judge), None);
+    }
+
+    #[test]
+    fn skin_state_number_best_and_target_score() {
+        let state = SkinDrawState {
+            best_ex_score: Some(1500),
+            target_ex_score: Some(800),
+            ..SkinDrawState::default()
+        };
+        // NUMBER_HIGHSCORE (150)
+        assert_eq!(skin_state_number(150, state), Some(1500));
+        // NUMBER_TARGET_SCORE (121)
+        assert_eq!(skin_state_number(121, state), Some(800));
+        // When None → None
+        let no_scores = SkinDrawState::default();
+        assert_eq!(skin_state_number(150, no_scores), None);
+        assert_eq!(skin_state_number(121, no_scores), None);
+    }
+
+    #[test]
+    fn graph_value_bestscorerate_fills_bar_proportionally() {
+        // BARGRAPH_BESTSCORERATE (113): best / (total_notes * 2)
+        // best=800, total=500 → 800/1000 = 0.8
+        let state = SkinDrawState {
+            best_ex_score: Some(800),
+            total_notes: 500,
+            ..SkinDrawState::default()
+        };
+        let v = graph_value(113, state);
+        assert!((v - 0.8).abs() < 1e-5, "best score rate: expected 0.8, got {v}");
+    }
+
+    #[test]
+    fn graph_value_targetscorerate_fills_bar_proportionally() {
+        // BARGRAPH_TARGETSCORERATE (115): target / (total_notes * 2)
+        // target=600, total=600 → 600/1200 = 0.5
+        let state = SkinDrawState {
+            target_ex_score: Some(600),
+            total_notes: 600,
+            ..SkinDrawState::default()
+        };
+        let v = graph_value(115, state);
+        assert!((v - 0.5).abs() < 1e-5, "target score rate: expected 0.5, got {v}");
+    }
+
+    #[test]
+    fn graph_value_bestscorerate_now_scales_with_past_notes() {
+        // BARGRAPH_BESTSCORERATE_NOW (112): best * past / (total^2 * 2)
+        // best=160 (80% of max 200), past=50, total=100
+        // → 160 * 50 / (100^2 * 2) = 8000 / 20000 = 0.4
+        // = best_rate(0.8) × play_fraction(0.5) = 0.4
+        let state = SkinDrawState {
+            best_ex_score: Some(160),
+            past_notes: 50,
+            total_notes: 100,
+            ..SkinDrawState::default()
+        };
+        let v = graph_value(112, state);
+        assert!((v - 0.4).abs() < 1e-4, "best now rate: expected 0.4, got {v}");
+    }
+
+    #[test]
+    fn graph_value_returns_zero_when_no_best_score() {
+        let state = SkinDrawState { total_notes: 100, ..SkinDrawState::default() };
+        assert_eq!(graph_value(113, state), 0.0);
+        assert_eq!(graph_value(115, state), 0.0);
     }
 
     #[test]
