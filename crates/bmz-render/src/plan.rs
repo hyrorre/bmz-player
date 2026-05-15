@@ -450,6 +450,7 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
                 judge_timing_ms,
                 best_ex_score: snapshot.best_ex_score,
                 target_ex_score: snapshot.target_ex_score,
+                judge_timing_offset_ms: snapshot.judge_timing_offset_ms,
             },
             SkinTextState {
                 title: &snapshot.title,

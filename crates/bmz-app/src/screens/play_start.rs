@@ -13,6 +13,7 @@ use crate::screens::play_session::{
 };
 use crate::select_options::ArrangeOption;
 use crate::storage::library_db::LibraryDatabase;
+use crate::storage::score_db::ScoreDatabase;
 
 #[derive(Debug, Clone, Default)]
 pub struct PlayStartOptions {
@@ -44,6 +45,7 @@ pub fn play_session_options_from_start(
 
 pub fn start_running_play_session_for_chart(
     library_db: &LibraryDatabase,
+    score_db: &ScoreDatabase,
     app_config: &AppConfig,
     profile: &ProfileConfig,
     chart_id: i64,
@@ -51,6 +53,7 @@ pub fn start_running_play_session_for_chart(
 ) -> Result<RunningPlaySession> {
     start_running_play_session_for_chart_with_input_backend(
         library_db,
+        score_db,
         app_config,
         profile,
         chart_id,
@@ -61,6 +64,7 @@ pub fn start_running_play_session_for_chart(
 
 pub fn start_running_play_session_for_chart_with_input_backend(
     library_db: &LibraryDatabase,
+    score_db: &ScoreDatabase,
     app_config: &AppConfig,
     profile: &ProfileConfig,
     chart_id: i64,
@@ -76,13 +80,16 @@ pub fn start_running_play_session_for_chart_with_input_backend(
         session_options,
         input_backend,
     )?;
+    let chart_sha256 = prepared.session.chart.identity.file_sha256;
     let mut running = open_prepared_play_audio(&app_config.audio, prepared)?;
+    running.best_ex_score = score_db.best_ex_score(chart_sha256).unwrap_or(None);
     running.start(chart_zero_time)?;
     Ok(running)
 }
 
 pub fn start_running_play_session_for_chart_with_winit_input(
     library_db: &LibraryDatabase,
+    score_db: &ScoreDatabase,
     app_config: &AppConfig,
     profile: &ProfileConfig,
     chart_id: i64,
@@ -91,6 +98,7 @@ pub fn start_running_play_session_for_chart_with_winit_input(
     let input = WinitInputBackend::default();
     let running = start_running_play_session_for_chart_with_input_backend(
         library_db,
+        score_db,
         app_config,
         profile,
         chart_id,

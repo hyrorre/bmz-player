@@ -36,6 +36,7 @@ impl BootstrappedApp {
     ) -> Result<crate::audio::RunningPlaySession> {
         start_running_play_session_for_chart(
             &self.library_db,
+            &self.score_db,
             &self.app_config,
             &self.profile_config,
             chart_id,
@@ -51,6 +52,7 @@ impl BootstrappedApp {
     ) -> Result<crate::audio::RunningPlaySession> {
         start_running_play_session_for_chart_with_input_backend(
             &self.library_db,
+            &self.score_db,
             &self.app_config,
             &self.profile_config,
             chart_id,
@@ -66,6 +68,7 @@ impl BootstrappedApp {
     ) -> Result<StartedWinitPlaySession> {
         start_running_play_session_for_chart_with_winit_input(
             &self.library_db,
+            &self.score_db,
             &self.app_config,
             &self.profile_config,
             chart_id,

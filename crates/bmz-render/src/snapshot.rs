@@ -25,6 +25,7 @@ pub struct RenderSnapshot {
     pub max_bpm: f32,
     pub best_ex_score: Option<u32>,
     pub target_ex_score: Option<u32>,
+    pub judge_timing_offset_ms: i32,
     pub visible_notes: [Vec<VisibleNote>; LANE_COUNT],
     pub recent_inputs: Vec<DisplayInput>,
     pub recent_judgements: Vec<DisplayJudgement>,

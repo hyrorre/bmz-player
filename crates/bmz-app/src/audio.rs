@@ -23,6 +23,8 @@ pub struct RunningPlaySession {
     pub sample_report: Vec<LoadedSampleReport>,
     pub finished: Option<FinishedPlaySession>,
     pub audio_paused_after_finish: bool,
+    /// プレイ開始時に DB から取得したベスト EX スコア。未取得なら None。
+    pub best_ex_score: Option<u32>,
 }
 
 impl AppAudioOutput {
@@ -76,6 +78,7 @@ pub fn open_prepared_play_audio(
         sample_report: prepared.sample_report,
         finished: None,
         audio_paused_after_finish: false,
+        best_ex_score: None,
     })
 }
 

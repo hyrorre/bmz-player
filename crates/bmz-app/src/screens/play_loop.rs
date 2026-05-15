@@ -42,10 +42,15 @@ impl PlayAdvanceOutcome {
 pub fn advance_play_screen(
     session: &mut GameSession,
     audio: &mut dyn AudioScheduler,
+    best_ex_score: Option<u32>,
 ) -> FrameOutput<RenderSnapshot> {
     let frame = advance_session_frame(session, audio);
-    let render_snapshot =
-        build_render_snapshot(session, frame.times.render_now, &session.recent_judgements);
+    let render_snapshot = build_render_snapshot(
+        session,
+        frame.times.render_now,
+        &session.recent_judgements,
+        best_ex_score,
+    );
     FrameOutput { render_snapshot, state: frame.state }
 }
 
@@ -57,7 +62,7 @@ pub fn advance_play_screen_until_result(
     replay_config: &ReplayConfig,
     played_at: i64,
 ) -> Result<PlayAdvanceOutcome> {
-    let frame = advance_play_screen(session, audio);
+    let frame = advance_play_screen(session, audio, None);
     if matches!(frame.state, PlayState::Finished | PlayState::Failed) {
         let finished =
             finish_session_result(score_db, profile_paths, replay_config, session, played_at)?;
@@ -70,15 +75,20 @@ pub fn advance_play_screen_until_result(
 pub fn advance_play_screen_with_shared_audio(
     session: &mut GameSession,
     audio: &SharedAudioEngine,
+    best_ex_score: Option<u32>,
 ) -> Result<FrameOutput<RenderSnapshot>> {
     let mut audio = audio.lock().map_err(|_| anyhow!("audio engine lock poisoned"))?;
-    Ok(advance_play_screen(session, &mut *audio))
+    Ok(advance_play_screen(session, &mut *audio, best_ex_score))
 }
 
 pub fn advance_running_play_session(
     running: &mut RunningPlaySession,
 ) -> Result<FrameOutput<RenderSnapshot>> {
-    advance_play_screen_with_shared_audio(&mut running.session, &running.audio.engine)
+    advance_play_screen_with_shared_audio(
+        &mut running.session,
+        &running.audio.engine,
+        running.best_ex_score,
+    )
 }
 
 pub fn advance_running_play_session_until_result(
@@ -91,7 +101,7 @@ pub fn advance_running_play_session_until_result(
     if let Some(finished) = running.finished.clone() {
         pause_running_audio_after_finish(running);
         return Ok(PlayAdvanceOutcome::Finished {
-            frame: current_play_frame(&running.session),
+            frame: current_play_frame(&running.session, running.best_ex_score),
             finished,
         });
     }
@@ -99,7 +109,7 @@ pub fn advance_running_play_session_until_result(
     let frame = {
         let mut audio =
             running.audio.engine.lock().map_err(|_| anyhow!("audio engine lock poisoned"))?;
-        advance_play_screen(&mut running.session, &mut *audio)
+        advance_play_screen(&mut running.session, &mut *audio, running.best_ex_score)
     };
     if matches!(frame.state, PlayState::Finished | PlayState::Failed) {
         let finished = finish_session_result_once(
@@ -133,10 +143,13 @@ fn pause_running_audio_after_finish(running: &mut RunningPlaySession) {
     }
 }
 
-fn current_play_frame(session: &GameSession) -> FrameOutput<RenderSnapshot> {
+fn current_play_frame(
+    session: &GameSession,
+    best_ex_score: Option<u32>,
+) -> FrameOutput<RenderSnapshot> {
     let times = bmz_gameplay::session::compute_frame_times(session);
     let render_snapshot =
-        build_render_snapshot(session, times.render_now, &session.recent_judgements);
+        build_render_snapshot(session, times.render_now, &session.recent_judgements, best_ex_score);
     FrameOutput { render_snapshot, state: session.state }
 }
 
@@ -181,7 +194,7 @@ mod tests {
             build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
         let mut audio = TestAudio::default();
 
-        let frame = advance_play_screen(&mut session, &mut audio);
+        let frame = advance_play_screen(&mut session, &mut audio, None);
 
         assert_eq!(frame.render_snapshot.time, TimeUs(0));
         assert_eq!(frame.render_snapshot.visible_notes[Lane::Key1.index()].len(), 1);
@@ -194,7 +207,7 @@ mod tests {
             build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
         let audio: SharedAudioEngine = Arc::new(Mutex::new(AudioEngine::default()));
 
-        let frame = advance_play_screen_with_shared_audio(&mut session, &audio).unwrap();
+        let frame = advance_play_screen_with_shared_audio(&mut session, &audio, None).unwrap();
 
         assert_eq!(frame.render_snapshot.visible_notes[Lane::Key1.index()].len(), 1);
     }

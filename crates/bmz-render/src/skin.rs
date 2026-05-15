@@ -709,6 +709,8 @@ pub struct SkinDrawState {
     pub best_ex_score: Option<u32>,
     /// ターゲットスコアのexスコア (NUMBER_TARGET_SCORE=121, BARGRAPH_TARGETSCORERATE=115 に使用)。
     pub target_ex_score: Option<u32>,
+    /// 判定タイミングオフセット設定値 ms (NUMBER_JUDGETIMING=12 に使用、beatoraja の judgetiming 設定)。
+    pub judge_timing_offset_ms: i32,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -2355,6 +2357,8 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         14 => Some((state.lane_cover.clamp(0.0, 1.0) * 100.0).round() as i64),
         // 判定タイミングずれ: VALUE_JUDGE_1P_DURATION=525 (ms、絶対値)
         525 => state.judge_timing_ms.map(|ms| ms.unsigned_abs() as i64),
+        // 判定タイミングオフセット設定値 (NUMBER_JUDGETIMING=12)
+        12 => Some(state.judge_timing_offset_ms as i64),
         // ベストスコア / ターゲットスコア (DB から供給、未取得時は None)
         150 => state.best_ex_score.map(|s| s as i64),
         121 => state.target_ex_score.map(|s| s as i64),

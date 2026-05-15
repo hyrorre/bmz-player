@@ -14,6 +14,7 @@ pub fn build_render_snapshot(
     session: &GameSession,
     render_now: TimeUs,
     recent_judgements: &[JudgementEvent],
+    best_ex_score: Option<u32>,
 ) -> RenderSnapshot {
     let mut snapshot = RenderSnapshot {
         time: render_now,
@@ -36,8 +37,9 @@ pub fn build_render_snapshot(
         now_bpm: current_bpm(&session.chart, render_now) as f32,
         min_bpm: chart_min_bpm(&session.chart) as f32,
         max_bpm: chart_max_bpm(&session.chart) as f32,
-        best_ex_score: None,   // TODO: resolve from score DB before play
+        best_ex_score,
         target_ex_score: None, // TODO: resolve from rival / target config
+        judge_timing_offset_ms: (session.offsets.input_offset_us / 1_000) as i32,
         visible_notes: std::array::from_fn(|_| Vec::new()),
         recent_inputs: session
             .recent_inputs
@@ -181,7 +183,7 @@ mod tests {
             time: TimeUs(1_000),
         }];
 
-        let snapshot = build_render_snapshot(&session, TimeUs(0), &judgements);
+        let snapshot = build_render_snapshot(&session, TimeUs(0), &judgements, None);
 
         assert_eq!(snapshot.combo, 0);
         assert_eq!(snapshot.max_combo, 0);
@@ -203,8 +205,8 @@ mod tests {
             build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
         session.hispeed = 1.0;
 
-        let early = build_render_snapshot(&session, TimeUs(0), &[]);
-        let later = build_render_snapshot(&session, TimeUs(750_000), &[]);
+        let early = build_render_snapshot(&session, TimeUs(0), &[], None);
+        let later = build_render_snapshot(&session, TimeUs(750_000), &[], None);
 
         assert_eq!(early.visible_notes[Lane::Key1.index()][0].y, 0.5);
         assert_eq!(later.visible_notes[Lane::Key1.index()][0].y, 0.125);
@@ -217,7 +219,7 @@ mod tests {
             build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
         session.hispeed = 2.0;
 
-        let snapshot = build_render_snapshot(&session, TimeUs(0), &[]);
+        let snapshot = build_render_snapshot(&session, TimeUs(0), &[], None);
 
         assert_eq!(snapshot.hispeed, 2.0);
         assert_eq!(snapshot.visible_notes[Lane::Key1.index()][0].y, 1.0);
@@ -230,7 +232,7 @@ mod tests {
             build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
         session.judge.lanes[Lane::Key1.index()].next_note_index = 1;
 
-        let snapshot = build_render_snapshot(&session, TimeUs(0), &[]);
+        let snapshot = build_render_snapshot(&session, TimeUs(0), &[], None);
 
         assert!(snapshot.visible_notes[Lane::Key1.index()].is_empty());
     }
@@ -249,7 +251,7 @@ mod tests {
             source: InputSource::Human,
         });
 
-        let snapshot = build_render_snapshot(&session, TimeUs(50_000), &[]);
+        let snapshot = build_render_snapshot(&session, TimeUs(50_000), &[], None);
 
         assert_eq!(snapshot.recent_inputs.len(), 1);
         assert_eq!(snapshot.recent_inputs[0].lane, Lane::Key3);
@@ -278,10 +280,37 @@ mod tests {
             time: TimeUs(2_000),
         });
 
-        let snapshot = build_render_snapshot(&session, TimeUs(0), &[]);
+        let snapshot = build_render_snapshot(&session, TimeUs(0), &[], None);
 
         assert_eq!(snapshot.judge_counts.pgreat, 1);
         assert_eq!(snapshot.judge_counts.empty_poor, 1);
+    }
+
+    #[test]
+    fn build_render_snapshot_passes_best_ex_score() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let session =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+
+        let with_best = build_render_snapshot(&session, TimeUs(0), &[], Some(42));
+        let without_best = build_render_snapshot(&session, TimeUs(0), &[], None);
+
+        assert_eq!(with_best.best_ex_score, Some(42));
+        assert_eq!(without_best.best_ex_score, None);
+    }
+
+    #[test]
+    fn build_render_snapshot_derives_judge_timing_offset_from_session() {
+        use bmz_gameplay::session::PlayOffsets;
+
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+        session.offsets = PlayOffsets { input_offset_us: 3_000, visual_offset_us: 0 };
+
+        let snapshot = build_render_snapshot(&session, TimeUs(0), &[], None);
+
+        assert_eq!(snapshot.judge_timing_offset_ms, 3);
     }
 
     #[test]
