@@ -534,10 +534,10 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
         for lane in Lane::ALL {
             let lane_index = lane.index();
             for note in &snapshot.visible_notes[lane_index] {
-                if let Some(rect) = skin.note_rect_for_progress(lane, note.y, NOTE_HEIGHT) {
-                    if let Some(item) = skin.document_note_item(lane, rect) {
-                        append_skin_render_items(&mut commands, &[item]);
-                    }
+                if let Some(rect) = skin.note_rect_for_progress(lane, note.y, NOTE_HEIGHT)
+                    && let Some(item) = skin.document_note_item(lane, rect)
+                {
+                    append_skin_render_items(&mut commands, &[item]);
                 }
             }
         }

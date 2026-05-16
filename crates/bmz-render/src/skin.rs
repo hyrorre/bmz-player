@@ -684,11 +684,15 @@ impl SkinContext {
         document.judge_render_items(judge, combo, elapsed_ms, &self.document_sources)
     }
 
-
     /// beatoraja スキンの `note.dst` からレーンのノートエリアを取得し、
     /// `note_y`（0.0=判定ライン, 1.0=最上部）に対応するノート矩形を返す。
     /// `note_height` は正規化座標での高さ。ドキュメントスキンが無い場合は `None`。
-    pub fn note_rect_for_progress(&self, lane: Lane, note_y: f32, note_height: f32) -> Option<Rect> {
+    pub fn note_rect_for_progress(
+        &self,
+        lane: Lane,
+        note_y: f32,
+        note_height: f32,
+    ) -> Option<Rect> {
         let document = self.document.as_ref()?;
         let enabled_options = document.enabled_options();
         let area = document.note_lane_area(lane, &enabled_options)?;
@@ -1227,10 +1231,7 @@ impl SkinDocument {
 
     /// 有効なオプション条件に基づいて `destination` エントリを展開し、
     /// 描画対象の `SkinDestinationDef` の参照リストを返す。
-    pub fn all_destinations<'a>(
-        &'a self,
-        enabled_options: &[i32],
-    ) -> Vec<&'a SkinDestinationDef> {
+    pub fn all_destinations<'a>(&'a self, enabled_options: &[i32]) -> Vec<&'a SkinDestinationDef> {
         let mut result = Vec::new();
         for entry in &self.destination {
             match entry {
@@ -1299,12 +1300,11 @@ impl SkinDocument {
 
         let frame = flat.get(lane_idx)?;
         if let (Some(x), Some(y), Some(w), Some(h)) = (frame.x, frame.y, frame.w, frame.h) {
-            Some(Rect {
-                x: x as f32 / canvas_w,
-                y: y as f32 / canvas_h,
-                width: w as f32 / canvas_w,
-                height: h as f32 / canvas_h,
-            })
+            Some(normalize_skin_frame_rect(
+                ResolvedSkinFrame { x, y, w, h, ..ResolvedSkinFrame::default() },
+                canvas_w as u32,
+                canvas_h as u32,
+            ))
         } else {
             None
         }
@@ -1318,15 +1318,16 @@ impl SkinDocument {
     ) -> Option<Vec<SkinRenderItem>> {
         let gauge_def = self.gauge.as_ref()?;
         let enabled_options = self.enabled_options();
-        let destination = self.all_destinations(&enabled_options).into_iter().find(|destination| {
-            destination.id == gauge_def.id
-                && destination.timer.is_none()
-                && test_skin_ops(&destination.op, &enabled_options)
-                && eval_skin_draw_condition(
-                    &destination.draw,
-                    SkinDrawState { elapsed_ms, gauge, ..SkinDrawState::default() },
-                )
-        })?;
+        let destination =
+            self.all_destinations(&enabled_options).into_iter().find(|destination| {
+                destination.id == gauge_def.id
+                    && destination.timer.is_none()
+                    && test_skin_ops(&destination.op, &enabled_options)
+                    && eval_skin_draw_condition(
+                        &destination.draw,
+                        SkinDrawState { elapsed_ms, gauge, ..SkinDrawState::default() },
+                    )
+            })?;
         let frame = resolve_destination_frame(destination, elapsed_ms, &enabled_options)?;
         let rect = normalize_skin_frame_rect(frame, self.w, self.h);
         let filled =
@@ -1436,20 +1437,15 @@ impl SkinDocument {
         let zero_pad = value.zeropadding != 0 || value.padding != 0;
         let max_digits = value.digit.max(0) as usize;
         let digits = display_number_digits(number, max_digits, zero_pad);
-        let digit_width = frame.w as f32 / self.w.max(1) as f32;
-        let digit_height = frame.h as f32 / self.h.max(1) as f32;
         // 桁間スペース (space フィールド、px 単位)
-        let space_norm = value.space as f32 / self.w.max(1) as f32;
-        let digit_step = digit_width + space_norm;
-        let origin_x = (base_frame.x + frame.x) as f32 / self.w.max(1) as f32;
-        let origin_y = (base_frame.y + frame.y) as f32 / self.h.max(1) as f32;
+        let digit_step = frame.w + value.space;
         // 先頭の空き桁数 (align のためのオフセット計算に使用)
         let shiftbase = max_digits.saturating_sub(digits.len());
         // align=0: 右寄せ (デフォルト), align=1: 左寄せ, align=2: 中央
         let shift = match value.align {
-            1 => digit_step * shiftbase as f32,
-            2 => digit_step * shiftbase as f32 * 0.5,
-            _ => 0.0,
+            1 => digit_step * shiftbase as i32,
+            2 => digit_step * shiftbase as i32 / 2,
+            _ => 0,
         };
 
         digits
@@ -1458,14 +1454,20 @@ impl SkinDocument {
             .map(|(index, digit)| {
                 let source_column = digit as i32 % divx;
                 let source_row = digit as i32 / divx;
+                let rect = normalize_skin_frame_rect(
+                    ResolvedSkinFrame {
+                        x: base_frame.x + frame.x + digit_step * (shiftbase + index) as i32 - shift,
+                        y: base_frame.y + frame.y,
+                        w: frame.w,
+                        h: frame.h,
+                        ..frame
+                    },
+                    self.w,
+                    self.h,
+                );
                 SkinRenderItem::Image {
                     texture: source.texture,
-                    rect: Rect {
-                        x: origin_x + digit_step * (shiftbase + index) as f32 - shift,
-                        y: origin_y,
-                        width: digit_width,
-                        height: digit_height,
-                    },
+                    rect,
                     uv: TextureRegion {
                         x: (value.x as f32 + cell_width_px * source_column as f32) / source_width,
                         y: (value.y as f32 + cell_height_px * source_row as f32) / source_height,
@@ -1520,15 +1522,13 @@ impl SkinDocument {
         if content.is_empty() {
             return None;
         }
+        let rect = normalize_skin_frame_rect(frame, self.w, self.h);
         Some(SkinRenderItem::Text {
-            origin: Point {
-                x: frame.x as f32 / self.w.max(1) as f32,
-                y: frame.y as f32 / self.h.max(1) as f32,
-            },
+            origin: Point { x: rect.x, y: rect.y },
             text: content,
             style: TextStyle {
                 font_id: (!text.font.is_empty()).then(|| text.font.clone()),
-                size: frame.h.max(text.size).max(1) as f32 / self.h.max(1) as f32,
+                size: frame.h.abs().max(text.size).max(1) as f32 / self.h.max(1) as f32,
                 color: Color::rgba(
                     frame.r as f32 / 255.0,
                     frame.g as f32 / 255.0,
@@ -1537,7 +1537,7 @@ impl SkinDocument {
                 ),
                 layer: TextLayer::Ui,
                 align: skin_text_align(text.align),
-                max_width: frame.w.max(0) as f32 / self.w.max(1) as f32,
+                max_width: frame.w.abs() as f32 / self.w.max(1) as f32,
                 overflow: skin_text_overflow(text.overflow),
                 wrapping: text.wrapping,
                 outline: skin_text_outline(text, self.h),
@@ -2820,11 +2820,7 @@ fn resolve_destination_frame_until_end(
 fn resolve_loop_elapsed(loop_point: i32, elapsed_ms: i32, cycle: i32) -> i32 {
     if loop_point >= 0 && elapsed_ms >= cycle {
         let span = cycle - loop_point;
-        if span > 0 {
-            (elapsed_ms - loop_point).rem_euclid(span) + loop_point
-        } else {
-            cycle
-        }
+        if span > 0 { (elapsed_ms - loop_point).rem_euclid(span) + loop_point } else { cycle }
     } else {
         elapsed_ms
     }
@@ -2920,21 +2916,17 @@ fn normalize_skin_frame_rect(
     canvas_width: u32,
     canvas_height: u32,
 ) -> Rect {
-    let width = frame.w as f32 / canvas_width.max(1) as f32;
-    let height = frame.h as f32 / canvas_height.max(1) as f32;
+    let canvas_width = canvas_width.max(1) as f32;
+    let canvas_height = canvas_height.max(1) as f32;
+    let x0 = frame.x as f32;
+    let x1 = (frame.x + frame.w) as f32;
+    let y0 = frame.y as f32;
+    let y1 = (frame.y + frame.h) as f32;
     Rect {
-        x: if width < 0.0 {
-            frame.x as f32 / canvas_width.max(1) as f32 + width
-        } else {
-            frame.x as f32 / canvas_width.max(1) as f32
-        },
-        y: if height < 0.0 {
-            frame.y as f32 / canvas_height.max(1) as f32 + height
-        } else {
-            frame.y as f32 / canvas_height.max(1) as f32
-        },
-        width: width.abs(),
-        height: height.abs(),
+        x: x0.min(x1) / canvas_width,
+        y: (canvas_height - y0.max(y1)) / canvas_height,
+        width: (x1 - x0).abs() / canvas_width,
+        height: (y1 - y0).abs() / canvas_height,
     }
 }
 
@@ -3829,7 +3821,7 @@ mod tests {
                 blend: BlendMode::Add,
                 ..
             } if approx_eq(x, 0.1)
-                && approx_eq(y, 0.1)
+                && approx_eq(y, 0.7)
                 && approx_eq(width, 0.2)
                 && approx_eq(height, 0.2)
                 && approx_eq(u, 16.0 / 256.0)
@@ -3879,7 +3871,7 @@ mod tests {
                 uv: TextureRegion { x: u, width: uv_width, .. },
                 ..
             } if approx_eq(x, 0.1)
-                && approx_eq(y, 0.2)
+                && approx_eq(y, 0.6)
                 && approx_eq(width, 0.4)
                 && approx_eq(height, 0.2)
                 && approx_eq(u, 0.0)
@@ -3892,7 +3884,7 @@ mod tests {
                 uv: TextureRegion { x: u, width: uv_width, .. },
                 ..
             } if approx_eq(x, 0.1)
-                && approx_eq(y, 0.6)
+                && approx_eq(y, 0.0)
                 && approx_eq(width, 0.4)
                 && approx_eq(height, 0.4)
                 && approx_eq(u, 0.25)
@@ -3904,7 +3896,7 @@ mod tests {
                 rect: Rect { x, y, width, height },
                 ..
             } if approx_eq(x, -0.2)
-                && approx_eq(y, 0.3)
+                && approx_eq(y, -0.3)
                 && approx_eq(width, 2.0)
                 && approx_eq(height, 1.0)
         ));
@@ -4250,7 +4242,7 @@ mod tests {
                 uv: TextureRegion { x: u, width: uv_width, .. },
                 ..
             } if approx_eq(x, 0.4)
-                && approx_eq(y, 0.1)
+                && approx_eq(y, 0.8)
                 && approx_eq(width, 0.1)
                 && approx_eq(height, 0.1)
                 && approx_eq(u, 0.1)
@@ -4311,7 +4303,7 @@ mod tests {
             } if approx_eq(x, 0.0)
                 && approx_eq(u_y, 0.1)
                 && approx_eq(u_height, 0.1)
-                && approx_eq(y, 0.1)
+                && approx_eq(y, 0.8)
                 && approx_eq(width, 0.2)));
         assert!(matches!(poor, SkinRenderItem::Image {
                 uv: TextureRegion { x, .. },
@@ -4365,7 +4357,7 @@ mod tests {
                 uv: TextureRegion { x: u, y: v, width: uv_width, height: uv_height },
                 ..
             } if approx_eq(x, 0.3)
-                && approx_eq(y, 0.15)
+                && approx_eq(y, 0.75)
                 && approx_eq(width, 0.05)
                 && approx_eq(height, 0.1)
                 && approx_eq(u, 0.1)
@@ -4427,19 +4419,14 @@ mod tests {
             lane_judge: [None, Some(0), None, None, None, None, None, None],
             ..SkinDrawState::default()
         };
-        let pgreat = document.static_render_items(
-            &sources,
-            pgreat_state,
-            SkinTextState::default(),
-        );
+        let pgreat = document.static_render_items(&sources, pgreat_state, SkinTextState::default());
         // GOOD 判定
         let good_state = SkinDrawState {
             bomb_ms: [None, Some(50), None, None, None, None, None, None],
             lane_judge: [None, Some(2), None, None, None, None, None, None],
             ..SkinDrawState::default()
         };
-        let good =
-            document.static_render_items(&sources, good_state, SkinTextState::default());
+        let good = document.static_render_items(&sources, good_state, SkinTextState::default());
         // タイマーがアニメーション終端を超過 → loop:-1 で非表示
         let expired_state = SkinDrawState {
             bomb_ms: [None, Some(150), None, None, None, None, None, None],
@@ -4515,7 +4502,7 @@ mod tests {
                 rect: Rect { x, y, .. },
                 uv: TextureRegion { x: u, .. },
                 ..
-            } if approx_eq(x, 0.15) && approx_eq(y, 0.2) && approx_eq(u, 0.4)));
+            } if approx_eq(x, 0.15) && approx_eq(y, 0.7) && approx_eq(u, 0.4)));
         assert!(matches!(items[1], SkinRenderItem::Image {
                 rect: Rect { x, .. },
                 uv: TextureRegion { x: u, .. },
@@ -4564,7 +4551,7 @@ mod tests {
                 style,
                 ..
             } if approx_eq(*x, 0.1)
-                && approx_eq(*y, 0.2)
+                && approx_eq(*y, 0.7)
                 && text == "Song Another"
                 && style.font_id.as_deref() == Some("main")
                 && approx_eq(style.size, 0.1)
@@ -4631,7 +4618,7 @@ mod tests {
                 blend,
                 ..
             } if approx_eq(x, 0.3)
-                && approx_eq(y, 0.7)
+                && approx_eq(y, 0.24)
                 && approx_eq(width, 0.05)
                 && approx_eq(height, 0.06)
                 && approx_eq(u, 0.1)
@@ -4682,7 +4669,7 @@ mod tests {
                 rect: Rect { x, y, width, height },
                 ..
             } if approx_eq(x, 0.1)
-                && approx_eq(y, 0.2)
+                && approx_eq(y, 0.74)
                 && approx_eq(width, 0.05)
                 && approx_eq(height, 0.06)));
     }
@@ -4725,7 +4712,7 @@ mod tests {
                 blend,
                 ..
             } if approx_eq(x, 0.2)
-                && approx_eq(y, -0.4)
+                && approx_eq(y, 1.0)
                 && approx_eq(width, 0.3)
                 && approx_eq(height, 0.4)
                 && approx_eq(u, 0.1)
@@ -5049,7 +5036,7 @@ mod tests {
         assert_eq!(items.len(), 1);
         let SkinRenderItem::Image { rect, .. } = &items[0] else { panic!() };
         assert!(approx_eq(rect.x, 0.0), "expected default x=0, got {}", rect.x);
-        assert!(approx_eq(rect.y, 0.0), "expected default y=0, got {}", rect.y);
+        assert!(approx_eq(rect.y, 1.0), "expected default y=1, got {}", rect.y);
     }
 
     #[test]
@@ -5083,10 +5070,10 @@ mod tests {
         let SkinRenderItem::Image { rect: rect_no_lift, .. } = &items_no_lift[0] else { panic!() };
         let SkinRenderItem::Image { rect: rect_lifted, .. } = &items_lifted[0] else { panic!() };
 
-        // With lift=72px on a 720h canvas: y shifts by 72/720 = 0.1
-        assert!(approx_eq(rect_no_lift.y, 200.0 / 720.0));
+        // With lift=72px on a 720h canvas, beatoraja y shifts upward in bottom-origin space.
+        assert!(approx_eq(rect_no_lift.y, (720 - 200 - 50) as f32 / 720.0));
         assert!(
-            approx_eq(rect_lifted.y, (200 + 72) as f32 / 720.0),
+            approx_eq(rect_lifted.y, (720 - (200 + 72) - 50) as f32 / 720.0),
             "expected y shifted by lift, got {}",
             rect_lifted.y
         );
@@ -5117,8 +5104,12 @@ mod tests {
 
         assert_eq!(items.len(), 1);
         let SkinRenderItem::Image { rect, .. } = &items[0] else { panic!() };
-        // y=720 shifted by -360 → 360/720 = 0.5
-        assert!(approx_eq(rect.y, 360.0 / 720.0), "expected y=0.5, got {}", rect.y);
+        // y=720 shifted by -360 in bottom-origin space: top = 720 - (720 - 360 + 50).
+        assert!(
+            approx_eq(rect.y, (720 - (720 - 360 + 50)) as f32 / 720.0),
+            "expected shifted y, got {}",
+            rect.y
+        );
     }
 
     #[test]
@@ -5145,7 +5136,7 @@ mod tests {
 
         assert_eq!(items.len(), 1, "expected one graph bar");
         let SkinRenderItem::Image { rect, uv, .. } = &items[0] else { panic!() };
-        // value=0.5 → height = 480/720 * 0.5, y = 480/720 * 0.5
+        // value=0.5 → height = 480/720 * 0.5; destination bottom is y=0 in beatoraja space.
         let dst_h = 480.0 / 720.0;
         assert!(
             approx_eq(rect.height, dst_h * 0.5),
@@ -5153,7 +5144,7 @@ mod tests {
             rect.height
         );
         assert!(
-            approx_eq(rect.y, dst_h * 0.5),
+            approx_eq(rect.y, 1.0 - dst_h * 0.5),
             "bar y should start at half-height: got {}",
             rect.y
         );
@@ -5542,7 +5533,9 @@ mod tests {
         // Key1 is index 0 → first Frame
         let area = document.note_lane_area(Lane::Key1, &enabled).unwrap();
         assert!(approx_eq(area.x, 90.0 / 1280.0));
+        assert!(approx_eq(area.y, 0.0));
         assert!(approx_eq(area.width, 50.0 / 1280.0));
+        assert!(approx_eq(area.height, 580.0 / 720.0));
         // Key2 is index 1 → second Frame
         let area2 = document.note_lane_area(Lane::Key2, &enabled).unwrap();
         assert!(approx_eq(area2.x, 140.0 / 1280.0));
@@ -5619,7 +5612,7 @@ mod tests {
         // Key1 is index 0
         let area = document.note_lane_area(Lane::Key1, &enabled).unwrap();
         assert!(approx_eq(area.x, 90.0 / 1280.0));
-        assert!(approx_eq(area.y, 140.0 / 720.0));
+        assert!(approx_eq(area.y, 0.0));
         assert!(approx_eq(area.width, 50.0 / 1280.0));
         assert!(approx_eq(area.height, 580.0 / 720.0));
 
