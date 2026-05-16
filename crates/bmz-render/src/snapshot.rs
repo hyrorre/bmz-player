@@ -55,6 +55,9 @@ pub struct DisplayJudgement {
     pub text: String,
     pub delta_us: i64,
     pub time: TimeUs,
+    /// ノートを押さずに通過した見逃し判定（Poor）。
+    /// このとき「打鍵」は発生していないのでキービームやボム演出は不要。
+    pub is_miss: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

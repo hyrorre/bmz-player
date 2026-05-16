@@ -96,6 +96,7 @@ fn display_judgement(event: &JudgementEvent) -> DisplayJudgement {
         text: format!("{}{}", judge_text(event.judge), side_suffix(event.side)),
         delta_us: event.delta.0,
         time: event.time,
+        is_miss: event.judge == Judge::Poor,
     }
 }
 

@@ -68,6 +68,7 @@ pub fn sample_play_scene() -> AppSceneSnapshot {
         text: "PGREAT FAST".to_string(),
         delta_us: -12_000,
         time: TimeUs(12_300_000),
+        is_miss: false,
     });
 
     AppSceneSnapshot::Play(snapshot)

@@ -387,9 +387,16 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
     let mut commands = Vec::new();
     let text = TextRenderer;
     let skin_manifest = skin.manifest();
+    let has_document = skin.document().is_some();
     let board = Rect { x: 0.18, y: 0.05, width: 0.64, height: 0.9 };
+    let lane_width = board.width / LANE_COUNT as f32;
+
+    // 見逃しPOOR（is_miss）はボムエフェクトを出さない
     let mut bomb_ms: [Option<i32>; 8] = [None; 8];
     for j in &snapshot.recent_judgements {
+        if j.is_miss {
+            continue;
+        }
         let idx = j.lane.index();
         let elapsed =
             ((snapshot.time.0 - j.time.0) / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32;
@@ -461,62 +468,78 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
             },
         ),
     );
-    commands.push(DrawCommand::Rect { rect: board, color: Color::rgb(0.025, 0.025, 0.028) });
-    commands.push(DrawCommand::Rect {
-        rect: Rect { x: board.x - 0.006, y: board.y, width: 0.006, height: board.height },
-        color: Color::rgb(0.18, 0.2, 0.21),
-    });
-    commands.push(DrawCommand::Rect {
-        rect: Rect { x: board.x + board.width, y: board.y, width: 0.006, height: board.height },
-        color: Color::rgb(0.18, 0.2, 0.21),
-    });
 
-    let lane_width = board.width / LANE_COUNT as f32;
-    for lane in Lane::ALL {
-        let lane_index = lane.index();
-        let x = board.x + lane_index as f32 * lane_width;
-        let color = if lane_index % 2 == 0 {
-            Color::rgb(0.07, 0.075, 0.08)
-        } else {
-            Color::rgb(0.045, 0.05, 0.055)
-        };
+    if !has_document {
+        // デフォルトスキン: ボード背景・レーン背景を描画
+        commands.push(DrawCommand::Rect { rect: board, color: Color::rgb(0.025, 0.025, 0.028) });
         commands.push(DrawCommand::Rect {
-            rect: Rect { x, y: board.y, width: lane_width, height: board.height },
-            color,
+            rect: Rect { x: board.x - 0.006, y: board.y, width: 0.006, height: board.height },
+            color: Color::rgb(0.18, 0.2, 0.21),
         });
-        if let Some(color) = lane_flash_color(snapshot, lane) {
+        commands.push(DrawCommand::Rect {
+            rect: Rect { x: board.x + board.width, y: board.y, width: 0.006, height: board.height },
+            color: Color::rgb(0.18, 0.2, 0.21),
+        });
+
+        for lane in Lane::ALL {
+            let lane_index = lane.index();
+            let x = board.x + lane_index as f32 * lane_width;
+            let color = if lane_index % 2 == 0 {
+                Color::rgb(0.07, 0.075, 0.08)
+            } else {
+                Color::rgb(0.045, 0.05, 0.055)
+            };
             commands.push(DrawCommand::Rect {
-                rect: Rect {
-                    x: x + lane_width * 0.04,
-                    y: board.y + board.height * 0.76,
-                    width: lane_width * 0.92,
-                    height: board.height * 0.18,
-                },
+                rect: Rect { x, y: board.y, width: lane_width, height: board.height },
                 color,
             });
+            if let Some(color) = lane_flash_color(snapshot, lane) {
+                commands.push(DrawCommand::Rect {
+                    rect: Rect {
+                        x: x + lane_width * 0.04,
+                        y: board.y + board.height * 0.76,
+                        width: lane_width * 0.92,
+                        height: board.height * 0.18,
+                    },
+                    color,
+                });
+            }
+
+            for note in &snapshot.visible_notes[lane_index] {
+                let y = note_rect_y(board, note.y);
+                let rect = Rect {
+                    x: x + lane_width * 0.08,
+                    y,
+                    width: lane_width * 0.84,
+                    height: NOTE_HEIGHT,
+                };
+                push_default_note_skin(skin_manifest, &mut commands, lane, rect);
+            }
         }
 
-        for note in &snapshot.visible_notes[lane_index] {
-            let y = note_rect_y(board, note.y);
-            let rect =
-                Rect { x: x + lane_width * 0.08, y, width: lane_width * 0.84, height: NOTE_HEIGHT };
-            if let Some(item) = skin.document_note_item(lane, rect) {
-                append_skin_render_items(&mut commands, &[item]);
-            } else {
-                push_default_note_skin(skin_manifest, &mut commands, lane, rect);
+        push_receptors(skin_manifest, &mut commands, board, lane_width);
+        for bar in &snapshot.bar_lines {
+            let y = play_object_y(board, bar.y);
+            commands.push(DrawCommand::Rect {
+                rect: Rect { x: board.x, y, width: board.width, height: 0.004 },
+                color: Color::rgb(0.45, 0.48, 0.5),
+            });
+        }
+        push_judge_line(skin_manifest, &mut commands, board);
+    } else {
+        // beatoraja スキン: note.dst のレーンエリアに基づいてノートを配置
+        for lane in Lane::ALL {
+            let lane_index = lane.index();
+            for note in &snapshot.visible_notes[lane_index] {
+                if let Some(rect) = skin.note_rect_for_progress(lane, note.y, NOTE_HEIGHT) {
+                    if let Some(item) = skin.document_note_item(lane, rect) {
+                        append_skin_render_items(&mut commands, &[item]);
+                    }
+                }
             }
         }
     }
 
-    push_receptors(skin_manifest, &mut commands, board, lane_width);
-    for bar in &snapshot.bar_lines {
-        let y = play_object_y(board, bar.y);
-        commands.push(DrawCommand::Rect {
-            rect: Rect { x: board.x, y, width: board.width, height: 0.004 },
-            color: Color::rgb(0.45, 0.48, 0.5),
-        });
-    }
-    push_judge_line(skin_manifest, &mut commands, board);
     push_gauge(
         skin,
         skin_manifest,
@@ -525,11 +548,15 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
         (snapshot.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32,
     );
     push_document_lane_effects(skin, &mut commands, snapshot);
-    push_combo_panel(skin_manifest, &mut commands, snapshot.combo);
-    push_default_play_skin(skin, &mut commands, snapshot);
-    push_play_text(&text, &mut commands, snapshot);
-    push_lane_text(&text, &mut commands, board, lane_width);
-    push_judgement_history(&text, &mut commands, snapshot);
+
+    if !has_document {
+        push_combo_panel(skin_manifest, &mut commands, snapshot.combo);
+        push_default_play_skin(skin, &mut commands, snapshot);
+        push_play_text(&text, &mut commands, snapshot);
+        push_lane_text(&text, &mut commands, board, lane_width);
+        push_judgement_history(&text, &mut commands, snapshot);
+    }
+
     push_start_overlay(&text, &mut commands, snapshot);
 
     DrawPlan { clear: Color::rgb(0.0, 0.0, 0.0), commands }
@@ -797,6 +824,10 @@ fn push_document_lane_effects(
     snapshot: &RenderSnapshot,
 ) {
     for judgement in &snapshot.recent_judgements {
+        // 見逃しPOOR（is_miss）はキービーム・ボムエフェクトを出さない
+        if judgement.is_miss {
+            continue;
+        }
         let elapsed_ms = ((snapshot.time.0 - judgement.time.0) / 1_000)
             .clamp(i32::MIN as i64, i32::MAX as i64) as i32;
         let items =
@@ -1151,7 +1182,9 @@ fn lane_flash_color(snapshot: &RenderSnapshot, lane: Lane) -> Option<Color> {
 
 fn judgement_lane_flash_color(snapshot: &RenderSnapshot, lane: Lane) -> Option<Color> {
     let judgement = snapshot.recent_judgements.iter().rev().find(|judgement| {
-        judgement.lane == lane && (0..=220_000).contains(&(snapshot.time.0 - judgement.time.0))
+        judgement.lane == lane
+            && !judgement.is_miss
+            && (0..=220_000).contains(&(snapshot.time.0 - judgement.time.0))
     })?;
     let age_us = (snapshot.time.0 - judgement.time.0).max(0) as f32;
     let alpha = (1.0 - age_us / 220_000.0).clamp(0.0, 1.0) * 0.55;
@@ -1600,6 +1633,7 @@ mod tests {
                 text: "PGREAT FAST".to_string(),
                 delta_us: -3_000,
                 time: TimeUs(920_000),
+                is_miss: false,
             }],
             ..Default::default()
         };
@@ -1648,6 +1682,7 @@ mod tests {
                 text: "PGREAT FAST".to_string(),
                 delta_us: -3_000,
                 time: TimeUs(920_000),
+                is_miss: false,
             }],
             ..Default::default()
         };
@@ -1669,6 +1704,7 @@ mod tests {
                 text: "EMPTY POOR SLOW".to_string(),
                 delta_us: 50_000,
                 time: TimeUs(980_000),
+                is_miss: false,
             }],
             ..Default::default()
         };
@@ -1690,6 +1726,7 @@ mod tests {
                 text: "BAD SLOW".to_string(),
                 delta_us: 88_000,
                 time: TimeUs(700_000),
+                is_miss: false,
             }],
             ..Default::default()
         };
@@ -1804,7 +1841,30 @@ mod tests {
             text: text.to_string(),
             delta_us: 0,
             time: TimeUs(0),
+            is_miss: false,
         })
+    }
+
+    #[test]
+    fn miss_poor_does_not_flash_lane() {
+        let snapshot = RenderSnapshot {
+            time: TimeUs(1_000_000),
+            recent_judgements: vec![DisplayJudgement {
+                lane: Lane::Key3,
+                text: "POOR SLOW".to_string(),
+                delta_us: 50_000,
+                time: TimeUs(950_000),
+                is_miss: true,
+            }],
+            ..Default::default()
+        };
+
+        // 見逃しPOORでは判定ラインフラッシュを出さない
+        assert_eq!(judgement_lane_flash_color(&snapshot, Lane::Key3), None);
+        // 打鍵判定（is_miss=false）では通常通りフラッシュが出る
+        let mut with_hit = snapshot.clone();
+        with_hit.recent_judgements[0].is_miss = false;
+        assert!(judgement_lane_flash_color(&with_hit, Lane::Key3).is_some());
     }
 
     fn approx_eq(actual: f32, expected: f32) -> bool {

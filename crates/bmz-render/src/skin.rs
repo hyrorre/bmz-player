@@ -421,7 +421,7 @@ pub struct SkinNoteSetDef {
     #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
     pub processed: Vec<String>,
     #[serde(default)]
-    pub dst: Vec<SkinAnimationDef>,
+    pub dst: Vec<SkinDstEntry>,
     #[serde(default)]
     pub group: Vec<SkinDestinationDef>,
     #[serde(default)]
@@ -657,6 +657,23 @@ impl SkinContext {
             return Vec::new();
         };
         document.imageset_render_items_for_lane(lane, judge, elapsed_ms, &self.document_sources)
+    }
+
+    /// beatoraja スキンの `note.dst` からレーンのノートエリアを取得し、
+    /// `note_y`（0.0=判定ライン, 1.0=最上部）に対応するノート矩形を返す。
+    /// `note_height` は正規化座標での高さ。ドキュメントスキンが無い場合は `None`。
+    pub fn note_rect_for_progress(&self, lane: Lane, note_y: f32, note_height: f32) -> Option<Rect> {
+        let document = self.document.as_ref()?;
+        let enabled_options = document.enabled_options();
+        let area = document.note_lane_area(lane, &enabled_options)?;
+        // note_y=0.0 → 判定ライン（エリア下端）、note_y=1.0 → エリア上端
+        let center_y = area.y + area.height * (1.0 - note_y);
+        Some(Rect {
+            x: area.x,
+            y: center_y - note_height / 2.0,
+            width: area.width,
+            height: note_height,
+        })
     }
 }
 
@@ -1162,6 +1179,42 @@ impl SkinDocument {
             source_size: Some(source.source_size),
             linear_filter: false,
         })
+    }
+
+    /// `note.dst` の中から有効な条件に一致するエントリを探し、
+    /// 指定レーンのノートエリア矩形（正規化座標）を返す。
+    /// ノートエリアはレーン列全体を表す。Y軸: 上端=ノートが最も早い時点、下端=判定ライン。
+    pub fn note_lane_area(&self, lane: Lane, enabled_options: &[i32]) -> Option<Rect> {
+        let note = self.note.as_ref()?;
+        let lane_idx = beatoraja_7k_note_index(lane);
+        let canvas_w = self.w as f32;
+        let canvas_h = self.h as f32;
+
+        for entry in &note.dst {
+            let frames: &[SkinAnimationDef] = match entry {
+                SkinDstEntry::Frame(f) => std::slice::from_ref(f),
+                SkinDstEntry::Conditional { if_ops, frames } => {
+                    if test_skin_dst_if(if_ops, enabled_options) {
+                        frames.as_slice()
+                    } else {
+                        continue;
+                    }
+                }
+            };
+            if let Some(frame) = frames.get(lane_idx) {
+                if let (Some(x), Some(y), Some(w), Some(h)) =
+                    (frame.x, frame.y, frame.w, frame.h)
+                {
+                    return Some(Rect {
+                        x: x as f32 / canvas_w,
+                        y: y as f32 / canvas_h,
+                        width: w as f32 / canvas_w,
+                        height: h as f32 / canvas_h,
+                    });
+                }
+            }
+        }
+        None
     }
 
     pub fn gauge_render_items(
@@ -5329,6 +5382,51 @@ mod tests {
             },
         );
         map
+    }
+
+    #[test]
+    fn note_lane_area_resolves_conditional_dst_for_enabled_option() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "w": 1280, "h": 720,
+                "note": {
+                    "dst": [
+                        {
+                            "if": [920],
+                            "values": [
+                                {"x": 90, "y": 140, "w": 50, "h": 580},
+                                {"x": 140, "y": 140, "w": 40, "h": 580},
+                                {"x": 180, "y": 140, "w": 50, "h": 580},
+                                {"x": 230, "y": 140, "w": 40, "h": 580},
+                                {"x": 270, "y": 140, "w": 50, "h": 580},
+                                {"x": 320, "y": 140, "w": 40, "h": 580},
+                                {"x": 360, "y": 140, "w": 50, "h": 580},
+                                {"x": 20, "y": 140, "w": 70, "h": 580}
+                            ]
+                        }
+                    ]
+                }
+            }
+            "#,
+        )
+        .unwrap();
+
+        let enabled = vec![920];
+        // Key1 is index 0
+        let area = document.note_lane_area(Lane::Key1, &enabled).unwrap();
+        assert!(approx_eq(area.x, 90.0 / 1280.0));
+        assert!(approx_eq(area.y, 140.0 / 720.0));
+        assert!(approx_eq(area.width, 50.0 / 1280.0));
+        assert!(approx_eq(area.height, 580.0 / 720.0));
+
+        // Scratch is index 7
+        let scratch_area = document.note_lane_area(Lane::Scratch, &enabled).unwrap();
+        assert!(approx_eq(scratch_area.x, 20.0 / 1280.0));
+        assert!(approx_eq(scratch_area.width, 70.0 / 1280.0));
+
+        // Without the required option, returns None
+        assert!(document.note_lane_area(Lane::Key1, &[]).is_none());
     }
 
     fn approx_eq(actual: f32, expected: f32) -> bool {
