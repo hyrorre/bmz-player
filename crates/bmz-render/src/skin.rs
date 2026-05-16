@@ -750,6 +750,8 @@ pub struct SkinDrawState {
     pub total_duration_ms: i32,
     /// レーンカバー割合 0.0-1.0 (NUMBER_LANECOVER1=14 に使用)。0=なし, 1=全画面。
     pub lane_cover: f32,
+    /// HIDDEN カバー割合 0.0-1.0。未対応の間は 0.0 で hiddenCover を描画しない。
+    pub hidden_cover: f32,
     /// 現在 BPM (NUMBER_NOWBPM=160 に使用)。
     pub now_bpm: f32,
     /// 最小 BPM (NUMBER_MINBPM=91 に使用)。
@@ -1200,6 +1202,7 @@ impl SkinDocument {
                         ResolvedSkinFrame::default(),
                         frame,
                         sources,
+                        false,
                     ));
                 }
 
@@ -1224,7 +1227,7 @@ impl SkinDocument {
 
                 let hidden_cover =
                     self.hidden_cover.iter().find(|cover| cover.id == destination.id)?;
-                self.hidden_cover_render_item(hidden_cover, destination, frame, sources)
+                self.hidden_cover_render_item(hidden_cover, destination, frame, state, sources)
                     .map(|item| vec![item])
             })
             .flatten()
@@ -1407,6 +1410,18 @@ impl SkinDocument {
         let (dx, dy) = skin_offset_shift(image_destination, offset_state);
         image_frame.x += dx;
         image_frame.y += dy;
+        if judge.shift
+            && combo > 0
+            && let Some(number_destination) = judge.numbers.get(judge_index)
+            && let Some(number_frame) = resolve_destination_frame_until_end(
+                number_destination,
+                elapsed_ms,
+                &enabled_options,
+            )
+        {
+            image_frame.x -=
+                self.value_number_length(&number_destination.id, combo as i64, number_frame) / 2;
+        }
         let mut items = vec![self.image_render_item(
             &image_destination.id,
             normalize_skin_frame_rect(image_frame, self.w, self.h),
@@ -1432,9 +1447,22 @@ impl SkinDocument {
                 image_frame,
                 number_frame,
                 sources,
+                judge.shift,
             ));
         }
         Some(items)
+    }
+
+    fn value_number_length(&self, value_id: &str, number: i64, frame: ResolvedSkinFrame) -> i32 {
+        let Some(value) = self.value.iter().find(|value| value.id == value_id) else {
+            return 0;
+        };
+        let digits = display_number_digits(
+            number,
+            value.digit.max(0) as usize,
+            value.zeropadding != 0 || value.padding != 0,
+        );
+        if digits.is_empty() { 0 } else { digits.len() as i32 * (frame.w + value.space) }
     }
 
     pub fn judge_image_render_item(
@@ -1453,6 +1481,7 @@ impl SkinDocument {
         base_frame: ResolvedSkinFrame,
         frame: ResolvedSkinFrame,
         sources: &HashMap<String, SkinDocumentTexture>,
+        compact_digits: bool,
     ) -> Vec<SkinRenderItem> {
         let Some(value) = self.value.iter().find(|value| value.id == value_id) else {
             return Vec::new();
@@ -1490,9 +1519,10 @@ impl SkinDocument {
             .map(|(index, digit)| {
                 let source_column = digit as i32 % divx;
                 let source_row = digit as i32 / divx;
+                let digit_position = if compact_digits { index } else { shiftbase + index } as i32;
                 let rect = normalize_skin_frame_rect(
                     ResolvedSkinFrame {
-                        x: base_frame.x + frame.x + digit_step * (shiftbase + index) as i32 - shift,
+                        x: base_frame.x + frame.x + digit_step * digit_position - shift,
                         y: base_frame.y + frame.y,
                         w: frame.w,
                         h: frame.h,
@@ -1641,8 +1671,12 @@ impl SkinDocument {
         cover: &SkinHiddenCoverDef,
         destination: &SkinDestinationDef,
         frame: ResolvedSkinFrame,
+        state: SkinDrawState,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<SkinRenderItem> {
+        if state.hidden_cover <= 0.0 {
+            return None;
+        }
         let source = sources.get(&cover.src)?;
         let source_width = source.source_size.width.max(1.0);
         let source_height = source.source_size.height.max(1.0);
@@ -4492,6 +4526,65 @@ mod tests {
     }
 
     #[test]
+    fn skin_document_compacts_shifted_judge_combo_numbers() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "judge.png" }],
+                "image": [
+                    { "id": "judgef-pg", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10 }
+                ],
+                "value": [
+                    { "id": "judgen-pg", "src": 1, "x": 0, "y": 20, "w": 100, "h": 10, "divx": 10, "digit": 6 }
+                ],
+                "judge": [{
+                    "id": 2010,
+                    "shift": true,
+                    "images": [
+                        { "id": "judgef-pg", "dst": [{ "time": 0, "x": 30, "y": 20, "w": 20, "h": 10 }, { "time": 500 }] }
+                    ],
+                    "numbers": [
+                        { "id": "judgen-pg", "dst": [{ "time": 0, "x": 20, "y": 5, "w": 5, "h": 10 }, { "time": 500 }] }
+                    ]
+                }],
+                "destination": [
+                    { "id": 2010 }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = mock_source("1", 100.0, 100.0);
+        let items = document.static_render_items(
+            &sources,
+            SkinDrawState {
+                combo: 123,
+                judge_ms: Some(100),
+                judge_index: Some(0),
+                ..Default::default()
+            },
+            SkinTextState::default(),
+        );
+
+        assert_eq!(items.len(), 4);
+        assert!(matches!(items[0], SkinRenderItem::Image {
+                rect: Rect { x, .. },
+                ..
+            } if approx_eq(x, 0.23)));
+        assert!(matches!(items[1], SkinRenderItem::Image {
+                rect: Rect { x, .. },
+                ..
+            } if approx_eq(x, 0.43)));
+        assert!(matches!(items[3], SkinRenderItem::Image {
+                rect: Rect { x, .. },
+                ..
+            } if approx_eq(x, 0.53)));
+    }
+
+    #[test]
     fn skin_document_resolves_lane_imageset_effects() {
         let document: SkinDocument = serde_json::from_str(
             r#"
@@ -4817,8 +4910,13 @@ mod tests {
             },
         )]);
 
-        let items = document.static_image_render_items(&sources, SkinDrawState::default());
+        let hidden = document.static_image_render_items(&sources, SkinDrawState::default());
+        let items = document.static_image_render_items(
+            &sources,
+            SkinDrawState { hidden_cover: 1.0, ..SkinDrawState::default() },
+        );
 
+        assert!(hidden.is_empty());
         assert_eq!(items.len(), 1);
         assert!(matches!(items[0], SkinRenderItem::Image {
                 rect: Rect { x, y, width, height },
