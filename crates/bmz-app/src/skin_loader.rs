@@ -37,6 +37,21 @@ pub fn apply_default_skin(renderer: &mut Renderer) -> Result<()> {
     apply_skin_from_dir(renderer, &default_skin_root())
 }
 
+/// `profile.toml` の `[skin] play` 設定からスキンをロードする。
+/// 空文字列 → デフォルトスキン、`.json` 拡張子 → beatoraja JSON スキン、
+/// それ以外 → `skin.toml` を含む bmz スキンディレクトリとして扱う。
+pub fn apply_skin_from_config(renderer: &mut Renderer, play_skin_path: &str) -> Result<()> {
+    if play_skin_path.is_empty() {
+        return apply_default_skin(renderer);
+    }
+    let path = Path::new(play_skin_path);
+    if path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("json")) {
+        apply_beatoraja_json_skin(renderer, path)
+    } else {
+        apply_skin_from_dir(renderer, path)
+    }
+}
+
 pub fn apply_beatoraja_json_skin(renderer: &mut Renderer, skin_path: &Path) -> Result<()> {
     let default_root = default_skin_root();
     let manifest_path = default_root.join("skin.toml");
@@ -255,6 +270,25 @@ mod tests {
         let mut renderer = Renderer::default();
 
         apply_beatoraja_json_skin(&mut renderer, &skin_path).unwrap();
+    }
+
+    #[test]
+    fn apply_skin_from_config_empty_path_uses_default_skin() {
+        let mut renderer = Renderer::default();
+
+        apply_skin_from_config(&mut renderer, "").unwrap();
+    }
+
+    #[test]
+    fn apply_skin_from_config_json_path_loads_beatoraja_skin_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/beatoraja/skin/default/play7.json");
+        if !skin_path.is_file() {
+            return;
+        }
+        let mut renderer = Renderer::default();
+
+        apply_skin_from_config(&mut renderer, skin_path.to_str().unwrap()).unwrap();
     }
 
     #[test]

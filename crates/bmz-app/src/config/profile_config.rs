@@ -16,6 +16,8 @@ pub struct ProfileConfig {
     pub replay: ReplayConfig,
     pub ui: UiConfig,
     pub audio_mix: AudioMixConfig,
+    #[serde(default)]
+    pub skin: SkinConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -179,6 +181,17 @@ pub struct AudioMixConfig {
     pub preview_volume: f32,
 }
 
+/// スキン設定。スキンはプロファイルごとに切り替えられる。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SkinConfig {
+    /// プレイ画面スキンのパス。
+    /// 空文字列なら内蔵デフォルトスキンを使用。
+    /// `.json` で終わるパスは beatoraja JSON スキン、それ以外は
+    /// `skin.toml` を含む bmz スキンディレクトリとして扱う。
+    #[serde(default)]
+    pub play: String,
+}
+
 impl ProfileConfig {
     pub fn new_default(id: &str, display_name: &str, now: i64) -> Self {
         Self {
@@ -232,6 +245,7 @@ impl ProfileConfig {
                 bgm_volume: 1.0,
                 preview_volume: 0.7,
             },
+            skin: SkinConfig::default(),
         }
     }
 }

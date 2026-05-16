@@ -26,7 +26,7 @@ use crate::screens::play_start::{PlayStartOptions, StartedWinitPlaySession};
 use crate::screens::result_model::ResultSummary;
 use crate::screens::select_model::{SelectItem, load_select_items_in_folder, root_folder_items};
 use crate::select_options::{ArrangeOption, AssistOption};
-use crate::skin_loader::apply_default_skin;
+use crate::skin_loader::apply_skin_from_config;
 use crate::storage::scan::scan_song_roots;
 
 const SAMPLE_PLAYABLE_TITLE: &str = "BMZ Sample Playable";
@@ -98,7 +98,7 @@ impl WinitApp {
         let select_keys = SelectKeyBindings::from_profile(&boot.profile_config.input);
 
         let mut renderer = Renderer::default();
-        load_default_skin_textures(&mut renderer);
+        load_play_skin_textures(&mut renderer, &boot.profile_config.skin.play);
 
         let mut app = Self {
             boot,
@@ -538,9 +538,9 @@ impl WinitApp {
     }
 }
 
-fn load_default_skin_textures(renderer: &mut Renderer) {
-    if let Err(error) = apply_default_skin(renderer) {
-        tracing::warn!(%error, "failed to apply default skin; using fallback textures");
+fn load_play_skin_textures(renderer: &mut Renderer, play_skin_path: &str) {
+    if let Err(error) = apply_skin_from_config(renderer, play_skin_path) {
+        tracing::warn!(%error, "failed to apply play skin; using fallback textures");
     }
 }
 
