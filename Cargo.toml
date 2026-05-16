@@ -8,6 +8,7 @@ members = [
     "crates/bmz-app",
     "crates/bmz-skin-convert",
 ]
+default-members = ["crates/bmz-app"]
 resolver = "2"
 
 [workspace.package]
