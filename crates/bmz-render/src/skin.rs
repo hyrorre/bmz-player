@@ -1073,6 +1073,7 @@ impl SkinDocument {
         let root = path.parent().unwrap_or_else(|| Path::new("."));
         let expanded = expand_json_skin_value(raw, root, root, enabled_options)
             .with_context(|| format!("failed to expand skin json: {}", path.display()))?;
+        let expanded = normalize_json_skin_integer_numbers(expanded);
         serde_json::from_value(expanded)
             .with_context(|| format!("failed to parse skin json: {}", path.display()))
     }
@@ -2004,6 +2005,133 @@ fn strip_json_trailing_commas(input: &str) -> String {
     }
 
     output
+}
+
+fn normalize_json_skin_integer_numbers(value: JsonValue) -> JsonValue {
+    normalize_json_skin_integer_numbers_for_key(None, value)
+}
+
+fn normalize_json_skin_integer_numbers_for_key(key: Option<&str>, value: JsonValue) -> JsonValue {
+    match value {
+        JsonValue::Array(values) => JsonValue::Array(
+            values
+                .into_iter()
+                .map(|value| {
+                    if is_json_skin_integer_key(key) {
+                        normalize_json_skin_integer_value(value)
+                    } else {
+                        normalize_json_skin_integer_numbers_for_key(key, value)
+                    }
+                })
+                .collect(),
+        ),
+        JsonValue::Object(map) => JsonValue::Object(
+            map.into_iter()
+                .map(|(key, value)| {
+                    let value = if is_json_skin_integer_key(Some(&key)) {
+                        normalize_json_skin_integer_value(value)
+                    } else {
+                        normalize_json_skin_integer_numbers_for_key(Some(&key), value)
+                    };
+                    (key, value)
+                })
+                .collect::<JsonMap<_, _>>(),
+        ),
+        JsonValue::Number(number) if is_json_skin_integer_key(key) => {
+            json_number_to_rounded_i64(&number)
+                .and_then(serde_json::Number::from_i128)
+                .map(JsonValue::Number)
+                .unwrap_or(JsonValue::Number(number))
+        }
+        value => value,
+    }
+}
+
+fn normalize_json_skin_integer_value(value: JsonValue) -> JsonValue {
+    match value {
+        JsonValue::Number(number) => json_number_to_rounded_i64(&number)
+            .and_then(serde_json::Number::from_i128)
+            .map(JsonValue::Number)
+            .unwrap_or(JsonValue::Number(number)),
+        JsonValue::Array(values) => {
+            JsonValue::Array(values.into_iter().map(normalize_json_skin_integer_value).collect())
+        }
+        JsonValue::Object(map) => JsonValue::Object(
+            map.into_iter()
+                .map(|(key, value)| {
+                    let value = if is_json_skin_integer_key(Some(&key)) {
+                        normalize_json_skin_integer_value(value)
+                    } else {
+                        normalize_json_skin_integer_numbers_for_key(Some(&key), value)
+                    };
+                    (key, value)
+                })
+                .collect::<JsonMap<_, _>>(),
+        ),
+        value => value,
+    }
+}
+
+fn json_number_to_rounded_i64(number: &serde_json::Number) -> Option<i128> {
+    if let Some(value) = number.as_i64() {
+        return Some(value as i128);
+    }
+    if let Some(value) = number.as_u64() {
+        return Some(value as i128);
+    }
+    let value = number.as_f64()?;
+    if !value.is_finite() || value < i64::MIN as f64 || value > i64::MAX as f64 {
+        return None;
+    }
+    Some(value.round() as i128)
+}
+
+fn is_json_skin_integer_key(key: Option<&str>) -> bool {
+    matches!(
+        key,
+        Some(
+            "a" | "acc"
+                | "align"
+                | "angle"
+                | "b"
+                | "blend"
+                | "center"
+                | "click"
+                | "cycle"
+                | "digit"
+                | "disapearLine"
+                | "divx"
+                | "divy"
+                | "endtime"
+                | "filter"
+                | "g"
+                | "h"
+                | "index"
+                | "len"
+                | "loop"
+                | "max"
+                | "min"
+                | "offset"
+                | "offsets"
+                | "op"
+                | "padding"
+                | "parts"
+                | "r"
+                | "range"
+                | "ref"
+                | "size"
+                | "space"
+                | "starttime"
+                | "stretch"
+                | "time"
+                | "timer"
+                | "type"
+                | "w"
+                | "x"
+                | "y"
+                | "zeropadding"
+        )
+    )
 }
 
 fn expand_json_skin_value(
@@ -4994,6 +5122,19 @@ mod tests {
         assert!(document.source_map().contains_key("7"));
         assert!(document.image_map().contains_key("note-w"));
         assert_eq!(document.note.as_ref().unwrap().id, "notes");
+        assert!(!document.destination.is_empty());
+    }
+
+    #[test]
+    fn local_ecfn_converted_play7_json_loads_when_available() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/skins/ECFN/play/play7-1p.json");
+        if !path.is_file() {
+            return;
+        }
+
+        let document = SkinDocument::load_beatoraja_json(&path).unwrap();
+
         assert!(!document.destination.is_empty());
     }
 

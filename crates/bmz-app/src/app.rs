@@ -574,8 +574,15 @@ impl WinitApp {
 
 fn load_play_skin_textures(renderer: &mut Renderer, play_skin_path: &str) {
     if let Err(error) = apply_skin_from_config(renderer, play_skin_path) {
-        tracing::warn!(%error, "failed to apply play skin; using fallback textures");
+        tracing::warn!(
+            error = %format_error_chain(&error),
+            "failed to apply play skin; using fallback textures"
+        );
     }
+}
+
+fn format_error_chain(error: &anyhow::Error) -> String {
+    error.chain().map(ToString::to_string).collect::<Vec<_>>().join(": ")
 }
 
 impl ApplicationHandler for WinitApp {
