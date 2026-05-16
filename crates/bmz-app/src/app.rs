@@ -18,7 +18,11 @@ use crate::cli::{
     SMOKE_EXIT_ON_RESULT_ARG,
 };
 use crate::config::app_config::PathEntry;
-use crate::config::profile_config::{GaugeTypeConfig, LaneConfig, ProfileInputConfig};
+use crate::config::profile_config::{
+    AssistOptionConfig, GaugeTypeConfig, LaneConfig, ProfileConfig, ProfileInputConfig,
+    RandomOptionConfig,
+};
+use crate::config::save::save_profile_config;
 use crate::input::winit::physical_key_to_control;
 use crate::screens::play_finish::FinishedPlaySession;
 use crate::screens::play_loop::{PlayAdvanceOutcome, advance_running_play_session_until_result};
@@ -92,9 +96,13 @@ impl WinitApp {
             .flatten();
         log_startup_options(&options);
 
-        let assist_option =
-            if options.autoplay_on_start { AssistOption::Autoplay } else { AssistOption::Normal };
+        let assist_option = if options.autoplay_on_start || boot.profile_config.play.auto_play {
+            AssistOption::Autoplay
+        } else {
+            AssistOption::Normal
+        };
         let gauge_option = boot.profile_config.play.gauge;
+        let arrange_option = arrange_option_from_profile(boot.profile_config.play.random);
         let select_keys = SelectKeyBindings::from_profile(&boot.profile_config.input);
 
         let mut renderer = Renderer::default();
@@ -114,7 +122,7 @@ impl WinitApp {
             dev_scene: None,
             last_scene_kind: None,
             start_held: false,
-            arrange_option: ArrangeOption::Normal,
+            arrange_option,
             gauge_option,
             assist_option,
             select_keys,
@@ -439,9 +447,11 @@ impl WinitApp {
                 self.last_play_snapshot = Some(frame.render_snapshot);
             }
             Ok(PlayAdvanceOutcome::Finished { frame, finished }) => {
+                let hispeed = active_play.running.session.hispeed;
                 self.last_play_snapshot = Some(frame.render_snapshot);
                 self.active_play = None;
                 self.finished_play = Some(finished);
+                self.save_current_play_options(Some(hispeed), "play finished");
             }
             Err(error) => {
                 tracing::error!(%error, "failed to advance play session");
@@ -506,6 +516,7 @@ impl WinitApp {
         if self.smoke_exit_on_result && self.finished_play.is_some() {
             self.smoke_exit_on_result = false;
             tracing::info!("smoke result reached; leaving event loop");
+            self.save_current_play_options(None, "game exit");
             event_loop.exit();
             return;
         }
@@ -521,7 +532,30 @@ impl WinitApp {
                 frames = self.rendered_frames,
                 "smoke exit frame count reached; leaving event loop"
             );
+            self.save_current_play_options(self.active_hispeed(), "game exit");
             event_loop.exit();
+        }
+    }
+
+    fn active_hispeed(&self) -> Option<f32> {
+        self.active_play.as_ref().map(|active| active.running.session.hispeed)
+    }
+
+    fn save_current_play_options(&mut self, hispeed: Option<f32>, reason: &'static str) {
+        apply_current_play_options_to_profile(
+            &mut self.boot.profile_config,
+            hispeed,
+            self.arrange_option,
+            self.gauge_option,
+            self.assist_option,
+            now_unix_seconds(),
+        );
+        if let Err(error) =
+            save_profile_config(&self.boot.profile_paths.profile_toml, &self.boot.profile_config)
+        {
+            tracing::error!(%error, reason, "failed to save profile play options");
+        } else {
+            tracing::info!(reason, "saved profile play options");
         }
     }
 
@@ -568,7 +602,10 @@ impl ApplicationHandler for WinitApp {
         }
 
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => {
+                self.save_current_play_options(self.active_hispeed(), "game exit");
+                event_loop.exit();
+            }
             WindowEvent::KeyboardInput { event, .. } => self.route_keyboard_input(&event),
             WindowEvent::Resized(size) => {
                 self.renderer
@@ -587,6 +624,10 @@ impl ApplicationHandler for WinitApp {
         if let Some(window) = &self.window {
             window.request_redraw();
         }
+    }
+
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        self.save_current_play_options(self.active_hispeed(), "game exit");
     }
 }
 
@@ -662,6 +703,46 @@ fn gauge_option_as_str(gauge: GaugeTypeConfig) -> &'static str {
         GaugeTypeConfig::ExHard => "EX-HARD",
         GaugeTypeConfig::Hazard => "HAZARD",
     }
+}
+
+fn arrange_option_from_profile(random: RandomOptionConfig) -> ArrangeOption {
+    match random {
+        RandomOptionConfig::Mirror => ArrangeOption::Mirror,
+        RandomOptionConfig::Random | RandomOptionConfig::RRandom | RandomOptionConfig::SRandom => {
+            ArrangeOption::Random
+        }
+        RandomOptionConfig::Off => ArrangeOption::Normal,
+    }
+}
+
+fn random_config_from_arrange(arrange: ArrangeOption) -> RandomOptionConfig {
+    match arrange {
+        ArrangeOption::Normal => RandomOptionConfig::Off,
+        ArrangeOption::Mirror => RandomOptionConfig::Mirror,
+        ArrangeOption::Random => RandomOptionConfig::Random,
+    }
+}
+
+fn apply_current_play_options_to_profile(
+    profile: &mut ProfileConfig,
+    hispeed: Option<f32>,
+    arrange: ArrangeOption,
+    gauge: GaugeTypeConfig,
+    assist: AssistOption,
+    updated_at: i64,
+) {
+    if let Some(hispeed) = hispeed {
+        profile.lane.hispeed = clamp_hispeed_for_profile(hispeed);
+    }
+    profile.play.random = random_config_from_arrange(arrange);
+    profile.play.gauge = gauge;
+    profile.play.auto_play = assist == AssistOption::Autoplay;
+    profile.play.assist = AssistOptionConfig::None;
+    profile.updated_at = updated_at;
+}
+
+fn clamp_hispeed_for_profile(hispeed: f32) -> f32 {
+    (hispeed * 4.0).round().clamp(2.0, 40.0) / 4.0
 }
 
 fn select_snapshot_rows(
@@ -1220,6 +1301,46 @@ mod tests {
         assert_eq!(adjusted_hispeed(2.0, HispeedChange::Down), 1.75);
         assert_eq!(adjusted_hispeed(10.0, HispeedChange::Up), 10.0);
         assert_eq!(adjusted_hispeed(0.5, HispeedChange::Down), 0.5);
+    }
+
+    #[test]
+    fn apply_current_play_options_updates_profile_defaults() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+
+        apply_current_play_options_to_profile(
+            &mut profile,
+            Some(3.37),
+            ArrangeOption::Mirror,
+            GaugeTypeConfig::Hard,
+            AssistOption::Autoplay,
+            42,
+        );
+
+        assert_eq!(profile.lane.hispeed, 3.25);
+        assert!(matches!(profile.play.random, RandomOptionConfig::Mirror));
+        assert!(matches!(profile.play.gauge, GaugeTypeConfig::Hard));
+        assert!(profile.play.auto_play);
+        assert!(matches!(profile.play.assist, AssistOptionConfig::None));
+        assert_eq!(profile.updated_at, 42);
+    }
+
+    #[test]
+    fn arrange_option_maps_profile_random_defaults() {
+        assert_eq!(arrange_option_from_profile(RandomOptionConfig::Off), ArrangeOption::Normal);
+        assert_eq!(arrange_option_from_profile(RandomOptionConfig::Mirror), ArrangeOption::Mirror);
+        assert_eq!(arrange_option_from_profile(RandomOptionConfig::Random), ArrangeOption::Random);
+        assert!(matches!(
+            random_config_from_arrange(ArrangeOption::Normal),
+            RandomOptionConfig::Off
+        ));
+        assert!(matches!(
+            random_config_from_arrange(ArrangeOption::Mirror),
+            RandomOptionConfig::Mirror
+        ));
+        assert!(matches!(
+            random_config_from_arrange(ArrangeOption::Random),
+            RandomOptionConfig::Random
+        ));
     }
 
     #[test]
