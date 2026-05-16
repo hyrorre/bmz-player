@@ -416,6 +416,8 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
     let judge_ms = snapshot.recent_judgements.last().map(|j| {
         ((snapshot.time.0 - j.time.0) / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32
     });
+    let judge_index =
+        snapshot.recent_judgements.last().and_then(|judgement| judge_image_index(&judgement.text));
     let judge_timing_ms = snapshot
         .recent_judgements
         .last()
@@ -440,6 +442,7 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
                 keyon_ms,
                 lane_judge,
                 judge_ms,
+                judge_index,
                 offset_lift_px: {
                     let canvas_h = skin.document().map_or(720, |d| d.h) as f32;
                     (snapshot.lift * canvas_h).round() as i32

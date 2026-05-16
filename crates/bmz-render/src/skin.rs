@@ -735,6 +735,9 @@ pub struct SkinDrawState {
     pub lane_judge: [Option<usize>; 8],
     /// 判定タイマー経過ms (TIMER_JUDGE_1P=46)。Noneなら非アクティブ。
     pub judge_ms: Option<i32>,
+    /// 現在表示中の判定画像インデックス (0=PGREAT,1=GREAT,2=GOOD,3=BAD,4=POOR)。
+    /// `destination` の judge 挿入点で judge 定義を描画するために使う。
+    pub judge_index: Option<usize>,
     /// OFFSET_LIFT (id=3) の y 値 (skin canvas pixel 単位)。リフト量に応じて要素をシフトする。
     pub offset_lift_px: i32,
     /// OFFSET_LANECOVER (id=4) の y 値 (skin canvas pixel 単位)。レーンカバー位置インジケータのシフト。
@@ -1101,6 +1104,19 @@ impl SkinDocument {
             .filter(|destination| test_skin_ops(&destination.op, &enabled_options))
             .filter(|destination| eval_skin_draw_condition(&destination.draw, state))
             .filter_map(|destination| {
+                if self.judge.iter().any(|judge| judge.id == destination.id) {
+                    let judge_index = state.judge_index?;
+                    let elapsed = state.judge_ms?;
+                    return self.judge_render_items_for_index(
+                        judge_index,
+                        state.combo,
+                        elapsed,
+                        sources,
+                        state.offset_lift_px,
+                        state.offset_lanecover_px,
+                    );
+                }
+
                 let elapsed = skin_timer_elapsed_ms(destination.timer, state)?;
                 let mut frame = resolve_destination_frame(destination, elapsed, &enabled_options)?;
                 let (dx, dy) = skin_offset_shift(destination, state);
@@ -1369,11 +1385,28 @@ impl SkinDocument {
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<Vec<SkinRenderItem>> {
         let judge_index = judge_image_index(judge)?;
+        self.judge_render_items_for_index(judge_index, combo, elapsed_ms, sources, 0, 0)
+    }
+
+    fn judge_render_items_for_index(
+        &self,
+        judge_index: usize,
+        combo: u32,
+        elapsed_ms: i32,
+        sources: &HashMap<String, SkinDocumentTexture>,
+        offset_lift_px: i32,
+        offset_lanecover_px: i32,
+    ) -> Option<Vec<SkinRenderItem>> {
         let judge = self.judge.first()?;
         let image_destination = judge.images.get(judge_index)?;
         let enabled_options = self.enabled_options();
-        let image_frame =
+        let mut image_frame =
             resolve_destination_frame_until_end(image_destination, elapsed_ms, &enabled_options)?;
+        let offset_state =
+            SkinDrawState { offset_lift_px, offset_lanecover_px, ..SkinDrawState::default() };
+        let (dx, dy) = skin_offset_shift(image_destination, offset_state);
+        image_frame.x += dx;
+        image_frame.y += dy;
         let mut items = vec![self.image_render_item(
             &image_destination.id,
             normalize_skin_frame_rect(image_frame, self.w, self.h),
@@ -1384,12 +1417,15 @@ impl SkinDocument {
         )?];
         if combo > 0
             && let Some(number_destination) = judge.numbers.get(judge_index)
-            && let Some(number_frame) = resolve_destination_frame_until_end(
+            && let Some(mut number_frame) = resolve_destination_frame_until_end(
                 number_destination,
                 elapsed_ms,
                 &enabled_options,
             )
         {
+            let (dx, dy) = skin_offset_shift(number_destination, offset_state);
+            number_frame.x += dx;
+            number_frame.y += dy;
             items.extend(self.value_number_render_items(
                 &number_destination.id,
                 combo as i64,
@@ -4374,6 +4410,85 @@ mod tests {
                 uv: TextureRegion { x: u, .. },
                 ..
             } if approx_eq(x, 0.4) && approx_eq(u, 0.3)));
+    }
+
+    #[test]
+    fn skin_document_renders_judge_destination_insert() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "property": [
+                    { "name": "Play Side", "item": [
+                        { "name": "1P", "op": 920 },
+                        { "name": "2P", "op": 921 }
+                    ]}
+                ],
+                "source": [{ "id": 1, "path": "judge.png" }],
+                "image": [
+                    { "id": "judgef-pg", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10 }
+                ],
+                "value": [
+                    { "id": "judgen-pg", "src": 1, "x": 0, "y": 20, "w": 100, "h": 10, "divx": 10, "digit": 3 }
+                ],
+                "judge": [{
+                    "id": 2010,
+                    "images": [
+                        { "id": "judgef-pg", "loop": -1, "offset": 3, "dst": [
+                            { "if": [920], "value": { "time": 0, "x": 10, "y": 20, "w": 20, "h": 10 } },
+                            { "if": [921], "value": { "time": 0, "x": 70, "y": 20, "w": 20, "h": 10 } },
+                            { "time": 500 }
+                        ]}
+                    ],
+                    "numbers": [
+                        { "id": "judgen-pg", "loop": -1, "dst": [
+                            { "time": 0, "x": 20, "y": 5, "w": 5, "h": 10 },
+                            { "time": 500 }
+                        ]}
+                    ]
+                }],
+                "destination": [
+                    { "id": 2010 }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "1".to_string(),
+            SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 100.0, height: 100.0 },
+            },
+        )]);
+
+        let items = document.static_render_items(
+            &sources,
+            SkinDrawState {
+                combo: 123,
+                judge_ms: Some(100),
+                judge_index: Some(0),
+                offset_lift_px: 10,
+                ..SkinDrawState::default()
+            },
+            SkinTextState::default(),
+        );
+
+        assert_eq!(items.len(), 4);
+        assert!(matches!(items[0], SkinRenderItem::Image {
+                rect: Rect { x, y, width, height },
+                ..
+            } if approx_eq(x, 0.1)
+                && approx_eq(y, 0.6)
+                && approx_eq(width, 0.2)
+                && approx_eq(height, 0.1)));
+        assert!(matches!(items[1], SkinRenderItem::Image {
+                rect: Rect { x, y, .. },
+                ..
+            } if approx_eq(x, 0.3) && approx_eq(y, 0.55)));
     }
 
     #[test]
