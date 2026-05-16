@@ -93,7 +93,7 @@ pub struct SkinDocument {
     pub judge: Vec<SkinJudgeDef>,
     pub bga: Option<SkinBgaDef>,
     #[serde(default)]
-    pub destination: Vec<SkinDestinationDef>,
+    pub destination: Vec<DestinationListEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -563,6 +563,41 @@ impl<'de> Deserialize<'de> for SkinDstEntry {
             Ok(SkinDstEntry::Conditional { if_ops, frames })
         } else {
             serde_json::from_value(value).map(SkinDstEntry::Frame).map_err(serde::de::Error::custom)
+        }
+    }
+}
+
+/// `destination` 配列の1エントリ。通常の `SkinDestinationDef` か、
+/// `{"if": [...], "values": [...]}` 形式の条件付きグループ。
+#[derive(Debug, Clone, PartialEq)]
+pub enum DestinationListEntry {
+    Single(SkinDestinationDef),
+    /// `{"if": [...], "values": [...]}` 形式。条件が満たされた場合のみ内部エントリを展開する。
+    Conditional {
+        if_ops: Vec<i32>,
+        destinations: Vec<SkinDestinationDef>,
+    },
+}
+
+impl<'de> Deserialize<'de> for DestinationListEntry {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = JsonValue::deserialize(deserializer)?;
+        if value.get("if").is_some() {
+            let if_ops = parse_skin_dst_if_ops(value.get("if").unwrap());
+            let destinations = if let Some(values_field) = value.get("values") {
+                serde_json::from_value::<Vec<SkinDestinationDef>>(values_field.clone())
+                    .unwrap_or_default()
+            } else {
+                vec![]
+            };
+            Ok(DestinationListEntry::Conditional { if_ops, destinations })
+        } else {
+            serde_json::from_value(value)
+                .map(DestinationListEntry::Single)
+                .map_err(serde::de::Error::custom)
         }
     }
 }
@@ -1063,8 +1098,8 @@ impl SkinDocument {
     ) -> Vec<SkinRenderItem> {
         let images = self.image_map();
         let enabled_options = self.enabled_options();
-        self.destination
-            .iter()
+        self.all_destinations(&enabled_options)
+            .into_iter()
             .filter(|destination| test_skin_ops(&destination.op, &enabled_options))
             .filter(|destination| eval_skin_draw_condition(&destination.draw, state))
             .filter_map(|destination| {
@@ -1158,6 +1193,26 @@ impl SkinDocument {
             .collect()
     }
 
+    /// 有効なオプション条件に基づいて `destination` エントリを展開し、
+    /// 描画対象の `SkinDestinationDef` の参照リストを返す。
+    pub fn all_destinations<'a>(
+        &'a self,
+        enabled_options: &[i32],
+    ) -> Vec<&'a SkinDestinationDef> {
+        let mut result = Vec::new();
+        for entry in &self.destination {
+            match entry {
+                DestinationListEntry::Single(d) => result.push(d),
+                DestinationListEntry::Conditional { if_ops, destinations } => {
+                    if test_skin_dst_if(if_ops, enabled_options) {
+                        result.extend(destinations.iter());
+                    }
+                }
+            }
+        }
+        result
+    }
+
     pub fn note_image_render_item(
         &self,
         lane: Lane,
@@ -1184,37 +1239,43 @@ impl SkinDocument {
     /// `note.dst` の中から有効な条件に一致するエントリを探し、
     /// 指定レーンのノートエリア矩形（正規化座標）を返す。
     /// ノートエリアはレーン列全体を表す。Y軸: 上端=ノートが最も早い時点、下端=判定ライン。
+    ///
+    /// note.dst の解釈は2通り:
+    /// 1. `load_beatoraja_json` 経由で読んだ場合: `expand_json_skin_value` により条件ブロックが
+    ///    展開済みで、dst はレーン順の Frame エントリ列になっている。
+    ///    → 全 Frame をフラット配列として `lane_idx` 番目を使う。
+    /// 2. 直接 JSON パースした場合: Conditional エントリの frames 配列がレーン対応を持つ。
+    ///    → 条件を満たす Conditional を探し、その frames[lane_idx] を使う。
     pub fn note_lane_area(&self, lane: Lane, enabled_options: &[i32]) -> Option<Rect> {
         let note = self.note.as_ref()?;
         let lane_idx = beatoraja_7k_note_index(lane);
         let canvas_w = self.w as f32;
         let canvas_h = self.h as f32;
 
+        // 全エントリを展開してフラット化。Conditional は条件が合うものだけ展開する。
+        let mut flat: Vec<SkinAnimationDef> = Vec::new();
         for entry in &note.dst {
-            let frames: &[SkinAnimationDef] = match entry {
-                SkinDstEntry::Frame(f) => std::slice::from_ref(f),
+            match entry {
+                SkinDstEntry::Frame(f) => flat.push(*f),
                 SkinDstEntry::Conditional { if_ops, frames } => {
                     if test_skin_dst_if(if_ops, enabled_options) {
-                        frames.as_slice()
-                    } else {
-                        continue;
+                        flat.extend_from_slice(frames);
                     }
-                }
-            };
-            if let Some(frame) = frames.get(lane_idx) {
-                if let (Some(x), Some(y), Some(w), Some(h)) =
-                    (frame.x, frame.y, frame.w, frame.h)
-                {
-                    return Some(Rect {
-                        x: x as f32 / canvas_w,
-                        y: y as f32 / canvas_h,
-                        width: w as f32 / canvas_w,
-                        height: h as f32 / canvas_h,
-                    });
                 }
             }
         }
-        None
+
+        let frame = flat.get(lane_idx)?;
+        if let (Some(x), Some(y), Some(w), Some(h)) = (frame.x, frame.y, frame.w, frame.h) {
+            Some(Rect {
+                x: x as f32 / canvas_w,
+                y: y as f32 / canvas_h,
+                width: w as f32 / canvas_w,
+                height: h as f32 / canvas_h,
+            })
+        } else {
+            None
+        }
     }
 
     pub fn gauge_render_items(
@@ -1225,7 +1286,7 @@ impl SkinDocument {
     ) -> Option<Vec<SkinRenderItem>> {
         let gauge_def = self.gauge.as_ref()?;
         let enabled_options = self.enabled_options();
-        let destination = self.destination.iter().find(|destination| {
+        let destination = self.all_destinations(&enabled_options).into_iter().find(|destination| {
             destination.id == gauge_def.id
                 && destination.timer.is_none()
                 && test_skin_ops(&destination.op, &enabled_options)
@@ -1324,11 +1385,12 @@ impl SkinDocument {
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Vec<SkinRenderItem> {
         let enabled_options = self.enabled_options();
+        let all_dests = self.all_destinations(&enabled_options);
         self.imageset
             .iter()
             .filter(|imageset| imageset_ref_lane(imageset.ref_id) == Some(lane))
             .filter_map(|imageset| {
-                let destination = self.destination.iter().find(|destination| {
+                let destination = all_dests.iter().find(|destination| {
                     destination.id == imageset.id
                         && destination.timer.is_some()
                         && test_skin_ops(&destination.op, &enabled_options)
@@ -3637,7 +3699,10 @@ mod tests {
         assert_eq!(document.image[0].src, "100");
         assert_eq!(document.image[1].src, "100");
         assert_eq!(document.imageset[0].images, ["200", "300"]);
-        assert_eq!(document.destination[0].id, "200");
+        let DestinationListEntry::Single(dst0) = &document.destination[0] else {
+            panic!("expected Single destination");
+        };
+        assert_eq!(dst0.id, "200");
     }
 
     #[test]
@@ -3682,8 +3747,11 @@ mod tests {
         assert_eq!(document.image.len(), 1);
         assert_eq!(document.image[0].id, "included");
         assert_eq!(document.destination.len(), 1);
-        assert_eq!(document.destination[0].id, "included");
-        let SkinDstEntry::Frame(frame) = &document.destination[0].dst[0] else {
+        let DestinationListEntry::Single(dst0) = &document.destination[0] else {
+            panic!("expected Single destination");
+        };
+        assert_eq!(dst0.id, "included");
+        let SkinDstEntry::Frame(frame) = &dst0.dst[0] else {
             panic!("expected Frame entry");
         };
         assert_eq!(frame.x, Some(1));
@@ -5382,6 +5450,46 @@ mod tests {
             },
         );
         map
+    }
+
+    #[test]
+    fn note_lane_area_resolves_flat_frame_dst_after_expansion() {
+        // load_beatoraja_json が expand_json_skin_value で条件ブロックを展開すると
+        // note.dst はレーン順の Frame エントリ列になる。全レーンが正しく解決されること。
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "w": 1280, "h": 720,
+                "note": {
+                    "dst": [
+                        {"x": 90, "y": 140, "w": 50, "h": 580},
+                        {"x": 140, "y": 140, "w": 40, "h": 580},
+                        {"x": 180, "y": 140, "w": 50, "h": 580},
+                        {"x": 230, "y": 140, "w": 40, "h": 580},
+                        {"x": 270, "y": 140, "w": 50, "h": 580},
+                        {"x": 320, "y": 140, "w": 40, "h": 580},
+                        {"x": 360, "y": 140, "w": 50, "h": 580},
+                        {"x": 20, "y": 140, "w": 70, "h": 580}
+                    ]
+                }
+            }
+            "#,
+        )
+        .unwrap();
+
+        let enabled: Vec<i32> = vec![];
+        // Key1 is index 0 → first Frame
+        let area = document.note_lane_area(Lane::Key1, &enabled).unwrap();
+        assert!(approx_eq(area.x, 90.0 / 1280.0));
+        assert!(approx_eq(area.width, 50.0 / 1280.0));
+        // Key2 is index 1 → second Frame
+        let area2 = document.note_lane_area(Lane::Key2, &enabled).unwrap();
+        assert!(approx_eq(area2.x, 140.0 / 1280.0));
+        assert!(approx_eq(area2.width, 40.0 / 1280.0));
+        // Scratch is index 7 → eighth Frame
+        let scratch = document.note_lane_area(Lane::Scratch, &enabled).unwrap();
+        assert!(approx_eq(scratch.x, 20.0 / 1280.0));
+        assert!(approx_eq(scratch.width, 70.0 / 1280.0));
     }
 
     #[test]
