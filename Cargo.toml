@@ -6,6 +6,7 @@ members = [
     "crates/bmz-gameplay",
     "crates/bmz-render",
     "crates/bmz-app",
+    "crates/bmz-skin-convert",
 ]
 resolver = "2"
 
@@ -34,3 +35,4 @@ encoding_rs = "0.8"
 cpal = "0.15"
 wgpu = "0.20"
 winit = "0.30"
+mlua = { version = "0.10", features = ["lua54", "vendored", "send"] }
