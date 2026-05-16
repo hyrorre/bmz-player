@@ -5,7 +5,7 @@ use crate::scene::{AppSceneSnapshot, SelectRowSnapshot, SelectSnapshot};
 use crate::skin::{
     Animation, BlendMode, NumberSlot, SkinContext, SkinDefinition, SkinManifest, SkinObject,
     SkinObjectId, SkinPhase, SkinPlacement, SkinRenderContext, SkinRenderItem, SkinSource,
-    SkinTextState, SkinTextureId, TextSlot, append_skin_render_items,
+    SkinTextState, SkinTextureId, TextSlot, append_skin_render_items, judge_image_index,
 };
 use crate::snapshot::{DisplayJudgeCounts, RenderSnapshot};
 use crate::text::{BitmapTextStyle, TextRenderer};
@@ -393,6 +393,7 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
 
     // 見逃しPOOR（is_miss）はボムエフェクトを出さない
     let mut bomb_ms: [Option<i32>; 8] = [None; 8];
+    let mut lane_judge: [Option<usize>; 8] = [None; 8];
     for j in &snapshot.recent_judgements {
         if j.is_miss {
             continue;
@@ -401,6 +402,7 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
         let elapsed =
             ((snapshot.time.0 - j.time.0) / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32;
         bomb_ms[idx] = Some(elapsed);
+        lane_judge[idx] = judge_image_index(&j.text);
     }
 
     let mut keyon_ms: [Option<i32>; 8] = [None; 8];
@@ -436,6 +438,7 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
                 end_of_note: end_of_note(snapshot),
                 bomb_ms,
                 keyon_ms,
+                lane_judge,
                 judge_ms,
                 offset_lift_px: {
                     let canvas_h = skin.document().map_or(720, |d| d.h) as f32;
@@ -547,7 +550,6 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
         snapshot.gauge,
         (snapshot.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32,
     );
-    push_document_lane_effects(skin, &mut commands, snapshot);
 
     if !has_document {
         push_combo_panel(skin_manifest, &mut commands, snapshot.combo);
@@ -816,24 +818,6 @@ fn play_progress(snapshot: &RenderSnapshot) -> f32 {
 
 fn end_of_note(snapshot: &RenderSnapshot) -> bool {
     snapshot.duration.0 > 0 && snapshot.time.0 >= snapshot.duration.0
-}
-
-fn push_document_lane_effects(
-    skin_context: &SkinContext,
-    commands: &mut Vec<DrawCommand>,
-    snapshot: &RenderSnapshot,
-) {
-    for judgement in &snapshot.recent_judgements {
-        // 見逃しPOOR（is_miss）はキービーム・ボムエフェクトを出さない
-        if judgement.is_miss {
-            continue;
-        }
-        let elapsed_ms = ((snapshot.time.0 - judgement.time.0) / 1_000)
-            .clamp(i32::MIN as i64, i32::MAX as i64) as i32;
-        let items =
-            skin_context.document_lane_effect_items(judgement.lane, &judgement.text, elapsed_ms);
-        append_skin_render_items(commands, &items);
-    }
 }
 
 fn push_play_text(text: &TextRenderer, commands: &mut Vec<DrawCommand>, snapshot: &RenderSnapshot) {

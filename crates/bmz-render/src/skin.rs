@@ -482,8 +482,10 @@ pub struct SkinDestinationDef {
     pub filter: i32,
     #[serde(default)]
     pub timer: Option<i32>,
+    /// `loop` フィールド。未指定(None)＝ループなし(1回再生して最終フレーム保持)。
+    /// `Some(n>=0)`＝終端到達後 n 時刻へループバック。`Some(n<0)`＝終端後に非表示。
     #[serde(default, rename = "loop")]
-    pub loop_time: i32,
+    pub loop_time: Option<i32>,
     #[serde(default)]
     pub center: i32,
     #[serde(default)]
@@ -682,17 +684,6 @@ impl SkinContext {
         document.judge_render_items(judge, combo, elapsed_ms, &self.document_sources)
     }
 
-    pub fn document_lane_effect_items(
-        &self,
-        lane: Lane,
-        judge: &str,
-        elapsed_ms: i32,
-    ) -> Vec<SkinRenderItem> {
-        let Some(document) = self.document.as_ref() else {
-            return Vec::new();
-        };
-        document.imageset_render_items_for_lane(lane, judge, elapsed_ms, &self.document_sources)
-    }
 
     /// beatoraja スキンの `note.dst` からレーンのノートエリアを取得し、
     /// `note_y`（0.0=判定ライン, 1.0=最上部）に対応するノート矩形を返す。
@@ -735,6 +726,9 @@ pub struct SkinDrawState {
     pub bomb_ms: [Option<i32>; 8],
     /// 各レーンのkeyon(押下中ビーム)タイマー経過ms。Noneなら非アクティブ。
     pub keyon_ms: [Option<i32>; 8],
+    /// 各レーンの直近判定の画像インデックス (0=PGREAT,1=GREAT,2=GOOD,3=BAD,4=POOR)。
+    /// imageset (ボム・キービーム) の画像選択に使う。Noneなら判定なし。
+    pub lane_judge: [Option<usize>; 8],
     /// 判定タイマー経過ms (TIMER_JUDGE_1P=46)。Noneなら非アクティブ。
     pub judge_ms: Option<i32>,
     /// OFFSET_LIFT (id=3) の y 値 (skin canvas pixel 単位)。リフト量に応じて要素をシフトする。
@@ -1140,6 +1134,44 @@ impl SkinDocument {
                     }]);
                 }
 
+                // imageset (キービーム・ボム等) を destination 自身のタイマー駆動で描画する。
+                // timer が非アクティブな destination は上の skin_timer_elapsed_ms で除外済み。
+                if let Some(imageset) = self.imageset.iter().find(|set| set.id == destination.id) {
+                    let judge_index = imageset_ref_lane(imageset.ref_id)
+                        .and_then(|lane| state.lane_judge[lane.index()]);
+                    let image_id = imageset_image_for_index(imageset, judge_index)?;
+                    let image = images.get(image_id.as_str())?;
+                    let source = sources.get(&image.src)?;
+                    let (rect, uv) = stretch_skin_image_geometry(
+                        destination.stretch,
+                        normalize_skin_frame_rect(frame, self.w, self.h),
+                        skin_image_texture_region(image, source.source_size, elapsed),
+                        source.source_size,
+                        self.w,
+                        self.h,
+                    );
+                    return Some(vec![SkinRenderItem::Image {
+                        texture: source.texture,
+                        rect,
+                        uv,
+                        tint: Color::rgba(
+                            frame.r as f32 / 255.0,
+                            frame.g as f32 / 255.0,
+                            frame.b as f32 / 255.0,
+                            frame.a as f32 / 255.0,
+                        ),
+                        blend: if destination.blend == 2 {
+                            BlendMode::Add
+                        } else {
+                            BlendMode::Normal
+                        },
+                        scale: SkinImageScale::Stretch,
+                        border: None,
+                        source_size: Some(source.source_size),
+                        linear_filter: destination.filter != 0,
+                    }]);
+                }
+
                 if let Some(value) = self.value.iter().find(|value| value.id == destination.id) {
                     let number = skin_state_number(value.ref_id, state)?;
                     return Some(self.value_number_render_items(
@@ -1375,39 +1407,6 @@ impl SkinDocument {
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<SkinRenderItem> {
         self.judge_render_items(judge, 0, elapsed_ms, sources)?.into_iter().next()
-    }
-
-    pub fn imageset_render_items_for_lane(
-        &self,
-        lane: Lane,
-        judge: &str,
-        elapsed_ms: i32,
-        sources: &HashMap<String, SkinDocumentTexture>,
-    ) -> Vec<SkinRenderItem> {
-        let enabled_options = self.enabled_options();
-        let all_dests = self.all_destinations(&enabled_options);
-        self.imageset
-            .iter()
-            .filter(|imageset| imageset_ref_lane(imageset.ref_id) == Some(lane))
-            .filter_map(|imageset| {
-                let destination = all_dests.iter().find(|destination| {
-                    destination.id == imageset.id
-                        && destination.timer.is_some()
-                        && test_skin_ops(&destination.op, &enabled_options)
-                })?;
-                let frame =
-                    resolve_destination_frame_until_end(destination, elapsed_ms, &enabled_options)?;
-                let image_id = imageset_judge_image_id(imageset, judge)?;
-                self.image_render_item(
-                    &image_id,
-                    normalize_skin_frame_rect(frame, self.w, self.h),
-                    elapsed_ms,
-                    sources,
-                    destination.stretch,
-                    destination.filter != 0,
-                )
-            })
-            .collect()
     }
 
     fn value_number_render_items(
@@ -1729,20 +1728,25 @@ fn imageset_ref_lane(ref_id: i32) -> Option<Lane> {
     }
 }
 
-fn imageset_judge_image_id(imageset: &SkinImageSetDef, judge: &str) -> Option<String> {
+/// imageset の画像を判定インデックス (0=PGREAT..4=POOR) で選ぶ。
+/// 2枚構成 (通常/PGREAT) は PGREAT 判定でのみ2枚目を使う。
+fn imageset_image_for_index(
+    imageset: &SkinImageSetDef,
+    judge_index: Option<usize>,
+) -> Option<String> {
     let len = imageset.images.len();
     if len == 0 {
         return None;
     }
     let index = if len == 2 {
-        usize::from(judge.trim().starts_with("PGREAT"))
+        usize::from(judge_index == Some(0))
     } else {
-        judge_image_index(judge).unwrap_or(0).min(len - 1)
+        judge_index.unwrap_or(0).min(len - 1)
     };
     imageset.images.get(index).cloned()
 }
 
-fn judge_image_index(judge: &str) -> Option<usize> {
+pub(crate) fn judge_image_index(judge: &str) -> Option<usize> {
     let judge = judge.trim();
     if judge.starts_with("PGREAT") {
         Some(0)
@@ -2757,8 +2761,22 @@ fn resolve_destination_frame(
     elapsed_ms: i32,
     enabled_options: &[i32],
 ) -> Option<ResolvedSkinFrame> {
-    let elapsed_ms = destination_animation_elapsed_ms(destination, elapsed_ms);
     let animations = flatten_dst_entries(&destination.dst, enabled_options);
+    // `cycle` はアニメーション終端（最後のキーフレーム時刻）。
+    let cycle = animations.iter().filter_map(|a| a.time).max().unwrap_or(0);
+    let elapsed_ms = match destination.loop_time {
+        // loop:負値 → ループせず、終端を過ぎたら描画しない（READY やボム等の単発演出）。
+        Some(loop_point) if loop_point < 0 => {
+            if elapsed_ms > cycle {
+                return None;
+            }
+            elapsed_ms
+        }
+        // loop:0以上 → 終端到達後 loop_point 時刻へループバック。
+        Some(loop_point) => resolve_loop_elapsed(loop_point, elapsed_ms, cycle),
+        // loop 未指定 → ループなし。1回再生して最終フレームを保持する。
+        None => elapsed_ms,
+    };
     let acc = destination_interpolation_acc_from_frames(&animations);
     let mut frame = ResolvedSkinFrame::default();
     let mut previous = None;
@@ -2781,7 +2799,7 @@ fn resolve_destination_frame_until_end(
     elapsed_ms: i32,
     enabled_options: &[i32],
 ) -> Option<ResolvedSkinFrame> {
-    if destination.loop_time > 0 {
+    if matches!(destination.loop_time, Some(loop_point) if loop_point > 0) {
         return resolve_destination_frame(destination, elapsed_ms, enabled_options);
     }
     let animations = flatten_dst_entries(&destination.dst, enabled_options);
@@ -2792,9 +2810,21 @@ fn resolve_destination_frame_until_end(
     resolve_destination_frame(destination, elapsed_ms, enabled_options)
 }
 
-fn destination_animation_elapsed_ms(destination: &SkinDestinationDef, elapsed_ms: i32) -> i32 {
-    if destination.loop_time > 0 {
-        elapsed_ms.rem_euclid(destination.loop_time)
+/// beatoraja の `loop` セマンティクスでアニメーション内の経過時刻を求める。
+///
+/// `loop` フィールドはループ「周期」ではなく、終端到達後に戻る「ループバック地点」。
+/// - `loop_point >= 0` かつ `elapsed >= cycle`: `[loop_point, cycle)` 区間を繰り返す。
+///   `loop_point >= cycle`（`loop == 終端` を含む）の場合は終端で停止し、
+///   アニメーションは1回再生して最終フレームを保持する。
+/// - `loop_point < 0`: ループしない（終端後の非表示は呼び出し側で判定）。
+fn resolve_loop_elapsed(loop_point: i32, elapsed_ms: i32, cycle: i32) -> i32 {
+    if loop_point >= 0 && elapsed_ms >= cycle {
+        let span = cycle - loop_point;
+        if span > 0 {
+            (elapsed_ms - loop_point).rem_euclid(span) + loop_point
+        } else {
+            cycle
+        }
     } else {
         elapsed_ms
     }
@@ -4092,7 +4122,7 @@ mod tests {
                 "source": [{ "id": 1, "path": "system.png" }],
                 "image": [{ "id": "panel", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10 }],
                 "destination": [
-                    { "id": "panel", "loop": 300, "dst": [
+                    { "id": "panel", "loop": 100, "dst": [
                         { "time": 0, "x": 0, "y": 0, "w": 10, "h": 10 },
                         { "time": 100, "x": 30 },
                         { "time": 200, "x": 60 }
@@ -4111,13 +4141,16 @@ mod tests {
             },
         )]);
 
+        // loop=100, 終端=200。elapsed=350 は終端超過なので [100, 200) 区間へループバック:
+        // (350 - 100) % (200 - 100) + 100 = 150 → time 150 は keyframe 100(x=30)/200(x=60) の中間
+        // x = 45 → 正規化 0.45
         let wrapped = document.static_image_render_items(
             &sources,
             SkinDrawState { elapsed_ms: 350, ..SkinDrawState::default() },
         );
 
         assert!(matches!(wrapped[0], SkinRenderItem::Image { rect: Rect { x, .. }, .. }
-                if approx_eq(x, 0.15)));
+                if approx_eq(x, 0.45)));
     }
 
     #[test]
@@ -4371,9 +4404,9 @@ mod tests {
                     { "id": "beam2", "ref": 502, "images": ["normal", "pgreat"] }
                 ],
                 "destination": [
-                    { "id": "beam1", "timer": 51, "dst": [{ "time": 0, "x": 10, "y": 20, "w": 20, "h": 10 }, { "time": 100 }] },
-                    { "id": "bomb1", "timer": 51, "dst": [{ "time": 0, "x": 30, "y": 20, "w": 20, "h": 10 }, { "time": 100 }] },
-                    { "id": "beam2", "timer": 52, "dst": [{ "time": 0, "x": 50, "y": 20, "w": 20, "h": 10 }, { "time": 100 }] }
+                    { "id": "beam1", "timer": 51, "loop": -1, "dst": [{ "time": 0, "x": 10, "y": 20, "w": 20, "h": 10 }, { "time": 100 }] },
+                    { "id": "bomb1", "timer": 51, "loop": -1, "dst": [{ "time": 0, "x": 30, "y": 20, "w": 20, "h": 10 }, { "time": 100 }] },
+                    { "id": "beam2", "timer": 52, "loop": -1, "dst": [{ "time": 0, "x": 50, "y": 20, "w": 20, "h": 10 }, { "time": 100 }] }
                 ]
             }
             "#,
@@ -4388,20 +4421,48 @@ mod tests {
             },
         )]);
 
-        let pgreat = document.imageset_render_items_for_lane(Lane::Key1, "PGREAT", 50, &sources);
-        let good = document.imageset_render_items_for_lane(Lane::Key1, "GOOD", 50, &sources);
-        let expired = document.imageset_render_items_for_lane(Lane::Key1, "PGREAT", 150, &sources);
+        // Key1 (timer 51 = bomb_ms[1]) でボムタイマー進行中、直近判定 PGREAT
+        let pgreat_state = SkinDrawState {
+            bomb_ms: [None, Some(50), None, None, None, None, None, None],
+            lane_judge: [None, Some(0), None, None, None, None, None, None],
+            ..SkinDrawState::default()
+        };
+        let pgreat = document.static_render_items(
+            &sources,
+            pgreat_state,
+            SkinTextState::default(),
+        );
+        // GOOD 判定
+        let good_state = SkinDrawState {
+            bomb_ms: [None, Some(50), None, None, None, None, None, None],
+            lane_judge: [None, Some(2), None, None, None, None, None, None],
+            ..SkinDrawState::default()
+        };
+        let good =
+            document.static_render_items(&sources, good_state, SkinTextState::default());
+        // タイマーがアニメーション終端を超過 → loop:-1 で非表示
+        let expired_state = SkinDrawState {
+            bomb_ms: [None, Some(150), None, None, None, None, None, None],
+            lane_judge: [None, Some(0), None, None, None, None, None, None],
+            ..SkinDrawState::default()
+        };
+        let expired =
+            document.static_render_items(&sources, expired_state, SkinTextState::default());
 
+        // beam1 と bomb1 のみ描画される (beam2 は timer 52 非アクティブ)
         assert_eq!(pgreat.len(), 2);
+        // beam1: 2枚構成 + PGREAT → "pgreat" 画像 (u=0.1), rect x=0.1
         assert!(matches!(pgreat[0], SkinRenderItem::Image {
                 rect: Rect { x, .. },
                 uv: TextureRegion { x: u, .. },
                 ..
             } if approx_eq(x, 0.1) && approx_eq(u, 0.1)));
+        // beam1: 2枚構成 + GOOD → "normal" 画像 (u=0.0)
         assert!(matches!(good[0], SkinRenderItem::Image {
                 uv: TextureRegion { x: u, .. },
                 ..
             } if approx_eq(u, 0.0)));
+        // bomb1: 3枚構成 + GOOD(index2) → "good" 画像 (u=0.2), rect x=0.3
         assert!(matches!(good[1], SkinRenderItem::Image {
                 rect: Rect { x, .. },
                 uv: TextureRegion { x: u, .. },
@@ -5490,6 +5551,40 @@ mod tests {
         let scratch = document.note_lane_area(Lane::Scratch, &enabled).unwrap();
         assert!(approx_eq(scratch.x, 20.0 / 1280.0));
         assert!(approx_eq(scratch.width, 70.0 / 1280.0));
+    }
+
+    #[test]
+    fn loop_at_cycle_end_holds_final_frame() {
+        // loop == cycle（終端へループバック）: 1回再生して最終フレームを保持する。
+        // lane-bg(loop:1000,終端1000) や keybeam(loop:100,終端100) の挙動。
+        assert_eq!(resolve_loop_elapsed(1000, 500, 1000), 500); // 再生中
+        assert_eq!(resolve_loop_elapsed(1000, 1000, 1000), 1000); // 終端
+        assert_eq!(resolve_loop_elapsed(1000, 5000, 1000), 1000); // 終端超過 → 保持
+        // loop > cycle も終端で停止する。
+        assert_eq!(resolve_loop_elapsed(300, 5000, 200), 200);
+    }
+
+    #[test]
+    fn loop_before_cycle_end_repeats_segment() {
+        // loop < cycle: [loop, cycle) 区間を繰り返す。
+        assert_eq!(resolve_loop_elapsed(0, 150, 200), 150); // 再生中はそのまま
+        assert_eq!(resolve_loop_elapsed(0, 350, 200), 150); // 350 → 150 へループ
+        assert_eq!(resolve_loop_elapsed(100, 350, 200), 150); // (350-100)%100+100
+    }
+
+    #[test]
+    fn negative_loop_destination_disappears_after_end() {
+        // loop:-1 の destination はアニメーション終端を過ぎると描画されない（READY/ボム）。
+        let destination: SkinDestinationDef = serde_json::from_str(
+            r#"{ "id": "ready", "loop": -1, "dst": [
+                { "time": 0, "x": 0, "y": 0, "w": 10, "h": 10, "a": 0 },
+                { "time": 1000, "a": 255 }
+            ]}"#,
+        )
+        .unwrap();
+        assert!(resolve_destination_frame(&destination, 500, &[]).is_some());
+        assert!(resolve_destination_frame(&destination, 1000, &[]).is_some());
+        assert!(resolve_destination_frame(&destination, 1001, &[]).is_none());
     }
 
     #[test]
