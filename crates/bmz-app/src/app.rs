@@ -41,18 +41,56 @@ use crate::storage::scan::scan_song_roots;
 
 const SAMPLE_PLAYABLE_TITLE: &str = "BMZ Sample Playable";
 
-pub fn run() -> Result<()> {
-    run_with_options(AppOptions::default())
+pub async fn run() -> Result<()> {
+    run_with_options(AppOptions::default()).await
 }
 
-pub fn run_with_options(options: AppOptions) -> Result<()> {
-    let boot = bootstrap::bootstrap()?;
+pub async fn run_with_options(options: AppOptions) -> Result<()> {
+    let mut boot = bootstrap::bootstrap()?;
+
+    if boot.app_config.tables.auto_fetch_on_startup {
+        fetch_configured_difficulty_tables(&mut boot).await;
+    }
+
     let event_loop = EventLoop::new().context("failed to create event loop")?;
     event_loop.set_control_flow(ControlFlow::Poll);
 
     let mut app = WinitApp::new(boot, options)?;
     tracing::info!("starting winit event loop");
     event_loop.run_app(&mut app).context("winit event loop failed")
+}
+
+async fn fetch_configured_difficulty_tables(boot: &mut bootstrap::BootstrappedApp) {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+
+    let sources: Vec<_> = boot
+        .app_config
+        .tables
+        .sources
+        .iter()
+        .filter(|s| s.enabled)
+        .map(|s| s.url.clone())
+        .collect();
+
+    for url in sources {
+        tracing::info!(%url, "fetching difficulty table");
+        match crate::difficulty_table::fetch_difficulty_table(&url, now).await {
+            Ok(table) => {
+                tracing::info!(
+                    name = %table.name,
+                    entries = table.entries.len(),
+                    "difficulty table fetched"
+                );
+                if let Err(e) = boot.library_db.upsert_difficulty_table(&table) {
+                    tracing::warn!(%url, error = %e, "failed to store difficulty table");
+                }
+            }
+            Err(e) => {
+                tracing::warn!(%url, error = %e, "failed to fetch difficulty table");
+            }
+        }
+    }
 }
 
 struct WinitApp {

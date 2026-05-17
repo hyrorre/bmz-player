@@ -1,4 +1,5 @@
 pub mod common;
+pub mod difficulty_table_db;
 pub mod import;
 pub mod library_db;
 pub mod migration;

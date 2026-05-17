@@ -5,6 +5,8 @@ use bmz_chart::import::error::ImportWarning;
 use bmz_chart::model::{NoteKind, PlayableChart, TimingEventKind};
 use rusqlite::{Connection, OptionalExtension, params};
 
+pub use super::difficulty_table_db::{DifficultyTableEntryRecord, DifficultyTableRecord};
+
 use super::common::configure_connection;
 
 pub const CHART_IMPORT_VERSION: i64 = 1;
@@ -368,6 +370,31 @@ impl LibraryDatabase {
             )
             .optional()
             .map_err(Into::into)
+    }
+
+    pub fn upsert_difficulty_table(
+        &mut self,
+        table: &crate::difficulty_table::FetchedDifficultyTable,
+    ) -> Result<i64> {
+        super::difficulty_table_db::upsert_difficulty_table(&mut self.conn, table)
+    }
+
+    pub fn list_difficulty_tables(&self) -> Result<Vec<DifficultyTableRecord>> {
+        super::difficulty_table_db::list_difficulty_tables(&self.conn)
+    }
+
+    pub fn list_difficulty_table_entries_by_md5s(
+        &self,
+        md5s: &[&str],
+    ) -> Result<Vec<DifficultyTableEntryRecord>> {
+        super::difficulty_table_db::list_entries_by_md5s(&self.conn, md5s)
+    }
+
+    pub fn list_difficulty_table_entries_by_sha256s(
+        &self,
+        sha256s: &[&str],
+    ) -> Result<Vec<DifficultyTableEntryRecord>> {
+        super::difficulty_table_db::list_entries_by_sha256s(&self.conn, sha256s)
     }
 }
 

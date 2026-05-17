@@ -10,6 +10,8 @@ pub struct AppConfig {
     pub video: VideoConfig,
     pub input: GlobalInputConfig,
     pub logging: LoggingConfig,
+    #[serde(default)]
+    pub tables: DifficultyTablesConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,6 +116,25 @@ pub struct LoggingConfig {
     pub file_logging: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DifficultyTablesConfig {
+    #[serde(default)]
+    pub sources: Vec<DifficultyTableSource>,
+    #[serde(default)]
+    pub auto_fetch_on_startup: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DifficultyTableSource {
+    pub url: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LogLevel {
@@ -161,6 +182,7 @@ impl Default for AppConfig {
                 midi_enabled: false,
             },
             logging: LoggingConfig { level: LogLevel::Info, file_logging: true },
+            tables: DifficultyTablesConfig::default(),
         }
     }
 }

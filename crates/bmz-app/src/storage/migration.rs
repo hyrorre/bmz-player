@@ -162,6 +162,33 @@ pub const LIBRARY_MIGRATIONS: &[Migration] = &[
             "CREATE INDEX idx_charts_mode ON charts(mode);",
         ],
     },
+    Migration {
+        version: 3,
+        statements: &[
+            "CREATE TABLE difficulty_tables (
+                id INTEGER PRIMARY KEY,
+                source_url TEXT NOT NULL UNIQUE,
+                head_url TEXT NOT NULL,
+                name TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                level_order TEXT NOT NULL,
+                fetched_at INTEGER NOT NULL
+            );",
+            "CREATE TABLE difficulty_table_entries (
+                id INTEGER PRIMARY KEY,
+                table_id INTEGER NOT NULL REFERENCES difficulty_tables(id) ON DELETE CASCADE,
+                level TEXT NOT NULL,
+                md5 TEXT NOT NULL,
+                sha256 TEXT NOT NULL,
+                title TEXT NOT NULL,
+                artist TEXT NOT NULL,
+                comment TEXT NOT NULL
+            );",
+            "CREATE INDEX idx_dte_table_id ON difficulty_table_entries(table_id);",
+            "CREATE INDEX idx_dte_md5 ON difficulty_table_entries(md5);",
+            "CREATE INDEX idx_dte_sha256 ON difficulty_table_entries(sha256);",
+        ],
+    },
 ];
 
 pub const SCORE_MIGRATIONS: &[Migration] = &[Migration {
