@@ -300,6 +300,7 @@ mod tests {
             lift: 0.0,
             lane_cover: 0.0,
             hidden_cover: 0.0,
+            skin_offsets: Vec::new(),
             input_timestamp_anchor: None,
             state: PlayState::Finished,
         }

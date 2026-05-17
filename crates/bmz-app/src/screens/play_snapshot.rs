@@ -4,6 +4,7 @@ use bmz_core::lane::Lane;
 use bmz_core::time::TimeUs;
 use bmz_gameplay::judge::model::JudgementEvent;
 use bmz_gameplay::session::GameSession;
+use bmz_render::skin_offset::{SkinOffsetValue, SkinOffsetValues};
 use bmz_render::snapshot::{
     DisplayInput, DisplayJudgeCounts, DisplayJudgement, RenderSnapshot, VisibleBarLine,
     VisibleLongNote, VisibleNote,
@@ -36,6 +37,7 @@ pub fn build_render_snapshot(
         lift: session.lift,
         lane_cover: session.lane_cover,
         hidden_cover: session.hidden_cover,
+        skin_offsets: skin_offsets_from_session(session),
         now_bpm: current_bpm(&session.chart, render_now) as f32,
         min_bpm: chart_min_bpm(&session.chart) as f32,
         max_bpm: chart_max_bpm(&session.chart) as f32,
@@ -84,6 +86,24 @@ pub fn build_render_snapshot(
     }
 
     snapshot
+}
+
+fn skin_offsets_from_session(session: &GameSession) -> SkinOffsetValues {
+    let mut values = SkinOffsetValues::default();
+    for offset in &session.skin_offsets {
+        values.set(
+            offset.id,
+            SkinOffsetValue {
+                x: offset.x,
+                y: offset.y,
+                w: offset.w,
+                h: offset.h,
+                r: offset.r,
+                a: offset.a,
+            },
+        );
+    }
+    values
 }
 
 fn note_y(note_time: TimeUs, render_now: TimeUs, hispeed: f32) -> Option<f32> {
@@ -338,6 +358,29 @@ mod tests {
         let snapshot = build_render_snapshot(&session, TimeUs(0), &[], None);
 
         assert_eq!(snapshot.judge_timing_offset_ms, 3);
+    }
+
+    #[test]
+    fn build_render_snapshot_copies_skin_offsets() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+        session.skin_offsets.push(bmz_gameplay::session::PlaySkinOffset {
+            id: 42,
+            x: 1,
+            y: 2,
+            w: 3,
+            h: 4,
+            r: 5,
+            a: -6,
+        });
+
+        let snapshot = build_render_snapshot(&session, TimeUs(0), &[], None);
+
+        assert_eq!(
+            snapshot.skin_offsets.get(42),
+            Some(SkinOffsetValue { x: 1, y: 2, w: 3, h: 4, r: 5, a: -6 })
+        );
     }
 
     #[test]

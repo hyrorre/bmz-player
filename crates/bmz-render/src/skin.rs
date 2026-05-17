@@ -13,6 +13,7 @@ use crate::plan::{
     Color, DrawCommand, Point, Rect, TextAlign, TextLayer, TextOutline, TextOverflow, TextShadow,
     TextStyle, TextureId, UvRect,
 };
+use crate::skin_offset::SkinOffsetValues;
 use crate::snapshot::DisplayJudgeCounts;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -763,6 +764,8 @@ pub struct SkinDrawState {
     pub offset_lanecover_px: i32,
     /// OFFSET_HIDDEN_COVER (id=5) の y 値 (skin canvas pixel 単位)。HIDDEN カバー位置のシフト。
     pub offset_hidden_cover_px: i32,
+    /// ユーザーまたは profile で指定された任意の skin offset 値。
+    pub skin_offsets: SkinOffsetValues,
     /// 現在のハイスピード倍率 (NUMBER_HISPEED=310, NUMBER_HISPEED_AFTERDOT=311 に使用)。
     pub hispeed: f32,
     /// 曲残り時間 ms (NUMBER_TIMELEFT_MINUTE=163, NUMBER_TIMELEFT_SECOND=164 に使用)。
@@ -3019,7 +3022,16 @@ fn apply_skin_offset_to_frame(
                     frame.a = (frame.a - 255).clamp(0, 255);
                 }
             }
-            _ => {}
+            _ => {
+                if let Some(offset) = state.skin_offsets.get(offset_id) {
+                    frame.x += offset.x - offset.w / 2;
+                    frame.y += offset.y - offset.h / 2;
+                    frame.w += offset.w;
+                    frame.h += offset.h;
+                    frame.r += offset.r;
+                    frame.a = (frame.a + offset.a).clamp(0, 255);
+                }
+            }
         }
     }
 }
@@ -5603,6 +5615,44 @@ mod tests {
             "expected shifted y, got {}",
             rect.y
         );
+    }
+
+    #[test]
+    fn custom_offset_adjusts_destination_geometry_and_alpha() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "w": 100, "h": 100,
+                "source": [{ "id": "src", "path": "a.png" }],
+                "image": [{ "id": "img", "src": "src", "w": 10, "h": 10 }],
+                "destination": [
+                    { "id": "img", "offset": 42, "dst": [
+                        { "time": 0, "x": 10, "y": 20, "w": 30, "h": 40, "a": 200 }
+                    ]}
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        let sources = mock_source("src", 10.0, 10.0);
+        let mut offsets = SkinOffsetValues::default();
+        offsets.set(
+            42,
+            crate::skin_offset::SkinOffsetValue { x: 6, y: 8, w: 10, h: 12, r: 0, a: -50 },
+        );
+        let items = document.static_image_render_items(
+            &sources,
+            SkinDrawState { skin_offsets: offsets, ..SkinDrawState::default() },
+        );
+
+        assert_eq!(items.len(), 1);
+        let SkinRenderItem::Image { rect, tint, .. } = &items[0] else { panic!() };
+        assert!(approx_eq(rect.x, (10 + 6 - 10 / 2) as f32 / 100.0));
+        assert!(approx_eq(rect.y, (100 - (20 + 8 - 12 / 2) - (40 + 12)) as f32 / 100.0));
+        assert!(approx_eq(rect.width, 40.0 / 100.0));
+        assert!(approx_eq(rect.height, 52.0 / 100.0));
+        assert!(approx_eq(tint.a, 150.0 / 255.0));
     }
 
     #[test]

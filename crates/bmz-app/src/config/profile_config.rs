@@ -190,6 +190,25 @@ pub struct SkinConfig {
     /// `skin.toml` を含む bmz スキンディレクトリとして扱う。
     #[serde(default)]
     pub play: String,
+    #[serde(default)]
+    pub offsets: Vec<SkinOffsetConfig>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct SkinOffsetConfig {
+    pub id: i32,
+    #[serde(default)]
+    pub x: i32,
+    #[serde(default)]
+    pub y: i32,
+    #[serde(default)]
+    pub w: i32,
+    #[serde(default)]
+    pub h: i32,
+    #[serde(default)]
+    pub r: i32,
+    #[serde(default)]
+    pub a: i32,
 }
 
 impl ProfileConfig {

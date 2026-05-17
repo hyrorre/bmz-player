@@ -478,6 +478,7 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
                         .map_or(canvas_h, |rect| rect.height * canvas_h);
                     ((1.0 - snapshot.lift) * snapshot.hidden_cover * lane_h).round() as i32
                 },
+                skin_offsets: snapshot.skin_offsets,
                 hispeed: snapshot.hispeed,
                 timeleft_ms: (snapshot.duration.0.saturating_sub(snapshot.time.0) / 1_000)
                     .saturating_add(1_000)

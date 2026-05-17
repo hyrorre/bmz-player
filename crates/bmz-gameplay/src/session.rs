@@ -42,6 +42,17 @@ pub struct PlayAudioMix {
     pub bgm_volume: f32,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PlaySkinOffset {
+    pub id: i32,
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+    pub r: i32,
+    pub a: i32,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct FrameTimes {
     pub audio_now: TimeUs,
@@ -73,6 +84,7 @@ pub struct GameSession {
     pub lift: f32,
     pub lane_cover: f32,
     pub hidden_cover: f32,
+    pub skin_offsets: Vec<PlaySkinOffset>,
     pub input_timestamp_anchor: Option<InputTimestampAnchor>,
     pub state: PlayState,
 }
@@ -420,6 +432,7 @@ mod tests {
             lift: 0.0,
             lane_cover: 0.0,
             hidden_cover: 0.0,
+            skin_offsets: Vec::new(),
             input_timestamp_anchor: None,
             state: PlayState::Ready,
         }

@@ -1,6 +1,8 @@
 use bmz_core::lane::{LANE_COUNT, Lane};
 use bmz_core::time::TimeUs;
 
+use crate::skin_offset::SkinOffsetValues;
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RenderSnapshot {
     pub time: TimeUs,
@@ -21,6 +23,7 @@ pub struct RenderSnapshot {
     pub lift: f32,
     pub lane_cover: f32,
     pub hidden_cover: f32,
+    pub skin_offsets: SkinOffsetValues,
     pub now_bpm: f32,
     pub min_bpm: f32,
     pub max_bpm: f32,

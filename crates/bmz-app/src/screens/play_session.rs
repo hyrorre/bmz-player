@@ -14,7 +14,7 @@ use bmz_gameplay::input::translator::DefaultInputTranslator;
 use bmz_gameplay::judge::engine::JudgeEngine;
 use bmz_gameplay::replay::{ReplayPlayer, ReplayRecorder};
 use bmz_gameplay::score::ScoreState;
-use bmz_gameplay::session::{BgmScheduler, GameSession, PlayState};
+use bmz_gameplay::session::{BgmScheduler, GameSession, PlaySkinOffset, PlayState};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -100,6 +100,7 @@ pub fn build_game_session_with_input_backend(
         lift: profile.lane.lift.clamp(0.0, 1.0),
         lane_cover: profile.lane.lane_cover.clamp(0.0, 1.0),
         hidden_cover: hidden_cover_from_profile(profile),
+        skin_offsets: skin_offsets_from_profile(profile),
         input_timestamp_anchor: None,
         state: PlayState::Ready,
     }
@@ -115,6 +116,24 @@ fn hidden_cover_from_profile(profile: &ProfileConfig) -> f32 {
         LaneEffectConfig::Off | LaneEffectConfig::Sudden => 0.0,
     }
     .clamp(0.0, 1.0)
+}
+
+fn skin_offsets_from_profile(profile: &ProfileConfig) -> Vec<PlaySkinOffset> {
+    profile
+        .skin
+        .offsets
+        .iter()
+        .copied()
+        .map(|offset| PlaySkinOffset {
+            id: offset.id,
+            x: offset.x,
+            y: offset.y,
+            w: offset.w,
+            h: offset.h,
+            r: offset.r,
+            a: offset.a,
+        })
+        .collect()
 }
 
 pub fn load_game_session_for_chart(
@@ -305,6 +324,28 @@ mod tests {
 
         assert_eq!(off.hidden_cover, 0.0);
         assert_eq!(hidden.hidden_cover, 0.4);
+    }
+
+    #[test]
+    fn build_game_session_copies_profile_skin_offsets() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.skin.offsets.push(crate::config::profile_config::SkinOffsetConfig {
+            id: 42,
+            x: 1,
+            y: 2,
+            w: 3,
+            h: 4,
+            r: 5,
+            a: -6,
+        });
+
+        let session =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+
+        assert_eq!(
+            session.skin_offsets,
+            vec![PlaySkinOffset { id: 42, x: 1, y: 2, w: 3, h: 4, r: 5, a: -6 }]
+        );
     }
 
     #[test]
