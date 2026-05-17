@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -5,7 +6,8 @@ use bmz_render::assets::load_png_rgba;
 use bmz_render::plan::TextureId;
 use bmz_render::renderer::Renderer;
 use bmz_render::skin::{
-    SkinContext, SkinDocument, SkinDocumentTexture, SkinManifest, SkinTextureId,
+    DestinationListEntry, SkinContext, SkinDocument, SkinDocumentTexture, SkinManifest,
+    SkinTextureId,
 };
 
 pub fn apply_skin_from_dir(renderer: &mut Renderer, skin_root: &Path) -> Result<()> {
@@ -74,6 +76,7 @@ pub fn apply_beatoraja_json_skin(renderer: &mut Renderer, skin_path: &Path) -> R
     let skin_root = skin_path.parent().unwrap_or_else(|| Path::new("."));
     let mut document_textures = Vec::new();
     let mut next_texture_id = 10_000;
+    let required_sources = required_skin_source_ids(&document);
 
     for font in &document.font {
         if font.id.is_empty() || font.path.is_empty() {
@@ -137,12 +140,21 @@ pub fn apply_beatoraja_json_skin(renderer: &mut Renderer, skin_path: &Path) -> R
         let asset = match load_png_rgba(&source_path) {
             Ok(asset) => asset,
             Err(error) => {
-                tracing::warn!(
-                    source_id = %source.id,
-                    path = %source_path.display(),
-                    %error,
-                    "failed to load beatoraja skin source"
-                );
+                if required_sources.contains(source.id.as_str()) {
+                    tracing::warn!(
+                        source_id = %source.id,
+                        path = %source_path.display(),
+                        %error,
+                        "failed to load beatoraja skin source"
+                    );
+                } else {
+                    tracing::debug!(
+                        source_id = %source.id,
+                        path = %source_path.display(),
+                        %error,
+                        "skipping unused missing beatoraja skin source"
+                    );
+                }
                 continue;
             }
         };
@@ -261,6 +273,110 @@ fn resolve_wildcard_path(
     }
 
     candidates.into_iter().next()
+}
+
+fn required_skin_source_ids(document: &SkinDocument) -> HashSet<&str> {
+    let destination_ids = destination_ids(document);
+    let image_sources = document
+        .image
+        .iter()
+        .map(|image| (image.id.as_str(), image.src.as_str()))
+        .collect::<std::collections::HashMap<_, _>>();
+    let mut required = HashSet::new();
+
+    for image in &document.image {
+        if destination_ids.contains(image.id.as_str()) {
+            required.insert(image.src.as_str());
+        }
+    }
+    for imageset in &document.imageset {
+        if destination_ids.contains(imageset.id.as_str()) {
+            for image_id in &imageset.images {
+                if let Some(source_id) = image_sources.get(image_id.as_str()) {
+                    required.insert(*source_id);
+                }
+            }
+        }
+    }
+    for value in &document.value {
+        if destination_ids.contains(value.id.as_str()) {
+            required.insert(value.src.as_str());
+        }
+    }
+    for slider in &document.slider {
+        if destination_ids.contains(slider.id.as_str()) {
+            required.insert(slider.src.as_str());
+        }
+    }
+    for graph in &document.graph {
+        if destination_ids.contains(graph.id.as_str()) {
+            required.insert(graph.src.as_str());
+        }
+    }
+    for cover in &document.hidden_cover {
+        if destination_ids.contains(cover.id.as_str()) {
+            required.insert(cover.src.as_str());
+        }
+    }
+    if let Some(note) = &document.note {
+        for image_id in note
+            .note
+            .iter()
+            .chain(note.lnstart.iter())
+            .chain(note.lnend.iter())
+            .chain(note.lnbody.iter())
+            .chain(note.lnactive.iter())
+            .chain(note.hcnstart.iter())
+            .chain(note.hcnend.iter())
+            .chain(note.hcnbody.iter())
+            .chain(note.hcnactive.iter())
+            .chain(note.hcndamage.iter())
+            .chain(note.hcnreactive.iter())
+            .chain(note.mine.iter())
+            .chain(note.hidden.iter())
+            .chain(note.processed.iter())
+        {
+            if let Some(source_id) = image_sources.get(image_id.as_str()) {
+                required.insert(*source_id);
+            }
+        }
+    }
+    if let Some(gauge) = &document.gauge {
+        for image_id in &gauge.nodes {
+            if let Some(source_id) = image_sources.get(image_id.as_str()) {
+                required.insert(*source_id);
+            }
+        }
+    }
+    for judge in &document.judge {
+        for destination in judge.images.iter().chain(judge.numbers.iter()) {
+            if let Some(source_id) = image_sources.get(destination.id.as_str()) {
+                required.insert(*source_id);
+            }
+            if let Some(value) = document.value.iter().find(|value| value.id == destination.id) {
+                required.insert(value.src.as_str());
+            }
+        }
+    }
+
+    required
+}
+
+fn destination_ids(document: &SkinDocument) -> HashSet<&str> {
+    let mut ids = HashSet::new();
+    for entry in &document.destination {
+        match entry {
+            DestinationListEntry::Single(destination) => {
+                ids.insert(destination.id.as_str());
+            }
+            DestinationListEntry::Conditional { destinations, .. } => {
+                for destination in destinations {
+                    ids.insert(destination.id.as_str());
+                }
+            }
+        }
+    }
+    ids
 }
 
 fn resolve_wildcard_directory_path(
@@ -391,6 +507,33 @@ mod tests {
             resolve_json_skin_asset_path(&root, "frame/SP/*/song.fnt", &document).unwrap();
 
         assert_eq!(resolved.strip_prefix(&root).unwrap(), Path::new("frame/SP/Default/song.fnt"));
+    }
+
+    #[test]
+    fn required_skin_sources_excludes_unused_images() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "source": [
+                    { "id": 1, "path": "used.png" },
+                    { "id": 2, "path": "unused.png" }
+                ],
+                "image": [
+                    { "id": "used", "src": 1, "x": 0, "y": 0, "w": 8, "h": 8 },
+                    { "id": "unused", "src": 2, "x": 0, "y": 0, "w": 8, "h": 8 }
+                ],
+                "destination": [
+                    { "id": "used", "dst": [{ "x": 0, "y": 0, "w": 8, "h": 8 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        let required = required_skin_source_ids(&document);
+
+        assert!(required.contains("1"));
+        assert!(!required.contains("2"));
     }
 
     #[test]
