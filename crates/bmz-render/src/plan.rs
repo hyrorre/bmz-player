@@ -32,9 +32,23 @@ pub struct DrawPlan {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum DrawCommand {
-    Rect { rect: Rect, color: Color },
-    Image { rect: Rect, uv: UvRect, texture: TextureId, tint: Color, linear_filter: bool },
-    Text { origin: Point, text: String, style: TextStyle },
+    Rect {
+        rect: Rect,
+        color: Color,
+    },
+    Image {
+        rect: Rect,
+        uv: UvRect,
+        texture: TextureId,
+        tint: Color,
+        blend: BlendMode,
+        linear_filter: bool,
+    },
+    Text {
+        origin: Point,
+        text: String,
+        style: TextStyle,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

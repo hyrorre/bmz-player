@@ -15,7 +15,7 @@ use crate::plan::{
     Color, DrawCommand, DrawPlan, Point, TextAlign, TextOverflow, TextStyle, TextureId,
 };
 use crate::scene::AppSceneSnapshot;
-use crate::skin::SkinContext;
+use crate::skin::{BlendMode, SkinContext};
 
 #[derive(Default)]
 pub struct Renderer {
@@ -72,6 +72,7 @@ struct WgpuRenderer {
     rect_buffer: Option<wgpu::Buffer>,
     rect_buffer_capacity: usize,
     image_pipeline: wgpu::RenderPipeline,
+    image_add_pipeline: wgpu::RenderPipeline,
     image_bind_group_layout: wgpu::BindGroupLayout,
     image_sampler: wgpu::Sampler,
     image_sampler_linear: wgpu::Sampler,
@@ -255,8 +256,14 @@ impl WgpuRenderer {
         let image_bind_group_layout = create_image_bind_group_layout(&device);
         let image_sampler = create_image_sampler(&device);
         let image_sampler_linear = create_image_sampler_linear(&device);
-        let image_pipeline =
-            create_image_pipeline(&device, config.format, &image_bind_group_layout);
+        let image_pipeline = create_image_pipeline(
+            &device,
+            config.format,
+            &image_bind_group_layout,
+            BlendMode::Normal,
+        );
+        let image_add_pipeline =
+            create_image_pipeline(&device, config.format, &image_bind_group_layout, BlendMode::Add);
         let image_textures = create_default_image_textures(&device, &queue);
         let text_bind_group_layout = create_text_bind_group_layout(&device);
         let text_sampler = create_text_sampler(&device);
@@ -271,6 +278,7 @@ impl WgpuRenderer {
             rect_buffer: None,
             rect_buffer_capacity: 0,
             image_pipeline,
+            image_add_pipeline,
             image_bind_group_layout,
             image_sampler,
             image_sampler_linear,
@@ -380,7 +388,10 @@ impl WgpuRenderer {
                     let instance_count = (batch.instances.len() / IMAGE_INSTANCE_BYTES) as u32;
                     if instance_count > 0 {
                         let end = offset + batch.instances.len() as u64;
-                        pass.set_pipeline(&self.image_pipeline);
+                        pass.set_pipeline(match batch.blend {
+                            BlendMode::Normal => &self.image_pipeline,
+                            BlendMode::Add => &self.image_add_pipeline,
+                        });
                         pass.set_bind_group(0, bind_group, &[]);
                         pass.set_vertex_buffer(0, buffer.slice(offset..end));
                         pass.draw(0..6, 0..instance_count);
@@ -603,6 +614,7 @@ struct TextFrame {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ImageBatch {
     texture: TextureId,
+    blend: BlendMode,
     linear: bool,
     instances: Vec<u8>,
 }
@@ -623,17 +635,18 @@ fn encode_rects(plan: &DrawPlan) -> Vec<u8> {
 fn encode_image_batches(plan: &DrawPlan) -> Vec<ImageBatch> {
     let mut batches = Vec::new();
     for command in &plan.commands {
-        let DrawCommand::Image { rect, uv, texture, tint, linear_filter } = command else {
+        let DrawCommand::Image { rect, uv, texture, tint, blend, linear_filter } = command else {
             continue;
         };
         let batch_index = batches
             .iter()
             .position(|batch: &ImageBatch| {
-                batch.texture == *texture && batch.linear == *linear_filter
+                batch.texture == *texture && batch.blend == *blend && batch.linear == *linear_filter
             })
             .unwrap_or_else(|| {
                 batches.push(ImageBatch {
                     texture: *texture,
+                    blend: *blend,
                     linear: *linear_filter,
                     instances: Vec::new(),
                 });
@@ -1288,6 +1301,7 @@ fn create_image_pipeline(
     device: &wgpu::Device,
     format: wgpu::TextureFormat,
     bind_group_layout: &wgpu::BindGroupLayout,
+    blend_mode: BlendMode,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("bmz-render image shader"),
@@ -1300,7 +1314,10 @@ fn create_image_pipeline(
     });
 
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("bmz-render image pipeline"),
+        label: Some(match blend_mode {
+            BlendMode::Normal => "bmz-render image pipeline",
+            BlendMode::Add => "bmz-render additive image pipeline",
+        }),
         layout: Some(&layout),
         vertex: wgpu::VertexState {
             module: &shader,
@@ -1334,7 +1351,7 @@ fn create_image_pipeline(
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format,
-                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                blend: Some(image_blend_state(blend_mode)),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
         }),
@@ -1343,6 +1360,24 @@ fn create_image_pipeline(
         multisample: wgpu::MultisampleState::default(),
         multiview: None,
     })
+}
+
+fn image_blend_state(blend_mode: BlendMode) -> wgpu::BlendState {
+    match blend_mode {
+        BlendMode::Normal => wgpu::BlendState::ALPHA_BLENDING,
+        BlendMode::Add => wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
+        },
+    }
 }
 
 fn create_text_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
@@ -1834,6 +1869,7 @@ mod tests {
                     uv: crate::plan::UvRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
                     texture: crate::plan::TextureId(0),
                     tint: Color::rgb(1.0, 1.0, 1.0),
+                    blend: BlendMode::Normal,
                     linear_filter: false,
                 },
                 DrawCommand::Image {
@@ -1841,6 +1877,7 @@ mod tests {
                     uv: crate::plan::UvRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
                     texture: crate::plan::TextureId(7),
                     tint: Color::rgb(1.0, 1.0, 1.0),
+                    blend: BlendMode::Normal,
                     linear_filter: false,
                 },
             ],
@@ -1851,6 +1888,28 @@ mod tests {
         assert_eq!(batches.len(), 2);
         assert_eq!(batches[0].instances.len(), IMAGE_INSTANCE_BYTES);
         assert_eq!(batches[1].instances.len(), IMAGE_INSTANCE_BYTES);
+    }
+
+    #[test]
+    fn encode_image_batches_separates_blend_modes() {
+        let image = |blend| DrawCommand::Image {
+            rect: crate::plan::Rect { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
+            uv: crate::plan::UvRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+            texture: crate::plan::TextureId(0),
+            tint: Color::rgb(1.0, 1.0, 1.0),
+            blend,
+            linear_filter: false,
+        };
+        let plan = DrawPlan {
+            clear: Color::rgb(0.0, 0.0, 0.0),
+            commands: vec![image(BlendMode::Normal), image(BlendMode::Add)],
+        };
+
+        let batches = encode_image_batches(&plan);
+
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].blend, BlendMode::Normal);
+        assert_eq!(batches[1].blend, BlendMode::Add);
     }
 
     #[test]

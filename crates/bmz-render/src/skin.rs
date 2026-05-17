@@ -2366,11 +2366,11 @@ pub fn append_skin_render_items(commands: &mut Vec<DrawCommand>, items: &[SkinRe
                 rect,
                 uv,
                 tint,
+                blend,
                 scale,
                 border,
                 source_size,
                 linear_filter,
-                ..
             } => {
                 append_skin_image_command(
                     commands,
@@ -2378,6 +2378,7 @@ pub fn append_skin_render_items(commands: &mut Vec<DrawCommand>, items: &[SkinRe
                     *rect,
                     *uv,
                     *tint,
+                    *blend,
                     *scale,
                     *border,
                     *source_size,
@@ -2394,6 +2395,7 @@ fn append_skin_image_command(
     rect: Rect,
     uv: TextureRegion,
     tint: Color,
+    blend: BlendMode,
     scale: SkinImageScale,
     border: Option<SkinImageBorder>,
     source_size: Option<SkinImageSize>,
@@ -2407,6 +2409,7 @@ fn append_skin_image_command(
                 rect,
                 uv,
                 tint,
+                blend,
                 border,
                 source_size,
                 linear_filter,
@@ -2417,6 +2420,7 @@ fn append_skin_image_command(
             uv: UvRect { x: uv.x, y: uv.y, width: uv.width, height: uv.height },
             texture: TextureId(texture.0),
             tint,
+            blend,
             linear_filter,
         }),
     }
@@ -2428,6 +2432,7 @@ fn append_nine_slice_image_commands(
     rect: Rect,
     uv: TextureRegion,
     tint: Color,
+    blend: BlendMode,
     border: SkinImageBorder,
     source_size: Option<SkinImageSize>,
     linear_filter: bool,
@@ -2442,6 +2447,7 @@ fn append_nine_slice_image_commands(
             uv: UvRect { x: uv.x, y: uv.y, width: uv.width, height: uv.height },
             texture: TextureId(texture.0),
             tint,
+            blend,
             linear_filter,
         });
         return;
@@ -2456,6 +2462,7 @@ fn append_nine_slice_image_commands(
             uv: UvRect { x: uv.x, y: uv.y, width: uv.width, height: uv.height },
             texture: TextureId(texture.0),
             tint,
+            blend,
             linear_filter,
         });
         return;
@@ -2500,6 +2507,7 @@ fn append_nine_slice_image_commands(
                     uv: piece_uv,
                     texture: TextureId(texture.0),
                     tint,
+                    blend,
                     linear_filter,
                 });
             }
@@ -3594,7 +3602,7 @@ mod tests {
                     rect: Rect { x: 0.0, y: 0.0, width: 0.1, height: 0.1 },
                     uv: TextureRegion { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
                     tint: Color::rgb(1.0, 1.0, 1.0),
-                    blend: BlendMode::Normal,
+                    blend: BlendMode::Add,
                     scale: SkinImageScale::Stretch,
                     border: None,
                     source_size: None,
@@ -3604,7 +3612,10 @@ mod tests {
         );
 
         assert_eq!(commands.len(), 2);
-        assert!(matches!(commands[1], DrawCommand::Image { texture: TextureId(1), .. }));
+        assert!(matches!(
+            commands[1],
+            DrawCommand::Image { texture: TextureId(1), blend: BlendMode::Add, .. }
+        ));
     }
 
     #[test]
