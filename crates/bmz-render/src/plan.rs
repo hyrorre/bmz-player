@@ -471,7 +471,7 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
                     .clamp(0, i32::MAX as i64) as i32,
                 total_duration_ms: (snapshot.duration.0 / 1_000).clamp(0, i32::MAX as i64) as i32,
                 lane_cover: snapshot.lane_cover,
-                hidden_cover: 0.0,
+                hidden_cover: snapshot.hidden_cover,
                 now_bpm: snapshot.now_bpm,
                 min_bpm: snapshot.min_bpm,
                 max_bpm: snapshot.max_bpm,

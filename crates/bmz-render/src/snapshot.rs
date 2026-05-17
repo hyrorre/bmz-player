@@ -20,6 +20,7 @@ pub struct RenderSnapshot {
     pub hispeed: f32,
     pub lift: f32,
     pub lane_cover: f32,
+    pub hidden_cover: f32,
     pub now_bpm: f32,
     pub min_bpm: f32,
     pub max_bpm: f32,

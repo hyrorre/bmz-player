@@ -22,7 +22,7 @@ use crate::config::play::{
     DEFAULT_JUDGE_WINDOW, audio_mix_from_profile, gauge_type_from_config,
     lane_binding_from_profile_input, play_offsets_from_profile,
 };
-use crate::config::profile_config::ProfileConfig;
+use crate::config::profile_config::{LaneEffectConfig, ProfileConfig};
 use crate::select_options::ArrangeOption;
 use crate::storage::library_db::LibraryDatabase;
 
@@ -99,6 +99,7 @@ pub fn build_game_session_with_input_backend(
         hispeed: clamp_hispeed(profile.lane.hispeed),
         lift: profile.lane.lift.clamp(0.0, 1.0),
         lane_cover: profile.lane.lane_cover.clamp(0.0, 1.0),
+        hidden_cover: hidden_cover_from_profile(profile),
         input_timestamp_anchor: None,
         state: PlayState::Ready,
     }
@@ -106,6 +107,14 @@ pub fn build_game_session_with_input_backend(
 
 fn clamp_hispeed(hispeed: f32) -> f32 {
     hispeed.clamp(0.5, 10.0)
+}
+
+fn hidden_cover_from_profile(profile: &ProfileConfig) -> f32 {
+    match profile.play.lane_effect {
+        LaneEffectConfig::Hidden | LaneEffectConfig::HiddenSudden => profile.lane.hidden,
+        LaneEffectConfig::Off | LaneEffectConfig::Sudden => 0.0,
+    }
+    .clamp(0.0, 1.0)
 }
 
 pub fn load_game_session_for_chart(
@@ -281,6 +290,21 @@ mod tests {
         assert_eq!(session.audio_mix.master_volume, 1.0);
         assert_eq!(session.audio_clock.sample_rate, 48_000);
         assert_eq!(session.hispeed, 2.0);
+        assert_eq!(session.hidden_cover, 0.0);
+    }
+
+    #[test]
+    fn build_game_session_uses_hidden_cover_only_for_hidden_effects() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.lane.hidden = 0.4;
+        profile.play.lane_effect = LaneEffectConfig::Off;
+        let off = build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+
+        profile.play.lane_effect = LaneEffectConfig::Hidden;
+        let hidden = build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+
+        assert_eq!(off.hidden_cover, 0.0);
+        assert_eq!(hidden.hidden_cover, 0.4);
     }
 
     #[test]

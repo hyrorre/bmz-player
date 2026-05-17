@@ -299,6 +299,7 @@ mod tests {
             hispeed: 2.0,
             lift: 0.0,
             lane_cover: 0.0,
+            hidden_cover: 0.0,
             input_timestamp_anchor: None,
             state: PlayState::Finished,
         }

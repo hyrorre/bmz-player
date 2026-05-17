@@ -72,6 +72,7 @@ pub struct GameSession {
     pub hispeed: f32,
     pub lift: f32,
     pub lane_cover: f32,
+    pub hidden_cover: f32,
     pub input_timestamp_anchor: Option<InputTimestampAnchor>,
     pub state: PlayState,
 }
@@ -418,6 +419,7 @@ mod tests {
             hispeed: 2.0,
             lift: 0.0,
             lane_cover: 0.0,
+            hidden_cover: 0.0,
             input_timestamp_anchor: None,
             state: PlayState::Ready,
         }

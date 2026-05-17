@@ -34,6 +34,7 @@ pub fn build_render_snapshot(
         hispeed: session.hispeed,
         lift: session.lift,
         lane_cover: session.lane_cover,
+        hidden_cover: session.hidden_cover,
         now_bpm: current_bpm(&session.chart, render_now) as f32,
         min_bpm: chart_min_bpm(&session.chart) as f32,
         max_bpm: chart_max_bpm(&session.chart) as f32,
