@@ -7,6 +7,7 @@ use bmz_render::sample::{sample_play_scene, sample_result_scene, sample_select_s
 use bmz_render::scene::{AppSceneSnapshot, ResultSnapshot, SelectRowSnapshot, SelectSnapshot};
 use bmz_render::snapshot::{DisplayJudgeCounts, RenderSnapshot};
 use winit::application::ApplicationHandler;
+use winit::dpi::PhysicalSize;
 use winit::event::{ElementState, StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
@@ -147,7 +148,7 @@ impl WinitApp {
             return;
         }
 
-        let attributes = WindowAttributes::default().with_title("bmz-player");
+        let attributes = window_attributes_from_config(&self.boot.app_config.video);
         match event_loop.create_window(attributes) {
             Ok(window) => {
                 let window = Arc::new(window);
@@ -570,6 +571,14 @@ impl WinitApp {
         }
         tracing::info!(scene = ?scene_kind, title = window_title_for_scene(scene_kind), "app scene active");
     }
+}
+
+fn window_attributes_from_config(
+    video: &crate::config::app_config::VideoConfig,
+) -> WindowAttributes {
+    WindowAttributes::default()
+        .with_title("bmz-player")
+        .with_inner_size(PhysicalSize::new(video.width.max(1), video.height.max(1)))
 }
 
 fn load_play_skin_textures(renderer: &mut Renderer, play_skin_path: &str) {
@@ -1402,6 +1411,17 @@ mod tests {
         assert_eq!(window_title_for_scene(AppSceneKind::Select), "bmz-player - Select");
         assert_eq!(window_title_for_scene(AppSceneKind::Play), "bmz-player - Play");
         assert_eq!(window_title_for_scene(AppSceneKind::Result), "bmz-player - Result");
+    }
+
+    #[test]
+    fn window_attributes_use_configured_video_size() {
+        let mut config = crate::config::app_config::AppConfig::default().video;
+        config.width = 1920;
+        config.height = 1080;
+
+        let attributes = window_attributes_from_config(&config);
+
+        assert_eq!(attributes.inner_size, Some(PhysicalSize::new(1920, 1080).into()));
     }
 
     #[test]
