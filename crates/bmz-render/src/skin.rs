@@ -2806,6 +2806,7 @@ fn judge_rate(count: u32, total: u32) -> f32 {
 
 fn skin_slider_progress(slider_type: i32, state: SkinDrawState) -> Option<f32> {
     match slider_type {
+        4 => (state.lane_cover > 0.0).then_some(state.lane_cover.clamp(0.0, 1.0)),
         6 => Some(state.play_progress.clamp(0.0, 1.0)),
         _ => None,
     }
@@ -4934,10 +4935,12 @@ mod tests {
                 "source": [{ "id": 1, "path": "system.png" }],
                 "slider": [
                     { "id": "progress", "src": 1, "x": 10, "y": 20, "w": 5, "h": 6, "angle": 2, "range": 40, "type": 6 },
+                    { "id": "lane-cover", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10, "angle": 2, "range": 20, "type": 4 },
                     { "id": "unknown", "src": 1, "x": 10, "y": 20, "w": 5, "h": 6, "angle": 0, "range": 40, "type": 999 }
                 ],
                 "destination": [
                     { "id": "progress", "blend": 2, "dst": [{ "x": 30, "y": 80, "w": 5, "h": 6 }] },
+                    { "id": "lane-cover", "dst": [{ "x": 10, "y": 50, "w": 10, "h": 10 }] },
                     { "id": "unknown", "dst": [{ "x": 30, "y": 80, "w": 5, "h": 6 }] }
                 ]
             }
@@ -4973,6 +4976,23 @@ mod tests {
                 && approx_eq(uw, 0.05)
                 && approx_eq(uh, 0.06)
                 && blend == BlendMode::Add));
+
+        let no_lane_cover = document.static_image_render_items(
+            &sources,
+            SkinDrawState { lane_cover: 0.0, ..SkinDrawState::default() },
+        );
+        assert_eq!(no_lane_cover.len(), 1);
+
+        let lane_cover = document.static_image_render_items(
+            &sources,
+            SkinDrawState { lane_cover: 0.5, ..SkinDrawState::default() },
+        );
+        assert_eq!(lane_cover.len(), 2);
+        assert!(matches!(
+            lane_cover[1],
+            SkinRenderItem::Image { rect: Rect { x, y, .. }, .. }
+                if approx_eq(x, 0.1) && approx_eq(y, 0.5)
+        ));
     }
 
     #[test]
