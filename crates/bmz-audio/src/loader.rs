@@ -268,12 +268,14 @@ mod tests {
             lane_notes: std::array::from_fn(|_| Vec::new()),
             long_notes: Vec::new(),
             bgm_events: Vec::new(),
+            bga_events: Vec::new(),
             timing_events: Vec::new(),
             bar_lines: Vec::new(),
             sounds: vec![
                 SoundAssetRef { id: SoundId(1), path: PathBuf::from("ok.wav") },
                 SoundAssetRef { id: SoundId(2), path: PathBuf::from("missing.wav") },
             ],
+            bga_assets: Vec::new(),
             total_notes: 0,
             end_time: TimeUs(0),
         }

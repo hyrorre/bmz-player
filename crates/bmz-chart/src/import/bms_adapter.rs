@@ -8,8 +8,9 @@ use crate::timing::TICKS_PER_MEASURE;
 use super::decode::decode_bms_text;
 use super::error::{ImportError, ImportWarning};
 use super::intermediate::{
-    BmpDef, BpmDef, IntermediateChart, IntermediateMetadata, IntermediateObject,
-    IntermediateObjectKind, IntermediateResources, MeasureInfo, StopDef, WavDef,
+    BmpDef, BpmDef, IntermediateBgaKind, IntermediateChart, IntermediateMetadata,
+    IntermediateObject, IntermediateObjectKind, IntermediateResources, MeasureInfo, StopDef,
+    WavDef,
 };
 
 pub fn import_bms_to_intermediate(
@@ -267,7 +268,18 @@ fn object_kind_from_channel(
 ) -> Option<IntermediateObjectKind> {
     match channel {
         1 => Some(IntermediateObjectKind::Bgm { wav_key: parse_base36_key(token)? }),
-        4 | 6 | 7 => Some(IntermediateObjectKind::Bga { bmp_key: parse_base36_key(token)? }),
+        4 => Some(IntermediateObjectKind::Bga {
+            bmp_key: parse_base36_key(token)?,
+            kind: IntermediateBgaKind::Base,
+        }),
+        6 => Some(IntermediateObjectKind::Bga {
+            bmp_key: parse_base36_key(token)?,
+            kind: IntermediateBgaKind::Poor,
+        }),
+        7 => Some(IntermediateObjectKind::Bga {
+            bmp_key: parse_base36_key(token)?,
+            kind: IntermediateBgaKind::Layer,
+        }),
         3 => Some(IntermediateObjectKind::SetBpm { bpm: parse_hex_key(token)? as f64 }),
         8 => Some(IntermediateObjectKind::SetExtendedBpm { bpm_key: parse_base36_key(token)? }),
         9 => Some(IntermediateObjectKind::Stop { stop_key: parse_base36_key(token)? }),
@@ -465,11 +477,12 @@ mod tests {
         assert_eq!(chart.metadata.banner_file, "banner.png");
         assert_eq!(chart.metadata.backbmp_file, "back.png");
         assert_eq!(chart.metadata.preview_file, "preview.ogg");
-        assert!(
-            chart.objects.iter().any(|object| {
-                matches!(object.kind, IntermediateObjectKind::Bga { bmp_key: 1 })
-            })
-        );
+        assert!(chart.objects.iter().any(|object| {
+            matches!(
+                object.kind,
+                IntermediateObjectKind::Bga { bmp_key: 1, kind: IntermediateBgaKind::Base }
+            )
+        }));
         assert!(
             !warnings
                 .iter()

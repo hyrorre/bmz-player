@@ -6,8 +6,8 @@ use bmz_core::lane::{LANE_COUNT, Lane};
 use bmz_core::time::{ChartTick, TimeUs};
 
 use crate::model::{
-    BarLine, ChartMetadata, LongNotePair, NoteEvent, NoteKind, PlayableChart, SoundAssetRef,
-    SoundEvent, TimingEvent, TimingEventKind,
+    BarLine, BgaAssetId, BgaAssetRef, BgaEvent, BgaEventKind, ChartMetadata, LongNotePair,
+    NoteEvent, NoteKind, PlayableChart, SoundAssetRef, SoundEvent, TimingEvent, TimingEventKind,
 };
 use crate::timing::{TickTimingEvent, TickTimingEventKind, TimingMap, build_timing_map};
 
@@ -25,6 +25,12 @@ struct SoundTable {
 }
 
 #[derive(Debug, Clone)]
+struct BgaTable {
+    by_bmp_key: HashMap<u16, BgaAssetId>,
+    assets: Vec<BgaAssetRef>,
+}
+
+#[derive(Debug, Clone)]
 struct TickObject {
     tick: ChartTick,
     kind: TickObjectKind,
@@ -36,6 +42,7 @@ enum TickObjectKind {
     InvisibleNote { lane: Lane, wav_key: Option<u16> },
     LongChannelNote { lane: Lane, wav_key: Option<u16> },
     Bgm { wav_key: u16 },
+    Bga { bmp_key: u16, kind: BgaEventKind },
 }
 
 #[derive(Debug, Clone)]
@@ -45,9 +52,11 @@ struct PlayableChartDraft {
     lane_notes: [Vec<NoteEvent>; LANE_COUNT],
     long_notes: Vec<LongNotePair>,
     bgm_events: Vec<SoundEvent>,
+    bga_events: Vec<BgaEvent>,
     timing_events: Vec<TimingEvent>,
     bar_lines: Vec<BarLine>,
     sounds: Vec<SoundAssetRef>,
+    bga_assets: Vec<BgaAssetRef>,
     total_notes: u32,
     end_time: TimeUs,
 }
@@ -59,13 +68,18 @@ pub fn normalize_chart(
 ) -> Result<PlayableChart, ImportError> {
     let metadata = normalize_metadata(&intermediate.metadata);
     let sound_table = build_sound_table(source_path, &intermediate, warnings);
+    let bga_table = build_bga_table(source_path, &intermediate, warnings);
     let tick_objects = materialize_tick_objects(&intermediate)?;
     let tick_timing_events = collect_timing_events(&intermediate, warnings)?;
     let timing_map =
         build_timing_map(intermediate.metadata.initial_bpm.max(1.0), tick_timing_events.clone());
 
-    let mut draft =
-        PlayableChartDraft::new(intermediate.identity, metadata, sound_table.assets.clone());
+    let mut draft = PlayableChartDraft::new(
+        intermediate.identity,
+        metadata,
+        sound_table.assets.clone(),
+        bga_table.assets.clone(),
+    );
     let lane_buckets = collect_lane_objects(&tick_objects, &timing_map);
 
     let mut next_note_id = 0_u32;
@@ -87,6 +101,7 @@ pub fn normalize_chart(
     }
 
     draft.bgm_events = build_bgm_events(&tick_objects, &timing_map, &sound_table, warnings);
+    draft.bga_events = build_bga_events(&tick_objects, &timing_map, &bga_table, warnings);
     draft.timing_events = build_timing_events(
         intermediate.metadata.initial_bpm.max(1.0),
         &tick_timing_events,
@@ -138,6 +153,28 @@ fn build_sound_table(
     SoundTable { by_wav_key, assets }
 }
 
+fn build_bga_table(
+    source_path: &Path,
+    intermediate: &IntermediateChart,
+    warnings: &mut Vec<ImportWarning>,
+) -> BgaTable {
+    let mut by_bmp_key = HashMap::new();
+    let mut assets = Vec::new();
+    let base_dir = source_path.parent().unwrap_or_else(|| Path::new(""));
+
+    for bmp in &intermediate.resources.bmps {
+        let id = BgaAssetId(assets.len() as u32);
+        let path = if bmp.path.is_absolute() { bmp.path.clone() } else { base_dir.join(&bmp.path) };
+        if !path.exists() {
+            warnings.push(ImportWarning::MissingBmpFile { path: path.clone() });
+        }
+        by_bmp_key.insert(bmp.key, id);
+        assets.push(BgaAssetRef { id, path });
+    }
+
+    BgaTable { by_bmp_key, assets }
+}
+
 fn resolve_sound_id(
     wav_key: Option<u16>,
     table: &SoundTable,
@@ -171,8 +208,10 @@ fn materialize_tick_objects(
                 Some(TickObjectKind::LongChannelNote { lane, wav_key })
             }
             IntermediateObjectKind::Bgm { wav_key } => Some(TickObjectKind::Bgm { wav_key }),
-            IntermediateObjectKind::Bga { .. }
-            | IntermediateObjectKind::SetBpm { .. }
+            IntermediateObjectKind::Bga { bmp_key, kind } => {
+                Some(TickObjectKind::Bga { bmp_key, kind: bga_event_kind(kind) })
+            }
+            IntermediateObjectKind::SetBpm { .. }
             | IntermediateObjectKind::SetExtendedBpm { .. }
             | IntermediateObjectKind::Stop { .. } => None,
         };
@@ -184,6 +223,14 @@ fn materialize_tick_objects(
 
     out.sort_by_key(|object| object.tick);
     Ok(out)
+}
+
+fn bga_event_kind(kind: super::intermediate::IntermediateBgaKind) -> BgaEventKind {
+    match kind {
+        super::intermediate::IntermediateBgaKind::Base => BgaEventKind::Base,
+        super::intermediate::IntermediateBgaKind::Poor => BgaEventKind::Poor,
+        super::intermediate::IntermediateBgaKind::Layer => BgaEventKind::Layer,
+    }
 }
 
 fn object_to_tick(
@@ -283,7 +330,7 @@ fn collect_lane_objects(
                     source: LaneObjectSource::LongChannel,
                 });
             }
-            TickObjectKind::Bgm { .. } => {}
+            TickObjectKind::Bgm { .. } | TickObjectKind::Bga { .. } => {}
         }
     }
 
@@ -391,6 +438,43 @@ fn build_bgm_events(
         .collect()
 }
 
+fn resolve_bga_asset_id(
+    bmp_key: u16,
+    table: &BgaTable,
+    warnings: &mut Vec<ImportWarning>,
+) -> Option<BgaAssetId> {
+    match table.by_bmp_key.get(&bmp_key).copied() {
+        Some(id) => Some(id),
+        None => {
+            warnings.push(ImportWarning::MissingBmpDefinition { key: bmp_key });
+            None
+        }
+    }
+}
+
+fn build_bga_events(
+    tick_objects: &[TickObject],
+    timing_map: &TimingMap,
+    bga_table: &BgaTable,
+    warnings: &mut Vec<ImportWarning>,
+) -> Vec<BgaEvent> {
+    tick_objects
+        .iter()
+        .filter_map(|object| match object.kind {
+            TickObjectKind::Bga { bmp_key, kind } => {
+                let asset = resolve_bga_asset_id(bmp_key, bga_table, warnings)?;
+                Some(BgaEvent {
+                    tick: object.tick,
+                    time: timing_map.tick_to_time(object.tick),
+                    asset,
+                    kind,
+                })
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 fn build_timing_events(
     initial_bpm: f64,
     events: &[TickTimingEvent],
@@ -443,6 +527,7 @@ fn finalize_playable_chart(mut draft: PlayableChartDraft) -> PlayableChart {
     }
     draft.long_notes.sort_by_key(|pair| pair.start_time);
     draft.bgm_events.sort_by_key(|event| event.time);
+    draft.bga_events.sort_by_key(|event| event.time);
     draft.timing_events.sort_by_key(|event| event.time);
     draft.bar_lines.sort_by_key(|line| line.time);
 
@@ -455,9 +540,11 @@ fn finalize_playable_chart(mut draft: PlayableChartDraft) -> PlayableChart {
         lane_notes: draft.lane_notes,
         long_notes: draft.long_notes,
         bgm_events: draft.bgm_events,
+        bga_events: draft.bga_events,
         timing_events: draft.timing_events,
         bar_lines: draft.bar_lines,
         sounds: draft.sounds,
+        bga_assets: draft.bga_assets,
         total_notes: draft.total_notes,
         end_time: draft.end_time,
     }
@@ -487,6 +574,7 @@ impl PlayableChartDraft {
         identity: bmz_core::chart::ChartIdentity,
         metadata: ChartMetadata,
         sounds: Vec<SoundAssetRef>,
+        bga_assets: Vec<BgaAssetRef>,
     ) -> Self {
         Self {
             identity,
@@ -494,9 +582,11 @@ impl PlayableChartDraft {
             lane_notes: std::array::from_fn(|_| Vec::new()),
             long_notes: Vec::new(),
             bgm_events: Vec::new(),
+            bga_events: Vec::new(),
             timing_events: Vec::new(),
             bar_lines: Vec::new(),
             sounds,
+            bga_assets,
             total_notes: 0,
             end_time: TimeUs(0),
         }

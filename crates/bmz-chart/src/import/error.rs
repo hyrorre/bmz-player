@@ -39,6 +39,8 @@ pub enum ImportWarning {
     UnsupportedChannel { channel: u16 },
     MissingWavDefinition { key: u16 },
     MissingSoundFile { path: PathBuf },
+    MissingBmpDefinition { key: u16 },
+    MissingBmpFile { path: PathBuf },
     MissingBpmDefinition { key: u16 },
     MissingStopDefinition { key: u16 },
     SuspiciousMeasureLength { measure: u32 },

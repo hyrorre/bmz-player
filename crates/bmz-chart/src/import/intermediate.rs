@@ -89,10 +89,17 @@ pub enum IntermediateObjectKind {
     InvisibleNote { lane: Lane, wav_key: Option<u16> },
     LongChannelNote { lane: Lane, wav_key: Option<u16> },
     Bgm { wav_key: u16 },
-    Bga { bmp_key: u16 },
+    Bga { bmp_key: u16, kind: IntermediateBgaKind },
     SetBpm { bpm: f64 },
     SetExtendedBpm { bpm_key: u16 },
     Stop { stop_key: u16 },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntermediateBgaKind {
+    Base,
+    Poor,
+    Layer,
 }
 
 #[derive(Debug, Clone)]

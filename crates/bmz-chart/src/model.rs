@@ -12,9 +12,11 @@ pub struct PlayableChart {
     pub lane_notes: [Vec<NoteEvent>; LANE_COUNT],
     pub long_notes: Vec<LongNotePair>,
     pub bgm_events: Vec<SoundEvent>,
+    pub bga_events: Vec<BgaEvent>,
     pub timing_events: Vec<TimingEvent>,
     pub bar_lines: Vec<BarLine>,
     pub sounds: Vec<SoundAssetRef>,
+    pub bga_assets: Vec<BgaAssetRef>,
     pub total_notes: u32,
     pub end_time: TimeUs,
 }
@@ -105,6 +107,30 @@ pub struct BarLine {
 #[derive(Debug, Clone)]
 pub struct SoundAssetRef {
     pub id: SoundId,
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct BgaAssetId(pub u32);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BgaEventKind {
+    Base,
+    Poor,
+    Layer,
+}
+
+#[derive(Debug, Clone)]
+pub struct BgaEvent {
+    pub tick: ChartTick,
+    pub time: TimeUs,
+    pub asset: BgaAssetId,
+    pub kind: BgaEventKind,
+}
+
+#[derive(Debug, Clone)]
+pub struct BgaAssetRef {
+    pub id: BgaAssetId,
     pub path: PathBuf,
 }
 

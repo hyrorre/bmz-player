@@ -35,7 +35,7 @@ mod tests {
     use bmz_core::lane::Lane;
 
     use crate::hash::compute_chart_identity;
-    use crate::model::{NoteKind, TimingEventKind};
+    use crate::model::{BgaEventKind, NoteKind, TimingEventKind};
 
     use super::*;
 
@@ -47,9 +47,11 @@ mod tests {
 #BPM 120
 #WAV01 key.wav
 #WAV02 bgm.wav
+#BMP01 bga.png
 #BPM01 180
 #STOP01 192
 #00001:0002
+#00004:0001
 #00011:0100
 #00013:0001
 #00108:0100
@@ -60,6 +62,7 @@ mod tests {
         let base_dir = path.parent().unwrap().to_path_buf();
         write_temp_file(&base_dir.join("key.wav"));
         write_temp_file(&base_dir.join("bgm.wav"));
+        write_temp_file(&base_dir.join("bga.png"));
 
         let result = import_bms_chart(&path, None).unwrap();
         let expected_identity = compute_chart_identity(text.as_bytes());
@@ -70,7 +73,10 @@ mod tests {
         assert_eq!(result.chart.metadata.artist, "Test Artist");
         assert_eq!(result.chart.total_notes, 3);
         assert_eq!(result.chart.sounds.len(), 2);
+        assert_eq!(result.chart.bga_assets.len(), 1);
         assert_eq!(result.chart.bgm_events.len(), 1);
+        assert_eq!(result.chart.bga_events.len(), 1);
+        assert_eq!(result.chart.bga_events[0].kind, BgaEventKind::Base);
         assert_eq!(result.chart.notes_for_lane(Lane::Key1).len(), 2);
         assert_eq!(result.chart.notes_for_lane(Lane::Key3).len(), 1);
 
@@ -95,6 +101,7 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
         std::fs::remove_file(base_dir.join("key.wav")).unwrap();
         std::fs::remove_file(base_dir.join("bgm.wav")).unwrap();
+        std::fs::remove_file(base_dir.join("bga.png")).unwrap();
     }
 
     fn write_temp_bms(text: &str) -> std::path::PathBuf {

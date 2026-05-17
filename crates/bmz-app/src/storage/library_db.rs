@@ -578,6 +578,12 @@ fn warning_details(warning: &ImportWarning) -> (&'static str, String) {
         ImportWarning::MissingSoundFile { path } => {
             ("MissingSoundFile", format!("missing sound file: {}", path_to_string(path)))
         }
+        ImportWarning::MissingBmpDefinition { key } => {
+            ("MissingBmpDefinition", format!("missing BMP definition: {key}"))
+        }
+        ImportWarning::MissingBmpFile { path } => {
+            ("MissingBmpFile", format!("missing BMP file: {}", path_to_string(path)))
+        }
         ImportWarning::MissingBpmDefinition { key } => {
             ("MissingBpmDefinition", format!("missing BPM definition: {key}"))
         }
@@ -634,9 +640,11 @@ mod tests {
             lane_notes: std::array::from_fn(|_| Vec::new()),
             long_notes: Vec::new(),
             bgm_events: Vec::new(),
+            bga_events: Vec::new(),
             timing_events: Vec::new(),
             bar_lines: Vec::new(),
             sounds: Vec::new(),
+            bga_assets: Vec::new(),
             total_notes: 0,
             end_time: TimeUs(10_000_000),
         }

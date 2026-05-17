@@ -324,9 +324,11 @@ mod tests {
             lane_notes,
             long_notes: Vec::new(),
             bgm_events: Vec::new(),
+            bga_events: Vec::new(),
             timing_events: Vec::new(),
             bar_lines: Vec::new(),
             sounds: Vec::new(),
+            bga_assets: Vec::new(),
             total_notes: 1,
             end_time: TimeUs(0),
         }

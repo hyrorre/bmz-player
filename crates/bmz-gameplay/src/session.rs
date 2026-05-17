@@ -456,9 +456,11 @@ mod tests {
             lane_notes,
             long_notes: Vec::new(),
             bgm_events: Vec::new(),
+            bga_events: Vec::new(),
             timing_events: Vec::new(),
             bar_lines: Vec::new(),
             sounds: vec![SoundAssetRef { id: SoundId(7), path: "sound.wav".into() }],
+            bga_assets: Vec::new(),
             total_notes: 1,
             end_time: TimeUs(0),
         }
@@ -471,9 +473,11 @@ mod tests {
             lane_notes: std::array::from_fn(|_| Vec::new()),
             long_notes: Vec::new(),
             bgm_events: vec![SoundEvent { tick: ChartTick(0), time: TimeUs(0), sound: SoundId(3) }],
+            bga_events: Vec::new(),
             timing_events: Vec::new(),
             bar_lines: Vec::new(),
             sounds: vec![SoundAssetRef { id: SoundId(3), path: "bgm.wav".into() }],
+            bga_assets: Vec::new(),
             total_notes: 0,
             end_time: TimeUs(0),
         }
