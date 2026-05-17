@@ -3,7 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use bmz_chart::model::PlayableChart;
-use bmz_render::assets::load_png_rgba;
+use bmz_render::assets::load_static_rgba_image;
 use bmz_render::plan::TextureId;
 use bmz_render::renderer::{RenderSurfaceStatus, Renderer, SurfaceSize};
 use bmz_render::sample::{sample_play_scene, sample_result_scene, sample_select_scene};
@@ -600,11 +600,7 @@ fn load_chart_bga_textures(renderer: &mut Renderer, chart: &PlayableChart) -> Bg
     let mut frames = BgaFrameCatalog::new();
     for asset in &chart.bga_assets {
         let path = &asset.path;
-        if !path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("png"))
-        {
+        if !is_supported_bga_image_path(path) {
             tracing::debug!(
                 asset_id = asset.id.0,
                 path = %path.display(),
@@ -613,7 +609,7 @@ fn load_chart_bga_textures(renderer: &mut Renderer, chart: &PlayableChart) -> Bg
             continue;
         }
 
-        match load_png_rgba(path) {
+        match load_static_rgba_image(path) {
             Ok(image) => {
                 let texture_id = TextureId(bga_texture_id(asset.id));
                 let frame = display_bga_frame(asset.id, image.width, image.height);
@@ -648,6 +644,12 @@ fn load_chart_bga_textures(renderer: &mut Renderer, chart: &PlayableChart) -> Bg
         }
     }
     frames
+}
+
+fn is_supported_bga_image_path(path: &std::path::Path) -> bool {
+    path.extension().and_then(|extension| extension.to_str()).is_some_and(|extension| {
+        matches!(extension.to_ascii_lowercase().as_str(), "png" | "bmp" | "jpg" | "jpeg")
+    })
 }
 
 fn format_error_chain(error: &anyhow::Error) -> String {
