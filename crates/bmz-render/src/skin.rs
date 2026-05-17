@@ -742,6 +742,8 @@ pub struct SkinDrawState {
     pub offset_lift_px: i32,
     /// OFFSET_LANECOVER (id=4) の y 値 (skin canvas pixel 単位)。レーンカバー位置インジケータのシフト。
     pub offset_lanecover_px: i32,
+    /// OFFSET_HIDDEN_COVER (id=5) の y 値 (skin canvas pixel 単位)。HIDDEN カバー位置のシフト。
+    pub offset_hidden_cover_px: i32,
     /// 現在のハイスピード倍率 (NUMBER_HISPEED=310, NUMBER_HISPEED_AFTERDOT=311 に使用)。
     pub hispeed: f32,
     /// 曲残り時間 ms (NUMBER_TIMELEFT_MINUTE=163, NUMBER_TIMELEFT_SECOND=164 に使用)。
@@ -1122,9 +1124,14 @@ impl SkinDocument {
 
                 let elapsed = skin_timer_elapsed_ms(destination.timer, state)?;
                 let mut frame = resolve_destination_frame(destination, elapsed, &enabled_options)?;
-                let (dx, dy) = skin_offset_shift(destination, state);
-                frame.x += dx;
-                frame.y += dy;
+                let is_hidden_cover_destination =
+                    self.hidden_cover.iter().any(|cover| cover.id == destination.id);
+                apply_skin_offset_to_frame(
+                    destination,
+                    &mut frame,
+                    state,
+                    is_hidden_cover_destination,
+                );
                 if let Some(image) = images.get(destination.id.as_str()) {
                     let source = sources.get(&image.src)?;
                     let (rect, uv) = stretch_skin_image_geometry(
@@ -1408,9 +1415,7 @@ impl SkinDocument {
             resolve_destination_frame_until_end(image_destination, elapsed_ms, &enabled_options)?;
         let offset_state =
             SkinDrawState { offset_lift_px, offset_lanecover_px, ..SkinDrawState::default() };
-        let (dx, dy) = skin_offset_shift(image_destination, offset_state);
-        image_frame.x += dx;
-        image_frame.y += dy;
+        apply_skin_offset_to_frame(image_destination, &mut image_frame, offset_state, false);
         if judge.shift
             && combo > 0
             && let Some(number_destination) = judge.numbers.get(judge_index)
@@ -1439,9 +1444,7 @@ impl SkinDocument {
                 &enabled_options,
             )
         {
-            let (dx, dy) = skin_offset_shift(number_destination, offset_state);
-            number_frame.x += dx;
-            number_frame.y += dy;
+            apply_skin_offset_to_frame(number_destination, &mut number_frame, offset_state, false);
             items.extend(self.value_number_render_items(
                 &number_destination.id,
                 combo as i64,
@@ -2945,22 +2948,38 @@ fn flatten_dst_entries(dst: &[SkinDstEntry], enabled_options: &[i32]) -> Vec<Ski
     result
 }
 
-/// Returns the (x, y) shift in skin canvas pixels for the given destination's offset IDs.
-fn skin_offset_shift(destination: &SkinDestinationDef, state: SkinDrawState) -> (i32, i32) {
-    let mut dy = 0i32;
-    let all_offsets = destination.offsets.iter().copied().chain(if destination.offset != 0 {
-        Some(destination.offset)
-    } else {
-        None
-    });
-    for offset_id in all_offsets {
+fn apply_skin_offset_to_frame(
+    destination: &SkinDestinationDef,
+    frame: &mut ResolvedSkinFrame,
+    state: SkinDrawState,
+    include_hidden_cover_offsets: bool,
+) {
+    let mut ids: Vec<i32> = destination.offsets.clone();
+    if destination.offset != 0 {
+        ids.push(destination.offset);
+    }
+    if include_hidden_cover_offsets {
+        if !ids.contains(&3) {
+            ids.push(3);
+        }
+        if !ids.contains(&5) {
+            ids.push(5);
+        }
+    }
+
+    for offset_id in ids {
         match offset_id {
-            3 => dy += state.offset_lift_px,
-            4 => dy += state.offset_lanecover_px,
+            3 => frame.y += state.offset_lift_px,
+            4 => frame.y += state.offset_lanecover_px,
+            5 => {
+                frame.y += state.offset_hidden_cover_px;
+                if state.hidden_cover <= 0.0 {
+                    frame.a = (frame.a - 255).clamp(0, 255);
+                }
+            }
             _ => {}
         }
     }
-    (0, dy)
 }
 
 fn resolve_destination_frame(
@@ -5095,6 +5114,53 @@ mod tests {
                 && blend == BlendMode::Add));
         assert_eq!(document.hidden_cover[0].disappear_line, 140);
         assert!(document.hidden_cover[0].is_disappear_line_link_lift);
+    }
+
+    #[test]
+    fn hidden_cover_destination_applies_lift_and_hidden_offsets() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 12, "path": "cover.png" }],
+                "hiddenCover": [
+                    { "id": "hidden-cover", "src": 12, "x": 0, "y": 0, "w": 10, "h": 10 }
+                ],
+                "destination": [
+                    { "id": "hidden-cover", "dst": [{ "x": 20, "y": -40, "w": 30, "h": 40 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "12".to_string(),
+            SkinDocumentTexture {
+                source_id: "12".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 100.0, height: 100.0 },
+            },
+        )]);
+
+        let items = document.static_image_render_items(
+            &sources,
+            SkinDrawState {
+                hidden_cover: 0.5,
+                offset_lift_px: 10,
+                offset_hidden_cover_px: 20,
+                ..SkinDrawState::default()
+            },
+        );
+
+        assert_eq!(items.len(), 1);
+        let SkinRenderItem::Image { rect, .. } = &items[0] else { panic!() };
+        assert!(
+            approx_eq(rect.y, (100 - (-40 + 10 + 20) - 40) as f32 / 100.0),
+            "expected hidden cover to use automatic lift and hidden offsets, got {}",
+            rect.y
+        );
     }
 
     #[test]
