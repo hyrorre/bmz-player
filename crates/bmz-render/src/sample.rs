@@ -3,7 +3,8 @@ use bmz_core::time::TimeUs;
 
 use crate::scene::{AppSceneSnapshot, ResultSnapshot, SelectRowSnapshot, SelectSnapshot};
 use crate::snapshot::{
-    DisplayJudgeCounts, DisplayJudgement, RenderSnapshot, VisibleBarLine, VisibleNote,
+    DisplayJudgeCounts, DisplayJudgement, RenderSnapshot, VisibleBarLine, VisibleLongNote,
+    VisibleNote,
 };
 
 pub fn sample_select_scene() -> AppSceneSnapshot {
@@ -63,6 +64,9 @@ pub fn sample_play_scene() -> AppSceneSnapshot {
     });
     snapshot.bar_lines.push(VisibleBarLine { time: TimeUs(12_000_000), y: 0.25 });
     snapshot.bar_lines.push(VisibleBarLine { time: TimeUs(13_000_000), y: 0.78 });
+    // ホールド中のロングノート（Key4）と上空に伸びるロングノート（Key6）
+    snapshot.visible_long_notes.push(VisibleLongNote { lane: Lane::Key4, head_y: 0.0, tail_y: 0.45 });
+    snapshot.visible_long_notes.push(VisibleLongNote { lane: Lane::Key6, head_y: 0.3, tail_y: 0.82 });
     snapshot.recent_judgements.push(DisplayJudgement {
         lane: Lane::Key3,
         text: "PGREAT FAST".to_string(),

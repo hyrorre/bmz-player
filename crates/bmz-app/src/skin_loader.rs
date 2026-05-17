@@ -443,6 +443,18 @@ mod tests {
     }
 
     #[test]
+    fn ecfn_play7_1p_json_skin_can_be_applied_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/skins/ECFN/play/play7-1p.json");
+        if !skin_path.is_file() {
+            return;
+        }
+        let mut renderer = Renderer::default();
+
+        apply_beatoraja_json_skin(&mut renderer, &skin_path).unwrap();
+    }
+
+    #[test]
     fn apply_skin_from_config_empty_path_uses_default_skin() {
         let mut renderer = Renderer::default();
 

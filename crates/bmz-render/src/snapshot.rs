@@ -28,6 +28,7 @@ pub struct RenderSnapshot {
     pub target_ex_score: Option<u32>,
     pub judge_timing_offset_ms: i32,
     pub visible_notes: [Vec<VisibleNote>; LANE_COUNT],
+    pub visible_long_notes: Vec<VisibleLongNote>,
     pub recent_inputs: Vec<DisplayInput>,
     pub recent_judgements: Vec<DisplayJudgement>,
     pub bar_lines: Vec<VisibleBarLine>,
@@ -48,6 +49,17 @@ pub struct VisibleNote {
     pub lane: Lane,
     pub time: TimeUs,
     pub y: f32,
+}
+
+/// 画面上に見えているロングノートの胴体。
+/// `head_y` は判定ライン側（手前）、`tail_y` は終端側（奥）。
+/// どちらも `VisibleNote::y` と同じ正規化座標（0.0=判定ライン, 1.0=最奥）で、
+/// 可視範囲 [0.0, 1.0] にクランプ済み。`head_y <= tail_y` が保証される。
+#[derive(Debug, Clone, PartialEq)]
+pub struct VisibleLongNote {
+    pub lane: Lane,
+    pub head_y: f32,
+    pub tail_y: f32,
 }
 
 #[derive(Debug, Clone, PartialEq)]

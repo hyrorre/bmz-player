@@ -5,7 +5,8 @@ use bmz_core::time::TimeUs;
 use bmz_gameplay::judge::model::JudgementEvent;
 use bmz_gameplay::session::GameSession;
 use bmz_render::snapshot::{
-    DisplayInput, DisplayJudgeCounts, DisplayJudgement, RenderSnapshot, VisibleBarLine, VisibleNote,
+    DisplayInput, DisplayJudgeCounts, DisplayJudgement, RenderSnapshot, VisibleBarLine,
+    VisibleLongNote, VisibleNote,
 };
 
 pub const DEFAULT_LOOKAHEAD_US: i64 = 2_000_000;
@@ -49,6 +50,7 @@ pub fn build_render_snapshot(
             .collect(),
         recent_judgements: recent_judgements.iter().map(display_judgement).collect(),
         bar_lines: Vec::new(),
+        visible_long_notes: Vec::new(),
     };
 
     for lane in Lane::ALL {
@@ -66,6 +68,21 @@ pub fn build_render_snapshot(
         }
     }
 
+    for long in &session.chart.long_notes {
+        let head = note_progress(long.start_time, render_now, session.hispeed);
+        let tail = note_progress(long.end_time, render_now, session.hispeed);
+        // 終端が判定ラインを過ぎた、または始端が可視域より奥なら非表示。
+        // ホールド中のLNは head < 0 になるが tail は可視域に残るので表示される。
+        if tail < 0.0 || head > 1.0 {
+            continue;
+        }
+        snapshot.visible_long_notes.push(VisibleLongNote {
+            lane: long.lane,
+            head_y: head.clamp(0.0, 1.0),
+            tail_y: tail.clamp(0.0, 1.0),
+        });
+    }
+
     snapshot
 }
 
@@ -77,6 +94,14 @@ fn note_y(note_time: TimeUs, render_now: TimeUs, hispeed: f32) -> Option<f32> {
 
     let progress = delta as f32 * hispeed / DEFAULT_LOOKAHEAD_US as f32;
     (progress <= 1.0).then_some(progress)
+}
+
+/// `note_y` と同じ正規化進捗を返すが、可視判定・クランプをしない生の値。
+/// 判定ラインを過ぎたノートは負値、可視域より奥は 1.0 超になる。
+/// ロングノートの始端・終端位置の算出に使う。
+fn note_progress(note_time: TimeUs, render_now: TimeUs, hispeed: f32) -> f32 {
+    let delta = note_time.0 - render_now.0;
+    delta as f32 * hispeed / DEFAULT_LOOKAHEAD_US as f32
 }
 
 fn display_judge_counts(session: &GameSession) -> DisplayJudgeCounts {
@@ -411,5 +436,92 @@ mod tests {
             total_notes: 1,
             end_time: TimeUs(1_000_000),
         }
+    }
+
+    /// Key1 に start=500ms, end=1500ms のロングノートを1本持つ譜面。
+    fn chart_with_long_note() -> PlayableChart {
+        use bmz_chart::model::{LongNotePair, LongNoteStyle};
+
+        let start = NoteEvent {
+            id: NoteId(1),
+            lane: Lane::Key1,
+            kind: NoteKind::LongStart,
+            tick: ChartTick(0),
+            time: TimeUs(500_000),
+            sound: None,
+        };
+        let end = NoteEvent {
+            id: NoteId(2),
+            lane: Lane::Key1,
+            kind: NoteKind::LongEnd,
+            tick: ChartTick(0),
+            time: TimeUs(1_500_000),
+            sound: None,
+        };
+        let mut lane_notes = std::array::from_fn(|_| Vec::new());
+        lane_notes[Lane::Key1.index()].push(start);
+        lane_notes[Lane::Key1.index()].push(end);
+
+        PlayableChart {
+            identity: compute_chart_identity(b"long-note"),
+            metadata: ChartMetadata { initial_bpm: 120.0, ..Default::default() },
+            lane_notes,
+            long_notes: vec![LongNotePair {
+                lane: Lane::Key1,
+                style: LongNoteStyle::ChannelPair,
+                start_note_id: NoteId(1),
+                end_note_id: NoteId(2),
+                start_tick: ChartTick(0),
+                end_tick: ChartTick(0),
+                start_time: TimeUs(500_000),
+                end_time: TimeUs(1_500_000),
+                sound: None,
+            }],
+            bgm_events: Vec::new(),
+            timing_events: Vec::new(),
+            bar_lines: Vec::new(),
+            sounds: Vec::new(),
+            total_notes: 1,
+            end_time: TimeUs(1_500_000),
+        }
+    }
+
+    #[test]
+    fn build_render_snapshot_emits_visible_long_note() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session = build_game_session(
+            Arc::new(chart_with_long_note()),
+            &profile,
+            PlaySessionOptions::default(),
+        );
+        session.hispeed = 1.0;
+
+        // render_now=0: start 500ms→0.25, end 1500ms→0.75 (lookahead 2s)
+        let upcoming = build_render_snapshot(&session, TimeUs(0), &[], None);
+        assert_eq!(upcoming.visible_long_notes.len(), 1);
+        assert_eq!(upcoming.visible_long_notes[0].lane, Lane::Key1);
+        assert_eq!(upcoming.visible_long_notes[0].head_y, 0.25);
+        assert_eq!(upcoming.visible_long_notes[0].tail_y, 0.75);
+    }
+
+    #[test]
+    fn build_render_snapshot_clamps_held_long_note_head_to_judge_line() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session = build_game_session(
+            Arc::new(chart_with_long_note()),
+            &profile,
+            PlaySessionOptions::default(),
+        );
+        session.hispeed = 1.0;
+
+        // render_now=1_000_000: 始端は判定ライン通過済み(負値→0.0)、終端は 0.25
+        let held = build_render_snapshot(&session, TimeUs(1_000_000), &[], None);
+        assert_eq!(held.visible_long_notes.len(), 1);
+        assert_eq!(held.visible_long_notes[0].head_y, 0.0);
+        assert_eq!(held.visible_long_notes[0].tail_y, 0.25);
+
+        // 終端も通過したら非表示
+        let passed = build_render_snapshot(&session, TimeUs(2_000_000), &[], None);
+        assert!(passed.visible_long_notes.is_empty());
     }
 }

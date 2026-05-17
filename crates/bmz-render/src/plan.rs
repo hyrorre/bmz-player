@@ -12,6 +12,8 @@ use crate::text::{BitmapTextStyle, TextRenderer};
 
 const JUDGE_LINE_Y_RATIO: f32 = 0.86;
 const NOTE_HEIGHT: f32 = 0.018;
+/// デフォルトスキンのロングノート胴体色（半透明）。
+const LONG_NOTE_BODY_COLOR: Color = Color::rgba(0.5, 0.78, 0.88, 0.5);
 pub const DEFAULT_NOTE_TEXTURE: TextureId = TextureId(1);
 pub const DEFAULT_KEY_EVEN_NOTE_TEXTURE: TextureId = TextureId(2);
 pub const DEFAULT_SCRATCH_NOTE_TEXTURE: TextureId = TextureId(3);
@@ -537,6 +539,21 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
                 });
             }
 
+            // ロングノート胴体はタップノートより先に描画する（端のキャップを上に重ねる）
+            for body in snapshot.visible_long_notes.iter().filter(|body| body.lane == lane) {
+                let top = play_object_y(board, body.tail_y);
+                let bottom = play_object_y(board, body.head_y);
+                commands.push(DrawCommand::Rect {
+                    rect: Rect {
+                        x: x + lane_width * 0.18,
+                        y: top,
+                        width: lane_width * 0.64,
+                        height: (bottom - top).max(0.0),
+                    },
+                    color: LONG_NOTE_BODY_COLOR,
+                });
+            }
+
             for note in &snapshot.visible_notes[lane_index] {
                 let y = note_rect_y(board, note.y);
                 let rect = Rect {
@@ -559,7 +576,14 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
         }
         push_judge_line(skin_manifest, &mut commands, board);
     } else {
-        // beatoraja スキン: note.dst のレーンエリアに基づいてノートを配置
+        // beatoraja スキン: ロングノート胴体 → タップノートの順で note.dst のエリアに配置
+        for body in &snapshot.visible_long_notes {
+            if let Some(rect) = skin.note_body_rect(body.lane, body.head_y, body.tail_y)
+                && let Some(item) = skin.document_long_body_item(body.lane, rect)
+            {
+                append_skin_render_items(&mut commands, &[item]);
+            }
+        }
         for lane in Lane::ALL {
             let lane_index = lane.index();
             for note in &snapshot.visible_notes[lane_index] {
@@ -1336,10 +1360,33 @@ mod tests {
 
     use crate::snapshot::{
         DisplayInput, DisplayJudgeCounts, DisplayJudgement, RenderSnapshot, VisibleBarLine,
-        VisibleNote,
+        VisibleLongNote, VisibleNote,
     };
 
     use super::*;
+
+    #[test]
+    fn play_plan_renders_long_note_body() {
+        let mut snapshot = RenderSnapshot::default();
+        snapshot.visible_long_notes.push(VisibleLongNote {
+            lane: Lane::Key4,
+            head_y: 0.1,
+            tail_y: 0.7,
+        });
+
+        let plan = DrawPlan::from_scene(&AppSceneSnapshot::Play(snapshot));
+
+        // 胴体は LONG_NOTE_BODY_COLOR の Rect。終端(tail)が始端(head)より画面上方にある。
+        let body = plan.commands.iter().find_map(|command| match command {
+            DrawCommand::Rect { rect, color } if *color == LONG_NOTE_BODY_COLOR => Some(*rect),
+            _ => None,
+        });
+        let body = body.expect("long note body rect should be present");
+        assert!(body.height > NOTE_HEIGHT, "body should be taller than a tap note");
+        let board = Rect { x: 0.18, y: 0.05, width: 0.64, height: 0.9 };
+        assert!(approx_eq(body.y, play_object_y(board, 0.7)));
+        assert!(approx_eq(body.y + body.height, play_object_y(board, 0.1)));
+    }
 
     #[test]
     fn play_plan_includes_lanes_notes_and_bar_lines() {

@@ -669,6 +669,12 @@ impl SkinContext {
         document.note_image_render_item(lane, rect, &self.document_sources)
     }
 
+    /// ロングノート胴体（`note.lnbody`）を指定矩形に伸縮描画する。
+    pub fn document_long_body_item(&self, lane: Lane, rect: Rect) -> Option<SkinRenderItem> {
+        let document = self.document.as_ref()?;
+        document.note_long_body_render_item(lane, rect, &self.document_sources)
+    }
+
     pub fn document_gauge_items(&self, gauge: f32, elapsed_ms: i32) -> Option<Vec<SkinRenderItem>> {
         let document = self.document.as_ref()?;
         document.gauge_render_items(gauge, elapsed_ms, &self.document_sources)
@@ -704,6 +710,19 @@ impl SkinContext {
             width: area.width,
             height: note_height,
         })
+    }
+
+    /// ロングノート胴体の矩形を計算する。`head_y`/`tail_y` は `VisibleNote::y` と同じ
+    /// 正規化座標（0.0=判定ライン, 1.0=最奥）。胴体は両端の中心を結ぶ。
+    pub fn note_body_rect(&self, lane: Lane, head_y: f32, tail_y: f32) -> Option<Rect> {
+        let document = self.document.as_ref()?;
+        let enabled_options = document.enabled_options();
+        let area = document.note_lane_area(lane, &enabled_options)?;
+        let head_center = area.y + area.height * (1.0 - head_y);
+        let tail_center = area.y + area.height * (1.0 - tail_y);
+        let top = head_center.min(tail_center);
+        let bottom = head_center.max(tail_center);
+        Some(Rect { x: area.x, y: top, width: area.width, height: bottom - top })
     }
 }
 
@@ -1281,7 +1300,30 @@ impl SkinDocument {
     ) -> Option<SkinRenderItem> {
         let note = self.note.as_ref()?;
         let image_id = note.note.get(beatoraja_7k_note_index(lane))?;
-        let image = self.image.iter().find(|image| image.id == *image_id)?;
+        self.note_part_render_item(image_id, rect, sources)
+    }
+
+    /// ロングノート胴体画像（`note.lnbody`）を描画する。
+    /// `lnbody` が未定義のレーンは通常ノート画像（`note.note`）で代用する。
+    pub fn note_long_body_render_item(
+        &self,
+        lane: Lane,
+        rect: Rect,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Option<SkinRenderItem> {
+        let note = self.note.as_ref()?;
+        let index = beatoraja_7k_note_index(lane);
+        let image_id = note.lnbody.get(index).or_else(|| note.note.get(index))?;
+        self.note_part_render_item(image_id, rect, sources)
+    }
+
+    fn note_part_render_item(
+        &self,
+        image_id: &str,
+        rect: Rect,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Option<SkinRenderItem> {
+        let image = self.image.iter().find(|image| image.id == image_id)?;
         let source = sources.get(&image.src)?;
         Some(SkinRenderItem::Image {
             texture: source.texture,
