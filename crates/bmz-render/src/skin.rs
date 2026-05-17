@@ -782,6 +782,8 @@ pub struct SkinDrawState {
     pub min_bpm: f32,
     /// 最大 BPM (NUMBER_MAXBPM=90 に使用)。
     pub max_bpm: f32,
+    /// 現在の曲にBGAイベントが含まれるかどうか (OPTION_NO_BGA=170 / OPTION_BGA=171)。
+    pub has_bga: bool,
     /// 最後の判定のタイミングずれ ms (VALUE_JUDGE_1P_DURATION=525 に使用)。Noneなら非表示。
     pub judge_timing_ms: Option<i32>,
     /// 過去ベストスコアのexスコア (NUMBER_HIGHSCORE=150, BARGRAPH_BESTSCORERATE=113 に使用)。
@@ -1139,7 +1141,7 @@ impl SkinDocument {
         let enabled_options = self.enabled_options();
         self.all_destinations(&enabled_options)
             .into_iter()
-            .filter(|destination| test_skin_ops(&destination.op, &enabled_options))
+            .filter(|destination| test_skin_ops(&destination.op, &enabled_options, state))
             .filter(|destination| eval_skin_draw_condition(&destination.draw, state))
             .filter_map(|destination| {
                 if self.judge.iter().any(|judge| judge.id == destination.id) {
@@ -1185,6 +1187,20 @@ impl SkinDocument {
                         Some(source.source_size),
                         destination.filter != 0,
                     )]);
+                }
+
+                if self.bga.as_ref().is_some_and(|bga| bga.id == destination.id) {
+                    return state.has_bga.then(|| {
+                        vec![SkinRenderItem::Rect {
+                            rect: normalize_skin_frame_rect(frame, self.w, self.h),
+                            color: Color::rgba(0.0, 0.0, 0.0, frame.a as f32 / 255.0),
+                            blend: if destination.blend == 2 {
+                                BlendMode::Add
+                            } else {
+                                BlendMode::Normal
+                            },
+                        }]
+                    });
                 }
 
                 // imageset (キービーム・ボム等) を destination 自身のタイマー駆動で描画する。
@@ -1385,7 +1401,11 @@ impl SkinDocument {
             self.all_destinations(&enabled_options).into_iter().find(|destination| {
                 destination.id == gauge_def.id
                     && destination.timer.is_none()
-                    && test_skin_ops(&destination.op, &enabled_options)
+                    && test_skin_ops(
+                        &destination.op,
+                        &enabled_options,
+                        SkinDrawState { elapsed_ms, gauge, ..SkinDrawState::default() },
+                    )
                     && eval_skin_draw_condition(
                         &destination.draw,
                         SkinDrawState { elapsed_ms, gauge, ..SkinDrawState::default() },
@@ -2327,8 +2347,18 @@ fn test_json_option_number(option: i32, enabled_options: &[i32]) -> bool {
     }
 }
 
-fn test_skin_ops(ops: &[i32], enabled_options: &[i32]) -> bool {
-    ops.iter().all(|op| test_json_option_number(*op, enabled_options))
+fn test_skin_ops(ops: &[i32], enabled_options: &[i32], state: SkinDrawState) -> bool {
+    ops.iter().all(|op| test_skin_op(*op, enabled_options, state))
+}
+
+fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool {
+    match op {
+        40 => false,
+        41 => true,
+        170 => !state.has_bga,
+        171 => state.has_bga,
+        value => test_json_option_number(value, enabled_options),
+    }
 }
 
 fn default_enabled_options(value: &JsonValue) -> Vec<i32> {
@@ -4075,6 +4105,98 @@ mod tests {
             panic!("expected Single destination");
         };
         assert_eq!(dst0.id, "200");
+    }
+
+    #[test]
+    fn bga_destination_renders_placeholder_only_when_chart_has_bga() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "bga": { "id": "bga" },
+                "destination": [
+                    { "id": "bga", "dst": [{ "x": 10, "y": 20, "w": 30, "h": 40, "a": 128 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        let no_bga_items = document.static_render_items(
+            &HashMap::new(),
+            SkinDrawState { has_bga: false, ..SkinDrawState::default() },
+            SkinTextState::default(),
+        );
+        let bga_items = document.static_render_items(
+            &HashMap::new(),
+            SkinDrawState { has_bga: true, ..SkinDrawState::default() },
+            SkinTextState::default(),
+        );
+
+        assert!(no_bga_items.is_empty());
+        assert!(matches!(
+            bga_items.as_slice(),
+            [SkinRenderItem::Rect {
+                rect: Rect { x, y, width, height },
+                color: Color { r: 0.0, g: 0.0, b: 0.0, a },
+                ..
+            }] if approx_eq(*x, 0.1)
+                && approx_eq(*y, 0.4)
+                && approx_eq(*width, 0.3)
+                && approx_eq(*height, 0.4)
+                && approx_eq(*a, 128.0 / 255.0)
+        ));
+    }
+
+    #[test]
+    fn song_bga_options_are_evaluated_from_draw_state() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": "src", "path": "dummy.png" }],
+                "image": [
+                    { "id": "no-bga", "src": "src", "x": 0, "y": 0, "w": 10, "h": 10 },
+                    { "id": "has-bga", "src": "src", "x": 0, "y": 0, "w": 10, "h": 10 }
+                ],
+                "destination": [
+                    { "id": "no-bga", "op": [170], "dst": [{ "x": 0, "y": 0, "w": 10, "h": 10 }] },
+                    { "id": "has-bga", "op": [171], "dst": [{ "x": 20, "y": 0, "w": 10, "h": 10 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "src".to_string(),
+            SkinDocumentTexture {
+                source_id: "src".to_string(),
+                texture: SkinTextureId(1),
+                source_size: SkinImageSize { width: 10.0, height: 10.0 },
+            },
+        )]);
+
+        let no_bga_items = document.static_image_render_items(
+            &sources,
+            SkinDrawState { has_bga: false, ..SkinDrawState::default() },
+        );
+        let bga_items = document.static_image_render_items(
+            &sources,
+            SkinDrawState { has_bga: true, ..SkinDrawState::default() },
+        );
+
+        assert!(matches!(
+            no_bga_items.as_slice(),
+            [SkinRenderItem::Image { rect: Rect { x, .. }, .. }] if approx_eq(*x, 0.0)
+        ));
+        assert!(matches!(
+            bga_items.as_slice(),
+            [SkinRenderItem::Image { rect: Rect { x, .. }, .. }] if approx_eq(*x, 0.2)
+        ));
     }
 
     #[test]

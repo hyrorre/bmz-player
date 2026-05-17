@@ -31,7 +31,10 @@ pub struct ChartMetadata {
     pub initial_bpm: f64,
     pub total: Option<f64>,
     pub stage_file: String,
+    pub banner_file: String,
+    pub backbmp_file: String,
     pub preview_file: String,
+    pub has_bga: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

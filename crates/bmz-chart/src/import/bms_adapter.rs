@@ -56,6 +56,9 @@ fn parse_bms_text(
         parse_command_line(body, &mut metadata, &mut resources, &mut lnobj_wav_key, warnings)?;
     }
 
+    metadata.has_bga =
+        objects.iter().any(|object| matches!(object.kind, IntermediateObjectKind::Bga { .. }));
+
     let measures = build_measures(max_measure, &measure_lengths);
 
     Ok(IntermediateChart {
@@ -91,6 +94,8 @@ fn parse_command_line(
         "DIFFICULTY" => metadata.difficulty_name = value.to_string(),
         "RANK" | "PLAYER" | "LNTYPE" | "LNMODE" => {}
         "STAGEFILE" => metadata.stage_file = value.to_string(),
+        "BANNER" => metadata.banner_file = value.to_string(),
+        "BACKBMP" => metadata.backbmp_file = value.to_string(),
         "PREVIEW" => metadata.preview_file = value.to_string(),
         "TOTAL" => metadata.total = value.parse::<f64>().ok(),
         "BPM" => {
@@ -262,6 +267,7 @@ fn object_kind_from_channel(
 ) -> Option<IntermediateObjectKind> {
     match channel {
         1 => Some(IntermediateObjectKind::Bgm { wav_key: parse_base36_key(token)? }),
+        4 | 6 | 7 => Some(IntermediateObjectKind::Bga { bmp_key: parse_base36_key(token)? }),
         3 => Some(IntermediateObjectKind::SetBpm { bpm: parse_hex_key(token)? as f64 }),
         8 => Some(IntermediateObjectKind::SetExtendedBpm { bpm_key: parse_base36_key(token)? }),
         9 => Some(IntermediateObjectKind::Stop { stop_key: parse_base36_key(token)? }),
@@ -439,6 +445,36 @@ mod tests {
             object.kind,
             IntermediateObjectKind::VisibleNote { lane: Lane::Key7, wav_key: Some(10) }
         )));
+    }
+
+    #[test]
+    fn parses_bms_media_metadata_and_bga_channels() {
+        let text = "\
+#STAGEFILE stage.png
+#BANNER banner.png
+#BACKBMP back.png
+#PREVIEW preview.ogg
+#BMP01 bga.png
+#00004:01
+";
+        let mut warnings = Vec::new();
+
+        let chart = parse_bms_text(text, &mut warnings).unwrap();
+
+        assert_eq!(chart.metadata.stage_file, "stage.png");
+        assert_eq!(chart.metadata.banner_file, "banner.png");
+        assert_eq!(chart.metadata.backbmp_file, "back.png");
+        assert_eq!(chart.metadata.preview_file, "preview.ogg");
+        assert!(
+            chart.objects.iter().any(|object| {
+                matches!(object.kind, IntermediateObjectKind::Bga { bmp_key: 1 })
+            })
+        );
+        assert!(
+            !warnings
+                .iter()
+                .any(|warning| matches!(warning, ImportWarning::UnsupportedChannel { channel: 4 }))
+        );
     }
 
     #[test]

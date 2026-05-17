@@ -28,7 +28,10 @@ pub struct IntermediateMetadata {
     pub initial_bpm: f64,
     pub total: Option<f64>,
     pub stage_file: String,
+    pub banner_file: String,
+    pub backbmp_file: String,
     pub preview_file: String,
+    pub has_bga: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -86,6 +89,7 @@ pub enum IntermediateObjectKind {
     InvisibleNote { lane: Lane, wav_key: Option<u16> },
     LongChannelNote { lane: Lane, wav_key: Option<u16> },
     Bgm { wav_key: u16 },
+    Bga { bmp_key: u16 },
     SetBpm { bpm: f64 },
     SetExtendedBpm { bpm_key: u16 },
     Stop { stop_key: u16 },

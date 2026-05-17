@@ -41,6 +41,7 @@ pub fn build_render_snapshot(
         now_bpm: current_bpm(&session.chart, render_now) as f32,
         min_bpm: chart_min_bpm(&session.chart) as f32,
         max_bpm: chart_max_bpm(&session.chart) as f32,
+        has_bga: session.chart.metadata.has_bga,
         best_ex_score,
         target_ex_score: None, // TODO: resolve from rival / target config
         judge_timing_offset_ms: (session.offsets.input_offset_us / 1_000) as i32,

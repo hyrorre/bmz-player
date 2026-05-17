@@ -109,7 +109,10 @@ fn normalize_metadata(input: &IntermediateMetadata) -> ChartMetadata {
         initial_bpm: input.initial_bpm,
         total: input.total,
         stage_file: input.stage_file.clone(),
+        banner_file: input.banner_file.clone(),
+        backbmp_file: input.backbmp_file.clone(),
         preview_file: input.preview_file.clone(),
+        has_bga: input.has_bga,
     }
 }
 
@@ -168,7 +171,8 @@ fn materialize_tick_objects(
                 Some(TickObjectKind::LongChannelNote { lane, wav_key })
             }
             IntermediateObjectKind::Bgm { wav_key } => Some(TickObjectKind::Bgm { wav_key }),
-            IntermediateObjectKind::SetBpm { .. }
+            IntermediateObjectKind::Bga { .. }
+            | IntermediateObjectKind::SetBpm { .. }
             | IntermediateObjectKind::SetExtendedBpm { .. }
             | IntermediateObjectKind::Stop { .. } => None,
         };

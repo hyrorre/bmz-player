@@ -27,6 +27,7 @@ pub struct RenderSnapshot {
     pub now_bpm: f32,
     pub min_bpm: f32,
     pub max_bpm: f32,
+    pub has_bga: bool,
     pub best_ex_score: Option<u32>,
     pub target_ex_score: Option<u32>,
     pub judge_timing_offset_ms: i32,

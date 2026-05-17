@@ -443,7 +443,7 @@ fn insert_chart(conn: &Connection, record: &ChartImportRecord<'_>) -> Result<i64
             has_mines, folder_path, stage_file, preview_file, import_version
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, '7K', ?10, ?11, ?12, ?13,
-            ?14, ?15, 0, ?16, ?17, ?18, ?19, ?20, ?21
+            ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22
         )",
         params![
             chart.identity.file_sha256.as_slice(),
@@ -461,6 +461,7 @@ fn insert_chart(conn: &Connection, record: &ChartImportRecord<'_>) -> Result<i64
             stats.max_bpm,
             chart.end_time.0 / 1_000,
             stats.ln_type,
+            chart.metadata.has_bga,
             stats.has_long_notes,
             stats.has_mines,
             folder_path(record.file_path),
@@ -480,9 +481,10 @@ fn update_chart(conn: &Connection, chart_id: i64, record: &ChartImportRecord<'_>
             sha256 = ?1, md5 = ?2, title = ?3, subtitle = ?4, artist = ?5,
             subartist = ?6, genre = ?7, difficulty_name = ?8, play_level = ?9,
             total_notes = ?10, initial_bpm = ?11, min_bpm = ?12, max_bpm = ?13,
-            length_ms = ?14, ln_type = ?15, has_long_notes = ?16, has_mines = ?17,
-            folder_path = ?18, stage_file = ?19, preview_file = ?20, import_version = ?21
-         WHERE id = ?22",
+            length_ms = ?14, ln_type = ?15, has_bga = ?16, has_long_notes = ?17,
+            has_mines = ?18, folder_path = ?19, stage_file = ?20, preview_file = ?21,
+            import_version = ?22
+         WHERE id = ?23",
         params![
             chart.identity.file_sha256.as_slice(),
             chart.identity.file_md5.as_slice(),
@@ -499,6 +501,7 @@ fn update_chart(conn: &Connection, chart_id: i64, record: &ChartImportRecord<'_>
             stats.max_bpm,
             chart.end_time.0 / 1_000,
             stats.ln_type,
+            chart.metadata.has_bga,
             stats.has_long_notes,
             stats.has_mines,
             folder_path(record.file_path),
@@ -645,7 +648,8 @@ mod tests {
         configure_connection(&conn).unwrap();
         run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
         let mut db = LibraryDatabase { conn };
-        let chart = chart("song");
+        let mut chart = chart("song");
+        chart.metadata.has_bga = true;
         let record = ChartImportRecord {
             root_id: None,
             file_path: Path::new("/songs/song.bms"),
@@ -658,15 +662,31 @@ mod tests {
         let chart_id = db.upsert_chart_import(&record).unwrap();
 
         assert_eq!(db.chart_id_by_sha256(chart.identity.file_sha256).unwrap(), Some(chart_id));
-        let (path, parse_status, title, mode, ln_type): (String, String, String, String, String) =
+        let (path, parse_status, title, mode, ln_type, has_bga): (
+            String,
+            String,
+            String,
+            String,
+            String,
+            bool,
+        ) =
             db.conn()
                 .query_row(
-                    "SELECT chart_files.path, chart_files.parse_status, charts.title, charts.mode, charts.ln_type
+                    "SELECT chart_files.path, chart_files.parse_status, charts.title, charts.mode, charts.ln_type, charts.has_bga
                     FROM chart_file_links
                     JOIN chart_files ON chart_files.id = chart_file_links.chart_file_id
                     JOIN charts ON charts.id = chart_file_links.chart_id",
                     [],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+                    |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                            row.get(5)?,
+                        ))
+                    },
                 )
                 .unwrap();
 
@@ -675,6 +695,7 @@ mod tests {
         assert_eq!(title, "song");
         assert_eq!(mode, "7K");
         assert_eq!(ln_type, "");
+        assert!(has_bga);
     }
 
     #[test]
