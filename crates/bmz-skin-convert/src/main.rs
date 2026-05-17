@@ -490,7 +490,10 @@ fn lua_key_to_json_key(key: Value, path: &str, warnings: &mut Vec<String>) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    static TEST_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     #[test]
     fn cli_parses_lua_to_json_options() {
@@ -570,6 +573,7 @@ mod tests {
 
     fn unique_test_dir(name: &str) -> PathBuf {
         let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        std::env::temp_dir().join(format!("{name}-{nanos}"))
+        let counter = TEST_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!("{name}-{nanos}-{counter}"))
     }
 }
