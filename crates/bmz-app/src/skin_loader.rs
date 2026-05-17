@@ -79,7 +79,14 @@ pub fn apply_beatoraja_json_skin(renderer: &mut Renderer, skin_path: &Path) -> R
         if font.id.is_empty() || font.path.is_empty() {
             continue;
         }
-        let font_path = skin_root.join(font.path.replace('\\', "/"));
+        let Some(font_path) = resolve_json_skin_asset_path(skin_root, &font.path, &document) else {
+            tracing::debug!(
+                font_id = %font.id,
+                path = %font.path,
+                "skipping unresolved beatoraja skin font"
+            );
+            continue;
+        };
         if !is_supported_font_path(&font_path) {
             tracing::debug!(
                 font_id = %font.id,
@@ -193,7 +200,15 @@ fn resolve_json_skin_source_path(
     source_path: &str,
     document: &SkinDocument,
 ) -> Option<PathBuf> {
-    let normalized = source_path.replace('\\', "/");
+    resolve_json_skin_asset_path(skin_root, source_path, document)
+}
+
+fn resolve_json_skin_asset_path(
+    skin_root: &Path,
+    asset_path: &str,
+    document: &SkinDocument,
+) -> Option<PathBuf> {
+    let normalized = asset_path.replace('\\', "/");
     if !normalized.contains('*') {
         return Some(skin_root.join(normalized));
     }
@@ -217,6 +232,11 @@ fn resolve_wildcard_path(
     let slash = prefix.rfind('/').map(|index| index + 1).unwrap_or(0);
     let (directory, filename_prefix) = prefix.split_at(slash);
     let directory = skin_root.join(directory);
+
+    if let Some(suffix) = suffix.strip_prefix('/') {
+        return resolve_wildcard_directory_path(&directory, filename_prefix, suffix, preferred);
+    }
+
     let mut candidates = std::fs::read_dir(directory)
         .ok()?
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))
@@ -235,6 +255,40 @@ fn resolve_wildcard_path(
             let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
             let stem = path.file_stem().and_then(|name| name.to_str()).unwrap_or_default();
             file_name == preferred || stem == preferred
+        })
+    {
+        return Some(candidate.clone());
+    }
+
+    candidates.into_iter().next()
+}
+
+fn resolve_wildcard_directory_path(
+    directory: &Path,
+    directory_prefix: &str,
+    suffix: &str,
+    preferred: Option<&str>,
+) -> Option<PathBuf> {
+    let mut candidates = std::fs::read_dir(directory)
+        .ok()?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.is_dir())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(directory_prefix))
+        })
+        .map(|path| path.join(suffix))
+        .filter(|path| path.is_file())
+        .collect::<Vec<_>>();
+    candidates.sort();
+
+    if let Some(preferred) = preferred
+        && let Some(candidate) = candidates.iter().find(|path| {
+            path.parent()
+                .and_then(|parent| parent.file_name())
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name == preferred)
         })
     {
         return Some(candidate.clone());
@@ -324,6 +378,19 @@ mod tests {
         let resolved = resolve_json_skin_source_path(&root, "parts/*.png", &document).unwrap();
 
         assert_eq!(resolved.file_name().and_then(|name| name.to_str()), Some("a.png"));
+    }
+
+    #[test]
+    fn wildcard_skin_font_resolves_nested_file() {
+        let root = unique_test_dir("bmz-json-font");
+        std::fs::create_dir_all(root.join("frame/SP/Default")).unwrap();
+        std::fs::write(root.join("frame/SP/Default/song.fnt"), []).unwrap();
+        let document: SkinDocument = serde_json::from_str("{}").unwrap();
+
+        let resolved =
+            resolve_json_skin_asset_path(&root, "frame/SP/*/song.fnt", &document).unwrap();
+
+        assert_eq!(resolved.strip_prefix(&root).unwrap(), Path::new("frame/SP/Default/song.fnt"));
     }
 
     #[test]
