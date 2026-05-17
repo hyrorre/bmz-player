@@ -14,6 +14,7 @@ use bmz_render::snapshot::{
 };
 
 pub const DEFAULT_LOOKAHEAD_US: i64 = 2_000_000;
+pub const DEFAULT_POOR_BGA_DURATION_US: i64 = 500_000;
 pub type BgaFrameCatalog = HashMap<BgaAssetId, DisplayBgaFrame>;
 
 pub fn build_render_snapshot(
@@ -64,6 +65,7 @@ pub fn build_render_snapshot_with_bga_frames(
         has_bga: session.chart.metadata.has_bga,
         bga_base: current_bga_frame(&session.chart, render_now, BgaEventKind::Base, bga_frames),
         bga_layer: current_bga_frame(&session.chart, render_now, BgaEventKind::Layer, bga_frames),
+        bga_poor: current_poor_bga_frame(&session.chart, render_now, recent_judgements, bga_frames),
         best_ex_score,
         target_ex_score: None, // TODO: resolve from rival / target config
         judge_timing_offset_ms: (session.offsets.input_offset_us / 1_000) as i32,
@@ -115,6 +117,20 @@ pub fn build_render_snapshot_with_bga_frames(
     }
 
     snapshot
+}
+
+fn current_poor_bga_frame(
+    chart: &PlayableChart,
+    render_now: TimeUs,
+    recent_judgements: &[JudgementEvent],
+    bga_frames: &BgaFrameCatalog,
+) -> Option<DisplayBgaFrame> {
+    let judgement = recent_judgements.iter().rev().find(|event| {
+        matches!(event.judge, Judge::Bad | Judge::Poor)
+            && render_now.0 >= event.time.0
+            && render_now.0 < event.time.0 + DEFAULT_POOR_BGA_DURATION_US
+    })?;
+    current_bga_frame(chart, judgement.time, BgaEventKind::Poor, bga_frames)
 }
 
 fn current_bga_frame(
@@ -471,6 +487,7 @@ mod tests {
             BgaAssetRef { id: BgaAssetId(0), path: "base-a.png".into() },
             BgaAssetRef { id: BgaAssetId(1), path: "base-b.png".into() },
             BgaAssetRef { id: BgaAssetId(2), path: "layer.png".into() },
+            BgaAssetRef { id: BgaAssetId(3), path: "poor.png".into() },
         ];
         chart.bga_events = vec![
             BgaEvent {
@@ -491,13 +508,28 @@ mod tests {
                 asset: BgaAssetId(2),
                 kind: BgaEventKind::Layer,
             },
+            BgaEvent {
+                tick: ChartTick(0),
+                time: TimeUs(300_000),
+                asset: BgaAssetId(3),
+                kind: BgaEventKind::Poor,
+            },
         ];
         let session = build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
         let bga_frames = BgaFrameCatalog::from([
             (BgaAssetId(0), display_bga_frame(BgaAssetId(0), 256, 256)),
             (BgaAssetId(1), display_bga_frame(BgaAssetId(1), 640, 480)),
             (BgaAssetId(2), display_bga_frame(BgaAssetId(2), 1280, 720)),
+            (BgaAssetId(3), display_bga_frame(BgaAssetId(3), 320, 240)),
         ]);
+        let poor_judgements = [JudgementEvent {
+            note_id: Some(NoteId(1)),
+            lane: Lane::Key1,
+            judge: Judge::Poor,
+            side: TimingSide::Slow,
+            delta: TimeUs(0),
+            time: TimeUs(400_000),
+        }];
 
         let early = build_render_snapshot_with_bga_frames(
             &session,
@@ -513,6 +545,20 @@ mod tests {
             None,
             &bga_frames,
         );
+        let poor_active = build_render_snapshot_with_bga_frames(
+            &session,
+            TimeUs(600_000),
+            &poor_judgements,
+            None,
+            &bga_frames,
+        );
+        let poor_expired = build_render_snapshot_with_bga_frames(
+            &session,
+            TimeUs(901_000),
+            &poor_judgements,
+            None,
+            &bga_frames,
+        );
 
         assert_eq!(early.bga_base.unwrap().texture_id, bga_texture_id(BgaAssetId(0)));
         assert!(early.bga_layer.is_none());
@@ -525,6 +571,15 @@ mod tests {
             }
         );
         assert_eq!(late.bga_layer.unwrap().texture_id, bga_texture_id(BgaAssetId(2)));
+        assert_eq!(
+            poor_active.bga_poor.unwrap(),
+            DisplayBgaFrame {
+                texture_id: bga_texture_id(BgaAssetId(3)),
+                width: 320.0,
+                height: 240.0
+            }
+        );
+        assert!(poor_expired.bga_poor.is_none());
     }
 
     #[test]

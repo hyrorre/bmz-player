@@ -807,6 +807,8 @@ pub struct SkinDrawState {
     pub bga_base: Option<SkinBgaFrame>,
     /// 現在表示するBGAレイヤー画像。
     pub bga_layer: Option<SkinBgaFrame>,
+    /// 直近のBAD/POORで一時表示するミスレイヤー画像。
+    pub bga_poor: Option<SkinBgaFrame>,
     /// 最後の判定のタイミングずれ ms (VALUE_JUDGE_1P_DURATION=525 に使用)。Noneなら非表示。
     pub judge_timing_ms: Option<i32>,
     /// 過去ベストスコアのexスコア (NUMBER_HIGHSCORE=150, BARGRAPH_BESTSCORERATE=113 に使用)。
@@ -1261,47 +1263,42 @@ impl SkinDocument {
                 let blend = if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal };
                 let tint = Color::rgba(1.0, 1.0, 1.0, frame.a as f32 / 255.0);
                 let mut items = Vec::new();
-                if let Some(bga) = state.bga_base {
-                    let (rect, uv) = stretch_skin_image_geometry(
+                if let Some(bga) = state.bga_poor {
+                    items.push(bga_image_item(
+                        bga,
                         destination.stretch,
                         rect,
-                        TextureRegion::default(),
-                        bga.source_size,
-                        self.w,
-                        self.h,
-                    );
-                    items.push(SkinRenderItem::Image {
-                        texture: bga.texture,
-                        rect,
-                        uv,
                         tint,
                         blend,
-                        scale: SkinImageScale::Stretch,
-                        border: None,
-                        source_size: Some(bga.source_size),
-                        linear_filter: destination.filter != 0,
-                    });
+                        self.w,
+                        self.h,
+                        destination.filter != 0,
+                    ));
+                } else if let Some(bga) = state.bga_base {
+                    items.push(bga_image_item(
+                        bga,
+                        destination.stretch,
+                        rect,
+                        tint,
+                        blend,
+                        self.w,
+                        self.h,
+                        destination.filter != 0,
+                    ));
                 }
-                if let Some(bga) = state.bga_layer {
-                    let (rect, uv) = stretch_skin_image_geometry(
+                if state.bga_poor.is_none()
+                    && let Some(bga) = state.bga_layer
+                {
+                    items.push(bga_image_item(
+                        bga,
                         destination.stretch,
                         rect,
-                        TextureRegion::default(),
-                        bga.source_size,
-                        self.w,
-                        self.h,
-                    );
-                    items.push(SkinRenderItem::Image {
-                        texture: bga.texture,
-                        rect,
-                        uv,
                         tint,
                         blend,
-                        scale: SkinImageScale::Stretch,
-                        border: None,
-                        source_size: Some(bga.source_size),
-                        linear_filter: destination.filter != 0,
-                    });
+                        self.w,
+                        self.h,
+                        destination.filter != 0,
+                    ));
                 }
                 if items.is_empty() {
                     items.push(SkinRenderItem::Rect {
@@ -3410,6 +3407,37 @@ fn normalize_skin_frame_rect(
     }
 }
 
+fn bga_image_item(
+    bga: SkinBgaFrame,
+    stretch: i32,
+    rect: Rect,
+    tint: Color,
+    blend: BlendMode,
+    canvas_width: u32,
+    canvas_height: u32,
+    linear_filter: bool,
+) -> SkinRenderItem {
+    let (rect, uv) = stretch_skin_image_geometry(
+        stretch,
+        rect,
+        TextureRegion::default(),
+        bga.source_size,
+        canvas_width,
+        canvas_height,
+    );
+    SkinRenderItem::Image {
+        texture: bga.texture,
+        rect,
+        uv,
+        tint,
+        blend,
+        scale: SkinImageScale::Stretch,
+        border: None,
+        source_size: Some(bga.source_size),
+        linear_filter,
+    }
+}
+
 fn stretch_skin_image_geometry(
     stretch: i32,
     rect: Rect,
@@ -4303,6 +4331,50 @@ mod tests {
                 && approx_eq(*width, 0.3)
                 && approx_eq(*height, 0.15)
                 && approx_eq(*a, 128.0 / 255.0)
+        ));
+    }
+
+    #[test]
+    fn bga_destination_renders_poor_bga_instead_of_base_and_layer() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "bga": { "id": "bga" },
+                "destination": [
+                    { "id": "bga", "dst": [{ "x": 10, "y": 20, "w": 30, "h": 40 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        let items = document.static_render_items(
+            &HashMap::new(),
+            SkinDrawState {
+                has_bga: true,
+                bga_base: Some(SkinBgaFrame {
+                    texture: SkinTextureId(20000),
+                    source_size: SkinImageSize { width: 256.0, height: 256.0 },
+                }),
+                bga_layer: Some(SkinBgaFrame {
+                    texture: SkinTextureId(20001),
+                    source_size: SkinImageSize { width: 256.0, height: 256.0 },
+                }),
+                bga_poor: Some(SkinBgaFrame {
+                    texture: SkinTextureId(20002),
+                    source_size: SkinImageSize { width: 256.0, height: 256.0 },
+                }),
+                ..SkinDrawState::default()
+            },
+            SkinTextState::default(),
+        );
+
+        assert!(matches!(
+            items.as_slice(),
+            [SkinRenderItem::Image { texture: SkinTextureId(20002), .. }]
         ));
     }
 
