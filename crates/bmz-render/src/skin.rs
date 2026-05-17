@@ -747,6 +747,12 @@ pub struct SkinDocumentTexture {
     pub source_size: SkinImageSize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SkinBgaFrame {
+    pub texture: SkinTextureId,
+    pub source_size: SkinImageSize,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct SkinDrawState {
     pub elapsed_ms: i32,
@@ -797,6 +803,10 @@ pub struct SkinDrawState {
     pub max_bpm: f32,
     /// 現在の曲にBGAイベントが含まれるかどうか (OPTION_NO_BGA=170 / OPTION_BGA=171)。
     pub has_bga: bool,
+    /// 現在表示するBGA本体画像。
+    pub bga_base: Option<SkinBgaFrame>,
+    /// 現在表示するBGAレイヤー画像。
+    pub bga_layer: Option<SkinBgaFrame>,
     /// 最後の判定のタイミングずれ ms (VALUE_JUDGE_1P_DURATION=525 に使用)。Noneなら非表示。
     pub judge_timing_ms: Option<i32>,
     /// 過去ベストスコアのexスコア (NUMBER_HIGHSCORE=150, BARGRAPH_BESTSCORERATE=113 に使用)。
@@ -1205,130 +1215,148 @@ impl SkinDocument {
         text_state: SkinTextState<'_>,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<Vec<SkinRenderItem>> {
-        {
-                if self.judge.iter().any(|judge| judge.id == destination.id) {
-                    let judge_index = state.judge_index?;
-                    let elapsed = state.judge_ms?;
-                    return self.judge_render_items_for_index(
-                        judge_index,
-                        state.combo,
-                        elapsed,
-                        sources,
-                        state.offset_lift_px,
-                        state.offset_lanecover_px,
-                    );
-                }
+        if self.judge.iter().any(|judge| judge.id == destination.id) {
+            let judge_index = state.judge_index?;
+            let elapsed = state.judge_ms?;
+            return self.judge_render_items_for_index(
+                judge_index,
+                state.combo,
+                elapsed,
+                sources,
+                state.offset_lift_px,
+                state.offset_lanecover_px,
+            );
+        }
 
-                let elapsed = skin_timer_elapsed_ms(destination.timer, state)?;
-                let mut frame = resolve_destination_frame(destination, elapsed, enabled_options)?;
-                let is_hidden_cover_destination =
-                    self.hidden_cover.iter().any(|cover| cover.id == destination.id);
-                apply_skin_offset_to_frame(
-                    destination,
-                    &mut frame,
-                    state,
-                    is_hidden_cover_destination,
-                );
-                if let Some(image) = images.get(destination.id.as_str()) {
-                    let source = sources.get(&image.src)?;
-                    let (rect, uv) = stretch_skin_image_geometry(
-                        destination.stretch,
-                        normalize_skin_frame_rect(frame, self.w, self.h),
-                        skin_image_texture_region(image, source.source_size, elapsed),
-                        source.source_size,
-                        self.w,
-                        self.h,
-                    );
-                    return Some(vec![skin_image_item_for_frame(
-                        source.texture,
+        let elapsed = skin_timer_elapsed_ms(destination.timer, state)?;
+        let mut frame = resolve_destination_frame(destination, elapsed, enabled_options)?;
+        let is_hidden_cover_destination =
+            self.hidden_cover.iter().any(|cover| cover.id == destination.id);
+        apply_skin_offset_to_frame(destination, &mut frame, state, is_hidden_cover_destination);
+        if let Some(image) = images.get(destination.id.as_str()) {
+            let source = sources.get(&image.src)?;
+            let (rect, uv) = stretch_skin_image_geometry(
+                destination.stretch,
+                normalize_skin_frame_rect(frame, self.w, self.h),
+                skin_image_texture_region(image, source.source_size, elapsed),
+                source.source_size,
+                self.w,
+                self.h,
+            );
+            return Some(vec![skin_image_item_for_frame(
+                source.texture,
+                rect,
+                uv,
+                frame,
+                destination.center,
+                if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal },
+                Some(source.source_size),
+                destination.filter != 0,
+            )]);
+        }
+
+        if self.bga.as_ref().is_some_and(|bga| bga.id == destination.id) {
+            return state.has_bga.then(|| {
+                let rect = normalize_skin_frame_rect(frame, self.w, self.h);
+                let blend = if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal };
+                let tint = Color::rgba(1.0, 1.0, 1.0, frame.a as f32 / 255.0);
+                let mut items = Vec::new();
+                if let Some(bga) = state.bga_base {
+                    items.push(SkinRenderItem::Image {
+                        texture: bga.texture,
                         rect,
-                        uv,
-                        frame,
-                        destination.center,
-                        if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal },
-                        Some(source.source_size),
-                        destination.filter != 0,
-                    )]);
-                }
-
-                if self.bga.as_ref().is_some_and(|bga| bga.id == destination.id) {
-                    return state.has_bga.then(|| {
-                        vec![SkinRenderItem::Rect {
-                            rect: normalize_skin_frame_rect(frame, self.w, self.h),
-                            color: Color::rgba(0.0, 0.0, 0.0, frame.a as f32 / 255.0),
-                            blend: if destination.blend == 2 {
-                                BlendMode::Add
-                            } else {
-                                BlendMode::Normal
-                            },
-                        }]
+                        uv: TextureRegion::default(),
+                        tint,
+                        blend,
+                        scale: SkinImageScale::Stretch,
+                        border: None,
+                        source_size: Some(bga.source_size),
+                        linear_filter: destination.filter != 0,
                     });
                 }
-
-                // imageset (キービーム・ボム等) を destination 自身のタイマー駆動で描画する。
-                // timer が非アクティブな destination は上の skin_timer_elapsed_ms で除外済み。
-                if let Some(imageset) = self.imageset.iter().find(|set| set.id == destination.id) {
-                    let judge_index = imageset_ref_lane(imageset.ref_id)
-                        .and_then(|lane| state.lane_judge[lane.index()]);
-                    let image_id = imageset_image_for_index(imageset, judge_index)?;
-                    let image = images.get(image_id.as_str())?;
-                    let source = sources.get(&image.src)?;
-                    let (rect, uv) = stretch_skin_image_geometry(
-                        destination.stretch,
-                        normalize_skin_frame_rect(frame, self.w, self.h),
-                        skin_image_texture_region(image, source.source_size, elapsed),
-                        source.source_size,
-                        self.w,
-                        self.h,
-                    );
-                    return Some(vec![skin_image_item_for_frame(
-                        source.texture,
+                if let Some(bga) = state.bga_layer {
+                    items.push(SkinRenderItem::Image {
+                        texture: bga.texture,
                         rect,
-                        uv,
-                        frame,
-                        destination.center,
-                        if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal },
-                        Some(source.source_size),
-                        destination.filter != 0,
-                    )]);
+                        uv: TextureRegion::default(),
+                        tint,
+                        blend,
+                        scale: SkinImageScale::Stretch,
+                        border: None,
+                        source_size: Some(bga.source_size),
+                        linear_filter: destination.filter != 0,
+                    });
                 }
-
-                if let Some(value) = self.value.iter().find(|value| value.id == destination.id) {
-                    let number = skin_state_number(value.ref_id, state)?;
-                    return Some(self.value_number_render_items(
-                        &value.id,
-                        number,
-                        ResolvedSkinFrame::default(),
-                        frame,
-                        sources,
-                        false,
-                    ));
+                if items.is_empty() {
+                    items.push(SkinRenderItem::Rect {
+                        rect,
+                        color: Color::rgba(0.0, 0.0, 0.0, frame.a as f32 / 255.0),
+                        blend,
+                    });
                 }
-
-                if let Some(text) = self.text.iter().find(|text| text.id == destination.id)
-                    && let Some(item) = self.text_render_item(text, frame, text_state)
-                {
-                    return Some(vec![item]);
-                }
-
-                if let Some(slider) = self.slider.iter().find(|slider| slider.id == destination.id)
-                    && let Some(item) =
-                        self.slider_render_item(slider, destination, frame, state, sources)
-                {
-                    return Some(vec![item]);
-                }
-
-                if let Some(graph) = self.graph.iter().find(|g| g.id == destination.id) {
-                    return self
-                        .graph_render_item(graph, frame, state, sources)
-                        .map(|item| vec![item]);
-                }
-
-                let hidden_cover =
-                    self.hidden_cover.iter().find(|cover| cover.id == destination.id)?;
-                self.hidden_cover_render_item(hidden_cover, destination, frame, state, sources)
-                    .map(|item| vec![item])
+                items
+            });
         }
+
+        // imageset (キービーム・ボム等) を destination 自身のタイマー駆動で描画する。
+        // timer が非アクティブな destination は上の skin_timer_elapsed_ms で除外済み。
+        if let Some(imageset) = self.imageset.iter().find(|set| set.id == destination.id) {
+            let judge_index =
+                imageset_ref_lane(imageset.ref_id).and_then(|lane| state.lane_judge[lane.index()]);
+            let image_id = imageset_image_for_index(imageset, judge_index)?;
+            let image = images.get(image_id.as_str())?;
+            let source = sources.get(&image.src)?;
+            let (rect, uv) = stretch_skin_image_geometry(
+                destination.stretch,
+                normalize_skin_frame_rect(frame, self.w, self.h),
+                skin_image_texture_region(image, source.source_size, elapsed),
+                source.source_size,
+                self.w,
+                self.h,
+            );
+            return Some(vec![skin_image_item_for_frame(
+                source.texture,
+                rect,
+                uv,
+                frame,
+                destination.center,
+                if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal },
+                Some(source.source_size),
+                destination.filter != 0,
+            )]);
+        }
+
+        if let Some(value) = self.value.iter().find(|value| value.id == destination.id) {
+            let number = skin_state_number(value.ref_id, state)?;
+            return Some(self.value_number_render_items(
+                &value.id,
+                number,
+                ResolvedSkinFrame::default(),
+                frame,
+                sources,
+                false,
+            ));
+        }
+
+        if let Some(text) = self.text.iter().find(|text| text.id == destination.id)
+            && let Some(item) = self.text_render_item(text, frame, text_state)
+        {
+            return Some(vec![item]);
+        }
+
+        if let Some(slider) = self.slider.iter().find(|slider| slider.id == destination.id)
+            && let Some(item) = self.slider_render_item(slider, destination, frame, state, sources)
+        {
+            return Some(vec![item]);
+        }
+
+        if let Some(graph) = self.graph.iter().find(|g| g.id == destination.id) {
+            return self.graph_render_item(graph, frame, state, sources).map(|item| vec![item]);
+        }
+
+        let hidden_cover = self.hidden_cover.iter().find(|cover| cover.id == destination.id)?;
+        self.hidden_cover_render_item(hidden_cover, destination, frame, state, sources)
+            .map(|item| vec![item])
     }
 
     pub fn enabled_options(&self) -> Vec<i32> {
@@ -4207,6 +4235,49 @@ mod tests {
                 && approx_eq(*width, 0.3)
                 && approx_eq(*height, 0.4)
                 && approx_eq(*a, 128.0 / 255.0)
+        ));
+    }
+
+    #[test]
+    fn bga_destination_renders_current_bga_images() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "bga": { "id": "bga" },
+                "destination": [
+                    { "id": "bga", "dst": [{ "x": 10, "y": 20, "w": 30, "h": 40, "a": 128 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        let items = document.static_render_items(
+            &HashMap::new(),
+            SkinDrawState {
+                has_bga: true,
+                bga_base: Some(SkinBgaFrame {
+                    texture: SkinTextureId(20000),
+                    source_size: SkinImageSize { width: 256.0, height: 256.0 },
+                }),
+                bga_layer: Some(SkinBgaFrame {
+                    texture: SkinTextureId(20001),
+                    source_size: SkinImageSize { width: 256.0, height: 256.0 },
+                }),
+                ..SkinDrawState::default()
+            },
+            SkinTextState::default(),
+        );
+
+        assert!(matches!(
+            items.as_slice(),
+            [
+                SkinRenderItem::Image { texture: SkinTextureId(20000), tint: Color { a, .. }, .. },
+                SkinRenderItem::Image { texture: SkinTextureId(20001), .. },
+            ] if approx_eq(*a, 128.0 / 255.0)
         ));
     }
 

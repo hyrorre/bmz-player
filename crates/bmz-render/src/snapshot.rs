@@ -28,6 +28,8 @@ pub struct RenderSnapshot {
     pub min_bpm: f32,
     pub max_bpm: f32,
     pub has_bga: bool,
+    pub bga_base: Option<DisplayBgaFrame>,
+    pub bga_layer: Option<DisplayBgaFrame>,
     pub best_ex_score: Option<u32>,
     pub target_ex_score: Option<u32>,
     pub judge_timing_offset_ms: i32,
@@ -87,4 +89,11 @@ pub struct DisplayInput {
 pub struct VisibleBarLine {
     pub time: TimeUs,
     pub y: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DisplayBgaFrame {
+    pub texture_id: u32,
+    pub width: f32,
+    pub height: f32,
 }

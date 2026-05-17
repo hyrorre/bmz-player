@@ -2,6 +2,9 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
+use bmz_chart::model::PlayableChart;
+use bmz_render::assets::load_png_rgba;
+use bmz_render::plan::TextureId;
 use bmz_render::renderer::{RenderSurfaceStatus, Renderer, SurfaceSize};
 use bmz_render::sample::{sample_play_scene, sample_result_scene, sample_select_scene};
 use bmz_render::scene::{AppSceneSnapshot, ResultSnapshot, SelectRowSnapshot, SelectSnapshot};
@@ -27,6 +30,7 @@ use crate::config::save::save_profile_config;
 use crate::input::winit::physical_key_to_control;
 use crate::screens::play_finish::FinishedPlaySession;
 use crate::screens::play_loop::{PlayAdvanceOutcome, advance_running_play_session_until_result};
+use crate::screens::play_snapshot::bga_texture_id;
 use crate::screens::play_start::{PlayStartOptions, StartedWinitPlaySession};
 use crate::screens::result_model::ResultSummary;
 use crate::screens::select_model::{SelectItem, load_select_items_in_folder, root_folder_items};
@@ -363,6 +367,7 @@ impl WinitApp {
     fn start_chart(&mut self, chart_id: i64) {
         match self.boot.start_play_for_chart_with_winit_input(chart_id, self.play_start_options()) {
             Ok(active_play) => {
+                load_chart_bga_textures(&mut self.renderer, &active_play.running.session.chart);
                 self.active_play = Some(active_play);
                 self.finished_play = None;
                 self.last_play_snapshot = None;
@@ -587,6 +592,54 @@ fn load_play_skin_textures(renderer: &mut Renderer, play_skin_path: &str) {
             error = %format_error_chain(&error),
             "failed to apply play skin; using fallback textures"
         );
+    }
+}
+
+fn load_chart_bga_textures(renderer: &mut Renderer, chart: &PlayableChart) {
+    for asset in &chart.bga_assets {
+        let path = &asset.path;
+        if !path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("png"))
+        {
+            tracing::debug!(
+                asset_id = asset.id.0,
+                path = %path.display(),
+                "skipping unsupported BGA image"
+            );
+            continue;
+        }
+
+        match load_png_rgba(path) {
+            Ok(image) => {
+                let texture_id = TextureId(bga_texture_id(asset.id));
+                if let Err(error) = renderer.upsert_image_asset(texture_id, &image) {
+                    tracing::warn!(
+                        asset_id = asset.id.0,
+                        texture_id = texture_id.0,
+                        path = %path.display(),
+                        %error,
+                        "failed to upload BGA image"
+                    );
+                } else {
+                    tracing::info!(
+                        asset_id = asset.id.0,
+                        texture_id = texture_id.0,
+                        path = %path.display(),
+                        "loaded BGA image"
+                    );
+                }
+            }
+            Err(error) => {
+                tracing::debug!(
+                    asset_id = asset.id.0,
+                    path = %path.display(),
+                    %error,
+                    "skipping unreadable BGA image"
+                );
+            }
+        }
     }
 }
 

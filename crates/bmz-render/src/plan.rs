@@ -25,6 +25,7 @@ pub const DEFAULT_GAUGE_FRAME_TEXTURE: TextureId = TextureId(8);
 pub const DEFAULT_GAUGE_FILL_TEXTURE: TextureId = TextureId(9);
 pub const DEFAULT_COMBO_PANEL_TEXTURE: TextureId = TextureId(10);
 pub const DEFAULT_COMBO_PANEL_INACTIVE_TEXTURE: TextureId = TextureId(11);
+pub const CHART_BGA_TEXTURE_BASE: u32 = 20_000;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DrawPlan {
@@ -450,57 +451,64 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
         .map(|j| (j.delta_us / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32);
 
     let skin_state = crate::skin::SkinDrawState {
-                elapsed_ms: (snapshot.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64)
-                    as i32,
-                combo: snapshot.combo,
-                max_combo: snapshot.max_combo,
-                ex_score: snapshot.ex_score,
-                total_notes: snapshot.total_notes,
-                past_notes: snapshot.past_notes,
-                judge_counts: snapshot.judge_counts,
-                gauge: snapshot.gauge,
-                play_progress: play_progress(snapshot),
-                end_of_note: end_of_note(snapshot),
-                bomb_ms,
-                keyon_ms,
-                lane_judge,
-                judge_ms,
-                judge_index,
-                offset_lift_px: {
-                    let canvas_h = skin.document().map_or(720, |d| d.h) as f32;
-                    (snapshot.lift * canvas_h).round() as i32
-                },
-                offset_lanecover_px: {
-                    let canvas_h = skin.document().map_or(720, |d| d.h) as f32;
-                    ((snapshot.lift - 1.0) * canvas_h * snapshot.lane_cover).round() as i32
-                },
-                offset_hidden_cover_px: {
-                    let canvas_h = skin.document().map_or(720, |d| d.h) as f32;
-                    let lane_h = skin
-                        .document()
-                        .and_then(|document| {
-                            let enabled_options = document.enabled_options();
-                            document.note_lane_area(Lane::Key1, &enabled_options)
-                        })
-                        .map_or(canvas_h, |rect| rect.height * canvas_h);
-                    ((1.0 - snapshot.lift) * snapshot.hidden_cover * lane_h).round() as i32
-                },
-                skin_offsets: snapshot.skin_offsets,
-                hispeed: snapshot.hispeed,
-                timeleft_ms: (snapshot.duration.0.saturating_sub(snapshot.time.0) / 1_000)
-                    .saturating_add(1_000)
-                    .clamp(0, i32::MAX as i64) as i32,
-                total_duration_ms: (snapshot.duration.0 / 1_000).clamp(0, i32::MAX as i64) as i32,
-                lane_cover: snapshot.lane_cover,
-                hidden_cover: snapshot.hidden_cover,
-                now_bpm: snapshot.now_bpm,
-                min_bpm: snapshot.min_bpm,
-                max_bpm: snapshot.max_bpm,
-                has_bga: snapshot.has_bga,
-                judge_timing_ms,
-                best_ex_score: snapshot.best_ex_score,
-                target_ex_score: snapshot.target_ex_score,
-                judge_timing_offset_ms: snapshot.judge_timing_offset_ms,
+        elapsed_ms: (snapshot.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+        combo: snapshot.combo,
+        max_combo: snapshot.max_combo,
+        ex_score: snapshot.ex_score,
+        total_notes: snapshot.total_notes,
+        past_notes: snapshot.past_notes,
+        judge_counts: snapshot.judge_counts,
+        gauge: snapshot.gauge,
+        play_progress: play_progress(snapshot),
+        end_of_note: end_of_note(snapshot),
+        bomb_ms,
+        keyon_ms,
+        lane_judge,
+        judge_ms,
+        judge_index,
+        offset_lift_px: {
+            let canvas_h = skin.document().map_or(720, |d| d.h) as f32;
+            (snapshot.lift * canvas_h).round() as i32
+        },
+        offset_lanecover_px: {
+            let canvas_h = skin.document().map_or(720, |d| d.h) as f32;
+            ((snapshot.lift - 1.0) * canvas_h * snapshot.lane_cover).round() as i32
+        },
+        offset_hidden_cover_px: {
+            let canvas_h = skin.document().map_or(720, |d| d.h) as f32;
+            let lane_h = skin
+                .document()
+                .and_then(|document| {
+                    let enabled_options = document.enabled_options();
+                    document.note_lane_area(Lane::Key1, &enabled_options)
+                })
+                .map_or(canvas_h, |rect| rect.height * canvas_h);
+            ((1.0 - snapshot.lift) * snapshot.hidden_cover * lane_h).round() as i32
+        },
+        skin_offsets: snapshot.skin_offsets,
+        hispeed: snapshot.hispeed,
+        timeleft_ms: (snapshot.duration.0.saturating_sub(snapshot.time.0) / 1_000)
+            .saturating_add(1_000)
+            .clamp(0, i32::MAX as i64) as i32,
+        total_duration_ms: (snapshot.duration.0 / 1_000).clamp(0, i32::MAX as i64) as i32,
+        lane_cover: snapshot.lane_cover,
+        hidden_cover: snapshot.hidden_cover,
+        now_bpm: snapshot.now_bpm,
+        min_bpm: snapshot.min_bpm,
+        max_bpm: snapshot.max_bpm,
+        has_bga: snapshot.has_bga,
+        bga_base: snapshot.bga_base.map(|frame| crate::skin::SkinBgaFrame {
+            texture: SkinTextureId(frame.texture_id),
+            source_size: crate::skin::SkinImageSize { width: frame.width, height: frame.height },
+        }),
+        bga_layer: snapshot.bga_layer.map(|frame| crate::skin::SkinBgaFrame {
+            texture: SkinTextureId(frame.texture_id),
+            source_size: crate::skin::SkinImageSize { width: frame.width, height: frame.height },
+        }),
+        judge_timing_ms,
+        best_ex_score: snapshot.best_ex_score,
+        target_ex_score: snapshot.target_ex_score,
+        judge_timing_offset_ms: snapshot.judge_timing_offset_ms,
     };
     let skin_text = SkinTextState {
         title: &snapshot.title,

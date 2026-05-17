@@ -1,13 +1,14 @@
-use bmz_chart::model::TimingEventKind;
+use bmz_chart::model::{BgaAssetId, BgaEventKind, PlayableChart, TimingEventKind};
 use bmz_core::judge::{Judge, TimingSide};
 use bmz_core::lane::Lane;
 use bmz_core::time::TimeUs;
 use bmz_gameplay::judge::model::JudgementEvent;
 use bmz_gameplay::session::GameSession;
+use bmz_render::plan::CHART_BGA_TEXTURE_BASE;
 use bmz_render::skin_offset::{SkinOffsetValue, SkinOffsetValues};
 use bmz_render::snapshot::{
-    DisplayInput, DisplayJudgeCounts, DisplayJudgement, RenderSnapshot, VisibleBarLine,
-    VisibleLongNote, VisibleNote,
+    DisplayBgaFrame, DisplayInput, DisplayJudgeCounts, DisplayJudgement, RenderSnapshot,
+    VisibleBarLine, VisibleLongNote, VisibleNote,
 };
 
 pub const DEFAULT_LOOKAHEAD_US: i64 = 2_000_000;
@@ -42,6 +43,8 @@ pub fn build_render_snapshot(
         min_bpm: chart_min_bpm(&session.chart) as f32,
         max_bpm: chart_max_bpm(&session.chart) as f32,
         has_bga: session.chart.metadata.has_bga,
+        bga_base: current_bga_frame(&session.chart, render_now, BgaEventKind::Base),
+        bga_layer: current_bga_frame(&session.chart, render_now, BgaEventKind::Layer),
         best_ex_score,
         target_ex_score: None, // TODO: resolve from rival / target config
         judge_timing_offset_ms: (session.offsets.input_offset_us / 1_000) as i32,
@@ -95,6 +98,24 @@ pub fn build_render_snapshot(
     snapshot
 }
 
+fn current_bga_frame(
+    chart: &PlayableChart,
+    render_now: TimeUs,
+    kind: BgaEventKind,
+) -> Option<DisplayBgaFrame> {
+    let event = chart
+        .bga_events
+        .iter()
+        .rev()
+        .find(|event| event.time <= render_now && event.kind == kind)?;
+    let asset = chart.bga_assets.iter().find(|asset| asset.id == event.asset)?;
+    Some(DisplayBgaFrame { texture_id: bga_texture_id(asset.id), width: 1.0, height: 1.0 })
+}
+
+pub fn bga_texture_id(id: BgaAssetId) -> u32 {
+    CHART_BGA_TEXTURE_BASE + id.0
+}
+
 fn skin_offsets_from_session(session: &GameSession) -> SkinOffsetValues {
     let mut values = SkinOffsetValues::default();
     for offset in &session.skin_offsets {
@@ -116,12 +137,7 @@ fn skin_offsets_from_session(session: &GameSession) -> SkinOffsetValues {
 /// ノートの正規化進捗（0.0=判定ライン, 1.0=可視域最奥）を返す。
 /// 判定ラインを過ぎた（delta<0）か、`visible_max` を超えるノートは `None`。
 /// `visible_max` はレーンカバーで縮んだ可視上限（カバー無しなら 1.0）。
-fn note_y(
-    note_time: TimeUs,
-    render_now: TimeUs,
-    hispeed: f32,
-    visible_max: f32,
-) -> Option<f32> {
+fn note_y(note_time: TimeUs, render_now: TimeUs, hispeed: f32, visible_max: f32) -> Option<f32> {
     let delta = note_time.0 - render_now.0;
     if delta < 0 {
         return None;
@@ -415,6 +431,49 @@ mod tests {
             snapshot.skin_offsets.get(42),
             Some(SkinOffsetValue { x: 1, y: 2, w: 3, h: 4, r: 5, a: -6 })
         );
+    }
+
+    #[test]
+    fn build_render_snapshot_selects_current_bga_frames() {
+        use bmz_chart::model::{BgaAssetRef, BgaEvent};
+
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut chart = chart();
+        chart.metadata.has_bga = true;
+        chart.bga_assets = vec![
+            BgaAssetRef { id: BgaAssetId(0), path: "base-a.png".into() },
+            BgaAssetRef { id: BgaAssetId(1), path: "base-b.png".into() },
+            BgaAssetRef { id: BgaAssetId(2), path: "layer.png".into() },
+        ];
+        chart.bga_events = vec![
+            BgaEvent {
+                tick: ChartTick(0),
+                time: TimeUs(0),
+                asset: BgaAssetId(0),
+                kind: BgaEventKind::Base,
+            },
+            BgaEvent {
+                tick: ChartTick(0),
+                time: TimeUs(500_000),
+                asset: BgaAssetId(1),
+                kind: BgaEventKind::Base,
+            },
+            BgaEvent {
+                tick: ChartTick(0),
+                time: TimeUs(250_000),
+                asset: BgaAssetId(2),
+                kind: BgaEventKind::Layer,
+            },
+        ];
+        let session = build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
+
+        let early = build_render_snapshot(&session, TimeUs(100_000), &[], None);
+        let late = build_render_snapshot(&session, TimeUs(600_000), &[], None);
+
+        assert_eq!(early.bga_base.unwrap().texture_id, bga_texture_id(BgaAssetId(0)));
+        assert!(early.bga_layer.is_none());
+        assert_eq!(late.bga_base.unwrap().texture_id, bga_texture_id(BgaAssetId(1)));
+        assert_eq!(late.bga_layer.unwrap().texture_id, bga_texture_id(BgaAssetId(2)));
     }
 
     #[test]
