@@ -26,7 +26,7 @@ pub fn apply_skin_from_dir(renderer: &mut Renderer, skin_root: &Path) -> Result<
             "loaded skin texture"
         );
     }
-    renderer.set_skin_context(SkinContext::from_manifest(manifest));
+    renderer.set_play_skin_context(SkinContext::from_manifest(manifest));
 
     Ok(())
 }
@@ -55,6 +55,23 @@ pub fn apply_skin_from_config(renderer: &mut Renderer, play_skin_path: &str) -> 
 }
 
 pub fn apply_beatoraja_json_skin(renderer: &mut Renderer, skin_path: &Path) -> Result<()> {
+    let context = load_beatoraja_json_skin_context(renderer, skin_path, 10_000, true)?;
+    renderer.set_play_skin_context(context);
+    Ok(())
+}
+
+pub fn apply_beatoraja_select_json_skin(renderer: &mut Renderer, skin_path: &Path) -> Result<()> {
+    let context = load_beatoraja_json_skin_context(renderer, skin_path, 20_000, false)?;
+    renderer.set_select_skin_context(context);
+    Ok(())
+}
+
+fn load_beatoraja_json_skin_context(
+    renderer: &mut Renderer,
+    skin_path: &Path,
+    first_texture_id: u32,
+    warn_missing_required_sources: bool,
+) -> Result<SkinContext> {
     let default_root = default_skin_root();
     let manifest_path = default_root.join("skin.toml");
     let manifest = SkinManifest::load(&manifest_path)
@@ -75,7 +92,7 @@ pub fn apply_beatoraja_json_skin(renderer: &mut Renderer, skin_path: &Path) -> R
         .with_context(|| format!("failed to load beatoraja json skin: {}", skin_path.display()))?;
     let skin_root = skin_path.parent().unwrap_or_else(|| Path::new("."));
     let mut document_textures = Vec::new();
-    let mut next_texture_id = 10_000;
+    let mut next_texture_id = first_texture_id;
     let required_sources = required_skin_source_ids(&document);
 
     for font in &document.font {
@@ -140,7 +157,7 @@ pub fn apply_beatoraja_json_skin(renderer: &mut Renderer, skin_path: &Path) -> R
         let asset = match load_png_rgba(&source_path) {
             Ok(asset) => asset,
             Err(error) => {
-                if required_sources.contains(source.id.as_str()) {
+                if warn_missing_required_sources && required_sources.contains(source.id.as_str()) {
                     tracing::warn!(
                         source_id = %source.id,
                         path = %source_path.display(),
@@ -179,12 +196,7 @@ pub fn apply_beatoraja_json_skin(renderer: &mut Renderer, skin_path: &Path) -> R
         );
     }
 
-    renderer.set_skin_context(SkinContext::from_manifest_and_document(
-        manifest,
-        document,
-        document_textures,
-    ));
-    Ok(())
+    Ok(SkinContext::from_manifest_and_document(manifest, document, document_textures))
 }
 
 fn is_supported_font_path(path: &Path) -> bool {
@@ -443,6 +455,18 @@ mod tests {
     }
 
     #[test]
+    fn beatoraja_default_select_json_skin_can_be_applied_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/beatoraja/skin/default/select.json");
+        if !skin_path.is_file() {
+            return;
+        }
+        let mut renderer = Renderer::default();
+
+        apply_beatoraja_select_json_skin(&mut renderer, &skin_path).unwrap();
+    }
+
+    #[test]
     fn ecfn_play7_1p_json_skin_can_be_applied_when_available() {
         let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../.local/skins/ECFN/play/play7-1p.json");
@@ -452,6 +476,18 @@ mod tests {
         let mut renderer = Renderer::default();
 
         apply_beatoraja_json_skin(&mut renderer, &skin_path).unwrap();
+    }
+
+    #[test]
+    fn ecfn_select_json_skin_can_be_applied_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/skins/ECFN/select/select-converted.json");
+        if !skin_path.is_file() {
+            return;
+        }
+        let mut renderer = Renderer::default();
+
+        apply_beatoraja_select_json_skin(&mut renderer, &skin_path).unwrap();
     }
 
     #[test]

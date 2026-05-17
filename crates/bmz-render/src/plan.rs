@@ -150,7 +150,7 @@ impl DrawPlan {
 
     pub fn from_scene_with_skin(scene: &AppSceneSnapshot, skin: &SkinContext) -> Self {
         match scene {
-            AppSceneSnapshot::Select(snapshot) => plan_select(snapshot),
+            AppSceneSnapshot::Select(snapshot) => plan_select(snapshot, skin),
             AppSceneSnapshot::Play(snapshot) => plan_play(snapshot, skin),
             AppSceneSnapshot::Result(snapshot) => plan_result(
                 snapshot.clear_type.as_str(),
@@ -181,7 +181,15 @@ impl Color {
     }
 }
 
-fn plan_select(snapshot: &SelectSnapshot) -> DrawPlan {
+fn plan_select(snapshot: &SelectSnapshot, skin: &SkinContext) -> DrawPlan {
+    if skin.document().is_some_and(|document| document.skin_type == 5) {
+        let mut commands = Vec::new();
+        crate::skin::append_skin_render_items(&mut commands, &skin.select_document_items(snapshot));
+        if !commands.is_empty() {
+            return DrawPlan { clear: Color::rgb(0.0, 0.0, 0.0), commands };
+        }
+    }
+
     let chart_count = snapshot.chart_count;
     let selected_index = snapshot.selected_index;
     let rows = &snapshot.rows;
@@ -515,6 +523,7 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
         best_ex_score: snapshot.best_ex_score,
         target_ex_score: snapshot.target_ex_score,
         judge_timing_offset_ms: snapshot.judge_timing_offset_ms,
+        ..crate::skin::SkinDrawState::default()
     };
     let skin_text = SkinTextState {
         title: &snapshot.title,
@@ -522,6 +531,7 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
         artist: &snapshot.artist,
         subartist: &snapshot.subartist,
         genre: &snapshot.genre,
+        ..SkinTextState::default()
     };
     // `{"id":"notes"}` マーカーでノーツ背面/前面に分割。
     // 描画順: 背面skin要素 → ロングノート胴体 → ノーツ → 前面skin要素（レーンカバー・枠・スコア等）

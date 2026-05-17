@@ -13,6 +13,7 @@ use crate::plan::{
     Color, DrawCommand, Point, Rect, TextAlign, TextLayer, TextOutline, TextOverflow, TextShadow,
     TextStyle, TextureId, UvRect,
 };
+use crate::scene::{SelectRowSnapshot, SelectSnapshot};
 use crate::skin_offset::SkinOffsetValues;
 use crate::snapshot::DisplayJudgeCounts;
 
@@ -93,8 +94,25 @@ pub struct SkinDocument {
     #[serde(default)]
     pub judge: Vec<SkinJudgeDef>,
     pub bga: Option<SkinBgaDef>,
+    pub songlist: Option<SkinSongListDef>,
     #[serde(default)]
     pub destination: Vec<DestinationListEntry>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct SkinSongListDef {
+    #[serde(default, deserialize_with = "deserialize_skin_id")]
+    pub id: String,
+    #[serde(default)]
+    pub center: i32,
+    #[serde(default)]
+    pub listoff: Vec<DestinationListEntry>,
+    #[serde(default)]
+    pub liston: Vec<DestinationListEntry>,
+    #[serde(default)]
+    pub text: Vec<DestinationListEntry>,
+    #[serde(default)]
+    pub level: Vec<DestinationListEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -665,6 +683,13 @@ impl SkinContext {
         document.static_render_items(&self.document_sources, state, text)
     }
 
+    pub fn select_document_items(&self, snapshot: &SelectSnapshot) -> Vec<SkinRenderItem> {
+        let Some(document) = &self.document else {
+            return Vec::new();
+        };
+        document.select_render_items(&self.document_sources, snapshot)
+    }
+
     /// 静的 destination を `{"id":"notes"}` マーカーで分割して返す。
     /// `.0` はノーツ背面、`.1` はノーツ前面に描画するアイテム列。
     pub fn static_document_items_split_for_state_and_text(
@@ -821,6 +846,12 @@ pub struct SkinDrawState {
     pub target_ex_score: Option<u32>,
     /// 判定タイミングオフセット設定値 ms (NUMBER_JUDGETIMING=12 に使用、beatoraja の judgetiming 設定)。
     pub judge_timing_offset_ms: i32,
+    /// 選曲画面の表示曲数 (NUMBER_SELECT_BAR_COUNT=300 相当)。
+    pub select_chart_count: u32,
+    /// 選択中曲のレベル表記から取り出した数値。
+    pub select_play_level: i64,
+    /// 選択中曲のベストEXスコア。
+    pub select_ex_score: Option<u32>,
 }
 
 impl Default for SkinDrawState {
@@ -863,6 +894,9 @@ impl Default for SkinDrawState {
             best_ex_score: None,
             target_ex_score: None,
             judge_timing_offset_ms: 0,
+            select_chart_count: 0,
+            select_play_level: 0,
+            select_ex_score: None,
         }
     }
 }
@@ -874,6 +908,8 @@ pub struct SkinTextState<'a> {
     pub artist: &'a str,
     pub subartist: &'a str,
     pub genre: &'a str,
+    pub current_folder: &'a str,
+    pub bar_text: &'a str,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -1422,6 +1458,65 @@ impl SkinDocument {
             .map(|item| vec![item])
     }
 
+    fn resolve_offset_destination_items(
+        &self,
+        destination: &SkinDestinationDef,
+        offset: (i32, i32),
+        images: &HashMap<&str, &SkinImageDef>,
+        enabled_options: &[i32],
+        state: SkinDrawState,
+        text_state: SkinTextState<'_>,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Option<Vec<SkinRenderItem>> {
+        let elapsed = skin_timer_elapsed_ms(destination.timer, state)?;
+        let mut frame = resolve_destination_frame(destination, elapsed, enabled_options)?;
+        frame.x += offset.0;
+        frame.y += offset.1;
+        apply_skin_offset_to_frame(destination, &mut frame, state, false);
+
+        if let Some(image) = images.get(destination.id.as_str()) {
+            let source = sources.get(&image.src)?;
+            let (rect, uv) = stretch_skin_image_geometry(
+                destination.stretch,
+                normalize_skin_frame_rect(frame, self.w, self.h),
+                skin_image_texture_region(image, source.source_size, elapsed),
+                source.source_size,
+                self.w,
+                self.h,
+            );
+            return Some(vec![skin_image_item_for_frame(
+                source.texture,
+                rect,
+                uv,
+                frame,
+                destination.center,
+                if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal },
+                Some(source.source_size),
+                destination.filter != 0,
+            )]);
+        }
+
+        if let Some(value) = self.value.iter().find(|value| value.id == destination.id) {
+            let number = skin_state_number(value.ref_id, state)?;
+            return Some(self.value_number_render_items(
+                &value.id,
+                number,
+                ResolvedSkinFrame::default(),
+                frame,
+                sources,
+                false,
+            ));
+        }
+
+        if let Some(text) = self.text.iter().find(|text| text.id == destination.id)
+            && let Some(item) = self.text_render_item(text, frame, text_state)
+        {
+            return Some(vec![item]);
+        }
+
+        None
+    }
+
     pub fn enabled_options(&self) -> Vec<i32> {
         self.property
             .iter()
@@ -1451,6 +1546,210 @@ impl SkinDocument {
             }
         }
         result
+    }
+
+    pub fn select_render_items(
+        &self,
+        sources: &HashMap<String, SkinDocumentTexture>,
+        snapshot: &SelectSnapshot,
+    ) -> Vec<SkinRenderItem> {
+        let selected_row = snapshot.rows.iter().find(|row| row.index == snapshot.selected_index);
+        let state = SkinDrawState {
+            elapsed_ms: 0,
+            select_chart_count: snapshot.chart_count,
+            select_play_level: selected_row.map(select_row_level_number).unwrap_or(0),
+            select_ex_score: selected_row.and_then(|row| row.ex_score),
+            ..SkinDrawState::default()
+        };
+        let text = SkinTextState {
+            title: selected_row.map(|row| row.title.as_str()).unwrap_or(&snapshot.selected_title),
+            artist: selected_row.map(|row| row.artist.as_str()).unwrap_or_default(),
+            genre: "",
+            current_folder: &snapshot.current_folder,
+            ..SkinTextState::default()
+        };
+
+        let images = self.image_map();
+        let enabled_options = self.enabled_options();
+        let mut items = Vec::new();
+        for destination in self.all_destinations(&enabled_options) {
+            if destination.id == self.songlist.as_ref().map(|list| list.id.as_str()).unwrap_or("") {
+                items.extend(self.select_songlist_items(
+                    sources,
+                    snapshot,
+                    &images,
+                    &enabled_options,
+                    state,
+                ));
+                continue;
+            }
+            if !test_skin_ops(&destination.op, &enabled_options, state)
+                || !eval_skin_draw_condition(&destination.draw, state)
+            {
+                continue;
+            }
+            if let Some(resolved) = self.resolve_destination_items(
+                destination,
+                &images,
+                &enabled_options,
+                state,
+                text,
+                sources,
+            ) {
+                items.extend(resolved);
+            }
+        }
+        items
+    }
+
+    fn select_songlist_items(
+        &self,
+        sources: &HashMap<String, SkinDocumentTexture>,
+        snapshot: &SelectSnapshot,
+        images: &HashMap<&str, &SkinImageDef>,
+        enabled_options: &[i32],
+        state: SkinDrawState,
+    ) -> Vec<SkinRenderItem> {
+        let Some(songlist) = &self.songlist else {
+            return Vec::new();
+        };
+        let mut items = Vec::new();
+        for row in &snapshot.rows {
+            let offset = row.index as i32 - snapshot.selected_index as i32;
+            let slot = songlist.center + offset;
+            if slot < 0 {
+                continue;
+            }
+            let selected = row.index == snapshot.selected_index;
+            let row_destinations = if selected { &songlist.liston } else { &songlist.listoff };
+            let Some(row_destination) =
+                destination_entry_at(row_destinations, slot as usize, enabled_options)
+            else {
+                continue;
+            };
+            let elapsed = skin_timer_elapsed_ms(row_destination.timer, state).unwrap_or(0);
+            let Some(mut row_frame) =
+                resolve_destination_frame(row_destination, elapsed, enabled_options)
+            else {
+                continue;
+            };
+            let row_origin = (row_frame.x, row_frame.y);
+            apply_skin_offset_to_frame(row_destination, &mut row_frame, state, false);
+            if let Some(item) = self.select_bar_item(row, row_destination, row_frame, sources) {
+                items.push(item);
+            }
+            items.extend(self.select_songlist_child_items(
+                &songlist.level,
+                row,
+                row_origin,
+                images,
+                enabled_options,
+                state,
+                sources,
+            ));
+            items.extend(self.select_songlist_text_items(
+                row,
+                row_origin,
+                images,
+                enabled_options,
+                state,
+                sources,
+            ));
+        }
+        items
+    }
+
+    fn select_songlist_child_items(
+        &self,
+        entries: &[DestinationListEntry],
+        row: &SelectRowSnapshot,
+        row_origin: (i32, i32),
+        images: &HashMap<&str, &SkinImageDef>,
+        enabled_options: &[i32],
+        state: SkinDrawState,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Vec<SkinRenderItem> {
+        let mut items = Vec::new();
+        let level_index = select_row_level_number(row).saturating_sub(1).max(0) as usize;
+        let Some(destination) = destination_entry_at(entries, level_index, enabled_options) else {
+            return items;
+        };
+        if let Some(mut resolved) = self.resolve_offset_destination_items(
+            destination,
+            row_origin,
+            images,
+            enabled_options,
+            state,
+            SkinTextState::default(),
+            sources,
+        ) {
+            items.append(&mut resolved);
+        }
+        items
+    }
+
+    fn select_songlist_text_items(
+        &self,
+        row: &SelectRowSnapshot,
+        row_origin: (i32, i32),
+        images: &HashMap<&str, &SkinImageDef>,
+        enabled_options: &[i32],
+        state: SkinDrawState,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Vec<SkinRenderItem> {
+        let Some(songlist) = &self.songlist else {
+            return Vec::new();
+        };
+        let mut items = Vec::new();
+        let text_state = SkinTextState { bar_text: &row.title, ..SkinTextState::default() };
+        for destination in destination_entries(&songlist.text, enabled_options) {
+            if let Some(mut resolved) = self.resolve_offset_destination_items(
+                destination,
+                row_origin,
+                images,
+                enabled_options,
+                state,
+                text_state,
+                sources,
+            ) {
+                items.append(&mut resolved);
+            }
+        }
+        items
+    }
+
+    fn select_bar_item(
+        &self,
+        row: &SelectRowSnapshot,
+        destination: &SkinDestinationDef,
+        frame: ResolvedSkinFrame,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Option<SkinRenderItem> {
+        let imageset = self.imageset.iter().find(|set| set.id == destination.id)?;
+        let image_index = if row.is_folder { 1 } else { 0 };
+        let image_id = imageset.images.get(image_index).or_else(|| imageset.images.first())?;
+        let image = self.image.iter().find(|image| image.id == *image_id)?;
+        let source = sources.get(&image.src)?;
+        let elapsed =
+            skin_timer_elapsed_ms(destination.timer, SkinDrawState::default()).unwrap_or(0);
+        let (rect, uv) = stretch_skin_image_geometry(
+            destination.stretch,
+            normalize_skin_frame_rect(frame, self.w, self.h),
+            skin_image_texture_region(image, source.source_size, elapsed),
+            source.source_size,
+            self.w,
+            self.h,
+        );
+        Some(skin_image_item_for_frame(
+            source.texture,
+            rect,
+            uv,
+            frame,
+            destination.center,
+            if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal },
+            Some(source.source_size),
+            destination.filter != 0,
+        ))
     }
 
     pub fn note_image_render_item(
@@ -2172,6 +2471,7 @@ fn load_json_value(path: &Path) -> Result<JsonValue> {
     let text = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read skin json: {}", path.display()))?;
     let text = strip_json_trailing_commas(&text);
+    let text = insert_missing_commas_between_json_values(&text);
     serde_json::from_str(&text)
         .with_context(|| format!("failed to parse skin json: {}", path.display()))
 }
@@ -2212,6 +2512,50 @@ fn strip_json_trailing_commas(input: &str) -> String {
         }
 
         output.push(ch);
+    }
+
+    output
+}
+
+fn insert_missing_commas_between_json_values(input: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    let mut in_string = false;
+    let mut escaped = false;
+
+    while let Some(ch) = chars.next() {
+        output.push(ch);
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        if ch == '"' {
+            in_string = true;
+            continue;
+        }
+        if ch != '}' && ch != ']' {
+            continue;
+        }
+
+        let mut lookahead = chars.clone();
+        let mut whitespace = String::new();
+        while let Some(next) = lookahead.peek().copied() {
+            if next.is_whitespace() {
+                whitespace.push(next);
+                lookahead.next();
+            } else {
+                break;
+            }
+        }
+        if matches!(lookahead.peek(), Some('{') | Some('[')) {
+            output.push(',');
+        }
     }
 
     output
@@ -2891,6 +3235,8 @@ fn eval_skin_draw_operand(operand: &str, state: SkinDrawState) -> Option<f32> {
 
 fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
     match ref_id {
+        300 => Some(state.select_chart_count as i64),
+        96 => Some(state.select_play_level),
         71 | 101 | 171 => Some(state.ex_score as i64),
         72 => Some(state.total_notes as i64 * 2),
         74 | 106 | 333 => Some(state.total_notes as i64),
@@ -3124,6 +3470,9 @@ fn skin_state_text(text: &SkinTextDef, state: SkinTextState<'_>) -> String {
     if !text.constant_text.is_empty() {
         return text.constant_text.clone();
     }
+    if text.id == "bartext" {
+        return state.bar_text.to_string();
+    }
     match text.ref_id {
         10 => state.title.to_string(),
         11 => state.subtitle.to_string(),
@@ -3132,6 +3481,7 @@ fn skin_state_text(text: &SkinTextDef, state: SkinTextState<'_>) -> String {
         14 => state.artist.to_string(),
         15 => state.subartist.to_string(),
         16 => full_label(state.artist, state.subartist),
+        1000 => state.current_folder.to_string(),
         _ => String::new(),
     }
 }
@@ -3143,6 +3493,36 @@ fn full_label(primary: &str, secondary: &str) -> String {
         (true, false) => secondary.to_string(),
         (false, false) => format!("{primary} {secondary}"),
     }
+}
+
+fn select_row_level_number(row: &SelectRowSnapshot) -> i64 {
+    row.play_level.chars().filter(|ch| ch.is_ascii_digit()).collect::<String>().parse().unwrap_or(0)
+}
+
+fn destination_entry_at<'a>(
+    entries: &'a [DestinationListEntry],
+    index: usize,
+    enabled_options: &[i32],
+) -> Option<&'a SkinDestinationDef> {
+    destination_entries(entries, enabled_options).into_iter().nth(index)
+}
+
+fn destination_entries<'a>(
+    entries: &'a [DestinationListEntry],
+    enabled_options: &[i32],
+) -> Vec<&'a SkinDestinationDef> {
+    let mut result = Vec::new();
+    for entry in entries {
+        match entry {
+            DestinationListEntry::Single(destination) => result.push(destination),
+            DestinationListEntry::Conditional { if_ops, destinations } => {
+                if test_skin_dst_if(if_ops, enabled_options) {
+                    result.extend(destinations);
+                }
+            }
+        }
+    }
+    result
 }
 
 /// Parses the `if` field of a conditional dst entry into a flat list of required option IDs.
@@ -5527,6 +5907,75 @@ mod tests {
     }
 
     #[test]
+    fn select_skin_document_renders_songlist_rows() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 5,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "bar.png" }, { "id": 2, "path": "num.png" }],
+                "image": [
+                    { "id": "bar-song", "src": 1, "x": 0, "y": 0, "w": 40, "h": 10 },
+                    { "id": "bar-folder", "src": 1, "x": 0, "y": 10, "w": 40, "h": 10 }
+                ],
+                "imageset": [{ "id": "bar", "images": ["bar-song", "bar-folder"] }],
+                "text": [{ "id": "bartext", "font": "main", "size": 10 }],
+                "value": [{ "id": "level", "src": 2, "x": 0, "y": 0, "w": 100, "h": 10, "divx": 10, "digit": 2, "ref": 96 }],
+                "songlist": {
+                    "id": "songlist",
+                    "center": 1,
+                    "listoff": [
+                        { "id": "bar", "dst": [{ "x": 10, "y": 70, "w": 40, "h": 10 }] },
+                        { "id": "bar", "dst": [{ "x": 10, "y": 50, "w": 40, "h": 10 }] },
+                        { "id": "bar", "dst": [{ "x": 10, "y": 30, "w": 40, "h": 10 }] }
+                    ],
+                    "liston": [
+                        { "id": "bar", "dst": [{ "x": 12, "y": 70, "w": 40, "h": 10 }] },
+                        { "id": "bar", "dst": [{ "x": 12, "y": 50, "w": 40, "h": 10 }] },
+                        { "id": "bar", "dst": [{ "x": 12, "y": 30, "w": 40, "h": 10 }] }
+                    ],
+                    "text": [{ "id": "bartext", "dst": [{ "x": 5, "y": 2, "w": 20, "h": 8 }] }],
+                    "level": [{ "id": "level", "dst": [{ "x": 30, "y": 2, "w": 5, "h": 8 }] }]
+                },
+                "destination": [{ "id": "songlist" }]
+            }
+            "#,
+        )
+        .unwrap();
+        let mut sources = mock_source("1", 100.0, 100.0);
+        sources.extend(mock_source("2", 100.0, 100.0));
+        let snapshot = SelectSnapshot {
+            selected_index: 2,
+            rows: vec![
+                SelectRowSnapshot {
+                    index: 1,
+                    title: "Folder".to_string(),
+                    play_level: "0".to_string(),
+                    is_folder: true,
+                    ..SelectRowSnapshot::default()
+                },
+                SelectRowSnapshot {
+                    index: 2,
+                    title: "Song".to_string(),
+                    play_level: "12".to_string(),
+                    ..SelectRowSnapshot::default()
+                },
+            ],
+            ..SelectSnapshot::default()
+        };
+
+        let items = document.select_render_items(&sources, &snapshot);
+
+        assert!(items.iter().any(|item| matches!(item, SkinRenderItem::Image { .. })));
+        assert!(
+            items
+                .iter()
+                .any(|item| matches!(item, SkinRenderItem::Text { text, .. } if text == "Song"))
+        );
+    }
+
+    #[test]
     fn skin_document_resolves_static_value_destinations() {
         let document: SkinDocument = serde_json::from_str(
             r#"
@@ -5924,6 +6373,22 @@ mod tests {
     }
 
     #[test]
+    fn bundled_beatoraja_default_select_json_loads_when_available() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/beatoraja/skin/default/select.json");
+        if !path.is_file() {
+            return;
+        }
+
+        let document = SkinDocument::load_beatoraja_json(&path).unwrap();
+
+        assert_eq!(document.name, "beatoraja default");
+        assert_eq!(document.skin_type, 5);
+        assert!(document.songlist.is_some());
+        assert!(!document.destination.is_empty());
+    }
+
+    #[test]
     fn local_ecfn_converted_play7_json_loads_when_available() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../.local/skins/ECFN/play/play7-1p.json");
@@ -5933,6 +6398,21 @@ mod tests {
 
         let document = SkinDocument::load_beatoraja_json(&path).unwrap();
 
+        assert!(!document.destination.is_empty());
+    }
+
+    #[test]
+    fn local_ecfn_converted_select_json_loads_when_available() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/skins/ECFN/select/select-converted.json");
+        if !path.is_file() {
+            return;
+        }
+
+        let document = SkinDocument::load_beatoraja_json(&path).unwrap();
+
+        assert_eq!(document.skin_type, 5);
+        assert!(document.songlist.is_some());
         assert!(!document.destination.is_empty());
     }
 
@@ -6659,6 +7139,7 @@ mod tests {
             artist: "Artist Name",
             subartist: "Feat. X",
             genre: "TRANCE",
+            ..SkinTextState::default()
         };
 
         let make_text = |ref_id: i32| SkinTextDef {

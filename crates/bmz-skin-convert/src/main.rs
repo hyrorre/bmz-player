@@ -226,6 +226,9 @@ fn install_sandbox(
 
     let root = sandbox_root;
     let require = lua.create_function(move |lua, module: String| {
+        if module == "main_state" {
+            return create_main_state_stub(lua);
+        }
         let globals = lua.globals();
         let package: Table = globals.get("package")?;
         let loaded: Table = package.get("loaded")?;
@@ -245,6 +248,17 @@ fn install_sandbox(
     globals.set("require", require)?;
 
     Ok(())
+}
+
+fn create_main_state_stub(lua: &Lua) -> mlua::Result<Value> {
+    let table = lua.create_table()?;
+    table.set("timer_off_value", i32::MIN)?;
+    table.set("number", lua.create_function(|_, _: i32| Ok(0))?)?;
+    table.set("option", lua.create_function(|_, _: i32| Ok(false))?)?;
+    table.set("text", lua.create_function(|_, _: i32| Ok(String::new()))?)?;
+    table.set("timer", lua.create_function(|_, _: i32| Ok(i32::MIN))?)?;
+    table.set("gauge_type", lua.create_function(|_, ()| Ok(0))?)?;
+    Ok(Value::Table(table))
 }
 
 fn skin_config_options_from_header(
@@ -553,6 +567,41 @@ mod tests {
         assert_eq!(json["name"], "1P");
         assert_eq!(json["image"][0]["id"], "panel");
         assert_eq!(json["destination"][0]["dst"][0]["w"], 30);
+    }
+
+    #[test]
+    fn converts_lua_skin_with_main_state_stub() {
+        let root = unique_test_dir("bmz-lua-skin");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("select.luaskin"),
+            r#"
+            local main_state = require("main_state")
+            return {
+                type = 5,
+                value = {
+                    { id = "score", src = 1, x = 0, y = 0, w = 10, h = 10, value = function()
+                        return main_state.number(71)
+                    end }
+                },
+                destination = {
+                    { id = "panel", draw = function() return main_state.option(1) end, dst = {{ x = 1, y = 2, w = 3, h = 4 }} }
+                }
+            }
+            "#,
+        )
+        .unwrap();
+
+        let output = root.join("out.json");
+        let report =
+            convert_lua_skin_to_json(&root.join("select.luaskin"), &output, &BTreeMap::new())
+                .unwrap();
+        let json: JsonValue = serde_json::from_str(&fs::read_to_string(output).unwrap()).unwrap();
+
+        assert!(report.warnings.iter().any(|warning| warning.contains("unsupported field")));
+        assert_eq!(json["type"], 5);
+        assert!(json["value"][0].get("value").is_none());
+        assert!(json["destination"][0].get("draw").is_none());
     }
 
     #[test]

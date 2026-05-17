@@ -21,7 +21,8 @@ use crate::skin::{BlendMode, SkinContext};
 pub struct Renderer {
     last_scene: Option<AppSceneSnapshot>,
     last_plan: Option<DrawPlan>,
-    skin_context: SkinContext,
+    play_skin_context: SkinContext,
+    select_skin_context: SkinContext,
     pending_textures: Vec<PendingTexture>,
     fonts: HashMap<String, FontArc>,
     bitmap_fonts: HashMap<String, BitmapFont>,
@@ -168,7 +169,22 @@ impl Renderer {
     }
 
     pub fn set_skin_context(&mut self, skin_context: SkinContext) {
-        self.skin_context = skin_context;
+        self.set_play_skin_context(skin_context);
+    }
+
+    pub fn set_play_skin_context(&mut self, skin_context: SkinContext) {
+        self.play_skin_context = skin_context;
+    }
+
+    pub fn set_select_skin_context(&mut self, skin_context: SkinContext) {
+        self.select_skin_context = skin_context;
+    }
+
+    fn skin_context_for_scene(&self, scene: &AppSceneSnapshot) -> &SkinContext {
+        match scene {
+            AppSceneSnapshot::Select(_) => &self.select_skin_context,
+            AppSceneSnapshot::Play(_) | AppSceneSnapshot::Result(_) => &self.play_skin_context,
+        }
     }
 
     pub fn resize_surface(&mut self, size: SurfaceSize) {
@@ -187,7 +203,7 @@ impl Renderer {
     }
 
     pub fn render_scene_status(&mut self, scene: AppSceneSnapshot) -> Result<RenderSurfaceStatus> {
-        let plan = DrawPlan::from_scene_with_skin(&scene, &self.skin_context);
+        let plan = DrawPlan::from_scene_with_skin(&scene, self.skin_context_for_scene(&scene));
         self.last_scene = Some(scene);
         self.last_plan = Some(plan);
 

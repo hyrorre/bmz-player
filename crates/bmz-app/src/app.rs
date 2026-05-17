@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -35,7 +36,7 @@ use crate::screens::play_start::{PlayStartOptions, StartedWinitPlaySession};
 use crate::screens::result_model::ResultSummary;
 use crate::screens::select_model::{SelectItem, load_select_items_in_folder, root_folder_items};
 use crate::select_options::{ArrangeOption, AssistOption};
-use crate::skin_loader::apply_skin_from_config;
+use crate::skin_loader::{apply_beatoraja_select_json_skin, apply_skin_from_config};
 use crate::storage::scan::scan_song_roots;
 
 const SAMPLE_PLAYABLE_TITLE: &str = "BMZ Sample Playable";
@@ -111,7 +112,11 @@ impl WinitApp {
         let select_keys = SelectKeyBindings::from_profile(&boot.profile_config.input);
 
         let mut renderer = Renderer::default();
-        load_play_skin_textures(&mut renderer, &boot.profile_config.skin.play);
+        load_skin_textures(
+            &mut renderer,
+            &boot.profile_config.skin.select,
+            &boot.profile_config.skin.play,
+        );
 
         let mut app = Self {
             boot,
@@ -596,7 +601,17 @@ fn window_attributes_from_config(
         .with_inner_size(PhysicalSize::new(video.width.max(1), video.height.max(1)))
 }
 
-fn load_play_skin_textures(renderer: &mut Renderer, play_skin_path: &str) {
+fn load_skin_textures(renderer: &mut Renderer, select_skin_path: &str, play_skin_path: &str) {
+    if !select_skin_path.trim().is_empty()
+        && let Err(error) =
+            apply_beatoraja_select_json_skin(renderer, Path::new(select_skin_path.trim()))
+    {
+        tracing::warn!(
+            error = %format_error_chain(&error),
+            "failed to apply select skin; using fallback select drawing"
+        );
+    }
+
     if let Err(error) = apply_skin_from_config(renderer, play_skin_path) {
         tracing::warn!(
             error = %format_error_chain(&error),

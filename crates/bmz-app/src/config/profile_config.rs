@@ -218,6 +218,11 @@ pub struct AudioMixConfig {
 /// スキン設定。スキンはプロファイルごとに切り替えられる。
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SkinConfig {
+    /// 選曲画面スキンのパス。
+    /// 空文字列なら bmz の固定描画を使用。
+    /// `.json` で終わるパスは beatoraja JSON スキンとして扱う。
+    #[serde(default)]
+    pub select: String,
     /// プレイ画面スキンのパス。
     /// 空文字列なら内蔵デフォルトスキンを使用。
     /// `.json` で終わるパスは beatoraja JSON スキン、それ以外は
