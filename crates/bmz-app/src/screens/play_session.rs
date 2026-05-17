@@ -22,7 +22,9 @@ use crate::config::play::{
     DEFAULT_JUDGE_WINDOW, audio_mix_from_profile, gauge_type_from_config,
     lane_binding_from_profile_input, play_offsets_from_profile,
 };
-use crate::config::profile_config::{BgaExpandConfig, LaneEffectConfig, ProfileConfig};
+use crate::config::profile_config::{
+    BgaExpandConfig, BgaModeConfig, LaneEffectConfig, ProfileConfig,
+};
 use crate::select_options::ArrangeOption;
 use crate::storage::library_db::LibraryDatabase;
 
@@ -69,7 +71,10 @@ pub fn build_game_session_with_input_backend(
 ) -> GameSession {
     let gauge_type =
         options.gauge_override.unwrap_or_else(|| gauge_type_from_config(profile.play.gauge));
-    let autoplay = (profile.play.auto_play || options.autoplay).then(AutoplayController::default);
+    let autoplay_enabled = profile.play.auto_play || options.autoplay;
+    let replay_player = options.replay_player;
+    let is_replay = replay_player.is_some();
+    let autoplay = autoplay_enabled.then(AutoplayController::default);
     let input_system = InputSystem {
         backend: input_backend,
         translator: Box::new(DefaultInputTranslator {
@@ -89,7 +94,7 @@ pub fn build_game_session_with_input_backend(
         input_system,
         score: ScoreState::default(),
         replay_recorder: ReplayRecorder::default(),
-        replay_player: options.replay_player,
+        replay_player,
         autoplay,
         recent_inputs: Vec::new(),
         recent_judgements: Vec::new(),
@@ -101,6 +106,7 @@ pub fn build_game_session_with_input_backend(
         lane_cover: profile.lane.lane_cover.clamp(0.0, 1.0),
         hidden_cover: hidden_cover_from_profile(profile),
         skin_offsets: skin_offsets_from_profile(profile),
+        bga_enabled: bga_enabled_from_profile(profile, autoplay_enabled, is_replay),
         poor_bga_duration_us: poor_bga_duration_us_from_profile(profile),
         bga_stretch: bga_stretch_from_profile(profile),
         input_timestamp_anchor: None,
@@ -129,6 +135,14 @@ fn bga_stretch_from_profile(profile: &ProfileConfig) -> i32 {
         BgaExpandConfig::Full => 0,
         BgaExpandConfig::KeepAspect => 1,
         BgaExpandConfig::Off => 8,
+    }
+}
+
+fn bga_enabled_from_profile(profile: &ProfileConfig, autoplay: bool, replay: bool) -> bool {
+    match profile.play.bga {
+        BgaModeConfig::On => true,
+        BgaModeConfig::Auto => autoplay || replay,
+        BgaModeConfig::Off => false,
     }
 }
 
@@ -324,6 +338,7 @@ mod tests {
         assert_eq!(session.audio_clock.sample_rate, 48_000);
         assert_eq!(session.hispeed, 2.0);
         assert_eq!(session.hidden_cover, 0.0);
+        assert!(session.bga_enabled);
         assert_eq!(session.poor_bga_duration_us, 500_000);
         assert_eq!(session.bga_stretch, 1);
     }
@@ -367,6 +382,36 @@ mod tests {
         assert_eq!(full.bga_stretch, 0);
         assert_eq!(keep.bga_stretch, 1);
         assert_eq!(off.bga_stretch, 8);
+    }
+
+    #[test]
+    fn build_game_session_maps_profile_bga_mode() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+
+        profile.play.bga = BgaModeConfig::Off;
+        let off = build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+
+        profile.play.bga = BgaModeConfig::Auto;
+        let auto_human =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+        let auto_autoplay = build_game_session(
+            Arc::new(chart()),
+            &profile,
+            PlaySessionOptions { autoplay: true, ..PlaySessionOptions::default() },
+        );
+        let auto_replay = build_game_session(
+            Arc::new(chart()),
+            &profile,
+            PlaySessionOptions {
+                replay_player: Some(ReplayPlayer::default()),
+                ..PlaySessionOptions::default()
+            },
+        );
+
+        assert!(!off.bga_enabled);
+        assert!(!auto_human.bga_enabled);
+        assert!(auto_autoplay.bga_enabled);
+        assert!(auto_replay.bga_enabled);
     }
 
     #[test]

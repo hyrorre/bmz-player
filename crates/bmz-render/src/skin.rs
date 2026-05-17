@@ -803,6 +803,8 @@ pub struct SkinDrawState {
     pub max_bpm: f32,
     /// 現在の曲にBGAイベントが含まれるかどうか (OPTION_NO_BGA=170 / OPTION_BGA=171)。
     pub has_bga: bool,
+    /// BGA表示設定がONかどうか。曲の有無とは分けて扱う。
+    pub bga_enabled: bool,
     /// 現在表示するBGA本体画像。
     pub bga_base: Option<SkinBgaFrame>,
     /// 現在表示するBGAレイヤー画像。
@@ -852,6 +854,7 @@ impl Default for SkinDrawState {
             min_bpm: 0.0,
             max_bpm: 0.0,
             has_bga: false,
+            bga_enabled: true,
             bga_base: None,
             bga_layer: None,
             bga_poor: None,
@@ -1303,7 +1306,7 @@ impl SkinDocument {
         }
 
         if self.bga.as_ref().is_some_and(|bga| bga.id == destination.id) {
-            return state.has_bga.then(|| {
+            return (state.has_bga && state.bga_enabled).then(|| {
                 let rect = normalize_skin_frame_rect(frame, self.w, self.h);
                 let blend = if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal };
                 let tint = Color::rgba(1.0, 1.0, 1.0, frame.a as f32 / 255.0);
@@ -4326,6 +4329,54 @@ mod tests {
                 && approx_eq(*width, 0.3)
                 && approx_eq(*height, 0.4)
                 && approx_eq(*a, 128.0 / 255.0)
+        ));
+    }
+
+    #[test]
+    fn bga_destination_is_hidden_when_bga_is_disabled() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "bga": { "id": "bga" },
+                "destination": [
+                    { "id": "bga", "dst": [{ "x": 10, "y": 20, "w": 30, "h": 40 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        let items = document.static_render_items(
+            &HashMap::new(),
+            SkinDrawState {
+                has_bga: true,
+                bga_enabled: false,
+                bga_base: Some(SkinBgaFrame {
+                    texture: SkinTextureId(20000),
+                    source_size: SkinImageSize { width: 256.0, height: 256.0 },
+                }),
+                ..SkinDrawState::default()
+            },
+            SkinTextState::default(),
+        );
+
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn bga_option_conditions_still_reflect_song_bga_when_disabled() {
+        assert!(!test_skin_op(
+            170,
+            &[],
+            SkinDrawState { has_bga: true, bga_enabled: false, ..SkinDrawState::default() }
+        ));
+        assert!(test_skin_op(
+            171,
+            &[],
+            SkinDrawState { has_bga: true, bga_enabled: false, ..SkinDrawState::default() }
         ));
     }
 

@@ -27,10 +27,16 @@ pub struct PlayDefaultsConfig {
     pub lane_effect: LaneEffectConfig,
     pub assist: AssistOptionConfig,
     pub auto_play: bool,
+    #[serde(default = "default_bga_mode")]
+    pub bga: BgaModeConfig,
     #[serde(default = "default_bga_expand")]
     pub bga_expand: BgaExpandConfig,
     #[serde(default = "default_misslayer_duration_ms")]
     pub misslayer_duration_ms: u32,
+}
+
+pub fn default_bga_mode() -> BgaModeConfig {
+    BgaModeConfig::On
 }
 
 pub fn default_bga_expand() -> BgaExpandConfig {
@@ -39,6 +45,14 @@ pub fn default_bga_expand() -> BgaExpandConfig {
 
 pub fn default_misslayer_duration_ms() -> u32 {
     500
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum BgaModeConfig {
+    On,
+    Auto,
+    Off,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -246,6 +260,7 @@ impl ProfileConfig {
                 lane_effect: LaneEffectConfig::Off,
                 assist: AssistOptionConfig::None,
                 auto_play: false,
+                bga: default_bga_mode(),
                 bga_expand: default_bga_expand(),
                 misslayer_duration_ms: default_misslayer_duration_ms(),
             },
@@ -325,6 +340,7 @@ mod tests {
         )
         .unwrap();
 
+        assert_eq!(play.bga, BgaModeConfig::On);
         assert_eq!(play.bga_expand, BgaExpandConfig::KeepAspect);
         assert_eq!(play.misslayer_duration_ms, 500);
     }

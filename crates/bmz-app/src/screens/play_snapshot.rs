@@ -62,15 +62,27 @@ pub fn build_render_snapshot_with_bga_frames(
         min_bpm: chart_min_bpm(&session.chart) as f32,
         max_bpm: chart_max_bpm(&session.chart) as f32,
         has_bga: session.chart.metadata.has_bga,
-        bga_base: current_bga_frame(&session.chart, render_now, BgaEventKind::Base, bga_frames),
-        bga_layer: current_bga_frame(&session.chart, render_now, BgaEventKind::Layer, bga_frames),
-        bga_poor: current_poor_bga_frame(
-            &session.chart,
-            render_now,
-            recent_judgements,
-            bga_frames,
-            session.poor_bga_duration_us,
-        ),
+        bga_enabled: session.bga_enabled,
+        bga_base: session
+            .bga_enabled
+            .then(|| current_bga_frame(&session.chart, render_now, BgaEventKind::Base, bga_frames))
+            .flatten(),
+        bga_layer: session
+            .bga_enabled
+            .then(|| current_bga_frame(&session.chart, render_now, BgaEventKind::Layer, bga_frames))
+            .flatten(),
+        bga_poor: session
+            .bga_enabled
+            .then(|| {
+                current_poor_bga_frame(
+                    &session.chart,
+                    render_now,
+                    recent_judgements,
+                    bga_frames,
+                    session.poor_bga_duration_us,
+                )
+            })
+            .flatten(),
         bga_stretch: session.bga_stretch,
         best_ex_score,
         target_ex_score: None, // TODO: resolve from rival / target config

@@ -301,6 +301,7 @@ mod tests {
             lane_cover: 0.0,
             hidden_cover: 0.0,
             skin_offsets: Vec::new(),
+            bga_enabled: true,
             poor_bga_duration_us: 500_000,
             bga_stretch: 1,
             input_timestamp_anchor: None,

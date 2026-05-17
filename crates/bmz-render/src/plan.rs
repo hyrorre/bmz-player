@@ -497,6 +497,7 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
         min_bpm: snapshot.min_bpm,
         max_bpm: snapshot.max_bpm,
         has_bga: snapshot.has_bga,
+        bga_enabled: snapshot.bga_enabled,
         bga_base: snapshot.bga_base.map(|frame| crate::skin::SkinBgaFrame {
             texture: SkinTextureId(frame.texture_id),
             source_size: crate::skin::SkinImageSize { width: frame.width, height: frame.height },
