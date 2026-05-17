@@ -56,17 +56,22 @@ pub fn build_render_snapshot(
         visible_long_notes: Vec::new(),
     };
 
+    // SUDDEN+（レーンカバー）はノーツの可視域を上端側から縮める。
+    // beatoraja の currentduration = region * (1 - lanecover) と同じ。
+    // 可視進捗の上限が visible_max になり、それより奥のノーツ・小節線は描画しない。
+    let visible_max = (1.0 - session.lane_cover).clamp(0.0, 1.0);
+
     for lane in Lane::ALL {
         let next_note_index = session.judge.lanes[lane.index()].next_note_index;
         for note in session.chart.notes_for_lane(lane).iter().skip(next_note_index) {
-            if let Some(y) = note_y(note.time, render_now, session.hispeed) {
+            if let Some(y) = note_y(note.time, render_now, session.hispeed, visible_max) {
                 snapshot.visible_notes[lane.index()].push(VisibleNote { lane, time: note.time, y });
             }
         }
     }
 
     for bar in &session.chart.bar_lines {
-        if let Some(y) = note_y(bar.time, render_now, session.hispeed) {
+        if let Some(y) = note_y(bar.time, render_now, session.hispeed, visible_max) {
             snapshot.bar_lines.push(VisibleBarLine { time: bar.time, y });
         }
     }
@@ -74,15 +79,16 @@ pub fn build_render_snapshot(
     for long in &session.chart.long_notes {
         let head = note_progress(long.start_time, render_now, session.hispeed);
         let tail = note_progress(long.end_time, render_now, session.hispeed);
-        // 終端が判定ラインを過ぎた、または始端が可視域より奥なら非表示。
+        // 終端が判定ラインを過ぎた、または始端がカバー域より奥なら非表示。
         // ホールド中のLNは head < 0 になるが tail は可視域に残るので表示される。
-        if tail < 0.0 || head > 1.0 {
+        // 始端・終端ともレーンカバーの可視上限 visible_max でクランプする。
+        if tail < 0.0 || head > visible_max {
             continue;
         }
         snapshot.visible_long_notes.push(VisibleLongNote {
             lane: long.lane,
-            head_y: head.clamp(0.0, 1.0),
-            tail_y: tail.clamp(0.0, 1.0),
+            head_y: head.clamp(0.0, visible_max),
+            tail_y: tail.clamp(0.0, visible_max),
         });
     }
 
@@ -107,14 +113,22 @@ fn skin_offsets_from_session(session: &GameSession) -> SkinOffsetValues {
     values
 }
 
-fn note_y(note_time: TimeUs, render_now: TimeUs, hispeed: f32) -> Option<f32> {
+/// ノートの正規化進捗（0.0=判定ライン, 1.0=可視域最奥）を返す。
+/// 判定ラインを過ぎた（delta<0）か、`visible_max` を超えるノートは `None`。
+/// `visible_max` はレーンカバーで縮んだ可視上限（カバー無しなら 1.0）。
+fn note_y(
+    note_time: TimeUs,
+    render_now: TimeUs,
+    hispeed: f32,
+    visible_max: f32,
+) -> Option<f32> {
     let delta = note_time.0 - render_now.0;
     if delta < 0 {
         return None;
     }
 
     let progress = delta as f32 * hispeed / DEFAULT_LOOKAHEAD_US as f32;
-    (progress <= 1.0).then_some(progress)
+    (progress <= visible_max).then_some(progress)
 }
 
 /// `note_y` と同じ正規化進捗を返すが、可視判定・クランプをしない生の値。
@@ -258,6 +272,25 @@ mod tests {
 
         assert_eq!(early.visible_notes[Lane::Key1.index()][0].y, 0.5);
         assert_eq!(later.visible_notes[Lane::Key1.index()][0].y, 0.125);
+    }
+
+    #[test]
+    fn build_render_snapshot_culls_notes_under_lane_cover() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+        session.hispeed = 1.0;
+        // Key1 のノートは render_now=0 で progress 0.5 (time 1_000_000 / lookahead 2_000_000)
+
+        // lane_cover=0.3 → visible_max=0.7 → progress 0.5 は可視
+        session.lane_cover = 0.3;
+        let visible = build_render_snapshot(&session, TimeUs(0), &[], None);
+        assert_eq!(visible.visible_notes[Lane::Key1.index()].len(), 1);
+
+        // lane_cover=0.6 → visible_max=0.4 → progress 0.5 はカバー域なので除外
+        session.lane_cover = 0.6;
+        let culled = build_render_snapshot(&session, TimeUs(0), &[], None);
+        assert!(culled.visible_notes[Lane::Key1.index()].is_empty());
     }
 
     #[test]

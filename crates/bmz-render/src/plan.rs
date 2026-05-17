@@ -587,6 +587,21 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
             });
         }
         push_judge_line(skin_manifest, &mut commands, board);
+
+        // SUDDEN+（レーンカバー）: レーン上部を覆う。ノーツは build_render_snapshot で
+        // 既に可視域外が除外されているので、ここではカバー帯を描くだけ。
+        if snapshot.lane_cover > 0.0 {
+            let cover_bottom = play_object_y(board, (1.0 - snapshot.lane_cover).clamp(0.0, 1.0));
+            commands.push(DrawCommand::Rect {
+                rect: Rect {
+                    x: board.x,
+                    y: board.y,
+                    width: board.width,
+                    height: (cover_bottom - board.y).max(0.0),
+                },
+                color: Color::rgba(0.02, 0.02, 0.03, 0.96),
+            });
+        }
     } else {
         // beatoraja スキン: ロングノート胴体 → タップノートの順で note.dst のエリアに配置
         for body in &snapshot.visible_long_notes {
