@@ -14,7 +14,6 @@ use bmz_render::snapshot::{
 };
 
 pub const DEFAULT_LOOKAHEAD_US: i64 = 2_000_000;
-pub const DEFAULT_POOR_BGA_DURATION_US: i64 = 500_000;
 pub type BgaFrameCatalog = HashMap<BgaAssetId, DisplayBgaFrame>;
 
 pub fn build_render_snapshot(
@@ -65,7 +64,13 @@ pub fn build_render_snapshot_with_bga_frames(
         has_bga: session.chart.metadata.has_bga,
         bga_base: current_bga_frame(&session.chart, render_now, BgaEventKind::Base, bga_frames),
         bga_layer: current_bga_frame(&session.chart, render_now, BgaEventKind::Layer, bga_frames),
-        bga_poor: current_poor_bga_frame(&session.chart, render_now, recent_judgements, bga_frames),
+        bga_poor: current_poor_bga_frame(
+            &session.chart,
+            render_now,
+            recent_judgements,
+            bga_frames,
+            session.poor_bga_duration_us,
+        ),
         best_ex_score,
         target_ex_score: None, // TODO: resolve from rival / target config
         judge_timing_offset_ms: (session.offsets.input_offset_us / 1_000) as i32,
@@ -124,11 +129,16 @@ fn current_poor_bga_frame(
     render_now: TimeUs,
     recent_judgements: &[JudgementEvent],
     bga_frames: &BgaFrameCatalog,
+    duration_us: i64,
 ) -> Option<DisplayBgaFrame> {
+    if duration_us <= 0 {
+        return None;
+    }
+
     let judgement = recent_judgements.iter().rev().find(|event| {
         matches!(event.judge, Judge::Bad | Judge::Poor)
             && render_now.0 >= event.time.0
-            && render_now.0 < event.time.0 + DEFAULT_POOR_BGA_DURATION_US
+            && render_now.0 < event.time.0 + duration_us
     })?;
     current_bga_frame(chart, judgement.time, BgaEventKind::Poor, bga_frames)
 }
@@ -515,7 +525,9 @@ mod tests {
                 kind: BgaEventKind::Poor,
             },
         ];
-        let session = build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
+        let mut session =
+            build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
+        session.poor_bga_duration_us = 250_000;
         let bga_frames = BgaFrameCatalog::from([
             (BgaAssetId(0), display_bga_frame(BgaAssetId(0), 256, 256)),
             (BgaAssetId(1), display_bga_frame(BgaAssetId(1), 640, 480)),
@@ -554,7 +566,7 @@ mod tests {
         );
         let poor_expired = build_render_snapshot_with_bga_frames(
             &session,
-            TimeUs(901_000),
+            TimeUs(651_000),
             &poor_judgements,
             None,
             &bga_frames,

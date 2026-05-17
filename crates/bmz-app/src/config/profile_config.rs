@@ -27,6 +27,12 @@ pub struct PlayDefaultsConfig {
     pub lane_effect: LaneEffectConfig,
     pub assist: AssistOptionConfig,
     pub auto_play: bool,
+    #[serde(default = "default_misslayer_duration_ms")]
+    pub misslayer_duration_ms: u32,
+}
+
+pub fn default_misslayer_duration_ms() -> u32 {
+    500
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -226,6 +232,7 @@ impl ProfileConfig {
                 lane_effect: LaneEffectConfig::Off,
                 assist: AssistOptionConfig::None,
                 auto_play: false,
+                misslayer_duration_ms: default_misslayer_duration_ms(),
             },
             judge: JudgeConfig {
                 input_offset_us: 0,
@@ -284,4 +291,25 @@ pub fn default_keyboard_bindings() -> Vec<BindingConfigEntry> {
 
 fn binding(control: &str, lane: LaneConfig) -> BindingConfigEntry {
     BindingConfigEntry { device: "keyboard".to_string(), control: control.to_string(), lane }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn play_defaults_uses_default_misslayer_duration_for_old_profiles() {
+        let play: PlayDefaultsConfig = toml::from_str(
+            r#"
+            gauge = "Normal"
+            random = "Off"
+            lane_effect = "Off"
+            assist = "None"
+            auto_play = false
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(play.misslayer_duration_ms, 500);
+    }
 }

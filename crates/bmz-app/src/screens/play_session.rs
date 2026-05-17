@@ -101,6 +101,7 @@ pub fn build_game_session_with_input_backend(
         lane_cover: profile.lane.lane_cover.clamp(0.0, 1.0),
         hidden_cover: hidden_cover_from_profile(profile),
         skin_offsets: skin_offsets_from_profile(profile),
+        poor_bga_duration_us: poor_bga_duration_us_from_profile(profile),
         input_timestamp_anchor: None,
         state: PlayState::Ready,
     }
@@ -116,6 +117,10 @@ fn hidden_cover_from_profile(profile: &ProfileConfig) -> f32 {
         LaneEffectConfig::Off | LaneEffectConfig::Sudden => 0.0,
     }
     .clamp(0.0, 1.0)
+}
+
+fn poor_bga_duration_us_from_profile(profile: &ProfileConfig) -> i64 {
+    i64::from(profile.play.misslayer_duration_ms.min(5_000)) * 1_000
 }
 
 fn skin_offsets_from_profile(profile: &ProfileConfig) -> Vec<PlaySkinOffset> {
@@ -310,6 +315,7 @@ mod tests {
         assert_eq!(session.audio_clock.sample_rate, 48_000);
         assert_eq!(session.hispeed, 2.0);
         assert_eq!(session.hidden_cover, 0.0);
+        assert_eq!(session.poor_bga_duration_us, 500_000);
     }
 
     #[test]
@@ -324,6 +330,17 @@ mod tests {
 
         assert_eq!(off.hidden_cover, 0.0);
         assert_eq!(hidden.hidden_cover, 0.4);
+    }
+
+    #[test]
+    fn build_game_session_clamps_profile_misslayer_duration() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.play.misslayer_duration_ms = 12_000;
+
+        let session =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+
+        assert_eq!(session.poor_bga_duration_us, 5_000_000);
     }
 
     #[test]
