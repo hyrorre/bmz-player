@@ -5,10 +5,19 @@ use anyhow::Result;
 use crate::storage::library_db::{ChartListItem, LibraryDatabase};
 use crate::storage::score_db::{BestScoreSummary, ScoreDatabase};
 
+fn md5_to_hex(md5: &[u8; 16]) -> String {
+    md5.iter().fold(String::with_capacity(32), |mut s, b| {
+        use std::fmt::Write;
+        let _ = write!(s, "{b:02x}");
+        s
+    })
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelectChartRow {
     pub chart: ChartListItem,
     pub best_score: Option<BestScoreSummary>,
+    pub table_level: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -75,6 +84,14 @@ pub fn load_select_items_in_folder(
         .map(|s| (s.chart_sha256, s))
         .collect();
 
+    let md5_hexes: Vec<String> = all_charts.iter().map(|c| md5_to_hex(&c.md5)).collect();
+    let md5_refs: Vec<&str> = md5_hexes.iter().map(|s| s.as_str()).collect();
+    let mut table_level_map: HashMap<String, String> = library_db
+        .list_difficulty_table_entries_by_md5s(&md5_refs)?
+        .into_iter()
+        .map(|e| (e.md5, format!("{}{}", e.table_symbol, e.level)))
+        .collect();
+
     let mut items = Vec::with_capacity(non_leaf_folders.len() + all_charts.len());
 
     for (path, name) in non_leaf_folders {
@@ -82,7 +99,8 @@ pub fn load_select_items_in_folder(
     }
     for chart in all_charts {
         let best_score = score_map.remove(&chart.sha256);
-        items.push(SelectItem::Chart(SelectChartRow { chart, best_score }));
+        let table_level = table_level_map.remove(&md5_to_hex(&chart.md5)).unwrap_or_default();
+        items.push(SelectItem::Chart(SelectChartRow { chart, best_score, table_level }));
     }
 
     Ok(items)

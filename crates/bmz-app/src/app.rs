@@ -907,6 +907,7 @@ fn select_snapshot_rows(
                     title: name.clone(),
                     artist: String::new(),
                     play_level: String::new(),
+                    table_level: String::new(),
                     clear_type: String::new(),
                     ex_score: None,
                     is_folder: true,
@@ -916,6 +917,7 @@ fn select_snapshot_rows(
                     title: row.chart.title.clone(),
                     artist: row.chart.artist.clone(),
                     play_level: row.chart.play_level.clone(),
+                    table_level: row.table_level.clone(),
                     clear_type: row
                         .best_score
                         .as_ref()
@@ -1599,6 +1601,7 @@ mod tests {
         SelectChartRow {
             chart: ChartListItem {
                 chart_id: index as i64,
+                md5: [0u8; 16],
                 sha256: [index as u8; 32],
                 title: format!("Title {index}"),
                 subtitle: String::new(),
@@ -1613,6 +1616,7 @@ mod tests {
                 folder_path: String::new(),
             },
             best_score: None,
+            table_level: String::new(),
         }
     }
 

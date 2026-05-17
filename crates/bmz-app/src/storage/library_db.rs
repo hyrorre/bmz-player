@@ -28,6 +28,7 @@ pub struct ChartImportRecord<'a> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChartListItem {
     pub chart_id: i64,
+    pub md5: [u8; 16],
     pub sha256: [u8; 32],
     pub title: String,
     pub subtitle: String,
@@ -237,6 +238,7 @@ impl LibraryDatabase {
         let mut stmt = self.conn.prepare(
             "SELECT
                 id,
+                md5,
                 sha256,
                 title,
                 subtitle,
@@ -285,6 +287,7 @@ impl LibraryDatabase {
         let mut stmt = self.conn.prepare(
             "SELECT
                 id,
+                md5,
                 sha256,
                 title,
                 subtitle,
@@ -399,24 +402,28 @@ impl LibraryDatabase {
 }
 
 fn chart_list_item_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChartListItem> {
-    let sha256_blob: Vec<u8> = row.get(1)?;
+    let md5_blob: Vec<u8> = row.get(1)?;
+    let mut md5 = [0_u8; 16];
+    md5.copy_from_slice(&md5_blob[..16]);
+    let sha256_blob: Vec<u8> = row.get(2)?;
     let mut sha256 = [0_u8; 32];
     sha256.copy_from_slice(&sha256_blob[..32]);
 
     Ok(ChartListItem {
         chart_id: row.get(0)?,
+        md5,
         sha256,
-        title: row.get(2)?,
-        subtitle: row.get(3)?,
-        artist: row.get(4)?,
-        difficulty_name: row.get(5)?,
-        play_level: row.get(6)?,
-        mode: row.get(7)?,
-        total_notes: row.get(8)?,
-        initial_bpm: row.get(9)?,
-        min_bpm: row.get(10)?,
-        max_bpm: row.get(11)?,
-        folder_path: row.get(12)?,
+        title: row.get(3)?,
+        subtitle: row.get(4)?,
+        artist: row.get(5)?,
+        difficulty_name: row.get(6)?,
+        play_level: row.get(7)?,
+        mode: row.get(8)?,
+        total_notes: row.get(9)?,
+        initial_bpm: row.get(10)?,
+        min_bpm: row.get(11)?,
+        max_bpm: row.get(12)?,
+        folder_path: row.get(13)?,
     })
 }
 

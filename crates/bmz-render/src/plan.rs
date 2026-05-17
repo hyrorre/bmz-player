@@ -395,6 +395,8 @@ fn row_status_label(row: Option<&SelectRowSnapshot>) -> String {
     let clear_type = clear_type_label(&row.clear_type);
     if !clear_type.is_empty() {
         clear_type.to_string()
+    } else if !row.table_level.is_empty() {
+        row.table_level.clone()
     } else if !row.play_level.is_empty() {
         format!("LV {}", display_label(&row.play_level, 4))
     } else {
@@ -1942,6 +1944,7 @@ mod tests {
                 title: format!("Title {index}"),
                 artist: format!("Artist {index}"),
                 play_level: index.to_string(),
+                table_level: String::new(),
                 clear_type: if index == 0 { "Normal".to_string() } else { String::new() },
                 ex_score: (index == 0).then_some(1234),
                 is_folder: false,

@@ -14,6 +14,7 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
             title: format!("Sample BMS {}", index + 1),
             artist: "bmz".to_string(),
             play_level: (index + 1).to_string(),
+            table_level: String::new(),
             clear_type: if index == 0 { "Normal".to_string() } else { String::new() },
             ex_score: (index == 0).then_some(1888),
             is_folder: false,
