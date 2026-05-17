@@ -46,6 +46,16 @@ pub enum DrawCommand {
         blend: BlendMode,
         linear_filter: bool,
     },
+    RotatedImage {
+        rect: Rect,
+        uv: UvRect,
+        texture: TextureId,
+        tint: Color,
+        blend: BlendMode,
+        linear_filter: bool,
+        angle_rad: f32,
+        center: Point,
+    },
     Text {
         origin: Point,
         text: String,

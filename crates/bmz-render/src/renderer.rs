@@ -591,7 +591,7 @@ impl WgpuRenderer {
 
 const RECT_INSTANCE_FLOATS: usize = 8;
 const RECT_INSTANCE_BYTES: usize = RECT_INSTANCE_FLOATS * std::mem::size_of::<f32>();
-const IMAGE_INSTANCE_FLOATS: usize = 12;
+const IMAGE_INSTANCE_FLOATS: usize = 16;
 const IMAGE_INSTANCE_BYTES: usize = IMAGE_INSTANCE_FLOATS * std::mem::size_of::<f32>();
 const TEXT_INSTANCE_FLOATS: usize = 12;
 const TEXT_INSTANCE_BYTES: usize = TEXT_INSTANCE_FLOATS * std::mem::size_of::<f32>();
@@ -635,8 +635,21 @@ fn encode_rects(plan: &DrawPlan) -> Vec<u8> {
 fn encode_image_batches(plan: &DrawPlan) -> Vec<ImageBatch> {
     let mut batches = Vec::new();
     for command in &plan.commands {
-        let DrawCommand::Image { rect, uv, texture, tint, blend, linear_filter } = command else {
-            continue;
+        let (rect, uv, texture, tint, blend, linear_filter, angle_rad, center) = match command {
+            DrawCommand::Image { rect, uv, texture, tint, blend, linear_filter } => {
+                (rect, uv, texture, tint, blend, linear_filter, 0.0, Point { x: 0.5, y: 0.5 })
+            }
+            DrawCommand::RotatedImage {
+                rect,
+                uv,
+                texture,
+                tint,
+                blend,
+                linear_filter,
+                angle_rad,
+                center,
+            } => (rect, uv, texture, tint, blend, linear_filter, *angle_rad, *center),
+            _ => continue,
         };
         let batch_index = batches
             .iter()
@@ -666,6 +679,10 @@ fn encode_image_batches(plan: &DrawPlan) -> Vec<ImageBatch> {
             tint.g,
             tint.b,
             tint.a,
+            angle_rad,
+            center.x,
+            center.y,
+            0.0,
         ] {
             batch.instances.extend_from_slice(&value.to_le_bytes());
         }
@@ -1342,6 +1359,11 @@ fn create_image_pipeline(
                         shader_location: 2,
                         format: wgpu::VertexFormat::Float32x4,
                     },
+                    wgpu::VertexAttribute {
+                        offset: 48,
+                        shader_location: 3,
+                        format: wgpu::VertexFormat::Float32x4,
+                    },
                 ],
             }],
         },
@@ -1531,6 +1553,7 @@ fn vs_main(
     @location(0) rect: vec4<f32>,
     @location(1) uv_rect: vec4<f32>,
     @location(2) tint: vec4<f32>,
+    @location(3) rotation: vec4<f32>,
 ) -> VertexOutput {
     var corners = array<vec2<f32>, 6>(
         vec2<f32>(0.0, 0.0),
@@ -1541,7 +1564,15 @@ fn vs_main(
         vec2<f32>(1.0, 1.0),
     );
     let local = corners[vertex_index];
-    let pos01 = rect.xy + local * rect.zw;
+    let pivot = rotation.yz;
+    let relative = (local - pivot) * rect.zw;
+    let c = cos(rotation.x);
+    let s = sin(rotation.x);
+    let rotated = vec2<f32>(
+        relative.x * c - relative.y * s,
+        relative.x * s + relative.y * c,
+    );
+    let pos01 = rect.xy + pivot * rect.zw + rotated;
 
     var out: VertexOutput;
     out.position = vec4<f32>(pos01.x * 2.0 - 1.0, 1.0 - pos01.y * 2.0, 0.0, 1.0);
@@ -1910,6 +1941,35 @@ mod tests {
         assert_eq!(batches.len(), 2);
         assert_eq!(batches[0].blend, BlendMode::Normal);
         assert_eq!(batches[1].blend, BlendMode::Add);
+    }
+
+    #[test]
+    fn encode_image_batches_writes_rotation_instance_data() {
+        let plan = DrawPlan {
+            clear: Color::rgb(0.0, 0.0, 0.0),
+            commands: vec![DrawCommand::RotatedImage {
+                rect: crate::plan::Rect { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
+                uv: crate::plan::UvRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+                texture: crate::plan::TextureId(0),
+                tint: Color::rgb(1.0, 1.0, 1.0),
+                blend: BlendMode::Normal,
+                linear_filter: false,
+                angle_rad: 1.25,
+                center: Point { x: 0.0, y: 1.0 },
+            }],
+        };
+
+        let batches = encode_image_batches(&plan);
+        let floats: Vec<f32> = batches[0]
+            .instances
+            .chunks_exact(std::mem::size_of::<f32>())
+            .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()))
+            .collect();
+
+        assert_eq!(floats.len(), IMAGE_INSTANCE_FLOATS);
+        assert_eq!(floats[12], 1.25);
+        assert_eq!(floats[13], 0.0);
+        assert_eq!(floats[14], 1.0);
     }
 
     #[test]

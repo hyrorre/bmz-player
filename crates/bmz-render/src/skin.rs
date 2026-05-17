@@ -1008,6 +1008,17 @@ pub enum SkinRenderItem {
         source_size: Option<SkinImageSize>,
         linear_filter: bool,
     },
+    RotatedImage {
+        texture: SkinTextureId,
+        rect: Rect,
+        uv: TextureRegion,
+        tint: Color,
+        blend: BlendMode,
+        source_size: Option<SkinImageSize>,
+        linear_filter: bool,
+        angle_deg: f32,
+        center: Point,
+    },
     Text {
         origin: Point,
         text: String,
@@ -1164,26 +1175,16 @@ impl SkinDocument {
                         self.w,
                         self.h,
                     );
-                    return Some(vec![SkinRenderItem::Image {
-                        texture: source.texture,
+                    return Some(vec![skin_image_item_for_frame(
+                        source.texture,
                         rect,
                         uv,
-                        tint: Color::rgba(
-                            frame.r as f32 / 255.0,
-                            frame.g as f32 / 255.0,
-                            frame.b as f32 / 255.0,
-                            frame.a as f32 / 255.0,
-                        ),
-                        blend: if destination.blend == 2 {
-                            BlendMode::Add
-                        } else {
-                            BlendMode::Normal
-                        },
-                        scale: SkinImageScale::Stretch,
-                        border: None,
-                        source_size: Some(source.source_size),
-                        linear_filter: destination.filter != 0,
-                    }]);
+                        frame,
+                        destination.center,
+                        if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal },
+                        Some(source.source_size),
+                        destination.filter != 0,
+                    )]);
                 }
 
                 // imageset (キービーム・ボム等) を destination 自身のタイマー駆動で描画する。
@@ -1202,26 +1203,16 @@ impl SkinDocument {
                         self.w,
                         self.h,
                     );
-                    return Some(vec![SkinRenderItem::Image {
-                        texture: source.texture,
+                    return Some(vec![skin_image_item_for_frame(
+                        source.texture,
                         rect,
                         uv,
-                        tint: Color::rgba(
-                            frame.r as f32 / 255.0,
-                            frame.g as f32 / 255.0,
-                            frame.b as f32 / 255.0,
-                            frame.a as f32 / 255.0,
-                        ),
-                        blend: if destination.blend == 2 {
-                            BlendMode::Add
-                        } else {
-                            BlendMode::Normal
-                        },
-                        scale: SkinImageScale::Stretch,
-                        border: None,
-                        source_size: Some(source.source_size),
-                        linear_filter: destination.filter != 0,
-                    }]);
+                        frame,
+                        destination.center,
+                        if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal },
+                        Some(source.source_size),
+                        destination.filter != 0,
+                    )]);
                 }
 
                 if let Some(value) = self.value.iter().find(|value| value.id == destination.id) {
@@ -2433,6 +2424,28 @@ pub fn append_skin_render_items(commands: &mut Vec<DrawCommand>, items: &[SkinRe
                     *linear_filter,
                 );
             }
+            SkinRenderItem::RotatedImage {
+                texture,
+                rect,
+                uv,
+                tint,
+                blend,
+                source_size: _,
+                linear_filter,
+                angle_deg,
+                center,
+            } => {
+                commands.push(DrawCommand::RotatedImage {
+                    rect: *rect,
+                    uv: UvRect { x: uv.x, y: uv.y, width: uv.width, height: uv.height },
+                    texture: TextureId(texture.0),
+                    tint: *tint,
+                    blend: *blend,
+                    linear_filter: *linear_filter,
+                    angle_rad: angle_deg.to_radians(),
+                    center: *center,
+                });
+            }
         }
     }
 }
@@ -3028,12 +3041,61 @@ fn apply_skin_offset_to_frame(
                     frame.y += offset.y - offset.h / 2;
                     frame.w += offset.w;
                     frame.h += offset.h;
-                    frame.r += offset.r;
+                    frame.angle += offset.r;
                     frame.a = (frame.a + offset.a).clamp(0, 255);
                 }
             }
         }
     }
+}
+
+fn skin_image_item_for_frame(
+    texture: SkinTextureId,
+    rect: Rect,
+    uv: TextureRegion,
+    frame: ResolvedSkinFrame,
+    center: i32,
+    blend: BlendMode,
+    source_size: Option<SkinImageSize>,
+    linear_filter: bool,
+) -> SkinRenderItem {
+    let tint = Color::rgba(
+        frame.r as f32 / 255.0,
+        frame.g as f32 / 255.0,
+        frame.b as f32 / 255.0,
+        frame.a as f32 / 255.0,
+    );
+    if frame.angle == 0 {
+        return SkinRenderItem::Image {
+            texture,
+            rect,
+            uv,
+            tint,
+            blend,
+            scale: SkinImageScale::Stretch,
+            border: None,
+            source_size,
+            linear_filter,
+        };
+    }
+    SkinRenderItem::RotatedImage {
+        texture,
+        rect,
+        uv,
+        tint,
+        blend,
+        source_size,
+        linear_filter,
+        angle_deg: frame.angle as f32,
+        center: skin_rotation_center(center),
+    }
+}
+
+fn skin_rotation_center(center: i32) -> Point {
+    const CENTER_X: [f32; 10] = [0.5, 0.0, 0.5, 1.0, 0.0, 0.5, 1.0, 0.0, 0.5, 1.0];
+    const CENTER_Y_BOTTOM_ORIGIN: [f32; 10] = [0.5, 0.0, 0.0, 0.0, 0.5, 0.5, 0.5, 1.0, 1.0, 1.0];
+    let index = usize::try_from(center).ok().filter(|index| *index < CENTER_X.len()).unwrap_or(0);
+    Point { x: CENTER_X[index], y: 1.0 - CENTER_Y_BOTTOM_ORIGIN[index] }
 }
 
 fn resolve_destination_frame(
@@ -3131,6 +3193,7 @@ fn interpolate_skin_frame(
         r: interpolate_i32(start.r, end.r, t),
         g: interpolate_i32(start.g, end.g, t),
         b: interpolate_i32(start.b, end.b, t),
+        angle: interpolate_i32(start.angle, end.angle, t),
     }
 }
 
@@ -3188,6 +3251,9 @@ fn apply_skin_animation(frame: &mut ResolvedSkinFrame, animation: &SkinAnimation
     }
     if let Some(b) = animation.b {
         frame.b = b;
+    }
+    if let Some(angle) = animation.angle {
+        frame.angle = angle;
     }
 }
 
@@ -3397,11 +3463,12 @@ struct ResolvedSkinFrame {
     r: i32,
     g: i32,
     b: i32,
+    angle: i32,
 }
 
 impl Default for ResolvedSkinFrame {
     fn default() -> Self {
-        Self { time: 0, x: 0, y: 0, w: 0, h: 0, acc: 0, a: 255, r: 255, g: 255, b: 255 }
+        Self { time: 0, x: 0, y: 0, w: 0, h: 0, acc: 0, a: 255, r: 255, g: 255, b: 255, angle: 0 }
     }
 }
 
@@ -5653,6 +5720,35 @@ mod tests {
         assert!(approx_eq(rect.width, 40.0 / 100.0));
         assert!(approx_eq(rect.height, 52.0 / 100.0));
         assert!(approx_eq(tint.a, 150.0 / 255.0));
+    }
+
+    #[test]
+    fn destination_angle_and_center_emit_rotated_image() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "w": 100, "h": 100,
+                "source": [{ "id": "src", "path": "a.png" }],
+                "image": [{ "id": "img", "src": "src", "w": 10, "h": 10 }],
+                "destination": [
+                    { "id": "img", "center": 1, "dst": [
+                        { "time": 0, "x": 10, "y": 20, "w": 30, "h": 40, "angle": 90 }
+                    ]}
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        let sources = mock_source("src", 10.0, 10.0);
+        let items = document.static_image_render_items(&sources, SkinDrawState::default());
+
+        assert_eq!(items.len(), 1);
+        assert!(matches!(
+            items[0],
+            SkinRenderItem::RotatedImage { angle_deg, center, .. }
+                if approx_eq(angle_deg, 90.0) && approx_eq(center.x, 0.0) && approx_eq(center.y, 1.0)
+        ));
     }
 
     #[test]
