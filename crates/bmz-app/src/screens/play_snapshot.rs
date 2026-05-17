@@ -501,16 +501,24 @@ mod tests {
 
     #[test]
     fn build_render_snapshot_selects_current_bga_frames() {
-        use bmz_chart::model::{BgaAssetRef, BgaEvent};
+        use bmz_chart::model::{BgaAssetKind, BgaAssetRef, BgaEvent};
 
         let profile = ProfileConfig::new_default("default", "Default", 1);
         let mut chart = chart();
         chart.metadata.has_bga = true;
         chart.bga_assets = vec![
-            BgaAssetRef { id: BgaAssetId(0), path: "base-a.png".into() },
-            BgaAssetRef { id: BgaAssetId(1), path: "base-b.png".into() },
-            BgaAssetRef { id: BgaAssetId(2), path: "layer.png".into() },
-            BgaAssetRef { id: BgaAssetId(3), path: "poor.png".into() },
+            BgaAssetRef {
+                id: BgaAssetId(0),
+                path: "base-a.png".into(),
+                kind: BgaAssetKind::Static,
+            },
+            BgaAssetRef {
+                id: BgaAssetId(1),
+                path: "base-b.png".into(),
+                kind: BgaAssetKind::Static,
+            },
+            BgaAssetRef { id: BgaAssetId(2), path: "layer.png".into(), kind: BgaAssetKind::Static },
+            BgaAssetRef { id: BgaAssetId(3), path: "poor.png".into(), kind: BgaAssetKind::Static },
         ];
         chart.bga_events = vec![
             BgaEvent {

@@ -9,3 +9,4 @@ pub mod screens;
 pub mod select_options;
 pub mod skin_loader;
 pub mod storage;
+pub mod video_bga;

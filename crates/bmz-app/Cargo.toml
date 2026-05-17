@@ -19,3 +19,4 @@ bmz-chart = { path = "../bmz-chart" }
 bmz-audio = { path = "../bmz-audio" }
 bmz-gameplay = { path = "../bmz-gameplay" }
 bmz-render = { path = "../bmz-render" }
+bmz-video = { path = "../bmz-video" }

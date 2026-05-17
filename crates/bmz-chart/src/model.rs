@@ -128,10 +128,17 @@ pub struct BgaEvent {
     pub kind: BgaEventKind,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BgaAssetKind {
+    Static,
+    Video,
+}
+
 #[derive(Debug, Clone)]
 pub struct BgaAssetRef {
     pub id: BgaAssetId,
     pub path: PathBuf,
+    pub kind: BgaAssetKind,
 }
 
 impl PlayableChart {

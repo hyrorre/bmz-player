@@ -7,6 +7,7 @@ members = [
     "crates/bmz-render",
     "crates/bmz-app",
     "crates/bmz-skin-convert",
+    "crates/bmz-video",
 ]
 default-members = ["crates/bmz-app"]
 resolver = "2"

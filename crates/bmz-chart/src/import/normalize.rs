@@ -6,8 +6,9 @@ use bmz_core::lane::{LANE_COUNT, Lane};
 use bmz_core::time::{ChartTick, TimeUs};
 
 use crate::model::{
-    BarLine, BgaAssetId, BgaAssetRef, BgaEvent, BgaEventKind, ChartMetadata, LongNotePair,
-    NoteEvent, NoteKind, PlayableChart, SoundAssetRef, SoundEvent, TimingEvent, TimingEventKind,
+    BarLine, BgaAssetId, BgaAssetKind, BgaAssetRef, BgaEvent, BgaEventKind, ChartMetadata,
+    LongNotePair, NoteEvent, NoteKind, PlayableChart, SoundAssetRef, SoundEvent, TimingEvent,
+    TimingEventKind,
 };
 use crate::timing::{TickTimingEvent, TickTimingEventKind, TimingMap, build_timing_map};
 
@@ -169,7 +170,7 @@ fn build_bga_table(
             warnings.push(ImportWarning::MissingBmpFile { path: path.clone() });
         }
         by_bmp_key.insert(bmp.key, id);
-        assets.push(BgaAssetRef { id, path });
+        assets.push(BgaAssetRef { id, path, kind: bga_asset_kind(&bmp.path) });
     }
 
     BgaTable { by_bmp_key, assets }
@@ -230,6 +231,16 @@ fn bga_event_kind(kind: super::intermediate::IntermediateBgaKind) -> BgaEventKin
         super::intermediate::IntermediateBgaKind::Base => BgaEventKind::Base,
         super::intermediate::IntermediateBgaKind::Poor => BgaEventKind::Poor,
         super::intermediate::IntermediateBgaKind::Layer => BgaEventKind::Layer,
+    }
+}
+
+fn bga_asset_kind(path: &Path) -> BgaAssetKind {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some(ext) => match ext.to_ascii_lowercase().as_str() {
+            "mp4" | "avi" | "wmv" | "mpg" | "mpeg" | "mkv" | "mov" => BgaAssetKind::Video,
+            _ => BgaAssetKind::Static,
+        },
+        None => BgaAssetKind::Static,
     }
 }
 

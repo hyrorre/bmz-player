@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, bail};
@@ -5,6 +6,7 @@ use bmz_audio::backend::cpal::{CpalBackend, CpalOutput, SharedAudioEngine};
 use bmz_audio::clock::AudioClock;
 use bmz_audio::engine::AudioEngine;
 use bmz_audio::loader::LoadedSampleReport;
+use bmz_chart::model::BgaAssetId;
 use bmz_core::time::TimeUs;
 use bmz_gameplay::session::GameSession;
 
@@ -12,6 +14,7 @@ use crate::config::app_config::{AudioBackend, AudioConfig};
 use crate::screens::play_finish::FinishedPlaySession;
 use crate::screens::play_session::PreparedPlaySession;
 use crate::screens::play_snapshot::BgaFrameCatalog;
+use crate::video_bga::ActiveVideoBgaDecoder;
 
 pub struct AppAudioOutput {
     pub engine: SharedAudioEngine,
@@ -27,6 +30,8 @@ pub struct RunningPlaySession {
     /// プレイ開始時に DB から取得したベスト EX スコア。未取得なら None。
     pub best_ex_score: Option<u32>,
     pub bga_frames: BgaFrameCatalog,
+    pub video_bga_decoders: HashMap<BgaAssetId, ActiveVideoBgaDecoder>,
+    pub failed_video_bga: HashSet<BgaAssetId>,
 }
 
 impl AppAudioOutput {
@@ -82,6 +87,8 @@ pub fn open_prepared_play_audio(
         audio_paused_after_finish: false,
         best_ex_score: None,
         bga_frames: BgaFrameCatalog::new(),
+        video_bga_decoders: HashMap::new(),
+        failed_video_bga: HashSet::new(),
     })
 }
 

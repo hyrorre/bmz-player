@@ -443,6 +443,15 @@ impl WinitApp {
             return;
         };
 
+        // 動画BGAテクスチャを更新（前フレームの時刻を使用、1フレーム遅延は許容）
+        let video_update_time =
+            self.last_play_snapshot.as_ref().map(|s| s.time).unwrap_or(bmz_core::time::TimeUs(0));
+        crate::video_bga::update_video_bga_frames(
+            &mut self.renderer,
+            &mut active_play.running,
+            video_update_time,
+        );
+
         match advance_running_play_session_until_result(
             &mut active_play.running,
             &mut self.boot.score_db,
@@ -597,14 +606,16 @@ fn load_play_skin_textures(renderer: &mut Renderer, play_skin_path: &str) {
 }
 
 fn load_chart_bga_textures(renderer: &mut Renderer, chart: &PlayableChart) -> BgaFrameCatalog {
+    use bmz_chart::model::BgaAssetKind;
+
     let mut frames = BgaFrameCatalog::new();
     for asset in &chart.bga_assets {
         let path = &asset.path;
-        if !is_supported_bga_image_path(path) {
+        if asset.kind != BgaAssetKind::Static {
             tracing::debug!(
                 asset_id = asset.id.0,
                 path = %path.display(),
-                "skipping unsupported BGA image"
+                "skipping non-static BGA asset (will be decoded at play time)"
             );
             continue;
         }
@@ -644,12 +655,6 @@ fn load_chart_bga_textures(renderer: &mut Renderer, chart: &PlayableChart) -> Bg
         }
     }
     frames
-}
-
-fn is_supported_bga_image_path(path: &std::path::Path) -> bool {
-    path.extension().and_then(|extension| extension.to_str()).is_some_and(|extension| {
-        matches!(extension.to_ascii_lowercase().as_str(), "png" | "bmp" | "jpg" | "jpeg")
-    })
 }
 
 fn format_error_chain(error: &anyhow::Error) -> String {
