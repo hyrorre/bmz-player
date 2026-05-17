@@ -71,6 +71,7 @@ pub fn build_render_snapshot_with_bga_frames(
             bga_frames,
             session.poor_bga_duration_us,
         ),
+        bga_stretch: session.bga_stretch,
         best_ex_score,
         target_ex_score: None, // TODO: resolve from rival / target config
         judge_timing_offset_ms: (session.offsets.input_offset_us / 1_000) as i32,

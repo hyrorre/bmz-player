@@ -31,6 +31,7 @@ pub struct RenderSnapshot {
     pub bga_base: Option<DisplayBgaFrame>,
     pub bga_layer: Option<DisplayBgaFrame>,
     pub bga_poor: Option<DisplayBgaFrame>,
+    pub bga_stretch: i32,
     pub best_ex_score: Option<u32>,
     pub target_ex_score: Option<u32>,
     pub judge_timing_offset_ms: i32,

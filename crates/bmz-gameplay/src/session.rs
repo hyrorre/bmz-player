@@ -86,6 +86,7 @@ pub struct GameSession {
     pub hidden_cover: f32,
     pub skin_offsets: Vec<PlaySkinOffset>,
     pub poor_bga_duration_us: i64,
+    pub bga_stretch: i32,
     pub input_timestamp_anchor: Option<InputTimestampAnchor>,
     pub state: PlayState,
 }
@@ -435,6 +436,7 @@ mod tests {
             hidden_cover: 0.0,
             skin_offsets: Vec::new(),
             poor_bga_duration_us: 500_000,
+            bga_stretch: 1,
             input_timestamp_anchor: None,
             state: PlayState::Ready,
         }

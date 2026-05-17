@@ -509,6 +509,7 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
             texture: SkinTextureId(frame.texture_id),
             source_size: crate::skin::SkinImageSize { width: frame.width, height: frame.height },
         }),
+        bga_stretch: snapshot.bga_stretch,
         judge_timing_ms,
         best_ex_score: snapshot.best_ex_score,
         target_ex_score: snapshot.target_ex_score,

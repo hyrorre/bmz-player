@@ -22,7 +22,7 @@ use crate::config::play::{
     DEFAULT_JUDGE_WINDOW, audio_mix_from_profile, gauge_type_from_config,
     lane_binding_from_profile_input, play_offsets_from_profile,
 };
-use crate::config::profile_config::{LaneEffectConfig, ProfileConfig};
+use crate::config::profile_config::{BgaExpandConfig, LaneEffectConfig, ProfileConfig};
 use crate::select_options::ArrangeOption;
 use crate::storage::library_db::LibraryDatabase;
 
@@ -102,6 +102,7 @@ pub fn build_game_session_with_input_backend(
         hidden_cover: hidden_cover_from_profile(profile),
         skin_offsets: skin_offsets_from_profile(profile),
         poor_bga_duration_us: poor_bga_duration_us_from_profile(profile),
+        bga_stretch: bga_stretch_from_profile(profile),
         input_timestamp_anchor: None,
         state: PlayState::Ready,
     }
@@ -121,6 +122,14 @@ fn hidden_cover_from_profile(profile: &ProfileConfig) -> f32 {
 
 fn poor_bga_duration_us_from_profile(profile: &ProfileConfig) -> i64 {
     i64::from(profile.play.misslayer_duration_ms.min(5_000)) * 1_000
+}
+
+fn bga_stretch_from_profile(profile: &ProfileConfig) -> i32 {
+    match profile.play.bga_expand {
+        BgaExpandConfig::Full => 0,
+        BgaExpandConfig::KeepAspect => 1,
+        BgaExpandConfig::Off => 8,
+    }
 }
 
 fn skin_offsets_from_profile(profile: &ProfileConfig) -> Vec<PlaySkinOffset> {
@@ -316,6 +325,7 @@ mod tests {
         assert_eq!(session.hispeed, 2.0);
         assert_eq!(session.hidden_cover, 0.0);
         assert_eq!(session.poor_bga_duration_us, 500_000);
+        assert_eq!(session.bga_stretch, 1);
     }
 
     #[test]
@@ -341,6 +351,22 @@ mod tests {
             build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
 
         assert_eq!(session.poor_bga_duration_us, 5_000_000);
+    }
+
+    #[test]
+    fn build_game_session_maps_profile_bga_expand() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+
+        profile.play.bga_expand = BgaExpandConfig::Full;
+        let full = build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+        profile.play.bga_expand = BgaExpandConfig::KeepAspect;
+        let keep = build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+        profile.play.bga_expand = BgaExpandConfig::Off;
+        let off = build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+
+        assert_eq!(full.bga_stretch, 0);
+        assert_eq!(keep.bga_stretch, 1);
+        assert_eq!(off.bga_stretch, 8);
     }
 
     #[test]

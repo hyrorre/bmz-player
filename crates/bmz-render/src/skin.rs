@@ -753,7 +753,7 @@ pub struct SkinBgaFrame {
     pub source_size: SkinImageSize,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SkinDrawState {
     pub elapsed_ms: i32,
     pub combo: u32,
@@ -809,6 +809,8 @@ pub struct SkinDrawState {
     pub bga_layer: Option<SkinBgaFrame>,
     /// 直近のBAD/POORで一時表示するミスレイヤー画像。
     pub bga_poor: Option<SkinBgaFrame>,
+    /// BGA destination に stretch 指定が無い場合に使う拡大設定。
+    pub bga_stretch: i32,
     /// 最後の判定のタイミングずれ ms (VALUE_JUDGE_1P_DURATION=525 に使用)。Noneなら非表示。
     pub judge_timing_ms: Option<i32>,
     /// 過去ベストスコアのexスコア (NUMBER_HIGHSCORE=150, BARGRAPH_BESTSCORERATE=113 に使用)。
@@ -817,6 +819,49 @@ pub struct SkinDrawState {
     pub target_ex_score: Option<u32>,
     /// 判定タイミングオフセット設定値 ms (NUMBER_JUDGETIMING=12 に使用、beatoraja の judgetiming 設定)。
     pub judge_timing_offset_ms: i32,
+}
+
+impl Default for SkinDrawState {
+    fn default() -> Self {
+        Self {
+            elapsed_ms: 0,
+            combo: 0,
+            max_combo: 0,
+            ex_score: 0,
+            total_notes: 0,
+            past_notes: 0,
+            judge_counts: DisplayJudgeCounts::default(),
+            gauge: 0.0,
+            play_progress: 0.0,
+            end_of_note: false,
+            bomb_ms: [None; 8],
+            keyon_ms: [None; 8],
+            lane_judge: [None; 8],
+            judge_ms: None,
+            judge_index: None,
+            offset_lift_px: 0,
+            offset_lanecover_px: 0,
+            offset_hidden_cover_px: 0,
+            skin_offsets: SkinOffsetValues::default(),
+            hispeed: 0.0,
+            timeleft_ms: 0,
+            total_duration_ms: 0,
+            lane_cover: 0.0,
+            hidden_cover: 0.0,
+            now_bpm: 0.0,
+            min_bpm: 0.0,
+            max_bpm: 0.0,
+            has_bga: false,
+            bga_base: None,
+            bga_layer: None,
+            bga_poor: None,
+            bga_stretch: 1,
+            judge_timing_ms: None,
+            best_ex_score: None,
+            target_ex_score: None,
+            judge_timing_offset_ms: 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -1262,11 +1307,13 @@ impl SkinDocument {
                 let rect = normalize_skin_frame_rect(frame, self.w, self.h);
                 let blend = if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal };
                 let tint = Color::rgba(1.0, 1.0, 1.0, frame.a as f32 / 255.0);
+                let stretch =
+                    if destination.stretch < 0 { state.bga_stretch } else { destination.stretch };
                 let mut items = Vec::new();
                 if let Some(bga) = state.bga_poor {
                     items.push(bga_image_item(
                         bga,
-                        destination.stretch,
+                        stretch,
                         rect,
                         tint,
                         blend,
@@ -1277,7 +1324,7 @@ impl SkinDocument {
                 } else if let Some(bga) = state.bga_base {
                     items.push(bga_image_item(
                         bga,
-                        destination.stretch,
+                        stretch,
                         rect,
                         tint,
                         blend,
@@ -1291,7 +1338,7 @@ impl SkinDocument {
                 {
                     items.push(bga_image_item(
                         bga,
-                        destination.stretch,
+                        stretch,
                         rect,
                         tint,
                         blend,
@@ -4375,6 +4422,94 @@ mod tests {
         assert!(matches!(
             items.as_slice(),
             [SkinRenderItem::Image { texture: SkinTextureId(20002), .. }]
+        ));
+    }
+
+    #[test]
+    fn bga_destination_uses_profile_stretch_when_destination_omits_stretch() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "bga": { "id": "bga" },
+                "destination": [
+                    { "id": "bga", "dst": [{ "x": 10, "y": 20, "w": 30, "h": 40 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        let items = document.static_render_items(
+            &HashMap::new(),
+            SkinDrawState {
+                has_bga: true,
+                bga_base: Some(SkinBgaFrame {
+                    texture: SkinTextureId(20000),
+                    source_size: SkinImageSize { width: 256.0, height: 128.0 },
+                }),
+                bga_stretch: 1,
+                ..SkinDrawState::default()
+            },
+            SkinTextState::default(),
+        );
+
+        assert!(matches!(
+            items.as_slice(),
+            [SkinRenderItem::Image {
+                texture: SkinTextureId(20000),
+                rect: Rect { x, y, width, height },
+                ..
+            }] if approx_eq(*x, 0.1)
+                && approx_eq(*y, 0.525)
+                && approx_eq(*width, 0.3)
+                && approx_eq(*height, 0.15)
+        ));
+    }
+
+    #[test]
+    fn bga_destination_stretch_overrides_profile_stretch() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "bga": { "id": "bga" },
+                "destination": [
+                    { "id": "bga", "stretch": 0, "dst": [{ "x": 10, "y": 20, "w": 30, "h": 40 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        let items = document.static_render_items(
+            &HashMap::new(),
+            SkinDrawState {
+                has_bga: true,
+                bga_base: Some(SkinBgaFrame {
+                    texture: SkinTextureId(20000),
+                    source_size: SkinImageSize { width: 256.0, height: 128.0 },
+                }),
+                bga_stretch: 1,
+                ..SkinDrawState::default()
+            },
+            SkinTextState::default(),
+        );
+
+        assert!(matches!(
+            items.as_slice(),
+            [SkinRenderItem::Image {
+                texture: SkinTextureId(20000),
+                rect: Rect { x, y, width, height },
+                ..
+            }] if approx_eq(*x, 0.1)
+                && approx_eq(*y, 0.4)
+                && approx_eq(*width, 0.3)
+                && approx_eq(*height, 0.4)
         ));
     }
 
