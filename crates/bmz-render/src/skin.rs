@@ -665,6 +665,19 @@ impl SkinContext {
         document.static_render_items(&self.document_sources, state, text)
     }
 
+    /// 静的 destination を `{"id":"notes"}` マーカーで分割して返す。
+    /// `.0` はノーツ背面、`.1` はノーツ前面に描画するアイテム列。
+    pub fn static_document_items_split_for_state_and_text(
+        &self,
+        state: SkinDrawState,
+        text: SkinTextState<'_>,
+    ) -> (Vec<SkinRenderItem>, Vec<SkinRenderItem>) {
+        let Some(document) = &self.document else {
+            return (Vec::new(), Vec::new());
+        };
+        document.static_render_items_split(&self.document_sources, state, text)
+    }
+
     pub fn document_note_item(&self, lane: Lane, rect: Rect) -> Option<SkinRenderItem> {
         let document = self.document.as_ref()?;
         document.note_image_render_item(lane, rect, &self.document_sources)
@@ -1137,13 +1150,62 @@ impl SkinDocument {
         state: SkinDrawState,
         text_state: SkinTextState<'_>,
     ) -> Vec<SkinRenderItem> {
+        let (mut behind, front) = self.static_render_items_split(sources, state, text_state);
+        behind.extend(front);
+        behind
+    }
+
+    /// 静的 destination を `{"id":"notes"}` マーカーで2分割して描画アイテムを返す。
+    /// 戻り値 `.0` はノーツより背面、`.1` はノーツより前面に描画するアイテム列。
+    /// マーカーが無いスキンでは全アイテムが `.0`（背面）に入る。
+    pub fn static_render_items_split(
+        &self,
+        sources: &HashMap<String, SkinDocumentTexture>,
+        state: SkinDrawState,
+        text_state: SkinTextState<'_>,
+    ) -> (Vec<SkinRenderItem>, Vec<SkinRenderItem>) {
         let images = self.image_map();
         let enabled_options = self.enabled_options();
-        self.all_destinations(&enabled_options)
-            .into_iter()
-            .filter(|destination| test_skin_ops(&destination.op, &enabled_options, state))
-            .filter(|destination| eval_skin_draw_condition(&destination.draw, state))
-            .filter_map(|destination| {
+        let mut behind = Vec::new();
+        let mut front = Vec::new();
+        let mut after_notes_marker = false;
+        for destination in self.all_destinations(&enabled_options) {
+            // `{"id":"notes"}` はノーツ描画位置マーカー。以降の destination はノーツ前面に積む。
+            if destination.id == "notes" {
+                after_notes_marker = true;
+                continue;
+            }
+            if !test_skin_ops(&destination.op, &enabled_options, state) {
+                continue;
+            }
+            if !eval_skin_draw_condition(&destination.draw, state) {
+                continue;
+            }
+            if let Some(items) = self.resolve_destination_items(
+                destination,
+                &images,
+                &enabled_options,
+                state,
+                text_state,
+                sources,
+            ) {
+                let target = if after_notes_marker { &mut front } else { &mut behind };
+                target.extend(items);
+            }
+        }
+        (behind, front)
+    }
+
+    fn resolve_destination_items(
+        &self,
+        destination: &SkinDestinationDef,
+        images: &HashMap<&str, &SkinImageDef>,
+        enabled_options: &[i32],
+        state: SkinDrawState,
+        text_state: SkinTextState<'_>,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Option<Vec<SkinRenderItem>> {
+        {
                 if self.judge.iter().any(|judge| judge.id == destination.id) {
                     let judge_index = state.judge_index?;
                     let elapsed = state.judge_ms?;
@@ -1158,7 +1220,7 @@ impl SkinDocument {
                 }
 
                 let elapsed = skin_timer_elapsed_ms(destination.timer, state)?;
-                let mut frame = resolve_destination_frame(destination, elapsed, &enabled_options)?;
+                let mut frame = resolve_destination_frame(destination, elapsed, enabled_options)?;
                 let is_hidden_cover_destination =
                     self.hidden_cover.iter().any(|cover| cover.id == destination.id);
                 apply_skin_offset_to_frame(
@@ -1266,9 +1328,7 @@ impl SkinDocument {
                     self.hidden_cover.iter().find(|cover| cover.id == destination.id)?;
                 self.hidden_cover_render_item(hidden_cover, destination, frame, state, sources)
                     .map(|item| vec![item])
-            })
-            .flatten()
-            .collect()
+        }
     }
 
     pub fn enabled_options(&self) -> Vec<i32> {
@@ -4303,6 +4363,50 @@ mod tests {
                 && approx_eq(r, 64.0 / 255.0)
                 && approx_eq(a, 128.0 / 255.0)
         ));
+    }
+
+    #[test]
+    fn static_render_items_split_at_notes_marker() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "system.png" }],
+                "image": [
+                    { "id": "behind", "src": 1, "x": 0, "y": 0, "w": 8, "h": 8 },
+                    { "id": "cover", "src": 1, "x": 0, "y": 0, "w": 8, "h": 8 },
+                    { "id": "frame", "src": 1, "x": 0, "y": 0, "w": 8, "h": 8 }
+                ],
+                "destination": [
+                    { "id": "behind", "dst": [{ "x": 0, "y": 0, "w": 100, "h": 100 }] },
+                    { "id": "notes" },
+                    { "id": "cover", "dst": [{ "x": 10, "y": 10, "w": 20, "h": 20 }] },
+                    { "id": "frame", "dst": [{ "x": 5, "y": 5, "w": 90, "h": 90 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = mock_source("1", 8.0, 8.0);
+
+        let (behind, front) = document.static_render_items_split(
+            &sources,
+            SkinDrawState::default(),
+            SkinTextState::default(),
+        );
+
+        // `{"id":"notes"}` マーカーより前の destination は背面、後ろは前面に入る。
+        assert_eq!(behind.len(), 1, "behind = destinations before the notes marker");
+        assert_eq!(front.len(), 2, "front = destinations after the notes marker");
+        // 結合版 static_render_items は behind→front の順で全アイテムを返す。
+        let all = document.static_render_items(
+            &sources,
+            SkinDrawState::default(),
+            SkinTextState::default(),
+        );
+        assert_eq!(all.len(), 3);
     }
 
     #[test]

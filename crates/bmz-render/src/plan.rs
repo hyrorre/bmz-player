@@ -449,10 +449,7 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
         .last()
         .map(|j| (j.delta_us / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32);
 
-    append_skin_render_items(
-        &mut commands,
-        &skin.static_document_items_for_state_and_text(
-            crate::skin::SkinDrawState {
+    let skin_state = crate::skin::SkinDrawState {
                 elapsed_ms: (snapshot.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64)
                     as i32,
                 combo: snapshot.combo,
@@ -504,16 +501,19 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
                 best_ex_score: snapshot.best_ex_score,
                 target_ex_score: snapshot.target_ex_score,
                 judge_timing_offset_ms: snapshot.judge_timing_offset_ms,
-            },
-            SkinTextState {
-                title: &snapshot.title,
-                subtitle: &snapshot.subtitle,
-                artist: &snapshot.artist,
-                subartist: &snapshot.subartist,
-                genre: &snapshot.genre,
-            },
-        ),
-    );
+    };
+    let skin_text = SkinTextState {
+        title: &snapshot.title,
+        subtitle: &snapshot.subtitle,
+        artist: &snapshot.artist,
+        subartist: &snapshot.subartist,
+        genre: &snapshot.genre,
+    };
+    // `{"id":"notes"}` マーカーでノーツ背面/前面に分割。
+    // 描画順: 背面skin要素 → ロングノート胴体 → ノーツ → 前面skin要素（レーンカバー・枠・スコア等）
+    let (behind_notes_items, front_notes_items) =
+        skin.static_document_items_split_for_state_and_text(skin_state, skin_text);
+    append_skin_render_items(&mut commands, &behind_notes_items);
 
     if !has_document {
         // デフォルトスキン: ボード背景・レーン背景を描画
@@ -607,6 +607,9 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
             }
         }
     }
+
+    // ノーツより前面の skin 要素（レーンカバー・枠・スコア等）をノーツの上に重ねる
+    append_skin_render_items(&mut commands, &front_notes_items);
 
     push_gauge(
         skin,
