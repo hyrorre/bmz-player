@@ -1262,10 +1262,18 @@ impl SkinDocument {
                 let tint = Color::rgba(1.0, 1.0, 1.0, frame.a as f32 / 255.0);
                 let mut items = Vec::new();
                 if let Some(bga) = state.bga_base {
+                    let (rect, uv) = stretch_skin_image_geometry(
+                        destination.stretch,
+                        rect,
+                        TextureRegion::default(),
+                        bga.source_size,
+                        self.w,
+                        self.h,
+                    );
                     items.push(SkinRenderItem::Image {
                         texture: bga.texture,
                         rect,
-                        uv: TextureRegion::default(),
+                        uv,
                         tint,
                         blend,
                         scale: SkinImageScale::Stretch,
@@ -1275,10 +1283,18 @@ impl SkinDocument {
                     });
                 }
                 if let Some(bga) = state.bga_layer {
+                    let (rect, uv) = stretch_skin_image_geometry(
+                        destination.stretch,
+                        rect,
+                        TextureRegion::default(),
+                        bga.source_size,
+                        self.w,
+                        self.h,
+                    );
                     items.push(SkinRenderItem::Image {
                         texture: bga.texture,
                         rect,
-                        uv: TextureRegion::default(),
+                        uv,
                         tint,
                         blend,
                         scale: SkinImageScale::Stretch,
@@ -4248,7 +4264,7 @@ mod tests {
                 "h": 100,
                 "bga": { "id": "bga" },
                 "destination": [
-                    { "id": "bga", "dst": [{ "x": 10, "y": 20, "w": 30, "h": 40, "a": 128 }] }
+                    { "id": "bga", "stretch": 1, "dst": [{ "x": 10, "y": 20, "w": 30, "h": 40, "a": 128 }] }
                 ]
             }
             "#,
@@ -4261,7 +4277,7 @@ mod tests {
                 has_bga: true,
                 bga_base: Some(SkinBgaFrame {
                     texture: SkinTextureId(20000),
-                    source_size: SkinImageSize { width: 256.0, height: 256.0 },
+                    source_size: SkinImageSize { width: 256.0, height: 128.0 },
                 }),
                 bga_layer: Some(SkinBgaFrame {
                     texture: SkinTextureId(20001),
@@ -4275,9 +4291,18 @@ mod tests {
         assert!(matches!(
             items.as_slice(),
             [
-                SkinRenderItem::Image { texture: SkinTextureId(20000), tint: Color { a, .. }, .. },
+                SkinRenderItem::Image {
+                    texture: SkinTextureId(20000),
+                    rect: Rect { x, y, width, height },
+                    tint: Color { a, .. },
+                    ..
+                },
                 SkinRenderItem::Image { texture: SkinTextureId(20001), .. },
-            ] if approx_eq(*a, 128.0 / 255.0)
+            ] if approx_eq(*x, 0.1)
+                && approx_eq(*y, 0.525)
+                && approx_eq(*width, 0.3)
+                && approx_eq(*height, 0.15)
+                && approx_eq(*a, 128.0 / 255.0)
         ));
     }
 

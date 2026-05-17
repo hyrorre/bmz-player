@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use bmz_chart::model::{BgaAssetId, BgaEventKind, PlayableChart, TimingEventKind};
 use bmz_core::judge::{Judge, TimingSide};
 use bmz_core::lane::Lane;
@@ -12,12 +14,29 @@ use bmz_render::snapshot::{
 };
 
 pub const DEFAULT_LOOKAHEAD_US: i64 = 2_000_000;
+pub type BgaFrameCatalog = HashMap<BgaAssetId, DisplayBgaFrame>;
 
 pub fn build_render_snapshot(
     session: &GameSession,
     render_now: TimeUs,
     recent_judgements: &[JudgementEvent],
     best_ex_score: Option<u32>,
+) -> RenderSnapshot {
+    build_render_snapshot_with_bga_frames(
+        session,
+        render_now,
+        recent_judgements,
+        best_ex_score,
+        &BgaFrameCatalog::new(),
+    )
+}
+
+pub fn build_render_snapshot_with_bga_frames(
+    session: &GameSession,
+    render_now: TimeUs,
+    recent_judgements: &[JudgementEvent],
+    best_ex_score: Option<u32>,
+    bga_frames: &BgaFrameCatalog,
 ) -> RenderSnapshot {
     let mut snapshot = RenderSnapshot {
         time: render_now,
@@ -43,8 +62,8 @@ pub fn build_render_snapshot(
         min_bpm: chart_min_bpm(&session.chart) as f32,
         max_bpm: chart_max_bpm(&session.chart) as f32,
         has_bga: session.chart.metadata.has_bga,
-        bga_base: current_bga_frame(&session.chart, render_now, BgaEventKind::Base),
-        bga_layer: current_bga_frame(&session.chart, render_now, BgaEventKind::Layer),
+        bga_base: current_bga_frame(&session.chart, render_now, BgaEventKind::Base, bga_frames),
+        bga_layer: current_bga_frame(&session.chart, render_now, BgaEventKind::Layer, bga_frames),
         best_ex_score,
         target_ex_score: None, // TODO: resolve from rival / target config
         judge_timing_offset_ms: (session.offsets.input_offset_us / 1_000) as i32,
@@ -102,14 +121,22 @@ fn current_bga_frame(
     chart: &PlayableChart,
     render_now: TimeUs,
     kind: BgaEventKind,
+    bga_frames: &BgaFrameCatalog,
 ) -> Option<DisplayBgaFrame> {
     let event = chart
         .bga_events
         .iter()
         .rev()
         .find(|event| event.time <= render_now && event.kind == kind)?;
-    let asset = chart.bga_assets.iter().find(|asset| asset.id == event.asset)?;
-    Some(DisplayBgaFrame { texture_id: bga_texture_id(asset.id), width: 1.0, height: 1.0 })
+    bga_frames.get(&event.asset).copied()
+}
+
+pub fn display_bga_frame(id: BgaAssetId, width: u32, height: u32) -> DisplayBgaFrame {
+    DisplayBgaFrame {
+        texture_id: bga_texture_id(id),
+        width: width.max(1) as f32,
+        height: height.max(1) as f32,
+    }
 }
 
 pub fn bga_texture_id(id: BgaAssetId) -> u32 {
@@ -466,13 +493,37 @@ mod tests {
             },
         ];
         let session = build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
+        let bga_frames = BgaFrameCatalog::from([
+            (BgaAssetId(0), display_bga_frame(BgaAssetId(0), 256, 256)),
+            (BgaAssetId(1), display_bga_frame(BgaAssetId(1), 640, 480)),
+            (BgaAssetId(2), display_bga_frame(BgaAssetId(2), 1280, 720)),
+        ]);
 
-        let early = build_render_snapshot(&session, TimeUs(100_000), &[], None);
-        let late = build_render_snapshot(&session, TimeUs(600_000), &[], None);
+        let early = build_render_snapshot_with_bga_frames(
+            &session,
+            TimeUs(100_000),
+            &[],
+            None,
+            &bga_frames,
+        );
+        let late = build_render_snapshot_with_bga_frames(
+            &session,
+            TimeUs(600_000),
+            &[],
+            None,
+            &bga_frames,
+        );
 
         assert_eq!(early.bga_base.unwrap().texture_id, bga_texture_id(BgaAssetId(0)));
         assert!(early.bga_layer.is_none());
-        assert_eq!(late.bga_base.unwrap().texture_id, bga_texture_id(BgaAssetId(1)));
+        assert_eq!(
+            late.bga_base.unwrap(),
+            DisplayBgaFrame {
+                texture_id: bga_texture_id(BgaAssetId(1)),
+                width: 640.0,
+                height: 480.0
+            }
+        );
         assert_eq!(late.bga_layer.unwrap().texture_id, bga_texture_id(BgaAssetId(2)));
     }
 

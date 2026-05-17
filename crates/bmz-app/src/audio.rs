@@ -11,6 +11,7 @@ use bmz_gameplay::session::GameSession;
 use crate::config::app_config::{AudioBackend, AudioConfig};
 use crate::screens::play_finish::FinishedPlaySession;
 use crate::screens::play_session::PreparedPlaySession;
+use crate::screens::play_snapshot::BgaFrameCatalog;
 
 pub struct AppAudioOutput {
     pub engine: SharedAudioEngine,
@@ -25,6 +26,7 @@ pub struct RunningPlaySession {
     pub audio_paused_after_finish: bool,
     /// プレイ開始時に DB から取得したベスト EX スコア。未取得なら None。
     pub best_ex_score: Option<u32>,
+    pub bga_frames: BgaFrameCatalog,
 }
 
 impl AppAudioOutput {
@@ -79,6 +81,7 @@ pub fn open_prepared_play_audio(
         finished: None,
         audio_paused_after_finish: false,
         best_ex_score: None,
+        bga_frames: BgaFrameCatalog::new(),
     })
 }
 

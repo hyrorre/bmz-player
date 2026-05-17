@@ -30,7 +30,7 @@ use crate::config::save::save_profile_config;
 use crate::input::winit::physical_key_to_control;
 use crate::screens::play_finish::FinishedPlaySession;
 use crate::screens::play_loop::{PlayAdvanceOutcome, advance_running_play_session_until_result};
-use crate::screens::play_snapshot::bga_texture_id;
+use crate::screens::play_snapshot::{BgaFrameCatalog, bga_texture_id, display_bga_frame};
 use crate::screens::play_start::{PlayStartOptions, StartedWinitPlaySession};
 use crate::screens::result_model::ResultSummary;
 use crate::screens::select_model::{SelectItem, load_select_items_in_folder, root_folder_items};
@@ -366,8 +366,9 @@ impl WinitApp {
 
     fn start_chart(&mut self, chart_id: i64) {
         match self.boot.start_play_for_chart_with_winit_input(chart_id, self.play_start_options()) {
-            Ok(active_play) => {
-                load_chart_bga_textures(&mut self.renderer, &active_play.running.session.chart);
+            Ok(mut active_play) => {
+                active_play.running.bga_frames =
+                    load_chart_bga_textures(&mut self.renderer, &active_play.running.session.chart);
                 self.active_play = Some(active_play);
                 self.finished_play = None;
                 self.last_play_snapshot = None;
@@ -595,7 +596,8 @@ fn load_play_skin_textures(renderer: &mut Renderer, play_skin_path: &str) {
     }
 }
 
-fn load_chart_bga_textures(renderer: &mut Renderer, chart: &PlayableChart) {
+fn load_chart_bga_textures(renderer: &mut Renderer, chart: &PlayableChart) -> BgaFrameCatalog {
+    let mut frames = BgaFrameCatalog::new();
     for asset in &chart.bga_assets {
         let path = &asset.path;
         if !path
@@ -614,6 +616,7 @@ fn load_chart_bga_textures(renderer: &mut Renderer, chart: &PlayableChart) {
         match load_png_rgba(path) {
             Ok(image) => {
                 let texture_id = TextureId(bga_texture_id(asset.id));
+                let frame = display_bga_frame(asset.id, image.width, image.height);
                 if let Err(error) = renderer.upsert_image_asset(texture_id, &image) {
                     tracing::warn!(
                         asset_id = asset.id.0,
@@ -626,9 +629,12 @@ fn load_chart_bga_textures(renderer: &mut Renderer, chart: &PlayableChart) {
                     tracing::info!(
                         asset_id = asset.id.0,
                         texture_id = texture_id.0,
+                        width = image.width,
+                        height = image.height,
                         path = %path.display(),
                         "loaded BGA image"
                     );
+                    frames.insert(asset.id, frame);
                 }
             }
             Err(error) => {
@@ -641,6 +647,7 @@ fn load_chart_bga_textures(renderer: &mut Renderer, chart: &PlayableChart) {
             }
         }
     }
+    frames
 }
 
 fn format_error_chain(error: &anyhow::Error) -> String {

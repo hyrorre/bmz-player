@@ -10,7 +10,7 @@ use crate::paths::ProfilePaths;
 use crate::screens::play_finish::{
     FinishedPlaySession, finish_session_result, finish_session_result_once,
 };
-use crate::screens::play_snapshot::build_render_snapshot;
+use crate::screens::play_snapshot::{BgaFrameCatalog, build_render_snapshot_with_bga_frames};
 use crate::storage::score_db::ScoreDatabase;
 
 #[derive(Debug, Clone)]
@@ -44,12 +44,22 @@ pub fn advance_play_screen(
     audio: &mut dyn AudioScheduler,
     best_ex_score: Option<u32>,
 ) -> FrameOutput<RenderSnapshot> {
+    advance_play_screen_with_bga_frames(session, audio, best_ex_score, &BgaFrameCatalog::new())
+}
+
+pub fn advance_play_screen_with_bga_frames(
+    session: &mut GameSession,
+    audio: &mut dyn AudioScheduler,
+    best_ex_score: Option<u32>,
+    bga_frames: &BgaFrameCatalog,
+) -> FrameOutput<RenderSnapshot> {
     let frame = advance_session_frame(session, audio);
-    let render_snapshot = build_render_snapshot(
+    let render_snapshot = build_render_snapshot_with_bga_frames(
         session,
         frame.times.render_now,
         &session.recent_judgements,
         best_ex_score,
+        bga_frames,
     );
     FrameOutput { render_snapshot, state: frame.state }
 }
@@ -84,11 +94,14 @@ pub fn advance_play_screen_with_shared_audio(
 pub fn advance_running_play_session(
     running: &mut RunningPlaySession,
 ) -> Result<FrameOutput<RenderSnapshot>> {
-    advance_play_screen_with_shared_audio(
+    let mut audio =
+        running.audio.engine.lock().map_err(|_| anyhow!("audio engine lock poisoned"))?;
+    Ok(advance_play_screen_with_bga_frames(
         &mut running.session,
-        &running.audio.engine,
+        &mut *audio,
         running.best_ex_score,
-    )
+        &running.bga_frames,
+    ))
 }
 
 pub fn advance_running_play_session_until_result(
@@ -100,16 +113,18 @@ pub fn advance_running_play_session_until_result(
 ) -> Result<PlayAdvanceOutcome> {
     if let Some(finished) = running.finished.clone() {
         pause_running_audio_after_finish(running);
-        return Ok(PlayAdvanceOutcome::Finished {
-            frame: current_play_frame(&running.session, running.best_ex_score),
-            finished,
-        });
+        return Ok(PlayAdvanceOutcome::Finished { frame: current_play_frame(running), finished });
     }
 
     let frame = {
         let mut audio =
             running.audio.engine.lock().map_err(|_| anyhow!("audio engine lock poisoned"))?;
-        advance_play_screen(&mut running.session, &mut *audio, running.best_ex_score)
+        advance_play_screen_with_bga_frames(
+            &mut running.session,
+            &mut *audio,
+            running.best_ex_score,
+            &running.bga_frames,
+        )
     };
     if matches!(frame.state, PlayState::Finished | PlayState::Failed) {
         let finished = finish_session_result_once(
@@ -143,13 +158,16 @@ fn pause_running_audio_after_finish(running: &mut RunningPlaySession) {
     }
 }
 
-fn current_play_frame(
-    session: &GameSession,
-    best_ex_score: Option<u32>,
-) -> FrameOutput<RenderSnapshot> {
+fn current_play_frame(running: &RunningPlaySession) -> FrameOutput<RenderSnapshot> {
+    let session = &running.session;
     let times = bmz_gameplay::session::compute_frame_times(session);
-    let render_snapshot =
-        build_render_snapshot(session, times.render_now, &session.recent_judgements, best_ex_score);
+    let render_snapshot = build_render_snapshot_with_bga_frames(
+        session,
+        times.render_now,
+        &session.recent_judgements,
+        running.best_ex_score,
+        &running.bga_frames,
+    );
     FrameOutput { render_snapshot, state: session.state }
 }
 
