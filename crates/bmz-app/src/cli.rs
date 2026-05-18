@@ -9,6 +9,7 @@ pub const SMOKE_EXIT_ON_RESULT_ARG: &str = "--smoke-exit-on-result";
 pub enum Command {
     Run(AppOptions),
     Table(TableCommand),
+    Songs(SongsCommand),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,6 +17,13 @@ pub enum TableCommand {
     Add { url: String },
     List,
     Fetch,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SongsCommand {
+    Add { path: String, recursive: bool, enabled: bool },
+    List,
+    Reload,
 }
 
 pub fn parse_command<I, S>(args: I) -> Result<Command>
@@ -39,6 +47,26 @@ where
                 Some("fetch") => Ok(Command::Table(TableCommand::Fetch)),
                 Some(sub) => bail!("unknown table subcommand: {sub}. Use: add, list, fetch"),
                 None => bail!("table requires a subcommand: add, list, fetch"),
+            }
+        }
+        Some("songs") => {
+            let rest = &args[1..];
+            match rest.first().map(|s| s.as_str()) {
+                Some("add") => {
+                    let flags = &rest[1..];
+                    let path = flags
+                        .iter()
+                        .find(|s| !s.starts_with('-'))
+                        .ok_or_else(|| anyhow::anyhow!("songs add requires a PATH"))?
+                        .clone();
+                    let recursive = !flags.iter().any(|s| s == "--no-recursive");
+                    let enabled = !flags.iter().any(|s| s == "--disabled");
+                    Ok(Command::Songs(SongsCommand::Add { path, recursive, enabled }))
+                }
+                Some("list") => Ok(Command::Songs(SongsCommand::List)),
+                Some("reload") => Ok(Command::Songs(SongsCommand::Reload)),
+                Some(sub) => bail!("unknown songs subcommand: {sub}. Use: add, list, reload"),
+                None => bail!("songs requires a subcommand: add, list, reload"),
             }
         }
         _ => Ok(Command::Run(AppOptions::parse_args(args)?)),
@@ -98,7 +126,7 @@ where
 }
 
 pub fn app_help_text() -> &'static str {
-    "bmz-app\n\nUsage:\n  bmz-app [OPTIONS]\n  bmz-app table <SUBCOMMAND>\n\nOptions:\n  --boot-play-sample              Start the bundled sample chart on boot\n  --autoplay-on-start             Enable autoplay for started charts\n  --smoke-exit-after-frames <N>   Exit after N rendered frames, clamped to 1 or more\n  --smoke-exit-on-result          Exit when the app reaches the result screen\n  -h, --help                      Print this help\n\nTable subcommands:\n  table add <URL>   Add a difficulty table source and fetch it\n  table list        List all stored difficulty tables\n  table fetch       Fetch/update all configured difficulty tables\n\nExamples:\n  cargo run -p bmz-app -- --boot-play-sample --smoke-exit-after-frames 3\n  cargo run -p bmz-app -- table add https://example.com/table.html\n  cargo run -p bmz-app -- table list"
+    "bmz-app\n\nUsage:\n  bmz-app [OPTIONS]\n  bmz-app table <SUBCOMMAND>\n  bmz-app songs <SUBCOMMAND>\n\nOptions:\n  --boot-play-sample              Start the bundled sample chart on boot\n  --autoplay-on-start             Enable autoplay for started charts\n  --smoke-exit-after-frames <N>   Exit after N rendered frames, clamped to 1 or more\n  --smoke-exit-on-result          Exit when the app reaches the result screen\n  -h, --help                      Print this help\n\nTable subcommands:\n  table add <URL>   Add a difficulty table source and fetch it\n  table list        List all stored difficulty tables\n  table fetch       Fetch/update all configured difficulty tables\n\nSongs subcommands:\n  songs add <PATH> [--no-recursive] [--disabled]   Add a song root directory\n  songs list                                        List configured song roots\n  songs reload                                      Scan all song roots and update the library\n\nExamples:\n  cargo run -p bmz-app -- --boot-play-sample --smoke-exit-after-frames 3\n  cargo run -p bmz-app -- table add https://example.com/table.html\n  cargo run -p bmz-app -- table list\n  cargo run -p bmz-app -- songs add /path/to/bms\n  cargo run -p bmz-app -- songs list\n  cargo run -p bmz-app -- songs reload"
 }
 
 fn parse_smoke_exit_after_frames_value(value: &str) -> Result<u32> {
@@ -200,5 +228,45 @@ mod tests {
         assert!(parse_command(["table", "remove"]).is_err());
         assert!(parse_command(["table"]).is_err());
         assert!(parse_command(["table", "add"]).is_err());
+    }
+
+    #[test]
+    fn parse_command_routes_songs_subcommands() {
+        assert_eq!(
+            parse_command(["songs", "add", "/bms"]).unwrap(),
+            Command::Songs(SongsCommand::Add {
+                path: "/bms".to_string(),
+                recursive: true,
+                enabled: true,
+            })
+        );
+        assert_eq!(
+            parse_command(["songs", "add", "/bms", "--no-recursive", "--disabled"]).unwrap(),
+            Command::Songs(SongsCommand::Add {
+                path: "/bms".to_string(),
+                recursive: false,
+                enabled: false,
+            })
+        );
+        assert_eq!(parse_command(["songs", "list"]).unwrap(), Command::Songs(SongsCommand::List));
+        assert_eq!(
+            parse_command(["songs", "reload"]).unwrap(),
+            Command::Songs(SongsCommand::Reload)
+        );
+    }
+
+    #[test]
+    fn parse_command_rejects_unknown_songs_subcommand() {
+        assert!(parse_command(["songs", "remove"]).is_err());
+        assert!(parse_command(["songs"]).is_err());
+        assert!(parse_command(["songs", "add"]).is_err());
+    }
+
+    #[test]
+    fn help_text_lists_songs_subcommands() {
+        let help = app_help_text();
+        assert!(help.contains("songs add"));
+        assert!(help.contains("songs list"));
+        assert!(help.contains("songs reload"));
     }
 }

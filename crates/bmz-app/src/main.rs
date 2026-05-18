@@ -14,5 +14,6 @@ async fn main() -> Result<()> {
     match bmz_app::cli::parse_command(args)? {
         Command::Run(options) => bmz_app::app::run_with_options(options).await,
         Command::Table(cmd) => bmz_app::table_cmd::run_table_command(cmd).await,
+        Command::Songs(cmd) => bmz_app::songs_cmd::run_songs_command(cmd),
     }
 }
