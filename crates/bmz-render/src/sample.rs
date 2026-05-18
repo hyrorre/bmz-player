@@ -38,6 +38,7 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
         arrange: "NORMAL".to_string(),
         gauge: "NORMAL".to_string(),
         assist: "NORMAL".to_string(),
+        bga: "ON".to_string(),
         current_folder: String::new(),
         key_hint: "UP DOWN  RIGHT/Z/X/C/V:ENTER  LEFT/S:BACK".to_string(),
         option_hint:

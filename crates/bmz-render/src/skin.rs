@@ -790,6 +790,10 @@ pub struct SkinDrawState {
     pub select_bar_elapsed_ms: i32,
     pub select_option_panel_elapsed_ms: i32,
     pub select_option_panel: u8,
+    pub select_arrange_index: usize,
+    pub select_gauge_index: usize,
+    pub select_bga_index: usize,
+    pub select_assist_index: usize,
     pub combo: u32,
     pub max_combo: u32,
     pub ex_score: u32,
@@ -882,6 +886,10 @@ impl Default for SkinDrawState {
             select_bar_elapsed_ms: 0,
             select_option_panel_elapsed_ms: 0,
             select_option_panel: 0,
+            select_arrange_index: 0,
+            select_gauge_index: 2,
+            select_bga_index: 0,
+            select_assist_index: 0,
             combo: 0,
             max_combo: 0,
             ex_score: 0,
@@ -1431,9 +1439,13 @@ impl SkinDocument {
         // imageset (キービーム・ボム等) を destination 自身のタイマー駆動で描画する。
         // timer が非アクティブな destination は上の skin_timer_elapsed_ms で除外済み。
         if let Some(imageset) = self.imageset.iter().find(|set| set.id == destination.id) {
-            let judge_index =
-                imageset_ref_lane(imageset.ref_id).and_then(|lane| state.lane_judge[lane.index()]);
-            let image_id = imageset_image_for_index(imageset, judge_index)?;
+            let image_id = if let Some(index) = skin_state_imageset_index(imageset.ref_id, state) {
+                imageset.images.get(index.min(imageset.images.len().saturating_sub(1))).cloned()
+            } else {
+                let judge_index = imageset_ref_lane(imageset.ref_id)
+                    .and_then(|lane| state.lane_judge[lane.index()]);
+                imageset_image_for_index(imageset, judge_index)
+            }?;
             let image = images.get(image_id.as_str())?;
             let source = sources.get(&image.src)?;
             let (rect, uv) = stretch_skin_image_geometry(
@@ -1593,6 +1605,10 @@ impl SkinDocument {
                 .clamp(i32::MIN as i64, i32::MAX as i64)
                 as i32,
             select_option_panel: snapshot.option_panel,
+            select_arrange_index: select_arrange_index(&snapshot.arrange),
+            select_gauge_index: select_gauge_index(&snapshot.gauge),
+            select_bga_index: select_bga_index(&snapshot.bga),
+            select_assist_index: select_assist_index(&snapshot.assist),
             select_chart_count: snapshot.chart_count,
             select_play_level: selected_row.map(select_row_level_number).unwrap_or(0),
             select_ex_score: selected_row.and_then(|row| row.ex_score),
@@ -2393,6 +2409,17 @@ fn imageset_ref_lane(ref_id: i32) -> Option<Lane> {
         505 => Some(Lane::Key5),
         506 => Some(Lane::Key6),
         507 => Some(Lane::Key7),
+        _ => None,
+    }
+}
+
+fn skin_state_imageset_index(ref_id: i32, state: SkinDrawState) -> Option<usize> {
+    match ref_id {
+        40 => Some(state.select_gauge_index),
+        42 | 43 => Some(state.select_arrange_index),
+        54 | 55 => Some(0),
+        72 => Some(state.select_bga_index),
+        301..=307 => Some(0),
         _ => None,
     }
 }
@@ -3625,6 +3652,41 @@ fn select_row_clear_index(row: &SelectRowSnapshot) -> usize {
         "FullCombo" => 8,
         "Perfect" => 9,
         "Max" => 10,
+        _ => 0,
+    }
+}
+
+fn select_arrange_index(arrange: &str) -> usize {
+    match arrange {
+        "MIRROR" => 1,
+        "RANDOM" => 2,
+        _ => 0,
+    }
+}
+
+fn select_gauge_index(gauge: &str) -> usize {
+    match gauge {
+        "A-EASY" => 0,
+        "EASY" => 1,
+        "NORMAL" => 2,
+        "HARD" => 3,
+        "EX-HARD" => 4,
+        "HAZARD" => 5,
+        _ => 2,
+    }
+}
+
+fn select_bga_index(bga: &str) -> usize {
+    match bga {
+        "AUTO" => 1,
+        "OFF" => 2,
+        _ => 0,
+    }
+}
+
+fn select_assist_index(assist: &str) -> usize {
+    match assist {
+        "AUTOPLAY" => 1,
         _ => 0,
     }
 }
@@ -6597,6 +6659,23 @@ mod tests {
         assert_eq!(skin_state_number(160, state), Some(148));
         assert_eq!(skin_state_number(350, state), Some(1200));
         assert_eq!(skin_state_number(71, state), Some(1234));
+    }
+
+    #[test]
+    fn skin_state_imageset_index_maps_select_options() {
+        let state = SkinDrawState {
+            select_arrange_index: 2,
+            select_gauge_index: 4,
+            select_bga_index: 1,
+            ..SkinDrawState::default()
+        };
+
+        assert_eq!(skin_state_imageset_index(42, state), Some(2));
+        assert_eq!(skin_state_imageset_index(43, state), Some(2));
+        assert_eq!(skin_state_imageset_index(40, state), Some(4));
+        assert_eq!(skin_state_imageset_index(72, state), Some(1));
+        assert_eq!(skin_state_imageset_index(301, state), Some(0));
+        assert_eq!(skin_state_imageset_index(500, state), None);
     }
 
     #[test]

@@ -25,6 +25,7 @@ pub struct SelectSnapshot {
     pub arrange: String,
     pub gauge: String,
     pub assist: String,
+    pub bga: String,
     pub current_folder: String,
     pub key_hint: String,
     pub option_hint: String,

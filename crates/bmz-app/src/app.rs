@@ -25,8 +25,8 @@ use crate::cli::{
 };
 use crate::config::app_config::PathEntry;
 use crate::config::profile_config::{
-    AssistOptionConfig, GaugeTypeConfig, LaneConfig, ProfileConfig, ProfileInputConfig,
-    RandomOptionConfig,
+    AssistOptionConfig, BgaModeConfig, GaugeTypeConfig, LaneConfig, ProfileConfig,
+    ProfileInputConfig, RandomOptionConfig,
 };
 use crate::config::save::save_profile_config;
 use crate::input::winit::physical_key_to_control;
@@ -300,6 +300,7 @@ impl WinitApp {
             arrange: self.arrange_option.as_str().to_string(),
             gauge: gauge_option_as_str(self.gauge_option).to_string(),
             assist: self.assist_option.as_str().to_string(),
+            bga: bga_mode_as_str(self.boot.profile_config.play.bga).to_string(),
             current_folder,
             key_hint: self.select_keys.key_hint.clone(),
             option_hint: self.select_keys.option_hint.clone(),
@@ -888,6 +889,14 @@ fn gauge_option_as_str(gauge: GaugeTypeConfig) -> &'static str {
         GaugeTypeConfig::Hard => "HARD",
         GaugeTypeConfig::ExHard => "EX-HARD",
         GaugeTypeConfig::Hazard => "HAZARD",
+    }
+}
+
+fn bga_mode_as_str(bga: BgaModeConfig) -> &'static str {
+    match bga {
+        BgaModeConfig::On => "ON",
+        BgaModeConfig::Auto => "AUTO",
+        BgaModeConfig::Off => "OFF",
     }
 }
 
