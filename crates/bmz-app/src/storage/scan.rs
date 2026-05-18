@@ -55,21 +55,27 @@ pub fn scan_song_roots(
             "scanning root"
         );
 
-        let log_every = (files_total / 10).max(1);
+        let mut last_log = std::time::Instant::now();
+        let log_interval = std::time::Duration::from_secs(2);
 
         for (file_index, path) in files.iter().enumerate() {
             report.summary.files_seen += 1;
 
-            if file_index % log_every == 0 {
-                let pct = file_index * 100 / files_total.max(1);
-                let folder = path.parent().unwrap_or(root_path);
-                tracing::info!(
-                    pct,
-                    done = file_index,
-                    total = files_total,
-                    folder = %folder.display(),
-                    "scan progress"
-                );
+            // Instant::now() のコストを抑えるため 64 ファイルごとに時刻を確認
+            if file_index % 64 == 0 {
+                let now = std::time::Instant::now();
+                if now.duration_since(last_log) >= log_interval {
+                    last_log = now;
+                    let pct = file_index * 100 / files_total.max(1);
+                    let folder = path.parent().unwrap_or(root_path);
+                    tracing::info!(
+                        pct,
+                        done = file_index,
+                        total = files_total,
+                        folder = %folder.display(),
+                        "scan progress"
+                    );
+                }
             }
 
             let (file_size, modified_at) = file_metadata_for_failure(&path);
