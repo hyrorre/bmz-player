@@ -2273,8 +2273,17 @@ impl SkinDocument {
             return None;
         }
         let rect = normalize_skin_frame_rect(frame, self.w, self.h);
+        // beatoraja は dst.x を align 基準点として扱う（align=1=center なら
+        // dst.x がテキストの中央, align=2=right なら dst.x がテキストの右端）。
+        // bmz の renderer は origin を「テキストボックスの左端」として扱うので、
+        // align に応じて origin.x を平行移動してから渡す。
+        let origin_x = match text.align {
+            1 => rect.x - rect.width / 2.0,
+            2 => rect.x - rect.width,
+            _ => rect.x,
+        };
         Some(SkinRenderItem::Text {
-            origin: Point { x: rect.x, y: rect.y },
+            origin: Point { x: origin_x, y: rect.y },
             text: content,
             style: TextStyle {
                 font_id: (!text.font.is_empty()).then(|| text.font.clone()),
