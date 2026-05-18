@@ -5,6 +5,11 @@ use anyhow::Result;
 use crate::storage::library_db::{ChartListItem, LibraryDatabase};
 use crate::storage::score_db::{BestScoreSummary, ScoreDatabase};
 
+/// Virtual path prefix used for difficulty-table navigation.
+/// `"bmz-table:"` is the root that lists all registered tables.
+/// `"bmz-table:{source_url}"` represents the chart list for that table.
+pub const TABLE_ROOT_PATH: &str = "bmz-table:";
+
 fn bytes_to_hex<const N: usize>(bytes: &[u8; N]) -> String {
     bytes.iter().fold(String::with_capacity(N * 2), |mut s, b| {
         use std::fmt::Write;
@@ -59,6 +64,69 @@ pub fn root_folder_items(root_paths: &[String]) -> Vec<SelectItem> {
             SelectItem::Folder { path: path.clone(), name }
         })
         .collect()
+}
+
+/// Returns the single folder item that leads to the difficulty-table navigator.
+pub fn table_folder_root_item() -> SelectItem {
+    SelectItem::Folder { path: TABLE_ROOT_PATH.to_string(), name: "難易度表".to_string() }
+}
+
+/// Returns one folder item per registered difficulty table.
+pub fn table_folder_items(library_db: &LibraryDatabase) -> Result<Vec<SelectItem>> {
+    let tables = library_db.list_difficulty_tables()?;
+    Ok(tables
+        .into_iter()
+        .map(|t| SelectItem::Folder {
+            path: format!("{TABLE_ROOT_PATH}{}", t.source_url),
+            name: format!("[{}] {}", t.symbol, t.name),
+        })
+        .collect())
+}
+
+/// Loads charts that are stored in the local library and belong to the given
+/// difficulty table (identified by `source_url`).  Charts are sorted by the
+/// table's `level_order`, then by title within each level.
+pub fn load_select_items_in_table(
+    library_db: &LibraryDatabase,
+    score_db: &ScoreDatabase,
+    source_url: &str,
+) -> Result<Vec<SelectItem>> {
+    // Fetch table metadata for symbol and level ordering.
+    let (symbol, level_order) = library_db
+        .list_difficulty_tables()?
+        .into_iter()
+        .find(|t| t.source_url == source_url)
+        .map(|t| (t.symbol, t.level_order))
+        .unwrap_or_default();
+
+    let mut chart_levels = library_db.list_charts_with_level_in_table(source_url)?;
+
+    // Sort by the table's level_order, then alphabetically by title.
+    let level_rank = |level: &str| -> usize {
+        level_order.iter().position(|l| l == level).unwrap_or(usize::MAX)
+    };
+    chart_levels.sort_by(|(a, al), (b, bl)| {
+        level_rank(al)
+            .cmp(&level_rank(bl))
+            .then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
+    });
+
+    // Batch score lookup.
+    let hashes: Vec<[u8; 32]> = chart_levels.iter().map(|(c, _)| c.sha256).collect();
+    let mut score_map: HashMap<[u8; 32], BestScoreSummary> = score_db
+        .best_scores_for_charts(&hashes)?
+        .into_iter()
+        .map(|s| (s.chart_sha256, s))
+        .collect();
+
+    Ok(chart_levels
+        .into_iter()
+        .map(|(chart, level)| {
+            let table_level = format!("{symbol}{level}");
+            let best_score = score_map.remove(&chart.sha256);
+            SelectItem::Chart(SelectChartRow { chart, best_score, table_level })
+        })
+        .collect())
 }
 
 /// Loads folders and charts immediately under `folder_path`.
@@ -379,6 +447,98 @@ mod tests {
             }],
             fetched_at: 0,
         }
+    }
+
+    #[test]
+    fn table_folder_root_item_has_expected_path_and_name() {
+        let item = table_folder_root_item();
+        assert!(matches!(
+            &item,
+            SelectItem::Folder { path, name }
+            if path == TABLE_ROOT_PATH && name == "難易度表"
+        ));
+    }
+
+    #[test]
+    fn table_folder_items_returns_one_folder_per_table() {
+        let (mut library_db, _) = open_in_memory_dbs();
+        let alpha = chart("Alpha");
+        // Register table using md5 so there's at least one entry (content does not matter here)
+        let table = difficulty_table_for_md5(&alpha.identity.file_md5, "★", "1");
+        library_db.upsert_difficulty_table(&table).unwrap();
+
+        let items = table_folder_items(&library_db).unwrap();
+
+        assert_eq!(items.len(), 1);
+        assert!(matches!(
+            &items[0],
+            SelectItem::Folder { path, name }
+            if path.starts_with(TABLE_ROOT_PATH) && name.contains("★")
+        ));
+    }
+
+    #[test]
+    fn load_select_items_in_table_returns_charts_sorted_by_level_order() {
+        let (mut library_db, score_db) = open_in_memory_dbs();
+
+        let hard = chart("Hard Song");
+        let easy = chart("Easy Song");
+        library_db.upsert_chart_import(&record_for_chart("/songs/hard.bms", &hard)).unwrap();
+        library_db.upsert_chart_import(&record_for_chart("/songs/easy.bms", &easy)).unwrap();
+
+        // Table has level_order ["5", "10"] — easy(5) before hard(10)
+        use crate::difficulty_table::{FetchedDifficultyTable, FetchedTableEntry};
+        let table = FetchedDifficultyTable {
+            source_url: "https://example.com/table/".to_string(),
+            head_url: "https://example.com/table/header.json".to_string(),
+            name: "Test Table".to_string(),
+            symbol: "★".to_string(),
+            level_order: vec!["5".to_string(), "10".to_string()],
+            entries: vec![
+                FetchedTableEntry {
+                    level: "10".to_string(),
+                    md5: bytes_to_hex(&hard.identity.file_md5),
+                    sha256: String::new(),
+                    title: String::new(),
+                    artist: String::new(),
+                    comment: String::new(),
+                },
+                FetchedTableEntry {
+                    level: "5".to_string(),
+                    md5: bytes_to_hex(&easy.identity.file_md5),
+                    sha256: String::new(),
+                    title: String::new(),
+                    artist: String::new(),
+                    comment: String::new(),
+                },
+            ],
+            fetched_at: 0,
+        };
+        library_db.upsert_difficulty_table(&table).unwrap();
+
+        let items =
+            load_select_items_in_table(&library_db, &score_db, "https://example.com/table/")
+                .unwrap();
+
+        assert_eq!(items.len(), 2);
+        let titles: Vec<_> = items
+            .iter()
+            .filter_map(|i| {
+                if let SelectItem::Chart(r) = i { Some(r.chart.title.as_str()) } else { None }
+            })
+            .collect();
+        assert_eq!(titles[0], "Easy Song");
+        assert_eq!(titles[1], "Hard Song");
+
+        // table_level should be formatted as symbol+level
+        let levels: Vec<_> = items
+            .iter()
+            .filter_map(|i| {
+                if let SelectItem::Chart(r) = i { Some(r.table_level.as_str()) } else { None }
+            })
+            .collect();
+        assert_eq!(levels[0], "★5");
+        assert_eq!(levels[1], "★10");
     }
 
     fn score_for_chart(chart_sha256: [u8; 32]) -> ScoreRecord {

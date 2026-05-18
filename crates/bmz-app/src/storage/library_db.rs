@@ -399,6 +399,47 @@ impl LibraryDatabase {
     ) -> Result<Vec<DifficultyTableEntryRecord>> {
         super::difficulty_table_db::list_entries_by_sha256s(&self.conn, sha256s)
     }
+
+    /// Returns `(ChartListItem, raw_level)` pairs for charts in the library that
+    /// appear in the given difficulty table, matched first by MD5 then by SHA-256.
+    /// Charts not present in the local library are omitted.
+    pub fn list_charts_with_level_in_table(
+        &self,
+        source_url: &str,
+    ) -> Result<Vec<(ChartListItem, String)>> {
+        // Use UNION (not UNION ALL) so that a chart matched by both MD5 and SHA-256
+        // for the same entry only appears once.
+        let sql = "
+            SELECT c.id, c.md5, c.sha256, c.title, c.subtitle, c.artist,
+                   c.difficulty_name, c.play_level, c.mode, c.total_notes,
+                   c.initial_bpm,
+                   COALESCE(c.min_bpm, c.initial_bpm),
+                   COALESCE(c.max_bpm, c.initial_bpm),
+                   c.folder_path, dte.level
+            FROM difficulty_table_entries dte
+            JOIN difficulty_tables dt ON dt.id = dte.table_id
+            JOIN charts c ON lower(hex(c.md5)) = dte.md5
+            WHERE dt.source_url = ?1 AND length(dte.md5) >= 24
+            UNION
+            SELECT c.id, c.md5, c.sha256, c.title, c.subtitle, c.artist,
+                   c.difficulty_name, c.play_level, c.mode, c.total_notes,
+                   c.initial_bpm,
+                   COALESCE(c.min_bpm, c.initial_bpm),
+                   COALESCE(c.max_bpm, c.initial_bpm),
+                   c.folder_path, dte.level
+            FROM difficulty_table_entries dte
+            JOIN difficulty_tables dt ON dt.id = dte.table_id
+            JOIN charts c ON lower(hex(c.sha256)) = dte.sha256
+            WHERE dt.source_url = ?1 AND length(dte.sha256) >= 24";
+
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = stmt.query_map(params![source_url], |row| {
+            let chart = chart_list_item_from_row(row)?;
+            let level: String = row.get(14)?;
+            Ok((chart, level))
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
+    }
 }
 
 fn chart_list_item_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChartListItem> {

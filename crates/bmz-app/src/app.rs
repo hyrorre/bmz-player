@@ -35,7 +35,10 @@ use crate::screens::play_loop::{PlayAdvanceOutcome, advance_running_play_session
 use crate::screens::play_snapshot::{BgaFrameCatalog, bga_texture_id, display_bga_frame};
 use crate::screens::play_start::{PlayStartOptions, StartedWinitPlaySession};
 use crate::screens::result_model::ResultSummary;
-use crate::screens::select_model::{SelectItem, load_select_items_in_folder, root_folder_items};
+use crate::screens::select_model::{
+    SelectItem, TABLE_ROOT_PATH, load_select_items_in_folder, load_select_items_in_table,
+    root_folder_items, table_folder_items, table_folder_root_item,
+};
 use crate::select_options::{ArrangeOption, AssistOption};
 use crate::skin_loader::{apply_beatoraja_select_json_skin, apply_skin_from_config};
 use crate::storage::scan::scan_song_roots;
@@ -277,13 +280,32 @@ impl WinitApp {
 
     fn select_snapshot(&self) -> SelectSnapshot {
         let selected = self.select_items.get(self.selected_index);
-        let current_folder = self
-            .folder_stack
-            .last()
-            .and_then(|p| std::path::Path::new(p).file_name())
-            .and_then(|n| n.to_str())
-            .unwrap_or("")
-            .to_string();
+        let current_folder = match self.folder_stack.last() {
+            None => String::new(),
+            Some(path) if path == TABLE_ROOT_PATH => "難易度表".to_string(),
+            Some(path) if path.starts_with(TABLE_ROOT_PATH) => {
+                // Show "[symbol] name" if the table is known, else the URL's filename segment.
+                let url = &path[TABLE_ROOT_PATH.len()..];
+                self.boot
+                    .library_db
+                    .list_difficulty_tables()
+                    .ok()
+                    .and_then(|ts| ts.into_iter().find(|t| t.source_url == url))
+                    .map(|t| format!("[{}] {}", t.symbol, t.name))
+                    .unwrap_or_else(|| {
+                        std::path::Path::new(url)
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or(url)
+                            .to_string()
+                    })
+            }
+            Some(path) => std::path::Path::new(path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string(),
+        };
         SelectSnapshot {
             time: self.select_time(),
             selection_time: self.select_bar_time(),
@@ -857,6 +879,23 @@ fn load_items_for_stack(
     stack: &[String],
 ) -> Vec<SelectItem> {
     match stack.last() {
+        Some(path) if path == TABLE_ROOT_PATH => match table_folder_items(&boot.library_db) {
+            Ok(items) => items,
+            Err(error) => {
+                tracing::error!(%error, "failed to load difficulty table list");
+                Vec::new()
+            }
+        },
+        Some(path) if path.starts_with(TABLE_ROOT_PATH) => {
+            let source_url = &path[TABLE_ROOT_PATH.len()..];
+            match load_select_items_in_table(&boot.library_db, &boot.score_db, source_url) {
+                Ok(items) => items,
+                Err(error) => {
+                    tracing::error!(%error, "failed to load difficulty table charts");
+                    Vec::new()
+                }
+            }
+        }
         Some(folder) => {
             match load_select_items_in_folder(&boot.library_db, &boot.score_db, folder) {
                 Ok(items) => items,
@@ -866,7 +905,11 @@ fn load_items_for_stack(
                 }
             }
         }
-        None => root_folder_items(&enabled_root_paths(&boot.app_config)),
+        None => {
+            let mut items = root_folder_items(&enabled_root_paths(&boot.app_config));
+            items.push(table_folder_root_item());
+            items
+        }
     }
 }
 
