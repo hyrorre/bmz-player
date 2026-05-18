@@ -42,6 +42,7 @@ pub struct SelectRowSnapshot {
     pub initial_bpm: f32,
     pub min_bpm: f32,
     pub max_bpm: f32,
+    pub length_ms: i64,
     pub clear_type: String,
     pub ex_score: Option<u32>,
     pub replay_slots: [bool; 4],

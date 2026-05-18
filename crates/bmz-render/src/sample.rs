@@ -19,6 +19,7 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
             initial_bpm: 128.0,
             min_bpm: 128.0,
             max_bpm: 160.0,
+            length_ms: 90_000 + i64::from(index) * 1_000,
             clear_type: if index == 0 { "Normal".to_string() } else { String::new() },
             ex_score: (index == 0).then_some(1888),
             replay_slots: [index == 0, false, false, false],

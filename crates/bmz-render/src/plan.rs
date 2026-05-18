@@ -1967,6 +1967,7 @@ mod tests {
                 initial_bpm: 128.0,
                 min_bpm: 128.0,
                 max_bpm: 128.0,
+                length_ms: 90_000,
                 clear_type: if index == 0 { "Normal".to_string() } else { String::new() },
                 ex_score: (index == 0).then_some(1234),
                 replay_slots: [false; 4],

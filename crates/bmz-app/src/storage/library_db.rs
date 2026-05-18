@@ -40,6 +40,7 @@ pub struct ChartListItem {
     pub initial_bpm: f64,
     pub min_bpm: f64,
     pub max_bpm: f64,
+    pub length_ms: i64,
     pub folder_path: String,
 }
 
@@ -250,6 +251,7 @@ impl LibraryDatabase {
                 initial_bpm,
                 COALESCE(min_bpm, initial_bpm),
                 COALESCE(max_bpm, initial_bpm),
+                length_ms,
                 folder_path
             FROM charts
             ORDER BY title COLLATE NOCASE, artist COLLATE NOCASE, play_level COLLATE NOCASE
@@ -299,6 +301,7 @@ impl LibraryDatabase {
                 initial_bpm,
                 COALESCE(min_bpm, initial_bpm),
                 COALESCE(max_bpm, initial_bpm),
+                length_ms,
                 folder_path
             FROM charts
             WHERE folder_path = ?1
@@ -415,7 +418,7 @@ impl LibraryDatabase {
                    c.initial_bpm,
                    COALESCE(c.min_bpm, c.initial_bpm),
                    COALESCE(c.max_bpm, c.initial_bpm),
-                   c.folder_path, dte.level
+                   c.length_ms, c.folder_path, dte.level
             FROM difficulty_table_entries dte
             JOIN difficulty_tables dt ON dt.id = dte.table_id
             JOIN charts c ON lower(hex(c.md5)) = dte.md5
@@ -426,7 +429,7 @@ impl LibraryDatabase {
                    c.initial_bpm,
                    COALESCE(c.min_bpm, c.initial_bpm),
                    COALESCE(c.max_bpm, c.initial_bpm),
-                   c.folder_path, dte.level
+                   c.length_ms, c.folder_path, dte.level
             FROM difficulty_table_entries dte
             JOIN difficulty_tables dt ON dt.id = dte.table_id
             JOIN charts c ON lower(hex(c.sha256)) = dte.sha256
@@ -435,7 +438,7 @@ impl LibraryDatabase {
         let mut stmt = self.conn.prepare(sql)?;
         let rows = stmt.query_map(params![source_url], |row| {
             let chart = chart_list_item_from_row(row)?;
-            let level: String = row.get(14)?;
+            let level: String = row.get(15)?;
             Ok((chart, level))
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
@@ -464,7 +467,8 @@ fn chart_list_item_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChartLi
         initial_bpm: row.get(10)?,
         min_bpm: row.get(11)?,
         max_bpm: row.get(12)?,
-        folder_path: row.get(13)?,
+        length_ms: row.get(13)?,
+        folder_path: row.get(14)?,
     })
 }
 
@@ -884,6 +888,7 @@ mod tests {
         assert_eq!(charts[0].title, "Alpha");
         assert_eq!(charts[1].title, "beta");
         assert_eq!(charts[0].mode, "7K");
+        assert_eq!(charts[0].length_ms, 10_000);
     }
 
     #[test]

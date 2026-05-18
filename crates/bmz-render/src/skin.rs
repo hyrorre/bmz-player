@@ -881,6 +881,8 @@ pub struct SkinDrawState {
     pub select_min_bpm: f32,
     /// 選択中曲の最大BPM。
     pub select_max_bpm: f32,
+    /// 選択中曲の長さ ms。
+    pub select_length_ms: i64,
 }
 
 impl Default for SkinDrawState {
@@ -941,6 +943,7 @@ impl Default for SkinDrawState {
             select_bpm: 0.0,
             select_min_bpm: 0.0,
             select_max_bpm: 0.0,
+            select_length_ms: 0,
         }
     }
 }
@@ -1635,6 +1638,7 @@ impl SkinDocument {
             select_bpm: selected_row.map(|row| row.initial_bpm).unwrap_or(0.0),
             select_min_bpm: selected_row.map(|row| row.min_bpm).unwrap_or(0.0),
             select_max_bpm: selected_row.map(|row| row.max_bpm).unwrap_or(0.0),
+            select_length_ms: selected_row.map(|row| row.length_ms).unwrap_or(0),
             ex_score: selected_row.and_then(|row| row.ex_score).unwrap_or(0),
             ..SkinDrawState::default()
         };
@@ -1700,6 +1704,7 @@ impl SkinDocument {
                 select_replay_index: select_row_replay_index(row),
                 select_clear_index: select_row_clear_index(row) as i64,
                 select_total_notes: row.total_notes,
+                select_length_ms: row.length_ms,
                 ex_score: row.ex_score.unwrap_or(0),
                 ..state
             };
@@ -3413,6 +3418,8 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         407 => Some(gauge_after_dot(state.gauge) as i64),
         163 => Some((state.timeleft_ms / 60_000) as i64),
         164 => Some(((state.timeleft_ms / 1_000) % 60) as i64),
+        1163 => Some(state.select_length_ms.max(0) / 60_000),
+        1164 => Some((state.select_length_ms.max(0) / 1_000) % 60),
         310 => Some(state.hispeed.floor() as i64),
         311 => Some(((state.hispeed * 100.0) as i64) % 100),
         312 => Some((state.total_duration_ms / 1_000) as i64),
@@ -6830,6 +6837,7 @@ mod tests {
             select_bpm: 148.0,
             select_min_bpm: 120.0,
             select_max_bpm: 180.0,
+            select_length_ms: 183_000,
             ex_score: 1234,
             ..SkinDrawState::default()
         };
@@ -6844,6 +6852,8 @@ mod tests {
         assert_eq!(skin_state_number(160, state), Some(148));
         assert_eq!(skin_state_number(350, state), Some(1200));
         assert_eq!(skin_state_number(71, state), Some(1234));
+        assert_eq!(skin_state_number(1163, state), Some(3));
+        assert_eq!(skin_state_number(1164, state), Some(3));
     }
 
     #[test]

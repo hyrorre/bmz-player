@@ -1122,6 +1122,7 @@ fn select_snapshot_rows(
                     initial_bpm: 0.0,
                     min_bpm: 0.0,
                     max_bpm: 0.0,
+                    length_ms: 0,
                     clear_type: String::new(),
                     ex_score: None,
                     replay_slots: [false; 4],
@@ -1137,6 +1138,7 @@ fn select_snapshot_rows(
                     initial_bpm: row.chart.initial_bpm as f32,
                     min_bpm: row.chart.min_bpm as f32,
                     max_bpm: row.chart.max_bpm as f32,
+                    length_ms: row.chart.length_ms,
                     clear_type: row
                         .best_score
                         .as_ref()
@@ -1858,6 +1860,7 @@ mod tests {
                 initial_bpm: 128.0,
                 min_bpm: 128.0,
                 max_bpm: 128.0,
+                length_ms: 90_000,
                 folder_path: String::new(),
             },
             best_score: None,
