@@ -1,4 +1,4 @@
-use bmz_core::lane::{LANE_COUNT, Lane};
+use bmz_core::lane::{KeyMode, LANE_COUNT, Lane};
 use bmz_core::time::TimeUs;
 
 use crate::skin_offset::SkinOffsetValues;
@@ -36,6 +36,7 @@ pub struct RenderSnapshot {
     pub best_ex_score: Option<u32>,
     pub target_ex_score: Option<u32>,
     pub judge_timing_offset_ms: i32,
+    pub key_mode: KeyMode,
     pub visible_notes: [Vec<VisibleNote>; LANE_COUNT],
     pub visible_long_notes: Vec<VisibleLongNote>,
     pub recent_inputs: Vec<DisplayInput>,

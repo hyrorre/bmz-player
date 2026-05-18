@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use bmz_core::chart::ChartIdentity;
 use bmz_core::ids::{NoteId, SoundId};
-use bmz_core::lane::{LANE_COUNT, Lane};
+use bmz_core::lane::{KeyMode, LANE_COUNT, Lane};
 use bmz_core::time::{ChartTick, TimeUs};
 
 #[derive(Debug, Clone)]
@@ -37,6 +37,7 @@ pub struct ChartMetadata {
     pub backbmp_file: String,
     pub preview_file: String,
     pub has_bga: bool,
+    pub key_mode: KeyMode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

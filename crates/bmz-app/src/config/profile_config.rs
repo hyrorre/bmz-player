@@ -163,6 +163,15 @@ pub enum LaneConfig {
     Key5,
     Key6,
     Key7,
+    // 2P lanes for 10K/14K
+    Scratch2,
+    Key8,
+    Key9,
+    Key10,
+    Key11,
+    Key12,
+    Key13,
+    Key14,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

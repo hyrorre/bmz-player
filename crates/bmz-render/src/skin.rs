@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
-use bmz_core::lane::Lane;
+use bmz_core::lane::{LANE_COUNT, Lane};
 use serde::de::{Error as DeError, Visitor};
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map as JsonMap, Value as JsonValue};
@@ -803,13 +803,13 @@ pub struct SkinDrawState {
     pub gauge: f32,
     pub play_progress: f32,
     pub end_of_note: bool,
-    /// 各レーン(Scratch=0, Key1=1..Key7=7)のボムタイマー経過ms。Noneなら非アクティブ。
-    pub bomb_ms: [Option<i32>; 8],
+    /// 各レーンのボムタイマー経過ms。Noneなら非アクティブ。
+    pub bomb_ms: [Option<i32>; LANE_COUNT],
     /// 各レーンのkeyon(押下中ビーム)タイマー経過ms。Noneなら非アクティブ。
-    pub keyon_ms: [Option<i32>; 8],
+    pub keyon_ms: [Option<i32>; LANE_COUNT],
     /// 各レーンの直近判定の画像インデックス (0=PGREAT,1=GREAT,2=GOOD,3=BAD,4=POOR)。
     /// imageset (ボム・キービーム) の画像選択に使う。Noneなら判定なし。
-    pub lane_judge: [Option<usize>; 8],
+    pub lane_judge: [Option<usize>; LANE_COUNT],
     /// 判定タイマー経過ms (TIMER_JUDGE_1P=46)。Noneなら非アクティブ。
     pub judge_ms: Option<i32>,
     /// 現在表示中の判定画像インデックス (0=PGREAT,1=GREAT,2=GOOD,3=BAD,4=POOR)。
@@ -903,9 +903,9 @@ impl Default for SkinDrawState {
             gauge: 0.0,
             play_progress: 0.0,
             end_of_note: false,
-            bomb_ms: [None; 8],
-            keyon_ms: [None; 8],
-            lane_judge: [None; 8],
+            bomb_ms: [None; LANE_COUNT],
+            keyon_ms: [None; LANE_COUNT],
+            lane_judge: [None; LANE_COUNT],
             judge_ms: None,
             judge_index: None,
             offset_lift_px: 0,
@@ -998,9 +998,18 @@ pub struct SkinImageManifest {
 impl SkinImageManifest {
     pub fn texture_for_lane(self, lane: Lane) -> u32 {
         match lane {
-            Lane::Scratch => self.scratch_texture.unwrap_or(self.texture),
-            Lane::Key2 | Lane::Key4 | Lane::Key6 => self.key_even_texture.unwrap_or(self.texture),
-            Lane::Key1 | Lane::Key3 | Lane::Key5 | Lane::Key7 => self.texture,
+            Lane::Scratch | Lane::Scratch2 => self.scratch_texture.unwrap_or(self.texture),
+            Lane::Key2 | Lane::Key4 | Lane::Key6 | Lane::Key9 | Lane::Key11 | Lane::Key13 => {
+                self.key_even_texture.unwrap_or(self.texture)
+            }
+            Lane::Key1
+            | Lane::Key3
+            | Lane::Key5
+            | Lane::Key7
+            | Lane::Key8
+            | Lane::Key10
+            | Lane::Key12
+            | Lane::Key14 => self.texture,
         }
     }
 }
@@ -2399,14 +2408,14 @@ impl SkinDocument {
 
 fn beatoraja_7k_note_index(lane: Lane) -> usize {
     match lane {
-        Lane::Key1 => 0,
-        Lane::Key2 => 1,
-        Lane::Key3 => 2,
-        Lane::Key4 => 3,
-        Lane::Key5 => 4,
-        Lane::Key6 => 5,
-        Lane::Key7 => 6,
-        Lane::Scratch => 7,
+        Lane::Key1 | Lane::Key8 => 0,
+        Lane::Key2 | Lane::Key9 => 1,
+        Lane::Key3 | Lane::Key10 => 2,
+        Lane::Key4 | Lane::Key11 => 3,
+        Lane::Key5 | Lane::Key12 => 4,
+        Lane::Key6 | Lane::Key13 => 5,
+        Lane::Key7 | Lane::Key14 => 6,
+        Lane::Scratch | Lane::Scratch2 => 7,
     }
 }
 
@@ -6207,22 +6216,46 @@ mod tests {
 
         // Key1 (timer 51 = bomb_ms[1]) でボムタイマー進行中、直近判定 PGREAT
         let pgreat_state = SkinDrawState {
-            bomb_ms: [None, Some(50), None, None, None, None, None, None],
-            lane_judge: [None, Some(0), None, None, None, None, None, None],
+            bomb_ms: {
+                let mut a = [None; LANE_COUNT];
+                a[1] = Some(50);
+                a
+            },
+            lane_judge: {
+                let mut a = [None; LANE_COUNT];
+                a[1] = Some(0);
+                a
+            },
             ..SkinDrawState::default()
         };
         let pgreat = document.static_render_items(&sources, pgreat_state, SkinTextState::default());
         // GOOD 判定
         let good_state = SkinDrawState {
-            bomb_ms: [None, Some(50), None, None, None, None, None, None],
-            lane_judge: [None, Some(2), None, None, None, None, None, None],
+            bomb_ms: {
+                let mut a = [None; LANE_COUNT];
+                a[1] = Some(50);
+                a
+            },
+            lane_judge: {
+                let mut a = [None; LANE_COUNT];
+                a[1] = Some(2);
+                a
+            },
             ..SkinDrawState::default()
         };
         let good = document.static_render_items(&sources, good_state, SkinTextState::default());
         // タイマーがアニメーション終端を超過 → loop:-1 で非表示
         let expired_state = SkinDrawState {
-            bomb_ms: [None, Some(150), None, None, None, None, None, None],
-            lane_judge: [None, Some(0), None, None, None, None, None, None],
+            bomb_ms: {
+                let mut a = [None; LANE_COUNT];
+                a[1] = Some(150);
+                a
+            },
+            lane_judge: {
+                let mut a = [None; LANE_COUNT];
+                a[1] = Some(0);
+                a
+            },
             ..SkinDrawState::default()
         };
         let expired =
@@ -7015,9 +7048,14 @@ mod tests {
         assert_eq!(items_inactive.len(), 0, "should be empty when all bomb timers are None");
 
         // Key1 (index=1) active → items returned
-        let mut active_bomb_ms = [None; 8];
-        active_bomb_ms[1] = Some(0); // Lane::Key1.index() = 1
-        let active_state = SkinDrawState { bomb_ms: active_bomb_ms, ..SkinDrawState::default() };
+        let active_state = SkinDrawState {
+            bomb_ms: {
+                let mut a = [None; LANE_COUNT];
+                a[1] = Some(0);
+                a
+            },
+            ..SkinDrawState::default()
+        };
         let items_active = document.static_image_render_items(&sources, active_state);
         assert_eq!(items_active.len(), 1, "should have one item when Key1 bomb timer is active");
     }

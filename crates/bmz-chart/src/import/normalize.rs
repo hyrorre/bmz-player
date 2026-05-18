@@ -129,6 +129,7 @@ fn normalize_metadata(input: &IntermediateMetadata) -> ChartMetadata {
         backbmp_file: input.backbmp_file.clone(),
         preview_file: input.preview_file.clone(),
         has_bga: input.has_bga,
+        key_mode: input.key_mode,
     }
 }
 

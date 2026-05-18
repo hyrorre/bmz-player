@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use bmz_core::chart::ChartIdentity;
-use bmz_core::lane::Lane;
+use bmz_core::lane::{KeyMode, Lane};
 use bmz_core::time::{ChartTick, TimeUs};
 
 use crate::model::LongNoteStyle;
@@ -32,6 +32,7 @@ pub struct IntermediateMetadata {
     pub backbmp_file: String,
     pub preview_file: String,
     pub has_bga: bool,
+    pub key_mode: KeyMode,
 }
 
 #[derive(Debug, Clone, Default)]

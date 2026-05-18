@@ -425,12 +425,14 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
     let text = TextRenderer;
     let skin_manifest = skin.manifest();
     let has_document = skin.document().is_some();
+    let active_lanes = snapshot.key_mode.active_lanes();
+    let active_lane_count = active_lanes.len();
     let board = Rect { x: 0.18, y: 0.05, width: 0.64, height: 0.9 };
-    let lane_width = board.width / LANE_COUNT as f32;
+    let lane_width = board.width / active_lane_count as f32;
 
     // 見逃しPOOR（is_miss）はボムエフェクトを出さない
-    let mut bomb_ms: [Option<i32>; 8] = [None; 8];
-    let mut lane_judge: [Option<usize>; 8] = [None; 8];
+    let mut bomb_ms: [Option<i32>; LANE_COUNT] = [None; LANE_COUNT];
+    let mut lane_judge: [Option<usize>; LANE_COUNT] = [None; LANE_COUNT];
     for j in &snapshot.recent_judgements {
         if j.is_miss {
             continue;
@@ -442,7 +444,7 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
         lane_judge[idx] = judge_image_index(&j.text);
     }
 
-    let mut keyon_ms: [Option<i32>; 8] = [None; 8];
+    let mut keyon_ms: [Option<i32>; LANE_COUNT] = [None; LANE_COUNT];
     for input in &snapshot.recent_inputs {
         let idx = input.lane.index();
         let elapsed = ((snapshot.time.0 - input.time.0) / 1_000)
@@ -553,10 +555,10 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
             color: Color::rgb(0.18, 0.2, 0.21),
         });
 
-        for lane in Lane::ALL {
+        for (display_index, &lane) in active_lanes.iter().enumerate() {
             let lane_index = lane.index();
-            let x = board.x + lane_index as f32 * lane_width;
-            let color = if lane_index % 2 == 0 {
+            let x = board.x + display_index as f32 * lane_width;
+            let color = if display_index % 2 == 0 {
                 Color::rgb(0.07, 0.075, 0.08)
             } else {
                 Color::rgb(0.045, 0.05, 0.055)
@@ -604,7 +606,7 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
             }
         }
 
-        push_receptors(skin_manifest, &mut commands, board, lane_width);
+        push_receptors(skin_manifest, &mut commands, board, lane_width, active_lanes);
         for bar in &snapshot.bar_lines {
             let y = play_object_y(board, bar.y);
             commands.push(DrawCommand::Rect {
@@ -637,7 +639,7 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
                 append_skin_render_items(&mut commands, &[item]);
             }
         }
-        for lane in Lane::ALL {
+        for &lane in active_lanes {
             let lane_index = lane.index();
             for note in &snapshot.visible_notes[lane_index] {
                 if let Some(rect) = skin.note_rect_for_progress(lane, note.y, NOTE_HEIGHT)
@@ -664,7 +666,7 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
         push_combo_panel(skin_manifest, &mut commands, snapshot.combo);
         push_default_play_skin(skin, &mut commands, snapshot);
         push_play_text(&text, &mut commands, snapshot);
-        push_lane_text(&text, &mut commands, board, lane_width);
+        push_lane_text(&text, &mut commands, board, lane_width, active_lanes);
         push_judgement_history(&text, &mut commands, snapshot);
     }
 
@@ -820,12 +822,12 @@ fn push_receptors(
     commands: &mut Vec<DrawCommand>,
     board: Rect,
     lane_width: f32,
+    active_lanes: &[Lane],
 ) {
     let receptor = skin_manifest.play_receptor_image();
     let receptor_y = board.y + board.height * 0.825;
-    for lane in Lane::ALL {
-        let lane_index = lane.index();
-        let x = board.x + lane_index as f32 * lane_width;
+    for (display_index, &lane) in active_lanes.iter().enumerate() {
+        let x = board.x + display_index as f32 * lane_width;
         append_skin_render_items(
             commands,
             &[SkinRenderItem::Image {
@@ -1139,10 +1141,10 @@ fn push_lane_text(
     commands: &mut Vec<DrawCommand>,
     board: Rect,
     lane_width: f32,
+    active_lanes: &[Lane],
 ) {
-    for lane in Lane::ALL {
-        let lane_index = lane.index();
-        let center_x = board.x + lane_index as f32 * lane_width + lane_width / 2.0;
+    for (display_index, &lane) in active_lanes.iter().enumerate() {
+        let center_x = board.x + display_index as f32 * lane_width + lane_width / 2.0;
         let label = lane_label(lane);
         text.push_text(
             commands,
@@ -1388,6 +1390,14 @@ fn lane_label(lane: Lane) -> &'static str {
         Lane::Key5 => "5",
         Lane::Key6 => "6",
         Lane::Key7 => "7",
+        Lane::Key8 => "1'",
+        Lane::Key9 => "2'",
+        Lane::Key10 => "3'",
+        Lane::Key11 => "4'",
+        Lane::Key12 => "5'",
+        Lane::Key13 => "6'",
+        Lane::Key14 => "7'",
+        Lane::Scratch2 => "S2",
     }
 }
 
@@ -1401,6 +1411,14 @@ fn lane_key_label(lane: Lane) -> &'static str {
         Lane::Key5 => "C",
         Lane::Key6 => "F",
         Lane::Key7 => "V",
+        Lane::Key8 => "Z",
+        Lane::Key9 => "S",
+        Lane::Key10 => "X",
+        Lane::Key11 => "D",
+        Lane::Key12 => "C",
+        Lane::Key13 => "F",
+        Lane::Key14 => "V",
+        Lane::Scratch2 => "LS",
     }
 }
 

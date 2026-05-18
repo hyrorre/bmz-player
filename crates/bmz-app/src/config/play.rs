@@ -52,6 +52,14 @@ pub fn lane_from_config(config: LaneConfig) -> Lane {
         LaneConfig::Key5 => Lane::Key5,
         LaneConfig::Key6 => Lane::Key6,
         LaneConfig::Key7 => Lane::Key7,
+        LaneConfig::Scratch2 => Lane::Scratch2,
+        LaneConfig::Key8 => Lane::Key8,
+        LaneConfig::Key9 => Lane::Key9,
+        LaneConfig::Key10 => Lane::Key10,
+        LaneConfig::Key11 => Lane::Key11,
+        LaneConfig::Key12 => Lane::Key12,
+        LaneConfig::Key13 => Lane::Key13,
+        LaneConfig::Key14 => Lane::Key14,
     }
 }
 

@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use bmz_core::lane::KeyMode;
 use bmz_core::time::ChartTick;
 
 use crate::hash::compute_chart_identity;
@@ -59,6 +60,13 @@ fn parse_bms_text(
 
     metadata.has_bga =
         objects.iter().any(|object| matches!(object.kind, IntermediateObjectKind::Bga { .. }));
+
+    metadata.key_mode = KeyMode::detect_from_lanes(objects.iter().filter_map(|o| match o.kind {
+        IntermediateObjectKind::VisibleNote { lane, .. }
+        | IntermediateObjectKind::InvisibleNote { lane, .. }
+        | IntermediateObjectKind::LongChannelNote { lane, .. } => Some(lane),
+        _ => None,
+    }));
 
     let measures = build_measures(max_measure, &measure_lengths);
 
@@ -285,17 +293,32 @@ fn object_kind_from_channel(
         9 => Some(IntermediateObjectKind::Stop { stop_key: parse_base36_key(token)? }),
         11 | 12 | 13 | 14 | 15 | 16 | 18 | 19 => {
             let key = parse_base36_key(token)?;
-            visible_lane(channel)
+            p1_visible_lane(channel)
+                .map(|lane| IntermediateObjectKind::VisibleNote { lane, wav_key: Some(key) })
+        }
+        21 | 22 | 23 | 24 | 25 | 26 | 28 | 29 => {
+            let key = parse_base36_key(token)?;
+            p2_visible_lane(channel)
                 .map(|lane| IntermediateObjectKind::VisibleNote { lane, wav_key: Some(key) })
         }
         31 | 32 | 33 | 34 | 35 | 36 | 38 | 39 => {
             let key = parse_base36_key(token)?;
-            visible_lane(channel - 20)
+            p1_visible_lane(channel - 20)
+                .map(|lane| IntermediateObjectKind::InvisibleNote { lane, wav_key: Some(key) })
+        }
+        41 | 42 | 43 | 44 | 45 | 46 | 48 | 49 => {
+            let key = parse_base36_key(token)?;
+            p2_visible_lane(channel - 20)
                 .map(|lane| IntermediateObjectKind::InvisibleNote { lane, wav_key: Some(key) })
         }
         51 | 52 | 53 | 54 | 55 | 56 | 58 | 59 => {
             let key = parse_base36_key(token)?;
-            visible_lane(channel - 40)
+            p1_visible_lane(channel - 40)
+                .map(|lane| IntermediateObjectKind::LongChannelNote { lane, wav_key: Some(key) })
+        }
+        61 | 62 | 63 | 64 | 65 | 66 | 68 | 69 => {
+            let key = parse_base36_key(token)?;
+            p2_visible_lane(channel - 40)
                 .map(|lane| IntermediateObjectKind::LongChannelNote { lane, wav_key: Some(key) })
         }
         _ => {
@@ -305,7 +328,7 @@ fn object_kind_from_channel(
     }
 }
 
-fn visible_lane(channel: u16) -> Option<bmz_core::lane::Lane> {
+fn p1_visible_lane(channel: u16) -> Option<bmz_core::lane::Lane> {
     match channel {
         16 => Some(bmz_core::lane::Lane::Scratch),
         11 => Some(bmz_core::lane::Lane::Key1),
@@ -315,6 +338,20 @@ fn visible_lane(channel: u16) -> Option<bmz_core::lane::Lane> {
         15 => Some(bmz_core::lane::Lane::Key5),
         18 => Some(bmz_core::lane::Lane::Key6),
         19 => Some(bmz_core::lane::Lane::Key7),
+        _ => None,
+    }
+}
+
+fn p2_visible_lane(channel: u16) -> Option<bmz_core::lane::Lane> {
+    match channel {
+        26 => Some(bmz_core::lane::Lane::Scratch2),
+        21 => Some(bmz_core::lane::Lane::Key8),
+        22 => Some(bmz_core::lane::Lane::Key9),
+        23 => Some(bmz_core::lane::Lane::Key10),
+        24 => Some(bmz_core::lane::Lane::Key11),
+        25 => Some(bmz_core::lane::Lane::Key12),
+        28 => Some(bmz_core::lane::Lane::Key13),
+        29 => Some(bmz_core::lane::Lane::Key14),
         _ => None,
     }
 }
