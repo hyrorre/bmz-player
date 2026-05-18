@@ -865,6 +865,10 @@ pub struct SkinDrawState {
     pub select_play_level: i64,
     /// 選択中曲のベストEXスコア。
     pub select_ex_score: Option<u32>,
+    /// 選択中曲のリプレイスロット有無。
+    pub select_replay_slots: [bool; 4],
+    /// 選択中リプレイスロット。Noneなら未選択。
+    pub select_replay_index: Option<usize>,
     /// 選択中曲のクリアランプ番号。
     pub select_clear_index: i64,
     /// 選択中バーがフォルダかどうか。
@@ -929,6 +933,8 @@ impl Default for SkinDrawState {
             select_chart_count: 0,
             select_play_level: 0,
             select_ex_score: None,
+            select_replay_slots: [false; 4],
+            select_replay_index: None,
             select_clear_index: 0,
             select_is_folder: false,
             select_total_notes: 0,
@@ -1612,6 +1618,8 @@ impl SkinDocument {
             select_chart_count: snapshot.chart_count,
             select_play_level: selected_row.map(select_row_level_number).unwrap_or(0),
             select_ex_score: selected_row.and_then(|row| row.ex_score),
+            select_replay_slots: selected_row.map(|row| row.replay_slots).unwrap_or([false; 4]),
+            select_replay_index: selected_row.and_then(select_row_replay_index),
             select_clear_index: selected_row.map(select_row_clear_index).unwrap_or(0) as i64,
             select_is_folder: selected_row.is_some_and(|row| row.is_folder),
             select_total_notes: selected_row.map(|row| row.total_notes).unwrap_or(0),
@@ -1679,6 +1687,8 @@ impl SkinDocument {
             let row_state = SkinDrawState {
                 select_play_level: select_row_level_number(row),
                 select_ex_score: row.ex_score,
+                select_replay_slots: row.replay_slots,
+                select_replay_index: select_row_replay_index(row),
                 select_clear_index: select_row_clear_index(row) as i64,
                 select_total_notes: row.total_notes,
                 ex_score: row.ex_score.unwrap_or(0),
@@ -2979,6 +2989,7 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool 
         22 => state.select_option_panel == 2,
         23 => state.select_option_panel == 3,
         160 => !state.select_is_folder,
+        196 | 197 | 198 | 1196..=1208 => select_replay_op_matches(op, state),
         200..=207 => select_rank_op_matches(op, state),
         300..=307 => select_small_rank_op_matches(op, state),
         170 => !state.has_bga,
@@ -3661,6 +3672,31 @@ fn select_row_clear_index(row: &SelectRowSnapshot) -> usize {
         "Perfect" => 9,
         "Max" => 10,
         _ => 0,
+    }
+}
+
+fn select_row_replay_index(row: &SelectRowSnapshot) -> Option<usize> {
+    row.replay_slots.iter().position(|has_replay| *has_replay)
+}
+
+fn select_replay_op_matches(op: i32, state: SkinDrawState) -> bool {
+    let slot = match op {
+        196..=198 => Some(0),
+        1196..=1198 => Some(1),
+        1199..=1201 => Some(2),
+        1202..=1204 => Some(3),
+        1205..=1208 => return state.select_replay_index == Some((op - 1205) as usize),
+        _ => None,
+    };
+    let Some(slot) = slot else {
+        return false;
+    };
+    let has_replay = state.select_replay_slots.get(slot).copied().unwrap_or(false);
+    match op {
+        196 | 1196 | 1199 | 1202 => !has_replay,
+        197 | 1197 | 1200 | 1203 => has_replay,
+        198 | 1198 | 1201 | 1204 => false,
+        _ => false,
     }
 }
 
@@ -5039,6 +5075,33 @@ mod tests {
         assert!(test_skin_op(207, &[], f_state));
         assert!(!test_skin_op(307, &[], f_state));
         assert!(!test_skin_op(200, &[], SkinDrawState::default()));
+    }
+
+    #[test]
+    fn select_replay_ops_reflect_replay_slots_and_selection() {
+        let no_replay = SkinDrawState::default();
+        let first_replay = SkinDrawState {
+            select_replay_slots: [true, false, false, false],
+            select_replay_index: Some(0),
+            ..SkinDrawState::default()
+        };
+        let second_replay = SkinDrawState {
+            select_replay_slots: [false, true, false, false],
+            select_replay_index: Some(1),
+            ..SkinDrawState::default()
+        };
+
+        assert!(test_skin_op(196, &[], no_replay));
+        assert!(!test_skin_op(197, &[], no_replay));
+        assert!(!test_skin_op(1205, &[], no_replay));
+        assert!(test_skin_op(197, &[], first_replay));
+        assert!(!test_skin_op(196, &[], first_replay));
+        assert!(test_skin_op(1205, &[], first_replay));
+        assert!(test_skin_op(-1205, &[], no_replay));
+        assert!(test_skin_op(1197, &[], second_replay));
+        assert!(test_skin_op(1206, &[], second_replay));
+        assert!(!test_skin_op(1205, &[], second_replay));
+        assert!(!test_skin_op(198, &[], first_replay));
     }
 
     #[test]

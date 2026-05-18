@@ -1951,6 +1951,7 @@ mod tests {
                 max_bpm: 128.0,
                 clear_type: if index == 0 { "Normal".to_string() } else { String::new() },
                 ex_score: (index == 0).then_some(1234),
+                replay_slots: [false; 4],
                 is_folder: false,
             })
             .collect()

@@ -973,6 +973,7 @@ fn select_snapshot_rows(
                     max_bpm: 0.0,
                     clear_type: String::new(),
                     ex_score: None,
+                    replay_slots: [false; 4],
                     is_folder: true,
                 },
                 SelectItem::Chart(row) => SelectRowSnapshot {
@@ -991,11 +992,20 @@ fn select_snapshot_rows(
                         .map(|score| score.clear_type.clone())
                         .unwrap_or_default(),
                     ex_score: row.best_score.as_ref().map(|score| score.ex_score),
+                    replay_slots: replay_slots_from_best_score(row.best_score.as_ref()),
                     is_folder: false,
                 },
             }
         })
         .collect()
+}
+
+fn replay_slots_from_best_score(
+    score: Option<&crate::storage::score_db::BestScoreSummary>,
+) -> [bool; 4] {
+    let mut slots = [false; 4];
+    slots[0] = score.is_some_and(|score| !score.replay_path.is_empty());
+    slots
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1619,7 +1629,7 @@ mod tests {
             .map(|index| {
                 let mut row = select_chart_row(index);
                 if index == 5 {
-                    row.best_score = Some(best_score(1234));
+                    row.best_score = Some(best_score_with_replay(1234, "replay/test.toml"));
                 }
                 SelectItem::Chart(row)
             })
@@ -1633,6 +1643,7 @@ mod tests {
         assert_eq!(snapshot_rows[3].title, "Title 5");
         assert_eq!(snapshot_rows[3].clear_type, "Normal");
         assert_eq!(snapshot_rows[3].ex_score, Some(1234));
+        assert_eq!(snapshot_rows[3].replay_slots, [true, false, false, false]);
     }
 
     #[test]
@@ -1687,7 +1698,7 @@ mod tests {
         }
     }
 
-    fn best_score(ex_score: u32) -> BestScoreSummary {
+    fn best_score_with_replay(ex_score: u32, replay_path: &str) -> BestScoreSummary {
         BestScoreSummary {
             chart_sha256: [0; 32],
             clear_type: "Normal".to_string(),
@@ -1696,7 +1707,7 @@ mod tests {
             ex_score,
             max_combo: 100,
             played_at: 1,
-            replay_path: String::new(),
+            replay_path: replay_path.to_string(),
         }
     }
 }

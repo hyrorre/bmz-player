@@ -21,6 +21,7 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
             max_bpm: 160.0,
             clear_type: if index == 0 { "Normal".to_string() } else { String::new() },
             ex_score: (index == 0).then_some(1888),
+            replay_slots: [index == 0, false, false, false],
             is_folder: false,
         })
         .collect();
