@@ -37,15 +37,41 @@ pub fn scan_song_roots(
     scanned_at: i64,
 ) -> Result<ScanReport> {
     let mut report = ScanReport::default();
+    let enabled_roots: Vec<&PathEntry> = roots.iter().filter(|r| r.enabled).collect();
+    let root_count = enabled_roots.len();
 
-    for root in roots.iter().filter(|root| root.enabled) {
+    for (root_index, root) in enabled_roots.into_iter().enumerate() {
         report.summary.roots_seen += 1;
         let root_path = Path::new(&root.path);
         let root_id = db.upsert_root(root_path, root.enabled, root.recursive)?;
         let files = discover_chart_files(root_path, root.recursive, scan)?;
+        let files_total = files.len();
 
-        for path in files {
+        tracing::info!(
+            root = %root_path.display(),
+            root_num = root_index + 1,
+            root_count,
+            files = files_total,
+            "scanning root"
+        );
+
+        let log_every = (files_total / 10).max(1);
+
+        for (file_index, path) in files.iter().enumerate() {
             report.summary.files_seen += 1;
+
+            if file_index % log_every == 0 {
+                let pct = file_index * 100 / files_total.max(1);
+                let folder = path.parent().unwrap_or(root_path);
+                tracing::info!(
+                    pct,
+                    done = file_index,
+                    total = files_total,
+                    folder = %folder.display(),
+                    "scan progress"
+                );
+            }
+
             let (file_size, modified_at) = file_metadata_for_failure(&path);
             if is_unchanged(db, &path, file_size, modified_at)? {
                 report.summary.skipped += 1;
@@ -67,10 +93,18 @@ pub fn scan_song_roots(
                         scanned_at,
                         &message,
                     )?;
-                    report.failures.push(ScanFailure { path, message });
+                    report.failures.push(ScanFailure { path: path.to_path_buf(), message });
                 }
             }
         }
+
+        tracing::info!(
+            imported = report.summary.imported,
+            skipped = report.summary.skipped,
+            failed = report.summary.failed,
+            root = %root_path.display(),
+            "root scan complete"
+        );
 
         db.update_root_scanned_at(root_id, scanned_at)?;
     }
