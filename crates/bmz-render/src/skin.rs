@@ -788,6 +788,8 @@ pub struct SkinBgaFrame {
 pub struct SkinDrawState {
     pub elapsed_ms: i32,
     pub select_bar_elapsed_ms: i32,
+    pub select_option_panel_elapsed_ms: i32,
+    pub select_option_panel: u8,
     pub combo: u32,
     pub max_combo: u32,
     pub ex_score: u32,
@@ -863,6 +865,14 @@ pub struct SkinDrawState {
     pub select_clear_index: i64,
     /// 選択中バーがフォルダかどうか。
     pub select_is_folder: bool,
+    /// 選択中曲のノーツ数。
+    pub select_total_notes: u32,
+    /// 選択中曲の代表BPM。
+    pub select_bpm: f32,
+    /// 選択中曲の最小BPM。
+    pub select_min_bpm: f32,
+    /// 選択中曲の最大BPM。
+    pub select_max_bpm: f32,
 }
 
 impl Default for SkinDrawState {
@@ -870,6 +880,8 @@ impl Default for SkinDrawState {
         Self {
             elapsed_ms: 0,
             select_bar_elapsed_ms: 0,
+            select_option_panel_elapsed_ms: 0,
+            select_option_panel: 0,
             combo: 0,
             max_combo: 0,
             ex_score: 0,
@@ -911,6 +923,10 @@ impl Default for SkinDrawState {
             select_ex_score: None,
             select_clear_index: 0,
             select_is_folder: false,
+            select_total_notes: 0,
+            select_bpm: 0.0,
+            select_min_bpm: 0.0,
+            select_max_bpm: 0.0,
         }
     }
 }
@@ -1573,11 +1589,19 @@ impl SkinDocument {
             elapsed_ms: (snapshot.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32,
             select_bar_elapsed_ms: (snapshot.selection_time.0 / 1_000)
                 .clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+            select_option_panel_elapsed_ms: (snapshot.option_panel_time.0 / 1_000)
+                .clamp(i32::MIN as i64, i32::MAX as i64)
+                as i32,
+            select_option_panel: snapshot.option_panel,
             select_chart_count: snapshot.chart_count,
             select_play_level: selected_row.map(select_row_level_number).unwrap_or(0),
             select_ex_score: selected_row.and_then(|row| row.ex_score),
             select_clear_index: selected_row.map(select_row_clear_index).unwrap_or(0) as i64,
             select_is_folder: selected_row.is_some_and(|row| row.is_folder),
+            select_total_notes: selected_row.map(|row| row.total_notes).unwrap_or(0),
+            select_bpm: selected_row.map(|row| row.initial_bpm).unwrap_or(0.0),
+            select_min_bpm: selected_row.map(|row| row.min_bpm).unwrap_or(0.0),
+            select_max_bpm: selected_row.map(|row| row.max_bpm).unwrap_or(0.0),
             ex_score: selected_row.and_then(|row| row.ex_score).unwrap_or(0),
             ..SkinDrawState::default()
         };
@@ -2918,6 +2942,10 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool 
         1 => state.select_is_folder,
         2 => !state.select_is_folder,
         3 => false,
+        21 => state.select_option_panel == 1,
+        22 => state.select_option_panel == 2,
+        23 => state.select_option_panel == 3,
+        160 => !state.select_is_folder,
         170 => !state.has_bga,
         171 => state.has_bga,
         value => test_json_option_number(value, enabled_options),
@@ -3306,9 +3334,11 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         300 => Some(state.select_chart_count as i64),
         96 => Some(state.select_play_level),
         370 => Some(state.select_clear_index),
+        92 => Some(state.select_bpm.round() as i64),
         71 | 101 | 171 => Some(state.ex_score as i64),
         72 => Some(state.total_notes as i64 * 2),
-        74 | 106 | 333 => Some(state.total_notes as i64),
+        74 | 106 | 333 => Some(state.total_notes.max(state.select_total_notes) as i64),
+        350 => Some(state.select_total_notes as i64),
         75 | 105 | 174 => Some(state.max_combo as i64),
         76 => Some((state.judge_counts.bad + state.judge_counts.poor) as i64),
         80 | 110 => Some(state.judge_counts.pgreat as i64),
@@ -3332,9 +3362,17 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         311 => Some(((state.hispeed * 100.0) as i64) % 100),
         312 => Some((state.total_duration_ms / 1_000) as i64),
         // BPM 系: NUMBER_MAXBPM=90, NUMBER_MINBPM=91, NUMBER_NOWBPM=160
-        90 => Some(state.max_bpm.round() as i64),
-        91 => Some(state.min_bpm.round() as i64),
-        160 => Some(state.now_bpm.round() as i64),
+        90 => {
+            Some(if state.max_bpm > 0.0 { state.max_bpm } else { state.select_max_bpm }.round()
+                as i64)
+        }
+        91 => {
+            Some(if state.min_bpm > 0.0 { state.min_bpm } else { state.select_min_bpm }.round()
+                as i64)
+        }
+        160 => {
+            Some(if state.now_bpm > 0.0 { state.now_bpm } else { state.select_bpm }.round() as i64)
+        }
         // レーンカバー: NUMBER_LANECOVER1=14 (0-100%)
         14 => Some((state.lane_cover.clamp(0.0, 1.0) * 100.0).round() as i64),
         // 判定タイミングずれ: VALUE_JUDGE_1P_DURATION=525 (ms、絶対値)
@@ -3474,7 +3512,7 @@ fn skin_timer_elapsed_ms(timer: Option<i32>, state: SkinDrawState) -> Option<i32
         None => Some(state.elapsed_ms),
         Some(40 | 41) => Some(state.elapsed_ms),
         Some(11) => Some(state.select_bar_elapsed_ms),
-        Some(21..=23) => Some(state.elapsed_ms),
+        Some(21..=23) => Some(state.select_option_panel_elapsed_ms),
         Some(46) => state.judge_ms,
         Some(50..=57) => state.bomb_ms[(timer.unwrap() - 50) as usize],
         Some(100..=107) => state.keyon_ms[(timer.unwrap() - 100) as usize],
@@ -6117,6 +6155,10 @@ mod tests {
                     ] },
                     { "id": "folder-panel", "op": [1], "dst": [
                         { "x": 50, "y": 0, "w": 10, "h": 10 }
+                    ] },
+                    { "id": "song-panel", "timer": 21, "op": [21], "dst": [
+                        { "time": 0, "x": 30, "y": 0, "w": 10, "h": 10 },
+                        { "time": 200, "x": 50 }
                     ] }
                 ]
             }
@@ -6127,6 +6169,8 @@ mod tests {
         let snapshot = SelectSnapshot {
             time: bmz_core::time::TimeUs(100_000),
             selection_time: bmz_core::time::TimeUs(100_000),
+            option_panel_time: bmz_core::time::TimeUs(100_000),
+            option_panel: 1,
             selected_index: 0,
             rows: vec![SelectRowSnapshot {
                 index: 0,
@@ -6139,12 +6183,16 @@ mod tests {
 
         let items = document.select_render_items(&sources, &snapshot);
 
-        assert_eq!(items.len(), 1);
-        assert!(matches!(items[0], SkinRenderItem::Image {
+        assert_eq!(items.len(), 2);
+        assert!(items.iter().any(|item| matches!(item, SkinRenderItem::Image {
                 rect: Rect { x, .. },
                 uv: TextureRegion { x: u, .. },
                 ..
-            } if approx_eq(x, 0.1) && approx_eq(u, 0.0)));
+            } if approx_eq(*x, 0.1) && approx_eq(*u, 0.0))));
+        assert!(items.iter().any(|item| matches!(item, SkinRenderItem::Image {
+                rect: Rect { x, .. },
+                ..
+            } if approx_eq(*x, 0.4))));
     }
 
     #[test]
@@ -6531,6 +6579,10 @@ mod tests {
             select_chart_count: 42,
             select_play_level: 12,
             select_clear_index: 5,
+            select_total_notes: 1200,
+            select_bpm: 148.0,
+            select_min_bpm: 120.0,
+            select_max_bpm: 180.0,
             ex_score: 1234,
             ..SkinDrawState::default()
         };
@@ -6538,6 +6590,12 @@ mod tests {
         assert_eq!(skin_state_number(300, state), Some(42));
         assert_eq!(skin_state_number(96, state), Some(12));
         assert_eq!(skin_state_number(370, state), Some(5));
+        assert_eq!(skin_state_number(74, state), Some(1200));
+        assert_eq!(skin_state_number(90, state), Some(180));
+        assert_eq!(skin_state_number(91, state), Some(120));
+        assert_eq!(skin_state_number(92, state), Some(148));
+        assert_eq!(skin_state_number(160, state), Some(148));
+        assert_eq!(skin_state_number(350, state), Some(1200));
         assert_eq!(skin_state_number(71, state), Some(1234));
     }
 

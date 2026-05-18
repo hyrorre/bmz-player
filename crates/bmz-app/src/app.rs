@@ -117,6 +117,8 @@ struct WinitApp {
     rendered_frames: u32,
     select_scene_started_at: Instant,
     select_bar_started_at: Instant,
+    option_panel_started_at: Instant,
+    select_option_panel: u8,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -183,6 +185,8 @@ impl WinitApp {
             rendered_frames: 0,
             select_scene_started_at: now,
             select_bar_started_at: now,
+            option_panel_started_at: now,
+            select_option_panel: 0,
         };
         if let Some(chart_id) = boot_sample_chart_id {
             tracing::info!(
@@ -283,6 +287,8 @@ impl WinitApp {
         SelectSnapshot {
             time: self.select_time(),
             selection_time: self.select_bar_time(),
+            option_panel_time: self.option_panel_time(),
+            option_panel: self.select_option_panel,
             chart_count: self.select_items.len() as u32,
             selected_index: self.selected_index as u32,
             selected_chart_id: match selected {
@@ -308,6 +314,12 @@ impl WinitApp {
 
     fn select_bar_time(&self) -> TimeUs {
         let micros = self.select_bar_started_at.elapsed().as_micros().min(i64::MAX as u128) as i64;
+        TimeUs(micros)
+    }
+
+    fn option_panel_time(&self) -> TimeUs {
+        let micros =
+            self.option_panel_started_at.elapsed().as_micros().min(i64::MAX as u128) as i64;
         TimeUs(micros)
     }
 
@@ -350,7 +362,12 @@ impl WinitApp {
         if let Some(control) = physical_key_name(event.physical_key)
             && control == self.select_keys.start
         {
-            self.start_held = event.state == ElementState::Pressed;
+            let pressed = event.state == ElementState::Pressed;
+            if self.start_held != pressed {
+                self.option_panel_started_at = Instant::now();
+            }
+            self.start_held = pressed;
+            self.select_option_panel = if pressed { 1 } else { 0 };
             return;
         }
 
@@ -941,6 +958,10 @@ fn select_snapshot_rows(
                     artist: String::new(),
                     play_level: String::new(),
                     table_level: String::new(),
+                    total_notes: 0,
+                    initial_bpm: 0.0,
+                    min_bpm: 0.0,
+                    max_bpm: 0.0,
                     clear_type: String::new(),
                     ex_score: None,
                     is_folder: true,
@@ -951,6 +972,10 @@ fn select_snapshot_rows(
                     artist: row.chart.artist.clone(),
                     play_level: row.chart.play_level.clone(),
                     table_level: row.table_level.clone(),
+                    total_notes: row.chart.total_notes,
+                    initial_bpm: row.chart.initial_bpm as f32,
+                    min_bpm: row.chart.min_bpm as f32,
+                    max_bpm: row.chart.max_bpm as f32,
                     clear_type: row
                         .best_score
                         .as_ref()
