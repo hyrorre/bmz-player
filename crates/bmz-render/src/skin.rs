@@ -1680,6 +1680,7 @@ impl SkinDocument {
                 select_play_level: select_row_level_number(row),
                 select_ex_score: row.ex_score,
                 select_clear_index: select_row_clear_index(row) as i64,
+                select_total_notes: row.total_notes,
                 ex_score: row.ex_score.unwrap_or(0),
                 ..state
             };
@@ -2963,6 +2964,11 @@ fn test_skin_ops(ops: &[i32], enabled_options: &[i32], state: SkinDrawState) -> 
 }
 
 fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool {
+    if op < 0 {
+        return op
+            .checked_neg()
+            .is_some_and(|positive| !test_skin_op(positive, enabled_options, state));
+    }
     match op {
         40 => false,
         41 => true,
@@ -2973,6 +2979,8 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool 
         22 => state.select_option_panel == 2,
         23 => state.select_option_panel == 3,
         160 => !state.select_is_folder,
+        200..=207 => select_rank_op_matches(op, state),
+        300..=307 => select_small_rank_op_matches(op, state),
         170 => !state.has_bga,
         171 => state.has_bga,
         value => test_json_option_number(value, enabled_options),
@@ -3654,6 +3662,58 @@ fn select_row_clear_index(row: &SelectRowSnapshot) -> usize {
         "Max" => 10,
         _ => 0,
     }
+}
+
+fn select_rank_op_matches(op: i32, state: SkinDrawState) -> bool {
+    let Some(rank) = select_rank_index(state) else {
+        return false;
+    };
+    op == 200 + rank as i32
+}
+
+fn select_small_rank_op_matches(op: i32, state: SkinDrawState) -> bool {
+    let Some(ex_score) = state.select_ex_score else {
+        return false;
+    };
+    let max_score = state.select_total_notes.saturating_mul(2);
+    if max_score == 0 {
+        return false;
+    }
+    if ex_score >= max_score {
+        return op == 300;
+    }
+    let Some(rank) = select_rank_index(state) else {
+        return false;
+    };
+    rank <= 6 && op == 301 + rank as i32
+}
+
+fn select_rank_index(state: SkinDrawState) -> Option<usize> {
+    let ex_score = state.select_ex_score?;
+    let max_score = state.select_total_notes.saturating_mul(2);
+    if max_score == 0 {
+        return None;
+    }
+    let score = ex_score.min(max_score) as u64;
+    let max = max_score as u64;
+    let rank = if score * 9 >= max * 8 {
+        0
+    } else if score * 9 >= max * 7 {
+        1
+    } else if score * 9 >= max * 6 {
+        2
+    } else if score * 9 >= max * 5 {
+        3
+    } else if score * 9 >= max * 4 {
+        4
+    } else if score * 9 >= max * 3 {
+        5
+    } else if score * 9 >= max * 2 {
+        6
+    } else {
+        7
+    };
+    Some(rank)
 }
 
 fn select_arrange_index(arrange: &str) -> usize {
@@ -4950,6 +5010,35 @@ mod tests {
             &[],
             SkinDrawState { has_bga: true, bga_enabled: false, ..SkinDrawState::default() }
         ));
+    }
+
+    #[test]
+    fn select_rank_ops_reflect_selected_ex_score() {
+        let aa_state = SkinDrawState {
+            select_ex_score: Some(1556),
+            select_total_notes: 1000,
+            ..SkinDrawState::default()
+        };
+        let max_state = SkinDrawState {
+            select_ex_score: Some(2000),
+            select_total_notes: 1000,
+            ..SkinDrawState::default()
+        };
+        let f_state = SkinDrawState {
+            select_ex_score: Some(300),
+            select_total_notes: 1000,
+            ..SkinDrawState::default()
+        };
+
+        assert!(test_skin_op(201, &[], aa_state));
+        assert!(test_skin_op(302, &[], aa_state));
+        assert!(!test_skin_op(200, &[], aa_state));
+        assert!(test_skin_op(-200, &[], aa_state));
+        assert!(test_skin_op(200, &[], max_state));
+        assert!(test_skin_op(300, &[], max_state));
+        assert!(test_skin_op(207, &[], f_state));
+        assert!(!test_skin_op(307, &[], f_state));
+        assert!(!test_skin_op(200, &[], SkinDrawState::default()));
     }
 
     #[test]
