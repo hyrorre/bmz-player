@@ -5,6 +5,46 @@ pub const AUTOPLAY_ON_START_ARG: &str = "--autoplay-on-start";
 pub const SMOKE_EXIT_AFTER_FRAMES_ARG: &str = "--smoke-exit-after-frames";
 pub const SMOKE_EXIT_ON_RESULT_ARG: &str = "--smoke-exit-on-result";
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Command {
+    Run(AppOptions),
+    Table(TableCommand),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TableCommand {
+    Add { url: String },
+    List,
+    Fetch,
+}
+
+pub fn parse_command<I, S>(args: I) -> Result<Command>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let args: Vec<String> = args.into_iter().map(|s| s.as_ref().to_string()).collect();
+    match args.first().map(|s| s.as_str()) {
+        Some("table") => {
+            let rest = &args[1..];
+            match rest.first().map(|s| s.as_str()) {
+                Some("add") => {
+                    let url = rest
+                        .get(1)
+                        .ok_or_else(|| anyhow::anyhow!("table add requires a URL"))?
+                        .clone();
+                    Ok(Command::Table(TableCommand::Add { url }))
+                }
+                Some("list") => Ok(Command::Table(TableCommand::List)),
+                Some("fetch") => Ok(Command::Table(TableCommand::Fetch)),
+                Some(sub) => bail!("unknown table subcommand: {sub}. Use: add, list, fetch"),
+                None => bail!("table requires a subcommand: add, list, fetch"),
+            }
+        }
+        _ => Ok(Command::Run(AppOptions::parse_args(args)?)),
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AppOptions {
     pub boot_play_sample: bool,
@@ -58,7 +98,7 @@ where
 }
 
 pub fn app_help_text() -> &'static str {
-    "bmz-app\n\nUsage:\n  bmz-app [OPTIONS]\n\nOptions:\n  --boot-play-sample              Start the bundled sample chart on boot\n  --autoplay-on-start             Enable autoplay for started charts\n  --smoke-exit-after-frames <N>   Exit after N rendered frames, clamped to 1 or more\n  --smoke-exit-on-result          Exit when the app reaches the result screen\n  -h, --help                      Print this help\n\nExamples:\n  cargo run -p bmz-app -- --boot-play-sample --smoke-exit-after-frames 3\n  cargo run -p bmz-app -- --boot-play-sample --autoplay-on-start --smoke-exit-on-result"
+    "bmz-app\n\nUsage:\n  bmz-app [OPTIONS]\n  bmz-app table <SUBCOMMAND>\n\nOptions:\n  --boot-play-sample              Start the bundled sample chart on boot\n  --autoplay-on-start             Enable autoplay for started charts\n  --smoke-exit-after-frames <N>   Exit after N rendered frames, clamped to 1 or more\n  --smoke-exit-on-result          Exit when the app reaches the result screen\n  -h, --help                      Print this help\n\nTable subcommands:\n  table add <URL>   Add a difficulty table source and fetch it\n  table list        List all stored difficulty tables\n  table fetch       Fetch/update all configured difficulty tables\n\nExamples:\n  cargo run -p bmz-app -- --boot-play-sample --smoke-exit-after-frames 3\n  cargo run -p bmz-app -- table add https://example.com/table.html\n  cargo run -p bmz-app -- table list"
 }
 
 fn parse_smoke_exit_after_frames_value(value: &str) -> Result<u32> {
@@ -131,5 +171,34 @@ mod tests {
         assert!(help.contains("--autoplay-on-start"));
         assert!(help.contains("--smoke-exit-after-frames"));
         assert!(help.contains("--smoke-exit-on-result"));
+        assert!(help.contains("table add"));
+        assert!(help.contains("table list"));
+        assert!(help.contains("table fetch"));
+    }
+
+    #[test]
+    fn parse_command_routes_table_subcommands() {
+        assert_eq!(
+            parse_command(["table", "add", "https://example.com/"]).unwrap(),
+            Command::Table(TableCommand::Add { url: "https://example.com/".to_string() })
+        );
+        assert_eq!(parse_command(["table", "list"]).unwrap(), Command::Table(TableCommand::List));
+        assert_eq!(parse_command(["table", "fetch"]).unwrap(), Command::Table(TableCommand::Fetch));
+    }
+
+    #[test]
+    fn parse_command_routes_app_flags() {
+        assert!(matches!(
+            parse_command(["--boot-play-sample"]).unwrap(),
+            Command::Run(opts) if opts.boot_play_sample
+        ));
+        assert!(matches!(parse_command([] as [&str; 0]).unwrap(), Command::Run(_)));
+    }
+
+    #[test]
+    fn parse_command_rejects_unknown_table_subcommand() {
+        assert!(parse_command(["table", "remove"]).is_err());
+        assert!(parse_command(["table"]).is_err());
+        assert!(parse_command(["table", "add"]).is_err());
     }
 }
