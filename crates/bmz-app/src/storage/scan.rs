@@ -78,12 +78,12 @@ pub fn scan_song_roots(
                 }
             }
 
-            let (file_size, modified_at) = file_metadata_for_failure(&path);
-            if is_unchanged(db, &path, file_size, modified_at)? {
+            let (file_size, modified_at) = file_metadata_for_failure(path);
+            if is_unchanged(db, path, file_size, modified_at)? {
                 report.summary.skipped += 1;
                 continue;
             }
-            match import_chart_file(db, &path, Some(root_id), scanned_at) {
+            match import_chart_file(db, path, Some(root_id), scanned_at) {
                 Ok(imported) => {
                     report.summary.imported += 1;
                     report.summary.warnings += imported.warnings.len() as u32;
@@ -93,7 +93,7 @@ pub fn scan_song_roots(
                     let message = error.to_string();
                     db.upsert_failed_chart_file(
                         Some(root_id),
-                        &path,
+                        path,
                         file_size,
                         modified_at,
                         scanned_at,
