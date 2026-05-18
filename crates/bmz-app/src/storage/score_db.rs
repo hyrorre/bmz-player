@@ -67,6 +67,12 @@ pub struct BestScoreSummary {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct ReplaySlotSummary {
+    pub chart_sha256: [u8; 32],
+    pub replay_slots: [bool; 4],
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct ScoreHistoryEntry {
     pub id: i64,
     pub chart_sha256: [u8; 32],
@@ -147,6 +153,36 @@ impl ScoreDatabase {
             {
                 out.push(summary);
             }
+        }
+
+        Ok(out)
+    }
+
+    pub fn replay_slots_for_charts(
+        &self,
+        chart_sha256s: &[[u8; 32]],
+    ) -> Result<Vec<ReplaySlotSummary>> {
+        let mut out = Vec::new();
+        let mut stmt = self.conn.prepare(
+            "SELECT replay_path
+            FROM score_history
+            WHERE chart_sha256 = ?1 AND replay_path <> ''
+            ORDER BY played_at DESC, id DESC
+            LIMIT 4",
+        )?;
+
+        for sha256 in chart_sha256s {
+            let paths = stmt
+                .query_map(params![sha256.as_slice()], |row| row.get::<_, String>(0))?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            if paths.is_empty() {
+                continue;
+            }
+            let mut replay_slots = [false; 4];
+            for slot in replay_slots.iter_mut().take(paths.len()) {
+                *slot = true;
+            }
+            out.push(ReplaySlotSummary { chart_sha256: *sha256, replay_slots });
         }
 
         Ok(out)
@@ -500,6 +536,32 @@ mod tests {
         assert_eq!(scores[0].gauge_type, "");
         assert_eq!(scores[1].chart_sha256, [1; 32]);
         assert_eq!(scores[1].replay_path, "replay/one.bzr");
+    }
+
+    #[test]
+    fn replay_slots_for_charts_returns_recent_non_empty_replays() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut db = ScoreDatabase { conn };
+
+        let mut empty_replay = record(10, ClearType::Normal);
+        empty_replay.chart_sha256 = [1; 32];
+        empty_replay.played_at = 1_700_000_000;
+        db.insert_score(&empty_replay).unwrap();
+        for index in 0..5 {
+            let mut with_replay = record(20 + index, ClearType::Normal);
+            with_replay.chart_sha256 = [1; 32];
+            with_replay.played_at = 1_700_000_010 + index as i64;
+            with_replay.replay_path = format!("replay/{index}.toml");
+            db.insert_score(&with_replay).unwrap();
+        }
+
+        let slots = db.replay_slots_for_charts(&[[2; 32], [1; 32]]).unwrap();
+
+        assert_eq!(slots.len(), 1);
+        assert_eq!(slots[0].chart_sha256, [1; 32]);
+        assert_eq!(slots[0].replay_slots, [true, true, true, true]);
     }
 
     #[test]

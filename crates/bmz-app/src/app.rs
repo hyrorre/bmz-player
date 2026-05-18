@@ -1143,20 +1143,12 @@ fn select_snapshot_rows(
                         .map(|score| score.clear_type.clone())
                         .unwrap_or_default(),
                     ex_score: row.best_score.as_ref().map(|score| score.ex_score),
-                    replay_slots: replay_slots_from_best_score(row.best_score.as_ref()),
+                    replay_slots: row.replay_slots,
                     is_folder: false,
                 },
             }
         })
         .collect()
-}
-
-fn replay_slots_from_best_score(
-    score: Option<&crate::storage::score_db::BestScoreSummary>,
-) -> [bool; 4] {
-    let mut slots = [false; 4];
-    slots[0] = score.is_some_and(|score| !score.replay_path.is_empty());
-    slots
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1804,6 +1796,7 @@ mod tests {
                 let mut row = select_chart_row(index);
                 if index == 5 {
                     row.best_score = Some(best_score_with_replay(1234, "replay/test.toml"));
+                    row.replay_slots = [true, false, false, false];
                 }
                 SelectItem::Chart(row)
             })
@@ -1868,6 +1861,7 @@ mod tests {
                 folder_path: String::new(),
             },
             best_score: None,
+            replay_slots: [false; 4],
             table_level: String::new(),
         }
     }

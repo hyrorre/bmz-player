@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use anyhow::Result;
 
 use crate::storage::library_db::{ChartListItem, LibraryDatabase};
-use crate::storage::score_db::{BestScoreSummary, ScoreDatabase};
+use crate::storage::score_db::{BestScoreSummary, ReplaySlotSummary, ScoreDatabase};
 
 /// Virtual path prefix used for difficulty-table navigation.
 /// `"bmz-table:"` is the root that lists all registered tables.
@@ -32,6 +32,7 @@ fn insert_table_level(map: &mut HashMap<String, String>, key: String, symbol: &s
 pub struct SelectChartRow {
     pub chart: ChartListItem,
     pub best_score: Option<BestScoreSummary>,
+    pub replay_slots: [bool; 4],
     pub table_level: String,
 }
 
@@ -118,13 +119,15 @@ pub fn load_select_items_in_table(
         .into_iter()
         .map(|s| (s.chart_sha256, s))
         .collect();
+    let mut replay_slot_map = replay_slot_map(score_db, &hashes)?;
 
     Ok(chart_levels
         .into_iter()
         .map(|(chart, level)| {
             let table_level = format!("{symbol}{level}");
             let best_score = score_map.remove(&chart.sha256);
-            SelectItem::Chart(SelectChartRow { chart, best_score, table_level })
+            let replay_slots = replay_slot_map.remove(&chart.sha256).unwrap_or([false; 4]);
+            SelectItem::Chart(SelectChartRow { chart, best_score, replay_slots, table_level })
         })
         .collect())
 }
@@ -161,6 +164,7 @@ pub fn load_select_items_in_folder(
         .into_iter()
         .map(|s| (s.chart_sha256, s))
         .collect();
+    let mut replay_slot_map = replay_slot_map(score_db, &hashes)?;
 
     // MD5 lookup (multiple tables per MD5 joined with '/')
     let md5_hexes: Vec<String> = all_charts.iter().map(|c| bytes_to_hex(&c.md5)).collect();
@@ -191,14 +195,31 @@ pub fn load_select_items_in_folder(
     }
     for chart in all_charts {
         let best_score = score_map.remove(&chart.sha256);
+        let replay_slots = replay_slot_map.remove(&chart.sha256).unwrap_or([false; 4]);
         let table_level = md5_level_map
             .remove(&bytes_to_hex(&chart.md5))
             .or_else(|| sha256_level_map.remove(&bytes_to_hex(&chart.sha256)))
             .unwrap_or_default();
-        items.push(SelectItem::Chart(SelectChartRow { chart, best_score, table_level }));
+        items.push(SelectItem::Chart(SelectChartRow {
+            chart,
+            best_score,
+            replay_slots,
+            table_level,
+        }));
     }
 
     Ok(items)
+}
+
+fn replay_slot_map(
+    score_db: &ScoreDatabase,
+    hashes: &[[u8; 32]],
+) -> Result<HashMap<[u8; 32], [bool; 4]>> {
+    Ok(score_db
+        .replay_slots_for_charts(hashes)?
+        .into_iter()
+        .map(|ReplaySlotSummary { chart_sha256, replay_slots }| (chart_sha256, replay_slots))
+        .collect())
 }
 
 #[cfg(test)]
@@ -240,6 +261,28 @@ mod tests {
         assert!(charts[0].best_score.is_some());
         assert_eq!(charts[1].chart.title, "Beta");
         assert!(charts[1].best_score.is_none());
+    }
+
+    #[test]
+    fn load_select_items_in_folder_attaches_replay_slots_by_recent_history() {
+        let (mut library_db, mut score_db) = open_in_memory_dbs();
+        let alpha = chart("Alpha");
+
+        library_db.upsert_chart_import(&record_for_chart("/songs/alpha.bms", &alpha)).unwrap();
+        for index in 0..5 {
+            let mut score = score_for_chart(alpha.identity.file_sha256);
+            score.played_at = 1_700_000_030 + index;
+            score.replay_path = format!("replay/{index}.toml");
+            score_db.insert_score(&score).unwrap();
+        }
+
+        let items = load_select_items_in_folder(&library_db, &score_db, "/songs").unwrap();
+
+        let row = items
+            .iter()
+            .find_map(|i| if let SelectItem::Chart(r) = i { Some(r) } else { None })
+            .unwrap();
+        assert_eq!(row.replay_slots, [true, true, true, true]);
     }
 
     #[test]

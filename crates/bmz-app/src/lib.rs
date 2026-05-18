@@ -9,7 +9,7 @@ pub mod paths;
 pub mod screens;
 pub mod select_options;
 pub mod skin_loader;
-pub mod storage;
 pub mod songs_cmd;
+pub mod storage;
 pub mod table_cmd;
 pub mod video_bga;
