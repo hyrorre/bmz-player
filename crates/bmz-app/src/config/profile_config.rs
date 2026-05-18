@@ -132,10 +132,22 @@ pub struct ProfileInputConfig {
     #[serde(default = "default_start_key")]
     pub start_key: String,
     pub bindings: Vec<BindingConfigEntry>,
+    #[serde(default = "default_analog_scratch_sensitivity")]
+    pub analog_scratch_sensitivity: f32,
+    #[serde(default = "default_analog_scratch_timeout_ms")]
+    pub analog_scratch_timeout_ms: u32,
 }
 
 fn default_start_key() -> String {
     "Q".to_string()
+}
+
+fn default_analog_scratch_sensitivity() -> f32 {
+    1.0
+}
+
+fn default_analog_scratch_timeout_ms() -> u32 {
+    500
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -295,6 +307,8 @@ impl ProfileConfig {
                 scratch_mode: ScratchInputMode::Normal,
                 start_key: default_start_key(),
                 bindings: default_keyboard_bindings(),
+                analog_scratch_sensitivity: default_analog_scratch_sensitivity(),
+                analog_scratch_timeout_ms: default_analog_scratch_timeout_ms(),
             },
             rival: RivalConfig { active_rival: String::new(), entries: Vec::new() },
             replay: ReplayConfig {

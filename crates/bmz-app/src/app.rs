@@ -122,6 +122,7 @@ struct WinitApp {
     select_bar_started_at: Instant,
     option_panel_started_at: Instant,
     select_option_panel: u8,
+    gilrs: Option<crate::input::gilrs::GilrsBackend>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -165,6 +166,23 @@ impl WinitApp {
             &boot.profile_config.skin.play,
         );
 
+        let gilrs = if boot.app_config.input.gamepad_enabled {
+            let sensitivity = boot.profile_config.input.analog_scratch_sensitivity;
+            let timeout_ms = boot.profile_config.input.analog_scratch_timeout_ms;
+            match crate::input::gilrs::GilrsBackend::new(sensitivity, timeout_ms) {
+                Ok(g) => {
+                    tracing::info!("gilrs initialized");
+                    Some(g)
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "gilrs init failed, gamepad disabled");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         let mut app = Self {
             boot,
             window: None,
@@ -190,6 +208,7 @@ impl WinitApp {
             select_bar_started_at: now,
             option_panel_started_at: now,
             select_option_panel: 0,
+            gilrs,
         };
         if let Some(chart_id) = boot_sample_chart_id {
             tracing::info!(
@@ -423,6 +442,94 @@ impl WinitApp {
                 SelectAction::EnterOrPlay => self.enter_or_play_selected(),
                 SelectAction::ExitFolder => self.exit_folder(),
                 SelectAction::Move(select_move) => self.move_selection(select_move),
+            }
+        }
+    }
+
+    fn poll_gamepad_events(&mut self) {
+        let Some(gilrs) = &mut self.gilrs else { return };
+        let events = gilrs.poll();
+        for event in &events {
+            let device_event = crate::input::gilrs::to_device_input_event(event);
+            if let Some(active_play) = &self.active_play {
+                active_play.input.push_shared_event(device_event);
+            }
+            self.route_gamepad_button(&event.name.clone(), event.pressed);
+        }
+    }
+
+    fn route_gamepad_button(&mut self, button: &str, pressed: bool) {
+        if !pressed {
+            if button == "Start" {
+                self.start_held = false;
+                self.select_option_panel = 0;
+                self.option_panel_started_at = Instant::now();
+            }
+            return;
+        }
+
+        // プレイ中: プレイ入力は push_shared_event で処理済み
+        if self.active_play.is_some() {
+            return;
+        }
+
+        // リザルト画面
+        if self.finished_play.is_some() {
+            match button {
+                "Button1" | "Start" => self.retry_last_chart(),
+                "Button2" | "Select" => self.leave_result(),
+                _ => {}
+            }
+            return;
+        }
+
+        // Start ボタン押下
+        if button == "Start" {
+            if !self.start_held {
+                self.option_panel_started_at = Instant::now();
+            }
+            self.start_held = true;
+            self.select_option_panel = 1;
+            return;
+        }
+
+        // Start 押しながら: オプション切替
+        if self.start_held {
+            if self.select_keys.cycle_arrange.as_deref() == Some(button) {
+                self.arrange_option = self.arrange_option.cycle();
+                tracing::info!(arrange = self.arrange_option.as_str(), "arrange option changed");
+            } else if self.select_keys.cycle_gauge.as_deref() == Some(button) {
+                self.gauge_option = cycle_gauge_option(self.gauge_option);
+                tracing::info!(gauge = ?self.gauge_option, "gauge option changed");
+            } else if self.select_keys.cycle_assist.as_deref() == Some(button) {
+                self.assist_option = self.assist_option.cycle();
+                tracing::info!(assist = self.assist_option.as_str(), "assist option changed");
+            }
+            return;
+        }
+
+        // セレクト画面: 固定ナビゲーション + プロファイルバインド
+        let action = match button {
+            "DPadUp" => Some(SelectAction::Move(SelectMove::Previous)),
+            "DPadDown" => Some(SelectAction::Move(SelectMove::Next)),
+            "DPadLeft" | "Select" => Some(SelectAction::ExitFolder),
+            "DPadRight" | "Button1" => Some(SelectAction::EnterOrPlay),
+            _ => {
+                if self.select_keys.is_enter(button) {
+                    Some(SelectAction::EnterOrPlay)
+                } else if self.select_keys.is_back(button) {
+                    Some(SelectAction::ExitFolder)
+                } else {
+                    None
+                }
+            }
+        };
+
+        if let Some(action) = action {
+            match action {
+                SelectAction::EnterOrPlay => self.enter_or_play_selected(),
+                SelectAction::ExitFolder => self.exit_folder(),
+                SelectAction::Move(m) => self.move_selection(m),
             }
         }
     }
@@ -830,6 +937,7 @@ impl ApplicationHandler for WinitApp {
     }
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        self.poll_gamepad_events();
         if let Some(window) = &self.window {
             window.request_redraw();
         }
@@ -1244,9 +1352,20 @@ struct SelectKeyBindings {
 impl SelectKeyBindings {
     fn from_profile(input: &ProfileInputConfig) -> Self {
         let kb: Vec<_> = input.bindings.iter().filter(|e| e.device == "keyboard").collect();
+        let all_input: Vec<_> = input
+            .bindings
+            .iter()
+            .filter(|e| e.device == "keyboard" || e.device == "gamepad")
+            .collect();
 
-        let keys_for = |lane: LaneConfig| -> Vec<String> {
+        // キーボード専用（ヒント文字列表示用）
+        let kb_keys_for = |lane: LaneConfig| -> Vec<String> {
             kb.iter().filter(|e| e.lane == lane).map(|e| e.control.clone()).collect()
+        };
+
+        // キーボード + ゲームパッド（is_enter / is_back ルックアップ用）
+        let keys_for = |lane: LaneConfig| -> Vec<String> {
+            all_input.iter().filter(|e| e.lane == lane).map(|e| e.control.clone()).collect()
         };
 
         let enter: Vec<String> =
@@ -1260,15 +1379,25 @@ impl SelectKeyBindings {
         let cycle_assist = keys_for(LaneConfig::Key5).into_iter().next();
         let start = input.start_key.clone();
 
+        // ヒント文字列はキーボードバインドのみ使用
+        let kb_enter: Vec<String> =
+            [LaneConfig::Key1, LaneConfig::Key3, LaneConfig::Key5, LaneConfig::Key7]
+                .iter()
+                .flat_map(|&l| kb_keys_for(l))
+                .collect();
+        let kb_back = kb_keys_for(LaneConfig::Key2);
         let enter_str =
-            if enter.is_empty() { String::new() } else { format!("/{}", enter.join("/")) };
-        let back_str = back.first().map(|k| format!("/{k}")).unwrap_or_default();
+            if kb_enter.is_empty() { String::new() } else { format!("/{}", kb_enter.join("/")) };
+        let back_str = kb_back.first().map(|k| format!("/{k}")).unwrap_or_default();
         let key_hint =
             format!("UP DOWN  RIGHT{enter_str}:ENTER  LEFT{back_str}:BACK  ENTER {start}");
 
-        let arrange_str = cycle_arrange.as_deref().unwrap_or("?");
-        let gauge_str = cycle_gauge.as_deref().unwrap_or("?");
-        let assist_str = cycle_assist.as_deref().unwrap_or("?");
+        let kb_arrange_str = kb_keys_for(LaneConfig::Key1).into_iter().next();
+        let kb_gauge_str = kb_keys_for(LaneConfig::Key3).into_iter().next();
+        let kb_assist_str = kb_keys_for(LaneConfig::Key5).into_iter().next();
+        let arrange_str = kb_arrange_str.as_deref().unwrap_or("?");
+        let gauge_str = kb_gauge_str.as_deref().unwrap_or("?");
+        let assist_str = kb_assist_str.as_deref().unwrap_or("?");
         let option_hint = format!(
             "F1 SELECT  F2 RELOAD  F3 RESULT  F4 PLAY   \
              {start}+{arrange_str}:ARRANGE  {start}+{gauge_str}:GAUGE  {start}+{assist_str}:ASSIST"
@@ -1389,6 +1518,8 @@ mod tests {
             scratch_mode: crate::config::profile_config::ScratchInputMode::Normal,
             start_key: "Q".to_string(),
             bindings: default_keyboard_bindings(),
+            analog_scratch_sensitivity: 1.0,
+            analog_scratch_timeout_ms: 500,
         })
     }
 

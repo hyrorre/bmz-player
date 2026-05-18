@@ -28,7 +28,7 @@ impl WinitInputBackend {
         }
     }
 
-    fn push_shared_event(&self, event: DeviceInputEvent) {
+    pub(crate) fn push_shared_event(&self, event: DeviceInputEvent) {
         if let Ok(mut buffer) = self.buffer.lock() {
             buffer.push_event(event);
         }
