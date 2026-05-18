@@ -1,4 +1,5 @@
 use bmz_core::clear::ClearType;
+use bmz_core::time::TimeUs;
 
 use crate::snapshot::{DisplayJudgeCounts, RenderSnapshot};
 
@@ -12,6 +13,8 @@ pub enum AppSceneSnapshot {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SelectSnapshot {
+    pub time: TimeUs,
+    pub selection_time: TimeUs,
     pub chart_count: u32,
     pub selected_index: u32,
     pub selected_chart_id: Option<i64>,

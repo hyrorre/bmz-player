@@ -22,6 +22,8 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
         .collect();
 
     AppSceneSnapshot::Select(SelectSnapshot {
+        time: TimeUs(12_345_000),
+        selection_time: TimeUs(345_000),
         chart_count: 7,
         selected_index: 0,
         selected_chart_id: Some(1),

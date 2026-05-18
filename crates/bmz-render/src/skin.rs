@@ -787,6 +787,7 @@ pub struct SkinBgaFrame {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SkinDrawState {
     pub elapsed_ms: i32,
+    pub select_bar_elapsed_ms: i32,
     pub combo: u32,
     pub max_combo: u32,
     pub ex_score: u32,
@@ -860,12 +861,15 @@ pub struct SkinDrawState {
     pub select_ex_score: Option<u32>,
     /// 選択中曲のクリアランプ番号。
     pub select_clear_index: i64,
+    /// 選択中バーがフォルダかどうか。
+    pub select_is_folder: bool,
 }
 
 impl Default for SkinDrawState {
     fn default() -> Self {
         Self {
             elapsed_ms: 0,
+            select_bar_elapsed_ms: 0,
             combo: 0,
             max_combo: 0,
             ex_score: 0,
@@ -906,6 +910,7 @@ impl Default for SkinDrawState {
             select_play_level: 0,
             select_ex_score: None,
             select_clear_index: 0,
+            select_is_folder: false,
         }
     }
 }
@@ -1565,11 +1570,14 @@ impl SkinDocument {
     ) -> Vec<SkinRenderItem> {
         let selected_row = snapshot.rows.iter().find(|row| row.index == snapshot.selected_index);
         let state = SkinDrawState {
-            elapsed_ms: 0,
+            elapsed_ms: (snapshot.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+            select_bar_elapsed_ms: (snapshot.selection_time.0 / 1_000)
+                .clamp(i32::MIN as i64, i32::MAX as i64) as i32,
             select_chart_count: snapshot.chart_count,
             select_play_level: selected_row.map(select_row_level_number).unwrap_or(0),
             select_ex_score: selected_row.and_then(|row| row.ex_score),
             select_clear_index: selected_row.map(select_row_clear_index).unwrap_or(0) as i64,
+            select_is_folder: selected_row.is_some_and(|row| row.is_folder),
             ex_score: selected_row.and_then(|row| row.ex_score).unwrap_or(0),
             ..SkinDrawState::default()
         };
@@ -2907,6 +2915,9 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool 
     match op {
         40 => false,
         41 => true,
+        1 => state.select_is_folder,
+        2 => !state.select_is_folder,
+        3 => false,
         170 => !state.has_bga,
         171 => state.has_bga,
         value => test_json_option_number(value, enabled_options),
@@ -3462,6 +3473,8 @@ fn skin_timer_elapsed_ms(timer: Option<i32>, state: SkinDrawState) -> Option<i32
     match timer {
         None => Some(state.elapsed_ms),
         Some(40 | 41) => Some(state.elapsed_ms),
+        Some(11) => Some(state.select_bar_elapsed_ms),
+        Some(21..=23) => Some(state.elapsed_ms),
         Some(46) => state.judge_ms,
         Some(50..=57) => state.bomb_ms[(timer.unwrap() - 50) as usize],
         Some(100..=107) => state.keyon_ms[(timer.unwrap() - 100) as usize],
@@ -6082,6 +6095,56 @@ mod tests {
                 && approx_eq(*width, 0.04)
                 && approx_eq(*height, 0.04)
                 && approx_eq(*u, 20.0 / 24.0))));
+    }
+
+    #[test]
+    fn select_skin_uses_snapshot_time_and_bar_type_ops() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 5,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "panel.png" }],
+                "image": [
+                    { "id": "song-panel", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10 },
+                    { "id": "folder-panel", "src": 1, "x": 10, "y": 0, "w": 10, "h": 10 }
+                ],
+                "destination": [
+                    { "id": "song-panel", "timer": 11, "loop": 200, "op": [2], "dst": [
+                        { "time": 0, "x": 0, "y": 0, "w": 10, "h": 10 },
+                        { "time": 200, "x": 20 }
+                    ] },
+                    { "id": "folder-panel", "op": [1], "dst": [
+                        { "x": 50, "y": 0, "w": 10, "h": 10 }
+                    ] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = mock_source("1", 100.0, 100.0);
+        let snapshot = SelectSnapshot {
+            time: bmz_core::time::TimeUs(100_000),
+            selection_time: bmz_core::time::TimeUs(100_000),
+            selected_index: 0,
+            rows: vec![SelectRowSnapshot {
+                index: 0,
+                title: "Song".to_string(),
+                is_folder: false,
+                ..SelectRowSnapshot::default()
+            }],
+            ..SelectSnapshot::default()
+        };
+
+        let items = document.select_render_items(&sources, &snapshot);
+
+        assert_eq!(items.len(), 1);
+        assert!(matches!(items[0], SkinRenderItem::Image {
+                rect: Rect { x, .. },
+                uv: TextureRegion { x: u, .. },
+                ..
+            } if approx_eq(x, 0.1) && approx_eq(u, 0.0)));
     }
 
     #[test]

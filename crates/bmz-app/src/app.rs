@@ -1,9 +1,10 @@
 use std::path::Path;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use bmz_chart::model::PlayableChart;
+use bmz_core::time::TimeUs;
 use bmz_render::assets::load_static_rgba_image;
 use bmz_render::plan::TextureId;
 use bmz_render::renderer::{RenderSurfaceStatus, Renderer, SurfaceSize};
@@ -114,6 +115,8 @@ struct WinitApp {
     smoke_exit_after_frames: Option<u32>,
     smoke_exit_on_result: bool,
     rendered_frames: u32,
+    select_scene_started_at: Instant,
+    select_bar_started_at: Instant,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -148,6 +151,7 @@ impl WinitApp {
         let gauge_option = boot.profile_config.play.gauge;
         let arrange_option = arrange_option_from_profile(boot.profile_config.play.random);
         let select_keys = SelectKeyBindings::from_profile(&boot.profile_config.input);
+        let now = Instant::now();
 
         let mut renderer = Renderer::default();
         load_skin_textures(
@@ -177,6 +181,8 @@ impl WinitApp {
             smoke_exit_after_frames: options.smoke_exit_after_frames,
             smoke_exit_on_result: options.smoke_exit_on_result,
             rendered_frames: 0,
+            select_scene_started_at: now,
+            select_bar_started_at: now,
         };
         if let Some(chart_id) = boot_sample_chart_id {
             tracing::info!(
@@ -275,6 +281,8 @@ impl WinitApp {
             .unwrap_or("")
             .to_string();
         SelectSnapshot {
+            time: self.select_time(),
+            selection_time: self.select_bar_time(),
             chart_count: self.select_items.len() as u32,
             selected_index: self.selected_index as u32,
             selected_chart_id: match selected {
@@ -290,6 +298,17 @@ impl WinitApp {
             key_hint: self.select_keys.key_hint.clone(),
             option_hint: self.select_keys.option_hint.clone(),
         }
+    }
+
+    fn select_time(&self) -> TimeUs {
+        let micros =
+            self.select_scene_started_at.elapsed().as_micros().min(i64::MAX as u128) as i64;
+        TimeUs(micros)
+    }
+
+    fn select_bar_time(&self) -> TimeUs {
+        let micros = self.select_bar_started_at.elapsed().as_micros().min(i64::MAX as u128) as i64;
+        TimeUs(micros)
     }
 
     fn route_keyboard_input(&mut self, event: &winit::event::KeyEvent) {
@@ -375,8 +394,12 @@ impl WinitApp {
         if self.select_items.is_empty() {
             return;
         }
+        let previous_index = self.selected_index;
         self.selected_index =
             moved_select_index(self.selected_index, self.select_items.len(), select_move);
+        if self.selected_index != previous_index {
+            self.select_bar_started_at = Instant::now();
+        }
     }
 
     fn enter_or_play_selected(&mut self) {
@@ -388,6 +411,7 @@ impl WinitApp {
                 self.folder_stack.push(path);
                 self.reload_select_items();
                 self.selected_index = 0;
+                self.select_bar_started_at = Instant::now();
                 tracing::info!(folder = ?self.folder_stack.last(), "entered folder");
             }
             Some(SelectItem::Chart(row)) => {
@@ -403,6 +427,7 @@ impl WinitApp {
         if self.folder_stack.pop().is_some() {
             self.reload_select_items();
             self.selected_index = 0;
+            self.select_bar_started_at = Instant::now();
             tracing::info!(depth = self.folder_stack.len(), "exited folder");
         }
     }
@@ -444,6 +469,9 @@ impl WinitApp {
         self.finished_play = None;
         self.last_play_snapshot = None;
         self.reload_select_items();
+        let now = Instant::now();
+        self.select_scene_started_at = now;
+        self.select_bar_started_at = now;
     }
 
     fn reload_select_items(&mut self) {
@@ -624,6 +652,11 @@ impl WinitApp {
         }
 
         self.last_scene_kind = Some(scene_kind);
+        if scene_kind == AppSceneKind::Select {
+            let now = Instant::now();
+            self.select_scene_started_at = now;
+            self.select_bar_started_at = now;
+        }
         if let Some(window) = &self.window {
             window.set_title(window_title_for_scene(scene_kind));
         }
