@@ -5,12 +5,22 @@ use anyhow::Result;
 use crate::storage::library_db::{ChartListItem, LibraryDatabase};
 use crate::storage::score_db::{BestScoreSummary, ScoreDatabase};
 
-fn md5_to_hex(md5: &[u8; 16]) -> String {
-    md5.iter().fold(String::with_capacity(32), |mut s, b| {
+fn bytes_to_hex<const N: usize>(bytes: &[u8; N]) -> String {
+    bytes.iter().fold(String::with_capacity(N * 2), |mut s, b| {
         use std::fmt::Write;
         let _ = write!(s, "{b:02x}");
         s
     })
+}
+
+fn insert_table_level(map: &mut HashMap<String, String>, key: String, symbol: &str, level: &str) {
+    let entry = format!("{symbol}{level}");
+    map.entry(key)
+        .and_modify(|v| {
+            v.push('/');
+            v.push_str(&entry);
+        })
+        .or_insert(entry);
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -84,13 +94,27 @@ pub fn load_select_items_in_folder(
         .map(|s| (s.chart_sha256, s))
         .collect();
 
-    let md5_hexes: Vec<String> = all_charts.iter().map(|c| md5_to_hex(&c.md5)).collect();
+    // MD5 lookup (multiple tables per MD5 joined with '/')
+    let md5_hexes: Vec<String> = all_charts.iter().map(|c| bytes_to_hex(&c.md5)).collect();
     let md5_refs: Vec<&str> = md5_hexes.iter().map(|s| s.as_str()).collect();
-    let mut table_level_map: HashMap<String, String> = library_db
-        .list_difficulty_table_entries_by_md5s(&md5_refs)?
-        .into_iter()
-        .map(|e| (e.md5, format!("{}{}", e.table_symbol, e.level)))
+    let mut md5_level_map: HashMap<String, String> = HashMap::new();
+    for e in library_db.list_difficulty_table_entries_by_md5s(&md5_refs)? {
+        insert_table_level(&mut md5_level_map, e.md5, &e.table_symbol, &e.level);
+    }
+
+    // SHA256 fallback for charts not matched by MD5
+    let missing_sha256_hexes: Vec<String> = all_charts
+        .iter()
+        .filter(|c| !md5_level_map.contains_key(&bytes_to_hex(&c.md5)))
+        .map(|c| bytes_to_hex(&c.sha256))
         .collect();
+    let mut sha256_level_map: HashMap<String, String> = HashMap::new();
+    if !missing_sha256_hexes.is_empty() {
+        let sha256_refs: Vec<&str> = missing_sha256_hexes.iter().map(|s| s.as_str()).collect();
+        for e in library_db.list_difficulty_table_entries_by_sha256s(&sha256_refs)? {
+            insert_table_level(&mut sha256_level_map, e.sha256, &e.table_symbol, &e.level);
+        }
+    }
 
     let mut items = Vec::with_capacity(non_leaf_folders.len() + all_charts.len());
 
@@ -99,7 +123,10 @@ pub fn load_select_items_in_folder(
     }
     for chart in all_charts {
         let best_score = score_map.remove(&chart.sha256);
-        let table_level = table_level_map.remove(&md5_to_hex(&chart.md5)).unwrap_or_default();
+        let table_level = md5_level_map
+            .remove(&bytes_to_hex(&chart.md5))
+            .or_else(|| sha256_level_map.remove(&bytes_to_hex(&chart.sha256)))
+            .unwrap_or_default();
         items.push(SelectItem::Chart(SelectChartRow { chart, best_score, table_level }));
     }
 
@@ -243,6 +270,114 @@ mod tests {
             modified_at: 1,
             scanned_at: 1,
             chart,
+        }
+    }
+
+    #[test]
+    fn load_select_items_attaches_table_level_via_md5() {
+        let (mut library_db, score_db) = open_in_memory_dbs();
+        let alpha = chart("Alpha");
+        library_db.upsert_chart_import(&record_for_chart("/songs/alpha.bms", &alpha)).unwrap();
+
+        let table = difficulty_table_for_md5(&alpha.identity.file_md5, "★", "3");
+        library_db.upsert_difficulty_table(&table).unwrap();
+
+        let items = load_select_items_in_folder(&library_db, &score_db, "/songs").unwrap();
+
+        let row = items
+            .iter()
+            .find_map(|i| if let SelectItem::Chart(r) = i { Some(r) } else { None })
+            .unwrap();
+        assert_eq!(row.table_level, "★3");
+    }
+
+    #[test]
+    fn load_select_items_joins_multiple_table_levels_with_slash() {
+        let (mut library_db, score_db) = open_in_memory_dbs();
+        let alpha = chart("Alpha");
+        library_db.upsert_chart_import(&record_for_chart("/songs/alpha.bms", &alpha)).unwrap();
+
+        library_db
+            .upsert_difficulty_table(&difficulty_table_for_md5(&alpha.identity.file_md5, "★", "3"))
+            .unwrap();
+        library_db
+            .upsert_difficulty_table(&difficulty_table_for_md5(&alpha.identity.file_md5, "☆", "5"))
+            .unwrap();
+
+        let items = load_select_items_in_folder(&library_db, &score_db, "/songs").unwrap();
+
+        let row = items
+            .iter()
+            .find_map(|i| if let SelectItem::Chart(r) = i { Some(r) } else { None })
+            .unwrap();
+        assert!(row.table_level.contains("★3"), "got: {}", row.table_level);
+        assert!(row.table_level.contains("☆5"), "got: {}", row.table_level);
+        assert!(row.table_level.contains('/'), "got: {}", row.table_level);
+    }
+
+    #[test]
+    fn load_select_items_falls_back_to_sha256_when_no_md5_match() {
+        let (mut library_db, score_db) = open_in_memory_dbs();
+        let alpha = chart("Alpha");
+        library_db.upsert_chart_import(&record_for_chart("/songs/alpha.bms", &alpha)).unwrap();
+
+        let table = difficulty_table_for_sha256(&alpha.identity.file_sha256, "◆", "7");
+        library_db.upsert_difficulty_table(&table).unwrap();
+
+        let items = load_select_items_in_folder(&library_db, &score_db, "/songs").unwrap();
+
+        let row = items
+            .iter()
+            .find_map(|i| if let SelectItem::Chart(r) = i { Some(r) } else { None })
+            .unwrap();
+        assert_eq!(row.table_level, "◆7");
+    }
+
+    fn difficulty_table_for_md5(
+        md5: &[u8; 16],
+        symbol: &str,
+        level: &str,
+    ) -> crate::difficulty_table::FetchedDifficultyTable {
+        use crate::difficulty_table::{FetchedDifficultyTable, FetchedTableEntry};
+        FetchedDifficultyTable {
+            source_url: format!("https://example.com/{symbol}/"),
+            head_url: format!("https://example.com/{symbol}/header.json"),
+            name: format!("Table {symbol}"),
+            symbol: symbol.to_string(),
+            level_order: vec![level.to_string()],
+            entries: vec![FetchedTableEntry {
+                level: level.to_string(),
+                md5: bytes_to_hex(md5),
+                sha256: String::new(),
+                title: String::new(),
+                artist: String::new(),
+                comment: String::new(),
+            }],
+            fetched_at: 0,
+        }
+    }
+
+    fn difficulty_table_for_sha256(
+        sha256: &[u8; 32],
+        symbol: &str,
+        level: &str,
+    ) -> crate::difficulty_table::FetchedDifficultyTable {
+        use crate::difficulty_table::{FetchedDifficultyTable, FetchedTableEntry};
+        FetchedDifficultyTable {
+            source_url: format!("https://example.com/{symbol}-sha/"),
+            head_url: format!("https://example.com/{symbol}-sha/header.json"),
+            name: format!("Table {symbol} SHA"),
+            symbol: symbol.to_string(),
+            level_order: vec![level.to_string()],
+            entries: vec![FetchedTableEntry {
+                level: level.to_string(),
+                md5: String::new(),
+                sha256: bytes_to_hex(sha256),
+                title: String::new(),
+                artist: String::new(),
+                comment: String::new(),
+            }],
+            fetched_at: 0,
         }
     }
 

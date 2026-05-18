@@ -910,6 +910,7 @@ pub struct SkinTextState<'a> {
     pub genre: &'a str,
     pub current_folder: &'a str,
     pub bar_text: &'a str,
+    pub table_level: &'a str,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -1566,6 +1567,7 @@ impl SkinDocument {
             artist: selected_row.map(|row| row.artist.as_str()).unwrap_or_default(),
             genre: "",
             current_folder: &snapshot.current_folder,
+            table_level: selected_row.map(|row| row.table_level.as_str()).unwrap_or_default(),
             ..SkinTextState::default()
         };
 
@@ -1701,7 +1703,11 @@ impl SkinDocument {
             return Vec::new();
         };
         let mut items = Vec::new();
-        let text_state = SkinTextState { bar_text: &row.title, ..SkinTextState::default() };
+        let text_state = SkinTextState {
+            bar_text: &row.title,
+            table_level: &row.table_level,
+            ..SkinTextState::default()
+        };
         for destination in destination_entries(&songlist.text, enabled_options) {
             if let Some(mut resolved) = self.resolve_offset_destination_items(
                 destination,
@@ -3473,6 +3479,9 @@ fn skin_state_text(text: &SkinTextDef, state: SkinTextState<'_>) -> String {
     if text.id == "bartext" {
         return state.bar_text.to_string();
     }
+    if text.id == "table_level" {
+        return state.table_level.to_string();
+    }
     match text.ref_id {
         10 => state.title.to_string(),
         11 => state.subtitle.to_string(),
@@ -3481,6 +3490,7 @@ fn skin_state_text(text: &SkinTextDef, state: SkinTextState<'_>) -> String {
         14 => state.artist.to_string(),
         15 => state.subartist.to_string(),
         16 => full_label(state.artist, state.subartist),
+        17 => state.table_level.to_string(),
         1000 => state.current_folder.to_string(),
         _ => String::new(),
     }
@@ -3496,7 +3506,8 @@ fn full_label(primary: &str, secondary: &str) -> String {
 }
 
 fn select_row_level_number(row: &SelectRowSnapshot) -> i64 {
-    row.play_level.chars().filter(|ch| ch.is_ascii_digit()).collect::<String>().parse().unwrap_or(0)
+    let source = if !row.table_level.is_empty() { &row.table_level } else { &row.play_level };
+    source.chars().filter(|ch| ch.is_ascii_digit()).collect::<String>().parse().unwrap_or(0)
 }
 
 fn destination_entry_at<'a>(
