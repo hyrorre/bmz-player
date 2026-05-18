@@ -1,3 +1,4 @@
+use bmz_chart::model::ChartMetadata;
 use bmz_core::clear::ClearType;
 use bmz_gameplay::result::PlayResult;
 use bmz_gameplay::score::JudgeCounts;
@@ -22,6 +23,11 @@ pub struct ResultSummary {
     pub target_max_combo: Option<u32>,
     pub target_misscount: Option<u32>,
     pub target_clear_type: Option<ClearType>,
+    pub title: String,
+    pub subtitle: String,
+    pub artist: String,
+    pub subartist: String,
+    pub genre: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -83,7 +89,11 @@ impl ResultFastSlowJudgeCounts {
 }
 
 impl ResultSummary {
-    pub fn from_play_result(result: &PlayResult, stored: &StoredPlayResult) -> Self {
+    pub fn from_play_result(
+        result: &PlayResult,
+        stored: &StoredPlayResult,
+        metadata: &ChartMetadata,
+    ) -> Self {
         Self {
             clear_type: result.clear_type,
             ex_score: result.score.ex_score(),
@@ -101,6 +111,11 @@ impl ResultSummary {
             target_max_combo: None,
             target_misscount: None,
             target_clear_type: None,
+            title: metadata.title.clone(),
+            subtitle: metadata.subtitle.clone(),
+            artist: metadata.artist.clone(),
+            subartist: metadata.subartist.clone(),
+            genre: metadata.genre.clone(),
         }
     }
 
@@ -141,9 +156,11 @@ mod tests {
         };
         let stored =
             StoredPlayResult { score_history_id: 9, replay_path: "replay/test.toml".to_string() };
+        let metadata = ChartMetadata { title: "Test".to_string(), ..ChartMetadata::default() };
 
-        let summary = ResultSummary::from_play_result(&result, &stored);
+        let summary = ResultSummary::from_play_result(&result, &stored, &metadata);
 
+        assert_eq!(summary.title, "Test");
         assert_eq!(summary.clear_type, ClearType::Normal);
         assert_eq!(summary.max_combo, 12);
         assert_eq!(summary.gauge_value, 82.0);

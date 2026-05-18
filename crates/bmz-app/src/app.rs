@@ -322,6 +322,11 @@ impl WinitApp {
                 elapsed_time: bmz_core::time::TimeUs(
                     self.result_scene_started_at.elapsed().as_micros().min(i64::MAX as u128) as i64,
                 ),
+                title: summary.title.clone(),
+                subtitle: summary.subtitle.clone(),
+                artist: summary.artist.clone(),
+                subartist: summary.subartist.clone(),
+                genre: summary.genre.clone(),
             }),
         }
     }

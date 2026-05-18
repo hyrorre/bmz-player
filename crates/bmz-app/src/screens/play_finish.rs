@@ -57,7 +57,16 @@ pub fn finish_session_result(
             replay_events: session.replay_recorder.events.clone(),
         },
     )?;
-    let summary = ResultSummary::from_play_result(&result, &stored);
+    let mut summary = ResultSummary::from_play_result(&result, &stored, &session.chart.metadata);
+    // 過去ベストスコア・ベストコンボを ResultSummary にフィルする。
+    // 今回のスコアが直前に upsert_score_best されているので、`best_*` は
+    // 「現在の最高記録」を返す。差分表示は `current - best` として 0 になり得る。
+    if let Ok(bests) = score_db.best_scores_for_charts(&[result.chart_sha256])
+        && let Some(best) = bests.into_iter().next()
+    {
+        summary.best_ex_score = Some(best.ex_score);
+        summary.best_max_combo = Some(best.max_combo);
+    }
 
     Ok(FinishedPlaySession { result, stored, summary })
 }

@@ -71,6 +71,12 @@ pub struct ResultSnapshot {
     /// リザルト画面を開いてからの経過時間。
     /// destination の timer/loop/keyframe アニメーション、image cycle に使われる。
     pub elapsed_time: TimeUs,
+    /// 曲名 (text ref 10/12 で表示)。
+    pub title: String,
+    pub subtitle: String,
+    pub artist: String,
+    pub subartist: String,
+    pub genre: String,
 }
 
 impl ResultSnapshot {
@@ -106,6 +112,11 @@ mod tests {
             target_misscount: None,
             target_clear_type: None,
             elapsed_time: TimeUs(0),
+            title: String::new(),
+            subtitle: String::new(),
+            artist: String::new(),
+            subartist: String::new(),
+            genre: String::new(),
         };
 
         assert!(snapshot.is_full_combo());
@@ -132,6 +143,11 @@ mod tests {
             target_misscount: None,
             target_clear_type: None,
             elapsed_time: TimeUs(0),
+            title: String::new(),
+            subtitle: String::new(),
+            artist: String::new(),
+            subartist: String::new(),
+            genre: String::new(),
         };
 
         assert!(!snapshot.is_full_combo());

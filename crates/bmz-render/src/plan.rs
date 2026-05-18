@@ -668,7 +668,14 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
 fn plan_result(snapshot: &crate::scene::ResultSnapshot, skin: &SkinContext) -> DrawPlan {
     if skin.document().is_some_and(|document| document.skin_type == 7) {
         let state = build_result_skin_draw_state(snapshot);
-        let text = SkinTextState::default();
+        let text = SkinTextState {
+            title: snapshot.title.as_str(),
+            subtitle: snapshot.subtitle.as_str(),
+            artist: snapshot.artist.as_str(),
+            subartist: snapshot.subartist.as_str(),
+            genre: snapshot.genre.as_str(),
+            ..SkinTextState::default()
+        };
         let items = skin.static_document_items_for_state_and_text(state, text);
         if !items.is_empty() {
             let mut commands = Vec::new();
@@ -1609,6 +1616,11 @@ mod tests {
             target_misscount: None,
             target_clear_type: None,
             elapsed_time: TimeUs(0),
+            title: String::new(),
+            subtitle: String::new(),
+            artist: String::new(),
+            subartist: String::new(),
+            genre: String::new(),
         };
 
         let plan = DrawPlan::from_scene_with_skin(&AppSceneSnapshot::Result(snapshot), &skin);

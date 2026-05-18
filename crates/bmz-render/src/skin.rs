@@ -1404,7 +1404,12 @@ impl SkinDocument {
             let (rect, uv) = stretch_skin_image_geometry(
                 destination.stretch,
                 normalize_skin_frame_rect(frame, self.w, self.h),
-                skin_image_texture_region(image, source.source_size, elapsed),
+                skin_image_texture_region_for_state(
+                    image,
+                    source.source_size,
+                    elapsed,
+                    Some(state),
+                ),
                 source.source_size,
                 self.w,
                 self.h,
@@ -1492,7 +1497,12 @@ impl SkinDocument {
             let (rect, uv) = stretch_skin_image_geometry(
                 destination.stretch,
                 normalize_skin_frame_rect(frame, self.w, self.h),
-                skin_image_texture_region(image, source.source_size, elapsed),
+                skin_image_texture_region_for_state(
+                    image,
+                    source.source_size,
+                    elapsed,
+                    Some(state),
+                ),
                 source.source_size,
                 self.w,
                 self.h,
@@ -1563,7 +1573,12 @@ impl SkinDocument {
             let (rect, uv) = stretch_skin_image_geometry(
                 destination.stretch,
                 normalize_skin_frame_rect(frame, self.w, self.h),
-                skin_image_texture_region(image, source.source_size, elapsed),
+                skin_image_texture_region_for_state(
+                    image,
+                    source.source_size,
+                    elapsed,
+                    Some(state),
+                ),
                 source.source_size,
                 self.w,
                 self.h,
@@ -3606,16 +3621,43 @@ fn skin_image_texture_region(
     source_size: SkinImageSize,
     elapsed_ms: i32,
 ) -> TextureRegion {
+    skin_image_texture_region_for_state(image, source_size, elapsed_ms, None)
+}
+
+/// `image.ref_id` が指定されている場合、`SkinDrawState` から ref 値を引いて
+/// 行インデックス（divy 方向）として使う。divx 方向は cycle 経過時間でアニメ。
+/// ref 未指定なら従来通り全フレームを cycle で順次再生する。
+fn skin_image_texture_region_for_state(
+    image: &SkinImageDef,
+    source_size: SkinImageSize,
+    elapsed_ms: i32,
+    state: Option<SkinDrawState>,
+) -> TextureRegion {
     let source_width = source_size.width.max(1.0);
     let source_height = source_size.height.max(1.0);
     let divx = image.divx.max(1);
     let divy = image.divy.max(1);
     let frame_count = divx * divy;
-    let frame_index = if image.cycle > 0 && frame_count > 1 {
+
+    // ref_id が指定されている画像は「ref 値 = 行」「cycle = 列のサブアニメ」と解釈する。
+    // ref 値が解決できない場合 (state 未提供 or 値 None) は行 0 にフォールバックし、
+    // 全フレームを順次再生する cycle モードへは落とさない（高速点滅を防ぐため）。
+    let frame_index = if image.ref_id != 0 {
+        let row = state.and_then(|s| skin_state_number(image.ref_id, s)).unwrap_or(0);
+        let max_row = if image.len > 0 { image.len.min(divy) } else { divy };
+        let row = row.clamp(0, (max_row - 1).max(0) as i64) as i32;
+        let col = if image.cycle > 0 && divx > 1 {
+            (elapsed_ms.rem_euclid(image.cycle) * divx / image.cycle).min(divx - 1)
+        } else {
+            0
+        };
+        row * divx + col
+    } else if image.cycle > 0 && frame_count > 1 {
         (elapsed_ms.rem_euclid(image.cycle) * frame_count / image.cycle).min(frame_count - 1)
     } else {
         0
     };
+
     let cell_width = image.w as f32 / divx as f32;
     let cell_height = image.h as f32 / divy as f32;
     let source_column = frame_index % divx;
@@ -3855,32 +3897,42 @@ fn select_replay_op_matches(op: i32, state: SkinDrawState) -> bool {
 }
 
 fn select_rank_op_matches(op: i32, state: SkinDrawState) -> bool {
-    let Some(rank) = select_rank_index(state) else {
+    let Some(rank) = current_rank_index(state) else {
         return false;
     };
     op == 200 + rank as i32
 }
 
 fn select_small_rank_op_matches(op: i32, state: SkinDrawState) -> bool {
-    let Some(ex_score) = state.select_ex_score else {
-        return false;
-    };
-    let max_score = state.select_total_notes.saturating_mul(2);
-    if max_score == 0 {
+    let (ex_score, total_notes) = current_rank_inputs(state);
+    let max_score = total_notes.saturating_mul(2);
+    if max_score == 0 || ex_score.is_none() {
         return false;
     }
+    let ex_score = ex_score.unwrap();
     if ex_score >= max_score {
         return op == 300;
     }
-    let Some(rank) = select_rank_index(state) else {
+    let Some(rank) = current_rank_index(state) else {
         return false;
     };
     rank <= 6 && op == 301 + rank as i32
 }
 
-fn select_rank_index(state: SkinDrawState) -> Option<usize> {
-    let ex_score = state.select_ex_score?;
-    let max_score = state.select_total_notes.saturating_mul(2);
+/// 現在のランク判定の基準値 (ex_score, total_notes)。
+/// Result 画面なら結果値、それ以外は select の選択中曲のベスト値を使う。
+fn current_rank_inputs(state: SkinDrawState) -> (Option<u32>, u32) {
+    if state.result_failed.is_some() {
+        (Some(state.ex_score), state.total_notes)
+    } else {
+        (state.select_ex_score, state.select_total_notes)
+    }
+}
+
+fn current_rank_index(state: SkinDrawState) -> Option<usize> {
+    let (ex_score, total_notes) = current_rank_inputs(state);
+    let ex_score = ex_score?;
+    let max_score = total_notes.saturating_mul(2);
     if max_score == 0 {
         return None;
     }
