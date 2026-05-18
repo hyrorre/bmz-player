@@ -264,9 +264,13 @@ impl WgpuRenderer {
             None,
         ))
         .context("failed to request wgpu device")?;
-        let config = surface
+        let mut config = surface
             .get_default_config(&adapter, size.width, size.height)
             .ok_or_else(|| anyhow!("surface is not supported by the selected adapter"))?;
+        // sRGB フレームバッファだと PNG の sRGB 値が二重 gamma エンコードされて白っぽくなる。
+        // beatoraja (libGDX) は GL_FRAMEBUFFER_SRGB を使わないため値をそのまま表示する。
+        // それと合わせるため sRGB サフィックスを除去して non-sRGB サーフェスとして使う。
+        config.format = config.format.remove_srgb_suffix();
         surface.configure(&device, &config);
         let rect_pipeline = create_rect_pipeline(&device, config.format);
         let image_bind_group_layout = create_image_bind_group_layout(&device);
