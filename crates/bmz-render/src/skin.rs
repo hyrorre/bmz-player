@@ -3444,11 +3444,36 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         // ベストスコア / ターゲットスコア (DB から供給、未取得時は None)
         150 => state.best_ex_score.map(|s| s as i64),
         121 => state.target_ex_score.map(|s| s as i64),
+        154 => next_rank_diff(state),
         420 => Some(state.judge_counts.empty_poor as i64),
         425 | 427 => Some((state.judge_counts.bad + state.judge_counts.poor) as i64),
         426 => Some(state.judge_counts.poor as i64),
         _ => None,
     }
+}
+
+fn next_rank_diff(state: SkinDrawState) -> Option<i64> {
+    let ex_score = state.select_ex_score.unwrap_or(state.ex_score) as i64;
+    let total_notes = state.select_total_notes.max(state.total_notes) as i64;
+    let max_score = total_notes.checked_mul(2)?;
+    if max_score <= 0 {
+        return None;
+    }
+    let ex_score = ex_score.clamp(0, max_score);
+    for rank_step in (0..=24).step_by(3) {
+        let threshold = div_ceil(rank_step as i64 * max_score, 27);
+        if ex_score < threshold {
+            return Some(threshold - ex_score);
+        }
+    }
+    Some(max_score - ex_score)
+}
+
+fn div_ceil(numerator: i64, denominator: i64) -> i64 {
+    if denominator <= 0 {
+        return 0;
+    }
+    numerator.div_euclid(denominator) + i64::from(numerator.rem_euclid(denominator) != 0)
 }
 
 fn judge_rate_int(count: u32, total_notes: u32) -> Option<i64> {
@@ -5091,6 +5116,30 @@ mod tests {
         assert!(test_skin_op(207, &[], f_state));
         assert!(!test_skin_op(307, &[], f_state));
         assert!(!test_skin_op(200, &[], SkinDrawState::default()));
+    }
+
+    #[test]
+    fn skin_state_number_maps_next_rank_diff() {
+        let a_state = SkinDrawState {
+            select_ex_score: Some(1300),
+            select_total_notes: 1000,
+            ..SkinDrawState::default()
+        };
+        let aaa_state = SkinDrawState {
+            select_ex_score: Some(1800),
+            select_total_notes: 1000,
+            ..SkinDrawState::default()
+        };
+        let max_state = SkinDrawState {
+            select_ex_score: Some(2000),
+            select_total_notes: 1000,
+            ..SkinDrawState::default()
+        };
+
+        assert_eq!(skin_state_number(154, a_state), Some(34));
+        assert_eq!(skin_state_number(154, aaa_state), Some(200));
+        assert_eq!(skin_state_number(154, max_state), Some(0));
+        assert_eq!(skin_state_number(154, SkinDrawState::default()), None);
     }
 
     #[test]
