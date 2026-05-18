@@ -23,6 +23,7 @@ pub struct Renderer {
     last_plan: Option<DrawPlan>,
     play_skin_context: SkinContext,
     select_skin_context: SkinContext,
+    result_skin_context: SkinContext,
     pending_textures: Vec<PendingTexture>,
     fonts: HashMap<String, FontArc>,
     bitmap_fonts: HashMap<String, BitmapFont>,
@@ -180,10 +181,15 @@ impl Renderer {
         self.select_skin_context = skin_context;
     }
 
+    pub fn set_result_skin_context(&mut self, skin_context: SkinContext) {
+        self.result_skin_context = skin_context;
+    }
+
     fn skin_context_for_scene(&self, scene: &AppSceneSnapshot) -> &SkinContext {
         match scene {
             AppSceneSnapshot::Select(_) => &self.select_skin_context,
-            AppSceneSnapshot::Play(_) | AppSceneSnapshot::Result(_) => &self.play_skin_context,
+            AppSceneSnapshot::Play(_) => &self.play_skin_context,
+            AppSceneSnapshot::Result(_) => &self.result_skin_context,
         }
     }
 
@@ -255,11 +261,18 @@ impl WgpuRenderer {
             compatible_surface: Some(&surface),
         }))
         .context("no compatible GPU adapter found")?;
+        // beatoraja スキンには 8192px を超える縦長/横長 PNG (背景アニメシート等) が
+        // 含まれることがある。Apple Silicon / モダンGPU 環境では 16384px までは許容
+        // されるので、アダプタが報告する上限まで広げて取得する。
+        let adapter_limits = adapter.limits();
+        let mut required_limits = wgpu::Limits::default();
+        required_limits.max_texture_dimension_2d = adapter_limits.max_texture_dimension_2d;
+        required_limits.max_texture_dimension_1d = adapter_limits.max_texture_dimension_1d;
         let (device, queue) = block_on(adapter.request_device(
             &wgpu::DeviceDescriptor {
                 label: Some("bmz-render device"),
                 required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::default(),
+                required_limits,
             },
             None,
         ))

@@ -883,6 +883,22 @@ pub struct SkinDrawState {
     pub select_max_bpm: f32,
     /// 選択中曲の長さ ms。
     pub select_length_ms: i64,
+    /// リザルト画面の Fast/Slow 内訳 (ref 410-419/421-424)。
+    /// Play 中は None、Result 中だけ Some。
+    pub fast_slow_counts: Option<crate::snapshot::FastSlowJudgeCounts>,
+    /// 過去ベスト max combo (ref 172)。
+    pub best_max_combo: Option<u32>,
+    /// ターゲット max combo (ref 173, 175 で使用)。
+    pub target_max_combo: Option<u32>,
+    /// 過去ベスト misscount (ref 178 で使用)。
+    pub best_misscount: Option<u32>,
+    /// ターゲット misscount (ref 176, 178 で使用)。
+    pub target_misscount: Option<u32>,
+    /// ターゲットクリアタイプの index (ref 371)。
+    pub target_clear_index: Option<i64>,
+    /// リザルト画面でクリアしたか (op 90=CLEAR, op 91=FAIL)。
+    /// Play 中は None、Result 中は Some(true)=Fail / Some(false)=Clear。
+    pub result_failed: Option<bool>,
 }
 
 impl Default for SkinDrawState {
@@ -944,6 +960,13 @@ impl Default for SkinDrawState {
             select_min_bpm: 0.0,
             select_max_bpm: 0.0,
             select_length_ms: 0,
+            fast_slow_counts: None,
+            best_max_combo: None,
+            target_max_combo: None,
+            best_misscount: None,
+            target_misscount: None,
+            target_clear_index: None,
+            result_failed: None,
         }
     }
 }
@@ -2097,11 +2120,13 @@ impl SkinDocument {
         let Some(value) = self.value.iter().find(|value| value.id == value_id) else {
             return 0;
         };
-        let digits = display_number_digits(
-            number,
-            value.digit.max(0) as usize,
-            value.zeropadding != 0 || value.padding != 0,
-        );
+        let max_digits = value.digit.max(0) as usize;
+        let zero_pad = value.zeropadding != 0 || value.padding != 0;
+        let digits = if ref_id_is_signed(value.ref_id) {
+            display_signed_number_digits(number, max_digits, zero_pad, value.divx.max(1) as u32)
+        } else {
+            display_number_digits(number, max_digits, zero_pad)
+        };
         if digits.is_empty() { 0 } else { digits.len() as i32 * (frame.w + value.space) }
     }
 
@@ -2141,7 +2166,11 @@ impl SkinDocument {
         // `padding` は `zeropadding` の別名
         let zero_pad = value.zeropadding != 0 || value.padding != 0;
         let max_digits = value.digit.max(0) as usize;
-        let digits = display_number_digits(number, max_digits, zero_pad);
+        let digits = if ref_id_is_signed(value.ref_id) {
+            display_signed_number_digits(number, max_digits, zero_pad, divx as u32)
+        } else {
+            display_number_digits(number, max_digits, zero_pad)
+        };
         // 桁間スペース (space フィールド、px 単位)
         let digit_step = frame.w + value.space;
         // 先頭の空き桁数 (align のためのオフセット計算に使用)
@@ -3008,6 +3037,10 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool 
         300..=307 => select_small_rank_op_matches(op, state),
         170 => !state.has_bga,
         171 => state.has_bga,
+        // OPTION_RESULT_CLEAR=90, OPTION_RESULT_FAIL=91
+        // Result 画面以外 (result_failed == None) では両方 false。
+        90 => state.result_failed == Some(false),
+        91 => state.result_failed == Some(true),
         value => test_json_option_number(value, enabled_options),
     }
 }
@@ -3331,6 +3364,54 @@ fn display_number_digits(value: i64, max_digits: usize, zero_pad: bool) -> Vec<u
     text.bytes().filter(|byte| byte.is_ascii_digit()).map(|byte| byte - b'0').collect()
 }
 
+/// 符号付き数値（beatoraja の mimage 慣習）用に、divx 列のテクスチャセル index を返す。
+///
+/// レイアウト (`divx`>=12, `divy`>=2):
+/// - 各行は `[0,1,2,3,4,5,6,7,8,9, blank, sign]`
+/// - 行0: 正数用 (sign cell = `+`)
+/// - 行1: 負数用 (sign cell = `-`)
+///
+/// 返り値の各 byte は `digit_index % divx` が列、`digit_index / divx` が行になる。
+/// 先頭要素は符号セル (index 11)、続けて絶対値の右寄せ桁が並ぶ。
+fn display_signed_number_digits(
+    value: i64,
+    max_digits: usize,
+    zero_pad: bool,
+    divx: u32,
+) -> Vec<u8> {
+    if max_digits == 0 {
+        return Vec::new();
+    }
+    let row_offset = if value < 0 { divx as u8 } else { 0 };
+    let inner_width = max_digits.saturating_sub(1);
+    let abs = value.unsigned_abs();
+    let abs_text = if zero_pad && inner_width > 0 {
+        format!("{:0width$}", abs, width = inner_width)
+    } else {
+        abs.to_string()
+    };
+    let trimmed: String = if inner_width > 0 && abs_text.len() > inner_width {
+        abs_text[abs_text.len() - inner_width..].to_string()
+    } else {
+        abs_text
+    };
+    let mut digits = Vec::with_capacity(trimmed.len() + 1);
+    // 先頭: 符号セル (sign image index = 11)
+    digits.push(11u8 + row_offset);
+    for byte in trimmed.bytes() {
+        if byte.is_ascii_digit() {
+            digits.push((byte - b'0') + row_offset);
+        }
+    }
+    digits
+}
+
+/// `ref_id` が符号付き表示を要求する Result 系 ref か。
+/// beatoraja の `NUMBER_DIFF_*` 系 (152, 153, 172, 175, 178) を対象とする。
+fn ref_id_is_signed(ref_id: i32) -> bool {
+    matches!(ref_id, 152 | 153 | 172 | 175 | 178)
+}
+
 fn lookup_text(values: &[(TextSlot, String)], slot: TextSlot) -> String {
     values
         .iter()
@@ -3445,7 +3526,39 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         150 => state.best_ex_score.map(|s| s as i64),
         121 => state.target_ex_score.map(|s| s as i64),
         154 => next_rank_diff(state),
+        // NUMBER_DIFF_HIGHSCORE=152, NUMBER_DIFF_HIGHSCORE2=172 (符号付き、ex_score - best)
+        152 | 172 => state.best_ex_score.map(|best| state.ex_score as i64 - best as i64),
+        // NUMBER_DIFF_TARGETSCORE=153 (符号付き、ex_score - target)
+        153 => state.target_ex_score.map(|target| state.ex_score as i64 - target as i64),
+        // NUMBER_TARGET_MAXCOMBO=173
+        173 => state.target_max_combo.map(|c| c as i64),
+        // NUMBER_DIFF_MAXCOMBO=175 (符号付き、max_combo - target_max_combo)
+        175 => state.target_max_combo.map(|target| state.max_combo as i64 - target as i64),
+        // NUMBER_TARGET_MISSCOUNT=176
+        176 => state.target_misscount.map(|c| c as i64),
+        // NUMBER_DIFF_MISSCOUNT=178 (符号付き、現在 misscount - target_misscount)
+        178 => state.target_misscount.map(|target| {
+            (state.judge_counts.bad + state.judge_counts.poor) as i64 - target as i64
+        }),
+        // NUMBER_TARGET_CLEAR=371
+        371 => state.target_clear_index,
+        // Fast/Slow split (PGREAT/GREAT/GOOD/BAD/POOR)
+        410 => state.fast_slow_counts.map(|c| c.fast_pgreat as i64),
+        411 => state.fast_slow_counts.map(|c| c.slow_pgreat as i64),
+        412 => state.fast_slow_counts.map(|c| c.fast_great as i64),
+        413 => state.fast_slow_counts.map(|c| c.slow_great as i64),
+        414 => state.fast_slow_counts.map(|c| c.fast_good as i64),
+        415 => state.fast_slow_counts.map(|c| c.slow_good as i64),
+        416 => state.fast_slow_counts.map(|c| c.fast_bad as i64),
+        417 => state.fast_slow_counts.map(|c| c.slow_bad as i64),
+        418 => state.fast_slow_counts.map(|c| c.fast_poor as i64),
+        419 => state.fast_slow_counts.map(|c| c.slow_poor as i64),
         420 => Some(state.judge_counts.empty_poor as i64),
+        421 => state.fast_slow_counts.map(|c| c.fast_empty_poor as i64),
+        422 => state.fast_slow_counts.map(|c| c.slow_empty_poor as i64),
+        // NUMBER_TOTALEARLY=423, NUMBER_TOTALLATE=424
+        423 => state.fast_slow_counts.map(|c| c.fast_total() as i64),
+        424 => state.fast_slow_counts.map(|c| c.slow_total() as i64),
         425 | 427 => Some((state.judge_counts.bad + state.judge_counts.poor) as i64),
         426 => Some(state.judge_counts.poor as i64),
         _ => None,
@@ -6874,6 +6987,103 @@ mod tests {
         assert_eq!(skin_state_number(425, state), Some(7));
         assert_eq!(skin_state_number(426, state), Some(3));
         assert_eq!(skin_state_number(427, state), Some(7));
+    }
+
+    #[test]
+    fn display_signed_number_digits_uses_sign_cell_and_row_offset() {
+        // divx=12, divy=2 のレイアウト想定
+        // 正数 +12 (max_digits=5): [sign+(11), blank(10 or 0), blank, 1, 2]
+        // 実装は内側のみ zero_pad、行0
+        let positive = display_signed_number_digits(12, 5, true, 12);
+        assert_eq!(positive.first(), Some(&11)); // sign cell
+        assert_eq!(positive.last(), Some(&2));
+        assert!(positive.iter().all(|&d| d < 12), "positive digits should be in row 0");
+
+        // 負数 -12 (max_digits=5): row 1 (offset=12)
+        let negative = display_signed_number_digits(-12, 5, true, 12);
+        assert_eq!(negative.first(), Some(&(11 + 12))); // sign cell row 1
+        assert_eq!(negative.last(), Some(&(2 + 12)));
+        assert!(negative.iter().all(|&d| d >= 12), "negative digits should be in row 1");
+
+        // 0 は正側
+        let zero = display_signed_number_digits(0, 5, true, 12);
+        assert_eq!(zero.first(), Some(&11));
+        assert!(zero.iter().all(|&d| d < 12));
+    }
+
+    #[test]
+    fn skin_state_number_maps_result_value_refs() {
+        let fast_slow = crate::snapshot::FastSlowJudgeCounts {
+            fast_pgreat: 350,
+            slow_pgreat: 427,
+            fast_great: 180,
+            slow_great: 154,
+            fast_good: 12,
+            slow_good: 10,
+            fast_bad: 2,
+            slow_bad: 1,
+            fast_poor: 3,
+            slow_poor: 2,
+            fast_empty_poor: 5,
+            slow_empty_poor: 4,
+        };
+        let state = SkinDrawState {
+            ex_score: 1888,
+            max_combo: 777,
+            total_notes: 1000,
+            judge_counts: DisplayJudgeCounts {
+                pgreat: 777,
+                great: 334,
+                good: 22,
+                bad: 3,
+                poor: 5,
+                empty_poor: 9,
+            },
+            fast_slow_counts: Some(fast_slow),
+            best_ex_score: Some(1700),
+            target_ex_score: Some(1900),
+            best_max_combo: Some(800),
+            target_max_combo: Some(1000),
+            best_misscount: Some(20),
+            target_misscount: Some(0),
+            target_clear_index: Some(8),
+            ..SkinDrawState::default()
+        };
+
+        // 符号付き差分
+        assert_eq!(skin_state_number(152, state), Some(1888 - 1700));
+        assert_eq!(skin_state_number(172, state), Some(1888 - 1700));
+        assert_eq!(skin_state_number(153, state), Some(1888 - 1900));
+        assert_eq!(skin_state_number(173, state), Some(1000));
+        assert_eq!(skin_state_number(175, state), Some(777 - 1000));
+        assert_eq!(skin_state_number(176, state), Some(0));
+        // 現在 misscount = bad+poor = 8、target = 0 → diff = 8
+        assert_eq!(skin_state_number(178, state), Some(8));
+        assert_eq!(skin_state_number(371, state), Some(8));
+
+        // Fast/Slow 内訳
+        assert_eq!(skin_state_number(410, state), Some(350));
+        assert_eq!(skin_state_number(411, state), Some(427));
+        assert_eq!(skin_state_number(412, state), Some(180));
+        assert_eq!(skin_state_number(413, state), Some(154));
+        assert_eq!(skin_state_number(414, state), Some(12));
+        assert_eq!(skin_state_number(415, state), Some(10));
+        assert_eq!(skin_state_number(416, state), Some(2));
+        assert_eq!(skin_state_number(417, state), Some(1));
+        assert_eq!(skin_state_number(418, state), Some(3));
+        assert_eq!(skin_state_number(419, state), Some(2));
+        assert_eq!(skin_state_number(421, state), Some(5));
+        assert_eq!(skin_state_number(422, state), Some(4));
+        // TOTAL_EARLY = fast 全合計 = 350+180+12+2+3 = 547
+        assert_eq!(skin_state_number(423, state), Some(547));
+        // TOTAL_LATE = slow 全合計 = 427+154+10+1+2 = 594
+        assert_eq!(skin_state_number(424, state), Some(594));
+
+        // best/target が None のとき None を返す
+        let bare = SkinDrawState::default();
+        assert_eq!(skin_state_number(152, bare), None);
+        assert_eq!(skin_state_number(173, bare), None);
+        assert_eq!(skin_state_number(410, bare), None);
     }
 
     #[test]

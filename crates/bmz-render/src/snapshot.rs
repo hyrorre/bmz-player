@@ -54,6 +54,34 @@ pub struct DisplayJudgeCounts {
     pub empty_poor: u32,
 }
 
+/// リザルト画面の Fast/Slow 内訳。
+/// beatoraja の result.json で `ref` 410-424（fast/slow split）を埋めるために使う。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FastSlowJudgeCounts {
+    pub fast_pgreat: u32,
+    pub slow_pgreat: u32,
+    pub fast_great: u32,
+    pub slow_great: u32,
+    pub fast_good: u32,
+    pub slow_good: u32,
+    pub fast_bad: u32,
+    pub slow_bad: u32,
+    pub fast_poor: u32,
+    pub slow_poor: u32,
+    pub fast_empty_poor: u32,
+    pub slow_empty_poor: u32,
+}
+
+impl FastSlowJudgeCounts {
+    pub fn fast_total(self) -> u32 {
+        self.fast_pgreat + self.fast_great + self.fast_good + self.fast_bad + self.fast_poor
+    }
+
+    pub fn slow_total(self) -> u32 {
+        self.slow_pgreat + self.slow_great + self.slow_good + self.slow_bad + self.slow_poor
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct VisibleNote {
     pub lane: Lane,

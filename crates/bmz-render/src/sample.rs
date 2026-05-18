@@ -3,8 +3,8 @@ use bmz_core::time::TimeUs;
 
 use crate::scene::{AppSceneSnapshot, ResultSnapshot, SelectRowSnapshot, SelectSnapshot};
 use crate::snapshot::{
-    DisplayJudgeCounts, DisplayJudgement, RenderSnapshot, VisibleBarLine, VisibleLongNote,
-    VisibleNote,
+    DisplayJudgeCounts, DisplayJudgement, FastSlowJudgeCounts, RenderSnapshot, VisibleBarLine,
+    VisibleLongNote, VisibleNote,
 };
 
 pub fn sample_select_scene() -> AppSceneSnapshot {
@@ -114,8 +114,30 @@ pub fn sample_result_scene() -> AppSceneSnapshot {
             poor: 5,
             empty_poor: 9,
         },
+        fast_slow_counts: FastSlowJudgeCounts {
+            fast_pgreat: 350,
+            slow_pgreat: 427,
+            fast_great: 180,
+            slow_great: 154,
+            fast_good: 12,
+            slow_good: 10,
+            fast_bad: 2,
+            slow_bad: 1,
+            fast_poor: 3,
+            slow_poor: 2,
+            fast_empty_poor: 5,
+            slow_empty_poor: 4,
+        },
         score_history_id: 42,
         replay_saved: true,
+        best_ex_score: Some(1700),
+        target_ex_score: Some(1900),
+        best_max_combo: Some(820),
+        target_max_combo: Some(1000),
+        best_misscount: Some(15),
+        target_misscount: Some(0),
+        target_clear_type: Some(bmz_core::clear::ClearType::FullCombo),
+        elapsed_time: TimeUs(0),
     })
 }
 

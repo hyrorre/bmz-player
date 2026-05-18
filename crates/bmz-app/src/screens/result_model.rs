@@ -12,8 +12,16 @@ pub struct ResultSummary {
     pub gauge_value: f32,
     pub total_notes: u32,
     pub judge_counts: ResultJudgeCounts,
+    pub fast_slow_counts: ResultFastSlowJudgeCounts,
     pub replay_path: String,
     pub score_history_id: i64,
+    pub best_ex_score: Option<u32>,
+    pub best_max_combo: Option<u32>,
+    pub best_misscount: Option<u32>,
+    pub target_ex_score: Option<u32>,
+    pub target_max_combo: Option<u32>,
+    pub target_misscount: Option<u32>,
+    pub target_clear_type: Option<ClearType>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -24,6 +32,22 @@ pub struct ResultJudgeCounts {
     pub bad: u32,
     pub poor: u32,
     pub empty_poor: u32,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ResultFastSlowJudgeCounts {
+    pub fast_pgreat: u32,
+    pub slow_pgreat: u32,
+    pub fast_great: u32,
+    pub slow_great: u32,
+    pub fast_good: u32,
+    pub slow_good: u32,
+    pub fast_bad: u32,
+    pub slow_bad: u32,
+    pub fast_poor: u32,
+    pub slow_poor: u32,
+    pub fast_empty_poor: u32,
+    pub slow_empty_poor: u32,
 }
 
 impl ResultJudgeCounts {
@@ -39,6 +63,25 @@ impl ResultJudgeCounts {
     }
 }
 
+impl ResultFastSlowJudgeCounts {
+    fn from_judge_counts(judges: &JudgeCounts) -> Self {
+        Self {
+            fast_pgreat: judges.fast_pgreat,
+            slow_pgreat: judges.slow_pgreat,
+            fast_great: judges.fast_great,
+            slow_great: judges.slow_great,
+            fast_good: judges.fast_good,
+            slow_good: judges.slow_good,
+            fast_bad: judges.fast_bad,
+            slow_bad: judges.slow_bad,
+            fast_poor: judges.fast_poor,
+            slow_poor: judges.slow_poor,
+            fast_empty_poor: judges.fast_empty_poor,
+            slow_empty_poor: judges.slow_empty_poor,
+        }
+    }
+}
+
 impl ResultSummary {
     pub fn from_play_result(result: &PlayResult, stored: &StoredPlayResult) -> Self {
         Self {
@@ -48,8 +91,16 @@ impl ResultSummary {
             gauge_value: result.gauge_value,
             total_notes: result.total_notes,
             judge_counts: ResultJudgeCounts::from_judge_counts(&result.score.judges),
+            fast_slow_counts: ResultFastSlowJudgeCounts::from_judge_counts(&result.score.judges),
             replay_path: stored.replay_path.clone(),
             score_history_id: stored.score_history_id,
+            best_ex_score: None,
+            best_max_combo: None,
+            best_misscount: None,
+            target_ex_score: None,
+            target_max_combo: None,
+            target_misscount: None,
+            target_clear_type: None,
         }
     }
 

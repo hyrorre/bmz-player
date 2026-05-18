@@ -10,7 +10,7 @@ use bmz_render::plan::TextureId;
 use bmz_render::renderer::{RenderSurfaceStatus, Renderer, SurfaceSize};
 use bmz_render::sample::{sample_play_scene, sample_result_scene, sample_select_scene};
 use bmz_render::scene::{AppSceneSnapshot, ResultSnapshot, SelectRowSnapshot, SelectSnapshot};
-use bmz_render::snapshot::{DisplayJudgeCounts, RenderSnapshot};
+use bmz_render::snapshot::{DisplayJudgeCounts, FastSlowJudgeCounts, RenderSnapshot};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
 use winit::event::{ElementState, StartCause, WindowEvent};
@@ -40,7 +40,9 @@ use crate::screens::select_model::{
     root_folder_items, table_folder_items, table_folder_root_item,
 };
 use crate::select_options::{ArrangeOption, AssistOption};
-use crate::skin_loader::{apply_beatoraja_select_json_skin, apply_skin_from_config};
+use crate::skin_loader::{
+    apply_beatoraja_result_json_skin, apply_beatoraja_select_json_skin, apply_skin_from_config,
+};
 use crate::storage::scan::scan_song_roots;
 
 const SAMPLE_PLAYABLE_TITLE: &str = "BMZ Sample Playable";
@@ -120,6 +122,7 @@ struct WinitApp {
     rendered_frames: u32,
     select_scene_started_at: Instant,
     select_bar_started_at: Instant,
+    result_scene_started_at: Instant,
     option_panel_started_at: Instant,
     select_option_panel: u8,
     gilrs: Option<crate::input::gilrs::GilrsBackend>,
@@ -164,6 +167,7 @@ impl WinitApp {
             &mut renderer,
             &boot.profile_config.skin.select,
             &boot.profile_config.skin.play,
+            &boot.profile_config.skin.result,
         );
 
         let gilrs = if boot.app_config.input.gamepad_enabled {
@@ -206,6 +210,7 @@ impl WinitApp {
             rendered_frames: 0,
             select_scene_started_at: now,
             select_bar_started_at: now,
+            result_scene_started_at: now,
             option_panel_started_at: now,
             select_option_panel: 0,
             gilrs,
@@ -291,8 +296,32 @@ impl WinitApp {
                     poor: summary.judge_counts.poor,
                     empty_poor: summary.judge_counts.empty_poor,
                 },
+                fast_slow_counts: FastSlowJudgeCounts {
+                    fast_pgreat: summary.fast_slow_counts.fast_pgreat,
+                    slow_pgreat: summary.fast_slow_counts.slow_pgreat,
+                    fast_great: summary.fast_slow_counts.fast_great,
+                    slow_great: summary.fast_slow_counts.slow_great,
+                    fast_good: summary.fast_slow_counts.fast_good,
+                    slow_good: summary.fast_slow_counts.slow_good,
+                    fast_bad: summary.fast_slow_counts.fast_bad,
+                    slow_bad: summary.fast_slow_counts.slow_bad,
+                    fast_poor: summary.fast_slow_counts.fast_poor,
+                    slow_poor: summary.fast_slow_counts.slow_poor,
+                    fast_empty_poor: summary.fast_slow_counts.fast_empty_poor,
+                    slow_empty_poor: summary.fast_slow_counts.slow_empty_poor,
+                },
                 score_history_id: summary.score_history_id,
                 replay_saved: !summary.replay_path.is_empty(),
+                best_ex_score: summary.best_ex_score,
+                target_ex_score: summary.target_ex_score,
+                best_max_combo: summary.best_max_combo,
+                target_max_combo: summary.target_max_combo,
+                best_misscount: summary.best_misscount,
+                target_misscount: summary.target_misscount,
+                target_clear_type: summary.target_clear_type,
+                elapsed_time: bmz_core::time::TimeUs(
+                    self.result_scene_started_at.elapsed().as_micros().min(i64::MAX as u128) as i64,
+                ),
             }),
         }
     }
@@ -804,6 +833,9 @@ impl WinitApp {
             self.select_scene_started_at = now;
             self.select_bar_started_at = now;
         }
+        if scene_kind == AppSceneKind::Result {
+            self.result_scene_started_at = Instant::now();
+        }
         if let Some(window) = &self.window {
             window.set_title(window_title_for_scene(scene_kind));
         }
@@ -819,7 +851,12 @@ fn window_attributes_from_config(
         .with_inner_size(PhysicalSize::new(video.width.max(1), video.height.max(1)))
 }
 
-fn load_skin_textures(renderer: &mut Renderer, select_skin_path: &str, play_skin_path: &str) {
+fn load_skin_textures(
+    renderer: &mut Renderer,
+    select_skin_path: &str,
+    play_skin_path: &str,
+    result_skin_path: &str,
+) {
     if !select_skin_path.trim().is_empty()
         && let Err(error) =
             apply_beatoraja_select_json_skin(renderer, Path::new(select_skin_path.trim()))
@@ -834,6 +871,16 @@ fn load_skin_textures(renderer: &mut Renderer, select_skin_path: &str, play_skin
         tracing::warn!(
             error = %format_error_chain(&error),
             "failed to apply play skin; using fallback textures"
+        );
+    }
+
+    if !result_skin_path.trim().is_empty()
+        && let Err(error) =
+            apply_beatoraja_result_json_skin(renderer, Path::new(result_skin_path.trim()))
+    {
+        tracing::warn!(
+            error = %format_error_chain(&error),
+            "failed to apply result skin; using fallback result drawing"
         );
     }
 }

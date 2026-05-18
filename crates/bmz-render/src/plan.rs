@@ -152,17 +152,7 @@ impl DrawPlan {
         match scene {
             AppSceneSnapshot::Select(snapshot) => plan_select(snapshot, skin),
             AppSceneSnapshot::Play(snapshot) => plan_play(snapshot, skin),
-            AppSceneSnapshot::Result(snapshot) => plan_result(
-                snapshot.clear_type.as_str(),
-                snapshot.ex_score,
-                snapshot.ex_score_rate,
-                snapshot.max_combo,
-                snapshot.gauge_value,
-                snapshot.total_notes,
-                &snapshot.judge_counts,
-                snapshot.score_history_id,
-                snapshot.replay_saved,
-            ),
+            AppSceneSnapshot::Result(snapshot) => plan_result(snapshot, skin),
         }
     }
 }
@@ -675,7 +665,62 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
     DrawPlan { clear: Color::rgb(0.0, 0.0, 0.0), commands }
 }
 
-fn plan_result(
+fn plan_result(snapshot: &crate::scene::ResultSnapshot, skin: &SkinContext) -> DrawPlan {
+    if skin.document().is_some_and(|document| document.skin_type == 7) {
+        let state = build_result_skin_draw_state(snapshot);
+        let text = SkinTextState::default();
+        let items = skin.static_document_items_for_state_and_text(state, text);
+        if !items.is_empty() {
+            let mut commands = Vec::new();
+            crate::skin::append_skin_render_items(&mut commands, &items);
+            return DrawPlan { clear: Color::rgb(0.0, 0.0, 0.0), commands };
+        }
+    }
+
+    plan_result_fallback(
+        snapshot.clear_type.as_str(),
+        snapshot.ex_score,
+        snapshot.ex_score_rate,
+        snapshot.max_combo,
+        snapshot.gauge_value,
+        snapshot.total_notes,
+        &snapshot.judge_counts,
+        snapshot.score_history_id,
+        snapshot.replay_saved,
+    )
+}
+
+fn build_result_skin_draw_state(
+    snapshot: &crate::scene::ResultSnapshot,
+) -> crate::skin::SkinDrawState {
+    use bmz_core::clear::ClearType;
+    let result_failed = matches!(snapshot.clear_type, ClearType::Failed | ClearType::NoPlay);
+    crate::skin::SkinDrawState {
+        elapsed_ms: (snapshot.elapsed_time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64)
+            as i32,
+        ex_score: snapshot.ex_score,
+        total_notes: snapshot.total_notes,
+        past_notes: snapshot.total_notes,
+        max_combo: snapshot.max_combo,
+        judge_counts: snapshot.judge_counts,
+        fast_slow_counts: Some(snapshot.fast_slow_counts),
+        gauge: snapshot.gauge_value,
+        play_progress: 1.0,
+        end_of_note: true,
+        best_ex_score: snapshot.best_ex_score,
+        target_ex_score: snapshot.target_ex_score,
+        best_max_combo: snapshot.best_max_combo,
+        target_max_combo: snapshot.target_max_combo,
+        best_misscount: snapshot.best_misscount,
+        target_misscount: snapshot.target_misscount,
+        target_clear_index: snapshot.target_clear_type.map(|c| c as i64),
+        select_clear_index: snapshot.clear_type as i64,
+        result_failed: Some(result_failed),
+        ..crate::skin::SkinDrawState::default()
+    }
+}
+
+fn plan_result_fallback(
     clear_type: &str,
     ex_score: u32,
     ex_score_rate: f32,
@@ -1518,6 +1563,63 @@ mod tests {
     }
 
     #[test]
+    fn result_plan_uses_skin_document_when_skin_type_is_seven() {
+        use crate::scene::ResultSnapshot;
+        use crate::skin::{SkinDocument, SkinTextureId};
+        use crate::snapshot::FastSlowJudgeCounts;
+        use bmz_core::clear::ClearType;
+
+        let document: SkinDocument = serde_json::from_str(
+            r#"{
+                "type": 7,
+                "name": "test",
+                "w": 100,
+                "h": 100,
+                "source": [{"id": 1, "path": "x.png"}],
+                "image": [{"id": "logo", "src": 1, "x": 0, "y": 0, "w": 8, "h": 8}],
+                "destination": [
+                    {"id": "logo", "dst": [{"x": 0, "y": 0, "w": 8, "h": 8}]}
+                ]
+            }"#,
+        )
+        .unwrap();
+        let manifest: SkinManifest = toml::from_str("").unwrap();
+        let source_texture = crate::skin::SkinDocumentTexture {
+            source_id: "1".to_string(),
+            texture: SkinTextureId(99),
+            source_size: crate::skin::SkinImageSize { width: 64.0, height: 64.0 },
+        };
+        let skin = SkinContext::from_manifest_and_document(manifest, document, [source_texture]);
+        let snapshot = ResultSnapshot {
+            clear_type: ClearType::Normal,
+            ex_score: 100,
+            ex_score_rate: 0.5,
+            max_combo: 50,
+            gauge_value: 80.0,
+            total_notes: 100,
+            judge_counts: DisplayJudgeCounts::default(),
+            fast_slow_counts: FastSlowJudgeCounts::default(),
+            score_history_id: 0,
+            replay_saved: false,
+            best_ex_score: None,
+            target_ex_score: None,
+            best_max_combo: None,
+            target_max_combo: None,
+            best_misscount: None,
+            target_misscount: None,
+            target_clear_type: None,
+            elapsed_time: TimeUs(0),
+        };
+
+        let plan = DrawPlan::from_scene_with_skin(&AppSceneSnapshot::Result(snapshot), &skin);
+
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Image { texture, .. } if *texture == TextureId(99)
+        )));
+    }
+
+    #[test]
     fn play_plan_uses_supplied_skin_context() {
         let manifest: SkinManifest = toml::from_str(
             r#"
@@ -1645,8 +1747,17 @@ mod tests {
 
     #[test]
     fn result_plan_clamps_ex_score_bar() {
-        let plan =
-            plan_result("Normal", 0, 1.5, 0, 0.0, 100, &DisplayJudgeCounts::default(), 1, true);
+        let plan = plan_result_fallback(
+            "Normal",
+            0,
+            1.5,
+            0,
+            0.0,
+            100,
+            &DisplayJudgeCounts::default(),
+            1,
+            true,
+        );
 
         assert!(plan.commands.iter().any(|command| matches!(
             command,
@@ -1656,7 +1767,7 @@ mod tests {
 
     #[test]
     fn result_plan_includes_extended_summary_text() {
-        let plan = plan_result(
+        let plan = plan_result_fallback(
             "Normal",
             1500,
             0.75,

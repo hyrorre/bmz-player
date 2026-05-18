@@ -66,6 +66,12 @@ pub fn apply_beatoraja_select_json_skin(renderer: &mut Renderer, skin_path: &Pat
     Ok(())
 }
 
+pub fn apply_beatoraja_result_json_skin(renderer: &mut Renderer, skin_path: &Path) -> Result<()> {
+    let context = load_beatoraja_json_skin_context(renderer, skin_path, 30_000, false)?;
+    renderer.set_result_skin_context(context);
+    Ok(())
+}
+
 fn load_beatoraja_json_skin_context(
     renderer: &mut Renderer,
     skin_path: &Path,
@@ -476,6 +482,30 @@ mod tests {
         let mut renderer = Renderer::default();
 
         apply_beatoraja_json_skin(&mut renderer, &skin_path).unwrap();
+    }
+
+    #[test]
+    fn beatoraja_default_result_json_skin_can_be_applied_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/beatoraja/skin/default/result.json");
+        if !skin_path.is_file() {
+            return;
+        }
+        let mut renderer = Renderer::default();
+
+        apply_beatoraja_result_json_skin(&mut renderer, &skin_path).unwrap();
+    }
+
+    #[test]
+    fn ecfn_result_json_skin_can_be_applied_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/skins/ECFN/RESULT/result-converted.json");
+        if !skin_path.is_file() {
+            return;
+        }
+        let mut renderer = Renderer::default();
+
+        apply_beatoraja_result_json_skin(&mut renderer, &skin_path).unwrap();
     }
 
     #[test]

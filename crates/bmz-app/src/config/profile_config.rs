@@ -250,6 +250,11 @@ pub struct SkinConfig {
     /// `skin.toml` を含む bmz スキンディレクトリとして扱う。
     #[serde(default)]
     pub play: String,
+    /// リザルト画面スキンのパス。
+    /// 空文字列なら bmz の固定描画を使用。
+    /// `.json` で終わるパスは beatoraja JSON スキンとして扱う。
+    #[serde(default)]
+    pub result: String,
     #[serde(default)]
     pub offsets: Vec<SkinOffsetConfig>,
 }

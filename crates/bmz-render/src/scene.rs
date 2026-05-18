@@ -1,7 +1,7 @@
 use bmz_core::clear::ClearType;
 use bmz_core::time::TimeUs;
 
-use crate::snapshot::{DisplayJudgeCounts, RenderSnapshot};
+use crate::snapshot::{DisplayJudgeCounts, FastSlowJudgeCounts, RenderSnapshot};
 
 #[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::large_enum_variant)]
@@ -58,8 +58,19 @@ pub struct ResultSnapshot {
     pub gauge_value: f32,
     pub total_notes: u32,
     pub judge_counts: DisplayJudgeCounts,
+    pub fast_slow_counts: FastSlowJudgeCounts,
     pub score_history_id: i64,
     pub replay_saved: bool,
+    pub best_ex_score: Option<u32>,
+    pub target_ex_score: Option<u32>,
+    pub best_max_combo: Option<u32>,
+    pub target_max_combo: Option<u32>,
+    pub best_misscount: Option<u32>,
+    pub target_misscount: Option<u32>,
+    pub target_clear_type: Option<ClearType>,
+    /// リザルト画面を開いてからの経過時間。
+    /// destination の timer/loop/keyframe アニメーション、image cycle に使われる。
+    pub elapsed_time: TimeUs,
 }
 
 impl ResultSnapshot {
@@ -84,8 +95,17 @@ mod tests {
             gauge_value: 100.0,
             total_notes: 10,
             judge_counts: DisplayJudgeCounts::default(),
+            fast_slow_counts: FastSlowJudgeCounts::default(),
             score_history_id: 1,
             replay_saved: true,
+            best_ex_score: None,
+            target_ex_score: None,
+            best_max_combo: None,
+            target_max_combo: None,
+            best_misscount: None,
+            target_misscount: None,
+            target_clear_type: None,
+            elapsed_time: TimeUs(0),
         };
 
         assert!(snapshot.is_full_combo());
@@ -101,8 +121,17 @@ mod tests {
             gauge_value: 100.0,
             total_notes: 0,
             judge_counts: DisplayJudgeCounts::default(),
+            fast_slow_counts: FastSlowJudgeCounts::default(),
             score_history_id: 1,
             replay_saved: true,
+            best_ex_score: None,
+            target_ex_score: None,
+            best_max_combo: None,
+            target_max_combo: None,
+            best_misscount: None,
+            target_misscount: None,
+            target_clear_type: None,
+            elapsed_time: TimeUs(0),
         };
 
         assert!(!snapshot.is_full_combo());
