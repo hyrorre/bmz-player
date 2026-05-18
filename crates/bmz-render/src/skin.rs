@@ -113,6 +113,12 @@ pub struct SkinSongListDef {
     pub text: Vec<DestinationListEntry>,
     #[serde(default)]
     pub level: Vec<DestinationListEntry>,
+    #[serde(default)]
+    pub lamp: Vec<DestinationListEntry>,
+    #[serde(default)]
+    pub playerlamp: Vec<DestinationListEntry>,
+    #[serde(default)]
+    pub rivallamp: Vec<DestinationListEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -852,6 +858,8 @@ pub struct SkinDrawState {
     pub select_play_level: i64,
     /// 選択中曲のベストEXスコア。
     pub select_ex_score: Option<u32>,
+    /// 選択中曲のクリアランプ番号。
+    pub select_clear_index: i64,
 }
 
 impl Default for SkinDrawState {
@@ -897,6 +905,7 @@ impl Default for SkinDrawState {
             select_chart_count: 0,
             select_play_level: 0,
             select_ex_score: None,
+            select_clear_index: 0,
         }
     }
 }
@@ -1560,6 +1569,8 @@ impl SkinDocument {
             select_chart_count: snapshot.chart_count,
             select_play_level: selected_row.map(select_row_level_number).unwrap_or(0),
             select_ex_score: selected_row.and_then(|row| row.ex_score),
+            select_clear_index: selected_row.map(select_row_clear_index).unwrap_or(0) as i64,
+            ex_score: selected_row.and_then(|row| row.ex_score).unwrap_or(0),
             ..SkinDrawState::default()
         };
         let text = SkinTextState {
@@ -1617,6 +1628,13 @@ impl SkinDocument {
         };
         let mut items = Vec::new();
         for row in &snapshot.rows {
+            let row_state = SkinDrawState {
+                select_play_level: select_row_level_number(row),
+                select_ex_score: row.ex_score,
+                select_clear_index: select_row_clear_index(row) as i64,
+                ex_score: row.ex_score.unwrap_or(0),
+                ..state
+            };
             let offset = row.index as i32 - snapshot.selected_index as i32;
             let slot = songlist.center + offset;
             if slot < 0 {
@@ -1640,13 +1658,25 @@ impl SkinDocument {
             if let Some(item) = self.select_bar_item(row, row_destination, row_frame, sources) {
                 items.push(item);
             }
+            let clear_index = select_row_clear_index(row);
+            let lamp_entries =
+                if songlist.playerlamp.is_empty() { &songlist.lamp } else { &songlist.playerlamp };
+            items.extend(self.select_songlist_child_items_by_index(
+                lamp_entries,
+                clear_index,
+                row_origin,
+                images,
+                enabled_options,
+                row_state,
+                sources,
+            ));
             items.extend(self.select_songlist_child_items(
                 &songlist.level,
                 row,
                 row_origin,
                 images,
                 enabled_options,
-                state,
+                row_state,
                 sources,
             ));
             items.extend(self.select_songlist_text_items(
@@ -1654,7 +1684,7 @@ impl SkinDocument {
                 row_origin,
                 images,
                 enabled_options,
-                state,
+                row_state,
                 sources,
             ));
         }
@@ -1671,9 +1701,30 @@ impl SkinDocument {
         state: SkinDrawState,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Vec<SkinRenderItem> {
-        let mut items = Vec::new();
         let level_index = select_row_level_number(row).saturating_sub(1).max(0) as usize;
-        let Some(destination) = destination_entry_at(entries, level_index, enabled_options) else {
+        self.select_songlist_child_items_by_index(
+            entries,
+            level_index,
+            row_origin,
+            images,
+            enabled_options,
+            state,
+            sources,
+        )
+    }
+
+    fn select_songlist_child_items_by_index(
+        &self,
+        entries: &[DestinationListEntry],
+        index: usize,
+        row_origin: (i32, i32),
+        images: &HashMap<&str, &SkinImageDef>,
+        enabled_options: &[i32],
+        state: SkinDrawState,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Vec<SkinRenderItem> {
+        let mut items = Vec::new();
+        let Some(destination) = destination_entry_at(entries, index, enabled_options) else {
             return items;
         };
         if let Some(mut resolved) = self.resolve_offset_destination_items(
@@ -3243,6 +3294,7 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
     match ref_id {
         300 => Some(state.select_chart_count as i64),
         96 => Some(state.select_play_level),
+        370 => Some(state.select_clear_index),
         71 | 101 | 171 => Some(state.ex_score as i64),
         72 => Some(state.total_notes as i64 * 2),
         74 | 106 | 333 => Some(state.total_notes as i64),
@@ -3508,6 +3560,22 @@ fn full_label(primary: &str, secondary: &str) -> String {
 fn select_row_level_number(row: &SelectRowSnapshot) -> i64 {
     let source = if !row.table_level.is_empty() { &row.table_level } else { &row.play_level };
     source.chars().filter(|ch| ch.is_ascii_digit()).collect::<String>().parse().unwrap_or(0)
+}
+
+fn select_row_clear_index(row: &SelectRowSnapshot) -> usize {
+    match row.clear_type.as_str() {
+        "Failed" => 1,
+        "AssistEasy" => 2,
+        "LightAssistEasy" => 3,
+        "Easy" => 4,
+        "Normal" => 5,
+        "Hard" => 6,
+        "ExHard" => 7,
+        "FullCombo" => 8,
+        "Perfect" => 9,
+        "Max" => 10,
+        _ => 0,
+    }
 }
 
 fn destination_entry_at<'a>(
@@ -5925,10 +5993,20 @@ mod tests {
                 "type": 5,
                 "w": 100,
                 "h": 100,
-                "source": [{ "id": 1, "path": "bar.png" }, { "id": 2, "path": "num.png" }],
+                "source": [
+                    { "id": 1, "path": "bar.png" },
+                    { "id": 2, "path": "num.png" },
+                    { "id": 3, "path": "lamp.png" }
+                ],
                 "image": [
                     { "id": "bar-song", "src": 1, "x": 0, "y": 0, "w": 40, "h": 10 },
-                    { "id": "bar-folder", "src": 1, "x": 0, "y": 10, "w": 40, "h": 10 }
+                    { "id": "bar-folder", "src": 1, "x": 0, "y": 10, "w": 40, "h": 10 },
+                    { "id": "lamp-none", "src": 3, "x": 0, "y": 0, "w": 4, "h": 4 },
+                    { "id": "lamp-failed", "src": 3, "x": 4, "y": 0, "w": 4, "h": 4 },
+                    { "id": "lamp-assist", "src": 3, "x": 8, "y": 0, "w": 4, "h": 4 },
+                    { "id": "lamp-light-assist", "src": 3, "x": 12, "y": 0, "w": 4, "h": 4 },
+                    { "id": "lamp-easy", "src": 3, "x": 16, "y": 0, "w": 4, "h": 4 },
+                    { "id": "lamp-normal", "src": 3, "x": 20, "y": 0, "w": 4, "h": 4 }
                 ],
                 "imageset": [{ "id": "bar", "images": ["bar-song", "bar-folder"] }],
                 "text": [{ "id": "bartext", "font": "main", "size": 10 }],
@@ -5947,7 +6025,15 @@ mod tests {
                         { "id": "bar", "dst": [{ "x": 12, "y": 30, "w": 40, "h": 10 }] }
                     ],
                     "text": [{ "id": "bartext", "dst": [{ "x": 5, "y": 2, "w": 20, "h": 8 }] }],
-                    "level": [{ "id": "level", "dst": [{ "x": 30, "y": 2, "w": 5, "h": 8 }] }]
+                    "level": [{ "id": "level", "dst": [{ "x": 30, "y": 2, "w": 5, "h": 8 }] }],
+                    "playerlamp": [
+                        { "id": "lamp-none", "dst": [{ "x": 1, "y": 1, "w": 4, "h": 4 }] },
+                        { "id": "lamp-failed", "dst": [{ "x": 1, "y": 1, "w": 4, "h": 4 }] },
+                        { "id": "lamp-assist", "dst": [{ "x": 1, "y": 1, "w": 4, "h": 4 }] },
+                        { "id": "lamp-light-assist", "dst": [{ "x": 1, "y": 1, "w": 4, "h": 4 }] },
+                        { "id": "lamp-easy", "dst": [{ "x": 1, "y": 1, "w": 4, "h": 4 }] },
+                        { "id": "lamp-normal", "dst": [{ "x": 1, "y": 1, "w": 4, "h": 4 }] }
+                    ]
                 },
                 "destination": [{ "id": "songlist" }]
             }
@@ -5956,6 +6042,7 @@ mod tests {
         .unwrap();
         let mut sources = mock_source("1", 100.0, 100.0);
         sources.extend(mock_source("2", 100.0, 100.0));
+        sources.extend(mock_source("3", 24.0, 4.0));
         let snapshot = SelectSnapshot {
             selected_index: 2,
             rows: vec![
@@ -5970,6 +6057,7 @@ mod tests {
                     index: 2,
                     title: "Song".to_string(),
                     play_level: "12".to_string(),
+                    clear_type: "Normal".to_string(),
                     ..SelectRowSnapshot::default()
                 },
             ],
@@ -5984,6 +6072,16 @@ mod tests {
                 .iter()
                 .any(|item| matches!(item, SkinRenderItem::Text { text, .. } if text == "Song"))
         );
+        assert!(items.iter().any(|item| matches!(item, SkinRenderItem::Image {
+                texture: SkinTextureId(9999),
+                rect: Rect { x, y, width, height },
+                uv: TextureRegion { x: u, .. },
+                ..
+            } if approx_eq(*x, 0.13)
+                && approx_eq(*y, 0.45)
+                && approx_eq(*width, 0.04)
+                && approx_eq(*height, 0.04)
+                && approx_eq(*u, 20.0 / 24.0))));
     }
 
     #[test]
@@ -6362,6 +6460,22 @@ mod tests {
         assert_eq!(skin_state_number(425, state), Some(7));
         assert_eq!(skin_state_number(426, state), Some(3));
         assert_eq!(skin_state_number(427, state), Some(7));
+    }
+
+    #[test]
+    fn skin_state_number_maps_select_refs() {
+        let state = SkinDrawState {
+            select_chart_count: 42,
+            select_play_level: 12,
+            select_clear_index: 5,
+            ex_score: 1234,
+            ..SkinDrawState::default()
+        };
+
+        assert_eq!(skin_state_number(300, state), Some(42));
+        assert_eq!(skin_state_number(96, state), Some(12));
+        assert_eq!(skin_state_number(370, state), Some(5));
+        assert_eq!(skin_state_number(71, state), Some(1234));
     }
 
     #[test]
