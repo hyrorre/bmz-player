@@ -181,8 +181,15 @@ impl LibraryDatabase {
             "DELETE FROM chart_import_warnings WHERE chart_file_id = ?1",
         )?
         .execute(params![chart_file_id])?;
+        // 同一 (code, message) の警告は1行にまとめる。
+        // 非対応チャンネル等はオブジェクトごとに警告が出るため、重複排除しないと
+        // warnings テーブルが数千行/チャート規模に膨張する。
+        let mut seen = std::collections::HashSet::new();
         for warning in warnings {
             let (code, message) = warning_details(warning);
+            if !seen.insert((code, message.clone())) {
+                continue;
+            }
             conn.prepare_cached(
                 "INSERT INTO chart_import_warnings (chart_file_id, code, message, created_at)
                 VALUES (?1, ?2, ?3, ?4)",

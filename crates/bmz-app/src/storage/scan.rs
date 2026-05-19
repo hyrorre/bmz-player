@@ -124,6 +124,7 @@ pub fn scan_song_roots(
             }
 
             // 並列パース
+            let parse_start = std::time::Instant::now();
             let parsed: Vec<ParsedFile> = chunk
                 .par_iter()
                 .map(|todo| ParsedFile {
@@ -133,8 +134,10 @@ pub fn scan_song_roots(
                     result: import_bms_chart(&todo.path, None, false),
                 })
                 .collect();
+            let parse_ms = parse_start.elapsed().as_millis();
 
             // 1トランザクションでバッチ書き込み
+            let write_start = std::time::Instant::now();
             {
                 let tx = db.conn_mut().transaction()?;
                 for p in &parsed {
@@ -177,6 +180,16 @@ pub fn scan_song_roots(
                 }
                 tx.commit()?;
             }
+            let write_ms = write_start.elapsed().as_millis();
+
+            tracing::info!(
+                batch = batch_idx,
+                files = chunk.len(),
+                parse_ms,
+                write_ms,
+                root = %root_path.display(),
+                "batch timing"
+            );
         }
 
         tracing::info!(

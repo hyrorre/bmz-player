@@ -189,6 +189,16 @@ pub const LIBRARY_MIGRATIONS: &[Migration] = &[
             "CREATE INDEX idx_dte_sha256 ON difficulty_table_entries(sha256);",
         ],
     },
+    Migration {
+        version: 4,
+        // chart_import_warnings は警告書き込みのたびに
+        // `DELETE ... WHERE chart_file_id = ?` を発行する。インデックスが無いと
+        // 毎回テーブル全走査になり、warnings テーブルの肥大とともにスキャンが極端に遅くなる。
+        statements: &[
+            "CREATE INDEX idx_chart_import_warnings_chart_file_id
+             ON chart_import_warnings(chart_file_id);",
+        ],
+    },
 ];
 
 pub const SCORE_MIGRATIONS: &[Migration] = &[
