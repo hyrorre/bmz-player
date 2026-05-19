@@ -55,19 +55,19 @@ pub fn apply_skin_from_config(renderer: &mut Renderer, play_skin_path: &str) -> 
 }
 
 pub fn apply_beatoraja_json_skin(renderer: &mut Renderer, skin_path: &Path) -> Result<()> {
-    let context = load_beatoraja_json_skin_context(renderer, skin_path, 10_000, true)?;
+    let context = load_beatoraja_json_skin_context(renderer, skin_path, 10_000, true, "play")?;
     renderer.set_play_skin_context(context);
     Ok(())
 }
 
 pub fn apply_beatoraja_select_json_skin(renderer: &mut Renderer, skin_path: &Path) -> Result<()> {
-    let context = load_beatoraja_json_skin_context(renderer, skin_path, 20_000, false)?;
+    let context = load_beatoraja_json_skin_context(renderer, skin_path, 20_000, false, "select")?;
     renderer.set_select_skin_context(context);
     Ok(())
 }
 
 pub fn apply_beatoraja_result_json_skin(renderer: &mut Renderer, skin_path: &Path) -> Result<()> {
-    let context = load_beatoraja_json_skin_context(renderer, skin_path, 30_000, false)?;
+    let context = load_beatoraja_json_skin_context(renderer, skin_path, 30_000, false, "result")?;
     renderer.set_result_skin_context(context);
     Ok(())
 }
@@ -77,6 +77,7 @@ fn load_beatoraja_json_skin_context(
     skin_path: &Path,
     first_texture_id: u32,
     warn_missing_required_sources: bool,
+    font_namespace: &str,
 ) -> Result<SkinContext> {
     let default_root = default_skin_root();
     let manifest_path = default_root.join("skin.toml");
@@ -94,8 +95,18 @@ fn load_beatoraja_json_skin_context(
         })?;
     }
 
-    let document = SkinDocument::load_beatoraja_json(skin_path)
+    let mut document = SkinDocument::load_beatoraja_json(skin_path)
         .with_context(|| format!("failed to load beatoraja json skin: {}", skin_path.display()))?;
+    // フォント ID は scene 横断的に Renderer のグローバルマップに登録されるので、
+    // play / select / result で同じ "0" 等が衝突する。namespace を付与して隔離する。
+    // text 定義の font 参照側も同じ namespace を付ける。
+    if !font_namespace.is_empty() {
+        for text in &mut document.text {
+            if !text.font.is_empty() {
+                text.font = format!("{}:{}", font_namespace, text.font);
+            }
+        }
+    }
     let skin_root = skin_path.parent().unwrap_or_else(|| Path::new("."));
     let mut document_textures = Vec::new();
     let mut next_texture_id = first_texture_id;
@@ -121,21 +132,26 @@ fn load_beatoraja_json_skin_context(
             );
             continue;
         }
-        let result = if is_bitmap_font_path(&font_path) {
-            renderer.load_bitmap_font(font.id.clone(), &font_path)
+        let stored_font_id = if font_namespace.is_empty() {
+            font.id.clone()
         } else {
-            renderer.load_font(font.id.clone(), &font_path)
+            format!("{}:{}", font_namespace, font.id)
+        };
+        let result = if is_bitmap_font_path(&font_path) {
+            renderer.load_bitmap_font(stored_font_id.clone(), &font_path)
+        } else {
+            renderer.load_font(stored_font_id.clone(), &font_path)
         };
         if let Err(error) = result {
             tracing::warn!(
-                font_id = %font.id,
+                font_id = %stored_font_id,
                 path = %font_path.display(),
                 %error,
                 "failed to load beatoraja skin font"
             );
         } else {
             tracing::info!(
-                font_id = %font.id,
+                font_id = %stored_font_id,
                 path = %font_path.display(),
                 "loaded beatoraja skin font"
             );

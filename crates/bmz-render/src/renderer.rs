@@ -525,7 +525,7 @@ impl WgpuRenderer {
             &frame.pixels,
             wgpu::ImageDataLayout {
                 offset: 0,
-                bytes_per_row: Some(frame.size.width),
+                bytes_per_row: Some(frame.size.width * 4),
                 rows_per_image: Some(frame.size.height),
             },
             wgpu::Extent3d {
@@ -566,7 +566,7 @@ impl WgpuRenderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R8Unorm,
+            format: wgpu::TextureFormat::Rgba8Unorm,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
@@ -899,11 +899,18 @@ impl TextAtlasBuilder {
                     continue;
                 }
                 let src_index = ((src_y * page.image.width + src_x) * 4) as usize;
-                let alpha = page.image.pixels.get(src_index + 3).copied().unwrap_or(0);
+                let Some(src) = page.image.pixels.get(src_index..src_index + 4) else {
+                    continue;
+                };
                 let dst_index =
-                    ((atlas_origin.1 + dst_y) * self.width + atlas_origin.0 + dst_x) as usize;
-                if let Some(pixel) = self.pixels.get_mut(dst_index) {
-                    *pixel = (*pixel).max(alpha);
+                    (((atlas_origin.1 + dst_y) * self.width + atlas_origin.0 + dst_x) * 4) as usize;
+                let Some(dst) = self.pixels.get_mut(dst_index..dst_index + 4) else {
+                    continue;
+                };
+                // ビットマップフォントは RGBA を保持して描画したい (色付きグリフ対応)。
+                // 同じアトラス位置に重ねたい場合は alpha が大きい方を採用。
+                if src[3] >= dst[3] {
+                    dst.copy_from_slice(src);
                 }
             }
         }
@@ -1037,9 +1044,17 @@ impl TextAtlasBuilder {
                     outlined.draw(|x, y, coverage| {
                         let dst_x = atlas_origin.0 + x;
                         let dst_y = atlas_origin.1 + y;
-                        let index = (dst_y * self.width + dst_x) as usize;
-                        if let Some(pixel) = self.pixels.get_mut(index) {
-                            *pixel = ((*pixel as f32).max(coverage * 255.0)) as u8;
+                        let index = ((dst_y * self.width + dst_x) * 4) as usize;
+                        let coverage_u8 = (coverage * 255.0).clamp(0.0, 255.0) as u8;
+                        if let Some(pixel) = self.pixels.get_mut(index..index + 4) {
+                            // TTF グリフは白 RGB に coverage を alpha として書く。
+                            // 既存値より coverage が大きい場合のみ上書き。
+                            if coverage_u8 >= pixel[3] {
+                                pixel[0] = 255;
+                                pixel[1] = 255;
+                                pixel[2] = 255;
+                                pixel[3] = coverage_u8;
+                            }
                         }
                     });
                     self.quads.push(TextQuad {
@@ -1075,7 +1090,7 @@ impl TextAtlasBuilder {
     }
 
     fn ensure_height(&mut self, height: u32) {
-        let needed = (self.width * height) as usize;
+        let needed = (self.width * height * 4) as usize;
         if self.pixels.len() < needed {
             self.pixels.resize(needed, 0);
         }
@@ -1087,7 +1102,7 @@ impl TextAtlasBuilder {
 
     fn finish(mut self) -> TextFrame {
         let height = self.atlas_height();
-        self.pixels.resize((self.width * height) as usize, 0);
+        self.pixels.resize((self.width * height * 4) as usize, 0);
         let instances = encode_text_quads(&self.quads, self.width, height);
         TextFrame { size: AtlasSize { width: self.width, height }, pixels: self.pixels, instances }
     }
@@ -1659,8 +1674,10 @@ fn vs_main(
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    let alpha = textureSample(text_atlas, text_sampler, input.uv).r;
-    return vec4<f32>(input.color.rgb, input.color.a * alpha);
+    let glyph = textureSample(text_atlas, text_sampler, input.uv);
+    // RGBA atlas: bitmap font は色付きグリフを保持。TTF は (1,1,1,coverage)。
+    // tint と乗算してアルファブレンド用の最終色を出す。
+    return glyph * input.color;
 }
 "#;
 
