@@ -328,6 +328,7 @@ impl LibraryDatabase {
     /// Returns distinct immediate child folder names directly under `parent_path`.
     /// Only the last path component (name) is returned, not the full path.
     pub fn list_child_folder_names(&self, parent_path: &str) -> Result<Vec<String>> {
+        let parent_path = to_folder_key(parent_path);
         let mut stmt = self.conn.prepare(
             "SELECT DISTINCT child_name FROM (
                 SELECT CASE
@@ -349,6 +350,7 @@ impl LibraryDatabase {
 
     /// Returns charts whose `folder_path` exactly matches `folder_path`.
     pub fn list_charts_in_folder(&self, folder_path: &str) -> Result<Vec<ChartListItem>> {
+        let folder_path = to_folder_key(folder_path);
         let mut stmt = self.conn.prepare(
             "SELECT
                 id,
@@ -724,8 +726,14 @@ fn path_to_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
+/// `charts.folder_path` はスラッシュ `/` を正準とする。
+/// Windows のバックスラッシュ区切りをスラッシュに変換する。
+fn to_folder_key(path: &str) -> String {
+    path.replace('\\', "/")
+}
+
 fn folder_path(path: &Path) -> String {
-    path.parent().map(path_to_string).unwrap_or_default()
+    to_folder_key(&path.parent().map(path_to_string).unwrap_or_default())
 }
 
 fn warning_details(warning: &ImportWarning) -> (&'static str, String) {
@@ -1128,5 +1136,32 @@ mod tests {
                 import_version: CHART_IMPORT_VERSION,
             })
         );
+    }
+
+    #[test]
+    fn folder_navigation_normalizes_backslash_separators() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase::from_connection(conn);
+        let chart = chart("song");
+        // file_path はスラッシュ区切りで与える（Path::parent() の OS 依存を避ける）。
+        // folder_path は "G:/BMS/INSANE/sub" として保存される。
+        db.upsert_chart_import(&ChartImportRecord {
+            root_id: None,
+            file_path: Path::new("G:/BMS/INSANE/sub/song.bms"),
+            file_size: 1,
+            modified_at: 1,
+            scanned_at: 1,
+            chart: &chart,
+        })
+        .unwrap();
+
+        // バックスラッシュ区切りの引数でも、スラッシュ保存された行が見つかること。
+        assert_eq!(
+            db.list_child_folder_names("G:\\BMS\\INSANE").unwrap(),
+            vec!["sub".to_string()]
+        );
+        assert_eq!(db.list_charts_in_folder("G:\\BMS\\INSANE\\sub").unwrap().len(), 1);
     }
 }

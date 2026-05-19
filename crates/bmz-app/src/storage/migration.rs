@@ -199,6 +199,13 @@ pub const LIBRARY_MIGRATIONS: &[Migration] = &[
              ON chart_import_warnings(chart_file_id);",
         ],
     },
+    Migration {
+        version: 5,
+        // folder_path はスラッシュ `/` を正準とする。Windows で取り込まれた既存行は
+        // バックスラッシュ区切りのため、選曲画面のフォルダ走査クエリと一致しない。
+        // 既存行のバックスラッシュをスラッシュに正規化する。
+        statements: &["UPDATE charts SET folder_path = REPLACE(folder_path, '\\', '/');"],
+    },
 ];
 
 pub const SCORE_MIGRATIONS: &[Migration] = &[
