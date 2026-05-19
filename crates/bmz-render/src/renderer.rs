@@ -265,9 +265,11 @@ impl WgpuRenderer {
         // 含まれることがある。Apple Silicon / モダンGPU 環境では 16384px までは許容
         // されるので、アダプタが報告する上限まで広げて取得する。
         let adapter_limits = adapter.limits();
-        let mut required_limits = wgpu::Limits::default();
-        required_limits.max_texture_dimension_2d = adapter_limits.max_texture_dimension_2d;
-        required_limits.max_texture_dimension_1d = adapter_limits.max_texture_dimension_1d;
+        let required_limits = wgpu::Limits {
+            max_texture_dimension_2d: adapter_limits.max_texture_dimension_2d,
+            max_texture_dimension_1d: adapter_limits.max_texture_dimension_1d,
+            ..Default::default()
+        };
         let (device, queue) = block_on(adapter.request_device(
             &wgpu::DeviceDescriptor {
                 label: Some("bmz-render device"),
@@ -1901,7 +1903,7 @@ mod tests {
         let frame = build_text_frame(&plan, &default_font, &HashMap::new(), &bitmap_fonts, surface);
 
         assert_eq!(frame.instances.len(), TEXT_INSTANCE_BYTES);
-        assert!(frame.pixels.iter().any(|pixel| *pixel == 255));
+        assert!(frame.pixels.contains(&255));
     }
 
     #[test]

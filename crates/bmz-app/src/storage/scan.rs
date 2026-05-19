@@ -10,7 +10,9 @@ use bmz_chart::import::import_bms_chart;
 
 use crate::config::app_config::{PathEntry, ScanConfig};
 
-use super::library_db::{CHART_IMPORT_VERSION, ChartFileFingerprint, ChartImportRecord, LibraryDatabase};
+use super::library_db::{
+    CHART_IMPORT_VERSION, ChartFileFingerprint, ChartImportRecord, LibraryDatabase,
+};
 
 #[derive(Debug, Clone, Default)]
 pub struct ScanSummary {
@@ -161,10 +163,7 @@ pub fn scan_song_roots(
                                 &message,
                             )?;
                             report.summary.failed += 1;
-                            report.failures.push(ScanFailure {
-                                path: p.path.clone(),
-                                message,
-                            });
+                            report.failures.push(ScanFailure { path: p.path.clone(), message });
                         }
                     }
                 }

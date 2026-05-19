@@ -344,7 +344,7 @@ mod tests {
                 let [r, g, b] = pixels[source_row * width_usize + col];
                 bytes.extend_from_slice(&[b, g, r]);
             }
-            while (bytes.len() - 54) % row_stride != 0 {
+            while !(bytes.len() - 54).is_multiple_of(row_stride) {
                 bytes.push(0);
             }
         }

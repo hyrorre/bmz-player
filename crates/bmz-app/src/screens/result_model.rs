@@ -137,14 +137,19 @@ mod tests {
 
     #[test]
     fn result_summary_uses_play_and_storage_values() {
-        let mut score = ScoreState::default();
-        score.max_combo = 12;
-        score.judges.fast_pgreat = 2;
-        score.judges.slow_great = 3;
-        score.judges.fast_good = 4;
-        score.judges.slow_bad = 5;
-        score.judges.fast_poor = 6;
-        score.judges.slow_empty_poor = 7;
+        let score = ScoreState {
+            max_combo: 12,
+            judges: bmz_gameplay::score::JudgeCounts {
+                fast_pgreat: 2,
+                slow_great: 3,
+                fast_good: 4,
+                slow_bad: 5,
+                fast_poor: 6,
+                slow_empty_poor: 7,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
         let result = PlayResult {
             chart_sha256: [1; 32],
             clear_type: ClearType::Normal,

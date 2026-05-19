@@ -133,7 +133,7 @@ struct WinitApp {
 enum AppViewState {
     Select,
     Play,
-    Result(ResultSummary),
+    Result(Box<ResultSummary>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -276,7 +276,7 @@ impl WinitApp {
         }
 
         if let Some(finished) = &self.finished_play {
-            return AppViewState::Result(finished.summary.clone());
+            return AppViewState::Result(Box::new(finished.summary.clone()));
         }
 
         AppViewState::Select

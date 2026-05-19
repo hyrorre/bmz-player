@@ -70,6 +70,14 @@ impl AppPaths {
     }
 }
 
+impl ProfilePaths {
+    pub fn ensure_dirs(&self) -> Result<()> {
+        std::fs::create_dir_all(&self.root_dir)?;
+        std::fs::create_dir_all(&self.replay_dir)?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -97,13 +105,5 @@ mod tests {
         assert!(validate_profile_id("profile/name").is_err());
         assert!(validate_profile_id("").is_err());
         assert!(validate_profile_id("default_1-2").is_ok());
-    }
-}
-
-impl ProfilePaths {
-    pub fn ensure_dirs(&self) -> Result<()> {
-        std::fs::create_dir_all(&self.root_dir)?;
-        std::fs::create_dir_all(&self.replay_dir)?;
-        Ok(())
     }
 }
