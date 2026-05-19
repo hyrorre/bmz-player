@@ -1,5 +1,4 @@
 use anyhow::Result;
-use bmz_core::clear::ClearType;
 use bmz_core::replay::ReplayEvent;
 use bmz_gameplay::result::PlayResult;
 
@@ -148,9 +147,9 @@ fn evaluate_slot_update(
 }
 
 fn should_save_replay(config: &ReplayConfig, result: &PlayResult) -> bool {
-    config.auto_save
-        && (!result.autoplay || config.save_autoplay_runs)
-        && (result.clear_type != ClearType::Failed || config.save_failed_runs)
+    // オートプレイの記録は保存しない (save_autoplay_runs は廃止: 常に false)
+    // 失敗ランは保存する (save_failed_runs は廃止: 常に true)
+    config.auto_save && !result.autoplay
 }
 
 #[cfg(test)]
@@ -183,8 +182,6 @@ mod tests {
         let mut score_db = ScoreDatabase::from_connection(conn);
         let config = ReplayConfig {
             auto_save: true,
-            save_failed_runs: false,
-            save_autoplay_runs: false,
             compress: false,
             slot_rules: crate::config::profile_config::default_slot_rules(),
         };
@@ -235,8 +232,6 @@ mod tests {
         let mut score_db = ScoreDatabase::from_connection(conn);
         let config = ReplayConfig {
             auto_save: true,
-            save_failed_runs: false,
-            save_autoplay_runs: false,
             compress: false,
             slot_rules: crate::config::profile_config::default_slot_rules(),
         };
@@ -267,7 +262,8 @@ mod tests {
     }
 
     #[test]
-    fn store_play_result_skips_failed_replay_when_disabled() {
+    fn store_play_result_saves_failed_replay_for_non_autoplay() {
+        // save_failed_runs は廃止 — 失敗ランは常に保存される (オートプレイ除く)
         let root = make_temp_dir("store-failed-result");
         let paths = ProfilePaths {
             root_dir: root.clone(),
@@ -281,8 +277,6 @@ mod tests {
         let mut score_db = ScoreDatabase::from_connection(conn);
         let config = ReplayConfig {
             auto_save: true,
-            save_failed_runs: false,
-            save_autoplay_runs: false,
             compress: false,
             slot_rules: crate::config::profile_config::default_slot_rules(),
         };
@@ -307,8 +301,8 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(stored.replay_path, "");
-        assert!(!paths.replay_dir.exists());
+        assert!(!stored.replay_path.is_empty());
+        assert!(root.join(&stored.replay_path).exists());
 
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -328,8 +322,6 @@ mod tests {
         let mut score_db = ScoreDatabase::from_connection(conn);
         let config = ReplayConfig {
             auto_save: true,
-            save_failed_runs: false,
-            save_autoplay_runs: false,
             compress: false,
             slot_rules: crate::config::profile_config::default_slot_rules(),
         };
@@ -403,8 +395,6 @@ mod tests {
         let mut score_db = ScoreDatabase::from_connection(conn);
         let config = ReplayConfig {
             auto_save: true,
-            save_failed_runs: false,
-            save_autoplay_runs: false,
             compress: false,
             slot_rules: crate::config::profile_config::default_slot_rules(),
         };

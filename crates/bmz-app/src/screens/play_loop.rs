@@ -258,8 +258,6 @@ mod tests {
         let mut score_db = ScoreDatabase::from_connection(conn);
         let replay_config = ReplayConfig {
             auto_save: false,
-            save_failed_runs: false,
-            save_autoplay_runs: false,
             compress: false,
             slot_rules: crate::config::profile_config::default_slot_rules(),
         };

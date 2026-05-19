@@ -256,8 +256,6 @@ pub fn default_slot_rules() -> [ReplaySlotRule; 4] {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReplayConfig {
     pub auto_save: bool,
-    pub save_failed_runs: bool,
-    pub save_autoplay_runs: bool,
     pub compress: bool,
     #[serde(default = "default_slot_rules")]
     pub slot_rules: [ReplaySlotRule; 4],
@@ -361,8 +359,6 @@ impl ProfileConfig {
             rival: RivalConfig { active_rival: String::new(), entries: Vec::new() },
             replay: ReplayConfig {
                 auto_save: true,
-                save_failed_runs: false,
-                save_autoplay_runs: false,
                 compress: false,
                 slot_rules: default_slot_rules(),
             },
