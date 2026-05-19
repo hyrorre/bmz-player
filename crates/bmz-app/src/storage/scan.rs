@@ -10,9 +10,7 @@ use bmz_chart::import::import_bms_chart;
 
 use crate::config::app_config::{PathEntry, ScanConfig};
 
-use super::library_db::{
-    CHART_IMPORT_VERSION, ChartFileFingerprint, ChartImportRecord, LibraryDatabase,
-};
+use super::library_db::{CHART_IMPORT_VERSION, ChartImportRecord, LibraryDatabase};
 
 #[derive(Debug, Clone, Default)]
 pub struct ScanSummary {
@@ -64,17 +62,24 @@ pub fn scan_song_roots(
             "scanning root"
         );
 
-        // Phase 1: skip判定（逐次、DBリード）
+        // Phase 1: skip判定（1クエリでrootの全fingerprintsをロードしてHashMap lookup）
         struct FileTodo {
             path: PathBuf,
             file_size: u64,
             modified_at: i64,
         }
+        let fingerprints = db.load_fingerprints_for_root(root_id)?;
         let mut to_import: Vec<FileTodo> = Vec::new();
         for path in &files {
             report.summary.files_seen += 1;
             let (file_size, modified_at) = file_metadata_for_failure(path);
-            if is_unchanged(db, path, file_size, modified_at)? {
+            let key = path.to_string_lossy();
+            let unchanged = fingerprints.get(key.as_ref()).is_some_and(|fp| {
+                fp.file_size == file_size
+                    && fp.modified_at == modified_at
+                    && fp.import_version == CHART_IMPORT_VERSION
+            });
+            if unchanged {
                 report.summary.skipped += 1;
             } else {
                 to_import.push(FileTodo { path: path.clone(), file_size, modified_at });
@@ -122,7 +127,7 @@ pub fn scan_song_roots(
                     path: todo.path.clone(),
                     file_size: todo.file_size,
                     modified_at: todo.modified_at,
-                    result: import_bms_chart(&todo.path, None),
+                    result: import_bms_chart(&todo.path, None, false),
                 })
                 .collect();
 
@@ -183,19 +188,6 @@ pub fn scan_song_roots(
     }
 
     Ok(report)
-}
-
-fn is_unchanged(
-    db: &LibraryDatabase,
-    path: &Path,
-    file_size: u64,
-    modified_at: i64,
-) -> Result<bool> {
-    let Some(fingerprint) = db.chart_file_fingerprint(path)? else {
-        return Ok(false);
-    };
-    Ok(fingerprint
-        == ChartFileFingerprint { file_size, modified_at, import_version: CHART_IMPORT_VERSION })
 }
 
 pub fn discover_chart_files(

@@ -66,10 +66,11 @@ pub fn normalize_chart(
     source_path: &Path,
     intermediate: IntermediateChart,
     warnings: &mut Vec<ImportWarning>,
+    check_resource_existence: bool,
 ) -> Result<PlayableChart, ImportError> {
     let metadata = normalize_metadata(&intermediate.metadata);
-    let sound_table = build_sound_table(source_path, &intermediate, warnings);
-    let bga_table = build_bga_table(source_path, &intermediate, warnings);
+    let sound_table = build_sound_table(source_path, &intermediate, warnings, check_resource_existence);
+    let bga_table = build_bga_table(source_path, &intermediate, warnings, check_resource_existence);
     let tick_objects = materialize_tick_objects(&intermediate)?;
     let tick_timing_events = collect_timing_events(&intermediate, warnings)?;
     let timing_map =
@@ -137,6 +138,7 @@ fn build_sound_table(
     source_path: &Path,
     intermediate: &IntermediateChart,
     warnings: &mut Vec<ImportWarning>,
+    check_resource_existence: bool,
 ) -> SoundTable {
     let mut by_wav_key = HashMap::new();
     let mut assets = Vec::new();
@@ -145,7 +147,7 @@ fn build_sound_table(
     for wav in &intermediate.resources.wavs {
         let id = SoundId(assets.len() as u32);
         let path = if wav.path.is_absolute() { wav.path.clone() } else { base_dir.join(&wav.path) };
-        if !path.exists() {
+        if check_resource_existence && !path.exists() {
             warnings.push(ImportWarning::MissingSoundFile { path: path.clone() });
         }
         by_wav_key.insert(wav.key, id);
@@ -159,6 +161,7 @@ fn build_bga_table(
     source_path: &Path,
     intermediate: &IntermediateChart,
     warnings: &mut Vec<ImportWarning>,
+    check_resource_existence: bool,
 ) -> BgaTable {
     let mut by_bmp_key = HashMap::new();
     let mut assets = Vec::new();
@@ -167,7 +170,7 @@ fn build_bga_table(
     for bmp in &intermediate.resources.bmps {
         let id = BgaAssetId(assets.len() as u32);
         let path = if bmp.path.is_absolute() { bmp.path.clone() } else { base_dir.join(&bmp.path) };
-        if !path.exists() {
+        if check_resource_existence && !path.exists() {
             warnings.push(ImportWarning::MissingBmpFile { path: path.clone() });
         }
         by_bmp_key.insert(bmp.key, id);

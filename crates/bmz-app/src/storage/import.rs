@@ -28,7 +28,7 @@ pub fn import_chart_file(
         .map(|duration| duration.as_secs() as i64)
         .unwrap_or(0);
 
-    let ImportResult { chart, warnings } = import_bms_chart(path, None)?;
+    let ImportResult { chart, warnings } = import_bms_chart(path, None, true)?;
     let record = ChartImportRecord {
         root_id,
         file_path: path,

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Result;
@@ -240,7 +241,7 @@ impl LibraryDatabase {
         scanned_at: i64,
         message: &str,
     ) -> Result<i64> {
-        conn.execute(
+        let chart_file_id: i64 = conn.query_row(
             "INSERT INTO chart_files (
                 root_id, path, file_size, modified_at, md5, sha256, scanned_at, parse_status
             ) VALUES (?1, ?2, ?3, ?4, x'', x'', ?5, 'Failed')
@@ -249,12 +250,9 @@ impl LibraryDatabase {
                 file_size = excluded.file_size,
                 modified_at = excluded.modified_at,
                 scanned_at = excluded.scanned_at,
-                parse_status = excluded.parse_status",
+                parse_status = excluded.parse_status
+            RETURNING id",
             params![root_id, path_to_string(file_path), file_size as i64, modified_at, scanned_at],
-        )?;
-        let chart_file_id: i64 = conn.query_row(
-            "SELECT id FROM chart_files WHERE path = ?1",
-            params![path_to_string(file_path)],
             |row| row.get(0),
         )?;
         conn.execute(
@@ -435,6 +433,34 @@ impl LibraryDatabase {
             .map_err(Into::into)
     }
 
+    pub fn load_fingerprints_for_root(
+        &self,
+        root_id: i64,
+    ) -> Result<HashMap<String, ChartFileFingerprint>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT cf.path, cf.file_size, cf.modified_at, COALESCE(c.import_version, 0)
+            FROM chart_files cf
+            LEFT JOIN chart_file_links cfl ON cfl.chart_file_id = cf.id
+            LEFT JOIN charts c ON c.id = cfl.chart_id
+            WHERE cf.root_id = ?1",
+        )?;
+        let rows = stmt.query_map(params![root_id], |row| {
+            let path: String = row.get(0)?;
+            let file_size: i64 = row.get(1)?;
+            Ok((path, ChartFileFingerprint {
+                file_size: file_size.max(0) as u64,
+                modified_at: row.get(2)?,
+                import_version: row.get(3)?,
+            }))
+        })?;
+        let mut map = HashMap::new();
+        for row in rows {
+            let (path, fingerprint) = row?;
+            map.insert(path, fingerprint);
+        }
+        Ok(map)
+    }
+
     pub fn upsert_difficulty_table(
         &mut self,
         table: &crate::difficulty_table::FetchedDifficultyTable,
@@ -530,7 +556,7 @@ fn chart_list_item_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChartLi
 }
 
 fn upsert_chart_file(conn: &Connection, record: &ChartImportRecord<'_>) -> Result<i64> {
-    conn.execute(
+    conn.query_row(
         "INSERT INTO chart_files (
             root_id,
             path,
@@ -548,7 +574,8 @@ fn upsert_chart_file(conn: &Connection, record: &ChartImportRecord<'_>) -> Resul
             md5 = excluded.md5,
             sha256 = excluded.sha256,
             scanned_at = excluded.scanned_at,
-            parse_status = excluded.parse_status",
+            parse_status = excluded.parse_status
+        RETURNING id",
         params![
             record.root_id,
             path_to_string(record.file_path),
@@ -558,11 +585,6 @@ fn upsert_chart_file(conn: &Connection, record: &ChartImportRecord<'_>) -> Resul
             record.chart.identity.file_sha256.as_slice(),
             record.scanned_at,
         ],
-    )?;
-
-    conn.query_row(
-        "SELECT id FROM chart_files WHERE path = ?1",
-        params![path_to_string(record.file_path)],
         |row| row.get(0),
     )
     .map_err(Into::into)

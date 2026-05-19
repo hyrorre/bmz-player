@@ -228,7 +228,7 @@ mod tests {
     fn bundled_sample_root_imports_playable_chart() {
         let sample_root = bundled_sample_song_root().expect("sample song root should exist");
         let sample_chart = sample_root.join("sample-playable").join("sample-playable.bms");
-        let import = import_bms_chart(&sample_chart, None).unwrap();
+        let import = import_bms_chart(&sample_chart, None, true).unwrap();
         assert!(import.warnings.is_empty());
         assert_eq!(import.chart.sounds.len(), 1);
         assert!(import.chart.sounds[0].path.exists());

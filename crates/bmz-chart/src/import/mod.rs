@@ -20,10 +20,11 @@ pub struct ImportResult {
 pub fn import_bms_chart(
     path: &Path,
     random_seed: Option<u64>,
+    check_resource_existence: bool,
 ) -> Result<ImportResult, ImportError> {
     let mut warnings = Vec::new();
     let intermediate = bms_adapter::import_bms_to_intermediate(path, random_seed, &mut warnings)?;
-    let chart = normalize::normalize_chart(path, intermediate, &mut warnings)?;
+    let chart = normalize::normalize_chart(path, intermediate, &mut warnings, check_resource_existence)?;
     Ok(ImportResult { chart, warnings })
 }
 
@@ -64,7 +65,7 @@ mod tests {
         write_temp_file(&base_dir.join("bgm.wav"));
         write_temp_file(&base_dir.join("bga.png"));
 
-        let result = import_bms_chart(&path, None).unwrap();
+        let result = import_bms_chart(&path, None, true).unwrap();
         let expected_identity = compute_chart_identity(text.as_bytes());
 
         assert!(result.warnings.is_empty());

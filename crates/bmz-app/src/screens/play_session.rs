@@ -201,7 +201,7 @@ pub fn load_game_session_for_chart_with_input_backend(
     let Some(path) = library_db.primary_chart_file_path(chart_id)? else {
         bail!("chart file not found for chart id {chart_id}");
     };
-    let import = import_bms_chart(std::path::Path::new(&path), None)
+    let import = import_bms_chart(std::path::Path::new(&path), None, true)
         .with_context(|| format!("failed to import chart file: {path}"))?;
     Ok(build_game_session_with_input_backend(
         Arc::new(import.chart),
@@ -246,7 +246,7 @@ pub fn load_prepared_play_session_for_chart_with_input_backend(
     let Some(path) = library_db.primary_chart_file_path(chart_id)? else {
         bail!("chart file not found for chart id {chart_id}");
     };
-    let import = import_bms_chart(std::path::Path::new(&path), None)
+    let import = import_bms_chart(std::path::Path::new(&path), None, true)
         .with_context(|| format!("failed to import chart file: {path}"))?;
     let mut chart = import.chart;
     let applied_arrange = apply_arrange(
@@ -578,7 +578,7 @@ mod tests {
 #00011:01
 ",
         );
-        let imported = import_bms_chart(&path, None).unwrap();
+        let imported = import_bms_chart(&path, None, true).unwrap();
         let mut conn = Connection::open_in_memory().unwrap();
         configure_connection(&conn).unwrap();
         run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
@@ -618,7 +618,7 @@ mod tests {
 #00011:01
 ",
         );
-        let imported = import_bms_chart(&path, None).unwrap();
+        let imported = import_bms_chart(&path, None, true).unwrap();
         let mut conn = Connection::open_in_memory().unwrap();
         configure_connection(&conn).unwrap();
         run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
