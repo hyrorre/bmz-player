@@ -1684,22 +1684,59 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 "#;
 
 fn load_default_font() -> Option<FontArc> {
+    // 日本語・記号を表示できる CJK 対応フォントを最優先で採用する。
+    // Latin のみのフォントしか見つからない環境向けに、それも一応保持しておく。
+    let mut latin_fallback: Option<FontArc> = None;
     for path in default_font_candidates() {
         let Ok(bytes) = std::fs::read(path) else {
             continue;
         };
         match FontArc::try_from_vec(bytes) {
-            Ok(font) => return Some(font),
+            Ok(font) => {
+                if font_supports_japanese(&font) {
+                    return Some(font);
+                }
+                latin_fallback.get_or_insert(font);
+            }
             Err(error) => tracing::warn!(%error, path, "failed to load default render font"),
         }
     }
-    tracing::warn!("no default render font found; text draw commands will be skipped");
-    None
+    match &latin_fallback {
+        Some(_) => tracing::warn!(
+            "no Japanese-capable font found; default skin text will fall back to a Latin-only font"
+        ),
+        None => {
+            tracing::warn!("no default render font found; text draw commands will be skipped")
+        }
+    }
+    latin_fallback
+}
+
+/// ひらがな「あ」と漢字「日」のグリフを両方持つフォントを日本語対応とみなす。
+/// `GlyphId(0)` は .notdef（未定義グリフ）なので、それ以外なら描画できる。
+fn font_supports_japanese(font: &FontArc) -> bool {
+    font.glyph_id('あ').0 != 0 && font.glyph_id('日').0 != 0
 }
 
 fn default_font_candidates() -> &'static [&'static str] {
     &[
+        // --- 日本語・記号対応フォント（優先） ---
+        // macOS
+        "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
+        "/System/Library/Fonts/Hiragino Sans GB.ttc",
+        "/Library/Fonts/Arial Unicode.ttf",
         "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+        // Windows
+        "C:\\Windows\\Fonts\\YuGothR.ttc",
+        "C:\\Windows\\Fonts\\YuGothM.ttc",
+        "C:\\Windows\\Fonts\\meiryo.ttc",
+        "C:\\Windows\\Fonts\\msgothic.ttc",
+        // Linux
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJKjp-Regular.otf",
+        // --- Latin のみのフォールバック ---
         "/System/Library/Fonts/Supplemental/Arial.ttf",
         "/System/Library/Fonts/Helvetica.ttc",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -1841,6 +1878,52 @@ mod tests {
         let frame = build_text_frame(&plan, &font, &HashMap::new(), &HashMap::new(), surface);
 
         assert_eq!(frame.instances.len(), TEXT_INSTANCE_BYTES * 9);
+    }
+
+    #[test]
+    fn load_default_font_prefers_japanese_capable_font() {
+        let Some(font) = load_default_font() else { return };
+        // CJK 対応フォントが環境にあれば、必ずそれが採用されていなければならない。
+        let cjk_available = default_font_candidates()
+            .iter()
+            .filter_map(|path| std::fs::read(path).ok())
+            .filter_map(|bytes| FontArc::try_from_vec(bytes).ok())
+            .any(|candidate| font_supports_japanese(&candidate));
+        if cjk_available {
+            assert!(font_supports_japanese(&font));
+        }
+    }
+
+    #[test]
+    fn japanese_text_emits_glyph_quads_with_default_font() {
+        let Some(font) = load_default_font() else { return };
+        if !font_supports_japanese(&font) {
+            return;
+        }
+        let surface = SurfaceSize { width: 320, height: 240 };
+        let plan = DrawPlan {
+            clear: Color::rgb(0.0, 0.0, 0.0),
+            commands: vec![DrawCommand::Text {
+                origin: Point { x: 0.1, y: 0.1 },
+                text: "日本語と記号★♪".to_string(),
+                style: TextStyle {
+                    font_id: None,
+                    size: 0.1,
+                    color: Color::rgb(1.0, 1.0, 1.0),
+                    layer: crate::plan::TextLayer::Skin,
+                    align: TextAlign::Left,
+                    max_width: 0.0,
+                    overflow: TextOverflow::Overflow,
+                    wrapping: false,
+                    outline: None,
+                    shadow: None,
+                },
+            }],
+        };
+        let frame = build_text_frame(&plan, &font, &HashMap::new(), &HashMap::new(), surface);
+
+        assert!(!frame.instances.is_empty());
+        assert!(frame.pixels.contains(&255));
     }
 
     #[test]
