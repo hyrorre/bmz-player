@@ -177,17 +177,17 @@ impl LibraryDatabase {
         warnings: &[ImportWarning],
         created_at: i64,
     ) -> Result<()> {
-        conn.execute(
+        conn.prepare_cached(
             "DELETE FROM chart_import_warnings WHERE chart_file_id = ?1",
-            params![chart_file_id],
-        )?;
+        )?
+        .execute(params![chart_file_id])?;
         for warning in warnings {
             let (code, message) = warning_details(warning);
-            conn.execute(
+            conn.prepare_cached(
                 "INSERT INTO chart_import_warnings (chart_file_id, code, message, created_at)
                 VALUES (?1, ?2, ?3, ?4)",
-                params![chart_file_id, code, message, created_at],
-            )?;
+            )?
+            .execute(params![chart_file_id, code, message, created_at])?;
         }
         Ok(())
     }
@@ -205,21 +205,19 @@ impl LibraryDatabase {
     }
 
     pub fn upsert_root(&mut self, path: &Path, enabled: bool, recursive: bool) -> Result<i64> {
-        self.conn.execute(
-            "INSERT INTO roots (path, enabled, recursive)
-            VALUES (?1, ?2, ?3)
-            ON CONFLICT(path) DO UPDATE SET
-                enabled = excluded.enabled,
-                recursive = excluded.recursive",
-            params![path_to_string(path), enabled, recursive],
-        )?;
+        self.conn
+            .prepare_cached(
+                "INSERT INTO roots (path, enabled, recursive)
+                VALUES (?1, ?2, ?3)
+                ON CONFLICT(path) DO UPDATE SET
+                    enabled = excluded.enabled,
+                    recursive = excluded.recursive",
+            )?
+            .execute(params![path_to_string(path), enabled, recursive])?;
 
         self.conn
-            .query_row(
-                "SELECT id FROM roots WHERE path = ?1",
-                params![path_to_string(path)],
-                |row| row.get(0),
-            )
+            .prepare_cached("SELECT id FROM roots WHERE path = ?1")?
+            .query_row(params![path_to_string(path)], |row| row.get(0))
             .map_err(Into::into)
     }
 
@@ -241,7 +239,7 @@ impl LibraryDatabase {
         scanned_at: i64,
         message: &str,
     ) -> Result<i64> {
-        let chart_file_id: i64 = conn.query_row(
+        let chart_file_id: i64 = conn.prepare_cached(
             "INSERT INTO chart_files (
                 root_id, path, file_size, modified_at, md5, sha256, scanned_at, parse_status
             ) VALUES (?1, ?2, ?3, ?4, x'', x'', ?5, 'Failed')
@@ -252,18 +250,20 @@ impl LibraryDatabase {
                 scanned_at = excluded.scanned_at,
                 parse_status = excluded.parse_status
             RETURNING id",
+        )?
+        .query_row(
             params![root_id, path_to_string(file_path), file_size as i64, modified_at, scanned_at],
             |row| row.get(0),
         )?;
-        conn.execute(
+        conn.prepare_cached(
             "DELETE FROM chart_import_warnings WHERE chart_file_id = ?1",
-            params![chart_file_id],
-        )?;
-        conn.execute(
+        )?
+        .execute(params![chart_file_id])?;
+        conn.prepare_cached(
             "INSERT INTO chart_import_warnings (chart_file_id, code, message, created_at)
             VALUES (?1, 'ImportFailed', ?2, ?3)",
-            params![chart_file_id, message, scanned_at],
-        )?;
+        )?
+        .execute(params![chart_file_id, message, scanned_at])?;
         Ok(chart_file_id)
     }
 
@@ -556,7 +556,7 @@ fn chart_list_item_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChartLi
 }
 
 fn upsert_chart_file(conn: &Connection, record: &ChartImportRecord<'_>) -> Result<i64> {
-    conn.query_row(
+    conn.prepare_cached(
         "INSERT INTO chart_files (
             root_id,
             path,
@@ -576,6 +576,8 @@ fn upsert_chart_file(conn: &Connection, record: &ChartImportRecord<'_>) -> Resul
             scanned_at = excluded.scanned_at,
             parse_status = excluded.parse_status
         RETURNING id",
+    )?
+    .query_row(
         params![
             record.root_id,
             path_to_string(record.file_path),
@@ -593,7 +595,7 @@ fn upsert_chart_file(conn: &Connection, record: &ChartImportRecord<'_>) -> Resul
 fn insert_chart(conn: &Connection, record: &ChartImportRecord<'_>) -> Result<i64> {
     let chart = record.chart;
     let stats = ChartStats::from_chart(chart);
-    conn.execute(
+    conn.prepare_cached(
         "INSERT INTO charts (
             sha256, md5, title, subtitle, artist, subartist, genre,
             difficulty_name, play_level, mode, total_notes, initial_bpm,
@@ -603,39 +605,39 @@ fn insert_chart(conn: &Connection, record: &ChartImportRecord<'_>) -> Result<i64
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
             ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23
         )",
-        params![
-            chart.identity.file_sha256.as_slice(),
-            chart.identity.file_md5.as_slice(),
-            chart.metadata.title.as_str(),
-            chart.metadata.subtitle.as_str(),
-            chart.metadata.artist.as_str(),
-            chart.metadata.subartist.as_str(),
-            chart.metadata.genre.as_str(),
-            chart.metadata.difficulty_name.as_str(),
-            chart.metadata.play_level.as_str(),
-            chart.metadata.key_mode.as_str(),
-            chart.total_notes,
-            chart.metadata.initial_bpm,
-            stats.min_bpm,
-            stats.max_bpm,
-            chart.end_time.0 / 1_000,
-            stats.ln_type,
-            chart.metadata.has_bga,
-            stats.has_long_notes,
-            stats.has_mines,
-            folder_path(record.file_path),
-            chart.metadata.stage_file.as_str(),
-            chart.metadata.preview_file.as_str(),
-            CHART_IMPORT_VERSION,
-        ],
-    )?;
+    )?
+    .execute(params![
+        chart.identity.file_sha256.as_slice(),
+        chart.identity.file_md5.as_slice(),
+        chart.metadata.title.as_str(),
+        chart.metadata.subtitle.as_str(),
+        chart.metadata.artist.as_str(),
+        chart.metadata.subartist.as_str(),
+        chart.metadata.genre.as_str(),
+        chart.metadata.difficulty_name.as_str(),
+        chart.metadata.play_level.as_str(),
+        chart.metadata.key_mode.as_str(),
+        chart.total_notes,
+        chart.metadata.initial_bpm,
+        stats.min_bpm,
+        stats.max_bpm,
+        chart.end_time.0 / 1_000,
+        stats.ln_type,
+        chart.metadata.has_bga,
+        stats.has_long_notes,
+        stats.has_mines,
+        folder_path(record.file_path),
+        chart.metadata.stage_file.as_str(),
+        chart.metadata.preview_file.as_str(),
+        CHART_IMPORT_VERSION,
+    ])?;
     Ok(conn.last_insert_rowid())
 }
 
 fn update_chart(conn: &Connection, chart_id: i64, record: &ChartImportRecord<'_>) -> Result<()> {
     let chart = record.chart;
     let stats = ChartStats::from_chart(chart);
-    conn.execute(
+    conn.prepare_cached(
         "UPDATE charts SET
             sha256 = ?1, md5 = ?2, title = ?3, subtitle = ?4, artist = ?5,
             subartist = ?6, genre = ?7, difficulty_name = ?8, play_level = ?9,
@@ -644,33 +646,33 @@ fn update_chart(conn: &Connection, chart_id: i64, record: &ChartImportRecord<'_>
             has_mines = ?19, folder_path = ?20, stage_file = ?21, preview_file = ?22,
             import_version = ?23
          WHERE id = ?24",
-        params![
-            chart.identity.file_sha256.as_slice(),
-            chart.identity.file_md5.as_slice(),
-            chart.metadata.title.as_str(),
-            chart.metadata.subtitle.as_str(),
-            chart.metadata.artist.as_str(),
-            chart.metadata.subartist.as_str(),
-            chart.metadata.genre.as_str(),
-            chart.metadata.difficulty_name.as_str(),
-            chart.metadata.play_level.as_str(),
-            chart.metadata.key_mode.as_str(),
-            chart.total_notes,
-            chart.metadata.initial_bpm,
-            stats.min_bpm,
-            stats.max_bpm,
-            chart.end_time.0 / 1_000,
-            stats.ln_type,
-            chart.metadata.has_bga,
-            stats.has_long_notes,
-            stats.has_mines,
-            folder_path(record.file_path),
-            chart.metadata.stage_file.as_str(),
-            chart.metadata.preview_file.as_str(),
-            CHART_IMPORT_VERSION,
-            chart_id,
-        ],
-    )?;
+    )?
+    .execute(params![
+        chart.identity.file_sha256.as_slice(),
+        chart.identity.file_md5.as_slice(),
+        chart.metadata.title.as_str(),
+        chart.metadata.subtitle.as_str(),
+        chart.metadata.artist.as_str(),
+        chart.metadata.subartist.as_str(),
+        chart.metadata.genre.as_str(),
+        chart.metadata.difficulty_name.as_str(),
+        chart.metadata.play_level.as_str(),
+        chart.metadata.key_mode.as_str(),
+        chart.total_notes,
+        chart.metadata.initial_bpm,
+        stats.min_bpm,
+        stats.max_bpm,
+        chart.end_time.0 / 1_000,
+        stats.ln_type,
+        chart.metadata.has_bga,
+        stats.has_long_notes,
+        stats.has_mines,
+        folder_path(record.file_path),
+        chart.metadata.stage_file.as_str(),
+        chart.metadata.preview_file.as_str(),
+        CHART_IMPORT_VERSION,
+        chart_id,
+    ])?;
     Ok(())
 }
 

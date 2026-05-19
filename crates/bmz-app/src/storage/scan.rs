@@ -51,8 +51,8 @@ pub fn scan_song_roots(
         report.summary.roots_seen += 1;
         let root_path = Path::new(&root.path);
         let root_id = db.upsert_root(root_path, root.enabled, root.recursive)?;
-        let files = discover_chart_files(root_path, root.recursive, scan)?;
-        let files_total = files.len();
+        let entries = discover_chart_files(root_path, root.recursive, scan)?;
+        let files_total = entries.len();
 
         tracing::info!(
             root = %root_path.display(),
@@ -70,19 +70,22 @@ pub fn scan_song_roots(
         }
         let fingerprints = db.load_fingerprints_for_root(root_id)?;
         let mut to_import: Vec<FileTodo> = Vec::new();
-        for path in &files {
+        for entry in &entries {
             report.summary.files_seen += 1;
-            let (file_size, modified_at) = file_metadata_for_failure(path);
-            let key = path.to_string_lossy();
+            let key = entry.path.to_string_lossy();
             let unchanged = fingerprints.get(key.as_ref()).is_some_and(|fp| {
-                fp.file_size == file_size
-                    && fp.modified_at == modified_at
+                fp.file_size == entry.file_size
+                    && fp.modified_at == entry.modified_at
                     && fp.import_version == CHART_IMPORT_VERSION
             });
             if unchanged {
                 report.summary.skipped += 1;
             } else {
-                to_import.push(FileTodo { path: path.clone(), file_size, modified_at });
+                to_import.push(FileTodo {
+                    path: entry.path.clone(),
+                    file_size: entry.file_size,
+                    modified_at: entry.modified_at,
+                });
             }
         }
 
@@ -190,15 +193,22 @@ pub fn scan_song_roots(
     Ok(report)
 }
 
+#[derive(Debug, Clone)]
+pub struct ChartFileEntry {
+    pub path: PathBuf,
+    pub file_size: u64,
+    pub modified_at: i64,
+}
+
 pub fn discover_chart_files(
     root: &Path,
     recursive: bool,
     scan: &ScanConfig,
-) -> Result<Vec<PathBuf>> {
+) -> Result<Vec<ChartFileEntry>> {
     let mut out = Vec::new();
     discover_into(root, recursive, scan, &mut out)?;
-    out.sort();
-    out.dedup();
+    out.sort_by(|a, b| a.path.cmp(&b.path));
+    out.dedup_by(|a, b| a.path == b.path);
     Ok(out)
 }
 
@@ -206,24 +216,42 @@ fn discover_into(
     dir: &Path,
     recursive: bool,
     scan: &ScanConfig,
-    out: &mut Vec<PathBuf>,
+    out: &mut Vec<ChartFileEntry>,
 ) -> Result<()> {
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
-        let file_type =
-            if scan.follow_symlinks { entry.metadata()?.file_type() } else { entry.file_type()? };
 
         if scan.skip_hidden && is_hidden(&path) {
             continue;
         }
+
+        let (file_type, meta_opt) = if scan.follow_symlinks {
+            let meta = entry.metadata()?;
+            let ft = meta.file_type();
+            (ft, Some(meta))
+        } else {
+            (entry.file_type()?, None)
+        };
 
         if file_type.is_dir() {
             if recursive {
                 discover_into(&path, recursive, scan, out)?;
             }
         } else if file_type.is_file() && is_chart_file(&path) {
-            out.push(path);
+            let (file_size, modified_at) = meta_opt
+                .or_else(|| entry.metadata().ok())
+                .map(|m| {
+                    let mtime = m
+                        .modified()
+                        .ok()
+                        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                        .map(|d| d.as_secs() as i64)
+                        .unwrap_or(0);
+                    (m.len(), mtime)
+                })
+                .unwrap_or((0, 0));
+            out.push(ChartFileEntry { path, file_size, modified_at });
         }
     }
 
@@ -244,19 +272,6 @@ fn is_hidden(path: &Path) -> bool {
         .and_then(|name| name.to_str())
         .map(|name| name.starts_with('.'))
         .unwrap_or(false)
-}
-
-fn file_metadata_for_failure(path: &Path) -> (u64, i64) {
-    let Ok(metadata) = std::fs::metadata(path) else {
-        return (0, 0);
-    };
-    let modified_at = metadata
-        .modified()
-        .ok()
-        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| duration.as_secs() as i64)
-        .unwrap_or(0);
-    (metadata.len(), modified_at)
 }
 
 #[cfg(test)]
