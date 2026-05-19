@@ -69,7 +69,8 @@ pub fn normalize_chart(
     check_resource_existence: bool,
 ) -> Result<PlayableChart, ImportError> {
     let metadata = normalize_metadata(&intermediate.metadata);
-    let sound_table = build_sound_table(source_path, &intermediate, warnings, check_resource_existence);
+    let sound_table =
+        build_sound_table(source_path, &intermediate, warnings, check_resource_existence);
     let bga_table = build_bga_table(source_path, &intermediate, warnings, check_resource_existence);
     let tick_objects = materialize_tick_objects(&intermediate)?;
     let tick_timing_events = collect_timing_events(&intermediate, warnings)?;

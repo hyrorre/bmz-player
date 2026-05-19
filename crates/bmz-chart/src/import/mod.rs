@@ -24,7 +24,8 @@ pub fn import_bms_chart(
 ) -> Result<ImportResult, ImportError> {
     let mut warnings = Vec::new();
     let intermediate = bms_adapter::import_bms_to_intermediate(path, random_seed, &mut warnings)?;
-    let chart = normalize::normalize_chart(path, intermediate, &mut warnings, check_resource_existence)?;
+    let chart =
+        normalize::normalize_chart(path, intermediate, &mut warnings, check_resource_existence)?;
     Ok(ImportResult { chart, warnings })
 }
 

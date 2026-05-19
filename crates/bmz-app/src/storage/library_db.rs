@@ -173,10 +173,8 @@ impl LibraryDatabase {
         warnings: &[ImportWarning],
         created_at: i64,
     ) -> Result<usize> {
-        conn.prepare_cached(
-            "DELETE FROM chart_import_warnings WHERE chart_file_id = ?1",
-        )?
-        .execute(params![chart_file_id])?;
+        conn.prepare_cached("DELETE FROM chart_import_warnings WHERE chart_file_id = ?1")?
+            .execute(params![chart_file_id])?;
         // 同一 (code, message) の警告は1行にまとめる。
         // 非対応チャンネル等はオブジェクトごとに警告が出るため、重複排除しないと
         // warnings テーブルが数千行/チャート規模に膨張する。
@@ -242,8 +240,9 @@ impl LibraryDatabase {
         scanned_at: i64,
         message: &str,
     ) -> Result<i64> {
-        let chart_file_id: i64 = conn.prepare_cached(
-            "INSERT INTO chart_files (
+        let chart_file_id: i64 = conn
+            .prepare_cached(
+                "INSERT INTO chart_files (
                 root_id, path, file_size, modified_at, md5, sha256, scanned_at, parse_status
             ) VALUES (?1, ?2, ?3, ?4, '', '', ?5, 'Failed')
             ON CONFLICT(path) DO UPDATE SET
@@ -253,15 +252,19 @@ impl LibraryDatabase {
                 scanned_at = excluded.scanned_at,
                 parse_status = excluded.parse_status
             RETURNING id",
-        )?
-        .query_row(
-            params![root_id, path_to_string(file_path), file_size as i64, modified_at, scanned_at],
-            |row| row.get(0),
-        )?;
-        conn.prepare_cached(
-            "DELETE FROM chart_import_warnings WHERE chart_file_id = ?1",
-        )?
-        .execute(params![chart_file_id])?;
+            )?
+            .query_row(
+                params![
+                    root_id,
+                    path_to_string(file_path),
+                    file_size as i64,
+                    modified_at,
+                    scanned_at
+                ],
+                |row| row.get(0),
+            )?;
+        conn.prepare_cached("DELETE FROM chart_import_warnings WHERE chart_file_id = ?1")?
+            .execute(params![chart_file_id])?;
         conn.prepare_cached(
             "INSERT INTO chart_import_warnings (chart_file_id, code, message, created_at)
             VALUES (?1, 'ImportFailed', ?2, ?3)",
@@ -452,11 +455,14 @@ impl LibraryDatabase {
         let rows = stmt.query_map(params![root_id], |row| {
             let path: String = row.get(0)?;
             let file_size: i64 = row.get(1)?;
-            Ok((path, ChartFileFingerprint {
-                file_size: file_size.max(0) as u64,
-                modified_at: row.get(2)?,
-                import_version: row.get(3)?,
-            }))
+            Ok((
+                path,
+                ChartFileFingerprint {
+                    file_size: file_size.max(0) as u64,
+                    modified_at: row.get(2)?,
+                    import_version: row.get(3)?,
+                },
+            ))
         })?;
         let mut map = HashMap::new();
         for row in rows {
@@ -1151,10 +1157,7 @@ mod tests {
         .unwrap();
 
         // バックスラッシュ区切りの引数でも、スラッシュ保存された行が見つかること。
-        assert_eq!(
-            db.list_child_folder_names("G:\\BMS\\INSANE").unwrap(),
-            vec!["sub".to_string()]
-        );
+        assert_eq!(db.list_child_folder_names("G:\\BMS\\INSANE").unwrap(), vec!["sub".to_string()]);
         assert_eq!(db.list_charts_in_folder("G:\\BMS\\INSANE\\sub").unwrap().len(), 1);
     }
 
@@ -1169,11 +1172,9 @@ mod tests {
 
         let (md5_typeof, sha256_typeof, md5_hex, sha256_hex): (String, String, String, String) = db
             .conn()
-            .query_row(
-                "SELECT typeof(md5), typeof(sha256), md5, sha256 FROM charts",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )
+            .query_row("SELECT typeof(md5), typeof(sha256), md5, sha256 FROM charts", [], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })
             .unwrap();
         assert_eq!(md5_typeof, "text");
         assert_eq!(sha256_typeof, "text");
@@ -1185,11 +1186,9 @@ mod tests {
         // chart_files も同様に小文字 hex TEXT。
         let (cf_md5_typeof, cf_sha256_typeof): (String, String) = db
             .conn()
-            .query_row(
-                "SELECT typeof(md5), typeof(sha256) FROM chart_files",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
+            .query_row("SELECT typeof(md5), typeof(sha256) FROM chart_files", [], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
             .unwrap();
         assert_eq!(cf_md5_typeof, "text");
         assert_eq!(cf_sha256_typeof, "text");

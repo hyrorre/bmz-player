@@ -57,9 +57,7 @@ fn hex_nibble(c: u8) -> rusqlite::Result<u8> {
         _ => Err(rusqlite::Error::FromSqlConversionFailure(
             0,
             Type::Text,
-            Box::new(FromSqlError::Other(
-                format!("invalid hex character: {:?}", c as char).into(),
-            )),
+            Box::new(FromSqlError::Other(format!("invalid hex character: {:?}", c as char).into())),
         )),
     }
 }
