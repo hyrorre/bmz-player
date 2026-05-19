@@ -171,12 +171,13 @@ impl LibraryDatabase {
     }
 
     /// トランザクションを管理せずにインポート警告を置き換える。
+    /// 戻り値は実際に挿入した（重複排除後の）警告行数。
     pub fn write_import_warnings(
         conn: &Connection,
         chart_file_id: i64,
         warnings: &[ImportWarning],
         created_at: i64,
-    ) -> Result<()> {
+    ) -> Result<usize> {
         conn.prepare_cached(
             "DELETE FROM chart_import_warnings WHERE chart_file_id = ?1",
         )?
@@ -196,7 +197,7 @@ impl LibraryDatabase {
             )?
             .execute(params![chart_file_id, code, message, created_at])?;
         }
-        Ok(())
+        Ok(seen.len())
     }
 
     pub fn replace_import_warnings(

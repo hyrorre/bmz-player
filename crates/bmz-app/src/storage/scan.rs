@@ -153,14 +153,14 @@ pub fn scan_song_roots(
                             };
                             let (_, chart_file_id) =
                                 LibraryDatabase::write_chart_import(&tx, &record)?;
-                            LibraryDatabase::write_import_warnings(
+                            let warnings_written = LibraryDatabase::write_import_warnings(
                                 &tx,
                                 chart_file_id,
                                 &import_result.warnings,
                                 scanned_at,
                             )?;
                             report.summary.imported += 1;
-                            report.summary.warnings += import_result.warnings.len() as u32;
+                            report.summary.warnings += warnings_written as u32;
                         }
                         Err(error) => {
                             let message = error.to_string();
