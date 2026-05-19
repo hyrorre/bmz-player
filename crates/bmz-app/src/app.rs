@@ -43,6 +43,7 @@ use crate::select_options::{ArrangeOption, AssistOption};
 use crate::skin_loader::{
     apply_beatoraja_result_json_skin, apply_beatoraja_select_json_skin, apply_skin_from_config,
 };
+use crate::storage::replay::load_replay_for_chart;
 use crate::storage::scan::scan_song_roots;
 
 const SAMPLE_PLAYABLE_TITLE: &str = "BMZ Sample Playable";
@@ -221,7 +222,17 @@ impl WinitApp {
                 chart_id,
                 "booting directly into bundled sample chart"
             );
-            app.start_chart(chart_id);
+            if let Some(slot) = options.boot_replay_slot {
+                if !app.try_start_replay_for_chart(chart_id, slot) {
+                    tracing::warn!(
+                        slot,
+                        "--boot-replay: slot empty for sample chart, falling back to normal boot"
+                    );
+                    app.start_chart(chart_id);
+                }
+            } else {
+                app.start_chart(chart_id);
+            }
         }
 
         Ok(app)
@@ -448,22 +459,30 @@ impl WinitApp {
         }
 
         if self.start_held {
-            if event.state == ElementState::Pressed
-                && !event.repeat
-                && let Some(control) = physical_key_name(event.physical_key)
-            {
-                if self.select_keys.cycle_arrange.as_deref() == Some(&control) {
-                    self.arrange_option = self.arrange_option.cycle();
-                    tracing::info!(
-                        arrange = self.arrange_option.as_str(),
-                        "arrange option changed"
-                    );
-                } else if self.select_keys.cycle_gauge.as_deref() == Some(&control) {
-                    self.gauge_option = cycle_gauge_option(self.gauge_option);
-                    tracing::info!(gauge = ?self.gauge_option, "gauge option changed");
-                } else if self.select_keys.cycle_assist.as_deref() == Some(&control) {
-                    self.assist_option = self.assist_option.cycle();
-                    tracing::info!(assist = self.assist_option.as_str(), "assist option changed");
+            if event.state == ElementState::Pressed && !event.repeat {
+                if let Some(slot) = digit_to_replay_slot(event.physical_key) {
+                    if !self.start_replay_for_selected(slot) {
+                        tracing::info!(slot, "Start+digit pressed but no replay available");
+                    }
+                    return;
+                }
+                if let Some(control) = physical_key_name(event.physical_key) {
+                    if self.select_keys.cycle_arrange.as_deref() == Some(&control) {
+                        self.arrange_option = self.arrange_option.cycle();
+                        tracing::info!(
+                            arrange = self.arrange_option.as_str(),
+                            "arrange option changed"
+                        );
+                    } else if self.select_keys.cycle_gauge.as_deref() == Some(&control) {
+                        self.gauge_option = cycle_gauge_option(self.gauge_option);
+                        tracing::info!(gauge = ?self.gauge_option, "gauge option changed");
+                    } else if self.select_keys.cycle_assist.as_deref() == Some(&control) {
+                        self.assist_option = self.assist_option.cycle();
+                        tracing::info!(
+                            assist = self.assist_option.as_str(),
+                            "assist option changed"
+                        );
+                    }
                 }
             }
             return;
@@ -614,7 +633,12 @@ impl WinitApp {
     }
 
     fn start_chart(&mut self, chart_id: i64) {
-        match self.boot.start_play_for_chart_with_winit_input(chart_id, self.play_start_options()) {
+        let options = self.play_start_options();
+        self.start_chart_with_options(chart_id, options);
+    }
+
+    fn start_chart_with_options(&mut self, chart_id: i64, options: PlayStartOptions) {
+        match self.boot.start_play_for_chart_with_winit_input(chart_id, options) {
             Ok(mut active_play) => {
                 active_play.running.bga_frames =
                     load_chart_bga_textures(&mut self.renderer, &active_play.running.session.chart);
@@ -630,11 +654,65 @@ impl WinitApp {
     }
 
     fn play_start_options(&self) -> PlayStartOptions {
+        let arrange_seed = match self.arrange_option {
+            ArrangeOption::Random => Some(crate::screens::play_session::generate_arrange_seed()),
+            _ => None,
+        };
         PlayStartOptions {
             autoplay: self.assist_option == AssistOption::Autoplay,
             gauge: Some(self.gauge_option),
             arrange: self.arrange_option,
+            arrange_seed,
             ..Default::default()
+        }
+    }
+
+    fn try_start_replay_for_chart(&mut self, chart_id: i64, slot: u8) -> bool {
+        let Some(sha) = self.boot.library_db.chart_sha256_by_chart_id(chart_id).ok().flatten()
+        else {
+            tracing::warn!(chart_id, "replay start failed: chart sha256 not found");
+            return false;
+        };
+        let Some(slot_record) = self.boot.score_db.replay_slot(sha, slot).ok().flatten() else {
+            tracing::info!(slot, "no replay saved for slot");
+            return false;
+        };
+        let abs_path = self.boot.profile_paths.root_dir.join(&slot_record.replay_path);
+        let replay_file = match load_replay_for_chart(&abs_path, sha) {
+            Ok(file) => file,
+            Err(error) => {
+                tracing::warn!(%error, path = %abs_path.display(), "replay load failed");
+                return false;
+            }
+        };
+        let player = bmz_gameplay::replay::ReplayPlayer {
+            events: replay_file.events.clone(),
+            next_index: 0,
+        };
+        let options = PlayStartOptions {
+            autoplay: false,
+            replay_player: Some(player),
+            chart_zero_time: TimeUs(0),
+            gauge: Some(self.gauge_option),
+            arrange: replay_file.arrange_option(),
+            arrange_seed: replay_file.arrange_seed,
+            arrange_pattern: replay_file.lane_shuffle_pattern.clone(),
+        };
+        self.start_chart_with_options(chart_id, options);
+        true
+    }
+
+    fn start_replay_for_selected(&mut self, slot: u8) -> bool {
+        let Some(chart_id) = self.currently_selected_chart_id() else {
+            return false;
+        };
+        self.try_start_replay_for_chart(chart_id, slot)
+    }
+
+    fn currently_selected_chart_id(&self) -> Option<i64> {
+        match self.select_items.get(self.selected_index)? {
+            SelectItem::Chart(row) => Some(row.chart.chart_id),
+            SelectItem::Folder { .. } => None,
         }
     }
 
@@ -1384,6 +1462,16 @@ fn physical_key_name(physical_key: PhysicalKey) -> Option<String> {
     }
 }
 
+fn digit_to_replay_slot(physical_key: PhysicalKey) -> Option<u8> {
+    match physical_key {
+        PhysicalKey::Code(KeyCode::Digit1) => Some(0),
+        PhysicalKey::Code(KeyCode::Digit2) => Some(1),
+        PhysicalKey::Code(KeyCode::Digit3) => Some(2),
+        PhysicalKey::Code(KeyCode::Digit4) => Some(3),
+        _ => None,
+    }
+}
+
 struct SelectKeyBindings {
     start: String,
     enter: Vec<String>,
@@ -1446,7 +1534,8 @@ impl SelectKeyBindings {
         let assist_str = kb_assist_str.as_deref().unwrap_or("?");
         let option_hint = format!(
             "F1 SELECT  F2 RELOAD  F3 RESULT  F4 PLAY   \
-             {start}+{arrange_str}:ARRANGE  {start}+{gauge_str}:GAUGE  {start}+{assist_str}:ASSIST"
+             {start}+{arrange_str}:ARRANGE  {start}+{gauge_str}:GAUGE  {start}+{assist_str}:ASSIST  \
+             {start}+1..4:REPLAY"
         );
 
         Self { start, enter, back, cycle_arrange, cycle_gauge, cycle_assist, key_hint, option_hint }

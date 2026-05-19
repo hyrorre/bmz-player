@@ -22,6 +22,22 @@ impl ArrangeOption {
             Self::Random => "RANDOM",
         }
     }
+
+    pub fn to_persistent_str(self) -> &'static str {
+        match self {
+            Self::Normal => "Normal",
+            Self::Mirror => "Mirror",
+            Self::Random => "Random",
+        }
+    }
+
+    pub fn from_persistent_str(value: &str) -> Self {
+        match value {
+            "Mirror" => Self::Mirror,
+            "Random" => Self::Random,
+            _ => Self::Normal,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

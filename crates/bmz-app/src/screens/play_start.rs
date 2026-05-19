@@ -23,6 +23,8 @@ pub struct PlayStartOptions {
     /// Override profile gauge type. None means use the profile default.
     pub gauge: Option<GaugeTypeConfig>,
     pub arrange: ArrangeOption,
+    pub arrange_seed: Option<i64>,
+    pub arrange_pattern: Option<Vec<u8>>,
 }
 
 pub struct StartedWinitPlaySession {
@@ -40,6 +42,8 @@ pub fn play_session_options_from_start(
         sample_rate: app_config.audio.sample_rate,
         gauge_override: start_options.gauge.map(gauge_type_from_config),
         arrange: start_options.arrange,
+        arrange_seed: start_options.arrange_seed,
+        arrange_pattern: start_options.arrange_pattern,
     }
 }
 

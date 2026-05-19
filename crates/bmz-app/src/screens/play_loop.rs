@@ -10,6 +10,7 @@ use crate::paths::ProfilePaths;
 use crate::screens::play_finish::{
     FinishedPlaySession, finish_session_result, finish_session_result_once,
 };
+use crate::screens::play_session::AppliedArrange;
 use crate::screens::play_snapshot::{BgaFrameCatalog, build_render_snapshot_with_bga_frames};
 use crate::storage::score_db::ScoreDatabase;
 
@@ -71,11 +72,18 @@ pub fn advance_play_screen_until_result(
     profile_paths: &ProfilePaths,
     replay_config: &ReplayConfig,
     played_at: i64,
+    applied_arrange: &AppliedArrange,
 ) -> Result<PlayAdvanceOutcome> {
     let frame = advance_play_screen(session, audio, None);
     if matches!(frame.state, PlayState::Finished | PlayState::Failed) {
-        let finished =
-            finish_session_result(score_db, profile_paths, replay_config, session, played_at)?;
+        let finished = finish_session_result(
+            score_db,
+            profile_paths,
+            replay_config,
+            session,
+            played_at,
+            applied_arrange,
+        )?;
         return Ok(PlayAdvanceOutcome::Finished { frame, finished });
     }
 
@@ -134,6 +142,7 @@ pub fn advance_running_play_session_until_result(
             replay_config,
             &running.session,
             played_at,
+            &running.applied_arrange,
         )?;
         pause_running_audio_after_finish(running);
         return Ok(PlayAdvanceOutcome::Finished { frame, finished });
@@ -252,6 +261,7 @@ mod tests {
             save_failed_runs: false,
             save_autoplay_runs: false,
             compress: false,
+            slot_rules: crate::config::profile_config::default_slot_rules(),
         };
 
         let outcome = advance_play_screen_until_result(
@@ -261,6 +271,7 @@ mod tests {
             &paths,
             &replay_config,
             1_700_000_200,
+            &AppliedArrange::default(),
         )
         .unwrap();
 

@@ -1,12 +1,13 @@
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use bmz_core::clear::{ClearType, GaugeType};
 use bmz_gameplay::result::PlayResult;
 use bmz_gameplay::score::ScoreState;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::common::configure_connection;
+use crate::config::profile_config::ReplaySlotRule;
 
 pub struct ScoreDatabase {
     conn: Connection,
@@ -70,6 +71,19 @@ pub struct BestScoreSummary {
 pub struct ReplaySlotSummary {
     pub chart_sha256: [u8; 32],
     pub replay_slots: [bool; 4],
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReplaySlotRecord {
+    pub chart_sha256: [u8; 32],
+    pub slot: u8,
+    pub rule: ReplaySlotRule,
+    pub replay_path: String,
+    pub played_at: i64,
+    pub ex_score: u32,
+    pub miss_count: u32,
+    pub max_combo: u32,
+    pub clear_rank: u8,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -163,29 +177,97 @@ impl ScoreDatabase {
         chart_sha256s: &[[u8; 32]],
     ) -> Result<Vec<ReplaySlotSummary>> {
         let mut out = Vec::new();
-        let mut stmt = self.conn.prepare(
-            "SELECT replay_path
-            FROM score_history
-            WHERE chart_sha256 = ?1 AND replay_path <> ''
-            ORDER BY played_at DESC, id DESC
-            LIMIT 4",
-        )?;
+        let mut stmt =
+            self.conn.prepare("SELECT slot FROM replay_slots WHERE chart_sha256 = ?1")?;
 
         for sha256 in chart_sha256s {
-            let paths = stmt
-                .query_map(params![sha256.as_slice()], |row| row.get::<_, String>(0))?
+            let slots: Vec<u8> = stmt
+                .query_map(params![sha256.as_slice()], |row| row.get::<_, u8>(0))?
                 .collect::<std::result::Result<Vec<_>, _>>()?;
-            if paths.is_empty() {
+            if slots.is_empty() {
                 continue;
             }
             let mut replay_slots = [false; 4];
-            for slot in replay_slots.iter_mut().take(paths.len()) {
-                *slot = true;
+            for slot in slots {
+                if (slot as usize) < replay_slots.len() {
+                    replay_slots[slot as usize] = true;
+                }
             }
             out.push(ReplaySlotSummary { chart_sha256: *sha256, replay_slots });
         }
 
         Ok(out)
+    }
+
+    pub fn replay_slot(
+        &self,
+        chart_sha256: [u8; 32],
+        slot: u8,
+    ) -> Result<Option<ReplaySlotRecord>> {
+        self.conn
+            .query_row(
+                "SELECT chart_sha256, slot, rule, replay_path, played_at, ex_score, miss_count, max_combo, clear_rank
+                 FROM replay_slots
+                 WHERE chart_sha256 = ?1 AND slot = ?2",
+                params![chart_sha256.as_slice(), slot],
+                replay_slot_record_from_row,
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    pub fn replay_slots_for_chart(
+        &self,
+        chart_sha256: [u8; 32],
+    ) -> Result<[Option<ReplaySlotRecord>; 4]> {
+        let mut stmt = self.conn.prepare(
+            "SELECT chart_sha256, slot, rule, replay_path, played_at, ex_score, miss_count, max_combo, clear_rank
+             FROM replay_slots
+             WHERE chart_sha256 = ?1",
+        )?;
+        let rows = stmt
+            .query_map(params![chart_sha256.as_slice()], replay_slot_record_from_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let mut out: [Option<ReplaySlotRecord>; 4] = [None, None, None, None];
+        for record in rows {
+            let slot = record.slot as usize;
+            if slot < out.len() {
+                out[slot] = Some(record);
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn upsert_replay_slot(&mut self, record: &ReplaySlotRecord) -> Result<()> {
+        if record.slot > 3 {
+            bail!("replay slot must be in 0..=3 (got {})", record.slot);
+        }
+        self.conn.execute(
+            "INSERT INTO replay_slots (
+                chart_sha256, slot, rule, replay_path, played_at,
+                ex_score, miss_count, max_combo, clear_rank
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            ON CONFLICT(chart_sha256, slot) DO UPDATE SET
+                rule = excluded.rule,
+                replay_path = excluded.replay_path,
+                played_at = excluded.played_at,
+                ex_score = excluded.ex_score,
+                miss_count = excluded.miss_count,
+                max_combo = excluded.max_combo,
+                clear_rank = excluded.clear_rank",
+            params![
+                record.chart_sha256.as_slice(),
+                record.slot,
+                record.rule.as_str(),
+                record.replay_path,
+                record.played_at,
+                record.ex_score,
+                record.miss_count,
+                record.max_combo,
+                record.clear_rank,
+            ],
+        )?;
+        Ok(())
     }
 
     pub fn recent_history(&self, limit: u32, offset: u32) -> Result<Vec<ScoreHistoryEntry>> {
@@ -225,6 +307,26 @@ fn best_score_summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Best
         max_combo: row.get(5)?,
         played_at: row.get(6)?,
         replay_path: row.get(7)?,
+    })
+}
+
+fn replay_slot_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ReplaySlotRecord> {
+    let sha256_blob: Vec<u8> = row.get(0)?;
+    let mut chart_sha256 = [0_u8; 32];
+    chart_sha256.copy_from_slice(&sha256_blob[..32]);
+    let rule_str: String = row.get(2)?;
+    let rule = ReplaySlotRule::from_str_opt(&rule_str).unwrap_or(ReplaySlotRule::Always);
+
+    Ok(ReplaySlotRecord {
+        chart_sha256,
+        slot: row.get(1)?,
+        rule,
+        replay_path: row.get(3)?,
+        played_at: row.get(4)?,
+        ex_score: row.get(5)?,
+        miss_count: row.get(6)?,
+        max_combo: row.get(7)?,
+        clear_rank: row.get(8)?,
     })
 }
 
@@ -538,30 +640,67 @@ mod tests {
         assert_eq!(scores[1].replay_path, "replay/one.bzr");
     }
 
+    fn sample_slot(slot: u8, ex_score: u32) -> ReplaySlotRecord {
+        ReplaySlotRecord {
+            chart_sha256: [1; 32],
+            slot,
+            rule: ReplaySlotRule::Always,
+            replay_path: format!("replay/{slot}.toml"),
+            played_at: 1_700_000_000 + slot as i64,
+            ex_score,
+            miss_count: 0,
+            max_combo: ex_score,
+            clear_rank: ClearType::Normal as u8,
+        }
+    }
+
     #[test]
-    fn replay_slots_for_charts_returns_recent_non_empty_replays() {
+    fn replay_slots_for_charts_reports_slot_presence_from_new_table() {
         let mut conn = Connection::open_in_memory().unwrap();
         configure_connection(&conn).unwrap();
         run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
         let mut db = ScoreDatabase { conn };
-
-        let mut empty_replay = record(10, ClearType::Normal);
-        empty_replay.chart_sha256 = [1; 32];
-        empty_replay.played_at = 1_700_000_000;
-        db.insert_score(&empty_replay).unwrap();
-        for index in 0..5 {
-            let mut with_replay = record(20 + index, ClearType::Normal);
-            with_replay.chart_sha256 = [1; 32];
-            with_replay.played_at = 1_700_000_010 + index as i64;
-            with_replay.replay_path = format!("replay/{index}.toml");
-            db.insert_score(&with_replay).unwrap();
-        }
+        db.upsert_replay_slot(&sample_slot(0, 10)).unwrap();
+        db.upsert_replay_slot(&sample_slot(2, 30)).unwrap();
 
         let slots = db.replay_slots_for_charts(&[[2; 32], [1; 32]]).unwrap();
 
         assert_eq!(slots.len(), 1);
         assert_eq!(slots[0].chart_sha256, [1; 32]);
-        assert_eq!(slots[0].replay_slots, [true, true, true, true]);
+        assert_eq!(slots[0].replay_slots, [true, false, true, false]);
+    }
+
+    #[test]
+    fn upsert_replay_slot_overwrites_same_slot() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut db = ScoreDatabase { conn };
+        db.upsert_replay_slot(&sample_slot(0, 10)).unwrap();
+        let mut updated = sample_slot(0, 99);
+        updated.replay_path = "replay/updated.toml".to_string();
+        db.upsert_replay_slot(&updated).unwrap();
+
+        let record = db.replay_slot([1; 32], 0).unwrap().unwrap();
+        assert_eq!(record.ex_score, 99);
+        assert_eq!(record.replay_path, "replay/updated.toml");
+    }
+
+    #[test]
+    fn replay_slots_for_chart_returns_all_four_slots() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut db = ScoreDatabase { conn };
+        db.upsert_replay_slot(&sample_slot(0, 10)).unwrap();
+        db.upsert_replay_slot(&sample_slot(3, 30)).unwrap();
+
+        let slots = db.replay_slots_for_chart([1; 32]).unwrap();
+
+        assert!(slots[0].is_some());
+        assert!(slots[1].is_none());
+        assert!(slots[2].is_none());
+        assert_eq!(slots[3].as_ref().unwrap().ex_score, 30);
     }
 
     #[test]

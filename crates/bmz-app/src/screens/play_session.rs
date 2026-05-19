@@ -35,12 +35,22 @@ pub struct PlaySessionOptions {
     pub sample_rate: u32,
     pub gauge_override: Option<GaugeType>,
     pub arrange: ArrangeOption,
+    pub arrange_seed: Option<i64>,
+    pub arrange_pattern: Option<Vec<u8>>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AppliedArrange {
+    pub arrange: ArrangeOption,
+    pub seed: Option<i64>,
+    pub pattern: Option<Vec<u8>>,
 }
 
 pub struct PreparedPlaySession {
     pub session: GameSession,
     pub audio: AudioEngine,
     pub sample_report: Vec<LoadedSampleReport>,
+    pub applied_arrange: AppliedArrange,
 }
 
 impl Default for PlaySessionOptions {
@@ -51,6 +61,8 @@ impl Default for PlaySessionOptions {
             sample_rate: 48_000,
             gauge_override: None,
             arrange: ArrangeOption::Normal,
+            arrange_seed: None,
+            arrange_pattern: None,
         }
     }
 }
@@ -237,30 +249,62 @@ pub fn load_prepared_play_session_for_chart_with_input_backend(
     let import = import_bms_chart(std::path::Path::new(&path), None)
         .with_context(|| format!("failed to import chart file: {path}"))?;
     let mut chart = import.chart;
-    apply_arrange(&mut chart, options.arrange);
+    let applied_arrange = apply_arrange(
+        &mut chart,
+        options.arrange,
+        options.arrange_seed,
+        options.arrange_pattern.as_deref(),
+    );
     let chart = Arc::new(chart);
     let mut loader = WavSampleLoader;
     let (audio, sample_report) =
         build_audio_engine_for_chart(&chart, options.sample_rate, &mut loader);
     let session = build_game_session_with_input_backend(chart, profile, options, input_backend);
 
-    Ok(PreparedPlaySession { session, audio, sample_report })
+    Ok(PreparedPlaySession { session, audio, sample_report, applied_arrange })
 }
 
-fn apply_arrange(chart: &mut PlayableChart, arrange: ArrangeOption) {
+pub fn generate_arrange_seed() -> i64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as i64).unwrap_or(12345)
+}
+
+pub fn apply_arrange(
+    chart: &mut PlayableChart,
+    arrange: ArrangeOption,
+    seed: Option<i64>,
+    pattern: Option<&[u8]>,
+) -> AppliedArrange {
+    if let Some(perm) = pattern {
+        let perm_usize: Vec<usize> = perm.iter().map(|&i| i as usize).collect();
+        apply_lane_permutation(chart, &perm_usize);
+        return AppliedArrange { arrange, seed, pattern: Some(perm.to_vec()) };
+    }
+
     let key_mode = chart.metadata.key_mode;
-    let perm: Vec<usize> = match arrange {
-        ArrangeOption::Normal => return,
-        ArrangeOption::Mirror => mirror_permutation(key_mode),
-        ArrangeOption::Random => {
-            let seed = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_nanos() as u64)
-                .unwrap_or(12345);
-            random_lane_permutation(seed, key_mode)
+    match arrange {
+        ArrangeOption::Normal => {
+            AppliedArrange { arrange: ArrangeOption::Normal, seed: None, pattern: None }
         }
-    };
-    apply_lane_permutation(chart, &perm);
+        ArrangeOption::Mirror => {
+            let perm = mirror_permutation(key_mode);
+            apply_lane_permutation(chart, &perm);
+            AppliedArrange {
+                arrange: ArrangeOption::Mirror,
+                seed: None,
+                pattern: Some(perm.iter().map(|&i| i as u8).collect()),
+            }
+        }
+        ArrangeOption::Random => {
+            let used_seed = seed.unwrap_or_else(generate_arrange_seed);
+            let perm = random_lane_permutation(used_seed as u64, key_mode);
+            apply_lane_permutation(chart, &perm);
+            AppliedArrange {
+                arrange: ArrangeOption::Random,
+                seed: Some(used_seed),
+                pattern: Some(perm.iter().map(|&i| i as u8).collect()),
+            }
+        }
+    }
 }
 
 fn mirror_permutation(key_mode: KeyMode) -> Vec<usize> {

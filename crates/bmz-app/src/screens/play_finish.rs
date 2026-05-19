@@ -4,6 +4,7 @@ use bmz_gameplay::session::{GameSession, PlayState};
 
 use crate::config::profile_config::ReplayConfig;
 use crate::paths::ProfilePaths;
+use crate::screens::play_session::AppliedArrange;
 use crate::screens::result_model::ResultSummary;
 use crate::storage::play_result::{StorePlayResultRequest, StoredPlayResult, store_play_result};
 use crate::storage::score_db::ScoreDatabase;
@@ -31,8 +32,17 @@ pub fn store_session_result(
     replay_config: &ReplayConfig,
     session: &GameSession,
     played_at: i64,
+    applied_arrange: &AppliedArrange,
 ) -> Result<StoredPlayResult> {
-    Ok(finish_session_result(score_db, profile_paths, replay_config, session, played_at)?.stored)
+    Ok(finish_session_result(
+        score_db,
+        profile_paths,
+        replay_config,
+        session,
+        played_at,
+        applied_arrange,
+    )?
+    .stored)
 }
 
 pub fn finish_session_result(
@@ -41,9 +51,13 @@ pub fn finish_session_result(
     replay_config: &ReplayConfig,
     session: &GameSession,
     played_at: i64,
+    applied_arrange: &AppliedArrange,
 ) -> Result<FinishedPlaySession> {
     ensure_storable_state(session.state)?;
     let result = play_result_from_session(session);
+    let arrange = applied_arrange.arrange;
+    let arrange_seed = applied_arrange.seed;
+    let arrange_pattern = applied_arrange.pattern.clone();
     let stored = store_play_result(
         score_db,
         profile_paths,
@@ -51,10 +65,13 @@ pub fn finish_session_result(
         &result,
         StorePlayResultRequest {
             played_at,
-            random_seed: None,
+            random_seed: arrange_seed,
             gauge_option: String::new(),
             assist_mask: 0,
             replay_events: session.replay_recorder.events.clone(),
+            arrange,
+            arrange_seed,
+            arrange_pattern,
         },
     )?;
     let mut summary = ResultSummary::from_play_result(&result, &stored, &session.chart.metadata);
@@ -78,13 +95,20 @@ pub fn finish_session_result_once(
     replay_config: &ReplayConfig,
     session: &GameSession,
     played_at: i64,
+    applied_arrange: &AppliedArrange,
 ) -> Result<FinishedPlaySession> {
     if let Some(finished) = cached.clone() {
         return Ok(finished);
     }
 
-    let finished =
-        finish_session_result(score_db, profile_paths, replay_config, session, played_at)?;
+    let finished = finish_session_result(
+        score_db,
+        profile_paths,
+        replay_config,
+        session,
+        played_at,
+        applied_arrange,
+    )?;
     *cached = Some(finished.clone());
     Ok(finished)
 }
@@ -151,6 +175,7 @@ mod tests {
             save_failed_runs: true,
             save_autoplay_runs: false,
             compress: false,
+            slot_rules: crate::config::profile_config::default_slot_rules(),
         };
         let mut session = session();
         session.replay_recorder.record(bmz_core::input::InputEvent {
@@ -160,9 +185,15 @@ mod tests {
             source: InputSource::Human,
         });
 
-        let stored =
-            store_session_result(&mut score_db, &paths, &replay_config, &session, 1_700_000_100)
-                .unwrap();
+        let stored = store_session_result(
+            &mut score_db,
+            &paths,
+            &replay_config,
+            &session,
+            1_700_000_100,
+            &AppliedArrange::default(),
+        )
+        .unwrap();
 
         assert!(stored.score_history_id > 0);
         assert!(!stored.replay_path.is_empty());
@@ -189,12 +220,19 @@ mod tests {
             save_failed_runs: true,
             save_autoplay_runs: false,
             compress: false,
+            slot_rules: crate::config::profile_config::default_slot_rules(),
         };
         let session = session();
 
-        let finished =
-            finish_session_result(&mut score_db, &paths, &replay_config, &session, 1_700_000_102)
-                .unwrap();
+        let finished = finish_session_result(
+            &mut score_db,
+            &paths,
+            &replay_config,
+            &session,
+            1_700_000_102,
+            &AppliedArrange::default(),
+        )
+        .unwrap();
 
         assert_eq!(finished.summary.score_history_id, finished.stored.score_history_id);
         assert_eq!(finished.summary.clear_type, finished.result.clear_type);
@@ -220,6 +258,7 @@ mod tests {
             save_failed_runs: true,
             save_autoplay_runs: false,
             compress: false,
+            slot_rules: crate::config::profile_config::default_slot_rules(),
         };
         let session = session();
         let mut cached = None;
@@ -231,6 +270,7 @@ mod tests {
             &replay_config,
             &session,
             1_700_000_103,
+            &AppliedArrange::default(),
         )
         .unwrap();
         let second = finish_session_result_once(
@@ -240,6 +280,7 @@ mod tests {
             &replay_config,
             &session,
             1_700_000_104,
+            &AppliedArrange::default(),
         )
         .unwrap();
 
@@ -267,12 +308,19 @@ mod tests {
             save_failed_runs: true,
             save_autoplay_runs: false,
             compress: false,
+            slot_rules: crate::config::profile_config::default_slot_rules(),
         };
         let mut session = session();
         session.state = PlayState::Playing;
 
-        let result =
-            store_session_result(&mut score_db, &paths, &replay_config, &session, 1_700_000_101);
+        let result = store_session_result(
+            &mut score_db,
+            &paths,
+            &replay_config,
+            &session,
+            1_700_000_101,
+            &AppliedArrange::default(),
+        );
 
         assert!(result.is_err());
 

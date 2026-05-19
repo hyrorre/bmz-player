@@ -6,13 +6,28 @@ use bmz_core::replay::ReplayEvent;
 use bmz_gameplay::replay::ReplayPlayer;
 use serde::{Deserialize, Serialize};
 
+use crate::select_options::ArrangeOption;
+
+pub const REPLAY_FILE_VERSION: u32 = 2;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReplayFile {
     pub version: u32,
     pub chart_sha256: String,
     pub played_at: i64,
+    #[serde(default)]
     pub random_seed: Option<i64>,
+    #[serde(default = "default_arrange")]
+    pub arrange: String,
+    #[serde(default)]
+    pub arrange_seed: Option<i64>,
+    #[serde(default)]
+    pub lane_shuffle_pattern: Option<Vec<u8>>,
     pub events: Vec<ReplayEvent>,
+}
+
+fn default_arrange() -> String {
+    "Normal".to_string()
 }
 
 impl ReplayFile {
@@ -20,9 +35,25 @@ impl ReplayFile {
         chart_sha256: [u8; 32],
         played_at: i64,
         random_seed: Option<i64>,
+        arrange: ArrangeOption,
+        arrange_seed: Option<i64>,
+        lane_shuffle_pattern: Option<Vec<u8>>,
         events: Vec<ReplayEvent>,
     ) -> Self {
-        Self { version: 1, chart_sha256: hex_encode(&chart_sha256), played_at, random_seed, events }
+        Self {
+            version: REPLAY_FILE_VERSION,
+            chart_sha256: hex_encode(&chart_sha256),
+            played_at,
+            random_seed,
+            arrange: arrange.to_persistent_str().to_string(),
+            arrange_seed,
+            lane_shuffle_pattern,
+            events,
+        }
+    }
+
+    pub fn arrange_option(&self) -> ArrangeOption {
+        ArrangeOption::from_persistent_str(&self.arrange)
     }
 }
 
@@ -52,15 +83,24 @@ pub fn load_replay_player(path: &Path) -> Result<ReplayPlayer> {
 }
 
 pub fn load_replay_player_for_chart(path: &Path, chart_sha256: [u8; 32]) -> Result<ReplayPlayer> {
+    let replay = load_replay_for_chart(path, chart_sha256)?;
+    Ok(ReplayPlayer { events: replay.events, next_index: 0 })
+}
+
+pub fn load_replay_for_chart(path: &Path, chart_sha256: [u8; 32]) -> Result<ReplayFile> {
     let replay = load_replay(path)?;
     if replay.chart_sha256_bytes()? != chart_sha256 {
         bail!("replay chart hash does not match selected chart");
     }
-    Ok(ReplayPlayer { events: replay.events, next_index: 0 })
+    Ok(replay)
 }
 
 pub fn replay_file_name(chart_sha256: [u8; 32], played_at: i64) -> String {
     format!("{}-{played_at}.toml", hex_encode(&chart_sha256))
+}
+
+pub fn replay_slot_file_name(chart_sha256: [u8; 32], slot: u8) -> String {
+    format!("{}-slot{slot}.toml", hex_encode(&chart_sha256))
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
@@ -119,13 +159,16 @@ mod tests {
             [1; 32],
             1_700_000_050,
             Some(123),
+            ArrangeOption::Normal,
+            None,
+            None,
             vec![ReplayEvent { lane: Lane::Key1, kind: InputKind::Press, time: TimeUs(1_000) }],
         );
 
         save_replay(&path, &replay).unwrap();
         let loaded = load_replay(&path).unwrap();
 
-        assert_eq!(loaded.version, 1);
+        assert_eq!(loaded.version, REPLAY_FILE_VERSION);
         assert_eq!(
             loaded.chart_sha256,
             "0101010101010101010101010101010101010101010101010101010101010101"
@@ -144,6 +187,14 @@ mod tests {
     }
 
     #[test]
+    fn replay_slot_file_name_uses_hash_and_slot_index() {
+        assert_eq!(
+            replay_slot_file_name([0xab; 32], 2),
+            "abababababababababababababababababababababababababababababababab-slot2.toml"
+        );
+    }
+
+    #[test]
     fn load_replay_player_builds_replay_player() {
         let path = std::env::temp_dir().join(format!(
             "bmz-replay-player-{}-{}.toml",
@@ -153,6 +204,9 @@ mod tests {
         let replay = ReplayFile::new(
             [2; 32],
             1_700_000_051,
+            None,
+            ArrangeOption::Normal,
+            None,
             None,
             vec![ReplayEvent { lane: Lane::Key2, kind: InputKind::Release, time: TimeUs(2_000) }],
         );
@@ -173,11 +227,94 @@ mod tests {
             std::process::id(),
             TimeUs(44).0
         ));
-        let replay = ReplayFile::new([2; 32], 1_700_000_052, None, Vec::new());
+        let replay = ReplayFile::new(
+            [2; 32],
+            1_700_000_052,
+            None,
+            ArrangeOption::Normal,
+            None,
+            None,
+            Vec::new(),
+        );
         save_replay(&path, &replay).unwrap();
 
         assert!(load_replay_player_for_chart(&path, [3; 32]).is_err());
         assert!(load_replay_player_for_chart(&path, [2; 32]).is_ok());
+
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn replay_file_round_trip_with_arrange_random() {
+        let path = std::env::temp_dir().join(format!(
+            "bmz-replay-arrange-{}-{}.toml",
+            std::process::id(),
+            TimeUs(45).0
+        ));
+        let pattern = vec![0, 3, 2, 1, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+        let replay = ReplayFile::new(
+            [5; 32],
+            1_700_000_055,
+            Some(7777),
+            ArrangeOption::Random,
+            Some(7777),
+            Some(pattern.clone()),
+            Vec::new(),
+        );
+
+        save_replay(&path, &replay).unwrap();
+        let loaded = load_replay(&path).unwrap();
+
+        assert_eq!(loaded.arrange, "Random");
+        assert_eq!(loaded.arrange_option(), ArrangeOption::Random);
+        assert_eq!(loaded.arrange_seed, Some(7777));
+        assert_eq!(loaded.lane_shuffle_pattern, Some(pattern));
+
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn replay_file_v1_back_compat_defaults_arrange_to_normal() {
+        let v1_toml = r#"
+version = 1
+chart_sha256 = "0101010101010101010101010101010101010101010101010101010101010101"
+played_at = 1700000060
+events = []
+"#;
+
+        let loaded: ReplayFile = toml::from_str(v1_toml).unwrap();
+
+        assert_eq!(loaded.version, 1);
+        assert_eq!(loaded.arrange, "Normal");
+        assert_eq!(loaded.arrange_seed, None);
+        assert_eq!(loaded.lane_shuffle_pattern, None);
+        assert_eq!(loaded.random_seed, None);
+        assert_eq!(loaded.events.len(), 0);
+    }
+
+    #[test]
+    fn load_replay_for_chart_returns_full_replay() {
+        let path = std::env::temp_dir().join(format!(
+            "bmz-replay-load-full-{}-{}.toml",
+            std::process::id(),
+            TimeUs(46).0
+        ));
+        let pattern = vec![1, 0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+        let replay = ReplayFile::new(
+            [9; 32],
+            1_700_000_070,
+            Some(42),
+            ArrangeOption::Mirror,
+            Some(42),
+            Some(pattern.clone()),
+            Vec::new(),
+        );
+        save_replay(&path, &replay).unwrap();
+
+        let loaded = load_replay_for_chart(&path, [9; 32]).unwrap();
+
+        assert_eq!(loaded.arrange, "Mirror");
+        assert_eq!(loaded.lane_shuffle_pattern, Some(pattern));
 
         std::fs::remove_file(path).unwrap();
     }

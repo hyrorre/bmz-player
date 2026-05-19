@@ -138,6 +138,26 @@ impl LibraryDatabase {
             .map_err(Into::into)
     }
 
+    pub fn chart_sha256_by_chart_id(&self, chart_id: i64) -> Result<Option<[u8; 32]>> {
+        let result: Option<Vec<u8>> = self
+            .conn
+            .query_row(
+                "SELECT sha256 FROM charts WHERE id = ?1 LIMIT 1",
+                params![chart_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(result.and_then(|blob| {
+            if blob.len() == 32 {
+                let mut out = [0_u8; 32];
+                out.copy_from_slice(&blob);
+                Some(out)
+            } else {
+                None
+            }
+        }))
+    }
+
     pub fn chart_file_id_by_path(&self, path: &Path) -> Result<Option<i64>> {
         self.conn
             .query_row(
@@ -260,7 +280,13 @@ impl LibraryDatabase {
     ) -> Result<i64> {
         let tx = self.conn.transaction()?;
         let chart_file_id = Self::write_failed_chart(
-            &tx, root_id, file_path, file_size, modified_at, scanned_at, message,
+            &tx,
+            root_id,
+            file_path,
+            file_size,
+            modified_at,
+            scanned_at,
+            message,
         )?;
         tx.commit()?;
         Ok(chart_file_id)

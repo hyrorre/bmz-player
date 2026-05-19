@@ -214,6 +214,17 @@ pub fn process_human_inputs(session: &mut GameSession) -> Vec<JudgementEvent> {
     judgements
 }
 
+/// リプレイ再生中は人間入力を判定に渡さない。視覚エフェクト用に recent_inputs だけ更新する。
+pub fn drain_human_inputs(session: &mut GameSession) {
+    let ctx = InputTimingContext {
+        audio_clock: &session.audio_clock,
+        offsets: session.offsets,
+        timestamp_anchor: session.input_timestamp_anchor,
+    };
+    let inputs = session.input_system.collect_game_inputs(&ctx);
+    update_recent_inputs(session, &inputs, session.audio_clock.now());
+}
+
 pub fn process_replay_inputs(session: &mut GameSession, audio_now: TimeUs) -> Vec<JudgementEvent> {
     let Some(player) = &mut session.replay_player else {
         return Vec::new();
@@ -268,9 +279,13 @@ pub fn advance_session_frame(
             audio,
         );
 
-        judgements.extend(process_human_inputs(session));
-        judgements.extend(process_replay_inputs(session, times.audio_now));
-        judgements.extend(process_autoplay_inputs(session, times.audio_now));
+        if session.replay_player.is_some() {
+            drain_human_inputs(session);
+            judgements.extend(process_replay_inputs(session, times.audio_now));
+        } else {
+            judgements.extend(process_human_inputs(session));
+            judgements.extend(process_autoplay_inputs(session, times.audio_now));
+        }
         judgements.extend(process_misses(session, times.audio_now));
         schedule_keysounds(session, &judgements, audio);
         update_recent_judgements(session, &judgements, times.render_now);
@@ -368,6 +383,49 @@ mod tests {
         update_recent_judgements(&mut session, &[], TimeUs(JUDGEMENT_DISPLAY_US + 1));
 
         assert!(session.recent_judgements.is_empty());
+    }
+
+    #[test]
+    fn advance_session_frame_skips_human_inputs_when_replay_active() {
+        use crate::input::backend::{
+            BufferedInputBackend, DeviceId, DeviceInputEvent, DeviceTimestamp, PhysicalControl,
+        };
+        use crate::input::binding::{BindingEntry, LaneBinding};
+
+        let chart = chart_with_keysound();
+        let mut session = session_with_autoplay(chart);
+        // 入力バインディングを設定して Z キーを Key1 にマップ
+        let mut backend = BufferedInputBackend::default();
+        backend.push(DeviceInputEvent {
+            device: DeviceId(1),
+            control: PhysicalControl::KeyboardKey("Z".to_string()),
+            kind: InputKind::Press,
+            timestamp: DeviceTimestamp::Unknown,
+        });
+        session.input_system = InputSystem {
+            backend: Box::new(backend),
+            translator: Box::new(DefaultInputTranslator {
+                binding: LaneBinding {
+                    entries: vec![BindingEntry {
+                        device: None,
+                        control: PhysicalControl::KeyboardKey("Z".to_string()),
+                        lane: Lane::Key1,
+                    }],
+                },
+            }),
+        };
+        session.replay_player = Some(crate::replay::ReplayPlayer::default());
+        session.autoplay = None;
+        let mut audio = TestAudio::default();
+
+        advance_session_frame(&mut session, &mut audio);
+
+        // 人間入力は judge にも recorder にも渡らない
+        assert_eq!(session.score.judges.fast_pgreat + session.score.judges.slow_pgreat, 0);
+        assert_eq!(session.score.judges.fast_great + session.score.judges.slow_great, 0);
+        assert!(session.replay_recorder.events.is_empty());
+        // recent_inputs だけは Press が反映される (視覚エフェクト用)
+        assert_eq!(session.recent_inputs.len(), 1);
     }
 
     #[test]

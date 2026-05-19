@@ -12,7 +12,7 @@ use bmz_gameplay::session::GameSession;
 
 use crate::config::app_config::{AudioBackend, AudioConfig};
 use crate::screens::play_finish::FinishedPlaySession;
-use crate::screens::play_session::PreparedPlaySession;
+use crate::screens::play_session::{AppliedArrange, PreparedPlaySession};
 use crate::screens::play_snapshot::BgaFrameCatalog;
 use crate::video_bga::ActiveVideoBgaDecoder;
 
@@ -29,6 +29,7 @@ pub struct RunningPlaySession {
     pub audio_paused_after_finish: bool,
     /// プレイ開始時に DB から取得したベスト EX スコア。未取得なら None。
     pub best_ex_score: Option<u32>,
+    pub applied_arrange: AppliedArrange,
     pub bga_frames: BgaFrameCatalog,
     pub video_bga_decoders: HashMap<BgaAssetId, ActiveVideoBgaDecoder>,
     pub failed_video_bga: HashSet<BgaAssetId>,
@@ -86,6 +87,7 @@ pub fn open_prepared_play_audio(
         finished: None,
         audio_paused_after_finish: false,
         best_ex_score: None,
+        applied_arrange: prepared.applied_arrange,
         bga_frames: BgaFrameCatalog::new(),
         video_bga_decoders: HashMap::new(),
         failed_video_bga: HashSet::new(),

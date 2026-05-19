@@ -4,6 +4,7 @@ pub const BOOT_PLAY_SAMPLE_ARG: &str = "--boot-play-sample";
 pub const AUTOPLAY_ON_START_ARG: &str = "--autoplay-on-start";
 pub const SMOKE_EXIT_AFTER_FRAMES_ARG: &str = "--smoke-exit-after-frames";
 pub const SMOKE_EXIT_ON_RESULT_ARG: &str = "--smoke-exit-on-result";
+pub const BOOT_REPLAY_ARG: &str = "--boot-replay";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
@@ -79,6 +80,8 @@ pub struct AppOptions {
     pub autoplay_on_start: bool,
     pub smoke_exit_after_frames: Option<u32>,
     pub smoke_exit_on_result: bool,
+    /// `--boot-replay <SLOT>` で指定された 0-based のスロット index。
+    pub boot_replay_slot: Option<u8>,
 }
 
 impl AppOptions {
@@ -96,6 +99,10 @@ impl AppOptions {
                 options.smoke_exit_after_frames = Some(parse_smoke_exit_after_frames_value(value)?);
                 continue;
             }
+            if let Some(value) = arg.strip_prefix("--boot-replay=") {
+                options.boot_replay_slot = Some(parse_boot_replay_slot(value)?);
+                continue;
+            }
 
             match arg {
                 BOOT_PLAY_SAMPLE_ARG => options.boot_play_sample = true,
@@ -108,6 +115,12 @@ impl AppOptions {
                     };
                     options.smoke_exit_after_frames =
                         Some(parse_smoke_exit_after_frames_value(value.as_ref())?);
+                }
+                BOOT_REPLAY_ARG => {
+                    let Some(value) = args.next() else {
+                        bail!("{BOOT_REPLAY_ARG} requires a slot number (1..4)");
+                    };
+                    options.boot_replay_slot = Some(parse_boot_replay_slot(value.as_ref())?);
                 }
                 _ => bail!("unknown argument: {arg}"),
             }
@@ -126,7 +139,7 @@ where
 }
 
 pub fn app_help_text() -> &'static str {
-    "bmz-app\n\nUsage:\n  bmz-app [OPTIONS]\n  bmz-app table <SUBCOMMAND>\n  bmz-app songs <SUBCOMMAND>\n\nOptions:\n  --boot-play-sample              Start the bundled sample chart on boot\n  --autoplay-on-start             Enable autoplay for started charts\n  --smoke-exit-after-frames <N>   Exit after N rendered frames, clamped to 1 or more\n  --smoke-exit-on-result          Exit when the app reaches the result screen\n  -h, --help                      Print this help\n\nTable subcommands:\n  table add <URL>   Add a difficulty table source and fetch it\n  table list        List all stored difficulty tables\n  table fetch       Fetch/update all configured difficulty tables\n\nSongs subcommands:\n  songs add <PATH> [--no-recursive] [--disabled]   Add a song root directory\n  songs list                                        List configured song roots\n  songs reload                                      Scan all song roots and update the library\n\nExamples:\n  cargo run -p bmz-app -- --boot-play-sample --smoke-exit-after-frames 3\n  cargo run -p bmz-app -- table add https://example.com/table.html\n  cargo run -p bmz-app -- table list\n  cargo run -p bmz-app -- songs add /path/to/bms\n  cargo run -p bmz-app -- songs list\n  cargo run -p bmz-app -- songs reload"
+    "bmz-app\n\nUsage:\n  bmz-app [OPTIONS]\n  bmz-app table <SUBCOMMAND>\n  bmz-app songs <SUBCOMMAND>\n\nOptions:\n  --boot-play-sample              Start the bundled sample chart on boot\n  --autoplay-on-start             Enable autoplay for started charts\n  --boot-replay <1..4>            Start the bundled sample chart in replay mode using slot N\n  --smoke-exit-after-frames <N>   Exit after N rendered frames, clamped to 1 or more\n  --smoke-exit-on-result          Exit when the app reaches the result screen\n  -h, --help                      Print this help\n\nTable subcommands:\n  table add <URL>   Add a difficulty table source and fetch it\n  table list        List all stored difficulty tables\n  table fetch       Fetch/update all configured difficulty tables\n\nSongs subcommands:\n  songs add <PATH> [--no-recursive] [--disabled]   Add a song root directory\n  songs list                                        List configured song roots\n  songs reload                                      Scan all song roots and update the library\n\nExamples:\n  cargo run -p bmz-app -- --boot-play-sample --smoke-exit-after-frames 3\n  cargo run -p bmz-app -- --boot-play-sample --boot-replay 1 --smoke-exit-on-result\n  cargo run -p bmz-app -- table add https://example.com/table.html\n  cargo run -p bmz-app -- table list\n  cargo run -p bmz-app -- songs add /path/to/bms\n  cargo run -p bmz-app -- songs list\n  cargo run -p bmz-app -- songs reload"
 }
 
 fn parse_smoke_exit_after_frames_value(value: &str) -> Result<u32> {
@@ -139,6 +152,19 @@ fn parse_smoke_exit_after_frames_value(value: &str) -> Result<u32> {
         format!("invalid frame count for {SMOKE_EXIT_AFTER_FRAMES_ARG}: {value}")
     })?;
     Ok(frames.max(1))
+}
+
+fn parse_boot_replay_slot(value: &str) -> Result<u8> {
+    let value = value.trim();
+    if value.is_empty() {
+        bail!("{BOOT_REPLAY_ARG} requires a slot number (1..4)");
+    }
+    let n: u8 =
+        value.parse().with_context(|| format!("invalid slot for {BOOT_REPLAY_ARG}: {value}"))?;
+    if !(1..=4).contains(&n) {
+        bail!("{BOOT_REPLAY_ARG} slot must be 1..4 (got {n})");
+    }
+    Ok(n - 1)
 }
 
 #[cfg(test)]
@@ -268,5 +294,34 @@ mod tests {
         assert!(help.contains("songs add"));
         assert!(help.contains("songs list"));
         assert!(help.contains("songs reload"));
+    }
+
+    #[test]
+    fn app_options_parse_boot_replay_slot_arg() {
+        let options = AppOptions::parse_args(["--boot-replay", "2"]).unwrap();
+        assert_eq!(options.boot_replay_slot, Some(1));
+
+        let options = AppOptions::parse_args(["--boot-replay", "4"]).unwrap();
+        assert_eq!(options.boot_replay_slot, Some(3));
+    }
+
+    #[test]
+    fn app_options_parse_boot_replay_equals_form() {
+        let options = AppOptions::parse_args(["--boot-replay=1"]).unwrap();
+        assert_eq!(options.boot_replay_slot, Some(0));
+    }
+
+    #[test]
+    fn app_options_reject_boot_replay_out_of_range() {
+        assert!(AppOptions::parse_args(["--boot-replay", "0"]).is_err());
+        assert!(AppOptions::parse_args(["--boot-replay", "5"]).is_err());
+        assert!(AppOptions::parse_args(["--boot-replay"]).is_err());
+        assert!(AppOptions::parse_args(["--boot-replay", "abc"]).is_err());
+    }
+
+    #[test]
+    fn help_text_lists_boot_replay() {
+        let help = app_help_text();
+        assert!(help.contains("--boot-replay"));
     }
 }

@@ -154,8 +154,11 @@ mod tests {
             score,
             autoplay: false,
         };
-        let stored =
-            StoredPlayResult { score_history_id: 9, replay_path: "replay/test.toml".to_string() };
+        let stored = StoredPlayResult {
+            score_history_id: 9,
+            replay_path: "replay/test.toml".to_string(),
+            slot_paths: [None, None, None, None],
+        };
         let metadata = ChartMetadata { title: "Test".to_string(), ..ChartMetadata::default() };
 
         let summary = ResultSummary::from_play_result(&result, &stored, &metadata);

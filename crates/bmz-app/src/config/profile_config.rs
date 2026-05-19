@@ -212,12 +212,55 @@ pub enum RivalSourceConfig {
     Ir,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ReplaySlotRule {
+    Always,
+    ScoreUpdate,
+    MissCountUpdate,
+    MaxComboUpdate,
+    ClearUpdate,
+}
+
+impl ReplaySlotRule {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Always => "Always",
+            Self::ScoreUpdate => "ScoreUpdate",
+            Self::MissCountUpdate => "MissCountUpdate",
+            Self::MaxComboUpdate => "MaxComboUpdate",
+            Self::ClearUpdate => "ClearUpdate",
+        }
+    }
+
+    pub fn from_str_opt(value: &str) -> Option<Self> {
+        match value {
+            "Always" => Some(Self::Always),
+            "ScoreUpdate" => Some(Self::ScoreUpdate),
+            "MissCountUpdate" => Some(Self::MissCountUpdate),
+            "MaxComboUpdate" => Some(Self::MaxComboUpdate),
+            "ClearUpdate" => Some(Self::ClearUpdate),
+            _ => None,
+        }
+    }
+}
+
+pub fn default_slot_rules() -> [ReplaySlotRule; 4] {
+    [
+        ReplaySlotRule::Always,
+        ReplaySlotRule::ScoreUpdate,
+        ReplaySlotRule::MissCountUpdate,
+        ReplaySlotRule::MaxComboUpdate,
+    ]
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReplayConfig {
     pub auto_save: bool,
     pub save_failed_runs: bool,
     pub save_autoplay_runs: bool,
     pub compress: bool,
+    #[serde(default = "default_slot_rules")]
+    pub slot_rules: [ReplaySlotRule; 4],
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -321,6 +364,7 @@ impl ProfileConfig {
                 save_failed_runs: false,
                 save_autoplay_runs: false,
                 compress: false,
+                slot_rules: default_slot_rules(),
             },
             ui: UiConfig {
                 language: "ja".to_string(),

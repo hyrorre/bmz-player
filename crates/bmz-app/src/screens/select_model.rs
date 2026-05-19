@@ -264,16 +264,25 @@ mod tests {
     }
 
     #[test]
-    fn load_select_items_in_folder_attaches_replay_slots_by_recent_history() {
+    fn load_select_items_in_folder_attaches_replay_slots_from_replay_slots_table() {
         let (mut library_db, mut score_db) = open_in_memory_dbs();
         let alpha = chart("Alpha");
 
         library_db.upsert_chart_import(&record_for_chart("/songs/alpha.bms", &alpha)).unwrap();
-        for index in 0..5 {
-            let mut score = score_for_chart(alpha.identity.file_sha256);
-            score.played_at = 1_700_000_030 + index;
-            score.replay_path = format!("replay/{index}.toml");
-            score_db.insert_score(&score).unwrap();
+        for slot in 0..4_u8 {
+            score_db
+                .upsert_replay_slot(&crate::storage::score_db::ReplaySlotRecord {
+                    chart_sha256: alpha.identity.file_sha256,
+                    slot,
+                    rule: crate::config::profile_config::ReplaySlotRule::Always,
+                    replay_path: format!("replay/{slot}.toml"),
+                    played_at: 1_700_000_030 + slot as i64,
+                    ex_score: 10 * slot as u32,
+                    miss_count: 0,
+                    max_combo: 10,
+                    clear_rank: ClearType::Normal as u8,
+                })
+                .unwrap();
         }
 
         let items = load_select_items_in_folder(&library_db, &score_db, "/songs").unwrap();

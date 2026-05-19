@@ -191,10 +191,11 @@ pub const LIBRARY_MIGRATIONS: &[Migration] = &[
     },
 ];
 
-pub const SCORE_MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    statements: &[
-        "CREATE TABLE score_history (
+pub const SCORE_MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        statements: &[
+            "CREATE TABLE score_history (
             id INTEGER PRIMARY KEY,
             chart_sha256 BLOB NOT NULL,
             played_at INTEGER NOT NULL,
@@ -222,7 +223,7 @@ pub const SCORE_MIGRATIONS: &[Migration] = &[Migration {
             autoplay INTEGER NOT NULL DEFAULT 0,
             replay_path TEXT NOT NULL
         );",
-        "CREATE TABLE score_best (
+            "CREATE TABLE score_best (
             chart_sha256 BLOB PRIMARY KEY,
             clear_type TEXT NOT NULL,
             gauge_type TEXT NOT NULL,
@@ -244,9 +245,28 @@ pub const SCORE_MIGRATIONS: &[Migration] = &[Migration {
             played_at INTEGER NOT NULL,
             replay_path TEXT NOT NULL
         );",
-        "CREATE INDEX idx_score_history_chart_sha256 ON score_history(chart_sha256);",
-        "CREATE INDEX idx_score_history_played_at ON score_history(played_at DESC);",
-        "CREATE INDEX idx_score_best_clear_type ON score_best(clear_type);",
-        "CREATE INDEX idx_score_best_ex_score ON score_best(ex_score DESC);",
-    ],
-}];
+            "CREATE INDEX idx_score_history_chart_sha256 ON score_history(chart_sha256);",
+            "CREATE INDEX idx_score_history_played_at ON score_history(played_at DESC);",
+            "CREATE INDEX idx_score_best_clear_type ON score_best(clear_type);",
+            "CREATE INDEX idx_score_best_ex_score ON score_best(ex_score DESC);",
+        ],
+    },
+    Migration {
+        version: 2,
+        statements: &[
+            "CREATE TABLE replay_slots (
+            chart_sha256 BLOB NOT NULL,
+            slot         INTEGER NOT NULL CHECK (slot BETWEEN 0 AND 3),
+            rule         TEXT NOT NULL,
+            replay_path  TEXT NOT NULL,
+            played_at    INTEGER NOT NULL,
+            ex_score     INTEGER NOT NULL,
+            miss_count   INTEGER NOT NULL,
+            max_combo    INTEGER NOT NULL,
+            clear_rank   INTEGER NOT NULL,
+            PRIMARY KEY(chart_sha256, slot)
+        );",
+            "CREATE INDEX idx_replay_slots_chart ON replay_slots(chart_sha256);",
+        ],
+    },
+];
