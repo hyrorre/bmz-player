@@ -370,7 +370,9 @@ mod tests {
     #[test]
     fn scan_song_roots_records_failed_imports() {
         let root = make_temp_dir("scan-failed");
-        write_file(&root.join("broken.bms"), "#TITLE Broken\n#00011:0\n");
+        // `0あ` は偶数バイト長だが、2文字トークンへの分割が UTF-8 文字境界を
+        // またぐため非UTF-8トークンとなり、チャートのパースが失敗する。
+        write_file(&root.join("broken.bms"), "#TITLE Broken\n#00011:0あ\n");
 
         let mut conn = Connection::open_in_memory().unwrap();
         configure_connection(&conn).unwrap();

@@ -763,6 +763,10 @@ fn warning_details(warning: &ImportWarning) -> (&'static str, String) {
         ImportWarning::SuspiciousMeasureLength { measure } => {
             ("SuspiciousMeasureLength", format!("suspicious measure length: {measure}"))
         }
+        ImportWarning::OddChannelDataLength { measure, channel } => (
+            "OddChannelDataLength",
+            format!("odd channel data length: measure {measure}, channel {channel}"),
+        ),
         ImportWarning::LnobjWithoutStart { lane } => {
             ("LnobjWithoutStart", format!("LNOBJ without start on lane {lane:?}"))
         }

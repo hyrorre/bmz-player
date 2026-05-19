@@ -231,12 +231,10 @@ fn parse_channel_line(
     }
 
     if !data.len().is_multiple_of(2) {
-        return Err(ImportError::Parse {
-            path: Default::default(),
-            message: format!(
-                "channel data length must be even: measure {measure}, channel {channel}"
-            ),
-        });
+        // 仕様ではチャンネルデータは2文字1組だが、奇数長の譜面が実在する。
+        // beatoraja/LR2 と同様に末尾の余り1文字は無視して読み込む
+        // （後段の chunks_exact(2) が余りバイトを自動的に切り捨てる）。
+        warnings.push(ImportWarning::OddChannelDataLength { measure, channel });
     }
 
     let object_count = (data.len() / 2) as u32;
