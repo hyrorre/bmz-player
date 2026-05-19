@@ -8,7 +8,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 pub use super::difficulty_table_db::{DifficultyTableEntryRecord, DifficultyTableRecord};
 
-use super::common::configure_connection;
+use super::common::{configure_connection, hash_to_hex, hex_to_hash};
 
 pub const CHART_IMPORT_VERSION: i64 = 1;
 
@@ -132,7 +132,7 @@ impl LibraryDatabase {
         self.conn
             .query_row(
                 "SELECT id FROM charts WHERE sha256 = ?1 LIMIT 1",
-                params![sha256.as_slice()],
+                params![hash_to_hex(&sha256)],
                 |row| row.get(0),
             )
             .optional()
@@ -140,7 +140,7 @@ impl LibraryDatabase {
     }
 
     pub fn chart_sha256_by_chart_id(&self, chart_id: i64) -> Result<Option<[u8; 32]>> {
-        let result: Option<Vec<u8>> = self
+        let result: Option<String> = self
             .conn
             .query_row(
                 "SELECT sha256 FROM charts WHERE id = ?1 LIMIT 1",
@@ -148,15 +148,10 @@ impl LibraryDatabase {
                 |row| row.get(0),
             )
             .optional()?;
-        Ok(result.and_then(|blob| {
-            if blob.len() == 32 {
-                let mut out = [0_u8; 32];
-                out.copy_from_slice(&blob);
-                Some(out)
-            } else {
-                None
-            }
-        }))
+        match result {
+            Some(hex) => Ok(Some(hex_to_hash::<32>(&hex)?)),
+            None => Ok(None),
+        }
     }
 
     pub fn chart_file_id_by_path(&self, path: &Path) -> Result<Option<i64>> {
@@ -250,7 +245,7 @@ impl LibraryDatabase {
         let chart_file_id: i64 = conn.prepare_cached(
             "INSERT INTO chart_files (
                 root_id, path, file_size, modified_at, md5, sha256, scanned_at, parse_status
-            ) VALUES (?1, ?2, ?3, ?4, x'', x'', ?5, 'Failed')
+            ) VALUES (?1, ?2, ?3, ?4, '', '', ?5, 'Failed')
             ON CONFLICT(path) DO UPDATE SET
                 root_id = excluded.root_id,
                 file_size = excluded.file_size,
@@ -514,7 +509,7 @@ impl LibraryDatabase {
                    c.length_ms, c.folder_path, dte.level
             FROM difficulty_table_entries dte
             JOIN difficulty_tables dt ON dt.id = dte.table_id
-            JOIN charts c ON lower(hex(c.md5)) = dte.md5
+            JOIN charts c ON c.md5 = dte.md5
             WHERE dt.source_url = ?1 AND length(dte.md5) >= 24
             UNION
             SELECT c.id, c.md5, c.sha256, c.title, c.subtitle, c.artist,
@@ -525,7 +520,7 @@ impl LibraryDatabase {
                    c.length_ms, c.folder_path, dte.level
             FROM difficulty_table_entries dte
             JOIN difficulty_tables dt ON dt.id = dte.table_id
-            JOIN charts c ON lower(hex(c.sha256)) = dte.sha256
+            JOIN charts c ON c.sha256 = dte.sha256
             WHERE dt.source_url = ?1 AND length(dte.sha256) >= 24";
 
         let mut stmt = self.conn.prepare(sql)?;
@@ -539,12 +534,10 @@ impl LibraryDatabase {
 }
 
 fn chart_list_item_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChartListItem> {
-    let md5_blob: Vec<u8> = row.get(1)?;
-    let mut md5 = [0_u8; 16];
-    md5.copy_from_slice(&md5_blob[..16]);
-    let sha256_blob: Vec<u8> = row.get(2)?;
-    let mut sha256 = [0_u8; 32];
-    sha256.copy_from_slice(&sha256_blob[..32]);
+    let md5_hex: String = row.get(1)?;
+    let md5 = hex_to_hash::<16>(&md5_hex)?;
+    let sha256_hex: String = row.get(2)?;
+    let sha256 = hex_to_hash::<32>(&sha256_hex)?;
 
     Ok(ChartListItem {
         chart_id: row.get(0)?,
@@ -593,8 +586,8 @@ fn upsert_chart_file(conn: &Connection, record: &ChartImportRecord<'_>) -> Resul
             path_to_string(record.file_path),
             record.file_size as i64,
             record.modified_at,
-            record.chart.identity.file_md5.as_slice(),
-            record.chart.identity.file_sha256.as_slice(),
+            hash_to_hex(&record.chart.identity.file_md5),
+            hash_to_hex(&record.chart.identity.file_sha256),
             record.scanned_at,
         ],
         |row| row.get(0),
@@ -617,8 +610,8 @@ fn insert_chart(conn: &Connection, record: &ChartImportRecord<'_>) -> Result<i64
         )",
     )?
     .execute(params![
-        chart.identity.file_sha256.as_slice(),
-        chart.identity.file_md5.as_slice(),
+        hash_to_hex(&chart.identity.file_sha256),
+        hash_to_hex(&chart.identity.file_md5),
         chart.metadata.title.as_str(),
         chart.metadata.subtitle.as_str(),
         chart.metadata.artist.as_str(),
@@ -658,8 +651,8 @@ fn update_chart(conn: &Connection, chart_id: i64, record: &ChartImportRecord<'_>
          WHERE id = ?24",
     )?
     .execute(params![
-        chart.identity.file_sha256.as_slice(),
-        chart.identity.file_md5.as_slice(),
+        hash_to_hex(&chart.identity.file_sha256),
+        hash_to_hex(&chart.identity.file_md5),
         chart.metadata.title.as_str(),
         chart.metadata.subtitle.as_str(),
         chart.metadata.artist.as_str(),
@@ -1163,5 +1156,75 @@ mod tests {
             vec!["sub".to_string()]
         );
         assert_eq!(db.list_charts_in_folder("G:\\BMS\\INSANE\\sub").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn charts_hash_columns_are_lowercase_hex_text() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase::from_connection(conn);
+        let chart = chart("song");
+        db.upsert_chart_import(&record_for_chart("/songs/song.bms", &chart)).unwrap();
+
+        let (md5_typeof, sha256_typeof, md5_hex, sha256_hex): (String, String, String, String) = db
+            .conn()
+            .query_row(
+                "SELECT typeof(md5), typeof(sha256), md5, sha256 FROM charts",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(md5_typeof, "text");
+        assert_eq!(sha256_typeof, "text");
+        assert_eq!(md5_hex.len(), 32);
+        assert_eq!(sha256_hex.len(), 64);
+        assert!(md5_hex.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        assert!(sha256_hex.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+
+        // chart_files も同様に小文字 hex TEXT。
+        let (cf_md5_typeof, cf_sha256_typeof): (String, String) = db
+            .conn()
+            .query_row(
+                "SELECT typeof(md5), typeof(sha256) FROM chart_files",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(cf_md5_typeof, "text");
+        assert_eq!(cf_sha256_typeof, "text");
+    }
+
+    #[test]
+    fn list_charts_with_level_in_table_uses_hash_indexes() {
+        // 難易度表結合が `c.md5 = dte.md5` の通常 JOIN になり、`idx_charts_md5` /
+        // `idx_charts_sha256` でルックアップされることを EXPLAIN QUERY PLAN で確認する。
+        // 関数結合（`lower(hex(c.md5)) = dte.md5`）に戻ると SCAN charts になる。
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+
+        let plan: Vec<String> = conn
+            .prepare(
+                "EXPLAIN QUERY PLAN
+                SELECT c.id FROM difficulty_table_entries dte
+                JOIN difficulty_tables dt ON dt.id = dte.table_id
+                JOIN charts c ON c.md5 = dte.md5
+                WHERE dt.source_url = ?1 AND length(dte.md5) >= 24",
+            )
+            .unwrap()
+            .query_map(params!["http://example.com/"], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        let combined = plan.join("\n");
+        assert!(
+            combined.contains("idx_charts_md5"),
+            "expected idx_charts_md5 to be used, got:\n{combined}"
+        );
+        assert!(
+            !combined.contains("SCAN c "),
+            "expected charts to be searched via index, not full scanned:\n{combined}"
+        );
     }
 }

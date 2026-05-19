@@ -6,7 +6,7 @@ use bmz_gameplay::result::PlayResult;
 use bmz_gameplay::score::ScoreState;
 use rusqlite::{Connection, OptionalExtension, params};
 
-use super::common::configure_connection;
+use super::common::{configure_connection, hash_to_hex, hex_to_hash};
 use crate::config::profile_config::ReplaySlotRule;
 
 pub struct ScoreDatabase {
@@ -134,7 +134,7 @@ impl ScoreDatabase {
         self.conn
             .query_row(
                 "SELECT ex_score FROM score_best WHERE chart_sha256 = ?1",
-                params![chart_sha256.as_slice()],
+                params![hash_to_hex(&chart_sha256)],
                 |row| row.get::<_, u32>(0),
             )
             .optional()
@@ -162,7 +162,7 @@ impl ScoreDatabase {
 
         for sha256 in chart_sha256s {
             if let Some(summary) = stmt
-                .query_row(params![sha256.as_slice()], best_score_summary_from_row)
+                .query_row(params![hash_to_hex(sha256)], best_score_summary_from_row)
                 .optional()?
             {
                 out.push(summary);
@@ -182,7 +182,7 @@ impl ScoreDatabase {
 
         for sha256 in chart_sha256s {
             let slots: Vec<u8> = stmt
-                .query_map(params![sha256.as_slice()], |row| row.get::<_, u8>(0))?
+                .query_map(params![hash_to_hex(sha256)], |row| row.get::<_, u8>(0))?
                 .collect::<std::result::Result<Vec<_>, _>>()?;
             if slots.is_empty() {
                 continue;
@@ -209,7 +209,7 @@ impl ScoreDatabase {
                 "SELECT chart_sha256, slot, rule, replay_path, played_at, ex_score, miss_count, max_combo, clear_rank
                  FROM replay_slots
                  WHERE chart_sha256 = ?1 AND slot = ?2",
-                params![chart_sha256.as_slice(), slot],
+                params![hash_to_hex(&chart_sha256), slot],
                 replay_slot_record_from_row,
             )
             .optional()
@@ -226,7 +226,7 @@ impl ScoreDatabase {
              WHERE chart_sha256 = ?1",
         )?;
         let rows = stmt
-            .query_map(params![chart_sha256.as_slice()], replay_slot_record_from_row)?
+            .query_map(params![hash_to_hex(&chart_sha256)], replay_slot_record_from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         let mut out: [Option<ReplaySlotRecord>; 4] = [None, None, None, None];
         for record in rows {
@@ -256,7 +256,7 @@ impl ScoreDatabase {
                 max_combo = excluded.max_combo,
                 clear_rank = excluded.clear_rank",
             params![
-                record.chart_sha256.as_slice(),
+                hash_to_hex(&record.chart_sha256),
                 record.slot,
                 record.rule.as_str(),
                 record.replay_path,
@@ -294,9 +294,8 @@ impl ScoreDatabase {
 }
 
 fn best_score_summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<BestScoreSummary> {
-    let sha256_blob: Vec<u8> = row.get(0)?;
-    let mut chart_sha256 = [0_u8; 32];
-    chart_sha256.copy_from_slice(&sha256_blob[..32]);
+    let sha256_hex: String = row.get(0)?;
+    let chart_sha256 = hex_to_hash::<32>(&sha256_hex)?;
 
     Ok(BestScoreSummary {
         chart_sha256,
@@ -311,9 +310,8 @@ fn best_score_summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Best
 }
 
 fn replay_slot_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ReplaySlotRecord> {
-    let sha256_blob: Vec<u8> = row.get(0)?;
-    let mut chart_sha256 = [0_u8; 32];
-    chart_sha256.copy_from_slice(&sha256_blob[..32]);
+    let sha256_hex: String = row.get(0)?;
+    let chart_sha256 = hex_to_hash::<32>(&sha256_hex)?;
     let rule_str: String = row.get(2)?;
     let rule = ReplaySlotRule::from_str_opt(&rule_str).unwrap_or(ReplaySlotRule::Always);
 
@@ -331,9 +329,8 @@ fn replay_slot_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Repl
 }
 
 fn score_history_entry_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ScoreHistoryEntry> {
-    let sha256_blob: Vec<u8> = row.get(1)?;
-    let mut chart_sha256 = [0_u8; 32];
-    chart_sha256.copy_from_slice(&sha256_blob[..32]);
+    let sha256_hex: String = row.get(1)?;
+    let chart_sha256 = hex_to_hash::<32>(&sha256_hex)?;
 
     Ok(ScoreHistoryEntry {
         id: row.get(0)?,
@@ -384,7 +381,7 @@ fn insert_score_history(conn: &Connection, record: &ScoreRecord) -> Result<()> {
             ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25
         )",
         params![
-            record.chart_sha256.as_slice(),
+            hash_to_hex(&record.chart_sha256),
             record.played_at,
             record.clear_type.as_str(),
             gauge_type_str(record.gauge_type),
@@ -500,7 +497,7 @@ fn upsert_score_best(conn: &Connection, record: &ScoreRecord) -> Result<()> {
                 AND excluded.max_combo > score_best.max_combo
             )",
         params![
-            record.chart_sha256.as_slice(),
+            hash_to_hex(&record.chart_sha256),
             record.clear_type.as_str(),
             gauge_type_str(record.gauge_type),
             record.gauge_value,
@@ -753,5 +750,30 @@ mod tests {
         assert_eq!(history[0].played_at, 2);
         assert!(history[0].autoplay);
         assert_eq!(history[1].chart_sha256, [1; 32]);
+    }
+
+    #[test]
+    fn chart_sha256_columns_are_lowercase_hex_text() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut db = ScoreDatabase::from_connection(conn);
+        db.insert_score(&record(20, ClearType::Normal)).unwrap();
+
+        let (hist_typeof, best_typeof, best_hex): (String, String, String) = db
+            .conn()
+            .query_row(
+                "SELECT
+                    (SELECT typeof(chart_sha256) FROM score_history LIMIT 1),
+                    (SELECT typeof(chart_sha256) FROM score_best LIMIT 1),
+                    (SELECT chart_sha256 FROM score_best LIMIT 1)",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(hist_typeof, "text");
+        assert_eq!(best_typeof, "text");
+        assert_eq!(best_hex.len(), 64);
+        assert!(best_hex.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
     }
 }

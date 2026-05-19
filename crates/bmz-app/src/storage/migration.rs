@@ -56,16 +56,16 @@ pub const LIBRARY_MIGRATIONS: &[Migration] = &[
             path TEXT NOT NULL UNIQUE,
             file_size INTEGER NOT NULL,
             modified_at INTEGER NOT NULL,
-            md5 BLOB NOT NULL,
-            sha256 BLOB NOT NULL,
+            md5 TEXT NOT NULL,
+            sha256 TEXT NOT NULL,
             scanned_at INTEGER NOT NULL,
             parse_status TEXT NOT NULL,
             FOREIGN KEY(root_id) REFERENCES roots(id)
         );",
             "CREATE TABLE charts (
             id INTEGER PRIMARY KEY,
-            sha256 BLOB NOT NULL UNIQUE,
-            md5 BLOB NOT NULL,
+            sha256 TEXT NOT NULL UNIQUE,
+            md5 TEXT NOT NULL,
             title TEXT NOT NULL,
             subtitle TEXT NOT NULL,
             artist TEXT NOT NULL,
@@ -121,8 +121,8 @@ pub const LIBRARY_MIGRATIONS: &[Migration] = &[
             "ALTER TABLE chart_file_links RENAME TO chart_file_links_old;",
             "CREATE TABLE charts (
             id INTEGER PRIMARY KEY,
-            sha256 BLOB NOT NULL,
-            md5 BLOB NOT NULL,
+            sha256 TEXT NOT NULL,
+            md5 TEXT NOT NULL,
             title TEXT NOT NULL,
             subtitle TEXT NOT NULL,
             artist TEXT NOT NULL,
@@ -160,6 +160,8 @@ pub const LIBRARY_MIGRATIONS: &[Migration] = &[
             "CREATE INDEX idx_charts_artist ON charts(artist);",
             "CREATE INDEX idx_charts_folder_path ON charts(folder_path);",
             "CREATE INDEX idx_charts_mode ON charts(mode);",
+            "CREATE INDEX idx_charts_md5 ON charts(md5);",
+            "CREATE INDEX idx_charts_sha256 ON charts(sha256);",
         ],
     },
     Migration {
@@ -214,7 +216,7 @@ pub const SCORE_MIGRATIONS: &[Migration] = &[
         statements: &[
             "CREATE TABLE score_history (
             id INTEGER PRIMARY KEY,
-            chart_sha256 BLOB NOT NULL,
+            chart_sha256 TEXT NOT NULL,
             played_at INTEGER NOT NULL,
             clear_type TEXT NOT NULL,
             gauge_type TEXT NOT NULL,
@@ -241,7 +243,7 @@ pub const SCORE_MIGRATIONS: &[Migration] = &[
             replay_path TEXT NOT NULL
         );",
             "CREATE TABLE score_best (
-            chart_sha256 BLOB PRIMARY KEY,
+            chart_sha256 TEXT PRIMARY KEY,
             clear_type TEXT NOT NULL,
             gauge_type TEXT NOT NULL,
             gauge_value REAL NOT NULL,
@@ -272,7 +274,7 @@ pub const SCORE_MIGRATIONS: &[Migration] = &[
         version: 2,
         statements: &[
             "CREATE TABLE replay_slots (
-            chart_sha256 BLOB NOT NULL,
+            chart_sha256 TEXT NOT NULL,
             slot         INTEGER NOT NULL CHECK (slot BETWEEN 0 AND 3),
             rule         TEXT NOT NULL,
             replay_path  TEXT NOT NULL,

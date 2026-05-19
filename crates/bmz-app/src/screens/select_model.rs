@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 
+use crate::storage::common::hash_to_hex;
 use crate::storage::library_db::{ChartListItem, LibraryDatabase};
 use crate::storage::score_db::{BestScoreSummary, ReplaySlotSummary, ScoreDatabase};
 
@@ -9,14 +10,6 @@ use crate::storage::score_db::{BestScoreSummary, ReplaySlotSummary, ScoreDatabas
 /// `"bmz-table:"` is the root that lists all registered tables.
 /// `"bmz-table:{source_url}"` represents the chart list for that table.
 pub const TABLE_ROOT_PATH: &str = "bmz-table:";
-
-fn bytes_to_hex<const N: usize>(bytes: &[u8; N]) -> String {
-    bytes.iter().fold(String::with_capacity(N * 2), |mut s, b| {
-        use std::fmt::Write;
-        let _ = write!(s, "{b:02x}");
-        s
-    })
-}
 
 fn insert_table_level(map: &mut HashMap<String, String>, key: String, symbol: &str, level: &str) {
     let entry = format!("{symbol}{level}");
@@ -167,7 +160,7 @@ pub fn load_select_items_in_folder(
     let mut replay_slot_map = replay_slot_map(score_db, &hashes)?;
 
     // MD5 lookup (multiple tables per MD5 joined with '/')
-    let md5_hexes: Vec<String> = all_charts.iter().map(|c| bytes_to_hex(&c.md5)).collect();
+    let md5_hexes: Vec<String> = all_charts.iter().map(|c| hash_to_hex(&c.md5)).collect();
     let md5_refs: Vec<&str> = md5_hexes.iter().map(|s| s.as_str()).collect();
     let mut md5_level_map: HashMap<String, String> = HashMap::new();
     for e in library_db.list_difficulty_table_entries_by_md5s(&md5_refs)? {
@@ -177,8 +170,8 @@ pub fn load_select_items_in_folder(
     // SHA256 fallback for charts not matched by MD5
     let missing_sha256_hexes: Vec<String> = all_charts
         .iter()
-        .filter(|c| !md5_level_map.contains_key(&bytes_to_hex(&c.md5)))
-        .map(|c| bytes_to_hex(&c.sha256))
+        .filter(|c| !md5_level_map.contains_key(&hash_to_hex(&c.md5)))
+        .map(|c| hash_to_hex(&c.sha256))
         .collect();
     let mut sha256_level_map: HashMap<String, String> = HashMap::new();
     if !missing_sha256_hexes.is_empty() {
@@ -197,8 +190,8 @@ pub fn load_select_items_in_folder(
         let best_score = score_map.remove(&chart.sha256);
         let replay_slots = replay_slot_map.remove(&chart.sha256).unwrap_or([false; 4]);
         let table_level = md5_level_map
-            .remove(&bytes_to_hex(&chart.md5))
-            .or_else(|| sha256_level_map.remove(&bytes_to_hex(&chart.sha256)))
+            .remove(&hash_to_hex(&chart.md5))
+            .or_else(|| sha256_level_map.remove(&hash_to_hex(&chart.sha256)))
             .unwrap_or_default();
         items.push(SelectItem::Chart(SelectChartRow {
             chart,
@@ -467,7 +460,7 @@ mod tests {
             level_order: vec![level.to_string()],
             entries: vec![FetchedTableEntry {
                 level: level.to_string(),
-                md5: bytes_to_hex(md5),
+                md5: hash_to_hex(md5),
                 sha256: String::new(),
                 title: String::new(),
                 artist: String::new(),
@@ -492,7 +485,7 @@ mod tests {
             entries: vec![FetchedTableEntry {
                 level: level.to_string(),
                 md5: String::new(),
-                sha256: bytes_to_hex(sha256),
+                sha256: hash_to_hex(sha256),
                 title: String::new(),
                 artist: String::new(),
                 comment: String::new(),
@@ -549,7 +542,7 @@ mod tests {
             entries: vec![
                 FetchedTableEntry {
                     level: "10".to_string(),
-                    md5: bytes_to_hex(&hard.identity.file_md5),
+                    md5: hash_to_hex(&hard.identity.file_md5),
                     sha256: String::new(),
                     title: String::new(),
                     artist: String::new(),
@@ -557,7 +550,7 @@ mod tests {
                 },
                 FetchedTableEntry {
                     level: "5".to_string(),
-                    md5: bytes_to_hex(&easy.identity.file_md5),
+                    md5: hash_to_hex(&easy.identity.file_md5),
                     sha256: String::new(),
                     title: String::new(),
                     artist: String::new(),
