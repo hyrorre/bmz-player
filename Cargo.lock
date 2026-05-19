@@ -234,6 +234,7 @@ dependencies = [
  "bmz-render",
  "bmz-video",
  "gilrs",
+ "rayon",
  "reqwest",
  "rusqlite",
  "serde",

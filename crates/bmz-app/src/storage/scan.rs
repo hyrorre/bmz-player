@@ -2,11 +2,15 @@ use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use anyhow::Result;
+use rayon::prelude::*;
+
+use bmz_chart::import::ImportResult;
+use bmz_chart::import::error::ImportError;
+use bmz_chart::import::import_bms_chart;
 
 use crate::config::app_config::{PathEntry, ScanConfig};
 
-use super::import::import_chart_file;
-use super::library_db::{CHART_IMPORT_VERSION, ChartFileFingerprint, LibraryDatabase};
+use super::library_db::{CHART_IMPORT_VERSION, ChartFileFingerprint, ChartImportRecord, LibraryDatabase};
 
 #[derive(Debug, Clone, Default)]
 pub struct ScanSummary {
@@ -29,6 +33,9 @@ pub struct ScanReport {
     pub summary: ScanSummary,
     pub failures: Vec<ScanFailure>,
 }
+
+/// 1回のバッチで並列パースするファイル数
+const IMPORT_BATCH_SIZE: usize = 256;
 
 pub fn scan_song_roots(
     db: &mut LibraryDatabase,
@@ -55,52 +62,113 @@ pub fn scan_song_roots(
             "scanning root"
         );
 
-        let mut last_log = std::time::Instant::now();
-        let log_interval = std::time::Duration::from_secs(2);
-
-        for (file_index, path) in files.iter().enumerate() {
+        // Phase 1: skip判定（逐次、DBリード）
+        struct FileTodo {
+            path: PathBuf,
+            file_size: u64,
+            modified_at: i64,
+        }
+        let mut to_import: Vec<FileTodo> = Vec::new();
+        for path in &files {
             report.summary.files_seen += 1;
-
-            // Instant::now() のコストを抑えるため 64 ファイルごとに時刻を確認
-            if file_index % 64 == 0 {
-                let now = std::time::Instant::now();
-                if now.duration_since(last_log) >= log_interval {
-                    last_log = now;
-                    let pct = file_index * 100 / files_total.max(1);
-                    let folder = path.parent().unwrap_or(root_path);
-                    tracing::info!(
-                        pct,
-                        done = file_index,
-                        total = files_total,
-                        folder = %folder.display(),
-                        "scan progress"
-                    );
-                }
-            }
-
             let (file_size, modified_at) = file_metadata_for_failure(path);
             if is_unchanged(db, path, file_size, modified_at)? {
                 report.summary.skipped += 1;
-                continue;
+            } else {
+                to_import.push(FileTodo { path: path.clone(), file_size, modified_at });
             }
-            match import_chart_file(db, path, Some(root_id), scanned_at) {
-                Ok(imported) => {
-                    report.summary.imported += 1;
-                    report.summary.warnings += imported.warnings.len() as u32;
+        }
+
+        let new_total = to_import.len();
+        tracing::info!(
+            new_files = new_total,
+            skipped = report.summary.skipped,
+            root = %root_path.display(),
+            "skip check complete"
+        );
+
+        // Phase 2+3: バッチごとに並列パース → 1トランザクションでまとめて書き込み
+        struct ParsedFile {
+            path: PathBuf,
+            file_size: u64,
+            modified_at: i64,
+            result: Result<ImportResult, ImportError>,
+        }
+
+        let mut last_log = std::time::Instant::now();
+        let log_interval = std::time::Duration::from_secs(2);
+
+        for (batch_idx, chunk) in to_import.chunks(IMPORT_BATCH_SIZE).enumerate() {
+            let batch_done = batch_idx * IMPORT_BATCH_SIZE;
+            let now = std::time::Instant::now();
+            if now.duration_since(last_log) >= log_interval || batch_idx == 0 {
+                last_log = now;
+                let pct = batch_done * 100 / new_total.max(1);
+                tracing::info!(
+                    pct,
+                    done = batch_done,
+                    total = new_total,
+                    root = %root_path.display(),
+                    "importing"
+                );
+            }
+
+            // 並列パース
+            let parsed: Vec<ParsedFile> = chunk
+                .par_iter()
+                .map(|todo| ParsedFile {
+                    path: todo.path.clone(),
+                    file_size: todo.file_size,
+                    modified_at: todo.modified_at,
+                    result: import_bms_chart(&todo.path, None),
+                })
+                .collect();
+
+            // 1トランザクションでバッチ書き込み
+            {
+                let tx = db.conn_mut().transaction()?;
+                for p in &parsed {
+                    match &p.result {
+                        Ok(import_result) => {
+                            let record = ChartImportRecord {
+                                root_id: Some(root_id),
+                                file_path: &p.path,
+                                file_size: p.file_size,
+                                modified_at: p.modified_at,
+                                scanned_at,
+                                chart: &import_result.chart,
+                            };
+                            let (_, chart_file_id) =
+                                LibraryDatabase::write_chart_import(&tx, &record)?;
+                            LibraryDatabase::write_import_warnings(
+                                &tx,
+                                chart_file_id,
+                                &import_result.warnings,
+                                scanned_at,
+                            )?;
+                            report.summary.imported += 1;
+                            report.summary.warnings += import_result.warnings.len() as u32;
+                        }
+                        Err(error) => {
+                            let message = error.to_string();
+                            LibraryDatabase::write_failed_chart(
+                                &tx,
+                                Some(root_id),
+                                &p.path,
+                                p.file_size,
+                                p.modified_at,
+                                scanned_at,
+                                &message,
+                            )?;
+                            report.summary.failed += 1;
+                            report.failures.push(ScanFailure {
+                                path: p.path.clone(),
+                                message,
+                            });
+                        }
+                    }
                 }
-                Err(error) => {
-                    report.summary.failed += 1;
-                    let message = error.to_string();
-                    db.upsert_failed_chart_file(
-                        Some(root_id),
-                        path,
-                        file_size,
-                        modified_at,
-                        scanned_at,
-                        &message,
-                    )?;
-                    report.failures.push(ScanFailure { path: path.to_path_buf(), message });
-                }
+                tx.commit()?;
             }
         }
 

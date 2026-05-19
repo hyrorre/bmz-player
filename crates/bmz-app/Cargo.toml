@@ -15,6 +15,7 @@ rusqlite.workspace = true
 winit.workspace = true
 gilrs.workspace = true
 
+rayon.workspace = true
 tokio.workspace = true
 reqwest.workspace = true
 

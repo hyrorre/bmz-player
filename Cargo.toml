@@ -41,3 +41,4 @@ gilrs = "0.10"
 mlua = { version = "0.10", features = ["lua54", "vendored", "send"] }
 tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.12", features = ["json"] }
+rayon = "1"

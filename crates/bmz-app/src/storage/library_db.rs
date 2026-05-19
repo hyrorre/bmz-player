@@ -79,12 +79,16 @@ impl LibraryDatabase {
         &mut self.conn
     }
 
-    pub fn upsert_chart_import(&mut self, record: &ChartImportRecord<'_>) -> Result<i64> {
-        let tx = self.conn.transaction()?;
+    /// トランザクションを管理せずにチャートをupsertする。
+    /// `conn` にはアクティブなトランザクション（またはコネクション）を渡す。
+    /// 戻り値は `(chart_id, chart_file_id)`。
+    pub fn write_chart_import(
+        conn: &Connection,
+        record: &ChartImportRecord<'_>,
+    ) -> Result<(i64, i64)> {
+        let chart_file_id = upsert_chart_file(conn, record)?;
 
-        let chart_file_id = upsert_chart_file(&tx, record)?;
-
-        let existing_chart_id: Option<i64> = tx
+        let existing_chart_id: Option<i64> = conn
             .query_row(
                 "SELECT chart_id FROM chart_file_links WHERE chart_file_id = ?1",
                 params![chart_file_id],
@@ -93,17 +97,23 @@ impl LibraryDatabase {
             .optional()?;
 
         let chart_id = if let Some(existing_id) = existing_chart_id {
-            update_chart(&tx, existing_id, record)?;
+            update_chart(conn, existing_id, record)?;
             existing_id
         } else {
-            let new_id = insert_chart(&tx, record)?;
-            tx.execute(
+            let new_id = insert_chart(conn, record)?;
+            conn.execute(
                 "INSERT INTO chart_file_links (chart_id, chart_file_id) VALUES (?1, ?2)",
                 params![new_id, chart_file_id],
             )?;
             new_id
         };
 
+        Ok((chart_id, chart_file_id))
+    }
+
+    pub fn upsert_chart_import(&mut self, record: &ChartImportRecord<'_>) -> Result<i64> {
+        let tx = self.conn.transaction()?;
+        let (chart_id, _) = Self::write_chart_import(&tx, record)?;
         tx.commit()?;
         Ok(chart_id)
     }
@@ -139,6 +149,28 @@ impl LibraryDatabase {
             .map_err(Into::into)
     }
 
+    /// トランザクションを管理せずにインポート警告を置き換える。
+    pub fn write_import_warnings(
+        conn: &Connection,
+        chart_file_id: i64,
+        warnings: &[ImportWarning],
+        created_at: i64,
+    ) -> Result<()> {
+        conn.execute(
+            "DELETE FROM chart_import_warnings WHERE chart_file_id = ?1",
+            params![chart_file_id],
+        )?;
+        for warning in warnings {
+            let (code, message) = warning_details(warning);
+            conn.execute(
+                "INSERT INTO chart_import_warnings (chart_file_id, code, message, created_at)
+                VALUES (?1, ?2, ?3, ?4)",
+                params![chart_file_id, code, message, created_at],
+            )?;
+        }
+        Ok(())
+    }
+
     pub fn replace_import_warnings(
         &mut self,
         chart_file_id: i64,
@@ -146,20 +178,7 @@ impl LibraryDatabase {
         created_at: i64,
     ) -> Result<()> {
         let tx = self.conn.transaction()?;
-        tx.execute(
-            "DELETE FROM chart_import_warnings WHERE chart_file_id = ?1",
-            params![chart_file_id],
-        )?;
-
-        for warning in warnings {
-            let (code, message) = warning_details(warning);
-            tx.execute(
-                "INSERT INTO chart_import_warnings (chart_file_id, code, message, created_at)
-                VALUES (?1, ?2, ?3, ?4)",
-                params![chart_file_id, code, message, created_at],
-            )?;
-        }
-
+        Self::write_import_warnings(&tx, chart_file_id, warnings, created_at)?;
         tx.commit()?;
         Ok(())
     }
@@ -191,6 +210,45 @@ impl LibraryDatabase {
         Ok(())
     }
 
+    /// トランザクションを管理せずに失敗チャートを記録する。戻り値は `chart_file_id`。
+    pub fn write_failed_chart(
+        conn: &Connection,
+        root_id: Option<i64>,
+        file_path: &Path,
+        file_size: u64,
+        modified_at: i64,
+        scanned_at: i64,
+        message: &str,
+    ) -> Result<i64> {
+        conn.execute(
+            "INSERT INTO chart_files (
+                root_id, path, file_size, modified_at, md5, sha256, scanned_at, parse_status
+            ) VALUES (?1, ?2, ?3, ?4, x'', x'', ?5, 'Failed')
+            ON CONFLICT(path) DO UPDATE SET
+                root_id = excluded.root_id,
+                file_size = excluded.file_size,
+                modified_at = excluded.modified_at,
+                scanned_at = excluded.scanned_at,
+                parse_status = excluded.parse_status",
+            params![root_id, path_to_string(file_path), file_size as i64, modified_at, scanned_at],
+        )?;
+        let chart_file_id: i64 = conn.query_row(
+            "SELECT id FROM chart_files WHERE path = ?1",
+            params![path_to_string(file_path)],
+            |row| row.get(0),
+        )?;
+        conn.execute(
+            "DELETE FROM chart_import_warnings WHERE chart_file_id = ?1",
+            params![chart_file_id],
+        )?;
+        conn.execute(
+            "INSERT INTO chart_import_warnings (chart_file_id, code, message, created_at)
+            VALUES (?1, 'ImportFailed', ?2, ?3)",
+            params![chart_file_id, message, scanned_at],
+        )?;
+        Ok(chart_file_id)
+    }
+
     pub fn upsert_failed_chart_file(
         &mut self,
         root_id: Option<i64>,
@@ -200,36 +258,9 @@ impl LibraryDatabase {
         scanned_at: i64,
         message: &str,
     ) -> Result<i64> {
-        self.conn.execute(
-            "INSERT INTO chart_files (
-                root_id,
-                path,
-                file_size,
-                modified_at,
-                md5,
-                sha256,
-                scanned_at,
-                parse_status
-            ) VALUES (?1, ?2, ?3, ?4, x'', x'', ?5, 'Failed')
-            ON CONFLICT(path) DO UPDATE SET
-                root_id = excluded.root_id,
-                file_size = excluded.file_size,
-                modified_at = excluded.modified_at,
-                scanned_at = excluded.scanned_at,
-                parse_status = excluded.parse_status",
-            params![root_id, path_to_string(file_path), file_size as i64, modified_at, scanned_at,],
-        )?;
-        let chart_file_id =
-            self.chart_file_id_by_path(file_path)?.expect("failed chart file exists");
         let tx = self.conn.transaction()?;
-        tx.execute(
-            "DELETE FROM chart_import_warnings WHERE chart_file_id = ?1",
-            params![chart_file_id],
-        )?;
-        tx.execute(
-            "INSERT INTO chart_import_warnings (chart_file_id, code, message, created_at)
-            VALUES (?1, 'ImportFailed', ?2, ?3)",
-            params![chart_file_id, message, scanned_at],
+        let chart_file_id = Self::write_failed_chart(
+            &tx, root_id, file_path, file_size, modified_at, scanned_at, message,
         )?;
         tx.commit()?;
         Ok(chart_file_id)
