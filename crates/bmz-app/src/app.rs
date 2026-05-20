@@ -43,12 +43,14 @@ use crate::screens::select_model::{
 };
 use crate::select_options::{ArrangeOption, AssistOption};
 use crate::skin_loader::{
-    DecodedSkin, SkinKind, apply_skin_from_config, decode_beatoraja_json_skin,
-    install_decoded_skin, load_default_skin_into_renderer,
+    DecodedFont, DecodedSkin, DecodedSource, SkinKind, apply_skin_from_config,
+    decode_beatoraja_json_skin, install_decoded_font, install_decoded_skin, install_decoded_source,
+    load_default_skin_into_renderer, set_decoded_skin_context,
 };
 use crate::storage::replay::load_replay_for_chart;
 use crate::storage::scan::scan_song_roots;
-use bmz_render::skin::SkinManifest;
+use bmz_render::skin::{SkinDocument, SkinDocumentTexture, SkinManifest};
+use std::collections::VecDeque;
 
 const SAMPLE_PLAYABLE_TITLE: &str = "BMZ Sample Playable";
 
@@ -135,6 +137,7 @@ struct WinitApp {
     pending_skin_rx: Option<Receiver<PendingSkinResult>>,
     pending_play_skin: bool,
     pending_result_skin: bool,
+    pending_skin_installs: Vec<PendingSkinInstall>,
 }
 
 struct PendingSkinResult {
@@ -142,6 +145,23 @@ struct PendingSkinResult {
     kind: SkinKind,
     result: Result<DecodedSkin>,
 }
+
+/// Phase B (install) を 1 フレームあたり数件ずつに分散させるためのキュー。
+/// 受信した DecodedSkin をここに積み、毎フレーム少しずつ消化する。
+struct PendingSkinInstall {
+    kind: SkinKind,
+    path: PathBuf,
+    document: SkinDocument,
+    default_manifest: SkinManifest,
+    fonts: VecDeque<DecodedFont>,
+    sources: VecDeque<DecodedSource>,
+    document_textures: Vec<SkinDocumentTexture>,
+}
+
+/// 1 フレームに install する PNG ソースの最大個数。
+/// PNG アップロードは GPU テクスチャ作成を伴い 1 件あたり数 ms 〜数十 ms かかるため、
+/// 体感の引っかかりを避けるよう 1 件ずつに抑える (フォントはコストが低いので一括処理)。
+const SKIN_INSTALL_SOURCES_PER_FRAME: usize = 1;
 
 #[derive(Debug, Clone, PartialEq)]
 enum AppViewState {
@@ -234,6 +254,7 @@ impl WinitApp {
             pending_skin_rx,
             pending_play_skin,
             pending_result_skin,
+            pending_skin_installs: Vec::new(),
         };
         if let Some(chart_id) = boot_sample_chart_id {
             tracing::info!(
@@ -800,14 +821,12 @@ impl WinitApp {
         self.reload_select_items();
     }
 
-    /// バックグラウンドで decode 中のスキンを非ブロッキングで取り込む。毎フレーム呼ぶ。
+    /// バックグラウンドで decode 中のスキンを非ブロッキングで取り込み、install キューに積む。
+    /// 毎フレーム呼ぶ。実際の Renderer への install 反映は `step_skin_installs` で分散実行する。
     fn drain_pending_skins(&mut self) {
-        loop {
-            let Some(rx) = self.pending_skin_rx.as_ref() else {
-                return;
-            };
+        while let Some(rx) = self.pending_skin_rx.as_ref() {
             match rx.try_recv() {
-                Ok(result) => self.install_pending_skin(result),
+                Ok(result) => self.enqueue_pending_skin_install(result),
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.pending_skin_rx = None;
@@ -815,34 +834,38 @@ impl WinitApp {
                 }
             }
         }
+        self.step_skin_installs();
     }
 
-    /// 指定された kind のスキンが install されるまでブロックして待つ。
-    /// scene 遷移直前に呼ぶ用途。すでに install 済みなら即座に return する。
+    /// 指定された kind のスキンが install されるまで強制的に完了させる。
+    /// scene 遷移直前に呼ぶ用途。decode 完了まちのチャネル受信もブロックして待つ。
     fn ensure_skin_ready(&mut self, kind: SkinKind) {
-        loop {
-            let still_pending = match kind {
-                SkinKind::Play => self.pending_play_skin,
-                SkinKind::Result => self.pending_result_skin,
-                SkinKind::Select => false,
-            };
-            if !still_pending {
-                return;
-            }
+        // まだ decode 結果が届いていなければブロックして受信する。
+        while self.is_kind_pending_decode(kind) {
             let Some(rx) = self.pending_skin_rx.as_ref() else {
-                return;
+                break;
             };
             match rx.recv() {
-                Ok(result) => self.install_pending_skin(result),
+                Ok(result) => self.enqueue_pending_skin_install(result),
                 Err(_) => {
                     self.pending_skin_rx = None;
-                    return;
+                    break;
                 }
             }
         }
+        // install キューに残っている該当 kind を一気に流す。
+        self.flush_skin_installs_for(kind);
     }
 
-    fn install_pending_skin(&mut self, pending: PendingSkinResult) {
+    fn is_kind_pending_decode(&self, kind: SkinKind) -> bool {
+        match kind {
+            SkinKind::Play => self.pending_play_skin,
+            SkinKind::Result => self.pending_result_skin,
+            SkinKind::Select => false,
+        }
+    }
+
+    fn enqueue_pending_skin_install(&mut self, pending: PendingSkinResult) {
         let PendingSkinResult { path, kind, result } = pending;
         match kind {
             SkinKind::Play => self.pending_play_skin = false,
@@ -869,14 +892,82 @@ impl WinitApp {
             );
             return;
         };
-        if let Err(error) = install_decoded_skin(&mut self.renderer, decoded, manifest) {
-            tracing::warn!(
-                path = %path.display(),
-                kind = ?kind,
-                error = %format_error_chain(&error),
-                "failed to install beatoraja skin"
-            );
+        let DecodedSkin { kind, document, fonts, sources } = decoded;
+        self.pending_skin_installs.push(PendingSkinInstall {
+            kind,
+            path,
+            document,
+            default_manifest: manifest,
+            fonts: fonts.into_iter().collect(),
+            sources: sources.into_iter().collect(),
+            document_textures: Vec::new(),
+        });
+    }
+
+    /// install キューを 1 フレーム分だけ進める。
+    /// フォントは安価なので 1 フレームで全部、PNG は重いので `SKIN_INSTALL_SOURCES_PER_FRAME` 個まで。
+    fn step_skin_installs(&mut self) {
+        if self.pending_skin_installs.is_empty() {
+            return;
         }
+        // 先頭の install を 1 フレーム分進める。
+        let install = &mut self.pending_skin_installs[0];
+        // フォントは全部一括で取り込む (FontArc::try_from_vec はミリ秒オーダー)。
+        while let Some(font) = install.fonts.pop_front() {
+            install_decoded_font(&mut self.renderer, font);
+        }
+        // PNG ソースはフレームあたり SKIN_INSTALL_SOURCES_PER_FRAME 個まで。
+        let mut budget = SKIN_INSTALL_SOURCES_PER_FRAME;
+        while budget > 0
+            && let Some(source) = install.sources.pop_front()
+        {
+            if let Some(texture) = install_decoded_source(&mut self.renderer, source) {
+                install.document_textures.push(texture);
+            }
+            budget -= 1;
+        }
+        // 全て install 終わったら scene context をセットして dequeue する。
+        if install.fonts.is_empty() && install.sources.is_empty() {
+            let install = self.pending_skin_installs.remove(0);
+            self.finalize_skin_install(install);
+        }
+    }
+
+    fn flush_skin_installs_for(&mut self, kind: SkinKind) {
+        let mut remaining = std::mem::take(&mut self.pending_skin_installs);
+        let (match_kind, others): (Vec<_>, Vec<_>) =
+            remaining.drain(..).partition(|install| install.kind == kind);
+        self.pending_skin_installs = others;
+        for mut install in match_kind {
+            while let Some(font) = install.fonts.pop_front() {
+                install_decoded_font(&mut self.renderer, font);
+            }
+            while let Some(source) = install.sources.pop_front() {
+                if let Some(texture) = install_decoded_source(&mut self.renderer, source) {
+                    install.document_textures.push(texture);
+                }
+            }
+            self.finalize_skin_install(install);
+        }
+    }
+
+    fn finalize_skin_install(&mut self, install: PendingSkinInstall) {
+        let PendingSkinInstall {
+            kind, path, document, default_manifest, document_textures, ..
+        } = install;
+        tracing::info!(
+            path = %path.display(),
+            kind = ?kind,
+            sources = document_textures.len(),
+            "beatoraja skin fully installed"
+        );
+        set_decoded_skin_context(
+            &mut self.renderer,
+            kind,
+            default_manifest,
+            document,
+            document_textures,
+        );
     }
 
     fn advance_active_play(&mut self) {

@@ -283,6 +283,8 @@ fn decode_font(path: &Path) -> Result<DecodedFontData> {
 
 /// Phase A でデコードした成果物を Renderer に取り込み、scene context を更新する。
 /// `default_manifest` は `load_default_skin_into_renderer` で取得した値を渡す。
+/// 一括 install するので、PNG/フォント数が多いと 1 フレーム分のコストになる。
+/// 起動直後や同期パスではこちらを使うが、ランタイム中はフレーム分散する方が望ましい。
 pub fn install_decoded_skin(
     renderer: &mut Renderer,
     decoded: DecodedSkin,
@@ -291,52 +293,76 @@ pub fn install_decoded_skin(
     let DecodedSkin { kind, document, fonts, sources } = decoded;
 
     for font in fonts {
-        let DecodedFont { stored_id, path, data } = font;
-        let result: Result<()> = match data {
-            DecodedFontData::Vector(bytes) => renderer.install_font_bytes(stored_id.clone(), bytes),
-            DecodedFontData::Bitmap(bitmap) => {
-                renderer.install_bitmap_font(stored_id.clone(), bitmap);
-                Ok(())
-            }
-        };
-        match result {
-            Ok(()) => tracing::info!(
-                font_id = %stored_id,
-                path = %path.display(),
-                "loaded beatoraja skin font"
-            ),
-            Err(error) => tracing::warn!(
-                font_id = %stored_id,
-                path = %path.display(),
-                %error,
-                "failed to install beatoraja skin font"
-            ),
-        }
+        install_decoded_font(renderer, font);
     }
 
-    let mut document_textures = Vec::with_capacity(sources.len());
-    for source in sources {
-        let DecodedSource { source_id, path, texture, asset } = source;
-        let source_size = SkinImageSize { width: asset.width as f32, height: asset.height as f32 };
-        if let Err(error) = renderer.upsert_image_asset(TextureId(texture.0), &asset) {
-            tracing::warn!(
-                source_id = %source_id,
-                texture_id = texture.0,
-                path = %path.display(),
-                %error,
-                "failed to upload beatoraja skin source"
-            );
-            continue;
+    let document_textures: Vec<SkinDocumentTexture> =
+        sources.into_iter().filter_map(|source| install_decoded_source(renderer, source)).collect();
+
+    set_decoded_skin_context(renderer, kind, default_manifest, document, document_textures);
+    Ok(())
+}
+
+/// 1 個のフォントを renderer に登録する。フレーム分散インストールから呼ばれる。
+pub fn install_decoded_font(renderer: &mut Renderer, font: DecodedFont) {
+    let DecodedFont { stored_id, path, data } = font;
+    let result: Result<()> = match data {
+        DecodedFontData::Vector(bytes) => renderer.install_font_bytes(stored_id.clone(), bytes),
+        DecodedFontData::Bitmap(bitmap) => {
+            renderer.install_bitmap_font(stored_id.clone(), bitmap);
+            Ok(())
         }
-        tracing::info!(
+    };
+    match result {
+        Ok(()) => tracing::info!(
+            font_id = %stored_id,
+            path = %path.display(),
+            "loaded beatoraja skin font"
+        ),
+        Err(error) => tracing::warn!(
+            font_id = %stored_id,
+            path = %path.display(),
+            %error,
+            "failed to install beatoraja skin font"
+        ),
+    }
+}
+
+/// 1 個の PNG ソースを renderer にアップロードし、対応する SkinDocumentTexture を返す。
+/// アップロードに失敗した場合は None。
+pub fn install_decoded_source(
+    renderer: &mut Renderer,
+    source: DecodedSource,
+) -> Option<SkinDocumentTexture> {
+    let DecodedSource { source_id, path, texture, asset } = source;
+    let source_size = SkinImageSize { width: asset.width as f32, height: asset.height as f32 };
+    if let Err(error) = renderer.upsert_image_asset(TextureId(texture.0), &asset) {
+        tracing::warn!(
             source_id = %source_id,
             texture_id = texture.0,
             path = %path.display(),
-            "loaded beatoraja skin source"
+            %error,
+            "failed to upload beatoraja skin source"
         );
-        document_textures.push(SkinDocumentTexture { source_id, texture, source_size });
+        return None;
     }
+    tracing::info!(
+        source_id = %source_id,
+        texture_id = texture.0,
+        path = %path.display(),
+        "loaded beatoraja skin source"
+    );
+    Some(SkinDocumentTexture { source_id, texture, source_size })
+}
 
+/// 取り込み済みのフォント/PNG から SkinContext を組み立てて scene context にセットする。
+pub fn set_decoded_skin_context(
+    renderer: &mut Renderer,
+    kind: SkinKind,
+    default_manifest: SkinManifest,
+    document: SkinDocument,
+    document_textures: Vec<SkinDocumentTexture>,
+) {
     let context =
         SkinContext::from_manifest_and_document(default_manifest, document, document_textures);
     match kind {
@@ -344,7 +370,6 @@ pub fn install_decoded_skin(
         SkinKind::Select => renderer.set_select_skin_context(context),
         SkinKind::Result => renderer.set_result_skin_context(context),
     }
-    Ok(())
 }
 
 fn is_supported_font_path(path: &Path) -> bool {
