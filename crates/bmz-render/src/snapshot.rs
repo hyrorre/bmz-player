@@ -19,6 +19,7 @@ pub struct RenderSnapshot {
     pub past_notes: u32,
     pub judge_counts: DisplayJudgeCounts,
     pub gauge: f32,
+    pub gauge_type: i32,
     pub hispeed: f32,
     pub lift: f32,
     pub lane_cover: f32,

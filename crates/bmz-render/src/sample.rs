@@ -105,6 +105,7 @@ pub fn sample_result_scene() -> AppSceneSnapshot {
         ex_score_rate: 0.944,
         max_combo: 777,
         gauge_value: 84.0,
+        gauge_type: bmz_core::clear::GaugeType::Normal as i32,
         total_notes: 1000,
         judge_counts: DisplayJudgeCounts {
             pgreat: 777,

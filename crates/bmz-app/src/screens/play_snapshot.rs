@@ -53,6 +53,7 @@ pub fn build_render_snapshot_with_bga_frames(
         past_notes: session.score.past_notes,
         judge_counts: display_judge_counts(session),
         gauge: session.gauge.current().value,
+        gauge_type: session.gauge.current().definition.gauge_type as i32,
         hispeed: session.hispeed,
         lift: session.lift,
         lane_cover: session.lane_cover,

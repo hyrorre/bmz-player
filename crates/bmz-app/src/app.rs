@@ -298,6 +298,7 @@ impl WinitApp {
                 ex_score_rate: summary.ex_score_rate(),
                 max_combo: summary.max_combo,
                 gauge_value: summary.gauge_value,
+                gauge_type: summary.gauge_type as i32,
                 total_notes: summary.total_notes,
                 judge_counts: DisplayJudgeCounts {
                     pgreat: summary.judge_counts.pgreat,

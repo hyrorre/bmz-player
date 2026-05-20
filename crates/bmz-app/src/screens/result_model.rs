@@ -1,5 +1,5 @@
 use bmz_chart::model::ChartMetadata;
-use bmz_core::clear::ClearType;
+use bmz_core::clear::{ClearType, GaugeType};
 use bmz_gameplay::result::PlayResult;
 use bmz_gameplay::score::JudgeCounts;
 
@@ -11,6 +11,7 @@ pub struct ResultSummary {
     pub ex_score: u32,
     pub max_combo: u32,
     pub gauge_value: f32,
+    pub gauge_type: GaugeType,
     pub total_notes: u32,
     pub judge_counts: ResultJudgeCounts,
     pub fast_slow_counts: ResultFastSlowJudgeCounts,
@@ -99,6 +100,7 @@ impl ResultSummary {
             ex_score: result.score.ex_score(),
             max_combo: result.score.max_combo,
             gauge_value: result.gauge_value,
+            gauge_type: result.gauge_type,
             total_notes: result.total_notes,
             judge_counts: ResultJudgeCounts::from_judge_counts(&result.score.judges),
             fast_slow_counts: ResultFastSlowJudgeCounts::from_judge_counts(&result.score.judges),
@@ -170,6 +172,7 @@ mod tests {
 
         assert_eq!(summary.title, "Test");
         assert_eq!(summary.clear_type, ClearType::Normal);
+        assert_eq!(summary.gauge_type, GaugeType::Normal);
         assert_eq!(summary.max_combo, 12);
         assert_eq!(summary.gauge_value, 82.0);
         assert_eq!(summary.score_history_id, 9);

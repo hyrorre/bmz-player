@@ -278,6 +278,8 @@ pub struct SkinValueDef {
     #[serde(default, rename = "ref")]
     pub ref_id: i32,
     #[serde(default)]
+    pub expr: String,
+    #[serde(default)]
     pub offset: Vec<SkinValueDef>,
 }
 
@@ -801,6 +803,7 @@ pub struct SkinDrawState {
     pub past_notes: u32,
     pub judge_counts: DisplayJudgeCounts,
     pub gauge: f32,
+    pub gauge_type: i32,
     pub play_progress: f32,
     pub end_of_note: bool,
     /// 各レーンのボムタイマー経過ms。Noneなら非アクティブ。
@@ -919,6 +922,7 @@ impl Default for SkinDrawState {
             past_notes: 0,
             judge_counts: DisplayJudgeCounts::default(),
             gauge: 0.0,
+            gauge_type: 2,
             play_progress: 0.0,
             end_of_note: false,
             bomb_ms: [None; LANE_COUNT],
@@ -1520,7 +1524,7 @@ impl SkinDocument {
         }
 
         if let Some(value) = self.value.iter().find(|value| value.id == destination.id) {
-            let number = skin_state_number(value.ref_id, state)?;
+            let number = skin_value_number(value, state)?;
             return Some(self.value_number_render_items(
                 &value.id,
                 number,
@@ -1596,7 +1600,7 @@ impl SkinDocument {
         }
 
         if let Some(value) = self.value.iter().find(|value| value.id == destination.id) {
-            let number = skin_state_number(value.ref_id, state)?;
+            let number = skin_value_number(value, state)?;
             return Some(self.value_number_render_items(
                 &value.id,
                 number,
@@ -3458,13 +3462,21 @@ fn eval_skin_draw_condition(condition: &str, state: SkinDrawState) -> bool {
         return true;
     }
 
-    condition
-        .split("&&")
-        .flat_map(|segment| segment.split(" and "))
-        .all(|term| eval_skin_draw_term(term.trim(), state).unwrap_or(false))
+    condition.split("||").flat_map(|segment| segment.split(" or ")).any(|branch| {
+        branch
+            .split("&&")
+            .flat_map(|segment| segment.split(" and "))
+            .all(|term| eval_skin_draw_term(term.trim(), state).unwrap_or(false))
+    })
 }
 
 fn eval_skin_draw_term(term: &str, state: SkinDrawState) -> Option<bool> {
+    if let Some(option_id) = parse_skin_option_operand(term) {
+        return Some(test_skin_op(option_id, &[], state));
+    }
+    if let Some(option_id) = term.strip_prefix('!').and_then(parse_skin_option_operand) {
+        return Some(!test_skin_op(option_id, &[], state));
+    }
     let operators = [">=", "<=", "==", "!=", ">", "<"];
     for operator in operators {
         let Some(index) = term.find(operator) else {
@@ -3488,10 +3500,86 @@ fn eval_skin_draw_term(term: &str, state: SkinDrawState) -> Option<bool> {
 }
 
 fn eval_skin_draw_operand(operand: &str, state: SkinDrawState) -> Option<f32> {
+    if let Some(ref_id) = parse_skin_number_operand(operand) {
+        return skin_state_number(ref_id, state).map(|value| value as f32);
+    }
+    if let Some(timer_id) = parse_skin_timer_operand(operand) {
+        return Some(skin_timer_elapsed_ms(Some(timer_id), state).unwrap_or(i32::MIN) as f32);
+    }
     match operand {
         "gauge()" | "gauge" => Some(state.gauge),
+        "gauge_type()" | "gauge_type" => Some(state.gauge_type as f32),
+        "timer_off" | "timer_off_value" => Some(i32::MIN as f32),
         value => value.parse::<f32>().ok(),
     }
+}
+
+fn parse_skin_number_operand(operand: &str) -> Option<i32> {
+    let inner = operand.strip_prefix("number(")?.strip_suffix(')')?.trim();
+    inner.parse::<i32>().ok()
+}
+
+fn parse_skin_option_operand(operand: &str) -> Option<i32> {
+    let inner = operand.strip_prefix("option(")?.strip_suffix(')')?.trim();
+    inner.parse::<i32>().ok()
+}
+
+fn parse_skin_timer_operand(operand: &str) -> Option<i32> {
+    let inner = operand.strip_prefix("timer(")?.strip_suffix(')')?.trim();
+    inner.parse::<i32>().ok()
+}
+
+fn skin_value_number(value: &SkinValueDef, state: SkinDrawState) -> Option<i64> {
+    if !value.expr.trim().is_empty() {
+        return skin_state_number_expr(&value.expr, state);
+    }
+    skin_state_number(value.ref_id, state)
+}
+
+fn skin_state_number_expr(expr: &str, state: SkinDrawState) -> Option<i64> {
+    let normalized = expr.replace('+', " + ").replace('-', " - ");
+    let mut sign = 1_i64;
+    let mut total = 0_i64;
+    let mut expecting_value = true;
+    for token in normalized.split_whitespace() {
+        match token {
+            "+" if expecting_value => sign = 1,
+            "-" if expecting_value => sign = -1,
+            "+" if !expecting_value => {
+                sign = 1;
+                expecting_value = true;
+            }
+            "-" if !expecting_value => {
+                sign = -1;
+                expecting_value = true;
+            }
+            value => {
+                if !expecting_value {
+                    return None;
+                }
+                let term = skin_state_number_expr_term(value, state)?;
+                total += sign * term;
+                sign = 1;
+                expecting_value = false;
+            }
+        }
+    }
+    if expecting_value {
+        return None;
+    }
+    Some(total)
+}
+
+fn skin_state_number_expr_term(term: &str, state: SkinDrawState) -> Option<i64> {
+    if let Some(ref_id) = parse_skin_number_operand(term) {
+        return skin_state_number(ref_id, state);
+    }
+    if let Some((coefficient, operand)) = term.split_once('*') {
+        let coefficient = coefficient.parse::<i64>().ok()?;
+        let ref_id = parse_skin_number_operand(operand.trim())?;
+        return skin_state_number(ref_id, state).map(|value| coefficient * value);
+    }
+    term.parse::<i64>().ok()
 }
 
 fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
@@ -5852,6 +5940,125 @@ mod tests {
     }
 
     #[test]
+    fn skin_document_evaluates_number_draw_conditions() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "system.png" }],
+                "image": [{ "id": "panel", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10 }],
+                "destination": [
+                    { "id": "panel", "draw": "number(425) > 0", "dst": [{ "x": 0, "y": 0, "w": 10, "h": 10 }] },
+                    { "id": "panel", "draw": "number(425) == 0", "dst": [{ "x": 10, "y": 0, "w": 10, "h": 10 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "1".to_string(),
+            SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 10.0, height: 10.0 },
+            },
+        )]);
+
+        let no_miss = document.static_image_render_items(&sources, SkinDrawState::default());
+        let miss = document.static_image_render_items(
+            &sources,
+            SkinDrawState {
+                judge_counts: DisplayJudgeCounts { bad: 1, poor: 2, ..Default::default() },
+                ..SkinDrawState::default()
+            },
+        );
+
+        assert!(
+            matches!(no_miss[0], SkinRenderItem::Image { rect: Rect { x, .. }, .. } if approx_eq(x, 0.1))
+        );
+        assert!(
+            matches!(miss[0], SkinRenderItem::Image { rect: Rect { x, .. }, .. } if approx_eq(x, 0.0))
+        );
+        assert!(eval_skin_draw_condition(
+            "number(410) == number(411) or number(110) == number(410)",
+            SkinDrawState {
+                judge_counts: DisplayJudgeCounts { pgreat: 300, ..Default::default() },
+                fast_slow_counts: Some(crate::snapshot::FastSlowJudgeCounts {
+                    fast_pgreat: 300,
+                    slow_pgreat: 0,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }
+        ));
+        assert!(eval_skin_draw_condition(
+            "number(410) > number(411) and number(411) >= 1",
+            SkinDrawState {
+                fast_slow_counts: Some(crate::snapshot::FastSlowJudgeCounts {
+                    fast_pgreat: 120,
+                    slow_pgreat: 20,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }
+        ));
+    }
+
+    #[test]
+    fn skin_document_evaluates_option_draw_conditions() {
+        assert!(eval_skin_draw_condition(
+            "option(197)",
+            SkinDrawState {
+                select_replay_slots: [true, false, false, false],
+                ..Default::default()
+            }
+        ));
+        assert!(eval_skin_draw_condition("!option(197)", SkinDrawState::default()));
+        assert!(!eval_skin_draw_condition(
+            "!option(197)",
+            SkinDrawState {
+                select_replay_slots: [true, false, false, false],
+                ..Default::default()
+            }
+        ));
+    }
+
+    #[test]
+    fn skin_document_evaluates_timer_draw_conditions() {
+        assert!(eval_skin_draw_condition("timer(46) == timer_off", SkinDrawState::default()));
+        assert!(eval_skin_draw_condition(
+            "timer(46) != timer_off",
+            SkinDrawState { judge_ms: Some(120), ..Default::default() }
+        ));
+        assert!(eval_skin_draw_condition(
+            "timer(46) > 0 and option(197)",
+            SkinDrawState {
+                judge_ms: Some(120),
+                select_replay_slots: [true, false, false, false],
+                ..Default::default()
+            }
+        ));
+    }
+
+    #[test]
+    fn skin_document_evaluates_gauge_type_draw_conditions() {
+        assert!(eval_skin_draw_condition(
+            "gauge_type() == 4 or gauge_type() == 5",
+            SkinDrawState { gauge_type: 4, ..Default::default() }
+        ));
+        assert!(eval_skin_draw_condition(
+            "gauge_type() == 4 or gauge_type() == 5",
+            SkinDrawState { gauge_type: 5, ..Default::default() }
+        ));
+        assert!(!eval_skin_draw_condition(
+            "gauge_type() == 4 or gauge_type() == 5",
+            SkinDrawState { gauge_type: 2, ..Default::default() }
+        ));
+    }
+
+    #[test]
     fn skin_document_evaluates_destination_option_conditions() {
         let document: SkinDocument = serde_json::from_str(
             r#"
@@ -6683,10 +6890,12 @@ mod tests {
                 "source": [{ "id": 1, "path": "number.png" }],
                 "value": [
                     { "id": "combo", "src": 1, "x": 0, "y": 0, "w": 100, "h": 10, "divx": 10, "digit": 3, "ref": 104 },
+                    { "id": "remain", "src": 1, "x": 0, "y": 0, "w": 100, "h": 10, "divx": 10, "digit": 3, "expr": "number(106) - number(110) - number(111)" },
                     { "id": "unknown", "src": 1, "x": 0, "y": 0, "w": 100, "h": 10, "divx": 10, "digit": 3, "ref": 9999 }
                 ],
                 "destination": [
                     { "id": "combo", "dst": [{ "x": 10, "y": 20, "w": 5, "h": 10 }] },
+                    { "id": "remain", "dst": [{ "x": 10, "y": 30, "w": 5, "h": 10 }] },
                     { "id": "unknown", "dst": [{ "x": 10, "y": 40, "w": 5, "h": 10 }] }
                 ]
             }
@@ -6704,14 +6913,20 @@ mod tests {
 
         let items = document.static_image_render_items(
             &sources,
-            SkinDrawState { elapsed_ms: 0, combo: 45, ..SkinDrawState::default() },
+            SkinDrawState {
+                elapsed_ms: 0,
+                combo: 45,
+                total_notes: 100,
+                judge_counts: DisplayJudgeCounts { pgreat: 30, great: 20, ..Default::default() },
+                ..SkinDrawState::default()
+            },
         );
 
         // combo=45 (2 digits), digit=3 → shiftbase=1, align=0 (right-aligned, default)
         // digit_step = 5/100 = 0.05, origin_x = 10/100 = 0.1
         // digit "4": x = 0.1 + 0.05 * (1+0) - 0 = 0.15
         // digit "5": x = 0.1 + 0.05 * (1+1) - 0 = 0.20
-        assert_eq!(items.len(), 2);
+        assert_eq!(items.len(), 4);
         assert!(matches!(items[0], SkinRenderItem::Image {
                 rect: Rect { x, y, .. },
                 uv: TextureRegion { x: u, .. },
@@ -6722,6 +6937,16 @@ mod tests {
                 uv: TextureRegion { x: u, .. },
                 ..
             } if approx_eq(x, 0.20) && approx_eq(u, 0.5)));
+        assert!(matches!(items[2], SkinRenderItem::Image {
+                rect: Rect { x, y, .. },
+                uv: TextureRegion { x: u, .. },
+                ..
+            } if approx_eq(x, 0.15) && approx_eq(y, 0.6) && approx_eq(u, 0.5)));
+        assert!(matches!(items[3], SkinRenderItem::Image {
+                rect: Rect { x, .. },
+                uv: TextureRegion { x: u, .. },
+                ..
+            } if approx_eq(x, 0.20) && approx_eq(u, 0.0)));
     }
 
     #[test]
