@@ -159,9 +159,11 @@ struct PendingSkinInstall {
 }
 
 /// 1 フレームに install する PNG ソースの最大個数。
-/// PNG アップロードは GPU テクスチャ作成を伴い 1 件あたり数 ms 〜数十 ms かかるため、
-/// 体感の引っかかりを避けるよう 1 件ずつに抑える (フォントはコストが低いので一括処理)。
-const SKIN_INSTALL_SOURCES_PER_FRAME: usize = 1;
+/// 細かく分散させると debug build や低 fps 環境で完了までの総時間が伸び、
+/// 結局 Select→Play 遷移で install 待ちが発生してしまうため、
+/// decode が完了して main thread が一段落しているこのタイミングで一気に流し込む。
+/// (release build では 1 フレームの stutter は ~数百 ms 程度に収まる)
+const SKIN_INSTALL_SOURCES_PER_FRAME: usize = usize::MAX;
 
 #[derive(Debug, Clone, PartialEq)]
 enum AppViewState {
@@ -905,31 +907,30 @@ impl WinitApp {
     }
 
     /// install キューを 1 フレーム分だけ進める。
-    /// フォントは安価なので 1 フレームで全部、PNG は重いので `SKIN_INSTALL_SOURCES_PER_FRAME` 個まで。
+    /// フォントは安価なので一括処理、PNG は `SKIN_INSTALL_SOURCES_PER_FRAME` 個までを上限に
+    /// 各 install を順番に進めていく。budget を使い切ったらそのフレームは打ち切る。
     fn step_skin_installs(&mut self) {
-        if self.pending_skin_installs.is_empty() {
-            return;
-        }
-        // 先頭の install を 1 フレーム分進める。
-        let install = &mut self.pending_skin_installs[0];
-        // フォントは全部一括で取り込む (FontArc::try_from_vec はミリ秒オーダー)。
-        while let Some(font) = install.fonts.pop_front() {
-            install_decoded_font(&mut self.renderer, font);
-        }
-        // PNG ソースはフレームあたり SKIN_INSTALL_SOURCES_PER_FRAME 個まで。
         let mut budget = SKIN_INSTALL_SOURCES_PER_FRAME;
-        while budget > 0
-            && let Some(source) = install.sources.pop_front()
-        {
-            if let Some(texture) = install_decoded_source(&mut self.renderer, source) {
-                install.document_textures.push(texture);
+        while !self.pending_skin_installs.is_empty() {
+            let install = &mut self.pending_skin_installs[0];
+            while let Some(font) = install.fonts.pop_front() {
+                install_decoded_font(&mut self.renderer, font);
             }
-            budget -= 1;
-        }
-        // 全て install 終わったら scene context をセットして dequeue する。
-        if install.fonts.is_empty() && install.sources.is_empty() {
-            let install = self.pending_skin_installs.remove(0);
-            self.finalize_skin_install(install);
+            while budget > 0
+                && let Some(source) = install.sources.pop_front()
+            {
+                if let Some(texture) = install_decoded_source(&mut self.renderer, source) {
+                    install.document_textures.push(texture);
+                }
+                budget = budget.saturating_sub(1);
+            }
+            if install.fonts.is_empty() && install.sources.is_empty() {
+                let install = self.pending_skin_installs.remove(0);
+                self.finalize_skin_install(install);
+            } else {
+                // budget を使い切った: 続きは次フレームで。
+                break;
+            }
         }
     }
 
@@ -1151,6 +1152,31 @@ fn load_skin_textures(
     play_skin_path: &str,
     result_skin_path: &str,
 ) -> (Option<SkinManifest>, Option<Receiver<PendingSkinResult>>, bool, bool) {
+    // Play / Result の JSON skin は Select の同期ロードより**前**に decode スレッドを起動して
+    // CPU をフル活用する。Select の sync 処理 (PNG GPU upload など) と並列に decode が進む。
+    let (tx, rx) = mpsc::channel::<PendingSkinResult>();
+    let mut pending_play = false;
+    let mut pending_result = false;
+
+    let play_trimmed = play_skin_path.trim().to_string();
+    let result_trimmed = result_skin_path.trim().to_string();
+
+    if !play_trimmed.is_empty() {
+        let play_path = Path::new(&play_trimmed);
+        if is_json_skin_path(play_path) {
+            spawn_skin_decode(tx.clone(), play_path.to_path_buf(), SkinKind::Play);
+            pending_play = true;
+        }
+    }
+    if !result_trimmed.is_empty() {
+        let result_path = Path::new(&result_trimmed);
+        if is_json_skin_path(result_path) {
+            spawn_skin_decode(tx.clone(), result_path.to_path_buf(), SkinKind::Result);
+            pending_result = true;
+        }
+    }
+    drop(tx);
+
     let default_manifest = match load_default_skin_into_renderer(renderer) {
         Ok(manifest) => Some(manifest),
         Err(error) => {
@@ -1176,43 +1202,23 @@ fn load_skin_textures(
         }
     }
 
-    // Play / Result skin はバックグラウンドで Phase A を実行する。
-    let (tx, rx) = mpsc::channel::<PendingSkinResult>();
-    let mut pending_play = false;
-    let mut pending_result = false;
-
-    let play_trimmed = play_skin_path.trim().to_string();
-    if !play_trimmed.is_empty() {
-        let play_path = Path::new(&play_trimmed);
-        if is_json_skin_path(play_path) {
-            spawn_skin_decode(tx.clone(), play_path.to_path_buf(), SkinKind::Play);
-            pending_play = true;
-        } else {
-            // toml or bmz-style directory skin。デフォルトスキンと比べて軽いので同期でロードする。
-            if let Err(error) = apply_skin_from_config(renderer, &play_trimmed) {
-                tracing::warn!(
-                    error = %format_error_chain(&error),
-                    "failed to apply play skin; using fallback textures"
-                );
-            }
-        }
+    // 非 JSON の play skin (toml/bmz-style) は同期ロード。
+    if !play_trimmed.is_empty()
+        && !is_json_skin_path(Path::new(&play_trimmed))
+        && let Err(error) = apply_skin_from_config(renderer, &play_trimmed)
+    {
+        tracing::warn!(
+            error = %format_error_chain(&error),
+            "failed to apply play skin; using fallback textures"
+        );
+    }
+    if !result_trimmed.is_empty() && !is_json_skin_path(Path::new(&result_trimmed)) {
+        tracing::warn!(
+            path = %result_trimmed,
+            "result skin path is not a .json file; ignoring"
+        );
     }
 
-    let result_trimmed = result_skin_path.trim();
-    if !result_trimmed.is_empty() {
-        let result_path = Path::new(result_trimmed);
-        if is_json_skin_path(result_path) {
-            spawn_skin_decode(tx.clone(), result_path.to_path_buf(), SkinKind::Result);
-            pending_result = true;
-        } else {
-            tracing::warn!(
-                path = %result_path.display(),
-                "result skin path is not a .json file; ignoring"
-            );
-        }
-    }
-
-    drop(tx);
     let rx = if pending_play || pending_result { Some(rx) } else { None };
     (default_manifest, rx, pending_play, pending_result)
 }
