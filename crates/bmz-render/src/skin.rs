@@ -6989,7 +6989,7 @@ mod tests {
                 text,
                 style,
                 ..
-            } if approx_eq(*x, 0.1)
+            } if approx_eq(*x, -0.15)
                 && approx_eq(*y, 0.7)
                 && text == "Song Another"
                 && style.font_id.as_deref() == Some("main")
