@@ -10,6 +10,7 @@ use bmz_render::skin::{
     DestinationListEntry, SkinContext, SkinDocument, SkinDocumentTexture, SkinImageSize,
     SkinManifest, SkinTextureId,
 };
+use bmz_skin::SkinKind as DecodeSkinKind;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,14 +99,14 @@ pub fn apply_default_skin(renderer: &mut Renderer) -> Result<()> {
 }
 
 /// `profile.toml` の `[skin] play` 設定からスキンをロードする。
-/// 空文字列 → デフォルトスキン、`.json` 拡張子 → beatoraja JSON スキン、
+/// 空文字列 → デフォルトスキン、`.json`/`.luaskin`/`.lua` 拡張子 → beatoraja スキン、
 /// それ以外 → `skin.toml` を含む bmz スキンディレクトリとして扱う。
 pub fn apply_skin_from_config(renderer: &mut Renderer, play_skin_path: &str) -> Result<()> {
     if play_skin_path.is_empty() {
         return apply_default_skin(renderer);
     }
     let path = Path::new(play_skin_path);
-    if path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("json")) {
+    if is_decodable_skin_path(path) {
         apply_beatoraja_json_skin(renderer, path)
     } else {
         apply_skin_from_dir(renderer, path)
@@ -130,7 +131,7 @@ fn apply_beatoraja_json_skin_for_kind(
     kind: SkinKind,
 ) -> Result<()> {
     let manifest = load_default_skin_into_renderer(renderer)?;
-    let decoded = decode_beatoraja_json_skin(skin_path, kind)?;
+    let decoded = decode_beatoraja_skin(skin_path, kind)?;
     install_decoded_skin(renderer, decoded, manifest)
 }
 
@@ -157,9 +158,8 @@ pub fn load_default_skin_into_renderer(renderer: &mut Renderer) -> Result<SkinMa
 
 /// beatoraja JSON skin の document/フォント/PNG ソースを並列にデコードする。
 /// Renderer には触らないので Send-safe で、別スレッドからも呼べる。
-pub fn decode_beatoraja_json_skin(skin_path: &Path, kind: SkinKind) -> Result<DecodedSkin> {
-    let mut document = SkinDocument::load_beatoraja_json(skin_path)
-        .with_context(|| format!("failed to load beatoraja json skin: {}", skin_path.display()))?;
+pub fn decode_beatoraja_skin(skin_path: &Path, kind: SkinKind) -> Result<DecodedSkin> {
+    let mut document = load_skin_document(skin_path, kind)?;
     // フォント ID は scene 横断的に Renderer のグローバルマップに登録されるので、
     // play / select / result で同じ "0" 等が衝突する。namespace を付与して隔離する。
     // text 定義の font 参照側も同じ namespace を付ける。
@@ -269,6 +269,50 @@ pub fn decode_beatoraja_json_skin(skin_path: &Path, kind: SkinKind) -> Result<De
         .collect();
 
     Ok(DecodedSkin { kind, document, fonts, sources })
+}
+
+fn load_skin_document(skin_path: &Path, kind: SkinKind) -> Result<SkinDocument> {
+    if is_lua_skin_path(skin_path) {
+        let loaded =
+            bmz_skin::load_lua_skin(skin_path, decode_skin_kind(kind), &Default::default())
+                .with_context(|| format!("failed to load lua skin: {}", skin_path.display()))?;
+        for warning in loaded.warnings {
+            tracing::warn!(
+                path = %skin_path.display(),
+                kind = ?kind,
+                warning = %warning.message,
+                "lua skin load warning"
+            );
+        }
+        Ok(loaded.document)
+    } else {
+        bmz_skin::load_beatoraja_json_skin_with_defaults(skin_path)
+            .with_context(|| format!("failed to load beatoraja json skin: {}", skin_path.display()))
+    }
+}
+
+fn decode_skin_kind(kind: SkinKind) -> DecodeSkinKind {
+    match kind {
+        SkinKind::Play => DecodeSkinKind::Play,
+        SkinKind::Select => DecodeSkinKind::Select,
+        SkinKind::Result => DecodeSkinKind::Result,
+    }
+}
+
+pub fn is_decodable_skin_path(path: &Path) -> bool {
+    is_json_skin_path(path) || is_lua_skin_path(path)
+}
+
+pub fn is_json_skin_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
+}
+
+pub fn is_lua_skin_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("luaskin") || ext.eq_ignore_ascii_case("lua"))
 }
 
 fn decode_font(path: &Path) -> Result<DecodedFontData> {
@@ -688,6 +732,36 @@ mod tests {
     }
 
     #[test]
+    fn ecfn_lua_skins_can_be_decoded_when_available() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/skins/ECFN");
+        let cases = [
+            (root.join("select/select.luaskin"), SkinKind::Select),
+            (root.join("play/play7.luaskin"), SkinKind::Play),
+            (root.join("RESULT/result.luaskin"), SkinKind::Result),
+        ];
+        for (skin_path, kind) in cases {
+            if !skin_path.is_file() {
+                continue;
+            }
+            let decoded = decode_beatoraja_skin(&skin_path, kind).unwrap();
+            assert!(!decoded.document.destination.is_empty());
+        }
+    }
+
+    #[test]
+    fn starseeker_play_lua_skin_can_be_decoded_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/skins/Starseeker/play/play7.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let decoded = decode_beatoraja_skin(&skin_path, SkinKind::Play).unwrap();
+
+        assert!(!decoded.document.destination.is_empty());
+    }
+
+    #[test]
     fn apply_skin_from_config_empty_path_uses_default_skin() {
         let mut renderer = Renderer::default();
 
@@ -698,6 +772,18 @@ mod tests {
     fn apply_skin_from_config_json_path_loads_beatoraja_skin_when_available() {
         let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../.local/beatoraja/skin/default/play7.json");
+        if !skin_path.is_file() {
+            return;
+        }
+        let mut renderer = Renderer::default();
+
+        apply_skin_from_config(&mut renderer, skin_path.to_str().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn apply_skin_from_config_lua_path_loads_beatoraja_skin_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/skins/ECFN/play/play7.luaskin");
         if !skin_path.is_file() {
             return;
         }

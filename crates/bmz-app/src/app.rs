@@ -44,8 +44,8 @@ use crate::screens::select_model::{
 use crate::select_options::{ArrangeOption, AssistOption};
 use crate::skin_loader::{
     DecodedFont, DecodedSkin, DecodedSource, SkinKind, apply_skin_from_config,
-    decode_beatoraja_json_skin, install_decoded_font, install_decoded_skin, install_decoded_source,
-    load_default_skin_into_renderer, set_decoded_skin_context,
+    decode_beatoraja_skin, install_decoded_font, install_decoded_skin, install_decoded_source,
+    is_decodable_skin_path, load_default_skin_into_renderer, set_decoded_skin_context,
 };
 use crate::storage::replay::load_replay_for_chart;
 use crate::storage::scan::scan_song_roots;
@@ -1204,14 +1204,14 @@ fn load_skin_textures(
 
     if !play_trimmed.is_empty() {
         let play_path = Path::new(&play_trimmed);
-        if is_json_skin_path(play_path) {
+        if is_decodable_skin_path(play_path) {
             spawn_skin_decode(tx.clone(), play_path.to_path_buf(), SkinKind::Play);
             pending_play = true;
         }
     }
     if !result_trimmed.is_empty() {
         let result_path = Path::new(&result_trimmed);
-        if is_json_skin_path(result_path) {
+        if is_decodable_skin_path(result_path) {
             spawn_skin_decode(tx.clone(), result_path.to_path_buf(), SkinKind::Result);
             pending_result = true;
         }
@@ -1233,19 +1233,19 @@ fn load_skin_textures(
     let select_trimmed = select_skin_path.trim();
     if !select_trimmed.is_empty() {
         let path = Path::new(select_trimmed);
-        if is_json_skin_path(path) {
+        if is_decodable_skin_path(path) {
             apply_json_skin_sync(renderer, path, SkinKind::Select, default_manifest.as_ref());
         } else {
             tracing::warn!(
                 path = %path.display(),
-                "select skin path is not a .json file; ignoring"
+                "select skin path is not a supported beatoraja skin file; ignoring"
             );
         }
     }
 
-    // 非 JSON の play skin (toml/bmz-style) は同期ロード。
+    // beatoraja 形式以外の play skin (toml/bmz-style) は同期ロード。
     if !play_trimmed.is_empty()
-        && !is_json_skin_path(Path::new(&play_trimmed))
+        && !is_decodable_skin_path(Path::new(&play_trimmed))
         && let Err(error) = apply_skin_from_config(renderer, &play_trimmed)
     {
         tracing::warn!(
@@ -1253,21 +1253,15 @@ fn load_skin_textures(
             "failed to apply play skin; using fallback textures"
         );
     }
-    if !result_trimmed.is_empty() && !is_json_skin_path(Path::new(&result_trimmed)) {
+    if !result_trimmed.is_empty() && !is_decodable_skin_path(Path::new(&result_trimmed)) {
         tracing::warn!(
             path = %result_trimmed,
-            "result skin path is not a .json file; ignoring"
+            "result skin path is not a supported beatoraja skin file; ignoring"
         );
     }
 
     let rx = if pending_play || pending_result { Some(rx) } else { None };
     (default_manifest, rx, pending_play, pending_result)
-}
-
-fn is_json_skin_path(path: &Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
 }
 
 fn apply_json_skin_sync(
@@ -1284,7 +1278,7 @@ fn apply_json_skin_sync(
         );
         return;
     };
-    let decoded = match decode_beatoraja_json_skin(path, kind) {
+    let decoded = match decode_beatoraja_skin(path, kind) {
         Ok(decoded) => decoded,
         Err(error) => {
             tracing::warn!(
@@ -1311,7 +1305,7 @@ fn spawn_skin_decode(tx: mpsc::Sender<PendingSkinResult>, path: PathBuf, kind: S
     thread::Builder::new()
         .name(format!("skin-decode-{:?}", kind))
         .spawn(move || {
-            let result = decode_beatoraja_json_skin(&path, kind);
+            let result = decode_beatoraja_skin(&path, kind);
             let _ = tx.send(PendingSkinResult { path: send_path, kind, result });
         })
         .expect("failed to spawn skin decode thread");

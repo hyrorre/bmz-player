@@ -232,6 +232,7 @@ dependencies = [
  "bmz-core",
  "bmz-gameplay",
  "bmz-render",
+ "bmz-skin",
  "bmz-video",
  "gilrs",
  "rayon",
@@ -308,11 +309,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "bmz-skin"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bmz-render",
+ "mlua",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "bmz-skin-convert"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "mlua",
+ "bmz-skin",
  "serde_json",
 ]
 

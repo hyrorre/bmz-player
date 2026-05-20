@@ -5,6 +5,7 @@ members = [
     "crates/bmz-audio",
     "crates/bmz-gameplay",
     "crates/bmz-render",
+    "crates/bmz-skin",
     "crates/bmz-app",
     "crates/bmz-skin-convert",
     "crates/bmz-video",
