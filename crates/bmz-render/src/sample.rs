@@ -46,6 +46,7 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
         option_hint:
             "F1 SELECT  F2 RELOAD  F3 RESULT  F4 PLAY   Q+Z:ARRANGE  Q+X:GAUGE  Q+C:ASSIST"
                 .to_string(),
+        exit_hold_progress: 0.0,
     })
 }
 

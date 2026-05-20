@@ -29,6 +29,8 @@ pub struct SelectSnapshot {
     pub current_folder: String,
     pub key_hint: String,
     pub option_hint: String,
+    /// ESC 長押しによるアプリ終了の進捗 (0.0..=1.0)。0.0 のときは未押下。
+    pub exit_hold_progress: f32,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]

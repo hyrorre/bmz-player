@@ -171,11 +171,43 @@ impl Color {
     }
 }
 
+fn push_exit_hold_indicator(commands: &mut Vec<DrawCommand>, progress: f32) {
+    let progress = progress.clamp(0.0, 1.0);
+    if progress <= 0.0 {
+        return;
+    }
+    // skin docが画面全体に画像を敷くケースで、DrawCommand::Rect は images より前に描画され
+    // 隠れてしまうため、文字レイヤ(=最前面)で全要素を描く。
+    const TOTAL_BLOCKS: usize = 16;
+    let filled = (progress * TOTAL_BLOCKS as f32).round() as usize;
+    let background_bar: String = "\u{2588}".repeat(TOTAL_BLOCKS); // ████ (U+2588)
+    let filled_bar: String = "\u{2588}".repeat(filled);
+    let text = TextRenderer;
+    text.push_text(
+        commands,
+        &background_bar,
+        BitmapTextStyle { x: 0.005, y: 0.005, cell: 0.006, color: Color::rgb(0.22, 0.22, 0.26) },
+    );
+    if filled > 0 {
+        text.push_text(
+            commands,
+            &filled_bar,
+            BitmapTextStyle { x: 0.005, y: 0.005, cell: 0.006, color: Color::rgb(0.92, 0.4, 0.32) },
+        );
+    }
+    text.push_text(
+        commands,
+        "HOLD ESC TO EXIT",
+        BitmapTextStyle { x: 0.005, y: 0.045, cell: 0.005, color: Color::rgb(0.95, 0.95, 0.95) },
+    );
+}
+
 fn plan_select(snapshot: &SelectSnapshot, skin: &SkinContext) -> DrawPlan {
     if skin.document().is_some_and(|document| document.skin_type == 5) {
         let mut commands = Vec::new();
         crate::skin::append_skin_render_items(&mut commands, &skin.select_document_items(snapshot));
         if !commands.is_empty() {
+            push_exit_hold_indicator(&mut commands, snapshot.exit_hold_progress);
             return DrawPlan { clear: Color::rgb(0.0, 0.0, 0.0), commands };
         }
     }
@@ -265,6 +297,8 @@ fn plan_select(snapshot: &SelectSnapshot, skin: &SkinContext) -> DrawPlan {
         &snapshot.option_hint,
         BitmapTextStyle { x: 0.08, y: 0.895, cell: 0.005, color: Color::rgb(0.58, 0.67, 0.7) },
     );
+
+    push_exit_hold_indicator(&mut commands, snapshot.exit_hold_progress);
 
     DrawPlan { clear: Color::rgb(0.02, 0.025, 0.03), commands }
 }

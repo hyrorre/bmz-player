@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use bmz_chart::model::PlayableChart;
@@ -138,7 +138,11 @@ struct WinitApp {
     pending_play_skin: bool,
     pending_result_skin: bool,
     pending_skin_installs: Vec<PendingSkinInstall>,
+    /// 選曲画面でESCを長押し中の開始時刻。離されたり画面を抜けると None になる。
+    select_exit_hold_started_at: Option<Instant>,
 }
+
+const SELECT_EXIT_HOLD_DURATION: Duration = Duration::from_millis(1_200);
 
 struct PendingSkinResult {
     path: PathBuf,
@@ -257,6 +261,7 @@ impl WinitApp {
             pending_play_skin,
             pending_result_skin,
             pending_skin_installs: Vec::new(),
+            select_exit_hold_started_at: None,
         };
         if let Some(chart_id) = boot_sample_chart_id {
             tracing::info!(
@@ -433,7 +438,28 @@ impl WinitApp {
             current_folder,
             key_hint: self.select_keys.key_hint.clone(),
             option_hint: self.select_keys.option_hint.clone(),
+            exit_hold_progress: self.select_exit_hold_progress(),
         }
+    }
+
+    fn should_exit_via_select_hold(&mut self) -> bool {
+        if !matches!(self.view_state(), AppViewState::Select) || self.dev_scene.is_some() {
+            self.select_exit_hold_started_at = None;
+            return false;
+        }
+        let Some(started) = self.select_exit_hold_started_at else {
+            return false;
+        };
+        started.elapsed() >= SELECT_EXIT_HOLD_DURATION
+    }
+
+    fn select_exit_hold_progress(&self) -> f32 {
+        let Some(started) = self.select_exit_hold_started_at else {
+            return 0.0;
+        };
+        let elapsed = started.elapsed().as_secs_f32();
+        let total = SELECT_EXIT_HOLD_DURATION.as_secs_f32();
+        (elapsed / total).clamp(0.0, 1.0)
     }
 
     fn select_time(&self) -> TimeUs {
@@ -496,6 +522,21 @@ impl WinitApp {
             && !event.repeat
         {
             self.rescan_and_reload();
+            return;
+        }
+
+        // Select 画面で ESC 長押し → アプリ終了 (実際の exit は redraw 時にチェック)。
+        if self.dev_scene.is_none() && event.physical_key == PhysicalKey::Code(KeyCode::Escape) {
+            match event.state {
+                ElementState::Pressed => {
+                    if self.select_exit_hold_started_at.is_none() {
+                        self.select_exit_hold_started_at = Some(Instant::now());
+                    }
+                }
+                ElementState::Released => {
+                    self.select_exit_hold_started_at = None;
+                }
+            }
             return;
         }
 
@@ -1369,6 +1410,12 @@ impl ApplicationHandler for WinitApp {
                 self.drain_pending_skins();
                 self.render_current_scene();
                 self.advance_active_play();
+                if self.should_exit_via_select_hold() {
+                    tracing::info!("escape held for 2s on select screen; exiting app");
+                    self.save_current_play_options(self.active_hispeed(), "select exit hold");
+                    event_loop.exit();
+                    return;
+                }
                 self.handle_smoke_exit_after_redraw(event_loop);
             }
             _ => {}
