@@ -2,13 +2,71 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use bmz_render::assets::load_png_rgba;
+use bmz_render::assets::{RgbaImageAsset, load_png_rgba};
+use bmz_render::bitmap_font::{BitmapFont, load_bitmap_font};
 use bmz_render::plan::TextureId;
 use bmz_render::renderer::Renderer;
 use bmz_render::skin::{
-    DestinationListEntry, SkinContext, SkinDocument, SkinDocumentTexture, SkinManifest,
-    SkinTextureId,
+    DestinationListEntry, SkinContext, SkinDocument, SkinDocumentTexture, SkinImageSize,
+    SkinManifest, SkinTextureId,
 };
+use rayon::prelude::*;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkinKind {
+    Play,
+    Select,
+    Result,
+}
+
+impl SkinKind {
+    fn first_texture_id(self) -> u32 {
+        match self {
+            SkinKind::Play => 10_000,
+            SkinKind::Select => 20_000,
+            SkinKind::Result => 30_000,
+        }
+    }
+
+    fn warn_missing_required_sources(self) -> bool {
+        matches!(self, SkinKind::Play)
+    }
+
+    fn font_namespace(self) -> &'static str {
+        match self {
+            SkinKind::Play => "play",
+            SkinKind::Select => "select",
+            SkinKind::Result => "result",
+        }
+    }
+}
+
+/// バックグラウンドスレッドでデコード可能な 1 スキンぶんの中間データ。
+/// Renderer に触らず Send-safe な値だけを保持する。
+pub struct DecodedSkin {
+    pub kind: SkinKind,
+    pub document: SkinDocument,
+    pub fonts: Vec<DecodedFont>,
+    pub sources: Vec<DecodedSource>,
+}
+
+pub struct DecodedFont {
+    pub stored_id: String,
+    pub path: PathBuf,
+    pub data: DecodedFontData,
+}
+
+pub enum DecodedFontData {
+    Vector(Vec<u8>),
+    Bitmap(BitmapFont),
+}
+
+pub struct DecodedSource {
+    pub source_id: String,
+    pub path: PathBuf,
+    pub texture: SkinTextureId,
+    pub asset: RgbaImageAsset,
+}
 
 pub fn apply_skin_from_dir(renderer: &mut Renderer, skin_root: &Path) -> Result<()> {
     let manifest_path = skin_root.join("skin.toml");
@@ -55,30 +113,30 @@ pub fn apply_skin_from_config(renderer: &mut Renderer, play_skin_path: &str) -> 
 }
 
 pub fn apply_beatoraja_json_skin(renderer: &mut Renderer, skin_path: &Path) -> Result<()> {
-    let context = load_beatoraja_json_skin_context(renderer, skin_path, 10_000, true, "play")?;
-    renderer.set_play_skin_context(context);
-    Ok(())
+    apply_beatoraja_json_skin_for_kind(renderer, skin_path, SkinKind::Play)
 }
 
 pub fn apply_beatoraja_select_json_skin(renderer: &mut Renderer, skin_path: &Path) -> Result<()> {
-    let context = load_beatoraja_json_skin_context(renderer, skin_path, 20_000, false, "select")?;
-    renderer.set_select_skin_context(context);
-    Ok(())
+    apply_beatoraja_json_skin_for_kind(renderer, skin_path, SkinKind::Select)
 }
 
 pub fn apply_beatoraja_result_json_skin(renderer: &mut Renderer, skin_path: &Path) -> Result<()> {
-    let context = load_beatoraja_json_skin_context(renderer, skin_path, 30_000, false, "result")?;
-    renderer.set_result_skin_context(context);
-    Ok(())
+    apply_beatoraja_json_skin_for_kind(renderer, skin_path, SkinKind::Result)
 }
 
-fn load_beatoraja_json_skin_context(
+fn apply_beatoraja_json_skin_for_kind(
     renderer: &mut Renderer,
     skin_path: &Path,
-    first_texture_id: u32,
-    warn_missing_required_sources: bool,
-    font_namespace: &str,
-) -> Result<SkinContext> {
+    kind: SkinKind,
+) -> Result<()> {
+    let manifest = load_default_skin_into_renderer(renderer)?;
+    let decoded = decode_beatoraja_json_skin(skin_path, kind)?;
+    install_decoded_skin(renderer, decoded, manifest)
+}
+
+/// デフォルトスキンの manifest と PNG テクスチャを renderer に取り込む。
+/// 起動時に 1 回だけ呼ばれることを想定 (同じテクスチャを複数回 upsert しても害は無いが無駄)。
+pub fn load_default_skin_into_renderer(renderer: &mut Renderer) -> Result<SkinManifest> {
     let default_root = default_skin_root();
     let manifest_path = default_root.join("skin.toml");
     let manifest = SkinManifest::load(&manifest_path)
@@ -94,131 +152,199 @@ fn load_beatoraja_json_skin_context(
             )
         })?;
     }
+    Ok(manifest)
+}
 
+/// beatoraja JSON skin の document/フォント/PNG ソースを並列にデコードする。
+/// Renderer には触らないので Send-safe で、別スレッドからも呼べる。
+pub fn decode_beatoraja_json_skin(skin_path: &Path, kind: SkinKind) -> Result<DecodedSkin> {
     let mut document = SkinDocument::load_beatoraja_json(skin_path)
         .with_context(|| format!("failed to load beatoraja json skin: {}", skin_path.display()))?;
     // フォント ID は scene 横断的に Renderer のグローバルマップに登録されるので、
     // play / select / result で同じ "0" 等が衝突する。namespace を付与して隔離する。
     // text 定義の font 参照側も同じ namespace を付ける。
-    if !font_namespace.is_empty() {
-        for text in &mut document.text {
-            if !text.font.is_empty() {
-                text.font = format!("{}:{}", font_namespace, text.font);
+    let font_namespace = kind.font_namespace();
+    for text in &mut document.text {
+        if !text.font.is_empty() {
+            text.font = format!("{}:{}", font_namespace, text.font);
+        }
+    }
+    let skin_root = skin_path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+    let required_sources: HashSet<String> =
+        required_skin_source_ids(&document).into_iter().map(str::to_string).collect();
+    let warn_missing_required = kind.warn_missing_required_sources();
+
+    // フォントを並列にデコードする。
+    let font_tasks: Vec<_> = document
+        .font
+        .iter()
+        .filter_map(|font| {
+            if font.id.is_empty() || font.path.is_empty() {
+                return None;
             }
-        }
-    }
-    let skin_root = skin_path.parent().unwrap_or_else(|| Path::new("."));
-    let mut document_textures = Vec::new();
-    let mut next_texture_id = first_texture_id;
-    let required_sources = required_skin_source_ids(&document);
+            let font_path = resolve_json_skin_asset_path(&skin_root, &font.path, &document)?;
+            if !is_supported_font_path(&font_path) {
+                tracing::debug!(
+                    font_id = %font.id,
+                    path = %font_path.display(),
+                    "skipping unsupported beatoraja skin font"
+                );
+                return None;
+            }
+            let stored_id = format!("{}:{}", font_namespace, font.id);
+            Some((stored_id, font_path))
+        })
+        .collect();
 
-    for font in &document.font {
-        if font.id.is_empty() || font.path.is_empty() {
-            continue;
-        }
-        let Some(font_path) = resolve_json_skin_asset_path(skin_root, &font.path, &document) else {
-            tracing::debug!(
-                font_id = %font.id,
-                path = %font.path,
-                "skipping unresolved beatoraja skin font"
-            );
-            continue;
-        };
-        if !is_supported_font_path(&font_path) {
-            tracing::debug!(
-                font_id = %font.id,
-                path = %font_path.display(),
-                "skipping unsupported beatoraja skin font"
-            );
-            continue;
-        }
-        let stored_font_id = if font_namespace.is_empty() {
-            font.id.clone()
-        } else {
-            format!("{}:{}", font_namespace, font.id)
-        };
-        let result = if is_bitmap_font_path(&font_path) {
-            renderer.load_bitmap_font(stored_font_id.clone(), &font_path)
-        } else {
-            renderer.load_font(stored_font_id.clone(), &font_path)
-        };
-        if let Err(error) = result {
-            tracing::warn!(
-                font_id = %stored_font_id,
-                path = %font_path.display(),
-                %error,
-                "failed to load beatoraja skin font"
-            );
-        } else {
-            tracing::info!(
-                font_id = %stored_font_id,
-                path = %font_path.display(),
-                "loaded beatoraja skin font"
-            );
-        }
-    }
-
-    for source in &document.source {
-        let Some(source_path) = resolve_json_skin_source_path(skin_root, &source.path, &document)
-        else {
-            tracing::debug!(
-                source_id = %source.id,
-                path = %source.path,
-                "skipping unresolved beatoraja skin source"
-            );
-            continue;
-        };
-        if !source_path.to_string_lossy().to_ascii_lowercase().ends_with(".png") {
-            tracing::debug!(
-                source_id = %source.id,
-                path = %source_path.display(),
-                "skipping unsupported beatoraja skin source"
-            );
-            continue;
-        }
-        let asset = match load_png_rgba(&source_path) {
-            Ok(asset) => asset,
+    let fonts: Vec<DecodedFont> = font_tasks
+        .into_par_iter()
+        .filter_map(|(stored_id, font_path)| match decode_font(&font_path) {
+            Ok(data) => Some(DecodedFont { stored_id, path: font_path, data }),
             Err(error) => {
-                if warn_missing_required_sources && required_sources.contains(source.id.as_str()) {
+                tracing::warn!(
+                    font_id = %stored_id,
+                    path = %font_path.display(),
+                    %error,
+                    "failed to load beatoraja skin font"
+                );
+                None
+            }
+        })
+        .collect();
+
+    // ソースは ID 順を保つため、まず resolved path リストを順次組み立て、
+    // PNG デコード本体だけを並列実行する。
+    let source_tasks: Vec<(usize, String, PathBuf)> = document
+        .source
+        .iter()
+        .enumerate()
+        .filter_map(|(index, source)| {
+            let source_path = resolve_json_skin_source_path(&skin_root, &source.path, &document)?;
+            if !source_path.to_string_lossy().to_ascii_lowercase().ends_with(".png") {
+                tracing::debug!(
+                    source_id = %source.id,
+                    path = %source_path.display(),
+                    "skipping unsupported beatoraja skin source"
+                );
+                return None;
+            }
+            Some((index, source.id.clone(), source_path))
+        })
+        .collect();
+
+    let mut decoded_pairs: Vec<(usize, String, PathBuf, RgbaImageAsset)> = source_tasks
+        .into_par_iter()
+        .filter_map(|(index, source_id, source_path)| match load_png_rgba(&source_path) {
+            Ok(asset) => Some((index, source_id, source_path, asset)),
+            Err(error) => {
+                if warn_missing_required && required_sources.contains(&source_id) {
                     tracing::warn!(
-                        source_id = %source.id,
+                        source_id = %source_id,
                         path = %source_path.display(),
                         %error,
                         "failed to load beatoraja skin source"
                     );
                 } else {
                     tracing::debug!(
-                        source_id = %source.id,
+                        source_id = %source_id,
                         path = %source_path.display(),
                         %error,
                         "skipping unused missing beatoraja skin source"
                     );
                 }
-                continue;
+                None
+            }
+        })
+        .collect();
+    decoded_pairs.sort_by_key(|(index, _, _, _)| *index);
+
+    let mut next_texture_id = kind.first_texture_id();
+    let sources: Vec<DecodedSource> = decoded_pairs
+        .into_iter()
+        .map(|(_, source_id, path, asset)| {
+            let texture = SkinTextureId(next_texture_id);
+            next_texture_id += 1;
+            DecodedSource { source_id, path, texture, asset }
+        })
+        .collect();
+
+    Ok(DecodedSkin { kind, document, fonts, sources })
+}
+
+fn decode_font(path: &Path) -> Result<DecodedFontData> {
+    if is_bitmap_font_path(path) {
+        Ok(DecodedFontData::Bitmap(load_bitmap_font(path)?))
+    } else {
+        let bytes = std::fs::read(path)
+            .with_context(|| format!("failed to read font: {}", path.display()))?;
+        Ok(DecodedFontData::Vector(bytes))
+    }
+}
+
+/// Phase A でデコードした成果物を Renderer に取り込み、scene context を更新する。
+/// `default_manifest` は `load_default_skin_into_renderer` で取得した値を渡す。
+pub fn install_decoded_skin(
+    renderer: &mut Renderer,
+    decoded: DecodedSkin,
+    default_manifest: SkinManifest,
+) -> Result<()> {
+    let DecodedSkin { kind, document, fonts, sources } = decoded;
+
+    for font in fonts {
+        let DecodedFont { stored_id, path, data } = font;
+        let result: Result<()> = match data {
+            DecodedFontData::Vector(bytes) => renderer.install_font_bytes(stored_id.clone(), bytes),
+            DecodedFontData::Bitmap(bitmap) => {
+                renderer.install_bitmap_font(stored_id.clone(), bitmap);
+                Ok(())
             }
         };
-        let texture = SkinTextureId(next_texture_id);
-        next_texture_id += 1;
-        renderer
-            .upsert_image_asset(TextureId(texture.0), &asset)
-            .with_context(|| format!("failed to upload skin source: {}", source_path.display()))?;
-        document_textures.push(SkinDocumentTexture {
-            source_id: source.id.clone(),
-            texture,
-            source_size: bmz_render::skin::SkinImageSize {
-                width: asset.width as f32,
-                height: asset.height as f32,
-            },
-        });
-        tracing::info!(
-            source_id = %source.id,
-            texture_id = texture.0,
-            path = %source_path.display(),
-            "loaded beatoraja skin source"
-        );
+        match result {
+            Ok(()) => tracing::info!(
+                font_id = %stored_id,
+                path = %path.display(),
+                "loaded beatoraja skin font"
+            ),
+            Err(error) => tracing::warn!(
+                font_id = %stored_id,
+                path = %path.display(),
+                %error,
+                "failed to install beatoraja skin font"
+            ),
+        }
     }
 
-    Ok(SkinContext::from_manifest_and_document(manifest, document, document_textures))
+    let mut document_textures = Vec::with_capacity(sources.len());
+    for source in sources {
+        let DecodedSource { source_id, path, texture, asset } = source;
+        let source_size = SkinImageSize { width: asset.width as f32, height: asset.height as f32 };
+        if let Err(error) = renderer.upsert_image_asset(TextureId(texture.0), &asset) {
+            tracing::warn!(
+                source_id = %source_id,
+                texture_id = texture.0,
+                path = %path.display(),
+                %error,
+                "failed to upload beatoraja skin source"
+            );
+            continue;
+        }
+        tracing::info!(
+            source_id = %source_id,
+            texture_id = texture.0,
+            path = %path.display(),
+            "loaded beatoraja skin source"
+        );
+        document_textures.push(SkinDocumentTexture { source_id, texture, source_size });
+    }
+
+    let context =
+        SkinContext::from_manifest_and_document(default_manifest, document, document_textures);
+    match kind {
+        SkinKind::Play => renderer.set_play_skin_context(context),
+        SkinKind::Select => renderer.set_select_skin_context(context),
+        SkinKind::Result => renderer.set_result_skin_context(context),
+    }
+    Ok(())
 }
 
 fn is_supported_font_path(path: &Path) -> bool {

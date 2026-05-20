@@ -1,5 +1,7 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver};
+use std::thread;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
@@ -41,10 +43,12 @@ use crate::screens::select_model::{
 };
 use crate::select_options::{ArrangeOption, AssistOption};
 use crate::skin_loader::{
-    apply_beatoraja_result_json_skin, apply_beatoraja_select_json_skin, apply_skin_from_config,
+    DecodedSkin, SkinKind, apply_skin_from_config, decode_beatoraja_json_skin,
+    install_decoded_skin, load_default_skin_into_renderer,
 };
 use crate::storage::replay::load_replay_for_chart;
 use crate::storage::scan::scan_song_roots;
+use bmz_render::skin::SkinManifest;
 
 const SAMPLE_PLAYABLE_TITLE: &str = "BMZ Sample Playable";
 
@@ -127,6 +131,16 @@ struct WinitApp {
     option_panel_started_at: Instant,
     select_option_panel: u8,
     gilrs: Option<crate::input::gilrs::GilrsBackend>,
+    default_skin_manifest: Option<SkinManifest>,
+    pending_skin_rx: Option<Receiver<PendingSkinResult>>,
+    pending_play_skin: bool,
+    pending_result_skin: bool,
+}
+
+struct PendingSkinResult {
+    path: PathBuf,
+    kind: SkinKind,
+    result: Result<DecodedSkin>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -164,12 +178,13 @@ impl WinitApp {
         let now = Instant::now();
 
         let mut renderer = Renderer::default();
-        load_skin_textures(
-            &mut renderer,
-            &boot.profile_config.skin.select,
-            &boot.profile_config.skin.play,
-            &boot.profile_config.skin.result,
-        );
+        let (default_skin_manifest, pending_skin_rx, pending_play_skin, pending_result_skin) =
+            load_skin_textures(
+                &mut renderer,
+                &boot.profile_config.skin.select,
+                &boot.profile_config.skin.play,
+                &boot.profile_config.skin.result,
+            );
 
         let gilrs = if boot.app_config.input.gamepad_enabled {
             let sensitivity = boot.profile_config.input.analog_scratch_sensitivity;
@@ -215,6 +230,10 @@ impl WinitApp {
             option_panel_started_at: now,
             select_option_panel: 0,
             gilrs,
+            default_skin_manifest,
+            pending_skin_rx,
+            pending_play_skin,
+            pending_result_skin,
         };
         if let Some(chart_id) = boot_sample_chart_id {
             tracing::info!(
@@ -650,6 +669,7 @@ impl WinitApp {
     }
 
     fn start_chart_with_options(&mut self, chart_id: i64, options: PlayStartOptions) {
+        self.ensure_skin_ready(SkinKind::Play);
         match self.boot.start_play_for_chart_with_winit_input(chart_id, options) {
             Ok(mut active_play) => {
                 active_play.running.bga_frames =
@@ -780,6 +800,85 @@ impl WinitApp {
         self.reload_select_items();
     }
 
+    /// バックグラウンドで decode 中のスキンを非ブロッキングで取り込む。毎フレーム呼ぶ。
+    fn drain_pending_skins(&mut self) {
+        loop {
+            let Some(rx) = self.pending_skin_rx.as_ref() else {
+                return;
+            };
+            match rx.try_recv() {
+                Ok(result) => self.install_pending_skin(result),
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.pending_skin_rx = None;
+                    break;
+                }
+            }
+        }
+    }
+
+    /// 指定された kind のスキンが install されるまでブロックして待つ。
+    /// scene 遷移直前に呼ぶ用途。すでに install 済みなら即座に return する。
+    fn ensure_skin_ready(&mut self, kind: SkinKind) {
+        loop {
+            let still_pending = match kind {
+                SkinKind::Play => self.pending_play_skin,
+                SkinKind::Result => self.pending_result_skin,
+                SkinKind::Select => false,
+            };
+            if !still_pending {
+                return;
+            }
+            let Some(rx) = self.pending_skin_rx.as_ref() else {
+                return;
+            };
+            match rx.recv() {
+                Ok(result) => self.install_pending_skin(result),
+                Err(_) => {
+                    self.pending_skin_rx = None;
+                    return;
+                }
+            }
+        }
+    }
+
+    fn install_pending_skin(&mut self, pending: PendingSkinResult) {
+        let PendingSkinResult { path, kind, result } = pending;
+        match kind {
+            SkinKind::Play => self.pending_play_skin = false,
+            SkinKind::Result => self.pending_result_skin = false,
+            SkinKind::Select => {}
+        }
+        let decoded = match result {
+            Ok(decoded) => decoded,
+            Err(error) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    kind = ?kind,
+                    error = %format_error_chain(&error),
+                    "failed to decode beatoraja skin in background"
+                );
+                return;
+            }
+        };
+        let Some(manifest) = self.default_skin_manifest.clone() else {
+            tracing::warn!(
+                path = %path.display(),
+                kind = ?kind,
+                "skipping pending skin install because default skin manifest is unavailable"
+            );
+            return;
+        };
+        if let Err(error) = install_decoded_skin(&mut self.renderer, decoded, manifest) {
+            tracing::warn!(
+                path = %path.display(),
+                kind = ?kind,
+                error = %format_error_chain(&error),
+                "failed to install beatoraja skin"
+            );
+        }
+    }
+
     fn advance_active_play(&mut self) {
         let Some(active_play) = &mut self.active_play else {
             return;
@@ -810,6 +909,7 @@ impl WinitApp {
                 self.active_play = None;
                 self.finished_play = Some(finished);
                 self.save_current_play_options(Some(hispeed), "play finished");
+                self.ensure_skin_ready(SkinKind::Result);
             }
             Err(error) => {
                 tracing::error!(%error, "failed to advance play session");
@@ -946,38 +1046,137 @@ fn window_attributes_from_config(
         .with_inner_size(PhysicalSize::new(video.width.max(1), video.height.max(1)))
 }
 
+/// 起動時のスキンロード処理。
+///
+/// - default skin は必ず一度だけ renderer にアップロードする。
+/// - select の JSON skin は同期デコード+install（Select 画面を最短で表示するためクリティカルパス）。
+/// - play / result の JSON skin はバックグラウンドスレッドで Phase A (decode) を実行。
+///   完了したものは main thread の `try_recv` で順次 Phase B (install) する。
+/// - select/play/result の各パスが JSON 以外 (空文字 or .toml ディレクトリ) の場合は
+///   従来通り同期処理 (短時間で完了する想定)。
 fn load_skin_textures(
     renderer: &mut Renderer,
     select_skin_path: &str,
     play_skin_path: &str,
     result_skin_path: &str,
+) -> (Option<SkinManifest>, Option<Receiver<PendingSkinResult>>, bool, bool) {
+    let default_manifest = match load_default_skin_into_renderer(renderer) {
+        Ok(manifest) => Some(manifest),
+        Err(error) => {
+            tracing::warn!(
+                error = %format_error_chain(&error),
+                "failed to load default skin; using fallback drawing"
+            );
+            None
+        }
+    };
+
+    // Select skin (クリティカルパス: 起動直後に表示される)
+    let select_trimmed = select_skin_path.trim();
+    if !select_trimmed.is_empty() {
+        let path = Path::new(select_trimmed);
+        if is_json_skin_path(path) {
+            apply_json_skin_sync(renderer, path, SkinKind::Select, default_manifest.as_ref());
+        } else {
+            tracing::warn!(
+                path = %path.display(),
+                "select skin path is not a .json file; ignoring"
+            );
+        }
+    }
+
+    // Play / Result skin はバックグラウンドで Phase A を実行する。
+    let (tx, rx) = mpsc::channel::<PendingSkinResult>();
+    let mut pending_play = false;
+    let mut pending_result = false;
+
+    let play_trimmed = play_skin_path.trim().to_string();
+    if !play_trimmed.is_empty() {
+        let play_path = Path::new(&play_trimmed);
+        if is_json_skin_path(play_path) {
+            spawn_skin_decode(tx.clone(), play_path.to_path_buf(), SkinKind::Play);
+            pending_play = true;
+        } else {
+            // toml or bmz-style directory skin。デフォルトスキンと比べて軽いので同期でロードする。
+            if let Err(error) = apply_skin_from_config(renderer, &play_trimmed) {
+                tracing::warn!(
+                    error = %format_error_chain(&error),
+                    "failed to apply play skin; using fallback textures"
+                );
+            }
+        }
+    }
+
+    let result_trimmed = result_skin_path.trim();
+    if !result_trimmed.is_empty() {
+        let result_path = Path::new(result_trimmed);
+        if is_json_skin_path(result_path) {
+            spawn_skin_decode(tx.clone(), result_path.to_path_buf(), SkinKind::Result);
+            pending_result = true;
+        } else {
+            tracing::warn!(
+                path = %result_path.display(),
+                "result skin path is not a .json file; ignoring"
+            );
+        }
+    }
+
+    drop(tx);
+    let rx = if pending_play || pending_result { Some(rx) } else { None };
+    (default_manifest, rx, pending_play, pending_result)
+}
+
+fn is_json_skin_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
+}
+
+fn apply_json_skin_sync(
+    renderer: &mut Renderer,
+    path: &Path,
+    kind: SkinKind,
+    default_manifest: Option<&SkinManifest>,
 ) {
-    if !select_skin_path.trim().is_empty()
-        && let Err(error) =
-            apply_beatoraja_select_json_skin(renderer, Path::new(select_skin_path.trim()))
-    {
+    let Some(manifest) = default_manifest else {
         tracing::warn!(
+            path = %path.display(),
+            kind = ?kind,
+            "skipping skin install because default skin manifest is unavailable"
+        );
+        return;
+    };
+    let decoded = match decode_beatoraja_json_skin(path, kind) {
+        Ok(decoded) => decoded,
+        Err(error) => {
+            tracing::warn!(
+                path = %path.display(),
+                kind = ?kind,
+                error = %format_error_chain(&error),
+                "failed to decode beatoraja skin"
+            );
+            return;
+        }
+    };
+    if let Err(error) = install_decoded_skin(renderer, decoded, manifest.clone()) {
+        tracing::warn!(
+            path = %path.display(),
+            kind = ?kind,
             error = %format_error_chain(&error),
-            "failed to apply select skin; using fallback select drawing"
+            "failed to install beatoraja skin"
         );
     }
+}
 
-    if let Err(error) = apply_skin_from_config(renderer, play_skin_path) {
-        tracing::warn!(
-            error = %format_error_chain(&error),
-            "failed to apply play skin; using fallback textures"
-        );
-    }
-
-    if !result_skin_path.trim().is_empty()
-        && let Err(error) =
-            apply_beatoraja_result_json_skin(renderer, Path::new(result_skin_path.trim()))
-    {
-        tracing::warn!(
-            error = %format_error_chain(&error),
-            "failed to apply result skin; using fallback result drawing"
-        );
-    }
+fn spawn_skin_decode(tx: mpsc::Sender<PendingSkinResult>, path: PathBuf, kind: SkinKind) {
+    let send_path = path.clone();
+    thread::Builder::new()
+        .name(format!("skin-decode-{:?}", kind))
+        .spawn(move || {
+            let result = decode_beatoraja_json_skin(&path, kind);
+            let _ = tx.send(PendingSkinResult { path: send_path, kind, result });
+        })
+        .expect("failed to spawn skin decode thread");
 }
 
 fn load_chart_bga_textures(renderer: &mut Renderer, chart: &PlayableChart) -> BgaFrameCatalog {
@@ -1070,6 +1269,7 @@ impl ApplicationHandler for WinitApp {
                     .resize_surface(SurfaceSize { width: size.width, height: size.height });
             }
             WindowEvent::RedrawRequested => {
+                self.drain_pending_skins();
                 self.render_current_scene();
                 self.advance_active_play();
                 self.handle_smoke_exit_after_redraw(event_loop);

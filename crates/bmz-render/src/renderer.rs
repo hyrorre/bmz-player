@@ -169,6 +169,20 @@ impl Renderer {
         Ok(())
     }
 
+    /// 事前に読み込んだフォントバイト列を登録する。
+    /// バックグラウンドスレッドで I/O を済ませた後に main スレッドから登録する用途。
+    pub fn install_font_bytes(&mut self, id: impl Into<String>, bytes: Vec<u8>) -> Result<()> {
+        let font = FontArc::try_from_vec(bytes)
+            .map_err(|error| anyhow!("failed to parse font bytes: {error}"))?;
+        self.fonts.insert(id.into(), font);
+        Ok(())
+    }
+
+    /// 事前にパース済みの bitmap font を登録する。
+    pub fn install_bitmap_font(&mut self, id: impl Into<String>, font: BitmapFont) {
+        self.bitmap_fonts.insert(id.into(), font);
+    }
+
     pub fn set_skin_context(&mut self, skin_context: SkinContext) {
         self.set_play_skin_context(skin_context);
     }
