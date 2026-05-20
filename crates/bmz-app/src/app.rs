@@ -423,6 +423,17 @@ impl WinitApp {
                 tracing::info!(hispeed = active_play.running.session.hispeed, "adjusted hispeed");
                 return;
             }
+            if event.physical_key == PhysicalKey::Code(KeyCode::Escape)
+                && event.state == ElementState::Pressed
+                && !event.repeat
+            {
+                let session = &mut active_play.running.session;
+                if !session.judge.is_exhausted(&session.chart) {
+                    tracing::info!("escape pressed during play; marking session as failed");
+                    session.state = bmz_gameplay::session::PlayState::Failed;
+                }
+                return;
+            }
             active_play.input.handle_key_event(event);
             return;
         }
