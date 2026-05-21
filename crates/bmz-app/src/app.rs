@@ -1081,9 +1081,10 @@ impl WinitApp {
             Ok(PlayAdvanceOutcome::Finished { frame, finished }) => {
                 let hispeed = active_play.running.session.hispeed;
                 self.last_play_snapshot = Some(frame.render_snapshot);
+                // active_play がまだ残っている内に hispeed/lane_cover/lift を profile に保存する。
+                self.save_current_play_options(Some(hispeed), "play finished");
                 self.active_play = None;
                 self.finished_play = Some(finished);
-                self.save_current_play_options(Some(hispeed), "play finished");
                 self.ensure_skin_ready(SkinKind::Result);
             }
             Err(error) => {
@@ -1174,10 +1175,19 @@ impl WinitApp {
         self.active_play.as_ref().map(|active| active.running.session.hispeed)
     }
 
+    fn active_lane_state(&self) -> Option<ActiveLaneState> {
+        self.active_play.as_ref().map(|active| {
+            let session = &active.running.session;
+            ActiveLaneState { lane_cover: session.lane_cover, lift: session.lift }
+        })
+    }
+
     fn save_current_play_options(&mut self, hispeed: Option<f32>, reason: &'static str) {
+        let lane_state = self.active_lane_state();
         apply_current_play_options_to_profile(
             &mut self.boot.profile_config,
             hispeed,
+            lane_state,
             self.arrange_option,
             self.gauge_option,
             self.assist_option,
@@ -1591,9 +1601,16 @@ fn random_config_from_arrange(arrange: ArrangeOption) -> RandomOptionConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ActiveLaneState {
+    lane_cover: f32,
+    lift: f32,
+}
+
 fn apply_current_play_options_to_profile(
     profile: &mut ProfileConfig,
     hispeed: Option<f32>,
+    lane_state: Option<ActiveLaneState>,
     arrange: ArrangeOption,
     gauge: GaugeTypeConfig,
     assist: AssistOption,
@@ -1601,6 +1618,10 @@ fn apply_current_play_options_to_profile(
 ) {
     if let Some(hispeed) = hispeed {
         profile.lane.hispeed = clamp_hispeed_for_profile(hispeed);
+    }
+    if let Some(state) = lane_state {
+        profile.lane.lane_cover = state.lane_cover.clamp(0.0, 1.0);
+        profile.lane.lift = state.lift.clamp(0.0, 1.0);
     }
     profile.play.random = random_config_from_arrange(arrange);
     profile.play.gauge = gauge;
@@ -2238,6 +2259,7 @@ mod tests {
         apply_current_play_options_to_profile(
             &mut profile,
             Some(3.37),
+            Some(ActiveLaneState { lane_cover: 0.42, lift: 0.1 }),
             ArrangeOption::Mirror,
             GaugeTypeConfig::Hard,
             AssistOption::Autoplay,
@@ -2245,6 +2267,8 @@ mod tests {
         );
 
         assert_eq!(profile.lane.hispeed, 3.25);
+        assert!((profile.lane.lane_cover - 0.42).abs() < 1e-6);
+        assert!((profile.lane.lift - 0.1).abs() < 1e-6);
         assert!(matches!(profile.play.random, RandomOptionConfig::Mirror));
         assert!(matches!(profile.play.gauge, GaugeTypeConfig::Hard));
         assert!(profile.play.auto_play);
