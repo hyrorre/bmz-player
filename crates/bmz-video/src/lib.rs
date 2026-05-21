@@ -9,7 +9,13 @@ static FFMPEG_INIT: OnceLock<Result<(), String>> = OnceLock::new();
 
 fn ensure_ffmpeg_init() -> Result<(), String> {
     FFMPEG_INIT
-        .get_or_init(|| ffmpeg_next::init().map_err(|e| format!("ffmpeg init failed: {e}")))
+        .get_or_init(|| {
+            ffmpeg_next::init().map_err(|e| format!("ffmpeg init failed: {e}"))?;
+            // ffmpeg 内部の WARNING/INFO ログ（vorbis の discarded samples 等）を抑制する。
+            // 致命的なものだけ残すため Error レベルにする。
+            ffmpeg_next::log::set_level(ffmpeg_next::log::Level::Error);
+            Ok(())
+        })
         .clone()
 }
 
