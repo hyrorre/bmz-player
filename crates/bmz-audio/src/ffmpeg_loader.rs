@@ -97,17 +97,28 @@ fn append_frame_samples(
         return Err(format!("unsupported sample format: {}", format.name()));
     }
 
+    let planes = audio.planes();
+    if planes == 0 {
+        return Ok(());
+    }
+
     frames.reserve(samples * channels);
 
     if format.is_planar() {
-        // planar: チャンネルごとに別プレーン。frame.planes() は channels と一致する想定。
-        let planes = audio.planes();
+        // planar: チャンネルごとに別プレーン。
+        // frame::Audio::data() はスライス長を linesize[index] から取るが、ffmpeg は
+        // 音声では linesize[0] しか設定せず linesize[1..] は 0 のままになる。
+        // そのため data(1) 以降は空スライス扱いになり、右チャンネルが無音化する
+        // （= キー音が左耳からしか鳴らない）。長さを samples で決める plane::<T>()
+        // アクセサ経由で各プレーンを読み出す。
+        let mut channel_samples: Vec<Vec<f32>> = Vec::with_capacity(channels);
+        for channel in 0..channels {
+            let plane = channel.min(planes - 1);
+            channel_samples.push(read_planar_plane(audio, format, plane)?);
+        }
         for sample_index in 0..samples {
-            for channel in 0..channels {
-                let plane = channel.min(planes.saturating_sub(1));
-                let buf = audio.data(plane);
-                let offset = sample_index * bytes_per;
-                frames.push(sample_to_f32(format, buf, offset)?);
+            for channel in &channel_samples {
+                frames.push(channel.get(sample_index).copied().unwrap_or(0.0));
             }
         }
     } else {
@@ -124,6 +135,35 @@ fn append_frame_samples(
     }
 
     Ok(())
+}
+
+/// planar 音声の 1 プレーン（= 1 チャンネル）を f32 サンプル列として読み出す。
+///
+/// `plane::<T>()` はスライス長を `linesize` ではなく `samples()` から決めるため、
+/// ffmpeg が linesize[1..] を 0 のままにしていても正しい長さで読み出せる。
+fn read_planar_plane(
+    audio: &frame::Audio,
+    format: FfmpegSample,
+    plane: usize,
+) -> Result<Vec<f32>, String> {
+    let values = match format {
+        FfmpegSample::U8(_) => {
+            audio.plane::<u8>(plane).iter().map(|&v| (v as f32 - 128.0) / 128.0).collect()
+        }
+        FfmpegSample::I16(_) => {
+            audio.plane::<i16>(plane).iter().map(|&v| v as f32 / 32_768.0).collect()
+        }
+        FfmpegSample::I32(_) => {
+            audio.plane::<i32>(plane).iter().map(|&v| v as f32 / 2_147_483_648.0).collect()
+        }
+        FfmpegSample::F32(_) => audio.plane::<f32>(plane).to_vec(),
+        FfmpegSample::F64(_) => audio.plane::<f64>(plane).iter().map(|&v| v as f32).collect(),
+        FfmpegSample::I64(_) => {
+            return Err("planar 64-bit integer audio is not supported".to_string());
+        }
+        FfmpegSample::None => return Err("decoder produced no sample format".to_string()),
+    };
+    Ok(values)
 }
 
 /// `buf[offset..]` の 1 サンプルを `format` に従って f32 (-1.0..=1.0 目安) に変換する。
@@ -193,6 +233,26 @@ mod tests {
         ));
         std::fs::write(&path, bytes).unwrap();
         path
+    }
+
+    #[test]
+    fn append_frame_samples_planar_keeps_both_channels() {
+        use ffmpeg_next::ChannelLayout;
+        use ffmpeg_next::format::sample::Type;
+
+        // planar ステレオフレームを組み立てる。ffmpeg は linesize[1] を 0 のままにするため、
+        // 旧実装では右チャンネル（plane 1）が空スライス扱いになり無音化していた。
+        let mut audio =
+            frame::Audio::new(FfmpegSample::F32(Type::Planar), 3, ChannelLayout::STEREO);
+        audio.set_rate(48_000);
+        audio.plane_mut::<f32>(0).copy_from_slice(&[0.1, 0.2, 0.3]);
+        audio.plane_mut::<f32>(1).copy_from_slice(&[-0.1, -0.2, -0.3]);
+
+        let mut frames = Vec::new();
+        append_frame_samples(&audio, 2, &mut frames).unwrap();
+
+        // L/R が交互に並んだインターリーブになっていること（右が 0.0 に潰れていない）。
+        assert_eq!(frames, vec![0.1, -0.1, 0.2, -0.2, 0.3, -0.3]);
     }
 
     #[test]
