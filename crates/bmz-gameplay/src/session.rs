@@ -83,6 +83,9 @@ pub struct GameSession {
     pub hispeed: f32,
     pub lift: f32,
     pub lane_cover: f32,
+    /// レーンカバー(SUDDEN+)の表示有無。
+    /// false のときは描画/判定の visible_max 計算で lane_cover が 0 として扱われる。
+    pub lane_cover_visible: bool,
     pub hidden_cover: f32,
     pub skin_offsets: Vec<PlaySkinOffset>,
     pub bga_enabled: bool,
@@ -492,6 +495,7 @@ mod tests {
             hispeed: 2.0,
             lift: 0.0,
             lane_cover: 0.0,
+            lane_cover_visible: true,
             hidden_cover: 0.0,
             skin_offsets: Vec::new(),
             bga_enabled: true,

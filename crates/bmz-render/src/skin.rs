@@ -3065,6 +3065,12 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool 
         300..=307 => select_small_rank_op_matches(op, state),
         170 => !state.has_bga,
         171 => state.has_bga,
+        // OPTION_LANECOVER1_ON / OPTION_LIFT1_ON / OPTION_HIDDEN1_ON
+        // SUDDEN+ 非表示時は play_snapshot 側で state.lane_cover=0 にしてあるので、
+        // ここで > 0 をそのまま「カバー有効」とみなせる。
+        271 => state.lane_cover > 0.0,
+        272 => state.offset_lift_px != 0,
+        273 => state.hidden_cover > 0.0,
         // OPTION_RESULT_CLEAR=90, OPTION_RESULT_FAIL=91
         // Result 画面以外 (result_failed == None) では両方 false。
         90 => state.result_failed == Some(false),

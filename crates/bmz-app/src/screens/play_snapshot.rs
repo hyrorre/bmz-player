@@ -56,7 +56,7 @@ pub fn build_render_snapshot_with_bga_frames(
         gauge_type: session.gauge.current().definition.gauge_type as i32,
         hispeed: session.hispeed,
         lift: session.lift,
-        lane_cover: session.lane_cover,
+        lane_cover: if session.lane_cover_visible { session.lane_cover } else { 0.0 },
         hidden_cover: session.hidden_cover,
         skin_offsets: skin_offsets_from_session(session),
         now_bpm: current_bpm(&session.chart, render_now) as f32,
@@ -103,7 +103,8 @@ pub fn build_render_snapshot_with_bga_frames(
     // SUDDEN+（レーンカバー）はノーツの可視域を上端側から縮める。
     // beatoraja の currentduration = region * (1 - lanecover) と同じ。
     // 可視進捗の上限が visible_max になり、それより奥のノーツ・小節線は描画しない。
-    let visible_max = (1.0 - session.lane_cover).clamp(0.0, 1.0);
+    let effective_lane_cover = if session.lane_cover_visible { session.lane_cover } else { 0.0 };
+    let visible_max = (1.0 - effective_lane_cover).clamp(0.0, 1.0);
 
     for lane in Lane::ALL {
         let next_note_index = session.judge.lanes[lane.index()].next_note_index;

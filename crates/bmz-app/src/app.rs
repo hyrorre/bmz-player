@@ -140,9 +140,15 @@ struct WinitApp {
     pending_skin_installs: Vec<PendingSkinInstall>,
     /// 選曲画面でESCを長押し中の開始時刻。離されたり画面を抜けると None になる。
     select_exit_hold_started_at: Option<Instant>,
+    /// プレイ中の Start キー直近の押下時刻。連続押し判定で使用。
+    last_play_start_press_at: Option<Instant>,
 }
 
 const SELECT_EXIT_HOLD_DURATION: Duration = Duration::from_millis(1_200);
+/// プレイ中の Start ボタンを「2回連続押し」と判定する間隔上限。
+const PLAY_START_DOUBLE_PRESS_WINDOW: Duration = Duration::from_millis(400);
+/// レーンカバー / LIFT を上下キーで動かす際のステップ幅。
+const LANE_COVER_STEP: f32 = 0.01;
 
 struct PendingSkinResult {
     path: PathBuf,
@@ -262,6 +268,7 @@ impl WinitApp {
             pending_result_skin,
             pending_skin_installs: Vec::new(),
             select_exit_hold_started_at: None,
+            last_play_start_press_at: None,
         };
         if let Some(chart_id) = boot_sample_chart_id {
             tracing::info!(
@@ -501,6 +508,41 @@ impl WinitApp {
                     session.state = bmz_gameplay::session::PlayState::Failed;
                 }
                 return;
+            }
+            if let Some(delta) = lane_cover_step(event.physical_key, event.state, event.repeat) {
+                let session = &mut active_play.running.session;
+                if session.lane_cover_visible {
+                    // SUDDEN+ は ArrowDown で値を大きくする (上下逆操作)。
+                    session.lane_cover = (session.lane_cover - delta).clamp(0.0, 1.0);
+                    tracing::info!(lane_cover = session.lane_cover, "adjusted lane cover");
+                } else {
+                    session.lift = (session.lift + delta).clamp(0.0, 1.0);
+                    tracing::info!(lift = session.lift, "adjusted lift");
+                }
+                return;
+            }
+            // Start ボタンの2回連続押し → レーンカバー表示切替
+            if event.state == ElementState::Pressed
+                && !event.repeat
+                && let Some(control) = physical_key_name(event.physical_key)
+                && control == self.select_keys.start
+            {
+                let now = Instant::now();
+                let is_double = self
+                    .last_play_start_press_at
+                    .is_some_and(|prev| now.duration_since(prev) <= PLAY_START_DOUBLE_PRESS_WINDOW);
+                if is_double {
+                    let session = &mut active_play.running.session;
+                    session.lane_cover_visible = !session.lane_cover_visible;
+                    tracing::info!(
+                        lane_cover_visible = session.lane_cover_visible,
+                        "toggled lane cover visibility",
+                    );
+                    self.last_play_start_press_at = None;
+                } else {
+                    self.last_play_start_press_at = Some(now);
+                }
+                // Start キーはゲームプレイ入力としても通すのでフォールスルー
             }
             active_play.input.handle_key_event(event);
             return;
@@ -1734,6 +1776,18 @@ fn hispeed_action(
     match physical_key {
         PhysicalKey::Code(KeyCode::ArrowLeft) => Some(HispeedChange::Down),
         PhysicalKey::Code(KeyCode::ArrowRight) => Some(HispeedChange::Up),
+        _ => None,
+    }
+}
+
+fn lane_cover_step(physical_key: PhysicalKey, state: ElementState, _repeat: bool) -> Option<f32> {
+    if state != ElementState::Pressed {
+        return None;
+    }
+    match physical_key {
+        // 上キー: カバー位置を上げる(下方向への余白を縮める = 値を増やす)
+        PhysicalKey::Code(KeyCode::ArrowUp) => Some(LANE_COVER_STEP),
+        PhysicalKey::Code(KeyCode::ArrowDown) => Some(-LANE_COVER_STEP),
         _ => None,
     }
 }

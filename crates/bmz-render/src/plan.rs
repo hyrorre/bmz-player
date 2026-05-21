@@ -606,8 +606,8 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
 
             // ロングノート胴体はタップノートより先に描画する（端のキャップを上に重ねる）
             for body in snapshot.visible_long_notes.iter().filter(|body| body.lane == lane) {
-                let top = play_object_y(board, body.tail_y);
-                let bottom = play_object_y(board, body.head_y);
+                let top = play_object_y(board, snapshot.lift, body.tail_y);
+                let bottom = play_object_y(board, snapshot.lift, body.head_y);
                 commands.push(DrawCommand::Rect {
                     rect: Rect {
                         x: x + lane_width * 0.18,
@@ -620,7 +620,7 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
             }
 
             for note in &snapshot.visible_notes[lane_index] {
-                let y = note_rect_y(board, note.y);
+                let y = note_rect_y(board, snapshot.lift, note.y);
                 let rect = Rect {
                     x: x + lane_width * 0.08,
                     y,
@@ -631,29 +631,48 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
             }
         }
 
-        push_receptors(skin_manifest, &mut commands, board, lane_width, active_lanes);
+        push_receptors(
+            skin_manifest,
+            &mut commands,
+            board,
+            snapshot.lift,
+            lane_width,
+            active_lanes,
+        );
         for bar in &snapshot.bar_lines {
-            let y = play_object_y(board, bar.y);
+            let y = play_object_y(board, snapshot.lift, bar.y);
             commands.push(DrawCommand::Rect {
                 rect: Rect { x: board.x, y, width: board.width, height: 0.004 },
                 color: Color::rgb(0.45, 0.48, 0.5),
             });
         }
-        push_judge_line(skin_manifest, &mut commands, board);
+        push_judge_line(skin_manifest, &mut commands, board, snapshot.lift);
 
         // SUDDEN+（レーンカバー）: レーン上部を覆う。ノーツは build_render_snapshot で
         // 既に可視域外が除外されているので、ここではカバー帯を描くだけ。
+        // レーン背景が暗いグレーなので、カバーは判別しやすいように明確に黒で塗り、
+        // 下端に視認用のハイライト帯を付ける。
         if snapshot.lane_cover > 0.0 {
-            let cover_bottom = play_object_y(board, (1.0 - snapshot.lane_cover).clamp(0.0, 1.0));
+            let cover_bottom =
+                play_object_y(board, snapshot.lift, (1.0 - snapshot.lane_cover).clamp(0.0, 1.0));
+            let cover_height = (cover_bottom - board.y).max(0.0);
             commands.push(DrawCommand::Rect {
-                rect: Rect {
-                    x: board.x,
-                    y: board.y,
-                    width: board.width,
-                    height: (cover_bottom - board.y).max(0.0),
-                },
-                color: Color::rgba(0.02, 0.02, 0.03, 0.96),
+                rect: Rect { x: board.x, y: board.y, width: board.width, height: cover_height },
+                color: Color::rgba(0.0, 0.0, 0.0, 1.0),
             });
+            // SUDDEN+ の下端ラインを描いて境界を視認できるようにする。
+            let line_height = 0.004_f32.min(cover_height);
+            if line_height > 0.0 {
+                commands.push(DrawCommand::Rect {
+                    rect: Rect {
+                        x: board.x,
+                        y: cover_bottom - line_height,
+                        width: board.width,
+                        height: line_height,
+                    },
+                    color: Color::rgb(0.95, 0.65, 0.25),
+                });
+            }
         }
     } else {
         // beatoraja スキン: ロングノート胴体 → タップノートの順で note.dst のエリアに配置
@@ -873,9 +892,14 @@ fn result_judge_labels(judge_counts: &DisplayJudgeCounts) -> [String; 6] {
     ]
 }
 
-fn push_judge_line(skin_manifest: &SkinManifest, commands: &mut Vec<DrawCommand>, board: Rect) {
+fn push_judge_line(
+    skin_manifest: &SkinManifest,
+    commands: &mut Vec<DrawCommand>,
+    board: Rect,
+    lift: f32,
+) {
     let image = skin_manifest.play_judge_line_image();
-    let line_y = judge_line_y(board);
+    let line_y = judge_line_y(board, lift);
     append_skin_render_items(
         commands,
         &[SkinRenderItem::Image {
@@ -892,28 +916,32 @@ fn push_judge_line(skin_manifest: &SkinManifest, commands: &mut Vec<DrawCommand>
     );
 }
 
-fn note_rect_y(board: Rect, progress_to_hit: f32) -> f32 {
-    (play_object_y(board, progress_to_hit) - NOTE_HEIGHT / 2.0).max(board.y)
+fn note_rect_y(board: Rect, lift: f32, progress_to_hit: f32) -> f32 {
+    (play_object_y(board, lift, progress_to_hit) - NOTE_HEIGHT / 2.0).max(board.y)
 }
 
-fn play_object_y(board: Rect, progress_to_hit: f32) -> f32 {
-    let judge_y = judge_line_y(board);
+fn play_object_y(board: Rect, lift: f32, progress_to_hit: f32) -> f32 {
+    let judge_y = judge_line_y(board, lift);
     judge_y - progress_to_hit.clamp(0.0, 1.0) * (judge_y - board.y)
 }
 
-fn judge_line_y(board: Rect) -> f32 {
-    board.y + board.height * JUDGE_LINE_Y_RATIO
+fn judge_line_y(board: Rect, lift: f32) -> f32 {
+    let lift_offset = lift.clamp(0.0, 1.0) * board.height;
+    let raw = board.y + board.height * JUDGE_LINE_Y_RATIO - lift_offset;
+    raw.max(board.y)
 }
 
 fn push_receptors(
     skin_manifest: &SkinManifest,
     commands: &mut Vec<DrawCommand>,
     board: Rect,
+    lift: f32,
     lane_width: f32,
     active_lanes: &[Lane],
 ) {
     let receptor = skin_manifest.play_receptor_image();
-    let receptor_y = board.y + board.height * 0.825;
+    let lift_offset = lift.clamp(0.0, 1.0) * board.height;
+    let receptor_y = (board.y + board.height * 0.825 - lift_offset).max(board.y);
     for (display_index, &lane) in active_lanes.iter().enumerate() {
         let x = board.x + display_index as f32 * lane_width;
         append_skin_render_items(
@@ -1546,8 +1574,8 @@ mod tests {
         let body = body.expect("long note body rect should be present");
         assert!(body.height > NOTE_HEIGHT, "body should be taller than a tap note");
         let board = Rect { x: 0.18, y: 0.05, width: 0.64, height: 0.9 };
-        assert!(approx_eq(body.y, play_object_y(board, 0.7)));
-        assert!(approx_eq(body.y + body.height, play_object_y(board, 0.1)));
+        assert!(approx_eq(body.y, play_object_y(board, 0.0, 0.7)));
+        assert!(approx_eq(body.y + body.height, play_object_y(board, 0.0, 0.1)));
     }
 
     #[test]
@@ -1727,7 +1755,10 @@ mod tests {
     fn play_plan_places_hit_timing_note_on_judge_line() {
         let board = Rect { x: 0.18, y: 0.05, width: 0.64, height: 0.9 };
 
-        assert!(approx_eq(note_rect_y(board, 0.0) + NOTE_HEIGHT / 2.0, judge_line_y(board)));
+        assert!(approx_eq(
+            note_rect_y(board, 0.0, 0.0) + NOTE_HEIGHT / 2.0,
+            judge_line_y(board, 0.0)
+        ));
     }
 
     #[test]
