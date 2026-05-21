@@ -254,6 +254,7 @@ dependencies = [
  "anyhow",
  "bmz-chart",
  "bmz-core",
+ "bmz-ffmpeg",
  "cpal",
  "ffmpeg-next",
  "thiserror 1.0.69",
@@ -277,6 +278,13 @@ name = "bmz-core"
 version = "0.1.0"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "bmz-ffmpeg"
+version = "0.1.0"
+dependencies = [
+ "ffmpeg-next",
 ]
 
 [[package]]
@@ -334,6 +342,7 @@ name = "bmz-video"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bmz-ffmpeg",
  "ffmpeg-next",
  "tracing",
 ]

@@ -1,13 +1,9 @@
 [package]
-name = "bmz-video"
+name = "bmz-ffmpeg"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
 authors.workspace = true
 
 [dependencies]
-anyhow.workspace = true
-tracing.workspace = true
 ffmpeg-next.workspace = true
-
-bmz-ffmpeg = { path = "../bmz-ffmpeg" }

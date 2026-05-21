@@ -9,7 +9,8 @@ anyhow.workspace = true
 thiserror.workspace = true
 cpal.workspace = true
 tracing.workspace = true
-ffmpeg-next = "8"
+ffmpeg-next.workspace = true
 
 bmz-core = { path = "../bmz-core" }
 bmz-chart = { path = "../bmz-chart" }
+bmz-ffmpeg = { path = "../bmz-ffmpeg" }

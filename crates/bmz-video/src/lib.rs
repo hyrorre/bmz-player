@@ -1,23 +1,8 @@
 use std::collections::VecDeque;
 use std::path::Path;
-use std::sync::OnceLock;
 use std::sync::mpsc::{SyncSender, sync_channel};
 
 use anyhow::Result;
-
-static FFMPEG_INIT: OnceLock<Result<(), String>> = OnceLock::new();
-
-fn ensure_ffmpeg_init() -> Result<(), String> {
-    FFMPEG_INIT
-        .get_or_init(|| {
-            ffmpeg_next::init().map_err(|e| format!("ffmpeg init failed: {e}"))?;
-            // ffmpeg 内部の WARNING/INFO ログ（vorbis の discarded samples 等）を抑制する。
-            // 致命的なものだけ残すため Error レベルにする。
-            ffmpeg_next::log::set_level(ffmpeg_next::log::Level::Error);
-            Ok(())
-        })
-        .clone()
-}
 
 #[derive(Debug, Clone)]
 pub struct DecodedFrame {
@@ -35,7 +20,7 @@ pub struct VideoBgaDecoder {
 
 impl VideoBgaDecoder {
     pub fn open(path: &Path) -> Result<Self> {
-        ensure_ffmpeg_init().map_err(|e| anyhow::anyhow!(e))?;
+        bmz_ffmpeg::ensure_init().map_err(|e| anyhow::anyhow!(e))?;
 
         let path = path.to_path_buf();
         let (sender, receiver) = sync_channel(4);

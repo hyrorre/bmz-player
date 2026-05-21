@@ -1,25 +1,10 @@
 use std::path::Path;
-use std::sync::OnceLock;
 
 use ffmpeg_next::format::Sample as FfmpegSample;
 use ffmpeg_next::{codec, format, frame, media};
 
 use crate::loader::{SampleLoadError, SampleLoader};
 use crate::sample::DecodedSample;
-
-static FFMPEG_INIT: OnceLock<Result<(), String>> = OnceLock::new();
-
-fn ensure_ffmpeg_init() -> Result<(), String> {
-    FFMPEG_INIT
-        .get_or_init(|| {
-            ffmpeg_next::init().map_err(|e| format!("ffmpeg init failed: {e}"))?;
-            // ffmpeg 内部の WARNING/INFO ログ（vorbis の discarded samples 等）を抑制する。
-            // 致命的なものだけ残すため Error レベルにする。
-            ffmpeg_next::log::set_level(ffmpeg_next::log::Level::Error);
-            Ok(())
-        })
-        .clone()
-}
 
 /// ffmpeg-next を使って wav/ogg/flac/mp3 等の音声ファイルをデコードするローダー。
 /// `bmz-video` の動画デコードと同じく ffmpeg-next を利用する。
@@ -31,7 +16,7 @@ pub struct FfmpegSampleLoader;
 
 impl SampleLoader for FfmpegSampleLoader {
     fn load(&mut self, path: &Path) -> Result<DecodedSample, SampleLoadError> {
-        if let Err(message) = ensure_ffmpeg_init() {
+        if let Err(message) = bmz_ffmpeg::ensure_init() {
             return Err(decode_error(path, message));
         }
         decode_audio(path).map_err(|message| decode_error(path, message))

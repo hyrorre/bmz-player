@@ -9,6 +9,7 @@ members = [
     "crates/bmz-app",
     "crates/bmz-skin-convert",
     "crates/bmz-video",
+    "crates/bmz-ffmpeg",
 ]
 default-members = ["crates/bmz-app"]
 resolver = "2"
@@ -36,6 +37,7 @@ sha2 = "0.10"
 encoding_rs = "0.8"
 
 cpal = "0.15"
+ffmpeg-next = "8"
 wgpu = "0.20"
 winit = "0.30"
 gilrs = "0.10"
