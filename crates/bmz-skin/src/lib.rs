@@ -289,6 +289,39 @@ mod tests {
     }
 
     #[test]
+    fn lua_skin_dofile_resolves_get_path_joined_with_forward_slash() {
+        // Regression: `skin_config.get_path` returns an absolute path and skins
+        // build the dofile target by concatenating `"/sub.lua"`. On Windows the
+        // skin root must not be a `\\?\` verbatim path, or the mixed-separator
+        // path fails to canonicalize and the dofile is silently lost.
+        let root = unique_test_dir("bmz-skin-lua");
+        fs::create_dir_all(root.join("parts/frame")).unwrap();
+        fs::write(
+            root.join("parts/frame/mod.lua"),
+            r#"return { destination = { { id = "x", dst = {{ x = 1, y = 2, w = 3, h = 4 }} } } }"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("play7.luaskin"),
+            r#"
+            if skin_config then
+                local dir = skin_config.get_path("parts/*")
+                local sub = dofile(dir .. "/mod.lua")
+                return { type = 0, destination = sub.destination }
+            else
+                return { type = 0 }
+            end
+            "#,
+        )
+        .unwrap();
+
+        let loaded =
+            load_lua_skin(&root.join("play7.luaskin"), SkinKind::Play, &BTreeMap::new()).unwrap();
+
+        assert_eq!(loaded.document.destination.len(), 1);
+    }
+
+    #[test]
     fn lua_skin_stops_infinite_loop() {
         let root = unique_test_dir("bmz-skin-lua");
         fs::create_dir_all(&root).unwrap();

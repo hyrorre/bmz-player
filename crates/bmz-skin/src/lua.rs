@@ -52,13 +52,11 @@ fn execute_lua_skin(
     input: &Path,
     options: &BTreeMap<String, String>,
 ) -> Result<(JsonValue, Vec<String>)> {
-    let input = input
-        .canonicalize()
+    let input = canonicalize_skin_path(input)
         .with_context(|| format!("failed to canonicalize input: {}", input.display()))?;
-    let root = input
-        .parent()
-        .ok_or_else(|| anyhow!("input path has no parent: {}", input.display()))?
-        .canonicalize()
+    let parent =
+        input.parent().ok_or_else(|| anyhow!("input path has no parent: {}", input.display()))?;
+    let root = canonicalize_skin_path(parent)
         .with_context(|| format!("failed to canonicalize skin root: {}", input.display()))?;
 
     let mut warnings = Vec::new();
@@ -585,11 +583,42 @@ fn strip_beatoraja_asset_filter(path: &str) -> &str {
     path.split_once('|').map_or(path, |(asset_path, _)| asset_path)
 }
 
+/// `Path::canonicalize` returns Windows extended-length (`\\?\`) verbatim paths.
+/// Verbatim paths reject `/` as a separator, but beatoraja Lua skins build paths
+/// by string concatenation (e.g. `skin_config.get_path("_font/*") .. "/set.lua"`),
+/// so a verbatim sandbox root makes every such `dofile`/`require` fail with a
+/// path-syntax error. Strip the verbatim prefix so derived paths stay normal and
+/// tolerate mixed separators. No-op on non-Windows.
+fn canonicalize_skin_path(path: &Path) -> std::io::Result<PathBuf> {
+    path.canonicalize().map(simplify_verbatim_path)
+}
+
+#[cfg(windows)]
+fn simplify_verbatim_path(path: PathBuf) -> PathBuf {
+    let text = path.as_os_str().to_string_lossy();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    if let Some(rest) = text.strip_prefix(r"\\?\") {
+        // Only simplify regular drive paths like `C:\dir`; leave device paths alone.
+        let bytes = rest.as_bytes();
+        if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+            return PathBuf::from(rest);
+        }
+    }
+    path
+}
+
+#[cfg(not(windows))]
+fn simplify_verbatim_path(path: PathBuf) -> PathBuf {
+    path
+}
+
 fn resolve_lua_path(root: &Path, requested: &str, module: bool) -> Result<PathBuf> {
     let relative = if module { requested.replace('.', "/") } else { requested.to_string() };
     let relative_path = Path::new(&relative);
     if relative_path.is_absolute() {
-        let canonical = relative_path.canonicalize()?;
+        let canonical = canonicalize_skin_path(relative_path)?;
         if canonical.starts_with(root) {
             return Ok(canonical);
         }
@@ -611,7 +640,7 @@ fn resolve_lua_path(root: &Path, requested: &str, module: bool) -> Result<PathBu
     for candidate in candidates {
         let path = root.join(candidate);
         if path.is_file() {
-            let canonical = path.canonicalize()?;
+            let canonical = canonicalize_skin_path(&path)?;
             if !canonical.starts_with(root) {
                 bail!("lua path escapes skin root: {}", canonical.display());
             }
