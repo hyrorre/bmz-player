@@ -1465,9 +1465,19 @@ impl ApplicationHandler for WinitApp {
                     .resize_surface(SurfaceSize { width: size.width, height: size.height });
             }
             WindowEvent::RedrawRequested => {
+                self.poll_gamepad_events();
                 self.drain_pending_skins();
                 self.render_current_scene();
                 self.advance_active_play();
+                // 次フレームの再描画をここで要求して描画ループを自走させる。
+                // about_to_wait から要求すると、Windows のウィンドウ移動/リサイズ中に
+                // 発生するモーダルループ (WM_ENTERSIZEMOVE..WM_EXITSIZEMOVE) では
+                // about_to_wait が呼ばれず、メインループが停止してしまう。
+                // RedrawRequested 内から request_redraw すると実 WM_PAINT が生成され、
+                // モーダルループのメッセージ処理でも拾われるためループが止まらない。
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
                 if self.should_exit_via_select_hold() {
                     tracing::info!("escape held for 2s on select screen; exiting app");
                     self.save_current_play_options(self.active_hispeed(), "select exit hold");
@@ -1477,13 +1487,6 @@ impl ApplicationHandler for WinitApp {
                 self.handle_smoke_exit_after_redraw(event_loop);
             }
             _ => {}
-        }
-    }
-
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        self.poll_gamepad_events();
-        if let Some(window) = &self.window {
-            window.request_redraw();
         }
     }
 
