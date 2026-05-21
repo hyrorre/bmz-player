@@ -492,6 +492,13 @@ impl WinitApp {
         }
 
         if let Some(active_play) = &mut self.active_play {
+            if let Some(control) = physical_key_name(event.physical_key)
+                && control == self.select_keys.start
+                && !event.repeat
+            {
+                active_play.running.session.lane_cover_changing =
+                    event.state == ElementState::Pressed;
+            }
             if let Some(change) = hispeed_action(event.physical_key, event.state, event.repeat) {
                 active_play.running.session.hispeed =
                     adjusted_hispeed(active_play.running.session.hispeed, change);
@@ -649,6 +656,11 @@ impl WinitApp {
     }
 
     fn route_gamepad_button(&mut self, button: &str, pressed: bool) {
+        if let Some(active_play) = &mut self.active_play
+            && button == "Start"
+        {
+            active_play.running.session.lane_cover_changing = pressed;
+        }
         if !pressed {
             if button == "Start" {
                 self.start_held = false;

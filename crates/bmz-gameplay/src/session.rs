@@ -86,6 +86,8 @@ pub struct GameSession {
     /// レーンカバー(SUDDEN+)の表示有無。
     /// false のときは描画/判定の visible_max 計算で lane_cover が 0 として扱われる。
     pub lane_cover_visible: bool,
+    /// Start/Select 押下中など、レーンカバー数値表示を出す状態。
+    pub lane_cover_changing: bool,
     pub hidden_cover: f32,
     pub skin_offsets: Vec<PlaySkinOffset>,
     pub bga_enabled: bool,
@@ -496,6 +498,7 @@ mod tests {
             lift: 0.0,
             lane_cover: 0.0,
             lane_cover_visible: true,
+            lane_cover_changing: false,
             hidden_cover: 0.0,
             skin_offsets: Vec::new(),
             bga_enabled: true,

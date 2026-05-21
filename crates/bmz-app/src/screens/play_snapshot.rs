@@ -57,6 +57,8 @@ pub fn build_render_snapshot_with_bga_frames(
         hispeed: session.hispeed,
         lift: session.lift,
         lane_cover: if session.lane_cover_visible { session.lane_cover } else { 0.0 },
+        lane_cover_changing: session.lane_cover_changing,
+        note_display_duration_ms: note_display_duration_ms(session),
         hidden_cover: session.hidden_cover,
         skin_offsets: skin_offsets_from_session(session),
         now_bpm: current_bpm(&session.chart, render_now) as f32,
@@ -100,23 +102,17 @@ pub fn build_render_snapshot_with_bga_frames(
         visible_long_notes: Vec::new(),
     };
 
-    // SUDDEN+（レーンカバー）はノーツの可視域を上端側から縮める。
-    // beatoraja の currentduration = region * (1 - lanecover) と同じ。
-    // 可視進捗の上限が visible_max になり、それより奥のノーツ・小節線は描画しない。
-    let effective_lane_cover = if session.lane_cover_visible { session.lane_cover } else { 0.0 };
-    let visible_max = (1.0 - effective_lane_cover).clamp(0.0, 1.0);
-
     for lane in Lane::ALL {
         let next_note_index = session.judge.lanes[lane.index()].next_note_index;
         for note in session.chart.notes_for_lane(lane).iter().skip(next_note_index) {
-            if let Some(y) = note_y(note.time, render_now, session.hispeed, visible_max) {
+            if let Some(y) = note_y(note.time, render_now, session.hispeed) {
                 snapshot.visible_notes[lane.index()].push(VisibleNote { lane, time: note.time, y });
             }
         }
     }
 
     for bar in &session.chart.bar_lines {
-        if let Some(y) = note_y(bar.time, render_now, session.hispeed, visible_max) {
+        if let Some(y) = note_y(bar.time, render_now, session.hispeed) {
             snapshot.bar_lines.push(VisibleBarLine { time: bar.time, y });
         }
     }
@@ -124,16 +120,15 @@ pub fn build_render_snapshot_with_bga_frames(
     for long in &session.chart.long_notes {
         let head = note_progress(long.start_time, render_now, session.hispeed);
         let tail = note_progress(long.end_time, render_now, session.hispeed);
-        // 終端が判定ラインを過ぎた、または始端がカバー域より奥なら非表示。
-        // ホールド中のLNは head < 0 になるが tail は可視域に残るので表示される。
-        // 始端・終端ともレーンカバーの可視上限 visible_max でクランプする。
-        if tail < 0.0 || head > visible_max {
+        // 終端が判定ラインを過ぎた、または始端が画面上端より奥なら非表示。
+        // lane cover は前面描画で隠すだけで、ノーツのカリング範囲は変えない。
+        if tail < 0.0 || head > 1.0 {
             continue;
         }
         snapshot.visible_long_notes.push(VisibleLongNote {
             lane: long.lane,
-            head_y: head.clamp(0.0, visible_max),
-            tail_y: tail.clamp(0.0, visible_max),
+            head_y: head.clamp(0.0, 1.0),
+            tail_y: tail.clamp(0.0, 1.0),
         });
     }
 
@@ -157,6 +152,15 @@ fn current_poor_bga_frame(
             && render_now.0 < event.time.0 + duration_us
     })?;
     current_bga_frame(chart, judgement.time, BgaEventKind::Poor, bga_frames)
+}
+
+fn note_display_duration_ms(session: &GameSession) -> i32 {
+    let hispeed = session.hispeed.max(0.01);
+    let lane_cover = if session.lane_cover_visible { session.lane_cover } else { 0.0 };
+    let visible_max = (1.0 - lane_cover).clamp(0.0, 1.0);
+    ((DEFAULT_LOOKAHEAD_US as f32 / hispeed * visible_max) / 1_000.0)
+        .round()
+        .clamp(0.0, i32::MAX as f32) as i32
 }
 
 fn current_bga_frame(
@@ -203,17 +207,16 @@ fn skin_offsets_from_session(session: &GameSession) -> SkinOffsetValues {
     values
 }
 
-/// ノートの正規化進捗（0.0=判定ライン, 1.0=可視域最奥）を返す。
-/// 判定ラインを過ぎた（delta<0）か、`visible_max` を超えるノートは `None`。
-/// `visible_max` はレーンカバーで縮んだ可視上限（カバー無しなら 1.0）。
-fn note_y(note_time: TimeUs, render_now: TimeUs, hispeed: f32, visible_max: f32) -> Option<f32> {
+/// ノートの正規化進捗（0.0=判定ライン, 1.0=画面上端）を返す。
+/// 判定ラインを過ぎた（delta<0）か、画面上端より奥のノートは `None`。
+fn note_y(note_time: TimeUs, render_now: TimeUs, hispeed: f32) -> Option<f32> {
     let delta = note_time.0 - render_now.0;
     if delta < 0 {
         return None;
     }
 
     let progress = delta as f32 * hispeed / DEFAULT_LOOKAHEAD_US as f32;
-    (progress <= visible_max).then_some(progress)
+    (progress <= 1.0).then_some(progress)
 }
 
 /// `note_y` と同じ正規化進捗を返すが、可視判定・クランプをしない生の値。
@@ -360,22 +363,22 @@ mod tests {
     }
 
     #[test]
-    fn build_render_snapshot_culls_notes_under_lane_cover() {
+    fn build_render_snapshot_keeps_notes_under_lane_cover() {
         let profile = ProfileConfig::new_default("default", "Default", 1);
         let mut session =
             build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
         session.hispeed = 1.0;
         // Key1 のノートは render_now=0 で progress 0.5 (time 1_000_000 / lookahead 2_000_000)
 
-        // lane_cover=0.3 → visible_max=0.7 → progress 0.5 は可視
         session.lane_cover = 0.3;
         let visible = build_render_snapshot(&session, TimeUs(0), &[], None);
         assert_eq!(visible.visible_notes[Lane::Key1.index()].len(), 1);
 
-        // lane_cover=0.6 → visible_max=0.4 → progress 0.5 はカバー域なので除外
+        // lane cover は描画で隠すだけなので、カバー域に入る progress でも snapshot には残す。
         session.lane_cover = 0.6;
-        let culled = build_render_snapshot(&session, TimeUs(0), &[], None);
-        assert!(culled.visible_notes[Lane::Key1.index()].is_empty());
+        let covered = build_render_snapshot(&session, TimeUs(0), &[], None);
+        assert_eq!(covered.visible_notes[Lane::Key1.index()].len(), 1);
+        assert_eq!(covered.visible_notes[Lane::Key1.index()][0].y, 0.5);
     }
 
     #[test]
@@ -389,6 +392,21 @@ mod tests {
 
         assert_eq!(snapshot.hispeed, 2.0);
         assert_eq!(snapshot.visible_notes[Lane::Key1.index()][0].y, 1.0);
+    }
+
+    #[test]
+    fn build_render_snapshot_reports_lane_cover_changing_and_note_display_duration() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+        session.hispeed = 2.0;
+        session.lane_cover = 0.25;
+        session.lane_cover_changing = true;
+
+        let snapshot = build_render_snapshot(&session, TimeUs(0), &[], None);
+
+        assert!(snapshot.lane_cover_changing);
+        assert_eq!(snapshot.note_display_duration_ms, 750);
     }
 
     #[test]

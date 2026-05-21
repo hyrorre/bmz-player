@@ -534,7 +534,8 @@ fn default_property_op(property: &JsonValue, items: &[JsonValue]) -> Option<i64>
 }
 
 fn skin_config_get_path(root: &Path, requested: &str) -> Result<PathBuf> {
-    let relative_path = Path::new(requested);
+    let requested_path = strip_beatoraja_asset_filter(requested);
+    let relative_path = Path::new(requested_path);
     if relative_path.is_absolute()
         || relative_path.components().any(|component| {
             matches!(component, Component::ParentDir | Component::RootDir | Component::Prefix(_))
@@ -543,25 +544,16 @@ fn skin_config_get_path(root: &Path, requested: &str) -> Result<PathBuf> {
         bail!("skin_config.get_path escapes skin root: {requested}");
     }
 
-    let Some((prefix, suffix)) = requested.split_once('*') else {
-        return Ok(root.join(requested));
+    let Some((prefix, suffix)) = requested_path.split_once('*') else {
+        return Ok(root.join(requested_path));
     };
     if suffix.contains('*') {
         bail!("skin_config.get_path supports only one wildcard: {requested}");
     }
 
-    let prefix_path = Path::new(prefix);
-    let (dir, name_prefix) = if prefix.ends_with('/') || prefix.ends_with('\\') {
-        (root.join(prefix_path), String::new())
-    } else {
-        (
-            root.join(prefix_path.parent().unwrap_or_else(|| Path::new(""))),
-            prefix_path
-                .file_name()
-                .map(|value| value.to_string_lossy().to_string())
-                .unwrap_or_default(),
-        )
-    };
+    let slash = prefix.rfind(['/', '\\']).map(|index| index + 1).unwrap_or(0);
+    let (directory_prefix, name_prefix) = prefix.split_at(slash);
+    let dir = root.join(directory_prefix);
     let suffix = suffix.replace('\\', "/");
     let mut candidates = Vec::new();
     for entry in fs::read_dir(&dir)
@@ -569,16 +561,16 @@ fn skin_config_get_path(root: &Path, requested: &str) -> Result<PathBuf> {
     {
         let entry = entry?;
         let name = entry.file_name().to_string_lossy().to_string();
-        let candidate_relative = if prefix.ends_with('/') || prefix.ends_with('\\') {
-            format!("{prefix}{name}{suffix}")
+        if !name.starts_with(name_prefix) {
+            continue;
+        }
+        let candidate_relative = if let Some(nested_suffix) = suffix.strip_prefix('/') {
+            format!("{directory_prefix}{name}/{nested_suffix}")
         } else {
-            let parent = prefix_path.parent().unwrap_or_else(|| Path::new(""));
-            let parent = parent.to_string_lossy();
-            if parent.is_empty() {
-                format!("{name_prefix}{name}{suffix}")
-            } else {
-                format!("{parent}/{name_prefix}{name}{suffix}")
+            if !name.ends_with(&suffix) {
+                continue;
             }
+            format!("{directory_prefix}{name}")
         };
         let candidate = root.join(candidate_relative);
         if candidate.exists() {
@@ -587,6 +579,10 @@ fn skin_config_get_path(root: &Path, requested: &str) -> Result<PathBuf> {
     }
     candidates.sort();
     candidates.into_iter().next().ok_or_else(|| anyhow!("skin_config path not found: {requested}"))
+}
+
+fn strip_beatoraja_asset_filter(path: &str) -> &str {
+    path.split_once('|').map_or(path, |(asset_path, _)| asset_path)
 }
 
 fn resolve_lua_path(root: &Path, requested: &str, module: bool) -> Result<PathBuf> {

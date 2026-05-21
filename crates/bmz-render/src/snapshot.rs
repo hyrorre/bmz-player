@@ -23,6 +23,8 @@ pub struct RenderSnapshot {
     pub hispeed: f32,
     pub lift: f32,
     pub lane_cover: f32,
+    pub lane_cover_changing: bool,
+    pub note_display_duration_ms: i32,
     pub hidden_cover: f32,
     pub skin_offsets: SkinOffsetValues,
     pub now_bpm: f32,

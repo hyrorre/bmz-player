@@ -254,6 +254,41 @@ mod tests {
     }
 
     #[test]
+    fn lua_skin_config_get_path_ignores_beatoraja_filter_suffix() {
+        let root = unique_test_dir("bmz-skin-lua");
+        fs::create_dir_all(root.join("parts/lanecover_lift")).unwrap();
+        fs::write(root.join("parts/lanecover_lift/default.png"), []).unwrap();
+        fs::write(
+            root.join("play7.luaskin"),
+            r#"
+            local cover_path = "parts/lanecover_lift/*.png|lanecover|"
+            if skin_config then
+                cover_path = skin_config.get_path(cover_path)
+            end
+            return {
+                type = 0,
+                source = {
+                    {
+                        id = "cover",
+                        path = cover_path
+                    }
+                }
+            }
+            "#,
+        )
+        .unwrap();
+
+        let loaded = load_lua_skin_value(&root.join("play7.luaskin"), &BTreeMap::new()).unwrap();
+
+        assert_eq!(
+            loaded.value["source"][0]["path"].as_str().and_then(|path| {
+                std::path::Path::new(path).file_name().and_then(|name| name.to_str())
+            }),
+            Some("default.png")
+        );
+    }
+
+    #[test]
     fn lua_skin_stops_infinite_loop() {
         let root = unique_test_dir("bmz-skin-lua");
         fs::create_dir_all(&root).unwrap();

@@ -467,6 +467,7 @@ fn resolve_wildcard_path(
     pattern: &str,
     preferred: Option<&str>,
 ) -> Option<PathBuf> {
+    let pattern = strip_beatoraja_asset_filter(pattern);
     let star = pattern.find('*')?;
     let (prefix, suffix_with_star) = pattern.split_at(star);
     let suffix = &suffix_with_star[1..];
@@ -502,6 +503,10 @@ fn resolve_wildcard_path(
     }
 
     candidates.into_iter().next()
+}
+
+fn strip_beatoraja_asset_filter(pattern: &str) -> &str {
+    pattern.split_once('|').map_or(pattern, |(path, _)| path)
 }
 
 fn required_skin_source_ids(document: &SkinDocument) -> HashSet<&str> {
@@ -812,6 +817,37 @@ mod tests {
         let resolved = resolve_json_skin_source_path(&root, "parts/*.png", &document).unwrap();
 
         assert_eq!(resolved.file_name().and_then(|name| name.to_str()), Some("blue.png"));
+    }
+
+    #[test]
+    fn wildcard_skin_source_ignores_beatoraja_filter_suffix() {
+        let root = unique_test_dir("bmz-json-source-filter");
+        std::fs::create_dir_all(root.join("parts/lanecover_lift")).unwrap();
+        std::fs::write(root.join("parts/lanecover_lift/default.png"), []).unwrap();
+        std::fs::write(root.join("parts/lanecover_lift/TYPE-M.png"), []).unwrap();
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "filepath": [
+                    {
+                        "name": "レーンカバー",
+                        "path": "parts/lanecover_lift/*.png|lanecover|",
+                        "def": "default"
+                    }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        let resolved = resolve_json_skin_source_path(
+            &root,
+            "parts/lanecover_lift/*.png|lanecover|",
+            &document,
+        )
+        .unwrap();
+
+        assert_eq!(resolved.file_name().and_then(|name| name.to_str()), Some("default.png"));
     }
 
     #[test]

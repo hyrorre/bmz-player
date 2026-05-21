@@ -700,21 +700,18 @@ fn encode_image_batches(plan: &DrawPlan) -> Vec<ImageBatch> {
             } => (rect, uv, texture, tint, blend, linear_filter, *angle_rad, *center),
             _ => continue,
         };
-        let batch_index = batches
-            .iter()
-            .position(|batch: &ImageBatch| {
-                batch.texture == *texture && batch.blend == *blend && batch.linear == *linear_filter
-            })
-            .unwrap_or_else(|| {
-                batches.push(ImageBatch {
-                    texture: *texture,
-                    blend: *blend,
-                    linear: *linear_filter,
-                    instances: Vec::new(),
-                });
-                batches.len() - 1
+        let start_new_batch = batches.last().map_or(true, |batch: &ImageBatch| {
+            batch.texture != *texture || batch.blend != *blend || batch.linear != *linear_filter
+        });
+        if start_new_batch {
+            batches.push(ImageBatch {
+                texture: *texture,
+                blend: *blend,
+                linear: *linear_filter,
+                instances: Vec::new(),
             });
-        let batch = &mut batches[batch_index];
+        }
+        let batch = batches.last_mut().expect("image batch exists");
         for value in [
             rect.x,
             rect.y,
@@ -2090,6 +2087,29 @@ mod tests {
         assert_eq!(batches.len(), 2);
         assert_eq!(batches[0].blend, BlendMode::Normal);
         assert_eq!(batches[1].blend, BlendMode::Add);
+    }
+
+    #[test]
+    fn encode_image_batches_preserves_non_consecutive_texture_order() {
+        let image = |texture| DrawCommand::Image {
+            rect: crate::plan::Rect { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
+            uv: crate::plan::UvRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+            texture: crate::plan::TextureId(texture),
+            tint: Color::rgb(1.0, 1.0, 1.0),
+            blend: BlendMode::Normal,
+            linear_filter: false,
+        };
+        let plan = DrawPlan {
+            clear: Color::rgb(0.0, 0.0, 0.0),
+            commands: vec![image(1), image(2), image(1)],
+        };
+
+        let batches = encode_image_batches(&plan);
+
+        assert_eq!(batches.len(), 3);
+        assert_eq!(batches[0].texture, crate::plan::TextureId(1));
+        assert_eq!(batches[1].texture, crate::plan::TextureId(2));
+        assert_eq!(batches[2].texture, crate::plan::TextureId(1));
     }
 
     #[test]

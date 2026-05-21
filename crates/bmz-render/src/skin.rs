@@ -830,12 +830,14 @@ pub struct SkinDrawState {
     pub hispeed: f32,
     /// 曲残り時間 ms (NUMBER_TIMELEFT_MINUTE=163, NUMBER_TIMELEFT_SECOND=164 に使用)。
     pub timeleft_ms: i32,
-    /// 曲の合計長さ ms (NUMBER_DURATION=312 に使用)。
+    /// ノーツ表示時間 ms (NUMBER_DURATION=312 / NUMBER_DURATION_GREEN=313 に使用)。
     pub total_duration_ms: i32,
     /// レーンカバー割合 0.0-1.0 (NUMBER_LANECOVER1=14 に使用)。0=なし, 1=全画面。
     pub lane_cover: f32,
     /// HIDDEN カバー割合 0.0-1.0。未対応の間は 0.0 で hiddenCover を描画しない。
     pub hidden_cover: f32,
+    /// OPTION_LANECOVER1_CHANGING (270)。Start/Select 押下中に true。
+    pub lane_cover_changing: bool,
     /// 現在 BPM (NUMBER_NOWBPM=160 に使用)。
     pub now_bpm: f32,
     /// 最小 BPM (NUMBER_MINBPM=91 に使用)。
@@ -939,6 +941,7 @@ impl Default for SkinDrawState {
             total_duration_ms: 0,
             lane_cover: 0.0,
             hidden_cover: 0.0,
+            lane_cover_changing: false,
             now_bpm: 0.0,
             min_bpm: 0.0,
             max_bpm: 0.0,
@@ -3065,9 +3068,8 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool 
         300..=307 => select_small_rank_op_matches(op, state),
         170 => !state.has_bga,
         171 => state.has_bga,
-        // OPTION_LANECOVER1_ON / OPTION_LIFT1_ON / OPTION_HIDDEN1_ON
-        // SUDDEN+ 非表示時は play_snapshot 側で state.lane_cover=0 にしてあるので、
-        // ここで > 0 をそのまま「カバー有効」とみなせる。
+        // OPTION_LANECOVER1_CHANGING / OPTION_LANECOVER1_ON / OPTION_LIFT1_ON / OPTION_HIDDEN1_ON
+        270 => state.lane_cover_changing,
         271 => state.lane_cover > 0.0,
         272 => state.offset_lift_px != 0,
         273 => state.hidden_cover > 0.0,
@@ -3621,7 +3623,8 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         1164 => Some((state.select_length_ms.max(0) / 1_000) % 60),
         310 => Some(state.hispeed.floor() as i64),
         311 => Some(((state.hispeed * 100.0) as i64) % 100),
-        312 => Some((state.total_duration_ms / 1_000) as i64),
+        312 => Some(state.total_duration_ms as i64),
+        313 => Some((state.total_duration_ms as i64) * 3 / 5),
         // BPM 系: NUMBER_MAXBPM=90, NUMBER_MINBPM=91, NUMBER_NOWBPM=160
         90 => {
             Some(if state.max_bpm > 0.0 { state.max_bpm } else { state.select_max_bpm }.round()
@@ -5354,6 +5357,26 @@ mod tests {
             171,
             &[],
             SkinDrawState { has_bga: true, bga_enabled: false, ..SkinDrawState::default() }
+        ));
+    }
+
+    #[test]
+    fn lane_cover_changing_op_is_true_while_lane_cover_is_visible() {
+        assert!(!test_skin_op(270, &[], SkinDrawState::default()));
+        assert!(!test_skin_op(
+            270,
+            &[],
+            SkinDrawState { lane_cover: 0.2, ..SkinDrawState::default() }
+        ));
+        assert!(test_skin_op(
+            270,
+            &[],
+            SkinDrawState { lane_cover_changing: true, ..SkinDrawState::default() }
+        ));
+        assert!(test_skin_op(
+            271,
+            &[],
+            SkinDrawState { lane_cover: 0.2, ..SkinDrawState::default() }
         ));
     }
 
@@ -8132,8 +8155,10 @@ mod tests {
         assert_eq!(skin_state_number(90, state), Some(200));
         // NUMBER_LANECOVER1 (14) = round(0.25 * 100) = 25
         assert_eq!(skin_state_number(14, state), Some(25));
-        // NUMBER_DURATION (312) = 183000 / 1000 = 183
-        assert_eq!(skin_state_number(312, state), Some(183));
+        // NUMBER_DURATION (312) = current note display duration in ms.
+        assert_eq!(skin_state_number(312, state), Some(183_000));
+        // NUMBER_DURATION_GREEN (313) = duration * 3 / 5.
+        assert_eq!(skin_state_number(313, state), Some(109_800));
         // VALUE_JUDGE_1P_DURATION (525) = abs(-3) = 3
         assert_eq!(skin_state_number(525, state), Some(3));
         // When no recent judgement, 525 returns None

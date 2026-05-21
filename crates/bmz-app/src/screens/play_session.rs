@@ -118,6 +118,7 @@ pub fn build_game_session_with_input_backend(
         lift: profile.lane.lift.clamp(0.0, 1.0),
         lane_cover: profile.lane.lane_cover.clamp(0.0, 1.0),
         lane_cover_visible: true,
+        lane_cover_changing: false,
         hidden_cover: hidden_cover_from_profile(profile),
         skin_offsets: skin_offsets_from_profile(profile),
         bga_enabled: bga_enabled_from_profile(profile, autoplay_enabled, is_replay),

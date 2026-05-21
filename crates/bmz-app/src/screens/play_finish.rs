@@ -349,6 +349,7 @@ mod tests {
             lift: 0.0,
             lane_cover: 0.0,
             lane_cover_visible: true,
+            lane_cover_changing: false,
             hidden_cover: 0.0,
             skin_offsets: Vec::new(),
             bga_enabled: true,

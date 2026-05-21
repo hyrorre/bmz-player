@@ -509,17 +509,12 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
         },
         offset_lanecover_px: {
             let canvas_h = skin.document().map_or(720, |d| d.h) as f32;
-            ((snapshot.lift - 1.0) * canvas_h * snapshot.lane_cover).round() as i32
+            let lane_h = skin_lane_height_px(skin, canvas_h);
+            ((snapshot.lift - 1.0) * lane_h * snapshot.lane_cover).round() as i32
         },
         offset_hidden_cover_px: {
             let canvas_h = skin.document().map_or(720, |d| d.h) as f32;
-            let lane_h = skin
-                .document()
-                .and_then(|document| {
-                    let enabled_options = document.enabled_options();
-                    document.note_lane_area(Lane::Key1, &enabled_options)
-                })
-                .map_or(canvas_h, |rect| rect.height * canvas_h);
+            let lane_h = skin_lane_height_px(skin, canvas_h);
             ((1.0 - snapshot.lift) * snapshot.hidden_cover * lane_h).round() as i32
         },
         skin_offsets: snapshot.skin_offsets,
@@ -527,8 +522,9 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
         timeleft_ms: (snapshot.duration.0.saturating_sub(snapshot.time.0) / 1_000)
             .saturating_add(1_000)
             .clamp(0, i32::MAX as i64) as i32,
-        total_duration_ms: (snapshot.duration.0 / 1_000).clamp(0, i32::MAX as i64) as i32,
+        total_duration_ms: snapshot.note_display_duration_ms,
         lane_cover: snapshot.lane_cover,
+        lane_cover_changing: snapshot.lane_cover_changing,
         hidden_cover: snapshot.hidden_cover,
         now_bpm: snapshot.now_bpm,
         min_bpm: snapshot.min_bpm,
@@ -717,6 +713,15 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
     push_start_overlay(&text, &mut commands, snapshot);
 
     DrawPlan { clear: Color::rgb(0.0, 0.0, 0.0), commands }
+}
+
+fn skin_lane_height_px(skin: &SkinContext, fallback_canvas_h: f32) -> f32 {
+    skin.document()
+        .and_then(|document| {
+            let enabled_options = document.enabled_options();
+            document.note_lane_area(Lane::Key1, &enabled_options)
+        })
+        .map_or(fallback_canvas_h, |rect| rect.height * fallback_canvas_h)
 }
 
 fn plan_result(snapshot: &crate::scene::ResultSnapshot, skin: &SkinContext) -> DrawPlan {
@@ -1719,6 +1724,36 @@ mod tests {
             command,
             DrawCommand::Image { texture, .. } if *texture == TextureId(42)
         )));
+    }
+
+    #[test]
+    fn skin_lane_height_uses_document_note_area_for_lane_cover_offsets() {
+        let document: crate::skin::SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 1920,
+                "h": 1080,
+                "note": {
+                    "dst": [
+                        { "x": 100, "y": 357, "w": 10, "h": 723 },
+                        { "x": 110, "y": 357, "w": 10, "h": 723 },
+                        { "x": 120, "y": 357, "w": 10, "h": 723 },
+                        { "x": 130, "y": 357, "w": 10, "h": 723 },
+                        { "x": 140, "y": 357, "w": 10, "h": 723 },
+                        { "x": 150, "y": 357, "w": 10, "h": 723 },
+                        { "x": 160, "y": 357, "w": 10, "h": 723 },
+                        { "x": 170, "y": 357, "w": 10, "h": 723 }
+                    ]
+                }
+            }
+            "#,
+        )
+        .unwrap();
+        let manifest: SkinManifest = toml::from_str("").unwrap();
+        let skin = SkinContext::from_manifest_and_document(manifest, document, []);
+
+        assert!(approx_eq(skin_lane_height_px(&skin, 1080.0), 723.0));
     }
 
     #[test]
