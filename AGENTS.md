@@ -116,7 +116,12 @@ cargo run -p bmz-app -- --boot-play-sample --autoplay-on-start --smoke-exit-on-r
 ## Coding Rules and Conventions
 
 - コミットメッセージは Conventional Commits にします。
-  - 例: `feat: load json skin fonts`
+  - スコープに修正対象の crate 名を入れます。例: `fix(bmz-audio): ...`、`feat(bmz-skin): load json skin fonts`。
+  - 複数 crate にまたがる変更は、主対象の crate をスコープにするか、スコープを省きます。
+- Windows / PowerShell でコミットする場合、メッセージ本文に `@` が混入することがあります。
+  - 原因は `git commit -m @'...'@` の here-string で、native command への引数渡しで先頭に `@` が紛れ込むためです。
+  - 対策: メッセージを一時ファイルへ書き、`git commit -F <file>` で渡します。1 行メッセージなら `-m "..."` でも構いません。
+  - コミット後は `git log -1 --format=%s` で先頭に `@` が無いか確認します。
 - 適切な粒度でコミットします。
 - unrelated な差分は混ぜません。
 - ユーザーや別ツールの変更を勝手に戻しません。
