@@ -59,16 +59,45 @@ fn load_asset(
     asset: &SoundAssetRef,
     loader: &mut dyn SampleLoader,
 ) -> LoadedSampleReport {
-    match loader.load(&asset.path) {
+    let resolved = resolve_sample_path(&asset.path);
+    let path = resolved.as_deref().unwrap_or(&asset.path);
+    match loader.load(path) {
         Ok(sample) => {
             engine.insert_sample(asset.id, sample);
-            LoadedSampleReport { path: asset.path.clone(), status: LoadedSampleStatus::Loaded }
+            LoadedSampleReport { path: path.to_path_buf(), status: LoadedSampleStatus::Loaded }
         }
         Err(error) => LoadedSampleReport {
-            path: asset.path.clone(),
+            path: path.to_path_buf(),
             status: LoadedSampleStatus::Failed(error.to_string()),
         },
     }
+}
+
+/// `#WAV` で指定された音声ファイルの拡張子フォールバック候補。
+/// BMS では `#WAV01 foo.wav` と書かれていても実体が `foo.ogg` 等のことがあるため、
+/// 指定ファイルが見つからない場合はこの順で同名ファイルを探す。
+const SAMPLE_EXTENSION_CANDIDATES: [&str; 4] = ["wav", "ogg", "flac", "mp3"];
+
+/// `#WAV` 指定パスが存在しない場合に、同じ stem で拡張子違いのファイルを探す。
+/// 元のパスがそのまま使えるなら `None` を返す。
+fn resolve_sample_path(path: &Path) -> Option<PathBuf> {
+    if path.exists() {
+        return None;
+    }
+
+    let original_ext = path.extension().and_then(|ext| ext.to_str()).map(str::to_ascii_lowercase);
+    for candidate_ext in SAMPLE_EXTENSION_CANDIDATES {
+        // 元の拡張子と同じものは存在しないと確定済みなのでスキップ。
+        if original_ext.as_deref() == Some(candidate_ext) {
+            continue;
+        }
+        let candidate = path.with_extension(candidate_ext);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+
+    None
 }
 
 fn decode_wav(path: &Path, bytes: &[u8]) -> Result<DecodedSample, SampleLoadError> {
@@ -255,6 +284,33 @@ mod tests {
         assert_eq!(sample.sample_stereo(0), (0.25, -0.5));
 
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn resolve_sample_path_falls_back_to_other_extensions() {
+        let dir = std::env::temp_dir().join(format!(
+            "bmz-audio-resolve-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // #WAV では foo.wav を指定するが、実体は foo.ogg。
+        let requested = dir.join("foo.wav");
+        let actual = dir.join("foo.ogg");
+        std::fs::write(&actual, b"dummy").unwrap();
+
+        assert_eq!(resolve_sample_path(&requested), Some(actual));
+
+        // 指定ファイルが存在するならフォールバックしない。
+        std::fs::write(&requested, b"dummy").unwrap();
+        assert_eq!(resolve_sample_path(&requested), None);
+
+        // 候補が一つも無ければ None。
+        let missing = dir.join("bar.wav");
+        assert_eq!(resolve_sample_path(&missing), None);
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     fn chart() -> PlayableChart {

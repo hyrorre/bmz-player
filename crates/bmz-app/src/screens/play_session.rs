@@ -1,7 +1,8 @@
 use anyhow::{Context, Result, bail};
 use bmz_audio::clock::AudioClock;
 use bmz_audio::engine::AudioEngine;
-use bmz_audio::loader::{LoadedSampleReport, SampleLoader, WavSampleLoader, load_chart_samples};
+use bmz_audio::ffmpeg_loader::FfmpegSampleLoader;
+use bmz_audio::loader::{LoadedSampleReport, SampleLoader, load_chart_samples};
 use bmz_chart::import::import_bms_chart;
 use bmz_chart::model::{NoteEvent, PlayableChart};
 use bmz_core::clear::GaugeType;
@@ -257,7 +258,7 @@ pub fn load_prepared_play_session_for_chart_with_input_backend(
         options.arrange_pattern.as_deref(),
     );
     let chart = Arc::new(chart);
-    let mut loader = WavSampleLoader;
+    let mut loader = FfmpegSampleLoader;
     let (audio, sample_report) =
         build_audio_engine_for_chart(&chart, options.sample_rate, &mut loader);
     let session = build_game_session_with_input_backend(chart, profile, options, input_backend);
