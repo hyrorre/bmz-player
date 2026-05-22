@@ -263,7 +263,7 @@ fn plan_select(snapshot: &SelectSnapshot, skin: &SkinContext) -> DrawPlan {
     let selected_row_position = select_snapshot_selected_row_position(rows, selected_index);
     for row in 0..visible_rows {
         let snapshot_row = rows.get(row);
-        let selected = snapshot_row.is_some() && row == selected_row_position;
+        let selected = snapshot_row.map_or(row == 0, |_| row == selected_row_position);
         let is_folder = snapshot_row.map(|r| r.is_folder).unwrap_or(false);
         let row_y = 0.2 + row as f32 * 0.09;
         let (left_bg, right_bg) = if is_folder {
