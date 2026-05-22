@@ -18,7 +18,8 @@ use winit::dpi::PhysicalSize;
 use winit::event::{ElementState, StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
-use winit::window::{Window, WindowAttributes, WindowId};
+use winit::monitor::{MonitorHandle, VideoModeHandle};
+use winit::window::{Fullscreen, Window, WindowAttributes, WindowId};
 
 use crate::audio::AppAudioOutput;
 use crate::bootstrap::{self, BootstrappedApp};
@@ -26,7 +27,7 @@ use crate::cli::{
     AUTOPLAY_ON_START_ARG, AppOptions, BOOT_PLAY_SAMPLE_ARG, SMOKE_EXIT_AFTER_FRAMES_ARG,
     SMOKE_EXIT_ON_RESULT_ARG,
 };
-use crate::config::app_config::PathEntry;
+use crate::config::app_config::{PathEntry, WindowMode};
 use crate::config::profile_config::{
     AssistOptionConfig, BgaModeConfig, GaugeTypeConfig, LaneConfig, ProfileConfig,
     ProfileInputConfig, RandomOptionConfig,
@@ -150,6 +151,9 @@ struct WinitApp {
     /// 本体設定 / スキン設定 / デバッグ表示用の egui レイヤ。
     /// ウィンドウ生成時に初期化される。
     egui: Option<EguiLayer>,
+    /// 現在ウィンドウへ適用済みのウィンドウモード。
+    /// config 側との差分検出でライブ反映の要否を判定する。
+    applied_window_mode: WindowMode,
 }
 
 const SELECT_EXIT_HOLD_DURATION: Duration = Duration::from_millis(1_200);
@@ -243,6 +247,8 @@ impl WinitApp {
             None
         };
 
+        let initial_window_mode = boot.app_config.video.mode.clone();
+
         let mut app = Self {
             boot,
             window: None,
@@ -279,6 +285,7 @@ impl WinitApp {
             select_exit_hold_started_at: None,
             last_play_start_press_at: None,
             egui: None,
+            applied_window_mode: initial_window_mode,
         };
         if let Some(chart_id) = boot_sample_chart_id {
             tracing::info!(
@@ -307,7 +314,9 @@ impl WinitApp {
             return;
         }
 
-        let attributes = window_attributes_from_config(&self.boot.app_config.video);
+        let video = &self.boot.app_config.video;
+        let attributes = window_attributes_from_config(video)
+            .with_fullscreen(fullscreen_from_config(&video.mode, event_loop.primary_monitor()));
         match event_loop.create_window(attributes) {
             Ok(window) => {
                 let window = Arc::new(window);
@@ -1147,6 +1156,13 @@ impl WinitApp {
         self.renderer.set_egui_frame(output.frame);
         // 本体設定パネルでの VSync 変更を即座に反映する (set_vsync は変化時のみ再構成)。
         self.renderer.set_vsync(self.boot.app_config.video.vsync);
+        // ウィンドウモード変更をライブ反映する (差分があるときのみ適用)。
+        let desired_mode = self.boot.app_config.video.mode.clone();
+        if desired_mode != self.applied_window_mode {
+            window.set_fullscreen(fullscreen_from_config(&desired_mode, window.current_monitor()));
+            tracing::info!(mode = ?desired_mode, "window mode updated");
+            self.applied_window_mode = desired_mode;
+        }
         if output.save_app_config {
             match save_app_config(&self.boot.app_paths.config_toml, &self.boot.app_config) {
                 Ok(()) => tracing::info!("app config saved from egui settings panel"),
@@ -1298,6 +1314,35 @@ fn window_attributes_from_config(
     WindowAttributes::default()
         .with_title("bmz-player")
         .with_inner_size(PhysicalSize::new(video.width.max(1), video.height.max(1)))
+}
+
+/// 設定のウィンドウモードに対応する winit の `Fullscreen` を返す。
+///
+/// 排他フルスクリーンはモニタの video mode が必要で、取得できない場合は
+/// ボーダレスへフォールバックする。
+fn fullscreen_from_config(mode: &WindowMode, monitor: Option<MonitorHandle>) -> Option<Fullscreen> {
+    match mode {
+        WindowMode::Windowed => None,
+        WindowMode::BorderlessFullscreen => Some(Fullscreen::Borderless(monitor)),
+        WindowMode::ExclusiveFullscreen => {
+            let monitor = monitor?;
+            match pick_exclusive_video_mode(&monitor) {
+                Some(video_mode) => Some(Fullscreen::Exclusive(video_mode)),
+                None => {
+                    tracing::warn!("no exclusive video mode available; using borderless");
+                    Some(Fullscreen::Borderless(Some(monitor)))
+                }
+            }
+        }
+    }
+}
+
+/// 排他フルスクリーン用に、解像度とリフレッシュレートが最大の video mode を選ぶ。
+fn pick_exclusive_video_mode(monitor: &MonitorHandle) -> Option<VideoModeHandle> {
+    monitor.video_modes().max_by_key(|mode| {
+        let size = mode.size();
+        (u64::from(size.width) * u64::from(size.height), mode.refresh_rate_millihertz())
+    })
 }
 
 /// 起動時のスキンロード処理。

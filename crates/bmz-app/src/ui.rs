@@ -208,7 +208,7 @@ fn build_settings_panel(ctx: &egui::Context, open: &mut bool, config: &mut AppCo
         ui.checkbox(&mut config.video.vsync, "垂直同期 (VSync)");
         ui.add(egui::Slider::new(&mut config.video.target_fps, 30..=480).text("目標 FPS"));
         ui.separator();
-        ui.label("VSync は即時反映。ウィンドウモード / 目標 FPS は次回起動時に反映されます。");
+        ui.label("VSync / ウィンドウモードは即時反映。目標 FPS は次回起動時に反映されます。");
         if ui.button("保存").clicked() {
             save_clicked = true;
         }
