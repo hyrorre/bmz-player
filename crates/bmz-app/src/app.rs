@@ -1211,6 +1211,28 @@ impl WinitApp {
                 Err(error) => tracing::error!(%error, "failed to save profile config"),
             }
         }
+        if output.reload_skins {
+            self.reload_skins();
+        }
+    }
+
+    /// 現在の profile config のスキンパスを renderer へ再適用する。
+    ///
+    /// 起動時と同じ `load_skin_textures` 経路を使い、JSON スキンは
+    /// バックグラウンド decode + 段階 install パイプラインへ流す。
+    fn reload_skins(&mut self) {
+        let select = self.boot.profile_config.skin.select.clone();
+        let play = self.boot.profile_config.skin.play.clone();
+        let result = self.boot.profile_config.skin.result.clone();
+        let (manifest, rx, pending_play, pending_result) =
+            load_skin_textures(&mut self.renderer, &select, &play, &result);
+        self.default_skin_manifest = manifest;
+        self.pending_skin_rx = rx;
+        self.pending_play_skin = pending_play;
+        self.pending_result_skin = pending_result;
+        // 前回リロードの未完了 install は破棄する。
+        self.pending_skin_installs.clear();
+        tracing::info!("skins reloaded from egui skin panel");
     }
 
     fn render_current_scene(&mut self) {

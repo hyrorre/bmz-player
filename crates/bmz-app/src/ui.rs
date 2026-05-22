@@ -30,6 +30,8 @@ pub struct EguiOutput {
     pub save_app_config: bool,
     /// プロファイル設定 (`ProfileConfig`) の保存が要求されたか。
     pub save_profile_config: bool,
+    /// スキンの再読込 (現在の config パスを renderer へ再適用) が要求されたか。
+    pub reload_skins: bool,
     /// デバッグ表示パネルの現在の開閉状態。
     /// profile config の `ui.show_fps` へ同期し、終了時に永続化される。
     pub debug_panel_visible: bool,
@@ -97,6 +99,7 @@ impl EguiLayer {
         let show_skin = &mut self.show_skin;
         let mut save_app_config = false;
         let mut save_profile_config = false;
+        let mut reload_skins = false;
         let full_output = ctx.run_ui(raw_input, |ui| {
             if visible {
                 let ctx = ui.ctx();
@@ -105,9 +108,9 @@ impl EguiLayer {
                 if build_settings_panel(ctx, show_settings, app_config) {
                     save_app_config = true;
                 }
-                if build_skin_panel(ctx, show_skin, &mut profile_config.skin) {
-                    save_profile_config = true;
-                }
+                let skin_actions = build_skin_panel(ctx, show_skin, &mut profile_config.skin);
+                save_profile_config |= skin_actions.save;
+                reload_skins |= skin_actions.reload;
             }
         });
         self.state.handle_platform_output(window, full_output.platform_output);
@@ -120,6 +123,7 @@ impl EguiLayer {
             },
             save_app_config,
             save_profile_config,
+            reload_skins,
             debug_panel_visible: *show_debug,
         }
     }
@@ -228,11 +232,22 @@ fn window_mode_label(mode: &WindowMode) -> &'static str {
     }
 }
 
+/// スキン設定パネルからのアクション要求。
+struct SkinPanelActions {
+    /// 「保存」ボタンが押された (profile.toml へ書き出し)。
+    save: bool,
+    /// 「スキン再読込」ボタンが押された (現在のパスを renderer へ再適用)。
+    reload: bool,
+}
+
 /// プロファイルのスキン設定 (`SkinConfig`) を編集するパネル。
-///
-/// 戻り値 `true` は「保存」ボタンが押されたことを表す。
-fn build_skin_panel(ctx: &egui::Context, open: &mut bool, skin: &mut SkinConfig) -> bool {
+fn build_skin_panel(
+    ctx: &egui::Context,
+    open: &mut bool,
+    skin: &mut SkinConfig,
+) -> SkinPanelActions {
     let mut save_clicked = false;
+    let mut reload_clicked = false;
     egui::Window::new("スキン設定").open(open).default_pos(egui::pos2(16.0, 480.0)).show(
         ctx,
         |ui| {
@@ -280,11 +295,18 @@ fn build_skin_panel(ctx: &egui::Context, open: &mut bool, skin: &mut SkinConfig)
                 skin.offsets.push(SkinOffsetConfig::default());
             }
             ui.separator();
-            ui.label("変更は次回起動時に反映されます。");
-            if ui.button("保存").clicked() {
-                save_clicked = true;
-            }
+            ui.label(
+                "「保存」で profile.toml へ書き出し、「スキン再読込」で現在のパスを即適用します。",
+            );
+            ui.horizontal(|ui| {
+                if ui.button("保存").clicked() {
+                    save_clicked = true;
+                }
+                if ui.button("スキン再読込").clicked() {
+                    reload_clicked = true;
+                }
+            });
         },
     );
-    save_clicked
+    SkinPanelActions { save: save_clicked, reload: reload_clicked }
 }
