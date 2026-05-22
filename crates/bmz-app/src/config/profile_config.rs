@@ -309,6 +309,15 @@ pub struct SkinConfig {
     /// リザルトスキンのカスタマイズオプション選択。
     #[serde(default)]
     pub result_options: BTreeMap<String, String>,
+    /// 選曲スキンのファイル選択 (filepath 定義名 -> 選択ファイルの相対パス)。
+    #[serde(default)]
+    pub select_files: BTreeMap<String, String>,
+    /// プレイスキンのファイル選択。
+    #[serde(default)]
+    pub play_files: BTreeMap<String, String>,
+    /// リザルトスキンのファイル選択。
+    #[serde(default)]
+    pub result_files: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]

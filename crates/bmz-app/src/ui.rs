@@ -5,6 +5,7 @@
 //! プリミティブをゲーム / スキン描画の上にペイントするだけにする。
 
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 use bmz_render::skin::{SkinDocument, SkinFilepathDef, SkinOffsetDef, SkinPropertyDef};
 use bmz_render::ui::EguiFrame;
@@ -338,6 +339,9 @@ fn build_skin_panel(
             }
             ui.separator();
             ui.label("読み込み済みスキンが宣言する設定可能項目:");
+            let select_root = skin_root_path(&skin.select);
+            let play_root = skin_root_path(&skin.play);
+            let result_root = skin_root_path(&skin.result);
             // オプション数が多いとウィンドウが画面をはみ出すため、この区画は
             // スクロール可能にする。
             egui::ScrollArea::vertical().id_salt("skin_defs_scroll").max_height(280.0).show(
@@ -347,19 +351,28 @@ fn build_skin_panel(
                         ui,
                         "選曲スキン",
                         &skin_meta.select,
+                        select_root.as_deref(),
                         &mut skin.select_options,
+                        &mut skin.select_files,
+                        &mut skin.offsets,
                     );
                     build_scene_skin_defs(
                         ui,
                         "プレイスキン",
                         &skin_meta.play,
+                        play_root.as_deref(),
                         &mut skin.play_options,
+                        &mut skin.play_files,
+                        &mut skin.offsets,
                     );
                     build_scene_skin_defs(
                         ui,
                         "リザルトスキン",
                         &skin_meta.result,
+                        result_root.as_deref(),
                         &mut skin.result_options,
+                        &mut skin.result_files,
+                        &mut skin.offsets,
                     );
                 },
             );
@@ -380,15 +393,19 @@ fn build_skin_panel(
     SkinPanelActions { save: save_clicked, reload: reload_clicked }
 }
 
-/// 1 シーン分のスキン設定可能項目を折りたたみ表示する。
+/// 1 シーン分のスキン設定可能項目を折りたたみ表示・編集する。
 ///
-/// オプション (property) は ComboBox で選択でき、選択値は `options`
-/// (オプション名 -> 選択肢名) に書き込まれる。filepath / offset は読み取り専用。
+/// - property: ComboBox で選択肢を選び `options` へ書き込む。
+/// - filepath: `path` グロブにマッチするファイルを ComboBox で選び `files` へ書き込む。
+/// - offset: 宣言された要素ごとに x/y/w/h/r/a を編集し `offsets` (id 単位) へ反映。
 fn build_scene_skin_defs(
     ui: &mut egui::Ui,
     label: &str,
     defs: &SceneSkinDefs,
+    skin_root: Option<&Path>,
     options: &mut BTreeMap<String, String>,
+    files: &mut BTreeMap<String, String>,
+    offsets: &mut Vec<SkinOffsetConfig>,
 ) {
     egui::CollapsingHeader::new(label).show(ui, |ui| {
         if defs.is_empty() {
@@ -414,19 +431,99 @@ fn build_scene_skin_defs(
         if !defs.filepath.is_empty() {
             ui.strong("ファイル選択");
             for filepath in &defs.filepath {
-                ui.label(format!(
-                    "・{} [{}] — {} / 既定: {}",
-                    filepath.name, filepath.category, filepath.path, filepath.def,
-                ));
+                let mut selected =
+                    files.get(&filepath.name).cloned().unwrap_or_else(|| filepath.def.clone());
+                let before = selected.clone();
+                let display = if selected.is_empty() { "(未選択)" } else { selected.as_str() };
+                egui::ComboBox::from_label(&filepath.name).selected_text(display).show_ui(
+                    ui,
+                    |ui| {
+                        // 候補列挙は ComboBox を開いたときだけ行う (毎フレームの fs 走査を回避)。
+                        let candidates = match skin_root {
+                            Some(root) => glob_candidates(root, &filepath.path),
+                            None => Vec::new(),
+                        };
+                        if candidates.is_empty() {
+                            ui.label("候補なし");
+                        }
+                        for candidate in candidates {
+                            ui.selectable_value(&mut selected, candidate.clone(), &candidate);
+                        }
+                    },
+                );
+                if selected != before {
+                    files.insert(filepath.name.clone(), selected);
+                }
             }
         }
         if !defs.offset.is_empty() {
             ui.strong("オフセット可能要素");
-            for offset in &defs.offset {
-                ui.label(format!("・{} [{}] — id {}", offset.name, offset.category, offset.id));
+            for offset_def in &defs.offset {
+                ui.push_id(offset_def.id, |ui| {
+                    ui.label(format!(
+                        "{} [{}] — id {}",
+                        offset_def.name, offset_def.category, offset_def.id
+                    ));
+                    let existing = offsets.iter().find(|o| o.id == offset_def.id).copied();
+                    let mut value = existing
+                        .unwrap_or(SkinOffsetConfig { id: offset_def.id, ..Default::default() });
+                    let before = value;
+                    ui.horizontal(|ui| {
+                        ui.add(egui::DragValue::new(&mut value.x).prefix("x:"));
+                        ui.add(egui::DragValue::new(&mut value.y).prefix("y:"));
+                        ui.add(egui::DragValue::new(&mut value.w).prefix("w:"));
+                        ui.add(egui::DragValue::new(&mut value.h).prefix("h:"));
+                        ui.add(egui::DragValue::new(&mut value.r).prefix("r:"));
+                        ui.add(egui::DragValue::new(&mut value.a).prefix("a:"));
+                    });
+                    if value != before {
+                        match offsets.iter_mut().find(|o| o.id == offset_def.id) {
+                            Some(entry) => *entry = value,
+                            None => offsets.push(value),
+                        }
+                    }
+                });
             }
         }
     });
+}
+
+/// スキンパス文字列からスキンルートディレクトリ (親ディレクトリ) を得る。
+fn skin_root_path(skin_path: &str) -> Option<PathBuf> {
+    let trimmed = skin_path.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Path::new(trimmed).parent().map(Path::to_path_buf)
+}
+
+/// `pattern` (スキンルート相対、末尾要素にワイルドカード `*` を 1 個まで) に
+/// マッチするファイルの相対パス一覧を返す。
+fn glob_candidates(root: &Path, pattern: &str) -> Vec<String> {
+    let pattern = pattern.replace('\\', "/");
+    let (dir_part, name_part) = match pattern.rfind('/') {
+        Some(index) => (&pattern[..=index], &pattern[index + 1..]),
+        None => ("", pattern.as_str()),
+    };
+    let Some((prefix, suffix)) = name_part.split_once('*') else {
+        // ワイルドカード無し: パターンそのものを唯一の候補とする。
+        return vec![pattern.clone()];
+    };
+    let dir = root.join(dir_part);
+    let mut candidates = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.len() >= prefix.len() + suffix.len()
+                && name.starts_with(prefix)
+                && name.ends_with(suffix)
+            {
+                candidates.push(format!("{dir_part}{name}"));
+            }
+        }
+    }
+    candidates.sort();
+    candidates
 }
 
 /// property の既定選択肢名。`def` を優先し、空なら先頭 item を使う。
