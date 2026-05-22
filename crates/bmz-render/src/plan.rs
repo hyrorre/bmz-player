@@ -259,10 +259,11 @@ fn plan_select(snapshot: &SelectSnapshot, skin: &SkinContext) -> DrawPlan {
         BitmapTextStyle { x: 0.08, y: 0.170, cell: 0.005, color: Color::rgb(0.72, 0.86, 0.92) },
     );
 
-    let visible_rows = rows.len().clamp(1, 7);
+    let visible_rows = rows.len().max(1);
+    let selected_row_position = select_snapshot_selected_row_position(rows, selected_index);
     for row in 0..visible_rows {
         let snapshot_row = rows.get(row);
-        let selected = snapshot_row.map(|row| row.index == selected_index).unwrap_or(row == 0);
+        let selected = snapshot_row.is_some() && row == selected_row_position;
         let is_folder = snapshot_row.map(|r| r.is_folder).unwrap_or(false);
         let row_y = 0.2 + row as f32 * 0.09;
         let (left_bg, right_bg) = if is_folder {
@@ -301,6 +302,16 @@ fn plan_select(snapshot: &SelectSnapshot, skin: &SkinContext) -> DrawPlan {
     push_exit_hold_indicator(&mut commands, snapshot.exit_hold_progress);
 
     DrawPlan { clear: Color::rgb(0.02, 0.025, 0.03), commands }
+}
+
+fn select_snapshot_selected_row_position(rows: &[SelectRowSnapshot], selected_index: u32) -> usize {
+    let center = rows.len() / 2;
+    rows.iter()
+        .enumerate()
+        .filter(|(_, row)| row.index == selected_index)
+        .min_by_key(|(index, _)| index.abs_diff(center))
+        .map(|(index, _)| index)
+        .unwrap_or(0)
 }
 
 fn push_select_title_text(
@@ -1928,7 +1939,7 @@ mod tests {
     }
 
     #[test]
-    fn select_plan_clamps_visible_rows() {
+    fn select_plan_renders_all_snapshot_rows() {
         let plan = DrawPlan::from_scene(&AppSceneSnapshot::Select(crate::scene::SelectSnapshot {
             chart_count: 20,
             rows: select_rows(20),
@@ -1945,7 +1956,7 @@ mod tests {
                 DrawCommand::Rect { color, .. } if *color == selected_row_color || *color == row_color
             ))
             .count();
-        assert_eq!(row_count, 7);
+        assert_eq!(row_count, 20);
         assert!(plan.commands.iter().any(|command| matches!(
             command,
             DrawCommand::Text { text, .. } if text.contains("DIFFICULTY NORMAL") && text.contains("LEVEL 0")

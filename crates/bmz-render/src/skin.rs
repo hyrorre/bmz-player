@@ -1818,7 +1818,9 @@ impl SkinDocument {
             return Vec::new();
         };
         let mut items = Vec::new();
-        for row in &snapshot.rows {
+        let selected_row_position =
+            select_snapshot_selected_row_position(&snapshot.rows, snapshot.selected_index) as i32;
+        for (row_position, row) in snapshot.rows.iter().enumerate() {
             let row_state = SkinDrawState {
                 select_play_level: select_row_level_number(row),
                 play_level: select_row_level_number(row),
@@ -1835,12 +1837,12 @@ impl SkinDocument {
                 ex_score: row.ex_score.unwrap_or(0),
                 ..state
             };
-            let offset = row.index as i32 - snapshot.selected_index as i32;
+            let offset = row_position as i32 - selected_row_position;
             let slot = songlist.center + offset;
             if slot < 0 {
                 continue;
             }
-            let selected = row.index == snapshot.selected_index;
+            let selected = row_position as i32 == selected_row_position;
             let row_destinations = if selected { &songlist.liston } else { &songlist.listoff };
             let Some(row_destination) =
                 destination_entry_at(row_destinations, slot as usize, enabled_options)
@@ -4340,6 +4342,16 @@ fn select_scroll_progress(snapshot: &SelectSnapshot) -> f32 {
         return 0.0;
     }
     snapshot.selected_index.min(snapshot.chart_count - 1) as f32 / (snapshot.chart_count - 1) as f32
+}
+
+fn select_snapshot_selected_row_position(rows: &[SelectRowSnapshot], selected_index: u32) -> usize {
+    let center = rows.len() / 2;
+    rows.iter()
+        .enumerate()
+        .filter(|(_, row)| row.index == selected_index)
+        .min_by_key(|(index, _)| index.abs_diff(center))
+        .map(|(index, _)| index)
+        .unwrap_or(0)
 }
 
 fn destination_entry_at<'a>(
@@ -7220,6 +7232,47 @@ mod tests {
                 && approx_eq(*y, 0.65)
                 && approx_eq(*u, 4.0 / 100.0)
                 && approx_eq(*v, 20.0 / 100.0))));
+
+        let wrapped_snapshot = SelectSnapshot {
+            selected_index: 0,
+            rows: vec![
+                SelectRowSnapshot {
+                    index: 2,
+                    title: "Last".to_string(),
+                    play_level: "2".to_string(),
+                    ..SelectRowSnapshot::default()
+                },
+                SelectRowSnapshot {
+                    index: 0,
+                    title: "First".to_string(),
+                    play_level: "1".to_string(),
+                    ..SelectRowSnapshot::default()
+                },
+                SelectRowSnapshot {
+                    index: 1,
+                    title: "Second".to_string(),
+                    play_level: "2".to_string(),
+                    ..SelectRowSnapshot::default()
+                },
+            ],
+            ..SelectSnapshot::default()
+        };
+        let items = document.select_render_items(&sources, &wrapped_snapshot);
+        assert!(
+            items
+                .iter()
+                .any(|item| matches!(item, SkinRenderItem::Text { text, .. } if text == "Last"))
+        );
+        assert!(
+            items
+                .iter()
+                .any(|item| matches!(item, SkinRenderItem::Text { text, .. } if text == "First"))
+        );
+        assert!(
+            items
+                .iter()
+                .any(|item| matches!(item, SkinRenderItem::Text { text, .. } if text == "Second"))
+        );
     }
 
     #[test]

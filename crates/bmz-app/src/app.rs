@@ -509,7 +509,7 @@ impl WinitApp {
                 _ => None,
             },
             selected_title: selected.map(|i| i.display_name().to_string()).unwrap_or_default(),
-            rows: select_snapshot_rows(&self.select_items, self.selected_index, 7),
+            rows: select_snapshot_rows(&self.select_items, self.selected_index, 25),
             arrange: self.arrange_option.as_str().to_string(),
             gauge: gauge_option_as_str(self.gauge_option).to_string(),
             assist: self.assist_option.as_str().to_string(),
@@ -1976,17 +1976,15 @@ fn select_snapshot_rows(
         return Vec::new();
     }
 
+    let row_count = visible_limit;
     let selected_index = selected_index.min(items.len() - 1);
-    let half_window = visible_limit / 2;
-    let max_start = items.len().saturating_sub(visible_limit);
-    let start = selected_index.saturating_sub(half_window).min(max_start);
-    let end = (start + visible_limit).min(items.len());
+    let half_window = row_count / 2;
+    let start = (selected_index + items.len() - (half_window % items.len())) % items.len();
 
-    items[start..end]
-        .iter()
-        .enumerate()
-        .map(|(offset, item)| {
-            let index = start + offset;
+    (0..row_count)
+        .map(|offset| {
+            let index = (start + offset) % items.len();
+            let item = &items[index];
             match item {
                 SelectItem::Folder { name, .. } => SelectRowSnapshot {
                     index: index as u32,
@@ -2101,14 +2099,13 @@ fn moved_select_index(current_index: usize, row_count: usize, select_move: Selec
         return 0;
     }
 
-    let max_index = row_count - 1;
     match select_move {
-        SelectMove::Previous => current_index.saturating_sub(1),
-        SelectMove::Next => current_index.saturating_add(1).min(max_index),
-        SelectMove::PagePrevious => current_index.saturating_sub(7),
-        SelectMove::PageNext => current_index.saturating_add(7).min(max_index),
+        SelectMove::Previous => (current_index + row_count - 1) % row_count,
+        SelectMove::Next => (current_index + 1) % row_count,
+        SelectMove::PagePrevious => (current_index + row_count - (7 % row_count)) % row_count,
+        SelectMove::PageNext => (current_index + 7) % row_count,
         SelectMove::First => 0,
-        SelectMove::Last => max_index,
+        SelectMove::Last => row_count - 1,
     }
 }
 
@@ -2724,25 +2721,41 @@ mod tests {
     }
 
     #[test]
-    fn select_snapshot_rows_clamps_near_edges() {
+    fn select_snapshot_rows_wraps_near_edges() {
         let rows: Vec<SelectItem> =
             (0..4).map(|i| SelectItem::Chart(select_chart_row(i))).collect();
 
-        let snapshot_rows = select_snapshot_rows(&rows, 99, 7);
+        let snapshot_rows = select_snapshot_rows(&rows, 0, 7);
 
-        assert_eq!(snapshot_rows.len(), 4);
-        assert_eq!(snapshot_rows[0].index, 0);
-        assert_eq!(snapshot_rows[3].index, 3);
+        assert_eq!(snapshot_rows.len(), 7);
+        assert_eq!(
+            snapshot_rows.iter().map(|row| row.index).collect::<Vec<_>>(),
+            vec![1, 2, 3, 0, 1, 2, 3]
+        );
     }
 
     #[test]
-    fn moved_select_index_moves_by_single_page_and_edges() {
+    fn select_snapshot_rows_keeps_twelve_rows_around_selection() {
+        let rows: Vec<SelectItem> =
+            (0..30).map(|i| SelectItem::Chart(select_chart_row(i))).collect();
+
+        let snapshot_rows = select_snapshot_rows(&rows, 2, 25);
+
+        assert_eq!(snapshot_rows.len(), 25);
+        assert_eq!(snapshot_rows[0].index, 20);
+        assert_eq!(snapshot_rows[12].index, 2);
+        assert_eq!(snapshot_rows[24].index, 14);
+    }
+
+    #[test]
+    fn moved_select_index_moves_by_single_page_and_wraps_edges() {
         assert_eq!(moved_select_index(4, 10, SelectMove::Previous), 3);
         assert_eq!(moved_select_index(4, 10, SelectMove::Next), 5);
-        assert_eq!(moved_select_index(8, 10, SelectMove::Next), 9);
+        assert_eq!(moved_select_index(9, 10, SelectMove::Next), 0);
+        assert_eq!(moved_select_index(0, 10, SelectMove::Previous), 9);
         assert_eq!(moved_select_index(8, 10, SelectMove::PagePrevious), 1);
-        assert_eq!(moved_select_index(4, 10, SelectMove::PagePrevious), 0);
-        assert_eq!(moved_select_index(2, 10, SelectMove::PageNext), 9);
+        assert_eq!(moved_select_index(4, 10, SelectMove::PagePrevious), 7);
+        assert_eq!(moved_select_index(7, 10, SelectMove::PageNext), 4);
         assert_eq!(moved_select_index(0, 10, SelectMove::Last), 9);
         assert_eq!(moved_select_index(9, 10, SelectMove::First), 0);
     }
