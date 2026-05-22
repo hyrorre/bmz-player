@@ -14,6 +14,8 @@ tracing-subscriber.workspace = true
 rusqlite.workspace = true
 winit.workspace = true
 gilrs.workspace = true
+egui.workspace = true
+egui-winit.workspace = true
 
 rayon.workspace = true
 tokio.workspace = true

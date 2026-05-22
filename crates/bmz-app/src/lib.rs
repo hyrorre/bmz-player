@@ -12,4 +12,5 @@ pub mod skin_loader;
 pub mod songs_cmd;
 pub mod storage;
 pub mod table_cmd;
+pub mod ui;
 pub mod video_bga;

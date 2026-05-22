@@ -16,6 +16,7 @@ use crate::plan::{
 };
 use crate::scene::AppSceneSnapshot;
 use crate::skin::{BlendMode, SkinContext};
+use crate::ui::{EguiFrame, EguiPainter};
 
 #[derive(Default)]
 pub struct Renderer {
@@ -28,6 +29,7 @@ pub struct Renderer {
     fonts: HashMap<String, FontArc>,
     bitmap_fonts: HashMap<String, BitmapFont>,
     gpu: Option<WgpuRenderer>,
+    pending_egui: Option<EguiFrame>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,6 +92,7 @@ struct WgpuRenderer {
     text_buffer: Option<wgpu::Buffer>,
     text_buffer_capacity: usize,
     font: Option<FontArc>,
+    egui: EguiPainter,
 }
 
 #[derive(Debug, Clone)]
@@ -230,7 +233,15 @@ impl Renderer {
         self.render_last_plan()
     }
 
+    /// 次の描画フレームで重ねる egui の描画データを差し込む。
+    ///
+    /// `render_scene_status` / `render_last_plan` の呼び出しで消費される。
+    pub fn set_egui_frame(&mut self, frame: EguiFrame) {
+        self.pending_egui = Some(frame);
+    }
+
     pub fn render_last_plan(&mut self) -> Result<RenderSurfaceStatus> {
+        let egui = self.pending_egui.take();
         let Some(gpu) = &mut self.gpu else {
             return Ok(RenderSurfaceStatus::SkippedNoSurface);
         };
@@ -238,7 +249,7 @@ impl Renderer {
             return Ok(RenderSurfaceStatus::SkippedNoSurface);
         };
 
-        gpu.render_plan(plan, &self.fonts, &self.bitmap_fonts)
+        gpu.render_plan(plan, &self.fonts, &self.bitmap_fonts, egui.as_ref())
     }
 
     pub fn last_scene(&self) -> Option<&AppSceneSnapshot> {
@@ -317,6 +328,7 @@ impl WgpuRenderer {
         let text_bind_group_layout = create_text_bind_group_layout(&device);
         let text_sampler = create_text_sampler(&device);
         let text_pipeline = create_text_pipeline(&device, config.format, &text_bind_group_layout);
+        let egui = EguiPainter::new(&device, config.format);
 
         Ok(Self {
             surface,
@@ -343,6 +355,7 @@ impl WgpuRenderer {
             text_buffer: None,
             text_buffer_capacity: 0,
             font: load_default_font(),
+            egui,
         })
     }
 
@@ -361,7 +374,15 @@ impl WgpuRenderer {
         plan: &DrawPlan,
         fonts: &HashMap<String, FontArc>,
         bitmap_fonts: &HashMap<String, BitmapFont>,
+        egui: Option<&EguiFrame>,
     ) -> Result<RenderSurfaceStatus> {
+        // egui のテクスチャ更新は、描画をスキップするフレームでも必ず適用する。
+        // TexturesDelta は累積ストリームのため、取りこぼすと後続フレームの
+        // 部分更新が未確保テクスチャを参照して panic する。
+        if let Some(frame) = egui {
+            self.egui.update_textures(&self.device, &self.queue, frame);
+        }
+
         if !(SurfaceSize { width: self.config.width, height: self.config.height }).is_drawable() {
             return Ok(RenderSurfaceStatus::SkippedZeroSize);
         }
@@ -463,7 +484,25 @@ impl WgpuRenderer {
                 }
             }
         }
-        self.queue.submit(Some(encoder.finish()));
+
+        // ゲーム / スキン描画の上に egui を重ねる。staging 用 CommandBuffer は
+        // egui パスを含む encoder より前に submit する必要がある。
+        let egui_staging = match egui {
+            Some(frame) => self.egui.paint(
+                &self.device,
+                &self.queue,
+                &mut encoder,
+                &view,
+                frame,
+                [self.config.width, self.config.height],
+            ),
+            None => Vec::new(),
+        };
+
+        self.queue.submit(egui_staging.into_iter().chain(std::iter::once(encoder.finish())));
+        if let Some(frame) = egui {
+            self.egui.free_textures(frame);
+        }
         output.present();
         Ok(RenderSurfaceStatus::Rendered)
     }
@@ -1731,8 +1770,26 @@ fn load_default_font() -> Option<FontArc> {
 
 /// ひらがな「あ」と漢字「日」のグリフを両方持つフォントを日本語対応とみなす。
 /// `GlyphId(0)` は .notdef（未定義グリフ）なので、それ以外なら描画できる。
-fn font_supports_japanese(font: &FontArc) -> bool {
+fn font_supports_japanese<F: Font>(font: &F) -> bool {
     font.glyph_id('あ').0 != 0 && font.glyph_id('日').0 != 0
+}
+
+/// egui など外部 UI 向けに、日本語表示が可能なフォントファイルの生バイト列を返す。
+///
+/// ゲーム本体テキストと同じ `default_font_candidates` の探索順を再利用し、
+/// OS にインストールされた CJK 対応フォントを最初に見つかった順で返す。
+pub fn load_japanese_font_bytes() -> Option<Vec<u8>> {
+    for path in default_font_candidates() {
+        let Ok(bytes) = std::fs::read(path) else {
+            continue;
+        };
+        match ab_glyph::FontRef::try_from_slice(&bytes) {
+            Ok(font) if font_supports_japanese(&font) => return Some(bytes),
+            _ => {}
+        }
+    }
+    tracing::warn!("no Japanese-capable font found for egui; text may render as tofu");
+    None
 }
 
 fn default_font_candidates() -> &'static [&'static str] {

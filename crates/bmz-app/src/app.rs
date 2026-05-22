@@ -50,6 +50,7 @@ use crate::skin_loader::{
 };
 use crate::storage::replay::load_replay_for_chart;
 use crate::storage::scan::scan_song_roots;
+use crate::ui::EguiLayer;
 use bmz_render::skin::{SkinDocument, SkinDocumentTexture, SkinManifest};
 use std::collections::VecDeque;
 
@@ -146,6 +147,9 @@ struct WinitApp {
     select_exit_hold_started_at: Option<Instant>,
     /// プレイ中の Start キー直近の押下時刻。連続押し判定で使用。
     last_play_start_press_at: Option<Instant>,
+    /// 本体設定 / スキン設定 / デバッグ表示用の egui レイヤ。
+    /// ウィンドウ生成時に初期化される。
+    egui: Option<EguiLayer>,
 }
 
 const SELECT_EXIT_HOLD_DURATION: Duration = Duration::from_millis(1_200);
@@ -274,6 +278,7 @@ impl WinitApp {
             pending_skin_installs: Vec::new(),
             select_exit_hold_started_at: None,
             last_play_start_press_at: None,
+            egui: None,
         };
         if let Some(chart_id) = boot_sample_chart_id {
             tracing::info!(
@@ -319,6 +324,7 @@ impl WinitApp {
                     "window and renderer surface ready"
                 );
                 window.request_redraw();
+                self.egui = Some(EguiLayer::new(&window));
                 self.window = Some(window);
                 self.update_window_title_for_scene(AppSceneKind::Select);
             }
@@ -1118,6 +1124,19 @@ impl WinitApp {
         }
     }
 
+    /// egui の 1 フレームを構築し、renderer へ描画データを渡す。
+    /// `render_current_scene` の前に呼ぶこと。
+    fn run_egui_frame(&mut self) {
+        let Some(window) = self.window.clone() else {
+            return;
+        };
+        let Some(egui) = self.egui.as_mut() else {
+            return;
+        };
+        let frame = egui.run(&window);
+        self.renderer.set_egui_frame(frame);
+    }
+
     fn render_current_scene(&mut self) {
         let scene = self.scene_snapshot();
         let scene_kind = scene_kind(&scene);
@@ -1465,12 +1484,35 @@ impl ApplicationHandler for WinitApp {
             return;
         }
 
+        // すべてのウィンドウイベントを egui へ供給する。RedrawRequested など
+        // egui が関知しないイベントは egui_winit 側で無視される。
+        let egui_consumed = match (self.window.clone(), self.egui.as_mut()) {
+            (Some(window), Some(egui)) => egui.on_window_event(&window, &event),
+            _ => false,
+        };
+
         match event {
             WindowEvent::CloseRequested => {
                 self.save_current_play_options(self.active_hispeed(), "game exit");
                 event_loop.exit();
             }
-            WindowEvent::KeyboardInput { event, .. } => self.route_keyboard_input(&event),
+            WindowEvent::KeyboardInput { event, .. } => {
+                // F5 で egui メニューを開閉する。
+                if event.physical_key == PhysicalKey::Code(KeyCode::F5)
+                    && event.state == ElementState::Pressed
+                    && !event.repeat
+                {
+                    if let Some(egui) = self.egui.as_mut() {
+                        egui.toggle();
+                    }
+                    return;
+                }
+                // egui がフォーカスを持つ間はゲーム入力へ伝播させない。
+                if egui_consumed {
+                    return;
+                }
+                self.route_keyboard_input(&event);
+            }
             WindowEvent::Resized(size) => {
                 self.renderer
                     .resize_surface(SurfaceSize { width: size.width, height: size.height });
@@ -1478,6 +1520,7 @@ impl ApplicationHandler for WinitApp {
             WindowEvent::RedrawRequested => {
                 self.poll_gamepad_events();
                 self.drain_pending_skins();
+                self.run_egui_frame();
                 self.render_current_scene();
                 self.advance_active_play();
                 // 次フレームの再描画をここで要求して描画ループを自走させる。
