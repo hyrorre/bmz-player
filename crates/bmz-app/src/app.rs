@@ -793,6 +793,8 @@ impl WinitApp {
 
     fn start_chart_with_options(&mut self, chart_id: i64, options: PlayStartOptions) {
         self.ensure_skin_ready(SkinKind::Play);
+        // 新しいプレイの音声出力を開く前に、前曲の余韻再生を止めて出力を解放する。
+        self.draining_audio = None;
         match self.boot.start_play_for_chart_with_winit_input(chart_id, options) {
             Ok(mut active_play) => {
                 active_play.running.bga_frames =
@@ -881,6 +883,8 @@ impl WinitApp {
 
     fn leave_result(&mut self) {
         self.finished_play = None;
+        // リザルト画面を抜けたら、まだ鳴っていても余韻再生を止める。
+        self.draining_audio = None;
         self.last_play_snapshot = None;
         self.reload_select_items();
         let now = Instant::now();
@@ -1115,6 +1119,23 @@ impl WinitApp {
                 self.active_play = None;
                 self.last_play_snapshot = None;
             }
+        }
+    }
+
+    /// リザルト遷移後も鳴らし続けている音声出力を監視し、スケジュール済みの
+    /// BGM/キー音がすべて鳴り切ったら出力を解放する。
+    fn advance_draining_audio(&mut self) {
+        let Some(audio) = &self.draining_audio else {
+            return;
+        };
+        let drained = match audio.engine.lock() {
+            Ok(engine) => engine.is_idle(),
+            // ロック中断時は安全側に倒して出力を解放する。
+            Err(_) => true,
+        };
+        if drained {
+            tracing::info!("play audio drained after result; releasing output");
+            self.draining_audio = None;
         }
     }
 
@@ -1480,6 +1501,7 @@ impl ApplicationHandler for WinitApp {
                 self.drain_pending_skins();
                 self.render_current_scene();
                 self.advance_active_play();
+                self.advance_draining_audio();
                 // 次フレームの再描画をここで要求して描画ループを自走させる。
                 // about_to_wait から要求すると、Windows のウィンドウ移動/リサイズ中に
                 // 発生するモーダルループ (WM_ENTERSIZEMOVE..WM_EXITSIZEMOVE) では
