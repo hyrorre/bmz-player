@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt;
 use std::future::Future;
+use std::ops::Range;
 use std::pin::Pin;
 use std::task::{Context as TaskContext, Poll, RawWaker, RawWakerVTable, Waker};
 use std::thread;
@@ -12,7 +13,8 @@ use anyhow::{Context, Result, anyhow};
 use crate::assets::{RgbaImageAsset, load_png_rgba};
 use crate::bitmap_font::{BitmapFont, load_bitmap_font};
 use crate::plan::{
-    Color, DrawCommand, DrawPlan, Point, TextAlign, TextOverflow, TextStyle, TextureId,
+    Color, DrawCommand, DrawPlan, Point, Rect, TextAlign, TextOverflow, TextStyle, TextureId,
+    UvRect,
 };
 use crate::scene::AppSceneSnapshot;
 use crate::skin::{BlendMode, SkinContext};
@@ -372,25 +374,19 @@ impl WgpuRenderer {
             return Ok(RenderSurfaceStatus::SkippedZeroSize);
         }
 
-        let rects = encode_rects(plan);
-        let image_batches = encode_image_batches(plan);
-        let images_len = image_batches.iter().map(|batch| batch.instances.len()).sum();
         let text_frame = self.build_text_frame(plan, fonts, bitmap_fonts);
-        self.ensure_rect_buffer(rects.len());
+        let geometry = encode_plan_geometry(plan, &text_frame);
+        self.ensure_rect_buffer(geometry.rects.len());
         if let Some(buffer) = &self.rect_buffer
-            && !rects.is_empty()
+            && !geometry.rects.is_empty()
         {
-            self.queue.write_buffer(buffer, 0, &rects);
+            self.queue.write_buffer(buffer, 0, &geometry.rects);
         }
-        self.ensure_image_buffer(images_len);
+        self.ensure_image_buffer(geometry.images.len());
         if let Some(buffer) = &self.image_buffer
-            && images_len > 0
+            && !geometry.images.is_empty()
         {
-            let mut offset = 0;
-            for batch in &image_batches {
-                self.queue.write_buffer(buffer, offset, &batch.instances);
-                offset += batch.instances.len() as u64;
-            }
+            self.queue.write_buffer(buffer, 0, &geometry.images);
         }
         self.upload_text_frame(&text_frame);
 
@@ -406,9 +402,17 @@ impl WgpuRenderer {
             }
         };
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let image_bind_groups: Vec<_> = image_batches
+        // image ステップごとの bind group を、レンダーパスが encoder を借りる前に作る。
+        // steps 内の image ステップと同じ順序で並ぶ。
+        let image_bind_groups: Vec<wgpu::BindGroup> = geometry
+            .steps
             .iter()
-            .map(|batch| self.image_bind_group(batch.texture, batch.linear))
+            .filter_map(|step| match step {
+                DrawStep::Image { texture, linear, .. } => {
+                    Some(self.image_bind_group(*texture, *linear))
+                }
+                _ => None,
+            })
             .collect();
         let text_bind_group = self.text_bind_group();
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -429,40 +433,65 @@ impl WgpuRenderer {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
-            if let Some(buffer) = &self.rect_buffer {
-                let instance_count = (rects.len() / RECT_INSTANCE_BYTES) as u32;
-                if instance_count > 0 {
-                    pass.set_pipeline(&self.rect_pipeline);
-                    pass.set_vertex_buffer(0, buffer.slice(..rects.len() as u64));
-                    pass.draw(0..6, 0..instance_count);
-                }
-            }
-            if let Some(buffer) = &self.image_buffer {
-                let mut offset = 0_u64;
-                for (batch, bind_group) in image_batches.iter().zip(image_bind_groups.iter()) {
-                    let instance_count = (batch.instances.len() / IMAGE_INSTANCE_BYTES) as u32;
-                    if instance_count > 0 {
-                        let end = offset + batch.instances.len() as u64;
-                        pass.set_pipeline(match batch.blend {
+            // DrawPlan.commands の順序を保ったまま rect / image / text を交互に描く。
+            // これにより skin が画像をテキストより前面に置く演出も正しく重なる。
+            let mut image_step_index = 0_usize;
+            for step in &geometry.steps {
+                match step {
+                    DrawStep::Rects { range } => {
+                        let Some(buffer) = &self.rect_buffer else {
+                            continue;
+                        };
+                        let instance_count = (range.len() / RECT_INSTANCE_BYTES) as u32;
+                        if instance_count == 0 {
+                            continue;
+                        }
+                        pass.set_pipeline(&self.rect_pipeline);
+                        pass.set_vertex_buffer(
+                            0,
+                            buffer.slice(range.start as u64..range.end as u64),
+                        );
+                        pass.draw(0..6, 0..instance_count);
+                    }
+                    DrawStep::Image { blend, range, .. } => {
+                        let bind_group = &image_bind_groups[image_step_index];
+                        image_step_index += 1;
+                        let Some(buffer) = &self.image_buffer else {
+                            continue;
+                        };
+                        let instance_count = (range.len() / IMAGE_INSTANCE_BYTES) as u32;
+                        if instance_count == 0 {
+                            continue;
+                        }
+                        pass.set_pipeline(match blend {
                             BlendMode::Normal => &self.image_pipeline,
                             BlendMode::Add => &self.image_add_pipeline,
                         });
                         pass.set_bind_group(0, bind_group, &[]);
-                        pass.set_vertex_buffer(0, buffer.slice(offset..end));
+                        pass.set_vertex_buffer(
+                            0,
+                            buffer.slice(range.start as u64..range.end as u64),
+                        );
                         pass.draw(0..6, 0..instance_count);
-                        offset = end;
                     }
-                }
-            }
-            if let Some(bind_group) = &text_bind_group
-                && let Some(buffer) = &self.text_buffer
-            {
-                let instance_count = (text_frame.instances.len() / TEXT_INSTANCE_BYTES) as u32;
-                if instance_count > 0 {
-                    pass.set_pipeline(&self.text_pipeline);
-                    pass.set_bind_group(0, bind_group, &[]);
-                    pass.set_vertex_buffer(0, buffer.slice(..text_frame.instances.len() as u64));
-                    pass.draw(0..6, 0..instance_count);
+                    DrawStep::Text { range } => {
+                        let (Some(bind_group), Some(buffer)) =
+                            (&text_bind_group, &self.text_buffer)
+                        else {
+                            continue;
+                        };
+                        let instance_count = (range.len() / TEXT_INSTANCE_BYTES) as u32;
+                        if instance_count == 0 {
+                            continue;
+                        }
+                        pass.set_pipeline(&self.text_pipeline);
+                        pass.set_bind_group(0, bind_group, &[]);
+                        pass.set_vertex_buffer(
+                            0,
+                            buffer.slice(range.start as u64..range.end as u64),
+                        );
+                        pass.draw(0..6, 0..instance_count);
+                    }
                 }
             }
         }
@@ -664,35 +693,63 @@ struct TextFrame {
     size: AtlasSize,
     pixels: Vec<u8>,
     instances: Vec<u8>,
+    /// `DrawCommand::Text` ごとに生成された quad 数を、commands 内の出現順で持つ。
+    /// 描画ステップ単位で text instance buffer をスライスするのに使う。
+    command_quad_counts: Vec<usize>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ImageBatch {
-    texture: TextureId,
-    blend: BlendMode,
-    linear: bool,
-    instances: Vec<u8>,
+/// `DrawPlan.commands` の順序を保ったまま 1 レンダーパスで描くための描画ステップ。
+/// 連続する同種コマンドは 1 ステップにまとめる。image は texture/blend/linear が
+/// 変わるか、別種コマンドを挟むたびに分割する。
+#[derive(Debug, Clone, PartialEq)]
+enum DrawStep {
+    /// rect instance buffer 内のバイト範囲。
+    Rects { range: Range<usize> },
+    /// image instance buffer 内のバイト範囲。
+    Image { texture: TextureId, blend: BlendMode, linear: bool, range: Range<usize> },
+    /// text instance buffer 内のバイト範囲。atlas テクスチャは全 text で共有する。
+    Text { range: Range<usize> },
 }
 
-fn encode_rects(plan: &DrawPlan) -> Vec<u8> {
-    let mut bytes = Vec::new();
+/// `DrawPlan` を GPU 描画用のバッファ列と順序付きステップ列へ変換した結果。
+struct PlanGeometry {
+    rects: Vec<u8>,
+    images: Vec<u8>,
+    steps: Vec<DrawStep>,
+}
+
+/// commands を 1 回走査し、rect/image インスタンスバッファと、コマンド順を尊重した
+/// 描画ステップ列を作る。`text_frame` の `command_quad_counts` から各 Text コマンドが
+/// 占める text instance buffer の範囲を割り出す。
+fn encode_plan_geometry(plan: &DrawPlan, text_frame: &TextFrame) -> PlanGeometry {
+    let mut rects = Vec::new();
+    let mut images = Vec::new();
+    let mut steps: Vec<DrawStep> = Vec::new();
+    // text instance buffer 上での現在位置 (quad 単位) と、次に参照する Text コマンド番号。
+    let mut text_quad_cursor = 0_usize;
+    let mut text_command_index = 0_usize;
+
     for command in &plan.commands {
-        let DrawCommand::Rect { rect, color } = command else {
-            continue;
-        };
-        for value in [rect.x, rect.y, rect.width, rect.height, color.r, color.g, color.b, color.a] {
-            bytes.extend_from_slice(&value.to_le_bytes());
-        }
-    }
-    bytes
-}
-
-fn encode_image_batches(plan: &DrawPlan) -> Vec<ImageBatch> {
-    let mut batches = Vec::new();
-    for command in &plan.commands {
-        let (rect, uv, texture, tint, blend, linear_filter, angle_rad, center) = match command {
+        match command {
+            DrawCommand::Rect { rect, color } => {
+                let start = rects.len();
+                for value in
+                    [rect.x, rect.y, rect.width, rect.height, color.r, color.g, color.b, color.a]
+                {
+                    rects.extend_from_slice(&value.to_le_bytes());
+                }
+                push_or_extend_rects(&mut steps, start..rects.len());
+            }
             DrawCommand::Image { rect, uv, texture, tint, blend, linear_filter } => {
-                (rect, uv, texture, tint, blend, linear_filter, 0.0, Point { x: 0.5, y: 0.5 })
+                let start = images.len();
+                encode_image_instance(&mut images, rect, uv, tint, 0.0, Point { x: 0.5, y: 0.5 });
+                push_or_extend_image(
+                    &mut steps,
+                    *texture,
+                    *blend,
+                    *linear_filter,
+                    start..images.len(),
+                );
             }
             DrawCommand::RotatedImage {
                 rect,
@@ -703,43 +760,96 @@ fn encode_image_batches(plan: &DrawPlan) -> Vec<ImageBatch> {
                 linear_filter,
                 angle_rad,
                 center,
-            } => (rect, uv, texture, tint, blend, linear_filter, *angle_rad, *center),
-            _ => continue,
-        };
-        let start_new_batch = batches.last().map_or(true, |batch: &ImageBatch| {
-            batch.texture != *texture || batch.blend != *blend || batch.linear != *linear_filter
-        });
-        if start_new_batch {
-            batches.push(ImageBatch {
-                texture: *texture,
-                blend: *blend,
-                linear: *linear_filter,
-                instances: Vec::new(),
-            });
-        }
-        let batch = batches.last_mut().expect("image batch exists");
-        for value in [
-            rect.x,
-            rect.y,
-            rect.width,
-            rect.height,
-            uv.x,
-            uv.y,
-            uv.width,
-            uv.height,
-            tint.r,
-            tint.g,
-            tint.b,
-            tint.a,
-            angle_rad,
-            center.x,
-            center.y,
-            0.0,
-        ] {
-            batch.instances.extend_from_slice(&value.to_le_bytes());
+            } => {
+                let start = images.len();
+                encode_image_instance(&mut images, rect, uv, tint, *angle_rad, *center);
+                push_or_extend_image(
+                    &mut steps,
+                    *texture,
+                    *blend,
+                    *linear_filter,
+                    start..images.len(),
+                );
+            }
+            DrawCommand::Text { .. } => {
+                let quad_count =
+                    text_frame.command_quad_counts.get(text_command_index).copied().unwrap_or(0);
+                text_command_index += 1;
+                let start = text_quad_cursor * TEXT_INSTANCE_BYTES;
+                text_quad_cursor += quad_count;
+                let end = text_quad_cursor * TEXT_INSTANCE_BYTES;
+                if quad_count > 0 {
+                    push_or_extend_text(&mut steps, start..end);
+                }
+            }
         }
     }
-    batches
+
+    PlanGeometry { rects, images, steps }
+}
+
+/// image インスタンス 1 件 (16 float) をバッファ末尾へ書き込む。
+fn encode_image_instance(
+    images: &mut Vec<u8>,
+    rect: &Rect,
+    uv: &UvRect,
+    tint: &Color,
+    angle_rad: f32,
+    center: Point,
+) {
+    for value in [
+        rect.x,
+        rect.y,
+        rect.width,
+        rect.height,
+        uv.x,
+        uv.y,
+        uv.width,
+        uv.height,
+        tint.r,
+        tint.g,
+        tint.b,
+        tint.a,
+        angle_rad,
+        center.x,
+        center.y,
+        0.0,
+    ] {
+        images.extend_from_slice(&value.to_le_bytes());
+    }
+}
+
+fn push_or_extend_rects(steps: &mut Vec<DrawStep>, range: Range<usize>) {
+    match steps.last_mut() {
+        Some(DrawStep::Rects { range: existing }) => existing.end = range.end,
+        _ => steps.push(DrawStep::Rects { range }),
+    }
+}
+
+fn push_or_extend_text(steps: &mut Vec<DrawStep>, range: Range<usize>) {
+    match steps.last_mut() {
+        Some(DrawStep::Text { range: existing }) => existing.end = range.end,
+        _ => steps.push(DrawStep::Text { range }),
+    }
+}
+
+fn push_or_extend_image(
+    steps: &mut Vec<DrawStep>,
+    texture: TextureId,
+    blend: BlendMode,
+    linear: bool,
+    range: Range<usize>,
+) {
+    if let Some(DrawStep::Image { texture: t, blend: b, linear: l, range: existing }) =
+        steps.last_mut()
+        && *t == texture
+        && *b == blend
+        && *l == linear
+    {
+        existing.end = range.end;
+        return;
+    }
+    steps.push(DrawStep::Image { texture, blend, linear, range });
 }
 
 fn build_text_frame(
@@ -754,21 +864,30 @@ fn build_text_frame(
     }
 
     let mut builder = TextAtlasBuilder::new(TEXT_ATLAS_WIDTH);
+    // 各 Text コマンドが生成した quad 数を記録し、描画ステップへ分割できるようにする。
+    let mut command_quad_counts = Vec::new();
     for command in &plan.commands {
         let DrawCommand::Text { origin, text, style } = command else {
             continue;
         };
+        let quads_before = builder.quads.len();
         if let Some(bitmap_font) =
             style.font_id.as_ref().and_then(|font_id| bitmap_fonts.get(font_id))
         {
             builder.push_bitmap_text(origin, text, style.clone(), bitmap_font, surface);
-            continue;
+        } else {
+            let font = style
+                .font_id
+                .as_ref()
+                .and_then(|font_id| fonts.get(font_id))
+                .unwrap_or(default_font);
+            builder.push_text(origin, text, style.clone(), font, surface);
         }
-        let font =
-            style.font_id.as_ref().and_then(|font_id| fonts.get(font_id)).unwrap_or(default_font);
-        builder.push_text(origin, text, style.clone(), font, surface);
+        command_quad_counts.push(builder.quads.len() - quads_before);
     }
-    builder.finish()
+    let mut frame = builder.finish();
+    frame.command_quad_counts = command_quad_counts;
+    frame
 }
 
 struct TextAtlasBuilder {
@@ -1123,7 +1242,12 @@ impl TextAtlasBuilder {
         let height = self.atlas_height();
         self.pixels.resize((self.width * height * 4) as usize, 0);
         let instances = encode_text_quads(&self.quads, self.width, height);
-        TextFrame { size: AtlasSize { width: self.width, height }, pixels: self.pixels, instances }
+        TextFrame {
+            size: AtlasSize { width: self.width, height },
+            pixels: self.pixels,
+            instances,
+            command_quad_counts: Vec::new(),
+        }
     }
 }
 
@@ -2045,101 +2169,145 @@ mod tests {
         assert_ne!(select.clear, play.clear);
     }
 
+    fn sample_image(texture: u32, blend: BlendMode) -> DrawCommand {
+        DrawCommand::Image {
+            rect: crate::plan::Rect { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
+            uv: crate::plan::UvRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+            texture: crate::plan::TextureId(texture),
+            tint: Color::rgb(1.0, 1.0, 1.0),
+            blend,
+            linear_filter: false,
+        }
+    }
+
+    fn sample_rect() -> DrawCommand {
+        DrawCommand::Rect {
+            rect: crate::plan::Rect { x: 0.0, y: 0.0, width: 0.1, height: 0.1 },
+            color: Color::rgb(1.0, 1.0, 1.0),
+        }
+    }
+
+    fn sample_text() -> DrawCommand {
+        DrawCommand::Text {
+            origin: Point { x: 0.1, y: 0.1 },
+            text: "x".to_string(),
+            style: TextStyle {
+                font_id: None,
+                size: 0.1,
+                color: Color::rgb(1.0, 1.0, 1.0),
+                layer: crate::plan::TextLayer::Skin,
+                align: TextAlign::Left,
+                max_width: 0.0,
+                overflow: TextOverflow::Overflow,
+                wrapping: false,
+                outline: None,
+                shadow: None,
+            },
+        }
+    }
+
     #[test]
-    fn encode_rects_writes_one_instance_per_rect_command() {
+    fn plan_geometry_encodes_one_rect_instance_per_rect_command() {
         let plan = DrawPlan::from_scene(&AppSceneSnapshot::Select(SelectSnapshot {
             chart_count: 1,
             ..Default::default()
         }));
 
-        let bytes = encode_rects(&plan);
+        let geometry = encode_plan_geometry(&plan, &TextFrame::default());
         let rect_count = plan
             .commands
             .iter()
             .filter(|command| matches!(command, DrawCommand::Rect { .. }))
             .count();
 
-        assert_eq!(bytes.len(), rect_count * RECT_INSTANCE_BYTES);
+        assert_eq!(geometry.rects.len(), rect_count * RECT_INSTANCE_BYTES);
     }
 
     #[test]
-    fn encode_image_batches_groups_instances_by_texture() {
+    fn plan_geometry_groups_consecutive_images_by_texture() {
         let plan = DrawPlan {
             clear: Color::rgb(0.0, 0.0, 0.0),
             commands: vec![
-                DrawCommand::Image {
-                    rect: crate::plan::Rect { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
-                    uv: crate::plan::UvRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
-                    texture: crate::plan::TextureId(0),
-                    tint: Color::rgb(1.0, 1.0, 1.0),
-                    blend: BlendMode::Normal,
-                    linear_filter: false,
-                },
-                DrawCommand::Image {
-                    rect: crate::plan::Rect { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
-                    uv: crate::plan::UvRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
-                    texture: crate::plan::TextureId(7),
-                    tint: Color::rgb(1.0, 1.0, 1.0),
-                    blend: BlendMode::Normal,
-                    linear_filter: false,
-                },
+                sample_image(0, BlendMode::Normal),
+                sample_image(0, BlendMode::Normal),
+                sample_image(7, BlendMode::Normal),
             ],
         };
 
-        let batches = encode_image_batches(&plan);
+        let geometry = encode_plan_geometry(&plan, &TextFrame::default());
+        let image_step_sizes: Vec<_> = geometry
+            .steps
+            .iter()
+            .filter_map(|step| match step {
+                DrawStep::Image { range, .. } => Some(range.len()),
+                _ => None,
+            })
+            .collect();
 
-        assert_eq!(batches.len(), 2);
-        assert_eq!(batches[0].instances.len(), IMAGE_INSTANCE_BYTES);
-        assert_eq!(batches[1].instances.len(), IMAGE_INSTANCE_BYTES);
+        assert_eq!(image_step_sizes, vec![IMAGE_INSTANCE_BYTES * 2, IMAGE_INSTANCE_BYTES]);
+        assert_eq!(geometry.images.len(), IMAGE_INSTANCE_BYTES * 3);
     }
 
     #[test]
-    fn encode_image_batches_separates_blend_modes() {
-        let image = |blend| DrawCommand::Image {
-            rect: crate::plan::Rect { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
-            uv: crate::plan::UvRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
-            texture: crate::plan::TextureId(0),
-            tint: Color::rgb(1.0, 1.0, 1.0),
-            blend,
-            linear_filter: false,
-        };
+    fn plan_geometry_separates_image_blend_modes() {
         let plan = DrawPlan {
             clear: Color::rgb(0.0, 0.0, 0.0),
-            commands: vec![image(BlendMode::Normal), image(BlendMode::Add)],
+            commands: vec![sample_image(0, BlendMode::Normal), sample_image(0, BlendMode::Add)],
         };
 
-        let batches = encode_image_batches(&plan);
+        let geometry = encode_plan_geometry(&plan, &TextFrame::default());
+        let blends: Vec<_> = geometry
+            .steps
+            .iter()
+            .filter_map(|step| match step {
+                DrawStep::Image { blend, .. } => Some(*blend),
+                _ => None,
+            })
+            .collect();
 
-        assert_eq!(batches.len(), 2);
-        assert_eq!(batches[0].blend, BlendMode::Normal);
-        assert_eq!(batches[1].blend, BlendMode::Add);
+        assert_eq!(blends, vec![BlendMode::Normal, BlendMode::Add]);
     }
 
     #[test]
-    fn encode_image_batches_preserves_non_consecutive_texture_order() {
-        let image = |texture| DrawCommand::Image {
-            rect: crate::plan::Rect { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
-            uv: crate::plan::UvRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
-            texture: crate::plan::TextureId(texture),
-            tint: Color::rgb(1.0, 1.0, 1.0),
-            blend: BlendMode::Normal,
-            linear_filter: false,
-        };
+    fn plan_geometry_splits_image_steps_around_other_commands() {
+        // 同じテクスチャの画像でも、間に rect を挟めば別ステップになる。
+        // rect が2枚の画像の「間」に描かれ、commands の順序が保たれることの回帰テスト。
         let plan = DrawPlan {
             clear: Color::rgb(0.0, 0.0, 0.0),
-            commands: vec![image(1), image(2), image(1)],
+            commands: vec![
+                sample_image(1, BlendMode::Normal),
+                sample_rect(),
+                sample_image(1, BlendMode::Normal),
+            ],
         };
 
-        let batches = encode_image_batches(&plan);
+        let geometry = encode_plan_geometry(&plan, &TextFrame::default());
 
-        assert_eq!(batches.len(), 3);
-        assert_eq!(batches[0].texture, crate::plan::TextureId(1));
-        assert_eq!(batches[1].texture, crate::plan::TextureId(2));
-        assert_eq!(batches[2].texture, crate::plan::TextureId(1));
+        assert_eq!(geometry.steps.len(), 3);
+        assert!(matches!(geometry.steps[0], DrawStep::Image { .. }));
+        assert!(matches!(geometry.steps[1], DrawStep::Rects { .. }));
+        assert!(matches!(geometry.steps[2], DrawStep::Image { .. }));
     }
 
     #[test]
-    fn encode_image_batches_writes_rotation_instance_data() {
+    fn plan_geometry_orders_text_steps_by_command_position() {
+        // Text コマンドが Image より前にあれば、描画ステップも Image より前 (背面) になる。
+        let plan = DrawPlan {
+            clear: Color::rgb(0.0, 0.0, 0.0),
+            commands: vec![sample_text(), sample_image(1, BlendMode::Normal)],
+        };
+        // sample_text が 2 quad を生成したと仮定したテキストフレーム。
+        let text_frame = TextFrame { command_quad_counts: vec![2], ..TextFrame::default() };
+
+        let geometry = encode_plan_geometry(&plan, &text_frame);
+
+        assert_eq!(geometry.steps.len(), 2);
+        assert_eq!(geometry.steps[0], DrawStep::Text { range: 0..TEXT_INSTANCE_BYTES * 2 });
+        assert!(matches!(geometry.steps[1], DrawStep::Image { .. }));
+    }
+
+    #[test]
+    fn plan_geometry_writes_rotation_instance_data() {
         let plan = DrawPlan {
             clear: Color::rgb(0.0, 0.0, 0.0),
             commands: vec![DrawCommand::RotatedImage {
@@ -2154,9 +2322,9 @@ mod tests {
             }],
         };
 
-        let batches = encode_image_batches(&plan);
-        let floats: Vec<f32> = batches[0]
-            .instances
+        let geometry = encode_plan_geometry(&plan, &TextFrame::default());
+        let floats: Vec<f32> = geometry
+            .images
             .chunks_exact(std::mem::size_of::<f32>())
             .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()))
             .collect();
