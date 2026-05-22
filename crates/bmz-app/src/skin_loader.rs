@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -159,7 +159,19 @@ pub fn load_default_skin_into_renderer(renderer: &mut Renderer) -> Result<SkinMa
 /// beatoraja JSON skin の document/フォント/PNG ソースを並列にデコードする。
 /// Renderer には触らないので Send-safe で、別スレッドからも呼べる。
 pub fn decode_beatoraja_skin(skin_path: &Path, kind: SkinKind) -> Result<DecodedSkin> {
-    let mut document = load_skin_document(skin_path, kind)?;
+    decode_beatoraja_skin_with_options(skin_path, kind, &BTreeMap::new())
+}
+
+/// `decode_beatoraja_skin` のカスタマイズオプション付き版。
+///
+/// `options` はオプション名 -> 選択肢名の対応。JSON スキンは選択肢の `op`
+/// コード列へ、Lua スキンはそのまま渡して展開する。
+pub fn decode_beatoraja_skin_with_options(
+    skin_path: &Path,
+    kind: SkinKind,
+    options: &BTreeMap<String, String>,
+) -> Result<DecodedSkin> {
+    let mut document = load_skin_document(skin_path, kind, options)?;
     // フォント ID は scene 横断的に Renderer のグローバルマップに登録されるので、
     // play / select / result で同じ "0" 等が衝突する。namespace を付与して隔離する。
     // text 定義の font 参照側も同じ namespace を付ける。
@@ -271,11 +283,15 @@ pub fn decode_beatoraja_skin(skin_path: &Path, kind: SkinKind) -> Result<Decoded
     Ok(DecodedSkin { kind, document, fonts, sources })
 }
 
-fn load_skin_document(skin_path: &Path, kind: SkinKind) -> Result<SkinDocument> {
+fn load_skin_document(
+    skin_path: &Path,
+    kind: SkinKind,
+    options: &BTreeMap<String, String>,
+) -> Result<SkinDocument> {
     if is_lua_skin_path(skin_path) {
-        let loaded =
-            bmz_skin::load_lua_skin(skin_path, decode_skin_kind(kind), &Default::default())
-                .with_context(|| format!("failed to load lua skin: {}", skin_path.display()))?;
+        // Lua スキンはオプション選択 (名前 -> 選択肢名) をそのまま渡す。
+        let loaded = bmz_skin::load_lua_skin(skin_path, decode_skin_kind(kind), options)
+            .with_context(|| format!("failed to load lua skin: {}", skin_path.display()))?;
         for warning in loaded.warnings {
             tracing::warn!(
                 path = %skin_path.display(),
@@ -286,9 +302,47 @@ fn load_skin_document(skin_path: &Path, kind: SkinKind) -> Result<SkinDocument> 
         }
         Ok(loaded.document)
     } else {
-        bmz_skin::load_beatoraja_json_skin_with_defaults(skin_path)
-            .with_context(|| format!("failed to load beatoraja json skin: {}", skin_path.display()))
+        let document =
+            bmz_skin::load_beatoraja_json_skin_with_defaults(skin_path).with_context(|| {
+                format!("failed to load beatoraja json skin: {}", skin_path.display())
+            })?;
+        if options.is_empty() {
+            return Ok(document);
+        }
+        // JSON スキンは property 定義から選択肢の op コード列を組み立て、
+        // それを有効オプションとして再デコードする。
+        let enabled = enabled_options_from_selections(&document, options);
+        bmz_skin::load_beatoraja_json_skin(skin_path, &enabled).with_context(|| {
+            format!("failed to load beatoraja json skin with options: {}", skin_path.display())
+        })
     }
+}
+
+/// property 定義とユーザ選択 (オプション名 -> 選択肢名) から、JSON スキンの
+/// 有効オプション (op コード列) を組み立てる。
+///
+/// 選択が無い property は `def` (空なら先頭 item) の op を使う。
+fn enabled_options_from_selections(
+    document: &SkinDocument,
+    selections: &BTreeMap<String, String>,
+) -> Vec<i32> {
+    document
+        .property
+        .iter()
+        .filter_map(|property| {
+            let chosen = selections
+                .get(&property.name)
+                .and_then(|name| property.item.iter().find(|item| &item.name == name));
+            let selected = chosen.or_else(|| {
+                if property.def.is_empty() {
+                    property.item.first()
+                } else {
+                    property.item.iter().find(|item| item.name == property.def)
+                }
+            });
+            selected.map(|item| item.op)
+        })
+        .collect()
 }
 
 fn decode_skin_kind(kind: SkinKind) -> DecodeSkinKind {

@@ -47,14 +47,15 @@ use crate::screens::select_model::{
 use crate::select_options::{ArrangeOption, AssistOption};
 use crate::skin_loader::{
     DecodedFont, DecodedSkin, DecodedSource, SkinKind, apply_skin_from_config,
-    decode_beatoraja_skin, install_decoded_font, install_decoded_skin, install_decoded_source,
-    is_decodable_skin_path, load_default_skin_into_renderer, set_decoded_skin_context,
+    decode_beatoraja_skin_with_options, install_decoded_font, install_decoded_skin,
+    install_decoded_source, is_decodable_skin_path, load_default_skin_into_renderer,
+    set_decoded_skin_context,
 };
 use crate::storage::replay::load_replay_for_chart;
 use crate::storage::scan::scan_song_roots;
 use crate::ui::{DebugInfo, EguiLayer, SceneSkinDefs, SkinConfigMeta};
 use bmz_render::skin::{SkinDocument, SkinDocumentTexture, SkinManifest};
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 
 const SAMPLE_PLAYABLE_TITLE: &str = "BMZ Sample Playable";
 
@@ -255,6 +256,9 @@ impl WinitApp {
                 &boot.profile_config.skin.select,
                 &boot.profile_config.skin.play,
                 &boot.profile_config.skin.result,
+                &boot.profile_config.skin.select_options,
+                &boot.profile_config.skin.play_options,
+                &boot.profile_config.skin.result_options,
             );
 
         let gilrs = if boot.app_config.input.gamepad_enabled {
@@ -1331,11 +1335,16 @@ impl WinitApp {
     /// 起動時と同じ `load_skin_textures` 経路を使い、JSON スキンは
     /// バックグラウンド decode + 段階 install パイプラインへ流す。
     fn reload_skins(&mut self) {
-        let select = self.boot.profile_config.skin.select.clone();
-        let play = self.boot.profile_config.skin.play.clone();
-        let result = self.boot.profile_config.skin.result.clone();
-        let (manifest, rx, pending_play, pending_result) =
-            load_skin_textures(&mut self.renderer, &select, &play, &result);
+        let skin = self.boot.profile_config.skin.clone();
+        let (manifest, rx, pending_play, pending_result) = load_skin_textures(
+            &mut self.renderer,
+            &skin.select,
+            &skin.play,
+            &skin.result,
+            &skin.select_options,
+            &skin.play_options,
+            &skin.result_options,
+        );
         self.default_skin_manifest = manifest;
         self.pending_skin_rx = rx;
         self.pending_play_skin = pending_play;
@@ -1535,11 +1544,15 @@ fn pick_exclusive_video_mode(monitor: &MonitorHandle) -> Option<VideoModeHandle>
 ///   完了したものは main thread の `try_recv` で順次 Phase B (install) する。
 /// - select/play/result の各パスが JSON 以外 (空文字 or .toml ディレクトリ) の場合は
 ///   従来通り同期処理 (短時間で完了する想定)。
+#[allow(clippy::too_many_arguments)]
 fn load_skin_textures(
     renderer: &mut Renderer,
     select_skin_path: &str,
     play_skin_path: &str,
     result_skin_path: &str,
+    select_options: &BTreeMap<String, String>,
+    play_options: &BTreeMap<String, String>,
+    result_options: &BTreeMap<String, String>,
 ) -> (Option<SkinManifest>, Option<Receiver<PendingSkinResult>>, bool, bool) {
     // Play / Result の JSON skin は Select の同期ロードより**前**に decode スレッドを起動して
     // CPU をフル活用する。Select の sync 処理 (PNG GPU upload など) と並列に decode が進む。
@@ -1553,14 +1566,24 @@ fn load_skin_textures(
     if !play_trimmed.is_empty() {
         let play_path = Path::new(&play_trimmed);
         if is_decodable_skin_path(play_path) {
-            spawn_skin_decode(tx.clone(), play_path.to_path_buf(), SkinKind::Play);
+            spawn_skin_decode(
+                tx.clone(),
+                play_path.to_path_buf(),
+                SkinKind::Play,
+                play_options.clone(),
+            );
             pending_play = true;
         }
     }
     if !result_trimmed.is_empty() {
         let result_path = Path::new(&result_trimmed);
         if is_decodable_skin_path(result_path) {
-            spawn_skin_decode(tx.clone(), result_path.to_path_buf(), SkinKind::Result);
+            spawn_skin_decode(
+                tx.clone(),
+                result_path.to_path_buf(),
+                SkinKind::Result,
+                result_options.clone(),
+            );
             pending_result = true;
         }
     }
@@ -1582,7 +1605,13 @@ fn load_skin_textures(
     if !select_trimmed.is_empty() {
         let path = Path::new(select_trimmed);
         if is_decodable_skin_path(path) {
-            apply_json_skin_sync(renderer, path, SkinKind::Select, default_manifest.as_ref());
+            apply_json_skin_sync(
+                renderer,
+                path,
+                SkinKind::Select,
+                default_manifest.as_ref(),
+                select_options,
+            );
         } else {
             tracing::warn!(
                 path = %path.display(),
@@ -1617,6 +1646,7 @@ fn apply_json_skin_sync(
     path: &Path,
     kind: SkinKind,
     default_manifest: Option<&SkinManifest>,
+    options: &BTreeMap<String, String>,
 ) {
     let Some(manifest) = default_manifest else {
         tracing::warn!(
@@ -1626,7 +1656,7 @@ fn apply_json_skin_sync(
         );
         return;
     };
-    let decoded = match decode_beatoraja_skin(path, kind) {
+    let decoded = match decode_beatoraja_skin_with_options(path, kind, options) {
         Ok(decoded) => decoded,
         Err(error) => {
             tracing::warn!(
@@ -1648,12 +1678,17 @@ fn apply_json_skin_sync(
     }
 }
 
-fn spawn_skin_decode(tx: mpsc::Sender<PendingSkinResult>, path: PathBuf, kind: SkinKind) {
+fn spawn_skin_decode(
+    tx: mpsc::Sender<PendingSkinResult>,
+    path: PathBuf,
+    kind: SkinKind,
+    options: BTreeMap<String, String>,
+) {
     let send_path = path.clone();
     thread::Builder::new()
         .name(format!("skin-decode-{:?}", kind))
         .spawn(move || {
-            let result = decode_beatoraja_skin(&path, kind);
+            let result = decode_beatoraja_skin_with_options(&path, kind, &options);
             let _ = tx.send(PendingSkinResult { path: send_path, kind, result });
         })
         .expect("failed to spawn skin decode thread");
