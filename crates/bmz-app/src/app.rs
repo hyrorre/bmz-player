@@ -31,7 +31,7 @@ use crate::config::profile_config::{
     AssistOptionConfig, BgaModeConfig, GaugeTypeConfig, LaneConfig, ProfileConfig,
     ProfileInputConfig, RandomOptionConfig,
 };
-use crate::config::save::save_profile_config;
+use crate::config::save::{save_app_config, save_profile_config};
 use crate::input::winit::physical_key_to_control;
 use crate::screens::play_finish::FinishedPlaySession;
 use crate::screens::play_loop::{PlayAdvanceOutcome, advance_running_play_session_until_result};
@@ -1140,8 +1140,14 @@ impl WinitApp {
         let Some(egui) = self.egui.as_mut() else {
             return;
         };
-        let frame = egui.run(&window, &info);
-        self.renderer.set_egui_frame(frame);
+        let output = egui.run(&window, &info, &mut self.boot.app_config);
+        self.renderer.set_egui_frame(output.frame);
+        if output.save_app_config {
+            match save_app_config(&self.boot.app_paths.config_toml, &self.boot.app_config) {
+                Ok(()) => tracing::info!("app config saved from egui settings panel"),
+                Err(error) => tracing::error!(%error, "failed to save app config"),
+            }
+        }
     }
 
     fn render_current_scene(&mut self) {

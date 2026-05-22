@@ -74,7 +74,7 @@ pub struct VideoConfig {
     pub renderer: RendererBackend,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum WindowMode {
     Windowed,

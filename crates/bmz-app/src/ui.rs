@@ -9,6 +9,8 @@ use egui::ViewportId;
 use winit::event::WindowEvent;
 use winit::window::Window;
 
+use crate::config::app_config::{AppConfig, WindowMode};
+
 /// デバッグ表示パネルへ毎フレーム渡すアプリ側の情報。
 pub struct DebugInfo {
     /// 現在のシーン種別 ("Select" / "Play" / "Result")。
@@ -19,6 +21,14 @@ pub struct DebugInfo {
     pub height: u32,
 }
 
+/// `EguiLayer::run` の 1 フレーム出力。
+pub struct EguiOutput {
+    /// renderer へ渡す描画データ。
+    pub frame: EguiFrame,
+    /// 本体設定 (`AppConfig`) の保存が要求されたか。
+    pub save_app_config: bool,
+}
+
 /// egui の状態管理とフレーム構築を担うレイヤ。
 pub struct EguiLayer {
     ctx: egui::Context,
@@ -27,6 +37,8 @@ pub struct EguiLayer {
     visible: bool,
     /// デバッグ表示パネルの開閉状態。
     show_debug: bool,
+    /// 本体設定パネルの開閉状態。
+    show_settings: bool,
 }
 
 impl EguiLayer {
@@ -43,7 +55,7 @@ impl EguiLayer {
             None,
             None,
         );
-        Self { ctx, state, visible: false, show_debug }
+        Self { ctx, state, visible: false, show_debug, show_settings: false }
     }
 
     /// メニュー表示状態を反転する (F5)。
@@ -61,25 +73,38 @@ impl EguiLayer {
         self.visible && response.consumed
     }
 
-    /// 1 フレーム分の UI を構築し、描画プリミティブを返す。
-    pub fn run(&mut self, window: &Window, info: &DebugInfo) -> EguiFrame {
+    /// 1 フレーム分の UI を構築し、描画データと要求されたアクションを返す。
+    pub fn run(
+        &mut self,
+        window: &Window,
+        info: &DebugInfo,
+        app_config: &mut AppConfig,
+    ) -> EguiOutput {
         let raw_input = self.state.take_egui_input(window);
         let ctx = self.ctx.clone();
         let visible = self.visible;
         let show_debug = &mut self.show_debug;
+        let show_settings = &mut self.show_settings;
+        let mut save_app_config = false;
         let full_output = ctx.run_ui(raw_input, |ui| {
             if visible {
                 let ctx = ui.ctx();
-                build_menu(ctx, show_debug);
+                build_menu(ctx, show_debug, show_settings);
                 build_debug_panel(ctx, show_debug, info);
+                if build_settings_panel(ctx, show_settings, app_config) {
+                    save_app_config = true;
+                }
             }
         });
         self.state.handle_platform_output(window, full_output.platform_output);
         let primitives = self.ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
-        EguiFrame {
-            primitives,
-            textures_delta: full_output.textures_delta,
-            pixels_per_point: full_output.pixels_per_point,
+        EguiOutput {
+            frame: EguiFrame {
+                primitives,
+                textures_delta: full_output.textures_delta,
+                pixels_per_point: full_output.pixels_per_point,
+            },
+            save_app_config,
         }
     }
 }
@@ -104,11 +129,12 @@ fn install_japanese_font(ctx: &egui::Context) {
 }
 
 /// 各サブパネルの開閉を切り替えるメインメニューハブ。
-fn build_menu(ctx: &egui::Context, show_debug: &mut bool) {
+fn build_menu(ctx: &egui::Context, show_debug: &mut bool, show_settings: &mut bool) {
     egui::Window::new("BMZ メニュー").default_pos(egui::pos2(16.0, 16.0)).show(ctx, |ui| {
         ui.label("F5 でこのメニューを開閉します。");
         ui.separator();
         ui.checkbox(show_debug, "デバッグ表示");
+        ui.checkbox(show_settings, "本体設定");
     });
 }
 
@@ -136,4 +162,46 @@ fn build_debug_panel(ctx: &egui::Context, open: &mut bool, info: &DebugInfo) {
             });
         },
     );
+}
+
+/// `AppConfig` の映像設定を編集する本体設定パネル。
+///
+/// 戻り値 `true` は「保存」ボタンが押されたことを表す。設定値は
+/// `config` を直接編集し、保存はアプリ側 (`run_egui_frame`) が行う。
+fn build_settings_panel(ctx: &egui::Context, open: &mut bool, config: &mut AppConfig) -> bool {
+    let mut save_clicked = false;
+    egui::Window::new("本体設定").open(open).default_pos(egui::pos2(16.0, 320.0)).show(ctx, |ui| {
+        ui.heading("映像");
+        egui::ComboBox::from_label("ウィンドウモード")
+            .selected_text(window_mode_label(&config.video.mode))
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut config.video.mode, WindowMode::Windowed, "ウィンドウ");
+                ui.selectable_value(
+                    &mut config.video.mode,
+                    WindowMode::BorderlessFullscreen,
+                    "ボーダレスフルスクリーン",
+                );
+                ui.selectable_value(
+                    &mut config.video.mode,
+                    WindowMode::ExclusiveFullscreen,
+                    "排他フルスクリーン",
+                );
+            });
+        ui.checkbox(&mut config.video.vsync, "垂直同期 (VSync)");
+        ui.add(egui::Slider::new(&mut config.video.target_fps, 30..=480).text("目標 FPS"));
+        ui.separator();
+        ui.label("変更は次回起動時に反映されます。");
+        if ui.button("保存").clicked() {
+            save_clicked = true;
+        }
+    });
+    save_clicked
+}
+
+fn window_mode_label(mode: &WindowMode) -> &'static str {
+    match mode {
+        WindowMode::Windowed => "ウィンドウ",
+        WindowMode::BorderlessFullscreen => "ボーダレスフルスクリーン",
+        WindowMode::ExclusiveFullscreen => "排他フルスクリーン",
+    }
 }
