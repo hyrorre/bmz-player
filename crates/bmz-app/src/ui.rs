@@ -10,7 +10,7 @@ use winit::event::WindowEvent;
 use winit::window::Window;
 
 use crate::config::app_config::{AppConfig, WindowMode};
-use crate::config::profile_config::{ProfileConfig, SkinConfig};
+use crate::config::profile_config::{ProfileConfig, SkinConfig, SkinOffsetConfig};
 
 /// デバッグ表示パネルへ毎フレーム渡すアプリ側の情報。
 pub struct DebugInfo {
@@ -249,7 +249,37 @@ fn build_skin_panel(ctx: &egui::Context, open: &mut bool, skin: &mut SkinConfig)
                 ui.end_row();
             });
             ui.separator();
-            ui.label(format!("オフセット定義: {} 件", skin.offsets.len()));
+            ui.label("スキンオフセット (id ごとの位置 / サイズ / 回転 / 不透明度の補正)");
+            egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
+                let mut remove_index = None;
+                for (index, offset) in skin.offsets.iter_mut().enumerate() {
+                    ui.push_id(index, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("ID");
+                            ui.add(egui::DragValue::new(&mut offset.id));
+                            if ui.button("削除").clicked() {
+                                remove_index = Some(index);
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.add(egui::DragValue::new(&mut offset.x).prefix("x:"));
+                            ui.add(egui::DragValue::new(&mut offset.y).prefix("y:"));
+                            ui.add(egui::DragValue::new(&mut offset.w).prefix("w:"));
+                            ui.add(egui::DragValue::new(&mut offset.h).prefix("h:"));
+                            ui.add(egui::DragValue::new(&mut offset.r).prefix("r:"));
+                            ui.add(egui::DragValue::new(&mut offset.a).prefix("a:"));
+                        });
+                        ui.separator();
+                    });
+                }
+                if let Some(index) = remove_index {
+                    skin.offsets.remove(index);
+                }
+            });
+            if ui.button("オフセット追加").clicked() {
+                skin.offsets.push(SkinOffsetConfig::default());
+            }
+            ui.separator();
             ui.label("変更は次回起動時に反映されます。");
             if ui.button("保存").clicked() {
                 save_clicked = true;
