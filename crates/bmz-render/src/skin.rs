@@ -814,6 +814,8 @@ pub struct SkinBgaFrame {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SkinDrawState {
     pub elapsed_ms: i32,
+    pub ready_timer_ms: i32,
+    pub play_timer_ms: Option<i32>,
     pub select_bar_elapsed_ms: i32,
     pub select_option_panel_elapsed_ms: i32,
     pub select_option_panel: u8,
@@ -952,6 +954,8 @@ impl Default for SkinDrawState {
     fn default() -> Self {
         Self {
             elapsed_ms: 0,
+            ready_timer_ms: 0,
+            play_timer_ms: None,
             select_bar_elapsed_ms: 0,
             select_option_panel_elapsed_ms: 0,
             select_option_panel: 0,
@@ -4052,7 +4056,8 @@ fn skin_timer_elapsed_ms(timer: Option<i32>, state: SkinDrawState) -> Option<i32
     match timer {
         None => Some(state.elapsed_ms),
         Some(2) => state.fadeout_ms,
-        Some(40 | 41) => Some(state.elapsed_ms),
+        Some(40) => Some(state.ready_timer_ms),
+        Some(41) => state.play_timer_ms,
         Some(11) => Some(state.select_bar_elapsed_ms),
         Some(21..=23) => Some(state.select_option_panel_elapsed_ms),
         Some(46) => state.judge_ms,

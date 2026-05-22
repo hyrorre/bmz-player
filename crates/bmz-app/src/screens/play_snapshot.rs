@@ -40,6 +40,7 @@ pub fn build_render_snapshot_with_bga_frames(
 ) -> RenderSnapshot {
     let mut snapshot = RenderSnapshot {
         time: render_now,
+        play_elapsed_time: render_now,
         duration: session.chart.end_time,
         title: session.chart.metadata.title.clone(),
         subtitle: session.chart.metadata.subtitle.clone(),

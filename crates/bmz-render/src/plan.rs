@@ -537,8 +537,15 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
         .last()
         .map(|j| (j.delta_us / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32);
 
+    let play_elapsed_ms =
+        (snapshot.play_elapsed_time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+    let skin_global_offset_ms = skin.document().map_or(0, |document| document.loadend.max(0));
+
     let skin_state = crate::skin::SkinDrawState {
-        elapsed_ms: (snapshot.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+        elapsed_ms: play_elapsed_ms.saturating_add(skin_global_offset_ms),
+        ready_timer_ms: play_elapsed_ms,
+        play_timer_ms: (snapshot.time.0 >= 0)
+            .then_some((snapshot.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32),
         combo: snapshot.combo,
         max_combo: snapshot.max_combo,
         ex_score: snapshot.ex_score,
@@ -1866,6 +1873,135 @@ mod tests {
         let skin = SkinContext::from_manifest_and_document(manifest, document, []);
 
         assert!(approx_eq(skin_lane_height_px(&skin, 1080.0), 723.0));
+    }
+
+    #[test]
+    fn play_skin_ready_timer_uses_scene_elapsed_time_before_chart_start() {
+        let document: crate::skin::SkinDocument = serde_json::from_str(
+            r#"{
+                "type": 7,
+                "w": 100,
+                "h": 100,
+                "loadend": 3000,
+                "source": [{"id": 1, "path": "panel.png"}],
+                "image": [{"id": "panel", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10}],
+                "destination": [
+                    {"id": "panel", "timer": 40, "dst": [
+                        {"time": 0, "x": 0, "y": 0, "w": 10, "h": 10},
+                        {"time": 1000, "x": 50, "y": 0, "w": 10, "h": 10}
+                    ]}
+                ]
+            }"#,
+        )
+        .unwrap();
+        let manifest: SkinManifest = toml::from_str("").unwrap();
+        let source_texture = crate::skin::SkinDocumentTexture {
+            source_id: "1".to_string(),
+            texture: SkinTextureId(99),
+            source_size: crate::skin::SkinImageSize { width: 10.0, height: 10.0 },
+        };
+        let skin = SkinContext::from_manifest_and_document(manifest, document, [source_texture]);
+        let snapshot = RenderSnapshot {
+            time: TimeUs(-1_000_000),
+            play_elapsed_time: TimeUs(500_000),
+            ..Default::default()
+        };
+
+        let plan = DrawPlan::from_scene_with_skin(&AppSceneSnapshot::Play(snapshot), &skin);
+
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Image { texture, rect, .. }
+                if *texture == TextureId(99) && approx_eq(rect.x, 0.25)
+        )));
+    }
+
+    #[test]
+    fn play_skin_untimed_intro_uses_load_elapsed_before_chart_start() {
+        let document: crate::skin::SkinDocument = serde_json::from_str(
+            r#"{
+                "type": 7,
+                "w": 100,
+                "h": 100,
+                "loadend": 3000,
+                "source": [{"id": 1, "path": "panel.png"}],
+                "image": [{"id": "panel", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10}],
+                "destination": [{"id": "panel", "loop": 1600, "dst": [
+                    {"time": 1400, "x": 0, "y": 0, "w": 10, "h": 10, "a": 0},
+                    {"time": 1600, "a": 255}
+                ]}]
+            }"#,
+        )
+        .unwrap();
+        let manifest: SkinManifest = toml::from_str("").unwrap();
+        let source_texture = crate::skin::SkinDocumentTexture {
+            source_id: "1".to_string(),
+            texture: SkinTextureId(99),
+            source_size: crate::skin::SkinImageSize { width: 10.0, height: 10.0 },
+        };
+        let skin = SkinContext::from_manifest_and_document(manifest, document, [source_texture]);
+        let snapshot = RenderSnapshot {
+            time: TimeUs(-1_000_000),
+            play_elapsed_time: TimeUs(0),
+            ..Default::default()
+        };
+
+        let plan = DrawPlan::from_scene_with_skin(&AppSceneSnapshot::Play(snapshot), &skin);
+
+        assert!(
+            plan.commands
+                .iter()
+                .any(|command| matches!(command, DrawCommand::Image { texture, tint, .. }
+                if *texture == TextureId(99) && approx_eq(tint.a, 1.0)))
+        );
+    }
+
+    #[test]
+    fn play_skin_play_timer_is_inactive_before_chart_start() {
+        let document: crate::skin::SkinDocument = serde_json::from_str(
+            r#"{
+                "type": 7,
+                "w": 100,
+                "h": 100,
+                "source": [{"id": 1, "path": "panel.png"}],
+                "image": [{"id": "panel", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10}],
+                "destination": [{"id": "panel", "timer": 41, "dst": [
+                    {"time": 0, "x": 0, "y": 0, "w": 10, "h": 10}
+                ]}]
+            }"#,
+        )
+        .unwrap();
+        let manifest: SkinManifest = toml::from_str("").unwrap();
+        let source_texture = crate::skin::SkinDocumentTexture {
+            source_id: "1".to_string(),
+            texture: SkinTextureId(99),
+            source_size: crate::skin::SkinImageSize { width: 10.0, height: 10.0 },
+        };
+        let skin = SkinContext::from_manifest_and_document(manifest, document, [source_texture]);
+        let before_start = RenderSnapshot {
+            time: TimeUs(-1),
+            play_elapsed_time: TimeUs(500_000),
+            ..Default::default()
+        };
+        let after_start = RenderSnapshot {
+            time: TimeUs(0),
+            play_elapsed_time: TimeUs(500_000),
+            ..Default::default()
+        };
+
+        let before_plan =
+            DrawPlan::from_scene_with_skin(&AppSceneSnapshot::Play(before_start), &skin);
+        let after_plan =
+            DrawPlan::from_scene_with_skin(&AppSceneSnapshot::Play(after_start), &skin);
+
+        assert!(!before_plan
+            .commands
+            .iter()
+            .any(|command| matches!(command, DrawCommand::Image { texture, .. } if *texture == TextureId(99))));
+        assert!(after_plan
+            .commands
+            .iter()
+            .any(|command| matches!(command, DrawCommand::Image { texture, .. } if *texture == TextureId(99))));
     }
 
     #[test]

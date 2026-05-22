@@ -6,6 +6,9 @@ use crate::skin_offset::SkinOffsetValues;
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RenderSnapshot {
     pub time: TimeUs,
+    /// プレイ画面に遷移してからの経過時間。
+    /// skin timer 40 と、loadend 分を加えた通常アニメーション時刻の基準に使う。
+    pub play_elapsed_time: TimeUs,
     pub duration: TimeUs,
     pub title: String,
     pub subtitle: String,

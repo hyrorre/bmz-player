@@ -36,7 +36,9 @@ use crate::config::save::{save_app_config, save_profile_config};
 use crate::input::winit::physical_key_to_control;
 use crate::screens::play_finish::FinishedPlaySession;
 use crate::screens::play_loop::{PlayAdvanceOutcome, advance_running_play_session_until_result};
-use crate::screens::play_snapshot::{BgaFrameCatalog, bga_texture_id, display_bga_frame};
+use crate::screens::play_snapshot::{
+    BgaFrameCatalog, bga_texture_id, build_render_snapshot_with_bga_frames, display_bga_frame,
+};
 use crate::screens::play_start::{PlayStartOptions, StartedWinitPlaySession};
 use crate::screens::result_model::ResultSummary;
 use crate::screens::select_model::{
@@ -140,6 +142,7 @@ struct WinitApp {
     rendered_frames: u32,
     select_scene_started_at: Instant,
     select_bar_started_at: Instant,
+    play_scene_started_at: Instant,
     result_scene_started_at: Instant,
     option_panel_started_at: Instant,
     select_option_panel: u8,
@@ -308,6 +311,7 @@ impl WinitApp {
             rendered_frames: 0,
             select_scene_started_at: now,
             select_bar_started_at: now,
+            play_scene_started_at: now,
             result_scene_started_at: now,
             option_panel_started_at: now,
             select_option_panel: 0,
@@ -563,6 +567,11 @@ impl WinitApp {
 
     fn select_bar_time(&self) -> TimeUs {
         let micros = self.select_bar_started_at.elapsed().as_micros().min(i64::MAX as u128) as i64;
+        TimeUs(micros)
+    }
+
+    fn play_elapsed_time(&self) -> TimeUs {
+        let micros = self.play_scene_started_at.elapsed().as_micros().min(i64::MAX as u128) as i64;
         TimeUs(micros)
     }
 
@@ -891,23 +900,42 @@ impl WinitApp {
         self.start_chart_with_options(chart_id, options);
     }
 
-    fn start_chart_with_options(&mut self, chart_id: i64, options: PlayStartOptions) {
+    fn start_chart_with_options(&mut self, chart_id: i64, mut options: PlayStartOptions) {
         self.ensure_skin_ready(SkinKind::Play);
+        if options.chart_zero_time == TimeUs(0) {
+            options.chart_zero_time = self.play_skin_chart_zero_time();
+        }
         // 新しいプレイの音声出力を開く前に、前曲の余韻再生を止めて出力を解放する。
         self.draining_audio = None;
         match self.boot.start_play_for_chart_with_winit_input(chart_id, options) {
             Ok(mut active_play) => {
                 active_play.running.bga_frames =
                     load_chart_bga_textures(&mut self.renderer, &active_play.running.session.chart);
-                self.active_play = Some(active_play);
                 self.finished_play = None;
-                self.last_play_snapshot = None;
+                self.play_scene_started_at = Instant::now();
+                let render_now = active_play.running.session.audio_clock.now();
+                let mut snapshot = build_render_snapshot_with_bga_frames(
+                    &active_play.running.session,
+                    render_now,
+                    &active_play.running.session.recent_judgements,
+                    active_play.running.best_ex_score,
+                    &active_play.running.bga_frames,
+                );
+                snapshot.play_elapsed_time = self.play_elapsed_time();
+                self.last_play_snapshot = Some(snapshot);
+                self.active_play = Some(active_play);
                 self.last_started_chart_id = Some(chart_id);
             }
             Err(error) => {
                 tracing::error!(chart_id, %error, "failed to start play");
             }
         }
+    }
+
+    fn play_skin_chart_zero_time(&self) -> TimeUs {
+        let playstart_ms =
+            self.renderer.play_skin_document().map(|document| document.playstart).unwrap_or(0);
+        TimeUs(-i64::from(playstart_ms.max(0)) * 1_000)
     }
 
     fn play_start_options(&self) -> PlayStartOptions {
@@ -1232,11 +1260,15 @@ impl WinitApp {
             now_unix_seconds(),
         ) {
             Ok(PlayAdvanceOutcome::Playing(frame)) => {
-                self.last_play_snapshot = Some(frame.render_snapshot);
+                let mut snapshot = frame.render_snapshot;
+                snapshot.play_elapsed_time = self.play_elapsed_time();
+                self.last_play_snapshot = Some(snapshot);
             }
             Ok(PlayAdvanceOutcome::Finished { frame, finished }) => {
                 let hispeed = active_play.running.session.hispeed;
-                self.last_play_snapshot = Some(frame.render_snapshot);
+                let mut snapshot = frame.render_snapshot;
+                snapshot.play_elapsed_time = self.play_elapsed_time();
+                self.last_play_snapshot = Some(snapshot);
                 // active_play がまだ残っている内に hispeed/lane_cover/lift を profile に保存する。
                 self.save_current_play_options(Some(hispeed), "play finished");
                 // リザルト画面へ移っても曲の最後まで鳴らすため、音声出力だけは
