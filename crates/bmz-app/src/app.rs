@@ -313,6 +313,8 @@ impl WinitApp {
                 let window = Arc::new(window);
                 window.set_visible(true);
                 let size = surface_size_for_window(&window);
+                // サーフェス生成前に VSync 設定を反映させておく。
+                self.renderer.set_vsync(self.boot.app_config.video.vsync);
                 if let Err(error) = self.renderer.attach_surface(Arc::clone(&window), size) {
                     tracing::error!(%error, "failed to initialize renderer surface");
                     event_loop.exit();
@@ -1143,6 +1145,8 @@ impl WinitApp {
         let output =
             egui.run(&window, &info, &mut self.boot.app_config, &mut self.boot.profile_config);
         self.renderer.set_egui_frame(output.frame);
+        // 本体設定パネルでの VSync 変更を即座に反映する (set_vsync は変化時のみ再構成)。
+        self.renderer.set_vsync(self.boot.app_config.video.vsync);
         if output.save_app_config {
             match save_app_config(&self.boot.app_paths.config_toml, &self.boot.app_config) {
                 Ok(()) => tracing::info!("app config saved from egui settings panel"),

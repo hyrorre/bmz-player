@@ -30,6 +30,8 @@ pub struct Renderer {
     bitmap_fonts: HashMap<String, BitmapFont>,
     gpu: Option<WgpuRenderer>,
     pending_egui: Option<EguiFrame>,
+    /// VSync の希望状態。サーフェス生成時および `set_vsync` で参照する。
+    vsync: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -118,7 +120,7 @@ impl Renderer {
             return Ok(());
         }
 
-        let mut gpu = WgpuRenderer::new(window, size)?;
+        let mut gpu = WgpuRenderer::new(window, size, self.vsync)?;
         for texture in self.pending_textures.drain(..) {
             gpu.upsert_rgba_texture(texture.id, texture.width, texture.height, &texture.rgba);
         }
@@ -240,6 +242,21 @@ impl Renderer {
         self.pending_egui = Some(frame);
     }
 
+    /// VSync の有効/無効を設定する。
+    ///
+    /// サーフェス生成済みなら present mode を即座に再構成する (要再起動なし)。
+    /// 値が変わらない場合は何もしないため、毎フレーム呼んでも安全。
+    pub fn set_vsync(&mut self, vsync: bool) {
+        if self.vsync == vsync {
+            return;
+        }
+        self.vsync = vsync;
+        if let Some(gpu) = &mut self.gpu {
+            gpu.set_present_mode(vsync);
+            tracing::info!(vsync, "vsync updated");
+        }
+    }
+
     pub fn render_last_plan(&mut self) -> Result<RenderSurfaceStatus> {
         let egui = self.pending_egui.take();
         let Some(gpu) = &mut self.gpu else {
@@ -274,7 +291,7 @@ impl fmt::Debug for Renderer {
 }
 
 impl WgpuRenderer {
-    fn new<T>(window: T, size: SurfaceSize) -> Result<Self>
+    fn new<T>(window: T, size: SurfaceSize, vsync: bool) -> Result<Self>
     where
         T: Into<wgpu::SurfaceTarget<'static>>,
     {
@@ -311,6 +328,7 @@ impl WgpuRenderer {
         // beatoraja (libGDX) は GL_FRAMEBUFFER_SRGB を使わないため値をそのまま表示する。
         // それと合わせるため sRGB サフィックスを除去して non-sRGB サーフェスとして使う。
         config.format = config.format.remove_srgb_suffix();
+        config.present_mode = present_mode_for(vsync);
         surface.configure(&device, &config);
         let rect_pipeline = create_rect_pipeline(&device, config.format);
         let image_bind_group_layout = create_image_bind_group_layout(&device);
@@ -539,6 +557,11 @@ impl WgpuRenderer {
 
     fn configure_surface(&self) {
         self.surface.configure(&self.device, &self.config);
+    }
+
+    fn set_present_mode(&mut self, vsync: bool) {
+        self.config.present_mode = present_mode_for(vsync);
+        self.configure_surface();
     }
 
     fn build_text_frame(
@@ -1738,6 +1761,14 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     return glyph * input.color;
 }
 "#;
+
+/// VSync 設定に対応する wgpu の present mode。
+///
+/// `Auto*` は環境に応じて `Fifo` / `Immediate` / `Mailbox` へ解決され、
+/// 常にサポートされるため安全に使える。
+fn present_mode_for(vsync: bool) -> wgpu::PresentMode {
+    if vsync { wgpu::PresentMode::AutoVsync } else { wgpu::PresentMode::AutoNoVsync }
+}
 
 fn load_default_font() -> Option<FontArc> {
     // 日本語・記号を表示できる CJK 対応フォントを最優先で採用する。
