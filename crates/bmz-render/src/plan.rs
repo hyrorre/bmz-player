@@ -755,9 +755,10 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
         push_play_text(&text, &mut commands, snapshot);
         push_lane_text(&text, &mut commands, board, lane_width, active_lanes);
         push_judgement_history(&text, &mut commands, snapshot);
+        // READY/GO オーバーレイはデフォルトスキン専用。
+        // JSON skin 等は skin 側の演出を使うため描画しない。
+        push_start_overlay(&text, &mut commands, snapshot);
     }
-
-    push_start_overlay(&text, &mut commands, snapshot);
 
     DrawPlan { clear: Color::rgb(0.0, 0.0, 0.0), commands }
 }
