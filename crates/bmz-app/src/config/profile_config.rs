@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -298,6 +300,15 @@ pub struct SkinConfig {
     pub result: String,
     #[serde(default)]
     pub offsets: Vec<SkinOffsetConfig>,
+    /// 選曲スキンのカスタマイズオプション選択 (オプション名 -> 選択肢名)。
+    #[serde(default)]
+    pub select_options: BTreeMap<String, String>,
+    /// プレイスキンのカスタマイズオプション選択。
+    #[serde(default)]
+    pub play_options: BTreeMap<String, String>,
+    /// リザルトスキンのカスタマイズオプション選択。
+    #[serde(default)]
+    pub result_options: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]

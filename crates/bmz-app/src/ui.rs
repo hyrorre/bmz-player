@@ -4,6 +4,8 @@
 //! UI を構築して描画プリミティブ (`EguiFrame`) を生成する。bmz-render はその
 //! プリミティブをゲーム / スキン描画の上にペイントするだけにする。
 
+use std::collections::BTreeMap;
+
 use bmz_render::skin::{SkinDocument, SkinFilepathDef, SkinOffsetDef, SkinPropertyDef};
 use bmz_render::ui::EguiFrame;
 use egui::ViewportId;
@@ -336,9 +338,14 @@ fn build_skin_panel(
             }
             ui.separator();
             ui.label("読み込み済みスキンが宣言する設定可能項目:");
-            build_scene_skin_defs(ui, "選曲スキン", &skin_meta.select);
-            build_scene_skin_defs(ui, "プレイスキン", &skin_meta.play);
-            build_scene_skin_defs(ui, "リザルトスキン", &skin_meta.result);
+            build_scene_skin_defs(ui, "選曲スキン", &skin_meta.select, &mut skin.select_options);
+            build_scene_skin_defs(ui, "プレイスキン", &skin_meta.play, &mut skin.play_options);
+            build_scene_skin_defs(
+                ui,
+                "リザルトスキン",
+                &skin_meta.result,
+                &mut skin.result_options,
+            );
             ui.separator();
             ui.label(
                 "「保存」で profile.toml へ書き出し、「スキン再読込」で現在のパスを即適用します。",
@@ -356,8 +363,16 @@ fn build_skin_panel(
     SkinPanelActions { save: save_clicked, reload: reload_clicked }
 }
 
-/// 1 シーン分のスキン設定可能項目を折りたたみ表示する (読み取り専用)。
-fn build_scene_skin_defs(ui: &mut egui::Ui, label: &str, defs: &SceneSkinDefs) {
+/// 1 シーン分のスキン設定可能項目を折りたたみ表示する。
+///
+/// オプション (property) は ComboBox で選択でき、選択値は `options`
+/// (オプション名 -> 選択肢名) に書き込まれる。filepath / offset は読み取り専用。
+fn build_scene_skin_defs(
+    ui: &mut egui::Ui,
+    label: &str,
+    defs: &SceneSkinDefs,
+    options: &mut BTreeMap<String, String>,
+) {
     egui::CollapsingHeader::new(label).show(ui, |ui| {
         if defs.is_empty() {
             ui.label("設定可能項目はありません (スキン未読込、または定義なし)。");
@@ -366,14 +381,17 @@ fn build_scene_skin_defs(ui: &mut egui::Ui, label: &str, defs: &SceneSkinDefs) {
         if !defs.property.is_empty() {
             ui.strong("オプション");
             for prop in &defs.property {
-                let choices: Vec<&str> = prop.item.iter().map(|item| item.name.as_str()).collect();
-                ui.label(format!(
-                    "・{} [{}] — 選択肢: {} / 既定: {}",
-                    prop.name,
-                    prop.category,
-                    choices.join(", "),
-                    prop.def,
-                ));
+                let default = property_default(prop);
+                let mut selected = options.get(&prop.name).cloned().unwrap_or(default);
+                let before = selected.clone();
+                egui::ComboBox::from_label(&prop.name).selected_text(&selected).show_ui(ui, |ui| {
+                    for item in &prop.item {
+                        ui.selectable_value(&mut selected, item.name.clone(), &item.name);
+                    }
+                });
+                if selected != before {
+                    options.insert(prop.name.clone(), selected);
+                }
             }
         }
         if !defs.filepath.is_empty() {
@@ -392,4 +410,13 @@ fn build_scene_skin_defs(ui: &mut egui::Ui, label: &str, defs: &SceneSkinDefs) {
             }
         }
     });
+}
+
+/// property の既定選択肢名。`def` を優先し、空なら先頭 item を使う。
+fn property_default(prop: &SkinPropertyDef) -> String {
+    if prop.def.is_empty() {
+        prop.item.first().map(|item| item.name.clone()).unwrap_or_default()
+    } else {
+        prop.def.clone()
+    }
 }
