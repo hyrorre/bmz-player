@@ -40,8 +40,9 @@ use crate::screens::play_snapshot::{BgaFrameCatalog, bga_texture_id, display_bga
 use crate::screens::play_start::{PlayStartOptions, StartedWinitPlaySession};
 use crate::screens::result_model::ResultSummary;
 use crate::screens::select_model::{
-    SelectItem, TABLE_ROOT_PATH, load_select_items_in_folder, load_select_items_in_table,
-    root_folder_items, table_folder_items, table_folder_root_item,
+    SelectItem, TABLE_ROOT_PATH, TablePath, load_select_items_in_folder,
+    load_select_items_in_table_level, parse_table_path, root_folder_items, table_folder_items,
+    table_level_folder_items,
 };
 use crate::select_options::{ArrangeOption, AssistOption};
 use crate::skin_loader::{
@@ -452,28 +453,44 @@ impl WinitApp {
         }
     }
 
+    /// 難易度表のパンくず表示名。テーブルが既知なら `[symbol] name`、
+    /// 不明なら URL のファイル名部分にフォールバックする。
+    fn table_breadcrumb_name(&self, source_url: &str) -> String {
+        self.boot
+            .library_db
+            .list_difficulty_tables()
+            .ok()
+            .and_then(|ts| ts.into_iter().find(|t| t.source_url == source_url))
+            .map(|t| format!("[{}] {}", t.symbol, t.name))
+            .unwrap_or_else(|| {
+                std::path::Path::new(source_url)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(source_url)
+                    .to_string()
+            })
+    }
+
     fn select_snapshot(&self) -> SelectSnapshot {
         let selected = self.select_items.get(self.selected_index);
         let current_folder = match self.folder_stack.last() {
             None => String::new(),
-            Some(path) if path == TABLE_ROOT_PATH => "難易度表".to_string(),
-            Some(path) if path.starts_with(TABLE_ROOT_PATH) => {
-                // Show "[symbol] name" if the table is known, else the URL's filename segment.
-                let url = &path[TABLE_ROOT_PATH.len()..];
-                self.boot
-                    .library_db
-                    .list_difficulty_tables()
-                    .ok()
-                    .and_then(|ts| ts.into_iter().find(|t| t.source_url == url))
-                    .map(|t| format!("[{}] {}", t.symbol, t.name))
-                    .unwrap_or_else(|| {
-                        std::path::Path::new(url)
-                            .file_name()
-                            .and_then(|n| n.to_str())
-                            .unwrap_or(url)
-                            .to_string()
-                    })
-            }
+            Some(path) if path.starts_with(TABLE_ROOT_PATH) => match parse_table_path(path) {
+                Some(TablePath::Root) | None => "難易度表".to_string(),
+                Some(TablePath::Table { source_url }) => self.table_breadcrumb_name(source_url),
+                Some(TablePath::Level { source_url, level }) => {
+                    let table_name = self.table_breadcrumb_name(source_url);
+                    let symbol = self
+                        .boot
+                        .library_db
+                        .list_difficulty_tables()
+                        .ok()
+                        .and_then(|ts| ts.into_iter().find(|t| t.source_url == source_url))
+                        .map(|t| t.symbol)
+                        .unwrap_or_default();
+                    format!("{table_name} > {symbol}{level}")
+                }
+            },
             Some(path) => std::path::Path::new(path)
                 .file_name()
                 .and_then(|n| n.to_str())
@@ -1813,23 +1830,39 @@ fn load_items_for_stack(
     stack: &[String],
 ) -> Vec<SelectItem> {
     match stack.last() {
-        Some(path) if path == TABLE_ROOT_PATH => match table_folder_items(&boot.library_db) {
-            Ok(items) => items,
-            Err(error) => {
-                tracing::error!(%error, "failed to load difficulty table list");
-                Vec::new()
-            }
-        },
-        Some(path) if path.starts_with(TABLE_ROOT_PATH) => {
-            let source_url = &path[TABLE_ROOT_PATH.len()..];
-            match load_select_items_in_table(&boot.library_db, &boot.score_db, source_url) {
+        Some(path) if path.starts_with(TABLE_ROOT_PATH) => match parse_table_path(path) {
+            Some(TablePath::Root) => match table_folder_items(&boot.library_db) {
                 Ok(items) => items,
                 Err(error) => {
-                    tracing::error!(%error, "failed to load difficulty table charts");
+                    tracing::error!(%error, "failed to load difficulty table list");
                     Vec::new()
                 }
+            },
+            Some(TablePath::Table { source_url }) => {
+                match table_level_folder_items(&boot.library_db, source_url) {
+                    Ok(items) => items,
+                    Err(error) => {
+                        tracing::error!(%error, "failed to load difficulty table levels");
+                        Vec::new()
+                    }
+                }
             }
-        }
+            Some(TablePath::Level { source_url, level }) => {
+                match load_select_items_in_table_level(
+                    &boot.library_db,
+                    &boot.score_db,
+                    source_url,
+                    level,
+                ) {
+                    Ok(items) => items,
+                    Err(error) => {
+                        tracing::error!(%error, "failed to load difficulty table charts");
+                        Vec::new()
+                    }
+                }
+            }
+            None => Vec::new(),
+        },
         Some(folder) => {
             match load_select_items_in_folder(&boot.library_db, &boot.score_db, folder) {
                 Ok(items) => items,
@@ -1840,8 +1873,14 @@ fn load_items_for_stack(
             }
         }
         None => {
+            // ルートには曲フォルダに続けて、各難易度表フォルダ（発狂BMS / Stella 等）を並べる。
             let mut items = root_folder_items(&enabled_root_paths(&boot.app_config));
-            items.push(table_folder_root_item());
+            match table_folder_items(&boot.library_db) {
+                Ok(tables) => items.extend(tables),
+                Err(error) => {
+                    tracing::error!(%error, "failed to load difficulty table folders");
+                }
+            }
             items
         }
     }
