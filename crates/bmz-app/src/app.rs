@@ -1184,6 +1184,9 @@ impl WinitApp {
         let output =
             egui.run(&window, &info, &mut self.boot.app_config, &mut self.boot.profile_config);
         self.renderer.set_egui_frame(output.frame);
+        // デバッグパネルの開閉状態を profile config へ同期する。
+        // 永続化は終了時 / プレイ後の save_profile_config に任せる。
+        self.boot.profile_config.ui.show_fps = output.debug_panel_visible;
         // 本体設定パネルでの VSync 変更を即座に反映する (set_vsync は変化時のみ再構成)。
         self.renderer.set_vsync(self.boot.app_config.video.vsync);
         // ウィンドウモード変更をライブ反映する (差分があるときのみ適用)。

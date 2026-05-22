@@ -30,6 +30,9 @@ pub struct EguiOutput {
     pub save_app_config: bool,
     /// プロファイル設定 (`ProfileConfig`) の保存が要求されたか。
     pub save_profile_config: bool,
+    /// デバッグ表示パネルの現在の開閉状態。
+    /// profile config の `ui.show_fps` へ同期し、終了時に永続化される。
+    pub debug_panel_visible: bool,
 }
 
 /// egui の状態管理とフレーム構築を担うレイヤ。
@@ -117,6 +120,7 @@ impl EguiLayer {
             },
             save_app_config,
             save_profile_config,
+            debug_panel_visible: *show_debug,
         }
     }
 }
