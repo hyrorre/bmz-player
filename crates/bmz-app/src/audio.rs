@@ -26,7 +26,6 @@ pub struct RunningPlaySession {
     pub audio: AppAudioOutput,
     pub sample_report: Vec<LoadedSampleReport>,
     pub finished: Option<FinishedPlaySession>,
-    pub audio_paused_after_finish: bool,
     /// プレイ開始時に DB から取得したベスト EX スコア。未取得なら None。
     pub best_ex_score: Option<u32>,
     pub applied_arrange: AppliedArrange,
@@ -53,7 +52,6 @@ impl RunningPlaySession {
     pub fn start(&mut self, chart_zero_time: TimeUs) -> Result<()> {
         self.audio.play(chart_zero_time)?;
         self.session.audio_clock = self.audio.clock();
-        self.audio_paused_after_finish = false;
         Ok(())
     }
 
@@ -85,7 +83,6 @@ pub fn open_prepared_play_audio(
         audio,
         sample_report: prepared.sample_report,
         finished: None,
-        audio_paused_after_finish: false,
         best_ex_score: None,
         applied_arrange: prepared.applied_arrange,
         bga_frames: BgaFrameCatalog::new(),

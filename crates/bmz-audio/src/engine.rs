@@ -22,6 +22,12 @@ impl AudioEngine {
         self.samples.insert(id, sample);
     }
 
+    /// 再生待ちのスケジュール音も鳴っているボイスも無い、つまり出力を
+    /// ドレインし終えた状態かどうか。リザルト遷移後の余韻再生の終了判定に使う。
+    pub fn is_idle(&self) -> bool {
+        self.queue.is_empty() && self.mixer.voices.is_empty()
+    }
+
     pub fn render_stereo(&mut self, output_start_frame: u64, output: &mut [f32]) {
         output.fill(0.0);
         let frame_count = output.len() / 2;

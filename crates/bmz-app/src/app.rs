@@ -20,6 +20,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowAttributes, WindowId};
 
+use crate::audio::AppAudioOutput;
 use crate::bootstrap::{self, BootstrappedApp};
 use crate::cli::{
     AUTOPLAY_ON_START_ARG, AppOptions, BOOT_PLAY_SAMPLE_ARG, SMOKE_EXIT_AFTER_FRAMES_ARG,
@@ -110,6 +111,9 @@ struct WinitApp {
     boot: BootstrappedApp,
     window: Option<Arc<Window>>,
     active_play: Option<StartedWinitPlaySession>,
+    /// プレイ終了でリザルトへ移った後、曲の余韻を鳴らし切るために保持する音声出力。
+    /// ドレインが完了するか、選曲復帰・次プレイ開始で解放される。
+    draining_audio: Option<AppAudioOutput>,
     finished_play: Option<FinishedPlaySession>,
     last_play_snapshot: Option<RenderSnapshot>,
     last_started_chart_id: Option<i64>,
@@ -239,6 +243,7 @@ impl WinitApp {
             boot,
             window: None,
             active_play: None,
+            draining_audio: None,
             finished_play: None,
             last_play_snapshot: None,
             last_started_chart_id: None,
@@ -1095,7 +1100,13 @@ impl WinitApp {
                 self.last_play_snapshot = Some(frame.render_snapshot);
                 // active_play がまだ残っている内に hispeed/lane_cover/lift を profile に保存する。
                 self.save_current_play_options(Some(hispeed), "play finished");
-                self.active_play = None;
+                // リザルト画面へ移っても曲の最後まで鳴らすため、音声出力だけは
+                // 取り出して保持する。スケジュール済みの BGM/キー音はオーディオ
+                // スレッドで鳴り切るまで再生され、advance_draining_audio が
+                // ドレイン完了後に解放する。
+                if let Some(started) = self.active_play.take() {
+                    self.draining_audio = Some(started.running.audio);
+                }
                 self.finished_play = Some(finished);
                 self.ensure_skin_ready(SkinKind::Result);
             }

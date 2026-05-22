@@ -119,11 +119,6 @@ pub fn advance_running_play_session_until_result(
     replay_config: &ReplayConfig,
     played_at: i64,
 ) -> Result<PlayAdvanceOutcome> {
-    if let Some(finished) = running.finished.clone() {
-        pause_running_audio_after_finish(running);
-        return Ok(PlayAdvanceOutcome::Finished { frame: current_play_frame(running), finished });
-    }
-
     let frame = {
         let mut audio =
             running.audio.engine.lock().map_err(|_| anyhow!("audio engine lock poisoned"))?;
@@ -144,40 +139,13 @@ pub fn advance_running_play_session_until_result(
             played_at,
             &running.applied_arrange,
         )?;
-        pause_running_audio_after_finish(running);
+        // ここでは音声を止めない。スケジュール済みの BGM/キー音は
+        // オーディオ出力スレッド側で曲の最後まで鳴り切る。出力の解放は
+        // リザルト画面側 (advance_draining_audio) がドレイン完了後に行う。
         return Ok(PlayAdvanceOutcome::Finished { frame, finished });
     }
 
     Ok(PlayAdvanceOutcome::Playing(frame))
-}
-
-fn pause_running_audio_after_finish(running: &mut RunningPlaySession) {
-    if running.audio_paused_after_finish {
-        return;
-    }
-
-    match running.audio.pause() {
-        Ok(()) => {
-            running.session.audio_clock = running.audio.clock();
-            running.audio_paused_after_finish = true;
-        }
-        Err(error) => {
-            tracing::warn!(%error, "failed to pause audio output after play finished");
-        }
-    }
-}
-
-fn current_play_frame(running: &RunningPlaySession) -> FrameOutput<RenderSnapshot> {
-    let session = &running.session;
-    let times = bmz_gameplay::session::compute_frame_times(session);
-    let render_snapshot = build_render_snapshot_with_bga_frames(
-        session,
-        times.render_now,
-        &session.recent_judgements,
-        running.best_ex_score,
-        &running.bga_frames,
-    );
-    FrameOutput { render_snapshot, state: session.state }
 }
 
 #[cfg(test)]
