@@ -338,13 +338,30 @@ fn build_skin_panel(
             }
             ui.separator();
             ui.label("読み込み済みスキンが宣言する設定可能項目:");
-            build_scene_skin_defs(ui, "選曲スキン", &skin_meta.select, &mut skin.select_options);
-            build_scene_skin_defs(ui, "プレイスキン", &skin_meta.play, &mut skin.play_options);
-            build_scene_skin_defs(
+            // オプション数が多いとウィンドウが画面をはみ出すため、この区画は
+            // スクロール可能にする。
+            egui::ScrollArea::vertical().id_salt("skin_defs_scroll").max_height(280.0).show(
                 ui,
-                "リザルトスキン",
-                &skin_meta.result,
-                &mut skin.result_options,
+                |ui| {
+                    build_scene_skin_defs(
+                        ui,
+                        "選曲スキン",
+                        &skin_meta.select,
+                        &mut skin.select_options,
+                    );
+                    build_scene_skin_defs(
+                        ui,
+                        "プレイスキン",
+                        &skin_meta.play,
+                        &mut skin.play_options,
+                    );
+                    build_scene_skin_defs(
+                        ui,
+                        "リザルトスキン",
+                        &skin_meta.result,
+                        &mut skin.result_options,
+                    );
+                },
             );
             ui.separator();
             ui.label(
