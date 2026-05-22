@@ -15,7 +15,7 @@ use bmz_render::scene::{AppSceneSnapshot, ResultSnapshot, SelectRowSnapshot, Sel
 use bmz_render::snapshot::{DisplayJudgeCounts, FastSlowJudgeCounts, RenderSnapshot};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
-use winit::event::{ElementState, StartCause, WindowEvent};
+use winit::event::{ElementState, MouseScrollDelta, StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::monitor::{MonitorHandle, VideoModeHandle};
@@ -825,6 +825,15 @@ impl WinitApp {
                 SelectAction::ExitFolder => self.exit_folder(),
                 SelectAction::Move(m) => self.move_selection(m),
             }
+        }
+    }
+
+    fn route_mouse_wheel(&mut self, delta: MouseScrollDelta) {
+        if !matches!(self.view_state(), AppViewState::Select) || self.dev_scene.is_some() {
+            return;
+        }
+        if let Some(select_move) = select_wheel_move(delta) {
+            self.move_selection(select_move);
         }
     }
 
@@ -1816,6 +1825,12 @@ impl ApplicationHandler for WinitApp {
                 }
                 self.route_keyboard_input(&event);
             }
+            WindowEvent::MouseWheel { delta, .. } => {
+                if egui_consumed {
+                    return;
+                }
+                self.route_mouse_wheel(delta);
+            }
             WindowEvent::Resized(size) => {
                 self.renderer
                     .resize_surface(SurfaceSize { width: size.width, height: size.height });
@@ -2158,6 +2173,21 @@ fn select_action(
         Some(SelectAction::EnterOrPlay)
     } else if bindings.is_back(&control) {
         Some(SelectAction::ExitFolder)
+    } else {
+        None
+    }
+}
+
+fn select_wheel_move(delta: MouseScrollDelta) -> Option<SelectMove> {
+    let y = match delta {
+        MouseScrollDelta::LineDelta(_, y) => y,
+        MouseScrollDelta::PixelDelta(position) => position.y as f32,
+    };
+
+    if y > 0.0 {
+        Some(SelectMove::Previous)
+    } else if y < 0.0 {
+        Some(SelectMove::Next)
     } else {
         None
     }
@@ -2579,6 +2609,35 @@ mod tests {
         assert_eq!(
             select_action(PhysicalKey::Code(KeyCode::KeyA), ElementState::Pressed, false, &keys),
             None
+        );
+    }
+
+    #[test]
+    fn select_wheel_move_maps_vertical_scroll_to_selection_movement() {
+        assert_eq!(
+            select_wheel_move(MouseScrollDelta::LineDelta(0.0, 1.0)),
+            Some(SelectMove::Previous)
+        );
+        assert_eq!(
+            select_wheel_move(MouseScrollDelta::LineDelta(0.0, -1.0)),
+            Some(SelectMove::Next)
+        );
+        assert_eq!(select_wheel_move(MouseScrollDelta::LineDelta(3.0, 0.0)), None);
+    }
+
+    #[test]
+    fn select_wheel_move_supports_pixel_delta() {
+        assert_eq!(
+            select_wheel_move(MouseScrollDelta::PixelDelta(winit::dpi::PhysicalPosition::new(
+                0.0, 12.0
+            ))),
+            Some(SelectMove::Previous)
+        );
+        assert_eq!(
+            select_wheel_move(MouseScrollDelta::PixelDelta(winit::dpi::PhysicalPosition::new(
+                0.0, -12.0
+            ))),
+            Some(SelectMove::Next)
         );
     }
 
