@@ -1831,31 +1831,60 @@ impl SkinDocument {
             if let Some(item) = self.select_bar_item(row, row_destination, row_frame, sources) {
                 items.push(item);
             }
-            let clear_index = select_row_clear_index(row);
-            let lamp_entries =
-                if songlist.playerlamp.is_empty() { &songlist.lamp } else { &songlist.playerlamp };
-            items.extend(self.select_songlist_child_items_by_index(
-                lamp_entries,
-                clear_index,
-                row_origin,
-                images,
-                enabled_options,
-                row_state,
-                sources,
-            ));
-            items.extend(self.select_songlist_child_items(
-                &songlist.level,
-                row,
-                row_origin,
-                images,
-                enabled_options,
-                row_state,
-                sources,
-            ));
-            if let Some(trophy_index) = select_row_trophy_index(row) {
+            if !row.is_folder {
+                let clear_index = select_row_clear_index(row);
+                let lamp_entries = if songlist.playerlamp.is_empty() {
+                    &songlist.lamp
+                } else {
+                    &songlist.playerlamp
+                };
                 items.extend(self.select_songlist_child_items_by_index(
-                    &songlist.trophy,
-                    trophy_index,
+                    lamp_entries,
+                    clear_index,
+                    row_origin,
+                    images,
+                    enabled_options,
+                    row_state,
+                    sources,
+                ));
+                items.extend(self.select_songlist_child_items(
+                    &songlist.level,
+                    row,
+                    row_origin,
+                    images,
+                    enabled_options,
+                    row_state,
+                    sources,
+                ));
+                if let Some(trophy_index) = select_row_trophy_index(row) {
+                    items.extend(self.select_songlist_child_items_by_index(
+                        &songlist.trophy,
+                        trophy_index,
+                        row_origin,
+                        images,
+                        enabled_options,
+                        row_state,
+                        sources,
+                    ));
+                }
+                items.extend(self.select_songlist_all_child_items(
+                    &songlist.graph,
+                    row_origin,
+                    images,
+                    enabled_options,
+                    row_state,
+                    sources,
+                ));
+                items.extend(self.select_songlist_all_child_items(
+                    &songlist.judgegraph,
+                    row_origin,
+                    images,
+                    enabled_options,
+                    row_state,
+                    sources,
+                ));
+                items.extend(self.select_songlist_all_child_items(
+                    &songlist.bpmgraph,
                     row_origin,
                     images,
                     enabled_options,
@@ -1863,30 +1892,6 @@ impl SkinDocument {
                     sources,
                 ));
             }
-            items.extend(self.select_songlist_all_child_items(
-                &songlist.graph,
-                row_origin,
-                images,
-                enabled_options,
-                row_state,
-                sources,
-            ));
-            items.extend(self.select_songlist_all_child_items(
-                &songlist.judgegraph,
-                row_origin,
-                images,
-                enabled_options,
-                row_state,
-                sources,
-            ));
-            items.extend(self.select_songlist_all_child_items(
-                &songlist.bpmgraph,
-                row_origin,
-                images,
-                enabled_options,
-                row_state,
-                sources,
-            ));
             items.extend(self.select_songlist_text_items(
                 row,
                 row_origin,
@@ -1993,7 +1998,15 @@ impl SkinDocument {
             table_level: &row.table_level,
             ..SkinTextState::default()
         };
-        for destination in destination_entries(&songlist.text, enabled_options) {
+        let destinations = destination_entries(&songlist.text, enabled_options);
+        let Some(destination) = destinations
+            .get(select_row_bar_text_index(row))
+            .or_else(|| destinations.first())
+            .copied()
+        else {
+            return items;
+        };
+        {
             if let Some(mut resolved) = self.resolve_offset_destination_items(
                 destination,
                 row_origin,
@@ -2017,7 +2030,7 @@ impl SkinDocument {
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<SkinRenderItem> {
         let imageset = self.imageset.iter().find(|set| set.id == destination.id)?;
-        let image_index = if row.is_folder { 1 } else { 0 };
+        let image_index = select_row_bar_image_index(row);
         let image_id = imageset.images.get(image_index).or_else(|| imageset.images.first())?;
         let image = self.image.iter().find(|image| image.id == *image_id)?;
         let source = sources.get(&image.src)?;
@@ -4060,7 +4073,7 @@ fn skin_state_text(text: &SkinTextDef, state: SkinTextState<'_>) -> String {
     if !text.constant_text.is_empty() {
         return text.constant_text.clone();
     }
-    if text.id == "bartext" {
+    if text.id.starts_with("bartext") {
         return state.bar_text.to_string();
     }
     if text.id == "table_level" {
@@ -4092,6 +4105,14 @@ fn full_label(primary: &str, secondary: &str) -> String {
 fn select_row_level_number(row: &SelectRowSnapshot) -> i64 {
     let source = if !row.table_level.is_empty() { &row.table_level } else { &row.play_level };
     source.chars().filter(|ch| ch.is_ascii_digit()).collect::<String>().parse().unwrap_or(0)
+}
+
+fn select_row_bar_image_index(row: &SelectRowSnapshot) -> usize {
+    if row.is_folder { 1 } else { 0 }
+}
+
+fn select_row_bar_text_index(row: &SelectRowSnapshot) -> usize {
+    if row.is_folder { 4 } else { 2 }
 }
 
 fn select_row_clear_index(row: &SelectRowSnapshot) -> usize {
@@ -6935,7 +6956,10 @@ mod tests {
                     { "id": "lamp-normal", "src": 3, "x": 20, "y": 0, "w": 4, "h": 4 }
                 ],
                 "imageset": [{ "id": "bar", "images": ["bar-song", "bar-folder"] }],
-                "text": [{ "id": "bartext", "font": "main", "size": 10 }],
+                "text": [
+                    { "id": "bartext", "font": "main", "size": 10 },
+                    { "id": "bartext4", "font": "folder", "size": 10 }
+                ],
                 "value": [{ "id": "level", "src": 2, "x": 0, "y": 0, "w": 100, "h": 10, "divx": 10, "digit": 2, "ref": 96 }],
                 "graph": [{ "id": "graph-lamp", "src": 4, "x": 0, "y": 0, "w": 40, "h": 4, "angle": 0, "type": -1 }],
                 "songlist": {
@@ -6951,7 +6975,13 @@ mod tests {
                         { "id": "bar", "dst": [{ "x": 12, "y": 50, "w": 40, "h": 10 }] },
                         { "id": "bar", "dst": [{ "x": 12, "y": 30, "w": 40, "h": 10 }] }
                     ],
-                    "text": [{ "id": "bartext", "dst": [{ "x": 5, "y": 2, "w": 20, "h": 8 }] }],
+                    "text": [
+                        { "id": "bartext", "dst": [{ "x": 1, "y": 2, "w": 20, "h": 8 }] },
+                        { "id": "bartext", "dst": [{ "x": 2, "y": 2, "w": 20, "h": 8 }] },
+                        { "id": "bartext", "dst": [{ "x": 5, "y": 2, "w": 20, "h": 8 }] },
+                        { "id": "bartext", "dst": [{ "x": 6, "y": 2, "w": 20, "h": 8 }] },
+                        { "id": "bartext4", "dst": [{ "x": 7, "y": 2, "w": 20, "h": 8 }] }
+                    ],
                     "level": [{ "id": "level", "dst": [{ "x": 30, "y": 2, "w": 5, "h": 8 }] }],
                     "trophy": [
                         { "id": "trophy-bronze", "dst": [{ "x": 35, "y": 1, "w": 4, "h": 4 }] },
@@ -7007,6 +7037,24 @@ mod tests {
             items
                 .iter()
                 .any(|item| matches!(item, SkinRenderItem::Text { text, .. } if text == "Song"))
+        );
+        assert!(items.iter().any(|item| matches!(item, SkinRenderItem::Text {
+                origin: Point { x, y },
+                text,
+                style,
+                ..
+            } if text == "Folder"
+                && style.font_id.as_deref() == Some("folder")
+                && approx_eq(*x, 0.17)
+                && approx_eq(*y, 0.2))));
+        assert_eq!(
+            items
+                .iter()
+                .filter(
+                    |item| matches!(item, SkinRenderItem::Text { text, .. } if text == "Folder")
+                )
+                .count(),
+            1
         );
         assert!(items.iter().any(|item| matches!(item, SkinRenderItem::Image {
                 texture: SkinTextureId(9999),

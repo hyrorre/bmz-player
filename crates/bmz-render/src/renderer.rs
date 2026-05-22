@@ -1455,7 +1455,7 @@ fn image_blend_state(blend_mode: BlendMode) -> wgpu::BlendState {
         BlendMode::Normal => wgpu::BlendState::ALPHA_BLENDING,
         BlendMode::Add => wgpu::BlendState {
             color: wgpu::BlendComponent {
-                src_factor: wgpu::BlendFactor::One,
+                src_factor: wgpu::BlendFactor::SrcAlpha,
                 dst_factor: wgpu::BlendFactor::One,
                 operation: wgpu::BlendOperation::Add,
             },
@@ -2093,6 +2093,15 @@ mod tests {
         assert_eq!(batches.len(), 2);
         assert_eq!(batches[0].blend, BlendMode::Normal);
         assert_eq!(batches[1].blend, BlendMode::Add);
+    }
+
+    #[test]
+    fn additive_image_blend_uses_source_alpha() {
+        let blend = image_blend_state(BlendMode::Add);
+
+        assert_eq!(blend.color.src_factor, wgpu::BlendFactor::SrcAlpha);
+        assert_eq!(blend.color.dst_factor, wgpu::BlendFactor::One);
+        assert_eq!(blend.color.operation, wgpu::BlendOperation::Add);
     }
 
     #[test]
