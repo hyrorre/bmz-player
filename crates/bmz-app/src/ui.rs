@@ -10,6 +10,7 @@ use winit::event::WindowEvent;
 use winit::window::Window;
 
 use crate::config::app_config::{AppConfig, WindowMode};
+use crate::config::profile_config::{ProfileConfig, SkinConfig};
 
 /// デバッグ表示パネルへ毎フレーム渡すアプリ側の情報。
 pub struct DebugInfo {
@@ -27,6 +28,8 @@ pub struct EguiOutput {
     pub frame: EguiFrame,
     /// 本体設定 (`AppConfig`) の保存が要求されたか。
     pub save_app_config: bool,
+    /// プロファイル設定 (`ProfileConfig`) の保存が要求されたか。
+    pub save_profile_config: bool,
 }
 
 /// egui の状態管理とフレーム構築を担うレイヤ。
@@ -39,6 +42,8 @@ pub struct EguiLayer {
     show_debug: bool,
     /// 本体設定パネルの開閉状態。
     show_settings: bool,
+    /// スキン設定パネルの開閉状態。
+    show_skin: bool,
 }
 
 impl EguiLayer {
@@ -55,7 +60,7 @@ impl EguiLayer {
             None,
             None,
         );
-        Self { ctx, state, visible: false, show_debug, show_settings: false }
+        Self { ctx, state, visible: false, show_debug, show_settings: false, show_skin: false }
     }
 
     /// メニュー表示状態を反転する (F5)。
@@ -79,20 +84,26 @@ impl EguiLayer {
         window: &Window,
         info: &DebugInfo,
         app_config: &mut AppConfig,
+        profile_config: &mut ProfileConfig,
     ) -> EguiOutput {
         let raw_input = self.state.take_egui_input(window);
         let ctx = self.ctx.clone();
         let visible = self.visible;
         let show_debug = &mut self.show_debug;
         let show_settings = &mut self.show_settings;
+        let show_skin = &mut self.show_skin;
         let mut save_app_config = false;
+        let mut save_profile_config = false;
         let full_output = ctx.run_ui(raw_input, |ui| {
             if visible {
                 let ctx = ui.ctx();
-                build_menu(ctx, show_debug, show_settings);
+                build_menu(ctx, show_debug, show_settings, show_skin);
                 build_debug_panel(ctx, show_debug, info);
                 if build_settings_panel(ctx, show_settings, app_config) {
                     save_app_config = true;
+                }
+                if build_skin_panel(ctx, show_skin, &mut profile_config.skin) {
+                    save_profile_config = true;
                 }
             }
         });
@@ -105,6 +116,7 @@ impl EguiLayer {
                 pixels_per_point: full_output.pixels_per_point,
             },
             save_app_config,
+            save_profile_config,
         }
     }
 }
@@ -129,12 +141,18 @@ fn install_japanese_font(ctx: &egui::Context) {
 }
 
 /// 各サブパネルの開閉を切り替えるメインメニューハブ。
-fn build_menu(ctx: &egui::Context, show_debug: &mut bool, show_settings: &mut bool) {
+fn build_menu(
+    ctx: &egui::Context,
+    show_debug: &mut bool,
+    show_settings: &mut bool,
+    show_skin: &mut bool,
+) {
     egui::Window::new("BMZ メニュー").default_pos(egui::pos2(16.0, 16.0)).show(ctx, |ui| {
         ui.label("F5 でこのメニューを開閉します。");
         ui.separator();
         ui.checkbox(show_debug, "デバッグ表示");
         ui.checkbox(show_settings, "本体設定");
+        ui.checkbox(show_skin, "スキン設定");
     });
 }
 
@@ -204,4 +222,35 @@ fn window_mode_label(mode: &WindowMode) -> &'static str {
         WindowMode::BorderlessFullscreen => "ボーダレスフルスクリーン",
         WindowMode::ExclusiveFullscreen => "排他フルスクリーン",
     }
+}
+
+/// プロファイルのスキン設定 (`SkinConfig`) を編集するパネル。
+///
+/// 戻り値 `true` は「保存」ボタンが押されたことを表す。
+fn build_skin_panel(ctx: &egui::Context, open: &mut bool, skin: &mut SkinConfig) -> bool {
+    let mut save_clicked = false;
+    egui::Window::new("スキン設定").open(open).default_pos(egui::pos2(16.0, 480.0)).show(
+        ctx,
+        |ui| {
+            ui.label("各画面のスキンパス。空欄なら内蔵描画 / デフォルトスキンを使用します。");
+            egui::Grid::new("skin_grid").num_columns(2).show(ui, |ui| {
+                ui.label("選曲");
+                ui.text_edit_singleline(&mut skin.select);
+                ui.end_row();
+                ui.label("プレイ");
+                ui.text_edit_singleline(&mut skin.play);
+                ui.end_row();
+                ui.label("リザルト");
+                ui.text_edit_singleline(&mut skin.result);
+                ui.end_row();
+            });
+            ui.separator();
+            ui.label(format!("オフセット定義: {} 件", skin.offsets.len()));
+            ui.label("変更は次回起動時に反映されます。");
+            if ui.button("保存").clicked() {
+                save_clicked = true;
+            }
+        },
+    );
+    save_clicked
 }

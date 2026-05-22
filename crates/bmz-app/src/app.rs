@@ -1140,12 +1140,22 @@ impl WinitApp {
         let Some(egui) = self.egui.as_mut() else {
             return;
         };
-        let output = egui.run(&window, &info, &mut self.boot.app_config);
+        let output =
+            egui.run(&window, &info, &mut self.boot.app_config, &mut self.boot.profile_config);
         self.renderer.set_egui_frame(output.frame);
         if output.save_app_config {
             match save_app_config(&self.boot.app_paths.config_toml, &self.boot.app_config) {
                 Ok(()) => tracing::info!("app config saved from egui settings panel"),
                 Err(error) => tracing::error!(%error, "failed to save app config"),
+            }
+        }
+        if output.save_profile_config {
+            match save_profile_config(
+                &self.boot.profile_paths.profile_toml,
+                &self.boot.profile_config,
+            ) {
+                Ok(()) => tracing::info!("profile config saved from egui skin panel"),
+                Err(error) => tracing::error!(%error, "failed to save profile config"),
             }
         }
     }
