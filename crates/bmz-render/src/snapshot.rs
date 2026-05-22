@@ -47,6 +47,10 @@ pub struct RenderSnapshot {
     pub recent_inputs: Vec<DisplayInput>,
     pub recent_judgements: Vec<DisplayJudgement>,
     pub bar_lines: Vec<VisibleBarLine>,
+    /// 各レーンのキー押下開始からの経過 ms(押下中のみ Some)。skin timer 100..=107 に渡る。
+    pub keyon_ms: [Option<i32>; LANE_COUNT],
+    /// 各レーンのキー解放からの経過 ms(離した直後のみ Some)。skin timer 120..=127 に渡る。
+    pub keyoff_ms: [Option<i32>; LANE_COUNT],
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

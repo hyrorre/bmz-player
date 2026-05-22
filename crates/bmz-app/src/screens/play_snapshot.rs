@@ -102,6 +102,16 @@ pub fn build_render_snapshot_with_bga_frames(
         recent_judgements: recent_judgements.iter().map(display_judgement).collect(),
         bar_lines: Vec::new(),
         visible_long_notes: Vec::new(),
+        keyon_ms: std::array::from_fn(|lane_index| {
+            session.lane_keyon_started_at[lane_index].map(|t| {
+                ((render_now.0 - t.0) / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32
+            })
+        }),
+        keyoff_ms: std::array::from_fn(|lane_index| {
+            session.lane_keyoff_started_at[lane_index].map(|t| {
+                ((render_now.0 - t.0) / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32
+            })
+        }),
     };
 
     for lane in Lane::ALL {

@@ -522,13 +522,10 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
         lane_judge[idx] = judge_image_index(&j.text);
     }
 
-    let mut keyon_ms: [Option<i32>; LANE_COUNT] = [None; LANE_COUNT];
-    for input in &snapshot.recent_inputs {
-        let idx = input.lane.index();
-        let elapsed = ((snapshot.time.0 - input.time.0) / 1_000)
-            .clamp(i32::MIN as i64, i32::MAX as i64) as i32;
-        keyon_ms[idx] = Some(elapsed);
-    }
+    // keyon/keyoff のタイマー値は session 側で per-lane に追跡された keyon/keyoff
+    // 開始時刻から算出済み。snapshot.recent_inputs から再構築しない。
+    let keyon_ms = snapshot.keyon_ms;
+    let keyoff_ms = snapshot.keyoff_ms;
 
     let judge_ms = snapshot.recent_judgements.last().map(|j| {
         ((snapshot.time.0 - j.time.0) / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32
@@ -554,6 +551,7 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
         end_of_note: end_of_note(snapshot),
         bomb_ms,
         keyon_ms,
+        keyoff_ms,
         lane_judge,
         judge_ms,
         judge_index,

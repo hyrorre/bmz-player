@@ -3,8 +3,9 @@ use std::sync::Arc;
 use bmz_audio::clock::AudioClock;
 use bmz_audio::queue::{AudioScheduler, ScheduledSound};
 use bmz_chart::model::PlayableChart;
-use bmz_core::input::{InputEvent, InputKind};
+use bmz_core::input::{InputEvent, InputKind, InputSource};
 use bmz_core::judge::Judge;
+use bmz_core::lane::LANE_COUNT;
 use bmz_core::time::TimeUs;
 
 use crate::autoplay::AutoplayController;
@@ -20,6 +21,9 @@ pub const AUDIO_SCHEDULE_AHEAD_US: i64 = 100_000;
 pub const SESSION_END_MARGIN_US: i64 = 500_000;
 pub const JUDGEMENT_DISPLAY_US: i64 = 800_000;
 pub const INPUT_DISPLAY_US: i64 = 160_000;
+/// オートプレイ時のキー押下を「離す」までの時間。beatoraja の `auto_minduration` (80ms) と揃える。
+/// この時間が経過すると lane_keyon → lane_keyoff へ遷移し、skin の KEYOFF タイマー演出が走る。
+pub const AUTO_KEYBEAM_DURATION_US: i64 = 80_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayState {
@@ -76,6 +80,13 @@ pub struct GameSession {
     pub replay_player: Option<ReplayPlayer>,
     pub autoplay: Option<AutoplayController>,
     pub recent_inputs: Vec<InputEvent>,
+    /// 各レーンのキー押下開始時刻。押下中のみ Some。skin の keyon タイマー(100..=107)。
+    pub lane_keyon_started_at: [Option<TimeUs>; LANE_COUNT],
+    /// 各レーンのキー解放時刻。離した直後のみ Some(次の Press でクリア)。skin の keyoff タイマー(120..=127)。
+    pub lane_keyoff_started_at: [Option<TimeUs>; LANE_COUNT],
+    /// オートプレイで Press したレーンの自動 Release 予定時刻。
+    /// `audio_now` がこの時刻を超えたら keyon → keyoff へ遷移する。
+    pub lane_auto_release_at: [Option<TimeUs>; LANE_COUNT],
     pub recent_judgements: Vec<JudgementEvent>,
     pub bgm_scheduler: BgmScheduler,
     pub offsets: PlayOffsets,
@@ -202,6 +213,46 @@ pub fn update_recent_inputs(session: &mut GameSession, inputs: &[InputEvent], no
     session.recent_inputs.retain(|input| now.0 <= input.time.0 + INPUT_DISPLAY_US);
 }
 
+/// レーンごとのキー押下/解放状態を更新する。beatoraja の KEYON/KEYOFF タイマー相当。
+/// Press → keyon を新しい時刻にセット、keyoff をクリア(autoplay 入力なら 80ms 後の自動 release も予約)。
+/// Release → 押下中だった場合のみ keyoff をセット、keyon と auto_release_at をクリア。
+pub fn update_lane_key_states(session: &mut GameSession, inputs: &[InputEvent]) {
+    for input in inputs {
+        let lane_index = input.lane.index();
+        match input.kind {
+            InputKind::Press => {
+                session.lane_keyon_started_at[lane_index] = Some(input.time);
+                session.lane_keyoff_started_at[lane_index] = None;
+                session.lane_auto_release_at[lane_index] = match input.source {
+                    InputSource::Auto => Some(TimeUs(input.time.0 + AUTO_KEYBEAM_DURATION_US)),
+                    _ => None,
+                };
+            }
+            InputKind::Release => {
+                if session.lane_keyon_started_at[lane_index].is_some() {
+                    session.lane_keyoff_started_at[lane_index] = Some(input.time);
+                    session.lane_keyon_started_at[lane_index] = None;
+                }
+                session.lane_auto_release_at[lane_index] = None;
+            }
+        }
+    }
+}
+
+/// オートプレイで Press したレーンを `AUTO_KEYBEAM_DURATION_US` 経過後に自動で release する。
+/// beatoraja の `auto_minduration` (80ms) 経過で `auto_presstime` を MIN_VALUE に戻す挙動に対応。
+pub fn apply_auto_key_release(session: &mut GameSession, audio_now: TimeUs) {
+    for lane_index in 0..LANE_COUNT {
+        if let Some(release_at) = session.lane_auto_release_at[lane_index]
+            && audio_now.0 >= release_at.0
+        {
+            session.lane_keyoff_started_at[lane_index] = Some(release_at);
+            session.lane_keyon_started_at[lane_index] = None;
+            session.lane_auto_release_at[lane_index] = None;
+        }
+    }
+}
+
 pub fn process_human_inputs(session: &mut GameSession) -> Vec<JudgementEvent> {
     let ctx = InputTimingContext {
         audio_clock: &session.audio_clock,
@@ -210,6 +261,7 @@ pub fn process_human_inputs(session: &mut GameSession) -> Vec<JudgementEvent> {
     };
     let inputs = session.input_system.collect_game_inputs(&ctx);
     update_recent_inputs(session, &inputs, session.audio_clock.now());
+    update_lane_key_states(session, &inputs);
     let mut judgements = Vec::new();
     for input in inputs {
         session.replay_recorder.record(input);
@@ -228,6 +280,7 @@ pub fn drain_human_inputs(session: &mut GameSession) {
     };
     let inputs = session.input_system.collect_game_inputs(&ctx);
     update_recent_inputs(session, &inputs, session.audio_clock.now());
+    update_lane_key_states(session, &inputs);
 }
 
 /// 入力バックエンドを drain するだけで、判定にも視覚エフェクト(recent_inputs)にも反映しない。
@@ -246,8 +299,10 @@ pub fn process_replay_inputs(session: &mut GameSession, audio_now: TimeUs) -> Ve
         return Vec::new();
     };
 
+    let inputs = player.poll_until(audio_now);
+    update_lane_key_states(session, &inputs);
     let mut judgements = Vec::new();
-    for input in player.poll_until(audio_now) {
+    for input in inputs {
         let outcome = session.judge.process_input(&session.chart, input);
         judgements.extend(apply_judge_outcome(session, outcome));
     }
@@ -265,6 +320,7 @@ pub fn process_autoplay_inputs(
     let inputs = auto.poll_until(&session.chart, audio_now);
     // オートプレイのキービームはノーツ処理時(=この autoplay 入力)で発火させる。
     update_recent_inputs(session, &inputs, session.audio_clock.now());
+    update_lane_key_states(session, &inputs);
 
     let mut judgements = Vec::new();
     for input in inputs {
@@ -308,6 +364,7 @@ pub fn advance_session_frame(
             // (ハイスピード等のオプション操作は app 側で別途処理される)
             discard_human_inputs(session);
             judgements.extend(process_autoplay_inputs(session, times.audio_now));
+            apply_auto_key_release(session, times.audio_now);
         } else {
             judgements.extend(process_human_inputs(session));
         }
@@ -511,6 +568,87 @@ mod tests {
     }
 
     #[test]
+    fn update_lane_key_states_press_sets_keyon_clears_keyoff() {
+        let mut session = session_with_autoplay(chart_with_keysound());
+        session.lane_keyoff_started_at[Lane::Key1.index()] = Some(TimeUs(1_000));
+
+        let inputs = [InputEvent {
+            lane: Lane::Key1,
+            kind: InputKind::Press,
+            time: TimeUs(5_000),
+            source: InputSource::Human,
+        }];
+        update_lane_key_states(&mut session, &inputs);
+
+        assert_eq!(session.lane_keyon_started_at[Lane::Key1.index()], Some(TimeUs(5_000)));
+        assert_eq!(session.lane_keyoff_started_at[Lane::Key1.index()], None);
+        // Human source の Press は自動 release を予約しない (押し続け対応)。
+        assert_eq!(session.lane_auto_release_at[Lane::Key1.index()], None);
+    }
+
+    #[test]
+    fn update_lane_key_states_release_transitions_to_keyoff() {
+        let mut session = session_with_autoplay(chart_with_keysound());
+        session.lane_keyon_started_at[Lane::Key1.index()] = Some(TimeUs(1_000));
+
+        let inputs = [InputEvent {
+            lane: Lane::Key1,
+            kind: InputKind::Release,
+            time: TimeUs(10_000),
+            source: InputSource::Human,
+        }];
+        update_lane_key_states(&mut session, &inputs);
+
+        assert_eq!(session.lane_keyon_started_at[Lane::Key1.index()], None);
+        assert_eq!(session.lane_keyoff_started_at[Lane::Key1.index()], Some(TimeUs(10_000)));
+    }
+
+    #[test]
+    fn update_lane_key_states_autoplay_press_schedules_auto_release() {
+        let mut session = session_with_autoplay(chart_with_keysound());
+
+        let inputs = [InputEvent {
+            lane: Lane::Key1,
+            kind: InputKind::Press,
+            time: TimeUs(5_000),
+            source: InputSource::Auto,
+        }];
+        update_lane_key_states(&mut session, &inputs);
+
+        // Auto は AUTO_KEYBEAM_DURATION_US (80ms) 後に自動 release が予約される。
+        assert_eq!(
+            session.lane_auto_release_at[Lane::Key1.index()],
+            Some(TimeUs(5_000 + AUTO_KEYBEAM_DURATION_US))
+        );
+    }
+
+    #[test]
+    fn apply_auto_key_release_transitions_after_duration() {
+        let mut session = session_with_autoplay(chart_with_keysound());
+        let inputs = [InputEvent {
+            lane: Lane::Key1,
+            kind: InputKind::Press,
+            time: TimeUs(0),
+            source: InputSource::Auto,
+        }];
+        update_lane_key_states(&mut session, &inputs);
+
+        // 期限前: 何も起きない。
+        apply_auto_key_release(&mut session, TimeUs(AUTO_KEYBEAM_DURATION_US - 1));
+        assert!(session.lane_keyon_started_at[Lane::Key1.index()].is_some());
+        assert!(session.lane_keyoff_started_at[Lane::Key1.index()].is_none());
+
+        // 期限到達: keyon → keyoff へ遷移。
+        apply_auto_key_release(&mut session, TimeUs(AUTO_KEYBEAM_DURATION_US));
+        assert!(session.lane_keyon_started_at[Lane::Key1.index()].is_none());
+        assert_eq!(
+            session.lane_keyoff_started_at[Lane::Key1.index()],
+            Some(TimeUs(AUTO_KEYBEAM_DURATION_US))
+        );
+        assert!(session.lane_auto_release_at[Lane::Key1.index()].is_none());
+    }
+
+    #[test]
     fn update_recent_inputs_keeps_presses_and_expires_old_events() {
         let mut session = session_with_autoplay(chart_with_keysound());
         let inputs = [
@@ -567,6 +705,9 @@ mod tests {
             replay_player: None,
             autoplay: Some(AutoplayController::default()),
             recent_inputs: Vec::new(),
+            lane_keyon_started_at: Default::default(),
+            lane_keyoff_started_at: Default::default(),
+            lane_auto_release_at: Default::default(),
             recent_judgements: Vec::new(),
             bgm_scheduler: BgmScheduler::default(),
             offsets: PlayOffsets { input_offset_us: 0, visual_offset_us: 0 },

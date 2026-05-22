@@ -835,6 +835,9 @@ pub struct SkinDrawState {
     pub bomb_ms: [Option<i32>; LANE_COUNT],
     /// 各レーンのkeyon(押下中ビーム)タイマー経過ms。Noneなら非アクティブ。
     pub keyon_ms: [Option<i32>; LANE_COUNT],
+    /// 各レーンのkeyoff(離した直後の演出)タイマー経過ms。Noneなら非アクティブ。
+    /// beatoraja の TIMER_KEYOFF_1P_KEY1..7 (121..127) / SCRATCH (120) に対応。
+    pub keyoff_ms: [Option<i32>; LANE_COUNT],
     /// 各レーンの直近判定の画像インデックス (0=PGREAT,1=GREAT,2=GOOD,3=BAD,4=POOR)。
     /// imageset (ボム・キービーム) の画像選択に使う。Noneなら判定なし。
     pub lane_judge: [Option<usize>; LANE_COUNT],
@@ -968,6 +971,7 @@ impl Default for SkinDrawState {
             end_of_note: false,
             bomb_ms: [None; LANE_COUNT],
             keyon_ms: [None; LANE_COUNT],
+            keyoff_ms: [None; LANE_COUNT],
             lane_judge: [None; LANE_COUNT],
             judge_ms: None,
             judge_index: None,
@@ -4054,6 +4058,7 @@ fn skin_timer_elapsed_ms(timer: Option<i32>, state: SkinDrawState) -> Option<i32
         Some(46) => state.judge_ms,
         Some(50..=57) => state.bomb_ms[(timer.unwrap() - 50) as usize],
         Some(100..=107) => state.keyon_ms[(timer.unwrap() - 100) as usize],
+        Some(120..=127) => state.keyoff_ms[(timer.unwrap() - 120) as usize],
         Some(143) => state.end_of_note.then_some(state.elapsed_ms),
         _ => None,
     }
