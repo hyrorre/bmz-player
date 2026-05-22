@@ -1986,7 +1986,7 @@ fn select_snapshot_rows(
             let index = (start + offset) % items.len();
             let item = &items[index];
             match item {
-                SelectItem::Folder { name, .. } => SelectRowSnapshot {
+                SelectItem::Folder { name, kind, .. } => SelectRowSnapshot {
                     index: index as u32,
                     title: name.clone(),
                     artist: String::new(),
@@ -2004,6 +2004,7 @@ fn select_snapshot_rows(
                     gauge_value: None,
                     replay_slots: [false; 4],
                     is_folder: true,
+                    kind: *kind,
                 },
                 SelectItem::Chart(row) => SelectRowSnapshot {
                     index: index as u32,
@@ -2027,6 +2028,7 @@ fn select_snapshot_rows(
                     gauge_value: row.best_score.as_ref().map(|score| score.gauge_value),
                     replay_slots: row.replay_slots,
                     is_folder: false,
+                    kind: bmz_render::scene::SelectRowKind::Song,
                 },
             }
         })

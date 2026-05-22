@@ -2335,6 +2335,7 @@ mod tests {
                 gauge_value: (index == 0).then_some(80.0),
                 replay_slots: [false; 4],
                 is_folder: false,
+                kind: Default::default(),
             })
             .collect()
     }

@@ -13,7 +13,7 @@ use crate::plan::{
     Color, DrawCommand, Point, Rect, TextAlign, TextLayer, TextOutline, TextOverflow, TextShadow,
     TextStyle, TextureId, UvRect,
 };
-use crate::scene::{SelectRowSnapshot, SelectSnapshot};
+use crate::scene::{SelectRowKind, SelectRowSnapshot, SelectSnapshot};
 use crate::skin_offset::SkinOffsetValues;
 use crate::snapshot::DisplayJudgeCounts;
 
@@ -4174,11 +4174,19 @@ fn difficulty_code_from_label(label: &str) -> i64 {
 }
 
 fn select_row_bar_image_index(row: &SelectRowSnapshot) -> usize {
-    if row.is_folder { 1 } else { 0 }
+    match row.kind {
+        SelectRowKind::Song => 0,
+        SelectRowKind::Folder => 1,
+        SelectRowKind::TableFolder => 2,
+    }
 }
 
 fn select_row_bar_text_index(row: &SelectRowSnapshot) -> usize {
-    if row.is_folder { 4 } else { 2 }
+    match row.kind {
+        SelectRowKind::Song => 2,
+        SelectRowKind::Folder => 4,
+        SelectRowKind::TableFolder => 6,
+    }
 }
 
 fn select_row_clear_index(row: &SelectRowSnapshot) -> usize {
@@ -7033,6 +7041,7 @@ mod tests {
                 "image": [
                     { "id": "bar-song", "src": 1, "x": 0, "y": 0, "w": 40, "h": 10 },
                     { "id": "bar-folder", "src": 1, "x": 0, "y": 10, "w": 40, "h": 10 },
+                    { "id": "bar-table", "src": 1, "x": 0, "y": 30, "w": 40, "h": 10 },
                     { "id": "song-op-marker", "src": 1, "x": 0, "y": 20, "w": 4, "h": 4 },
                     { "id": "folder-op-marker", "src": 1, "x": 4, "y": 20, "w": 4, "h": 4 },
                     { "id": "trophy-bronze", "src": 3, "x": 0, "y": 0, "w": 4, "h": 4 },
@@ -7045,9 +7054,12 @@ mod tests {
                     { "id": "lamp-easy", "src": 3, "x": 16, "y": 0, "w": 4, "h": 4 },
                     { "id": "lamp-normal", "src": 3, "x": 20, "y": 0, "w": 4, "h": 4 }
                 ],
-                "imageset": [{ "id": "bar", "images": ["bar-song", "bar-folder"] }],
+                "imageset": [{ "id": "bar", "images": ["bar-song", "bar-folder", "bar-table"] }],
                 "text": [
                     { "id": "bartext", "font": "main", "size": 10 },
+                    { "id": "bartext1", "font": "folder", "size": 10 },
+                    { "id": "bartext2", "font": "table", "size": 10 },
+                    { "id": "bartext3", "font": "main", "size": 10 },
                     { "id": "bartext4", "font": "folder", "size": 10 }
                 ],
                 "value": [
@@ -7074,7 +7086,9 @@ mod tests {
                         { "id": "bartext", "dst": [{ "x": 2, "y": 2, "w": 20, "h": 8 }] },
                         { "id": "bartext", "dst": [{ "x": 5, "y": 2, "w": 20, "h": 8 }] },
                         { "id": "bartext", "dst": [{ "x": 6, "y": 2, "w": 20, "h": 8 }] },
-                        { "id": "bartext4", "dst": [{ "x": 7, "y": 2, "w": 20, "h": 8 }] }
+                        { "id": "bartext4", "dst": [{ "x": 7, "y": 2, "w": 20, "h": 8 }] },
+                        { "id": "bartext4", "dst": [{ "x": 8, "y": 2, "w": 20, "h": 8 }] },
+                        { "id": "bartext2", "dst": [{ "x": 9, "y": 2, "w": 20, "h": 8 }] }
                     ],
                     "judgegraph": [
                         { "id": "song-op-marker", "op": [2], "dst": [{ "x": 8, "y": 1, "w": 4, "h": 4 }] },
@@ -7117,6 +7131,7 @@ mod tests {
                     title: "Folder".to_string(),
                     play_level: "0".to_string(),
                     is_folder: true,
+                    kind: SelectRowKind::Folder,
                     ..SelectRowSnapshot::default()
                 },
                 SelectRowSnapshot {
@@ -7127,6 +7142,14 @@ mod tests {
                     clear_type: "Normal".to_string(),
                     total_notes: 100,
                     ex_score: Some(180),
+                    ..SelectRowSnapshot::default()
+                },
+                SelectRowSnapshot {
+                    index: 3,
+                    title: "Table".to_string(),
+                    play_level: "0".to_string(),
+                    is_folder: true,
+                    kind: SelectRowKind::TableFolder,
                     ..SelectRowSnapshot::default()
                 },
             ],
@@ -7159,6 +7182,17 @@ mod tests {
                 .count(),
             1
         );
+        assert!(items.iter().any(|item| matches!(item, SkinRenderItem::Text {
+                text,
+                style,
+                ..
+            } if text == "Table"
+                && style.font_id.as_deref() == Some("table"))));
+        assert!(items.iter().any(|item| matches!(item, SkinRenderItem::Image {
+                texture: SkinTextureId(9999),
+                uv: TextureRegion { y: v, .. },
+                ..
+            } if approx_eq(*v, 30.0 / 100.0))));
         assert!(items.iter().any(|item| matches!(item, SkinRenderItem::Image {
                 texture: SkinTextureId(9999),
                 rect: Rect { x, y, width, height },

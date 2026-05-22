@@ -55,6 +55,15 @@ pub struct SelectRowSnapshot {
     pub gauge_value: Option<f32>,
     pub replay_slots: [bool; 4],
     pub is_folder: bool,
+    pub kind: SelectRowKind,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SelectRowKind {
+    #[default]
+    Song,
+    Folder,
+    TableFolder,
 }
 
 #[derive(Debug, Clone, PartialEq)]

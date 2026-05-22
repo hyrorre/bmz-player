@@ -27,6 +27,7 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
             gauge_value: (index == 0).then_some(80.0),
             replay_slots: [index == 0, false, false, false],
             is_folder: false,
+            kind: Default::default(),
         })
         .collect();
 

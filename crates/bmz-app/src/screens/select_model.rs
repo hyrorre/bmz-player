@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
+use bmz_render::scene::SelectRowKind;
 
 use crate::storage::common::hash_to_hex;
 use crate::storage::library_db::{ChartListItem, LibraryDatabase};
@@ -62,7 +63,7 @@ pub struct SelectChartRow {
 #[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::large_enum_variant)]
 pub enum SelectItem {
-    Folder { path: String, name: String },
+    Folder { path: String, name: String, kind: SelectRowKind },
     Chart(SelectChartRow),
 }
 
@@ -85,7 +86,7 @@ pub fn root_folder_items(root_paths: &[String]) -> Vec<SelectItem> {
                 .and_then(|n| n.to_str())
                 .unwrap_or(path.as_str())
                 .to_string();
-            SelectItem::Folder { path: path.clone(), name }
+            SelectItem::Folder { path: path.clone(), name, kind: SelectRowKind::Folder }
         })
         .collect()
 }
@@ -98,6 +99,7 @@ pub fn table_folder_items(library_db: &LibraryDatabase) -> Result<Vec<SelectItem
         .map(|t| SelectItem::Folder {
             path: format!("{TABLE_ROOT_PATH}{}", t.source_url),
             name: format!("[{}] {}", t.symbol, t.name),
+            kind: SelectRowKind::TableFolder,
         })
         .collect())
 }
@@ -120,6 +122,7 @@ pub fn table_level_folder_items(
         .map(|level| SelectItem::Folder {
             path: format!("{TABLE_ROOT_PATH}{source_url}{TABLE_LEVEL_SEPARATOR}{level}"),
             name: format!("{}{}", table.symbol, level),
+            kind: SelectRowKind::TableFolder,
         })
         .collect())
 }
@@ -253,7 +256,7 @@ pub fn load_select_items_in_folder(
     let mut items = Vec::with_capacity(non_leaf_folders.len() + all_charts.len());
 
     for (path, name) in non_leaf_folders {
-        items.push(SelectItem::Folder { path, name });
+        items.push(SelectItem::Folder { path, name, kind: SelectRowKind::Folder });
     }
     for chart in all_charts {
         let best_score = score_map.remove(&chart.sha256);
@@ -576,8 +579,8 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert!(matches!(
             &items[0],
-            SelectItem::Folder { path, name }
-            if path.starts_with(TABLE_ROOT_PATH) && name.contains("★")
+            SelectItem::Folder { path, name, kind }
+            if path.starts_with(TABLE_ROOT_PATH) && name.contains("★") && *kind == SelectRowKind::TableFolder
         ));
     }
 
@@ -687,8 +690,8 @@ mod tests {
         assert_eq!(items.len(), 3);
         assert!(matches!(
             &items[0],
-            SelectItem::Folder { path, name }
-            if name == "★1" && path == "bmz-table:https://example.com/insane/\n1"
+            SelectItem::Folder { path, name, kind }
+            if name == "★1" && path == "bmz-table:https://example.com/insane/\n1" && *kind == SelectRowKind::TableFolder
         ));
         assert!(matches!(&items[2], SelectItem::Folder { name, .. } if name == "★25"));
     }
