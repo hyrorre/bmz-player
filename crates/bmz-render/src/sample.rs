@@ -22,6 +22,8 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
             length_ms: 90_000 + i64::from(index) * 1_000,
             clear_type: if index == 0 { "Normal".to_string() } else { String::new() },
             ex_score: (index == 0).then_some(1888),
+            max_combo: (index == 0).then_some(777),
+            gauge_value: (index == 0).then_some(80.0),
             replay_slots: [index == 0, false, false, false],
             is_folder: false,
         })
@@ -41,6 +43,9 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
         gauge: "NORMAL".to_string(),
         assist: "NORMAL".to_string(),
         bga: "ON".to_string(),
+        master_volume: 1.0,
+        key_volume: 1.0,
+        bgm_volume: 1.0,
         current_folder: String::new(),
         key_hint: "UP DOWN  RIGHT/Z/X/C/V:ENTER  LEFT/S:BACK".to_string(),
         option_hint:

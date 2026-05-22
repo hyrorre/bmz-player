@@ -26,6 +26,9 @@ pub struct SelectSnapshot {
     pub gauge: String,
     pub assist: String,
     pub bga: String,
+    pub master_volume: f32,
+    pub key_volume: f32,
+    pub bgm_volume: f32,
     pub current_folder: String,
     pub key_hint: String,
     pub option_hint: String,
@@ -47,6 +50,8 @@ pub struct SelectRowSnapshot {
     pub length_ms: i64,
     pub clear_type: String,
     pub ex_score: Option<u32>,
+    pub max_combo: Option<u32>,
+    pub gauge_value: Option<f32>,
     pub replay_slots: [bool; 4],
     pub is_folder: bool,
 }

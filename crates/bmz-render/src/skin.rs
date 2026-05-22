@@ -119,6 +119,14 @@ pub struct SkinSongListDef {
     pub playerlamp: Vec<DestinationListEntry>,
     #[serde(default)]
     pub rivallamp: Vec<DestinationListEntry>,
+    #[serde(default, deserialize_with = "deserialize_destination_entries")]
+    pub trophy: Vec<DestinationListEntry>,
+    #[serde(default, deserialize_with = "deserialize_destination_entries")]
+    pub graph: Vec<DestinationListEntry>,
+    #[serde(default)]
+    pub judgegraph: Vec<DestinationListEntry>,
+    #[serde(default)]
+    pub bpmgraph: Vec<DestinationListEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -631,6 +639,23 @@ impl<'de> Deserialize<'de> for DestinationListEntry {
     }
 }
 
+fn deserialize_destination_entries<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Vec<DestinationListEntry>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = JsonValue::deserialize(deserializer)?;
+    if value.is_null() {
+        return Ok(Vec::new());
+    }
+    if value.is_array() {
+        serde_json::from_value(value).map_err(serde::de::Error::custom)
+    } else {
+        serde_json::from_value(value).map(|entry| vec![entry]).map_err(serde::de::Error::custom)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkinContext {
     manifest: SkinManifest,
@@ -866,6 +891,12 @@ pub struct SkinDrawState {
     pub judge_timing_offset_ms: i32,
     /// 選曲画面の表示曲数 (NUMBER_SELECT_BAR_COUNT=300 相当)。
     pub select_chart_count: u32,
+    /// 選曲バーのスクロール位置 0.0-1.0。
+    pub select_scroll_progress: f32,
+    /// 選曲画面の master/key/bgm 音量 0.0-1.0。
+    pub select_master_volume: f32,
+    pub select_key_volume: f32,
+    pub select_bgm_volume: f32,
     /// 選択中曲のレベル表記から取り出した数値。
     pub select_play_level: i64,
     /// 選択中曲のベストEXスコア。
@@ -956,6 +987,10 @@ impl Default for SkinDrawState {
             target_ex_score: None,
             judge_timing_offset_ms: 0,
             select_chart_count: 0,
+            select_scroll_progress: 0.0,
+            select_master_volume: 1.0,
+            select_key_volume: 1.0,
+            select_bgm_volume: 1.0,
             select_play_level: 0,
             select_ex_score: None,
             select_replay_slots: [false; 4],
@@ -1538,6 +1573,12 @@ impl SkinDocument {
             ));
         }
 
+        if let Some(graph) = self.graph.iter().find(|graph| graph.id == destination.id)
+            && let Some(item) = self.graph_render_item(graph, frame, state, sources)
+        {
+            return Some(vec![item]);
+        }
+
         if let Some(text) = self.text.iter().find(|text| text.id == destination.id)
             && let Some(item) = self.text_render_item(text, frame, text_state)
         {
@@ -1614,6 +1655,12 @@ impl SkinDocument {
             ));
         }
 
+        if let Some(graph) = self.graph.iter().find(|graph| graph.id == destination.id)
+            && let Some(item) = self.graph_render_item(graph, frame, state, sources)
+        {
+            return Some(vec![item]);
+        }
+
         if let Some(text) = self.text.iter().find(|text| text.id == destination.id)
             && let Some(item) = self.text_render_item(text, frame, text_state)
         {
@@ -1672,6 +1719,10 @@ impl SkinDocument {
             select_gauge_index: select_gauge_index(&snapshot.gauge),
             select_bga_index: select_bga_index(&snapshot.bga),
             select_assist_index: select_assist_index(&snapshot.assist),
+            select_scroll_progress: select_scroll_progress(snapshot),
+            select_master_volume: snapshot.master_volume,
+            select_key_volume: snapshot.key_volume,
+            select_bgm_volume: snapshot.bgm_volume,
             select_chart_count: snapshot.chart_count,
             select_play_level: selected_row.map(select_row_level_number).unwrap_or(0),
             select_ex_score: selected_row.and_then(|row| row.ex_score),
@@ -1684,6 +1735,8 @@ impl SkinDocument {
             select_min_bpm: selected_row.map(|row| row.min_bpm).unwrap_or(0.0),
             select_max_bpm: selected_row.map(|row| row.max_bpm).unwrap_or(0.0),
             select_length_ms: selected_row.map(|row| row.length_ms).unwrap_or(0),
+            max_combo: selected_row.and_then(|row| row.max_combo).unwrap_or(0),
+            gauge: selected_row.and_then(|row| row.gauge_value).unwrap_or(0.0),
             ex_score: selected_row.and_then(|row| row.ex_score).unwrap_or(0),
             ..SkinDrawState::default()
         };
@@ -1750,6 +1803,8 @@ impl SkinDocument {
                 select_clear_index: select_row_clear_index(row) as i64,
                 select_total_notes: row.total_notes,
                 select_length_ms: row.length_ms,
+                max_combo: row.max_combo.unwrap_or(0),
+                gauge: row.gauge_value.unwrap_or(0.0),
                 ex_score: row.ex_score.unwrap_or(0),
                 ..state
             };
@@ -1797,6 +1852,41 @@ impl SkinDocument {
                 row_state,
                 sources,
             ));
+            if let Some(trophy_index) = select_row_trophy_index(row) {
+                items.extend(self.select_songlist_child_items_by_index(
+                    &songlist.trophy,
+                    trophy_index,
+                    row_origin,
+                    images,
+                    enabled_options,
+                    row_state,
+                    sources,
+                ));
+            }
+            items.extend(self.select_songlist_all_child_items(
+                &songlist.graph,
+                row_origin,
+                images,
+                enabled_options,
+                row_state,
+                sources,
+            ));
+            items.extend(self.select_songlist_all_child_items(
+                &songlist.judgegraph,
+                row_origin,
+                images,
+                enabled_options,
+                row_state,
+                sources,
+            ));
+            items.extend(self.select_songlist_all_child_items(
+                &songlist.bpmgraph,
+                row_origin,
+                images,
+                enabled_options,
+                row_state,
+                sources,
+            ));
             items.extend(self.select_songlist_text_items(
                 row,
                 row_origin,
@@ -1805,6 +1895,32 @@ impl SkinDocument {
                 row_state,
                 sources,
             ));
+        }
+        items
+    }
+
+    fn select_songlist_all_child_items(
+        &self,
+        entries: &[DestinationListEntry],
+        row_origin: (i32, i32),
+        images: &HashMap<&str, &SkinImageDef>,
+        enabled_options: &[i32],
+        state: SkinDrawState,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Vec<SkinRenderItem> {
+        let mut items = Vec::new();
+        for destination in destination_entries(entries, enabled_options) {
+            if let Some(mut resolved) = self.resolve_offset_destination_items(
+                destination,
+                row_origin,
+                images,
+                enabled_options,
+                state,
+                SkinTextState::default(),
+                sources,
+            ) {
+                items.append(&mut resolved);
+            }
         }
         items
     }
@@ -3639,6 +3755,10 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         }
         // レーンカバー: NUMBER_LANECOVER1=14 (0-100%)
         14 => Some((state.lane_cover.clamp(0.0, 1.0) * 100.0).round() as i64),
+        // 選曲画面の音量表示: MASTER/BGM/KEY volume (0-100)
+        57 => Some((state.select_master_volume.clamp(0.0, 1.0) * 100.0).round() as i64),
+        58 => Some((state.select_bgm_volume.clamp(0.0, 1.0) * 100.0).round() as i64),
+        59 => Some((state.select_key_volume.clamp(0.0, 1.0) * 100.0).round() as i64),
         // 判定タイミングずれ: VALUE_JUDGE_1P_DURATION=525 (ms、絶対値)
         525 => state.judge_timing_ms.map(|ms| ms.unsigned_abs() as i64),
         // 判定タイミングオフセット設定値 (NUMBER_JUDGETIMING=12)
@@ -3839,6 +3959,15 @@ fn graph_value(graph_type: i32, state: SkinDrawState) -> f32 {
             let max = (state.total_notes * 2) as f32;
             if max > 0.0 { state.target_ex_score.unwrap_or(0) as f32 / max } else { 0.0 }
         }
+        -1 => (state.select_clear_index as f32 / 10.0).clamp(0.0, 1.0),
+        -2 => {
+            let total_notes = state.select_total_notes.max(state.total_notes);
+            let max = (total_notes * 2) as f32;
+            if max > 0.0 { state.ex_score as f32 / max } else { 0.0 }
+        }
+        17 => state.select_master_volume.clamp(0.0, 1.0),
+        18 => state.select_key_volume.clamp(0.0, 1.0),
+        19 => state.select_bgm_volume.clamp(0.0, 1.0),
         _ => 0.0,
     }
 }
@@ -3849,8 +3978,12 @@ fn judge_rate(count: u32, total: u32) -> f32 {
 
 fn skin_slider_progress(slider_type: i32, state: SkinDrawState) -> Option<f32> {
     match slider_type {
+        1 => Some(state.select_scroll_progress.clamp(0.0, 1.0)),
         4 => (state.lane_cover > 0.0).then_some(state.lane_cover.clamp(0.0, 1.0)),
         6 => Some(state.play_progress.clamp(0.0, 1.0)),
+        17 => Some(state.select_master_volume.clamp(0.0, 1.0)),
+        18 => Some(state.select_key_volume.clamp(0.0, 1.0)),
+        19 => Some(state.select_bgm_volume.clamp(0.0, 1.0)),
         _ => None,
     }
 }
@@ -3981,6 +4114,24 @@ fn select_row_replay_index(row: &SelectRowSnapshot) -> Option<usize> {
     row.replay_slots.iter().position(|has_replay| *has_replay)
 }
 
+fn select_row_trophy_index(row: &SelectRowSnapshot) -> Option<usize> {
+    let ex_score = row.ex_score?;
+    let max_score = row.total_notes.checked_mul(2)?;
+    if max_score == 0 {
+        return None;
+    }
+    let score = ex_score.min(max_score);
+    if score * 9 >= max_score * 8 {
+        Some(2)
+    } else if score * 9 >= max_score * 7 {
+        Some(1)
+    } else if score * 9 >= max_score * 6 {
+        Some(0)
+    } else {
+        None
+    }
+}
+
 fn select_replay_op_matches(op: i32, state: SkinDrawState) -> bool {
     let slot = match op {
         196..=198 => Some(0),
@@ -4097,6 +4248,13 @@ fn select_assist_index(assist: &str) -> usize {
         "AUTOPLAY" => 1,
         _ => 0,
     }
+}
+
+fn select_scroll_progress(snapshot: &SelectSnapshot) -> f32 {
+    if snapshot.chart_count <= 1 {
+        return 0.0;
+    }
+    snapshot.selected_index.min(snapshot.chart_count - 1) as f32 / (snapshot.chart_count - 1) as f32
 }
 
 fn destination_entry_at<'a>(
@@ -6760,11 +6918,15 @@ mod tests {
                 "source": [
                     { "id": 1, "path": "bar.png" },
                     { "id": 2, "path": "num.png" },
-                    { "id": 3, "path": "lamp.png" }
+                    { "id": 3, "path": "lamp.png" },
+                    { "id": 4, "path": "graph.png" }
                 ],
                 "image": [
                     { "id": "bar-song", "src": 1, "x": 0, "y": 0, "w": 40, "h": 10 },
                     { "id": "bar-folder", "src": 1, "x": 0, "y": 10, "w": 40, "h": 10 },
+                    { "id": "trophy-bronze", "src": 3, "x": 0, "y": 0, "w": 4, "h": 4 },
+                    { "id": "trophy-silver", "src": 3, "x": 4, "y": 0, "w": 4, "h": 4 },
+                    { "id": "trophy-gold", "src": 3, "x": 8, "y": 0, "w": 4, "h": 4 },
                     { "id": "lamp-none", "src": 3, "x": 0, "y": 0, "w": 4, "h": 4 },
                     { "id": "lamp-failed", "src": 3, "x": 4, "y": 0, "w": 4, "h": 4 },
                     { "id": "lamp-assist", "src": 3, "x": 8, "y": 0, "w": 4, "h": 4 },
@@ -6775,6 +6937,7 @@ mod tests {
                 "imageset": [{ "id": "bar", "images": ["bar-song", "bar-folder"] }],
                 "text": [{ "id": "bartext", "font": "main", "size": 10 }],
                 "value": [{ "id": "level", "src": 2, "x": 0, "y": 0, "w": 100, "h": 10, "divx": 10, "digit": 2, "ref": 96 }],
+                "graph": [{ "id": "graph-lamp", "src": 4, "x": 0, "y": 0, "w": 40, "h": 4, "angle": 0, "type": -1 }],
                 "songlist": {
                     "id": "songlist",
                     "center": 1,
@@ -6790,6 +6953,12 @@ mod tests {
                     ],
                     "text": [{ "id": "bartext", "dst": [{ "x": 5, "y": 2, "w": 20, "h": 8 }] }],
                     "level": [{ "id": "level", "dst": [{ "x": 30, "y": 2, "w": 5, "h": 8 }] }],
+                    "trophy": [
+                        { "id": "trophy-bronze", "dst": [{ "x": 35, "y": 1, "w": 4, "h": 4 }] },
+                        { "id": "trophy-silver", "dst": [{ "x": 35, "y": 1, "w": 4, "h": 4 }] },
+                        { "id": "trophy-gold", "dst": [{ "x": 35, "y": 1, "w": 4, "h": 4 }] }
+                    ],
+                    "graph": { "id": "graph-lamp", "dst": [{ "x": 5, "y": 1, "w": 20, "h": 2 }] },
                     "playerlamp": [
                         { "id": "lamp-none", "dst": [{ "x": 1, "y": 1, "w": 4, "h": 4 }] },
                         { "id": "lamp-failed", "dst": [{ "x": 1, "y": 1, "w": 4, "h": 4 }] },
@@ -6807,6 +6976,7 @@ mod tests {
         let mut sources = mock_source("1", 100.0, 100.0);
         sources.extend(mock_source("2", 100.0, 100.0));
         sources.extend(mock_source("3", 24.0, 4.0));
+        sources.extend(mock_source("4", 40.0, 4.0));
         let snapshot = SelectSnapshot {
             selected_index: 2,
             rows: vec![
@@ -6822,6 +6992,8 @@ mod tests {
                     title: "Song".to_string(),
                     play_level: "12".to_string(),
                     clear_type: "Normal".to_string(),
+                    total_notes: 100,
+                    ex_score: Some(180),
                     ..SelectRowSnapshot::default()
                 },
             ],
@@ -6846,6 +7018,22 @@ mod tests {
                 && approx_eq(*width, 0.04)
                 && approx_eq(*height, 0.04)
                 && approx_eq(*u, 20.0 / 24.0))));
+        assert!(items.iter().any(|item| matches!(item, SkinRenderItem::Image {
+                texture: SkinTextureId(9999),
+                rect: Rect { x, y, .. },
+                uv: TextureRegion { x: u, .. },
+                ..
+            } if approx_eq(*x, 0.47)
+                && approx_eq(*y, 0.45)
+                && approx_eq(*u, 8.0 / 24.0))));
+        assert!(items.iter().any(|item| matches!(item, SkinRenderItem::Image {
+                texture: SkinTextureId(9999),
+                rect: Rect { x, width, .. },
+                uv: TextureRegion { width: u_width, .. },
+                ..
+            } if approx_eq(*x, 0.17)
+                && approx_eq(*width, 0.1)
+                && approx_eq(*u_width, 0.5))));
     }
 
     #[test]
@@ -7056,11 +7244,15 @@ mod tests {
                 "slider": [
                     { "id": "progress", "src": 1, "x": 10, "y": 20, "w": 5, "h": 6, "angle": 2, "range": 40, "type": 6 },
                     { "id": "lane-cover", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10, "angle": 2, "range": 20, "type": 4 },
+                    { "id": "song-scroll", "src": 1, "x": 20, "y": 20, "w": 5, "h": 6, "angle": 2, "range": 40, "type": 1 },
+                    { "id": "master", "src": 1, "x": 30, "y": 20, "w": 5, "h": 6, "angle": 1, "range": 40, "type": 17 },
                     { "id": "unknown", "src": 1, "x": 10, "y": 20, "w": 5, "h": 6, "angle": 0, "range": 40, "type": 999 }
                 ],
                 "destination": [
                     { "id": "progress", "blend": 2, "dst": [{ "x": 30, "y": 80, "w": 5, "h": 6 }] },
                     { "id": "lane-cover", "dst": [{ "x": 10, "y": 50, "w": 10, "h": 10 }] },
+                    { "id": "song-scroll", "dst": [{ "x": 30, "y": 80, "w": 5, "h": 6 }] },
+                    { "id": "master", "dst": [{ "x": 30, "y": 80, "w": 5, "h": 6 }] },
                     { "id": "unknown", "dst": [{ "x": 30, "y": 80, "w": 5, "h": 6 }] }
                 ]
             }
@@ -7078,10 +7270,15 @@ mod tests {
 
         let items = document.static_image_render_items(
             &sources,
-            SkinDrawState { play_progress: 0.25, ..SkinDrawState::default() },
+            SkinDrawState {
+                play_progress: 0.25,
+                select_scroll_progress: 0.5,
+                select_master_volume: 0.75,
+                ..SkinDrawState::default()
+            },
         );
 
-        assert_eq!(items.len(), 1);
+        assert_eq!(items.len(), 3);
         assert!(matches!(items[0], SkinRenderItem::Image {
                 rect: Rect { x, y, width, height },
                 uv: TextureRegion { x: u, y: v, width: uw, height: uh },
@@ -7096,18 +7293,28 @@ mod tests {
                 && approx_eq(uw, 0.05)
                 && approx_eq(uh, 0.06)
                 && blend == BlendMode::Add));
+        assert!(matches!(
+            items[1],
+            SkinRenderItem::Image { rect: Rect { x, y, .. }, .. }
+                if approx_eq(x, 0.3) && approx_eq(y, 0.34)
+        ));
+        assert!(matches!(
+            items[2],
+            SkinRenderItem::Image { rect: Rect { x, y, .. }, .. }
+                if approx_eq(x, 0.0) && approx_eq(y, 0.14)
+        ));
 
         let no_lane_cover = document.static_image_render_items(
             &sources,
             SkinDrawState { lane_cover: 0.0, ..SkinDrawState::default() },
         );
-        assert_eq!(no_lane_cover.len(), 1);
+        assert_eq!(no_lane_cover.len(), 3);
 
         let lane_cover = document.static_image_render_items(
             &sources,
             SkinDrawState { lane_cover: 0.5, ..SkinDrawState::default() },
         );
-        assert_eq!(lane_cover.len(), 2);
+        assert_eq!(lane_cover.len(), 4);
         assert!(matches!(
             lane_cover[1],
             SkinRenderItem::Image { rect: Rect { x, y, .. }, .. }
@@ -7412,6 +7619,9 @@ mod tests {
             select_min_bpm: 120.0,
             select_max_bpm: 180.0,
             select_length_ms: 183_000,
+            select_master_volume: 0.57,
+            select_bgm_volume: 0.58,
+            select_key_volume: 0.59,
             ex_score: 1234,
             ..SkinDrawState::default()
         };
@@ -7428,6 +7638,9 @@ mod tests {
         assert_eq!(skin_state_number(71, state), Some(1234));
         assert_eq!(skin_state_number(1163, state), Some(3));
         assert_eq!(skin_state_number(1164, state), Some(3));
+        assert_eq!(skin_state_number(57, state), Some(57));
+        assert_eq!(skin_state_number(58, state), Some(58));
+        assert_eq!(skin_state_number(59, state), Some(59));
     }
 
     #[test]
