@@ -232,7 +232,7 @@ database:
 
 - `.luaskin` / `.lua` の load と `return skin` table の decode
 - `skin_config.option`: `property.def` を優先し、なければ先頭 item を既定値にします。
-- `skin_config.get_path()`: `filepath.def` を優先し、なければ wildcard の最初の実在候補を返します。
+- `skin_config.get_path()`: profile のスキン設定で選んだファイル (`skin.*_files` の filepath 定義名 → 相対パス) を最優先で返します。選択が無い / 該当ファイルが存在しない場合は wildcard の最初の実在候補へフォールバックします (Lua 側は現状 `filepath.def` は参照しません)。JSON skin 側の `source` / `font` ワイルドカード解決は同じ優先で、フォールバック順は ユーザ選択 → `filepath.def` → 先頭候補 です。
 - sandbox: `os` / `io` / `debug` / `package.loadlib` を無効化します。
 - `require` / `dofile` / `loadfile`: skin root 配下だけ許可します。
 - Lua hook による命令数上限、table 深さ・配列長・総 entry 数の上限を持ちます。

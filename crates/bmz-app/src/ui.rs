@@ -499,8 +499,12 @@ fn skin_root_path(skin_path: &str) -> Option<PathBuf> {
 
 /// `pattern` (スキンルート相対、末尾要素にワイルドカード `*` を 1 個まで) に
 /// マッチするファイルの相対パス一覧を返す。
+///
+/// beatoraja の `path|filter|` 形式の `|...|` 接尾辞 (lanecover などの
+/// アセット用途タグ) は対象ファイル名には含まれないので、列挙前に取り除く。
 fn glob_candidates(root: &Path, pattern: &str) -> Vec<String> {
     let pattern = pattern.replace('\\', "/");
+    let pattern = pattern.split_once('|').map_or(pattern.as_str(), |(path, _)| path).to_string();
     let (dir_part, name_part) = match pattern.rfind('/') {
         Some(index) => (&pattern[..=index], &pattern[index + 1..]),
         None => ("", pattern.as_str()),
@@ -532,5 +536,52 @@ fn property_default(prop: &SkinPropertyDef) -> String {
         prop.item.first().map(|item| item.name.clone()).unwrap_or_default()
     } else {
         prop.def.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static TEST_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn unique_test_dir(name: &str) -> PathBuf {
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let counter = TEST_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!("{name}-{nanos}-{counter}"))
+    }
+
+    #[test]
+    fn glob_candidates_lists_files_matching_simple_pattern() {
+        let root = unique_test_dir("bmz-ui-glob");
+        fs::create_dir_all(root.join("parts")).unwrap();
+        fs::write(root.join("parts/a.png"), []).unwrap();
+        fs::write(root.join("parts/b.png"), []).unwrap();
+        fs::write(root.join("parts/c.txt"), []).unwrap();
+
+        let candidates = glob_candidates(&root, "parts/*.png");
+
+        assert_eq!(candidates, vec!["parts/a.png".to_string(), "parts/b.png".to_string()]);
+    }
+
+    #[test]
+    fn glob_candidates_strips_beatoraja_filter_suffix() {
+        let root = unique_test_dir("bmz-ui-glob");
+        fs::create_dir_all(root.join("parts/lanecover_lift")).unwrap();
+        fs::write(root.join("parts/lanecover_lift/default.png"), []).unwrap();
+        fs::write(root.join("parts/lanecover_lift/TYPE-M.png"), []).unwrap();
+
+        let candidates = glob_candidates(&root, "parts/lanecover_lift/*.png|lanecover|");
+
+        assert_eq!(
+            candidates,
+            vec![
+                "parts/lanecover_lift/TYPE-M.png".to_string(),
+                "parts/lanecover_lift/default.png".to_string(),
+            ]
+        );
     }
 }
