@@ -904,6 +904,10 @@ pub struct SkinDrawState {
     /// リザルト画面でクリアしたか (op 90=CLEAR, op 91=FAIL)。
     /// Play 中は None、Result 中は Some(true)=Fail / Some(false)=Clear。
     pub result_failed: Option<bool>,
+    /// シーン終了フェードアウトのタイマー経過 ms (TIMER_FADEOUT=2)。
+    /// None ならフェードアウト中でない。`timer: 2` の destination はこの値が
+    /// Some のときだけ描画され、リザルト画面終了時のアニメーションを駆動する。
+    pub fadeout_ms: Option<i32>,
 }
 
 impl Default for SkinDrawState {
@@ -974,6 +978,7 @@ impl Default for SkinDrawState {
             target_misscount: None,
             target_clear_index: None,
             result_failed: None,
+            fadeout_ms: None,
         }
     }
 }
@@ -3858,6 +3863,7 @@ fn skin_slider_progress(slider_type: i32, state: SkinDrawState) -> Option<f32> {
 fn skin_timer_elapsed_ms(timer: Option<i32>, state: SkinDrawState) -> Option<i32> {
     match timer {
         None => Some(state.elapsed_ms),
+        Some(2) => state.fadeout_ms,
         Some(40 | 41) => Some(state.elapsed_ms),
         Some(11) => Some(state.select_bar_elapsed_ms),
         Some(21..=23) => Some(state.select_option_panel_elapsed_ms),
@@ -4289,10 +4295,9 @@ fn resolve_destination_frame(
             previous = Some(frame);
             continue;
         }
-        return Some(match previous {
-            Some(previous) => interpolate_skin_frame(previous, frame, elapsed_ms, acc),
-            None => frame,
-        });
+        // previous=None は最初のキーフレーム時刻より前 → destination はまだ表示開始
+        // していない。beatoraja 同様、開始時刻前のオブジェクトは描画しない。
+        return previous.map(|previous| interpolate_skin_frame(previous, frame, elapsed_ms, acc));
     }
     previous.or_else(|| animations.first().map(|_| frame))
 }
@@ -7162,6 +7167,55 @@ mod tests {
     }
 
     #[test]
+    fn skin_document_resolves_fadeout_timer_destinations() {
+        // timer=2 (TIMER_FADEOUT) はリザルト画面終了アニメーション専用。
+        // fadeout_ms=None なら非アクティブで描画されず、Some なら経過 ms で
+        // keyframe アニメーションが進行する。
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 7,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "system.png" }],
+                "image": [{ "id": "curtain", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10 }],
+                "destination": [
+                    { "id": "curtain", "timer": 2, "dst": [
+                        { "time": 0, "x": 0, "y": 0, "w": 100, "h": 0 },
+                        { "time": 200, "x": 0, "y": 0, "w": 100, "h": 100 }
+                    ] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "1".to_string(),
+            SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(7),
+                source_size: SkinImageSize { width: 100.0, height: 100.0 },
+            },
+        )]);
+
+        let inactive = document.static_image_render_items(
+            &sources,
+            SkinDrawState { fadeout_ms: None, ..SkinDrawState::default() },
+        );
+        let mid = document.static_image_render_items(
+            &sources,
+            SkinDrawState { fadeout_ms: Some(100), ..SkinDrawState::default() },
+        );
+
+        assert!(inactive.is_empty(), "fadeout timer is inactive when fadeout_ms is None");
+        assert_eq!(mid.len(), 1);
+        assert!(matches!(mid[0], SkinRenderItem::Image {
+                rect: Rect { height, .. },
+                ..
+            } if approx_eq(height, 0.5)));
+    }
+
+    #[test]
     fn skin_document_resolves_hidden_cover_destinations() {
         let document: SkinDocument = serde_json::from_str(
             r#"
@@ -7740,8 +7794,8 @@ mod tests {
 
     #[test]
     fn dst_if_value_uses_default_when_option_disabled() {
-        // No property → no enabled options → conditional frame skipped, only end frame {time:500}
-        // With elapsed=0 the element renders at the default position (0,0)
+        // No property → no enabled options → conditional frame skipped, only end frame {time:500}.
+        // 最初のキーフレーム時刻 (500) より前は描画されず、500ms 以降に既定位置 (0,0) で描画される。
         let document: SkinDocument = serde_json::from_str(
             r#"
             {
@@ -7760,10 +7814,19 @@ mod tests {
         .unwrap();
 
         let sources = mock_source("src", 10.0, 10.0);
-        let state = SkinDrawState::default();
-        let items = document.static_image_render_items(&sources, state);
 
-        // Conditional frame skipped → position defaults to (0,0); {time:500} still provides a frame
+        // elapsed=0: 最初のキーフレーム時刻 (500) より前なので描画しない。
+        let before = document.static_image_render_items(
+            &sources,
+            SkinDrawState { elapsed_ms: 0, ..SkinDrawState::default() },
+        );
+        assert!(before.is_empty(), "destination is not drawn before its first keyframe time");
+
+        // elapsed=500: 条件フレームが skip され、{time:500} の既定位置 (0,0) で描画される。
+        let items = document.static_image_render_items(
+            &sources,
+            SkinDrawState { elapsed_ms: 500, ..SkinDrawState::default() },
+        );
         assert_eq!(items.len(), 1);
         let SkinRenderItem::Image { rect, .. } = &items[0] else { panic!() };
         assert!(approx_eq(rect.x, 0.0), "expected default x=0, got {}", rect.x);

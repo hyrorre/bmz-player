@@ -199,6 +199,12 @@ impl Renderer {
         self.result_skin_context = skin_context;
     }
 
+    /// リザルトスキンが宣言する終了フェードアウト時間 (ms)。
+    /// ドキュメントスキンが無い場合や未指定の場合は 0 を返す。
+    pub fn result_skin_fadeout_ms(&self) -> i32 {
+        self.result_skin_context.document().map(|document| document.fadeout).unwrap_or(0).max(0)
+    }
+
     fn skin_context_for_scene(&self, scene: &AppSceneSnapshot) -> &SkinContext {
         match scene {
             AppSceneSnapshot::Select(_) => &self.select_skin_context,
@@ -1809,6 +1815,26 @@ mod tests {
 
         assert_eq!(renderer.last_scene(), Some(&scene));
         assert!(renderer.last_plan().is_some());
+    }
+
+    #[test]
+    fn result_skin_fadeout_ms_reads_document_or_defaults_to_zero() {
+        use crate::skin::{SkinContext, SkinDocument, SkinManifest};
+
+        let mut renderer = Renderer::default();
+        // ドキュメントスキン未設定なら 0 (フェードアウトなし)。
+        assert_eq!(renderer.result_skin_fadeout_ms(), 0);
+
+        let document: SkinDocument =
+            serde_json::from_str(r#"{ "type": 7, "w": 100, "h": 100, "fadeout": 300 }"#).unwrap();
+        let manifest: SkinManifest = toml::from_str("").unwrap();
+        renderer.set_result_skin_context(SkinContext::from_manifest_and_document(
+            manifest,
+            document,
+            [],
+        ));
+
+        assert_eq!(renderer.result_skin_fadeout_ms(), 300);
     }
 
     #[test]

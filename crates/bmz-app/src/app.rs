@@ -146,6 +146,25 @@ struct WinitApp {
     select_exit_hold_started_at: Option<Instant>,
     /// プレイ中の Start キー直近の押下時刻。連続押し判定で使用。
     last_play_start_press_at: Option<Instant>,
+    /// リザルト画面終了アニメーションの進行状態。
+    /// Some のあいだは終了フェードアウト中で、入力は受け付けない。
+    result_exit: Option<ResultExit>,
+}
+
+/// リザルト画面終了フェードアウトの進行状態。
+/// フェードアウト時間が経過したら `action` を実行して画面を切り替える。
+struct ResultExit {
+    started_at: Instant,
+    action: ResultExitAction,
+}
+
+/// リザルト画面を抜けたあとに実行する遷移。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResultExitAction {
+    /// 選曲画面へ戻る。
+    Leave,
+    /// 直前と同じ譜面をもう一度プレイする。
+    Retry,
 }
 
 const SELECT_EXIT_HOLD_DURATION: Duration = Duration::from_millis(1_200);
@@ -274,6 +293,7 @@ impl WinitApp {
             pending_skin_installs: Vec::new(),
             select_exit_hold_started_at: None,
             last_play_start_press_at: None,
+            result_exit: None,
         };
         if let Some(chart_id) = boot_sample_chart_id {
             tracing::info!(
@@ -393,6 +413,11 @@ impl WinitApp {
                 elapsed_time: bmz_core::time::TimeUs(
                     self.result_scene_started_at.elapsed().as_micros().min(i64::MAX as u128) as i64,
                 ),
+                fadeout_elapsed: self.result_exit.as_ref().map(|exit| {
+                    bmz_core::time::TimeUs(
+                        exit.started_at.elapsed().as_micros().min(i64::MAX as u128) as i64,
+                    )
+                }),
                 title: summary.title.clone(),
                 subtitle: summary.subtitle.clone(),
                 artist: summary.artist.clone(),
@@ -561,10 +586,13 @@ impl WinitApp {
         }
 
         if self.finished_play.is_some() {
-            if let Some(action) = result_action(event.physical_key, event.state, event.repeat) {
+            // 終了アニメーション中 (result_exit=Some) は追加入力を受け付けない。
+            if self.result_exit.is_none()
+                && let Some(action) = result_action(event.physical_key, event.state, event.repeat)
+            {
                 match action {
-                    ResultAction::Retry => self.retry_last_chart(),
-                    ResultAction::Leave => self.leave_result(),
+                    ResultAction::Retry => self.begin_result_exit(ResultExitAction::Retry),
+                    ResultAction::Leave => self.begin_result_exit(ResultExitAction::Leave),
                 }
             }
             return;
@@ -682,10 +710,13 @@ impl WinitApp {
 
         // リザルト画面
         if self.finished_play.is_some() {
-            match button {
-                "Button1" | "Start" => self.retry_last_chart(),
-                "Button2" | "Select" => self.leave_result(),
-                _ => {}
+            // 終了アニメーション中 (result_exit=Some) は追加入力を受け付けない。
+            if self.result_exit.is_none() {
+                match button {
+                    "Button1" | "Start" => self.begin_result_exit(ResultExitAction::Retry),
+                    "Button2" | "Select" => self.begin_result_exit(ResultExitAction::Leave),
+                    _ => {}
+                }
             }
             return;
         }
@@ -881,8 +912,43 @@ impl WinitApp {
         self.start_chart(chart_id);
     }
 
+    /// リザルト画面の終了アニメーションを開始する。
+    /// スキンが宣言するフェードアウト時間が経過したら `advance_result_exit` が
+    /// 実際の遷移 (選曲へ戻る / リトライ) を実行する。
+    fn begin_result_exit(&mut self, action: ResultExitAction) {
+        if self.result_exit.is_some() || self.finished_play.is_none() {
+            return;
+        }
+        tracing::info!(?action, "result screen exit animation started");
+        self.result_exit = Some(ResultExit { started_at: Instant::now(), action });
+    }
+
+    /// 終了フェードアウトの経過を監視し、スキンのフェードアウト時間を過ぎたら
+    /// 保留していた遷移を実行する。毎フレーム描画前に呼ぶ。
+    fn advance_result_exit(&mut self) {
+        let Some(exit) = &self.result_exit else {
+            return;
+        };
+        // 何らかの理由でリザルトを抜けていたら終了状態を破棄する。
+        if self.finished_play.is_none() {
+            self.result_exit = None;
+            return;
+        }
+        let fadeout = Duration::from_millis(self.renderer.result_skin_fadeout_ms().max(0) as u64);
+        if exit.started_at.elapsed() < fadeout {
+            return;
+        }
+        let action = exit.action;
+        self.result_exit = None;
+        match action {
+            ResultExitAction::Leave => self.leave_result(),
+            ResultExitAction::Retry => self.retry_last_chart(),
+        }
+    }
+
     fn leave_result(&mut self) {
         self.finished_play = None;
+        self.result_exit = None;
         // リザルト画面を抜けたら、まだ鳴っていても余韻再生を止める。
         self.draining_audio = None;
         self.last_play_snapshot = None;
@@ -1499,6 +1565,7 @@ impl ApplicationHandler for WinitApp {
             WindowEvent::RedrawRequested => {
                 self.poll_gamepad_events();
                 self.drain_pending_skins();
+                self.advance_result_exit();
                 self.render_current_scene();
                 self.advance_active_play();
                 self.advance_draining_audio();

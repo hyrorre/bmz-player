@@ -783,6 +783,9 @@ fn build_result_skin_draw_state(
         target_clear_index: snapshot.target_clear_type.map(|c| c as i64),
         select_clear_index: snapshot.clear_type as i64,
         result_failed: Some(result_failed),
+        fadeout_ms: snapshot
+            .fadeout_elapsed
+            .map(|elapsed| (elapsed.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32),
         ..crate::skin::SkinDrawState::default()
     }
 }
@@ -1686,6 +1689,7 @@ mod tests {
             target_misscount: None,
             target_clear_type: None,
             elapsed_time: TimeUs(0),
+            fadeout_elapsed: None,
             title: String::new(),
             subtitle: String::new(),
             artist: String::new(),

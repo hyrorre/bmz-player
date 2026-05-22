@@ -74,6 +74,10 @@ pub struct ResultSnapshot {
     /// リザルト画面を開いてからの経過時間。
     /// destination の timer/loop/keyframe アニメーション、image cycle に使われる。
     pub elapsed_time: TimeUs,
+    /// リザルト画面終了フェードアウトの経過時間 (TIMER_FADEOUT=2)。
+    /// None なら終了処理に入っていない。Some のあいだは `timer: 2` の
+    /// destination が描画され、終了アニメーションが進行する。
+    pub fadeout_elapsed: Option<TimeUs>,
     /// 曲名 (text ref 10/12 で表示)。
     pub title: String,
     pub subtitle: String,
@@ -116,6 +120,7 @@ mod tests {
             target_misscount: None,
             target_clear_type: None,
             elapsed_time: TimeUs(0),
+            fadeout_elapsed: None,
             title: String::new(),
             subtitle: String::new(),
             artist: String::new(),
@@ -148,6 +153,7 @@ mod tests {
             target_misscount: None,
             target_clear_type: None,
             elapsed_time: TimeUs(0),
+            fadeout_elapsed: None,
             title: String::new(),
             subtitle: String::new(),
             artist: String::new(),

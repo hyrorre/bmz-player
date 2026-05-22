@@ -140,6 +140,7 @@ pub fn sample_result_scene() -> AppSceneSnapshot {
         target_misscount: Some(0),
         target_clear_type: Some(bmz_core::clear::ClearType::FullCombo),
         elapsed_time: TimeUs(0),
+        fadeout_elapsed: None,
         title: "BMZ Sample Playable".to_string(),
         subtitle: String::new(),
         artist: "bmz".to_string(),
