@@ -342,11 +342,27 @@ fn push_select_title_text(
             &display_label(&row.artist, 30),
             BitmapTextStyle {
                 x: 0.1,
-                y: row_y + 0.046,
-                cell: 0.0035,
+                y: row_y + 0.041,
+                cell: 0.0032,
                 color: Color::rgb(0.58, 0.71, 0.73),
             },
         );
+    }
+    if selected {
+        let metadata =
+            difficulty_level_label(&row.difficulty_name, &row.play_level, &row.table_level);
+        if !metadata.is_empty() {
+            text.push_text(
+                commands,
+                &metadata,
+                BitmapTextStyle {
+                    x: 0.1,
+                    y: row_y + 0.053,
+                    cell: 0.0032,
+                    color: Color::rgb(0.7, 0.78, 0.7),
+                },
+            );
+        }
     }
 }
 
@@ -425,6 +441,33 @@ fn row_status_label(row: Option<&SelectRowSnapshot>) -> String {
         format!("LV {}", display_label(&row.play_level, 4))
     } else {
         "READY".to_string()
+    }
+}
+
+fn difficulty_level_label(difficulty_name: &str, play_level: &str, table_level: &str) -> String {
+    let difficulty = display_label(difficulty_name, 12);
+    let level_source = if !table_level.is_empty() { table_level } else { play_level };
+    let level = display_label(level_source, 8);
+    match (difficulty.is_empty(), level.is_empty()) {
+        (true, true) => String::new(),
+        (false, true) => format!("DIFFICULTY {difficulty}"),
+        (true, false) => format!("LEVEL {level}"),
+        (false, false) => format!("DIFFICULTY {difficulty}  LEVEL {level}"),
+    }
+}
+
+fn skin_level_number(label: &str) -> i64 {
+    label.chars().filter(|ch| ch.is_ascii_digit()).collect::<String>().parse().unwrap_or(0)
+}
+
+fn skin_difficulty_code(label: &str) -> i64 {
+    match label.trim().to_ascii_uppercase().as_str() {
+        "1" | "BEGINNER" => 1,
+        "2" | "NORMAL" => 2,
+        "3" | "HYPER" => 3,
+        "4" | "ANOTHER" => 4,
+        "5" | "INSANE" => 5,
+        _ => 0,
     }
 }
 
@@ -526,6 +569,8 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
         lane_cover: snapshot.lane_cover,
         lane_cover_changing: snapshot.lane_cover_changing,
         hidden_cover: snapshot.hidden_cover,
+        play_level: skin_level_number(&snapshot.play_level),
+        difficulty: skin_difficulty_code(&snapshot.difficulty_name),
         now_bpm: snapshot.now_bpm,
         min_bpm: snapshot.min_bpm,
         max_bpm: snapshot.max_bpm,
@@ -556,6 +601,8 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
         artist: &snapshot.artist,
         subartist: &snapshot.subartist,
         genre: &snapshot.genre,
+        difficulty_name: &snapshot.difficulty_name,
+        play_level: &snapshot.play_level,
         ..SkinTextState::default()
     };
     // `{"id":"notes"}` マーカーでノーツ背面/前面に分割。
@@ -733,6 +780,8 @@ fn plan_result(snapshot: &crate::scene::ResultSnapshot, skin: &SkinContext) -> D
             artist: snapshot.artist.as_str(),
             subartist: snapshot.subartist.as_str(),
             genre: snapshot.genre.as_str(),
+            difficulty_name: snapshot.difficulty_name.as_str(),
+            play_level: snapshot.play_level.as_str(),
             ..SkinTextState::default()
         };
         let items = skin.static_document_items_for_state_and_text(state, text);
@@ -743,17 +792,19 @@ fn plan_result(snapshot: &crate::scene::ResultSnapshot, skin: &SkinContext) -> D
         }
     }
 
-    plan_result_fallback(
-        snapshot.clear_type.as_str(),
-        snapshot.ex_score,
-        snapshot.ex_score_rate,
-        snapshot.max_combo,
-        snapshot.gauge_value,
-        snapshot.total_notes,
-        &snapshot.judge_counts,
-        snapshot.score_history_id,
-        snapshot.replay_saved,
-    )
+    plan_result_fallback(ResultFallbackSummary {
+        clear_type: snapshot.clear_type.as_str(),
+        ex_score: snapshot.ex_score,
+        ex_score_rate: snapshot.ex_score_rate,
+        max_combo: snapshot.max_combo,
+        gauge_value: snapshot.gauge_value,
+        total_notes: snapshot.total_notes,
+        judge_counts: &snapshot.judge_counts,
+        score_history_id: snapshot.score_history_id,
+        replay_saved: snapshot.replay_saved,
+        difficulty_name: &snapshot.difficulty_name,
+        play_level: &snapshot.play_level,
+    })
 }
 
 fn build_result_skin_draw_state(
@@ -783,21 +834,43 @@ fn build_result_skin_draw_state(
         target_clear_index: snapshot.target_clear_type.map(|c| c as i64),
         select_clear_index: snapshot.clear_type as i64,
         result_failed: Some(result_failed),
+        play_level: skin_level_number(&snapshot.play_level),
+        difficulty: skin_difficulty_code(&snapshot.difficulty_name),
+        fadeout_ms: snapshot
+            .fadeout_elapsed
+            .map(|elapsed| (elapsed.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32),
         ..crate::skin::SkinDrawState::default()
     }
 }
 
-fn plan_result_fallback(
-    clear_type: &str,
+struct ResultFallbackSummary<'a> {
+    clear_type: &'a str,
     ex_score: u32,
     ex_score_rate: f32,
     max_combo: u32,
     gauge_value: f32,
     total_notes: u32,
-    judge_counts: &DisplayJudgeCounts,
+    judge_counts: &'a DisplayJudgeCounts,
     score_history_id: i64,
     replay_saved: bool,
-) -> DrawPlan {
+    difficulty_name: &'a str,
+    play_level: &'a str,
+}
+
+fn plan_result_fallback(summary: ResultFallbackSummary<'_>) -> DrawPlan {
+    let ResultFallbackSummary {
+        clear_type,
+        ex_score,
+        ex_score_rate,
+        max_combo,
+        gauge_value,
+        total_notes,
+        judge_counts,
+        score_history_id,
+        replay_saved,
+        difficulty_name,
+        play_level,
+    } = summary;
     let mut commands = Vec::new();
     let text = TextRenderer;
     commands.push(DrawCommand::Rect {
@@ -814,6 +887,19 @@ fn plan_result_fallback(
         &display_label(clear_type, 18),
         BitmapTextStyle { x: 0.55, y: 0.22, cell: 0.008, color: Color::rgb(0.84, 0.93, 0.9) },
     );
+    let metadata = difficulty_level_label(difficulty_name, play_level, "");
+    if !metadata.is_empty() {
+        text.push_text(
+            &mut commands,
+            &metadata,
+            BitmapTextStyle {
+                x: 0.14,
+                y: 0.292,
+                cell: 0.0055,
+                color: Color::rgb(0.72, 0.82, 0.76),
+            },
+        );
+    }
     commands.push(DrawCommand::Rect {
         rect: Rect { x: 0.14, y: 0.42, width: 0.72, height: 0.045 },
         color: Color::rgb(0.065, 0.06, 0.058),
@@ -1055,6 +1141,19 @@ fn end_of_note(snapshot: &RenderSnapshot) -> bool {
 fn push_play_text(text: &TextRenderer, commands: &mut Vec<DrawCommand>, snapshot: &RenderSnapshot) {
     push_play_status_text(text, commands, snapshot);
     push_judge_count_text(text, commands, snapshot);
+    let metadata = difficulty_level_label(&snapshot.difficulty_name, &snapshot.play_level, "");
+    if !metadata.is_empty() {
+        text.push_text(
+            commands,
+            &metadata,
+            BitmapTextStyle {
+                x: 0.055,
+                y: 0.155,
+                cell: 0.0045,
+                color: Color::rgb(0.62, 0.76, 0.72),
+            },
+        );
+    }
     text.push_text(
         commands,
         &format!("G{}", snapshot.gauge.round() as u32),
@@ -1686,11 +1785,14 @@ mod tests {
             target_misscount: None,
             target_clear_type: None,
             elapsed_time: TimeUs(0),
+            fadeout_elapsed: None,
             title: String::new(),
             subtitle: String::new(),
             artist: String::new(),
             subartist: String::new(),
             genre: String::new(),
+            difficulty_name: String::new(),
+            play_level: String::new(),
         };
 
         let plan = DrawPlan::from_scene_with_skin(&AppSceneSnapshot::Result(snapshot), &skin);
@@ -1843,6 +1945,10 @@ mod tests {
             ))
             .count();
         assert_eq!(row_count, 7);
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Text { text, .. } if text.contains("DIFFICULTY NORMAL") && text.contains("LEVEL 0")
+        )));
     }
 
     #[test]
@@ -1862,17 +1968,20 @@ mod tests {
 
     #[test]
     fn result_plan_clamps_ex_score_bar() {
-        let plan = plan_result_fallback(
-            "Normal",
-            0,
-            1.5,
-            0,
-            0.0,
-            100,
-            &DisplayJudgeCounts::default(),
-            1,
-            true,
-        );
+        let judge_counts = DisplayJudgeCounts::default();
+        let plan = plan_result_fallback(ResultFallbackSummary {
+            clear_type: "Normal",
+            ex_score: 0,
+            ex_score_rate: 1.5,
+            max_combo: 0,
+            gauge_value: 0.0,
+            total_notes: 100,
+            judge_counts: &judge_counts,
+            score_history_id: 1,
+            replay_saved: true,
+            difficulty_name: "",
+            play_level: "",
+        });
 
         assert!(plan.commands.iter().any(|command| matches!(
             command,
@@ -1882,21 +1991,28 @@ mod tests {
 
     #[test]
     fn result_plan_includes_extended_summary_text() {
-        let plan = plan_result_fallback(
-            "Normal",
-            1500,
-            0.75,
-            500,
-            82.0,
-            1000,
-            &DisplayJudgeCounts::default(),
-            42,
-            true,
-        );
+        let judge_counts = DisplayJudgeCounts::default();
+        let plan = plan_result_fallback(ResultFallbackSummary {
+            clear_type: "Normal",
+            ex_score: 1500,
+            ex_score_rate: 0.75,
+            max_combo: 500,
+            gauge_value: 82.0,
+            total_notes: 1000,
+            judge_counts: &judge_counts,
+            score_history_id: 42,
+            replay_saved: true,
+            difficulty_name: "HYPER",
+            play_level: "10",
+        });
 
         assert!(plan.commands.iter().any(|command| matches!(
             command,
             DrawCommand::Text { style, .. } if style.color == Color::rgb(0.72, 0.84, 0.86)
+        )));
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Text { text, .. } if text.contains("DIFFICULTY HYPER") && text.contains("LEVEL 10")
         )));
         assert_eq!(format_percent(0.754), "75%");
     }
@@ -1924,6 +2040,8 @@ mod tests {
             total_notes: 1200,
             past_notes: 900,
             gauge: 82.0,
+            difficulty_name: "ANOTHER".to_string(),
+            play_level: "12".to_string(),
             ..Default::default()
         };
 
@@ -1981,6 +2099,10 @@ mod tests {
             command,
             DrawCommand::Text { text, style, .. }
                 if text == "1234" && style.layer == TextLayer::Skin
+        )));
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Text { text, .. } if text.contains("DIFFICULTY ANOTHER") && text.contains("LEVEL 12")
         )));
     }
 
@@ -2187,6 +2309,7 @@ mod tests {
                 index,
                 title: format!("Title {index}"),
                 artist: format!("Artist {index}"),
+                difficulty_name: "NORMAL".to_string(),
                 play_level: index.to_string(),
                 table_level: String::new(),
                 total_notes: 1000 + index,
@@ -2196,6 +2319,8 @@ mod tests {
                 length_ms: 90_000,
                 clear_type: if index == 0 { "Normal".to_string() } else { String::new() },
                 ex_score: (index == 0).then_some(1234),
+                max_combo: (index == 0).then_some(777),
+                gauge_value: (index == 0).then_some(80.0),
                 replay_slots: [false; 4],
                 is_folder: false,
             })

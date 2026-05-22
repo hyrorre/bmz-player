@@ -119,6 +119,14 @@ pub struct SkinSongListDef {
     pub playerlamp: Vec<DestinationListEntry>,
     #[serde(default)]
     pub rivallamp: Vec<DestinationListEntry>,
+    #[serde(default, deserialize_with = "deserialize_destination_entries")]
+    pub trophy: Vec<DestinationListEntry>,
+    #[serde(default, deserialize_with = "deserialize_destination_entries")]
+    pub graph: Vec<DestinationListEntry>,
+    #[serde(default)]
+    pub judgegraph: Vec<DestinationListEntry>,
+    #[serde(default)]
+    pub bpmgraph: Vec<DestinationListEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -631,6 +639,23 @@ impl<'de> Deserialize<'de> for DestinationListEntry {
     }
 }
 
+fn deserialize_destination_entries<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Vec<DestinationListEntry>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = JsonValue::deserialize(deserializer)?;
+    if value.is_null() {
+        return Ok(Vec::new());
+    }
+    if value.is_array() {
+        serde_json::from_value(value).map_err(serde::de::Error::custom)
+    } else {
+        serde_json::from_value(value).map(|entry| vec![entry]).map_err(serde::de::Error::custom)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkinContext {
     manifest: SkinManifest,
@@ -866,8 +891,18 @@ pub struct SkinDrawState {
     pub judge_timing_offset_ms: i32,
     /// 選曲画面の表示曲数 (NUMBER_SELECT_BAR_COUNT=300 相当)。
     pub select_chart_count: u32,
+    /// 選曲バーのスクロール位置 0.0-1.0。
+    pub select_scroll_progress: f32,
+    /// 選曲画面の master/key/bgm 音量 0.0-1.0。
+    pub select_master_volume: f32,
+    pub select_key_volume: f32,
+    pub select_bgm_volume: f32,
     /// 選択中曲のレベル表記から取り出した数値。
     pub select_play_level: i64,
+    /// 現在の曲のレベル表記から取り出した数値 (NUMBER_PLAYLEVEL=96)。
+    pub play_level: i64,
+    /// 現在の曲の #DIFFICULTY code。0=OTHER, 1=BEGINNER, 2=NORMAL, 3=HYPER, 4=ANOTHER, 5=INSANE。
+    pub difficulty: i64,
     /// 選択中曲のベストEXスコア。
     pub select_ex_score: Option<u32>,
     /// 選択中曲のリプレイスロット有無。
@@ -904,6 +939,10 @@ pub struct SkinDrawState {
     /// リザルト画面でクリアしたか (op 90=CLEAR, op 91=FAIL)。
     /// Play 中は None、Result 中は Some(true)=Fail / Some(false)=Clear。
     pub result_failed: Option<bool>,
+    /// シーン終了フェードアウトのタイマー経過 ms (TIMER_FADEOUT=2)。
+    /// None ならフェードアウト中でない。`timer: 2` の destination はこの値が
+    /// Some のときだけ描画され、リザルト画面終了時のアニメーションを駆動する。
+    pub fadeout_ms: Option<i32>,
 }
 
 impl Default for SkinDrawState {
@@ -956,7 +995,13 @@ impl Default for SkinDrawState {
             target_ex_score: None,
             judge_timing_offset_ms: 0,
             select_chart_count: 0,
+            select_scroll_progress: 0.0,
+            select_master_volume: 1.0,
+            select_key_volume: 1.0,
+            select_bgm_volume: 1.0,
             select_play_level: 0,
+            play_level: 0,
+            difficulty: 0,
             select_ex_score: None,
             select_replay_slots: [false; 4],
             select_replay_index: None,
@@ -974,6 +1019,7 @@ impl Default for SkinDrawState {
             target_misscount: None,
             target_clear_index: None,
             result_failed: None,
+            fadeout_ms: None,
         }
     }
 }
@@ -985,6 +1031,8 @@ pub struct SkinTextState<'a> {
     pub artist: &'a str,
     pub subartist: &'a str,
     pub genre: &'a str,
+    pub difficulty_name: &'a str,
+    pub play_level: &'a str,
     pub current_folder: &'a str,
     pub bar_text: &'a str,
     pub table_level: &'a str,
@@ -1538,6 +1586,12 @@ impl SkinDocument {
             ));
         }
 
+        if let Some(graph) = self.graph.iter().find(|graph| graph.id == destination.id)
+            && let Some(item) = self.graph_render_item(graph, frame, state, sources)
+        {
+            return Some(vec![item]);
+        }
+
         if let Some(text) = self.text.iter().find(|text| text.id == destination.id)
             && let Some(item) = self.text_render_item(text, frame, text_state)
         {
@@ -1569,6 +1623,11 @@ impl SkinDocument {
         text_state: SkinTextState<'_>,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<Vec<SkinRenderItem>> {
+        if !test_skin_ops(&destination.op, enabled_options, state)
+            || !eval_skin_draw_condition(&destination.draw, state)
+        {
+            return None;
+        }
         let elapsed = skin_timer_elapsed_ms(destination.timer, state)?;
         let mut frame = resolve_destination_frame(destination, elapsed, enabled_options)?;
         frame.x += offset.0;
@@ -1603,7 +1662,7 @@ impl SkinDocument {
         }
 
         if let Some(value) = self.value.iter().find(|value| value.id == destination.id) {
-            let number = skin_value_number(value, state)?;
+            let number = skin_value_number_or_songlist_level(value, state)?;
             return Some(self.value_number_render_items(
                 &value.id,
                 number,
@@ -1612,6 +1671,12 @@ impl SkinDocument {
                 sources,
                 false,
             ));
+        }
+
+        if let Some(graph) = self.graph.iter().find(|graph| graph.id == destination.id)
+            && let Some(item) = self.graph_render_item(graph, frame, state, sources)
+        {
+            return Some(vec![item]);
         }
 
         if let Some(text) = self.text.iter().find(|text| text.id == destination.id)
@@ -1672,8 +1737,14 @@ impl SkinDocument {
             select_gauge_index: select_gauge_index(&snapshot.gauge),
             select_bga_index: select_bga_index(&snapshot.bga),
             select_assist_index: select_assist_index(&snapshot.assist),
+            select_scroll_progress: select_scroll_progress(snapshot),
+            select_master_volume: snapshot.master_volume,
+            select_key_volume: snapshot.key_volume,
+            select_bgm_volume: snapshot.bgm_volume,
             select_chart_count: snapshot.chart_count,
             select_play_level: selected_row.map(select_row_level_number).unwrap_or(0),
+            play_level: selected_row.map(select_row_level_number).unwrap_or(0),
+            difficulty: selected_row.map(select_row_difficulty_code).unwrap_or(0),
             select_ex_score: selected_row.and_then(|row| row.ex_score),
             select_replay_slots: selected_row.map(|row| row.replay_slots).unwrap_or([false; 4]),
             select_replay_index: selected_row.and_then(select_row_replay_index),
@@ -1684,6 +1755,8 @@ impl SkinDocument {
             select_min_bpm: selected_row.map(|row| row.min_bpm).unwrap_or(0.0),
             select_max_bpm: selected_row.map(|row| row.max_bpm).unwrap_or(0.0),
             select_length_ms: selected_row.map(|row| row.length_ms).unwrap_or(0),
+            max_combo: selected_row.and_then(|row| row.max_combo).unwrap_or(0),
+            gauge: selected_row.and_then(|row| row.gauge_value).unwrap_or(0.0),
             ex_score: selected_row.and_then(|row| row.ex_score).unwrap_or(0),
             ..SkinDrawState::default()
         };
@@ -1691,6 +1764,10 @@ impl SkinDocument {
             title: selected_row.map(|row| row.title.as_str()).unwrap_or(&snapshot.selected_title),
             artist: selected_row.map(|row| row.artist.as_str()).unwrap_or_default(),
             genre: "",
+            difficulty_name: selected_row
+                .map(|row| row.difficulty_name.as_str())
+                .unwrap_or_default(),
+            play_level: selected_row.map(|row| row.play_level.as_str()).unwrap_or_default(),
             current_folder: &snapshot.current_folder,
             table_level: selected_row.map(|row| row.table_level.as_str()).unwrap_or_default(),
             ..SkinTextState::default()
@@ -1744,12 +1821,17 @@ impl SkinDocument {
         for row in &snapshot.rows {
             let row_state = SkinDrawState {
                 select_play_level: select_row_level_number(row),
+                play_level: select_row_level_number(row),
+                difficulty: select_row_difficulty_code(row),
                 select_ex_score: row.ex_score,
                 select_replay_slots: row.replay_slots,
                 select_replay_index: select_row_replay_index(row),
                 select_clear_index: select_row_clear_index(row) as i64,
+                select_is_folder: row.is_folder,
                 select_total_notes: row.total_notes,
                 select_length_ms: row.length_ms,
+                max_combo: row.max_combo.unwrap_or(0),
+                gauge: row.gauge_value.unwrap_or(0.0),
                 ex_score: row.ex_score.unwrap_or(0),
                 ..state
             };
@@ -1776,27 +1858,67 @@ impl SkinDocument {
             if let Some(item) = self.select_bar_item(row, row_destination, row_frame, sources) {
                 items.push(item);
             }
-            let clear_index = select_row_clear_index(row);
-            let lamp_entries =
-                if songlist.playerlamp.is_empty() { &songlist.lamp } else { &songlist.playerlamp };
-            items.extend(self.select_songlist_child_items_by_index(
-                lamp_entries,
-                clear_index,
-                row_origin,
-                images,
-                enabled_options,
-                row_state,
-                sources,
-            ));
-            items.extend(self.select_songlist_child_items(
-                &songlist.level,
-                row,
-                row_origin,
-                images,
-                enabled_options,
-                row_state,
-                sources,
-            ));
+            if !row.is_folder {
+                let clear_index = select_row_clear_index(row);
+                let lamp_entries = if songlist.playerlamp.is_empty() {
+                    &songlist.lamp
+                } else {
+                    &songlist.playerlamp
+                };
+                items.extend(self.select_songlist_child_items_by_index(
+                    lamp_entries,
+                    clear_index,
+                    row_origin,
+                    images,
+                    enabled_options,
+                    row_state,
+                    sources,
+                ));
+                items.extend(self.select_songlist_level_items(
+                    &songlist.level,
+                    row,
+                    row_origin,
+                    images,
+                    enabled_options,
+                    row_state,
+                    sources,
+                ));
+                if let Some(trophy_index) = select_row_trophy_index(row) {
+                    items.extend(self.select_songlist_child_items_by_index(
+                        &songlist.trophy,
+                        trophy_index,
+                        row_origin,
+                        images,
+                        enabled_options,
+                        row_state,
+                        sources,
+                    ));
+                }
+                items.extend(self.select_songlist_all_child_items(
+                    &songlist.graph,
+                    row_origin,
+                    images,
+                    enabled_options,
+                    row_state,
+                    sources,
+                ));
+                items.extend(self.select_songlist_all_child_items(
+                    &songlist.judgegraph,
+                    row_origin,
+                    images,
+                    enabled_options,
+                    row_state,
+                    sources,
+                ));
+                items.extend(self.select_songlist_all_child_items(
+                    &songlist.bpmgraph,
+                    row_origin,
+                    images,
+                    enabled_options,
+                    row_state,
+                    sources,
+                ));
+            }
             items.extend(self.select_songlist_text_items(
                 row,
                 row_origin,
@@ -1809,7 +1931,33 @@ impl SkinDocument {
         items
     }
 
-    fn select_songlist_child_items(
+    fn select_songlist_all_child_items(
+        &self,
+        entries: &[DestinationListEntry],
+        row_origin: (i32, i32),
+        images: &HashMap<&str, &SkinImageDef>,
+        enabled_options: &[i32],
+        state: SkinDrawState,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Vec<SkinRenderItem> {
+        let mut items = Vec::new();
+        for destination in destination_entries(entries, enabled_options) {
+            if let Some(mut resolved) = self.resolve_offset_destination_items(
+                destination,
+                row_origin,
+                images,
+                enabled_options,
+                state,
+                SkinTextState::default(),
+                sources,
+            ) {
+                items.append(&mut resolved);
+            }
+        }
+        items
+    }
+
+    fn select_songlist_level_items(
         &self,
         entries: &[DestinationListEntry],
         row: &SelectRowSnapshot,
@@ -1819,7 +1967,7 @@ impl SkinDocument {
         state: SkinDrawState,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Vec<SkinRenderItem> {
-        let level_index = select_row_level_number(row).saturating_sub(1).max(0) as usize;
+        let level_index = select_row_difficulty_code(row).clamp(0, i64::MAX) as usize;
         self.select_songlist_child_items_by_index(
             entries,
             level_index,
@@ -1877,7 +2025,15 @@ impl SkinDocument {
             table_level: &row.table_level,
             ..SkinTextState::default()
         };
-        for destination in destination_entries(&songlist.text, enabled_options) {
+        let destinations = destination_entries(&songlist.text, enabled_options);
+        let Some(destination) = destinations
+            .get(select_row_bar_text_index(row))
+            .or_else(|| destinations.first())
+            .copied()
+        else {
+            return items;
+        };
+        {
             if let Some(mut resolved) = self.resolve_offset_destination_items(
                 destination,
                 row_origin,
@@ -1901,7 +2057,7 @@ impl SkinDocument {
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<SkinRenderItem> {
         let imageset = self.imageset.iter().find(|set| set.id == destination.id)?;
-        let image_index = if row.is_folder { 1 } else { 0 };
+        let image_index = select_row_bar_image_index(row);
         let image_id = imageset.images.get(image_index).or_else(|| imageset.images.first())?;
         let image = self.image.iter().find(|image| image.id == *image_id)?;
         let source = sources.get(&image.src)?;
@@ -3073,6 +3229,9 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool 
         271 => state.lane_cover > 0.0,
         272 => state.offset_lift_px != 0,
         273 => state.hidden_cover > 0.0,
+        // OPTION_DIFFICULTY0..5. 0 は UNKNOWN/OTHER、1..5 は BMS #DIFFICULTY。
+        150 => state.difficulty <= 0 || state.difficulty > 5,
+        151..=155 => state.difficulty == i64::from(op - 150),
         // OPTION_RESULT_CLEAR=90, OPTION_RESULT_FAIL=91
         // Result 画面以外 (result_failed == None) では両方 false。
         90 => state.result_failed == Some(false),
@@ -3544,6 +3703,17 @@ fn skin_value_number(value: &SkinValueDef, state: SkinDrawState) -> Option<i64> 
     skin_state_number(value.ref_id, state)
 }
 
+fn skin_value_number_or_songlist_level(value: &SkinValueDef, state: SkinDrawState) -> Option<i64> {
+    if value.ref_id == 0 && value.expr.trim().is_empty() {
+        return Some(if state.play_level != 0 {
+            state.play_level
+        } else {
+            state.select_play_level
+        });
+    }
+    skin_value_number(value, state)
+}
+
 fn skin_state_number_expr(expr: &str, state: SkinDrawState) -> Option<i64> {
     let normalized = expr.replace('+', " + ").replace('-', " - ");
     let mut sign = 1_i64;
@@ -3593,7 +3763,7 @@ fn skin_state_number_expr_term(term: &str, state: SkinDrawState) -> Option<i64> 
 fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
     match ref_id {
         300 => Some(state.select_chart_count as i64),
-        96 => Some(state.select_play_level),
+        96 => Some(if state.play_level != 0 { state.play_level } else { state.select_play_level }),
         370 => Some(state.select_clear_index),
         92 => Some(state.select_bpm.round() as i64),
         71 | 101 | 171 => Some(state.ex_score as i64),
@@ -3639,6 +3809,10 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         }
         // レーンカバー: NUMBER_LANECOVER1=14 (0-100%)
         14 => Some((state.lane_cover.clamp(0.0, 1.0) * 100.0).round() as i64),
+        // 選曲画面の音量表示: MASTER/BGM/KEY volume (0-100)
+        57 => Some((state.select_master_volume.clamp(0.0, 1.0) * 100.0).round() as i64),
+        58 => Some((state.select_bgm_volume.clamp(0.0, 1.0) * 100.0).round() as i64),
+        59 => Some((state.select_key_volume.clamp(0.0, 1.0) * 100.0).round() as i64),
         // 判定タイミングずれ: VALUE_JUDGE_1P_DURATION=525 (ms、絶対値)
         525 => state.judge_timing_ms.map(|ms| ms.unsigned_abs() as i64),
         // 判定タイミングオフセット設定値 (NUMBER_JUDGETIMING=12)
@@ -3839,6 +4013,15 @@ fn graph_value(graph_type: i32, state: SkinDrawState) -> f32 {
             let max = (state.total_notes * 2) as f32;
             if max > 0.0 { state.target_ex_score.unwrap_or(0) as f32 / max } else { 0.0 }
         }
+        -1 => (state.select_clear_index as f32 / 10.0).clamp(0.0, 1.0),
+        -2 => {
+            let total_notes = state.select_total_notes.max(state.total_notes);
+            let max = (total_notes * 2) as f32;
+            if max > 0.0 { state.ex_score as f32 / max } else { 0.0 }
+        }
+        17 => state.select_master_volume.clamp(0.0, 1.0),
+        18 => state.select_key_volume.clamp(0.0, 1.0),
+        19 => state.select_bgm_volume.clamp(0.0, 1.0),
         _ => 0.0,
     }
 }
@@ -3849,8 +4032,12 @@ fn judge_rate(count: u32, total: u32) -> f32 {
 
 fn skin_slider_progress(slider_type: i32, state: SkinDrawState) -> Option<f32> {
     match slider_type {
+        1 => Some(state.select_scroll_progress.clamp(0.0, 1.0)),
         4 => (state.lane_cover > 0.0).then_some(state.lane_cover.clamp(0.0, 1.0)),
         6 => Some(state.play_progress.clamp(0.0, 1.0)),
+        17 => Some(state.select_master_volume.clamp(0.0, 1.0)),
+        18 => Some(state.select_key_volume.clamp(0.0, 1.0)),
+        19 => Some(state.select_bgm_volume.clamp(0.0, 1.0)),
         _ => None,
     }
 }
@@ -3858,6 +4045,7 @@ fn skin_slider_progress(slider_type: i32, state: SkinDrawState) -> Option<f32> {
 fn skin_timer_elapsed_ms(timer: Option<i32>, state: SkinDrawState) -> Option<i32> {
     match timer {
         None => Some(state.elapsed_ms),
+        Some(2) => state.fadeout_ms,
         Some(40 | 41) => Some(state.elapsed_ms),
         Some(11) => Some(state.select_bar_elapsed_ms),
         Some(21..=23) => Some(state.select_option_panel_elapsed_ms),
@@ -3927,11 +4115,17 @@ fn skin_state_text(text: &SkinTextDef, state: SkinTextState<'_>) -> String {
     if !text.constant_text.is_empty() {
         return text.constant_text.clone();
     }
-    if text.id == "bartext" {
+    if text.id.starts_with("bartext") {
         return state.bar_text.to_string();
     }
     if text.id == "table_level" {
         return state.table_level.to_string();
+    }
+    if text.id == "difficulty" || text.id == "difficulty_name" {
+        return state.difficulty_name.to_string();
+    }
+    if text.id == "level" || text.id == "play_level" {
+        return state.play_level.to_string();
     }
     match text.ref_id {
         10 => state.title.to_string(),
@@ -3961,6 +4155,30 @@ fn select_row_level_number(row: &SelectRowSnapshot) -> i64 {
     source.chars().filter(|ch| ch.is_ascii_digit()).collect::<String>().parse().unwrap_or(0)
 }
 
+fn select_row_difficulty_code(row: &SelectRowSnapshot) -> i64 {
+    difficulty_code_from_label(&row.difficulty_name)
+}
+
+fn difficulty_code_from_label(label: &str) -> i64 {
+    let normalized = label.trim().to_ascii_uppercase();
+    match normalized.as_str() {
+        "1" | "BEGINNER" => 1,
+        "2" | "NORMAL" => 2,
+        "3" | "HYPER" => 3,
+        "4" | "ANOTHER" => 4,
+        "5" | "INSANE" => 5,
+        _ => 0,
+    }
+}
+
+fn select_row_bar_image_index(row: &SelectRowSnapshot) -> usize {
+    if row.is_folder { 1 } else { 0 }
+}
+
+fn select_row_bar_text_index(row: &SelectRowSnapshot) -> usize {
+    if row.is_folder { 4 } else { 2 }
+}
+
 fn select_row_clear_index(row: &SelectRowSnapshot) -> usize {
     match row.clear_type.as_str() {
         "Failed" => 1,
@@ -3979,6 +4197,24 @@ fn select_row_clear_index(row: &SelectRowSnapshot) -> usize {
 
 fn select_row_replay_index(row: &SelectRowSnapshot) -> Option<usize> {
     row.replay_slots.iter().position(|has_replay| *has_replay)
+}
+
+fn select_row_trophy_index(row: &SelectRowSnapshot) -> Option<usize> {
+    let ex_score = row.ex_score?;
+    let max_score = row.total_notes.checked_mul(2)?;
+    if max_score == 0 {
+        return None;
+    }
+    let score = ex_score.min(max_score);
+    if score * 9 >= max_score * 8 {
+        Some(2)
+    } else if score * 9 >= max_score * 7 {
+        Some(1)
+    } else if score * 9 >= max_score * 6 {
+        Some(0)
+    } else {
+        None
+    }
 }
 
 fn select_replay_op_matches(op: i32, state: SkinDrawState) -> bool {
@@ -4097,6 +4333,13 @@ fn select_assist_index(assist: &str) -> usize {
         "AUTOPLAY" => 1,
         _ => 0,
     }
+}
+
+fn select_scroll_progress(snapshot: &SelectSnapshot) -> f32 {
+    if snapshot.chart_count <= 1 {
+        return 0.0;
+    }
+    snapshot.selected_index.min(snapshot.chart_count - 1) as f32 / (snapshot.chart_count - 1) as f32
 }
 
 fn destination_entry_at<'a>(
@@ -4289,10 +4532,9 @@ fn resolve_destination_frame(
             previous = Some(frame);
             continue;
         }
-        return Some(match previous {
-            Some(previous) => interpolate_skin_frame(previous, frame, elapsed_ms, acc),
-            None => frame,
-        });
+        // previous=None は最初のキーフレーム時刻より前 → destination はまだ表示開始
+        // していない。beatoraja 同様、開始時刻前のオブジェクトは描画しない。
+        return previous.map(|previous| interpolate_skin_frame(previous, frame, elapsed_ms, acc));
     }
     previous.or_else(|| animations.first().map(|_| frame))
 }
@@ -5358,6 +5600,19 @@ mod tests {
             &[],
             SkinDrawState { has_bga: true, bga_enabled: false, ..SkinDrawState::default() }
         ));
+    }
+
+    #[test]
+    fn difficulty_ops_reflect_chart_difficulty_code() {
+        let unknown = SkinDrawState::default();
+        let normal = SkinDrawState { difficulty: 2, ..SkinDrawState::default() };
+        let insane = SkinDrawState { difficulty: 5, ..SkinDrawState::default() };
+
+        assert!(test_skin_op(150, &[], unknown));
+        assert!(!test_skin_op(150, &[], normal));
+        assert!(test_skin_op(152, &[], normal));
+        assert!(!test_skin_op(153, &[], normal));
+        assert!(test_skin_op(155, &[], insane));
     }
 
     #[test]
@@ -6760,11 +7015,17 @@ mod tests {
                 "source": [
                     { "id": 1, "path": "bar.png" },
                     { "id": 2, "path": "num.png" },
-                    { "id": 3, "path": "lamp.png" }
+                    { "id": 3, "path": "lamp.png" },
+                    { "id": 4, "path": "graph.png" }
                 ],
                 "image": [
                     { "id": "bar-song", "src": 1, "x": 0, "y": 0, "w": 40, "h": 10 },
                     { "id": "bar-folder", "src": 1, "x": 0, "y": 10, "w": 40, "h": 10 },
+                    { "id": "song-op-marker", "src": 1, "x": 0, "y": 20, "w": 4, "h": 4 },
+                    { "id": "folder-op-marker", "src": 1, "x": 4, "y": 20, "w": 4, "h": 4 },
+                    { "id": "trophy-bronze", "src": 3, "x": 0, "y": 0, "w": 4, "h": 4 },
+                    { "id": "trophy-silver", "src": 3, "x": 4, "y": 0, "w": 4, "h": 4 },
+                    { "id": "trophy-gold", "src": 3, "x": 8, "y": 0, "w": 4, "h": 4 },
                     { "id": "lamp-none", "src": 3, "x": 0, "y": 0, "w": 4, "h": 4 },
                     { "id": "lamp-failed", "src": 3, "x": 4, "y": 0, "w": 4, "h": 4 },
                     { "id": "lamp-assist", "src": 3, "x": 8, "y": 0, "w": 4, "h": 4 },
@@ -6773,8 +7034,16 @@ mod tests {
                     { "id": "lamp-normal", "src": 3, "x": 20, "y": 0, "w": 4, "h": 4 }
                 ],
                 "imageset": [{ "id": "bar", "images": ["bar-song", "bar-folder"] }],
-                "text": [{ "id": "bartext", "font": "main", "size": 10 }],
-                "value": [{ "id": "level", "src": 2, "x": 0, "y": 0, "w": 100, "h": 10, "divx": 10, "digit": 2, "ref": 96 }],
+                "text": [
+                    { "id": "bartext", "font": "main", "size": 10 },
+                    { "id": "bartext4", "font": "folder", "size": 10 }
+                ],
+                "value": [
+                    { "id": "level-other", "src": 2, "x": 0, "y": 0, "w": 100, "h": 10, "divx": 10, "digit": 2 },
+                    { "id": "level-beginner", "src": 2, "x": 0, "y": 10, "w": 100, "h": 10, "divx": 10, "digit": 2 },
+                    { "id": "level-normal", "src": 2, "x": 0, "y": 20, "w": 100, "h": 10, "divx": 10, "digit": 2 }
+                ],
+                "graph": [{ "id": "graph-lamp", "src": 4, "x": 0, "y": 0, "w": 40, "h": 4, "angle": 0, "type": -1 }],
                 "songlist": {
                     "id": "songlist",
                     "center": 1,
@@ -6788,8 +7057,28 @@ mod tests {
                         { "id": "bar", "dst": [{ "x": 12, "y": 50, "w": 40, "h": 10 }] },
                         { "id": "bar", "dst": [{ "x": 12, "y": 30, "w": 40, "h": 10 }] }
                     ],
-                    "text": [{ "id": "bartext", "dst": [{ "x": 5, "y": 2, "w": 20, "h": 8 }] }],
-                    "level": [{ "id": "level", "dst": [{ "x": 30, "y": 2, "w": 5, "h": 8 }] }],
+                    "text": [
+                        { "id": "bartext", "dst": [{ "x": 1, "y": 2, "w": 20, "h": 8 }] },
+                        { "id": "bartext", "dst": [{ "x": 2, "y": 2, "w": 20, "h": 8 }] },
+                        { "id": "bartext", "dst": [{ "x": 5, "y": 2, "w": 20, "h": 8 }] },
+                        { "id": "bartext", "dst": [{ "x": 6, "y": 2, "w": 20, "h": 8 }] },
+                        { "id": "bartext4", "dst": [{ "x": 7, "y": 2, "w": 20, "h": 8 }] }
+                    ],
+                    "judgegraph": [
+                        { "id": "song-op-marker", "op": [2], "dst": [{ "x": 8, "y": 1, "w": 4, "h": 4 }] },
+                        { "id": "folder-op-marker", "op": [1], "dst": [{ "x": 12, "y": 1, "w": 4, "h": 4 }] }
+                    ],
+                    "level": [
+                        { "id": "level-other", "dst": [{ "x": 30, "y": 2, "w": 5, "h": 8 }] },
+                        { "id": "level-beginner", "dst": [{ "x": 30, "y": 2, "w": 5, "h": 8 }] },
+                        { "id": "level-normal", "dst": [{ "x": 30, "y": 2, "w": 5, "h": 8 }] }
+                    ],
+                    "trophy": [
+                        { "id": "trophy-bronze", "dst": [{ "x": 35, "y": 1, "w": 4, "h": 4 }] },
+                        { "id": "trophy-silver", "dst": [{ "x": 35, "y": 1, "w": 4, "h": 4 }] },
+                        { "id": "trophy-gold", "dst": [{ "x": 35, "y": 1, "w": 4, "h": 4 }] }
+                    ],
+                    "graph": { "id": "graph-lamp", "dst": [{ "x": 5, "y": 1, "w": 20, "h": 2 }] },
                     "playerlamp": [
                         { "id": "lamp-none", "dst": [{ "x": 1, "y": 1, "w": 4, "h": 4 }] },
                         { "id": "lamp-failed", "dst": [{ "x": 1, "y": 1, "w": 4, "h": 4 }] },
@@ -6807,6 +7096,7 @@ mod tests {
         let mut sources = mock_source("1", 100.0, 100.0);
         sources.extend(mock_source("2", 100.0, 100.0));
         sources.extend(mock_source("3", 24.0, 4.0));
+        sources.extend(mock_source("4", 40.0, 4.0));
         let snapshot = SelectSnapshot {
             selected_index: 2,
             rows: vec![
@@ -6820,8 +7110,11 @@ mod tests {
                 SelectRowSnapshot {
                     index: 2,
                     title: "Song".to_string(),
+                    difficulty_name: "2".to_string(),
                     play_level: "12".to_string(),
                     clear_type: "Normal".to_string(),
+                    total_notes: 100,
+                    ex_score: Some(180),
                     ..SelectRowSnapshot::default()
                 },
             ],
@@ -6836,6 +7129,24 @@ mod tests {
                 .iter()
                 .any(|item| matches!(item, SkinRenderItem::Text { text, .. } if text == "Song"))
         );
+        assert!(items.iter().any(|item| matches!(item, SkinRenderItem::Text {
+                origin: Point { x, y },
+                text,
+                style,
+                ..
+            } if text == "Folder"
+                && style.font_id.as_deref() == Some("folder")
+                && approx_eq(*x, 0.17)
+                && approx_eq(*y, 0.2))));
+        assert_eq!(
+            items
+                .iter()
+                .filter(
+                    |item| matches!(item, SkinRenderItem::Text { text, .. } if text == "Folder")
+                )
+                .count(),
+            1
+        );
         assert!(items.iter().any(|item| matches!(item, SkinRenderItem::Image {
                 texture: SkinTextureId(9999),
                 rect: Rect { x, y, width, height },
@@ -6846,6 +7157,69 @@ mod tests {
                 && approx_eq(*width, 0.04)
                 && approx_eq(*height, 0.04)
                 && approx_eq(*u, 20.0 / 24.0))));
+        assert!(items.iter().any(|item| matches!(item, SkinRenderItem::Image {
+                texture: SkinTextureId(9999),
+                rect: Rect { x, y, .. },
+                uv: TextureRegion { x: u, .. },
+                ..
+            } if approx_eq(*x, 0.47)
+                && approx_eq(*y, 0.45)
+                && approx_eq(*u, 8.0 / 24.0))));
+        assert!(items.iter().any(|item| matches!(item, SkinRenderItem::Image {
+                texture: SkinTextureId(9999),
+                rect: Rect { x, width, .. },
+                uv: TextureRegion { width: u_width, .. },
+                ..
+            } if approx_eq(*x, 0.17)
+                && approx_eq(*width, 0.1)
+                && approx_eq(*u_width, 0.5))));
+        assert!(items.iter().any(|item| matches!(item, SkinRenderItem::Image {
+                texture: SkinTextureId(9999),
+                rect: Rect { x, y, .. },
+                uv: TextureRegion { y: u, .. },
+                ..
+            } if approx_eq(*x, 0.47)
+                && approx_eq(*y, 0.4)
+                && approx_eq(*u, 0.2))));
+        assert!(items.iter().any(|item| matches!(item, SkinRenderItem::Image {
+                texture: SkinTextureId(9999),
+                rect: Rect { x, y, .. },
+                uv: TextureRegion { x: u, y: v, .. },
+                ..
+            } if approx_eq(*x, 0.2)
+                && approx_eq(*y, 0.45)
+                && approx_eq(*u, 0.0)
+                && approx_eq(*v, 20.0 / 100.0))));
+        assert!(!items.iter().any(|item| matches!(item, SkinRenderItem::Image {
+                texture: SkinTextureId(9999),
+                rect: Rect { x, y, .. },
+                uv: TextureRegion { x: u, y: v, .. },
+                ..
+            } if approx_eq(*x, 0.22)
+                && approx_eq(*y, 0.45)
+                && approx_eq(*u, 4.0 / 100.0)
+                && approx_eq(*v, 20.0 / 100.0))));
+
+        let folder_selected = SelectSnapshot { selected_index: 1, ..snapshot };
+        let items = document.select_render_items(&sources, &folder_selected);
+        assert!(items.iter().any(|item| matches!(item, SkinRenderItem::Image {
+                texture: SkinTextureId(9999),
+                rect: Rect { x, y, .. },
+                uv: TextureRegion { x: u, y: v, .. },
+                ..
+            } if approx_eq(*x, 0.18)
+                && approx_eq(*y, 0.65)
+                && approx_eq(*u, 0.0)
+                && approx_eq(*v, 20.0 / 100.0))));
+        assert!(!items.iter().any(|item| matches!(item, SkinRenderItem::Image {
+                texture: SkinTextureId(9999),
+                rect: Rect { x, y, .. },
+                uv: TextureRegion { x: u, y: v, .. },
+                ..
+            } if approx_eq(*x, 0.22)
+                && approx_eq(*y, 0.65)
+                && approx_eq(*u, 4.0 / 100.0)
+                && approx_eq(*v, 20.0 / 100.0))));
     }
 
     #[test]
@@ -7056,11 +7430,15 @@ mod tests {
                 "slider": [
                     { "id": "progress", "src": 1, "x": 10, "y": 20, "w": 5, "h": 6, "angle": 2, "range": 40, "type": 6 },
                     { "id": "lane-cover", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10, "angle": 2, "range": 20, "type": 4 },
+                    { "id": "song-scroll", "src": 1, "x": 20, "y": 20, "w": 5, "h": 6, "angle": 2, "range": 40, "type": 1 },
+                    { "id": "master", "src": 1, "x": 30, "y": 20, "w": 5, "h": 6, "angle": 1, "range": 40, "type": 17 },
                     { "id": "unknown", "src": 1, "x": 10, "y": 20, "w": 5, "h": 6, "angle": 0, "range": 40, "type": 999 }
                 ],
                 "destination": [
                     { "id": "progress", "blend": 2, "dst": [{ "x": 30, "y": 80, "w": 5, "h": 6 }] },
                     { "id": "lane-cover", "dst": [{ "x": 10, "y": 50, "w": 10, "h": 10 }] },
+                    { "id": "song-scroll", "dst": [{ "x": 30, "y": 80, "w": 5, "h": 6 }] },
+                    { "id": "master", "dst": [{ "x": 30, "y": 80, "w": 5, "h": 6 }] },
                     { "id": "unknown", "dst": [{ "x": 30, "y": 80, "w": 5, "h": 6 }] }
                 ]
             }
@@ -7078,10 +7456,15 @@ mod tests {
 
         let items = document.static_image_render_items(
             &sources,
-            SkinDrawState { play_progress: 0.25, ..SkinDrawState::default() },
+            SkinDrawState {
+                play_progress: 0.25,
+                select_scroll_progress: 0.5,
+                select_master_volume: 0.75,
+                ..SkinDrawState::default()
+            },
         );
 
-        assert_eq!(items.len(), 1);
+        assert_eq!(items.len(), 3);
         assert!(matches!(items[0], SkinRenderItem::Image {
                 rect: Rect { x, y, width, height },
                 uv: TextureRegion { x: u, y: v, width: uw, height: uh },
@@ -7096,18 +7479,28 @@ mod tests {
                 && approx_eq(uw, 0.05)
                 && approx_eq(uh, 0.06)
                 && blend == BlendMode::Add));
+        assert!(matches!(
+            items[1],
+            SkinRenderItem::Image { rect: Rect { x, y, .. }, .. }
+                if approx_eq(x, 0.3) && approx_eq(y, 0.34)
+        ));
+        assert!(matches!(
+            items[2],
+            SkinRenderItem::Image { rect: Rect { x, y, .. }, .. }
+                if approx_eq(x, 0.0) && approx_eq(y, 0.14)
+        ));
 
         let no_lane_cover = document.static_image_render_items(
             &sources,
             SkinDrawState { lane_cover: 0.0, ..SkinDrawState::default() },
         );
-        assert_eq!(no_lane_cover.len(), 1);
+        assert_eq!(no_lane_cover.len(), 3);
 
         let lane_cover = document.static_image_render_items(
             &sources,
             SkinDrawState { lane_cover: 0.5, ..SkinDrawState::default() },
         );
-        assert_eq!(lane_cover.len(), 2);
+        assert_eq!(lane_cover.len(), 4);
         assert!(matches!(
             lane_cover[1],
             SkinRenderItem::Image { rect: Rect { x, y, .. }, .. }
@@ -7159,6 +7552,55 @@ mod tests {
                 && approx_eq(y, 0.74)
                 && approx_eq(width, 0.05)
                 && approx_eq(height, 0.06)));
+    }
+
+    #[test]
+    fn skin_document_resolves_fadeout_timer_destinations() {
+        // timer=2 (TIMER_FADEOUT) はリザルト画面終了アニメーション専用。
+        // fadeout_ms=None なら非アクティブで描画されず、Some なら経過 ms で
+        // keyframe アニメーションが進行する。
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 7,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "system.png" }],
+                "image": [{ "id": "curtain", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10 }],
+                "destination": [
+                    { "id": "curtain", "timer": 2, "dst": [
+                        { "time": 0, "x": 0, "y": 0, "w": 100, "h": 0 },
+                        { "time": 200, "x": 0, "y": 0, "w": 100, "h": 100 }
+                    ] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "1".to_string(),
+            SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(7),
+                source_size: SkinImageSize { width: 100.0, height: 100.0 },
+            },
+        )]);
+
+        let inactive = document.static_image_render_items(
+            &sources,
+            SkinDrawState { fadeout_ms: None, ..SkinDrawState::default() },
+        );
+        let mid = document.static_image_render_items(
+            &sources,
+            SkinDrawState { fadeout_ms: Some(100), ..SkinDrawState::default() },
+        );
+
+        assert!(inactive.is_empty(), "fadeout timer is inactive when fadeout_ms is None");
+        assert_eq!(mid.len(), 1);
+        assert!(matches!(mid[0], SkinRenderItem::Image {
+                rect: Rect { height, .. },
+                ..
+            } if approx_eq(height, 0.5)));
     }
 
     #[test]
@@ -7412,12 +7854,22 @@ mod tests {
             select_min_bpm: 120.0,
             select_max_bpm: 180.0,
             select_length_ms: 183_000,
+            select_master_volume: 0.57,
+            select_bgm_volume: 0.58,
+            select_key_volume: 0.59,
             ex_score: 1234,
             ..SkinDrawState::default()
         };
 
         assert_eq!(skin_state_number(300, state), Some(42));
         assert_eq!(skin_state_number(96, state), Some(12));
+        assert_eq!(
+            skin_state_number(
+                96,
+                SkinDrawState { select_play_level: 12, play_level: 9, ..SkinDrawState::default() }
+            ),
+            Some(9)
+        );
         assert_eq!(skin_state_number(370, state), Some(5));
         assert_eq!(skin_state_number(74, state), Some(1200));
         assert_eq!(skin_state_number(90, state), Some(180));
@@ -7428,6 +7880,9 @@ mod tests {
         assert_eq!(skin_state_number(71, state), Some(1234));
         assert_eq!(skin_state_number(1163, state), Some(3));
         assert_eq!(skin_state_number(1164, state), Some(3));
+        assert_eq!(skin_state_number(57, state), Some(57));
+        assert_eq!(skin_state_number(58, state), Some(58));
+        assert_eq!(skin_state_number(59, state), Some(59));
     }
 
     #[test]
@@ -7740,8 +8195,8 @@ mod tests {
 
     #[test]
     fn dst_if_value_uses_default_when_option_disabled() {
-        // No property → no enabled options → conditional frame skipped, only end frame {time:500}
-        // With elapsed=0 the element renders at the default position (0,0)
+        // No property → no enabled options → conditional frame skipped, only end frame {time:500}.
+        // 最初のキーフレーム時刻 (500) より前は描画されず、500ms 以降に既定位置 (0,0) で描画される。
         let document: SkinDocument = serde_json::from_str(
             r#"
             {
@@ -7760,10 +8215,19 @@ mod tests {
         .unwrap();
 
         let sources = mock_source("src", 10.0, 10.0);
-        let state = SkinDrawState::default();
-        let items = document.static_image_render_items(&sources, state);
 
-        // Conditional frame skipped → position defaults to (0,0); {time:500} still provides a frame
+        // elapsed=0: 最初のキーフレーム時刻 (500) より前なので描画しない。
+        let before = document.static_image_render_items(
+            &sources,
+            SkinDrawState { elapsed_ms: 0, ..SkinDrawState::default() },
+        );
+        assert!(before.is_empty(), "destination is not drawn before its first keyframe time");
+
+        // elapsed=500: 条件フレームが skip され、{time:500} の既定位置 (0,0) で描画される。
+        let items = document.static_image_render_items(
+            &sources,
+            SkinDrawState { elapsed_ms: 500, ..SkinDrawState::default() },
+        );
         assert_eq!(items.len(), 1);
         let SkinRenderItem::Image { rect, .. } = &items[0] else { panic!() };
         assert!(approx_eq(rect.x, 0.0), "expected default x=0, got {}", rect.x);

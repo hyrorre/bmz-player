@@ -55,25 +55,34 @@ pub fn finish_session_result(
 ) -> Result<FinishedPlaySession> {
     ensure_storable_state(session.state)?;
     let result = play_result_from_session(session);
-    let arrange = applied_arrange.arrange;
-    let arrange_seed = applied_arrange.seed;
-    let arrange_pattern = applied_arrange.pattern.clone();
-    let stored = store_play_result(
-        score_db,
-        profile_paths,
-        replay_config,
-        &result,
-        StorePlayResultRequest {
-            played_at,
-            random_seed: arrange_seed,
-            gauge_option: String::new(),
-            assist_mask: 0,
-            replay_events: session.replay_recorder.events.clone(),
-            arrange,
-            arrange_seed,
-            arrange_pattern,
-        },
-    )?;
+    // オートプレイ時はスコア・リプレイをDBに保存しない（リザルト画面の表示のみ行う）。
+    let stored = if session.autoplay.is_some() {
+        StoredPlayResult {
+            score_history_id: 0,
+            replay_path: String::new(),
+            slot_paths: [None, None, None, None],
+        }
+    } else {
+        let arrange = applied_arrange.arrange;
+        let arrange_seed = applied_arrange.seed;
+        let arrange_pattern = applied_arrange.pattern.clone();
+        store_play_result(
+            score_db,
+            profile_paths,
+            replay_config,
+            &result,
+            StorePlayResultRequest {
+                played_at,
+                random_seed: arrange_seed,
+                gauge_option: String::new(),
+                assist_mask: 0,
+                replay_events: session.replay_recorder.events.clone(),
+                arrange,
+                arrange_seed,
+                arrange_pattern,
+            },
+        )?
+    };
     let mut summary = ResultSummary::from_play_result(&result, &stored, &session.chart.metadata);
     // 過去ベストスコア・ベストコンボを ResultSummary にフィルする。
     // 今回のスコアが直前に upsert_score_best されているので、`best_*` は
@@ -280,6 +289,46 @@ mod tests {
 
         assert_eq!(first.stored.score_history_id, second.stored.score_history_id);
         assert_eq!(score_db.recent_history(10, 0).unwrap().len(), 1);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn finish_session_result_skips_storage_for_autoplay() {
+        let root = make_temp_dir("finish-autoplay");
+        let paths = ProfilePaths {
+            root_dir: root.clone(),
+            profile_toml: root.join("profile.toml"),
+            score_db: root.join("score.db"),
+            replay_dir: root.join("replay"),
+        };
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut score_db = ScoreDatabase::from_connection(conn);
+        let replay_config = ReplayConfig {
+            auto_save: true,
+            compress: false,
+            slot_rules: crate::config::profile_config::default_slot_rules(),
+        };
+        let mut session = session();
+        session.autoplay = Some(bmz_gameplay::autoplay::AutoplayController::default());
+
+        let finished = finish_session_result(
+            &mut score_db,
+            &paths,
+            &replay_config,
+            &session,
+            1_700_000_105,
+            &AppliedArrange::default(),
+        )
+        .unwrap();
+
+        // オートプレイ時はDB保存・リプレイ保存をしない。
+        assert_eq!(finished.stored.score_history_id, 0);
+        assert!(finished.stored.replay_path.is_empty());
+        assert!(finished.stored.slot_paths.iter().all(Option::is_none));
+        assert_eq!(score_db.recent_history(10, 0).unwrap().len(), 0);
 
         std::fs::remove_dir_all(root).unwrap();
     }

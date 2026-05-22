@@ -46,6 +46,8 @@ pub fn build_render_snapshot_with_bga_frames(
         artist: session.chart.metadata.artist.clone(),
         subartist: session.chart.metadata.subartist.clone(),
         genre: session.chart.metadata.genre.clone(),
+        difficulty_name: session.chart.metadata.difficulty_name.clone(),
+        play_level: session.chart.metadata.play_level.clone(),
         combo: session.score.combo,
         max_combo: session.score.max_combo,
         ex_score: session.score.ex_score(),

@@ -158,6 +158,25 @@ struct WinitApp {
     focused: bool,
     /// 直近フレームの開始時刻。フレームレート制限のスリープ量算出に使う。
     last_frame_at: Option<Instant>,
+    /// リザルト画面終了アニメーションの進行状態。
+    /// Some のあいだは終了フェードアウト中で、入力は受け付けない。
+    result_exit: Option<ResultExit>,
+}
+
+/// リザルト画面終了フェードアウトの進行状態。
+/// フェードアウト時間が経過したら `action` を実行して画面を切り替える。
+struct ResultExit {
+    started_at: Instant,
+    action: ResultExitAction,
+}
+
+/// リザルト画面を抜けたあとに実行する遷移。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResultExitAction {
+    /// 選曲画面へ戻る。
+    Leave,
+    /// 直前と同じ譜面をもう一度プレイする。
+    Retry,
 }
 
 const SELECT_EXIT_HOLD_DURATION: Duration = Duration::from_millis(1_200);
@@ -292,6 +311,7 @@ impl WinitApp {
             applied_window_mode: initial_window_mode,
             focused: true,
             last_frame_at: None,
+            result_exit: None,
         };
         if let Some(chart_id) = boot_sample_chart_id {
             tracing::info!(
@@ -416,11 +436,18 @@ impl WinitApp {
                 elapsed_time: bmz_core::time::TimeUs(
                     self.result_scene_started_at.elapsed().as_micros().min(i64::MAX as u128) as i64,
                 ),
+                fadeout_elapsed: self.result_exit.as_ref().map(|exit| {
+                    bmz_core::time::TimeUs(
+                        exit.started_at.elapsed().as_micros().min(i64::MAX as u128) as i64,
+                    )
+                }),
                 title: summary.title.clone(),
                 subtitle: summary.subtitle.clone(),
                 artist: summary.artist.clone(),
                 subartist: summary.subartist.clone(),
                 genre: summary.genre.clone(),
+                difficulty_name: summary.difficulty_name.clone(),
+                play_level: summary.play_level.clone(),
             }),
         }
     }
@@ -470,6 +497,9 @@ impl WinitApp {
             gauge: gauge_option_as_str(self.gauge_option).to_string(),
             assist: self.assist_option.as_str().to_string(),
             bga: bga_mode_as_str(self.boot.profile_config.play.bga).to_string(),
+            master_volume: self.boot.profile_config.audio_mix.master_volume,
+            key_volume: self.boot.profile_config.audio_mix.key_volume,
+            bgm_volume: self.boot.profile_config.audio_mix.bgm_volume,
             current_folder,
             key_hint: self.select_keys.key_hint.clone(),
             option_hint: self.select_keys.option_hint.clone(),
@@ -584,10 +614,13 @@ impl WinitApp {
         }
 
         if self.finished_play.is_some() {
-            if let Some(action) = result_action(event.physical_key, event.state, event.repeat) {
+            // 終了アニメーション中 (result_exit=Some) は追加入力を受け付けない。
+            if self.result_exit.is_none()
+                && let Some(action) = result_action(event.physical_key, event.state, event.repeat)
+            {
                 match action {
-                    ResultAction::Retry => self.retry_last_chart(),
-                    ResultAction::Leave => self.leave_result(),
+                    ResultAction::Retry => self.begin_result_exit(ResultExitAction::Retry),
+                    ResultAction::Leave => self.begin_result_exit(ResultExitAction::Leave),
                 }
             }
             return;
@@ -705,10 +738,13 @@ impl WinitApp {
 
         // リザルト画面
         if self.finished_play.is_some() {
-            match button {
-                "Button1" | "Start" => self.retry_last_chart(),
-                "Button2" | "Select" => self.leave_result(),
-                _ => {}
+            // 終了アニメーション中 (result_exit=Some) は追加入力を受け付けない。
+            if self.result_exit.is_none() {
+                match button {
+                    "Button1" | "Start" => self.begin_result_exit(ResultExitAction::Retry),
+                    "Button2" | "Select" => self.begin_result_exit(ResultExitAction::Leave),
+                    _ => {}
+                }
             }
             return;
         }
@@ -816,6 +852,8 @@ impl WinitApp {
 
     fn start_chart_with_options(&mut self, chart_id: i64, options: PlayStartOptions) {
         self.ensure_skin_ready(SkinKind::Play);
+        // 新しいプレイの音声出力を開く前に、前曲の余韻再生を止めて出力を解放する。
+        self.draining_audio = None;
         match self.boot.start_play_for_chart_with_winit_input(chart_id, options) {
             Ok(mut active_play) => {
                 active_play.running.bga_frames =
@@ -902,8 +940,45 @@ impl WinitApp {
         self.start_chart(chart_id);
     }
 
+    /// リザルト画面の終了アニメーションを開始する。
+    /// スキンが宣言するフェードアウト時間が経過したら `advance_result_exit` が
+    /// 実際の遷移 (選曲へ戻る / リトライ) を実行する。
+    fn begin_result_exit(&mut self, action: ResultExitAction) {
+        if self.result_exit.is_some() || self.finished_play.is_none() {
+            return;
+        }
+        tracing::info!(?action, "result screen exit animation started");
+        self.result_exit = Some(ResultExit { started_at: Instant::now(), action });
+    }
+
+    /// 終了フェードアウトの経過を監視し、スキンのフェードアウト時間を過ぎたら
+    /// 保留していた遷移を実行する。毎フレーム描画前に呼ぶ。
+    fn advance_result_exit(&mut self) {
+        let Some(exit) = &self.result_exit else {
+            return;
+        };
+        // 何らかの理由でリザルトを抜けていたら終了状態を破棄する。
+        if self.finished_play.is_none() {
+            self.result_exit = None;
+            return;
+        }
+        let fadeout = Duration::from_millis(self.renderer.result_skin_fadeout_ms().max(0) as u64);
+        if exit.started_at.elapsed() < fadeout {
+            return;
+        }
+        let action = exit.action;
+        self.result_exit = None;
+        match action {
+            ResultExitAction::Leave => self.leave_result(),
+            ResultExitAction::Retry => self.retry_last_chart(),
+        }
+    }
+
     fn leave_result(&mut self) {
         self.finished_play = None;
+        self.result_exit = None;
+        // リザルト画面を抜けたら、まだ鳴っていても余韻再生を止める。
+        self.draining_audio = None;
         self.last_play_snapshot = None;
         self.reload_select_items();
         let now = Instant::now();
@@ -1233,6 +1308,23 @@ impl WinitApp {
         // 前回リロードの未完了 install は破棄する。
         self.pending_skin_installs.clear();
         tracing::info!("skins reloaded from egui skin panel");
+    }
+
+    /// リザルト遷移後も鳴らし続けている音声出力を監視し、スケジュール済みの
+    /// BGM/キー音がすべて鳴り切ったら出力を解放する。
+    fn advance_draining_audio(&mut self) {
+        let Some(audio) = &self.draining_audio else {
+            return;
+        };
+        let drained = match audio.engine.lock() {
+            Ok(engine) => engine.is_idle(),
+            // ロック中断時は安全側に倒して出力を解放する。
+            Err(_) => true,
+        };
+        if drained {
+            tracing::info!("play audio drained after result; releasing output");
+            self.draining_audio = None;
+        }
     }
 
     fn render_current_scene(&mut self) {
@@ -1651,9 +1743,11 @@ impl ApplicationHandler for WinitApp {
                 self.limit_frame_rate();
                 self.poll_gamepad_events();
                 self.drain_pending_skins();
+                self.advance_result_exit();
                 self.run_egui_frame();
                 self.render_current_scene();
                 self.advance_active_play();
+                self.advance_draining_audio();
                 // 次フレームの再描画をここで要求して描画ループを自走させる。
                 // about_to_wait から要求すると、Windows のウィンドウ移動/リサイズ中に
                 // 発生するモーダルループ (WM_ENTERSIZEMOVE..WM_EXITSIZEMOVE) では
@@ -1859,6 +1953,7 @@ fn select_snapshot_rows(
                     index: index as u32,
                     title: name.clone(),
                     artist: String::new(),
+                    difficulty_name: String::new(),
                     play_level: String::new(),
                     table_level: String::new(),
                     total_notes: 0,
@@ -1868,6 +1963,8 @@ fn select_snapshot_rows(
                     length_ms: 0,
                     clear_type: String::new(),
                     ex_score: None,
+                    max_combo: None,
+                    gauge_value: None,
                     replay_slots: [false; 4],
                     is_folder: true,
                 },
@@ -1875,6 +1972,7 @@ fn select_snapshot_rows(
                     index: index as u32,
                     title: row.chart.title.clone(),
                     artist: row.chart.artist.clone(),
+                    difficulty_name: row.chart.difficulty_name.clone(),
                     play_level: row.chart.play_level.clone(),
                     table_level: row.table_level.clone(),
                     total_notes: row.chart.total_notes,
@@ -1888,6 +1986,8 @@ fn select_snapshot_rows(
                         .map(|score| score.clear_type.clone())
                         .unwrap_or_default(),
                     ex_score: row.best_score.as_ref().map(|score| score.ex_score),
+                    max_combo: row.best_score.as_ref().map(|score| score.max_combo),
+                    gauge_value: row.best_score.as_ref().map(|score| score.gauge_value),
                     replay_slots: row.replay_slots,
                     is_folder: false,
                 },

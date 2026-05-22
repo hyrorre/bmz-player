@@ -26,6 +26,9 @@ pub struct SelectSnapshot {
     pub gauge: String,
     pub assist: String,
     pub bga: String,
+    pub master_volume: f32,
+    pub key_volume: f32,
+    pub bgm_volume: f32,
     pub current_folder: String,
     pub key_hint: String,
     pub option_hint: String,
@@ -38,6 +41,7 @@ pub struct SelectRowSnapshot {
     pub index: u32,
     pub title: String,
     pub artist: String,
+    pub difficulty_name: String,
     pub play_level: String,
     pub table_level: String,
     pub total_notes: u32,
@@ -47,6 +51,8 @@ pub struct SelectRowSnapshot {
     pub length_ms: i64,
     pub clear_type: String,
     pub ex_score: Option<u32>,
+    pub max_combo: Option<u32>,
+    pub gauge_value: Option<f32>,
     pub replay_slots: [bool; 4],
     pub is_folder: bool,
 }
@@ -74,12 +80,18 @@ pub struct ResultSnapshot {
     /// リザルト画面を開いてからの経過時間。
     /// destination の timer/loop/keyframe アニメーション、image cycle に使われる。
     pub elapsed_time: TimeUs,
+    /// リザルト画面終了フェードアウトの経過時間 (TIMER_FADEOUT=2)。
+    /// None なら終了処理に入っていない。Some のあいだは `timer: 2` の
+    /// destination が描画され、終了アニメーションが進行する。
+    pub fadeout_elapsed: Option<TimeUs>,
     /// 曲名 (text ref 10/12 で表示)。
     pub title: String,
     pub subtitle: String,
     pub artist: String,
     pub subartist: String,
     pub genre: String,
+    pub difficulty_name: String,
+    pub play_level: String,
 }
 
 impl ResultSnapshot {
@@ -116,11 +128,14 @@ mod tests {
             target_misscount: None,
             target_clear_type: None,
             elapsed_time: TimeUs(0),
+            fadeout_elapsed: None,
             title: String::new(),
             subtitle: String::new(),
             artist: String::new(),
             subartist: String::new(),
             genre: String::new(),
+            difficulty_name: String::new(),
+            play_level: String::new(),
         };
 
         assert!(snapshot.is_full_combo());
@@ -148,11 +163,14 @@ mod tests {
             target_misscount: None,
             target_clear_type: None,
             elapsed_time: TimeUs(0),
+            fadeout_elapsed: None,
             title: String::new(),
             subtitle: String::new(),
             artist: String::new(),
             subartist: String::new(),
             genre: String::new(),
+            difficulty_name: String::new(),
+            play_level: String::new(),
         };
 
         assert!(!snapshot.is_full_combo());

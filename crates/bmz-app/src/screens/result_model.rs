@@ -29,6 +29,8 @@ pub struct ResultSummary {
     pub artist: String,
     pub subartist: String,
     pub genre: String,
+    pub difficulty_name: String,
+    pub play_level: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -118,6 +120,8 @@ impl ResultSummary {
             artist: metadata.artist.clone(),
             subartist: metadata.subartist.clone(),
             genre: metadata.genre.clone(),
+            difficulty_name: metadata.difficulty_name.clone(),
+            play_level: metadata.play_level.clone(),
         }
     }
 
