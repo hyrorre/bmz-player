@@ -287,9 +287,13 @@ pub fn advance_session_frame(
         if session.replay_player.is_some() {
             drain_human_inputs(session);
             judgements.extend(process_replay_inputs(session, times.audio_now));
+        } else if session.autoplay.is_some() {
+            // オートプレイ中は人間のキー入力を判定に渡さない。
+            // (ハイスピード等のオプション操作は app 側で別途処理される)
+            drain_human_inputs(session);
+            judgements.extend(process_autoplay_inputs(session, times.audio_now));
         } else {
             judgements.extend(process_human_inputs(session));
-            judgements.extend(process_autoplay_inputs(session, times.audio_now));
         }
         judgements.extend(process_misses(session, times.audio_now));
         schedule_keysounds(session, &judgements, audio);
@@ -430,6 +434,44 @@ mod tests {
         assert_eq!(session.score.judges.fast_great + session.score.judges.slow_great, 0);
         assert!(session.replay_recorder.events.is_empty());
         // recent_inputs だけは Press が反映される (視覚エフェクト用)
+        assert_eq!(session.recent_inputs.len(), 1);
+    }
+
+    #[test]
+    fn advance_session_frame_skips_human_inputs_when_autoplay_active() {
+        use crate::input::backend::{
+            BufferedInputBackend, DeviceId, DeviceInputEvent, DeviceTimestamp, PhysicalControl,
+        };
+        use crate::input::binding::{BindingEntry, LaneBinding};
+
+        let chart = chart_with_keysound();
+        let mut session = session_with_autoplay(chart);
+        let mut backend = BufferedInputBackend::default();
+        backend.push(DeviceInputEvent {
+            device: DeviceId(1),
+            control: PhysicalControl::KeyboardKey("Z".to_string()),
+            kind: InputKind::Press,
+            timestamp: DeviceTimestamp::Unknown,
+        });
+        session.input_system = InputSystem {
+            backend: Box::new(backend),
+            translator: Box::new(DefaultInputTranslator {
+                binding: LaneBinding {
+                    entries: vec![BindingEntry {
+                        device: None,
+                        control: PhysicalControl::KeyboardKey("Z".to_string()),
+                        lane: Lane::Key1,
+                    }],
+                },
+            }),
+        };
+        let mut audio = TestAudio::default();
+
+        advance_session_frame(&mut session, &mut audio);
+
+        // オートプレイ中は人間入力を recorder に渡さない (judge には autoplay 入力のみ)。
+        assert!(session.replay_recorder.events.is_empty());
+        // recent_inputs だけは Press が反映される (視覚エフェクト用)。
         assert_eq!(session.recent_inputs.len(), 1);
     }
 
