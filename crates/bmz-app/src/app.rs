@@ -52,7 +52,7 @@ use crate::skin_loader::{
 };
 use crate::storage::replay::load_replay_for_chart;
 use crate::storage::scan::scan_song_roots;
-use crate::ui::{DebugInfo, EguiLayer};
+use crate::ui::{DebugInfo, EguiLayer, SceneSkinDefs, SkinConfigMeta};
 use bmz_render::skin::{SkinDocument, SkinDocumentTexture, SkinManifest};
 use std::collections::VecDeque;
 
@@ -1278,11 +1278,21 @@ impl WinitApp {
         };
         let size = window.inner_size();
         let info = DebugInfo { scene, width: size.width, height: size.height };
+        let skin_meta = SkinConfigMeta {
+            select: SceneSkinDefs::from_document(self.renderer.select_skin_document()),
+            play: SceneSkinDefs::from_document(self.renderer.play_skin_document()),
+            result: SceneSkinDefs::from_document(self.renderer.result_skin_document()),
+        };
         let Some(egui) = self.egui.as_mut() else {
             return;
         };
-        let output =
-            egui.run(&window, &info, &mut self.boot.app_config, &mut self.boot.profile_config);
+        let output = egui.run(
+            &window,
+            &info,
+            &mut self.boot.app_config,
+            &mut self.boot.profile_config,
+            &skin_meta,
+        );
         self.renderer.set_egui_frame(output.frame);
         // デバッグパネルの開閉状態を profile config へ同期する。
         // 永続化は終了時 / プレイ後の save_profile_config に任せる。

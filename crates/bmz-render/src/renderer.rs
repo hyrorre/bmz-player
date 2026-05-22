@@ -17,7 +17,7 @@ use crate::plan::{
     UvRect,
 };
 use crate::scene::AppSceneSnapshot;
-use crate::skin::{BlendMode, SkinContext};
+use crate::skin::{BlendMode, SkinContext, SkinDocument};
 use crate::ui::{EguiFrame, EguiPainter};
 
 #[derive(Default)]
@@ -210,6 +210,21 @@ impl Renderer {
     /// ドキュメントスキンが無い場合や未指定の場合は 0 を返す。
     pub fn result_skin_fadeout_ms(&self) -> i32 {
         self.result_skin_context.document().map(|document| document.fadeout).unwrap_or(0).max(0)
+    }
+
+    /// 選曲スキンの document (設定 UI が property/offset 定義を読むため公開)。
+    pub fn select_skin_document(&self) -> Option<&SkinDocument> {
+        self.select_skin_context.document()
+    }
+
+    /// プレイスキンの document。
+    pub fn play_skin_document(&self) -> Option<&SkinDocument> {
+        self.play_skin_context.document()
+    }
+
+    /// リザルトスキンの document。
+    pub fn result_skin_document(&self) -> Option<&SkinDocument> {
+        self.result_skin_context.document()
     }
 
     fn skin_context_for_scene(&self, scene: &AppSceneSnapshot) -> &SkinContext {

@@ -4,6 +4,7 @@
 //! UI を構築して描画プリミティブ (`EguiFrame`) を生成する。bmz-render はその
 //! プリミティブをゲーム / スキン描画の上にペイントするだけにする。
 
+use bmz_render::skin::{SkinDocument, SkinFilepathDef, SkinOffsetDef, SkinPropertyDef};
 use bmz_render::ui::EguiFrame;
 use egui::ViewportId;
 use winit::event::WindowEvent;
@@ -11,6 +12,42 @@ use winit::window::Window;
 
 use crate::config::app_config::{AppConfig, WindowMode};
 use crate::config::profile_config::{ProfileConfig, SkinConfig, SkinOffsetConfig};
+
+/// スキンが宣言する設定可能項目の定義 (1 シーン分)。
+///
+/// renderer が保持する `SkinDocument` から複製して egui パネルへ渡す。
+#[derive(Default)]
+pub struct SceneSkinDefs {
+    pub property: Vec<SkinPropertyDef>,
+    pub filepath: Vec<SkinFilepathDef>,
+    pub offset: Vec<SkinOffsetDef>,
+}
+
+impl SceneSkinDefs {
+    /// renderer の `SkinDocument` から設定可能項目の定義を複製する。
+    pub fn from_document(document: Option<&SkinDocument>) -> Self {
+        match document {
+            Some(doc) => Self {
+                property: doc.property.clone(),
+                filepath: doc.filepath.clone(),
+                offset: doc.offset.clone(),
+            },
+            None => Self::default(),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.property.is_empty() && self.filepath.is_empty() && self.offset.is_empty()
+    }
+}
+
+/// 選曲 / プレイ / リザルト各スキンの設定可能項目。
+#[derive(Default)]
+pub struct SkinConfigMeta {
+    pub select: SceneSkinDefs,
+    pub play: SceneSkinDefs,
+    pub result: SceneSkinDefs,
+}
 
 /// デバッグ表示パネルへ毎フレーム渡すアプリ側の情報。
 pub struct DebugInfo {
@@ -90,6 +127,7 @@ impl EguiLayer {
         info: &DebugInfo,
         app_config: &mut AppConfig,
         profile_config: &mut ProfileConfig,
+        skin_meta: &SkinConfigMeta,
     ) -> EguiOutput {
         let raw_input = self.state.take_egui_input(window);
         let ctx = self.ctx.clone();
@@ -108,7 +146,8 @@ impl EguiLayer {
                 if build_settings_panel(ctx, show_settings, app_config) {
                     save_app_config = true;
                 }
-                let skin_actions = build_skin_panel(ctx, show_skin, &mut profile_config.skin);
+                let skin_actions =
+                    build_skin_panel(ctx, show_skin, &mut profile_config.skin, skin_meta);
                 save_profile_config |= skin_actions.save;
                 reload_skins |= skin_actions.reload;
             }
@@ -245,6 +284,7 @@ fn build_skin_panel(
     ctx: &egui::Context,
     open: &mut bool,
     skin: &mut SkinConfig,
+    skin_meta: &SkinConfigMeta,
 ) -> SkinPanelActions {
     let mut save_clicked = false;
     let mut reload_clicked = false;
@@ -295,6 +335,11 @@ fn build_skin_panel(
                 skin.offsets.push(SkinOffsetConfig::default());
             }
             ui.separator();
+            ui.label("読み込み済みスキンが宣言する設定可能項目:");
+            build_scene_skin_defs(ui, "選曲スキン", &skin_meta.select);
+            build_scene_skin_defs(ui, "プレイスキン", &skin_meta.play);
+            build_scene_skin_defs(ui, "リザルトスキン", &skin_meta.result);
+            ui.separator();
             ui.label(
                 "「保存」で profile.toml へ書き出し、「スキン再読込」で現在のパスを即適用します。",
             );
@@ -309,4 +354,42 @@ fn build_skin_panel(
         },
     );
     SkinPanelActions { save: save_clicked, reload: reload_clicked }
+}
+
+/// 1 シーン分のスキン設定可能項目を折りたたみ表示する (読み取り専用)。
+fn build_scene_skin_defs(ui: &mut egui::Ui, label: &str, defs: &SceneSkinDefs) {
+    egui::CollapsingHeader::new(label).show(ui, |ui| {
+        if defs.is_empty() {
+            ui.label("設定可能項目はありません (スキン未読込、または定義なし)。");
+            return;
+        }
+        if !defs.property.is_empty() {
+            ui.strong("オプション");
+            for prop in &defs.property {
+                let choices: Vec<&str> = prop.item.iter().map(|item| item.name.as_str()).collect();
+                ui.label(format!(
+                    "・{} [{}] — 選択肢: {} / 既定: {}",
+                    prop.name,
+                    prop.category,
+                    choices.join(", "),
+                    prop.def,
+                ));
+            }
+        }
+        if !defs.filepath.is_empty() {
+            ui.strong("ファイル選択");
+            for filepath in &defs.filepath {
+                ui.label(format!(
+                    "・{} [{}] — {} / 既定: {}",
+                    filepath.name, filepath.category, filepath.path, filepath.def,
+                ));
+            }
+        }
+        if !defs.offset.is_empty() {
+            ui.strong("オフセット可能要素");
+            for offset in &defs.offset {
+                ui.label(format!("・{} [{}] — id {}", offset.name, offset.category, offset.id));
+            }
+        }
+    });
 }
