@@ -17,8 +17,9 @@ fn main() -> ExitCode {
 fn run() -> Result<()> {
     let args = CliArgs::parse(std::env::args().skip(1))?;
     match args.command {
-        Command::LuaToJson { input, output, options } => {
-            let warnings = bmz_skin::convert_lua_skin_to_json_file(&input, &output, &options)?;
+        Command::LuaToJson { input, output, options, files } => {
+            let warnings =
+                bmz_skin::convert_lua_skin_to_json_file(&input, &output, &options, &files)?;
             for warning in warnings {
                 eprintln!("warning: {}", warning.message);
             }
@@ -35,7 +36,12 @@ struct CliArgs {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Command {
-    LuaToJson { input: PathBuf, output: PathBuf, options: BTreeMap<String, String> },
+    LuaToJson {
+        input: PathBuf,
+        output: PathBuf,
+        options: BTreeMap<String, String>,
+        files: BTreeMap<String, String>,
+    },
 }
 
 impl CliArgs {
@@ -56,6 +62,7 @@ impl CliArgs {
         };
         let mut output = None;
         let mut options = BTreeMap::new();
+        let mut files = BTreeMap::new();
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--out" => {
@@ -71,12 +78,23 @@ impl CliArgs {
                     let (key, value) = parse_option_pair(&option)?;
                     options.insert(key, value);
                 }
+                "--file" => {
+                    let Some(file) = args.next() else {
+                        bail!("--file requires name=relative/path");
+                    };
+                    let (key, value) = parse_option_pair(&file)?;
+                    files.insert(key, value);
+                }
                 _ if arg.starts_with("--out=") => {
                     output = Some(PathBuf::from(arg.trim_start_matches("--out=")));
                 }
                 _ if arg.starts_with("--option=") => {
                     let (key, value) = parse_option_pair(arg.trim_start_matches("--option="))?;
                     options.insert(key, value);
+                }
+                _ if arg.starts_with("--file=") => {
+                    let (key, value) = parse_option_pair(arg.trim_start_matches("--file="))?;
+                    files.insert(key, value);
                 }
                 _ => bail!("unknown argument `{arg}`"),
             }
@@ -86,12 +104,14 @@ impl CliArgs {
             bail!("lua-to-json requires --out <path>");
         };
 
-        Ok(Self { command: Command::LuaToJson { input: PathBuf::from(input), output, options } })
+        Ok(Self {
+            command: Command::LuaToJson { input: PathBuf::from(input), output, options, files },
+        })
     }
 }
 
 fn help_text() -> &'static str {
-    "usage: bmz-skin-convert lua-to-json <input.luaskin> --out <output.json> [--option key=value]"
+    "usage: bmz-skin-convert lua-to-json <input.luaskin> --out <output.json> [--option key=value] [--file name=relative/path]"
 }
 
 fn parse_option_pair(input: &str) -> Result<(String, String)> {
@@ -127,7 +147,32 @@ mod tests {
                 command: Command::LuaToJson {
                     input: PathBuf::from("skin.luaskin"),
                     output: PathBuf::from("skin.json"),
-                    options: BTreeMap::from([("Play Side".to_string(), "1P".to_string())])
+                    options: BTreeMap::from([("Play Side".to_string(), "1P".to_string())]),
+                    files: BTreeMap::new(),
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn cli_parses_lua_to_json_file_selections() {
+        let args = CliArgs::parse([
+            "lua-to-json".to_string(),
+            "skin.luaskin".to_string(),
+            "--out=skin.json".to_string(),
+            "--file".to_string(),
+            "Cover=parts/blue.png".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(
+            args,
+            CliArgs {
+                command: Command::LuaToJson {
+                    input: PathBuf::from("skin.luaskin"),
+                    output: PathBuf::from("skin.json"),
+                    options: BTreeMap::new(),
+                    files: BTreeMap::from([("Cover".to_string(), "parts/blue.png".to_string())]),
                 }
             }
         );

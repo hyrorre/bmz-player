@@ -159,19 +159,24 @@ pub fn load_default_skin_into_renderer(renderer: &mut Renderer) -> Result<SkinMa
 /// beatoraja JSON skin の document/フォント/PNG ソースを並列にデコードする。
 /// Renderer には触らないので Send-safe で、別スレッドからも呼べる。
 pub fn decode_beatoraja_skin(skin_path: &Path, kind: SkinKind) -> Result<DecodedSkin> {
-    decode_beatoraja_skin_with_options(skin_path, kind, &BTreeMap::new())
+    decode_beatoraja_skin_with_options(skin_path, kind, &BTreeMap::new(), &BTreeMap::new())
 }
 
-/// `decode_beatoraja_skin` のカスタマイズオプション付き版。
+/// `decode_beatoraja_skin` のカスタマイズオプション / ファイル選択付き版。
 ///
 /// `options` はオプション名 -> 選択肢名の対応。JSON スキンは選択肢の `op`
 /// コード列へ、Lua スキンはそのまま渡して展開する。
+///
+/// `files` は filepath 定義名 -> 選択ファイルのスキンルート相対パスの対応。
+/// Lua スキンは `skin_config.get_path` の解決へ、JSON スキンは `source` /
+/// `font` のワイルドカード解決へ反映する。
 pub fn decode_beatoraja_skin_with_options(
     skin_path: &Path,
     kind: SkinKind,
     options: &BTreeMap<String, String>,
+    files: &BTreeMap<String, String>,
 ) -> Result<DecodedSkin> {
-    let mut document = load_skin_document(skin_path, kind, options)?;
+    let mut document = load_skin_document(skin_path, kind, options, files)?;
     // フォント ID は scene 横断的に Renderer のグローバルマップに登録されるので、
     // play / select / result で同じ "0" 等が衝突する。namespace を付与して隔離する。
     // text 定義の font 参照側も同じ namespace を付ける。
@@ -194,7 +199,7 @@ pub fn decode_beatoraja_skin_with_options(
             if font.id.is_empty() || font.path.is_empty() {
                 return None;
             }
-            let font_path = resolve_json_skin_asset_path(&skin_root, &font.path, &document)?;
+            let font_path = resolve_json_skin_asset_path(&skin_root, &font.path, &document, files)?;
             if !is_supported_font_path(&font_path) {
                 tracing::debug!(
                     font_id = %font.id,
@@ -231,7 +236,8 @@ pub fn decode_beatoraja_skin_with_options(
         .iter()
         .enumerate()
         .filter_map(|(index, source)| {
-            let source_path = resolve_json_skin_source_path(&skin_root, &source.path, &document)?;
+            let source_path =
+                resolve_json_skin_source_path(&skin_root, &source.path, &document, files)?;
             if !source_path.to_string_lossy().to_ascii_lowercase().ends_with(".png") {
                 tracing::debug!(
                     source_id = %source.id,
@@ -287,10 +293,12 @@ fn load_skin_document(
     skin_path: &Path,
     kind: SkinKind,
     options: &BTreeMap<String, String>,
+    files: &BTreeMap<String, String>,
 ) -> Result<SkinDocument> {
     if is_lua_skin_path(skin_path) {
-        // Lua スキンはオプション選択 (名前 -> 選択肢名) をそのまま渡す。
-        let loaded = bmz_skin::load_lua_skin(skin_path, decode_skin_kind(kind), options)
+        // Lua スキンはオプション選択 (名前 -> 選択肢名) とファイル選択
+        // (filepath 定義名 -> 相対パス) をそのまま渡す。
+        let loaded = bmz_skin::load_lua_skin(skin_path, decode_skin_kind(kind), options, files)
             .with_context(|| format!("failed to load lua skin: {}", skin_path.display()))?;
         for warning in loaded.warnings {
             tracing::warn!(
@@ -494,26 +502,55 @@ fn resolve_json_skin_source_path(
     skin_root: &Path,
     source_path: &str,
     document: &SkinDocument,
+    files: &BTreeMap<String, String>,
 ) -> Option<PathBuf> {
-    resolve_json_skin_asset_path(skin_root, source_path, document)
+    resolve_json_skin_asset_path(skin_root, source_path, document, files)
 }
 
 fn resolve_json_skin_asset_path(
     skin_root: &Path,
     asset_path: &str,
     document: &SkinDocument,
+    files: &BTreeMap<String, String>,
 ) -> Option<PathBuf> {
     let normalized = asset_path.replace('\\', "/");
     if !normalized.contains('*') {
         return Some(skin_root.join(normalized));
     }
 
-    let preferred = document
-        .filepath
-        .iter()
-        .find(|filepath| filepath.path.replace('\\', "/") == normalized)
-        .and_then(|filepath| (!filepath.def.is_empty()).then_some(filepath.def.as_str()));
+    let filepath =
+        document.filepath.iter().find(|filepath| filepath.path.replace('\\', "/") == normalized);
+
+    // スキン設定パネルで選んだファイルを最優先で返す。ファイルが消えている
+    // 場合は `def` / 先頭候補へフォールバックする。
+    if let Some(filepath) = filepath
+        && let Some(selected) = files.get(&filepath.name).filter(|selected| !selected.is_empty())
+        && let Some(path) = resolve_selected_skin_file(skin_root, selected)
+    {
+        return Some(path);
+    }
+
+    let preferred =
+        filepath.and_then(|filepath| (!filepath.def.is_empty()).then_some(filepath.def.as_str()));
     resolve_wildcard_path(skin_root, &normalized, preferred)
+}
+
+/// ユーザ選択のスキンルート相対パスを解決する。
+/// 絶対パスやスキンルート外への脱出を含む選択は無効として `None` を返す。
+fn resolve_selected_skin_file(skin_root: &Path, selected: &str) -> Option<PathBuf> {
+    use std::path::Component;
+
+    let relative = Path::new(selected);
+    if relative.as_os_str().is_empty()
+        || relative.is_absolute()
+        || relative.components().any(|component| {
+            matches!(component, Component::ParentDir | Component::RootDir | Component::Prefix(_))
+        })
+    {
+        return None;
+    }
+    let candidate = skin_root.join(relative);
+    candidate.is_file().then_some(candidate)
 }
 
 fn resolve_wildcard_path(
@@ -868,7 +905,59 @@ mod tests {
         )
         .unwrap();
 
-        let resolved = resolve_json_skin_source_path(&root, "parts/*.png", &document).unwrap();
+        let resolved =
+            resolve_json_skin_source_path(&root, "parts/*.png", &document, &BTreeMap::new())
+                .unwrap();
+
+        assert_eq!(resolved.file_name().and_then(|name| name.to_str()), Some("blue.png"));
+    }
+
+    #[test]
+    fn wildcard_skin_source_prefers_user_file_selection() {
+        let root = unique_test_dir("bmz-json-source");
+        std::fs::create_dir_all(root.join("parts")).unwrap();
+        std::fs::write(root.join("parts/default.png"), []).unwrap();
+        std::fs::write(root.join("parts/blue.png"), []).unwrap();
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "filepath": [
+                    { "name": "Parts", "path": "parts/*.png", "def": "blue" }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        // ユーザ選択は `def` (blue) より優先される。
+        let files = BTreeMap::from([("Parts".to_string(), "parts/default.png".to_string())]);
+
+        let resolved =
+            resolve_json_skin_source_path(&root, "parts/*.png", &document, &files).unwrap();
+
+        assert_eq!(resolved.file_name().and_then(|name| name.to_str()), Some("default.png"));
+    }
+
+    #[test]
+    fn wildcard_skin_source_falls_back_when_user_selection_missing() {
+        let root = unique_test_dir("bmz-json-source");
+        std::fs::create_dir_all(root.join("parts")).unwrap();
+        std::fs::write(root.join("parts/default.png"), []).unwrap();
+        std::fs::write(root.join("parts/blue.png"), []).unwrap();
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "filepath": [
+                    { "name": "Parts", "path": "parts/*.png", "def": "blue" }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        // 存在しないファイルを選択 → `def` (blue) へフォールバック。
+        let files = BTreeMap::from([("Parts".to_string(), "parts/missing.png".to_string())]);
+
+        let resolved =
+            resolve_json_skin_source_path(&root, "parts/*.png", &document, &files).unwrap();
 
         assert_eq!(resolved.file_name().and_then(|name| name.to_str()), Some("blue.png"));
     }
@@ -898,6 +987,7 @@ mod tests {
             &root,
             "parts/lanecover_lift/*.png|lanecover|",
             &document,
+            &BTreeMap::new(),
         )
         .unwrap();
 
@@ -912,7 +1002,9 @@ mod tests {
         std::fs::write(root.join("parts/a.png"), []).unwrap();
         let document: SkinDocument = serde_json::from_str("{}").unwrap();
 
-        let resolved = resolve_json_skin_source_path(&root, "parts/*.png", &document).unwrap();
+        let resolved =
+            resolve_json_skin_source_path(&root, "parts/*.png", &document, &BTreeMap::new())
+                .unwrap();
 
         assert_eq!(resolved.file_name().and_then(|name| name.to_str()), Some("a.png"));
     }
@@ -925,7 +1017,8 @@ mod tests {
         let document: SkinDocument = serde_json::from_str("{}").unwrap();
 
         let resolved =
-            resolve_json_skin_asset_path(&root, "frame/SP/*/song.fnt", &document).unwrap();
+            resolve_json_skin_asset_path(&root, "frame/SP/*/song.fnt", &document, &BTreeMap::new())
+                .unwrap();
 
         assert_eq!(resolved.strip_prefix(&root).unwrap(), Path::new("frame/SP/Default/song.fnt"));
     }

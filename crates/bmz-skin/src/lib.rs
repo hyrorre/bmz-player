@@ -44,8 +44,9 @@ pub fn load_lua_skin(
     path: &Path,
     _kind: SkinKind,
     options: &BTreeMap<String, String>,
+    files: &BTreeMap<String, String>,
 ) -> Result<LoadedSkinDocument> {
-    let loaded = load_lua_skin_value(path, options)?;
+    let loaded = load_lua_skin_value(path, options, files)?;
     let value = normalize_json_skin_integer_numbers(loaded.value);
     let document = serde_json::from_value(value)
         .with_context(|| format!("failed to parse lua skin as document: {}", path.display()))?;
@@ -55,8 +56,9 @@ pub fn load_lua_skin(
 pub fn load_lua_skin_value(
     path: &Path,
     options: &BTreeMap<String, String>,
+    files: &BTreeMap<String, String>,
 ) -> Result<LoadedLuaSkinValue> {
-    lua::load_lua_skin_value(path, options)
+    lua::load_lua_skin_value(path, options, files)
 }
 
 fn normalize_json_skin_integer_numbers(value: JsonValue) -> JsonValue {
@@ -191,8 +193,9 @@ pub fn convert_lua_skin_to_json_file(
     input: &Path,
     output: &Path,
     options: &BTreeMap<String, String>,
+    files: &BTreeMap<String, String>,
 ) -> Result<Vec<SkinLoadWarning>> {
-    let report = lua::convert_lua_skin_to_json(input, output, options)?;
+    let report = lua::convert_lua_skin_to_json(input, output, options, files)?;
     Ok(report.warnings.into_iter().map(|message| SkinLoadWarning { message }).collect())
 }
 
@@ -228,8 +231,13 @@ mod tests {
         )
         .unwrap();
 
-        let loaded =
-            load_lua_skin(&root.join("play7.luaskin"), SkinKind::Play, &BTreeMap::new()).unwrap();
+        let loaded = load_lua_skin(
+            &root.join("play7.luaskin"),
+            SkinKind::Play,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
 
         assert!(loaded.warnings.is_empty());
         assert_eq!(loaded.document.value[0].ref_id, 71);
@@ -248,8 +256,13 @@ mod tests {
         fs::write(root.join("play7.luaskin"), "return dofile('../outside.lua')").unwrap();
         fs::write(root.parent().unwrap().join("outside.lua"), "return {}").unwrap();
 
-        let err = load_lua_skin(&root.join("play7.luaskin"), SkinKind::Play, &BTreeMap::new())
-            .unwrap_err();
+        let err = load_lua_skin(
+            &root.join("play7.luaskin"),
+            SkinKind::Play,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap_err();
         assert!(format!("{err:#}").contains("escapes skin root"));
     }
 
@@ -278,13 +291,93 @@ mod tests {
         )
         .unwrap();
 
-        let loaded = load_lua_skin_value(&root.join("play7.luaskin"), &BTreeMap::new()).unwrap();
+        let loaded =
+            load_lua_skin_value(&root.join("play7.luaskin"), &BTreeMap::new(), &BTreeMap::new())
+                .unwrap();
 
         assert_eq!(
             loaded.value["source"][0]["path"].as_str().and_then(|path| {
                 std::path::Path::new(path).file_name().and_then(|name| name.to_str())
             }),
             Some("default.png")
+        );
+    }
+
+    #[test]
+    fn lua_skin_config_get_path_applies_user_file_selection() {
+        let root = unique_test_dir("bmz-skin-lua");
+        fs::create_dir_all(root.join("parts")).unwrap();
+        fs::write(root.join("parts/a.png"), []).unwrap();
+        fs::write(root.join("parts/z.png"), []).unwrap();
+        fs::write(
+            root.join("play7.luaskin"),
+            r#"
+            local cover_path = "parts/*.png"
+            if skin_config then
+                cover_path = skin_config.get_path(cover_path)
+            end
+            return {
+                type = 0,
+                filepath = {
+                    { name = "Cover", path = "parts/*.png", def = "a" }
+                },
+                source = {
+                    { id = "cover", path = cover_path }
+                }
+            }
+            "#,
+        )
+        .unwrap();
+
+        let files = BTreeMap::from([("Cover".to_string(), "parts/z.png".to_string())]);
+        let loaded =
+            load_lua_skin_value(&root.join("play7.luaskin"), &BTreeMap::new(), &files).unwrap();
+
+        assert_eq!(
+            loaded.value["source"][0]["path"].as_str().and_then(|path| {
+                std::path::Path::new(path).file_name().and_then(|name| name.to_str())
+            }),
+            // ユーザ選択 (z.png) を採用する。ソート先頭候補は a.png。
+            Some("z.png")
+        );
+    }
+
+    #[test]
+    fn lua_skin_config_get_path_falls_back_when_selection_missing() {
+        let root = unique_test_dir("bmz-skin-lua");
+        fs::create_dir_all(root.join("parts")).unwrap();
+        fs::write(root.join("parts/a.png"), []).unwrap();
+        fs::write(root.join("parts/z.png"), []).unwrap();
+        fs::write(
+            root.join("play7.luaskin"),
+            r#"
+            local cover_path = "parts/*.png"
+            if skin_config then
+                cover_path = skin_config.get_path(cover_path)
+            end
+            return {
+                type = 0,
+                filepath = {
+                    { name = "Cover", path = "parts/*.png", def = "a" }
+                },
+                source = {
+                    { id = "cover", path = cover_path }
+                }
+            }
+            "#,
+        )
+        .unwrap();
+
+        // 存在しないファイルを選択 → 従来通りソート先頭候補へフォールバック。
+        let files = BTreeMap::from([("Cover".to_string(), "parts/missing.png".to_string())]);
+        let loaded =
+            load_lua_skin_value(&root.join("play7.luaskin"), &BTreeMap::new(), &files).unwrap();
+
+        assert_eq!(
+            loaded.value["source"][0]["path"].as_str().and_then(|path| {
+                std::path::Path::new(path).file_name().and_then(|name| name.to_str())
+            }),
+            Some("a.png")
         );
     }
 
@@ -315,8 +408,13 @@ mod tests {
         )
         .unwrap();
 
-        let loaded =
-            load_lua_skin(&root.join("play7.luaskin"), SkinKind::Play, &BTreeMap::new()).unwrap();
+        let loaded = load_lua_skin(
+            &root.join("play7.luaskin"),
+            SkinKind::Play,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
 
         assert_eq!(loaded.document.destination.len(), 1);
     }
@@ -327,8 +425,13 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         fs::write(root.join("play7.luaskin"), "while true do end").unwrap();
 
-        let err = load_lua_skin(&root.join("play7.luaskin"), SkinKind::Play, &BTreeMap::new())
-            .unwrap_err();
+        let err = load_lua_skin(
+            &root.join("play7.luaskin"),
+            SkinKind::Play,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap_err();
         assert!(format!("{err:#}").contains("instruction limit"));
     }
 

@@ -259,6 +259,9 @@ impl WinitApp {
                 &boot.profile_config.skin.select_options,
                 &boot.profile_config.skin.play_options,
                 &boot.profile_config.skin.result_options,
+                &boot.profile_config.skin.select_files,
+                &boot.profile_config.skin.play_files,
+                &boot.profile_config.skin.result_files,
             );
 
         let gilrs = if boot.app_config.input.gamepad_enabled {
@@ -1344,6 +1347,9 @@ impl WinitApp {
             &skin.select_options,
             &skin.play_options,
             &skin.result_options,
+            &skin.select_files,
+            &skin.play_files,
+            &skin.result_files,
         );
         self.default_skin_manifest = manifest;
         self.pending_skin_rx = rx;
@@ -1553,6 +1559,9 @@ fn load_skin_textures(
     select_options: &BTreeMap<String, String>,
     play_options: &BTreeMap<String, String>,
     result_options: &BTreeMap<String, String>,
+    select_files: &BTreeMap<String, String>,
+    play_files: &BTreeMap<String, String>,
+    result_files: &BTreeMap<String, String>,
 ) -> (Option<SkinManifest>, Option<Receiver<PendingSkinResult>>, bool, bool) {
     // Play / Result の JSON skin は Select の同期ロードより**前**に decode スレッドを起動して
     // CPU をフル活用する。Select の sync 処理 (PNG GPU upload など) と並列に decode が進む。
@@ -1571,6 +1580,7 @@ fn load_skin_textures(
                 play_path.to_path_buf(),
                 SkinKind::Play,
                 play_options.clone(),
+                play_files.clone(),
             );
             pending_play = true;
         }
@@ -1583,6 +1593,7 @@ fn load_skin_textures(
                 result_path.to_path_buf(),
                 SkinKind::Result,
                 result_options.clone(),
+                result_files.clone(),
             );
             pending_result = true;
         }
@@ -1611,6 +1622,7 @@ fn load_skin_textures(
                 SkinKind::Select,
                 default_manifest.as_ref(),
                 select_options,
+                select_files,
             );
         } else {
             tracing::warn!(
@@ -1647,6 +1659,7 @@ fn apply_json_skin_sync(
     kind: SkinKind,
     default_manifest: Option<&SkinManifest>,
     options: &BTreeMap<String, String>,
+    files: &BTreeMap<String, String>,
 ) {
     let Some(manifest) = default_manifest else {
         tracing::warn!(
@@ -1656,7 +1669,7 @@ fn apply_json_skin_sync(
         );
         return;
     };
-    let decoded = match decode_beatoraja_skin_with_options(path, kind, options) {
+    let decoded = match decode_beatoraja_skin_with_options(path, kind, options, files) {
         Ok(decoded) => decoded,
         Err(error) => {
             tracing::warn!(
@@ -1683,12 +1696,13 @@ fn spawn_skin_decode(
     path: PathBuf,
     kind: SkinKind,
     options: BTreeMap<String, String>,
+    files: BTreeMap<String, String>,
 ) {
     let send_path = path.clone();
     thread::Builder::new()
         .name(format!("skin-decode-{:?}", kind))
         .spawn(move || {
-            let result = decode_beatoraja_skin_with_options(&path, kind, &options);
+            let result = decode_beatoraja_skin_with_options(&path, kind, &options, &files);
             let _ = tx.send(PendingSkinResult { path: send_path, kind, result });
         })
         .expect("failed to spawn skin decode thread");

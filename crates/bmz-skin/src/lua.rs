@@ -24,8 +24,9 @@ pub struct ConvertReport {
 pub fn load_lua_skin_value(
     input: &Path,
     options: &BTreeMap<String, String>,
+    files: &BTreeMap<String, String>,
 ) -> Result<LoadedLuaSkinValue> {
-    let (value, warnings) = execute_lua_skin(input, options)?;
+    let (value, warnings) = execute_lua_skin(input, options, files)?;
     Ok(LoadedLuaSkinValue {
         value,
         warnings: warnings.into_iter().map(|message| SkinLoadWarning { message }).collect(),
@@ -36,8 +37,9 @@ pub fn convert_lua_skin_to_json(
     input: &Path,
     output: &Path,
     options: &BTreeMap<String, String>,
+    files: &BTreeMap<String, String>,
 ) -> Result<ConvertReport> {
-    let (json, warnings) = execute_lua_skin(input, options)?;
+    let (json, warnings) = execute_lua_skin(input, options, files)?;
     if let Some(parent) = output.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create output dir: {}", parent.display()))?;
@@ -51,6 +53,7 @@ pub fn convert_lua_skin_to_json(
 fn execute_lua_skin(
     input: &Path,
     options: &BTreeMap<String, String>,
+    files: &BTreeMap<String, String>,
 ) -> Result<(JsonValue, Vec<String>)> {
     let input = canonicalize_skin_path(input)
         .with_context(|| format!("failed to canonicalize input: {}", input.display()))?;
@@ -66,7 +69,7 @@ fn execute_lua_skin(
 
     let header_lua = Lua::new();
     install_instruction_limit(&header_lua);
-    let header_probe = install_sandbox(&header_lua, &root, options, None)?;
+    let header_probe = install_sandbox(&header_lua, &root, options, None, &BTreeMap::new())?;
     let header = header_lua
         .load(&source)
         .set_name(input.to_string_lossy().as_ref())
@@ -75,10 +78,11 @@ fn execute_lua_skin(
     let header_json =
         lua_value_to_json(header, "$", 0, &mut warnings, &header_probe, &mut table_budget)?;
     let skin_options = skin_config_options_from_header(&header_json, options, &mut warnings);
+    let skin_files = skin_files_from_header(&header_json, files);
 
     let lua = Lua::new();
     install_instruction_limit(&lua);
-    let main_state_probe = install_sandbox(&lua, &root, options, Some(&skin_options))?;
+    let main_state_probe = install_sandbox(&lua, &root, options, Some(&skin_options), &skin_files)?;
     let value = lua
         .load(&source)
         .set_name(input.to_string_lossy().as_ref())
@@ -129,6 +133,7 @@ fn install_sandbox(
     root: &Path,
     options: &BTreeMap<String, String>,
     skin_config_options: Option<&BTreeMap<String, i64>>,
+    skin_files: &BTreeMap<String, String>,
 ) -> Result<Arc<Mutex<MainStateProbe>>> {
     let main_state_probe = Arc::new(Mutex::new(MainStateProbe::default()));
     let globals = lua.globals();
@@ -140,8 +145,9 @@ fn install_sandbox(
         }
         skin_config.set("option", option)?;
         let root_for_get_path = root.to_path_buf();
+        let skin_files_for_get_path = skin_files.clone();
         let get_path = lua.create_function(move |_, requested: String| {
-            skin_config_get_path(&root_for_get_path, &requested)
+            skin_config_get_path(&root_for_get_path, &requested, &skin_files_for_get_path)
                 .map(|path| path.to_string_lossy().to_string())
                 .map_err(mlua::Error::external)
         })?;
@@ -531,7 +537,53 @@ fn default_property_op(property: &JsonValue, items: &[JsonValue]) -> Option<i64>
     items.first().and_then(|item| item.get("op")).and_then(JsonValue::as_i64)
 }
 
-fn skin_config_get_path(root: &Path, requested: &str) -> Result<PathBuf> {
+/// スキン設定パネルで選んだファイル選択を、filepath 定義の `path` グロブごとに
+/// 集める。キーは `path` グロブ (区切りを `/` に正規化)、値は選択ファイルの
+/// スキンルート相対パス。選択が無い / 空の定義は含めない。
+fn skin_files_from_header(
+    header: &JsonValue,
+    selected: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    let mut result = BTreeMap::new();
+    let Some(filepaths) = header.get("filepath").and_then(JsonValue::as_array) else {
+        return result;
+    };
+    for filepath in filepaths {
+        let Some(name) = filepath.get("name").and_then(JsonValue::as_str) else {
+            continue;
+        };
+        let Some(path) = filepath.get("path").and_then(JsonValue::as_str) else {
+            continue;
+        };
+        let Some(choice) = selected.get(name).filter(|choice| !choice.is_empty()) else {
+            continue;
+        };
+        result.insert(path.replace('\\', "/"), choice.clone());
+    }
+    result
+}
+
+/// ユーザ選択のスキンルート相対パスを解決する。
+/// 絶対パスやスキンルート外への脱出を含む選択は無効として `None` を返す。
+fn resolve_selected_skin_file(root: &Path, selected: &str) -> Option<PathBuf> {
+    let relative = Path::new(selected);
+    if relative.as_os_str().is_empty()
+        || relative.is_absolute()
+        || relative.components().any(|component| {
+            matches!(component, Component::ParentDir | Component::RootDir | Component::Prefix(_))
+        })
+    {
+        return None;
+    }
+    let candidate = root.join(relative);
+    candidate.is_file().then_some(candidate)
+}
+
+fn skin_config_get_path(
+    root: &Path,
+    requested: &str,
+    skin_files: &BTreeMap<String, String>,
+) -> Result<PathBuf> {
     let requested_path = strip_beatoraja_asset_filter(requested);
     let relative_path = Path::new(requested_path);
     if relative_path.is_absolute()
@@ -540,6 +592,14 @@ fn skin_config_get_path(root: &Path, requested: &str) -> Result<PathBuf> {
         })
     {
         bail!("skin_config.get_path escapes skin root: {requested}");
+    }
+
+    // ユーザがスキン設定パネルで選んだファイルを最優先で返す。
+    // 選択が存在しない / ファイルが消えている場合は従来通り候補解決へ委ねる。
+    if let Some(selected) = skin_files.get(&requested.replace('\\', "/"))
+        && let Some(path) = resolve_selected_skin_file(root, selected)
+    {
+        return Ok(path);
     }
 
     let Some((prefix, suffix)) = requested_path.split_once('*') else {
