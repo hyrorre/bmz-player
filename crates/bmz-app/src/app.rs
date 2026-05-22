@@ -154,6 +154,10 @@ struct WinitApp {
     /// 現在ウィンドウへ適用済みのウィンドウモード。
     /// config 側との差分検出でライブ反映の要否を判定する。
     applied_window_mode: WindowMode,
+    /// ウィンドウがフォーカスを持っているか。フレームレート上限の切替に使う。
+    focused: bool,
+    /// 直近フレームの開始時刻。フレームレート制限のスリープ量算出に使う。
+    last_frame_at: Option<Instant>,
 }
 
 const SELECT_EXIT_HOLD_DURATION: Duration = Duration::from_millis(1_200);
@@ -286,6 +290,8 @@ impl WinitApp {
             last_play_start_press_at: None,
             egui: None,
             applied_window_mode: initial_window_mode,
+            focused: true,
+            last_frame_at: None,
         };
         if let Some(chart_id) = boot_sample_chart_id {
             tracing::info!(
@@ -1135,6 +1141,30 @@ impl WinitApp {
         }
     }
 
+    /// `target_fps` (フォアグラウンド) / `frame_limit_in_background`
+    /// (非フォーカス時) に従ってフレーム開始間隔を一定に保つ。
+    ///
+    /// 各 `RedrawRequested` の先頭で呼び、前フレーム開始からの経過が
+    /// フレーム予算に満たなければ残りをスリープする。FPS 値が 0 の場合は
+    /// 無制限としてスリープしない。
+    fn limit_frame_rate(&mut self) {
+        let fps = if self.focused {
+            self.boot.app_config.video.target_fps
+        } else {
+            self.boot.app_config.video.frame_limit_in_background
+        };
+        if fps > 0
+            && let Some(last) = self.last_frame_at
+        {
+            let budget = Duration::from_secs_f64(1.0 / f64::from(fps));
+            let elapsed = last.elapsed();
+            if elapsed < budget {
+                thread::sleep(budget - elapsed);
+            }
+        }
+        self.last_frame_at = Some(Instant::now());
+    }
+
     /// egui の 1 フレームを構築し、renderer へ描画データを渡す。
     /// `render_current_scene` の前に呼ぶこと。
     fn run_egui_frame(&mut self) {
@@ -1589,7 +1619,11 @@ impl ApplicationHandler for WinitApp {
                 self.renderer
                     .resize_surface(SurfaceSize { width: size.width, height: size.height });
             }
+            WindowEvent::Focused(focused) => {
+                self.focused = focused;
+            }
             WindowEvent::RedrawRequested => {
+                self.limit_frame_rate();
                 self.poll_gamepad_events();
                 self.drain_pending_skins();
                 self.run_egui_frame();
