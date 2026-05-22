@@ -230,6 +230,17 @@ pub fn drain_human_inputs(session: &mut GameSession) {
     update_recent_inputs(session, &inputs, session.audio_clock.now());
 }
 
+/// 入力バックエンドを drain するだけで、判定にも視覚エフェクト(recent_inputs)にも反映しない。
+/// オートプレイ中はキービームをノーツ処理側で発火させるため、人間入力はここで捨てる。
+pub fn discard_human_inputs(session: &mut GameSession) {
+    let ctx = InputTimingContext {
+        audio_clock: &session.audio_clock,
+        offsets: session.offsets,
+        timestamp_anchor: session.input_timestamp_anchor,
+    };
+    let _ = session.input_system.collect_game_inputs(&ctx);
+}
+
 pub fn process_replay_inputs(session: &mut GameSession, audio_now: TimeUs) -> Vec<JudgementEvent> {
     let Some(player) = &mut session.replay_player else {
         return Vec::new();
@@ -251,8 +262,12 @@ pub fn process_autoplay_inputs(
         return Vec::new();
     };
 
+    let inputs = auto.poll_until(&session.chart, audio_now);
+    // オートプレイのキービームはノーツ処理時(=この autoplay 入力)で発火させる。
+    update_recent_inputs(session, &inputs, session.audio_clock.now());
+
     let mut judgements = Vec::new();
-    for input in auto.poll_until(&session.chart, audio_now) {
+    for input in inputs {
         let outcome = session.judge.process_input(&session.chart, input);
         judgements.extend(apply_judge_outcome(session, outcome));
     }
@@ -288,9 +303,10 @@ pub fn advance_session_frame(
             drain_human_inputs(session);
             judgements.extend(process_replay_inputs(session, times.audio_now));
         } else if session.autoplay.is_some() {
-            // オートプレイ中は人間のキー入力を判定に渡さない。
+            // オートプレイ中は人間のキー入力を判定にも視覚エフェクトにも渡さない。
+            // キービームは process_autoplay_inputs 側(ノーツ処理時)で発火する。
             // (ハイスピード等のオプション操作は app 側で別途処理される)
-            drain_human_inputs(session);
+            discard_human_inputs(session);
             judgements.extend(process_autoplay_inputs(session, times.audio_now));
         } else {
             judgements.extend(process_human_inputs(session));
@@ -469,10 +485,29 @@ mod tests {
 
         advance_session_frame(&mut session, &mut audio);
 
-        // オートプレイ中は人間入力を recorder に渡さない (judge には autoplay 入力のみ)。
+        // オートプレイ中は人間入力を recorder に渡さない。
         assert!(session.replay_recorder.events.is_empty());
-        // recent_inputs だけは Press が反映される (視覚エフェクト用)。
+        // 人間のキー入力は recent_inputs(キービーム)にも反映されない。
+        // recent_inputs に乗るのは autoplay のノーツ処理入力のみ。
+        assert!(session.recent_inputs.iter().all(|i| i.source == InputSource::Auto));
+        assert!(
+            session.recent_inputs.iter().all(|i| i.source != InputSource::Human),
+            "human key press must not produce a keybeam during autoplay",
+        );
+    }
+
+    #[test]
+    fn process_autoplay_inputs_flashes_keybeam_on_note_processing() {
+        let mut session = session_with_autoplay(chart_with_keysound());
+
+        // chart_with_keysound のノーツは time=0 / Key1。audio_now=0 で処理される。
+        let judgements = process_autoplay_inputs(&mut session, TimeUs(0));
+
+        assert!(!judgements.is_empty(), "autoplay should judge the note");
+        // ノーツ処理に伴って autoplay 入力が recent_inputs に積まれる(キービーム発火)。
         assert_eq!(session.recent_inputs.len(), 1);
+        assert_eq!(session.recent_inputs[0].lane, Lane::Key1);
+        assert_eq!(session.recent_inputs[0].source, InputSource::Auto);
     }
 
     #[test]
