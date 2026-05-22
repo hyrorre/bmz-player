@@ -122,6 +122,9 @@ struct WinitApp {
     last_started_chart_id: Option<i64>,
     select_items: Vec<SelectItem>,
     folder_stack: Vec<String>,
+    /// `folder_stack` の各階層に入る直前の `selected_index`。
+    /// フォルダから出た時にカーソル位置を復元するために使う。長さは `folder_stack` と一致。
+    selected_index_stack: Vec<usize>,
     selected_index: usize,
     renderer: Renderer,
     dev_scene: Option<AppSceneSnapshot>,
@@ -282,6 +285,7 @@ impl WinitApp {
             last_play_snapshot: None,
             last_started_chart_id: None,
             select_items,
+            selected_index_stack: vec![0; folder_stack.len()],
             folder_stack,
             selected_index: 0,
             renderer,
@@ -838,6 +842,8 @@ impl WinitApp {
         }
         match self.select_items.get(self.selected_index).cloned() {
             Some(SelectItem::Folder { path, .. }) => {
+                // 入る直前のカーソル位置を覚えておき、出た時に復元できるようにする。
+                self.selected_index_stack.push(self.selected_index);
                 self.folder_stack.push(path);
                 self.reload_select_items();
                 self.selected_index = 0;
@@ -855,8 +861,10 @@ impl WinitApp {
 
     fn exit_folder(&mut self) {
         if self.folder_stack.pop().is_some() {
+            let restored = self.selected_index_stack.pop().unwrap_or(0);
             self.reload_select_items();
-            self.selected_index = 0;
+            // 復元先がリスト範囲外なら末尾にクランプする。
+            self.selected_index = restored.min(self.select_items.len().saturating_sub(1));
             self.select_bar_started_at = Instant::now();
             tracing::info!(depth = self.folder_stack.len(), "exited folder");
         }
