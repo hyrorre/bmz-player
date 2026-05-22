@@ -38,7 +38,7 @@ encoding_rs = "0.8"
 
 cpal = "0.15"
 ffmpeg-next = "8"
-wgpu = "0.20"
+wgpu = "29"
 winit = "0.30"
 gilrs = "0.10"
 mlua = { version = "0.10", features = ["lua54", "vendored", "send"] }
