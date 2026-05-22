@@ -899,6 +899,10 @@ pub struct SkinDrawState {
     pub select_bgm_volume: f32,
     /// 選択中曲のレベル表記から取り出した数値。
     pub select_play_level: i64,
+    /// 現在の曲のレベル表記から取り出した数値 (NUMBER_PLAYLEVEL=96)。
+    pub play_level: i64,
+    /// 現在の曲の #DIFFICULTY code。0=OTHER, 1=BEGINNER, 2=NORMAL, 3=HYPER, 4=ANOTHER, 5=INSANE。
+    pub difficulty: i64,
     /// 選択中曲のベストEXスコア。
     pub select_ex_score: Option<u32>,
     /// 選択中曲のリプレイスロット有無。
@@ -996,6 +1000,8 @@ impl Default for SkinDrawState {
             select_key_volume: 1.0,
             select_bgm_volume: 1.0,
             select_play_level: 0,
+            play_level: 0,
+            difficulty: 0,
             select_ex_score: None,
             select_replay_slots: [false; 4],
             select_replay_index: None,
@@ -1025,6 +1031,8 @@ pub struct SkinTextState<'a> {
     pub artist: &'a str,
     pub subartist: &'a str,
     pub genre: &'a str,
+    pub difficulty_name: &'a str,
+    pub play_level: &'a str,
     pub current_folder: &'a str,
     pub bar_text: &'a str,
     pub table_level: &'a str,
@@ -1649,7 +1657,7 @@ impl SkinDocument {
         }
 
         if let Some(value) = self.value.iter().find(|value| value.id == destination.id) {
-            let number = skin_value_number(value, state)?;
+            let number = skin_value_number_or_songlist_level(value, state)?;
             return Some(self.value_number_render_items(
                 &value.id,
                 number,
@@ -1730,6 +1738,8 @@ impl SkinDocument {
             select_bgm_volume: snapshot.bgm_volume,
             select_chart_count: snapshot.chart_count,
             select_play_level: selected_row.map(select_row_level_number).unwrap_or(0),
+            play_level: selected_row.map(select_row_level_number).unwrap_or(0),
+            difficulty: selected_row.map(select_row_difficulty_code).unwrap_or(0),
             select_ex_score: selected_row.and_then(|row| row.ex_score),
             select_replay_slots: selected_row.map(|row| row.replay_slots).unwrap_or([false; 4]),
             select_replay_index: selected_row.and_then(select_row_replay_index),
@@ -1749,6 +1759,10 @@ impl SkinDocument {
             title: selected_row.map(|row| row.title.as_str()).unwrap_or(&snapshot.selected_title),
             artist: selected_row.map(|row| row.artist.as_str()).unwrap_or_default(),
             genre: "",
+            difficulty_name: selected_row
+                .map(|row| row.difficulty_name.as_str())
+                .unwrap_or_default(),
+            play_level: selected_row.map(|row| row.play_level.as_str()).unwrap_or_default(),
             current_folder: &snapshot.current_folder,
             table_level: selected_row.map(|row| row.table_level.as_str()).unwrap_or_default(),
             ..SkinTextState::default()
@@ -1802,6 +1816,8 @@ impl SkinDocument {
         for row in &snapshot.rows {
             let row_state = SkinDrawState {
                 select_play_level: select_row_level_number(row),
+                play_level: select_row_level_number(row),
+                difficulty: select_row_difficulty_code(row),
                 select_ex_score: row.ex_score,
                 select_replay_slots: row.replay_slots,
                 select_replay_index: select_row_replay_index(row),
@@ -1852,7 +1868,7 @@ impl SkinDocument {
                     row_state,
                     sources,
                 ));
-                items.extend(self.select_songlist_child_items(
+                items.extend(self.select_songlist_level_items(
                     &songlist.level,
                     row,
                     row_origin,
@@ -1935,7 +1951,7 @@ impl SkinDocument {
         items
     }
 
-    fn select_songlist_child_items(
+    fn select_songlist_level_items(
         &self,
         entries: &[DestinationListEntry],
         row: &SelectRowSnapshot,
@@ -1945,7 +1961,7 @@ impl SkinDocument {
         state: SkinDrawState,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Vec<SkinRenderItem> {
-        let level_index = select_row_level_number(row).saturating_sub(1).max(0) as usize;
+        let level_index = select_row_difficulty_code(row).clamp(0, i64::MAX) as usize;
         self.select_songlist_child_items_by_index(
             entries,
             level_index,
@@ -3207,6 +3223,9 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool 
         271 => state.lane_cover > 0.0,
         272 => state.offset_lift_px != 0,
         273 => state.hidden_cover > 0.0,
+        // OPTION_DIFFICULTY0..5. 0 は UNKNOWN/OTHER、1..5 は BMS #DIFFICULTY。
+        150 => state.difficulty <= 0 || state.difficulty > 5,
+        151..=155 => state.difficulty == i64::from(op - 150),
         // OPTION_RESULT_CLEAR=90, OPTION_RESULT_FAIL=91
         // Result 画面以外 (result_failed == None) では両方 false。
         90 => state.result_failed == Some(false),
@@ -3678,6 +3697,17 @@ fn skin_value_number(value: &SkinValueDef, state: SkinDrawState) -> Option<i64> 
     skin_state_number(value.ref_id, state)
 }
 
+fn skin_value_number_or_songlist_level(value: &SkinValueDef, state: SkinDrawState) -> Option<i64> {
+    if value.ref_id == 0 && value.expr.trim().is_empty() {
+        return Some(if state.play_level != 0 {
+            state.play_level
+        } else {
+            state.select_play_level
+        });
+    }
+    skin_value_number(value, state)
+}
+
 fn skin_state_number_expr(expr: &str, state: SkinDrawState) -> Option<i64> {
     let normalized = expr.replace('+', " + ").replace('-', " - ");
     let mut sign = 1_i64;
@@ -3727,7 +3757,7 @@ fn skin_state_number_expr_term(term: &str, state: SkinDrawState) -> Option<i64> 
 fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
     match ref_id {
         300 => Some(state.select_chart_count as i64),
-        96 => Some(state.select_play_level),
+        96 => Some(if state.play_level != 0 { state.play_level } else { state.select_play_level }),
         370 => Some(state.select_clear_index),
         92 => Some(state.select_bpm.round() as i64),
         71 | 101 | 171 => Some(state.ex_score as i64),
@@ -4085,6 +4115,12 @@ fn skin_state_text(text: &SkinTextDef, state: SkinTextState<'_>) -> String {
     if text.id == "table_level" {
         return state.table_level.to_string();
     }
+    if text.id == "difficulty" || text.id == "difficulty_name" {
+        return state.difficulty_name.to_string();
+    }
+    if text.id == "level" || text.id == "play_level" {
+        return state.play_level.to_string();
+    }
     match text.ref_id {
         10 => state.title.to_string(),
         11 => state.subtitle.to_string(),
@@ -4111,6 +4147,22 @@ fn full_label(primary: &str, secondary: &str) -> String {
 fn select_row_level_number(row: &SelectRowSnapshot) -> i64 {
     let source = if !row.table_level.is_empty() { &row.table_level } else { &row.play_level };
     source.chars().filter(|ch| ch.is_ascii_digit()).collect::<String>().parse().unwrap_or(0)
+}
+
+fn select_row_difficulty_code(row: &SelectRowSnapshot) -> i64 {
+    difficulty_code_from_label(&row.difficulty_name)
+}
+
+fn difficulty_code_from_label(label: &str) -> i64 {
+    let normalized = label.trim().to_ascii_uppercase();
+    match normalized.as_str() {
+        "1" | "BEGINNER" => 1,
+        "2" | "NORMAL" => 2,
+        "3" | "HYPER" => 3,
+        "4" | "ANOTHER" => 4,
+        "5" | "INSANE" => 5,
+        _ => 0,
+    }
 }
 
 fn select_row_bar_image_index(row: &SelectRowSnapshot) -> usize {
@@ -5545,6 +5597,19 @@ mod tests {
     }
 
     #[test]
+    fn difficulty_ops_reflect_chart_difficulty_code() {
+        let unknown = SkinDrawState::default();
+        let normal = SkinDrawState { difficulty: 2, ..SkinDrawState::default() };
+        let insane = SkinDrawState { difficulty: 5, ..SkinDrawState::default() };
+
+        assert!(test_skin_op(150, &[], unknown));
+        assert!(!test_skin_op(150, &[], normal));
+        assert!(test_skin_op(152, &[], normal));
+        assert!(!test_skin_op(153, &[], normal));
+        assert!(test_skin_op(155, &[], insane));
+    }
+
+    #[test]
     fn lane_cover_changing_op_is_true_while_lane_cover_is_visible() {
         assert!(!test_skin_op(270, &[], SkinDrawState::default()));
         assert!(!test_skin_op(
@@ -6965,7 +7030,11 @@ mod tests {
                     { "id": "bartext", "font": "main", "size": 10 },
                     { "id": "bartext4", "font": "folder", "size": 10 }
                 ],
-                "value": [{ "id": "level", "src": 2, "x": 0, "y": 0, "w": 100, "h": 10, "divx": 10, "digit": 2, "ref": 96 }],
+                "value": [
+                    { "id": "level-other", "src": 2, "x": 0, "y": 0, "w": 100, "h": 10, "divx": 10, "digit": 2 },
+                    { "id": "level-beginner", "src": 2, "x": 0, "y": 10, "w": 100, "h": 10, "divx": 10, "digit": 2 },
+                    { "id": "level-normal", "src": 2, "x": 0, "y": 20, "w": 100, "h": 10, "divx": 10, "digit": 2 }
+                ],
                 "graph": [{ "id": "graph-lamp", "src": 4, "x": 0, "y": 0, "w": 40, "h": 4, "angle": 0, "type": -1 }],
                 "songlist": {
                     "id": "songlist",
@@ -6987,7 +7056,11 @@ mod tests {
                         { "id": "bartext", "dst": [{ "x": 6, "y": 2, "w": 20, "h": 8 }] },
                         { "id": "bartext4", "dst": [{ "x": 7, "y": 2, "w": 20, "h": 8 }] }
                     ],
-                    "level": [{ "id": "level", "dst": [{ "x": 30, "y": 2, "w": 5, "h": 8 }] }],
+                    "level": [
+                        { "id": "level-other", "dst": [{ "x": 30, "y": 2, "w": 5, "h": 8 }] },
+                        { "id": "level-beginner", "dst": [{ "x": 30, "y": 2, "w": 5, "h": 8 }] },
+                        { "id": "level-normal", "dst": [{ "x": 30, "y": 2, "w": 5, "h": 8 }] }
+                    ],
                     "trophy": [
                         { "id": "trophy-bronze", "dst": [{ "x": 35, "y": 1, "w": 4, "h": 4 }] },
                         { "id": "trophy-silver", "dst": [{ "x": 35, "y": 1, "w": 4, "h": 4 }] },
@@ -7025,6 +7098,7 @@ mod tests {
                 SelectRowSnapshot {
                     index: 2,
                     title: "Song".to_string(),
+                    difficulty_name: "2".to_string(),
                     play_level: "12".to_string(),
                     clear_type: "Normal".to_string(),
                     total_notes: 100,
@@ -7087,6 +7161,14 @@ mod tests {
             } if approx_eq(*x, 0.17)
                 && approx_eq(*width, 0.1)
                 && approx_eq(*u_width, 0.5))));
+        assert!(items.iter().any(|item| matches!(item, SkinRenderItem::Image {
+                texture: SkinTextureId(9999),
+                rect: Rect { x, y, .. },
+                uv: TextureRegion { y: u, .. },
+                ..
+            } if approx_eq(*x, 0.47)
+                && approx_eq(*y, 0.4)
+                && approx_eq(*u, 0.2))));
     }
 
     #[test]
@@ -7730,6 +7812,13 @@ mod tests {
 
         assert_eq!(skin_state_number(300, state), Some(42));
         assert_eq!(skin_state_number(96, state), Some(12));
+        assert_eq!(
+            skin_state_number(
+                96,
+                SkinDrawState { select_play_level: 12, play_level: 9, ..SkinDrawState::default() }
+            ),
+            Some(9)
+        );
         assert_eq!(skin_state_number(370, state), Some(5));
         assert_eq!(skin_state_number(74, state), Some(1200));
         assert_eq!(skin_state_number(90, state), Some(180));

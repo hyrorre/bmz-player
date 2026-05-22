@@ -423,6 +423,8 @@ impl WinitApp {
                 artist: summary.artist.clone(),
                 subartist: summary.subartist.clone(),
                 genre: summary.genre.clone(),
+                difficulty_name: summary.difficulty_name.clone(),
+                play_level: summary.play_level.clone(),
             }),
         }
     }
@@ -1777,6 +1779,7 @@ fn select_snapshot_rows(
                     index: index as u32,
                     title: name.clone(),
                     artist: String::new(),
+                    difficulty_name: String::new(),
                     play_level: String::new(),
                     table_level: String::new(),
                     total_notes: 0,
@@ -1795,6 +1798,7 @@ fn select_snapshot_rows(
                     index: index as u32,
                     title: row.chart.title.clone(),
                     artist: row.chart.artist.clone(),
+                    difficulty_name: row.chart.difficulty_name.clone(),
                     play_level: row.chart.play_level.clone(),
                     table_level: row.table_level.clone(),
                     total_notes: row.chart.total_notes,

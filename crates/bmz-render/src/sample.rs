@@ -13,6 +13,7 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
             index,
             title: format!("Sample BMS {}", index + 1),
             artist: "bmz".to_string(),
+            difficulty_name: "NORMAL".to_string(),
             play_level: (index + 1).to_string(),
             table_level: String::new(),
             total_notes: 1200 + index * 10,
@@ -62,6 +63,8 @@ pub fn sample_play_scene() -> AppSceneSnapshot {
         title: "BMZ Sample Playable".to_string(),
         artist: "bmz".to_string(),
         genre: "BMS".to_string(),
+        difficulty_name: "NORMAL".to_string(),
+        play_level: "7".to_string(),
         combo: 1234,
         gauge: 82.0,
         hispeed: 2.0,
@@ -151,6 +154,8 @@ pub fn sample_result_scene() -> AppSceneSnapshot {
         artist: "bmz".to_string(),
         subartist: String::new(),
         genre: "BMS".to_string(),
+        difficulty_name: "NORMAL".to_string(),
+        play_level: "7".to_string(),
     })
 }
 

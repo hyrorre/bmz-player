@@ -41,6 +41,7 @@ pub struct SelectRowSnapshot {
     pub index: u32,
     pub title: String,
     pub artist: String,
+    pub difficulty_name: String,
     pub play_level: String,
     pub table_level: String,
     pub total_notes: u32,
@@ -89,6 +90,8 @@ pub struct ResultSnapshot {
     pub artist: String,
     pub subartist: String,
     pub genre: String,
+    pub difficulty_name: String,
+    pub play_level: String,
 }
 
 impl ResultSnapshot {
@@ -131,6 +134,8 @@ mod tests {
             artist: String::new(),
             subartist: String::new(),
             genre: String::new(),
+            difficulty_name: String::new(),
+            play_level: String::new(),
         };
 
         assert!(snapshot.is_full_combo());
@@ -164,6 +169,8 @@ mod tests {
             artist: String::new(),
             subartist: String::new(),
             genre: String::new(),
+            difficulty_name: String::new(),
+            play_level: String::new(),
         };
 
         assert!(!snapshot.is_full_combo());

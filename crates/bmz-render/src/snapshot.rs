@@ -12,6 +12,8 @@ pub struct RenderSnapshot {
     pub artist: String,
     pub subartist: String,
     pub genre: String,
+    pub difficulty_name: String,
+    pub play_level: String,
     pub combo: u32,
     pub max_combo: u32,
     pub ex_score: u32,
