@@ -1623,6 +1623,11 @@ impl SkinDocument {
         text_state: SkinTextState<'_>,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<Vec<SkinRenderItem>> {
+        if !test_skin_ops(&destination.op, enabled_options, state)
+            || !eval_skin_draw_condition(&destination.draw, state)
+        {
+            return None;
+        }
         let elapsed = skin_timer_elapsed_ms(destination.timer, state)?;
         let mut frame = resolve_destination_frame(destination, elapsed, enabled_options)?;
         frame.x += offset.0;
@@ -1822,6 +1827,7 @@ impl SkinDocument {
                 select_replay_slots: row.replay_slots,
                 select_replay_index: select_row_replay_index(row),
                 select_clear_index: select_row_clear_index(row) as i64,
+                select_is_folder: row.is_folder,
                 select_total_notes: row.total_notes,
                 select_length_ms: row.length_ms,
                 max_combo: row.max_combo.unwrap_or(0),
@@ -7015,6 +7021,8 @@ mod tests {
                 "image": [
                     { "id": "bar-song", "src": 1, "x": 0, "y": 0, "w": 40, "h": 10 },
                     { "id": "bar-folder", "src": 1, "x": 0, "y": 10, "w": 40, "h": 10 },
+                    { "id": "song-op-marker", "src": 1, "x": 0, "y": 20, "w": 4, "h": 4 },
+                    { "id": "folder-op-marker", "src": 1, "x": 4, "y": 20, "w": 4, "h": 4 },
                     { "id": "trophy-bronze", "src": 3, "x": 0, "y": 0, "w": 4, "h": 4 },
                     { "id": "trophy-silver", "src": 3, "x": 4, "y": 0, "w": 4, "h": 4 },
                     { "id": "trophy-gold", "src": 3, "x": 8, "y": 0, "w": 4, "h": 4 },
@@ -7055,6 +7063,10 @@ mod tests {
                         { "id": "bartext", "dst": [{ "x": 5, "y": 2, "w": 20, "h": 8 }] },
                         { "id": "bartext", "dst": [{ "x": 6, "y": 2, "w": 20, "h": 8 }] },
                         { "id": "bartext4", "dst": [{ "x": 7, "y": 2, "w": 20, "h": 8 }] }
+                    ],
+                    "judgegraph": [
+                        { "id": "song-op-marker", "op": [2], "dst": [{ "x": 8, "y": 1, "w": 4, "h": 4 }] },
+                        { "id": "folder-op-marker", "op": [1], "dst": [{ "x": 12, "y": 1, "w": 4, "h": 4 }] }
                     ],
                     "level": [
                         { "id": "level-other", "dst": [{ "x": 30, "y": 2, "w": 5, "h": 8 }] },
@@ -7169,6 +7181,45 @@ mod tests {
             } if approx_eq(*x, 0.47)
                 && approx_eq(*y, 0.4)
                 && approx_eq(*u, 0.2))));
+        assert!(items.iter().any(|item| matches!(item, SkinRenderItem::Image {
+                texture: SkinTextureId(9999),
+                rect: Rect { x, y, .. },
+                uv: TextureRegion { x: u, y: v, .. },
+                ..
+            } if approx_eq(*x, 0.2)
+                && approx_eq(*y, 0.45)
+                && approx_eq(*u, 0.0)
+                && approx_eq(*v, 20.0 / 100.0))));
+        assert!(!items.iter().any(|item| matches!(item, SkinRenderItem::Image {
+                texture: SkinTextureId(9999),
+                rect: Rect { x, y, .. },
+                uv: TextureRegion { x: u, y: v, .. },
+                ..
+            } if approx_eq(*x, 0.22)
+                && approx_eq(*y, 0.45)
+                && approx_eq(*u, 4.0 / 100.0)
+                && approx_eq(*v, 20.0 / 100.0))));
+
+        let folder_selected = SelectSnapshot { selected_index: 1, ..snapshot };
+        let items = document.select_render_items(&sources, &folder_selected);
+        assert!(items.iter().any(|item| matches!(item, SkinRenderItem::Image {
+                texture: SkinTextureId(9999),
+                rect: Rect { x, y, .. },
+                uv: TextureRegion { x: u, y: v, .. },
+                ..
+            } if approx_eq(*x, 0.18)
+                && approx_eq(*y, 0.65)
+                && approx_eq(*u, 0.0)
+                && approx_eq(*v, 20.0 / 100.0))));
+        assert!(!items.iter().any(|item| matches!(item, SkinRenderItem::Image {
+                texture: SkinTextureId(9999),
+                rect: Rect { x, y, .. },
+                uv: TextureRegion { x: u, y: v, .. },
+                ..
+            } if approx_eq(*x, 0.22)
+                && approx_eq(*y, 0.65)
+                && approx_eq(*u, 4.0 / 100.0)
+                && approx_eq(*v, 20.0 / 100.0))));
     }
 
     #[test]
