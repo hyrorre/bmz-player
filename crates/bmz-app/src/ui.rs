@@ -9,16 +9,30 @@ use egui::ViewportId;
 use winit::event::WindowEvent;
 use winit::window::Window;
 
+/// デバッグ表示パネルへ毎フレーム渡すアプリ側の情報。
+pub struct DebugInfo {
+    /// 現在のシーン種別 ("Select" / "Play" / "Result")。
+    pub scene: &'static str,
+    /// 描画サーフェスの幅 (px)。
+    pub width: u32,
+    /// 描画サーフェスの高さ (px)。
+    pub height: u32,
+}
+
 /// egui の状態管理とフレーム構築を担うレイヤ。
 pub struct EguiLayer {
     ctx: egui::Context,
     state: egui_winit::State,
-    /// メニュー表示中かどうか。F5 でトグルする。
+    /// メニュー全体の表示状態。F5 でトグルする。
     visible: bool,
+    /// デバッグ表示パネルの開閉状態。
+    show_debug: bool,
 }
 
 impl EguiLayer {
-    pub fn new(window: &Window) -> Self {
+    /// `show_debug` はデバッグ表示パネルの初期開閉状態 (profile config の
+    /// `ui.show_fps` を引き継ぐ)。
+    pub fn new(window: &Window, show_debug: bool) -> Self {
         let ctx = egui::Context::default();
         install_japanese_font(&ctx);
         let state = egui_winit::State::new(
@@ -29,7 +43,7 @@ impl EguiLayer {
             None,
             None,
         );
-        Self { ctx, state, visible: false }
+        Self { ctx, state, visible: false, show_debug }
     }
 
     /// メニュー表示状態を反転する (F5)。
@@ -48,12 +62,16 @@ impl EguiLayer {
     }
 
     /// 1 フレーム分の UI を構築し、描画プリミティブを返す。
-    pub fn run(&mut self, window: &Window) -> EguiFrame {
+    pub fn run(&mut self, window: &Window, info: &DebugInfo) -> EguiFrame {
         let raw_input = self.state.take_egui_input(window);
+        let ctx = self.ctx.clone();
         let visible = self.visible;
-        let full_output = self.ctx.run_ui(raw_input, |ui| {
+        let show_debug = &mut self.show_debug;
+        let full_output = ctx.run_ui(raw_input, |ui| {
             if visible {
-                build_ui(ui.ctx());
+                let ctx = ui.ctx();
+                build_menu(ctx, show_debug);
+                build_debug_panel(ctx, show_debug, info);
             }
         });
         self.state.handle_platform_output(window, full_output.platform_output);
@@ -85,16 +103,37 @@ fn install_japanese_font(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 }
 
-/// v1: egui 統合の動作確認用ウィンドウ。
-///
-/// 本体設定 / スキン設定 / デバッグ表示の各パネルは後続タスクでここへ追加する。
-fn build_ui(ctx: &egui::Context) {
-    egui::Window::new("BMZ Debug").default_pos(egui::pos2(16.0, 16.0)).show(ctx, |ui| {
-        ui.label("egui 統合の動作確認ウィンドウです。");
-        ui.label("F5 で開閉します。");
+/// 各サブパネルの開閉を切り替えるメインメニューハブ。
+fn build_menu(ctx: &egui::Context, show_debug: &mut bool) {
+    egui::Window::new("BMZ メニュー").default_pos(egui::pos2(16.0, 16.0)).show(ctx, |ui| {
+        ui.label("F5 でこのメニューを開閉します。");
         ui.separator();
-        if ui.button("クリック").clicked() {
-            tracing::info!("egui debug window button clicked");
-        }
+        ui.checkbox(show_debug, "デバッグ表示");
     });
+}
+
+/// FPS / フレーム時間 / シーン / 解像度を表示するデバッグパネル。
+fn build_debug_panel(ctx: &egui::Context, open: &mut bool, info: &DebugInfo) {
+    egui::Window::new("デバッグ表示").open(open).default_pos(egui::pos2(16.0, 140.0)).show(
+        ctx,
+        |ui| {
+            // egui が算出した平滑化フレーム時間から FPS を求める。
+            let dt = ctx.input(|i| i.stable_dt);
+            let fps = if dt > 0.0 { 1.0 / dt } else { 0.0 };
+            egui::Grid::new("debug_grid").num_columns(2).show(ui, |ui| {
+                ui.label("FPS");
+                ui.label(format!("{fps:.1}"));
+                ui.end_row();
+                ui.label("フレーム時間");
+                ui.label(format!("{:.2} ms", dt * 1000.0));
+                ui.end_row();
+                ui.label("シーン");
+                ui.label(info.scene);
+                ui.end_row();
+                ui.label("解像度");
+                ui.label(format!("{} x {}", info.width, info.height));
+                ui.end_row();
+            });
+        },
+    );
 }

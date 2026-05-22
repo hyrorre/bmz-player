@@ -50,7 +50,7 @@ use crate::skin_loader::{
 };
 use crate::storage::replay::load_replay_for_chart;
 use crate::storage::scan::scan_song_roots;
-use crate::ui::EguiLayer;
+use crate::ui::{DebugInfo, EguiLayer};
 use bmz_render::skin::{SkinDocument, SkinDocumentTexture, SkinManifest};
 use std::collections::VecDeque;
 
@@ -324,7 +324,7 @@ impl WinitApp {
                     "window and renderer surface ready"
                 );
                 window.request_redraw();
-                self.egui = Some(EguiLayer::new(&window));
+                self.egui = Some(EguiLayer::new(&window, self.boot.profile_config.ui.show_fps));
                 self.window = Some(window);
                 self.update_window_title_for_scene(AppSceneKind::Select);
             }
@@ -1130,10 +1130,17 @@ impl WinitApp {
         let Some(window) = self.window.clone() else {
             return;
         };
+        let scene = match scene_kind(&self.scene_snapshot()) {
+            AppSceneKind::Select => "Select",
+            AppSceneKind::Play => "Play",
+            AppSceneKind::Result => "Result",
+        };
+        let size = window.inner_size();
+        let info = DebugInfo { scene, width: size.width, height: size.height };
         let Some(egui) = self.egui.as_mut() else {
             return;
         };
-        let frame = egui.run(&window);
+        let frame = egui.run(&window, &info);
         self.renderer.set_egui_frame(frame);
     }
 
