@@ -295,7 +295,7 @@ fn load_skin_document(
     options: &BTreeMap<String, String>,
     files: &BTreeMap<String, String>,
 ) -> Result<SkinDocument> {
-    if is_lua_skin_path(skin_path) {
+    let mut document = if is_lua_skin_path(skin_path) {
         // Lua スキンはオプション選択 (名前 -> 選択肢名) とファイル選択
         // (filepath 定義名 -> 相対パス) をそのまま渡す。
         let loaded = bmz_skin::load_lua_skin(skin_path, decode_skin_kind(kind), options, files)
@@ -308,22 +308,28 @@ fn load_skin_document(
                 "lua skin load warning"
             );
         }
-        Ok(loaded.document)
+        loaded.document
     } else {
         let document =
             bmz_skin::load_beatoraja_json_skin_with_defaults(skin_path).with_context(|| {
                 format!("failed to load beatoraja json skin: {}", skin_path.display())
             })?;
         if options.is_empty() {
-            return Ok(document);
+            document
+        } else {
+            // JSON スキンは property 定義から選択肢の op コード列を組み立て、
+            // それを有効オプションとして再デコードする。
+            let enabled = enabled_options_from_selections(&document, options);
+            bmz_skin::load_beatoraja_json_skin(skin_path, &enabled).with_context(|| {
+                format!("failed to load beatoraja json skin with options: {}", skin_path.display())
+            })?
         }
-        // JSON スキンは property 定義から選択肢の op コード列を組み立て、
-        // それを有効オプションとして再デコードする。
-        let enabled = enabled_options_from_selections(&document, options);
-        bmz_skin::load_beatoraja_json_skin(skin_path, &enabled).with_context(|| {
-            format!("failed to load beatoraja json skin with options: {}", skin_path.display())
-        })
-    }
+    };
+    // レンダー時の `enabled_options()` がユーザ選択を反映するように、
+    // 選択値から算出した op コード列を document に格納する。
+    // (選択が空でもデフォルト計算結果と同じになるため、常に設定して問題ない)
+    document.user_selected_options = Some(enabled_options_from_selections(&document, options));
+    Ok(document)
 }
 
 /// property 定義とユーザ選択 (オプション名 -> 選択肢名) から、JSON スキンの
@@ -830,6 +836,28 @@ mod tests {
         // asset の prefix が定義と一致しない
         let result = substitute_filepath_choice("other/path/*.png", &filepaths, &files);
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn enabled_options_includes_unselected_property_default_for_real_skin() {
+        // 実際の Starseeker play7.luaskin で「スコアグラフ=On」のみ選択した時、
+        // 未選択の「プレーサイド」のデフォルト (1P=920) と「スコアグラフ=On」(901)
+        // の両方が enabled_options に入ることを確認する。
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/skins/Starseeker/play/play7.luaskin");
+        if !skin_path.is_file() {
+            eprintln!("skipping: skin not present at {}", skin_path.display());
+            return;
+        }
+        let mut selections = BTreeMap::new();
+        selections.insert("スコアグラフ".to_string(), "On".to_string());
+
+        let document =
+            load_skin_document(&skin_path, SkinKind::Play, &selections, &BTreeMap::new())
+                .expect("load skin document");
+        let ops = enabled_options_from_selections(&document, &selections);
+        assert!(ops.contains(&901), "expected 901 in ops, got {ops:?}");
+        assert!(ops.contains(&920), "expected 920 (1P default) in ops, got {ops:?}");
     }
 
     #[test]

@@ -97,6 +97,12 @@ pub struct SkinDocument {
     pub songlist: Option<SkinSongListDef>,
     #[serde(default)]
     pub destination: Vec<DestinationListEntry>,
+    /// ユーザがスキン設定パネルで選んだオプションから算出した有効 op コード列。
+    /// `Some` のときレンダー時の `enabled_options()` はこれを返し、`None` の
+    /// ときは従来通り `property.def` (または各 property の先頭 item) を既定として
+    /// 計算する。
+    #[serde(skip)]
+    pub user_selected_options: Option<Vec<i32>>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
@@ -1697,6 +1703,9 @@ impl SkinDocument {
     }
 
     pub fn enabled_options(&self) -> Vec<i32> {
+        if let Some(ops) = &self.user_selected_options {
+            return ops.clone();
+        }
         self.property
             .iter()
             .filter_map(|property| {
