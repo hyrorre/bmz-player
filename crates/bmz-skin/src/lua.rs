@@ -564,8 +564,13 @@ fn skin_files_from_header(
 }
 
 /// ユーザ選択のスキンルート相対パスを解決する。
+///
 /// 絶対パスやスキンルート外への脱出を含む選択は無効として `None` を返す。
-fn resolve_selected_skin_file(root: &Path, selected: &str) -> Option<PathBuf> {
+/// 通常の候補解決経路 (`skin_config_get_path` 本体) と挙動を揃え、
+/// ファイル / ディレクトリの双方を許可する (Lua スキンは
+/// `skin_config.get_path("dir/*") .. "/foo.lua"` の形でディレクトリ選択を
+/// 連結に使うパターンがある)。
+fn resolve_selected_skin_path(root: &Path, selected: &str) -> Option<PathBuf> {
     let relative = Path::new(selected);
     if relative.as_os_str().is_empty()
         || relative.is_absolute()
@@ -576,7 +581,7 @@ fn resolve_selected_skin_file(root: &Path, selected: &str) -> Option<PathBuf> {
         return None;
     }
     let candidate = root.join(relative);
-    candidate.is_file().then_some(candidate)
+    candidate.exists().then_some(candidate)
 }
 
 fn skin_config_get_path(
@@ -597,7 +602,7 @@ fn skin_config_get_path(
     // ユーザがスキン設定パネルで選んだファイルを最優先で返す。
     // 選択が存在しない / ファイルが消えている場合は従来通り候補解決へ委ねる。
     if let Some(selected) = skin_files.get(&requested.replace('\\', "/"))
-        && let Some(path) = resolve_selected_skin_file(root, selected)
+        && let Some(path) = resolve_selected_skin_path(root, selected)
     {
         return Ok(path);
     }

@@ -7,8 +7,8 @@ use bmz_render::bitmap_font::{BitmapFont, load_bitmap_font};
 use bmz_render::plan::TextureId;
 use bmz_render::renderer::Renderer;
 use bmz_render::skin::{
-    DestinationListEntry, SkinContext, SkinDocument, SkinDocumentTexture, SkinImageSize,
-    SkinManifest, SkinTextureId,
+    DestinationListEntry, SkinContext, SkinDocument, SkinDocumentTexture, SkinFilepathDef,
+    SkinImageSize, SkinManifest, SkinTextureId,
 };
 use bmz_skin::SkinKind as DecodeSkinKind;
 use rayon::prelude::*;
@@ -521,8 +521,7 @@ fn resolve_json_skin_asset_path(
     let filepath =
         document.filepath.iter().find(|filepath| filepath.path.replace('\\', "/") == normalized);
 
-    // スキン設定パネルで選んだファイルを最優先で返す。ファイルが消えている
-    // 場合は `def` / 先頭候補へフォールバックする。
+    // 1. パスが filepath 定義と完全一致するときは、選択ファイルをそのまま使う。
     if let Some(filepath) = filepath
         && let Some(selected) = files.get(&filepath.name).filter(|selected| !selected.is_empty())
         && let Some(path) = resolve_selected_skin_file(skin_root, selected)
@@ -530,9 +529,54 @@ fn resolve_json_skin_asset_path(
         return Some(path);
     }
 
+    // 2. 完全一致しなくても、filepath 定義の `*` が asset_path の `*` と同じ
+    //    位置に来るなら、選択値からワイルドカード部分を抽出して埋め込む
+    //    (例: 定義 `custom/laser/*` で選択 `custom/laser/veryshort` のとき、
+    //         ソース `custom/laser/*/main.png` を `custom/laser/veryshort/main.png` へ)。
+    if let Some(substituted) = substitute_filepath_choice(&normalized, &document.filepath, files) {
+        let candidate = skin_root.join(&substituted);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+
     let preferred =
         filepath.and_then(|filepath| (!filepath.def.is_empty()).then_some(filepath.def.as_str()));
     resolve_wildcard_path(skin_root, &normalized, preferred)
+}
+
+/// filepath 定義のワイルドカードと一致するユーザ選択値を `asset_path` の
+/// ワイルドカード位置に埋め込んだ相対パスを返す。
+///
+/// 一致条件: `asset_path` と filepath 定義の `path` が `*` 直前の prefix を
+/// 共有していること。選択値からも同じ prefix（および suffix）を剥がして
+/// ワイルドカード相当の文字列を取り出し、`asset_path` の `*` を置換する。
+fn substitute_filepath_choice(
+    asset_path: &str,
+    filepaths: &[SkinFilepathDef],
+    files: &BTreeMap<String, String>,
+) -> Option<String> {
+    let (asset_before, asset_after) = asset_path.split_once('*')?;
+    for filepath in filepaths {
+        let def_path = filepath.path.replace('\\', "/");
+        let Some((def_prefix, def_suffix)) = def_path.split_once('*') else {
+            continue;
+        };
+        if def_prefix != asset_before {
+            continue;
+        }
+        let Some(selected) = files.get(&filepath.name).filter(|selected| !selected.is_empty())
+        else {
+            continue;
+        };
+        let selected = selected.replace('\\', "/");
+        let Some(stripped) = selected.strip_prefix(def_prefix) else {
+            continue;
+        };
+        let wildcard_value = stripped.strip_suffix(def_suffix).unwrap_or(stripped);
+        return Some(format!("{asset_before}{wildcard_value}{asset_after}"));
+    }
+    None
 }
 
 /// ユーザ選択のスキンルート相対パスを解決する。
@@ -746,6 +790,55 @@ mod tests {
     #[test]
     fn default_skin_root_contains_manifest() {
         assert!(default_skin_root().join("skin.toml").is_file());
+    }
+
+    fn filepath_def(name: &str, path: &str, def: &str) -> SkinFilepathDef {
+        SkinFilepathDef {
+            category: String::new(),
+            name: name.to_string(),
+            path: path.to_string(),
+            def: def.to_string(),
+        }
+    }
+
+    #[test]
+    fn substitute_filepath_choice_replaces_wildcard_in_asset_path() {
+        let filepaths = vec![filepath_def("レーザー", "custom/laser/*", "default")];
+        let mut files = BTreeMap::new();
+        files.insert("レーザー".to_string(), "custom/laser/veryshort".to_string());
+
+        let result = substitute_filepath_choice("custom/laser/*/main.png", &filepaths, &files);
+        assert_eq!(result.as_deref(), Some("custom/laser/veryshort/main.png"));
+    }
+
+    #[test]
+    fn substitute_filepath_choice_strips_def_suffix_from_selection() {
+        let filepaths = vec![filepath_def("icon", "icon-*.png", "")];
+        let mut files = BTreeMap::new();
+        files.insert("icon".to_string(), "icon-blue.png".to_string());
+
+        let result = substitute_filepath_choice("icon-*.png", &filepaths, &files);
+        assert_eq!(result.as_deref(), Some("icon-blue.png"));
+    }
+
+    #[test]
+    fn substitute_filepath_choice_returns_none_when_prefix_mismatch() {
+        let filepaths = vec![filepath_def("レーザー", "custom/laser/*", "default")];
+        let mut files = BTreeMap::new();
+        files.insert("レーザー".to_string(), "custom/laser/veryshort".to_string());
+
+        // asset の prefix が定義と一致しない
+        let result = substitute_filepath_choice("other/path/*.png", &filepaths, &files);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn substitute_filepath_choice_returns_none_when_no_selection() {
+        let filepaths = vec![filepath_def("レーザー", "custom/laser/*", "default")];
+        let files: BTreeMap<String, String> = BTreeMap::new();
+
+        let result = substitute_filepath_choice("custom/laser/*/main.png", &filepaths, &files);
+        assert_eq!(result, None);
     }
 
     #[test]
