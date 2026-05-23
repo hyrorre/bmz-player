@@ -529,7 +529,7 @@ pub struct SkinDestinationDef {
     pub offsets: Vec<i32>,
     #[serde(default = "default_stretch")]
     pub stretch: i32,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_op_codes")]
     pub op: Vec<i32>,
     #[serde(default)]
     pub draw: String,
@@ -4985,6 +4985,25 @@ where
     D: Deserializer<'de>,
 {
     deserializer.deserialize_any(SkinIdVisitor)
+}
+
+/// `op` フィールドは beatoraja Lua スキンで単一整数または整数配列のどちらでも
+/// 書ける。`Vec<i32>` への直接デシリアライズは整数を拒否してしまうため、
+/// スカラーは長さ 1 の配列として受け入れる。
+fn deserialize_op_codes<'de, D>(deserializer: D) -> std::result::Result<Vec<i32>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        Many(Vec<i32>),
+        One(i32),
+    }
+    Ok(match OneOrMany::deserialize(deserializer)? {
+        OneOrMany::Many(values) => values,
+        OneOrMany::One(value) => vec![value],
+    })
 }
 
 fn deserialize_skin_id_vec<'de, D>(deserializer: D) -> std::result::Result<Vec<String>, D::Error>
