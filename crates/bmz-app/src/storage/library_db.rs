@@ -327,23 +327,91 @@ impl LibraryDatabase {
     /// Only the last path component (name) is returned, not the full path.
     pub fn list_child_folder_names(&self, parent_path: &str) -> Result<Vec<String>> {
         let parent_path = to_folder_key(parent_path);
+        // 直下の子だけが欲しいので、子孫を 1 回引いて Rust 側で
+        // 直下名を抽出する。range 条件 ( `folder_path >= prefix AND < end` )
+        // により idx_charts_folder_path をレンジスキャンで使える。
+        let descendants = self.list_descendant_folder_paths_for_key(&parent_path)?;
+        let mut names: Vec<String> = Vec::new();
+        let prefix_len = parent_path.len() + 1; // including the trailing '/'
+        for path in descendants {
+            let rest = &path[prefix_len..];
+            let name = match rest.find('/') {
+                Some(idx) => &rest[..idx],
+                None => rest,
+            };
+            if name.is_empty() {
+                continue;
+            }
+            names.push(name.to_string());
+        }
+        names.sort_by_key(|name| name.to_lowercase());
+        names.dedup();
+        Ok(names)
+    }
+
+    /// Returns all distinct `folder_path` values that are strict descendants of
+    /// `parent_path` (i.e. starting with `parent_path + '/'`).
+    ///
+    /// Uses a range condition on the indexed `folder_path` column, so it scales
+    /// to libraries with tens of thousands of charts without a full table scan.
+    pub fn list_descendant_folder_paths(&self, parent_path: &str) -> Result<Vec<String>> {
+        let parent_path = to_folder_key(parent_path);
+        self.list_descendant_folder_paths_for_key(&parent_path)
+    }
+
+    fn list_descendant_folder_paths_for_key(&self, parent_key: &str) -> Result<Vec<String>> {
+        // ASCII '/' は 0x2F、'0' は 0x30。`prefix..end` は `prefix` で始まる
+        // 文字列だけを範囲指定でき、idx_charts_folder_path を使ったレンジ
+        // スキャンになる。
+        let prefix = format!("{parent_key}/");
+        let end = format!("{parent_key}0");
         let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT child_name FROM (
-                SELECT CASE
-                    WHEN INSTR(rest, '/') > 0 THEN SUBSTR(rest, 1, INSTR(rest, '/') - 1)
-                    ELSE rest
-                END AS child_name
-                FROM (
-                    SELECT SUBSTR(folder_path, LENGTH(?1) + 2) AS rest
-                    FROM charts
-                    WHERE SUBSTR(folder_path, 1, LENGTH(?1) + 1) = ?1 || '/'
-                )
-            )
-            WHERE child_name != ''
-            ORDER BY child_name COLLATE NOCASE",
+            "SELECT DISTINCT folder_path FROM charts
+             WHERE folder_path >= ?1 AND folder_path < ?2",
         )?;
-        let rows = stmt.query_map(params![parent_path], |row| row.get(0))?;
+        let rows = stmt.query_map(params![prefix, end], |row| row.get(0))?;
         rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Returns charts in any of the given folder paths.
+    ///
+    /// Reuses a single prepared `WHERE folder_path = ?1` statement instead of
+    /// expanding to `IN (?,?,...)`, so the SQLite bind-variable limit
+    /// (`SQLITE_MAX_VARIABLE_NUMBER`) is never hit even for huge folder sets.
+    pub fn list_charts_in_folders(&self, folder_paths: &[&str]) -> Result<Vec<ChartListItem>> {
+        if folder_paths.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut stmt = self.conn.prepare(
+            "SELECT
+                id,
+                md5,
+                sha256,
+                title,
+                subtitle,
+                artist,
+                difficulty_name,
+                play_level,
+                mode,
+                total_notes,
+                initial_bpm,
+                COALESCE(min_bpm, initial_bpm),
+                COALESCE(max_bpm, initial_bpm),
+                length_ms,
+                folder_path
+            FROM charts
+            WHERE folder_path = ?1
+            ORDER BY title COLLATE NOCASE, artist COLLATE NOCASE, play_level COLLATE NOCASE",
+        )?;
+        let mut out = Vec::new();
+        for path in folder_paths {
+            let key = to_folder_key(path);
+            let rows = stmt.query_map(params![key], chart_list_item_from_row)?;
+            for row in rows {
+                out.push(row?);
+            }
+        }
+        Ok(out)
     }
 
     /// Returns charts whose `folder_path` exactly matches `folder_path`.
@@ -1159,6 +1227,55 @@ mod tests {
         // バックスラッシュ区切りの引数でも、スラッシュ保存された行が見つかること。
         assert_eq!(db.list_child_folder_names("G:\\BMS\\INSANE").unwrap(), vec!["sub".to_string()]);
         assert_eq!(db.list_charts_in_folder("G:\\BMS\\INSANE\\sub").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn list_descendant_folder_paths_returns_only_strict_descendants() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase::from_connection(conn);
+        for (i, path) in [
+            "G:/BMS/INSANE/a/song.bms",
+            "G:/BMS/INSANE/b/c/song.bms",
+            "G:/BMS/INSANE/song.bms", // 親そのもの直下: 子孫扱いしない
+            "G:/BMS/OTHER/song.bms",  // 別ルート: 含まれない
+        ]
+        .iter()
+        .enumerate()
+        {
+            let c = chart(&format!("s{i}"));
+            db.upsert_chart_import(&ChartImportRecord {
+                root_id: None,
+                file_path: Path::new(path),
+                file_size: 1,
+                modified_at: 1,
+                scanned_at: 1,
+                chart: &c,
+            })
+            .unwrap();
+        }
+
+        let mut got = db.list_descendant_folder_paths("G:/BMS/INSANE").unwrap();
+        got.sort();
+        assert_eq!(got, vec!["G:/BMS/INSANE/a", "G:/BMS/INSANE/b/c"]);
+    }
+
+    #[test]
+    fn list_charts_in_folders_collects_charts_across_paths() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase::from_connection(conn);
+        db.upsert_chart_import(&record_for_chart("/songs/a/song.bms", &chart("A"))).unwrap();
+        db.upsert_chart_import(&record_for_chart("/songs/b/song.bms", &chart("B"))).unwrap();
+        db.upsert_chart_import(&record_for_chart("/songs/c/song.bms", &chart("C"))).unwrap();
+
+        let got = db.list_charts_in_folders(&["/songs/a", "/songs/c"]).unwrap();
+        let titles: Vec<_> = got.iter().map(|c| c.title.as_str()).collect();
+        assert_eq!(titles, vec!["A", "C"]);
+
+        assert!(db.list_charts_in_folders(&[]).unwrap().is_empty());
     }
 
     #[test]
