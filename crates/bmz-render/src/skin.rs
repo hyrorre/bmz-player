@@ -1595,6 +1595,7 @@ impl SkinDocument {
                 number,
                 ResolvedSkinFrame::default(),
                 frame,
+                elapsed,
                 sources,
                 false,
             ));
@@ -1682,6 +1683,7 @@ impl SkinDocument {
                 number,
                 ResolvedSkinFrame::default(),
                 frame,
+                elapsed,
                 sources,
                 false,
             ));
@@ -2306,6 +2308,7 @@ impl SkinDocument {
                 combo as i64,
                 image_frame,
                 number_frame,
+                elapsed_ms,
                 sources,
                 judge.shift,
             ));
@@ -2342,6 +2345,7 @@ impl SkinDocument {
         number: i64,
         base_frame: ResolvedSkinFrame,
         frame: ResolvedSkinFrame,
+        elapsed_ms: i32,
         sources: &HashMap<String, SkinDocumentTexture>,
         compact_digits: bool,
     ) -> Vec<SkinRenderItem> {
@@ -2351,8 +2355,6 @@ impl SkinDocument {
         let Some(source) = sources.get(&value.src) else {
             return Vec::new();
         };
-        let source_width = source.source_size.width.max(1.0);
-        let source_height = source.source_size.height.max(1.0);
         let divx = value.divx.max(1);
         let divy = value.divy.max(1);
         let cell_width_px = value.w as f32 / divx as f32;
@@ -2383,8 +2385,6 @@ impl SkinDocument {
             .into_iter()
             .enumerate()
             .map(|(index, digit)| {
-                let source_column = digit as i32 % divx;
-                let source_row = digit as i32 / divx;
                 let digit_position = if compact_digits { index } else { shiftbase + index } as i32;
                 let rect = normalize_skin_frame_rect(
                     ResolvedSkinFrame {
@@ -2397,16 +2397,27 @@ impl SkinDocument {
                     self.w,
                     self.h,
                 );
+                let uv = Self::value_digit_texture_region(
+                    value,
+                    digit.into(),
+                    elapsed_ms,
+                    source.source_size,
+                    cell_width_px,
+                    cell_height_px,
+                    divx,
+                    divy,
+                );
+                let tint = Color::rgba(
+                    frame.r as f32 / 255.0,
+                    frame.g as f32 / 255.0,
+                    frame.b as f32 / 255.0,
+                    frame.a as f32 / 255.0,
+                );
                 SkinRenderItem::Image {
                     texture: source.texture,
                     rect,
-                    uv: TextureRegion {
-                        x: (value.x as f32 + cell_width_px * source_column as f32) / source_width,
-                        y: (value.y as f32 + cell_height_px * source_row as f32) / source_height,
-                        width: cell_width_px / source_width,
-                        height: cell_height_px / source_height,
-                    },
-                    tint: Color::rgb(1.0, 1.0, 1.0),
+                    uv,
+                    tint,
                     blend: BlendMode::Normal,
                     scale: SkinImageScale::Stretch,
                     border: None,
@@ -2415,6 +2426,36 @@ impl SkinDocument {
                 }
             })
             .collect()
+    }
+
+    fn value_digit_texture_region(
+        value: &SkinValueDef,
+        digit: u32,
+        elapsed_ms: i32,
+        source_size: SkinImageSize,
+        cell_width_px: f32,
+        cell_height_px: f32,
+        divx: i32,
+        divy: i32,
+    ) -> TextureRegion {
+        let source_width = source_size.width.max(1.0);
+        let source_height = source_size.height.max(1.0);
+        let digit_column = digit as i32 % divx;
+        let digit_row = digit as i32 / divx;
+        let animation_rows = divy.saturating_sub(digit_row).max(1);
+        let animation_row = if value.cycle > 0 && animation_rows > 1 {
+            (elapsed_ms.rem_euclid(value.cycle) * animation_rows / value.cycle)
+                .min(animation_rows - 1)
+        } else {
+            0
+        };
+        let source_row = (digit_row + animation_row).min(divy - 1);
+        TextureRegion {
+            x: (value.x as f32 + cell_width_px * digit_column as f32) / source_width,
+            y: (value.y as f32 + cell_height_px * source_row as f32) / source_height,
+            width: cell_width_px / source_width,
+            height: cell_height_px / source_height,
+        }
     }
 
     fn image_render_item(
@@ -6816,6 +6857,56 @@ mod tests {
                 uv: TextureRegion { x: u, .. },
                 ..
             } if approx_eq(x, 0.4) && approx_eq(u, 0.3)));
+    }
+
+    #[test]
+    fn skin_document_animates_judge_number_value_rows() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "judge.png" }],
+                "image": [
+                    { "id": "judgef-pg", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10 }
+                ],
+                "value": [
+                    { "id": "judgen-pg", "src": 1, "x": 0, "y": 20, "w": 100, "h": 20, "divx": 10, "divy": 2, "digit": 1, "cycle": 100 }
+                ],
+                "judge": [{
+                    "id": "judge",
+                    "images": [
+                        { "id": "judgef-pg", "dst": [{ "time": 0, "x": 10, "y": 10, "w": 20, "h": 10 }, { "time": 500 }] }
+                    ],
+                    "numbers": [
+                        { "id": "judgen-pg", "dst": [{ "time": 0, "x": 20, "y": 5, "w": 5, "h": 10 }, { "time": 500 }] }
+                    ]
+                }]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "1".to_string(),
+            SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 100.0, height: 100.0 },
+            },
+        )]);
+
+        let early = document.judge_render_items("PGREAT", 7, 25, &sources).unwrap();
+        let late = document.judge_render_items("PGREAT", 7, 75, &sources).unwrap();
+
+        assert!(matches!(early[1], SkinRenderItem::Image {
+                uv: TextureRegion { y, .. },
+                ..
+            } if approx_eq(y, 0.2)));
+        assert!(matches!(late[1], SkinRenderItem::Image {
+                uv: TextureRegion { y, .. },
+                ..
+            } if approx_eq(y, 0.3)));
     }
 
     #[test]
