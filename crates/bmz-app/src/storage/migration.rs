@@ -206,6 +206,42 @@ pub const LIBRARY_MIGRATIONS: &[Migration] = &[
         // 既存行のバックスラッシュをスラッシュに正規化する。
         statements: &["UPDATE charts SET folder_path = REPLACE(folder_path, '\\', '/');"],
     },
+    Migration {
+        version: 6,
+        statements: &[
+            "CREATE TABLE courses (
+                id INTEGER PRIMARY KEY,
+                source TEXT NOT NULL,
+                course_key TEXT NOT NULL,
+                title TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                class_constraint TEXT NOT NULL,
+                speed_constraint TEXT NOT NULL,
+                judge_constraint TEXT NOT NULL,
+                gauge_constraint TEXT NOT NULL,
+                ln_constraint TEXT NOT NULL,
+                source_constraints TEXT NOT NULL,
+                trophies_json TEXT NOT NULL,
+                release INTEGER NOT NULL DEFAULT 1,
+                imported_at INTEGER NOT NULL,
+                UNIQUE(source, course_key)
+            );",
+            "CREATE TABLE course_entries (
+                course_id INTEGER NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+                position INTEGER NOT NULL,
+                md5 TEXT NOT NULL,
+                sha256 TEXT NOT NULL,
+                title_hint TEXT NOT NULL,
+                chart_id INTEGER REFERENCES charts(id),
+                PRIMARY KEY(course_id, position)
+            );",
+            "CREATE INDEX idx_courses_source ON courses(source);",
+            "CREATE INDEX idx_courses_kind ON courses(kind);",
+            "CREATE INDEX idx_course_entries_chart_id ON course_entries(chart_id);",
+            "CREATE INDEX idx_course_entries_md5 ON course_entries(md5);",
+            "CREATE INDEX idx_course_entries_sha256 ON course_entries(sha256);",
+        ],
+    },
 ];
 
 pub const SCORE_MIGRATIONS: &[Migration] = &[

@@ -1,4 +1,5 @@
 pub mod common;
+pub mod course_db;
 pub mod difficulty_table_db;
 pub mod import;
 pub mod library_db;

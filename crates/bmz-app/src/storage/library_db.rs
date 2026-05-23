@@ -6,6 +6,7 @@ use bmz_chart::import::error::ImportWarning;
 use bmz_chart::model::{NoteKind, PlayableChart, TimingEventKind};
 use rusqlite::{Connection, OptionalExtension, params};
 
+pub use super::course_db::{StoredCourse, StoredCourseEntry};
 pub use super::difficulty_table_db::{DifficultyTableEntryRecord, DifficultyTableRecord};
 
 use super::common::{configure_connection, hash_to_hex, hex_to_hash};
@@ -563,6 +564,23 @@ impl LibraryDatabase {
         sha256s: &[&str],
     ) -> Result<Vec<DifficultyTableEntryRecord>> {
         super::difficulty_table_db::list_entries_by_sha256s(&self.conn, sha256s)
+    }
+
+    pub fn upsert_course(
+        &mut self,
+        source: &str,
+        course: &bmz_core::course::CourseDefinition,
+        imported_at: i64,
+    ) -> Result<i64> {
+        super::course_db::upsert_course(&mut self.conn, source, course, imported_at)
+    }
+
+    pub fn list_courses(&self) -> Result<Vec<StoredCourse>> {
+        super::course_db::list_courses(&self.conn)
+    }
+
+    pub fn list_course_entries(&self, course_id: i64) -> Result<Vec<StoredCourseEntry>> {
+        super::course_db::list_course_entries(&self.conn, course_id)
     }
 
     /// Returns `(ChartListItem, raw_level)` pairs for charts in the library that

@@ -1,5 +1,6 @@
 pub mod chart;
 pub mod clear;
+pub mod course;
 pub mod ids;
 pub mod input;
 pub mod judge;

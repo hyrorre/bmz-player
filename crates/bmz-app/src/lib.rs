@@ -3,6 +3,7 @@ pub mod audio;
 pub mod bootstrap;
 pub mod cli;
 pub mod config;
+pub mod course;
 pub mod difficulty_table;
 pub mod input;
 pub mod paths;
