@@ -10,18 +10,25 @@ Supported Skin: beatoraja json skin / beatoraja lua skin
 
 ## How to build
 
-### macOS
+### Windows (stable-x86_64-pc-windows-msvc)
 
-```sh
-brew install ffmpeg
+Install vcpkg beforehand.
+
+```powershell
+winget install llvm.llvm
+vcpkg integrate install
+vcpkg install ffmpeg:x64-windows
+cargo build
 cargo run
 ```
 
-### Windows
+### macOS (stable-aarch64-apple-darwin)
 
-```powershell
-vcpkg install ffmpeg-x64 (TODO: check command)
-# set environment variables
+Install Homebrew beforehand.
+
+```sh
+brew install ffmpeg
+cargo build
 cargo run
 ```
 
