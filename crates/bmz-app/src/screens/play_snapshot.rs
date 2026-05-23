@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use bmz_chart::model::{BgaAssetId, BgaEventKind, PlayableChart, TimingEventKind};
+use bmz_chart::timing::{TICKS_PER_BEAT, TimingMap};
 use bmz_core::judge::{Judge, TimingSide};
 use bmz_core::lane::Lane;
 use bmz_core::time::TimeUs;
@@ -61,7 +62,7 @@ pub fn build_render_snapshot_with_bga_frames(
         lift: session.lift,
         lane_cover: if session.lane_cover_visible { session.lane_cover } else { 0.0 },
         lane_cover_changing: session.lane_cover_changing,
-        note_display_duration_ms: note_display_duration_ms(session),
+        note_display_duration_ms: note_display_duration_ms(session, render_now),
         hidden_cover: session.hidden_cover,
         skin_offsets: skin_offsets_from_session(session),
         now_bpm: current_bpm(&session.chart, render_now) as f32,
@@ -115,24 +116,27 @@ pub fn build_render_snapshot_with_bga_frames(
         }),
     };
 
+    let scroll = ScrollContext::new(session);
+    let cursor_tick = scroll.cursor_tick(render_now);
+
     for lane in Lane::ALL {
         let next_note_index = session.judge.lanes[lane.index()].next_note_index;
         for note in session.chart.notes_for_lane(lane).iter().skip(next_note_index) {
-            if let Some(y) = note_y(note.time, render_now, session.hispeed) {
+            if let Some(y) = scroll.note_y(note.time, cursor_tick) {
                 snapshot.visible_notes[lane.index()].push(VisibleNote { lane, time: note.time, y });
             }
         }
     }
 
     for bar in &session.chart.bar_lines {
-        if let Some(y) = note_y(bar.time, render_now, session.hispeed) {
+        if let Some(y) = scroll.note_y(bar.time, cursor_tick) {
             snapshot.bar_lines.push(VisibleBarLine { time: bar.time, y });
         }
     }
 
     for long in &session.chart.long_notes {
-        let head = note_progress(long.start_time, render_now, session.hispeed);
-        let tail = note_progress(long.end_time, render_now, session.hispeed);
+        let head = scroll.note_progress(long.start_time, cursor_tick);
+        let tail = scroll.note_progress(long.end_time, cursor_tick);
         // 終端が判定ラインを過ぎた、または始端が画面上端より奥なら非表示。
         // lane cover は前面描画で隠すだけで、ノーツのカリング範囲は変えない。
         if tail < 0.0 || head > 1.0 {
@@ -167,11 +171,16 @@ fn current_poor_bga_frame(
     current_bga_frame(chart, judgement.time, BgaEventKind::Poor, bga_frames)
 }
 
-fn note_display_duration_ms(session: &GameSession) -> i32 {
+fn note_display_duration_ms(session: &GameSession, render_now: TimeUs) -> i32 {
     let hispeed = session.hispeed.max(0.01);
     let lane_cover = if session.lane_cover_visible { session.lane_cover } else { 0.0 };
     let visible_max = (1.0 - lane_cover).clamp(0.0, 1.0);
-    ((DEFAULT_LOOKAHEAD_US as f32 / hispeed * visible_max) / 1_000.0)
+    // BPM スクロールでは可視時間が現在 BPM に反比例する。譜面の基準 BPM (initial_bpm)
+    // 比で補正することで、緑数字が今の流速に追従する。
+    let initial_bpm = session.chart.metadata.initial_bpm.max(1.0);
+    let now_bpm = current_bpm(&session.chart, render_now).max(1.0);
+    let bpm_ratio = (initial_bpm / now_bpm) as f32;
+    ((DEFAULT_LOOKAHEAD_US as f32 / hispeed * visible_max * bpm_ratio) / 1_000.0)
         .round()
         .clamp(0.0, i32::MAX as f32) as i32
 }
@@ -220,24 +229,47 @@ fn skin_offsets_from_session(session: &GameSession) -> SkinOffsetValues {
     values
 }
 
-/// ノートの正規化進捗（0.0=判定ライン, 1.0=画面上端）を返す。
-/// 判定ラインを過ぎた（delta<0）か、画面上端より奥のノートは `None`。
-fn note_y(note_time: TimeUs, render_now: TimeUs, hispeed: f32) -> Option<f32> {
-    let delta = note_time.0 - render_now.0;
-    if delta < 0 {
-        return None;
-    }
-
-    let progress = delta as f32 * hispeed / DEFAULT_LOOKAHEAD_US as f32;
-    (progress <= 1.0).then_some(progress)
+/// BPM 変化と STOP に追従した tick ベースのスクロール計算ヘルパ。
+///
+/// 「lookahead = `DEFAULT_LOOKAHEAD_US` を譜面の `initial_bpm` で換算した tick 数」を
+/// 基準にし、現在カーソル tick との差分でノートの y を出す。これにより BPM が
+/// 上がれば見かけのスクロール速度も上がり、STOP 中はカーソル tick が停止する。
+struct ScrollContext<'a> {
+    timing_map: &'a TimingMap,
+    hispeed: f32,
+    lookahead_ticks: f64,
 }
 
-/// `note_y` と同じ正規化進捗を返すが、可視判定・クランプをしない生の値。
-/// 判定ラインを過ぎたノートは負値、可視域より奥は 1.0 超になる。
-/// ロングノートの始端・終端位置の算出に使う。
-fn note_progress(note_time: TimeUs, render_now: TimeUs, hispeed: f32) -> f32 {
-    let delta = note_time.0 - render_now.0;
-    delta as f32 * hispeed / DEFAULT_LOOKAHEAD_US as f32
+impl<'a> ScrollContext<'a> {
+    fn new(session: &'a GameSession) -> Self {
+        let initial_bpm = session.chart.metadata.initial_bpm.max(1.0);
+        let lookahead_ticks =
+            initial_bpm * DEFAULT_LOOKAHEAD_US as f64 * TICKS_PER_BEAT as f64 / 60_000_000.0;
+        Self { timing_map: &session.timing_map, hispeed: session.hispeed, lookahead_ticks }
+    }
+
+    fn cursor_tick(&self, render_now: TimeUs) -> f64 {
+        self.timing_map.time_to_tick_f64(render_now)
+    }
+
+    /// ノートの正規化進捗（0.0=判定ライン, 1.0=画面上端）。判定ラインより手前 (delta<0)
+    /// と画面上端より奥のノートは `None`。
+    fn note_y(&self, note_time: TimeUs, cursor_tick: f64) -> Option<f32> {
+        let note_tick = self.timing_map.time_to_tick_f64(note_time);
+        let delta = note_tick - cursor_tick;
+        if delta < 0.0 {
+            return None;
+        }
+        let progress = (delta / self.lookahead_ticks) as f32 * self.hispeed;
+        (progress <= 1.0).then_some(progress)
+    }
+
+    /// `note_y` と同じ進捗のクランプしない生値。ロングノートの始端/終端で使う。
+    fn note_progress(&self, note_time: TimeUs, cursor_tick: f64) -> f32 {
+        let note_tick = self.timing_map.time_to_tick_f64(note_time);
+        let delta = note_tick - cursor_tick;
+        (delta / self.lookahead_ticks) as f32 * self.hispeed
+    }
 }
 
 fn display_judge_counts(session: &GameSession) -> DisplayJudgeCounts {
@@ -392,6 +424,70 @@ mod tests {
         let covered = build_render_snapshot(&session, TimeUs(0), &[], None);
         assert_eq!(covered.visible_notes[Lane::Key1.index()].len(), 1);
         assert_eq!(covered.visible_notes[Lane::Key1.index()][0].y, 0.5);
+    }
+
+    #[test]
+    fn build_render_snapshot_scroll_speed_tracks_bpm_change() {
+        use bmz_chart::model::{TimingEvent, TimingEventKind};
+        use bmz_chart::timing::TICKS_PER_BEAT;
+
+        // 120 BPM の譜面で 4 拍経過時点(500ms)に 240 BPM へ変化。
+        // ノートを変化点直後の 1 拍先 (= さらに 250ms) に置く。
+        // hispeed=1.0, lookahead=2s, base BPM=120 → lookahead は 4 拍ぶん。
+        // 240 BPM 区間では実時間で半分の速さでスクロールに見えるはずで、
+        // ノートは「1 / 4 拍 = 0.25」の位置に来る。
+        let mut c = chart();
+        c.metadata.initial_bpm = 120.0;
+        c.timing_events = vec![TimingEvent {
+            tick: ChartTick(TICKS_PER_BEAT as u64 * 4),
+            time: TimeUs(2_000_000),
+            kind: TimingEventKind::BpmChange { bpm: 240.0 },
+        }];
+        // ノートを 4 拍 + 1 拍 = 5 拍位置に置く。
+        // 0..4 拍 = 2s @ 120BPM, 4..5 拍 = 0.25s @ 240BPM → time = 2_250_000us
+        c.lane_notes[Lane::Key1.index()][0].tick = ChartTick(TICKS_PER_BEAT as u64 * 5);
+        c.lane_notes[Lane::Key1.index()][0].time = TimeUs(2_250_000);
+
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session = build_game_session(Arc::new(c), &profile, PlaySessionOptions::default());
+        session.hispeed = 1.0;
+
+        // render_now=2_000_000 (BPM 変化点ちょうど): ノートは 1 拍先 = 0.25 にいる。
+        let snap = build_render_snapshot(&session, TimeUs(2_000_000), &[], None);
+        let y = snap.visible_notes[Lane::Key1.index()][0].y;
+        assert!((y - 0.25).abs() < 1e-3, "expected ~0.25, got {y}");
+    }
+
+    #[test]
+    fn build_render_snapshot_scroll_freezes_during_stop() {
+        use bmz_chart::model::{TimingEvent, TimingEventKind};
+        use bmz_chart::timing::TICKS_PER_BEAT;
+
+        // 120 BPM で 4 拍経過時点 (2s) に 1 秒の STOP。
+        // ノートは 5 拍位置 (実時刻 3.5s — 2s + STOP1s + 0.5s)。
+        let mut c = chart();
+        c.metadata.initial_bpm = 120.0;
+        c.timing_events = vec![TimingEvent {
+            tick: ChartTick(TICKS_PER_BEAT as u64 * 4),
+            time: TimeUs(0),
+            kind: TimingEventKind::Stop { duration_us: 1_000_000 },
+        }];
+        c.lane_notes[Lane::Key1.index()][0].tick = ChartTick(TICKS_PER_BEAT as u64 * 5);
+        c.lane_notes[Lane::Key1.index()][0].time = TimeUs(3_500_000);
+
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session = build_game_session(Arc::new(c), &profile, PlaySessionOptions::default());
+        session.hispeed = 1.0;
+
+        // STOP 直前 (just before tick 4 拍): カーソル tick=4, ノート tick=5 → 1 拍差 = 0.25
+        let before = build_render_snapshot(&session, TimeUs(1_999_999), &[], None);
+        let y_before = before.visible_notes[Lane::Key1.index()][0].y;
+        assert!((y_before - 0.25).abs() < 1e-3, "before: expected ~0.25, got {y_before}");
+
+        // STOP 中: カーソル tick が止まり、ノート位置も動かない。
+        let mid = build_render_snapshot(&session, TimeUs(2_500_000), &[], None);
+        let y_mid = mid.visible_notes[Lane::Key1.index()][0].y;
+        assert!((y_mid - 0.25).abs() < 1e-3, "mid stop: expected ~0.25, got {y_mid}");
     }
 
     #[test]

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use bmz_audio::clock::AudioClock;
 use bmz_audio::queue::{AudioScheduler, ScheduledSound};
 use bmz_chart::model::PlayableChart;
+use bmz_chart::timing::TimingMap;
 use bmz_core::input::{InputEvent, InputKind, InputSource};
 use bmz_core::judge::Judge;
 use bmz_core::lane::LANE_COUNT;
@@ -71,6 +72,9 @@ pub struct BgmScheduler {
 
 pub struct GameSession {
     pub chart: Arc<PlayableChart>,
+    /// `chart` の BPM 変化と STOP を取り込んだ tick<->time マップ。
+    /// スクロール位置を BPM に追従させるために使う。
+    pub timing_map: TimingMap,
     pub audio_clock: AudioClock,
     pub input_system: InputSystem,
     pub judge: JudgeEngine,
@@ -676,8 +680,11 @@ mod tests {
 
     fn session_with_autoplay(chart: PlayableChart) -> GameSession {
         let chart = Arc::new(chart);
+        let timing_map =
+            TimingMap::from_chart_timing_events(chart.metadata.initial_bpm, &chart.timing_events);
         GameSession {
             chart: Arc::clone(&chart),
+            timing_map,
             audio_clock: AudioClock {
                 sample_rate: 48_000,
                 start_output_frame: 0,

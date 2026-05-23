@@ -370,8 +370,13 @@ mod tests {
 
     fn session() -> GameSession {
         let chart = Arc::new(chart());
+        let timing_map = bmz_chart::timing::TimingMap::from_chart_timing_events(
+            chart.metadata.initial_bpm,
+            &chart.timing_events,
+        );
         GameSession {
             chart: Arc::clone(&chart),
+            timing_map,
             audio_clock: bmz_audio::clock::AudioClock::stopped(48_000),
             input_system: InputSystem {
                 backend: Box::new(NullInputBackend),

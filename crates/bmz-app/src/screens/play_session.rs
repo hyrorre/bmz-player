@@ -95,6 +95,11 @@ pub fn build_game_session_with_input_backend(
         }),
     };
 
+    let timing_map = bmz_chart::timing::TimingMap::from_chart_timing_events(
+        chart.metadata.initial_bpm,
+        &chart.timing_events,
+    );
+
     GameSession {
         gauge: GaugeState::new(
             gauge_type,
@@ -104,6 +109,7 @@ pub fn build_game_session_with_input_backend(
         judge: JudgeEngine::new(DEFAULT_JUDGE_WINDOW),
         audio_clock: AudioClock::stopped(options.sample_rate),
         chart,
+        timing_map,
         input_system,
         score: ScoreState::default(),
         replay_recorder: ReplayRecorder::default(),
