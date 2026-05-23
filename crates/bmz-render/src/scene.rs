@@ -7,6 +7,7 @@ use crate::snapshot::{DisplayJudgeCounts, FastSlowJudgeCounts, RenderSnapshot};
 #[allow(clippy::large_enum_variant)]
 pub enum AppSceneSnapshot {
     Select(SelectSnapshot),
+    Decide(RenderSnapshot),
     Play(RenderSnapshot),
     Result(ResultSnapshot),
 }

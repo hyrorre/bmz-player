@@ -287,6 +287,11 @@ pub struct SkinConfig {
     /// `.json` で終わるパスは beatoraja JSON スキンとして扱う。
     #[serde(default)]
     pub select: String,
+    /// 決定画面スキンのパス。
+    /// 空文字列ならプレイ開始前もプレイスキン側の描画を使用。
+    /// `.json` / `.luaskin` / `.lua` で終わるパスは beatoraja スキンとして扱う。
+    #[serde(default)]
+    pub decide: String,
     /// プレイ画面スキンのパス。
     /// 空文字列なら内蔵デフォルトスキンを使用。
     /// `.json` で終わるパスは beatoraja JSON スキン、それ以外は
@@ -303,6 +308,9 @@ pub struct SkinConfig {
     /// 選曲スキンのカスタマイズオプション選択 (オプション名 -> 選択肢名)。
     #[serde(default)]
     pub select_options: BTreeMap<String, String>,
+    /// 決定スキンのカスタマイズオプション選択。
+    #[serde(default)]
+    pub decide_options: BTreeMap<String, String>,
     /// プレイスキンのカスタマイズオプション選択。
     #[serde(default)]
     pub play_options: BTreeMap<String, String>,
@@ -312,6 +320,9 @@ pub struct SkinConfig {
     /// 選曲スキンのファイル選択 (filepath 定義名 -> 選択ファイルの相対パス)。
     #[serde(default)]
     pub select_files: BTreeMap<String, String>,
+    /// 決定スキンのファイル選択。
+    #[serde(default)]
+    pub decide_files: BTreeMap<String, String>,
     /// プレイスキンのファイル選択。
     #[serde(default)]
     pub play_files: BTreeMap<String, String>,

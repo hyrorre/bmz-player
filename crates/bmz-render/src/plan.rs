@@ -151,6 +151,7 @@ impl DrawPlan {
     pub fn from_scene_with_skin(scene: &AppSceneSnapshot, skin: &SkinContext) -> Self {
         match scene {
             AppSceneSnapshot::Select(snapshot) => plan_select(snapshot, skin),
+            AppSceneSnapshot::Decide(snapshot) => plan_decide(snapshot, skin),
             AppSceneSnapshot::Play(snapshot) => plan_play(snapshot, skin),
             AppSceneSnapshot::Result(snapshot) => plan_result(snapshot, skin),
         }
@@ -778,6 +779,53 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
     }
 
     DrawPlan { clear: Color::rgb(0.0, 0.0, 0.0), commands }
+}
+
+fn plan_decide(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
+    if skin.document().is_some_and(|document| document.skin_type == 6) {
+        let play_elapsed_ms =
+            (snapshot.play_elapsed_time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+        let skin_global_offset_ms = skin.document().map_or(0, |document| document.loadend.max(0));
+        let state = crate::skin::SkinDrawState {
+            elapsed_ms: play_elapsed_ms.saturating_add(skin_global_offset_ms),
+            ready_timer_ms: play_elapsed_ms,
+            total_notes: snapshot.total_notes,
+            past_notes: snapshot.past_notes,
+            gauge: snapshot.gauge,
+            gauge_type: snapshot.gauge_type,
+            play_level: skin_level_number(&snapshot.play_level),
+            difficulty: skin_difficulty_code(&snapshot.difficulty_name),
+            now_bpm: snapshot.now_bpm,
+            min_bpm: snapshot.min_bpm,
+            max_bpm: snapshot.max_bpm,
+            has_bga: snapshot.has_bga,
+            bga_enabled: snapshot.bga_enabled,
+            skin_offsets: snapshot.skin_offsets,
+            hispeed: snapshot.hispeed,
+            total_duration_ms: snapshot.note_display_duration_ms,
+            lane_cover: snapshot.lane_cover,
+            hidden_cover: snapshot.hidden_cover,
+            ..crate::skin::SkinDrawState::default()
+        };
+        let text = SkinTextState {
+            title: &snapshot.title,
+            subtitle: &snapshot.subtitle,
+            artist: &snapshot.artist,
+            subartist: &snapshot.subartist,
+            genre: &snapshot.genre,
+            difficulty_name: &snapshot.difficulty_name,
+            play_level: &snapshot.play_level,
+            ..SkinTextState::default()
+        };
+        let items = skin.static_document_items_for_state_and_text(state, text);
+        if !items.is_empty() {
+            let mut commands = Vec::new();
+            crate::skin::append_skin_render_items(&mut commands, &items);
+            return DrawPlan { clear: Color::rgb(0.0, 0.0, 0.0), commands };
+        }
+    }
+
+    plan_play(snapshot, &SkinContext::default())
 }
 
 fn skin_lane_height_px(skin: &SkinContext, fallback_canvas_h: f32) -> f32 {

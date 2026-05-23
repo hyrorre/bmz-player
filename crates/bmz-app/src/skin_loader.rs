@@ -17,6 +17,7 @@ use rayon::prelude::*;
 pub enum SkinKind {
     Play,
     Select,
+    Decide,
     Result,
 }
 
@@ -25,6 +26,7 @@ impl SkinKind {
         match self {
             SkinKind::Play => 10_000,
             SkinKind::Select => 20_000,
+            SkinKind::Decide => 25_000,
             SkinKind::Result => 30_000,
         }
     }
@@ -37,6 +39,7 @@ impl SkinKind {
         match self {
             SkinKind::Play => "play",
             SkinKind::Select => "select",
+            SkinKind::Decide => "decide",
             SkinKind::Result => "result",
         }
     }
@@ -123,6 +126,10 @@ pub fn apply_beatoraja_select_json_skin(renderer: &mut Renderer, skin_path: &Pat
 
 pub fn apply_beatoraja_result_json_skin(renderer: &mut Renderer, skin_path: &Path) -> Result<()> {
     apply_beatoraja_json_skin_for_kind(renderer, skin_path, SkinKind::Result)
+}
+
+pub fn apply_beatoraja_decide_json_skin(renderer: &mut Renderer, skin_path: &Path) -> Result<()> {
+    apply_beatoraja_json_skin_for_kind(renderer, skin_path, SkinKind::Decide)
 }
 
 fn apply_beatoraja_json_skin_for_kind(
@@ -363,6 +370,7 @@ fn decode_skin_kind(kind: SkinKind) -> DecodeSkinKind {
     match kind {
         SkinKind::Play => DecodeSkinKind::Play,
         SkinKind::Select => DecodeSkinKind::Select,
+        SkinKind::Decide => DecodeSkinKind::Decide,
         SkinKind::Result => DecodeSkinKind::Result,
     }
 }
@@ -480,6 +488,7 @@ pub fn set_decoded_skin_context(
     match kind {
         SkinKind::Play => renderer.set_play_skin_context(context),
         SkinKind::Select => renderer.set_select_skin_context(context),
+        SkinKind::Decide => renderer.set_decide_skin_context(context),
         SkinKind::Result => renderer.set_result_skin_context(context),
     }
 }

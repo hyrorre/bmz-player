@@ -149,6 +149,7 @@ struct WinitApp {
     gilrs: Option<crate::input::gilrs::GilrsBackend>,
     default_skin_manifest: Option<SkinManifest>,
     pending_skin_rx: Option<Receiver<PendingSkinResult>>,
+    pending_decide_skin: bool,
     pending_play_skin: bool,
     pending_result_skin: bool,
     pending_skin_installs: Vec<PendingSkinInstall>,
@@ -221,6 +222,7 @@ const SKIN_INSTALL_SOURCES_PER_FRAME: usize = usize::MAX;
 #[derive(Debug, Clone, PartialEq)]
 enum AppViewState {
     Select,
+    Decide,
     Play,
     Result(Box<ResultSummary>),
 }
@@ -228,6 +230,7 @@ enum AppViewState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AppSceneKind {
     Select,
+    Decide,
     Play,
     Result,
 }
@@ -253,19 +256,27 @@ impl WinitApp {
         let now = Instant::now();
 
         let mut renderer = Renderer::default();
-        let (default_skin_manifest, pending_skin_rx, pending_play_skin, pending_result_skin) =
-            load_skin_textures(
-                &mut renderer,
-                &boot.profile_config.skin.select,
-                &boot.profile_config.skin.play,
-                &boot.profile_config.skin.result,
-                &boot.profile_config.skin.select_options,
-                &boot.profile_config.skin.play_options,
-                &boot.profile_config.skin.result_options,
-                &boot.profile_config.skin.select_files,
-                &boot.profile_config.skin.play_files,
-                &boot.profile_config.skin.result_files,
-            );
+        let (
+            default_skin_manifest,
+            pending_skin_rx,
+            pending_decide_skin,
+            pending_play_skin,
+            pending_result_skin,
+        ) = load_skin_textures(
+            &mut renderer,
+            &boot.profile_config.skin.select,
+            &boot.profile_config.skin.decide,
+            &boot.profile_config.skin.play,
+            &boot.profile_config.skin.result,
+            &boot.profile_config.skin.select_options,
+            &boot.profile_config.skin.decide_options,
+            &boot.profile_config.skin.play_options,
+            &boot.profile_config.skin.result_options,
+            &boot.profile_config.skin.select_files,
+            &boot.profile_config.skin.decide_files,
+            &boot.profile_config.skin.play_files,
+            &boot.profile_config.skin.result_files,
+        );
 
         let gilrs = if boot.app_config.input.gamepad_enabled {
             let sensitivity = boot.profile_config.input.analog_scratch_sensitivity;
@@ -318,6 +329,7 @@ impl WinitApp {
             gilrs,
             default_skin_manifest,
             pending_skin_rx,
+            pending_decide_skin,
             pending_play_skin,
             pending_result_skin,
             pending_skin_installs: Vec::new(),
@@ -390,6 +402,15 @@ impl WinitApp {
 
     fn view_state(&self) -> AppViewState {
         if self.active_play.is_some() {
+            if self.last_play_snapshot.as_ref().is_some_and(|snapshot| {
+                snapshot.time.0 < 0
+                    && self
+                        .renderer
+                        .decide_skin_document()
+                        .is_some_and(|document| document.skin_type == 6)
+            }) {
+                return AppViewState::Decide;
+            }
             return AppViewState::Play;
         }
 
@@ -407,6 +428,9 @@ impl WinitApp {
 
         match self.view_state() {
             AppViewState::Select => AppSceneSnapshot::Select(self.select_snapshot()),
+            AppViewState::Decide => {
+                AppSceneSnapshot::Decide(self.last_play_snapshot.clone().unwrap_or_default())
+            }
             AppViewState::Play => {
                 AppSceneSnapshot::Play(self.last_play_snapshot.clone().unwrap_or_default())
             }
@@ -901,6 +925,7 @@ impl WinitApp {
     }
 
     fn start_chart_with_options(&mut self, chart_id: i64, mut options: PlayStartOptions) {
+        self.ensure_skin_ready(SkinKind::Decide);
         self.ensure_skin_ready(SkinKind::Play);
         if options.chart_zero_time == TimeUs(0) {
             options.chart_zero_time = self.play_skin_chart_zero_time();
@@ -1128,6 +1153,7 @@ impl WinitApp {
 
     fn is_kind_pending_decode(&self, kind: SkinKind) -> bool {
         match kind {
+            SkinKind::Decide => self.pending_decide_skin,
             SkinKind::Play => self.pending_play_skin,
             SkinKind::Result => self.pending_result_skin,
             SkinKind::Select => false,
@@ -1137,6 +1163,7 @@ impl WinitApp {
     fn enqueue_pending_skin_install(&mut self, pending: PendingSkinResult) {
         let PendingSkinResult { path, kind, result } = pending;
         match kind {
+            SkinKind::Decide => self.pending_decide_skin = false,
             SkinKind::Play => self.pending_play_skin = false,
             SkinKind::Result => self.pending_result_skin = false,
             SkinKind::Select => {}
@@ -1321,6 +1348,7 @@ impl WinitApp {
         };
         let scene = match scene_kind(&self.scene_snapshot()) {
             AppSceneKind::Select => "Select",
+            AppSceneKind::Decide => "Decide",
             AppSceneKind::Play => "Play",
             AppSceneKind::Result => "Result",
         };
@@ -1328,6 +1356,7 @@ impl WinitApp {
         let info = DebugInfo { scene, width: size.width, height: size.height };
         let skin_meta = SkinConfigMeta {
             select: SceneSkinDefs::from_document(self.renderer.select_skin_document()),
+            decide: SceneSkinDefs::from_document(self.renderer.decide_skin_document()),
             play: SceneSkinDefs::from_document(self.renderer.play_skin_document()),
             result: SceneSkinDefs::from_document(self.renderer.result_skin_document()),
         };
@@ -1380,20 +1409,24 @@ impl WinitApp {
     /// バックグラウンド decode + 段階 install パイプラインへ流す。
     fn reload_skins(&mut self) {
         let skin = self.boot.profile_config.skin.clone();
-        let (manifest, rx, pending_play, pending_result) = load_skin_textures(
+        let (manifest, rx, pending_decide, pending_play, pending_result) = load_skin_textures(
             &mut self.renderer,
             &skin.select,
+            &skin.decide,
             &skin.play,
             &skin.result,
             &skin.select_options,
+            &skin.decide_options,
             &skin.play_options,
             &skin.result_options,
             &skin.select_files,
+            &skin.decide_files,
             &skin.play_files,
             &skin.result_files,
         );
         self.default_skin_manifest = manifest;
         self.pending_skin_rx = rx;
+        self.pending_decide_skin = pending_decide;
         self.pending_play_skin = pending_play;
         self.pending_result_skin = pending_result;
         // 前回リロードの未完了 install は破棄する。
@@ -1595,24 +1628,42 @@ fn pick_exclusive_video_mode(monitor: &MonitorHandle) -> Option<VideoModeHandle>
 fn load_skin_textures(
     renderer: &mut Renderer,
     select_skin_path: &str,
+    decide_skin_path: &str,
     play_skin_path: &str,
     result_skin_path: &str,
     select_options: &BTreeMap<String, String>,
+    decide_options: &BTreeMap<String, String>,
     play_options: &BTreeMap<String, String>,
     result_options: &BTreeMap<String, String>,
     select_files: &BTreeMap<String, String>,
+    decide_files: &BTreeMap<String, String>,
     play_files: &BTreeMap<String, String>,
     result_files: &BTreeMap<String, String>,
-) -> (Option<SkinManifest>, Option<Receiver<PendingSkinResult>>, bool, bool) {
+) -> (Option<SkinManifest>, Option<Receiver<PendingSkinResult>>, bool, bool, bool) {
     // Play / Result の JSON skin は Select の同期ロードより**前**に decode スレッドを起動して
     // CPU をフル活用する。Select の sync 処理 (PNG GPU upload など) と並列に decode が進む。
     let (tx, rx) = mpsc::channel::<PendingSkinResult>();
+    let mut pending_decide = false;
     let mut pending_play = false;
     let mut pending_result = false;
 
+    let decide_trimmed = decide_skin_path.trim().to_string();
     let play_trimmed = play_skin_path.trim().to_string();
     let result_trimmed = result_skin_path.trim().to_string();
 
+    if !decide_trimmed.is_empty() {
+        let decide_path = Path::new(&decide_trimmed);
+        if is_decodable_skin_path(decide_path) {
+            spawn_skin_decode(
+                tx.clone(),
+                decide_path.to_path_buf(),
+                SkinKind::Decide,
+                decide_options.clone(),
+                decide_files.clone(),
+            );
+            pending_decide = true;
+        }
+    }
     if !play_trimmed.is_empty() {
         let play_path = Path::new(&play_trimmed);
         if is_decodable_skin_path(play_path) {
@@ -1690,8 +1741,15 @@ fn load_skin_textures(
         );
     }
 
-    let rx = if pending_play || pending_result { Some(rx) } else { None };
-    (default_manifest, rx, pending_play, pending_result)
+    if !decide_trimmed.is_empty() && !is_decodable_skin_path(Path::new(&decide_trimmed)) {
+        tracing::warn!(
+            path = %decide_trimmed,
+            "decide skin path is not a supported beatoraja skin file; ignoring"
+        );
+    }
+
+    let rx = if pending_decide || pending_play || pending_result { Some(rx) } else { None };
+    (default_manifest, rx, pending_decide, pending_play, pending_result)
 }
 
 fn apply_json_skin_sync(
@@ -2307,6 +2365,7 @@ fn result_action(
 fn scene_kind(scene: &AppSceneSnapshot) -> AppSceneKind {
     match scene {
         AppSceneSnapshot::Select(_) => AppSceneKind::Select,
+        AppSceneSnapshot::Decide(_) => AppSceneKind::Decide,
         AppSceneSnapshot::Play(_) => AppSceneKind::Play,
         AppSceneSnapshot::Result(_) => AppSceneKind::Result,
     }
@@ -2315,6 +2374,7 @@ fn scene_kind(scene: &AppSceneSnapshot) -> AppSceneKind {
 fn window_title_for_scene(scene_kind: AppSceneKind) -> &'static str {
     match scene_kind {
         AppSceneKind::Select => "bmz-player - Select",
+        AppSceneKind::Decide => "bmz-player - Decide",
         AppSceneKind::Play => "bmz-player - Play",
         AppSceneKind::Result => "bmz-player - Result",
     }

@@ -48,6 +48,7 @@ impl SceneSkinDefs {
 #[derive(Default)]
 pub struct SkinConfigMeta {
     pub select: SceneSkinDefs,
+    pub decide: SceneSkinDefs,
     pub play: SceneSkinDefs,
     pub result: SceneSkinDefs,
 }
@@ -299,6 +300,9 @@ fn build_skin_panel(
                 ui.label("選曲");
                 ui.text_edit_singleline(&mut skin.select);
                 ui.end_row();
+                ui.label("決定");
+                ui.text_edit_singleline(&mut skin.decide);
+                ui.end_row();
                 ui.label("プレイ");
                 ui.text_edit_singleline(&mut skin.play);
                 ui.end_row();
@@ -340,6 +344,7 @@ fn build_skin_panel(
             ui.separator();
             ui.label("読み込み済みスキンが宣言する設定可能項目:");
             let select_root = skin_root_path(&skin.select);
+            let decide_root = skin_root_path(&skin.decide);
             let play_root = skin_root_path(&skin.play);
             let result_root = skin_root_path(&skin.result);
             // オプション数が多いとウィンドウが画面をはみ出すため、この区画は
@@ -354,6 +359,15 @@ fn build_skin_panel(
                         select_root.as_deref(),
                         &mut skin.select_options,
                         &mut skin.select_files,
+                        &mut skin.offsets,
+                    );
+                    build_scene_skin_defs(
+                        ui,
+                        "決定スキン",
+                        &skin_meta.decide,
+                        decide_root.as_deref(),
+                        &mut skin.decide_options,
+                        &mut skin.decide_files,
                         &mut skin.offsets,
                     );
                     build_scene_skin_defs(

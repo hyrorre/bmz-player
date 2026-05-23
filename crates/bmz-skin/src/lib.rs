@@ -12,6 +12,7 @@ mod lua;
 pub enum SkinKind {
     Play,
     Select,
+    Decide,
     Result,
 }
 

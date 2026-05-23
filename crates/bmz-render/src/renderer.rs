@@ -26,6 +26,7 @@ pub struct Renderer {
     last_plan: Option<DrawPlan>,
     play_skin_context: SkinContext,
     select_skin_context: SkinContext,
+    decide_skin_context: SkinContext,
     result_skin_context: SkinContext,
     pending_textures: Vec<PendingTexture>,
     fonts: HashMap<String, FontArc>,
@@ -202,6 +203,10 @@ impl Renderer {
         self.select_skin_context = skin_context;
     }
 
+    pub fn set_decide_skin_context(&mut self, skin_context: SkinContext) {
+        self.decide_skin_context = skin_context;
+    }
+
     pub fn set_result_skin_context(&mut self, skin_context: SkinContext) {
         self.result_skin_context = skin_context;
     }
@@ -222,6 +227,11 @@ impl Renderer {
         self.play_skin_context.document()
     }
 
+    /// 決定スキンの document。
+    pub fn decide_skin_document(&self) -> Option<&SkinDocument> {
+        self.decide_skin_context.document()
+    }
+
     /// リザルトスキンの document。
     pub fn result_skin_document(&self) -> Option<&SkinDocument> {
         self.result_skin_context.document()
@@ -230,6 +240,7 @@ impl Renderer {
     fn skin_context_for_scene(&self, scene: &AppSceneSnapshot) -> &SkinContext {
         match scene {
             AppSceneSnapshot::Select(_) => &self.select_skin_context,
+            AppSceneSnapshot::Decide(_) => &self.decide_skin_context,
             AppSceneSnapshot::Play(_) => &self.play_skin_context,
             AppSceneSnapshot::Result(_) => &self.result_skin_context,
         }
