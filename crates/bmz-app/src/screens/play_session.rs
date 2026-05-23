@@ -120,6 +120,7 @@ pub fn build_game_session_with_input_backend(
         lane_keyoff_started_at: Default::default(),
         lane_auto_release_at: Default::default(),
         recent_judgements: Vec::new(),
+        full_combo_started_at: None,
         bgm_scheduler: BgmScheduler::default(),
         offsets: play_offsets_from_profile(profile),
         audio_mix: audio_mix_from_profile(profile),

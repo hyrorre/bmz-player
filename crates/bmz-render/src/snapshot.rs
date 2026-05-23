@@ -49,6 +49,8 @@ pub struct RenderSnapshot {
     pub visible_long_notes: Vec<VisibleLongNote>,
     pub recent_inputs: Vec<DisplayInput>,
     pub recent_judgements: Vec<DisplayJudgement>,
+    /// Full combo timer elapsed ms (skin timer 48/49). None while inactive.
+    pub full_combo_elapsed_ms: Option<i32>,
     pub bar_lines: Vec<VisibleBarLine>,
     /// 各レーンのキー押下開始からの経過 ms(押下中のみ Some)。skin timer 100..=107 に渡る。
     pub keyon_ms: [Option<i32>; LANE_COUNT],

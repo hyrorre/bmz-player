@@ -43,7 +43,6 @@ cargo run
 - [ ] 小節線を表示
 - [ ] 楽曲プレイ後、select 画面の背景が曲のstagefile?になる
 - [ ] 途中落ちのアニメーション再生
-- [ ] フルコンボアニメーション再生
 - [ ] play画面のAUTO PLAY表示
 - [ ] egui の日本語の vertical-align を修正
 - [ ] cliのオプション指定方法を変更 (songs scan, songs rescan, -a, --autoplay)

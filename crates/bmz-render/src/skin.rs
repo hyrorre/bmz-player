@@ -851,6 +851,8 @@ pub struct SkinDrawState {
     pub lane_judge: [Option<usize>; LANE_COUNT],
     /// 判定タイマー経過ms (TIMER_JUDGE_1P=46)。Noneなら非アクティブ。
     pub judge_ms: Option<i32>,
+    /// Full combo timer elapsed ms (TIMER_FULLCOMBO_1P/2P=48/49)。Noneなら非アクティブ。
+    pub full_combo_ms: Option<i32>,
     /// 現在表示中の判定画像インデックス (0=PGREAT,1=GREAT,2=GOOD,3=BAD,4=POOR)。
     /// `destination` の judge 挿入点で judge 定義を描画するために使う。
     pub judge_index: Option<usize>,
@@ -984,6 +986,7 @@ impl Default for SkinDrawState {
             keyoff_ms: [None; LANE_COUNT],
             lane_judge: [None; LANE_COUNT],
             judge_ms: None,
+            full_combo_ms: None,
             judge_index: None,
             offset_lift_px: 0,
             offset_lanecover_px: 0,
@@ -4111,6 +4114,7 @@ fn skin_timer_elapsed_ms(timer: Option<i32>, state: SkinDrawState) -> Option<i32
         Some(11) => Some(state.select_bar_elapsed_ms),
         Some(21..=23) => Some(state.select_option_panel_elapsed_ms),
         Some(46) => state.judge_ms,
+        Some(48 | 49) => state.full_combo_ms,
         Some(50..=57) => state.bomb_ms[(timer.unwrap() - 50) as usize],
         Some(100..=107) => state.keyon_ms[(timer.unwrap() - 100) as usize],
         Some(120..=127) => state.keyoff_ms[(timer.unwrap() - 120) as usize],
@@ -7768,6 +7772,52 @@ mod tests {
                 && approx_eq(y, 0.74)
                 && approx_eq(width, 0.05)
                 && approx_eq(height, 0.06)));
+    }
+
+    #[test]
+    fn skin_document_resolves_full_combo_timer_destinations() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "system.png" }],
+                "image": [{ "id": "fc", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10 }],
+                "destination": [
+                    { "id": "fc", "timer": 48, "loop": -1, "dst": [
+                        { "time": 0, "x": 10, "y": 20, "w": 5, "h": 6, "a": 255 },
+                        { "time": 1000, "a": 0 }
+                    ] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "1".to_string(),
+            SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 100.0, height: 100.0 },
+            },
+        )]);
+
+        let hidden = document.static_image_render_items(
+            &sources,
+            SkinDrawState { full_combo_ms: None, ..SkinDrawState::default() },
+        );
+        let visible = document.static_image_render_items(
+            &sources,
+            SkinDrawState { full_combo_ms: Some(500), ..SkinDrawState::default() },
+        );
+
+        assert!(hidden.is_empty());
+        assert_eq!(visible.len(), 1);
+        assert!(matches!(visible[0], SkinRenderItem::Image {
+                tint: Color { a, .. },
+                ..
+            } if approx_eq(a, 128.0 / 255.0)));
     }
 
     #[test]

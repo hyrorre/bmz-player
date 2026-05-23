@@ -92,6 +92,9 @@ pub struct GameSession {
     /// `audio_now` がこの時刻を超えたら keyon → keyoff へ遷移する。
     pub lane_auto_release_at: [Option<TimeUs>; LANE_COUNT],
     pub recent_judgements: Vec<JudgementEvent>,
+    /// Full combo animation start time. Set once when all notes have been judged
+    /// and the combo still matches the total note count.
+    pub full_combo_started_at: Option<TimeUs>,
     pub bgm_scheduler: BgmScheduler,
     pub offsets: PlayOffsets,
     pub audio_mix: PlayAudioMix,
@@ -375,6 +378,7 @@ pub fn advance_session_frame(
         judgements.extend(process_misses(session, times.audio_now));
         schedule_keysounds(session, &judgements, audio);
         update_recent_judgements(session, &judgements, times.render_now);
+        update_full_combo_timer(session, &judgements);
 
         if should_finish(session, times.audio_now) {
             session.state = PlayState::Finished;
@@ -382,6 +386,22 @@ pub fn advance_session_frame(
     }
 
     SessionFrame { times, judgements, state: session.state }
+}
+
+fn update_full_combo_timer(session: &mut GameSession, judgements: &[JudgementEvent]) {
+    if session.full_combo_started_at.is_some()
+        || session.chart.total_notes == 0
+        || session.score.past_notes < session.chart.total_notes
+        || session.score.combo < session.chart.total_notes
+    {
+        return;
+    }
+    session.full_combo_started_at = judgements
+        .iter()
+        .rev()
+        .find(|event| event.note_id.is_some())
+        .map(|event| event.time)
+        .or_else(|| Some(session.audio_clock.now()));
 }
 
 pub fn should_finish(session: &GameSession, audio_now: TimeUs) -> bool {
@@ -437,6 +457,16 @@ mod tests {
         assert_eq!(audio.scheduled[0].start_frame, 0);
         assert_eq!(audio.scheduled[0].volume, 0.125);
         assert_eq!(session.recent_judgements.len(), 1);
+    }
+
+    #[test]
+    fn advance_session_frame_starts_full_combo_timer_after_last_note() {
+        let mut session = session_with_autoplay(chart_with_keysound());
+        let mut audio = TestAudio::default();
+
+        advance_session_frame(&mut session, &mut audio);
+
+        assert_eq!(session.full_combo_started_at, Some(TimeUs(0)));
     }
 
     #[test]
@@ -716,6 +746,7 @@ mod tests {
             lane_keyoff_started_at: Default::default(),
             lane_auto_release_at: Default::default(),
             recent_judgements: Vec::new(),
+            full_combo_started_at: None,
             bgm_scheduler: BgmScheduler::default(),
             offsets: PlayOffsets { input_offset_us: 0, visual_offset_us: 0 },
             audio_mix: PlayAudioMix { master_volume: 1.0, key_volume: 1.0, bgm_volume: 1.0 },

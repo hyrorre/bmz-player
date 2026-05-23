@@ -561,6 +561,7 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
         keyoff_ms,
         lane_judge,
         judge_ms,
+        full_combo_ms: snapshot.full_combo_elapsed_ms,
         judge_index,
         offset_lift_px: {
             let canvas_h = skin.document().map_or(720, |d| d.h) as f32;

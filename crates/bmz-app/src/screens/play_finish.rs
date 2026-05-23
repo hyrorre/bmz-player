@@ -399,6 +399,7 @@ mod tests {
             lane_keyoff_started_at: Default::default(),
             lane_auto_release_at: Default::default(),
             recent_judgements: Vec::new(),
+            full_combo_started_at: None,
             bgm_scheduler: BgmScheduler::default(),
             offsets: PlayOffsets { input_offset_us: 0, visual_offset_us: 0 },
             audio_mix: PlayAudioMix { master_volume: 1.0, key_volume: 1.0, bgm_volume: 1.0 },
