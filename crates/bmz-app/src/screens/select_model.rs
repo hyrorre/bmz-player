@@ -206,22 +206,51 @@ pub fn load_select_items_in_folder(
     score_db: &ScoreDatabase,
     folder_path: &str,
 ) -> Result<Vec<SelectItem>> {
-    let folder_names = library_db.list_child_folder_names(folder_path)?;
-    let direct_charts = library_db.list_charts_in_folder(folder_path)?;
+    // 子孫 folder_path を 1 回だけ引き、直下の子と各子が leaf かどうかを
+    // Rust 側で集計する。`/` 区切り後の最初のセグメントが「直下の子の名前」、
+    // それより深いセグメントが残っていれば leaf でない。
+    let folder_key = folder_path.replace('\\', "/");
+    let prefix_len = folder_key.len() + 1; // including the trailing '/'
+    let descendants = library_db.list_descendant_folder_paths(&folder_key)?;
 
-    let mut non_leaf_folders: Vec<(String, String)> = Vec::new();
-    let mut all_charts = direct_charts;
-
-    for name in folder_names {
-        let child_path = format!("{}/{}", folder_path, name);
-        let child_sub_folders = library_db.list_child_folder_names(&child_path)?;
-        if child_sub_folders.is_empty() {
-            let leaf_charts = library_db.list_charts_in_folder(&child_path)?;
-            all_charts.extend(leaf_charts);
-        } else {
-            non_leaf_folders.push((child_path, name));
+    // child_name -> has_grandchild (= 非 leaf)
+    let mut child_state: std::collections::BTreeMap<String, bool> =
+        std::collections::BTreeMap::new();
+    for descendant in &descendants {
+        let Some(rest) = descendant.get(prefix_len..) else { continue };
+        let (child, deeper) = match rest.split_once('/') {
+            Some((head, tail)) => (head, !tail.is_empty()),
+            None => (rest, false),
+        };
+        if child.is_empty() {
+            continue;
+        }
+        let entry = child_state.entry(child.to_string()).or_insert(false);
+        if deeper {
+            *entry = true;
         }
     }
+
+    let mut non_leaf_folders: Vec<(String, String)> = Vec::new();
+    let mut leaf_folder_paths: Vec<String> = Vec::new();
+    for (name, has_grandchild) in child_state {
+        let child_path = format!("{folder_key}/{name}");
+        if has_grandchild {
+            non_leaf_folders.push((child_path, name));
+        } else {
+            leaf_folder_paths.push(child_path);
+        }
+    }
+    // 表示順は元実装に合わせ COLLATE NOCASE 相当。BTreeMap は code-point 順
+    // なので、ここで lowercase 比較に揃え直す。
+    non_leaf_folders.sort_by_key(|(_, name)| name.to_lowercase());
+
+    // 親フォルダ自身 + leaf 子フォルダ群の charts を 1 つのプリペアド
+    // ステートメントで取得する。
+    let mut fetch_paths: Vec<&str> = Vec::with_capacity(1 + leaf_folder_paths.len());
+    fetch_paths.push(folder_key.as_str());
+    fetch_paths.extend(leaf_folder_paths.iter().map(String::as_str));
+    let all_charts = library_db.list_charts_in_folders(&fetch_paths)?;
 
     let hashes: Vec<[u8; 32]> = all_charts.iter().map(|c| c.sha256).collect();
     let mut score_map: HashMap<[u8; 32], BestScoreSummary> = score_db
