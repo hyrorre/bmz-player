@@ -113,54 +113,54 @@ pub(super) fn list_entries_by_md5s(
     conn: &Connection,
     md5s: &[&str],
 ) -> Result<Vec<DifficultyTableEntryRecord>> {
-    if md5s.is_empty() {
-        return Ok(Vec::new());
-    }
-    let placeholders = vec!["?"; md5s.len()].join(",");
-    let sql = format!(
-        "SELECT dt.name, dt.symbol, dte.level, dte.md5, dte.sha256
-         FROM difficulty_table_entries dte
-         JOIN difficulty_tables dt ON dt.id = dte.table_id
-         WHERE dte.md5 IN ({placeholders})"
-    );
-    let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(rusqlite::params_from_iter(md5s.iter().copied()), |row| {
-        Ok(DifficultyTableEntryRecord {
-            table_name: row.get(0)?,
-            table_symbol: row.get(1)?,
-            level: row.get(2)?,
-            md5: row.get(3)?,
-            sha256: row.get(4)?,
-        })
-    })?;
-    rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
+    list_entries_by_hash_column(conn, "md5", md5s)
 }
 
 pub(super) fn list_entries_by_sha256s(
     conn: &Connection,
     sha256s: &[&str],
 ) -> Result<Vec<DifficultyTableEntryRecord>> {
-    if sha256s.is_empty() {
+    list_entries_by_hash_column(conn, "sha256", sha256s)
+}
+
+/// Look up table entries by a single hash column (`md5` or `sha256`).
+///
+/// Uses a single prepared statement with `WHERE dte.<col> = ?` and reuses it
+/// for every input hash. This avoids hitting SQLite's per-statement variable
+/// limit (`SQLITE_MAX_VARIABLE_NUMBER`, 999 on older builds / 32766 on newer
+/// ones) when a folder contains tens of thousands of BMS files.
+fn list_entries_by_hash_column(
+    conn: &Connection,
+    column: &'static str,
+    hashes: &[&str],
+) -> Result<Vec<DifficultyTableEntryRecord>> {
+    debug_assert!(matches!(column, "md5" | "sha256"));
+    if hashes.is_empty() {
         return Ok(Vec::new());
     }
-    let placeholders = vec!["?"; sha256s.len()].join(",");
     let sql = format!(
         "SELECT dt.name, dt.symbol, dte.level, dte.md5, dte.sha256
          FROM difficulty_table_entries dte
          JOIN difficulty_tables dt ON dt.id = dte.table_id
-         WHERE dte.sha256 IN ({placeholders})"
+         WHERE dte.{column} = ?1"
     );
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(rusqlite::params_from_iter(sha256s.iter().copied()), |row| {
-        Ok(DifficultyTableEntryRecord {
-            table_name: row.get(0)?,
-            table_symbol: row.get(1)?,
-            level: row.get(2)?,
-            md5: row.get(3)?,
-            sha256: row.get(4)?,
-        })
-    })?;
-    rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
+    let mut result = Vec::new();
+    for hash in hashes {
+        let rows = stmt.query_map(params![hash], |row| {
+            Ok(DifficultyTableEntryRecord {
+                table_name: row.get(0)?,
+                table_symbol: row.get(1)?,
+                level: row.get(2)?,
+                md5: row.get(3)?,
+                sha256: row.get(4)?,
+            })
+        })?;
+        for row in rows {
+            result.push(row?);
+        }
+    }
+    Ok(result)
 }
 
 #[cfg(test)]
