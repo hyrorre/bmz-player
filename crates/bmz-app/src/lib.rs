@@ -4,6 +4,7 @@ pub mod bootstrap;
 pub mod cli;
 pub mod config;
 pub mod course;
+pub mod course_cmd;
 pub mod difficulty_table;
 pub mod input;
 pub mod paths;

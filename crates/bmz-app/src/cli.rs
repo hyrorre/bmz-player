@@ -11,6 +11,7 @@ pub enum Command {
     Run(AppOptions),
     Table(TableCommand),
     Songs(SongsCommand),
+    Course(CourseCommand),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,6 +26,12 @@ pub enum SongsCommand {
     Add { path: String, recursive: bool, enabled: bool },
     List,
     Reload,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CourseCommand {
+    Import { path: String },
+    List,
 }
 
 pub fn parse_command<I, S>(args: I) -> Result<Command>
@@ -68,6 +75,21 @@ where
                 Some("reload") => Ok(Command::Songs(SongsCommand::Reload)),
                 Some(sub) => bail!("unknown songs subcommand: {sub}. Use: add, list, reload"),
                 None => bail!("songs requires a subcommand: add, list, reload"),
+            }
+        }
+        Some("course") => {
+            let rest = &args[1..];
+            match rest.first().map(|s| s.as_str()) {
+                Some("import") => {
+                    let path = rest
+                        .get(1)
+                        .ok_or_else(|| anyhow::anyhow!("course import requires a PATH"))?
+                        .clone();
+                    Ok(Command::Course(CourseCommand::Import { path }))
+                }
+                Some("list") => Ok(Command::Course(CourseCommand::List)),
+                Some(sub) => bail!("unknown course subcommand: {sub}. Use: import, list"),
+                None => bail!("course requires a subcommand: import, list"),
             }
         }
         _ => Ok(Command::Run(AppOptions::parse_args(args)?)),
@@ -139,7 +161,7 @@ where
 }
 
 pub fn app_help_text() -> &'static str {
-    "bmz-app\n\nUsage:\n  bmz-app [OPTIONS]\n  bmz-app table <SUBCOMMAND>\n  bmz-app songs <SUBCOMMAND>\n\nOptions:\n  --boot-play-sample              Start the bundled sample chart on boot\n  --autoplay-on-start             Enable autoplay for started charts\n  --boot-replay <1..4>            Start the bundled sample chart in replay mode using slot N\n  --smoke-exit-after-frames <N>   Exit after N rendered frames, clamped to 1 or more\n  --smoke-exit-on-result          Exit when the app reaches the result screen\n  -h, --help                      Print this help\n\nTable subcommands:\n  table add <URL>   Add a difficulty table source and fetch it\n  table list        List all stored difficulty tables\n  table fetch       Fetch/update all configured difficulty tables\n\nSongs subcommands:\n  songs add <PATH> [--no-recursive] [--disabled]   Add a song root directory\n  songs list                                        List configured song roots\n  songs reload                                      Scan all song roots and update the library\n\nExamples:\n  cargo run -p bmz-app -- --boot-play-sample --smoke-exit-after-frames 3\n  cargo run -p bmz-app -- --boot-play-sample --boot-replay 1 --smoke-exit-on-result\n  cargo run -p bmz-app -- table add https://example.com/table.html\n  cargo run -p bmz-app -- table list\n  cargo run -p bmz-app -- songs add /path/to/bms\n  cargo run -p bmz-app -- songs list\n  cargo run -p bmz-app -- songs reload"
+    "bmz-app\n\nUsage:\n  bmz-app [OPTIONS]\n  bmz-app table <SUBCOMMAND>\n  bmz-app songs <SUBCOMMAND>\n  bmz-app course <SUBCOMMAND>\n\nOptions:\n  --boot-play-sample              Start the bundled sample chart on boot\n  --autoplay-on-start             Enable autoplay for started charts\n  --boot-replay <1..4>            Start the bundled sample chart in replay mode using slot N\n  --smoke-exit-after-frames <N>   Exit after N rendered frames, clamped to 1 or more\n  --smoke-exit-on-result          Exit when the app reaches the result screen\n  -h, --help                      Print this help\n\nTable subcommands:\n  table add <URL>   Add a difficulty table source and fetch it\n  table list        List all stored difficulty tables\n  table fetch       Fetch/update all configured difficulty tables\n\nSongs subcommands:\n  songs add <PATH> [--no-recursive] [--disabled]   Add a song root directory\n  songs list                                        List configured song roots\n  songs reload                                      Scan all song roots and update the library\n\nCourse subcommands:\n  course import <PATH>   Import beatoraja course JSON from a file or directory\n  course list            List stored courses\n\nExamples:\n  cargo run -p bmz-app -- --boot-play-sample --smoke-exit-after-frames 3\n  cargo run -p bmz-app -- --boot-play-sample --boot-replay 1 --smoke-exit-on-result\n  cargo run -p bmz-app -- table add https://example.com/table.html\n  cargo run -p bmz-app -- table list\n  cargo run -p bmz-app -- songs add /path/to/bms\n  cargo run -p bmz-app -- songs list\n  cargo run -p bmz-app -- songs reload\n  cargo run -p bmz-app -- course import /path/to/course.json\n  cargo run -p bmz-app -- course list"
 }
 
 fn parse_smoke_exit_after_frames_value(value: &str) -> Result<u32> {
@@ -228,6 +250,8 @@ mod tests {
         assert!(help.contains("table add"));
         assert!(help.contains("table list"));
         assert!(help.contains("table fetch"));
+        assert!(help.contains("course import"));
+        assert!(help.contains("course list"));
     }
 
     #[test]
@@ -279,6 +303,25 @@ mod tests {
             parse_command(["songs", "reload"]).unwrap(),
             Command::Songs(SongsCommand::Reload)
         );
+    }
+
+    #[test]
+    fn parse_command_routes_course_subcommands() {
+        assert_eq!(
+            parse_command(["course", "import", "/course"]).unwrap(),
+            Command::Course(CourseCommand::Import { path: "/course".to_string() })
+        );
+        assert_eq!(
+            parse_command(["course", "list"]).unwrap(),
+            Command::Course(CourseCommand::List)
+        );
+    }
+
+    #[test]
+    fn parse_command_rejects_unknown_course_subcommand() {
+        assert!(parse_command(["course", "remove"]).is_err());
+        assert!(parse_command(["course"]).is_err());
+        assert!(parse_command(["course", "import"]).is_err());
     }
 
     #[test]
