@@ -1125,52 +1125,16 @@ fn push_receptors(
 
 fn push_gauge(
     skin: &SkinContext,
-    skin_manifest: &SkinManifest,
+    _skin_manifest: &SkinManifest,
     commands: &mut Vec<DrawCommand>,
     gauge: f32,
     elapsed_ms: i32,
 ) {
     if let Some(items) = skin.document_gauge_items(gauge, elapsed_ms) {
         append_skin_render_items(commands, &items);
-        return;
     }
-
-    let frame = Rect { x: 0.84, y: 0.08, width: 0.035, height: 0.82 };
-    let fill = gauge.clamp(0.0, 100.0) / 100.0;
-    let frame_image = skin_manifest.play_gauge_frame_image();
-    let fill_image = skin_manifest.play_gauge_fill_image();
-    append_skin_render_items(
-        commands,
-        &[
-            SkinRenderItem::Image {
-                texture: SkinTextureId(frame_image.texture),
-                rect: frame,
-                uv: frame_image.uv,
-                tint: Color::rgb(1.0, 1.0, 1.0),
-                blend: BlendMode::Normal,
-                scale: frame_image.scale,
-                border: frame_image.border,
-                source_size: frame_image.source_size,
-                linear_filter: false,
-            },
-            SkinRenderItem::Image {
-                texture: SkinTextureId(fill_image.texture),
-                rect: Rect {
-                    x: frame.x + 0.006,
-                    y: frame.y + frame.height * (1.0 - fill),
-                    width: frame.width - 0.012,
-                    height: frame.height * fill,
-                },
-                uv: fill_image.uv,
-                tint: gauge_color(gauge),
-                blend: BlendMode::Normal,
-                scale: fill_image.scale,
-                border: fill_image.border,
-                source_size: fill_image.source_size,
-                linear_filter: false,
-            },
-        ],
-    );
+    // skin doc が無い(=デフォルトスキン)時はグルーブゲージを描画しない。
+    // 旧来は組み込みの frame/fill 画像で描いていたが、デフォルトスキンの HUD から外す方針。
 }
 
 fn push_combo_panel(skin_manifest: &SkinManifest, commands: &mut Vec<DrawCommand>, combo: u32) {
@@ -1650,16 +1614,6 @@ fn display_label(text: &str, max_chars: usize) -> String {
         .take(max_chars)
         .collect();
     if ascii.is_empty() { "NO TITLE".to_string() } else { ascii }
-}
-
-fn gauge_color(gauge: f32) -> Color {
-    if gauge >= 80.0 {
-        Color::rgb(0.35, 0.9, 0.6)
-    } else if gauge >= 30.0 {
-        Color::rgb(0.9, 0.78, 0.35)
-    } else {
-        Color::rgb(0.9, 0.32, 0.32)
-    }
 }
 
 fn skin_image_tint(_lane: Lane) -> Color {
@@ -2247,15 +2201,14 @@ mod tests {
             DrawCommand::Image { texture, tint, .. }
                 if *texture == DEFAULT_JUDGE_LINE_TEXTURE && *tint == skin_image_tint(Lane::Key1)
         )));
-        assert!(plan.commands.iter().any(|command| matches!(
+        // デフォルトスキンではグルーブゲージを描画しない。
+        assert!(!plan.commands.iter().any(|command| matches!(
             command,
-            DrawCommand::Image { texture, tint, .. }
-                if *texture == DEFAULT_GAUGE_FRAME_TEXTURE && *tint == Color::rgb(1.0, 1.0, 1.0)
+            DrawCommand::Image { texture, .. } if *texture == DEFAULT_GAUGE_FRAME_TEXTURE
         )));
-        assert!(plan.commands.iter().any(|command| matches!(
+        assert!(!plan.commands.iter().any(|command| matches!(
             command,
-            DrawCommand::Image { texture, tint, .. }
-                if *texture == DEFAULT_GAUGE_FILL_TEXTURE && *tint == gauge_color(82.0)
+            DrawCommand::Image { texture, .. } if *texture == DEFAULT_GAUGE_FILL_TEXTURE
         )));
         assert!(plan.commands.iter().any(|command| matches!(
             command,
@@ -2436,13 +2389,6 @@ mod tests {
         };
 
         assert_eq!(input_lane_flash_color(&snapshot, Lane::Key4), None);
-    }
-
-    #[test]
-    fn gauge_color_reflects_life_thresholds() {
-        assert_eq!(gauge_color(90.0), Color::rgb(0.35, 0.9, 0.6));
-        assert_eq!(gauge_color(50.0), Color::rgb(0.9, 0.78, 0.35));
-        assert_eq!(gauge_color(10.0), Color::rgb(0.9, 0.32, 0.32));
     }
 
     #[test]
