@@ -43,10 +43,6 @@ pub enum ImportWarning {
     MissingBmpFile { path: PathBuf },
     MissingBpmDefinition { key: u16 },
     MissingStopDefinition { key: u16 },
-    SuspiciousMeasureLength { measure: u32 },
-    OddChannelDataLength { measure: u32, channel: u16 },
     LnobjWithoutStart { lane: Lane },
     UnterminatedLongNote { lane: Lane },
-    ConflictingLongNoteSyntax { lane: Lane },
-    DuplicateDefinition { name: String },
 }

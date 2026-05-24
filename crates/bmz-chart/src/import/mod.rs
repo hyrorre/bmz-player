@@ -1,4 +1,4 @@
-pub mod bms_adapter;
+pub mod bms_rs_adapter;
 pub mod decode;
 pub mod error;
 pub mod intermediate;
@@ -23,7 +23,8 @@ pub fn import_bms_chart(
     check_resource_existence: bool,
 ) -> Result<ImportResult, ImportError> {
     let mut warnings = Vec::new();
-    let intermediate = bms_adapter::import_bms_to_intermediate(path, random_seed, &mut warnings)?;
+    let intermediate =
+        bms_rs_adapter::import_bms_to_intermediate(path, random_seed, &mut warnings)?;
     let chart =
         normalize::normalize_chart(path, intermediate, &mut warnings, check_resource_existence)?;
     Ok(ImportResult { chart, warnings })
@@ -47,6 +48,7 @@ mod tests {
 #TITLE Integration Song
 #ARTIST Test Artist
 #BPM 120
+#TOTAL 200
 #WAV01 key.wav
 #WAV02 bgm.wav
 #BMP01 bga.png
@@ -69,7 +71,7 @@ mod tests {
         let result = import_bms_chart(&path, None, true).unwrap();
         let expected_identity = compute_chart_identity(text.as_bytes());
 
-        assert!(result.warnings.is_empty());
+        assert!(result.warnings.is_empty(), "warnings: {:?}", result.warnings);
         assert_eq!(result.chart.identity, expected_identity);
         assert_eq!(result.chart.metadata.title, "Integration Song");
         assert_eq!(result.chart.metadata.artist, "Test Artist");
@@ -104,6 +106,57 @@ mod tests {
         std::fs::remove_file(base_dir.join("key.wav")).unwrap();
         std::fs::remove_file(base_dir.join("bgm.wav")).unwrap();
         std::fs::remove_file(base_dir.join("bga.png")).unwrap();
+    }
+
+    #[test]
+    fn imports_mine_notes_with_damage() {
+        let text = "\
+#TITLE Mine Song
+#BPM 120
+#TOTAL 200
+#001D1:0008000C
+";
+        let path = write_temp_bms(text);
+        let result = import_bms_chart(&path, None, false).unwrap();
+
+        let mines: Vec<_> = result
+            .chart
+            .notes_for_lane(Lane::Key1)
+            .iter()
+            .filter(|n| n.kind == NoteKind::Mine)
+            .collect();
+        assert_eq!(mines.len(), 2);
+        assert_eq!(mines[0].damage, Some(8));
+        assert_eq!(mines[1].damage, Some(12));
+        // total_notes は Tap/LongStart のみ。Mine はスコア対象外。
+        assert_eq!(result.chart.total_notes, 0);
+
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn imports_random_branch_with_deterministic_seed() {
+        // RANDOM 2 / IF 1 を含むので、seed=1 で同じ結果になることを確認する。
+        let text = "\
+#TITLE Random Song
+#BPM 120
+#TOTAL 200
+#00011:01010101
+#RANDOM 2
+#IF 1
+#00211:01010101
+#ENDIF
+#ENDRANDOM
+";
+        let path = write_temp_bms(text);
+        let result_a = import_bms_chart(&path, Some(1), false).unwrap();
+        let result_b = import_bms_chart(&path, Some(1), false).unwrap();
+        assert_eq!(
+            result_a.chart.notes_for_lane(Lane::Key1).len(),
+            result_b.chart.notes_for_lane(Lane::Key1).len(),
+            "fixed seed should give identical note count"
+        );
+        std::fs::remove_file(&path).unwrap();
     }
 
     fn write_temp_bms(text: &str) -> std::path::PathBuf {

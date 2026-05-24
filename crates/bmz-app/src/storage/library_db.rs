@@ -853,24 +853,11 @@ fn warning_details(warning: &ImportWarning) -> (&'static str, String) {
         ImportWarning::MissingStopDefinition { key } => {
             ("MissingStopDefinition", format!("missing STOP definition: {key}"))
         }
-        ImportWarning::SuspiciousMeasureLength { measure } => {
-            ("SuspiciousMeasureLength", format!("suspicious measure length: {measure}"))
-        }
-        ImportWarning::OddChannelDataLength { measure, channel } => (
-            "OddChannelDataLength",
-            format!("odd channel data length: measure {measure}, channel {channel}"),
-        ),
         ImportWarning::LnobjWithoutStart { lane } => {
             ("LnobjWithoutStart", format!("LNOBJ without start on lane {lane:?}"))
         }
         ImportWarning::UnterminatedLongNote { lane } => {
             ("UnterminatedLongNote", format!("unterminated long note on lane {lane:?}"))
-        }
-        ImportWarning::ConflictingLongNoteSyntax { lane } => {
-            ("ConflictingLongNoteSyntax", format!("conflicting long note syntax on lane {lane:?}"))
-        }
-        ImportWarning::DuplicateDefinition { name } => {
-            ("DuplicateDefinition", format!("duplicate definition: {name}"))
         }
     }
 }

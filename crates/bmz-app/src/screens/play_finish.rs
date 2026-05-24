@@ -445,6 +445,7 @@ mod tests {
             tick: ChartTick(0),
             time: TimeUs(0),
             sound: None,
+            damage: None,
         };
         let mut lane_notes = std::array::from_fn(|_| Vec::new());
         lane_notes[Lane::Key1.index()].push(note);

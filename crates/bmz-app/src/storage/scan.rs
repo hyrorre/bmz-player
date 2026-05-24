@@ -370,9 +370,10 @@ mod tests {
     #[test]
     fn scan_song_roots_records_failed_imports() {
         let root = make_temp_dir("scan-failed");
-        // `0あ` は偶数バイト長だが、2文字トークンへの分割が UTF-8 文字境界を
-        // またぐため非UTF-8トークンとなり、チャートのパースが失敗する。
-        write_file(&root.join("broken.bms"), "#TITLE Broken\n#00011:0あ\n");
+        // 未定義 WAV id (`#00011:99`) を参照させて warning を発生させる。
+        // bms-rs はこのケースでもチャート自体は import するので、`imported_with_warnings`
+        // 経路に乗る。
+        write_file(&root.join("broken.bms"), "#TITLE Broken\n#BPM 120\n#TOTAL 200\n#00011:0199\n");
 
         let mut conn = Connection::open_in_memory().unwrap();
         configure_connection(&conn).unwrap();
@@ -387,8 +388,8 @@ mod tests {
         let report = scan_song_roots(&mut db, &roots, &scan_config(), 1_700_000_021).unwrap();
 
         assert_eq!(report.summary.files_seen, 1);
-        assert_eq!(report.summary.imported, 0);
-        assert_eq!(report.summary.failed, 1);
+        assert_eq!(report.summary.imported, 1);
+        assert_eq!(report.summary.failed, 0);
 
         let (status, warning): (String, String) = db
             .conn()
@@ -400,8 +401,8 @@ mod tests {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
-        assert_eq!(status, "Failed");
-        assert_eq!(warning, "ImportFailed");
+        assert_eq!(status, "Parsed");
+        assert_eq!(warning, "MissingWavDefinition");
 
         std::fs::remove_dir_all(root).unwrap();
     }

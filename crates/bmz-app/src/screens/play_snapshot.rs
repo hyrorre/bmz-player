@@ -568,6 +568,7 @@ mod tests {
             tick: ChartTick(0),
             time: TimeUs(1_000_000),
             sound: None,
+            damage: None,
         });
         chart.lane_notes[Lane::Key3.index()].push(NoteEvent {
             id: NoteId(3),
@@ -576,6 +577,7 @@ mod tests {
             tick: ChartTick(0),
             time: TimeUs(1_000_000),
             sound: None,
+            damage: Some(8),
         });
         let profile = ProfileConfig::new_default("default", "Default", 1);
         let session = build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
@@ -893,6 +895,7 @@ mod tests {
             tick: ChartTick(0),
             time: TimeUs(1_000_000),
             sound: None,
+            damage: None,
         };
         let mut lane_notes = std::array::from_fn(|_| Vec::new());
         lane_notes[Lane::Key1.index()].push(note);
@@ -929,6 +932,7 @@ mod tests {
             tick: ChartTick(0),
             time: TimeUs(500_000),
             sound: None,
+            damage: None,
         };
         let end = NoteEvent {
             id: NoteId(2),
@@ -937,6 +941,7 @@ mod tests {
             tick: ChartTick(0),
             time: TimeUs(1_500_000),
             sound: None,
+            damage: None,
         };
         let mut lane_notes = std::array::from_fn(|_| Vec::new());
         lane_notes[Lane::Key1.index()].push(start);

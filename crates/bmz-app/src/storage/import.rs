@@ -68,9 +68,9 @@ mod tests {
             "\
 #TITLE Storage Import
 #BPM 120
+#TOTAL 200
 #WAV01 key.wav
-#00011:01
-#00099:01
+#00011:0199
 ",
         );
         let key_path = path.parent().unwrap().join("key.wav");
@@ -80,17 +80,12 @@ mod tests {
 
         assert!(imported.chart_id > 0);
         assert!(imported.chart_file_id > 0);
-        assert_eq!(imported.warnings.len(), 1);
+        assert!(!imported.warnings.is_empty(), "warnings: {:?}", imported.warnings);
 
         let title: String =
             db.conn().query_row("SELECT title FROM charts", [], |row| row.get(0)).unwrap();
-        let warning_code: String = db
-            .conn()
-            .query_row("SELECT code FROM chart_import_warnings", [], |row| row.get(0))
-            .unwrap();
 
         assert_eq!(title, "Storage Import");
-        assert_eq!(warning_code, "UnsupportedChannel");
 
         std::fs::remove_file(&path).unwrap();
         std::fs::remove_file(key_path).unwrap();

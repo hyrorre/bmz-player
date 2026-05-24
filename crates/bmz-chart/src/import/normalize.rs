@@ -42,6 +42,7 @@ enum TickObjectKind {
     VisibleNote { lane: Lane, wav_key: Option<u16> },
     InvisibleNote { lane: Lane, wav_key: Option<u16> },
     LongChannelNote { lane: Lane, wav_key: Option<u16> },
+    MineNote { lane: Lane, wav_key: Option<u16>, damage: u16 },
     Bgm { wav_key: u16 },
     Bga { bmp_key: u16, kind: BgaEventKind },
 }
@@ -214,6 +215,9 @@ fn materialize_tick_objects(
             IntermediateObjectKind::LongChannelNote { lane, wav_key } => {
                 Some(TickObjectKind::LongChannelNote { lane, wav_key })
             }
+            IntermediateObjectKind::MineNote { lane, wav_key, damage } => {
+                Some(TickObjectKind::MineNote { lane, wav_key, damage })
+            }
             IntermediateObjectKind::Bgm { wav_key } => Some(TickObjectKind::Bgm { wav_key }),
             IntermediateObjectKind::Bga { bmp_key, kind } => {
                 Some(TickObjectKind::Bga { bmp_key, kind: bga_event_kind(kind) })
@@ -347,6 +351,15 @@ fn collect_lane_objects(
                     source: LaneObjectSource::LongChannel,
                 });
             }
+            TickObjectKind::MineNote { lane, wav_key, damage } => {
+                buckets[lane.index()].push(LaneObject {
+                    lane,
+                    tick: object.tick,
+                    time,
+                    wav_key,
+                    source: LaneObjectSource::Mine { damage },
+                });
+            }
             TickObjectKind::Bgm { .. } | TickObjectKind::Bga { .. } => {}
         }
     }
@@ -377,6 +390,7 @@ fn emit_resolved_lane_events(
                     tick,
                     time,
                     sound: resolve_sound_id(wav_key, sound_table, warnings),
+                    damage: None,
                 });
             }
             ResolvedLaneEvent::Invisible { tick, time, wav_key, .. } => {
@@ -388,6 +402,19 @@ fn emit_resolved_lane_events(
                     tick,
                     time,
                     sound: resolve_sound_id(wav_key, sound_table, warnings),
+                    damage: None,
+                });
+            }
+            ResolvedLaneEvent::Mine { tick, time, wav_key, damage, .. } => {
+                let id = alloc_note_id(next_note_id);
+                draft.lane_notes[lane.index()].push(NoteEvent {
+                    id,
+                    lane,
+                    kind: NoteKind::Mine,
+                    tick,
+                    time,
+                    sound: resolve_sound_id(wav_key, sound_table, warnings),
+                    damage: Some(damage),
                 });
             }
             ResolvedLaneEvent::Long { pair } => {
@@ -402,6 +429,7 @@ fn emit_resolved_lane_events(
                     tick: pair.start_tick,
                     time: pair.start_time,
                     sound,
+                    damage: None,
                 });
                 draft.lane_notes[lane.index()].push(NoteEvent {
                     id: end_note_id,
@@ -410,6 +438,7 @@ fn emit_resolved_lane_events(
                     tick: pair.end_tick,
                     time: pair.end_time,
                     sound: None,
+                    damage: None,
                 });
                 draft.long_notes.push(LongNotePair {
                     lane,

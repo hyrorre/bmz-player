@@ -41,6 +41,17 @@ pub fn normalize_lane_objects(
         },
     ));
 
+    out.extend(objects.iter().filter_map(|object| match object.source {
+        LaneObjectSource::Mine { damage } => Some(ResolvedLaneEvent::Mine {
+            lane,
+            tick: object.tick,
+            time: object.time,
+            wav_key: object.wav_key,
+            damage,
+        }),
+        _ => None,
+    }));
+
     out
 }
 

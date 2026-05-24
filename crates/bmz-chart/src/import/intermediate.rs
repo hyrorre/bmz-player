@@ -90,6 +90,7 @@ pub enum IntermediateObjectKind {
     VisibleNote { lane: Lane, wav_key: Option<u16> },
     InvisibleNote { lane: Lane, wav_key: Option<u16> },
     LongChannelNote { lane: Lane, wav_key: Option<u16> },
+    MineNote { lane: Lane, wav_key: Option<u16>, damage: u16 },
     Bgm { wav_key: u16 },
     Bga { bmp_key: u16, kind: IntermediateBgaKind },
     SetBpm { bpm: f64 },
@@ -118,6 +119,7 @@ pub enum LaneObjectSource {
     Visible,
     Invisible,
     LongChannel,
+    Mine { damage: u16 },
 }
 
 #[derive(Debug, Clone)]
@@ -125,6 +127,7 @@ pub enum ResolvedLaneEvent {
     Tap { lane: Lane, tick: ChartTick, time: TimeUs, wav_key: Option<u16> },
     Long { pair: LongNotePairDraft },
     Invisible { lane: Lane, tick: ChartTick, time: TimeUs, wav_key: Option<u16> },
+    Mine { lane: Lane, tick: ChartTick, time: TimeUs, wav_key: Option<u16>, damage: u16 },
 }
 
 #[derive(Debug, Clone)]

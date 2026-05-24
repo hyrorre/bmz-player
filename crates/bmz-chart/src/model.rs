@@ -58,6 +58,9 @@ pub struct NoteEvent {
     pub tick: ChartTick,
     pub time: TimeUs,
     pub sound: Option<SoundId>,
+    /// Mine 専用のダメージ値（チャネル D系列に置かれた base36 値そのもの）。
+    /// Mine 以外は常に None。
+    pub damage: Option<u16>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

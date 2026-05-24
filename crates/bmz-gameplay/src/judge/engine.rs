@@ -269,6 +269,7 @@ mod tests {
             tick: Default::default(),
             time,
             sound: None,
+            damage: None,
         };
         let mut lane_notes = std::array::from_fn(|_| Vec::new());
         lane_notes[lane.index()].push(note);

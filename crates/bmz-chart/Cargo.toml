@@ -10,11 +10,9 @@ serde.workspace = true
 md5.workspace = true
 sha2.workspace = true
 encoding_rs.workspace = true
+bms-rs = "1.0"
 
 bmz-core = { path = "../bmz-core" }
 
 [dev-dependencies]
-# bms-rs 採用検討用 spike (examples/bms_rs_spike.rs)。
-# 本採用 or 見送りが決まり次第、依存ごと再評価する。
-bms-rs = "1.0"
 tempfile = "3"
