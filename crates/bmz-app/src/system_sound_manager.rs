@@ -4,7 +4,10 @@
 //!
 //! - 構築時に 22 種すべてを `FfmpegSampleLoader` でデコードし、サンプル個別の失敗は
 //!   warn ログだけで継続する(致命化しない)。
-//! - SoundId は chart の音声サンプルと衝突しないよう `u32::MAX` の上位 22 個を予約。
+//! - SoundId は chart のキー音(BMS `#WAVxx` は base-36 で最大 1296 個)と衝突しないよう
+//!   [`SYSTEM_SOUND_BASE`] (= 100_000) からの 22 連番を予約する。`SampleBank` は
+//!   `Vec<Option<DecodedSample>>` で `SoundId.0` を index に取るため、`u32::MAX` 付近の
+//!   巨大 ID を使うと resize が数十 GB の allocation を試みて OOM kill される。
 //! - 再生は [`bmz_audio::engine::AudioEngine::play_now`] を経由し、`is_bgm()` の音は
 //!   そのままループ再生になる。
 
