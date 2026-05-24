@@ -17,6 +17,11 @@ use crate::scene::{SelectRowKind, SelectRowSnapshot, SelectSnapshot};
 use crate::skin_offset::SkinOffsetValues;
 use crate::snapshot::DisplayJudgeCounts;
 
+const OFFSET_ALL: i32 = 10;
+const OFFSET_NOTES_1P: i32 = 30;
+const OFFSET_JUDGE_1P: i32 = 32;
+const OFFSET_JUDGEDETAIL_1P: i32 = 33;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SkinObjectId(pub u32);
 
@@ -763,9 +768,38 @@ impl SkinContext {
         judge: &str,
         combo: u32,
         elapsed_ms: i32,
+        skin_offsets: SkinOffsetValues,
     ) -> Option<Vec<SkinRenderItem>> {
         let document = self.document.as_ref()?;
-        document.judge_render_items(judge, combo, elapsed_ms, &self.document_sources)
+        document.judge_render_items_with_offsets(
+            judge,
+            combo,
+            elapsed_ms,
+            skin_offsets,
+            &self.document_sources,
+        )
+    }
+
+    pub fn apply_play_skin_global_offset(
+        &self,
+        items: Vec<SkinRenderItem>,
+        state: SkinDrawState,
+    ) -> Vec<SkinRenderItem> {
+        if self.document.is_none() {
+            return items;
+        }
+        items.into_iter().map(|item| apply_all_offset_to_render_item(item, state)).collect()
+    }
+
+    pub fn apply_play_skin_global_offset_to_item(
+        &self,
+        item: SkinRenderItem,
+        state: SkinDrawState,
+    ) -> SkinRenderItem {
+        if self.document.is_none() {
+            return item;
+        }
+        apply_all_offset_to_render_item(item, state)
     }
 
     /// beatoraja スキンの `note.dst` からレーンのノートエリアを取得し、
@@ -776,23 +810,31 @@ impl SkinContext {
         lane: Lane,
         note_y: f32,
         note_height: f32,
+        state: SkinDrawState,
     ) -> Option<Rect> {
         let document = self.document.as_ref()?;
         let enabled_options = document.enabled_options();
         let area = document.note_lane_area(lane, &enabled_options)?;
         // note_y=0.0 → 判定ライン（エリア下端）、note_y=1.0 → エリア上端
         let center_y = area.y + area.height * (1.0 - note_y);
-        Some(Rect {
+        let rect = Rect {
             x: area.x,
             y: center_y - note_height / 2.0,
             width: area.width,
             height: note_height,
-        })
+        };
+        Some(document.apply_notes_offset_to_rect(rect, state))
     }
 
     /// ロングノート胴体の矩形を計算する。`head_y`/`tail_y` は `VisibleNote::y` と同じ
     /// 正規化座標（0.0=判定ライン, 1.0=最奥）。胴体は両端の中心を結ぶ。
-    pub fn note_body_rect(&self, lane: Lane, head_y: f32, tail_y: f32) -> Option<Rect> {
+    pub fn note_body_rect(
+        &self,
+        lane: Lane,
+        head_y: f32,
+        tail_y: f32,
+        state: SkinDrawState,
+    ) -> Option<Rect> {
         let document = self.document.as_ref()?;
         let enabled_options = document.enabled_options();
         let area = document.note_lane_area(lane, &enabled_options)?;
@@ -800,7 +842,10 @@ impl SkinContext {
         let tail_center = area.y + area.height * (1.0 - tail_y);
         let top = head_center.min(tail_center);
         let bottom = head_center.max(tail_center);
-        Some(Rect { x: area.x, y: top, width: area.width, height: bottom - top })
+        Some(document.apply_notes_offset_to_rect(
+            Rect { x: area.x, y: top, width: area.width, height: bottom - top },
+            state,
+        ))
     }
 }
 
@@ -1461,8 +1506,7 @@ impl SkinDocument {
                 state.combo,
                 elapsed,
                 sources,
-                state.offset_lift_px,
-                state.offset_lanecover_px,
+                state,
             );
         }
 
@@ -2194,6 +2238,22 @@ impl SkinDocument {
         }
     }
 
+    fn apply_notes_offset_to_rect(&self, rect: Rect, state: SkinDrawState) -> Rect {
+        let Some(offset) = state.skin_offsets.get(OFFSET_NOTES_1P) else {
+            return rect;
+        };
+        let canvas_w = self.w.max(1) as f32;
+        let canvas_h = self.h.max(1) as f32;
+        let offset_w = offset.w as f32 / canvas_w;
+        let offset_h = offset.h as f32 / canvas_h;
+        Rect {
+            x: rect.x + offset.x as f32 / canvas_w - offset_w / 2.0,
+            y: rect.y - offset.y as f32 / canvas_h - offset_h / 2.0,
+            width: rect.width + offset_w,
+            height: rect.height + offset_h,
+        }
+    }
+
     pub fn gauge_render_items(
         &self,
         gauge: f32,
@@ -2256,8 +2316,31 @@ impl SkinDocument {
         elapsed_ms: i32,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<Vec<SkinRenderItem>> {
+        self.judge_render_items_with_offsets(
+            judge,
+            combo,
+            elapsed_ms,
+            SkinOffsetValues::default(),
+            sources,
+        )
+    }
+
+    pub fn judge_render_items_with_offsets(
+        &self,
+        judge: &str,
+        combo: u32,
+        elapsed_ms: i32,
+        skin_offsets: SkinOffsetValues,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Option<Vec<SkinRenderItem>> {
         let judge_index = judge_image_index(judge)?;
-        self.judge_render_items_for_index(judge_index, combo, elapsed_ms, sources, 0, 0)
+        self.judge_render_items_for_index(
+            judge_index,
+            combo,
+            elapsed_ms,
+            sources,
+            SkinDrawState { skin_offsets, ..SkinDrawState::default() },
+        )
     }
 
     fn judge_render_items_for_index(
@@ -2266,16 +2349,20 @@ impl SkinDocument {
         combo: u32,
         elapsed_ms: i32,
         sources: &HashMap<String, SkinDocumentTexture>,
-        offset_lift_px: i32,
-        offset_lanecover_px: i32,
+        state: SkinDrawState,
     ) -> Option<Vec<SkinRenderItem>> {
         let judge = self.judge.first()?;
         let image_destination = judge.images.get(judge_index)?;
         let enabled_options = self.enabled_options();
         let mut image_frame =
             resolve_destination_frame_until_end(image_destination, elapsed_ms, &enabled_options)?;
-        let offset_state =
-            SkinDrawState { offset_lift_px, offset_lanecover_px, ..SkinDrawState::default() };
+        let offset_state = SkinDrawState {
+            skin_offsets: state.skin_offsets,
+            offset_lift_px: state.offset_lift_px,
+            offset_lanecover_px: state.offset_lanecover_px,
+            ..SkinDrawState::default()
+        };
+        apply_skin_offset_ids_to_frame(&[OFFSET_JUDGE_1P], &mut image_frame, offset_state);
         apply_skin_offset_to_frame(image_destination, &mut image_frame, offset_state, false);
         if judge.shift
             && combo > 0
@@ -2305,6 +2392,7 @@ impl SkinDocument {
                 &enabled_options,
             )
         {
+            apply_skin_offset_ids_to_frame(&[OFFSET_JUDGE_1P], &mut number_frame, offset_state);
             apply_skin_offset_to_frame(number_destination, &mut number_frame, offset_state, false);
             items.extend(self.value_number_render_items(
                 &number_destination.id,
@@ -4504,6 +4592,9 @@ fn apply_skin_offset_to_frame(
     if destination.offset != 0 {
         ids.push(destination.offset);
     }
+    if is_judge_detail_destination_id(&destination.id) && !ids.contains(&OFFSET_JUDGEDETAIL_1P) {
+        ids.push(OFFSET_JUDGEDETAIL_1P);
+    }
     if include_hidden_cover_offsets {
         if !ids.contains(&3) {
             ids.push(3);
@@ -4513,7 +4604,15 @@ fn apply_skin_offset_to_frame(
         }
     }
 
-    for offset_id in ids {
+    apply_skin_offset_ids_to_frame(&ids, frame, state);
+}
+
+fn apply_skin_offset_ids_to_frame(
+    ids: &[i32],
+    frame: &mut ResolvedSkinFrame,
+    state: SkinDrawState,
+) {
+    for &offset_id in ids {
         match offset_id {
             3 => frame.y += state.offset_lift_px,
             4 => frame.y += state.offset_lanecover_px,
@@ -4535,6 +4634,103 @@ fn apply_skin_offset_to_frame(
             }
         }
     }
+}
+
+fn is_judge_detail_destination_id(id: &str) -> bool {
+    matches!(id, "judge-early" | "judge-late") || id.starts_with("judgems")
+}
+
+fn apply_all_offset_to_render_item(item: SkinRenderItem, state: SkinDrawState) -> SkinRenderItem {
+    let Some(offset) = state.skin_offsets.get(OFFSET_ALL) else {
+        return item;
+    };
+    if offset.x == 0 && offset.y == 0 && offset.w == 0 && offset.h == 0 {
+        return item;
+    }
+    let scale_x = (offset.w + 100) as f32 / 100.0;
+    let scale_y = (offset.h + 100) as f32 / 100.0;
+    let translate_x = offset.x as f32 / 100.0;
+    let translate_y = offset.y as f32 / 100.0;
+    match item {
+        SkinRenderItem::Image {
+            texture,
+            rect,
+            uv,
+            tint,
+            blend,
+            scale,
+            border,
+            source_size,
+            linear_filter,
+        } => SkinRenderItem::Image {
+            texture,
+            rect: apply_all_offset_to_rect(rect, scale_x, scale_y, translate_x, translate_y),
+            uv,
+            tint,
+            blend,
+            scale,
+            border,
+            source_size,
+            linear_filter,
+        },
+        SkinRenderItem::RotatedImage {
+            texture,
+            rect,
+            uv,
+            tint,
+            blend,
+            source_size,
+            linear_filter,
+            angle_deg,
+            center,
+        } => SkinRenderItem::RotatedImage {
+            texture,
+            rect: apply_all_offset_to_rect(rect, scale_x, scale_y, translate_x, translate_y),
+            uv,
+            tint,
+            blend,
+            source_size,
+            linear_filter,
+            angle_deg,
+            center: apply_all_offset_to_point(center, scale_x, scale_y, translate_x, translate_y),
+        },
+        SkinRenderItem::Text { origin, text, style, blend } => SkinRenderItem::Text {
+            origin: apply_all_offset_to_point(origin, scale_x, scale_y, translate_x, translate_y),
+            text,
+            style,
+            blend,
+        },
+        SkinRenderItem::Rect { rect, color, blend } => SkinRenderItem::Rect {
+            rect: apply_all_offset_to_rect(rect, scale_x, scale_y, translate_x, translate_y),
+            color,
+            blend,
+        },
+    }
+}
+
+fn apply_all_offset_to_rect(
+    rect: Rect,
+    scale_x: f32,
+    scale_y: f32,
+    translate_x: f32,
+    translate_y: f32,
+) -> Rect {
+    Rect {
+        x: rect.x * scale_x + translate_x,
+        y: rect.y * scale_y - translate_y,
+        width: rect.width * scale_x,
+        height: rect.height * scale_y,
+    }
+}
+
+fn apply_all_offset_to_point(
+    point: Point,
+    scale_x: f32,
+    scale_y: f32,
+    translate_x: f32,
+    translate_y: f32,
+) -> Point {
+    Point { x: point.x * scale_x + translate_x, y: point.y * scale_y - translate_y }
 }
 
 fn skin_image_item_for_frame(
@@ -8609,6 +8805,101 @@ mod tests {
         assert!(approx_eq(rect.width, 40.0 / 100.0));
         assert!(approx_eq(rect.height, 52.0 / 100.0));
         assert!(approx_eq(tint.a, 150.0 / 255.0));
+    }
+
+    #[test]
+    fn all_offset_transforms_play_skin_render_item() {
+        let mut offsets = SkinOffsetValues::default();
+        offsets.set(
+            OFFSET_ALL,
+            crate::skin_offset::SkinOffsetValue { x: 10, y: 20, w: 50, h: -50, r: 0, a: 0 },
+        );
+        let item = SkinRenderItem::Image {
+            texture: SkinTextureId(1),
+            rect: Rect { x: 0.2, y: 0.4, width: 0.1, height: 0.2 },
+            uv: TextureRegion::default(),
+            tint: Color::rgb(1.0, 1.0, 1.0),
+            blend: BlendMode::Normal,
+            scale: SkinImageScale::Stretch,
+            border: None,
+            source_size: None,
+            linear_filter: false,
+        };
+
+        let item = apply_all_offset_to_render_item(
+            item,
+            SkinDrawState { skin_offsets: offsets, ..SkinDrawState::default() },
+        );
+
+        let SkinRenderItem::Image { rect, .. } = item else { panic!() };
+        assert!(approx_eq(rect.x, 0.4));
+        assert!(approx_eq(rect.y, 0.0));
+        assert!(approx_eq(rect.width, 0.15));
+        assert!(approx_eq(rect.height, 0.1));
+    }
+
+    #[test]
+    fn notes_offset_adjusts_note_rect() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "w": 100, "h": 100,
+                "note": {
+                    "id": "notes",
+                    "note": ["n1"],
+                    "dst": [{ "time": 0, "x": 10, "y": 20, "w": 30, "h": 40 }]
+                }
+            }
+            "#,
+        )
+        .unwrap();
+        let mut offsets = SkinOffsetValues::default();
+        offsets.set(
+            OFFSET_NOTES_1P,
+            crate::skin_offset::SkinOffsetValue { x: 0, y: 0, w: 0, h: 20, r: 0, a: 0 },
+        );
+
+        let area = document.note_lane_area(Lane::Key1, &[]).unwrap();
+        let center_y = area.y + area.height * 0.5;
+        let rect = document.apply_notes_offset_to_rect(
+            Rect { x: area.x, y: center_y - 0.05, width: area.width, height: 0.1 },
+            SkinDrawState { skin_offsets: offsets, ..SkinDrawState::default() },
+        );
+
+        assert!(approx_eq(rect.y, 0.45));
+        assert!(approx_eq(rect.height, 0.3));
+    }
+
+    #[test]
+    fn judge_offset_applies_to_judge_special_renderer() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "w": 100, "h": 100,
+                "source": [{ "id": "src", "path": "judge.png" }],
+                "image": [{ "id": "judgef-pg", "src": "src", "x": 0, "y": 0, "w": 10, "h": 10 }],
+                "judge": [{
+                    "id": "judge",
+                    "images": [
+                        { "id": "judgef-pg", "dst": [{ "time": 0, "x": 10, "y": 20, "w": 30, "h": 10 }, { "time": 500 }] }
+                    ]
+                }]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = mock_source("src", 10.0, 10.0);
+        let mut offsets = SkinOffsetValues::default();
+        offsets.set(
+            OFFSET_JUDGE_1P,
+            crate::skin_offset::SkinOffsetValue { x: 6, y: 0, w: 0, h: 0, r: 0, a: 0 },
+        );
+
+        let items =
+            document.judge_render_items_with_offsets("PGREAT", 0, 0, offsets, &sources).unwrap();
+
+        let SkinRenderItem::Image { rect, .. } = &items[0] else { panic!() };
+        assert!(approx_eq(rect.x, 0.16));
     }
 
     #[test]

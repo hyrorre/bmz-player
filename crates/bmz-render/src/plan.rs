@@ -627,6 +627,7 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
     // 描画順: 背面skin要素 → ロングノート胴体 → ノーツ → 前面skin要素（レーンカバー・枠・スコア等）
     let (behind_notes_items, front_notes_items) =
         skin.static_document_items_split_for_state_and_text(skin_state, skin_text);
+    let behind_notes_items = skin.apply_play_skin_global_offset(behind_notes_items, skin_state);
     append_skin_render_items(&mut commands, &behind_notes_items);
 
     if !has_document {
@@ -738,18 +739,21 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
     } else {
         // beatoraja スキン: ロングノート胴体 → タップノートの順で note.dst のエリアに配置
         for body in &snapshot.visible_long_notes {
-            if let Some(rect) = skin.note_body_rect(body.lane, body.head_y, body.tail_y)
+            if let Some(rect) = skin.note_body_rect(body.lane, body.head_y, body.tail_y, skin_state)
                 && let Some(item) = skin.document_long_body_item(body.lane, rect)
             {
+                let item = skin.apply_play_skin_global_offset_to_item(item, skin_state);
                 append_skin_render_items(&mut commands, &[item]);
             }
         }
         for &lane in active_lanes {
             let lane_index = lane.index();
             for note in &snapshot.visible_notes[lane_index] {
-                if let Some(rect) = skin.note_rect_for_progress(lane, note.y, NOTE_HEIGHT)
+                if let Some(rect) =
+                    skin.note_rect_for_progress(lane, note.y, NOTE_HEIGHT, skin_state)
                     && let Some(item) = skin.document_note_item(lane, rect)
                 {
+                    let item = skin.apply_play_skin_global_offset_to_item(item, skin_state);
                     append_skin_render_items(&mut commands, &[item]);
                 }
             }
@@ -757,6 +761,7 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
     }
 
     // ノーツより前面の skin 要素（レーンカバー・枠・スコア等）をノーツの上に重ねる
+    let front_notes_items = skin.apply_play_skin_global_offset(front_notes_items, skin_state);
     append_skin_render_items(&mut commands, &front_notes_items);
 
     push_gauge(
@@ -1217,6 +1222,7 @@ fn push_default_play_skin(
             snapshot.combo,
             ((snapshot.time.0 - judgement.time.0) / 1_000).clamp(i32::MIN as i64, i32::MAX as i64)
                 as i32,
+            snapshot.skin_offsets,
         )
     });
     let has_judge_image = judge_image.is_some();

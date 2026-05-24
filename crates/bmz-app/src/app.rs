@@ -7,6 +7,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use bmz_chart::model::PlayableChart;
 use bmz_core::time::TimeUs;
+use bmz_gameplay::session::PlaySkinOffset;
 use bmz_render::assets::load_static_rgba_image;
 use bmz_render::plan::TextureId;
 use bmz_render::renderer::{RenderSurfaceStatus, Renderer, SurfaceSize};
@@ -1460,6 +1461,7 @@ impl WinitApp {
             self.pending_skin_reload_at = None;
             self.reset_profile_config_from_disk();
         } else if output.skin_config_changed {
+            self.apply_profile_skin_offsets_to_active_play();
             self.pending_skin_reload_at = Some(Instant::now() + SKIN_RELOAD_DEBOUNCE);
         }
         if let Some(reload_at) = self.pending_skin_reload_at
@@ -1475,6 +1477,7 @@ impl WinitApp {
             Ok(profile) => {
                 self.boot.profile_config = profile;
                 self.pending_skin_reload_at = None;
+                self.apply_profile_skin_offsets_to_active_play();
                 self.reload_skins();
                 tracing::info!("profile config reset from profile.toml");
             }
@@ -1486,6 +1489,28 @@ impl WinitApp {
                 );
             }
         }
+    }
+
+    fn apply_profile_skin_offsets_to_active_play(&mut self) {
+        let Some(active_play) = &mut self.active_play else {
+            return;
+        };
+        active_play.running.session.skin_offsets = self
+            .boot
+            .profile_config
+            .skin
+            .offsets
+            .iter()
+            .map(|offset| PlaySkinOffset {
+                id: offset.id,
+                x: offset.x,
+                y: offset.y,
+                w: offset.w,
+                h: offset.h,
+                r: offset.r,
+                a: offset.a,
+            })
+            .collect();
     }
 
     /// 現在の profile config のスキンパスを renderer へ再適用する。
