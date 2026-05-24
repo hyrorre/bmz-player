@@ -165,9 +165,14 @@ struct WinitApp {
     pending_skin_installs: Vec<PendingSkinInstall>,
     /// システム SE / BGM を再生する cpal ストリーム。
     /// 開けない環境では `None` で、システム音はサイレント。
-    /// Stage 2c でデコード投入、Stage 2d で各シーンから `play_now` を呼ぶようになる。
     #[allow(dead_code)]
     system_audio: Option<crate::audio::SystemAudio>,
+    /// `system_audio` 上にデコード済みサンプルを乗せて再生・停止する facade。
+    /// `system_audio` が `None` の場合や、サウンドセット未指定の場合も `Some` で
+    /// 構築されるが id_map が空なので各 play/stop は no-op になる。
+    /// Stage 2d で各シーン遷移から `play` / `stop` を呼ぶようになる。
+    #[allow(dead_code)]
+    system_sound: Option<crate::system_sound_manager::SystemSoundManager>,
     /// 選曲画面でESCを長押し中の開始時刻。離されたり画面を抜けると None になる。
     select_exit_hold_started_at: Option<Instant>,
     /// プレイ中の Start キー直近の押下時刻。連続押し判定で使用。
@@ -316,6 +321,18 @@ impl WinitApp {
 
         let initial_window_mode = boot.app_config.video.mode.clone();
 
+        // システム SE / BGM facade を構築する。Stage 2e で `[audio]` の bgm_dir / se_dir /
+        // default_sound_dir / system_volume を反映する予定。現状は暫定で
+        // `defaultsound/` だけを使う SoundSetSelection を組む。
+        let system_sound = system_audio.as_ref().map(|audio| {
+            let selection = crate::system_sound::SoundSetSelection {
+                bgm_dir: None,
+                se_dir: None,
+                default_dir: Some(PathBuf::from("defaultsound")),
+            };
+            crate::system_sound_manager::SystemSoundManager::new(audio.engine(), &selection)
+        });
+
         let mut app = Self {
             boot,
             window: None,
@@ -353,6 +370,7 @@ impl WinitApp {
             pending_result_skin,
             pending_skin_installs: Vec::new(),
             system_audio,
+            system_sound,
             select_exit_hold_started_at: None,
             last_play_start_press_at: None,
             egui: None,
