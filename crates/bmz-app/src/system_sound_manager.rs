@@ -17,8 +17,11 @@ use bmz_core::ids::SoundId;
 
 use crate::system_sound::{SoundSetSelection, SoundType};
 
-/// chart 側のキー音 SoundId と衝突しないよう、`u32::MAX` から 22 個を予約。
-const SYSTEM_SOUND_BASE: u32 = u32::MAX - (SoundType::ALL.len() as u32 - 1);
+/// chart 側のキー音 SoundId と衝突しないよう確保する予約レンジの先頭。
+/// `SampleBank` は `Vec<Option<DecodedSample>>` で `SoundId.0` を index に取るため、
+/// 大きすぎる値を使うと巨大な resize が走り OOM kill される。
+/// BMS の `#WAVxx` は base-36 で最大 1296 個なので、100_000 オフセットなら衝突しない。
+const SYSTEM_SOUND_BASE: u32 = 100_000;
 
 pub struct SystemSoundManager {
     engine: SharedAudioEngine,
@@ -138,9 +141,11 @@ mod tests {
     }
 
     #[test]
-    fn system_sound_ids_do_not_collide_with_typical_chart_ids() {
-        // chart の SoundId は通常小さい値から割り当てられる前提で、
-        // システム音は u32::MAX 付近を使うことを assertion で固定する。
-        const { assert!(SYSTEM_SOUND_BASE >= u32::MAX - 1024) };
+    fn system_sound_ids_are_above_typical_chart_ids_but_safe_for_vec_sample_bank() {
+        // BMS の `#WAVxx` は最大 1296 個なので 100_000 オフセットなら chart と衝突しない。
+        // 一方で `SampleBank` (`Vec<Option<DecodedSample>>`) の resize が現実的サイズで済む
+        // (= u32::MAX のような巨大 index を使うと数十 GB の allocation で OOM kill される) こと。
+        const { assert!(SYSTEM_SOUND_BASE >= 10_000) };
+        const { assert!(SYSTEM_SOUND_BASE as usize + SoundType::ALL.len() < 10_000_000) };
     }
 }
