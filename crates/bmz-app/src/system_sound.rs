@@ -70,6 +70,8 @@ impl SoundType {
     ];
 
     /// beatoraja 既定のファイル名(セットディレクトリ直下から探す)。
+    /// 戻り値はデフォルトの `.wav` 拡張子付きだが、実ファイルは [`SUPPORTED_EXTENSIONS`]
+    /// のいずれの拡張子でも解決される(beatoraja と同じく `.ogg` 等もサポート)。
     pub fn file_name(&self) -> &'static str {
         match self {
             SoundType::Scratch => "scratch.wav",
@@ -97,10 +99,34 @@ impl SoundType {
         }
     }
 
+    /// `file_name()` の拡張子を除いたステム(`"scratch.wav"` → `"scratch"`)。
+    fn stem(&self) -> &'static str {
+        let name = self.file_name();
+        match name.rfind('.') {
+            Some(idx) => &name[..idx],
+            None => name,
+        }
+    }
+
     /// BGM (ループ再生)対象かどうか。
     pub fn is_bgm(&self) -> bool {
         matches!(self, SoundType::Select | SoundType::Decide)
     }
+}
+
+/// システム SE / BGM の探索対象拡張子。先頭から順に試す。
+/// beatoraja の挙動と合わせて `.wav` / `.ogg` / `.flac` / `.mp3` をサポート。
+pub const SUPPORTED_EXTENSIONS: &[&str] = &["wav", "ogg", "flac", "mp3"];
+
+/// `dir/<stem>.<ext>` を [`SUPPORTED_EXTENSIONS`] の順に試し、最初に見つかったパスを返す。
+fn first_existing_with_extension(dir: &Path, stem: &str) -> Option<PathBuf> {
+    for ext in SUPPORTED_EXTENSIONS {
+        let candidate = dir.join(format!("{stem}.{ext}"));
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 /// スキャンで選ばれた1つの BGM セット / SE セットディレクトリ。
@@ -118,37 +144,44 @@ impl SoundSetSelection {
     /// `sound_type` に対応するファイルパスを解決する。
     ///
     /// 解決順は beatoraja と同じ:
-    /// 1. BGM か SE に応じたセットディレクトリ直下の `file_name`。
-    /// 2. `default_dir/file_name`。
+    /// 1. BGM か SE に応じたセットディレクトリ直下のステム + 各拡張子。
+    /// 2. `default_dir` 直下のステム + 各拡張子。
     /// 3. 上記がいずれも存在しなければ `None`。
+    ///
+    /// 拡張子は [`SUPPORTED_EXTENSIONS`] の順で試す(`.wav` / `.ogg` / `.flac` / `.mp3`)。
     pub fn resolve(&self, sound_type: SoundType) -> Option<PathBuf> {
+        let stem = sound_type.stem();
         let dir =
             if sound_type.is_bgm() { self.bgm_dir.as_deref() } else { self.se_dir.as_deref() };
-        if let Some(dir) = dir {
-            let candidate = dir.join(sound_type.file_name());
-            if candidate.is_file() {
-                return Some(candidate);
-            }
+        if let Some(dir) = dir
+            && let Some(path) = first_existing_with_extension(dir, stem)
+        {
+            return Some(path);
         }
-        if let Some(default) = self.default_dir.as_deref() {
-            let candidate = default.join(sound_type.file_name());
-            if candidate.is_file() {
-                return Some(candidate);
-            }
+        if let Some(default) = self.default_dir.as_deref()
+            && let Some(path) = first_existing_with_extension(default, stem)
+        {
+            return Some(path);
         }
         None
     }
 }
 
 /// `root` 配下を再帰的に走査し、`marker_filename` を含むディレクトリのリストを返す。
-/// beatoraja の `SystemSoundManager.scan` と同じ振る舞い。
+/// beatoraja の `SystemSoundManager.scan` と同じ振る舞い。`marker_filename` は
+/// `.wav` 拡張子付きで渡し、実ファイルは [`SUPPORTED_EXTENSIONS`] のいずれでも
+/// マーカーとして認識する。
 pub fn scan_sound_sets(root: &Path, marker_filename: &str) -> Vec<PathBuf> {
+    let marker_stem = match marker_filename.rfind('.') {
+        Some(idx) => &marker_filename[..idx],
+        None => marker_filename,
+    };
     let mut out = Vec::new();
-    scan_sound_sets_into(root, marker_filename, &mut out);
+    scan_sound_sets_into(root, marker_stem, &mut out);
     out
 }
 
-fn scan_sound_sets_into(dir: &Path, marker_filename: &str, out: &mut Vec<PathBuf>) {
+fn scan_sound_sets_into(dir: &Path, marker_stem: &str, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -156,15 +189,30 @@ fn scan_sound_sets_into(dir: &Path, marker_filename: &str, out: &mut Vec<PathBuf
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            scan_sound_sets_into(&path, marker_filename, out);
-        } else if !has_marker && path.file_name().and_then(|n| n.to_str()) == Some(marker_filename)
-        {
+            scan_sound_sets_into(&path, marker_stem, out);
+        } else if !has_marker && is_marker_file(&path, marker_stem) {
             has_marker = true;
         }
     }
     if has_marker {
         out.push(dir.to_path_buf());
     }
+}
+
+/// `path` のファイル名がステム `marker_stem` + [`SUPPORTED_EXTENSIONS`] のいずれか
+/// に一致するか。大文字小文字は区別しない(拡張子のみ)。
+fn is_marker_file(path: &Path, marker_stem: &str) -> bool {
+    let Some(stem) = path.file_stem().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    if stem != marker_stem {
+        return false;
+    }
+    let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+        return false;
+    };
+    let ext_lower = ext.to_ascii_lowercase();
+    SUPPORTED_EXTENSIONS.iter().any(|supported| *supported == ext_lower)
 }
 
 /// `bgms` と `ses` からランダムに 1 セットずつ選んで [`SoundSetSelection`] を作る。
@@ -260,6 +308,39 @@ mod tests {
 
         std::fs::remove_dir_all(bgm_dir).unwrap();
         std::fs::remove_dir_all(default_dir).unwrap();
+    }
+
+    #[test]
+    fn scan_sound_sets_matches_alternative_extensions() {
+        // ModernChic 等の SE セットは `.ogg` で配布されている。`.wav` 指定で
+        // スキャンしても `.ogg` のマーカーを認識できることを確認する。
+        let root = temp_dir("scan-ogg");
+        let set = root.join("modernchic");
+        std::fs::create_dir_all(&set).unwrap();
+        std::fs::write(set.join("clear.ogg"), b"x").unwrap();
+
+        let found = scan_sound_sets(&root, "clear.wav");
+        assert_eq!(found, vec![set]);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn resolve_falls_back_through_supported_extensions() {
+        // se_dir に scratch.ogg がある場合、SoundType::Scratch.file_name() = "scratch.wav"
+        // でも解決できること。
+        let se_dir = temp_dir("resolve-ogg");
+        std::fs::write(se_dir.join("scratch.ogg"), b"x").unwrap();
+        std::fs::write(se_dir.join("clear.flac"), b"x").unwrap();
+
+        let selection =
+            SoundSetSelection { bgm_dir: None, se_dir: Some(se_dir.clone()), default_dir: None };
+
+        assert_eq!(selection.resolve(SoundType::Scratch), Some(se_dir.join("scratch.ogg")));
+        assert_eq!(selection.resolve(SoundType::ResultClear), Some(se_dir.join("clear.flac")));
+        assert_eq!(selection.resolve(SoundType::Select), None);
+
+        std::fs::remove_dir_all(se_dir).unwrap();
     }
 
     #[test]
