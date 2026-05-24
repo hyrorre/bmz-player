@@ -170,8 +170,6 @@ struct WinitApp {
     /// `system_audio` 上にデコード済みサンプルを乗せて再生・停止する facade。
     /// `system_audio` が `None` の場合や、サウンドセット未指定の場合も `Some` で
     /// 構築されるが id_map が空なので各 play/stop は no-op になる。
-    /// Stage 2d で各シーン遷移から `play` / `stop` を呼ぶようになる。
-    #[allow(dead_code)]
     system_sound: Option<crate::system_sound_manager::SystemSoundManager>,
     /// 選曲画面でESCを長押し中の開始時刻。離されたり画面を抜けると None になる。
     select_exit_hold_started_at: Option<Instant>,
@@ -670,6 +668,7 @@ impl WinitApp {
                 if !session.judge.is_exhausted(&session.chart) {
                     tracing::info!("escape pressed during play; marking session as failed");
                     session.state = bmz_gameplay::session::PlayState::Failed;
+                    self.play_system_sound(crate::system_sound::SoundType::PlayStop);
                 }
                 return;
             }
@@ -771,21 +770,28 @@ impl WinitApp {
                     return;
                 }
                 if let Some(control) = physical_key_name(event.physical_key) {
+                    let mut option_changed = false;
                     if self.select_keys.cycle_arrange.as_deref() == Some(&control) {
                         self.arrange_option = self.arrange_option.cycle();
+                        option_changed = true;
                         tracing::info!(
                             arrange = self.arrange_option.as_str(),
                             "arrange option changed"
                         );
                     } else if self.select_keys.cycle_gauge.as_deref() == Some(&control) {
                         self.gauge_option = cycle_gauge_option(self.gauge_option);
+                        option_changed = true;
                         tracing::info!(gauge = ?self.gauge_option, "gauge option changed");
                     } else if self.select_keys.cycle_assist.as_deref() == Some(&control) {
                         self.assist_option = self.assist_option.cycle();
+                        option_changed = true;
                         tracing::info!(
                             assist = self.assist_option.as_str(),
                             "assist option changed"
                         );
+                    }
+                    if option_changed {
+                        self.play_system_sound(crate::system_sound::SoundType::OptionChange);
                     }
                 }
             }
@@ -860,15 +866,22 @@ impl WinitApp {
 
         // Start 押しながら: オプション切替
         if self.start_held {
+            let mut option_changed = false;
             if self.select_keys.cycle_arrange.as_deref() == Some(button) {
                 self.arrange_option = self.arrange_option.cycle();
+                option_changed = true;
                 tracing::info!(arrange = self.arrange_option.as_str(), "arrange option changed");
             } else if self.select_keys.cycle_gauge.as_deref() == Some(button) {
                 self.gauge_option = cycle_gauge_option(self.gauge_option);
+                option_changed = true;
                 tracing::info!(gauge = ?self.gauge_option, "gauge option changed");
             } else if self.select_keys.cycle_assist.as_deref() == Some(button) {
                 self.assist_option = self.assist_option.cycle();
+                option_changed = true;
                 tracing::info!(assist = self.assist_option.as_str(), "assist option changed");
+            }
+            if option_changed {
+                self.play_system_sound(crate::system_sound::SoundType::OptionChange);
             }
             return;
         }
@@ -920,6 +933,7 @@ impl WinitApp {
             moved_select_index(self.selected_index, self.select_items.len(), select_move);
         if self.selected_index != previous_index {
             self.select_bar_started_at = Instant::now();
+            self.play_system_sound(crate::system_sound::SoundType::Scratch);
         }
     }
 
@@ -935,6 +949,7 @@ impl WinitApp {
                 self.reload_select_items();
                 self.selected_index = 0;
                 self.select_bar_started_at = Instant::now();
+                self.play_system_sound(crate::system_sound::SoundType::FolderOpen);
                 tracing::info!(folder = ?self.folder_stack.last(), "entered folder");
             }
             Some(SelectItem::Chart(row)) => {
@@ -953,6 +968,7 @@ impl WinitApp {
             // 復元先がリスト範囲外なら末尾にクランプする。
             self.selected_index = restored.min(self.select_items.len().saturating_sub(1));
             self.select_bar_started_at = Instant::now();
+            self.play_system_sound(crate::system_sound::SoundType::FolderClose);
             tracing::info!(depth = self.folder_stack.len(), "exited folder");
         }
     }
@@ -1081,6 +1097,10 @@ impl WinitApp {
         }
         tracing::info!(?action, "result screen exit animation started");
         self.result_exit = Some(ResultExit { started_at: Instant::now(), action });
+        // ResultClear / ResultFail のループ風長尺音を止めて、close SE を鳴らす。
+        self.stop_system_sound(crate::system_sound::SoundType::ResultClear);
+        self.stop_system_sound(crate::system_sound::SoundType::ResultFail);
+        self.play_system_sound(crate::system_sound::SoundType::ResultClose);
     }
 
     /// 終了フェードアウトの経過を監視し、スキンのフェードアウト時間を過ぎたら
@@ -1602,6 +1622,7 @@ impl WinitApp {
         }
 
         self.last_scene_kind = Some(scene_kind);
+        self.fire_scene_transition_sounds(scene_kind);
         if scene_kind == AppSceneKind::Select {
             let now = Instant::now();
             self.select_scene_started_at = now;
@@ -1614,6 +1635,51 @@ impl WinitApp {
             window.set_title(window_title_for_scene(scene_kind));
         }
         tracing::info!(scene = ?scene_kind, title = window_title_for_scene(scene_kind), "app scene active");
+    }
+
+    /// シーン遷移時のシステム SE / BGM を発火する。
+    /// 入る前に進行中の BGM をすべて停止してから、新しい BGM / SE を鳴らす。
+    fn fire_scene_transition_sounds(&self, scene_kind: AppSceneKind) {
+        use crate::system_sound::SoundType;
+        self.stop_all_system_bgm();
+        match scene_kind {
+            AppSceneKind::Select => self.play_system_sound(SoundType::Select),
+            AppSceneKind::Decide => self.play_system_sound(SoundType::Decide),
+            AppSceneKind::Play => self.play_system_sound(SoundType::PlayReady),
+            AppSceneKind::Result => {
+                let clear = self
+                    .finished_play
+                    .as_ref()
+                    .map(|finished| finished.summary.clear_type)
+                    .unwrap_or(bmz_core::clear::ClearType::Failed);
+                let sound = if matches!(clear, bmz_core::clear::ClearType::Failed) {
+                    SoundType::ResultFail
+                } else {
+                    SoundType::ResultClear
+                };
+                self.play_system_sound(sound);
+            }
+        }
+    }
+
+    /// `master_volume = 1.0` 固定でシステム音を 1 発鳴らす。Stage 2e で
+    /// `app_config.audio.system_volume` を渡せるよう差し替える予定。
+    fn play_system_sound(&self, sound_type: crate::system_sound::SoundType) {
+        if let Some(manager) = &self.system_sound {
+            manager.play(sound_type, 1.0);
+        }
+    }
+
+    fn stop_system_sound(&self, sound_type: crate::system_sound::SoundType) {
+        if let Some(manager) = &self.system_sound {
+            manager.stop(sound_type);
+        }
+    }
+
+    fn stop_all_system_bgm(&self) {
+        if let Some(manager) = &self.system_sound {
+            manager.stop_all_bgm();
+        }
     }
 }
 
