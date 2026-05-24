@@ -49,6 +49,7 @@ pub fn build_render_snapshot_with_bga_frames(
         subartist: session.chart.metadata.subartist.clone(),
         genre: session.chart.metadata.genre.clone(),
         difficulty_name: session.chart.metadata.difficulty_name.clone(),
+        judge_rank: session.chart.metadata.judge_rank,
         play_level: session.chart.metadata.play_level.clone(),
         combo: session.score.combo,
         max_combo: session.score.max_combo,
@@ -56,6 +57,7 @@ pub fn build_render_snapshot_with_bga_frames(
         total_notes: session.chart.total_notes,
         past_notes: session.score.past_notes,
         judge_counts: display_judge_counts(session),
+        fast_slow_counts: display_fast_slow_counts(session),
         gauge: session.gauge.current().value,
         gauge_type: session.gauge.current().definition.gauge_type as i32,
         hispeed: session.hispeed,
@@ -285,6 +287,24 @@ fn display_judge_counts(session: &GameSession) -> DisplayJudgeCounts {
         bad: judges.fast_bad + judges.slow_bad,
         poor: judges.fast_poor + judges.slow_poor,
         empty_poor: judges.fast_empty_poor + judges.slow_empty_poor,
+    }
+}
+
+fn display_fast_slow_counts(session: &GameSession) -> bmz_render::snapshot::FastSlowJudgeCounts {
+    let judges = &session.score.judges;
+    bmz_render::snapshot::FastSlowJudgeCounts {
+        fast_pgreat: judges.fast_pgreat,
+        slow_pgreat: judges.slow_pgreat,
+        fast_great: judges.fast_great,
+        slow_great: judges.slow_great,
+        fast_good: judges.fast_good,
+        slow_good: judges.slow_good,
+        fast_bad: judges.fast_bad,
+        slow_bad: judges.slow_bad,
+        fast_poor: judges.fast_poor,
+        slow_poor: judges.slow_poor,
+        fast_empty_poor: judges.fast_empty_poor,
+        slow_empty_poor: judges.slow_empty_poor,
     }
 }
 
@@ -581,6 +601,20 @@ mod tests {
 
         assert_eq!(snapshot.judge_counts.pgreat, 1);
         assert_eq!(snapshot.judge_counts.empty_poor, 1);
+        assert_eq!(snapshot.fast_slow_counts.fast_pgreat, 1);
+        assert_eq!(snapshot.fast_slow_counts.slow_empty_poor, 1);
+    }
+
+    #[test]
+    fn build_render_snapshot_passes_judge_rank() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut chart = chart();
+        chart.metadata.judge_rank = Some(0);
+        let session = build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
+
+        let snapshot = build_render_snapshot(&session, TimeUs(0), &[], None);
+
+        assert_eq!(snapshot.judge_rank, Some(0));
     }
 
     #[test]

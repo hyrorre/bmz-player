@@ -101,7 +101,8 @@ fn parse_command_line(
         "GENRE" => metadata.genre = value.to_string(),
         "PLAYLEVEL" => metadata.play_level = value.to_string(),
         "DIFFICULTY" => metadata.difficulty_name = value.to_string(),
-        "RANK" | "PLAYER" | "LNTYPE" | "LNMODE" => {}
+        "RANK" => metadata.judge_rank = value.parse::<i32>().ok(),
+        "PLAYER" | "LNTYPE" | "LNMODE" => {}
         "STAGEFILE" => metadata.stage_file = value.to_string(),
         "BANNER" => metadata.banner_file = value.to_string(),
         "BACKBMP" => metadata.backbmp_file = value.to_string(),
@@ -460,6 +461,7 @@ mod tests {
 #TITLE Test Song
 #ARTIST Composer
 #BPM 150
+#RANK 0
 #WAV01 kick.wav
 #WAV0A snare.wav
 #BPM01 180
@@ -477,6 +479,7 @@ mod tests {
         assert_eq!(chart.metadata.title, "Test Song");
         assert_eq!(chart.metadata.artist, "Composer");
         assert_eq!(chart.metadata.initial_bpm, 150.0);
+        assert_eq!(chart.metadata.judge_rank, Some(0));
         assert_eq!(chart.resources.wavs.len(), 2);
         assert_eq!(chart.resources.bpm_table[0].bpm, 180.0);
         assert_eq!(chart.resources.stop_table[0].value, 192);

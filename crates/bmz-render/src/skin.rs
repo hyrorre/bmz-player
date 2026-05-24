@@ -961,6 +961,8 @@ pub struct SkinDrawState {
     pub play_level: i64,
     /// 現在の曲の #DIFFICULTY code。0=OTHER, 1=BEGINNER, 2=NORMAL, 3=HYPER, 4=ANOTHER, 5=INSANE。
     pub difficulty: i64,
+    /// 現在の曲の #RANK / 判定ランク。0..4 は VERYHARD..VERYEASY、10 以上は直接倍率。
+    pub judge_rank: Option<i32>,
     /// 選択中曲のベストEXスコア。
     pub select_ex_score: Option<u32>,
     /// 選択中曲のリプレイスロット有無。
@@ -981,8 +983,8 @@ pub struct SkinDrawState {
     pub select_max_bpm: f32,
     /// 選択中曲の長さ ms。
     pub select_length_ms: i64,
-    /// リザルト画面の Fast/Slow 内訳 (ref 410-419/421-424)。
-    /// Play 中は None、Result 中だけ Some。
+    /// Fast/Slow 内訳 (ref 410-419/421-424)。
+    /// Play/Result 中は Some、それ以外は None。
     pub fast_slow_counts: Option<crate::snapshot::FastSlowJudgeCounts>,
     /// 過去ベスト max combo (ref 172)。
     pub best_max_combo: Option<u32>,
@@ -1064,6 +1066,7 @@ impl Default for SkinDrawState {
             select_play_level: 0,
             play_level: 0,
             difficulty: 0,
+            judge_rank: None,
             select_ex_score: None,
             select_replay_slots: [false; 4],
             select_replay_index: None,
@@ -3383,6 +3386,8 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool 
         // OPTION_DIFFICULTY0..5. 0 は UNKNOWN/OTHER、1..5 は BMS #DIFFICULTY。
         150 => state.difficulty <= 0 || state.difficulty > 5,
         151..=155 => state.difficulty == i64::from(op - 150),
+        // OPTION_JUDGE_VERYHARD..VERYEASY (180..184)
+        180..=184 => judge_rank_option_matches(op, state.judge_rank),
         // OPTION_RESULT_CLEAR=90, OPTION_RESULT_FAIL=91
         // Result 画面以外 (result_failed == None) では両方 false。
         90 => state.result_failed == Some(false),
@@ -3971,6 +3976,15 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         // ベストスコア / ターゲットスコア (DB から供給、未取得時は None)
         150 => state.best_ex_score.map(|s| s as i64),
         121 => state.target_ex_score.map(|s| s as i64),
+        122 | 123 => state
+            .target_ex_score
+            .map(|target| score_rate_parts(target, state.total_notes))
+            .map(|parts| if ref_id == 122 { parts.0 } else { parts.1 } as i64),
+        183 | 184 => state
+            .best_ex_score
+            .map(|best| score_rate_parts(best, state.total_notes))
+            .map(|parts| if ref_id == 183 { parts.0 } else { parts.1 } as i64),
+        400 => state.judge_rank.map(|rank| rank as i64),
         154 => next_rank_diff(state),
         // NUMBER_DIFF_HIGHSCORE=152, NUMBER_DIFF_HIGHSCORE2=172 (符号付き、ex_score - best)
         152 | 172 => state.best_ex_score.map(|best| state.ex_score as i64 - best as i64),
@@ -4033,6 +4047,20 @@ fn div_ceil(numerator: i64, denominator: i64) -> i64 {
         return 0;
     }
     numerator.div_euclid(denominator) + i64::from(numerator.rem_euclid(denominator) != 0)
+}
+
+fn judge_rank_option_matches(op: i32, judge_rank: Option<i32>) -> bool {
+    let Some(rank) = judge_rank else {
+        return op == 182;
+    };
+    match op {
+        180 => rank == 0 || (10..35).contains(&rank),
+        181 => rank == 1 || (35..60).contains(&rank),
+        182 => rank == 2 || (60..85).contains(&rank),
+        183 => rank == 3 || (85..110).contains(&rank),
+        184 => rank == 4 || rank >= 110,
+        _ => false,
+    }
 }
 
 fn judge_rate_int(count: u32, total_notes: u32) -> Option<i64> {
@@ -8184,6 +8212,23 @@ mod tests {
                 empty_poor: 2,
             },
             gauge: 78.6,
+            fast_slow_counts: Some(crate::snapshot::FastSlowJudgeCounts {
+                fast_pgreat: 10,
+                slow_pgreat: 11,
+                fast_great: 12,
+                slow_great: 13,
+                fast_good: 14,
+                slow_good: 15,
+                fast_bad: 16,
+                slow_bad: 17,
+                fast_poor: 18,
+                slow_poor: 19,
+                fast_empty_poor: 20,
+                slow_empty_poor: 21,
+            }),
+            best_ex_score: Some(123),
+            target_ex_score: Some(145),
+            judge_rank: Some(1),
             ..SkinDrawState::default()
         };
 
@@ -8202,10 +8247,19 @@ mod tests {
         assert_eq!(skin_state_number(112, state), Some(10));
         assert_eq!(skin_state_number(113, state), Some(4));
         assert_eq!(skin_state_number(114, state), Some(3));
+        assert_eq!(skin_state_number(122, state), Some(72));
+        assert_eq!(skin_state_number(123, state), Some(5));
+        assert_eq!(skin_state_number(183, state), Some(61));
+        assert_eq!(skin_state_number(184, state), Some(5));
+        assert_eq!(skin_state_number(400, state), Some(1));
         assert_eq!(skin_state_number(420, state), Some(2));
+        assert_eq!(skin_state_number(423, state), Some(70));
+        assert_eq!(skin_state_number(424, state), Some(75));
         assert_eq!(skin_state_number(425, state), Some(7));
         assert_eq!(skin_state_number(426, state), Some(3));
         assert_eq!(skin_state_number(427, state), Some(7));
+        assert!(test_skin_op(181, &[], state));
+        assert!(!test_skin_op(182, &[], state));
     }
 
     #[test]

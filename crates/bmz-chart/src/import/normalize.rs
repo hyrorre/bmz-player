@@ -123,6 +123,7 @@ fn normalize_metadata(input: &IntermediateMetadata) -> ChartMetadata {
         subartist: input.subartist.clone(),
         genre: input.genre.clone(),
         difficulty_name: input.difficulty_name.clone(),
+        judge_rank: input.judge_rank,
         play_level: input.play_level.clone(),
         initial_bpm: input.initial_bpm,
         total: input.total,

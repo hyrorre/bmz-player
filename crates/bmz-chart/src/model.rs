@@ -29,6 +29,7 @@ pub struct ChartMetadata {
     pub subartist: String,
     pub genre: String,
     pub difficulty_name: String,
+    pub judge_rank: Option<i32>,
     pub play_level: String,
     pub initial_bpm: f64,
     pub total: Option<f64>,

@@ -25,6 +25,7 @@ pub struct IntermediateMetadata {
     pub genre: String,
     pub play_level: String,
     pub difficulty_name: String,
+    pub judge_rank: Option<i32>,
     pub initial_bpm: f64,
     pub total: Option<f64>,
     pub stage_file: String,
