@@ -39,9 +39,74 @@ impl SceneSkinDefs {
         }
     }
 
+    /// beatoraja はすべてのプレイ用スキンに共通 offset を追加するため、
+    /// BMZ のスキン設定 UI でも play skin だけ同じ項目を常時出す。
+    pub fn from_play_document(document: Option<&SkinDocument>) -> Self {
+        let mut defs = Self::from_document(document);
+        defs.append_missing_beatoraja_play_offsets();
+        defs
+    }
+
     fn is_empty(&self) -> bool {
         self.property.is_empty() && self.filepath.is_empty() && self.offset.is_empty()
     }
+
+    fn append_missing_beatoraja_play_offsets(&mut self) {
+        for offset in beatoraja_play_common_offsets() {
+            if !self.offset.iter().any(|existing| existing.id == offset.id) {
+                self.offset.push(offset);
+            }
+        }
+    }
+}
+
+fn beatoraja_play_common_offsets() -> [SkinOffsetDef; 4] {
+    [
+        SkinOffsetDef {
+            category: "beatoraja".to_string(),
+            name: "All offset(%)".to_string(),
+            id: 10,
+            x: true,
+            y: true,
+            w: true,
+            h: true,
+            r: false,
+            a: false,
+        },
+        SkinOffsetDef {
+            category: "beatoraja".to_string(),
+            name: "Notes offset".to_string(),
+            id: 30,
+            x: false,
+            y: false,
+            w: false,
+            h: true,
+            r: false,
+            a: false,
+        },
+        SkinOffsetDef {
+            category: "beatoraja".to_string(),
+            name: "Judge offset".to_string(),
+            id: 32,
+            x: true,
+            y: true,
+            w: true,
+            h: true,
+            r: false,
+            a: true,
+        },
+        SkinOffsetDef {
+            category: "beatoraja".to_string(),
+            name: "Judge Detail offset".to_string(),
+            id: 33,
+            x: true,
+            y: true,
+            w: true,
+            h: true,
+            r: false,
+            a: true,
+        },
+    ]
 }
 
 /// 選曲 / プレイ / リザルト各スキンの設定可能項目。
@@ -512,18 +577,7 @@ fn build_scene_skin_defs(
                         .unwrap_or(SkinOffsetConfig { id: offset_def.id, ..Default::default() });
                     let before = value;
                     ui.horizontal(|ui| {
-                        changed |=
-                            ui.add(egui::DragValue::new(&mut value.x).prefix("x:")).changed();
-                        changed |=
-                            ui.add(egui::DragValue::new(&mut value.y).prefix("y:")).changed();
-                        changed |=
-                            ui.add(egui::DragValue::new(&mut value.w).prefix("w:")).changed();
-                        changed |=
-                            ui.add(egui::DragValue::new(&mut value.h).prefix("h:")).changed();
-                        changed |=
-                            ui.add(egui::DragValue::new(&mut value.r).prefix("r:")).changed();
-                        changed |=
-                            ui.add(egui::DragValue::new(&mut value.a).prefix("a:")).changed();
+                        changed |= add_offset_drag_values(ui, offset_def, &mut value);
                     });
                     if value != before {
                         match offsets.iter_mut().find(|o| o.id == offset_def.id) {
@@ -536,6 +590,43 @@ fn build_scene_skin_defs(
             }
         }
     });
+    changed
+}
+
+fn add_offset_drag_values(
+    ui: &mut egui::Ui,
+    def: &SkinOffsetDef,
+    value: &mut SkinOffsetConfig,
+) -> bool {
+    let mut changed = false;
+    let mut any = false;
+    if def.x {
+        changed |= ui.add(egui::DragValue::new(&mut value.x).prefix("x:")).changed();
+        any = true;
+    }
+    if def.y {
+        changed |= ui.add(egui::DragValue::new(&mut value.y).prefix("y:")).changed();
+        any = true;
+    }
+    if def.w {
+        changed |= ui.add(egui::DragValue::new(&mut value.w).prefix("w:")).changed();
+        any = true;
+    }
+    if def.h {
+        changed |= ui.add(egui::DragValue::new(&mut value.h).prefix("h:")).changed();
+        any = true;
+    }
+    if def.r {
+        changed |= ui.add(egui::DragValue::new(&mut value.r).prefix("r:")).changed();
+        any = true;
+    }
+    if def.a {
+        changed |= ui.add(egui::DragValue::new(&mut value.a).prefix("a:")).changed();
+        any = true;
+    }
+    if !any {
+        ui.label("調整可能な値はありません");
+    }
     changed
 }
 
@@ -634,5 +725,38 @@ mod tests {
                 "parts/lanecover_lift/default.png".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn play_skin_defs_include_beatoraja_common_offsets() {
+        let defs = SceneSkinDefs::from_play_document(None);
+
+        let offsets: Vec<_> =
+            defs.offset.iter().map(|offset| (offset.id, offset.name.as_str())).collect();
+        assert!(offsets.contains(&(10, "All offset(%)")));
+        assert!(offsets.contains(&(30, "Notes offset")));
+        assert!(offsets.contains(&(32, "Judge offset")));
+        assert!(offsets.contains(&(33, "Judge Detail offset")));
+    }
+
+    #[test]
+    fn play_skin_defs_do_not_duplicate_existing_common_offset_ids() {
+        let mut defs = SceneSkinDefs::default();
+        defs.offset.push(SkinOffsetDef {
+            category: "custom".to_string(),
+            name: "Custom all".to_string(),
+            id: 10,
+            x: true,
+            y: true,
+            w: false,
+            h: false,
+            r: false,
+            a: false,
+        });
+
+        defs.append_missing_beatoraja_play_offsets();
+
+        assert_eq!(defs.offset.iter().filter(|offset| offset.id == 10).count(), 1);
+        assert_eq!(defs.offset.len(), 4);
     }
 }

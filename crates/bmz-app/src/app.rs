@@ -1415,7 +1415,7 @@ impl WinitApp {
         let skin_meta = SkinConfigMeta {
             select: SceneSkinDefs::from_document(self.renderer.select_skin_document()),
             decide: SceneSkinDefs::from_document(self.renderer.decide_skin_document()),
-            play: SceneSkinDefs::from_document(self.renderer.play_skin_document()),
+            play: SceneSkinDefs::from_play_document(self.renderer.play_skin_document()),
             result: SceneSkinDefs::from_document(self.renderer.result_skin_document()),
         };
         let Some(egui) = self.egui.as_mut() else {
