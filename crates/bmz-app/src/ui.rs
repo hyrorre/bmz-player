@@ -71,8 +71,10 @@ pub struct EguiOutput {
     pub save_app_config: bool,
     /// プロファイル設定 (`ProfileConfig`) の保存が要求されたか。
     pub save_profile_config: bool,
-    /// スキンの再読込 (現在の config パスを renderer へ再適用) が要求されたか。
-    pub reload_skins: bool,
+    /// profile.toml からスキン設定を再読込して未保存変更を戻す要求。
+    pub reset_skin_config: bool,
+    /// スキン設定値が変更されたか。app 側でデバウンスして再読込へつなぐ。
+    pub skin_config_changed: bool,
     /// デバッグ表示パネルの現在の開閉状態。
     /// profile config の `ui.show_fps` へ同期し、終了時に永続化される。
     pub debug_panel_visible: bool,
@@ -141,7 +143,8 @@ impl EguiLayer {
         let show_skin = &mut self.show_skin;
         let mut save_app_config = false;
         let mut save_profile_config = false;
-        let mut reload_skins = false;
+        let mut reset_skin_config = false;
+        let mut skin_config_changed = false;
         let full_output = ctx.run_ui(raw_input, |ui| {
             if visible {
                 let ctx = ui.ctx();
@@ -153,7 +156,8 @@ impl EguiLayer {
                 let skin_actions =
                     build_skin_panel(ctx, show_skin, &mut profile_config.skin, skin_meta);
                 save_profile_config |= skin_actions.save;
-                reload_skins |= skin_actions.reload;
+                reset_skin_config |= skin_actions.reset;
+                skin_config_changed |= skin_actions.changed;
             }
         });
         self.state.handle_platform_output(window, full_output.platform_output);
@@ -166,7 +170,8 @@ impl EguiLayer {
             },
             save_app_config,
             save_profile_config,
-            reload_skins,
+            reset_skin_config,
+            skin_config_changed,
             debug_panel_visible: *show_debug,
         }
     }
@@ -279,8 +284,10 @@ fn window_mode_label(mode: &WindowMode) -> &'static str {
 struct SkinPanelActions {
     /// 「保存」ボタンが押された (profile.toml へ書き出し)。
     save: bool,
-    /// 「スキン再読込」ボタンが押された (現在のパスを renderer へ再適用)。
-    reload: bool,
+    /// 「リセット」ボタンが押された (profile.toml の値へ戻す)。
+    reset: bool,
+    /// パネル内のスキン設定が変更された。
+    changed: bool,
 }
 
 /// プロファイルのスキン設定 (`SkinConfig`) を編集するパネル。
@@ -291,23 +298,24 @@ fn build_skin_panel(
     skin_meta: &SkinConfigMeta,
 ) -> SkinPanelActions {
     let mut save_clicked = false;
-    let mut reload_clicked = false;
+    let mut reset_clicked = false;
+    let mut changed = false;
     egui::Window::new("スキン設定").open(open).default_pos(egui::pos2(16.0, 480.0)).show(
         ctx,
         |ui| {
             ui.label("各画面のスキンパス。空欄なら内蔵描画 / デフォルトスキンを使用します。");
             egui::Grid::new("skin_grid").num_columns(2).show(ui, |ui| {
                 ui.label("選曲");
-                ui.text_edit_singleline(&mut skin.select);
+                changed |= ui.text_edit_singleline(&mut skin.select).changed();
                 ui.end_row();
                 ui.label("決定");
-                ui.text_edit_singleline(&mut skin.decide);
+                changed |= ui.text_edit_singleline(&mut skin.decide).changed();
                 ui.end_row();
                 ui.label("プレイ");
-                ui.text_edit_singleline(&mut skin.play);
+                changed |= ui.text_edit_singleline(&mut skin.play).changed();
                 ui.end_row();
                 ui.label("リザルト");
-                ui.text_edit_singleline(&mut skin.result);
+                changed |= ui.text_edit_singleline(&mut skin.result).changed();
                 ui.end_row();
             });
             ui.separator();
@@ -318,28 +326,36 @@ fn build_skin_panel(
                     ui.push_id(index, |ui| {
                         ui.horizontal(|ui| {
                             ui.label("ID");
-                            ui.add(egui::DragValue::new(&mut offset.id));
+                            changed |= ui.add(egui::DragValue::new(&mut offset.id)).changed();
                             if ui.button("削除").clicked() {
                                 remove_index = Some(index);
                             }
                         });
                         ui.horizontal(|ui| {
-                            ui.add(egui::DragValue::new(&mut offset.x).prefix("x:"));
-                            ui.add(egui::DragValue::new(&mut offset.y).prefix("y:"));
-                            ui.add(egui::DragValue::new(&mut offset.w).prefix("w:"));
-                            ui.add(egui::DragValue::new(&mut offset.h).prefix("h:"));
-                            ui.add(egui::DragValue::new(&mut offset.r).prefix("r:"));
-                            ui.add(egui::DragValue::new(&mut offset.a).prefix("a:"));
+                            changed |=
+                                ui.add(egui::DragValue::new(&mut offset.x).prefix("x:")).changed();
+                            changed |=
+                                ui.add(egui::DragValue::new(&mut offset.y).prefix("y:")).changed();
+                            changed |=
+                                ui.add(egui::DragValue::new(&mut offset.w).prefix("w:")).changed();
+                            changed |=
+                                ui.add(egui::DragValue::new(&mut offset.h).prefix("h:")).changed();
+                            changed |=
+                                ui.add(egui::DragValue::new(&mut offset.r).prefix("r:")).changed();
+                            changed |=
+                                ui.add(egui::DragValue::new(&mut offset.a).prefix("a:")).changed();
                         });
                         ui.separator();
                     });
                 }
                 if let Some(index) = remove_index {
                     skin.offsets.remove(index);
+                    changed = true;
                 }
             });
             if ui.button("オフセット追加").clicked() {
                 skin.offsets.push(SkinOffsetConfig::default());
+                changed = true;
             }
             ui.separator();
             ui.label("読み込み済みスキンが宣言する設定可能項目:");
@@ -352,7 +368,7 @@ fn build_skin_panel(
             egui::ScrollArea::vertical().id_salt("skin_defs_scroll").max_height(280.0).show(
                 ui,
                 |ui| {
-                    build_scene_skin_defs(
+                    changed |= build_scene_skin_defs(
                         ui,
                         "選曲スキン",
                         &skin_meta.select,
@@ -361,7 +377,7 @@ fn build_skin_panel(
                         &mut skin.select_files,
                         &mut skin.offsets,
                     );
-                    build_scene_skin_defs(
+                    changed |= build_scene_skin_defs(
                         ui,
                         "決定スキン",
                         &skin_meta.decide,
@@ -370,7 +386,7 @@ fn build_skin_panel(
                         &mut skin.decide_files,
                         &mut skin.offsets,
                     );
-                    build_scene_skin_defs(
+                    changed |= build_scene_skin_defs(
                         ui,
                         "プレイスキン",
                         &skin_meta.play,
@@ -379,7 +395,7 @@ fn build_skin_panel(
                         &mut skin.play_files,
                         &mut skin.offsets,
                     );
-                    build_scene_skin_defs(
+                    changed |= build_scene_skin_defs(
                         ui,
                         "リザルトスキン",
                         &skin_meta.result,
@@ -392,19 +408,19 @@ fn build_skin_panel(
             );
             ui.separator();
             ui.label(
-                "「保存」で profile.toml へ書き出し、「スキン再読込」で現在のパスを即適用します。",
+                "「保存」で profile.toml へ書き出し、「リセット」で保存済みの設定へ戻します。",
             );
             ui.horizontal(|ui| {
                 if ui.button("保存").clicked() {
                     save_clicked = true;
                 }
-                if ui.button("スキン再読込").clicked() {
-                    reload_clicked = true;
+                if ui.button("リセット").clicked() {
+                    reset_clicked = true;
                 }
             });
         },
     );
-    SkinPanelActions { save: save_clicked, reload: reload_clicked }
+    SkinPanelActions { save: save_clicked, reset: reset_clicked, changed }
 }
 
 /// 1 シーン分のスキン設定可能項目を折りたたみ表示・編集する。
@@ -420,7 +436,8 @@ fn build_scene_skin_defs(
     options: &mut BTreeMap<String, String>,
     files: &mut BTreeMap<String, String>,
     offsets: &mut Vec<SkinOffsetConfig>,
-) {
+) -> bool {
+    let mut changed = false;
     egui::CollapsingHeader::new(label).show(ui, |ui| {
         if defs.is_empty() {
             ui.label("設定可能項目はありません (スキン未読込、または定義なし)。");
@@ -445,6 +462,7 @@ fn build_scene_skin_defs(
                     );
                     if selected != before {
                         options.insert(prop.name.clone(), selected);
+                        changed = true;
                     }
                 }
             });
@@ -476,6 +494,7 @@ fn build_scene_skin_defs(
                     );
                     if selected != before {
                         files.insert(filepath.name.clone(), selected);
+                        changed = true;
                     }
                 }
             });
@@ -493,23 +512,31 @@ fn build_scene_skin_defs(
                         .unwrap_or(SkinOffsetConfig { id: offset_def.id, ..Default::default() });
                     let before = value;
                     ui.horizontal(|ui| {
-                        ui.add(egui::DragValue::new(&mut value.x).prefix("x:"));
-                        ui.add(egui::DragValue::new(&mut value.y).prefix("y:"));
-                        ui.add(egui::DragValue::new(&mut value.w).prefix("w:"));
-                        ui.add(egui::DragValue::new(&mut value.h).prefix("h:"));
-                        ui.add(egui::DragValue::new(&mut value.r).prefix("r:"));
-                        ui.add(egui::DragValue::new(&mut value.a).prefix("a:"));
+                        changed |=
+                            ui.add(egui::DragValue::new(&mut value.x).prefix("x:")).changed();
+                        changed |=
+                            ui.add(egui::DragValue::new(&mut value.y).prefix("y:")).changed();
+                        changed |=
+                            ui.add(egui::DragValue::new(&mut value.w).prefix("w:")).changed();
+                        changed |=
+                            ui.add(egui::DragValue::new(&mut value.h).prefix("h:")).changed();
+                        changed |=
+                            ui.add(egui::DragValue::new(&mut value.r).prefix("r:")).changed();
+                        changed |=
+                            ui.add(egui::DragValue::new(&mut value.a).prefix("a:")).changed();
                     });
                     if value != before {
                         match offsets.iter_mut().find(|o| o.id == offset_def.id) {
                             Some(entry) => *entry = value,
                             None => offsets.push(value),
                         }
+                        changed = true;
                     }
                 });
             }
         }
     });
+    changed
 }
 
 /// スキンパス文字列からスキンルートディレクトリ (親ディレクトリ) を得る。
