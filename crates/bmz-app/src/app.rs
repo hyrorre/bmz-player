@@ -170,9 +170,12 @@ struct WinitApp {
     pending_skin_reload_at: Option<Instant>,
     /// システム SE / BGM を再生する cpal ストリーム。
     /// 開けない環境では `None` で、システム音はサイレント。
-    /// Stage 2c でデコード投入、Stage 2d で各シーンから `play_now` を呼ぶようになる。
     #[allow(dead_code)]
     system_audio: Option<crate::audio::SystemAudio>,
+    /// `system_audio` 上にデコード済みサンプルを乗せて再生・停止する facade。
+    /// `system_audio` が `None` の場合や、サウンドセット未指定の場合も `Some` で
+    /// 構築されるが id_map が空なので各 play/stop は no-op になる。
+    system_sound: Option<crate::system_sound_manager::SystemSoundManager>,
     /// 選曲画面でESCを長押し中の開始時刻。離されたり画面を抜けると None になる。
     select_exit_hold_started_at: Option<Instant>,
     /// プレイ中の Start キー直近の押下時刻。連続押し判定で使用。
@@ -324,6 +327,41 @@ impl WinitApp {
 
         let initial_window_mode = boot.app_config.video.mode.clone();
 
+        // システム SE / BGM facade を構築する。
+        // - `profile.[system_sound].bgm_dir` / `se_dir` が指定されていれば再帰スキャンして
+        //   セットを集め、その中からランダム選択する(beatoraja 互換)。
+        // - 空なら scan を省略し、`default_sound_dir` だけにフォールバックする。
+        let system_sound = system_audio.as_ref().map(|audio| {
+            let cfg = &boot.profile_config.system_sound;
+            let bgm_candidates = if cfg.bgm_dir.is_empty() {
+                Vec::new()
+            } else {
+                crate::system_sound::scan_sound_sets(
+                    Path::new(&cfg.bgm_dir),
+                    crate::system_sound::SoundType::Select.file_name(),
+                )
+            };
+            let se_candidates = if cfg.se_dir.is_empty() {
+                Vec::new()
+            } else {
+                crate::system_sound::scan_sound_sets(
+                    Path::new(&cfg.se_dir),
+                    crate::system_sound::SoundType::ResultClear.file_name(),
+                )
+            };
+            let default_dir = if cfg.default_sound_dir.is_empty() {
+                None
+            } else {
+                Some(PathBuf::from(&cfg.default_sound_dir))
+            };
+            let selection = crate::system_sound::select_random_sound_set(
+                &bgm_candidates,
+                &se_candidates,
+                default_dir,
+            );
+            crate::system_sound_manager::SystemSoundManager::new(audio.engine(), &selection)
+        });
+
         let mut app = Self {
             boot,
             window: None,
@@ -364,6 +402,7 @@ impl WinitApp {
             skin_reload_generation: 0,
             pending_skin_reload_at: None,
             system_audio,
+            system_sound,
             select_exit_hold_started_at: None,
             last_play_start_press_at: None,
             egui: None,
@@ -664,6 +703,7 @@ impl WinitApp {
                 if !session.judge.is_exhausted(&session.chart) {
                     tracing::info!("escape pressed during play; marking session as failed");
                     session.state = bmz_gameplay::session::PlayState::Failed;
+                    self.play_system_sound(crate::system_sound::SoundType::PlayStop);
                 }
                 return;
             }
@@ -765,21 +805,28 @@ impl WinitApp {
                     return;
                 }
                 if let Some(control) = physical_key_name(event.physical_key) {
+                    let mut option_changed = false;
                     if self.select_keys.cycle_arrange.as_deref() == Some(&control) {
                         self.arrange_option = self.arrange_option.cycle();
+                        option_changed = true;
                         tracing::info!(
                             arrange = self.arrange_option.as_str(),
                             "arrange option changed"
                         );
                     } else if self.select_keys.cycle_gauge.as_deref() == Some(&control) {
                         self.gauge_option = cycle_gauge_option(self.gauge_option);
+                        option_changed = true;
                         tracing::info!(gauge = ?self.gauge_option, "gauge option changed");
                     } else if self.select_keys.cycle_assist.as_deref() == Some(&control) {
                         self.assist_option = self.assist_option.cycle();
+                        option_changed = true;
                         tracing::info!(
                             assist = self.assist_option.as_str(),
                             "assist option changed"
                         );
+                    }
+                    if option_changed {
+                        self.play_system_sound(crate::system_sound::SoundType::OptionChange);
                     }
                 }
             }
@@ -854,15 +901,22 @@ impl WinitApp {
 
         // Start 押しながら: オプション切替
         if self.start_held {
+            let mut option_changed = false;
             if self.select_keys.cycle_arrange.as_deref() == Some(button) {
                 self.arrange_option = self.arrange_option.cycle();
+                option_changed = true;
                 tracing::info!(arrange = self.arrange_option.as_str(), "arrange option changed");
             } else if self.select_keys.cycle_gauge.as_deref() == Some(button) {
                 self.gauge_option = cycle_gauge_option(self.gauge_option);
+                option_changed = true;
                 tracing::info!(gauge = ?self.gauge_option, "gauge option changed");
             } else if self.select_keys.cycle_assist.as_deref() == Some(button) {
                 self.assist_option = self.assist_option.cycle();
+                option_changed = true;
                 tracing::info!(assist = self.assist_option.as_str(), "assist option changed");
+            }
+            if option_changed {
+                self.play_system_sound(crate::system_sound::SoundType::OptionChange);
             }
             return;
         }
@@ -914,6 +968,7 @@ impl WinitApp {
             moved_select_index(self.selected_index, self.select_items.len(), select_move);
         if self.selected_index != previous_index {
             self.select_bar_started_at = Instant::now();
+            self.play_system_sound(crate::system_sound::SoundType::Scratch);
         }
     }
 
@@ -929,6 +984,7 @@ impl WinitApp {
                 self.reload_select_items();
                 self.selected_index = 0;
                 self.select_bar_started_at = Instant::now();
+                self.play_system_sound(crate::system_sound::SoundType::FolderOpen);
                 tracing::info!(folder = ?self.folder_stack.last(), "entered folder");
             }
             Some(SelectItem::Chart(row)) => {
@@ -947,6 +1003,7 @@ impl WinitApp {
             // 復元先がリスト範囲外なら末尾にクランプする。
             self.selected_index = restored.min(self.select_items.len().saturating_sub(1));
             self.select_bar_started_at = Instant::now();
+            self.play_system_sound(crate::system_sound::SoundType::FolderClose);
             tracing::info!(depth = self.folder_stack.len(), "exited folder");
         }
     }
@@ -1075,6 +1132,10 @@ impl WinitApp {
         }
         tracing::info!(?action, "result screen exit animation started");
         self.result_exit = Some(ResultExit { started_at: Instant::now(), action });
+        // ResultClear / ResultFail のループ風長尺音を止めて、close SE を鳴らす。
+        self.stop_system_sound(crate::system_sound::SoundType::ResultClear);
+        self.stop_system_sound(crate::system_sound::SoundType::ResultFail);
+        self.play_system_sound(crate::system_sound::SoundType::ResultClose);
     }
 
     /// 終了フェードアウトの経過を監視し、スキンのフェードアウト時間を過ぎたら
@@ -1680,6 +1741,7 @@ impl WinitApp {
         }
 
         self.last_scene_kind = Some(scene_kind);
+        self.fire_scene_transition_sounds(scene_kind);
         if scene_kind == AppSceneKind::Select {
             let now = Instant::now();
             self.select_scene_started_at = now;
@@ -1692,6 +1754,51 @@ impl WinitApp {
             window.set_title(window_title_for_scene(scene_kind));
         }
         tracing::info!(scene = ?scene_kind, title = window_title_for_scene(scene_kind), "app scene active");
+    }
+
+    /// シーン遷移時のシステム SE / BGM を発火する。
+    /// 入る前に進行中の BGM をすべて停止してから、新しい BGM / SE を鳴らす。
+    fn fire_scene_transition_sounds(&self, scene_kind: AppSceneKind) {
+        use crate::system_sound::SoundType;
+        self.stop_all_system_bgm();
+        match scene_kind {
+            AppSceneKind::Select => self.play_system_sound(SoundType::Select),
+            AppSceneKind::Decide => self.play_system_sound(SoundType::Decide),
+            AppSceneKind::Play => self.play_system_sound(SoundType::PlayReady),
+            AppSceneKind::Result => {
+                let clear = self
+                    .finished_play
+                    .as_ref()
+                    .map(|finished| finished.summary.clear_type)
+                    .unwrap_or(bmz_core::clear::ClearType::Failed);
+                let sound = if matches!(clear, bmz_core::clear::ClearType::Failed) {
+                    SoundType::ResultFail
+                } else {
+                    SoundType::ResultClear
+                };
+                self.play_system_sound(sound);
+            }
+        }
+    }
+
+    /// `profile.[system_sound].volume` を反映してシステム音を鳴らす。
+    /// ボリュームは AudioEngine 側で 0.0..=1.0 にクランプされる。
+    fn play_system_sound(&self, sound_type: crate::system_sound::SoundType) {
+        if let Some(manager) = &self.system_sound {
+            manager.play(sound_type, self.boot.profile_config.system_sound.volume);
+        }
+    }
+
+    fn stop_system_sound(&self, sound_type: crate::system_sound::SoundType) {
+        if let Some(manager) = &self.system_sound {
+            manager.stop(sound_type);
+        }
+    }
+
+    fn stop_all_system_bgm(&self) {
+        if let Some(manager) = &self.system_sound {
+            manager.stop_all_bgm();
+        }
     }
 }
 
