@@ -19,6 +19,8 @@ pub struct ProfileConfig {
     pub ui: UiConfig,
     pub audio_mix: AudioMixConfig,
     #[serde(default)]
+    pub system_sound: SystemSoundConfig,
+    #[serde(default)]
     pub skin: SkinConfig,
 }
 
@@ -279,6 +281,46 @@ pub struct AudioMixConfig {
     pub preview_volume: f32,
 }
 
+/// beatoraja 互換のシステム SE / BGM (選曲 BGM、フォルダ SE 等) の設定。
+/// 旧来 `[audio]` (config.toml) ではなく、ユーザーごとに切り替えたい設定として
+/// profile.toml の `[system_sound]` に配置する。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemSoundConfig {
+    /// システム BGM セットのルート(`select.wav` を含むディレクトリの親)。
+    /// 空文字列ならスキャンせず、`default_sound_dir` だけを参照する。
+    #[serde(default)]
+    pub bgm_dir: String,
+    /// システム SE セットのルート(`clear.wav` を含むディレクトリの親)。
+    /// 空文字列ならスキャンせず、`default_sound_dir` だけを参照する。
+    #[serde(default)]
+    pub se_dir: String,
+    /// 各システム音のフォールバック先(beatoraja 既定の `defaultsound/` 相当)。
+    #[serde(default = "default_system_sound_default_dir")]
+    pub default_sound_dir: String,
+    /// システム SE / BGM のマスターボリューム(0.0..=1.0)。
+    #[serde(default = "default_system_sound_volume")]
+    pub volume: f32,
+}
+
+pub fn default_system_sound_default_dir() -> String {
+    "defaultsound".to_string()
+}
+
+pub fn default_system_sound_volume() -> f32 {
+    1.0
+}
+
+impl Default for SystemSoundConfig {
+    fn default() -> Self {
+        Self {
+            bgm_dir: String::new(),
+            se_dir: String::new(),
+            default_sound_dir: default_system_sound_default_dir(),
+            volume: default_system_sound_volume(),
+        }
+    }
+}
+
 /// スキン設定。スキンはプロファイルごとに切り替えられる。
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SkinConfig {
@@ -405,6 +447,7 @@ impl ProfileConfig {
                 bgm_volume: 1.0,
                 preview_volume: 0.7,
             },
+            system_sound: SystemSoundConfig::default(),
             skin: SkinConfig::default(),
         }
     }
