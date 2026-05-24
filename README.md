@@ -34,10 +34,6 @@ cargo run
 
 ## TODO
 
-- [ ] デフォルトスキンのグルーブゲージが表示されないよう修正
-- [ ] スクリーンショット機能を追加 (F12, profile.tomlに保存場所指定を追加)
-- [ ] profile.toml のコントローラーのキーコンフィグ指定方法を確認
-- [ ] Support SE / BGM
 - [ ] play 画面終了時に画面のフェードアウト処理を追加
 - [ ] result 画面終了時に音声のフェードアウト処理を追加
 - [ ] 小節線を表示
@@ -46,7 +42,10 @@ cargo run
 - [ ] play画面のAUTO PLAY表示
 - [ ] egui の日本語の vertical-align を修正
 - [ ] cliのオプション指定方法を変更 (songs scan, songs rescan, -a, --autoplay)
-- [ ] All offset / Notes offset / Judge offset / Judge Detail offset
+- [ ] skin offset による伸縮の挙動がbeatorajaと違う問題を修正
+- [ ] invisible notesが見えている？
+- [ ] LNノーツの処理方法確認
+- [ ] DIFFICULTY(N/H/A/I)の推測
 
 ## Roadmap
 
