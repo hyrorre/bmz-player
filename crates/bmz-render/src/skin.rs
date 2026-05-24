@@ -758,6 +758,17 @@ impl SkinContext {
         document.note_long_body_render_item(lane, rect, &self.document_sources)
     }
 
+    pub fn document_bar_line_items(
+        &self,
+        note_y: f32,
+        state: SkinDrawState,
+    ) -> Vec<SkinRenderItem> {
+        let Some(document) = self.document.as_ref() else {
+            return Vec::new();
+        };
+        document.note_group_render_items(note_y, state, &self.document_sources)
+    }
+
     pub fn document_gauge_items(&self, gauge: f32, elapsed_ms: i32) -> Option<Vec<SkinRenderItem>> {
         let document = self.document.as_ref()?;
         document.gauge_render_items(gauge, elapsed_ms, &self.document_sources)
@@ -2203,6 +2214,73 @@ impl SkinDocument {
         })
     }
 
+    pub fn note_group_render_items(
+        &self,
+        note_y: f32,
+        state: SkinDrawState,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Vec<SkinRenderItem> {
+        let Some(note) = self.note.as_ref() else {
+            return Vec::new();
+        };
+        let images = self.image_map();
+        let enabled_options = self.enabled_options();
+        let Some(area) = self.note_lane_area(Lane::Key1, &enabled_options) else {
+            return Vec::new();
+        };
+        let canvas_h = self.h.max(1) as f32;
+        let center_y = area.y + area.height * (1.0 - note_y);
+        let mut items = Vec::new();
+        for destination in &note.group {
+            if !test_skin_ops(&destination.op, &enabled_options, state)
+                || !eval_skin_draw_condition(&destination.draw, state)
+            {
+                continue;
+            }
+            let Some(elapsed) = skin_timer_elapsed_ms(destination.timer, state) else {
+                continue;
+            };
+            let Some(mut frame) = resolve_destination_frame(destination, elapsed, &enabled_options)
+            else {
+                continue;
+            };
+            let line_height = (frame.h.abs().max(1) as f32) / canvas_h;
+            frame.y = (canvas_h * (1.0 - (center_y + line_height / 2.0))).round() as i32;
+            apply_skin_offset_to_frame(destination, &mut frame, state, false);
+            let Some(image) = images.get(destination.id.as_str()) else {
+                continue;
+            };
+            let Some(source) = sources.get(&image.src) else {
+                continue;
+            };
+            let (rect, uv) = stretch_skin_image_geometry(
+                destination.stretch,
+                normalize_skin_frame_rect(frame, self.w, self.h),
+                skin_image_texture_region_for_state(
+                    image,
+                    source.source_size,
+                    elapsed,
+                    Some(state),
+                ),
+                source.source_size,
+                self.w,
+                self.h,
+            );
+            let item = skin_image_item_for_frame(
+                source.texture,
+                rect,
+                uv,
+                frame,
+                destination.center,
+                if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal },
+                Some(source.source_size),
+                destination.filter != 0,
+            );
+            items.push(self.apply_notes_offset_to_item(item, state));
+        }
+        items
+    }
+
     /// `note.dst` の中から有効な条件に一致するエントリを探し、
     /// 指定レーンのノートエリア矩形（正規化座標）を返す。
     /// ノートエリアはレーン列全体を表す。Y軸: 上端=ノートが最も早い時点、下端=判定ライン。
@@ -2257,6 +2335,58 @@ impl SkinDocument {
             y: rect.y - offset.y as f32 / canvas_h - offset_h / 2.0,
             width: rect.width + offset_w,
             height: rect.height + offset_h,
+        }
+    }
+
+    fn apply_notes_offset_to_item(
+        &self,
+        item: SkinRenderItem,
+        state: SkinDrawState,
+    ) -> SkinRenderItem {
+        match item {
+            SkinRenderItem::Image {
+                texture,
+                rect,
+                uv,
+                tint,
+                blend,
+                scale,
+                border,
+                source_size,
+                linear_filter,
+            } => SkinRenderItem::Image {
+                texture,
+                rect: self.apply_notes_offset_to_rect(rect, state),
+                uv,
+                tint,
+                blend,
+                scale,
+                border,
+                source_size,
+                linear_filter,
+            },
+            SkinRenderItem::RotatedImage {
+                texture,
+                rect,
+                uv,
+                tint,
+                blend,
+                source_size,
+                linear_filter,
+                angle_deg,
+                center,
+            } => SkinRenderItem::RotatedImage {
+                texture,
+                rect: self.apply_notes_offset_to_rect(rect, state),
+                uv,
+                tint,
+                blend,
+                source_size,
+                linear_filter,
+                angle_deg,
+                center,
+            },
+            other => other,
         }
     }
 

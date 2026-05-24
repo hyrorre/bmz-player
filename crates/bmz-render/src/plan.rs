@@ -740,6 +740,11 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
         }
     } else {
         // beatoraja スキン: ロングノート胴体 → タップノートの順で note.dst のエリアに配置
+        for bar in &snapshot.bar_lines {
+            let items = skin.document_bar_line_items(bar.y, skin_state);
+            let items = skin.apply_play_skin_global_offset(items, skin_state);
+            append_skin_render_items(&mut commands, &items);
+        }
         for body in &snapshot.visible_long_notes {
             if let Some(rect) = skin.note_body_rect(body.lane, body.head_y, body.tail_y, skin_state)
                 && let Some(item) = skin.document_long_body_item(body.lane, rect)
@@ -1859,6 +1864,67 @@ mod tests {
         assert!(plan.commands.iter().any(|command| matches!(
             command,
             DrawCommand::Image { texture, .. } if *texture == TextureId(42)
+        )));
+    }
+
+    #[test]
+    fn play_skin_document_renders_bar_lines_in_note_area() {
+        let document: crate::skin::SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{"id": 1, "path": "line.png"}],
+                "image": [{"id": "section-line", "src": 1, "x": 0, "y": 0, "w": 1, "h": 1}],
+                "note": {
+                    "dst": [
+                        { "x": 10, "y": 20, "w": 5, "h": 60 },
+                        { "x": 15, "y": 20, "w": 5, "h": 60 },
+                        { "x": 20, "y": 20, "w": 5, "h": 60 },
+                        { "x": 25, "y": 20, "w": 5, "h": 60 },
+                        { "x": 30, "y": 20, "w": 5, "h": 60 },
+                        { "x": 35, "y": 20, "w": 5, "h": 60 },
+                        { "x": 40, "y": 20, "w": 5, "h": 60 },
+                        { "x": 45, "y": 20, "w": 5, "h": 60 }
+                    ],
+                    "group": [
+                        {
+                            "id": "section-line",
+                            "dst": [
+                                { "x": 10, "y": 20, "w": 40, "h": 2, "r": 64, "g": 128, "b": 255, "a": 200 }
+                            ]
+                        }
+                    ]
+                }
+            }
+            "#,
+        )
+        .unwrap();
+        let manifest: SkinManifest = toml::from_str("").unwrap();
+        let source_texture = crate::skin::SkinDocumentTexture {
+            source_id: "1".to_string(),
+            texture: SkinTextureId(77),
+            source_size: crate::skin::SkinImageSize { width: 1.0, height: 1.0 },
+        };
+        let skin = SkinContext::from_manifest_and_document(manifest, document, [source_texture]);
+        let mut snapshot = RenderSnapshot::default();
+        snapshot.bar_lines.push(VisibleBarLine { time: TimeUs(1_000), y: 0.5 });
+
+        let plan = DrawPlan::from_scene_with_skin(&AppSceneSnapshot::Play(snapshot), &skin);
+
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Image { texture, rect, tint, .. }
+                if *texture == TextureId(77)
+                    && approx_eq(rect.x, 0.1)
+                    && approx_eq(rect.y, 0.5 - 0.01)
+                    && approx_eq(rect.width, 0.4)
+                    && approx_eq(rect.height, 0.02)
+                    && approx_eq(tint.r, 64.0 / 255.0)
+                    && approx_eq(tint.g, 128.0 / 255.0)
+                    && approx_eq(tint.b, 1.0)
+                    && approx_eq(tint.a, 200.0 / 255.0)
         )));
     }
 
