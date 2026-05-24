@@ -22,6 +22,25 @@ impl AudioEngine {
         self.samples.insert(id, sample);
     }
 
+    /// 指定 sound_id のスケジュール済み音および再生中 voice をすべて停止する。
+    /// BGM ループの停止等に使う。
+    pub fn stop_sound(&mut self, id: bmz_core::ids::SoundId) {
+        self.queue.retain(|sound| sound.sound_id != id);
+        self.mixer.voices.retain(|voice| voice.sound.sound_id != id);
+    }
+
+    /// `start_frame = 0`(=即時再生)で sound_id を 1 ショット再生する。
+    /// 必要なら `loop_playback = true` でループ再生も可能。
+    pub fn play_now(&mut self, sound_id: bmz_core::ids::SoundId, volume: f32, loop_playback: bool) {
+        self.schedule(ScheduledSound {
+            start_frame: 0,
+            sound_id,
+            volume: volume.clamp(0.0, 1.0),
+            pan: 0.0,
+            loop_playback,
+        });
+    }
+
     /// 再生待ちのスケジュール音も鳴っているボイスも無い、つまり出力を
     /// ドレインし終えた状態かどうか。リザルト遷移後の余韻再生の終了判定に使う。
     pub fn is_idle(&self) -> bool {
@@ -62,12 +81,32 @@ mod tests {
             sound_id: SoundId(1),
             volume: 1.0,
             pan: 0.0,
+            loop_playback: false,
         });
         let mut output = vec![1.0; 8];
 
         engine.render_stereo(0, &mut output);
 
         assert_eq!(output, vec![0.0, 0.0, 0.0, 0.0, 0.5, 0.5, 0.25, 0.25]);
+    }
+
+    #[test]
+    fn stop_sound_drops_queue_and_voices_for_id() {
+        let mut engine = AudioEngine::default();
+        engine.insert_sample(
+            SoundId(1),
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![0.5, 0.5, 0.5, 0.5] },
+        );
+        engine.play_now(SoundId(1), 1.0, true);
+        // 1 サンプル分 render してループ voice が生きていることを確認。
+        let mut output = vec![0.0; 4];
+        engine.render_stereo(0, &mut output);
+        assert!(!engine.is_idle());
+
+        engine.stop_sound(SoundId(1));
+
+        // stop 後はキューも voice も空。
+        assert!(engine.is_idle());
     }
 
     #[test]
@@ -84,6 +123,7 @@ mod tests {
             sound_id: SoundId(1),
             volume: 1.0,
             pan: 0.0,
+            loop_playback: false,
         });
         // スケジュール済みの音が残っている間はアイドルではない。
         assert!(!engine.is_idle());

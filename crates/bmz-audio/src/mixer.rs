@@ -46,6 +46,7 @@ impl MixerState {
             };
 
             let mut alive = true;
+            let sample_frames = sample.frame_count();
             for out_frame in 0..frame_count {
                 let absolute_frame = output_start_frame + out_frame as u64;
                 if absolute_frame < voice.sound.start_frame {
@@ -53,9 +54,16 @@ impl MixerState {
                 }
 
                 let sample_frame = voice.sample_position.floor() as usize;
-                if sample_frame >= sample.frame_count() {
-                    alive = false;
-                    break;
+                if sample_frame >= sample_frames {
+                    if voice.sound.loop_playback && sample_frames > 0 {
+                        // サンプル末尾まで到達したらループ。先頭からの相対位置を保つ。
+                        let frames_f = sample_frames as f64;
+                        let wrapped = voice.sample_position.rem_euclid(frames_f);
+                        voice.sample_position = wrapped;
+                    } else {
+                        alive = false;
+                        break;
+                    }
                 }
 
                 let (mut left, mut right) = sample.sample_stereo_linear(voice.sample_position);
@@ -67,7 +75,10 @@ impl MixerState {
                 voice.sample_position += sample.sample_rate as f64 / self.output_sample_rate as f64;
             }
 
-            if alive && voice.sample_position.floor() < sample.frame_count() as f64 {
+            // ループ voice はサンプル末尾を超えても破棄しない。
+            let still_playing =
+                voice.sound.loop_playback || voice.sample_position.floor() < sample_frames as f64;
+            if alive && still_playing {
                 retained.push(voice);
             }
         }
@@ -106,6 +117,7 @@ mod tests {
             sound_id: SoundId(1),
             volume: 2.0,
             pan: 0.0,
+            loop_playback: false,
         }]);
         let mut output = vec![0.0; 6];
 
@@ -113,6 +125,31 @@ mod tests {
 
         assert_eq!(output, vec![0.0, 0.0, 0.5, 0.5, 1.0, 1.0]);
         assert!(mixer.voices.is_empty());
+    }
+
+    #[test]
+    fn mix_stereo_loops_sample_when_loop_playback_set() {
+        let mut bank = SampleBank::default();
+        bank.insert(
+            SoundId(1),
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![0.5, 0.25] },
+        );
+        let mut mixer = MixerState::default();
+        mixer.push_scheduled([ScheduledSound {
+            start_frame: 0,
+            sound_id: SoundId(1),
+            volume: 1.0,
+            pan: 0.0,
+            loop_playback: true,
+        }]);
+        let mut output = vec![0.0; 12]; // 6 frames, 3 ループ分
+
+        mixer.mix_stereo(&bank, 0, &mut output);
+
+        // [0.5, 0.25, 0.5, 0.25, 0.5, 0.25] が左右に複製される。
+        assert_eq!(output, vec![0.5, 0.5, 0.25, 0.25, 0.5, 0.5, 0.25, 0.25, 0.5, 0.5, 0.25, 0.25]);
+        // ループ voice はサンプル末尾を超えても残る。
+        assert!(!mixer.voices.is_empty());
     }
 
     #[test]
@@ -128,6 +165,7 @@ mod tests {
             sound_id: SoundId(1),
             volume: 1.0,
             pan: 0.0,
+            loop_playback: false,
         }]);
         let mut output = vec![0.0; 8];
 

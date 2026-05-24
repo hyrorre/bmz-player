@@ -147,6 +147,7 @@ impl BgmScheduler {
                 sound_id: event.sound,
                 volume: volume.clamp(0.0, 1.0),
                 pan: 0.0,
+                loop_playback: false,
             });
 
             self.next_index += 1;
@@ -200,6 +201,7 @@ pub fn schedule_keysounds(
             volume: (session.audio_mix.master_volume * session.audio_mix.key_volume)
                 .clamp(0.0, 1.0),
             pan: 0.0,
+            loop_playback: false,
         });
     }
 }

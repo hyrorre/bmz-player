@@ -6,6 +6,16 @@ pub struct ScheduledSound {
     pub sound_id: SoundId,
     pub volume: f32,
     pub pan: f32,
+    /// `true` のときはサンプル末尾でループ再生する(BGM 等)。
+    /// `false` なら従来通り 1 回再生して voice を破棄する。
+    pub loop_playback: bool,
+}
+
+impl ScheduledSound {
+    /// 既存呼び出し互換用: ループしない通常のスケジュール音。
+    pub fn one_shot(start_frame: u64, sound_id: SoundId, volume: f32, pan: f32) -> Self {
+        Self { start_frame, sound_id, volume, pan, loop_playback: false }
+    }
 }
 
 pub trait AudioScheduler {
@@ -33,6 +43,11 @@ impl ScheduledSoundQueue {
 
     pub fn is_empty(&self) -> bool {
         self.sounds.is_empty()
+    }
+
+    /// 述語が `true` を返すスケジュール音だけを保持する。`stop_sound` 等で使う。
+    pub fn retain(&mut self, mut keep: impl FnMut(&ScheduledSound) -> bool) {
+        self.sounds.retain(|sound| keep(sound));
     }
 }
 
@@ -65,6 +80,12 @@ mod tests {
     }
 
     fn sound(start_frame: u64, sound_id: u32) -> ScheduledSound {
-        ScheduledSound { start_frame, sound_id: SoundId(sound_id), volume: 1.0, pan: 0.0 }
+        ScheduledSound {
+            start_frame,
+            sound_id: SoundId(sound_id),
+            volume: 1.0,
+            pan: 0.0,
+            loop_playback: false,
+        }
     }
 }
