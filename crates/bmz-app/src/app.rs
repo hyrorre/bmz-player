@@ -319,15 +319,38 @@ impl WinitApp {
 
         let initial_window_mode = boot.app_config.video.mode.clone();
 
-        // システム SE / BGM facade を構築する。Stage 2e で `[audio]` の bgm_dir / se_dir /
-        // default_sound_dir / system_volume を反映する予定。現状は暫定で
-        // `defaultsound/` だけを使う SoundSetSelection を組む。
+        // システム SE / BGM facade を構築する。
+        // - `[audio].bgm_dir` / `se_dir` が指定されていれば再帰スキャンしてセットを集め、
+        //   その中からランダム選択する(beatoraja 互換)。
+        // - 空なら scan を省略し、`default_sound_dir` だけにフォールバックする。
         let system_sound = system_audio.as_ref().map(|audio| {
-            let selection = crate::system_sound::SoundSetSelection {
-                bgm_dir: None,
-                se_dir: None,
-                default_dir: Some(PathBuf::from("defaultsound")),
+            let audio_cfg = &boot.app_config.audio;
+            let bgm_candidates = if audio_cfg.bgm_dir.is_empty() {
+                Vec::new()
+            } else {
+                crate::system_sound::scan_sound_sets(
+                    Path::new(&audio_cfg.bgm_dir),
+                    crate::system_sound::SoundType::Select.file_name(),
+                )
             };
+            let se_candidates = if audio_cfg.se_dir.is_empty() {
+                Vec::new()
+            } else {
+                crate::system_sound::scan_sound_sets(
+                    Path::new(&audio_cfg.se_dir),
+                    crate::system_sound::SoundType::ResultClear.file_name(),
+                )
+            };
+            let default_dir = if audio_cfg.default_sound_dir.is_empty() {
+                None
+            } else {
+                Some(PathBuf::from(&audio_cfg.default_sound_dir))
+            };
+            let selection = crate::system_sound::select_random_sound_set(
+                &bgm_candidates,
+                &se_candidates,
+                default_dir,
+            );
             crate::system_sound_manager::SystemSoundManager::new(audio.engine(), &selection)
         });
 
@@ -1662,11 +1685,11 @@ impl WinitApp {
         }
     }
 
-    /// `master_volume = 1.0` 固定でシステム音を 1 発鳴らす。Stage 2e で
-    /// `app_config.audio.system_volume` を渡せるよう差し替える予定。
+    /// `[audio].system_volume` を反映してシステム音を鳴らす。
+    /// ボリュームは AudioEngine 側で 0.0..=1.0 にクランプされる。
     fn play_system_sound(&self, sound_type: crate::system_sound::SoundType) {
         if let Some(manager) = &self.system_sound {
-            manager.play(sound_type, 1.0);
+            manager.play(sound_type, self.boot.app_config.audio.system_volume);
         }
     }
 

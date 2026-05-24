@@ -43,6 +43,28 @@ pub struct AudioConfig {
     pub buffer_size: u32,
     pub exclusive_mode: bool,
     pub asio_driver: String,
+    /// beatoraja 互換のシステム BGM セット(`select.wav` を含むディレクトリの親)。
+    /// 空文字列ならスキャンせず、`default_sound_dir` だけを参照する。
+    #[serde(default)]
+    pub bgm_dir: String,
+    /// beatoraja 互換のシステム SE セット(`clear.wav` を含むディレクトリの親)。
+    /// 空文字列ならスキャンせず、`default_sound_dir` だけを参照する。
+    #[serde(default)]
+    pub se_dir: String,
+    /// 各システム音のフォールバック先(beatoraja 既定の `defaultsound/` 相当)。
+    #[serde(default = "default_sound_dir_default")]
+    pub default_sound_dir: String,
+    /// システム SE / BGM のマスターボリューム(0.0..=1.0)。
+    #[serde(default = "system_volume_default")]
+    pub system_volume: f32,
+}
+
+fn default_sound_dir_default() -> String {
+    "defaultsound".to_string()
+}
+
+fn system_volume_default() -> f32 {
+    1.0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -165,6 +187,10 @@ impl Default for AppConfig {
                 buffer_size: 256,
                 exclusive_mode: false,
                 asio_driver: String::new(),
+                bgm_dir: String::new(),
+                se_dir: String::new(),
+                default_sound_dir: default_sound_dir_default(),
+                system_volume: system_volume_default(),
             },
             video: VideoConfig {
                 mode: WindowMode::Windowed,
