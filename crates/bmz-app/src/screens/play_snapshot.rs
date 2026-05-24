@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use bmz_chart::model::{BgaAssetId, BgaEventKind, PlayableChart, TimingEventKind};
+use bmz_chart::model::{BgaAssetId, BgaEventKind, NoteKind, PlayableChart, TimingEventKind};
 use bmz_chart::timing::{TICKS_PER_BEAT, TimingMap};
 use bmz_core::judge::{Judge, TimingSide};
 use bmz_core::lane::Lane;
@@ -128,6 +128,10 @@ pub fn build_render_snapshot_with_bga_frames(
     for lane in Lane::ALL {
         let next_note_index = session.judge.lanes[lane.index()].next_note_index;
         for note in session.chart.notes_for_lane(lane).iter().skip(next_note_index) {
+            // Invisible / Mine は通常ノーツとしては描画しない（Mine は将来別テクスチャ対応）。
+            if matches!(note.kind, NoteKind::Invisible | NoteKind::Mine) {
+                continue;
+            }
             if let Some(y) = scroll.note_y(note.time, cursor_tick) {
                 snapshot.visible_notes[lane.index()].push(VisibleNote { lane, time: note.time, y });
             }
@@ -552,6 +556,35 @@ mod tests {
         let snapshot = build_render_snapshot(&session, TimeUs(0), &[], None);
 
         assert!(snapshot.visible_notes[Lane::Key1.index()].is_empty());
+    }
+
+    #[test]
+    fn build_render_snapshot_excludes_invisible_and_mine_notes() {
+        let mut chart = chart();
+        chart.lane_notes[Lane::Key2.index()].push(NoteEvent {
+            id: NoteId(2),
+            lane: Lane::Key2,
+            kind: NoteKind::Invisible,
+            tick: ChartTick(0),
+            time: TimeUs(1_000_000),
+            sound: None,
+        });
+        chart.lane_notes[Lane::Key3.index()].push(NoteEvent {
+            id: NoteId(3),
+            lane: Lane::Key3,
+            kind: NoteKind::Mine,
+            tick: ChartTick(0),
+            time: TimeUs(1_000_000),
+            sound: None,
+        });
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let session = build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
+
+        let snapshot = build_render_snapshot(&session, TimeUs(0), &[], None);
+
+        assert_eq!(snapshot.visible_notes[Lane::Key1.index()].len(), 1);
+        assert!(snapshot.visible_notes[Lane::Key2.index()].is_empty());
+        assert!(snapshot.visible_notes[Lane::Key3.index()].is_empty());
     }
 
     #[test]
