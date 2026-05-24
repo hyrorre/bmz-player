@@ -943,6 +943,8 @@ pub struct SkinDrawState {
     pub judge_timing_ms: Option<i32>,
     /// 過去ベストスコアのexスコア (NUMBER_HIGHSCORE=150, BARGRAPH_BESTSCORERATE=113 に使用)。
     pub best_ex_score: Option<u32>,
+    /// 過去ベストのクリアタイプ index (ref 371)。
+    pub best_clear_index: Option<i64>,
     /// ターゲットスコアのexスコア (NUMBER_TARGET_SCORE=121, BARGRAPH_TARGETSCORERATE=115 に使用)。
     pub target_ex_score: Option<u32>,
     /// 判定タイミングオフセット設定値 ms (NUMBER_JUDGETIMING=12 に使用、beatoraja の judgetiming 設定)。
@@ -1056,6 +1058,7 @@ impl Default for SkinDrawState {
             bga_stretch: 1,
             judge_timing_ms: None,
             best_ex_score: None,
+            best_clear_index: None,
             target_ex_score: None,
             judge_timing_offset_ms: 0,
             select_chart_count: 0,
@@ -3376,6 +3379,7 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool 
         196 | 197 | 198 | 1196..=1208 => select_replay_op_matches(op, state),
         200..=207 => select_rank_op_matches(op, state),
         300..=307 => select_small_rank_op_matches(op, state),
+        320..=327 => best_rank_op_matches(op, state),
         170 => !state.has_bga,
         171 => state.has_bga,
         // OPTION_LANECOVER1_CHANGING / OPTION_LANECOVER1_ON / OPTION_LIFT1_ON / OPTION_HIDDEN1_ON
@@ -3974,7 +3978,7 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         // 判定タイミングオフセット設定値 (NUMBER_JUDGETIMING=12)
         12 => Some(state.judge_timing_offset_ms as i64),
         // ベストスコア / ターゲットスコア (DB から供給、未取得時は None)
-        150 => state.best_ex_score.map(|s| s as i64),
+        150 | 170 => state.best_ex_score.map(|s| s as i64),
         121 => state.target_ex_score.map(|s| s as i64),
         122 | 123 => state
             .target_ex_score
@@ -4001,7 +4005,7 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
             (state.judge_counts.bad + state.judge_counts.poor) as i64 - target as i64
         }),
         // NUMBER_TARGET_CLEAR=371
-        371 => state.target_clear_index,
+        371 => state.best_clear_index.or(state.target_clear_index),
         // Fast/Slow split (PGREAT/GREAT/GOOD/BAD/POOR)
         410 => state.fast_slow_counts.map(|c| c.fast_pgreat as i64),
         411 => state.fast_slow_counts.map(|c| c.slow_pgreat as i64),
@@ -4451,6 +4455,13 @@ fn select_small_rank_op_matches(op: i32, state: SkinDrawState) -> bool {
     rank <= 6 && op == 301 + rank as i32
 }
 
+fn best_rank_op_matches(op: i32, state: SkinDrawState) -> bool {
+    let Some(rank) = rank_index(state.best_ex_score, state.total_notes) else {
+        return false;
+    };
+    op == 320 + rank as i32
+}
+
 /// 現在のランク判定の基準値 (ex_score, total_notes)。
 /// Result 画面なら結果値、それ以外は select の選択中曲のベスト値を使う。
 fn current_rank_inputs(state: SkinDrawState) -> (Option<u32>, u32) {
@@ -4463,6 +4474,10 @@ fn current_rank_inputs(state: SkinDrawState) -> (Option<u32>, u32) {
 
 fn current_rank_index(state: SkinDrawState) -> Option<usize> {
     let (ex_score, total_notes) = current_rank_inputs(state);
+    rank_index(ex_score, total_notes)
+}
+
+fn rank_index(ex_score: Option<u32>, total_notes: u32) -> Option<usize> {
     let ex_score = ex_score?;
     let max_score = total_notes.saturating_mul(2);
     if max_score == 0 {
@@ -8314,6 +8329,7 @@ mod tests {
             },
             fast_slow_counts: Some(fast_slow),
             best_ex_score: Some(1700),
+            best_clear_index: Some(6),
             target_ex_score: Some(1900),
             best_max_combo: Some(800),
             target_max_combo: Some(1000),
@@ -8324,6 +8340,9 @@ mod tests {
         };
 
         // 符号付き差分
+        assert_eq!(skin_state_number(170, state), Some(1700));
+        assert_eq!(skin_state_number(183, state), Some(85));
+        assert_eq!(skin_state_number(184, state), Some(0));
         assert_eq!(skin_state_number(152, state), Some(1888 - 1700));
         assert_eq!(skin_state_number(172, state), Some(1888 - 1700));
         assert_eq!(skin_state_number(153, state), Some(1888 - 1900));
@@ -8332,7 +8351,9 @@ mod tests {
         assert_eq!(skin_state_number(176, state), Some(0));
         // 現在 misscount = bad+poor = 8、target = 0 → diff = 8
         assert_eq!(skin_state_number(178, state), Some(8));
-        assert_eq!(skin_state_number(371, state), Some(8));
+        assert_eq!(skin_state_number(371, state), Some(6));
+        assert!(test_skin_op(321, &[], state));
+        assert!(!test_skin_op(320, &[], state));
 
         // Fast/Slow 内訳
         assert_eq!(skin_state_number(410, state), Some(350));

@@ -498,6 +498,7 @@ impl WinitApp {
                 score_history_id: summary.score_history_id,
                 replay_saved: !summary.replay_path.is_empty(),
                 best_ex_score: summary.best_ex_score,
+                best_clear_type: summary.best_clear_type,
                 target_ex_score: summary.target_ex_score,
                 best_max_combo: summary.best_max_combo,
                 target_max_combo: summary.target_max_combo,

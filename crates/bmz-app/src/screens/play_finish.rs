@@ -1,4 +1,5 @@
 use anyhow::{Result, bail};
+use bmz_core::clear::ClearType;
 use bmz_gameplay::result::PlayResult;
 use bmz_gameplay::session::{GameSession, PlayState};
 
@@ -91,10 +92,28 @@ pub fn finish_session_result(
         && let Some(best) = bests.into_iter().next()
     {
         summary.best_ex_score = Some(best.ex_score);
+        summary.best_clear_type = clear_type_from_name(&best.clear_type);
         summary.best_max_combo = Some(best.max_combo);
     }
 
     Ok(FinishedPlaySession { result, stored, summary })
+}
+
+fn clear_type_from_name(name: &str) -> Option<ClearType> {
+    match name {
+        "NoPlay" => Some(ClearType::NoPlay),
+        "Failed" => Some(ClearType::Failed),
+        "AssistEasy" => Some(ClearType::AssistEasy),
+        "LightAssistEasy" => Some(ClearType::LightAssistEasy),
+        "Easy" => Some(ClearType::Easy),
+        "Normal" => Some(ClearType::Normal),
+        "Hard" => Some(ClearType::Hard),
+        "ExHard" => Some(ClearType::ExHard),
+        "FullCombo" => Some(ClearType::FullCombo),
+        "Perfect" => Some(ClearType::Perfect),
+        "Max" => Some(ClearType::Max),
+        _ => None,
+    }
 }
 
 pub fn finish_session_result_once(

@@ -142,6 +142,7 @@ pub fn sample_result_scene() -> AppSceneSnapshot {
         score_history_id: 42,
         replay_saved: true,
         best_ex_score: Some(1700),
+        best_clear_type: Some(bmz_core::clear::ClearType::Hard),
         target_ex_score: Some(1900),
         best_max_combo: Some(820),
         target_max_combo: Some(1000),
