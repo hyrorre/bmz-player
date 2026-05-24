@@ -131,10 +131,15 @@ mod tests {
 
         let binding = lane_binding_from_profile_input(&profile.input);
 
-        assert_eq!(binding.entries.len(), 8);
+        // キーボード 8 + ゲームパッド 9 (スクラッチ ×2 + 鍵盤 ×7) = 17
+        assert_eq!(binding.entries.len(), 17);
         assert!(binding.entries.iter().any(|entry| {
             entry.lane == Lane::Scratch
                 && entry.control == PhysicalControl::KeyboardKey("LShift".to_string())
+        }));
+        assert!(binding.entries.iter().any(|entry| {
+            entry.lane == Lane::Scratch
+                && entry.control == PhysicalControl::GamepadButton("AxisLeftX+".to_string())
         }));
     }
 }

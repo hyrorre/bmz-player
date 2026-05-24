@@ -383,7 +383,7 @@ impl ProfileConfig {
             input: ProfileInputConfig {
                 scratch_mode: ScratchInputMode::Normal,
                 start_key: default_start_key(),
-                bindings: default_keyboard_bindings(),
+                bindings: default_bindings(),
                 analog_scratch_sensitivity: default_analog_scratch_sensitivity(),
                 analog_scratch_timeout_ms: default_analog_scratch_timeout_ms(),
             },
@@ -410,6 +410,12 @@ impl ProfileConfig {
     }
 }
 
+pub fn default_bindings() -> Vec<BindingConfigEntry> {
+    let mut bindings = default_keyboard_bindings();
+    bindings.extend(default_gamepad_bindings());
+    bindings
+}
+
 pub fn default_keyboard_bindings() -> Vec<BindingConfigEntry> {
     vec![
         binding("LShift", LaneConfig::Scratch),
@@ -423,8 +429,26 @@ pub fn default_keyboard_bindings() -> Vec<BindingConfigEntry> {
     ]
 }
 
+pub fn default_gamepad_bindings() -> Vec<BindingConfigEntry> {
+    vec![
+        gamepad_binding("AxisLeftX+", LaneConfig::Scratch),
+        gamepad_binding("AxisLeftX-", LaneConfig::Scratch),
+        gamepad_binding("Button1", LaneConfig::Key1),
+        gamepad_binding("Button2", LaneConfig::Key2),
+        gamepad_binding("Button3", LaneConfig::Key3),
+        gamepad_binding("Button4", LaneConfig::Key4),
+        gamepad_binding("Button5", LaneConfig::Key5),
+        gamepad_binding("Button6", LaneConfig::Key6),
+        gamepad_binding("Button7", LaneConfig::Key7),
+    ]
+}
+
 fn binding(control: &str, lane: LaneConfig) -> BindingConfigEntry {
     BindingConfigEntry { device: "keyboard".to_string(), control: control.to_string(), lane }
+}
+
+fn gamepad_binding(control: &str, lane: LaneConfig) -> BindingConfigEntry {
+    BindingConfigEntry { device: "gamepad".to_string(), control: control.to_string(), lane }
 }
 
 #[cfg(test)]
