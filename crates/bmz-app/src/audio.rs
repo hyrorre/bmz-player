@@ -70,6 +70,34 @@ pub fn open_app_audio_output(config: &AudioConfig, engine: AudioEngine) -> Resul
     Ok(AppAudioOutput { engine, output })
 }
 
+/// アプリ全体で常時 ON のシステム SE / BGM 出力。
+///
+/// プレイセッションの [`AppAudioOutput`] とは別の `cpal` ストリームを持ち、
+/// 選曲画面の BGM やシーン遷移の効果音をプレイ中であっても並行して鳴らせる。
+/// macOS / WASAPI shared / PulseAudio など、デフォルト出力デバイスに対して
+/// 複数ストリームの mix を OS 側がサポートしている環境を前提とする。
+pub struct SystemAudio {
+    pub engine: SharedAudioEngine,
+    pub output: CpalOutput,
+}
+
+impl SystemAudio {
+    /// クロックを開始してストリームを走らせ、`play_now` / `stop_sound` を即座に
+    /// 反映できる状態にする。`chart_zero_time` 引数はシステム音のスケジューリング
+    /// (`start_frame = 0`)には影響しないため `TimeUs(0)` 固定で良い。
+    pub fn open(config: &AudioConfig) -> Result<Self> {
+        ensure_default_device_supported(config)?;
+        let engine = Arc::new(Mutex::new(AudioEngine::default()));
+        let mut output = CpalBackend::open_default(Arc::clone(&engine))?;
+        output.play(TimeUs(0)).context("failed to start system audio output stream")?;
+        Ok(Self { engine, output })
+    }
+
+    pub fn engine(&self) -> SharedAudioEngine {
+        Arc::clone(&self.engine)
+    }
+}
+
 pub fn open_prepared_play_audio(
     config: &AudioConfig,
     prepared: PreparedPlaySession,

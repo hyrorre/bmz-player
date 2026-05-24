@@ -72,10 +72,20 @@ pub async fn run_with_options(options: AppOptions) -> Result<()> {
         fetch_configured_difficulty_tables(&mut boot).await;
     }
 
+    // システム SE / BGM 用の cpal ストリームを起動する。
+    // 開けない環境(ヘッドレス CI 等)はサイレントモードでアプリ起動を継続する。
+    let system_audio = match crate::audio::SystemAudio::open(&boot.app_config.audio) {
+        Ok(audio) => Some(audio),
+        Err(error) => {
+            tracing::warn!(%error, "failed to open system audio output; running without system sounds");
+            None
+        }
+    };
+
     let event_loop = EventLoop::new().context("failed to create event loop")?;
     event_loop.set_control_flow(ControlFlow::Poll);
 
-    let mut app = WinitApp::new(boot, options)?;
+    let mut app = WinitApp::new(boot, options, system_audio)?;
     tracing::info!("starting winit event loop");
     event_loop.run_app(&mut app).context("winit event loop failed")
 }
@@ -153,6 +163,11 @@ struct WinitApp {
     pending_play_skin: bool,
     pending_result_skin: bool,
     pending_skin_installs: Vec<PendingSkinInstall>,
+    /// システム SE / BGM を再生する cpal ストリーム。
+    /// 開けない環境では `None` で、システム音はサイレント。
+    /// Stage 2c でデコード投入、Stage 2d で各シーンから `play_now` を呼ぶようになる。
+    #[allow(dead_code)]
+    system_audio: Option<crate::audio::SystemAudio>,
     /// 選曲画面でESCを長押し中の開始時刻。離されたり画面を抜けると None になる。
     select_exit_hold_started_at: Option<Instant>,
     /// プレイ中の Start キー直近の押下時刻。連続押し判定で使用。
@@ -236,7 +251,11 @@ enum AppSceneKind {
 }
 
 impl WinitApp {
-    fn new(boot: BootstrappedApp, options: AppOptions) -> Result<Self> {
+    fn new(
+        boot: BootstrappedApp,
+        options: AppOptions,
+        system_audio: Option<crate::audio::SystemAudio>,
+    ) -> Result<Self> {
         let folder_stack = initial_folder_stack(&boot.app_config);
         let select_items = load_items_for_stack(&boot, &folder_stack);
         let boot_sample_chart_id = options
@@ -333,6 +352,7 @@ impl WinitApp {
             pending_play_skin,
             pending_result_skin,
             pending_skin_installs: Vec::new(),
+            system_audio,
             select_exit_hold_started_at: None,
             last_play_start_press_at: None,
             egui: None,
