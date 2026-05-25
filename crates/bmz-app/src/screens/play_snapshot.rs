@@ -360,9 +360,35 @@ fn factor_before(segments: &[(f64, f64)], tick: f64) -> f64 {
     current
 }
 
-/// 指定 tick における SPEED の現在値を返す。
+/// 指定 tick における SPEED の現在値を返す。beatoraja 仕様に合わせ、隣接イベント間は
+/// 線形補間。最初のイベント前は 1.0、最後のイベント以降はその値で固定。
 fn speed_at(segments: &[(f64, f64)], tick: f64) -> f64 {
-    factor_before(segments, tick)
+    if segments.is_empty() {
+        return 1.0;
+    }
+    // tick を挟む直前 (prev) / 直後 (next) のイベントを探す。
+    let mut prev: Option<(f64, f64)> = None;
+    let mut next: Option<(f64, f64)> = None;
+    for &(t, f) in segments {
+        if t <= tick {
+            prev = Some((t, f));
+        } else {
+            next = Some((t, f));
+            break;
+        }
+    }
+    match (prev, next) {
+        (None, _) => 1.0,
+        (Some((_, f)), None) => f,
+        (Some((t0, f0)), Some((t1, f1))) => {
+            let span = t1 - t0;
+            if span <= f64::EPSILON {
+                return f1;
+            }
+            let ratio = ((tick - t0) / span).clamp(0.0, 1.0);
+            f0 + (f1 - f0) * ratio
+        }
+    }
 }
 
 fn display_judge_counts(session: &GameSession) -> DisplayJudgeCounts {
@@ -634,6 +660,28 @@ mod tests {
     }
 
     #[test]
+    fn speed_at_interpolates_linearly_between_events() {
+        let segments = [(0.0, 1.0), (3840.0, 2.0)];
+        // 区間内の中央は中間値 1.5。
+        assert!((super::speed_at(&segments, 1920.0) - 1.5).abs() < 1e-6);
+        // 1/4 地点。
+        assert!((super::speed_at(&segments, 960.0) - 1.25).abs() < 1e-6);
+        // 境界の値そのもの。
+        assert!((super::speed_at(&segments, 0.0) - 1.0).abs() < 1e-6);
+        assert!((super::speed_at(&segments, 3840.0) - 2.0).abs() < 1e-6);
+        // 最後のイベント以降はその factor で固定 (補間されない)。
+        assert!((super::speed_at(&segments, 5000.0) - 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn speed_at_returns_one_before_first_event() {
+        let segments = [(1000.0, 2.0)];
+        assert!((super::speed_at(&segments, 500.0) - 1.0).abs() < 1e-6);
+        assert!((super::speed_at(&segments, 1000.0) - 2.0).abs() < 1e-6);
+        assert!((super::speed_at(&segments, 2000.0) - 2.0).abs() < 1e-6);
+    }
+
+    #[test]
     fn build_render_snapshot_applies_speed_factor() {
         use bmz_chart::model::SpeedEvent;
         let mut chart = chart();
@@ -646,6 +694,30 @@ mod tests {
         let snapshot = build_render_snapshot(&session, TimeUs(0), &[], None);
         let y = snapshot.visible_notes[Lane::Key1.index()][0].y;
         assert!((y - 1.0).abs() < 1e-3, "expected ~1.0 with SPEED 2.0, got {y}");
+    }
+
+    #[test]
+    fn build_render_snapshot_interpolates_speed_between_events() {
+        use bmz_chart::model::SpeedEvent;
+        let mut chart = chart();
+        // BPM 120 / 4 拍 = 3840 ticks。SPEED を tick=0..3840 で 1.0→3.0 へ補間。
+        // chart() のノートは TimeUs(1_000_000) = 1920 ticks (中央) なので、
+        // 補間値は 2.0 になる。base 進捗 0.5 × SPEED 2.0 = 1.0 (画面上端)。
+        chart.speed_events = vec![
+            SpeedEvent { tick: ChartTick(0), time: TimeUs(0), factor: 1.0 },
+            SpeedEvent { tick: ChartTick(3840), time: TimeUs(2_000_000), factor: 3.0 },
+        ];
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session =
+            build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
+        session.hispeed = 1.0;
+
+        let snapshot = build_render_snapshot(&session, TimeUs(0), &[], None);
+        let y = snapshot.visible_notes[Lane::Key1.index()][0].y;
+        assert!(
+            (y - 1.0).abs() < 1e-3,
+            "expected ~1.0 from linear interpolation (0.5 base × 2.0 mid speed), got {y}"
+        );
     }
 
     #[test]
