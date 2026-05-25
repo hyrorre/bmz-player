@@ -2575,7 +2575,17 @@ impl SkinDocument {
                 &enabled_options,
             )
         {
-            apply_skin_offset_ids_to_frame(&[OFFSET_JUDGE_1P], &mut number_frame, offset_state);
+            // beatoraja の SkinNumber は `setRelative(true)` のため、OFFSET_JUDGE_1P の
+            // x/y シフトを受けない (w/h/r/a のみ加算)。
+            // ここで通常の center-anchor シフトを適用すると、コンボ digit 位置が
+            // base_frame.y (= 適用済み image_frame.y) + frame.y で
+            // offset.y/2 ぶん**二重適用**され、判定文字とコンボ数の Y がずれる。
+            if let Some(offset) = offset_state.skin_offsets.get(OFFSET_JUDGE_1P) {
+                number_frame.w += offset.w;
+                number_frame.h += offset.h;
+                number_frame.angle += offset.r;
+                number_frame.a = (number_frame.a + offset.a).clamp(0, 255);
+            }
             apply_skin_offset_to_frame(number_destination, &mut number_frame, offset_state, false);
             items.extend(self.value_number_render_items(
                 &number_destination.id,
@@ -9221,6 +9231,79 @@ mod tests {
 
         assert!(approx_eq(rect.y, 0.45));
         assert!(approx_eq(rect.height, 0.3));
+    }
+
+    #[test]
+    fn judge_offset_height_keeps_image_and_combo_y_aligned() {
+        // beatoraja は SkinNumber を `setRelative(true)` で扱うため、
+        // OFFSET_JUDGE_1P.h を変えても 判定文字 (image) とコンボ数 (number)
+        // の Y 位置は同じ量だけシフトする (中心アンカー伸縮)。
+        // 過去には number_frame にも x/y シフトが二重適用され、
+        // 判定文字とコンボ数の Y がずれていた。
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "w": 100, "h": 100,
+                "source": [{ "id": "src", "path": "judge.png" }],
+                "image": [{ "id": "judgef-pg", "src": "src", "x": 0, "y": 0, "w": 10, "h": 10 }],
+                "value": [{
+                    "id": "combo-num", "src": "src",
+                    "x": 0, "y": 10, "w": 10, "h": 20,
+                    "divx": 10, "divy": 1, "digit": 4, "ref": 102
+                }],
+                "judge": [{
+                    "id": "judge",
+                    "images": [
+                        { "id": "judgef-pg", "dst": [
+                            { "time": 0, "x": 10, "y": 20, "w": 30, "h": 10 },
+                            { "time": 500 }
+                        ]}
+                    ],
+                    "numbers": [
+                        { "id": "combo-num", "dst": [
+                            { "time": 0, "x": 0, "y": 30, "w": 10, "h": 20 },
+                            { "time": 500 }
+                        ]}
+                    ]
+                }]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = mock_source("src", 10.0, 10.0);
+
+        fn render_y_positions(
+            document: &SkinDocument,
+            sources: &HashMap<String, SkinDocumentTexture>,
+            offset_h: i32,
+        ) -> (f32, f32) {
+            let mut offsets = SkinOffsetValues::default();
+            offsets.set(
+                OFFSET_JUDGE_1P,
+                crate::skin_offset::SkinOffsetValue { x: 0, y: 0, w: 0, h: offset_h, r: 0, a: 0 },
+            );
+            let items = document
+                .judge_render_items_with_offsets("PGREAT", 42, 0, offsets, sources)
+                .unwrap();
+            // [0] = 判定文字 image, [1..] = combo digit images
+            let SkinRenderItem::Image { rect: image_rect, .. } = &items[0] else {
+                panic!("first item should be image")
+            };
+            let SkinRenderItem::Image { rect: combo_rect, .. } = &items[1] else {
+                panic!("second item should be first combo digit")
+            };
+            (image_rect.y + image_rect.height / 2.0, combo_rect.y + combo_rect.height / 2.0)
+        }
+
+        let (image_center_y_0, combo_center_y_0) = render_y_positions(&document, &sources, 0);
+        let (image_center_y_h, combo_center_y_h) = render_y_positions(&document, &sources, 20);
+
+        let image_shift = image_center_y_h - image_center_y_0;
+        let combo_shift = combo_center_y_h - combo_center_y_0;
+        assert!(
+            approx_eq(image_shift, combo_shift),
+            "image Y shift {image_shift} should match combo Y shift {combo_shift}"
+        );
     }
 
     #[test]
