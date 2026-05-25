@@ -14,7 +14,7 @@ use crate::gauge::GaugeState;
 use crate::input::system::InputSystem;
 use crate::input::translator::{InputTimestampAnchor, InputTimingContext};
 use crate::judge::engine::JudgeEngine;
-use crate::judge::model::{JudgeOutcome, JudgementEvent};
+use crate::judge::model::{JudgeOutcome, JudgementEvent, MineHitEvent};
 use crate::replay::{ReplayPlayer, ReplayRecorder};
 use crate::score::ScoreState;
 
@@ -112,12 +112,17 @@ pub struct GameSession {
     pub poor_bga_duration_us: i64,
     pub bga_stretch: i32,
     pub input_timestamp_anchor: Option<InputTimestampAnchor>,
+    /// 当該フレーム中に発火した Mine ヒット。`advance_session_frame` の終端で
+    /// `SessionFrame.mine_hits` に吸い出される（app 層が地雷 SE を鳴らす）。
+    pub pending_mine_hits: Vec<MineHitEvent>,
     pub state: PlayState,
 }
 
 #[derive(Debug, Clone)]
 pub struct FrameOutput<TSnapshot> {
     pub render_snapshot: TSnapshot,
+    /// 当該フレームで踏んだ Mine ノーツ。app 層が地雷 SE を鳴らすのに使う。
+    pub mine_hits: Vec<MineHitEvent>,
     pub state: PlayState,
 }
 
@@ -125,6 +130,9 @@ pub struct FrameOutput<TSnapshot> {
 pub struct SessionFrame {
     pub times: FrameTimes,
     pub judgements: Vec<JudgementEvent>,
+    /// 当該フレームで踏んだ Mine ノーツ。地雷 SE 再生など、UI / audio 側の
+    /// 副作用処理に使う。`apply_judge_outcome` の中ですでにゲージは削っている。
+    pub mine_hits: Vec<MineHitEvent>,
     pub state: PlayState,
 }
 
@@ -177,8 +185,10 @@ pub fn apply_judge_outcome(
         events.push(event);
     }
     for hit in outcome.mine_hits {
-        // Mine はスコア/コンボに影響を与えず、ゲージのみ削る。
+        // Mine はスコア/コンボに影響を与えず、ゲージのみ削る。SE 再生 (= app 層の
+        // 副作用) は `pending_mine_hits` に積んでフレーム終端で吸い出す。
         session.gauge.apply_mine(hit.damage);
+        session.pending_mine_hits.push(hit);
     }
     events
 }
@@ -391,7 +401,8 @@ pub fn advance_session_frame(
         }
     }
 
-    SessionFrame { times, judgements, state: session.state }
+    let mine_hits = std::mem::take(&mut session.pending_mine_hits);
+    SessionFrame { times, judgements, mine_hits, state: session.state }
 }
 
 fn update_full_combo_timer(session: &mut GameSession, judgements: &[JudgementEvent]) {

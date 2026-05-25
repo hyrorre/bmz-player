@@ -135,6 +135,7 @@ pub fn build_game_session_with_input_backend(
         poor_bga_duration_us: poor_bga_duration_us_from_profile(profile),
         bga_stretch: bga_stretch_from_profile(profile),
         input_timestamp_anchor: None,
+        pending_mine_hits: Vec::new(),
         state: PlayState::Ready,
     }
 }

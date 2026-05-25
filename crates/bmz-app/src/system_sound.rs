@@ -41,10 +41,12 @@ pub enum SoundType {
     Select,
     /// Decide シーン BGM(ループ)。
     Decide,
+    /// 地雷ノーツを踏んだときの固定 SE (beatoraja の `defaultsound/landmine.wav` 相当)。
+    Landmine,
 }
 
 impl SoundType {
-    pub const ALL: [SoundType; 22] = [
+    pub const ALL: [SoundType; 23] = [
         SoundType::Scratch,
         SoundType::FolderOpen,
         SoundType::FolderClose,
@@ -67,6 +69,7 @@ impl SoundType {
         SoundType::GuideSeMiss,
         SoundType::Select,
         SoundType::Decide,
+        SoundType::Landmine,
     ];
 
     /// beatoraja 既定のファイル名(セットディレクトリ直下から探す)。
@@ -96,6 +99,7 @@ impl SoundType {
             SoundType::GuideSeMiss => "guide-ms.wav",
             SoundType::Select => "select.wav",
             SoundType::Decide => "decide.wav",
+            SoundType::Landmine => "landmine.wav",
         }
     }
 
@@ -258,6 +262,8 @@ mod tests {
         assert!(!SoundType::Scratch.is_bgm());
         assert_eq!(SoundType::Scratch.file_name(), "scratch.wav");
         assert_eq!(SoundType::ResultClear.file_name(), "clear.wav");
+        assert_eq!(SoundType::Landmine.file_name(), "landmine.wav");
+        assert!(!SoundType::Landmine.is_bgm());
     }
 
     #[test]

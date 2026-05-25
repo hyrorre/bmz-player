@@ -1408,15 +1408,19 @@ impl WinitApp {
             now_unix_seconds(),
         ) {
             Ok(PlayAdvanceOutcome::Playing(frame)) => {
+                let mine_hits = frame.mine_hits.len();
                 let mut snapshot = frame.render_snapshot;
                 snapshot.play_elapsed_time = self.play_elapsed_time();
                 self.last_play_snapshot = Some(snapshot);
+                self.play_landmine_se(mine_hits);
             }
             Ok(PlayAdvanceOutcome::Finished { frame, finished }) => {
                 let hispeed = active_play.running.session.hispeed;
+                let mine_hits = frame.mine_hits.len();
                 let mut snapshot = frame.render_snapshot;
                 snapshot.play_elapsed_time = self.play_elapsed_time();
                 self.last_play_snapshot = Some(snapshot);
+                self.play_landmine_se(mine_hits);
                 // active_play がまだ残っている内に hispeed/lane_cover/lift を profile に保存する。
                 self.save_current_play_options(Some(hispeed), "play finished");
                 // リザルト画面へ移っても曲の最後まで鳴らすため、音声出力だけは
@@ -1787,6 +1791,16 @@ impl WinitApp {
         if let Some(manager) = &self.system_sound {
             manager.play(sound_type, self.boot.profile_config.system_sound.volume);
         }
+    }
+
+    /// 当該フレームで踏んだ Mine の数だけ地雷 SE を鳴らす。
+    /// 連続ヒットを重ね鳴らししないよう、複数同時ヒットでも1回にまとめる
+    /// (`hits == 0` のときは no-op)。
+    fn play_landmine_se(&self, hits: usize) {
+        if hits == 0 {
+            return;
+        }
+        self.play_system_sound(crate::system_sound::SoundType::Landmine);
     }
 
     fn stop_system_sound(&self, sound_type: crate::system_sound::SoundType) {

@@ -62,7 +62,7 @@ pub fn advance_play_screen_with_bga_frames(
         best_ex_score,
         bga_frames,
     );
-    FrameOutput { render_snapshot, state: frame.state }
+    FrameOutput { render_snapshot, mine_hits: frame.mine_hits, state: frame.state }
 }
 
 pub fn advance_play_screen_until_result(

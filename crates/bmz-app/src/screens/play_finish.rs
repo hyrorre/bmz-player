@@ -433,6 +433,7 @@ mod tests {
             poor_bga_duration_us: 500_000,
             bga_stretch: 1,
             input_timestamp_anchor: None,
+            pending_mine_hits: Vec::new(),
             state: PlayState::Finished,
         }
     }
