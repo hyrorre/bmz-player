@@ -35,14 +35,43 @@ pub enum ImportError {
 pub enum ImportWarning {
     EncodingFallback,
     TextReplacementOccurred,
-    UnsupportedCommand { command: String },
-    UnsupportedChannel { channel: u16 },
-    MissingWavDefinition { key: u16 },
-    MissingSoundFile { path: PathBuf },
-    MissingBmpDefinition { key: u16 },
-    MissingBmpFile { path: PathBuf },
-    MissingBpmDefinition { key: u16 },
-    MissingStopDefinition { key: u16 },
-    LnobjWithoutStart { lane: Lane },
-    UnterminatedLongNote { lane: Lane },
+    /// bms-rs から返される [`bms_rs::bms::BmsWarning`] を表示用にラップしたもの。
+    /// `code` は安定した分類タグ (e.g. `ParseSyntaxError`, `PlayingTotalUndefined`)、
+    /// `message` は人間向け詳細。`library_db` の `chart_import_warnings` テーブルへ
+    /// `code` がそのまま入る。
+    ParserDiagnostic {
+        code: String,
+        message: String,
+    },
+    /// 内部使用: 将来別 parser を呼ぶ場合用に残してある汎用フォールバック。
+    UnsupportedCommand {
+        command: String,
+    },
+    UnsupportedChannel {
+        channel: u16,
+    },
+    MissingWavDefinition {
+        key: u16,
+    },
+    MissingSoundFile {
+        path: PathBuf,
+    },
+    MissingBmpDefinition {
+        key: u16,
+    },
+    MissingBmpFile {
+        path: PathBuf,
+    },
+    MissingBpmDefinition {
+        key: u16,
+    },
+    MissingStopDefinition {
+        key: u16,
+    },
+    LnobjWithoutStart {
+        lane: Lane,
+    },
+    UnterminatedLongNote {
+        lane: Lane,
+    },
 }

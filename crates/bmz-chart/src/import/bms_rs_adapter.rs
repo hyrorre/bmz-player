@@ -410,8 +410,47 @@ fn map_lane(side: PlayerSide, key: Key) -> Option<Lane> {
     }
 }
 
+/// bms-rs の [`BmsWarning`] を `ImportWarning::ParserDiagnostic` に分類して写像する。
+/// `code` は `library_db.chart_import_warnings.code` に保存される安定識別子。
 fn map_bms_warning(w: &BmsWarning) -> Option<ImportWarning> {
-    // 細かい variant までは Phase 5 で整理する。ここでは汎用 UnsupportedCommand に
-    // まとめ、ロード自体は継続させる。
-    Some(ImportWarning::UnsupportedCommand { command: format!("{w:?}") })
+    use bms_rs::bms::parse::ParseWarning;
+    use bms_rs::bms::parse::check_playing::{PlayingError, PlayingWarning};
+
+    let (code, message) = match w {
+        BmsWarning::Lex(inner) => ("LexWarning", format!("{}", inner.content())),
+        BmsWarning::Parse(inner) => {
+            let code = match inner.content() {
+                ParseWarning::SyntaxError(_) => "ParseSyntaxError",
+                ParseWarning::UndefinedObject(_) => "ParseUndefinedObject",
+                ParseWarning::DuplicatingDef(_) => "ParseDuplicatingDef",
+                ParseWarning::DuplicatingTrackObj(_, _) => "ParseDuplicatingTrackObj",
+                ParseWarning::DuplicatingChannelObj(_, _) => "ParseDuplicatingChannelObj",
+                ParseWarning::OutOfBase62 => "ParseOutOfBase62",
+            };
+            (code, format!("{}", inner.content()))
+        }
+        BmsWarning::PlayingWarning(w) => {
+            let code = match w {
+                PlayingWarning::TotalUndefined => "PlayingTotalUndefined",
+                PlayingWarning::NoDisplayableNotes => "PlayingNoDisplayableNotes",
+                PlayingWarning::NoPlayableNotes => "PlayingNoPlayableNotes",
+                PlayingWarning::StartBpmUndefined => "PlayingStartBpmUndefined",
+                _ => "PlayingWarningOther",
+            };
+            (code, format!("{w}"))
+        }
+        BmsWarning::PlayingError(e) => {
+            let code = match e {
+                PlayingError::InvalidBpm { .. } => "PlayingInvalidBpm",
+                PlayingError::InvalidStop { .. } => "PlayingInvalidStop",
+                PlayingError::InvalidSpeed { .. } => "PlayingInvalidSpeed",
+                PlayingError::InvalidScroll { .. } => "PlayingInvalidScroll",
+                PlayingError::InvalidSeek { .. } => "PlayingInvalidSeek",
+                _ => "PlayingErrorOther",
+            };
+            (code, format!("{e}"))
+        }
+        _ => ("BmsWarningOther", format!("{w:?}")),
+    };
+    Some(ImportWarning::ParserDiagnostic { code: code.to_string(), message })
 }

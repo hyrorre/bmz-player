@@ -182,7 +182,7 @@ impl LibraryDatabase {
         let mut seen = std::collections::HashSet::new();
         for warning in warnings {
             let (code, message) = warning_details(warning);
-            if !seen.insert((code, message.clone())) {
+            if !seen.insert((code.clone(), message.clone())) {
                 continue;
             }
             conn.prepare_cached(
@@ -821,43 +821,47 @@ fn folder_path(path: &Path) -> String {
     to_folder_key(&path.parent().map(path_to_string).unwrap_or_default())
 }
 
-fn warning_details(warning: &ImportWarning) -> (&'static str, String) {
+fn warning_details(warning: &ImportWarning) -> (String, String) {
     match warning {
         ImportWarning::EncodingFallback => {
-            ("EncodingFallback", "decoded chart as Shift_JIS".to_string())
+            ("EncodingFallback".into(), "decoded chart as Shift_JIS".to_string())
         }
         ImportWarning::TextReplacementOccurred => {
-            ("TextReplacementOccurred", "text decoder replaced invalid bytes".to_string())
+            ("TextReplacementOccurred".into(), "text decoder replaced invalid bytes".to_string())
+        }
+        ImportWarning::ParserDiagnostic { code, message } => {
+            // bms-rs から細分化済みの code をそのまま `chart_import_warnings.code` に保存する。
+            (code.clone(), message.clone())
         }
         ImportWarning::UnsupportedCommand { command } => {
-            ("UnsupportedCommand", format!("unsupported command: {command}"))
+            ("UnsupportedCommand".into(), format!("unsupported command: {command}"))
         }
         ImportWarning::UnsupportedChannel { channel } => {
-            ("UnsupportedChannel", format!("unsupported channel: {channel}"))
+            ("UnsupportedChannel".into(), format!("unsupported channel: {channel}"))
         }
         ImportWarning::MissingWavDefinition { key } => {
-            ("MissingWavDefinition", format!("missing WAV definition: {key}"))
+            ("MissingWavDefinition".into(), format!("missing WAV definition: {key}"))
         }
         ImportWarning::MissingSoundFile { path } => {
-            ("MissingSoundFile", format!("missing sound file: {}", path_to_string(path)))
+            ("MissingSoundFile".into(), format!("missing sound file: {}", path_to_string(path)))
         }
         ImportWarning::MissingBmpDefinition { key } => {
-            ("MissingBmpDefinition", format!("missing BMP definition: {key}"))
+            ("MissingBmpDefinition".into(), format!("missing BMP definition: {key}"))
         }
         ImportWarning::MissingBmpFile { path } => {
-            ("MissingBmpFile", format!("missing BMP file: {}", path_to_string(path)))
+            ("MissingBmpFile".into(), format!("missing BMP file: {}", path_to_string(path)))
         }
         ImportWarning::MissingBpmDefinition { key } => {
-            ("MissingBpmDefinition", format!("missing BPM definition: {key}"))
+            ("MissingBpmDefinition".into(), format!("missing BPM definition: {key}"))
         }
         ImportWarning::MissingStopDefinition { key } => {
-            ("MissingStopDefinition", format!("missing STOP definition: {key}"))
+            ("MissingStopDefinition".into(), format!("missing STOP definition: {key}"))
         }
         ImportWarning::LnobjWithoutStart { lane } => {
-            ("LnobjWithoutStart", format!("LNOBJ without start on lane {lane:?}"))
+            ("LnobjWithoutStart".into(), format!("LNOBJ without start on lane {lane:?}"))
         }
         ImportWarning::UnterminatedLongNote { lane } => {
-            ("UnterminatedLongNote", format!("unterminated long note on lane {lane:?}"))
+            ("UnterminatedLongNote".into(), format!("unterminated long note on lane {lane:?}"))
         }
     }
 }

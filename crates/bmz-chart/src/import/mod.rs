@@ -160,6 +160,30 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
     }
 
+    #[test]
+    fn classifies_bms_rs_warning_with_code() {
+        // `#LNOBJ ZZ` を指定しているのに `ZZ` を参照する行が無いため
+        // ParseUndefinedObject 警告が出る。
+        let text = "\
+#TITLE Diagnostic
+#BPM 120
+#TOTAL 200
+#LNOBJ ZZ
+#00011:01
+";
+        let path = write_temp_bms(text);
+        let result = import_bms_chart(&path, None, false).unwrap();
+        let has_undefined = result.warnings.iter().any(|w| {
+            matches!(
+                w,
+                crate::import::error::ImportWarning::ParserDiagnostic { code, .. }
+                    if code == "ParseUndefinedObject"
+            )
+        });
+        assert!(has_undefined, "warnings: {:?}", result.warnings);
+        std::fs::remove_file(&path).unwrap();
+    }
+
     fn write_temp_bms(text: &str) -> std::path::PathBuf {
         let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
         let path = std::env::temp_dir()
