@@ -36,16 +36,19 @@ cargo run
 
 - [ ] play 画面終了時に画面のフェードアウト処理を追加
 - [ ] result 画面終了時に音声のフェードアウト処理を追加
-- [ ] 小節線を表示
 - [ ] 楽曲プレイ後、select 画面の背景が曲のstagefile?になる
-- [ ] 途中落ちのアニメーション再生
+- [ ] シーン遷移の待機時間
 - [ ] play画面のAUTO PLAY表示
 - [ ] egui の日本語の vertical-align を修正
 - [ ] cliのオプション指定方法を変更 (songs scan, songs rescan, -a, --autoplay)
 - [ ] skin offset による伸縮の挙動がbeatorajaと違う問題を修正
-- [ ] invisible notesが見えている？
 - [ ] LNノーツの処理方法確認
-- [ ] DIFFICULTY(N/H/A/I)の推測
+- [ ] Mineノーツの処理方法確認
+- [ ] play スキンを play5, play7, play10, play14 に分ける
+- [ ] 起動時にスキン候補を検索し、egui のコンボボックスで選択可能にする
+- [ ] 画面右下にバージョン情報とオートプレイ情報を常時表示
+- [ ] 難易度表フォルダ内ではlibrary.dbに無い曲も表示
+- [ ] 小節線のOffset(h/a)をスキン問わず設定可能に
 
 ## Roadmap
 
@@ -58,5 +61,8 @@ cargo run
 - [ ] Support Qwilight-style BMS (4K / 6K / 8K)
 - [ ] Support BMSON
 - [ ] Support csv skin
-- [ ] Support IR
-- [ ] Support 22K BMS
+- [ ] Support Read-only IR (LR2IR, mocha)
+- [ ] Support new IR
+- [ ] Support normalizing volume per-chart
+- [ ] Support OBS WebSocket control integration
+- [ ] Discord Rich Presence
