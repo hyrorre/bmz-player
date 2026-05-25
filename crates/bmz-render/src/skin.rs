@@ -467,6 +467,8 @@ pub struct SkinNoteSetDef {
     #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
     pub processed: Vec<String>,
     #[serde(default)]
+    pub size: Vec<i32>,
+    #[serde(default)]
     pub dst: Vec<SkinDstEntry>,
     #[serde(default)]
     pub group: Vec<SkinDestinationDef>,
@@ -758,6 +760,11 @@ impl SkinContext {
         document.note_long_body_render_item(lane, rect, &self.document_sources)
     }
 
+    pub fn document_note_height(&self, lane: Lane) -> Option<f32> {
+        let document = self.document.as_ref()?;
+        document.note_height_for_lane(lane)
+    }
+
     pub fn document_bar_line_items(
         &self,
         note_y: f32,
@@ -827,13 +834,9 @@ impl SkinContext {
         let enabled_options = document.enabled_options();
         let area = document.note_lane_area(lane, &enabled_options)?;
         // note_y=0.0 → 判定ライン（エリア下端）、note_y=1.0 → エリア上端
-        let center_y = area.y + area.height * (1.0 - note_y);
-        let rect = Rect {
-            x: area.x,
-            y: center_y - note_height / 2.0,
-            width: area.width,
-            height: note_height,
-        };
+        let bottom_y = area.y + area.height * (1.0 - note_y);
+        let rect =
+            Rect { x: area.x, y: bottom_y - note_height, width: area.width, height: note_height };
         Some(document.apply_notes_offset_to_rect(rect, state))
     }
 
@@ -2193,6 +2196,18 @@ impl SkinDocument {
         self.note_part_render_item(image_id, rect, sources)
     }
 
+    pub fn note_height_for_lane(&self, lane: Lane) -> Option<f32> {
+        let note = self.note.as_ref()?;
+        let index = beatoraja_7k_note_index(lane);
+        if let Some(size) = note.size.get(index).copied().filter(|size| *size > 0) {
+            return Some(size as f32 / self.h.max(1) as f32);
+        }
+        let image_id = note.note.get(index)?;
+        let image = self.image.iter().find(|image| image.id == *image_id)?;
+        let divy = image.divy.max(1);
+        Some((image.h.max(1) as f32 / divy as f32) / self.h.max(1) as f32)
+    }
+
     fn note_part_render_item(
         &self,
         image_id: &str,
@@ -2229,7 +2244,9 @@ impl SkinDocument {
             return Vec::new();
         };
         let canvas_h = self.h.max(1) as f32;
-        let center_y = area.y + area.height * (1.0 - note_y);
+        let bottom_y = area.y + area.height * (1.0 - note_y);
+        let lane_bottom_px = canvas_h * (1.0 - (area.y + area.height));
+        let timeline_bottom_px = canvas_h * (1.0 - bottom_y);
         let mut items = Vec::new();
         for destination in &note.group {
             if !test_skin_ops(&destination.op, &enabled_options, state)
@@ -2244,8 +2261,7 @@ impl SkinDocument {
             else {
                 continue;
             };
-            let line_height = (frame.h.abs().max(1) as f32) / canvas_h;
-            frame.y = (canvas_h * (1.0 - (center_y + line_height / 2.0))).round() as i32;
+            frame.y += (timeline_bottom_px - lane_bottom_px).round() as i32;
             apply_skin_offset_to_frame(destination, &mut frame, state, false);
             let Some(image) = images.get(destination.id.as_str()) else {
                 continue;

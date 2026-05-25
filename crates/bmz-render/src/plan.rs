@@ -755,9 +755,10 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
         }
         for &lane in active_lanes {
             let lane_index = lane.index();
+            let note_height = skin.document_note_height(lane).unwrap_or(NOTE_HEIGHT);
             for note in &snapshot.visible_notes[lane_index] {
                 if let Some(rect) =
-                    skin.note_rect_for_progress(lane, note.y, NOTE_HEIGHT, skin_state)
+                    skin.note_rect_for_progress(lane, note.y, note_height, skin_state)
                     && let Some(item) = skin.document_note_item(lane, rect)
                 {
                     let item = skin.apply_play_skin_global_offset_to_item(item, skin_state);
@@ -1091,7 +1092,7 @@ fn push_judge_line(
 }
 
 fn note_rect_y(board: Rect, lift: f32, progress_to_hit: f32) -> f32 {
-    (play_object_y(board, lift, progress_to_hit) - NOTE_HEIGHT / 2.0).max(board.y)
+    play_object_y(board, lift, progress_to_hit) - NOTE_HEIGHT
 }
 
 fn play_object_y(board: Rect, lift: f32, progress_to_hit: f32) -> f32 {
@@ -1892,7 +1893,7 @@ mod tests {
                         {
                             "id": "section-line",
                             "dst": [
-                                { "x": 10, "y": 20, "w": 40, "h": 2, "r": 64, "g": 128, "b": 255, "a": 200 }
+                                { "x": 10, "y": 25, "w": 40, "h": 2, "r": 64, "g": 128, "b": 255, "a": 200 }
                             ]
                         }
                     ]
@@ -1918,13 +1919,58 @@ mod tests {
             DrawCommand::Image { texture, rect, tint, .. }
                 if *texture == TextureId(77)
                     && approx_eq(rect.x, 0.1)
-                    && approx_eq(rect.y, 0.5 - 0.01)
+                    && approx_eq(rect.y + rect.height, 0.45)
                     && approx_eq(rect.width, 0.4)
                     && approx_eq(rect.height, 0.02)
                     && approx_eq(tint.r, 64.0 / 255.0)
                     && approx_eq(tint.g, 128.0 / 255.0)
                     && approx_eq(tint.b, 1.0)
                     && approx_eq(tint.a, 200.0 / 255.0)
+        )));
+    }
+
+    #[test]
+    fn play_skin_document_places_hit_timing_note_bottom_on_judge_line() {
+        let document: crate::skin::SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{"id": 1, "path": "note.png"}],
+                "image": [{"id": "note", "src": 1, "x": 0, "y": 0, "w": 1, "h": 36}],
+                "note": {
+                    "note": ["note"],
+                    "dst": [
+                        { "x": 10, "y": 20, "w": 5, "h": 60 }
+                    ]
+                }
+            }
+            "#,
+        )
+        .unwrap();
+        let manifest: SkinManifest = toml::from_str("").unwrap();
+        let source_texture = crate::skin::SkinDocumentTexture {
+            source_id: "1".to_string(),
+            texture: SkinTextureId(78),
+            source_size: crate::skin::SkinImageSize { width: 1.0, height: 1.0 },
+        };
+        let skin = SkinContext::from_manifest_and_document(manifest, document, [source_texture]);
+        let mut snapshot = RenderSnapshot::default();
+        snapshot.visible_notes[Lane::Key1.index()].push(VisibleNote {
+            lane: Lane::Key1,
+            time: TimeUs(1_000),
+            y: 0.0,
+        });
+
+        let plan = DrawPlan::from_scene_with_skin(&AppSceneSnapshot::Play(snapshot), &skin);
+
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Image { texture, rect, .. }
+                if *texture == TextureId(78)
+                    && approx_eq(rect.y + rect.height, 0.8)
+                    && approx_eq(rect.height, 0.36)
         )));
     }
 
@@ -2113,18 +2159,15 @@ mod tests {
             })
             .collect();
 
-        assert!(note_ys.iter().any(|y| approx_eq(*y, 0.2345)));
-        assert!(note_ys.iter().any(|y| approx_eq(*y, 0.6215)));
+        assert!(note_ys.iter().any(|y| approx_eq(*y, 0.2255)));
+        assert!(note_ys.iter().any(|y| approx_eq(*y, 0.6125)));
     }
 
     #[test]
     fn play_plan_places_hit_timing_note_on_judge_line() {
         let board = Rect { x: 0.18, y: 0.05, width: 0.64, height: 0.9 };
 
-        assert!(approx_eq(
-            note_rect_y(board, 0.0, 0.0) + NOTE_HEIGHT / 2.0,
-            judge_line_y(board, 0.0)
-        ));
+        assert!(approx_eq(note_rect_y(board, 0.0, 0.0) + NOTE_HEIGHT, judge_line_y(board, 0.0)));
     }
 
     #[test]
