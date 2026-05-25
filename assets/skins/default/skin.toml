@@ -42,6 +42,10 @@ path = "combo-panel.png"
 id = 11
 path = "combo-panel-inactive.png"
 
+[[textures]]
+id = 12
+path = "note-mine.png"
+
 [play.note]
 texture = 1
 key_even_texture = 2

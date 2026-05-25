@@ -87,15 +87,47 @@ pub struct IntermediateObject {
 
 #[derive(Debug, Clone)]
 pub enum IntermediateObjectKind {
-    VisibleNote { lane: Lane, wav_key: Option<u16> },
-    InvisibleNote { lane: Lane, wav_key: Option<u16> },
-    LongChannelNote { lane: Lane, wav_key: Option<u16> },
-    MineNote { lane: Lane, wav_key: Option<u16>, damage: u16 },
-    Bgm { wav_key: u16 },
-    Bga { bmp_key: u16, kind: IntermediateBgaKind },
-    SetBpm { bpm: f64 },
-    SetExtendedBpm { bpm_key: u16 },
-    Stop { stop_key: u16 },
+    VisibleNote {
+        lane: Lane,
+        wav_key: Option<u16>,
+    },
+    InvisibleNote {
+        lane: Lane,
+        wav_key: Option<u16>,
+    },
+    LongChannelNote {
+        lane: Lane,
+        wav_key: Option<u16>,
+    },
+    MineNote {
+        lane: Lane,
+        wav_key: Option<u16>,
+        damage: u16,
+    },
+    Bgm {
+        wav_key: u16,
+    },
+    Bga {
+        bmp_key: u16,
+        kind: IntermediateBgaKind,
+    },
+    SetBpm {
+        bpm: f64,
+    },
+    SetExtendedBpm {
+        bpm_key: u16,
+    },
+    Stop {
+        stop_key: u16,
+    },
+    /// SCROLL チャネル: スクロール速度倍率の変化点。
+    SetScroll {
+        factor: f64,
+    },
+    /// SPEED チャネル: 間隔倍率の変化点 (beatoraja 拡張)。
+    SetSpeed {
+        factor: f64,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

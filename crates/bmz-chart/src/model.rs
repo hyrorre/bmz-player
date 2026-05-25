@@ -14,6 +14,8 @@ pub struct PlayableChart {
     pub bgm_events: Vec<SoundEvent>,
     pub bga_events: Vec<BgaEvent>,
     pub timing_events: Vec<TimingEvent>,
+    pub scroll_events: Vec<ScrollEvent>,
+    pub speed_events: Vec<SpeedEvent>,
     pub bar_lines: Vec<BarLine>,
     pub sounds: Vec<SoundAssetRef>,
     pub bga_assets: Vec<BgaAssetRef>,
@@ -100,6 +102,25 @@ pub struct TimingEvent {
     pub tick: ChartTick,
     pub time: TimeUs,
     pub kind: TimingEventKind,
+}
+
+/// SCROLL チャネルで指定されたスクロール速度倍率の変化点。
+/// 判定時刻には影響せず、譜面の見た目だけを変える（factor>1.0 で速く流れる、
+/// factor<0 で逆スクロール等）。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScrollEvent {
+    pub tick: ChartTick,
+    pub time: TimeUs,
+    pub factor: f64,
+}
+
+/// SPEED チャネルで指定された間隔倍率の変化点。SCROLL とは別系統で、
+/// beatoraja 拡張の `#SPEEDxx` 系をサポートする譜面で使われる。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SpeedEvent {
+    pub tick: ChartTick,
+    pub time: TimeUs,
+    pub factor: f64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -90,6 +90,8 @@ fn build_intermediate(bms: &Bms, warnings: &mut Vec<ImportWarning>) -> Intermedi
     push_bga_objects(bms, &mut objects);
     push_bpm_change_objects(bms, &mut objects);
     push_stop_objects(bms, &mut objects, &mut resources);
+    push_scroll_objects(bms, &mut objects);
+    push_speed_objects(bms, &mut objects);
 
     let max_measure = compute_max_measure(bms, &objects);
     let measures = build_measures(max_measure, bms);
@@ -307,6 +309,28 @@ fn push_bpm_change_objects(bms: &Bms, objects: &mut Vec<IntermediateObject>) {
             position_num: change.time.numerator() as u32,
             position_den: change.time.denominator().get() as u32,
             kind: IntermediateObjectKind::SetBpm { bpm: change.bpm.get() },
+        });
+    }
+}
+
+fn push_scroll_objects(bms: &Bms, objects: &mut Vec<IntermediateObject>) {
+    for change in bms.scroll.scrolling_factor_changes.values() {
+        objects.push(IntermediateObject {
+            measure: track_of(change.time),
+            position_num: change.time.numerator() as u32,
+            position_den: change.time.denominator().get() as u32,
+            kind: IntermediateObjectKind::SetScroll { factor: change.factor.get() },
+        });
+    }
+}
+
+fn push_speed_objects(bms: &Bms, objects: &mut Vec<IntermediateObject>) {
+    for change in bms.speed.speed_factor_changes.values() {
+        objects.push(IntermediateObject {
+            measure: track_of(change.time),
+            position_num: change.time.numerator() as u32,
+            position_den: change.time.denominator().get() as u32,
+            kind: IntermediateObjectKind::SetSpeed { factor: change.factor.get() },
         });
     }
 }

@@ -14,8 +14,6 @@ const JUDGE_LINE_Y_RATIO: f32 = 0.86;
 const NOTE_HEIGHT: f32 = 0.018;
 /// デフォルトスキンのロングノート胴体色（半透明）。
 const LONG_NOTE_BODY_COLOR: Color = Color::rgba(0.5, 0.78, 0.88, 0.5);
-/// デフォルトスキンの Mine ノーツ色（赤・濃いめ）。
-const MINE_COLOR: Color = Color::rgba(0.95, 0.18, 0.20, 0.95);
 pub const DEFAULT_NOTE_TEXTURE: TextureId = TextureId(1);
 pub const DEFAULT_KEY_EVEN_NOTE_TEXTURE: TextureId = TextureId(2);
 pub const DEFAULT_SCRATCH_NOTE_TEXTURE: TextureId = TextureId(3);
@@ -27,6 +25,7 @@ pub const DEFAULT_GAUGE_FRAME_TEXTURE: TextureId = TextureId(8);
 pub const DEFAULT_GAUGE_FILL_TEXTURE: TextureId = TextureId(9);
 pub const DEFAULT_COMBO_PANEL_TEXTURE: TextureId = TextureId(10);
 pub const DEFAULT_COMBO_PANEL_INACTIVE_TEXTURE: TextureId = TextureId(11);
+pub const DEFAULT_MINE_NOTE_TEXTURE: TextureId = TextureId(12);
 pub const CHART_BGA_TEXTURE_BASE: u32 = 20_000;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -696,17 +695,24 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
                 push_default_note_skin(skin_manifest, &mut commands, lane, rect);
             }
 
-            // Mine: 通常ノーツより前面に赤い帯を描く。専用テクスチャは未整備のため
-            // 暫定的にベタ塗り（damage に応じて色を変えるなどは別 PR）。
+            // Mine: 通常ノーツより前面に「警告ストライプ」テクスチャを重ねる。
+            // 全レーン共通の DEFAULT_MINE_NOTE_TEXTURE を使い、レーン色付けは行わない。
             for mine in &snapshot.visible_mines[lane_index] {
                 let y = note_rect_y(board, snapshot.lift, mine.y);
                 let rect = Rect {
-                    x: x + lane_width * 0.12,
+                    x: x + lane_width * 0.08,
                     y,
-                    width: lane_width * 0.76,
+                    width: lane_width * 0.84,
                     height: NOTE_HEIGHT,
                 };
-                commands.push(DrawCommand::Rect { rect, color: MINE_COLOR });
+                commands.push(DrawCommand::Image {
+                    rect,
+                    uv: UvRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+                    texture: DEFAULT_MINE_NOTE_TEXTURE,
+                    tint: Color::rgba(1.0, 1.0, 1.0, 1.0),
+                    blend: BlendMode::Normal,
+                    linear_filter: false,
+                });
             }
         }
 
@@ -780,13 +786,20 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
                     append_skin_render_items(&mut commands, &[item]);
                 }
             }
-            // Mine はスキン側に専用 sprite が無い段階では、note.dst のエリアに赤帯を
-            // 重ねて視認できるようにする。専用テクスチャ対応は別 PR。
+            // beatoraja スキンには Mine 専用 sprite を指定する手段が現状無いため、
+            // デフォルトの DEFAULT_MINE_NOTE_TEXTURE を note.dst エリアへ重ねる。
             for mine in &snapshot.visible_mines[lane_index] {
                 if let Some(rect) =
                     skin.note_rect_for_progress(lane, mine.y, note_height, skin_state)
                 {
-                    commands.push(DrawCommand::Rect { rect, color: MINE_COLOR });
+                    commands.push(DrawCommand::Image {
+                        rect,
+                        uv: UvRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+                        texture: DEFAULT_MINE_NOTE_TEXTURE,
+                        tint: Color::rgba(1.0, 1.0, 1.0, 1.0),
+                        blend: BlendMode::Normal,
+                        linear_filter: false,
+                    });
                 }
             }
         }

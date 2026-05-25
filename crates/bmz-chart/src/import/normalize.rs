@@ -7,8 +7,8 @@ use bmz_core::time::{ChartTick, TimeUs};
 
 use crate::model::{
     BarLine, BgaAssetId, BgaAssetKind, BgaAssetRef, BgaEvent, BgaEventKind, ChartMetadata,
-    LongNotePair, NoteEvent, NoteKind, PlayableChart, SoundAssetRef, SoundEvent, TimingEvent,
-    TimingEventKind,
+    LongNotePair, NoteEvent, NoteKind, PlayableChart, ScrollEvent, SoundAssetRef, SoundEvent,
+    SpeedEvent, TimingEvent, TimingEventKind,
 };
 use crate::timing::{TickTimingEvent, TickTimingEventKind, TimingMap, build_timing_map};
 
@@ -56,6 +56,8 @@ struct PlayableChartDraft {
     bgm_events: Vec<SoundEvent>,
     bga_events: Vec<BgaEvent>,
     timing_events: Vec<TimingEvent>,
+    scroll_events: Vec<ScrollEvent>,
+    speed_events: Vec<SpeedEvent>,
     bar_lines: Vec<BarLine>,
     sounds: Vec<SoundAssetRef>,
     bga_assets: Vec<BgaAssetRef>,
@@ -79,7 +81,7 @@ pub fn normalize_chart(
         build_timing_map(intermediate.metadata.initial_bpm.max(1.0), tick_timing_events.clone());
 
     let mut draft = PlayableChartDraft::new(
-        intermediate.identity,
+        intermediate.identity.clone(),
         metadata,
         sound_table.assets.clone(),
         bga_table.assets.clone(),
@@ -111,6 +113,8 @@ pub fn normalize_chart(
         &tick_timing_events,
         &timing_map,
     );
+    draft.scroll_events = build_scroll_events(&intermediate, &timing_map)?;
+    draft.speed_events = build_speed_events(&intermediate, &timing_map)?;
     draft.bar_lines = build_bar_lines(&intermediate.measures, &timing_map);
 
     Ok(finalize_playable_chart(draft))
@@ -224,7 +228,9 @@ fn materialize_tick_objects(
             }
             IntermediateObjectKind::SetBpm { .. }
             | IntermediateObjectKind::SetExtendedBpm { .. }
-            | IntermediateObjectKind::Stop { .. } => None,
+            | IntermediateObjectKind::Stop { .. }
+            | IntermediateObjectKind::SetScroll { .. }
+            | IntermediateObjectKind::SetSpeed { .. } => None,
         };
 
         if let Some(kind) = kind {
@@ -556,6 +562,34 @@ fn build_timing_events(
         .collect()
 }
 
+fn build_scroll_events(
+    intermediate: &IntermediateChart,
+    timing_map: &TimingMap,
+) -> Result<Vec<ScrollEvent>, ImportError> {
+    let mut out = Vec::new();
+    for object in &intermediate.objects {
+        if let IntermediateObjectKind::SetScroll { factor } = object.kind {
+            let tick = object_to_tick(object, &intermediate.measures)?;
+            out.push(ScrollEvent { tick, time: timing_map.tick_to_time(tick), factor });
+        }
+    }
+    Ok(out)
+}
+
+fn build_speed_events(
+    intermediate: &IntermediateChart,
+    timing_map: &TimingMap,
+) -> Result<Vec<SpeedEvent>, ImportError> {
+    let mut out = Vec::new();
+    for object in &intermediate.objects {
+        if let IntermediateObjectKind::SetSpeed { factor } = object.kind {
+            let tick = object_to_tick(object, &intermediate.measures)?;
+            out.push(SpeedEvent { tick, time: timing_map.tick_to_time(tick), factor });
+        }
+    }
+    Ok(out)
+}
+
 fn build_bar_lines(measures: &[MeasureInfo], timing_map: &TimingMap) -> Vec<BarLine> {
     measures
         .iter()
@@ -575,6 +609,8 @@ fn finalize_playable_chart(mut draft: PlayableChartDraft) -> PlayableChart {
     draft.bgm_events.sort_by_key(|event| event.time);
     draft.bga_events.sort_by_key(|event| event.time);
     draft.timing_events.sort_by_key(|event| event.time);
+    draft.scroll_events.sort_by_key(|event| event.time);
+    draft.speed_events.sort_by_key(|event| event.time);
     draft.bar_lines.sort_by_key(|line| line.time);
 
     draft.total_notes = compute_total_notes(&draft.lane_notes);
@@ -588,6 +624,8 @@ fn finalize_playable_chart(mut draft: PlayableChartDraft) -> PlayableChart {
         bgm_events: draft.bgm_events,
         bga_events: draft.bga_events,
         timing_events: draft.timing_events,
+        scroll_events: draft.scroll_events,
+        speed_events: draft.speed_events,
         bar_lines: draft.bar_lines,
         sounds: draft.sounds,
         bga_assets: draft.bga_assets,
@@ -630,6 +668,8 @@ impl PlayableChartDraft {
             bgm_events: Vec::new(),
             bga_events: Vec::new(),
             timing_events: Vec::new(),
+            scroll_events: Vec::new(),
+            speed_events: Vec::new(),
             bar_lines: Vec::new(),
             sounds,
             bga_assets,

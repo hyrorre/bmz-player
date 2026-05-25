@@ -184,6 +184,42 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
     }
 
+    #[test]
+    fn imports_scroll_and_speed_events() {
+        // SCROLL チャネル (SC) と SPEED チャネル (SP) を含む BMS。
+        // bms-rs は `#SCROLLxx` / `#SPEEDxx` 定義と `#xxxSC` / `#xxxSP` 行を
+        // 解釈して factor を引き出す。
+        let text = "\
+#TITLE Scroll Song
+#BPM 120
+#TOTAL 200
+#SCROLL01 2.0
+#SCROLL02 0.5
+#SPEED01 1.5
+#00111:01
+#001SC:0102
+#001SP:0001
+";
+        let path = write_temp_bms(text);
+        let result = import_bms_chart(&path, None, false).unwrap();
+        assert_eq!(
+            result.chart.scroll_events.len(),
+            2,
+            "scroll events: {:?}",
+            result.chart.scroll_events
+        );
+        assert_eq!(result.chart.scroll_events[0].factor, 2.0);
+        assert_eq!(result.chart.scroll_events[1].factor, 0.5);
+        assert_eq!(
+            result.chart.speed_events.len(),
+            1,
+            "speed events: {:?}",
+            result.chart.speed_events
+        );
+        assert_eq!(result.chart.speed_events[0].factor, 1.5);
+        std::fs::remove_file(&path).unwrap();
+    }
+
     fn write_temp_bms(text: &str) -> std::path::PathBuf {
         let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
         let path = std::env::temp_dir()
