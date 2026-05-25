@@ -786,20 +786,25 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
                     append_skin_render_items(&mut commands, &[item]);
                 }
             }
-            // beatoraja スキンには Mine 専用 sprite を指定する手段が現状無いため、
-            // デフォルトの DEFAULT_MINE_NOTE_TEXTURE を note.dst エリアへ重ねる。
+            // Mine ノーツ: スキン側に `note.mine` が定義されていればそれを使い、
+            // 無ければ DEFAULT_MINE_NOTE_TEXTURE をフォールバックとして重ねる。
             for mine in &snapshot.visible_mines[lane_index] {
                 if let Some(rect) =
                     skin.note_rect_for_progress(lane, mine.y, note_height, skin_state)
                 {
-                    commands.push(DrawCommand::Image {
-                        rect,
-                        uv: UvRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
-                        texture: DEFAULT_MINE_NOTE_TEXTURE,
-                        tint: Color::rgba(1.0, 1.0, 1.0, 1.0),
-                        blend: BlendMode::Normal,
-                        linear_filter: false,
-                    });
+                    if let Some(item) = skin.document_mine_item(lane, rect) {
+                        let item = skin.apply_play_skin_global_offset_to_item(item, skin_state);
+                        append_skin_render_items(&mut commands, &[item]);
+                    } else {
+                        commands.push(DrawCommand::Image {
+                            rect,
+                            uv: UvRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+                            texture: DEFAULT_MINE_NOTE_TEXTURE,
+                            tint: Color::rgba(1.0, 1.0, 1.0, 1.0),
+                            blend: BlendMode::Normal,
+                            linear_filter: false,
+                        });
+                    }
                 }
             }
         }

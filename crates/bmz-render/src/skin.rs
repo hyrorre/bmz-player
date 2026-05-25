@@ -760,6 +760,14 @@ impl SkinContext {
         document.note_long_body_render_item(lane, rect, &self.document_sources)
     }
 
+    /// Mine ノート（`note.mine`）を指定矩形に描画する。スキン側に定義が無ければ
+    /// `None` を返すため、呼び出し側はデフォルトテクスチャ等のフォールバックへ
+    /// 落ちる。
+    pub fn document_mine_item(&self, lane: Lane, rect: Rect) -> Option<SkinRenderItem> {
+        let document = self.document.as_ref()?;
+        document.note_mine_render_item(lane, rect, &self.document_sources)
+    }
+
     pub fn document_note_height(&self, lane: Lane) -> Option<f32> {
         let document = self.document.as_ref()?;
         document.note_height_for_lane(lane)
@@ -2193,6 +2201,20 @@ impl SkinDocument {
         let note = self.note.as_ref()?;
         let index = beatoraja_7k_note_index(lane);
         let image_id = note.lnbody.get(index).or_else(|| note.note.get(index))?;
+        self.note_part_render_item(image_id, rect, sources)
+    }
+
+    /// Mine ノート画像（`note.mine`）を描画する。スキンが `mine` を定義していない、
+    /// または該当レーンの index が空なら `None` を返し、呼び出し側でフォールバックを
+    /// 使う想定。
+    pub fn note_mine_render_item(
+        &self,
+        lane: Lane,
+        rect: Rect,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Option<SkinRenderItem> {
+        let note = self.note.as_ref()?;
+        let image_id = note.mine.get(beatoraja_7k_note_index(lane))?;
         self.note_part_render_item(image_id, rect, sources)
     }
 
