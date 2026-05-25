@@ -249,9 +249,13 @@ fn install_japanese_font(ctx: &egui::Context) {
         return;
     };
     let mut fonts = egui::FontDefinitions::default();
-    fonts
-        .font_data
-        .insert("bmz_jp".to_owned(), std::sync::Arc::new(egui::FontData::from_owned(bytes)));
+    let font_data = egui::FontData::from_owned(bytes).tweak(egui::FontTweak {
+        scale: 1.0,
+        y_offset_factor: 0.26,
+        y_offset: 0.0,
+        ..Default::default()
+    });
+    fonts.font_data.insert("bmz_jp".to_owned(), std::sync::Arc::new(font_data));
     // Latin は egui 既定フォントのまま、欠落グリフ (日本語) だけここへフォールバックさせる。
     for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
         if let Some(chain) = fonts.families.get_mut(&family) {
