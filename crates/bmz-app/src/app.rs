@@ -157,6 +157,7 @@ struct WinitApp {
     select_scene_started_at: Instant,
     select_bar_started_at: Instant,
     play_scene_started_at: Instant,
+    play_ready_sound_started_at: Option<Instant>,
     result_scene_started_at: Instant,
     option_panel_started_at: Instant,
     select_option_panel: u8,
@@ -408,6 +409,7 @@ impl WinitApp {
             select_scene_started_at: now,
             select_bar_started_at: now,
             play_scene_started_at: now,
+            play_ready_sound_started_at: None,
             result_scene_started_at: now,
             option_panel_started_at: now,
             select_option_panel: 0,
@@ -1097,6 +1099,7 @@ impl WinitApp {
         self.ensure_skin_ready(SkinKind::Play);
         self.play_ending = None;
         self.result_exit = None;
+        self.play_ready_sound_started_at = None;
         if options.chart_zero_time == TimeUs(0) {
             options.chart_zero_time = self.play_skin_chart_zero_time();
         }
@@ -1128,9 +1131,21 @@ impl WinitApp {
     }
 
     fn play_skin_chart_zero_time(&self) -> TimeUs {
-        let playstart_ms =
-            self.renderer.play_skin_document().map(|document| document.playstart).unwrap_or(0);
-        TimeUs(-i64::from(playstart_ms.max(0)) * 1_000)
+        let preplay_ms = self.renderer.play_skin_document().map_or(0, |document| {
+            document
+                .loadstart
+                .max(0)
+                .saturating_add(document.loadend.max(0))
+                .saturating_add(document.playstart.max(0))
+        });
+        TimeUs(-i64::from(preplay_ms) * 1_000)
+    }
+
+    fn play_skin_ready_delay(&self) -> Duration {
+        let ready_delay_ms = self.renderer.play_skin_document().map_or(0, |document| {
+            document.loadstart.max(0).saturating_add(document.loadend.max(0))
+        });
+        skin_duration_ms(ready_delay_ms)
     }
 
     fn play_start_options(&self) -> PlayStartOptions {
@@ -1606,6 +1621,10 @@ impl WinitApp {
             self.update_play_ending_snapshot_timers();
             return;
         }
+        if self.active_play.is_none() {
+            return;
+        }
+        self.maybe_play_ready_sound();
         let Some(active_play) = &mut self.active_play else {
             return;
         };
@@ -1656,6 +1675,17 @@ impl WinitApp {
                 self.last_play_snapshot = None;
             }
         }
+    }
+
+    fn maybe_play_ready_sound(&mut self) {
+        if self.play_ready_sound_started_at.is_some() {
+            return;
+        }
+        if self.play_elapsed_time().0 < self.play_skin_ready_delay().as_micros() as i64 {
+            return;
+        }
+        self.play_ready_sound_started_at = Some(Instant::now());
+        self.play_system_sound(crate::system_sound::SoundType::PlayReady);
     }
 
     fn update_play_ending_snapshot_timers(&mut self) {
@@ -2000,7 +2030,7 @@ impl WinitApp {
         match scene_kind {
             AppSceneKind::Select => self.play_system_sound(SoundType::Select),
             AppSceneKind::Decide => self.play_system_sound(SoundType::Decide),
-            AppSceneKind::Play => self.play_system_sound(SoundType::PlayReady),
+            AppSceneKind::Play => {}
             AppSceneKind::Result => {
                 let clear = self
                     .finished_play

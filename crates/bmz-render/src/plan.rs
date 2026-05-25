@@ -541,11 +541,13 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
 
     let play_elapsed_ms =
         (snapshot.play_elapsed_time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32;
-    let skin_global_offset_ms = skin.document().map_or(0, |document| document.loadend.max(0));
+    let ready_delay_ms = skin.document().map_or(0, play_skin_ready_delay_ms);
+    let ready_timer_ms =
+        (play_elapsed_ms >= ready_delay_ms).then_some(play_elapsed_ms - ready_delay_ms);
 
     let skin_state = crate::skin::SkinDrawState {
-        elapsed_ms: play_elapsed_ms.saturating_add(skin_global_offset_ms),
-        ready_timer_ms: play_elapsed_ms,
+        elapsed_ms: play_elapsed_ms,
+        ready_timer_ms,
         play_timer_ms: (snapshot.time.0 >= 0)
             .then_some((snapshot.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32),
         combo: snapshot.combo,
@@ -843,10 +845,9 @@ fn plan_decide(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
     if skin.document().is_some_and(|document| document.skin_type == 6) {
         let play_elapsed_ms =
             (snapshot.play_elapsed_time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32;
-        let skin_global_offset_ms = skin.document().map_or(0, |document| document.loadend.max(0));
         let state = crate::skin::SkinDrawState {
-            elapsed_ms: play_elapsed_ms.saturating_add(skin_global_offset_ms),
-            ready_timer_ms: play_elapsed_ms,
+            elapsed_ms: play_elapsed_ms,
+            ready_timer_ms: Some(play_elapsed_ms),
             total_notes: snapshot.total_notes,
             past_notes: snapshot.past_notes,
             ex_score: snapshot.ex_score,
@@ -888,6 +889,10 @@ fn plan_decide(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
     }
 
     plan_play(snapshot, &SkinContext::default())
+}
+
+fn play_skin_ready_delay_ms(document: &crate::skin::SkinDocument) -> i32 {
+    document.loadstart.max(0).saturating_add(document.loadend.max(0))
 }
 
 fn skin_lane_height_px(skin: &SkinContext, fallback_canvas_h: f32) -> f32 {
@@ -2050,12 +2055,13 @@ mod tests {
     }
 
     #[test]
-    fn play_skin_ready_timer_uses_scene_elapsed_time_before_chart_start() {
+    fn play_skin_ready_timer_starts_after_load_timers() {
         let document: crate::skin::SkinDocument = serde_json::from_str(
             r#"{
                 "type": 7,
                 "w": 100,
                 "h": 100,
+                "loadstart": 500,
                 "loadend": 3000,
                 "source": [{"id": 1, "path": "panel.png"}],
                 "image": [{"id": "panel", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10}],
@@ -2075,15 +2081,27 @@ mod tests {
             source_size: crate::skin::SkinImageSize { width: 10.0, height: 10.0 },
         };
         let skin = SkinContext::from_manifest_and_document(manifest, document, [source_texture]);
-        let snapshot = RenderSnapshot {
+        let before_ready = RenderSnapshot {
             time: TimeUs(-1_000_000),
-            play_elapsed_time: TimeUs(500_000),
+            play_elapsed_time: TimeUs(3_000_000),
+            ..Default::default()
+        };
+        let after_ready = RenderSnapshot {
+            time: TimeUs(-1_000_000),
+            play_elapsed_time: TimeUs(4_000_000),
             ..Default::default()
         };
 
-        let plan = DrawPlan::from_scene_with_skin(&AppSceneSnapshot::Play(snapshot), &skin);
+        let before_plan =
+            DrawPlan::from_scene_with_skin(&AppSceneSnapshot::Play(before_ready), &skin);
+        let after_plan =
+            DrawPlan::from_scene_with_skin(&AppSceneSnapshot::Play(after_ready), &skin);
 
-        assert!(plan.commands.iter().any(|command| matches!(
+        assert!(!before_plan
+            .commands
+            .iter()
+            .any(|command| matches!(command, DrawCommand::Image { texture, .. } if *texture == TextureId(99))));
+        assert!(after_plan.commands.iter().any(|command| matches!(
             command,
             DrawCommand::Image { texture, rect, .. }
                 if *texture == TextureId(99) && approx_eq(rect.x, 0.25)
@@ -2091,7 +2109,7 @@ mod tests {
     }
 
     #[test]
-    fn play_skin_untimed_intro_uses_load_elapsed_before_chart_start() {
+    fn play_skin_untimed_intro_uses_scene_elapsed_without_loadend_offset() {
         let document: crate::skin::SkinDocument = serde_json::from_str(
             r#"{
                 "type": 7,
@@ -2114,20 +2132,31 @@ mod tests {
             source_size: crate::skin::SkinImageSize { width: 10.0, height: 10.0 },
         };
         let skin = SkinContext::from_manifest_and_document(manifest, document, [source_texture]);
-        let snapshot = RenderSnapshot {
+        let before_intro = RenderSnapshot {
             time: TimeUs(-1_000_000),
             play_elapsed_time: TimeUs(0),
             ..Default::default()
         };
+        let during_intro = RenderSnapshot {
+            time: TimeUs(-1_000_000),
+            play_elapsed_time: TimeUs(1_500_000),
+            ..Default::default()
+        };
 
-        let plan = DrawPlan::from_scene_with_skin(&AppSceneSnapshot::Play(snapshot), &skin);
+        let before_plan =
+            DrawPlan::from_scene_with_skin(&AppSceneSnapshot::Play(before_intro), &skin);
+        let during_plan =
+            DrawPlan::from_scene_with_skin(&AppSceneSnapshot::Play(during_intro), &skin);
 
-        assert!(
-            plan.commands
-                .iter()
-                .any(|command| matches!(command, DrawCommand::Image { texture, tint, .. }
-                if *texture == TextureId(99) && approx_eq(tint.a, 1.0)))
-        );
+        assert!(!before_plan
+            .commands
+            .iter()
+            .any(|command| matches!(command, DrawCommand::Image { texture, .. } if *texture == TextureId(99))));
+        assert!(during_plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Image { texture, tint, .. }
+                if *texture == TextureId(99) && approx_eq(tint.a, 128.0 / 255.0)
+        )));
     }
 
     #[test]
