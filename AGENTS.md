@@ -5,7 +5,7 @@
 ## Project Goal
 
 BMZ Player は LunaticRave2 / beatoraja の後継を目指す BMS プレイヤーです。
-技術方針は Rust + wgpu、アプリ内 UI は egui、音声は cpal + ffmpeg-next、BMS パースは `bms-rs` 利用を前提にする予定ですが、現在は自前パースです。
+技術方針は Rust + wgpu、アプリ内 UI は egui、音声/動画は cpal + ffmpeg-next、BMS パースは `bms-rs` を利用。
 対象OSは Windows / macOS / Linux です。
 
 最初のゲームモードは 5K / 7K / 10K / 14K 通常プレイとオートプレイです。
@@ -119,7 +119,7 @@ cargo run -p bmz-app -- songs list
 - `songs list`
 - `songs reload`
 
-以前使っていた `BMZ_*` 環境変数ベースの smoke/debug 操作は CLI 引数へ移行済みです。新しいデバッグフラグを追加するときも `crates/bmz-app/src/cli.rs` に集約してください。
+新しいデバッグフラグを追加するときも `crates/bmz-app/src/cli.rs` に集約してください。
 
 ## Manual Check Keys
 
@@ -194,6 +194,28 @@ Empty Poor:
 - 将来、キーボードやゲームパッド入力を低遅延APIへ差し替える前提です。
 - polling から event driven になっても直しやすいよう、backend と gameplay 入力変換の境界を保ってください。
 - 関連: `crates/bmz-gameplay/src/input`, `crates/bmz-app/src/input`.
+
+Mine (地雷):
+
+- BMS の D系列 (P1) / E系列 (P2) チャネルに置かれたノーツを `NoteKind::Mine` として扱います。`NoteEvent.damage: Option<u16>` がチャネル値そのまま (= ダメージ量)。
+- 描画: `RenderSnapshot.visible_mines` に振り分け、専用テクスチャ `assets/skins/default/note-mine.png` (`DEFAULT_MINE_NOTE_TEXTURE = TextureId(12)`) で描きます。
+- 判定: `JudgeWindow.mine_hit_us` (デフォルト 16ms) 以内の Press でヒット。`JudgeOutcome.mine_hits` に積み、`GameSession.pending_mine_hits` → `SessionFrame.mine_hits` → `FrameOutput.mine_hits` の経路で app 層まで運ばれます。
+- 副作用: コンボ/スコア無影響、ゲージのみ `gauge.apply_mine(damage)` で減算 (guts 補正なし)。
+- SE: app 側で `SoundType::Landmine` (`landmine.wav`) を再生。同一フレームの複数ヒットは 1 回にまとめて重ね鳴らししません。
+- Autoplay は Mine を踏みません (`autoplay.rs` で skip)。
+
+SCROLL / SPEED:
+
+- BMS の SCROLL チャネル / SPEED チャネルを `PlayableChart.scroll_events` / `speed_events` に保持します。
+- `ScrollContext::scroll_delta` で tick 区間積分し見かけ距離を計算。SCROLL factor は階段関数として畳み込み、SPEED factor は note 位置時点の値を倍率として最終 delta に掛けます。
+- SCROLL factor < 0 は逆スクロール扱いで `note_y` が `None` (描画対象外) になります。
+- SPEED は beatoraja では線形補間ですが、現状は階段関数で実装。
+
+BMS パーサ:
+
+- `bms-rs` 1.x を主パーサとして使用 (`crates/bmz-chart/src/import/bms_rs_adapter.rs`)。RANDOM/IF, LNOBJ, Mine, Base62, BMSON 等は bms-rs 側で吸収します。
+- `random_seed` は `PlaySessionOptions.arrange_seed` (リプレイにも保存) から流すため、同じリプレイで RANDOM が必ず同じ分岐へ落ちます。
+- bms-rs の `BmsWarning` は `map_bms_warning` で `ImportWarning::ParserDiagnostic { code, message }` に分類。`code` 名はそのまま `chart_import_warnings.code` に保存され、UI で識別できます。
 
 ## Storage and Config
 
@@ -281,6 +303,8 @@ database:
 - `graph` / score graph 系 (type 101/102/110-115/140-147 は実装済み)
 - より正確な text outline/shadow。現在の outline は周囲8方向描画の近似です。
 - SDF/距離場フォント化
+- beatoraja JSON skin の Mine 専用 sprite。現状は `DEFAULT_MINE_NOTE_TEXTURE` をフォールバックで使用。
+- SPEED チャネルの線形補間 (現状は階段関数で代用)
 
 実装の入口:
 
@@ -302,6 +326,8 @@ database:
 - 9分割描画は、角を固定して辺と中央だけ伸ばす描画です。パネルやゲージ枠など、角を崩したくないUI部品に使います。
 - BGA は静止画 texture と動画 BGA の両方を扱います。動画 decode は `bmz-video`、ffmpeg 初期化は `bmz-ffmpeg`、renderer への texture upload / frame 選択は app 側 play flow を確認します。
 - egui はゲーム / スキン描画の上に overlay します。winit event と `egui::Context` は `bmz-app`、`egui-wgpu` による描画は `bmz-render` の責務です。
+- ノートのスクロール位置計算は `crates/bmz-app/src/screens/play_snapshot.rs::ScrollContext` に集約。BPM 変化 (timing_map)、STOP、SCROLL、SPEED をすべてここで畳み込みます。
+- Mine ノーツは `visible_mines` に振り分け、デフォルトでは `DEFAULT_MINE_NOTE_TEXTURE` (note-mine.png) を使用。
 - 主な確認対象は `bmz-render` の unit tests です。
 
 ## Change Checklist
@@ -315,10 +341,9 @@ database:
 
 実装中:
 
-1. 変更範囲を crate/module の責務内に収める。
+1. 変更範囲を crate / module の責務内に収める。
 2. 既存 helper / parser / structured API を優先する。
 3. 仕様変更には近い場所の unit test を追加する。
-4. Play 画面優先。Select 画面は大きな設計変更がありそうなら後回し。
 
 変更後:
 
