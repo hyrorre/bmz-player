@@ -264,6 +264,12 @@ struct ScrollContext<'a> {
     timing_map: &'a TimingMap,
     hispeed: f32,
     lookahead_ticks: f64,
+    /// SCROLL イベント (tick 昇順)。`(tick, factor)`。
+    /// 区間ごとに factor を掛けて scroll 位置を畳む。空なら factor 1.0 固定。
+    scroll_segments: Vec<(f64, f64)>,
+    /// SPEED イベント (tick 昇順)。beatoraja は線形補間だが、まずは SCROLL と同じ
+    /// 階段関数で扱い、note 位置時点での値を倍率として掛ける。
+    speed_segments: Vec<(f64, f64)>,
 }
 
 impl<'a> ScrollContext<'a> {
@@ -271,7 +277,17 @@ impl<'a> ScrollContext<'a> {
         let initial_bpm = session.chart.metadata.initial_bpm.max(1.0);
         let lookahead_ticks =
             initial_bpm * DEFAULT_LOOKAHEAD_US as f64 * TICKS_PER_BEAT as f64 / 60_000_000.0;
-        Self { timing_map: &session.timing_map, hispeed: session.hispeed, lookahead_ticks }
+        let scroll_segments =
+            session.chart.scroll_events.iter().map(|e| (e.tick.0 as f64, e.factor)).collect();
+        let speed_segments =
+            session.chart.speed_events.iter().map(|e| (e.tick.0 as f64, e.factor)).collect();
+        Self {
+            timing_map: &session.timing_map,
+            hispeed: session.hispeed,
+            lookahead_ticks,
+            scroll_segments,
+            speed_segments,
+        }
     }
 
     fn cursor_tick(&self, render_now: TimeUs) -> f64 {
@@ -279,10 +295,10 @@ impl<'a> ScrollContext<'a> {
     }
 
     /// ノートの正規化進捗（0.0=判定ライン, 1.0=画面上端）。判定ラインより手前 (delta<0)
-    /// と画面上端より奥のノートは `None`。
+    /// と画面上端より奥のノートは `None`。SCROLL / SPEED 倍率を畳み込む。
     fn note_y(&self, note_time: TimeUs, cursor_tick: f64) -> Option<f32> {
         let note_tick = self.timing_map.time_to_tick_f64(note_time);
-        let delta = note_tick - cursor_tick;
+        let delta = self.scroll_delta(cursor_tick, note_tick);
         if delta < 0.0 {
             return None;
         }
@@ -293,9 +309,60 @@ impl<'a> ScrollContext<'a> {
     /// `note_y` と同じ進捗のクランプしない生値。ロングノートの始端/終端で使う。
     fn note_progress(&self, note_time: TimeUs, cursor_tick: f64) -> f32 {
         let note_tick = self.timing_map.time_to_tick_f64(note_time);
-        let delta = note_tick - cursor_tick;
+        let delta = self.scroll_delta(cursor_tick, note_tick);
         (delta / self.lookahead_ticks) as f32 * self.hispeed
     }
+
+    /// `from..to` の tick 区間にわたって SCROLL の factor を畳み込み、note 位置の
+    /// SPEED 倍率を掛けた「見かけの距離」を返す。factor が負だと delta も負になり、
+    /// note_y は `None` に倒れる(= 逆スクロール時は画面外として描画対象外)。
+    fn scroll_delta(&self, from_tick: f64, to_tick: f64) -> f64 {
+        accumulate_scroll(&self.scroll_segments, from_tick, to_tick)
+            * speed_at(&self.speed_segments, to_tick)
+    }
+}
+
+/// `segments` を階段関数として `from..to` の区間積分を返す。factor は次のイベントまで
+/// 一定。`from > to` の場合は対称に負値を返す。
+fn accumulate_scroll(segments: &[(f64, f64)], from_tick: f64, to_tick: f64) -> f64 {
+    if (from_tick - to_tick).abs() < f64::EPSILON {
+        return 0.0;
+    }
+    let (lo, hi, sign) =
+        if from_tick <= to_tick { (from_tick, to_tick, 1.0) } else { (to_tick, from_tick, -1.0) };
+    let mut acc = 0.0;
+    let mut prev = lo;
+    let mut factor = factor_before(segments, lo);
+    for &(tick, next_factor) in segments {
+        if tick <= lo {
+            continue;
+        }
+        if tick >= hi {
+            break;
+        }
+        acc += (tick - prev) * factor;
+        prev = tick;
+        factor = next_factor;
+    }
+    acc += (hi - prev) * factor;
+    acc * sign
+}
+
+/// 指定 tick 直前(同時刻も含む)の factor 値を返す(イベント未定義なら 1.0)。
+fn factor_before(segments: &[(f64, f64)], tick: f64) -> f64 {
+    let mut current = 1.0;
+    for &(t, f) in segments {
+        if t > tick {
+            break;
+        }
+        current = f;
+    }
+    current
+}
+
+/// 指定 tick における SPEED の現在値を返す。
+fn speed_at(segments: &[(f64, f64)], tick: f64) -> f64 {
+    factor_before(segments, tick)
 }
 
 fn display_judge_counts(session: &GameSession) -> DisplayJudgeCounts {
@@ -545,6 +612,73 @@ mod tests {
 
         assert_eq!(snapshot.hispeed, 2.0);
         assert_eq!(snapshot.visible_notes[Lane::Key1.index()][0].y, 1.0);
+    }
+
+    #[test]
+    fn build_render_snapshot_doubles_distance_with_scroll_factor_two() {
+        use bmz_chart::model::ScrollEvent;
+        let mut chart = chart();
+        // tick 0 から factor=2.0 で全区間スクロール倍速。
+        chart.scroll_events =
+            vec![ScrollEvent { tick: ChartTick(0), time: TimeUs(0), factor: 2.0 }];
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session =
+            build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
+        session.hispeed = 1.0;
+
+        // chart() のノートは TimeUs(1_000_000)、lookahead=2_000_000 で 1/2 進捗。
+        // SCROLL 2.0 が乗ると見かけ進捗 1.0 (画面上端) になる。
+        let snapshot = build_render_snapshot(&session, TimeUs(0), &[], None);
+        let y = snapshot.visible_notes[Lane::Key1.index()][0].y;
+        assert!((y - 1.0).abs() < 1e-3, "expected ~1.0 with SCROLL 2.0, got {y}");
+    }
+
+    #[test]
+    fn build_render_snapshot_applies_speed_factor() {
+        use bmz_chart::model::SpeedEvent;
+        let mut chart = chart();
+        chart.speed_events = vec![SpeedEvent { tick: ChartTick(0), time: TimeUs(0), factor: 2.0 }];
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session =
+            build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
+        session.hispeed = 1.0;
+
+        let snapshot = build_render_snapshot(&session, TimeUs(0), &[], None);
+        let y = snapshot.visible_notes[Lane::Key1.index()][0].y;
+        assert!((y - 1.0).abs() < 1e-3, "expected ~1.0 with SPEED 2.0, got {y}");
+    }
+
+    #[test]
+    fn build_render_snapshot_compresses_distance_with_scroll_factor_half() {
+        use bmz_chart::model::ScrollEvent;
+        let mut chart = chart();
+        chart.scroll_events =
+            vec![ScrollEvent { tick: ChartTick(0), time: TimeUs(0), factor: 0.5 }];
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session =
+            build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
+        session.hispeed = 1.0;
+
+        // 1/2 進捗 × SCROLL 0.5 = 1/4 進捗。
+        let snapshot = build_render_snapshot(&session, TimeUs(0), &[], None);
+        let y = snapshot.visible_notes[Lane::Key1.index()][0].y;
+        assert!((y - 0.25).abs() < 1e-3, "expected ~0.25 with SCROLL 0.5, got {y}");
+    }
+
+    #[test]
+    fn build_render_snapshot_hides_note_with_negative_scroll() {
+        use bmz_chart::model::ScrollEvent;
+        let mut chart = chart();
+        // factor < 0 は逆スクロール。delta が負になり描画対象外。
+        chart.scroll_events =
+            vec![ScrollEvent { tick: ChartTick(0), time: TimeUs(0), factor: -1.0 }];
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session =
+            build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
+        session.hispeed = 1.0;
+
+        let snapshot = build_render_snapshot(&session, TimeUs(0), &[], None);
+        assert!(snapshot.visible_notes[Lane::Key1.index()].is_empty());
     }
 
     #[test]
