@@ -819,13 +819,15 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
     let front_notes_items = skin.apply_play_skin_global_offset(front_notes_items, skin_state);
     append_skin_render_items(&mut commands, &front_notes_items);
 
-    push_gauge(
-        skin,
-        skin_manifest,
-        &mut commands,
-        snapshot.gauge,
-        (snapshot.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32,
-    );
+    if snapshot.fadeout_elapsed_ms.is_none() && snapshot.failed_elapsed_ms.is_none() {
+        push_gauge(
+            skin,
+            skin_manifest,
+            &mut commands,
+            snapshot.gauge,
+            (snapshot.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+        );
+    }
 
     if !has_document {
         push_combo_panel(skin_manifest, &mut commands, snapshot.combo);

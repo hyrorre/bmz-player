@@ -795,6 +795,25 @@ impl SkinContext {
         document.gauge_render_items(gauge, elapsed_ms, &self.document_sources)
     }
 
+    pub fn timer_animation_duration_ms(&self, timer: i32) -> i32 {
+        self.document.as_ref().map_or(0, |document| {
+            let enabled_options = document.enabled_options();
+            document
+                .all_destinations(&enabled_options)
+                .into_iter()
+                .filter(|destination| destination.timer == Some(timer))
+                .filter_map(|destination| {
+                    flatten_dst_entries(&destination.dst, &enabled_options)
+                        .into_iter()
+                        .map(|frame| frame.time.unwrap_or(0))
+                        .max()
+                })
+                .max()
+                .unwrap_or(0)
+                .max(0)
+        })
+    }
+
     pub fn document_judge_items(
         &self,
         judge: &str,
@@ -8300,6 +8319,34 @@ mod tests {
                 tint: Color { a, .. },
                 ..
             } if approx_eq(a, 128.0 / 255.0)));
+    }
+
+    #[test]
+    fn skin_context_reports_timer_animation_duration() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "system.png" }],
+                "image": [{ "id": "fc", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10 }],
+                "destination": [
+                    { "id": "fc", "timer": 48, "loop": -1, "dst": [
+                        { "time": 0, "x": 10, "y": 20, "w": 5, "h": 6 },
+                        { "time": 1966, "a": 0 }
+                    ] },
+                    { "id": "other", "timer": 2, "dst": [{ "time": 3000 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let context =
+            SkinContext::from_manifest_and_document(default_skin_manifest(), document, Vec::new());
+
+        assert_eq!(context.timer_animation_duration_ms(48), 1966);
+        assert_eq!(context.timer_animation_duration_ms(49), 0);
     }
 
     #[test]

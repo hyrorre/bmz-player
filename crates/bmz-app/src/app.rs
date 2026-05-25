@@ -234,6 +234,7 @@ struct PlayEndingTransition {
     fadeout_started_at: Option<Instant>,
     finished: FinishedPlaySession,
     failed: bool,
+    full_combo_elapsed_at_finish_ms: Option<i32>,
 }
 
 /// リザルト画面終了フェードアウトの進行状態。
@@ -1475,7 +1476,7 @@ impl WinitApp {
         }
 
         if ending.fadeout_started_at.is_none()
-            && ending.started_at.elapsed() >= self.play_finishmargin_duration()
+            && ending.started_at.elapsed() >= self.play_pre_fadeout_duration(ending)
         {
             if let Some(ending) = &mut self.play_ending {
                 ending.fadeout_started_at = Some(Instant::now());
@@ -1559,6 +1560,19 @@ impl WinitApp {
 
     fn play_finishmargin_duration(&self) -> Duration {
         skin_duration_ms(self.renderer.play_skin_document().map(|d| d.finishmargin).unwrap_or(0))
+    }
+
+    fn play_pre_fadeout_duration(&self, ending: &PlayEndingTransition) -> Duration {
+        let finishmargin = self.play_finishmargin_duration();
+        let Some(elapsed_ms) = ending.full_combo_elapsed_at_finish_ms else {
+            return finishmargin;
+        };
+        let full_combo_ms = self
+            .renderer
+            .play_skin_timer_animation_duration_ms(48)
+            .max(self.renderer.play_skin_timer_animation_duration_ms(49));
+        let remaining_ms = full_combo_ms.saturating_sub(elapsed_ms.max(0));
+        finishmargin.max(skin_duration_ms(remaining_ms))
     }
 
     fn play_fadeout_duration(&self) -> Duration {
@@ -1844,6 +1858,7 @@ impl WinitApp {
                 let mut snapshot = frame.render_snapshot;
                 snapshot.play_elapsed_time = self.play_elapsed_time();
                 snapshot.ready_elapsed_time = self.play_ready_sound_started_at.map(elapsed_since);
+                let full_combo_elapsed_at_finish_ms = snapshot.full_combo_elapsed_ms;
                 self.last_play_snapshot = Some(snapshot);
                 self.play_landmine_se(mine_hits);
                 // active_play がまだ残っている内に hispeed/lane_cover/lift を profile に保存する。
@@ -1852,6 +1867,7 @@ impl WinitApp {
                     started_at: Instant::now(),
                     fadeout_started_at: None,
                     failed: frame.state == bmz_gameplay::session::PlayState::Failed,
+                    full_combo_elapsed_at_finish_ms,
                     finished,
                 });
                 self.update_play_ending_snapshot_timers();
@@ -1912,6 +1928,9 @@ impl WinitApp {
             (!ending.failed).then_some(elapsed_since_ms(ending.started_at));
         snapshot.failed_elapsed_ms = ending.failed.then_some(elapsed_since_ms(ending.started_at));
         snapshot.fadeout_elapsed_ms = ending.fadeout_started_at.map(elapsed_since_ms);
+        snapshot.full_combo_elapsed_ms = ending
+            .full_combo_elapsed_at_finish_ms
+            .map(|elapsed_ms| elapsed_ms.saturating_add(elapsed_since_ms(ending.started_at)));
     }
 
     /// `target_fps` (フォアグラウンド) / `frame_limit_in_background`

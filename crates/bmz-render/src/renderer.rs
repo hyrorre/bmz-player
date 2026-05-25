@@ -227,6 +227,10 @@ impl Renderer {
         self.play_skin_context.document()
     }
 
+    pub fn play_skin_timer_animation_duration_ms(&self, timer: i32) -> i32 {
+        self.play_skin_context.timer_animation_duration_ms(timer)
+    }
+
     /// 決定スキンの document。
     pub fn decide_skin_document(&self) -> Option<&SkinDocument> {
         self.decide_skin_context.document()
