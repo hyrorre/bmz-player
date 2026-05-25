@@ -134,6 +134,8 @@ struct WinitApp {
     draining_audio: Option<AppAudioOutput>,
     finished_play: Option<FinishedPlaySession>,
     last_play_snapshot: Option<RenderSnapshot>,
+    pending_decide: Option<DecideTransition>,
+    play_ending: Option<PlayEndingTransition>,
     last_started_chart_id: Option<i64>,
     select_items: Vec<SelectItem>,
     folder_stack: Vec<String>,
@@ -193,6 +195,22 @@ struct WinitApp {
     /// リザルト画面終了アニメーションの進行状態。
     /// Some のあいだは終了フェードアウト中で、入力は受け付けない。
     result_exit: Option<ResultExit>,
+}
+
+struct DecideTransition {
+    chart_id: i64,
+    options: PlayStartOptions,
+    started_at: Instant,
+    fadeout_started_at: Option<Instant>,
+    cancel: bool,
+    snapshot: RenderSnapshot,
+}
+
+struct PlayEndingTransition {
+    started_at: Instant,
+    fadeout_started_at: Option<Instant>,
+    finished: FinishedPlaySession,
+    failed: bool,
 }
 
 /// リザルト画面終了フェードアウトの進行状態。
@@ -369,6 +387,8 @@ impl WinitApp {
             draining_audio: None,
             finished_play: None,
             last_play_snapshot: None,
+            pending_decide: None,
+            play_ending: None,
             last_started_chart_id: None,
             select_items,
             selected_index_stack: vec![0; folder_stack.len()],
@@ -471,16 +491,10 @@ impl WinitApp {
     }
 
     fn view_state(&self) -> AppViewState {
+        if self.pending_decide.is_some() {
+            return AppViewState::Decide;
+        }
         if self.active_play.is_some() {
-            if self.last_play_snapshot.as_ref().is_some_and(|snapshot| {
-                snapshot.time.0 < 0
-                    && self
-                        .renderer
-                        .decide_skin_document()
-                        .is_some_and(|document| document.skin_type == 6)
-            }) {
-                return AppViewState::Decide;
-            }
             return AppViewState::Play;
         }
 
@@ -498,9 +512,13 @@ impl WinitApp {
 
         match self.view_state() {
             AppViewState::Select => AppSceneSnapshot::Select(self.select_snapshot()),
-            AppViewState::Decide => {
-                AppSceneSnapshot::Decide(self.last_play_snapshot.clone().unwrap_or_default())
-            }
+            AppViewState::Decide => AppSceneSnapshot::Decide(
+                self.pending_decide
+                    .as_ref()
+                    .map(|decide| self.decide_snapshot(decide))
+                    .or_else(|| self.last_play_snapshot.clone())
+                    .unwrap_or_default(),
+            ),
             AppViewState::Play => {
                 AppSceneSnapshot::Play(self.last_play_snapshot.clone().unwrap_or_default())
             }
@@ -670,6 +688,13 @@ impl WinitApp {
         TimeUs(micros)
     }
 
+    fn decide_snapshot(&self, decide: &DecideTransition) -> RenderSnapshot {
+        let mut snapshot = decide.snapshot.clone();
+        snapshot.play_elapsed_time = elapsed_since(decide.started_at);
+        snapshot.fadeout_elapsed_ms = decide.fadeout_started_at.map(elapsed_since_ms);
+        snapshot
+    }
+
     fn option_panel_time(&self) -> TimeUs {
         let micros =
             self.option_panel_started_at.elapsed().as_micros().min(i64::MAX as u128) as i64;
@@ -746,9 +771,19 @@ impl WinitApp {
             return;
         }
 
+        if self.pending_decide.is_some() {
+            if self.decide_input_ready()
+                && let Some(action) = decide_action(event.physical_key, event.state, event.repeat)
+            {
+                self.begin_decide_fadeout(matches!(action, DecideAction::Cancel));
+            }
+            return;
+        }
+
         if self.finished_play.is_some() {
             // 終了アニメーション中 (result_exit=Some) は追加入力を受け付けない。
             if self.result_exit.is_none()
+                && self.result_input_ready()
                 && let Some(action) = result_action(event.physical_key, event.state, event.repeat)
             {
                 match action {
@@ -876,10 +911,21 @@ impl WinitApp {
             return;
         }
 
+        if self.pending_decide.is_some() {
+            if self.decide_input_ready() {
+                match button {
+                    "Button1" | "Start" => self.begin_decide_fadeout(false),
+                    "Button2" | "Select" => self.begin_decide_fadeout(true),
+                    _ => {}
+                }
+            }
+            return;
+        }
+
         // リザルト画面
         if self.finished_play.is_some() {
             // 終了アニメーション中 (result_exit=Some) は追加入力を受け付けない。
-            if self.result_exit.is_none() {
+            if self.result_exit.is_none() && self.result_input_ready() {
                 match button {
                     "Button1" | "Start" => self.begin_result_exit(ResultExitAction::Retry),
                     "Button2" | "Select" => self.begin_result_exit(ResultExitAction::Leave),
@@ -1010,12 +1056,47 @@ impl WinitApp {
 
     fn start_chart(&mut self, chart_id: i64) {
         let options = self.play_start_options();
-        self.start_chart_with_options(chart_id, options);
+        self.begin_decide_for_chart(chart_id, options);
+    }
+
+    fn begin_decide_for_chart(&mut self, chart_id: i64, options: PlayStartOptions) {
+        self.ensure_skin_ready(SkinKind::Decide);
+        self.ensure_skin_ready(SkinKind::Play);
+        let now = Instant::now();
+        self.pending_decide = Some(DecideTransition {
+            chart_id,
+            options,
+            started_at: now,
+            fadeout_started_at: None,
+            cancel: false,
+            snapshot: self.decide_snapshot_for_chart(chart_id),
+        });
+    }
+
+    fn decide_snapshot_for_chart(&self, chart_id: i64) -> RenderSnapshot {
+        let mut snapshot = RenderSnapshot::default();
+        if let Some(SelectItem::Chart(row)) = self.select_items.iter().find(|item| match item {
+            SelectItem::Chart(row) => row.chart.chart_id == chart_id,
+            SelectItem::Folder { .. } => false,
+        }) {
+            snapshot.title = row.chart.title.clone();
+            snapshot.artist = row.chart.artist.clone();
+            snapshot.difficulty_name = row.chart.difficulty_name.clone();
+            snapshot.play_level = row.chart.play_level.clone();
+            snapshot.total_notes = row.chart.total_notes;
+            snapshot.duration = TimeUs(row.chart.length_ms.saturating_mul(1_000));
+            snapshot.min_bpm = row.chart.min_bpm as f32;
+            snapshot.max_bpm = row.chart.max_bpm as f32;
+            snapshot.now_bpm = row.chart.initial_bpm as f32;
+        }
+        snapshot
     }
 
     fn start_chart_with_options(&mut self, chart_id: i64, mut options: PlayStartOptions) {
         self.ensure_skin_ready(SkinKind::Decide);
         self.ensure_skin_ready(SkinKind::Play);
+        self.play_ending = None;
+        self.result_exit = None;
         if options.chart_zero_time == TimeUs(0) {
             options.chart_zero_time = self.play_skin_chart_zero_time();
         }
@@ -1120,7 +1201,8 @@ impl WinitApp {
             tracing::warn!("no previous chart is available to retry");
             return;
         };
-        self.start_chart(chart_id);
+        let options = self.play_start_options();
+        self.start_chart_with_options(chart_id, options);
     }
 
     /// リザルト画面の終了アニメーションを開始する。
@@ -1138,9 +1220,106 @@ impl WinitApp {
         self.play_system_sound(crate::system_sound::SoundType::ResultClose);
     }
 
+    fn decide_input_ready(&self) -> bool {
+        let Some(decide) = &self.pending_decide else {
+            return false;
+        };
+        decide.started_at.elapsed() >= self.decide_input_duration()
+    }
+
+    fn begin_decide_fadeout(&mut self, cancel: bool) {
+        let Some(decide) = &mut self.pending_decide else {
+            return;
+        };
+        if decide.fadeout_started_at.is_some() {
+            return;
+        }
+        decide.cancel = cancel;
+        decide.fadeout_started_at = Some(Instant::now());
+    }
+
+    fn advance_decide_transition(&mut self) {
+        let Some(decide) = &self.pending_decide else {
+            return;
+        };
+        if decide.fadeout_started_at.is_none()
+            && decide.started_at.elapsed() >= self.decide_scene_duration()
+        {
+            self.begin_decide_fadeout(false);
+            return;
+        }
+
+        let Some(fadeout_started_at) =
+            self.pending_decide.as_ref().and_then(|d| d.fadeout_started_at)
+        else {
+            return;
+        };
+        if fadeout_started_at.elapsed() < self.decide_fadeout_duration() {
+            return;
+        }
+
+        let Some(decide) = self.pending_decide.take() else {
+            return;
+        };
+        if decide.cancel {
+            let now = Instant::now();
+            self.select_scene_started_at = now;
+            self.select_bar_started_at = now;
+        } else {
+            self.start_chart_with_options(decide.chart_id, decide.options);
+        }
+    }
+
+    fn advance_play_ending(&mut self) {
+        let Some(ending) = &self.play_ending else {
+            return;
+        };
+        if ending.failed {
+            if ending.started_at.elapsed() >= self.play_close_duration() {
+                self.finish_play_ending();
+            }
+            return;
+        }
+
+        if ending.fadeout_started_at.is_none()
+            && ending.started_at.elapsed() >= self.play_finishmargin_duration()
+        {
+            if let Some(ending) = &mut self.play_ending {
+                ending.fadeout_started_at = Some(Instant::now());
+            }
+            return;
+        }
+
+        let Some(fadeout_started_at) = self.play_ending.as_ref().and_then(|e| e.fadeout_started_at)
+        else {
+            return;
+        };
+        if fadeout_started_at.elapsed() >= self.play_fadeout_duration() {
+            self.finish_play_ending();
+        }
+    }
+
+    fn finish_play_ending(&mut self) {
+        let Some(ending) = self.play_ending.take() else {
+            return;
+        };
+        if let Some(started) = self.active_play.take() {
+            self.draining_audio = Some(started.running.audio);
+        }
+        self.finished_play = Some(ending.finished);
+        self.result_scene_started_at = Instant::now();
+        self.ensure_skin_ready(SkinKind::Result);
+    }
+
     /// 終了フェードアウトの経過を監視し、スキンのフェードアウト時間を過ぎたら
     /// 保留していた遷移を実行する。毎フレーム描画前に呼ぶ。
     fn advance_result_exit(&mut self) {
+        if self.finished_play.is_some()
+            && self.result_exit.is_none()
+            && self.result_scene_started_at.elapsed() >= self.result_scene_duration()
+        {
+            self.begin_result_exit(ResultExitAction::Leave);
+        }
         let Some(exit) = &self.result_exit else {
             return;
         };
@@ -1171,6 +1350,42 @@ impl WinitApp {
         let now = Instant::now();
         self.select_scene_started_at = now;
         self.select_bar_started_at = now;
+    }
+
+    fn decide_input_duration(&self) -> Duration {
+        skin_duration_ms(self.renderer.decide_skin_document().map(|d| d.input).unwrap_or(0))
+    }
+
+    fn decide_scene_duration(&self) -> Duration {
+        skin_duration_ms(self.renderer.decide_skin_document().map(|d| d.scene).unwrap_or(0))
+    }
+
+    fn decide_fadeout_duration(&self) -> Duration {
+        skin_duration_ms(self.renderer.decide_skin_document().map(|d| d.fadeout).unwrap_or(0))
+    }
+
+    fn play_finishmargin_duration(&self) -> Duration {
+        skin_duration_ms(self.renderer.play_skin_document().map(|d| d.finishmargin).unwrap_or(0))
+    }
+
+    fn play_fadeout_duration(&self) -> Duration {
+        skin_duration_ms(self.renderer.play_skin_document().map(|d| d.fadeout).unwrap_or(0))
+    }
+
+    fn play_close_duration(&self) -> Duration {
+        skin_duration_ms(self.renderer.play_skin_document().map(|d| d.close).unwrap_or(0))
+    }
+
+    fn result_input_ready(&self) -> bool {
+        self.result_scene_started_at.elapsed() >= self.result_input_duration()
+    }
+
+    fn result_input_duration(&self) -> Duration {
+        skin_duration_ms(self.renderer.result_skin_document().map(|d| d.input).unwrap_or(0))
+    }
+
+    fn result_scene_duration(&self) -> Duration {
+        skin_duration_ms(self.renderer.result_skin_document().map(|d| d.scene).unwrap_or(0))
     }
 
     fn reload_select_items(&mut self) {
@@ -1387,6 +1602,10 @@ impl WinitApp {
     }
 
     fn advance_active_play(&mut self) {
+        if self.play_ending.is_some() {
+            self.update_play_ending_snapshot_timers();
+            return;
+        }
         let Some(active_play) = &mut self.active_play else {
             return;
         };
@@ -1423,15 +1642,13 @@ impl WinitApp {
                 self.play_landmine_se(mine_hits);
                 // active_play がまだ残っている内に hispeed/lane_cover/lift を profile に保存する。
                 self.save_current_play_options(Some(hispeed), "play finished");
-                // リザルト画面へ移っても曲の最後まで鳴らすため、音声出力だけは
-                // 取り出して保持する。スケジュール済みの BGM/キー音はオーディオ
-                // スレッドで鳴り切るまで再生され、advance_draining_audio が
-                // ドレイン完了後に解放する。
-                if let Some(started) = self.active_play.take() {
-                    self.draining_audio = Some(started.running.audio);
-                }
-                self.finished_play = Some(finished);
-                self.ensure_skin_ready(SkinKind::Result);
+                self.play_ending = Some(PlayEndingTransition {
+                    started_at: Instant::now(),
+                    fadeout_started_at: None,
+                    failed: frame.state == bmz_gameplay::session::PlayState::Failed,
+                    finished,
+                });
+                self.update_play_ending_snapshot_timers();
             }
             Err(error) => {
                 tracing::error!(%error, "failed to advance play session");
@@ -1439,6 +1656,21 @@ impl WinitApp {
                 self.last_play_snapshot = None;
             }
         }
+    }
+
+    fn update_play_ending_snapshot_timers(&mut self) {
+        let Some(ending) = &self.play_ending else {
+            return;
+        };
+        let play_elapsed_time = self.play_elapsed_time();
+        let Some(snapshot) = &mut self.last_play_snapshot else {
+            return;
+        };
+        snapshot.play_elapsed_time = play_elapsed_time;
+        snapshot.music_end_elapsed_ms =
+            (!ending.failed).then_some(elapsed_since_ms(ending.started_at));
+        snapshot.failed_elapsed_ms = ending.failed.then_some(elapsed_since_ms(ending.started_at));
+        snapshot.fadeout_elapsed_ms = ending.fadeout_started_at.map(elapsed_since_ms);
     }
 
     /// `target_fps` (フォアグラウンド) / `frame_limit_in_background`
@@ -2256,6 +2488,8 @@ impl ApplicationHandler for WinitApp {
                 self.limit_frame_rate();
                 self.poll_gamepad_events();
                 self.drain_pending_skins();
+                self.advance_decide_transition();
+                self.advance_play_ending();
                 self.advance_result_exit();
                 self.run_egui_frame();
                 self.render_current_scene();
@@ -2629,6 +2863,12 @@ enum ResultAction {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DecideAction {
+    Confirm,
+    Cancel,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HispeedChange {
     Down,
     Up,
@@ -2684,6 +2924,34 @@ fn result_action(
         PhysicalKey::Code(KeyCode::Enter | KeyCode::Escape) => Some(ResultAction::Leave),
         _ => None,
     }
+}
+
+fn decide_action(
+    physical_key: PhysicalKey,
+    state: ElementState,
+    repeat: bool,
+) -> Option<DecideAction> {
+    if state != ElementState::Pressed || repeat {
+        return None;
+    }
+
+    match physical_key {
+        PhysicalKey::Code(KeyCode::Enter | KeyCode::Space) => Some(DecideAction::Confirm),
+        PhysicalKey::Code(KeyCode::Escape) => Some(DecideAction::Cancel),
+        _ => None,
+    }
+}
+
+fn elapsed_since(started_at: Instant) -> TimeUs {
+    TimeUs(started_at.elapsed().as_micros().min(i64::MAX as u128) as i64)
+}
+
+fn elapsed_since_ms(started_at: Instant) -> i32 {
+    (started_at.elapsed().as_millis().min(i32::MAX as u128)) as i32
+}
+
+fn skin_duration_ms(ms: i32) -> Duration {
+    Duration::from_millis(ms.max(0) as u64)
 }
 
 fn scene_kind(scene: &AppSceneSnapshot) -> AppSceneKind {

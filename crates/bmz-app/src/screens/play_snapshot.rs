@@ -109,6 +109,9 @@ pub fn build_render_snapshot_with_bga_frames(
             (render_now.0 >= started_at.0)
                 .then_some(((render_now.0 - started_at.0) / 1_000).clamp(0, i32::MAX as i64) as i32)
         }),
+        fadeout_elapsed_ms: None,
+        failed_elapsed_ms: None,
+        music_end_elapsed_ms: None,
         bar_lines: Vec::new(),
         visible_long_notes: Vec::new(),
         keyon_ms: std::array::from_fn(|lane_index| {

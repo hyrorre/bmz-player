@@ -920,6 +920,7 @@ pub struct SkinDrawState {
     pub judge_ms: Option<i32>,
     /// Full combo timer elapsed ms (TIMER_FULLCOMBO_1P/2P=48/49)。Noneなら非アクティブ。
     pub full_combo_ms: Option<i32>,
+    pub music_end_ms: Option<i32>,
     /// 現在表示中の判定画像インデックス (0=PGREAT,1=GREAT,2=GOOD,3=BAD,4=POOR)。
     /// `destination` の judge 挿入点で judge 定義を描画するために使う。
     pub judge_index: Option<usize>,
@@ -1027,6 +1028,8 @@ pub struct SkinDrawState {
     /// None ならフェードアウト中でない。`timer: 2` の destination はこの値が
     /// Some のときだけ描画され、リザルト画面終了時のアニメーションを駆動する。
     pub fadeout_ms: Option<i32>,
+    /// 閉店/FAILED 演出のタイマー経過 ms (TIMER_FAILED=3)。
+    pub failed_ms: Option<i32>,
 }
 
 impl Default for SkinDrawState {
@@ -1058,6 +1061,7 @@ impl Default for SkinDrawState {
             lane_judge: [None; LANE_COUNT],
             judge_ms: None,
             full_combo_ms: None,
+            music_end_ms: None,
             judge_index: None,
             offset_lift_px: 0,
             offset_lanecover_px: 0,
@@ -1110,6 +1114,7 @@ impl Default for SkinDrawState {
             target_clear_index: None,
             result_failed: None,
             fadeout_ms: None,
+            failed_ms: None,
         }
     }
 }
@@ -1696,6 +1701,10 @@ impl SkinDocument {
 
         if let Some(graph) = self.graph.iter().find(|g| g.id == destination.id) {
             return self.graph_render_item(graph, frame, state, sources).map(|item| vec![item]);
+        }
+
+        if let Some(item) = special_image_render_item(destination, frame, self.w, self.h) {
+            return Some(vec![item]);
         }
 
         let hidden_cover = self.hidden_cover.iter().find(|cover| cover.id == destination.id)?;
@@ -4397,12 +4406,14 @@ fn skin_timer_elapsed_ms(timer: Option<i32>, state: SkinDrawState) -> Option<i32
     match timer {
         None => Some(state.elapsed_ms),
         Some(2) => state.fadeout_ms,
+        Some(3) => state.failed_ms,
         Some(40) => Some(state.ready_timer_ms),
         Some(41) => state.play_timer_ms,
         Some(11) => Some(state.select_bar_elapsed_ms),
         Some(21..=23) => Some(state.select_option_panel_elapsed_ms),
         Some(46) => state.judge_ms,
         Some(48 | 49) => state.full_combo_ms,
+        Some(908) => state.music_end_ms,
         Some(50..=57) => state.bomb_ms[(timer.unwrap() - 50) as usize],
         Some(100..=107) => state.keyon_ms[(timer.unwrap() - 100) as usize],
         Some(120..=127) => state.keyoff_ms[(timer.unwrap() - 120) as usize],
@@ -5199,6 +5210,29 @@ fn bga_image_item(
         source_size: Some(bga.source_size),
         linear_filter,
     }
+}
+
+fn special_image_render_item(
+    destination: &SkinDestinationDef,
+    frame: ResolvedSkinFrame,
+    canvas_width: u32,
+    canvas_height: u32,
+) -> Option<SkinRenderItem> {
+    let (base_r, base_g, base_b) = match destination.id.as_str() {
+        "-110" => (0.0, 0.0, 0.0),
+        "-111" => (1.0, 1.0, 1.0),
+        _ => return None,
+    };
+    Some(SkinRenderItem::Rect {
+        rect: normalize_skin_frame_rect(frame, canvas_width, canvas_height),
+        color: Color::rgba(
+            base_r * frame.r as f32 / 255.0,
+            base_g * frame.g as f32 / 255.0,
+            base_b * frame.b as f32 / 255.0,
+            frame.a as f32 / 255.0,
+        ),
+        blend: if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal },
+    })
 }
 
 fn stretch_skin_image_geometry(
@@ -8229,7 +8263,7 @@ mod tests {
 
     #[test]
     fn skin_document_resolves_fadeout_timer_destinations() {
-        // timer=2 (TIMER_FADEOUT) はリザルト画面終了アニメーション専用。
+        // timer=2 (TIMER_FADEOUT) はシーン終了アニメーション用。
         // fadeout_ms=None なら非アクティブで描画されず、Some なら経過 ms で
         // keyframe アニメーションが進行する。
         let document: SkinDocument = serde_json::from_str(
@@ -8274,6 +8308,82 @@ mod tests {
                 rect: Rect { height, .. },
                 ..
             } if approx_eq(height, 0.5)));
+    }
+
+    #[test]
+    fn skin_document_resolves_special_black_fade_rect() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 6,
+                "w": 100,
+                "h": 100,
+                "destination": [
+                    { "id": -110, "timer": 2, "dst": [
+                        { "time": 0, "x": 0, "y": 0, "w": 100, "h": 100, "a": 0 },
+                        { "time": 200, "a": 255 }
+                    ] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        let mid = document.static_image_render_items(
+            &HashMap::new(),
+            SkinDrawState { fadeout_ms: Some(100), ..SkinDrawState::default() },
+        );
+
+        assert_eq!(mid.len(), 1);
+        assert!(matches!(mid[0], SkinRenderItem::Rect {
+                rect: Rect { width, height, .. },
+                color: Color { r, g, b, a },
+                ..
+            } if approx_eq(width, 1.0)
+                && approx_eq(height, 1.0)
+                && approx_eq(r, 0.0)
+                && approx_eq(g, 0.0)
+                && approx_eq(b, 0.0)
+                && approx_eq(a, 128.0 / 255.0)));
+    }
+
+    #[test]
+    fn skin_document_resolves_failed_timer_destinations() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "destination": [
+                    { "id": -111, "timer": 3, "dst": [
+                        { "time": 0, "x": 0, "y": 0, "w": 100, "h": 100, "a": 0 },
+                        { "time": 100, "a": 255 }
+                    ] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        let inactive = document.static_image_render_items(
+            &HashMap::new(),
+            SkinDrawState { failed_ms: None, ..SkinDrawState::default() },
+        );
+        let active = document.static_image_render_items(
+            &HashMap::new(),
+            SkinDrawState { failed_ms: Some(50), ..SkinDrawState::default() },
+        );
+
+        assert!(inactive.is_empty());
+        assert_eq!(active.len(), 1);
+        assert!(matches!(active[0], SkinRenderItem::Rect {
+                color: Color { r, g, b, a },
+                ..
+            } if approx_eq(r, 1.0)
+                && approx_eq(g, 1.0)
+                && approx_eq(b, 1.0)
+                && approx_eq(a, 128.0 / 255.0)));
     }
 
     #[test]

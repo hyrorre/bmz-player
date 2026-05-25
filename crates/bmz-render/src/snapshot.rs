@@ -55,6 +55,12 @@ pub struct RenderSnapshot {
     pub recent_judgements: Vec<DisplayJudgement>,
     /// Full combo timer elapsed ms (skin timer 48/49). None while inactive.
     pub full_combo_elapsed_ms: Option<i32>,
+    /// Scene fadeout timer elapsed ms (skin timer 2). None while inactive.
+    pub fadeout_elapsed_ms: Option<i32>,
+    /// Failed/close timer elapsed ms (skin timer 3). None while inactive.
+    pub failed_elapsed_ms: Option<i32>,
+    /// Music end timer elapsed ms (skin timer 908). None while inactive.
+    pub music_end_elapsed_ms: Option<i32>,
     pub bar_lines: Vec<VisibleBarLine>,
     /// 各レーンのキー押下開始からの経過 ms(押下中のみ Some)。skin timer 100..=107 に渡る。
     pub keyon_ms: [Option<i32>; LANE_COUNT],
