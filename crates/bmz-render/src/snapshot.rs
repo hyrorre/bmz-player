@@ -48,6 +48,8 @@ pub struct RenderSnapshot {
     pub judge_timing_offset_ms: i32,
     pub key_mode: KeyMode,
     pub visible_notes: [Vec<VisibleNote>; LANE_COUNT],
+    /// Mine ノーツ。スコア対象外で、専用のスプライト（赤系）で描く。
+    pub visible_mines: [Vec<VisibleMine>; LANE_COUNT],
     pub visible_long_notes: Vec<VisibleLongNote>,
     pub recent_inputs: Vec<DisplayInput>,
     pub recent_judgements: Vec<DisplayJudgement>,
@@ -103,6 +105,15 @@ pub struct VisibleNote {
     pub lane: Lane,
     pub time: TimeUs,
     pub y: f32,
+}
+
+/// 画面上に見えている Mine ノーツ。座標系は [`VisibleNote`] と同じ。
+#[derive(Debug, Clone, PartialEq)]
+pub struct VisibleMine {
+    pub lane: Lane,
+    pub time: TimeUs,
+    pub y: f32,
+    pub damage: u16,
 }
 
 /// 画面上に見えているロングノートの胴体。

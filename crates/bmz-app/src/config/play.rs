@@ -14,6 +14,7 @@ pub const DEFAULT_JUDGE_WINDOW: JudgeWindow = JudgeWindow {
     bad_us: 120_000,
     empty_poor_fast_us: 500_000,
     empty_poor_slow_us: 200_000,
+    mine_hit_us: 16_000,
 };
 
 pub fn play_offsets_from_profile(profile: &ProfileConfig) -> PlayOffsets {

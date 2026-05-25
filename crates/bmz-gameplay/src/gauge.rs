@@ -88,6 +88,14 @@ impl GaugeState {
             gauge.apply(index, rate);
         }
     }
+
+    /// Mine ノーツを踏んだときの直接ダメージ適用（beatoraja 準拠で
+    /// gauge から `damage` を引く）。コンボ/スコアには影響しない。
+    pub fn apply_mine(&mut self, damage: u16) {
+        for gauge in &mut self.gauges {
+            gauge.apply_mine(damage);
+        }
+    }
 }
 
 impl SingleGaugeState {
@@ -110,6 +118,15 @@ impl SingleGaugeState {
 
     pub fn is_qualified(&self) -> bool {
         self.value > 0.0 && self.value >= self.definition.border
+    }
+
+    /// Mine 用の直接減算（beatoraja は `Gauge.addValue(-damage)` 相当）。
+    /// 通常の `apply` と違って guts 補正を入れず、min..=max にだけクランプする。
+    pub fn apply_mine(&mut self, damage: u16) {
+        if self.value <= 0.0 {
+            return;
+        }
+        self.value = (self.value - damage as f32).clamp(self.definition.min, self.definition.max);
     }
 }
 

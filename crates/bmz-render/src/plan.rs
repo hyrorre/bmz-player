@@ -14,6 +14,8 @@ const JUDGE_LINE_Y_RATIO: f32 = 0.86;
 const NOTE_HEIGHT: f32 = 0.018;
 /// デフォルトスキンのロングノート胴体色（半透明）。
 const LONG_NOTE_BODY_COLOR: Color = Color::rgba(0.5, 0.78, 0.88, 0.5);
+/// デフォルトスキンの Mine ノーツ色（赤・濃いめ）。
+const MINE_COLOR: Color = Color::rgba(0.95, 0.18, 0.20, 0.95);
 pub const DEFAULT_NOTE_TEXTURE: TextureId = TextureId(1);
 pub const DEFAULT_KEY_EVEN_NOTE_TEXTURE: TextureId = TextureId(2);
 pub const DEFAULT_SCRATCH_NOTE_TEXTURE: TextureId = TextureId(3);
@@ -693,6 +695,19 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
                 };
                 push_default_note_skin(skin_manifest, &mut commands, lane, rect);
             }
+
+            // Mine: 通常ノーツより前面に赤い帯を描く。専用テクスチャは未整備のため
+            // 暫定的にベタ塗り（damage に応じて色を変えるなどは別 PR）。
+            for mine in &snapshot.visible_mines[lane_index] {
+                let y = note_rect_y(board, snapshot.lift, mine.y);
+                let rect = Rect {
+                    x: x + lane_width * 0.12,
+                    y,
+                    width: lane_width * 0.76,
+                    height: NOTE_HEIGHT,
+                };
+                commands.push(DrawCommand::Rect { rect, color: MINE_COLOR });
+            }
         }
 
         push_receptors(
@@ -763,6 +778,15 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
                 {
                     let item = skin.apply_play_skin_global_offset_to_item(item, skin_state);
                     append_skin_render_items(&mut commands, &[item]);
+                }
+            }
+            // Mine はスキン側に専用 sprite が無い段階では、note.dst のエリアに赤帯を
+            // 重ねて視認できるようにする。専用テクスチャ対応は別 PR。
+            for mine in &snapshot.visible_mines[lane_index] {
+                if let Some(rect) =
+                    skin.note_rect_for_progress(lane, mine.y, note_height, skin_state)
+                {
+                    commands.push(DrawCommand::Rect { rect, color: MINE_COLOR });
                 }
             }
         }

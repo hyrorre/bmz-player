@@ -11,7 +11,7 @@ use bmz_render::plan::CHART_BGA_TEXTURE_BASE;
 use bmz_render::skin_offset::{SkinOffsetValue, SkinOffsetValues};
 use bmz_render::snapshot::{
     DisplayBgaFrame, DisplayInput, DisplayJudgeCounts, DisplayJudgement, RenderSnapshot,
-    VisibleBarLine, VisibleLongNote, VisibleNote,
+    VisibleBarLine, VisibleLongNote, VisibleMine, VisibleNote,
 };
 
 pub const DEFAULT_LOOKAHEAD_US: i64 = 2_000_000;
@@ -98,6 +98,7 @@ pub fn build_render_snapshot_with_bga_frames(
         judge_timing_offset_ms: (session.offsets.input_offset_us / 1_000) as i32,
         key_mode: session.chart.metadata.key_mode,
         visible_notes: std::array::from_fn(|_| Vec::new()),
+        visible_mines: std::array::from_fn(|_| Vec::new()),
         recent_inputs: session
             .recent_inputs
             .iter()
@@ -128,12 +129,27 @@ pub fn build_render_snapshot_with_bga_frames(
     for lane in Lane::ALL {
         let next_note_index = session.judge.lanes[lane.index()].next_note_index;
         for note in session.chart.notes_for_lane(lane).iter().skip(next_note_index) {
-            // Invisible / Mine は通常ノーツとしては描画しない（Mine は将来別テクスチャ対応）。
-            if matches!(note.kind, NoteKind::Invisible | NoteKind::Mine) {
-                continue;
-            }
-            if let Some(y) = scroll.note_y(note.time, cursor_tick) {
-                snapshot.visible_notes[lane.index()].push(VisibleNote { lane, time: note.time, y });
+            match note.kind {
+                NoteKind::Invisible => continue,
+                NoteKind::Mine => {
+                    if let Some(y) = scroll.note_y(note.time, cursor_tick) {
+                        snapshot.visible_mines[lane.index()].push(VisibleMine {
+                            lane,
+                            time: note.time,
+                            y,
+                            damage: note.damage.unwrap_or(0),
+                        });
+                    }
+                }
+                NoteKind::Tap | NoteKind::LongStart | NoteKind::LongEnd => {
+                    if let Some(y) = scroll.note_y(note.time, cursor_tick) {
+                        snapshot.visible_notes[lane.index()].push(VisibleNote {
+                            lane,
+                            time: note.time,
+                            y,
+                        });
+                    }
+                }
             }
         }
     }
@@ -559,7 +575,7 @@ mod tests {
     }
 
     #[test]
-    fn build_render_snapshot_excludes_invisible_and_mine_notes() {
+    fn build_render_snapshot_routes_invisible_and_mine_correctly() {
         let mut chart = chart();
         chart.lane_notes[Lane::Key2.index()].push(NoteEvent {
             id: NoteId(2),
@@ -587,6 +603,11 @@ mod tests {
         assert_eq!(snapshot.visible_notes[Lane::Key1.index()].len(), 1);
         assert!(snapshot.visible_notes[Lane::Key2.index()].is_empty());
         assert!(snapshot.visible_notes[Lane::Key3.index()].is_empty());
+        // Mine は visible_mines 側に振り分けられる。damage も保持。
+        assert_eq!(snapshot.visible_mines[Lane::Key3.index()].len(), 1);
+        assert_eq!(snapshot.visible_mines[Lane::Key3.index()][0].damage, 8);
+        assert!(snapshot.visible_mines[Lane::Key1.index()].is_empty());
+        assert!(snapshot.visible_mines[Lane::Key2.index()].is_empty());
     }
 
     #[test]

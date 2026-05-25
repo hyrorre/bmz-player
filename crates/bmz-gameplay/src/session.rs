@@ -176,6 +176,10 @@ pub fn apply_judge_outcome(
         session.gauge.apply_judge(event.judge, 1.0);
         events.push(event);
     }
+    for hit in outcome.mine_hits {
+        // Mine はスコア/コンボに影響を与えず、ゲージのみ削る。
+        session.gauge.apply_mine(hit.damage);
+    }
     events
 }
 
@@ -737,6 +741,7 @@ mod tests {
                 bad_us: 120_000,
                 empty_poor_fast_us: 500_000,
                 empty_poor_slow_us: 200_000,
+                mine_hit_us: 16_000,
             }),
             score: ScoreState::default(),
             gauge: GaugeState::new(bmz_core::clear::GaugeType::Normal, 160.0, chart.total_notes),

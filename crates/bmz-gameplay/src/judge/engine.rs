@@ -7,6 +7,7 @@ use bmz_core::time::TimeUs;
 
 use super::model::{
     ActiveLongNote, JudgeOutcome, JudgeWindow, JudgementEvent, LaneJudgeState, LongNoteEndRef,
+    MineHitEvent,
 };
 
 #[derive(Debug, Clone)]
@@ -78,16 +79,32 @@ impl JudgeEngine {
     }
 
     fn process_press(&mut self, chart: &PlayableChart, input: InputEvent) -> JudgeOutcome {
+        // Mine ヒット判定は通常ノーツの判定に先んじて、もしくは並走して行う。
+        // 入力は通常ノーツの判定を妨げないので、ここでは別ベクタに積むだけ。
+        let mut mine_hits = Vec::new();
+        if let Some(hit) = detect_mine_hit(
+            chart,
+            input.lane,
+            input.time,
+            self.windows.mine_hit_us,
+            &self.lanes[input.lane.index()],
+        ) {
+            self.lanes[input.lane.index()].last_mine_hit_time = Some(hit.time);
+            mine_hits.push(hit);
+        }
+
         let lane_state = &mut self.lanes[input.lane.index()];
         let Some((idx, note)) =
             next_press_reference_note(chart, input.lane, lane_state.next_note_index)
         else {
-            return classify_empty_poor_from_last_press(
+            let mut outcome = classify_empty_poor_from_last_press(
                 lane_state.last_press_time,
                 input,
                 self.windows,
             )
             .unwrap_or_default();
+            outcome.mine_hits = mine_hits;
+            return outcome;
         };
 
         let delta = input.time.0 - note.time.0;
@@ -111,25 +128,24 @@ impl JudgeEngine {
                     delta: TimeUs(delta),
                     time: input.time,
                 }],
+                mine_hits,
                 consumed_input: true,
             };
         }
 
-        if let Some(outcome) =
+        let mut outcome = if let Some(outcome) =
             classify_empty_poor_from_last_press(lane_state.last_press_time, input, self.windows)
         {
-            return outcome;
-        }
-
-        if delta > self.windows.bad_us && delta <= self.windows.empty_poor_slow_us {
-            return empty_poor(input.lane, TimingSide::Slow, TimeUs(delta), input.time);
-        }
-
-        if delta < -self.windows.bad_us && (-delta) <= self.windows.empty_poor_fast_us {
-            return empty_poor(input.lane, TimingSide::Fast, TimeUs(delta), input.time);
-        }
-
-        JudgeOutcome::default()
+            outcome
+        } else if delta > self.windows.bad_us && delta <= self.windows.empty_poor_slow_us {
+            empty_poor(input.lane, TimingSide::Slow, TimeUs(delta), input.time)
+        } else if delta < -self.windows.bad_us && (-delta) <= self.windows.empty_poor_fast_us {
+            empty_poor(input.lane, TimingSide::Fast, TimeUs(delta), input.time)
+        } else {
+            JudgeOutcome::default()
+        };
+        outcome.mine_hits = mine_hits;
+        outcome
     }
 
     fn process_release(&mut self, input: InputEvent) -> JudgeOutcome {
@@ -152,6 +168,7 @@ impl JudgeEngine {
                 delta: TimeUs(delta),
                 time: input.time,
             }],
+            mine_hits: Vec::new(),
             consumed_input: true,
         }
     }
@@ -168,6 +185,29 @@ fn next_press_reference_note(
         .enumerate()
         .skip(start_index)
         .find(|(_, note)| matches!(note.kind, NoteKind::Tap | NoteKind::LongStart))
+}
+
+/// 指定レーンに置かれた Mine の中から、入力時刻と `window_us` 以内に一致するものを探す。
+/// 直近に同じ time の Mine をヒット済みなら無視する（二重ヒット防止）。
+fn detect_mine_hit(
+    chart: &PlayableChart,
+    lane: Lane,
+    input_time: TimeUs,
+    window_us: i64,
+    lane_state: &LaneJudgeState,
+) -> Option<MineHitEvent> {
+    chart
+        .notes_for_lane(lane)
+        .iter()
+        .filter(|note| note.kind == NoteKind::Mine)
+        .filter(|note| Some(note.time) != lane_state.last_mine_hit_time)
+        .find(|note| (input_time.0 - note.time.0).abs() <= window_us)
+        .map(|note| MineHitEvent {
+            note_id: note.id,
+            lane,
+            damage: note.damage.unwrap_or(0),
+            time: note.time,
+        })
 }
 
 fn classify_normal_delta(delta_us: i64, windows: JudgeWindow) -> Option<Judge> {
@@ -218,6 +258,7 @@ fn empty_poor(lane: Lane, side: TimingSide, delta: TimeUs, time: TimeUs) -> Judg
             delta,
             time,
         }],
+        mine_hits: Vec::new(),
         consumed_input: false,
     }
 }
@@ -257,6 +298,7 @@ mod tests {
             bad_us: 120_000,
             empty_poor_fast_us: 500_000,
             empty_poor_slow_us: 200_000,
+            mine_hit_us: 16_000,
         }
     }
 
@@ -370,6 +412,72 @@ mod tests {
         assert_eq!(second.events[0].side, TimingSide::Slow);
         assert_eq!(second.events[0].note_id, None);
         assert_eq!(engine.lanes[Lane::Key1.index()].next_note_index, 1);
+    }
+
+    fn chart_with_mine(time: TimeUs, damage: u16) -> PlayableChart {
+        let lane = Lane::Key1;
+        let note = NoteEvent {
+            id: NoteId(7),
+            lane,
+            kind: NoteKind::Mine,
+            tick: Default::default(),
+            time,
+            sound: None,
+            damage: Some(damage),
+        };
+        let mut lane_notes = std::array::from_fn(|_| Vec::new());
+        lane_notes[lane.index()].push(note);
+        PlayableChart {
+            identity: ChartIdentity { file_md5: [0; 16], file_sha256: [0; 32] },
+            metadata: ChartMetadata::default(),
+            lane_notes,
+            long_notes: Vec::new(),
+            bgm_events: Vec::<SoundEvent>::new(),
+            bga_events: Vec::new(),
+            timing_events: Vec::new(),
+            bar_lines: Vec::new(),
+            sounds: Vec::<SoundAssetRef>::new(),
+            bga_assets: Vec::new(),
+            total_notes: 0,
+            end_time: time,
+        }
+    }
+
+    #[test]
+    fn mine_hit_emits_event_with_damage() {
+        let chart = chart_with_mine(TimeUs(1_000_000), 8);
+        let mut engine = JudgeEngine::new(windows());
+
+        let outcome = engine.process_input(&chart, press_at(TimeUs(1_000_000)));
+
+        assert_eq!(outcome.mine_hits.len(), 1);
+        assert_eq!(outcome.mine_hits[0].damage, 8);
+        assert_eq!(outcome.mine_hits[0].note_id, NoteId(7));
+        // Mine ヒットは通常判定とは別ベクタに入る。スコア対象ノーツが無いので
+        // events は空、consumed_input も false のまま。
+        assert!(outcome.events.is_empty());
+        assert!(!outcome.consumed_input);
+    }
+
+    #[test]
+    fn mine_does_not_hit_outside_window() {
+        let chart = chart_with_mine(TimeUs(1_000_000), 8);
+        let mut engine = JudgeEngine::new(windows());
+
+        let outcome = engine.process_input(&chart, press_at(TimeUs(1_100_000)));
+        assert!(outcome.mine_hits.is_empty());
+    }
+
+    #[test]
+    fn mine_hit_does_not_double_fire() {
+        let chart = chart_with_mine(TimeUs(1_000_000), 8);
+        let mut engine = JudgeEngine::new(windows());
+
+        let first = engine.process_input(&chart, press_at(TimeUs(1_000_000)));
+        let second = engine.process_input(&chart, press_at(TimeUs(1_000_000)));
+
+        assert_eq!(first.mine_hits.len(), 1);
+        assert!(second.mine_hits.is_empty(), "same Mine must not fire twice");
     }
 
     #[test]
