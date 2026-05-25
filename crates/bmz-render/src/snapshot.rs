@@ -9,6 +9,8 @@ pub struct RenderSnapshot {
     /// プレイ画面に遷移してからの経過時間。
     /// timer 未指定 destination の通常アニメーション時刻の基準に使う。
     pub play_elapsed_time: TimeUs,
+    /// READY timer (TIMER_READY=40) elapsed time. None while READY is not active yet.
+    pub ready_elapsed_time: Option<TimeUs>,
     pub duration: TimeUs,
     pub title: String,
     pub subtitle: String,

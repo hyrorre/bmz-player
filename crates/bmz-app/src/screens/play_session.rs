@@ -54,6 +54,13 @@ pub struct PreparedPlaySession {
     pub applied_arrange: AppliedArrange,
 }
 
+pub struct PreloadedPlaySession {
+    pub chart: Arc<PlayableChart>,
+    pub audio: AudioEngine,
+    pub sample_report: Vec<LoadedSampleReport>,
+    pub applied_arrange: AppliedArrange,
+}
+
 impl Default for PlaySessionOptions {
     fn default() -> Self {
         Self {
@@ -265,6 +272,15 @@ pub fn load_prepared_play_session_for_chart_with_input_backend(
     options: PlaySessionOptions,
     input_backend: Box<dyn InputBackend>,
 ) -> Result<PreparedPlaySession> {
+    let preloaded = preload_play_session_for_chart(library_db, chart_id, options.clone())?;
+    Ok(build_prepared_play_session_from_preloaded(preloaded, profile, options, input_backend))
+}
+
+pub fn preload_play_session_for_chart(
+    library_db: &LibraryDatabase,
+    chart_id: i64,
+    options: PlaySessionOptions,
+) -> Result<PreloadedPlaySession> {
     let Some(path) = library_db.primary_chart_file_path(chart_id)? else {
         bail!("chart file not found for chart id {chart_id}");
     };
@@ -282,9 +298,24 @@ pub fn load_prepared_play_session_for_chart_with_input_backend(
     let mut loader = FfmpegSampleLoader;
     let (audio, sample_report) =
         build_audio_engine_for_chart(&chart, options.sample_rate, &mut loader);
-    let session = build_game_session_with_input_backend(chart, profile, options, input_backend);
 
-    Ok(PreparedPlaySession { session, audio, sample_report, applied_arrange })
+    Ok(PreloadedPlaySession { chart, audio, sample_report, applied_arrange })
+}
+
+pub fn build_prepared_play_session_from_preloaded(
+    preloaded: PreloadedPlaySession,
+    profile: &ProfileConfig,
+    options: PlaySessionOptions,
+    input_backend: Box<dyn InputBackend>,
+) -> PreparedPlaySession {
+    let session =
+        build_game_session_with_input_backend(preloaded.chart, profile, options, input_backend);
+    PreparedPlaySession {
+        session,
+        audio: preloaded.audio,
+        sample_report: preloaded.sample_report,
+        applied_arrange: preloaded.applied_arrange,
+    }
 }
 
 pub fn generate_arrange_seed() -> i64 {

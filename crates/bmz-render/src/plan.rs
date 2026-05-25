@@ -541,9 +541,9 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
 
     let play_elapsed_ms =
         (snapshot.play_elapsed_time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32;
-    let ready_delay_ms = skin.document().map_or(0, play_skin_ready_delay_ms);
-    let ready_timer_ms =
-        (play_elapsed_ms >= ready_delay_ms).then_some(play_elapsed_ms - ready_delay_ms);
+    let ready_timer_ms = snapshot
+        .ready_elapsed_time
+        .map(|time| (time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32);
 
     let skin_state = crate::skin::SkinDrawState {
         elapsed_ms: play_elapsed_ms,
@@ -889,10 +889,6 @@ fn plan_decide(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
     }
 
     plan_play(snapshot, &SkinContext::default())
-}
-
-fn play_skin_ready_delay_ms(document: &crate::skin::SkinDocument) -> i32 {
-    document.loadstart.max(0).saturating_add(document.loadend.max(0))
 }
 
 fn skin_lane_height_px(skin: &SkinContext, fallback_canvas_h: f32) -> f32 {
@@ -2084,11 +2080,13 @@ mod tests {
         let before_ready = RenderSnapshot {
             time: TimeUs(-1_000_000),
             play_elapsed_time: TimeUs(3_000_000),
+            ready_elapsed_time: None,
             ..Default::default()
         };
         let after_ready = RenderSnapshot {
             time: TimeUs(-1_000_000),
             play_elapsed_time: TimeUs(4_000_000),
+            ready_elapsed_time: Some(TimeUs(500_000)),
             ..Default::default()
         };
 

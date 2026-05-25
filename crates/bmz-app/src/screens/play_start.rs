@@ -9,7 +9,9 @@ use crate::config::play::gauge_type_from_config;
 use crate::config::profile_config::{GaugeTypeConfig, ProfileConfig};
 use crate::input::winit::WinitInputBackend;
 use crate::screens::play_session::{
-    PlaySessionOptions, load_prepared_play_session_for_chart_with_input_backend,
+    PlaySessionOptions, PreloadedPlaySession, PreparedPlaySession,
+    build_prepared_play_session_from_preloaded,
+    load_prepared_play_session_for_chart_with_input_backend,
 };
 use crate::select_options::ArrangeOption;
 use crate::storage::library_db::LibraryDatabase;
@@ -30,6 +32,17 @@ pub struct PlayStartOptions {
 pub struct StartedWinitPlaySession {
     pub running: RunningPlaySession,
     pub input: WinitInputBackend,
+}
+
+pub struct PreparedWinitPlaySession {
+    pub prepared: PreparedPlaySession,
+    pub input: WinitInputBackend,
+}
+
+pub struct PreloadedWinitPlaySession {
+    pub preloaded: PreloadedPlaySession,
+    pub input: WinitInputBackend,
+    pub session_options: PlaySessionOptions,
 }
 
 pub fn play_session_options_from_start(
@@ -89,6 +102,49 @@ pub fn start_running_play_session_for_chart_with_input_backend(
     running.best_ex_score = score_db.best_ex_score(chart_sha256).unwrap_or(None);
     running.start(chart_zero_time)?;
     Ok(running)
+}
+
+pub fn prepare_play_session_for_chart_with_winit_input(
+    library_db: &LibraryDatabase,
+    app_config: &AppConfig,
+    profile: &ProfileConfig,
+    chart_id: i64,
+    start_options: PlayStartOptions,
+) -> Result<PreparedWinitPlaySession> {
+    let input = WinitInputBackend::default();
+    let session_options = play_session_options_from_start(app_config, start_options);
+    let prepared = load_prepared_play_session_for_chart_with_input_backend(
+        library_db,
+        chart_id,
+        profile,
+        session_options,
+        Box::new(input.clone()),
+    )?;
+    Ok(PreparedWinitPlaySession { prepared, input })
+}
+
+pub fn prepare_winit_play_session_from_preloaded(
+    profile: &ProfileConfig,
+    preloaded: PreloadedWinitPlaySession,
+) -> PreparedWinitPlaySession {
+    let prepared = build_prepared_play_session_from_preloaded(
+        preloaded.preloaded,
+        profile,
+        preloaded.session_options,
+        Box::new(preloaded.input.clone()),
+    );
+    PreparedWinitPlaySession { prepared, input: preloaded.input }
+}
+
+pub fn open_prepared_winit_play_session(
+    score_db: &ScoreDatabase,
+    app_config: &AppConfig,
+    prepared: PreparedWinitPlaySession,
+) -> Result<StartedWinitPlaySession> {
+    let chart_sha256 = prepared.prepared.session.chart.identity.file_sha256;
+    let mut running = open_prepared_play_audio(&app_config.audio, prepared.prepared)?;
+    running.best_ex_score = score_db.best_ex_score(chart_sha256).unwrap_or(None);
+    Ok(StartedWinitPlaySession { running, input: prepared.input })
 }
 
 pub fn start_running_play_session_for_chart_with_winit_input(

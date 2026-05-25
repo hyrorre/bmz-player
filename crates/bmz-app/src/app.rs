@@ -41,7 +41,11 @@ use crate::screens::play_loop::{PlayAdvanceOutcome, advance_running_play_session
 use crate::screens::play_snapshot::{
     BgaFrameCatalog, bga_texture_id, build_render_snapshot_with_bga_frames, display_bga_frame,
 };
-use crate::screens::play_start::{PlayStartOptions, StartedWinitPlaySession};
+use crate::screens::play_start::{
+    PlayStartOptions, PreloadedWinitPlaySession, StartedWinitPlaySession,
+    open_prepared_winit_play_session, prepare_play_session_for_chart_with_winit_input,
+    prepare_winit_play_session_from_preloaded,
+};
 use crate::screens::result_model::ResultSummary;
 use crate::screens::select_model::{
     SelectItem, TABLE_ROOT_PATH, TablePath, load_select_items_in_folder,
@@ -135,6 +139,9 @@ struct WinitApp {
     finished_play: Option<FinishedPlaySession>,
     last_play_snapshot: Option<RenderSnapshot>,
     pending_decide: Option<DecideTransition>,
+    pending_play_start: Option<PendingPlayStart>,
+    pending_play_preload: Option<PendingPlayPreload>,
+    play_preload_generation: u64,
     play_ending: Option<PlayEndingTransition>,
     last_started_chart_id: Option<i64>,
     select_items: Vec<SelectItem>,
@@ -200,11 +207,26 @@ struct WinitApp {
 
 struct DecideTransition {
     chart_id: i64,
-    options: PlayStartOptions,
     started_at: Instant,
     fadeout_started_at: Option<Instant>,
     cancel: bool,
     snapshot: RenderSnapshot,
+}
+
+struct PendingPlayStart {
+    chart_id: i64,
+}
+
+struct PendingPlayPreload {
+    generation: u64,
+    chart_id: i64,
+    rx: Receiver<PlayPreloadResult>,
+}
+
+struct PlayPreloadResult {
+    generation: u64,
+    chart_id: i64,
+    result: std::result::Result<PreloadedWinitPlaySession, String>,
 }
 
 struct PlayEndingTransition {
@@ -389,6 +411,9 @@ impl WinitApp {
             finished_play: None,
             last_play_snapshot: None,
             pending_decide: None,
+            pending_play_start: None,
+            pending_play_preload: None,
+            play_preload_generation: 0,
             play_ending: None,
             last_started_chart_id: None,
             select_items,
@@ -496,7 +521,7 @@ impl WinitApp {
         if self.pending_decide.is_some() {
             return AppViewState::Decide;
         }
-        if self.active_play.is_some() {
+        if self.active_play.is_some() || self.pending_play_start.is_some() {
             return AppViewState::Play;
         }
 
@@ -1064,15 +1089,53 @@ impl WinitApp {
     fn begin_decide_for_chart(&mut self, chart_id: i64, options: PlayStartOptions) {
         self.ensure_skin_ready(SkinKind::Decide);
         self.ensure_skin_ready(SkinKind::Play);
+        self.start_play_preload(chart_id, options.clone());
         let now = Instant::now();
         self.pending_decide = Some(DecideTransition {
             chart_id,
-            options,
             started_at: now,
             fadeout_started_at: None,
             cancel: false,
             snapshot: self.decide_snapshot_for_chart(chart_id),
         });
+    }
+
+    fn start_play_preload(&mut self, chart_id: i64, options: PlayStartOptions) {
+        self.play_preload_generation = self.play_preload_generation.wrapping_add(1);
+        let generation = self.play_preload_generation;
+        let (tx, rx) = mpsc::channel();
+        let library_db_path = self.boot.app_paths.library_db.clone();
+        let app_config = self.boot.app_config.clone();
+        thread::Builder::new()
+            .name(format!("play-preload-{chart_id}"))
+            .spawn(move || {
+                let result = (|| -> Result<PreloadedWinitPlaySession> {
+                    let library_db =
+                        crate::storage::library_db::LibraryDatabase::open(&library_db_path)?;
+                    let input = crate::input::winit::WinitInputBackend::default();
+                    let session_options =
+                        crate::screens::play_start::play_session_options_from_start(
+                            &app_config,
+                            options,
+                        );
+                    let preloaded = crate::screens::play_session::preload_play_session_for_chart(
+                        &library_db,
+                        chart_id,
+                        session_options.clone(),
+                    )?;
+                    Ok(PreloadedWinitPlaySession { preloaded, input, session_options })
+                })()
+                .map_err(|error| format!("{error:#}"));
+                let _ = tx.send(PlayPreloadResult { generation, chart_id, result });
+            })
+            .expect("failed to spawn play preload thread");
+        self.pending_play_preload = Some(PendingPlayPreload { generation, chart_id, rx });
+        tracing::info!(chart_id, generation, "play preload started");
+    }
+
+    fn invalidate_play_preload(&mut self) {
+        self.play_preload_generation = self.play_preload_generation.wrapping_add(1);
+        self.pending_play_preload = None;
     }
 
     fn decide_snapshot_for_chart(&self, chart_id: i64) -> RenderSnapshot {
@@ -1097,32 +1160,28 @@ impl WinitApp {
     fn start_chart_with_options(&mut self, chart_id: i64, mut options: PlayStartOptions) {
         self.ensure_skin_ready(SkinKind::Decide);
         self.ensure_skin_ready(SkinKind::Play);
+        self.invalidate_play_preload();
         self.play_ending = None;
         self.result_exit = None;
         self.play_ready_sound_started_at = None;
         if options.chart_zero_time == TimeUs(0) {
-            options.chart_zero_time = self.play_skin_chart_zero_time();
+            options.chart_zero_time = self.play_skin_playstart_offset();
         }
         // 新しいプレイの音声出力を開く前に、前曲の余韻再生を止めて出力を解放する。
         self.draining_audio = None;
-        match self.boot.start_play_for_chart_with_winit_input(chart_id, options) {
-            Ok(mut active_play) => {
-                active_play.running.bga_frames =
-                    load_chart_bga_textures(&mut self.renderer, &active_play.running.session.chart);
-                self.finished_play = None;
-                self.play_scene_started_at = Instant::now();
-                let render_now = active_play.running.session.audio_clock.now();
-                let mut snapshot = build_render_snapshot_with_bga_frames(
-                    &active_play.running.session,
-                    render_now,
-                    &active_play.running.session.recent_judgements,
-                    active_play.running.best_ex_score,
-                    &active_play.running.bga_frames,
-                );
-                snapshot.play_elapsed_time = self.play_elapsed_time();
-                self.last_play_snapshot = Some(snapshot);
-                self.active_play = Some(active_play);
-                self.last_started_chart_id = Some(chart_id);
+        match prepare_play_session_for_chart_with_winit_input(
+            &self.boot.library_db,
+            &self.boot.app_config,
+            &self.boot.profile_config,
+            chart_id,
+            options.clone(),
+        )
+        .and_then(|prepared| {
+            open_prepared_winit_play_session(&self.boot.score_db, &self.boot.app_config, prepared)
+        }) {
+            Ok(active_play) => {
+                self.enter_play_scene(chart_id, self.decide_snapshot_for_chart(chart_id));
+                self.install_active_play(active_play);
             }
             Err(error) => {
                 tracing::error!(chart_id, %error, "failed to start play");
@@ -1130,15 +1189,10 @@ impl WinitApp {
         }
     }
 
-    fn play_skin_chart_zero_time(&self) -> TimeUs {
-        let preplay_ms = self.renderer.play_skin_document().map_or(0, |document| {
-            document
-                .loadstart
-                .max(0)
-                .saturating_add(document.loadend.max(0))
-                .saturating_add(document.playstart.max(0))
-        });
-        TimeUs(-i64::from(preplay_ms) * 1_000)
+    fn play_skin_playstart_offset(&self) -> TimeUs {
+        let playstart_ms =
+            self.renderer.play_skin_document().map(|document| document.playstart).unwrap_or(0);
+        TimeUs(-i64::from(playstart_ms.max(0)) * 1_000)
     }
 
     fn play_skin_ready_delay(&self) -> Duration {
@@ -1146,6 +1200,129 @@ impl WinitApp {
             document.loadstart.max(0).saturating_add(document.loadend.max(0))
         });
         skin_duration_ms(ready_delay_ms)
+    }
+
+    fn enter_play_scene(&mut self, chart_id: i64, mut snapshot: RenderSnapshot) {
+        self.play_ending = None;
+        self.result_exit = None;
+        self.play_ready_sound_started_at = None;
+        self.active_play = None;
+        self.finished_play = None;
+        self.draining_audio = None;
+        self.play_scene_started_at = Instant::now();
+        snapshot.play_elapsed_time = TimeUs(0);
+        snapshot.ready_elapsed_time = None;
+        snapshot.time = self.play_skin_playstart_offset();
+        self.last_play_snapshot = Some(snapshot.clone());
+        self.pending_play_start = Some(PendingPlayStart { chart_id });
+        self.last_started_chart_id = Some(chart_id);
+    }
+
+    fn install_active_play(&mut self, mut active_play: StartedWinitPlaySession) {
+        active_play.running.bga_frames =
+            load_chart_bga_textures(&mut self.renderer, &active_play.running.session.chart);
+        let render_now = self.play_skin_playstart_offset();
+        let mut snapshot = build_render_snapshot_with_bga_frames(
+            &active_play.running.session,
+            render_now,
+            &active_play.running.session.recent_judgements,
+            active_play.running.best_ex_score,
+            &active_play.running.bga_frames,
+        );
+        snapshot.play_elapsed_time = self.play_elapsed_time();
+        snapshot.ready_elapsed_time = self.play_ready_sound_started_at.map(elapsed_since);
+        self.last_play_snapshot = Some(snapshot);
+        self.active_play = Some(active_play);
+    }
+
+    fn poll_play_preload(&mut self) {
+        if self.pending_decide.is_some() && self.pending_play_start.is_none() {
+            return;
+        }
+        let Some(pending) = &self.pending_play_preload else {
+            return;
+        };
+        let result = match pending.rx.try_recv() {
+            Ok(result) => result,
+            Err(mpsc::TryRecvError::Empty) => return,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                tracing::warn!(
+                    chart_id = pending.chart_id,
+                    generation = pending.generation,
+                    "play preload worker disconnected"
+                );
+                self.pending_play_preload = None;
+                return;
+            }
+        };
+        self.pending_play_preload = None;
+
+        let Some(play_start) = &self.pending_play_start else {
+            tracing::debug!(
+                chart_id = result.chart_id,
+                generation = result.generation,
+                "discarding play preload result with no pending play scene"
+            );
+            return;
+        };
+        if result.generation != self.play_preload_generation
+            || result.chart_id != play_start.chart_id
+        {
+            tracing::debug!(
+                chart_id = result.chart_id,
+                generation = result.generation,
+                current_generation = self.play_preload_generation,
+                pending_chart_id = play_start.chart_id,
+                "discarding stale play preload result"
+            );
+            return;
+        }
+
+        match result.result {
+            Ok(prepared) => {
+                let prepared =
+                    prepare_winit_play_session_from_preloaded(&self.boot.profile_config, prepared);
+                match open_prepared_winit_play_session(
+                    &self.boot.score_db,
+                    &self.boot.app_config,
+                    prepared,
+                ) {
+                    Ok(active_play) => {
+                        tracing::info!(
+                            chart_id = play_start.chart_id,
+                            generation = result.generation,
+                            "play preload installed"
+                        );
+                        self.install_active_play(active_play);
+                    }
+                    Err(error) => {
+                        tracing::error!(
+                            chart_id = play_start.chart_id,
+                            %error,
+                            "failed to open preloaded play audio"
+                        );
+                        self.abort_pending_play_start();
+                    }
+                }
+            }
+            Err(error) => {
+                tracing::error!(
+                    chart_id = play_start.chart_id,
+                    error,
+                    "failed to preload play session"
+                );
+                self.abort_pending_play_start();
+            }
+        }
+    }
+
+    fn abort_pending_play_start(&mut self) {
+        self.pending_play_start = None;
+        self.active_play = None;
+        self.last_play_snapshot = None;
+        let now = Instant::now();
+        self.select_scene_started_at = now;
+        self.select_bar_started_at = now;
     }
 
     fn play_start_options(&self) -> PlayStartOptions {
@@ -1277,11 +1454,12 @@ impl WinitApp {
             return;
         };
         if decide.cancel {
+            self.invalidate_play_preload();
             let now = Instant::now();
             self.select_scene_started_at = now;
             self.select_bar_started_at = now;
         } else {
-            self.start_chart_with_options(decide.chart_id, decide.options);
+            self.enter_play_scene(decide.chart_id, decide.snapshot);
         }
     }
 
@@ -1621,10 +1799,17 @@ impl WinitApp {
             self.update_play_ending_snapshot_timers();
             return;
         }
+        if self.pending_play_start.is_some() {
+            self.update_pending_play_snapshot_timers();
+        }
         if self.active_play.is_none() {
             return;
         }
-        self.maybe_play_ready_sound();
+        self.maybe_start_ready_phase();
+        if self.play_ready_sound_started_at.is_none() {
+            self.update_pending_play_snapshot_timers();
+            return;
+        }
         let Some(active_play) = &mut self.active_play else {
             return;
         };
@@ -1649,6 +1834,7 @@ impl WinitApp {
                 let mine_hits = frame.mine_hits.len();
                 let mut snapshot = frame.render_snapshot;
                 snapshot.play_elapsed_time = self.play_elapsed_time();
+                snapshot.ready_elapsed_time = self.play_ready_sound_started_at.map(elapsed_since);
                 self.last_play_snapshot = Some(snapshot);
                 self.play_landmine_se(mine_hits);
             }
@@ -1657,6 +1843,7 @@ impl WinitApp {
                 let mine_hits = frame.mine_hits.len();
                 let mut snapshot = frame.render_snapshot;
                 snapshot.play_elapsed_time = self.play_elapsed_time();
+                snapshot.ready_elapsed_time = self.play_ready_sound_started_at.map(elapsed_since);
                 self.last_play_snapshot = Some(snapshot);
                 self.play_landmine_se(mine_hits);
                 // active_play がまだ残っている内に hispeed/lane_cover/lift を profile に保存する。
@@ -1677,15 +1864,39 @@ impl WinitApp {
         }
     }
 
-    fn maybe_play_ready_sound(&mut self) {
+    fn maybe_start_ready_phase(&mut self) {
         if self.play_ready_sound_started_at.is_some() {
             return;
         }
         if self.play_elapsed_time().0 < self.play_skin_ready_delay().as_micros() as i64 {
             return;
         }
+        let chart_zero_time = self.play_skin_playstart_offset();
+        let Some(active_play) = &mut self.active_play else {
+            return;
+        };
+        if let Err(error) = active_play.running.start(chart_zero_time) {
+            tracing::error!(%error, "failed to start preloaded play audio");
+            self.abort_pending_play_start();
+            return;
+        }
         self.play_ready_sound_started_at = Some(Instant::now());
+        self.pending_play_start = None;
         self.play_system_sound(crate::system_sound::SoundType::PlayReady);
+        if let Some(snapshot) = &mut self.last_play_snapshot {
+            snapshot.ready_elapsed_time = Some(TimeUs(0));
+            snapshot.time = chart_zero_time;
+        }
+    }
+
+    fn update_pending_play_snapshot_timers(&mut self) {
+        let play_elapsed_time = self.play_elapsed_time();
+        let ready_elapsed_time = self.play_ready_sound_started_at.map(elapsed_since);
+        let Some(snapshot) = &mut self.last_play_snapshot else {
+            return;
+        };
+        snapshot.play_elapsed_time = play_elapsed_time;
+        snapshot.ready_elapsed_time = ready_elapsed_time;
     }
 
     fn update_play_ending_snapshot_timers(&mut self) {
@@ -2518,6 +2729,7 @@ impl ApplicationHandler for WinitApp {
                 self.limit_frame_rate();
                 self.poll_gamepad_events();
                 self.drain_pending_skins();
+                self.poll_play_preload();
                 self.advance_decide_transition();
                 self.advance_play_ending();
                 self.advance_result_exit();
