@@ -48,8 +48,15 @@ pub fn us_to_ticks(delta_us: i64, bpm: f64) -> u64 {
     ticks.floor().max(0.0) as u64
 }
 
+/// BMS `#STOPxx` の raw 値 (1/192 measure 単位) を microsecond duration へ変換する。
+///
+/// beatoraja 準拠の式: `duration_us = raw * 60_000_000 * 4 / (192 * bpm)`
+/// 例) `#STOP01 192` (= 1 measure) を BPM 120 で停止 → 2_000_000us = 2 秒。
+///
+/// 内部的には `raw * 20` を ticks 換算して使うのと等価
+/// (TICKS_PER_MEASURE / 192 = 3840 / 192 = 20)。
 pub fn stop_raw_to_us(value: u64, bpm: f64) -> i64 {
-    ticks_to_us(value, bpm)
+    ticks_to_us(value.saturating_mul(TICKS_PER_MEASURE as u64 / 192), bpm)
 }
 
 pub fn build_timing_map(initial_bpm: f64, mut events: Vec<TickTimingEvent>) -> TimingMap {
@@ -218,6 +225,18 @@ impl TimingMap {
 mod tests {
     use super::*;
     use crate::model::{TimingEvent, TimingEventKind};
+
+    #[test]
+    fn stop_raw_to_us_matches_beatoraja_formula() {
+        // `#STOP01 192` = 1 measure (4 beats) を BPM 120 で停止 → 2_000_000us
+        assert_eq!(stop_raw_to_us(192, 120.0), 2_000_000);
+        // 48 = 1 beat。BPM 120 で 500_000us。
+        assert_eq!(stop_raw_to_us(48, 120.0), 500_000);
+        // BPM 240 にすると同じ raw 値で半分の時間。
+        assert_eq!(stop_raw_to_us(192, 240.0), 1_000_000);
+        // 0 はゼロ秒。
+        assert_eq!(stop_raw_to_us(0, 120.0), 0);
+    }
 
     #[test]
     fn from_chart_events_matches_build_timing_map_for_bpm_change() {

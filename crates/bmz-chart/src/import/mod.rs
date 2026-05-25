@@ -97,9 +97,10 @@ mod tests {
             event.kind,
             TimingEventKind::BpmChange { bpm } if bpm == 180.0
         )));
+        // STOP 値 192 (1 measure) を BPM 120 で適用 → 2_000_000us (beatoraja 準拠)。
         assert!(result.chart.timing_events.iter().any(|event| matches!(
             event.kind,
-            TimingEventKind::Stop { duration_us } if duration_us == 100_000
+            TimingEventKind::Stop { duration_us } if duration_us == 2_000_000
         )));
 
         std::fs::remove_file(&path).unwrap();

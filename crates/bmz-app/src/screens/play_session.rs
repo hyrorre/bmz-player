@@ -214,14 +214,22 @@ pub fn load_game_session_for_chart_with_input_backend(
     let Some(path) = library_db.primary_chart_file_path(chart_id)? else {
         bail!("chart file not found for chart id {chart_id}");
     };
-    let import = import_bms_chart(std::path::Path::new(&path), None, true)
-        .with_context(|| format!("failed to import chart file: {path}"))?;
+    let import =
+        import_bms_chart(std::path::Path::new(&path), random_seed_for_chart(&options), true)
+            .with_context(|| format!("failed to import chart file: {path}"))?;
     Ok(build_game_session_with_input_backend(
         Arc::new(import.chart),
         profile,
         options,
         input_backend,
     ))
+}
+
+/// `import_bms_chart` に渡す BMS `#RANDOM` / `#IF` 解決用 seed。
+/// アレンジ seed (リプレイにも保存される) と同じ値を流用することで、
+/// 同じ replay を再生したときに RANDOM が必ず同じ分岐へ落ちることを保証する。
+fn random_seed_for_chart(options: &PlaySessionOptions) -> Option<u64> {
+    options.arrange_seed.map(|s| s as u64)
 }
 
 pub fn build_audio_engine_for_chart(
@@ -259,8 +267,9 @@ pub fn load_prepared_play_session_for_chart_with_input_backend(
     let Some(path) = library_db.primary_chart_file_path(chart_id)? else {
         bail!("chart file not found for chart id {chart_id}");
     };
-    let import = import_bms_chart(std::path::Path::new(&path), None, true)
-        .with_context(|| format!("failed to import chart file: {path}"))?;
+    let import =
+        import_bms_chart(std::path::Path::new(&path), random_seed_for_chart(&options), true)
+            .with_context(|| format!("failed to import chart file: {path}"))?;
     let mut chart = import.chart;
     let applied_arrange = apply_arrange(
         &mut chart,
