@@ -19,6 +19,10 @@ use crate::snapshot::DisplayJudgeCounts;
 
 const OFFSET_ALL: i32 = 10;
 const OFFSET_NOTES_1P: i32 = 30;
+/// beatoraja の `SkinProperty.OFFSET_JUDGE_1P`。判定文字とコンボ数の destination が
+/// `offsets: [32]` で参照する。コード本体では明示注入せず destination の `offsets`
+/// 経由で適用する (テスト・ドキュメント用に定数だけ保持)。
+#[allow(dead_code)]
 const OFFSET_JUDGE_1P: i32 = 32;
 const OFFSET_JUDGEDETAIL_1P: i32 = 33;
 
@@ -2545,7 +2549,10 @@ impl SkinDocument {
             offset_lanecover_px: state.offset_lanecover_px,
             ..SkinDrawState::default()
         };
-        apply_skin_offset_ids_to_frame(&[OFFSET_JUDGE_1P], &mut image_frame, offset_state);
+        // OFFSET_JUDGE_1P (id 32) は beatoraja では明示注入されず、destination の
+        // `offsets` フィールドで宣言されたぶんだけ適用される。ここで重ねて
+        // 注入すると、`offsets: [32]` を持つ skin (beatoraja 標準形) で
+        // 二重適用になり、判定文字とコンボ数の Y が乖離する原因になる。
         apply_skin_offset_to_frame(image_destination, &mut image_frame, offset_state, false);
         if judge.shift
             && combo > 0
@@ -2575,18 +2582,16 @@ impl SkinDocument {
                 &enabled_options,
             )
         {
-            // beatoraja の SkinNumber は `setRelative(true)` のため、OFFSET_JUDGE_1P の
-            // x/y シフトを受けない (w/h/r/a のみ加算)。
-            // ここで通常の center-anchor シフトを適用すると、コンボ digit 位置が
-            // base_frame.y (= 適用済み image_frame.y) + frame.y で
-            // offset.y/2 ぶん**二重適用**され、判定文字とコンボ数の Y がずれる。
-            if let Some(offset) = offset_state.skin_offsets.get(OFFSET_JUDGE_1P) {
-                number_frame.w += offset.w;
-                number_frame.h += offset.h;
-                number_frame.angle += offset.r;
-                number_frame.a = (number_frame.a + offset.a).clamp(0, 255);
-            }
-            apply_skin_offset_to_frame(number_destination, &mut number_frame, offset_state, false);
+            // beatoraja は SkinNumber に `setRelative(true)` を立てるため、
+            // destination の offsets を適用しても x/y は移動せず w/h/r/a だけ
+            // 加算される。これにより combo digit の最終位置は
+            // base_frame.y (= 適用後 image_frame.y) + number_frame.y_orig となり、
+            // 判定文字と同じ量だけ y シフトする (中心アンカー伸縮)。
+            apply_skin_offset_to_frame_relative(
+                number_destination,
+                &mut number_frame,
+                offset_state,
+            );
             items.extend(self.value_number_render_items(
                 &number_destination.id,
                 combo as i64,
@@ -4820,6 +4825,26 @@ fn apply_skin_offset_to_frame(
     state: SkinDrawState,
     include_hidden_cover_offsets: bool,
 ) {
+    apply_skin_offset_to_frame_inner(destination, frame, state, include_hidden_cover_offsets, false)
+}
+
+/// beatoraja の `SkinObject.setRelative(true)` 相当 (SkinNumber 等で使用)。
+/// destination の offset を適用する際、x/y シフトはスキップし w/h/r/a のみ加算する。
+fn apply_skin_offset_to_frame_relative(
+    destination: &SkinDestinationDef,
+    frame: &mut ResolvedSkinFrame,
+    state: SkinDrawState,
+) {
+    apply_skin_offset_to_frame_inner(destination, frame, state, false, true)
+}
+
+fn apply_skin_offset_to_frame_inner(
+    destination: &SkinDestinationDef,
+    frame: &mut ResolvedSkinFrame,
+    state: SkinDrawState,
+    include_hidden_cover_offsets: bool,
+    relative: bool,
+) {
     let mut ids: Vec<i32> = destination.offsets.clone();
     if destination.offset != 0 {
         ids.push(destination.offset);
@@ -4836,13 +4861,14 @@ fn apply_skin_offset_to_frame(
         }
     }
 
-    apply_skin_offset_ids_to_frame(&ids, frame, state);
+    apply_skin_offset_ids_to_frame(&ids, frame, state, relative);
 }
 
 fn apply_skin_offset_ids_to_frame(
     ids: &[i32],
     frame: &mut ResolvedSkinFrame,
     state: SkinDrawState,
+    relative: bool,
 ) {
     for &offset_id in ids {
         match offset_id {
@@ -4856,8 +4882,11 @@ fn apply_skin_offset_ids_to_frame(
             }
             _ => {
                 if let Some(offset) = state.skin_offsets.get(offset_id) {
-                    frame.x += offset.x - offset.w / 2;
-                    frame.y += offset.y - offset.h / 2;
+                    if !relative {
+                        // beatoraja: !relative のとき x/y は中央アンカーでシフト
+                        frame.x += offset.x - offset.w / 2;
+                        frame.y += offset.y - offset.h / 2;
+                    }
                     frame.w += offset.w;
                     frame.h += offset.h;
                     frame.angle += offset.r;
@@ -9254,13 +9283,13 @@ mod tests {
                 "judge": [{
                     "id": "judge",
                     "images": [
-                        { "id": "judgef-pg", "dst": [
+                        { "id": "judgef-pg", "offsets": [32], "dst": [
                             { "time": 0, "x": 10, "y": 20, "w": 30, "h": 10 },
                             { "time": 500 }
                         ]}
                     ],
                     "numbers": [
-                        { "id": "combo-num", "dst": [
+                        { "id": "combo-num", "offsets": [32], "dst": [
                             { "time": 0, "x": 0, "y": 30, "w": 10, "h": 20 },
                             { "time": 500 }
                         ]}
@@ -9317,7 +9346,7 @@ mod tests {
                 "judge": [{
                     "id": "judge",
                     "images": [
-                        { "id": "judgef-pg", "dst": [{ "time": 0, "x": 10, "y": 20, "w": 30, "h": 10 }, { "time": 500 }] }
+                        { "id": "judgef-pg", "offsets": [32], "dst": [{ "time": 0, "x": 10, "y": 20, "w": 30, "h": 10 }, { "time": 500 }] }
                     ]
                 }]
             }
