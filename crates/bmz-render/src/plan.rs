@@ -821,16 +821,6 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
     let front_notes_items = skin.apply_play_skin_global_offset(front_notes_items, skin_state);
     append_skin_render_items(&mut commands, &front_notes_items);
 
-    if snapshot.fadeout_elapsed_ms.is_none() && snapshot.failed_elapsed_ms.is_none() {
-        push_gauge(
-            skin,
-            skin_manifest,
-            &mut commands,
-            snapshot.gauge,
-            (snapshot.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32,
-        );
-    }
-
     if !has_document {
         push_combo_panel(skin_manifest, &mut commands, snapshot.combo);
         push_default_play_skin(skin, &mut commands, snapshot);
@@ -1190,20 +1180,6 @@ fn push_receptors(
             }],
         );
     }
-}
-
-fn push_gauge(
-    skin: &SkinContext,
-    _skin_manifest: &SkinManifest,
-    commands: &mut Vec<DrawCommand>,
-    gauge: f32,
-    elapsed_ms: i32,
-) {
-    if let Some(items) = skin.document_gauge_items(gauge, elapsed_ms) {
-        append_skin_render_items(commands, &items);
-    }
-    // skin doc が無い(=デフォルトスキン)時はグルーブゲージを描画しない。
-    // 旧来は組み込みの frame/fill 画像で描いていたが、デフォルトスキンの HUD から外す方針。
 }
 
 fn push_combo_panel(skin_manifest: &SkinManifest, commands: &mut Vec<DrawCommand>, combo: u32) {

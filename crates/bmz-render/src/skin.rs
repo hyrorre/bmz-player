@@ -1549,6 +1549,18 @@ impl SkinDocument {
             if !eval_skin_draw_condition(&destination.draw, state) {
                 continue;
             }
+            if self.gauge.as_ref().is_some_and(|gauge| gauge.id == destination.id) {
+                if let Some(items) = self.resolve_gauge_destination_items(
+                    destination,
+                    &enabled_options,
+                    state,
+                    sources,
+                ) {
+                    let target = if after_notes_marker { &mut front } else { &mut behind };
+                    target.extend(items);
+                }
+                continue;
+            }
             if let Some(items) = self.resolve_destination_items(
                 destination,
                 &images,
@@ -2494,26 +2506,31 @@ impl SkinDocument {
         elapsed_ms: i32,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<Vec<SkinRenderItem>> {
-        let gauge_def = self.gauge.as_ref()?;
+        let state = SkinDrawState { elapsed_ms, gauge, ..SkinDrawState::default() };
         let enabled_options = self.enabled_options();
         let destination =
             self.all_destinations(&enabled_options).into_iter().find(|destination| {
-                destination.id == gauge_def.id
+                self.gauge.as_ref().is_some_and(|gauge_def| destination.id == gauge_def.id)
                     && destination.timer.is_none()
-                    && test_skin_ops(
-                        &destination.op,
-                        &enabled_options,
-                        SkinDrawState { elapsed_ms, gauge, ..SkinDrawState::default() },
-                    )
-                    && eval_skin_draw_condition(
-                        &destination.draw,
-                        SkinDrawState { elapsed_ms, gauge, ..SkinDrawState::default() },
-                    )
+                    && test_skin_ops(&destination.op, &enabled_options, state)
+                    && eval_skin_draw_condition(&destination.draw, state)
             })?;
-        let frame = resolve_destination_frame(destination, elapsed_ms, &enabled_options)?;
+        self.resolve_gauge_destination_items(destination, &enabled_options, state, sources)
+    }
+
+    fn resolve_gauge_destination_items(
+        &self,
+        destination: &SkinDestinationDef,
+        enabled_options: &[i32],
+        state: SkinDrawState,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Option<Vec<SkinRenderItem>> {
+        let gauge_def = self.gauge.as_ref()?;
+        let elapsed_ms = skin_timer_elapsed_ms(destination.timer, state)?;
+        let frame = resolve_destination_frame(destination, elapsed_ms, enabled_options)?;
         let rect = normalize_skin_frame_rect(frame, self.w, self.h);
         let filled =
-            (gauge.clamp(0.0, 100.0) / 100.0 * gauge_def.parts.max(1) as f32).round() as i32;
+            (state.gauge.clamp(0.0, 100.0) / 100.0 * gauge_def.parts.max(1) as f32).round() as i32;
         let node_id = gauge_def.nodes.first()?;
         let mut items = Vec::new();
         for index in 0..filled {
@@ -7317,6 +7334,59 @@ mod tests {
                 && approx_eq(u, 0.1)
                 && approx_eq(uv_width, 0.05)));
         assert!(matches!(items[1], SkinRenderItem::Image { rect: Rect { x, .. }, .. }
+                if approx_eq(x, 0.5)));
+    }
+
+    #[test]
+    fn static_render_items_resolve_gauge_in_destination_order() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "gauge.png" }],
+                "image": [
+                    { "id": "panel", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10 },
+                    { "id": "gauge-node", "src": 1, "x": 10, "y": 0, "w": 5, "h": 10 }
+                ],
+                "gauge": { "id": "gauge", "nodes": ["gauge-node"], "parts": 4 },
+                "destination": [
+                    { "id": "panel", "dst": [{ "x": 0, "y": 0, "w": 10, "h": 10 }] },
+                    { "id": "gauge", "timer": 2, "dst": [{ "x": 80, "y": 10, "w": -40, "h": 10 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "1".to_string(),
+            SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 100.0, height: 100.0 },
+            },
+        )]);
+
+        let inactive = document.static_image_render_items(
+            &sources,
+            SkinDrawState { elapsed_ms: 500, gauge: 50.0, fadeout_ms: None, ..Default::default() },
+        );
+        let active = document.static_image_render_items(
+            &sources,
+            SkinDrawState {
+                elapsed_ms: 500,
+                gauge: 50.0,
+                fadeout_ms: Some(250),
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(inactive.len(), 1);
+        assert_eq!(active.len(), 3);
+        assert!(matches!(active[1], SkinRenderItem::Image { rect: Rect { x, .. }, .. }
+                if approx_eq(x, 0.4)));
+        assert!(matches!(active[2], SkinRenderItem::Image { rect: Rect { x, .. }, .. }
                 if approx_eq(x, 0.5)));
     }
 
