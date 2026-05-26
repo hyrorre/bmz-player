@@ -380,8 +380,17 @@ fn build_skin_panel(
                 ui.label("決定");
                 changed |= ui.text_edit_singleline(&mut skin.decide).changed();
                 ui.end_row();
-                ui.label("プレイ");
-                changed |= ui.text_edit_singleline(&mut skin.play).changed();
+                ui.label("プレイ (5K)");
+                changed |= ui.text_edit_singleline(&mut skin.play5).changed();
+                ui.end_row();
+                ui.label("プレイ (7K)");
+                changed |= ui.text_edit_singleline(&mut skin.play7).changed();
+                ui.end_row();
+                ui.label("プレイ (10K)");
+                changed |= ui.text_edit_singleline(&mut skin.play10).changed();
+                ui.end_row();
+                ui.label("プレイ (14K)");
+                changed |= ui.text_edit_singleline(&mut skin.play14).changed();
                 ui.end_row();
                 ui.label("リザルト");
                 changed |= ui.text_edit_singleline(&mut skin.result).changed();
@@ -430,7 +439,10 @@ fn build_skin_panel(
             ui.label("読み込み済みスキンが宣言する設定可能項目:");
             let select_root = skin_root_path(&skin.select);
             let decide_root = skin_root_path(&skin.decide);
-            let play_root = skin_root_path(&skin.play);
+            let play5_root = skin_root_path(&skin.play5);
+            let play7_root = skin_root_path(&skin.play7);
+            let play10_root = skin_root_path(&skin.play10);
+            let play14_root = skin_root_path(&skin.play14);
             let result_root = skin_root_path(&skin.result);
             // オプション数が多いとウィンドウが画面をはみ出すため、この区画は
             // スクロール可能にする。
@@ -457,11 +469,38 @@ fn build_skin_panel(
                     );
                     changed |= build_scene_skin_defs(
                         ui,
-                        "プレイスキン",
+                        "プレイスキン (5K)",
                         &skin_meta.play,
-                        play_root.as_deref(),
-                        &mut skin.play_options,
-                        &mut skin.play_files,
+                        play5_root.as_deref(),
+                        &mut skin.play5_options,
+                        &mut skin.play5_files,
+                        &mut skin.offsets,
+                    );
+                    changed |= build_scene_skin_defs(
+                        ui,
+                        "プレイスキン (7K)",
+                        &skin_meta.play,
+                        play7_root.as_deref(),
+                        &mut skin.play7_options,
+                        &mut skin.play7_files,
+                        &mut skin.offsets,
+                    );
+                    changed |= build_scene_skin_defs(
+                        ui,
+                        "プレイスキン (10K)",
+                        &skin_meta.play,
+                        play10_root.as_deref(),
+                        &mut skin.play10_options,
+                        &mut skin.play10_files,
+                        &mut skin.offsets,
+                    );
+                    changed |= build_scene_skin_defs(
+                        ui,
+                        "プレイスキン (14K)",
+                        &skin_meta.play,
+                        play14_root.as_deref(),
+                        &mut skin.play14_options,
+                        &mut skin.play14_files,
                         &mut skin.offsets,
                     );
                     changed |= build_scene_skin_defs(

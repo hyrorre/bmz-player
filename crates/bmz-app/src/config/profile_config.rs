@@ -334,12 +334,21 @@ pub struct SkinConfig {
     /// `.json` / `.luaskin` / `.lua` で終わるパスは beatoraja スキンとして扱う。
     #[serde(default)]
     pub decide: String,
-    /// プレイ画面スキンのパス。
+    /// 5K プレイ画面スキンのパス。
     /// 空文字列なら内蔵デフォルトスキンを使用。
     /// `.json` で終わるパスは beatoraja JSON スキン、それ以外は
     /// `skin.toml` を含む bmz スキンディレクトリとして扱う。
     #[serde(default)]
-    pub play: String,
+    pub play5: String,
+    /// 7K プレイ画面スキンのパス。フォーマットは [`play5`] と同じ。
+    #[serde(default)]
+    pub play7: String,
+    /// 10K プレイ画面スキンのパス。フォーマットは [`play5`] と同じ。
+    #[serde(default)]
+    pub play10: String,
+    /// 14K プレイ画面スキンのパス。フォーマットは [`play5`] と同じ。
+    #[serde(default)]
+    pub play14: String,
     /// リザルト画面スキンのパス。
     /// 空文字列なら bmz の固定描画を使用。
     /// `.json` で終わるパスは beatoraja JSON スキンとして扱う。
@@ -353,9 +362,18 @@ pub struct SkinConfig {
     /// 決定スキンのカスタマイズオプション選択。
     #[serde(default)]
     pub decide_options: BTreeMap<String, String>,
-    /// プレイスキンのカスタマイズオプション選択。
+    /// 5K プレイスキンのカスタマイズオプション選択。
     #[serde(default)]
-    pub play_options: BTreeMap<String, String>,
+    pub play5_options: BTreeMap<String, String>,
+    /// 7K プレイスキンのカスタマイズオプション選択。
+    #[serde(default)]
+    pub play7_options: BTreeMap<String, String>,
+    /// 10K プレイスキンのカスタマイズオプション選択。
+    #[serde(default)]
+    pub play10_options: BTreeMap<String, String>,
+    /// 14K プレイスキンのカスタマイズオプション選択。
+    #[serde(default)]
+    pub play14_options: BTreeMap<String, String>,
     /// リザルトスキンのカスタマイズオプション選択。
     #[serde(default)]
     pub result_options: BTreeMap<String, String>,
@@ -365,9 +383,18 @@ pub struct SkinConfig {
     /// 決定スキンのファイル選択。
     #[serde(default)]
     pub decide_files: BTreeMap<String, String>,
-    /// プレイスキンのファイル選択。
+    /// 5K プレイスキンのファイル選択。
     #[serde(default)]
-    pub play_files: BTreeMap<String, String>,
+    pub play5_files: BTreeMap<String, String>,
+    /// 7K プレイスキンのファイル選択。
+    #[serde(default)]
+    pub play7_files: BTreeMap<String, String>,
+    /// 10K プレイスキンのファイル選択。
+    #[serde(default)]
+    pub play10_files: BTreeMap<String, String>,
+    /// 14K プレイスキンのファイル選択。
+    #[serde(default)]
+    pub play14_files: BTreeMap<String, String>,
     /// リザルトスキンのファイル選択。
     #[serde(default)]
     pub result_files: BTreeMap<String, String>,

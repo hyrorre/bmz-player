@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use bmz_core::lane::KeyMode;
 use bmz_render::assets::{RgbaImageAsset, load_png_rgba};
 use bmz_render::bitmap_font::{BitmapFont, load_bitmap_font};
 use bmz_render::plan::TextureId;
@@ -12,6 +13,46 @@ use bmz_render::skin::{
 };
 use bmz_skin::SkinKind as DecodeSkinKind;
 use rayon::prelude::*;
+
+use crate::config::profile_config::SkinConfig;
+
+/// `SkinConfig` から key_mode に対応するプレイスキン path / options / files を借用する。
+pub struct PlaySkinSelection<'a> {
+    pub key_mode: KeyMode,
+    pub path: &'a str,
+    pub options: &'a BTreeMap<String, String>,
+    pub files: &'a BTreeMap<String, String>,
+}
+
+/// `SkinConfig` から key_mode に応じたプレイスキン設定の参照を取り出す。
+pub fn play_skin_selection_for(skin: &SkinConfig, key_mode: KeyMode) -> PlaySkinSelection<'_> {
+    match key_mode {
+        KeyMode::K5 => PlaySkinSelection {
+            key_mode,
+            path: skin.play5.as_str(),
+            options: &skin.play5_options,
+            files: &skin.play5_files,
+        },
+        KeyMode::K7 => PlaySkinSelection {
+            key_mode,
+            path: skin.play7.as_str(),
+            options: &skin.play7_options,
+            files: &skin.play7_files,
+        },
+        KeyMode::K10 => PlaySkinSelection {
+            key_mode,
+            path: skin.play10.as_str(),
+            options: &skin.play10_options,
+            files: &skin.play10_files,
+        },
+        KeyMode::K14 => PlaySkinSelection {
+            key_mode,
+            path: skin.play14.as_str(),
+            options: &skin.play14_options,
+            files: &skin.play14_files,
+        },
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SkinKind {
@@ -985,6 +1026,37 @@ mod tests {
         let decoded = decode_beatoraja_skin(&skin_path, SkinKind::Play).unwrap();
 
         assert!(!decoded.document.destination.is_empty());
+    }
+
+    #[test]
+    fn play_skin_selection_for_returns_per_mode_fields() {
+        let mut skin = SkinConfig {
+            play5: "skin5.json".to_string(),
+            play7: "skin7.json".to_string(),
+            play10: "skin10.json".to_string(),
+            play14: "skin14.json".to_string(),
+            ..SkinConfig::default()
+        };
+        skin.play5_options.insert("a".to_string(), "x".to_string());
+        skin.play7_options.insert("b".to_string(), "y".to_string());
+        skin.play10_files.insert("c".to_string(), "z.png".to_string());
+        skin.play14_files.insert("d".to_string(), "w.png".to_string());
+
+        let s5 = play_skin_selection_for(&skin, KeyMode::K5);
+        assert_eq!(s5.path, "skin5.json");
+        assert!(s5.options.contains_key("a"));
+
+        let s7 = play_skin_selection_for(&skin, KeyMode::K7);
+        assert_eq!(s7.path, "skin7.json");
+        assert!(s7.options.contains_key("b"));
+
+        let s10 = play_skin_selection_for(&skin, KeyMode::K10);
+        assert_eq!(s10.path, "skin10.json");
+        assert!(s10.files.contains_key("c"));
+
+        let s14 = play_skin_selection_for(&skin, KeyMode::K14);
+        assert_eq!(s14.path, "skin14.json");
+        assert!(s14.files.contains_key("d"));
     }
 
     #[test]

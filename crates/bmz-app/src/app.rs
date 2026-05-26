@@ -6,6 +6,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use bmz_chart::model::PlayableChart;
+use bmz_core::lane::KeyMode;
 use bmz_core::time::TimeUs;
 use bmz_gameplay::session::PlaySkinOffset;
 use bmz_render::assets::load_static_rgba_image;
@@ -57,7 +58,7 @@ use crate::skin_loader::{
     DecodedFont, DecodedSkin, DecodedSource, SkinKind, apply_skin_from_config,
     decode_beatoraja_skin_with_options, install_decoded_font, install_decoded_skin,
     install_decoded_source, is_decodable_skin_path, load_default_skin_into_renderer,
-    set_decoded_skin_context,
+    play_skin_selection_for, set_decoded_skin_context,
 };
 use crate::storage::replay::load_replay_for_chart;
 use crate::storage::scan::scan_song_roots;
@@ -170,7 +171,8 @@ struct WinitApp {
     select_option_panel: u8,
     gilrs: Option<crate::input::gilrs::GilrsBackend>,
     default_skin_manifest: Option<SkinManifest>,
-    pending_skin_rx: Option<Receiver<PendingSkinResult>>,
+    skin_decode_tx: mpsc::Sender<PendingSkinResult>,
+    skin_decode_rx: Receiver<PendingSkinResult>,
     pending_select_skin: bool,
     pending_decide_skin: bool,
     pending_play_skin: bool,
@@ -178,6 +180,9 @@ struct WinitApp {
     pending_skin_installs: Vec<PendingSkinInstall>,
     skin_reload_generation: u64,
     pending_skin_reload_at: Option<Instant>,
+    /// 直近 install をリクエストしたプレイスキンの key_mode と設定 fingerprint。
+    /// 同じ mode かつ同じ path/options/files なら再 decode をスキップする。
+    last_play_skin_signature: Option<PlaySkinSignature>,
     /// システム SE / BGM を再生する cpal ストリーム。
     /// 開けない環境では `None` で、システム音はサイレント。
     #[allow(dead_code)]
@@ -204,6 +209,8 @@ struct WinitApp {
     /// Some のあいだは終了フェードアウト中で、入力は受け付けない。
     result_exit: Option<ResultExit>,
 }
+
+type PlaySkinSignature = (KeyMode, String, BTreeMap<String, String>, BTreeMap<String, String>);
 
 struct DecideTransition {
     chart_id: i64,
@@ -327,28 +334,23 @@ impl WinitApp {
         let now = Instant::now();
 
         let mut renderer = Renderer::default();
-        let (
-            default_skin_manifest,
-            pending_skin_rx,
-            pending_select_skin,
-            pending_decide_skin,
-            pending_play_skin,
-            pending_result_skin,
-        ) = load_initial_skin_textures(
-            &mut renderer,
-            &boot.profile_config.skin.select,
-            &boot.profile_config.skin.decide,
-            &boot.profile_config.skin.play,
-            &boot.profile_config.skin.result,
-            &boot.profile_config.skin.select_options,
-            &boot.profile_config.skin.decide_options,
-            &boot.profile_config.skin.play_options,
-            &boot.profile_config.skin.result_options,
-            &boot.profile_config.skin.select_files,
-            &boot.profile_config.skin.decide_files,
-            &boot.profile_config.skin.play_files,
-            &boot.profile_config.skin.result_files,
-        );
+        let (skin_decode_tx, skin_decode_rx) = mpsc::channel::<PendingSkinResult>();
+        let (default_skin_manifest, pending_select_skin, pending_decide_skin, pending_result_skin) =
+            load_initial_skin_textures(
+                &mut renderer,
+                &skin_decode_tx,
+                0,
+                &boot.profile_config.skin.select,
+                &boot.profile_config.skin.decide,
+                &boot.profile_config.skin.result,
+                &boot.profile_config.skin.select_options,
+                &boot.profile_config.skin.decide_options,
+                &boot.profile_config.skin.result_options,
+                &boot.profile_config.skin.select_files,
+                &boot.profile_config.skin.decide_files,
+                &boot.profile_config.skin.result_files,
+            );
+        let pending_play_skin = false;
 
         let gilrs = if boot.app_config.input.gamepad_enabled {
             let sensitivity = boot.profile_config.input.analog_scratch_sensitivity;
@@ -441,12 +443,14 @@ impl WinitApp {
             select_option_panel: 0,
             gilrs,
             default_skin_manifest,
-            pending_skin_rx,
+            skin_decode_tx,
+            skin_decode_rx,
             pending_select_skin,
             pending_decide_skin,
             pending_play_skin,
             pending_result_skin,
             pending_skin_installs: Vec::new(),
+            last_play_skin_signature: None,
             skin_reload_generation: 0,
             pending_skin_reload_at: None,
             system_audio,
@@ -1089,6 +1093,7 @@ impl WinitApp {
 
     fn begin_decide_for_chart(&mut self, chart_id: i64, options: PlayStartOptions) {
         self.ensure_skin_ready(SkinKind::Decide);
+        self.spawn_play_skin_decode_for(self.key_mode_for_chart(chart_id));
         self.ensure_skin_ready(SkinKind::Play);
         self.start_play_preload(chart_id, options.clone());
         let now = Instant::now();
@@ -1139,6 +1144,20 @@ impl WinitApp {
         self.pending_play_preload = None;
     }
 
+    /// select_items に持っている `ChartListItem.mode` から KeyMode を引く。
+    /// 未知 / 見つからない場合はデフォルトの 7K を返す (プレイスキン解決のフォールバック)。
+    fn key_mode_for_chart(&self, chart_id: i64) -> KeyMode {
+        self.select_items
+            .iter()
+            .find_map(|item| match item {
+                SelectItem::Chart(row) if row.chart.chart_id == chart_id => {
+                    KeyMode::from_str_opt(&row.chart.mode)
+                }
+                _ => None,
+            })
+            .unwrap_or_default()
+    }
+
     fn decide_snapshot_for_chart(&self, chart_id: i64) -> RenderSnapshot {
         let mut snapshot = RenderSnapshot::default();
         if let Some(SelectItem::Chart(row)) = self.select_items.iter().find(|item| match item {
@@ -1160,6 +1179,7 @@ impl WinitApp {
 
     fn start_chart_with_options(&mut self, chart_id: i64, mut options: PlayStartOptions) {
         self.ensure_skin_ready(SkinKind::Decide);
+        self.spawn_play_skin_decode_for(self.key_mode_for_chart(chart_id));
         self.ensure_skin_ready(SkinKind::Play);
         self.invalidate_play_preload();
         self.play_ending = None;
@@ -1633,14 +1653,13 @@ impl WinitApp {
     /// バックグラウンドで decode 中のスキンを非ブロッキングで取り込み、install キューに積む。
     /// 毎フレーム呼ぶ。実際の Renderer への install 反映は `step_skin_installs` で分散実行する。
     fn drain_pending_skins(&mut self) {
-        while let Some(rx) = self.pending_skin_rx.as_ref() {
-            match rx.try_recv() {
+        loop {
+            match self.skin_decode_rx.try_recv() {
                 Ok(result) => self.enqueue_pending_skin_install(result),
                 Err(mpsc::TryRecvError::Empty) => break,
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    self.pending_skin_rx = None;
-                    break;
-                }
+                // Sender は App 寿命を通じて保持するため Disconnected には到達しないが、
+                // 念のためループから抜ける。
+                Err(mpsc::TryRecvError::Disconnected) => break,
             }
         }
         self.step_skin_installs();
@@ -1651,15 +1670,9 @@ impl WinitApp {
     fn ensure_skin_ready(&mut self, kind: SkinKind) {
         // まだ decode 結果が届いていなければブロックして受信する。
         while self.is_kind_pending_decode(kind) {
-            let Some(rx) = self.pending_skin_rx.as_ref() else {
-                break;
-            };
-            match rx.recv() {
+            match self.skin_decode_rx.recv() {
                 Ok(result) => self.enqueue_pending_skin_install(result),
-                Err(_) => {
-                    self.pending_skin_rx = None;
-                    break;
-                }
+                Err(_) => break,
             }
         }
         // install キューに残っている該当 kind を一気に流す。
@@ -2079,32 +2092,81 @@ impl WinitApp {
         let skin = self.boot.profile_config.skin.clone();
         self.skin_reload_generation = self.skin_reload_generation.wrapping_add(1);
         let generation = self.skin_reload_generation;
-        let (rx, pending_select, pending_decide, pending_play, pending_result) =
-            reload_skin_textures(
-                &mut self.renderer,
-                generation,
-                self.default_skin_manifest.clone(),
-                &skin.select,
-                &skin.decide,
-                &skin.play,
-                &skin.result,
-                &skin.select_options,
-                &skin.decide_options,
-                &skin.play_options,
-                &skin.result_options,
-                &skin.select_files,
-                &skin.decide_files,
-                &skin.play_files,
-                &skin.result_files,
-            );
-        self.pending_skin_rx = rx;
+        let (pending_select, pending_decide, pending_result) = reload_skin_textures(
+            &mut self.renderer,
+            &self.skin_decode_tx,
+            generation,
+            &skin.select,
+            &skin.decide,
+            &skin.result,
+            &skin.select_options,
+            &skin.decide_options,
+            &skin.result_options,
+            &skin.select_files,
+            &skin.decide_files,
+            &skin.result_files,
+        );
         self.pending_select_skin = pending_select;
         self.pending_decide_skin = pending_decide;
-        self.pending_play_skin = pending_play;
+        self.pending_play_skin = false;
         self.pending_result_skin = pending_result;
         // 前回リロードの未完了 install は破棄する。
         self.pending_skin_installs.clear();
+        // プレイスキンは決定画面で chart.key_mode を見て個別に再 decode する。
+        // 設定がそのまま (mode 切替もせず) 続行するケースもあるので、署名は
+        // 残しておき、次の決定で同じ設定なら skip させる。設定変更直後に
+        // active_play 中なら、次プレイで自然にリロードされる。
         tracing::info!(generation, "skins reload queued from egui skin panel");
+    }
+
+    /// 決定対象チャートの key_mode に対応するプレイスキンを background decode に投入する。
+    /// 直前と同じ mode かつ path/options/files が同じなら何もしない。
+    fn spawn_play_skin_decode_for(&mut self, key_mode: KeyMode) {
+        let selection = play_skin_selection_for(&self.boot.profile_config.skin, key_mode);
+        let trimmed = selection.path.trim();
+        let signature =
+            (key_mode, trimmed.to_string(), selection.options.clone(), selection.files.clone());
+
+        if !self.pending_play_skin && self.last_play_skin_signature.as_ref() == Some(&signature) {
+            tracing::debug!(?key_mode, "play skin reuse (signature unchanged)");
+            return;
+        }
+        self.last_play_skin_signature = Some(signature);
+        self.pending_play_skin = false;
+
+        if trimmed.is_empty() {
+            tracing::debug!(?key_mode, "play skin path empty; using default skin only");
+            return;
+        }
+        let path = Path::new(trimmed);
+        if !is_decodable_skin_path(path) {
+            // TOML directory スキンは同期ロード。デフォルトスキンを下敷きに renderer 直差し替え。
+            if let Err(error) = apply_skin_from_config(&mut self.renderer, trimmed) {
+                tracing::warn!(
+                    ?key_mode,
+                    path = trimmed,
+                    error = %format_error_chain(&error),
+                    "failed to apply play skin from directory; using existing textures"
+                );
+            }
+            return;
+        }
+
+        spawn_skin_decode(
+            self.skin_decode_tx.clone(),
+            self.skin_reload_generation,
+            path.to_path_buf(),
+            SkinKind::Play,
+            selection.options.clone(),
+            selection.files.clone(),
+        );
+        self.pending_play_skin = true;
+        tracing::info!(
+            ?key_mode,
+            path = trimmed,
+            generation = self.skin_reload_generation,
+            "play skin decode queued"
+        );
     }
 
     /// リザルト遷移後も鳴らし続けている音声出力を監視し、スケジュール済みの
@@ -2349,44 +2411,39 @@ fn pick_exclusive_video_mode(monitor: &MonitorHandle) -> Option<VideoModeHandle>
 ///
 /// - default skin は必ず一度だけ renderer にアップロードする。
 /// - select の JSON skin は同期デコード+install（Select 画面を最短で表示するためクリティカルパス）。
-/// - play / result の JSON skin はバックグラウンドスレッドで Phase A (decode) を実行。
+/// - decide / result の JSON skin はバックグラウンドスレッドで Phase A (decode) を実行。
 ///   完了したものは main thread の `try_recv` で順次 Phase B (install) する。
-/// - select/play/result の各パスが JSON 以外 (空文字 or .toml ディレクトリ) の場合は
-///   従来通り同期処理 (短時間で完了する想定)。
+/// - select/decide/result の各パスが JSON 以外 (空文字または非対応) の場合は警告ログのみ。
+/// - プレイスキンは決定画面でチャートの key_mode から個別に decode するためここでは扱わない。
 #[allow(clippy::too_many_arguments)]
 fn load_initial_skin_textures(
     renderer: &mut Renderer,
+    skin_decode_tx: &mpsc::Sender<PendingSkinResult>,
+    generation: u64,
     select_skin_path: &str,
     decide_skin_path: &str,
-    play_skin_path: &str,
     result_skin_path: &str,
     select_options: &BTreeMap<String, String>,
     decide_options: &BTreeMap<String, String>,
-    play_options: &BTreeMap<String, String>,
     result_options: &BTreeMap<String, String>,
     select_files: &BTreeMap<String, String>,
     decide_files: &BTreeMap<String, String>,
-    play_files: &BTreeMap<String, String>,
     result_files: &BTreeMap<String, String>,
-) -> (Option<SkinManifest>, Option<Receiver<PendingSkinResult>>, bool, bool, bool, bool) {
-    let (tx, rx) = mpsc::channel::<PendingSkinResult>();
-    let generation = 0;
-    // Play / Result の JSON skin は Select の同期ロードより**前**に decode スレッドを起動して
+) -> (Option<SkinManifest>, bool, bool, bool) {
+    // Decide / Result の JSON skin は Select の同期ロードより**前**に decode スレッドを起動して
     // CPU をフル活用する。Select の sync 処理 (PNG GPU upload など) と並列に decode が進む。
     let pending_select = false;
     let mut pending_decide = false;
-    let mut pending_play = false;
     let mut pending_result = false;
 
     let decide_trimmed = decide_skin_path.trim().to_string();
-    let play_trimmed = play_skin_path.trim().to_string();
     let result_trimmed = result_skin_path.trim().to_string();
 
     if !decide_trimmed.is_empty() {
         let decide_path = Path::new(&decide_trimmed);
         if is_decodable_skin_path(decide_path) {
             spawn_skin_decode(
-                tx.clone(),
+                skin_decode_tx.clone(),
                 generation,
                 decide_path.to_path_buf(),
                 SkinKind::Decide,
@@ -2396,25 +2453,11 @@ fn load_initial_skin_textures(
             pending_decide = true;
         }
     }
-    if !play_trimmed.is_empty() {
-        let play_path = Path::new(&play_trimmed);
-        if is_decodable_skin_path(play_path) {
-            spawn_skin_decode(
-                tx.clone(),
-                generation,
-                play_path.to_path_buf(),
-                SkinKind::Play,
-                play_options.clone(),
-                play_files.clone(),
-            );
-            pending_play = true;
-        }
-    }
     if !result_trimmed.is_empty() {
         let result_path = Path::new(&result_trimmed);
         if is_decodable_skin_path(result_path) {
             spawn_skin_decode(
-                tx.clone(),
+                skin_decode_tx.clone(),
                 generation,
                 result_path.to_path_buf(),
                 SkinKind::Result,
@@ -2424,7 +2467,6 @@ fn load_initial_skin_textures(
             pending_result = true;
         }
     }
-    drop(tx);
 
     let default_manifest = match load_default_skin_into_renderer(renderer) {
         Ok(manifest) => Some(manifest),
@@ -2458,16 +2500,6 @@ fn load_initial_skin_textures(
         }
     }
 
-    // beatoraja 形式以外の play skin (toml/bmz-style) は同期ロード。
-    if !play_trimmed.is_empty()
-        && !is_decodable_skin_path(Path::new(&play_trimmed))
-        && let Err(error) = apply_skin_from_config(renderer, &play_trimmed)
-    {
-        tracing::warn!(
-            error = %format_error_chain(&error),
-            "failed to apply play skin; using fallback textures"
-        );
-    }
     if !result_trimmed.is_empty() && !is_decodable_skin_path(Path::new(&result_trimmed)) {
         tracing::warn!(
             path = %result_trimmed,
@@ -2482,38 +2514,31 @@ fn load_initial_skin_textures(
         );
     }
 
-    let rx = if pending_decide || pending_play || pending_result { Some(rx) } else { None };
-    (default_manifest, rx, pending_select, pending_decide, pending_play, pending_result)
+    (default_manifest, pending_select, pending_decide, pending_result)
 }
 
 #[allow(clippy::too_many_arguments)]
 fn reload_skin_textures(
-    renderer: &mut Renderer,
+    _renderer: &mut Renderer,
+    skin_decode_tx: &mpsc::Sender<PendingSkinResult>,
     generation: u64,
-    default_manifest: Option<SkinManifest>,
     select_skin_path: &str,
     decide_skin_path: &str,
-    play_skin_path: &str,
     result_skin_path: &str,
     select_options: &BTreeMap<String, String>,
     decide_options: &BTreeMap<String, String>,
-    play_options: &BTreeMap<String, String>,
     result_options: &BTreeMap<String, String>,
     select_files: &BTreeMap<String, String>,
     decide_files: &BTreeMap<String, String>,
-    play_files: &BTreeMap<String, String>,
     result_files: &BTreeMap<String, String>,
-) -> (Option<Receiver<PendingSkinResult>>, bool, bool, bool, bool) {
-    let (tx, rx) = mpsc::channel::<PendingSkinResult>();
+) -> (bool, bool, bool) {
     let mut pending_select = false;
     let mut pending_decide = false;
-    let mut pending_play = false;
     let mut pending_result = false;
 
     for (path_text, kind, options, files) in [
         (select_skin_path, SkinKind::Select, select_options, select_files),
         (decide_skin_path, SkinKind::Decide, decide_options, decide_files),
-        (play_skin_path, SkinKind::Play, play_options, play_files),
         (result_skin_path, SkinKind::Result, result_options, result_files),
     ] {
         let trimmed = path_text.trim();
@@ -2523,7 +2548,7 @@ fn reload_skin_textures(
         let path = Path::new(trimmed);
         if is_decodable_skin_path(path) {
             spawn_skin_decode(
-                tx.clone(),
+                skin_decode_tx.clone(),
                 generation,
                 path.to_path_buf(),
                 kind,
@@ -2533,15 +2558,8 @@ fn reload_skin_textures(
             match kind {
                 SkinKind::Select => pending_select = true,
                 SkinKind::Decide => pending_decide = true,
-                SkinKind::Play => pending_play = true,
                 SkinKind::Result => pending_result = true,
-            }
-        } else if matches!(kind, SkinKind::Play) {
-            if let Err(error) = apply_skin_from_config(renderer, trimmed) {
-                tracing::warn!(
-                    error = %format_error_chain(&error),
-                    "failed to apply play skin; using existing textures"
-                );
+                SkinKind::Play => unreachable!("play skin handled via spawn_play_skin_decode_for"),
             }
         } else {
             tracing::warn!(
@@ -2551,20 +2569,8 @@ fn reload_skin_textures(
             );
         }
     }
-    drop(tx);
 
-    if default_manifest.is_none()
-        && (pending_select || pending_decide || pending_play || pending_result)
-    {
-        tracing::warn!("default skin manifest is unavailable; decoded skins cannot be installed");
-    }
-
-    let rx = if pending_select || pending_decide || pending_play || pending_result {
-        Some(rx)
-    } else {
-        None
-    };
-    (rx, pending_select, pending_decide, pending_play, pending_result)
+    (pending_select, pending_decide, pending_result)
 }
 
 fn apply_json_skin_sync(

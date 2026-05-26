@@ -118,6 +118,18 @@ impl KeyMode {
         }
     }
 
+    /// `as_str` の逆。"5K" / "7K" / "10K" / "14K" を受ける (大文字小文字無視)。
+    /// 未知値は `None`。
+    pub fn from_str_opt(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_uppercase().as_str() {
+            "5K" => Some(KeyMode::K5),
+            "7K" => Some(KeyMode::K7),
+            "10K" => Some(KeyMode::K10),
+            "14K" => Some(KeyMode::K14),
+            _ => None,
+        }
+    }
+
     /// BMS オブジェクトのレーン集合からキーモードを推定する。
     pub fn detect_from_lanes(lanes: impl Iterator<Item = Lane>) -> Self {
         let mut has_p2_key = false;
