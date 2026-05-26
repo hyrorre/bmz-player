@@ -3731,7 +3731,7 @@ pub fn default_skin_manifest() -> SkinManifest {
     DEFAULT_SKIN_MANIFEST
         .get_or_init(|| {
             let manifest: SkinManifest =
-                toml::from_str(include_str!("../../../assets/skins/default/skin.toml"))
+                toml::from_str(include_str!("../../../data/skins/default/skin.toml"))
                     .expect("bundled default skin manifest must parse");
             manifest.with_texture_source_sizes(&default_skin_root())
         })
@@ -3739,7 +3739,7 @@ pub fn default_skin_manifest() -> SkinManifest {
 }
 
 fn default_skin_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/skins/default")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/skins/default")
 }
 
 fn fill_image_source_size(
@@ -8993,8 +8993,8 @@ mod tests {
 
     #[test]
     fn local_ecfn_converted_play7_json_loads_when_available() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../.local/skins/ECFN/play/play7-1p.json");
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/skins/ECFN/play/play7-1p.json");
         if !path.is_file() {
             return;
         }
@@ -9007,7 +9007,7 @@ mod tests {
     #[test]
     fn local_ecfn_converted_select_json_loads_when_available() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../.local/skins/ECFN/select/select-converted.json");
+            .join("../../data/skins/ECFN/select/select-converted.json");
         if !path.is_file() {
             return;
         }

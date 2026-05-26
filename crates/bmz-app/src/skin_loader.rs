@@ -135,7 +135,7 @@ pub fn apply_skin_from_dir(renderer: &mut Renderer, skin_root: &Path) -> Result<
 }
 
 pub fn default_skin_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/skins/default")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/skins/default")
 }
 
 pub fn apply_default_skin(renderer: &mut Renderer) -> Result<()> {
@@ -894,7 +894,7 @@ mod tests {
         // 未選択の「プレーサイド」のデフォルト (1P=920) と「スコアグラフ=On」(901)
         // の両方が enabled_options に入ることを確認する。
         let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../.local/skins/Starseeker/play/play7.luaskin");
+            .join("../../data/skins/Starseeker/play/play7.luaskin");
         if !skin_path.is_file() {
             eprintln!("skipping: skin not present at {}", skin_path.display());
             return;
@@ -952,8 +952,8 @@ mod tests {
 
     #[test]
     fn ecfn_play7_1p_json_skin_can_be_applied_when_available() {
-        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../.local/skins/ECFN/play/play7-1p.json");
+        let skin_path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/skins/ECFN/play/play7-1p.json");
         if !skin_path.is_file() {
             return;
         }
@@ -977,7 +977,7 @@ mod tests {
     #[test]
     fn ecfn_result_json_skin_can_be_applied_when_available() {
         let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../.local/skins/ECFN/RESULT/result-converted.json");
+            .join("../../data/skins/ECFN/RESULT/result-converted.json");
         if !skin_path.is_file() {
             return;
         }
@@ -989,7 +989,7 @@ mod tests {
     #[test]
     fn ecfn_select_json_skin_can_be_applied_when_available() {
         let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../.local/skins/ECFN/select/select-converted.json");
+            .join("../../data/skins/ECFN/select/select-converted.json");
         if !skin_path.is_file() {
             return;
         }
@@ -1000,7 +1000,7 @@ mod tests {
 
     #[test]
     fn ecfn_lua_skins_can_be_decoded_when_available() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/skins/ECFN");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/skins/ECFN");
         let cases = [
             (root.join("select/select.luaskin"), SkinKind::Select),
             (root.join("play/play7.luaskin"), SkinKind::Play),
@@ -1018,7 +1018,7 @@ mod tests {
     #[test]
     fn starseeker_play_lua_skin_can_be_decoded_when_available() {
         let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../.local/skins/Starseeker/play/play7.luaskin");
+            .join("../../data/skins/Starseeker/play/play7.luaskin");
         if !skin_path.is_file() {
             return;
         }
@@ -1080,8 +1080,8 @@ mod tests {
 
     #[test]
     fn apply_skin_from_config_lua_path_loads_beatoraja_skin_when_available() {
-        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../.local/skins/ECFN/play/play7.luaskin");
+        let skin_path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/skins/ECFN/play/play7.luaskin");
         if !skin_path.is_file() {
             return;
         }

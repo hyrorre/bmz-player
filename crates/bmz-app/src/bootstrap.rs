@@ -148,7 +148,7 @@ fn startup_scan_roots(app_config: &AppConfig, sample_root: Option<&Path>) -> Vec
 
 fn bundled_sample_song_root() -> Option<PathBuf> {
     let root =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/songs").canonicalize().ok()?;
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/songs").canonicalize().ok()?;
     root.is_dir().then_some(root)
 }
 

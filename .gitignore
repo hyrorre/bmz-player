@@ -1,5 +1,13 @@
 /.DS_Store
 /target/
-/data/
+/data/*
+!/data/skins/
+/data/skins/*
+!/data/skins/default/
+!/data/skins/default/**
+!/data/songs/
+/data/songs/*
+!/data/songs/sample-playable/
+!/data/songs/sample-playable/**
 /.local/
 /.claude/settings.local.json
