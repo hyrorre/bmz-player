@@ -505,7 +505,8 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
     let text = TextRenderer;
     let skin_manifest = skin.manifest();
     let has_document = skin.document().is_some();
-    let active_lanes = snapshot.key_mode.active_lanes();
+    let key_mode = snapshot.key_mode;
+    let active_lanes = key_mode.active_lanes();
     let active_lane_count = active_lanes.len();
     let board = Rect { x: 0.18, y: 0.05, width: 0.64, height: 0.9 };
     let lane_width = board.width / active_lane_count as f32;
@@ -772,8 +773,9 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
             append_skin_render_items(&mut commands, &items);
         }
         for body in &snapshot.visible_long_notes {
-            if let Some(rect) = skin.note_body_rect(body.lane, body.head_y, body.tail_y, skin_state)
-                && let Some(item) = skin.document_long_body_item(body.lane, rect)
+            if let Some(rect) =
+                skin.note_body_rect(body.lane, key_mode, body.head_y, body.tail_y, skin_state)
+                && let Some(item) = skin.document_long_body_item(body.lane, key_mode, rect)
             {
                 let item = skin.apply_play_skin_global_offset_to_item(item, skin_state);
                 append_skin_render_items(&mut commands, &[item]);
@@ -781,11 +783,11 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
         }
         for &lane in active_lanes {
             let lane_index = lane.index();
-            let note_height = skin.document_note_height(lane).unwrap_or(NOTE_HEIGHT);
+            let note_height = skin.document_note_height(lane, key_mode).unwrap_or(NOTE_HEIGHT);
             for note in &snapshot.visible_notes[lane_index] {
                 if let Some(rect) =
-                    skin.note_rect_for_progress(lane, note.y, note_height, skin_state)
-                    && let Some(item) = skin.document_note_item(lane, rect)
+                    skin.note_rect_for_progress(lane, key_mode, note.y, note_height, skin_state)
+                    && let Some(item) = skin.document_note_item(lane, key_mode, rect)
                 {
                     let item = skin.apply_play_skin_global_offset_to_item(item, skin_state);
                     append_skin_render_items(&mut commands, &[item]);
@@ -795,9 +797,9 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
             // 無ければ DEFAULT_MINE_NOTE_TEXTURE をフォールバックとして重ねる。
             for mine in &snapshot.visible_mines[lane_index] {
                 if let Some(rect) =
-                    skin.note_rect_for_progress(lane, mine.y, note_height, skin_state)
+                    skin.note_rect_for_progress(lane, key_mode, mine.y, note_height, skin_state)
                 {
-                    if let Some(item) = skin.document_mine_item(lane, rect) {
+                    if let Some(item) = skin.document_mine_item(lane, key_mode, rect) {
                         let item = skin.apply_play_skin_global_offset_to_item(item, skin_state);
                         append_skin_render_items(&mut commands, &[item]);
                     } else {
@@ -897,7 +899,8 @@ fn skin_lane_height_px(skin: &SkinContext, fallback_canvas_h: f32) -> f32 {
     skin.document()
         .and_then(|document| {
             let enabled_options = document.enabled_options();
-            document.note_lane_area(Lane::Key1, &enabled_options)
+            // Key1 はすべてのキーモードでインデックス 0 なので K7 で代用。
+            document.note_lane_area(Lane::Key1, bmz_core::lane::KeyMode::K7, &enabled_options)
         })
         .map_or(fallback_canvas_h, |rect| rect.height * fallback_canvas_h)
 }

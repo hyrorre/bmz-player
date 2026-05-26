@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
-use bmz_core::lane::{LANE_COUNT, Lane};
+use bmz_core::lane::{KeyMode, LANE_COUNT, Lane};
 use serde::de::{Error as DeError, Visitor};
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map as JsonMap, Value as JsonValue};
@@ -755,28 +755,43 @@ impl SkinContext {
         document.static_render_items_split(&self.document_sources, state, text)
     }
 
-    pub fn document_note_item(&self, lane: Lane, rect: Rect) -> Option<SkinRenderItem> {
+    pub fn document_note_item(
+        &self,
+        lane: Lane,
+        key_mode: KeyMode,
+        rect: Rect,
+    ) -> Option<SkinRenderItem> {
         let document = self.document.as_ref()?;
-        document.note_image_render_item(lane, rect, &self.document_sources)
+        document.note_image_render_item(lane, key_mode, rect, &self.document_sources)
     }
 
     /// ロングノート胴体（`note.lnbody`）を指定矩形に伸縮描画する。
-    pub fn document_long_body_item(&self, lane: Lane, rect: Rect) -> Option<SkinRenderItem> {
+    pub fn document_long_body_item(
+        &self,
+        lane: Lane,
+        key_mode: KeyMode,
+        rect: Rect,
+    ) -> Option<SkinRenderItem> {
         let document = self.document.as_ref()?;
-        document.note_long_body_render_item(lane, rect, &self.document_sources)
+        document.note_long_body_render_item(lane, key_mode, rect, &self.document_sources)
     }
 
     /// Mine ノート（`note.mine`）を指定矩形に描画する。スキン側に定義が無ければ
     /// `None` を返すため、呼び出し側はデフォルトテクスチャ等のフォールバックへ
     /// 落ちる。
-    pub fn document_mine_item(&self, lane: Lane, rect: Rect) -> Option<SkinRenderItem> {
+    pub fn document_mine_item(
+        &self,
+        lane: Lane,
+        key_mode: KeyMode,
+        rect: Rect,
+    ) -> Option<SkinRenderItem> {
         let document = self.document.as_ref()?;
-        document.note_mine_render_item(lane, rect, &self.document_sources)
+        document.note_mine_render_item(lane, key_mode, rect, &self.document_sources)
     }
 
-    pub fn document_note_height(&self, lane: Lane) -> Option<f32> {
+    pub fn document_note_height(&self, lane: Lane, key_mode: KeyMode) -> Option<f32> {
         let document = self.document.as_ref()?;
-        document.note_height_for_lane(lane)
+        document.note_height_for_lane(lane, key_mode)
     }
 
     pub fn document_bar_line_items(
@@ -859,13 +874,14 @@ impl SkinContext {
     pub fn note_rect_for_progress(
         &self,
         lane: Lane,
+        key_mode: KeyMode,
         note_y: f32,
         note_height: f32,
         state: SkinDrawState,
     ) -> Option<Rect> {
         let document = self.document.as_ref()?;
         let enabled_options = document.enabled_options();
-        let area = document.note_lane_area(lane, &enabled_options)?;
+        let area = document.note_lane_area(lane, key_mode, &enabled_options)?;
         // note_y=0.0 → 判定ライン（エリア下端）、note_y=1.0 → エリア上端
         let bottom_y = area.y + area.height * (1.0 - note_y);
         let rect =
@@ -878,13 +894,14 @@ impl SkinContext {
     pub fn note_body_rect(
         &self,
         lane: Lane,
+        key_mode: KeyMode,
         head_y: f32,
         tail_y: f32,
         state: SkinDrawState,
     ) -> Option<Rect> {
         let document = self.document.as_ref()?;
         let enabled_options = document.enabled_options();
-        let area = document.note_lane_area(lane, &enabled_options)?;
+        let area = document.note_lane_area(lane, key_mode, &enabled_options)?;
         let head_center = area.y + area.height * (1.0 - head_y);
         let tail_center = area.y + area.height * (1.0 - tail_y);
         let top = head_center.min(tail_center);
@@ -2216,11 +2233,12 @@ impl SkinDocument {
     pub fn note_image_render_item(
         &self,
         lane: Lane,
+        key_mode: KeyMode,
         rect: Rect,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<SkinRenderItem> {
         let note = self.note.as_ref()?;
-        let image_id = note.note.get(beatoraja_7k_note_index(lane))?;
+        let image_id = note.note.get(beatoraja_note_index(lane, key_mode))?;
         self.note_part_render_item(image_id, rect, sources)
     }
 
@@ -2229,11 +2247,12 @@ impl SkinDocument {
     pub fn note_long_body_render_item(
         &self,
         lane: Lane,
+        key_mode: KeyMode,
         rect: Rect,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<SkinRenderItem> {
         let note = self.note.as_ref()?;
-        let index = beatoraja_7k_note_index(lane);
+        let index = beatoraja_note_index(lane, key_mode);
         let image_id = note.lnbody.get(index).or_else(|| note.note.get(index))?;
         self.note_part_render_item(image_id, rect, sources)
     }
@@ -2244,17 +2263,18 @@ impl SkinDocument {
     pub fn note_mine_render_item(
         &self,
         lane: Lane,
+        key_mode: KeyMode,
         rect: Rect,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<SkinRenderItem> {
         let note = self.note.as_ref()?;
-        let image_id = note.mine.get(beatoraja_7k_note_index(lane))?;
+        let image_id = note.mine.get(beatoraja_note_index(lane, key_mode))?;
         self.note_part_render_item(image_id, rect, sources)
     }
 
-    pub fn note_height_for_lane(&self, lane: Lane) -> Option<f32> {
+    pub fn note_height_for_lane(&self, lane: Lane, key_mode: KeyMode) -> Option<f32> {
         let note = self.note.as_ref()?;
-        let index = beatoraja_7k_note_index(lane);
+        let index = beatoraja_note_index(lane, key_mode);
         if let Some(size) = note.size.get(index).copied().filter(|size| *size > 0) {
             return Some(size as f32 / self.h.max(1) as f32);
         }
@@ -2296,7 +2316,8 @@ impl SkinDocument {
         };
         let images = self.image_map();
         let enabled_options = self.enabled_options();
-        let Some(area) = self.note_lane_area(Lane::Key1, &enabled_options) else {
+        // Key1 はすべてのキーモードでインデックス 0 なので KeyMode::K7 で代用。
+        let Some(area) = self.note_lane_area(Lane::Key1, KeyMode::K7, &enabled_options) else {
             return Vec::new();
         };
         let canvas_h = self.h.max(1) as f32;
@@ -2363,9 +2384,14 @@ impl SkinDocument {
     ///    → 全 Frame をフラット配列として `lane_idx` 番目を使う。
     /// 2. 直接 JSON パースした場合: Conditional エントリの frames 配列がレーン対応を持つ。
     ///    → 条件を満たす Conditional を探し、その frames[lane_idx] を使う。
-    pub fn note_lane_area(&self, lane: Lane, enabled_options: &[i32]) -> Option<Rect> {
+    pub fn note_lane_area(
+        &self,
+        lane: Lane,
+        key_mode: KeyMode,
+        enabled_options: &[i32],
+    ) -> Option<Rect> {
         let note = self.note.as_ref()?;
-        let lane_idx = beatoraja_7k_note_index(lane);
+        let lane_idx = beatoraja_note_index(lane, key_mode);
         let canvas_w = self.w as f32;
         let canvas_h = self.h as f32;
 
@@ -2997,16 +3023,60 @@ impl SkinDocument {
     }
 }
 
-fn beatoraja_7k_note_index(lane: Lane) -> usize {
-    match lane {
-        Lane::Key1 | Lane::Key8 => 0,
-        Lane::Key2 | Lane::Key9 => 1,
-        Lane::Key3 | Lane::Key10 => 2,
-        Lane::Key4 | Lane::Key11 => 3,
-        Lane::Key5 | Lane::Key12 => 4,
-        Lane::Key6 | Lane::Key13 => 5,
-        Lane::Key7 | Lane::Key14 => 6,
-        Lane::Scratch | Lane::Scratch2 => 7,
+/// beatoraja スキンの `note` 配列インデックスをキーモードに応じて返す。
+/// スキン側の並び順: 1P [Key1..KeyN, Scratch], 2P [Key(N+1)..Key(2N), Scratch2]
+fn beatoraja_note_index(lane: Lane, key_mode: KeyMode) -> usize {
+    match key_mode {
+        KeyMode::K5 => match lane {
+            Lane::Key1 => 0,
+            Lane::Key2 => 1,
+            Lane::Key3 => 2,
+            Lane::Key4 => 3,
+            Lane::Key5 => 4,
+            _ => 5, // Scratch
+        },
+        KeyMode::K7 => match lane {
+            Lane::Key1 => 0,
+            Lane::Key2 => 1,
+            Lane::Key3 => 2,
+            Lane::Key4 => 3,
+            Lane::Key5 => 4,
+            Lane::Key6 => 5,
+            Lane::Key7 => 6,
+            _ => 7, // Scratch
+        },
+        KeyMode::K10 => match lane {
+            Lane::Key1 => 0,
+            Lane::Key2 => 1,
+            Lane::Key3 => 2,
+            Lane::Key4 => 3,
+            Lane::Key5 => 4,
+            Lane::Scratch => 5,
+            Lane::Key8 => 6,
+            Lane::Key9 => 7,
+            Lane::Key10 => 8,
+            Lane::Key11 => 9,
+            Lane::Key12 => 10,
+            _ => 11, // Scratch2
+        },
+        KeyMode::K14 => match lane {
+            Lane::Key1 => 0,
+            Lane::Key2 => 1,
+            Lane::Key3 => 2,
+            Lane::Key4 => 3,
+            Lane::Key5 => 4,
+            Lane::Key6 => 5,
+            Lane::Key7 => 6,
+            Lane::Scratch => 7,
+            Lane::Key8 => 8,
+            Lane::Key9 => 9,
+            Lane::Key10 => 10,
+            Lane::Key11 => 11,
+            Lane::Key12 => 12,
+            Lane::Key13 => 13,
+            Lane::Key14 => 14,
+            _ => 15, // Scratch2
+        },
     }
 }
 
@@ -4451,8 +4521,17 @@ fn skin_timer_elapsed_ms(timer: Option<i32>, state: SkinDrawState) -> Option<i32
         Some(48 | 49) => state.full_combo_ms,
         Some(908) => state.music_end_ms,
         Some(50..=57) => state.bomb_ms[(timer.unwrap() - 50) as usize],
+        // 2P bomb: timer 60=Scratch2, 61-67=Key8-14
+        Some(60) => state.bomb_ms[Lane::Scratch2.index()],
+        Some(61..=67) => state.bomb_ms[Lane::Key8.index() + (timer.unwrap() - 61) as usize],
         Some(100..=107) => state.keyon_ms[(timer.unwrap() - 100) as usize],
+        // 2P keyon: timer 110=Scratch2, 111-117=Key8-14
+        Some(110) => state.keyon_ms[Lane::Scratch2.index()],
+        Some(111..=117) => state.keyon_ms[Lane::Key8.index() + (timer.unwrap() - 111) as usize],
         Some(120..=127) => state.keyoff_ms[(timer.unwrap() - 120) as usize],
+        // 2P keyoff: timer 130=Scratch2, 131-137=Key8-14
+        Some(130) => state.keyoff_ms[Lane::Scratch2.index()],
+        Some(131..=137) => state.keyoff_ms[Lane::Key8.index() + (timer.unwrap() - 131) as usize],
         Some(143) => state.end_of_note.then_some(state.elapsed_ms),
         _ => None,
     }
@@ -7165,6 +7244,7 @@ mod tests {
         let key2 = document
             .note_image_render_item(
                 Lane::Key2,
+                KeyMode::K7,
                 Rect { x: 0.0, y: 0.0, width: 0.1, height: 0.1 },
                 &sources,
             )
@@ -7172,6 +7252,7 @@ mod tests {
         let scratch = document
             .note_image_render_item(
                 Lane::Scratch,
+                KeyMode::K7,
                 Rect { x: 0.0, y: 0.0, width: 0.1, height: 0.1 },
                 &sources,
             )
@@ -9300,7 +9381,7 @@ mod tests {
             crate::skin_offset::SkinOffsetValue { x: 0, y: 0, w: 0, h: 20, r: 0, a: 0 },
         );
 
-        let area = document.note_lane_area(Lane::Key1, &[]).unwrap();
+        let area = document.note_lane_area(Lane::Key1, KeyMode::K7, &[]).unwrap();
         let center_y = area.y + area.height * 0.5;
         let rect = document.apply_notes_offset_to_rect(
             Rect { x: area.x, y: center_y - 0.05, width: area.width, height: 0.1 },
@@ -9867,17 +9948,17 @@ mod tests {
 
         let enabled: Vec<i32> = vec![];
         // Key1 is index 0 → first Frame
-        let area = document.note_lane_area(Lane::Key1, &enabled).unwrap();
+        let area = document.note_lane_area(Lane::Key1, KeyMode::K7, &enabled).unwrap();
         assert!(approx_eq(area.x, 90.0 / 1280.0));
         assert!(approx_eq(area.y, 0.0));
         assert!(approx_eq(area.width, 50.0 / 1280.0));
         assert!(approx_eq(area.height, 580.0 / 720.0));
         // Key2 is index 1 → second Frame
-        let area2 = document.note_lane_area(Lane::Key2, &enabled).unwrap();
+        let area2 = document.note_lane_area(Lane::Key2, KeyMode::K7, &enabled).unwrap();
         assert!(approx_eq(area2.x, 140.0 / 1280.0));
         assert!(approx_eq(area2.width, 40.0 / 1280.0));
         // Scratch is index 7 → eighth Frame
-        let scratch = document.note_lane_area(Lane::Scratch, &enabled).unwrap();
+        let scratch = document.note_lane_area(Lane::Scratch, KeyMode::K7, &enabled).unwrap();
         assert!(approx_eq(scratch.x, 20.0 / 1280.0));
         assert!(approx_eq(scratch.width, 70.0 / 1280.0));
     }
@@ -9946,19 +10027,19 @@ mod tests {
 
         let enabled = vec![920];
         // Key1 is index 0
-        let area = document.note_lane_area(Lane::Key1, &enabled).unwrap();
+        let area = document.note_lane_area(Lane::Key1, KeyMode::K7, &enabled).unwrap();
         assert!(approx_eq(area.x, 90.0 / 1280.0));
         assert!(approx_eq(area.y, 0.0));
         assert!(approx_eq(area.width, 50.0 / 1280.0));
         assert!(approx_eq(area.height, 580.0 / 720.0));
 
         // Scratch is index 7
-        let scratch_area = document.note_lane_area(Lane::Scratch, &enabled).unwrap();
+        let scratch_area = document.note_lane_area(Lane::Scratch, KeyMode::K7, &enabled).unwrap();
         assert!(approx_eq(scratch_area.x, 20.0 / 1280.0));
         assert!(approx_eq(scratch_area.width, 70.0 / 1280.0));
 
         // Without the required option, returns None
-        assert!(document.note_lane_area(Lane::Key1, &[]).is_none());
+        assert!(document.note_lane_area(Lane::Key1, KeyMode::K7, &[]).is_none());
     }
 
     fn approx_eq(actual: f32, expected: f32) -> bool {
