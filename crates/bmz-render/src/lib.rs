@@ -10,3 +10,5 @@ pub mod skin_offset;
 pub mod snapshot;
 pub mod text;
 pub mod ui;
+
+pub use renderer::WgpuBackend;

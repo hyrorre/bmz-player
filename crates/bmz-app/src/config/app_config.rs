@@ -82,7 +82,7 @@ pub enum WindowMode {
     ExclusiveFullscreen,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "PascalCase")]
 pub enum RendererBackend {
     Auto,

@@ -20,6 +20,28 @@ use crate::scene::AppSceneSnapshot;
 use crate::skin::{BlendMode, SkinContext, SkinDocument};
 use crate::ui::{EguiFrame, EguiPainter};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WgpuBackend {
+    #[default]
+    Auto,
+    Vulkan,
+    Metal,
+    Dx12,
+    Gl,
+}
+
+impl WgpuBackend {
+    pub fn to_wgpu(self) -> wgpu::Backends {
+        match self {
+            Self::Auto => wgpu::Backends::all(),
+            Self::Vulkan => wgpu::Backends::VULKAN,
+            Self::Metal => wgpu::Backends::METAL,
+            Self::Dx12 => wgpu::Backends::DX12,
+            Self::Gl => wgpu::Backends::GL,
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct Renderer {
     last_scene: Option<AppSceneSnapshot>,
@@ -35,6 +57,7 @@ pub struct Renderer {
     pending_egui: Option<EguiFrame>,
     /// VSync の希望状態。サーフェス生成時および `set_vsync` で参照する。
     vsync: bool,
+    backend: WgpuBackend,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,7 +146,7 @@ impl Renderer {
             return Ok(());
         }
 
-        let mut gpu = WgpuRenderer::new(window, size, self.vsync)?;
+        let mut gpu = WgpuRenderer::new(window, size, self.vsync, self.backend)?;
         for texture in self.pending_textures.drain(..) {
             gpu.upsert_rgba_texture(texture.id, texture.width, texture.height, &texture.rgba);
         }
@@ -295,6 +318,10 @@ impl Renderer {
         }
     }
 
+    pub fn set_backend(&mut self, backend: WgpuBackend) {
+        self.backend = backend;
+    }
+
     pub fn render_last_plan(&mut self) -> Result<RenderSurfaceStatus> {
         let egui = self.pending_egui.take();
         let Some(gpu) = &mut self.gpu else {
@@ -329,11 +356,13 @@ impl fmt::Debug for Renderer {
 }
 
 impl WgpuRenderer {
-    fn new<T>(window: T, size: SurfaceSize, vsync: bool) -> Result<Self>
+    fn new<T>(window: T, size: SurfaceSize, vsync: bool, backend: WgpuBackend) -> Result<Self>
     where
         T: Into<wgpu::SurfaceTarget<'static>>,
     {
-        let instance = wgpu::Instance::default();
+        let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+        descriptor.backends = backend.to_wgpu();
+        let instance = wgpu::Instance::new(descriptor);
         let surface = instance.create_surface(window).context("failed to create wgpu surface")?;
         let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,

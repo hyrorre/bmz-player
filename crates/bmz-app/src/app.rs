@@ -317,6 +317,12 @@ impl WinitApp {
         options: AppOptions,
         system_audio: Option<crate::audio::SystemAudio>,
     ) -> Result<Self> {
+        let mut boot = boot;
+        if let Some(cli_renderer) = options.renderer.clone() {
+            tracing::info!(?cli_renderer, "overriding renderer backend via CLI option");
+            boot.app_config.video.renderer = cli_renderer;
+        }
+
         let folder_stack = initial_folder_stack(&boot.app_config);
         let select_items = load_items_for_stack(&boot, &folder_stack);
         let boot_sample_chart_id = options
@@ -503,8 +509,24 @@ impl WinitApp {
                 let window = Arc::new(window);
                 window.set_visible(true);
                 let size = surface_size_for_window(&window);
-                // サーフェス生成前に VSync 設定を反映させておく。
+                // サーフェス生成前に VSync とバックエンド設定を反映させておく。
                 self.renderer.set_vsync(self.boot.app_config.video.vsync);
+                let backend = match self.boot.app_config.video.renderer {
+                    crate::config::app_config::RendererBackend::Auto => {
+                        bmz_render::WgpuBackend::Auto
+                    }
+                    crate::config::app_config::RendererBackend::Vulkan => {
+                        bmz_render::WgpuBackend::Vulkan
+                    }
+                    crate::config::app_config::RendererBackend::Metal => {
+                        bmz_render::WgpuBackend::Metal
+                    }
+                    crate::config::app_config::RendererBackend::Dx12 => {
+                        bmz_render::WgpuBackend::Dx12
+                    }
+                    crate::config::app_config::RendererBackend::Gl => bmz_render::WgpuBackend::Gl,
+                };
+                self.renderer.set_backend(backend);
                 if let Err(error) = self.renderer.attach_surface(Arc::clone(&window), size) {
                     tracing::error!(%error, "failed to initialize renderer surface");
                     event_loop.exit();

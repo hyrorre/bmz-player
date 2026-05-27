@@ -1,3 +1,4 @@
+use crate::config::app_config::RendererBackend;
 use anyhow::{Context, Result, bail};
 
 pub const BOOT_PLAY_SAMPLE_ARG: &str = "--boot-play-sample";
@@ -104,6 +105,8 @@ pub struct AppOptions {
     pub smoke_exit_on_result: bool,
     /// `--boot-replay <SLOT>` で指定された 0-based のスロット index。
     pub boot_replay_slot: Option<u8>,
+    /// `--renderer <backend>` で指定されたレンダラーバックエンド。
+    pub renderer: Option<RendererBackend>,
 }
 
 impl AppOptions {
@@ -125,6 +128,10 @@ impl AppOptions {
                 options.boot_replay_slot = Some(parse_boot_replay_slot(value)?);
                 continue;
             }
+            if let Some(value) = arg.strip_prefix("--renderer=") {
+                options.renderer = Some(parse_renderer_backend(value)?);
+                continue;
+            }
 
             match arg {
                 BOOT_PLAY_SAMPLE_ARG => options.boot_play_sample = true,
@@ -144,6 +151,12 @@ impl AppOptions {
                     };
                     options.boot_replay_slot = Some(parse_boot_replay_slot(value.as_ref())?);
                 }
+                "--renderer" => {
+                    let Some(value) = args.next() else {
+                        bail!("--renderer requires a backend (vulkan, metal, dx12, gl, auto)");
+                    };
+                    options.renderer = Some(parse_renderer_backend(value.as_ref())?);
+                }
                 _ => bail!("unknown argument: {arg}"),
             }
         }
@@ -161,7 +174,7 @@ where
 }
 
 pub fn app_help_text() -> &'static str {
-    "bmz-app\n\nUsage:\n  bmz-app [OPTIONS]\n  bmz-app table <SUBCOMMAND>\n  bmz-app songs <SUBCOMMAND>\n  bmz-app course <SUBCOMMAND>\n\nOptions:\n  --boot-play-sample              Start the bundled sample chart on boot\n  --autoplay-on-start             Enable autoplay for started charts\n  --boot-replay <1..4>            Start the bundled sample chart in replay mode using slot N\n  --smoke-exit-after-frames <N>   Exit after N rendered frames, clamped to 1 or more\n  --smoke-exit-on-result          Exit when the app reaches the result screen\n  -h, --help                      Print this help\n\nTable subcommands:\n  table add <URL>   Add a difficulty table source and fetch it\n  table list        List all stored difficulty tables\n  table fetch       Fetch/update all configured difficulty tables\n\nSongs subcommands:\n  songs add <PATH> [--no-recursive] [--disabled]   Add a song root directory\n  songs list                                        List configured song roots\n  songs reload                                      Scan all song roots and update the library\n\nCourse subcommands:\n  course import <PATH>   Import beatoraja course JSON from a file or directory\n  course list            List stored courses\n\nExamples:\n  cargo run -p bmz-app -- --boot-play-sample --smoke-exit-after-frames 3\n  cargo run -p bmz-app -- --boot-play-sample --boot-replay 1 --smoke-exit-on-result\n  cargo run -p bmz-app -- table add https://example.com/table.html\n  cargo run -p bmz-app -- table list\n  cargo run -p bmz-app -- songs add /path/to/bms\n  cargo run -p bmz-app -- songs list\n  cargo run -p bmz-app -- songs reload\n  cargo run -p bmz-app -- course import /path/to/course.json\n  cargo run -p bmz-app -- course list"
+    "bmz-app\n\nUsage:\n  bmz-app [OPTIONS]\n  bmz-app table <SUBCOMMAND>\n  bmz-app songs <SUBCOMMAND>\n  bmz-app course <SUBCOMMAND>\n\nOptions:\n  --boot-play-sample              Start the bundled sample chart on boot\n  --autoplay-on-start             Enable autoplay for started charts\n  --boot-replay <1..4>            Start the bundled sample chart in replay mode using slot N\n  --smoke-exit-after-frames <N>   Exit after N rendered frames, clamped to 1 or more\n  --smoke-exit-on-result          Exit when the app reaches the result screen\n  --renderer <backend>            wgpu renderer backend (vulkan, metal, dx12, gl, auto)\n  -h, --help                      Print this help\n\nTable subcommands:\n  table add <URL>   Add a difficulty table source and fetch it\n  table list        List all stored difficulty tables\n  table fetch       Fetch/update all configured difficulty tables\n\nSongs subcommands:\n  songs add <PATH> [--no-recursive] [--disabled]   Add a song root directory\n  songs list                                        List configured song roots\n  songs reload                                      Scan all song roots and update the library\n\nCourse subcommands:\n  course import <PATH>   Import beatoraja course JSON from a file or directory\n  course list            List stored courses\n\nExamples:\n  cargo run -p bmz-app -- --boot-play-sample --smoke-exit-after-frames 3\n  cargo run -p bmz-app -- --boot-play-sample --boot-replay 1 --smoke-exit-on-result\n  cargo run -p bmz-app -- table add https://example.com/table.html\n  cargo run -p bmz-app -- table list\n  cargo run -p bmz-app -- songs add /path/to/bms\n  cargo run -p bmz-app -- songs list\n  cargo run -p bmz-app -- songs reload\n  cargo run -p bmz-app -- course import /path/to/course.json\n  cargo run -p bmz-app -- course list"
 }
 
 fn parse_smoke_exit_after_frames_value(value: &str) -> Result<u32> {
@@ -187,6 +200,19 @@ fn parse_boot_replay_slot(value: &str) -> Result<u8> {
         bail!("{BOOT_REPLAY_ARG} slot must be 1..4 (got {n})");
     }
     Ok(n - 1)
+}
+
+fn parse_renderer_backend(value: &str) -> Result<RendererBackend> {
+    match value.trim().to_lowercase().as_str() {
+        "auto" => Ok(RendererBackend::Auto),
+        "vulkan" => Ok(RendererBackend::Vulkan),
+        "metal" => Ok(RendererBackend::Metal),
+        "dx12" | "directx12" | "d3d12" => Ok(RendererBackend::Dx12),
+        "gl" | "opengl" => Ok(RendererBackend::Gl),
+        other => {
+            bail!("unknown renderer backend: {other}. Valid options: vulkan, metal, dx12, gl, auto")
+        }
+    }
 }
 
 #[cfg(test)]
@@ -247,6 +273,7 @@ mod tests {
         assert!(help.contains("--autoplay-on-start"));
         assert!(help.contains("--smoke-exit-after-frames"));
         assert!(help.contains("--smoke-exit-on-result"));
+        assert!(help.contains("--renderer"));
         assert!(help.contains("table add"));
         assert!(help.contains("table list"));
         assert!(help.contains("table fetch"));
@@ -337,6 +364,17 @@ mod tests {
         assert!(help.contains("songs add"));
         assert!(help.contains("songs list"));
         assert!(help.contains("songs reload"));
+    }
+
+    #[test]
+    fn app_options_parse_renderer_arg() {
+        let options = AppOptions::parse_args(["--renderer", "vulkan"]).unwrap();
+        assert_eq!(options.renderer, Some(RendererBackend::Vulkan));
+
+        let options = AppOptions::parse_args(["--renderer=metal"]).unwrap();
+        assert_eq!(options.renderer, Some(RendererBackend::Metal));
+
+        assert!(AppOptions::parse_args(["--renderer", "invalid"]).is_err());
     }
 
     #[test]

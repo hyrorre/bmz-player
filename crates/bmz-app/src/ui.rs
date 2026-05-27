@@ -14,7 +14,7 @@ use egui::ViewportId;
 use winit::event::WindowEvent;
 use winit::window::Window;
 
-use crate::config::app_config::{AppConfig, WindowMode};
+use crate::config::app_config::{AppConfig, RendererBackend, WindowMode};
 use crate::config::profile_config::{
     ProfileConfig, SkinConfig, SkinHistoryEntryConfig, SkinOffsetConfig,
 };
@@ -372,8 +372,17 @@ fn build_settings_panel(ctx: &egui::Context, open: &mut bool, config: &mut AppCo
             });
         ui.checkbox(&mut config.video.vsync, "垂直同期 (VSync)");
         ui.add(egui::Slider::new(&mut config.video.target_fps, 30..=480).text("目標 FPS"));
+        egui::ComboBox::from_label("レンダリングバックエンド")
+            .selected_text(renderer_backend_label(&config.video.renderer))
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut config.video.renderer, RendererBackend::Auto, "自動選択");
+                ui.selectable_value(&mut config.video.renderer, RendererBackend::Vulkan, "Vulkan");
+                ui.selectable_value(&mut config.video.renderer, RendererBackend::Metal, "Metal");
+                ui.selectable_value(&mut config.video.renderer, RendererBackend::Dx12, "DirectX 12");
+                ui.selectable_value(&mut config.video.renderer, RendererBackend::Gl, "OpenGL");
+            });
         ui.separator();
-        ui.label("VSync / ウィンドウモードは即時反映。目標 FPS は次回起動時に反映されます。");
+        ui.label("VSync / ウィンドウモードは即時反映。目標 FPS / レンダリングバックエンドは次回起動時に反映されます。");
         if ui.button("保存").clicked() {
             save_clicked = true;
         }
@@ -386,6 +395,16 @@ fn window_mode_label(mode: &WindowMode) -> &'static str {
         WindowMode::Windowed => "ウィンドウ",
         WindowMode::BorderlessFullscreen => "ボーダレスフルスクリーン",
         WindowMode::ExclusiveFullscreen => "排他フルスクリーン",
+    }
+}
+
+fn renderer_backend_label(backend: &RendererBackend) -> &'static str {
+    match backend {
+        RendererBackend::Auto => "自動選択",
+        RendererBackend::Vulkan => "Vulkan",
+        RendererBackend::Metal => "Metal",
+        RendererBackend::Dx12 => "DirectX 12",
+        RendererBackend::Gl => "OpenGL",
     }
 }
 
