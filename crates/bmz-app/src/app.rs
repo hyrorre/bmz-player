@@ -744,7 +744,7 @@ impl WinitApp {
             chart_count: self.select_items.len() as u32,
             selected_index: self.selected_index as u32,
             selected_chart_id: match selected {
-                Some(SelectItem::Chart(row)) => Some(row.chart.chart_id),
+                Some(SelectItem::Chart(row)) => row.chart.as_ref().map(|chart| chart.chart_id),
                 _ => None,
             },
             selected_title: selected.map(|i| i.display_name().to_string()).unwrap_or_default(),
@@ -1146,7 +1146,16 @@ impl WinitApp {
                 tracing::info!(folder = ?self.folder_stack.last(), "entered folder");
             }
             Some(SelectItem::Chart(row)) => {
-                self.start_chart(row.chart.chart_id);
+                if row.in_library() {
+                    self.start_chart(
+                        row.chart.as_ref().expect("in_library row has chart").chart_id,
+                    );
+                } else {
+                    tracing::info!(
+                        title = row.display_title(),
+                        "skipping play for chart missing from library"
+                    );
+                }
             }
             None => {
                 tracing::warn!("no item is available to select");
@@ -1230,29 +1239,33 @@ impl WinitApp {
         self.select_items
             .iter()
             .find_map(|item| match item {
-                SelectItem::Chart(row) if row.chart.chart_id == chart_id => {
-                    KeyMode::from_str_opt(&row.chart.mode)
-                }
+                SelectItem::Chart(row) => row.chart.as_ref().and_then(|chart| {
+                    (chart.chart_id == chart_id).then(|| KeyMode::from_str_opt(&chart.mode))
+                }),
                 _ => None,
             })
+            .flatten()
             .unwrap_or_default()
     }
 
     fn decide_snapshot_for_chart(&self, chart_id: i64) -> RenderSnapshot {
         let mut snapshot = RenderSnapshot::default();
         if let Some(SelectItem::Chart(row)) = self.select_items.iter().find(|item| match item {
-            SelectItem::Chart(row) => row.chart.chart_id == chart_id,
+            SelectItem::Chart(row) => {
+                row.chart.as_ref().is_some_and(|chart| chart.chart_id == chart_id)
+            }
             SelectItem::Folder { .. } => false,
-        }) {
-            snapshot.title = row.chart.title.clone();
-            snapshot.artist = row.chart.artist.clone();
-            snapshot.difficulty_name = row.chart.difficulty_name.clone();
-            snapshot.play_level = row.chart.play_level.clone();
-            snapshot.total_notes = row.chart.total_notes;
-            snapshot.duration = TimeUs(row.chart.length_ms.saturating_mul(1_000));
-            snapshot.min_bpm = row.chart.min_bpm as f32;
-            snapshot.max_bpm = row.chart.max_bpm as f32;
-            snapshot.now_bpm = row.chart.initial_bpm as f32;
+        }) && let Some(chart) = &row.chart
+        {
+            snapshot.title = chart.title.clone();
+            snapshot.artist = chart.artist.clone();
+            snapshot.difficulty_name = chart.difficulty_name.clone();
+            snapshot.play_level = chart.play_level.clone();
+            snapshot.total_notes = chart.total_notes;
+            snapshot.duration = TimeUs(chart.length_ms.saturating_mul(1_000));
+            snapshot.min_bpm = chart.min_bpm as f32;
+            snapshot.max_bpm = chart.max_bpm as f32;
+            snapshot.now_bpm = chart.initial_bpm as f32;
         }
         snapshot
     }
@@ -1486,7 +1499,7 @@ impl WinitApp {
 
     fn currently_selected_chart_id(&self) -> Option<i64> {
         match self.select_items.get(self.selected_index)? {
-            SelectItem::Chart(row) => Some(row.chart.chart_id),
+            SelectItem::Chart(row) => row.chart.as_ref().map(|chart| chart.chart_id),
             SelectItem::Folder { .. } => None,
         }
     }
@@ -3218,16 +3231,28 @@ fn select_snapshot_rows(
                 },
                 SelectItem::Chart(row) => SelectRowSnapshot {
                     index: index as u32,
-                    title: row.chart.title.clone(),
-                    artist: row.chart.artist.clone(),
-                    difficulty_name: row.chart.difficulty_name.clone(),
-                    play_level: row.chart.play_level.clone(),
+                    title: row.display_title().to_string(),
+                    artist: row.display_artist().to_string(),
+                    difficulty_name: row
+                        .chart
+                        .as_ref()
+                        .map(|chart| chart.difficulty_name.clone())
+                        .unwrap_or_default(),
+                    play_level: row
+                        .chart
+                        .as_ref()
+                        .map(|chart| chart.play_level.clone())
+                        .unwrap_or_default(),
                     table_level: row.table_level.clone(),
-                    total_notes: row.chart.total_notes,
-                    initial_bpm: row.chart.initial_bpm as f32,
-                    min_bpm: row.chart.min_bpm as f32,
-                    max_bpm: row.chart.max_bpm as f32,
-                    length_ms: row.chart.length_ms,
+                    total_notes: row.chart.as_ref().map(|chart| chart.total_notes).unwrap_or(0),
+                    initial_bpm: row
+                        .chart
+                        .as_ref()
+                        .map(|chart| chart.initial_bpm as f32)
+                        .unwrap_or(0.0),
+                    min_bpm: row.chart.as_ref().map(|chart| chart.min_bpm as f32).unwrap_or(0.0),
+                    max_bpm: row.chart.as_ref().map(|chart| chart.max_bpm as f32).unwrap_or(0.0),
+                    length_ms: row.chart.as_ref().map(|chart| chart.length_ms).unwrap_or(0),
                     clear_type: row
                         .best_score
                         .as_ref()
@@ -4127,7 +4152,7 @@ mod tests {
 
     fn select_chart_row(index: usize) -> SelectChartRow {
         SelectChartRow {
-            chart: ChartListItem {
+            chart: Some(ChartListItem {
                 chart_id: index as i64,
                 md5: [0u8; 16],
                 sha256: [index as u8; 32],
@@ -4143,7 +4168,10 @@ mod tests {
                 max_bpm: 128.0,
                 length_ms: 90_000,
                 folder_path: String::new(),
-            },
+            }),
+            fallback_title: String::new(),
+            fallback_artist: String::new(),
+            entry_sha256: None,
             best_score: None,
             replay_slots: [false; 4],
             table_level: String::new(),

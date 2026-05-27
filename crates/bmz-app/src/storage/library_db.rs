@@ -7,7 +7,9 @@ use bmz_chart::model::{NoteKind, PlayableChart, TimingEventKind};
 use rusqlite::{Connection, OptionalExtension, params};
 
 pub use super::course_db::{StoredCourse, StoredCourseEntry};
-pub use super::difficulty_table_db::{DifficultyTableEntryRecord, DifficultyTableRecord};
+pub use super::difficulty_table_db::{
+    DifficultyTableEntryRecord, DifficultyTableRecord, TableEntryRow,
+};
 
 use super::common::{configure_connection, hash_to_hex, hex_to_hash};
 
@@ -44,6 +46,17 @@ pub struct ChartListItem {
     pub max_bpm: f64,
     pub length_ms: i64,
     pub folder_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TableEntryListItem {
+    pub level: String,
+    pub md5: String,
+    pub sha256: String,
+    pub title: String,
+    pub artist: String,
+    pub comment: String,
+    pub chart: Option<ChartListItem>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -566,6 +579,52 @@ impl LibraryDatabase {
         super::difficulty_table_db::list_entries_by_sha256s(&self.conn, sha256s)
     }
 
+    /// Returns every entry of the given difficulty table, including entries that
+    /// are not present in the local library.  Matched charts use MD5 first, then
+    /// SHA-256.
+    pub fn list_table_entries_with_chart(
+        &self,
+        source_url: &str,
+    ) -> Result<Vec<TableEntryListItem>> {
+        let rows = super::difficulty_table_db::list_table_entries(&self.conn, source_url)?;
+        let md5_refs: Vec<&str> =
+            rows.iter().filter(|row| row.md5.len() >= 24).map(|row| row.md5.as_str()).collect();
+        let sha256_refs: Vec<&str> = rows
+            .iter()
+            .filter(|row| row.sha256.len() >= 24)
+            .map(|row| row.sha256.as_str())
+            .collect();
+        let md5_charts = self.charts_by_md5s(&md5_refs)?;
+        let sha256_charts = self.charts_by_sha256s(&sha256_refs)?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                let chart = md5_charts
+                    .get(&row.md5)
+                    .cloned()
+                    .or_else(|| sha256_charts.get(&row.sha256).cloned());
+                TableEntryListItem {
+                    level: row.level,
+                    md5: row.md5,
+                    sha256: row.sha256,
+                    title: row.title,
+                    artist: row.artist,
+                    comment: row.comment,
+                    chart,
+                }
+            })
+            .collect())
+    }
+
+    fn charts_by_md5s(&self, md5s: &[&str]) -> Result<HashMap<String, ChartListItem>> {
+        charts_by_hash_column(&self.conn, "md5", md5s)
+    }
+
+    fn charts_by_sha256s(&self, sha256s: &[&str]) -> Result<HashMap<String, ChartListItem>> {
+        charts_by_hash_column(&self.conn, "sha256", sha256s)
+    }
+
     pub fn upsert_course(
         &mut self,
         source: &str,
@@ -586,6 +645,9 @@ impl LibraryDatabase {
     /// Returns `(ChartListItem, raw_level)` pairs for charts in the library that
     /// appear in the given difficulty table, matched first by MD5 then by SHA-256.
     /// Charts not present in the local library are omitted.
+    ///
+    /// Prefer [`Self::list_table_entries_with_chart`] when table entries without a
+    /// local chart should be included.
     pub fn list_charts_with_level_in_table(
         &self,
         source_url: &str,
@@ -623,6 +685,77 @@ impl LibraryDatabase {
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
     }
+}
+
+const CHART_LIST_ITEM_LOOKUP_SQL: &str = "
+    SELECT id, md5, sha256, title, subtitle, artist,
+           difficulty_name, play_level, mode, total_notes,
+           initial_bpm, COALESCE(min_bpm, initial_bpm),
+           COALESCE(max_bpm, initial_bpm), length_ms, folder_path
+    FROM charts
+    WHERE {column} = ?1
+    ORDER BY id DESC";
+
+fn charts_by_hash_column(
+    conn: &Connection,
+    column: &'static str,
+    hashes: &[&str],
+) -> Result<HashMap<String, ChartListItem>> {
+    debug_assert!(matches!(column, "md5" | "sha256"));
+    let mut map = HashMap::new();
+    if hashes.is_empty() {
+        return Ok(map);
+    }
+    let sql = CHART_LIST_ITEM_LOOKUP_SQL.replace("{column}", column);
+    let mut stmt = conn.prepare(&sql)?;
+    for hash in hashes {
+        if map.contains_key(*hash) {
+            continue;
+        }
+        let candidates = stmt
+            .query_map(params![hash], chart_list_item_from_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        if let Some(chart) = best_playable_chart(conn, &candidates)? {
+            map.insert((*hash).to_string(), chart);
+        }
+    }
+    Ok(map)
+}
+
+fn best_playable_chart(
+    conn: &Connection,
+    candidates: &[ChartListItem],
+) -> Result<Option<ChartListItem>> {
+    let mut best_missing: Option<ChartListItem> = None;
+    let mut best_playable: Option<ChartListItem> = None;
+
+    for chart in candidates {
+        if chart_primary_file_exists(conn, chart.chart_id)? {
+            if best_playable.as_ref().is_none_or(|best| best.chart_id < chart.chart_id) {
+                best_playable = Some(chart.clone());
+            }
+        } else if best_missing.as_ref().is_none_or(|best| best.chart_id < chart.chart_id) {
+            best_missing = Some(chart.clone());
+        }
+    }
+
+    Ok(best_playable.or(best_missing))
+}
+
+fn chart_primary_file_exists(conn: &Connection, chart_id: i64) -> Result<bool> {
+    let path: Option<String> = conn
+        .query_row(
+            "SELECT chart_files.path
+             FROM chart_file_links
+             JOIN chart_files ON chart_files.id = chart_file_links.chart_file_id
+             WHERE chart_file_links.chart_id = ?1
+             ORDER BY chart_files.path COLLATE NOCASE
+             LIMIT 1",
+            params![chart_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(path.is_some_and(|path| Path::new(&path).exists()))
 }
 
 fn chart_list_item_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChartListItem> {
@@ -1189,6 +1322,36 @@ mod tests {
         let count: i64 =
             db.conn().query_row("SELECT COUNT(*) FROM charts", [], |r| r.get(0)).unwrap();
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn charts_by_md5s_prefers_chart_with_existing_file() {
+        let dir = std::env::temp_dir().join(format!("bmz-chart-pick-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let existing_path = dir.join("existing.bms");
+        std::fs::write(&existing_path, b"test").unwrap();
+        let missing_path = dir.join("missing.bms");
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase::from_connection(conn);
+
+        let same_chart = chart("duplicate");
+        let stale_id = db
+            .upsert_chart_import(&record_for_chart(missing_path.to_str().unwrap(), &same_chart))
+            .unwrap();
+        let fresh_id = db
+            .upsert_chart_import(&record_for_chart(existing_path.to_str().unwrap(), &same_chart))
+            .unwrap();
+        assert!(stale_id < fresh_id);
+
+        let md5 = hash_to_hex(&same_chart.identity.file_md5);
+        let resolved = db.charts_by_md5s(&[md5.as_str()]).unwrap();
+
+        assert_eq!(resolved.get(&md5).map(|chart| chart.chart_id), Some(fresh_id));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

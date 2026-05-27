@@ -22,6 +22,17 @@ pub struct DifficultyTableEntryRecord {
     pub sha256: String,
 }
 
+/// Raw difficulty-table entry metadata stored in `library.db`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableEntryRow {
+    pub level: String,
+    pub md5: String,
+    pub sha256: String,
+    pub title: String,
+    pub artist: String,
+    pub comment: String,
+}
+
 pub(super) fn upsert_difficulty_table(
     conn: &mut Connection,
     table: &FetchedDifficultyTable,
@@ -107,6 +118,31 @@ pub(super) fn list_difficulty_tables(conn: &Connection) -> Result<Vec<Difficulty
         });
     }
     Ok(result)
+}
+
+/// Lists every entry of the given difficulty table without joining local charts.
+pub(super) fn list_table_entries(
+    conn: &Connection,
+    source_url: &str,
+) -> Result<Vec<TableEntryRow>> {
+    let sql = "
+        SELECT dte.level, dte.md5, dte.sha256, dte.title, dte.artist, dte.comment
+        FROM difficulty_table_entries dte
+        JOIN difficulty_tables dt ON dt.id = dte.table_id
+        WHERE dt.source_url = ?1";
+
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt.query_map(params![source_url], |row| {
+        Ok(TableEntryRow {
+            level: row.get(0)?,
+            md5: row.get(1)?,
+            sha256: row.get(2)?,
+            title: row.get(3)?,
+            artist: row.get(4)?,
+            comment: row.get(5)?,
+        })
+    })?;
+    rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
 }
 
 pub(super) fn list_entries_by_md5s(
@@ -268,5 +304,18 @@ mod tests {
 
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].level, "2");
+    }
+
+    #[test]
+    fn list_table_entries_includes_missing_library_entries() {
+        let mut conn = open_db();
+        let table = sample_table("https://example.com/");
+        upsert_difficulty_table(&mut conn, &table).unwrap();
+
+        let entries = list_table_entries(&conn, "https://example.com/").unwrap();
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].title, "Song A");
+        assert_eq!(entries[1].title, "Song B");
     }
 }

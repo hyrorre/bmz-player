@@ -1,10 +1,10 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
 use bmz_render::scene::SelectRowKind;
 
 use crate::storage::common::hash_to_hex;
-use crate::storage::library_db::{ChartListItem, LibraryDatabase};
+use crate::storage::library_db::{ChartListItem, LibraryDatabase, TableEntryListItem};
 use crate::storage::score_db::{BestScoreSummary, ReplaySlotSummary, ScoreDatabase};
 
 /// Virtual path prefix used for difficulty-table navigation.
@@ -54,10 +54,39 @@ fn insert_table_level(map: &mut HashMap<String, String>, key: String, symbol: &s
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelectChartRow {
-    pub chart: ChartListItem,
+    pub chart: Option<ChartListItem>,
+    pub fallback_title: String,
+    pub fallback_artist: String,
+    pub entry_sha256: Option<[u8; 32]>,
     pub best_score: Option<BestScoreSummary>,
     pub replay_slots: [bool; 4],
     pub table_level: String,
+}
+
+impl SelectChartRow {
+    pub fn display_title(&self) -> &str {
+        self.chart
+            .as_ref()
+            .map(|chart| chart.title.as_str())
+            .filter(|title| !title.is_empty())
+            .unwrap_or(self.fallback_title.as_str())
+    }
+
+    pub fn display_artist(&self) -> &str {
+        self.chart
+            .as_ref()
+            .map(|chart| chart.artist.as_str())
+            .filter(|artist| !artist.is_empty())
+            .unwrap_or(self.fallback_artist.as_str())
+    }
+
+    pub fn in_library(&self) -> bool {
+        self.chart.is_some()
+    }
+
+    pub fn score_sha256(&self) -> Option<[u8; 32]> {
+        self.chart.as_ref().map(|chart| chart.sha256).or(self.entry_sha256)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -71,7 +100,7 @@ impl SelectItem {
     pub fn display_name(&self) -> &str {
         match self {
             Self::Folder { name, .. } => name.as_str(),
-            Self::Chart(row) => row.chart.title.as_str(),
+            Self::Chart(row) => row.display_title(),
         }
     }
 }
@@ -162,23 +191,24 @@ fn load_select_items_in_table_filtered(
         .map(|t| (t.symbol, t.level_order))
         .unwrap_or_default();
 
-    let mut chart_levels = library_db.list_charts_with_level_in_table(source_url)?;
+    let mut entries = library_db.list_table_entries_with_chart(source_url)?;
     if let Some(level) = level_filter {
-        chart_levels.retain(|(_, chart_level)| chart_level == level);
+        entries.retain(|entry| entry.level == level);
     }
+    entries = dedupe_table_entries(entries);
 
-    // Sort by the table's level_order, then alphabetically by title.
+    // Sort by the table's level_order, then alphabetically by display title.
     let level_rank = |level: &str| -> usize {
         level_order.iter().position(|l| l == level).unwrap_or(usize::MAX)
     };
-    chart_levels.sort_by(|(a, al), (b, bl)| {
-        level_rank(al)
-            .cmp(&level_rank(bl))
-            .then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
+    entries.sort_by(|a, b| {
+        level_rank(&a.level).cmp(&level_rank(&b.level)).then_with(|| {
+            entry_display_title(a).to_lowercase().cmp(&entry_display_title(b).to_lowercase())
+        })
     });
 
     // Batch score lookup.
-    let hashes: Vec<[u8; 32]> = chart_levels.iter().map(|(c, _)| c.sha256).collect();
+    let hashes: Vec<[u8; 32]> = entries.iter().filter_map(entry_score_sha256).collect();
     let mut score_map: HashMap<[u8; 32], BestScoreSummary> = score_db
         .best_scores_for_charts(&hashes)?
         .into_iter()
@@ -186,15 +216,149 @@ fn load_select_items_in_table_filtered(
         .collect();
     let mut replay_slot_map = replay_slot_map(score_db, &hashes)?;
 
-    Ok(chart_levels
+    Ok(entries
         .into_iter()
-        .map(|(chart, level)| {
-            let table_level = format!("{symbol}{level}");
-            let best_score = score_map.remove(&chart.sha256);
-            let replay_slots = replay_slot_map.remove(&chart.sha256).unwrap_or([false; 4]);
-            SelectItem::Chart(SelectChartRow { chart, best_score, replay_slots, table_level })
+        .map(|entry| {
+            let table_level = format!("{symbol}{}", entry.level);
+            let score_sha256 = entry_score_sha256(&entry);
+            let best_score = score_sha256.and_then(|hash| score_map.remove(&hash));
+            let replay_slots =
+                score_sha256.and_then(|hash| replay_slot_map.remove(&hash)).unwrap_or([false; 4]);
+            SelectItem::Chart(select_chart_row_from_table_entry(
+                entry,
+                best_score,
+                replay_slots,
+                table_level,
+            ))
         })
         .collect())
+}
+
+fn entry_display_title(entry: &TableEntryListItem) -> &str {
+    entry
+        .chart
+        .as_ref()
+        .map(|chart| chart.title.as_str())
+        .filter(|title| !title.is_empty())
+        .unwrap_or(entry.title.as_str())
+}
+
+/// Collapses duplicate difficulty-table rows that refer to the same local chart.
+///
+/// Tables often contain redundant hash rows for the same song.  When also showing
+/// unmatched entries we drop duplicate matched charts and stale rows that no longer
+/// resolve to a unique missing song.
+fn dedupe_table_entries(entries: Vec<TableEntryListItem>) -> Vec<TableEntryListItem> {
+    let mut claimed_md5_by_level: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut claimed_sha256_by_level: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut claimed_titles_by_level: HashMap<String, HashSet<String>> = HashMap::new();
+
+    for entry in &entries {
+        let Some(chart) = &entry.chart else {
+            continue;
+        };
+        let md5s = claimed_md5_by_level.entry(entry.level.clone()).or_default();
+        let sha256s = claimed_sha256_by_level.entry(entry.level.clone()).or_default();
+        let titles = claimed_titles_by_level.entry(entry.level.clone()).or_default();
+
+        if entry.md5.len() >= 24 {
+            md5s.insert(entry.md5.clone());
+        }
+        if entry.sha256.len() >= 24 {
+            sha256s.insert(entry.sha256.clone());
+        }
+        md5s.insert(hash_to_hex(&chart.md5));
+        sha256s.insert(hash_to_hex(&chart.sha256));
+        if !entry.title.is_empty() {
+            titles.insert(entry.title.to_lowercase());
+        }
+        if !chart.title.is_empty() {
+            titles.insert(chart.title.to_lowercase());
+        }
+    }
+
+    let mut seen_chart_sha256_by_level: HashSet<(String, [u8; 32])> = HashSet::new();
+    let mut seen_unmatched_keys: HashSet<(String, String, String)> = HashSet::new();
+    let mut result = Vec::with_capacity(entries.len());
+
+    for entry in entries {
+        if let Some(chart) = &entry.chart {
+            let identity = (entry.level.clone(), chart.sha256);
+            if !seen_chart_sha256_by_level.insert(identity) {
+                continue;
+            }
+            result.push(entry);
+            continue;
+        }
+
+        if entry_claimed_by_matched_entry(&entry, &claimed_md5_by_level, &claimed_sha256_by_level) {
+            continue;
+        }
+        if !entry.title.is_empty()
+            && claimed_titles_by_level
+                .get(&entry.level)
+                .is_some_and(|titles| titles.contains(&entry.title.to_lowercase()))
+        {
+            continue;
+        }
+
+        let unmatched_key = (entry.level.clone(), entry.md5.clone(), entry.sha256.clone());
+        if !seen_unmatched_keys.insert(unmatched_key) {
+            continue;
+        }
+
+        result.push(entry);
+    }
+
+    result
+}
+
+fn entry_claimed_by_matched_entry(
+    entry: &TableEntryListItem,
+    claimed_md5_by_level: &HashMap<String, HashSet<String>>,
+    claimed_sha256_by_level: &HashMap<String, HashSet<String>>,
+) -> bool {
+    if entry.md5.len() >= 24
+        && claimed_md5_by_level.get(&entry.level).is_some_and(|hashes| hashes.contains(&entry.md5))
+    {
+        return true;
+    }
+    entry.sha256.len() >= 24
+        && claimed_sha256_by_level
+            .get(&entry.level)
+            .is_some_and(|hashes| hashes.contains(&entry.sha256))
+}
+
+fn entry_score_sha256(entry: &TableEntryListItem) -> Option<[u8; 32]> {
+    if let Some(chart) = &entry.chart {
+        return Some(chart.sha256);
+    }
+    if entry.sha256.len() >= 48 {
+        return hex_to_hash::<32>(&entry.sha256).ok();
+    }
+    None
+}
+
+fn select_chart_row_from_table_entry(
+    entry: TableEntryListItem,
+    best_score: Option<BestScoreSummary>,
+    replay_slots: [bool; 4],
+    table_level: String,
+) -> SelectChartRow {
+    let entry_sha256 = entry_score_sha256(&entry);
+    SelectChartRow {
+        chart: entry.chart,
+        fallback_title: entry.title,
+        fallback_artist: entry.artist,
+        entry_sha256,
+        best_score,
+        replay_slots,
+        table_level,
+    }
+}
+
+fn hex_to_hash<const N: usize>(hex: &str) -> Result<[u8; N]> {
+    crate::storage::common::hex_to_hash(hex).map_err(Into::into)
 }
 
 /// Loads folders and charts immediately under `folder_path`.
@@ -295,7 +459,10 @@ pub fn load_select_items_in_folder(
             .or_else(|| sha256_level_map.remove(&hash_to_hex(&chart.sha256)))
             .unwrap_or_default();
         items.push(SelectItem::Chart(SelectChartRow {
-            chart,
+            chart: Some(chart),
+            fallback_title: String::new(),
+            fallback_artist: String::new(),
+            entry_sha256: None,
             best_score,
             replay_slots,
             table_level,
@@ -351,9 +518,9 @@ mod tests {
             .filter_map(|i| if let SelectItem::Chart(r) = i { Some(r) } else { None })
             .collect();
         assert_eq!(charts.len(), 2);
-        assert_eq!(charts[0].chart.title, "Alpha");
+        assert_eq!(charts[0].display_title(), "Alpha");
         assert!(charts[0].best_score.is_some());
-        assert_eq!(charts[1].chart.title, "Beta");
+        assert_eq!(charts[1].display_title(), "Beta");
         assert!(charts[1].best_score.is_none());
     }
 
@@ -405,12 +572,13 @@ mod tests {
         // genre is a leaf folder so its chart appears directly, not as a Folder entry
         assert_eq!(items.len(), 2);
         assert!(items.iter().all(|i| matches!(i, SelectItem::Chart(_))));
-        let titles: Vec<_> = items
-            .iter()
-            .filter_map(|i| {
-                if let SelectItem::Chart(r) = i { Some(r.chart.title.as_str()) } else { None }
-            })
-            .collect();
+        let titles: Vec<_> =
+            items
+                .iter()
+                .filter_map(|i| {
+                    if let SelectItem::Chart(r) = i { Some(r.display_title()) } else { None }
+                })
+                .collect();
         assert!(titles.contains(&"A"));
         assert!(titles.contains(&"B"));
     }
@@ -431,7 +599,7 @@ mod tests {
 
         assert_eq!(items.len(), 2);
         assert!(matches!(&items[0], SelectItem::Folder { name, .. } if name == "genre"));
-        assert!(matches!(&items[1], SelectItem::Chart(r) if r.chart.title == "B"));
+        assert!(matches!(&items[1], SelectItem::Chart(r) if r.display_title() == "B"));
     }
 
     #[test]
@@ -661,12 +829,13 @@ mod tests {
                 .unwrap();
 
         assert_eq!(items.len(), 2);
-        let titles: Vec<_> = items
-            .iter()
-            .filter_map(|i| {
-                if let SelectItem::Chart(r) = i { Some(r.chart.title.as_str()) } else { None }
-            })
-            .collect();
+        let titles: Vec<_> =
+            items
+                .iter()
+                .filter_map(|i| {
+                    if let SelectItem::Chart(r) = i { Some(r.display_title()) } else { None }
+                })
+                .collect();
         assert_eq!(titles[0], "Easy Song");
         assert_eq!(titles[1], "Hard Song");
 
@@ -775,7 +944,240 @@ mod tests {
         .unwrap();
 
         assert_eq!(items.len(), 1);
-        assert!(matches!(&items[0], SelectItem::Chart(r) if r.chart.title == "Easy Song"));
+        assert!(matches!(&items[0], SelectItem::Chart(r) if r.display_title() == "Easy Song"));
+    }
+
+    #[test]
+    fn load_select_items_in_table_level_shows_missing_library_entry() {
+        let (mut library_db, score_db) = open_in_memory_dbs();
+
+        use crate::difficulty_table::{FetchedDifficultyTable, FetchedTableEntry};
+        let table = FetchedDifficultyTable {
+            source_url: "https://example.com/missing/".to_string(),
+            head_url: "https://example.com/missing/header.json".to_string(),
+            name: "Missing".to_string(),
+            symbol: "★".to_string(),
+            level_order: vec!["12".to_string()],
+            entries: vec![FetchedTableEntry {
+                level: "12".to_string(),
+                md5: "aabbcc".repeat(5) + "aabb",
+                sha256: String::new(),
+                title: "Missing Song".to_string(),
+                artist: "Missing Artist".to_string(),
+                comment: String::new(),
+            }],
+            fetched_at: 0,
+        };
+        library_db.upsert_difficulty_table(&table).unwrap();
+
+        let items = load_select_items_in_table_level(
+            &library_db,
+            &score_db,
+            "https://example.com/missing/",
+            "12",
+        )
+        .unwrap();
+
+        assert_eq!(items.len(), 1);
+        assert!(matches!(
+            &items[0],
+            SelectItem::Chart(row)
+            if row.display_title() == "Missing Song"
+                && row.display_artist() == "Missing Artist"
+                && !row.in_library()
+        ));
+    }
+
+    #[test]
+    fn load_select_items_in_table_level_prefers_library_title_when_registered() {
+        let (mut library_db, score_db) = open_in_memory_dbs();
+        let chart = chart("Library Title");
+        library_db.upsert_chart_import(&record_for_chart("/songs/registered.bms", &chart)).unwrap();
+
+        use crate::difficulty_table::{FetchedDifficultyTable, FetchedTableEntry};
+        let table = FetchedDifficultyTable {
+            source_url: "https://example.com/registered/".to_string(),
+            head_url: "https://example.com/registered/header.json".to_string(),
+            name: "Registered".to_string(),
+            symbol: "★".to_string(),
+            level_order: vec!["12".to_string()],
+            entries: vec![FetchedTableEntry {
+                level: "12".to_string(),
+                md5: hash_to_hex(&chart.identity.file_md5),
+                sha256: String::new(),
+                title: "Table Title".to_string(),
+                artist: "Table Artist".to_string(),
+                comment: String::new(),
+            }],
+            fetched_at: 0,
+        };
+        library_db.upsert_difficulty_table(&table).unwrap();
+
+        let items = load_select_items_in_table_level(
+            &library_db,
+            &score_db,
+            "https://example.com/registered/",
+            "12",
+        )
+        .unwrap();
+
+        assert_eq!(items.len(), 1);
+        assert!(matches!(
+            &items[0],
+            SelectItem::Chart(row)
+            if row.display_title() == "Library Title" && row.in_library()
+        ));
+    }
+
+    #[test]
+    fn load_select_items_in_table_level_dedupes_matched_chart_and_stale_hash_row() {
+        let (mut library_db, score_db) = open_in_memory_dbs();
+        let chart = chart("Registered Song");
+        library_db.upsert_chart_import(&record_for_chart("/songs/registered.bms", &chart)).unwrap();
+
+        use crate::difficulty_table::{FetchedDifficultyTable, FetchedTableEntry};
+        let table = FetchedDifficultyTable {
+            source_url: "https://example.com/dedupe/".to_string(),
+            head_url: "https://example.com/dedupe/header.json".to_string(),
+            name: "Dedupe".to_string(),
+            symbol: "★".to_string(),
+            level_order: vec!["12".to_string()],
+            entries: vec![
+                FetchedTableEntry {
+                    level: "12".to_string(),
+                    md5: hash_to_hex(&chart.identity.file_md5),
+                    sha256: String::new(),
+                    title: "Registered Song".to_string(),
+                    artist: String::new(),
+                    comment: String::new(),
+                },
+                FetchedTableEntry {
+                    level: "12".to_string(),
+                    md5: "deadbeef".repeat(4),
+                    sha256: String::new(),
+                    title: "Registered Song".to_string(),
+                    artist: String::new(),
+                    comment: String::new(),
+                },
+            ],
+            fetched_at: 0,
+        };
+        library_db.upsert_difficulty_table(&table).unwrap();
+
+        let items = load_select_items_in_table_level(
+            &library_db,
+            &score_db,
+            "https://example.com/dedupe/",
+            "12",
+        )
+        .unwrap();
+
+        assert_eq!(items.len(), 1);
+        assert!(matches!(
+            &items[0],
+            SelectItem::Chart(row)
+            if row.display_title() == "Registered Song" && row.in_library()
+        ));
+    }
+
+    #[test]
+    fn load_select_items_in_table_level_dedupes_md5_and_sha256_rows_for_same_chart() {
+        let (mut library_db, score_db) = open_in_memory_dbs();
+        let chart = chart("Dual Hash Song");
+        library_db.upsert_chart_import(&record_for_chart("/songs/dual.bms", &chart)).unwrap();
+
+        use crate::difficulty_table::{FetchedDifficultyTable, FetchedTableEntry};
+        let table = FetchedDifficultyTable {
+            source_url: "https://example.com/dual/".to_string(),
+            head_url: "https://example.com/dual/header.json".to_string(),
+            name: "Dual".to_string(),
+            symbol: "★".to_string(),
+            level_order: vec!["12".to_string()],
+            entries: vec![
+                FetchedTableEntry {
+                    level: "12".to_string(),
+                    md5: hash_to_hex(&chart.identity.file_md5),
+                    sha256: String::new(),
+                    title: String::new(),
+                    artist: String::new(),
+                    comment: String::new(),
+                },
+                FetchedTableEntry {
+                    level: "12".to_string(),
+                    md5: String::new(),
+                    sha256: hash_to_hex(&chart.identity.file_sha256),
+                    title: String::new(),
+                    artist: String::new(),
+                    comment: String::new(),
+                },
+            ],
+            fetched_at: 0,
+        };
+        library_db.upsert_difficulty_table(&table).unwrap();
+
+        let items = load_select_items_in_table_level(
+            &library_db,
+            &score_db,
+            "https://example.com/dual/",
+            "12",
+        )
+        .unwrap();
+
+        assert_eq!(items.len(), 1);
+        assert!(matches!(&items[0], SelectItem::Chart(row) if row.in_library()));
+    }
+
+    #[test]
+    fn load_select_items_in_table_level_dedupes_duplicate_library_chart_ids() {
+        let (mut library_db, score_db) = open_in_memory_dbs();
+        let chart = chart("Duplicate Import Song");
+        let chart_id_a = library_db
+            .upsert_chart_import(&record_for_chart("/songs/a/track.bms", &chart))
+            .unwrap();
+        let chart_id_b = library_db
+            .upsert_chart_import(&record_for_chart("/songs/b/track.bms", &chart))
+            .unwrap();
+        assert_ne!(chart_id_a, chart_id_b);
+
+        use crate::difficulty_table::{FetchedDifficultyTable, FetchedTableEntry};
+        let table = FetchedDifficultyTable {
+            source_url: "https://example.com/dup-import/".to_string(),
+            head_url: "https://example.com/dup-import/header.json".to_string(),
+            name: "Dup Import".to_string(),
+            symbol: "★".to_string(),
+            level_order: vec!["12".to_string()],
+            entries: vec![
+                FetchedTableEntry {
+                    level: "12".to_string(),
+                    md5: hash_to_hex(&chart.identity.file_md5),
+                    sha256: String::new(),
+                    title: String::new(),
+                    artist: String::new(),
+                    comment: String::new(),
+                },
+                FetchedTableEntry {
+                    level: "12".to_string(),
+                    md5: String::new(),
+                    sha256: hash_to_hex(&chart.identity.file_sha256),
+                    title: String::new(),
+                    artist: String::new(),
+                    comment: String::new(),
+                },
+            ],
+            fetched_at: 0,
+        };
+        library_db.upsert_difficulty_table(&table).unwrap();
+
+        let items = load_select_items_in_table_level(
+            &library_db,
+            &score_db,
+            "https://example.com/dup-import/",
+            "12",
+        )
+        .unwrap();
+
+        assert_eq!(items.len(), 1);
+        assert!(matches!(&items[0], SelectItem::Chart(row) if row.in_library()));
     }
 
     fn score_for_chart(chart_sha256: [u8; 32]) -> ScoreRecord {
