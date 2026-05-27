@@ -153,6 +153,7 @@ struct WinitApp {
     selected_index: usize,
     renderer: Renderer,
     skin_catalog: SkinCatalog,
+    skin_defs_cache: BTreeMap<String, SceneSkinDefs>,
     dev_scene: Option<AppSceneSnapshot>,
     last_scene_kind: Option<AppSceneKind>,
     start_held: bool,
@@ -427,6 +428,7 @@ impl WinitApp {
             selected_index: 0,
             renderer,
             skin_catalog,
+            skin_defs_cache: BTreeMap::new(),
             dev_scene: None,
             last_scene_kind: None,
             start_held: false,
@@ -1987,10 +1989,21 @@ impl WinitApp {
         };
         let size = window.inner_size();
         let info = DebugInfo { scene, width: size.width, height: size.height };
+        let play5_path = self.boot.profile_config.skin.play5.clone();
+        let play7_path = self.boot.profile_config.skin.play7.clone();
+        let play10_path = self.boot.profile_config.skin.play10.clone();
+        let play14_path = self.boot.profile_config.skin.play14.clone();
+        let play5_defs = self.play_skin_defs_for_path(&play5_path);
+        let play7_defs = self.play_skin_defs_for_path(&play7_path);
+        let play10_defs = self.play_skin_defs_for_path(&play10_path);
+        let play14_defs = self.play_skin_defs_for_path(&play14_path);
         let skin_meta = SkinConfigMeta {
             select: SceneSkinDefs::from_document(self.renderer.select_skin_document()),
             decide: SceneSkinDefs::from_document(self.renderer.decide_skin_document()),
-            play: SceneSkinDefs::from_play_document(self.renderer.play_skin_document()),
+            play5: play5_defs,
+            play7: play7_defs,
+            play10: play10_defs,
+            play14: play14_defs,
             result: SceneSkinDefs::from_document(self.renderer.result_skin_document()),
         };
         let Some(egui) = self.egui.as_mut() else {
@@ -2045,6 +2058,16 @@ impl WinitApp {
             self.pending_skin_reload_at = None;
             self.reload_skins();
         }
+    }
+
+    fn play_skin_defs_for_path(&mut self, path: &str) -> SceneSkinDefs {
+        let key = path.trim().to_string();
+        if let Some(defs) = self.skin_defs_cache.get(&key) {
+            return defs.clone();
+        }
+        let defs = play_skin_defs_from_path(&key);
+        self.skin_defs_cache.insert(key, defs.clone());
+        defs
     }
 
     fn reset_profile_config_from_disk(&mut self) {
@@ -2114,6 +2137,7 @@ impl WinitApp {
         self.pending_decide_skin = pending_decide;
         self.pending_play_skin = false;
         self.pending_result_skin = pending_result;
+        self.skin_defs_cache.clear();
         // 前回リロードの未完了 install は破棄する。
         self.pending_skin_installs.clear();
         // プレイスキンは決定画面で chart.key_mode を見て個別に再 decode する。
@@ -2664,6 +2688,15 @@ fn scan_skin_catalog_dir(repo_root: &Path, dir: &Path, catalog: &mut SkinCatalog
     }
 }
 
+fn play_skin_defs_from_path(path: &str) -> SceneSkinDefs {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return SceneSkinDefs::from_play_document(None);
+    }
+    let document = load_skin_header_document(Path::new(trimmed));
+    SceneSkinDefs::from_play_document(document.as_ref())
+}
+
 fn is_skin_candidate_file(path: &Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
@@ -2671,18 +2704,22 @@ fn is_skin_candidate_file(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn load_skin_candidate(repo_root: &Path, path: &Path) -> Option<(i32, SkinCandidate)> {
-    let document = if path
+fn load_skin_header_document(path: &Path) -> Option<SkinDocument> {
+    if path
         .extension()
         .and_then(|ext| ext.to_str())
         .is_some_and(|ext| ext.eq_ignore_ascii_case("luaskin"))
     {
         bmz_skin::load_lua_skin_header_value(path)
             .ok()
-            .and_then(|loaded| serde_json::from_value::<SkinDocument>(loaded.value).ok())?
+            .and_then(|loaded| serde_json::from_value::<SkinDocument>(loaded.value).ok())
     } else {
-        SkinDocument::load_beatoraja_json(path).ok()?
-    };
+        SkinDocument::load_beatoraja_json(path).ok()
+    }
+}
+
+fn load_skin_candidate(repo_root: &Path, path: &Path) -> Option<(i32, SkinCandidate)> {
+    let document = load_skin_header_document(path)?;
     let relative = path.strip_prefix(repo_root).unwrap_or(path);
     let name = if document.name.trim().is_empty() {
         relative.file_stem().and_then(|name| name.to_str()).unwrap_or("").to_string()
@@ -3608,6 +3645,21 @@ mod tests {
         assert_eq!(catalog.play7[0].path, "data/skins/example/play7.luaskin");
         assert_eq!(catalog.play10[0].path, "data/skins/example/play10.luaskin");
         assert_eq!(catalog.play14[0].path, "data/skins/example/play14.luaskin");
+    }
+
+    #[test]
+    fn play_skin_defs_load_from_configured_path_without_renderer_install() {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let path = repo.join("data/skins/ECFN/play/play7.luaskin");
+        if !path.is_file() {
+            return;
+        }
+
+        let defs = play_skin_defs_from_path(&path.to_string_lossy());
+
+        assert!(!defs.property.is_empty());
+        assert!(!defs.filepath.is_empty());
+        assert!(defs.offset.iter().any(|offset| offset.id == 10));
     }
 
     fn default_select_keys() -> SelectKeyBindings {

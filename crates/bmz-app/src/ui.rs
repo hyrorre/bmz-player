@@ -21,7 +21,7 @@ use crate::config::profile_config::{
 /// スキンが宣言する設定可能項目の定義 (1 シーン分)。
 ///
 /// renderer が保持する `SkinDocument` から複製して egui パネルへ渡す。
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct SceneSkinDefs {
     pub property: Vec<SkinPropertyDef>,
     pub filepath: Vec<SkinFilepathDef>,
@@ -116,7 +116,10 @@ fn beatoraja_play_common_offsets() -> [SkinOffsetDef; 4] {
 pub struct SkinConfigMeta {
     pub select: SceneSkinDefs,
     pub decide: SceneSkinDefs,
-    pub play: SceneSkinDefs,
+    pub play5: SceneSkinDefs,
+    pub play7: SceneSkinDefs,
+    pub play10: SceneSkinDefs,
+    pub play14: SceneSkinDefs,
     pub result: SceneSkinDefs,
 }
 
@@ -648,7 +651,7 @@ fn build_skin_panel(
                     changed |= build_scene_skin_defs(
                         ui,
                         "プレイスキン (5K)",
-                        &skin_meta.play,
+                        &skin_meta.play5,
                         play5_root.as_deref(),
                         &mut skin.play5_options,
                         &mut skin.play5_files,
@@ -657,7 +660,7 @@ fn build_skin_panel(
                     changed |= build_scene_skin_defs(
                         ui,
                         "プレイスキン (7K)",
-                        &skin_meta.play,
+                        &skin_meta.play7,
                         play7_root.as_deref(),
                         &mut skin.play7_options,
                         &mut skin.play7_files,
@@ -666,7 +669,7 @@ fn build_skin_panel(
                     changed |= build_scene_skin_defs(
                         ui,
                         "プレイスキン (10K)",
-                        &skin_meta.play,
+                        &skin_meta.play10,
                         play10_root.as_deref(),
                         &mut skin.play10_options,
                         &mut skin.play10_files,
@@ -675,7 +678,7 @@ fn build_skin_panel(
                     changed |= build_scene_skin_defs(
                         ui,
                         "プレイスキン (14K)",
-                        &skin_meta.play,
+                        &skin_meta.play14,
                         play14_root.as_deref(),
                         &mut skin.play14_options,
                         &mut skin.play14_files,
