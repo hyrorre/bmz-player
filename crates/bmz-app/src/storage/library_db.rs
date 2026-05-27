@@ -694,7 +694,8 @@ const CHART_LIST_ITEM_LOOKUP_SQL: &str = "
            COALESCE(max_bpm, initial_bpm), length_ms, folder_path
     FROM charts
     WHERE {column} = ?1
-    ORDER BY id DESC";
+    ORDER BY id DESC
+    LIMIT 1";
 
 fn charts_by_hash_column(
     conn: &Connection,
@@ -712,50 +713,12 @@ fn charts_by_hash_column(
         if map.contains_key(*hash) {
             continue;
         }
-        let candidates = stmt
-            .query_map(params![hash], chart_list_item_from_row)?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        if let Some(chart) = best_playable_chart(conn, &candidates)? {
+        let chart = stmt.query_row(params![hash], chart_list_item_from_row).optional()?;
+        if let Some(chart) = chart {
             map.insert((*hash).to_string(), chart);
         }
     }
     Ok(map)
-}
-
-fn best_playable_chart(
-    conn: &Connection,
-    candidates: &[ChartListItem],
-) -> Result<Option<ChartListItem>> {
-    let mut best_missing: Option<ChartListItem> = None;
-    let mut best_playable: Option<ChartListItem> = None;
-
-    for chart in candidates {
-        if chart_primary_file_exists(conn, chart.chart_id)? {
-            if best_playable.as_ref().is_none_or(|best| best.chart_id < chart.chart_id) {
-                best_playable = Some(chart.clone());
-            }
-        } else if best_missing.as_ref().is_none_or(|best| best.chart_id < chart.chart_id) {
-            best_missing = Some(chart.clone());
-        }
-    }
-
-    Ok(best_playable.or(best_missing))
-}
-
-fn chart_primary_file_exists(conn: &Connection, chart_id: i64) -> Result<bool> {
-    let path: Option<String> = conn
-        .query_row(
-            "SELECT chart_files.path
-             FROM chart_file_links
-             JOIN chart_files ON chart_files.id = chart_file_links.chart_file_id
-             WHERE chart_file_links.chart_id = ?1
-             ORDER BY chart_files.path COLLATE NOCASE
-             LIMIT 1",
-            params![chart_id],
-            |row| row.get(0),
-        )
-        .optional()?;
-    Ok(path.is_some_and(|path| Path::new(&path).exists()))
 }
 
 fn chart_list_item_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChartListItem> {
@@ -1325,13 +1288,7 @@ mod tests {
     }
 
     #[test]
-    fn charts_by_md5s_prefers_chart_with_existing_file() {
-        let dir = std::env::temp_dir().join(format!("bmz-chart-pick-test-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let existing_path = dir.join("existing.bms");
-        std::fs::write(&existing_path, b"test").unwrap();
-        let missing_path = dir.join("missing.bms");
-
+    fn charts_by_md5s_prefers_newest_chart_id() {
         let mut conn = Connection::open_in_memory().unwrap();
         configure_connection(&conn).unwrap();
         run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
@@ -1339,10 +1296,10 @@ mod tests {
 
         let same_chart = chart("duplicate");
         let stale_id = db
-            .upsert_chart_import(&record_for_chart(missing_path.to_str().unwrap(), &same_chart))
+            .upsert_chart_import(&record_for_chart("/songs/a/track.bms", &same_chart))
             .unwrap();
         let fresh_id = db
-            .upsert_chart_import(&record_for_chart(existing_path.to_str().unwrap(), &same_chart))
+            .upsert_chart_import(&record_for_chart("/songs/b/track.bms", &same_chart))
             .unwrap();
         assert!(stale_id < fresh_id);
 
@@ -1350,8 +1307,6 @@ mod tests {
         let resolved = db.charts_by_md5s(&[md5.as_str()]).unwrap();
 
         assert_eq!(resolved.get(&md5).map(|chart| chart.chart_id), Some(fresh_id));
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
