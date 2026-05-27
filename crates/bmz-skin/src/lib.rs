@@ -62,6 +62,10 @@ pub fn load_lua_skin_value(
     lua::load_lua_skin_value(path, options, files)
 }
 
+pub fn load_lua_skin_header_value(path: &Path) -> Result<LoadedLuaSkinValue> {
+    lua::load_lua_skin_header_value(path)
+}
+
 fn normalize_json_skin_integer_numbers(value: JsonValue) -> JsonValue {
     normalize_json_skin_integer_numbers_for_key(None, value)
 }
@@ -302,6 +306,31 @@ mod tests {
             }),
             Some("default.png")
         );
+    }
+
+    #[test]
+    fn lua_skin_header_load_skips_skin_config_body() {
+        let root = unique_test_dir("bmz-skin-lua");
+        fs::create_dir_all(root.join("parts")).unwrap();
+        fs::write(root.join("parts/frame.lua"), "return {}").unwrap();
+        fs::write(
+            root.join("play5.luaskin"),
+            r#"
+            if skin_config then
+                dofile(skin_config.get_path("parts/*") .. "/frame.lua")
+            end
+            return {
+                name = "Header Only",
+                type = 1
+            }
+            "#,
+        )
+        .unwrap();
+
+        let header = load_lua_skin_header_value(&root.join("play5.luaskin")).unwrap();
+
+        assert_eq!(header.value["name"], "Header Only");
+        assert_eq!(header.value["type"], 1);
     }
 
     #[test]

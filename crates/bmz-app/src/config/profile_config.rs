@@ -398,6 +398,22 @@ pub struct SkinConfig {
     /// リザルトスキンのファイル選択。
     #[serde(default)]
     pub result_files: BTreeMap<String, String>,
+    /// スキンファイル path ごとのカスタマイズ履歴。
+    ///
+    /// beatoraja の `skinHistory` 相当。スキンを切り替えても、各スキンの
+    /// option / filepath / offset を前回値へ戻せるように保持する。
+    #[serde(default)]
+    pub history: BTreeMap<String, SkinHistoryEntryConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct SkinHistoryEntryConfig {
+    #[serde(default)]
+    pub options: BTreeMap<String, String>,
+    #[serde(default)]
+    pub files: BTreeMap<String, String>,
+    #[serde(default)]
+    pub offsets: Vec<SkinOffsetConfig>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]

@@ -62,7 +62,7 @@ use crate::skin_loader::{
 };
 use crate::storage::replay::load_replay_for_chart;
 use crate::storage::scan::scan_song_roots;
-use crate::ui::{DebugInfo, EguiLayer, SceneSkinDefs, SkinConfigMeta};
+use crate::ui::{DebugInfo, EguiLayer, SceneSkinDefs, SkinCandidate, SkinCatalog, SkinConfigMeta};
 use bmz_render::skin::{SkinDocument, SkinDocumentTexture, SkinManifest};
 use std::collections::{BTreeMap, VecDeque};
 
@@ -152,6 +152,7 @@ struct WinitApp {
     selected_index_stack: Vec<usize>,
     selected_index: usize,
     renderer: Renderer,
+    skin_catalog: SkinCatalog,
     dev_scene: Option<AppSceneSnapshot>,
     last_scene_kind: Option<AppSceneKind>,
     start_held: bool,
@@ -334,6 +335,7 @@ impl WinitApp {
         let now = Instant::now();
 
         let mut renderer = Renderer::default();
+        let skin_catalog = scan_skin_catalog();
         let (skin_decode_tx, skin_decode_rx) = mpsc::channel::<PendingSkinResult>();
         let (default_skin_manifest, pending_select_skin, pending_decide_skin, pending_result_skin) =
             load_initial_skin_textures(
@@ -424,6 +426,7 @@ impl WinitApp {
             folder_stack,
             selected_index: 0,
             renderer,
+            skin_catalog,
             dev_scene: None,
             last_scene_kind: None,
             start_held: false,
@@ -1999,6 +2002,7 @@ impl WinitApp {
             &mut self.boot.app_config,
             &mut self.boot.profile_config,
             &skin_meta,
+            &self.skin_catalog,
         );
         self.renderer.set_egui_frame(output.frame);
         // デバッグパネルの開閉状態を profile config へ同期する。
@@ -2627,6 +2631,101 @@ fn spawn_skin_decode(
             let _ = tx.send(PendingSkinResult { generation, path: send_path, kind, result });
         })
         .expect("failed to spawn skin decode thread");
+}
+
+fn scan_skin_catalog() -> SkinCatalog {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = repo_root.join("data/skins");
+    let mut catalog = SkinCatalog::default();
+    scan_skin_catalog_dir(&repo_root, &root, &mut catalog);
+    sort_skin_catalog(&mut catalog);
+    catalog
+}
+
+fn scan_skin_catalog_dir(repo_root: &Path, dir: &Path, catalog: &mut SkinCatalog) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            scan_skin_catalog_dir(repo_root, &path, catalog);
+            continue;
+        }
+        if !is_skin_candidate_file(&path) {
+            continue;
+        }
+        match load_skin_candidate(repo_root, &path) {
+            Some((skin_type, candidate)) => push_skin_candidate(catalog, skin_type, candidate),
+            None => {
+                tracing::debug!(path = %path.display(), "skipping skin candidate without readable header")
+            }
+        }
+    }
+}
+
+fn is_skin_candidate_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| matches!(ext.to_ascii_lowercase().as_str(), "json" | "luaskin"))
+        .unwrap_or(false)
+}
+
+fn load_skin_candidate(repo_root: &Path, path: &Path) -> Option<(i32, SkinCandidate)> {
+    let document = if path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("luaskin"))
+    {
+        bmz_skin::load_lua_skin_header_value(path)
+            .ok()
+            .and_then(|loaded| serde_json::from_value::<SkinDocument>(loaded.value).ok())?
+    } else {
+        SkinDocument::load_beatoraja_json(path).ok()?
+    };
+    let relative = path.strip_prefix(repo_root).unwrap_or(path);
+    let name = if document.name.trim().is_empty() {
+        relative.file_stem().and_then(|name| name.to_str()).unwrap_or("").to_string()
+    } else {
+        document.name
+    };
+    Some((
+        document.skin_type,
+        SkinCandidate { name, path: relative.to_string_lossy().replace('\\', "/") },
+    ))
+}
+
+fn push_skin_candidate(catalog: &mut SkinCatalog, skin_type: i32, candidate: SkinCandidate) {
+    match skin_type {
+        0 => catalog.play7.push(candidate),
+        1 => catalog.play5.push(candidate),
+        2 => catalog.play14.push(candidate),
+        3 => catalog.play10.push(candidate),
+        5 => catalog.select.push(candidate),
+        6 => catalog.decide.push(candidate),
+        7 => catalog.result.push(candidate),
+        _ => {}
+    }
+}
+
+fn sort_skin_catalog(catalog: &mut SkinCatalog) {
+    for candidates in [
+        &mut catalog.select,
+        &mut catalog.decide,
+        &mut catalog.play5,
+        &mut catalog.play7,
+        &mut catalog.play10,
+        &mut catalog.play14,
+        &mut catalog.result,
+    ] {
+        candidates.sort_by(|a, b| {
+            a.name
+                .to_ascii_lowercase()
+                .cmp(&b.name.to_ascii_lowercase())
+                .then_with(|| a.path.cmp(&b.path))
+        });
+        candidates.dedup_by(|a, b| a.path == b.path);
+    }
 }
 
 fn load_chart_bga_textures(renderer: &mut Renderer, chart: &PlayableChart) -> BgaFrameCatalog {
@@ -3456,6 +3555,59 @@ mod tests {
                 .iter()
                 .any(|texture| texture.id == 11 && texture.path == "combo-panel-inactive.png")
         );
+    }
+
+    #[test]
+    fn skin_catalog_scan_ignores_lua_parts_files() {
+        assert!(is_skin_candidate_file(Path::new("data/skins/ECFN/play/play7.luaskin")));
+        assert!(is_skin_candidate_file(Path::new("data/skins/ECFN/play/play7-1p.json")));
+        assert!(!is_skin_candidate_file(Path::new("data/skins/ECFN/play/play_parts.lua")));
+    }
+
+    #[test]
+    fn skin_catalog_maps_play_key_modes_by_exact_skin_type() {
+        let mut catalog = SkinCatalog::default();
+        push_skin_candidate(
+            &mut catalog,
+            0,
+            SkinCandidate {
+                name: "Seven".to_string(),
+                path: "data/skins/example/play7.luaskin".to_string(),
+            },
+        );
+        push_skin_candidate(
+            &mut catalog,
+            1,
+            SkinCandidate {
+                name: "Five".to_string(),
+                path: "data/skins/example/play5.luaskin".to_string(),
+            },
+        );
+        push_skin_candidate(
+            &mut catalog,
+            2,
+            SkinCandidate {
+                name: "Fourteen".to_string(),
+                path: "data/skins/example/play14.luaskin".to_string(),
+            },
+        );
+        push_skin_candidate(
+            &mut catalog,
+            3,
+            SkinCandidate {
+                name: "Ten".to_string(),
+                path: "data/skins/example/play10.luaskin".to_string(),
+            },
+        );
+
+        assert_eq!(catalog.play5.len(), 1);
+        assert_eq!(catalog.play7.len(), 1);
+        assert_eq!(catalog.play10.len(), 1);
+        assert_eq!(catalog.play14.len(), 1);
+        assert_eq!(catalog.play5[0].path, "data/skins/example/play5.luaskin");
+        assert_eq!(catalog.play7[0].path, "data/skins/example/play7.luaskin");
+        assert_eq!(catalog.play10[0].path, "data/skins/example/play10.luaskin");
+        assert_eq!(catalog.play14[0].path, "data/skins/example/play14.luaskin");
     }
 
     fn default_select_keys() -> SelectKeyBindings {

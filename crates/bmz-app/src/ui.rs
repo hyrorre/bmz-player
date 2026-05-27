@@ -14,7 +14,9 @@ use winit::event::WindowEvent;
 use winit::window::Window;
 
 use crate::config::app_config::{AppConfig, WindowMode};
-use crate::config::profile_config::{ProfileConfig, SkinConfig, SkinOffsetConfig};
+use crate::config::profile_config::{
+    ProfileConfig, SkinConfig, SkinHistoryEntryConfig, SkinOffsetConfig,
+};
 
 /// スキンが宣言する設定可能項目の定義 (1 シーン分)。
 ///
@@ -118,6 +120,23 @@ pub struct SkinConfigMeta {
     pub result: SceneSkinDefs,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct SkinCatalog {
+    pub select: Vec<SkinCandidate>,
+    pub decide: Vec<SkinCandidate>,
+    pub play5: Vec<SkinCandidate>,
+    pub play7: Vec<SkinCandidate>,
+    pub play10: Vec<SkinCandidate>,
+    pub play14: Vec<SkinCandidate>,
+    pub result: Vec<SkinCandidate>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkinCandidate {
+    pub name: String,
+    pub path: String,
+}
+
 /// デバッグ表示パネルへ毎フレーム渡すアプリ側の情報。
 pub struct DebugInfo {
     /// 現在のシーン種別 ("Select" / "Play" / "Result")。
@@ -199,6 +218,7 @@ impl EguiLayer {
         app_config: &mut AppConfig,
         profile_config: &mut ProfileConfig,
         skin_meta: &SkinConfigMeta,
+        skin_catalog: &SkinCatalog,
     ) -> EguiOutput {
         let raw_input = self.state.take_egui_input(window);
         let ctx = self.ctx.clone();
@@ -218,8 +238,13 @@ impl EguiLayer {
                 if build_settings_panel(ctx, show_settings, app_config) {
                     save_app_config = true;
                 }
-                let skin_actions =
-                    build_skin_panel(ctx, show_skin, &mut profile_config.skin, skin_meta);
+                let skin_actions = build_skin_panel(
+                    ctx,
+                    show_skin,
+                    &mut profile_config.skin,
+                    skin_meta,
+                    skin_catalog,
+                );
                 save_profile_config |= skin_actions.save;
                 reset_skin_config |= skin_actions.reset;
                 skin_config_changed |= skin_actions.changed;
@@ -359,12 +384,155 @@ struct SkinPanelActions {
     changed: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SkinSlot {
+    Select,
+    Decide,
+    Play5,
+    Play7,
+    Play10,
+    Play14,
+    Result,
+}
+
+fn skin_path_combo(
+    ui: &mut egui::Ui,
+    skin: &mut SkinConfig,
+    slot: SkinSlot,
+    label: &str,
+    candidates: &[SkinCandidate],
+) -> bool {
+    ui.label(label);
+    let current = skin_slot_path(skin, slot).to_string();
+    let mut selected = current.clone();
+    let selected_text = skin_candidate_label(candidates, &current);
+    egui::ComboBox::from_id_salt(("skin_path_combo", label))
+        .selected_text(selected_text)
+        .width(320.0)
+        .show_ui(ui, |ui| {
+            ui.selectable_value(&mut selected, String::new(), "(デフォルト)");
+            for candidate in candidates {
+                ui.selectable_value(
+                    &mut selected,
+                    candidate.path.clone(),
+                    skin_candidate_display(candidate),
+                );
+            }
+        });
+    let combo_changed = selected != current;
+    if combo_changed {
+        save_skin_slot_history(skin, slot);
+        *skin_slot_path_mut(skin, slot) = selected;
+        restore_skin_slot_history(skin, slot);
+    }
+    let mut edited_path = skin_slot_path(skin, slot).to_string();
+    let text_changed = ui.text_edit_singleline(&mut edited_path).changed();
+    if text_changed {
+        save_skin_slot_history(skin, slot);
+        *skin_slot_path_mut(skin, slot) = edited_path;
+        restore_skin_slot_history(skin, slot);
+    }
+    combo_changed || text_changed
+}
+
+fn skin_candidate_label(candidates: &[SkinCandidate], current: &str) -> String {
+    if current.is_empty() {
+        return "(デフォルト)".to_string();
+    }
+    candidates
+        .iter()
+        .find(|candidate| candidate.path == current)
+        .map(skin_candidate_display)
+        .unwrap_or_else(|| current.to_string())
+}
+
+fn skin_candidate_display(candidate: &SkinCandidate) -> String {
+    if candidate.name.is_empty() {
+        candidate.path.clone()
+    } else {
+        format!("{} ({})", candidate.name, candidate.path)
+    }
+}
+
+fn skin_slot_path(skin: &SkinConfig, slot: SkinSlot) -> &str {
+    match slot {
+        SkinSlot::Select => &skin.select,
+        SkinSlot::Decide => &skin.decide,
+        SkinSlot::Play5 => &skin.play5,
+        SkinSlot::Play7 => &skin.play7,
+        SkinSlot::Play10 => &skin.play10,
+        SkinSlot::Play14 => &skin.play14,
+        SkinSlot::Result => &skin.result,
+    }
+}
+
+fn skin_slot_path_mut(skin: &mut SkinConfig, slot: SkinSlot) -> &mut String {
+    match slot {
+        SkinSlot::Select => &mut skin.select,
+        SkinSlot::Decide => &mut skin.decide,
+        SkinSlot::Play5 => &mut skin.play5,
+        SkinSlot::Play7 => &mut skin.play7,
+        SkinSlot::Play10 => &mut skin.play10,
+        SkinSlot::Play14 => &mut skin.play14,
+        SkinSlot::Result => &mut skin.result,
+    }
+}
+
+fn skin_slot_options_mut(skin: &mut SkinConfig, slot: SkinSlot) -> &mut BTreeMap<String, String> {
+    match slot {
+        SkinSlot::Select => &mut skin.select_options,
+        SkinSlot::Decide => &mut skin.decide_options,
+        SkinSlot::Play5 => &mut skin.play5_options,
+        SkinSlot::Play7 => &mut skin.play7_options,
+        SkinSlot::Play10 => &mut skin.play10_options,
+        SkinSlot::Play14 => &mut skin.play14_options,
+        SkinSlot::Result => &mut skin.result_options,
+    }
+}
+
+fn skin_slot_files_mut(skin: &mut SkinConfig, slot: SkinSlot) -> &mut BTreeMap<String, String> {
+    match slot {
+        SkinSlot::Select => &mut skin.select_files,
+        SkinSlot::Decide => &mut skin.decide_files,
+        SkinSlot::Play5 => &mut skin.play5_files,
+        SkinSlot::Play7 => &mut skin.play7_files,
+        SkinSlot::Play10 => &mut skin.play10_files,
+        SkinSlot::Play14 => &mut skin.play14_files,
+        SkinSlot::Result => &mut skin.result_files,
+    }
+}
+
+fn save_skin_slot_history(skin: &mut SkinConfig, slot: SkinSlot) {
+    let path = skin_slot_path(skin, slot).trim().to_string();
+    if path.is_empty() {
+        return;
+    }
+    let options = skin_slot_options_mut(skin, slot).clone();
+    let files = skin_slot_files_mut(skin, slot).clone();
+    skin.history
+        .insert(path, SkinHistoryEntryConfig { options, files, offsets: skin.offsets.clone() });
+}
+
+fn restore_skin_slot_history(skin: &mut SkinConfig, slot: SkinSlot) {
+    let path = skin_slot_path(skin, slot).trim().to_string();
+    let Some(entry) = skin.history.get(&path).cloned() else {
+        skin_slot_options_mut(skin, slot).clear();
+        skin_slot_files_mut(skin, slot).clear();
+        skin.offsets.clear();
+        return;
+    };
+    *skin_slot_options_mut(skin, slot) = entry.options;
+    *skin_slot_files_mut(skin, slot) = entry.files;
+    skin.offsets = entry.offsets;
+}
+
 /// プロファイルのスキン設定 (`SkinConfig`) を編集するパネル。
 fn build_skin_panel(
     ctx: &egui::Context,
     open: &mut bool,
     skin: &mut SkinConfig,
     skin_meta: &SkinConfigMeta,
+    skin_catalog: &SkinCatalog,
 ) -> SkinPanelActions {
     let mut save_clicked = false;
     let mut reset_clicked = false;
@@ -372,28 +540,38 @@ fn build_skin_panel(
     egui::Window::new("スキン設定").open(open).default_pos(egui::pos2(16.0, 480.0)).show(
         ctx,
         |ui| {
-            ui.label("各画面のスキンパス。空欄なら内蔵描画 / デフォルトスキンを使用します。");
+            ui.label("各画面のスキン。空欄なら内蔵描画 / デフォルトスキンを使用します。");
             egui::Grid::new("skin_grid").num_columns(2).show(ui, |ui| {
-                ui.label("選曲");
-                changed |= ui.text_edit_singleline(&mut skin.select).changed();
+                changed |=
+                    skin_path_combo(ui, skin, SkinSlot::Select, "選曲", &skin_catalog.select);
                 ui.end_row();
-                ui.label("決定");
-                changed |= ui.text_edit_singleline(&mut skin.decide).changed();
+                changed |=
+                    skin_path_combo(ui, skin, SkinSlot::Decide, "決定", &skin_catalog.decide);
                 ui.end_row();
-                ui.label("プレイ (5K)");
-                changed |= ui.text_edit_singleline(&mut skin.play5).changed();
+                changed |=
+                    skin_path_combo(ui, skin, SkinSlot::Play5, "プレイ (5K)", &skin_catalog.play5);
                 ui.end_row();
-                ui.label("プレイ (7K)");
-                changed |= ui.text_edit_singleline(&mut skin.play7).changed();
+                changed |=
+                    skin_path_combo(ui, skin, SkinSlot::Play7, "プレイ (7K)", &skin_catalog.play7);
                 ui.end_row();
-                ui.label("プレイ (10K)");
-                changed |= ui.text_edit_singleline(&mut skin.play10).changed();
+                changed |= skin_path_combo(
+                    ui,
+                    skin,
+                    SkinSlot::Play10,
+                    "プレイ (10K)",
+                    &skin_catalog.play10,
+                );
                 ui.end_row();
-                ui.label("プレイ (14K)");
-                changed |= ui.text_edit_singleline(&mut skin.play14).changed();
+                changed |= skin_path_combo(
+                    ui,
+                    skin,
+                    SkinSlot::Play14,
+                    "プレイ (14K)",
+                    &skin_catalog.play14,
+                );
                 ui.end_row();
-                ui.label("リザルト");
-                changed |= ui.text_edit_singleline(&mut skin.result).changed();
+                changed |=
+                    skin_path_combo(ui, skin, SkinSlot::Result, "リザルト", &skin_catalog.result);
                 ui.end_row();
             });
             ui.separator();
@@ -801,5 +979,30 @@ mod tests {
 
         assert_eq!(defs.offset.iter().filter(|offset| offset.id == 10).count(), 1);
         assert_eq!(defs.offset.len(), 4);
+    }
+
+    #[test]
+    fn skin_slot_history_restores_options_files_and_offsets_by_path() {
+        let mut skin = SkinConfig {
+            play7: "data/skins/ECFN/play/play7.luaskin".to_string(),
+            offsets: vec![SkinOffsetConfig { id: 32, x: 12, ..Default::default() }],
+            ..SkinConfig::default()
+        };
+        skin.play7_options.insert("Judge".to_string(), "On".to_string());
+        skin.play7_files.insert("Notes".to_string(), "notes/default.png".to_string());
+
+        save_skin_slot_history(&mut skin, SkinSlot::Play7);
+        skin.play7 = "data/skins/Starseeker/play/play7.luaskin".to_string();
+        skin.play7_options.insert("Judge".to_string(), "Off".to_string());
+        skin.play7_files.insert("Notes".to_string(), "notes/other.png".to_string());
+        skin.offsets = vec![SkinOffsetConfig { id: 32, x: -4, ..Default::default() }];
+        save_skin_slot_history(&mut skin, SkinSlot::Play7);
+
+        skin.play7 = "data/skins/ECFN/play/play7.luaskin".to_string();
+        restore_skin_slot_history(&mut skin, SkinSlot::Play7);
+
+        assert_eq!(skin.play7_options.get("Judge").map(String::as_str), Some("On"));
+        assert_eq!(skin.play7_files.get("Notes").map(String::as_str), Some("notes/default.png"));
+        assert_eq!(skin.offsets, vec![SkinOffsetConfig { id: 32, x: 12, ..Default::default() }]);
     }
 }

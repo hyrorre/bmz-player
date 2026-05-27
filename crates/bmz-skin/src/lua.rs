@@ -33,6 +33,14 @@ pub fn load_lua_skin_value(
     })
 }
 
+pub fn load_lua_skin_header_value(input: &Path) -> Result<LoadedLuaSkinValue> {
+    let (value, warnings) = execute_lua_skin_header(input)?;
+    Ok(LoadedLuaSkinValue {
+        value,
+        warnings: warnings.into_iter().map(|message| SkinLoadWarning { message }).collect(),
+    })
+}
+
 pub fn convert_lua_skin_to_json(
     input: &Path,
     output: &Path,
@@ -48,6 +56,32 @@ pub fn convert_lua_skin_to_json(
         .with_context(|| format!("failed to write json skin: {}", output.display()))?;
 
     Ok(ConvertReport { warnings })
+}
+
+fn execute_lua_skin_header(input: &Path) -> Result<(JsonValue, Vec<String>)> {
+    let input = canonicalize_skin_path(input)
+        .with_context(|| format!("failed to canonicalize input: {}", input.display()))?;
+    let parent =
+        input.parent().ok_or_else(|| anyhow!("input path has no parent: {}", input.display()))?;
+    let root = canonicalize_skin_path(parent)
+        .with_context(|| format!("failed to canonicalize skin root: {}", input.display()))?;
+
+    let mut warnings = Vec::new();
+    let mut table_budget = TableBudget::default();
+    let source = fs::read_to_string(&input)
+        .with_context(|| format!("failed to read lua skin: {}", input.display()))?;
+
+    let lua = Lua::new();
+    install_instruction_limit(&lua);
+    let probe = install_sandbox(&lua, &root, &BTreeMap::new(), None, &BTreeMap::new())?;
+    let header = lua
+        .load(&source)
+        .set_name(input.to_string_lossy().as_ref())
+        .eval::<Value>()
+        .with_context(|| format!("failed to execute lua skin header: {}", input.display()))?;
+    let header_json = lua_value_to_json(header, "$", 0, &mut warnings, &probe, &mut table_budget)?;
+
+    Ok((header_json, warnings))
 }
 
 fn execute_lua_skin(
