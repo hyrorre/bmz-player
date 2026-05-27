@@ -211,6 +211,7 @@ fn plan_select(snapshot: &SelectSnapshot, skin: &SkinContext) -> DrawPlan {
         crate::skin::append_skin_render_items(&mut commands, &skin.select_document_items(snapshot));
         if !commands.is_empty() {
             push_exit_hold_indicator(&mut commands, snapshot.exit_hold_progress);
+            push_scene_overlay_text(&mut commands, &snapshot.overlay.text);
             return DrawPlan { clear: Color::rgb(0.0, 0.0, 0.0), commands };
         }
     }
@@ -303,6 +304,7 @@ fn plan_select(snapshot: &SelectSnapshot, skin: &SkinContext) -> DrawPlan {
     );
 
     push_exit_hold_indicator(&mut commands, snapshot.exit_hold_progress);
+    push_scene_overlay_text(&mut commands, &snapshot.overlay.text);
 
     DrawPlan { clear: Color::rgb(0.02, 0.025, 0.03), commands }
 }
@@ -835,6 +837,7 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
         // JSON skin 等は skin 側の演出を使うため描画しない。
         push_start_overlay(&text, &mut commands, snapshot);
     }
+    push_scene_overlay_text(&mut commands, &snapshot.overlay.text);
 
     DrawPlan { clear: Color::rgb(0.0, 0.0, 0.0), commands }
 }
@@ -882,6 +885,7 @@ fn plan_decide(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
         if !items.is_empty() {
             let mut commands = Vec::new();
             crate::skin::append_skin_render_items(&mut commands, &items);
+            push_scene_overlay_text(&mut commands, &snapshot.overlay.text);
             return DrawPlan { clear: Color::rgb(0.0, 0.0, 0.0), commands };
         }
     }
@@ -916,11 +920,12 @@ fn plan_result(snapshot: &crate::scene::ResultSnapshot, skin: &SkinContext) -> D
         if !items.is_empty() {
             let mut commands = Vec::new();
             crate::skin::append_skin_render_items(&mut commands, &items);
+            push_scene_overlay_text(&mut commands, &snapshot.overlay.text);
             return DrawPlan { clear: Color::rgb(0.0, 0.0, 0.0), commands };
         }
     }
 
-    plan_result_fallback(ResultFallbackSummary {
+    let mut plan = plan_result_fallback(ResultFallbackSummary {
         clear_type: snapshot.clear_type.as_str(),
         ex_score: snapshot.ex_score,
         ex_score_rate: snapshot.ex_score_rate,
@@ -932,7 +937,40 @@ fn plan_result(snapshot: &crate::scene::ResultSnapshot, skin: &SkinContext) -> D
         replay_saved: snapshot.replay_saved,
         difficulty_name: &snapshot.difficulty_name,
         play_level: &snapshot.play_level,
-    })
+    });
+    push_scene_overlay_text(&mut plan.commands, &snapshot.overlay.text);
+    plan
+}
+
+fn push_scene_overlay_text(commands: &mut Vec<DrawCommand>, overlay: &str) {
+    if overlay.is_empty() {
+        return;
+    }
+    // TextStyle.size は「画面高に対する比率」で扱われる (renderer.rs 側で * surface.height)。
+    // ここでは 1080p を基準に 14px 相当へ合わせる。
+    const OVERLAY_FONT_SIZE_RATIO: f32 = 14.0 / 1080.0;
+    const OVERLAY_SHADOW_OFFSET_RATIO: f32 = 1.0 / 1080.0;
+    // TextAlign::Right は max_width > 0 のときだけ効く (renderer.rs)。
+    // origin.x を右端ボックスの左端、max_width をボックス幅にして右寄せする。
+    commands.push(DrawCommand::Text {
+        origin: Point { x: -0.015, y: 0.975 },
+        text: overlay.to_string(),
+        style: TextStyle {
+            font_id: None,
+            size: OVERLAY_FONT_SIZE_RATIO,
+            color: Color::rgba(0.9, 0.9, 0.9, 0.65),
+            layer: TextLayer::Ui,
+            align: TextAlign::Right,
+            max_width: 1.0,
+            overflow: TextOverflow::Overflow,
+            wrapping: false,
+            outline: None,
+            shadow: Some(TextShadow {
+                color: Color::rgba(0.0, 0.0, 0.0, 0.55),
+                offset: Point { x: OVERLAY_SHADOW_OFFSET_RATIO, y: OVERLAY_SHADOW_OFFSET_RATIO },
+            }),
+        },
+    });
 }
 
 fn build_result_skin_draw_state(
@@ -1864,6 +1902,7 @@ mod tests {
             genre: String::new(),
             difficulty_name: String::new(),
             play_level: String::new(),
+            overlay: crate::snapshot::OverlaySnapshot::default(),
         };
 
         let plan = DrawPlan::from_scene_with_skin(&AppSceneSnapshot::Result(snapshot), &skin);

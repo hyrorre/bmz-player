@@ -14,7 +14,9 @@ use bmz_render::plan::TextureId;
 use bmz_render::renderer::{RenderSurfaceStatus, Renderer, SurfaceSize};
 use bmz_render::sample::{sample_play_scene, sample_result_scene, sample_select_scene};
 use bmz_render::scene::{AppSceneSnapshot, ResultSnapshot, SelectRowSnapshot, SelectSnapshot};
-use bmz_render::snapshot::{DisplayJudgeCounts, FastSlowJudgeCounts, RenderSnapshot};
+use bmz_render::snapshot::{
+    DisplayJudgeCounts, FastSlowJudgeCounts, OverlaySnapshot, RenderSnapshot,
+};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
 use winit::event::{ElementState, MouseScrollDelta, StartCause, WindowEvent};
@@ -138,6 +140,8 @@ struct WinitApp {
     /// ドレインが完了するか、選曲復帰・次プレイ開始で解放される。
     draining_audio: Option<AppAudioOutput>,
     finished_play: Option<FinishedPlaySession>,
+    /// 直近のプレイがオートプレイだったか。Result 画面の常時表示に使う。
+    last_play_was_autoplay: bool,
     last_play_snapshot: Option<RenderSnapshot>,
     pending_decide: Option<DecideTransition>,
     pending_play_start: Option<PendingPlayStart>,
@@ -421,6 +425,7 @@ impl WinitApp {
             active_play: None,
             draining_audio: None,
             finished_play: None,
+            last_play_was_autoplay: false,
             last_play_snapshot: None,
             pending_decide: None,
             pending_play_start: None,
@@ -565,78 +570,125 @@ impl WinitApp {
     }
 
     fn scene_snapshot(&self) -> AppSceneSnapshot {
-        if let Some(scene) = &self.dev_scene {
-            return scene.clone();
-        }
-
-        match self.view_state() {
-            AppViewState::Select => AppSceneSnapshot::Select(self.select_snapshot()),
-            AppViewState::Decide => AppSceneSnapshot::Decide(
-                self.pending_decide
-                    .as_ref()
-                    .map(|decide| self.decide_snapshot(decide))
-                    .or_else(|| self.last_play_snapshot.clone())
-                    .unwrap_or_default(),
-            ),
-            AppViewState::Play => {
-                AppSceneSnapshot::Play(self.last_play_snapshot.clone().unwrap_or_default())
-            }
-            AppViewState::Result(summary) => AppSceneSnapshot::Result(ResultSnapshot {
-                clear_type: summary.clear_type,
-                ex_score: summary.ex_score,
-                ex_score_rate: summary.ex_score_rate(),
-                max_combo: summary.max_combo,
-                gauge_value: summary.gauge_value,
-                gauge_type: summary.gauge_type as i32,
-                total_notes: summary.total_notes,
-                judge_counts: DisplayJudgeCounts {
-                    pgreat: summary.judge_counts.pgreat,
-                    great: summary.judge_counts.great,
-                    good: summary.judge_counts.good,
-                    bad: summary.judge_counts.bad,
-                    poor: summary.judge_counts.poor,
-                    empty_poor: summary.judge_counts.empty_poor,
-                },
-                fast_slow_counts: FastSlowJudgeCounts {
-                    fast_pgreat: summary.fast_slow_counts.fast_pgreat,
-                    slow_pgreat: summary.fast_slow_counts.slow_pgreat,
-                    fast_great: summary.fast_slow_counts.fast_great,
-                    slow_great: summary.fast_slow_counts.slow_great,
-                    fast_good: summary.fast_slow_counts.fast_good,
-                    slow_good: summary.fast_slow_counts.slow_good,
-                    fast_bad: summary.fast_slow_counts.fast_bad,
-                    slow_bad: summary.fast_slow_counts.slow_bad,
-                    fast_poor: summary.fast_slow_counts.fast_poor,
-                    slow_poor: summary.fast_slow_counts.slow_poor,
-                    fast_empty_poor: summary.fast_slow_counts.fast_empty_poor,
-                    slow_empty_poor: summary.fast_slow_counts.slow_empty_poor,
-                },
-                score_history_id: summary.score_history_id,
-                replay_saved: !summary.replay_path.is_empty(),
-                best_ex_score: summary.best_ex_score,
-                best_clear_type: summary.best_clear_type,
-                target_ex_score: summary.target_ex_score,
-                best_max_combo: summary.best_max_combo,
-                target_max_combo: summary.target_max_combo,
-                best_misscount: summary.best_misscount,
-                target_misscount: summary.target_misscount,
-                target_clear_type: summary.target_clear_type,
-                elapsed_time: bmz_core::time::TimeUs(
-                    self.result_scene_started_at.elapsed().as_micros().min(i64::MAX as u128) as i64,
+        let mut scene = if let Some(scene) = &self.dev_scene {
+            scene.clone()
+        } else {
+            match self.view_state() {
+                AppViewState::Select => AppSceneSnapshot::Select(self.select_snapshot()),
+                AppViewState::Decide => AppSceneSnapshot::Decide(
+                    self.pending_decide
+                        .as_ref()
+                        .map(|decide| self.decide_snapshot(decide))
+                        .or_else(|| self.last_play_snapshot.clone())
+                        .unwrap_or_default(),
                 ),
-                fadeout_elapsed: self.result_exit.as_ref().map(|exit| {
-                    bmz_core::time::TimeUs(
-                        exit.started_at.elapsed().as_micros().min(i64::MAX as u128) as i64,
-                    )
+                AppViewState::Play => {
+                    AppSceneSnapshot::Play(self.last_play_snapshot.clone().unwrap_or_default())
+                }
+                AppViewState::Result(summary) => AppSceneSnapshot::Result(ResultSnapshot {
+                    clear_type: summary.clear_type,
+                    ex_score: summary.ex_score,
+                    ex_score_rate: summary.ex_score_rate(),
+                    max_combo: summary.max_combo,
+                    gauge_value: summary.gauge_value,
+                    gauge_type: summary.gauge_type as i32,
+                    total_notes: summary.total_notes,
+                    judge_counts: DisplayJudgeCounts {
+                        pgreat: summary.judge_counts.pgreat,
+                        great: summary.judge_counts.great,
+                        good: summary.judge_counts.good,
+                        bad: summary.judge_counts.bad,
+                        poor: summary.judge_counts.poor,
+                        empty_poor: summary.judge_counts.empty_poor,
+                    },
+                    fast_slow_counts: FastSlowJudgeCounts {
+                        fast_pgreat: summary.fast_slow_counts.fast_pgreat,
+                        slow_pgreat: summary.fast_slow_counts.slow_pgreat,
+                        fast_great: summary.fast_slow_counts.fast_great,
+                        slow_great: summary.fast_slow_counts.slow_great,
+                        fast_good: summary.fast_slow_counts.fast_good,
+                        slow_good: summary.fast_slow_counts.slow_good,
+                        fast_bad: summary.fast_slow_counts.fast_bad,
+                        slow_bad: summary.fast_slow_counts.slow_bad,
+                        fast_poor: summary.fast_slow_counts.fast_poor,
+                        slow_poor: summary.fast_slow_counts.slow_poor,
+                        fast_empty_poor: summary.fast_slow_counts.fast_empty_poor,
+                        slow_empty_poor: summary.fast_slow_counts.slow_empty_poor,
+                    },
+                    score_history_id: summary.score_history_id,
+                    replay_saved: !summary.replay_path.is_empty(),
+                    best_ex_score: summary.best_ex_score,
+                    best_clear_type: summary.best_clear_type,
+                    target_ex_score: summary.target_ex_score,
+                    best_max_combo: summary.best_max_combo,
+                    target_max_combo: summary.target_max_combo,
+                    best_misscount: summary.best_misscount,
+                    target_misscount: summary.target_misscount,
+                    target_clear_type: summary.target_clear_type,
+                    elapsed_time: bmz_core::time::TimeUs(
+                        self.result_scene_started_at.elapsed().as_micros().min(i64::MAX as u128)
+                            as i64,
+                    ),
+                    fadeout_elapsed: self.result_exit.as_ref().map(|exit| {
+                        bmz_core::time::TimeUs(
+                            exit.started_at.elapsed().as_micros().min(i64::MAX as u128) as i64,
+                        )
+                    }),
+                    title: summary.title.clone(),
+                    subtitle: summary.subtitle.clone(),
+                    artist: summary.artist.clone(),
+                    subartist: summary.subartist.clone(),
+                    genre: summary.genre.clone(),
+                    difficulty_name: summary.difficulty_name.clone(),
+                    play_level: summary.play_level.clone(),
+                    overlay: OverlaySnapshot::default(),
                 }),
-                title: summary.title.clone(),
-                subtitle: summary.subtitle.clone(),
-                artist: summary.artist.clone(),
-                subartist: summary.subartist.clone(),
-                genre: summary.genre.clone(),
-                difficulty_name: summary.difficulty_name.clone(),
-                play_level: summary.play_level.clone(),
-            }),
+            }
+        };
+        let overlay_text = self.always_overlay_text();
+        self.apply_overlay_text_to_scene(&mut scene, overlay_text);
+        scene
+    }
+
+    fn always_overlay_text(&self) -> String {
+        let player_name = env!("CARGO_PKG_NAME");
+        let player_version = env!("CARGO_PKG_VERSION");
+        if self.is_autoplay_for_overlay() {
+            format!("{player_name} {player_version} autoplay")
+        } else {
+            format!("{player_name} {player_version}")
+        }
+    }
+
+    fn is_autoplay_for_overlay(&self) -> bool {
+        match self.view_state() {
+            AppViewState::Result(_) => self.last_play_was_autoplay,
+            AppViewState::Play => self
+                .active_play
+                .as_ref()
+                .map(|active| active.running.session.autoplay.is_some())
+                .or_else(|| {
+                    self.pending_play_start
+                        .as_ref()
+                        .map(|_| self.assist_option == AssistOption::Autoplay)
+                })
+                .unwrap_or(self.last_play_was_autoplay),
+            AppViewState::Select | AppViewState::Decide => {
+                self.assist_option == AssistOption::Autoplay
+                    || self.boot.profile_config.play.auto_play
+            }
+        }
+    }
+
+    fn apply_overlay_text_to_scene(&self, scene: &mut AppSceneSnapshot, text: String) {
+        match scene {
+            AppSceneSnapshot::Select(snapshot) => {
+                snapshot.overlay = OverlaySnapshot { text: text.clone() }
+            }
+            AppSceneSnapshot::Decide(snapshot) | AppSceneSnapshot::Play(snapshot) => {
+                snapshot.overlay = OverlaySnapshot { text: text.clone() }
+            }
+            AppSceneSnapshot::Result(snapshot) => snapshot.overlay = OverlaySnapshot { text },
         }
     }
 
@@ -708,6 +760,7 @@ impl WinitApp {
             key_hint: self.select_keys.key_hint.clone(),
             option_hint: self.select_keys.option_hint.clone(),
             exit_hold_progress: self.select_exit_hold_progress(),
+            overlay: OverlaySnapshot::default(),
         }
     }
 
@@ -1205,6 +1258,7 @@ impl WinitApp {
     }
 
     fn start_chart_with_options(&mut self, chart_id: i64, mut options: PlayStartOptions) {
+        self.last_play_was_autoplay = options.autoplay;
         self.ensure_skin_ready(SkinKind::Decide);
         self.spawn_play_skin_decode_for(self.key_mode_for_chart(chart_id));
         self.ensure_skin_ready(SkinKind::Play);
@@ -1267,6 +1321,7 @@ impl WinitApp {
     }
 
     fn install_active_play(&mut self, mut active_play: StartedWinitPlaySession) {
+        self.last_play_was_autoplay = active_play.running.session.autoplay.is_some();
         active_play.running.bga_frames =
             load_chart_bga_textures(&mut self.renderer, &active_play.running.session.chart);
         let render_now = self.play_skin_playstart_offset();

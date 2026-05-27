@@ -10,8 +10,8 @@ use bmz_gameplay::session::GameSession;
 use bmz_render::plan::CHART_BGA_TEXTURE_BASE;
 use bmz_render::skin_offset::{SkinOffsetValue, SkinOffsetValues};
 use bmz_render::snapshot::{
-    DisplayBgaFrame, DisplayInput, DisplayJudgeCounts, DisplayJudgement, RenderSnapshot,
-    VisibleBarLine, VisibleLongNote, VisibleMine, VisibleNote,
+    DisplayBgaFrame, DisplayInput, DisplayJudgeCounts, DisplayJudgement, OverlaySnapshot,
+    RenderSnapshot, VisibleBarLine, VisibleLongNote, VisibleMine, VisibleNote,
 };
 
 pub const DEFAULT_LOOKAHEAD_US: i64 = 2_000_000;
@@ -125,6 +125,7 @@ pub fn build_render_snapshot_with_bga_frames(
                 ((render_now.0 - t.0) / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32
             })
         }),
+        overlay: OverlaySnapshot::default(),
     };
 
     let scroll = ScrollContext::new(session);

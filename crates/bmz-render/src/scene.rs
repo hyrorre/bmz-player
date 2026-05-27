@@ -1,7 +1,7 @@
 use bmz_core::clear::ClearType;
 use bmz_core::time::TimeUs;
 
-use crate::snapshot::{DisplayJudgeCounts, FastSlowJudgeCounts, RenderSnapshot};
+use crate::snapshot::{DisplayJudgeCounts, FastSlowJudgeCounts, OverlaySnapshot, RenderSnapshot};
 
 #[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::large_enum_variant)]
@@ -35,6 +35,8 @@ pub struct SelectSnapshot {
     pub option_hint: String,
     /// ESC 長押しによるアプリ終了の進捗 (0.0..=1.0)。0.0 のときは未押下。
     pub exit_hold_progress: f32,
+    /// 右下に常時表示するオーバーレイ文字列。
+    pub overlay: OverlaySnapshot,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -103,6 +105,8 @@ pub struct ResultSnapshot {
     pub genre: String,
     pub difficulty_name: String,
     pub play_level: String,
+    /// 右下に常時表示するオーバーレイ文字列。
+    pub overlay: OverlaySnapshot,
 }
 
 impl ResultSnapshot {
@@ -148,6 +152,7 @@ mod tests {
             genre: String::new(),
             difficulty_name: String::new(),
             play_level: String::new(),
+            overlay: OverlaySnapshot::default(),
         };
 
         assert!(snapshot.is_full_combo());
@@ -184,6 +189,7 @@ mod tests {
             genre: String::new(),
             difficulty_name: String::new(),
             play_level: String::new(),
+            overlay: OverlaySnapshot::default(),
         };
 
         assert!(!snapshot.is_full_combo());

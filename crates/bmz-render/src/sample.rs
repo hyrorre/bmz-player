@@ -3,8 +3,8 @@ use bmz_core::time::TimeUs;
 
 use crate::scene::{AppSceneSnapshot, ResultSnapshot, SelectRowSnapshot, SelectSnapshot};
 use crate::snapshot::{
-    DisplayJudgeCounts, DisplayJudgement, FastSlowJudgeCounts, RenderSnapshot, VisibleBarLine,
-    VisibleLongNote, VisibleNote,
+    DisplayJudgeCounts, DisplayJudgement, FastSlowJudgeCounts, OverlaySnapshot, RenderSnapshot,
+    VisibleBarLine, VisibleLongNote, VisibleNote,
 };
 
 pub fn sample_select_scene() -> AppSceneSnapshot {
@@ -54,6 +54,7 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
             "F1 SELECT  F2 RELOAD  F3 RESULT  F4 PLAY   Q+Z:ARRANGE  Q+X:GAUGE  Q+C:ASSIST"
                 .to_string(),
         exit_hold_progress: 0.0,
+        overlay: OverlaySnapshot::default(),
     })
 }
 
@@ -158,6 +159,7 @@ pub fn sample_result_scene() -> AppSceneSnapshot {
         genre: "BMS".to_string(),
         difficulty_name: "NORMAL".to_string(),
         play_level: "7".to_string(),
+        overlay: OverlaySnapshot::default(),
     })
 }
 

@@ -3,6 +3,11 @@ use bmz_core::time::TimeUs;
 
 use crate::skin_offset::SkinOffsetValues;
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OverlaySnapshot {
+    pub text: String,
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RenderSnapshot {
     pub time: TimeUs,
@@ -68,6 +73,8 @@ pub struct RenderSnapshot {
     pub keyon_ms: [Option<i32>; LANE_COUNT],
     /// 各レーンのキー解放からの経過 ms(離した直後のみ Some)。skin timer 120..=127 に渡る。
     pub keyoff_ms: [Option<i32>; LANE_COUNT],
+    /// 右下に常時表示するオーバーレイ文字列。
+    pub overlay: OverlaySnapshot,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
