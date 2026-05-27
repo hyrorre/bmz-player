@@ -27,7 +27,10 @@ pub const DEFAULT_GAUGE_FILL_TEXTURE: TextureId = TextureId(9);
 pub const DEFAULT_COMBO_PANEL_TEXTURE: TextureId = TextureId(10);
 pub const DEFAULT_COMBO_PANEL_INACTIVE_TEXTURE: TextureId = TextureId(11);
 pub const DEFAULT_MINE_NOTE_TEXTURE: TextureId = TextureId(12);
-pub const CHART_BGA_TEXTURE_BASE: u32 = 20_000;
+/// 譜面 BGA (静止画/動画) 用テクスチャ ID の起点。
+/// beatoraja スキンは scene ごとに 10000 刻み (play=10000, select=20000, …) を使うため、
+/// 20000 帯に置くと select スキン PNG をプレイ中に上書きし、リザルト復帰後も背景が壊れたままになる。
+pub const CHART_BGA_TEXTURE_BASE: u32 = 50_000;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DrawPlan {

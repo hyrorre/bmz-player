@@ -506,6 +506,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn bga_texture_ids_do_not_overlap_beatoraja_skin_ranges() {
+        // skin_loader::SkinKind::first_texture_id と同じ割当。
+        const SELECT_SKIN_BASE: u32 = 20_000;
+        const RESULT_SKIN_BASE: u32 = 30_000;
+        // result スキンが数千 PNG あっても BGA 帯に届かないこと。
+        const MAX_RESULT_SKIN_TEXTURES: u32 = 10_000;
+
+        assert!(CHART_BGA_TEXTURE_BASE >= RESULT_SKIN_BASE + MAX_RESULT_SKIN_TEXTURES);
+        assert!(CHART_BGA_TEXTURE_BASE > SELECT_SKIN_BASE);
+        assert_eq!(bga_texture_id(BgaAssetId(0)), CHART_BGA_TEXTURE_BASE);
+    }
+
+    #[test]
     fn build_render_snapshot_filters_visible_notes_and_formats_judgements() {
         let profile = ProfileConfig::new_default("default", "Default", 1);
         let mut session =
