@@ -1,4 +1,5 @@
 pub const SKIN_OFFSET_VALUE_COUNT: usize = 200;
+pub const SKIN_OFFSET_BAR_LINE: i32 = 34;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SkinOffsetValue {

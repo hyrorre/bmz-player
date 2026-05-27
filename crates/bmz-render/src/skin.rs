@@ -14,7 +14,7 @@ use crate::plan::{
     TextStyle, TextureId, UvRect,
 };
 use crate::scene::{SelectRowKind, SelectRowSnapshot, SelectSnapshot};
-use crate::skin_offset::SkinOffsetValues;
+use crate::skin_offset::{SKIN_OFFSET_BAR_LINE, SkinOffsetValues};
 use crate::snapshot::DisplayJudgeCounts;
 
 const OFFSET_ALL: i32 = 10;
@@ -2352,6 +2352,7 @@ impl SkinDocument {
             };
             frame.y += (timeline_bottom_px - lane_bottom_px).round() as i32;
             apply_skin_offset_to_frame(destination, &mut frame, state, false);
+            apply_bar_line_offset_to_frame(&mut frame, state);
             let Some(image) = images.get(destination.id.as_str()) else {
                 continue;
             };
@@ -5011,6 +5012,13 @@ fn apply_skin_offset_ids_to_frame(
                 }
             }
         }
+    }
+}
+
+fn apply_bar_line_offset_to_frame(frame: &mut ResolvedSkinFrame, state: SkinDrawState) {
+    if let Some(offset) = state.skin_offsets.get(SKIN_OFFSET_BAR_LINE) {
+        frame.h = (frame.h + offset.h).max(0);
+        frame.a = (frame.a + offset.a).clamp(0, 255);
     }
 }
 

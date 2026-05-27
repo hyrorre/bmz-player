@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use bmz_render::skin::{SkinDocument, SkinFilepathDef, SkinOffsetDef, SkinPropertyDef};
+use bmz_render::skin_offset::SKIN_OFFSET_BAR_LINE;
 use bmz_render::ui::EguiFrame;
 use egui::ViewportId;
 use winit::event::WindowEvent;
@@ -62,7 +63,7 @@ impl SceneSkinDefs {
     }
 }
 
-fn beatoraja_play_common_offsets() -> [SkinOffsetDef; 4] {
+fn beatoraja_play_common_offsets() -> [SkinOffsetDef; 5] {
     [
         SkinOffsetDef {
             category: "beatoraja".to_string(),
@@ -104,6 +105,17 @@ fn beatoraja_play_common_offsets() -> [SkinOffsetDef; 4] {
             x: true,
             y: true,
             w: true,
+            h: true,
+            r: false,
+            a: true,
+        },
+        SkinOffsetDef {
+            category: "bmz".to_string(),
+            name: "Bar Line offset".to_string(),
+            id: SKIN_OFFSET_BAR_LINE,
+            x: false,
+            y: false,
+            w: false,
             h: true,
             r: false,
             a: true,
@@ -1094,6 +1106,7 @@ mod tests {
         assert!(offsets.contains(&(30, "Notes offset")));
         assert!(offsets.contains(&(32, "Judge offset")));
         assert!(offsets.contains(&(33, "Judge Detail offset")));
+        assert!(offsets.contains(&(SKIN_OFFSET_BAR_LINE, "Bar Line offset")));
     }
 
     #[test]
@@ -1114,7 +1127,7 @@ mod tests {
         defs.append_missing_beatoraja_play_offsets();
 
         assert_eq!(defs.offset.iter().filter(|offset| offset.id == 10).count(), 1);
-        assert_eq!(defs.offset.len(), 4);
+        assert_eq!(defs.offset.len(), 5);
     }
 
     #[test]
