@@ -373,6 +373,44 @@ mod tests {
     }
 
     #[test]
+    fn lua_skin_config_get_path_prefers_filepath_default() {
+        let root = unique_test_dir("bmz-skin-lua");
+        fs::create_dir_all(root.join("parts")).unwrap();
+        fs::write(root.join("parts/aaa.png"), []).unwrap();
+        fs::write(root.join("parts/default.png"), []).unwrap();
+        fs::write(
+            root.join("play7.luaskin"),
+            r#"
+            local image_path = "parts/*.png"
+            if skin_config then
+                image_path = skin_config.get_path(image_path)
+            end
+            return {
+                type = 0,
+                filepath = {
+                    { name = "Notes", path = "parts/*.png", def = "default" }
+                },
+                source = {
+                    { id = "notes", path = image_path }
+                }
+            }
+            "#,
+        )
+        .unwrap();
+
+        let loaded =
+            load_lua_skin_value(&root.join("play7.luaskin"), &BTreeMap::new(), &BTreeMap::new())
+                .unwrap();
+
+        assert_eq!(
+            loaded.value["source"][0]["path"].as_str().and_then(|path| {
+                std::path::Path::new(path).file_name().and_then(|name| name.to_str())
+            }),
+            Some("default.png")
+        );
+    }
+
+    #[test]
     fn lua_skin_config_get_path_falls_back_when_selection_missing() {
         let root = unique_test_dir("bmz-skin-lua");
         fs::create_dir_all(root.join("parts")).unwrap();

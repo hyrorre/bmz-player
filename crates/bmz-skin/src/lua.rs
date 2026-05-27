@@ -112,7 +112,7 @@ fn execute_lua_skin(
     let header_json =
         lua_value_to_json(header, "$", 0, &mut warnings, &header_probe, &mut table_budget)?;
     let skin_options = skin_config_options_from_header(&header_json, options, &mut warnings);
-    let skin_files = skin_files_from_header(&header_json, files);
+    let skin_files = skin_files_from_header(&root, &header_json, files);
 
     let lua = Lua::new();
     install_instruction_limit(&lua);
@@ -575,6 +575,7 @@ fn default_property_op(property: &JsonValue, items: &[JsonValue]) -> Option<i64>
 /// 集める。キーは `path` グロブ (区切りを `/` に正規化)、値は選択ファイルの
 /// スキンルート相対パス。選択が無い / 空の定義は含めない。
 fn skin_files_from_header(
+    root: &Path,
     header: &JsonValue,
     selected: &BTreeMap<String, String>,
 ) -> BTreeMap<String, String> {
@@ -589,12 +590,80 @@ fn skin_files_from_header(
         let Some(path) = filepath.get("path").and_then(JsonValue::as_str) else {
             continue;
         };
-        let Some(choice) = selected.get(name).filter(|choice| !choice.is_empty()) else {
-            continue;
-        };
-        result.insert(path.replace('\\', "/"), choice.clone());
+        let normalized_path = path.replace('\\', "/");
+        let choice = selected
+            .get(name)
+            .filter(|choice| !choice.is_empty())
+            .cloned()
+            .or_else(|| default_skin_file_from_filepath(root, &normalized_path, filepath));
+        if let Some(choice) = choice {
+            result.insert(normalized_path, choice);
+        }
     }
     result
+}
+
+fn default_skin_file_from_filepath(
+    root: &Path,
+    normalized_path: &str,
+    filepath: &JsonValue,
+) -> Option<String> {
+    let candidates = skin_file_candidates(root, normalized_path);
+    if candidates.is_empty() {
+        return None;
+    }
+    if let Some(default_name) = filepath.get("def").and_then(JsonValue::as_str)
+        && !default_name.is_empty()
+        && let Some(candidate) =
+            candidates.iter().find(|candidate| filename_matches_def(candidate, default_name))
+    {
+        return Some(candidate.clone());
+    }
+    candidates.into_iter().next()
+}
+
+fn skin_file_candidates(root: &Path, normalized_path: &str) -> Vec<String> {
+    let requested_path = strip_beatoraja_asset_filter(normalized_path);
+    let Some((prefix, suffix)) = requested_path.split_once('*') else {
+        return vec![requested_path.to_string()];
+    };
+    if suffix.contains('*') {
+        return Vec::new();
+    }
+    let slash = prefix.rfind('/').map(|index| index + 1).unwrap_or(0);
+    let (directory_prefix, name_prefix) = prefix.split_at(slash);
+    let dir = root.join(directory_prefix);
+    let mut candidates = Vec::new();
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return candidates;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.starts_with(name_prefix) {
+            continue;
+        }
+        if let Some(nested_suffix) = suffix.strip_prefix('/') {
+            let candidate = format!("{directory_prefix}{name}/{nested_suffix}");
+            if root.join(&candidate).exists() {
+                candidates.push(candidate);
+            }
+        } else if name.ends_with(suffix) {
+            candidates.push(format!("{directory_prefix}{name}"));
+        }
+    }
+    candidates.sort();
+    candidates
+}
+
+fn filename_matches_def(candidate: &str, default_name: &str) -> bool {
+    let file_name = Path::new(candidate).file_name().and_then(|name| name.to_str()).unwrap_or("");
+    if file_name.eq_ignore_ascii_case(default_name) {
+        return true;
+    }
+    Path::new(file_name)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .is_some_and(|stem| stem.eq_ignore_ascii_case(default_name))
 }
 
 /// ユーザ選択のスキンルート相対パスを解決する。

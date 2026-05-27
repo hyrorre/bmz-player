@@ -729,14 +729,15 @@ fn build_scene_skin_defs(
             ui.label("設定可能項目はありません (スキン未読込、または定義なし)。");
             return;
         }
+        changed |= fill_missing_skin_defaults(defs, skin_root, options, files);
         if !defs.property.is_empty() {
             ui.strong("オプション");
             // property / filepath は同名 (例: "シャッター") を持ちうるので、egui の
             // ComboBox ID 衝突を防ぐためにカテゴリで名前空間を切る。
             ui.push_id("property", |ui| {
                 for prop in &defs.property {
-                    let default = property_default(prop);
-                    let mut selected = options.get(&prop.name).cloned().unwrap_or(default);
+                    let mut selected =
+                        options.get(&prop.name).cloned().unwrap_or_else(|| property_default(prop));
                     let before = selected.clone();
                     egui::ComboBox::from_label(&prop.name).selected_text(&selected).show_ui(
                         ui,
@@ -757,8 +758,7 @@ fn build_scene_skin_defs(
             ui.strong("ファイル選択");
             ui.push_id("filepath", |ui| {
                 for filepath in &defs.filepath {
-                    let mut selected =
-                        files.get(&filepath.name).cloned().unwrap_or_else(|| filepath.def.clone());
+                    let mut selected = files.get(&filepath.name).cloned().unwrap_or_default();
                     let before = selected.clone();
                     let display =
                         if selected.is_empty() { "(未選択)" } else { selected.as_str() };
@@ -811,6 +811,35 @@ fn build_scene_skin_defs(
             }
         }
     });
+    changed
+}
+
+fn fill_missing_skin_defaults(
+    defs: &SceneSkinDefs,
+    skin_root: Option<&Path>,
+    options: &mut BTreeMap<String, String>,
+    files: &mut BTreeMap<String, String>,
+) -> bool {
+    let mut changed = false;
+    for prop in &defs.property {
+        if !options.contains_key(&prop.name) {
+            options.insert(prop.name.clone(), property_default(prop));
+            changed = true;
+        }
+    }
+    let Some(skin_root) = skin_root else {
+        return changed;
+    };
+    for filepath in &defs.filepath {
+        if files.contains_key(&filepath.name) {
+            continue;
+        }
+        let candidates = glob_candidates(skin_root, &filepath.path);
+        if let Some(default) = filepath_default(filepath, &candidates) {
+            files.insert(filepath.name.clone(), default);
+            changed = true;
+        }
+    }
     changed
 }
 
@@ -893,13 +922,39 @@ fn glob_candidates(root: &Path, pattern: &str) -> Vec<String> {
     candidates
 }
 
-/// property の既定選択肢名。`def` を優先し、空なら先頭 item を使う。
+/// property の既定選択肢名。beatoraja と同じく `def` が item name と一致する
+/// ときだけ採用し、未指定/不一致なら先頭 item を使う。
 fn property_default(prop: &SkinPropertyDef) -> String {
-    if prop.def.is_empty() {
-        prop.item.first().map(|item| item.name.clone()).unwrap_or_default()
-    } else {
-        prop.def.clone()
+    prop.item
+        .iter()
+        .find(|item| !prop.def.is_empty() && item.name == prop.def)
+        .or_else(|| prop.item.first())
+        .map(|item| item.name.clone())
+        .unwrap_or_default()
+}
+
+fn filepath_default(filepath: &SkinFilepathDef, candidates: &[String]) -> Option<String> {
+    if candidates.is_empty() {
+        return None;
     }
+    if !filepath.def.is_empty()
+        && let Some(candidate) =
+            candidates.iter().find(|candidate| filename_matches_def(candidate, &filepath.def))
+    {
+        return Some(candidate.clone());
+    }
+    candidates.first().cloned()
+}
+
+fn filename_matches_def(candidate: &str, def: &str) -> bool {
+    let file_name = Path::new(candidate).file_name().and_then(|name| name.to_str()).unwrap_or("");
+    if file_name.eq_ignore_ascii_case(def) {
+        return true;
+    }
+    Path::new(file_name)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .is_some_and(|stem| stem.eq_ignore_ascii_case(def))
 }
 
 #[cfg(test)]
@@ -946,6 +1001,84 @@ mod tests {
                 "parts/lanecover_lift/default.png".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn property_default_uses_matching_def_name_or_first_item() {
+        let prop = SkinPropertyDef {
+            category: String::new(),
+            name: "Notes".to_string(),
+            item: vec![
+                bmz_render::skin::SkinPropertyItemDef { name: "Light".to_string(), op: 1 },
+                bmz_render::skin::SkinPropertyItemDef { name: "Dark".to_string(), op: 2 },
+            ],
+            def: "Dark".to_string(),
+        };
+        assert_eq!(property_default(&prop), "Dark");
+
+        let prop = SkinPropertyDef { def: "Missing".to_string(), ..prop };
+        assert_eq!(property_default(&prop), "Light");
+    }
+
+    #[test]
+    fn filepath_default_matches_def_with_or_without_extension_case_insensitive() {
+        let filepath = SkinFilepathDef {
+            category: String::new(),
+            name: "Notes".to_string(),
+            path: "notes/*.png".to_string(),
+            def: "default".to_string(),
+        };
+        let candidates = vec!["notes/aaa.png".to_string(), "notes/Default.PNG".to_string()];
+
+        assert_eq!(filepath_default(&filepath, &candidates).as_deref(), Some("notes/Default.PNG"));
+
+        let filepath = SkinFilepathDef { def: "missing".to_string(), ..filepath };
+        assert_eq!(filepath_default(&filepath, &candidates).as_deref(), Some("notes/aaa.png"));
+    }
+
+    #[test]
+    fn fill_missing_skin_defaults_keeps_saved_values_and_fills_new_items() {
+        let root = unique_test_dir("bmz-ui-defaults");
+        fs::create_dir_all(root.join("notes")).unwrap();
+        fs::write(root.join("notes/aaa.png"), []).unwrap();
+        fs::write(root.join("notes/default.png"), []).unwrap();
+        let defs = SceneSkinDefs {
+            property: vec![
+                SkinPropertyDef {
+                    category: String::new(),
+                    name: "Lane".to_string(),
+                    item: vec![
+                        bmz_render::skin::SkinPropertyItemDef { name: "Off".to_string(), op: 0 },
+                        bmz_render::skin::SkinPropertyItemDef { name: "On".to_string(), op: 1 },
+                    ],
+                    def: "On".to_string(),
+                },
+                SkinPropertyDef {
+                    category: String::new(),
+                    name: "Saved".to_string(),
+                    item: vec![
+                        bmz_render::skin::SkinPropertyItemDef { name: "A".to_string(), op: 0 },
+                        bmz_render::skin::SkinPropertyItemDef { name: "B".to_string(), op: 1 },
+                    ],
+                    def: "A".to_string(),
+                },
+            ],
+            filepath: vec![SkinFilepathDef {
+                category: String::new(),
+                name: "Notes".to_string(),
+                path: "notes/*.png".to_string(),
+                def: "default".to_string(),
+            }],
+            offset: Vec::new(),
+        };
+        let mut options = BTreeMap::from([("Saved".to_string(), "B".to_string())]);
+        let mut files = BTreeMap::new();
+
+        assert!(fill_missing_skin_defaults(&defs, Some(&root), &mut options, &mut files));
+
+        assert_eq!(options.get("Lane").map(String::as_str), Some("On"));
+        assert_eq!(options.get("Saved").map(String::as_str), Some("B"));
+        assert_eq!(files.get("Notes").map(String::as_str), Some("notes/default.png"));
     }
 
     #[test]
