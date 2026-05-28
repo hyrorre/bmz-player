@@ -1040,6 +1040,8 @@ pub struct SkinDrawState {
     pub select_clear_index: i64,
     /// 選択中バーがフォルダかどうか。
     pub select_is_folder: bool,
+    /// 選択中曲が library.db に登録済みかどうか (OPTION_PLAYABLEBAR=5)。
+    pub select_in_library: bool,
     /// 選択中曲のノーツ数。
     pub select_total_notes: u32,
     /// 選択中曲の代表BPM。
@@ -1143,6 +1145,7 @@ impl Default for SkinDrawState {
             select_replay_index: None,
             select_clear_index: 0,
             select_is_folder: false,
+            select_in_library: true,
             select_total_notes: 0,
             select_bpm: 0.0,
             select_min_bpm: 0.0,
@@ -1907,6 +1910,7 @@ impl SkinDocument {
             select_replay_index: selected_row.and_then(select_row_replay_index),
             select_clear_index: selected_row.map(select_row_clear_index).unwrap_or(0) as i64,
             select_is_folder: selected_row.is_some_and(|row| row.is_folder),
+            select_in_library: selected_row.is_none_or(|row| row.in_library),
             select_total_notes: selected_row.map(|row| row.total_notes).unwrap_or(0),
             select_bpm: selected_row.map(|row| row.initial_bpm).unwrap_or(0.0),
             select_min_bpm: selected_row.map(|row| row.min_bpm).unwrap_or(0.0),
@@ -1987,6 +1991,7 @@ impl SkinDocument {
                 select_replay_index: select_row_replay_index(row),
                 select_clear_index: select_row_clear_index(row) as i64,
                 select_is_folder: row.is_folder,
+                select_in_library: row.in_library,
                 select_total_notes: row.total_notes,
                 select_length_ms: row.length_ms,
                 max_combo: row.max_combo.unwrap_or(0),
@@ -2017,7 +2022,7 @@ impl SkinDocument {
             if let Some(item) = self.select_bar_item(row, row_destination, row_frame, sources) {
                 items.push(item);
             }
-            if !row.is_folder {
+            if !row.is_folder && row.in_library {
                 let clear_index = select_row_clear_index(row);
                 let lamp_entries = if songlist.playerlamp.is_empty() {
                     &songlist.lamp
@@ -3673,6 +3678,7 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool 
         1 => state.select_is_folder,
         2 => !state.select_is_folder,
         3 => false,
+        5 => !state.select_is_folder && state.select_in_library,
         21 => state.select_option_panel == 1,
         22 => state.select_option_panel == 2,
         23 => state.select_option_panel == 3,
@@ -4671,6 +4677,7 @@ fn difficulty_code_from_label(label: &str) -> i64 {
 
 fn select_row_bar_image_index(row: &SelectRowSnapshot) -> usize {
     match row.kind {
+        SelectRowKind::Song if !row.in_library => 4,
         SelectRowKind::Song => 0,
         SelectRowKind::Folder => 1,
         SelectRowKind::TableFolder => 2,
@@ -4679,6 +4686,7 @@ fn select_row_bar_image_index(row: &SelectRowSnapshot) -> usize {
 
 fn select_row_bar_text_index(row: &SelectRowSnapshot) -> usize {
     match row.kind {
+        SelectRowKind::Song if !row.in_library => 8,
         SelectRowKind::Song => 2,
         SelectRowKind::Folder => 4,
         SelectRowKind::TableFolder => 6,
@@ -6321,6 +6329,48 @@ mod tests {
         assert!(test_skin_op(152, &[], normal));
         assert!(!test_skin_op(153, &[], normal));
         assert!(test_skin_op(155, &[], insane));
+    }
+
+    #[test]
+    fn select_row_bar_image_index_unowned_song_uses_nograde() {
+        let owned = SelectRowSnapshot { in_library: true, ..SelectRowSnapshot::default() };
+        let unowned = SelectRowSnapshot { in_library: false, ..SelectRowSnapshot::default() };
+        assert_eq!(select_row_bar_image_index(&owned), 0);
+        assert_eq!(select_row_bar_image_index(&unowned), 4);
+    }
+
+    #[test]
+    fn select_row_bar_text_index_unowned_song_uses_no_songs_text() {
+        let owned = SelectRowSnapshot { in_library: true, ..SelectRowSnapshot::default() };
+        let unowned = SelectRowSnapshot { in_library: false, ..SelectRowSnapshot::default() };
+        assert_eq!(select_row_bar_text_index(&owned), 2);
+        assert_eq!(select_row_bar_text_index(&unowned), 8);
+    }
+
+    #[test]
+    fn playable_bar_op_matches_library_presence() {
+        let owned_song = SkinDrawState {
+            select_is_folder: false,
+            select_in_library: true,
+            ..SkinDrawState::default()
+        };
+        let unowned_song = SkinDrawState {
+            select_is_folder: false,
+            select_in_library: false,
+            ..SkinDrawState::default()
+        };
+        let folder = SkinDrawState {
+            select_is_folder: true,
+            select_in_library: true,
+            ..SkinDrawState::default()
+        };
+
+        assert!(test_skin_op(5, &[], owned_song));
+        assert!(!test_skin_op(5, &[], unowned_song));
+        assert!(!test_skin_op(5, &[], folder));
+        assert!(!test_skin_op(-5, &[], owned_song));
+        assert!(test_skin_op(-5, &[], unowned_song));
+        assert!(test_skin_op(-5, &[], folder));
     }
 
     #[test]
@@ -8100,6 +8150,82 @@ mod tests {
                 .iter()
                 .any(|item| matches!(item, SkinRenderItem::Text { text, .. } if text == "Second"))
         );
+    }
+
+    #[test]
+    fn select_skin_document_renders_unowned_song_with_nograde_bar() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 5,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "bar.png" }],
+                "image": [
+                    { "id": "bar-song", "src": 1, "x": 0, "y": 0, "w": 40, "h": 10 },
+                    { "id": "bar-nograde", "src": 1, "x": 0, "y": 40, "w": 40, "h": 10 }
+                ],
+                "imageset": [{
+                    "id": "bar",
+                    "images": ["bar-song", "bar-song", "bar-song", "bar-song", "bar-nograde"]
+                }],
+                "text": [
+                    { "id": "bartext-owned", "font": "main", "size": 10 },
+                    { "id": "bartext-owned2", "font": "main", "size": 10 },
+                    { "id": "bartext-owned3", "font": "main", "size": 10 },
+                    { "id": "bartext-owned4", "font": "main", "size": 10 },
+                    { "id": "bartext-owned5", "font": "main", "size": 10 },
+                    { "id": "bartext-owned6", "font": "main", "size": 10 },
+                    { "id": "bartext-owned7", "font": "main", "size": 10 },
+                    { "id": "bartext-owned8", "font": "main", "size": 10 },
+                    { "id": "bartext-unowned", "font": "unowned", "size": 10 }
+                ],
+                "songlist": {
+                    "id": "songlist",
+                    "center": 0,
+                    "listoff": [{ "id": "bar", "dst": [{ "x": 10, "y": 50, "w": 40, "h": 10 }] }],
+                    "liston": [{ "id": "bar", "dst": [{ "x": 12, "y": 50, "w": 40, "h": 10 }] }],
+                    "text": [
+                        { "id": "bartext-owned", "dst": [{ "x": 1, "y": 2, "w": 20, "h": 8 }] },
+                        { "id": "bartext-owned2", "dst": [{ "x": 2, "y": 2, "w": 20, "h": 8 }] },
+                        { "id": "bartext-owned3", "dst": [{ "x": 3, "y": 2, "w": 20, "h": 8 }] },
+                        { "id": "bartext-owned4", "dst": [{ "x": 4, "y": 2, "w": 20, "h": 8 }] },
+                        { "id": "bartext-owned5", "dst": [{ "x": 5, "y": 2, "w": 20, "h": 8 }] },
+                        { "id": "bartext-owned6", "dst": [{ "x": 6, "y": 2, "w": 20, "h": 8 }] },
+                        { "id": "bartext-owned7", "dst": [{ "x": 7, "y": 2, "w": 20, "h": 8 }] },
+                        { "id": "bartext-owned8", "dst": [{ "x": 8, "y": 2, "w": 20, "h": 8 }] },
+                        { "id": "bartext-unowned", "dst": [{ "x": 9, "y": 2, "w": 20, "h": 8 }] }
+                    ]
+                },
+                "destination": [{ "id": "songlist" }]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = mock_source("1", 100.0, 100.0);
+        let snapshot = SelectSnapshot {
+            selected_index: 0,
+            rows: vec![SelectRowSnapshot {
+                index: 0,
+                title: "Missing Song".to_string(),
+                in_library: false,
+                ..SelectRowSnapshot::default()
+            }],
+            ..SelectSnapshot::default()
+        };
+
+        let items = document.select_render_items(&sources, &snapshot);
+
+        assert!(items.iter().any(|item| matches!(item, SkinRenderItem::Image {
+                texture: SkinTextureId(9999),
+                uv: TextureRegion { y: v, .. },
+                ..
+            } if approx_eq(*v, 40.0 / 100.0))));
+        assert!(items.iter().any(|item| matches!(item, SkinRenderItem::Text {
+                text,
+                style,
+                ..
+            } if text == "Missing Song" && style.font_id.as_deref() == Some("unowned"))));
     }
 
     #[test]

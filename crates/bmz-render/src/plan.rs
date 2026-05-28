@@ -272,12 +272,19 @@ fn plan_select(snapshot: &SelectSnapshot, skin: &SkinContext) -> DrawPlan {
         let snapshot_row = rows.get(row);
         let selected = snapshot_row.map_or(row == 0, |_| row == selected_row_position);
         let is_folder = snapshot_row.map(|r| r.is_folder).unwrap_or(false);
+        let in_library = snapshot_row.map(|r| r.in_library).unwrap_or(true);
         let row_y = 0.2 + row as f32 * 0.09;
         let (left_bg, right_bg) = if is_folder {
             if selected {
                 (Color::rgb(0.26, 0.21, 0.08), Color::rgb(0.20, 0.16, 0.06))
             } else {
                 (Color::rgb(0.09, 0.075, 0.03), Color::rgb(0.07, 0.058, 0.023))
+            }
+        } else if !in_library {
+            if selected {
+                (Color::rgb(0.14, 0.14, 0.14), Color::rgb(0.10, 0.10, 0.10))
+            } else {
+                (Color::rgb(0.05, 0.05, 0.055), Color::rgb(0.04, 0.04, 0.045))
             }
         } else if selected {
             (Color::rgb(0.22, 0.28, 0.31), Color::rgb(0.16, 0.21, 0.23))
@@ -330,9 +337,12 @@ fn push_select_title_text(
     selected: bool,
 ) {
     let is_folder = row.map(|r| r.is_folder).unwrap_or(false);
+    let in_library = row.map(|r| r.in_library).unwrap_or(true);
     let title = display_title(row.map(|row| row.title.as_str()).unwrap_or_default());
     let color = if is_folder {
         if selected { Color::rgb(0.98, 0.88, 0.55) } else { Color::rgb(0.62, 0.54, 0.26) }
+    } else if !in_library {
+        if selected { Color::rgb(0.55, 0.55, 0.55) } else { Color::rgb(0.38, 0.38, 0.40) }
     } else if selected {
         Color::rgb(0.9, 0.96, 0.98)
     } else {
@@ -451,6 +461,9 @@ fn row_status_label(row: Option<&SelectRowSnapshot>) -> String {
     let Some(row) = row else {
         return "EMPTY".to_string();
     };
+    if !row.in_library {
+        return "NOT OWNED".to_string();
+    }
     let clear_type = clear_type_label(&row.clear_type);
     if !clear_type.is_empty() {
         clear_type.to_string()
@@ -2731,6 +2744,16 @@ mod tests {
         assert_eq!(clear_type_label(""), "");
     }
 
+    #[test]
+    fn row_status_label_shows_not_owned_for_unregistered_songs() {
+        let unowned = SelectRowSnapshot {
+            in_library: false,
+            table_level: "12".to_string(),
+            ..SelectRowSnapshot::default()
+        };
+        assert_eq!(row_status_label(Some(&unowned)), "NOT OWNED");
+    }
+
     fn select_rows(count: u32) -> Vec<crate::scene::SelectRowSnapshot> {
         (0..count)
             .map(|index| crate::scene::SelectRowSnapshot {
@@ -2752,6 +2775,7 @@ mod tests {
                 replay_slots: [false; 4],
                 is_folder: false,
                 kind: Default::default(),
+                ..Default::default()
             })
             .collect()
     }

@@ -28,6 +28,7 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
             replay_slots: [index == 0, false, false, false],
             is_folder: false,
             kind: Default::default(),
+            ..SelectRowSnapshot::default()
         })
         .collect();
 

@@ -3228,6 +3228,7 @@ fn select_snapshot_rows(
                     replay_slots: [false; 4],
                     is_folder: true,
                     kind: *kind,
+                    in_library: true,
                 },
                 SelectItem::Chart(row) => SelectRowSnapshot {
                     index: index as u32,
@@ -3264,6 +3265,7 @@ fn select_snapshot_rows(
                     replay_slots: row.replay_slots,
                     is_folder: false,
                     kind: bmz_render::scene::SelectRowKind::Song,
+                    in_library: row.in_library(),
                 },
             }
         })

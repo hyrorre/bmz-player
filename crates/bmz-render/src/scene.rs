@@ -39,7 +39,7 @@ pub struct SelectSnapshot {
     pub overlay: OverlaySnapshot,
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SelectRowSnapshot {
     pub index: u32,
     pub title: String,
@@ -59,6 +59,34 @@ pub struct SelectRowSnapshot {
     pub replay_slots: [bool; 4],
     pub is_folder: bool,
     pub kind: SelectRowKind,
+    /// library.db に登録済みかどうか。未登録の難易度表エントリは false。
+    pub in_library: bool,
+}
+
+impl Default for SelectRowSnapshot {
+    fn default() -> Self {
+        Self {
+            index: 0,
+            title: String::new(),
+            artist: String::new(),
+            difficulty_name: String::new(),
+            play_level: String::new(),
+            table_level: String::new(),
+            total_notes: 0,
+            initial_bpm: 0.0,
+            min_bpm: 0.0,
+            max_bpm: 0.0,
+            length_ms: 0,
+            clear_type: String::new(),
+            ex_score: None,
+            max_combo: None,
+            gauge_value: None,
+            replay_slots: [false; 4],
+            is_folder: false,
+            kind: SelectRowKind::default(),
+            in_library: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
