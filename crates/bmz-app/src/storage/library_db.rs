@@ -1295,12 +1295,10 @@ mod tests {
         let mut db = LibraryDatabase::from_connection(conn);
 
         let same_chart = chart("duplicate");
-        let stale_id = db
-            .upsert_chart_import(&record_for_chart("/songs/a/track.bms", &same_chart))
-            .unwrap();
-        let fresh_id = db
-            .upsert_chart_import(&record_for_chart("/songs/b/track.bms", &same_chart))
-            .unwrap();
+        let stale_id =
+            db.upsert_chart_import(&record_for_chart("/songs/a/track.bms", &same_chart)).unwrap();
+        let fresh_id =
+            db.upsert_chart_import(&record_for_chart("/songs/b/track.bms", &same_chart)).unwrap();
         assert!(stale_id < fresh_id);
 
         let md5 = hash_to_hex(&same_chart.identity.file_md5);
