@@ -1735,6 +1735,7 @@ impl SkinDocument {
                 elapsed,
                 sources,
                 false,
+                None,
             ));
         }
 
@@ -1827,6 +1828,7 @@ impl SkinDocument {
                 elapsed,
                 sources,
                 false,
+                None,
             ));
         }
 
@@ -2624,6 +2626,8 @@ impl SkinDocument {
         // 注入すると、`offsets: [32]` を持つ skin (beatoraja 標準形) で
         // 二重適用になり、判定文字とコンボ数の Y が乖離する原因になる。
         apply_skin_offset_to_frame(image_destination, &mut image_frame, offset_state, false);
+        // beatoraja はコンボ数字をシフト前の判定文字 X を基準に配置する。
+        let image_frame_for_numbers = image_frame;
         if judge.shift
             && combo > 0
             && let Some(number_destination) = judge.numbers.get(judge_index)
@@ -2662,17 +2666,30 @@ impl SkinDocument {
                 &mut number_frame,
                 offset_state,
             );
+            if let Some(value) = self.value.iter().find(|value| value.id == number_destination.id) {
+                Self::apply_beatoraja_judge_number_dst_x(&mut number_frame, value.digit);
+            }
             items.extend(self.value_number_render_items(
                 &number_destination.id,
                 combo as i64,
-                image_frame,
+                image_frame_for_numbers,
                 number_frame,
                 elapsed_ms,
                 sources,
-                judge.shift,
+                false,
+                Some(2),
             ));
         }
         Some(items)
+    }
+
+    /// beatoraja `JsonPlaySkinObjectLoader` が judge number の各 dst に適用する X 補正。
+    fn beatoraja_judge_number_dst_x(dst_w: i32, digit: i32) -> i32 {
+        dst_w.saturating_mul(digit.max(0)) / 2
+    }
+
+    fn apply_beatoraja_judge_number_dst_x(frame: &mut ResolvedSkinFrame, digit: i32) {
+        frame.x -= Self::beatoraja_judge_number_dst_x(frame.w, digit);
     }
 
     fn value_number_length(&self, value_id: &str, number: i64, frame: ResolvedSkinFrame) -> i32 {
@@ -2707,6 +2724,7 @@ impl SkinDocument {
         elapsed_ms: i32,
         sources: &HashMap<String, SkinDocumentTexture>,
         compact_digits: bool,
+        align_override: Option<i32>,
     ) -> Vec<SkinRenderItem> {
         let Some(value) = self.value.iter().find(|value| value.id == value_id) else {
             return Vec::new();
@@ -2734,7 +2752,8 @@ impl SkinDocument {
         // 先頭の空き桁数 (align のためのオフセット計算に使用)
         let shiftbase = max_digits.saturating_sub(digits.len());
         // align=0: 右寄せ (デフォルト), align=1: 左寄せ, align=2: 中央
-        let shift = match value.align {
+        let align = align_override.unwrap_or(value.align);
+        let shift = match align {
             1 => digit_step * shiftbase as i32,
             2 => digit_step * shiftbase as i32 / 2,
             _ => 0,
@@ -7549,11 +7568,12 @@ mod tests {
         let items = document.judge_render_items("PGREAT", 123, 100, &sources).unwrap();
 
         assert_eq!(items.len(), 4);
+        // judge number: dst x 20 - w*digit/2 = 13, align=2, base judge x=10 → digits at 0.23/0.28/0.33
         assert!(matches!(items[1], SkinRenderItem::Image {
                 rect: Rect { x, y, width, height },
                 uv: TextureRegion { x: u, y: v, width: uv_width, height: uv_height },
                 ..
-            } if approx_eq(x, 0.3)
+            } if approx_eq(x, 0.23)
                 && approx_eq(y, 0.75)
                 && approx_eq(width, 0.05)
                 && approx_eq(height, 0.1)
@@ -7565,12 +7585,12 @@ mod tests {
                 rect: Rect { x, .. },
                 uv: TextureRegion { x: u, .. },
                 ..
-            } if approx_eq(x, 0.35) && approx_eq(u, 0.2)));
+            } if approx_eq(x, 0.28) && approx_eq(u, 0.2)));
         assert!(matches!(items[3], SkinRenderItem::Image {
                 rect: Rect { x, .. },
                 uv: TextureRegion { x: u, .. },
                 ..
-            } if approx_eq(x, 0.4) && approx_eq(u, 0.3)));
+            } if approx_eq(x, 0.33) && approx_eq(u, 0.3)));
     }
 
     #[test]
@@ -7699,11 +7719,11 @@ mod tests {
         assert!(matches!(items[1], SkinRenderItem::Image {
                 rect: Rect { x, y, .. },
                 ..
-            } if approx_eq(x, 0.3) && approx_eq(y, 0.55)));
+            } if approx_eq(x, 0.23) && approx_eq(y, 0.55)));
     }
 
     #[test]
-    fn skin_document_compacts_shifted_judge_combo_numbers() {
+    fn skin_document_shifts_judge_combo_numbers_beatoraja_style() {
         let document: SkinDocument = serde_json::from_str(
             r#"
             {
@@ -7751,10 +7771,15 @@ mod tests {
                 rect: Rect { x, .. },
                 ..
             } if approx_eq(x, 0.23)));
+        // dst x 20 - w*6/2 = 5, align=2, shiftbase=3, judge x 30 - length/2 = 23
         assert!(matches!(items[1], SkinRenderItem::Image {
                 rect: Rect { x, .. },
                 ..
             } if approx_eq(x, 0.43)));
+        assert!(matches!(items[2], SkinRenderItem::Image {
+                rect: Rect { x, .. },
+                ..
+            } if approx_eq(x, 0.48)));
         assert!(matches!(items[3], SkinRenderItem::Image {
                 rect: Rect { x, .. },
                 ..

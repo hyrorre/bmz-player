@@ -1016,6 +1016,68 @@ mod tests {
     }
 
     #[test]
+    fn ecfn_play7_judge_combo_x_matches_beatoraja_layout_when_available() {
+        use std::collections::HashMap;
+
+        use bmz_render::skin::{SkinDocumentTexture, SkinImageSize, SkinRenderItem, SkinTextureId};
+
+        let skin_path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/skins/ECFN/play/play7.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+        let decoded = decode_beatoraja_skin(&skin_path, SkinKind::Play).unwrap();
+        let mock_texture = SkinDocumentTexture {
+            source_id: "mock".to_string(),
+            texture: SkinTextureId(1),
+            source_size: SkinImageSize { width: 1920.0, height: 1080.0 },
+        };
+        let sources: HashMap<String, SkinDocumentTexture> = decoded
+            .document
+            .source
+            .iter()
+            .map(|source| (source.id.clone(), mock_texture.clone()))
+            .chain(
+                decoded
+                    .document
+                    .value
+                    .iter()
+                    .map(|value| (value.src.clone(), mock_texture.clone())),
+            )
+            .chain(
+                decoded
+                    .document
+                    .image
+                    .iter()
+                    .map(|image| (image.src.clone(), mock_texture.clone())),
+            )
+            .collect();
+        let items =
+            decoded.document.judge_render_items("PGREAT", 42, 100, &sources).expect("judge items");
+        let digit_xs: Vec<f32> = items
+            .iter()
+            .skip(1)
+            .filter_map(|item| match item {
+                SkinRenderItem::Image { rect, .. } => Some(rect.x),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(digit_xs.len(), 2);
+        let expected_first = 334.0 / 1920.0;
+        let expected_second = 392.0 / 1920.0;
+        assert!(
+            (digit_xs[0] - expected_first).abs() < 0.001,
+            "first digit x={} expected {expected_first}",
+            digit_xs[0]
+        );
+        assert!(
+            (digit_xs[1] - expected_second).abs() < 0.001,
+            "second digit x={} expected {expected_second}",
+            digit_xs[1]
+        );
+    }
+
+    #[test]
     fn starseeker_play_lua_skin_can_be_decoded_when_available() {
         let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../data/skins/Starseeker/play/play7.luaskin");
