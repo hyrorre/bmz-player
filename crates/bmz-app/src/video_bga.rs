@@ -29,7 +29,7 @@ pub fn update_video_bga_frames(
     let chart = running.session.chart.clone();
 
     // Base と Layer は BGA イベント時刻をビデオ開始時刻とする
-    for kind in [BgaEventKind::Base, BgaEventKind::Layer] {
+    for kind in [BgaEventKind::Base, BgaEventKind::Layer, BgaEventKind::Layer2] {
         let Some(event) =
             chart.bga_events.iter().rev().find(|e| e.time <= render_now && e.kind == kind)
         else {

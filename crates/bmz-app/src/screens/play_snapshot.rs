@@ -84,7 +84,17 @@ pub fn build_render_snapshot_with_bga_frames(
             .flatten(),
         bga_layer: session
             .bga_enabled
-            .then(|| current_bga_frame(&session.chart, render_now, BgaEventKind::Layer, bga_frames))
+            .then(|| {
+                current_keybound_bga_frame(session, render_now, bga_frames).or_else(|| {
+                    current_bga_frame(&session.chart, render_now, BgaEventKind::Layer, bga_frames)
+                })
+            })
+            .flatten(),
+        bga_layer2: session
+            .bga_enabled
+            .then(|| {
+                current_bga_frame(&session.chart, render_now, BgaEventKind::Layer2, bga_frames)
+            })
             .flatten(),
         bga_poor: session
             .bga_enabled
@@ -224,6 +234,30 @@ fn note_display_duration_ms(session: &GameSession, render_now: TimeUs) -> i32 {
     ((DEFAULT_LOOKAHEAD_US as f32 / hispeed * visible_max * bpm_ratio) / 1_000.0)
         .round()
         .clamp(0.0, i32::MAX as f32) as i32
+}
+
+fn current_keybound_bga_frame(
+    session: &GameSession,
+    render_now: TimeUs,
+    bga_frames: &BgaFrameCatalog,
+) -> Option<DisplayBgaFrame> {
+    let asset = bmz_chart::bga_keybound::keybound_bga_asset_at_time(
+        &session.chart,
+        render_now,
+        session.lane_keyon_started_at,
+    )?;
+    let mut frame = bga_frames.get(&asset).copied()?;
+    let tint = bmz_chart::bga::bga_tint_at_time(
+        &session.chart.bga_opacity_events,
+        &session.chart.bga_argb_events,
+        BgaEventKind::Layer,
+        render_now,
+    );
+    frame.tint_r = tint.r;
+    frame.tint_g = tint.g;
+    frame.tint_b = tint.b;
+    frame.tint_a = tint.a;
+    Some(frame)
 }
 
 fn current_bga_frame(
@@ -1157,6 +1191,9 @@ mod tests {
             text_events: Vec::new(),
             bga_opacity_events: Vec::new(),
             bga_argb_events: Vec::new(),
+            swbga_definitions: Vec::new(),
+            bga_keybound_events: Vec::new(),
+            bga_asset_by_bmp_key: std::collections::HashMap::new(),
             bar_lines: Vec::new(),
             sounds: Vec::new(),
             bga_assets: Vec::new(),
@@ -1201,6 +1238,9 @@ mod tests {
             text_events: Vec::new(),
             bga_opacity_events: Vec::new(),
             bga_argb_events: Vec::new(),
+            swbga_definitions: Vec::new(),
+            bga_keybound_events: Vec::new(),
+            bga_asset_by_bmp_key: std::collections::HashMap::new(),
             bar_lines: Vec::new(),
             sounds: Vec::new(),
             bga_assets: Vec::new(),
@@ -1263,6 +1303,9 @@ mod tests {
             text_events: Vec::new(),
             bga_opacity_events: Vec::new(),
             bga_argb_events: Vec::new(),
+            swbga_definitions: Vec::new(),
+            bga_keybound_events: Vec::new(),
+            bga_asset_by_bmp_key: std::collections::HashMap::new(),
             bar_lines: Vec::new(),
             sounds: Vec::new(),
             bga_assets: Vec::new(),
