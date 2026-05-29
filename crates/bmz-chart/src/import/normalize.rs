@@ -7,8 +7,8 @@ use bmz_core::time::{ChartTick, TimeUs};
 
 use crate::model::{
     BarLine, BgaAssetId, BgaAssetKind, BgaAssetRef, BgaEvent, BgaEventKind, ChartMetadata,
-    JudgeRankEvent, LongNotePair, NoteEvent, NoteKind, PlayableChart, ScrollEvent, SoundAssetRef,
-    SoundEvent, SpeedEvent, TimingEvent, TimingEventKind,
+    ChartVolumeEvent, JudgeRankEvent, LongNotePair, NoteEvent, NoteKind, PlayableChart,
+    ScrollEvent, SoundAssetRef, SoundEvent, SpeedEvent, TimingEvent, TimingEventKind,
 };
 use crate::timing::{TickTimingEvent, TickTimingEventKind, TimingMap, build_timing_map};
 
@@ -59,6 +59,8 @@ struct PlayableChartDraft {
     scroll_events: Vec<ScrollEvent>,
     speed_events: Vec<SpeedEvent>,
     judge_rank_events: Vec<JudgeRankEvent>,
+    bgm_volume_events: Vec<ChartVolumeEvent>,
+    key_volume_events: Vec<ChartVolumeEvent>,
     bar_lines: Vec<BarLine>,
     sounds: Vec<SoundAssetRef>,
     bga_assets: Vec<BgaAssetRef>,
@@ -117,6 +119,8 @@ pub fn normalize_chart(
     draft.scroll_events = build_scroll_events(&intermediate, &timing_map)?;
     draft.speed_events = build_speed_events(&intermediate, &timing_map)?;
     draft.judge_rank_events = build_judge_rank_events(&intermediate, &timing_map)?;
+    draft.bgm_volume_events = build_chart_volume_events(&intermediate, &timing_map, true)?;
+    draft.key_volume_events = build_chart_volume_events(&intermediate, &timing_map, false)?;
     draft.bar_lines = build_bar_lines(&intermediate.measures, &timing_map);
 
     Ok(finalize_playable_chart(draft))
@@ -138,6 +142,7 @@ fn normalize_metadata(input: &IntermediateMetadata) -> ChartMetadata {
         banner_file: input.banner_file.clone(),
         backbmp_file: input.backbmp_file.clone(),
         preview_file: input.preview_file.clone(),
+        volwav_percent: input.volwav_percent,
         has_bga: input.has_bga,
         key_mode: input.key_mode,
     }
@@ -233,7 +238,9 @@ fn materialize_tick_objects(
             | IntermediateObjectKind::Stop { .. }
             | IntermediateObjectKind::SetScroll { .. }
             | IntermediateObjectKind::SetSpeed { .. }
-            | IntermediateObjectKind::SetJudgeRank { .. } => None,
+            | IntermediateObjectKind::SetJudgeRank { .. }
+            | IntermediateObjectKind::SetBgmVolume { .. }
+            | IntermediateObjectKind::SetKeyVolume { .. } => None,
         };
 
         if let Some(kind) = kind {
@@ -607,6 +614,24 @@ fn build_judge_rank_events(
     Ok(out)
 }
 
+fn build_chart_volume_events(
+    intermediate: &IntermediateChart,
+    timing_map: &TimingMap,
+    bgm: bool,
+) -> Result<Vec<ChartVolumeEvent>, ImportError> {
+    let mut out = Vec::new();
+    for object in &intermediate.objects {
+        let value = match (bgm, &object.kind) {
+            (true, IntermediateObjectKind::SetBgmVolume { volume }) => *volume,
+            (false, IntermediateObjectKind::SetKeyVolume { volume }) => *volume,
+            _ => continue,
+        };
+        let tick = object_to_tick(object, &intermediate.measures)?;
+        out.push(ChartVolumeEvent { tick, time: timing_map.tick_to_time(tick), value });
+    }
+    Ok(out)
+}
+
 fn build_bar_lines(measures: &[MeasureInfo], timing_map: &TimingMap) -> Vec<BarLine> {
     measures
         .iter()
@@ -629,6 +654,8 @@ fn finalize_playable_chart(mut draft: PlayableChartDraft) -> PlayableChart {
     draft.scroll_events.sort_by_key(|event| event.time);
     draft.speed_events.sort_by_key(|event| event.time);
     draft.judge_rank_events.sort_by_key(|event| event.time);
+    draft.bgm_volume_events.sort_by_key(|event| event.time);
+    draft.key_volume_events.sort_by_key(|event| event.time);
     draft.bar_lines.sort_by_key(|line| line.time);
 
     draft.total_notes = compute_total_notes(&draft.lane_notes);
@@ -645,6 +672,8 @@ fn finalize_playable_chart(mut draft: PlayableChartDraft) -> PlayableChart {
         scroll_events: draft.scroll_events,
         speed_events: draft.speed_events,
         judge_rank_events: draft.judge_rank_events,
+        bgm_volume_events: draft.bgm_volume_events,
+        key_volume_events: draft.key_volume_events,
         bar_lines: draft.bar_lines,
         sounds: draft.sounds,
         bga_assets: draft.bga_assets,
@@ -690,6 +719,8 @@ impl PlayableChartDraft {
             scroll_events: Vec::new(),
             speed_events: Vec::new(),
             judge_rank_events: Vec::new(),
+            bgm_volume_events: Vec::new(),
+            key_volume_events: Vec::new(),
             bar_lines: Vec::new(),
             sounds,
             bga_assets,

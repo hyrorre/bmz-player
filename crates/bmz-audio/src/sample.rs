@@ -55,6 +55,15 @@ impl DecodedSample {
         let (left_b, right_b) = self.sample_stereo(frame + 1);
         (lerp(left_a, left_b, frac), lerp(right_a, right_b, frac))
     }
+
+    pub fn apply_gain(&mut self, gain: f32) {
+        if gain == 1.0 {
+            return;
+        }
+        for frame in &mut self.frames {
+            *frame *= gain;
+        }
+    }
 }
 
 fn lerp(a: f32, b: f32, t: f32) -> f32 {

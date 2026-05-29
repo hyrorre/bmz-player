@@ -641,6 +641,8 @@ mod tests {
 
             speed_events: Vec::new(),
             judge_rank_events: Vec::new(),
+            bgm_volume_events: Vec::new(),
+            key_volume_events: Vec::new(),
             bar_lines: Vec::new(),
             sounds: Vec::new(),
             bga_assets: Vec::new(),

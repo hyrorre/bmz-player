@@ -32,6 +32,7 @@ pub struct IntermediateMetadata {
     pub banner_file: String,
     pub backbmp_file: String,
     pub preview_file: String,
+    pub volwav_percent: u8,
     pub has_bga: bool,
     pub key_mode: KeyMode,
 }
@@ -131,6 +132,14 @@ pub enum IntermediateObjectKind {
     /// `#EXRANK` / chA0: 判定ランク変更。
     SetJudgeRank {
         rank_percent: i32,
+    },
+    /// チャネル #97: BGM 音量変更。
+    SetBgmVolume {
+        volume: u8,
+    },
+    /// チャネル #98: KEY 音量変更。
+    SetKeyVolume {
+        volume: u8,
     },
 }
 

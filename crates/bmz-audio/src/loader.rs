@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use bmz_chart::model::{PlayableChart, SoundAssetRef};
+use bmz_chart::volume::volwav_factor;
 use thiserror::Error;
 
 use crate::engine::AudioEngine;
@@ -51,18 +52,21 @@ pub fn load_chart_samples(
     chart: &PlayableChart,
     loader: &mut dyn SampleLoader,
 ) -> Vec<LoadedSampleReport> {
-    chart.sounds.iter().map(|asset| load_asset(engine, asset, loader)).collect()
+    let volwav = volwav_factor(chart.metadata.volwav_percent);
+    chart.sounds.iter().map(|asset| load_asset(engine, asset, loader, volwav)).collect()
 }
 
 fn load_asset(
     engine: &mut AudioEngine,
     asset: &SoundAssetRef,
     loader: &mut dyn SampleLoader,
+    volwav: f32,
 ) -> LoadedSampleReport {
     let resolved = resolve_sample_path(&asset.path);
     let path = resolved.as_deref().unwrap_or(&asset.path);
     match loader.load(path) {
-        Ok(sample) => {
+        Ok(mut sample) => {
+            sample.apply_gain(volwav);
             engine.insert_sample(asset.id, sample);
             LoadedSampleReport { path: path.to_path_buf(), status: LoadedSampleStatus::Loaded }
         }
@@ -251,6 +255,24 @@ mod tests {
     }
 
     #[test]
+    fn load_chart_samples_applies_volwav_gain() {
+        let mut engine = AudioEngine::default();
+        let mut chart = chart();
+        chart.metadata.volwav_percent = 50;
+        let mut loader = TestLoader::default();
+        loader.samples.insert(
+            PathBuf::from("ok.wav"),
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0, -1.0] },
+        );
+
+        load_chart_samples(&mut engine, &chart, &mut loader);
+
+        let sample = engine.samples.get(SoundId(1)).unwrap();
+        assert_eq!(sample.frames[0], 0.5);
+        assert_eq!(sample.frames[1], -0.5);
+    }
+
+    #[test]
     fn wav_loader_decodes_pcm16_mono() {
         let path = write_temp_wav(&[
             wav_header(1, 1, 44_100, 16, 4).as_slice(),
@@ -329,6 +351,8 @@ mod tests {
             scroll_events: Vec::new(),
             speed_events: Vec::new(),
             judge_rank_events: Vec::new(),
+            bgm_volume_events: Vec::new(),
+            key_volume_events: Vec::new(),
             bar_lines: Vec::new(),
             sounds: vec![
                 SoundAssetRef { id: SoundId(1), path: PathBuf::from("ok.wav") },

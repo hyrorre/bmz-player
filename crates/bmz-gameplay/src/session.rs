@@ -159,10 +159,13 @@ impl BgmScheduler {
                 break;
             }
 
+            let chart_volume = bmz_chart::volume::chart_channel_volume_factor(
+                bmz_chart::volume::chart_volume_at_time(&chart.bgm_volume_events, event.time),
+            );
             audio.schedule(ScheduledSound {
                 start_frame: clock.time_to_output_frame(event.time),
                 sound_id: event.sound,
-                volume: volume.clamp(0.0, 1.0),
+                volume: (volume * chart_volume).clamp(0.0, 1.0),
                 pan: 0.0,
                 loop_playback: false,
             });
@@ -218,10 +221,13 @@ pub fn schedule_keysounds(
             continue;
         };
 
+        let chart_volume = bmz_chart::volume::chart_channel_volume_factor(
+            bmz_chart::volume::chart_volume_at_time(&session.chart.key_volume_events, event.time),
+        );
         audio.schedule(ScheduledSound {
             start_frame: session.audio_clock.time_to_output_frame(event.time),
             sound_id,
-            volume: (session.audio_mix.master_volume * session.audio_mix.key_volume)
+            volume: (session.audio_mix.master_volume * session.audio_mix.key_volume * chart_volume)
                 .clamp(0.0, 1.0),
             pan: 0.0,
             loop_playback: false,
@@ -518,6 +524,41 @@ mod tests {
         assert_eq!(audio.scheduled.len(), 1);
         assert_eq!(audio.scheduled[0].sound_id, SoundId(3));
         assert_eq!(audio.scheduled[0].volume, 0.375);
+    }
+
+    #[test]
+    fn advance_session_frame_applies_chart_volume_channels() {
+        let mut chart = chart_with_keysound();
+        chart.key_volume_events.push(bmz_chart::model::ChartVolumeEvent {
+            tick: ChartTick(0),
+            time: TimeUs(0),
+            value: 128,
+        });
+        let mut session = session_with_autoplay(chart);
+        session.audio_mix.master_volume = 1.0;
+        session.audio_mix.key_volume = 1.0;
+        let mut audio = TestAudio::default();
+
+        advance_session_frame(&mut session, &mut audio);
+
+        let expected = 128.0 / 255.0;
+        assert!((audio.scheduled[0].volume - expected).abs() < 0.001);
+
+        let mut bgm_chart = chart_with_bgm();
+        bgm_chart.bgm_volume_events.push(bmz_chart::model::ChartVolumeEvent {
+            tick: ChartTick(0),
+            time: TimeUs(0),
+            value: 64,
+        });
+        let mut bgm_session = session_with_autoplay(bgm_chart);
+        bgm_session.audio_mix.master_volume = 1.0;
+        bgm_session.audio_mix.bgm_volume = 1.0;
+        let mut bgm_audio = TestAudio::default();
+
+        advance_session_frame(&mut bgm_session, &mut bgm_audio);
+
+        let expected_bgm = 64.0 / 255.0;
+        assert!((bgm_audio.scheduled[0].volume - expected_bgm).abs() < 0.001);
     }
 
     #[test]
@@ -840,6 +881,8 @@ mod tests {
             scroll_events: Vec::new(),
             speed_events: Vec::new(),
             judge_rank_events: Vec::new(),
+            bgm_volume_events: Vec::new(),
+            key_volume_events: Vec::new(),
             bar_lines: Vec::new(),
             sounds: vec![SoundAssetRef { id: SoundId(7), path: "sound.wav".into() }],
             bga_assets: Vec::new(),
@@ -860,6 +903,8 @@ mod tests {
             scroll_events: Vec::new(),
             speed_events: Vec::new(),
             judge_rank_events: Vec::new(),
+            bgm_volume_events: Vec::new(),
+            key_volume_events: Vec::new(),
             bar_lines: Vec::new(),
             sounds: vec![SoundAssetRef { id: SoundId(3), path: "bgm.wav".into() }],
             bga_assets: Vec::new(),

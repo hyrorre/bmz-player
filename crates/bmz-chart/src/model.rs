@@ -17,6 +17,8 @@ pub struct PlayableChart {
     pub scroll_events: Vec<ScrollEvent>,
     pub speed_events: Vec<SpeedEvent>,
     pub judge_rank_events: Vec<JudgeRankEvent>,
+    pub bgm_volume_events: Vec<ChartVolumeEvent>,
+    pub key_volume_events: Vec<ChartVolumeEvent>,
     pub bar_lines: Vec<BarLine>,
     pub sounds: Vec<SoundAssetRef>,
     pub bga_assets: Vec<BgaAssetRef>,
@@ -24,7 +26,7 @@ pub struct PlayableChart {
     pub end_time: TimeUs,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ChartMetadata {
     pub title: String,
     pub subtitle: String,
@@ -40,8 +42,34 @@ pub struct ChartMetadata {
     pub banner_file: String,
     pub backbmp_file: String,
     pub preview_file: String,
+    /// `#VOLWAV` ヘッダ (百分率、100 = 原音)。
+    pub volwav_percent: u8,
     pub has_bga: bool,
     pub key_mode: KeyMode,
+}
+
+impl Default for ChartMetadata {
+    fn default() -> Self {
+        Self {
+            title: String::new(),
+            subtitle: String::new(),
+            artist: String::new(),
+            subartist: String::new(),
+            genre: String::new(),
+            difficulty_name: String::new(),
+            judge_rank: None,
+            play_level: String::new(),
+            initial_bpm: 0.0,
+            total: None,
+            stage_file: String::new(),
+            banner_file: String::new(),
+            backbmp_file: String::new(),
+            preview_file: String::new(),
+            volwav_percent: 100,
+            has_bga: false,
+            key_mode: KeyMode::default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,6 +159,15 @@ pub struct JudgeRankEvent {
     pub time: TimeUs,
     /// beatoraja 準拠の判定窓倍率 (%) 。25=VERYHARD, 100=EASY 等。
     pub rank_percent: i32,
+}
+
+/// BMS チャネル #97 (BGM) / #98 (KEY) による音量変更イベント。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChartVolumeEvent {
+    pub tick: ChartTick,
+    pub time: TimeUs,
+    /// 0x01..=0xFF (255 = 原音)。
+    pub value: u8,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

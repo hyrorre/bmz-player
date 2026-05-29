@@ -92,6 +92,7 @@ fn build_intermediate(bms: &Bms, warnings: &mut Vec<ImportWarning>) -> Intermedi
     push_scroll_objects(bms, &mut objects);
     push_speed_objects(bms, &mut objects);
     push_judge_rank_objects(bms, &mut objects);
+    push_volume_objects(bms, &mut objects);
 
     let max_measure = compute_max_measure(bms, &objects);
     let measures = build_measures(max_measure, bms);
@@ -167,6 +168,7 @@ fn build_metadata(bms: &Bms) -> IntermediateMetadata {
             .as_ref()
             .map(|p| path_to_string(p.as_path()))
             .unwrap_or_default(),
+        volwav_percent: bms.volume.volume.relative_percent,
         has_bga: false,
         key_mode: KeyMode::default(),
     }
@@ -344,6 +346,25 @@ fn push_judge_rank_objects(bms: &Bms, objects: &mut Vec<IntermediateObject>) {
             kind: IntermediateObjectKind::SetJudgeRank {
                 rank_percent: judge_level_to_rank_percent(judge_obj.judge_level),
             },
+        });
+    }
+}
+
+fn push_volume_objects(bms: &Bms, objects: &mut Vec<IntermediateObject>) {
+    for change in bms.volume.bgm_volume_changes.values() {
+        objects.push(IntermediateObject {
+            measure: track_of(change.time),
+            position_num: change.time.numerator() as u32,
+            position_den: change.time.denominator().get() as u32,
+            kind: IntermediateObjectKind::SetBgmVolume { volume: change.volume },
+        });
+    }
+    for change in bms.volume.key_volume_changes.values() {
+        objects.push(IntermediateObject {
+            measure: track_of(change.time),
+            position_num: change.time.numerator() as u32,
+            position_den: change.time.denominator().get() as u32,
+            kind: IntermediateObjectKind::SetKeyVolume { volume: change.volume },
         });
     }
 }

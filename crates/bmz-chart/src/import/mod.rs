@@ -241,6 +241,29 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
     }
 
+    #[test]
+    fn imports_volwav_and_volume_channels() {
+        let text = "\
+#TITLE Volume Song
+#BPM 120
+#TOTAL 200
+#VOLWAV 50
+#00111:01
+#00197:80
+#00198:40
+#00297:FF
+";
+        let path = write_temp_bms(text);
+        let result = import_bms_chart(&path, None, false).unwrap();
+        assert_eq!(result.chart.metadata.volwav_percent, 50);
+        assert_eq!(result.chart.bgm_volume_events.len(), 2);
+        assert_eq!(result.chart.bgm_volume_events[0].value, 0x80);
+        assert_eq!(result.chart.bgm_volume_events[1].value, 0xFF);
+        assert_eq!(result.chart.key_volume_events.len(), 1);
+        assert_eq!(result.chart.key_volume_events[0].value, 0x40);
+        std::fs::remove_file(&path).unwrap();
+    }
+
     fn write_temp_bms(text: &str) -> std::path::PathBuf {
         let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
         let path = std::env::temp_dir()
