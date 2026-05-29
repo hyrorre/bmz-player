@@ -20,6 +20,10 @@ const LUA_MAX_TABLE_DEPTH: usize = 64;
 const LUA_MAX_TABLE_ENTRIES: usize = 200_000;
 const TIMER_OFF_VALUE: i32 = i32::MIN;
 
+/// beatoraja fast/slow 判定カウント ref (graph 比率推論用)
+const FAST_SLOW_FAST_REFS: [i32; 6] = [410, 412, 414, 416, 418, 421];
+const FAST_SLOW_SLOW_REFS: [i32; 6] = [411, 413, 415, 417, 419, 422];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConvertReport {
     pub warnings: Vec<String>,
@@ -1178,7 +1182,16 @@ fn lua_table_to_json(
                     object.insert("ref".to_string(), JsonValue::Number(JsonNumber::from(ref_id)));
                     continue;
                 }
-                if let Some(value_expr) = infer_value_float_expr(function, main_state_probe) {
+                if is_graph
+                    && let Some(graph_type) =
+                        infer_fast_slow_ratio_graph_type(function, main_state_probe)
+                {
+                    object.insert(
+                        "type".to_string(),
+                        JsonValue::Number(JsonNumber::from(graph_type)),
+                    );
+                } else if let Some(value_expr) = infer_value_float_expr(function, main_state_probe)
+                {
                     object.insert("value_expr".to_string(), JsonValue::String(value_expr));
                 } else if !is_graph {
                     if let Some(expr) = infer_main_state_number_expr(function, main_state_probe) {
@@ -1923,6 +1936,86 @@ fn infer_value_float_expr(
         .or_else(|| infer_main_state_number_expr(function, main_state_probe))
 }
 
+fn fast_slow_ref_set() -> BTreeMap<i32, ()> {
+    FAST_SLOW_FAST_REFS.into_iter().chain(FAST_SLOW_SLOW_REFS).map(|ref_id| (ref_id, ())).collect()
+}
+
+fn infer_fast_slow_ratio_graph_type(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<i32> {
+    let refs = collect_number_refs(function, main_state_probe)?;
+    let expected = fast_slow_ref_set();
+    if refs.len() != expected.len() || !refs.iter().all(|ref_id| expected.contains_key(ref_id)) {
+        return None;
+    }
+    let fast_set: BTreeMap<i32, ()> =
+        FAST_SLOW_FAST_REFS.into_iter().map(|ref_id| (ref_id, ())).collect();
+    let slow_set: BTreeMap<i32, ()> =
+        FAST_SLOW_SLOW_REFS.into_iter().map(|ref_id| (ref_id, ())).collect();
+    if verify_fast_slow_ratio(function, main_state_probe, &refs, &fast_set) {
+        return Some(148);
+    }
+    if verify_fast_slow_ratio(function, main_state_probe, &refs, &slow_set) {
+        return Some(149);
+    }
+    None
+}
+
+fn approx_float_eq(actual: f64, expected: f64) -> bool {
+    if expected.abs() < f64::EPSILON && (!actual.is_finite() || actual.abs() < f64::EPSILON) {
+        return true;
+    }
+    (actual - expected).abs() <= 0.02
+}
+
+fn verify_fast_slow_ratio(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+    refs: &[i32],
+    numerator_refs: &BTreeMap<i32, ()>,
+) -> bool {
+    let ratio = |values: &BTreeMap<i32, i32>| {
+        let num: f64 = numerator_refs
+            .keys()
+            .map(|ref_id| values.get(ref_id).copied().unwrap_or(0) as f64)
+            .sum();
+        let den: f64 =
+            refs.iter().map(|ref_id| values.get(ref_id).copied().unwrap_or(0) as f64).sum();
+        if den.abs() < f64::EPSILON { 0.0 } else { num / den }
+    };
+    let all_zero: BTreeMap<i32, i32> = refs.iter().copied().map(|ref_id| (ref_id, 0)).collect();
+    let all_one: BTreeMap<i32, i32> = refs.iter().copied().map(|ref_id| (ref_id, 1)).collect();
+    let mut numerator_only = all_zero.clone();
+    for ref_id in numerator_refs.keys() {
+        numerator_only.insert(*ref_id, 5);
+    }
+    let mut complement_only =
+        refs.iter().copied().map(|ref_id| (ref_id, 5)).collect::<BTreeMap<_, _>>();
+    for ref_id in numerator_refs.keys() {
+        complement_only.insert(*ref_id, 0);
+    }
+    let ratio_all_one = ratio(&all_one);
+    let ratio_numerator_only = ratio(&numerator_only);
+    let ratio_complement_only = ratio(&complement_only);
+    for (values, expected) in [
+        (all_zero, 0.0),
+        (all_one, ratio_all_one),
+        (numerator_only, ratio_numerator_only),
+        (complement_only, ratio_complement_only),
+    ] {
+        let actual = match call_number_float_with_values(function, main_state_probe, values) {
+            Some(value) if value.is_finite() => value,
+            _ if expected.abs() < f64::EPSILON => 0.0,
+            _ => return false,
+        };
+        if !approx_float_eq(actual, expected) {
+            return false;
+        }
+    }
+    true
+}
+
 fn infer_division_of_number_sums(
     function: &Function,
     main_state_probe: &Arc<Mutex<MainStateProbe>>,
@@ -1948,20 +2041,35 @@ fn infer_division_of_number_sums(
     let numerator = format_number_sum_expr(&numerator_refs);
     let denominator = format_number_sum_expr(&refs);
     let expr = format!("({numerator})/({denominator})");
-    let samples = [0, 1, 2, 3, 5];
-    for &sample in &samples {
-        let values = refs.iter().copied().map(|id| (id, sample)).collect::<BTreeMap<_, _>>();
-        let expected = {
-            let num: f64 = numerator_refs
-                .iter()
-                .map(|ref_id| values.get(ref_id).copied().unwrap_or(0) as f64)
-                .sum();
-            let den: f64 =
-                refs.iter().map(|ref_id| values.get(ref_id).copied().unwrap_or(0) as f64).sum();
-            if den.abs() < f64::EPSILON { 0.0 } else { num / den }
-        };
+    let expected_ratio = |values: &BTreeMap<i32, i32>| {
+        let num: f64 = numerator_refs
+            .iter()
+            .map(|ref_id| values.get(ref_id).copied().unwrap_or(0) as f64)
+            .sum();
+        let den: f64 =
+            refs.iter().map(|ref_id| values.get(ref_id).copied().unwrap_or(0) as f64).sum();
+        if den.abs() < f64::EPSILON { 0.0 } else { num / den }
+    };
+    let mut numerator_only = zero_values.clone();
+    for ref_id in &numerator_refs {
+        numerator_only.insert(*ref_id, 5);
+    }
+    let mut denominator_only =
+        refs.iter().copied().map(|ref_id| (ref_id, 5)).collect::<BTreeMap<_, _>>();
+    for ref_id in &numerator_refs {
+        denominator_only.insert(*ref_id, 0);
+    }
+    let test_cases = [
+        zero_values,
+        refs.iter().copied().map(|id| (id, 1)).collect(),
+        refs.iter().copied().map(|id| (id, 3)).collect(),
+        numerator_only,
+        denominator_only,
+    ];
+    for values in test_cases {
+        let expected = expected_ratio(&values);
         let actual = call_number_float_with_values(function, main_state_probe, values)?;
-        if (actual - expected).abs() > 0.01 {
+        if !approx_float_eq(actual, expected) {
             return None;
         }
     }

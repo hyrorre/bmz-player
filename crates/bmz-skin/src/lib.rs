@@ -607,52 +607,8 @@ mod tests {
     }
 
     #[test]
-    fn lua_skin_infers_or_of_number_lt_zero_draw() {
-        let root = unique_test_dir("bmz-skin-lua-or-lt-zero");
-        fs::create_dir_all(&root).unwrap();
-        fs::write(
-            root.join("select.luaskin"),
-            r#"
-            local main_state = require("main_state")
-            return {
-                type = 0,
-                destination = {
-                    {
-                        id = "zero-mask",
-                        draw = function()
-                            return main_state.number(77) < 0 or main_state.number(150) < 0
-                        end,
-                        dst = {{ x = 0, y = 0, w = 1, h = 1 }},
-                    },
-                },
-            }
-            "#,
-        )
-        .unwrap();
-
-        let loaded = load_lua_skin(
-            &root.join("select.luaskin"),
-            SkinKind::Select,
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-        )
-        .unwrap();
-        assert!(
-            loaded.warnings.is_empty(),
-            "warnings: {:?}",
-            loaded.warnings.iter().map(|w| w.message.as_str()).collect::<Vec<_>>()
-        );
-        let bmz_render::skin::DestinationListEntry::Single(destination) =
-            &loaded.document.destination[0]
-        else {
-            panic!("expected single destination");
-        };
-        assert_eq!(destination.draw, "number(77) < 0 or number(150) < 0");
-    }
-
-    #[test]
-    fn lua_skin_infers_or_of_number_eq_zero_draw() {
-        let root = unique_test_dir("bmz-skin-lua-or-eq-zero");
+    fn lua_skin_infers_or_eq_zero_and_lt_zero_draw() {
+        let root = unique_test_dir("bmz-skin-lua-or-zero");
         fs::create_dir_all(&root).unwrap();
         fs::write(
             root.join("result.luaskin"),
@@ -665,6 +621,13 @@ mod tests {
                         id = "miss-f",
                         draw = function()
                             return main_state.number(71) == 0 or main_state.number(150) == 0
+                        end,
+                        dst = {{ x = 0, y = 0, w = 1, h = 1 }},
+                    },
+                    {
+                        id = "zero-mask",
+                        draw = function()
+                            return main_state.number(77) < 0 or main_state.number(150) < 0
                         end,
                         dst = {{ x = 0, y = 0, w = 1, h = 1 }},
                     },
@@ -686,12 +649,16 @@ mod tests {
             "warnings: {:?}",
             loaded.warnings.iter().map(|w| w.message.as_str()).collect::<Vec<_>>()
         );
-        let bmz_render::skin::DestinationListEntry::Single(destination) =
-            &loaded.document.destination[0]
+        let bmz_render::skin::DestinationListEntry::Single(miss) = &loaded.document.destination[0]
         else {
             panic!("expected single destination");
         };
-        assert_eq!(destination.draw, "number(71) == 0 or number(150) == 0");
+        let bmz_render::skin::DestinationListEntry::Single(mask) = &loaded.document.destination[1]
+        else {
+            panic!("expected single destination");
+        };
+        assert_eq!(miss.draw, "number(71) == 0 or number(150) == 0");
+        assert_eq!(mask.draw, "number(77) < 0 or number(150) < 0");
     }
 
     #[test]
@@ -745,6 +712,81 @@ mod tests {
             panic!("expected single destination");
         };
         assert_eq!(destination.draw, "number(150) == 0");
+    }
+
+    #[test]
+    fn lua_skin_infers_fast_slow_ratio_graph_type() {
+        let root = unique_test_dir("bmz-skin-lua-fs-graph");
+        fs::create_dir_all(&root).unwrap();
+        let refs = [410, 411, 412, 413, 414, 415, 416, 417, 418, 419, 421, 422];
+        let sum_lines: String = refs
+            .iter()
+            .map(|ref_id| format!("main_state.number({ref_id})"))
+            .collect::<Vec<_>>()
+            .join(" + ");
+        fs::write(
+            root.join("select.luaskin"),
+            format!(
+                r#"
+            local main_state = require("main_state")
+            return {{
+                type = 0,
+                graph = {{
+                    {{
+                        id = "fast",
+                        src = 1,
+                        x = 0,
+                        y = 0,
+                        w = 10,
+                        h = 10,
+                        value = function()
+                            local fastall = main_state.number(410) + main_state.number(412)
+                                + main_state.number(414) + main_state.number(416)
+                                + main_state.number(418) + main_state.number(421)
+                            local fsall = {sum_lines}
+                            if fsall == 0 then return 0 end
+                            return fastall / fsall
+                        end,
+                    }},
+                    {{
+                        id = "slow",
+                        src = 1,
+                        x = 0,
+                        y = 0,
+                        w = 10,
+                        h = 10,
+                        value = function()
+                            local slowall = main_state.number(411) + main_state.number(413)
+                                + main_state.number(415) + main_state.number(417)
+                                + main_state.number(419) + main_state.number(422)
+                            local fsall = {sum_lines}
+                            if fsall == 0 then return 0 end
+                            return slowall / fsall
+                        end,
+                    }},
+                }},
+            }}
+            "#
+            ),
+        )
+        .unwrap();
+
+        let loaded = load_lua_skin(
+            &root.join("select.luaskin"),
+            SkinKind::Select,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert!(
+            loaded.warnings.is_empty(),
+            "warnings: {:?}",
+            loaded.warnings.iter().map(|w| w.message.as_str()).collect::<Vec<_>>()
+        );
+        assert_eq!(loaded.document.graph[0].graph_type, 148);
+        assert_eq!(loaded.document.graph[1].graph_type, 149);
+        assert!(loaded.document.graph[0].value_expr.is_empty());
+        assert!(loaded.document.graph[1].value_expr.is_empty());
     }
 
     #[test]
