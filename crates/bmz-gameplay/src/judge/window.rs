@@ -54,9 +54,11 @@ pub fn judge_percent_at_time(
 }
 
 fn scale_window_us(value: i64, percent: i32) -> i64 {
-    ((value as i128) * percent as i128 / 100)
-        .try_into()
-        .unwrap_or(if value < 0 { i64::MIN } else { i64::MAX })
+    ((value as i128) * percent as i128 / 100).try_into().unwrap_or(if value < 0 {
+        i64::MIN
+    } else {
+        i64::MAX
+    })
 }
 
 #[cfg(test)]

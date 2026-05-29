@@ -601,11 +601,7 @@ fn build_judge_rank_events(
     for object in &intermediate.objects {
         if let IntermediateObjectKind::SetJudgeRank { rank_percent } = object.kind {
             let tick = object_to_tick(object, &intermediate.measures)?;
-            out.push(JudgeRankEvent {
-                tick,
-                time: timing_map.tick_to_time(tick),
-                rank_percent,
-            });
+            out.push(JudgeRankEvent { tick, time: timing_map.tick_to_time(tick), rank_percent });
         }
     }
     Ok(out)

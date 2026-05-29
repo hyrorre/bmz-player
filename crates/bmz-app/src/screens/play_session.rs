@@ -119,11 +119,7 @@ pub fn build_game_session_with_input_backend(
         ),
         judge: JudgeEngine::new(judge_window_for_rank(
             base_judge_window,
-            judge_percent_at_time(
-                chart.metadata.judge_rank,
-                &chart.judge_rank_events,
-                TimeUs(0),
-            ),
+            judge_percent_at_time(chart.metadata.judge_rank, &chart.judge_rank_events, TimeUs(0)),
         )),
         base_judge_window,
         audio_clock: AudioClock::stopped(options.sample_rate),

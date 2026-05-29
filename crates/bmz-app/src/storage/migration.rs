@@ -242,6 +242,15 @@ pub const LIBRARY_MIGRATIONS: &[Migration] = &[
             "CREATE INDEX idx_course_entries_sha256 ON course_entries(sha256);",
         ],
     },
+    Migration {
+        version: 7,
+        statements: &[
+            "ALTER TABLE charts ADD COLUMN banner_file TEXT NOT NULL DEFAULT '';",
+            "ALTER TABLE charts ADD COLUMN backbmp_file TEXT NOT NULL DEFAULT '';",
+            "ALTER TABLE charts ADD COLUMN judge_rank INTEGER;",
+            "ALTER TABLE charts ADD COLUMN gauge_total REAL;",
+        ],
+    },
 ];
 
 pub const SCORE_MIGRATIONS: &[Migration] = &[

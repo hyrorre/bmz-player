@@ -373,8 +373,7 @@ pub fn sync_judge_windows(session: &mut GameSession, now: TimeUs) {
         &session.chart.judge_rank_events,
         now,
     );
-    session.judge.windows =
-        judge_window_for_rank(session.base_judge_window, percent);
+    session.judge.windows = judge_window_for_rank(session.base_judge_window, percent);
 }
 
 pub fn advance_session_frame(

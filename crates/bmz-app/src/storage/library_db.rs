@@ -4,6 +4,7 @@ use std::path::Path;
 use anyhow::Result;
 use bmz_chart::import::error::ImportWarning;
 use bmz_chart::model::{NoteKind, PlayableChart, TimingEventKind};
+use bmz_gameplay::gauge::gauge_total_for_chart;
 use rusqlite::{Connection, OptionalExtension, params};
 
 pub use super::course_db::{StoredCourse, StoredCourseEntry};
@@ -791,10 +792,11 @@ fn insert_chart(conn: &Connection, record: &ChartImportRecord<'_>) -> Result<i64
             sha256, md5, title, subtitle, artist, subartist, genre,
             difficulty_name, play_level, mode, total_notes, initial_bpm,
             min_bpm, max_bpm, length_ms, ln_type, has_bga, has_long_notes,
-            has_mines, folder_path, stage_file, preview_file, import_version
+            has_mines, folder_path, stage_file, preview_file,
+            banner_file, backbmp_file, judge_rank, gauge_total, import_version
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
-            ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23
+            ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27
         )",
     )?
     .execute(params![
@@ -820,6 +822,10 @@ fn insert_chart(conn: &Connection, record: &ChartImportRecord<'_>) -> Result<i64
         folder_path(record.file_path),
         chart.metadata.stage_file.as_str(),
         chart.metadata.preview_file.as_str(),
+        chart.metadata.banner_file.as_str(),
+        chart.metadata.backbmp_file.as_str(),
+        chart.metadata.judge_rank,
+        gauge_total_for_chart(chart.metadata.total, chart.total_notes),
         CHART_IMPORT_VERSION,
     ])?;
     Ok(conn.last_insert_rowid())
@@ -835,8 +841,9 @@ fn update_chart(conn: &Connection, chart_id: i64, record: &ChartImportRecord<'_>
             mode = ?10, total_notes = ?11, initial_bpm = ?12, min_bpm = ?13, max_bpm = ?14,
             length_ms = ?15, ln_type = ?16, has_bga = ?17, has_long_notes = ?18,
             has_mines = ?19, folder_path = ?20, stage_file = ?21, preview_file = ?22,
-            import_version = ?23
-         WHERE id = ?24",
+            banner_file = ?23, backbmp_file = ?24, judge_rank = ?25, gauge_total = ?26,
+            import_version = ?27
+         WHERE id = ?28",
     )?
     .execute(params![
         hash_to_hex(&chart.identity.file_sha256),
@@ -861,6 +868,10 @@ fn update_chart(conn: &Connection, chart_id: i64, record: &ChartImportRecord<'_>
         folder_path(record.file_path),
         chart.metadata.stage_file.as_str(),
         chart.metadata.preview_file.as_str(),
+        chart.metadata.banner_file.as_str(),
+        chart.metadata.backbmp_file.as_str(),
+        chart.metadata.judge_rank,
+        gauge_total_for_chart(chart.metadata.total, chart.total_notes),
         CHART_IMPORT_VERSION,
         chart_id,
     ])?;
