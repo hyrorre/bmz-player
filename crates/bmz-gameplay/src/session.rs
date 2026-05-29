@@ -104,6 +104,12 @@ pub struct GameSession {
     /// レーンカバー(SUDDEN+)の表示有無。
     /// false のときは描画/判定の visible_max 計算で lane_cover が 0 として扱われる。
     pub lane_cover_visible: bool,
+    /// beatoraja `OPTION_LANECOVER1_ON` (271): SUDDEN+ 機能が有効か。
+    pub lanecover_enabled: bool,
+    /// beatoraja `OPTION_LIFT1_ON` (272): LIFT 機能が有効か。
+    pub lift_enabled: bool,
+    /// beatoraja `OPTION_HIDDEN1_ON` (273): HIDDEN 機能が有効か。
+    pub hidden_enabled: bool,
     /// Start/Select 押下中など、レーンカバー数値表示を出す状態。
     pub lane_cover_changing: bool,
     pub hidden_cover: f32,
@@ -773,6 +779,9 @@ mod tests {
             lane_cover: 0.0,
             lane_cover_visible: true,
             lane_cover_changing: false,
+            lanecover_enabled: false,
+            lift_enabled: true,
+            hidden_enabled: false,
             hidden_cover: 0.0,
             skin_offsets: Vec::new(),
             bga_enabled: true,

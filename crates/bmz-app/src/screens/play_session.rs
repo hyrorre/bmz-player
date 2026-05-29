@@ -136,6 +136,9 @@ pub fn build_game_session_with_input_backend(
         lane_cover: profile.lane.lane_cover.clamp(0.0, 1.0),
         lane_cover_visible: true,
         lane_cover_changing: false,
+        lanecover_enabled: lanecover_enabled_from_profile(profile),
+        lift_enabled: true,
+        hidden_enabled: hidden_enabled_from_profile(profile),
         hidden_cover: hidden_cover_from_profile(profile),
         skin_offsets: skin_offsets_from_profile(profile),
         bga_enabled: bga_enabled_from_profile(profile, autoplay_enabled, is_replay),
@@ -157,6 +160,20 @@ fn hidden_cover_from_profile(profile: &ProfileConfig) -> f32 {
         LaneEffectConfig::Off | LaneEffectConfig::Sudden => 0.0,
     }
     .clamp(0.0, 1.0)
+}
+
+fn lanecover_enabled_from_profile(profile: &ProfileConfig) -> bool {
+    matches!(
+        profile.play.lane_effect,
+        LaneEffectConfig::Sudden | LaneEffectConfig::HiddenSudden
+    )
+}
+
+fn hidden_enabled_from_profile(profile: &ProfileConfig) -> bool {
+    matches!(
+        profile.play.lane_effect,
+        LaneEffectConfig::Hidden | LaneEffectConfig::HiddenSudden
+    )
 }
 
 fn poor_bga_duration_us_from_profile(profile: &ProfileConfig) -> i64 {

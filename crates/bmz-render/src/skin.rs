@@ -1045,6 +1045,12 @@ pub struct SkinDrawState {
     pub hidden_cover: f32,
     /// OPTION_LANECOVER1_CHANGING (270)。Start/Select 押下中に true。
     pub lane_cover_changing: bool,
+    /// OPTION_LANECOVER1_ON (271)。
+    pub lanecover_enabled: bool,
+    /// OPTION_LIFT1_ON (272)。
+    pub lift_enabled: bool,
+    /// OPTION_HIDDEN1_ON (273)。
+    pub hidden_enabled: bool,
     /// 現在 BPM (NUMBER_NOWBPM=160 に使用)。
     pub now_bpm: f32,
     /// 最小 BPM (NUMBER_MINBPM=91 に使用)。
@@ -1182,6 +1188,9 @@ impl Default for SkinDrawState {
             lane_cover: 0.0,
             hidden_cover: 0.0,
             lane_cover_changing: false,
+            lanecover_enabled: true,
+            lift_enabled: true,
+            hidden_enabled: false,
             now_bpm: 0.0,
             min_bpm: 0.0,
             max_bpm: 0.0,
@@ -1694,6 +1703,54 @@ impl SkinDocument {
         (behind, front)
     }
 
+    /// `hiddenCover.disapearLine` をレーンカバー系 (HIDDEN / SUDDEN+ / LIFT) のクロップ境界として使う。
+    fn disappear_line_for_lane_cover_clip(&self) -> Option<(i32, bool)> {
+        let cover = self.hidden_cover.first()?;
+        (cover.disappear_line > 0)
+            .then_some((cover.disappear_line, cover.is_disappear_line_link_lift))
+    }
+
+    fn should_clip_image_at_disappear_line(
+        &self,
+        destination: &SkinDestinationDef,
+        image: &SkinImageDef,
+    ) -> bool {
+        if self.hidden_cover.is_empty() {
+            return false;
+        }
+        if is_lift_lane_cover_id(&destination.id) || is_lift_lane_cover_id(&image.id) {
+            return true;
+        }
+        destination_uses_lift_offset_only(destination)
+            && self.hidden_cover.iter().any(|cover| cover.src == image.src)
+    }
+
+    /// `liftcover` 系 ID のみ。`offset: 3` だけの destination (判定線・数値表示など) は対象外。
+    fn should_skip_lift_lane_cover_render(
+        &self,
+        destination: &SkinDestinationDef,
+        image: &SkinImageDef,
+    ) -> bool {
+        is_lift_lane_cover_id(&destination.id) || is_lift_lane_cover_id(&image.id)
+    }
+
+    /// LIFT 用 image は `offset: 3` で既にリフト分だけ動くため、`hiddenCover` の
+    /// `isDisappearLineLinkLift` は二重適用しない。
+    fn link_lift_for_lane_cover_clip(
+        &self,
+        destination: &SkinDestinationDef,
+        image: &SkinImageDef,
+        link_lift: bool,
+    ) -> bool {
+        if is_lift_lane_cover_id(&destination.id)
+            || is_lift_lane_cover_id(&image.id)
+            || destination_uses_lift_offset_only(destination)
+        {
+            return false;
+        }
+        link_lift
+    }
+
     fn resolve_destination_items(
         &self,
         destination: &SkinDestinationDef,
@@ -1723,16 +1780,36 @@ impl SkinDocument {
             self.hidden_cover.iter().any(|cover| cover.id == destination.id);
         apply_skin_offset_to_frame(destination, &mut frame, state, is_hidden_cover_destination);
         if let Some(image) = images.get(destination.id.as_str()) {
+            if self.should_skip_lift_lane_cover_render(destination, image)
+                && state.offset_lift_px == 0
+            {
+                return None;
+            }
             let source = sources.get(&image.src)?;
+            let mut uv = skin_image_texture_region_for_state(
+                image,
+                source.source_size,
+                elapsed,
+                Some(state),
+            );
+            if self.should_clip_image_at_disappear_line(destination, image)
+                && let Some((disappear_line, link_lift)) = self.disappear_line_for_lane_cover_clip()
+            {
+                clip_skin_cover_to_disappear_line(
+                    &mut frame,
+                    &mut uv,
+                    disappear_line,
+                    self.link_lift_for_lane_cover_clip(destination, image, link_lift),
+                    state,
+                );
+                if frame.h <= 0 {
+                    return None;
+                }
+            }
             let (rect, uv) = stretch_skin_image_geometry(
                 destination.stretch,
                 normalize_skin_frame_rect(frame, self.w, self.h),
-                skin_image_texture_region_for_state(
-                    image,
-                    source.source_size,
-                    elapsed,
-                    Some(state),
-                ),
+                uv,
                 source.source_size,
                 self.w,
                 self.h,
@@ -1909,16 +1986,36 @@ impl SkinDocument {
         apply_skin_offset_to_frame(destination, &mut frame, state, false);
 
         if let Some(image) = images.get(destination.id.as_str()) {
+            if self.should_skip_lift_lane_cover_render(destination, image)
+                && state.offset_lift_px == 0
+            {
+                return None;
+            }
             let source = sources.get(&image.src)?;
+            let mut uv = skin_image_texture_region_for_state(
+                image,
+                source.source_size,
+                elapsed,
+                Some(state),
+            );
+            if self.should_clip_image_at_disappear_line(destination, image)
+                && let Some((disappear_line, link_lift)) = self.disappear_line_for_lane_cover_clip()
+            {
+                clip_skin_cover_to_disappear_line(
+                    &mut frame,
+                    &mut uv,
+                    disappear_line,
+                    self.link_lift_for_lane_cover_clip(destination, image, link_lift),
+                    state,
+                );
+                if frame.h <= 0 {
+                    return None;
+                }
+            }
             let (rect, uv) = stretch_skin_image_geometry(
                 destination.stretch,
                 normalize_skin_frame_rect(frame, self.w, self.h),
-                skin_image_texture_region_for_state(
-                    image,
-                    source.source_size,
-                    elapsed,
-                    Some(state),
-                ),
+                uv,
                 source.source_size,
                 self.w,
                 self.h,
@@ -3047,12 +3144,26 @@ impl SkinDocument {
             3 => frame.y += offset,
             _ => {}
         }
-        let uv = TextureRegion {
+        let mut uv = TextureRegion {
             x: slider.x as f32 / source_width,
             y: slider.y as f32 / source_height,
             width: slider.w as f32 / source_width,
             height: slider.h as f32 / source_height,
         };
+        if slider.slider_type == 4
+            && let Some((disappear_line, link_lift)) = self.disappear_line_for_lane_cover_clip()
+        {
+            clip_skin_cover_to_disappear_line(
+                &mut frame,
+                &mut uv,
+                disappear_line,
+                link_lift,
+                state,
+            );
+            if frame.h <= 0 {
+                return None;
+            }
+        }
         let (rect, uv) = stretch_skin_image_geometry(
             destination.stretch,
             normalize_skin_frame_rect(frame, self.w, self.h),
@@ -3093,12 +3204,23 @@ impl SkinDocument {
         let source = sources.get(&cover.src)?;
         let source_width = source.source_size.width.max(1.0);
         let source_height = source.source_size.height.max(1.0);
-        let uv = TextureRegion {
+        let mut frame = frame;
+        let mut uv = TextureRegion {
             x: cover.x as f32 / source_width,
             y: cover.y as f32 / source_height,
             width: cover.w as f32 / source_width,
             height: cover.h as f32 / source_height,
         };
+        clip_skin_cover_to_disappear_line(
+            &mut frame,
+            &mut uv,
+            cover.disappear_line,
+            cover.is_disappear_line_link_lift,
+            state,
+        );
+        if frame.h <= 0 {
+            return None;
+        }
         let (rect, uv) = stretch_skin_image_geometry(
             destination.stretch,
             normalize_skin_frame_rect(frame, self.w, self.h),
@@ -3829,9 +3951,9 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool 
         171 => state.has_bga,
         // OPTION_LANECOVER1_CHANGING / OPTION_LANECOVER1_ON / OPTION_LIFT1_ON / OPTION_HIDDEN1_ON
         270 => state.lane_cover_changing,
-        271 => state.lane_cover > 0.0,
-        272 => state.offset_lift_px != 0,
-        273 => state.hidden_cover > 0.0,
+        271 => state.lanecover_enabled,
+        272 => state.lift_enabled,
+        273 => state.hidden_enabled,
         // OPTION_DIFFICULTY0..5. 0 は UNKNOWN/OTHER、1..5 は BMS #DIFFICULTY。
         150 => state.difficulty <= 0 || state.difficulty > 5,
         151..=155 => state.difficulty == i64::from(op - 150),
@@ -4440,6 +4562,8 @@ fn skin_state_float_expr_term(term: &str, state: SkinDrawState) -> Option<f32> {
 
 fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
     match ref_id {
+        // Lua draw 畳み込みのプレースホルダ (`number(0) >= 0` 等)
+        0 => Some(0),
         300 => Some(state.select_chart_count as i64),
         96 => Some(if state.play_level != 0 { state.play_level } else { state.select_play_level }),
         370 => Some(state.select_clear_index),
@@ -5581,6 +5705,61 @@ fn apply_skin_animation(frame: &mut ResolvedSkinFrame, animation: &SkinAnimation
     }
 }
 
+fn destination_uses_skin_offset(destination: &SkinDestinationDef, offset_id: i32) -> bool {
+    destination.offset == offset_id || destination.offsets.iter().any(|&id| id == offset_id)
+}
+
+fn destination_uses_lift_offset_only(destination: &SkinDestinationDef) -> bool {
+    destination_uses_skin_offset(destination, 3)
+        && !destination_uses_skin_offset(destination, 4)
+        && !destination_uses_skin_offset(destination, 5)
+}
+
+fn is_lift_lane_cover_id(id: &str) -> bool {
+    id.eq_ignore_ascii_case("liftcover")
+        || id.eq_ignore_ascii_case("lift-cover")
+        || id.eq_ignore_ascii_case("lift_cover")
+        || id.to_ascii_lowercase().contains("liftcover")
+}
+
+/// beatoraja `SkinHidden` 準拠: `disappear_line` より下 (y が小さい側) を切り、上側だけ残す。
+/// 上端が消失ライン以下のときは描画しない。
+fn clip_skin_cover_to_disappear_line(
+    frame: &mut ResolvedSkinFrame,
+    uv: &mut TextureRegion,
+    disappear_line: i32,
+    link_lift: bool,
+    state: SkinDrawState,
+) {
+    if disappear_line <= 0 || frame.h <= 0 {
+        return;
+    }
+    let mut disappear_y = disappear_line;
+    if link_lift {
+        disappear_y = disappear_y.saturating_add(state.offset_lift_px);
+    }
+    let bottom = frame.y;
+    let top = bottom.saturating_add(frame.h);
+    if top < disappear_y {
+        frame.h = 0;
+        return;
+    }
+    // 下端が消失ライン以上なら加工不要 (SUDDEN+ の全開など)
+    if bottom >= disappear_y {
+        return;
+    }
+    if top <= disappear_y {
+        return;
+    }
+    // 消失ラインより下 (y が小さい側) だけ切り、上側を残す
+    let original_h = frame.h.max(1);
+    let new_h = top - disappear_y;
+    let ratio = new_h as f32 / original_h as f32;
+    frame.y = disappear_y;
+    frame.h = new_h;
+    uv.height *= ratio;
+}
+
 fn normalize_skin_frame_rect(
     frame: ResolvedSkinFrame,
     canvas_width: u32,
@@ -6678,8 +6857,46 @@ mod tests {
         assert!(test_skin_op(
             271,
             &[],
-            SkinDrawState { lane_cover: 0.2, ..SkinDrawState::default() }
+            SkinDrawState { lanecover_enabled: true, ..SkinDrawState::default() }
         ));
+    }
+
+    #[test]
+    fn folded_constant_draw_condition_number_zero_is_true() {
+        assert!(eval_skin_draw_condition("number(0) >= 0", SkinDrawState::default()));
+        assert!(!eval_skin_draw_condition("number(0) < 0", SkinDrawState::default()));
+    }
+
+    #[test]
+    fn judge_line_with_lift_offset_still_renders_at_minimum_lift() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "w": 720,
+                "h": 720,
+                "source": [{ "id": 12, "path": "line.png" }],
+                "image": [{ "id": "judge_line", "src": 12, "w": 431, "h": 8 }],
+                "destination": [
+                    { "id": "judge_line", "offset": 3, "dst": [{ "time": 0, "x": 20, "y": 357, "w": 431, "h": 8, "a": 255 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "12".to_string(),
+            SkinDocumentTexture {
+                source_id: "12".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 431.0, height: 8.0 },
+            },
+        )]);
+
+        let items = document.static_image_render_items(
+            &sources,
+            SkinDrawState { offset_lift_px: 0, ..SkinDrawState::default() },
+        );
+        assert_eq!(items.len(), 1, "judge_line must not be skipped with liftcover skip logic");
     }
 
     #[test]
@@ -9214,6 +9431,185 @@ mod tests {
     }
 
     #[test]
+    fn hidden_cover_clips_at_disappear_line() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 720,
+                "h": 720,
+                "source": [{ "id": 12, "path": "cover.png" }],
+                "hiddenCover": [
+                    { "id": "hidden-cover", "src": 12, "x": 0, "y": 0, "w": 390, "h": 580, "disapearLine": 140 }
+                ],
+                "destination": [
+                    { "id": "hidden-cover", "dst": [{ "x": 20, "y": -440, "w": 390, "h": 580 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "12".to_string(),
+            SkinDocumentTexture {
+                source_id: "12".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 390.0, height: 580.0 },
+            },
+        )]);
+
+        let flush = document.static_image_render_items(
+            &sources,
+            SkinDrawState { hidden_cover: 1.0, ..SkinDrawState::default() },
+        );
+        let SkinRenderItem::Image { rect: flush_rect, uv: flush_uv, .. } = &flush[0] else {
+            panic!("expected image");
+        };
+        // オフセット無し: 上端 (skin y=140) が disappearLine
+        assert!(approx_eq(flush_rect.y, 580.0 / 720.0));
+        assert!(approx_eq(flush_rect.height, 580.0 / 720.0));
+
+        let clipped = document.static_image_render_items(
+            &sources,
+            SkinDrawState {
+                hidden_cover: 1.0,
+                offset_hidden_cover_px: 300,
+                ..SkinDrawState::default()
+            },
+        );
+        let SkinRenderItem::Image { rect: clipped_rect, uv: clipped_uv, .. } = &clipped[0] else {
+            panic!("expected image");
+        };
+        // offset で上げた分、判定線より下を切り、上側 300px だけ残す
+        assert!(approx_eq(clipped_rect.y, 280.0 / 720.0));
+        assert!(approx_eq(clipped_rect.height, 300.0 / 720.0));
+        assert!(approx_eq(flush_uv.height - clipped_uv.height, 280.0 / 580.0));
+    }
+
+    #[test]
+    fn lift_cover_skipped_at_minimum_lift() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 720,
+                "h": 720,
+                "source": [{ "id": 12, "path": "lift.png" }],
+                "image": [
+                    { "id": "liftcover", "src": 12, "x": 0, "y": 0, "w": 431, "h": 723 }
+                ],
+                "hiddenCover": [
+                    { "id": "hiddencover", "src": 12, "x": 0, "y": 0, "w": 431, "h": 723, "disapearLine": 357 }
+                ],
+                "destination": [
+                    { "id": "liftcover", "offset": 3, "dst": [{ "x": 20, "y": -366, "w": 431, "h": 723 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "12".to_string(),
+            SkinDocumentTexture {
+                source_id: "12".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 431.0, height: 723.0 },
+            },
+        )]);
+
+        let items = document.static_image_render_items(
+            &sources,
+            SkinDrawState { offset_lift_px: 0, ..SkinDrawState::default() },
+        );
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn sudden_slider_draws_above_disappear_line() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 720,
+                "h": 720,
+                "source": [{ "id": 12, "path": "cover.png" }],
+                "slider": [
+                    { "id": "lanecover", "src": 12, "x": 0, "y": 0, "w": 431, "h": 723, "angle": 2, "range": 723, "type": 4 }
+                ],
+                "hiddenCover": [
+                    { "id": "hiddencover", "src": 12, "x": 0, "y": 0, "w": 431, "h": 723, "disapearLine": 357 }
+                ],
+                "destination": [
+                    { "id": "lanecover", "dst": [{ "x": 20, "y": 1080, "w": 431, "h": 723 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "12".to_string(),
+            SkinDocumentTexture {
+                source_id: "12".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 431.0, height: 723.0 },
+            },
+        )]);
+
+        let items = document.static_image_render_items(
+            &sources,
+            SkinDrawState { lane_cover: 1.0, ..SkinDrawState::default() },
+        );
+        let SkinRenderItem::Image { rect, uv, .. } = &items[0] else {
+            panic!("expected sudden+ lane cover image");
+        };
+        assert!(approx_eq(rect.height, 723.0 / 720.0));
+        assert!(approx_eq(uv.height, 1.0));
+    }
+
+    #[test]
+    fn lift_cover_clips_at_disappear_line() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 720,
+                "h": 720,
+                "source": [{ "id": 12, "path": "lift.png" }],
+                "image": [
+                    { "id": "liftcover", "src": 12, "x": 0, "y": 0, "w": 431, "h": 723 }
+                ],
+                "hiddenCover": [
+                    { "id": "hiddencover", "src": 12, "x": 0, "y": 0, "w": 431, "h": 723, "disapearLine": 357 }
+                ],
+                "destination": [
+                    { "id": "liftcover", "offset": 3, "dst": [{ "x": 20, "y": -366, "w": 431, "h": 723 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "12".to_string(),
+            SkinDocumentTexture {
+                source_id: "12".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 431.0, height: 723.0 },
+            },
+        )]);
+
+        let clipped = document.static_image_render_items(
+            &sources,
+            SkinDrawState { offset_lift_px: 200, ..SkinDrawState::default() },
+        );
+        let SkinRenderItem::Image { rect: clipped_rect, uv: clipped_uv, .. } = &clipped[0] else {
+            panic!("expected image");
+        };
+        // offset 3 で 200px 上げた分、判定線より下を切り、上側 200px だけ残す
+        assert!(approx_eq(clipped_rect.y, 163.0 / 720.0));
+        assert!(approx_eq(clipped_rect.height, 200.0 / 720.0));
+        assert!(approx_eq(clipped_uv.height, 200.0 / 723.0));
+    }
+
     fn hidden_cover_destination_applies_lift_and_hidden_offsets() {
         let document: SkinDocument = serde_json::from_str(
             r#"

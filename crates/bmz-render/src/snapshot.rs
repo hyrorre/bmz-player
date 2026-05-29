@@ -51,6 +51,12 @@ pub struct RenderSnapshot {
     pub lift: f32,
     pub lane_cover: f32,
     pub lane_cover_changing: bool,
+    /// beatoraja `OPTION_LANECOVER1_ON` (271)。
+    pub lanecover_enabled: bool,
+    /// beatoraja `OPTION_LIFT1_ON` (272)。
+    pub lift_enabled: bool,
+    /// beatoraja `OPTION_HIDDEN1_ON` (273)。
+    pub hidden_enabled: bool,
     pub note_display_duration_ms: i32,
     pub hidden_cover: f32,
     pub skin_offsets: SkinOffsetValues,
