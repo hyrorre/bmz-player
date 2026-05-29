@@ -284,6 +284,27 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
     }
 
+    #[test]
+    fn imports_bga_opacity_and_argb_events() {
+        let text = "\
+#TITLE BGA FX Song
+#BPM 120
+#TOTAL 200
+#ARGB01 255,0,0,255
+#00111:01
+#0010B:80
+#001A1:01000000
+";
+        let path = write_temp_bms(text);
+        let result = import_bms_chart(&path, None, false).unwrap();
+        assert_eq!(result.chart.bga_opacity_events.len(), 1);
+        assert_eq!(result.chart.bga_opacity_events[0].opacity, 0x80);
+        assert_eq!(result.chart.bga_argb_events.len(), 1);
+        assert_eq!(result.chart.bga_argb_events[0].red, 255);
+        assert_eq!(result.chart.bga_argb_events[0].green, 0);
+        std::fs::remove_file(&path).unwrap();
+    }
+
     fn write_temp_bms(text: &str) -> std::path::PathBuf {
         let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
         let path = std::env::temp_dir()

@@ -354,6 +354,8 @@ mod tests {
             bgm_volume_events: Vec::new(),
             key_volume_events: Vec::new(),
             text_events: Vec::new(),
+            bga_opacity_events: Vec::new(),
+            bga_argb_events: Vec::new(),
             bar_lines: Vec::new(),
             sounds: vec![
                 SoundAssetRef { id: SoundId(1), path: PathBuf::from("ok.wav") },

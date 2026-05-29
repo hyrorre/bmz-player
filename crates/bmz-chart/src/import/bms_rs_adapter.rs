@@ -94,6 +94,8 @@ fn build_intermediate(bms: &Bms, warnings: &mut Vec<ImportWarning>) -> Intermedi
     push_judge_rank_objects(bms, &mut objects);
     push_volume_objects(bms, &mut objects);
     push_text_objects(bms, &mut objects);
+    push_bga_opacity_objects(bms, &mut objects);
+    push_bga_argb_objects(bms, &mut objects);
 
     let max_measure = compute_max_measure(bms, &objects);
     let measures = build_measures(max_measure, bms);
@@ -378,6 +380,54 @@ fn push_text_objects(bms: &Bms, objects: &mut Vec<IntermediateObject>) {
             position_den: text_obj.time.denominator().get() as u32,
             kind: IntermediateObjectKind::SetText { text: text_obj.text.clone() },
         });
+    }
+}
+
+fn push_bga_opacity_objects(bms: &Bms, objects: &mut Vec<IntermediateObject>) {
+    for changes in bms.bmp.bga_opacity_changes.values() {
+        for change in changes.values() {
+            let Some(kind) = map_bga_layer_kind(change.layer) else {
+                continue;
+            };
+            objects.push(IntermediateObject {
+                measure: track_of(change.time),
+                position_num: change.time.numerator() as u32,
+                position_den: change.time.denominator().get() as u32,
+                kind: IntermediateObjectKind::SetBgaOpacity { kind, opacity: change.opacity },
+            });
+        }
+    }
+}
+
+fn push_bga_argb_objects(bms: &Bms, objects: &mut Vec<IntermediateObject>) {
+    for changes in bms.bmp.bga_argb_changes.values() {
+        for change in changes.values() {
+            let Some(kind) = map_bga_layer_kind(change.layer) else {
+                continue;
+            };
+            objects.push(IntermediateObject {
+                measure: track_of(change.time),
+                position_num: change.time.numerator() as u32,
+                position_den: change.time.denominator().get() as u32,
+                kind: IntermediateObjectKind::SetBgaArgb {
+                    kind,
+                    alpha: change.argb.alpha,
+                    red: change.argb.red,
+                    green: change.argb.green,
+                    blue: change.argb.blue,
+                },
+            });
+        }
+    }
+}
+
+fn map_bga_layer_kind(layer: bms_rs::bms::model::obj::BgaLayer) -> Option<IntermediateBgaKind> {
+    use bms_rs::bms::model::obj::BgaLayer;
+    match layer {
+        BgaLayer::Base => Some(IntermediateBgaKind::Base),
+        BgaLayer::Poor => Some(IntermediateBgaKind::Poor),
+        BgaLayer::Overlay | BgaLayer::Overlay2 => Some(IntermediateBgaKind::Layer),
+        _ => None,
     }
 }
 

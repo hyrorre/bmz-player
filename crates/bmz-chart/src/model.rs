@@ -20,6 +20,8 @@ pub struct PlayableChart {
     pub bgm_volume_events: Vec<ChartVolumeEvent>,
     pub key_volume_events: Vec<ChartVolumeEvent>,
     pub text_events: Vec<ChartTextEvent>,
+    pub bga_opacity_events: Vec<BgaOpacityEvent>,
+    pub bga_argb_events: Vec<BgaArgbEvent>,
     pub bar_lines: Vec<BarLine>,
     pub sounds: Vec<SoundAssetRef>,
     pub bga_assets: Vec<BgaAssetRef>,
@@ -177,6 +179,28 @@ pub struct ChartTextEvent {
     pub tick: ChartTick,
     pub time: TimeUs,
     pub text: String,
+}
+
+/// BMS チャネル 0B–0E による BGA レイヤ不透明度変更。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BgaOpacityEvent {
+    pub tick: ChartTick,
+    pub time: TimeUs,
+    pub layer: BgaEventKind,
+    /// 0x01..=0xFF (255 = 不透明)。
+    pub opacity: u8,
+}
+
+/// BMS チャネル A1–A4 / `#ARGB` による BGA レイヤ色変更。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BgaArgbEvent {
+    pub tick: ChartTick,
+    pub time: TimeUs,
+    pub layer: BgaEventKind,
+    pub alpha: u8,
+    pub red: u8,
+    pub green: u8,
+    pub blue: u8,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -6,10 +6,10 @@ use bmz_core::lane::{LANE_COUNT, Lane};
 use bmz_core::time::{ChartTick, TimeUs};
 
 use crate::model::{
-    BarLine, BgaAssetId, BgaAssetKind, BgaAssetRef, BgaEvent, BgaEventKind, ChartMetadata,
-    ChartTextEvent, ChartVolumeEvent, JudgeRankEvent, LongNotePair, NoteEvent, NoteKind,
-    PlayableChart, ScrollEvent, SoundAssetRef, SoundEvent, SpeedEvent, TimingEvent,
-    TimingEventKind,
+    BarLine, BgaArgbEvent, BgaAssetId, BgaAssetKind, BgaAssetRef, BgaEvent, BgaEventKind,
+    BgaOpacityEvent, ChartMetadata, ChartTextEvent, ChartVolumeEvent, JudgeRankEvent, LongNotePair,
+    NoteEvent, NoteKind, PlayableChart, ScrollEvent, SoundAssetRef, SoundEvent, SpeedEvent,
+    TimingEvent, TimingEventKind,
 };
 use crate::timing::{TickTimingEvent, TickTimingEventKind, TimingMap, build_timing_map};
 
@@ -63,6 +63,8 @@ struct PlayableChartDraft {
     bgm_volume_events: Vec<ChartVolumeEvent>,
     key_volume_events: Vec<ChartVolumeEvent>,
     text_events: Vec<ChartTextEvent>,
+    bga_opacity_events: Vec<BgaOpacityEvent>,
+    bga_argb_events: Vec<BgaArgbEvent>,
     bar_lines: Vec<BarLine>,
     sounds: Vec<SoundAssetRef>,
     bga_assets: Vec<BgaAssetRef>,
@@ -124,6 +126,8 @@ pub fn normalize_chart(
     draft.bgm_volume_events = build_chart_volume_events(&intermediate, &timing_map, true)?;
     draft.key_volume_events = build_chart_volume_events(&intermediate, &timing_map, false)?;
     draft.text_events = build_text_events(&intermediate, &timing_map)?;
+    draft.bga_opacity_events = build_bga_opacity_events(&intermediate, &timing_map)?;
+    draft.bga_argb_events = build_bga_argb_events(&intermediate, &timing_map)?;
     draft.bar_lines = build_bar_lines(&intermediate.measures, &timing_map);
 
     Ok(finalize_playable_chart(draft))
@@ -244,7 +248,9 @@ fn materialize_tick_objects(
             | IntermediateObjectKind::SetJudgeRank { .. }
             | IntermediateObjectKind::SetBgmVolume { .. }
             | IntermediateObjectKind::SetKeyVolume { .. }
-            | IntermediateObjectKind::SetText { .. } => None,
+            | IntermediateObjectKind::SetText { .. }
+            | IntermediateObjectKind::SetBgaOpacity { .. }
+            | IntermediateObjectKind::SetBgaArgb { .. } => None,
         };
 
         if let Some(kind) = kind {
@@ -651,6 +657,50 @@ fn build_text_events(
     Ok(out)
 }
 
+fn build_bga_opacity_events(
+    intermediate: &IntermediateChart,
+    timing_map: &TimingMap,
+) -> Result<Vec<BgaOpacityEvent>, ImportError> {
+    let mut out = Vec::new();
+    for object in &intermediate.objects {
+        let IntermediateObjectKind::SetBgaOpacity { kind, opacity } = object.kind else {
+            continue;
+        };
+        let tick = object_to_tick(object, &intermediate.measures)?;
+        out.push(BgaOpacityEvent {
+            tick,
+            time: timing_map.tick_to_time(tick),
+            layer: bga_event_kind(kind),
+            opacity,
+        });
+    }
+    Ok(out)
+}
+
+fn build_bga_argb_events(
+    intermediate: &IntermediateChart,
+    timing_map: &TimingMap,
+) -> Result<Vec<BgaArgbEvent>, ImportError> {
+    let mut out = Vec::new();
+    for object in &intermediate.objects {
+        let IntermediateObjectKind::SetBgaArgb { kind, alpha, red, green, blue } = object.kind
+        else {
+            continue;
+        };
+        let tick = object_to_tick(object, &intermediate.measures)?;
+        out.push(BgaArgbEvent {
+            tick,
+            time: timing_map.tick_to_time(tick),
+            layer: bga_event_kind(kind),
+            alpha,
+            red,
+            green,
+            blue,
+        });
+    }
+    Ok(out)
+}
+
 fn build_bar_lines(measures: &[MeasureInfo], timing_map: &TimingMap) -> Vec<BarLine> {
     measures
         .iter()
@@ -676,6 +726,8 @@ fn finalize_playable_chart(mut draft: PlayableChartDraft) -> PlayableChart {
     draft.bgm_volume_events.sort_by_key(|event| event.time);
     draft.key_volume_events.sort_by_key(|event| event.time);
     draft.text_events.sort_by_key(|event| event.time);
+    draft.bga_opacity_events.sort_by_key(|event| event.time);
+    draft.bga_argb_events.sort_by_key(|event| event.time);
     draft.bar_lines.sort_by_key(|line| line.time);
 
     draft.total_notes = compute_total_notes(&draft.lane_notes);
@@ -695,6 +747,8 @@ fn finalize_playable_chart(mut draft: PlayableChartDraft) -> PlayableChart {
         bgm_volume_events: draft.bgm_volume_events,
         key_volume_events: draft.key_volume_events,
         text_events: draft.text_events,
+        bga_opacity_events: draft.bga_opacity_events,
+        bga_argb_events: draft.bga_argb_events,
         bar_lines: draft.bar_lines,
         sounds: draft.sounds,
         bga_assets: draft.bga_assets,
@@ -743,6 +797,8 @@ impl PlayableChartDraft {
             bgm_volume_events: Vec::new(),
             key_volume_events: Vec::new(),
             text_events: Vec::new(),
+            bga_opacity_events: Vec::new(),
+            bga_argb_events: Vec::new(),
             bar_lines: Vec::new(),
             sounds,
             bga_assets,

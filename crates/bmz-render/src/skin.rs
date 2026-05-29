@@ -985,6 +985,16 @@ pub struct SkinDocumentTexture {
 pub struct SkinBgaFrame {
     pub texture: SkinTextureId,
     pub source_size: SkinImageSize,
+    pub tint_r: f32,
+    pub tint_g: f32,
+    pub tint_b: f32,
+    pub tint_a: f32,
+}
+
+impl SkinBgaFrame {
+    pub fn opaque(texture: SkinTextureId, source_size: SkinImageSize) -> Self {
+        Self { texture, source_size, tint_r: 1.0, tint_g: 1.0, tint_b: 1.0, tint_a: 1.0 }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1851,11 +1861,12 @@ impl SkinDocument {
             return (state.has_bga && state.bga_enabled).then(|| {
                 let rect = normalize_skin_frame_rect(frame, self.w, self.h);
                 let blend = if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal };
-                let tint = Color::rgba(1.0, 1.0, 1.0, frame.a as f32 / 255.0);
+                let destination_tint = Color::rgba(1.0, 1.0, 1.0, frame.a as f32 / 255.0);
                 let stretch =
                     if destination.stretch < 0 { state.bga_stretch } else { destination.stretch };
                 let mut items = Vec::new();
                 if let Some(bga) = state.bga_poor {
+                    let tint = multiply_bga_tints(destination_tint, bga);
                     items.push(bga_image_item(
                         bga,
                         stretch,
@@ -1867,6 +1878,7 @@ impl SkinDocument {
                         destination.filter != 0,
                     ));
                 } else if let Some(bga) = state.bga_base {
+                    let tint = multiply_bga_tints(destination_tint, bga);
                     items.push(bga_image_item(
                         bga,
                         stretch,
@@ -1881,6 +1893,7 @@ impl SkinDocument {
                 if state.bga_poor.is_none()
                     && let Some(bga) = state.bga_layer
                 {
+                    let tint = multiply_bga_tints(destination_tint, bga);
                     items.push(bga_image_item(
                         bga,
                         stretch,
@@ -5929,6 +5942,15 @@ fn normalize_skin_frame_rect(
     }
 }
 
+fn multiply_bga_tints(destination: Color, bga: SkinBgaFrame) -> Color {
+    Color::rgba(
+        destination.r * bga.tint_r,
+        destination.g * bga.tint_g,
+        destination.b * bga.tint_b,
+        destination.a * bga.tint_a,
+    )
+}
+
 fn bga_image_item(
     bga: SkinBgaFrame,
     stretch: i32,
@@ -7027,6 +7049,10 @@ mod tests {
                 bga_base: Some(SkinBgaFrame {
                     texture: SkinTextureId(20000),
                     source_size: SkinImageSize { width: 256.0, height: 256.0 },
+                    tint_r: 1.0,
+                    tint_g: 1.0,
+                    tint_b: 1.0,
+                    tint_a: 1.0,
                 }),
                 ..SkinDrawState::default()
             },
@@ -7295,10 +7321,18 @@ mod tests {
                 bga_base: Some(SkinBgaFrame {
                     texture: SkinTextureId(20000),
                     source_size: SkinImageSize { width: 256.0, height: 128.0 },
+                    tint_r: 1.0,
+                    tint_g: 1.0,
+                    tint_b: 1.0,
+                    tint_a: 1.0,
                 }),
                 bga_layer: Some(SkinBgaFrame {
                     texture: SkinTextureId(20001),
                     source_size: SkinImageSize { width: 256.0, height: 256.0 },
+                    tint_r: 1.0,
+                    tint_g: 1.0,
+                    tint_b: 1.0,
+                    tint_a: 1.0,
                 }),
                 ..SkinDrawState::default()
             },
@@ -7347,14 +7381,26 @@ mod tests {
                 bga_base: Some(SkinBgaFrame {
                     texture: SkinTextureId(20000),
                     source_size: SkinImageSize { width: 256.0, height: 256.0 },
+                    tint_r: 1.0,
+                    tint_g: 1.0,
+                    tint_b: 1.0,
+                    tint_a: 1.0,
                 }),
                 bga_layer: Some(SkinBgaFrame {
                     texture: SkinTextureId(20001),
                     source_size: SkinImageSize { width: 256.0, height: 256.0 },
+                    tint_r: 1.0,
+                    tint_g: 1.0,
+                    tint_b: 1.0,
+                    tint_a: 1.0,
                 }),
                 bga_poor: Some(SkinBgaFrame {
                     texture: SkinTextureId(20002),
                     source_size: SkinImageSize { width: 256.0, height: 256.0 },
+                    tint_r: 1.0,
+                    tint_g: 1.0,
+                    tint_b: 1.0,
+                    tint_a: 1.0,
                 }),
                 ..SkinDrawState::default()
             },
@@ -7391,6 +7437,10 @@ mod tests {
                 bga_base: Some(SkinBgaFrame {
                     texture: SkinTextureId(20000),
                     source_size: SkinImageSize { width: 256.0, height: 128.0 },
+                    tint_r: 1.0,
+                    tint_g: 1.0,
+                    tint_b: 1.0,
+                    tint_a: 1.0,
                 }),
                 bga_stretch: 1,
                 ..SkinDrawState::default()
@@ -7435,6 +7485,10 @@ mod tests {
                 bga_base: Some(SkinBgaFrame {
                     texture: SkinTextureId(20000),
                     source_size: SkinImageSize { width: 256.0, height: 128.0 },
+                    tint_r: 1.0,
+                    tint_g: 1.0,
+                    tint_b: 1.0,
+                    tint_a: 1.0,
                 }),
                 bga_stretch: 1,
                 ..SkinDrawState::default()

@@ -237,15 +237,22 @@ fn current_bga_frame(
         .iter()
         .rev()
         .find(|event| event.time <= render_now && event.kind == kind)?;
-    bga_frames.get(&event.asset).copied()
+    let mut frame = bga_frames.get(&event.asset).copied()?;
+    let tint = bmz_chart::bga::bga_tint_at_time(
+        &chart.bga_opacity_events,
+        &chart.bga_argb_events,
+        kind,
+        render_now,
+    );
+    frame.tint_r = tint.r;
+    frame.tint_g = tint.g;
+    frame.tint_b = tint.b;
+    frame.tint_a = tint.a;
+    Some(frame)
 }
 
 pub fn display_bga_frame(id: BgaAssetId, width: u32, height: u32) -> DisplayBgaFrame {
-    DisplayBgaFrame {
-        texture_id: bga_texture_id(id),
-        width: width.max(1) as f32,
-        height: height.max(1) as f32,
-    }
+    DisplayBgaFrame::opaque(bga_texture_id(id), width.max(1) as f32, height.max(1) as f32)
 }
 
 pub fn bga_texture_id(id: BgaAssetId) -> u32 {
@@ -1058,7 +1065,11 @@ mod tests {
             DisplayBgaFrame {
                 texture_id: bga_texture_id(BgaAssetId(1)),
                 width: 640.0,
-                height: 480.0
+                height: 480.0,
+                tint_r: 1.0,
+                tint_g: 1.0,
+                tint_b: 1.0,
+                tint_a: 1.0,
             }
         );
         assert_eq!(late.bga_layer.unwrap().texture_id, bga_texture_id(BgaAssetId(2)));
@@ -1067,7 +1078,11 @@ mod tests {
             DisplayBgaFrame {
                 texture_id: bga_texture_id(BgaAssetId(3)),
                 width: 320.0,
-                height: 240.0
+                height: 240.0,
+                tint_r: 1.0,
+                tint_g: 1.0,
+                tint_b: 1.0,
+                tint_a: 1.0,
             }
         );
         assert!(poor_expired.bga_poor.is_none());
@@ -1140,6 +1155,8 @@ mod tests {
             bgm_volume_events: Vec::new(),
             key_volume_events: Vec::new(),
             text_events: Vec::new(),
+            bga_opacity_events: Vec::new(),
+            bga_argb_events: Vec::new(),
             bar_lines: Vec::new(),
             sounds: Vec::new(),
             bga_assets: Vec::new(),
@@ -1182,6 +1199,8 @@ mod tests {
             bgm_volume_events: Vec::new(),
             key_volume_events: Vec::new(),
             text_events: Vec::new(),
+            bga_opacity_events: Vec::new(),
+            bga_argb_events: Vec::new(),
             bar_lines: Vec::new(),
             sounds: Vec::new(),
             bga_assets: Vec::new(),
@@ -1242,6 +1261,8 @@ mod tests {
             bgm_volume_events: Vec::new(),
             key_volume_events: Vec::new(),
             text_events: Vec::new(),
+            bga_opacity_events: Vec::new(),
+            bga_argb_events: Vec::new(),
             bar_lines: Vec::new(),
             sounds: Vec::new(),
             bga_assets: Vec::new(),

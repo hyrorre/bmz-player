@@ -747,6 +747,8 @@ mod tests {
             bgm_volume_events: Vec::new(),
             key_volume_events: Vec::new(),
             text_events: Vec::new(),
+            bga_opacity_events: Vec::new(),
+            bga_argb_events: Vec::new(),
             bar_lines: Vec::new(),
             sounds: Vec::<SoundAssetRef>::new(),
             bga_assets: Vec::new(),

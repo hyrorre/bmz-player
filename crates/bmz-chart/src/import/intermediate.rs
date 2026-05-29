@@ -145,6 +145,19 @@ pub enum IntermediateObjectKind {
     SetText {
         text: String,
     },
+    /// チャネル 0B–0E: BGA レイヤ不透明度。
+    SetBgaOpacity {
+        kind: IntermediateBgaKind,
+        opacity: u8,
+    },
+    /// チャネル A1–A4: BGA レイヤ ARGB。
+    SetBgaArgb {
+        kind: IntermediateBgaKind,
+        alpha: u8,
+        red: u8,
+        green: u8,
+        blue: u8,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

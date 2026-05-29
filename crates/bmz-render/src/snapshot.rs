@@ -201,4 +201,14 @@ pub struct DisplayBgaFrame {
     pub texture_id: u32,
     pub width: f32,
     pub height: f32,
+    pub tint_r: f32,
+    pub tint_g: f32,
+    pub tint_b: f32,
+    pub tint_a: f32,
+}
+
+impl DisplayBgaFrame {
+    pub fn opaque(texture_id: u32, width: f32, height: f32) -> Self {
+        Self { texture_id, width, height, tint_r: 1.0, tint_g: 1.0, tint_b: 1.0, tint_a: 1.0 }
+    }
 }
