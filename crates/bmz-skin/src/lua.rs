@@ -3,7 +3,8 @@ use std::fs;
 use std::path::Component;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow, bail};
 use mlua::{Function, HookTriggers, Lua, Table, Value, Variadic, VmState};
@@ -15,6 +16,7 @@ const LUA_INSTRUCTION_LIMIT: i64 = 2_000_000;
 const LUA_HOOK_INTERVAL: u32 = 1_000;
 const LUA_MAX_TABLE_DEPTH: usize = 64;
 const LUA_MAX_TABLE_ENTRIES: usize = 200_000;
+const TIMER_OFF_VALUE: i32 = i32::MIN;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConvertReport {
@@ -240,6 +242,9 @@ fn install_sandbox(
     let require = lua.create_function(move |lua, module: String| {
         if module == "main_state" {
             return create_main_state_stub(lua, probe_for_require.clone());
+        }
+        if module == "timer_util" {
+            return create_timer_util_module(lua, probe_for_require.clone());
         }
         let globals = lua.globals();
         let package: Table = globals.get("package")?;
@@ -511,6 +516,129 @@ fn create_main_state_stub(lua: &Lua, probe: Arc<Mutex<MainStateProbe>>) -> mlua:
                 .gauge_type())
         })?,
     )?;
+    Ok(Value::Table(table))
+}
+
+#[derive(Debug)]
+struct TimerObserveState {
+    timer_value: i32,
+}
+
+fn lua_load_now_micros() -> i32 {
+    static ORIGIN: OnceLock<Instant> = OnceLock::new();
+    let origin = ORIGIN.get_or_init(Instant::now);
+    origin.elapsed().as_micros().min(i32::MAX as u128) as i32
+}
+
+/// beatoraja の `TimerUtility` 相当。Lua スキンが `require("timer_util")` できるようにする。
+fn create_timer_util_module(lua: &Lua, probe: Arc<Mutex<MainStateProbe>>) -> mlua::Result<Value> {
+    let table = lua.create_table()?;
+
+    table.set(
+        "now_timer",
+        lua.create_function(|_, timer_value: i32| {
+            Ok(if timer_value != TIMER_OFF_VALUE {
+                lua_load_now_micros().saturating_sub(timer_value.max(0))
+            } else {
+                0
+            })
+        })?,
+    )?;
+    table.set(
+        "is_timer_on",
+        lua.create_function(|_, timer_value: i32| Ok(timer_value != TIMER_OFF_VALUE))?,
+    )?;
+    table.set(
+        "is_timer_off",
+        lua.create_function(|_, timer_value: i32| Ok(timer_value == TIMER_OFF_VALUE))?,
+    )?;
+
+    let probe_for_timer_function = probe.clone();
+    table.set(
+        "timer_function",
+        lua.create_function(move |lua, timer_id: i32| {
+            let probe = probe_for_timer_function.clone();
+            lua.create_function(move |_, _: Value| {
+                Ok(probe
+                    .lock()
+                    .map_err(|_| mlua::Error::external("main_state probe lock poisoned"))?
+                    .timer(timer_id))
+            })
+        })?,
+    )?;
+
+    table.set(
+        "timer_observe_boolean",
+        lua.create_function(|lua, observed: Function| {
+            let state = Arc::new(Mutex::new(TimerObserveState { timer_value: TIMER_OFF_VALUE }));
+            lua.create_function(move |_, ()| {
+                let on = observed.call::<bool>(())?;
+                let mut state = state
+                    .lock()
+                    .map_err(|_| mlua::Error::external("timer observe lock poisoned"))?;
+                if on && state.timer_value == TIMER_OFF_VALUE {
+                    state.timer_value = lua_load_now_micros();
+                } else if !on && state.timer_value != TIMER_OFF_VALUE {
+                    state.timer_value = TIMER_OFF_VALUE;
+                }
+                Ok(state.timer_value)
+            })
+        })?,
+    )?;
+
+    table.set(
+        "new_passive_timer",
+        lua.create_function(|lua, ()| {
+            let state = Arc::new(Mutex::new(TimerObserveState { timer_value: TIMER_OFF_VALUE }));
+            let passive = lua.create_table()?;
+            let state_for_timer = state.clone();
+            passive.set(
+                "timer",
+                lua.create_function(move |_, ()| {
+                    Ok(state_for_timer
+                        .lock()
+                        .map_err(|_| mlua::Error::external("passive timer lock poisoned"))?
+                        .timer_value)
+                })?,
+            )?;
+            let state_for_turn_on = state.clone();
+            passive.set(
+                "turn_on",
+                lua.create_function(move |_, ()| {
+                    let mut state = state_for_turn_on
+                        .lock()
+                        .map_err(|_| mlua::Error::external("passive timer lock poisoned"))?;
+                    if state.timer_value == TIMER_OFF_VALUE {
+                        state.timer_value = lua_load_now_micros();
+                    }
+                    Ok(())
+                })?,
+            )?;
+            let state_for_turn_on_reset = state.clone();
+            passive.set(
+                "turn_on_reset",
+                lua.create_function(move |_, ()| {
+                    state_for_turn_on_reset
+                        .lock()
+                        .map_err(|_| mlua::Error::external("passive timer lock poisoned"))?
+                        .timer_value = lua_load_now_micros();
+                    Ok(())
+                })?,
+            )?;
+            passive.set(
+                "turn_off",
+                lua.create_function(move |_, ()| {
+                    state
+                        .lock()
+                        .map_err(|_| mlua::Error::external("passive timer lock poisoned"))?
+                        .timer_value = TIMER_OFF_VALUE;
+                    Ok(())
+                })?,
+            )?;
+            Ok(passive)
+        })?,
+    )?;
+
     Ok(Value::Table(table))
 }
 

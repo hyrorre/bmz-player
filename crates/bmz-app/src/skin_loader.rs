@@ -1188,6 +1188,39 @@ mod tests {
     }
 
     #[test]
+    fn starseeker_frame_filepath_selection_merges_frame_destinations_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/Starseeker/play/play7.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let mut files = BTreeMap::new();
+        files.insert("フレーム".to_string(), "custom/frame/AC_SP/starseeker".to_string());
+
+        let decoded = decode_beatoraja_skin_with_options(
+            &skin_path,
+            SkinKind::Play,
+            &BTreeMap::new(),
+            &files,
+        )
+        .expect("decode starseeker frame skin");
+
+        assert!(
+            decoded.document.source.iter().any(|source| source.id == "main_frame"),
+            "expected main_frame source from starseeker frameL.lua"
+        );
+        assert!(
+            decoded
+                .document
+                .all_destinations(&[])
+                .iter()
+                .any(|destination| destination.id == "base_L" || destination.id == "base_R"),
+            "expected frame panel destinations from starseeker frameL.lua"
+        );
+    }
+
+    #[test]
     fn play_skin_selection_for_returns_per_mode_fields() {
         let mut skin = SkinConfig {
             play5: "skin5.json".to_string(),

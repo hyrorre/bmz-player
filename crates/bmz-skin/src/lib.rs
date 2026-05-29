@@ -488,6 +488,59 @@ mod tests {
     }
 
     #[test]
+    fn lua_skin_timer_util_supports_observe_boolean_for_dofile_parts() {
+        let root = unique_test_dir("bmz-skin-lua");
+        fs::create_dir_all(root.join("parts/frame")).unwrap();
+        fs::write(
+            root.join("parts/frame/mod.lua"),
+            r#"
+            local timer_util = require("timer_util")
+            return {
+                destination = {
+                    {
+                        id = "frame-panel",
+                        timer = timer_util.timer_observe_boolean(function()
+                            return true
+                        end),
+                        dst = { { x = 1, y = 2, w = 3, h = 4 } },
+                    },
+                },
+            }
+            "#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("play7.luaskin"),
+            r#"
+            if skin_config then
+                local dir = skin_config.get_path("parts/*")
+                local sub = dofile(dir .. "/mod.lua")
+                return { type = 0, destination = sub.destination }
+            else
+                return { type = 0 }
+            end
+            "#,
+        )
+        .unwrap();
+
+        let loaded = load_lua_skin(
+            &root.join("play7.luaskin"),
+            SkinKind::Play,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+
+        assert_eq!(loaded.document.destination.len(), 1);
+        let bmz_render::skin::DestinationListEntry::Single(destination) =
+            &loaded.document.destination[0]
+        else {
+            panic!("destination should be single");
+        };
+        assert_eq!(destination.id, "frame-panel");
+    }
+
+    #[test]
     fn lua_skin_stops_infinite_loop() {
         let root = unique_test_dir("bmz-skin-lua");
         fs::create_dir_all(&root).unwrap();
