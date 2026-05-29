@@ -128,6 +128,10 @@ pub enum IntermediateObjectKind {
     SetSpeed {
         factor: f64,
     },
+    /// `#EXRANK` / chA0: 判定ランク変更。
+    SetJudgeRank {
+        rank_percent: i32,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

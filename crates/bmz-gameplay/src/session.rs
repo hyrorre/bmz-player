@@ -14,7 +14,8 @@ use crate::gauge::GaugeState;
 use crate::input::system::InputSystem;
 use crate::input::translator::{InputTimestampAnchor, InputTimingContext};
 use crate::judge::engine::JudgeEngine;
-use crate::judge::model::{JudgeOutcome, JudgementEvent, MineHitEvent};
+use crate::judge::model::{JudgeOutcome, JudgeWindow, JudgementEvent, MineHitEvent};
+use crate::judge::window::{judge_percent_at_time, judge_window_for_rank};
 use crate::replay::{ReplayPlayer, ReplayRecorder};
 use crate::score::ScoreState;
 
@@ -78,6 +79,8 @@ pub struct GameSession {
     pub audio_clock: AudioClock,
     pub input_system: InputSystem,
     pub judge: JudgeEngine,
+    /// プロファイル既定の判定窓。`#RANK` / `#EXRANK` 倍率の基準値。
+    pub base_judge_window: JudgeWindow,
     pub score: ScoreState,
     pub gauge: GaugeState,
     pub replay_recorder: ReplayRecorder,
@@ -364,6 +367,16 @@ pub fn process_misses(session: &mut GameSession, audio_now: TimeUs) -> Vec<Judge
     apply_judge_outcome(session, outcome)
 }
 
+pub fn sync_judge_windows(session: &mut GameSession, now: TimeUs) {
+    let percent = judge_percent_at_time(
+        session.chart.metadata.judge_rank,
+        &session.chart.judge_rank_events,
+        now,
+    );
+    session.judge.windows =
+        judge_window_for_rank(session.base_judge_window, percent);
+}
+
 pub fn advance_session_frame(
     session: &mut GameSession,
     audio: &mut dyn AudioScheduler,
@@ -376,6 +389,8 @@ pub fn advance_session_frame(
     let mut judgements = Vec::new();
 
     if session.state == PlayState::Playing {
+        sync_judge_windows(session, times.audio_now);
+
         session.bgm_scheduler.schedule_until(
             &session.chart,
             &session.audio_clock,
@@ -760,6 +775,15 @@ mod tests {
                 empty_poor_slow_us: 200_000,
                 mine_hit_us: 16_000,
             }),
+            base_judge_window: JudgeWindow {
+                pgreat_us: 16_000,
+                great_us: 40_000,
+                good_us: 80_000,
+                bad_us: 120_000,
+                empty_poor_fast_us: 500_000,
+                empty_poor_slow_us: 200_000,
+                mine_hit_us: 16_000,
+            },
             score: ScoreState::default(),
             gauge: GaugeState::new(bmz_core::clear::GaugeType::Normal, 160.0, chart.total_notes),
             replay_recorder: ReplayRecorder::default(),
@@ -816,6 +840,7 @@ mod tests {
             timing_events: Vec::new(),
             scroll_events: Vec::new(),
             speed_events: Vec::new(),
+            judge_rank_events: Vec::new(),
             bar_lines: Vec::new(),
             sounds: vec![SoundAssetRef { id: SoundId(7), path: "sound.wav".into() }],
             bga_assets: Vec::new(),
@@ -835,6 +860,7 @@ mod tests {
             timing_events: Vec::new(),
             scroll_events: Vec::new(),
             speed_events: Vec::new(),
+            judge_rank_events: Vec::new(),
             bar_lines: Vec::new(),
             sounds: vec![SoundAssetRef { id: SoundId(3), path: "bgm.wav".into() }],
             bga_assets: Vec::new(),

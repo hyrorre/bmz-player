@@ -220,6 +220,27 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
     }
 
+    #[test]
+    fn imports_exrank_judge_events() {
+        let text = "\
+#TITLE Exrank Song
+#BPM 120
+#TOTAL 200
+#RANK 3
+#EXRANK01 1
+#EXRANK02 0
+#00111:01
+#001A0:01000000
+#002A0:02000000
+";
+        let path = write_temp_bms(text);
+        let result = import_bms_chart(&path, None, false).unwrap();
+        assert_eq!(result.chart.judge_rank_events.len(), 2);
+        assert_eq!(result.chart.judge_rank_events[0].rank_percent, 50);
+        assert_eq!(result.chart.judge_rank_events[1].rank_percent, 25);
+        std::fs::remove_file(&path).unwrap();
+    }
+
     fn write_temp_bms(text: &str) -> std::path::PathBuf {
         let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
         let path = std::env::temp_dir()

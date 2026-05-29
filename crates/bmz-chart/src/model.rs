@@ -16,6 +16,7 @@ pub struct PlayableChart {
     pub timing_events: Vec<TimingEvent>,
     pub scroll_events: Vec<ScrollEvent>,
     pub speed_events: Vec<SpeedEvent>,
+    pub judge_rank_events: Vec<JudgeRankEvent>,
     pub bar_lines: Vec<BarLine>,
     pub sounds: Vec<SoundAssetRef>,
     pub bga_assets: Vec<BgaAssetRef>,
@@ -121,6 +122,15 @@ pub struct SpeedEvent {
     pub tick: ChartTick,
     pub time: TimeUs,
     pub factor: f64,
+}
+
+/// `#EXRANK` / chA0 による判定ランク変更イベント。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JudgeRankEvent {
+    pub tick: ChartTick,
+    pub time: TimeUs,
+    /// beatoraja 準拠の判定窓倍率 (%) 。25=VERYHARD, 100=EASY 等。
+    pub rank_percent: i32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

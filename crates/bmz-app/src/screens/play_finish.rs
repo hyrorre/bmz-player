@@ -404,6 +404,7 @@ mod tests {
                 }),
             },
             judge: JudgeEngine::new(DEFAULT_JUDGE_WINDOW),
+            base_judge_window: DEFAULT_JUDGE_WINDOW,
             score: Default::default(),
             gauge: bmz_gameplay::gauge::GaugeState::new(
                 bmz_core::clear::GaugeType::Normal,
@@ -466,6 +467,7 @@ mod tests {
             scroll_events: Vec::new(),
 
             speed_events: Vec::new(),
+            judge_rank_events: Vec::new(),
             bar_lines: Vec::new(),
             sounds: Vec::new(),
             bga_assets: Vec::new(),

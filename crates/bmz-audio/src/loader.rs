@@ -326,6 +326,9 @@ mod tests {
             bgm_events: Vec::new(),
             bga_events: Vec::new(),
             timing_events: Vec::new(),
+            scroll_events: Vec::new(),
+            speed_events: Vec::new(),
+            judge_rank_events: Vec::new(),
             bar_lines: Vec::new(),
             sounds: vec![
                 SoundAssetRef { id: SoundId(1), path: PathBuf::from("ok.wav") },

@@ -7,8 +7,8 @@ use bmz_core::time::{ChartTick, TimeUs};
 
 use crate::model::{
     BarLine, BgaAssetId, BgaAssetKind, BgaAssetRef, BgaEvent, BgaEventKind, ChartMetadata,
-    LongNotePair, NoteEvent, NoteKind, PlayableChart, ScrollEvent, SoundAssetRef, SoundEvent,
-    SpeedEvent, TimingEvent, TimingEventKind,
+    JudgeRankEvent, LongNotePair, NoteEvent, NoteKind, PlayableChart, ScrollEvent, SoundAssetRef,
+    SoundEvent, SpeedEvent, TimingEvent, TimingEventKind,
 };
 use crate::timing::{TickTimingEvent, TickTimingEventKind, TimingMap, build_timing_map};
 
@@ -58,6 +58,7 @@ struct PlayableChartDraft {
     timing_events: Vec<TimingEvent>,
     scroll_events: Vec<ScrollEvent>,
     speed_events: Vec<SpeedEvent>,
+    judge_rank_events: Vec<JudgeRankEvent>,
     bar_lines: Vec<BarLine>,
     sounds: Vec<SoundAssetRef>,
     bga_assets: Vec<BgaAssetRef>,
@@ -115,6 +116,7 @@ pub fn normalize_chart(
     );
     draft.scroll_events = build_scroll_events(&intermediate, &timing_map)?;
     draft.speed_events = build_speed_events(&intermediate, &timing_map)?;
+    draft.judge_rank_events = build_judge_rank_events(&intermediate, &timing_map)?;
     draft.bar_lines = build_bar_lines(&intermediate.measures, &timing_map);
 
     Ok(finalize_playable_chart(draft))
@@ -230,7 +232,8 @@ fn materialize_tick_objects(
             | IntermediateObjectKind::SetExtendedBpm { .. }
             | IntermediateObjectKind::Stop { .. }
             | IntermediateObjectKind::SetScroll { .. }
-            | IntermediateObjectKind::SetSpeed { .. } => None,
+            | IntermediateObjectKind::SetSpeed { .. }
+            | IntermediateObjectKind::SetJudgeRank { .. } => None,
         };
 
         if let Some(kind) = kind {
@@ -590,6 +593,24 @@ fn build_speed_events(
     Ok(out)
 }
 
+fn build_judge_rank_events(
+    intermediate: &IntermediateChart,
+    timing_map: &TimingMap,
+) -> Result<Vec<JudgeRankEvent>, ImportError> {
+    let mut out = Vec::new();
+    for object in &intermediate.objects {
+        if let IntermediateObjectKind::SetJudgeRank { rank_percent } = object.kind {
+            let tick = object_to_tick(object, &intermediate.measures)?;
+            out.push(JudgeRankEvent {
+                tick,
+                time: timing_map.tick_to_time(tick),
+                rank_percent,
+            });
+        }
+    }
+    Ok(out)
+}
+
 fn build_bar_lines(measures: &[MeasureInfo], timing_map: &TimingMap) -> Vec<BarLine> {
     measures
         .iter()
@@ -611,6 +632,7 @@ fn finalize_playable_chart(mut draft: PlayableChartDraft) -> PlayableChart {
     draft.timing_events.sort_by_key(|event| event.time);
     draft.scroll_events.sort_by_key(|event| event.time);
     draft.speed_events.sort_by_key(|event| event.time);
+    draft.judge_rank_events.sort_by_key(|event| event.time);
     draft.bar_lines.sort_by_key(|line| line.time);
 
     draft.total_notes = compute_total_notes(&draft.lane_notes);
@@ -626,6 +648,7 @@ fn finalize_playable_chart(mut draft: PlayableChartDraft) -> PlayableChart {
         timing_events: draft.timing_events,
         scroll_events: draft.scroll_events,
         speed_events: draft.speed_events,
+        judge_rank_events: draft.judge_rank_events,
         bar_lines: draft.bar_lines,
         sounds: draft.sounds,
         bga_assets: draft.bga_assets,
@@ -670,6 +693,7 @@ impl PlayableChartDraft {
             timing_events: Vec::new(),
             scroll_events: Vec::new(),
             speed_events: Vec::new(),
+            judge_rank_events: Vec::new(),
             bar_lines: Vec::new(),
             sounds,
             bga_assets,

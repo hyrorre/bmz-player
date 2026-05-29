@@ -1000,6 +1000,7 @@ mod tests {
             scroll_events: Vec::new(),
 
             speed_events: Vec::new(),
+            judge_rank_events: Vec::new(),
             bar_lines: Vec::new(),
             sounds: Vec::new(),
             bga_assets: Vec::new(),

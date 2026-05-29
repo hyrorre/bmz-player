@@ -36,6 +36,23 @@ pub fn judge_window_from_chart_rank(judge_rank: Option<i32>, base: JudgeWindow) 
     judge_window_for_rank(base, judge_rank_to_percent_optional(judge_rank))
 }
 
+/// 譜面ヘッダ `#RANK` と `#EXRANK` イベントから、指定時刻の判定倍率 (%) を求める。
+pub fn judge_percent_at_time(
+    header_rank: Option<i32>,
+    events: &[bmz_chart::model::JudgeRankEvent],
+    now: bmz_core::time::TimeUs,
+) -> i32 {
+    let mut percent = judge_rank_to_percent_optional(header_rank);
+    for event in events {
+        if event.time <= now {
+            percent = event.rank_percent;
+        } else {
+            break;
+        }
+    }
+    percent
+}
+
 fn scale_window_us(value: i64, percent: i32) -> i64 {
     ((value as i128) * percent as i128 / 100)
         .try_into()
@@ -91,5 +108,19 @@ mod tests {
     fn very_hard_rank_halves_pgreat_window() {
         let window = judge_window_from_chart_rank(Some(0), base_window());
         assert_eq!(window.pgreat_us, 4_000);
+    }
+
+    #[test]
+    fn exrank_events_override_header_rank() {
+        use bmz_chart::model::JudgeRankEvent;
+        use bmz_core::time::TimeUs;
+
+        let events = vec![
+            JudgeRankEvent { tick: Default::default(), time: TimeUs(1_000), rank_percent: 50 },
+            JudgeRankEvent { tick: Default::default(), time: TimeUs(2_000), rank_percent: 25 },
+        ];
+        assert_eq!(judge_percent_at_time(Some(3), &events, TimeUs(0)), 100);
+        assert_eq!(judge_percent_at_time(Some(3), &events, TimeUs(1_500)), 50);
+        assert_eq!(judge_percent_at_time(Some(3), &events, TimeUs(2_500)), 25);
     }
 }

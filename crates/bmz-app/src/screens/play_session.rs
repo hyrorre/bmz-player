@@ -7,13 +7,14 @@ use bmz_chart::import::import_bms_chart;
 use bmz_chart::model::{NoteEvent, PlayableChart};
 use bmz_core::clear::GaugeType;
 use bmz_core::lane::{KeyMode, LANE_COUNT, Lane};
+use bmz_core::time::TimeUs;
 use bmz_gameplay::autoplay::AutoplayController;
 use bmz_gameplay::gauge::{GaugeState, gauge_total_for_chart};
 use bmz_gameplay::input::backend::{InputBackend, NullInputBackend};
 use bmz_gameplay::input::system::InputSystem;
 use bmz_gameplay::input::translator::DefaultInputTranslator;
 use bmz_gameplay::judge::engine::JudgeEngine;
-use bmz_gameplay::judge::window::judge_window_from_chart_rank;
+use bmz_gameplay::judge::window::{judge_percent_at_time, judge_window_for_rank};
 use bmz_gameplay::replay::{ReplayPlayer, ReplayRecorder};
 use bmz_gameplay::score::ScoreState;
 use bmz_gameplay::session::{BgmScheduler, GameSession, PlaySkinOffset, PlayState};
@@ -108,16 +109,23 @@ pub fn build_game_session_with_input_backend(
         &chart.timing_events,
     );
 
+    let base_judge_window = DEFAULT_JUDGE_WINDOW;
+
     GameSession {
         gauge: GaugeState::new(
             gauge_type,
             gauge_total_for_chart(chart.metadata.total, chart.total_notes),
             chart.total_notes,
         ),
-        judge: JudgeEngine::new(judge_window_from_chart_rank(
-            chart.metadata.judge_rank,
-            DEFAULT_JUDGE_WINDOW,
+        judge: JudgeEngine::new(judge_window_for_rank(
+            base_judge_window,
+            judge_percent_at_time(
+                chart.metadata.judge_rank,
+                &chart.judge_rank_events,
+                TimeUs(0),
+            ),
         )),
+        base_judge_window,
         audio_clock: AudioClock::stopped(options.sample_rate),
         chart,
         timing_map,
@@ -739,6 +747,7 @@ mod tests {
             scroll_events: Vec::new(),
 
             speed_events: Vec::new(),
+            judge_rank_events: Vec::new(),
             bar_lines: Vec::new(),
             sounds: Vec::<SoundAssetRef>::new(),
             bga_assets: Vec::new(),

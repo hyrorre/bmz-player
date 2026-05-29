@@ -91,6 +91,7 @@ fn build_intermediate(bms: &Bms, warnings: &mut Vec<ImportWarning>) -> Intermedi
     push_stop_objects(bms, &mut objects, &mut resources);
     push_scroll_objects(bms, &mut objects);
     push_speed_objects(bms, &mut objects);
+    push_judge_rank_objects(bms, &mut objects);
 
     let max_measure = compute_max_measure(bms, &objects);
     let measures = build_measures(max_measure, bms);
@@ -331,6 +332,35 @@ fn push_speed_objects(bms: &Bms, objects: &mut Vec<IntermediateObject>) {
             position_den: change.time.denominator().get() as u32,
             kind: IntermediateObjectKind::SetSpeed { factor: change.factor.get() },
         });
+    }
+}
+
+fn push_judge_rank_objects(bms: &Bms, objects: &mut Vec<IntermediateObject>) {
+    for judge_obj in bms.judge.judge_events.values() {
+        objects.push(IntermediateObject {
+            measure: track_of(judge_obj.time),
+            position_num: judge_obj.time.numerator() as u32,
+            position_den: judge_obj.time.denominator().get() as u32,
+            kind: IntermediateObjectKind::SetJudgeRank {
+                rank_percent: judge_level_to_rank_percent(judge_obj.judge_level),
+            },
+        });
+    }
+}
+
+fn judge_level_to_rank_percent(level: JudgeLevel) -> i32 {
+    judge_rank_to_percent(judge_level_to_int(level))
+}
+
+fn judge_rank_to_percent(rank: i32) -> i32 {
+    match rank {
+        0 => 25,
+        1 => 50,
+        2 => 75,
+        3 => 100,
+        4 => 125,
+        r if r >= 10 => r,
+        _ => 75,
     }
 }
 
