@@ -17,6 +17,27 @@ pub fn run_songs_command(cmd: SongsCommand) -> Result<()> {
     }
 }
 
+/// 曲ルート一覧へ 1 件追加する。重複パスはエラー。
+pub fn add_song_root_entry(
+    roots: &mut Vec<PathEntry>,
+    path: &str,
+    recursive: bool,
+    enabled: bool,
+) -> Result<()> {
+    if roots.iter().any(|root| root.path == path) {
+        bail!("already configured: {path}");
+    }
+    roots.push(PathEntry { path: path.to_string(), recursive, enabled });
+    Ok(())
+}
+
+/// 曲ルート一覧から index 番目を削除する。
+pub fn remove_song_root_entry(roots: &mut Vec<PathEntry>, index: usize) {
+    if index < roots.len() {
+        roots.remove(index);
+    }
+}
+
 fn add_song_root(path: &str, recursive: bool, enabled: bool) -> Result<()> {
     let app_paths = resolve_app_paths()?;
     app_paths.ensure_dirs()?;
@@ -27,11 +48,7 @@ fn add_song_root(path: &str, recursive: bool, enabled: bool) -> Result<()> {
         Default::default()
     };
 
-    if app_config.songs.roots.iter().any(|r| r.path == path) {
-        bail!("already configured: {path}");
-    }
-
-    app_config.songs.roots.push(PathEntry { path: path.to_string(), recursive, enabled });
+    add_song_root_entry(&mut app_config.songs.roots, path, recursive, enabled)?;
     save_app_config(&app_paths.config_toml, &app_config)?;
 
     println!("Added {path}");

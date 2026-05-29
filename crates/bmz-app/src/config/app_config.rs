@@ -45,7 +45,7 @@ pub struct AudioConfig {
     pub asio_driver: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "PascalCase")]
 pub enum AudioBackend {
     Auto,
@@ -56,7 +56,7 @@ pub enum AudioBackend {
     Pulse,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "PascalCase")]
 pub enum AudioBufferSizeMode {
     Auto,

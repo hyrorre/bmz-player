@@ -10,14 +10,17 @@ use std::path::{Path, PathBuf};
 use bmz_render::skin::{SkinDocument, SkinFilepathDef, SkinOffsetDef, SkinPropertyDef};
 use bmz_render::skin_offset::SKIN_OFFSET_BAR_LINE;
 use bmz_render::ui::EguiFrame;
-use egui::ViewportId;
+use egui::{NumExt, ViewportId};
 use winit::event::WindowEvent;
 use winit::window::Window;
 
-use crate::config::app_config::{AppConfig, RendererBackend, WindowMode};
+use crate::config::app_config::{
+    AppConfig, AudioBackend, AudioBufferSizeMode, RendererBackend, WindowMode,
+};
 use crate::config::profile_config::{
     ProfileConfig, SkinConfig, SkinHistoryEntryConfig, SkinOffsetConfig,
 };
+use crate::songs_cmd::{add_song_root_entry, remove_song_root_entry};
 
 /// スキンが宣言する設定可能項目の定義 (1 シーン分)。
 ///
@@ -177,6 +180,8 @@ pub struct EguiOutput {
     /// デバッグ表示パネルの現在の開閉状態。
     /// profile config の `ui.show_fps` へ同期し、終了時に永続化される。
     pub debug_panel_visible: bool,
+    /// 有効な曲ルートをライブラリ DB へ再スキャンする要求。
+    pub trigger_song_rescan: bool,
 }
 
 /// egui の状態管理とフレーム構築を担うレイヤ。
@@ -191,6 +196,10 @@ pub struct EguiLayer {
     show_settings: bool,
     /// スキン設定パネルの開閉状態。
     show_skin: bool,
+    /// 本体設定パネル: 曲フォルダ追加用の入力欄。
+    settings_new_root_path: String,
+    /// 本体設定パネル: 曲フォルダ追加の直近エラー。
+    settings_add_root_error: String,
 }
 
 impl EguiLayer {
@@ -207,7 +216,16 @@ impl EguiLayer {
             None,
             None,
         );
-        Self { ctx, state, visible: false, show_debug, show_settings: false, show_skin: false }
+        Self {
+            ctx,
+            state,
+            visible: false,
+            show_debug,
+            show_settings: false,
+            show_skin: false,
+            settings_new_root_path: String::new(),
+            settings_add_root_error: String::new(),
+        }
     }
 
     /// メニュー表示状態を反転する (F5)。
@@ -237,7 +255,6 @@ impl EguiLayer {
     ) -> EguiOutput {
         let raw_input = self.state.take_egui_input(window);
         let ctx = self.ctx.clone();
-        let visible = self.visible;
         let show_debug = &mut self.show_debug;
         let show_settings = &mut self.show_settings;
         let show_skin = &mut self.show_skin;
@@ -245,14 +262,22 @@ impl EguiLayer {
         let mut save_profile_config = false;
         let mut reset_skin_config = false;
         let mut skin_config_changed = false;
+        let mut trigger_song_rescan = false;
+        let visible_flag = &mut self.visible;
         let full_output = ctx.run_ui(raw_input, |ui| {
-            if visible {
+            if *visible_flag {
                 let ctx = ui.ctx();
-                build_menu(ctx, show_debug, show_settings, show_skin);
+                build_menu(ctx, visible_flag, show_debug, show_settings, show_skin);
                 build_debug_panel(ctx, show_debug, info);
-                if build_settings_panel(ctx, show_settings, app_config) {
-                    save_app_config = true;
-                }
+                let settings_actions = build_settings_panel(
+                    ctx,
+                    show_settings,
+                    app_config,
+                    &mut self.settings_new_root_path,
+                    &mut self.settings_add_root_error,
+                );
+                save_app_config |= settings_actions.save;
+                trigger_song_rescan |= settings_actions.rescan;
                 let skin_actions = build_skin_panel(
                     ctx,
                     show_skin,
@@ -278,6 +303,7 @@ impl EguiLayer {
             reset_skin_config,
             skin_config_changed,
             debug_panel_visible: *show_debug,
+            trigger_song_rescan,
         }
     }
 }
@@ -308,86 +334,433 @@ fn install_japanese_font(ctx: &egui::Context) {
 /// 各サブパネルの開閉を切り替えるメインメニューハブ。
 fn build_menu(
     ctx: &egui::Context,
+    visible: &mut bool,
     show_debug: &mut bool,
     show_settings: &mut bool,
     show_skin: &mut bool,
 ) {
-    egui::Window::new("BMZ メニュー").default_pos(egui::pos2(16.0, 16.0)).show(ctx, |ui| {
-        ui.label("F5 でこのメニューを開閉します。");
-        ui.separator();
-        ui.checkbox(show_debug, "デバッグ表示");
-        ui.checkbox(show_settings, "本体設定");
-        ui.checkbox(show_skin, "スキン設定");
-    });
+    egui::Window::new("BMZ メニュー")
+        .open(visible)
+        .constrain_to(ctx.content_rect().shrink(PANEL_VIEWPORT_MARGIN))
+        .default_pos(egui::pos2(16.0, 16.0))
+        .show(ctx, |ui| {
+            ui.label("F5 でこのメニューを開閉します。");
+            ui.separator();
+            ui.checkbox(show_debug, "デバッグ表示");
+            ui.checkbox(show_settings, "本体設定");
+            ui.checkbox(show_skin, "スキン設定");
+        });
+}
+
+/// Window 内コンテンツを全体スクロール可能にする。
+fn scrollable_window_content<R>(
+    ui: &mut egui::Ui,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    // レイアウト確定前に inner が膨らむのを防ぐため、
+    // 利用可能矩形から ScrollArea 高さを明示的に制限する。
+    let available = ui.available_rect_before_wrap();
+    let max_height = available.height().max(64.0);
+    egui::ScrollArea::vertical()
+        .max_height(max_height)
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.set_width(available.width());
+            add_contents(ui)
+        })
+        .inner
+}
+
+/// パネル Window の default / max サイズと初期位置をビューポート内に収める。
+const PANEL_VIEWPORT_MARGIN: f32 = 16.0;
+
+/// Window の outer サイズ = inner + chrome。egui `Window` の resize margin 計算に合わせる。
+fn panel_window_chrome(ctx: &egui::Context) -> egui::Vec2 {
+    let style = ctx.global_style();
+    let frame = egui::Frame::window(&style);
+    let title_bar_inner_height = ctx
+        .fonts_mut(|fonts| fonts.row_height(&style.text_styles[&egui::TextStyle::Heading]))
+        .at_least(style.spacing.interact_size.y)
+        + frame.inner_margin.sum().y;
+    let title_content_spacing = frame.stroke.width;
+    let frame_margin = frame.total_margin().sum();
+    egui::vec2(frame_margin.x, frame_margin.y + title_bar_inner_height + title_content_spacing)
+}
+
+fn clamp_panel_layout(
+    constrain: egui::Rect,
+    chrome: egui::Vec2,
+    preferred_width: f32,
+    preferred_height: f32,
+    preferred_pos: egui::Pos2,
+) -> (egui::Vec2, egui::Vec2, egui::Pos2) {
+    let max_inner = egui::vec2(
+        (constrain.width() - chrome.x).max(200.0),
+        (constrain.height() - chrome.y).max(80.0),
+    );
+    let default_inner =
+        egui::vec2(preferred_width.min(max_inner.x), preferred_height.min(max_inner.y));
+    let outer = default_inner + chrome;
+    let max_x = (constrain.max.x - outer.x).max(constrain.min.x);
+    let max_y = (constrain.max.y - outer.y).max(constrain.min.y);
+    let default_pos = egui::pos2(
+        preferred_pos.x.clamp(constrain.min.x, max_x),
+        preferred_pos.y.clamp(constrain.min.y, max_y),
+    );
+    (default_inner, max_inner, default_pos)
+}
+
+/// 既存 Window の outer rect が constrain からはみ出していれば位置を補正する。
+fn panel_window_pos(
+    ctx: &egui::Context,
+    title: &'static str,
+    constrain: egui::Rect,
+    default_pos: egui::Pos2,
+) -> egui::Pos2 {
+    let id = egui::Id::new(title);
+    let Some(rect) = ctx.memory(|memory| memory.area_rect(id)) else {
+        return default_pos;
+    };
+    constrain_window_rect_to_area(rect, constrain).min
+}
+
+/// egui `Context::constrain_window_rect_to_area` と同等 (crate 外からは非公開のため)。
+fn constrain_window_rect_to_area(window: egui::Rect, area: egui::Rect) -> egui::Rect {
+    let mut pos = window.min;
+    let margin_x = (window.width() - area.width()).at_least(0.0);
+    let margin_y = (window.height() - area.height()).at_least(0.0);
+    pos.x = pos.x.at_most(area.right() + margin_x - window.width());
+    pos.x = pos.x.at_least(area.left() - margin_x);
+    pos.y = pos.y.at_most(area.bottom() + margin_y - window.height());
+    pos.y = pos.y.at_least(area.top() - margin_y);
+    egui::Rect::from_min_size(pos, window.size())
+}
+
+fn sized_panel_window<'open>(
+    title: &'static str,
+    ctx: &egui::Context,
+    open: &'open mut bool,
+    preferred_width: f32,
+    preferred_height: f32,
+    default_pos: egui::Pos2,
+) -> egui::Window<'open> {
+    let constrain = ctx.content_rect().shrink(PANEL_VIEWPORT_MARGIN);
+    let chrome = panel_window_chrome(ctx);
+    let (default_inner, max_inner, clamped_default_pos) =
+        clamp_panel_layout(constrain, chrome, preferred_width, preferred_height, default_pos);
+    let pos = panel_window_pos(ctx, title, constrain, clamped_default_pos);
+    egui::Window::new(title)
+        .open(open)
+        .resizable(true)
+        .constrain_to(constrain)
+        .current_pos(pos)
+        .default_size(default_inner)
+        .max_size(max_inner)
+        .min_size([280.0, 80.0])
 }
 
 /// FPS / フレーム時間 / シーン / 解像度を表示するデバッグパネル。
 fn build_debug_panel(ctx: &egui::Context, open: &mut bool, info: &DebugInfo) {
-    egui::Window::new("デバッグ表示").open(open).default_pos(egui::pos2(16.0, 140.0)).show(
+    sized_panel_window("デバッグ表示", ctx, open, 320.0, 200.0, egui::pos2(16.0, 140.0)).show(
         ctx,
         |ui| {
-            // egui が算出した平滑化フレーム時間から FPS を求める。
-            let dt = ctx.input(|i| i.stable_dt);
-            let fps = if dt > 0.0 { 1.0 / dt } else { 0.0 };
-            egui::Grid::new("debug_grid").num_columns(2).show(ui, |ui| {
-                ui.label("FPS");
-                ui.label(format!("{fps:.1}"));
-                ui.end_row();
-                ui.label("フレーム時間");
-                ui.label(format!("{:.2} ms", dt * 1000.0));
-                ui.end_row();
-                ui.label("シーン");
-                ui.label(info.scene);
-                ui.end_row();
-                ui.label("解像度");
-                ui.label(format!("{} x {}", info.width, info.height));
-                ui.end_row();
+            scrollable_window_content(ui, |ui| {
+                let dt = ctx.input(|i| i.stable_dt);
+                let fps = if dt > 0.0 { 1.0 / dt } else { 0.0 };
+                egui::Grid::new("debug_grid").num_columns(2).show(ui, |ui| {
+                    ui.label("FPS");
+                    ui.label(format!("{fps:.1}"));
+                    ui.end_row();
+                    ui.label("フレーム時間");
+                    ui.label(format!("{:.2} ms", dt * 1000.0));
+                    ui.end_row();
+                    ui.label("シーン");
+                    ui.label(info.scene);
+                    ui.end_row();
+                    ui.label("解像度");
+                    ui.label(format!("{} x {}", info.width, info.height));
+                    ui.end_row();
+                });
             });
         },
     );
 }
 
-/// `AppConfig` の映像設定を編集する本体設定パネル。
-///
-/// 戻り値 `true` は「保存」ボタンが押されたことを表す。設定値は
-/// `config` を直接編集し、保存はアプリ側 (`run_egui_frame`) が行う。
-fn build_settings_panel(ctx: &egui::Context, open: &mut bool, config: &mut AppConfig) -> bool {
+/// 本体設定パネルからのアクション要求。
+struct SettingsPanelActions {
+    save: bool,
+    rescan: bool,
+}
+
+/// `AppConfig` を編集する本体設定パネル。
+fn build_settings_panel(
+    ctx: &egui::Context,
+    open: &mut bool,
+    config: &mut AppConfig,
+    new_root_path: &mut String,
+    add_root_error: &mut String,
+) -> SettingsPanelActions {
     let mut save_clicked = false;
-    egui::Window::new("本体設定").open(open).default_pos(egui::pos2(16.0, 320.0)).show(ctx, |ui| {
-        ui.heading("映像");
-        egui::ComboBox::from_label("ウィンドウモード")
-            .selected_text(window_mode_label(&config.video.mode))
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut config.video.mode, WindowMode::Windowed, "ウィンドウ");
-                ui.selectable_value(
-                    &mut config.video.mode,
-                    WindowMode::BorderlessFullscreen,
-                    "ボーダレスフルスクリーン",
-                );
-                ui.selectable_value(
-                    &mut config.video.mode,
-                    WindowMode::ExclusiveFullscreen,
-                    "排他フルスクリーン",
-                );
+    let mut rescan_clicked = false;
+    sized_panel_window("本体設定", ctx, open, 440.0, 520.0, egui::pos2(16.0, 320.0)).show(
+        ctx,
+        |ui| {
+            scrollable_window_content(ui, |ui| {
+                egui::CollapsingHeader::new("曲フォルダ (BMS)")
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        let mut remove_index = None;
+                        for (index, root) in config.songs.roots.iter_mut().enumerate() {
+                            ui.push_id(index, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(&root.path);
+                                    if ui.button("削除").clicked() {
+                                        remove_index = Some(index);
+                                    }
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.checkbox(&mut root.enabled, "有効");
+                                    ui.checkbox(&mut root.recursive, "再帰スキャン");
+                                });
+                                ui.separator();
+                            });
+                        }
+                        if let Some(index) = remove_index {
+                            remove_song_root_entry(&mut config.songs.roots, index);
+                        }
+                        if config.songs.roots.is_empty() {
+                            ui.label("登録された曲フォルダはありません。");
+                        }
+                        ui.horizontal(|ui| {
+                            ui.label("パス");
+                            ui.add(
+                                egui::TextEdit::singleline(new_root_path)
+                                    .desired_width(240.0)
+                                    .hint_text("/path/to/bms"),
+                            );
+                        });
+                        ui.horizontal(|ui| {
+                            if ui.button("フォルダを選択…").clicked()
+                                && let Some(folder) = rfd::FileDialog::new().pick_folder()
+                            {
+                                *new_root_path = folder.to_string_lossy().into_owned();
+                                add_root_error.clear();
+                            }
+                            if ui.button("追加").clicked() {
+                                let path = new_root_path.trim();
+                                if path.is_empty() {
+                                    *add_root_error =
+                                        "パスを入力するかフォルダを選択してください。".to_string();
+                                } else {
+                                    match add_song_root_entry(
+                                        &mut config.songs.roots,
+                                        path,
+                                        true,
+                                        true,
+                                    ) {
+                                        Ok(()) => {
+                                            new_root_path.clear();
+                                            add_root_error.clear();
+                                        }
+                                        Err(error) => *add_root_error = error.to_string(),
+                                    }
+                                }
+                            }
+                        });
+                        if !add_root_error.is_empty() {
+                            ui.colored_label(egui::Color32::RED, add_root_error.as_str());
+                        }
+                        if ui.button("ライブラリを再スキャン").clicked() {
+                            rescan_clicked = true;
+                        }
+                        ui.label("再スキャンは有効なルートを対象に library.db を更新します。");
+                    });
+
+                egui::CollapsingHeader::new("スキャン").show(ui, |ui| {
+                    ui.checkbox(&mut config.scan.follow_symlinks, "シンボリックリンクを辿る");
+                    ui.checkbox(&mut config.scan.skip_hidden, "隠しファイル / フォルダをスキップ");
+                    ui.checkbox(
+                        &mut config.scan.auto_rescan_on_startup,
+                        "起動時に自動再スキャン",
+                    );
+                    ui.checkbox(
+                        &mut config.scan.rescan_missing_files,
+                        "存在しないファイルを DB から除去 (未実装)",
+                    );
+                });
+
+                egui::CollapsingHeader::new("音声").show(ui, |ui| {
+                    egui::ComboBox::from_label("バックエンド")
+                        .selected_text(audio_backend_label(&config.audio.backend))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut config.audio.backend,
+                                AudioBackend::Auto,
+                                "自動選択",
+                            );
+                            ui.selectable_value(
+                                &mut config.audio.backend,
+                                AudioBackend::CoreAudio,
+                                "Core Audio",
+                            );
+                            ui.selectable_value(
+                                &mut config.audio.backend,
+                                AudioBackend::Wasapi,
+                                "WASAPI",
+                            );
+                            ui.selectable_value(
+                                &mut config.audio.backend,
+                                AudioBackend::Asio,
+                                "ASIO",
+                            );
+                            ui.selectable_value(
+                                &mut config.audio.backend,
+                                AudioBackend::Alsa,
+                                "ALSA",
+                            );
+                            ui.selectable_value(
+                                &mut config.audio.backend,
+                                AudioBackend::Pulse,
+                                "PulseAudio",
+                            );
+                        });
+                    ui.add(
+                        egui::Slider::new(&mut config.audio.sample_rate, 44_100..=96_000)
+                            .text("サンプルレート"),
+                    );
+                    egui::ComboBox::from_label("バッファサイズモード")
+                        .selected_text(audio_buffer_size_mode_label(&config.audio.buffer_size_mode))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut config.audio.buffer_size_mode,
+                                AudioBufferSizeMode::Auto,
+                                "自動",
+                            );
+                            ui.selectable_value(
+                                &mut config.audio.buffer_size_mode,
+                                AudioBufferSizeMode::Fixed,
+                                "固定",
+                            );
+                        });
+                    ui.add(
+                        egui::Slider::new(&mut config.audio.buffer_size, 64..=4096)
+                            .text("バッファサイズ (フレーム)"),
+                    );
+                    ui.checkbox(&mut config.audio.exclusive_mode, "排他モード");
+                    ui.add_enabled_ui(false, |ui| {
+                        ui.label(format!(
+                            "出力デバイス (未実装): {}",
+                            if config.audio.output_device.is_empty() {
+                                "(デフォルト)"
+                            } else {
+                                config.audio.output_device.as_str()
+                            }
+                        ));
+                        ui.label(format!(
+                            "ASIO ドライバ (未実装): {}",
+                            if config.audio.asio_driver.is_empty() {
+                                "(未指定)"
+                            } else {
+                                config.audio.asio_driver.as_str()
+                            }
+                        ));
+                    });
+                    ui.label("音声設定は次回起動時に反映されます。");
+                });
+
+                egui::CollapsingHeader::new("映像").show(ui, |ui| {
+                    egui::ComboBox::from_label("ウィンドウモード")
+                        .selected_text(window_mode_label(&config.video.mode))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut config.video.mode,
+                                WindowMode::Windowed,
+                                "ウィンドウ",
+                            );
+                            ui.selectable_value(
+                                &mut config.video.mode,
+                                WindowMode::BorderlessFullscreen,
+                                "ボーダレスフルスクリーン",
+                            );
+                            ui.selectable_value(
+                                &mut config.video.mode,
+                                WindowMode::ExclusiveFullscreen,
+                                "排他フルスクリーン",
+                            );
+                        });
+                    ui.add(
+                        egui::Slider::new(&mut config.video.width, 640..=3840).text("幅 (px)"),
+                    );
+                    ui.add(
+                        egui::Slider::new(&mut config.video.height, 480..=2160).text("高さ (px)"),
+                    );
+                    ui.checkbox(&mut config.video.vsync, "垂直同期 (VSync)");
+                    ui.add(
+                        egui::Slider::new(&mut config.video.target_fps, 30..=480).text("目標 FPS"),
+                    );
+                    ui.add(
+                        egui::Slider::new(&mut config.video.frame_limit_in_background, 1..=120)
+                            .text("バックグラウンド FPS 上限"),
+                    );
+                    egui::ComboBox::from_label("レンダリングバックエンド")
+                        .selected_text(renderer_backend_label(&config.video.renderer))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut config.video.renderer,
+                                RendererBackend::Auto,
+                                "自動選択",
+                            );
+                            ui.selectable_value(
+                                &mut config.video.renderer,
+                                RendererBackend::Vulkan,
+                                "Vulkan",
+                            );
+                            ui.selectable_value(
+                                &mut config.video.renderer,
+                                RendererBackend::Metal,
+                                "Metal",
+                            );
+                            ui.selectable_value(
+                                &mut config.video.renderer,
+                                RendererBackend::Dx12,
+                                "DirectX 12",
+                            );
+                            ui.selectable_value(
+                                &mut config.video.renderer,
+                                RendererBackend::Gl,
+                                "OpenGL",
+                            );
+                        });
+                    ui.label(
+                        "VSync / ウィンドウモードは即時反映。幅 / 高さ / 目標 FPS / レンダリングバックエンドは次回起動時に反映されます。",
+                    );
+                });
+
+                ui.separator();
+                if ui.button("保存").clicked() {
+                    save_clicked = true;
+                }
             });
-        ui.checkbox(&mut config.video.vsync, "垂直同期 (VSync)");
-        ui.add(egui::Slider::new(&mut config.video.target_fps, 30..=480).text("目標 FPS"));
-        egui::ComboBox::from_label("レンダリングバックエンド")
-            .selected_text(renderer_backend_label(&config.video.renderer))
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut config.video.renderer, RendererBackend::Auto, "自動選択");
-                ui.selectable_value(&mut config.video.renderer, RendererBackend::Vulkan, "Vulkan");
-                ui.selectable_value(&mut config.video.renderer, RendererBackend::Metal, "Metal");
-                ui.selectable_value(&mut config.video.renderer, RendererBackend::Dx12, "DirectX 12");
-                ui.selectable_value(&mut config.video.renderer, RendererBackend::Gl, "OpenGL");
-            });
-        ui.separator();
-        ui.label("VSync / ウィンドウモードは即時反映。目標 FPS / レンダリングバックエンドは次回起動時に反映されます。");
-        if ui.button("保存").clicked() {
-            save_clicked = true;
-        }
-    });
-    save_clicked
+        });
+    SettingsPanelActions { save: save_clicked, rescan: rescan_clicked }
+}
+
+fn audio_backend_label(backend: &AudioBackend) -> &'static str {
+    match backend {
+        AudioBackend::Auto => "自動選択",
+        AudioBackend::Wasapi => "WASAPI",
+        AudioBackend::Asio => "ASIO",
+        AudioBackend::CoreAudio => "Core Audio",
+        AudioBackend::Alsa => "ALSA",
+        AudioBackend::Pulse => "PulseAudio",
+    }
+}
+
+fn audio_buffer_size_mode_label(mode: &AudioBufferSizeMode) -> &'static str {
+    match mode {
+        AudioBufferSizeMode::Auto => "自動",
+        AudioBufferSizeMode::Fixed => "固定",
+    }
 }
 
 fn window_mode_label(mode: &WindowMode) -> &'static str {
@@ -571,9 +944,10 @@ fn build_skin_panel(
     let mut save_clicked = false;
     let mut reset_clicked = false;
     let mut changed = false;
-    egui::Window::new("スキン設定").open(open).default_pos(egui::pos2(16.0, 480.0)).show(
+    sized_panel_window("スキン設定", ctx, open, 440.0, 560.0, egui::pos2(16.0, 480.0)).show(
         ctx,
         |ui| {
+            scrollable_window_content(ui, |ui| {
             ui.label("各画面のスキン。空欄なら内蔵描画 / デフォルトスキンを使用します。");
             egui::Grid::new("skin_grid").num_columns(2).show(ui, |ui| {
                 changed |=
@@ -610,39 +984,37 @@ fn build_skin_panel(
             });
             ui.separator();
             ui.label("スキンオフセット (id ごとの位置 / サイズ / 回転 / 不透明度の補正)");
-            egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
-                let mut remove_index = None;
-                for (index, offset) in skin.offsets.iter_mut().enumerate() {
-                    ui.push_id(index, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label("ID");
-                            changed |= ui.add(egui::DragValue::new(&mut offset.id)).changed();
-                            if ui.button("削除").clicked() {
-                                remove_index = Some(index);
-                            }
-                        });
-                        ui.horizontal(|ui| {
-                            changed |=
-                                ui.add(egui::DragValue::new(&mut offset.x).prefix("x:")).changed();
-                            changed |=
-                                ui.add(egui::DragValue::new(&mut offset.y).prefix("y:")).changed();
-                            changed |=
-                                ui.add(egui::DragValue::new(&mut offset.w).prefix("w:")).changed();
-                            changed |=
-                                ui.add(egui::DragValue::new(&mut offset.h).prefix("h:")).changed();
-                            changed |=
-                                ui.add(egui::DragValue::new(&mut offset.r).prefix("r:")).changed();
-                            changed |=
-                                ui.add(egui::DragValue::new(&mut offset.a).prefix("a:")).changed();
-                        });
-                        ui.separator();
+            let mut remove_index = None;
+            for (index, offset) in skin.offsets.iter_mut().enumerate() {
+                ui.push_id(index, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("ID");
+                        changed |= ui.add(egui::DragValue::new(&mut offset.id)).changed();
+                        if ui.button("削除").clicked() {
+                            remove_index = Some(index);
+                        }
                     });
-                }
-                if let Some(index) = remove_index {
-                    skin.offsets.remove(index);
-                    changed = true;
-                }
-            });
+                    ui.horizontal(|ui| {
+                        changed |=
+                            ui.add(egui::DragValue::new(&mut offset.x).prefix("x:")).changed();
+                        changed |=
+                            ui.add(egui::DragValue::new(&mut offset.y).prefix("y:")).changed();
+                        changed |=
+                            ui.add(egui::DragValue::new(&mut offset.w).prefix("w:")).changed();
+                        changed |=
+                            ui.add(egui::DragValue::new(&mut offset.h).prefix("h:")).changed();
+                        changed |=
+                            ui.add(egui::DragValue::new(&mut offset.r).prefix("r:")).changed();
+                        changed |=
+                            ui.add(egui::DragValue::new(&mut offset.a).prefix("a:")).changed();
+                    });
+                    ui.separator();
+                });
+            }
+            if let Some(index) = remove_index {
+                skin.offsets.remove(index);
+                changed = true;
+            }
             if ui.button("オフセット追加").clicked() {
                 skin.offsets.push(SkinOffsetConfig::default());
                 changed = true;
@@ -656,79 +1028,72 @@ fn build_skin_panel(
             let play10_root = skin_root_path(&skin.play10);
             let play14_root = skin_root_path(&skin.play14);
             let result_root = skin_root_path(&skin.result);
-            // オプション数が多いとウィンドウが画面をはみ出すため、この区画は
-            // スクロール可能にする。
-            egui::ScrollArea::vertical().id_salt("skin_defs_scroll").max_height(280.0).show(
+            changed |= build_scene_skin_defs(
                 ui,
-                |ui| {
-                    changed |= build_scene_skin_defs(
-                        ui,
-                        "選曲スキン",
-                        &skin_meta.select,
-                        select_root.as_deref(),
-                        &mut skin.select_options,
-                        &mut skin.select_files,
-                        &mut skin.offsets,
-                    );
-                    changed |= build_scene_skin_defs(
-                        ui,
-                        "決定スキン",
-                        &skin_meta.decide,
-                        decide_root.as_deref(),
-                        &mut skin.decide_options,
-                        &mut skin.decide_files,
-                        &mut skin.offsets,
-                    );
-                    changed |= build_scene_skin_defs(
-                        ui,
-                        "プレイスキン (5K)",
-                        &skin_meta.play5,
-                        play5_root.as_deref(),
-                        &mut skin.play5_options,
-                        &mut skin.play5_files,
-                        &mut skin.offsets,
-                    );
-                    changed |= build_scene_skin_defs(
-                        ui,
-                        "プレイスキン (7K)",
-                        &skin_meta.play7,
-                        play7_root.as_deref(),
-                        &mut skin.play7_options,
-                        &mut skin.play7_files,
-                        &mut skin.offsets,
-                    );
-                    changed |= build_scene_skin_defs(
-                        ui,
-                        "プレイスキン (10K)",
-                        &skin_meta.play10,
-                        play10_root.as_deref(),
-                        &mut skin.play10_options,
-                        &mut skin.play10_files,
-                        &mut skin.offsets,
-                    );
-                    changed |= build_scene_skin_defs(
-                        ui,
-                        "プレイスキン (14K)",
-                        &skin_meta.play14,
-                        play14_root.as_deref(),
-                        &mut skin.play14_options,
-                        &mut skin.play14_files,
-                        &mut skin.offsets,
-                    );
-                    changed |= build_scene_skin_defs(
-                        ui,
-                        "リザルトスキン",
-                        &skin_meta.result,
-                        result_root.as_deref(),
-                        &mut skin.result_options,
-                        &mut skin.result_files,
-                        &mut skin.offsets,
-                    );
-                },
+                "選曲スキン",
+                &skin_meta.select,
+                select_root.as_deref(),
+                &mut skin.select_options,
+                &mut skin.select_files,
+                &mut skin.offsets,
+            );
+            changed |= build_scene_skin_defs(
+                ui,
+                "決定スキン",
+                &skin_meta.decide,
+                decide_root.as_deref(),
+                &mut skin.decide_options,
+                &mut skin.decide_files,
+                &mut skin.offsets,
+            );
+            changed |= build_scene_skin_defs(
+                ui,
+                "プレイスキン (5K)",
+                &skin_meta.play5,
+                play5_root.as_deref(),
+                &mut skin.play5_options,
+                &mut skin.play5_files,
+                &mut skin.offsets,
+            );
+            changed |= build_scene_skin_defs(
+                ui,
+                "プレイスキン (7K)",
+                &skin_meta.play7,
+                play7_root.as_deref(),
+                &mut skin.play7_options,
+                &mut skin.play7_files,
+                &mut skin.offsets,
+            );
+            changed |= build_scene_skin_defs(
+                ui,
+                "プレイスキン (10K)",
+                &skin_meta.play10,
+                play10_root.as_deref(),
+                &mut skin.play10_options,
+                &mut skin.play10_files,
+                &mut skin.offsets,
+            );
+            changed |= build_scene_skin_defs(
+                ui,
+                "プレイスキン (14K)",
+                &skin_meta.play14,
+                play14_root.as_deref(),
+                &mut skin.play14_options,
+                &mut skin.play14_files,
+                &mut skin.offsets,
+            );
+            changed |= build_scene_skin_defs(
+                ui,
+                "リザルトスキン",
+                &skin_meta.result,
+                result_root.as_deref(),
+                &mut skin.result_options,
+                &mut skin.result_files,
+                &mut skin.offsets,
             );
             ui.separator();
             ui.label(
-                "「保存」で profile.toml へ書き出し、「リセット」で保存済みの設定へ戻します。",
+                "「保存」で profile.toml へ書き出し。「リセット」で保存済みの設定へ戻します。オプションの「デフォルトに戻す」は保存までディスクへ書きません。",
             );
             ui.horizontal(|ui| {
                 if ui.button("保存").clicked() {
@@ -737,6 +1102,7 @@ fn build_skin_panel(
                 if ui.button("リセット").clicked() {
                     reset_clicked = true;
                 }
+            });
             });
         },
     );
@@ -844,8 +1210,30 @@ fn build_scene_skin_defs(
                 });
             }
         }
+        if !defs.is_empty() && ui.button("デフォルトに戻す").clicked() {
+            changed |= reset_scene_skin_to_defaults(defs, skin_root, options, files, offsets);
+        }
     });
     changed
+}
+
+/// 1 シーン分の options / files / 当該 offset id をスキン定義の factory default へ戻す。
+fn reset_scene_skin_to_defaults(
+    defs: &SceneSkinDefs,
+    skin_root: Option<&Path>,
+    options: &mut BTreeMap<String, String>,
+    files: &mut BTreeMap<String, String>,
+    offsets: &mut Vec<SkinOffsetConfig>,
+) -> bool {
+    if defs.is_empty() {
+        return false;
+    }
+    options.clear();
+    files.clear();
+    let scene_offset_ids: std::collections::HashSet<i32> =
+        defs.offset.iter().map(|offset| offset.id).collect();
+    offsets.retain(|offset| !scene_offset_ids.contains(&offset.id));
+    fill_missing_skin_defaults(defs, skin_root, options, files)
 }
 
 fn fill_missing_skin_defaults(
@@ -1007,6 +1395,39 @@ mod tests {
     }
 
     #[test]
+    fn clamp_panel_layout_fits_high_dpi_1920x1080_logical_viewport() {
+        // 1920x1080 物理ウィンドウ @ 2x → egui 論理 960x540 相当。
+        let constrain = egui::Rect::from_min_size(egui::pos2(16.0, 16.0), egui::vec2(928.0, 508.0));
+        // egui 0.34 既定 style 付近の chrome 高さ (frame + title bar)。
+        let chrome = egui::vec2(12.0, 58.0);
+        let (default_inner, max_inner, pos) =
+            clamp_panel_layout(constrain, chrome, 440.0, 560.0, egui::pos2(16.0, 480.0));
+
+        let outer = default_inner + chrome;
+        assert!(outer.x <= constrain.width() + 0.01);
+        assert!(outer.y <= constrain.height() + 0.01);
+        assert!(pos.x + outer.x <= constrain.max.x + 0.01);
+        assert!(pos.y + outer.y <= constrain.max.y + 0.01);
+        assert_eq!(pos, egui::pos2(16.0, 16.0));
+        assert!(default_inner.y < 560.0);
+        assert_eq!(max_inner, egui::vec2(916.0, 450.0));
+    }
+
+    #[test]
+    fn clamp_panel_layout_keeps_preferred_size_on_large_viewport() {
+        let constrain =
+            egui::Rect::from_min_size(egui::pos2(16.0, 16.0), egui::vec2(1888.0, 1048.0));
+        let chrome = egui::vec2(12.0, 58.0);
+        let (default_inner, max_inner, pos) =
+            clamp_panel_layout(constrain, chrome, 440.0, 560.0, egui::pos2(16.0, 480.0));
+
+        assert_eq!(default_inner, egui::vec2(440.0, 560.0));
+        assert_eq!(max_inner, egui::vec2(1876.0, 990.0));
+        // outer 高さ 618 のため y=480 では下端がはみ出す → 446 へクランプ。
+        assert_eq!(pos, egui::pos2(16.0, 446.0));
+    }
+
+    #[test]
     fn glob_candidates_lists_files_matching_simple_pattern() {
         let root = unique_test_dir("bmz-ui-glob");
         fs::create_dir_all(root.join("parts")).unwrap();
@@ -1147,6 +1568,57 @@ mod tests {
 
         assert_eq!(defs.offset.iter().filter(|offset| offset.id == 10).count(), 1);
         assert_eq!(defs.offset.len(), 5);
+    }
+
+    #[test]
+    fn reset_scene_skin_to_defaults_clears_saved_values_and_restores_factory_defaults() {
+        let root = unique_test_dir("bmz-ui-reset-scene");
+        fs::create_dir_all(root.join("notes")).unwrap();
+        fs::write(root.join("notes/aaa.png"), []).unwrap();
+        fs::write(root.join("notes/default.png"), []).unwrap();
+        let defs = SceneSkinDefs {
+            property: vec![SkinPropertyDef {
+                category: String::new(),
+                name: "Lane".to_string(),
+                item: vec![
+                    bmz_render::skin::SkinPropertyItemDef { name: "Off".to_string(), op: 0 },
+                    bmz_render::skin::SkinPropertyItemDef { name: "On".to_string(), op: 1 },
+                ],
+                def: "On".to_string(),
+            }],
+            filepath: vec![SkinFilepathDef {
+                category: String::new(),
+                name: "Notes".to_string(),
+                path: "notes/*.png".to_string(),
+                def: "default".to_string(),
+            }],
+            offset: vec![SkinOffsetDef {
+                category: "test".to_string(),
+                name: "Judge".to_string(),
+                id: 32,
+                x: true,
+                y: true,
+                w: false,
+                h: false,
+                r: false,
+                a: false,
+            }],
+        };
+        let mut options = BTreeMap::from([("Lane".to_string(), "Off".to_string())]);
+        let mut files = BTreeMap::from([("Notes".to_string(), "notes/aaa.png".to_string())]);
+        let mut offsets = vec![SkinOffsetConfig { id: 32, x: 99, ..Default::default() }];
+
+        assert!(reset_scene_skin_to_defaults(
+            &defs,
+            Some(&root),
+            &mut options,
+            &mut files,
+            &mut offsets
+        ));
+
+        assert_eq!(options.get("Lane").map(String::as_str), Some("On"));
+        assert_eq!(files.get("Notes").map(String::as_str), Some("notes/default.png"));
+        assert!(offsets.is_empty());
     }
 
     #[test]

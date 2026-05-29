@@ -2250,6 +2250,9 @@ impl WinitApp {
                 Err(error) => tracing::error!(%error, "failed to save app config"),
             }
         }
+        if output.trigger_song_rescan {
+            self.rescan_and_reload();
+        }
         if output.save_profile_config {
             match save_profile_config(
                 &self.boot.profile_paths.profile_toml,

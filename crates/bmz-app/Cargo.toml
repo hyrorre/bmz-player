@@ -16,6 +16,7 @@ winit.workspace = true
 gilrs.workspace = true
 egui.workspace = true
 egui-winit.workspace = true
+rfd.workspace = true
 
 rayon.workspace = true
 tokio.workspace = true

@@ -51,3 +51,4 @@ reqwest = { version = "0.12", features = ["json"] }
 rayon = "1"
 font-kit = "0.14"
 ab_glyph = "0.2.32"
+rfd = "0.15"
