@@ -27,8 +27,9 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::monitor::{MonitorHandle, VideoModeHandle};
 use winit::window::{Fullscreen, Window, WindowAttributes, WindowId};
 
-use crate::audio::AppAudioOutput;
 use crate::bootstrap::{self, BootstrappedApp};
+use crate::audio::AppAudioOutput;
+use crate::chart_preview::SelectChartPreview;
 use crate::cli::{
     AUTOPLAY_ON_START_ARG, AppOptions, BOOT_PLAY_SAMPLE_ARG, SMOKE_EXIT_AFTER_FRAMES_ARG,
     SMOKE_EXIT_ON_RESULT_ARG,
@@ -207,6 +208,10 @@ struct WinitApp {
     /// 選曲 `#BANNER` のロード済みキャッシュキー (`folder|file`)。
     select_banner_source: Option<String>,
     select_banner_loaded: bool,
+    /// 選曲 `#PREVIEW` のロード済みキャッシュキー (`folder|file`)。
+    select_preview_source: Option<String>,
+    select_preview_playing: bool,
+    select_preview: Option<SelectChartPreview>,
     /// プレイ `#BACKBMP` のロード済みキャッシュキー。
     play_backbmp_source: Option<String>,
     play_backbmp_loaded: bool,
@@ -431,6 +436,8 @@ impl WinitApp {
             );
             crate::system_sound_manager::SystemSoundManager::new(audio.engine(), &selection)
         });
+        let select_preview =
+            system_audio.as_ref().map(|audio| SelectChartPreview::new(audio.engine()));
 
         let mut app = Self {
             boot,
@@ -489,6 +496,9 @@ impl WinitApp {
             select_stage_loaded: false,
             select_banner_source: None,
             select_banner_loaded: false,
+            select_preview_source: None,
+            select_preview_playing: false,
+            select_preview,
             play_backbmp_source: None,
             play_backbmp_loaded: false,
             last_play_start_press_at: None,
@@ -793,6 +803,53 @@ impl WinitApp {
             stage_background: self.select_stage_loaded,
             banner_image: self.select_banner_loaded,
         }
+    }
+
+    fn sync_select_preview_audio(&mut self) {
+        let cache_key = match self.select_items.get(self.selected_index) {
+            Some(SelectItem::Chart(row)) => row.chart.as_ref().and_then(|chart| {
+                (!chart.preview_file.is_empty())
+                    .then(|| format!("{}|{}", chart.folder_path, chart.preview_file))
+            }),
+            _ => None,
+        };
+        if cache_key.as_deref() == self.select_preview_source.as_deref() {
+            return;
+        }
+        let had_preview = self.select_preview_playing;
+        self.select_preview_source = cache_key.clone();
+
+        let mix = &self.boot.profile_config.audio_mix;
+        let volume = (mix.master_volume * mix.preview_volume).clamp(0.0, 1.0);
+
+        let loaded = match (&self.select_preview, cache_key.as_deref()) {
+            (Some(preview), Some(key)) => {
+                let (folder, file) = key.split_once('|').unwrap_or(("", ""));
+                preview.stop();
+                crate::chart_asset::resolve_chart_asset_path(folder, file)
+                    .is_some_and(|path| preview.load_and_play(&path, volume))
+            }
+            (Some(preview), None) => {
+                preview.stop();
+                false
+            }
+            (None, _) => false,
+        };
+
+        self.select_preview_playing = loaded;
+        if loaded {
+            self.stop_all_system_bgm();
+        } else if cache_key.is_some() || had_preview {
+            self.play_system_sound(crate::system_sound::SoundType::Select);
+        }
+    }
+
+    fn stop_select_preview(&mut self) {
+        if let Some(preview) = &self.select_preview {
+            preview.stop();
+        }
+        self.select_preview_source = None;
+        self.select_preview_playing = false;
     }
 
     fn sync_select_banner_texture(&mut self) {
@@ -2419,6 +2476,7 @@ impl WinitApp {
         if matches!(self.view_state(), AppViewState::Select) {
             self.sync_select_stage_texture();
             self.sync_select_banner_texture();
+            self.sync_select_preview_audio();
         }
         let scene = self.scene_snapshot();
         let scene_kind = scene_kind(&scene);
@@ -2531,7 +2589,11 @@ impl WinitApp {
             return;
         }
 
+        let previous = self.last_scene_kind;
         self.last_scene_kind = Some(scene_kind);
+        if previous == Some(AppSceneKind::Select) && scene_kind != AppSceneKind::Select {
+            self.stop_select_preview();
+        }
         self.fire_scene_transition_sounds(scene_kind);
         if scene_kind == AppSceneKind::Select {
             let now = Instant::now();
@@ -4322,6 +4384,7 @@ mod tests {
                 stage_file: String::new(),
                 banner_file: String::new(),
                 backbmp_file: String::new(),
+                preview_file: String::new(),
             }),
             fallback_title: String::new(),
             fallback_artist: String::new(),

@@ -2,6 +2,7 @@ pub mod app;
 pub mod audio;
 pub mod bootstrap;
 pub mod chart_asset;
+pub mod chart_preview;
 pub mod cli;
 pub mod config;
 pub mod course;
