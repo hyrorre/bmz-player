@@ -47,6 +47,9 @@ pub struct ChartListItem {
     pub max_bpm: f64,
     pub length_ms: i64,
     pub folder_path: String,
+    pub stage_file: String,
+    pub banner_file: String,
+    pub backbmp_file: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -312,27 +315,12 @@ impl LibraryDatabase {
     }
 
     pub fn list_charts(&self, limit: u32, offset: u32) -> Result<Vec<ChartListItem>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT
-                id,
-                md5,
-                sha256,
-                title,
-                subtitle,
-                artist,
-                difficulty_name,
-                play_level,
-                mode,
-                total_notes,
-                initial_bpm,
-                COALESCE(min_bpm, initial_bpm),
-                COALESCE(max_bpm, initial_bpm),
-                length_ms,
-                folder_path
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {CHART_LIST_ITEM_COLUMNS}
             FROM charts
             ORDER BY title COLLATE NOCASE, artist COLLATE NOCASE, play_level COLLATE NOCASE
-            LIMIT ?1 OFFSET ?2",
-        )?;
+            LIMIT ?1 OFFSET ?2"
+        ))?;
 
         let rows = stmt.query_map(params![limit, offset], chart_list_item_from_row)?;
         rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
@@ -397,27 +385,12 @@ impl LibraryDatabase {
         if folder_paths.is_empty() {
             return Ok(Vec::new());
         }
-        let mut stmt = self.conn.prepare(
-            "SELECT
-                id,
-                md5,
-                sha256,
-                title,
-                subtitle,
-                artist,
-                difficulty_name,
-                play_level,
-                mode,
-                total_notes,
-                initial_bpm,
-                COALESCE(min_bpm, initial_bpm),
-                COALESCE(max_bpm, initial_bpm),
-                length_ms,
-                folder_path
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {CHART_LIST_ITEM_COLUMNS}
             FROM charts
             WHERE folder_path = ?1
-            ORDER BY title COLLATE NOCASE, artist COLLATE NOCASE, play_level COLLATE NOCASE",
-        )?;
+            ORDER BY title COLLATE NOCASE, artist COLLATE NOCASE, play_level COLLATE NOCASE"
+        ))?;
         let mut out = Vec::new();
         for path in folder_paths {
             let key = to_folder_key(path);
@@ -432,27 +405,12 @@ impl LibraryDatabase {
     /// Returns charts whose `folder_path` exactly matches `folder_path`.
     pub fn list_charts_in_folder(&self, folder_path: &str) -> Result<Vec<ChartListItem>> {
         let folder_path = to_folder_key(folder_path);
-        let mut stmt = self.conn.prepare(
-            "SELECT
-                id,
-                md5,
-                sha256,
-                title,
-                subtitle,
-                artist,
-                difficulty_name,
-                play_level,
-                mode,
-                total_notes,
-                initial_bpm,
-                COALESCE(min_bpm, initial_bpm),
-                COALESCE(max_bpm, initial_bpm),
-                length_ms,
-                folder_path
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {CHART_LIST_ITEM_COLUMNS}
             FROM charts
             WHERE folder_path = ?1
-            ORDER BY title COLLATE NOCASE, artist COLLATE NOCASE, play_level COLLATE NOCASE",
-        )?;
+            ORDER BY title COLLATE NOCASE, artist COLLATE NOCASE, play_level COLLATE NOCASE"
+        ))?;
         let rows = stmt.query_map(params![folder_path], chart_list_item_from_row)?;
         rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
     }
@@ -655,33 +613,25 @@ impl LibraryDatabase {
     ) -> Result<Vec<(ChartListItem, String)>> {
         // Use UNION (not UNION ALL) so that a chart matched by both MD5 and SHA-256
         // for the same entry only appears once.
-        let sql = "
-            SELECT c.id, c.md5, c.sha256, c.title, c.subtitle, c.artist,
-                   c.difficulty_name, c.play_level, c.mode, c.total_notes,
-                   c.initial_bpm,
-                   COALESCE(c.min_bpm, c.initial_bpm),
-                   COALESCE(c.max_bpm, c.initial_bpm),
-                   c.length_ms, c.folder_path, dte.level
+        let sql = format!(
+            "
+            SELECT {CHART_LIST_ITEM_COLUMNS_C}, dte.level
             FROM difficulty_table_entries dte
             JOIN difficulty_tables dt ON dt.id = dte.table_id
             JOIN charts c ON c.md5 = dte.md5
             WHERE dt.source_url = ?1 AND length(dte.md5) >= 24
             UNION
-            SELECT c.id, c.md5, c.sha256, c.title, c.subtitle, c.artist,
-                   c.difficulty_name, c.play_level, c.mode, c.total_notes,
-                   c.initial_bpm,
-                   COALESCE(c.min_bpm, c.initial_bpm),
-                   COALESCE(c.max_bpm, c.initial_bpm),
-                   c.length_ms, c.folder_path, dte.level
+            SELECT {CHART_LIST_ITEM_COLUMNS_C}, dte.level
             FROM difficulty_table_entries dte
             JOIN difficulty_tables dt ON dt.id = dte.table_id
             JOIN charts c ON c.sha256 = dte.sha256
-            WHERE dt.source_url = ?1 AND length(dte.sha256) >= 24";
+            WHERE dt.source_url = ?1 AND length(dte.sha256) >= 24"
+        );
 
-        let mut stmt = self.conn.prepare(sql)?;
+        let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(params![source_url], |row| {
             let chart = chart_list_item_from_row(row)?;
-            let level: String = row.get(15)?;
+            let level: String = row.get(18)?;
             Ok((chart, level))
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
@@ -692,7 +642,8 @@ const CHART_LIST_ITEM_LOOKUP_SQL: &str = "
     SELECT id, md5, sha256, title, subtitle, artist,
            difficulty_name, play_level, mode, total_notes,
            initial_bpm, COALESCE(min_bpm, initial_bpm),
-           COALESCE(max_bpm, initial_bpm), length_ms, folder_path
+           COALESCE(max_bpm, initial_bpm), length_ms, folder_path,
+           stage_file, banner_file, backbmp_file
     FROM charts
     WHERE {column} = ?1
     ORDER BY id DESC
@@ -722,6 +673,46 @@ fn charts_by_hash_column(
     Ok(map)
 }
 
+const CHART_LIST_ITEM_COLUMNS: &str = "
+    id,
+    md5,
+    sha256,
+    title,
+    subtitle,
+    artist,
+    difficulty_name,
+    play_level,
+    mode,
+    total_notes,
+    initial_bpm,
+    COALESCE(min_bpm, initial_bpm),
+    COALESCE(max_bpm, initial_bpm),
+    length_ms,
+    folder_path,
+    stage_file,
+    banner_file,
+    backbmp_file";
+
+const CHART_LIST_ITEM_COLUMNS_C: &str = "
+    c.id,
+    c.md5,
+    c.sha256,
+    c.title,
+    c.subtitle,
+    c.artist,
+    c.difficulty_name,
+    c.play_level,
+    c.mode,
+    c.total_notes,
+    c.initial_bpm,
+    COALESCE(c.min_bpm, c.initial_bpm),
+    COALESCE(c.max_bpm, c.initial_bpm),
+    c.length_ms,
+    c.folder_path,
+    c.stage_file,
+    c.banner_file,
+    c.backbmp_file";
+
 fn chart_list_item_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChartListItem> {
     let md5_hex: String = row.get(1)?;
     let md5 = hex_to_hash::<16>(&md5_hex)?;
@@ -744,6 +735,9 @@ fn chart_list_item_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChartLi
         max_bpm: row.get(12)?,
         length_ms: row.get(13)?,
         folder_path: row.get(14)?,
+        stage_file: row.get(15)?,
+        banner_file: row.get(16)?,
+        backbmp_file: row.get(17)?,
     })
 }
 

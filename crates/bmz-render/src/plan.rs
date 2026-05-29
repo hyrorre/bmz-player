@@ -27,6 +27,10 @@ pub const DEFAULT_GAUGE_FILL_TEXTURE: TextureId = TextureId(9);
 pub const DEFAULT_COMBO_PANEL_TEXTURE: TextureId = TextureId(10);
 pub const DEFAULT_COMBO_PANEL_INACTIVE_TEXTURE: TextureId = TextureId(11);
 pub const DEFAULT_MINE_NOTE_TEXTURE: TextureId = TextureId(12);
+/// 選曲画面の `#STAGEFILE` 背景。
+pub const SELECT_STAGE_TEXTURE: TextureId = TextureId(20);
+/// プレイ画面の `#BACKBMP` 背景 (BGA 下)。
+pub const PLAY_BACKBMP_TEXTURE: TextureId = TextureId(21);
 /// 譜面 BGA (静止画/動画) 用テクスチャ ID の起点。
 /// beatoraja スキンは scene ごとに 10000 刻み (play=10000, select=20000, …) を使うため、
 /// 20000 帯に置くと select スキン PNG をプレイ中に上書きし、リザルト復帰後も背景が壊れたままになる。
@@ -228,6 +232,17 @@ fn advance_skin_dynamic_timers(
         .unwrap_or(state)
 }
 
+fn push_fullscreen_image(commands: &mut Vec<DrawCommand>, texture: TextureId) {
+    commands.push(DrawCommand::Image {
+        rect: Rect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+        uv: UvRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+        texture,
+        tint: Color::rgb(1.0, 1.0, 1.0),
+        blend: BlendMode::Normal,
+        linear_filter: true,
+    });
+}
+
 fn plan_select(
     snapshot: &SelectSnapshot,
     skin: &SkinContext,
@@ -235,6 +250,9 @@ fn plan_select(
 ) -> DrawPlan {
     if skin.document().is_some_and(|document| document.skin_type == 5) {
         let mut commands = Vec::new();
+        if snapshot.stage_background {
+            push_fullscreen_image(&mut commands, SELECT_STAGE_TEXTURE);
+        }
         crate::skin::append_skin_render_items(&mut commands, &skin.select_document_items(snapshot));
         if !commands.is_empty() {
             push_exit_hold_indicator(&mut commands, snapshot.exit_hold_progress);
@@ -248,6 +266,9 @@ fn plan_select(
     let rows = &snapshot.rows;
 
     let mut commands = Vec::new();
+    if snapshot.stage_background {
+        push_fullscreen_image(&mut commands, SELECT_STAGE_TEXTURE);
+    }
     let text = TextRenderer;
     commands.push(DrawCommand::Rect {
         rect: Rect { x: 0.06, y: 0.08, width: 0.88, height: 0.08 },
@@ -549,6 +570,9 @@ fn plan_play(
     dynamic_timers: &mut crate::skin::DynamicTimerRuntime,
 ) -> DrawPlan {
     let mut commands = Vec::new();
+    if snapshot.backbmp_background {
+        push_fullscreen_image(&mut commands, PLAY_BACKBMP_TEXTURE);
+    }
     let text = TextRenderer;
     let skin_manifest = skin.manifest();
     let has_document = skin.document().is_some();

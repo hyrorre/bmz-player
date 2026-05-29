@@ -133,6 +133,7 @@ pub fn build_render_snapshot_with_bga_frames(
             })
         }),
         overlay: OverlaySnapshot::default(),
+        backbmp_background: false,
     };
 
     let scroll = ScrollContext::new(session);

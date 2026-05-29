@@ -102,6 +102,8 @@ pub struct RenderSnapshot {
     pub keyoff_ms: [Option<i32>; LANE_COUNT],
     /// 右下に常時表示するオーバーレイ文字列。
     pub overlay: OverlaySnapshot,
+    /// `#BACKBMP` テクスチャがロード済みなら true (BGA より下に描画)。
+    pub backbmp_background: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

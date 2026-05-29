@@ -56,6 +56,7 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
                 .to_string(),
         exit_hold_progress: 0.0,
         overlay: OverlaySnapshot::default(),
+        stage_background: false,
     })
 }
 

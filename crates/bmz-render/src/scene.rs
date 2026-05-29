@@ -37,6 +37,8 @@ pub struct SelectSnapshot {
     pub exit_hold_progress: f32,
     /// 右下に常時表示するオーバーレイ文字列。
     pub overlay: OverlaySnapshot,
+    /// `#STAGEFILE` テクスチャがロード済みなら true。
+    pub stage_background: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

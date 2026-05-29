@@ -10,7 +10,7 @@ use bmz_core::lane::KeyMode;
 use bmz_core::time::TimeUs;
 use bmz_gameplay::session::PlaySkinOffset;
 use bmz_render::assets::load_static_rgba_image;
-use bmz_render::plan::TextureId;
+use bmz_render::plan::{PLAY_BACKBMP_TEXTURE, SELECT_STAGE_TEXTURE, TextureId};
 use bmz_render::renderer::{RenderSurfaceStatus, Renderer, SurfaceSize};
 use bmz_render::sample::{sample_play_scene, sample_result_scene, sample_select_scene};
 use bmz_render::scene::{AppSceneSnapshot, ResultSnapshot, SelectRowSnapshot, SelectSnapshot};
@@ -199,6 +199,12 @@ struct WinitApp {
     system_sound: Option<crate::system_sound_manager::SystemSoundManager>,
     /// 選曲画面でESCを長押し中の開始時刻。離されたり画面を抜けると None になる。
     select_exit_hold_started_at: Option<Instant>,
+    /// 選曲 `#STAGEFILE` のロード済みキャッシュキー (`folder|file`)。
+    select_stage_source: Option<String>,
+    select_stage_loaded: bool,
+    /// プレイ `#BACKBMP` のロード済みキャッシュキー。
+    play_backbmp_source: Option<String>,
+    play_backbmp_loaded: bool,
     /// プレイ中の Start キー直近の押下時刻。連続押し判定で使用。
     last_play_start_press_at: Option<Instant>,
     /// 本体設定 / スキン設定 / デバッグ表示用の egui レイヤ。
@@ -474,6 +480,10 @@ impl WinitApp {
             system_audio,
             system_sound,
             select_exit_hold_started_at: None,
+            select_stage_source: None,
+            select_stage_loaded: false,
+            play_backbmp_source: None,
+            play_backbmp_loaded: false,
             last_play_start_press_at: None,
             egui: None,
             applied_window_mode: initial_window_mode,
@@ -773,7 +783,26 @@ impl WinitApp {
             option_hint: self.select_keys.option_hint.clone(),
             exit_hold_progress: self.select_exit_hold_progress(),
             overlay: OverlaySnapshot::default(),
+            stage_background: self.select_stage_loaded,
         }
+    }
+
+    fn sync_select_stage_texture(&mut self) {
+        let cache_key = match self.select_items.get(self.selected_index) {
+            Some(SelectItem::Chart(row)) => row.chart.as_ref().and_then(|chart| {
+                (!chart.stage_file.is_empty())
+                    .then(|| format!("{}|{}", chart.folder_path, chart.stage_file))
+            }),
+            _ => None,
+        };
+        if cache_key.as_deref() == self.select_stage_source.as_deref() {
+            return;
+        }
+        self.select_stage_source = cache_key.clone();
+        self.select_stage_loaded = cache_key.is_some_and(|key| {
+            let (folder, file) = key.split_once('|').unwrap_or(("", ""));
+            load_chart_meta_texture(&mut self.renderer, SELECT_STAGE_TEXTURE, folder, file)
+        });
     }
 
     fn should_exit_via_select_hold(&mut self) -> bool {
@@ -1329,11 +1358,17 @@ impl WinitApp {
         skin_duration_ms(ready_delay_ms)
     }
 
+    fn clear_play_backbmp_state(&mut self) {
+        self.play_backbmp_source = None;
+        self.play_backbmp_loaded = false;
+    }
+
     fn enter_play_scene(&mut self, chart_id: i64, mut snapshot: RenderSnapshot) {
         self.play_ending = None;
         self.result_exit = None;
         self.play_ready_sound_started_at = None;
         self.active_play = None;
+        self.clear_play_backbmp_state();
         self.finished_play = None;
         self.draining_audio = None;
         self.play_scene_started_at = Instant::now();
@@ -1349,6 +1384,20 @@ impl WinitApp {
         self.last_play_was_autoplay = active_play.running.session.autoplay.is_some();
         active_play.running.bga_frames =
             load_chart_bga_textures(&mut self.renderer, &active_play.running.session.chart);
+        let chart = &active_play.running.session.chart;
+        let folder = chart_asset_folder(chart)
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let backbmp_key = format!("{}|{}", folder, chart.metadata.backbmp_file);
+        if self.play_backbmp_source.as_deref() != Some(backbmp_key.as_str()) {
+            self.play_backbmp_source = Some(backbmp_key);
+            self.play_backbmp_loaded = load_chart_meta_texture(
+                &mut self.renderer,
+                PLAY_BACKBMP_TEXTURE,
+                &folder,
+                &chart.metadata.backbmp_file,
+            );
+        }
         let render_now = self.play_skin_playstart_offset();
         let mut snapshot = build_render_snapshot_with_bga_frames(
             &active_play.running.session,
@@ -1357,6 +1406,7 @@ impl WinitApp {
             active_play.running.best_ex_score,
             &active_play.running.bga_frames,
         );
+        snapshot.backbmp_background = self.play_backbmp_loaded;
         snapshot.play_elapsed_time = self.play_elapsed_time();
         snapshot.ready_elapsed_time = self.play_ready_sound_started_at.map(elapsed_since);
         self.last_play_snapshot = Some(snapshot);
@@ -1447,6 +1497,7 @@ impl WinitApp {
     fn abort_pending_play_start(&mut self) {
         self.pending_play_start = None;
         self.active_play = None;
+        self.clear_play_backbmp_state();
         self.last_play_snapshot = None;
         let now = Instant::now();
         self.select_scene_started_at = now;
@@ -1664,6 +1715,7 @@ impl WinitApp {
     fn leave_result(&mut self) {
         self.finished_play = None;
         self.result_exit = None;
+        self.clear_play_backbmp_state();
         // リザルト画面を抜けたら、まだ鳴っていても余韻再生を止める。
         self.draining_audio = None;
         self.last_play_snapshot = None;
@@ -1971,6 +2023,7 @@ impl WinitApp {
                 let mut snapshot = frame.render_snapshot;
                 snapshot.play_elapsed_time = self.play_elapsed_time();
                 snapshot.ready_elapsed_time = self.play_ready_sound_started_at.map(elapsed_since);
+                snapshot.backbmp_background = self.play_backbmp_loaded;
                 self.last_play_snapshot = Some(snapshot);
                 self.play_landmine_se(mine_hits);
             }
@@ -1980,6 +2033,7 @@ impl WinitApp {
                 let mut snapshot = frame.render_snapshot;
                 snapshot.play_elapsed_time = self.play_elapsed_time();
                 snapshot.ready_elapsed_time = self.play_ready_sound_started_at.map(elapsed_since);
+                snapshot.backbmp_background = self.play_backbmp_loaded;
                 let full_combo_elapsed_at_finish_ms = snapshot.full_combo_elapsed_ms;
                 self.last_play_snapshot = Some(snapshot);
                 self.play_landmine_se(mine_hits);
@@ -1997,6 +2051,7 @@ impl WinitApp {
             Err(error) => {
                 tracing::error!(%error, "failed to advance play session");
                 self.active_play = None;
+                self.clear_play_backbmp_state();
                 self.last_play_snapshot = None;
             }
         }
@@ -2335,6 +2390,9 @@ impl WinitApp {
     }
 
     fn render_current_scene(&mut self) {
+        if matches!(self.view_state(), AppViewState::Select) {
+            self.sync_select_stage_texture();
+        }
         let scene = self.scene_snapshot();
         let scene_kind = scene_kind(&scene);
         self.update_window_title_for_scene(scene_kind);
@@ -2882,6 +2940,40 @@ fn sort_skin_catalog(catalog: &mut SkinCatalog) {
                 .then_with(|| a.path.cmp(&b.path))
         });
         candidates.dedup_by(|a, b| a.path == b.path);
+    }
+}
+
+fn chart_asset_folder(chart: &PlayableChart) -> Option<PathBuf> {
+    chart
+        .sounds
+        .iter()
+        .find_map(|asset| asset.path.parent())
+        .or_else(|| chart.bga_assets.iter().find_map(|asset| asset.path.parent()))
+        .map(Path::to_path_buf)
+}
+
+fn load_chart_meta_texture(
+    renderer: &mut Renderer,
+    texture_id: TextureId,
+    folder_path: &str,
+    relative: &str,
+) -> bool {
+    let Some(path) = crate::chart_asset::resolve_chart_asset_path(folder_path, relative) else {
+        return false;
+    };
+    match load_static_rgba_image(&path) {
+        Ok(image) => {
+            if let Err(error) = renderer.upsert_image_asset(texture_id, &image) {
+                tracing::warn!(path = %path.display(), %error, "failed to upload chart meta image");
+                false
+            } else {
+                true
+            }
+        }
+        Err(error) => {
+            tracing::debug!(path = %path.display(), %error, "skipping chart meta image");
+            false
+        }
     }
 }
 
@@ -4200,6 +4292,9 @@ mod tests {
                 max_bpm: 128.0,
                 length_ms: 90_000,
                 folder_path: String::new(),
+                stage_file: String::new(),
+                banner_file: String::new(),
+                backbmp_file: String::new(),
             }),
             fallback_title: String::new(),
             fallback_artist: String::new(),
