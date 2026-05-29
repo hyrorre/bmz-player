@@ -39,6 +39,8 @@ pub struct SelectSnapshot {
     pub overlay: OverlaySnapshot,
     /// `#STAGEFILE` テクスチャがロード済みなら true。
     pub stage_background: bool,
+    /// `#BANNER` テクスチャがロード済みなら true。
+    pub banner_image: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -31,6 +31,8 @@ pub const DEFAULT_MINE_NOTE_TEXTURE: TextureId = TextureId(12);
 pub const SELECT_STAGE_TEXTURE: TextureId = TextureId(20);
 /// プレイ画面の `#BACKBMP` 背景 (BGA 下)。
 pub const PLAY_BACKBMP_TEXTURE: TextureId = TextureId(21);
+/// 選曲画面の `#BANNER` 画像。
+pub const SELECT_BANNER_TEXTURE: TextureId = TextureId(22);
 /// 譜面 BGA (静止画/動画) 用テクスチャ ID の起点。
 /// beatoraja スキンは scene ごとに 10000 刻み (play=10000, select=20000, …) を使うため、
 /// 20000 帯に置くと select スキン PNG をプレイ中に上書きし、リザルト復帰後も背景が壊れたままになる。
@@ -243,6 +245,17 @@ fn push_fullscreen_image(commands: &mut Vec<DrawCommand>, texture: TextureId) {
     });
 }
 
+fn push_select_banner_image(commands: &mut Vec<DrawCommand>) {
+    commands.push(DrawCommand::Image {
+        rect: Rect { x: 0.72, y: 0.16, width: 0.26, height: 0.065 },
+        uv: UvRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+        texture: SELECT_BANNER_TEXTURE,
+        tint: Color::rgb(1.0, 1.0, 1.0),
+        blend: BlendMode::Normal,
+        linear_filter: true,
+    });
+}
+
 fn plan_select(
     snapshot: &SelectSnapshot,
     skin: &SkinContext,
@@ -268,6 +281,9 @@ fn plan_select(
     let mut commands = Vec::new();
     if snapshot.stage_background {
         push_fullscreen_image(&mut commands, SELECT_STAGE_TEXTURE);
+    }
+    if snapshot.banner_image {
+        push_select_banner_image(&mut commands);
     }
     let text = TextRenderer;
     commands.push(DrawCommand::Rect {

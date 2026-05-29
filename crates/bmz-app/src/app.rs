@@ -10,7 +10,9 @@ use bmz_core::lane::KeyMode;
 use bmz_core::time::TimeUs;
 use bmz_gameplay::session::PlaySkinOffset;
 use bmz_render::assets::load_static_rgba_image;
-use bmz_render::plan::{PLAY_BACKBMP_TEXTURE, SELECT_STAGE_TEXTURE, TextureId};
+use bmz_render::plan::{
+    PLAY_BACKBMP_TEXTURE, SELECT_BANNER_TEXTURE, SELECT_STAGE_TEXTURE, TextureId,
+};
 use bmz_render::renderer::{RenderSurfaceStatus, Renderer, SurfaceSize};
 use bmz_render::sample::{sample_play_scene, sample_result_scene, sample_select_scene};
 use bmz_render::scene::{AppSceneSnapshot, ResultSnapshot, SelectRowSnapshot, SelectSnapshot};
@@ -202,6 +204,9 @@ struct WinitApp {
     /// 選曲 `#STAGEFILE` のロード済みキャッシュキー (`folder|file`)。
     select_stage_source: Option<String>,
     select_stage_loaded: bool,
+    /// 選曲 `#BANNER` のロード済みキャッシュキー (`folder|file`)。
+    select_banner_source: Option<String>,
+    select_banner_loaded: bool,
     /// プレイ `#BACKBMP` のロード済みキャッシュキー。
     play_backbmp_source: Option<String>,
     play_backbmp_loaded: bool,
@@ -482,6 +487,8 @@ impl WinitApp {
             select_exit_hold_started_at: None,
             select_stage_source: None,
             select_stage_loaded: false,
+            select_banner_source: None,
+            select_banner_loaded: false,
             play_backbmp_source: None,
             play_backbmp_loaded: false,
             last_play_start_press_at: None,
@@ -784,7 +791,26 @@ impl WinitApp {
             exit_hold_progress: self.select_exit_hold_progress(),
             overlay: OverlaySnapshot::default(),
             stage_background: self.select_stage_loaded,
+            banner_image: self.select_banner_loaded,
         }
+    }
+
+    fn sync_select_banner_texture(&mut self) {
+        let cache_key = match self.select_items.get(self.selected_index) {
+            Some(SelectItem::Chart(row)) => row.chart.as_ref().and_then(|chart| {
+                (!chart.banner_file.is_empty())
+                    .then(|| format!("{}|{}", chart.folder_path, chart.banner_file))
+            }),
+            _ => None,
+        };
+        if cache_key.as_deref() == self.select_banner_source.as_deref() {
+            return;
+        }
+        self.select_banner_source = cache_key.clone();
+        self.select_banner_loaded = cache_key.is_some_and(|key| {
+            let (folder, file) = key.split_once('|').unwrap_or(("", ""));
+            load_chart_meta_texture(&mut self.renderer, SELECT_BANNER_TEXTURE, folder, file)
+        });
     }
 
     fn sync_select_stage_texture(&mut self) {
@@ -2392,6 +2418,7 @@ impl WinitApp {
     fn render_current_scene(&mut self) {
         if matches!(self.view_state(), AppViewState::Select) {
             self.sync_select_stage_texture();
+            self.sync_select_banner_texture();
         }
         let scene = self.scene_snapshot();
         let scene_kind = scene_kind(&scene);
