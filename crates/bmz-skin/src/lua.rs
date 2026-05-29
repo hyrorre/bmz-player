@@ -1665,16 +1665,20 @@ fn collect_number_refs(
     function: &Function,
     main_state_probe: &Arc<Mutex<MainStateProbe>>,
 ) -> Option<Vec<i32>> {
-    {
-        main_state_probe.lock().ok()?.begin_number_call_recording(0);
+    let mut calls = Vec::new();
+    // Lua の `or` / `and` 短絡評価で片方の number() だけ呼ばれることがあるため、
+    // 複数の probe 値で実行して ref を集める。
+    for default_value in [5, 0, -1] {
+        {
+            main_state_probe.lock().ok()?.begin_number_call_recording(default_value);
+        }
+        let _ = function.call::<Value>(()).ok();
+        {
+            let mut probe = main_state_probe.lock().ok()?;
+            calls.extend(probe.number_calls.iter().copied());
+            probe.end_recording();
+        }
     }
-    let _ = function.call::<Value>(()).ok();
-    let mut calls = {
-        let mut probe = main_state_probe.lock().ok()?;
-        let calls = probe.number_calls.clone();
-        probe.end_recording();
-        calls
-    };
     calls.sort_unstable();
     calls.dedup();
     Some(calls)
@@ -1779,13 +1783,35 @@ fn infer_or_of_number_lt_zero(
     main_state_probe: &Arc<Mutex<MainStateProbe>>,
 ) -> Option<String> {
     let refs = collect_number_refs(function, main_state_probe)?;
-    if refs.len() != 1 {
+    if refs.is_empty() {
         return None;
     }
-    let ref_id = refs[0];
-    let condition = format!("number({ref_id}) < 0");
+    if refs.len() == 1 {
+        let ref_id = refs[0];
+        let condition = format!("number({ref_id}) < 0");
+        return verify_draw_condition(function, main_state_probe, &refs, |values| {
+            values.get(&ref_id).copied().unwrap_or(0) < 0
+        })
+        .then_some(condition);
+    }
+    let all_zero = refs.iter().copied().map(|ref_id| (ref_id, 0)).collect::<BTreeMap<_, _>>();
+    if call_draw_with_numbers(function, main_state_probe, all_zero) != Some(false) {
+        return None;
+    }
+    let mut terms = Vec::new();
+    for ref_id in &refs {
+        let mut only_negative = refs.iter().copied().map(|id| (id, 0)).collect::<BTreeMap<_, _>>();
+        only_negative.insert(*ref_id, -1);
+        if call_draw_with_numbers(function, main_state_probe, only_negative) == Some(true) {
+            terms.push(format!("number({ref_id}) < 0"));
+        }
+    }
+    if terms.is_empty() {
+        return None;
+    }
+    let condition = terms.join(" or ");
     verify_draw_condition(function, main_state_probe, &refs, |values| {
-        values.get(&ref_id).copied().unwrap_or(0) < 0
+        refs.iter().any(|ref_id| values.get(ref_id).copied().unwrap_or(0) < 0)
     })
     .then_some(condition)
 }

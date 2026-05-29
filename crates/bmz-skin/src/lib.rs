@@ -607,6 +607,50 @@ mod tests {
     }
 
     #[test]
+    fn lua_skin_infers_or_of_number_lt_zero_draw() {
+        let root = unique_test_dir("bmz-skin-lua-or-lt-zero");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("select.luaskin"),
+            r#"
+            local main_state = require("main_state")
+            return {
+                type = 0,
+                destination = {
+                    {
+                        id = "zero-mask",
+                        draw = function()
+                            return main_state.number(77) < 0 or main_state.number(150) < 0
+                        end,
+                        dst = {{ x = 0, y = 0, w = 1, h = 1 }},
+                    },
+                },
+            }
+            "#,
+        )
+        .unwrap();
+
+        let loaded = load_lua_skin(
+            &root.join("select.luaskin"),
+            SkinKind::Select,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert!(
+            loaded.warnings.is_empty(),
+            "warnings: {:?}",
+            loaded.warnings.iter().map(|w| w.message.as_str()).collect::<Vec<_>>()
+        );
+        let bmz_render::skin::DestinationListEntry::Single(destination) =
+            &loaded.document.destination[0]
+        else {
+            panic!("expected single destination");
+        };
+        assert_eq!(destination.draw, "number(77) < 0 or number(150) < 0");
+    }
+
+    #[test]
     fn lua_skin_stops_infinite_loop() {
         let root = unique_test_dir("bmz-skin-lua");
         fs::create_dir_all(&root).unwrap();
