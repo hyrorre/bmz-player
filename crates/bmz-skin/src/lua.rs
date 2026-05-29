@@ -125,6 +125,12 @@ fn execute_lua_skin(
     )?;
     let skin_options = skin_config_options_from_header(&header_json, options, &mut warnings);
     let skin_files = skin_files_from_header(&root, &header_json, files);
+    // ヘッダ pass では skin_config / 全 option が未注入のため draw/value 推論が失敗しうる。
+    // 本 pass の警告だけ残す。
+    warnings.retain(|warning| {
+        !warning.starts_with("skipping unsupported draw function at ")
+            && !warning.starts_with("skipping unsupported value function at ")
+    });
 
     let lua = Lua::new();
     install_instruction_limit(&lua);
@@ -1363,11 +1369,11 @@ fn infer_main_state_draw_condition(
         .collect::<Option<Vec<_>>>()?;
 
     let candidates = [
-        ("> 0", samples.iter().map(|value| *value > 0).collect::<Vec<_>>()),
         ("== 0", samples.iter().map(|value| *value == 0).collect::<Vec<_>>()),
+        ("< 0", samples.iter().map(|value| *value < 0).collect::<Vec<_>>()),
+        ("> 0", samples.iter().map(|value| *value > 0).collect::<Vec<_>>()),
         ("!= 0", samples.iter().map(|value| *value != 0).collect::<Vec<_>>()),
         (">= 0", samples.iter().map(|value| *value >= 0).collect::<Vec<_>>()),
-        ("< 0", samples.iter().map(|value| *value < 0).collect::<Vec<_>>()),
         ("<= 0", samples.iter().map(|value| *value <= 0).collect::<Vec<_>>()),
     ];
     candidates.into_iter().find_map(|(operator, expected)| {

@@ -695,6 +695,59 @@ mod tests {
     }
 
     #[test]
+    fn lua_skin_infers_draw_with_skin_config_option_and_number() {
+        let root = unique_test_dir("bmz-skin-lua-skin-config-draw");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("play7.luaskin"),
+            r#"
+            local main_state = require("main_state")
+            return {
+                type = 0,
+                property = {
+                    {
+                        name = "mybest スコアが存在しない時",
+                        def = "976",
+                        item = {
+                            { name = "976", op = 976 },
+                            { name = "off", op = 0 },
+                        },
+                    },
+                },
+                destination = {
+                    {
+                        id = "score-diff",
+                        draw = function()
+                            return main_state.number(150) == 0
+                                and skin_config.option["mybest スコアが存在しない時"] == 976
+                        end,
+                        dst = {{ x = 0, y = 0, w = 1, h = 1 }},
+                    },
+                },
+            }
+            "#,
+        )
+        .unwrap();
+
+        let mut options = BTreeMap::new();
+        options.insert("mybest スコアが存在しない時".to_string(), "976".to_string());
+        let loaded =
+            load_lua_skin(&root.join("play7.luaskin"), SkinKind::Play, &options, &BTreeMap::new())
+                .unwrap();
+        assert!(
+            loaded.warnings.is_empty(),
+            "warnings: {:?}",
+            loaded.warnings.iter().map(|w| w.message.as_str()).collect::<Vec<_>>()
+        );
+        let bmz_render::skin::DestinationListEntry::Single(destination) =
+            &loaded.document.destination[0]
+        else {
+            panic!("expected single destination");
+        };
+        assert_eq!(destination.draw, "number(150) == 0");
+    }
+
+    #[test]
     fn lua_skin_stops_infinite_loop() {
         let root = unique_test_dir("bmz-skin-lua");
         fs::create_dir_all(&root).unwrap();
