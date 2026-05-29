@@ -261,9 +261,38 @@ pub fn default_gauge_definitions() -> &'static [GaugeDefinition] {
 const NORMAL_GUTS: &[(f32, f32)] = &[(30.0, 0.5), (50.0, 0.7)];
 const HARD_GUTS: &[(f32, f32)] = &[(30.0, 0.6), (50.0, 0.8)];
 
+/// beatoraja `BMSPlayerRule.calculateDefaultTotal` 相当。
+pub fn default_gauge_total(total_notes: u32) -> f64 {
+    let notes = total_notes as f64;
+    if notes <= 0.0 {
+        return 260.0;
+    }
+    260.0_f64.max(7.605 * notes / (0.01 * notes + 6.5))
+}
+
+/// 譜面メタの `#TOTAL` が未指定または 0 以下のとき beatoraja 既定式へフォールバックする。
+pub fn gauge_total_for_chart(metadata_total: Option<f64>, total_notes: u32) -> f64 {
+    metadata_total.filter(|total| *total > 0.0).unwrap_or_else(|| default_gauge_total(total_notes))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_gauge_total_matches_beatoraja_formula() {
+        assert_eq!(default_gauge_total(0), 260.0);
+        assert_eq!(default_gauge_total(100), 260.0);
+        let dense = default_gauge_total(2000);
+        assert!(dense > 260.0);
+    }
+
+    #[test]
+    fn gauge_total_for_chart_uses_metadata_when_positive() {
+        assert_eq!(gauge_total_for_chart(Some(320.0), 500), 320.0);
+        assert_eq!(gauge_total_for_chart(Some(0.0), 500), default_gauge_total(500));
+        assert_eq!(gauge_total_for_chart(None, 500), default_gauge_total(500));
+    }
 
     #[test]
     fn creates_selected_gauge_state_from_defaults() {

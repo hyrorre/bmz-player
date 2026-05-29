@@ -22,8 +22,7 @@
 //!   こちらでは追加処理せず通常の Long-channel として扱う。
 //!
 //! 未対応 (warning に流すか drop):
-//! - SCROLL / SPEED
-//! - JUDGE 変更イベント
+//! - JUDGE 変更イベント (#EXRANK / chA0)
 //! - TEXT / OPTION / VIDEO / SEEK 等
 //! - foot pedal / free zone
 
