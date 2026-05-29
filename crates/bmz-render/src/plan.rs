@@ -686,9 +686,9 @@ fn plan_play(
         play_level: &snapshot.play_level,
         ..SkinTextState::default()
     };
-    // `{"id":"notes"}` マーカーでノーツ背面/前面に分割。
-    // 描画順: 背面skin要素 → ロングノート胴体 → ノーツ → 前面skin要素（レーンカバー・枠・スコア等）
-    let (behind_notes_items, front_notes_items) =
+    // `{"id":"notes"}` マーカーと `timer: 3` (FAILED) で3分割。
+    // 描画順: 背面skin → ロング/ノーツ → 前面skin → 暗転/閉店オーバーレイ
+    let (behind_notes_items, front_notes_items, failed_overlay_items) =
         skin.static_document_items_split_for_state_and_text(skin_state, skin_text);
     let behind_notes_items = skin.apply_play_skin_global_offset(behind_notes_items, skin_state);
     append_skin_render_items(&mut commands, &behind_notes_items);
@@ -877,6 +877,10 @@ fn plan_play(
     // ノーツより前面の skin 要素（レーンカバー・枠・スコア等）をノーツの上に重ねる
     let front_notes_items = skin.apply_play_skin_global_offset(front_notes_items, skin_state);
     append_skin_render_items(&mut commands, &front_notes_items);
+
+    // 閉店の暗転 (`black` の a:0→255) 等、timer:3 を最前面に描画
+    let failed_overlay_items = skin.apply_play_skin_global_offset(failed_overlay_items, skin_state);
+    append_skin_render_items(&mut commands, &failed_overlay_items);
 
     if !has_document {
         push_combo_panel(skin_manifest, &mut commands, snapshot.combo);

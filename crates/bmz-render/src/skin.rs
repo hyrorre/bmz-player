@@ -794,15 +794,15 @@ impl SkinContext {
         document.select_render_items(&self.document_sources, snapshot)
     }
 
-    /// 静的 destination を `{"id":"notes"}` マーカーで分割して返す。
-    /// `.0` はノーツ背面、`.1` はノーツ前面に描画するアイテム列。
+    /// 静的 destination を `{"id":"notes"}` マーカーと `timer: 3` (FAILED) で分割して返す。
+    /// `.0` はノーツ背面、`.1` はノーツ前面、`.2` は閉店/暗転オーバーレイ（最前面）。
     pub fn static_document_items_split_for_state_and_text(
         &self,
         state: SkinDrawState,
         text: SkinTextState<'_>,
-    ) -> (Vec<SkinRenderItem>, Vec<SkinRenderItem>) {
+    ) -> (Vec<SkinRenderItem>, Vec<SkinRenderItem>, Vec<SkinRenderItem>) {
         let Some(document) = &self.document else {
-            return (Vec::new(), Vec::new());
+            return (Vec::new(), Vec::new(), Vec::new());
         };
         document.static_render_items_split(&self.document_sources, state, text)
     }
@@ -1645,24 +1645,26 @@ impl SkinDocument {
         state: SkinDrawState,
         text_state: SkinTextState<'_>,
     ) -> Vec<SkinRenderItem> {
-        let (mut behind, front) = self.static_render_items_split(sources, state, text_state);
+        let (mut behind, front, failed_overlay) =
+            self.static_render_items_split(sources, state, text_state);
         behind.extend(front);
+        behind.extend(failed_overlay);
         behind
     }
 
-    /// 静的 destination を `{"id":"notes"}` マーカーで2分割して描画アイテムを返す。
-    /// 戻り値 `.0` はノーツより背面、`.1` はノーツより前面に描画するアイテム列。
-    /// マーカーが無いスキンでは全アイテムが `.0`（背面）に入る。
+    /// 静的 destination を `{"id":"notes"}` マーカーと `timer: 3` で3分割して描画アイテムを返す。
+    /// 戻り値 `.0` はノーツより背面、`.1` はノーツより前面、`.2` は FAILED オーバーレイ。
     pub fn static_render_items_split(
         &self,
         sources: &HashMap<String, SkinDocumentTexture>,
         state: SkinDrawState,
         text_state: SkinTextState<'_>,
-    ) -> (Vec<SkinRenderItem>, Vec<SkinRenderItem>) {
+    ) -> (Vec<SkinRenderItem>, Vec<SkinRenderItem>, Vec<SkinRenderItem>) {
         let images = self.image_map();
         let enabled_options = self.enabled_options();
         let mut behind = Vec::new();
         let mut front = Vec::new();
+        let mut failed_overlay = Vec::new();
         let mut after_notes_marker = false;
         for destination in self.all_destinations(&enabled_options) {
             // `{"id":"notes"}` はノーツ描画位置マーカー。以降の destination はノーツ前面に積む。
@@ -1683,7 +1685,13 @@ impl SkinDocument {
                     state,
                     sources,
                 ) {
-                    let target = if after_notes_marker { &mut front } else { &mut behind };
+                    let target = destination_render_layer(
+                        destination.timer,
+                        after_notes_marker,
+                        &mut behind,
+                        &mut front,
+                        &mut failed_overlay,
+                    );
                     target.extend(items);
                 }
                 continue;
@@ -1696,11 +1704,17 @@ impl SkinDocument {
                 text_state,
                 sources,
             ) {
-                let target = if after_notes_marker { &mut front } else { &mut behind };
+                let target = destination_render_layer(
+                    destination.timer,
+                    after_notes_marker,
+                    &mut behind,
+                    &mut front,
+                    &mut failed_overlay,
+                );
                 target.extend(items);
             }
         }
-        (behind, front)
+        (behind, front, failed_overlay)
     }
 
     /// `hiddenCover.disapearLine` をレーンカバー系 (HIDDEN / SUDDEN+ / LIFT) のクロップ境界として使う。
@@ -1785,12 +1799,14 @@ impl SkinDocument {
             {
                 return None;
             }
-            let source = sources.get(&image.src)?;
+            let source = resolve_document_source(sources, &image.src)?;
+            let pixel_rect = skin_image_pixel_rect(image, images);
             let mut uv = skin_image_texture_region_for_state(
                 image,
                 source.source_size,
                 elapsed,
                 Some(state),
+                pixel_rect,
             );
             if self.should_clip_image_at_disappear_line(destination, image)
                 && let Some((disappear_line, link_lift)) = self.disappear_line_for_lane_cover_clip()
@@ -1893,7 +1909,8 @@ impl SkinDocument {
                 imageset_image_for_index(imageset, judge_index)
             }?;
             let image = images.get(image_id.as_str())?;
-            let source = sources.get(&image.src)?;
+            let source = resolve_document_source(sources, &image.src)?;
+            let pixel_rect = skin_image_pixel_rect(image, images);
             let (rect, uv) = stretch_skin_image_geometry(
                 destination.stretch,
                 normalize_skin_frame_rect(frame, self.w, self.h),
@@ -1902,6 +1919,7 @@ impl SkinDocument {
                     source.source_size,
                     elapsed,
                     Some(state),
+                    pixel_rect,
                 ),
                 source.source_size,
                 self.w,
@@ -1991,12 +2009,14 @@ impl SkinDocument {
             {
                 return None;
             }
-            let source = sources.get(&image.src)?;
+            let source = resolve_document_source(sources, &image.src)?;
+            let pixel_rect = skin_image_pixel_rect(image, images);
             let mut uv = skin_image_texture_region_for_state(
                 image,
                 source.source_size,
                 elapsed,
                 Some(state),
+                pixel_rect,
             );
             if self.should_clip_image_at_disappear_line(destination, image)
                 && let Some((disappear_line, link_lift)) = self.disappear_line_for_lane_cover_clip()
@@ -2440,7 +2460,7 @@ impl SkinDocument {
         let image_index = select_row_bar_image_index(row);
         let image_id = imageset.images.get(image_index).or_else(|| imageset.images.first())?;
         let image = self.image.iter().find(|image| image.id == *image_id)?;
-        let source = sources.get(&image.src)?;
+        let source = resolve_document_source(sources, &image.src)?;
         let elapsed =
             skin_timer_elapsed_ms(destination.timer, SkinDrawState::default()).unwrap_or(0);
         let (rect, uv) = stretch_skin_image_geometry(
@@ -2524,7 +2544,7 @@ impl SkinDocument {
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<SkinRenderItem> {
         let image = self.image.iter().find(|image| image.id == image_id)?;
-        let source = sources.get(&image.src)?;
+        let source = resolve_document_source(sources, &image.src)?;
         Some(SkinRenderItem::Image {
             texture: source.texture,
             rect,
@@ -2577,9 +2597,10 @@ impl SkinDocument {
             let Some(image) = images.get(destination.id.as_str()) else {
                 continue;
             };
-            let Some(source) = sources.get(&image.src) else {
+            let Some(source) = resolve_document_source(sources, &image.src) else {
                 continue;
             };
+            let pixel_rect = skin_image_pixel_rect(image, &images);
             let (rect, uv) = stretch_skin_image_geometry(
                 destination.stretch,
                 normalize_skin_frame_rect(frame, self.w, self.h),
@@ -2588,6 +2609,7 @@ impl SkinDocument {
                     source.source_size,
                     elapsed,
                     Some(state),
+                    pixel_rect,
                 ),
                 source.source_size,
                 self.w,
@@ -3062,7 +3084,7 @@ impl SkinDocument {
         linear_filter: bool,
     ) -> Option<SkinRenderItem> {
         let image = self.image.iter().find(|image| image.id == image_id)?;
-        let source = sources.get(&image.src)?;
+        let source = resolve_document_source(sources, &image.src)?;
         let uv = skin_image_texture_region(image, source.source_size, elapsed_ms);
         let (rect, uv) =
             stretch_skin_image_geometry(stretch, rect, uv, source.source_size, self.w, self.h);
@@ -4726,7 +4748,26 @@ fn skin_image_texture_region(
     source_size: SkinImageSize,
     elapsed_ms: i32,
 ) -> TextureRegion {
-    skin_image_texture_region_for_state(image, source_size, elapsed_ms, None)
+    skin_image_texture_region_for_state(
+        image,
+        source_size,
+        elapsed_ms,
+        None,
+        (image.x, image.y, image.w, image.h),
+    )
+}
+
+/// Starseeker 閉店の `src = 0` は `system` の黒 1px (`black` image と同じ UV) を指す。
+fn skin_image_pixel_rect(
+    image: &SkinImageDef,
+    images: &HashMap<&str, &SkinImageDef>,
+) -> (i32, i32, i32, i32) {
+    if image.src == "0" {
+        if let Some(black) = images.get("black") {
+            return (black.x, black.y, black.w, black.h);
+        }
+    }
+    (image.x, image.y, image.w, image.h)
 }
 
 /// `image.ref_id` が指定されている場合、`SkinDrawState` から ref 値を引いて
@@ -4737,7 +4778,9 @@ fn skin_image_texture_region_for_state(
     source_size: SkinImageSize,
     elapsed_ms: i32,
     state: Option<SkinDrawState>,
+    pixel_rect: (i32, i32, i32, i32),
 ) -> TextureRegion {
+    let (px, py, pw, ph) = pixel_rect;
     let source_width = source_size.width.max(1.0);
     let source_height = source_size.height.max(1.0);
     let divx = image.divx.max(1);
@@ -4763,13 +4806,13 @@ fn skin_image_texture_region_for_state(
         0
     };
 
-    let cell_width = image.w as f32 / divx as f32;
-    let cell_height = image.h as f32 / divy as f32;
+    let cell_width = pw as f32 / divx as f32;
+    let cell_height = ph as f32 / divy as f32;
     let source_column = frame_index % divx;
     let source_row = frame_index / divx;
     TextureRegion {
-        x: (image.x as f32 + cell_width * source_column as f32) / source_width,
-        y: (image.y as f32 + cell_height * source_row as f32) / source_height,
+        x: (px as f32 + cell_width * source_column as f32) / source_width,
+        y: (py as f32 + cell_height * source_row as f32) / source_height,
         width: cell_width / source_width,
         height: cell_height / source_height,
     }
@@ -6073,6 +6116,36 @@ fn default_stretch() -> i32 {
     -1
 }
 
+/// Starseeker 等の閉店 Lua は `src = "bg"` / `src = 0` と書くが、実体は `system.png`。
+fn resolve_document_source<'a>(
+    sources: &'a HashMap<String, SkinDocumentTexture>,
+    src: &str,
+) -> Option<&'a SkinDocumentTexture> {
+    if let Some(texture) = sources.get(src) {
+        return Some(texture);
+    }
+    match src {
+        "bg" | "0" => sources.get("system"),
+        _ => None,
+    }
+}
+
+fn destination_render_layer<'a>(
+    timer: Option<i32>,
+    after_notes_marker: bool,
+    behind: &'a mut Vec<SkinRenderItem>,
+    front: &'a mut Vec<SkinRenderItem>,
+    failed_overlay: &'a mut Vec<SkinRenderItem>,
+) -> &'a mut Vec<SkinRenderItem> {
+    if timer == Some(3) {
+        failed_overlay
+    } else if after_notes_marker {
+        front
+    } else {
+        behind
+    }
+}
+
 fn deserialize_skin_id<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
 where
     D: Deserializer<'de>,
@@ -7344,7 +7417,7 @@ mod tests {
         .unwrap();
         let sources = mock_source("1", 8.0, 8.0);
 
-        let (behind, front) = document.static_render_items_split(
+        let (behind, front, failed_overlay) = document.static_render_items_split(
             &sources,
             SkinDrawState::default(),
             SkinTextState::default(),
@@ -7353,7 +7426,8 @@ mod tests {
         // `{"id":"notes"}` マーカーより前の destination は背面、後ろは前面に入る。
         assert_eq!(behind.len(), 1, "behind = destinations before the notes marker");
         assert_eq!(front.len(), 2, "front = destinations after the notes marker");
-        // 結合版 static_render_items は behind→front の順で全アイテムを返す。
+        assert!(failed_overlay.is_empty());
+        // 結合版 static_render_items は behind→front→failed の順で全アイテムを返す。
         let all = document.static_render_items(
             &sources,
             SkinDrawState::default(),
@@ -9371,6 +9445,82 @@ mod tests {
             } if approx_eq(r, 1.0)
                 && approx_eq(g, 1.0)
                 && approx_eq(b, 1.0)
+                && approx_eq(a, 128.0 / 255.0)));
+    }
+
+    #[test]
+    fn src_zero_image_uses_black_pixel_crop() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 1920,
+                "h": 1080,
+                "source": [{ "id": "system", "path": "system.png" }],
+                "image": [
+                    { "id": 7, "src": 0, "x": 0, "y": 0, "w": 8, "h": 8 },
+                    { "id": "black", "src": "bg", "x": 391, "y": 1080, "w": 8, "h": 8 }
+                ],
+                "destination": [
+                    { "id": 7, "timer": 3, "dst": [{ "x": 0, "y": 0, "w": 1920, "h": 1080, "a": 200 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let images = document.image_map();
+        let image = images.get("7").unwrap();
+        let black = images.get("black").unwrap();
+        let rect = skin_image_pixel_rect(image, &images);
+        assert_eq!(rect, (black.x, black.y, black.w, black.h));
+    }
+
+    /// Starseeker 閉店の `black` 相当: `src = "bg"` を `system` に解決し、timer 3 で暗転フェード。
+    #[test]
+    fn failed_close_black_fades_in_over_fullscreen() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 1920,
+                "h": 1080,
+                "source": [{ "id": "system", "path": "system.png" }],
+                "image": [{ "id": "black", "src": "bg", "x": 391, "y": 1080, "w": 8, "h": 8 }],
+                "destination": [
+                    { "id": "black", "loop": 1000, "timer": 3, "dst": [
+                        { "time": 0, "x": 0, "y": 0, "w": 1920, "h": 1080, "a": 0 },
+                        { "time": 1000, "a": 255 }
+                    ] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = mock_source("system", 1920.0, 1080.0);
+
+        let inactive = document.static_image_render_items(
+            &sources,
+            SkinDrawState { failed_ms: None, ..SkinDrawState::default() },
+        );
+        let mid = document.static_image_render_items(
+            &sources,
+            SkinDrawState { failed_ms: Some(500), ..SkinDrawState::default() },
+        );
+        let (_, _, failed_overlay) = document.static_render_items_split(
+            &sources,
+            SkinDrawState { failed_ms: Some(500), ..SkinDrawState::default() },
+            SkinTextState::default(),
+        );
+
+        assert!(inactive.is_empty());
+        assert_eq!(mid.len(), 1);
+        assert_eq!(failed_overlay.len(), 1);
+        assert!(matches!(mid[0], SkinRenderItem::Image {
+                rect: Rect { width, height, .. },
+                tint: Color { a, .. },
+                ..
+            } if approx_eq(width, 1.0)
+                && approx_eq(height, 1.0)
                 && approx_eq(a, 128.0 / 255.0)));
     }
 
