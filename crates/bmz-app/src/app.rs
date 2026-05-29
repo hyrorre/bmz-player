@@ -2230,10 +2230,14 @@ impl WinitApp {
         self.skin_defs_cache.clear();
         // 前回リロードの未完了 install は破棄する。
         self.pending_skin_installs.clear();
-        // プレイスキンは決定画面で chart.key_mode を見て個別に再 decode する。
-        // 設定がそのまま (mode 切替もせず) 続行するケースもあるので、署名は
-        // 残しておき、次の決定で同じ設定なら skip させる。設定変更直後に
-        // active_play 中なら、次プレイで自然にリロードされる。
+        // プレイスキンも egui 設定パネルからライブ反映する。直近 load 済みの
+        // key_mode があれば、その mode で強制再 decode を投入する。
+        // `spawn_play_skin_decode_for` は signature 一致時に skip するので、
+        // 署名を無効化してから呼び、設定変更を確実に反映させる。
+        if let Some(key_mode) = self.last_play_skin_signature.as_ref().map(|sig| sig.0) {
+            self.last_play_skin_signature = None;
+            self.spawn_play_skin_decode_for(key_mode);
+        }
         tracing::info!(generation, "skins reload queued from egui skin panel");
     }
 
