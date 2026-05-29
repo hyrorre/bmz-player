@@ -112,7 +112,7 @@ struct WgpuRenderer {
     image_bind_group_layout: wgpu::BindGroupLayout,
     image_sampler: wgpu::Sampler,
     image_sampler_linear: wgpu::Sampler,
-    image_textures: HashMap<TextureId, GpuTexture>,
+    image_textures: HashMap<TextureId, PreparedTexture>,
     image_buffer: Option<wgpu::Buffer>,
     image_buffer_capacity: usize,
     text_pipeline: wgpu::RenderPipeline,
@@ -135,7 +135,10 @@ struct PendingTexture {
     rgba: Vec<u8>,
 }
 
-struct GpuTexture {
+/// GPU へアップロード済みのテクスチャ。別スレッド (skin upload worker) で
+/// 生成してメインスレッドへ送るために公開する。`wgpu::Texture` /
+/// `wgpu::TextureView` はどちらも `Send` なのでスレッド間で受け渡しできる。
+pub struct PreparedTexture {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
 }
@@ -177,6 +180,28 @@ impl Renderer {
     pub fn upsert_image_asset(&mut self, id: TextureId, asset: &RgbaImageAsset) -> Result<()> {
         asset.validate()?;
         self.upsert_rgba_texture(id, asset.width, asset.height, asset.pixels.clone())
+    }
+
+    /// skin upload worker 用に、GPU アップロード機能の clone を取り出す。
+    /// surface 未接続 (`gpu` が None) の間は `None`。
+    /// 返り値は `Send + Clone` なので別スレッドへ渡せる。
+    pub fn gpu_uploader(&self) -> Option<GpuUploader> {
+        self.gpu
+            .as_ref()
+            .map(|gpu| GpuUploader { device: gpu.device.clone(), queue: gpu.queue.clone() })
+    }
+
+    /// worker でアップロード済みの `PreparedTexture` をテクスチャ表へ差し込む。
+    /// surface 未接続時は (worker が存在しないため通常起きないが) 無視する。
+    pub fn insert_prepared_texture(&mut self, id: TextureId, prepared: PreparedTexture) {
+        if let Some(gpu) = &mut self.gpu {
+            gpu.image_textures.insert(id, prepared);
+        } else {
+            tracing::warn!(
+                texture_id = id.0,
+                "dropping prepared texture because gpu surface is not attached"
+            );
+        }
     }
 
     pub fn load_png_texture(&mut self, id: TextureId, path: &std::path::Path) -> Result<()> {
@@ -1613,13 +1638,29 @@ fn create_image_sampler_linear(device: &wgpu::Device) -> wgpu::Sampler {
 fn create_default_image_textures(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-) -> HashMap<TextureId, GpuTexture> {
+) -> HashMap<TextureId, PreparedTexture> {
     let mut textures = HashMap::new();
     textures.insert(
         TextureId(0),
         create_rgba_texture(device, queue, TextureId(0), 1, 1, &[255, 255, 255, 255]),
     );
     textures
+}
+
+/// GPU テクスチャアップロード機能のハンドル。`wgpu::Device` / `Queue` の clone を
+/// 保持し、メインスレッド外 (skin upload worker) から RGBA8 をアップロードできる。
+/// `Renderer::gpu_uploader` で取得する。`Send + Clone`。
+#[derive(Clone)]
+pub struct GpuUploader {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+}
+
+impl GpuUploader {
+    /// RGBA8 バイト列を GPU テクスチャへアップロードして `PreparedTexture` を返す。
+    pub fn upload(&self, width: u32, height: u32, rgba: &[u8]) -> PreparedTexture {
+        create_rgba_texture(&self.device, &self.queue, TextureId(0), width, height, rgba)
+    }
 }
 
 fn create_rgba_texture(
@@ -1629,7 +1670,7 @@ fn create_rgba_texture(
     width: u32,
     height: u32,
     rgba: &[u8],
-) -> GpuTexture {
+) -> PreparedTexture {
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("bmz-render image texture"),
         size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
@@ -1657,7 +1698,7 @@ fn create_rgba_texture(
     );
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     tracing::debug!(texture_id = id.0, width, height, "registered render image texture");
-    GpuTexture { texture, view }
+    PreparedTexture { texture, view }
 }
 
 fn create_image_pipeline(

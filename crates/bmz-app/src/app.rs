@@ -60,16 +60,16 @@ use crate::screens::select_model::{
 };
 use crate::select_options::{ArrangeOption, AssistOption};
 use crate::skin_loader::{
-    DecodedFont, DecodedSkin, DecodedSource, SkinKind, apply_skin_from_config,
+    DecodedSkin, PreparedSource, SkinKind, UploadedSkin, apply_skin_from_config,
     decode_beatoraja_skin_with_options, install_decoded_font, install_decoded_skin,
-    install_decoded_source, is_decodable_skin_path, load_default_skin_into_renderer,
-    play_skin_selection_for, set_decoded_skin_context,
+    is_decodable_skin_path, load_default_skin_into_renderer, play_skin_selection_for,
+    set_decoded_skin_context, upload_decoded_skin,
 };
 use crate::storage::replay::load_replay_for_chart;
 use crate::storage::scan::scan_song_roots;
 use crate::ui::{DebugInfo, EguiLayer, SceneSkinDefs, SkinCandidate, SkinCatalog, SkinConfigMeta};
 use bmz_render::skin::{SkinDocument, SkinDocumentTexture, SkinManifest};
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 
 const SAMPLE_PLAYABLE_TITLE: &str = "BMZ Sample Playable";
 
@@ -180,13 +180,21 @@ struct WinitApp {
     select_option_panel: u8,
     gilrs: Option<crate::input::gilrs::GilrsBackend>,
     default_skin_manifest: Option<SkinManifest>,
+    /// decode worker (CPU) → upload worker への送信端。
     skin_decode_tx: mpsc::Sender<PendingSkinResult>,
-    skin_decode_rx: Receiver<PendingSkinResult>,
+    /// decode worker → upload worker の受信端。surface 接続時に upload worker へ
+    /// move するため Option で保持する。
+    skin_decode_rx: Option<Receiver<PendingSkinResult>>,
+    /// upload worker → main への送信端 (upload worker を spawn する際に clone)。
+    skin_upload_tx: mpsc::Sender<PendingUploadResult>,
+    /// upload worker → main の受信端。GPU アップロード済みスキンを取り込む。
+    skin_upload_rx: Receiver<PendingUploadResult>,
+    /// upload worker を spawn 済みか (surface 接続時に一度だけ起動)。
+    skin_upload_worker_started: bool,
     pending_select_skin: bool,
     pending_decide_skin: bool,
     pending_play_skin: bool,
     pending_result_skin: bool,
-    pending_skin_installs: Vec<PendingSkinInstall>,
     skin_reload_generation: u64,
     pending_skin_reload_at: Option<Instant>,
     /// 直近 install をリクエストしたプレイスキンの key_mode と設定 fingerprint。
@@ -298,24 +306,15 @@ struct PendingSkinResult {
     result: Result<DecodedSkin>,
 }
 
-/// Phase B (install) を 1 フレームあたり数件ずつに分散させるためのキュー。
-/// 受信した DecodedSkin をここに積み、毎フレーム少しずつ消化する。
-struct PendingSkinInstall {
+/// upload worker が GPU アップロードまで終えた結果を main へ返すメッセージ。
+/// `UploadedSkin` 内の `PreparedTexture` は `Send` なのでスレッド間で渡せる。
+/// main は受信後、テクスチャを差し込んで `SkinContext` を組むだけ (軽量)。
+struct PendingUploadResult {
     generation: u64,
-    kind: SkinKind,
     path: PathBuf,
-    document: SkinDocument,
-    default_manifest: SkinManifest,
-    fonts: VecDeque<DecodedFont>,
-    sources: VecDeque<DecodedSource>,
-    document_textures: Vec<SkinDocumentTexture>,
+    kind: SkinKind,
+    uploaded: Result<UploadedSkin>,
 }
-
-/// 1 フレームに install する PNG ソースの最大個数。
-///
-/// runtime reload 中の描画停止を避けるため、GPU upload を複数フレームへ分散する。
-/// scene 遷移直前に必要なスキンだけは `ensure_skin_ready` で明示的に flush する。
-const SKIN_INSTALL_SOURCES_PER_FRAME: usize = 1;
 
 #[derive(Debug, Clone, PartialEq)]
 enum AppViewState {
@@ -366,6 +365,7 @@ impl WinitApp {
         let mut renderer = Renderer::default();
         let skin_catalog = scan_skin_catalog();
         let (skin_decode_tx, skin_decode_rx) = mpsc::channel::<PendingSkinResult>();
+        let (skin_upload_tx, skin_upload_rx) = mpsc::channel::<PendingUploadResult>();
         let (default_skin_manifest, pending_select_skin, pending_decide_skin, pending_result_skin) =
             load_initial_skin_textures(
                 &mut renderer,
@@ -480,12 +480,14 @@ impl WinitApp {
             gilrs,
             default_skin_manifest,
             skin_decode_tx,
-            skin_decode_rx,
+            skin_decode_rx: Some(skin_decode_rx),
+            skin_upload_tx,
+            skin_upload_rx,
+            skin_upload_worker_started: false,
             pending_select_skin,
             pending_decide_skin,
             pending_play_skin,
             pending_result_skin,
-            pending_skin_installs: Vec::new(),
             last_play_skin_signature: None,
             skin_reload_generation: 0,
             pending_skin_reload_at: None,
@@ -572,6 +574,9 @@ impl WinitApp {
                     height = size.height,
                     "window and renderer surface ready"
                 );
+                // surface 接続後 (= GPU device/queue 利用可能) に upload worker を起動する。
+                // decode 結果はそれまで skin_decode_rx にバッファされ、起動後にドレインされる。
+                self.start_skin_upload_worker();
                 window.request_redraw();
                 self.egui = Some(EguiLayer::new(&window, self.boot.profile_config.ui.show_fps));
                 self.window = Some(window);
@@ -1892,33 +1897,53 @@ impl WinitApp {
         self.reload_select_items();
     }
 
-    /// バックグラウンドで decode 中のスキンを非ブロッキングで取り込み、install キューに積む。
-    /// 毎フレーム呼ぶ。実際の Renderer への install 反映は `step_skin_installs` で分散実行する。
+    /// upload worker を起動する。surface 接続後に一度だけ呼ぶ。
+    /// decode worker からの receiver (`skin_decode_rx`) と GPU uploader を worker へ
+    /// move し、worker は decode 結果を受けて GPU アップロードし `skin_upload_tx` で
+    /// main へ返す。
+    fn start_skin_upload_worker(&mut self) {
+        if self.skin_upload_worker_started {
+            return;
+        }
+        let Some(decode_rx) = self.skin_decode_rx.take() else {
+            return;
+        };
+        let Some(uploader) = self.renderer.gpu_uploader() else {
+            // surface 未接続。次回接続時に再試行できるよう receiver を戻す。
+            self.skin_decode_rx = Some(decode_rx);
+            return;
+        };
+        let upload_tx = self.skin_upload_tx.clone();
+        thread::Builder::new()
+            .name("skin-upload".to_string())
+            .spawn(move || skin_upload_worker(decode_rx, upload_tx, uploader))
+            .expect("failed to spawn skin upload thread");
+        self.skin_upload_worker_started = true;
+    }
+
+    /// upload worker が GPU アップロードまで終えたスキンを非ブロッキングで取り込む。
+    /// 毎フレーム呼ぶ。テクスチャ挿入 + フォント登録 + SkinContext 構築のみで軽量。
     fn drain_pending_skins(&mut self) {
         loop {
-            match self.skin_decode_rx.try_recv() {
-                Ok(result) => self.enqueue_pending_skin_install(result),
+            match self.skin_upload_rx.try_recv() {
+                Ok(result) => self.apply_uploaded_skin(result),
                 Err(mpsc::TryRecvError::Empty) => break,
-                // Sender は App 寿命を通じて保持するため Disconnected には到達しないが、
-                // 念のためループから抜ける。
                 Err(mpsc::TryRecvError::Disconnected) => break,
             }
         }
-        self.step_skin_installs();
     }
 
-    /// 指定された kind のスキンが install されるまで強制的に完了させる。
-    /// scene 遷移直前に呼ぶ用途。decode 完了まちのチャネル受信もブロックして待つ。
+    /// 指定された kind のスキンがアップロードされ取り込まれるまでブロックして待つ。
+    /// scene 遷移直前 (特にプレイ開始) に呼ぶ。GPU アップロードは upload worker 上で
+    /// 進むため、main は worker からの受信を待つだけで重い同期処理は無い。
+    /// 先読みが間に合っていれば待ちはゼロ。
     fn ensure_skin_ready(&mut self, kind: SkinKind) {
-        // まだ decode 結果が届いていなければブロックして受信する。
         while self.is_kind_pending_decode(kind) {
-            match self.skin_decode_rx.recv() {
-                Ok(result) => self.enqueue_pending_skin_install(result),
+            match self.skin_upload_rx.recv() {
+                Ok(result) => self.apply_uploaded_skin(result),
                 Err(_) => break,
             }
         }
-        // install キューに残っている該当 kind を一気に流す。
-        self.flush_skin_installs_for(kind);
     }
 
     fn is_kind_pending_decode(&self, kind: SkinKind) -> bool {
@@ -1930,15 +1955,18 @@ impl WinitApp {
         }
     }
 
-    fn enqueue_pending_skin_install(&mut self, pending: PendingSkinResult) {
-        let PendingSkinResult { generation, path, kind, result } = pending;
+    /// upload worker から届いた `UploadedSkin` を Renderer へ取り込む。
+    /// stale generation は破棄。GPU アップロードは worker で完了済みなので、
+    /// ここではハンドル挿入・フォント登録・SkinContext 構築のみ (軽量)。
+    fn apply_uploaded_skin(&mut self, pending: PendingUploadResult) {
+        let PendingUploadResult { generation, path, kind, uploaded } = pending;
         if generation != self.skin_reload_generation {
             tracing::debug!(
                 path = %path.display(),
                 kind = ?kind,
                 generation,
                 current = self.skin_reload_generation,
-                "discarding stale skin decode result"
+                "discarding stale uploaded skin"
             );
             return;
         }
@@ -1948,14 +1976,14 @@ impl WinitApp {
             SkinKind::Play => self.pending_play_skin = false,
             SkinKind::Result => self.pending_result_skin = false,
         }
-        let decoded = match result {
-            Ok(decoded) => decoded,
+        let uploaded = match uploaded {
+            Ok(uploaded) => uploaded,
             Err(error) => {
                 tracing::warn!(
                     path = %path.display(),
                     kind = ?kind,
                     error = %format_error_chain(&error),
-                    "failed to decode beatoraja skin in background"
+                    "failed to decode/upload beatoraja skin in background"
                 );
                 return;
             }
@@ -1964,89 +1992,21 @@ impl WinitApp {
             tracing::warn!(
                 path = %path.display(),
                 kind = ?kind,
-                "skipping pending skin install because default skin manifest is unavailable"
+                "skipping uploaded skin because default skin manifest is unavailable"
             );
             return;
         };
-        let DecodedSkin { kind, document, fonts, sources } = decoded;
-        self.pending_skin_installs.push(PendingSkinInstall {
-            generation,
-            kind,
-            path,
-            document,
-            default_manifest: manifest,
-            fonts: fonts.into_iter().collect(),
-            sources: sources.into_iter().collect(),
-            document_textures: Vec::new(),
-        });
-    }
-
-    /// install キューを 1 フレーム分だけ進める。
-    /// フォントは安価なので一括処理、PNG は `SKIN_INSTALL_SOURCES_PER_FRAME` 個までを上限に
-    /// 各 install を順番に進めていく。budget を使い切ったらそのフレームは打ち切る。
-    fn step_skin_installs(&mut self) {
-        let mut budget = SKIN_INSTALL_SOURCES_PER_FRAME;
-        while !self.pending_skin_installs.is_empty() {
-            let install = &mut self.pending_skin_installs[0];
-            while let Some(font) = install.fonts.pop_front() {
-                install_decoded_font(&mut self.renderer, font);
-            }
-            while budget > 0
-                && let Some(source) = install.sources.pop_front()
-            {
-                if let Some(texture) = install_decoded_source(&mut self.renderer, source) {
-                    install.document_textures.push(texture);
-                }
-                budget = budget.saturating_sub(1);
-            }
-            if install.fonts.is_empty() && install.sources.is_empty() {
-                let install = self.pending_skin_installs.remove(0);
-                self.finalize_skin_install(install);
-            } else {
-                // budget を使い切った: 続きは次フレームで。
-                break;
-            }
+        let UploadedSkin { kind, document, fonts, prepared } = uploaded;
+        // フォント登録 (ab_glyph パース。軽量なので main で実施)。
+        for font in fonts {
+            install_decoded_font(&mut self.renderer, font);
         }
-    }
-
-    fn flush_skin_installs_for(&mut self, kind: SkinKind) {
-        let mut remaining = std::mem::take(&mut self.pending_skin_installs);
-        let (match_kind, others): (Vec<_>, Vec<_>) = remaining.drain(..).partition(|install| {
-            install.kind == kind && install.generation == self.skin_reload_generation
-        });
-        self.pending_skin_installs = others;
-        for mut install in match_kind {
-            while let Some(font) = install.fonts.pop_front() {
-                install_decoded_font(&mut self.renderer, font);
-            }
-            while let Some(source) = install.sources.pop_front() {
-                if let Some(texture) = install_decoded_source(&mut self.renderer, source) {
-                    install.document_textures.push(texture);
-                }
-            }
-            self.finalize_skin_install(install);
-        }
-    }
-
-    fn finalize_skin_install(&mut self, install: PendingSkinInstall) {
-        let PendingSkinInstall {
-            generation,
-            kind,
-            path,
-            document,
-            default_manifest,
-            document_textures,
-            ..
-        } = install;
-        if generation != self.skin_reload_generation {
-            tracing::debug!(
-                path = %path.display(),
-                kind = ?kind,
-                generation,
-                current = self.skin_reload_generation,
-                "discarding stale pending skin install"
-            );
-            return;
+        // アップロード済みテクスチャを差し込み、SkinDocumentTexture を組む。
+        let mut document_textures = Vec::with_capacity(prepared.len());
+        for source in prepared {
+            let PreparedSource { source_id, texture, prepared, size } = source;
+            self.renderer.insert_prepared_texture(TextureId(texture.0), prepared);
+            document_textures.push(SkinDocumentTexture { source_id, texture, source_size: size });
         }
         tracing::info!(
             path = %path.display(),
@@ -2058,7 +2018,7 @@ impl WinitApp {
         set_decoded_skin_context(
             &mut self.renderer,
             kind,
-            default_manifest,
+            manifest,
             document,
             document_textures,
             preserve_play_dynamic_timers,
@@ -2392,8 +2352,8 @@ impl WinitApp {
         self.pending_play_skin = false;
         self.pending_result_skin = pending_result;
         self.skin_defs_cache.clear();
-        // 前回リロードの未完了 install は破棄する。
-        self.pending_skin_installs.clear();
+        // 旧 generation 分の upload 結果は apply_uploaded_skin の generation
+        // チェックで破棄されるため、ここでの明示的なキュー破棄は不要。
         // プレイスキンも egui 設定パネルからライブ反映する。直近 load 済みの
         // key_mode があれば、その mode で強制再 decode を投入する。
         // `spawn_play_skin_decode_for` は signature 一致時に skip するので、
@@ -2922,6 +2882,22 @@ fn spawn_skin_decode(
             let _ = tx.send(PendingSkinResult { generation, path: send_path, kind, result });
         })
         .expect("failed to spawn skin decode thread");
+}
+
+/// upload worker のループ。decode 結果を受け取り、GPU アップロードして main へ返す。
+/// decode 側 (`decode_rx`) が全て drop されるとループを抜ける (アプリ終了時)。
+fn skin_upload_worker(
+    decode_rx: Receiver<PendingSkinResult>,
+    upload_tx: mpsc::Sender<PendingUploadResult>,
+    uploader: bmz_render::renderer::GpuUploader,
+) {
+    while let Ok(PendingSkinResult { generation, path, kind, result }) = decode_rx.recv() {
+        let uploaded = result.map(|decoded| upload_decoded_skin(&uploader, decoded));
+        if upload_tx.send(PendingUploadResult { generation, path, kind, uploaded }).is_err() {
+            // main 側受信端が drop された (アプリ終了)。
+            break;
+        }
+    }
 }
 
 fn scan_skin_catalog() -> SkinCatalog {

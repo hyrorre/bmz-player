@@ -6,7 +6,7 @@ use bmz_core::lane::KeyMode;
 use bmz_render::assets::{RgbaImageAsset, load_png_rgba};
 use bmz_render::bitmap_font::{BitmapFont, load_bitmap_font};
 use bmz_render::plan::TextureId;
-use bmz_render::renderer::Renderer;
+use bmz_render::renderer::{GpuUploader, PreparedTexture, Renderer};
 use bmz_render::skin::{
     DestinationListEntry, SkinContext, SkinDocument, SkinDocumentTexture, SkinFilepathDef,
     SkinImageSize, SkinManifest, SkinTextureId,
@@ -111,6 +111,49 @@ pub struct DecodedSource {
     pub path: PathBuf,
     pub texture: SkinTextureId,
     pub asset: RgbaImageAsset,
+}
+
+/// GPU アップロード済みの 1 ソース。upload worker が `DecodedSource` から生成する。
+pub struct PreparedSource {
+    pub source_id: String,
+    pub texture: SkinTextureId,
+    pub prepared: PreparedTexture,
+    pub size: SkinImageSize,
+}
+
+/// decode + GPU アップロードまで終わった 1 スキンぶん。upload worker → main で渡す。
+/// `PreparedTexture` (= wgpu::Texture/View) は `Send` なのでスレッド間で受け渡せる。
+pub struct UploadedSkin {
+    pub kind: SkinKind,
+    pub document: SkinDocument,
+    pub fonts: Vec<DecodedFont>,
+    pub prepared: Vec<PreparedSource>,
+}
+
+/// `DecodedSkin` の全ソースを GPU へアップロードして `UploadedSkin` を返す。
+/// upload worker スレッドから呼ぶ (`uploader` は `Renderer::gpu_uploader` の clone)。
+pub fn upload_decoded_skin(uploader: &GpuUploader, decoded: DecodedSkin) -> UploadedSkin {
+    let DecodedSkin { kind, document, fonts, sources } = decoded;
+    let prepared = sources
+        .into_iter()
+        .filter_map(|source| {
+            let DecodedSource { source_id, path, texture, asset } = source;
+            if let Err(error) = asset.validate() {
+                tracing::warn!(
+                    source_id = %source_id,
+                    texture_id = texture.0,
+                    path = %path.display(),
+                    %error,
+                    "skipping invalid beatoraja skin source"
+                );
+                return None;
+            }
+            let size = SkinImageSize { width: asset.width as f32, height: asset.height as f32 };
+            let prepared = uploader.upload(asset.width, asset.height, &asset.pixels);
+            Some(PreparedSource { source_id, texture, prepared, size })
+        })
+        .collect();
+    UploadedSkin { kind, document, fonts, prepared }
 }
 
 pub fn apply_skin_from_dir(renderer: &mut Renderer, skin_root: &Path) -> Result<()> {
