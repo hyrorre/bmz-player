@@ -8,7 +8,7 @@ use crate::skin::{
     SkinTextState, SkinTextureId, TextSlot, append_skin_render_items, judge_image_index,
 };
 use crate::skin_offset::SKIN_OFFSET_BAR_LINE;
-use crate::snapshot::{DisplayJudgeCounts, RenderSnapshot};
+use crate::snapshot::{DisplayBgaFrame, DisplayJudgeCounts, RenderSnapshot};
 use crate::text::{BitmapTextStyle, TextRenderer};
 
 const JUDGE_LINE_Y_RATIO: f32 = 0.86;
@@ -243,6 +243,75 @@ fn push_fullscreen_image(commands: &mut Vec<DrawCommand>, texture: TextureId) {
         blend: BlendMode::Normal,
         linear_filter: true,
     });
+}
+
+/// デフォルトスキン (skin document 無し) 向けの全画面 BGA 描画。
+fn push_fallback_bga_background(commands: &mut Vec<DrawCommand>, snapshot: &RenderSnapshot) {
+    if !snapshot.has_bga || !snapshot.bga_enabled || snapshot.bga_stretch == 8 {
+        return;
+    }
+    if let Some(poor) = snapshot.bga_poor {
+        push_bga_fullscreen(commands, poor, snapshot.bga_stretch);
+    } else if let Some(base) = snapshot.bga_base {
+        push_bga_fullscreen(commands, base, snapshot.bga_stretch);
+    }
+    if snapshot.bga_poor.is_none() {
+        if let Some(layer) = snapshot.bga_layer {
+            push_bga_fullscreen(commands, layer, snapshot.bga_stretch);
+        }
+        if let Some(layer2) = snapshot.bga_layer2 {
+            push_bga_fullscreen(commands, layer2, snapshot.bga_stretch);
+        }
+    }
+}
+
+fn push_bga_fullscreen(commands: &mut Vec<DrawCommand>, frame: DisplayBgaFrame, stretch: i32) {
+    let (rect, uv) = bga_fullscreen_geometry(frame.width, frame.height, stretch);
+    commands.push(DrawCommand::Image {
+        rect,
+        uv,
+        texture: TextureId(frame.texture_id),
+        tint: Color::rgba(frame.tint_r, frame.tint_g, frame.tint_b, frame.tint_a),
+        blend: BlendMode::Normal,
+        linear_filter: true,
+    });
+}
+
+/// beatoraja BGA stretch 0/1 の簡易版 (全画面 rect = 1x1 正規化座標)。
+fn bga_fullscreen_geometry(source_w: f32, source_h: f32, stretch: i32) -> (Rect, UvRect) {
+    let source_w = source_w.max(1.0);
+    let source_h = source_h.max(1.0);
+    let source_aspect = source_w / source_h;
+
+    if stretch == 1 {
+        // 縦横比を保って画面内に収める。
+        if source_aspect >= 1.0 {
+            let height = 1.0 / source_aspect;
+            return (
+                Rect { x: 0.0, y: (1.0 - height) * 0.5, width: 1.0, height },
+                UvRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+            );
+        }
+        let width = source_aspect;
+        return (
+            Rect { x: (1.0 - width) * 0.5, y: 0.0, width, height: 1.0 },
+            UvRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+        );
+    }
+
+    // stretch 0: 画面全体を覆う (center crop)。
+    if source_aspect >= 1.0 {
+        let uv_width = 1.0 / source_aspect;
+        return (
+            Rect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+            UvRect { x: (1.0 - uv_width) * 0.5, y: 0.0, width: uv_width, height: 1.0 },
+        );
+    }
+    let uv_height = source_aspect;
+    (
+        Rect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+        UvRect { x: 0.0, y: (1.0 - uv_height) * 0.5, width: 1.0, height: uv_height },
+    )
 }
 
 fn push_select_banner_image(commands: &mut Vec<DrawCommand>) {
@@ -592,6 +661,9 @@ fn plan_play(
     let text = TextRenderer;
     let skin_manifest = skin.manifest();
     let has_document = skin.document().is_some();
+    if !has_document {
+        push_fallback_bga_background(&mut commands, snapshot);
+    }
     let key_mode = snapshot.key_mode;
     let active_lanes = key_mode.active_lanes();
     let active_lane_count = active_lanes.len();
@@ -705,6 +777,14 @@ fn plan_play(
             tint_a: frame.tint_a,
         }),
         bga_layer: snapshot.bga_layer.map(|frame| crate::skin::SkinBgaFrame {
+            texture: SkinTextureId(frame.texture_id),
+            source_size: crate::skin::SkinImageSize { width: frame.width, height: frame.height },
+            tint_r: frame.tint_r,
+            tint_g: frame.tint_g,
+            tint_b: frame.tint_b,
+            tint_a: frame.tint_a,
+        }),
+        bga_layer2: snapshot.bga_layer2.map(|frame| crate::skin::SkinBgaFrame {
             texture: SkinTextureId(frame.texture_id),
             source_size: crate::skin::SkinImageSize { width: frame.width, height: frame.height },
             tint_r: frame.tint_r,
@@ -2975,6 +3055,14 @@ mod tests {
             time: TimeUs(0),
             is_miss: false,
         })
+    }
+
+    #[test]
+    fn bga_fullscreen_geometry_letterbox_preserves_aspect() {
+        let (rect, uv) = bga_fullscreen_geometry(1920.0, 1080.0, 1);
+        assert!((rect.width - 1.0).abs() < f32::EPSILON);
+        assert!((rect.height - (1080.0 / 1920.0)).abs() < 0.001);
+        assert!((uv.width - 1.0).abs() < f32::EPSILON);
     }
 
     #[test]

@@ -71,6 +71,7 @@ pub struct RenderSnapshot {
     pub bga_enabled: bool,
     pub bga_base: Option<DisplayBgaFrame>,
     pub bga_layer: Option<DisplayBgaFrame>,
+    pub bga_layer2: Option<DisplayBgaFrame>,
     pub bga_poor: Option<DisplayBgaFrame>,
     pub bga_stretch: i32,
     pub best_ex_score: Option<u32>,

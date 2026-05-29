@@ -1078,6 +1078,8 @@ pub struct SkinDrawState {
     pub bga_base: Option<SkinBgaFrame>,
     /// 現在表示するBGAレイヤー画像。
     pub bga_layer: Option<SkinBgaFrame>,
+    /// 現在表示するBGAレイヤー2画像 (ch 0A)。
+    pub bga_layer2: Option<SkinBgaFrame>,
     /// 直近のBAD/POORで一時表示するミスレイヤー画像。
     pub bga_poor: Option<SkinBgaFrame>,
     /// BGA destination に stretch 指定が無い場合に使う拡大設定。
@@ -1213,6 +1215,7 @@ impl Default for SkinDrawState {
             bga_enabled: true,
             bga_base: None,
             bga_layer: None,
+            bga_layer2: None,
             bga_poor: None,
             bga_stretch: 1,
             judge_timing_ms: None,
@@ -1892,6 +1895,21 @@ impl SkinDocument {
                 }
                 if state.bga_poor.is_none()
                     && let Some(bga) = state.bga_layer
+                {
+                    let tint = multiply_bga_tints(destination_tint, bga);
+                    items.push(bga_image_item(
+                        bga,
+                        stretch,
+                        rect,
+                        tint,
+                        blend,
+                        self.w,
+                        self.h,
+                        destination.filter != 0,
+                    ));
+                }
+                if state.bga_poor.is_none()
+                    && let Some(bga) = state.bga_layer2
                 {
                     let tint = multiply_bga_tints(destination_tint, bga);
                     items.push(bga_image_item(
