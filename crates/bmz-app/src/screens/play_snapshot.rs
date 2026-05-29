@@ -61,6 +61,8 @@ pub fn build_render_snapshot_with_bga_frames(
         fast_slow_counts: display_fast_slow_counts(session),
         gauge: session.gauge.current().value,
         gauge_type: session.gauge.current().definition.gauge_type as i32,
+        gauge_max: session.gauge.current().definition.max,
+        gauge_border: session.gauge.current().definition.border,
         hispeed: session.hispeed,
         lift: session.lift,
         lane_cover: if session.lane_cover_visible { session.lane_cover } else { 0.0 },

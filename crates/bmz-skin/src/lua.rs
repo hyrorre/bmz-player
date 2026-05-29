@@ -647,7 +647,8 @@ fn create_timer_util_module(lua: &Lua, probe: Arc<Mutex<MainStateProbe>>) -> mlu
     table.set(
         "timer_observe_boolean",
         lua.create_function(move |lua, observed: Function| {
-            let observe = infer_boolean_predicate(&observed, &probe_for_observe, None)
+            let observe = infer_is_gauge_iidx_global_observe(lua, &observed)
+                .or_else(|| infer_boolean_predicate(&observed, &probe_for_observe, None))
                 .or_else(|| infer_constant_boolean(&observed))
                 .unwrap_or_else(|| "number(0) < 0".to_string());
             let timer_id = {
@@ -1652,6 +1653,38 @@ fn infer_constant_boolean(function: &Function) -> Option<String> {
     match function.call::<bool>(()).ok() {
         Some(true) => Some("number(0) >= 0".to_string()),
         Some(false) => Some("number(0) < 0".to_string()),
+        _ => None,
+    }
+}
+
+/// Starseeker 等が `return is_gauge_iidx` / `return not is_gauge_iidx` と書くが
+/// グローバルを定義しないスキン向け。ロード時に真偽を切り替えて EX-HARD/HAZARD 相当へ写す。
+fn infer_is_gauge_iidx_global_observe(lua: &Lua, function: &Function) -> Option<String> {
+    let globals = lua.globals();
+    let previous = globals.get::<Value>("is_gauge_iidx").ok();
+
+    fn observe_truth(function: &Function) -> Option<bool> {
+        match function.call::<Value>(()).ok()? {
+            Value::Boolean(value) => Some(value),
+            Value::Nil => Some(false),
+            _ => None,
+        }
+    }
+
+    globals.set("is_gauge_iidx", false).ok()?;
+    let when_false = observe_truth(function)?;
+    globals.set("is_gauge_iidx", true).ok()?;
+    let when_true = observe_truth(function)?;
+
+    if let Some(value) = previous {
+        globals.set("is_gauge_iidx", value).ok()?;
+    } else {
+        globals.raw_remove("is_gauge_iidx").ok()?;
+    }
+
+    match (when_false, when_true) {
+        (false, true) => Some("gauge_type() == 4 or gauge_type() == 5".to_string()),
+        (true, false) => Some("gauge_type() != 4 and gauge_type() != 5".to_string()),
         _ => None,
     }
 }

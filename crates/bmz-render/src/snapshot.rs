@@ -47,6 +47,10 @@ pub struct RenderSnapshot {
     pub fast_slow_counts: FastSlowJudgeCounts,
     pub gauge: f32,
     pub gauge_type: i32,
+    /// 現在ゲージの上限 (beatoraja `GaugeElementProperty.max`)。
+    pub gauge_max: f32,
+    /// 現在ゲージの合格ライン (beatoraja `GaugeElementProperty.border`)。
+    pub gauge_border: f32,
     pub hispeed: f32,
     pub lift: f32,
     pub lane_cover: f32,

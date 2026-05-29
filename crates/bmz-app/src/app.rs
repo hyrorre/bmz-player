@@ -1919,8 +1919,7 @@ impl WinitApp {
             sources = document_textures.len(),
             "beatoraja skin fully installed"
         );
-        let preserve_play_dynamic_timers =
-            kind == SkinKind::Play && self.active_play.is_some();
+        let preserve_play_dynamic_timers = kind == SkinKind::Play && self.active_play.is_some();
         set_decoded_skin_context(
             &mut self.renderer,
             kind,

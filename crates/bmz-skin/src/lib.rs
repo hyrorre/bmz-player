@@ -544,6 +544,56 @@ mod tests {
     }
 
     #[test]
+    fn lua_skin_timer_observe_infers_is_gauge_iidx_global() {
+        let root = unique_test_dir("bmz-skin-lua-iidx");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("play7.luaskin"),
+            r#"
+            local timer_util = require("timer_util")
+            return {
+                type = 0,
+                destination = {
+                    {
+                        id = "groove_frame",
+                        timer = timer_util.timer_observe_boolean(function()
+                            return not is_gauge_iidx
+                        end),
+                        dst = { { x = 0, y = 0, w = 1, h = 1 } },
+                    },
+                    {
+                        id = "groove_frame_iidx",
+                        timer = timer_util.timer_observe_boolean(function()
+                            return is_gauge_iidx
+                        end),
+                        dst = { { x = 0, y = 0, w = 1, h = 1 } },
+                    },
+                },
+            }
+            "#,
+        )
+        .unwrap();
+
+        let loaded = load_lua_skin(
+            &root.join("play7.luaskin"),
+            SkinKind::Play,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+
+        assert_eq!(loaded.document.dynamic_timers.len(), 2);
+        assert_eq!(
+            loaded.document.dynamic_timers[0].observe,
+            "gauge_type() != 4 and gauge_type() != 5"
+        );
+        assert_eq!(
+            loaded.document.dynamic_timers[1].observe,
+            "gauge_type() == 4 or gauge_type() == 5"
+        );
+    }
+
+    #[test]
     fn lua_skin_infers_or_draw_and_division_graph_value() {
         let root = unique_test_dir("bmz-skin-lua");
         fs::create_dir_all(&root).unwrap();

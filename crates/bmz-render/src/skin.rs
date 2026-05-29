@@ -511,7 +511,8 @@ pub struct SkinGaugeDef {
     pub nodes: Vec<String>,
     #[serde(default = "default_gauge_parts")]
     pub parts: i32,
-    #[serde(default, rename = "type")]
+    /// beatoraja `SkinGauge` のアニメ種別 (`ANIMATION_*`)。JSON で省略時は 0 (RANDOM)。
+    #[serde(default = "default_skin_gauge_animation_type", rename = "type")]
     pub gauge_type: i32,
     #[serde(default = "default_gauge_range")]
     pub range: i32,
@@ -1006,6 +1007,8 @@ pub struct SkinDrawState {
     pub judge_counts: DisplayJudgeCounts,
     pub gauge: f32,
     pub gauge_type: i32,
+    pub gauge_max: f32,
+    pub gauge_border: f32,
     pub play_progress: f32,
     pub end_of_note: bool,
     /// 各レーンのボムタイマー経過ms。Noneなら非アクティブ。
@@ -1168,6 +1171,8 @@ impl Default for SkinDrawState {
             judge_counts: DisplayJudgeCounts::default(),
             gauge: 0.0,
             gauge_type: 2,
+            gauge_max: 100.0,
+            gauge_border: 80.0,
             play_progress: 0.0,
             end_of_note: false,
             bomb_ms: [None; LANE_COUNT],
@@ -1678,7 +1683,7 @@ impl SkinDocument {
             if !eval_skin_draw_condition(&destination.draw, state) {
                 continue;
             }
-            if self.gauge.as_ref().is_some_and(|gauge| gauge.id == destination.id) {
+            if self.destination_uses_skin_gauge_bar_render(destination) {
                 if let Some(items) = self.resolve_gauge_destination_items(
                     destination,
                     &enabled_options,
@@ -1793,7 +1798,7 @@ impl SkinDocument {
         let is_hidden_cover_destination =
             self.hidden_cover.iter().any(|cover| cover.id == destination.id);
         apply_skin_offset_to_frame(destination, &mut frame, state, is_hidden_cover_destination);
-        if let Some(image) = images.get(destination.id.as_str()) {
+        if let Some(image) = skin_image_for_destination_id(destination.id.as_str(), images) {
             if self.should_skip_lift_lane_cover_render(destination, image)
                 && state.offset_lift_px == 0
             {
@@ -1969,6 +1974,16 @@ impl SkinDocument {
             return Some(vec![item]);
         }
 
+        if self.destination_uses_skin_gauge_overlay_render(destination) {
+            let rect = normalize_skin_frame_rect(frame, self.w, self.h);
+            let blend = if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal };
+            return Some(vec![SkinRenderItem::Rect {
+                rect,
+                color: Color::rgba(1.0, 1.0, 1.0, frame.a as f32 / 255.0),
+                blend,
+            }]);
+        }
+
         if let Some(graph) = self.graph.iter().find(|g| g.id == destination.id) {
             return self.graph_render_item(graph, frame, state, sources).map(|item| vec![item]);
         }
@@ -2003,7 +2018,7 @@ impl SkinDocument {
         frame.y += offset.1;
         apply_skin_offset_to_frame(destination, &mut frame, state, false);
 
-        if let Some(image) = images.get(destination.id.as_str()) {
+        if let Some(image) = skin_image_for_destination_id(destination.id.as_str(), images) {
             if self.should_skip_lift_lane_cover_render(destination, image)
                 && state.offset_lift_px == 0
             {
@@ -2754,12 +2769,27 @@ impl SkinDocument {
         let enabled_options = self.enabled_options();
         let destination =
             self.all_destinations(&enabled_options).into_iter().find(|destination| {
-                self.gauge.as_ref().is_some_and(|gauge_def| destination.id == gauge_def.id)
+                self.destination_uses_skin_gauge_bar_render(destination)
                     && destination.timer.is_none()
                     && test_skin_ops(&destination.op, &enabled_options, state)
                     && eval_skin_draw_condition(&destination.draw, state)
             })?;
         self.resolve_gauge_destination_items(destination, &enabled_options, state, sources)
+    }
+
+    fn destination_uses_skin_gauge_bar_render(&self, destination: &SkinDestinationDef) -> bool {
+        self.gauge.as_ref().is_some_and(|gauge| {
+            gauge.id == destination.id
+                && destination.draw.trim().is_empty()
+                && destination.blend != 2
+        })
+    }
+
+    fn destination_uses_skin_gauge_overlay_render(&self, destination: &SkinDestinationDef) -> bool {
+        self.gauge.as_ref().is_some_and(|gauge| {
+            gauge.id == destination.id
+                && (!destination.draw.trim().is_empty() || destination.blend == 2)
+        })
     }
 
     fn resolve_gauge_destination_items(
@@ -2773,32 +2803,70 @@ impl SkinDocument {
         let elapsed_ms = skin_timer_elapsed_ms(destination.timer, state)?;
         let frame = resolve_destination_frame(destination, elapsed_ms, enabled_options)?;
         let rect = normalize_skin_frame_rect(frame, self.w, self.h);
-        let filled =
-            (state.gauge.clamp(0.0, 100.0) / 100.0 * gauge_def.parts.max(1) as f32).round() as i32;
-        let node_id = gauge_def.nodes.first()?;
+        let parts = gauge_def.parts.max(1);
+        let max = state.gauge_max.max(1.0);
+        let border = state.gauge_border;
+        let notes = skin_gauge_notes_count(state.gauge, parts, max);
+        let animation = skin_gauge_animation_index(gauge_def, state);
+        let exgauge = skin_gauge_node_base(state.gauge_type);
+        let anim_type = gauge_def.gauge_type;
+        let base_color = skin_gauge_frame_color(frame);
+        let blend = skin_gauge_destination_blend(destination);
         let mut items = Vec::new();
-        for index in 0..filled {
-            let part_rect = if rect.width >= rect.height {
-                let part_width = rect.width / gauge_def.parts.max(1) as f32;
-                Rect {
-                    x: rect.x + part_width * index as f32,
-                    y: rect.y,
-                    width: part_width,
-                    height: rect.height,
-                }
-            } else {
-                let part_height = rect.height / gauge_def.parts.max(1) as f32;
-                Rect {
-                    x: rect.x,
-                    y: rect.y + rect.height - part_height * (index + 1) as f32,
-                    width: rect.width,
-                    height: part_height,
-                }
-            };
-            if let Some(item) =
-                self.image_render_item(node_id, part_rect, elapsed_ms, sources, 0, false)
-            {
+        for part in 1..=parts {
+            let part_border = part as f32 * max / parts as f32;
+            let node_index = skin_gauge_sprite_node_index(
+                exgauge,
+                part,
+                notes,
+                animation,
+                border,
+                part_border,
+                gauge_def.nodes.len(),
+                anim_type,
+            );
+            let node_id = gauge_def.nodes.get(node_index)?;
+            let part_rect = skin_gauge_part_rect(rect, parts, part);
+            if let Some(item) = self.gauge_image_render_item(
+                node_id,
+                part_rect,
+                elapsed_ms,
+                sources,
+                base_color,
+                blend,
+                destination.filter != 0,
+            ) {
                 items.push(item);
+            }
+            if anim_type == SKIN_GAUGE_ANIM_FLICKERING
+                && notes > 0
+                && part == notes
+                && let Some(tip_index) = skin_gauge_flicker_tip_node_index(
+                    exgauge,
+                    border,
+                    part_border,
+                    gauge_def.nodes.len(),
+                )
+                && let Some(tip_id) = gauge_def.nodes.get(tip_index)
+            {
+                let flicker_alpha = skin_gauge_flicker_alpha(animation, gauge_def.cycle);
+                let flicker_color = Color::rgba(
+                    base_color.r,
+                    base_color.g,
+                    base_color.b,
+                    base_color.a * flicker_alpha,
+                );
+                if let Some(item) = self.gauge_image_render_item(
+                    tip_id,
+                    part_rect,
+                    elapsed_ms,
+                    sources,
+                    flicker_color,
+                    blend,
+                    destination.filter != 0,
+                ) {
+                    items.push(item);
+                }
             }
         }
         Some(items)
@@ -3094,6 +3162,34 @@ impl SkinDocument {
             uv,
             tint: Color::rgb(1.0, 1.0, 1.0),
             blend: BlendMode::Normal,
+            scale: SkinImageScale::Stretch,
+            border: None,
+            source_size: Some(source.source_size),
+            linear_filter,
+        })
+    }
+
+    fn gauge_image_render_item(
+        &self,
+        image_id: &str,
+        rect: Rect,
+        elapsed_ms: i32,
+        sources: &HashMap<String, SkinDocumentTexture>,
+        tint: Color,
+        blend: BlendMode,
+        linear_filter: bool,
+    ) -> Option<SkinRenderItem> {
+        let image = self.image.iter().find(|image| image.id == image_id)?;
+        let source = resolve_document_source(sources, &image.src)?;
+        let uv = skin_image_texture_region(image, source.source_size, elapsed_ms);
+        let (rect, uv) =
+            stretch_skin_image_geometry(0, rect, uv, source.source_size, self.w, self.h);
+        Some(SkinRenderItem::Image {
+            texture: source.texture,
+            rect,
+            uv,
+            tint,
+            blend,
             scale: SkinImageScale::Stretch,
             border: None,
             source_size: Some(source.source_size),
@@ -5758,6 +5854,17 @@ fn destination_uses_lift_offset_only(destination: &SkinDestinationDef) -> bool {
         && !destination_uses_skin_offset(destination, 5)
 }
 
+/// Starseeker 等で `groove_frame_iidx` destination が `groove_frame` image を共有する。
+fn skin_image_for_destination_id<'a>(
+    destination_id: &str,
+    images: &'a HashMap<&str, &SkinImageDef>,
+) -> Option<&'a SkinImageDef> {
+    images
+        .get(destination_id)
+        .copied()
+        .or_else(|| destination_id.strip_suffix("_iidx").and_then(|base| images.get(base)).copied())
+}
+
 fn is_lift_lane_cover_id(id: &str) -> bool {
     id.eq_ignore_ascii_case("liftcover")
         || id.eq_ignore_ascii_case("lift-cover")
@@ -6094,6 +6201,118 @@ fn default_true() -> bool {
 
 fn default_graph_angle() -> i32 {
     1
+}
+
+/// beatoraja `SkinGauge.ANIMATION_*` (JSON `gauge.type` フィールド)。
+const SKIN_GAUGE_ANIM_FLICKERING: i32 = 3;
+const SKIN_GAUGE_ANIM_INCREASE: i32 = 1;
+
+/// beatoraja `SkinGauge.draw` の `exgauge = (type >= CLASS ? type - 3 : type) * 6`。
+fn skin_gauge_node_base(gameplay_gauge_type: i32) -> usize {
+    let adjusted =
+        if gameplay_gauge_type >= 6 { gameplay_gauge_type - 3 } else { gameplay_gauge_type };
+    adjusted.max(0) as usize * 6
+}
+
+fn skin_gauge_notes_count(gauge: f32, parts: i32, max: f32) -> i32 {
+    if gauge > 0.0 { ((gauge * parts as f32 / max.max(1.0)) as i32).max(1) } else { 0 }
+}
+
+fn skin_gauge_frame_color(frame: ResolvedSkinFrame) -> Color {
+    Color::rgba(
+        frame.r as f32 / 255.0,
+        frame.g as f32 / 255.0,
+        frame.b as f32 / 255.0,
+        frame.a as f32 / 255.0,
+    )
+}
+
+fn skin_gauge_destination_blend(destination: &SkinDestinationDef) -> BlendMode {
+    if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal }
+}
+
+fn skin_gauge_animation_index(gauge_def: &SkinGaugeDef, state: SkinDrawState) -> i32 {
+    let cycle = gauge_def.cycle.max(1);
+    match gauge_def.gauge_type {
+        SKIN_GAUGE_ANIM_FLICKERING => {
+            let time = state.play_timer_ms.unwrap_or(state.elapsed_ms);
+            time.rem_euclid(cycle)
+        }
+        SKIN_GAUGE_ANIM_INCREASE => (state.elapsed_ms / cycle) % (gauge_def.range + 1),
+        _ => 0,
+    }
+}
+
+/// beatoraja `SkinGauge.draw` のスプライト選択 (`exgauge + offset + underclear`)。
+fn skin_gauge_sprite_node_index(
+    exgauge: usize,
+    part: i32,
+    notes: i32,
+    animation: i32,
+    border: f32,
+    part_border: f32,
+    node_count: usize,
+    anim_type: i32,
+) -> usize {
+    let offset = if anim_type == SKIN_GAUGE_ANIM_FLICKERING {
+        if notes >= part { 0 } else { 2 }
+    } else if notes == part {
+        4
+    } else if notes - animation > part {
+        0
+    } else {
+        2
+    };
+    let underclear = if part_border < border { 1 } else { 0 };
+    (exgauge + offset + underclear).min(node_count.saturating_sub(1))
+}
+
+fn skin_gauge_flicker_tip_node_index(
+    exgauge: usize,
+    border: f32,
+    part_border: f32,
+    node_count: usize,
+) -> Option<usize> {
+    let underclear = if part_border < border { 1 } else { 0 };
+    Some((exgauge + 4 + underclear).min(node_count.saturating_sub(1)))
+}
+
+/// beatoraja `SkinGauge` FLICKERING の先端 α (`duration` = JSON `gauge.cycle`)。
+///
+/// `orgAlpha * (animation < duration/2 ? animation/(duration/2-1) : (duration-1-animation)/(duration/2-1))`
+fn skin_gauge_flicker_alpha(animation: i32, duration: i32) -> f32 {
+    let duration = duration.max(1);
+    let half = (duration / 2).max(1);
+    let denom = (half - 1).max(1) as f32;
+    if animation < half {
+        animation as f32 / denom
+    } else {
+        ((duration - 1) - animation) as f32 / denom
+    }
+}
+
+fn skin_gauge_part_rect(rect: Rect, parts: i32, part: i32) -> Rect {
+    if rect.width.abs() >= rect.height.abs() {
+        let part_width = rect.width / parts as f32;
+        Rect {
+            x: rect.x + part_width * (part - 1) as f32,
+            y: rect.y,
+            width: part_width,
+            height: rect.height,
+        }
+    } else {
+        let part_height = rect.height / parts as f32;
+        Rect {
+            x: rect.x,
+            y: rect.y + rect.height - part_height * part as f32,
+            width: rect.width,
+            height: part_height,
+        }
+    }
+}
+
+fn default_skin_gauge_animation_type() -> i32 {
+    0
 }
 
 fn default_gauge_parts() -> i32 {
@@ -7681,6 +7900,98 @@ mod tests {
     }
 
     #[test]
+    fn static_render_items_resolve_iidx_destination_with_base_image() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "frame.png" }],
+                "image": [{ "id": "groove_frame", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10 }],
+                "destination": [
+                    { "id": "groove_frame_iidx", "timer": 9001, "dst": [{ "x": 1, "y": 2, "w": 10, "h": 10 }] }
+                ],
+                "dynamicTimer": [{ "id": 9001, "observe": "gauge_type() == 4 or gauge_type() == 5" }]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "1".to_string(),
+            SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(7),
+                source_size: SkinImageSize { width: 100.0, height: 100.0 },
+            },
+        )]);
+        let mut runtime = DynamicTimerRuntime::default();
+        let state = runtime.advance(
+            &document,
+            SkinDrawState { gauge_type: 4, elapsed_ms: 100, ..Default::default() },
+            100,
+        );
+        let (behind, front, _) =
+            document.static_render_items_split(&sources, state, SkinTextState::default());
+        let items = behind.into_iter().chain(front).collect::<Vec<_>>();
+        assert_eq!(items.len(), 1);
+        assert!(matches!(items[0], SkinRenderItem::Image { .. }));
+    }
+
+    #[test]
+    fn static_render_items_resolve_exhard_gauge_additive_overlay() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 1920,
+                "h": 1080,
+                "source": [{ "id": 1, "path": "gauge.png" }],
+                "image": [{ "id": "gauge-node", "src": 1, "x": 0, "y": 0, "w": 5, "h": 10 }],
+                "gauge": { "id": "gauge", "nodes": ["gauge-node"], "parts": 2 },
+                "destination": [
+                    {
+                        "id": "gauge",
+                        "loop": 1200,
+                        "draw": "gauge_type() == 4 or gauge_type() == 5",
+                        "blend": 2,
+                        "dst": [
+                            { "time": 1200, "x": 54, "y": 151, "w": 450, "h": 28, "a": 0 },
+                            { "time": 1700, "a": 80 },
+                            { "time": 2000, "a": 0 }
+                        ]
+                    }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "1".to_string(),
+            SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 100.0, height: 100.0 },
+            },
+        )]);
+        let (behind, front, _) = document.static_render_items_split(
+            &sources,
+            SkinDrawState { gauge_type: 4, elapsed_ms: 1700, ..Default::default() },
+            SkinTextState::default(),
+        );
+        let items = behind.into_iter().chain(front).collect::<Vec<_>>();
+        assert_eq!(items.len(), 1);
+        assert!(matches!(
+            items[0],
+            SkinRenderItem::Rect {
+                color: Color { a, .. },
+                blend: BlendMode::Add,
+                ..
+            } if (a - 80.0 / 255.0).abs() < 0.01
+        ));
+    }
+
+    #[test]
     fn skin_document_evaluates_destination_option_conditions() {
         let document: SkinDocument = serde_json::from_str(
             r#"
@@ -7941,7 +8252,7 @@ mod tests {
                 "h": 100,
                 "source": [{ "id": 1, "path": "gauge.png" }],
                 "image": [{ "id": "gauge-node", "src": 1, "x": 10, "y": 0, "w": 5, "h": 10 }],
-                "gauge": { "id": "gauge", "nodes": ["gauge-node"], "parts": 4 },
+                "gauge": { "id": "gauge", "nodes": ["gauge-node"], "parts": 4, "type": 0 },
                 "destination": [
                     { "id": "gauge", "dst": [{ "x": 80, "y": 10, "w": -40, "h": 10 }] }
                 ]
@@ -7960,19 +8271,247 @@ mod tests {
 
         let items = document.gauge_render_items(50.0, 0, &sources).unwrap();
 
-        assert_eq!(items.len(), 2);
+        assert_eq!(items.len(), 4);
+        assert!(items.iter().all(|item| matches!(item, SkinRenderItem::Image { .. })));
         assert!(matches!(items[0], SkinRenderItem::Image {
                 rect: Rect { x, y, width, height },
-                uv: TextureRegion { x: u, width: uv_width, .. },
                 ..
             } if approx_eq(x, 0.4)
                 && approx_eq(y, 0.8)
                 && approx_eq(width, 0.1)
-                && approx_eq(height, 0.1)
-                && approx_eq(u, 0.1)
-                && approx_eq(uv_width, 0.05)));
-        assert!(matches!(items[1], SkinRenderItem::Image { rect: Rect { x, .. }, .. }
-                if approx_eq(x, 0.5)));
+                && approx_eq(height, 0.1)));
+    }
+
+    #[test]
+    fn skin_gauge_sprite_selects_exhard_nodes_and_tip_frame() {
+        let mut document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "gauge.png" }],
+                "image": [],
+                "gauge": { "id": "gauge", "nodes": [], "parts": 4, "type": 3, "cycle": 33 },
+                "destination": [
+                    { "id": "gauge", "dst": [{ "x": 0, "y": 0, "w": 40, "h": 10 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        document.gauge.as_mut().unwrap().nodes =
+            (0..36).map(|index| format!("node-{index}")).collect();
+        document.image = (0..36)
+            .map(|index| SkinImageDef {
+                id: format!("node-{index}"),
+                src: "1".to_string(),
+                x: index as i32,
+                y: 0,
+                w: 1,
+                h: 1,
+                divx: 1,
+                divy: 1,
+                timer: None,
+                cycle: 0,
+                len: 0,
+                ref_id: 0,
+                click: 0,
+            })
+            .collect();
+        let sources = HashMap::from([(
+            "1".to_string(),
+            SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 36.0, height: 1.0 },
+            },
+        )]);
+        let items = document
+            .static_image_render_items(
+                &sources,
+                SkinDrawState {
+                    elapsed_ms: 1_000,
+                    gauge: 75.0,
+                    gauge_max: 100.0,
+                    gauge_border: 1.0,
+                    gauge_type: 4,
+                    ..Default::default()
+                },
+            )
+            .into_iter()
+            .filter_map(|item| match item {
+                SkinRenderItem::Image { .. } => Some(item),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(items.len(), 5, "4 parts + flickering tip overlay");
+        let tip_flicker = items.iter().find_map(|item| match item {
+            SkinRenderItem::Image { uv, blend: BlendMode::Normal, .. } if uv.x > 0.7 => Some(uv.x),
+            _ => None,
+        });
+        assert!(
+            tip_flicker.is_some(),
+            "EX-HARD flickering tip should use node index 28+ (normal blend overlay)"
+        );
+    }
+
+    #[test]
+    fn skin_gauge_flickering_draws_normal_tip_overlay() {
+        let mut document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "gauge.png" }],
+                "image": [],
+                "gauge": { "id": "gauge", "nodes": [], "parts": 4, "type": 3, "cycle": 33 },
+                "destination": [
+                    { "id": "gauge", "dst": [{ "x": 0, "y": 0, "w": 40, "h": 10 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        document.gauge.as_mut().unwrap().nodes =
+            (0..36).map(|index| format!("node-{index}")).collect();
+        document.image = (0..36)
+            .map(|index| SkinImageDef {
+                id: format!("node-{index}"),
+                src: "1".to_string(),
+                x: index as i32,
+                y: 0,
+                w: 1,
+                h: 1,
+                divx: 1,
+                divy: 1,
+                timer: None,
+                cycle: 0,
+                len: 0,
+                ref_id: 0,
+                click: 0,
+            })
+            .collect();
+        let sources = HashMap::from([(
+            "1".to_string(),
+            SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 36.0, height: 1.0 },
+            },
+        )]);
+        let items = document
+            .static_image_render_items(
+                &sources,
+                SkinDrawState {
+                    elapsed_ms: 8,
+                    gauge: 75.0,
+                    gauge_max: 100.0,
+                    gauge_border: 1.0,
+                    gauge_type: 2,
+                    ..Default::default()
+                },
+            )
+            .into_iter()
+            .filter_map(|item| match item {
+                SkinRenderItem::Image { .. } => Some(item),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(items.len(), 5, "4 parts + flickering tip overlay");
+        let flicker = items.iter().find(|item| {
+            matches!(
+                item,
+                SkinRenderItem::Image {
+                    blend: BlendMode::Normal,
+                    tint: Color { a, .. },
+                    ..
+                } if *a > 0.2
+            )
+        });
+        assert!(flicker.is_some(), "expected normal-blend tip overlay with alpha fade");
+    }
+
+    #[test]
+    fn skin_gauge_defaults_to_random_when_type_omitted() {
+        let document: SkinDocument =
+            serde_json::from_str(r#"{"type":0,"w":100,"h":100,"gauge":{"id":"g","nodes":[]}}"#)
+                .unwrap();
+        assert_eq!(document.gauge.as_ref().unwrap().gauge_type, 0);
+    }
+
+    #[test]
+    fn skin_gauge_notes_count_truncates_toward_zero() {
+        assert_eq!(skin_gauge_notes_count(74.9, 4, 100.0), 2);
+        assert_eq!(skin_gauge_notes_count(75.0, 4, 100.0), 3);
+        assert_eq!(skin_gauge_notes_count(0.0, 4, 100.0), 0);
+    }
+
+    #[test]
+    fn skin_gauge_omitted_type_has_no_flickering_overlay() {
+        let mut document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "gauge.png" }],
+                "image": [],
+                "gauge": { "id": "gauge", "nodes": [], "parts": 4 },
+                "destination": [
+                    { "id": "gauge", "dst": [{ "x": 0, "y": 0, "w": 40, "h": 10 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        document.gauge.as_mut().unwrap().nodes =
+            (0..36).map(|index| format!("node-{index}")).collect();
+        document.image = (0..36)
+            .map(|index| SkinImageDef {
+                id: format!("node-{index}"),
+                src: "1".to_string(),
+                x: index as i32,
+                y: 0,
+                w: 1,
+                h: 1,
+                divx: 1,
+                divy: 1,
+                timer: None,
+                cycle: 0,
+                len: 0,
+                ref_id: 0,
+                click: 0,
+            })
+            .collect();
+        let sources = HashMap::from([(
+            "1".to_string(),
+            SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 36.0, height: 1.0 },
+            },
+        )]);
+        let items = document
+            .static_image_render_items(
+                &sources,
+                SkinDrawState {
+                    elapsed_ms: 8,
+                    gauge: 75.0,
+                    gauge_max: 100.0,
+                    gauge_border: 1.0,
+                    gauge_type: 2,
+                    ..Default::default()
+                },
+            )
+            .into_iter()
+            .filter_map(|item| match item {
+                SkinRenderItem::Image { .. } => Some(item),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(items.len(), 4, "type=0 should not add flickering tip overlay");
     }
 
     #[test]
@@ -7988,7 +8527,7 @@ mod tests {
                     { "id": "panel", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10 },
                     { "id": "gauge-node", "src": 1, "x": 10, "y": 0, "w": 5, "h": 10 }
                 ],
-                "gauge": { "id": "gauge", "nodes": ["gauge-node"], "parts": 4 },
+                "gauge": { "id": "gauge", "nodes": ["gauge-node"], "parts": 4, "type": 0 },
                 "destination": [
                     { "id": "panel", "dst": [{ "x": 0, "y": 0, "w": 10, "h": 10 }] },
                     { "id": "gauge", "timer": 2, "dst": [{ "x": 80, "y": 10, "w": -40, "h": 10 }] }
@@ -8008,24 +8547,29 @@ mod tests {
 
         let inactive = document.static_image_render_items(
             &sources,
-            SkinDrawState { elapsed_ms: 500, gauge: 50.0, fadeout_ms: None, ..Default::default() },
+            SkinDrawState {
+                elapsed_ms: 500,
+                gauge: 50.0,
+                gauge_max: 100.0,
+                fadeout_ms: None,
+                ..Default::default()
+            },
         );
         let active = document.static_image_render_items(
             &sources,
             SkinDrawState {
                 elapsed_ms: 500,
                 gauge: 50.0,
+                gauge_max: 100.0,
                 fadeout_ms: Some(250),
                 ..Default::default()
             },
         );
 
         assert_eq!(inactive.len(), 1);
-        assert_eq!(active.len(), 3);
-        assert!(matches!(active[1], SkinRenderItem::Image { rect: Rect { x, .. }, .. }
-                if approx_eq(x, 0.4)));
-        assert!(matches!(active[2], SkinRenderItem::Image { rect: Rect { x, .. }, .. }
-                if approx_eq(x, 0.5)));
+        // beatoraja は全 `parts` 分のセルを描画する (埋まり具合でスプライトだけ変える)。
+        assert_eq!(active.len(), 5);
+        assert!(active[1..].iter().all(|item| matches!(item, SkinRenderItem::Image { .. })));
     }
 
     #[test]
