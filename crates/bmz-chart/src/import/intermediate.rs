@@ -4,7 +4,7 @@ use bmz_core::chart::ChartIdentity;
 use bmz_core::lane::{KeyMode, Lane};
 use bmz_core::time::{ChartTick, TimeUs};
 
-use crate::model::LongNoteStyle;
+use crate::model::{LongNoteMode, LongNoteStyle};
 
 #[derive(Debug, Clone)]
 pub struct IntermediateChart {
@@ -33,6 +33,7 @@ pub struct IntermediateMetadata {
     pub backbmp_file: String,
     pub preview_file: String,
     pub volwav_percent: u8,
+    pub long_note_mode: LongNoteMode,
     pub has_bga: bool,
     pub key_mode: KeyMode,
 }

@@ -1,4 +1,5 @@
 pub mod bms_rs_adapter;
+pub mod bmson_adapter;
 pub mod decode;
 pub mod error;
 pub mod intermediate;
@@ -11,10 +12,34 @@ use crate::model::PlayableChart;
 
 use self::error::{ImportError, ImportWarning};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChartFileFormat {
+    Bms,
+    Bmson,
+}
+
 #[derive(Debug, Clone)]
 pub struct ImportResult {
     pub chart: PlayableChart,
     pub warnings: Vec<ImportWarning>,
+}
+
+/// 拡張子に応じて BMS / BMSON を import する。
+pub fn import_chart(
+    path: &Path,
+    random_seed: Option<u64>,
+    check_resource_existence: bool,
+) -> Result<ImportResult, ImportError> {
+    let mut warnings = Vec::new();
+    let intermediate = match chart_file_format(path) {
+        ChartFileFormat::Bmson => bmson_adapter::import_bmson_to_intermediate(path, &mut warnings)?,
+        ChartFileFormat::Bms => {
+            bms_rs_adapter::import_bms_to_intermediate(path, random_seed, &mut warnings)?
+        }
+    };
+    let chart =
+        normalize::normalize_chart(path, intermediate, &mut warnings, check_resource_existence)?;
+    Ok(ImportResult { chart, warnings })
 }
 
 pub fn import_bms_chart(
@@ -22,12 +47,18 @@ pub fn import_bms_chart(
     random_seed: Option<u64>,
     check_resource_existence: bool,
 ) -> Result<ImportResult, ImportError> {
-    let mut warnings = Vec::new();
-    let intermediate =
-        bms_rs_adapter::import_bms_to_intermediate(path, random_seed, &mut warnings)?;
-    let chart =
-        normalize::normalize_chart(path, intermediate, &mut warnings, check_resource_existence)?;
-    Ok(ImportResult { chart, warnings })
+    import_chart(path, random_seed, check_resource_existence)
+}
+
+fn chart_file_format(path: &Path) -> ChartFileFormat {
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.to_ascii_lowercase())
+    {
+        Some(ext) if ext == "bmson" => ChartFileFormat::Bmson,
+        _ => ChartFileFormat::Bms,
+    }
 }
 
 #[cfg(test)]
@@ -290,7 +321,7 @@ mod tests {
 #TITLE BGA FX Song
 #BPM 120
 #TOTAL 200
-#ARGB01 255,0,0,255
+#ARGB01 255,255,0,0
 #00111:01
 #0010B:80
 #001A1:01000000
@@ -303,6 +334,54 @@ mod tests {
         assert_eq!(result.chart.bga_argb_events[0].red, 255);
         assert_eq!(result.chart.bga_argb_events[0].green, 0);
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn imports_bmson_into_playable_chart() {
+        let json = r#"{
+            "version": "1.0.0",
+            "info": {
+                "title": "Bmson Song",
+                "artist": "Test Artist",
+                "genre": "Test",
+                "level": 5,
+                "init_bpm": 120.0,
+                "judge_rank": 100.0,
+                "total": 200.0,
+                "resolution": 240
+            },
+            "sound_channels": []
+        }"#;
+        let path = write_temp_file_with_ext(json, "bmson");
+        let result = import_chart(&path, None, false).unwrap();
+        assert_eq!(result.chart.metadata.title, "Bmson Song");
+        assert_eq!(result.chart.metadata.long_note_mode, crate::model::LongNoteMode::Ln);
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn imports_lnmode_from_bms_header() {
+        let text = "\
+#TITLE Lnmode Song
+#BPM 120
+#TOTAL 200
+#LNMODE 3
+#00011:01
+";
+        let path = write_temp_bms(text);
+        let result = import_chart(&path, None, false).unwrap();
+        assert_eq!(result.chart.metadata.long_note_mode, crate::model::LongNoteMode::Hcn);
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    fn write_temp_file_with_ext(text: &str, ext: &str) -> std::path::PathBuf {
+        let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let path = std::env::temp_dir()
+            .join(format!("bmz-chart-import-{}-{stamp}.{ext}", std::process::id()));
+        let mut file = std::fs::File::create(&path).unwrap();
+        file.write_all(text.as_bytes()).unwrap();
+        file.sync_all().unwrap();
+        path
     }
 
     fn write_temp_bms(text: &str) -> std::path::PathBuf {

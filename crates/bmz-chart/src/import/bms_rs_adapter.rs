@@ -28,10 +28,10 @@
 
 use std::path::Path;
 
-use bms_rs::bms::command::JudgeLevel;
 use bms_rs::bms::command::channel::mapper::{KeyLayoutBeat, KeyLayoutMapper, KeyMapping};
 use bms_rs::bms::command::channel::{Key, NoteKind as BmsNoteKind, PlayerSide};
 use bms_rs::bms::command::time::ObjTime;
+use bms_rs::bms::command::{JudgeLevel, LnMode};
 use bms_rs::bms::model::Bms;
 use bms_rs::bms::rng::JavaRandom;
 use bms_rs::bms::{BmsOutput, BmsWarning, default_config_with_rng, parse_bms};
@@ -49,6 +49,8 @@ use super::intermediate::{
     IntermediateObject, IntermediateObjectKind, IntermediateResources, MeasureInfo, StopDef,
     WavDef,
 };
+
+use crate::model::LongNoteMode;
 
 pub fn import_bms_to_intermediate(
     source_path: &Path,
@@ -74,12 +76,15 @@ pub fn import_bms_to_intermediate(
         message: format!("{err:?}"),
     })?;
 
-    let mut intermediate = build_intermediate(&bms, warnings);
+    let mut intermediate = build_intermediate_from_bms(&bms, warnings);
     intermediate.identity = identity;
     Ok(intermediate)
 }
 
-fn build_intermediate(bms: &Bms, warnings: &mut Vec<ImportWarning>) -> IntermediateChart {
+pub(crate) fn build_intermediate_from_bms(
+    bms: &Bms,
+    warnings: &mut Vec<ImportWarning>,
+) -> IntermediateChart {
     let metadata = build_metadata(bms);
     let mut resources = build_resources(bms);
     let mut objects = Vec::new();
@@ -172,8 +177,17 @@ fn build_metadata(bms: &Bms) -> IntermediateMetadata {
             .map(|p| path_to_string(p.as_path()))
             .unwrap_or_default(),
         volwav_percent: bms.volume.volume.relative_percent,
+        long_note_mode: map_ln_mode(bms.repr.ln_mode),
         has_bga: false,
         key_mode: KeyMode::default(),
+    }
+}
+
+fn map_ln_mode(mode: LnMode) -> LongNoteMode {
+    match mode {
+        LnMode::Ln => LongNoteMode::Ln,
+        LnMode::Cn => LongNoteMode::Cn,
+        LnMode::Hcn => LongNoteMode::Hcn,
     }
 }
 

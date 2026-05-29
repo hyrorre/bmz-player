@@ -150,6 +150,7 @@ fn normalize_metadata(input: &IntermediateMetadata) -> ChartMetadata {
         backbmp_file: input.backbmp_file.clone(),
         preview_file: input.preview_file.clone(),
         volwav_percent: input.volwav_percent,
+        long_note_mode: input.long_note_mode,
         has_bga: input.has_bga,
         key_mode: input.key_mode,
     }

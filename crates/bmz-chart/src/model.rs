@@ -49,6 +49,19 @@ pub struct ChartMetadata {
     pub volwav_percent: u8,
     pub has_bga: bool,
     pub key_mode: KeyMode,
+    /// `#LNMODE` / BMSON `ln_type`。未指定時は LR2 互換の LN (終点判定なし)。
+    pub long_note_mode: LongNoteMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LongNoteMode {
+    /// 始点のみ判定。終点まで押し続ければ離さなくてよい。
+    #[default]
+    Ln,
+    /// 始点と終点の両方で判定 (IIDX CN 相当)。
+    Cn,
+    /// CN + 押下中のゲージ増加 / 早離しペナルティ (IIDX HCN 相当)。
+    Hcn,
 }
 
 impl Default for ChartMetadata {
@@ -71,6 +84,7 @@ impl Default for ChartMetadata {
             volwav_percent: 100,
             has_bga: false,
             key_mode: KeyMode::default(),
+            long_note_mode: LongNoteMode::default(),
         }
     }
 }

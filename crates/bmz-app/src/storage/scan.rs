@@ -275,7 +275,10 @@ fn is_chart_file(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
         .map(|extension| {
-            matches!(extension.to_ascii_lowercase().as_str(), "bms" | "bme" | "bml" | "pms")
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "bms" | "bme" | "bml" | "pms" | "bmson"
+            )
         })
         .unwrap_or(false)
 }
