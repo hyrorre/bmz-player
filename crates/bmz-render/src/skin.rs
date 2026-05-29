@@ -520,6 +520,41 @@ pub struct SkinJudgeDef {
     pub shift: bool,
 }
 
+/// beatoraja `PlaySkin.judgeregion` 上限 (TIMER_JUDGE_1P/2P/3P = 46/47/247)。
+pub const MAX_JUDGE_REGIONS: usize = 3;
+
+/// レーン index から判定領域 index へ (beatoraja `JudgeManager.updateMicro` 同式)。
+pub fn lane_judge_region(lane_index: usize, lane_count: usize, region_count: usize) -> usize {
+    if lane_count == 0 || region_count == 0 {
+        return 0;
+    }
+    let region = lane_index * region_count / lane_count;
+    region.min(region_count.saturating_sub(1))
+}
+
+/// `recent_judgements` から領域別の判定 timer / 画像 index を構築する。
+pub fn build_judge_region_state(
+    recent_judgements: &[crate::snapshot::DisplayJudgement],
+    render_now_us: i64,
+    region_count: usize,
+) -> ([Option<i32>; MAX_JUDGE_REGIONS], [Option<usize>; MAX_JUDGE_REGIONS]) {
+    let mut judge_ms = [None; MAX_JUDGE_REGIONS];
+    let mut judge_index = [None; MAX_JUDGE_REGIONS];
+    let region_count = region_count.min(MAX_JUDGE_REGIONS);
+    for judgement in recent_judgements.iter().rev() {
+        let region = lane_judge_region(judgement.lane.index(), LANE_COUNT, region_count);
+        if judge_ms[region].is_some() {
+            continue;
+        }
+        judge_ms[region] = Some(
+            ((render_now_us - judgement.time.0) / 1_000).clamp(i32::MIN as i64, i32::MAX as i64)
+                as i32,
+        );
+        judge_index[region] = judge_image_index(&judgement.text);
+    }
+    (judge_ms, judge_index)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct SkinBgaDef {
     #[serde(default, deserialize_with = "deserialize_skin_id")]
@@ -835,14 +870,22 @@ impl SkinContext {
         combo: u32,
         elapsed_ms: i32,
         skin_offsets: SkinOffsetValues,
+        region: usize,
     ) -> Option<Vec<SkinRenderItem>> {
         let document = self.document.as_ref()?;
-        document.judge_render_items_with_offsets(
-            judge,
+        let judge_image_index = judge_image_index(judge)?;
+        let judge_def = document
+            .judge
+            .iter()
+            .find(|j| j.index == region as i32)
+            .or_else(|| document.judge.first())?;
+        document.judge_render_items_for_def(
+            judge_def,
+            judge_image_index,
             combo,
             elapsed_ms,
-            skin_offsets,
             &self.document_sources,
+            SkinDrawState { skin_offsets, ..SkinDrawState::default() },
         )
     }
 
@@ -958,14 +1001,13 @@ pub struct SkinDrawState {
     /// 各レーンの直近判定の画像インデックス (0=PGREAT,1=GREAT,2=GOOD,3=BAD,4=POOR)。
     /// imageset (ボム・キービーム) の画像選択に使う。Noneなら判定なし。
     pub lane_judge: [Option<usize>; LANE_COUNT],
-    /// 判定タイマー経過ms (TIMER_JUDGE_1P=46)。Noneなら非アクティブ。
-    pub judge_ms: Option<i32>,
+    /// 判定タイマー経過ms。index 0/1/2 = TIMER_JUDGE_1P/2P/3P (46/47/247)。Noneなら非アクティブ。
+    pub judge_ms: [Option<i32>; MAX_JUDGE_REGIONS],
     /// Full combo timer elapsed ms (TIMER_FULLCOMBO_1P/2P=48/49)。Noneなら非アクティブ。
     pub full_combo_ms: Option<i32>,
     pub music_end_ms: Option<i32>,
-    /// 現在表示中の判定画像インデックス (0=PGREAT,1=GREAT,2=GOOD,3=BAD,4=POOR)。
-    /// `destination` の judge 挿入点で judge 定義を描画するために使う。
-    pub judge_index: Option<usize>,
+    /// 領域別の判定画像インデックス (0=PGREAT,1=GREAT,2=GOOD,3=BAD,4=POOR)。
+    pub judge_index: [Option<usize>; MAX_JUDGE_REGIONS],
     /// OFFSET_LIFT (id=3) の y 値 (skin canvas pixel 単位)。リフト量に応じて要素をシフトする。
     pub offset_lift_px: i32,
     /// OFFSET_LANECOVER (id=4) の y 値 (skin canvas pixel 単位)。レーンカバー位置インジケータのシフト。
@@ -1103,10 +1145,10 @@ impl Default for SkinDrawState {
             keyon_ms: [None; LANE_COUNT],
             keyoff_ms: [None; LANE_COUNT],
             lane_judge: [None; LANE_COUNT],
-            judge_ms: None,
+            judge_ms: [None; MAX_JUDGE_REGIONS],
             full_combo_ms: None,
             music_end_ms: None,
-            judge_index: None,
+            judge_index: [None; MAX_JUDGE_REGIONS],
             offset_lift_px: 0,
             offset_lanecover_px: 0,
             offset_hidden_cover_px: 0,
@@ -1507,6 +1549,12 @@ impl SkinDocument {
         self.image.iter().map(|image| (image.id.as_str(), image)).collect()
     }
 
+    /// beatoraja `PlaySkin.judgeregion` 相当 (`max(judge.index) + 1`、最低 1)。
+    pub fn judge_region_count(&self) -> usize {
+        let max_index = self.judge.iter().map(|judge| judge.index).max().unwrap_or(-1);
+        (max_index.max(0) as usize + 1).max(1)
+    }
+
     pub fn static_image_render_items(
         &self,
         sources: &HashMap<String, SkinDocumentTexture>,
@@ -1588,11 +1636,13 @@ impl SkinDocument {
         text_state: SkinTextState<'_>,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<Vec<SkinRenderItem>> {
-        if self.judge.iter().any(|judge| judge.id == destination.id) {
-            let judge_index = state.judge_index?;
-            let elapsed = state.judge_ms?;
-            return self.judge_render_items_for_index(
-                judge_index,
+        if let Some(judge_def) = self.judge.iter().find(|judge| judge.id == destination.id) {
+            let region = judge_def.index.clamp(0, MAX_JUDGE_REGIONS as i32 - 1) as usize;
+            let elapsed = state.judge_ms[region]?;
+            let judge_image_index = state.judge_index[region]?;
+            return self.judge_render_items_for_def(
+                judge_def,
+                judge_image_index,
                 state.combo,
                 elapsed,
                 sources,
@@ -2592,9 +2642,11 @@ impl SkinDocument {
         skin_offsets: SkinOffsetValues,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<Vec<SkinRenderItem>> {
-        let judge_index = judge_image_index(judge)?;
-        self.judge_render_items_for_index(
-            judge_index,
+        let judge_image_index = judge_image_index(judge)?;
+        let judge_def = self.judge.first()?;
+        self.judge_render_items_for_def(
+            judge_def,
+            judge_image_index,
             combo,
             elapsed_ms,
             sources,
@@ -2602,15 +2654,15 @@ impl SkinDocument {
         )
     }
 
-    fn judge_render_items_for_index(
+    pub fn judge_render_items_for_def(
         &self,
+        judge: &SkinJudgeDef,
         judge_index: usize,
         combo: u32,
         elapsed_ms: i32,
         sources: &HashMap<String, SkinDocumentTexture>,
         state: SkinDrawState,
     ) -> Option<Vec<SkinRenderItem>> {
-        let judge = self.judge.first()?;
         let image_destination = judge.images.get(judge_index)?;
         let enabled_options = self.enabled_options();
         let mut image_frame =
@@ -4560,7 +4612,9 @@ fn skin_timer_elapsed_ms(timer: Option<i32>, state: SkinDrawState) -> Option<i32
         Some(41) => state.play_timer_ms,
         Some(11) => Some(state.select_bar_elapsed_ms),
         Some(21..=23) => Some(state.select_option_panel_elapsed_ms),
-        Some(46) => state.judge_ms,
+        Some(46) => state.judge_ms[0],
+        Some(47) => state.judge_ms[1],
+        Some(247) => state.judge_ms[2],
         Some(48 | 49) => state.full_combo_ms,
         Some(908) => state.music_end_ms,
         Some(50..=57) => state.bomb_ms[(timer.unwrap() - 50) as usize],
@@ -5787,6 +5841,20 @@ mod tests {
     use crate::plan::TextLayer;
 
     use super::*;
+
+    fn judge_region_state(
+        region: usize,
+        ms: i32,
+        image_index: usize,
+    ) -> ([Option<i32>; MAX_JUDGE_REGIONS], [Option<usize>; MAX_JUDGE_REGIONS]) {
+        let mut judge_ms = [None; MAX_JUDGE_REGIONS];
+        let mut judge_index = [None; MAX_JUDGE_REGIONS];
+        if region < MAX_JUDGE_REGIONS {
+            judge_ms[region] = Some(ms);
+            judge_index[region] = Some(image_index);
+        }
+        (judge_ms, judge_index)
+    }
 
     #[test]
     fn number_object_resolves_to_padded_text() {
@@ -7091,12 +7159,12 @@ mod tests {
         assert!(eval_skin_draw_condition("timer(46) == timer_off", SkinDrawState::default()));
         assert!(eval_skin_draw_condition(
             "timer(46) != timer_off",
-            SkinDrawState { judge_ms: Some(120), ..Default::default() }
+            SkinDrawState { judge_ms: judge_region_state(0, 120, 0).0, ..Default::default() }
         ));
         assert!(eval_skin_draw_condition(
             "timer(46) > 0 and option(197)",
             SkinDrawState {
-                judge_ms: Some(120),
+                judge_ms: judge_region_state(0, 120, 0).0,
                 select_replay_slots: [true, false, false, false],
                 ..Default::default()
             }
@@ -7700,8 +7768,8 @@ mod tests {
             &sources,
             SkinDrawState {
                 combo: 123,
-                judge_ms: Some(100),
-                judge_index: Some(0),
+                judge_ms: judge_region_state(0, 100, 0).0,
+                judge_index: judge_region_state(0, 100, 0).1,
                 offset_lift_px: 10,
                 ..SkinDrawState::default()
             },
@@ -7720,6 +7788,109 @@ mod tests {
                 rect: Rect { x, y, .. },
                 ..
             } if approx_eq(x, 0.23) && approx_eq(y, 0.55)));
+    }
+
+    #[test]
+    fn lane_judge_region_maps_14k_sides() {
+        assert_eq!(lane_judge_region(0, 16, 2), 0);
+        assert_eq!(lane_judge_region(7, 16, 2), 0);
+        assert_eq!(lane_judge_region(8, 16, 2), 1);
+        assert_eq!(lane_judge_region(15, 16, 2), 1);
+    }
+
+    #[test]
+    fn dual_judge_regions_render_combo_at_separate_positions() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "judge.png" }],
+                "image": [
+                    { "id": "judgef-pg", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10 }
+                ],
+                "value": [
+                    { "id": "judgen-pg", "src": 1, "x": 0, "y": 20, "w": 100, "h": 10, "divx": 10, "digit": 3 }
+                ],
+                "judge": [
+                    {
+                        "id": "judge",
+                        "index": 0,
+                        "images": [
+                            { "id": "judgef-pg", "dst": [{ "time": 0, "x": 10, "y": 20, "w": 20, "h": 10 }, { "time": 500 }] }
+                        ],
+                        "numbers": [
+                            { "id": "judgen-pg", "dst": [{ "time": 0, "x": 20, "y": 5, "w": 5, "h": 10 }, { "time": 500 }] }
+                        ]
+                    },
+                    {
+                        "id": "judge1",
+                        "index": 1,
+                        "images": [
+                            { "id": "judgef-pg", "dst": [{ "time": 0, "x": 60, "y": 20, "w": 20, "h": 10 }, { "time": 500 }] }
+                        ],
+                        "numbers": [
+                            { "id": "judgen-pg", "dst": [{ "time": 0, "x": 70, "y": 5, "w": 5, "h": 10 }, { "time": 500 }] }
+                        ]
+                    }
+                ],
+                "destination": [
+                    { "id": "judge" },
+                    { "id": "judge1" }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = mock_source("1", 100.0, 100.0);
+        assert_eq!(document.judge_region_count(), 2);
+        let state = SkinDrawState {
+            judge_ms: {
+                let mut ms = [None; MAX_JUDGE_REGIONS];
+                ms[0] = Some(100);
+                ms[1] = Some(100);
+                ms
+            },
+            judge_index: {
+                let mut idx = [None; MAX_JUDGE_REGIONS];
+                idx[0] = Some(0);
+                idx[1] = Some(0);
+                idx
+            },
+            combo: 42,
+            ..SkinDrawState::default()
+        };
+        let left = document
+            .judge_render_items_for_def(&document.judge[0], 0, 42, 100, &sources, state)
+            .unwrap();
+        let right = document
+            .judge_render_items_for_def(&document.judge[1], 0, 42, 100, &sources, state)
+            .unwrap();
+        let left_digit = match &left[1] {
+            SkinRenderItem::Image { rect, .. } => rect.x,
+            _ => panic!("expected digit image"),
+        };
+        let right_digit = match &right[1] {
+            SkinRenderItem::Image { rect, .. } => rect.x,
+            _ => panic!("expected digit image"),
+        };
+        assert!(
+            right_digit > left_digit + 0.2,
+            "right region digit x={right_digit} should be right of left x={left_digit}"
+        );
+
+        let static_items = document.static_render_items(&sources, state, SkinTextState::default());
+        assert_eq!(static_items.len(), 6);
+        let static_left = match &static_items[1] {
+            SkinRenderItem::Image { rect, .. } => rect.x,
+            _ => panic!(),
+        };
+        let static_right = match &static_items[4] {
+            SkinRenderItem::Image { rect, .. } => rect.x,
+            _ => panic!(),
+        };
+        assert!(static_right > static_left + 0.2);
     }
 
     #[test]
@@ -7759,8 +7930,8 @@ mod tests {
             &sources,
             SkinDrawState {
                 combo: 123,
-                judge_ms: Some(100),
-                judge_index: Some(0),
+                judge_ms: judge_region_state(0, 100, 0).0,
+                judge_index: judge_region_state(0, 100, 0).1,
                 ..Default::default()
             },
             SkinTextState::default(),
@@ -9343,7 +9514,8 @@ mod tests {
         )]);
 
         // judge_ms=Some(100) → between frame 0 and frame 200 → x should be 0.25 (interpolated)
-        let state_early = SkinDrawState { judge_ms: Some(100), ..SkinDrawState::default() };
+        let state_early =
+            SkinDrawState { judge_ms: judge_region_state(0, 100, 0).0, ..SkinDrawState::default() };
         let items_early = document.static_image_render_items(&sources, state_early);
         assert_eq!(items_early.len(), 1);
         assert!(
@@ -9353,7 +9525,8 @@ mod tests {
         );
 
         // judge_ms=Some(300) → past last frame → last frame x=0.5
-        let state_late = SkinDrawState { judge_ms: Some(300), ..SkinDrawState::default() };
+        let state_late =
+            SkinDrawState { judge_ms: judge_region_state(0, 300, 0).0, ..SkinDrawState::default() };
         let items_late = document.static_image_render_items(&sources, state_late);
         assert_eq!(items_late.len(), 1);
         assert!(
@@ -9363,7 +9536,8 @@ mod tests {
         );
 
         // judge_ms=None → no items (timer inactive)
-        let state_inactive = SkinDrawState { judge_ms: None, ..SkinDrawState::default() };
+        let state_inactive =
+            SkinDrawState { judge_ms: [None; MAX_JUDGE_REGIONS], ..SkinDrawState::default() };
         let items_inactive = document.static_image_render_items(&sources, state_inactive);
         assert_eq!(items_inactive.len(), 0, "judge_ms=None should produce no items");
     }

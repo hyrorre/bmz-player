@@ -549,11 +549,12 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
     let keyon_ms = snapshot.keyon_ms;
     let keyoff_ms = snapshot.keyoff_ms;
 
-    let judge_ms = snapshot.recent_judgements.last().map(|j| {
-        ((snapshot.time.0 - j.time.0) / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32
-    });
-    let judge_index =
-        snapshot.recent_judgements.last().and_then(|judgement| judge_image_index(&judgement.text));
+    let judge_region_count = skin.document().map(|d| d.judge_region_count()).unwrap_or(1);
+    let (judge_ms, judge_index) = crate::skin::build_judge_region_state(
+        &snapshot.recent_judgements,
+        snapshot.time.0,
+        judge_region_count,
+    );
     let judge_timing_ms = snapshot
         .recent_judgements
         .last()
@@ -1323,12 +1324,19 @@ fn push_default_play_skin(
     let recent_judgement = snapshot.recent_judgements.last();
     let judge_text = recent_judgement.map(|judgement| judgement.text.clone()).unwrap_or_default();
     let judge_image = recent_judgement.and_then(|judgement| {
+        let region_count = skin_context.document().map(|d| d.judge_region_count()).unwrap_or(1);
+        let region = crate::skin::lane_judge_region(
+            judgement.lane.index(),
+            bmz_core::lane::LANE_COUNT,
+            region_count,
+        );
         skin_context.document_judge_items(
             &judgement.text,
             snapshot.combo,
             ((snapshot.time.0 - judgement.time.0) / 1_000).clamp(i32::MIN as i64, i32::MAX as i64)
                 as i32,
             snapshot.skin_offsets,
+            region,
         )
     });
     let has_judge_image = judge_image.is_some();

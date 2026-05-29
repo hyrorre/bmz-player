@@ -1078,6 +1078,103 @@ mod tests {
     }
 
     #[test]
+    fn ecfn_play14_judge1_combo_is_right_of_judge_when_available() {
+        use std::collections::HashMap;
+
+        use bmz_core::lane::Lane;
+        use bmz_render::skin::{
+            MAX_JUDGE_REGIONS, SkinDocumentTexture, SkinDrawState, SkinImageSize, SkinRenderItem,
+            SkinTextureId,
+        };
+
+        let skin_path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/skins/ECFN/play/play14.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+        let Ok(decoded) = decode_beatoraja_skin(&skin_path, SkinKind::Play) else {
+            // play14main.lua は skin_config 未注入だと geometry が未初期化で落ちる。
+            return;
+        };
+        let judge0 =
+            decoded.document.judge.iter().find(|judge| judge.id == "judge").expect("judge");
+        let judge1 =
+            decoded.document.judge.iter().find(|judge| judge.id == "judge1").expect("judge1");
+        assert_eq!(judge0.index, 0);
+        assert_eq!(judge1.index, 1);
+
+        let mock_texture = SkinDocumentTexture {
+            source_id: "mock".to_string(),
+            texture: SkinTextureId(1),
+            source_size: SkinImageSize { width: 1920.0, height: 1080.0 },
+        };
+        let sources: HashMap<String, SkinDocumentTexture> = decoded
+            .document
+            .source
+            .iter()
+            .map(|source| (source.id.clone(), mock_texture.clone()))
+            .chain(
+                decoded
+                    .document
+                    .value
+                    .iter()
+                    .map(|value| (value.src.clone(), mock_texture.clone())),
+            )
+            .chain(
+                decoded
+                    .document
+                    .image
+                    .iter()
+                    .map(|image| (image.src.clone(), mock_texture.clone())),
+            )
+            .collect();
+
+        let mut judge_ms = [None; MAX_JUDGE_REGIONS];
+        let mut judge_index = [None; MAX_JUDGE_REGIONS];
+        judge_ms[0] = Some(100);
+        judge_ms[1] = Some(100);
+        judge_index[0] = Some(0);
+        judge_index[1] = Some(0);
+        let state = SkinDrawState { judge_ms, judge_index, combo: 42, ..SkinDrawState::default() };
+
+        let left_items = decoded
+            .document
+            .judge_render_items_for_def(judge0, 0, 42, 100, &sources, state)
+            .expect("left judge");
+        let right_items = decoded
+            .document
+            .judge_render_items_for_def(judge1, 0, 42, 100, &sources, state)
+            .expect("right judge");
+        let left_digit = left_items
+            .iter()
+            .skip(1)
+            .find_map(|item| match item {
+                SkinRenderItem::Image { rect, .. } => Some(rect.x),
+                _ => None,
+            })
+            .expect("left combo digit");
+        let right_digit = right_items
+            .iter()
+            .skip(1)
+            .find_map(|item| match item {
+                SkinRenderItem::Image { rect, .. } => Some(rect.x),
+                _ => None,
+            })
+            .expect("right combo digit");
+        assert!(
+            right_digit > left_digit + 0.3,
+            "judge1 digit x={right_digit} should be right of judge x={left_digit}"
+        );
+
+        let region = bmz_render::skin::lane_judge_region(
+            Lane::Key8.index(),
+            bmz_core::lane::LANE_COUNT,
+            decoded.document.judge_region_count(),
+        );
+        assert_eq!(region, 1);
+    }
+
+    #[test]
     fn starseeker_play_lua_skin_can_be_decoded_when_available() {
         let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../data/skins/Starseeker/play/play7.luaskin");
