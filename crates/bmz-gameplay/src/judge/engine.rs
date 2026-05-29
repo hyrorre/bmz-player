@@ -1,4 +1,4 @@
-use bmz_chart::model::{NoteEvent, NoteKind, PlayableChart};
+use bmz_chart::model::{LongNoteMode, NoteEvent, NoteKind, PlayableChart};
 use bmz_core::ids::NoteId;
 use bmz_core::input::{InputEvent, InputKind};
 use bmz_core::judge::{Judge, TimingSide};
@@ -24,7 +24,7 @@ impl JudgeEngine {
     pub fn process_input(&mut self, chart: &PlayableChart, input: InputEvent) -> JudgeOutcome {
         match input.kind {
             InputKind::Press => self.process_press(chart, input),
-            InputKind::Release => self.process_release(input),
+            InputKind::Release => self.process_release(chart, input),
         }
     }
 
@@ -52,18 +52,28 @@ impl JudgeEngine {
                 });
             }
 
-            if let Some(active) = lane_state.active_long
-                && now.0 > active.end.end_time.0 + self.windows.bad_us
-            {
-                lane_state.active_long = None;
-                outcome.events.push(JudgementEvent {
-                    note_id: Some(active.end.end_note_id),
-                    lane,
-                    judge: Judge::Poor,
-                    side: TimingSide::Slow,
-                    delta: TimeUs(now.0 - active.end.end_time.0),
-                    time: now,
-                });
+            if let Some(active) = lane_state.active_long {
+                match chart.metadata.long_note_mode {
+                    LongNoteMode::Ln => {
+                        if now.0 >= active.end.end_time.0 {
+                            lane_state.active_long = None;
+                        }
+                    }
+                    LongNoteMode::Cn | LongNoteMode::Hcn => {
+                        if now.0 > active.end.end_time.0 + self.windows.bad_us {
+                            lane_state.active_long = None;
+                            lane_state.hcn_draining = false;
+                            outcome.events.push(JudgementEvent {
+                                note_id: Some(active.end.end_note_id),
+                                lane,
+                                judge: Judge::Poor,
+                                side: TimingSide::Slow,
+                                delta: TimeUs(now.0 - active.end.end_time.0),
+                                time: now,
+                            });
+                        }
+                    }
+                }
             }
         }
 
@@ -117,6 +127,7 @@ impl JudgeEngine {
                 && let Some(active) = make_active_long(chart, note.id)
             {
                 lane_state.active_long = Some(active);
+                lane_state.hcn_draining = false;
             }
 
             return JudgeOutcome {
@@ -148,28 +159,54 @@ impl JudgeEngine {
         outcome
     }
 
-    fn process_release(&mut self, input: InputEvent) -> JudgeOutcome {
+    fn process_release(&mut self, chart: &PlayableChart, input: InputEvent) -> JudgeOutcome {
         let lane_state = &mut self.lanes[input.lane.index()];
         let Some(active) = lane_state.active_long else {
             return JudgeOutcome::default();
         };
 
-        let delta = input.time.0 - active.end.end_time.0;
-        let side = side_from_delta(delta);
-        let judge = classify_normal_delta(delta, self.windows).unwrap_or(Judge::Poor);
-        lane_state.active_long = None;
+        match chart.metadata.long_note_mode {
+            LongNoteMode::Ln => {
+                lane_state.active_long = None;
+                if input.time.0 >= active.end.end_time.0 {
+                    return JudgeOutcome::default();
+                }
+                JudgeOutcome {
+                    events: vec![JudgementEvent {
+                        note_id: Some(active.start_note_id),
+                        lane: input.lane,
+                        judge: Judge::Poor,
+                        side: TimingSide::Fast,
+                        delta: TimeUs(input.time.0 - active.end.end_time.0),
+                        time: input.time,
+                    }],
+                    mine_hits: Vec::new(),
+                    consumed_input: true,
+                }
+            }
+            LongNoteMode::Cn | LongNoteMode::Hcn => {
+                let delta = input.time.0 - active.end.end_time.0;
+                let side = side_from_delta(delta);
+                let judge = classify_normal_delta(delta, self.windows).unwrap_or(Judge::Poor);
+                let early_release = chart.metadata.long_note_mode == LongNoteMode::Hcn && delta < 0;
+                lane_state.active_long = None;
+                if early_release {
+                    lane_state.hcn_draining = true;
+                }
 
-        JudgeOutcome {
-            events: vec![JudgementEvent {
-                note_id: Some(active.end.end_note_id),
-                lane: input.lane,
-                judge,
-                side,
-                delta: TimeUs(delta),
-                time: input.time,
-            }],
-            mine_hits: Vec::new(),
-            consumed_input: true,
+                JudgeOutcome {
+                    events: vec![JudgementEvent {
+                        note_id: Some(active.end.end_note_id),
+                        lane: input.lane,
+                        judge,
+                        side,
+                        delta: TimeUs(delta),
+                        time: input.time,
+                    }],
+                    mine_hits: Vec::new(),
+                    consumed_input: true,
+                }
+            }
         }
     }
 }

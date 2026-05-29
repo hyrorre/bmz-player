@@ -96,6 +96,28 @@ impl GaugeState {
             gauge.apply_mine(damage);
         }
     }
+
+    /// HCN 押下中のゲージ増加 (beatoraja 準拠の近似)。
+    pub fn apply_hcn_hold(&mut self, delta_seconds: f32) {
+        const RATE_PER_SEC: f32 = 6.0;
+        let inc = RATE_PER_SEC * delta_seconds;
+        for gauge in &mut self.gauges {
+            if gauge.value > 0.0 {
+                gauge.value = (gauge.value + inc).clamp(gauge.definition.min, gauge.definition.max);
+            }
+        }
+    }
+
+    /// HCN 早離し後のゲージ減衰 (beatoraja 準拠の近似)。
+    pub fn apply_hcn_drain(&mut self, delta_seconds: f32) {
+        const RATE_PER_SEC: f32 = 10.0;
+        let dec = RATE_PER_SEC * delta_seconds;
+        for gauge in &mut self.gauges {
+            if gauge.value > 0.0 {
+                gauge.value = (gauge.value - dec).clamp(gauge.definition.min, gauge.definition.max);
+            }
+        }
+    }
 }
 
 impl SingleGaugeState {

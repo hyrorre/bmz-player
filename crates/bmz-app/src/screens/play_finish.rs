@@ -439,6 +439,7 @@ mod tests {
             input_timestamp_anchor: None,
             pending_mine_hits: Vec::new(),
             state: PlayState::Finished,
+            last_hcn_gauge_at: None,
         }
     }
 

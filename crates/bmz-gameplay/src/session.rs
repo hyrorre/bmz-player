@@ -2,11 +2,11 @@ use std::sync::Arc;
 
 use bmz_audio::clock::AudioClock;
 use bmz_audio::queue::{AudioScheduler, ScheduledSound};
-use bmz_chart::model::PlayableChart;
+use bmz_chart::model::{LongNoteMode, PlayableChart};
 use bmz_chart::timing::TimingMap;
 use bmz_core::input::{InputEvent, InputKind, InputSource};
 use bmz_core::judge::Judge;
-use bmz_core::lane::LANE_COUNT;
+use bmz_core::lane::{LANE_COUNT, Lane};
 use bmz_core::time::TimeUs;
 
 use crate::autoplay::AutoplayController;
@@ -125,6 +125,8 @@ pub struct GameSession {
     /// `SessionFrame.mine_hits` に吸い出される（app 層が地雷 SE を鳴らす）。
     pub pending_mine_hits: Vec<MineHitEvent>,
     pub state: PlayState,
+    /// HCN ゲージ増減の前回更新時刻。
+    pub last_hcn_gauge_at: Option<TimeUs>,
 }
 
 #[derive(Debug, Clone)]
@@ -373,6 +375,31 @@ pub fn process_misses(session: &mut GameSession, audio_now: TimeUs) -> Vec<Judge
     apply_judge_outcome(session, outcome)
 }
 
+pub fn apply_hcn_gauge(session: &mut GameSession, audio_now: TimeUs) {
+    if session.chart.metadata.long_note_mode != LongNoteMode::Hcn {
+        session.last_hcn_gauge_at = None;
+        return;
+    }
+
+    let delta_us =
+        session.last_hcn_gauge_at.map(|prev| audio_now.0.saturating_sub(prev.0)).unwrap_or(0);
+    session.last_hcn_gauge_at = Some(audio_now);
+    if delta_us <= 0 {
+        return;
+    }
+    let delta_secs = delta_us as f32 / 1_000_000.0;
+
+    for lane in Lane::ALL {
+        let idx = lane.index();
+        let lane_state = &session.judge.lanes[idx];
+        if lane_state.active_long.is_some() && session.lane_keyon_started_at[idx].is_some() {
+            session.gauge.apply_hcn_hold(delta_secs);
+        } else if lane_state.hcn_draining {
+            session.gauge.apply_hcn_drain(delta_secs);
+        }
+    }
+}
+
 pub fn sync_judge_windows(session: &mut GameSession, now: TimeUs) {
     let percent = judge_percent_at_time(
         session.chart.metadata.judge_rank,
@@ -418,6 +445,7 @@ pub fn advance_session_frame(
             judgements.extend(process_human_inputs(session));
         }
         judgements.extend(process_misses(session, times.audio_now));
+        apply_hcn_gauge(session, times.audio_now);
         schedule_keysounds(session, &judgements, audio);
         update_recent_judgements(session, &judgements, times.render_now);
         update_full_combo_timer(session, &judgements);
@@ -854,6 +882,7 @@ mod tests {
             input_timestamp_anchor: None,
             pending_mine_hits: Vec::new(),
             state: PlayState::Ready,
+            last_hcn_gauge_at: None,
         }
     }
 

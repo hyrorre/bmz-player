@@ -155,6 +155,7 @@ pub fn build_game_session_with_input_backend(
         input_timestamp_anchor: None,
         pending_mine_hits: Vec::new(),
         state: PlayState::Ready,
+        last_hcn_gauge_at: None,
     }
 }
 
