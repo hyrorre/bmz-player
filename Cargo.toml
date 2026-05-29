@@ -10,6 +10,7 @@ members = [
     "crates/bmz-skin-convert",
     "crates/bmz-video",
     "crates/bmz-ffmpeg",
+    "crates/bmz-font",
 ]
 default-members = ["crates/bmz-app"]
 resolver = "2"
@@ -48,3 +49,5 @@ mlua = { version = "0.10", features = ["lua54", "vendored", "send"] }
 tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.12", features = ["json"] }
 rayon = "1"
+font-kit = "0.14"
+ab_glyph = "0.2.32"

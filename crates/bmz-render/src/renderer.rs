@@ -7,7 +7,7 @@ use std::pin::Pin;
 use std::task::{Context as TaskContext, Poll, RawWaker, RawWakerVTable, Waker};
 use std::thread;
 
-use ab_glyph::{Font, FontArc, Glyph, PxScale, ScaleFont, point};
+use ab_glyph::{Font, FontArc, FontVec, Glyph, PxScale, ScaleFont, point};
 use anyhow::{Context, Result, anyhow};
 
 use crate::assets::{RgbaImageAsset, load_png_rgba};
@@ -224,7 +224,11 @@ impl Renderer {
 
     /// `preserve_dynamic_timers` が true のとき、プレイ中のスキン差し替え向けに
     /// `timer_observe_boolean` の経過時刻を維持する。
-    pub fn set_play_skin_context(&mut self, skin_context: SkinContext, preserve_dynamic_timers: bool) {
+    pub fn set_play_skin_context(
+        &mut self,
+        skin_context: SkinContext,
+        preserve_dynamic_timers: bool,
+    ) {
         if !preserve_dynamic_timers {
             self.play_dynamic_timer_runtime.reset();
         }
@@ -1986,85 +1990,46 @@ fn present_mode_for(vsync: bool) -> wgpu::PresentMode {
 }
 
 fn load_default_font() -> Option<FontArc> {
-    // 日本語・記号を表示できる CJK 対応フォントを最優先で採用する。
-    // Latin のみのフォントしか見つからない環境向けに、それも一応保持しておく。
-    let mut latin_fallback: Option<FontArc> = None;
-    for path in default_font_candidates() {
-        let Ok(bytes) = std::fs::read(path) else {
-            continue;
-        };
-        match FontArc::try_from_vec(bytes) {
-            Ok(font) => {
-                if font_supports_japanese(&font) {
-                    return Some(font);
-                }
-                latin_fallback.get_or_insert(font);
-            }
-            Err(error) => tracing::warn!(%error, path, "failed to load default render font"),
-        }
+    if let Some(resolved) = bmz_font::resolve_system_font(true) {
+        return load_font_from_resolved(&resolved);
     }
-    match &latin_fallback {
-        Some(_) => tracing::warn!(
+
+    if let Some(resolved) = bmz_font::resolve_system_font(false) {
+        tracing::warn!(
             "no Japanese-capable font found; default skin text will fall back to a Latin-only font"
-        ),
-        None => {
-            tracing::warn!("no default render font found; text draw commands will be skipped")
-        }
+        );
+        return load_font_from_resolved(&resolved);
     }
-    latin_fallback
+
+    tracing::warn!("no default render font found; text draw commands will be skipped");
+    None
 }
 
-/// ひらがな「あ」と漢字「日」のグリフを両方持つフォントを日本語対応とみなす。
-/// `GlyphId(0)` は .notdef（未定義グリフ）なので、それ以外なら描画できる。
-fn font_supports_japanese<F: Font>(font: &F) -> bool {
-    font.glyph_id('あ').0 != 0 && font.glyph_id('日').0 != 0
+fn load_font_from_resolved(resolved: &bmz_font::ResolvedFont) -> Option<FontArc> {
+    let source = bmz_font::resolved_font_source(resolved);
+    let bytes = bmz_font::read_resolved_font_bytes(resolved).ok()?;
+    match FontVec::try_from_vec_and_index(bytes, resolved.font_index) {
+        Ok(font) => Some(FontArc::from(font)),
+        Err(error) => {
+            tracing::warn!(%error, source, "failed to load default render font");
+            None
+        }
+    }
 }
 
 /// egui など外部 UI 向けに、日本語表示が可能なフォントファイルの生バイト列を返す。
 ///
-/// ゲーム本体テキストと同じ `default_font_candidates` の探索順を再利用し、
-/// OS にインストールされた CJK 対応フォントを最初に見つかった順で返す。
+/// OS フォント DB から CJK 対応 face を font-kit 経由で解決し、
+/// collection index 付きでファイル全体を返す。
 pub fn load_japanese_font_bytes() -> Option<Vec<u8>> {
-    for path in default_font_candidates() {
-        let Ok(bytes) = std::fs::read(path) else {
-            continue;
-        };
-        match ab_glyph::FontRef::try_from_slice(&bytes) {
-            Ok(font) if font_supports_japanese(&font) => return Some(bytes),
-            _ => {}
-        }
+    let resolved = bmz_font::resolve_system_font(true)?;
+    let bytes = bmz_font::read_resolved_font_bytes(&resolved).ok()?;
+    if bmz_font::font_supports_japanese(&bytes, resolved.font_index) {
+        Some(bytes)
+    } else {
+        tracing::warn!("no Japanese-capable font found for egui; text may render as tofu");
+        None
     }
-    tracing::warn!("no Japanese-capable font found for egui; text may render as tofu");
-    None
-}
-
-fn default_font_candidates() -> &'static [&'static str] {
-    &[
-        // --- 日本語・記号対応フォント（優先） ---
-        // macOS
-        "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
-        "/System/Library/Fonts/Hiragino Sans GB.ttc",
-        "/Library/Fonts/Arial Unicode.ttf",
-        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
-        // Windows
-        "C:\\Windows\\Fonts\\YuGothR.ttc",
-        "C:\\Windows\\Fonts\\YuGothM.ttc",
-        "C:\\Windows\\Fonts\\meiryo.ttc",
-        "C:\\Windows\\Fonts\\msgothic.ttc",
-        // Linux
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/opentype/noto/NotoSansCJKjp-Regular.otf",
-        // --- Latin のみのフォールバック ---
-        "/System/Library/Fonts/Supplemental/Arial.ttf",
-        "/System/Library/Fonts/Helvetica.ttc",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
-        "C:\\Windows\\Fonts\\segoeui.ttf",
-        "C:\\Windows\\Fonts\\arial.ttf",
-    ]
 }
 
 fn block_on<T>(future: impl Future<Output = T>) -> T {
@@ -2102,6 +2067,10 @@ mod tests {
 
     use super::*;
 
+    fn font_supports_japanese<F: Font>(font: &F) -> bool {
+        font.glyph_id('あ').0 != 0 && font.glyph_id('日').0 != 0
+    }
+
     #[test]
     fn renderer_records_last_scene() {
         let mut renderer = Renderer::default();
@@ -2123,8 +2092,7 @@ mod tests {
     #[test]
     fn select_skin_context_update_does_not_reset_play_dynamic_timers() {
         use crate::skin::{
-            SkinDocument, SkinDrawState, SkinDynamicTimerDef, SkinManifest,
-            SKIN_DYNAMIC_TIMER_BASE,
+            SKIN_DYNAMIC_TIMER_BASE, SkinDocument, SkinDrawState, SkinDynamicTimerDef, SkinManifest,
         };
 
         let mut renderer = Renderer::default();
@@ -2140,21 +2108,15 @@ mod tests {
         renderer.set_play_skin_context(context, false);
 
         let state = SkinDrawState::default();
-        let seeded = renderer
-            .play_dynamic_timer_runtime
-            .advance(&document, state, 5_000);
+        let seeded = renderer.play_dynamic_timer_runtime.advance(&document, state, 5_000);
         assert_eq!(seeded.dynamic_timer_ms[0], Some(0));
 
-        let progressed = renderer
-            .play_dynamic_timer_runtime
-            .advance(&document, state, 8_000);
+        let progressed = renderer.play_dynamic_timer_runtime.advance(&document, state, 8_000);
         assert_eq!(progressed.dynamic_timer_ms[0], Some(3_000));
 
         renderer.set_select_skin_context(SkinContext::default());
 
-        let continued = renderer
-            .play_dynamic_timer_runtime
-            .advance(&document, state, 9_000);
+        let continued = renderer.play_dynamic_timer_runtime.advance(&document, state, 9_000);
         assert_eq!(continued.dynamic_timer_ms[0], Some(4_000));
     }
 
@@ -2262,11 +2224,7 @@ mod tests {
     fn load_default_font_prefers_japanese_capable_font() {
         let Some(font) = load_default_font() else { return };
         // CJK 対応フォントが環境にあれば、必ずそれが採用されていなければならない。
-        let cjk_available = default_font_candidates()
-            .iter()
-            .filter_map(|path| std::fs::read(path).ok())
-            .filter_map(|bytes| FontArc::try_from_vec(bytes).ok())
-            .any(|candidate| font_supports_japanese(&candidate));
+        let cjk_available = bmz_font::resolve_system_font(true).is_some();
         if cjk_available {
             assert!(font_supports_japanese(&font));
         }

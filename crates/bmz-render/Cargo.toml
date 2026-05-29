@@ -6,7 +6,7 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-ab_glyph = "0.2.32"
+ab_glyph.workspace = true
 jpeg-decoder = "0.3"
 png = "0.17"
 serde.workspace = true
@@ -20,3 +20,4 @@ egui-wgpu.workspace = true
 bmz-core = { path = "../bmz-core" }
 bmz-chart = { path = "../bmz-chart" }
 bmz-gameplay = { path = "../bmz-gameplay" }
+bmz-font = { path = "../bmz-font" }
