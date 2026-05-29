@@ -2638,8 +2638,7 @@ impl SkinDocument {
                 continue;
             };
             frame.y += (timeline_bottom_px - lane_bottom_px).round() as i32;
-            apply_skin_offset_to_frame(destination, &mut frame, state, false);
-            apply_bar_line_offset_to_frame(&mut frame, state);
+            apply_bar_line_skin_offsets_to_frame(destination, &mut frame, state);
             let Some(image) = images.get(destination.id.as_str()) else {
                 continue;
             };
@@ -2671,7 +2670,7 @@ impl SkinDocument {
                 Some(source.source_size),
                 destination.filter != 0,
             );
-            items.push(self.apply_notes_offset_to_item(item, state));
+            items.push(item);
         }
         items
     }
@@ -2735,58 +2734,6 @@ impl SkinDocument {
             y: rect.y - offset.y as f32 / canvas_h - offset_h / 2.0,
             width: rect.width + offset_w,
             height: rect.height + offset_h,
-        }
-    }
-
-    fn apply_notes_offset_to_item(
-        &self,
-        item: SkinRenderItem,
-        state: SkinDrawState,
-    ) -> SkinRenderItem {
-        match item {
-            SkinRenderItem::Image {
-                texture,
-                rect,
-                uv,
-                tint,
-                blend,
-                scale,
-                border,
-                source_size,
-                linear_filter,
-            } => SkinRenderItem::Image {
-                texture,
-                rect: self.apply_notes_offset_to_rect(rect, state),
-                uv,
-                tint,
-                blend,
-                scale,
-                border,
-                source_size,
-                linear_filter,
-            },
-            SkinRenderItem::RotatedImage {
-                texture,
-                rect,
-                uv,
-                tint,
-                blend,
-                source_size,
-                linear_filter,
-                angle_deg,
-                center,
-            } => SkinRenderItem::RotatedImage {
-                texture,
-                rect: self.apply_notes_offset_to_rect(rect, state),
-                uv,
-                tint,
-                blend,
-                source_size,
-                linear_filter,
-                angle_deg,
-                center,
-            },
-            other => other,
         }
     }
 
@@ -5547,6 +5494,8 @@ fn apply_skin_offset_ids_to_frame(
                     frame.a = (frame.a - 255).clamp(0, 255);
                 }
             }
+            SKIN_OFFSET_BAR_LINE => {}
+            OFFSET_NOTES_1P => {}
             _ => {
                 if let Some(offset) = state.skin_offsets.get(offset_id) {
                     if !relative {
@@ -5564,10 +5513,31 @@ fn apply_skin_offset_ids_to_frame(
     }
 }
 
+/// 小節線 (`note.group`) 向けオフセット適用。Notes offset (30) はノーツ専用のため除外する。
+fn apply_bar_line_skin_offsets_to_frame(
+    destination: &SkinDestinationDef,
+    frame: &mut ResolvedSkinFrame,
+    state: SkinDrawState,
+) {
+    let mut ids: Vec<i32> = destination
+        .offsets
+        .iter()
+        .copied()
+        .filter(|&id| id != OFFSET_NOTES_1P && id != SKIN_OFFSET_BAR_LINE)
+        .collect();
+    if destination.offset != 0
+        && destination.offset != OFFSET_NOTES_1P
+        && destination.offset != SKIN_OFFSET_BAR_LINE
+    {
+        ids.push(destination.offset);
+    }
+    apply_skin_offset_ids_to_frame(&ids, frame, state, false);
+    apply_bar_line_offset_to_frame(frame, state);
+}
+
 fn apply_bar_line_offset_to_frame(frame: &mut ResolvedSkinFrame, state: SkinDrawState) {
     if let Some(offset) = state.skin_offsets.get(SKIN_OFFSET_BAR_LINE) {
         frame.h = (frame.h + offset.h).max(0);
-        frame.a = (frame.a + offset.a).clamp(0, 255);
     }
 }
 

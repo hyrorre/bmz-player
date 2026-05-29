@@ -59,7 +59,13 @@ impl SceneSkinDefs {
 
     fn append_missing_beatoraja_play_offsets(&mut self) {
         for offset in beatoraja_play_common_offsets() {
-            if !self.offset.iter().any(|existing| existing.id == offset.id) {
+            if let Some(existing) = self.offset.iter_mut().find(|existing| existing.id == offset.id)
+            {
+                if offset.id == SKIN_OFFSET_BAR_LINE {
+                    existing.h = true;
+                    existing.a = true;
+                }
+            } else {
                 self.offset.push(offset);
             }
         }
@@ -1568,6 +1574,31 @@ mod tests {
 
         assert_eq!(defs.offset.iter().filter(|offset| offset.id == 10).count(), 1);
         assert_eq!(defs.offset.len(), 5);
+    }
+
+    #[test]
+    fn play_skin_defs_enable_bar_line_alpha_when_skin_def_disables_it() {
+        let mut defs = SceneSkinDefs::default();
+        defs.offset.push(SkinOffsetDef {
+            category: "custom".to_string(),
+            name: "Custom bar".to_string(),
+            id: SKIN_OFFSET_BAR_LINE,
+            x: false,
+            y: false,
+            w: false,
+            h: true,
+            r: false,
+            a: false,
+        });
+
+        defs.append_missing_beatoraja_play_offsets();
+
+        let bar_line = defs
+            .offset
+            .iter()
+            .find(|offset| offset.id == SKIN_OFFSET_BAR_LINE)
+            .expect("bar line offset def");
+        assert!(bar_line.a);
     }
 
     #[test]

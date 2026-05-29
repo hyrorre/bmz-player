@@ -7,7 +7,7 @@ use crate::skin::{
     SkinObjectId, SkinPhase, SkinPlacement, SkinRenderContext, SkinRenderItem, SkinSource,
     SkinTextState, SkinTextureId, TextSlot, append_skin_render_items, judge_image_index,
 };
-use crate::skin_offset::SKIN_OFFSET_BAR_LINE;
+use crate::skin_offset::{SKIN_OFFSET_BAR_LINE, SkinOffsetValues};
 use crate::snapshot::{DisplayBgaFrame, DisplayJudgeCounts, RenderSnapshot};
 use crate::text::{BitmapTextStyle, TextRenderer};
 
@@ -919,14 +919,15 @@ fn plan_play(
             active_lanes,
         );
         for bar in &snapshot.bar_lines {
-            let y = play_object_y(board, snapshot.lift, bar.y);
-            let offset = snapshot.skin_offsets.get(SKIN_OFFSET_BAR_LINE).unwrap_or_default();
-            let height = (0.004 + offset.h as f32 / 1080.0).max(0.0);
-            let alpha = (1.0 + offset.a as f32 / 255.0).clamp(0.0, 1.0);
-            commands.push(DrawCommand::Rect {
-                rect: Rect { x: board.x, y, width: board.width, height },
-                color: Color::rgba(0.45, 0.48, 0.5, alpha),
-            });
+            push_play_bar_line(
+                &mut commands,
+                skin,
+                skin_state,
+                board,
+                snapshot.lift,
+                bar,
+                snapshot.skin_offsets,
+            );
         }
         push_judge_line(skin_manifest, &mut commands, board, snapshot.lift);
 
@@ -959,9 +960,15 @@ fn plan_play(
     } else {
         // beatoraja スキン: ロングノート胴体 → タップノートの順で note.dst のエリアに配置
         for bar in &snapshot.bar_lines {
-            let items = skin.document_bar_line_items(bar.y, skin_state);
-            let items = skin.apply_play_skin_global_offset(items, skin_state);
-            append_skin_render_items(&mut commands, &items);
+            push_play_bar_line(
+                &mut commands,
+                skin,
+                skin_state,
+                board,
+                snapshot.lift,
+                bar,
+                snapshot.skin_offsets,
+            );
         }
         for body in &snapshot.visible_long_notes {
             if let Some(rect) =
@@ -1416,6 +1423,62 @@ fn note_rect_y(board: Rect, lift: f32, progress_to_hit: f32) -> f32 {
 fn play_object_y(board: Rect, lift: f32, progress_to_hit: f32) -> f32 {
     let judge_y = judge_line_y(board, lift);
     judge_y - progress_to_hit.clamp(0.0, 1.0) * (judge_y - board.y)
+}
+
+fn push_play_bar_line(
+    commands: &mut Vec<DrawCommand>,
+    skin: &SkinContext,
+    skin_state: crate::skin::SkinDrawState,
+    board: Rect,
+    lift: f32,
+    bar: &crate::snapshot::VisibleBarLine,
+    skin_offsets: SkinOffsetValues,
+) {
+    let start = commands.len();
+    let items = skin.document_bar_line_items(bar.y, skin_state);
+    if items.is_empty() {
+        push_bar_line_rect_geometry(commands, board, lift, bar.y, skin_offsets);
+    } else {
+        let items = skin.apply_play_skin_global_offset(items, skin_state);
+        append_skin_render_items(commands, &items);
+    }
+    apply_bar_line_alpha_offset(&mut commands[start..], skin_offsets);
+}
+
+/// beatoraja `SkinObject.prepareColor` 相当。小節線コマンド列に alpha offset を加算する。
+fn apply_bar_line_alpha_offset(commands: &mut [DrawCommand], skin_offsets: SkinOffsetValues) {
+    let offset = skin_offsets.get(SKIN_OFFSET_BAR_LINE).unwrap_or_default();
+    if offset.a == 0 {
+        return;
+    }
+    let alpha_delta = offset.a as f32 / 255.0;
+    for command in commands {
+        match command {
+            DrawCommand::Image { tint, .. } | DrawCommand::RotatedImage { tint, .. } => {
+                tint.a = (tint.a + alpha_delta).clamp(0.0, 1.0);
+            }
+            DrawCommand::Rect { color, .. } => {
+                color.a = (color.a + alpha_delta).clamp(0.0, 1.0);
+            }
+            DrawCommand::Text { .. } => {}
+        }
+    }
+}
+
+fn push_bar_line_rect_geometry(
+    commands: &mut Vec<DrawCommand>,
+    board: Rect,
+    lift: f32,
+    bar_y: f32,
+    skin_offsets: SkinOffsetValues,
+) {
+    let y = play_object_y(board, lift, bar_y);
+    let offset = skin_offsets.get(SKIN_OFFSET_BAR_LINE).unwrap_or_default();
+    let height = (0.004 + offset.h as f32 / 1080.0).max(0.0);
+    commands.push(DrawCommand::Rect {
+        rect: Rect { x: board.x, y, width: board.width, height },
+        color: Color::rgba(0.45, 0.48, 0.5, 1.0),
+    });
 }
 
 fn judge_line_y(board: Rect, lift: f32) -> f32 {
@@ -2319,6 +2382,149 @@ mod tests {
             DrawCommand::Rect { rect, color }
                 if approx_eq(rect.height, 0.004 + 4.0 / 1080.0)
                     && approx_eq(color.a, 127.0 / 255.0)
+        )));
+    }
+
+    #[test]
+    fn play_skin_document_ignores_notes_offset_on_bar_lines() {
+        let document: crate::skin::SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{"id": 1, "path": "line.png"}],
+                "image": [{"id": "section-line", "src": 1, "x": 0, "y": 0, "w": 1, "h": 1}],
+                "note": {
+                    "dst": [{ "x": 10, "y": 20, "w": 5, "h": 60 }],
+                    "group": [{
+                        "id": "section-line",
+                        "offset": 30,
+                        "dst": [{ "x": 10, "y": 20, "w": 40, "h": 2, "a": 200 }]
+                    }]
+                }
+            }
+            "#,
+        )
+        .unwrap();
+        let manifest: SkinManifest = toml::from_str("").unwrap();
+        let source_texture = crate::skin::SkinDocumentTexture {
+            source_id: "1".to_string(),
+            texture: SkinTextureId(77),
+            source_size: crate::skin::SkinImageSize { width: 1.0, height: 1.0 },
+        };
+        let skin = SkinContext::from_manifest_and_document(manifest, document, [source_texture]);
+        let mut snapshot = RenderSnapshot::default();
+        snapshot
+            .skin_offsets
+            .set(30, crate::skin_offset::SkinOffsetValue { h: 20, ..Default::default() });
+        snapshot.skin_offsets.set(
+            SKIN_OFFSET_BAR_LINE,
+            crate::skin_offset::SkinOffsetValue { h: 5, a: -50, ..Default::default() },
+        );
+        snapshot.bar_lines.push(VisibleBarLine { time: TimeUs(1_000), y: 0.5 });
+
+        let plan = DrawPlan::from_scene_with_skin(
+            &AppSceneSnapshot::Play(snapshot),
+            &skin,
+            &mut crate::skin::DynamicTimerRuntime::default(),
+        );
+
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Image { texture, rect, tint, .. }
+                if *texture == TextureId(77)
+                    && approx_eq(rect.height, 0.07)
+                    && approx_eq(tint.a, 150.0 / 255.0)
+        )));
+    }
+
+    #[test]
+    fn play_skin_document_without_group_falls_back_to_bar_line_offset_rect() {
+        let document: crate::skin::SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "note": {
+                    "dst": [{ "x": 10, "y": 20, "w": 5, "h": 60 }]
+                }
+            }
+            "#,
+        )
+        .unwrap();
+        let manifest: SkinManifest = toml::from_str("").unwrap();
+        let skin = SkinContext::from_manifest_and_document(manifest, document, []);
+        let mut snapshot = RenderSnapshot::default();
+        snapshot.skin_offsets.set(
+            SKIN_OFFSET_BAR_LINE,
+            crate::skin_offset::SkinOffsetValue { h: 4, a: -128, ..Default::default() },
+        );
+        snapshot.bar_lines.push(VisibleBarLine { time: TimeUs(1_000), y: 0.5 });
+
+        let plan = DrawPlan::from_scene_with_skin(
+            &AppSceneSnapshot::Play(snapshot),
+            &skin,
+            &mut crate::skin::DynamicTimerRuntime::default(),
+        );
+
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Rect { rect, color }
+                if approx_eq(rect.height, 0.004 + 4.0 / 1080.0)
+                    && approx_eq(color.a, 127.0 / 255.0)
+        )));
+    }
+
+    #[test]
+    fn play_skin_document_applies_bar_line_alpha_after_global_offset() {
+        let document: crate::skin::SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{"id": 1, "path": "line.png"}],
+                "image": [{"id": "section-line", "src": 1, "x": 0, "y": 0, "w": 1, "h": 1}],
+                "note": {
+                    "dst": [{ "x": 10, "y": 20, "w": 5, "h": 60 }],
+                    "group": [{
+                        "id": "section-line",
+                        "dst": [{ "x": 10, "y": 20, "w": 40, "h": 2, "a": 255 }]
+                    }]
+                }
+            }
+            "#,
+        )
+        .unwrap();
+        let manifest: SkinManifest = toml::from_str("").unwrap();
+        let source_texture = crate::skin::SkinDocumentTexture {
+            source_id: "1".to_string(),
+            texture: SkinTextureId(77),
+            source_size: crate::skin::SkinImageSize { width: 1.0, height: 1.0 },
+        };
+        let skin = SkinContext::from_manifest_and_document(manifest, document, [source_texture]);
+        let mut snapshot = RenderSnapshot::default();
+        snapshot
+            .skin_offsets
+            .set(10, crate::skin_offset::SkinOffsetValue { w: 20, ..Default::default() });
+        snapshot.skin_offsets.set(
+            SKIN_OFFSET_BAR_LINE,
+            crate::skin_offset::SkinOffsetValue { a: -64, ..Default::default() },
+        );
+        snapshot.bar_lines.push(VisibleBarLine { time: TimeUs(1_000), y: 0.5 });
+
+        let plan = DrawPlan::from_scene_with_skin(
+            &AppSceneSnapshot::Play(snapshot),
+            &skin,
+            &mut crate::skin::DynamicTimerRuntime::default(),
+        );
+
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Image { texture, tint, .. }
+                if *texture == TextureId(77) && approx_eq(tint.a, 191.0 / 255.0)
         )));
     }
 
