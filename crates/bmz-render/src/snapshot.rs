@@ -3,6 +3,16 @@ use bmz_core::time::TimeUs;
 
 use crate::skin_offset::SkinOffsetValues;
 
+/// beatoraja の OPTION_COURSE_STAGE1..4 / OPTION_COURSE_STAGE_FINAL (280..283 / 289) に対応。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CourseStageMarker {
+    Stage1,
+    Stage2,
+    Stage3,
+    Stage4,
+    Final,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct OverlaySnapshot {
     /// 右下に常時表示する文字列。
@@ -56,6 +66,10 @@ pub struct RenderSnapshot {
     pub best_ex_score: Option<u32>,
     pub target_ex_score: Option<u32>,
     pub judge_timing_offset_ms: i32,
+    /// OPTION_AUTOPLAYON (33) / OPTION_AUTOPLAYOFF (32) 用。
+    pub autoplay: bool,
+    /// OPTION_MODE_COURSE (290) とステージ別 op (280..283 / 289) 用。未対応時は None。
+    pub course_stage: Option<CourseStageMarker>,
     pub key_mode: KeyMode,
     pub visible_notes: [Vec<VisibleNote>; LANE_COUNT],
     /// Mine ノーツ。スコア対象外で、専用のスプライト（赤系）で描く。

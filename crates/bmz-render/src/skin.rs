@@ -15,7 +15,7 @@ use crate::plan::{
 };
 use crate::scene::{SelectRowKind, SelectRowSnapshot, SelectSnapshot};
 use crate::skin_offset::{SKIN_OFFSET_BAR_LINE, SkinOffsetValues};
-use crate::snapshot::DisplayJudgeCounts;
+use crate::snapshot::{CourseStageMarker, DisplayJudgeCounts};
 
 const OFFSET_ALL: i32 = 10;
 const OFFSET_NOTES_1P: i32 = 30;
@@ -1116,6 +1116,10 @@ pub struct SkinDrawState {
     pub fadeout_ms: Option<i32>,
     /// 閉店/FAILED 演出のタイマー経過 ms (TIMER_FAILED=3)。
     pub failed_ms: Option<i32>,
+    /// OPTION_AUTOPLAYON (33) / OPTION_AUTOPLAYOFF (32) 用。
+    pub autoplay: bool,
+    /// OPTION_MODE_COURSE (290) とステージ別 op (280..283 / 289) 用。未対応時は None。
+    pub course_stage: Option<CourseStageMarker>,
 }
 
 impl Default for SkinDrawState {
@@ -1202,6 +1206,8 @@ impl Default for SkinDrawState {
             result_failed: None,
             fadeout_ms: None,
             failed_ms: None,
+            autoplay: false,
+            course_stage: None,
         }
     }
 }
@@ -3774,6 +3780,17 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool 
         // Result 画面以外 (result_failed == None) では両方 false。
         90 => state.result_failed == Some(false),
         91 => state.result_failed == Some(true),
+        // OPTION_AUTOPLAYOFF / OPTION_AUTOPLAYON
+        32 => !state.autoplay,
+        33 => state.autoplay,
+        // OPTION_COURSE_STAGE1..4 / OPTION_COURSE_STAGE_FINAL
+        280 => state.course_stage == Some(CourseStageMarker::Stage1),
+        281 => state.course_stage == Some(CourseStageMarker::Stage2),
+        282 => state.course_stage == Some(CourseStageMarker::Stage3),
+        283 => state.course_stage == Some(CourseStageMarker::Stage4),
+        289 => state.course_stage == Some(CourseStageMarker::Final),
+        // OPTION_MODE_COURSE
+        290 => state.course_stage.is_some(),
         value => test_json_option_number(value, enabled_options),
     }
 }
@@ -6458,6 +6475,34 @@ mod tests {
         assert!(!test_skin_op(-5, &[], owned_song));
         assert!(test_skin_op(-5, &[], unowned_song));
         assert!(test_skin_op(-5, &[], folder));
+    }
+
+    #[test]
+    fn play_mode_option_ops_reflect_autoplay_and_course_stage() {
+        let normal_play = SkinDrawState::default();
+        let autoplay = SkinDrawState { autoplay: true, ..SkinDrawState::default() };
+        let course_stage1 = SkinDrawState {
+            course_stage: Some(CourseStageMarker::Stage1),
+            ..SkinDrawState::default()
+        };
+        let course_final = SkinDrawState {
+            course_stage: Some(CourseStageMarker::Final),
+            ..SkinDrawState::default()
+        };
+
+        // Starseeker freestage: op = {32, -290}
+        assert!(test_skin_op(32, &[], normal_play));
+        assert!(!test_skin_op(290, &[], normal_play));
+        assert!(test_skin_ops(&[32, -290], &[], normal_play));
+
+        // Starseeker auto_play: op = {33}
+        assert!(!test_skin_op(33, &[], normal_play));
+        assert!(test_skin_op(33, &[], autoplay));
+
+        // Course stage labels
+        assert!(test_skin_ops(&[32, 290, 280], &[], course_stage1));
+        assert!(!test_skin_ops(&[32, 290, 280], &[], course_final));
+        assert!(test_skin_ops(&[32, 290, 289], &[], course_final));
     }
 
     #[test]

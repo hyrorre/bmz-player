@@ -97,6 +97,8 @@ pub fn build_render_snapshot_with_bga_frames(
         best_ex_score,
         target_ex_score: None, // TODO: resolve from rival / target config
         judge_timing_offset_ms: (session.offsets.input_offset_us / 1_000) as i32,
+        autoplay: session.autoplay.is_some(),
+        course_stage: None,
         key_mode: session.chart.metadata.key_mode,
         visible_notes: std::array::from_fn(|_| Vec::new()),
         visible_mines: std::array::from_fn(|_| Vec::new()),

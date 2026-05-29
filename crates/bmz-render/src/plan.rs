@@ -640,6 +640,8 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
         best_ex_score: snapshot.best_ex_score,
         target_ex_score: snapshot.target_ex_score,
         judge_timing_offset_ms: snapshot.judge_timing_offset_ms,
+        autoplay: snapshot.autoplay,
+        course_stage: snapshot.course_stage,
         ..crate::skin::SkinDrawState::default()
     };
     let skin_text = SkinTextState {
