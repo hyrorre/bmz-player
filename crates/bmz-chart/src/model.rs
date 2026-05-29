@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use bmz_core::chart::ChartIdentity;
@@ -22,6 +23,12 @@ pub struct PlayableChart {
     pub text_events: Vec<ChartTextEvent>,
     pub bga_opacity_events: Vec<BgaOpacityEvent>,
     pub bga_argb_events: Vec<BgaArgbEvent>,
+    /// `#SWBGA` 定義。
+    pub swbga_definitions: Vec<SwBgaDefinition>,
+    /// チャネル A5 による keybound BGA 切替。
+    pub bga_keybound_events: Vec<BgaKeyboundEvent>,
+    /// BMP キー → BGA アセット ID。
+    pub bga_asset_by_bmp_key: HashMap<u16, BgaAssetId>,
     pub bar_lines: Vec<BarLine>,
     pub sounds: Vec<SoundAssetRef>,
     pub bga_assets: Vec<BgaAssetRef>,
@@ -217,6 +224,28 @@ pub struct BgaArgbEvent {
     pub blue: u8,
 }
 
+#[derive(Debug, Clone)]
+pub struct SwBgaDefinition {
+    pub id: u16,
+    pub frame_rate_ms: u32,
+    pub total_time_ms: u32,
+    /// 対象キー通道 (11–18 / 21–28)。
+    pub line: u8,
+    pub loop_mode: bool,
+    pub chroma_alpha: u8,
+    pub chroma_red: u8,
+    pub chroma_green: u8,
+    pub chroma_blue: u8,
+    pub pattern_bmp_keys: Vec<u16>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BgaKeyboundEvent {
+    pub tick: ChartTick,
+    pub time: TimeUs,
+    pub swbga_id: u16,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BarLine {
     pub measure: u32,
@@ -238,6 +267,8 @@ pub enum BgaEventKind {
     Base,
     Poor,
     Layer,
+    /// BMS チャネル 0A (Overlay2)。
+    Layer2,
 }
 
 #[derive(Debug, Clone)]

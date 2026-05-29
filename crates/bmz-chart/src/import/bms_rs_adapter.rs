@@ -12,7 +12,7 @@
 //!   - 01: BGM
 //!   - 02: 小節長
 //!   - 03/08: BPM 変更（インライン / ref）
-//!   - 04/06/07: BGA (Base/Poor/Overlay→Layer)
+//!   - 04/06/07/0A: BGA (Base/Poor/Overlay→Layer/Layer2)
 //!   - 09: STOP
 //!   - 1x/2x: Visible (P1/P2)
 //!   - 3x/4x: Invisible (P1/P2)
@@ -101,6 +101,7 @@ pub(crate) fn build_intermediate_from_bms(
     push_text_objects(bms, &mut objects);
     push_bga_opacity_objects(bms, &mut objects);
     push_bga_argb_objects(bms, &mut objects);
+    push_bga_keybound_objects(bms, &mut objects);
 
     let max_measure = compute_max_measure(bms, &objects);
     let measures = build_measures(max_measure, bms);
@@ -234,7 +235,46 @@ fn build_resources(bms: &Bms) -> IntermediateResources {
             sv.value().as_ref().ok().map(|v| StopDef { key: id.as_u16(), value: v.get() as u64 })
         })
         .collect();
-    IntermediateResources { wavs, bmps, bpm_table, stop_table }
+    IntermediateResources { wavs, bmps, bpm_table, stop_table, swbga_defs: build_swbga_defs(bms) }
+}
+
+fn build_swbga_defs(bms: &Bms) -> Vec<super::intermediate::SwBgaDef> {
+    bms.bmp
+        .swbga_events
+        .iter()
+        .map(|(id, event)| super::intermediate::SwBgaDef {
+            id: id.as_u16(),
+            frame_rate_ms: event.frame_rate,
+            total_time_ms: event.total_time,
+            line: event.line,
+            loop_mode: event.loop_mode,
+            chroma_alpha: event.argb.alpha,
+            chroma_red: event.argb.red,
+            chroma_green: event.argb.green,
+            chroma_blue: event.argb.blue,
+            pattern: event.pattern.clone(),
+        })
+        .collect()
+}
+
+fn push_bga_keybound_objects(bms: &Bms, objects: &mut Vec<IntermediateObject>) {
+    for keybound in bms.bmp.bga_keybound_events.values() {
+        let swbga_key = bms
+            .bmp
+            .swbga_events
+            .iter()
+            .find(|(_, event)| *event == &keybound.event)
+            .map(|(id, _)| id.as_u16());
+        let Some(swbga_key) = swbga_key else {
+            continue;
+        };
+        objects.push(IntermediateObject {
+            measure: track_of(keybound.time),
+            position_num: keybound.time.numerator() as u32,
+            position_den: keybound.time.denominator().get() as u32,
+            kind: IntermediateObjectKind::BgaKeybound { swbga_key },
+        });
+    }
 }
 
 fn push_note_objects(
@@ -299,7 +339,8 @@ fn push_bga_objects(bms: &Bms, objects: &mut Vec<IntermediateObject>) {
         let kind = match bga.layer {
             BgaLayer::Base => IntermediateBgaKind::Base,
             BgaLayer::Poor => IntermediateBgaKind::Poor,
-            BgaLayer::Overlay | BgaLayer::Overlay2 => IntermediateBgaKind::Layer,
+            BgaLayer::Overlay => IntermediateBgaKind::Layer,
+            BgaLayer::Overlay2 => IntermediateBgaKind::Layer2,
             _ => continue,
         };
         objects.push(IntermediateObject {
@@ -440,7 +481,8 @@ fn map_bga_layer_kind(layer: bms_rs::bms::model::obj::BgaLayer) -> Option<Interm
     match layer {
         BgaLayer::Base => Some(IntermediateBgaKind::Base),
         BgaLayer::Poor => Some(IntermediateBgaKind::Poor),
-        BgaLayer::Overlay | BgaLayer::Overlay2 => Some(IntermediateBgaKind::Layer),
+        BgaLayer::Overlay => Some(IntermediateBgaKind::Layer),
+        BgaLayer::Overlay2 => Some(IntermediateBgaKind::Layer2),
         _ => None,
     }
 }

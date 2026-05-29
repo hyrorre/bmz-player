@@ -337,6 +337,48 @@ mod tests {
     }
 
     #[test]
+    fn imports_bga_layer2_separate_from_layer() {
+        let text = "\
+#TITLE Layer2 Song
+#BPM 120
+#TOTAL 200
+#BMP01 layer.png
+#BMP02 layer2.png
+#00007:0001
+#0010A:0002
+#00011:01
+";
+        let path = write_temp_bms(text);
+        let result = import_bms_chart(&path, None, false).unwrap();
+        assert_eq!(result.chart.bga_events.len(), 2);
+        assert_eq!(result.chart.bga_events[0].kind, BgaEventKind::Layer);
+        assert_eq!(result.chart.bga_events[1].kind, BgaEventKind::Layer2);
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn imports_swbga_and_keybound_events() {
+        let text = "\
+#TITLE Keybound Song
+#BPM 120
+#TOTAL 200
+#BMP01 f1.png
+#BMP02 f2.png
+#SWBGA01 100:0:11:0:255,0,0,0 0102
+#000A5:01
+#00011:01
+";
+        let path = write_temp_bms(text);
+        let result = import_bms_chart(&path, None, false).unwrap();
+        assert_eq!(result.chart.swbga_definitions.len(), 1);
+        assert_eq!(result.chart.swbga_definitions[0].pattern_bmp_keys, vec![1, 2]);
+        assert_eq!(result.chart.swbga_definitions[0].line, 11);
+        assert_eq!(result.chart.bga_keybound_events.len(), 1);
+        assert_eq!(result.chart.bga_keybound_events[0].swbga_id, 1);
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn imports_bmson_into_playable_chart() {
         let json = r#"{
             "version": "1.0.0",

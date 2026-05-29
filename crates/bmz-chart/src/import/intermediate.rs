@@ -44,6 +44,21 @@ pub struct IntermediateResources {
     pub bmps: Vec<BmpDef>,
     pub bpm_table: Vec<BpmDef>,
     pub stop_table: Vec<StopDef>,
+    pub swbga_defs: Vec<SwBgaDef>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SwBgaDef {
+    pub id: u16,
+    pub frame_rate_ms: u32,
+    pub total_time_ms: u32,
+    pub line: u8,
+    pub loop_mode: bool,
+    pub chroma_alpha: u8,
+    pub chroma_red: u8,
+    pub chroma_green: u8,
+    pub chroma_blue: u8,
+    pub pattern: String,
 }
 
 #[derive(Debug, Clone)]
@@ -159,6 +174,10 @@ pub enum IntermediateObjectKind {
         green: u8,
         blue: u8,
     },
+    /// チャネル A5: keybound BGA 切替。
+    BgaKeybound {
+        swbga_key: u16,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -166,6 +185,7 @@ pub enum IntermediateBgaKind {
     Base,
     Poor,
     Layer,
+    Layer2,
 }
 
 #[derive(Debug, Clone)]

@@ -5,11 +5,12 @@ use bmz_core::ids::{NoteId, SoundId};
 use bmz_core::lane::{LANE_COUNT, Lane};
 use bmz_core::time::{ChartTick, TimeUs};
 
+use crate::bga_keybound::parse_swbga_pattern;
 use crate::model::{
     BarLine, BgaArgbEvent, BgaAssetId, BgaAssetKind, BgaAssetRef, BgaEvent, BgaEventKind,
-    BgaOpacityEvent, ChartMetadata, ChartTextEvent, ChartVolumeEvent, JudgeRankEvent, LongNotePair,
-    NoteEvent, NoteKind, PlayableChart, ScrollEvent, SoundAssetRef, SoundEvent, SpeedEvent,
-    TimingEvent, TimingEventKind,
+    BgaKeyboundEvent, BgaOpacityEvent, ChartMetadata, ChartTextEvent, ChartVolumeEvent,
+    JudgeRankEvent, LongNotePair, NoteEvent, NoteKind, PlayableChart, ScrollEvent, SoundAssetRef,
+    SoundEvent, SpeedEvent, SwBgaDefinition, TimingEvent, TimingEventKind,
 };
 use crate::timing::{TickTimingEvent, TickTimingEventKind, TimingMap, build_timing_map};
 
@@ -65,6 +66,9 @@ struct PlayableChartDraft {
     text_events: Vec<ChartTextEvent>,
     bga_opacity_events: Vec<BgaOpacityEvent>,
     bga_argb_events: Vec<BgaArgbEvent>,
+    swbga_definitions: Vec<SwBgaDefinition>,
+    bga_keybound_events: Vec<BgaKeyboundEvent>,
+    bga_asset_by_bmp_key: HashMap<u16, BgaAssetId>,
     bar_lines: Vec<BarLine>,
     sounds: Vec<SoundAssetRef>,
     bga_assets: Vec<BgaAssetRef>,
@@ -128,6 +132,9 @@ pub fn normalize_chart(
     draft.text_events = build_text_events(&intermediate, &timing_map)?;
     draft.bga_opacity_events = build_bga_opacity_events(&intermediate, &timing_map)?;
     draft.bga_argb_events = build_bga_argb_events(&intermediate, &timing_map)?;
+    draft.swbga_definitions = build_swbga_definitions(&intermediate);
+    draft.bga_keybound_events = build_bga_keybound_events(&intermediate, &timing_map)?;
+    draft.bga_asset_by_bmp_key = bga_table.by_bmp_key.clone();
     draft.bar_lines = build_bar_lines(&intermediate.measures, &timing_map);
 
     Ok(finalize_playable_chart(draft))
@@ -251,7 +258,8 @@ fn materialize_tick_objects(
             | IntermediateObjectKind::SetKeyVolume { .. }
             | IntermediateObjectKind::SetText { .. }
             | IntermediateObjectKind::SetBgaOpacity { .. }
-            | IntermediateObjectKind::SetBgaArgb { .. } => None,
+            | IntermediateObjectKind::SetBgaArgb { .. }
+            | IntermediateObjectKind::BgaKeybound { .. } => None,
         };
 
         if let Some(kind) = kind {
@@ -268,6 +276,7 @@ fn bga_event_kind(kind: super::intermediate::IntermediateBgaKind) -> BgaEventKin
         super::intermediate::IntermediateBgaKind::Base => BgaEventKind::Base,
         super::intermediate::IntermediateBgaKind::Poor => BgaEventKind::Poor,
         super::intermediate::IntermediateBgaKind::Layer => BgaEventKind::Layer,
+        super::intermediate::IntermediateBgaKind::Layer2 => BgaEventKind::Layer2,
     }
 }
 
@@ -702,6 +711,45 @@ fn build_bga_argb_events(
     Ok(out)
 }
 
+fn build_swbga_definitions(intermediate: &IntermediateChart) -> Vec<SwBgaDefinition> {
+    intermediate
+        .resources
+        .swbga_defs
+        .iter()
+        .map(|def| SwBgaDefinition {
+            id: def.id,
+            frame_rate_ms: def.frame_rate_ms,
+            total_time_ms: def.total_time_ms,
+            line: def.line,
+            loop_mode: def.loop_mode,
+            chroma_alpha: def.chroma_alpha,
+            chroma_red: def.chroma_red,
+            chroma_green: def.chroma_green,
+            chroma_blue: def.chroma_blue,
+            pattern_bmp_keys: parse_swbga_pattern(&def.pattern),
+        })
+        .collect()
+}
+
+fn build_bga_keybound_events(
+    intermediate: &IntermediateChart,
+    timing_map: &TimingMap,
+) -> Result<Vec<BgaKeyboundEvent>, ImportError> {
+    let mut out = Vec::new();
+    for object in &intermediate.objects {
+        let IntermediateObjectKind::BgaKeybound { swbga_key } = object.kind else {
+            continue;
+        };
+        let tick = object_to_tick(object, &intermediate.measures)?;
+        out.push(BgaKeyboundEvent {
+            tick,
+            time: timing_map.tick_to_time(tick),
+            swbga_id: swbga_key,
+        });
+    }
+    Ok(out)
+}
+
 fn build_bar_lines(measures: &[MeasureInfo], timing_map: &TimingMap) -> Vec<BarLine> {
     measures
         .iter()
@@ -729,6 +777,7 @@ fn finalize_playable_chart(mut draft: PlayableChartDraft) -> PlayableChart {
     draft.text_events.sort_by_key(|event| event.time);
     draft.bga_opacity_events.sort_by_key(|event| event.time);
     draft.bga_argb_events.sort_by_key(|event| event.time);
+    draft.bga_keybound_events.sort_by_key(|event| event.time);
     draft.bar_lines.sort_by_key(|line| line.time);
 
     draft.total_notes = compute_total_notes(&draft.lane_notes);
@@ -750,6 +799,9 @@ fn finalize_playable_chart(mut draft: PlayableChartDraft) -> PlayableChart {
         text_events: draft.text_events,
         bga_opacity_events: draft.bga_opacity_events,
         bga_argb_events: draft.bga_argb_events,
+        swbga_definitions: draft.swbga_definitions,
+        bga_keybound_events: draft.bga_keybound_events,
+        bga_asset_by_bmp_key: draft.bga_asset_by_bmp_key,
         bar_lines: draft.bar_lines,
         sounds: draft.sounds,
         bga_assets: draft.bga_assets,
@@ -800,6 +852,9 @@ impl PlayableChartDraft {
             text_events: Vec::new(),
             bga_opacity_events: Vec::new(),
             bga_argb_events: Vec::new(),
+            swbga_definitions: Vec::new(),
+            bga_keybound_events: Vec::new(),
+            bga_asset_by_bmp_key: HashMap::new(),
             bar_lines: Vec::new(),
             sounds,
             bga_assets,
