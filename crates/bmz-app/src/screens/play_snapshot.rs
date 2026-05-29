@@ -134,6 +134,8 @@ pub fn build_render_snapshot_with_bga_frames(
         }),
         overlay: OverlaySnapshot::default(),
         backbmp_background: false,
+        chart_text: bmz_chart::text::chart_text_at_time(&session.chart.text_events, render_now)
+            .to_string(),
     };
 
     let scroll = ScrollContext::new(session);
@@ -1137,6 +1139,7 @@ mod tests {
             judge_rank_events: Vec::new(),
             bgm_volume_events: Vec::new(),
             key_volume_events: Vec::new(),
+            text_events: Vec::new(),
             bar_lines: Vec::new(),
             sounds: Vec::new(),
             bga_assets: Vec::new(),
@@ -1178,6 +1181,7 @@ mod tests {
             judge_rank_events: Vec::new(),
             bgm_volume_events: Vec::new(),
             key_volume_events: Vec::new(),
+            text_events: Vec::new(),
             bar_lines: Vec::new(),
             sounds: Vec::new(),
             bga_assets: Vec::new(),
@@ -1237,6 +1241,7 @@ mod tests {
             judge_rank_events: Vec::new(),
             bgm_volume_events: Vec::new(),
             key_volume_events: Vec::new(),
+            text_events: Vec::new(),
             bar_lines: Vec::new(),
             sounds: Vec::new(),
             bga_assets: Vec::new(),

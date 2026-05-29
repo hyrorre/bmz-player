@@ -19,6 +19,7 @@ pub struct PlayableChart {
     pub judge_rank_events: Vec<JudgeRankEvent>,
     pub bgm_volume_events: Vec<ChartVolumeEvent>,
     pub key_volume_events: Vec<ChartVolumeEvent>,
+    pub text_events: Vec<ChartTextEvent>,
     pub bar_lines: Vec<BarLine>,
     pub sounds: Vec<SoundAssetRef>,
     pub bga_assets: Vec<BgaAssetRef>,
@@ -168,6 +169,14 @@ pub struct ChartVolumeEvent {
     pub time: TimeUs,
     /// 0x01..=0xFF (255 = 原音)。
     pub value: u8,
+}
+
+/// BMS `#TEXT` / チャネル #99 によるテキスト表示イベント。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChartTextEvent {
+    pub tick: ChartTick,
+    pub time: TimeUs,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

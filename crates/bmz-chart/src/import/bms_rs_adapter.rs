@@ -93,6 +93,7 @@ fn build_intermediate(bms: &Bms, warnings: &mut Vec<ImportWarning>) -> Intermedi
     push_speed_objects(bms, &mut objects);
     push_judge_rank_objects(bms, &mut objects);
     push_volume_objects(bms, &mut objects);
+    push_text_objects(bms, &mut objects);
 
     let max_measure = compute_max_measure(bms, &objects);
     let measures = build_measures(max_measure, bms);
@@ -365,6 +366,17 @@ fn push_volume_objects(bms: &Bms, objects: &mut Vec<IntermediateObject>) {
             position_num: change.time.numerator() as u32,
             position_den: change.time.denominator().get() as u32,
             kind: IntermediateObjectKind::SetKeyVolume { volume: change.volume },
+        });
+    }
+}
+
+fn push_text_objects(bms: &Bms, objects: &mut Vec<IntermediateObject>) {
+    for text_obj in bms.text.text_events.values() {
+        objects.push(IntermediateObject {
+            measure: track_of(text_obj.time),
+            position_num: text_obj.time.numerator() as u32,
+            position_den: text_obj.time.denominator().get() as u32,
+            kind: IntermediateObjectKind::SetText { text: text_obj.text.clone() },
         });
     }
 }

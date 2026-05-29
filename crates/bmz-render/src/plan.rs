@@ -934,9 +934,29 @@ fn plan_play(
         // JSON skin 等は skin 側の演出を使うため描画しない。
         push_start_overlay(&text, &mut commands, snapshot);
     }
+    push_chart_text(&text, &mut commands, snapshot);
     push_scene_overlays(&mut commands, &snapshot.overlay);
 
     DrawPlan { clear: Color::rgb(0.0, 0.0, 0.0), commands }
+}
+
+fn push_chart_text(
+    text: &TextRenderer,
+    commands: &mut Vec<DrawCommand>,
+    snapshot: &RenderSnapshot,
+) {
+    if snapshot.chart_text.is_empty() {
+        return;
+    }
+    commands.push(DrawCommand::Rect {
+        rect: Rect { x: 0.18, y: 0.04, width: 0.64, height: 0.06 },
+        color: Color::rgba(0.0, 0.0, 0.0, 0.55),
+    });
+    text.push_text(
+        commands,
+        &snapshot.chart_text,
+        BitmapTextStyle { x: 0.2, y: 0.055, cell: 0.006, color: Color::rgb(0.95, 0.95, 0.9) },
+    );
 }
 
 fn plan_decide(

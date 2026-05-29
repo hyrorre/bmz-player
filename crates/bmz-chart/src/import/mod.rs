@@ -264,6 +264,26 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
     }
 
+    #[test]
+    fn imports_text_events() {
+        let text = "\
+#TITLE Text Song
+#BPM 120
+#TOTAL 200
+#TEXT01 Hello World
+#TEXT02 Test Message
+#00111:01
+#00199:01000200
+#00299:02000100
+";
+        let path = write_temp_bms(text);
+        let result = import_bms_chart(&path, None, false).unwrap();
+        assert_eq!(result.chart.text_events.len(), 4);
+        assert!(result.chart.text_events.iter().any(|event| event.text == "Hello World"));
+        assert!(result.chart.text_events.iter().any(|event| event.text == "Test Message"));
+        std::fs::remove_file(&path).unwrap();
+    }
+
     fn write_temp_bms(text: &str) -> std::path::PathBuf {
         let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
         let path = std::env::temp_dir()

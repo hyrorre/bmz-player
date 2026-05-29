@@ -104,6 +104,8 @@ pub struct RenderSnapshot {
     pub overlay: OverlaySnapshot,
     /// `#BACKBMP` テクスチャがロード済みなら true (BGA より下に描画)。
     pub backbmp_background: bool,
+    /// BMS `#TEXT` / チャネル #99 で表示する譜面テキスト。
+    pub chart_text: String,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

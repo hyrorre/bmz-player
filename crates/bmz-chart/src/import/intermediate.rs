@@ -141,6 +141,10 @@ pub enum IntermediateObjectKind {
     SetKeyVolume {
         volume: u8,
     },
+    /// チャネル #99: テキスト表示。
+    SetText {
+        text: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
