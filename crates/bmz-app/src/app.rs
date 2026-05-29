@@ -211,6 +211,8 @@ struct WinitApp {
     focused: bool,
     /// 直近フレームの開始時刻。フレームレート制限のスリープ量算出に使う。
     last_frame_at: Option<Instant>,
+    /// RedrawRequested 間隔から平滑化した wgpu 描画 FPS。
+    wgpu_fps: f32,
     /// リザルト画面終了アニメーションの進行状態。
     /// Some のあいだは終了フェードアウト中で、入力は受け付けない。
     result_exit: Option<ResultExit>,
@@ -477,6 +479,7 @@ impl WinitApp {
             applied_window_mode: initial_window_mode,
             focused: true,
             last_frame_at: None,
+            wgpu_fps: 0.0,
             result_exit: None,
         };
         if let Some(chart_id) = boot_sample_chart_id {
@@ -645,9 +648,13 @@ impl WinitApp {
                 }),
             }
         };
-        let overlay_text = self.always_overlay_text();
-        self.apply_overlay_text_to_scene(&mut scene, overlay_text);
+        let overlay = self.build_overlay_snapshot();
+        self.apply_overlay_to_scene(&mut scene, overlay);
         scene
+    }
+
+    fn build_overlay_snapshot(&self) -> OverlaySnapshot {
+        OverlaySnapshot { text: self.always_overlay_text(), fps_text: self.wgpu_fps_overlay_text() }
     }
 
     fn always_overlay_text(&self) -> String {
@@ -658,6 +665,13 @@ impl WinitApp {
         } else {
             format!("{player_name} {player_version}")
         }
+    }
+
+    fn wgpu_fps_overlay_text(&self) -> String {
+        if self.wgpu_fps <= 0.0 {
+            return String::new();
+        }
+        format!("FPS {:.1}", self.wgpu_fps)
     }
 
     fn is_autoplay_for_overlay(&self) -> bool {
@@ -680,15 +694,13 @@ impl WinitApp {
         }
     }
 
-    fn apply_overlay_text_to_scene(&self, scene: &mut AppSceneSnapshot, text: String) {
+    fn apply_overlay_to_scene(&self, scene: &mut AppSceneSnapshot, overlay: OverlaySnapshot) {
         match scene {
-            AppSceneSnapshot::Select(snapshot) => {
-                snapshot.overlay = OverlaySnapshot { text: text.clone() }
-            }
+            AppSceneSnapshot::Select(snapshot) => snapshot.overlay = overlay,
             AppSceneSnapshot::Decide(snapshot) | AppSceneSnapshot::Play(snapshot) => {
-                snapshot.overlay = OverlaySnapshot { text: text.clone() }
+                snapshot.overlay = overlay
             }
-            AppSceneSnapshot::Result(snapshot) => snapshot.overlay = OverlaySnapshot { text },
+            AppSceneSnapshot::Result(snapshot) => snapshot.overlay = overlay,
         }
     }
 
@@ -2048,6 +2060,18 @@ impl WinitApp {
     /// フレーム予算に満たなければ残りをスリープする。FPS 値が 0 の場合は
     /// 無制限としてスリープしない。
     fn limit_frame_rate(&mut self) {
+        let frame_started = Instant::now();
+        if let Some(last) = self.last_frame_at {
+            let dt = frame_started.duration_since(last).as_secs_f32();
+            if dt > 0.0 {
+                let instant_fps = 1.0 / dt;
+                self.wgpu_fps = if self.wgpu_fps <= 0.0 {
+                    instant_fps
+                } else {
+                    self.wgpu_fps.mul_add(0.9, instant_fps * 0.1)
+                };
+            }
+        }
         let fps = if self.focused {
             self.boot.app_config.video.target_fps
         } else {
@@ -2062,7 +2086,7 @@ impl WinitApp {
                 thread::sleep(budget - elapsed);
             }
         }
-        self.last_frame_at = Some(Instant::now());
+        self.last_frame_at = Some(frame_started);
     }
 
     /// egui の 1 フレームを構築し、renderer へ描画データを渡す。

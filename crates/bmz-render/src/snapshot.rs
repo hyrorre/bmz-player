@@ -5,7 +5,10 @@ use crate::skin_offset::SkinOffsetValues;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct OverlaySnapshot {
+    /// 右下に常時表示する文字列。
     pub text: String,
+    /// 右上に常時表示する FPS 文字列。
+    pub fps_text: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]

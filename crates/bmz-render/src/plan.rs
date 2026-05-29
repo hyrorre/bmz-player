@@ -214,7 +214,7 @@ fn plan_select(snapshot: &SelectSnapshot, skin: &SkinContext) -> DrawPlan {
         crate::skin::append_skin_render_items(&mut commands, &skin.select_document_items(snapshot));
         if !commands.is_empty() {
             push_exit_hold_indicator(&mut commands, snapshot.exit_hold_progress);
-            push_scene_overlay_text(&mut commands, &snapshot.overlay.text);
+            push_scene_overlays(&mut commands, &snapshot.overlay);
             return DrawPlan { clear: Color::rgb(0.0, 0.0, 0.0), commands };
         }
     }
@@ -314,7 +314,7 @@ fn plan_select(snapshot: &SelectSnapshot, skin: &SkinContext) -> DrawPlan {
     );
 
     push_exit_hold_indicator(&mut commands, snapshot.exit_hold_progress);
-    push_scene_overlay_text(&mut commands, &snapshot.overlay.text);
+    push_scene_overlays(&mut commands, &snapshot.overlay);
 
     DrawPlan { clear: Color::rgb(0.02, 0.025, 0.03), commands }
 }
@@ -853,7 +853,7 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
         // JSON skin 等は skin 側の演出を使うため描画しない。
         push_start_overlay(&text, &mut commands, snapshot);
     }
-    push_scene_overlay_text(&mut commands, &snapshot.overlay.text);
+    push_scene_overlays(&mut commands, &snapshot.overlay);
 
     DrawPlan { clear: Color::rgb(0.0, 0.0, 0.0), commands }
 }
@@ -901,7 +901,7 @@ fn plan_decide(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
         if !items.is_empty() {
             let mut commands = Vec::new();
             crate::skin::append_skin_render_items(&mut commands, &items);
-            push_scene_overlay_text(&mut commands, &snapshot.overlay.text);
+            push_scene_overlays(&mut commands, &snapshot.overlay);
             return DrawPlan { clear: Color::rgb(0.0, 0.0, 0.0), commands };
         }
     }
@@ -936,7 +936,7 @@ fn plan_result(snapshot: &crate::scene::ResultSnapshot, skin: &SkinContext) -> D
         if !items.is_empty() {
             let mut commands = Vec::new();
             crate::skin::append_skin_render_items(&mut commands, &items);
-            push_scene_overlay_text(&mut commands, &snapshot.overlay.text);
+            push_scene_overlays(&mut commands, &snapshot.overlay);
             return DrawPlan { clear: Color::rgb(0.0, 0.0, 0.0), commands };
         }
     }
@@ -954,11 +954,19 @@ fn plan_result(snapshot: &crate::scene::ResultSnapshot, skin: &SkinContext) -> D
         difficulty_name: &snapshot.difficulty_name,
         play_level: &snapshot.play_level,
     });
-    push_scene_overlay_text(&mut plan.commands, &snapshot.overlay.text);
+    push_scene_overlays(&mut plan.commands, &snapshot.overlay);
     plan
 }
 
-fn push_scene_overlay_text(commands: &mut Vec<DrawCommand>, overlay: &str) {
+fn push_scene_overlays(
+    commands: &mut Vec<DrawCommand>,
+    overlay: &crate::snapshot::OverlaySnapshot,
+) {
+    push_scene_overlay_text(commands, &overlay.fps_text, 0.015);
+    push_scene_overlay_text(commands, &overlay.text, 0.975);
+}
+
+fn push_scene_overlay_text(commands: &mut Vec<DrawCommand>, overlay: &str, origin_y: f32) {
     if overlay.is_empty() {
         return;
     }
@@ -969,7 +977,7 @@ fn push_scene_overlay_text(commands: &mut Vec<DrawCommand>, overlay: &str) {
     // TextAlign::Right は max_width > 0 のときだけ効く (renderer.rs)。
     // origin.x を右端ボックスの左端、max_width をボックス幅にして右寄せする。
     commands.push(DrawCommand::Text {
-        origin: Point { x: -0.015, y: 0.975 },
+        origin: Point { x: -0.015, y: origin_y },
         text: overlay.to_string(),
         style: TextStyle {
             font_id: None,
