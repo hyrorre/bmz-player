@@ -10,6 +10,8 @@ use anyhow::{Context, Result, anyhow, bail};
 use mlua::{Function, HookTriggers, Lua, Table, Value, Variadic, VmState};
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 
+use bmz_render::skin::SKIN_DYNAMIC_TIMER_BASE;
+
 use crate::{LoadedLuaSkinValue, SkinLoadWarning};
 
 const LUA_INSTRUCTION_LIMIT: i64 = 2_000_000;
@@ -81,7 +83,8 @@ fn execute_lua_skin_header(input: &Path) -> Result<(JsonValue, Vec<String>)> {
         .set_name(input.to_string_lossy().as_ref())
         .eval::<Value>()
         .with_context(|| format!("failed to execute lua skin header: {}", input.display()))?;
-    let header_json = lua_value_to_json(header, "$", 0, &mut warnings, &probe, &mut table_budget)?;
+    let header_json =
+        lua_value_to_json(&lua, header, "$", 0, &mut warnings, &probe, &mut table_budget)?;
 
     Ok((header_json, warnings))
 }
@@ -111,8 +114,15 @@ fn execute_lua_skin(
         .set_name(input.to_string_lossy().as_ref())
         .eval::<Value>()
         .with_context(|| format!("failed to execute lua skin header: {}", input.display()))?;
-    let header_json =
-        lua_value_to_json(header, "$", 0, &mut warnings, &header_probe, &mut table_budget)?;
+    let header_json = lua_value_to_json(
+        &header_lua,
+        header,
+        "$",
+        0,
+        &mut warnings,
+        &header_probe,
+        &mut table_budget,
+    )?;
     let skin_options = skin_config_options_from_header(&header_json, options, &mut warnings);
     let skin_files = skin_files_from_header(&root, &header_json, files);
 
@@ -124,8 +134,32 @@ fn execute_lua_skin(
         .set_name(input.to_string_lossy().as_ref())
         .eval::<Value>()
         .with_context(|| format!("failed to execute lua skin: {}", input.display()))?;
-    let json =
-        lua_value_to_json(value, "$", 0, &mut warnings, &main_state_probe, &mut table_budget)?;
+    let mut json = lua_value_to_json(
+        &lua,
+        value,
+        "$",
+        0,
+        &mut warnings,
+        &main_state_probe,
+        &mut table_budget,
+    )?;
+
+    if let JsonValue::Object(ref mut root) = json {
+        let timers = main_state_probe
+            .lock()
+            .ok()
+            .map(|probe| probe.dynamic_timers.clone())
+            .unwrap_or_default();
+        if !timers.is_empty() {
+            let entries = timers.into_iter().map(|(id, observe)| {
+                JsonValue::Object(JsonMap::from_iter([
+                    ("id".to_string(), JsonValue::Number(JsonNumber::from(id))),
+                    ("observe".to_string(), JsonValue::String(observe)),
+                ]))
+            });
+            root.insert("dynamicTimer".to_string(), JsonValue::Array(entries.collect()));
+        }
+    }
 
     Ok((json, warnings))
 }
@@ -264,10 +298,16 @@ fn install_sandbox(
     })?;
     globals.set("require", require)?;
 
+    let timer_fn_map = lua.create_table()?;
+    let timer_fn_metatable = lua.create_table()?;
+    timer_fn_metatable.set("__mode", "k")?;
+    timer_fn_map.set_metatable(Some(timer_fn_metatable));
+    globals.set("bmz_timer_fn_map", timer_fn_map)?;
+
     Ok(main_state_probe)
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 struct MainStateProbe {
     mode: MainStateProbeMode,
     number_calls: Vec<i32>,
@@ -278,6 +318,26 @@ struct MainStateProbe {
     timer_values: BTreeMap<i32, i32>,
     gauge_type_calls: usize,
     gauge_type_value: i32,
+    next_dynamic_timer_id: i32,
+    dynamic_timers: Vec<(i32, String)>,
+}
+
+impl Default for MainStateProbe {
+    fn default() -> Self {
+        Self {
+            mode: MainStateProbeMode::default(),
+            number_calls: Vec::new(),
+            number_values: BTreeMap::new(),
+            option_calls: Vec::new(),
+            option_values: BTreeMap::new(),
+            timer_calls: Vec::new(),
+            timer_values: BTreeMap::new(),
+            gauge_type_calls: 0,
+            gauge_type_value: 0,
+            next_dynamic_timer_id: SKIN_DYNAMIC_TIMER_BASE,
+            dynamic_timers: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -530,6 +590,12 @@ fn lua_load_now_micros() -> i32 {
     origin.elapsed().as_micros().min(i32::MAX as u128) as i32
 }
 
+fn lua_load_now_ms() -> i32 {
+    static ORIGIN: OnceLock<Instant> = OnceLock::new();
+    let origin = ORIGIN.get_or_init(Instant::now);
+    origin.elapsed().as_millis().min(i32::MAX as u128) as i32
+}
+
 /// beatoraja の `TimerUtility` 相当。Lua スキンが `require("timer_util")` できるようにする。
 fn create_timer_util_module(lua: &Lua, probe: Arc<Mutex<MainStateProbe>>) -> mlua::Result<Value> {
     let table = lua.create_table()?;
@@ -567,22 +633,39 @@ fn create_timer_util_module(lua: &Lua, probe: Arc<Mutex<MainStateProbe>>) -> mlu
         })?,
     )?;
 
+    let probe_for_observe = probe.clone();
     table.set(
         "timer_observe_boolean",
-        lua.create_function(|lua, observed: Function| {
+        lua.create_function(move |lua, observed: Function| {
+            let observe = infer_boolean_predicate(&observed, &probe_for_observe, None)
+                .or_else(|| infer_constant_boolean(&observed))
+                .unwrap_or_else(|| "number(0) < 0".to_string());
+            let timer_id = {
+                let mut probe = probe_for_observe
+                    .lock()
+                    .map_err(|_| mlua::Error::external("main_state probe lock poisoned"))?;
+                let timer_id = probe.next_dynamic_timer_id;
+                probe.next_dynamic_timer_id += 1;
+                probe.dynamic_timers.push((timer_id, observe));
+                timer_id
+            };
             let state = Arc::new(Mutex::new(TimerObserveState { timer_value: TIMER_OFF_VALUE }));
-            lua.create_function(move |_, ()| {
-                let on = observed.call::<bool>(())?;
+            let observed_for_timer = observed.clone();
+            let inner = lua.create_function(move |_, ()| {
+                let on = observed_for_timer.call::<bool>(())?;
                 let mut state = state
                     .lock()
                     .map_err(|_| mlua::Error::external("timer observe lock poisoned"))?;
                 if on && state.timer_value == TIMER_OFF_VALUE {
-                    state.timer_value = lua_load_now_micros();
+                    state.timer_value = lua_load_now_ms();
                 } else if !on && state.timer_value != TIMER_OFF_VALUE {
                     state.timer_value = TIMER_OFF_VALUE;
                 }
                 Ok(state.timer_value)
-            })
+            })?;
+            let map: Table = lua.globals().get("bmz_timer_fn_map")?;
+            map.set(inner.clone(), timer_id)?;
+            Ok(inner)
         })?,
     )?;
 
@@ -965,6 +1048,7 @@ fn lua_value_to_log_string(value: &Value) -> String {
 }
 
 fn lua_value_to_json(
+    lua: &Lua,
     value: Value,
     path: &str,
     depth: usize,
@@ -986,9 +1070,15 @@ fn lua_value_to_json(
             })?
         }
         Value::String(value) => JsonValue::String(value.to_string_lossy()),
-        Value::Table(table) => {
-            lua_table_to_json(table, path, depth + 1, warnings, main_state_probe, table_budget)?
-        }
+        Value::Table(table) => lua_table_to_json(
+            lua,
+            table,
+            path,
+            depth + 1,
+            warnings,
+            main_state_probe,
+            table_budget,
+        )?,
         Value::Function(_) => {
             warnings.push(format!("skipping function at {path}"));
             JsonValue::Null
@@ -1013,6 +1103,7 @@ fn lua_value_to_json(
 }
 
 fn lua_table_to_json(
+    lua: &Lua,
     table: Table,
     path: &str,
     depth: usize,
@@ -1050,6 +1141,7 @@ fn lua_table_to_json(
         });
         for (index, (_, value)) in entries.into_iter().enumerate() {
             values.push(lua_value_to_json(
+                lua,
                 value,
                 &format!("{path}[{}]", index + 1),
                 depth,
@@ -1073,38 +1165,43 @@ fn lua_table_to_json(
         }
         if let Value::Function(function) = &value {
             if key == "value" {
-                if let Some(ref_id) = infer_main_state_number_ref(function, main_state_probe) {
-                    object.insert("ref".to_string(), JsonValue::Number(JsonNumber::from(ref_id)));
-                } else if let Some(expr) = infer_main_state_number_expr(function, main_state_probe)
+                let is_graph = path.contains(".graph[");
+                if !is_graph
+                    && let Some(ref_id) = infer_main_state_number_ref(function, main_state_probe)
                 {
-                    object.insert("expr".to_string(), JsonValue::String(expr));
+                    object.insert("ref".to_string(), JsonValue::Number(JsonNumber::from(ref_id)));
+                    continue;
+                }
+                if let Some(value_expr) = infer_value_float_expr(function, main_state_probe) {
+                    object.insert("value_expr".to_string(), JsonValue::String(value_expr));
+                } else if !is_graph {
+                    if let Some(expr) = infer_main_state_number_expr(function, main_state_probe) {
+                        object.insert("expr".to_string(), JsonValue::String(expr));
+                    } else {
+                        warnings
+                            .push(format!("skipping unsupported value function at {path}.{key}"));
+                    }
                 } else {
                     warnings.push(format!("skipping unsupported value function at {path}.{key}"));
                 }
                 continue;
             }
             if key == "draw" {
-                if let Some(draw) = infer_main_state_draw_condition(function, main_state_probe)
-                    .or_else(|| {
-                        infer_main_state_timer_option_draw_condition(function, main_state_probe)
-                    })
-                    .or_else(|| {
-                        infer_main_state_gauge_type_draw_condition(function, main_state_probe)
-                    })
-                    .or_else(|| {
-                        infer_judge_fast_slow_draw_condition(
-                            function,
-                            main_state_probe,
-                            object_id.as_deref(),
-                        )
-                    })
-                    .or_else(|| infer_main_state_option_draw_condition(function, main_state_probe))
+                if let Some(draw) =
+                    infer_boolean_predicate(function, main_state_probe, object_id.as_deref())
                 {
                     object.insert(key.clone(), JsonValue::String(draw));
                 } else {
                     warnings.push(format!("skipping unsupported draw function at {path}.{key}"));
                 }
                 continue;
+            }
+            if key == "timer" {
+                let map: Table = lua.globals().get("bmz_timer_fn_map")?;
+                if let Ok(timer_id) = map.get::<i32>(function.clone()) {
+                    object.insert(key.clone(), JsonValue::Number(JsonNumber::from(timer_id)));
+                    continue;
+                }
             }
         }
         if is_unsupported_json_field_value(&value) {
@@ -1114,6 +1211,7 @@ fn lua_table_to_json(
         object.insert(
             key.clone(),
             lua_value_to_json(
+                lua,
                 value,
                 &format!("{path}.{key}"),
                 depth,
@@ -1529,6 +1627,281 @@ fn unique_numbers_in_order(values: &[i32]) -> Vec<i32> {
         }
     }
     unique
+}
+
+fn infer_constant_boolean(function: &Function) -> Option<String> {
+    match function.call::<bool>(()).ok() {
+        Some(true) => Some("number(0) >= 0".to_string()),
+        Some(false) => Some("number(0) < 0".to_string()),
+        _ => None,
+    }
+}
+
+fn infer_boolean_predicate(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+    object_id: Option<&str>,
+) -> Option<String> {
+    let refs = collect_number_refs(function, main_state_probe).unwrap_or_default();
+    if refs.len() >= 2 {
+        infer_or_of_number_gt_zero(function, main_state_probe)
+            .or_else(|| infer_two_number_compare_and(function, main_state_probe))
+            .or_else(|| infer_or_of_number_lt_zero(function, main_state_probe))
+    } else {
+        None
+    }
+    .or_else(|| infer_main_state_draw_condition(function, main_state_probe))
+    .or_else(|| infer_main_state_option_draw_condition(function, main_state_probe))
+    .or_else(|| infer_main_state_gauge_type_draw_condition(function, main_state_probe))
+    .or_else(|| infer_main_state_timer_option_draw_condition(function, main_state_probe))
+    .or_else(|| infer_judge_fast_slow_draw_condition(function, main_state_probe, object_id))
+    .or_else(|| infer_or_of_number_gt_zero(function, main_state_probe))
+    .or_else(|| infer_or_of_number_lt_zero(function, main_state_probe))
+    .or_else(|| infer_two_number_compare_and(function, main_state_probe))
+    .or_else(|| infer_number_eq_zero_with_constant_tail(function, main_state_probe))
+}
+
+fn collect_number_refs(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<Vec<i32>> {
+    {
+        main_state_probe.lock().ok()?.begin_number_call_recording(0);
+    }
+    let _ = function.call::<Value>(()).ok();
+    let mut calls = {
+        let mut probe = main_state_probe.lock().ok()?;
+        let calls = probe.number_calls.clone();
+        probe.end_recording();
+        calls
+    };
+    calls.sort_unstable();
+    calls.dedup();
+    Some(calls)
+}
+
+fn call_draw_with_numbers(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+    values: BTreeMap<i32, i32>,
+) -> Option<bool> {
+    {
+        main_state_probe.lock().ok()?.begin_number_recording_with_values(values);
+    }
+    let result = function.call::<Value>(()).ok();
+    main_state_probe.lock().ok()?.end_recording();
+    match result? {
+        Value::Boolean(value) => Some(value),
+        _ => None,
+    }
+}
+
+fn call_number_float_with_values(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+    values: BTreeMap<i32, i32>,
+) -> Option<f64> {
+    {
+        main_state_probe.lock().ok()?.begin_number_recording_with_values(values);
+    }
+    let result = function.call::<Value>(()).ok();
+    main_state_probe.lock().ok()?.end_recording();
+    match result? {
+        Value::Integer(value) => Some(value as f64),
+        Value::Number(value) if value.is_finite() => Some(value),
+        _ => None,
+    }
+}
+
+fn verify_draw_condition(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+    refs: &[i32],
+    expected: impl Fn(&BTreeMap<i32, i32>) -> bool,
+) -> bool {
+    let samples = [-1, 0, 1, 2, 3, 5];
+    for &left in &samples {
+        for &right in &samples {
+            let mut values = BTreeMap::new();
+            if refs.len() == 1 {
+                values.insert(refs[0], left);
+            } else if refs.len() >= 2 {
+                values.insert(refs[0], left);
+                values.insert(refs[1], right);
+                for extra in refs.iter().skip(2) {
+                    values.insert(*extra, 0);
+                }
+            }
+            let Some(got) = call_draw_with_numbers(function, main_state_probe, values.clone())
+            else {
+                return false;
+            };
+            if got != expected(&values) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn infer_or_of_number_gt_zero(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    let refs = collect_number_refs(function, main_state_probe)?;
+    if refs.is_empty() {
+        return None;
+    }
+    let all_zero = refs.iter().copied().map(|ref_id| (ref_id, 0)).collect::<BTreeMap<_, _>>();
+    if call_draw_with_numbers(function, main_state_probe, all_zero) != Some(false) {
+        return None;
+    }
+    let mut terms = Vec::new();
+    for ref_id in &refs {
+        let mut only_positive = refs.iter().copied().map(|id| (id, 0)).collect::<BTreeMap<_, _>>();
+        only_positive.insert(*ref_id, 5);
+        if call_draw_with_numbers(function, main_state_probe, only_positive) == Some(true) {
+            terms.push(format!("number({ref_id}) > 0"));
+        }
+    }
+    if terms.is_empty() {
+        return None;
+    }
+    let condition = terms.join(" or ");
+    verify_draw_condition(function, main_state_probe, &refs, |values| {
+        refs.iter().any(|ref_id| values.get(ref_id).copied().unwrap_or(0) > 0)
+    })
+    .then_some(condition)
+}
+
+fn infer_or_of_number_lt_zero(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    let refs = collect_number_refs(function, main_state_probe)?;
+    if refs.len() != 1 {
+        return None;
+    }
+    let ref_id = refs[0];
+    let condition = format!("number({ref_id}) < 0");
+    verify_draw_condition(function, main_state_probe, &refs, |values| {
+        values.get(&ref_id).copied().unwrap_or(0) < 0
+    })
+    .then_some(condition)
+}
+
+fn infer_two_number_compare_and(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    let refs = collect_number_refs(function, main_state_probe)?;
+    if refs.len() != 2 {
+        return None;
+    }
+    let (left, right) = (refs[0], refs[1]);
+    for threshold in 0..=5 {
+        for &(flip_left, flip_right) in &[(left, right), (right, left)] {
+            let condition = format!(
+                "number({flip_left}) < number({flip_right}) and number({flip_right}) >= {threshold}"
+            );
+            if verify_draw_condition(function, main_state_probe, &refs, |values| {
+                let a = values.get(&flip_left).copied().unwrap_or(0);
+                let b = values.get(&flip_right).copied().unwrap_or(0);
+                a < b && b >= threshold
+            }) {
+                return Some(condition);
+            }
+            let gt_condition = format!(
+                "number({flip_left}) > number({flip_right}) and number({flip_right}) >= {threshold}"
+            );
+            if verify_draw_condition(function, main_state_probe, &refs, |values| {
+                let a = values.get(&flip_left).copied().unwrap_or(0);
+                let b = values.get(&flip_right).copied().unwrap_or(0);
+                a > b && b >= threshold
+            }) {
+                return Some(gt_condition);
+            }
+        }
+    }
+    None
+}
+
+fn infer_number_eq_zero_with_constant_tail(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    let refs = collect_number_refs(function, main_state_probe)?;
+    if refs.len() != 1 {
+        return None;
+    }
+    let ref_id = refs[0];
+    let zero = call_draw_with_numbers(function, main_state_probe, BTreeMap::from([(ref_id, 0)]))?;
+    let nonzero =
+        call_draw_with_numbers(function, main_state_probe, BTreeMap::from([(ref_id, 5)]))?;
+    if zero && !nonzero {
+        return Some(format!("number({ref_id}) == 0"));
+    }
+    if !zero && nonzero {
+        return Some(format!("number({ref_id}) != 0"));
+    }
+    None
+}
+
+fn format_number_sum_expr(refs: &[i32]) -> String {
+    refs.iter().map(|ref_id| format!("number({ref_id})")).collect::<Vec<_>>().join("+")
+}
+
+fn infer_value_float_expr(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    infer_division_of_number_sums(function, main_state_probe)
+        .or_else(|| infer_main_state_number_expr(function, main_state_probe))
+}
+
+fn infer_division_of_number_sums(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    let refs = collect_number_refs(function, main_state_probe)?;
+    if refs.len() < 2 || refs.len() > 24 {
+        return None;
+    }
+    let zero_values = refs.iter().copied().map(|ref_id| (ref_id, 0)).collect::<BTreeMap<_, _>>();
+    let baseline = call_number_float_with_values(function, main_state_probe, zero_values.clone())?;
+    let mut numerator_refs = Vec::new();
+    for ref_id in &refs {
+        let mut values = zero_values.clone();
+        values.insert(*ref_id, 5);
+        let value = call_number_float_with_values(function, main_state_probe, values)?;
+        if value > baseline + f64::EPSILON {
+            numerator_refs.push(*ref_id);
+        }
+    }
+    if numerator_refs.is_empty() {
+        return None;
+    }
+    let numerator = format_number_sum_expr(&numerator_refs);
+    let denominator = format_number_sum_expr(&refs);
+    let expr = format!("({numerator})/({denominator})");
+    let samples = [0, 1, 2, 3, 5];
+    for &sample in &samples {
+        let values = refs.iter().copied().map(|id| (id, sample)).collect::<BTreeMap<_, _>>();
+        let expected = {
+            let num: f64 = numerator_refs
+                .iter()
+                .map(|ref_id| values.get(ref_id).copied().unwrap_or(0) as f64)
+                .sum();
+            let den: f64 =
+                refs.iter().map(|ref_id| values.get(ref_id).copied().unwrap_or(0) as f64).sum();
+            if den.abs() < f64::EPSILON { 0.0 } else { num / den }
+        };
+        let actual = call_number_float_with_values(function, main_state_probe, values)?;
+        if (actual - expected).abs() > 0.01 {
+            return None;
+        }
+    }
+    Some(expr)
 }
 
 fn is_unsupported_json_field_value(value: &Value) -> bool {

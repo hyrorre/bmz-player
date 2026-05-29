@@ -538,6 +538,72 @@ mod tests {
             panic!("destination should be single");
         };
         assert_eq!(destination.id, "frame-panel");
+        assert_eq!(destination.timer, Some(bmz_render::skin::SKIN_DYNAMIC_TIMER_BASE));
+        assert_eq!(loaded.document.dynamic_timers.len(), 1);
+        assert_eq!(loaded.document.dynamic_timers[0].observe, "number(0) >= 0");
+    }
+
+    #[test]
+    fn lua_skin_infers_or_draw_and_division_graph_value() {
+        let root = unique_test_dir("bmz-skin-lua");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("play7.luaskin"),
+            r#"
+            local main_state = require("main_state")
+            return {
+                type = 0,
+                graph = {
+                    {
+                        id = "ratio",
+                        src = 1,
+                        x = 0,
+                        y = 0,
+                        w = 10,
+                        h = 10,
+                        value = function()
+                            local fast = main_state.number(410)
+                            local slow = main_state.number(411)
+                            local total = fast + slow
+                            if total == 0 then return 0 end
+                            return fast / total
+                        end,
+                    },
+                },
+                destination = {
+                    {
+                        id = "panel",
+                        draw = function()
+                            return main_state.number(77) > 0 or main_state.number(150) > 0
+                        end,
+                        dst = {{ x = 1, y = 2, w = 3, h = 4 }},
+                    },
+                },
+            }
+            "#,
+        )
+        .unwrap();
+
+        let loaded = load_lua_skin(
+            &root.join("play7.luaskin"),
+            SkinKind::Play,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+
+        assert!(
+            loaded.warnings.is_empty(),
+            "warnings: {:?}",
+            loaded.warnings.iter().map(|warning| warning.message.as_str()).collect::<Vec<_>>()
+        );
+        assert_eq!(loaded.document.graph[0].value_expr, "(number(410))/(number(410)+number(411))");
+        let bmz_render::skin::DestinationListEntry::Single(destination) =
+            &loaded.document.destination[0]
+        else {
+            panic!("destination should be single");
+        };
+        assert_eq!(destination.draw, "number(77) > 0 or number(150) > 0");
     }
 
     #[test]

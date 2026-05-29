@@ -293,11 +293,14 @@ database:
 - `require` / `dofile` / `loadfile`: skin root 配下だけ許可します。
 - Lua hook による命令数上限、table 深さ・配列長・総 entry 数の上限を持ちます。
 - `main_state.number(...)` / `main_state.option(...)` / `main_state.timer(...)` / `main_state.gauge_type()` の一部 function 推論。
+- `draw` function: 単一 ref 比較に加え、複数 ref の `or` / 2 ref 比較+`and`、定数 tail (`number(N)==0` 等) をロード時に draw 条件文字列へ変換。
+- `graph.value` function: 加算式の除算 (`value_expr`) と graph type `148`/`149` (fast/slow 比率) をサポート。
+- `timer_util.timer_observe_boolean`: `dynamicTimer` + ID `9000+` に変換し、描画時は `DynamicTimerRuntime` で observe 条件のエッジから経過 ms を供給。
 - 未対応 function は `lua skin load warning` としてログに出し、ロード自体は継続します。
 
 未対応/今後の候補:
 
-- Lua `value` / `draw` function の複数 ref 条件、複合 boolean、比率 graph value などの推論拡張
+- Lua `draw` / `value` のさらに複雑な式 (3 ref 以上の任意 boolean、skin_config 動的参照の一般化)
 - Lua function warning の object id / source context 付き診断
 - destination `center`, `offset`, `offsets`, `filter`
 - destination `stretch` for non-static image objects
