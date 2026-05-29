@@ -943,8 +943,8 @@ impl SkinContext {
         let document = self.document.as_ref()?;
         let enabled_options = document.enabled_options();
         let area = document.note_lane_area(lane, key_mode, &enabled_options)?;
-        // note_y=0.0 → 判定ライン（エリア下端）、note_y=1.0 → エリア上端
-        let bottom_y = area.y + area.height * (1.0 - note_y);
+        let canvas_h = document.h.max(1) as f32;
+        let bottom_y = note_progress_to_y(area, note_y, state, canvas_h);
         let rect =
             Rect { x: area.x, y: bottom_y - note_height, width: area.width, height: note_height };
         Some(document.apply_notes_offset_to_rect(rect, state))
@@ -963,8 +963,9 @@ impl SkinContext {
         let document = self.document.as_ref()?;
         let enabled_options = document.enabled_options();
         let area = document.note_lane_area(lane, key_mode, &enabled_options)?;
-        let head_center = area.y + area.height * (1.0 - head_y);
-        let tail_center = area.y + area.height * (1.0 - tail_y);
+        let canvas_h = document.h.max(1) as f32;
+        let head_center = note_progress_to_y(area, head_y, state, canvas_h);
+        let tail_center = note_progress_to_y(area, tail_y, state, canvas_h);
         let top = head_center.min(tail_center);
         let bottom = head_center.max(tail_center);
         Some(document.apply_notes_offset_to_rect(
@@ -2620,7 +2621,7 @@ impl SkinDocument {
             return Vec::new();
         };
         let canvas_h = self.h.max(1) as f32;
-        let bottom_y = area.y + area.height * (1.0 - note_y);
+        let bottom_y = note_progress_to_y(area, note_y, state, canvas_h);
         let lane_bottom_px = canvas_h * (1.0 - (area.y + area.height));
         let timeline_bottom_px = canvas_h * (1.0 - bottom_y);
         let mut items = Vec::new();
@@ -5511,6 +5512,16 @@ fn apply_skin_offset_ids_to_frame(
             }
         }
     }
+}
+
+/// `note_y` progress (0=判定ライン, 1=最奥) を `note.dst` エリア内の正規化 Y に変換する。
+/// LIFT (`offset_lift_px`) により判定ラインを上げ、スクロール範囲を縮める。
+fn note_progress_to_y(area: Rect, progress: f32, state: SkinDrawState, canvas_h: f32) -> f32 {
+    let lift_norm = state.offset_lift_px as f32 / canvas_h.max(1.0);
+    let scroll_top = area.y;
+    let judge_bottom = (area.y + area.height - lift_norm).max(scroll_top);
+    let progress = progress.clamp(0.0, 1.0);
+    judge_bottom - progress * (judge_bottom - scroll_top)
 }
 
 /// 小節線 (`note.group`) 向けオフセット適用。Notes offset (30) はノーツ専用のため除外する。
@@ -11127,6 +11138,78 @@ mod tests {
 
         assert!(approx_eq(rect.y, 0.45));
         assert!(approx_eq(rect.height, 0.3));
+    }
+
+    #[test]
+    fn note_rect_for_progress_shifts_with_lift() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "w": 720, "h": 720,
+                "note": {
+                    "id": "notes",
+                    "note": ["n1"],
+                    "dst": [{ "time": 0, "x": 10, "y": 140, "w": 50, "h": 580 }]
+                }
+            }
+            "#,
+        )
+        .unwrap();
+        let skin = SkinContext::from_manifest_and_document(default_skin_manifest(), document, []);
+        let note_height = 12.0 / 720.0;
+        let state_no_lift = SkinDrawState { offset_lift_px: 0, ..SkinDrawState::default() };
+        let state_lifted = SkinDrawState { offset_lift_px: 72, ..SkinDrawState::default() };
+
+        let rect_no_lift = skin
+            .note_rect_for_progress(Lane::Key1, KeyMode::K7, 0.0, note_height, state_no_lift)
+            .unwrap();
+        let rect_lifted = skin
+            .note_rect_for_progress(Lane::Key1, KeyMode::K7, 0.0, note_height, state_lifted)
+            .unwrap();
+
+        let judge_no_lift = 580.0 / 720.0;
+        let judge_lifted = judge_no_lift - 72.0 / 720.0;
+        assert!(approx_eq(rect_no_lift.y + note_height, judge_no_lift));
+        assert!(approx_eq(rect_lifted.y + note_height, judge_lifted));
+        assert!(
+            rect_lifted.y < rect_no_lift.y,
+            "expected lifted note higher on screen, got no_lift={} lifted={}",
+            rect_no_lift.y,
+            rect_lifted.y
+        );
+    }
+
+    #[test]
+    fn note_body_rect_shifts_with_lift() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "w": 720, "h": 720,
+                "note": {
+                    "id": "notes",
+                    "note": ["n1"],
+                    "dst": [{ "time": 0, "x": 10, "y": 140, "w": 50, "h": 580 }]
+                }
+            }
+            "#,
+        )
+        .unwrap();
+        let skin = SkinContext::from_manifest_and_document(default_skin_manifest(), document, []);
+        let state_no_lift = SkinDrawState { offset_lift_px: 0, ..SkinDrawState::default() };
+        let state_lifted = SkinDrawState { offset_lift_px: 72, ..SkinDrawState::default() };
+
+        let rect_no_lift =
+            skin.note_body_rect(Lane::Key1, KeyMode::K7, 0.0, 0.5, state_no_lift).unwrap();
+        let rect_lifted =
+            skin.note_body_rect(Lane::Key1, KeyMode::K7, 0.0, 0.5, state_lifted).unwrap();
+
+        assert!(
+            rect_lifted.y < rect_no_lift.y,
+            "expected lifted long body higher on screen, got no_lift={} lifted={}",
+            rect_no_lift.y,
+            rect_lifted.y
+        );
+        assert!(rect_lifted.height <= rect_no_lift.height + 0.0001);
     }
 
     #[test]
