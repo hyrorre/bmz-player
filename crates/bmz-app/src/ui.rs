@@ -989,43 +989,6 @@ fn build_skin_panel(
                 ui.end_row();
             });
             ui.separator();
-            ui.label("スキンオフセット (id ごとの位置 / サイズ / 回転 / 不透明度の補正)");
-            let mut remove_index = None;
-            for (index, offset) in skin.offsets.iter_mut().enumerate() {
-                ui.push_id(index, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("ID");
-                        changed |= ui.add(egui::DragValue::new(&mut offset.id)).changed();
-                        if ui.button("削除").clicked() {
-                            remove_index = Some(index);
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        changed |=
-                            ui.add(egui::DragValue::new(&mut offset.x).prefix("x:")).changed();
-                        changed |=
-                            ui.add(egui::DragValue::new(&mut offset.y).prefix("y:")).changed();
-                        changed |=
-                            ui.add(egui::DragValue::new(&mut offset.w).prefix("w:")).changed();
-                        changed |=
-                            ui.add(egui::DragValue::new(&mut offset.h).prefix("h:")).changed();
-                        changed |=
-                            ui.add(egui::DragValue::new(&mut offset.r).prefix("r:")).changed();
-                        changed |=
-                            ui.add(egui::DragValue::new(&mut offset.a).prefix("a:")).changed();
-                    });
-                    ui.separator();
-                });
-            }
-            if let Some(index) = remove_index {
-                skin.offsets.remove(index);
-                changed = true;
-            }
-            if ui.button("オフセット追加").clicked() {
-                skin.offsets.push(SkinOffsetConfig::default());
-                changed = true;
-            }
-            ui.separator();
             ui.label("読み込み済みスキンが宣言する設定可能項目:");
             let select_root = skin_root_path(&skin.select);
             let decide_root = skin_root_path(&skin.decide);
