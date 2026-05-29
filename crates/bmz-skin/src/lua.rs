@@ -1645,8 +1645,9 @@ fn infer_boolean_predicate(
     let refs = collect_number_refs(function, main_state_probe).unwrap_or_default();
     if refs.len() >= 2 {
         infer_or_of_number_gt_zero(function, main_state_probe)
-            .or_else(|| infer_two_number_compare_and(function, main_state_probe))
+            .or_else(|| infer_or_of_number_eq_zero(function, main_state_probe))
             .or_else(|| infer_or_of_number_lt_zero(function, main_state_probe))
+            .or_else(|| infer_two_number_compare_and(function, main_state_probe))
     } else {
         None
     }
@@ -1656,6 +1657,7 @@ fn infer_boolean_predicate(
     .or_else(|| infer_main_state_timer_option_draw_condition(function, main_state_probe))
     .or_else(|| infer_judge_fast_slow_draw_condition(function, main_state_probe, object_id))
     .or_else(|| infer_or_of_number_gt_zero(function, main_state_probe))
+    .or_else(|| infer_or_of_number_eq_zero(function, main_state_probe))
     .or_else(|| infer_or_of_number_lt_zero(function, main_state_probe))
     .or_else(|| infer_two_number_compare_and(function, main_state_probe))
     .or_else(|| infer_number_eq_zero_with_constant_tail(function, main_state_probe))
@@ -1812,6 +1814,36 @@ fn infer_or_of_number_lt_zero(
     let condition = terms.join(" or ");
     verify_draw_condition(function, main_state_probe, &refs, |values| {
         refs.iter().any(|ref_id| values.get(ref_id).copied().unwrap_or(0) < 0)
+    })
+    .then_some(condition)
+}
+
+fn infer_or_of_number_eq_zero(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    let refs = collect_number_refs(function, main_state_probe)?;
+    if refs.len() < 2 {
+        return None;
+    }
+    let all_positive = refs.iter().copied().map(|ref_id| (ref_id, 5)).collect::<BTreeMap<_, _>>();
+    if call_draw_with_numbers(function, main_state_probe, all_positive) != Some(false) {
+        return None;
+    }
+    let mut terms = Vec::new();
+    for ref_id in &refs {
+        let mut only_zero = refs.iter().copied().map(|id| (id, 5)).collect::<BTreeMap<_, _>>();
+        only_zero.insert(*ref_id, 0);
+        if call_draw_with_numbers(function, main_state_probe, only_zero) == Some(true) {
+            terms.push(format!("number({ref_id}) == 0"));
+        }
+    }
+    if terms.is_empty() {
+        return None;
+    }
+    let condition = terms.join(" or ");
+    verify_draw_condition(function, main_state_probe, &refs, |values| {
+        refs.iter().any(|ref_id| values.get(ref_id).copied().unwrap_or(0) == 0)
     })
     .then_some(condition)
 }
