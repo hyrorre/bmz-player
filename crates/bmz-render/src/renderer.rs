@@ -17,7 +17,7 @@ use crate::plan::{
     UvRect,
 };
 use crate::scene::AppSceneSnapshot;
-use crate::skin::{BlendMode, SkinContext, SkinDocument};
+use crate::skin::{BlendMode, DynamicTimerRuntime, SkinContext, SkinDocument};
 use crate::ui::{EguiFrame, EguiPainter};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -55,6 +55,7 @@ pub struct Renderer {
     bitmap_fonts: HashMap<String, BitmapFont>,
     gpu: Option<WgpuRenderer>,
     pending_egui: Option<EguiFrame>,
+    dynamic_timer_runtime: DynamicTimerRuntime,
     /// VSync の希望状態。サーフェス生成時および `set_vsync` で参照する。
     vsync: bool,
     backend: WgpuBackend,
@@ -219,18 +220,22 @@ impl Renderer {
     }
 
     pub fn set_play_skin_context(&mut self, skin_context: SkinContext) {
+        self.dynamic_timer_runtime.reset();
         self.play_skin_context = skin_context;
     }
 
     pub fn set_select_skin_context(&mut self, skin_context: SkinContext) {
+        self.dynamic_timer_runtime.reset();
         self.select_skin_context = skin_context;
     }
 
     pub fn set_decide_skin_context(&mut self, skin_context: SkinContext) {
+        self.dynamic_timer_runtime.reset();
         self.decide_skin_context = skin_context;
     }
 
     pub fn set_result_skin_context(&mut self, skin_context: SkinContext) {
+        self.dynamic_timer_runtime.reset();
         self.result_skin_context = skin_context;
     }
 
@@ -289,7 +294,8 @@ impl Renderer {
     }
 
     pub fn render_scene_status(&mut self, scene: AppSceneSnapshot) -> Result<RenderSurfaceStatus> {
-        let plan = DrawPlan::from_scene_with_skin(&scene, self.skin_context_for_scene(&scene));
+        let skin = self.skin_context_for_scene(&scene).clone();
+        let plan = DrawPlan::from_scene_with_skin(&scene, &skin, &mut self.dynamic_timer_runtime);
         self.last_scene = Some(scene);
         self.last_plan = Some(plan);
 

@@ -150,15 +150,23 @@ pub struct Color {
 
 impl DrawPlan {
     pub fn from_scene(scene: &AppSceneSnapshot) -> Self {
-        Self::from_scene_with_skin(scene, &SkinContext::default())
+        Self::from_scene_with_skin(
+            scene,
+            &SkinContext::default(),
+            &mut crate::skin::DynamicTimerRuntime::default(),
+        )
     }
 
-    pub fn from_scene_with_skin(scene: &AppSceneSnapshot, skin: &SkinContext) -> Self {
+    pub fn from_scene_with_skin(
+        scene: &AppSceneSnapshot,
+        skin: &SkinContext,
+        dynamic_timers: &mut crate::skin::DynamicTimerRuntime,
+    ) -> Self {
         match scene {
-            AppSceneSnapshot::Select(snapshot) => plan_select(snapshot, skin),
-            AppSceneSnapshot::Decide(snapshot) => plan_decide(snapshot, skin),
-            AppSceneSnapshot::Play(snapshot) => plan_play(snapshot, skin),
-            AppSceneSnapshot::Result(snapshot) => plan_result(snapshot, skin),
+            AppSceneSnapshot::Select(snapshot) => plan_select(snapshot, skin, dynamic_timers),
+            AppSceneSnapshot::Decide(snapshot) => plan_decide(snapshot, skin, dynamic_timers),
+            AppSceneSnapshot::Play(snapshot) => plan_play(snapshot, skin, dynamic_timers),
+            AppSceneSnapshot::Result(snapshot) => plan_result(snapshot, skin, dynamic_timers),
         }
     }
 }
@@ -208,7 +216,23 @@ fn push_exit_hold_indicator(commands: &mut Vec<DrawCommand>, progress: f32) {
     );
 }
 
-fn plan_select(snapshot: &SelectSnapshot, skin: &SkinContext) -> DrawPlan {
+fn advance_skin_dynamic_timers(
+    skin: &SkinContext,
+    runtime: &mut crate::skin::DynamicTimerRuntime,
+    state: crate::skin::SkinDrawState,
+    now_ms: i32,
+) -> crate::skin::SkinDrawState {
+    skin.document()
+        .filter(|document| !document.dynamic_timers.is_empty())
+        .map(|document| runtime.advance(document, state, now_ms))
+        .unwrap_or(state)
+}
+
+fn plan_select(
+    snapshot: &SelectSnapshot,
+    skin: &SkinContext,
+    _dynamic_timers: &mut crate::skin::DynamicTimerRuntime,
+) -> DrawPlan {
     if skin.document().is_some_and(|document| document.skin_type == 5) {
         let mut commands = Vec::new();
         crate::skin::append_skin_render_items(&mut commands, &skin.select_document_items(snapshot));
@@ -519,7 +543,11 @@ fn clear_type_label(clear_type: &str) -> &'static str {
     }
 }
 
-fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
+fn plan_play(
+    snapshot: &RenderSnapshot,
+    skin: &SkinContext,
+    dynamic_timers: &mut crate::skin::DynamicTimerRuntime,
+) -> DrawPlan {
     let mut commands = Vec::new();
     let text = TextRenderer;
     let skin_manifest = skin.manifest();
@@ -644,6 +672,7 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
         course_stage: snapshot.course_stage,
         ..crate::skin::SkinDrawState::default()
     };
+    let skin_state = advance_skin_dynamic_timers(skin, dynamic_timers, skin_state, play_elapsed_ms);
     let skin_text = SkinTextState {
         title: &snapshot.title,
         subtitle: &snapshot.subtitle,
@@ -861,7 +890,11 @@ fn plan_play(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
     DrawPlan { clear: Color::rgb(0.0, 0.0, 0.0), commands }
 }
 
-fn plan_decide(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
+fn plan_decide(
+    snapshot: &RenderSnapshot,
+    skin: &SkinContext,
+    dynamic_timers: &mut crate::skin::DynamicTimerRuntime,
+) -> DrawPlan {
     if skin.document().is_some_and(|document| document.skin_type == 6) {
         let play_elapsed_ms =
             (snapshot.play_elapsed_time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32;
@@ -890,6 +923,7 @@ fn plan_decide(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
             hidden_cover: snapshot.hidden_cover,
             ..crate::skin::SkinDrawState::default()
         };
+        let state = advance_skin_dynamic_timers(skin, dynamic_timers, state, play_elapsed_ms);
         let text = SkinTextState {
             title: &snapshot.title,
             subtitle: &snapshot.subtitle,
@@ -909,7 +943,7 @@ fn plan_decide(snapshot: &RenderSnapshot, skin: &SkinContext) -> DrawPlan {
         }
     }
 
-    plan_play(snapshot, &SkinContext::default())
+    plan_play(snapshot, &SkinContext::default(), dynamic_timers)
 }
 
 fn skin_lane_height_px(skin: &SkinContext, fallback_canvas_h: f32) -> f32 {
@@ -922,9 +956,18 @@ fn skin_lane_height_px(skin: &SkinContext, fallback_canvas_h: f32) -> f32 {
         .map_or(fallback_canvas_h, |rect| rect.height * fallback_canvas_h)
 }
 
-fn plan_result(snapshot: &crate::scene::ResultSnapshot, skin: &SkinContext) -> DrawPlan {
+fn plan_result(
+    snapshot: &crate::scene::ResultSnapshot,
+    skin: &SkinContext,
+    dynamic_timers: &mut crate::skin::DynamicTimerRuntime,
+) -> DrawPlan {
     if skin.document().is_some_and(|document| document.skin_type == 7) {
-        let state = build_result_skin_draw_state(snapshot);
+        let state = advance_skin_dynamic_timers(
+            skin,
+            dynamic_timers,
+            build_result_skin_draw_state(snapshot),
+            (snapshot.elapsed_time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+        );
         let text = SkinTextState {
             title: snapshot.title.as_str(),
             subtitle: snapshot.subtitle.as_str(),
@@ -1939,7 +1982,11 @@ mod tests {
             overlay: crate::snapshot::OverlaySnapshot::default(),
         };
 
-        let plan = DrawPlan::from_scene_with_skin(&AppSceneSnapshot::Result(snapshot), &skin);
+        let plan = DrawPlan::from_scene_with_skin(
+            &AppSceneSnapshot::Result(snapshot),
+            &skin,
+            &mut crate::skin::DynamicTimerRuntime::default(),
+        );
 
         assert!(plan.commands.iter().any(|command| matches!(
             command,
@@ -1964,7 +2011,11 @@ mod tests {
             y: 0.5,
         });
 
-        let plan = DrawPlan::from_scene_with_skin(&AppSceneSnapshot::Play(snapshot), &skin);
+        let plan = DrawPlan::from_scene_with_skin(
+            &AppSceneSnapshot::Play(snapshot),
+            &skin,
+            &mut crate::skin::DynamicTimerRuntime::default(),
+        );
 
         assert!(plan.commands.iter().any(|command| matches!(
             command,
@@ -2016,7 +2067,11 @@ mod tests {
         let mut snapshot = RenderSnapshot::default();
         snapshot.bar_lines.push(VisibleBarLine { time: TimeUs(1_000), y: 0.5 });
 
-        let plan = DrawPlan::from_scene_with_skin(&AppSceneSnapshot::Play(snapshot), &skin);
+        let plan = DrawPlan::from_scene_with_skin(
+            &AppSceneSnapshot::Play(snapshot),
+            &skin,
+            &mut crate::skin::DynamicTimerRuntime::default(),
+        );
 
         assert!(plan.commands.iter().any(|command| matches!(
             command,
@@ -2068,7 +2123,11 @@ mod tests {
         );
         snapshot.bar_lines.push(VisibleBarLine { time: TimeUs(1_000), y: 0.5 });
 
-        let plan = DrawPlan::from_scene_with_skin(&AppSceneSnapshot::Play(snapshot), &skin);
+        let plan = DrawPlan::from_scene_with_skin(
+            &AppSceneSnapshot::Play(snapshot),
+            &skin,
+            &mut crate::skin::DynamicTimerRuntime::default(),
+        );
 
         assert!(plan.commands.iter().any(|command| matches!(
             command,
@@ -2132,7 +2191,11 @@ mod tests {
             y: 0.0,
         });
 
-        let plan = DrawPlan::from_scene_with_skin(&AppSceneSnapshot::Play(snapshot), &skin);
+        let plan = DrawPlan::from_scene_with_skin(
+            &AppSceneSnapshot::Play(snapshot),
+            &skin,
+            &mut crate::skin::DynamicTimerRuntime::default(),
+        );
 
         assert!(plan.commands.iter().any(|command| matches!(
             command,
@@ -2213,10 +2276,17 @@ mod tests {
             ..Default::default()
         };
 
-        let before_plan =
-            DrawPlan::from_scene_with_skin(&AppSceneSnapshot::Play(before_ready), &skin);
-        let after_plan =
-            DrawPlan::from_scene_with_skin(&AppSceneSnapshot::Play(after_ready), &skin);
+        let mut dynamic_timers = crate::skin::DynamicTimerRuntime::default();
+        let before_plan = DrawPlan::from_scene_with_skin(
+            &AppSceneSnapshot::Play(before_ready),
+            &skin,
+            &mut dynamic_timers,
+        );
+        let after_plan = DrawPlan::from_scene_with_skin(
+            &AppSceneSnapshot::Play(after_ready),
+            &skin,
+            &mut dynamic_timers,
+        );
 
         assert!(!before_plan
             .commands
@@ -2264,10 +2334,17 @@ mod tests {
             ..Default::default()
         };
 
-        let before_plan =
-            DrawPlan::from_scene_with_skin(&AppSceneSnapshot::Play(before_intro), &skin);
-        let during_plan =
-            DrawPlan::from_scene_with_skin(&AppSceneSnapshot::Play(during_intro), &skin);
+        let mut dynamic_timers = crate::skin::DynamicTimerRuntime::default();
+        let before_plan = DrawPlan::from_scene_with_skin(
+            &AppSceneSnapshot::Play(before_intro),
+            &skin,
+            &mut dynamic_timers,
+        );
+        let during_plan = DrawPlan::from_scene_with_skin(
+            &AppSceneSnapshot::Play(during_intro),
+            &skin,
+            &mut dynamic_timers,
+        );
 
         assert!(!before_plan
             .commands
@@ -2313,10 +2390,17 @@ mod tests {
             ..Default::default()
         };
 
-        let before_plan =
-            DrawPlan::from_scene_with_skin(&AppSceneSnapshot::Play(before_start), &skin);
-        let after_plan =
-            DrawPlan::from_scene_with_skin(&AppSceneSnapshot::Play(after_start), &skin);
+        let mut dynamic_timers = crate::skin::DynamicTimerRuntime::default();
+        let before_plan = DrawPlan::from_scene_with_skin(
+            &AppSceneSnapshot::Play(before_start),
+            &skin,
+            &mut dynamic_timers,
+        );
+        let after_plan = DrawPlan::from_scene_with_skin(
+            &AppSceneSnapshot::Play(after_start),
+            &skin,
+            &mut dynamic_timers,
+        );
 
         assert!(!before_plan
             .commands

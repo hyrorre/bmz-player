@@ -108,6 +108,9 @@ pub struct SkinDocument {
     pub songlist: Option<SkinSongListDef>,
     #[serde(default)]
     pub destination: Vec<DestinationListEntry>,
+    /// Lua `timer_util.timer_observe_boolean` から変換された動的タイマー定義。
+    #[serde(default, rename = "dynamicTimer")]
+    pub dynamic_timers: Vec<SkinDynamicTimerDef>,
     /// ユーザがスキン設定パネルで選んだオプションから算出した有効 op コード列。
     /// `Some` のときレンダー時の `enabled_options()` はこれを返し、`None` の
     /// ときは従来通り `property.def` (または各 property の先頭 item) を既定として
@@ -378,6 +381,17 @@ pub struct SkinSliderDef {
     pub max: i32,
 }
 
+/// beatoraja 予約 ID と衝突しない動的タイマー ID 範囲の先頭。
+pub const SKIN_DYNAMIC_TIMER_BASE: i32 = 9000;
+/// `SkinDrawState::dynamic_timer_ms` のスロット数。
+pub const SKIN_DYNAMIC_TIMER_COUNT: usize = 64;
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SkinDynamicTimerDef {
+    pub id: i32,
+    pub observe: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct SkinGraphDef {
     #[serde(default, deserialize_with = "deserialize_skin_id")]
@@ -404,6 +418,9 @@ pub struct SkinGraphDef {
     pub angle: i32,
     #[serde(default, rename = "type")]
     pub graph_type: i32,
+    /// Lua `value = function()` から変換した fill 比率式 (0.0–1.0)。空なら `graph_type` を使う。
+    #[serde(default)]
+    pub value_expr: String,
     #[serde(default, rename = "isRefNum")]
     pub is_ref_num: bool,
     #[serde(default)]
@@ -1120,6 +1137,8 @@ pub struct SkinDrawState {
     pub autoplay: bool,
     /// OPTION_MODE_COURSE (290) とステージ別 op (280..283 / 289) 用。未対応時は None。
     pub course_stage: Option<CourseStageMarker>,
+    /// `dynamicTimer` で定義された observe タイマーの経過 ms。None は timer_off。
+    pub dynamic_timer_ms: [Option<i32>; SKIN_DYNAMIC_TIMER_COUNT],
 }
 
 impl Default for SkinDrawState {
@@ -1208,7 +1227,49 @@ impl Default for SkinDrawState {
             failed_ms: None,
             autoplay: false,
             course_stage: None,
+            dynamic_timer_ms: [None; SKIN_DYNAMIC_TIMER_COUNT],
         }
+    }
+}
+
+/// `dynamicTimer` observe 条件のエッジ検出用ランタイム。Renderer が保持する。
+#[derive(Debug, Clone)]
+pub struct DynamicTimerRuntime {
+    starts: [Option<i32>; SKIN_DYNAMIC_TIMER_COUNT],
+}
+
+impl Default for DynamicTimerRuntime {
+    fn default() -> Self {
+        Self { starts: [None; SKIN_DYNAMIC_TIMER_COUNT] }
+    }
+}
+
+impl DynamicTimerRuntime {
+    pub fn reset(&mut self) {
+        self.starts = [None; SKIN_DYNAMIC_TIMER_COUNT];
+    }
+
+    /// observe 条件を評価し、`state.dynamic_timer_ms` を更新する。
+    pub fn advance(
+        &mut self,
+        document: &SkinDocument,
+        mut state: SkinDrawState,
+        now_ms: i32,
+    ) -> SkinDrawState {
+        for def in &document.dynamic_timers {
+            let idx = def.id.saturating_sub(SKIN_DYNAMIC_TIMER_BASE) as usize;
+            if idx >= SKIN_DYNAMIC_TIMER_COUNT {
+                continue;
+            }
+            if eval_skin_draw_condition(&def.observe, state) {
+                let start = self.starts[idx].get_or_insert(now_ms);
+                state.dynamic_timer_ms[idx] = Some(now_ms.saturating_sub(*start));
+            } else {
+                self.starts[idx] = None;
+                state.dynamic_timer_ms[idx] = None;
+            }
+        }
+        state
     }
 }
 
@@ -3072,7 +3133,7 @@ impl SkinDocument {
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<SkinRenderItem> {
         let source = sources.get(&graph.src)?;
-        let value = graph_value(graph.graph_type, state).clamp(0.0, 1.0);
+        let value = graph_fill_ratio(graph, state).clamp(0.0, 1.0);
         let source_w = source.source_size.width.max(1.0);
         let source_h = source.source_size.height.max(1.0);
         let base_uv = TextureRegion {
@@ -4315,6 +4376,68 @@ fn skin_state_number_expr_term(term: &str, state: SkinDrawState) -> Option<i64> 
     term.parse::<i64>().ok()
 }
 
+fn skin_state_float_expr(expr: &str, state: SkinDrawState) -> Option<f32> {
+    let expr = expr.trim();
+    if expr.is_empty() {
+        return None;
+    }
+    if let Some((numerator, denominator)) = expr.split_once('/') {
+        let numerator = skin_state_additive_float_expr(numerator.trim(), state)?;
+        let denominator = skin_state_additive_float_expr(denominator.trim(), state)?;
+        if denominator.abs() < f32::EPSILON {
+            return Some(0.0);
+        }
+        return Some((numerator / denominator).clamp(0.0, 1.0));
+    }
+    skin_state_additive_float_expr(expr, state)
+}
+
+fn skin_state_additive_float_expr(expr: &str, state: SkinDrawState) -> Option<f32> {
+    let normalized = expr.replace('+', " + ").replace('-', " - ");
+    let mut sign = 1.0_f32;
+    let mut total = 0.0_f32;
+    let mut expecting_value = true;
+    for token in normalized.split_whitespace() {
+        match token {
+            "+" if expecting_value => sign = 1.0,
+            "-" if expecting_value => sign = -1.0,
+            "+" if !expecting_value => {
+                sign = 1.0;
+                expecting_value = true;
+            }
+            "-" if !expecting_value => {
+                sign = -1.0;
+                expecting_value = true;
+            }
+            value => {
+                if !expecting_value {
+                    return None;
+                }
+                let term = skin_state_float_expr_term(value, state)?;
+                total += sign * term;
+                sign = 1.0;
+                expecting_value = false;
+            }
+        }
+    }
+    if expecting_value {
+        return None;
+    }
+    Some(total)
+}
+
+fn skin_state_float_expr_term(term: &str, state: SkinDrawState) -> Option<f32> {
+    if let Some(ref_id) = parse_skin_number_operand(term) {
+        return skin_state_number(ref_id, state).map(|value| value as f32);
+    }
+    if let Some((coefficient, operand)) = term.split_once('*') {
+        let coefficient = coefficient.parse::<f32>().ok()?;
+        let ref_id = parse_skin_number_operand(operand.trim())?;
+        return skin_state_number(ref_id, state).map(|value| coefficient * value as f32);
+    }
+    term.parse::<f32>().ok()
+}
+
 fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
     match ref_id {
         300 => Some(state.select_chart_count as i64),
@@ -4600,8 +4723,34 @@ fn graph_value(graph_type: i32, state: SkinDrawState) -> f32 {
         17 => state.select_master_volume.clamp(0.0, 1.0),
         18 => state.select_key_volume.clamp(0.0, 1.0),
         19 => state.select_bgm_volume.clamp(0.0, 1.0),
+        // Lua fast/slow 比率 graph (ECFN select 等)
+        148 => fast_slow_ratio_fast(state),
+        149 => fast_slow_ratio_slow(state),
         _ => 0.0,
     }
+}
+
+fn graph_fill_ratio(graph: &SkinGraphDef, state: SkinDrawState) -> f32 {
+    if !graph.value_expr.trim().is_empty() {
+        return skin_state_float_expr(&graph.value_expr, state).unwrap_or(0.0);
+    }
+    graph_value(graph.graph_type, state)
+}
+
+fn fast_slow_ratio_fast(state: SkinDrawState) -> f32 {
+    let Some(counts) = state.fast_slow_counts else {
+        return 0.0;
+    };
+    let total = counts.fast_total() + counts.slow_total();
+    if total == 0 { 0.0 } else { counts.fast_total() as f32 / total as f32 }
+}
+
+fn fast_slow_ratio_slow(state: SkinDrawState) -> f32 {
+    let Some(counts) = state.fast_slow_counts else {
+        return 0.0;
+    };
+    let total = counts.fast_total() + counts.slow_total();
+    if total == 0 { 0.0 } else { counts.slow_total() as f32 / total as f32 }
 }
 
 fn judge_rate(count: u32, total: u32) -> f32 {
@@ -4647,6 +4796,14 @@ fn skin_timer_elapsed_ms(timer: Option<i32>, state: SkinDrawState) -> Option<i32
         Some(130) => state.keyoff_ms[Lane::Scratch2.index()],
         Some(131..=137) => state.keyoff_ms[Lane::Key8.index() + (timer.unwrap() - 131) as usize],
         Some(143) => state.end_of_note.then_some(state.elapsed_ms),
+        Some(id)
+            if (SKIN_DYNAMIC_TIMER_BASE
+                ..SKIN_DYNAMIC_TIMER_BASE + SKIN_DYNAMIC_TIMER_COUNT as i32)
+                .contains(&id) =>
+        {
+            let idx = (id - SKIN_DYNAMIC_TIMER_BASE) as usize;
+            state.dynamic_timer_ms[idx]
+        }
         _ => None,
     }
 }
