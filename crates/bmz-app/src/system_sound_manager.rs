@@ -33,7 +33,7 @@ pub struct SystemSoundManager {
 
 impl SystemSoundManager {
     /// `selection` から各 [`SoundType`] のパスを解決し、デコードして engine へ登録する。
-    /// 解決失敗 / デコード失敗はサウンド単位で warn ログを出してスキップする。
+    /// 解決失敗は info、デコード失敗は warn をサウンド単位で出してスキップする。
     pub fn new(engine: SharedAudioEngine, selection: &SoundSetSelection) -> Self {
         let mut id_map = HashMap::new();
         let mut loader = FfmpegSampleLoader;
@@ -42,7 +42,7 @@ impl SystemSoundManager {
         for (i, sound_type) in SoundType::ALL.iter().enumerate() {
             let id = SoundId(SYSTEM_SOUND_BASE + i as u32);
             let Some(path) = selection.resolve(*sound_type) else {
-                tracing::warn!(
+                tracing::info!(
                     sound_type = ?sound_type,
                     file_name = sound_type.file_name(),
                     "system sound file not found in selected set or default dir; skipping"
