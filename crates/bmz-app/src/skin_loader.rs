@@ -129,7 +129,7 @@ pub fn apply_skin_from_dir(renderer: &mut Renderer, skin_root: &Path) -> Result<
             "loaded skin texture"
         );
     }
-    renderer.set_play_skin_context(SkinContext::from_manifest(manifest));
+    renderer.set_play_skin_context(SkinContext::from_manifest(manifest), false);
 
     Ok(())
 }
@@ -460,7 +460,7 @@ pub fn install_decoded_skin(
     let document_textures: Vec<SkinDocumentTexture> =
         sources.into_iter().filter_map(|source| install_decoded_source(renderer, source)).collect();
 
-    set_decoded_skin_context(renderer, kind, default_manifest, document, document_textures);
+    set_decoded_skin_context(renderer, kind, default_manifest, document, document_textures, false);
     Ok(())
 }
 
@@ -517,17 +517,23 @@ pub fn install_decoded_source(
 }
 
 /// 取り込み済みのフォント/PNG から SkinContext を組み立てて scene context にセットする。
+///
+/// プレイ中に `play7_files` などだけ変えた場合、`preserve_play_dynamic_timers` を true にすると
+/// グルーヴ枠など `timer_observe_boolean` 由来のアニメ経過を維持できる。
 pub fn set_decoded_skin_context(
     renderer: &mut Renderer,
     kind: SkinKind,
     default_manifest: SkinManifest,
     document: SkinDocument,
     document_textures: Vec<SkinDocumentTexture>,
+    preserve_play_dynamic_timers: bool,
 ) {
     let context =
         SkinContext::from_manifest_and_document(default_manifest, document, document_textures);
     match kind {
-        SkinKind::Play => renderer.set_play_skin_context(context),
+        SkinKind::Play => {
+            renderer.set_play_skin_context(context, preserve_play_dynamic_timers);
+        }
         SkinKind::Select => renderer.set_select_skin_context(context),
         SkinKind::Decide => renderer.set_decide_skin_context(context),
         SkinKind::Result => renderer.set_result_skin_context(context),
