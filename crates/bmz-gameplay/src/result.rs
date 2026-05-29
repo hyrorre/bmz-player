@@ -89,6 +89,8 @@ mod tests {
             bgm_events: Vec::new(),
             bga_events: Vec::new(),
             timing_events: Vec::new(),
+            scroll_events: Vec::new(),
+            speed_events: Vec::new(),
             bar_lines: Vec::new(),
             sounds: Vec::new(),
             bga_assets: Vec::new(),

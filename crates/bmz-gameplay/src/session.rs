@@ -788,6 +788,7 @@ mod tests {
             poor_bga_duration_us: 500_000,
             bga_stretch: 1,
             input_timestamp_anchor: None,
+            pending_mine_hits: Vec::new(),
             state: PlayState::Ready,
         }
     }
@@ -813,6 +814,8 @@ mod tests {
             bgm_events: Vec::new(),
             bga_events: Vec::new(),
             timing_events: Vec::new(),
+            scroll_events: Vec::new(),
+            speed_events: Vec::new(),
             bar_lines: Vec::new(),
             sounds: vec![SoundAssetRef { id: SoundId(7), path: "sound.wav".into() }],
             bga_assets: Vec::new(),
@@ -830,6 +833,8 @@ mod tests {
             bgm_events: vec![SoundEvent { tick: ChartTick(0), time: TimeUs(0), sound: SoundId(3) }],
             bga_events: Vec::new(),
             timing_events: Vec::new(),
+            scroll_events: Vec::new(),
+            speed_events: Vec::new(),
             bar_lines: Vec::new(),
             sounds: vec![SoundAssetRef { id: SoundId(3), path: "bgm.wav".into() }],
             bga_assets: Vec::new(),

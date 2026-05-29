@@ -13,6 +13,7 @@ use bmz_gameplay::input::backend::{InputBackend, NullInputBackend};
 use bmz_gameplay::input::system::InputSystem;
 use bmz_gameplay::input::translator::DefaultInputTranslator;
 use bmz_gameplay::judge::engine::JudgeEngine;
+use bmz_gameplay::judge::window::judge_window_from_chart_rank;
 use bmz_gameplay::replay::{ReplayPlayer, ReplayRecorder};
 use bmz_gameplay::score::ScoreState;
 use bmz_gameplay::session::{BgmScheduler, GameSession, PlaySkinOffset, PlayState};
@@ -113,7 +114,10 @@ pub fn build_game_session_with_input_backend(
             chart.metadata.total.unwrap_or(160.0),
             chart.total_notes,
         ),
-        judge: JudgeEngine::new(DEFAULT_JUDGE_WINDOW),
+        judge: JudgeEngine::new(judge_window_from_chart_rank(
+            chart.metadata.judge_rank,
+            DEFAULT_JUDGE_WINDOW,
+        )),
         audio_clock: AudioClock::stopped(options.sample_rate),
         chart,
         timing_map,
