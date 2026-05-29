@@ -715,6 +715,59 @@ mod tests {
     }
 
     #[test]
+    fn lua_skin_infers_skin_config_only_draw() {
+        let root = unique_test_dir("bmz-skin-lua-skin-config-only-draw");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("play7.luaskin"),
+            r#"
+            return {
+                type = 0,
+                property = {
+                    {
+                        name = "グルーヴゲージ表示",
+                        def = "default",
+                        item = {
+                            { name = "default", op = 930 },
+                            { name = "all_off", op = 932 },
+                        },
+                    },
+                },
+                destination = {
+                    {
+                        id = "gaugevalue",
+                        draw = function()
+                            return skin_config.option["グルーヴゲージ表示"] ~= 932
+                        end,
+                        dst = {{ x = 0, y = 0, w = 1, h = 1 }},
+                    },
+                },
+            }
+            "#,
+        )
+        .unwrap();
+
+        let loaded = load_lua_skin(
+            &root.join("play7.luaskin"),
+            SkinKind::Play,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert!(
+            loaded.warnings.is_empty(),
+            "warnings: {:?}",
+            loaded.warnings.iter().map(|w| w.message.as_str()).collect::<Vec<_>>()
+        );
+        let bmz_render::skin::DestinationListEntry::Single(destination) =
+            &loaded.document.destination[0]
+        else {
+            panic!("expected single destination");
+        };
+        assert_eq!(destination.draw, "number(0) >= 0");
+    }
+
+    #[test]
     fn lua_skin_infers_fast_slow_ratio_graph_type() {
         let root = unique_test_dir("bmz-skin-lua-fs-graph");
         fs::create_dir_all(&root).unwrap();

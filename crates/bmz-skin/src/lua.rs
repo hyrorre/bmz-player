@@ -1680,6 +1680,16 @@ fn infer_boolean_predicate(
     .or_else(|| infer_or_of_number_lt_zero(function, main_state_probe))
     .or_else(|| infer_two_number_compare_and(function, main_state_probe))
     .or_else(|| infer_number_eq_zero_with_constant_tail(function, main_state_probe))
+    .or_else(|| infer_constant_draw_at_load(function))
+}
+
+/// `skin_config.option` のみ等、ロード時に結果が決まる draw function を畳み込む。
+fn infer_constant_draw_at_load(function: &Function) -> Option<String> {
+    match function.call::<bool>(()).ok() {
+        Some(true) => Some("number(0) >= 0".to_string()),
+        Some(false) => Some("number(0) < 0".to_string()),
+        _ => None,
+    }
 }
 
 fn collect_number_refs(
