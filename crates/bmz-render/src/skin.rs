@@ -9534,7 +9534,7 @@ mod tests {
                 "h": 100,
                 "source": [{ "id": 12, "path": "cover.png" }],
                 "hiddenCover": [
-                    { "id": "hidden-cover", "src": 12, "x": 10, "y": 20, "w": 30, "h": 40, "disapearLine": 140 }
+                    { "id": "hidden-cover", "src": 12, "x": 10, "y": 20, "w": 30, "h": 40 }
                 ],
                 "destination": [
                     { "id": "hidden-cover", "blend": 2, "dst": [{ "x": 20, "y": -40, "w": 30, "h": 40, "a": 128 }] }
@@ -9576,7 +9576,7 @@ mod tests {
                 && approx_eq(uh, 0.4)
                 && approx_eq(a, 128.0 / 255.0)
                 && blend == BlendMode::Add));
-        assert_eq!(document.hidden_cover[0].disappear_line, 140);
+        assert_eq!(document.hidden_cover[0].disappear_line, 0);
         assert!(document.hidden_cover[0].is_disappear_line_link_lift);
     }
 

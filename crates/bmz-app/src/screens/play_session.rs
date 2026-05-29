@@ -163,17 +163,11 @@ fn hidden_cover_from_profile(profile: &ProfileConfig) -> f32 {
 }
 
 fn lanecover_enabled_from_profile(profile: &ProfileConfig) -> bool {
-    matches!(
-        profile.play.lane_effect,
-        LaneEffectConfig::Sudden | LaneEffectConfig::HiddenSudden
-    )
+    matches!(profile.play.lane_effect, LaneEffectConfig::Sudden | LaneEffectConfig::HiddenSudden)
 }
 
 fn hidden_enabled_from_profile(profile: &ProfileConfig) -> bool {
-    matches!(
-        profile.play.lane_effect,
-        LaneEffectConfig::Hidden | LaneEffectConfig::HiddenSudden
-    )
+    matches!(profile.play.lane_effect, LaneEffectConfig::Hidden | LaneEffectConfig::HiddenSudden)
 }
 
 fn poor_bga_duration_us_from_profile(profile: &ProfileConfig) -> i64 {
