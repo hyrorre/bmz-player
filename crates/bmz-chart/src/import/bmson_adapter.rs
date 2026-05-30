@@ -5,6 +5,7 @@
 
 use std::path::Path;
 
+use bms_rs::bms::command::LnMode;
 use bms_rs::bms::model::Bms;
 use bms_rs::bmson::bmson_to_bms::BmsonToBmsWarning;
 use bms_rs::bmson::parse_bmson;
@@ -30,7 +31,12 @@ pub fn import_bmson_to_intermediate(
         message: "BMSON file is not valid UTF-8".into(),
     })?;
 
-    let output = parse_bmson(text);
+    let (parse_text, ln_type) = prepare_bmson_text(text).map_err(|message| ImportError::Parse {
+        path: source_path.to_path_buf(),
+        message,
+    })?;
+
+    let output = parse_bmson(&parse_text);
     let parse_errors: Vec<_> = output.errors.iter().map(|error| format!("{error:?}")).collect();
     for message in &parse_errors {
         warnings.push(ImportWarning::ParserDiagnostic {
@@ -71,6 +77,8 @@ pub fn import_bmson_to_intermediate(
         });
     }
 
+    converted.bms.repr.ln_mode = ln_type;
+
     let mut intermediate = build_intermediate_from_bms(&converted.bms, warnings);
     intermediate.identity = identity;
     intermediate.metadata.suppress_bar_lines = suppress_bar_lines;
@@ -98,4 +106,81 @@ fn push_bmson_to_bms_warning(warning: BmsonToBmsWarning, warnings: &mut Vec<Impo
         _ => ("BmsonToBmsWarning", warning.to_string()),
     };
     warnings.push(ImportWarning::ParserDiagnostic { code: code.into(), message });
+}
+
+/// beatoraja 拡張の `ln_type` / `t` は整数だが、bms-rs の serde は variant 名を期待する。
+/// パース前に整数値を取り出し、JSON から除去する。
+fn prepare_bmson_text(text: &str) -> Result<(String, LnMode), String> {
+    let mut value: serde_json::Value =
+        serde_json::from_str(text).map_err(|err| format!("invalid BMSON JSON: {err}"))?;
+    let ln_type = value
+        .pointer("/info/ln_type")
+        .map(parse_ln_type_json)
+        .unwrap_or_default();
+    if let Some(info) = value.get_mut("info").and_then(serde_json::Value::as_object_mut) {
+        info.remove("ln_type");
+    }
+    strip_integer_ln_type_fields(&mut value);
+    let sanitized =
+        serde_json::to_string(&value).map_err(|err| format!("failed to serialize BMSON JSON: {err}"))?;
+    Ok((sanitized, ln_type))
+}
+
+fn parse_ln_type_json(value: &serde_json::Value) -> LnMode {
+    match value {
+        serde_json::Value::Number(number) => number
+            .as_u64()
+            .and_then(|raw| u8::try_from(raw).ok())
+            .and_then(|raw| LnMode::try_from(raw).ok())
+            .unwrap_or_default(),
+        serde_json::Value::String(text) => match text.to_ascii_lowercase().as_str() {
+            "ln" | "1" => LnMode::Ln,
+            "cn" | "2" => LnMode::Cn,
+            "hcn" | "hell" | "3" => LnMode::Hcn,
+            _ => LnMode::default(),
+        },
+        _ => LnMode::default(),
+    }
+}
+
+fn strip_integer_ln_type_fields(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            if matches!(map.get("t"), Some(serde_json::Value::Number(_))) {
+                map.remove("t");
+            }
+            for nested in map.values_mut() {
+                strip_integer_ln_type_fields(nested);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                strip_integer_ln_type_fields(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::LongNoteMode;
+    use bms_rs::bmson::parse_bmson;
+
+    #[test]
+    fn prepare_bmson_text_strips_integer_ln_type_for_bms_rs() {
+        let json = r#"{"version":"1.0.0","info":{"title":"t","artist":"a","genre":"g","level":1,"init_bpm":120,"ln_type":3,"resolution":240},"sound_channels":[]}"#;
+        let (sanitized, ln_type) = prepare_bmson_text(json).unwrap();
+        assert_eq!(ln_type, LnMode::Hcn);
+        assert!(parse_bmson(&sanitized).bmson.is_some());
+        assert_eq!(
+            LongNoteMode::Hcn,
+            match ln_type {
+                LnMode::Ln => LongNoteMode::Ln,
+                LnMode::Cn => LongNoteMode::Cn,
+                LnMode::Hcn => LongNoteMode::Hcn,
+            }
+        );
+    }
 }

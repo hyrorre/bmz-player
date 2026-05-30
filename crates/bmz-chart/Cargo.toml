@@ -12,6 +12,7 @@ sha2.workspace = true
 encoding_rs.workspace = true
 bms-rs = "1.0"
 strict-num-extended = "0.5"
+serde_json = "1"
 
 bmz-core = { path = "../bmz-core" }
 

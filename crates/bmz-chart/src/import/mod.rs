@@ -441,6 +441,29 @@ mod tests {
     }
 
     #[test]
+    fn imports_bmson_ln_type_into_long_note_mode() {
+        let json = r#"{
+            "version": "1.0.0",
+            "info": {
+                "title": "Hcn Song",
+                "artist": "Test",
+                "genre": "Test",
+                "level": 1,
+                "init_bpm": 120.0,
+                "judge_rank": 100.0,
+                "total": 100.0,
+                "resolution": 240,
+                "ln_type": 3
+            },
+            "sound_channels": []
+        }"#;
+        let path = write_temp_file_with_ext(json, "bmson");
+        let result = import_chart(&path, None, false).unwrap();
+        assert_eq!(result.chart.metadata.long_note_mode, crate::model::LongNoteMode::Hcn);
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn imports_bmson_irregular_meter_lines() {
         let json = r#"{
             "version": "1.0.0",

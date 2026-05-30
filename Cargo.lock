@@ -539,6 +539,7 @@ dependencies = [
  "encoding_rs",
  "md5",
  "serde",
+ "serde_json",
  "sha2",
  "strict-num-extended",
  "tempfile",
