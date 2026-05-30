@@ -2941,14 +2941,27 @@ impl SkinDocument {
             image_frame.x -=
                 self.value_number_length(&number_destination.id, combo as i64, number_frame) / 2;
         }
-        let mut items = vec![self.image_render_item(
-            &image_destination.id,
-            normalize_skin_frame_rect(image_frame, self.w, self.h),
-            elapsed_ms,
-            sources,
+        let image = self.image.iter().find(|image| image.id == image_destination.id)?;
+        let source = resolve_document_source(sources, &image.src)?;
+        let uv = skin_image_texture_region(image, source.source_size, elapsed_ms);
+        let (rect, uv) = stretch_skin_image_geometry(
             image_destination.stretch,
+            normalize_skin_frame_rect(image_frame, self.w, self.h),
+            uv,
+            source.source_size,
+            self.w,
+            self.h,
+        );
+        let mut items = vec![skin_image_item_for_frame(
+            source.texture,
+            rect,
+            uv,
+            image_frame,
+            image_destination.center,
+            BlendMode::Normal,
+            Some(source.source_size),
             image_destination.filter != 0,
-        )?];
+        )];
         if combo > 0
             && let Some(number_destination) = judge.numbers.get(judge_index)
             && let Some(mut number_frame) = resolve_destination_frame_until_end(
@@ -3135,33 +3148,6 @@ impl SkinDocument {
             width: cell_width_px / source_width,
             height: cell_height_px / source_height,
         }
-    }
-
-    fn image_render_item(
-        &self,
-        image_id: &str,
-        rect: Rect,
-        elapsed_ms: i32,
-        sources: &HashMap<String, SkinDocumentTexture>,
-        stretch: i32,
-        linear_filter: bool,
-    ) -> Option<SkinRenderItem> {
-        let image = self.image.iter().find(|image| image.id == image_id)?;
-        let source = resolve_document_source(sources, &image.src)?;
-        let uv = skin_image_texture_region(image, source.source_size, elapsed_ms);
-        let (rect, uv) =
-            stretch_skin_image_geometry(stretch, rect, uv, source.source_size, self.w, self.h);
-        Some(SkinRenderItem::Image {
-            texture: source.texture,
-            rect,
-            uv,
-            tint: Color::rgb(1.0, 1.0, 1.0),
-            blend: BlendMode::Normal,
-            scale: SkinImageScale::Stretch,
-            border: None,
-            source_size: Some(source.source_size),
-            linear_filter,
-        })
     }
 
     fn gauge_image_render_item(
@@ -11485,6 +11471,55 @@ mod tests {
             approx_eq(image_shift, combo_shift),
             "image Y shift {image_shift} should match combo Y shift {combo_shift}"
         );
+    }
+
+    #[test]
+    fn judge_offset_alpha_applies_to_judge_image_and_combo() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "w": 100, "h": 100,
+                "source": [{ "id": "src", "path": "judge.png" }],
+                "image": [{ "id": "judgef-pg", "src": "src", "x": 0, "y": 0, "w": 10, "h": 10 }],
+                "value": [{
+                    "id": "combo-num", "src": "src",
+                    "x": 0, "y": 10, "w": 10, "h": 20,
+                    "divx": 10, "divy": 1, "digit": 4, "ref": 102
+                }],
+                "judge": [{
+                    "id": "judge",
+                    "images": [
+                        { "id": "judgef-pg", "offsets": [32], "dst": [
+                            { "time": 0, "x": 10, "y": 20, "w": 30, "h": 10, "a": 200 },
+                            { "time": 500 }
+                        ]}
+                    ],
+                    "numbers": [
+                        { "id": "combo-num", "offsets": [32], "dst": [
+                            { "time": 0, "x": 0, "y": 30, "w": 10, "h": 20, "a": 200 },
+                            { "time": 500 }
+                        ]}
+                    ]
+                }]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = mock_source("src", 10.0, 10.0);
+        let mut offsets = SkinOffsetValues::default();
+        offsets.set(
+            OFFSET_JUDGE_1P,
+            crate::skin_offset::SkinOffsetValue { x: 0, y: 0, w: 0, h: 0, r: 0, a: -80 },
+        );
+
+        let items =
+            document.judge_render_items_with_offsets("PGREAT", 42, 0, offsets, &sources).unwrap();
+
+        let SkinRenderItem::Image { tint: judge_tint, .. } = &items[0] else { panic!() };
+        let SkinRenderItem::Image { tint: combo_tint, .. } = &items[1] else { panic!() };
+        let expected = (200.0 - 80.0) / 255.0;
+        assert!(approx_eq(judge_tint.a, expected), "judge alpha {}", judge_tint.a);
+        assert!(approx_eq(combo_tint.a, expected), "combo alpha {}", combo_tint.a);
     }
 
     #[test]
