@@ -3639,8 +3639,7 @@ fn is_select_start_key(physical_key: PhysicalKey, bindings: &SelectKeyBindings) 
 }
 
 fn is_select_modifier_key(physical_key: PhysicalKey, bindings: &SelectKeyBindings) -> bool {
-    matches!(physical_key, PhysicalKey::Code(KeyCode::ArrowLeft))
-        || physical_key_name(physical_key).is_some_and(|control| bindings.is_back(&control))
+    physical_key_name(physical_key).is_some_and(|control| bindings.is_back(&control))
 }
 
 fn arrange_option_from_profile(random: RandomOptionConfig) -> ArrangeOption {
@@ -4609,8 +4608,17 @@ mod tests {
     #[test]
     fn select_modifier_keys_are_handled_before_folder_back() {
         let keys = default_select_keys();
-        assert!(is_select_modifier_key(PhysicalKey::Code(KeyCode::ArrowLeft), &keys));
+        assert!(!is_select_modifier_key(PhysicalKey::Code(KeyCode::ArrowLeft), &keys));
         assert!(is_select_modifier_key(PhysicalKey::Code(KeyCode::KeyS), &keys));
+        assert_eq!(
+            select_action(
+                PhysicalKey::Code(KeyCode::ArrowLeft),
+                ElementState::Pressed,
+                false,
+                &keys
+            ),
+            Some(SelectAction::ExitFolder)
+        );
         assert_eq!(
             select_action(PhysicalKey::Code(KeyCode::KeyS), ElementState::Pressed, false, &keys),
             Some(SelectAction::ExitFolder)
