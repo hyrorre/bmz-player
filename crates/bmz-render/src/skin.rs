@@ -4876,10 +4876,10 @@ fn skin_image_pixel_rect(
     image: &SkinImageDef,
     images: &HashMap<&str, &SkinImageDef>,
 ) -> (i32, i32, i32, i32) {
-    if image.src == "0" {
-        if let Some(black) = images.get("black") {
-            return (black.x, black.y, black.w, black.h);
-        }
+    if image.src == "0"
+        && let Some(black) = images.get("black")
+    {
+        return (black.x, black.y, black.w, black.h);
     }
     (image.x, image.y, image.w, image.h)
 }
@@ -5962,7 +5962,7 @@ fn apply_skin_animation(frame: &mut ResolvedSkinFrame, animation: &SkinAnimation
 }
 
 fn destination_uses_skin_offset(destination: &SkinDestinationDef, offset_id: i32) -> bool {
-    destination.offset == offset_id || destination.offsets.iter().any(|&id| id == offset_id)
+    destination.offset == offset_id || destination.offsets.contains(&offset_id)
 }
 
 fn destination_uses_lift_offset_only(destination: &SkinDestinationDef) -> bool {
