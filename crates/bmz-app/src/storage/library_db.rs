@@ -51,6 +51,8 @@ pub struct ChartListItem {
     pub banner_file: String,
     pub backbmp_file: String,
     pub preview_file: String,
+    pub has_long_notes: bool,
+    pub has_mines: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -683,7 +685,7 @@ impl LibraryDatabase {
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(params![source_url], |row| {
             let chart = chart_list_item_from_row(row)?;
-            let level: String = row.get(19)?;
+            let level: String = row.get(21)?;
             Ok((chart, level))
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
@@ -744,7 +746,9 @@ const CHART_LIST_ITEM_COLUMNS: &str = "
     stage_file,
     banner_file,
     backbmp_file,
-    preview_file";
+    preview_file,
+    has_long_notes,
+    has_mines";
 
 const CHART_LIST_ITEM_COLUMNS_C: &str = "
     c.id,
@@ -765,7 +769,9 @@ const CHART_LIST_ITEM_COLUMNS_C: &str = "
     c.stage_file,
     c.banner_file,
     c.backbmp_file,
-    c.preview_file";
+    c.preview_file,
+    c.has_long_notes,
+    c.has_mines";
 
 fn chart_list_item_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChartListItem> {
     let md5_hex: String = row.get(1)?;
@@ -793,6 +799,8 @@ fn chart_list_item_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChartLi
         banner_file: row.get(16)?,
         backbmp_file: row.get(17)?,
         preview_file: row.get(18)?,
+        has_long_notes: row.get(19)?,
+        has_mines: row.get(20)?,
     })
 }
 

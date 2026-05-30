@@ -1102,6 +1102,8 @@ pub struct SkinDrawState {
     pub judge_timing_offset_ms: i32,
     /// 選曲画面の表示曲数 (NUMBER_SELECT_BAR_COUNT=300 相当)。
     pub select_chart_count: u32,
+    /// 現在の描画状態が選曲画面かどうか。番号 ref の一部は scene ごとに意味が違う。
+    pub select_screen: bool,
     /// 選曲バーのスクロール位置 0.0-1.0。
     pub select_scroll_progress: f32,
     /// 選曲画面の master/key/bgm 音量 0.0-1.0。
@@ -1138,6 +1140,10 @@ pub struct SkinDrawState {
     pub select_max_bpm: f32,
     /// 選択中曲の長さ ms。
     pub select_length_ms: i64,
+    /// 選択中曲のプレイ回数 / クリア回数 / ミスカウント。
+    pub select_play_count: u32,
+    pub select_clear_count: u32,
+    pub select_miss_count: Option<u32>,
     /// Fast/Slow 内訳 (ref 410-419/421-424)。
     /// Play/Result 中は Some、それ以外は None。
     pub fast_slow_counts: Option<crate::snapshot::FastSlowJudgeCounts>,
@@ -1234,6 +1240,7 @@ impl Default for SkinDrawState {
             target_ex_score: None,
             judge_timing_offset_ms: 0,
             select_chart_count: 0,
+            select_screen: false,
             select_scroll_progress: 0.0,
             select_master_volume: 1.0,
             select_key_volume: 1.0,
@@ -1253,6 +1260,9 @@ impl Default for SkinDrawState {
             select_min_bpm: 0.0,
             select_max_bpm: 0.0,
             select_length_ms: 0,
+            select_play_count: 0,
+            select_clear_count: 0,
+            select_miss_count: None,
             fast_slow_counts: None,
             best_max_combo: None,
             target_max_combo: None,
@@ -2199,6 +2209,7 @@ impl SkinDocument {
             select_key_volume: snapshot.key_volume,
             select_bgm_volume: snapshot.bgm_volume,
             select_chart_count: snapshot.chart_count,
+            select_screen: true,
             select_play_level: selected_row.map(select_row_level_number).unwrap_or(0),
             play_level: selected_row.map(select_row_level_number).unwrap_or(0),
             difficulty: selected_row.map(select_row_difficulty_code).unwrap_or(0),
@@ -2213,7 +2224,11 @@ impl SkinDocument {
             select_min_bpm: selected_row.map(|row| row.min_bpm).unwrap_or(0.0),
             select_max_bpm: selected_row.map(|row| row.max_bpm).unwrap_or(0.0),
             select_length_ms: selected_row.map(|row| row.length_ms).unwrap_or(0),
+            select_play_count: selected_row.map(|row| row.play_count).unwrap_or(0),
+            select_clear_count: selected_row.map(|row| row.clear_count).unwrap_or(0),
+            select_miss_count: selected_row.and_then(|row| row.miss_count),
             max_combo: selected_row.and_then(|row| row.max_combo).unwrap_or(0),
+            total_notes: selected_row.map(|row| row.total_notes).unwrap_or(0),
             gauge: selected_row.and_then(|row| row.gauge_value).unwrap_or(0.0),
             gauge_auto_shift: snapshot.gauge_auto_shift != "OFF",
             ex_score: selected_row.and_then(|row| row.ex_score).unwrap_or(0),
@@ -2221,6 +2236,7 @@ impl SkinDocument {
         };
         let text = SkinTextState {
             title: selected_row.map(|row| row.title.as_str()).unwrap_or(&snapshot.selected_title),
+            subtitle: selected_row.map(|row| row.subtitle.as_str()).unwrap_or_default(),
             artist: selected_row.map(|row| row.artist.as_str()).unwrap_or_default(),
             genre: "",
             difficulty_name: selected_row
@@ -2293,7 +2309,11 @@ impl SkinDocument {
                 select_in_library: row.in_library,
                 select_total_notes: row.total_notes,
                 select_length_ms: row.length_ms,
+                select_play_count: row.play_count,
+                select_clear_count: row.clear_count,
+                select_miss_count: row.miss_count,
                 max_combo: row.max_combo.unwrap_or(0),
+                total_notes: row.total_notes,
                 gauge: row.gauge_value.unwrap_or(0.0),
                 ex_score: row.ex_score.unwrap_or(0),
                 ..state
@@ -4676,6 +4696,7 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         // Lua draw 畳み込みのプレースホルダ (`number(0) >= 0` 等)
         0 => Some(0),
         300 => Some(state.select_chart_count as i64),
+        30 if state.select_screen => Some(state.select_play_count as i64),
         96 => Some(if state.play_level != 0 { state.play_level } else { state.select_play_level }),
         370 => Some(state.select_clear_index),
         92 => Some(state.select_bpm.round() as i64),
@@ -4684,8 +4705,11 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         74 | 106 | 333 => Some(state.total_notes.max(state.select_total_notes) as i64),
         350 => Some(state.select_total_notes as i64),
         75 | 105 | 174 => Some(state.max_combo as i64),
+        76 if state.select_screen => state.select_miss_count.map(|count| count as i64).or(Some(0)),
         76 => Some((state.judge_counts.bad + state.judge_counts.poor) as i64),
+        77 if state.select_screen => Some(state.select_play_count as i64),
         77 => Some(state.select_target_index as i64),
+        78 if state.select_screen => Some(state.select_clear_count as i64),
         78 => Some(state.select_gauge_auto_shift_index as i64),
         80 | 110 => Some(state.judge_counts.pgreat as i64),
         81 | 111 => Some(state.judge_counts.great as i64),

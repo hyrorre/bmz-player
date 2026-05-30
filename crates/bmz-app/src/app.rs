@@ -3942,6 +3942,7 @@ fn select_snapshot_rows(
                 SelectItem::Folder { name, kind, .. } => SelectRowSnapshot {
                     index: index as u32,
                     title: name.clone(),
+                    subtitle: String::new(),
                     artist: String::new(),
                     difficulty_name: String::new(),
                     play_level: String::new(),
@@ -3955,51 +3956,86 @@ fn select_snapshot_rows(
                     ex_score: None,
                     max_combo: None,
                     gauge_value: None,
+                    miss_count: None,
+                    play_count: 0,
+                    clear_count: 0,
                     replay_slots: [false; 4],
+                    has_long_notes: false,
+                    has_mines: false,
+                    has_random: false,
                     is_folder: true,
                     kind: *kind,
                     in_library: true,
                 },
-                SelectItem::Chart(row) => SelectRowSnapshot {
-                    index: index as u32,
-                    title: row.display_title().to_string(),
-                    artist: row.display_artist().to_string(),
-                    difficulty_name: row
-                        .chart
-                        .as_ref()
-                        .map(|chart| chart.difficulty_name.clone())
-                        .unwrap_or_default(),
-                    play_level: row
-                        .chart
-                        .as_ref()
-                        .map(|chart| chart.play_level.clone())
-                        .unwrap_or_default(),
-                    table_level: row.table_level.clone(),
-                    total_notes: row.chart.as_ref().map(|chart| chart.total_notes).unwrap_or(0),
-                    initial_bpm: row
-                        .chart
-                        .as_ref()
-                        .map(|chart| chart.initial_bpm as f32)
-                        .unwrap_or(0.0),
-                    min_bpm: row.chart.as_ref().map(|chart| chart.min_bpm as f32).unwrap_or(0.0),
-                    max_bpm: row.chart.as_ref().map(|chart| chart.max_bpm as f32).unwrap_or(0.0),
-                    length_ms: row.chart.as_ref().map(|chart| chart.length_ms).unwrap_or(0),
-                    clear_type: row
-                        .best_score
-                        .as_ref()
-                        .map(|score| score.clear_type.clone())
-                        .unwrap_or_default(),
-                    ex_score: row.best_score.as_ref().map(|score| score.ex_score),
-                    max_combo: row.best_score.as_ref().map(|score| score.max_combo),
-                    gauge_value: row.best_score.as_ref().map(|score| score.gauge_value),
-                    replay_slots: row.replay_slots,
-                    is_folder: false,
-                    kind: bmz_render::scene::SelectRowKind::Song,
-                    in_library: row.in_library(),
-                },
+                SelectItem::Chart(row) => {
+                    let play_count = u32::from(row.best_score.is_some());
+                    let clear_count = u32::from(row.best_score.as_ref().is_some_and(|score| {
+                        !score.clear_type.is_empty() && score.clear_type != "Failed"
+                    }));
+                    SelectRowSnapshot {
+                        index: index as u32,
+                        title: row.display_title().to_string(),
+                        subtitle: row
+                            .chart
+                            .as_ref()
+                            .map(|chart| chart.subtitle.clone())
+                            .unwrap_or_default(),
+                        artist: row.display_artist().to_string(),
+                        difficulty_name: row
+                            .chart
+                            .as_ref()
+                            .map(|chart| chart.difficulty_name.clone())
+                            .unwrap_or_default(),
+                        play_level: row
+                            .chart
+                            .as_ref()
+                            .map(|chart| chart.play_level.clone())
+                            .unwrap_or_default(),
+                        table_level: row.table_level.clone(),
+                        total_notes: row.chart.as_ref().map(|chart| chart.total_notes).unwrap_or(0),
+                        initial_bpm: row
+                            .chart
+                            .as_ref()
+                            .map(|chart| chart.initial_bpm as f32)
+                            .unwrap_or(0.0),
+                        min_bpm: row
+                            .chart
+                            .as_ref()
+                            .map(|chart| chart.min_bpm as f32)
+                            .unwrap_or(0.0),
+                        max_bpm: row
+                            .chart
+                            .as_ref()
+                            .map(|chart| chart.max_bpm as f32)
+                            .unwrap_or(0.0),
+                        length_ms: row.chart.as_ref().map(|chart| chart.length_ms).unwrap_or(0),
+                        clear_type: row
+                            .best_score
+                            .as_ref()
+                            .map(|score| score.clear_type.clone())
+                            .unwrap_or_default(),
+                        ex_score: row.best_score.as_ref().map(|score| score.ex_score),
+                        max_combo: row.best_score.as_ref().map(|score| score.max_combo),
+                        gauge_value: row.best_score.as_ref().map(|score| score.gauge_value),
+                        miss_count: None,
+                        play_count,
+                        clear_count,
+                        replay_slots: row.replay_slots,
+                        has_long_notes: row
+                            .chart
+                            .as_ref()
+                            .is_some_and(|chart| chart.has_long_notes),
+                        has_mines: row.chart.as_ref().is_some_and(|chart| chart.has_mines),
+                        has_random: false,
+                        is_folder: false,
+                        kind: bmz_render::scene::SelectRowKind::Song,
+                        in_library: row.in_library(),
+                    }
+                }
                 SelectItem::Course(row) => SelectRowSnapshot {
                     index: index as u32,
                     title: row.title.clone(),
+                    subtitle: String::new(),
                     // Use the trophy names joined as "subtitle" so the artist
                     // slot shows e.g. "silvermedal / goldmedal".
                     artist: row.trophy_names.join(" / "),
@@ -4017,7 +4053,13 @@ fn select_snapshot_rows(
                     ex_score: None,
                     max_combo: None,
                     gauge_value: None,
+                    miss_count: None,
+                    play_count: 0,
+                    clear_count: 0,
                     replay_slots: [false; 4],
+                    has_long_notes: false,
+                    has_mines: false,
+                    has_random: false,
                     is_folder: false,
                     kind: bmz_render::scene::SelectRowKind::Course,
                     in_library: row.resolved_count > 0,
@@ -5116,6 +5158,8 @@ mod tests {
                 banner_file: String::new(),
                 backbmp_file: String::new(),
                 preview_file: String::new(),
+                has_long_notes: false,
+                has_mines: false,
             }),
             fallback_title: String::new(),
             fallback_artist: String::new(),

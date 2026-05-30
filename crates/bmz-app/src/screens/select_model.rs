@@ -1102,6 +1102,8 @@ mod tests {
                 banner_file: String::new(),
                 backbmp_file: String::new(),
                 preview_file: String::new(),
+                has_long_notes: false,
+                has_mines: false,
             }),
             fallback_title: String::new(),
             fallback_artist: String::new(),
