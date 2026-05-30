@@ -44,6 +44,10 @@ pub struct PlaySessionOptions {
     /// When set, overrides the gauge's starting value.  Used to carry the
     /// gauge between charts during a course.
     pub initial_gauge_value: Option<f32>,
+    /// Course judge constraint forwarded from CourseJudgeConstraint.
+    /// `NoGood` zeroes the good window, `NoGreat` zeroes great and good
+    /// windows; the next judge band kicks in immediately.
+    pub judge_constraint: bmz_core::course::CourseJudgeConstraint,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -80,6 +84,7 @@ impl Default for PlaySessionOptions {
             arrange_seed: None,
             arrange_pattern: None,
             initial_gauge_value: None,
+            judge_constraint: bmz_core::course::CourseJudgeConstraint::Normal,
         }
     }
 }
@@ -117,7 +122,24 @@ pub fn build_game_session_with_input_backend(
         &chart.timing_events,
     );
 
-    let base_judge_window = DEFAULT_JUDGE_WINDOW;
+    // Course judge constraints narrow the judge window so the corresponding
+    // judge band is unreachable: NoGood zeroes good_us, NoGreat zeroes both
+    // great_us and good_us.  Mirrors beatoraja JudgeManager's *JudgeWindowRate
+    // = 0 path.
+    let base_judge_window = {
+        let mut w = DEFAULT_JUDGE_WINDOW;
+        match options.judge_constraint {
+            bmz_core::course::CourseJudgeConstraint::Normal => {}
+            bmz_core::course::CourseJudgeConstraint::NoGood => {
+                w.good_us = 0;
+            }
+            bmz_core::course::CourseJudgeConstraint::NoGreat => {
+                w.great_us = 0;
+                w.good_us = 0;
+            }
+        }
+        w
+    };
 
     let mut gauge = GaugeState::new(
         gauge_type,

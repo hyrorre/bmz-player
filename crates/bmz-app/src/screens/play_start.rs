@@ -1,6 +1,7 @@
 use anyhow::Result;
 use bmz_core::course::{
-    CourseClassConstraint, CourseConstraints, CourseGaugeConstraint, CourseSpeedConstraint,
+    CourseClassConstraint, CourseConstraints, CourseGaugeConstraint, CourseJudgeConstraint,
+    CourseSpeedConstraint,
 };
 use bmz_core::time::TimeUs;
 use bmz_gameplay::input::backend::{InputBackend, NullInputBackend};
@@ -34,6 +35,9 @@ pub struct PlayStartOptions {
     /// Override the starting gauge value (used to carry the gauge between
     /// charts in a course).  None means use the gauge's default `init`.
     pub initial_gauge_value: Option<f32>,
+    /// Course judge constraint (e.g. NoGood / NoGreat).  Forwarded to the
+    /// JudgeEngine via PlaySessionOptions::judge_constraint.
+    pub judge_constraint: CourseJudgeConstraint,
 }
 
 pub struct StartedWinitPlaySession {
@@ -66,6 +70,7 @@ pub fn play_session_options_from_start(
         arrange_seed: start_options.arrange_seed,
         arrange_pattern: start_options.arrange_pattern,
         initial_gauge_value: start_options.initial_gauge_value,
+        judge_constraint: start_options.judge_constraint,
     }
 }
 
@@ -201,6 +206,10 @@ pub fn apply_course_constraints(options: &mut PlayStartOptions, constraints: &Co
     // NoSpeed: enforced at the input-handling layer in WinitApp::route_keyboard_input
     // by reading active_course.definition.constraints.speed.
     let _ = constraints.speed == CourseSpeedConstraint::NoSpeed;
+
+    // Judge constraints are applied at GameSession construction by narrowing
+    // the judge window inside play_session_options_from_start.
+    options.judge_constraint = constraints.judge;
 
     let allowed: &[ArrangeOption] = match constraints.class {
         CourseClassConstraint::None => return,

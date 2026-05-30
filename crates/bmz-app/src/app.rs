@@ -1831,6 +1831,7 @@ impl WinitApp {
             arrange_seed: replay_file.arrange_seed,
             arrange_pattern: replay_file.lane_shuffle_pattern.clone(),
             initial_gauge_value: None,
+            judge_constraint: bmz_core::course::CourseJudgeConstraint::Normal,
         };
         self.start_chart_with_options(chart_id, options);
         true
