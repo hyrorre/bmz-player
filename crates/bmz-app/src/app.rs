@@ -9,6 +9,7 @@ use bmz_chart::model::PlayableChart;
 use bmz_core::lane::KeyMode;
 use bmz_core::time::TimeUs;
 use bmz_gameplay::session::PlaySkinOffset;
+use bmz_gameplay::session::compute_frame_times;
 use bmz_render::assets::load_static_rgba_image;
 use bmz_render::plan::{
     PLAY_BACKBMP_TEXTURE, SELECT_BANNER_TEXTURE, SELECT_STAGE_TEXTURE, TextureId,
@@ -42,7 +43,10 @@ use crate::config::save::{save_app_config, save_profile_config};
 use crate::input::winit::physical_key_to_control;
 use crate::screens::course_session::{ActiveCourseSession, CourseEntryResult, CourseResultSummary};
 use crate::screens::play_finish::FinishedPlaySession;
-use crate::screens::play_loop::{PlayAdvanceOutcome, advance_running_play_session_until_result};
+use crate::screens::play_loop::{
+    PlayAdvanceOutcome, PlayEndingSkinTimers, advance_running_play_session_until_result,
+    refresh_play_ending_snapshot,
+};
 use crate::screens::play_snapshot::{
     BgaFrameCatalog, bga_texture_id, build_render_snapshot_with_target_and_bga_frames,
     display_bga_frame,
@@ -2344,7 +2348,7 @@ impl WinitApp {
 
     fn advance_active_play(&mut self) {
         if self.play_ending.is_some() {
-            self.update_play_ending_snapshot_timers();
+            self.update_play_ending_snapshot();
             return;
         }
         if self.pending_play_start.is_some() {
@@ -2406,7 +2410,7 @@ impl WinitApp {
                     full_combo_elapsed_at_finish_ms,
                     finished,
                 });
-                self.update_play_ending_snapshot_timers();
+                self.update_play_ending_snapshot();
             }
             Err(error) => {
                 tracing::error!(%error, "failed to advance play session");
@@ -2452,22 +2456,42 @@ impl WinitApp {
         snapshot.ready_elapsed_time = ready_elapsed_time;
     }
 
-    fn update_play_ending_snapshot_timers(&mut self) {
+    fn update_play_ending_snapshot(&mut self) {
         let Some(ending) = &self.play_ending else {
             return;
         };
         let play_elapsed_time = self.play_elapsed_time();
-        let Some(snapshot) = &mut self.last_play_snapshot else {
+        let ready_elapsed_time = self.play_ready_sound_started_at.map(elapsed_since);
+        let timers = PlayEndingSkinTimers {
+            play_elapsed_time,
+            ready_elapsed_time,
+            backbmp_background: self.play_backbmp_loaded,
+            failed_elapsed_ms: ending.failed.then_some(elapsed_since_ms(ending.started_at)),
+            music_end_elapsed_ms: (!ending.failed).then_some(elapsed_since_ms(ending.started_at)),
+            fadeout_elapsed_ms: ending.fadeout_started_at.map(elapsed_since_ms),
+        };
+
+        let Some(active_play) = &mut self.active_play else {
+            let Some(snapshot) = &mut self.last_play_snapshot else {
+                return;
+            };
+            snapshot.play_elapsed_time = timers.play_elapsed_time;
+            snapshot.ready_elapsed_time = timers.ready_elapsed_time;
+            snapshot.failed_elapsed_ms = timers.failed_elapsed_ms;
+            snapshot.music_end_elapsed_ms = timers.music_end_elapsed_ms;
+            snapshot.fadeout_elapsed_ms = timers.fadeout_elapsed_ms;
             return;
         };
-        snapshot.play_elapsed_time = play_elapsed_time;
-        snapshot.music_end_elapsed_ms =
-            (!ending.failed).then_some(elapsed_since_ms(ending.started_at));
-        snapshot.failed_elapsed_ms = ending.failed.then_some(elapsed_since_ms(ending.started_at));
-        snapshot.fadeout_elapsed_ms = ending.fadeout_started_at.map(elapsed_since_ms);
-        snapshot.full_combo_elapsed_ms = ending
-            .full_combo_elapsed_at_finish_ms
-            .map(|elapsed_ms| elapsed_ms.saturating_add(elapsed_since_ms(ending.started_at)));
+
+        let video_update_time = compute_frame_times(&active_play.running.session).render_now;
+        crate::video_bga::update_video_bga_frames(
+            &mut self.renderer,
+            &mut active_play.running,
+            video_update_time,
+        );
+
+        let snapshot = refresh_play_ending_snapshot(&mut active_play.running, timers);
+        self.last_play_snapshot = Some(snapshot);
     }
 
     /// `target_fps` (フォアグラウンド) / `frame_limit_in_background`

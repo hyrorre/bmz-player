@@ -1,7 +1,11 @@
 use anyhow::{Result, anyhow};
 use bmz_audio::backend::cpal::SharedAudioEngine;
 use bmz_audio::queue::AudioScheduler;
-use bmz_gameplay::session::{FrameOutput, GameSession, PlayState, advance_session_frame};
+use bmz_core::time::TimeUs;
+use bmz_gameplay::session::{
+    FrameOutput, GameSession, PlayState, advance_session_frame, apply_auto_key_release,
+    compute_frame_times, update_recent_inputs, update_recent_judgements,
+};
 use bmz_render::snapshot::RenderSnapshot;
 
 use crate::audio::RunningPlaySession;
@@ -167,19 +171,80 @@ pub fn advance_running_play_session_until_result(
     Ok(PlayAdvanceOutcome::Playing(frame))
 }
 
+/// `play_ending` 中に skin 側へ渡す壁時計ベースの timer 値。
+#[derive(Debug, Clone, Copy)]
+pub struct PlayEndingSkinTimers {
+    pub play_elapsed_time: TimeUs,
+    pub ready_elapsed_time: Option<TimeUs>,
+    pub backbmp_background: bool,
+    pub failed_elapsed_ms: Option<i32>,
+    pub music_end_elapsed_ms: Option<i32>,
+    pub fadeout_elapsed_ms: Option<i32>,
+}
+
+/// 終了演出中に gameplay を止めたまま、オーディオクロックに追従して描画 snapshot を更新する。
+pub fn refresh_play_ending_snapshot(
+    running: &mut RunningPlaySession,
+    timers: PlayEndingSkinTimers,
+) -> RenderSnapshot {
+    refresh_play_ending_snapshot_with_session(
+        &mut running.session,
+        running.best_ex_score,
+        running.best_ghost.as_deref(),
+        running.target_ex_score,
+        &running.bga_frames,
+        timers,
+    )
+}
+
+pub fn refresh_play_ending_snapshot_with_session(
+    session: &mut GameSession,
+    best_ex_score: Option<u32>,
+    best_ghost: Option<&[u8]>,
+    target_ex_score: Option<u32>,
+    bga_frames: &BgaFrameCatalog,
+    timers: PlayEndingSkinTimers,
+) -> RenderSnapshot {
+    let times = compute_frame_times(session);
+    apply_auto_key_release(session, times.audio_now);
+    update_recent_judgements(session, &[], times.render_now);
+    update_recent_inputs(session, &[], times.render_now);
+
+    let mut snapshot = build_render_snapshot_with_target_and_bga_frames(
+        session,
+        times.render_now,
+        &session.recent_judgements,
+        best_ex_score,
+        best_ghost,
+        target_ex_score,
+        bga_frames,
+    );
+    snapshot.play_elapsed_time = timers.play_elapsed_time;
+    snapshot.ready_elapsed_time = timers.ready_elapsed_time;
+    snapshot.backbmp_background = timers.backbmp_background;
+    snapshot.failed_elapsed_ms = timers.failed_elapsed_ms;
+    snapshot.music_end_elapsed_ms = timers.music_end_elapsed_ms;
+    snapshot.fadeout_elapsed_ms = timers.fadeout_elapsed_ms;
+    snapshot
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     use bmz_audio::backend::cpal::SharedAudioEngine;
+    use bmz_audio::clock::AudioClock;
     use bmz_audio::engine::AudioEngine;
     use bmz_audio::queue::{AudioScheduler, ScheduledSound};
     use bmz_chart::hash::compute_chart_identity;
     use bmz_chart::model::{ChartMetadata, NoteEvent, NoteKind, PlayableChart};
     use bmz_core::ids::NoteId;
+    use bmz_core::judge::Judge;
     use bmz_core::lane::Lane;
     use bmz_core::time::{ChartTick, TimeUs};
+    use bmz_gameplay::judge::model::JudgementEvent;
 
     use crate::config::profile_config::ProfileConfig;
     use crate::config::profile_config::ReplayConfig;
@@ -266,6 +331,108 @@ mod tests {
         assert_eq!(outcome.frame().state, PlayState::Finished);
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn refresh_play_ending_snapshot_advances_note_scroll_with_audio_clock() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+        session.hispeed = 1.0;
+        session.audio_clock = test_running_audio_clock(0);
+
+        let timers = PlayEndingSkinTimers {
+            play_elapsed_time: TimeUs(0),
+            ready_elapsed_time: None,
+            backbmp_background: false,
+            failed_elapsed_ms: None,
+            music_end_elapsed_ms: None,
+            fadeout_elapsed_ms: None,
+        };
+        let early = refresh_play_ending_snapshot_with_session(
+            &mut session,
+            None,
+            None,
+            None,
+            &BgaFrameCatalog::new(),
+            timers,
+        );
+        assert_eq!(early.visible_notes[Lane::Key1.index()][0].y, 0.5);
+
+        advance_test_audio_clock(&mut session, 750_000);
+        let later = refresh_play_ending_snapshot_with_session(
+            &mut session,
+            None,
+            None,
+            None,
+            &BgaFrameCatalog::new(),
+            timers,
+        );
+        assert_eq!(later.time, TimeUs(750_000));
+        assert_eq!(later.visible_notes[Lane::Key1.index()][0].y, 0.125);
+    }
+
+    #[test]
+    fn refresh_play_ending_snapshot_expires_old_judgements() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+        session.recent_judgements.push(JudgementEvent {
+            lane: Lane::Key1,
+            judge: Judge::PGreat,
+            side: bmz_core::judge::TimingSide::Fast,
+            delta: TimeUs(0),
+            time: TimeUs(0),
+            note_id: Some(NoteId(1)),
+        });
+        session.audio_clock = test_running_audio_clock(0);
+
+        let timers = PlayEndingSkinTimers {
+            play_elapsed_time: TimeUs(0),
+            ready_elapsed_time: None,
+            backbmp_background: false,
+            failed_elapsed_ms: None,
+            music_end_elapsed_ms: None,
+            fadeout_elapsed_ms: None,
+        };
+        let visible = refresh_play_ending_snapshot_with_session(
+            &mut session,
+            None,
+            None,
+            None,
+            &BgaFrameCatalog::new(),
+            timers,
+        );
+        assert_eq!(visible.recent_judgements.len(), 1);
+
+        advance_test_audio_clock(&mut session, 900_000);
+        let expired = refresh_play_ending_snapshot_with_session(
+            &mut session,
+            None,
+            None,
+            None,
+            &BgaFrameCatalog::new(),
+            timers,
+        );
+        assert!(expired.recent_judgements.is_empty());
+    }
+
+    fn test_running_audio_clock(elapsed_us: i64) -> AudioClock {
+        let sample_rate = 48_000;
+        let current_frame = Arc::new(AtomicU64::new(us_to_frames(elapsed_us, sample_rate)));
+        AudioClock::with_position(sample_rate, 0, 0, current_frame, true)
+    }
+
+    fn advance_test_audio_clock(session: &mut GameSession, elapsed_us: i64) {
+        let sample_rate = session.audio_clock.sample_rate;
+        session
+            .audio_clock
+            .current_frame
+            .store(us_to_frames(elapsed_us, sample_rate), Ordering::Relaxed);
+    }
+
+    fn us_to_frames(elapsed_us: i64, sample_rate: u32) -> u64 {
+        ((elapsed_us.max(0) as u128 * sample_rate as u128) / 1_000_000u128) as u64
     }
 
     fn chart() -> PlayableChart {
