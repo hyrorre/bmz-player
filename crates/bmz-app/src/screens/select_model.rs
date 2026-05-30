@@ -207,11 +207,13 @@ pub fn course_root_item() -> SelectItem {
     }
 }
 
-/// Loads all stored courses as `SelectItem::Course` entries, sorted by title.
+/// Loads manually-imported courses (not from a difficulty table) as `SelectItem::Course` entries.
+/// Table-sourced courses appear inside each table's folder via `table_level_folder_items`.
 pub fn load_select_items_for_courses(library_db: &LibraryDatabase) -> Result<Vec<SelectItem>> {
     let courses = library_db.list_courses()?;
     Ok(courses
         .into_iter()
+        .filter(|stored| !stored.source.starts_with("table:"))
         .map(|stored| {
             let resolved_count =
                 stored.definition.entries.iter().filter(|e| e.chart_id.is_some()).count();
@@ -227,7 +229,7 @@ pub fn load_select_items_for_courses(library_db: &LibraryDatabase) -> Result<Vec
 }
 
 /// Returns one folder item per level of the difficulty table, ordered by the
-/// table's `level_order`.  Each folder leads to `load_select_items_in_table_level`.
+/// table's `level_order`, followed by any courses imported from that table.
 pub fn table_level_folder_items(
     library_db: &LibraryDatabase,
     source_url: &str,
@@ -238,7 +240,7 @@ pub fn table_level_folder_items(
         return Ok(Vec::new());
     };
 
-    Ok(table
+    let mut items: Vec<SelectItem> = table
         .level_order
         .iter()
         .map(|level| SelectItem::Folder {
@@ -246,7 +248,25 @@ pub fn table_level_folder_items(
             name: format!("{}{}", table.symbol, level),
             kind: SelectRowKind::TableFolder,
         })
-        .collect())
+        .collect();
+
+    // Append courses that were imported from this table.
+    let table_source = format!("table:{source_url}");
+    if let Ok(courses) = library_db.list_courses_by_source(&table_source) {
+        for stored in courses {
+            let resolved_count =
+                stored.definition.entries.iter().filter(|e| e.chart_id.is_some()).count();
+            items.push(SelectItem::Course(SelectCourseRow {
+                course_id: stored.id,
+                title: stored.definition.title,
+                kind: stored.definition.kind,
+                entry_count: stored.definition.entries.len(),
+                resolved_count,
+            }));
+        }
+    }
+
+    Ok(items)
 }
 
 /// Loads charts that are stored in the local library and belong to the given

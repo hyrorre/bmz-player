@@ -3562,9 +3562,13 @@ fn load_items_for_stack(
         }
         None => {
             // ルートには曲フォルダに続けて、コースフォルダ・各難易度表フォルダを並べる。
+            // 難易度表由来のコースは各テーブルフォルダ内に表示されるため、
+            // 手動インポート分（source が "table:..." でないもの）がある場合のみ COURSE フォルダを表示する。
             let mut items = root_folder_items(&enabled_root_paths(&boot.app_config));
             match boot.library_db.list_courses() {
-                Ok(courses) if !courses.is_empty() => {
+                Ok(courses)
+                    if courses.iter().any(|c| !c.source.starts_with("table:")) =>
+                {
                     items.push(course_root_item());
                 }
                 Ok(_) => {}

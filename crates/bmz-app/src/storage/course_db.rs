@@ -106,6 +106,27 @@ pub(super) fn list_courses(conn: &Connection) -> Result<Vec<StoredCourse>> {
     Ok(courses)
 }
 
+pub(super) fn list_courses_by_source(conn: &Connection, source: &str) -> Result<Vec<StoredCourse>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, source, course_key, title, kind, class_constraint, speed_constraint,
+                judge_constraint, gauge_constraint, ln_constraint, source_constraints,
+                trophies_json, release
+         FROM courses
+         WHERE source = ?1
+         ORDER BY title COLLATE NOCASE, id",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![source], stored_course_from_row)?;
+
+    let mut courses = Vec::new();
+    for row in rows {
+        let mut course = row?;
+        course.definition.entries =
+            list_course_entries(conn, course.id)?.into_iter().map(|entry| entry.entry).collect();
+        courses.push(course);
+    }
+    Ok(courses)
+}
+
 pub(super) fn list_course_entries(
     conn: &Connection,
     course_id: i64,
