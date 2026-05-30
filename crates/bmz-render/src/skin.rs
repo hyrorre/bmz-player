@@ -4728,8 +4728,8 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         // 判定タイミングオフセット設定値 (NUMBER_JUDGETIMING=12)
         12 => Some(state.judge_timing_offset_ms as i64),
         // ベストスコア / ターゲットスコア (DB から供給、未取得時は None)
-        150 | 170 => state.best_ex_score.map(|s| s as i64),
-        121 | 151 => state.target_ex_score.map(|s| s as i64),
+        150 | 170 => state.best_ex_score.map(|s| projected_score_at_progress(s, state) as i64),
+        121 | 151 => state.target_ex_score.map(|s| projected_score_at_progress(s, state) as i64),
         122 | 123 | 135 | 136 | 157 | 158 => {
             state.target_ex_score.map(|target| score_rate_parts(target, state.total_notes)).map(
                 |parts| (if matches!(ref_id, 122 | 135 | 157) { parts.0 } else { parts.1 }) as i64,
@@ -4742,9 +4742,13 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         400 => state.judge_rank.map(|rank| rank as i64),
         154 => next_rank_diff(state),
         // NUMBER_DIFF_HIGHSCORE=152, NUMBER_DIFF_HIGHSCORE2=172 (符号付き、ex_score - best)
-        152 | 172 => state.best_ex_score.map(|best| state.ex_score as i64 - best as i64),
+        152 | 172 => state
+            .best_ex_score
+            .map(|best| state.ex_score as i64 - projected_score_at_progress(best, state) as i64),
         // NUMBER_DIFF_TARGETSCORE=153 (符号付き、ex_score - target)
-        153 => state.target_ex_score.map(|target| state.ex_score as i64 - target as i64),
+        153 => state.target_ex_score.map(|target| {
+            state.ex_score as i64 - projected_score_at_progress(target, state) as i64
+        }),
         // NUMBER_TARGET_MAXCOMBO=173
         173 => state.target_max_combo.map(|c| c as i64),
         // NUMBER_DIFF_MAXCOMBO=175 (符号付き、max_combo - target_max_combo)
@@ -4795,6 +4799,14 @@ fn next_rank_diff(state: SkinDrawState) -> Option<i64> {
         }
     }
     Some(max_score - ex_score)
+}
+
+fn projected_score_at_progress(final_score: u32, state: SkinDrawState) -> u32 {
+    if state.total_notes == 0 {
+        return final_score;
+    }
+    let past_notes = state.past_notes.min(state.total_notes);
+    ((final_score as u64 * past_notes as u64) / state.total_notes as u64) as u32
 }
 
 fn div_ceil(numerator: i64, denominator: i64) -> i64 {
@@ -10579,6 +10591,7 @@ mod tests {
             ex_score: 1888,
             max_combo: 777,
             total_notes: 1000,
+            past_notes: 1000,
             judge_counts: DisplayJudgeCounts {
                 pgreat: 777,
                 great: 334,
@@ -10646,6 +10659,26 @@ mod tests {
         assert_eq!(skin_state_number(152, bare), None);
         assert_eq!(skin_state_number(173, bare), None);
         assert_eq!(skin_state_number(410, bare), None);
+    }
+
+    #[test]
+    fn best_and_target_scores_follow_note_progress() {
+        let state = SkinDrawState {
+            ex_score: 450,
+            total_notes: 1000,
+            past_notes: 250,
+            best_ex_score: Some(1800),
+            target_ex_score: Some(1600),
+            ..SkinDrawState::default()
+        };
+
+        assert_eq!(skin_state_number(150, state), Some(450));
+        assert_eq!(skin_state_number(170, state), Some(450));
+        assert_eq!(skin_state_number(121, state), Some(400));
+        assert_eq!(skin_state_number(151, state), Some(400));
+        assert_eq!(skin_state_number(152, state), Some(0));
+        assert_eq!(skin_state_number(172, state), Some(0));
+        assert_eq!(skin_state_number(153, state), Some(50));
     }
 
     #[test]
