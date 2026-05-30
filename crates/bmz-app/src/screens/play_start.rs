@@ -31,6 +31,9 @@ pub struct PlayStartOptions {
     pub target: TargetOption,
     pub arrange_seed: Option<i64>,
     pub arrange_pattern: Option<Vec<u8>>,
+    /// Override the starting gauge value (used to carry the gauge between
+    /// charts in a course).  None means use the gauge's default `init`.
+    pub initial_gauge_value: Option<f32>,
 }
 
 pub struct StartedWinitPlaySession {
@@ -62,6 +65,7 @@ pub fn play_session_options_from_start(
         target: start_options.target,
         arrange_seed: start_options.arrange_seed,
         arrange_pattern: start_options.arrange_pattern,
+        initial_gauge_value: start_options.initial_gauge_value,
     }
 }
 

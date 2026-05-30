@@ -41,6 +41,9 @@ pub struct PlaySessionOptions {
     pub target: TargetOption,
     pub arrange_seed: Option<i64>,
     pub arrange_pattern: Option<Vec<u8>>,
+    /// When set, overrides the gauge's starting value.  Used to carry the
+    /// gauge between charts during a course.
+    pub initial_gauge_value: Option<f32>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -76,6 +79,7 @@ impl Default for PlaySessionOptions {
             target: TargetOption::None,
             arrange_seed: None,
             arrange_pattern: None,
+            initial_gauge_value: None,
         }
     }
 }
@@ -96,6 +100,7 @@ pub fn build_game_session_with_input_backend(
 ) -> GameSession {
     let gauge_type =
         options.gauge_override.unwrap_or_else(|| gauge_type_from_config(profile.play.gauge));
+    let initial_gauge_value = options.initial_gauge_value;
     let autoplay_enabled = profile.play.auto_play || options.autoplay;
     let replay_player = options.replay_player;
     let is_replay = replay_player.is_some();
@@ -114,12 +119,17 @@ pub fn build_game_session_with_input_backend(
 
     let base_judge_window = DEFAULT_JUDGE_WINDOW;
 
+    let mut gauge = GaugeState::new(
+        gauge_type,
+        gauge_total_for_chart(chart.metadata.total, chart.total_notes),
+        chart.total_notes,
+    );
+    if let Some(initial) = initial_gauge_value {
+        gauge.set_initial_value(initial);
+    }
+
     GameSession {
-        gauge: GaugeState::new(
-            gauge_type,
-            gauge_total_for_chart(chart.metadata.total, chart.total_notes),
-            chart.total_notes,
-        ),
+        gauge,
         judge: JudgeEngine::new(judge_window_for_rank(
             base_judge_window,
             judge_percent_at_time(chart.metadata.judge_rank, &chart.judge_rank_events, TimeUs(0)),

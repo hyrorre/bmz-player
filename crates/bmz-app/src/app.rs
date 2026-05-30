@@ -1439,6 +1439,9 @@ impl WinitApp {
         // Beatoraja behavior: if any chart in the course is Failed, the course
         // ends immediately and remaining charts are skipped.
         let failed = finished.result.clear_type == bmz_core::clear::ClearType::Failed;
+        // Carry the gauge value of this chart over to the next chart in the
+        // course (beatoraja keeps the gauge between songs).
+        let carried_gauge = finished.result.gauge_value;
         course.entry_results.push(CourseEntryResult { chart_id, finished });
         course.current_index += 1;
 
@@ -1450,6 +1453,7 @@ impl WinitApp {
         if !failed && let Some(next_chart_id) = next_chart_id {
             let mut options = self.play_start_options();
             apply_course_constraints(&mut options, &constraints);
+            options.initial_gauge_value = Some(carried_gauge);
             self.start_chart_with_options(next_chart_id, options);
             return;
         }
@@ -1814,6 +1818,7 @@ impl WinitApp {
             target: self.target_option,
             arrange_seed: replay_file.arrange_seed,
             arrange_pattern: replay_file.lane_shuffle_pattern.clone(),
+            initial_gauge_value: None,
         };
         self.start_chart_with_options(chart_id, options);
         true

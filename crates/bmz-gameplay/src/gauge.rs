@@ -71,6 +71,15 @@ impl GaugeState {
         Self { selected, original: selected, gauges }
     }
 
+    /// Overrides every gauge's starting value with `value`, clamped to
+    /// `[min, max]`.  Used to carry the gauge over between charts in a
+    /// course (beatoraja keeps the gauge between songs).
+    pub fn set_initial_value(&mut self, value: f32) {
+        for gauge in &mut self.gauges {
+            gauge.value = value.clamp(gauge.definition.min, gauge.definition.max);
+        }
+    }
+
     pub fn current(&self) -> &SingleGaugeState {
         self.gauges
             .iter()
