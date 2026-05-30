@@ -606,7 +606,6 @@ impl WinitApp {
                 window.request_redraw();
                 self.egui = Some(EguiLayer::new(&window, self.boot.profile_config.ui.show_fps));
                 self.window = Some(window);
-                self.update_window_title_for_scene(AppSceneKind::Select);
             }
             Err(error) => {
                 tracing::error!(%error, "failed to create window");
@@ -866,7 +865,9 @@ impl WinitApp {
         self.select_preview_playing = loaded;
         if loaded {
             self.stop_all_system_bgm();
-        } else if cache_key.is_some() || had_preview {
+        } else if had_preview {
+            // プレビュー再生中から離れたときだけ Select BGM に戻す。
+            // 起動直後やプレビュー未ロード時は fire_scene_transition_sounds が既に鳴らしている。
             self.play_system_sound(crate::system_sound::SoundType::Select);
         }
     }
@@ -2752,14 +2753,14 @@ impl WinitApp {
     }
 
     fn render_current_scene(&mut self) {
+        let scene = self.scene_snapshot();
+        let scene_kind = scene_kind(&scene);
+        self.update_window_title_for_scene(scene_kind);
         if matches!(self.view_state(), AppViewState::Select) {
             self.sync_select_stage_texture();
             self.sync_select_banner_texture();
             self.sync_select_preview_audio();
         }
-        let scene = self.scene_snapshot();
-        let scene_kind = scene_kind(&scene);
-        self.update_window_title_for_scene(scene_kind);
         match self.renderer.render_scene_status(scene) {
             Ok(RenderSurfaceStatus::Rendered)
             | Ok(RenderSurfaceStatus::SkippedNoSurface)
