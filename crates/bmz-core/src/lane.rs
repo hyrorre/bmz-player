@@ -15,6 +15,7 @@ pub enum Lane {
     Key6 = 6,
     Key7 = 7,
     // 2P (P2 side of DP): Key8=P2Key1..Key14=P2Key7, Scratch2=P2Scratch
+    // K9 モードでは Key8/Key9 は PMS Key8/Key9 として使う。
     Key8 = 8,
     Key9 = 9,
     Key10 = 10,
@@ -48,6 +49,21 @@ impl Lane {
     pub const fn index(self) -> usize {
         self as usize
     }
+
+    pub const fn from_pms_key(key: u8) -> Option<Self> {
+        match key {
+            1 => Some(Lane::Key1),
+            2 => Some(Lane::Key2),
+            3 => Some(Lane::Key3),
+            4 => Some(Lane::Key4),
+            5 => Some(Lane::Key5),
+            6 => Some(Lane::Key6),
+            7 => Some(Lane::Key7),
+            8 => Some(Lane::Key8),
+            9 => Some(Lane::Key9),
+            _ => None,
+        }
+    }
 }
 
 /// BMS キーモード。BMS ファイルのチャネル使用状況から判定する。
@@ -56,8 +72,44 @@ pub enum KeyMode {
     K5,
     #[default]
     K7,
+    /// PMS 9K (Pop'n)。Scratch なし。PMS 5K もスキン/入力は K9 に寄せる。
+    K9,
     K10,
     K14,
+}
+
+/// Beat 系譜面のキーレイアウト。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BeatKeyLayout {
+    Beat,
+}
+
+/// PMS 譜面のキーレイアウト variant。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PmsKeyLayout {
+    Standard,
+    BmeType,
+}
+
+/// import 時のキーレイアウト family。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChartKeyLayout {
+    Beat(BeatKeyLayout),
+    Pms(PmsKeyLayout),
+}
+
+impl ChartKeyLayout {
+    pub const fn beat() -> Self {
+        Self::Beat(BeatKeyLayout::Beat)
+    }
+
+    pub const fn pms(variant: PmsKeyLayout) -> Self {
+        Self::Pms(variant)
+    }
+
+    pub const fn is_pms(self) -> bool {
+        matches!(self, Self::Pms(_))
+    }
 }
 
 /// 5K 表示順レーン配列 (Scratch, Key1-5)
@@ -74,6 +126,19 @@ const ACTIVE_K7: [Lane; 8] = [
     Lane::Key5,
     Lane::Key6,
     Lane::Key7,
+];
+
+/// 9K PMS 表示順 (Scratch なし, Key1-9)
+const ACTIVE_K9: [Lane; 9] = [
+    Lane::Key1,
+    Lane::Key2,
+    Lane::Key3,
+    Lane::Key4,
+    Lane::Key5,
+    Lane::Key6,
+    Lane::Key7,
+    Lane::Key8,
+    Lane::Key9,
 ];
 
 /// 10K 表示順レーン配列 (P1Scratch, P1Key1-5, P2Key1-5, P2Scratch)
@@ -104,6 +169,7 @@ impl KeyMode {
         match self {
             KeyMode::K5 => &ACTIVE_K5,
             KeyMode::K7 => &ACTIVE_K7,
+            KeyMode::K9 => &ACTIVE_K9,
             KeyMode::K10 => &ACTIVE_K10,
             KeyMode::K14 => &ACTIVE_K14,
         }
@@ -113,24 +179,42 @@ impl KeyMode {
         match self {
             KeyMode::K5 => "5K",
             KeyMode::K7 => "7K",
+            KeyMode::K9 => "9K",
             KeyMode::K10 => "10K",
             KeyMode::K14 => "14K",
         }
     }
 
-    /// `as_str` の逆。"5K" / "7K" / "10K" / "14K" を受ける (大文字小文字無視)。
+    /// `as_str` の逆。"5K" / "7K" / "9K" / "10K" / "14K" を受ける (大文字小文字無視)。
     /// 未知値は `None`。
     pub fn from_str_opt(value: &str) -> Option<Self> {
         match value.trim().to_ascii_uppercase().as_str() {
             "5K" => Some(KeyMode::K5),
             "7K" => Some(KeyMode::K7),
+            "9K" => Some(KeyMode::K9),
             "10K" => Some(KeyMode::K10),
             "14K" => Some(KeyMode::K14),
             _ => None,
         }
     }
 
-    /// BMS オブジェクトのレーン集合からキーモードを推定する。
+    /// layout family に応じてキーモードを推定する。
+    pub fn detect_from_lanes_with_layout(
+        layout: ChartKeyLayout,
+        lanes: impl Iterator<Item = Lane>,
+    ) -> Self {
+        match layout {
+            ChartKeyLayout::Beat(_) => Self::detect_from_lanes(lanes),
+            ChartKeyLayout::Pms(_) => Self::detect_pms_from_lanes(lanes),
+        }
+    }
+
+    /// PMS 譜面用。5K/9K どちらもスキン/入力は K9 に寄せる。
+    pub fn detect_pms_from_lanes(_lanes: impl Iterator<Item = Lane>) -> Self {
+        KeyMode::K9
+    }
+
+    /// Beat 系 BMS オブジェクトのレーン集合からキーモードを推定する。
     pub fn detect_from_lanes(lanes: impl Iterator<Item = Lane>) -> Self {
         let mut has_p2_key = false;
         let mut has_p2_key67 = false;
@@ -160,5 +244,49 @@ impl KeyMode {
         } else {
             KeyMode::K5
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn k9_active_lanes_are_nine_keys_without_scratch() {
+        assert_eq!(KeyMode::K9.lane_count(), 9);
+        assert_eq!(KeyMode::K9.active_lanes(), &ACTIVE_K9);
+        assert_eq!(KeyMode::K9.as_str(), "9K");
+        assert_eq!(KeyMode::from_str_opt("9k"), Some(KeyMode::K9));
+    }
+
+    #[test]
+    fn pms_detect_always_returns_k9() {
+        let lanes = [Lane::Key1, Lane::Key2, Lane::Key3];
+        assert_eq!(KeyMode::detect_pms_from_lanes(lanes.into_iter()), KeyMode::K9,);
+    }
+
+    #[test]
+    fn beat_detect_does_not_classify_k9_lanes_as_k10() {
+        let lanes = [Lane::Key1, Lane::Key8, Lane::Key9];
+        assert_eq!(KeyMode::detect_from_lanes(lanes.into_iter()), KeyMode::K10);
+    }
+
+    #[test]
+    fn detect_with_pms_layout_uses_k9_even_for_five_keys() {
+        let lanes = [Lane::Key1, Lane::Key2, Lane::Key3, Lane::Key4, Lane::Key5];
+        assert_eq!(
+            KeyMode::detect_from_lanes_with_layout(
+                ChartKeyLayout::pms(PmsKeyLayout::Standard),
+                lanes.into_iter(),
+            ),
+            KeyMode::K9,
+        );
+    }
+
+    #[test]
+    fn lane_from_pms_key_maps_one_to_nine() {
+        assert_eq!(Lane::from_pms_key(1), Some(Lane::Key1));
+        assert_eq!(Lane::from_pms_key(9), Some(Lane::Key9));
+        assert_eq!(Lane::from_pms_key(0), None);
     }
 }
