@@ -117,8 +117,8 @@ pub async fn fetch_table_url(url: &str, library_db: &mut LibraryDatabase) -> Res
 
     // Save any courses embedded in the table header.
     let source = format!("table:{url}");
-    for course in &table.courses {
-        library_db.upsert_course(&source, course, now)?;
+    for (position, course) in table.courses.iter().enumerate() {
+        library_db.upsert_course(&source, course, position as i64, now)?;
     }
     if !table.courses.is_empty() {
         println!("  {} course(s) stored.", table.courses.len());

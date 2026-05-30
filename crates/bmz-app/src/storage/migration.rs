@@ -251,6 +251,16 @@ pub const LIBRARY_MIGRATIONS: &[Migration] = &[
             "ALTER TABLE charts ADD COLUMN gauge_total REAL;",
         ],
     },
+    Migration {
+        version: 8,
+        // Course list order should follow the difficulty table's JSON ordering
+        // (the order specified by the table author), not alphabetical by title.
+        // `source_position` is the index of the course within its source array.
+        statements: &[
+            "ALTER TABLE courses ADD COLUMN source_position INTEGER NOT NULL DEFAULT 0;",
+            "CREATE INDEX idx_courses_source_position ON courses(source, source_position);",
+        ],
+    },
 ];
 
 pub const SCORE_MIGRATIONS: &[Migration] = &[

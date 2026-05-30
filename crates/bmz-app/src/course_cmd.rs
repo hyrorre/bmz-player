@@ -37,8 +37,8 @@ fn import_courses(path: &Path) -> Result<()> {
             .and_then(|json| crate::course::parse_beatoraja_course_json(&source, &json))
         {
             Ok(courses) => {
-                for course in &courses {
-                    library_db.upsert_course(&source, course, now)?;
+                for (position, course) in courses.iter().enumerate() {
+                    library_db.upsert_course(&source, course, position as i64, now)?;
                 }
                 println!("Imported {} course(s) from {}", courses.len(), file.display());
                 imported_files += 1;

@@ -134,8 +134,10 @@ async fn fetch_configured_difficulty_tables(boot: &mut bootstrap::BootstrappedAp
                     tracing::warn!(%url, error = %e, "failed to store difficulty table");
                 }
                 let source = format!("table:{url}");
-                for course in &table.courses {
-                    if let Err(e) = boot.library_db.upsert_course(&source, course, now) {
+                for (position, course) in table.courses.iter().enumerate() {
+                    if let Err(e) =
+                        boot.library_db.upsert_course(&source, course, position as i64, now)
+                    {
                         tracing::warn!(%url, course = %course.title, error = %e, "failed to store table course");
                     }
                 }

@@ -610,9 +610,16 @@ impl LibraryDatabase {
         &mut self,
         source: &str,
         course: &bmz_core::course::CourseDefinition,
+        source_position: i64,
         imported_at: i64,
     ) -> Result<i64> {
-        super::course_db::upsert_course(&mut self.conn, source, course, imported_at)
+        super::course_db::upsert_course(
+            &mut self.conn,
+            source,
+            course,
+            source_position,
+            imported_at,
+        )
     }
 
     pub fn list_courses(&self) -> Result<Vec<StoredCourse>> {
