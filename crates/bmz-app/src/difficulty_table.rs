@@ -151,7 +151,27 @@ fn parse_courses_from_header(
     let Some(value) = course_json else {
         return Vec::new();
     };
-    let json_str = match serde_json::to_string(value) {
+
+    // Some tables (e.g. Stella) wrap the courses in an extra outer array: [[c1, c2, ...]]
+    // Flatten one level so that parse_beatoraja_course_json always receives [c1, c2, ...].
+    let flat = match value {
+        serde_json::Value::Array(outer) => {
+            let all_inner_arrays = outer.iter().all(|v| v.is_array());
+            if all_inner_arrays {
+                // Flatten [[c1, c2], [c3, c4]] → [c1, c2, c3, c4]
+                let flat: Vec<serde_json::Value> = outer
+                    .iter()
+                    .flat_map(|v| v.as_array().cloned().unwrap_or_default())
+                    .collect();
+                serde_json::Value::Array(flat)
+            } else {
+                value.clone()
+            }
+        }
+        other => other.clone(),
+    };
+
+    let json_str = match serde_json::to_string(&flat) {
         Ok(s) => s,
         Err(_) => return Vec::new(),
     };
@@ -163,6 +183,15 @@ fn parse_courses_from_header(
             Vec::new()
         }
     }
+}
+
+/// Test-visible wrapper for `parse_courses_from_header`.
+#[cfg(test)]
+pub fn parse_courses_from_header_for_test(
+    source_url: &str,
+    course_json: &Option<serde_json::Value>,
+) -> Vec<CourseDefinition> {
+    parse_courses_from_header(source_url, course_json)
 }
 
 fn find_bmstable_meta(html: &str) -> Option<String> {

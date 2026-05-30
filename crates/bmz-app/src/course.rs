@@ -13,8 +13,12 @@ enum BeatorajaCourseFile {
 struct BeatorajaCourse {
     #[serde(default)]
     name: String,
+    /// Standard beatoraja course format: array of song objects with title/md5/sha256.
     #[serde(default, alias = "song")]
     hash: Vec<BeatorajaCourseSong>,
+    /// Stella/table-embedded format: flat array of MD5 hex strings.
+    #[serde(default, rename = "md5")]
+    md5_list: Vec<String>,
     #[serde(default)]
     constraint: Vec<String>,
     #[serde(default)]
@@ -66,7 +70,41 @@ fn convert_beatoraja_course(
     index: usize,
     course: BeatorajaCourse,
 ) -> Result<CourseDefinition> {
-    if course.hash.is_empty() {
+    // Build entries from `hash` (object format) or fall back to `md5_list` (string format).
+    let entries: Vec<CourseEntry> = if !course.hash.is_empty() {
+        course
+            .hash
+            .into_iter()
+            .enumerate()
+            .map(|(entry_index, song)| CourseEntry {
+                title_hint: if song.title.trim().is_empty() {
+                    format!("course {}", entry_index + 1)
+                } else {
+                    song.title
+                },
+                md5: normalize_hash(song.md5, 32),
+                sha256: normalize_hash(song.sha256, 64),
+                chart_id: None,
+            })
+            .collect()
+    } else if !course.md5_list.is_empty() {
+        // Stella/table format: md5 is a flat array of hex strings.
+        course
+            .md5_list
+            .into_iter()
+            .enumerate()
+            .map(|(entry_index, md5)| CourseEntry {
+                title_hint: format!("course {}", entry_index + 1),
+                md5: normalize_hash(md5, 32),
+                sha256: None,
+                chart_id: None,
+            })
+            .collect()
+    } else {
+        bail!("course has no entries");
+    };
+
+    if entries.is_empty() {
         bail!("course has no entries");
     }
 
@@ -75,21 +113,6 @@ fn convert_beatoraja_course(
     let constraints =
         CourseConstraints::from_beatoraja_names(course.constraint.iter().map(String::as_str));
     let kind = CourseDefinition::derive_kind_from_constraints(&constraints);
-    let entries = course
-        .hash
-        .into_iter()
-        .enumerate()
-        .map(|(entry_index, song)| CourseEntry {
-            title_hint: if song.title.trim().is_empty() {
-                format!("course {}", entry_index + 1)
-            } else {
-                song.title
-            },
-            md5: normalize_hash(song.md5, 32),
-            sha256: normalize_hash(song.sha256, 64),
-            chart_id: None,
-        })
-        .collect();
     let trophies = course
         .trophy
         .into_iter()
@@ -164,5 +187,64 @@ mod tests {
             courses[0].entries[0].sha256.as_deref(),
             Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
         );
+    }
+
+    // Stella/table-embedded format: md5 is a flat array of hex strings.
+    #[test]
+    fn parses_course_with_flat_md5_array() {
+        let json = r#"[
+          {
+            "name": "Stella Skill Simulator 4th st0",
+            "constraint": ["grade_mirror", "gauge_lr2", "ln"],
+            "trophy": [
+              {"name": "silvermedal", "missrate": 5.0, "scorerate": 70.0},
+              {"name": "goldmedal",   "missrate": 2.5, "scorerate": 85.0}
+            ],
+            "md5": [
+              "349bc491ec40d5595412637d8a4c8d2e",
+              "baee0a1921fc5041b44d7d87c7b5548d",
+              "72b1ce4b2051bd2a396dfa11a2d785ee",
+              "3a1661a3eaafa13f976e1010d5b87ca0"
+            ]
+          }
+        ]"#;
+
+        let courses = parse_beatoraja_course_json("table:https://stellabms.xyz/st/header.json", json).unwrap();
+
+        assert_eq!(courses.len(), 1);
+        assert_eq!(courses[0].title, "Stella Skill Simulator 4th st0");
+        assert_eq!(courses[0].kind, CourseKind::Dan); // grade_mirror → Dan
+        assert_eq!(courses[0].entries.len(), 4);
+        assert_eq!(
+            courses[0].entries[0].md5.as_deref(),
+            Some("349bc491ec40d5595412637d8a4c8d2e")
+        );
+        assert!(courses[0].entries[0].sha256.is_none());
+        assert_eq!(courses[0].trophies[0].name, "silvermedal");
+        assert_eq!(courses[0].trophies[1].name, "goldmedal");
+    }
+
+    // Stella header format: course field is wrapped in an extra outer array [[...]].
+    #[test]
+    fn parse_courses_from_header_flattens_nested_array() {
+        use crate::difficulty_table::parse_courses_from_header_for_test;
+        let value = serde_json::json!([[
+            {
+                "name": "st0",
+                "constraint": ["grade_mirror", "gauge_lr2", "ln"],
+                "trophy": [],
+                "md5": ["349bc491ec40d5595412637d8a4c8d2e"]
+            },
+            {
+                "name": "st1",
+                "constraint": ["grade_mirror", "gauge_lr2", "ln"],
+                "trophy": [],
+                "md5": ["baee0a1921fc5041b44d7d87c7b5548d"]
+            }
+        ]]);
+        let courses = parse_courses_from_header_for_test("https://stellabms.xyz/st/header.json", &Some(value));
+        assert_eq!(courses.len(), 2);
+        assert_eq!(courses[0].title, "st0");
+        assert_eq!(courses[1].title, "st1");
     }
 }
