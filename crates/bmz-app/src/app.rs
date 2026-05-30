@@ -170,6 +170,10 @@ struct WinitApp {
     pending_decide: Option<DecideTransition>,
     pending_play_start: Option<PendingPlayStart>,
     pending_play_preload: Option<PendingPlayPreload>,
+    /// Decide 演出中に preload worker から受け取った結果を退避し、
+    /// `start_chart_with_options` で再利用するためのバッファ。
+    /// 既に裏で完了している譜面/音源ロードを main で再度同期実行するのを避ける。
+    preloaded_play_session: Option<PreloadedWinitPlaySession>,
     play_preload_generation: u64,
     play_ending: Option<PlayEndingTransition>,
     last_started_chart_id: Option<i64>,
@@ -484,6 +488,7 @@ impl WinitApp {
             pending_decide: None,
             pending_play_start: None,
             pending_play_preload: None,
+            preloaded_play_session: None,
             play_preload_generation: 0,
             play_ending: None,
             last_started_chart_id: None,
@@ -1588,6 +1593,8 @@ impl WinitApp {
     fn invalidate_play_preload(&mut self) {
         self.play_preload_generation = self.play_preload_generation.wrapping_add(1);
         self.pending_play_preload = None;
+        // 裏で完成して退避していた結果も無効化する (decide キャンセル / 譜面差し替え)。
+        self.preloaded_play_session = None;
     }
 
     /// select_items に持っている `ChartListItem.mode` から KeyMode を引く。
@@ -1641,16 +1648,37 @@ impl WinitApp {
         }
         // 新しいプレイの音声出力を開く前に、前曲の余韻再生を止めて出力を解放する。
         self.draining_audio = None;
-        match prepare_play_session_for_chart_with_winit_input(
-            &self.boot.library_db,
-            &self.boot.app_config,
-            &self.boot.profile_config,
-            chart_id,
-            options.clone(),
-        )
-        .and_then(|prepared| {
-            open_prepared_winit_play_session(&self.boot.score_db, &self.boot.app_config, prepared)
-        }) {
+
+        // Decide 演出中に preload worker が完成させていればそれを使う。
+        // 譜面/音源は別スレッドでロード済みなので、ここでは音声出力 open 等の軽量処理だけ。
+        // バッファが無ければ (course モード / preload 不発時) 従来通り main で同期ロードする。
+        let opened = match self.preloaded_play_session.take() {
+            Some(preloaded) => {
+                tracing::debug!(chart_id, "using buffered play preload");
+                let prepared =
+                    prepare_winit_play_session_from_preloaded(&self.boot.profile_config, preloaded);
+                open_prepared_winit_play_session(
+                    &self.boot.score_db,
+                    &self.boot.app_config,
+                    prepared,
+                )
+            }
+            None => prepare_play_session_for_chart_with_winit_input(
+                &self.boot.library_db,
+                &self.boot.app_config,
+                &self.boot.profile_config,
+                chart_id,
+                options.clone(),
+            )
+            .and_then(|prepared| {
+                open_prepared_winit_play_session(
+                    &self.boot.score_db,
+                    &self.boot.app_config,
+                    prepared,
+                )
+            }),
+        };
+        match opened {
             Ok(active_play) => {
                 self.enter_play_scene(chart_id, self.decide_snapshot_for_chart(chart_id));
                 self.install_active_play(active_play);
@@ -1732,81 +1760,70 @@ impl WinitApp {
     }
 
     fn poll_play_preload(&mut self) {
-        if self.pending_decide.is_some() && self.pending_play_start.is_none() {
-            return;
-        }
-        let Some(pending) = &self.pending_play_preload else {
-            return;
-        };
-        let result = match pending.rx.try_recv() {
-            Ok(result) => result,
-            Err(mpsc::TryRecvError::Empty) => return,
-            Err(mpsc::TryRecvError::Disconnected) => {
-                tracing::warn!(
-                    chart_id = pending.chart_id,
-                    generation = pending.generation,
-                    "play preload worker disconnected"
-                );
-                self.pending_play_preload = None;
-                return;
-            }
-        };
-        self.pending_play_preload = None;
-
-        let Some(play_start) = &self.pending_play_start else {
-            tracing::debug!(
-                chart_id = result.chart_id,
-                generation = result.generation,
-                "discarding play preload result with no pending play scene"
-            );
-            return;
-        };
-        if result.generation != self.play_preload_generation
-            || result.chart_id != play_start.chart_id
-        {
-            tracing::debug!(
-                chart_id = result.chart_id,
-                generation = result.generation,
-                current_generation = self.play_preload_generation,
-                pending_chart_id = play_start.chart_id,
-                "discarding stale play preload result"
-            );
-            return;
-        }
-
-        match result.result {
-            Ok(prepared) => {
-                let prepared =
-                    prepare_winit_play_session_from_preloaded(&self.boot.profile_config, prepared);
-                match open_prepared_winit_play_session(
-                    &self.boot.score_db,
-                    &self.boot.app_config,
-                    prepared,
-                ) {
-                    Ok(active_play) => {
-                        tracing::info!(
-                            chart_id = play_start.chart_id,
+        // 1) preload worker からの結果を受け取り (Decide 演出中でも受信して退避する)。
+        if let Some(pending) = &self.pending_play_preload {
+            match pending.rx.try_recv() {
+                Ok(result) => {
+                    self.pending_play_preload = None;
+                    if result.generation != self.play_preload_generation {
+                        tracing::debug!(
+                            chart_id = result.chart_id,
                             generation = result.generation,
-                            "play preload installed"
+                            current_generation = self.play_preload_generation,
+                            "discarding stale play preload result"
                         );
-                        self.install_active_play(active_play);
-                    }
-                    Err(error) => {
-                        tracing::error!(
-                            chart_id = play_start.chart_id,
-                            %error,
-                            "failed to open preloaded play audio"
-                        );
-                        self.abort_pending_play_start();
+                    } else {
+                        match result.result {
+                            Ok(prepared) => {
+                                tracing::info!(
+                                    chart_id = result.chart_id,
+                                    generation = result.generation,
+                                    "play preload ready (buffered)"
+                                );
+                                self.preloaded_play_session = Some(prepared);
+                            }
+                            Err(error) => {
+                                // preload 失敗時はバッファを空のままにし、
+                                // 後段 `start_chart_with_options` の同期 fallback で再試行する。
+                                tracing::error!(
+                                    chart_id = result.chart_id,
+                                    error,
+                                    "play preload failed (will fallback to sync load)"
+                                );
+                            }
+                        }
                     }
                 }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    tracing::warn!(
+                        chart_id = pending.chart_id,
+                        generation = pending.generation,
+                        "play preload worker disconnected"
+                    );
+                    self.pending_play_preload = None;
+                }
+            }
+        }
+
+        // 2) Play 入場が確定 (pending_play_start) しており、バッファに preload があれば install。
+        let Some(play_start) = self.pending_play_start.as_ref() else {
+            return;
+        };
+        let Some(prepared) = self.preloaded_play_session.take() else {
+            return;
+        };
+        let chart_id = play_start.chart_id;
+        let prepared =
+            prepare_winit_play_session_from_preloaded(&self.boot.profile_config, prepared);
+        match open_prepared_winit_play_session(&self.boot.score_db, &self.boot.app_config, prepared)
+        {
+            Ok(active_play) => {
+                tracing::info!(chart_id, "play preload installed");
+                self.install_active_play(active_play);
             }
             Err(error) => {
-                tracing::error!(
-                    chart_id = play_start.chart_id,
-                    error,
-                    "failed to preload play session"
-                );
+                tracing::error!(chart_id, %error, "failed to open preloaded play audio");
                 self.abort_pending_play_start();
             }
         }
