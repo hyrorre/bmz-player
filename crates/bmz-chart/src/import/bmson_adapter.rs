@@ -6,9 +6,11 @@
 use std::path::{Path, PathBuf};
 
 use bms_rs::bms::command::LnMode;
+use bms_rs::bms::command::channel::mapper::KeyLayoutBeat;
 use bms_rs::bms::model::Bms;
 use bms_rs::bmson::bmson_to_bms::BmsonToBmsWarning;
 use bms_rs::bmson::parse_bmson;
+use bmz_core::lane::ChartKeyLayout;
 
 use crate::hash::compute_chart_identity;
 
@@ -80,7 +82,11 @@ pub fn import_bmson_to_intermediate(
     converted.bms.sprite.back_bmp =
         resolve_backbmp_path(bmson.info.back_image.as_deref(), bmson.info.title_image.as_deref());
 
-    let mut intermediate = build_intermediate_from_bms(&converted.bms, warnings);
+    let mut intermediate = build_intermediate_from_bms::<KeyLayoutBeat>(
+        &converted.bms,
+        ChartKeyLayout::beat(),
+        warnings,
+    );
     intermediate.identity = identity;
     intermediate.metadata.suppress_bar_lines = suppress_bar_lines;
     Ok(intermediate)

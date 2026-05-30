@@ -17,6 +17,7 @@ use self::error::{ImportError, ImportWarning};
 enum ChartFileFormat {
     Bms,
     Bmson,
+    Pms,
 }
 
 #[derive(Debug, Clone)]
@@ -36,6 +37,9 @@ pub fn import_chart(
         ChartFileFormat::Bmson => bmson_adapter::import_bmson_to_intermediate(path, &mut warnings)?,
         ChartFileFormat::Bms => {
             bms_rs_adapter::import_bms_to_intermediate(path, random_seed, &mut warnings)?
+        }
+        ChartFileFormat::Pms => {
+            bms_rs_adapter::import_pms_to_intermediate(path, random_seed, &mut warnings)?
         }
     };
     let chart =
@@ -58,6 +62,7 @@ fn chart_file_format(path: &Path) -> ChartFileFormat {
         .map(|extension| extension.to_ascii_lowercase())
     {
         Some(ext) if ext == "bmson" => ChartFileFormat::Bmson,
+        Some(ext) if ext == "pms" => ChartFileFormat::Pms,
         _ => ChartFileFormat::Bms,
     }
 }

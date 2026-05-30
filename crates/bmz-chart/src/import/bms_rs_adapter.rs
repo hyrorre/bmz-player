@@ -20,15 +20,19 @@
 //!   - Dx/Ex: Landmine (P1/P2)
 //! - `#LNOBJ`: bms-rs 側で対応するノートが `NoteKind::Long` に書き換えられるため、
 //!   こちらでは追加処理せず通常の Long-channel として扱う。
+//! - `.pms`: `KeyLayoutPms` / `KeyLayoutPmsBmeType` による 9K SP (18K は drop + warning)
 //!
 //! 未対応 (warning に流すか drop):
 //! - JUDGE 変更イベント (#EXRANK / chA0)
 //! - TEXT / OPTION / VIDEO / SEEK 等
 //! - foot pedal / free zone
+//! - PMS 18K (2P 側ノート)
 
 use std::path::Path;
 
-use bms_rs::bms::command::channel::mapper::{KeyLayoutBeat, KeyLayoutMapper, KeyMapping};
+use bms_rs::bms::command::channel::mapper::{
+    KeyLayoutBeat, KeyLayoutMapper, KeyLayoutPms, KeyLayoutPmsBmeType,
+};
 use bms_rs::bms::command::channel::{Key, NoteKind as BmsNoteKind, PlayerSide};
 use bms_rs::bms::command::time::ObjTime;
 use bms_rs::bms::command::{JudgeLevel, LnMode};
@@ -36,7 +40,7 @@ use bms_rs::bms::model::Bms;
 use bms_rs::bms::rng::JavaRandom;
 use bms_rs::bms::{BmsOutput, BmsWarning, default_config_with_rng, parse_bms};
 use bmz_core::chart::ChartIdentity;
-use bmz_core::lane::{KeyMode, Lane};
+use bmz_core::lane::{ChartKeyLayout, KeyMode, Lane, PmsKeyLayout};
 use bmz_core::time::ChartTick;
 
 use crate::hash::compute_chart_identity;
@@ -57,14 +61,56 @@ pub fn import_bms_to_intermediate(
     random_seed: Option<u64>,
     warnings: &mut Vec<ImportWarning>,
 ) -> Result<IntermediateChart, ImportError> {
+    import_with_layout::<KeyLayoutBeat>(source_path, ChartKeyLayout::beat(), random_seed, warnings)
+}
+
+pub fn import_pms_to_intermediate(
+    source_path: &Path,
+    random_seed: Option<u64>,
+    warnings: &mut Vec<ImportWarning>,
+) -> Result<IntermediateChart, ImportError> {
+    let bytes = std::fs::read(source_path)
+        .map_err(|source| ImportError::Io { path: source_path.to_path_buf(), source })?;
+    let text = decode_bms_text(&bytes, warnings);
+    let (variant, conflict) = detect_pms_variant(&text);
+    if conflict {
+        warnings.push(ImportWarning::ParserDiagnostic {
+            code: "PmsLayoutConflict".to_string(),
+            message: "PMS standard (2P upper) and BME-type (1P 16-19) channels both used; \
+                      using standard layout"
+                .to_string(),
+        });
+    }
+    match variant {
+        PmsKeyLayout::Standard => import_with_layout::<KeyLayoutPms>(
+            source_path,
+            ChartKeyLayout::pms(PmsKeyLayout::Standard),
+            random_seed,
+            warnings,
+        ),
+        PmsKeyLayout::BmeType => import_with_layout::<KeyLayoutPmsBmeType>(
+            source_path,
+            ChartKeyLayout::pms(PmsKeyLayout::BmeType),
+            random_seed,
+            warnings,
+        ),
+    }
+}
+
+fn import_with_layout<T: KeyLayoutMapper>(
+    source_path: &Path,
+    layout: ChartKeyLayout,
+    random_seed: Option<u64>,
+    warnings: &mut Vec<ImportWarning>,
+) -> Result<IntermediateChart, ImportError> {
     let bytes = std::fs::read(source_path)
         .map_err(|source| ImportError::Io { path: source_path.to_path_buf(), source })?;
     let identity = compute_chart_identity(&bytes);
     let text = decode_bms_text(&bytes, warnings);
 
-    let BmsOutput { bms, warnings: bms_warnings } = parse_bms::<KeyLayoutBeat, _, _, _>(
+    let BmsOutput { bms, warnings: bms_warnings } = parse_bms::<T, _, _, _>(
         &text,
-        default_config_with_rng(JavaRandom::new(random_seed.unwrap_or(0) as i64)),
+        default_config_with_rng(JavaRandom::new(random_seed.unwrap_or(0) as i64)).key_mapper::<T>(),
     );
     for w in bms_warnings {
         if let Some(w) = map_bms_warning(&w) {
@@ -76,21 +122,22 @@ pub fn import_bms_to_intermediate(
         message: format!("{err:?}"),
     })?;
 
-    let mut intermediate = build_intermediate_from_bms(&bms, warnings);
+    let mut intermediate = build_intermediate_from_bms::<T>(&bms, layout, warnings);
     intermediate.identity = identity;
     Ok(intermediate)
 }
 
-pub(crate) fn build_intermediate_from_bms(
+pub(crate) fn build_intermediate_from_bms<T: KeyLayoutMapper>(
     bms: &Bms,
+    layout: ChartKeyLayout,
     warnings: &mut Vec<ImportWarning>,
 ) -> IntermediateChart {
     let metadata = build_metadata(bms);
     let mut resources = build_resources(bms);
     let mut objects = Vec::new();
 
-    push_note_objects(bms, &mut objects, warnings);
-    push_bgm_objects(bms, &mut objects);
+    push_note_objects::<T>(bms, layout, &mut objects, warnings);
+    push_bgm_objects::<T>(bms, &mut objects);
     push_bga_objects(bms, &mut objects);
     push_bpm_change_objects(bms, &mut objects);
     push_stop_objects(bms, &mut objects, &mut resources);
@@ -120,16 +167,75 @@ pub(crate) fn build_intermediate_from_bms(
         .iter()
         .any(|object| matches!(object.kind, IntermediateObjectKind::Bga { .. }));
 
-    intermediate.metadata.key_mode =
-        KeyMode::detect_from_lanes(intermediate.objects.iter().filter_map(|o| match o.kind {
+    intermediate.metadata.key_mode = KeyMode::detect_from_lanes_with_layout(
+        layout,
+        intermediate.objects.iter().filter_map(|o| match o.kind {
             IntermediateObjectKind::VisibleNote { lane, .. }
             | IntermediateObjectKind::InvisibleNote { lane, .. }
             | IntermediateObjectKind::LongChannelNote { lane, .. }
             | IntermediateObjectKind::MineNote { lane, .. } => Some(lane),
             _ => None,
-        }));
+        }),
+    );
 
     intermediate
+}
+
+/// `.pms` テキストから Standard / BME-type を判定する。
+pub(crate) fn detect_pms_variant(source: &str) -> (PmsKeyLayout, bool) {
+    let mut has_standard_upper = false;
+    let mut has_bme_upper = false;
+
+    for line in source.lines() {
+        let Some(channel) = message_channel_bytes(line) else {
+            continue;
+        };
+        if pms_standard_upper_channel(channel) {
+            has_standard_upper = true;
+        }
+        if pms_bme_upper_channel(channel) {
+            has_bme_upper = true;
+        }
+    }
+
+    let variant = if has_standard_upper {
+        PmsKeyLayout::Standard
+    } else if has_bme_upper {
+        PmsKeyLayout::BmeType
+    } else {
+        PmsKeyLayout::Standard
+    };
+    (variant, has_standard_upper && has_bme_upper)
+}
+
+fn message_channel_bytes(line: &str) -> Option<[u8; 2]> {
+    let line = line.trim();
+    if !line.starts_with('#') {
+        return None;
+    }
+    let body = line.strip_prefix('#')?;
+    let colon = body.find(':')?;
+    if colon < 2 {
+        return None;
+    }
+    let channel_str = &body[colon - 2..colon];
+    let bytes = channel_str.as_bytes();
+    if bytes.len() != 2 {
+        return None;
+    }
+    Some([bytes[0], bytes[1]])
+}
+
+/// PMS Standard: P2 K2–K5 (= PMS K6–K9) の各 note kind。
+fn pms_standard_upper_channel(channel: [u8; 2]) -> bool {
+    let first = channel[0].to_ascii_uppercase();
+    matches!(first, b'2' | b'3' | b'5' | b'6' | b'D' | b'E') && matches!(channel[1], b'2'..=b'5')
+}
+
+/// PMS BME-type: P1 ch 16–19 (= PMS K6–K9) の各 note kind。
+fn pms_bme_upper_channel(channel: [u8; 2]) -> bool {
+    let first = channel[0].to_ascii_uppercase();
+    matches!(first, b'1' | b'3' | b'5' | b'6' | b'D' | b'E') && matches!(channel[1], b'6'..=b'9')
 }
 
 fn build_metadata(bms: &Bms) -> IntermediateMetadata {
@@ -288,20 +394,23 @@ fn push_bga_keybound_objects(bms: &Bms, objects: &mut Vec<IntermediateObject>) {
     }
 }
 
-fn push_note_objects(
+fn push_note_objects<T: KeyLayoutMapper>(
     bms: &Bms,
+    layout: ChartKeyLayout,
     objects: &mut Vec<IntermediateObject>,
     warnings: &mut Vec<ImportWarning>,
 ) {
-    // `playables()` は Visible / Long のみを返すため Invisible / Landmine が抜け落ちる。
-    // BGM チャネルは KeyLayoutBeat にマップできないので、`from_channel_id` が None なら
-    // 通常ノーツ扱いせずに飛ばす（BGM は `push_bgm_objects` で別途処理する）。
     for note in bms.notes().all_notes() {
-        let Some(mapping) = KeyLayoutBeat::from_channel_id(note.channel_id) else {
+        let Some(mapping) = T::from_channel_id(note.channel_id) else {
             continue;
         };
-        let Some(lane) = map_lane(mapping.side(), mapping.key()) else {
-            warnings.push(ImportWarning::UnsupportedChannel { channel: note.channel_id.as_u16() });
+        let Some(lane) = map_lane(layout, mapping.side(), mapping.key()) else {
+            if layout.is_pms() && mapping.side() == PlayerSide::Player2 {
+                warnings.push(ImportWarning::UnsupportedPmsPlayerSide { side: 2 });
+            } else {
+                warnings
+                    .push(ImportWarning::UnsupportedChannel { channel: note.channel_id.as_u16() });
+            }
             continue;
         };
         let wav_id = note.wav_id.as_u16();
@@ -318,11 +427,9 @@ fn push_note_objects(
                 lane,
                 wav_key: (wav_id != 0).then_some(wav_id),
             },
-            BmsNoteKind::Landmine => IntermediateObjectKind::MineNote {
-                lane,
-                wav_key: None, // Mine の wav_id は damage 値であり鳴音 key ではない
-                damage: wav_id,
-            },
+            BmsNoteKind::Landmine => {
+                IntermediateObjectKind::MineNote { lane, wav_key: None, damage: wav_id }
+            }
         };
         objects.push(IntermediateObject {
             measure: track_of(note.offset),
@@ -333,8 +440,8 @@ fn push_note_objects(
     }
 }
 
-fn push_bgm_objects(bms: &Bms, objects: &mut Vec<IntermediateObject>) {
-    for note in bms.notes().bgms::<KeyLayoutBeat>() {
+fn push_bgm_objects<T: KeyLayoutMapper>(bms: &Bms, objects: &mut Vec<IntermediateObject>) {
+    for note in bms.notes().bgms::<T>() {
         objects.push(IntermediateObject {
             measure: track_of(note.offset),
             position_num: note.offset.numerator() as u32,
@@ -364,7 +471,6 @@ fn push_bga_objects(bms: &Bms, objects: &mut Vec<IntermediateObject>) {
 }
 
 fn push_bpm_change_objects(bms: &Bms, objects: &mut Vec<IntermediateObject>) {
-    // チャネル 03: 1byte 16進数で BPM を直接指定。
     for (time, bpm) in &bms.bpm.bpm_changes_u8 {
         objects.push(IntermediateObject {
             measure: track_of(*time),
@@ -373,7 +479,6 @@ fn push_bpm_change_objects(bms: &Bms, objects: &mut Vec<IntermediateObject>) {
             kind: IntermediateObjectKind::SetBpm { bpm: *bpm as f64 },
         });
     }
-    // チャネル 08: `#BPMxx` 定義を参照。
     for change in bms.bpm.bpm_changes.values() {
         objects.push(IntermediateObject {
             measure: track_of(change.time),
@@ -519,9 +624,6 @@ fn push_stop_objects(
     objects: &mut Vec<IntermediateObject>,
     resources: &mut IntermediateResources,
 ) {
-    // bms-rs は `#xxx09` を解決済みの StopObj として展開してくれるため、各 StopObj に
-    // synthetic key を割り当てて StopDef を生やしておく。`build_resources` が拾った
-    // `#STOPxx` 定義との key 衝突を避けるため、既存最大値+1 から採番する。
     let start_key = resources.stop_table.iter().map(|d| d.key).max().unwrap_or(0) + 1;
     for (key, stop) in (start_key..).zip(bms.stop.stops.values()) {
         resources.stop_table.push(StopDef { key, value: stop.duration.get() as u64 });
@@ -591,7 +693,14 @@ fn gcd(mut a: u32, mut b: u32) -> u32 {
     a
 }
 
-fn map_lane(side: PlayerSide, key: Key) -> Option<Lane> {
+fn map_lane(layout: ChartKeyLayout, side: PlayerSide, key: Key) -> Option<Lane> {
+    match layout {
+        ChartKeyLayout::Beat(_) => map_lane_beat(side, key),
+        ChartKeyLayout::Pms(_) => map_lane_pms(side, key),
+    }
+}
+
+fn map_lane_beat(side: PlayerSide, key: Key) -> Option<Lane> {
     match (side, key) {
         (PlayerSide::Player1, Key::Key(1)) => Some(Lane::Key1),
         (PlayerSide::Player1, Key::Key(2)) => Some(Lane::Key2),
@@ -613,8 +722,13 @@ fn map_lane(side: PlayerSide, key: Key) -> Option<Lane> {
     }
 }
 
-/// bms-rs の [`BmsWarning`] を `ImportWarning::ParserDiagnostic` に分類して写像する。
-/// `code` は `library_db.chart_import_warnings.code` に保存される安定識別子。
+fn map_lane_pms(side: PlayerSide, key: Key) -> Option<Lane> {
+    match (side, key) {
+        (PlayerSide::Player1, Key::Key(n)) => Lane::from_pms_key(n),
+        _ => None,
+    }
+}
+
 fn map_bms_warning(w: &BmsWarning) -> Option<ImportWarning> {
     use bms_rs::bms::parse::ParseWarning;
     use bms_rs::bms::parse::check_playing::{PlayingError, PlayingWarning};
@@ -656,4 +770,138 @@ fn map_bms_warning(w: &BmsWarning) -> Option<ImportWarning> {
         _ => ("BmsWarningOther", format!("{w:?}")),
     };
     Some(ImportWarning::ParserDiagnostic { code: code.to_string(), message })
+}
+
+#[cfg(test)]
+mod tests {
+    use bmz_core::lane::KeyMode;
+
+    use super::*;
+
+    const PMS_HEADER: &str = "\
+#TITLE PMS Test
+#ARTIST Tester
+#BPM 120
+#WAV01 key.wav
+";
+
+    fn pms_note_lines_standard() -> String {
+        let mut lines = String::from(PMS_HEADER);
+        for (i, channel) in
+            ["11", "12", "13", "14", "15", "22", "23", "24", "25"].into_iter().enumerate()
+        {
+            let measure = i + 1;
+            lines.push_str(&format!("#{measure:03}{channel}:01\n"));
+        }
+        lines
+    }
+
+    fn pms_note_lines_bme() -> String {
+        let mut lines = String::from(PMS_HEADER);
+        for (i, channel) in
+            ["11", "12", "13", "14", "15", "16", "17", "18", "19"].into_iter().enumerate()
+        {
+            let measure = i + 1;
+            lines.push_str(&format!("#{measure:03}{channel}:01\n"));
+        }
+        lines
+    }
+
+    fn import_pms_text(text: &str) -> IntermediateChart {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.pms");
+        std::fs::write(&path, text).unwrap();
+        std::fs::write(dir.path().join("key.wav"), b"wav").unwrap();
+        let mut warnings = Vec::new();
+        import_pms_to_intermediate(&path, None, &mut warnings).unwrap()
+    }
+
+    fn note_lanes(chart: &IntermediateChart) -> Vec<Lane> {
+        chart
+            .objects
+            .iter()
+            .filter_map(|object| match object.kind {
+                IntermediateObjectKind::VisibleNote { lane, .. } => Some(lane),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn detect_pms_variant_standard_from_p2_upper_channels() {
+        let (variant, conflict) = detect_pms_variant(&pms_note_lines_standard());
+        assert_eq!(variant, PmsKeyLayout::Standard);
+        assert!(!conflict);
+    }
+
+    #[test]
+    fn detect_pms_variant_bme_from_p1_upper_channels() {
+        let (variant, conflict) = detect_pms_variant(&pms_note_lines_bme());
+        assert_eq!(variant, PmsKeyLayout::BmeType);
+        assert!(!conflict);
+    }
+
+    #[test]
+    fn pms_standard_9k_maps_key1_through_key9() {
+        let chart = import_pms_text(&pms_note_lines_standard());
+        assert_eq!(chart.metadata.key_mode, KeyMode::K9);
+        let lanes = note_lanes(&chart);
+        assert_eq!(lanes.len(), 9);
+        for (expected, actual) in [
+            Lane::Key1,
+            Lane::Key2,
+            Lane::Key3,
+            Lane::Key4,
+            Lane::Key5,
+            Lane::Key6,
+            Lane::Key7,
+            Lane::Key8,
+            Lane::Key9,
+        ]
+        .into_iter()
+        .zip(lanes)
+        {
+            assert_eq!(expected, actual);
+        }
+    }
+
+    #[test]
+    fn pms_bme_9k_maps_key1_through_key9() {
+        let chart = import_pms_text(&pms_note_lines_bme());
+        assert_eq!(chart.metadata.key_mode, KeyMode::K9);
+        let lanes = note_lanes(&chart);
+        assert_eq!(lanes.len(), 9);
+        assert!(lanes.contains(&Lane::Key9));
+    }
+
+    #[test]
+    fn pms_5k_still_reports_k9_key_mode() {
+        let mut text = String::from(PMS_HEADER);
+        for (i, channel) in ["11", "12", "13", "14", "15"].into_iter().enumerate() {
+            let measure = i + 1;
+            text.push_str(&format!("#{measure:03}{channel}:01\n"));
+        }
+        let chart = import_pms_text(&text);
+        assert_eq!(chart.metadata.key_mode, KeyMode::K9);
+        assert_eq!(note_lanes(&chart).len(), 5);
+    }
+
+    #[test]
+    fn pms_18k_player2_notes_are_dropped_with_warning() {
+        let mut text = String::from(PMS_HEADER);
+        text.push_str("#00121:01\n");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.pms");
+        std::fs::write(&path, &text).unwrap();
+        std::fs::write(dir.path().join("key.wav"), b"wav").unwrap();
+        let mut warnings = Vec::new();
+        let chart = import_pms_to_intermediate(&path, None, &mut warnings).unwrap();
+        assert!(note_lanes(&chart).is_empty());
+        assert!(
+            warnings.iter().any(|warning| matches!(
+                warning,
+                ImportWarning::UnsupportedPmsPlayerSide { side: 2 }
+            ))
+        );
+    }
 }

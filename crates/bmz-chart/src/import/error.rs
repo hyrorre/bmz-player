@@ -50,6 +50,10 @@ pub enum ImportWarning {
     UnsupportedChannel {
         channel: u16,
     },
+    /// PMS 18K 等、現状未対応のプレイヤー側ノート。
+    UnsupportedPmsPlayerSide {
+        side: u8,
+    },
     MissingWavDefinition {
         key: u16,
     },
