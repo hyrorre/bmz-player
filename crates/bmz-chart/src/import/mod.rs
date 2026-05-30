@@ -441,6 +441,30 @@ mod tests {
     }
 
     #[test]
+    fn imports_bmson_title_image_fallback_to_backbmp() {
+        let json = r#"{
+            "version": "1.0.0",
+            "info": {
+                "title": "Title Image Song",
+                "artist": "Test",
+                "genre": "Test",
+                "level": 1,
+                "init_bpm": 120.0,
+                "judge_rank": 100.0,
+                "total": 100.0,
+                "resolution": 240,
+                "back_image": "",
+                "title_image": "_Back.png"
+            },
+            "sound_channels": []
+        }"#;
+        let path = write_temp_file_with_ext(json, "bmson");
+        let result = import_chart(&path, None, false).unwrap();
+        assert_eq!(result.chart.metadata.backbmp_file, "_Back.png");
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn imports_bmson_subartists_into_subartist() {
         let json = r#"{
             "version": "1.0.0",

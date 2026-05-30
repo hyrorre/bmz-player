@@ -232,9 +232,7 @@ pub fn rebuild_bms_timing_from_bmson(
                 ObjId::null()
             })
         });
-        if !bms.wav.wav_files.contains_key(&obj_id) {
-            bms.wav.wav_files.insert(obj_id, wav_path);
-        }
+        bms.wav.wav_files.entry(obj_id).or_insert(wav_path);
 
         for note in &sound_channel.notes {
             let time = pulse_to_obj_time(note.y.0, boundaries);
@@ -256,9 +254,7 @@ pub fn rebuild_bms_timing_from_bmson(
                 ObjId::null()
             })
         });
-        if !bms.wav.wav_files.contains_key(&obj_id) {
-            bms.wav.wav_files.insert(obj_id, wav_path);
-        }
+        bms.wav.wav_files.entry(obj_id).or_insert(wav_path);
 
         for mine_event in &mine_channel.notes {
             let time = pulse_to_obj_time(mine_event.y.0, boundaries);
@@ -279,9 +275,7 @@ pub fn rebuild_bms_timing_from_bmson(
                 ObjId::null()
             })
         });
-        if !bms.wav.wav_files.contains_key(&obj_id) {
-            bms.wav.wav_files.insert(obj_id, wav_path);
-        }
+        bms.wav.wav_files.entry(obj_id).or_insert(wav_path);
 
         for key_event in &key_channel.notes {
             let time = pulse_to_obj_time(key_event.y.0, boundaries);

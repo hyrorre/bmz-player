@@ -3,7 +3,7 @@
 //! bms-rs の `parse_bmson` + `Bms::from_bmson` で BMS 相当へ変換し、
 //! 既存の BMS 正規化パイプラインへ流す。
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use bms_rs::bms::command::LnMode;
 use bms_rs::bms::model::Bms;
@@ -31,10 +31,8 @@ pub fn import_bmson_to_intermediate(
         message: "BMSON file is not valid UTF-8".into(),
     })?;
 
-    let (parse_text, ln_type) = prepare_bmson_text(text).map_err(|message| ImportError::Parse {
-        path: source_path.to_path_buf(),
-        message,
-    })?;
+    let (parse_text, ln_type) = prepare_bmson_text(text)
+        .map_err(|message| ImportError::Parse { path: source_path.to_path_buf(), message })?;
 
     let output = parse_bmson(&parse_text);
     let parse_errors: Vec<_> = output.errors.iter().map(|error| format!("{error:?}")).collect();
@@ -79,6 +77,8 @@ pub fn import_bmson_to_intermediate(
 
     converted.bms.repr.ln_mode = ln_type;
     converted.bms.music_info.sub_artist = Some(join_subartists(&bmson.info.subartists));
+    converted.bms.sprite.back_bmp =
+        resolve_backbmp_path(bmson.info.back_image.as_deref(), bmson.info.title_image.as_deref());
 
     let mut intermediate = build_intermediate_from_bms(&converted.bms, warnings);
     intermediate.identity = identity;
@@ -114,16 +114,13 @@ fn push_bmson_to_bms_warning(warning: BmsonToBmsWarning, warnings: &mut Vec<Impo
 fn prepare_bmson_text(text: &str) -> Result<(String, LnMode), String> {
     let mut value: serde_json::Value =
         serde_json::from_str(text).map_err(|err| format!("invalid BMSON JSON: {err}"))?;
-    let ln_type = value
-        .pointer("/info/ln_type")
-        .map(parse_ln_type_json)
-        .unwrap_or_default();
+    let ln_type = value.pointer("/info/ln_type").map(parse_ln_type_json).unwrap_or_default();
     if let Some(info) = value.get_mut("info").and_then(serde_json::Value::as_object_mut) {
         info.remove("ln_type");
     }
     strip_integer_ln_type_fields(&mut value);
-    let sanitized =
-        serde_json::to_string(&value).map_err(|err| format!("failed to serialize BMSON JSON: {err}"))?;
+    let sanitized = serde_json::to_string(&value)
+        .map_err(|err| format!("failed to serialize BMSON JSON: {err}"))?;
     Ok((sanitized, ln_type))
 }
 
@@ -134,6 +131,14 @@ fn join_subartists(subartists: &[std::borrow::Cow<'_, str>]) -> String {
         .filter(|entry| !entry.is_empty())
         .collect::<Vec<_>>()
         .join(" / ")
+}
+
+fn resolve_backbmp_path(back_image: Option<&str>, title_image: Option<&str>) -> Option<PathBuf> {
+    back_image
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .or_else(|| title_image.map(str::trim).filter(|path| !path.is_empty()))
+        .map(PathBuf::from)
 }
 
 fn parse_ln_type_json(value: &serde_json::Value) -> LnMode {
@@ -177,6 +182,26 @@ mod tests {
     use super::*;
     use crate::model::LongNoteMode;
     use bms_rs::bmson::parse_bmson;
+
+    #[test]
+    fn resolve_backbmp_path_prefers_back_image() {
+        assert_eq!(
+            resolve_backbmp_path(Some("back.png"), Some("title.png")).as_deref(),
+            Some(Path::new("back.png"))
+        );
+    }
+
+    #[test]
+    fn resolve_backbmp_path_falls_back_to_title_image() {
+        assert_eq!(
+            resolve_backbmp_path(Some(""), Some("_Back.png")).as_deref(),
+            Some(Path::new("_Back.png"))
+        );
+        assert_eq!(
+            resolve_backbmp_path(None, Some("_Back.png")).as_deref(),
+            Some(Path::new("_Back.png"))
+        );
+    }
 
     #[test]
     fn join_subartists_joins_all_entries() {
