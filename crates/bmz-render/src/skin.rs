@@ -5257,7 +5257,9 @@ fn select_row_bar_text_index(row: &SelectRowSnapshot) -> usize {
         SelectRowKind::Song => 2,
         SelectRowKind::Folder => 4,
         SelectRowKind::TableFolder => 6,
-        SelectRowKind::Course => 6,
+        // Course rows display the course title in the same slot as a song title
+        // (text index 2), not the folder slot (6).
+        SelectRowKind::Course => 2,
     }
 }
 
