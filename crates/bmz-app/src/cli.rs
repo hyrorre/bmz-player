@@ -3,6 +3,7 @@ use anyhow::{Context, Result, bail};
 
 pub const BOOT_PLAY_SAMPLE_ARG: &str = "--boot-play-sample";
 pub const AUTOPLAY_ON_START_ARG: &str = "--autoplay-on-start";
+pub const AUTOPLAY_SHORT_ARG: &str = "-a";
 pub const SMOKE_EXIT_AFTER_FRAMES_ARG: &str = "--smoke-exit-after-frames";
 pub const SMOKE_EXIT_ON_RESULT_ARG: &str = "--smoke-exit-on-result";
 pub const BOOT_REPLAY_ARG: &str = "--boot-replay";
@@ -111,10 +112,12 @@ where
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AppOptions {
     pub boot_play_sample: bool,
+    /// beatoraja 互換: 譜面ファイル PATH を指定して起動時プレイ。
+    pub boot_play_path: Option<String>,
     pub autoplay_on_start: bool,
     pub smoke_exit_after_frames: Option<u32>,
     pub smoke_exit_on_result: bool,
-    /// `--boot-replay <SLOT>` で指定された 0-based のスロット index。
+    /// `--boot-replay <SLOT>` / `-r1..4` で指定された 0-based のスロット index。
     pub boot_replay_slot: Option<u8>,
     /// `--renderer <backend>` で指定されたレンダラーバックエンド。
     pub renderer: Option<RendererBackend>,
@@ -146,7 +149,7 @@ impl AppOptions {
 
             match arg {
                 BOOT_PLAY_SAMPLE_ARG => options.boot_play_sample = true,
-                AUTOPLAY_ON_START_ARG => options.autoplay_on_start = true,
+                AUTOPLAY_ON_START_ARG | AUTOPLAY_SHORT_ARG => options.autoplay_on_start = true,
                 SMOKE_EXIT_ON_RESULT_ARG => options.smoke_exit_on_result = true,
                 "--help" | "-h" => {}
                 SMOKE_EXIT_AFTER_FRAMES_ARG => {
@@ -168,7 +171,11 @@ impl AppOptions {
                     };
                     options.renderer = Some(parse_renderer_backend(value.as_ref())?);
                 }
-                _ => bail!("unknown argument: {arg}"),
+                _ if let Some(slot) = parse_beatoraja_replay_flag(arg) => {
+                    options.boot_replay_slot = Some(slot);
+                }
+                _ if arg.starts_with('-') => bail!("unknown argument: {arg}"),
+                _ => options.boot_play_path = Some(arg.to_string()),
             }
         }
 
@@ -185,7 +192,7 @@ where
 }
 
 pub fn app_help_text() -> &'static str {
-    "bmz-app\n\nUsage:\n  bmz-app [OPTIONS]\n  bmz-app table <SUBCOMMAND>\n  bmz-app songs <SUBCOMMAND>\n  bmz-app course <SUBCOMMAND>\n\nOptions:\n  --boot-play-sample              Start the bundled sample chart on boot\n  --autoplay-on-start             Enable autoplay for started charts\n  --boot-replay <1..4>            Start the bundled sample chart in replay mode using slot N\n  --smoke-exit-after-frames <N>   Exit after N rendered frames, clamped to 1 or more\n  --smoke-exit-on-result          Exit when the app reaches the result screen\n  --renderer <backend>            wgpu renderer backend (vulkan, metal, dx12, gl, auto)\n  -h, --help                      Print this help\n\nTable subcommands:\n  table add <URL>       Add a difficulty table source and fetch it\n  table list            List all stored difficulty tables\n  table fetch [URL]     Fetch/update configured tables, or a single URL\n\nSongs subcommands:\n  songs add <PATH> [--no-recursive] [--disabled]   Add a song root directory\n  songs list                                        List configured song roots\n  songs load [PATH|NAME]                            Scan song roots (incremental)\n  songs reload [PATH|NAME]                          Force rescan song roots\n\nCourse subcommands:\n  course import <PATH>   Import beatoraja course JSON from a file or directory\n  course list            List stored courses\n\nExamples:\n  cargo run -p bmz-app -- --boot-play-sample --smoke-exit-after-frames 3\n  cargo run -p bmz-app -- --boot-play-sample --boot-replay 1 --smoke-exit-on-result\n  cargo run -p bmz-app -- table add https://example.com/table.html\n  cargo run -p bmz-app -- table list\n  cargo run -p bmz-app -- table fetch https://example.com/table.html\n  cargo run -p bmz-app -- songs add /path/to/bms\n  cargo run -p bmz-app -- songs list\n  cargo run -p bmz-app -- songs load\n  cargo run -p bmz-app -- songs reload my-bms-folder\n  cargo run -p bmz-app -- course import /path/to/course.json\n  cargo run -p bmz-app -- course list"
+    "bmz-app\n\nUsage:\n  bmz-app [OPTIONS] [PATH]\n  bmz-app table <SUBCOMMAND>\n  bmz-app songs <SUBCOMMAND>\n  bmz-app course <SUBCOMMAND>\n\nOptions:\n  [PATH]                          Start the chart at PATH (beatoraja-style alias)\n  -a                              Enable autoplay for the boot chart (alias of --autoplay-on-start)\n  -r1 | -r2 | -r3 | -r4           Start replay slot 1..4 for the boot chart\n  --boot-play-sample              Start the bundled sample chart on boot\n  --autoplay-on-start             Enable autoplay for started charts\n  --boot-replay <1..4>            Start replay slot N for the boot chart\n  --smoke-exit-after-frames <N>   Exit after N rendered frames, clamped to 1 or more\n  --smoke-exit-on-result          Exit when the app reaches the result screen\n  --renderer <backend>            wgpu renderer backend (vulkan, metal, dx12, gl, auto)\n  -h, --help                      Print this help\n\nTable subcommands:\n  table add <URL>       Add a difficulty table source and fetch it\n  table list            List all stored difficulty tables\n  table fetch [URL]     Fetch/update configured tables, or a single URL\n\nSongs subcommands:\n  songs add <PATH> [--no-recursive] [--disabled]   Add a song root directory\n  songs list                                        List configured song roots\n  songs load [PATH|NAME]                            Scan song roots (incremental)\n  songs reload [PATH|NAME]                          Force rescan song roots\n\nCourse subcommands:\n  course import <PATH>   Import beatoraja course JSON from a file or directory\n  course list            List stored courses\n\nExamples:\n  cargo run -p bmz-app -- /path/to/chart.bms\n  cargo run -p bmz-app -- -a /path/to/chart.bms\n  cargo run -p bmz-app -- -r2 /path/to/chart.bms\n  cargo run -p bmz-app -- --boot-play-sample --smoke-exit-after-frames 3\n  cargo run -p bmz-app -- --boot-play-sample --boot-replay 1 --smoke-exit-on-result\n  cargo run -p bmz-app -- table add https://example.com/table.html\n  cargo run -p bmz-app -- table list\n  cargo run -p bmz-app -- table fetch https://example.com/table.html\n  cargo run -p bmz-app -- songs add /path/to/bms\n  cargo run -p bmz-app -- songs list\n  cargo run -p bmz-app -- songs load\n  cargo run -p bmz-app -- songs reload my-bms-folder\n  cargo run -p bmz-app -- course import /path/to/course.json\n  cargo run -p bmz-app -- course list"
 }
 
 fn parse_smoke_exit_after_frames_value(value: &str) -> Result<u32> {
@@ -213,6 +220,18 @@ fn parse_boot_replay_slot(value: &str) -> Result<u8> {
     Ok(n - 1)
 }
 
+/// beatoraja 互換の `-r1`..`-r4` を 0-based スロット index に変換する。
+fn parse_beatoraja_replay_flag(arg: &str) -> Option<u8> {
+    let rest = arg.strip_prefix('-')?;
+    match rest {
+        "r1" => Some(0),
+        "r2" => Some(1),
+        "r3" => Some(2),
+        "r4" => Some(3),
+        _ => None,
+    }
+}
+
 fn parse_renderer_backend(value: &str) -> Result<RendererBackend> {
     match value.trim().to_lowercase().as_str() {
         "auto" => Ok(RendererBackend::Auto),
@@ -229,6 +248,38 @@ fn parse_renderer_backend(value: &str) -> Result<RendererBackend> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn app_options_parse_beatoraja_style_boot_path() {
+        let options = AppOptions::parse_args(["/music/song.bms"]).unwrap();
+        assert_eq!(options.boot_play_path.as_deref(), Some("/music/song.bms"));
+        assert!(!options.autoplay_on_start);
+        assert_eq!(options.boot_replay_slot, None);
+
+        let options = AppOptions::parse_args(["-a", "/music/song.bms"]).unwrap();
+        assert!(options.autoplay_on_start);
+        assert_eq!(options.boot_play_path.as_deref(), Some("/music/song.bms"));
+
+        let options = AppOptions::parse_args(["-r3", "/music/song.bms"]).unwrap();
+        assert_eq!(options.boot_replay_slot, Some(2));
+        assert_eq!(options.boot_play_path.as_deref(), Some("/music/song.bms"));
+
+        let options =
+            AppOptions::parse_args(["--renderer", "vulkan", "-a", "-r1", "/music/song.bms"])
+                .unwrap();
+        assert_eq!(options.renderer, Some(RendererBackend::Vulkan));
+        assert!(options.autoplay_on_start);
+        assert_eq!(options.boot_replay_slot, Some(0));
+        assert_eq!(options.boot_play_path.as_deref(), Some("/music/song.bms"));
+    }
+
+    #[test]
+    fn parse_beatoraja_replay_flag_maps_slots() {
+        assert_eq!(parse_beatoraja_replay_flag("-r1"), Some(0));
+        assert_eq!(parse_beatoraja_replay_flag("-r4"), Some(3));
+        assert_eq!(parse_beatoraja_replay_flag("-a"), None);
+        assert_eq!(parse_beatoraja_replay_flag("-r5"), None);
+    }
 
     #[test]
     fn app_options_parse_flags() {

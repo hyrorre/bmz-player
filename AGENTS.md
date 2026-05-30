@@ -114,17 +114,28 @@ cargo run -p bmz-app -- songs list
 
 対応済みCLI引数 / サブコマンド:
 
-- `--boot-play-sample`
-- `--autoplay-on-start`
-- `--boot-replay <1..4>`
-- `--boot-replay=<1..4>`
-- `--smoke-exit-after-frames <N>`
-- `--smoke-exit-after-frames=<N>`
+起動時プレイ:
+
+- `[PATH]` — 譜面 PATH を通常プレイで起動（ファイル不存在 / 未登録なら通常起動）
+- `-a` / `--autoplay-on-start` — 起動譜面をオートプレイ
+- `-r1` / `-r2` / `-r3` / `-r4` / `--boot-replay <1..4>` / `--boot-replay=<1..4>` — リプレイスロット指定
+- `--boot-play-sample` — 同梱サンプル譜面で起動
+
+その他:
+
+- `--smoke-exit-after-frames <N>` / `--smoke-exit-after-frames=<N>`
 - `--smoke-exit-on-result`
-- `-h`, `--help`
+- `--renderer <backend>` (`vulkan`, `metal`, `dx12`, `gl`, `auto`)
+- `-h` / `--help`
+
+`table`:
+
 - `table add <URL>`
 - `table list`
-- `table fetch [URL]`
+- `table fetch` / `table fetch <URL>`
+
+`songs`:
+
 - `songs add <PATH> [--no-recursive] [--disabled]`
 - `songs list`
 - `songs load [PATH|NAME]`

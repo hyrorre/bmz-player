@@ -184,6 +184,27 @@ impl LibraryDatabase {
             .map_err(Into::into)
     }
 
+    /// Returns the chart id linked to a chart file path, trying common path normalizations.
+    pub fn chart_id_by_chart_file_path(&self, path: &Path) -> Result<Option<i64>> {
+        for candidate in chart_file_path_candidates(path) {
+            let Some(chart_file_id) = self.chart_file_id_by_path(Path::new(&candidate))? else {
+                continue;
+            };
+            let chart_id = self
+                .conn
+                .query_row(
+                    "SELECT chart_id FROM chart_file_links WHERE chart_file_id = ?1 LIMIT 1",
+                    params![chart_file_id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .optional()?;
+            if chart_id.is_some() {
+                return Ok(chart_id);
+            }
+        }
+        Ok(None)
+    }
+
     /// トランザクションを管理せずにインポート警告を置き換える。
     /// 戻り値は実際に挿入した（重複排除後の）警告行数。
     pub fn write_import_warnings(
@@ -916,6 +937,22 @@ fn path_to_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
+fn chart_file_path_candidates(path: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut push = |value: String| {
+        if !value.is_empty() && !out.contains(&value) {
+            out.push(value);
+        }
+    };
+    push(path_to_string(path));
+    push(to_folder_key(&path_to_string(path)));
+    if let Ok(canonical) = path.canonicalize() {
+        push(path_to_string(&canonical));
+        push(to_folder_key(&path_to_string(&canonical)));
+    }
+    out
+}
+
 /// `charts.folder_path` はスラッシュ `/` を正準とする。
 /// Windows のバックスラッシュ区切りをスラッシュに変換する。
 fn to_folder_key(path: &str) -> String {
@@ -1209,6 +1246,31 @@ mod tests {
             Some("/songs/song.bms".to_string())
         );
         assert_eq!(db.primary_chart_file_path(chart_id + 1).unwrap(), None);
+    }
+
+    #[test]
+    fn chart_id_by_chart_file_path_resolves_linked_chart() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase::from_connection(conn);
+        let chart = chart("boot");
+        let chart_id = db
+            .upsert_chart_import(&ChartImportRecord {
+                root_id: None,
+                file_path: Path::new("/songs/boot.bms"),
+                file_size: 1,
+                modified_at: 1,
+                scanned_at: 1,
+                chart: &chart,
+            })
+            .unwrap();
+
+        assert_eq!(
+            db.chart_id_by_chart_file_path(Path::new("/songs/boot.bms")).unwrap(),
+            Some(chart_id)
+        );
+        assert_eq!(db.chart_id_by_chart_file_path(Path::new("/missing.bms")).unwrap(), None);
     }
 
     #[test]

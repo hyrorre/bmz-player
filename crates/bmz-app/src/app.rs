@@ -30,7 +30,7 @@ use crate::audio::AppAudioOutput;
 use crate::bootstrap::{self, BootstrappedApp};
 use crate::chart_preview::SelectChartPreview;
 use crate::cli::{
-    AUTOPLAY_ON_START_ARG, AppOptions, BOOT_PLAY_SAMPLE_ARG, SMOKE_EXIT_AFTER_FRAMES_ARG,
+    AUTOPLAY_ON_START_ARG, AppOptions, SMOKE_EXIT_AFTER_FRAMES_ARG,
     SMOKE_EXIT_ON_RESULT_ARG,
 };
 use crate::config::app_config::{PathEntry, WindowMode};
@@ -348,10 +348,7 @@ impl WinitApp {
 
         let folder_stack = initial_folder_stack(&boot.app_config);
         let select_items = load_items_for_stack(&boot, &folder_stack);
-        let boot_sample_chart_id = options
-            .boot_play_sample
-            .then(|| boot.library_db.chart_id_by_title(SAMPLE_PLAYABLE_TITLE).ok().flatten())
-            .flatten();
+        let boot_chart_id = resolve_boot_chart_id(&boot.library_db, &options);
         log_startup_options(&options);
 
         let assist_option = if options.autoplay_on_start || boot.profile_config.play.auto_play {
@@ -513,18 +510,11 @@ impl WinitApp {
             wgpu_fps: 0.0,
             result_exit: None,
         };
-        if let Some(chart_id) = boot_sample_chart_id {
-            tracing::info!(
-                arg = BOOT_PLAY_SAMPLE_ARG,
-                chart_id,
-                "booting directly into bundled sample chart"
-            );
+        if let Some(chart_id) = boot_chart_id {
+            tracing::info!(chart_id, "booting directly into chart");
             if let Some(slot) = options.boot_replay_slot {
                 if !app.try_start_replay_for_chart(chart_id, slot) {
-                    tracing::warn!(
-                        slot,
-                        "--boot-replay: slot empty for sample chart, falling back to normal boot"
-                    );
+                    tracing::warn!(slot, "boot replay slot empty; falling back to normal play");
                     app.start_chart(chart_id);
                 }
             } else {
@@ -3261,7 +3251,45 @@ fn now_unix_seconds() -> i64 {
         .unwrap_or(0)
 }
 
+fn resolve_boot_chart_id(
+    library_db: &crate::storage::library_db::LibraryDatabase,
+    options: &AppOptions,
+) -> Option<i64> {
+    if let Some(path) = options.boot_play_path.as_deref() {
+        return lookup_boot_chart_id(library_db, path);
+    }
+    if options.boot_play_sample {
+        return library_db.chart_id_by_title(SAMPLE_PLAYABLE_TITLE).ok().flatten();
+    }
+    None
+}
+
+fn lookup_boot_chart_id(
+    library_db: &crate::storage::library_db::LibraryDatabase,
+    path: &str,
+) -> Option<i64> {
+    let path_obj = Path::new(path);
+    if !path_obj.is_file() {
+        tracing::warn!(path, "boot chart path not found; starting normally");
+        return None;
+    }
+    match library_db.chart_id_by_chart_file_path(path_obj) {
+        Ok(Some(chart_id)) => Some(chart_id),
+        Ok(None) => {
+            tracing::warn!(path, "boot chart path is not in library; starting normally");
+            None
+        }
+        Err(error) => {
+            tracing::error!(%error, path, "failed to resolve boot chart path; starting normally");
+            None
+        }
+    }
+}
+
 fn log_startup_options(options: &AppOptions) {
+    if let Some(path) = &options.boot_play_path {
+        tracing::info!(boot_play_path = %path, "boot chart path specified");
+    }
     if options.autoplay_on_start {
         tracing::info!(arg = AUTOPLAY_ON_START_ARG, "autoplay enabled for started charts");
     }
