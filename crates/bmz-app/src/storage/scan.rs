@@ -42,6 +42,7 @@ pub fn scan_song_roots(
     roots: &[PathEntry],
     scan: &ScanConfig,
     scanned_at: i64,
+    force: bool,
 ) -> Result<ScanReport> {
     let mut report = ScanReport::default();
     let enabled_roots: Vec<&PathEntry> = roots.iter().filter(|r| r.enabled).collect();
@@ -73,11 +74,12 @@ pub fn scan_song_roots(
         for entry in &entries {
             report.summary.files_seen += 1;
             let key = entry.path.to_string_lossy();
-            let unchanged = fingerprints.get(key.as_ref()).is_some_and(|fp| {
-                fp.file_size == entry.file_size
-                    && fp.modified_at == entry.modified_at
-                    && fp.import_version == CHART_IMPORT_VERSION
-            });
+            let unchanged = !force
+                && fingerprints.get(key.as_ref()).is_some_and(|fp| {
+                    fp.file_size == entry.file_size
+                        && fp.modified_at == entry.modified_at
+                        && fp.import_version == CHART_IMPORT_VERSION
+                });
             if unchanged {
                 report.summary.skipped += 1;
             } else {
@@ -352,7 +354,8 @@ mod tests {
             recursive: true,
         }];
 
-        let report = scan_song_roots(&mut db, &roots, &scan_config(), 1_700_000_020).unwrap();
+        let report =
+            scan_song_roots(&mut db, &roots, &scan_config(), 1_700_000_020, false).unwrap();
 
         assert_eq!(report.summary.roots_seen, 1);
         assert_eq!(report.summary.files_seen, 1);
@@ -388,7 +391,8 @@ mod tests {
             recursive: true,
         }];
 
-        let report = scan_song_roots(&mut db, &roots, &scan_config(), 1_700_000_021).unwrap();
+        let report =
+            scan_song_roots(&mut db, &roots, &scan_config(), 1_700_000_021, false).unwrap();
 
         assert_eq!(report.summary.files_seen, 1);
         assert_eq!(report.summary.imported, 1);
@@ -433,12 +437,16 @@ mod tests {
             recursive: true,
         }];
 
-        let first = scan_song_roots(&mut db, &roots, &scan_config(), 1_700_000_022).unwrap();
-        let second = scan_song_roots(&mut db, &roots, &scan_config(), 1_700_000_023).unwrap();
+        let first = scan_song_roots(&mut db, &roots, &scan_config(), 1_700_000_022, false).unwrap();
+        let second =
+            scan_song_roots(&mut db, &roots, &scan_config(), 1_700_000_023, false).unwrap();
+        let forced = scan_song_roots(&mut db, &roots, &scan_config(), 1_700_000_024, true).unwrap();
 
         assert_eq!(first.summary.imported, 1);
         assert_eq!(second.summary.imported, 0);
         assert_eq!(second.summary.skipped, 1);
+        assert_eq!(forced.summary.imported, 1);
+        assert_eq!(forced.summary.skipped, 0);
 
         std::fs::remove_dir_all(root).unwrap();
     }

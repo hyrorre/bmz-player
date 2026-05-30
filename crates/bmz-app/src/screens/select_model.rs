@@ -42,6 +42,54 @@ pub fn parse_table_path(path: &str) -> Option<TablePath<'_>> {
     }
 }
 
+/// Returns the difficulty-table source URL implied by the current select navigation
+/// context, if any.
+pub fn table_source_url_from_context(
+    folder_stack: &[String],
+    selected: Option<&SelectItem>,
+) -> Option<String> {
+    if let Some(path) = folder_stack.last()
+        && path.starts_with(TABLE_ROOT_PATH)
+    {
+        match parse_table_path(path) {
+            Some(TablePath::Table { source_url }) | Some(TablePath::Level { source_url, .. }) => {
+                return Some(source_url.to_string());
+            }
+            Some(TablePath::Root) | None => {}
+        }
+    }
+
+    if let Some(SelectItem::Folder { path, .. }) = selected
+        && path.starts_with(TABLE_ROOT_PATH)
+        && path != TABLE_ROOT_PATH
+    {
+        return parse_table_path(path).and_then(|parsed| match parsed {
+            TablePath::Table { source_url } => Some(source_url.to_string()),
+            TablePath::Level { source_url, .. } => Some(source_url.to_string()),
+            TablePath::Root => None,
+        });
+    }
+
+    None
+}
+
+/// Returns the song folder path to scan implied by the current select navigation
+/// context, if any.
+pub fn song_scan_path_from_context(
+    _folder_stack: &[String],
+    selected: Option<&SelectItem>,
+) -> Option<String> {
+    match selected {
+        Some(SelectItem::Folder { path, kind, .. }) if *kind == SelectRowKind::Folder => {
+            Some(path.clone())
+        }
+        Some(SelectItem::Chart(row)) if row.in_library() => {
+            row.chart.as_ref().map(|chart| chart.folder_path.clone())
+        }
+        _ => None,
+    }
+}
+
 fn insert_table_level(map: &mut HashMap<String, String>, key: String, symbol: &str, level: &str) {
     let entry = format!("{symbol}{level}");
     map.entry(key)
@@ -857,6 +905,71 @@ mod tests {
             .collect();
         assert_eq!(levels[0], "★5");
         assert_eq!(levels[1], "★10");
+    }
+
+    #[test]
+    fn table_source_url_from_context_reads_stack_and_selection() {
+        let stack = vec!["bmz-table:https://example.com/t/\n12".to_string()];
+        assert_eq!(
+            table_source_url_from_context(&stack, None),
+            Some("https://example.com/t/".to_string())
+        );
+
+        let selected = SelectItem::Folder {
+            path: "bmz-table:https://example.com/other/".to_string(),
+            name: "[★] Other".to_string(),
+            kind: SelectRowKind::TableFolder,
+        };
+        assert_eq!(
+            table_source_url_from_context(&[], Some(&selected)),
+            Some("https://example.com/other/".to_string())
+        );
+
+        assert_eq!(table_source_url_from_context(&[], None), None);
+    }
+
+    #[test]
+    fn song_scan_path_from_context_reads_folder_and_chart() {
+        let folder = SelectItem::Folder {
+            path: "/music/bms".to_string(),
+            name: "bms".to_string(),
+            kind: SelectRowKind::Folder,
+        };
+        assert_eq!(song_scan_path_from_context(&[], Some(&folder)), Some("/music/bms".to_string()));
+
+        let chart = SelectItem::Chart(SelectChartRow {
+            chart: Some(ChartListItem {
+                chart_id: 1,
+                md5: [0; 16],
+                sha256: [0; 32],
+                title: "Song".to_string(),
+                subtitle: String::new(),
+                artist: String::new(),
+                difficulty_name: String::new(),
+                play_level: String::new(),
+                mode: String::new(),
+                total_notes: 10,
+                initial_bpm: 120.0,
+                min_bpm: 120.0,
+                max_bpm: 120.0,
+                length_ms: 0,
+                folder_path: "/music/bms/album".to_string(),
+                stage_file: String::new(),
+                banner_file: String::new(),
+                backbmp_file: String::new(),
+                preview_file: String::new(),
+            }),
+            fallback_title: String::new(),
+            fallback_artist: String::new(),
+            entry_sha256: None,
+            best_score: None,
+            replay_slots: [false; 4],
+            table_level: String::new(),
+        });
+        assert_eq!(
+            song_scan_path_from_context(&[], Some(&chart)),
+            Some("/music/bms/album".to_string())
+        );
     }
 
     #[test]

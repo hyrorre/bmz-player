@@ -14,7 +14,6 @@ use bmz_render::plan::{
     PLAY_BACKBMP_TEXTURE, SELECT_BANNER_TEXTURE, SELECT_STAGE_TEXTURE, TextureId,
 };
 use bmz_render::renderer::{RenderSurfaceStatus, Renderer, SurfaceSize};
-use bmz_render::sample::{sample_play_scene, sample_result_scene, sample_select_scene};
 use bmz_render::scene::{AppSceneSnapshot, ResultSnapshot, SelectRowSnapshot, SelectSnapshot};
 use bmz_render::snapshot::{
     DisplayJudgeCounts, FastSlowJudgeCounts, OverlaySnapshot, RenderSnapshot,
@@ -55,8 +54,9 @@ use crate::screens::play_start::{
 use crate::screens::result_model::ResultSummary;
 use crate::screens::select_model::{
     SelectItem, TABLE_ROOT_PATH, TablePath, load_select_items_in_folder,
-    load_select_items_in_table_level, parse_table_path, root_folder_items, table_folder_items,
-    table_level_folder_items,
+    load_select_items_in_table_level, parse_table_path, root_folder_items,
+    song_scan_path_from_context, table_folder_items, table_level_folder_items,
+    table_source_url_from_context,
 };
 use crate::select_options::{ArrangeOption, AssistOption};
 use crate::skin_loader::{
@@ -65,8 +65,10 @@ use crate::skin_loader::{
     is_decodable_skin_path, load_default_skin_into_renderer, play_skin_selection_for,
     set_decoded_skin_context, upload_decoded_skin,
 };
+use crate::songs_cmd::scan_songs;
+use crate::storage::library_db::LibraryDatabase;
+use crate::storage::migration::migrate_library_db;
 use crate::storage::replay::load_replay_for_chart;
-use crate::storage::scan::scan_song_roots;
 use crate::ui::{DebugInfo, EguiLayer, SceneSkinDefs, SkinCandidate, SkinCatalog, SkinConfigMeta};
 use bmz_render::skin::{SkinDocument, SkinDocumentTexture, SkinManifest};
 use std::collections::BTreeMap;
@@ -161,7 +163,7 @@ struct WinitApp {
     renderer: Renderer,
     skin_catalog: SkinCatalog,
     skin_defs_cache: BTreeMap<String, SceneSkinDefs>,
-    dev_scene: Option<AppSceneSnapshot>,
+    pending_table_fetch: Option<Receiver<Result<()>>>,
     last_scene_kind: Option<AppSceneKind>,
     start_held: bool,
     arrange_option: ArrangeOption,
@@ -460,7 +462,7 @@ impl WinitApp {
             renderer,
             skin_catalog,
             skin_defs_cache: BTreeMap::new(),
-            dev_scene: None,
+            pending_table_fetch: None,
             last_scene_kind: None,
             start_held: false,
             arrange_option,
@@ -605,80 +607,75 @@ impl WinitApp {
     }
 
     fn scene_snapshot(&self) -> AppSceneSnapshot {
-        let mut scene = if let Some(scene) = &self.dev_scene {
-            scene.clone()
-        } else {
-            match self.view_state() {
-                AppViewState::Select => AppSceneSnapshot::Select(self.select_snapshot()),
-                AppViewState::Decide => AppSceneSnapshot::Decide(
-                    self.pending_decide
-                        .as_ref()
-                        .map(|decide| self.decide_snapshot(decide))
-                        .or_else(|| self.last_play_snapshot.clone())
-                        .unwrap_or_default(),
-                ),
-                AppViewState::Play => {
-                    AppSceneSnapshot::Play(self.last_play_snapshot.clone().unwrap_or_default())
-                }
-                AppViewState::Result(summary) => AppSceneSnapshot::Result(ResultSnapshot {
-                    clear_type: summary.clear_type,
-                    ex_score: summary.ex_score,
-                    ex_score_rate: summary.ex_score_rate(),
-                    max_combo: summary.max_combo,
-                    gauge_value: summary.gauge_value,
-                    gauge_type: summary.gauge_type as i32,
-                    total_notes: summary.total_notes,
-                    judge_counts: DisplayJudgeCounts {
-                        pgreat: summary.judge_counts.pgreat,
-                        great: summary.judge_counts.great,
-                        good: summary.judge_counts.good,
-                        bad: summary.judge_counts.bad,
-                        poor: summary.judge_counts.poor,
-                        empty_poor: summary.judge_counts.empty_poor,
-                    },
-                    fast_slow_counts: FastSlowJudgeCounts {
-                        fast_pgreat: summary.fast_slow_counts.fast_pgreat,
-                        slow_pgreat: summary.fast_slow_counts.slow_pgreat,
-                        fast_great: summary.fast_slow_counts.fast_great,
-                        slow_great: summary.fast_slow_counts.slow_great,
-                        fast_good: summary.fast_slow_counts.fast_good,
-                        slow_good: summary.fast_slow_counts.slow_good,
-                        fast_bad: summary.fast_slow_counts.fast_bad,
-                        slow_bad: summary.fast_slow_counts.slow_bad,
-                        fast_poor: summary.fast_slow_counts.fast_poor,
-                        slow_poor: summary.fast_slow_counts.slow_poor,
-                        fast_empty_poor: summary.fast_slow_counts.fast_empty_poor,
-                        slow_empty_poor: summary.fast_slow_counts.slow_empty_poor,
-                    },
-                    score_history_id: summary.score_history_id,
-                    replay_saved: !summary.replay_path.is_empty(),
-                    best_ex_score: summary.best_ex_score,
-                    best_clear_type: summary.best_clear_type,
-                    target_ex_score: summary.target_ex_score,
-                    best_max_combo: summary.best_max_combo,
-                    target_max_combo: summary.target_max_combo,
-                    best_misscount: summary.best_misscount,
-                    target_misscount: summary.target_misscount,
-                    target_clear_type: summary.target_clear_type,
-                    elapsed_time: bmz_core::time::TimeUs(
-                        self.result_scene_started_at.elapsed().as_micros().min(i64::MAX as u128)
-                            as i64,
-                    ),
-                    fadeout_elapsed: self.result_exit.as_ref().map(|exit| {
-                        bmz_core::time::TimeUs(
-                            exit.started_at.elapsed().as_micros().min(i64::MAX as u128) as i64,
-                        )
-                    }),
-                    title: summary.title.clone(),
-                    subtitle: summary.subtitle.clone(),
-                    artist: summary.artist.clone(),
-                    subartist: summary.subartist.clone(),
-                    genre: summary.genre.clone(),
-                    difficulty_name: summary.difficulty_name.clone(),
-                    play_level: summary.play_level.clone(),
-                    overlay: OverlaySnapshot::default(),
-                }),
+        let mut scene = match self.view_state() {
+            AppViewState::Select => AppSceneSnapshot::Select(self.select_snapshot()),
+            AppViewState::Decide => AppSceneSnapshot::Decide(
+                self.pending_decide
+                    .as_ref()
+                    .map(|decide| self.decide_snapshot(decide))
+                    .or_else(|| self.last_play_snapshot.clone())
+                    .unwrap_or_default(),
+            ),
+            AppViewState::Play => {
+                AppSceneSnapshot::Play(self.last_play_snapshot.clone().unwrap_or_default())
             }
+            AppViewState::Result(summary) => AppSceneSnapshot::Result(ResultSnapshot {
+                clear_type: summary.clear_type,
+                ex_score: summary.ex_score,
+                ex_score_rate: summary.ex_score_rate(),
+                max_combo: summary.max_combo,
+                gauge_value: summary.gauge_value,
+                gauge_type: summary.gauge_type as i32,
+                total_notes: summary.total_notes,
+                judge_counts: DisplayJudgeCounts {
+                    pgreat: summary.judge_counts.pgreat,
+                    great: summary.judge_counts.great,
+                    good: summary.judge_counts.good,
+                    bad: summary.judge_counts.bad,
+                    poor: summary.judge_counts.poor,
+                    empty_poor: summary.judge_counts.empty_poor,
+                },
+                fast_slow_counts: FastSlowJudgeCounts {
+                    fast_pgreat: summary.fast_slow_counts.fast_pgreat,
+                    slow_pgreat: summary.fast_slow_counts.slow_pgreat,
+                    fast_great: summary.fast_slow_counts.fast_great,
+                    slow_great: summary.fast_slow_counts.slow_great,
+                    fast_good: summary.fast_slow_counts.fast_good,
+                    slow_good: summary.fast_slow_counts.slow_good,
+                    fast_bad: summary.fast_slow_counts.fast_bad,
+                    slow_bad: summary.fast_slow_counts.slow_bad,
+                    fast_poor: summary.fast_slow_counts.fast_poor,
+                    slow_poor: summary.fast_slow_counts.slow_poor,
+                    fast_empty_poor: summary.fast_slow_counts.fast_empty_poor,
+                    slow_empty_poor: summary.fast_slow_counts.slow_empty_poor,
+                },
+                score_history_id: summary.score_history_id,
+                replay_saved: !summary.replay_path.is_empty(),
+                best_ex_score: summary.best_ex_score,
+                best_clear_type: summary.best_clear_type,
+                target_ex_score: summary.target_ex_score,
+                best_max_combo: summary.best_max_combo,
+                target_max_combo: summary.target_max_combo,
+                best_misscount: summary.best_misscount,
+                target_misscount: summary.target_misscount,
+                target_clear_type: summary.target_clear_type,
+                elapsed_time: bmz_core::time::TimeUs(
+                    self.result_scene_started_at.elapsed().as_micros().min(i64::MAX as u128) as i64,
+                ),
+                fadeout_elapsed: self.result_exit.as_ref().map(|exit| {
+                    bmz_core::time::TimeUs(
+                        exit.started_at.elapsed().as_micros().min(i64::MAX as u128) as i64,
+                    )
+                }),
+                title: summary.title.clone(),
+                subtitle: summary.subtitle.clone(),
+                artist: summary.artist.clone(),
+                subartist: summary.subartist.clone(),
+                genre: summary.genre.clone(),
+                difficulty_name: summary.difficulty_name.clone(),
+                play_level: summary.play_level.clone(),
+                overlay: OverlaySnapshot::default(),
+            }),
         };
         let overlay = self.build_overlay_snapshot();
         self.apply_overlay_to_scene(&mut scene, overlay);
@@ -894,7 +891,7 @@ impl WinitApp {
     }
 
     fn should_exit_via_select_hold(&mut self) -> bool {
-        if !matches!(self.view_state(), AppViewState::Select) || self.dev_scene.is_some() {
+        if !matches!(self.view_state(), AppViewState::Select) {
             self.select_exit_hold_started_at = None;
             return false;
         }
@@ -943,10 +940,6 @@ impl WinitApp {
     }
 
     fn route_keyboard_input(&mut self, event: &winit::event::KeyEvent) {
-        if self.route_dev_scene_key(event.physical_key, event.state, event.repeat) {
-            return;
-        }
-
         if let Some(active_play) = &mut self.active_play {
             if let Some(control) = physical_key_name(event.physical_key)
                 && control == self.select_keys.start
@@ -1035,17 +1028,17 @@ impl WinitApp {
             return;
         }
 
-        if self.dev_scene.is_none()
-            && event.physical_key == PhysicalKey::Code(KeyCode::F2)
+        if matches!(self.view_state(), AppViewState::Select)
+            && event.physical_key == PhysicalKey::Code(KeyCode::F5)
             && event.state == ElementState::Pressed
             && !event.repeat
         {
-            self.rescan_and_reload();
+            self.reload_from_select_context();
             return;
         }
 
         // Select 画面で ESC 長押し → アプリ終了 (実際の exit は redraw 時にチェック)。
-        if self.dev_scene.is_none() && event.physical_key == PhysicalKey::Code(KeyCode::Escape) {
+        if event.physical_key == PhysicalKey::Code(KeyCode::Escape) {
             match event.state {
                 ElementState::Pressed => {
                     if self.select_exit_hold_started_at.is_none() {
@@ -1235,7 +1228,7 @@ impl WinitApp {
     }
 
     fn route_mouse_wheel(&mut self, delta: MouseScrollDelta) {
-        if !matches!(self.view_state(), AppViewState::Select) || self.dev_scene.is_some() {
+        if !matches!(self.view_state(), AppViewState::Select) {
             return;
         }
         if let Some(select_move) = select_wheel_move(delta) {
@@ -1870,31 +1863,113 @@ impl WinitApp {
         }
     }
 
-    fn rescan_and_reload(&mut self) {
-        let scan_roots: Vec<PathEntry> = if let Some(folder) = self.folder_stack.last() {
-            vec![PathEntry { path: folder.clone(), enabled: true, recursive: true }]
-        } else {
-            self.boot.app_config.songs.roots.iter().filter(|p| p.enabled).cloned().collect()
-        };
+    fn load_songs_and_reload(&mut self) {
+        let scan_roots = self.song_load_roots_from_stack();
 
         if !scan_roots.is_empty() {
-            match scan_song_roots(
+            match scan_songs(
                 &mut self.boot.library_db,
                 &scan_roots,
                 &self.boot.app_config.scan,
                 now_unix_seconds(),
+                false,
             ) {
                 Ok(report) => tracing::info!(
                     imported = report.summary.imported,
                     skipped = report.summary.skipped,
                     failed = report.summary.failed,
-                    "F2 rescan complete"
+                    "song load complete"
                 ),
-                Err(error) => tracing::error!(%error, "F2 rescan failed"),
+                Err(error) => tracing::error!(%error, "song load failed"),
             }
         }
 
         self.reload_select_items();
+    }
+
+    fn song_load_roots_from_stack(&self) -> Vec<PathEntry> {
+        if let Some(folder) = self.folder_stack.last()
+            && !folder.starts_with(TABLE_ROOT_PATH)
+        {
+            return vec![PathEntry { path: folder.clone(), enabled: true, recursive: true }];
+        }
+        self.boot.app_config.songs.roots.iter().filter(|p| p.enabled).cloned().collect()
+    }
+
+    fn reload_from_select_context(&mut self) {
+        let selected = self.select_items.get(self.selected_index);
+        if let Some(url) = table_source_url_from_context(&self.folder_stack, selected) {
+            self.spawn_table_fetch(url);
+            return;
+        }
+        if let Some(path) = song_scan_path_from_context(&self.folder_stack, selected) {
+            let roots = vec![PathEntry { path, enabled: true, recursive: true }];
+            match scan_songs(
+                &mut self.boot.library_db,
+                &roots,
+                &self.boot.app_config.scan,
+                now_unix_seconds(),
+                true,
+            ) {
+                Ok(report) => tracing::info!(
+                    imported = report.summary.imported,
+                    skipped = report.summary.skipped,
+                    failed = report.summary.failed,
+                    "F5 song reload complete"
+                ),
+                Err(error) => tracing::error!(%error, "F5 song reload failed"),
+            }
+            self.reload_select_items();
+            return;
+        }
+        tracing::debug!("F5 reload: no applicable target in select context");
+    }
+
+    fn spawn_table_fetch(&mut self, url: String) {
+        if self.pending_table_fetch.is_some() {
+            tracing::debug!(%url, "table fetch already in progress");
+            return;
+        }
+        let library_db_path = self.boot.app_paths.library_db.clone();
+        let (tx, rx) = mpsc::channel();
+        let fetch_url = url.clone();
+        thread::Builder::new()
+            .name("table-fetch".to_string())
+            .spawn(move || {
+                let result = (|| -> Result<()> {
+                    migrate_library_db(&library_db_path)?;
+                    let mut library_db = LibraryDatabase::open(&library_db_path)?;
+                    let rt =
+                        tokio::runtime::Runtime::new().context("failed to create tokio runtime")?;
+                    rt.block_on(crate::table_cmd::fetch_table_url(&fetch_url, &mut library_db))
+                })();
+                let _ = tx.send(result);
+            })
+            .expect("failed to spawn table fetch thread");
+        self.pending_table_fetch = Some(rx);
+        tracing::info!(%url, "started table fetch");
+    }
+
+    fn poll_pending_table_fetch(&mut self) {
+        let Some(rx) = &self.pending_table_fetch else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(Ok(())) => {
+                tracing::info!("table fetch complete");
+                self.pending_table_fetch = None;
+                self.reload_select_items();
+            }
+            Ok(Err(error)) => {
+                tracing::error!(%error, "table fetch failed");
+                self.pending_table_fetch = None;
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+            Err(mpsc::TryRecvError::Disconnected) => {
+                tracing::warn!("table fetch worker disconnected");
+                self.pending_table_fetch = None;
+            }
+        }
     }
 
     /// upload worker を起動する。surface 接続後に一度だけ呼ぶ。
@@ -2251,7 +2326,7 @@ impl WinitApp {
             }
         }
         if output.trigger_song_rescan {
-            self.rescan_and_reload();
+            self.load_songs_and_reload();
         }
         if output.save_profile_config {
             match save_profile_config(
@@ -2457,37 +2532,6 @@ impl WinitApp {
             Err(error) => {
                 tracing::error!(%error, "failed to present render scene");
             }
-        }
-    }
-
-    fn route_dev_scene_key(
-        &mut self,
-        physical_key: PhysicalKey,
-        state: ElementState,
-        repeat: bool,
-    ) -> bool {
-        match dev_scene_action(physical_key, state, repeat) {
-            Some(DevSceneAction::SampleSelect) => {
-                self.dev_scene = Some(sample_select_scene());
-                tracing::info!("showing sample select scene");
-                true
-            }
-            Some(DevSceneAction::SamplePlay) => {
-                self.dev_scene = Some(sample_play_scene());
-                tracing::info!("showing sample play scene");
-                true
-            }
-            Some(DevSceneAction::SampleResult) => {
-                self.dev_scene = Some(sample_result_scene());
-                tracing::info!("showing sample result scene");
-                true
-            }
-            Some(DevSceneAction::Clear) if self.dev_scene.is_some() => {
-                self.dev_scene = None;
-                tracing::info!("leaving sample scene");
-                true
-            }
-            _ => false,
         }
     }
 
@@ -3137,8 +3181,8 @@ impl ApplicationHandler for WinitApp {
                 event_loop.exit();
             }
             WindowEvent::KeyboardInput { event, .. } => {
-                // F5 で egui メニューを開閉する。
-                if event.physical_key == PhysicalKey::Code(KeyCode::F5)
+                // F1 で egui メニューを開閉する。
+                if event.physical_key == PhysicalKey::Code(KeyCode::F1)
                     && event.state == ElementState::Pressed
                     && !event.repeat
                 {
@@ -3171,6 +3215,7 @@ impl ApplicationHandler for WinitApp {
                 self.poll_gamepad_events();
                 self.drain_pending_skins();
                 self.poll_play_preload();
+                self.poll_pending_table_fetch();
                 self.advance_decide_transition();
                 self.advance_play_ending();
                 self.advance_result_exit();
@@ -3669,32 +3714,6 @@ fn window_title_for_scene(scene_kind: AppSceneKind) -> &'static str {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DevSceneAction {
-    SampleSelect,
-    SamplePlay,
-    SampleResult,
-    Clear,
-}
-
-fn dev_scene_action(
-    physical_key: PhysicalKey,
-    state: ElementState,
-    repeat: bool,
-) -> Option<DevSceneAction> {
-    if state != ElementState::Pressed || repeat {
-        return None;
-    }
-
-    match physical_key {
-        PhysicalKey::Code(KeyCode::F1) => Some(DevSceneAction::SampleSelect),
-        PhysicalKey::Code(KeyCode::F3) => Some(DevSceneAction::SampleResult),
-        PhysicalKey::Code(KeyCode::F4) => Some(DevSceneAction::SamplePlay),
-        PhysicalKey::Code(KeyCode::Escape) => Some(DevSceneAction::Clear),
-        _ => None,
-    }
-}
-
 fn physical_key_name(physical_key: PhysicalKey) -> Option<String> {
     use bmz_gameplay::input::backend::PhysicalControl;
     match physical_key_to_control(physical_key)? {
@@ -3774,7 +3793,7 @@ impl SelectKeyBindings {
         let gauge_str = kb_gauge_str.as_deref().unwrap_or("?");
         let assist_str = kb_assist_str.as_deref().unwrap_or("?");
         let option_hint = format!(
-            "F1 SELECT  F2 RELOAD  F3 RESULT  F4 PLAY   \
+            "F1 MENU  F5 RELOAD   \
              {start}+{arrange_str}:ARRANGE  {start}+{gauge_str}:GAUGE  {start}+{assist_str}:ASSIST  \
              {start}+1..4:REPLAY"
         );
@@ -4096,8 +4115,8 @@ mod tests {
         assert!(keys.key_hint.contains("Z/X/C/V"), "enter keys in hint: {}", keys.key_hint);
         assert!(keys.key_hint.contains("/S:BACK"), "back key in hint: {}", keys.key_hint);
         assert!(keys.key_hint.contains(" Q"), "start key in hint: {}", keys.key_hint);
-        assert!(keys.option_hint.contains("F2 RELOAD"), "reload in hint: {}", keys.option_hint);
-        assert!(keys.option_hint.contains("F4 PLAY"), "play in hint: {}", keys.option_hint);
+        assert!(keys.option_hint.contains("F1 MENU"), "menu in hint: {}", keys.option_hint);
+        assert!(keys.option_hint.contains("F5 RELOAD"), "reload in hint: {}", keys.option_hint);
         assert!(keys.option_hint.contains("Q+Z:ARRANGE"), "arrange in hint: {}", keys.option_hint);
     }
 
@@ -4206,53 +4225,6 @@ mod tests {
             random_config_from_arrange(ArrangeOption::Random),
             RandomOptionConfig::Random
         ));
-    }
-
-    #[test]
-    fn dev_scene_keys_map_to_sample_scenes() {
-        assert_eq!(
-            dev_scene_action(PhysicalKey::Code(KeyCode::F1), ElementState::Pressed, false),
-            Some(DevSceneAction::SampleSelect)
-        );
-        assert_eq!(
-            dev_scene_action(PhysicalKey::Code(KeyCode::F2), ElementState::Pressed, false),
-            None
-        );
-        assert_eq!(
-            dev_scene_action(PhysicalKey::Code(KeyCode::F3), ElementState::Pressed, false),
-            Some(DevSceneAction::SampleResult)
-        );
-        assert_eq!(
-            dev_scene_action(PhysicalKey::Code(KeyCode::F4), ElementState::Pressed, false),
-            Some(DevSceneAction::SamplePlay)
-        );
-        assert_eq!(
-            dev_scene_action(PhysicalKey::Code(KeyCode::Escape), ElementState::Pressed, false),
-            Some(DevSceneAction::Clear)
-        );
-    }
-
-    #[test]
-    fn dev_scene_keys_ignore_releases_repeats_and_other_keys() {
-        assert_eq!(
-            dev_scene_action(PhysicalKey::Code(KeyCode::F1), ElementState::Released, false),
-            None
-        );
-        assert_eq!(
-            dev_scene_action(PhysicalKey::Code(KeyCode::F1), ElementState::Pressed, true),
-            None
-        );
-        assert_eq!(
-            dev_scene_action(PhysicalKey::Code(KeyCode::KeyZ), ElementState::Pressed, false),
-            None
-        );
-    }
-
-    #[test]
-    fn scene_kind_maps_scene_variants() {
-        assert_eq!(scene_kind(&sample_select_scene()), AppSceneKind::Select);
-        assert_eq!(scene_kind(&sample_play_scene()), AppSceneKind::Play);
-        assert_eq!(scene_kind(&sample_result_scene()), AppSceneKind::Result);
     }
 
     #[test]

@@ -104,7 +104,13 @@ pub fn bootstrap() -> Result<BootstrappedApp> {
     let startup_scan = if scan_roots.is_empty() {
         None
     } else {
-        Some(scan_song_roots(&mut library_db, &scan_roots, &app_config.scan, now_unix_seconds())?)
+        Some(scan_song_roots(
+            &mut library_db,
+            &scan_roots,
+            &app_config.scan,
+            now_unix_seconds(),
+            false,
+        )?)
     };
     let score_db = ScoreDatabase::open(&profile_paths.score_db)?;
 
@@ -240,7 +246,7 @@ mod tests {
         run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
         let mut db = LibraryDatabase::from_connection(conn);
 
-        let report = scan_song_roots(&mut db, &roots, &config.scan, 1_700_000_100).unwrap();
+        let report = scan_song_roots(&mut db, &roots, &config.scan, 1_700_000_100, false).unwrap();
 
         assert_eq!(report.summary.failed, 0);
         assert!(report.summary.imported >= 1);

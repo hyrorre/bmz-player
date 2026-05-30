@@ -19,14 +19,15 @@ pub enum Command {
 pub enum TableCommand {
     Add { url: String },
     List,
-    Fetch,
+    Fetch { url: Option<String> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SongsCommand {
     Add { path: String, recursive: bool, enabled: bool },
     List,
-    Reload,
+    Load { target: Option<String> },
+    Reload { target: Option<String> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,7 +54,10 @@ where
                     Ok(Command::Table(TableCommand::Add { url }))
                 }
                 Some("list") => Ok(Command::Table(TableCommand::List)),
-                Some("fetch") => Ok(Command::Table(TableCommand::Fetch)),
+                Some("fetch") => {
+                    let url = rest.get(1).cloned();
+                    Ok(Command::Table(TableCommand::Fetch { url }))
+                }
                 Some(sub) => bail!("unknown table subcommand: {sub}. Use: add, list, fetch"),
                 None => bail!("table requires a subcommand: add, list, fetch"),
             }
@@ -73,9 +77,16 @@ where
                     Ok(Command::Songs(SongsCommand::Add { path, recursive, enabled }))
                 }
                 Some("list") => Ok(Command::Songs(SongsCommand::List)),
-                Some("reload") => Ok(Command::Songs(SongsCommand::Reload)),
-                Some(sub) => bail!("unknown songs subcommand: {sub}. Use: add, list, reload"),
-                None => bail!("songs requires a subcommand: add, list, reload"),
+                Some("load") => {
+                    let target = rest.get(1).cloned();
+                    Ok(Command::Songs(SongsCommand::Load { target }))
+                }
+                Some("reload") => {
+                    let target = rest.get(1).cloned();
+                    Ok(Command::Songs(SongsCommand::Reload { target }))
+                }
+                Some(sub) => bail!("unknown songs subcommand: {sub}. Use: add, list, load, reload"),
+                None => bail!("songs requires a subcommand: add, list, load, reload"),
             }
         }
         Some("course") => {
@@ -174,7 +185,7 @@ where
 }
 
 pub fn app_help_text() -> &'static str {
-    "bmz-app\n\nUsage:\n  bmz-app [OPTIONS]\n  bmz-app table <SUBCOMMAND>\n  bmz-app songs <SUBCOMMAND>\n  bmz-app course <SUBCOMMAND>\n\nOptions:\n  --boot-play-sample              Start the bundled sample chart on boot\n  --autoplay-on-start             Enable autoplay for started charts\n  --boot-replay <1..4>            Start the bundled sample chart in replay mode using slot N\n  --smoke-exit-after-frames <N>   Exit after N rendered frames, clamped to 1 or more\n  --smoke-exit-on-result          Exit when the app reaches the result screen\n  --renderer <backend>            wgpu renderer backend (vulkan, metal, dx12, gl, auto)\n  -h, --help                      Print this help\n\nTable subcommands:\n  table add <URL>   Add a difficulty table source and fetch it\n  table list        List all stored difficulty tables\n  table fetch       Fetch/update all configured difficulty tables\n\nSongs subcommands:\n  songs add <PATH> [--no-recursive] [--disabled]   Add a song root directory\n  songs list                                        List configured song roots\n  songs reload                                      Scan all song roots and update the library\n\nCourse subcommands:\n  course import <PATH>   Import beatoraja course JSON from a file or directory\n  course list            List stored courses\n\nExamples:\n  cargo run -p bmz-app -- --boot-play-sample --smoke-exit-after-frames 3\n  cargo run -p bmz-app -- --boot-play-sample --boot-replay 1 --smoke-exit-on-result\n  cargo run -p bmz-app -- table add https://example.com/table.html\n  cargo run -p bmz-app -- table list\n  cargo run -p bmz-app -- songs add /path/to/bms\n  cargo run -p bmz-app -- songs list\n  cargo run -p bmz-app -- songs reload\n  cargo run -p bmz-app -- course import /path/to/course.json\n  cargo run -p bmz-app -- course list"
+    "bmz-app\n\nUsage:\n  bmz-app [OPTIONS]\n  bmz-app table <SUBCOMMAND>\n  bmz-app songs <SUBCOMMAND>\n  bmz-app course <SUBCOMMAND>\n\nOptions:\n  --boot-play-sample              Start the bundled sample chart on boot\n  --autoplay-on-start             Enable autoplay for started charts\n  --boot-replay <1..4>            Start the bundled sample chart in replay mode using slot N\n  --smoke-exit-after-frames <N>   Exit after N rendered frames, clamped to 1 or more\n  --smoke-exit-on-result          Exit when the app reaches the result screen\n  --renderer <backend>            wgpu renderer backend (vulkan, metal, dx12, gl, auto)\n  -h, --help                      Print this help\n\nTable subcommands:\n  table add <URL>       Add a difficulty table source and fetch it\n  table list            List all stored difficulty tables\n  table fetch [URL]     Fetch/update configured tables, or a single URL\n\nSongs subcommands:\n  songs add <PATH> [--no-recursive] [--disabled]   Add a song root directory\n  songs list                                        List configured song roots\n  songs load [PATH|NAME]                            Scan song roots (incremental)\n  songs reload [PATH|NAME]                          Force rescan song roots\n\nCourse subcommands:\n  course import <PATH>   Import beatoraja course JSON from a file or directory\n  course list            List stored courses\n\nExamples:\n  cargo run -p bmz-app -- --boot-play-sample --smoke-exit-after-frames 3\n  cargo run -p bmz-app -- --boot-play-sample --boot-replay 1 --smoke-exit-on-result\n  cargo run -p bmz-app -- table add https://example.com/table.html\n  cargo run -p bmz-app -- table list\n  cargo run -p bmz-app -- table fetch https://example.com/table.html\n  cargo run -p bmz-app -- songs add /path/to/bms\n  cargo run -p bmz-app -- songs list\n  cargo run -p bmz-app -- songs load\n  cargo run -p bmz-app -- songs reload my-bms-folder\n  cargo run -p bmz-app -- course import /path/to/course.json\n  cargo run -p bmz-app -- course list"
 }
 
 fn parse_smoke_exit_after_frames_value(value: &str) -> Result<u32> {
@@ -288,7 +299,14 @@ mod tests {
             Command::Table(TableCommand::Add { url: "https://example.com/".to_string() })
         );
         assert_eq!(parse_command(["table", "list"]).unwrap(), Command::Table(TableCommand::List));
-        assert_eq!(parse_command(["table", "fetch"]).unwrap(), Command::Table(TableCommand::Fetch));
+        assert_eq!(
+            parse_command(["table", "fetch"]).unwrap(),
+            Command::Table(TableCommand::Fetch { url: None })
+        );
+        assert_eq!(
+            parse_command(["table", "fetch", "https://example.com/"]).unwrap(),
+            Command::Table(TableCommand::Fetch { url: Some("https://example.com/".to_string()) })
+        );
     }
 
     #[test]
@@ -327,8 +345,20 @@ mod tests {
         );
         assert_eq!(parse_command(["songs", "list"]).unwrap(), Command::Songs(SongsCommand::List));
         assert_eq!(
+            parse_command(["songs", "load"]).unwrap(),
+            Command::Songs(SongsCommand::Load { target: None })
+        );
+        assert_eq!(
+            parse_command(["songs", "load", "my-folder"]).unwrap(),
+            Command::Songs(SongsCommand::Load { target: Some("my-folder".to_string()) })
+        );
+        assert_eq!(
             parse_command(["songs", "reload"]).unwrap(),
-            Command::Songs(SongsCommand::Reload)
+            Command::Songs(SongsCommand::Reload { target: None })
+        );
+        assert_eq!(
+            parse_command(["songs", "reload", "/bms"]).unwrap(),
+            Command::Songs(SongsCommand::Reload { target: Some("/bms".to_string()) })
         );
     }
 
@@ -363,6 +393,7 @@ mod tests {
         let help = app_help_text();
         assert!(help.contains("songs add"));
         assert!(help.contains("songs list"));
+        assert!(help.contains("songs load"));
         assert!(help.contains("songs reload"));
     }
 

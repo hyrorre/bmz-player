@@ -12,7 +12,7 @@ pub async fn run_table_command(cmd: TableCommand) -> Result<()> {
     match cmd {
         TableCommand::Add { url } => add_table(&url).await,
         TableCommand::List => list_tables(),
-        TableCommand::Fetch => fetch_tables().await,
+        TableCommand::Fetch { url } => fetch_tables(url.as_deref()).await,
     }
 }
 
@@ -36,15 +36,7 @@ async fn add_table(url: &str) -> Result<()> {
     migrate_library_db(&app_paths.library_db)?;
     let mut library_db = LibraryDatabase::open(&app_paths.library_db)?;
 
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-
-    println!("Fetching {url}...");
-    let table = crate::difficulty_table::fetch_difficulty_table(url, now).await?;
-    println!("Fetched: {} ({}) — {} entries", table.name, table.symbol, table.entries.len());
-    library_db.upsert_difficulty_table(&table)?;
+    fetch_table_url(url, &mut library_db).await?;
     println!("Stored.");
 
     Ok(())
@@ -68,9 +60,17 @@ fn list_tables() -> Result<()> {
     Ok(())
 }
 
-async fn fetch_tables() -> Result<()> {
+async fn fetch_tables(url: Option<&str>) -> Result<()> {
     let app_paths = resolve_app_paths()?;
     app_paths.ensure_dirs()?;
+
+    migrate_library_db(&app_paths.library_db)?;
+    let mut library_db = LibraryDatabase::open(&app_paths.library_db)?;
+
+    if let Some(url) = url {
+        fetch_table_url(url, &mut library_db).await?;
+        return Ok(());
+    }
 
     let app_config = if app_paths.config_toml.exists() {
         load_app_config(&app_paths.config_toml)?
@@ -85,22 +85,12 @@ async fn fetch_tables() -> Result<()> {
         return Ok(());
     }
 
-    migrate_library_db(&app_paths.library_db)?;
-    let mut library_db = LibraryDatabase::open(&app_paths.library_db)?;
-
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-
     let mut ok = 0usize;
     let mut failed = 0usize;
     for source in &sources {
         print!("Fetching {}... ", source.url);
-        match crate::difficulty_table::fetch_difficulty_table(&source.url, now).await {
-            Ok(table) => {
-                println!("{} ({}) — {} entries", table.name, table.symbol, table.entries.len());
-                library_db.upsert_difficulty_table(&table)?;
+        match fetch_table_url(&source.url, &mut library_db).await {
+            Ok(()) => {
                 ok += 1;
             }
             Err(e) => {
@@ -111,5 +101,18 @@ async fn fetch_tables() -> Result<()> {
     }
 
     println!("\n{ok} succeeded, {failed} failed.");
+    Ok(())
+}
+
+pub async fn fetch_table_url(url: &str, library_db: &mut LibraryDatabase) -> Result<()> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    println!("Fetching {url}...");
+    let table = crate::difficulty_table::fetch_difficulty_table(url, now).await?;
+    println!("Fetched: {} ({}) — {} entries", table.name, table.symbol, table.entries.len());
+    library_db.upsert_difficulty_table(&table)?;
     Ok(())
 }

@@ -124,10 +124,11 @@ cargo run -p bmz-app -- songs list
 - `-h`, `--help`
 - `table add <URL>`
 - `table list`
-- `table fetch`
+- `table fetch [URL]`
 - `songs add <PATH> [--no-recursive] [--disabled]`
 - `songs list`
-- `songs reload`
+- `songs load [PATH|NAME]`
+- `songs reload [PATH|NAME]`
 
 新しいデバッグフラグを追加するときも `crates/bmz-app/src/cli.rs` に集約してください。
 
@@ -135,11 +136,9 @@ cargo run -p bmz-app -- songs list
 
 アプリウィンドウにフォーカスがある状態:
 
-- `F1`: sample Select scene
-- `F2`: sample Play scene
-- `F3`: sample Result scene
-- `F5`: egui メニューを開閉
-- `Escape`: sample scene を抜けて通常状態へ戻る
+- `F1`: egui メニューを開閉
+- `F5`: 選曲画面で文脈依存 reload（曲フォルダは `songs reload`、難易度表は `table fetch <URL>`）
+- `Escape` (Select 画面長押し 2 秒): アプリ終了
 
 通常操作:
 
