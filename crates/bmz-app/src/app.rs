@@ -1538,8 +1538,9 @@ impl WinitApp {
 
     fn begin_decide_for_chart(&mut self, chart_id: i64, options: PlayStartOptions) {
         self.ensure_skin_ready(SkinKind::Decide);
+        // Play スキンは裏で decode+upload を進めるが、Decide 入場では待たない。
+        // 実際の Play 入場 (`start_chart_with_options`) で `ensure_skin_ready` が保険として残る。
         self.spawn_play_skin_decode_for(self.key_mode_for_chart(chart_id));
-        self.ensure_skin_ready(SkinKind::Play);
         self.start_play_preload(chart_id, options.clone());
         let now = Instant::now();
         self.pending_decide = Some(DecideTransition {
