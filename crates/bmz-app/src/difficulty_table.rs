@@ -159,10 +159,8 @@ fn parse_courses_from_header(
             let all_inner_arrays = outer.iter().all(|v| v.is_array());
             if all_inner_arrays {
                 // Flatten [[c1, c2], [c3, c4]] → [c1, c2, c3, c4]
-                let flat: Vec<serde_json::Value> = outer
-                    .iter()
-                    .flat_map(|v| v.as_array().cloned().unwrap_or_default())
-                    .collect();
+                let flat: Vec<serde_json::Value> =
+                    outer.iter().flat_map(|v| v.as_array().cloned().unwrap_or_default()).collect();
                 serde_json::Value::Array(flat)
             } else {
                 value.clone()
@@ -316,9 +314,6 @@ mod tests {
         assert_eq!(courses.len(), 2, "should have parsed 2 courses");
         assert_eq!(courses[0].title, "Stella Skill Simulator 4th st0");
         assert_eq!(courses[0].entries.len(), 4);
-        assert_eq!(
-            courses[0].entries[0].md5.as_deref(),
-            Some("349bc491ec40d5595412637d8a4c8d2e")
-        );
+        assert_eq!(courses[0].entries[0].md5.as_deref(), Some("349bc491ec40d5595412637d8a4c8d2e"));
     }
 }

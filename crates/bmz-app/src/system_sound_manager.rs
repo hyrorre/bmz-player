@@ -157,11 +157,7 @@ mod tests {
             let mut guard = engine.lock().unwrap();
             guard.insert_sample(
                 SoundId(SYSTEM_SOUND_BASE),
-                DecodedSample {
-                    channels: 1,
-                    sample_rate: 48_000,
-                    frames: vec![0.5; 48_000],
-                },
+                DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![0.5; 48_000] },
             );
         }
 
@@ -178,11 +174,7 @@ mod tests {
             let mut guard = engine.lock().unwrap();
             let mut output = vec![0.0; 8];
             guard.render_stereo(8, &mut output);
-            assert_eq!(
-                guard.mixer.voices.len(),
-                1,
-                "duplicate BGM play should not stack voices"
-            );
+            assert_eq!(guard.mixer.voices.len(), 1, "duplicate BGM play should not stack voices");
         }
     }
 

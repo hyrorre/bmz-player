@@ -209,16 +209,15 @@ mod tests {
           }
         ]"#;
 
-        let courses = parse_beatoraja_course_json("table:https://stellabms.xyz/st/header.json", json).unwrap();
+        let courses =
+            parse_beatoraja_course_json("table:https://stellabms.xyz/st/header.json", json)
+                .unwrap();
 
         assert_eq!(courses.len(), 1);
         assert_eq!(courses[0].title, "Stella Skill Simulator 4th st0");
         assert_eq!(courses[0].kind, CourseKind::Dan); // grade_mirror → Dan
         assert_eq!(courses[0].entries.len(), 4);
-        assert_eq!(
-            courses[0].entries[0].md5.as_deref(),
-            Some("349bc491ec40d5595412637d8a4c8d2e")
-        );
+        assert_eq!(courses[0].entries[0].md5.as_deref(), Some("349bc491ec40d5595412637d8a4c8d2e"));
         assert!(courses[0].entries[0].sha256.is_none());
         assert_eq!(courses[0].trophies[0].name, "silvermedal");
         assert_eq!(courses[0].trophies[1].name, "goldmedal");
@@ -242,7 +241,10 @@ mod tests {
                 "md5": ["baee0a1921fc5041b44d7d87c7b5548d"]
             }
         ]]);
-        let courses = parse_courses_from_header_for_test("https://stellabms.xyz/st/header.json", &Some(value));
+        let courses = parse_courses_from_header_for_test(
+            "https://stellabms.xyz/st/header.json",
+            &Some(value),
+        );
         assert_eq!(courses.len(), 2);
         assert_eq!(courses[0].title, "st0");
         assert_eq!(courses[1].title, "st1");

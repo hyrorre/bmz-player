@@ -47,9 +47,8 @@ impl ActiveCourseSession {
             self.entry_results.iter().map(|r| r.finished.result.score.ex_score()).sum();
         let max_ex_score: u32 = total_notes.saturating_mul(2);
 
-        let judge_counts = self.entry_results.iter().fold(
-            ResultJudgeCounts::default(),
-            |acc, r| {
+        let judge_counts =
+            self.entry_results.iter().fold(ResultJudgeCounts::default(), |acc, r| {
                 let j = &r.finished.result.score.judges;
                 ResultJudgeCounts {
                     pgreat: acc.pgreat + j.fast_pgreat + j.slow_pgreat,
@@ -59,14 +58,16 @@ impl ActiveCourseSession {
                     poor: acc.poor + j.fast_poor + j.slow_poor,
                     empty_poor: acc.empty_poor + j.fast_empty_poor + j.slow_empty_poor,
                 }
-            },
-        );
+            });
 
         let miss_count = judge_counts.bad + judge_counts.poor + judge_counts.empty_poor;
         let miss_rate =
             if total_notes > 0 { miss_count as f32 / total_notes as f32 * 100.0 } else { 0.0 };
-        let score_rate =
-            if max_ex_score > 0 { total_ex_score as f32 / max_ex_score as f32 * 100.0 } else { 0.0 };
+        let score_rate = if max_ex_score > 0 {
+            total_ex_score as f32 / max_ex_score as f32 * 100.0
+        } else {
+            0.0
+        };
 
         let trophy_results: Vec<TrophyResult> = self
             .definition
@@ -80,8 +81,7 @@ impl ActiveCourseSession {
 
         let course_clear = trophy_results.iter().any(|t| t.achieved);
 
-        let entry_summaries =
-            self.entry_results.into_iter().map(|r| r.finished.summary).collect();
+        let entry_summaries = self.entry_results.into_iter().map(|r| r.finished.summary).collect();
 
         CourseResultSummary {
             course_id: self.course_id,
@@ -127,9 +127,9 @@ mod tests {
     }
 
     fn make_session(course_id: i64, entry_scores: Vec<(ScoreState, u32)>) -> ActiveCourseSession {
-        use bmz_core::course::CourseKind;
-        use crate::storage::play_result::StoredPlayResult;
         use crate::screens::result_model::ResultSummary;
+        use crate::storage::play_result::StoredPlayResult;
+        use bmz_core::course::CourseKind;
 
         let entries: Vec<CourseEntry> = (0..entry_scores.len())
             .map(|i| CourseEntry {
@@ -155,10 +155,7 @@ mod tests {
                             slot_paths: [None, None, None, None],
                         },
                         summary: ResultSummary::from_play_result(
-                            &make_play_result(
-                                ScoreState::default(),
-                                total_notes,
-                            ),
+                            &make_play_result(ScoreState::default(), total_notes),
                             &StoredPlayResult {
                                 score_history_id: 0,
                                 replay_path: String::new(),
@@ -200,13 +197,7 @@ mod tests {
 
     #[test]
     fn into_result_aggregates_scores() {
-        let session = make_session(
-            1,
-            vec![
-                (make_score(100, 0), 100),
-                (make_score(100, 0), 100),
-            ],
-        );
+        let session = make_session(1, vec![(make_score(100, 0), 100), (make_score(100, 0), 100)]);
         let result = session.into_result();
         assert_eq!(result.total_notes, 200);
         assert_eq!(result.max_ex_score, 400);
