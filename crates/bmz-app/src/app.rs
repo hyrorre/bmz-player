@@ -16,7 +16,7 @@ use bmz_render::plan::{
 use bmz_render::renderer::{RenderSurfaceStatus, Renderer, SurfaceSize};
 use bmz_render::scene::{AppSceneSnapshot, ResultSnapshot, SelectRowSnapshot, SelectSnapshot};
 use bmz_render::snapshot::{
-    DisplayJudgeCounts, FastSlowJudgeCounts, OverlaySnapshot, RenderSnapshot,
+    CourseStageMarker, DisplayJudgeCounts, FastSlowJudgeCounts, OverlaySnapshot, RenderSnapshot,
 };
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
@@ -1408,6 +1408,32 @@ impl WinitApp {
         }
     }
 
+    /// Returns the beatoraja-compatible course stage marker for the currently
+    /// playing chart in the active course (1, 2, 3, 4 or Final).  None when no
+    /// course is active.
+    ///
+    /// The final entry always maps to `Final` (OPTION_COURSE_STAGE_FINAL=289);
+    /// earlier entries map to Stage1..4 by their 1-based index, clamped to
+    /// Stage4 for courses longer than 4 + final entry.
+    fn current_course_stage_marker(&self) -> Option<CourseStageMarker> {
+        let course = self.active_course.as_ref()?;
+        let total = course.definition.entries.len();
+        if total == 0 {
+            return None;
+        }
+        let index = course.current_index.min(total - 1);
+        let is_final = index + 1 == total;
+        if is_final {
+            return Some(CourseStageMarker::Final);
+        }
+        Some(match index {
+            0 => CourseStageMarker::Stage1,
+            1 => CourseStageMarker::Stage2,
+            2 => CourseStageMarker::Stage3,
+            _ => CourseStageMarker::Stage4,
+        })
+    }
+
     fn start_chart(&mut self, chart_id: i64) {
         let options = self.play_start_options();
         self.begin_decide_for_chart(chart_id, options);
@@ -1677,6 +1703,7 @@ impl WinitApp {
             );
         }
         let render_now = self.play_skin_playstart_offset();
+        let course_stage = self.current_course_stage_marker();
         let mut snapshot = build_render_snapshot_with_target_and_bga_frames(
             &active_play.running.session,
             render_now,
@@ -1689,6 +1716,7 @@ impl WinitApp {
         snapshot.backbmp_background = self.play_backbmp_loaded;
         snapshot.play_elapsed_time = self.play_elapsed_time();
         snapshot.ready_elapsed_time = self.play_ready_sound_started_at.map(elapsed_since);
+        snapshot.course_stage = course_stage;
         self.last_play_snapshot = Some(snapshot);
         self.active_play = Some(active_play);
     }
@@ -2326,6 +2354,8 @@ impl WinitApp {
             self.update_pending_play_snapshot_timers();
             return;
         }
+        // Capture the course stage before borrowing self.active_play mutably below.
+        let course_stage = self.current_course_stage_marker();
         let Some(active_play) = &mut self.active_play else {
             return;
         };
@@ -2352,6 +2382,7 @@ impl WinitApp {
                 snapshot.play_elapsed_time = self.play_elapsed_time();
                 snapshot.ready_elapsed_time = self.play_ready_sound_started_at.map(elapsed_since);
                 snapshot.backbmp_background = self.play_backbmp_loaded;
+                snapshot.course_stage = course_stage;
                 self.last_play_snapshot = Some(snapshot);
                 self.play_landmine_se(mine_hits);
             }
@@ -2362,6 +2393,7 @@ impl WinitApp {
                 snapshot.play_elapsed_time = self.play_elapsed_time();
                 snapshot.ready_elapsed_time = self.play_ready_sound_started_at.map(elapsed_since);
                 snapshot.backbmp_background = self.play_backbmp_loaded;
+                snapshot.course_stage = course_stage;
                 let full_combo_elapsed_at_finish_ms = snapshot.full_combo_elapsed_ms;
                 self.last_play_snapshot = Some(snapshot);
                 self.play_landmine_se(mine_hits);
