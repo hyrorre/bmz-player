@@ -1045,6 +1045,18 @@ impl WinitApp {
                     event.state == ElementState::Pressed;
             }
             if let Some(change) = hispeed_action(event.physical_key, event.state, event.repeat) {
+                // Beatoraja: NoSpeed constraint locks the hispeed during course play.
+                let speed_locked = self
+                    .active_course
+                    .as_ref()
+                    .is_some_and(|c| {
+                        c.definition.constraints.speed
+                            == bmz_core::course::CourseSpeedConstraint::NoSpeed
+                    });
+                if speed_locked {
+                    tracing::debug!("hispeed change ignored: course NoSpeed constraint");
+                    return;
+                }
                 active_play.running.session.hispeed =
                     adjusted_hispeed(active_play.running.session.hispeed, change);
                 tracing::info!(hispeed = active_play.running.session.hispeed, "adjusted hispeed");

@@ -198,8 +198,8 @@ pub fn apply_course_constraints(options: &mut PlayStartOptions, constraints: &Co
         }
     }
 
-    // Speed lock is stored in the constraint but not yet enforced in gameplay.
-    // Future work: propagate CourseSpeedConstraint into PlaySessionOptions.
+    // NoSpeed: enforced at the input-handling layer in WinitApp::route_keyboard_input
+    // by reading active_course.definition.constraints.speed.
     let _ = constraints.speed == CourseSpeedConstraint::NoSpeed;
 
     let allowed: &[ArrangeOption] = match constraints.class {
