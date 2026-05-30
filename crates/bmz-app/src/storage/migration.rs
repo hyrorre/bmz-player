@@ -261,6 +261,60 @@ pub const LIBRARY_MIGRATIONS: &[Migration] = &[
             "CREATE INDEX idx_courses_source_position ON courses(source, source_position);",
         ],
     },
+    Migration {
+        version: 9,
+        // Persist aggregated course play results plus their per-chart breakdown.
+        // Course scores live alongside the `courses` table because the FK to
+        // courses(id) cannot cross databases.
+        statements: &[
+            "CREATE TABLE course_scores (
+                id INTEGER PRIMARY KEY,
+                course_id INTEGER NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+                ex_score INTEGER NOT NULL,
+                max_ex_score INTEGER NOT NULL,
+                clear_type TEXT NOT NULL,
+                gauge_type TEXT NOT NULL,
+                gauge_value REAL NOT NULL,
+                max_combo INTEGER NOT NULL,
+                miss_count INTEGER NOT NULL,
+                course_failed INTEGER NOT NULL,
+                course_clear INTEGER NOT NULL,
+                trophies_json TEXT NOT NULL,
+                played_at INTEGER NOT NULL
+            );",
+            "CREATE INDEX idx_course_scores_course ON course_scores(course_id, played_at);",
+            "CREATE INDEX idx_course_scores_course_ex_score
+                ON course_scores(course_id, ex_score DESC);",
+            "CREATE TABLE course_score_charts (
+                course_score_id INTEGER NOT NULL
+                    REFERENCES course_scores(id) ON DELETE CASCADE,
+                position INTEGER NOT NULL,
+                chart_id INTEGER NOT NULL,
+                ex_score INTEGER NOT NULL,
+                max_combo INTEGER NOT NULL,
+                clear_type TEXT NOT NULL,
+                gauge_value REAL NOT NULL,
+                PRIMARY KEY(course_score_id, position)
+            );",
+            "CREATE INDEX idx_course_score_charts_chart ON course_score_charts(chart_id);",
+        ],
+    },
+    Migration {
+        version: 10,
+        // Per-chart replay file paths for a course attempt.  Replay file format
+        // is identical to per-chart replays; only the storage table is new so
+        // that the whole sequence can be replayed back to back later.
+        statements: &[
+            "CREATE TABLE course_replays (
+                course_score_id INTEGER NOT NULL
+                    REFERENCES course_scores(id) ON DELETE CASCADE,
+                position INTEGER NOT NULL,
+                chart_id INTEGER NOT NULL,
+                replay_path TEXT NOT NULL,
+                PRIMARY KEY(course_score_id, position)
+            );",
+        ],
+    },
 ];
 
 pub const SCORE_MIGRATIONS: &[Migration] = &[
