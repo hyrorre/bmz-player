@@ -540,6 +540,7 @@ dependencies = [
  "md5",
  "serde",
  "sha2",
+ "strict-num-extended",
  "tempfile",
  "thiserror 1.0.69",
 ]

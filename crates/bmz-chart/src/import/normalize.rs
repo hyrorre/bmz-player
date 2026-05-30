@@ -135,7 +135,11 @@ pub fn normalize_chart(
     draft.swbga_definitions = build_swbga_definitions(&intermediate);
     draft.bga_keybound_events = build_bga_keybound_events(&intermediate, &timing_map)?;
     draft.bga_asset_by_bmp_key = bga_table.by_bmp_key.clone();
-    draft.bar_lines = build_bar_lines(&intermediate.measures, &timing_map);
+    draft.bar_lines = if intermediate.metadata.suppress_bar_lines {
+        Vec::new()
+    } else {
+        build_bar_lines(&intermediate.measures, &timing_map)
+    };
 
     Ok(finalize_playable_chart(draft))
 }

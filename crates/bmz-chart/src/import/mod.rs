@@ -1,5 +1,6 @@
 pub mod bms_rs_adapter;
 pub mod bmson_adapter;
+pub mod bmson_timing;
 pub mod decode;
 pub mod error;
 pub mod intermediate;
@@ -436,6 +437,77 @@ mod tests {
         let result = import_chart(&path, None, false).unwrap();
         assert_eq!(result.chart.metadata.title, "Bmson Song");
         assert_eq!(result.chart.metadata.long_note_mode, crate::model::LongNoteMode::Ln);
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn imports_bmson_irregular_meter_lines() {
+        let json = r#"{
+            "version": "1.0.0",
+            "info": {
+                "title": "Irregular",
+                "artist": "Test",
+                "genre": "Test",
+                "level": 1,
+                "init_bpm": 120.0,
+                "judge_rank": 100.0,
+                "total": 100.0,
+                "resolution": 240
+            },
+            "lines": [
+                { "y": 960 },
+                { "y": 1680 },
+                { "y": 2640 }
+            ],
+            "sound_channels": [
+                {
+                    "name": "key.wav",
+                    "notes": [
+                        { "x": 1, "y": 1680, "l": 0, "c": false }
+                    ]
+                }
+            ]
+        }"#;
+        let path = write_temp_file_with_ext(json, "bmson");
+        let result = import_chart(&path, None, false).unwrap();
+        let note = result
+            .chart
+            .lane_notes
+            .iter()
+            .flat_map(|lane| lane.iter())
+            .find(|note| note.kind == crate::model::NoteKind::Tap)
+            .expect("note at pulse 1680");
+        assert_eq!(note.tick, bmz_core::time::ChartTick(6_720));
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn imports_bmson_empty_lines_without_bar_lines() {
+        let json = r#"{
+            "version": "1.0.0",
+            "info": {
+                "title": "No Barlines",
+                "artist": "Test",
+                "genre": "Test",
+                "level": 1,
+                "init_bpm": 120.0,
+                "judge_rank": 100.0,
+                "total": 100.0,
+                "resolution": 240
+            },
+            "lines": [],
+            "sound_channels": [
+                {
+                    "name": "key.wav",
+                    "notes": [
+                        { "x": 1, "y": 960, "l": 0, "c": false }
+                    ]
+                }
+            ]
+        }"#;
+        let path = write_temp_file_with_ext(json, "bmson");
+        let result = import_chart(&path, None, false).unwrap();
+        assert!(result.chart.bar_lines.is_empty());
         std::fs::remove_file(&path).unwrap();
     }
 

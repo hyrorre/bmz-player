@@ -12,6 +12,9 @@ use bms_rs::bmson::parse_bmson;
 use crate::hash::compute_chart_identity;
 
 use super::bms_rs_adapter::build_intermediate_from_bms;
+use super::bmson_timing::{
+    build_measure_boundaries, max_pulse_in_bmson, rebuild_bms_timing_from_bmson,
+};
 use super::error::{ImportError, ImportWarning};
 use super::intermediate::IntermediateChart;
 
@@ -41,7 +44,17 @@ pub fn import_bmson_to_intermediate(
         message: format!("failed to parse BMSON: {}", parse_errors.join("; ")),
     })?;
 
-    let converted = Bms::from_bmson(bmson);
+    let suppress_bar_lines = matches!(bmson.lines.as_ref(), Some(lines) if lines.is_empty());
+    let max_pulse = max_pulse_in_bmson(&bmson);
+    let boundaries =
+        build_measure_boundaries(bmson.lines.as_deref(), bmson.info.resolution.get(), max_pulse);
+
+    let mut converted = Bms::from_bmson(bmson.clone());
+    let mut timing_warnings = Vec::new();
+    rebuild_bms_timing_from_bmson(&mut converted.bms, &bmson, &boundaries, &mut timing_warnings);
+    for warning in timing_warnings {
+        push_bmson_to_bms_warning(warning, warnings);
+    }
     for warning in converted.warnings {
         push_bmson_to_bms_warning(warning, warnings);
     }
@@ -60,6 +73,7 @@ pub fn import_bmson_to_intermediate(
 
     let mut intermediate = build_intermediate_from_bms(&converted.bms, warnings);
     intermediate.identity = identity;
+    intermediate.metadata.suppress_bar_lines = suppress_bar_lines;
     Ok(intermediate)
 }
 

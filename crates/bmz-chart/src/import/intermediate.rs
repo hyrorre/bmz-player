@@ -38,6 +38,8 @@ pub struct IntermediateMetadata {
     pub key_mode: KeyMode,
     /// `#BASE 62` 相当。`true` のときオブジェクト ID は base62 換算する。
     pub base62_obj_ids: bool,
+    /// BMSON `lines: []` のとき小節線を描画しない。
+    pub suppress_bar_lines: bool,
 }
 
 #[derive(Debug, Clone, Default)]

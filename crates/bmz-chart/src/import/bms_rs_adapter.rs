@@ -182,6 +182,7 @@ fn build_metadata(bms: &Bms) -> IntermediateMetadata {
         has_bga: false,
         key_mode: KeyMode::default(),
         base62_obj_ids: bms_uses_base62_obj_ids(bms),
+        suppress_bar_lines: false,
     }
 }
 
