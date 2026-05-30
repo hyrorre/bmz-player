@@ -291,7 +291,8 @@ mod tests {
         let mut conn = open_db();
         let course = course();
 
-        let id = upsert_course(&mut conn, "course/default.json", &course, 0, 1_700_000_000).unwrap();
+        let id =
+            upsert_course(&mut conn, "course/default.json", &course, 0, 1_700_000_000).unwrap();
         assert!(id > 0);
 
         let courses = list_courses(&conn).unwrap();

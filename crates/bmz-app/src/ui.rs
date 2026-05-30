@@ -543,9 +543,7 @@ fn build_course_result_panel(ctx: &egui::Context, summary: &CourseResultSummary)
                 ui.label("GD / BD / PR");
                 ui.label(format!(
                     "{} / {} / {}",
-                    summary.judge_counts.good,
-                    summary.judge_counts.bad,
-                    summary.judge_counts.poor,
+                    summary.judge_counts.good, summary.judge_counts.bad, summary.judge_counts.poor,
                 ));
                 ui.end_row();
             });
@@ -609,10 +607,7 @@ fn build_course_preview_panel(ctx: &egui::Context, preview: &SelectCourseRow) {
             ui.horizontal(|ui| {
                 ui.label(&preview.category_label);
                 ui.separator();
-                ui.label(format!(
-                    "{}/{} resolved",
-                    preview.resolved_count, preview.entry_count
-                ));
+                ui.label(format!("{}/{} resolved", preview.resolved_count, preview.entry_count));
                 ui.separator();
                 ui.label(format!("notes {}", preview.total_notes));
             });
@@ -636,7 +631,10 @@ fn build_course_preview_panel(ctx: &egui::Context, preview: &SelectCourseRow) {
                             if entry.resolved {
                                 ui.label(title);
                             } else {
-                                ui.colored_label(egui::Color32::GRAY, format!("{} (missing)", title));
+                                ui.colored_label(
+                                    egui::Color32::GRAY,
+                                    format!("{} (missing)", title),
+                                );
                             }
                             ui.label(&entry.play_level);
                             ui.label(format!("{}", entry.total_notes));

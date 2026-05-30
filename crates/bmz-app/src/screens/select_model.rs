@@ -250,11 +250,9 @@ fn build_select_course_row(
     stored: crate::storage::library_db::StoredCourse,
 ) -> SelectItem {
     let entry_count = stored.definition.entries.len();
-    let resolved_count =
-        stored.definition.entries.iter().filter(|e| e.chart_id.is_some()).count();
+    let resolved_count = stored.definition.entries.iter().filter(|e| e.chart_id.is_some()).count();
 
-    let chart_ids: Vec<i64> =
-        stored.definition.entries.iter().filter_map(|e| e.chart_id).collect();
+    let chart_ids: Vec<i64> = stored.definition.entries.iter().filter_map(|e| e.chart_id).collect();
     let charts = library_db.list_charts_by_ids(&chart_ids).unwrap_or_default();
     let chart_by_id: std::collections::HashMap<i64, &ChartListItem> =
         charts.iter().map(|c| (c.chart_id, c)).collect();
@@ -287,11 +285,8 @@ fn build_select_course_row(
     let total_length_ms: i64 = charts.iter().map(|c| c.length_ms).sum();
     let min_bpm = charts.iter().map(|c| c.min_bpm as f32).fold(f32::INFINITY, f32::min);
     let max_bpm = charts.iter().map(|c| c.max_bpm as f32).fold(f32::NEG_INFINITY, f32::max);
-    let (min_bpm, max_bpm) = if min_bpm.is_finite() && max_bpm.is_finite() {
-        (min_bpm, max_bpm)
-    } else {
-        (0.0, 0.0)
-    };
+    let (min_bpm, max_bpm) =
+        if min_bpm.is_finite() && max_bpm.is_finite() { (min_bpm, max_bpm) } else { (0.0, 0.0) };
 
     let category_label = match stored.definition.kind {
         bmz_core::course::CourseKind::Dan => "DAN".to_string(),

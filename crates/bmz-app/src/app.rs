@@ -1075,13 +1075,10 @@ impl WinitApp {
             }
             if let Some(change) = hispeed_action(event.physical_key, event.state, event.repeat) {
                 // Beatoraja: NoSpeed constraint locks the hispeed during course play.
-                let speed_locked = self
-                    .active_course
-                    .as_ref()
-                    .is_some_and(|c| {
-                        c.definition.constraints.speed
-                            == bmz_core::course::CourseSpeedConstraint::NoSpeed
-                    });
+                let speed_locked = self.active_course.as_ref().is_some_and(|c| {
+                    c.definition.constraints.speed
+                        == bmz_core::course::CourseSpeedConstraint::NoSpeed
+                });
                 if speed_locked {
                     tracing::debug!("hispeed change ignored: course NoSpeed constraint");
                     return;
@@ -2645,17 +2642,14 @@ impl WinitApp {
         let course_result = self.finished_course.clone();
         // Only show the course preview when the user is on the select screen
         // and the cursor is over a course row.
-        let course_preview = matches!(
-            scene_kind(&self.scene_snapshot()),
-            AppSceneKind::Select
-        )
-        .then(|| {
-            self.select_items.get(self.selected_index).and_then(|item| match item {
-                SelectItem::Course(row) => Some(row.clone()),
-                _ => None,
+        let course_preview = matches!(scene_kind(&self.scene_snapshot()), AppSceneKind::Select)
+            .then(|| {
+                self.select_items.get(self.selected_index).and_then(|item| match item {
+                    SelectItem::Course(row) => Some(row.clone()),
+                    _ => None,
+                })
             })
-        })
-        .flatten();
+            .flatten();
         let Some(egui) = self.egui.as_mut() else {
             return;
         };
