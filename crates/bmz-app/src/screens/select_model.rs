@@ -253,6 +253,7 @@ pub fn table_level_folder_items(
     // Append courses that were imported from this table.
     let table_source = format!("table:{source_url}");
     if let Ok(courses) = library_db.list_courses_by_source(&table_source) {
+        tracing::info!(source = %table_source, count = courses.len(), "courses found for table");
         for stored in courses {
             let resolved_count =
                 stored.definition.entries.iter().filter(|e| e.chart_id.is_some()).count();
