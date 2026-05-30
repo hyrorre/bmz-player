@@ -172,56 +172,64 @@ pub fn build_render_snapshot_with_target_and_bga_frames(
             .to_string(),
     };
 
-    let scroll = ScrollContext::new(session);
-    let cursor_tick = scroll.cursor_tick(render_now);
+    // beatoraja の LaneRenderer と同様、playstart 中 (render_now < 0) は
+    // レーンスクロールの基準時刻を 0 に固定する。音声の chart_zero_time は
+    // マイナスのまま維持し、見た目だけ clamp する。
+    // chart 時刻が 0 未満の間は譜面オブジェクトを出さない (beatoraja の
+    // TIMER_PLAY 開始前と同じ)。
+    let scroll_time = scroll_render_time(render_now);
+    if render_now.0 >= 0 {
+        let scroll = ScrollContext::new(session);
+        let cursor_tick = scroll.cursor_tick(scroll_time);
 
-    for lane in Lane::ALL {
-        let next_note_index = session.judge.lanes[lane.index()].next_note_index;
-        for note in session.chart.notes_for_lane(lane).iter().skip(next_note_index) {
-            match note.kind {
-                NoteKind::Invisible => continue,
-                NoteKind::Mine => {
-                    if let Some(y) = scroll.note_y(note.time, cursor_tick) {
-                        snapshot.visible_mines[lane.index()].push(VisibleMine {
-                            lane,
-                            time: note.time,
-                            y,
-                            damage: note.damage.unwrap_or(0),
-                        });
+        for lane in Lane::ALL {
+            let next_note_index = session.judge.lanes[lane.index()].next_note_index;
+            for note in session.chart.notes_for_lane(lane).iter().skip(next_note_index) {
+                match note.kind {
+                    NoteKind::Invisible => continue,
+                    NoteKind::Mine => {
+                        if let Some(y) = scroll.note_y(note.time, cursor_tick) {
+                            snapshot.visible_mines[lane.index()].push(VisibleMine {
+                                lane,
+                                time: note.time,
+                                y,
+                                damage: note.damage.unwrap_or(0),
+                            });
+                        }
                     }
-                }
-                NoteKind::Tap | NoteKind::LongStart | NoteKind::LongEnd => {
-                    if let Some(y) = scroll.note_y(note.time, cursor_tick) {
-                        snapshot.visible_notes[lane.index()].push(VisibleNote {
-                            lane,
-                            time: note.time,
-                            y,
-                        });
+                    NoteKind::Tap | NoteKind::LongStart | NoteKind::LongEnd => {
+                        if let Some(y) = scroll.note_y(note.time, cursor_tick) {
+                            snapshot.visible_notes[lane.index()].push(VisibleNote {
+                                lane,
+                                time: note.time,
+                                y,
+                            });
+                        }
                     }
                 }
             }
         }
-    }
 
-    for bar in &session.chart.bar_lines {
-        if let Some(y) = scroll.note_y(bar.time, cursor_tick) {
-            snapshot.bar_lines.push(VisibleBarLine { time: bar.time, y });
+        for bar in &session.chart.bar_lines {
+            if let Some(y) = scroll.note_y(bar.time, cursor_tick) {
+                snapshot.bar_lines.push(VisibleBarLine { time: bar.time, y });
+            }
         }
-    }
 
-    for long in &session.chart.long_notes {
-        let head = scroll.note_progress(long.start_time, cursor_tick);
-        let tail = scroll.note_progress(long.end_time, cursor_tick);
-        // 終端が判定ラインを過ぎた、または始端が画面上端より奥なら非表示。
-        // lane cover は前面描画で隠すだけで、ノーツのカリング範囲は変えない。
-        if tail < 0.0 || head > 1.0 {
-            continue;
+        for long in &session.chart.long_notes {
+            let head = scroll.note_progress(long.start_time, cursor_tick);
+            let tail = scroll.note_progress(long.end_time, cursor_tick);
+            // 終端が判定ラインを過ぎた、または始端が画面上端より奥なら非表示。
+            // lane cover は前面描画で隠すだけで、ノーツのカリング範囲は変えない。
+            if tail < 0.0 || head > 1.0 {
+                continue;
+            }
+            snapshot.visible_long_notes.push(VisibleLongNote {
+                lane: long.lane,
+                head_y: head.clamp(0.0, 1.0),
+                tail_y: tail.clamp(0.0, 1.0),
+            });
         }
-        snapshot.visible_long_notes.push(VisibleLongNote {
-            lane: long.lane,
-            head_y: head.clamp(0.0, 1.0),
-            tail_y: tail.clamp(0.0, 1.0),
-        });
     }
 
     snapshot
@@ -333,6 +341,12 @@ fn skin_offsets_from_session(session: &GameSession) -> SkinOffsetValues {
         );
     }
     values
+}
+
+/// ノーツ / 小節線 / ロングノートのスクロール計算に使う時刻。
+/// playstart 中は beatoraja と同く 0 扱いにする。
+fn scroll_render_time(render_now: TimeUs) -> TimeUs {
+    TimeUs(render_now.0.max(0))
 }
 
 /// BPM 変化と STOP に追従した tick ベースのスクロール計算ヘルパ。
@@ -633,6 +647,26 @@ mod tests {
         assert_eq!(snapshot.recent_judgements[0].lane, Lane::Key1);
         assert_eq!(snapshot.recent_judgements[0].text, "EMPTY POOR SLOW");
         assert_eq!(snapshot.recent_judgements[0].delta_us, 5_000);
+    }
+
+    #[test]
+    fn build_render_snapshot_hides_lane_objects_during_playstart() {
+        use bmz_chart::model::BarLine;
+
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut chart = chart();
+        chart.bar_lines.push(BarLine { measure: 1, tick: ChartTick(0), time: TimeUs(1_000_000) });
+        let session = build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
+
+        let playstart = build_render_snapshot(&session, TimeUs(-1_000_000), &[], None);
+        let started = build_render_snapshot(&session, TimeUs(0), &[], None);
+
+        assert_eq!(playstart.time, TimeUs(-1_000_000));
+        assert!(playstart.bar_lines.is_empty());
+        assert!(playstart.visible_notes[Lane::Key1.index()].is_empty());
+        assert_eq!(started.bar_lines.len(), 1);
+        assert_eq!(started.visible_notes[Lane::Key1.index()].len(), 1);
+        assert!(started.bar_lines[0].y > 0.0);
     }
 
     #[test]
