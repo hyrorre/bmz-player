@@ -114,5 +114,15 @@ pub async fn fetch_table_url(url: &str, library_db: &mut LibraryDatabase) -> Res
     let table = crate::difficulty_table::fetch_difficulty_table(url, now).await?;
     println!("Fetched: {} ({}) — {} entries", table.name, table.symbol, table.entries.len());
     library_db.upsert_difficulty_table(&table)?;
+
+    // Save any courses embedded in the table header.
+    let source = format!("table:{url}");
+    for course in &table.courses {
+        library_db.upsert_course(&source, course, now)?;
+    }
+    if !table.courses.is_empty() {
+        println!("  {} course(s) stored.", table.courses.len());
+    }
+
     Ok(())
 }
