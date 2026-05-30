@@ -163,12 +163,19 @@ pub struct BindingConfigEntry {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum InputActionConfig {
+    #[serde(rename = "Start", alias = "SelectStart")]
     SelectStart,
+    #[serde(rename = "Enter", alias = "SelectEnter")]
     SelectEnter,
+    #[serde(rename = "Back", alias = "SelectBack")]
     SelectBack,
+    #[serde(rename = "OptionArrange", alias = "SelectOptionArrange")]
     SelectOptionArrange,
+    #[serde(rename = "OptionGauge", alias = "SelectOptionGauge")]
     SelectOptionGauge,
+    #[serde(rename = "OptionAssist", alias = "SelectOptionAssist")]
     SelectOptionAssist,
+    #[serde(rename = "OptionBga", alias = "SelectOptionBga")]
     SelectOptionBga,
 }
 
@@ -651,13 +658,32 @@ mod tests {
     }
 
     #[test]
+    fn input_config_reads_legacy_select_action_names() {
+        let input: ProfileInputConfig = toml::from_str(
+            r#"
+            scratch_mode = "Normal"
+            analog_scratch_sensitivity = 1.0
+            analog_scratch_timeout_ms = 500
+
+            [[bindings]]
+            device = "keyboard"
+            control = "Q"
+            action = "SelectStart"
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(input.bindings[0].action, Some(InputActionConfig::SelectStart));
+    }
+
+    #[test]
     fn input_config_serializes_select_actions_without_start_key() {
         let profile = ProfileConfig::new_default("default", "Default", 1);
 
         let toml = toml::to_string(&profile.input).unwrap();
 
         assert!(!toml.contains("start_key"));
-        assert!(toml.contains("action = \"SelectStart\""));
-        assert!(toml.contains("action = \"SelectBack\""));
+        assert!(toml.contains("action = \"Start\""));
+        assert!(toml.contains("action = \"Back\""));
     }
 }
