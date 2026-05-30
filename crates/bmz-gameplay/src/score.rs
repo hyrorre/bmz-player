@@ -26,6 +26,8 @@ pub struct ScoreState {
     pub combo: u32,
     pub max_combo: u32,
     pub past_notes: u32,
+    /// beatoraja 互換 ghost。各スコア対象ノーツの判定 bucket を 1 byte で保持する。
+    pub ghost: Vec<u8>,
 }
 
 impl ScoreState {
@@ -34,6 +36,7 @@ impl ScoreState {
 
         if event.note_id.is_some() {
             self.past_notes += 1;
+            self.ghost.push(ghost_judge_code(event.judge));
         }
 
         match event.judge {
@@ -81,6 +84,16 @@ impl ScoreState {
             (Judge::EmptyPoor, TimingSide::Fast) => self.judges.fast_empty_poor += 1,
             (Judge::EmptyPoor, TimingSide::Slow) => self.judges.slow_empty_poor += 1,
         }
+    }
+}
+
+fn ghost_judge_code(judge: Judge) -> u8 {
+    match judge {
+        Judge::PGreat => 0,
+        Judge::Great => 1,
+        Judge::Good => 2,
+        Judge::Bad => 3,
+        Judge::Poor | Judge::EmptyPoor => 4,
     }
 }
 

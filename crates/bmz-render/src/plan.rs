@@ -803,6 +803,7 @@ fn plan_play(
         bga_stretch: snapshot.bga_stretch,
         judge_timing_ms,
         best_ex_score: snapshot.best_ex_score,
+        projected_best_ex_score: snapshot.projected_best_ex_score,
         target_ex_score: snapshot.target_ex_score,
         judge_timing_offset_ms: snapshot.judge_timing_offset_ms,
         autoplay: snapshot.autoplay,

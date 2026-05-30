@@ -1,9 +1,15 @@
+use std::io::{Read, Write};
 use std::path::Path;
 
 use anyhow::{Result, bail};
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE;
 use bmz_core::clear::{ClearType, GaugeType};
 use bmz_gameplay::result::PlayResult;
 use bmz_gameplay::score::ScoreState;
+use flate2::Compression;
+use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::common::{configure_connection, hash_to_hex, hex_to_hash};
@@ -139,6 +145,24 @@ impl ScoreDatabase {
             )
             .optional()
             .map_err(Into::into)
+    }
+
+    pub fn best_ghost(&self, chart_sha256: [u8; 32], total_notes: u32) -> Result<Option<Vec<u8>>> {
+        let Some(ghost) = self
+            .conn
+            .query_row(
+                "SELECT ghost FROM score_best WHERE chart_sha256 = ?1",
+                params![hash_to_hex(&chart_sha256)],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+        else {
+            return Ok(None);
+        };
+        if ghost.is_empty() {
+            return Ok(None);
+        }
+        decode_beatoraja_ghost(&ghost, total_notes).map(Some)
     }
 
     pub fn best_scores_for_charts(
@@ -349,6 +373,7 @@ fn score_history_entry_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Sco
 
 fn insert_score_history(conn: &Connection, record: &ScoreRecord) -> Result<()> {
     let judges = &record.score.judges;
+    let ghost = encode_beatoraja_ghost(&record.score.ghost)?;
     conn.execute(
         "INSERT INTO score_history (
             chart_sha256,
@@ -375,10 +400,11 @@ fn insert_score_history(conn: &Connection, record: &ScoreRecord) -> Result<()> {
             gauge_option,
             assist_mask,
             autoplay,
-            replay_path
+            replay_path,
+            ghost
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-            ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25
+            ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26
         )",
         params![
             hash_to_hex(&record.chart_sha256),
@@ -406,6 +432,7 @@ fn insert_score_history(conn: &Connection, record: &ScoreRecord) -> Result<()> {
             record.assist_mask,
             record.autoplay,
             record.replay_path.as_str(),
+            ghost,
         ],
     )?;
     Ok(())
@@ -413,6 +440,7 @@ fn insert_score_history(conn: &Connection, record: &ScoreRecord) -> Result<()> {
 
 fn upsert_score_best(conn: &Connection, record: &ScoreRecord) -> Result<()> {
     let judges = &record.score.judges;
+    let ghost = encode_beatoraja_ghost(&record.score.ghost)?;
     conn.execute(
         "INSERT INTO score_best (
             chart_sha256,
@@ -434,10 +462,11 @@ fn upsert_score_best(conn: &Connection, record: &ScoreRecord) -> Result<()> {
             fast_empty_poor,
             slow_empty_poor,
             played_at,
-            replay_path
+            replay_path,
+            ghost
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-            ?14, ?15, ?16, ?17, ?18, ?19, ?20
+            ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21
         )
         ON CONFLICT(chart_sha256) DO UPDATE SET
             clear_type = excluded.clear_type,
@@ -458,7 +487,8 @@ fn upsert_score_best(conn: &Connection, record: &ScoreRecord) -> Result<()> {
             fast_empty_poor = excluded.fast_empty_poor,
             slow_empty_poor = excluded.slow_empty_poor,
             played_at = excluded.played_at,
-            replay_path = excluded.replay_path
+            replay_path = excluded.replay_path,
+            ghost = excluded.ghost
         WHERE
             excluded.ex_score > score_best.ex_score
             OR (
@@ -517,6 +547,7 @@ fn upsert_score_best(conn: &Connection, record: &ScoreRecord) -> Result<()> {
             judges.slow_empty_poor,
             record.played_at,
             record.replay_path.as_str(),
+            ghost,
         ],
     )?;
     Ok(())
@@ -524,6 +555,34 @@ fn upsert_score_best(conn: &Connection, record: &ScoreRecord) -> Result<()> {
 
 fn gauge_type_str(gauge_type: Option<GaugeType>) -> &'static str {
     gauge_type.map(GaugeType::as_str).unwrap_or("")
+}
+
+pub fn encode_beatoraja_ghost(ghost: &[u8]) -> Result<String> {
+    if ghost.is_empty() {
+        return Ok(String::new());
+    }
+
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(ghost)?;
+    Ok(URL_SAFE.encode(encoder.finish()?))
+}
+
+pub fn decode_beatoraja_ghost(encoded: &str, total_notes: u32) -> Result<Vec<u8>> {
+    let expected_len = total_notes as usize;
+    if encoded.is_empty() {
+        return Ok(vec![4; expected_len]);
+    }
+
+    let compressed = URL_SAFE.decode(encoded)?;
+    let mut decoder = GzDecoder::new(compressed.as_slice());
+    let mut decoded = Vec::with_capacity(expected_len);
+    decoder.read_to_end(&mut decoded)?;
+    if decoded.len() < expected_len {
+        decoded.resize(expected_len, 4);
+    } else if decoded.len() > expected_len {
+        decoded.truncate(expected_len);
+    }
+    Ok(decoded)
 }
 
 #[cfg(test)]
@@ -610,6 +669,29 @@ mod tests {
         db.insert_score(&record(30, ClearType::Easy)).unwrap();
 
         assert_eq!(db.best_ex_score([7; 32]).unwrap(), Some(30));
+    }
+
+    #[test]
+    fn beatoraja_ghost_round_trips_as_gzip_urlsafe_base64() {
+        let ghost = vec![0, 1, 2, 3, 4];
+
+        let encoded = encode_beatoraja_ghost(&ghost).unwrap();
+        let decoded = decode_beatoraja_ghost(&encoded, ghost.len() as u32).unwrap();
+
+        assert_eq!(decoded, ghost);
+    }
+
+    #[test]
+    fn insert_score_persists_best_ghost_for_current_best() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut db = ScoreDatabase { conn };
+
+        db.insert_score(&record(20, ClearType::Normal)).unwrap();
+        db.insert_score(&record(10, ClearType::Hard)).unwrap();
+
+        assert_eq!(db.best_ghost([7; 32], 10).unwrap(), Some(vec![0; 10]));
     }
 
     #[test]

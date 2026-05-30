@@ -1090,6 +1090,8 @@ pub struct SkinDrawState {
     pub judge_timing_ms: Option<i32>,
     /// 過去ベストスコアのexスコア (NUMBER_HIGHSCORE=150, BARGRAPH_BESTSCORERATE=113 に使用)。
     pub best_ex_score: Option<u32>,
+    /// ghost から現在進行度まで積算した過去ベスト EX。None の場合は final score の線形投影を使う。
+    pub projected_best_ex_score: Option<u32>,
     /// 過去ベストのクリアタイプ index (ref 371)。
     pub best_clear_index: Option<i64>,
     /// ターゲットスコアのexスコア (NUMBER_TARGET_SCORE=121, BARGRAPH_TARGETSCORERATE=115 に使用)。
@@ -1223,6 +1225,7 @@ impl Default for SkinDrawState {
             bga_stretch: 1,
             judge_timing_ms: None,
             best_ex_score: None,
+            projected_best_ex_score: None,
             best_clear_index: None,
             target_ex_score: None,
             judge_timing_offset_ms: 0,
@@ -4728,7 +4731,7 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         // 判定タイミングオフセット設定値 (NUMBER_JUDGETIMING=12)
         12 => Some(state.judge_timing_offset_ms as i64),
         // ベストスコア / ターゲットスコア (DB から供給、未取得時は None)
-        150 | 170 => state.best_ex_score.map(|s| projected_score_at_progress(s, state) as i64),
+        150 | 170 => projected_best_score_at_progress(state).map(|s| s as i64),
         121 | 151 => state.target_ex_score.map(|s| projected_score_at_progress(s, state) as i64),
         122 | 123 | 135 | 136 | 157 | 158 => {
             state.target_ex_score.map(|target| score_rate_parts(target, state.total_notes)).map(
@@ -4742,9 +4745,9 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         400 => state.judge_rank.map(|rank| rank as i64),
         154 => next_rank_diff(state),
         // NUMBER_DIFF_HIGHSCORE=152, NUMBER_DIFF_HIGHSCORE2=172 (符号付き、ex_score - best)
-        152 | 172 => state
-            .best_ex_score
-            .map(|best| state.ex_score as i64 - projected_score_at_progress(best, state) as i64),
+        152 | 172 => {
+            projected_best_score_at_progress(state).map(|best| state.ex_score as i64 - best as i64)
+        }
         // NUMBER_DIFF_TARGETSCORE=153 (符号付き、ex_score - target)
         153 => state.target_ex_score.map(|target| {
             state.ex_score as i64 - projected_score_at_progress(target, state) as i64
@@ -4807,6 +4810,12 @@ fn projected_score_at_progress(final_score: u32, state: SkinDrawState) -> u32 {
     }
     let past_notes = state.past_notes.min(state.total_notes);
     ((final_score as u64 * past_notes as u64) / state.total_notes as u64) as u32
+}
+
+fn projected_best_score_at_progress(state: SkinDrawState) -> Option<u32> {
+    state
+        .projected_best_ex_score
+        .or_else(|| state.best_ex_score.map(|score| projected_score_at_progress(score, state)))
 }
 
 fn div_ceil(numerator: i64, denominator: i64) -> i64 {
@@ -11756,6 +11765,14 @@ mod tests {
         assert_eq!(skin_state_number(150, state), Some(1500));
         // NUMBER_TARGET_SCORE (121)
         assert_eq!(skin_state_number(121, state), Some(800));
+        let ghost_projected = SkinDrawState {
+            best_ex_score: Some(1500),
+            projected_best_ex_score: Some(321),
+            ex_score: 400,
+            ..SkinDrawState::default()
+        };
+        assert_eq!(skin_state_number(150, ghost_projected), Some(321));
+        assert_eq!(skin_state_number(152, ghost_projected), Some(79));
         // When None → None
         let no_scores = SkinDrawState::default();
         assert_eq!(skin_state_number(150, no_scores), None);

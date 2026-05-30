@@ -52,6 +52,7 @@ pub fn advance_play_screen(
         audio,
         best_ex_score,
         None,
+        None,
         &BgaFrameCatalog::new(),
     )
 }
@@ -60,6 +61,7 @@ pub fn advance_play_screen_with_bga_frames(
     session: &mut GameSession,
     audio: &mut dyn AudioScheduler,
     best_ex_score: Option<u32>,
+    best_ghost: Option<&[u8]>,
     target_ex_score: Option<u32>,
     bga_frames: &BgaFrameCatalog,
 ) -> FrameOutput<RenderSnapshot> {
@@ -69,6 +71,7 @@ pub fn advance_play_screen_with_bga_frames(
         frame.times.render_now,
         &session.recent_judgements,
         best_ex_score,
+        best_ghost,
         target_ex_score,
         bga_frames,
     );
@@ -119,6 +122,7 @@ pub fn advance_running_play_session(
         &mut running.session,
         &mut *audio,
         running.best_ex_score,
+        running.best_ghost.as_deref(),
         running.target_ex_score,
         &running.bga_frames,
     ))
@@ -138,6 +142,7 @@ pub fn advance_running_play_session_until_result(
             &mut running.session,
             &mut *audio,
             running.best_ex_score,
+            running.best_ghost.as_deref(),
             running.target_ex_score,
             &running.bga_frames,
         )

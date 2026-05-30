@@ -331,4 +331,11 @@ pub const SCORE_MIGRATIONS: &[Migration] = &[
             "CREATE INDEX idx_replay_slots_chart ON replay_slots(chart_sha256);",
         ],
     },
+    Migration {
+        version: 3,
+        statements: &[
+            "ALTER TABLE score_history ADD COLUMN ghost TEXT NOT NULL DEFAULT '';",
+            "ALTER TABLE score_best ADD COLUMN ghost TEXT NOT NULL DEFAULT '';",
+        ],
+    },
 ];

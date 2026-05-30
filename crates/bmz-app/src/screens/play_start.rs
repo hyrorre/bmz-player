@@ -102,6 +102,8 @@ pub fn start_running_play_session_for_chart_with_input_backend(
     let chart_sha256 = prepared.session.chart.identity.file_sha256;
     let mut running = open_prepared_play_audio(&app_config.audio, prepared)?;
     running.best_ex_score = score_db.best_ex_score(chart_sha256).unwrap_or(None);
+    running.best_ghost =
+        score_db.best_ghost(chart_sha256, running.session.chart.total_notes).unwrap_or(None);
     running.start(chart_zero_time)?;
     Ok(running)
 }
@@ -146,6 +148,8 @@ pub fn open_prepared_winit_play_session(
     let chart_sha256 = prepared.prepared.session.chart.identity.file_sha256;
     let mut running = open_prepared_play_audio(&app_config.audio, prepared.prepared)?;
     running.best_ex_score = score_db.best_ex_score(chart_sha256).unwrap_or(None);
+    running.best_ghost =
+        score_db.best_ghost(chart_sha256, running.session.chart.total_notes).unwrap_or(None);
     Ok(StartedWinitPlaySession { running, input: prepared.input })
 }
 

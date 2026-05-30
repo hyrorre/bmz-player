@@ -45,6 +45,7 @@ pub fn build_render_snapshot_with_bga_frames(
         recent_judgements,
         best_ex_score,
         None,
+        None,
         bga_frames,
     )
 }
@@ -54,9 +55,12 @@ pub fn build_render_snapshot_with_target_and_bga_frames(
     render_now: TimeUs,
     recent_judgements: &[JudgementEvent],
     best_ex_score: Option<u32>,
+    best_ghost: Option<&[u8]>,
     target_ex_score: Option<u32>,
     bga_frames: &BgaFrameCatalog,
 ) -> RenderSnapshot {
+    let projected_best_ex_score =
+        best_ghost.map(|ghost| ghost_ex_score_at_progress(ghost, session.score.past_notes));
     let mut snapshot = RenderSnapshot {
         time: render_now,
         play_elapsed_time: render_now,
@@ -128,6 +132,7 @@ pub fn build_render_snapshot_with_target_and_bga_frames(
             .flatten(),
         bga_stretch: session.bga_stretch,
         best_ex_score,
+        projected_best_ex_score,
         target_ex_score,
         judge_timing_offset_ms: (session.offsets.input_offset_us / 1_000) as i32,
         autoplay: session.autoplay.is_some(),
@@ -474,6 +479,18 @@ fn display_judge_counts(session: &GameSession) -> DisplayJudgeCounts {
         bad: judges.fast_bad + judges.slow_bad,
         poor: judges.fast_poor + judges.slow_poor,
         empty_poor: judges.fast_empty_poor + judges.slow_empty_poor,
+    }
+}
+
+fn ghost_ex_score_at_progress(ghost: &[u8], past_notes: u32) -> u32 {
+    ghost.iter().take(past_notes as usize).map(|&judge| ghost_ex_value(judge)).sum()
+}
+
+fn ghost_ex_value(judge: u8) -> u32 {
+    match judge {
+        0 => 2,
+        1 => 1,
+        _ => 0,
     }
 }
 
@@ -990,11 +1007,32 @@ mod tests {
             TimeUs(0),
             &[],
             None,
+            None,
             Some(1600),
             &BgaFrameCatalog::new(),
         );
 
         assert_eq!(snapshot.target_ex_score, Some(1600));
+    }
+
+    #[test]
+    fn build_render_snapshot_projects_best_score_from_ghost() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+        session.score.past_notes = 3;
+
+        let snapshot = build_render_snapshot_with_target_and_bga_frames(
+            &session,
+            TimeUs(0),
+            &[],
+            Some(8),
+            Some(&[0, 1, 4, 0]),
+            None,
+            &BgaFrameCatalog::new(),
+        );
+
+        assert_eq!(snapshot.projected_best_ex_score, Some(3));
     }
 
     #[test]

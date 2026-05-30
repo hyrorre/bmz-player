@@ -491,6 +491,7 @@ name = "bmz-app"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64",
  "bmz-audio",
  "bmz-chart",
  "bmz-core",
@@ -500,6 +501,7 @@ dependencies = [
  "bmz-video",
  "egui",
  "egui-winit",
+ "flate2",
  "gilrs",
  "rayon",
  "reqwest",

@@ -1555,6 +1555,7 @@ impl WinitApp {
             render_now,
             &active_play.running.session.recent_judgements,
             active_play.running.best_ex_score,
+            active_play.running.best_ghost.as_deref(),
             active_play.running.target_ex_score,
             &active_play.running.bga_frames,
         );
