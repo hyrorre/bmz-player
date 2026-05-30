@@ -713,7 +713,6 @@ impl WinitApp {
                 .unwrap_or(self.last_play_was_autoplay),
             AppViewState::Select | AppViewState::Decide => {
                 self.assist_option == AssistOption::Autoplay
-                    || self.boot.profile_config.play.auto_play
             }
         }
     }
@@ -975,7 +974,7 @@ impl WinitApp {
             tracing::info!(gauge = ?self.gauge_option, "gauge option changed");
             true
         } else if self.select_keys.cycle_assist.as_deref() == Some(control) {
-            self.assist_option = self.assist_option.cycle();
+            self.set_assist_option(self.assist_option.cycle());
             tracing::info!(assist = self.assist_option.as_str(), "assist option changed");
             true
         } else {
@@ -983,9 +982,14 @@ impl WinitApp {
         }
     }
 
+    fn set_assist_option(&mut self, assist: AssistOption) {
+        self.assist_option = assist;
+        self.boot.profile_config.play.auto_play = assist == AssistOption::Autoplay;
+    }
+
     fn apply_assist_option_control(&mut self, control: &str) -> bool {
         if self.select_keys.cycle_assist.as_deref() == Some(control) {
-            self.assist_option = self.assist_option.cycle();
+            self.set_assist_option(self.assist_option.cycle());
             tracing::info!(assist = self.assist_option.as_str(), "assist option changed");
             true
         } else {
@@ -4471,6 +4475,15 @@ mod tests {
         let keys = default_select_keys();
         assert!(is_select_start_key(PhysicalKey::Code(KeyCode::KeyQ), &keys));
         assert!(!is_select_start_key(PhysicalKey::Code(KeyCode::KeyS), &keys));
+    }
+
+    #[test]
+    fn select_key_bindings_map_e1_plus_key5_to_assist_option() {
+        let keys = default_select_keys();
+
+        assert!(keys.is_start("Q"));
+        assert_eq!(keys.cycle_assist.as_deref(), Some("C"));
+        assert!(keys.is_enter("C"));
     }
 
     #[test]
