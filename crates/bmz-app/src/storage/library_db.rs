@@ -1020,6 +1020,9 @@ fn warning_details(warning: &ImportWarning) -> (String, String) {
         ImportWarning::UnsupportedChannel { channel } => {
             ("UnsupportedChannel".into(), format!("unsupported channel: {channel}"))
         }
+        ImportWarning::UnsupportedPmsPlayerSide { side } => {
+            ("UnsupportedPmsPlayerSide".into(), format!("unsupported PMS player side: {side}"))
+        }
         ImportWarning::MissingWavDefinition { key } => {
             ("MissingWavDefinition".into(), format!("missing WAV definition: {key}"))
         }

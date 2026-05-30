@@ -51,6 +51,13 @@ pub fn play_skin_selection_for(skin: &SkinConfig, key_mode: KeyMode) -> PlaySkin
             options: &skin.play14_options,
             files: &skin.play14_files,
         },
+        // play9 未実装の間は 7K プレイスキンへフォールバック (PMS 5K/9K 共通)。
+        KeyMode::K9 => PlaySkinSelection {
+            key_mode,
+            path: skin.play7.as_str(),
+            options: &skin.play7_options,
+            files: &skin.play7_files,
+        },
     }
 }
 

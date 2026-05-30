@@ -3516,6 +3516,18 @@ fn beatoraja_note_index(lane: Lane, key_mode: KeyMode) -> usize {
             Lane::Key14 => 14,
             _ => 15, // Scratch2
         },
+        KeyMode::K9 => match lane {
+            Lane::Key1 => 0,
+            Lane::Key2 => 1,
+            Lane::Key3 => 2,
+            Lane::Key4 => 3,
+            Lane::Key5 => 4,
+            Lane::Key6 => 5,
+            Lane::Key7 => 6,
+            Lane::Key8 => 7,
+            Lane::Key9 => 8,
+            _ => 8,
+        },
     }
 }
 
