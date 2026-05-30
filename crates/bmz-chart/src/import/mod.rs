@@ -379,6 +379,44 @@ mod tests {
     }
 
     #[test]
+    fn sets_base62_obj_ids_metadata() {
+        let text = "\
+#TITLE Base62 Flag
+#BPM 120
+#BASE 62
+";
+        let path = write_temp_bms(text);
+        let mut warnings = Vec::new();
+        let intermediate =
+            super::bms_rs_adapter::import_bms_to_intermediate(&path, None, &mut warnings).unwrap();
+        assert!(intermediate.metadata.base62_obj_ids, "warnings: {warnings:?}");
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn imports_base62_swbga_pattern_with_distinct_case_ids() {
+        let text = "\
+#TITLE Base62 SWBGA
+#BPM 120
+#TOTAL 200
+#BASE 62
+#BMPaa aa.png
+#BMPAA AA.png
+#SWBGA01 100:0:11:0:255,0,0,0 aaAA
+#000A5:01
+#00011:01
+";
+        let path = write_temp_bms(text);
+        let result = import_bms_chart(&path, None, false).unwrap();
+        assert_eq!(result.chart.swbga_definitions.len(), 1);
+        assert_eq!(
+            result.chart.swbga_definitions[0].pattern_bmp_keys,
+            vec![36 * 62 + 36, 10 * 62 + 10]
+        );
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn imports_bmson_into_playable_chart() {
         let json = r#"{
             "version": "1.0.0",

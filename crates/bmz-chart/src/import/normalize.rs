@@ -726,7 +726,10 @@ fn build_swbga_definitions(intermediate: &IntermediateChart) -> Vec<SwBgaDefinit
             chroma_red: def.chroma_red,
             chroma_green: def.chroma_green,
             chroma_blue: def.chroma_blue,
-            pattern_bmp_keys: parse_swbga_pattern(&def.pattern),
+            pattern_bmp_keys: parse_swbga_pattern(
+                &def.pattern,
+                intermediate.metadata.base62_obj_ids,
+            ),
         })
         .collect()
 }

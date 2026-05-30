@@ -26,8 +26,11 @@ pub fn swbga_line_to_lane(line: u8) -> Option<Lane> {
     }
 }
 
-/// `#SWBGA` pattern 文字列 (2桁 base36 BMP ID 列) を BMP キー列へ。
-pub fn parse_swbga_pattern(pattern: &str) -> Vec<u16> {
+/// `#SWBGA` pattern 文字列 (2桁オブジェクト ID 列) を BMP キー列へ。
+///
+/// `base62_obj_ids` が `true` のとき beatoraja / bms-rs の base62 換算、
+/// それ以外は base36 換算を使う。
+pub fn parse_swbga_pattern(pattern: &str, base62_obj_ids: bool) -> Vec<u16> {
     let trimmed = pattern.trim();
     if trimmed.is_empty() {
         return Vec::new();
@@ -35,11 +38,44 @@ pub fn parse_swbga_pattern(pattern: &str) -> Vec<u16> {
     trimmed
         .as_bytes()
         .chunks(2)
-        .filter_map(|chunk| {
-            let token = std::str::from_utf8(chunk).ok()?;
-            u16::from_str_radix(token, 36).ok()
-        })
+        .filter_map(|chunk| parse_obj_id_pair(chunk, base62_obj_ids))
         .collect()
+}
+
+fn parse_obj_id_pair(chars: &[u8], base62_obj_ids: bool) -> Option<u16> {
+    let [c1, c2] = chars else {
+        return None;
+    };
+    if base62_obj_ids { parse_int62(*c1, *c2) } else { parse_int36(*c1, *c2) }
+}
+
+fn base62_digit(c: u8) -> Option<u8> {
+    match c {
+        b'0'..=b'9' => Some(c - b'0'),
+        b'A'..=b'Z' => Some(c - b'A' + 10),
+        b'a'..=b'z' => Some(c - b'a' + 36),
+        _ => None,
+    }
+}
+
+fn parse_int62(c1: u8, c2: u8) -> Option<u16> {
+    let hi = base62_digit(c1)?;
+    let lo = base62_digit(c2)?;
+    Some(u16::from(hi) * 62 + u16::from(lo))
+}
+
+fn parse_int36(c1: u8, c2: u8) -> Option<u16> {
+    let digit = |c: u8| -> Option<u8> {
+        match c {
+            b'0'..=b'9' => Some(c - b'0'),
+            b'a'..=b'z' => Some(c - b'a' + 10),
+            b'A'..=b'Z' => Some(c - b'A' + 10),
+            _ => None,
+        }
+    };
+    let hi = digit(c1)?;
+    let lo = digit(c2)?;
+    Some(u16::from(hi) * 36 + u16::from(lo))
 }
 
 /// キー押下中の keybound BGA フレーム (BMP キー) を返す。
@@ -87,7 +123,17 @@ mod tests {
 
     #[test]
     fn parse_swbga_pattern_reads_base36_pairs() {
-        assert_eq!(parse_swbga_pattern("0102ZZ"), vec![1, 2, 35 * 36 + 35]);
+        assert_eq!(parse_swbga_pattern("0102ZZ", false), vec![1, 2, 35 * 36 + 35]);
+    }
+
+    #[test]
+    fn parse_swbga_pattern_reads_base62_pairs() {
+        assert_eq!(parse_swbga_pattern("0102ZZ", true), vec![1, 2, 35 * 62 + 35]);
+        // aa=36*62+36, AA=10*62+10
+        assert_eq!(parse_swbga_pattern("aaAA", true), vec![36 * 62 + 36, 10 * 62 + 10]);
+        // "10" は base36=36, base62=62
+        assert_eq!(parse_swbga_pattern("10", false), vec![36]);
+        assert_eq!(parse_swbga_pattern("10", true), vec![62]);
     }
 
     #[test]

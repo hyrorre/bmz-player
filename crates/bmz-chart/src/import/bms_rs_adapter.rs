@@ -181,7 +181,17 @@ fn build_metadata(bms: &Bms) -> IntermediateMetadata {
         long_note_mode: map_ln_mode(bms.repr.ln_mode),
         has_bga: false,
         key_mode: KeyMode::default(),
+        base62_obj_ids: bms_uses_base62_obj_ids(bms),
     }
+}
+
+fn bms_uses_base62_obj_ids(bms: &Bms) -> bool {
+    if bms.repr.case_sensitive_obj_id {
+        return true;
+    }
+    // bms-rs は `#BASE 62` 処理時に RefCell だけ更新し `repr.case_sensitive_obj_id` を
+    // 立てないことがあるため、記録済みヘッダ行も見る。
+    bms.repr.raw_command_lines.iter().any(|line| line.eq_ignore_ascii_case("#BASE 62"))
 }
 
 fn map_ln_mode(mode: LnMode) -> LongNoteMode {

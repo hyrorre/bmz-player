@@ -36,6 +36,8 @@ pub struct IntermediateMetadata {
     pub long_note_mode: LongNoteMode,
     pub has_bga: bool,
     pub key_mode: KeyMode,
+    /// `#BASE 62` 相当。`true` のときオブジェクト ID は base62 換算する。
+    pub base62_obj_ids: bool,
 }
 
 #[derive(Debug, Clone, Default)]
