@@ -48,6 +48,9 @@ pub struct PlaySessionOptions {
     /// `NoGood` zeroes the good window, `NoGreat` zeroes great and good
     /// windows; the next judge band kicks in immediately.
     pub judge_constraint: bmz_core::course::CourseJudgeConstraint,
+    /// Course-forced long-note mode (Ln/Cn/Hcn).  `None` keeps the chart's
+    /// declared mode.
+    pub ln_mode_override: Option<bmz_chart::model::LongNoteMode>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -85,6 +88,7 @@ impl Default for PlaySessionOptions {
             arrange_pattern: None,
             initial_gauge_value: None,
             judge_constraint: bmz_core::course::CourseJudgeConstraint::Normal,
+            ln_mode_override: None,
         }
     }
 }
@@ -343,6 +347,11 @@ pub fn preload_play_session_for_chart(
         import_bms_chart(std::path::Path::new(&path), random_seed_for_chart(&options), true)
             .with_context(|| format!("failed to import chart file: {path}"))?;
     let mut chart = import.chart;
+    // Course constraint may force a specific LN mode (Ln/Cn/Hcn) regardless of
+    // what the chart declared. Mirrors beatoraja PlayerConfig.setLnmode().
+    if let Some(ln_mode) = options.ln_mode_override {
+        chart.metadata.long_note_mode = ln_mode;
+    }
     let applied_arrange = apply_arrange(
         &mut chart,
         options.arrange,

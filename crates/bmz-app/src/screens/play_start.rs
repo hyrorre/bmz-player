@@ -1,7 +1,8 @@
 use anyhow::Result;
+use bmz_chart::model::LongNoteMode;
 use bmz_core::course::{
     CourseClassConstraint, CourseConstraints, CourseGaugeConstraint, CourseJudgeConstraint,
-    CourseSpeedConstraint,
+    CourseLnConstraint, CourseSpeedConstraint,
 };
 use bmz_core::time::TimeUs;
 use bmz_gameplay::input::backend::{InputBackend, NullInputBackend};
@@ -38,6 +39,9 @@ pub struct PlayStartOptions {
     /// Course judge constraint (e.g. NoGood / NoGreat).  Forwarded to the
     /// JudgeEngine via PlaySessionOptions::judge_constraint.
     pub judge_constraint: CourseJudgeConstraint,
+    /// Override the LN mode for this chart (Ln/Cn/Hcn).  None preserves the
+    /// chart's own declaration.  Used by course `ln`/`cn`/`hcn` constraints.
+    pub ln_mode_override: Option<LongNoteMode>,
 }
 
 pub struct StartedWinitPlaySession {
@@ -71,6 +75,7 @@ pub fn play_session_options_from_start(
         arrange_pattern: start_options.arrange_pattern,
         initial_gauge_value: start_options.initial_gauge_value,
         judge_constraint: start_options.judge_constraint,
+        ln_mode_override: start_options.ln_mode_override,
     }
 }
 
@@ -210,6 +215,15 @@ pub fn apply_course_constraints(options: &mut PlayStartOptions, constraints: &Co
     // Judge constraints are applied at GameSession construction by narrowing
     // the judge window inside play_session_options_from_start.
     options.judge_constraint = constraints.judge;
+
+    // LN constraints force the chart's long-note mode regardless of the chart's
+    // own declaration; applied in preload_play_session_for_chart.
+    options.ln_mode_override = match constraints.ln {
+        CourseLnConstraint::Default => None,
+        CourseLnConstraint::Ln => Some(LongNoteMode::Ln),
+        CourseLnConstraint::Cn => Some(LongNoteMode::Cn),
+        CourseLnConstraint::Hcn => Some(LongNoteMode::Hcn),
+    };
 
     let allowed: &[ArrangeOption] = match constraints.class {
         CourseClassConstraint::None => return,
