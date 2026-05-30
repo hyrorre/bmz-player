@@ -3892,7 +3892,7 @@ impl SelectKeyBindings {
             lane_enter,
         );
         let back = select_controls_with_lane_fallback(
-            actions_for(InputActionConfig::SelectBack),
+            actions_for(InputActionConfig::E2),
             keys_for(LaneConfig::Key2),
         );
         let cycle_arrange = select_control_with_lane_fallback(
@@ -3911,7 +3911,7 @@ impl SelectKeyBindings {
             actions_for(InputActionConfig::SelectOptionBga),
             keys_for(LaneConfig::Key1),
         );
-        let mut start = actions_for(InputActionConfig::SelectStart);
+        let mut start = actions_for(InputActionConfig::E1);
         if let Some(legacy_start) = input.start_key.clone()
             && !start.iter().any(|control| control == &legacy_start)
         {
@@ -3932,13 +3932,13 @@ impl SelectKeyBindings {
             kb_lane_enter,
         );
         let kb_back = select_controls_with_lane_fallback(
-            kb_actions_for(InputActionConfig::SelectBack),
+            kb_actions_for(InputActionConfig::E2),
             kb_keys_for(LaneConfig::Key2),
         );
         let enter_str =
             if kb_enter.is_empty() { String::new() } else { format!("/{}", kb_enter.join("/")) };
         let back_str = kb_back.first().map(|k| format!("/{k}")).unwrap_or_default();
-        let start_str = kb_actions_for(InputActionConfig::SelectStart)
+        let start_str = kb_actions_for(InputActionConfig::E1)
             .into_iter()
             .next()
             .or_else(|| input.start_key.clone())

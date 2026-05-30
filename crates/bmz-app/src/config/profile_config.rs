@@ -163,19 +163,17 @@ pub struct BindingConfigEntry {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum InputActionConfig {
-    #[serde(rename = "Start", alias = "SelectStart")]
-    SelectStart,
-    #[serde(rename = "Enter", alias = "SelectEnter")]
+    E1,
+    #[serde(rename = "Enter")]
     SelectEnter,
-    #[serde(rename = "Back", alias = "SelectBack")]
-    SelectBack,
-    #[serde(rename = "OptionArrange", alias = "SelectOptionArrange")]
+    E2,
+    #[serde(rename = "OptionArrange")]
     SelectOptionArrange,
-    #[serde(rename = "OptionGauge", alias = "SelectOptionGauge")]
+    #[serde(rename = "OptionGauge")]
     SelectOptionGauge,
-    #[serde(rename = "OptionAssist", alias = "SelectOptionAssist")]
+    #[serde(rename = "OptionAssist")]
     SelectOptionAssist,
-    #[serde(rename = "OptionBga", alias = "SelectOptionBga")]
+    #[serde(rename = "OptionBga")]
     SelectOptionBga,
 }
 
@@ -530,12 +528,12 @@ pub fn default_keyboard_bindings() -> Vec<BindingConfigEntry> {
         binding("C", LaneConfig::Key5),
         binding("F", LaneConfig::Key6),
         binding("V", LaneConfig::Key7),
-        action_binding("Q", InputActionConfig::SelectStart),
+        action_binding("Q", InputActionConfig::E1),
         action_binding("Z", InputActionConfig::SelectEnter),
         action_binding("X", InputActionConfig::SelectEnter),
         action_binding("C", InputActionConfig::SelectEnter),
         action_binding("V", InputActionConfig::SelectEnter),
-        action_binding("S", InputActionConfig::SelectBack),
+        action_binding("S", InputActionConfig::E2),
         action_binding("Z", InputActionConfig::SelectOptionArrange),
         action_binding("X", InputActionConfig::SelectOptionGauge),
         action_binding("C", InputActionConfig::SelectOptionAssist),
@@ -554,11 +552,11 @@ pub fn default_gamepad_bindings() -> Vec<BindingConfigEntry> {
         gamepad_binding("Button5", LaneConfig::Key5),
         gamepad_binding("Button6", LaneConfig::Key6),
         gamepad_binding("Button7", LaneConfig::Key7),
-        gamepad_action_binding("Start", InputActionConfig::SelectStart),
+        gamepad_action_binding("Start", InputActionConfig::E1),
         gamepad_action_binding("Button1", InputActionConfig::SelectEnter),
         gamepad_action_binding("DPadRight", InputActionConfig::SelectEnter),
-        gamepad_action_binding("Select", InputActionConfig::SelectBack),
-        gamepad_action_binding("DPadLeft", InputActionConfig::SelectBack),
+        gamepad_action_binding("Select", InputActionConfig::E2),
+        gamepad_action_binding("DPadLeft", InputActionConfig::E2),
         gamepad_action_binding("Button1", InputActionConfig::SelectOptionArrange),
         gamepad_action_binding("Button3", InputActionConfig::SelectOptionGauge),
         gamepad_action_binding("Button5", InputActionConfig::SelectOptionAssist),
@@ -632,7 +630,7 @@ mod tests {
         assert!(profile.input.bindings.iter().any(|entry| {
             entry.device == "keyboard"
                 && entry.control == "Q"
-                && entry.action == Some(InputActionConfig::SelectStart)
+                && entry.action == Some(InputActionConfig::E1)
         }));
     }
 
@@ -657,24 +655,6 @@ mod tests {
         assert_eq!(input.bindings[0].lane, Some(LaneConfig::Key1));
     }
 
-    #[test]
-    fn input_config_reads_legacy_select_action_names() {
-        let input: ProfileInputConfig = toml::from_str(
-            r#"
-            scratch_mode = "Normal"
-            analog_scratch_sensitivity = 1.0
-            analog_scratch_timeout_ms = 500
-
-            [[bindings]]
-            device = "keyboard"
-            control = "Q"
-            action = "SelectStart"
-            "#,
-        )
-        .unwrap();
-
-        assert_eq!(input.bindings[0].action, Some(InputActionConfig::SelectStart));
-    }
 
     #[test]
     fn input_config_serializes_select_actions_without_start_key() {
@@ -683,7 +663,7 @@ mod tests {
         let toml = toml::to_string(&profile.input).unwrap();
 
         assert!(!toml.contains("start_key"));
-        assert!(toml.contains("action = \"Start\""));
-        assert!(toml.contains("action = \"Back\""));
+        assert!(toml.contains("action = \"E1\""));
+        assert!(toml.contains("action = \"E2\""));
     }
 }
