@@ -484,8 +484,8 @@ fn sized_panel_window<'open>(
 /// `finished_course` が `Some` のあいだ表示され続け、リザルト画面を抜けると
 /// `None` になって自動的に消える。最小実装として egui::Window を 1 枚出すだけ。
 fn build_course_result_panel(ctx: &egui::Context, summary: &CourseResultSummary) {
-    let screen_rect = ctx.screen_rect();
-    let pos = egui::pos2(screen_rect.right() - 360.0 - 16.0, 16.0);
+    let content_rect = ctx.content_rect();
+    let pos = egui::pos2(content_rect.right() - 360.0 - 16.0, 16.0);
 
     egui::Window::new("コースリザルト")
         .id(egui::Id::new("course_result_overlay"))
@@ -590,8 +590,8 @@ fn build_course_result_panel(ctx: &egui::Context, summary: &CourseResultSummary)
 /// 選曲画面でコース行にカーソルがある間、コース内の各曲のメタ情報を表示する
 /// プレビューパネル。
 fn build_course_preview_panel(ctx: &egui::Context, preview: &SelectCourseRow) {
-    let screen_rect = ctx.screen_rect();
-    let pos = egui::pos2(16.0, screen_rect.bottom() - 320.0);
+    let content_rect = ctx.content_rect();
+    let pos = egui::pos2(16.0, content_rect.bottom() - 320.0);
 
     egui::Window::new("コース内訳")
         .id(egui::Id::new("course_preview_overlay"))
