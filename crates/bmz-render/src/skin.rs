@@ -4057,6 +4057,10 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool 
         271 => state.lanecover_enabled,
         272 => state.lift_enabled,
         273 => state.hidden_enabled,
+        // Result/update comparison options. In play skins these are often reused
+        // as target-reached draw conditions.
+        336 => state.target_ex_score.is_some_and(|target| state.ex_score > target),
+        1336 => state.target_ex_score.is_some_and(|target| state.ex_score == target),
         // OPTION_DIFFICULTY0..5. 0 は UNKNOWN/OTHER、1..5 は BMS #DIFFICULTY。
         150 => state.difficulty <= 0 || state.difficulty > 5,
         151..=155 => state.difficulty == i64::from(op - 150),
@@ -4677,6 +4681,7 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         350 => Some(state.select_total_notes as i64),
         75 | 105 | 174 => Some(state.max_combo as i64),
         76 => Some((state.judge_counts.bad + state.judge_counts.poor) as i64),
+        77 => Some(state.select_target_index as i64),
         80 | 110 => Some(state.judge_counts.pgreat as i64),
         81 | 111 => Some(state.judge_counts.great as i64),
         82 | 112 => Some(state.judge_counts.good as i64),
@@ -4724,11 +4729,12 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         12 => Some(state.judge_timing_offset_ms as i64),
         // ベストスコア / ターゲットスコア (DB から供給、未取得時は None)
         150 | 170 => state.best_ex_score.map(|s| s as i64),
-        121 => state.target_ex_score.map(|s| s as i64),
-        122 | 123 => state
-            .target_ex_score
-            .map(|target| score_rate_parts(target, state.total_notes))
-            .map(|parts| if ref_id == 122 { parts.0 } else { parts.1 } as i64),
+        121 | 151 => state.target_ex_score.map(|s| s as i64),
+        122 | 123 | 135 | 136 | 157 | 158 => {
+            state.target_ex_score.map(|target| score_rate_parts(target, state.total_notes)).map(
+                |parts| (if matches!(ref_id, 122 | 135 | 157) { parts.0 } else { parts.1 }) as i64,
+            )
+        }
         183 | 184 => state
             .best_ex_score
             .map(|best| score_rate_parts(best, state.total_notes))
@@ -4796,6 +4802,10 @@ fn div_ceil(numerator: i64, denominator: i64) -> i64 {
         return 0;
     }
     numerator.div_euclid(denominator) + i64::from(numerator.rem_euclid(denominator) != 0)
+}
+
+fn rank_threshold(max_score: u32, rank_step: u32) -> u32 {
+    div_ceil(rank_step as i64 * max_score as i64, 27).clamp(0, u32::MAX as i64) as u32
 }
 
 fn judge_rank_option_matches(op: i32, judge_rank: Option<i32>) -> bool {
@@ -5026,6 +5036,7 @@ fn skin_timer_elapsed_ms(timer: Option<i32>, state: SkinDrawState) -> Option<i32
         Some(41) => state.play_timer_ms,
         Some(11) => Some(state.select_bar_elapsed_ms),
         Some(21..=23) => Some(state.select_option_panel_elapsed_ms),
+        Some(348..=352) => score_target_timer_elapsed_ms(timer.unwrap(), state),
         Some(46) => state.judge_ms[0],
         Some(47) => state.judge_ms[1],
         Some(247) => state.judge_ms[2],
@@ -5192,6 +5203,19 @@ fn difficulty_code_from_label(label: &str) -> i64 {
         "5" | "INSANE" => 5,
         _ => 0,
     }
+}
+
+fn score_target_timer_elapsed_ms(timer_id: i32, state: SkinDrawState) -> Option<i32> {
+    let max = state.total_notes.saturating_mul(2);
+    let threshold = match timer_id {
+        348 => rank_threshold(max, 18), // RANK A
+        349 => rank_threshold(max, 21), // RANK AA
+        350 => rank_threshold(max, 24), // RANK AAA
+        351 => state.best_ex_score?,
+        352 => state.target_ex_score?,
+        _ => return None,
+    };
+    (threshold > 0 && state.ex_score >= threshold).then_some(state.elapsed_ms)
 }
 
 fn select_row_bar_image_index(row: &SelectRowSnapshot) -> usize {
@@ -10577,6 +10601,14 @@ mod tests {
 
         // 符号付き差分
         assert_eq!(skin_state_number(170, state), Some(1700));
+        assert_eq!(skin_state_number(121, state), Some(1900));
+        assert_eq!(skin_state_number(151, state), Some(1900));
+        assert_eq!(skin_state_number(122, state), Some(95));
+        assert_eq!(skin_state_number(123, state), Some(0));
+        assert_eq!(skin_state_number(135, state), Some(95));
+        assert_eq!(skin_state_number(136, state), Some(0));
+        assert_eq!(skin_state_number(157, state), Some(95));
+        assert_eq!(skin_state_number(158, state), Some(0));
         assert_eq!(skin_state_number(183, state), Some(85));
         assert_eq!(skin_state_number(184, state), Some(0));
         assert_eq!(skin_state_number(152, state), Some(1888 - 1700));
@@ -10614,6 +10646,25 @@ mod tests {
         assert_eq!(skin_state_number(152, bare), None);
         assert_eq!(skin_state_number(173, bare), None);
         assert_eq!(skin_state_number(410, bare), None);
+    }
+
+    #[test]
+    fn target_score_timer_and_ops_follow_current_ex_score() {
+        let below = SkinDrawState {
+            elapsed_ms: 1234,
+            ex_score: 1599,
+            total_notes: 900,
+            target_ex_score: Some(1600),
+            ..SkinDrawState::default()
+        };
+        let reached = SkinDrawState { ex_score: 1600, ..below };
+        let updated = SkinDrawState { ex_score: 1601, ..below };
+
+        assert_eq!(skin_timer_elapsed_ms(Some(352), below), None);
+        assert_eq!(skin_timer_elapsed_ms(Some(352), reached), Some(1234));
+        assert!(test_skin_op(1336, &[], reached));
+        assert!(!test_skin_op(336, &[], reached));
+        assert!(test_skin_op(336, &[], updated));
     }
 
     #[test]
