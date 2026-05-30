@@ -424,6 +424,24 @@ impl LibraryDatabase {
         Ok(out)
     }
 
+    /// Returns charts whose `chart_id` is one of the given ids.
+    /// Order in the returned vector is unspecified.
+    pub fn list_charts_by_ids(&self, ids: &[i64]) -> Result<Vec<ChartListItem>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut stmt =
+            self.conn.prepare(&format!("SELECT {CHART_LIST_ITEM_COLUMNS} FROM charts WHERE id = ?1"))?;
+        let mut out = Vec::with_capacity(ids.len());
+        for id in ids {
+            let row = stmt.query_row(params![id], chart_list_item_from_row).ok();
+            if let Some(row) = row {
+                out.push(row);
+            }
+        }
+        Ok(out)
+    }
+
     /// Returns charts whose `folder_path` exactly matches `folder_path`.
     pub fn list_charts_in_folder(&self, folder_path: &str) -> Result<Vec<ChartListItem>> {
         let folder_path = to_folder_key(folder_path);

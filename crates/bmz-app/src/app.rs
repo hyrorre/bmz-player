@@ -3805,15 +3805,19 @@ fn select_snapshot_rows(
                 SelectItem::Course(row) => SelectRowSnapshot {
                     index: index as u32,
                     title: row.title.clone(),
-                    artist: String::new(),
-                    difficulty_name: String::new(),
-                    play_level: String::new(),
+                    // Use the trophy names joined as "subtitle" so the artist
+                    // slot shows e.g. "silvermedal / goldmedal".
+                    artist: row.trophy_names.join(" / "),
+                    // Beatoraja-style category tag (DAN / COURSE).
+                    difficulty_name: row.category_label.clone(),
+                    // Show "N stages" in the play_level slot.
+                    play_level: format!("{} stages", row.entry_count),
                     table_level: String::new(),
-                    total_notes: 0,
-                    initial_bpm: 0.0,
-                    min_bpm: 0.0,
-                    max_bpm: 0.0,
-                    length_ms: 0,
+                    total_notes: row.total_notes,
+                    initial_bpm: row.min_bpm,
+                    min_bpm: row.min_bpm,
+                    max_bpm: row.max_bpm,
+                    length_ms: row.total_length_ms,
                     clear_type: String::new(),
                     ex_score: None,
                     max_combo: None,
