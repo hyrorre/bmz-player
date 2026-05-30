@@ -441,6 +441,29 @@ mod tests {
     }
 
     #[test]
+    fn imports_bmson_subartists_into_subartist() {
+        let json = r#"{
+            "version": "1.0.0",
+            "info": {
+                "title": "Subartist Song",
+                "artist": "Main",
+                "genre": "Test",
+                "level": 1,
+                "init_bpm": 120.0,
+                "judge_rank": 100.0,
+                "total": 100.0,
+                "resolution": 240,
+                "subartists": ["music:Alice", "chart:Bob"]
+            },
+            "sound_channels": []
+        }"#;
+        let path = write_temp_file_with_ext(json, "bmson");
+        let result = import_chart(&path, None, false).unwrap();
+        assert_eq!(result.chart.metadata.subartist, "music:Alice / chart:Bob");
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn imports_bmson_ln_type_into_long_note_mode() {
         let json = r#"{
             "version": "1.0.0",

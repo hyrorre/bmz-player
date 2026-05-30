@@ -78,6 +78,7 @@ pub fn import_bmson_to_intermediate(
     }
 
     converted.bms.repr.ln_mode = ln_type;
+    converted.bms.music_info.sub_artist = Some(join_subartists(&bmson.info.subartists));
 
     let mut intermediate = build_intermediate_from_bms(&converted.bms, warnings);
     intermediate.identity = identity;
@@ -126,6 +127,15 @@ fn prepare_bmson_text(text: &str) -> Result<(String, LnMode), String> {
     Ok((sanitized, ln_type))
 }
 
+fn join_subartists(subartists: &[std::borrow::Cow<'_, str>]) -> String {
+    subartists
+        .iter()
+        .map(|entry| entry.trim())
+        .filter(|entry| !entry.is_empty())
+        .collect::<Vec<_>>()
+        .join(" / ")
+}
+
 fn parse_ln_type_json(value: &serde_json::Value) -> LnMode {
     match value {
         serde_json::Value::Number(number) => number
@@ -167,6 +177,20 @@ mod tests {
     use super::*;
     use crate::model::LongNoteMode;
     use bms_rs::bmson::parse_bmson;
+
+    #[test]
+    fn join_subartists_joins_all_entries() {
+        use std::borrow::Cow;
+
+        assert_eq!(
+            join_subartists(&[
+                Cow::Borrowed("music:Alice"),
+                Cow::Borrowed("chart:Bob"),
+                Cow::Borrowed(" movie.Sphere ")
+            ]),
+            "music:Alice / chart:Bob / movie.Sphere"
+        );
+    }
 
     #[test]
     fn prepare_bmson_text_strips_integer_ln_type_for_bms_rs() {
