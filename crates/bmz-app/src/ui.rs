@@ -21,6 +21,7 @@ use crate::config::profile_config::{
     ProfileConfig, SkinConfig, SkinHistoryEntryConfig, SkinOffsetConfig,
 };
 use crate::screens::course_session::CourseResultSummary;
+use crate::screens::select_model::SelectCourseRow;
 use crate::songs_cmd::{add_song_root_entry, remove_song_root_entry};
 
 /// スキンが宣言する設定可能項目の定義 (1 シーン分)。
@@ -260,6 +261,7 @@ impl EguiLayer {
         skin_meta: &SkinConfigMeta,
         skin_catalog: &SkinCatalog,
         course_result: Option<&CourseResultSummary>,
+        course_preview: Option<&SelectCourseRow>,
     ) -> EguiOutput {
         let raw_input = self.state.take_egui_input(window);
         let ctx = self.ctx.clone();
@@ -277,6 +279,11 @@ impl EguiLayer {
             // a gameplay-level summary, not a settings panel.
             if let Some(summary) = course_result {
                 build_course_result_panel(ui.ctx(), summary);
+            }
+            // Course preview is shown only while hovering a course row on the
+            // select screen — the caller decides when to pass Some().
+            if let Some(preview) = course_preview {
+                build_course_preview_panel(ui.ctx(), preview);
             }
             if *visible_flag {
                 let ctx = ui.ctx();
@@ -579,6 +586,65 @@ fn build_course_result_panel(ctx: &egui::Context, summary: &CourseResultSummary)
                     },
                 );
             }
+        });
+}
+
+/// 選曲画面でコース行にカーソルがある間、コース内の各曲のメタ情報を表示する
+/// プレビューパネル。
+fn build_course_preview_panel(ctx: &egui::Context, preview: &SelectCourseRow) {
+    let screen_rect = ctx.screen_rect();
+    let pos = egui::pos2(16.0, screen_rect.bottom() - 320.0);
+
+    egui::Window::new("コース内訳")
+        .id(egui::Id::new("course_preview_overlay"))
+        .resizable(false)
+        .collapsible(true)
+        .movable(true)
+        .title_bar(true)
+        .current_pos(pos)
+        .default_width(380.0)
+        .max_height(300.0)
+        .show(ctx, |ui| {
+            ui.heading(&preview.title);
+            ui.horizontal(|ui| {
+                ui.label(&preview.category_label);
+                ui.separator();
+                ui.label(format!(
+                    "{}/{} resolved",
+                    preview.resolved_count, preview.entry_count
+                ));
+                ui.separator();
+                ui.label(format!("notes {}", preview.total_notes));
+            });
+            if !preview.trophy_names.is_empty() {
+                ui.label(format!("trophies: {}", preview.trophy_names.join(" / ")));
+            }
+            ui.separator();
+            egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
+                egui::Grid::new("course_preview_entries").num_columns(4).striped(true).show(
+                    ui,
+                    |ui| {
+                        ui.label("#");
+                        ui.label("曲名");
+                        ui.label("☆");
+                        ui.label("notes");
+                        ui.end_row();
+                        for (i, entry) in preview.entry_previews.iter().enumerate() {
+                            ui.label(format!("{}", i + 1));
+                            let title =
+                                if entry.title.is_empty() { "(no title)" } else { &entry.title };
+                            if entry.resolved {
+                                ui.label(title);
+                            } else {
+                                ui.colored_label(egui::Color32::GRAY, format!("{} (missing)", title));
+                            }
+                            ui.label(&entry.play_level);
+                            ui.label(format!("{}", entry.total_notes));
+                            ui.end_row();
+                        }
+                    },
+                );
+            });
         });
 }
 

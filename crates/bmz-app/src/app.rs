@@ -2541,6 +2541,19 @@ impl WinitApp {
         // `self.egui` is uniquely borrowed.  CourseResultSummary is small —
         // a few strings and Vec<ResultSummary> — so the clone cost is minor.
         let course_result = self.finished_course.clone();
+        // Only show the course preview when the user is on the select screen
+        // and the cursor is over a course row.
+        let course_preview = matches!(
+            scene_kind(&self.scene_snapshot()),
+            AppSceneKind::Select
+        )
+        .then(|| {
+            self.select_items.get(self.selected_index).and_then(|item| match item {
+                SelectItem::Course(row) => Some(row.clone()),
+                _ => None,
+            })
+        })
+        .flatten();
         let Some(egui) = self.egui.as_mut() else {
             return;
         };
@@ -2552,6 +2565,7 @@ impl WinitApp {
             &skin_meta,
             &self.skin_catalog,
             course_result.as_ref(),
+            course_preview.as_ref(),
         );
         self.renderer.set_egui_frame(output.frame);
         // デバッグパネルの開閉状態を profile config へ同期する。

@@ -161,6 +161,21 @@ pub struct SelectCourseRow {
     pub category_label: String,
     /// Trophy names defined for this course (e.g. ["silvermedal", "goldmedal"]).
     pub trophy_names: Vec<String>,
+    /// Entries inside the course, used by the preview panel.
+    pub entry_previews: Vec<CourseEntryPreview>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CourseEntryPreview {
+    /// Title taken from the resolved library chart when available, otherwise
+    /// the title_hint declared in the course JSON.
+    pub title: String,
+    pub artist: String,
+    pub play_level: String,
+    pub difficulty_name: String,
+    pub total_notes: u32,
+    /// True when this entry is resolved to a chart in the local library.
+    pub resolved: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -241,6 +256,32 @@ fn build_select_course_row(
     let chart_ids: Vec<i64> =
         stored.definition.entries.iter().filter_map(|e| e.chart_id).collect();
     let charts = library_db.list_charts_by_ids(&chart_ids).unwrap_or_default();
+    let chart_by_id: std::collections::HashMap<i64, &ChartListItem> =
+        charts.iter().map(|c| (c.chart_id, c)).collect();
+
+    let entry_previews: Vec<CourseEntryPreview> = stored
+        .definition
+        .entries
+        .iter()
+        .map(|entry| match entry.chart_id.and_then(|id| chart_by_id.get(&id).copied()) {
+            Some(chart) => CourseEntryPreview {
+                title: chart.title.clone(),
+                artist: chart.artist.clone(),
+                play_level: chart.play_level.clone(),
+                difficulty_name: chart.difficulty_name.clone(),
+                total_notes: chart.total_notes,
+                resolved: true,
+            },
+            None => CourseEntryPreview {
+                title: entry.title_hint.clone(),
+                artist: String::new(),
+                play_level: String::new(),
+                difficulty_name: String::new(),
+                total_notes: 0,
+                resolved: false,
+            },
+        })
+        .collect();
 
     let total_notes: u32 = charts.iter().map(|c| c.total_notes).sum();
     let total_length_ms: i64 = charts.iter().map(|c| c.length_ms).sum();
@@ -271,6 +312,7 @@ fn build_select_course_row(
         max_bpm,
         category_label,
         trophy_names,
+        entry_previews,
     })
 }
 
