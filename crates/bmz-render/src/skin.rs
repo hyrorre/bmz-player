@@ -4965,11 +4965,13 @@ fn graph_value(graph_type: i32, state: SkinDrawState) -> f32 {
             let max = (state.past_notes * 2) as f32;
             if max > 0.0 { state.ex_score as f32 / max } else { 0.0 }
         }
-        // BARGRAPH_BESTSCORERATE_NOW (112): best_ex_score * past_notes / (total_notes^2 * 2)
+        // BARGRAPH_BESTSCORERATE_NOW (112): best score at current progress / max_ex_score.
+        // When a beatoraja ghost is available, use its per-note progression instead of a
+        // linear projection from the final best score.
         112 => {
-            let max = (state.total_notes as f64).powi(2) * 2.0;
+            let max = (state.total_notes * 2) as f32;
             if max > 0.0 {
-                (state.best_ex_score.unwrap_or(0) as f64 * state.past_notes as f64 / max) as f32
+                projected_best_score_at_progress(state).unwrap_or(0) as f32 / max
             } else {
                 0.0
             }
@@ -11819,6 +11821,21 @@ mod tests {
         };
         let v = graph_value(112, state);
         assert!((v - 0.4).abs() < 1e-4, "best now rate: expected 0.4, got {v}");
+    }
+
+    #[test]
+    fn graph_value_bestscorerate_now_uses_projected_best_score() {
+        let state = SkinDrawState {
+            best_ex_score: Some(160),
+            projected_best_ex_score: Some(100),
+            past_notes: 50,
+            total_notes: 100,
+            ..SkinDrawState::default()
+        };
+
+        let v = graph_value(112, state);
+
+        assert!((v - 0.5).abs() < 1e-4, "best ghost now rate: expected 0.5, got {v}");
     }
 
     #[test]
