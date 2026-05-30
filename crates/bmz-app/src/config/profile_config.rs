@@ -133,17 +133,13 @@ pub struct LaneViewConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProfileInputConfig {
     pub scratch_mode: ScratchInputMode,
-    #[serde(default = "default_start_key")]
-    pub start_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_key: Option<String>,
     pub bindings: Vec<BindingConfigEntry>,
     #[serde(default = "default_analog_scratch_sensitivity")]
     pub analog_scratch_sensitivity: f32,
     #[serde(default = "default_analog_scratch_timeout_ms")]
     pub analog_scratch_timeout_ms: u32,
-}
-
-fn default_start_key() -> String {
-    "Q".to_string()
 }
 
 fn default_analog_scratch_sensitivity() -> f32 {
@@ -158,7 +154,22 @@ fn default_analog_scratch_timeout_ms() -> u32 {
 pub struct BindingConfigEntry {
     pub device: String,
     pub control: String,
-    pub lane: LaneConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lane: Option<LaneConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<InputActionConfig>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum InputActionConfig {
+    SelectStart,
+    SelectEnter,
+    SelectBack,
+    SelectOptionArrange,
+    SelectOptionGauge,
+    SelectOptionAssist,
+    SelectOptionBga,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -467,7 +478,7 @@ impl ProfileConfig {
             },
             input: ProfileInputConfig {
                 scratch_mode: ScratchInputMode::Normal,
-                start_key: default_start_key(),
+                start_key: None,
                 bindings: default_bindings(),
                 analog_scratch_sensitivity: default_analog_scratch_sensitivity(),
                 analog_scratch_timeout_ms: default_analog_scratch_timeout_ms(),
@@ -512,6 +523,16 @@ pub fn default_keyboard_bindings() -> Vec<BindingConfigEntry> {
         binding("C", LaneConfig::Key5),
         binding("F", LaneConfig::Key6),
         binding("V", LaneConfig::Key7),
+        action_binding("Q", InputActionConfig::SelectStart),
+        action_binding("Z", InputActionConfig::SelectEnter),
+        action_binding("X", InputActionConfig::SelectEnter),
+        action_binding("C", InputActionConfig::SelectEnter),
+        action_binding("V", InputActionConfig::SelectEnter),
+        action_binding("S", InputActionConfig::SelectBack),
+        action_binding("Z", InputActionConfig::SelectOptionArrange),
+        action_binding("X", InputActionConfig::SelectOptionGauge),
+        action_binding("C", InputActionConfig::SelectOptionAssist),
+        action_binding("Z", InputActionConfig::SelectOptionBga),
     ]
 }
 
@@ -526,15 +547,52 @@ pub fn default_gamepad_bindings() -> Vec<BindingConfigEntry> {
         gamepad_binding("Button5", LaneConfig::Key5),
         gamepad_binding("Button6", LaneConfig::Key6),
         gamepad_binding("Button7", LaneConfig::Key7),
+        gamepad_action_binding("Start", InputActionConfig::SelectStart),
+        gamepad_action_binding("Button1", InputActionConfig::SelectEnter),
+        gamepad_action_binding("DPadRight", InputActionConfig::SelectEnter),
+        gamepad_action_binding("Select", InputActionConfig::SelectBack),
+        gamepad_action_binding("DPadLeft", InputActionConfig::SelectBack),
+        gamepad_action_binding("Button1", InputActionConfig::SelectOptionArrange),
+        gamepad_action_binding("Button3", InputActionConfig::SelectOptionGauge),
+        gamepad_action_binding("Button5", InputActionConfig::SelectOptionAssist),
+        gamepad_action_binding("Button1", InputActionConfig::SelectOptionBga),
     ]
 }
 
 fn binding(control: &str, lane: LaneConfig) -> BindingConfigEntry {
-    BindingConfigEntry { device: "keyboard".to_string(), control: control.to_string(), lane }
+    BindingConfigEntry {
+        device: "keyboard".to_string(),
+        control: control.to_string(),
+        lane: Some(lane),
+        action: None,
+    }
 }
 
 fn gamepad_binding(control: &str, lane: LaneConfig) -> BindingConfigEntry {
-    BindingConfigEntry { device: "gamepad".to_string(), control: control.to_string(), lane }
+    BindingConfigEntry {
+        device: "gamepad".to_string(),
+        control: control.to_string(),
+        lane: Some(lane),
+        action: None,
+    }
+}
+
+fn action_binding(control: &str, action: InputActionConfig) -> BindingConfigEntry {
+    BindingConfigEntry {
+        device: "keyboard".to_string(),
+        control: control.to_string(),
+        lane: None,
+        action: Some(action),
+    }
+}
+
+fn gamepad_action_binding(control: &str, action: InputActionConfig) -> BindingConfigEntry {
+    BindingConfigEntry {
+        device: "gamepad".to_string(),
+        control: control.to_string(),
+        lane: None,
+        action: Some(action),
+    }
 }
 
 #[cfg(test)]
@@ -557,5 +615,49 @@ mod tests {
         assert_eq!(play.bga, BgaModeConfig::On);
         assert_eq!(play.bga_expand, BgaExpandConfig::KeepAspect);
         assert_eq!(play.misslayer_duration_ms, 500);
+    }
+
+    #[test]
+    fn default_profile_stores_select_start_in_bindings() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+
+        assert!(profile.input.start_key.is_none());
+        assert!(profile.input.bindings.iter().any(|entry| {
+            entry.device == "keyboard"
+                && entry.control == "Q"
+                && entry.action == Some(InputActionConfig::SelectStart)
+        }));
+    }
+
+    #[test]
+    fn input_config_reads_legacy_start_key() {
+        let input: ProfileInputConfig = toml::from_str(
+            r#"
+            scratch_mode = "Normal"
+            start_key = "E"
+            analog_scratch_sensitivity = 1.0
+            analog_scratch_timeout_ms = 500
+
+            [[bindings]]
+            device = "keyboard"
+            control = "Z"
+            lane = "Key1"
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(input.start_key.as_deref(), Some("E"));
+        assert_eq!(input.bindings[0].lane, Some(LaneConfig::Key1));
+    }
+
+    #[test]
+    fn input_config_serializes_select_actions_without_start_key() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+
+        let toml = toml::to_string(&profile.input).unwrap();
+
+        assert!(!toml.contains("start_key"));
+        assert!(toml.contains("action = \"SelectStart\""));
+        assert!(toml.contains("action = \"SelectBack\""));
     }
 }

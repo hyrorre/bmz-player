@@ -30,14 +30,13 @@ use crate::audio::AppAudioOutput;
 use crate::bootstrap::{self, BootstrappedApp};
 use crate::chart_preview::SelectChartPreview;
 use crate::cli::{
-    AUTOPLAY_ON_START_ARG, AppOptions, SMOKE_EXIT_AFTER_FRAMES_ARG,
-    SMOKE_EXIT_ON_RESULT_ARG,
+    AUTOPLAY_ON_START_ARG, AppOptions, SMOKE_EXIT_AFTER_FRAMES_ARG, SMOKE_EXIT_ON_RESULT_ARG,
 };
 use crate::config::app_config::{PathEntry, WindowMode};
 use crate::config::load::load_profile_config;
 use crate::config::profile_config::{
-    AssistOptionConfig, BgaModeConfig, GaugeTypeConfig, LaneConfig, ProfileConfig,
-    ProfileInputConfig, RandomOptionConfig,
+    AssistOptionConfig, BgaModeConfig, GaugeTypeConfig, InputActionConfig, LaneConfig,
+    ProfileConfig, ProfileInputConfig, RandomOptionConfig,
 };
 use crate::config::save::{save_app_config, save_profile_config};
 use crate::input::winit::physical_key_to_control;
@@ -166,6 +165,7 @@ struct WinitApp {
     pending_table_fetch: Option<Receiver<Result<()>>>,
     last_scene_kind: Option<AppSceneKind>,
     start_held: bool,
+    select_held: bool,
     arrange_option: ArrangeOption,
     gauge_option: GaugeTypeConfig,
     assist_option: AssistOption,
@@ -462,6 +462,7 @@ impl WinitApp {
             pending_table_fetch: None,
             last_scene_kind: None,
             start_held: false,
+            select_held: false,
             arrange_option,
             gauge_option,
             assist_option,
@@ -929,10 +930,77 @@ impl WinitApp {
         TimeUs(micros)
     }
 
+    fn set_start_held(&mut self, held: bool) {
+        if self.start_held != held {
+            self.start_held = held;
+            self.update_select_option_panel();
+        }
+    }
+
+    fn set_select_held(&mut self, held: bool) {
+        if self.select_held != held {
+            self.select_held = held;
+            self.update_select_option_panel();
+        }
+    }
+
+    fn update_select_option_panel(&mut self) {
+        let panel = select_option_panel_for_holds(self.start_held, self.select_held);
+        if self.select_option_panel != panel {
+            self.select_option_panel = panel;
+            self.option_panel_started_at = Instant::now();
+        }
+    }
+
+    fn cycle_bga_option(&mut self) {
+        self.boot.profile_config.play.bga = cycle_bga_option(self.boot.profile_config.play.bga);
+        tracing::info!(
+            bga = bga_mode_as_str(self.boot.profile_config.play.bga),
+            "bga option changed"
+        );
+    }
+
+    fn apply_play_option_control(&mut self, control: &str) -> bool {
+        if self.select_keys.cycle_arrange.as_deref() == Some(control) {
+            self.arrange_option = self.arrange_option.cycle();
+            tracing::info!(arrange = self.arrange_option.as_str(), "arrange option changed");
+            true
+        } else if self.select_keys.cycle_gauge.as_deref() == Some(control) {
+            self.gauge_option = cycle_gauge_option(self.gauge_option);
+            tracing::info!(gauge = ?self.gauge_option, "gauge option changed");
+            true
+        } else if self.select_keys.cycle_assist.as_deref() == Some(control) {
+            self.assist_option = self.assist_option.cycle();
+            tracing::info!(assist = self.assist_option.as_str(), "assist option changed");
+            true
+        } else {
+            false
+        }
+    }
+
+    fn apply_assist_option_control(&mut self, control: &str) -> bool {
+        if self.select_keys.cycle_assist.as_deref() == Some(control) {
+            self.assist_option = self.assist_option.cycle();
+            tracing::info!(assist = self.assist_option.as_str(), "assist option changed");
+            true
+        } else {
+            false
+        }
+    }
+
+    fn apply_detail_option_control(&mut self, control: &str) -> bool {
+        if self.select_keys.cycle_bga.as_deref() == Some(control) {
+            self.cycle_bga_option();
+            true
+        } else {
+            false
+        }
+    }
+
     fn route_keyboard_input(&mut self, event: &winit::event::KeyEvent) {
         if let Some(active_play) = &mut self.active_play {
             if let Some(control) = physical_key_name(event.physical_key)
-                && control == self.select_keys.start
+                && self.select_keys.is_start(&control)
                 && !event.repeat
             {
                 active_play.running.session.lane_cover_changing =
@@ -972,7 +1040,7 @@ impl WinitApp {
             if event.state == ElementState::Pressed
                 && !event.repeat
                 && let Some(control) = physical_key_name(event.physical_key)
-                && control == self.select_keys.start
+                && self.select_keys.is_start(&control)
             {
                 let now = Instant::now();
                 let is_double = self
@@ -1042,51 +1110,47 @@ impl WinitApp {
             return;
         }
 
-        // Track start button held state for option cycling
-        if let Some(control) = physical_key_name(event.physical_key)
-            && control == self.select_keys.start
-        {
-            let pressed = event.state == ElementState::Pressed;
-            if self.start_held != pressed {
-                self.option_panel_started_at = Instant::now();
-            }
-            self.start_held = pressed;
-            self.select_option_panel = if pressed { 1 } else { 0 };
+        if is_select_start_key(event.physical_key, &self.select_keys) {
+            self.set_start_held(event.state == ElementState::Pressed);
             return;
         }
 
-        if self.start_held {
+        if is_select_modifier_key(event.physical_key, &self.select_keys) {
+            self.set_select_held(event.state == ElementState::Pressed);
+            return;
+        }
+
+        if self.select_option_panel != 0 {
             if event.state == ElementState::Pressed && !event.repeat {
-                if let Some(slot) = digit_to_replay_slot(event.physical_key) {
-                    if !self.start_replay_for_selected(slot) {
-                        tracing::info!(slot, "Start+digit pressed but no replay available");
+                match self.select_option_panel {
+                    1 => {
+                        if let Some(slot) = digit_to_replay_slot(event.physical_key) {
+                            if !self.start_replay_for_selected(slot) {
+                                tracing::info!(slot, "Start+digit pressed but no replay available");
+                            }
+                            return;
+                        }
+                        if let Some(control) = physical_key_name(event.physical_key)
+                            && self.apply_play_option_control(&control)
+                        {
+                            self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+                        }
                     }
-                    return;
-                }
-                if let Some(control) = physical_key_name(event.physical_key) {
-                    let mut option_changed = false;
-                    if self.select_keys.cycle_arrange.as_deref() == Some(&control) {
-                        self.arrange_option = self.arrange_option.cycle();
-                        option_changed = true;
-                        tracing::info!(
-                            arrange = self.arrange_option.as_str(),
-                            "arrange option changed"
-                        );
-                    } else if self.select_keys.cycle_gauge.as_deref() == Some(&control) {
-                        self.gauge_option = cycle_gauge_option(self.gauge_option);
-                        option_changed = true;
-                        tracing::info!(gauge = ?self.gauge_option, "gauge option changed");
-                    } else if self.select_keys.cycle_assist.as_deref() == Some(&control) {
-                        self.assist_option = self.assist_option.cycle();
-                        option_changed = true;
-                        tracing::info!(
-                            assist = self.assist_option.as_str(),
-                            "assist option changed"
-                        );
+                    2 => {
+                        if let Some(control) = physical_key_name(event.physical_key)
+                            && self.apply_assist_option_control(&control)
+                        {
+                            self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+                        }
                     }
-                    if option_changed {
-                        self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+                    3 => {
+                        if let Some(control) = physical_key_name(event.physical_key)
+                            && self.apply_detail_option_control(&control)
+                        {
+                            self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+                        }
                     }
+                    _ => {}
                 }
             }
             return;
@@ -1117,15 +1181,15 @@ impl WinitApp {
 
     fn route_gamepad_button(&mut self, button: &str, pressed: bool) {
         if let Some(active_play) = &mut self.active_play
-            && button == "Start"
+            && self.select_keys.is_start(button)
         {
             active_play.running.session.lane_cover_changing = pressed;
         }
         if !pressed {
-            if button == "Start" {
-                self.start_held = false;
-                self.select_option_panel = 0;
-                self.option_panel_started_at = Instant::now();
+            if self.select_keys.is_start(button) {
+                self.set_start_held(false);
+            } else if self.select_keys.is_back(button) || matches!(button, "Select" | "DPadLeft") {
+                self.set_select_held(false);
             }
             return;
         }
@@ -1159,32 +1223,23 @@ impl WinitApp {
             return;
         }
 
-        // Start ボタン押下
-        if button == "Start" {
-            if !self.start_held {
-                self.option_panel_started_at = Instant::now();
-            }
-            self.start_held = true;
-            self.select_option_panel = 1;
+        if self.select_keys.is_start(button) {
+            self.set_start_held(true);
             return;
         }
 
-        // Start 押しながら: オプション切替
-        if self.start_held {
-            let mut option_changed = false;
-            if self.select_keys.cycle_arrange.as_deref() == Some(button) {
-                self.arrange_option = self.arrange_option.cycle();
-                option_changed = true;
-                tracing::info!(arrange = self.arrange_option.as_str(), "arrange option changed");
-            } else if self.select_keys.cycle_gauge.as_deref() == Some(button) {
-                self.gauge_option = cycle_gauge_option(self.gauge_option);
-                option_changed = true;
-                tracing::info!(gauge = ?self.gauge_option, "gauge option changed");
-            } else if self.select_keys.cycle_assist.as_deref() == Some(button) {
-                self.assist_option = self.assist_option.cycle();
-                option_changed = true;
-                tracing::info!(assist = self.assist_option.as_str(), "assist option changed");
-            }
+        if self.select_keys.is_back(button) || matches!(button, "Select" | "DPadLeft") {
+            self.set_select_held(true);
+            return;
+        }
+
+        if self.select_option_panel != 0 {
+            let option_changed = match self.select_option_panel {
+                1 => self.apply_play_option_control(button),
+                2 => self.apply_assist_option_control(button),
+                3 => self.apply_detail_option_control(button),
+                _ => false,
+            };
             if option_changed {
                 self.play_system_sound(crate::system_sound::SoundType::OptionChange);
             }
@@ -3402,6 +3457,32 @@ fn bga_mode_as_str(bga: BgaModeConfig) -> &'static str {
     }
 }
 
+fn cycle_bga_option(current: BgaModeConfig) -> BgaModeConfig {
+    match current {
+        BgaModeConfig::On => BgaModeConfig::Auto,
+        BgaModeConfig::Auto => BgaModeConfig::Off,
+        BgaModeConfig::Off => BgaModeConfig::On,
+    }
+}
+
+fn select_option_panel_for_holds(start_held: bool, select_held: bool) -> u8 {
+    match (start_held, select_held) {
+        (true, true) => 3,
+        (true, false) => 1,
+        (false, true) => 2,
+        (false, false) => 0,
+    }
+}
+
+fn is_select_start_key(physical_key: PhysicalKey, bindings: &SelectKeyBindings) -> bool {
+    physical_key_name(physical_key).is_some_and(|control| bindings.is_start(&control))
+}
+
+fn is_select_modifier_key(physical_key: PhysicalKey, bindings: &SelectKeyBindings) -> bool {
+    matches!(physical_key, PhysicalKey::Code(KeyCode::ArrowLeft))
+        || physical_key_name(physical_key).is_some_and(|control| bindings.is_back(&control))
+}
+
 fn arrange_option_from_profile(random: RandomOptionConfig) -> ArrangeOption {
     match random {
         RandomOptionConfig::Mirror => ArrangeOption::Mirror,
@@ -3761,12 +3842,13 @@ fn digit_to_replay_slot(physical_key: PhysicalKey) -> Option<u8> {
 }
 
 struct SelectKeyBindings {
-    start: String,
+    start: Vec<String>,
     enter: Vec<String>,
     back: Vec<String>,
     cycle_arrange: Option<String>,
     cycle_gauge: Option<String>,
     cycle_assist: Option<String>,
+    cycle_bga: Option<String>,
     key_hint: String,
     option_hint: String,
 }
@@ -3782,51 +3864,126 @@ impl SelectKeyBindings {
 
         // キーボード専用（ヒント文字列表示用）
         let kb_keys_for = |lane: LaneConfig| -> Vec<String> {
-            kb.iter().filter(|e| e.lane == lane).map(|e| e.control.clone()).collect()
+            kb.iter().filter(|e| e.lane == Some(lane)).map(|e| e.control.clone()).collect()
         };
 
         // キーボード + ゲームパッド（is_enter / is_back ルックアップ用）
         let keys_for = |lane: LaneConfig| -> Vec<String> {
-            all_input.iter().filter(|e| e.lane == lane).map(|e| e.control.clone()).collect()
+            all_input.iter().filter(|e| e.lane == Some(lane)).map(|e| e.control.clone()).collect()
+        };
+        let kb_actions_for = |action: InputActionConfig| -> Vec<String> {
+            kb.iter().filter(|e| e.action == Some(action)).map(|e| e.control.clone()).collect()
+        };
+        let actions_for = |action: InputActionConfig| -> Vec<String> {
+            all_input
+                .iter()
+                .filter(|e| e.action == Some(action))
+                .map(|e| e.control.clone())
+                .collect()
         };
 
-        let enter: Vec<String> =
+        let lane_enter: Vec<String> =
             [LaneConfig::Key1, LaneConfig::Key3, LaneConfig::Key5, LaneConfig::Key7]
                 .iter()
                 .flat_map(|&l| keys_for(l))
                 .collect();
-        let back = keys_for(LaneConfig::Key2);
-        let cycle_arrange = keys_for(LaneConfig::Key1).into_iter().next();
-        let cycle_gauge = keys_for(LaneConfig::Key3).into_iter().next();
-        let cycle_assist = keys_for(LaneConfig::Key5).into_iter().next();
-        let start = input.start_key.clone();
+        let enter = select_controls_with_lane_fallback(
+            actions_for(InputActionConfig::SelectEnter),
+            lane_enter,
+        );
+        let back = select_controls_with_lane_fallback(
+            actions_for(InputActionConfig::SelectBack),
+            keys_for(LaneConfig::Key2),
+        );
+        let cycle_arrange = select_control_with_lane_fallback(
+            actions_for(InputActionConfig::SelectOptionArrange),
+            keys_for(LaneConfig::Key1),
+        );
+        let cycle_gauge = select_control_with_lane_fallback(
+            actions_for(InputActionConfig::SelectOptionGauge),
+            keys_for(LaneConfig::Key3),
+        );
+        let cycle_assist = select_control_with_lane_fallback(
+            actions_for(InputActionConfig::SelectOptionAssist),
+            keys_for(LaneConfig::Key5),
+        );
+        let cycle_bga = select_control_with_lane_fallback(
+            actions_for(InputActionConfig::SelectOptionBga),
+            keys_for(LaneConfig::Key1),
+        );
+        let mut start = actions_for(InputActionConfig::SelectStart);
+        if let Some(legacy_start) = input.start_key.clone()
+            && !start.iter().any(|control| control == &legacy_start)
+        {
+            start.push(legacy_start);
+        }
+        if start.is_empty() {
+            start.push("Q".to_string());
+        }
 
         // ヒント文字列はキーボードバインドのみ使用
-        let kb_enter: Vec<String> =
+        let kb_lane_enter: Vec<String> =
             [LaneConfig::Key1, LaneConfig::Key3, LaneConfig::Key5, LaneConfig::Key7]
                 .iter()
                 .flat_map(|&l| kb_keys_for(l))
                 .collect();
-        let kb_back = kb_keys_for(LaneConfig::Key2);
+        let kb_enter = select_controls_with_lane_fallback(
+            kb_actions_for(InputActionConfig::SelectEnter),
+            kb_lane_enter,
+        );
+        let kb_back = select_controls_with_lane_fallback(
+            kb_actions_for(InputActionConfig::SelectBack),
+            kb_keys_for(LaneConfig::Key2),
+        );
         let enter_str =
             if kb_enter.is_empty() { String::new() } else { format!("/{}", kb_enter.join("/")) };
         let back_str = kb_back.first().map(|k| format!("/{k}")).unwrap_or_default();
+        let start_str = kb_actions_for(InputActionConfig::SelectStart)
+            .into_iter()
+            .next()
+            .or_else(|| input.start_key.clone())
+            .unwrap_or_else(|| start.first().cloned().unwrap_or_else(|| "Q".to_string()));
         let key_hint =
-            format!("UP DOWN  RIGHT{enter_str}:ENTER  LEFT{back_str}:BACK  ENTER {start}");
+            format!("UP DOWN  RIGHT{enter_str}:ENTER  LEFT{back_str}:BACK  ENTER {start_str}");
 
-        let kb_arrange_str = kb_keys_for(LaneConfig::Key1).into_iter().next();
-        let kb_gauge_str = kb_keys_for(LaneConfig::Key3).into_iter().next();
-        let kb_assist_str = kb_keys_for(LaneConfig::Key5).into_iter().next();
+        let kb_arrange_str = select_control_with_lane_fallback(
+            kb_actions_for(InputActionConfig::SelectOptionArrange),
+            kb_keys_for(LaneConfig::Key1),
+        );
+        let kb_gauge_str = select_control_with_lane_fallback(
+            kb_actions_for(InputActionConfig::SelectOptionGauge),
+            kb_keys_for(LaneConfig::Key3),
+        );
+        let kb_assist_str = select_control_with_lane_fallback(
+            kb_actions_for(InputActionConfig::SelectOptionAssist),
+            kb_keys_for(LaneConfig::Key5),
+        );
+        let kb_bga_str = select_control_with_lane_fallback(
+            kb_actions_for(InputActionConfig::SelectOptionBga),
+            kb_keys_for(LaneConfig::Key1),
+        );
         let arrange_str = kb_arrange_str.as_deref().unwrap_or("?");
         let gauge_str = kb_gauge_str.as_deref().unwrap_or("?");
         let assist_str = kb_assist_str.as_deref().unwrap_or("?");
+        let bga_str = kb_bga_str.as_deref().unwrap_or("?");
         let option_hint = format!(
             "F1 MENU  F5 RELOAD   \
-             {start}+{arrange_str}:ARRANGE  {start}+{gauge_str}:GAUGE  {start}+{assist_str}:ASSIST  \
-             {start}+1..4:REPLAY"
+             {start_str}:PLAY OPT  BACK:ASSIST OPT  {start_str}+BACK:DETAIL OPT  \
+             {start_str}+{arrange_str}:ARRANGE  {start_str}+{gauge_str}:GAUGE  {start_str}+{assist_str}:ASSIST  \
+             {start_str}+{bga_str}:BGA  {start_str}+1..4:REPLAY"
         );
 
-        Self { start, enter, back, cycle_arrange, cycle_gauge, cycle_assist, key_hint, option_hint }
+        Self {
+            start,
+            enter,
+            back,
+            cycle_arrange,
+            cycle_gauge,
+            cycle_assist,
+            cycle_bga,
+            key_hint,
+            option_hint,
+        }
     }
 
     fn is_enter(&self, control: &str) -> bool {
@@ -3836,6 +3993,24 @@ impl SelectKeyBindings {
     fn is_back(&self, control: &str) -> bool {
         self.back.iter().any(|k| k == control)
     }
+
+    fn is_start(&self, control: &str) -> bool {
+        self.start.iter().any(|k| k == control)
+    }
+}
+
+fn select_controls_with_lane_fallback(
+    configured: Vec<String>,
+    lane_fallback: Vec<String>,
+) -> Vec<String> {
+    if configured.is_empty() { lane_fallback } else { configured }
+}
+
+fn select_control_with_lane_fallback(
+    configured: Vec<String>,
+    lane_fallback: Vec<String>,
+) -> Option<String> {
+    configured.into_iter().next().or_else(|| lane_fallback.into_iter().next())
 }
 
 #[cfg(test)]
@@ -4007,7 +4182,7 @@ mod tests {
         use crate::config::profile_config::default_keyboard_bindings;
         SelectKeyBindings::from_profile(&ProfileInputConfig {
             scratch_mode: crate::config::profile_config::ScratchInputMode::Normal,
-            start_key: "Q".to_string(),
+            start_key: None,
             bindings: default_keyboard_bindings(),
             analog_scratch_sensitivity: 1.0,
             analog_scratch_timeout_ms: 500,
@@ -4146,6 +4321,39 @@ mod tests {
         assert!(keys.option_hint.contains("F1 MENU"), "menu in hint: {}", keys.option_hint);
         assert!(keys.option_hint.contains("F5 RELOAD"), "reload in hint: {}", keys.option_hint);
         assert!(keys.option_hint.contains("Q+Z:ARRANGE"), "arrange in hint: {}", keys.option_hint);
+    }
+
+    #[test]
+    fn select_option_panel_maps_start_and_select_holds() {
+        assert_eq!(select_option_panel_for_holds(false, false), 0);
+        assert_eq!(select_option_panel_for_holds(true, false), 1);
+        assert_eq!(select_option_panel_for_holds(false, true), 2);
+        assert_eq!(select_option_panel_for_holds(true, true), 3);
+    }
+
+    #[test]
+    fn select_modifier_keys_are_handled_before_folder_back() {
+        let keys = default_select_keys();
+        assert!(is_select_modifier_key(PhysicalKey::Code(KeyCode::ArrowLeft), &keys));
+        assert!(is_select_modifier_key(PhysicalKey::Code(KeyCode::KeyS), &keys));
+        assert_eq!(
+            select_action(PhysicalKey::Code(KeyCode::KeyS), ElementState::Pressed, false, &keys),
+            Some(SelectAction::ExitFolder)
+        );
+    }
+
+    #[test]
+    fn select_start_key_uses_profile_start_binding() {
+        let keys = default_select_keys();
+        assert!(is_select_start_key(PhysicalKey::Code(KeyCode::KeyQ), &keys));
+        assert!(!is_select_start_key(PhysicalKey::Code(KeyCode::KeyS), &keys));
+    }
+
+    #[test]
+    fn bga_option_cycles_on_auto_off() {
+        assert!(matches!(cycle_bga_option(BgaModeConfig::On), BgaModeConfig::Auto));
+        assert!(matches!(cycle_bga_option(BgaModeConfig::Auto), BgaModeConfig::Off));
+        assert!(matches!(cycle_bga_option(BgaModeConfig::Off), BgaModeConfig::On));
     }
 
     #[test]

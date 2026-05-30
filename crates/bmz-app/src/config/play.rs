@@ -69,10 +69,13 @@ pub fn lane_binding_from_profile_input(input: &ProfileInputConfig) -> LaneBindin
         entries: input
             .bindings
             .iter()
-            .map(|entry| BindingEntry {
-                device: None,
-                control: control_from_config(&entry.device, &entry.control),
-                lane: lane_from_config(entry.lane),
+            .filter_map(|entry| {
+                let lane = entry.lane?;
+                Some(BindingEntry {
+                    device: None,
+                    control: control_from_config(&entry.device, &entry.control),
+                    lane: lane_from_config(lane),
+                })
             })
             .collect(),
     }
