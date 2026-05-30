@@ -1436,6 +1436,9 @@ impl WinitApp {
             return;
         };
         let chart_id = self.last_started_chart_id.unwrap_or(0);
+        // Beatoraja behavior: if any chart in the course is Failed, the course
+        // ends immediately and remaining charts are skipped.
+        let failed = finished.result.clear_type == bmz_core::clear::ClearType::Failed;
         course.entry_results.push(CourseEntryResult { chart_id, finished });
         course.current_index += 1;
 
@@ -1444,14 +1447,15 @@ impl WinitApp {
         let next_chart_id =
             course.definition.entries.get(next_index).and_then(|e| e.chart_id);
 
-        if let Some(next_chart_id) = next_chart_id {
+        if !failed && let Some(next_chart_id) = next_chart_id {
             let mut options = self.play_start_options();
             apply_course_constraints(&mut options, &constraints);
             self.start_chart_with_options(next_chart_id, options);
             return;
         }
 
-        // All entries completed — build course result and show the last chart's result screen.
+        // Course is over either because every entry was played or because the
+        // most recent chart was Failed (skip remaining entries).
         let course = self.active_course.take().unwrap();
         let last_finished = course.entry_results.last().map(|r| r.finished.clone());
         let course_result = course.into_result();
@@ -1459,6 +1463,9 @@ impl WinitApp {
             title = %course_result.title,
             total_ex_score = course_result.total_ex_score,
             course_clear = course_result.course_clear,
+            course_failed = course_result.course_failed,
+            played = course_result.played_entries,
+            total = course_result.total_entries,
             trophies = ?course_result
                 .trophy_results
                 .iter()

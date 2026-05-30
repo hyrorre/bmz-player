@@ -27,6 +27,13 @@ pub struct CourseResultSummary {
     pub judge_counts: ResultJudgeCounts,
     pub trophy_results: Vec<TrophyResult>,
     pub course_clear: bool,
+    /// True when the course ended because one chart was Failed
+    /// (remaining charts were not played).  Mirrors beatoraja behavior.
+    pub course_failed: bool,
+    /// Total number of charts in the course definition.
+    pub total_entries: usize,
+    /// Number of entries the player actually played (includes the failed one).
+    pub played_entries: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -62,23 +69,33 @@ impl ActiveCourseSession {
             },
         );
 
+        let course_failed = self
+            .entry_results
+            .iter()
+            .any(|r| r.finished.result.clear_type == bmz_core::clear::ClearType::Failed);
+        let total_entries = self.definition.entries.len();
+        let played_entries = self.entry_results.len();
+
         let miss_count = judge_counts.bad + judge_counts.poor + judge_counts.empty_poor;
         let miss_rate =
             if total_notes > 0 { miss_count as f32 / total_notes as f32 * 100.0 } else { 0.0 };
         let score_rate =
             if max_ex_score > 0 { total_ex_score as f32 / max_ex_score as f32 * 100.0 } else { 0.0 };
 
+        // Beatoraja awards trophies only when every chart was played (i.e. not failed).
         let trophy_results: Vec<TrophyResult> = self
             .definition
             .trophies
             .iter()
             .map(|trophy| TrophyResult {
                 name: trophy.name.clone(),
-                achieved: miss_rate <= trophy.max_miss_rate && score_rate >= trophy.min_score_rate,
+                achieved: !course_failed
+                    && miss_rate <= trophy.max_miss_rate
+                    && score_rate >= trophy.min_score_rate,
             })
             .collect();
 
-        let course_clear = trophy_results.iter().any(|t| t.achieved);
+        let course_clear = !course_failed && trophy_results.iter().any(|t| t.achieved);
 
         let entry_summaries =
             self.entry_results.into_iter().map(|r| r.finished.summary).collect();
@@ -94,6 +111,9 @@ impl ActiveCourseSession {
             judge_counts,
             trophy_results,
             course_clear,
+            course_failed,
+            total_entries,
+            played_entries,
         }
     }
 }
@@ -113,11 +133,20 @@ mod tests {
     }
 
     fn make_play_result(score: ScoreState, total_notes: u32) -> PlayResult {
+        use bmz_core::clear::ClearType;
+        make_play_result_with(score, total_notes, ClearType::Normal)
+    }
+
+    fn make_play_result_with(
+        score: ScoreState,
+        total_notes: u32,
+        clear_type: bmz_core::clear::ClearType,
+    ) -> PlayResult {
         use bmz_chart::hash::compute_chart_identity;
-        use bmz_core::clear::{ClearType, GaugeType};
+        use bmz_core::clear::GaugeType;
         PlayResult {
             chart_sha256: compute_chart_identity(b"test").file_sha256,
-            clear_type: ClearType::Normal,
+            clear_type,
             gauge_type: GaugeType::Normal,
             gauge_value: 80.0,
             total_notes,
@@ -234,5 +263,91 @@ mod tests {
         assert!(!result.trophy_results[0].achieved);
         assert!(!result.trophy_results[1].achieved);
         assert!(!result.course_clear);
+    }
+
+    /// Build a session of `entry_count` entries, but only fill `played` of them
+    /// with results.  Used to simulate a course that was aborted by a Failed.
+    fn make_partial_session(
+        entry_count: usize,
+        played: Vec<(ScoreState, u32, bmz_core::clear::ClearType)>,
+    ) -> ActiveCourseSession {
+        use crate::screens::result_model::ResultSummary;
+        use crate::storage::play_result::StoredPlayResult;
+
+        let entries: Vec<CourseEntry> = (0..entry_count)
+            .map(|i| CourseEntry {
+                title_hint: format!("Song {i}"),
+                md5: None,
+                sha256: None,
+                chart_id: Some(i as i64 + 1),
+            })
+            .collect();
+
+        let entry_results: Vec<CourseEntryResult> = played
+            .into_iter()
+            .enumerate()
+            .map(|(i, (score, total_notes, clear_type))| {
+                let result = make_play_result_with(score, total_notes, clear_type);
+                CourseEntryResult {
+                    chart_id: i as i64 + 1,
+                    finished: FinishedPlaySession {
+                        result,
+                        stored: StoredPlayResult {
+                            score_history_id: 0,
+                            replay_path: String::new(),
+                            slot_paths: [None, None, None, None],
+                        },
+                        summary: ResultSummary::from_play_result(
+                            &make_play_result(ScoreState::default(), total_notes),
+                            &StoredPlayResult {
+                                score_history_id: 0,
+                                replay_path: String::new(),
+                                slot_paths: [None, None, None, None],
+                            },
+                            &bmz_chart::model::ChartMetadata::default(),
+                        ),
+                    },
+                }
+            })
+            .collect();
+
+        ActiveCourseSession {
+            course_id: 1,
+            definition: CourseDefinition {
+                key: "test#0".to_string(),
+                title: "Test".to_string(),
+                kind: bmz_core::course::CourseKind::Dan,
+                entries,
+                constraints: CourseConstraints::default(),
+                trophies: vec![CourseTrophy {
+                    name: "gold".to_string(),
+                    max_miss_rate: 100.0,
+                    min_score_rate: 0.0,
+                }],
+                release: true,
+            },
+            current_index: 0,
+            entry_results,
+        }
+    }
+
+    #[test]
+    fn failed_chart_aborts_course_and_blocks_trophy() {
+        use bmz_core::clear::ClearType;
+        // 4-entry course, only first 2 played, second is Failed.
+        let session = make_partial_session(
+            4,
+            vec![
+                (make_score(100, 0), 100, ClearType::Normal),
+                (make_score(0, 100), 100, ClearType::Failed),
+            ],
+        );
+        let result = session.into_result();
+        assert!(result.course_failed);
+        assert!(!result.course_clear);
+        assert_eq!(result.played_entries, 2);
+        assert_eq!(result.total_entries, 4);
+        // Trophies are blocked when course_failed even if numeric thresholds pass.
+        assert!(!result.trophy_results[0].achieved);
     }
 }
