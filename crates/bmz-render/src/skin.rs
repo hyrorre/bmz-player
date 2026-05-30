@@ -5247,6 +5247,7 @@ fn select_row_bar_image_index(row: &SelectRowSnapshot) -> usize {
         SelectRowKind::Song => 0,
         SelectRowKind::Folder => 1,
         SelectRowKind::TableFolder => 2,
+        SelectRowKind::Course => 3,
     }
 }
 
@@ -5256,6 +5257,7 @@ fn select_row_bar_text_index(row: &SelectRowSnapshot) -> usize {
         SelectRowKind::Song => 2,
         SelectRowKind::Folder => 4,
         SelectRowKind::TableFolder => 6,
+        SelectRowKind::Course => 6,
     }
 }
 

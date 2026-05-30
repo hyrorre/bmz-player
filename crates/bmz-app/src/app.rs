@@ -40,6 +40,9 @@ use crate::config::profile_config::{
 };
 use crate::config::save::{save_app_config, save_profile_config};
 use crate::input::winit::physical_key_to_control;
+use crate::screens::course_session::{
+    ActiveCourseSession, CourseEntryResult, CourseResultSummary,
+};
 use crate::screens::play_finish::FinishedPlaySession;
 use crate::screens::play_loop::{PlayAdvanceOutcome, advance_running_play_session_until_result};
 use crate::screens::play_snapshot::{
@@ -48,15 +51,15 @@ use crate::screens::play_snapshot::{
 };
 use crate::screens::play_start::{
     PlayStartOptions, PreloadedWinitPlaySession, StartedWinitPlaySession,
-    open_prepared_winit_play_session, prepare_play_session_for_chart_with_winit_input,
-    prepare_winit_play_session_from_preloaded,
+    apply_course_constraints, open_prepared_winit_play_session,
+    prepare_play_session_for_chart_with_winit_input, prepare_winit_play_session_from_preloaded,
 };
 use crate::screens::result_model::ResultSummary;
 use crate::screens::select_model::{
-    SelectItem, TABLE_ROOT_PATH, TablePath, load_select_items_in_folder,
-    load_select_items_in_table_level, parse_table_path, root_folder_items,
-    song_scan_path_from_context, table_folder_items, table_level_folder_items,
-    table_source_url_from_context,
+    COURSE_ROOT_PATH, SelectItem, TABLE_ROOT_PATH, TablePath, course_root_item,
+    load_select_items_for_courses, load_select_items_in_folder, load_select_items_in_table_level,
+    parse_table_path, root_folder_items, song_scan_path_from_context, table_folder_items,
+    table_level_folder_items, table_source_url_from_context,
 };
 use crate::select_options::{ArrangeOption, AssistOption, TargetOption};
 use crate::skin_loader::{
@@ -124,10 +127,20 @@ async fn fetch_configured_difficulty_tables(boot: &mut bootstrap::BootstrappedAp
                 tracing::info!(
                     name = %table.name,
                     entries = table.entries.len(),
+                    courses = table.courses.len(),
                     "difficulty table fetched"
                 );
                 if let Err(e) = boot.library_db.upsert_difficulty_table(&table) {
                     tracing::warn!(%url, error = %e, "failed to store difficulty table");
+                }
+                let source = format!("table:{url}");
+                for course in &table.courses {
+                    if let Err(e) = boot.library_db.upsert_course(&source, course, now) {
+                        tracing::warn!(%url, course = %course.title, error = %e, "failed to store table course");
+                    }
+                }
+                if !table.courses.is_empty() {
+                    tracing::info!(count = table.courses.len(), %url, "stored table courses");
                 }
             }
             Err(e) => {
@@ -141,6 +154,10 @@ struct WinitApp {
     boot: BootstrappedApp,
     window: Option<Arc<Window>>,
     active_play: Option<StartedWinitPlaySession>,
+    /// コースプレイ中のセッション。単曲プレイ時は None。
+    active_course: Option<ActiveCourseSession>,
+    /// コース全体完了時のリザルト。リザルト画面から抜けるまで保持する。
+    finished_course: Option<CourseResultSummary>,
     /// プレイ終了でリザルトへ移った後、曲の余韻を鳴らし切るために保持する音声出力。
     /// ドレインが完了するか、選曲復帰・次プレイ開始で解放される。
     draining_audio: Option<AppAudioOutput>,
@@ -445,6 +462,8 @@ impl WinitApp {
             boot,
             window: None,
             active_play: None,
+            active_course: None,
+            finished_course: None,
             draining_audio: None,
             finished_play: None,
             last_play_was_autoplay: false,
@@ -1353,6 +1372,10 @@ impl WinitApp {
                     );
                 }
             }
+            Some(SelectItem::Course(row)) => {
+                let course_id = row.course_id;
+                self.start_course(course_id);
+            }
             None => {
                 tracing::warn!("no item is available to select");
             }
@@ -1374,6 +1397,81 @@ impl WinitApp {
     fn start_chart(&mut self, chart_id: i64) {
         let options = self.play_start_options();
         self.begin_decide_for_chart(chart_id, options);
+    }
+
+    fn start_course(&mut self, course_id: i64) {
+        let stored = match self.boot.library_db.list_courses() {
+            Ok(courses) => courses.into_iter().find(|c| c.id == course_id),
+            Err(error) => {
+                tracing::error!(%error, course_id, "failed to load courses for start_course");
+                return;
+            }
+        };
+        let Some(stored) = stored else {
+            tracing::warn!(course_id, "course not found");
+            return;
+        };
+        let definition = stored.definition;
+        let first_chart_id = definition.entries.iter().find_map(|e| e.chart_id);
+        let Some(first_chart_id) = first_chart_id else {
+            tracing::warn!(course_id, "no resolved chart in course");
+            return;
+        };
+        tracing::info!(course_id, title = %definition.title, "starting course");
+        let mut options = self.play_start_options();
+        apply_course_constraints(&mut options, &definition.constraints);
+        self.active_course = Some(ActiveCourseSession {
+            course_id,
+            definition,
+            current_index: 0,
+            entry_results: Vec::new(),
+        });
+        self.start_chart_with_options(first_chart_id, options);
+    }
+
+    fn advance_course_after_finish(&mut self, finished: FinishedPlaySession) {
+        let Some(course) = &mut self.active_course else {
+            return;
+        };
+        let chart_id = self.last_started_chart_id.unwrap_or(0);
+        course.entry_results.push(CourseEntryResult { chart_id, finished });
+        course.current_index += 1;
+
+        let next_index = course.current_index;
+        let constraints = course.definition.constraints.clone();
+        let next_chart_id =
+            course.definition.entries.get(next_index).and_then(|e| e.chart_id);
+
+        if let Some(next_chart_id) = next_chart_id {
+            let mut options = self.play_start_options();
+            apply_course_constraints(&mut options, &constraints);
+            self.start_chart_with_options(next_chart_id, options);
+            return;
+        }
+
+        // All entries completed — build course result and show the last chart's result screen.
+        let course = self.active_course.take().unwrap();
+        let last_finished = course.entry_results.last().map(|r| r.finished.clone());
+        let course_result = course.into_result();
+        tracing::info!(
+            title = %course_result.title,
+            total_ex_score = course_result.total_ex_score,
+            course_clear = course_result.course_clear,
+            trophies = ?course_result
+                .trophy_results
+                .iter()
+                .filter(|t| t.achieved)
+                .map(|t| t.name.as_str())
+                .collect::<Vec<_>>(),
+            "course finished"
+        );
+        self.finished_course = Some(course_result);
+        // Use the last chart's result for the standard result skin display.
+        if let Some(last) = last_finished {
+            self.finished_play = Some(last);
+            self.result_scene_started_at = Instant::now();
+            self.ensure_skin_ready(SkinKind::Result);
+        }
     }
 
     fn begin_decide_for_chart(&mut self, chart_id: i64, options: PlayStartOptions) {
@@ -1450,7 +1548,7 @@ impl WinitApp {
             SelectItem::Chart(row) => {
                 row.chart.as_ref().is_some_and(|chart| chart.chart_id == chart_id)
             }
-            SelectItem::Folder { .. } => false,
+            SelectItem::Folder { .. } | SelectItem::Course(_) => false,
         }) && let Some(chart) = &row.chart
         {
             snapshot.title = chart.title.clone();
@@ -1722,7 +1820,7 @@ impl WinitApp {
     fn currently_selected_chart_id(&self) -> Option<i64> {
         match self.select_items.get(self.selected_index)? {
             SelectItem::Chart(row) => row.chart.as_ref().map(|chart| chart.chart_id),
-            SelectItem::Folder { .. } => None,
+            SelectItem::Folder { .. } | SelectItem::Course(_) => None,
         }
     }
 
@@ -1837,6 +1935,10 @@ impl WinitApp {
         if let Some(started) = self.active_play.take() {
             self.draining_audio = Some(started.running.audio);
         }
+        if self.active_course.is_some() {
+            self.advance_course_after_finish(ending.finished);
+            return;
+        }
         self.finished_play = Some(ending.finished);
         self.result_scene_started_at = Instant::now();
         self.ensure_skin_ready(SkinKind::Result);
@@ -1873,6 +1975,8 @@ impl WinitApp {
 
     fn leave_result(&mut self) {
         self.finished_play = None;
+        self.finished_course = None;
+        self.active_course = None;
         self.result_exit = None;
         self.clear_play_backbmp_state();
         // リザルト画面を抜けたら、まだ鳴っていても余韻再生を止める。
@@ -3405,6 +3509,15 @@ fn load_items_for_stack(
     stack: &[String],
 ) -> Vec<SelectItem> {
     match stack.last() {
+        Some(path) if path == COURSE_ROOT_PATH => {
+            match load_select_items_for_courses(&boot.library_db) {
+                Ok(items) => items,
+                Err(error) => {
+                    tracing::error!(%error, "failed to load course list");
+                    Vec::new()
+                }
+            }
+        }
         Some(path) if path.starts_with(TABLE_ROOT_PATH) => match parse_table_path(path) {
             Some(TablePath::Root) => match table_folder_items(&boot.library_db) {
                 Ok(items) => items,
@@ -3448,8 +3561,17 @@ fn load_items_for_stack(
             }
         }
         None => {
-            // ルートには曲フォルダに続けて、各難易度表フォルダ（発狂BMS / Stella 等）を並べる。
+            // ルートには曲フォルダに続けて、コースフォルダ・各難易度表フォルダを並べる。
             let mut items = root_folder_items(&enabled_root_paths(&boot.app_config));
+            match boot.library_db.list_courses() {
+                Ok(courses) if !courses.is_empty() => {
+                    items.push(course_root_item());
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::error!(%error, "failed to check course list for root");
+                }
+            }
             match table_folder_items(&boot.library_db) {
                 Ok(tables) => items.extend(tables),
                 Err(error) => {
@@ -3674,6 +3796,27 @@ fn select_snapshot_rows(
                     is_folder: false,
                     kind: bmz_render::scene::SelectRowKind::Song,
                     in_library: row.in_library(),
+                },
+                SelectItem::Course(row) => SelectRowSnapshot {
+                    index: index as u32,
+                    title: row.title.clone(),
+                    artist: String::new(),
+                    difficulty_name: String::new(),
+                    play_level: String::new(),
+                    table_level: String::new(),
+                    total_notes: 0,
+                    initial_bpm: 0.0,
+                    min_bpm: 0.0,
+                    max_bpm: 0.0,
+                    length_ms: 0,
+                    clear_type: String::new(),
+                    ex_score: None,
+                    max_combo: None,
+                    gauge_value: None,
+                    replay_slots: [false; 4],
+                    is_folder: false,
+                    kind: bmz_render::scene::SelectRowKind::Course,
+                    in_library: row.resolved_count > 0,
                 },
             }
         })

@@ -1,4 +1,7 @@
 use anyhow::Result;
+use bmz_core::course::{
+    CourseClassConstraint, CourseConstraints, CourseGaugeConstraint, CourseSpeedConstraint,
+};
 use bmz_core::time::TimeUs;
 use bmz_gameplay::input::backend::{InputBackend, NullInputBackend};
 use bmz_gameplay::replay::ReplayPlayer;
@@ -172,6 +175,44 @@ pub fn start_running_play_session_for_chart_with_winit_input(
         Box::new(input.clone()),
     )?;
     Ok(StartedWinitPlaySession { running, input })
+}
+
+/// Overrides `options` fields based on the course constraints.
+///
+/// - Gauge: non-Default constraints override the user's gauge choice with `Normal`.
+/// - Arrange: class constraints restrict which arrange options are allowed.
+///   If the user's current arrange is not in the allowed set, it falls back to Normal.
+pub fn apply_course_constraints(options: &mut PlayStartOptions, constraints: &CourseConstraints) {
+    match constraints.gauge {
+        CourseGaugeConstraint::Default => {}
+        CourseGaugeConstraint::Lr2
+        | CourseGaugeConstraint::Keys5
+        | CourseGaugeConstraint::Keys7
+        | CourseGaugeConstraint::Keys9
+        | CourseGaugeConstraint::Keys24 => {
+            options.gauge = Some(GaugeTypeConfig::Normal);
+        }
+    }
+
+    // Speed lock is stored in the constraint but not yet enforced in gameplay.
+    // Future work: propagate CourseSpeedConstraint into PlaySessionOptions.
+    let _ = constraints.speed == CourseSpeedConstraint::NoSpeed;
+
+    let allowed: &[ArrangeOption] = match constraints.class {
+        CourseClassConstraint::None => return,
+        CourseClassConstraint::Grade => &[ArrangeOption::Normal],
+        CourseClassConstraint::GradeMirrorAllowed => {
+            &[ArrangeOption::Normal, ArrangeOption::Mirror]
+        }
+        CourseClassConstraint::GradeRandomAllowed => {
+            &[ArrangeOption::Normal, ArrangeOption::Random]
+        }
+    };
+    if !allowed.contains(&options.arrange) {
+        options.arrange = ArrangeOption::Normal;
+        options.arrange_seed = None;
+        options.arrange_pattern = None;
+    }
 }
 
 #[cfg(test)]

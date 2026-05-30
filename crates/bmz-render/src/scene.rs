@@ -100,6 +100,7 @@ pub enum SelectRowKind {
     Song,
     Folder,
     TableFolder,
+    Course,
 }
 
 #[derive(Debug, Clone, PartialEq)]

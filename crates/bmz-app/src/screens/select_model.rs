@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
+use bmz_core::course::CourseKind;
 use bmz_render::scene::SelectRowKind;
 
 use crate::storage::common::hash_to_hex;
@@ -12,6 +13,9 @@ use crate::storage::score_db::{BestScoreSummary, ReplaySlotSummary, ScoreDatabas
 /// `"bmz-table:{source_url}"` lists the level folders of that table.
 /// `"bmz-table:{source_url}\n{level}"` lists the charts of that table level.
 pub const TABLE_ROOT_PATH: &str = "bmz-table:";
+
+/// Virtual path for the course list root.
+pub const COURSE_ROOT_PATH: &str = "bmz-course:";
 
 /// Separator between a table's `source_url` and a level inside a virtual
 /// table path.  A newline never appears in a difficulty-table source URL,
@@ -138,10 +142,22 @@ impl SelectChartRow {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct SelectCourseRow {
+    pub course_id: i64,
+    pub title: String,
+    pub kind: CourseKind,
+    /// Total number of entries in the course.
+    pub entry_count: usize,
+    /// Number of entries whose `chart_id` is resolved in the local library.
+    pub resolved_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::large_enum_variant)]
 pub enum SelectItem {
     Folder { path: String, name: String, kind: SelectRowKind },
     Chart(SelectChartRow),
+    Course(SelectCourseRow),
 }
 
 impl SelectItem {
@@ -149,6 +165,7 @@ impl SelectItem {
         match self {
             Self::Folder { name, .. } => name.as_str(),
             Self::Chart(row) => row.display_title(),
+            Self::Course(row) => row.title.as_str(),
         }
     }
 }
@@ -177,6 +194,34 @@ pub fn table_folder_items(library_db: &LibraryDatabase) -> Result<Vec<SelectItem
             path: format!("{TABLE_ROOT_PATH}{}", t.source_url),
             name: format!("[{}] {}", t.symbol, t.name),
             kind: SelectRowKind::TableFolder,
+        })
+        .collect())
+}
+
+/// Returns a folder item for the course list root.
+pub fn course_root_item() -> SelectItem {
+    SelectItem::Folder {
+        path: COURSE_ROOT_PATH.to_string(),
+        name: "COURSE".to_string(),
+        kind: SelectRowKind::TableFolder,
+    }
+}
+
+/// Loads all stored courses as `SelectItem::Course` entries, sorted by title.
+pub fn load_select_items_for_courses(library_db: &LibraryDatabase) -> Result<Vec<SelectItem>> {
+    let courses = library_db.list_courses()?;
+    Ok(courses
+        .into_iter()
+        .map(|stored| {
+            let resolved_count =
+                stored.definition.entries.iter().filter(|e| e.chart_id.is_some()).count();
+            SelectItem::Course(SelectCourseRow {
+                course_id: stored.id,
+                title: stored.definition.title,
+                kind: stored.definition.kind,
+                entry_count: stored.definition.entries.len(),
+                resolved_count,
+            })
         })
         .collect())
 }
@@ -796,6 +841,7 @@ mod tests {
                 artist: String::new(),
                 comment: String::new(),
             }],
+            courses: Vec::new(),
             fetched_at: 0,
         }
     }
@@ -820,6 +866,7 @@ mod tests {
                 artist: String::new(),
                 comment: String::new(),
             }],
+            courses: Vec::new(),
             fetched_at: 0,
         }
     }
@@ -877,6 +924,7 @@ mod tests {
                     comment: String::new(),
                 },
             ],
+            courses: Vec::new(),
             fetched_at: 0,
         };
         library_db.upsert_difficulty_table(&table).unwrap();
@@ -1005,6 +1053,7 @@ mod tests {
                 artist: String::new(),
                 comment: String::new(),
             }],
+            courses: Vec::new(),
             fetched_at: 0,
         };
         library_db.upsert_difficulty_table(&table).unwrap();
@@ -1053,6 +1102,7 @@ mod tests {
                     comment: String::new(),
                 },
             ],
+            courses: Vec::new(),
             fetched_at: 0,
         };
         library_db.upsert_difficulty_table(&table).unwrap();
@@ -1088,6 +1138,7 @@ mod tests {
                 artist: "Missing Artist".to_string(),
                 comment: String::new(),
             }],
+            courses: Vec::new(),
             fetched_at: 0,
         };
         library_db.upsert_difficulty_table(&table).unwrap();
@@ -1131,6 +1182,7 @@ mod tests {
                 artist: "Table Artist".to_string(),
                 comment: String::new(),
             }],
+            courses: Vec::new(),
             fetched_at: 0,
         };
         library_db.upsert_difficulty_table(&table).unwrap();
@@ -1182,6 +1234,7 @@ mod tests {
                     comment: String::new(),
                 },
             ],
+            courses: Vec::new(),
             fetched_at: 0,
         };
         library_db.upsert_difficulty_table(&table).unwrap();
@@ -1233,6 +1286,7 @@ mod tests {
                     comment: String::new(),
                 },
             ],
+            courses: Vec::new(),
             fetched_at: 0,
         };
         library_db.upsert_difficulty_table(&table).unwrap();
@@ -1286,6 +1340,7 @@ mod tests {
                     comment: String::new(),
                 },
             ],
+            courses: Vec::new(),
             fetched_at: 0,
         };
         library_db.upsert_difficulty_table(&table).unwrap();

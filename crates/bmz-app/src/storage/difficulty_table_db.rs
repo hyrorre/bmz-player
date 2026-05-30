@@ -240,6 +240,7 @@ mod tests {
                     comment: String::new(),
                 },
             ],
+            courses: Vec::new(),
             fetched_at: 1_700_000_000,
         }
     }

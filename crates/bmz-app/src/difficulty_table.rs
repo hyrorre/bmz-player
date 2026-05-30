@@ -1,4 +1,5 @@
 use anyhow::{Result, bail};
+use bmz_core::course::CourseDefinition;
 use serde::Deserialize;
 
 pub struct FetchedDifficultyTable {
@@ -8,6 +9,8 @@ pub struct FetchedDifficultyTable {
     pub symbol: String,
     pub level_order: Vec<String>,
     pub entries: Vec<FetchedTableEntry>,
+    /// Courses embedded in the table header JSON.
+    pub courses: Vec<CourseDefinition>,
     pub fetched_at: i64,
 }
 
@@ -28,6 +31,10 @@ struct HeaderJson {
     data_url: DataUrl,
     #[serde(default)]
     level_order: Vec<String>,
+    /// Embedded course definitions in beatoraja table format.
+    /// Stored as raw JSON to reuse `parse_beatoraja_course_json`.
+    #[serde(default)]
+    course: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize, Default)]
@@ -123,6 +130,8 @@ pub async fn fetch_difficulty_table(
         }
     }
 
+    let courses = parse_courses_from_header(source_url, &header.course);
+
     Ok(FetchedDifficultyTable {
         source_url: source_url.to_string(),
         head_url,
@@ -130,8 +139,30 @@ pub async fn fetch_difficulty_table(
         symbol: header.symbol,
         level_order,
         entries,
+        courses,
         fetched_at,
     })
+}
+
+fn parse_courses_from_header(
+    source_url: &str,
+    course_json: &Option<serde_json::Value>,
+) -> Vec<CourseDefinition> {
+    let Some(value) = course_json else {
+        return Vec::new();
+    };
+    let json_str = match serde_json::to_string(value) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let source = format!("table:{source_url}");
+    match crate::course::parse_beatoraja_course_json(&source, &json_str) {
+        Ok(courses) => courses,
+        Err(err) => {
+            tracing::warn!(%err, %source_url, "failed to parse courses from difficulty table header");
+            Vec::new()
+        }
+    }
 }
 
 fn find_bmstable_meta(html: &str) -> Option<String> {
