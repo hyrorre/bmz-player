@@ -36,14 +36,15 @@ use crate::config::app_config::{PathEntry, WindowMode};
 use crate::config::load::load_profile_config;
 use crate::config::profile_config::{
     AssistOptionConfig, BgaModeConfig, GaugeTypeConfig, InputActionConfig, LaneConfig,
-    ProfileConfig, ProfileInputConfig, RandomOptionConfig,
+    ProfileConfig, ProfileInputConfig, RandomOptionConfig, TargetOptionConfig,
 };
 use crate::config::save::{save_app_config, save_profile_config};
 use crate::input::winit::physical_key_to_control;
 use crate::screens::play_finish::FinishedPlaySession;
 use crate::screens::play_loop::{PlayAdvanceOutcome, advance_running_play_session_until_result};
 use crate::screens::play_snapshot::{
-    BgaFrameCatalog, bga_texture_id, build_render_snapshot_with_bga_frames, display_bga_frame,
+    BgaFrameCatalog, bga_texture_id, build_render_snapshot_with_target_and_bga_frames,
+    display_bga_frame,
 };
 use crate::screens::play_start::{
     PlayStartOptions, PreloadedWinitPlaySession, StartedWinitPlaySession,
@@ -57,7 +58,7 @@ use crate::screens::select_model::{
     song_scan_path_from_context, table_folder_items, table_level_folder_items,
     table_source_url_from_context,
 };
-use crate::select_options::{ArrangeOption, AssistOption};
+use crate::select_options::{ArrangeOption, AssistOption, TargetOption};
 use crate::skin_loader::{
     DecodedSkin, PreparedSource, SkinKind, UploadedSkin, apply_skin_from_config,
     decode_beatoraja_skin_with_options, install_decoded_font, install_decoded_skin,
@@ -167,6 +168,7 @@ struct WinitApp {
     start_held: bool,
     select_held: bool,
     arrange_option: ArrangeOption,
+    target_option: TargetOption,
     gauge_option: GaugeTypeConfig,
     assist_option: AssistOption,
     select_keys: SelectKeyBindings,
@@ -358,6 +360,7 @@ impl WinitApp {
         };
         let gauge_option = boot.profile_config.play.gauge;
         let arrange_option = arrange_option_from_profile(boot.profile_config.play.random);
+        let target_option = target_option_from_profile(boot.profile_config.play.target);
         let select_keys = SelectKeyBindings::from_profile(&boot.profile_config.input);
         let now = Instant::now();
 
@@ -464,6 +467,7 @@ impl WinitApp {
             start_held: false,
             select_held: false,
             arrange_option,
+            target_option,
             gauge_option,
             assist_option,
             select_keys,
@@ -782,6 +786,7 @@ impl WinitApp {
             selected_title: selected.map(|i| i.display_name().to_string()).unwrap_or_default(),
             rows: select_snapshot_rows(&self.select_items, self.selected_index, 25),
             arrange: self.arrange_option.as_str().to_string(),
+            target: self.target_option.as_str().to_string(),
             gauge: gauge_option_as_str(self.gauge_option).to_string(),
             assist: self.assist_option.as_str().to_string(),
             bga: bga_mode_as_str(self.boot.profile_config.play.bga).to_string(),
@@ -988,6 +993,14 @@ impl WinitApp {
         }
     }
 
+    fn apply_target_option_cycle(&mut self, cycle: TargetCycle) {
+        self.target_option = match cycle {
+            TargetCycle::Previous => self.target_option.cycle_prev(),
+            TargetCycle::Next => self.target_option.cycle(),
+        };
+        tracing::info!(target = self.target_option.as_str(), "target option changed");
+    }
+
     fn apply_detail_option_control(&mut self, control: &str) -> bool {
         if self.select_keys.cycle_bga.as_deref() == Some(control) {
             self.cycle_bga_option();
@@ -1130,6 +1143,11 @@ impl WinitApp {
                             }
                             return;
                         }
+                        if let Some(cycle) = target_cycle_from_key(event.physical_key) {
+                            self.apply_target_option_cycle(cycle);
+                            self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+                            return;
+                        }
                         if let Some(control) = physical_key_name(event.physical_key)
                             && self.apply_play_option_control(&control)
                         {
@@ -1240,6 +1258,13 @@ impl WinitApp {
                 3 => self.apply_detail_option_control(button),
                 _ => false,
             };
+            if self.select_option_panel == 1
+                && let Some(cycle) = target_cycle_from_control(button, &self.select_keys)
+            {
+                self.apply_target_option_cycle(cycle);
+                self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+                return;
+            }
             if option_changed {
                 self.play_system_sound(crate::system_sound::SoundType::OptionChange);
             }
@@ -1525,11 +1550,12 @@ impl WinitApp {
             );
         }
         let render_now = self.play_skin_playstart_offset();
-        let mut snapshot = build_render_snapshot_with_bga_frames(
+        let mut snapshot = build_render_snapshot_with_target_and_bga_frames(
             &active_play.running.session,
             render_now,
             &active_play.running.session.recent_judgements,
             active_play.running.best_ex_score,
+            active_play.running.target_ex_score,
             &active_play.running.bga_frames,
         );
         snapshot.backbmp_background = self.play_backbmp_loaded;
@@ -1639,6 +1665,7 @@ impl WinitApp {
             autoplay: self.assist_option == AssistOption::Autoplay,
             gauge: Some(self.gauge_option),
             arrange: self.arrange_option,
+            target: self.target_option,
             arrange_seed,
             ..Default::default()
         }
@@ -1672,6 +1699,7 @@ impl WinitApp {
             chart_zero_time: TimeUs(0),
             gauge: Some(self.gauge_option),
             arrange: replay_file.arrange_option(),
+            target: self.target_option,
             arrange_seed: replay_file.arrange_seed,
             arrange_pattern: replay_file.lane_shuffle_pattern.clone(),
         };
@@ -2623,6 +2651,7 @@ impl WinitApp {
             hispeed,
             lane_state,
             self.arrange_option,
+            self.target_option,
             self.gauge_option,
             self.assist_option,
             now_unix_seconds(),
@@ -3501,6 +3530,34 @@ fn random_config_from_arrange(arrange: ArrangeOption) -> RandomOptionConfig {
     }
 }
 
+fn target_option_from_profile(target: TargetOptionConfig) -> TargetOption {
+    match target {
+        TargetOptionConfig::None => TargetOption::None,
+        TargetOptionConfig::Max => TargetOption::Max,
+        TargetOptionConfig::Aaa => TargetOption::Aaa,
+        TargetOptionConfig::Aa => TargetOption::Aa,
+        TargetOptionConfig::A => TargetOption::A,
+        TargetOptionConfig::B => TargetOption::B,
+        TargetOptionConfig::C => TargetOption::C,
+        TargetOptionConfig::D => TargetOption::D,
+        TargetOptionConfig::E => TargetOption::E,
+    }
+}
+
+fn target_config_from_option(target: TargetOption) -> TargetOptionConfig {
+    match target {
+        TargetOption::None => TargetOptionConfig::None,
+        TargetOption::Max => TargetOptionConfig::Max,
+        TargetOption::Aaa => TargetOptionConfig::Aaa,
+        TargetOption::Aa => TargetOptionConfig::Aa,
+        TargetOption::A => TargetOptionConfig::A,
+        TargetOption::B => TargetOptionConfig::B,
+        TargetOption::C => TargetOptionConfig::C,
+        TargetOption::D => TargetOptionConfig::D,
+        TargetOption::E => TargetOptionConfig::E,
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct ActiveLaneState {
     lane_cover: f32,
@@ -3512,6 +3569,7 @@ fn apply_current_play_options_to_profile(
     hispeed: Option<f32>,
     lane_state: Option<ActiveLaneState>,
     arrange: ArrangeOption,
+    target: TargetOption,
     gauge: GaugeTypeConfig,
     assist: AssistOption,
     updated_at: i64,
@@ -3524,6 +3582,7 @@ fn apply_current_play_options_to_profile(
         profile.lane.lift = state.lift.clamp(0.0, 1.0);
     }
     profile.play.random = random_config_from_arrange(arrange);
+    profile.play.target = target_config_from_option(target);
     profile.play.gauge = gauge;
     profile.play.auto_play = assist == AssistOption::Autoplay;
     profile.play.assist = AssistOptionConfig::None;
@@ -3841,10 +3900,43 @@ fn digit_to_replay_slot(physical_key: PhysicalKey) -> Option<u8> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TargetCycle {
+    Previous,
+    Next,
+}
+
+fn target_cycle_from_key(physical_key: PhysicalKey) -> Option<TargetCycle> {
+    match physical_key {
+        PhysicalKey::Code(KeyCode::ArrowUp) => Some(TargetCycle::Previous),
+        PhysicalKey::Code(KeyCode::ArrowDown) => Some(TargetCycle::Next),
+        _ => None,
+    }
+}
+
+fn target_cycle_from_control(control: &str, bindings: &SelectKeyBindings) -> Option<TargetCycle> {
+    match control {
+        "ScratchUp" => return Some(TargetCycle::Previous),
+        "ScratchDown" => return Some(TargetCycle::Next),
+        _ => {}
+    }
+    if !bindings.scratch_controls.iter().any(|scratch| scratch == control) {
+        return None;
+    }
+    if control.ends_with('-') {
+        Some(TargetCycle::Previous)
+    } else if control.ends_with('+') {
+        Some(TargetCycle::Next)
+    } else {
+        None
+    }
+}
+
 struct SelectKeyBindings {
     start: Vec<String>,
     enter: Vec<String>,
     back: Vec<String>,
+    scratch_controls: Vec<String>,
     cycle_arrange: Option<String>,
     cycle_gauge: Option<String>,
     cycle_assist: Option<String>,
@@ -3895,6 +3987,7 @@ impl SelectKeyBindings {
             actions_for(InputActionConfig::E2),
             keys_for(LaneConfig::Key2),
         );
+        let scratch_controls = keys_for(LaneConfig::Scratch);
         let cycle_arrange = select_control_with_lane_fallback(
             actions_for(InputActionConfig::SelectOptionArrange),
             keys_for(LaneConfig::Key1),
@@ -3970,13 +4063,14 @@ impl SelectKeyBindings {
             "F1 MENU  F5 RELOAD   \
              {start_str}:PLAY OPT  BACK:ASSIST OPT  {start_str}+BACK:DETAIL OPT  \
              {start_str}+{arrange_str}:ARRANGE  {start_str}+{gauge_str}:GAUGE  {start_str}+{assist_str}:ASSIST  \
-             {start_str}+{bga_str}:BGA  {start_str}+1..4:REPLAY"
+             {start_str}+UP/DOWN:TARGET  {start_str}+{bga_str}:BGA  {start_str}+1..4:REPLAY"
         );
 
         Self {
             start,
             enter,
             back,
+            scratch_controls,
             cycle_arrange,
             cycle_gauge,
             cycle_assist,
@@ -4321,6 +4415,11 @@ mod tests {
         assert!(keys.option_hint.contains("F1 MENU"), "menu in hint: {}", keys.option_hint);
         assert!(keys.option_hint.contains("F5 RELOAD"), "reload in hint: {}", keys.option_hint);
         assert!(keys.option_hint.contains("Q+Z:ARRANGE"), "arrange in hint: {}", keys.option_hint);
+        assert!(
+            keys.option_hint.contains("Q+UP/DOWN:TARGET"),
+            "target in hint: {}",
+            keys.option_hint
+        );
     }
 
     #[test]
@@ -4329,6 +4428,30 @@ mod tests {
         assert_eq!(select_option_panel_for_holds(true, false), 1);
         assert_eq!(select_option_panel_for_holds(false, true), 2);
         assert_eq!(select_option_panel_for_holds(true, true), 3);
+    }
+
+    #[test]
+    fn target_cycle_maps_start_arrow_and_scratch_controls() {
+        let keys = default_select_keys();
+        let gamepad_keys = SelectKeyBindings::from_profile(
+            &ProfileConfig::new_default("default", "Default", 1).input,
+        );
+
+        assert_eq!(
+            target_cycle_from_key(PhysicalKey::Code(KeyCode::ArrowUp)),
+            Some(TargetCycle::Previous)
+        );
+        assert_eq!(
+            target_cycle_from_key(PhysicalKey::Code(KeyCode::ArrowDown)),
+            Some(TargetCycle::Next)
+        );
+        assert_eq!(target_cycle_from_control("ScratchUp", &keys), Some(TargetCycle::Previous));
+        assert_eq!(target_cycle_from_control("ScratchDown", &keys), Some(TargetCycle::Next));
+        assert_eq!(
+            target_cycle_from_control("AxisLeftX-", &gamepad_keys),
+            Some(TargetCycle::Previous)
+        );
+        assert_eq!(target_cycle_from_control("AxisLeftX+", &gamepad_keys), Some(TargetCycle::Next));
     }
 
     #[test]
@@ -4429,6 +4552,7 @@ mod tests {
             Some(3.37),
             Some(ActiveLaneState { lane_cover: 0.42, lift: 0.1 }),
             ArrangeOption::Mirror,
+            TargetOption::Aaa,
             GaugeTypeConfig::Hard,
             AssistOption::Autoplay,
             42,
@@ -4438,6 +4562,7 @@ mod tests {
         assert!((profile.lane.lane_cover - 0.42).abs() < 1e-6);
         assert!((profile.lane.lift - 0.1).abs() < 1e-6);
         assert!(matches!(profile.play.random, RandomOptionConfig::Mirror));
+        assert!(matches!(profile.play.target, TargetOptionConfig::Aaa));
         assert!(matches!(profile.play.gauge, GaugeTypeConfig::Hard));
         assert!(profile.play.auto_play);
         assert!(matches!(profile.play.assist, AssistOptionConfig::None));

@@ -28,6 +28,8 @@ pub struct RunningPlaySession {
     pub finished: Option<FinishedPlaySession>,
     /// プレイ開始時に DB から取得したベスト EX スコア。未取得なら None。
     pub best_ex_score: Option<u32>,
+    /// プレイ開始時のターゲット設定を譜面ノーツ数で解決した EX スコア。
+    pub target_ex_score: Option<u32>,
     pub applied_arrange: AppliedArrange,
     pub bga_frames: BgaFrameCatalog,
     pub video_bga_decoders: HashMap<BgaAssetId, ActiveVideoBgaDecoder>,
@@ -112,6 +114,7 @@ pub fn open_prepared_play_audio(
         sample_report: prepared.sample_report,
         finished: None,
         best_ex_score: None,
+        target_ex_score: prepared.target_ex_score,
         applied_arrange: prepared.applied_arrange,
         bga_frames: BgaFrameCatalog::new(),
         video_bga_decoders: HashMap::new(),

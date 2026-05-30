@@ -28,7 +28,7 @@ use crate::config::play::{
 use crate::config::profile_config::{
     BgaExpandConfig, BgaModeConfig, LaneEffectConfig, ProfileConfig,
 };
-use crate::select_options::ArrangeOption;
+use crate::select_options::{ArrangeOption, TargetOption};
 use crate::storage::library_db::LibraryDatabase;
 
 #[derive(Debug, Clone)]
@@ -38,6 +38,7 @@ pub struct PlaySessionOptions {
     pub sample_rate: u32,
     pub gauge_override: Option<GaugeType>,
     pub arrange: ArrangeOption,
+    pub target: TargetOption,
     pub arrange_seed: Option<i64>,
     pub arrange_pattern: Option<Vec<u8>>,
 }
@@ -54,6 +55,7 @@ pub struct PreparedPlaySession {
     pub audio: AudioEngine,
     pub sample_report: Vec<LoadedSampleReport>,
     pub applied_arrange: AppliedArrange,
+    pub target_ex_score: Option<u32>,
 }
 
 pub struct PreloadedPlaySession {
@@ -71,6 +73,7 @@ impl Default for PlaySessionOptions {
             sample_rate: 48_000,
             gauge_override: None,
             arrange: ArrangeOption::Normal,
+            target: TargetOption::None,
             arrange_seed: None,
             arrange_pattern: None,
         }
@@ -328,6 +331,7 @@ pub fn build_prepared_play_session_from_preloaded(
     options: PlaySessionOptions,
     input_backend: Box<dyn InputBackend>,
 ) -> PreparedPlaySession {
+    let target_ex_score = options.target.target_ex_score(preloaded.chart.total_notes);
     let session =
         build_game_session_with_input_backend(preloaded.chart, profile, options, input_backend);
     PreparedPlaySession {
@@ -335,6 +339,7 @@ pub fn build_prepared_play_session_from_preloaded(
         audio: preloaded.audio,
         sample_report: preloaded.sample_report,
         applied_arrange: preloaded.applied_arrange,
+        target_ex_score,
     }
 }
 

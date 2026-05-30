@@ -390,8 +390,8 @@ fn plan_select(
     text.push_text(
         &mut commands,
         &format!(
-            "ARRANGE: {}   GAUGE: {}   ASSIST: {}   BGA: {}",
-            snapshot.arrange, snapshot.gauge, snapshot.assist, snapshot.bga
+            "ARRANGE: {}   TARGET: {}   GAUGE: {}   ASSIST: {}   BGA: {}",
+            snapshot.arrange, snapshot.target, snapshot.gauge, snapshot.assist, snapshot.bga
         ),
         BitmapTextStyle { x: 0.08, y: 0.170, cell: 0.005, color: Color::rgb(0.72, 0.86, 0.92) },
     );

@@ -13,7 +13,7 @@ use crate::screens::play_session::{
     build_prepared_play_session_from_preloaded,
     load_prepared_play_session_for_chart_with_input_backend,
 };
-use crate::select_options::ArrangeOption;
+use crate::select_options::{ArrangeOption, TargetOption};
 use crate::storage::library_db::LibraryDatabase;
 use crate::storage::score_db::ScoreDatabase;
 
@@ -25,6 +25,7 @@ pub struct PlayStartOptions {
     /// Override profile gauge type. None means use the profile default.
     pub gauge: Option<GaugeTypeConfig>,
     pub arrange: ArrangeOption,
+    pub target: TargetOption,
     pub arrange_seed: Option<i64>,
     pub arrange_pattern: Option<Vec<u8>>,
 }
@@ -55,6 +56,7 @@ pub fn play_session_options_from_start(
         sample_rate: app_config.audio.sample_rate,
         gauge_override: start_options.gauge.map(gauge_type_from_config),
         arrange: start_options.arrange,
+        target: start_options.target,
         arrange_seed: start_options.arrange_seed,
         arrange_pattern: start_options.arrange_pattern,
     }

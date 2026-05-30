@@ -11,7 +11,9 @@ use crate::screens::play_finish::{
     FinishedPlaySession, finish_session_result, finish_session_result_once,
 };
 use crate::screens::play_session::AppliedArrange;
-use crate::screens::play_snapshot::{BgaFrameCatalog, build_render_snapshot_with_bga_frames};
+use crate::screens::play_snapshot::{
+    BgaFrameCatalog, build_render_snapshot_with_target_and_bga_frames,
+};
 use crate::storage::score_db::ScoreDatabase;
 
 #[derive(Debug, Clone)]
@@ -45,21 +47,29 @@ pub fn advance_play_screen(
     audio: &mut dyn AudioScheduler,
     best_ex_score: Option<u32>,
 ) -> FrameOutput<RenderSnapshot> {
-    advance_play_screen_with_bga_frames(session, audio, best_ex_score, &BgaFrameCatalog::new())
+    advance_play_screen_with_bga_frames(
+        session,
+        audio,
+        best_ex_score,
+        None,
+        &BgaFrameCatalog::new(),
+    )
 }
 
 pub fn advance_play_screen_with_bga_frames(
     session: &mut GameSession,
     audio: &mut dyn AudioScheduler,
     best_ex_score: Option<u32>,
+    target_ex_score: Option<u32>,
     bga_frames: &BgaFrameCatalog,
 ) -> FrameOutput<RenderSnapshot> {
     let frame = advance_session_frame(session, audio);
-    let render_snapshot = build_render_snapshot_with_bga_frames(
+    let render_snapshot = build_render_snapshot_with_target_and_bga_frames(
         session,
         frame.times.render_now,
         &session.recent_judgements,
         best_ex_score,
+        target_ex_score,
         bga_frames,
     );
     FrameOutput { render_snapshot, mine_hits: frame.mine_hits, state: frame.state }
@@ -83,6 +93,7 @@ pub fn advance_play_screen_until_result(
             session,
             played_at,
             applied_arrange,
+            None,
         )?;
         return Ok(PlayAdvanceOutcome::Finished { frame, finished });
     }
@@ -108,6 +119,7 @@ pub fn advance_running_play_session(
         &mut running.session,
         &mut *audio,
         running.best_ex_score,
+        running.target_ex_score,
         &running.bga_frames,
     ))
 }
@@ -126,6 +138,7 @@ pub fn advance_running_play_session_until_result(
             &mut running.session,
             &mut *audio,
             running.best_ex_score,
+            running.target_ex_score,
             &running.bga_frames,
         )
     };
@@ -138,6 +151,7 @@ pub fn advance_running_play_session_until_result(
             &running.session,
             played_at,
             &running.applied_arrange,
+            running.target_ex_score,
         )?;
         // ここでは音声を止めない。スケジュール済みの BGM/キー音は
         // オーディオ出力スレッド側で曲の最後まで鳴り切る。出力の解放は

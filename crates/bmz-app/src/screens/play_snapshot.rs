@@ -39,6 +39,24 @@ pub fn build_render_snapshot_with_bga_frames(
     best_ex_score: Option<u32>,
     bga_frames: &BgaFrameCatalog,
 ) -> RenderSnapshot {
+    build_render_snapshot_with_target_and_bga_frames(
+        session,
+        render_now,
+        recent_judgements,
+        best_ex_score,
+        None,
+        bga_frames,
+    )
+}
+
+pub fn build_render_snapshot_with_target_and_bga_frames(
+    session: &GameSession,
+    render_now: TimeUs,
+    recent_judgements: &[JudgementEvent],
+    best_ex_score: Option<u32>,
+    target_ex_score: Option<u32>,
+    bga_frames: &BgaFrameCatalog,
+) -> RenderSnapshot {
     let mut snapshot = RenderSnapshot {
         time: render_now,
         play_elapsed_time: render_now,
@@ -110,7 +128,7 @@ pub fn build_render_snapshot_with_bga_frames(
             .flatten(),
         bga_stretch: session.bga_stretch,
         best_ex_score,
-        target_ex_score: None, // TODO: resolve from rival / target config
+        target_ex_score,
         judge_timing_offset_ms: (session.offsets.input_offset_us / 1_000) as i32,
         autoplay: session.autoplay.is_some(),
         course_stage: None,
@@ -959,6 +977,24 @@ mod tests {
 
         assert_eq!(with_best.best_ex_score, Some(42));
         assert_eq!(without_best.best_ex_score, None);
+    }
+
+    #[test]
+    fn build_render_snapshot_passes_target_ex_score() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let session =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+
+        let snapshot = build_render_snapshot_with_target_and_bga_frames(
+            &session,
+            TimeUs(0),
+            &[],
+            None,
+            Some(1600),
+            &BgaFrameCatalog::new(),
+        );
+
+        assert_eq!(snapshot.target_ex_score, Some(1600));
     }
 
     #[test]

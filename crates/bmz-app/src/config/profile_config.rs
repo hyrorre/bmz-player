@@ -28,6 +28,8 @@ pub struct ProfileConfig {
 pub struct PlayDefaultsConfig {
     pub gauge: GaugeTypeConfig,
     pub random: RandomOptionConfig,
+    #[serde(default)]
+    pub target: TargetOptionConfig,
     pub lane_effect: LaneEffectConfig,
     pub assist: AssistOptionConfig,
     pub auto_play: bool,
@@ -86,6 +88,21 @@ pub enum RandomOptionConfig {
     Random,
     RRandom,
     SRandom,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum TargetOptionConfig {
+    #[default]
+    None,
+    Max,
+    Aaa,
+    Aa,
+    A,
+    B,
+    C,
+    D,
+    E,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -461,6 +478,7 @@ impl ProfileConfig {
             play: PlayDefaultsConfig {
                 gauge: GaugeTypeConfig::Normal,
                 random: RandomOptionConfig::Off,
+                target: TargetOptionConfig::None,
                 lane_effect: LaneEffectConfig::Off,
                 assist: AssistOptionConfig::None,
                 auto_play: false,
@@ -617,6 +635,7 @@ mod tests {
         )
         .unwrap();
 
+        assert_eq!(play.target, TargetOptionConfig::None);
         assert_eq!(play.bga, BgaModeConfig::On);
         assert_eq!(play.bga_expand, BgaExpandConfig::KeepAspect);
         assert_eq!(play.misslayer_duration_ms, 500);
@@ -654,7 +673,6 @@ mod tests {
         assert_eq!(input.start_key.as_deref(), Some("E"));
         assert_eq!(input.bindings[0].lane, Some(LaneConfig::Key1));
     }
-
 
     #[test]
     fn input_config_serializes_select_actions_without_start_key() {

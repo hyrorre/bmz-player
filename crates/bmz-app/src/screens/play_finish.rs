@@ -42,6 +42,7 @@ pub fn store_session_result(
         session,
         played_at,
         applied_arrange,
+        None,
     )?
     .stored)
 }
@@ -53,6 +54,7 @@ pub fn finish_session_result(
     session: &GameSession,
     played_at: i64,
     applied_arrange: &AppliedArrange,
+    target_ex_score: Option<u32>,
 ) -> Result<FinishedPlaySession> {
     ensure_storable_state(session.state)?;
     let result = play_result_from_session(session);
@@ -85,6 +87,7 @@ pub fn finish_session_result(
         )?
     };
     let mut summary = ResultSummary::from_play_result(&result, &stored, &session.chart.metadata);
+    summary.target_ex_score = target_ex_score;
     // 過去ベストスコア・ベストコンボを ResultSummary にフィルする。
     // 今回のスコアが直前に upsert_score_best されているので、`best_*` は
     // 「現在の最高記録」を返す。差分表示は `current - best` として 0 になり得る。
@@ -124,6 +127,7 @@ pub fn finish_session_result_once(
     session: &GameSession,
     played_at: i64,
     applied_arrange: &AppliedArrange,
+    target_ex_score: Option<u32>,
 ) -> Result<FinishedPlaySession> {
     if let Some(finished) = cached.clone() {
         return Ok(finished);
@@ -136,6 +140,7 @@ pub fn finish_session_result_once(
         session,
         played_at,
         applied_arrange,
+        target_ex_score,
     )?;
     *cached = Some(finished.clone());
     Ok(finished)
@@ -255,11 +260,13 @@ mod tests {
             &session,
             1_700_000_102,
             &AppliedArrange::default(),
+            Some(1600),
         )
         .unwrap();
 
         assert_eq!(finished.summary.score_history_id, finished.stored.score_history_id);
         assert_eq!(finished.summary.clear_type, finished.result.clear_type);
+        assert_eq!(finished.summary.target_ex_score, Some(1600));
 
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -293,6 +300,7 @@ mod tests {
             &session,
             1_700_000_103,
             &AppliedArrange::default(),
+            None,
         )
         .unwrap();
         let second = finish_session_result_once(
@@ -303,6 +311,7 @@ mod tests {
             &session,
             1_700_000_104,
             &AppliedArrange::default(),
+            None,
         )
         .unwrap();
 
@@ -340,6 +349,7 @@ mod tests {
             &session,
             1_700_000_105,
             &AppliedArrange::default(),
+            None,
         )
         .unwrap();
 

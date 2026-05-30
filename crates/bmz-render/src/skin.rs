@@ -1008,6 +1008,7 @@ pub struct SkinDrawState {
     pub select_option_panel: u8,
     pub select_arrange_index: usize,
     pub select_gauge_index: usize,
+    pub select_target_index: usize,
     pub select_bga_index: usize,
     pub select_assist_index: usize,
     pub combo: u32,
@@ -1174,6 +1175,7 @@ impl Default for SkinDrawState {
             select_option_panel: 0,
             select_arrange_index: 0,
             select_gauge_index: 2,
+            select_target_index: 0,
             select_bga_index: 0,
             select_assist_index: 0,
             combo: 0,
@@ -1310,6 +1312,7 @@ pub struct SkinTextState<'a> {
     pub genre: &'a str,
     pub difficulty_name: &'a str,
     pub play_level: &'a str,
+    pub target: &'a str,
     pub current_folder: &'a str,
     pub bar_text: &'a str,
     pub table_level: &'a str,
@@ -2178,6 +2181,7 @@ impl SkinDocument {
             select_option_panel: snapshot.option_panel,
             select_arrange_index: select_arrange_index(&snapshot.arrange),
             select_gauge_index: select_gauge_index(&snapshot.gauge),
+            select_target_index: select_target_index(&snapshot.target),
             select_bga_index: select_bga_index(&snapshot.bga),
             select_assist_index: select_assist_index(&snapshot.assist),
             select_scroll_progress: select_scroll_progress(snapshot),
@@ -2212,6 +2216,7 @@ impl SkinDocument {
                 .map(|row| row.difficulty_name.as_str())
                 .unwrap_or_default(),
             play_level: selected_row.map(|row| row.play_level.as_str()).unwrap_or_default(),
+            target: &snapshot.target,
             current_folder: &snapshot.current_folder,
             table_level: selected_row.map(|row| row.table_level.as_str()).unwrap_or_default(),
             ..SkinTextState::default()
@@ -3477,6 +3482,7 @@ fn imageset_ref_lane(ref_id: i32) -> Option<Lane> {
 fn skin_state_imageset_index(ref_id: i32, state: SkinDrawState) -> Option<usize> {
     match ref_id {
         40 => Some(state.select_gauge_index),
+        41 => Some(state.select_target_index),
         42 | 43 => Some(state.select_arrange_index),
         54 | 55 => Some(0),
         72 => Some(state.select_bga_index),
@@ -5121,6 +5127,7 @@ fn skin_state_text(text: &SkinTextDef, state: SkinTextState<'_>) -> String {
         return state.play_level.to_string();
     }
     match text.ref_id {
+        3 => select_target_name(state.target),
         10 => state.title.to_string(),
         11 => state.subtitle.to_string(),
         12 => full_label(state.title, state.subtitle),
@@ -5129,9 +5136,32 @@ fn skin_state_text(text: &SkinTextDef, state: SkinTextState<'_>) -> String {
         15 => state.subartist.to_string(),
         16 => full_label(state.artist, state.subartist),
         17 => state.table_level.to_string(),
+        200..=209 => select_target_name_by_offset(state.target, text.ref_id - 210),
+        210..=219 => select_target_name_by_offset(state.target, text.ref_id - 209),
         1000 => state.current_folder.to_string(),
         _ => String::new(),
     }
+}
+
+const SELECT_TARGET_IDS: [&str; 9] = ["NONE", "MAX", "AAA", "AA", "A", "B", "C", "D", "E"];
+const SELECT_TARGET_NAMES: [&str; 9] =
+    ["NO TARGET", "MAX", "RANK AAA", "RANK AA", "RANK A", "RANK B", "RANK C", "RANK D", "RANK E"];
+
+fn select_target_name(target: &str) -> String {
+    SELECT_TARGET_IDS
+        .iter()
+        .position(|id| *id == target)
+        .map(|index| SELECT_TARGET_NAMES[index].to_string())
+        .unwrap_or_default()
+}
+
+fn select_target_name_by_offset(target: &str, offset: i32) -> String {
+    let Some(index) = SELECT_TARGET_IDS.iter().position(|id| *id == target) else {
+        return String::new();
+    };
+    let len = SELECT_TARGET_NAMES.len() as i32;
+    let shifted = (index as i32 + offset).rem_euclid(len) as usize;
+    SELECT_TARGET_NAMES[shifted].to_string()
 }
 
 fn full_label(primary: &str, secondary: &str) -> String {
@@ -5331,6 +5361,20 @@ fn select_gauge_index(gauge: &str) -> usize {
         "EX-HARD" => 4,
         "HAZARD" => 5,
         _ => 2,
+    }
+}
+
+fn select_target_index(target: &str) -> usize {
+    match target {
+        "MAX" => 1,
+        "AAA" => 2,
+        "AA" => 3,
+        "A" => 4,
+        "B" => 5,
+        "C" => 6,
+        "D" => 7,
+        "E" => 8,
+        _ => 0,
     }
 }
 
@@ -10619,6 +10663,7 @@ mod tests {
         let state = SkinDrawState {
             select_arrange_index: 2,
             select_gauge_index: 4,
+            select_target_index: 3,
             select_bga_index: 1,
             ..SkinDrawState::default()
         };
@@ -10626,9 +10671,23 @@ mod tests {
         assert_eq!(skin_state_imageset_index(42, state), Some(2));
         assert_eq!(skin_state_imageset_index(43, state), Some(2));
         assert_eq!(skin_state_imageset_index(40, state), Some(4));
+        assert_eq!(skin_state_imageset_index(41, state), Some(3));
         assert_eq!(skin_state_imageset_index(72, state), Some(1));
         assert_eq!(skin_state_imageset_index(301, state), Some(0));
         assert_eq!(skin_state_imageset_index(500, state), None);
+    }
+
+    #[test]
+    fn select_target_index_maps_fixed_targets() {
+        assert_eq!(select_target_index("NONE"), 0);
+        assert_eq!(select_target_index("MAX"), 1);
+        assert_eq!(select_target_index("AAA"), 2);
+        assert_eq!(select_target_index("AA"), 3);
+        assert_eq!(select_target_index("A"), 4);
+        assert_eq!(select_target_index("B"), 5);
+        assert_eq!(select_target_index("C"), 6);
+        assert_eq!(select_target_index("D"), 7);
+        assert_eq!(select_target_index("E"), 8);
     }
 
     #[test]
@@ -11676,6 +11735,7 @@ mod tests {
             artist: "Artist Name",
             subartist: "Feat. X",
             genre: "TRANCE",
+            target: "AAA",
             ..SkinTextState::default()
         };
 
@@ -11700,6 +11760,11 @@ mod tests {
         assert_eq!(skin_state_text(&make_text(15), state), "Feat. X");
         // STRING_FULLARTIST (16) = artist + " " + subartist
         assert_eq!(skin_state_text(&make_text(16), state), "Artist Name Feat. X");
+        // STRING_TARGET (3)
+        assert_eq!(skin_state_text(&make_text(3), state), "RANK AAA");
+        // STRING_TARGETNAME_P1/N1 (209/210)
+        assert_eq!(skin_state_text(&make_text(209), state), "MAX");
+        assert_eq!(skin_state_text(&make_text(210), state), "RANK AA");
         // Unknown ref → empty
         assert_eq!(skin_state_text(&make_text(99), state), "");
     }

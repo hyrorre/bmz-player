@@ -24,6 +24,7 @@ pub struct SelectSnapshot {
     pub selected_title: String,
     pub rows: Vec<SelectRowSnapshot>,
     pub arrange: String,
+    pub target: String,
     pub gauge: String,
     pub assist: String,
     pub bga: String,
