@@ -20,6 +20,7 @@ use crate::config::app_config::{
 use crate::config::profile_config::{
     ProfileConfig, SkinConfig, SkinHistoryEntryConfig, SkinOffsetConfig,
 };
+use crate::screens::course_session::CourseResultSummary;
 use crate::songs_cmd::{add_song_root_entry, remove_song_root_entry};
 
 /// スキンが宣言する設定可能項目の定義 (1 シーン分)。
@@ -258,6 +259,7 @@ impl EguiLayer {
         profile_config: &mut ProfileConfig,
         skin_meta: &SkinConfigMeta,
         skin_catalog: &SkinCatalog,
+        course_result: Option<&CourseResultSummary>,
     ) -> EguiOutput {
         let raw_input = self.state.take_egui_input(window);
         let ctx = self.ctx.clone();
@@ -271,6 +273,11 @@ impl EguiLayer {
         let mut trigger_song_rescan = false;
         let visible_flag = &mut self.visible;
         let full_output = ctx.run_ui(raw_input, |ui| {
+            // Course result overlay is shown regardless of menu visibility — it's
+            // a gameplay-level summary, not a settings panel.
+            if let Some(summary) = course_result {
+                build_course_result_panel(ui.ctx(), summary);
+            }
             if *visible_flag {
                 let ctx = ui.ctx();
                 build_menu(ctx, visible_flag, show_debug, show_settings, show_skin);
@@ -463,6 +470,116 @@ fn sized_panel_window<'open>(
         .default_size(default_inner)
         .max_size(max_inner)
         .min_size([280.0, 80.0])
+}
+
+/// コース全体リザルトを画面上にオーバーレイ表示する。
+///
+/// `finished_course` が `Some` のあいだ表示され続け、リザルト画面を抜けると
+/// `None` になって自動的に消える。最小実装として egui::Window を 1 枚出すだけ。
+fn build_course_result_panel(ctx: &egui::Context, summary: &CourseResultSummary) {
+    let screen_rect = ctx.screen_rect();
+    let pos = egui::pos2(screen_rect.right() - 360.0 - 16.0, 16.0);
+
+    egui::Window::new("コースリザルト")
+        .id(egui::Id::new("course_result_overlay"))
+        .resizable(false)
+        .collapsible(true)
+        .movable(true)
+        .title_bar(true)
+        .current_pos(pos)
+        .default_width(360.0)
+        .show(ctx, |ui| {
+            ui.heading(&summary.title);
+
+            ui.horizontal(|ui| {
+                let kind_label = match summary.kind {
+                    bmz_core::course::CourseKind::Dan => "段位",
+                    bmz_core::course::CourseKind::Course => "コース",
+                };
+                ui.label(kind_label);
+                ui.separator();
+                if summary.course_failed {
+                    ui.colored_label(egui::Color32::LIGHT_RED, "FAILED");
+                } else if summary.course_clear {
+                    ui.colored_label(egui::Color32::LIGHT_GREEN, "CLEAR");
+                } else {
+                    ui.colored_label(egui::Color32::LIGHT_YELLOW, "NO TROPHY");
+                }
+                ui.separator();
+                ui.label(format!("{}/{}", summary.played_entries, summary.total_entries));
+            });
+
+            ui.separator();
+
+            // Totals.
+            let score_rate = if summary.max_ex_score > 0 {
+                summary.total_ex_score as f32 / summary.max_ex_score as f32 * 100.0
+            } else {
+                0.0
+            };
+            egui::Grid::new("course_result_totals").num_columns(2).show(ui, |ui| {
+                ui.label("EX SCORE");
+                ui.label(format!(
+                    "{} / {} ({:.2}%)",
+                    summary.total_ex_score, summary.max_ex_score, score_rate
+                ));
+                ui.end_row();
+                ui.label("NOTES");
+                ui.label(format!("{}", summary.total_notes));
+                ui.end_row();
+                ui.label("PG / GR");
+                ui.label(format!(
+                    "{} / {}",
+                    summary.judge_counts.pgreat, summary.judge_counts.great
+                ));
+                ui.end_row();
+                ui.label("GD / BD / PR");
+                ui.label(format!(
+                    "{} / {} / {}",
+                    summary.judge_counts.good,
+                    summary.judge_counts.bad,
+                    summary.judge_counts.poor,
+                ));
+                ui.end_row();
+            });
+
+            if !summary.trophy_results.is_empty() {
+                ui.separator();
+                ui.label("トロフィー");
+                ui.horizontal_wrapped(|ui| {
+                    for trophy in &summary.trophy_results {
+                        let color = if trophy.achieved {
+                            egui::Color32::from_rgb(255, 215, 0) // gold
+                        } else {
+                            egui::Color32::DARK_GRAY
+                        };
+                        ui.colored_label(color, &trophy.name);
+                    }
+                });
+            }
+
+            if !summary.entry_summaries.is_empty() {
+                ui.separator();
+                ui.label("各曲");
+                egui::Grid::new("course_result_entries").num_columns(3).striped(true).show(
+                    ui,
+                    |ui| {
+                        ui.label("#");
+                        ui.label("曲名");
+                        ui.label("EX");
+                        ui.end_row();
+                        for (i, entry) in summary.entry_summaries.iter().enumerate() {
+                            ui.label(format!("{}", i + 1));
+                            let title =
+                                if entry.title.is_empty() { "(no title)" } else { &entry.title };
+                            ui.label(title);
+                            ui.label(format!("{}", entry.ex_score));
+                            ui.end_row();
+                        }
+                    },
+                );
+            }
+        });
 }
 
 /// FPS / フレーム時間 / シーン / 解像度を表示するデバッグパネル。

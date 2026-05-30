@@ -2491,6 +2491,10 @@ impl WinitApp {
             play14: play14_defs,
             result: SceneSkinDefs::from_document(self.renderer.result_skin_document()),
         };
+        // Clone the course summary so the egui closure can borrow it while
+        // `self.egui` is uniquely borrowed.  CourseResultSummary is small —
+        // a few strings and Vec<ResultSummary> — so the clone cost is minor.
+        let course_result = self.finished_course.clone();
         let Some(egui) = self.egui.as_mut() else {
             return;
         };
@@ -2501,6 +2505,7 @@ impl WinitApp {
             &mut self.boot.profile_config,
             &skin_meta,
             &self.skin_catalog,
+            course_result.as_ref(),
         );
         self.renderer.set_egui_frame(output.frame);
         // デバッグパネルの開閉状態を profile config へ同期する。
