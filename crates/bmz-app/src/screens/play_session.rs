@@ -42,6 +42,16 @@ pub struct PlaySessionOptions {
     pub target: TargetOption,
     pub arrange_seed: Option<i64>,
     pub arrange_pattern: Option<Vec<u8>>,
+    /// When set, overrides the gauge's starting value.  Used to carry the
+    /// gauge between charts during a course.
+    pub initial_gauge_value: Option<f32>,
+    /// Course judge constraint forwarded from CourseJudgeConstraint.
+    /// `NoGood` zeroes the good window, `NoGreat` zeroes great and good
+    /// windows; the next judge band kicks in immediately.
+    pub judge_constraint: bmz_core::course::CourseJudgeConstraint,
+    /// Course-forced long-note mode (Ln/Cn/Hcn).  `None` keeps the chart's
+    /// declared mode.
+    pub ln_mode_override: Option<bmz_chart::model::LongNoteMode>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -78,6 +88,9 @@ impl Default for PlaySessionOptions {
             target: TargetOption::None,
             arrange_seed: None,
             arrange_pattern: None,
+            initial_gauge_value: None,
+            judge_constraint: bmz_core::course::CourseJudgeConstraint::Normal,
+            ln_mode_override: None,
         }
     }
 }
@@ -105,6 +118,7 @@ pub fn build_game_session_with_input_backend(
     } else {
         GaugeAutoShiftMode::Off
     };
+    let initial_gauge_value = options.initial_gauge_value;
     let autoplay_enabled = profile.play.auto_play || options.autoplay;
     let replay_player = options.replay_player;
     let is_replay = replay_player.is_some();
@@ -121,22 +135,46 @@ pub fn build_game_session_with_input_backend(
         &chart.timing_events,
     );
 
-    let base_judge_window = DEFAULT_JUDGE_WINDOW;
+    // Course judge constraints narrow the judge window so the corresponding
+    // judge band is unreachable: NoGood zeroes good_us, NoGreat zeroes both
+    // great_us and good_us.  Mirrors beatoraja JudgeManager's *JudgeWindowRate
+    // = 0 path.
+    let base_judge_window = {
+        let mut w = DEFAULT_JUDGE_WINDOW;
+        match options.judge_constraint {
+            bmz_core::course::CourseJudgeConstraint::Normal => {}
+            bmz_core::course::CourseJudgeConstraint::NoGood => {
+                w.good_us = 0;
+            }
+            bmz_core::course::CourseJudgeConstraint::NoGreat => {
+                w.great_us = 0;
+                w.good_us = 0;
+            }
+        }
+        w
+    };
+
+    let mut gauge = {
+        let gauge_total = gauge_total_for_chart(chart.metadata.total, chart.total_notes);
+        if gauge_auto_shift != GaugeAutoShiftMode::Off {
+            GaugeState::new_with_auto_shift(
+                gauge_type,
+                gauge_auto_shift,
+                gauge_total,
+                chart.total_notes,
+            )
+        } else {
+            GaugeState::new(gauge_type, gauge_total, chart.total_notes)
+        }
+    };
+    // Course play carries the previous chart's gauge value over; this overrides
+    // the initial value computed by GaugeState::new* above.
+    if let Some(initial) = initial_gauge_value {
+        gauge.set_initial_value(initial);
+    }
 
     GameSession {
-        gauge: {
-            let gauge_total = gauge_total_for_chart(chart.metadata.total, chart.total_notes);
-            if gauge_auto_shift != GaugeAutoShiftMode::Off {
-                GaugeState::new_with_auto_shift(
-                    gauge_type,
-                    gauge_auto_shift,
-                    gauge_total,
-                    chart.total_notes,
-                )
-            } else {
-                GaugeState::new(gauge_type, gauge_total, chart.total_notes)
-            }
-        },
+        gauge,
         judge: JudgeEngine::new(judge_window_for_rank(
             base_judge_window,
             judge_percent_at_time(chart.metadata.judge_rank, &chart.judge_rank_events, TimeUs(0)),
@@ -328,6 +366,11 @@ pub fn preload_play_session_for_chart(
         import_bms_chart(std::path::Path::new(&path), random_seed_for_chart(&options), true)
             .with_context(|| format!("failed to import chart file: {path}"))?;
     let mut chart = import.chart;
+    // Course constraint may force a specific LN mode (Ln/Cn/Hcn) regardless of
+    // what the chart declared. Mirrors beatoraja PlayerConfig.setLnmode().
+    if let Some(ln_mode) = options.ln_mode_override {
+        chart.metadata.long_note_mode = ln_mode;
+    }
     let applied_arrange = apply_arrange(
         &mut chart,
         options.arrange,

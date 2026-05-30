@@ -17,7 +17,7 @@ use bmz_render::plan::{
 use bmz_render::renderer::{RenderSurfaceStatus, Renderer, SurfaceSize};
 use bmz_render::scene::{AppSceneSnapshot, ResultSnapshot, SelectRowSnapshot, SelectSnapshot};
 use bmz_render::snapshot::{
-    DisplayJudgeCounts, FastSlowJudgeCounts, OverlaySnapshot, RenderSnapshot,
+    CourseStageMarker, DisplayJudgeCounts, FastSlowJudgeCounts, OverlaySnapshot, RenderSnapshot,
 };
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
@@ -136,8 +136,10 @@ async fn fetch_configured_difficulty_tables(boot: &mut bootstrap::BootstrappedAp
                     tracing::warn!(%url, error = %e, "failed to store difficulty table");
                 }
                 let source = format!("table:{url}");
-                for course in &table.courses {
-                    if let Err(e) = boot.library_db.upsert_course(&source, course, now) {
+                for (position, course) in table.courses.iter().enumerate() {
+                    if let Err(e) =
+                        boot.library_db.upsert_course(&source, course, position as i64, now)
+                    {
                         tracing::warn!(%url, course = %course.title, error = %e, "failed to store table course");
                     }
                 }
@@ -1072,6 +1074,18 @@ impl WinitApp {
                     event.state == ElementState::Pressed;
             }
             if let Some(change) = hispeed_action(event.physical_key, event.state, event.repeat) {
+                // Beatoraja: NoSpeed constraint locks the hispeed during course play.
+                let speed_locked = self
+                    .active_course
+                    .as_ref()
+                    .is_some_and(|c| {
+                        c.definition.constraints.speed
+                            == bmz_core::course::CourseSpeedConstraint::NoSpeed
+                    });
+                if speed_locked {
+                    tracing::debug!("hispeed change ignored: course NoSpeed constraint");
+                    return;
+                }
                 active_play.running.session.hispeed =
                     adjusted_hispeed(active_play.running.session.hispeed, change);
                 tracing::info!(hispeed = active_play.running.session.hispeed, "adjusted hispeed");
@@ -1462,6 +1476,32 @@ impl WinitApp {
         }
     }
 
+    /// Returns the beatoraja-compatible course stage marker for the currently
+    /// playing chart in the active course (1, 2, 3, 4 or Final).  None when no
+    /// course is active.
+    ///
+    /// The final entry always maps to `Final` (OPTION_COURSE_STAGE_FINAL=289);
+    /// earlier entries map to Stage1..4 by their 1-based index, clamped to
+    /// Stage4 for courses longer than 4 + final entry.
+    fn current_course_stage_marker(&self) -> Option<CourseStageMarker> {
+        let course = self.active_course.as_ref()?;
+        let total = course.definition.entries.len();
+        if total == 0 {
+            return None;
+        }
+        let index = course.current_index.min(total - 1);
+        let is_final = index + 1 == total;
+        if is_final {
+            return Some(CourseStageMarker::Final);
+        }
+        Some(match index {
+            0 => CourseStageMarker::Stage1,
+            1 => CourseStageMarker::Stage2,
+            2 => CourseStageMarker::Stage3,
+            _ => CourseStageMarker::Stage4,
+        })
+    }
+
     fn start_chart(&mut self, chart_id: i64) {
         let options = self.play_start_options();
         self.begin_decide_for_chart(chart_id, options);
@@ -1502,6 +1542,12 @@ impl WinitApp {
             return;
         };
         let chart_id = self.last_started_chart_id.unwrap_or(0);
+        // Beatoraja behavior: if any chart in the course is Failed, the course
+        // ends immediately and remaining charts are skipped.
+        let failed = finished.result.clear_type == bmz_core::clear::ClearType::Failed;
+        // Carry the gauge value of this chart over to the next chart in the
+        // course (beatoraja keeps the gauge between songs).
+        let carried_gauge = finished.result.gauge_value;
         course.entry_results.push(CourseEntryResult { chart_id, finished });
         course.current_index += 1;
 
@@ -1509,14 +1555,16 @@ impl WinitApp {
         let constraints = course.definition.constraints.clone();
         let next_chart_id = course.definition.entries.get(next_index).and_then(|e| e.chart_id);
 
-        if let Some(next_chart_id) = next_chart_id {
+        if !failed && let Some(next_chart_id) = next_chart_id {
             let mut options = self.play_start_options();
             apply_course_constraints(&mut options, &constraints);
+            options.initial_gauge_value = Some(carried_gauge);
             self.start_chart_with_options(next_chart_id, options);
             return;
         }
 
-        // All entries completed — build course result and show the last chart's result screen.
+        // Course is over either because every entry was played or because the
+        // most recent chart was Failed (skip remaining entries).
         let course = self.active_course.take().unwrap();
         let last_finished = course.entry_results.last().map(|r| r.finished.clone());
         let course_result = course.into_result();
@@ -1524,6 +1572,9 @@ impl WinitApp {
             title = %course_result.title,
             total_ex_score = course_result.total_ex_score,
             course_clear = course_result.course_clear,
+            course_failed = course_result.course_failed,
+            played = course_result.played_entries,
+            total = course_result.total_entries,
             trophies = ?course_result
                 .trophy_results
                 .iter()
@@ -1743,6 +1794,7 @@ impl WinitApp {
             );
         }
         let render_now = self.play_skin_playstart_offset();
+        let course_stage = self.current_course_stage_marker();
         let mut snapshot = build_render_snapshot_with_target_and_bga_frames(
             &active_play.running.session,
             render_now,
@@ -1755,6 +1807,7 @@ impl WinitApp {
         snapshot.backbmp_background = self.play_backbmp_loaded;
         snapshot.play_elapsed_time = self.play_elapsed_time();
         snapshot.ready_elapsed_time = self.play_ready_sound_started_at.map(elapsed_since);
+        snapshot.course_stage = course_stage;
         self.last_play_snapshot = Some(snapshot);
         self.active_play = Some(active_play);
     }
@@ -1887,6 +1940,9 @@ impl WinitApp {
             target: self.target_option,
             arrange_seed: replay_file.arrange_seed,
             arrange_pattern: replay_file.lane_shuffle_pattern.clone(),
+            initial_gauge_value: None,
+            judge_constraint: bmz_core::course::CourseJudgeConstraint::Normal,
+            ln_mode_override: None,
         };
         self.start_chart_with_options(chart_id, options);
         true
@@ -2380,6 +2436,8 @@ impl WinitApp {
             self.update_pending_play_snapshot_timers();
             return;
         }
+        // Capture the course stage before borrowing self.active_play mutably below.
+        let course_stage = self.current_course_stage_marker();
         let Some(active_play) = &mut self.active_play else {
             return;
         };
@@ -2406,6 +2464,7 @@ impl WinitApp {
                 snapshot.play_elapsed_time = self.play_elapsed_time();
                 snapshot.ready_elapsed_time = self.play_ready_sound_started_at.map(elapsed_since);
                 snapshot.backbmp_background = self.play_backbmp_loaded;
+                snapshot.course_stage = course_stage;
                 self.last_play_snapshot = Some(snapshot);
                 self.play_landmine_se(mine_hits);
             }
@@ -2416,6 +2475,7 @@ impl WinitApp {
                 snapshot.play_elapsed_time = self.play_elapsed_time();
                 snapshot.ready_elapsed_time = self.play_ready_sound_started_at.map(elapsed_since);
                 snapshot.backbmp_background = self.play_backbmp_loaded;
+                snapshot.course_stage = course_stage;
                 let full_combo_elapsed_at_finish_ms = snapshot.full_combo_elapsed_ms;
                 self.last_play_snapshot = Some(snapshot);
                 self.play_landmine_se(mine_hits);
@@ -2579,6 +2639,23 @@ impl WinitApp {
             play14: play14_defs,
             result: SceneSkinDefs::from_document(self.renderer.result_skin_document()),
         };
+        // Clone the course summary so the egui closure can borrow it while
+        // `self.egui` is uniquely borrowed.  CourseResultSummary is small —
+        // a few strings and Vec<ResultSummary> — so the clone cost is minor.
+        let course_result = self.finished_course.clone();
+        // Only show the course preview when the user is on the select screen
+        // and the cursor is over a course row.
+        let course_preview = matches!(
+            scene_kind(&self.scene_snapshot()),
+            AppSceneKind::Select
+        )
+        .then(|| {
+            self.select_items.get(self.selected_index).and_then(|item| match item {
+                SelectItem::Course(row) => Some(row.clone()),
+                _ => None,
+            })
+        })
+        .flatten();
         let Some(egui) = self.egui.as_mut() else {
             return;
         };
@@ -2589,6 +2666,8 @@ impl WinitApp {
             &mut self.boot.profile_config,
             &skin_meta,
             &self.skin_catalog,
+            course_result.as_ref(),
+            course_preview.as_ref(),
         );
         self.renderer.set_egui_frame(output.frame);
         // デバッグパネルの開閉状態を profile config へ同期する。
@@ -3927,15 +4006,19 @@ fn select_snapshot_rows(
                 SelectItem::Course(row) => SelectRowSnapshot {
                     index: index as u32,
                     title: row.title.clone(),
-                    artist: String::new(),
-                    difficulty_name: String::new(),
-                    play_level: String::new(),
+                    // Use the trophy names joined as "subtitle" so the artist
+                    // slot shows e.g. "silvermedal / goldmedal".
+                    artist: row.trophy_names.join(" / "),
+                    // Beatoraja-style category tag (DAN / COURSE).
+                    difficulty_name: row.category_label.clone(),
+                    // Show "N stages" in the play_level slot.
+                    play_level: format!("{} stages", row.entry_count),
                     table_level: String::new(),
-                    total_notes: 0,
-                    initial_bpm: 0.0,
-                    min_bpm: 0.0,
-                    max_bpm: 0.0,
-                    length_ms: 0,
+                    total_notes: row.total_notes,
+                    initial_bpm: row.min_bpm,
+                    min_bpm: row.min_bpm,
+                    max_bpm: row.max_bpm,
+                    length_ms: row.total_length_ms,
                     clear_type: String::new(),
                     ex_score: None,
                     max_combo: None,

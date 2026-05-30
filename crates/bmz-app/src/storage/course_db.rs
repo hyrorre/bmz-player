@@ -19,6 +19,7 @@ pub(super) fn upsert_course(
     conn: &mut Connection,
     source: &str,
     course: &CourseDefinition,
+    source_position: i64,
     imported_at: i64,
 ) -> Result<i64> {
     let tx = conn.transaction()?;
@@ -26,9 +27,9 @@ pub(super) fn upsert_course(
         "INSERT INTO courses (
             source, course_key, title, kind, class_constraint, speed_constraint,
             judge_constraint, gauge_constraint, ln_constraint, source_constraints,
-            trophies_json, release, imported_at
+            trophies_json, release, imported_at, source_position
          )
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
          ON CONFLICT(source, course_key) DO UPDATE SET
             title = excluded.title,
             kind = excluded.kind,
@@ -40,7 +41,8 @@ pub(super) fn upsert_course(
             source_constraints = excluded.source_constraints,
             trophies_json = excluded.trophies_json,
             release = excluded.release,
-            imported_at = excluded.imported_at",
+            imported_at = excluded.imported_at,
+            source_position = excluded.source_position",
         params![
             source,
             course.key,
@@ -55,6 +57,7 @@ pub(super) fn upsert_course(
             serde_json::to_string(&course.trophies)?,
             course.release,
             imported_at,
+            source_position,
         ],
     )?;
 
@@ -113,7 +116,7 @@ pub(super) fn list_courses_by_source(conn: &Connection, source: &str) -> Result<
                 trophies_json, release
          FROM courses
          WHERE source = ?1
-         ORDER BY title COLLATE NOCASE, id",
+         ORDER BY source_position, id",
     )?;
     let rows = stmt.query_map(rusqlite::params![source], stored_course_from_row)?;
 
@@ -288,7 +291,7 @@ mod tests {
         let mut conn = open_db();
         let course = course();
 
-        let id = upsert_course(&mut conn, "course/default.json", &course, 1_700_000_000).unwrap();
+        let id = upsert_course(&mut conn, "course/default.json", &course, 0, 1_700_000_000).unwrap();
         assert!(id > 0);
 
         let courses = list_courses(&conn).unwrap();
@@ -308,7 +311,7 @@ mod tests {
     fn upsert_replaces_entries() {
         let mut conn = open_db();
         let mut course = course();
-        upsert_course(&mut conn, "course/default.json", &course, 1).unwrap();
+        upsert_course(&mut conn, "course/default.json", &course, 0, 1).unwrap();
 
         course.entries.push(CourseEntry {
             title_hint: "Song B".to_string(),
@@ -318,10 +321,38 @@ mod tests {
             ),
             chart_id: None,
         });
-        upsert_course(&mut conn, "course/default.json", &course, 2).unwrap();
+        upsert_course(&mut conn, "course/default.json", &course, 0, 2).unwrap();
 
         let courses = list_courses(&conn).unwrap();
         assert_eq!(courses[0].definition.entries.len(), 2);
         assert_eq!(courses[0].definition.entries[1].title_hint, "Song B");
+    }
+
+    #[test]
+    fn list_courses_by_source_orders_by_source_position() {
+        let mut conn = open_db();
+
+        // Insert in title-alphabetical order that does NOT match position order.
+        let mut zebra = course();
+        zebra.key = "z.json#0".to_string();
+        zebra.title = "Alpha (pos 5)".to_string();
+        upsert_course(&mut conn, "table:url", &zebra, 5, 1).unwrap();
+
+        let mut bravo = course();
+        bravo.key = "z.json#1".to_string();
+        bravo.title = "Zulu (pos 0)".to_string();
+        upsert_course(&mut conn, "table:url", &bravo, 0, 1).unwrap();
+
+        let mut charlie = course();
+        charlie.key = "z.json#2".to_string();
+        charlie.title = "Mike (pos 2)".to_string();
+        upsert_course(&mut conn, "table:url", &charlie, 2, 1).unwrap();
+
+        let courses = list_courses_by_source(&conn, "table:url").unwrap();
+        assert_eq!(courses.len(), 3);
+        // Order should follow source_position (0, 2, 5), not alphabetical title.
+        assert_eq!(courses[0].definition.title, "Zulu (pos 0)");
+        assert_eq!(courses[1].definition.title, "Mike (pos 2)");
+        assert_eq!(courses[2].definition.title, "Alpha (pos 5)");
     }
 }

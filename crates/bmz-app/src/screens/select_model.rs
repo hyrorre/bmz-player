@@ -150,6 +150,32 @@ pub struct SelectCourseRow {
     pub entry_count: usize,
     /// Number of entries whose `chart_id` is resolved in the local library.
     pub resolved_count: usize,
+    /// Total notes across all resolved entries.
+    pub total_notes: u32,
+    /// Sum of length in milliseconds across resolved entries.
+    pub total_length_ms: i64,
+    /// Minimum / maximum BPM among resolved entries.
+    pub min_bpm: f32,
+    pub max_bpm: f32,
+    /// Difficulty band derived from constraints (e.g. "DAN" / "COURSE").
+    pub category_label: String,
+    /// Trophy names defined for this course (e.g. ["silvermedal", "goldmedal"]).
+    pub trophy_names: Vec<String>,
+    /// Entries inside the course, used by the preview panel.
+    pub entry_previews: Vec<CourseEntryPreview>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CourseEntryPreview {
+    /// Title taken from the resolved library chart when available, otherwise
+    /// the title_hint declared in the course JSON.
+    pub title: String,
+    pub artist: String,
+    pub play_level: String,
+    pub difficulty_name: String,
+    pub total_notes: u32,
+    /// True when this entry is resolved to a chart in the local library.
+    pub resolved: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -214,18 +240,80 @@ pub fn load_select_items_for_courses(library_db: &LibraryDatabase) -> Result<Vec
     Ok(courses
         .into_iter()
         .filter(|stored| !stored.source.starts_with("table:"))
-        .map(|stored| {
-            let resolved_count =
-                stored.definition.entries.iter().filter(|e| e.chart_id.is_some()).count();
-            SelectItem::Course(SelectCourseRow {
-                course_id: stored.id,
-                title: stored.definition.title,
-                kind: stored.definition.kind,
-                entry_count: stored.definition.entries.len(),
-                resolved_count,
-            })
-        })
+        .map(|stored| build_select_course_row(library_db, stored))
         .collect())
+}
+
+/// Aggregates per-entry chart stats into a `SelectCourseRow`.
+fn build_select_course_row(
+    library_db: &LibraryDatabase,
+    stored: crate::storage::library_db::StoredCourse,
+) -> SelectItem {
+    let entry_count = stored.definition.entries.len();
+    let resolved_count =
+        stored.definition.entries.iter().filter(|e| e.chart_id.is_some()).count();
+
+    let chart_ids: Vec<i64> =
+        stored.definition.entries.iter().filter_map(|e| e.chart_id).collect();
+    let charts = library_db.list_charts_by_ids(&chart_ids).unwrap_or_default();
+    let chart_by_id: std::collections::HashMap<i64, &ChartListItem> =
+        charts.iter().map(|c| (c.chart_id, c)).collect();
+
+    let entry_previews: Vec<CourseEntryPreview> = stored
+        .definition
+        .entries
+        .iter()
+        .map(|entry| match entry.chart_id.and_then(|id| chart_by_id.get(&id).copied()) {
+            Some(chart) => CourseEntryPreview {
+                title: chart.title.clone(),
+                artist: chart.artist.clone(),
+                play_level: chart.play_level.clone(),
+                difficulty_name: chart.difficulty_name.clone(),
+                total_notes: chart.total_notes,
+                resolved: true,
+            },
+            None => CourseEntryPreview {
+                title: entry.title_hint.clone(),
+                artist: String::new(),
+                play_level: String::new(),
+                difficulty_name: String::new(),
+                total_notes: 0,
+                resolved: false,
+            },
+        })
+        .collect();
+
+    let total_notes: u32 = charts.iter().map(|c| c.total_notes).sum();
+    let total_length_ms: i64 = charts.iter().map(|c| c.length_ms).sum();
+    let min_bpm = charts.iter().map(|c| c.min_bpm as f32).fold(f32::INFINITY, f32::min);
+    let max_bpm = charts.iter().map(|c| c.max_bpm as f32).fold(f32::NEG_INFINITY, f32::max);
+    let (min_bpm, max_bpm) = if min_bpm.is_finite() && max_bpm.is_finite() {
+        (min_bpm, max_bpm)
+    } else {
+        (0.0, 0.0)
+    };
+
+    let category_label = match stored.definition.kind {
+        bmz_core::course::CourseKind::Dan => "DAN".to_string(),
+        bmz_core::course::CourseKind::Course => "COURSE".to_string(),
+    };
+    let trophy_names: Vec<String> =
+        stored.definition.trophies.iter().map(|t| t.name.clone()).collect();
+
+    SelectItem::Course(SelectCourseRow {
+        course_id: stored.id,
+        title: stored.definition.title,
+        kind: stored.definition.kind,
+        entry_count,
+        resolved_count,
+        total_notes,
+        total_length_ms,
+        min_bpm,
+        max_bpm,
+        category_label,
+        trophy_names,
+        entry_previews,
+    })
 }
 
 /// Returns one folder item per level of the difficulty table, ordered by the
@@ -255,15 +343,7 @@ pub fn table_level_folder_items(
     if let Ok(courses) = library_db.list_courses_by_source(&table_source) {
         tracing::info!(source = %table_source, count = courses.len(), "courses found for table");
         for stored in courses {
-            let resolved_count =
-                stored.definition.entries.iter().filter(|e| e.chart_id.is_some()).count();
-            items.push(SelectItem::Course(SelectCourseRow {
-                course_id: stored.id,
-                title: stored.definition.title,
-                kind: stored.definition.kind,
-                entry_count: stored.definition.entries.len(),
-                resolved_count,
-            }));
+            items.push(build_select_course_row(library_db, stored));
         }
     }
 
