@@ -697,7 +697,8 @@ const CHART_LIST_ITEM_LOOKUP_SQL: &str = "
            difficulty_name, play_level, mode, total_notes,
            initial_bpm, COALESCE(min_bpm, initial_bpm),
            COALESCE(max_bpm, initial_bpm), length_ms, folder_path,
-           stage_file, banner_file, backbmp_file, preview_file
+           stage_file, banner_file, backbmp_file, preview_file,
+           has_long_notes, has_mines
     FROM charts
     WHERE {column} = ?1
     ORDER BY id DESC
