@@ -791,10 +791,22 @@ impl SkinContext {
     }
 
     pub fn select_document_items(&self, snapshot: &SelectSnapshot) -> Vec<SkinRenderItem> {
+        self.select_document_items_with_dynamic_timers(snapshot, None)
+    }
+
+    pub fn select_document_items_with_dynamic_timers(
+        &self,
+        snapshot: &SelectSnapshot,
+        dynamic_timers: Option<&mut DynamicTimerRuntime>,
+    ) -> Vec<SkinRenderItem> {
         let Some(document) = &self.document else {
             return Vec::new();
         };
-        document.select_render_items(&self.document_sources, snapshot)
+        document.select_render_items_with_dynamic_timers(
+            &self.document_sources,
+            snapshot,
+            dynamic_timers,
+        )
     }
 
     /// 静的 destination を `{"id":"notes"}` マーカーと `timer: 3` (FAILED) で分割して返す。
@@ -2189,8 +2201,17 @@ impl SkinDocument {
         sources: &HashMap<String, SkinDocumentTexture>,
         snapshot: &SelectSnapshot,
     ) -> Vec<SkinRenderItem> {
+        self.select_render_items_with_dynamic_timers(sources, snapshot, None)
+    }
+
+    pub fn select_render_items_with_dynamic_timers(
+        &self,
+        sources: &HashMap<String, SkinDocumentTexture>,
+        snapshot: &SelectSnapshot,
+        dynamic_timers: Option<&mut DynamicTimerRuntime>,
+    ) -> Vec<SkinRenderItem> {
         let selected_row = snapshot.rows.iter().find(|row| row.index == snapshot.selected_index);
-        let state = SkinDrawState {
+        let mut state = SkinDrawState {
             elapsed_ms: (snapshot.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32,
             select_bar_elapsed_ms: (snapshot.selection_time.0 / 1_000)
                 .clamp(i32::MIN as i64, i32::MAX as i64) as i32,
@@ -2236,6 +2257,9 @@ impl SkinDocument {
             ex_score: selected_row.and_then(|row| row.ex_score).unwrap_or(0),
             ..SkinDrawState::default()
         };
+        if let Some(runtime) = dynamic_timers {
+            state = runtime.advance(self, state, state.elapsed_ms);
+        }
         let text = SkinTextState {
             title: selected_row.map(|row| row.title.as_str()).unwrap_or(&snapshot.selected_title),
             subtitle: selected_row.map(|row| row.subtitle.as_str()).unwrap_or_default(),
@@ -6662,6 +6686,8 @@ impl<'de> Visitor<'de> for SkinIdVisitor {
 
 #[cfg(test)]
 mod tests {
+    use bmz_core::time::TimeUs;
+
     use crate::plan::TextLayer;
 
     use super::*;
@@ -9642,6 +9668,41 @@ mod tests {
                 .iter()
                 .any(|item| matches!(item, SkinRenderItem::Text { text, .. } if text == "Second"))
         );
+    }
+
+    #[test]
+    fn select_skin_document_advances_dynamic_timers() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 5,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "marker.png" }],
+                "image": [{ "id": "marker", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10 }],
+                "destination": [
+                    { "id": "marker", "timer": 9001, "dst": [{ "x": 10, "y": 10, "w": 10, "h": 10 }] }
+                ],
+                "dynamicTimer": [{ "id": 9001, "observe": "number(300) > 0" }]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = mock_source("1", 100.0, 100.0);
+        let snapshot =
+            SelectSnapshot { time: TimeUs(100_000), chart_count: 1, ..SelectSnapshot::default() };
+
+        assert!(document.select_render_items(&sources, &snapshot).is_empty());
+
+        let mut runtime = DynamicTimerRuntime::default();
+        let items = document.select_render_items_with_dynamic_timers(
+            &sources,
+            &snapshot,
+            Some(&mut runtime),
+        );
+
+        assert_eq!(items.len(), 1);
+        assert!(matches!(items[0], SkinRenderItem::Image { .. }));
     }
 
     #[test]

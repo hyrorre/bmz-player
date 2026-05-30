@@ -328,14 +328,17 @@ fn push_select_banner_image(commands: &mut Vec<DrawCommand>) {
 fn plan_select(
     snapshot: &SelectSnapshot,
     skin: &SkinContext,
-    _dynamic_timers: &mut crate::skin::DynamicTimerRuntime,
+    dynamic_timers: &mut crate::skin::DynamicTimerRuntime,
 ) -> DrawPlan {
     if skin.document().is_some_and(|document| document.skin_type == 5) {
         let mut commands = Vec::new();
         if snapshot.stage_background {
             push_fullscreen_image(&mut commands, SELECT_STAGE_TEXTURE);
         }
-        crate::skin::append_skin_render_items(&mut commands, &skin.select_document_items(snapshot));
+        crate::skin::append_skin_render_items(
+            &mut commands,
+            &skin.select_document_items_with_dynamic_timers(snapshot, Some(dynamic_timers)),
+        );
         if !commands.is_empty() {
             push_exit_hold_indicator(&mut commands, snapshot.exit_hold_progress);
             push_scene_overlays(&mut commands, &snapshot.overlay);
