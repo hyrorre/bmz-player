@@ -1,4 +1,5 @@
 use anyhow::Result;
+use bmz_core::clear::ClearType;
 use bmz_core::course::{CourseConstraints, CourseDefinition, CourseEntry, CourseTrophy};
 use rusqlite::{Connection, OptionalExtension, params};
 
@@ -13,6 +14,57 @@ pub struct StoredCourse {
     pub id: i64,
     pub source: String,
     pub definition: CourseDefinition,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CourseScoreChartRecord {
+    pub position: i64,
+    pub chart_id: i64,
+    pub ex_score: u32,
+    pub max_combo: u32,
+    pub clear_type: String,
+    pub gauge_value: f32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CourseReplayRecord {
+    pub position: i64,
+    pub chart_id: i64,
+    pub replay_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CourseScoreInsert {
+    pub course_id: i64,
+    pub ex_score: u32,
+    pub max_ex_score: u32,
+    pub clear_type: String,
+    pub gauge_type: String,
+    pub gauge_value: f32,
+    pub max_combo: u32,
+    pub miss_count: u32,
+    pub course_failed: bool,
+    pub course_clear: bool,
+    pub trophies_json: String,
+    pub played_at: i64,
+    pub charts: Vec<CourseScoreChartRecord>,
+    pub replays: Vec<CourseReplayRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CourseBestScore {
+    pub course_score_id: i64,
+    pub course_id: i64,
+    pub ex_score: u32,
+    pub max_ex_score: u32,
+    pub clear_type: String,
+    pub gauge_type: String,
+    pub gauge_value: f32,
+    pub max_combo: u32,
+    pub miss_count: u32,
+    pub course_failed: bool,
+    pub course_clear: bool,
+    pub played_at: i64,
 }
 
 pub(super) fn upsert_course(
@@ -219,6 +271,224 @@ fn resolve_entry_chart_id(conn: &Connection, entry: &CourseEntry) -> Result<Opti
     Ok(None)
 }
 
+pub(super) fn insert_course_score(
+    conn: &mut Connection,
+    record: &CourseScoreInsert,
+) -> Result<i64> {
+    let tx = conn.transaction()?;
+    tx.execute(
+        "INSERT INTO course_scores (
+            course_id, ex_score, max_ex_score, clear_type, gauge_type, gauge_value,
+            max_combo, miss_count, course_failed, course_clear, trophies_json, played_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        params![
+            record.course_id,
+            record.ex_score,
+            record.max_ex_score,
+            record.clear_type,
+            record.gauge_type,
+            record.gauge_value,
+            record.max_combo,
+            record.miss_count,
+            record.course_failed,
+            record.course_clear,
+            record.trophies_json,
+            record.played_at,
+        ],
+    )?;
+    let course_score_id = tx.last_insert_rowid();
+
+    for chart in &record.charts {
+        tx.execute(
+            "INSERT INTO course_score_charts (
+                course_score_id, position, chart_id, ex_score, max_combo,
+                clear_type, gauge_value
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                course_score_id,
+                chart.position,
+                chart.chart_id,
+                chart.ex_score,
+                chart.max_combo,
+                chart.clear_type,
+                chart.gauge_value,
+            ],
+        )?;
+    }
+
+    for replay in &record.replays {
+        // Skip rows with empty replay_path (autoplay or save-disabled).
+        if replay.replay_path.is_empty() {
+            continue;
+        }
+        tx.execute(
+            "INSERT INTO course_replays (course_score_id, position, chart_id, replay_path)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                course_score_id,
+                replay.position,
+                replay.chart_id,
+                replay.replay_path,
+            ],
+        )?;
+    }
+
+    tx.commit()?;
+    Ok(course_score_id)
+}
+
+pub(super) fn best_course_score(
+    conn: &Connection,
+    course_id: i64,
+) -> Result<Option<CourseBestScore>> {
+    // Pick the row with the highest ex_score; tie-break by best clear_type
+    // rank, then by latest played_at.  ClearType rank uses the same numeric
+    // ordering as the enum discriminant (NoPlay=0 .. Max=10).
+    let row = conn
+        .query_row(
+            "SELECT id, course_id, ex_score, max_ex_score, clear_type, gauge_type,
+                    gauge_value, max_combo, miss_count, course_failed, course_clear,
+                    played_at
+             FROM course_scores
+             WHERE course_id = ?1
+             ORDER BY ex_score DESC,
+                      CASE clear_type
+                          WHEN 'NoPlay' THEN 0
+                          WHEN 'Failed' THEN 1
+                          WHEN 'AssistEasy' THEN 2
+                          WHEN 'LightAssistEasy' THEN 3
+                          WHEN 'Easy' THEN 4
+                          WHEN 'Normal' THEN 5
+                          WHEN 'Hard' THEN 6
+                          WHEN 'ExHard' THEN 7
+                          WHEN 'FullCombo' THEN 8
+                          WHEN 'Perfect' THEN 9
+                          WHEN 'Max' THEN 10
+                          ELSE 0
+                      END DESC,
+                      played_at DESC,
+                      id DESC
+             LIMIT 1",
+            params![course_id],
+            course_best_score_from_row,
+        )
+        .optional()?;
+    Ok(row)
+}
+
+pub(super) fn best_course_clear(conn: &Connection, course_id: i64) -> Result<Option<ClearType>> {
+    let value: Option<String> = conn
+        .query_row(
+            "SELECT clear_type
+             FROM course_scores
+             WHERE course_id = ?1
+             ORDER BY CASE clear_type
+                          WHEN 'NoPlay' THEN 0
+                          WHEN 'Failed' THEN 1
+                          WHEN 'AssistEasy' THEN 2
+                          WHEN 'LightAssistEasy' THEN 3
+                          WHEN 'Easy' THEN 4
+                          WHEN 'Normal' THEN 5
+                          WHEN 'Hard' THEN 6
+                          WHEN 'ExHard' THEN 7
+                          WHEN 'FullCombo' THEN 8
+                          WHEN 'Perfect' THEN 9
+                          WHEN 'Max' THEN 10
+                          ELSE 0
+                      END DESC
+             LIMIT 1",
+            params![course_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    Ok(value.and_then(|s| clear_type_from_name(&s)))
+}
+
+pub(super) fn list_course_score_charts(
+    conn: &Connection,
+    course_score_id: i64,
+) -> Result<Vec<CourseScoreChartRecord>> {
+    let mut stmt = conn.prepare(
+        "SELECT position, chart_id, ex_score, max_combo, clear_type, gauge_value
+         FROM course_score_charts
+         WHERE course_score_id = ?1
+         ORDER BY position",
+    )?;
+    let rows = stmt.query_map(params![course_score_id], |row| {
+        Ok(CourseScoreChartRecord {
+            position: row.get(0)?,
+            chart_id: row.get(1)?,
+            ex_score: row.get(2)?,
+            max_combo: row.get(3)?,
+            clear_type: row.get(4)?,
+            gauge_value: row.get(5)?,
+        })
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+pub(super) fn list_course_replays(
+    conn: &Connection,
+    course_score_id: i64,
+) -> Result<Vec<CourseReplayRecord>> {
+    let mut stmt = conn.prepare(
+        "SELECT position, chart_id, replay_path
+         FROM course_replays
+         WHERE course_score_id = ?1
+         ORDER BY position",
+    )?;
+    let rows = stmt.query_map(params![course_score_id], |row| {
+        Ok(CourseReplayRecord {
+            position: row.get(0)?,
+            chart_id: row.get(1)?,
+            replay_path: row.get(2)?,
+        })
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+fn course_best_score_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CourseBestScore> {
+    Ok(CourseBestScore {
+        course_score_id: row.get(0)?,
+        course_id: row.get(1)?,
+        ex_score: row.get(2)?,
+        max_ex_score: row.get(3)?,
+        clear_type: row.get(4)?,
+        gauge_type: row.get(5)?,
+        gauge_value: row.get(6)?,
+        max_combo: row.get(7)?,
+        miss_count: row.get(8)?,
+        course_failed: row.get(9)?,
+        course_clear: row.get(10)?,
+        played_at: row.get(11)?,
+    })
+}
+
+fn clear_type_from_name(name: &str) -> Option<ClearType> {
+    match name {
+        "NoPlay" => Some(ClearType::NoPlay),
+        "Failed" => Some(ClearType::Failed),
+        "AssistEasy" => Some(ClearType::AssistEasy),
+        "LightAssistEasy" => Some(ClearType::LightAssistEasy),
+        "Easy" => Some(ClearType::Easy),
+        "Normal" => Some(ClearType::Normal),
+        "Hard" => Some(ClearType::Hard),
+        "ExHard" => Some(ClearType::ExHard),
+        "FullCombo" => Some(ClearType::FullCombo),
+        "Perfect" => Some(ClearType::Perfect),
+        "Max" => Some(ClearType::Max),
+        _ => None,
+    }
+}
+
 fn non_empty(value: String) -> Option<String> {
     (!value.is_empty()).then_some(value)
 }
@@ -327,6 +597,162 @@ mod tests {
         let courses = list_courses(&conn).unwrap();
         assert_eq!(courses[0].definition.entries.len(), 2);
         assert_eq!(courses[0].definition.entries[1].title_hint, "Song B");
+    }
+
+    fn insert_test_course(conn: &mut Connection) -> i64 {
+        upsert_course(conn, "course/default.json", &course(), 0, 1_700_000_000).unwrap()
+    }
+
+    fn sample_score_insert(course_id: i64, ex_score: u32, clear: &str) -> CourseScoreInsert {
+        CourseScoreInsert {
+            course_id,
+            ex_score,
+            max_ex_score: 1000,
+            clear_type: clear.to_string(),
+            gauge_type: "Normal".to_string(),
+            gauge_value: 80.0,
+            max_combo: 200,
+            miss_count: 5,
+            course_failed: clear == "Failed",
+            course_clear: clear != "Failed" && clear != "NoPlay",
+            trophies_json: "[]".to_string(),
+            played_at: 1_700_000_500,
+            charts: vec![
+                CourseScoreChartRecord {
+                    position: 0,
+                    chart_id: 1,
+                    ex_score: ex_score / 2,
+                    max_combo: 100,
+                    clear_type: clear.to_string(),
+                    gauge_value: 80.0,
+                },
+                CourseScoreChartRecord {
+                    position: 1,
+                    chart_id: 2,
+                    ex_score: ex_score - ex_score / 2,
+                    max_combo: 100,
+                    clear_type: clear.to_string(),
+                    gauge_value: 80.0,
+                },
+            ],
+            replays: vec![
+                CourseReplayRecord {
+                    position: 0,
+                    chart_id: 1,
+                    replay_path: "replay/c1.bzr".to_string(),
+                },
+                CourseReplayRecord {
+                    position: 1,
+                    chart_id: 2,
+                    replay_path: "replay/c2.bzr".to_string(),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn insert_course_score_persists_charts_and_replays() {
+        let mut conn = open_db();
+        let course_id = insert_test_course(&mut conn);
+
+        let score_id =
+            insert_course_score(&mut conn, &sample_score_insert(course_id, 500, "Normal")).unwrap();
+        assert!(score_id > 0);
+
+        let (count, total): (i64, i64) = conn
+            .query_row(
+                "SELECT COUNT(*), COALESCE(SUM(ex_score), 0) FROM course_score_charts WHERE course_score_id = ?1",
+                params![score_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(count, 2);
+        assert_eq!(total, 500);
+
+        let replays = list_course_replays(&conn, score_id).unwrap();
+        assert_eq!(replays.len(), 2);
+        assert_eq!(replays[0].replay_path, "replay/c1.bzr");
+    }
+
+    #[test]
+    fn insert_course_score_skips_empty_replay_paths() {
+        let mut conn = open_db();
+        let course_id = insert_test_course(&mut conn);
+
+        let mut insert = sample_score_insert(course_id, 500, "Normal");
+        insert.replays[0].replay_path = String::new();
+        let score_id = insert_course_score(&mut conn, &insert).unwrap();
+
+        let replays = list_course_replays(&conn, score_id).unwrap();
+        assert_eq!(replays.len(), 1);
+        assert_eq!(replays[0].position, 1);
+    }
+
+    #[test]
+    fn best_course_score_picks_highest_ex_score() {
+        let mut conn = open_db();
+        let course_id = insert_test_course(&mut conn);
+
+        insert_course_score(&mut conn, &sample_score_insert(course_id, 400, "Normal")).unwrap();
+        insert_course_score(&mut conn, &sample_score_insert(course_id, 800, "Easy")).unwrap();
+        insert_course_score(&mut conn, &sample_score_insert(course_id, 600, "Hard")).unwrap();
+
+        let best = best_course_score(&conn, course_id).unwrap().unwrap();
+        assert_eq!(best.ex_score, 800);
+        assert_eq!(best.clear_type, "Easy");
+        assert_eq!(best.course_id, course_id);
+    }
+
+    #[test]
+    fn best_course_score_tiebreaks_by_clear_rank() {
+        let mut conn = open_db();
+        let course_id = insert_test_course(&mut conn);
+
+        insert_course_score(&mut conn, &sample_score_insert(course_id, 500, "Normal")).unwrap();
+        insert_course_score(&mut conn, &sample_score_insert(course_id, 500, "Hard")).unwrap();
+        insert_course_score(&mut conn, &sample_score_insert(course_id, 500, "Easy")).unwrap();
+
+        let best = best_course_score(&conn, course_id).unwrap().unwrap();
+        assert_eq!(best.clear_type, "Hard");
+    }
+
+    #[test]
+    fn best_course_clear_returns_highest_rank() {
+        let mut conn = open_db();
+        let course_id = insert_test_course(&mut conn);
+        insert_course_score(&mut conn, &sample_score_insert(course_id, 200, "Failed")).unwrap();
+        insert_course_score(&mut conn, &sample_score_insert(course_id, 500, "Normal")).unwrap();
+
+        assert_eq!(best_course_clear(&conn, course_id).unwrap(), Some(ClearType::Normal));
+    }
+
+    #[test]
+    fn best_course_score_returns_none_when_no_history() {
+        let mut conn = open_db();
+        let course_id = insert_test_course(&mut conn);
+        assert!(best_course_score(&conn, course_id).unwrap().is_none());
+        assert!(best_course_clear(&conn, course_id).unwrap().is_none());
+    }
+
+    #[test]
+    fn deleting_course_cascades_to_scores_and_replays() {
+        let mut conn = open_db();
+        let course_id = insert_test_course(&mut conn);
+        insert_course_score(&mut conn, &sample_score_insert(course_id, 500, "Normal")).unwrap();
+
+        conn.execute("DELETE FROM courses WHERE id = ?1", params![course_id]).unwrap();
+
+        let scores: i64 = conn
+            .query_row("SELECT COUNT(*) FROM course_scores", [], |row| row.get(0))
+            .unwrap();
+        let charts: i64 = conn
+            .query_row("SELECT COUNT(*) FROM course_score_charts", [], |row| row.get(0))
+            .unwrap();
+        let replays: i64 =
+            conn.query_row("SELECT COUNT(*) FROM course_replays", [], |row| row.get(0)).unwrap();
+        assert_eq!(scores, 0);
+        assert_eq!(charts, 0);
+        assert_eq!(replays, 0);
     }
 
     #[test]

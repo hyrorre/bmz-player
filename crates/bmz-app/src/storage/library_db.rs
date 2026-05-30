@@ -7,7 +7,10 @@ use bmz_chart::model::{NoteKind, PlayableChart, TimingEventKind};
 use bmz_gameplay::gauge::gauge_total_for_chart;
 use rusqlite::{Connection, OptionalExtension, params};
 
-pub use super::course_db::{StoredCourse, StoredCourseEntry};
+pub use super::course_db::{
+    CourseBestScore, CourseReplayRecord, CourseScoreChartRecord, CourseScoreInsert, StoredCourse,
+    StoredCourseEntry,
+};
 pub use super::difficulty_table_db::{
     DifficultyTableEntryRecord, DifficultyTableRecord, TableEntryRow,
 };
@@ -651,6 +654,48 @@ impl LibraryDatabase {
 
     pub fn list_course_entries(&self, course_id: i64) -> Result<Vec<StoredCourseEntry>> {
         super::course_db::list_course_entries(&self.conn, course_id)
+    }
+
+    pub fn insert_course_score(&mut self, record: &CourseScoreInsert) -> Result<i64> {
+        super::course_db::insert_course_score(&mut self.conn, record)
+    }
+
+    pub fn best_course_score(&self, course_id: i64) -> Result<Option<CourseBestScore>> {
+        super::course_db::best_course_score(&self.conn, course_id)
+    }
+
+    pub fn best_course_clear(
+        &self,
+        course_id: i64,
+    ) -> Result<Option<bmz_core::clear::ClearType>> {
+        super::course_db::best_course_clear(&self.conn, course_id)
+    }
+
+    pub fn best_course_scores_for_courses(
+        &self,
+        course_ids: &[i64],
+    ) -> Result<std::collections::HashMap<i64, CourseBestScore>> {
+        let mut out = std::collections::HashMap::new();
+        for id in course_ids {
+            if let Some(best) = super::course_db::best_course_score(&self.conn, *id)? {
+                out.insert(*id, best);
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn list_course_score_charts(
+        &self,
+        course_score_id: i64,
+    ) -> Result<Vec<CourseScoreChartRecord>> {
+        super::course_db::list_course_score_charts(&self.conn, course_score_id)
+    }
+
+    pub fn list_course_replays(
+        &self,
+        course_score_id: i64,
+    ) -> Result<Vec<CourseReplayRecord>> {
+        super::course_db::list_course_replays(&self.conn, course_score_id)
     }
 
     /// Returns `(ChartListItem, raw_level)` pairs for charts in the library that
