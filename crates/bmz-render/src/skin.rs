@@ -143,6 +143,8 @@ pub struct SkinSongListDef {
     pub trophy: Vec<DestinationListEntry>,
     #[serde(default, deserialize_with = "deserialize_destination_entries")]
     pub graph: Vec<DestinationListEntry>,
+    #[serde(default, deserialize_with = "deserialize_destination_entries")]
+    pub label: Vec<DestinationListEntry>,
     #[serde(default)]
     pub judgegraph: Vec<DestinationListEntry>,
     #[serde(default)]
@@ -2366,6 +2368,17 @@ impl SkinDocument {
                     row_state,
                     sources,
                 ));
+                for label_index in select_row_label_indices(row) {
+                    items.extend(self.select_songlist_child_items_by_index(
+                        &songlist.label,
+                        label_index,
+                        row_origin,
+                        images,
+                        enabled_options,
+                        row_state,
+                        sources,
+                    ));
+                }
                 if let Some(trophy_index) = select_row_trophy_index(row) {
                     items.extend(self.select_songlist_child_items_by_index(
                         &songlist.trophy,
@@ -5325,6 +5338,20 @@ fn select_row_trophy_index(row: &SelectRowSnapshot) -> Option<usize> {
     } else {
         None
     }
+}
+
+fn select_row_label_indices(row: &SelectRowSnapshot) -> Vec<usize> {
+    let mut indices = Vec::new();
+    if row.has_long_notes {
+        indices.push(0);
+    }
+    if row.has_random {
+        indices.push(1);
+    }
+    if row.has_mines {
+        indices.push(2);
+    }
+    indices
 }
 
 fn select_replay_op_matches(op: i32, state: SkinDrawState) -> bool {
@@ -9332,7 +9359,10 @@ mod tests {
                     { "id": "lamp-assist", "src": 3, "x": 8, "y": 0, "w": 4, "h": 4 },
                     { "id": "lamp-light-assist", "src": 3, "x": 12, "y": 0, "w": 4, "h": 4 },
                     { "id": "lamp-easy", "src": 3, "x": 16, "y": 0, "w": 4, "h": 4 },
-                    { "id": "lamp-normal", "src": 3, "x": 20, "y": 0, "w": 4, "h": 4 }
+                    { "id": "lamp-normal", "src": 3, "x": 20, "y": 0, "w": 4, "h": 4 },
+                    { "id": "label-ln", "src": 1, "x": 0, "y": 40, "w": 4, "h": 4 },
+                    { "id": "label-random", "src": 1, "x": 4, "y": 40, "w": 4, "h": 4 },
+                    { "id": "label-mine", "src": 1, "x": 8, "y": 40, "w": 4, "h": 4 }
                 ],
                 "imageset": [{ "id": "bar", "images": ["bar-song", "bar-folder", "bar-table"] }],
                 "text": [
@@ -9384,6 +9414,11 @@ mod tests {
                         { "id": "trophy-silver", "dst": [{ "x": 35, "y": 1, "w": 4, "h": 4 }] },
                         { "id": "trophy-gold", "dst": [{ "x": 35, "y": 1, "w": 4, "h": 4 }] }
                     ],
+                    "label": [
+                        { "id": "label-ln", "dst": [{ "x": 40, "y": 1, "w": 4, "h": 4 }] },
+                        { "id": "label-random", "dst": [{ "x": 44, "y": 1, "w": 4, "h": 4 }] },
+                        { "id": "label-mine", "dst": [{ "x": 48, "y": 1, "w": 4, "h": 4 }] }
+                    ],
                     "graph": { "id": "graph-lamp", "dst": [{ "x": 5, "y": 1, "w": 20, "h": 2 }] },
                     "playerlamp": [
                         { "id": "lamp-none", "dst": [{ "x": 1, "y": 1, "w": 4, "h": 4 }] },
@@ -9422,6 +9457,8 @@ mod tests {
                     clear_type: "Normal".to_string(),
                     total_notes: 100,
                     ex_score: Some(180),
+                    has_long_notes: true,
+                    has_mines: true,
                     ..SelectRowSnapshot::default()
                 },
                 SelectRowSnapshot {
@@ -9516,6 +9553,24 @@ mod tests {
                 && approx_eq(*y, 0.45)
                 && approx_eq(*u, 0.0)
                 && approx_eq(*v, 20.0 / 100.0))));
+        assert!(items.iter().any(|item| matches!(item, SkinRenderItem::Image {
+                texture: SkinTextureId(9999),
+                rect: Rect { x, y, .. },
+                uv: TextureRegion { x: u, y: v, .. },
+                ..
+            } if approx_eq(*x, 0.52)
+                && approx_eq(*y, 0.45)
+                && approx_eq(*u, 0.0)
+                && approx_eq(*v, 40.0 / 100.0))));
+        assert!(items.iter().any(|item| matches!(item, SkinRenderItem::Image {
+                texture: SkinTextureId(9999),
+                rect: Rect { x, y, .. },
+                uv: TextureRegion { x: u, y: v, .. },
+                ..
+            } if approx_eq(*x, 0.60)
+                && approx_eq(*y, 0.45)
+                && approx_eq(*u, 8.0 / 100.0)
+                && approx_eq(*v, 40.0 / 100.0))));
         assert!(!items.iter().any(|item| matches!(item, SkinRenderItem::Image {
                 texture: SkinTextureId(9999),
                 rect: Rect { x, y, .. },
