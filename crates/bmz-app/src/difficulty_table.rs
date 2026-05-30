@@ -265,4 +265,60 @@ mod tests {
             "https://example.com/table/header.json"
         );
     }
+
+    // Integration test: parse the full Stella header JSON exactly as it arrives
+    // from HTTP (via HeaderJson deserialization) and verify courses are extracted.
+    #[test]
+    fn parse_stella_header_json_extracts_courses() {
+        let header_json = r#"{
+  "name": "Stella",
+  "symbol": "st",
+  "data_url": "score.json",
+  "course": [[
+    {
+      "name": "Stella Skill Simulator 4th st0",
+      "constraint": ["grade_mirror", "gauge_lr2", "ln"],
+      "trophy": [
+        {"name": "silvermedal", "missrate": 5.0, "scorerate": 70.0},
+        {"name": "goldmedal",   "missrate": 2.5, "scorerate": 85.0}
+      ],
+      "md5": [
+        "349bc491ec40d5595412637d8a4c8d2e",
+        "baee0a1921fc5041b44d7d87c7b5548d",
+        "72b1ce4b2051bd2a396dfa11a2d785ee",
+        "3a1661a3eaafa13f976e1010d5b87ca0"
+      ]
+    },
+    {
+      "name": "Stella Skill Simulator 4th st1",
+      "constraint": ["grade_mirror", "gauge_lr2", "ln"],
+      "trophy": [
+        {"name": "silvermedal", "missrate": 5.0, "scorerate": 70.0},
+        {"name": "goldmedal",   "missrate": 2.5, "scorerate": 85.0}
+      ],
+      "md5": [
+        "a87c666d3232097ac5359d6913ad5b23",
+        "d26ad712ceef97a5a843226bd77553eb",
+        "965d42e6aa003f95958cd7bcf3a59bec",
+        "8b327890a493ead1825472d4c4f7bc79"
+      ]
+    }
+  ]]
+}"#;
+
+        // Simulate how fetch_difficulty_table deserializes the header
+        let header: HeaderJson = serde_json::from_str(header_json).expect("header parse failed");
+        assert_eq!(header.name, "Stella");
+        assert!(header.course.is_some(), "course field should be present");
+
+        let courses =
+            parse_courses_from_header("https://stellabms.xyz/st/table.html", &header.course);
+        assert_eq!(courses.len(), 2, "should have parsed 2 courses");
+        assert_eq!(courses[0].title, "Stella Skill Simulator 4th st0");
+        assert_eq!(courses[0].entries.len(), 4);
+        assert_eq!(
+            courses[0].entries[0].md5.as_deref(),
+            Some("349bc491ec40d5595412637d8a4c8d2e")
+        );
+    }
 }
