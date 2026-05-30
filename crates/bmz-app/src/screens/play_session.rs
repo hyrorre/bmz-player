@@ -9,7 +9,7 @@ use bmz_core::clear::GaugeType;
 use bmz_core::lane::{KeyMode, LANE_COUNT, Lane};
 use bmz_core::time::TimeUs;
 use bmz_gameplay::autoplay::AutoplayController;
-use bmz_gameplay::gauge::{GaugeState, gauge_total_for_chart};
+use bmz_gameplay::gauge::{GaugeAutoShiftMode, GaugeState, gauge_total_for_chart};
 use bmz_gameplay::input::backend::{InputBackend, NullInputBackend};
 use bmz_gameplay::input::system::InputSystem;
 use bmz_gameplay::input::translator::DefaultInputTranslator;
@@ -22,8 +22,8 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::play::{
-    DEFAULT_JUDGE_WINDOW, audio_mix_from_profile, gauge_type_from_config,
-    lane_binding_from_profile_input, play_offsets_from_profile,
+    DEFAULT_JUDGE_WINDOW, audio_mix_from_profile, gauge_auto_shift_from_config,
+    gauge_type_from_config, lane_binding_from_profile_input, play_offsets_from_profile,
 };
 use crate::config::profile_config::{
     BgaExpandConfig, BgaModeConfig, LaneEffectConfig, ProfileConfig,
@@ -37,6 +37,7 @@ pub struct PlaySessionOptions {
     pub replay_player: Option<ReplayPlayer>,
     pub sample_rate: u32,
     pub gauge_override: Option<GaugeType>,
+    pub gauge_auto_shift: GaugeAutoShiftMode,
     pub arrange: ArrangeOption,
     pub target: TargetOption,
     pub arrange_seed: Option<i64>,
@@ -72,6 +73,7 @@ impl Default for PlaySessionOptions {
             replay_player: None,
             sample_rate: 48_000,
             gauge_override: None,
+            gauge_auto_shift: GaugeAutoShiftMode::Off,
             arrange: ArrangeOption::Normal,
             target: TargetOption::None,
             arrange_seed: None,
@@ -96,6 +98,13 @@ pub fn build_game_session_with_input_backend(
 ) -> GameSession {
     let gauge_type =
         options.gauge_override.unwrap_or_else(|| gauge_type_from_config(profile.play.gauge));
+    let gauge_auto_shift = if options.gauge_auto_shift != GaugeAutoShiftMode::Off {
+        options.gauge_auto_shift
+    } else if options.gauge_override.is_none() {
+        gauge_auto_shift_from_config(profile.play.gauge, profile.play.gauge_auto_shift)
+    } else {
+        GaugeAutoShiftMode::Off
+    };
     let autoplay_enabled = profile.play.auto_play || options.autoplay;
     let replay_player = options.replay_player;
     let is_replay = replay_player.is_some();
@@ -115,11 +124,19 @@ pub fn build_game_session_with_input_backend(
     let base_judge_window = DEFAULT_JUDGE_WINDOW;
 
     GameSession {
-        gauge: GaugeState::new(
-            gauge_type,
-            gauge_total_for_chart(chart.metadata.total, chart.total_notes),
-            chart.total_notes,
-        ),
+        gauge: {
+            let gauge_total = gauge_total_for_chart(chart.metadata.total, chart.total_notes);
+            if gauge_auto_shift != GaugeAutoShiftMode::Off {
+                GaugeState::new_with_auto_shift(
+                    gauge_type,
+                    gauge_auto_shift,
+                    gauge_total,
+                    chart.total_notes,
+                )
+            } else {
+                GaugeState::new(gauge_type, gauge_total, chart.total_notes)
+            }
+        },
         judge: JudgeEngine::new(judge_window_for_rank(
             base_judge_window,
             judge_percent_at_time(chart.metadata.judge_rank, &chart.judge_rank_events, TimeUs(0)),
@@ -512,6 +529,20 @@ mod tests {
         assert!(session.bga_enabled);
         assert_eq!(session.poor_bga_duration_us, 500_000);
         assert_eq!(session.bga_stretch, 1);
+    }
+
+    #[test]
+    fn build_game_session_enables_gauge_auto_shift_from_profile() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.play.gauge_auto_shift =
+            crate::config::profile_config::GaugeAutoShiftConfig::BestClear;
+        let chart = Arc::new(chart());
+
+        let session = build_game_session(chart, &profile, PlaySessionOptions::default());
+
+        assert!(session.gauge.auto_shift);
+        assert_eq!(session.gauge.auto_shift_mode, GaugeAutoShiftMode::BestClear);
+        assert_eq!(session.gauge.selected, GaugeType::ExHard);
     }
 
     #[test]

@@ -35,14 +35,12 @@ use crate::cli::{
 use crate::config::app_config::{PathEntry, WindowMode};
 use crate::config::load::load_profile_config;
 use crate::config::profile_config::{
-    AssistOptionConfig, BgaModeConfig, GaugeTypeConfig, InputActionConfig, LaneConfig,
-    ProfileConfig, ProfileInputConfig, RandomOptionConfig, TargetOptionConfig,
+    AssistOptionConfig, BgaModeConfig, GaugeAutoShiftConfig, GaugeTypeConfig, InputActionConfig,
+    LaneConfig, ProfileConfig, ProfileInputConfig, RandomOptionConfig, TargetOptionConfig,
 };
 use crate::config::save::{save_app_config, save_profile_config};
 use crate::input::winit::physical_key_to_control;
-use crate::screens::course_session::{
-    ActiveCourseSession, CourseEntryResult, CourseResultSummary,
-};
+use crate::screens::course_session::{ActiveCourseSession, CourseEntryResult, CourseResultSummary};
 use crate::screens::play_finish::FinishedPlaySession;
 use crate::screens::play_loop::{PlayAdvanceOutcome, advance_running_play_session_until_result};
 use crate::screens::play_snapshot::{
@@ -50,9 +48,9 @@ use crate::screens::play_snapshot::{
     display_bga_frame,
 };
 use crate::screens::play_start::{
-    PlayStartOptions, PreloadedWinitPlaySession, StartedWinitPlaySession,
-    apply_course_constraints, open_prepared_winit_play_session,
-    prepare_play_session_for_chart_with_winit_input, prepare_winit_play_session_from_preloaded,
+    PlayStartOptions, PreloadedWinitPlaySession, StartedWinitPlaySession, apply_course_constraints,
+    open_prepared_winit_play_session, prepare_play_session_for_chart_with_winit_input,
+    prepare_winit_play_session_from_preloaded,
 };
 use crate::screens::result_model::ResultSummary;
 use crate::screens::select_model::{
@@ -187,6 +185,7 @@ struct WinitApp {
     arrange_option: ArrangeOption,
     target_option: TargetOption,
     gauge_option: GaugeTypeConfig,
+    gauge_auto_shift_option: GaugeAutoShiftConfig,
     assist_option: AssistOption,
     select_keys: SelectKeyBindings,
     smoke_exit_after_frames: Option<u32>,
@@ -375,7 +374,17 @@ impl WinitApp {
         } else {
             AssistOption::Normal
         };
-        let gauge_option = boot.profile_config.play.gauge;
+        let gauge_option = if boot.profile_config.play.gauge == GaugeTypeConfig::AutoShift {
+            GaugeTypeConfig::ExHard
+        } else {
+            boot.profile_config.play.gauge
+        };
+        let gauge_auto_shift_option =
+            if boot.profile_config.play.gauge == GaugeTypeConfig::AutoShift {
+                GaugeAutoShiftConfig::BestClear
+            } else {
+                boot.profile_config.play.gauge_auto_shift
+            };
         let arrange_option = arrange_option_from_profile(boot.profile_config.play.random);
         let target_option = target_option_from_profile(boot.profile_config.play.target);
         let select_keys = SelectKeyBindings::from_profile(&boot.profile_config.input);
@@ -488,6 +497,7 @@ impl WinitApp {
             arrange_option,
             target_option,
             gauge_option,
+            gauge_auto_shift_option,
             assist_option,
             select_keys,
             smoke_exit_after_frames: options.smoke_exit_after_frames,
@@ -806,6 +816,7 @@ impl WinitApp {
             arrange: self.arrange_option.as_str().to_string(),
             target: self.target_option.as_str().to_string(),
             gauge: gauge_option_as_str(self.gauge_option).to_string(),
+            gauge_auto_shift: gauge_auto_shift_as_str(self.gauge_auto_shift_option).to_string(),
             assist: self.assist_option.as_str().to_string(),
             bga: bga_mode_as_str(self.boot.profile_config.play.bga).to_string(),
             master_volume: self.boot.profile_config.audio_mix.master_volume,
@@ -983,6 +994,14 @@ impl WinitApp {
         );
     }
 
+    fn toggle_gauge_auto_shift(&mut self) {
+        self.gauge_auto_shift_option = cycle_gauge_auto_shift_option(self.gauge_auto_shift_option);
+        tracing::info!(
+            gauge_auto_shift = gauge_auto_shift_as_str(self.gauge_auto_shift_option),
+            "gauge auto shift changed"
+        );
+    }
+
     fn apply_play_option_control(&mut self, control: &str) -> bool {
         if self.select_keys.cycle_arrange.as_deref() == Some(control) {
             self.arrange_option = self.arrange_option.cycle();
@@ -1146,8 +1165,35 @@ impl WinitApp {
             return;
         }
 
+        if event.state == ElementState::Pressed
+            && !event.repeat
+            && self.select_held
+            && self.select_keys.back_uses_key2()
+            && is_select_start_key(event.physical_key, &self.select_keys)
+        {
+            self.set_start_held(true);
+            self.toggle_gauge_auto_shift();
+            self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+            return;
+        }
+
         if is_select_start_key(event.physical_key, &self.select_keys) {
             self.set_start_held(event.state == ElementState::Pressed);
+            return;
+        }
+
+        if event.state == ElementState::Pressed
+            && !event.repeat
+            && self.start_held
+            && (self.select_held || is_select_modifier_key(event.physical_key, &self.select_keys))
+            && let Some(control) = physical_key_name(event.physical_key)
+            && self.select_keys.is_key2(&control)
+        {
+            self.toggle_gauge_auto_shift();
+            self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+            if is_select_modifier_key(event.physical_key, &self.select_keys) {
+                self.set_select_held(true);
+            }
             return;
         }
 
@@ -1260,6 +1306,18 @@ impl WinitApp {
                     "Button2" | "Select" => self.begin_result_exit(ResultExitAction::Leave),
                     _ => {}
                 }
+            }
+            return;
+        }
+
+        if self.start_held
+            && (self.select_held || self.select_keys.is_back(button))
+            && self.select_keys.is_key2(button)
+        {
+            self.toggle_gauge_auto_shift();
+            self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+            if self.select_keys.is_back(button) {
+                self.set_select_held(true);
             }
             return;
         }
@@ -1439,8 +1497,7 @@ impl WinitApp {
 
         let next_index = course.current_index;
         let constraints = course.definition.constraints.clone();
-        let next_chart_id =
-            course.definition.entries.get(next_index).and_then(|e| e.chart_id);
+        let next_chart_id = course.definition.entries.get(next_index).and_then(|e| e.chart_id);
 
         if let Some(next_chart_id) = next_chart_id {
             let mut options = self.play_start_options();
@@ -1767,6 +1824,7 @@ impl WinitApp {
         PlayStartOptions {
             autoplay: self.assist_option == AssistOption::Autoplay,
             gauge: Some(self.gauge_option),
+            gauge_auto_shift: self.gauge_auto_shift_option,
             arrange: self.arrange_option,
             target: self.target_option,
             arrange_seed,
@@ -1801,6 +1859,7 @@ impl WinitApp {
             replay_player: Some(player),
             chart_zero_time: TimeUs(0),
             gauge: Some(self.gauge_option),
+            gauge_auto_shift: self.gauge_auto_shift_option,
             arrange: replay_file.arrange_option(),
             target: self.target_option,
             arrange_seed: replay_file.arrange_seed,
@@ -2762,6 +2821,7 @@ impl WinitApp {
             self.arrange_option,
             self.target_option,
             self.gauge_option,
+            self.gauge_auto_shift_option,
             self.assist_option,
             now_unix_seconds(),
         );
@@ -3566,9 +3626,7 @@ fn load_items_for_stack(
             // 手動インポート分（source が "table:..." でないもの）がある場合のみ COURSE フォルダを表示する。
             let mut items = root_folder_items(&enabled_root_paths(&boot.app_config));
             match boot.library_db.list_courses() {
-                Ok(courses)
-                    if courses.iter().any(|c| !c.source.starts_with("table:")) =>
-                {
+                Ok(courses) if courses.iter().any(|c| !c.source.starts_with("table:")) => {
                     items.push(course_root_item());
                 }
                 Ok(_) => {}
@@ -3593,7 +3651,7 @@ fn cycle_gauge_option(current: GaugeTypeConfig) -> GaugeTypeConfig {
         GaugeTypeConfig::Easy => GaugeTypeConfig::Normal,
         GaugeTypeConfig::Normal => GaugeTypeConfig::Hard,
         GaugeTypeConfig::Hard => GaugeTypeConfig::ExHard,
-        GaugeTypeConfig::ExHard => GaugeTypeConfig::Hazard,
+        GaugeTypeConfig::ExHard | GaugeTypeConfig::AutoShift => GaugeTypeConfig::Hazard,
         GaugeTypeConfig::Hazard => GaugeTypeConfig::AssistEasy,
     }
 }
@@ -3605,7 +3663,28 @@ fn gauge_option_as_str(gauge: GaugeTypeConfig) -> &'static str {
         GaugeTypeConfig::Normal => "NORMAL",
         GaugeTypeConfig::Hard => "HARD",
         GaugeTypeConfig::ExHard => "EX-HARD",
+        GaugeTypeConfig::AutoShift => "EX-HARD",
         GaugeTypeConfig::Hazard => "HAZARD",
+    }
+}
+
+fn cycle_gauge_auto_shift_option(current: GaugeAutoShiftConfig) -> GaugeAutoShiftConfig {
+    match current {
+        GaugeAutoShiftConfig::Off => GaugeAutoShiftConfig::Continue,
+        GaugeAutoShiftConfig::Continue => GaugeAutoShiftConfig::HardToGroove,
+        GaugeAutoShiftConfig::HardToGroove => GaugeAutoShiftConfig::BestClear,
+        GaugeAutoShiftConfig::BestClear => GaugeAutoShiftConfig::SelectToUnder,
+        GaugeAutoShiftConfig::SelectToUnder => GaugeAutoShiftConfig::Off,
+    }
+}
+
+fn gauge_auto_shift_as_str(mode: GaugeAutoShiftConfig) -> &'static str {
+    match mode {
+        GaugeAutoShiftConfig::Off => "OFF",
+        GaugeAutoShiftConfig::Continue => "CONTINUE",
+        GaugeAutoShiftConfig::HardToGroove => "HARD TO GROOVE",
+        GaugeAutoShiftConfig::BestClear => "BEST CLEAR",
+        GaugeAutoShiftConfig::SelectToUnder => "SELECT TO UNDER",
     }
 }
 
@@ -3701,6 +3780,7 @@ fn apply_current_play_options_to_profile(
     arrange: ArrangeOption,
     target: TargetOption,
     gauge: GaugeTypeConfig,
+    gauge_auto_shift: GaugeAutoShiftConfig,
     assist: AssistOption,
     updated_at: i64,
 ) {
@@ -3714,6 +3794,7 @@ fn apply_current_play_options_to_profile(
     profile.play.random = random_config_from_arrange(arrange);
     profile.play.target = target_config_from_option(target);
     profile.play.gauge = gauge;
+    profile.play.gauge_auto_shift = gauge_auto_shift;
     profile.play.auto_play = assist == AssistOption::Autoplay;
     profile.play.assist = AssistOptionConfig::None;
     profile.updated_at = updated_at;
@@ -4087,6 +4168,7 @@ struct SelectKeyBindings {
     start: Vec<String>,
     enter: Vec<String>,
     back: Vec<String>,
+    key2_controls: Vec<String>,
     scratch_controls: Vec<String>,
     cycle_arrange: Option<String>,
     cycle_gauge: Option<String>,
@@ -4138,6 +4220,7 @@ impl SelectKeyBindings {
             actions_for(InputActionConfig::E2),
             keys_for(LaneConfig::Key2),
         );
+        let key2_controls = keys_for(LaneConfig::Key2);
         let scratch_controls = keys_for(LaneConfig::Scratch);
         let cycle_arrange = select_control_with_lane_fallback(
             actions_for(InputActionConfig::SelectOptionArrange),
@@ -4182,6 +4265,10 @@ impl SelectKeyBindings {
         let enter_str =
             if kb_enter.is_empty() { String::new() } else { format!("/{}", kb_enter.join("/")) };
         let back_str = kb_back.first().map(|k| format!("/{k}")).unwrap_or_default();
+        let key2_str = kb_keys_for(LaneConfig::Key2)
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| kb_back.first().cloned().unwrap_or_else(|| "Key2".to_string()));
         let start_str = kb_actions_for(InputActionConfig::E1)
             .into_iter()
             .next()
@@ -4214,13 +4301,14 @@ impl SelectKeyBindings {
             "F1 MENU  F5 RELOAD   \
              {start_str}:PLAY OPT  BACK:ASSIST OPT  {start_str}+BACK:DETAIL OPT  \
              {start_str}+{arrange_str}:ARRANGE  {start_str}+{gauge_str}:GAUGE  {start_str}+{assist_str}:ASSIST  \
-             {start_str}+UP/DOWN:TARGET  {start_str}+{bga_str}:BGA  {start_str}+1..4:REPLAY"
+             {start_str}+BACK+{key2_str}:GAS  {start_str}+UP/DOWN:TARGET  {start_str}+{bga_str}:BGA  {start_str}+1..4:REPLAY"
         );
 
         Self {
             start,
             enter,
             back,
+            key2_controls,
             scratch_controls,
             cycle_arrange,
             cycle_gauge,
@@ -4241,6 +4329,14 @@ impl SelectKeyBindings {
 
     fn is_start(&self, control: &str) -> bool {
         self.start.iter().any(|k| k == control)
+    }
+
+    fn is_key2(&self, control: &str) -> bool {
+        self.key2_controls.iter().any(|k| k == control)
+    }
+
+    fn back_uses_key2(&self) -> bool {
+        self.back.iter().any(|control| self.is_key2(control))
     }
 }
 
@@ -4494,10 +4590,14 @@ mod tests {
             select_action(PhysicalKey::Code(KeyCode::KeyV), ElementState::Pressed, false, &keys),
             Some(SelectAction::EnterOrPlay)
         );
-        // Key2(S) → ExitFolder
+        // E2(W) → ExitFolder. Key2(S) is used with E1+E2 for GAS, not as Back.
+        assert_eq!(
+            select_action(PhysicalKey::Code(KeyCode::KeyW), ElementState::Pressed, false, &keys),
+            Some(SelectAction::ExitFolder)
+        );
         assert_eq!(
             select_action(PhysicalKey::Code(KeyCode::KeyS), ElementState::Pressed, false, &keys),
-            Some(SelectAction::ExitFolder)
+            None
         );
     }
 
@@ -4561,7 +4661,7 @@ mod tests {
     fn select_key_bindings_builds_correct_hints() {
         let keys = default_select_keys();
         assert!(keys.key_hint.contains("Z/X/C/V"), "enter keys in hint: {}", keys.key_hint);
-        assert!(keys.key_hint.contains("/S:BACK"), "back key in hint: {}", keys.key_hint);
+        assert!(keys.key_hint.contains("/W:BACK"), "back key in hint: {}", keys.key_hint);
         assert!(keys.key_hint.contains(" Q"), "start key in hint: {}", keys.key_hint);
         assert!(keys.option_hint.contains("F1 MENU"), "menu in hint: {}", keys.option_hint);
         assert!(keys.option_hint.contains("F5 RELOAD"), "reload in hint: {}", keys.option_hint);
@@ -4609,7 +4709,8 @@ mod tests {
     fn select_modifier_keys_are_handled_before_folder_back() {
         let keys = default_select_keys();
         assert!(!is_select_modifier_key(PhysicalKey::Code(KeyCode::ArrowLeft), &keys));
-        assert!(is_select_modifier_key(PhysicalKey::Code(KeyCode::KeyS), &keys));
+        assert!(is_select_modifier_key(PhysicalKey::Code(KeyCode::KeyW), &keys));
+        assert!(!is_select_modifier_key(PhysicalKey::Code(KeyCode::KeyS), &keys));
         assert_eq!(
             select_action(
                 PhysicalKey::Code(KeyCode::ArrowLeft),
@@ -4620,8 +4721,12 @@ mod tests {
             Some(SelectAction::ExitFolder)
         );
         assert_eq!(
-            select_action(PhysicalKey::Code(KeyCode::KeyS), ElementState::Pressed, false, &keys),
+            select_action(PhysicalKey::Code(KeyCode::KeyW), ElementState::Pressed, false, &keys),
             Some(SelectAction::ExitFolder)
+        );
+        assert_eq!(
+            select_action(PhysicalKey::Code(KeyCode::KeyS), ElementState::Pressed, false, &keys),
+            None
         );
     }
 
@@ -4629,6 +4734,7 @@ mod tests {
     fn select_start_key_uses_profile_start_binding() {
         let keys = default_select_keys();
         assert!(is_select_start_key(PhysicalKey::Code(KeyCode::KeyQ), &keys));
+        assert!(!is_select_start_key(PhysicalKey::Code(KeyCode::KeyW), &keys));
         assert!(!is_select_start_key(PhysicalKey::Code(KeyCode::KeyS), &keys));
     }
 
@@ -4639,6 +4745,17 @@ mod tests {
         assert!(keys.is_start("Q"));
         assert_eq!(keys.cycle_assist.as_deref(), Some("C"));
         assert!(keys.is_enter("C"));
+    }
+
+    #[test]
+    fn select_key_bindings_expose_key2_for_gas_toggle() {
+        let keys = default_select_keys();
+
+        assert!(keys.is_start("Q"));
+        assert!(keys.is_back("W"));
+        assert!(!keys.is_back("S"));
+        assert!(keys.is_key2("S"));
+        assert!(!keys.back_uses_key2());
     }
 
     #[test]
@@ -4713,6 +4830,17 @@ mod tests {
     }
 
     #[test]
+    fn gauge_option_cycle_includes_auto_shift() {
+        assert_eq!(cycle_gauge_option(GaugeTypeConfig::ExHard), GaugeTypeConfig::Hazard);
+        assert_eq!(
+            cycle_gauge_auto_shift_option(GaugeAutoShiftConfig::Off),
+            GaugeAutoShiftConfig::Continue
+        );
+        assert_eq!(gauge_auto_shift_as_str(GaugeAutoShiftConfig::BestClear), "BEST CLEAR");
+        assert_eq!(cycle_gauge_option(GaugeTypeConfig::AutoShift), GaugeTypeConfig::Hazard);
+    }
+
+    #[test]
     fn apply_current_play_options_updates_profile_defaults() {
         let mut profile = ProfileConfig::new_default("default", "Default", 1);
 
@@ -4723,6 +4851,7 @@ mod tests {
             ArrangeOption::Mirror,
             TargetOption::Aaa,
             GaugeTypeConfig::Hard,
+            GaugeAutoShiftConfig::BestClear,
             AssistOption::Autoplay,
             42,
         );
@@ -4733,6 +4862,7 @@ mod tests {
         assert!(matches!(profile.play.random, RandomOptionConfig::Mirror));
         assert!(matches!(profile.play.target, TargetOptionConfig::Aaa));
         assert!(matches!(profile.play.gauge, GaugeTypeConfig::Hard));
+        assert!(matches!(profile.play.gauge_auto_shift, GaugeAutoShiftConfig::BestClear));
         assert!(profile.play.auto_play);
         assert!(matches!(profile.play.assist, AssistOptionConfig::None));
         assert_eq!(profile.updated_at, 42);

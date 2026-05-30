@@ -1008,6 +1008,7 @@ pub struct SkinDrawState {
     pub select_option_panel: u8,
     pub select_arrange_index: usize,
     pub select_gauge_index: usize,
+    pub select_gauge_auto_shift_index: usize,
     pub select_target_index: usize,
     pub select_bga_index: usize,
     pub select_assist_index: usize,
@@ -1019,6 +1020,7 @@ pub struct SkinDrawState {
     pub judge_counts: DisplayJudgeCounts,
     pub gauge: f32,
     pub gauge_type: i32,
+    pub gauge_auto_shift: bool,
     pub gauge_max: f32,
     pub gauge_border: f32,
     pub play_progress: f32,
@@ -1177,6 +1179,7 @@ impl Default for SkinDrawState {
             select_option_panel: 0,
             select_arrange_index: 0,
             select_gauge_index: 2,
+            select_gauge_auto_shift_index: 0,
             select_target_index: 0,
             select_bga_index: 0,
             select_assist_index: 0,
@@ -1188,6 +1191,7 @@ impl Default for SkinDrawState {
             judge_counts: DisplayJudgeCounts::default(),
             gauge: 0.0,
             gauge_type: 2,
+            gauge_auto_shift: false,
             gauge_max: 100.0,
             gauge_border: 80.0,
             play_progress: 0.0,
@@ -2184,6 +2188,9 @@ impl SkinDocument {
             select_option_panel: snapshot.option_panel,
             select_arrange_index: select_arrange_index(&snapshot.arrange),
             select_gauge_index: select_gauge_index(&snapshot.gauge),
+            select_gauge_auto_shift_index: select_gauge_auto_shift_index(
+                &snapshot.gauge_auto_shift,
+            ),
             select_target_index: select_target_index(&snapshot.target),
             select_bga_index: select_bga_index(&snapshot.bga),
             select_assist_index: select_assist_index(&snapshot.assist),
@@ -2208,6 +2215,7 @@ impl SkinDocument {
             select_length_ms: selected_row.map(|row| row.length_ms).unwrap_or(0),
             max_combo: selected_row.and_then(|row| row.max_combo).unwrap_or(0),
             gauge: selected_row.and_then(|row| row.gauge_value).unwrap_or(0.0),
+            gauge_auto_shift: snapshot.gauge_auto_shift != "OFF",
             ex_score: selected_row.and_then(|row| row.ex_score).unwrap_or(0),
             ..SkinDrawState::default()
         };
@@ -3489,6 +3497,7 @@ fn skin_state_imageset_index(ref_id: i32, state: SkinDrawState) -> Option<usize>
         42 | 43 => Some(state.select_arrange_index),
         54 | 55 => Some(0),
         72 => Some(state.select_bga_index),
+        78 => Some(state.select_gauge_auto_shift_index),
         301..=307 => Some(0),
         _ => None,
     }
@@ -4524,6 +4533,12 @@ fn eval_skin_draw_operand(operand: &str, state: SkinDrawState) -> Option<f32> {
     match operand {
         "gauge()" | "gauge" => Some(state.gauge),
         "gauge_type()" | "gauge_type" => Some(state.gauge_type as f32),
+        "gauge_auto_shift()" | "gauge_auto_shift" => {
+            Some(if state.gauge_auto_shift { 1.0 } else { 0.0 })
+        }
+        "gauge_auto_shift_mode()" | "gauge_auto_shift_mode" => {
+            Some(state.select_gauge_auto_shift_index as f32)
+        }
         "timer_off" | "timer_off_value" => Some(i32::MIN as f32),
         value => value.parse::<f32>().ok(),
     }
@@ -4685,6 +4700,7 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         75 | 105 | 174 => Some(state.max_combo as i64),
         76 => Some((state.judge_counts.bad + state.judge_counts.poor) as i64),
         77 => Some(state.select_target_index as i64),
+        78 => Some(state.select_gauge_auto_shift_index as i64),
         80 | 110 => Some(state.judge_counts.pgreat as i64),
         81 | 111 => Some(state.judge_counts.great as i64),
         82 | 112 => Some(state.judge_counts.good as i64),
@@ -5410,6 +5426,16 @@ fn select_gauge_index(gauge: &str) -> usize {
         "EX-HARD" => 4,
         "HAZARD" => 5,
         _ => 2,
+    }
+}
+
+fn select_gauge_auto_shift_index(mode: &str) -> usize {
+    match mode {
+        "CONTINUE" => 1,
+        "HARD TO GROOVE" => 2,
+        "BEST CLEAR" => 3,
+        "SELECT TO UNDER" => 4,
+        _ => 0,
     }
 }
 
@@ -8043,6 +8069,26 @@ mod tests {
             "gauge_type() == 4 or gauge_type() == 5",
             SkinDrawState { gauge_type: 2, ..Default::default() }
         ));
+    }
+
+    #[test]
+    fn skin_document_evaluates_gauge_auto_shift_draw_conditions() {
+        assert!(eval_skin_draw_condition(
+            "gauge_auto_shift() == 1",
+            SkinDrawState { gauge_auto_shift: true, ..Default::default() }
+        ));
+        assert!(!eval_skin_draw_condition(
+            "gauge_auto_shift() == 1",
+            SkinDrawState { gauge_auto_shift: false, ..Default::default() }
+        ));
+        assert_eq!(select_gauge_auto_shift_index("BEST CLEAR"), 3);
+        assert_eq!(
+            skin_state_imageset_index(
+                78,
+                SkinDrawState { select_gauge_auto_shift_index: 3, ..Default::default() }
+            ),
+            Some(3)
+        );
     }
 
     #[test]

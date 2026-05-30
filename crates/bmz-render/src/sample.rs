@@ -45,6 +45,7 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
         arrange: "NORMAL".to_string(),
         target: "NONE".to_string(),
         gauge: "NORMAL".to_string(),
+        gauge_auto_shift: "OFF".to_string(),
         assist: "NORMAL".to_string(),
         bga: "ON".to_string(),
         master_volume: 1.0,

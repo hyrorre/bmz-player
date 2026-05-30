@@ -98,7 +98,8 @@ fn ghost_judge_code(judge: Judge) -> u8 {
 }
 
 pub fn compute_clear_type(failed_state: bool, score: &ScoreState, gauge: &GaugeState) -> ClearType {
-    if failed_state || !gauge.current().is_qualified() {
+    let result_gauge = gauge.result_gauge();
+    if failed_state || !result_gauge.is_qualified() {
         return ClearType::Failed;
     }
 
@@ -112,5 +113,5 @@ pub fn compute_clear_type(failed_state: bool, score: &ScoreState, gauge: &GaugeS
         return ClearType::FullCombo;
     }
 
-    gauge.current_clear_type().unwrap_or(ClearType::Failed)
+    result_gauge.definition.clear_type.unwrap_or(ClearType::Failed)
 }

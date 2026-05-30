@@ -395,6 +395,7 @@ fn plan_select(
         ),
         BitmapTextStyle { x: 0.08, y: 0.170, cell: 0.005, color: Color::rgb(0.72, 0.86, 0.92) },
     );
+    push_select_option_panel(&text, &mut commands, snapshot);
 
     let visible_rows = rows.len().max(1);
     let selected_row_position = select_snapshot_selected_row_position(rows, selected_index);
@@ -447,6 +448,75 @@ fn plan_select(
     push_scene_overlays(&mut commands, &snapshot.overlay);
 
     DrawPlan { clear: Color::rgb(0.02, 0.025, 0.03), commands }
+}
+
+fn push_select_option_panel(
+    text: &TextRenderer,
+    commands: &mut Vec<DrawCommand>,
+    snapshot: &SelectSnapshot,
+) {
+    if snapshot.option_panel == 0 {
+        return;
+    }
+
+    let (title, lines): (&str, Vec<String>) = match snapshot.option_panel {
+        1 => (
+            "PLAY OPTIONS",
+            vec![
+                format!("ARRANGE  {}", snapshot.arrange),
+                format!("TARGET   {}", snapshot.target),
+                format!("GAUGE    {}", snapshot.gauge),
+                "REPLAY   1 / 2 / 3 / 4".to_string(),
+            ],
+        ),
+        2 => ("ASSIST OPTIONS", vec![format!("ASSIST   {}", snapshot.assist)]),
+        3 => (
+            "DETAIL OPTIONS",
+            vec![
+                format!("GAS      {}", snapshot.gauge_auto_shift),
+                format!("GAUGE    {}", snapshot.gauge),
+                format!("BGA      {}", snapshot.bga),
+            ],
+        ),
+        _ => return,
+    };
+
+    let alpha = (snapshot.option_panel_time.0 as f32 / 120_000.0).clamp(0.0, 1.0);
+    commands.push(DrawCommand::Rect {
+        rect: Rect { x: 0.57, y: 0.225, width: 0.33, height: 0.12 + lines.len() as f32 * 0.035 },
+        color: Color::rgba(0.02, 0.026, 0.032, 0.84 * alpha),
+    });
+    commands.push(DrawCommand::Rect {
+        rect: Rect { x: 0.57, y: 0.225, width: 0.33, height: 0.028 },
+        color: Color::rgba(0.11, 0.16, 0.19, 0.9 * alpha),
+    });
+    text.push_text(
+        commands,
+        title,
+        BitmapTextStyle {
+            x: 0.585,
+            y: 0.232,
+            cell: 0.0048,
+            color: Color::rgba(0.74, 0.9, 0.96, alpha),
+        },
+    );
+    for (index, line) in lines.iter().enumerate() {
+        let selected = snapshot.option_panel == 3 && line.starts_with("GAS");
+        text.push_text(
+            commands,
+            line,
+            BitmapTextStyle {
+                x: 0.595,
+                y: 0.275 + index as f32 * 0.035,
+                cell: 0.005,
+                color: if selected {
+                    Color::rgba(0.96, 0.9, 0.48, alpha)
+                } else {
+                    Color::rgba(0.78, 0.86, 0.88, alpha)
+                },
+            },
+        );
+    }
 }
 
 fn select_snapshot_selected_row_position(rows: &[SelectRowSnapshot], selected_index: u32) -> usize {
@@ -720,6 +790,7 @@ fn plan_play(
         fast_slow_counts: Some(snapshot.fast_slow_counts),
         gauge: snapshot.gauge,
         gauge_type: snapshot.gauge_type,
+        gauge_auto_shift: snapshot.gauge_auto_shift,
         gauge_max: snapshot.gauge_max,
         gauge_border: snapshot.gauge_border,
         play_progress: play_progress(snapshot),
@@ -1033,6 +1104,7 @@ fn plan_play(
         // READY/GO オーバーレイはデフォルトスキン専用。
         // JSON skin 等は skin 側の演出を使うため描画しない。
         push_start_overlay(&text, &mut commands, snapshot);
+        push_default_failed_overlay(&text, &mut commands, snapshot);
     }
     push_chart_text(&text, &mut commands, snapshot);
     push_scene_overlays(&mut commands, &snapshot.overlay);
@@ -1077,6 +1149,7 @@ fn plan_decide(
             fast_slow_counts: Some(snapshot.fast_slow_counts),
             gauge: snapshot.gauge,
             gauge_type: snapshot.gauge_type,
+            gauge_auto_shift: snapshot.gauge_auto_shift,
             gauge_max: snapshot.gauge_max,
             gauge_border: snapshot.gauge_border,
             play_level: skin_level_number(&snapshot.play_level),
@@ -1748,6 +1821,33 @@ fn push_start_overlay(
             } else {
                 Color::rgb(0.96, 0.92, 0.54)
             },
+        },
+    );
+}
+
+fn push_default_failed_overlay(
+    text: &TextRenderer,
+    commands: &mut Vec<DrawCommand>,
+    snapshot: &RenderSnapshot,
+) {
+    let Some(elapsed_ms) = snapshot.failed_elapsed_ms else {
+        return;
+    };
+    let alpha = (elapsed_ms as f32 / 700.0).clamp(0.0, 0.82);
+    commands.push(DrawCommand::Rect {
+        rect: Rect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+        color: Color::rgba(0.0, 0.0, 0.0, alpha),
+    });
+    let label = "FAILED";
+    let cell = 0.02;
+    text.push_text(
+        commands,
+        label,
+        BitmapTextStyle {
+            x: 0.5 - label_width(label, cell) / 2.0,
+            y: 0.43,
+            cell,
+            color: Color::rgba(1.0, 0.24, 0.28, alpha.clamp(0.35, 1.0)),
         },
     );
 }
@@ -2843,10 +2943,42 @@ mod tests {
     }
 
     #[test]
+    fn default_play_plan_includes_failed_overlay() {
+        let snapshot = RenderSnapshot { failed_elapsed_ms: Some(500), ..Default::default() };
+
+        let plan = DrawPlan::from_scene(&AppSceneSnapshot::Play(snapshot));
+
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Text { text, .. } if text == "FAILED"
+        )));
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Rect { color, .. } if color.a > 0.0
+        )));
+    }
+
+    #[test]
     fn select_plan_has_non_empty_commands() {
         let plan = DrawPlan::from_scene(&AppSceneSnapshot::Select(Default::default()));
 
         assert!(!plan.commands.is_empty());
+    }
+
+    #[test]
+    fn select_detail_panel_shows_gas_state() {
+        let snapshot = crate::scene::SelectSnapshot {
+            option_panel: 3,
+            gauge_auto_shift: "BEST CLEAR".to_string(),
+            ..Default::default()
+        };
+
+        let plan = DrawPlan::from_scene(&AppSceneSnapshot::Select(snapshot));
+
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Text { text, .. } if text == "GAS      BEST CLEAR"
+        )));
     }
 
     #[test]

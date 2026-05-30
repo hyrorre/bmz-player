@@ -1,6 +1,16 @@
 use bmz_core::clear::{ClearType, GaugeType};
 use bmz_core::judge::Judge;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GaugeAutoShiftMode {
+    #[default]
+    Off,
+    Continue,
+    HardToGroove,
+    BestClear,
+    SelectToUnder,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GaugeModifier {
     None,
@@ -55,6 +65,8 @@ pub struct SingleGaugeState {
 pub struct GaugeState {
     pub selected: GaugeType,
     pub original: GaugeType,
+    pub auto_shift: bool,
+    pub auto_shift_mode: GaugeAutoShiftMode,
     pub gauges: Vec<SingleGaugeState>,
 }
 
@@ -68,7 +80,42 @@ impl GaugeState {
             })
             .collect();
 
-        Self { selected, original: selected, gauges }
+        Self {
+            selected,
+            original: selected,
+            auto_shift: false,
+            auto_shift_mode: GaugeAutoShiftMode::Off,
+            gauges,
+        }
+    }
+
+    pub fn new_auto_shift(total: f64, total_notes: u32) -> Self {
+        Self::new_with_auto_shift(
+            GaugeType::ExHard,
+            GaugeAutoShiftMode::BestClear,
+            total,
+            total_notes,
+        )
+    }
+
+    pub fn new_with_auto_shift(
+        selected: GaugeType,
+        mode: GaugeAutoShiftMode,
+        total: f64,
+        total_notes: u32,
+    ) -> Self {
+        let start = match mode {
+            GaugeAutoShiftMode::BestClear => GaugeType::ExHard,
+            GaugeAutoShiftMode::Off
+            | GaugeAutoShiftMode::Continue
+            | GaugeAutoShiftMode::HardToGroove
+            | GaugeAutoShiftMode::SelectToUnder => selected,
+        };
+        let mut state = Self::new(start, total, total_notes);
+        state.original = selected;
+        state.auto_shift = mode != GaugeAutoShiftMode::Off;
+        state.auto_shift_mode = mode;
+        state
     }
 
     pub fn current(&self) -> &SingleGaugeState {
@@ -82,11 +129,29 @@ impl GaugeState {
         self.current().definition.clear_type
     }
 
+    pub fn current_closes_play_on_zero(&self) -> bool {
+        self.current().value <= self.current().definition.min
+            && self.auto_shift_mode == GaugeAutoShiftMode::Off
+            && gauge_closes_play_on_zero(self.current().definition.gauge_type)
+    }
+
+    pub fn result_gauge(&self) -> &SingleGaugeState {
+        if matches!(
+            self.auto_shift_mode,
+            GaugeAutoShiftMode::BestClear | GaugeAutoShiftMode::SelectToUnder
+        ) {
+            self.best_auto_shift_clear_gauge().unwrap_or_else(|| self.current())
+        } else {
+            self.current()
+        }
+    }
+
     pub fn apply_judge(&mut self, judge: Judge, rate: f32) {
         let index = GaugeJudgeIndex::from(judge);
         for gauge in &mut self.gauges {
             gauge.apply(index, rate);
         }
+        self.auto_shift_if_needed();
     }
 
     /// Mine ノーツを踏んだときの直接ダメージ適用（beatoraja 準拠で
@@ -95,6 +160,7 @@ impl GaugeState {
         for gauge in &mut self.gauges {
             gauge.apply_mine(damage);
         }
+        self.auto_shift_if_needed();
     }
 
     /// HCN 押下中のゲージ増加 (beatoraja 準拠の近似)。
@@ -106,6 +172,7 @@ impl GaugeState {
                 gauge.value = (gauge.value + inc).clamp(gauge.definition.min, gauge.definition.max);
             }
         }
+        self.auto_shift_if_needed();
     }
 
     /// HCN 早離し後のゲージ減衰 (beatoraja 準拠の近似)。
@@ -117,7 +184,86 @@ impl GaugeState {
                 gauge.value = (gauge.value - dec).clamp(gauge.definition.min, gauge.definition.max);
             }
         }
+        self.auto_shift_if_needed();
     }
+
+    fn best_auto_shift_clear_gauge(&self) -> Option<&SingleGaugeState> {
+        AUTO_SHIFT_RESULT_ORDER.iter().find_map(|gauge_type| {
+            if self.auto_shift_mode == GaugeAutoShiftMode::SelectToUnder
+                && auto_shift_result_rank(*gauge_type) > auto_shift_result_rank(self.original)
+            {
+                return None;
+            }
+            self.gauge(*gauge_type).and_then(|gauge| gauge.is_qualified().then_some(gauge))
+        })
+    }
+
+    fn auto_shift_if_needed(&mut self) {
+        match self.auto_shift_mode {
+            GaugeAutoShiftMode::Off | GaugeAutoShiftMode::Continue => {}
+            GaugeAutoShiftMode::HardToGroove => {
+                if self.current().value <= self.current().definition.min
+                    && gauge_closes_play_on_zero(self.selected)
+                {
+                    self.selected = GaugeType::Normal;
+                }
+            }
+            GaugeAutoShiftMode::BestClear | GaugeAutoShiftMode::SelectToUnder => {
+                while self.current().value <= self.current().definition.min {
+                    let Some(next) = next_auto_shift_gauge(self.selected) else {
+                        break;
+                    };
+                    self.selected = next;
+                }
+            }
+        }
+    }
+
+    fn gauge(&self, gauge_type: GaugeType) -> Option<&SingleGaugeState> {
+        self.gauges.iter().find(|gauge| gauge.definition.gauge_type == gauge_type)
+    }
+}
+
+const AUTO_SHIFT_RESULT_ORDER: &[GaugeType] = &[
+    GaugeType::ExHard,
+    GaugeType::Hard,
+    GaugeType::Normal,
+    GaugeType::Easy,
+    GaugeType::AssistEasy,
+];
+
+fn auto_shift_result_rank(gauge_type: GaugeType) -> u8 {
+    match gauge_type {
+        GaugeType::AssistEasy => 0,
+        GaugeType::Easy => 1,
+        GaugeType::Normal => 2,
+        GaugeType::Hard => 3,
+        GaugeType::ExHard => 4,
+        GaugeType::Hazard => 5,
+        GaugeType::Class => 6,
+        GaugeType::ExClass => 7,
+        GaugeType::ExHardClass => 8,
+    }
+}
+
+fn next_auto_shift_gauge(current: GaugeType) -> Option<GaugeType> {
+    match current {
+        GaugeType::ExHard => Some(GaugeType::Hard),
+        GaugeType::Hard => Some(GaugeType::Normal),
+        _ => None,
+    }
+}
+
+fn gauge_closes_play_on_zero(gauge_type: GaugeType) -> bool {
+    matches!(
+        gauge_type,
+        GaugeType::Hard
+            | GaugeType::ExHard
+            | GaugeType::Hazard
+            | GaugeType::Class
+            | GaugeType::ExClass
+            | GaugeType::ExHardClass
+    )
 }
 
 impl SingleGaugeState {
@@ -333,5 +479,108 @@ mod tests {
 
         assert_eq!(gauge.current().value, 0.0);
         assert!(!gauge.current().is_qualified());
+        assert!(gauge.current_closes_play_on_zero());
+    }
+
+    #[test]
+    fn auto_shift_starts_from_exhard_and_falls_back_to_hard() {
+        let mut gauge = GaugeState::new_auto_shift(160.0, 1000);
+
+        gauge.apply_judge(Judge::Poor, 6.0);
+
+        assert!(gauge.auto_shift);
+        assert_eq!(gauge.original, GaugeType::ExHard);
+        assert_eq!(gauge.selected, GaugeType::Hard);
+    }
+
+    #[test]
+    fn auto_shift_result_uses_highest_qualified_gauge() {
+        let mut gauge = GaugeState::new_auto_shift(160.0, 1000);
+
+        gauge
+            .gauges
+            .iter_mut()
+            .find(|gauge| gauge.definition.gauge_type == GaugeType::ExHard)
+            .unwrap()
+            .value = 0.0;
+        gauge
+            .gauges
+            .iter_mut()
+            .find(|gauge| gauge.definition.gauge_type == GaugeType::Hard)
+            .unwrap()
+            .value = 0.0;
+        gauge
+            .gauges
+            .iter_mut()
+            .find(|gauge| gauge.definition.gauge_type == GaugeType::Normal)
+            .unwrap()
+            .value = 70.0;
+        gauge
+            .gauges
+            .iter_mut()
+            .find(|gauge| gauge.definition.gauge_type == GaugeType::Easy)
+            .unwrap()
+            .value = 82.0;
+        gauge.selected = GaugeType::Normal;
+
+        let result_gauge = gauge.result_gauge();
+
+        assert_eq!(result_gauge.definition.gauge_type, GaugeType::Easy);
+    }
+
+    #[test]
+    fn continue_mode_does_not_fail_or_shift_at_zero() {
+        let mut gauge = GaugeState::new_with_auto_shift(
+            GaugeType::Hard,
+            GaugeAutoShiftMode::Continue,
+            160.0,
+            1000,
+        );
+
+        gauge.apply_judge(Judge::Poor, 20.0);
+
+        assert_eq!(gauge.selected, GaugeType::Hard);
+        assert_eq!(gauge.current().value, 0.0);
+        assert!(!gauge.current_closes_play_on_zero());
+    }
+
+    #[test]
+    fn hard_to_groove_shifts_survival_gauge_to_normal() {
+        let mut gauge = GaugeState::new_with_auto_shift(
+            GaugeType::ExHard,
+            GaugeAutoShiftMode::HardToGroove,
+            160.0,
+            1000,
+        );
+
+        gauge.apply_judge(Judge::Poor, 20.0);
+
+        assert_eq!(gauge.selected, GaugeType::Normal);
+    }
+
+    #[test]
+    fn select_to_under_result_does_not_exceed_original_gauge() {
+        let mut gauge = GaugeState::new_with_auto_shift(
+            GaugeType::Hard,
+            GaugeAutoShiftMode::SelectToUnder,
+            160.0,
+            1000,
+        );
+        gauge
+            .gauges
+            .iter_mut()
+            .find(|gauge| gauge.definition.gauge_type == GaugeType::ExHard)
+            .unwrap()
+            .value = 100.0;
+        gauge
+            .gauges
+            .iter_mut()
+            .find(|gauge| gauge.definition.gauge_type == GaugeType::Hard)
+            .unwrap()
+            .value = 90.0;
+
+        let result_gauge = gauge.result_gauge();
+
+        assert_eq!(result_gauge.definition.gauge_type, GaugeType::Hard);
     }
 }

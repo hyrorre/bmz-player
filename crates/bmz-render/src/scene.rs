@@ -26,6 +26,7 @@ pub struct SelectSnapshot {
     pub arrange: String,
     pub target: String,
     pub gauge: String,
+    pub gauge_auto_shift: String,
     pub assist: String,
     pub bga: String,
     pub master_volume: f32,

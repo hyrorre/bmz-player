@@ -25,12 +25,12 @@ impl PlayResult {
         autoplay: bool,
     ) -> Self {
         let failed = state == PlayState::Failed;
-        let current_gauge = gauge.current();
+        let result_gauge = gauge.result_gauge();
         Self {
             chart_sha256: chart.identity.file_sha256,
             clear_type: compute_clear_type(failed, score, gauge),
-            gauge_type: current_gauge.definition.gauge_type,
-            gauge_value: current_gauge.value,
+            gauge_type: result_gauge.definition.gauge_type,
+            gauge_value: result_gauge.value,
             total_notes: chart.total_notes,
             score: score.clone(),
             autoplay,
@@ -76,6 +76,44 @@ mod tests {
         assert!(!result.autoplay);
     }
 
+    #[test]
+    fn play_result_uses_auto_shift_result_gauge() {
+        let chart = chart();
+        let mut score = ScoreState::default();
+        score.past_notes = 1;
+        let mut gauge = GaugeState::new_auto_shift(160.0, 1000);
+        gauge
+            .gauges
+            .iter_mut()
+            .find(|gauge| gauge.definition.gauge_type == GaugeType::ExHard)
+            .unwrap()
+            .value = 0.0;
+        gauge
+            .gauges
+            .iter_mut()
+            .find(|gauge| gauge.definition.gauge_type == GaugeType::Hard)
+            .unwrap()
+            .value = 0.0;
+        gauge
+            .gauges
+            .iter_mut()
+            .find(|gauge| gauge.definition.gauge_type == GaugeType::Normal)
+            .unwrap()
+            .value = 70.0;
+        gauge
+            .gauges
+            .iter_mut()
+            .find(|gauge| gauge.definition.gauge_type == GaugeType::Easy)
+            .unwrap()
+            .value = 82.0;
+
+        let result = PlayResult::from_states(&chart, &score, &gauge, PlayState::Finished, false);
+
+        assert_eq!(result.clear_type, ClearType::Easy);
+        assert_eq!(result.gauge_type, GaugeType::Easy);
+        assert_eq!(result.gauge_value, 82.0);
+    }
+
     fn chart() -> PlayableChart {
         PlayableChart {
             identity: compute_chart_identity(b"chart"),
@@ -112,6 +150,8 @@ mod tests {
         GaugeState {
             selected: GaugeType::Normal,
             original: GaugeType::Normal,
+            auto_shift: false,
+            auto_shift_mode: crate::gauge::GaugeAutoShiftMode::Off,
             gauges: vec![SingleGaugeState {
                 definition: GaugeRuntimeDefinition {
                     gauge_type: GaugeType::Normal,

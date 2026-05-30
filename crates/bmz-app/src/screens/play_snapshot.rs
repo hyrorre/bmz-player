@@ -83,6 +83,7 @@ pub fn build_render_snapshot_with_target_and_bga_frames(
         fast_slow_counts: display_fast_slow_counts(session),
         gauge: session.gauge.current().value,
         gauge_type: session.gauge.current().definition.gauge_type as i32,
+        gauge_auto_shift: session.gauge.auto_shift,
         gauge_max: session.gauge.current().definition.max,
         gauge_border: session.gauge.current().definition.border,
         hispeed: session.hispeed,

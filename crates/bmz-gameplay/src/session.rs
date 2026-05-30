@@ -204,7 +204,14 @@ pub fn apply_judge_outcome(
         session.gauge.apply_mine(hit.damage);
         session.pending_mine_hits.push(hit);
     }
+    update_failed_state_from_gauge(session);
     events
+}
+
+fn update_failed_state_from_gauge(session: &mut GameSession) {
+    if session.state == PlayState::Playing && session.gauge.current_closes_play_on_zero() {
+        session.state = PlayState::Failed;
+    }
 }
 
 pub fn schedule_keysounds(
@@ -446,6 +453,7 @@ pub fn advance_session_frame(
         }
         judgements.extend(process_misses(session, times.audio_now));
         apply_hcn_gauge(session, times.audio_now);
+        update_failed_state_from_gauge(session);
         schedule_keysounds(session, &judgements, audio);
         update_recent_judgements(session, &judgements, times.render_now);
         update_full_combo_timer(session, &judgements);
@@ -538,6 +546,37 @@ mod tests {
         advance_session_frame(&mut session, &mut audio);
 
         assert_eq!(session.full_combo_started_at, Some(TimeUs(0)));
+    }
+
+    #[test]
+    fn hard_gauge_zero_moves_session_to_failed() {
+        let mut session = session_with_autoplay(chart_with_keysound());
+        session.state = PlayState::Playing;
+        session.gauge = GaugeState::new(bmz_core::clear::GaugeType::Hard, 160.0, 1000);
+        session
+            .gauge
+            .gauges
+            .iter_mut()
+            .find(|gauge| gauge.definition.gauge_type == bmz_core::clear::GaugeType::Hard)
+            .unwrap()
+            .value = 0.0;
+
+        update_failed_state_from_gauge(&mut session);
+
+        assert_eq!(session.state, PlayState::Failed);
+    }
+
+    #[test]
+    fn auto_shift_hard_zero_falls_back_without_failed_state() {
+        let mut session = session_with_autoplay(chart_with_keysound());
+        session.state = PlayState::Playing;
+        session.gauge = GaugeState::new_auto_shift(160.0, 1000);
+
+        session.gauge.apply_judge(Judge::Poor, 6.0);
+        update_failed_state_from_gauge(&mut session);
+
+        assert_eq!(session.state, PlayState::Playing);
+        assert_eq!(session.gauge.selected, bmz_core::clear::GaugeType::Hard);
     }
 
     #[test]

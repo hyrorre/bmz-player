@@ -1,11 +1,14 @@
 use bmz_core::clear::GaugeType;
 use bmz_core::lane::Lane;
+use bmz_gameplay::gauge::GaugeAutoShiftMode;
 use bmz_gameplay::input::backend::PhysicalControl;
 use bmz_gameplay::input::binding::{BindingEntry, LaneBinding};
 use bmz_gameplay::judge::model::JudgeWindow;
 use bmz_gameplay::session::{PlayAudioMix, PlayOffsets};
 
-use super::profile_config::{GaugeTypeConfig, LaneConfig, ProfileConfig, ProfileInputConfig};
+use super::profile_config::{
+    GaugeAutoShiftConfig, GaugeTypeConfig, LaneConfig, ProfileConfig, ProfileInputConfig,
+};
 
 pub const DEFAULT_JUDGE_WINDOW: JudgeWindow = JudgeWindow {
     pgreat_us: 16_000,
@@ -38,8 +41,25 @@ pub fn gauge_type_from_config(config: GaugeTypeConfig) -> GaugeType {
         GaugeTypeConfig::Easy => GaugeType::Easy,
         GaugeTypeConfig::Normal => GaugeType::Normal,
         GaugeTypeConfig::Hard => GaugeType::Hard,
-        GaugeTypeConfig::ExHard => GaugeType::ExHard,
+        GaugeTypeConfig::ExHard | GaugeTypeConfig::AutoShift => GaugeType::ExHard,
         GaugeTypeConfig::Hazard => GaugeType::Hazard,
+    }
+}
+
+pub fn gauge_auto_shift_from_config(
+    gauge: GaugeTypeConfig,
+    config: GaugeAutoShiftConfig,
+) -> GaugeAutoShiftMode {
+    if matches!(gauge, GaugeTypeConfig::AutoShift) {
+        GaugeAutoShiftMode::BestClear
+    } else {
+        match config {
+            GaugeAutoShiftConfig::Off => GaugeAutoShiftMode::Off,
+            GaugeAutoShiftConfig::Continue => GaugeAutoShiftMode::Continue,
+            GaugeAutoShiftConfig::HardToGroove => GaugeAutoShiftMode::HardToGroove,
+            GaugeAutoShiftConfig::BestClear => GaugeAutoShiftMode::BestClear,
+            GaugeAutoShiftConfig::SelectToUnder => GaugeAutoShiftMode::SelectToUnder,
+        }
     }
 }
 
@@ -126,6 +146,15 @@ mod tests {
     #[test]
     fn maps_profile_enums_to_runtime_types() {
         assert_eq!(gauge_type_from_config(GaugeTypeConfig::Hard), GaugeType::Hard);
+        assert_eq!(gauge_type_from_config(GaugeTypeConfig::AutoShift), GaugeType::ExHard);
+        assert_eq!(
+            gauge_auto_shift_from_config(GaugeTypeConfig::AutoShift, GaugeAutoShiftConfig::Off),
+            GaugeAutoShiftMode::BestClear
+        );
+        assert_eq!(
+            gauge_auto_shift_from_config(GaugeTypeConfig::ExHard, GaugeAutoShiftConfig::Off),
+            GaugeAutoShiftMode::Off
+        );
         assert_eq!(lane_from_config(LaneConfig::Key7), Lane::Key7);
     }
 

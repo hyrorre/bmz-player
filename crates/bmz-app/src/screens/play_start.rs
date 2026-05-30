@@ -8,8 +8,8 @@ use bmz_gameplay::replay::ReplayPlayer;
 
 use crate::audio::{RunningPlaySession, open_prepared_play_audio};
 use crate::config::app_config::AppConfig;
-use crate::config::play::gauge_type_from_config;
-use crate::config::profile_config::{GaugeTypeConfig, ProfileConfig};
+use crate::config::play::{gauge_auto_shift_from_config, gauge_type_from_config};
+use crate::config::profile_config::{GaugeAutoShiftConfig, GaugeTypeConfig, ProfileConfig};
 use crate::input::winit::WinitInputBackend;
 use crate::screens::play_session::{
     PlaySessionOptions, PreloadedPlaySession, PreparedPlaySession,
@@ -27,6 +27,7 @@ pub struct PlayStartOptions {
     pub chart_zero_time: TimeUs,
     /// Override profile gauge type. None means use the profile default.
     pub gauge: Option<GaugeTypeConfig>,
+    pub gauge_auto_shift: GaugeAutoShiftConfig,
     pub arrange: ArrangeOption,
     pub target: TargetOption,
     pub arrange_seed: Option<i64>,
@@ -58,6 +59,10 @@ pub fn play_session_options_from_start(
         replay_player: start_options.replay_player,
         sample_rate: app_config.audio.sample_rate,
         gauge_override: start_options.gauge.map(gauge_type_from_config),
+        gauge_auto_shift: start_options
+            .gauge
+            .map(|gauge| gauge_auto_shift_from_config(gauge, start_options.gauge_auto_shift))
+            .unwrap_or_default(),
         arrange: start_options.arrange,
         target: start_options.target,
         arrange_seed: start_options.arrange_seed,

@@ -47,6 +47,8 @@ pub struct RenderSnapshot {
     pub fast_slow_counts: FastSlowJudgeCounts,
     pub gauge: f32,
     pub gauge_type: i32,
+    /// Gauge Auto Shift が有効なプレイかどうか。
+    pub gauge_auto_shift: bool,
     /// 現在ゲージの上限 (beatoraja `GaugeElementProperty.max`)。
     pub gauge_max: f32,
     /// 現在ゲージの合格ライン (beatoraja `GaugeElementProperty.border`)。

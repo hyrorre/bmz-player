@@ -27,6 +27,8 @@ pub struct ProfileConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayDefaultsConfig {
     pub gauge: GaugeTypeConfig,
+    #[serde(default)]
+    pub gauge_auto_shift: GaugeAutoShiftConfig,
     pub random: RandomOptionConfig,
     #[serde(default)]
     pub target: TargetOptionConfig,
@@ -69,7 +71,7 @@ pub enum BgaExpandConfig {
     Off,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum GaugeTypeConfig {
     AssistEasy,
@@ -77,7 +79,20 @@ pub enum GaugeTypeConfig {
     Normal,
     Hard,
     ExHard,
+    /// Legacy in-development value. New configs should use `gauge_auto_shift`.
+    AutoShift,
     Hazard,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum GaugeAutoShiftConfig {
+    #[default]
+    Off,
+    Continue,
+    HardToGroove,
+    BestClear,
+    SelectToUnder,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -477,6 +492,7 @@ impl ProfileConfig {
             updated_at: now,
             play: PlayDefaultsConfig {
                 gauge: GaugeTypeConfig::Normal,
+                gauge_auto_shift: GaugeAutoShiftConfig::Off,
                 random: RandomOptionConfig::Off,
                 target: TargetOptionConfig::None,
                 lane_effect: LaneEffectConfig::Off,
@@ -551,7 +567,7 @@ pub fn default_keyboard_bindings() -> Vec<BindingConfigEntry> {
         action_binding("X", InputActionConfig::SelectEnter),
         action_binding("C", InputActionConfig::SelectEnter),
         action_binding("V", InputActionConfig::SelectEnter),
-        action_binding("S", InputActionConfig::E2),
+        action_binding("W", InputActionConfig::E2),
         action_binding("Z", InputActionConfig::SelectOptionArrange),
         action_binding("X", InputActionConfig::SelectOptionGauge),
         action_binding("C", InputActionConfig::SelectOptionAssist),
