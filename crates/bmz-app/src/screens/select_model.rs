@@ -167,6 +167,9 @@ pub struct SelectCourseRow {
     /// `course_scores` table; `None` when the course has never been played
     /// successfully or when the lookup failed.
     pub best_score: Option<crate::storage::library_db::CourseBestScore>,
+    /// Which of the four course replay slots have a saved attempt.  Used by
+    /// the select skin to render slot indicators on course rows.
+    pub replay_slots: [bool; 4],
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -303,6 +306,14 @@ fn build_select_course_row(
         tracing::warn!(%error, course_id = stored.id, "failed to load best course score");
         None
     });
+    let replay_slots = library_db.course_replay_slot_presence(stored.id).unwrap_or_else(|error| {
+        tracing::warn!(
+            %error,
+            course_id = stored.id,
+            "failed to load course_replay_slot_presence"
+        );
+        [false; 4]
+    });
 
     SelectItem::Course(SelectCourseRow {
         course_id: stored.id,
@@ -318,6 +329,7 @@ fn build_select_course_row(
         trophy_names,
         entry_previews,
         best_score,
+        replay_slots,
     })
 }
 

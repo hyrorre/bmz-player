@@ -1839,6 +1839,21 @@ impl WinitApp {
                             "failed to tag score_history rows with course_score_id"
                         );
                     }
+
+                    // Update the four course replay slots that pass their
+                    // configured rule.  Reuses the per-chart slot_rule_passes
+                    // helper for identical semantics (Always overwrites
+                    // unconditionally; Score / MissCount / MaxCombo / Clear
+                    // require strict improvement; empty slot always wins).
+                    self.update_course_replay_slots(
+                        course_id,
+                        course_score_id,
+                        played_at,
+                        course_result.total_ex_score,
+                        miss_count,
+                        max_combo,
+                        final_clear_type as u8,
+                    );
                 }
                 Err(error) => {
                     tracing::error!(%error, course_id, "failed to persist course score");
@@ -1852,6 +1867,64 @@ impl WinitApp {
             self.finished_play = Some(last);
             self.result_scene_started_at = Instant::now();
             self.ensure_skin_ready(SkinKind::Result);
+        }
+    }
+
+    fn update_course_replay_slots(
+        &mut self,
+        course_id: i64,
+        course_score_id: i64,
+        played_at: i64,
+        ex_score: u32,
+        miss_count: u32,
+        max_combo: u32,
+        clear_rank: u8,
+    ) {
+        let slot_rules = self.boot.profile_config.replay.slot_rules;
+        let candidate = crate::storage::play_result::CandidateMetrics {
+            ex_score,
+            miss_count,
+            max_combo,
+            clear_rank,
+        };
+        for (slot_index, &rule) in slot_rules.iter().enumerate() {
+            let slot = slot_index as u8;
+            let prev = match self.boot.library_db.course_replay_slot(course_id, slot) {
+                Ok(record) => record,
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        course_id,
+                        slot,
+                        "failed to read course_replay_slot; skipping rule eval"
+                    );
+                    continue;
+                }
+            };
+            let prev_metrics =
+                prev.as_ref().map(|p| (p.ex_score, p.miss_count, p.max_combo, p.clear_rank));
+            if !crate::storage::play_result::slot_rule_passes(rule, prev_metrics, &candidate) {
+                continue;
+            }
+            let record = crate::storage::library_db::CourseReplaySlotRecord {
+                course_id,
+                slot,
+                rule: rule.as_str().to_string(),
+                course_score_id,
+                played_at,
+                ex_score,
+                miss_count,
+                max_combo,
+                clear_rank,
+            };
+            if let Err(error) = self.boot.library_db.upsert_course_replay_slot(&record) {
+                tracing::warn!(
+                    %error,
+                    course_id,
+                    slot,
+                    "failed to upsert course_replay_slot"
+                );
+            }
         }
     }
 
@@ -2216,12 +2289,10 @@ impl WinitApp {
         if let Some(chart_id) = self.currently_selected_chart_id() {
             return self.try_start_replay_for_chart(chart_id, slot);
         }
-        // Otherwise, if the cursor is on a course row, try to replay the
-        // latest attempt.  All four digit slots map to "latest" for now —
-        // course_replay_slots (the equivalent of `replay_slots` for courses)
-        // is not yet implemented, so distinguishing slots would be misleading.
+        // Otherwise, if the cursor is on a course row, try to launch the
+        // course replay stored in the requested slot.
         if let Some(course_id) = self.currently_selected_course_id() {
-            return self.try_start_course_replay_latest(course_id, slot);
+            return self.try_start_course_replay_for_slot(course_id, slot);
         }
         false
     }
@@ -2240,27 +2311,28 @@ impl WinitApp {
         }
     }
 
-    fn try_start_course_replay_latest(&mut self, course_id: i64, slot: u8) -> bool {
-        match self.boot.library_db.latest_course_score_id(course_id) {
-            Ok(Some(course_score_id)) => {
+    fn try_start_course_replay_for_slot(&mut self, course_id: i64, slot: u8) -> bool {
+        match self.boot.library_db.course_replay_slot(course_id, slot) {
+            Ok(Some(record)) => {
                 tracing::info!(
                     course_id,
-                    course_score_id,
+                    course_score_id = record.course_score_id,
                     slot,
                     "starting course replay from select"
                 );
-                self.start_course_replay(course_id, course_score_id);
+                self.start_course_replay(course_id, record.course_score_id);
                 true
             }
             Ok(None) => {
-                tracing::info!(course_id, slot, "no saved course attempt to replay");
+                tracing::info!(course_id, slot, "no saved course attempt in this replay slot");
                 false
             }
             Err(error) => {
                 tracing::error!(
                     %error,
                     course_id,
-                    "failed to look up latest course score for replay"
+                    slot,
+                    "failed to look up course_replay_slot"
                 );
                 false
             }
@@ -4329,7 +4401,7 @@ fn select_snapshot_rows(
                     ex_score: row.best_score.as_ref().map(|best| best.ex_score),
                     max_combo: row.best_score.as_ref().map(|best| best.max_combo),
                     gauge_value: row.best_score.as_ref().map(|best| best.gauge_value),
-                    replay_slots: [false; 4],
+                    replay_slots: row.replay_slots,
                     is_folder: false,
                     kind: bmz_render::scene::SelectRowKind::Course,
                     in_library: row.resolved_count > 0,

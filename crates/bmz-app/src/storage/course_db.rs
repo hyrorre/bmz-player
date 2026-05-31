@@ -552,12 +552,8 @@ pub(super) fn course_replay_slots_for_course(
     Ok(out)
 }
 
-pub(super) fn course_replay_slot_presence(
-    conn: &Connection,
-    course_id: i64,
-) -> Result<[bool; 4]> {
-    let mut stmt =
-        conn.prepare("SELECT slot FROM course_replay_slots WHERE course_id = ?1")?;
+pub(super) fn course_replay_slot_presence(conn: &Connection, course_id: i64) -> Result<[bool; 4]> {
+    let mut stmt = conn.prepare("SELECT slot FROM course_replay_slots WHERE course_id = ?1")?;
     let mut out = [false; 4];
     let rows = stmt.query_map(params![course_id], |row| row.get::<_, u8>(0))?;
     for row in rows {
@@ -949,7 +945,10 @@ mod tests {
         upsert_course_replay_slot(&mut conn, &sample_slot_record(course_id, 2, score_id, 10))
             .unwrap();
 
-        assert_eq!(course_replay_slot_presence(&conn, course_id).unwrap(), [false, true, true, false]);
+        assert_eq!(
+            course_replay_slot_presence(&conn, course_id).unwrap(),
+            [false, true, true, false]
+        );
         // Empty course has no slots set.
         let mut other = course();
         other.key = "other.json#0".to_string();
