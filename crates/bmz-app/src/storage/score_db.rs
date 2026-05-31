@@ -105,6 +105,11 @@ pub struct ScoreHistoryEntry {
     pub max_combo: u32,
     pub autoplay: bool,
     pub replay_path: String,
+    /// `library.db`'s `course_scores.id` if this chart play happened as part
+    /// of a course attempt, otherwise `None`.  No cross-database FK is
+    /// enforced — callers can join against `library.db.course_scores` if
+    /// they need the attempt details.
+    pub course_score_id: Option<i64>,
 }
 
 impl ScoreDatabase {
@@ -333,7 +338,8 @@ impl ScoreDatabase {
                 ex_score,
                 max_combo,
                 autoplay,
-                replay_path
+                replay_path,
+                course_score_id
             FROM score_history
             ORDER BY played_at DESC, id DESC
             LIMIT ?1 OFFSET ?2",
@@ -394,6 +400,7 @@ fn score_history_entry_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Sco
         max_combo: row.get(8)?,
         autoplay: row.get(9)?,
         replay_path: row.get(10)?,
+        course_score_id: row.get(11)?,
     })
 }
 
@@ -899,6 +906,31 @@ mod tests {
         assert_eq!(history[0].played_at, 2);
         assert!(history[0].autoplay);
         assert_eq!(history[1].chart_sha256, [1; 32]);
+    }
+
+    #[test]
+    fn recent_history_exposes_course_score_id_when_tagged() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut db = ScoreDatabase::from_connection(conn);
+
+        let mut solo = record(20, ClearType::Normal);
+        solo.chart_sha256 = [1; 32];
+        let solo_id = db.insert_score(&solo).unwrap();
+
+        let mut course_play = record(30, ClearType::Easy);
+        course_play.chart_sha256 = [2; 32];
+        let course_play_id = db.insert_score(&course_play).unwrap();
+
+        // Tag the course-attempt row only.
+        db.tag_score_history_with_course(&[course_play_id], 77).unwrap();
+
+        let history = db.recent_history(10, 0).unwrap();
+        let by_id: std::collections::HashMap<i64, &ScoreHistoryEntry> =
+            history.iter().map(|h| (h.id, h)).collect();
+        assert_eq!(by_id.get(&solo_id).unwrap().course_score_id, None);
+        assert_eq!(by_id.get(&course_play_id).unwrap().course_score_id, Some(77));
     }
 
     #[test]
