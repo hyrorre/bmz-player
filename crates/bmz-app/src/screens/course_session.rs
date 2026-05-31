@@ -207,6 +207,7 @@ mod tests {
                             },
                             &bmz_chart::model::ChartMetadata::default(),
                         ),
+                        replay_playback: false,
                     },
                 }
             })
@@ -313,6 +314,7 @@ mod tests {
                             },
                             &bmz_chart::model::ChartMetadata::default(),
                         ),
+                        replay_playback: false,
                     },
                 }
             })

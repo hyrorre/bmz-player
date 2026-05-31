@@ -1730,6 +1730,7 @@ impl WinitApp {
             })
             .collect();
         let any_autoplay = course.entry_results.iter().any(|r| r.finished.result.autoplay);
+        let any_replay_playback = course.entry_results.iter().any(|r| r.finished.replay_playback);
         // Collect score_history row ids written by per-chart store_play_result
         // so they can be tagged with the new course_score_id after insert.
         // Autoplay charts have score_history_id == 0 and are filtered out.
@@ -1777,8 +1778,8 @@ impl WinitApp {
         );
         // Persist course score + per-chart replay paths.
         //
-        // - Autoplay courses are not saved, matching the per-chart autoplay
-        //   policy in `store_play_result`.
+        // - Autoplay / replay playback courses are not saved, matching the
+        //   per-chart policy in `finish_session_result`.
         // - The course clear type is taken from the last played chart's
         //   gauge survival result; a Failed at any point forces Failed.
         // - The per-chart replay files have already been written by
@@ -1788,7 +1789,7 @@ impl WinitApp {
         // - TODO(course-replay-reload): launching a course via a "replay slot"
         //   from the select screen is out of scope for this change; only the
         //   save path is wired up.
-        if !any_autoplay {
+        if !any_autoplay && !any_replay_playback {
             let final_clear_type = if course_result.course_failed {
                 bmz_core::clear::ClearType::Failed
             } else {

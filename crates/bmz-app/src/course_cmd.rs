@@ -74,7 +74,8 @@ fn list_courses() -> Result<()> {
         let missing =
             course.definition.entries.iter().filter(|entry| entry.chart_id.is_none()).count();
         println!(
-            "[{}] {} — {} chart(s), {} missing ({})",
+            "#{} [{}] {} — {} chart(s), {} missing ({})",
+            course.id,
             kind_label(course.definition.kind),
             course.definition.title,
             course.definition.entries.len(),
