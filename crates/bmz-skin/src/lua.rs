@@ -1796,6 +1796,12 @@ fn lua_table_to_json(
                 } else if let Some(value_expr) = infer_value_float_expr(function, main_state_probe)
                 {
                     object.insert("value_expr".to_string(), JsonValue::String(value_expr));
+                } else if path.contains(".text[")
+                    && let Some(text) = infer_constant_text_at_load(function)
+                {
+                    object.insert("constantText".to_string(), JsonValue::String(text));
+                } else if let Some(value_expr) = infer_constant_number_at_load(function) {
+                    object.insert("value_expr".to_string(), JsonValue::String(value_expr));
                 } else {
                     warnings.push(format!("skipping unsupported value function at {path}.{key}"));
                 }
@@ -1820,7 +1826,7 @@ fn lua_table_to_json(
             }
         }
         if is_unsupported_json_field_value(&value) {
-            if should_silently_skip_loader_field(&key, &value) {
+            if should_silently_skip_loader_field(path, &key, &value) {
                 continue;
             }
             warnings.push(format!("skipping unsupported field `{key}` at {path}"));
@@ -2364,6 +2370,24 @@ fn infer_constant_draw_at_load(function: &Function) -> Option<String> {
     match function.call::<bool>(()).ok() {
         Some(true) => Some("number(0) >= 0".to_string()),
         Some(false) => Some("number(0) < 0".to_string()),
+        _ => None,
+    }
+}
+
+fn infer_constant_text_at_load(function: &Function) -> Option<String> {
+    match function.call::<Value>(()).ok()? {
+        Value::String(value) => Some(value.to_string_lossy()),
+        Value::Integer(value) => Some(value.to_string()),
+        Value::Number(value) if value.is_finite() => Some(value.to_string()),
+        Value::Boolean(value) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn infer_constant_number_at_load(function: &Function) -> Option<String> {
+    match function.call::<Value>(()).ok()? {
+        Value::Integer(value) => Some(value.to_string()),
+        Value::Number(value) if value.is_finite() => Some(value.to_string()),
         _ => None,
     }
 }
@@ -3075,10 +3099,12 @@ fn is_unsupported_json_field_value(value: &Value) -> bool {
 
 /// beatoraja Lua skin loader が document/header に残すコールバック。
 /// BMZ は `.luaskin` 実行結果だけを使い、関数参照自体は JSON 化しない。
-const SILENTLY_SKIPPED_LOADER_FIELDS: &[&str] = &["process", "main", "processHeader"];
+const SILENTLY_SKIPPED_LOADER_FIELDS: &[&str] = &["process", "main", "processHeader", "act"];
 
-fn should_silently_skip_loader_field(key: &str, value: &Value) -> bool {
-    SILENTLY_SKIPPED_LOADER_FIELDS.contains(&key) && matches!(value, Value::Function(_))
+fn should_silently_skip_loader_field(path: &str, key: &str, value: &Value) -> bool {
+    matches!(value, Value::Function(_))
+        && (SILENTLY_SKIPPED_LOADER_FIELDS.contains(&key)
+            || (key == "timer" && path.contains(".customTimers[")))
 }
 
 fn lua_key_to_json_key(key: Value, path: &str, warnings: &mut Vec<String>) -> Result<String> {

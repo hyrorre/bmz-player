@@ -614,6 +614,68 @@ mod tests {
     }
 
     #[test]
+    fn lua_skin_value_functions_fall_back_to_load_time_constants() {
+        let root = unique_test_dir("bmz-skin-lua");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("select.luaskin"),
+            r#"
+            return {
+                type = 0,
+                value = {
+                    { id = "num", src = 1, x = 0, y = 0, w = 10, h = 10, value = function() return 42 end }
+                },
+                graph = {
+                    { id = "graph", src = 1, x = 0, y = 0, w = 10, h = 10, value = function() return 0.25 end }
+                },
+                text = {
+                    { id = "text", font = 1, size = 16, value = function() return "ready" end }
+                }
+            }
+            "#,
+        )
+        .unwrap();
+
+        let loaded =
+            load_lua_skin_value(&root.join("select.luaskin"), &BTreeMap::new(), &BTreeMap::new())
+                .unwrap();
+
+        assert!(loaded.warnings.is_empty());
+        assert_eq!(loaded.value["value"][0]["value_expr"], "42");
+        assert_eq!(loaded.value["graph"][0]["value_expr"], "0.25");
+        assert_eq!(loaded.value["text"][0]["constantText"], "ready");
+    }
+
+    #[test]
+    fn lua_skin_silently_skips_loader_callback_fields() {
+        let root = unique_test_dir("bmz-skin-lua");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("select.luaskin"),
+            r#"
+            return {
+                type = 0,
+                image = {
+                    { id = "button", src = "src", x = 0, y = 0, w = 10, h = 10, act = function() return true end }
+                },
+                customTimers = {
+                    { id = 9001, timer = function() return 0 end }
+                }
+            }
+            "#,
+        )
+        .unwrap();
+
+        let loaded =
+            load_lua_skin_value(&root.join("select.luaskin"), &BTreeMap::new(), &BTreeMap::new())
+                .unwrap();
+
+        assert!(loaded.warnings.is_empty());
+        assert!(loaded.value["image"][0].get("act").is_none());
+        assert!(loaded.value["customTimers"][0].get("timer").is_none());
+    }
+
+    #[test]
     fn lua_skin_config_get_path_prefers_filepath_default() {
         let root = unique_test_dir("bmz-skin-lua");
         fs::create_dir_all(root.join("parts")).unwrap();
