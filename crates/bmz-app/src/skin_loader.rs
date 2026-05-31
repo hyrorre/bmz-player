@@ -51,8 +51,14 @@ pub fn play_skin_selection_for(skin: &SkinConfig, key_mode: KeyMode) -> PlaySkin
             options: &skin.play14_options,
             files: &skin.play14_files,
         },
-        // play9 / Qwilight 系未実装の間は 7K プレイスキンへフォールバック。
-        KeyMode::K4 | KeyMode::K6 | KeyMode::K8 | KeyMode::K9 => PlaySkinSelection {
+        KeyMode::K9 => PlaySkinSelection {
+            key_mode,
+            path: skin.play9.as_str(),
+            options: &skin.play9_options,
+            files: &skin.play9_files,
+        },
+        // Qwilight 系未実装の間は 7K プレイスキンへフォールバック。
+        KeyMode::K4 | KeyMode::K6 | KeyMode::K8 => PlaySkinSelection {
             key_mode,
             path: skin.play7.as_str(),
             options: &skin.play7_options,
@@ -1281,12 +1287,14 @@ mod tests {
         let mut skin = SkinConfig {
             play5: "skin5.json".to_string(),
             play7: "skin7.json".to_string(),
+            play9: "skin9.json".to_string(),
             play10: "skin10.json".to_string(),
             play14: "skin14.json".to_string(),
             ..SkinConfig::default()
         };
         skin.play5_options.insert("a".to_string(), "x".to_string());
         skin.play7_options.insert("b".to_string(), "y".to_string());
+        skin.play9_options.insert("e".to_string(), "p".to_string());
         skin.play10_files.insert("c".to_string(), "z.png".to_string());
         skin.play14_files.insert("d".to_string(), "w.png".to_string());
 
@@ -1297,6 +1305,10 @@ mod tests {
         let s7 = play_skin_selection_for(&skin, KeyMode::K7);
         assert_eq!(s7.path, "skin7.json");
         assert!(s7.options.contains_key("b"));
+
+        let s9 = play_skin_selection_for(&skin, KeyMode::K9);
+        assert_eq!(s9.path, "skin9.json");
+        assert!(s9.options.contains_key("e"));
 
         let s10 = play_skin_selection_for(&skin, KeyMode::K10);
         assert_eq!(s10.path, "skin10.json");

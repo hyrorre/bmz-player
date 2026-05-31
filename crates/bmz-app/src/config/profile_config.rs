@@ -417,6 +417,10 @@ pub struct SkinConfig {
     /// 14K プレイ画面スキンのパス。フォーマットは [`play5`] と同じ。
     #[serde(default)]
     pub play14: String,
+    /// 9K プレイ画面スキンのパス (PMS / Pop'n)。フォーマットは [`play5`] と同じ。
+    /// 空文字列なら内蔵デフォルトスキンを使用。
+    #[serde(default)]
+    pub play9: String,
     /// リザルト画面スキンのパス。
     /// 空文字列なら bmz の固定描画を使用。
     /// `.json` で終わるパスは beatoraja JSON スキンとして扱う。
@@ -442,6 +446,9 @@ pub struct SkinConfig {
     /// 14K プレイスキンのカスタマイズオプション選択。
     #[serde(default)]
     pub play14_options: BTreeMap<String, String>,
+    /// 9K プレイスキンのカスタマイズオプション選択。
+    #[serde(default)]
+    pub play9_options: BTreeMap<String, String>,
     /// リザルトスキンのカスタマイズオプション選択。
     #[serde(default)]
     pub result_options: BTreeMap<String, String>,
@@ -463,6 +470,9 @@ pub struct SkinConfig {
     /// 14K プレイスキンのファイル選択。
     #[serde(default)]
     pub play14_files: BTreeMap<String, String>,
+    /// 9K プレイスキンのファイル選択。
+    #[serde(default)]
+    pub play9_files: BTreeMap<String, String>,
     /// リザルトスキンのファイル選択。
     #[serde(default)]
     pub result_files: BTreeMap<String, String>,
