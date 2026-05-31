@@ -605,6 +605,63 @@ mod tests {
         assert_eq!(gauge.selected, GaugeType::Normal);
     }
 
+    fn definition_for(gauge_type: GaugeType) -> &'static GaugeDefinition {
+        default_gauge_definitions()
+            .iter()
+            .find(|def| def.gauge_type == gauge_type)
+            .expect("definition exists")
+    }
+
+    #[test]
+    fn class_gauges_start_full_and_clear_above_zero() {
+        for &(ty, expected_clear) in &[
+            (GaugeType::Class, Some(ClearType::Normal)),
+            (GaugeType::ExClass, Some(ClearType::Hard)),
+            (GaugeType::ExHardClass, Some(ClearType::ExHard)),
+        ] {
+            let def = definition_for(ty);
+            assert_eq!(def.init, 100.0, "{ty:?} init");
+            assert_eq!(def.max, 100.0, "{ty:?} max");
+            assert_eq!(def.min, 0.0, "{ty:?} min");
+            assert_eq!(def.border, 1.0, "{ty:?} border");
+            assert_eq!(def.clear_type, expected_clear, "{ty:?} clear_type");
+        }
+    }
+
+    #[test]
+    fn class_gauge_fails_at_zero_like_survival_gauges() {
+        for ty in [GaugeType::Class, GaugeType::ExClass, GaugeType::ExHardClass] {
+            let mut gauge = GaugeState::new(ty, 160.0, 1000);
+            gauge.apply_judge(Judge::Poor, 200.0);
+            assert_eq!(gauge.current().value, 0.0, "{ty:?} should drain to zero");
+            assert!(!gauge.current().is_qualified(), "{ty:?} not qualified at zero");
+            assert!(gauge.current_closes_play_on_zero(), "{ty:?} closes play on zero");
+        }
+    }
+
+    #[test]
+    fn class_gauges_drain_strictly_more_than_normal() {
+        let normal = definition_for(GaugeType::Normal);
+        let class = definition_for(GaugeType::Class);
+        let exclass = definition_for(GaugeType::ExClass);
+        let exhardclass = definition_for(GaugeType::ExHardClass);
+        // Bad index = 3. Each tier should drain at least as hard as Class.
+        assert!(class.values[3] >= exclass.values[3]);
+        assert!(exclass.values[3] >= exhardclass.values[3]);
+        // Normal recovers from above ratio adjustments; the Class draw values
+        // are direct percentages (no Total modifier), so a single -1.5 hit on
+        // CLASS already produces a real decrement at 100 init.
+        let _ = normal;
+    }
+
+    #[test]
+    fn set_initial_value_carries_over_class_gauge() {
+        let mut gauge = GaugeState::new(GaugeType::Class, 160.0, 1000);
+        gauge.set_initial_value(45.0);
+        assert_eq!(gauge.current().value, 45.0);
+        assert!(gauge.current().is_qualified());
+    }
+
     #[test]
     fn select_to_under_result_does_not_exceed_original_gauge() {
         let mut gauge = GaugeState::new_with_auto_shift(

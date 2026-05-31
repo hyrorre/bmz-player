@@ -287,6 +287,7 @@ fn course_gauge_for(gauge: GaugeTypeConfig) -> GaugeType {
 mod tests {
     use super::*;
     use crate::config::app_config::AppConfig;
+    use bmz_core::course::CourseGaugeConstraint;
     use winit::event::ElementState;
     use winit::keyboard::{KeyCode, PhysicalKey};
 
@@ -303,6 +304,69 @@ mod tests {
         assert!(options.autoplay);
         assert_eq!(options.sample_rate, 96_000);
         assert!(options.replay_player.is_none());
+    }
+
+    fn default_constraints() -> CourseConstraints {
+        CourseConstraints {
+            gauge: CourseGaugeConstraint::Default,
+            judge: CourseJudgeConstraint::Normal,
+            ln: CourseLnConstraint::Default,
+            speed: CourseSpeedConstraint::Free,
+            class: CourseClassConstraint::None,
+            source_constraints: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn course_constraints_pick_class_gauge_for_groove_selections() {
+        for (selected, expected) in [
+            (GaugeTypeConfig::AssistEasy, GaugeType::Class),
+            (GaugeTypeConfig::Easy, GaugeType::Class),
+            (GaugeTypeConfig::Normal, GaugeType::Class),
+            (GaugeTypeConfig::Hard, GaugeType::ExClass),
+            (GaugeTypeConfig::ExHard, GaugeType::ExHardClass),
+            (GaugeTypeConfig::Hazard, GaugeType::ExHardClass),
+            (GaugeTypeConfig::AutoShift, GaugeType::ExHardClass),
+        ] {
+            let mut options = PlayStartOptions { gauge: Some(selected), ..Default::default() };
+            apply_course_constraints(&mut options, &default_constraints());
+            assert_eq!(
+                options.course_gauge_override,
+                Some(expected),
+                "selected {selected:?} should map to {expected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn course_gauge_override_disables_auto_shift_in_session_options() {
+        let app_config = AppConfig::default();
+        let mut options =
+            PlayStartOptions { gauge: Some(GaugeTypeConfig::AutoShift), ..Default::default() };
+        apply_course_constraints(&mut options, &default_constraints());
+
+        let session = play_session_options_from_start(&app_config, options);
+
+        assert_eq!(session.gauge_override, Some(GaugeType::ExHardClass));
+        assert_eq!(session.gauge_auto_shift, GaugeAutoShiftMode::Off);
+    }
+
+    #[test]
+    fn course_gauge_constraint_keymode_hint_is_ignored() {
+        for constraint in [
+            CourseGaugeConstraint::Lr2,
+            CourseGaugeConstraint::Keys5,
+            CourseGaugeConstraint::Keys7,
+            CourseGaugeConstraint::Keys9,
+            CourseGaugeConstraint::Keys24,
+        ] {
+            let mut options =
+                PlayStartOptions { gauge: Some(GaugeTypeConfig::Hard), ..Default::default() };
+            let mut constraints = default_constraints();
+            constraints.gauge = constraint;
+            apply_course_constraints(&mut options, &constraints);
+            assert_eq!(options.course_gauge_override, Some(GaugeType::ExClass));
+        }
     }
 
     #[test]
