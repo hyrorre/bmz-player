@@ -9,7 +9,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 pub use super::course_db::{
     CourseBestScore, CourseReplayRecord, CourseReplaySlotRecord, CourseScoreChartRecord,
-    CourseScoreInsert, StoredCourse, StoredCourseEntry,
+    CourseScoreEntry, CourseScoreInsert, StoredCourse, StoredCourseEntry,
 };
 pub use super::difficulty_table_db::{
     DifficultyTableEntryRecord, DifficultyTableRecord, TableEntryRow,
@@ -694,6 +694,15 @@ impl LibraryDatabase {
 
     pub fn latest_course_score_id(&self, course_id: i64) -> Result<Option<i64>> {
         super::course_db::latest_course_score_id(&self.conn, course_id)
+    }
+
+    pub fn list_recent_course_scores(
+        &self,
+        course_id: i64,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<CourseScoreEntry>> {
+        super::course_db::list_recent_course_scores(&self.conn, course_id, limit, offset)
     }
 
     pub fn upsert_course_replay_slot(&mut self, record: &CourseReplaySlotRecord) -> Result<()> {

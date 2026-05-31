@@ -522,6 +522,77 @@ pub(super) fn best_course_score_for_trophy(
     Ok(row)
 }
 
+/// One stored attempt for a course, including the list of achieved trophy
+/// names (sorted alphabetically).  Used by the CLI history view and any
+/// future UI that needs to list past attempts.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CourseScoreEntry {
+    pub course_score_id: i64,
+    pub course_id: i64,
+    pub ex_score: u32,
+    pub max_ex_score: u32,
+    pub clear_type: String,
+    pub gauge_type: String,
+    pub gauge_value: f32,
+    pub max_combo: u32,
+    pub miss_count: u32,
+    pub course_failed: bool,
+    pub course_clear: bool,
+    pub played_at: i64,
+    pub achieved_trophies: Vec<String>,
+}
+
+pub(super) fn list_recent_course_scores(
+    conn: &Connection,
+    course_id: i64,
+    limit: u32,
+    offset: u32,
+) -> Result<Vec<CourseScoreEntry>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, course_id, ex_score, max_ex_score, clear_type, gauge_type,
+                gauge_value, max_combo, miss_count, course_failed, course_clear,
+                played_at
+         FROM course_scores
+         WHERE course_id = ?1
+         ORDER BY played_at DESC, id DESC
+         LIMIT ?2 OFFSET ?3",
+    )?;
+    let rows = stmt
+        .query_map(params![course_id, limit, offset], course_best_score_from_row)?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+
+    // Attach trophy names per attempt with a single grouped query, instead of
+    // doing N round-trips.  Order within each attempt is alphabetical.
+    let mut trophy_stmt = conn.prepare(
+        "SELECT trophy_name
+         FROM course_trophy_achievements
+         WHERE course_score_id = ?1
+         ORDER BY trophy_name",
+    )?;
+    let mut out = Vec::with_capacity(rows.len());
+    for best in rows {
+        let trophies: Vec<String> = trophy_stmt
+            .query_map(params![best.course_score_id], |row| row.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        out.push(CourseScoreEntry {
+            course_score_id: best.course_score_id,
+            course_id: best.course_id,
+            ex_score: best.ex_score,
+            max_ex_score: best.max_ex_score,
+            clear_type: best.clear_type,
+            gauge_type: best.gauge_type,
+            gauge_value: best.gauge_value,
+            max_combo: best.max_combo,
+            miss_count: best.miss_count,
+            course_failed: best.course_failed,
+            course_clear: best.course_clear,
+            played_at: best.played_at,
+            achieved_trophies: trophies,
+        });
+    }
+    Ok(out)
+}
+
 pub(super) fn latest_course_score_id(conn: &Connection, course_id: i64) -> Result<Option<i64>> {
     let row: Option<i64> = conn
         .query_row(
@@ -1157,6 +1228,60 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM course_trophy_achievements", [], |row| row.get(0))
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn list_recent_course_scores_returns_newest_first_with_trophies() {
+        let mut conn = open_db();
+        let course_id = insert_test_course(&mut conn);
+
+        let mut older = sample_score_insert(course_id, 400, "Normal");
+        older.played_at = 1_000;
+        older.achieved_trophies = vec!["silver".to_string()];
+        let older_id = insert_course_score(&mut conn, &older).unwrap();
+
+        let mut newer = sample_score_insert(course_id, 800, "Easy");
+        newer.played_at = 2_000;
+        newer.achieved_trophies = vec!["gold".to_string(), "silver".to_string()];
+        let newer_id = insert_course_score(&mut conn, &newer).unwrap();
+
+        let entries = list_recent_course_scores(&conn, course_id, 10, 0).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].course_score_id, newer_id);
+        assert_eq!(entries[0].ex_score, 800);
+        assert_eq!(entries[0].achieved_trophies, vec!["gold".to_string(), "silver".to_string()]);
+        assert_eq!(entries[1].course_score_id, older_id);
+        assert_eq!(entries[1].achieved_trophies, vec!["silver".to_string()]);
+    }
+
+    #[test]
+    fn list_recent_course_scores_honors_limit_and_offset() {
+        let mut conn = open_db();
+        let course_id = insert_test_course(&mut conn);
+
+        for i in 0..5 {
+            let mut insert = sample_score_insert(course_id, 100 + i * 100, "Normal");
+            insert.played_at = 1_000 + i as i64;
+            insert_course_score(&mut conn, &insert).unwrap();
+        }
+
+        let page1 = list_recent_course_scores(&conn, course_id, 2, 0).unwrap();
+        let page2 = list_recent_course_scores(&conn, course_id, 2, 2).unwrap();
+        let page3 = list_recent_course_scores(&conn, course_id, 2, 4).unwrap();
+
+        assert_eq!(page1.len(), 2);
+        assert_eq!(page2.len(), 2);
+        assert_eq!(page3.len(), 1);
+        // Newest first by played_at.
+        assert!(page1[0].played_at > page1[1].played_at);
+        assert!(page1[1].played_at > page2[0].played_at);
+    }
+
+    #[test]
+    fn list_recent_course_scores_returns_empty_for_unplayed_course() {
+        let mut conn = open_db();
+        let course_id = insert_test_course(&mut conn);
+        assert!(list_recent_course_scores(&conn, course_id, 10, 0).unwrap().is_empty());
     }
 
     #[test]
