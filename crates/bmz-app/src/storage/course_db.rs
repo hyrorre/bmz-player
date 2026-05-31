@@ -426,6 +426,23 @@ pub(super) fn list_course_score_charts(
     Ok(out)
 }
 
+pub(super) fn latest_course_score_id(
+    conn: &Connection,
+    course_id: i64,
+) -> Result<Option<i64>> {
+    let row: Option<i64> = conn
+        .query_row(
+            "SELECT id FROM course_scores
+             WHERE course_id = ?1
+             ORDER BY played_at DESC, id DESC
+             LIMIT 1",
+            params![course_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(row)
+}
+
 pub(super) fn list_course_replays(
     conn: &Connection,
     course_score_id: i64,
@@ -727,6 +744,26 @@ mod tests {
         let course_id = insert_test_course(&mut conn);
         assert!(best_course_score(&conn, course_id).unwrap().is_none());
         assert!(best_course_clear(&conn, course_id).unwrap().is_none());
+    }
+
+    #[test]
+    fn latest_course_score_id_picks_newest_attempt() {
+        let mut conn = open_db();
+        let course_id = insert_test_course(&mut conn);
+
+        assert!(latest_course_score_id(&conn, course_id).unwrap().is_none());
+
+        let mut older = sample_score_insert(course_id, 100, "Normal");
+        older.played_at = 1_000;
+        let older_id = insert_course_score(&mut conn, &older).unwrap();
+
+        let mut newer = sample_score_insert(course_id, 50, "Failed");
+        newer.played_at = 2_000;
+        let newer_id = insert_course_score(&mut conn, &newer).unwrap();
+
+        let latest = latest_course_score_id(&conn, course_id).unwrap();
+        assert_eq!(latest, Some(newer_id));
+        assert_ne!(latest, Some(older_id));
     }
 
     #[test]

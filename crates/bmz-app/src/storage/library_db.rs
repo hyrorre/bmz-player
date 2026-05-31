@@ -692,6 +692,10 @@ impl LibraryDatabase {
         super::course_db::list_course_replays(&self.conn, course_score_id)
     }
 
+    pub fn latest_course_score_id(&self, course_id: i64) -> Result<Option<i64>> {
+        super::course_db::latest_course_score_id(&self.conn, course_id)
+    }
+
     /// Returns `(ChartListItem, raw_level)` pairs for charts in the library that
     /// appear in the given difficulty table, matched first by MD5 then by SHA-256.
     /// Charts not present in the local library are omitted.

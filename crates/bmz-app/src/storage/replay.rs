@@ -99,6 +99,50 @@ pub fn replay_file_name(chart_sha256: [u8; 32], played_at: i64) -> String {
     format!("{}-{played_at}.toml", hex_encode(&chart_sha256))
 }
 
+/// One queued replay inside a course attempt: keeps the chart id, the
+/// per-chart replay file (events + arrange info), and the chart sha256 the
+/// replay was recorded against so callers can verify before launch.
+#[derive(Debug, Clone)]
+pub struct QueuedCourseReplay {
+    pub position: i64,
+    pub chart_id: i64,
+    pub chart_sha256: [u8; 32],
+    pub replay: ReplayFile,
+}
+
+/// Load every replay file referenced by a `course_scores` row.
+///
+/// `entries` is the list of `(position, chart_id, replay_path)` rows from
+/// `course_replays` (already ordered by position).  `lookup_sha256` resolves a
+/// chart_id to its sha256 — typically a closure over `LibraryDatabase`.
+/// `replay_root` is the directory that relative replay paths are joined onto
+/// (matches `ProfilePaths.root_dir`).
+///
+/// Returns the queued replays in order.  Returns an error if any file is
+/// missing, malformed, or refers to a chart whose hash no longer matches
+/// (e.g. the chart was re-imported with different bytes).
+pub fn load_course_replays(
+    entries: &[(i64, i64, String)],
+    replay_root: &Path,
+    lookup_sha256: impl Fn(i64) -> Result<Option<[u8; 32]>>,
+) -> Result<Vec<QueuedCourseReplay>> {
+    let mut out = Vec::with_capacity(entries.len());
+    for (position, chart_id, rel_path) in entries {
+        let Some(sha) = lookup_sha256(*chart_id)? else {
+            bail!("chart id {chart_id} is no longer in the library");
+        };
+        let abs = replay_root.join(rel_path);
+        let replay = load_replay_for_chart(&abs, sha)?;
+        out.push(QueuedCourseReplay {
+            position: *position,
+            chart_id: *chart_id,
+            chart_sha256: sha,
+            replay,
+        });
+    }
+    Ok(out)
+}
+
 pub fn replay_slot_file_name(chart_sha256: [u8; 32], slot: u8) -> String {
     format!("{}-slot{slot}.toml", hex_encode(&chart_sha256))
 }
@@ -290,6 +334,97 @@ events = []
         assert_eq!(loaded.lane_shuffle_pattern, None);
         assert_eq!(loaded.random_seed, None);
         assert_eq!(loaded.events.len(), 0);
+    }
+
+    #[test]
+    fn load_course_replays_loads_all_files_in_position_order() {
+        let dir = std::env::temp_dir().join(format!(
+            "bmz-course-replays-{}-{}",
+            std::process::id(),
+            TimeUs(47).0
+        ));
+        let replay_subdir = dir.join("replay");
+        std::fs::create_dir_all(&replay_subdir).unwrap();
+
+        // Two charts: id=1 (sha=[1;32]) at position 0, id=2 (sha=[2;32]) at position 1.
+        let r0 = ReplayFile::new(
+            [1; 32],
+            1,
+            None,
+            ArrangeOption::Normal,
+            None,
+            None,
+            vec![ReplayEvent { lane: Lane::Key1, kind: InputKind::Press, time: TimeUs(10) }],
+        );
+        let r1 = ReplayFile::new(
+            [2; 32],
+            2,
+            None,
+            ArrangeOption::Mirror,
+            None,
+            None,
+            vec![ReplayEvent { lane: Lane::Key2, kind: InputKind::Release, time: TimeUs(20) }],
+        );
+        let p0 = replay_subdir.join("c0.toml");
+        let p1 = replay_subdir.join("c1.toml");
+        save_replay(&p0, &r0).unwrap();
+        save_replay(&p1, &r1).unwrap();
+
+        let entries = vec![
+            (0_i64, 1_i64, "replay/c0.toml".to_string()),
+            (1_i64, 2_i64, "replay/c1.toml".to_string()),
+        ];
+        let queued = load_course_replays(&entries, &dir, |chart_id| {
+            Ok(match chart_id {
+                1 => Some([1; 32]),
+                2 => Some([2; 32]),
+                _ => None,
+            })
+        })
+        .unwrap();
+
+        assert_eq!(queued.len(), 2);
+        assert_eq!(queued[0].position, 0);
+        assert_eq!(queued[0].chart_id, 1);
+        assert_eq!(queued[0].chart_sha256, [1; 32]);
+        assert_eq!(queued[0].replay.events.len(), 1);
+        assert_eq!(queued[1].chart_id, 2);
+        assert_eq!(queued[1].replay.arrange_option(), ArrangeOption::Mirror);
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn load_course_replays_rejects_when_chart_sha_no_longer_matches() {
+        let dir = std::env::temp_dir().join(format!(
+            "bmz-course-replays-mismatch-{}-{}",
+            std::process::id(),
+            TimeUs(48).0
+        ));
+        let replay_subdir = dir.join("replay");
+        std::fs::create_dir_all(&replay_subdir).unwrap();
+        let replay = ReplayFile::new(
+            [1; 32],
+            1,
+            None,
+            ArrangeOption::Normal,
+            None,
+            None,
+            Vec::new(),
+        );
+        let p = replay_subdir.join("c0.toml");
+        save_replay(&p, &replay).unwrap();
+
+        // Chart was re-imported and now hashes as [9;32]; verification must fail.
+        let entries = vec![(0_i64, 1_i64, "replay/c0.toml".to_string())];
+        let err = load_course_replays(&entries, &dir, |_| Ok(Some([9; 32]))).unwrap_err();
+        assert!(err.to_string().contains("replay chart hash"));
+
+        // And missing chart bails out with a clear error.
+        let err = load_course_replays(&entries, &dir, |_| Ok(None)).unwrap_err();
+        assert!(err.to_string().contains("no longer in the library"));
+
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
