@@ -2225,9 +2225,30 @@ impl WinitApp {
         self.active_play = None;
         self.clear_play_backbmp_state();
         self.last_play_snapshot = None;
+        // An audio-open / audio-start failure bounces the user back to the
+        // select screen.  If they were in a course at the time, the course
+        // session is no longer valid — otherwise the next chart they pick
+        // would be treated as the next entry of a stale course (route
+        // through advance_course_after_finish with mismatched chart_id).
+        self.clear_active_course_state();
         let now = Instant::now();
         self.select_scene_started_at = now;
         self.select_bar_started_at = now;
+    }
+
+    /// Clears any active course session and the cached finished-course
+    /// summary.  Call from any path that returns to the select screen
+    /// without completing the course naturally.
+    fn clear_active_course_state(&mut self) {
+        if self.active_course.is_some() || self.finished_course.is_some() {
+            tracing::info!(
+                had_active = self.active_course.is_some(),
+                had_finished = self.finished_course.is_some(),
+                "clearing course session state (abort or cancel)"
+            );
+        }
+        self.active_course = None;
+        self.finished_course = None;
     }
 
     fn play_start_options(&self) -> PlayStartOptions {
@@ -2408,6 +2429,10 @@ impl WinitApp {
         };
         if decide.cancel {
             self.invalidate_play_preload();
+            // Decide screen cancel (Escape) returns to select.  If a course
+            // was being started, drop the course session — the user opted
+            // out before the first chart actually began.
+            self.clear_active_course_state();
             let now = Instant::now();
             self.select_scene_started_at = now;
             self.select_bar_started_at = now;
@@ -2492,8 +2517,7 @@ impl WinitApp {
 
     fn leave_result(&mut self) {
         self.finished_play = None;
-        self.finished_course = None;
-        self.active_course = None;
+        self.clear_active_course_state();
         self.result_exit = None;
         self.clear_play_backbmp_state();
         // リザルト画面を抜けたら、まだ鳴っていても余韻再生を止める。
