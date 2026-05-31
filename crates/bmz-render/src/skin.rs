@@ -7404,6 +7404,24 @@ mod tests {
     }
 
     #[test]
+    fn select_row_snapshot_carries_achieved_trophy_names() {
+        // SelectRowSnapshot is the carrier — SkinDrawState intentionally does
+        // not duplicate this field (it must stay Copy).  This test simply
+        // pins down that course rows preserve the data and song rows default
+        // to empty, so future skin ops have a stable contract to consume.
+        use crate::scene::{SelectRowKind, SelectRowSnapshot};
+        let course = SelectRowSnapshot {
+            kind: SelectRowKind::Course,
+            achieved_trophy_names: vec!["gold".to_string(), "silver".to_string()],
+            ..SelectRowSnapshot::default()
+        };
+        let song = SelectRowSnapshot { kind: SelectRowKind::Song, ..SelectRowSnapshot::default() };
+
+        assert_eq!(course.achieved_trophy_names, vec!["gold".to_string(), "silver".to_string()]);
+        assert!(song.achieved_trophy_names.is_empty());
+    }
+
+    #[test]
     fn select_row_replay_index_is_row_kind_agnostic() {
         // Regression: course rows must surface their replay slot indicators
         // exactly like song rows.  `select_row_replay_index` looks only at

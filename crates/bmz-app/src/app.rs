@@ -4381,6 +4381,7 @@ fn select_snapshot_rows(
                     is_folder: true,
                     kind: *kind,
                     in_library: true,
+                    achieved_trophy_names: Vec::new(),
                 },
                 SelectItem::Chart(row) => SelectRowSnapshot {
                     index: index as u32,
@@ -4418,6 +4419,8 @@ fn select_snapshot_rows(
                     is_folder: false,
                     kind: bmz_render::scene::SelectRowKind::Song,
                     in_library: row.in_library(),
+                    // Song rows have no course trophies.
+                    achieved_trophy_names: Vec::new(),
                 },
                 SelectItem::Course(row) => SelectRowSnapshot {
                     index: index as u32,
@@ -4447,6 +4450,7 @@ fn select_snapshot_rows(
                     is_folder: false,
                     kind: bmz_render::scene::SelectRowKind::Course,
                     in_library: row.resolved_count > 0,
+                    achieved_trophy_names: row.achieved_trophy_names.clone(),
                 },
             }
         })

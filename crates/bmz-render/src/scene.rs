@@ -67,6 +67,15 @@ pub struct SelectRowSnapshot {
     pub kind: SelectRowKind,
     /// library.db に登録済みかどうか。未登録の難易度表エントリは false。
     pub in_library: bool,
+    /// コース行の場合のみ、これまでに達成したトロフィー名のリスト
+    /// （`course_trophy_achievements` の DISTINCT、アルファ順）。
+    /// それ以外の行 (Song / Folder / TableFolder) では常に空。
+    ///
+    /// 現状このフィールドを直接参照するスキン要素は無く、`SelectRowSnapshot`
+    /// までの流路だけが整っている。`SkinDrawState` には載せない (Copy で
+    /// あるため Vec を抱えられない) — 対応する skin op を実装するときは
+    /// `select_skin_items` のループから row を直接参照して描画判定する。
+    pub achieved_trophy_names: Vec<String>,
 }
 
 impl Default for SelectRowSnapshot {
@@ -91,6 +100,7 @@ impl Default for SelectRowSnapshot {
             is_folder: false,
             kind: SelectRowKind::default(),
             in_library: true,
+            achieved_trophy_names: Vec::new(),
         }
     }
 }
