@@ -428,6 +428,11 @@ impl MainStateProbe {
         self.clear_aux_calls();
     }
 
+    fn begin_number_call_recording_with_option(&mut self, default_value: i32, option_id: i32) {
+        self.begin_number_call_recording(default_value);
+        self.option_values.insert(option_id, true);
+    }
+
     fn begin_number_recording_with_value(&mut self, ref_id: i32, value: i32) {
         self.mode = MainStateProbeMode::RecordNumbers { default_value: 0 };
         self.number_calls.clear();
@@ -451,6 +456,15 @@ impl MainStateProbe {
         self.timer_values.clear();
         self.gauge_type_calls = 0;
         self.gauge_type_value = 0;
+    }
+
+    fn begin_number_recording_with_values_and_options(
+        &mut self,
+        values: BTreeMap<i32, i32>,
+        options: BTreeMap<i32, bool>,
+    ) {
+        self.begin_number_recording_with_values(values);
+        self.option_values = options;
     }
 
     fn begin_option_call_recording(&mut self, default_value: bool) {
@@ -2415,6 +2429,31 @@ fn collect_number_refs(
     Some(calls)
 }
 
+fn collect_number_refs_with_option(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+    option_id: i32,
+) -> Option<Vec<i32>> {
+    let mut calls = Vec::new();
+    for default_value in [5, 0, -1] {
+        {
+            main_state_probe
+                .lock()
+                .ok()?
+                .begin_number_call_recording_with_option(default_value, option_id);
+        }
+        let _ = function.call::<Value>(()).ok();
+        {
+            let mut probe = main_state_probe.lock().ok()?;
+            calls.extend(probe.number_calls.iter().copied());
+            probe.end_recording();
+        }
+    }
+    calls.sort_unstable();
+    calls.dedup();
+    Some(calls)
+}
+
 fn call_draw_with_numbers(
     function: &Function,
     main_state_probe: &Arc<Mutex<MainStateProbe>>,
@@ -2438,6 +2477,27 @@ fn call_number_float_with_values(
 ) -> Option<f64> {
     {
         main_state_probe.lock().ok()?.begin_number_recording_with_values(values);
+    }
+    let result = function.call::<Value>(()).ok();
+    main_state_probe.lock().ok()?.end_recording();
+    match result? {
+        Value::Integer(value) => Some(value as f64),
+        Value::Number(value) if value.is_finite() => Some(value),
+        _ => None,
+    }
+}
+
+fn call_number_float_with_values_and_options(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+    values: BTreeMap<i32, i32>,
+    options: BTreeMap<i32, bool>,
+) -> Option<f64> {
+    {
+        main_state_probe
+            .lock()
+            .ok()?
+            .begin_number_recording_with_values_and_options(values, options);
     }
     let result = function.call::<Value>(()).ok();
     main_state_probe.lock().ok()?.end_recording();
@@ -2867,6 +2927,7 @@ fn infer_value_float_expr(
 ) -> Option<String> {
     infer_remain_rate_scaled(function, main_state_probe)
         .or_else(|| infer_number_scalar_multiply(function, main_state_probe))
+        .or_else(|| infer_option_weighted_number_sum(function, main_state_probe))
         .or_else(|| infer_division_of_number_sums(function, main_state_probe))
 }
 
@@ -2943,6 +3004,101 @@ fn infer_number_scalar_multiply(
         return None;
     }
     Some(format!("{coefficient}*number({ref_id})"))
+}
+
+fn infer_option_weighted_number_sum(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    let options = collect_option_calls(function, main_state_probe)?;
+    if options.is_empty() || options.len() > 12 {
+        return None;
+    }
+
+    let mut refs = Vec::new();
+    for option_id in &options {
+        refs.extend(collect_number_refs_with_option(function, main_state_probe, *option_id)?);
+    }
+    refs.sort_unstable();
+    refs.dedup();
+    if refs.is_empty() || refs.len() > 16 {
+        return None;
+    }
+
+    let mut terms = Vec::new();
+    for option_id in &options {
+        let option_values = BTreeMap::from([(*option_id, true)]);
+        let zero_values = refs.iter().copied().map(|ref_id| (ref_id, 0)).collect();
+        let baseline = call_number_float_with_values_and_options(
+            function,
+            main_state_probe,
+            zero_values,
+            option_values.clone(),
+        )?;
+        for ref_id in &refs {
+            let mut values = refs.iter().copied().map(|id| (id, 0)).collect::<BTreeMap<_, _>>();
+            values.insert(*ref_id, 1);
+            let at_one = call_number_float_with_values_and_options(
+                function,
+                main_state_probe,
+                values,
+                option_values.clone(),
+            )?;
+            let coefficient = at_one - baseline;
+            if coefficient.abs() > f64::EPSILON {
+                terms.push(format!("{coefficient}*option({option_id})*number({ref_id})"));
+            }
+        }
+    }
+    if terms.is_empty() {
+        return None;
+    }
+
+    for option_id in &options {
+        let option_values = BTreeMap::from([(*option_id, true)]);
+        for sample in [1, 3, 7] {
+            let values = refs.iter().copied().map(|ref_id| (ref_id, sample)).collect();
+            let actual = call_number_float_with_values_and_options(
+                function,
+                main_state_probe,
+                values,
+                option_values.clone(),
+            )?;
+            let expected = evaluate_option_weighted_number_terms(
+                &terms,
+                *option_id,
+                &refs.iter().copied().map(|ref_id| (ref_id, sample)).collect(),
+            )?;
+            if !approx_float_eq(actual, expected) {
+                return None;
+            }
+        }
+    }
+
+    Some(terms.join("+"))
+}
+
+fn evaluate_option_weighted_number_terms(
+    terms: &[String],
+    active_option: i32,
+    values: &BTreeMap<i32, i32>,
+) -> Option<f64> {
+    let mut total = 0.0;
+    for term in terms {
+        let mut factors = term.split('*');
+        let coefficient = factors.next()?.parse::<f64>().ok()?;
+        let option = factors.next()?.trim();
+        let number = factors.next()?.trim();
+        if factors.next().is_some() {
+            return None;
+        }
+        let option_id = option.strip_prefix("option(")?.strip_suffix(')')?.parse::<i32>().ok()?;
+        let ref_id = number.strip_prefix("number(")?.strip_suffix(')')?.parse::<i32>().ok()?;
+        if option_id == active_option {
+            total += coefficient * f64::from(values.get(&ref_id).copied().unwrap_or(0));
+        }
+    }
+    Some(total)
 }
 
 fn fast_slow_ref_set() -> BTreeMap<i32, ()> {

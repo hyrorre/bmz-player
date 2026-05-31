@@ -5174,12 +5174,27 @@ fn skin_state_float_expr_term(term: &str, state: SkinDrawState) -> Option<f32> {
     if let Some(ref_id) = parse_skin_number_operand(term) {
         return skin_state_number(ref_id, state).map(|value| value as f32);
     }
-    if let Some((coefficient, operand)) = term.split_once('*') {
-        let coefficient = coefficient.parse::<f32>().ok()?;
-        let ref_id = parse_skin_number_operand(operand.trim())?;
-        return skin_state_number(ref_id, state).map(|value| coefficient * value as f32);
+    if term.contains('*') {
+        return skin_state_float_product_expr_term(term, state);
     }
     term.parse::<f32>().ok()
+}
+
+fn skin_state_float_product_expr_term(term: &str, state: SkinDrawState) -> Option<f32> {
+    let mut product = 1.0_f32;
+    for factor in term.split('*') {
+        let factor = factor.trim();
+        if let Some(ref_id) = parse_skin_float_number_operand(factor) {
+            product *= skin_state_float_number(ref_id, state)?;
+        } else if let Some(ref_id) = parse_skin_number_operand(factor) {
+            product *= skin_state_number(ref_id, state)? as f32;
+        } else if let Some(option_id) = parse_skin_option_operand(factor) {
+            product *= if test_skin_op(option_id, &[], state) { 1.0 } else { 0.0 };
+        } else {
+            product *= factor.parse::<f32>().ok()?;
+        }
+    }
+    Some(product)
 }
 
 fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
@@ -12521,6 +12536,24 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(skin_value_number(&value, state), Some(109_800));
+    }
+
+    #[test]
+    fn skin_state_float_expr_evaluates_option_weighted_terms() {
+        let expr = "0.102*option(180)*number(350)+0.09*option(181)*number(350)";
+        let very_hard = SkinDrawState {
+            judge_rank: Some(0),
+            select_total_notes: 100,
+            ..SkinDrawState::default()
+        };
+        let hard = SkinDrawState {
+            judge_rank: Some(1),
+            select_total_notes: 100,
+            ..SkinDrawState::default()
+        };
+
+        assert!((skin_state_float_expr(expr, very_hard).unwrap() - 10.2).abs() < 0.001);
+        assert!((skin_state_float_expr(expr, hard).unwrap() - 9.0).abs() < 0.001);
     }
 
     #[test]

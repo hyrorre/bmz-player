@@ -1000,6 +1000,62 @@ mod tests {
     }
 
     #[test]
+    fn lua_skin_infers_option_weighted_graph_value() {
+        let root = unique_test_dir("bmz-skin-lua-option-weighted");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("select.luaskin"),
+            r#"
+            local main_state = require("main_state")
+            return {
+                type = 0,
+                graph = {
+                    {
+                        id = "difficulty",
+                        src = 1,
+                        x = 0,
+                        y = 0,
+                        w = 10,
+                        h = 10,
+                        value = function()
+                            local rank
+                            if main_state.option(180) then
+                                rank = 1.7
+                            elseif main_state.option(181) then
+                                rank = 1.5
+                            elseif main_state.option(182) then
+                                rank = 1.3
+                            end
+                            if rank < 0 then rank = 0 end
+                            return (main_state.number(350) / 25 + main_state.number(351) / 8.3) * rank * 1.5
+                        end,
+                    },
+                },
+            }
+            "#,
+        )
+        .unwrap();
+
+        let loaded = load_lua_skin(
+            &root.join("select.luaskin"),
+            SkinKind::Select,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+
+        assert!(
+            loaded.warnings.is_empty(),
+            "warnings: {:?}",
+            loaded.warnings.iter().map(|warning| warning.message.as_str()).collect::<Vec<_>>()
+        );
+        let expr = &loaded.document.graph[0].value_expr;
+        assert!(expr.contains("*option(180)*number(350)"));
+        assert!(expr.contains("*option(181)*number(351)"));
+        assert!(expr.contains("*option(182)*number(350)"));
+    }
+
+    #[test]
     fn lua_skin_infers_or_eq_zero_and_lt_zero_draw() {
         let root = unique_test_dir("bmz-skin-lua-or-zero");
         fs::create_dir_all(&root).unwrap();
