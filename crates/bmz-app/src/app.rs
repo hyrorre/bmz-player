@@ -1759,7 +1759,7 @@ impl WinitApp {
             .max()
             .unwrap_or(0);
 
-        let course_result = course.into_result();
+        let mut course_result = course.into_result();
         tracing::info!(
             title = %course_result.title,
             total_ex_score = course_result.total_ex_score,
@@ -1868,6 +1868,15 @@ impl WinitApp {
                     tracing::error!(%error, course_id, "failed to persist course score");
                 }
             }
+
+            // Look up the best score *after* the insert above so the just-
+            // saved attempt is reflected when it improved the record.  The
+            // result overlay reads this to show a "BEST" section.
+            course_result.best_score =
+                self.boot.library_db.best_course_score(course_id).unwrap_or_else(|error| {
+                    tracing::warn!(%error, course_id, "failed to read best course score");
+                    None
+                });
         }
 
         self.finished_course = Some(course_result);

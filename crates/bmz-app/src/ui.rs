@@ -554,6 +554,9 @@ fn build_course_result_panel(ctx: &egui::Context, summary: &CourseResultSummary)
             if !summary.trophy_results.is_empty() {
                 ui.separator();
                 ui.label("トロフィー");
+                // `trophy_results` is built only from `definition.trophies`
+                // in `ActiveCourseSession::into_result`, so it cannot show
+                // a name that the course author did not declare.
                 ui.horizontal_wrapped(|ui| {
                     for trophy in &summary.trophy_results {
                         let color = if trophy.achieved {
@@ -564,6 +567,42 @@ fn build_course_result_panel(ctx: &egui::Context, summary: &CourseResultSummary)
                         ui.colored_label(color, &trophy.name);
                     }
                 });
+            }
+
+            // BEST section: shows the highest persisted attempt for this
+            // course.  Includes the current attempt if it improved the
+            // record (the lookup runs after insert_course_score).
+            if let Some(best) = &summary.best_score {
+                ui.separator();
+                ui.label("ベスト");
+                let best_rate = if best.max_ex_score > 0 {
+                    best.ex_score as f32 / best.max_ex_score as f32 * 100.0
+                } else {
+                    0.0
+                };
+                let is_new_record = best.ex_score == summary.total_ex_score
+                    && best.max_ex_score == summary.max_ex_score
+                    && !summary.course_failed;
+                egui::Grid::new("course_result_best").num_columns(2).show(ui, |ui| {
+                    ui.label("EX SCORE");
+                    let ex_text =
+                        format!("{} / {} ({:.2}%)", best.ex_score, best.max_ex_score, best_rate);
+                    if is_new_record {
+                        ui.colored_label(egui::Color32::from_rgb(255, 215, 0), ex_text);
+                    } else {
+                        ui.label(ex_text);
+                    }
+                    ui.end_row();
+                    ui.label("CLEAR");
+                    ui.label(&best.clear_type);
+                    ui.end_row();
+                    ui.label("MAX COMBO");
+                    ui.label(format!("{}", best.max_combo));
+                    ui.end_row();
+                });
+                if is_new_record {
+                    ui.colored_label(egui::Color32::from_rgb(255, 215, 0), "★ NEW RECORD");
+                }
             }
 
             if !summary.entry_summaries.is_empty() {
