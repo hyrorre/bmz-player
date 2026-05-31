@@ -1,5 +1,6 @@
 use bmz_core::clear::{ClearType, GaugeType};
 use bmz_core::judge::Judge;
+use bmz_core::lane::KeyMode;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum GaugeAutoShiftMode {
@@ -9,6 +10,35 @@ pub enum GaugeAutoShiftMode {
     HardToGroove,
     BestClear,
     SelectToUnder,
+}
+
+/// beatoraja `GaugeProperty` 相当。キーモード別の段位ゲージ係数を選ぶ。
+/// グルーヴ系ゲージ (AssistEasy..Hazard) は本実装では全プロパティ共通だが、
+/// CLASS / EXCLASS / EXHARDCLASS は beatoraja の各キーモード値を移植する。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GaugeProperty {
+    FiveKeys,
+    #[default]
+    SevenKeys,
+    /// pop'n music 系（9K）。bmz-player のキーモードでは現状未対応だが、
+    /// `CourseGaugeConstraint::Keys9` から指定された場合の段位ゲージ値として保持する。
+    Pms,
+    /// keyboard mania 系（24K）。同上で、コース定義側から指定された場合のみ使う。
+    Keyboard,
+    /// LR2 互換。コース側で `gauge_lr2` 指定時に明示的に使う。
+    Lr2,
+}
+
+impl GaugeProperty {
+    /// チャートの `KeyMode` から beatoraja 既定の `GaugeProperty` を決める。
+    /// `BMSPlayerRule.Beatoraja_5/7` と同等：5K/10K→FiveKeys、7K/14K→SevenKeys。
+    /// PMS / KEYBOARD はチャート由来では選ばれず、コース定義側からのみ来る。
+    pub fn from_keymode(key_mode: KeyMode) -> Self {
+        match key_mode {
+            KeyMode::K5 | KeyMode::K10 => Self::FiveKeys,
+            KeyMode::K7 | KeyMode::K14 => Self::SevenKeys,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,11 +101,22 @@ pub struct GaugeState {
 }
 
 impl GaugeState {
+    /// 既定の SevenKeys プロパティでゲージ状態を作る（テストや旧呼び出し用）。
     pub fn new(selected: GaugeType, total: f64, total_notes: u32) -> Self {
-        let gauges = default_gauge_definitions()
-            .iter()
+        Self::new_with_property(selected, total, total_notes, GaugeProperty::default())
+    }
+
+    /// 指定 `GaugeProperty` でゲージ状態を作る。キーモードに応じた段位ゲージ値を引く。
+    pub fn new_with_property(
+        selected: GaugeType,
+        total: f64,
+        total_notes: u32,
+        property: GaugeProperty,
+    ) -> Self {
+        let gauges = gauge_definitions_for(property)
+            .into_iter()
             .map(|definition| {
-                let definition = compile_gauge_definition(definition, total, total_notes);
+                let definition = compile_gauge_definition(&definition, total, total_notes);
                 SingleGaugeState { value: definition.init, definition }
             })
             .collect();
@@ -104,6 +145,22 @@ impl GaugeState {
         total: f64,
         total_notes: u32,
     ) -> Self {
+        Self::new_with_auto_shift_property(
+            selected,
+            mode,
+            total,
+            total_notes,
+            GaugeProperty::default(),
+        )
+    }
+
+    pub fn new_with_auto_shift_property(
+        selected: GaugeType,
+        mode: GaugeAutoShiftMode,
+        total: f64,
+        total_notes: u32,
+        property: GaugeProperty,
+    ) -> Self {
         let start = match mode {
             GaugeAutoShiftMode::BestClear => GaugeType::ExHard,
             GaugeAutoShiftMode::Off
@@ -111,7 +168,7 @@ impl GaugeState {
             | GaugeAutoShiftMode::HardToGroove
             | GaugeAutoShiftMode::SelectToUnder => selected,
         };
-        let mut state = Self::new(start, total, total_notes);
+        let mut state = Self::new_with_property(start, total, total_notes, property);
         state.original = selected;
         state.auto_shift = mode != GaugeAutoShiftMode::Off;
         state.auto_shift_mode = mode;
@@ -364,117 +421,189 @@ fn apply_modifier(value: f32, modifier: GaugeModifier, total: f64, total_notes: 
     }
 }
 
-pub fn default_gauge_definitions() -> &'static [GaugeDefinition] {
-    &[
-        GaugeDefinition {
-            gauge_type: GaugeType::AssistEasy,
-            clear_type: Some(ClearType::AssistEasy),
-            modifier: GaugeModifier::Total,
-            min: 0.0,
-            max: 100.0,
-            init: 20.0,
-            border: 60.0,
-            values: [0.16, 0.16, 0.0, -1.2, -2.0, -0.5],
-            guts: NORMAL_GUTS,
+/// 既定 `SevenKeys` プロパティのゲージ定義（後方互換）。
+pub fn default_gauge_definitions() -> Vec<GaugeDefinition> {
+    gauge_definitions_for(GaugeProperty::default())
+}
+
+/// 指定 `GaugeProperty` に対応するゲージ定義一式を返す。
+/// グルーヴ系ゲージは全プロパティ共通（既存値を維持）、段位ゲージのみ
+/// beatoraja `GaugeProperty.java` のキーモード別値を引く。
+pub fn gauge_definitions_for(property: GaugeProperty) -> Vec<GaugeDefinition> {
+    let mut defs = Vec::with_capacity(9);
+    defs.extend_from_slice(&GROOVE_GAUGE_DEFINITIONS);
+    let class = class_gauge_set(property);
+    defs.push(GaugeDefinition {
+        gauge_type: GaugeType::Class,
+        clear_type: Some(ClearType::Normal),
+        modifier: GaugeModifier::None,
+        min: 0.0,
+        max: 100.0,
+        init: 100.0,
+        border: 1.0,
+        values: class.class,
+        guts: class.class_guts,
+    });
+    defs.push(GaugeDefinition {
+        gauge_type: GaugeType::ExClass,
+        clear_type: Some(ClearType::Hard),
+        modifier: GaugeModifier::None,
+        min: 0.0,
+        max: 100.0,
+        init: 100.0,
+        border: 1.0,
+        values: class.exclass,
+        guts: class.exclass_guts,
+    });
+    defs.push(GaugeDefinition {
+        gauge_type: GaugeType::ExHardClass,
+        clear_type: Some(ClearType::ExHard),
+        modifier: GaugeModifier::None,
+        min: 0.0,
+        max: 100.0,
+        init: 100.0,
+        border: 1.0,
+        values: class.exhardclass,
+        guts: class.exhardclass_guts,
+    });
+    defs
+}
+
+/// グルーヴ系ゲージ (AssistEasy..Hazard) の定義。本実装ではキーモードによらず
+/// 共通の値を使う（既存挙動の維持を優先し、beatoraja のキーモード別 groove 値
+/// 移植は将来対応）。
+const GROOVE_GAUGE_DEFINITIONS: [GaugeDefinition; 6] = [
+    GaugeDefinition {
+        gauge_type: GaugeType::AssistEasy,
+        clear_type: Some(ClearType::AssistEasy),
+        modifier: GaugeModifier::Total,
+        min: 0.0,
+        max: 100.0,
+        init: 20.0,
+        border: 60.0,
+        values: [0.16, 0.16, 0.0, -1.2, -2.0, -0.5],
+        guts: NORMAL_GUTS,
+    },
+    GaugeDefinition {
+        gauge_type: GaugeType::Easy,
+        clear_type: Some(ClearType::Easy),
+        modifier: GaugeModifier::Total,
+        min: 0.0,
+        max: 100.0,
+        init: 20.0,
+        border: 80.0,
+        values: [0.16, 0.16, 0.0, -2.0, -3.0, -1.0],
+        guts: NORMAL_GUTS,
+    },
+    GaugeDefinition {
+        gauge_type: GaugeType::Normal,
+        clear_type: Some(ClearType::Normal),
+        modifier: GaugeModifier::Total,
+        min: 0.0,
+        max: 100.0,
+        init: 20.0,
+        border: 80.0,
+        values: [0.16, 0.16, 0.0, -4.0, -6.0, -2.0],
+        guts: NORMAL_GUTS,
+    },
+    GaugeDefinition {
+        gauge_type: GaugeType::Hard,
+        clear_type: Some(ClearType::Hard),
+        modifier: GaugeModifier::LimitIncrement,
+        min: 0.0,
+        max: 100.0,
+        init: 100.0,
+        border: 1.0,
+        values: [0.15, 0.15, 0.0, -5.0, -9.0, -3.0],
+        guts: HARD_GUTS,
+    },
+    GaugeDefinition {
+        gauge_type: GaugeType::ExHard,
+        clear_type: Some(ClearType::ExHard),
+        modifier: GaugeModifier::LimitIncrement,
+        min: 0.0,
+        max: 100.0,
+        init: 100.0,
+        border: 1.0,
+        values: [0.15, 0.15, 0.0, -8.0, -18.0, -6.0],
+        guts: HARD_GUTS,
+    },
+    GaugeDefinition {
+        gauge_type: GaugeType::Hazard,
+        clear_type: None,
+        modifier: GaugeModifier::None,
+        min: 0.0,
+        max: 100.0,
+        init: 100.0,
+        border: 1.0,
+        values: [0.0, 0.0, 0.0, -100.0, -100.0, -100.0],
+        guts: &[],
+    },
+];
+
+/// 段位ゲージ 3 種の値と guts テーブルをまとめた組。
+struct ClassGaugeSet {
+    class: [f32; 6],
+    class_guts: &'static [(f32, f32)],
+    exclass: [f32; 6],
+    exclass_guts: &'static [(f32, f32)],
+    exhardclass: [f32; 6],
+    exhardclass_guts: &'static [(f32, f32)],
+}
+
+/// beatoraja `GaugeProperty.java` から CLASS_X / EXCLASS_X / EXHARDCLASS_X を引く。
+fn class_gauge_set(property: GaugeProperty) -> ClassGaugeSet {
+    match property {
+        GaugeProperty::SevenKeys => ClassGaugeSet {
+            class: [0.15, 0.12, 0.06, -1.5, -3.0, -1.5],
+            class_guts: CLASS_7K_GUTS,
+            exclass: [0.15, 0.12, 0.03, -3.0, -6.0, -3.0],
+            exclass_guts: &[],
+            exhardclass: [0.15, 0.06, 0.0, -5.0, -10.0, -5.0],
+            exhardclass_guts: &[],
         },
-        GaugeDefinition {
-            gauge_type: GaugeType::Easy,
-            clear_type: Some(ClearType::Easy),
-            modifier: GaugeModifier::Total,
-            min: 0.0,
-            max: 100.0,
-            init: 20.0,
-            border: 80.0,
-            values: [0.16, 0.16, 0.0, -2.0, -3.0, -1.0],
-            guts: NORMAL_GUTS,
+        GaugeProperty::FiveKeys => ClassGaugeSet {
+            class: [0.01, 0.01, 0.0, -0.5, -1.0, -0.5],
+            class_guts: &[],
+            exclass: [0.01, 0.01, 0.0, -1.0, -2.0, -1.0],
+            exclass_guts: &[],
+            exhardclass: [0.01, 0.01, 0.0, -2.5, -5.0, -2.5],
+            exhardclass_guts: &[],
         },
-        GaugeDefinition {
-            gauge_type: GaugeType::Normal,
-            clear_type: Some(ClearType::Normal),
-            modifier: GaugeModifier::Total,
-            min: 0.0,
-            max: 100.0,
-            init: 20.0,
-            border: 80.0,
-            values: [0.16, 0.16, 0.0, -4.0, -6.0, -2.0],
-            guts: NORMAL_GUTS,
+        GaugeProperty::Pms => ClassGaugeSet {
+            class: [0.15, 0.12, 0.06, -1.5, -3.0, -3.0],
+            class_guts: CLASS_7K_GUTS,
+            exclass: [0.15, 0.12, 0.03, -3.0, -6.0, -6.0],
+            exclass_guts: &[],
+            exhardclass: [0.15, 0.06, 0.0, -5.0, -10.0, -10.0],
+            exhardclass_guts: &[],
         },
-        GaugeDefinition {
-            gauge_type: GaugeType::Hard,
-            clear_type: Some(ClearType::Hard),
-            modifier: GaugeModifier::LimitIncrement,
-            min: 0.0,
-            max: 100.0,
-            init: 100.0,
-            border: 1.0,
-            values: [0.15, 0.15, 0.0, -5.0, -9.0, -3.0],
-            guts: HARD_GUTS,
+        GaugeProperty::Keyboard => ClassGaugeSet {
+            class: [0.20, 0.20, 0.10, -1.5, -3.0, -1.5],
+            class_guts: CLASS_7K_GUTS,
+            exclass: [0.20, 0.20, 0.10, -3.0, -6.0, -3.0],
+            exclass_guts: &[],
+            exhardclass: [0.20, 0.10, 0.0, -5.0, -10.0, -5.0],
+            exhardclass_guts: &[],
         },
-        GaugeDefinition {
-            gauge_type: GaugeType::ExHard,
-            clear_type: Some(ClearType::ExHard),
-            modifier: GaugeModifier::LimitIncrement,
-            min: 0.0,
-            max: 100.0,
-            init: 100.0,
-            border: 1.0,
-            values: [0.15, 0.15, 0.0, -8.0, -18.0, -6.0],
-            guts: HARD_GUTS,
+        GaugeProperty::Lr2 => ClassGaugeSet {
+            class: [0.10, 0.10, 0.05, -2.0, -3.0, -2.0],
+            class_guts: LR2_CLASS_GUTS,
+            exclass: [0.10, 0.10, 0.05, -6.0, -10.0, -2.0],
+            exclass_guts: LR2_CLASS_GUTS,
+            exhardclass: [0.10, 0.10, 0.05, -12.0, -20.0, -2.0],
+            exhardclass_guts: &[],
         },
-        GaugeDefinition {
-            gauge_type: GaugeType::Hazard,
-            clear_type: None,
-            modifier: GaugeModifier::None,
-            min: 0.0,
-            max: 100.0,
-            init: 100.0,
-            border: 1.0,
-            values: [0.0, 0.0, 0.0, -100.0, -100.0, -100.0],
-            guts: &[],
-        },
-        // Course (段位) gauges. beatoraja `GaugeProperty.SEVENKEYS` の CLASS / EXCLASS / EXHARDCLASS。
-        // 単曲プレイでは選ばれず、`apply_course_constraints` がコース時にプレイヤー選択の Gauge から
-        // 6/7/8 のいずれかへマップする。
-        GaugeDefinition {
-            gauge_type: GaugeType::Class,
-            clear_type: Some(ClearType::Normal),
-            modifier: GaugeModifier::None,
-            min: 0.0,
-            max: 100.0,
-            init: 100.0,
-            border: 1.0,
-            values: [0.15, 0.12, 0.06, -1.5, -3.0, -1.5],
-            guts: CLASS_GUTS,
-        },
-        GaugeDefinition {
-            gauge_type: GaugeType::ExClass,
-            clear_type: Some(ClearType::Hard),
-            modifier: GaugeModifier::None,
-            min: 0.0,
-            max: 100.0,
-            init: 100.0,
-            border: 1.0,
-            values: [0.15, 0.12, 0.03, -3.0, -6.0, -3.0],
-            guts: &[],
-        },
-        GaugeDefinition {
-            gauge_type: GaugeType::ExHardClass,
-            clear_type: Some(ClearType::ExHard),
-            modifier: GaugeModifier::None,
-            min: 0.0,
-            max: 100.0,
-            init: 100.0,
-            border: 1.0,
-            values: [0.15, 0.06, 0.0, -5.0, -10.0, -5.0],
-            guts: &[],
-        },
-    ]
+    }
 }
 
 const NORMAL_GUTS: &[(f32, f32)] = &[(30.0, 0.5), (50.0, 0.7)];
 const HARD_GUTS: &[(f32, f32)] = &[(30.0, 0.6), (50.0, 0.8)];
-// beatoraja CLASS の guts テーブル（7keys）。下限近くで減衰量が弱まる救済補正。
-const CLASS_GUTS: &[(f32, f32)] = &[(5.0, 0.4), (10.0, 0.5), (15.0, 0.6), (20.0, 0.7), (25.0, 0.8)];
+// beatoraja CLASS の guts テーブル（7keys / PMS / KB 共通）。下限近くで減衰量が弱まる救済補正。
+const CLASS_7K_GUTS: &[(f32, f32)] =
+    &[(5.0, 0.4), (10.0, 0.5), (15.0, 0.6), (20.0, 0.7), (25.0, 0.8)];
+// beatoraja LR2 CLASS / EXCLASS の guts。30 以下で減衰量を 60% に弱める。
+const LR2_CLASS_GUTS: &[(f32, f32)] = &[(30.0, 0.6)];
 
 /// beatoraja `BMSPlayerRule.calculateDefaultTotal` 相当。
 pub fn default_gauge_total(total_notes: u32) -> f64 {
@@ -605,9 +734,16 @@ mod tests {
         assert_eq!(gauge.selected, GaugeType::Normal);
     }
 
-    fn definition_for(gauge_type: GaugeType) -> &'static GaugeDefinition {
+    fn definition_for(gauge_type: GaugeType) -> GaugeDefinition {
         default_gauge_definitions()
-            .iter()
+            .into_iter()
+            .find(|def| def.gauge_type == gauge_type)
+            .expect("definition exists")
+    }
+
+    fn definition_for_property(gauge_type: GaugeType, property: GaugeProperty) -> GaugeDefinition {
+        gauge_definitions_for(property)
+            .into_iter()
             .find(|def| def.gauge_type == gauge_type)
             .expect("definition exists")
     }
@@ -641,17 +777,56 @@ mod tests {
 
     #[test]
     fn class_gauges_drain_strictly_more_than_normal() {
-        let normal = definition_for(GaugeType::Normal);
         let class = definition_for(GaugeType::Class);
         let exclass = definition_for(GaugeType::ExClass);
         let exhardclass = definition_for(GaugeType::ExHardClass);
         // Bad index = 3. Each tier should drain at least as hard as Class.
         assert!(class.values[3] >= exclass.values[3]);
         assert!(exclass.values[3] >= exhardclass.values[3]);
-        // Normal recovers from above ratio adjustments; the Class draw values
-        // are direct percentages (no Total modifier), so a single -1.5 hit on
-        // CLASS already produces a real decrement at 100 init.
-        let _ = normal;
+    }
+
+    #[test]
+    fn gauge_property_from_keymode_matches_beatoraja_player_rule() {
+        assert_eq!(GaugeProperty::from_keymode(KeyMode::K5), GaugeProperty::FiveKeys);
+        assert_eq!(GaugeProperty::from_keymode(KeyMode::K10), GaugeProperty::FiveKeys);
+        assert_eq!(GaugeProperty::from_keymode(KeyMode::K7), GaugeProperty::SevenKeys);
+        assert_eq!(GaugeProperty::from_keymode(KeyMode::K14), GaugeProperty::SevenKeys);
+    }
+
+    #[test]
+    fn class_gauge_values_differ_per_property() {
+        // beatoraja FIVEKEYS の CLASS は SEVENKEYS よりはるかにマイルド。
+        let class_5 = definition_for_property(GaugeType::Class, GaugeProperty::FiveKeys);
+        let class_7 = definition_for_property(GaugeType::Class, GaugeProperty::SevenKeys);
+        assert_eq!(class_5.values, [0.01, 0.01, 0.0, -0.5, -1.0, -0.5]);
+        assert_eq!(class_7.values, [0.15, 0.12, 0.06, -1.5, -3.0, -1.5]);
+
+        // PMS の CLASS は SEVENKEYS と回復は同じだが EmptyPoor (idx 5) が厳しい (-3 vs -1.5)。
+        let class_pms = definition_for_property(GaugeType::Class, GaugeProperty::Pms);
+        assert_eq!(class_pms.values[5], -3.0);
+
+        // LR2 EXHARDCLASS は突き抜けて重い (-12 BAD)。
+        let exhardclass_lr2 = definition_for_property(GaugeType::ExHardClass, GaugeProperty::Lr2);
+        assert_eq!(exhardclass_lr2.values[3], -12.0);
+
+        // KEYBOARD CLASS は PG/GR 回復が 0.20 と高い。
+        let class_kb = definition_for_property(GaugeType::Class, GaugeProperty::Keyboard);
+        assert_eq!(class_kb.values[0], 0.20);
+    }
+
+    #[test]
+    fn groove_gauges_stay_constant_across_properties() {
+        // グルーヴゲージは本実装ではキーモード非依存。プロパティを変えても同じ定義。
+        for property in [
+            GaugeProperty::FiveKeys,
+            GaugeProperty::SevenKeys,
+            GaugeProperty::Pms,
+            GaugeProperty::Keyboard,
+            GaugeProperty::Lr2,
+        ] {
+            let normal = definition_for_property(GaugeType::Normal, property);
+            assert_eq!(normal.values, [0.16, 0.16, 0.0, -4.0, -6.0, -2.0], "{property:?}");
+        }
     }
 
     #[test]
