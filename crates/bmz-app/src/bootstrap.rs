@@ -153,8 +153,10 @@ fn startup_scan_roots(app_config: &AppConfig, sample_root: Option<&Path>) -> Vec
 }
 
 fn bundled_sample_song_root() -> Option<PathBuf> {
-    let root =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/songs").canonicalize().ok()?;
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../data/songs/sample-playable")
+        .canonicalize()
+        .ok()?;
     root.is_dir().then_some(root)
 }
 
@@ -233,7 +235,7 @@ mod tests {
     #[test]
     fn bundled_sample_root_imports_playable_chart() {
         let sample_root = bundled_sample_song_root().expect("sample song root should exist");
-        let sample_chart = sample_root.join("sample-playable").join("sample-playable.bms");
+        let sample_chart = sample_root.join("sample-playable.bms");
         let import = import_bms_chart(&sample_chart, None, true).unwrap();
         assert!(import.warnings.is_empty());
         assert_eq!(import.chart.sounds.len(), 1);

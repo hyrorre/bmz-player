@@ -59,6 +59,10 @@ pub fn stop_raw_to_us(value: u64, bpm: f64) -> i64 {
     ticks_to_us(value.saturating_mul(TICKS_PER_MEASURE as u64 / 192), bpm)
 }
 
+fn add_time_us(time: TimeUs, delta_us: i64) -> TimeUs {
+    TimeUs(time.0.saturating_add(delta_us))
+}
+
 pub fn build_timing_map(initial_bpm: f64, mut events: Vec<TickTimingEvent>) -> TimingMap {
     events.sort_by_key(|event| (event.tick.0, timing_event_priority(event.kind)));
 
@@ -70,7 +74,7 @@ pub fn build_timing_map(initial_bpm: f64, mut events: Vec<TickTimingEvent>) -> T
     for event in events {
         if event.tick > current_tick {
             let end_time =
-                TimeUs(current_time.0 + ticks_to_us(event.tick.0 - current_tick.0, current_bpm));
+                add_time_us(current_time, ticks_to_us(event.tick.0 - current_tick.0, current_bpm));
 
             segments.push(TimingSegment {
                 start_tick: current_tick,
@@ -86,7 +90,7 @@ pub fn build_timing_map(initial_bpm: f64, mut events: Vec<TickTimingEvent>) -> T
 
         match event.kind {
             TickTimingEventKind::StopRaw { value } => {
-                current_time = TimeUs(current_time.0 + stop_raw_to_us(value, current_bpm));
+                current_time = add_time_us(current_time, stop_raw_to_us(value, current_bpm));
             }
             TickTimingEventKind::SetBpm(bpm) => {
                 current_bpm = bpm;
@@ -121,14 +125,14 @@ impl TimingMap {
     pub fn tick_to_time(&self, tick: ChartTick) -> TimeUs {
         let seg = self.find_segment_by_tick(tick);
         let delta = tick.0.saturating_sub(seg.start_tick.0);
-        TimeUs(seg.start_time.0 + ticks_to_us(delta, seg.bpm))
+        add_time_us(seg.start_time, ticks_to_us(delta, seg.bpm))
     }
 
     pub fn time_to_tick(&self, time: TimeUs) -> ChartTick {
         let seg = self.find_segment_by_time(time);
         let delta_us = time.0.saturating_sub(seg.start_time.0);
         let delta_ticks = us_to_ticks(delta_us, seg.bpm);
-        ChartTick(seg.start_tick.0 + delta_ticks)
+        ChartTick(seg.start_tick.0.saturating_add(delta_ticks))
     }
 
     pub fn bpm_at_tick(&self, tick: ChartTick) -> f64 {
@@ -185,8 +189,9 @@ impl TimingMap {
 
         for event in sorted {
             if event.tick > current_tick {
-                let end_time = TimeUs(
-                    current_time.0 + ticks_to_us(event.tick.0 - current_tick.0, current_bpm),
+                let end_time = add_time_us(
+                    current_time,
+                    ticks_to_us(event.tick.0 - current_tick.0, current_bpm),
                 );
                 segments.push(TimingSegment {
                     start_tick: current_tick,
@@ -201,7 +206,7 @@ impl TimingMap {
 
             match event.kind {
                 Kind::Stop { duration_us } => {
-                    current_time = TimeUs(current_time.0 + duration_us.max(0));
+                    current_time = add_time_us(current_time, duration_us.max(0));
                 }
                 Kind::BpmChange { bpm } => {
                     current_bpm = bpm.max(1.0);
@@ -255,6 +260,31 @@ mod tests {
         assert_eq!(map.tick_to_time(ChartTick(ticks * 2)), TimeUs(3_000_000));
         assert_eq!(map.bpm_at_tick(ChartTick(ticks - 1)), 120.0);
         assert_eq!(map.bpm_at_tick(ChartTick(ticks)), 240.0);
+    }
+
+    #[test]
+    fn build_timing_map_saturates_extreme_chart_time() {
+        let events = vec![TickTimingEvent {
+            tick: ChartTick(u64::MAX),
+            kind: TickTimingEventKind::SetBpm(120.0),
+        }];
+
+        let map = build_timing_map(1.0, events);
+
+        assert_eq!(map.segments[0].end_time, TimeUs(i64::MAX));
+        assert_eq!(map.tick_to_time(ChartTick(u64::MAX)), TimeUs(i64::MAX));
+    }
+
+    #[test]
+    fn build_timing_map_saturates_extreme_stop_time() {
+        let events = vec![TickTimingEvent {
+            tick: ChartTick(0),
+            kind: TickTimingEventKind::StopRaw { value: u64::MAX },
+        }];
+
+        let map = build_timing_map(1.0, events);
+
+        assert_eq!(map.segments[0].start_time, TimeUs(i64::MAX));
     }
 
     #[test]

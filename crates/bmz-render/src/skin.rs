@@ -11349,6 +11349,7 @@ mod tests {
     fn skin_state_number_maps_select_refs() {
         let state = SkinDrawState {
             select_chart_count: 42,
+            select_screen: true,
             select_play_level: 12,
             select_clear_index: 5,
             select_total_notes: 1200,

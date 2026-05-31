@@ -311,7 +311,7 @@ fn object_to_tick(
 
     let local_tick =
         measure.tick_len.saturating_mul(object.position_num as u64) / object.position_den as u64;
-    Ok(ChartTick(measure.start_tick.0 + local_tick))
+    Ok(ChartTick(measure.start_tick.0.saturating_add(local_tick)))
 }
 
 fn collect_timing_events(
