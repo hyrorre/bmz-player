@@ -11,6 +11,7 @@ pub fn run_course_command(cmd: CourseCommand) -> Result<()> {
     match cmd {
         CourseCommand::Import { path } => import_courses(Path::new(&path)),
         CourseCommand::List => list_courses(),
+        CourseCommand::History { course_id, limit } => course_history(course_id, limit),
     }
 }
 
@@ -71,13 +72,9 @@ fn list_courses() -> Result<()> {
     for course in courses {
         let missing =
             course.definition.entries.iter().filter(|entry| entry.chart_id.is_none()).count();
-        let kind = match course.definition.kind {
-            bmz_core::course::CourseKind::Course => "course",
-            bmz_core::course::CourseKind::Dan => "dan",
-        };
         println!(
             "[{}] {} — {} chart(s), {} missing ({})",
-            kind,
+            kind_label(course.definition.kind),
             course.definition.title,
             course.definition.entries.len(),
             missing,
@@ -85,6 +82,93 @@ fn list_courses() -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn course_history(course_id: i64, limit: u32) -> Result<()> {
+    let app_paths = resolve_app_paths()?;
+    migrate_library_db(&app_paths.library_db)?;
+    let library_db = LibraryDatabase::open(&app_paths.library_db)?;
+
+    let course = library_db
+        .list_courses()?
+        .into_iter()
+        .find(|c| c.id == course_id)
+        .ok_or_else(|| anyhow::anyhow!("course id {course_id} not found"))?;
+
+    let entries = library_db.list_recent_course_scores(course_id, limit, 0)?;
+    if entries.is_empty() {
+        println!(
+            "No attempts stored for course [{}] {} (id {}).",
+            kind_label(course.definition.kind),
+            course.definition.title,
+            course_id,
+        );
+        return Ok(());
+    }
+
+    println!(
+        "[{}] {} — {} stored attempt(s) (showing up to {}):",
+        kind_label(course.definition.kind),
+        course.definition.title,
+        entries.len(),
+        limit,
+    );
+    println!(
+        "  {:<5}  {:<19}  {:>7}  {:>7}  {:<12}  {:>8}  TROPHIES",
+        "ID", "PLAYED AT (UTC)", "EX", "MAX EX", "CLEAR", "MAXCOMBO",
+    );
+    for entry in entries {
+        let played_at = format_unix_utc(entry.played_at);
+        let trophies = if entry.achieved_trophies.is_empty() {
+            "-".to_string()
+        } else {
+            entry.achieved_trophies.join(",")
+        };
+        println!(
+            "  {:<5}  {:<19}  {:>7}  {:>7}  {:<12}  {:>8}  {}",
+            entry.course_score_id,
+            played_at,
+            entry.ex_score,
+            entry.max_ex_score,
+            entry.clear_type,
+            entry.max_combo,
+            trophies,
+        );
+    }
+    Ok(())
+}
+
+fn kind_label(kind: bmz_core::course::CourseKind) -> &'static str {
+    match kind {
+        bmz_core::course::CourseKind::Course => "course",
+        bmz_core::course::CourseKind::Dan => "dan",
+    }
+}
+
+/// Format a Unix-seconds timestamp as `YYYY-MM-DD HH:MM:SS` in UTC.
+/// Pure Rust to avoid pulling in chrono just for one CLI line.
+fn format_unix_utc(secs: i64) -> String {
+    // Days since 1970-01-01 and remaining seconds in the day.
+    let days = secs.div_euclid(86_400);
+    let day_secs = secs.rem_euclid(86_400) as u32;
+    let h = day_secs / 3_600;
+    let m = (day_secs % 3_600) / 60;
+    let s = day_secs % 60;
+
+    // Convert days since epoch into (year, month, day).  Howard Hinnant's
+    // civil_from_days algorithm; correct for any i64 day count in range.
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 }.div_euclid(146_097);
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m_civ = if mp < 10 { mp + 3 } else { mp.wrapping_sub(9) };
+    let y = if m_civ <= 2 { y + 1 } else { y };
+
+    format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", y, m_civ, d, h, m, s)
 }
 
 fn course_json_files(path: &Path) -> Result<Vec<PathBuf>> {
@@ -122,6 +206,18 @@ fn unix_now() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn format_unix_utc_matches_known_timestamps() {
+        // 0 = epoch start.
+        assert_eq!(format_unix_utc(0), "1970-01-01 00:00:00");
+        // 2024-01-01 00:00:00 UTC = 1_704_067_200.
+        assert_eq!(format_unix_utc(1_704_067_200), "2024-01-01 00:00:00");
+        // Leap-year Feb 29 2024.
+        assert_eq!(format_unix_utc(1_709_175_900), "2024-02-29 03:05:00");
+        // A pre-epoch instant (1969-12-31 23:59:59) stays well-formed.
+        assert_eq!(format_unix_utc(-1), "1969-12-31 23:59:59");
+    }
 
     #[test]
     fn course_json_files_returns_single_file() {

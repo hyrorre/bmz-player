@@ -143,6 +143,12 @@ cargo run -p bmz-app -- songs list
 - `songs load [PATH|NAME]`
 - `songs reload [PATH|NAME]`
 
+`course`:
+
+- `course import <PATH>`
+- `course list`
+- `course history <COURSE_ID> [--limit N]`
+
 新しいデバッグフラグを追加するときも `crates/bmz-app/src/cli.rs` に集約してください。
 
 ## Manual Check Keys
