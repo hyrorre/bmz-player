@@ -52,6 +52,19 @@ pub struct CourseScoreInsert {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct CourseReplaySlotRecord {
+    pub course_id: i64,
+    pub slot: u8,
+    pub rule: String,
+    pub course_score_id: i64,
+    pub played_at: i64,
+    pub ex_score: u32,
+    pub miss_count: u32,
+    pub max_combo: u32,
+    pub clear_rank: u8,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct CourseBestScore {
     pub course_score_id: i64,
     pub course_id: i64,
@@ -464,6 +477,114 @@ pub(super) fn list_course_replays(
     Ok(out)
 }
 
+pub(super) fn upsert_course_replay_slot(
+    conn: &mut Connection,
+    record: &CourseReplaySlotRecord,
+) -> Result<()> {
+    if record.slot > 3 {
+        anyhow::bail!("course replay slot must be in 0..=3 (got {})", record.slot);
+    }
+    conn.execute(
+        "INSERT INTO course_replay_slots (
+            course_id, slot, rule, course_score_id, played_at,
+            ex_score, miss_count, max_combo, clear_rank
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+         ON CONFLICT(course_id, slot) DO UPDATE SET
+            rule = excluded.rule,
+            course_score_id = excluded.course_score_id,
+            played_at = excluded.played_at,
+            ex_score = excluded.ex_score,
+            miss_count = excluded.miss_count,
+            max_combo = excluded.max_combo,
+            clear_rank = excluded.clear_rank",
+        params![
+            record.course_id,
+            record.slot,
+            record.rule,
+            record.course_score_id,
+            record.played_at,
+            record.ex_score,
+            record.miss_count,
+            record.max_combo,
+            record.clear_rank,
+        ],
+    )?;
+    Ok(())
+}
+
+pub(super) fn course_replay_slot(
+    conn: &Connection,
+    course_id: i64,
+    slot: u8,
+) -> Result<Option<CourseReplaySlotRecord>> {
+    conn.query_row(
+        "SELECT course_id, slot, rule, course_score_id, played_at,
+                ex_score, miss_count, max_combo, clear_rank
+         FROM course_replay_slots
+         WHERE course_id = ?1 AND slot = ?2",
+        params![course_id, slot],
+        course_replay_slot_from_row,
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+pub(super) fn course_replay_slots_for_course(
+    conn: &Connection,
+    course_id: i64,
+) -> Result<[Option<CourseReplaySlotRecord>; 4]> {
+    let mut stmt = conn.prepare(
+        "SELECT course_id, slot, rule, course_score_id, played_at,
+                ex_score, miss_count, max_combo, clear_rank
+         FROM course_replay_slots
+         WHERE course_id = ?1",
+    )?;
+    let rows = stmt
+        .query_map(params![course_id], course_replay_slot_from_row)?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let mut out: [Option<CourseReplaySlotRecord>; 4] = [None, None, None, None];
+    for record in rows {
+        let idx = record.slot as usize;
+        if idx < out.len() {
+            out[idx] = Some(record);
+        }
+    }
+    Ok(out)
+}
+
+pub(super) fn course_replay_slot_presence(
+    conn: &Connection,
+    course_id: i64,
+) -> Result<[bool; 4]> {
+    let mut stmt =
+        conn.prepare("SELECT slot FROM course_replay_slots WHERE course_id = ?1")?;
+    let mut out = [false; 4];
+    let rows = stmt.query_map(params![course_id], |row| row.get::<_, u8>(0))?;
+    for row in rows {
+        let slot = row? as usize;
+        if slot < out.len() {
+            out[slot] = true;
+        }
+    }
+    Ok(out)
+}
+
+fn course_replay_slot_from_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<CourseReplaySlotRecord> {
+    Ok(CourseReplaySlotRecord {
+        course_id: row.get(0)?,
+        slot: row.get(1)?,
+        rule: row.get(2)?,
+        course_score_id: row.get(3)?,
+        played_at: row.get(4)?,
+        ex_score: row.get(5)?,
+        miss_count: row.get(6)?,
+        max_combo: row.get(7)?,
+        clear_rank: row.get(8)?,
+    })
+}
+
 fn course_best_score_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CourseBestScore> {
     Ok(CourseBestScore {
         course_score_id: row.get(0)?,
@@ -761,6 +882,108 @@ mod tests {
         let latest = latest_course_score_id(&conn, course_id).unwrap();
         assert_eq!(latest, Some(newer_id));
         assert_ne!(latest, Some(older_id));
+    }
+
+    fn sample_slot_record(
+        course_id: i64,
+        slot: u8,
+        course_score_id: i64,
+        ex_score: u32,
+    ) -> CourseReplaySlotRecord {
+        CourseReplaySlotRecord {
+            course_id,
+            slot,
+            rule: "Always".to_string(),
+            course_score_id,
+            played_at: 1_700_000_500 + slot as i64,
+            ex_score,
+            miss_count: 0,
+            max_combo: 100,
+            clear_rank: 5,
+        }
+    }
+
+    #[test]
+    fn upsert_course_replay_slot_overwrites_same_slot() {
+        let mut conn = open_db();
+        let course_id = insert_test_course(&mut conn);
+        let score_id =
+            insert_course_score(&mut conn, &sample_score_insert(course_id, 500, "Normal")).unwrap();
+
+        upsert_course_replay_slot(&mut conn, &sample_slot_record(course_id, 0, score_id, 100))
+            .unwrap();
+        upsert_course_replay_slot(&mut conn, &sample_slot_record(course_id, 0, score_id, 200))
+            .unwrap();
+
+        let record = course_replay_slot(&conn, course_id, 0).unwrap().unwrap();
+        assert_eq!(record.ex_score, 200);
+        assert_eq!(record.course_score_id, score_id);
+    }
+
+    #[test]
+    fn course_replay_slots_for_course_returns_all_four_slots() {
+        let mut conn = open_db();
+        let course_id = insert_test_course(&mut conn);
+        let score_id =
+            insert_course_score(&mut conn, &sample_score_insert(course_id, 500, "Normal")).unwrap();
+        upsert_course_replay_slot(&mut conn, &sample_slot_record(course_id, 0, score_id, 10))
+            .unwrap();
+        upsert_course_replay_slot(&mut conn, &sample_slot_record(course_id, 3, score_id, 99))
+            .unwrap();
+
+        let slots = course_replay_slots_for_course(&conn, course_id).unwrap();
+        assert!(slots[0].is_some());
+        assert!(slots[1].is_none());
+        assert!(slots[2].is_none());
+        assert_eq!(slots[3].as_ref().unwrap().ex_score, 99);
+    }
+
+    #[test]
+    fn course_replay_slot_presence_reflects_stored_slots() {
+        let mut conn = open_db();
+        let course_id = insert_test_course(&mut conn);
+        let score_id =
+            insert_course_score(&mut conn, &sample_score_insert(course_id, 500, "Normal")).unwrap();
+        upsert_course_replay_slot(&mut conn, &sample_slot_record(course_id, 1, score_id, 10))
+            .unwrap();
+        upsert_course_replay_slot(&mut conn, &sample_slot_record(course_id, 2, score_id, 10))
+            .unwrap();
+
+        assert_eq!(course_replay_slot_presence(&conn, course_id).unwrap(), [false, true, true, false]);
+        // Empty course has no slots set.
+        let mut other = course();
+        other.key = "other.json#0".to_string();
+        let other_id = upsert_course(&mut conn, "course/other.json", &other, 0, 1).unwrap();
+        assert_eq!(course_replay_slot_presence(&conn, other_id).unwrap(), [false; 4]);
+    }
+
+    #[test]
+    fn upsert_course_replay_slot_rejects_out_of_range() {
+        let mut conn = open_db();
+        let course_id = insert_test_course(&mut conn);
+        let score_id =
+            insert_course_score(&mut conn, &sample_score_insert(course_id, 500, "Normal")).unwrap();
+        let err =
+            upsert_course_replay_slot(&mut conn, &sample_slot_record(course_id, 4, score_id, 1))
+                .unwrap_err();
+        assert!(err.to_string().contains("0..=3"));
+    }
+
+    #[test]
+    fn deleting_course_score_cascades_to_replay_slots() {
+        let mut conn = open_db();
+        let course_id = insert_test_course(&mut conn);
+        let score_id =
+            insert_course_score(&mut conn, &sample_score_insert(course_id, 500, "Normal")).unwrap();
+        upsert_course_replay_slot(&mut conn, &sample_slot_record(course_id, 0, score_id, 10))
+            .unwrap();
+
+        conn.execute("DELETE FROM course_scores WHERE id = ?1", params![score_id]).unwrap();
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM course_replay_slots", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
     }
 
     #[test]

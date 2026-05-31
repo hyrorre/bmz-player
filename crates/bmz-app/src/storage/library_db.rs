@@ -8,8 +8,8 @@ use bmz_gameplay::gauge::gauge_total_for_chart;
 use rusqlite::{Connection, OptionalExtension, params};
 
 pub use super::course_db::{
-    CourseBestScore, CourseReplayRecord, CourseScoreChartRecord, CourseScoreInsert, StoredCourse,
-    StoredCourseEntry,
+    CourseBestScore, CourseReplayRecord, CourseReplaySlotRecord, CourseScoreChartRecord,
+    CourseScoreInsert, StoredCourse, StoredCourseEntry,
 };
 pub use super::difficulty_table_db::{
     DifficultyTableEntryRecord, DifficultyTableRecord, TableEntryRow,
@@ -694,6 +694,29 @@ impl LibraryDatabase {
 
     pub fn latest_course_score_id(&self, course_id: i64) -> Result<Option<i64>> {
         super::course_db::latest_course_score_id(&self.conn, course_id)
+    }
+
+    pub fn upsert_course_replay_slot(&mut self, record: &CourseReplaySlotRecord) -> Result<()> {
+        super::course_db::upsert_course_replay_slot(&mut self.conn, record)
+    }
+
+    pub fn course_replay_slot(
+        &self,
+        course_id: i64,
+        slot: u8,
+    ) -> Result<Option<CourseReplaySlotRecord>> {
+        super::course_db::course_replay_slot(&self.conn, course_id, slot)
+    }
+
+    pub fn course_replay_slots_for_course(
+        &self,
+        course_id: i64,
+    ) -> Result<[Option<CourseReplaySlotRecord>; 4]> {
+        super::course_db::course_replay_slots_for_course(&self.conn, course_id)
+    }
+
+    pub fn course_replay_slot_presence(&self, course_id: i64) -> Result<[bool; 4]> {
+        super::course_db::course_replay_slot_presence(&self.conn, course_id)
     }
 
     /// Returns `(ChartListItem, raw_level)` pairs for charts in the library that

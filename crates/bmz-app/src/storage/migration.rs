@@ -313,6 +313,31 @@ pub const LIBRARY_MIGRATIONS: &[Migration] = &[
                 PRIMARY KEY(course_score_id, position)
             );"],
     },
+    Migration {
+        version: 11,
+        // Course-level replay slots, mirroring the per-chart `replay_slots`
+        // shape in `score.db`.  Slots are addressed by (course_id, slot)
+        // and point at a course_scores row whose aggregate metrics passed
+        // the slot's rule (Always / ScoreUpdate / MissCountUpdate /
+        // MaxComboUpdate / ClearUpdate).
+        statements: &[
+            "CREATE TABLE course_replay_slots (
+                course_id INTEGER NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+                slot INTEGER NOT NULL CHECK (slot BETWEEN 0 AND 3),
+                rule TEXT NOT NULL,
+                course_score_id INTEGER NOT NULL
+                    REFERENCES course_scores(id) ON DELETE CASCADE,
+                played_at INTEGER NOT NULL,
+                ex_score INTEGER NOT NULL,
+                miss_count INTEGER NOT NULL,
+                max_combo INTEGER NOT NULL,
+                clear_rank INTEGER NOT NULL,
+                PRIMARY KEY(course_id, slot)
+            );",
+            "CREATE INDEX idx_course_replay_slots_course
+                ON course_replay_slots(course_id);",
+        ],
+    },
 ];
 
 pub const SCORE_MIGRATIONS: &[Migration] = &[
