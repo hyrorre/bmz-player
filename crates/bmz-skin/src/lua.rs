@@ -1331,6 +1331,9 @@ fn lua_table_to_json(
             }
         }
         if is_unsupported_json_field_value(&value) {
+            if should_silently_skip_loader_field(&key, &value) {
+                continue;
+            }
             warnings.push(format!("skipping unsupported field `{key}` at {path}"));
             continue;
         }
@@ -2546,6 +2549,14 @@ fn is_unsupported_json_field_value(value: &Value) -> bool {
             | Value::Error(_)
             | Value::Other(_)
     )
+}
+
+/// beatoraja Lua skin loader が document/header に残すコールバック。
+/// BMZ は `.luaskin` 実行結果だけを使い、関数参照自体は JSON 化しない。
+const SILENTLY_SKIPPED_LOADER_FIELDS: &[&str] = &["process", "main", "processHeader"];
+
+fn should_silently_skip_loader_field(key: &str, value: &Value) -> bool {
+    SILENTLY_SKIPPED_LOADER_FIELDS.contains(&key) && matches!(value, Value::Function(_))
 }
 
 fn lua_key_to_json_key(key: Value, path: &str, warnings: &mut Vec<String>) -> Result<String> {

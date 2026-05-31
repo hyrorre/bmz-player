@@ -1054,6 +1054,10 @@ mod tests {
             !messages.iter().any(|message| message.contains("value[50].value")),
             "threshold-num should be inferred: {messages:?}"
         );
+        assert!(
+            !messages.iter().any(|message| message.contains("`process`")),
+            "loader process callback should be silently skipped: {messages:?}"
+        );
     }
 
     /// Rm-skin ロード成功と destination 非空を確認する。
