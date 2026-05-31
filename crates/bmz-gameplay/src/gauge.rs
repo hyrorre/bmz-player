@@ -37,6 +37,7 @@ impl GaugeProperty {
     /// - K9 → Pms (POPN_9K)
     /// - K4 / K6 / K8 は beatoraja に対応モードがないため、`Beatoraja_Other`
     ///   と同じ SevenKeys にフォールバック（Qwilight 系の派生キーモード）。
+    ///
     /// KEYBOARD はチャート由来では選ばれず、コース定義側からのみ来る。
     pub fn from_keymode(key_mode: KeyMode) -> Self {
         match key_mode {
