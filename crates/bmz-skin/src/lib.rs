@@ -488,6 +488,45 @@ mod tests {
     }
 
     #[test]
+    fn lua_skin_io_stub_reads_skin_alias_and_ignores_writes() {
+        let parent = unique_test_dir("bmz-skin-lua");
+        let root = parent.join("m_select");
+        fs::create_dir_all(root.join("customize/advanced")).unwrap();
+        fs::write(root.join("customize/advanced/enable.txt"), "first.lua\nsecond.lua\n").unwrap();
+        fs::write(
+            root.join("music_select.luaskin"),
+            r#"
+            local f = io.open("skin/m_select/customize/advanced/enable.txt", "r")
+            local out = io.open("skin/m_select/customize/advanced/load_log.txt", "w")
+            local count = 0
+            for line in f:lines() do
+                count = count + 1
+                out:write(line)
+            end
+            f:close()
+            out:close()
+            return {
+                type = 0,
+                text = {
+                    { id = "line-count", font = 1, size = 16, constantText = tostring(count) }
+                }
+            }
+            "#,
+        )
+        .unwrap();
+
+        let loaded = load_lua_skin_value(
+            &root.join("music_select.luaskin"),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+
+        assert_eq!(loaded.value["text"][0]["constantText"], "2");
+        assert!(!root.join("customize/advanced/load_log.txt").exists());
+    }
+
+    #[test]
     fn lua_skin_config_get_path_prefers_filepath_default() {
         let root = unique_test_dir("bmz-skin-lua");
         fs::create_dir_all(root.join("parts")).unwrap();

@@ -256,7 +256,7 @@ fn install_sandbox(
         globals.set("skin_config", skin_config)?;
     }
     globals.set("os", create_os_stub(lua)?)?;
-    globals.set("io", Value::Nil)?;
+    globals.set("io", create_io_stub(lua, root)?)?;
     globals.set("debug", Value::Nil)?;
     if let Ok(package) = globals.get::<Table>("package") {
         package.set("loadlib", Value::Nil)?;
@@ -745,6 +745,64 @@ fn create_os_stub(lua: &Lua) -> mlua::Result<Value> {
         })?,
     )?;
     Ok(Value::Table(table))
+}
+
+fn create_io_stub(lua: &Lua, root: &Path) -> mlua::Result<Value> {
+    let table = lua.create_table()?;
+    let root_for_open = root.to_path_buf();
+    table.set(
+        "open",
+        lua.create_function(move |lua, (path, mode): (String, Option<String>)| {
+            let mode = mode.unwrap_or_else(|| "r".to_string());
+            if mode.starts_with('r') {
+                let Ok(path) = resolve_skin_io_path(&root_for_open, &path) else {
+                    return Ok(Value::Nil);
+                };
+                let Ok(source) = fs::read_to_string(path) else {
+                    return Ok(Value::Nil);
+                };
+                return create_read_file_stub(lua, source);
+            }
+            if mode.starts_with('w') || mode.starts_with('a') {
+                return create_write_file_stub(lua);
+            }
+            Ok(Value::Nil)
+        })?,
+    )?;
+    Ok(Value::Table(table))
+}
+
+fn create_read_file_stub(lua: &Lua, source: String) -> mlua::Result<Value> {
+    let file = lua.create_table()?;
+    let lines = source.lines().map(str::to_string).collect::<Vec<_>>();
+    file.set(
+        "lines",
+        lua.create_function(move |lua, _: Value| {
+            let lines = lines.clone();
+            let index = Arc::new(Mutex::new(0usize));
+            lua.create_function(move |lua, ()| {
+                let mut index =
+                    index.lock().map_err(|_| mlua::Error::external("io lines lock poisoned"))?;
+                let Some(line) = lines.get(*index) else {
+                    return Ok(Value::Nil);
+                };
+                *index += 1;
+                Ok(Value::String(lua.create_string(line)?))
+            })
+        })?,
+    )?;
+    file.set("close", lua.create_function(|_, _: Value| Ok(true))?)?;
+    Ok(Value::Table(file))
+}
+
+fn create_write_file_stub(lua: &Lua) -> mlua::Result<Value> {
+    let file = lua.create_table()?;
+    file.set(
+        "write",
+        lua.create_function(|_, (_self, _args): (Value, Variadic<Value>)| Ok(true))?,
+    )?;
+    file.set("close", lua.create_function(|_, _: Value| Ok(true))?)?;
+    Ok(Value::Table(file))
 }
 
 fn lua_os_now_seconds() -> i64 {
@@ -1407,6 +1465,9 @@ fn resolve_lua_path(root: &Path, requested: &str, module: bool) -> Result<PathBu
     };
 
     for candidate in candidates {
+        if let Some(path) = resolve_beatoraja_skin_alias(root, &candidate) {
+            return Ok(path);
+        }
         let path = root.join(candidate);
         if path.is_file() {
             let canonical = canonicalize_skin_path(&path)?;
@@ -1418,6 +1479,50 @@ fn resolve_lua_path(root: &Path, requested: &str, module: bool) -> Result<PathBu
     }
 
     bail!("lua file not found: {requested}");
+}
+
+fn resolve_skin_io_path(root: &Path, requested: &str) -> Result<PathBuf> {
+    let relative = requested.replace('\\', "/");
+    let relative_path = Path::new(&relative);
+    if relative_path.is_absolute()
+        || relative_path.components().any(|component| {
+            matches!(component, Component::ParentDir | Component::RootDir | Component::Prefix(_))
+        })
+    {
+        bail!("io path escapes skin root: {requested}");
+    }
+
+    if let Some(path) = resolve_beatoraja_skin_alias(root, &relative) {
+        return Ok(path);
+    }
+
+    let path = root.join(&relative);
+    let canonical = canonicalize_skin_path(&path)?;
+    if !canonical.starts_with(root) {
+        bail!("io path escapes skin root: {}", canonical.display());
+    }
+    Ok(canonical)
+}
+
+fn resolve_beatoraja_skin_alias(root: &Path, relative: &str) -> Option<PathBuf> {
+    let rest = relative.strip_prefix("skin/")?;
+    let (skin_name, skin_relative) = rest.split_once('/')?;
+    for ancestor in root.ancestors() {
+        if ancestor.file_name().and_then(|name| name.to_str()) != Some(skin_name) {
+            continue;
+        }
+        let path = ancestor.join(skin_relative);
+        if !path.is_file() {
+            continue;
+        }
+        let Ok(canonical) = canonicalize_skin_path(&path) else {
+            continue;
+        };
+        if canonical.starts_with(ancestor) {
+            return Some(canonical);
+        }
+    }
+    None
 }
 
 fn lua_value_to_log_string(value: &Value) -> String {
