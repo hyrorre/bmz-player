@@ -664,10 +664,7 @@ impl LibraryDatabase {
         super::course_db::best_course_score(&self.conn, course_id)
     }
 
-    pub fn best_course_clear(
-        &self,
-        course_id: i64,
-    ) -> Result<Option<bmz_core::clear::ClearType>> {
+    pub fn best_course_clear(&self, course_id: i64) -> Result<Option<bmz_core::clear::ClearType>> {
         super::course_db::best_course_clear(&self.conn, course_id)
     }
 
@@ -691,10 +688,7 @@ impl LibraryDatabase {
         super::course_db::list_course_score_charts(&self.conn, course_score_id)
     }
 
-    pub fn list_course_replays(
-        &self,
-        course_score_id: i64,
-    ) -> Result<Vec<CourseReplayRecord>> {
+    pub fn list_course_replays(&self, course_score_id: i64) -> Result<Vec<CourseReplayRecord>> {
         super::course_db::list_course_replays(&self.conn, course_score_id)
     }
 

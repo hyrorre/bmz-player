@@ -324,12 +324,7 @@ pub(super) fn insert_course_score(
         tx.execute(
             "INSERT INTO course_replays (course_score_id, position, chart_id, replay_path)
              VALUES (?1, ?2, ?3, ?4)",
-            params![
-                course_score_id,
-                replay.position,
-                replay.chart_id,
-                replay.replay_path,
-            ],
+            params![course_score_id, replay.position, replay.chart_id, replay.replay_path,],
         )?;
     }
 
@@ -742,9 +737,8 @@ mod tests {
 
         conn.execute("DELETE FROM courses WHERE id = ?1", params![course_id]).unwrap();
 
-        let scores: i64 = conn
-            .query_row("SELECT COUNT(*) FROM course_scores", [], |row| row.get(0))
-            .unwrap();
+        let scores: i64 =
+            conn.query_row("SELECT COUNT(*) FROM course_scores", [], |row| row.get(0)).unwrap();
         let charts: i64 = conn
             .query_row("SELECT COUNT(*) FROM course_score_charts", [], |row| row.get(0))
             .unwrap();

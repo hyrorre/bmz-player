@@ -304,16 +304,14 @@ pub const LIBRARY_MIGRATIONS: &[Migration] = &[
         // Per-chart replay file paths for a course attempt.  Replay file format
         // is identical to per-chart replays; only the storage table is new so
         // that the whole sequence can be replayed back to back later.
-        statements: &[
-            "CREATE TABLE course_replays (
+        statements: &["CREATE TABLE course_replays (
                 course_score_id INTEGER NOT NULL
                     REFERENCES course_scores(id) ON DELETE CASCADE,
                 position INTEGER NOT NULL,
                 chart_id INTEGER NOT NULL,
                 replay_path TEXT NOT NULL,
                 PRIMARY KEY(course_score_id, position)
-            );",
-        ],
+            );"],
     },
 ];
 

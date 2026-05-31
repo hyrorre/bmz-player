@@ -1663,8 +1663,8 @@ impl WinitApp {
                 .filter(|t| t.achieved)
                 .map(|t| t.name.as_str())
                 .collect();
-            let trophies_json = serde_json::to_string(&achieved_trophies)
-                .unwrap_or_else(|_| "[]".to_string());
+            let trophies_json =
+                serde_json::to_string(&achieved_trophies).unwrap_or_else(|_| "[]".to_string());
             let insert = crate::storage::library_db::CourseScoreInsert {
                 course_id,
                 ex_score: course_result.total_ex_score,
