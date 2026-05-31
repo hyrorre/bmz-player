@@ -527,6 +527,32 @@ mod tests {
     }
 
     #[test]
+    fn lua_skin_main_state_stubs_audio_volume_helpers() {
+        let root = unique_test_dir("bmz-skin-lua");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("play7.luaskin"),
+            r#"
+            local main_state = require("main_state")
+            local ok = main_state.audio_play("sound.wav", main_state.volume_sys())
+            return {
+                type = 0,
+                text = {
+                    { id = "volume", font = 1, size = 16, constantText = tostring(main_state.volume_key() + main_state.volume_bg()) .. "|" .. tostring(ok) }
+                }
+            }
+            "#,
+        )
+        .unwrap();
+
+        let loaded =
+            load_lua_skin_value(&root.join("play7.luaskin"), &BTreeMap::new(), &BTreeMap::new())
+                .unwrap();
+
+        assert_eq!(loaded.value["text"][0]["constantText"], "2.0|true");
+    }
+
+    #[test]
     fn lua_skin_config_get_path_prefers_filepath_default() {
         let root = unique_test_dir("bmz-skin-lua");
         fs::create_dir_all(root.join("parts")).unwrap();

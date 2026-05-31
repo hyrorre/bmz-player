@@ -678,6 +678,17 @@ fn create_main_state_stub(lua: &Lua, probe: Arc<Mutex<MainStateProbe>>) -> mlua:
                 .gauge_type())
         })?,
     )?;
+    table.set("volume_sys", lua.create_function(|_, ()| Ok(1.0f64))?)?;
+    table.set("volume_key", lua.create_function(|_, ()| Ok(1.0f64))?)?;
+    table.set("volume_bg", lua.create_function(|_, ()| Ok(1.0f64))?)?;
+    table.set("set_volume_sys", lua.create_function(|_, _: Value| Ok(true))?)?;
+    table.set("set_volume_key", lua.create_function(|_, _: Value| Ok(true))?)?;
+    table.set("set_volume_bg", lua.create_function(|_, _: Value| Ok(true))?)?;
+    table
+        .set("audio_play", lua.create_function(|_, (_path, _volume): (Value, Value)| Ok(true))?)?;
+    table
+        .set("audio_loop", lua.create_function(|_, (_path, _volume): (Value, Value)| Ok(true))?)?;
+    table.set("audio_stop", lua.create_function(|_, _path: Value| Ok(true))?)?;
     Ok(Value::Table(table))
 }
 
