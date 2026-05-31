@@ -49,6 +49,12 @@ pub struct CourseScoreInsert {
     pub played_at: i64,
     pub charts: Vec<CourseScoreChartRecord>,
     pub replays: Vec<CourseReplayRecord>,
+    /// Names of trophies achieved on this attempt.  Each name is fanned out
+    /// into a `course_trophy_achievements` row inside the same transaction
+    /// as the course_scores insert, enabling per-trophy best queries.  This
+    /// is the structured form of `trophies_json` (which is preserved as the
+    /// raw JSON for round-trip / audit).
+    pub achieved_trophies: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -341,6 +347,23 @@ pub(super) fn insert_course_score(
         )?;
     }
 
+    // Fan out achieved trophies into course_trophy_achievements.  Empty trophy
+    // names are skipped defensively (the course definition should not contain
+    // unnamed trophies, but this protects against malformed JSON).  Duplicate
+    // names within a single attempt are deduped by the PRIMARY KEY via
+    // INSERT OR IGNORE.
+    for trophy_name in &record.achieved_trophies {
+        if trophy_name.is_empty() {
+            continue;
+        }
+        tx.execute(
+            "INSERT OR IGNORE INTO course_trophy_achievements
+                 (course_score_id, course_id, trophy_name)
+             VALUES (?1, ?2, ?3)",
+            params![course_score_id, record.course_id, trophy_name],
+        )?;
+    }
+
     tx.commit()?;
     Ok(course_score_id)
 }
@@ -437,6 +460,66 @@ pub(super) fn list_course_score_charts(
         out.push(row?);
     }
     Ok(out)
+}
+
+pub(super) fn achieved_trophy_names_for_course(
+    conn: &Connection,
+    course_id: i64,
+) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT trophy_name
+         FROM course_trophy_achievements
+         WHERE course_id = ?1
+         ORDER BY trophy_name",
+    )?;
+    let rows = stmt.query_map(params![course_id], |row| row.get::<_, String>(0))?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+pub(super) fn best_course_score_for_trophy(
+    conn: &Connection,
+    course_id: i64,
+    trophy_name: &str,
+) -> Result<Option<CourseBestScore>> {
+    // Best ex_score among attempts of this course that achieved the named
+    // trophy.  Tie-breaks mirror best_course_score: by clear_type rank, then
+    // by played_at, then by id.
+    let row = conn
+        .query_row(
+            "SELECT cs.id, cs.course_id, cs.ex_score, cs.max_ex_score, cs.clear_type,
+                    cs.gauge_type, cs.gauge_value, cs.max_combo, cs.miss_count,
+                    cs.course_failed, cs.course_clear, cs.played_at
+             FROM course_scores cs
+             JOIN course_trophy_achievements cta
+                 ON cta.course_score_id = cs.id
+             WHERE cs.course_id = ?1 AND cta.trophy_name = ?2
+             ORDER BY cs.ex_score DESC,
+                      CASE cs.clear_type
+                          WHEN 'NoPlay' THEN 0
+                          WHEN 'Failed' THEN 1
+                          WHEN 'AssistEasy' THEN 2
+                          WHEN 'LightAssistEasy' THEN 3
+                          WHEN 'Easy' THEN 4
+                          WHEN 'Normal' THEN 5
+                          WHEN 'Hard' THEN 6
+                          WHEN 'ExHard' THEN 7
+                          WHEN 'FullCombo' THEN 8
+                          WHEN 'Perfect' THEN 9
+                          WHEN 'Max' THEN 10
+                          ELSE 0
+                      END DESC,
+                      cs.played_at DESC,
+                      cs.id DESC
+             LIMIT 1",
+            params![course_id, trophy_name],
+            course_best_score_from_row,
+        )
+        .optional()?;
+    Ok(row)
 }
 
 pub(super) fn latest_course_score_id(conn: &Connection, course_id: i64) -> Result<Option<i64>> {
@@ -773,6 +856,7 @@ mod tests {
                     replay_path: "replay/c2.bzr".to_string(),
                 },
             ],
+            achieved_trophies: Vec::new(),
         }
     }
 
@@ -966,6 +1050,113 @@ mod tests {
             upsert_course_replay_slot(&mut conn, &sample_slot_record(course_id, 4, score_id, 1))
                 .unwrap_err();
         assert!(err.to_string().contains("0..=3"));
+    }
+
+    #[test]
+    fn insert_course_score_fans_out_achieved_trophies() {
+        let mut conn = open_db();
+        let course_id = insert_test_course(&mut conn);
+
+        let mut insert = sample_score_insert(course_id, 500, "Normal");
+        insert.achieved_trophies = vec!["gold".to_string(), "silver".to_string()];
+        insert_course_score(&mut conn, &insert).unwrap();
+
+        let names = achieved_trophy_names_for_course(&conn, course_id).unwrap();
+        assert_eq!(names, vec!["gold".to_string(), "silver".to_string()]);
+    }
+
+    #[test]
+    fn insert_course_score_dedupes_duplicate_trophy_names_within_attempt() {
+        let mut conn = open_db();
+        let course_id = insert_test_course(&mut conn);
+
+        let mut insert = sample_score_insert(course_id, 500, "Normal");
+        insert.achieved_trophies =
+            vec!["gold".to_string(), "gold".to_string(), "silver".to_string()];
+        insert_course_score(&mut conn, &insert).unwrap();
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM course_trophy_achievements WHERE course_id = ?1",
+                params![course_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn insert_course_score_skips_empty_trophy_names() {
+        let mut conn = open_db();
+        let course_id = insert_test_course(&mut conn);
+
+        let mut insert = sample_score_insert(course_id, 500, "Normal");
+        insert.achieved_trophies = vec![String::new(), "gold".to_string(), String::new()];
+        insert_course_score(&mut conn, &insert).unwrap();
+
+        let names = achieved_trophy_names_for_course(&conn, course_id).unwrap();
+        assert_eq!(names, vec!["gold".to_string()]);
+    }
+
+    #[test]
+    fn best_course_score_for_trophy_picks_highest_ex_score_with_trophy() {
+        let mut conn = open_db();
+        let course_id = insert_test_course(&mut conn);
+
+        let mut a = sample_score_insert(course_id, 400, "Normal");
+        a.achieved_trophies = vec!["silver".to_string()];
+        insert_course_score(&mut conn, &a).unwrap();
+
+        let mut b = sample_score_insert(course_id, 900, "Normal");
+        b.achieved_trophies = vec!["silver".to_string(), "gold".to_string()];
+        insert_course_score(&mut conn, &b).unwrap();
+
+        // A higher score that did NOT achieve gold; must not win for "gold".
+        let mut c = sample_score_insert(course_id, 950, "Normal");
+        c.achieved_trophies = vec!["silver".to_string()];
+        insert_course_score(&mut conn, &c).unwrap();
+
+        let gold = best_course_score_for_trophy(&conn, course_id, "gold").unwrap().unwrap();
+        assert_eq!(gold.ex_score, 900);
+        let silver = best_course_score_for_trophy(&conn, course_id, "silver").unwrap().unwrap();
+        assert_eq!(silver.ex_score, 950);
+        assert!(best_course_score_for_trophy(&conn, course_id, "missing").unwrap().is_none());
+    }
+
+    #[test]
+    fn achieved_trophy_names_for_course_returns_distinct_sorted() {
+        let mut conn = open_db();
+        let course_id = insert_test_course(&mut conn);
+
+        let mut a = sample_score_insert(course_id, 400, "Normal");
+        a.achieved_trophies = vec!["silver".to_string()];
+        insert_course_score(&mut conn, &a).unwrap();
+
+        let mut b = sample_score_insert(course_id, 500, "Normal");
+        b.achieved_trophies = vec!["gold".to_string(), "silver".to_string()];
+        insert_course_score(&mut conn, &b).unwrap();
+
+        assert_eq!(
+            achieved_trophy_names_for_course(&conn, course_id).unwrap(),
+            vec!["gold".to_string(), "silver".to_string()],
+        );
+    }
+
+    #[test]
+    fn deleting_course_score_cascades_to_trophy_achievements() {
+        let mut conn = open_db();
+        let course_id = insert_test_course(&mut conn);
+
+        let mut insert = sample_score_insert(course_id, 500, "Normal");
+        insert.achieved_trophies = vec!["gold".to_string()];
+        let score_id = insert_course_score(&mut conn, &insert).unwrap();
+
+        conn.execute("DELETE FROM course_scores WHERE id = ?1", params![score_id]).unwrap();
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM course_trophy_achievements", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
     }
 
     #[test]

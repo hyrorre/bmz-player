@@ -1795,14 +1795,15 @@ impl WinitApp {
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0);
             // Store the names of trophies that were achieved on this attempt
-            // as a JSON array of strings.  The full trophy definitions live on
-            // the `courses` row (`trophies_json`); here we only record which
-            // were earned this play.
-            let achieved_trophies: Vec<&str> = course_result
+            // as a JSON array of strings (for round-trip / audit) and
+            // separately as structured rows in course_trophy_achievements via
+            // CourseScoreInsert.achieved_trophies, which is what powers
+            // per-trophy best queries.
+            let achieved_trophies: Vec<String> = course_result
                 .trophy_results
                 .iter()
                 .filter(|t| t.achieved)
-                .map(|t| t.name.as_str())
+                .map(|t| t.name.clone())
                 .collect();
             let trophies_json =
                 serde_json::to_string(&achieved_trophies).unwrap_or_else(|_| "[]".to_string());
@@ -1821,6 +1822,7 @@ impl WinitApp {
                 played_at,
                 charts: chart_records,
                 replays: replay_records,
+                achieved_trophies,
             };
             match self.boot.library_db.insert_course_score(&insert) {
                 Ok(course_score_id) => {

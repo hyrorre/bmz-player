@@ -338,6 +338,28 @@ pub const LIBRARY_MIGRATIONS: &[Migration] = &[
                 ON course_replay_slots(course_id);",
         ],
     },
+    Migration {
+        version: 12,
+        // Per-attempt trophy achievements, denormalized for indexed queries.
+        // `course_scores.trophies_json` still stores the JSON list as-is for
+        // round-trip/audit purposes; this table makes \"which trophies were
+        // ever achieved\" and \"best score that achieved trophy X\" cheap.
+        //
+        // PRIMARY KEY ensures each attempt contributes at most one row per
+        // trophy name.  CASCADE fires when either the course or the attempt
+        // is deleted.
+        statements: &[
+            "CREATE TABLE course_trophy_achievements (
+                course_score_id INTEGER NOT NULL
+                    REFERENCES course_scores(id) ON DELETE CASCADE,
+                course_id INTEGER NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+                trophy_name TEXT NOT NULL,
+                PRIMARY KEY(course_score_id, trophy_name)
+            );",
+            "CREATE INDEX idx_course_trophy_achievements_course_name
+                ON course_trophy_achievements(course_id, trophy_name);",
+        ],
+    },
 ];
 
 pub const SCORE_MIGRATIONS: &[Migration] = &[
