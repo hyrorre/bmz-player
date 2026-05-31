@@ -1941,6 +1941,7 @@ impl WinitApp {
             judge_constraint: bmz_core::course::CourseJudgeConstraint::Normal,
             ln_mode_override: None,
             course_gauge_override: None,
+            course_gauge_property_override: None,
         };
         self.start_chart_with_options(chart_id, options);
         true
