@@ -1723,6 +1723,15 @@ impl WinitApp {
             })
             .collect();
         let any_autoplay = course.entry_results.iter().any(|r| r.finished.result.autoplay);
+        // Collect score_history row ids written by per-chart store_play_result
+        // so they can be tagged with the new course_score_id after insert.
+        // Autoplay charts have score_history_id == 0 and are filtered out.
+        let history_ids: Vec<i64> = course
+            .entry_results
+            .iter()
+            .map(|r| r.finished.stored.score_history_id)
+            .filter(|id| *id > 0)
+            .collect();
         let last_finished = course.entry_results.last().map(|r| r.finished.clone());
         let last_clear_type = course
             .entry_results
@@ -1813,8 +1822,27 @@ impl WinitApp {
                 charts: chart_records,
                 replays: replay_records,
             };
-            if let Err(error) = self.boot.library_db.insert_course_score(&insert) {
-                tracing::error!(%error, course_id, "failed to persist course score");
+            match self.boot.library_db.insert_course_score(&insert) {
+                Ok(course_score_id) => {
+                    // Backfill the per-chart `score_history` rows with the
+                    // course attempt id so they can be filtered as part of
+                    // this course play later.
+                    if let Err(error) = self
+                        .boot
+                        .score_db
+                        .tag_score_history_with_course(&history_ids, course_score_id)
+                    {
+                        tracing::warn!(
+                            %error,
+                            course_id,
+                            course_score_id,
+                            "failed to tag score_history rows with course_score_id"
+                        );
+                    }
+                }
+                Err(error) => {
+                    tracing::error!(%error, course_id, "failed to persist course score");
+                }
             }
         }
 

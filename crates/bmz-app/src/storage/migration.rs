@@ -400,4 +400,21 @@ pub const SCORE_MIGRATIONS: &[Migration] = &[
             "ALTER TABLE score_best ADD COLUMN ghost TEXT NOT NULL DEFAULT '';",
         ],
     },
+    Migration {
+        version: 4,
+        // Per-chart score history rows can be tagged with the library.db
+        // `course_scores.id` of the course attempt they belong to, so a chart
+        // play can be traced back to its course context.  NULL means "solo
+        // play" or "course history written before this migration".
+        //
+        // No FK is added because `score.db` and `library.db` are separate
+        // SQLite databases and FKs cannot span them.  `course_score_id` is
+        // a plain INTEGER index into `library.db`'s `course_scores.id`.
+        statements: &[
+            "ALTER TABLE score_history ADD COLUMN course_score_id INTEGER;",
+            "CREATE INDEX idx_score_history_course_score_id
+                ON score_history(course_score_id)
+                WHERE course_score_id IS NOT NULL;",
+        ],
+    },
 ];
