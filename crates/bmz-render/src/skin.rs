@@ -273,7 +273,7 @@ pub struct SkinImageSetDef {
     pub click: i32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
 pub struct SkinValueDef {
     #[serde(default, deserialize_with = "deserialize_skin_id")]
     pub id: String,
@@ -309,6 +309,9 @@ pub struct SkinValueDef {
     pub ref_id: i32,
     #[serde(default)]
     pub expr: String,
+    /// Lua `value = function()` から変換した浮動小数 digit 式。空なら `expr` / `ref` を使う。
+    #[serde(default)]
+    pub value_expr: String,
     #[serde(default)]
     pub offset: Vec<SkinValueDef>,
 }
@@ -4662,7 +4665,32 @@ fn skin_value_number(value: &SkinValueDef, state: SkinDrawState) -> Option<i64> 
     if !value.expr.trim().is_empty() {
         return skin_state_number_expr(&value.expr, state);
     }
+    if !value.value_expr.trim().is_empty() {
+        return skin_state_digit_float_expr(&value.value_expr, state)
+            .map(|value| value.round() as i64);
+    }
     skin_state_number(value.ref_id, state)
+}
+
+fn skin_state_digit_float_expr(expr: &str, state: SkinDrawState) -> Option<f32> {
+    let expr = expr.trim();
+    if expr.is_empty() {
+        return None;
+    }
+    if let Some((left, right)) = expr.split_once('*') {
+        let left = skin_state_digit_float_expr(left.trim(), state)?;
+        let right = skin_state_digit_float_expr(right.trim(), state)?;
+        return Some(left * right);
+    }
+    if let Some((numerator, denominator)) = expr.split_once('/') {
+        let numerator = skin_state_additive_float_expr(numerator.trim(), state)?;
+        let denominator = skin_state_additive_float_expr(denominator.trim(), state)?;
+        if denominator.abs() < f32::EPSILON {
+            return Some(0.0);
+        }
+        return Some(numerator / denominator);
+    }
+    skin_state_additive_float_expr(expr, state)
 }
 
 fn skin_value_number_or_songlist_level(value: &SkinValueDef, state: SkinDrawState) -> Option<i64> {
@@ -12045,11 +12073,10 @@ mod tests {
         };
         assert!((skin_state_float_number(113, best_rate).unwrap() - 0.75).abs() < 0.001);
         assert!(!eval_skin_draw_condition("float_number(113) == 0", best_rate));
-        assert!(eval_skin_draw_condition("float_number(113) == 0", SkinDrawState {
-            total_notes: 100,
-            best_ex_score: Some(0),
-            ..SkinDrawState::default()
-        }));
+        assert!(eval_skin_draw_condition(
+            "float_number(113) == 0",
+            SkinDrawState { total_notes: 100, best_ex_score: Some(0), ..SkinDrawState::default() }
+        ));
         // NUMBER_DURATION (312) = current note display duration in ms.
         assert_eq!(skin_state_number(312, state), Some(183_000));
         // NUMBER_DURATION_GREEN (313) = duration * 3 / 5.
@@ -12059,6 +12086,18 @@ mod tests {
         // When no recent judgement, 525 returns None
         let no_judge = SkinDrawState { judge_timing_ms: None, ..state };
         assert_eq!(skin_state_number(525, no_judge), None);
+    }
+
+    #[test]
+    fn skin_value_number_evaluates_value_expr() {
+        let state = SkinDrawState { total_duration_ms: 183_000, ..SkinDrawState::default() };
+        let value = SkinValueDef {
+            id: "lanecover-green".to_string(),
+            src: String::new(),
+            value_expr: "0.6*number(312)".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(skin_value_number(&value, state), Some(109_800));
     }
 
     #[test]

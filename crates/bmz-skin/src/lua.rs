@@ -1260,6 +1260,12 @@ fn lua_table_to_json(
                     continue;
                 }
                 if !is_graph
+                    && let Some(ref_id) = infer_gated_number_ref(function, main_state_probe)
+                {
+                    object.insert("ref".to_string(), JsonValue::Number(JsonNumber::from(ref_id)));
+                    continue;
+                }
+                if !is_graph
                     && let Some(ref_id) = infer_main_state_number_ref(function, main_state_probe)
                 {
                     object.insert("ref".to_string(), JsonValue::Number(JsonNumber::from(ref_id)));
@@ -1273,16 +1279,15 @@ fn lua_table_to_json(
                         "type".to_string(),
                         JsonValue::Number(JsonNumber::from(graph_type)),
                     );
+                } else if !is_graph
+                    && let Some(expr) = infer_main_state_number_expr(function, main_state_probe)
+                {
+                    object.insert("expr".to_string(), JsonValue::String(expr));
                 } else if let Some(value_expr) = infer_value_float_expr(function, main_state_probe)
                 {
                     object.insert("value_expr".to_string(), JsonValue::String(value_expr));
                 } else if !is_graph {
-                    if let Some(expr) = infer_main_state_number_expr(function, main_state_probe) {
-                        object.insert("expr".to_string(), JsonValue::String(expr));
-                    } else {
-                        warnings
-                            .push(format!("skipping unsupported value function at {path}.{key}"));
-                    }
+                    warnings.push(format!("skipping unsupported value function at {path}.{key}"));
                 } else {
                     warnings.push(format!("skipping unsupported value function at {path}.{key}"));
                 }
@@ -1363,6 +1368,48 @@ fn infer_main_state_number_ref(
         }
         _ => None,
     }
+}
+
+/// Rm-skin `getDummyNumber(ref)` — `number(101) < 1` なら 0、でなければ `number(ref)`。
+fn infer_gated_number_ref(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<i32> {
+    const GATE_REF: i32 = 101;
+    let refs = collect_number_refs(function, main_state_probe)?;
+    if !refs.contains(&GATE_REF) {
+        return None;
+    }
+    let target = if refs.len() == 1 {
+        GATE_REF
+    } else if refs.len() == 2 {
+        if refs[0] == GATE_REF && refs[1] == GATE_REF {
+            GATE_REF
+        } else {
+            refs.iter().copied().find(|ref_id| *ref_id != GATE_REF)?
+        }
+    } else {
+        return None;
+    };
+    let gated_off =
+        call_number_expr_with_values(function, main_state_probe, BTreeMap::from([(GATE_REF, 0)]))?;
+    if gated_off != 0 {
+        return None;
+    }
+    let mut open_values = BTreeMap::from([(GATE_REF, 5), (target, 7)]);
+    if target == GATE_REF {
+        open_values.insert(GATE_REF, 7);
+    }
+    let open_on = call_number_expr_with_values(function, main_state_probe, open_values.clone())?;
+    if open_on != 7 {
+        return None;
+    }
+    open_values.insert(target, 0);
+    let open_zero = call_number_expr_with_values(function, main_state_probe, open_values)?;
+    if open_zero != 0 {
+        return None;
+    }
+    Some(target)
 }
 
 fn infer_main_state_number_expr(
@@ -2143,7 +2190,10 @@ fn collect_float_number_refs(
     let mut calls = Vec::new();
     for float_value in [0.0_f64, 1.0] {
         {
-            main_state_probe.lock().ok()?.begin_draw_probe(BTreeMap::new(), BTreeMap::from([(113, float_value)]));
+            main_state_probe
+                .lock()
+                .ok()?
+                .begin_draw_probe(BTreeMap::new(), BTreeMap::from([(113, float_value)]));
         }
         let _ = function.call::<Value>(()).ok();
         {
@@ -2165,8 +2215,84 @@ fn infer_value_float_expr(
     function: &Function,
     main_state_probe: &Arc<Mutex<MainStateProbe>>,
 ) -> Option<String> {
-    infer_division_of_number_sums(function, main_state_probe)
-        .or_else(|| infer_main_state_number_expr(function, main_state_probe))
+    infer_remain_rate_scaled(function, main_state_probe)
+        .or_else(|| infer_number_scalar_multiply(function, main_state_probe))
+        .or_else(|| infer_division_of_number_sums(function, main_state_probe))
+}
+
+const REMAIN_NOTE_REFS: [i32; 6] = [106, 110, 111, 112, 113, 114];
+
+fn remain_notes_numerator_expr() -> String {
+    "number(106)-number(110)-number(111)-number(112)-number(113)-number(114)".to_string()
+}
+
+fn infer_remain_rate_scaled(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    let refs = collect_number_refs(function, main_state_probe)?;
+    if refs.len() != 6 || !refs.iter().all(|ref_id| REMAIN_NOTE_REFS.contains(ref_id)) {
+        return None;
+    }
+    let mut probe_values = BTreeMap::from([(106, 10)]);
+    for ref_id in REMAIN_NOTE_REFS {
+        probe_values.entry(ref_id).or_insert(0);
+    }
+    let scale_sample =
+        call_number_float_with_values(function, main_state_probe, probe_values.clone())?;
+    let scale = scale_sample.round();
+    if (scale - 100.0).abs() > 0.5 && (scale - 10000.0).abs() > 0.5 {
+        return None;
+    }
+    let numerator = remain_notes_numerator_expr();
+    let expr = format!("({numerator})/number(106)*{}", scale as i64);
+    let expected = |values: &BTreeMap<i32, i32>| {
+        let remain: f64 = REMAIN_NOTE_REFS
+            .iter()
+            .map(|ref_id| {
+                let value = values.get(ref_id).copied().unwrap_or(0) as f64;
+                if *ref_id == 106 { value } else { -value }
+            })
+            .sum();
+        let total = values.get(&106).copied().unwrap_or(0) as f64;
+        if total.abs() < f64::EPSILON { 0.0 } else { remain / total * scale }
+    };
+    for test_values in [
+        probe_values.clone(),
+        BTreeMap::from([(106, 20), (110, 5)]),
+        BTreeMap::from([(106, 30), (110, 10), (111, 5)]),
+    ] {
+        let actual =
+            call_number_float_with_values(function, main_state_probe, test_values.clone())?;
+        if !approx_float_eq(actual, expected(&test_values)) {
+            return None;
+        }
+    }
+    Some(expr)
+}
+
+fn infer_number_scalar_multiply(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    let refs = collect_number_refs(function, main_state_probe)?;
+    if refs.len() != 1 {
+        return None;
+    }
+    let ref_id = refs[0];
+    let baseline = call_number_float_with_values(function, main_state_probe, BTreeMap::new())?;
+    let at_one =
+        call_number_float_with_values(function, main_state_probe, BTreeMap::from([(ref_id, 1)]))?;
+    let coefficient = at_one - baseline;
+    if coefficient.abs() < f64::EPSILON {
+        return None;
+    }
+    let at_three =
+        call_number_float_with_values(function, main_state_probe, BTreeMap::from([(ref_id, 3)]))?;
+    if !approx_float_eq(at_three - baseline, coefficient * 3.0) {
+        return None;
+    }
+    Some(format!("{coefficient}*number({ref_id})"))
 }
 
 fn fast_slow_ref_set() -> BTreeMap<i32, ()> {

@@ -79,8 +79,7 @@ fn normalize_lua_skin_category_map(value: JsonValue) -> JsonValue {
     };
     if let Some(JsonValue::Object(category_map)) = map.get("category").cloned() {
         let entries: Vec<JsonValue> = category_map.into_values().collect();
-        if !entries.is_empty()
-            && entries.iter().all(|entry| matches!(entry, JsonValue::Object(_)))
+        if !entries.is_empty() && entries.iter().all(|entry| matches!(entry, JsonValue::Object(_)))
         {
             map.insert("category".to_string(), JsonValue::Array(entries));
         }
@@ -1040,8 +1039,12 @@ mod tests {
             "score diff draw should be inferred: {messages:?}"
         );
         assert!(
-            messages.iter().any(|message| message.contains("value[14].value")),
-            "unexpected warning set: {messages:?}"
+            !messages.iter().any(|message| message.contains("value[14].value")),
+            "getDummyNumber values should be inferred: {messages:?}"
+        );
+        assert!(
+            messages.iter().any(|message| message.contains("value[31].value")),
+            "adjusted-rate still unsupported: {messages:?}"
         );
     }
 
