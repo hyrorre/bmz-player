@@ -1563,7 +1563,54 @@ impl WinitApp {
         // Course is over either because every entry was played or because the
         // most recent chart was Failed (skip remaining entries).
         let course = self.active_course.take().unwrap();
+        let course_id = course.course_id;
+
+        // Extract data needed to persist the course score before `into_result`
+        // consumes `entry_results`.
+        let chart_records: Vec<crate::storage::library_db::CourseScoreChartRecord> = course
+            .entry_results
+            .iter()
+            .enumerate()
+            .map(|(i, r)| crate::storage::library_db::CourseScoreChartRecord {
+                position: i as i64,
+                chart_id: r.chart_id,
+                ex_score: r.finished.result.score.ex_score(),
+                max_combo: r.finished.result.score.max_combo,
+                clear_type: r.finished.result.clear_type.as_str().to_string(),
+                gauge_value: r.finished.result.gauge_value,
+            })
+            .collect();
+        let replay_records: Vec<crate::storage::library_db::CourseReplayRecord> = course
+            .entry_results
+            .iter()
+            .enumerate()
+            .map(|(i, r)| crate::storage::library_db::CourseReplayRecord {
+                position: i as i64,
+                chart_id: r.chart_id,
+                replay_path: r.finished.stored.replay_path.clone(),
+            })
+            .collect();
+        let any_autoplay = course.entry_results.iter().any(|r| r.finished.result.autoplay);
         let last_finished = course.entry_results.last().map(|r| r.finished.clone());
+        let last_clear_type = course
+            .entry_results
+            .last()
+            .map(|r| r.finished.result.clear_type)
+            .unwrap_or(bmz_core::clear::ClearType::NoPlay);
+        let last_gauge_type = course
+            .entry_results
+            .last()
+            .map(|r| r.finished.result.gauge_type)
+            .unwrap_or(bmz_core::clear::GaugeType::Normal);
+        let last_gauge_value =
+            course.entry_results.last().map(|r| r.finished.result.gauge_value).unwrap_or(0.0);
+        let max_combo: u32 = course
+            .entry_results
+            .iter()
+            .map(|r| r.finished.result.score.max_combo)
+            .max()
+            .unwrap_or(0);
+
         let course_result = course.into_result();
         tracing::info!(
             title = %course_result.title,
@@ -1580,6 +1627,65 @@ impl WinitApp {
                 .collect::<Vec<_>>(),
             "course finished"
         );
+        // Persist course score + per-chart replay paths.
+        //
+        // - Autoplay courses are not saved, matching the per-chart autoplay
+        //   policy in `store_play_result`.
+        // - The course clear type is taken from the last played chart's
+        //   gauge survival result; a Failed at any point forces Failed.
+        // - The per-chart replay files have already been written by
+        //   `store_play_result` for each chart in the course; we only record
+        //   the relative paths here so the course can be replayed back to back
+        //   in a future iteration.
+        // - TODO(course-replay-reload): launching a course via a "replay slot"
+        //   from the select screen is out of scope for this change; only the
+        //   save path is wired up.
+        if !any_autoplay {
+            let final_clear_type = if course_result.course_failed {
+                bmz_core::clear::ClearType::Failed
+            } else {
+                last_clear_type
+            };
+            let miss_count = course_result.judge_counts.bad
+                + course_result.judge_counts.poor
+                + course_result.judge_counts.empty_poor;
+            let played_at = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            // Store the names of trophies that were achieved on this attempt
+            // as a JSON array of strings.  The full trophy definitions live on
+            // the `courses` row (`trophies_json`); here we only record which
+            // were earned this play.
+            let achieved_trophies: Vec<&str> = course_result
+                .trophy_results
+                .iter()
+                .filter(|t| t.achieved)
+                .map(|t| t.name.as_str())
+                .collect();
+            let trophies_json = serde_json::to_string(&achieved_trophies)
+                .unwrap_or_else(|_| "[]".to_string());
+            let insert = crate::storage::library_db::CourseScoreInsert {
+                course_id,
+                ex_score: course_result.total_ex_score,
+                max_ex_score: course_result.max_ex_score,
+                clear_type: final_clear_type.as_str().to_string(),
+                gauge_type: last_gauge_type.as_str().to_string(),
+                gauge_value: last_gauge_value,
+                max_combo,
+                miss_count,
+                course_failed: course_result.course_failed,
+                course_clear: course_result.course_clear,
+                trophies_json,
+                played_at,
+                charts: chart_records,
+                replays: replay_records,
+            };
+            if let Err(error) = self.boot.library_db.insert_course_score(&insert) {
+                tracing::error!(%error, course_id, "failed to persist course score");
+            }
+        }
+
         self.finished_course = Some(course_result);
         // Use the last chart's result for the standard result skin display.
         if let Some(last) = last_finished {
