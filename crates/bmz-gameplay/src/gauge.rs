@@ -432,11 +432,49 @@ pub fn default_gauge_definitions() -> &'static [GaugeDefinition] {
             values: [0.0, 0.0, 0.0, -100.0, -100.0, -100.0],
             guts: &[],
         },
+        // Course (段位) gauges. beatoraja `GaugeProperty.SEVENKEYS` の CLASS / EXCLASS / EXHARDCLASS。
+        // 単曲プレイでは選ばれず、`apply_course_constraints` がコース時にプレイヤー選択の Gauge から
+        // 6/7/8 のいずれかへマップする。
+        GaugeDefinition {
+            gauge_type: GaugeType::Class,
+            clear_type: Some(ClearType::Normal),
+            modifier: GaugeModifier::None,
+            min: 0.0,
+            max: 100.0,
+            init: 100.0,
+            border: 1.0,
+            values: [0.15, 0.12, 0.06, -1.5, -3.0, -1.5],
+            guts: CLASS_GUTS,
+        },
+        GaugeDefinition {
+            gauge_type: GaugeType::ExClass,
+            clear_type: Some(ClearType::Hard),
+            modifier: GaugeModifier::None,
+            min: 0.0,
+            max: 100.0,
+            init: 100.0,
+            border: 1.0,
+            values: [0.15, 0.12, 0.03, -3.0, -6.0, -3.0],
+            guts: &[],
+        },
+        GaugeDefinition {
+            gauge_type: GaugeType::ExHardClass,
+            clear_type: Some(ClearType::ExHard),
+            modifier: GaugeModifier::None,
+            min: 0.0,
+            max: 100.0,
+            init: 100.0,
+            border: 1.0,
+            values: [0.15, 0.06, 0.0, -5.0, -10.0, -5.0],
+            guts: &[],
+        },
     ]
 }
 
 const NORMAL_GUTS: &[(f32, f32)] = &[(30.0, 0.5), (50.0, 0.7)];
 const HARD_GUTS: &[(f32, f32)] = &[(30.0, 0.6), (50.0, 0.8)];
+// beatoraja CLASS の guts テーブル（7keys）。下限近くで減衰量が弱まる救済補正。
+const CLASS_GUTS: &[(f32, f32)] = &[(5.0, 0.4), (10.0, 0.5), (15.0, 0.6), (20.0, 0.7), (25.0, 0.8)];
 
 /// beatoraja `BMSPlayerRule.calculateDefaultTotal` 相当。
 pub fn default_gauge_total(total_notes: u32) -> f64 {
