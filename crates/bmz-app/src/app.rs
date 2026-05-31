@@ -2184,16 +2184,58 @@ impl WinitApp {
     }
 
     fn start_replay_for_selected(&mut self, slot: u8) -> bool {
-        let Some(chart_id) = self.currently_selected_chart_id() else {
-            return false;
-        };
-        self.try_start_replay_for_chart(chart_id, slot)
+        // Prefer the chart path when the cursor is on a chart row.
+        if let Some(chart_id) = self.currently_selected_chart_id() {
+            return self.try_start_replay_for_chart(chart_id, slot);
+        }
+        // Otherwise, if the cursor is on a course row, try to replay the
+        // latest attempt.  All four digit slots map to "latest" for now —
+        // course_replay_slots (the equivalent of `replay_slots` for courses)
+        // is not yet implemented, so distinguishing slots would be misleading.
+        if let Some(course_id) = self.currently_selected_course_id() {
+            return self.try_start_course_replay_latest(course_id, slot);
+        }
+        false
     }
 
     fn currently_selected_chart_id(&self) -> Option<i64> {
         match self.select_items.get(self.selected_index)? {
             SelectItem::Chart(row) => row.chart.as_ref().map(|chart| chart.chart_id),
             SelectItem::Folder { .. } | SelectItem::Course(_) => None,
+        }
+    }
+
+    fn currently_selected_course_id(&self) -> Option<i64> {
+        match self.select_items.get(self.selected_index)? {
+            SelectItem::Course(row) => Some(row.course_id),
+            SelectItem::Chart(_) | SelectItem::Folder { .. } => None,
+        }
+    }
+
+    fn try_start_course_replay_latest(&mut self, course_id: i64, slot: u8) -> bool {
+        match self.boot.library_db.latest_course_score_id(course_id) {
+            Ok(Some(course_score_id)) => {
+                tracing::info!(
+                    course_id,
+                    course_score_id,
+                    slot,
+                    "starting course replay from select"
+                );
+                self.start_course_replay(course_id, course_score_id);
+                true
+            }
+            Ok(None) => {
+                tracing::info!(course_id, slot, "no saved course attempt to replay");
+                false
+            }
+            Err(error) => {
+                tracing::error!(
+                    %error,
+                    course_id,
+                    "failed to look up latest course score for replay"
+                );
+                false
+            }
         }
     }
 
