@@ -1,6 +1,7 @@
 use bmz_core::lane::{KeyMode, LANE_COUNT, Lane};
 use bmz_core::time::TimeUs;
 
+pub use crate::chart_graph::BpmGraphSegment;
 use crate::skin_offset::SkinOffsetValues;
 
 /// beatoraja の OPTION_COURSE_STAGE1..4 / OPTION_COURSE_STAGE_FINAL (280..283 / 289) に対応。
@@ -80,6 +81,22 @@ pub struct RenderSnapshot {
     pub projected_best_ex_score: Option<u32>,
     pub target_ex_score: Option<u32>,
     pub judge_timing_offset_ms: i32,
+    /// beatoraja `NUMBER_MAINBPM` (92) 用の代表 BPM。
+    pub main_bpm: f32,
+    /// beatoraja `event_index(BUTTON_HSFIX=55)`。
+    pub hsfix_index: i32,
+    /// Rm-skin F/S threshold 表示 (ms)。
+    pub fs_threshold_ms: i32,
+    /// HSFIX 連動の adjusted hidden cover (0..1)。
+    pub adjusted_cover_progress: Option<f32>,
+    /// HSFIX 連動の BPM 比率 (0..1)。
+    pub adjusted_rate: Option<f32>,
+    /// HSFIX 連動の BPM 比率 ×100 整数部。
+    pub adjusted_rate_adot: Option<i32>,
+    /// プレイ用 judgegraph (1 秒単位ノーツ密度)。
+    pub judge_graph_density: Vec<u8>,
+    /// プレイ用 bpmgraph 線分。
+    pub bpm_graph_segments: Vec<BpmGraphSegment>,
     /// OPTION_AUTOPLAYON (33) / OPTION_AUTOPLAYOFF (32) 用。
     pub autoplay: bool,
     /// OPTION_MODE_COURSE (290) とステージ別 op (280..283 / 289) 用。未対応時は None。

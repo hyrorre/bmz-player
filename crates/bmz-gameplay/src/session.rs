@@ -123,6 +123,8 @@ pub struct GameSession {
     pub bga_enabled: bool,
     pub poor_bga_duration_us: i64,
     pub bga_stretch: i32,
+    /// beatoraja `event_index(BUTTON_HSFIX=55)`。
+    pub hsfix_index: i32,
     pub input_timestamp_anchor: Option<InputTimestampAnchor>,
     /// 当該フレーム中に発火した Mine ヒット。`advance_session_frame` の終端で
     /// `SessionFrame.mine_hits` に吸い出される（app 層が地雷 SE を鳴らす）。
@@ -925,6 +927,7 @@ mod tests {
             bga_enabled: true,
             poor_bga_duration_us: 500_000,
             bga_stretch: 1,
+            hsfix_index: 0,
             input_timestamp_anchor: None,
             pending_mine_hits: Vec::new(),
             state: PlayState::Ready,

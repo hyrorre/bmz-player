@@ -1112,6 +1112,15 @@ impl WinitApp {
                 }
                 return;
             }
+            if event.physical_key == PhysicalKey::Code(KeyCode::KeyH)
+                && event.state == ElementState::Pressed
+                && !event.repeat
+            {
+                let session = &mut active_play.running.session;
+                session.hsfix_index = (session.hsfix_index + 1) % 5;
+                tracing::info!(hsfix_index = session.hsfix_index, "adjusted HSFIX mode");
+                return;
+            }
             // Start ボタンの2回連続押し → レーンカバー表示切替
             if event.state == ElementState::Pressed
                 && !event.repeat

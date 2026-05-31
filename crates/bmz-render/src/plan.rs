@@ -881,12 +881,22 @@ fn plan_play(
         projected_best_ex_score: snapshot.projected_best_ex_score,
         target_ex_score: snapshot.target_ex_score,
         judge_timing_offset_ms: snapshot.judge_timing_offset_ms,
-        hit_error_ring: snapshot.hit_error_ring.values,
-        hit_error_ring_index: snapshot.hit_error_ring.index,
+        main_bpm: snapshot.main_bpm,
+        hsfix_index: snapshot.hsfix_index,
+        fs_threshold_ms: snapshot.fs_threshold_ms,
+        adjusted_cover_progress: snapshot.adjusted_cover_progress,
+        adjusted_rate: snapshot.adjusted_rate,
+        adjusted_rate_adot: snapshot.adjusted_rate_adot,
         autoplay: snapshot.autoplay,
         course_stage: snapshot.course_stage,
+        hit_error_ring: snapshot.hit_error_ring.values,
+        hit_error_ring_index: snapshot.hit_error_ring.index,
         ..crate::skin::SkinDrawState::default()
     };
+    let play_skin = skin.with_play_graphs(
+        snapshot.judge_graph_density.clone(),
+        snapshot.bpm_graph_segments.clone(),
+    );
     let skin_state = advance_skin_dynamic_timers(skin, dynamic_timers, skin_state, play_elapsed_ms);
     let skin_text = SkinTextState {
         title: &snapshot.title,
@@ -901,7 +911,7 @@ fn plan_play(
     // `{"id":"notes"}` マーカーと `timer: 3` (FAILED) で3分割。
     // 描画順: 背面skin → ロング/ノーツ → 前面skin → 暗転/閉店オーバーレイ
     let (behind_notes_items, front_notes_items, failed_overlay_items) =
-        skin.static_document_items_split_for_state_and_text(skin_state, skin_text);
+        play_skin.static_document_items_split_for_state_and_text(skin_state, skin_text);
     let behind_notes_items = skin.apply_play_skin_global_offset(behind_notes_items, skin_state);
     append_skin_render_items(&mut commands, &behind_notes_items);
 

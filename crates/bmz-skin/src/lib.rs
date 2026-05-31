@@ -1043,8 +1043,16 @@ mod tests {
             "getDummyNumber values should be inferred: {messages:?}"
         );
         assert!(
-            messages.iter().any(|message| message.contains("value[31].value")),
-            "adjusted-rate still unsupported: {messages:?}"
+            !messages.iter().any(|message| message.contains("value[31].value")),
+            "adjusted-rate should be inferred: {messages:?}"
+        );
+        assert!(
+            !messages.iter().any(|message| message.contains("slider[3].value")),
+            "adjustedcover slider should be inferred: {messages:?}"
+        );
+        assert!(
+            !messages.iter().any(|message| message.contains("value[50].value")),
+            "threshold-num should be inferred: {messages:?}"
         );
     }
 

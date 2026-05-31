@@ -10,7 +10,10 @@ use anyhow::{Context, Result, anyhow, bail};
 use mlua::{Function, HookTriggers, Lua, Table, Value, Variadic, VmState};
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 
-use bmz_render::skin::{SKIN_DYNAMIC_TIMER_BASE, SKIN_REF_PLAY_GAUGE_TYPE};
+use bmz_render::skin::{
+    SKIN_DYNAMIC_TIMER_BASE, SKIN_EXPR_ADJUSTED_COVER, SKIN_EXPR_ADJUSTED_RATE,
+    SKIN_EXPR_ADJUSTED_RATE_ADOT, SKIN_EXPR_FS_THRESHOLD, SKIN_REF_PLAY_GAUGE_TYPE,
+};
 
 use crate::{LoadedLuaSkinValue, SkinLoadWarning};
 
@@ -1260,6 +1263,24 @@ fn lua_table_to_json(
                     continue;
                 }
                 if !is_graph
+                    && path.contains(".slider[")
+                    && let Some(value_expr) =
+                        infer_slider_value_expr(function, object_id.as_deref(), main_state_probe)
+                {
+                    object.insert("value_expr".to_string(), JsonValue::String(value_expr));
+                    continue;
+                }
+                if !is_graph
+                    && let Some(value_expr) = infer_bmz_builtin_value_expr(
+                        function,
+                        object_id.as_deref(),
+                        main_state_probe,
+                    )
+                {
+                    object.insert("value_expr".to_string(), JsonValue::String(value_expr));
+                    continue;
+                }
+                if !is_graph
                     && let Some(ref_id) = infer_gated_number_ref(function, main_state_probe)
                 {
                     object.insert("ref".to_string(), JsonValue::Number(JsonNumber::from(ref_id)));
@@ -1286,8 +1307,6 @@ fn lua_table_to_json(
                 } else if let Some(value_expr) = infer_value_float_expr(function, main_state_probe)
                 {
                     object.insert("value_expr".to_string(), JsonValue::String(value_expr));
-                } else if !is_graph {
-                    warnings.push(format!("skipping unsupported value function at {path}.{key}"));
                 } else {
                     warnings.push(format!("skipping unsupported value function at {path}.{key}"));
                 }
@@ -2209,6 +2228,88 @@ fn collect_float_number_refs(
 
 fn format_number_sum_expr(refs: &[i32]) -> String {
     refs.iter().map(|ref_id| format!("number({ref_id})")).collect::<Vec<_>>().join("+")
+}
+
+fn infer_slider_value_expr(
+    function: &Function,
+    object_id: Option<&str>,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    match object_id {
+        Some("adjustedcover") | Some("adjusted-cover") | Some("adjusted_cover") => {
+            Some(SKIN_EXPR_ADJUSTED_COVER.to_string())
+        }
+        _ => infer_hsfix_dependent_float(function, main_state_probe)
+            .map(|_| SKIN_EXPR_ADJUSTED_COVER.to_string()),
+    }
+}
+
+fn infer_bmz_builtin_value_expr(
+    function: &Function,
+    object_id: Option<&str>,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    match object_id {
+        Some("adjusted-rate-num") | Some("adjusted_rate_num") => {
+            Some(SKIN_EXPR_ADJUSTED_RATE.to_string())
+        }
+        Some("adjusted-rate-adot-num") | Some("adjusted_rate_adot_num") => {
+            Some(SKIN_EXPR_ADJUSTED_RATE_ADOT.to_string())
+        }
+        Some("threshold-num") | Some("threshold_num") | Some("fs-threshold") => {
+            Some(SKIN_EXPR_FS_THRESHOLD.to_string())
+        }
+        _ => {
+            let refs = collect_number_refs(function, main_state_probe)?;
+            if refs.iter().any(|ref_id| matches!(ref_id, 160 | 90 | 91 | 314 | 14)) {
+                infer_hsfix_dependent_float(function, main_state_probe).map(|_| {
+                    if object_id.is_some_and(|id| id.contains("adot") || id.contains("dot")) {
+                        SKIN_EXPR_ADJUSTED_RATE_ADOT.to_string()
+                    } else {
+                        SKIN_EXPR_ADJUSTED_RATE.to_string()
+                    }
+                })
+            } else if collect_option_calls(function, main_state_probe)
+                .is_some_and(|options| options.iter().any(|option| (180..=183).contains(option)))
+            {
+                Some(SKIN_EXPR_FS_THRESHOLD.to_string())
+            } else {
+                None
+            }
+        }
+    }
+}
+
+fn infer_hsfix_dependent_float(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<f64> {
+    let number_refs = collect_number_refs(function, main_state_probe)?;
+    let float_refs = collect_float_number_refs(function, main_state_probe)?;
+    if number_refs.iter().any(|ref_id| matches!(ref_id, 160 | 90 | 91))
+        || float_refs.iter().any(|ref_id| matches!(ref_id, 14 | 314))
+    {
+        Some(0.0)
+    } else {
+        None
+    }
+}
+
+fn collect_option_calls(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<Vec<i32>> {
+    {
+        main_state_probe.lock().ok()?.begin_number_call_recording(0);
+    }
+    let _ = function.call::<Value>(()).ok();
+    let calls = {
+        let mut probe = main_state_probe.lock().ok()?;
+        let calls = probe.option_calls.clone();
+        probe.end_recording();
+        calls
+    };
+    (!calls.is_empty()).then_some(calls)
 }
 
 fn infer_value_float_expr(

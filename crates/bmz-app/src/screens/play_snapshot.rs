@@ -7,6 +7,10 @@ use bmz_core::lane::Lane;
 use bmz_core::time::TimeUs;
 use bmz_gameplay::judge::model::JudgementEvent;
 use bmz_gameplay::session::GameSession;
+use bmz_render::chart_graph::{
+    build_bpm_graph_segments, build_judge_graph_density, compute_adjusted_cover_progress,
+    compute_adjusted_rate, rm_skin_fs_threshold_ms,
+};
 use bmz_render::plan::CHART_BGA_TEXTURE_BASE;
 use bmz_render::skin_offset::{SkinOffsetValue, SkinOffsetValues};
 use bmz_render::snapshot::{
@@ -136,6 +140,40 @@ pub fn build_render_snapshot_with_target_and_bga_frames(
         projected_best_ex_score,
         target_ex_score,
         judge_timing_offset_ms: (session.offsets.input_offset_us / 1_000) as i32,
+        main_bpm: session.chart.metadata.initial_bpm as f32,
+        hsfix_index: session.hsfix_index,
+        fs_threshold_ms: rm_skin_fs_threshold_ms(
+            session.chart.metadata.judge_rank,
+            session.chart.metadata.key_mode,
+        ),
+        adjusted_cover_progress: compute_adjusted_cover_progress(
+            session.hidden_enabled,
+            if session.lane_cover_visible { session.lane_cover } else { 0.0 },
+            session.lift,
+            session.hsfix_index,
+            current_bpm(&session.chart, render_now) as f32,
+            chart_max_bpm(&session.chart) as f32,
+            session.chart.metadata.initial_bpm as f32,
+        ),
+        adjusted_rate: compute_adjusted_rate(
+            session.hidden_enabled,
+            session.lanecover_enabled,
+            session.hsfix_index,
+            current_bpm(&session.chart, render_now) as f32,
+            chart_max_bpm(&session.chart) as f32,
+            session.chart.metadata.initial_bpm as f32,
+        ),
+        adjusted_rate_adot: compute_adjusted_rate(
+            session.hidden_enabled,
+            session.lanecover_enabled,
+            session.hsfix_index,
+            current_bpm(&session.chart, render_now) as f32,
+            chart_max_bpm(&session.chart) as f32,
+            session.chart.metadata.initial_bpm as f32,
+        )
+        .map(|rate| (rate * 100.0).floor() as i32),
+        judge_graph_density: build_judge_graph_density(&session.chart),
+        bpm_graph_segments: build_bpm_graph_segments(&session.chart),
         autoplay: session.autoplay.is_some(),
         course_stage: None,
         key_mode: session.chart.metadata.key_mode,

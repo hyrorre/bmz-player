@@ -102,6 +102,10 @@ pub struct SkinDocument {
     pub hidden_cover: Vec<SkinHiddenCoverDef>,
     #[serde(default, rename = "hiterrorvisualizer")]
     pub hiterror_visualizer: Vec<SkinHitErrorVisualizerDef>,
+    #[serde(default)]
+    pub judgegraph: Vec<SkinJudgeGraphDef>,
+    #[serde(default)]
+    pub bpmgraph: Vec<SkinBpmGraphDef>,
     pub note: Option<SkinNoteSetDef>,
     pub gauge: Option<SkinGaugeDef>,
     #[serde(default)]
@@ -119,6 +123,12 @@ pub struct SkinDocument {
     /// 計算する。
     #[serde(skip)]
     pub user_selected_options: Option<Vec<i32>>,
+    /// プレイ描画時のみ plan 側が設定する judgegraph 密度。
+    #[serde(skip, default)]
+    pub play_judge_graph_density: Vec<u8>,
+    /// プレイ描画時のみ plan 側が設定する bpmgraph 線分。
+    #[serde(skip, default)]
+    pub play_bpm_graph_segments: Vec<crate::chart_graph::BpmGraphSegment>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
@@ -386,7 +396,66 @@ pub struct SkinSliderDef {
     pub min: i32,
     #[serde(default)]
     pub max: i32,
+    /// Lua `value = function()` から変換した slider 進捗式 (0.0–1.0)。空なら `type` を使う。
+    #[serde(default)]
+    pub value_expr: String,
 }
+
+/// beatoraja `judgegraph[]` 要素。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SkinJudgeGraphDef {
+    #[serde(default, deserialize_with = "deserialize_skin_id")]
+    pub id: String,
+    #[serde(default)]
+    pub graph_type: i32,
+    #[serde(default, rename = "type")]
+    pub type_alias: i32,
+    #[serde(default, rename = "backTexOff")]
+    pub back_tex_off: i32,
+    #[serde(default)]
+    pub delay: i32,
+    #[serde(default, rename = "orderReverse")]
+    pub order_reverse: i32,
+    #[serde(default, rename = "noGap")]
+    pub no_gap: i32,
+    #[serde(default, rename = "noGapX")]
+    pub no_gap_x: i32,
+}
+
+impl SkinJudgeGraphDef {
+    pub fn graph_type(&self) -> i32 {
+        if self.graph_type != 0 { self.graph_type } else { self.type_alias }
+    }
+}
+
+/// beatoraja `bpmgraph[]` 要素。
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SkinBpmGraphDef {
+    #[serde(default, deserialize_with = "deserialize_skin_id")]
+    pub id: String,
+    #[serde(default)]
+    pub delay: i32,
+    #[serde(default, rename = "lineWidth")]
+    pub line_width: i32,
+    #[serde(default, rename = "mainBPMColor")]
+    pub main_bpm_color: String,
+    #[serde(default, rename = "minBPMColor")]
+    pub min_bpm_color: String,
+    #[serde(default, rename = "maxBPMColor")]
+    pub max_bpm_color: String,
+    #[serde(default, rename = "otherBPMColor")]
+    pub other_bpm_color: String,
+    #[serde(default, rename = "stopLineColor")]
+    pub stop_line_color: String,
+    #[serde(default, rename = "transitionLineColor")]
+    pub transition_line_color: String,
+}
+
+/// Skin value / slider 用の BMZ 組み込み式キー。
+pub const SKIN_EXPR_ADJUSTED_COVER: &str = "bmz:adjusted_cover";
+pub const SKIN_EXPR_ADJUSTED_RATE: &str = "bmz:adjusted_rate";
+pub const SKIN_EXPR_ADJUSTED_RATE_ADOT: &str = "bmz:adjusted_rate_adot";
+pub const SKIN_EXPR_FS_THRESHOLD: &str = "bmz:fs_threshold";
 
 /// beatoraja 予約 ID と衝突しない動的タイマー ID 範囲の先頭。
 pub const SKIN_DYNAMIC_TIMER_BASE: i32 = 9000;
@@ -853,6 +922,19 @@ impl SkinContext {
         self.document.as_ref()
     }
 
+    pub fn with_play_graphs(
+        &self,
+        judge_graph_density: Vec<u8>,
+        bpm_graph_segments: Vec<crate::chart_graph::BpmGraphSegment>,
+    ) -> Self {
+        let mut cloned = self.clone();
+        if let Some(document) = &mut cloned.document {
+            document.play_judge_graph_density = judge_graph_density;
+            document.play_bpm_graph_segments = bpm_graph_segments;
+        }
+        cloned
+    }
+
     pub fn static_document_items(&self) -> Vec<SkinRenderItem> {
         self.static_document_items_for_state(SkinDrawState::default())
     }
@@ -1270,6 +1352,16 @@ pub struct SkinDrawState {
     pub course_stage: Option<CourseStageMarker>,
     /// beatoraja `event_index(SKIN_EVENT_HSFIX)`。0=OFF, 1=START, 2=MAX, 3=MAIN, 4=MIN。
     pub hsfix_index: i32,
+    /// beatoraja `NUMBER_MAINBPM` (92) 用の代表 BPM (プレイ中)。
+    pub main_bpm: f32,
+    /// Rm-skin F/S threshold 表示 (ms)。
+    pub fs_threshold_ms: i32,
+    /// HSFIX 連動の adjusted hidden cover (0..1)。
+    pub adjusted_cover_progress: Option<f32>,
+    /// HSFIX 連動の BPM 比率 (0..1)。
+    pub adjusted_rate: Option<f32>,
+    /// HSFIX 連動の BPM 比率 ×100 整数部。
+    pub adjusted_rate_adot: Option<i32>,
     /// HitErrorVisualizer 用の直近判定タイミング (ms)。
     pub hit_error_ring: [i64; bmz_gameplay::hit_error::HIT_ERROR_RING_LEN],
     pub hit_error_ring_index: usize,
@@ -1379,6 +1471,11 @@ impl Default for SkinDrawState {
             autoplay: false,
             course_stage: None,
             hsfix_index: 0,
+            main_bpm: 0.0,
+            fs_threshold_ms: 25,
+            adjusted_cover_progress: None,
+            adjusted_rate: None,
+            adjusted_rate_adot: None,
             hit_error_ring: [bmz_gameplay::hit_error::HIT_ERROR_EMPTY;
                 bmz_gameplay::hit_error::HIT_ERROR_RING_LEN],
             hit_error_ring_index: 0,
@@ -1949,6 +2046,12 @@ impl SkinDocument {
                 frame,
                 state,
             ));
+        }
+        if let Some(judge_graph) = self.judgegraph.iter().find(|graph| graph.id == destination.id) {
+            return Some(self.judgegraph_render_items(judge_graph, destination, frame, state));
+        }
+        if let Some(bpm_graph) = self.bpmgraph.iter().find(|graph| graph.id == destination.id) {
+            return Some(self.bpmgraph_render_items(bpm_graph, destination, frame, state));
         }
         if let Some(image) = skin_image_for_destination_id(destination.id.as_str(), images) {
             if self.should_skip_lift_lane_cover_render(destination, image)
@@ -3446,6 +3549,92 @@ impl SkinDocument {
         items
     }
 
+    fn judgegraph_render_items(
+        &self,
+        graph: &SkinJudgeGraphDef,
+        destination: &SkinDestinationDef,
+        frame: ResolvedSkinFrame,
+        _state: SkinDrawState,
+    ) -> Vec<SkinRenderItem> {
+        let density = &self.play_judge_graph_density;
+        if density.is_empty() {
+            return Vec::new();
+        }
+        let rect = normalize_skin_frame_rect(frame, self.w, self.h);
+        let frame_alpha = frame.a as f32 / 255.0;
+        let blend = if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal };
+        let max_density = density.iter().copied().max().unwrap_or(1).max(1) as f32;
+        let count = density.len().max(1) as f32;
+        let gap = if graph.no_gap != 0 { 0.0 } else { 1.0 };
+        let bar_w = ((rect.width - gap * (count - 1.0)).max(1.0) / count).max(1.0);
+        let color = Color::rgba(0.75, 0.85, 1.0, 0.85 * frame_alpha);
+        let mut items = Vec::new();
+        for (index, value) in density.iter().enumerate() {
+            if *value == 0 {
+                continue;
+            }
+            let x = rect.x + index as f32 * (bar_w + gap);
+            let height = rect.height * (*value as f32 / max_density);
+            items.push(SkinRenderItem::Rect {
+                rect: Rect { x, y: rect.y + rect.height - height, width: bar_w, height },
+                color,
+                blend,
+            });
+        }
+        items
+    }
+
+    fn bpmgraph_render_items(
+        &self,
+        graph: &SkinBpmGraphDef,
+        destination: &SkinDestinationDef,
+        frame: ResolvedSkinFrame,
+        state: SkinDrawState,
+    ) -> Vec<SkinRenderItem> {
+        let segments = &self.play_bpm_graph_segments;
+        if segments.is_empty() {
+            return Vec::new();
+        }
+        let rect = normalize_skin_frame_rect(frame, self.w, self.h);
+        let frame_alpha = frame.a as f32 / 255.0;
+        let blend = if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal };
+        let min_bpm = state.min_bpm.max(1.0);
+        let max_bpm = state.max_bpm.max(min_bpm + 1.0);
+        let line_width = graph.line_width.max(1) as f32;
+        let main_color = skin_hex_color(&graph.main_bpm_color)
+            .unwrap_or(Color::rgba(1.0, 0.4, 0.4, 0.9))
+            .with_alpha(frame_alpha);
+        let stop_color = skin_hex_color(&graph.stop_line_color)
+            .unwrap_or(Color::rgba(1.0, 1.0, 1.0, 0.8))
+            .with_alpha(frame_alpha);
+        let other_color = skin_hex_color(&graph.other_bpm_color)
+            .unwrap_or(Color::rgba(0.7, 0.7, 0.7, 0.8))
+            .with_alpha(frame_alpha);
+        let mut items = Vec::new();
+        for segment in segments {
+            let x0 = rect.x + segment.start_ratio.clamp(0.0, 1.0) * rect.width;
+            let x1 = rect.x + segment.end_ratio.clamp(0.0, 1.0) * rect.width;
+            if segment.is_stop {
+                items.push(SkinRenderItem::Rect {
+                    rect: Rect { x: x0, y: rect.y, width: line_width, height: rect.height },
+                    color: stop_color,
+                    blend,
+                });
+                continue;
+            }
+            let ratio = ((segment.bpm - min_bpm) / (max_bpm - min_bpm)).clamp(0.0, 1.0);
+            let y = rect.y + rect.height * (1.0 - ratio) - line_width / 2.0;
+            let color =
+                if (segment.bpm - state.main_bpm).abs() < 0.5 { main_color } else { other_color };
+            items.push(SkinRenderItem::Rect {
+                rect: Rect { x: x0, y, width: (x1 - x0).max(line_width), height: line_width },
+                color,
+                blend,
+            });
+        }
+        items
+    }
+
     fn slider_render_item(
         &self,
         slider: &SkinSliderDef,
@@ -3454,7 +3643,7 @@ impl SkinDocument {
         state: SkinDrawState,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<SkinRenderItem> {
-        let progress = skin_slider_progress(slider.slider_type, state)?;
+        let progress = skin_slider_progress(slider, state)?;
         let source = sources.get(&slider.src)?;
         let source_width = source.source_size.width.max(1.0);
         let source_height = source.source_size.height.max(1.0);
@@ -4815,11 +5004,24 @@ fn parse_skin_timer_operand(operand: &str) -> Option<i32> {
     inner.parse::<i32>().ok()
 }
 
+fn skin_builtin_value_f32(expr: &str, state: SkinDrawState) -> Option<f32> {
+    match expr.trim() {
+        SKIN_EXPR_ADJUSTED_COVER => state.adjusted_cover_progress,
+        SKIN_EXPR_ADJUSTED_RATE => state.adjusted_rate,
+        SKIN_EXPR_ADJUSTED_RATE_ADOT => state.adjusted_rate_adot.map(|value| value as f32),
+        SKIN_EXPR_FS_THRESHOLD => Some(state.fs_threshold_ms as f32),
+        _ => None,
+    }
+}
+
 fn skin_value_number(value: &SkinValueDef, state: SkinDrawState) -> Option<i64> {
     if !value.expr.trim().is_empty() {
         return skin_state_number_expr(&value.expr, state);
     }
     if !value.value_expr.trim().is_empty() {
+        if let Some(number) = skin_builtin_value_f32(&value.value_expr, state) {
+            return Some(number.round() as i64);
+        }
         return skin_state_digit_float_expr(&value.value_expr, state)
             .map(|value| value.round() as i64);
     }
@@ -4980,7 +5182,8 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         30 if state.select_screen => Some(state.select_play_count as i64),
         96 => Some(if state.play_level != 0 { state.play_level } else { state.select_play_level }),
         370 => Some(state.select_clear_index),
-        92 => Some(state.select_bpm.round() as i64),
+        92 if state.select_screen => Some(state.select_bpm.round() as i64),
+        92 => Some(state.main_bpm.round() as i64),
         71 | 101 | 171 => Some(state.ex_score as i64),
         72 => Some(state.total_notes as i64 * 2),
         74 | 106 | 333 => Some(state.total_notes.max(state.select_total_notes) as i64),
@@ -5347,7 +5550,16 @@ fn judge_rate(count: u32, total: u32) -> f32 {
     if total > 0 { count as f32 / total as f32 } else { 0.0 }
 }
 
-fn skin_slider_progress(slider_type: i32, state: SkinDrawState) -> Option<f32> {
+fn skin_slider_progress(slider: &SkinSliderDef, state: SkinDrawState) -> Option<f32> {
+    if !slider.value_expr.trim().is_empty()
+        && let Some(progress) = skin_builtin_value_f32(&slider.value_expr, state)
+    {
+        return Some(progress.clamp(0.0, 1.0));
+    }
+    skin_slider_progress_by_type(slider.slider_type, state)
+}
+
+fn skin_slider_progress_by_type(slider_type: i32, state: SkinDrawState) -> Option<f32> {
     match slider_type {
         1 => Some(state.select_scroll_progress.clamp(0.0, 1.0)),
         4 => (state.lane_cover > 0.0).then_some(state.lane_cover.clamp(0.0, 1.0)),
