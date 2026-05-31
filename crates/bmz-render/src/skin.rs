@@ -7404,6 +7404,24 @@ mod tests {
     }
 
     #[test]
+    fn select_row_replay_index_is_row_kind_agnostic() {
+        // Regression: course rows must surface their replay slot indicators
+        // exactly like song rows.  `select_row_replay_index` looks only at
+        // `row.replay_slots`, so swapping row.kind must not change the
+        // result.  This locks the invariant for future refactors.
+        use crate::scene::{SelectRowKind, SelectRowSnapshot};
+        let mut song = SelectRowSnapshot::default();
+        song.kind = SelectRowKind::Song;
+        song.replay_slots = [false, true, false, true];
+        let mut course = SelectRowSnapshot::default();
+        course.kind = SelectRowKind::Course;
+        course.replay_slots = [false, true, false, true];
+
+        assert_eq!(select_row_replay_index(&song), Some(1));
+        assert_eq!(select_row_replay_index(&course), Some(1));
+    }
+
+    #[test]
     fn bga_destination_renders_current_bga_images() {
         let document: SkinDocument = serde_json::from_str(
             r#"
