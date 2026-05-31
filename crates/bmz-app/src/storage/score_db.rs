@@ -695,6 +695,63 @@ mod tests {
     }
 
     #[test]
+    fn class_gauge_types_round_trip_via_score_history_and_best() {
+        // 段位ゲージで終わったプレイが score_history / score_best 経由で
+        // `"Class" / "ExClass" / "ExHardClass"` の文字列として正しく永続化・
+        // 復元されることを担保する。
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut db = ScoreDatabase { conn };
+
+        let cases = [
+            ([10u8; 32], GaugeType::Class, "Class"),
+            ([11u8; 32], GaugeType::ExClass, "ExClass"),
+            ([12u8; 32], GaugeType::ExHardClass, "ExHardClass"),
+        ];
+
+        // ex_score は (sha[0], 段位ごと) で順に上げ、score_best が上書きされて
+        // 残ることを保証する。
+        for (i, (sha, gauge, _)) in cases.iter().enumerate() {
+            let mut rec = record(20 + i as u32 * 10, ClearType::Hard);
+            rec.chart_sha256 = *sha;
+            rec.gauge_type = Some(*gauge);
+            rec.gauge_value = 42.0 + i as f32;
+            db.insert_score(&rec).unwrap();
+        }
+
+        // score_history: GaugeType::as_str() の文字列で素直に入る。
+        let history = db.recent_history(10, 0).unwrap();
+        let mut history_map: std::collections::HashMap<[u8; 32], String> =
+            history.into_iter().map(|entry| (entry.chart_sha256, entry.gauge_type)).collect();
+        for (sha, _, expected) in &cases {
+            assert_eq!(history_map.remove(sha).as_deref(), Some(*expected), "history {sha:?}");
+        }
+
+        // score_best: 同じく文字列でラウンドトリップ、gauge_value も保持される。
+        let shas: Vec<_> = cases.iter().map(|(sha, _, _)| *sha).collect();
+        let best = db.best_scores_for_charts(&shas).unwrap();
+        assert_eq!(best.len(), 3);
+        let mut by_sha: std::collections::HashMap<_, _> =
+            best.into_iter().map(|s| (s.chart_sha256, s)).collect();
+        for (i, (sha, _, expected_label)) in cases.iter().enumerate() {
+            let summary = by_sha.remove(sha).expect("best entry exists");
+            assert_eq!(summary.gauge_type, *expected_label);
+            assert_eq!(summary.gauge_value, 42.0 + i as f32);
+        }
+    }
+
+    #[test]
+    fn gauge_type_str_matches_enum_display_for_class_gauges() {
+        assert_eq!(gauge_type_str(Some(GaugeType::Class)), "Class");
+        assert_eq!(gauge_type_str(Some(GaugeType::ExClass)), "ExClass");
+        assert_eq!(gauge_type_str(Some(GaugeType::ExHardClass)), "ExHardClass");
+        // sanity: 非段位ゲージも従来通り。
+        assert_eq!(gauge_type_str(Some(GaugeType::Normal)), "Normal");
+        assert_eq!(gauge_type_str(None), "");
+    }
+
+    #[test]
     fn best_scores_for_charts_returns_existing_scores() {
         let mut conn = Connection::open_in_memory().unwrap();
         configure_connection(&conn).unwrap();
