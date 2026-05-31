@@ -906,6 +906,10 @@ fn plan_play(
         genre: &snapshot.genre,
         difficulty_name: &snapshot.difficulty_name,
         play_level: &snapshot.play_level,
+        table_text_primary: &snapshot.table_text_primary,
+        table_text_secondary: &snapshot.table_text_secondary,
+        table_text_fallback: &snapshot.table_text_fallback,
+        course_stage: snapshot.course_stage,
         ..SkinTextState::default()
     };
     // `{"id":"notes"}` マーカーと `timer: 3` (FAILED) で3分割。

@@ -101,6 +101,12 @@ pub struct RenderSnapshot {
     pub autoplay: bool,
     /// OPTION_MODE_COURSE (290) とステージ別 op (280..283 / 289) 用。未対応時は None。
     pub course_stage: Option<CourseStageMarker>,
+    /// beatoraja `TEXT_TABLE1` (1001): 難易度表名 (例: `[★] Insane`)。
+    pub table_text_primary: String,
+    /// beatoraja `TEXT_TABLE2` (1002): 表内レベル (例: `★12`)。
+    pub table_text_secondary: String,
+    /// beatoraja `TEXT_TABLE3` (1003): 表名フォールバック。
+    pub table_text_fallback: String,
     pub key_mode: KeyMode,
     pub visible_notes: [Vec<VisibleNote>; LANE_COUNT],
     /// Mine ノーツ。スコア対象外で、専用のスプライト（赤系）で描く。

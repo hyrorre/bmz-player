@@ -1071,8 +1071,8 @@ mod tests {
         let messages: Vec<_> =
             loaded.warnings.iter().map(|warning| warning.message.as_str()).collect();
         assert!(
-            !messages.is_empty(),
-            "baseline expects known unsupported-function warnings until Rm-skin support lands"
+            messages.is_empty(),
+            "Rm-skin play7 should convert without unsupported-function warnings: {messages:?}"
         );
         assert!(
             !messages.iter().any(|message| message.contains("destination[51].draw")),
@@ -1093,6 +1093,10 @@ mod tests {
         assert!(
             !messages.iter().any(|message| message.contains("value[50].value")),
             "threshold-num should be inferred: {messages:?}"
+        );
+        assert!(
+            !messages.iter().any(|message| message.contains("text[4].value")),
+            "course table text should be inferred: {messages:?}"
         );
         assert!(
             !messages.iter().any(|message| message.contains("`process`")),

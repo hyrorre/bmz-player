@@ -12,7 +12,8 @@ use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 
 use bmz_render::skin::{
     SKIN_DYNAMIC_TIMER_BASE, SKIN_EXPR_ADJUSTED_COVER, SKIN_EXPR_ADJUSTED_RATE,
-    SKIN_EXPR_ADJUSTED_RATE_ADOT, SKIN_EXPR_FS_THRESHOLD, SKIN_REF_PLAY_GAUGE_TYPE,
+    SKIN_EXPR_ADJUSTED_RATE_ADOT, SKIN_EXPR_COURSE_TABLE_TEXT, SKIN_EXPR_FS_THRESHOLD,
+    SKIN_REF_PLAY_GAUGE_TYPE,
 };
 
 use crate::{LoadedLuaSkinValue, SkinLoadWarning};
@@ -1257,6 +1258,17 @@ fn lua_table_to_json(
                 }
                 if !is_graph
                     && path.contains(".text[")
+                    && let Some(value_expr) = infer_course_table_text_expr(
+                        function,
+                        object_id.as_deref(),
+                        main_state_probe,
+                    )
+                {
+                    object.insert("value_expr".to_string(), JsonValue::String(value_expr));
+                    continue;
+                }
+                if !is_graph
+                    && path.contains(".text[")
                     && let Some(ref_id) = infer_main_state_text_ref(function, main_state_probe)
                 {
                     object.insert("ref".to_string(), JsonValue::Number(JsonNumber::from(ref_id)));
@@ -2137,6 +2149,37 @@ fn infer_gauge_type_imageset_ref(
         (gauge_calls, number_calls)
     };
     (gauge_calls > 0 && number_calls.is_empty()).then_some(SKIN_REF_PLAY_GAUGE_TYPE)
+}
+
+fn infer_course_table_text_expr(
+    function: &Function,
+    object_id: Option<&str>,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    if object_id == Some("table") {
+        return Some(SKIN_EXPR_COURSE_TABLE_TEXT.to_string());
+    }
+
+    let option_calls = collect_option_calls(function, main_state_probe)?;
+    if !option_calls.contains(&290) {
+        return None;
+    }
+
+    {
+        main_state_probe.lock().ok()?.begin_number_call_recording(0);
+    }
+    let _ = function.call::<Value>(()).ok();
+    let text_calls = {
+        let mut probe = main_state_probe.lock().ok()?;
+        let calls = probe.text_calls.clone();
+        probe.end_recording();
+        calls
+    };
+    if text_calls.iter().any(|ref_id| (1001..=1003).contains(ref_id)) {
+        Some(SKIN_EXPR_COURSE_TABLE_TEXT.to_string())
+    } else {
+        None
+    }
 }
 
 fn infer_main_state_text_ref(

@@ -358,6 +358,9 @@ pub struct SkinTextDef {
     pub shadow_offset_y: f32,
     #[serde(default, rename = "shadowSmoothness")]
     pub shadow_smoothness: f32,
+    /// Lua `value = function()` から変換したコース表テキスト式。空なら `ref` を使う。
+    #[serde(default)]
+    pub value_expr: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -456,6 +459,7 @@ pub const SKIN_EXPR_ADJUSTED_COVER: &str = "bmz:adjusted_cover";
 pub const SKIN_EXPR_ADJUSTED_RATE: &str = "bmz:adjusted_rate";
 pub const SKIN_EXPR_ADJUSTED_RATE_ADOT: &str = "bmz:adjusted_rate_adot";
 pub const SKIN_EXPR_FS_THRESHOLD: &str = "bmz:fs_threshold";
+pub const SKIN_EXPR_COURSE_TABLE_TEXT: &str = "bmz:course_table_text";
 
 /// beatoraja 予約 ID と衝突しない動的タイマー ID 範囲の先頭。
 pub const SKIN_DYNAMIC_TIMER_BASE: i32 = 9000;
@@ -1538,6 +1542,10 @@ pub struct SkinTextState<'a> {
     pub current_folder: &'a str,
     pub bar_text: &'a str,
     pub table_level: &'a str,
+    pub table_text_primary: &'a str,
+    pub table_text_secondary: &'a str,
+    pub table_text_fallback: &'a str,
+    pub course_stage: Option<CourseStageMarker>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -5665,9 +5673,54 @@ fn skin_hex_color(value: &str) -> Option<Color> {
     Some(Color::rgba(r, g, b, a))
 }
 
+/// Rm-skin `text id="table"` と beatoraja `TEXT_TABLE1..3` (1001..1003) の表示ロジック。
+pub fn format_rm_skin_course_table_text(
+    course_stage: Option<CourseStageMarker>,
+    primary: &str,
+    secondary: &str,
+    fallback: &str,
+) -> String {
+    if let Some(stage) = course_stage {
+        return match stage {
+            CourseStageMarker::Final => "COURSE : STAGE FINAL".to_string(),
+            CourseStageMarker::Stage1 => "COURSE : STAGE 1".to_string(),
+            CourseStageMarker::Stage2 => "COURSE : STAGE 2".to_string(),
+            CourseStageMarker::Stage3 => "COURSE : STAGE 3".to_string(),
+            CourseStageMarker::Stage4 => "COURSE : STAGE 4".to_string(),
+        };
+    }
+
+    // Lua: `not tx1 or tx1 == "" and not tx2 or tx2 == ""`
+    let use_fallback = secondary.is_empty() || (primary.is_empty() && secondary.is_empty());
+    if use_fallback {
+        if fallback.is_empty() {
+            return "# No-Table".to_string();
+        }
+        return fallback.to_string();
+    }
+
+    if primary.is_empty() { format!(" > {secondary}") } else { format!("{primary} > {secondary}") }
+}
+
 fn skin_state_text(text: &SkinTextDef, state: SkinTextState<'_>) -> String {
     if !text.constant_text.is_empty() {
         return text.constant_text.clone();
+    }
+    if text.value_expr.trim() == SKIN_EXPR_COURSE_TABLE_TEXT {
+        return format_rm_skin_course_table_text(
+            state.course_stage,
+            state.table_text_primary,
+            state.table_text_secondary,
+            state.table_text_fallback,
+        );
+    }
+    if text.id == "table" {
+        return format_rm_skin_course_table_text(
+            state.course_stage,
+            state.table_text_primary,
+            state.table_text_secondary,
+            state.table_text_fallback,
+        );
     }
     if text.id.starts_with("bartext") {
         return state.bar_text.to_string();
@@ -5691,6 +5744,9 @@ fn skin_state_text(text: &SkinTextDef, state: SkinTextState<'_>) -> String {
         15 => state.subartist.to_string(),
         16 => full_label(state.artist, state.subartist),
         17 => state.table_level.to_string(),
+        1001 => state.table_text_primary.to_string(),
+        1002 => state.table_text_secondary.to_string(),
+        1003 => state.table_text_fallback.to_string(),
         200..=209 => select_target_name_by_offset(state.target, text.ref_id - 210),
         210..=219 => select_target_name_by_offset(state.target, text.ref_id - 209),
         1000 => state.current_folder.to_string(),
@@ -12608,6 +12664,60 @@ mod tests {
             ..SkinTextDef::default()
         };
         assert_eq!(skin_state_text(&text, state), "Hardcoded");
+    }
+
+    #[test]
+    fn format_rm_skin_course_table_text_matches_lua_branches() {
+        use crate::snapshot::CourseStageMarker;
+
+        assert_eq!(
+            format_rm_skin_course_table_text(Some(CourseStageMarker::Final), "", "", ""),
+            "COURSE : STAGE FINAL"
+        );
+        assert_eq!(
+            format_rm_skin_course_table_text(
+                Some(CourseStageMarker::Stage2),
+                "[★] Insane",
+                "★12",
+                "[★] Insane"
+            ),
+            "COURSE : STAGE 2"
+        );
+        assert_eq!(
+            format_rm_skin_course_table_text(None, "[★] Insane", "★12", "[★] Insane"),
+            "[★] Insane > ★12"
+        );
+        assert_eq!(format_rm_skin_course_table_text(None, "", "★12", "[★] Insane"), " > ★12");
+        assert_eq!(
+            format_rm_skin_course_table_text(None, "[★] Insane", "", "[★] Insane"),
+            "[★] Insane"
+        );
+        assert_eq!(format_rm_skin_course_table_text(None, "", "", ""), "# No-Table");
+    }
+
+    #[test]
+    fn skin_state_text_course_table_uses_value_expr_and_table_id() {
+        use crate::snapshot::CourseStageMarker;
+
+        let state = SkinTextState {
+            table_text_primary: "[★] Insane",
+            table_text_secondary: "★12",
+            table_text_fallback: "[★] Insane",
+            course_stage: None,
+            ..SkinTextState::default()
+        };
+        let by_expr = SkinTextDef {
+            id: "table".to_string(),
+            value_expr: SKIN_EXPR_COURSE_TABLE_TEXT.to_string(),
+            ..SkinTextDef::default()
+        };
+        assert_eq!(skin_state_text(&by_expr, state), "[★] Insane > ★12");
+
+        let by_id = SkinTextDef { id: "table".to_string(), ..SkinTextDef::default() };
+        assert_eq!(skin_state_text(&by_id, state), "[★] Insane > ★12");
+
+        let course_state = SkinTextState { course_stage: Some(CourseStageMarker::Stage1), ..state };
+        assert_eq!(skin_state_text(&by_id, course_state), "COURSE : STAGE 1");
     }
 
     #[test]

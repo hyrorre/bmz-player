@@ -179,6 +179,10 @@ struct WinitApp {
     play_preload_generation: u64,
     play_ending: Option<PlayEndingTransition>,
     last_started_chart_id: Option<i64>,
+    /// プレイ開始時点の難易度表テキスト (beatoraja TEXT_TABLE1..3)。
+    play_table_text_primary: String,
+    play_table_text_secondary: String,
+    play_table_text_fallback: String,
     select_items: Vec<SelectItem>,
     folder_stack: Vec<String>,
     /// `folder_stack` の各階層に入る直前の `selected_index`。
@@ -494,6 +498,9 @@ impl WinitApp {
             play_preload_generation: 0,
             play_ending: None,
             last_started_chart_id: None,
+            play_table_text_primary: String::new(),
+            play_table_text_secondary: String::new(),
+            play_table_text_fallback: String::new(),
             select_items,
             selected_index_stack: vec![0; folder_stack.len()],
             folder_stack,
@@ -782,6 +789,42 @@ impl WinitApp {
                     .unwrap_or(source_url)
                     .to_string()
             })
+    }
+
+    fn table_text_context_for_chart(&self, chart_id: i64) -> (String, String, String) {
+        let table_level = self
+            .select_items
+            .iter()
+            .find_map(|item| match item {
+                SelectItem::Chart(row)
+                    if row.chart.as_ref().is_some_and(|chart| chart.chart_id == chart_id) =>
+                {
+                    Some(row.table_level.clone())
+                }
+                _ => None,
+            })
+            .unwrap_or_default();
+
+        let selected = self.select_items.get(self.selected_index);
+        let source_url = table_source_url_from_context(&self.folder_stack, selected);
+        let primary =
+            source_url.as_ref().map(|url| self.table_breadcrumb_name(url)).unwrap_or_default();
+        let secondary = table_level;
+        let fallback = primary.clone();
+        (primary, secondary, fallback)
+    }
+
+    fn capture_play_table_text_for_chart(&mut self, chart_id: i64) {
+        let (primary, secondary, fallback) = self.table_text_context_for_chart(chart_id);
+        self.play_table_text_primary = primary;
+        self.play_table_text_secondary = secondary;
+        self.play_table_text_fallback = fallback;
+    }
+
+    fn apply_play_table_text(&self, snapshot: &mut RenderSnapshot) {
+        snapshot.table_text_primary = self.play_table_text_primary.clone();
+        snapshot.table_text_secondary = self.play_table_text_secondary.clone();
+        snapshot.table_text_fallback = self.play_table_text_fallback.clone();
     }
 
     fn select_snapshot(&self) -> SelectSnapshot {
@@ -1776,6 +1819,8 @@ impl WinitApp {
         snapshot.play_elapsed_time = TimeUs(0);
         snapshot.ready_elapsed_time = None;
         snapshot.time = self.play_skin_playstart_offset();
+        self.capture_play_table_text_for_chart(chart_id);
+        self.apply_play_table_text(&mut snapshot);
         self.last_play_snapshot = Some(snapshot.clone());
         self.pending_play_start = Some(PendingPlayStart { chart_id });
         self.last_started_chart_id = Some(chart_id);
@@ -1814,6 +1859,7 @@ impl WinitApp {
         snapshot.play_elapsed_time = self.play_elapsed_time();
         snapshot.ready_elapsed_time = self.play_ready_sound_started_at.map(elapsed_since);
         snapshot.course_stage = course_stage;
+        self.apply_play_table_text(&mut snapshot);
         self.last_play_snapshot = Some(snapshot);
         self.active_play = Some(active_play);
     }
@@ -2473,6 +2519,7 @@ impl WinitApp {
                 snapshot.ready_elapsed_time = self.play_ready_sound_started_at.map(elapsed_since);
                 snapshot.backbmp_background = self.play_backbmp_loaded;
                 snapshot.course_stage = course_stage;
+                self.apply_play_table_text(&mut snapshot);
                 self.last_play_snapshot = Some(snapshot);
                 self.play_landmine_se(mine_hits);
             }
@@ -2484,6 +2531,7 @@ impl WinitApp {
                 snapshot.ready_elapsed_time = self.play_ready_sound_started_at.map(elapsed_since);
                 snapshot.backbmp_background = self.play_backbmp_loaded;
                 snapshot.course_stage = course_stage;
+                self.apply_play_table_text(&mut snapshot);
                 let full_combo_elapsed_at_finish_ms = snapshot.full_combo_elapsed_ms;
                 self.last_play_snapshot = Some(snapshot);
                 self.play_landmine_se(mine_hits);
@@ -2576,7 +2624,9 @@ impl WinitApp {
             video_update_time,
         );
 
-        let snapshot = refresh_play_ending_snapshot(&mut active_play.running, timers);
+        let mut snapshot = refresh_play_ending_snapshot(&mut active_play.running, timers);
+        snapshot.course_stage = self.current_course_stage_marker();
+        self.apply_play_table_text(&mut snapshot);
         self.last_play_snapshot = Some(snapshot);
     }
 
