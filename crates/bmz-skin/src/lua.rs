@@ -141,6 +141,7 @@ fn execute_lua_skin(
     warnings.retain(|warning| {
         !warning.starts_with("skipping unsupported draw function at ")
             && !warning.starts_with("skipping unsupported value function at ")
+            && !warning.starts_with("mixed lua table converted to object at ")
     });
 
     let lua = Lua::new();
@@ -605,6 +606,9 @@ impl MainStateProbe {
     }
 
     fn text(&mut self, ref_id: i32) -> String {
+        if ref_id == 1010 {
+            return "BMZ Player 0.1.0".to_string();
+        }
         if matches!(self.mode, MainStateProbeMode::RuntimeStub) {
             return String::new();
         }
@@ -1697,7 +1701,10 @@ fn lua_table_to_json(
 
     let mut integer_keys = Vec::new();
     let mut has_non_integer_key = false;
-    for (key, _) in &entries {
+    for (key, value) in &entries {
+        if matches!(value, Value::Nil) {
+            continue;
+        }
         match key {
             Value::Integer(index) if *index > 0 => integer_keys.push(*index),
             _ => has_non_integer_key = true,

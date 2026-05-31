@@ -647,6 +647,88 @@ mod tests {
     }
 
     #[test]
+    fn lua_skin_main_state_version_text_is_available_during_load() {
+        let root = unique_test_dir("bmz-skin-lua");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("select.luaskin"),
+            r#"
+            local main_state = require("main_state")
+            local version = main_state.text(1010)
+            version = string.sub(version, (string.find(version, " ") + 1))
+            return {
+                type = 0,
+                text = {
+                    { id = "version", constantText = version },
+                },
+            }
+            "#,
+        )
+        .unwrap();
+
+        let loaded =
+            load_lua_skin_value(&root.join("select.luaskin"), &BTreeMap::new(), &BTreeMap::new())
+                .unwrap();
+
+        assert!(loaded.warnings.is_empty());
+        assert_eq!(loaded.value["text"][0]["constantText"], "Player 0.1.0");
+    }
+
+    #[test]
+    fn lua_skin_nil_integer_keys_do_not_warn_as_mixed_table() {
+        let root = unique_test_dir("bmz-skin-lua");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("select.luaskin"),
+            r#"
+            local skin = { type = 0, image = {} }
+            skin[1] = nil
+            return skin
+            "#,
+        )
+        .unwrap();
+
+        let loaded =
+            load_lua_skin_value(&root.join("select.luaskin"), &BTreeMap::new(), &BTreeMap::new())
+                .unwrap();
+
+        assert!(
+            loaded.warnings.iter().all(|warning| !warning.message.contains("mixed lua table")),
+            "warnings: {:?}",
+            loaded.warnings
+        );
+    }
+
+    #[test]
+    fn lua_skin_header_pass_mixed_table_warning_is_suppressed() {
+        let root = unique_test_dir("bmz-skin-lua");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("select.luaskin"),
+            r#"
+            if skin_config then
+                return { type = 0, image = {} }
+            end
+            return {
+                type = 0,
+                { image = {} },
+            }
+            "#,
+        )
+        .unwrap();
+
+        let loaded =
+            load_lua_skin_value(&root.join("select.luaskin"), &BTreeMap::new(), &BTreeMap::new())
+                .unwrap();
+
+        assert!(
+            loaded.warnings.iter().all(|warning| !warning.message.contains("mixed lua table")),
+            "warnings: {:?}",
+            loaded.warnings
+        );
+    }
+
+    #[test]
     fn lua_skin_silently_skips_loader_callback_fields() {
         let root = unique_test_dir("bmz-skin-lua");
         fs::create_dir_all(&root).unwrap();
