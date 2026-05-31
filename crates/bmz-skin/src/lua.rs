@@ -10,7 +10,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use mlua::{Function, HookTriggers, Lua, Table, Value, Variadic, VmState};
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 
-use bmz_render::skin::SKIN_DYNAMIC_TIMER_BASE;
+use bmz_render::skin::{SKIN_DYNAMIC_TIMER_BASE, SKIN_REF_PLAY_GAUGE_TYPE};
 
 use crate::{LoadedLuaSkinValue, SkinLoadWarning};
 
@@ -328,6 +328,9 @@ struct MainStateProbe {
     timer_values: BTreeMap<i32, i32>,
     gauge_type_calls: usize,
     gauge_type_value: i32,
+    float_number_calls: Vec<i32>,
+    float_number_values: BTreeMap<i32, f64>,
+    text_calls: Vec<i32>,
     next_dynamic_timer_id: i32,
     dynamic_timers: Vec<(i32, String)>,
 }
@@ -344,6 +347,9 @@ impl Default for MainStateProbe {
             timer_values: BTreeMap::new(),
             gauge_type_calls: 0,
             gauge_type_value: 0,
+            float_number_calls: Vec::new(),
+            float_number_values: BTreeMap::new(),
+            text_calls: Vec::new(),
             next_dynamic_timer_id: SKIN_DYNAMIC_TIMER_BASE,
             dynamic_timers: Vec::new(),
         }
@@ -363,6 +369,12 @@ enum MainStateProbeMode {
 }
 
 impl MainStateProbe {
+    fn clear_aux_calls(&mut self) {
+        self.float_number_calls.clear();
+        self.float_number_values.clear();
+        self.text_calls.clear();
+    }
+
     fn begin_number_recording(&mut self, default_value: i32) {
         self.mode = MainStateProbeMode::SymbolicNumbers { base_value: default_value };
         self.number_calls.clear();
@@ -373,6 +385,7 @@ impl MainStateProbe {
         self.timer_values.clear();
         self.gauge_type_calls = 0;
         self.gauge_type_value = 0;
+        self.clear_aux_calls();
     }
 
     fn begin_number_call_recording(&mut self, default_value: i32) {
@@ -385,6 +398,7 @@ impl MainStateProbe {
         self.timer_values.clear();
         self.gauge_type_calls = 0;
         self.gauge_type_value = 0;
+        self.clear_aux_calls();
     }
 
     fn begin_number_recording_with_value(&mut self, ref_id: i32, value: i32) {
@@ -540,6 +554,31 @@ impl MainStateProbe {
         self.gauge_type_calls += 1;
         self.gauge_type_value
     }
+
+    fn float_number(&mut self, ref_id: i32) -> f64 {
+        if matches!(self.mode, MainStateProbeMode::RuntimeStub) {
+            return 0.0;
+        }
+        self.float_number_calls.push(ref_id);
+        self.float_number_values.get(&ref_id).copied().unwrap_or(0.0)
+    }
+
+    fn text(&mut self, ref_id: i32) -> String {
+        if matches!(self.mode, MainStateProbeMode::RuntimeStub) {
+            return String::new();
+        }
+        self.text_calls.push(ref_id);
+        format!("Text{ref_id}")
+    }
+
+    fn event_index(&mut self, _event_id: i32) -> i32 {
+        0
+    }
+
+    fn begin_draw_probe(&mut self, numbers: BTreeMap<i32, i32>, floats: BTreeMap<i32, f64>) {
+        self.begin_number_recording_with_values(numbers);
+        self.float_number_values = floats;
+    }
 }
 
 fn create_main_state_stub(lua: &Lua, probe: Arc<Mutex<MainStateProbe>>) -> mlua::Result<Value> {
@@ -566,7 +605,36 @@ fn create_main_state_stub(lua: &Lua, probe: Arc<Mutex<MainStateProbe>>) -> mlua:
                 .option(option_id))
         })?,
     )?;
-    table.set("text", lua.create_function(|_, _: i32| Ok(String::new()))?)?;
+    let probe_for_text = probe.clone();
+    table.set(
+        "text",
+        lua.create_function(move |_, ref_id: i32| {
+            Ok(probe_for_text
+                .lock()
+                .map_err(|_| mlua::Error::external("main_state probe lock poisoned"))?
+                .text(ref_id))
+        })?,
+    )?;
+    let probe_for_float_number = probe.clone();
+    table.set(
+        "float_number",
+        lua.create_function(move |_, ref_id: i32| {
+            Ok(probe_for_float_number
+                .lock()
+                .map_err(|_| mlua::Error::external("main_state probe lock poisoned"))?
+                .float_number(ref_id))
+        })?,
+    )?;
+    let probe_for_event_index = probe.clone();
+    table.set(
+        "event_index",
+        lua.create_function(move |_, _event_id: i32| {
+            Ok(probe_for_event_index
+                .lock()
+                .map_err(|_| mlua::Error::external("main_state probe lock poisoned"))?
+                .event_index(0))
+        })?,
+    )?;
     table.set(
         "timer",
         lua.create_function(move |_, timer_id: i32| {
@@ -1178,6 +1246,20 @@ fn lua_table_to_json(
             if key == "value" {
                 let is_graph = path.contains(".graph[");
                 if !is_graph
+                    && path.contains(".imageset[")
+                    && let Some(ref_id) = infer_gauge_type_imageset_ref(function, main_state_probe)
+                {
+                    object.insert("ref".to_string(), JsonValue::Number(JsonNumber::from(ref_id)));
+                    continue;
+                }
+                if !is_graph
+                    && path.contains(".text[")
+                    && let Some(ref_id) = infer_main_state_text_ref(function, main_state_probe)
+                {
+                    object.insert("ref".to_string(), JsonValue::Number(JsonNumber::from(ref_id)));
+                    continue;
+                }
+                if !is_graph
                     && let Some(ref_id) = infer_main_state_number_ref(function, main_state_probe)
                 {
                     object.insert("ref".to_string(), JsonValue::Number(JsonNumber::from(ref_id)));
@@ -1703,6 +1785,7 @@ fn infer_boolean_predicate(
     } else {
         None
     }
+    .or_else(|| infer_float_number_and_number_and_draw(function, main_state_probe))
     .or_else(|| infer_main_state_draw_condition(function, main_state_probe))
     .or_else(|| infer_main_state_option_draw_condition(function, main_state_probe))
     .or_else(|| infer_main_state_gauge_type_draw_condition(function, main_state_probe))
@@ -1965,6 +2048,113 @@ fn infer_number_eq_zero_with_constant_tail(
         return Some(format!("number({ref_id}) != 0"));
     }
     None
+}
+
+fn infer_gauge_type_imageset_ref(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<i32> {
+    {
+        main_state_probe.lock().ok()?.begin_gauge_type_call_recording(0);
+    }
+    let _ = function.call::<Value>(()).ok();
+    let (gauge_calls, number_calls) = {
+        let mut probe = main_state_probe.lock().ok()?;
+        let gauge_calls = probe.gauge_type_calls;
+        let number_calls = probe.number_calls.clone();
+        probe.end_recording();
+        (gauge_calls, number_calls)
+    };
+    (gauge_calls > 0 && number_calls.is_empty()).then_some(SKIN_REF_PLAY_GAUGE_TYPE)
+}
+
+fn infer_main_state_text_ref(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<i32> {
+    {
+        main_state_probe.lock().ok()?.begin_number_call_recording(0);
+    }
+    let _ = function.call::<Value>(()).ok();
+    let text_calls = {
+        let mut probe = main_state_probe.lock().ok()?;
+        let calls = probe.text_calls.clone();
+        probe.end_recording();
+        calls
+    };
+    single_number_call(&text_calls)
+}
+
+fn call_draw_with_float_and_number(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+    float_ref: i32,
+    float_value: f64,
+    number_ref: i32,
+    number_value: i32,
+) -> Option<bool> {
+    {
+        main_state_probe.lock().ok()?.begin_draw_probe(
+            BTreeMap::from([(number_ref, number_value)]),
+            BTreeMap::from([(float_ref, float_value)]),
+        );
+    }
+    let result = function.call::<Value>(()).ok();
+    main_state_probe.lock().ok()?.end_recording();
+    match result? {
+        Value::Boolean(value) => Some(value),
+        _ => None,
+    }
+}
+
+fn infer_float_number_and_number_and_draw(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    let float_refs = collect_float_number_refs(function, main_state_probe)?;
+    let number_refs = collect_number_refs(function, main_state_probe)?;
+    if float_refs.len() != 1 || number_refs.len() != 1 {
+        return None;
+    }
+    let float_ref = float_refs[0];
+    let number_ref = number_refs[0];
+    let zero_zero =
+        call_draw_with_float_and_number(function, main_state_probe, float_ref, 0.0, number_ref, 0);
+    let zero_pos =
+        call_draw_with_float_and_number(function, main_state_probe, float_ref, 0.0, number_ref, 5);
+    let pos_pos =
+        call_draw_with_float_and_number(function, main_state_probe, float_ref, 1.0, number_ref, 5);
+    if zero_pos == Some(true) && zero_zero == Some(false) && pos_pos == Some(false) {
+        return Some(format!("float_number({float_ref}) == 0 && number({number_ref}) != 0"));
+    }
+    if pos_pos == Some(true) && zero_pos == Some(false) && zero_zero == Some(false) {
+        return Some(format!("float_number({float_ref}) != 0 && number({number_ref}) != 0"));
+    }
+    if zero_zero == Some(true) && zero_pos == Some(false) && pos_pos == Some(false) {
+        return Some(format!("number({number_ref}) == 0"));
+    }
+    None
+}
+
+fn collect_float_number_refs(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<Vec<i32>> {
+    let mut calls = Vec::new();
+    for float_value in [0.0_f64, 1.0] {
+        {
+            main_state_probe.lock().ok()?.begin_draw_probe(BTreeMap::new(), BTreeMap::from([(113, float_value)]));
+        }
+        let _ = function.call::<Value>(()).ok();
+        {
+            let mut probe = main_state_probe.lock().ok()?;
+            calls.extend(probe.float_number_calls.iter().copied());
+            probe.end_recording();
+        }
+    }
+    calls.sort_unstable();
+    calls.dedup();
+    (!calls.is_empty()).then_some(calls)
 }
 
 fn format_number_sum_expr(refs: &[i32]) -> String {

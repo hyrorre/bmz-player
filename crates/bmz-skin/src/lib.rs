@@ -967,6 +967,57 @@ mod tests {
         assert_eq!(categories.len(), 2);
     }
 
+    #[test]
+    fn lua_skin_infers_rm_skin_score_diff_draw() {
+        let root = unique_test_dir("bmz-skin-rm-score-diff");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("play7.luaskin"),
+            r#"
+            local main_state = require("main_state")
+            return {
+                type = 0,
+                destination = {
+                    {
+                        id = "score-diff-best",
+                        draw = function()
+                            return main_state.float_number(113) == 0 and main_state.number(152) ~= 0
+                        end,
+                        dst = {{ x = 0, y = 0, w = 1, h = 1 }},
+                    },
+                    {
+                        id = "score-diff-zero",
+                        draw = function()
+                            return not (main_state.number(153) ~= 0)
+                        end,
+                        dst = {{ x = 0, y = 0, w = 1, h = 1 }},
+                    },
+                },
+            }
+            "#,
+        )
+        .unwrap();
+
+        let loaded = load_lua_skin(
+            &root.join("play7.luaskin"),
+            SkinKind::Play,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        let draws: Vec<_> = loaded
+            .document
+            .destination
+            .iter()
+            .filter_map(|entry| match entry {
+                bmz_render::skin::DestinationListEntry::Single(d) => Some(d.draw.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(draws.contains(&"float_number(113) == 0 && number(152) != 0"));
+        assert!(draws.contains(&"number(153) == 0"));
+    }
+
     /// Rm-skin 互換作業のベースライン。`data/skins/Rm-skin` が無い環境では skip する。
     #[test]
     fn rm_skin_play7_convert_warnings_baseline() {
@@ -985,7 +1036,11 @@ mod tests {
             "baseline expects known unsupported-function warnings until Rm-skin support lands"
         );
         assert!(
-            messages.iter().any(|message| message.contains("destination[51].draw")),
+            !messages.iter().any(|message| message.contains("destination[51].draw")),
+            "score diff draw should be inferred: {messages:?}"
+        );
+        assert!(
+            messages.iter().any(|message| message.contains("value[14].value")),
             "unexpected warning set: {messages:?}"
         );
     }
