@@ -257,10 +257,8 @@ pub fn apply_queued_replay(
     options: &mut PlayStartOptions,
     replay: &crate::storage::replay::QueuedCourseReplay,
 ) {
-    let player = bmz_gameplay::replay::ReplayPlayer {
-        events: replay.replay.events.clone(),
-        next_index: 0,
-    };
+    let player =
+        bmz_gameplay::replay::ReplayPlayer { events: replay.replay.events.clone(), next_index: 0 };
     options.replay_player = Some(player);
     options.arrange = replay.replay.arrange_option();
     options.arrange_seed = replay.replay.arrange_seed;

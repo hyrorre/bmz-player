@@ -426,10 +426,7 @@ pub(super) fn list_course_score_charts(
     Ok(out)
 }
 
-pub(super) fn latest_course_score_id(
-    conn: &Connection,
-    course_id: i64,
-) -> Result<Option<i64>> {
+pub(super) fn latest_course_score_id(conn: &Connection, course_id: i64) -> Result<Option<i64>> {
     let row: Option<i64> = conn
         .query_row(
             "SELECT id FROM course_scores

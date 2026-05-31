@@ -403,15 +403,8 @@ events = []
         ));
         let replay_subdir = dir.join("replay");
         std::fs::create_dir_all(&replay_subdir).unwrap();
-        let replay = ReplayFile::new(
-            [1; 32],
-            1,
-            None,
-            ArrangeOption::Normal,
-            None,
-            None,
-            Vec::new(),
-        );
+        let replay =
+            ReplayFile::new([1; 32], 1, None, ArrangeOption::Normal, None, None, Vec::new());
         let p = replay_subdir.join("c0.toml");
         save_replay(&p, &replay).unwrap();
 

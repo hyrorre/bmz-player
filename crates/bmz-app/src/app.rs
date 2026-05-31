@@ -565,6 +565,28 @@ impl WinitApp {
             } else {
                 app.start_chart(chart_id);
             }
+        } else if let Some(course_id) = options.boot_course_replay_id {
+            // `--boot-course-replay <COURSE_ID>` replays the most recent
+            // attempt of the given course on boot.
+            match app.boot.library_db.latest_course_score_id(course_id) {
+                Ok(Some(course_score_id)) => {
+                    tracing::info!(course_id, course_score_id, "booting into course replay");
+                    app.start_course_replay(course_id, course_score_id);
+                }
+                Ok(None) => {
+                    tracing::warn!(
+                        course_id,
+                        "no saved course attempt; --boot-course-replay has nothing to replay"
+                    );
+                }
+                Err(error) => {
+                    tracing::error!(
+                        %error,
+                        course_id,
+                        "failed to look up latest course score for replay boot"
+                    );
+                }
+            }
         }
 
         Ok(app)
