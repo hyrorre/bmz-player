@@ -394,6 +394,37 @@ mod tests {
     }
 
     #[test]
+    fn lua_skin_config_offset_exposes_zero_defaults_by_name() {
+        let root = unique_test_dir("bmz-skin-lua");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("play7.luaskin"),
+            r#"
+            local alpha = 255
+            if skin_config then
+                alpha = skin_config.offset["Panel alpha"].a
+            end
+            return {
+                type = 0,
+                offset = {
+                    { name = "Panel alpha", id = 42, a = true }
+                },
+                destination = {
+                    { id = -110, dst = {{ x = 1, y = 2, w = 3, h = 4, a = alpha }} }
+                }
+            }
+            "#,
+        )
+        .unwrap();
+
+        let loaded =
+            load_lua_skin_value(&root.join("play7.luaskin"), &BTreeMap::new(), &BTreeMap::new())
+                .unwrap();
+
+        assert_eq!(loaded.value["destination"][0]["dst"][0]["a"], 0);
+    }
+
+    #[test]
     fn lua_skin_config_get_path_prefers_filepath_default() {
         let root = unique_test_dir("bmz-skin-lua");
         fs::create_dir_all(root.join("parts")).unwrap();

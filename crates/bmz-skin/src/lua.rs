@@ -85,7 +85,8 @@ fn execute_lua_skin_header(input: &Path) -> Result<(JsonValue, Vec<String>)> {
 
     let lua = Lua::new();
     install_instruction_limit(&lua);
-    let probe = install_sandbox(&lua, &root, &BTreeMap::new(), None, &BTreeMap::new())?;
+    let probe =
+        install_sandbox(&lua, &root, &BTreeMap::new(), None, &BTreeMap::new(), &BTreeMap::new())?;
     let header = lua
         .load(&source)
         .set_name(input.to_string_lossy().as_ref())
@@ -116,7 +117,8 @@ fn execute_lua_skin(
 
     let header_lua = Lua::new();
     install_instruction_limit(&header_lua);
-    let header_probe = install_sandbox(&header_lua, &root, options, None, &BTreeMap::new())?;
+    let header_probe =
+        install_sandbox(&header_lua, &root, options, None, &BTreeMap::new(), &BTreeMap::new())?;
     let header = header_lua
         .load(&source)
         .set_name(input.to_string_lossy().as_ref())
@@ -133,6 +135,7 @@ fn execute_lua_skin(
     )?;
     let skin_options = skin_config_options_from_header(&header_json, options, &mut warnings);
     let skin_files = skin_files_from_header(&root, &header_json, files);
+    let skin_offsets = skin_config_offsets_from_header(&header_json);
     // ヘッダ pass では skin_config / 全 option が未注入のため draw/value 推論が失敗しうる。
     // 本 pass の警告だけ残す。
     warnings.retain(|warning| {
@@ -142,7 +145,8 @@ fn execute_lua_skin(
 
     let lua = Lua::new();
     install_instruction_limit(&lua);
-    let main_state_probe = install_sandbox(&lua, &root, options, Some(&skin_options), &skin_files)?;
+    let main_state_probe =
+        install_sandbox(&lua, &root, options, Some(&skin_options), &skin_files, &skin_offsets)?;
     let value = lua
         .load(&source)
         .set_name(input.to_string_lossy().as_ref())
@@ -218,6 +222,7 @@ fn install_sandbox(
     options: &BTreeMap<String, String>,
     skin_config_options: Option<&BTreeMap<String, i64>>,
     skin_files: &BTreeMap<String, String>,
+    skin_offsets: &BTreeMap<String, LuaSkinOffsetValue>,
 ) -> Result<Arc<Mutex<MainStateProbe>>> {
     let main_state_probe = Arc::new(Mutex::new(MainStateProbe::default()));
     let globals = lua.globals();
@@ -228,6 +233,18 @@ fn install_sandbox(
             option.set(key.as_str(), *value)?;
         }
         skin_config.set("option", option)?;
+        let offset = lua.create_table()?;
+        for (name, value) in skin_offsets {
+            let offset_value = lua.create_table()?;
+            offset_value.set("x", value.x)?;
+            offset_value.set("y", value.y)?;
+            offset_value.set("w", value.w)?;
+            offset_value.set("h", value.h)?;
+            offset_value.set("r", value.r)?;
+            offset_value.set("a", value.a)?;
+            offset.set(name.as_str(), offset_value)?;
+        }
+        skin_config.set("offset", offset)?;
         let root_for_get_path = root.to_path_buf();
         let skin_files_for_get_path = skin_files.clone();
         let get_path = lua.create_function(move |_, requested: String| {
@@ -863,6 +880,32 @@ fn default_property_op(property: &JsonValue, items: &[JsonValue]) -> Option<i64>
         return Some(op);
     }
     items.first().and_then(|item| item.get("op")).and_then(JsonValue::as_i64)
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct LuaSkinOffsetValue {
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    r: i32,
+    a: i32,
+}
+
+fn skin_config_offsets_from_header(header: &JsonValue) -> BTreeMap<String, LuaSkinOffsetValue> {
+    let mut result = BTreeMap::new();
+    let Some(offsets) = header.get("offset").and_then(JsonValue::as_array) else {
+        return result;
+    };
+
+    for offset in offsets {
+        let Some(name) = offset.get("name").and_then(JsonValue::as_str) else {
+            continue;
+        };
+        result.insert(name.to_string(), LuaSkinOffsetValue::default());
+    }
+
+    result
 }
 
 /// スキン設定パネルで選んだファイル選択を、filepath 定義の `path` グロブごとに
