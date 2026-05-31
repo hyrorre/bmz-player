@@ -485,7 +485,10 @@ fn sized_panel_window<'open>(
 /// `None` になって自動的に消える。最小実装として egui::Window を 1 枚出すだけ。
 fn build_course_result_panel(ctx: &egui::Context, summary: &CourseResultSummary) {
     let content_rect = ctx.content_rect();
-    let pos = egui::pos2(content_rect.right() - 360.0 - 16.0, 16.0);
+    // Panel widened from 360px to 440px so the 6-column per-chart grid
+    // (#/title/EX/combo/clear/miss) fits without horizontal scroll.
+    let panel_width = 440.0_f32;
+    let pos = egui::pos2(content_rect.right() - panel_width - 16.0, 16.0);
 
     egui::Window::new("コースリザルト")
         .id(egui::Id::new("course_result_overlay"))
@@ -494,7 +497,7 @@ fn build_course_result_panel(ctx: &egui::Context, summary: &CourseResultSummary)
         .movable(true)
         .title_bar(true)
         .current_pos(pos)
-        .default_width(360.0)
+        .default_width(panel_width)
         .show(ctx, |ui| {
             ui.heading(&summary.title);
 
@@ -566,12 +569,16 @@ fn build_course_result_panel(ctx: &egui::Context, summary: &CourseResultSummary)
             if !summary.entry_summaries.is_empty() {
                 ui.separator();
                 ui.label("各曲");
-                egui::Grid::new("course_result_entries").num_columns(3).striped(true).show(
+                egui::Grid::new("course_result_entries").num_columns(6).striped(true).show(
                     ui,
                     |ui| {
+                        // Header row.
                         ui.label("#");
                         ui.label("曲名");
                         ui.label("EX");
+                        ui.label("COMBO");
+                        ui.label("CLEAR");
+                        ui.label("MISS");
                         ui.end_row();
                         for (i, entry) in summary.entry_summaries.iter().enumerate() {
                             ui.label(format!("{}", i + 1));
@@ -579,6 +586,21 @@ fn build_course_result_panel(ctx: &egui::Context, summary: &CourseResultSummary)
                                 if entry.title.is_empty() { "(no title)" } else { &entry.title };
                             ui.label(title);
                             ui.label(format!("{}", entry.ex_score));
+                            ui.label(format!("{}", entry.max_combo));
+                            // Color the clear cell so failed entries stand out.
+                            let clear_text = entry.clear_type.as_str();
+                            let clear_color = match entry.clear_type {
+                                bmz_core::clear::ClearType::Failed => egui::Color32::LIGHT_RED,
+                                bmz_core::clear::ClearType::FullCombo
+                                | bmz_core::clear::ClearType::Perfect
+                                | bmz_core::clear::ClearType::Max => egui::Color32::LIGHT_GREEN,
+                                _ => ui.visuals().text_color(),
+                            };
+                            ui.colored_label(clear_color, clear_text);
+                            let miss = entry.judge_counts.bad
+                                + entry.judge_counts.poor
+                                + entry.judge_counts.empty_poor;
+                            ui.label(format!("{}", miss));
                             ui.end_row();
                         }
                     },
