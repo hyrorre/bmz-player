@@ -311,6 +311,9 @@ fn install_sandbox(
         if module == "timer_util" {
             return create_timer_util_module(lua, probe_for_require.clone());
         }
+        if module == "event_util" {
+            return create_event_util_module(lua);
+        }
         let globals = lua.globals();
         let package: Table = globals.get("package")?;
         let loaded: Table = package.get("loaded")?;
@@ -693,6 +696,126 @@ fn lua_load_now_ms() -> i32 {
     static ORIGIN: OnceLock<Instant> = OnceLock::new();
     let origin = ORIGIN.get_or_init(Instant::now);
     origin.elapsed().as_millis().min(i32::MAX as u128) as i32
+}
+
+#[derive(Debug)]
+struct EventObserveBoolState {
+    is_on: bool,
+}
+
+#[derive(Debug)]
+struct EventObserveTimerState {
+    value: i32,
+}
+
+#[derive(Debug)]
+struct EventMinIntervalState {
+    last_execution_ms: Option<i32>,
+}
+
+/// beatoraja の `EventUtility` 相当。CustomEvent 用 callback 生成器を提供する。
+fn create_event_util_module(lua: &Lua) -> mlua::Result<Value> {
+    let table = lua.create_table()?;
+
+    table.set(
+        "event_observe_turn_true",
+        lua.create_function(|lua, (observed, action): (Function, Function)| {
+            let state = Arc::new(Mutex::new(EventObserveBoolState { is_on: false }));
+            lua.create_function(move |_, ()| {
+                let on = observed.call::<bool>(())?;
+                let mut state = state
+                    .lock()
+                    .map_err(|_| mlua::Error::external("event observe lock poisoned"))?;
+                if state.is_on != on {
+                    state.is_on = on;
+                    if state.is_on {
+                        action.call::<()>(())?;
+                    }
+                }
+                Ok(true)
+            })
+        })?,
+    )?;
+
+    table.set(
+        "event_observe_timer",
+        lua.create_function(|lua, (timer, action): (Function, Function)| {
+            let state = Arc::new(Mutex::new(EventObserveTimerState { value: TIMER_OFF_VALUE }));
+            lua.create_function(move |_, ()| {
+                let value = timer.call::<i32>(())?;
+                let mut state =
+                    state.lock().map_err(|_| mlua::Error::external("event timer lock poisoned"))?;
+                if value != state.value && value != TIMER_OFF_VALUE {
+                    state.value = value;
+                    action.call::<()>(())?;
+                }
+                Ok(true)
+            })
+        })?,
+    )?;
+
+    table.set(
+        "event_observe_timer_on",
+        lua.create_function(|lua, (timer, action): (Function, Function)| {
+            let state = Arc::new(Mutex::new(EventObserveBoolState { is_on: false }));
+            lua.create_function(move |_, ()| {
+                let on = timer.call::<i32>(())? != TIMER_OFF_VALUE;
+                let mut state = state
+                    .lock()
+                    .map_err(|_| mlua::Error::external("event timer-on lock poisoned"))?;
+                if state.is_on != on {
+                    state.is_on = on;
+                    if state.is_on {
+                        action.call::<()>(())?;
+                    }
+                }
+                Ok(true)
+            })
+        })?,
+    )?;
+
+    table.set(
+        "event_observe_timer_off",
+        lua.create_function(|lua, (timer, action): (Function, Function)| {
+            let state = Arc::new(Mutex::new(EventObserveBoolState { is_on: true }));
+            lua.create_function(move |_, ()| {
+                let off = timer.call::<i32>(())? == TIMER_OFF_VALUE;
+                let mut state = state
+                    .lock()
+                    .map_err(|_| mlua::Error::external("event timer-off lock poisoned"))?;
+                if state.is_on != off {
+                    state.is_on = off;
+                    if state.is_on {
+                        action.call::<()>(())?;
+                    }
+                }
+                Ok(true)
+            })
+        })?,
+    )?;
+
+    table.set(
+        "event_min_interval",
+        lua.create_function(|lua, (min_interval_ms, action): (i32, Function)| {
+            let state = Arc::new(Mutex::new(EventMinIntervalState { last_execution_ms: None }));
+            lua.create_function(move |_, ()| {
+                let now = lua_load_now_ms();
+                let mut state = state
+                    .lock()
+                    .map_err(|_| mlua::Error::external("event interval lock poisoned"))?;
+                let should_run = state
+                    .last_execution_ms
+                    .is_none_or(|last| now.saturating_sub(last) >= min_interval_ms);
+                if should_run {
+                    state.last_execution_ms = Some(now);
+                    action.call::<()>(())?;
+                }
+                Ok(true)
+            })
+        })?,
+    )?;
+
+    Ok(Value::Table(table))
 }
 
 /// beatoraja の `TimerUtility` 相当。Lua スキンが `require("timer_util")` できるようにする。
