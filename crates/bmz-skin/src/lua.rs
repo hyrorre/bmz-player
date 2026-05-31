@@ -314,6 +314,9 @@ fn install_sandbox(
         if module == "event_util" {
             return create_event_util_module(lua);
         }
+        if module == "luajava" {
+            return create_luajava_stub(lua);
+        }
         let globals = lua.globals();
         let package: Table = globals.get("package")?;
         let loaded: Table = package.get("loaded")?;
@@ -780,6 +783,18 @@ fn create_io_stub(lua: &Lua, root: &Path) -> mlua::Result<Value> {
             Ok(Value::Nil)
         })?,
     )?;
+    let root_for_lines = root.to_path_buf();
+    table.set(
+        "lines",
+        lua.create_function(move |lua, path: String| {
+            let Ok(path) = resolve_skin_io_path(&root_for_lines, &path) else {
+                return create_lines_iterator(lua, Vec::new());
+            };
+            let source = fs::read_to_string(path).unwrap_or_default();
+            create_lines_iterator(lua, source.lines().map(str::to_string).collect())
+        })?,
+    )?;
+    table.set("close", lua.create_function(|_, _file: Value| Ok(true))?)?;
     Ok(Value::Table(table))
 }
 
@@ -788,22 +803,23 @@ fn create_read_file_stub(lua: &Lua, source: String) -> mlua::Result<Value> {
     let lines = source.lines().map(str::to_string).collect::<Vec<_>>();
     file.set(
         "lines",
-        lua.create_function(move |lua, _: Value| {
-            let lines = lines.clone();
-            let index = Arc::new(Mutex::new(0usize));
-            lua.create_function(move |lua, ()| {
-                let mut index =
-                    index.lock().map_err(|_| mlua::Error::external("io lines lock poisoned"))?;
-                let Some(line) = lines.get(*index) else {
-                    return Ok(Value::Nil);
-                };
-                *index += 1;
-                Ok(Value::String(lua.create_string(line)?))
-            })
-        })?,
+        lua.create_function(move |lua, _: Value| create_lines_iterator(lua, lines.clone()))?,
     )?;
     file.set("close", lua.create_function(|_, _: Value| Ok(true))?)?;
     Ok(Value::Table(file))
+}
+
+fn create_lines_iterator(lua: &Lua, lines: Vec<String>) -> mlua::Result<Function> {
+    let index = Arc::new(Mutex::new(0usize));
+    lua.create_function(move |lua, ()| {
+        let mut index =
+            index.lock().map_err(|_| mlua::Error::external("io lines lock poisoned"))?;
+        let Some(line) = lines.get(*index) else {
+            return Ok(Value::Nil);
+        };
+        *index += 1;
+        Ok(Value::String(lua.create_string(line)?))
+    })
 }
 
 fn create_write_file_stub(lua: &Lua) -> mlua::Result<Value> {
@@ -1026,6 +1042,42 @@ fn create_event_util_module(lua: &Lua) -> mlua::Result<Value> {
     )?;
 
     Ok(Value::Table(table))
+}
+
+fn create_luajava_stub(lua: &Lua) -> mlua::Result<Value> {
+    let table = lua.create_table()?;
+    table.set(
+        "bindClass",
+        lua.create_function(|lua, _class_name: String| create_luajava_object_stub(lua))?,
+    )?;
+    table.set(
+        "newInstance",
+        lua.create_function(|lua, (_class_name, _args): (String, Variadic<Value>)| {
+            create_luajava_object_stub(lua)
+        })?,
+    )?;
+    table.set(
+        "createProxy",
+        lua.create_function(|lua, _: Variadic<Value>| create_luajava_object_stub(lua))?,
+    )?;
+    Ok(Value::Table(table))
+}
+
+fn create_luajava_object_stub(lua: &Lua) -> mlua::Result<Value> {
+    let object = lua.create_table()?;
+    let metatable = lua.create_table()?;
+    metatable.set(
+        "__index",
+        lua.create_function(|lua, (_table, _key): (Value, Value)| create_luajava_object_stub(lua))?,
+    )?;
+    metatable.set(
+        "__call",
+        lua.create_function(|lua, (_self, _args): (Value, Variadic<Value>)| {
+            create_luajava_object_stub(lua)
+        })?,
+    )?;
+    object.set_metatable(Some(metatable));
+    Ok(Value::Table(object))
 }
 
 /// beatoraja の `TimerUtility` 相当。Lua スキンが `require("timer_util")` できるようにする。

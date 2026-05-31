@@ -503,7 +503,10 @@ mod tests {
                 count = count + 1
                 out:write(line)
             end
-            f:close()
+            for _ in io.lines("skin/m_select/customize/advanced/enable.txt") do
+                count = count + 1
+            end
+            io.close(f)
             out:close()
             return {
                 type = 0,
@@ -522,7 +525,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(loaded.value["text"][0]["constantText"], "2");
+        assert_eq!(loaded.value["text"][0]["constantText"], "4");
         assert!(!root.join("customize/advanced/load_log.txt").exists());
     }
 
@@ -550,6 +553,33 @@ mod tests {
                 .unwrap();
 
         assert_eq!(loaded.value["text"][0]["constantText"], "2.0|true");
+    }
+
+    #[test]
+    fn lua_skin_luajava_stub_loads_legacy_sound_helper() {
+        let root = unique_test_dir("bmz-skin-lua");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("select.luaskin"),
+            r#"
+            local luajava = require("luajava")
+            local gdx = luajava.bindClass("com.badlogic.gdx.Gdx")
+            pcall(function() gdx.app:getApplicationListener():getAudioProcessor():play("x", 1) end)
+            return {
+                type = 0,
+                text = {
+                    { id = "loaded", font = 1, size = 16, constantText = "ok" }
+                }
+            }
+            "#,
+        )
+        .unwrap();
+
+        let loaded =
+            load_lua_skin_value(&root.join("select.luaskin"), &BTreeMap::new(), &BTreeMap::new())
+                .unwrap();
+
+        assert_eq!(loaded.value["text"][0]["constantText"], "ok");
     }
 
     #[test]
