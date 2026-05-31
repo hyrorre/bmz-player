@@ -1,10 +1,12 @@
 use anyhow::Result;
 use bmz_chart::model::LongNoteMode;
+use bmz_core::clear::GaugeType;
 use bmz_core::course::{
-    CourseClassConstraint, CourseConstraints, CourseGaugeConstraint, CourseJudgeConstraint,
-    CourseLnConstraint, CourseSpeedConstraint,
+    CourseClassConstraint, CourseConstraints, CourseJudgeConstraint, CourseLnConstraint,
+    CourseSpeedConstraint,
 };
 use bmz_core::time::TimeUs;
+use bmz_gameplay::gauge::GaugeAutoShiftMode;
 use bmz_gameplay::input::backend::{InputBackend, NullInputBackend};
 use bmz_gameplay::replay::ReplayPlayer;
 
@@ -43,6 +45,11 @@ pub struct PlayStartOptions {
     /// Override the LN mode for this chart (Ln/Cn/Hcn).  None preserves the
     /// chart's own declaration.  Used by course `ln`/`cn`/`hcn` constraints.
     pub ln_mode_override: Option<LongNoteMode>,
+    /// Course-forced gauge override (CLASS / EXCLASS / EXHARDCLASS).
+    /// `apply_course_constraints` populates this for course play so the user's
+    /// selected gauge translates into a course-only class gauge; takes priority
+    /// over `gauge` and disables auto-shift in `play_session_options_from_start`.
+    pub course_gauge_override: Option<GaugeType>,
 }
 
 pub struct StartedWinitPlaySession {
@@ -65,15 +72,25 @@ pub fn play_session_options_from_start(
     app_config: &AppConfig,
     start_options: PlayStartOptions,
 ) -> PlaySessionOptions {
+    let gauge_override = start_options
+        .course_gauge_override
+        .or_else(|| start_options.gauge.map(gauge_type_from_config));
+    let gauge_auto_shift = if start_options.course_gauge_override.is_some() {
+        // 段位ゲージは自動シフトしない（beatoraja 準拠）。
+        GaugeAutoShiftMode::Off
+    } else {
+        start_options
+            .gauge
+            .map(|gauge| gauge_auto_shift_from_config(gauge, start_options.gauge_auto_shift))
+            .unwrap_or_default()
+    };
+
     PlaySessionOptions {
         autoplay: start_options.autoplay,
         replay_player: start_options.replay_player,
         sample_rate: app_config.audio.sample_rate,
-        gauge_override: start_options.gauge.map(gauge_type_from_config),
-        gauge_auto_shift: start_options
-            .gauge
-            .map(|gauge| gauge_auto_shift_from_config(gauge, start_options.gauge_auto_shift))
-            .unwrap_or_default(),
+        gauge_override,
+        gauge_auto_shift,
         arrange: start_options.arrange,
         target: start_options.target,
         arrange_seed: start_options.arrange_seed,
@@ -198,20 +215,24 @@ pub fn start_running_play_session_for_chart_with_winit_input(
 
 /// Overrides `options` fields based on the course constraints.
 ///
-/// - Gauge: non-Default constraints override the user's gauge choice with `Normal`.
+/// - Gauge: course play always uses one of the class gauges (CLASS / EXCLASS /
+///   EXHARDCLASS).  We pick which one based on the user's selected gauge type:
+///   AssistEasy/Easy/Normal → CLASS, Hard → EXCLASS, ExHard/Hazard/AutoShift →
+///   EXHARDCLASS (mirrors beatoraja `GrooveGauge.create`: `type<=2?6:type==3?7:8`).
+///   The `CourseGaugeConstraint` variants (gauge_lr2 / gauge_5k / gauge_7k /
+///   gauge_9k / gauge_24k) are simplifications — beatoraja uses them to pick
+///   the keymode-specific GaugeProperty (FIVEKEYS / SEVENKEYS / PMS / KEYBOARD
+///   / LR2) which has its own values for each class gauge.  We currently keep
+///   a single SEVENKEYS-based table and ignore the keymode hint.
 /// - Arrange: class constraints restrict which arrange options are allowed.
 ///   If the user's current arrange is not in the allowed set, it falls back to Normal.
 pub fn apply_course_constraints(options: &mut PlayStartOptions, constraints: &CourseConstraints) {
-    match constraints.gauge {
-        CourseGaugeConstraint::Default => {}
-        CourseGaugeConstraint::Lr2
-        | CourseGaugeConstraint::Keys5
-        | CourseGaugeConstraint::Keys7
-        | CourseGaugeConstraint::Keys9
-        | CourseGaugeConstraint::Keys24 => {
-            options.gauge = Some(GaugeTypeConfig::Normal);
-        }
-    }
+    // constraints.gauge (gauge_lr2 / gauge_5k / gauge_7k / gauge_9k / gauge_24k)
+    // は beatoraja の keymode 別 GaugeProperty を選ぶヒントだが、ここでは
+    // SEVENKEYS ベースに統一して無視する。
+    let _ = constraints.gauge;
+    let selected = options.gauge.unwrap_or(GaugeTypeConfig::Normal);
+    options.course_gauge_override = Some(course_gauge_for(selected));
 
     // NoSpeed: enforced at the input-handling layer in WinitApp::route_keyboard_input
     // by reading active_course.definition.constraints.speed.
@@ -244,6 +265,21 @@ pub fn apply_course_constraints(options: &mut PlayStartOptions, constraints: &Co
         options.arrange = ArrangeOption::Normal;
         options.arrange_seed = None;
         options.arrange_pattern = None;
+    }
+}
+
+/// プレイヤー選択の Gauge から段位ゲージ (CLASS / EXCLASS / EXHARDCLASS) を決める。
+/// beatoraja `GrooveGauge.create`: `type<=2?CLASS:type==3?EXCLASS:EXHARDCLASS` 準拠。
+/// `AutoShift` は beatoraja に存在しないため EXHARDCLASS にマップする。
+fn course_gauge_for(gauge: GaugeTypeConfig) -> GaugeType {
+    match gauge {
+        GaugeTypeConfig::AssistEasy | GaugeTypeConfig::Easy | GaugeTypeConfig::Normal => {
+            GaugeType::Class
+        }
+        GaugeTypeConfig::Hard => GaugeType::ExClass,
+        GaugeTypeConfig::ExHard | GaugeTypeConfig::Hazard | GaugeTypeConfig::AutoShift => {
+            GaugeType::ExHardClass
+        }
     }
 }
 
