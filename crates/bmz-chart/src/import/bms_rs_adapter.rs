@@ -167,7 +167,7 @@ pub(crate) fn build_intermediate_from_bms<T: KeyLayoutMapper>(
         .iter()
         .any(|object| matches!(object.kind, IntermediateObjectKind::Bga { .. }));
 
-    intermediate.metadata.key_mode = KeyMode::detect_from_lanes_with_layout(
+    let lane_key_mode = KeyMode::detect_from_lanes_with_layout(
         layout,
         intermediate.objects.iter().filter_map(|o| match o.kind {
             IntermediateObjectKind::VisibleNote { lane, .. }
@@ -177,8 +177,36 @@ pub(crate) fn build_intermediate_from_bms<T: KeyLayoutMapper>(
             _ => None,
         }),
     );
+    intermediate.metadata.key_mode =
+        detect_key_mode_from_bms_headers(bms, layout).unwrap_or(lane_key_mode);
 
     intermediate
+}
+
+/// Qwilight / BMSE 拡張ヘッダ (`#4K`, `#6K`, `#8K`) からキーモードを読む。
+///
+/// bms-rs はこれらを構造化しないため `repr.raw_command_lines` を走査する。
+/// 複数行ある場合は後勝ち（EXPANSION FIELD の宣言を優先）。
+pub(crate) fn detect_key_mode_from_bms_headers(
+    bms: &Bms,
+    layout: ChartKeyLayout,
+) -> Option<KeyMode> {
+    if layout.is_pms() {
+        return None;
+    }
+
+    let mut mode = None;
+    for line in &bms.repr.raw_command_lines {
+        let trimmed = line.trim();
+        if trimmed.eq_ignore_ascii_case("#4K") {
+            mode = Some(KeyMode::K4);
+        } else if trimmed.eq_ignore_ascii_case("#6K") {
+            mode = Some(KeyMode::K6);
+        } else if trimmed.eq_ignore_ascii_case("#8K") {
+            mode = Some(KeyMode::K8);
+        }
+    }
+    mode
 }
 
 /// `.pms` テキストから Standard / BME-type を判定する。
@@ -884,6 +912,111 @@ mod tests {
         let chart = import_pms_text(&text);
         assert_eq!(chart.metadata.key_mode, KeyMode::K9);
         assert_eq!(note_lanes(&chart).len(), 5);
+    }
+
+    fn import_bms_text(text: &str) -> IntermediateChart {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.bms");
+        std::fs::write(&path, text).unwrap();
+        std::fs::write(dir.path().join("key.wav"), b"wav").unwrap();
+        let mut warnings = Vec::new();
+        import_bms_to_intermediate(&path, None, &mut warnings).unwrap()
+    }
+
+    const BMS_HEADER: &str = "\
+#TITLE BMS Test
+#ARTIST Tester
+#BPM 120
+#WAV01 key.wav
+";
+
+    fn ue_8k_note_lines() -> String {
+        let mut lines = String::from(BMS_HEADER);
+        for (i, channel) in ["11", "12", "13", "14", "15", "16", "18", "19"].into_iter().enumerate()
+        {
+            let measure = i + 1;
+            lines.push_str(&format!("#{measure:03}{channel}:01\n"));
+        }
+        lines
+    }
+
+    #[test]
+    fn detect_key_mode_from_headers_parses_qwilight_tags() {
+        use bms_rs::bms::command::channel::mapper::KeyLayoutBeat;
+        use bms_rs::bms::{default_config, parse_bms};
+
+        let parse =
+            |text: &str| parse_bms::<KeyLayoutBeat, _, _, _>(&text, default_config()).bms.unwrap();
+
+        assert_eq!(
+            detect_key_mode_from_bms_headers(&parse("#4K\n"), ChartKeyLayout::beat()),
+            Some(KeyMode::K4),
+        );
+        assert_eq!(
+            detect_key_mode_from_bms_headers(&parse("#6K\n"), ChartKeyLayout::beat()),
+            Some(KeyMode::K6),
+        );
+        assert_eq!(
+            detect_key_mode_from_bms_headers(&parse("#8K\n"), ChartKeyLayout::beat()),
+            Some(KeyMode::K8),
+        );
+        assert_eq!(
+            detect_key_mode_from_bms_headers(
+                &parse("* EXPANSION\n#6K\n#8K\n"),
+                ChartKeyLayout::beat(),
+            ),
+            Some(KeyMode::K8),
+        );
+        assert_eq!(
+            detect_key_mode_from_bms_headers(&parse("#TITLE x\n"), ChartKeyLayout::beat()),
+            None,
+        );
+        assert_eq!(
+            detect_key_mode_from_bms_headers(
+                &parse("#8K\n"),
+                ChartKeyLayout::pms(PmsKeyLayout::Standard),
+            ),
+            None,
+        );
+    }
+
+    #[test]
+    fn bms_8k_header_overrides_lane_detected_k7() {
+        let mut text = ue_8k_note_lines();
+        text.push_str("#8K\n");
+        let chart = import_bms_text(&text);
+        assert_eq!(chart.metadata.key_mode, KeyMode::K8);
+    }
+
+    #[test]
+    fn bms_without_qwilight_header_uses_lane_detect() {
+        let chart = import_bms_text(&ue_8k_note_lines());
+        assert_eq!(chart.metadata.key_mode, KeyMode::K7);
+    }
+
+    #[test]
+    fn bms_4k_and_6k_headers_set_key_mode() {
+        let mut text = ue_8k_note_lines();
+        text.push_str("#4K\n");
+        assert_eq!(import_bms_text(&text).metadata.key_mode, KeyMode::K4);
+
+        let mut text = ue_8k_note_lines();
+        text.push_str("#6K\n");
+        assert_eq!(import_bms_text(&text).metadata.key_mode, KeyMode::K6);
+    }
+
+    #[test]
+    fn bms_8k_ue_sample_reports_k8_when_present() {
+        let path = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../data/songs/8K U_E FULL PACK 1.1/[r] Baby/_baby_8K_Hard.bms"
+        ));
+        if !path.exists() {
+            return;
+        }
+        let mut warnings = Vec::new();
+        let chart = import_bms_to_intermediate(path, None, &mut warnings).unwrap();
+        assert_eq!(chart.metadata.key_mode, KeyMode::K8);
     }
 
     #[test]
