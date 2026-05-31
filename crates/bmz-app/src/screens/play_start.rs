@@ -1,10 +1,12 @@
 use anyhow::Result;
 use bmz_chart::model::LongNoteMode;
+use bmz_core::clear::GaugeType;
 use bmz_core::course::{
     CourseClassConstraint, CourseConstraints, CourseGaugeConstraint, CourseJudgeConstraint,
     CourseLnConstraint, CourseSpeedConstraint,
 };
 use bmz_core::time::TimeUs;
+use bmz_gameplay::gauge::{GaugeAutoShiftMode, GaugeProperty};
 use bmz_gameplay::input::backend::{InputBackend, NullInputBackend};
 use bmz_gameplay::replay::ReplayPlayer;
 
@@ -43,6 +45,15 @@ pub struct PlayStartOptions {
     /// Override the LN mode for this chart (Ln/Cn/Hcn).  None preserves the
     /// chart's own declaration.  Used by course `ln`/`cn`/`hcn` constraints.
     pub ln_mode_override: Option<LongNoteMode>,
+    /// Course-forced gauge override (CLASS / EXCLASS / EXHARDCLASS).
+    /// `apply_course_constraints` populates this for course play so the user's
+    /// selected gauge translates into a course-only class gauge; takes priority
+    /// over `gauge` and disables auto-shift in `play_session_options_from_start`.
+    pub course_gauge_override: Option<GaugeType>,
+    /// 段位ゲージの `GaugeProperty` 上書き。`apply_course_constraints` で
+    /// `CourseGaugeConstraint::Lr2/Keys5/Keys7/Keys9/Keys24` を解釈して設定。
+    /// `None` なら `PlaySessionOptions` 側でチャート由来の値が使われる。
+    pub course_gauge_property_override: Option<GaugeProperty>,
 }
 
 pub struct StartedWinitPlaySession {
@@ -65,15 +76,25 @@ pub fn play_session_options_from_start(
     app_config: &AppConfig,
     start_options: PlayStartOptions,
 ) -> PlaySessionOptions {
+    let gauge_override = start_options
+        .course_gauge_override
+        .or_else(|| start_options.gauge.map(gauge_type_from_config));
+    let gauge_auto_shift = if start_options.course_gauge_override.is_some() {
+        // 段位ゲージは自動シフトしない（beatoraja 準拠）。
+        GaugeAutoShiftMode::Off
+    } else {
+        start_options
+            .gauge
+            .map(|gauge| gauge_auto_shift_from_config(gauge, start_options.gauge_auto_shift))
+            .unwrap_or_default()
+    };
+
     PlaySessionOptions {
         autoplay: start_options.autoplay,
         replay_player: start_options.replay_player,
         sample_rate: app_config.audio.sample_rate,
-        gauge_override: start_options.gauge.map(gauge_type_from_config),
-        gauge_auto_shift: start_options
-            .gauge
-            .map(|gauge| gauge_auto_shift_from_config(gauge, start_options.gauge_auto_shift))
-            .unwrap_or_default(),
+        gauge_override,
+        gauge_auto_shift,
         arrange: start_options.arrange,
         target: start_options.target,
         arrange_seed: start_options.arrange_seed,
@@ -81,6 +102,7 @@ pub fn play_session_options_from_start(
         initial_gauge_value: start_options.initial_gauge_value,
         judge_constraint: start_options.judge_constraint,
         ln_mode_override: start_options.ln_mode_override,
+        gauge_property: start_options.course_gauge_property_override,
     }
 }
 
@@ -198,20 +220,29 @@ pub fn start_running_play_session_for_chart_with_winit_input(
 
 /// Overrides `options` fields based on the course constraints.
 ///
-/// - Gauge: non-Default constraints override the user's gauge choice with `Normal`.
+/// - Gauge: course play always uses one of the class gauges (CLASS / EXCLASS /
+///   EXHARDCLASS).  We pick which one based on the user's selected gauge type:
+///   AssistEasy/Easy/Normal → CLASS, Hard → EXCLASS, ExHard/Hazard/AutoShift →
+///   EXHARDCLASS (mirrors beatoraja `GrooveGauge.create`: `type<=2?6:type==3?7:8`).
+///   `CourseGaugeConstraint` (gauge_lr2 / gauge_5k / gauge_7k / gauge_9k /
+///   gauge_24k) はキーモード別 `GaugeProperty`（FIVEKEYS / SEVENKEYS / PMS /
+///   KEYBOARD / LR2）を選び、段位ゲージ係数を決める。`Default` ならチャートの
+///   キーモード由来で `PlaySessionOptions` 側が自動推定する。
 /// - Arrange: class constraints restrict which arrange options are allowed.
 ///   If the user's current arrange is not in the allowed set, it falls back to Normal.
 pub fn apply_course_constraints(options: &mut PlayStartOptions, constraints: &CourseConstraints) {
-    match constraints.gauge {
-        CourseGaugeConstraint::Default => {}
-        CourseGaugeConstraint::Lr2
-        | CourseGaugeConstraint::Keys5
-        | CourseGaugeConstraint::Keys7
-        | CourseGaugeConstraint::Keys9
-        | CourseGaugeConstraint::Keys24 => {
-            options.gauge = Some(GaugeTypeConfig::Normal);
-        }
-    }
+    let selected = options.gauge.unwrap_or(GaugeTypeConfig::Normal);
+    options.course_gauge_override = Some(course_gauge_for(selected));
+    // beatoraja `GrooveGauge.create` の `case GAUGE_X` 分岐に対応。`Default` は
+    // チャートのキーモードから推定するため None のまま (play_session 側で導出)。
+    options.course_gauge_property_override = match constraints.gauge {
+        CourseGaugeConstraint::Default => None,
+        CourseGaugeConstraint::Lr2 => Some(GaugeProperty::Lr2),
+        CourseGaugeConstraint::Keys5 => Some(GaugeProperty::FiveKeys),
+        CourseGaugeConstraint::Keys7 => Some(GaugeProperty::SevenKeys),
+        CourseGaugeConstraint::Keys9 => Some(GaugeProperty::Pms),
+        CourseGaugeConstraint::Keys24 => Some(GaugeProperty::Keyboard),
+    };
 
     // NoSpeed: enforced at the input-handling layer in WinitApp::route_keyboard_input
     // by reading active_course.definition.constraints.speed.
@@ -247,10 +278,26 @@ pub fn apply_course_constraints(options: &mut PlayStartOptions, constraints: &Co
     }
 }
 
+/// プレイヤー選択の Gauge から段位ゲージ (CLASS / EXCLASS / EXHARDCLASS) を決める。
+/// beatoraja `GrooveGauge.create`: `type<=2?CLASS:type==3?EXCLASS:EXHARDCLASS` 準拠。
+/// `AutoShift` は beatoraja に存在しないため EXHARDCLASS にマップする。
+fn course_gauge_for(gauge: GaugeTypeConfig) -> GaugeType {
+    match gauge {
+        GaugeTypeConfig::AssistEasy | GaugeTypeConfig::Easy | GaugeTypeConfig::Normal => {
+            GaugeType::Class
+        }
+        GaugeTypeConfig::Hard => GaugeType::ExClass,
+        GaugeTypeConfig::ExHard | GaugeTypeConfig::Hazard | GaugeTypeConfig::AutoShift => {
+            GaugeType::ExHardClass
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::app_config::AppConfig;
+    use bmz_core::course::CourseGaugeConstraint;
     use winit::event::ElementState;
     use winit::keyboard::{KeyCode, PhysicalKey};
 
@@ -267,6 +314,88 @@ mod tests {
         assert!(options.autoplay);
         assert_eq!(options.sample_rate, 96_000);
         assert!(options.replay_player.is_none());
+    }
+
+    fn default_constraints() -> CourseConstraints {
+        CourseConstraints {
+            gauge: CourseGaugeConstraint::Default,
+            judge: CourseJudgeConstraint::Normal,
+            ln: CourseLnConstraint::Default,
+            speed: CourseSpeedConstraint::Free,
+            class: CourseClassConstraint::None,
+            source_constraints: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn course_constraints_pick_class_gauge_for_groove_selections() {
+        for (selected, expected) in [
+            (GaugeTypeConfig::AssistEasy, GaugeType::Class),
+            (GaugeTypeConfig::Easy, GaugeType::Class),
+            (GaugeTypeConfig::Normal, GaugeType::Class),
+            (GaugeTypeConfig::Hard, GaugeType::ExClass),
+            (GaugeTypeConfig::ExHard, GaugeType::ExHardClass),
+            (GaugeTypeConfig::Hazard, GaugeType::ExHardClass),
+            (GaugeTypeConfig::AutoShift, GaugeType::ExHardClass),
+        ] {
+            let mut options = PlayStartOptions { gauge: Some(selected), ..Default::default() };
+            apply_course_constraints(&mut options, &default_constraints());
+            assert_eq!(
+                options.course_gauge_override,
+                Some(expected),
+                "selected {selected:?} should map to {expected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn course_gauge_override_disables_auto_shift_in_session_options() {
+        let app_config = AppConfig::default();
+        let mut options =
+            PlayStartOptions { gauge: Some(GaugeTypeConfig::AutoShift), ..Default::default() };
+        apply_course_constraints(&mut options, &default_constraints());
+
+        let session = play_session_options_from_start(&app_config, options);
+
+        assert_eq!(session.gauge_override, Some(GaugeType::ExHardClass));
+        assert_eq!(session.gauge_auto_shift, GaugeAutoShiftMode::Off);
+    }
+
+    #[test]
+    fn course_gauge_constraint_maps_to_gauge_property() {
+        let cases = [
+            (CourseGaugeConstraint::Default, None),
+            (CourseGaugeConstraint::Lr2, Some(GaugeProperty::Lr2)),
+            (CourseGaugeConstraint::Keys5, Some(GaugeProperty::FiveKeys)),
+            (CourseGaugeConstraint::Keys7, Some(GaugeProperty::SevenKeys)),
+            (CourseGaugeConstraint::Keys9, Some(GaugeProperty::Pms)),
+            (CourseGaugeConstraint::Keys24, Some(GaugeProperty::Keyboard)),
+        ];
+        for (constraint, expected_property) in cases {
+            let mut options =
+                PlayStartOptions { gauge: Some(GaugeTypeConfig::Hard), ..Default::default() };
+            let mut constraints = default_constraints();
+            constraints.gauge = constraint;
+            apply_course_constraints(&mut options, &constraints);
+            // 段位ゲージ自体は CourseGaugeConstraint に依存しない（プレイヤー選択ゲージから決定）。
+            assert_eq!(options.course_gauge_override, Some(GaugeType::ExClass));
+            // CourseGaugeConstraint からは GaugeProperty が決まる。
+            assert_eq!(options.course_gauge_property_override, expected_property, "{constraint:?}",);
+        }
+    }
+
+    #[test]
+    fn course_gauge_property_override_reaches_session_options() {
+        let app_config = AppConfig::default();
+        let mut options =
+            PlayStartOptions { gauge: Some(GaugeTypeConfig::Hard), ..Default::default() };
+        let mut constraints = default_constraints();
+        constraints.gauge = CourseGaugeConstraint::Lr2;
+        apply_course_constraints(&mut options, &constraints);
+
+        let session = play_session_options_from_start(&app_config, options);
+
+        assert_eq!(session.gauge_property, Some(GaugeProperty::Lr2));
     }
 
     #[test]

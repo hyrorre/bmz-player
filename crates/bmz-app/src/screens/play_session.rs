@@ -9,7 +9,7 @@ use bmz_core::clear::GaugeType;
 use bmz_core::lane::{KeyMode, LANE_COUNT, Lane};
 use bmz_core::time::TimeUs;
 use bmz_gameplay::autoplay::AutoplayController;
-use bmz_gameplay::gauge::{GaugeAutoShiftMode, GaugeState, gauge_total_for_chart};
+use bmz_gameplay::gauge::{GaugeAutoShiftMode, GaugeProperty, GaugeState, gauge_total_for_chart};
 use bmz_gameplay::hit_error::HitErrorRing;
 use bmz_gameplay::input::backend::{InputBackend, NullInputBackend};
 use bmz_gameplay::input::system::InputSystem;
@@ -53,6 +53,10 @@ pub struct PlaySessionOptions {
     /// Course-forced long-note mode (Ln/Cn/Hcn).  `None` keeps the chart's
     /// declared mode.
     pub ln_mode_override: Option<bmz_chart::model::LongNoteMode>,
+    /// 段位ゲージ用の `GaugeProperty` 上書き。コース時に
+    /// `apply_course_constraints` が `CourseGaugeConstraint::Lr2/Keys5/...` を
+    /// 解釈して設定する。`None` の場合はチャートの `KeyMode` から自動推定する。
+    pub gauge_property: Option<GaugeProperty>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -92,6 +96,7 @@ impl Default for PlaySessionOptions {
             initial_gauge_value: None,
             judge_constraint: bmz_core::course::CourseJudgeConstraint::Normal,
             ln_mode_override: None,
+            gauge_property: None,
         }
     }
 }
@@ -158,15 +163,26 @@ pub fn build_game_session_with_input_backend(
 
     let mut gauge = {
         let gauge_total = gauge_total_for_chart(chart.metadata.total, chart.total_notes);
+        // 単曲時はチャートのキーモードから GaugeProperty を導出、コース時は
+        // `apply_course_constraints` が CourseGaugeConstraint から決めた値を使う。
+        let gauge_property = options
+            .gauge_property
+            .unwrap_or_else(|| GaugeProperty::from_keymode(chart.metadata.key_mode));
         if gauge_auto_shift != GaugeAutoShiftMode::Off {
-            GaugeState::new_with_auto_shift(
+            GaugeState::new_with_auto_shift_property(
                 gauge_type,
                 gauge_auto_shift,
                 gauge_total,
                 chart.total_notes,
+                gauge_property,
             )
         } else {
-            GaugeState::new(gauge_type, gauge_total, chart.total_notes)
+            GaugeState::new_with_property(
+                gauge_type,
+                gauge_total,
+                chart.total_notes,
+                gauge_property,
+            )
         }
     };
     // Course play carries the previous chart's gauge value over; this overrides
@@ -613,6 +629,49 @@ mod tests {
         assert!(session.bga_enabled);
         assert_eq!(session.poor_bga_duration_us, 500_000);
         assert_eq!(session.bga_stretch, 1);
+    }
+
+    fn class_gauge_values(session: &GameSession) -> [f32; 6] {
+        session
+            .gauge
+            .gauges
+            .iter()
+            .find(|g| g.definition.gauge_type == GaugeType::Class)
+            .map(|g| g.definition.values)
+            .expect("Class gauge present")
+    }
+
+    #[test]
+    fn build_game_session_picks_gauge_property_from_chart_keymode() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut chart_k5 = chart();
+        chart_k5.metadata.key_mode = KeyMode::K5;
+        let mut chart_k7 = chart();
+        chart_k7.metadata.key_mode = KeyMode::K7;
+
+        let session_k5 =
+            build_game_session(Arc::new(chart_k5), &profile, PlaySessionOptions::default());
+        let session_k7 =
+            build_game_session(Arc::new(chart_k7), &profile, PlaySessionOptions::default());
+
+        // FIVEKEYS CLASS: PG/GR=0.01, BAD=-0.5。SEVENKEYS CLASS: PG=0.15, BAD=-1.5。
+        assert_eq!(class_gauge_values(&session_k5)[0], 0.01);
+        assert_eq!(class_gauge_values(&session_k5)[3], -0.5);
+        assert_eq!(class_gauge_values(&session_k7)[0], 0.15);
+        assert_eq!(class_gauge_values(&session_k7)[3], -1.5);
+    }
+
+    #[test]
+    fn build_game_session_uses_gauge_property_override() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        // チャートは K7 だが、option で LR2 を強制する。
+        let options =
+            PlaySessionOptions { gauge_property: Some(GaugeProperty::Lr2), ..Default::default() };
+        let session = build_game_session(Arc::new(chart()), &profile, options);
+
+        // LR2 CLASS: BAD=-2.0、PG=0.10。
+        assert_eq!(class_gauge_values(&session)[3], -2.0);
+        assert_eq!(class_gauge_values(&session)[0], 0.10);
     }
 
     #[test]

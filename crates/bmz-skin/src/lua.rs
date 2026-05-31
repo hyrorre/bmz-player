@@ -1710,7 +1710,9 @@ fn infer_main_state_gauge_type_draw_condition(
     if calls == 0 {
         return None;
     }
-    let samples = [0, 1, 2, 3, 4, 5, 6];
+    // beatoraja の gauge id 0..=8 を網羅。6/7/8 (CLASS / EXCLASS / EXHARDCLASS) を
+    // 含めることで段位ゲージ用の skin 条件 (例: `gauge_type() >= 6`) を取りこぼさない。
+    let samples = [0, 1, 2, 3, 4, 5, 6, 7, 8];
     let observed = samples
         .iter()
         .map(|value| call_draw_with_gauge_type(function, main_state_probe, *value))
