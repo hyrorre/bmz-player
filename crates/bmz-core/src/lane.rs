@@ -67,11 +67,17 @@ impl Lane {
 }
 
 /// BMS キーモード。BMS ファイルのチャネル使用状況から判定する。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum KeyMode {
+    /// Qwilight-style 4K (Scratch なし)
+    K4,
     K5,
     #[default]
     K7,
+    /// Qwilight-style 6K (Scratch なし)
+    K6,
+    /// Qwilight-style 8K (Scratch + Key1-7)
+    K8,
     /// PMS 9K (Pop'n)。Scratch なし。PMS 5K もスキン/入力は K9 に寄せる。
     K9,
     K10,
@@ -111,6 +117,13 @@ impl ChartKeyLayout {
         matches!(self, Self::Pms(_))
     }
 }
+
+/// 4K Qwilight 表示順 (Key1-4, Scratch なし)
+const ACTIVE_K4: [Lane; 4] = [Lane::Key1, Lane::Key2, Lane::Key3, Lane::Key4];
+
+/// 6K Qwilight 表示順 (Key1-6, Scratch なし)
+const ACTIVE_K6: [Lane; 6] =
+    [Lane::Key1, Lane::Key2, Lane::Key3, Lane::Key4, Lane::Key5, Lane::Key6];
 
 /// 5K 表示順レーン配列 (Scratch, Key1-5)
 const ACTIVE_K5: [Lane; 6] =
@@ -167,8 +180,11 @@ impl KeyMode {
 
     pub fn active_lanes(self) -> &'static [Lane] {
         match self {
+            KeyMode::K4 => &ACTIVE_K4,
             KeyMode::K5 => &ACTIVE_K5,
+            KeyMode::K6 => &ACTIVE_K6,
             KeyMode::K7 => &ACTIVE_K7,
+            KeyMode::K8 => &ACTIVE_K7, // 8K = Scratch + Key1-7
             KeyMode::K9 => &ACTIVE_K9,
             KeyMode::K10 => &ACTIVE_K10,
             KeyMode::K14 => &ACTIVE_K14,
@@ -177,25 +193,48 @@ impl KeyMode {
 
     pub fn as_str(self) -> &'static str {
         match self {
+            KeyMode::K4 => "4K",
             KeyMode::K5 => "5K",
+            KeyMode::K6 => "6K",
             KeyMode::K7 => "7K",
+            KeyMode::K8 => "8K",
             KeyMode::K9 => "9K",
             KeyMode::K10 => "10K",
             KeyMode::K14 => "14K",
         }
     }
 
-    /// `as_str` の逆。"5K" / "7K" / "9K" / "10K" / "14K" を受ける (大文字小文字無視)。
-    /// 未知値は `None`。
-    pub fn from_str_opt(value: &str) -> Option<Self> {
-        match value.trim().to_ascii_uppercase().as_str() {
-            "5K" => Some(KeyMode::K5),
-            "7K" => Some(KeyMode::K7),
-            "9K" => Some(KeyMode::K9),
-            "10K" => Some(KeyMode::K10),
-            "14K" => Some(KeyMode::K14),
+    /// profile `[input.play.*]` の map キー (小文字)。
+    pub fn play_map_key(self) -> &'static str {
+        match self {
+            KeyMode::K4 => "4k",
+            KeyMode::K5 => "5k",
+            KeyMode::K6 => "6k",
+            KeyMode::K7 => "7k",
+            KeyMode::K8 => "8k",
+            KeyMode::K9 => "9k",
+            KeyMode::K10 => "10k",
+            KeyMode::K14 => "14k",
+        }
+    }
+
+    /// `play_map_key` / `as_str` の逆 (大文字小文字無視)。
+    pub fn from_play_map_key(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "4k" => Some(KeyMode::K4),
+            "5k" => Some(KeyMode::K5),
+            "6k" => Some(KeyMode::K6),
+            "7k" => Some(KeyMode::K7),
+            "8k" => Some(KeyMode::K8),
+            "9k" => Some(KeyMode::K9),
+            "10k" => Some(KeyMode::K10),
+            "14k" => Some(KeyMode::K14),
             _ => None,
         }
+    }
+
+    pub fn from_str_opt(value: &str) -> Option<Self> {
+        Self::from_play_map_key(value)
     }
 
     /// layout family に応じてキーモードを推定する。

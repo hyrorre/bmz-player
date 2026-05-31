@@ -23,7 +23,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::play::{
     DEFAULT_JUDGE_WINDOW, audio_mix_from_profile, gauge_auto_shift_from_config,
-    gauge_type_from_config, lane_binding_from_profile_input, play_offsets_from_profile,
+    gauge_type_from_config, lane_binding_for_chart, play_offsets_from_profile,
 };
 use crate::config::profile_config::{
     BgaExpandConfig, BgaModeConfig, LaneEffectConfig, ProfileConfig,
@@ -123,10 +123,11 @@ pub fn build_game_session_with_input_backend(
     let replay_player = options.replay_player;
     let is_replay = replay_player.is_some();
     let autoplay = autoplay_enabled.then(AutoplayController::default);
+    let key_mode = chart.metadata.key_mode;
     let input_system = InputSystem {
         backend: input_backend,
         translator: Box::new(DefaultInputTranslator {
-            binding: lane_binding_from_profile_input(&profile.input),
+            binding: lane_binding_for_chart(&profile.input, key_mode),
         }),
     };
 

@@ -162,12 +162,32 @@ pub struct LaneViewConfig {
     pub target_green_number: u32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UiInputConfig {
+    #[serde(default = "default_ui_bindings")]
+    pub bindings: Vec<BindingConfigEntry>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PlayModeInputConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inherit: Option<String>,
+    #[serde(default)]
+    pub bindings: Vec<BindingConfigEntry>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProfileInputConfig {
     pub scratch_mode: ScratchInputMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start_key: Option<String>,
-    pub bindings: Vec<BindingConfigEntry>,
+    #[serde(default)]
+    pub ui: UiInputConfig,
+    #[serde(default)]
+    pub play: BTreeMap<String, PlayModeInputConfig>,
+    /// 旧 `[[input.bindings]]` (lane + action 混在)。読込時のみ。保存時は出力しない。
+    #[serde(default, rename = "bindings", skip_serializing)]
+    pub legacy_bindings: Vec<BindingConfigEntry>,
     #[serde(default = "default_analog_scratch_sensitivity")]
     pub analog_scratch_sensitivity: f32,
     #[serde(default = "default_analog_scratch_timeout_ms")]
@@ -216,7 +236,7 @@ pub enum ScratchInputMode {
     AnyDirection,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum LaneConfig {
     Scratch,
@@ -515,13 +535,7 @@ impl ProfileConfig {
                 note_scale: 1.0,
                 target_green_number: 300,
             },
-            input: ProfileInputConfig {
-                scratch_mode: ScratchInputMode::Normal,
-                start_key: None,
-                bindings: default_bindings(),
-                analog_scratch_sensitivity: default_analog_scratch_sensitivity(),
-                analog_scratch_timeout_ms: default_analog_scratch_timeout_ms(),
-            },
+            input: crate::config::play_input::default_profile_input(),
             rival: RivalConfig { active_rival: String::new(), entries: Vec::new() },
             replay: ReplayConfig {
                 auto_save: true,
@@ -547,9 +561,25 @@ impl ProfileConfig {
 }
 
 pub fn default_bindings() -> Vec<BindingConfigEntry> {
-    let mut bindings = default_keyboard_bindings();
-    bindings.extend(default_gamepad_bindings());
+    let mut bindings = default_play_lane_bindings();
+    bindings.extend(default_ui_bindings());
     bindings
+}
+
+pub fn default_ui_bindings() -> Vec<BindingConfigEntry> {
+    default_keyboard_bindings()
+        .into_iter()
+        .filter(|entry| entry.action.is_some())
+        .chain(default_gamepad_bindings().into_iter().filter(|entry| entry.action.is_some()))
+        .collect()
+}
+
+fn default_play_lane_bindings() -> Vec<BindingConfigEntry> {
+    default_keyboard_bindings()
+        .into_iter()
+        .filter(|entry| entry.lane.is_some())
+        .chain(default_gamepad_bindings().into_iter().filter(|entry| entry.lane.is_some()))
+        .collect()
 }
 
 pub fn default_keyboard_bindings() -> Vec<BindingConfigEntry> {
@@ -662,7 +692,7 @@ mod tests {
         let profile = ProfileConfig::new_default("default", "Default", 1);
 
         assert!(profile.input.start_key.is_none());
-        assert!(profile.input.bindings.iter().any(|entry| {
+        assert!(profile.input.ui.bindings.iter().any(|entry| {
             entry.device == "keyboard"
                 && entry.control == "Q"
                 && entry.action == Some(InputActionConfig::E1)
@@ -687,7 +717,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(input.start_key.as_deref(), Some("E"));
-        assert_eq!(input.bindings[0].lane, Some(LaneConfig::Key1));
+        assert_eq!(input.legacy_bindings[0].lane, Some(LaneConfig::Key1));
     }
 
     #[test]

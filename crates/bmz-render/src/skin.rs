@@ -3528,6 +3528,8 @@ fn beatoraja_note_index(lane: Lane, key_mode: KeyMode) -> usize {
             Lane::Key9 => 8,
             _ => 8,
         },
+        // Qwilight 系は 7K スキンへフォールバック描画。
+        KeyMode::K4 | KeyMode::K6 | KeyMode::K8 => beatoraja_note_index(lane, KeyMode::K7),
     }
 }
 

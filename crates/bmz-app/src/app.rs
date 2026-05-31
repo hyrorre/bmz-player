@@ -4342,21 +4342,28 @@ struct SelectKeyBindings {
 
 impl SelectKeyBindings {
     fn from_profile(input: &ProfileInputConfig) -> Self {
-        let kb: Vec<_> = input.bindings.iter().filter(|e| e.device == "keyboard").collect();
+        use crate::config::play_input::resolve_play_bindings;
+
+        let play_7k = resolve_play_bindings(input, bmz_core::lane::KeyMode::K7).unwrap_or_default();
+        let kb: Vec<_> = input.ui.bindings.iter().filter(|e| e.device == "keyboard").collect();
+        let play_kb: Vec<_> = play_7k.iter().filter(|e| e.device == "keyboard").collect();
         let all_input: Vec<_> = input
+            .ui
             .bindings
             .iter()
             .filter(|e| e.device == "keyboard" || e.device == "gamepad")
             .collect();
+        let play_all: Vec<_> =
+            play_7k.iter().filter(|e| e.device == "keyboard" || e.device == "gamepad").collect();
 
         // キーボード専用（ヒント文字列表示用）
         let kb_keys_for = |lane: LaneConfig| -> Vec<String> {
-            kb.iter().filter(|e| e.lane == Some(lane)).map(|e| e.control.clone()).collect()
+            play_kb.iter().filter(|e| e.lane == Some(lane)).map(|e| e.control.clone()).collect()
         };
 
         // キーボード + ゲームパッド（is_enter / is_back ルックアップ用）
         let keys_for = |lane: LaneConfig| -> Vec<String> {
-            all_input.iter().filter(|e| e.lane == Some(lane)).map(|e| e.control.clone()).collect()
+            play_all.iter().filter(|e| e.lane == Some(lane)).map(|e| e.control.clone()).collect()
         };
         let kb_actions_for = |action: InputActionConfig| -> Vec<String> {
             kb.iter().filter(|e| e.action == Some(action)).map(|e| e.control.clone()).collect()
@@ -4520,7 +4527,7 @@ fn select_control_with_lane_fallback(
 mod tests {
     use bmz_render::skin::SkinManifest;
 
-    use crate::config::profile_config::ProfileInputConfig;
+    use crate::config::profile_config::ProfileConfig;
     use crate::screens::select_model::SelectChartRow;
     use crate::skin_loader::default_skin_root;
     use crate::storage::library_db::ChartListItem;
@@ -4682,14 +4689,7 @@ mod tests {
     }
 
     fn default_select_keys() -> SelectKeyBindings {
-        use crate::config::profile_config::default_keyboard_bindings;
-        SelectKeyBindings::from_profile(&ProfileInputConfig {
-            scratch_mode: crate::config::profile_config::ScratchInputMode::Normal,
-            start_key: None,
-            bindings: default_keyboard_bindings(),
-            analog_scratch_sensitivity: 1.0,
-            analog_scratch_timeout_ms: 500,
-        })
+        SelectKeyBindings::from_profile(&crate::config::play_input::default_profile_input())
     }
 
     #[test]

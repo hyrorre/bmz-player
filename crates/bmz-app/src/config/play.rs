@@ -1,11 +1,11 @@
 use bmz_core::clear::GaugeType;
-use bmz_core::lane::Lane;
+use bmz_core::lane::{KeyMode, Lane};
 use bmz_gameplay::gauge::GaugeAutoShiftMode;
-use bmz_gameplay::input::backend::PhysicalControl;
-use bmz_gameplay::input::binding::{BindingEntry, LaneBinding};
+use bmz_gameplay::input::binding::LaneBinding;
 use bmz_gameplay::judge::model::JudgeWindow;
 use bmz_gameplay::session::{PlayAudioMix, PlayOffsets};
 
+use super::play_input::lane_binding_for_key_mode;
 use super::profile_config::{
     GaugeAutoShiftConfig, GaugeTypeConfig, LaneConfig, ProfileConfig, ProfileInputConfig,
 };
@@ -85,35 +85,19 @@ pub fn lane_from_config(config: LaneConfig) -> Lane {
 }
 
 pub fn lane_binding_from_profile_input(input: &ProfileInputConfig) -> LaneBinding {
-    LaneBinding {
-        entries: input
-            .bindings
-            .iter()
-            .filter_map(|entry| {
-                let lane = entry.lane?;
-                Some(BindingEntry {
-                    device: None,
-                    control: control_from_config(&entry.device, &entry.control),
-                    lane: lane_from_config(lane),
-                })
-            })
-            .collect(),
-    }
+    lane_binding_for_key_mode(input, KeyMode::K7)
+        .unwrap_or_else(|_| LaneBinding { entries: Vec::new() })
 }
 
-fn control_from_config(device: &str, control: &str) -> PhysicalControl {
-    match device.to_ascii_lowercase().as_str() {
-        "gamepad" => PhysicalControl::GamepadButton(control.to_string()),
-        "hid" => control
-            .parse::<u32>()
-            .map(PhysicalControl::HidButton)
-            .unwrap_or_else(|_| PhysicalControl::KeyboardKey(control.to_string())),
-        _ => PhysicalControl::KeyboardKey(control.to_string()),
-    }
+pub fn lane_binding_for_chart(input: &ProfileInputConfig, key_mode: KeyMode) -> LaneBinding {
+    lane_binding_for_key_mode(input, key_mode)
+        .unwrap_or_else(|_| LaneBinding { entries: Vec::new() })
 }
 
 #[cfg(test)]
 mod tests {
+    use bmz_gameplay::input::backend::PhysicalControl;
+
     use super::*;
     use crate::config::profile_config::ProfileConfig;
 
