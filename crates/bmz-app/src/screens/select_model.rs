@@ -163,6 +163,10 @@ pub struct SelectCourseRow {
     pub trophy_names: Vec<String>,
     /// Entries inside the course, used by the preview panel.
     pub entry_previews: Vec<CourseEntryPreview>,
+    /// Best persisted course score, if any.  Populated from the
+    /// `course_scores` table; `None` when the course has never been played
+    /// successfully or when the lookup failed.
+    pub best_score: Option<crate::storage::library_db::CourseBestScore>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -295,6 +299,11 @@ fn build_select_course_row(
     let trophy_names: Vec<String> =
         stored.definition.trophies.iter().map(|t| t.name.clone()).collect();
 
+    let best_score = library_db.best_course_score(stored.id).unwrap_or_else(|error| {
+        tracing::warn!(%error, course_id = stored.id, "failed to load best course score");
+        None
+    });
+
     SelectItem::Course(SelectCourseRow {
         course_id: stored.id,
         title: stored.definition.title,
@@ -308,6 +317,7 @@ fn build_select_course_row(
         category_label,
         trophy_names,
         entry_previews,
+        best_score,
     })
 }
 

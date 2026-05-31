@@ -4119,10 +4119,14 @@ fn select_snapshot_rows(
                     min_bpm: row.min_bpm,
                     max_bpm: row.max_bpm,
                     length_ms: row.total_length_ms,
-                    clear_type: String::new(),
-                    ex_score: None,
-                    max_combo: None,
-                    gauge_value: None,
+                    clear_type: row
+                        .best_score
+                        .as_ref()
+                        .map(|best| best.clear_type.clone())
+                        .unwrap_or_default(),
+                    ex_score: row.best_score.as_ref().map(|best| best.ex_score),
+                    max_combo: row.best_score.as_ref().map(|best| best.max_combo),
+                    gauge_value: row.best_score.as_ref().map(|best| best.gauge_value),
                     replay_slots: [false; 4],
                     is_folder: false,
                     kind: bmz_render::scene::SelectRowKind::Course,
