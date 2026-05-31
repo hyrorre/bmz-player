@@ -594,6 +594,46 @@ mod tests {
     }
 
     #[test]
+    fn lua_skin_infers_gauge_type_class_predicate_covers_ids_6_7_8() {
+        // 段位ゲージ用 skin が `gauge_type() >= 6` のような draw 条件を書いたとき、
+        // probe は 6 / 7 / 8 すべてを検出して or 連結する必要がある。
+        let root = unique_test_dir("bmz-skin-lua-class-gauge");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("play7.luaskin"),
+            r#"
+            local main_state = require("main_state")
+            return {
+                type = 0,
+                destination = {
+                    {
+                        id = "class_gauge_overlay",
+                        draw = function() return main_state.gauge_type() >= 6 end,
+                        dst = {{ x = 0, y = 0, w = 1, h = 1 }},
+                    },
+                },
+            }
+            "#,
+        )
+        .unwrap();
+
+        let loaded = load_lua_skin(
+            &root.join("play7.luaskin"),
+            SkinKind::Play,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+
+        let bmz_render::skin::DestinationListEntry::Single(destination) =
+            &loaded.document.destination[0]
+        else {
+            panic!("destination should be single");
+        };
+        assert_eq!(destination.draw, "gauge_type() == 6 or gauge_type() == 7 or gauge_type() == 8");
+    }
+
+    #[test]
     fn lua_skin_infers_or_draw_and_division_graph_value() {
         let root = unique_test_dir("bmz-skin-lua");
         fs::create_dir_all(&root).unwrap();
