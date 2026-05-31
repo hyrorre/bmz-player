@@ -141,6 +141,7 @@ pub struct SkinConfigMeta {
     pub decide: SceneSkinDefs,
     pub play5: SceneSkinDefs,
     pub play7: SceneSkinDefs,
+    pub play9: SceneSkinDefs,
     pub play10: SceneSkinDefs,
     pub play14: SceneSkinDefs,
     pub result: SceneSkinDefs,
@@ -152,6 +153,7 @@ pub struct SkinCatalog {
     pub decide: Vec<SkinCandidate>,
     pub play5: Vec<SkinCandidate>,
     pub play7: Vec<SkinCandidate>,
+    pub play9: Vec<SkinCandidate>,
     pub play10: Vec<SkinCandidate>,
     pub play14: Vec<SkinCandidate>,
     pub result: Vec<SkinCandidate>,
@@ -984,6 +986,7 @@ enum SkinSlot {
     Decide,
     Play5,
     Play7,
+    Play9,
     Play10,
     Play14,
     Result,
@@ -1054,6 +1057,7 @@ fn skin_slot_path(skin: &SkinConfig, slot: SkinSlot) -> &str {
         SkinSlot::Decide => &skin.decide,
         SkinSlot::Play5 => &skin.play5,
         SkinSlot::Play7 => &skin.play7,
+        SkinSlot::Play9 => &skin.play9,
         SkinSlot::Play10 => &skin.play10,
         SkinSlot::Play14 => &skin.play14,
         SkinSlot::Result => &skin.result,
@@ -1066,6 +1070,7 @@ fn skin_slot_path_mut(skin: &mut SkinConfig, slot: SkinSlot) -> &mut String {
         SkinSlot::Decide => &mut skin.decide,
         SkinSlot::Play5 => &mut skin.play5,
         SkinSlot::Play7 => &mut skin.play7,
+        SkinSlot::Play9 => &mut skin.play9,
         SkinSlot::Play10 => &mut skin.play10,
         SkinSlot::Play14 => &mut skin.play14,
         SkinSlot::Result => &mut skin.result,
@@ -1078,6 +1083,7 @@ fn skin_slot_options_mut(skin: &mut SkinConfig, slot: SkinSlot) -> &mut BTreeMap
         SkinSlot::Decide => &mut skin.decide_options,
         SkinSlot::Play5 => &mut skin.play5_options,
         SkinSlot::Play7 => &mut skin.play7_options,
+        SkinSlot::Play9 => &mut skin.play9_options,
         SkinSlot::Play10 => &mut skin.play10_options,
         SkinSlot::Play14 => &mut skin.play14_options,
         SkinSlot::Result => &mut skin.result_options,
@@ -1090,6 +1096,7 @@ fn skin_slot_files_mut(skin: &mut SkinConfig, slot: SkinSlot) -> &mut BTreeMap<S
         SkinSlot::Decide => &mut skin.decide_files,
         SkinSlot::Play5 => &mut skin.play5_files,
         SkinSlot::Play7 => &mut skin.play7_files,
+        SkinSlot::Play9 => &mut skin.play9_files,
         SkinSlot::Play10 => &mut skin.play10_files,
         SkinSlot::Play14 => &mut skin.play14_files,
         SkinSlot::Result => &mut skin.result_files,
@@ -1149,6 +1156,9 @@ fn build_skin_panel(
                 changed |=
                     skin_path_combo(ui, skin, SkinSlot::Play7, "プレイ (7K)", &skin_catalog.play7);
                 ui.end_row();
+                changed |=
+                    skin_path_combo(ui, skin, SkinSlot::Play9, "プレイ (9K)", &skin_catalog.play9);
+                ui.end_row();
                 changed |= skin_path_combo(
                     ui,
                     skin,
@@ -1175,6 +1185,7 @@ fn build_skin_panel(
             let decide_root = skin_root_path(&skin.decide);
             let play5_root = skin_root_path(&skin.play5);
             let play7_root = skin_root_path(&skin.play7);
+            let play9_root = skin_root_path(&skin.play9);
             let play10_root = skin_root_path(&skin.play10);
             let play14_root = skin_root_path(&skin.play14);
             let result_root = skin_root_path(&skin.result);
@@ -1212,6 +1223,15 @@ fn build_skin_panel(
                 play7_root.as_deref(),
                 &mut skin.play7_options,
                 &mut skin.play7_files,
+                &mut skin.offsets,
+            );
+            changed |= build_scene_skin_defs(
+                ui,
+                "プレイスキン (9K)",
+                &skin_meta.play9,
+                play9_root.as_deref(),
+                &mut skin.play9_options,
+                &mut skin.play9_files,
                 &mut skin.offsets,
             );
             changed |= build_scene_skin_defs(

@@ -2621,10 +2621,12 @@ impl WinitApp {
         let info = DebugInfo { scene, width: size.width, height: size.height };
         let play5_path = self.boot.profile_config.skin.play5.clone();
         let play7_path = self.boot.profile_config.skin.play7.clone();
+        let play9_path = self.boot.profile_config.skin.play9.clone();
         let play10_path = self.boot.profile_config.skin.play10.clone();
         let play14_path = self.boot.profile_config.skin.play14.clone();
         let play5_defs = self.play_skin_defs_for_path(&play5_path);
         let play7_defs = self.play_skin_defs_for_path(&play7_path);
+        let play9_defs = self.play_skin_defs_for_path(&play9_path);
         let play10_defs = self.play_skin_defs_for_path(&play10_path);
         let play14_defs = self.play_skin_defs_for_path(&play14_path);
         let skin_meta = SkinConfigMeta {
@@ -2632,6 +2634,7 @@ impl WinitApp {
             decide: SceneSkinDefs::from_document(self.renderer.decide_skin_document()),
             play5: play5_defs,
             play7: play7_defs,
+            play9: play9_defs,
             play10: play10_defs,
             play14: play14_defs,
             result: SceneSkinDefs::from_document(self.renderer.result_skin_document()),
@@ -3387,6 +3390,7 @@ fn push_skin_candidate(catalog: &mut SkinCatalog, skin_type: i32, candidate: Ski
         1 => catalog.play5.push(candidate),
         2 => catalog.play14.push(candidate),
         3 => catalog.play10.push(candidate),
+        4 => catalog.play9.push(candidate),
         5 => catalog.select.push(candidate),
         6 => catalog.decide.push(candidate),
         7 => catalog.result.push(candidate),
@@ -3400,6 +3404,7 @@ fn sort_skin_catalog(catalog: &mut SkinCatalog) {
         &mut catalog.decide,
         &mut catalog.play5,
         &mut catalog.play7,
+        &mut catalog.play9,
         &mut catalog.play10,
         &mut catalog.play14,
         &mut catalog.result,
@@ -4662,13 +4667,23 @@ mod tests {
                 path: "data/skins/example/play10.luaskin".to_string(),
             },
         );
+        push_skin_candidate(
+            &mut catalog,
+            4,
+            SkinCandidate {
+                name: "Nine".to_string(),
+                path: "data/skins/example/play9.luaskin".to_string(),
+            },
+        );
 
         assert_eq!(catalog.play5.len(), 1);
         assert_eq!(catalog.play7.len(), 1);
+        assert_eq!(catalog.play9.len(), 1);
         assert_eq!(catalog.play10.len(), 1);
         assert_eq!(catalog.play14.len(), 1);
         assert_eq!(catalog.play5[0].path, "data/skins/example/play5.luaskin");
         assert_eq!(catalog.play7[0].path, "data/skins/example/play7.luaskin");
+        assert_eq!(catalog.play9[0].path, "data/skins/example/play9.luaskin");
         assert_eq!(catalog.play10[0].path, "data/skins/example/play10.luaskin");
         assert_eq!(catalog.play14[0].path, "data/skins/example/play14.luaskin");
     }
