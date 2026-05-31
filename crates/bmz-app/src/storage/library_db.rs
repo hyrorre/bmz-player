@@ -7,7 +7,10 @@ use bmz_chart::model::{NoteKind, PlayableChart, TimingEventKind};
 use bmz_gameplay::gauge::gauge_total_for_chart;
 use rusqlite::{Connection, OptionalExtension, params};
 
-pub use super::course_db::{StoredCourse, StoredCourseEntry};
+pub use super::course_db::{
+    CourseBestScore, CourseReplayRecord, CourseReplaySlotRecord, CourseScoreChartRecord,
+    CourseScoreEntry, CourseScoreInsert, StoredCourse, StoredCourseEntry,
+};
 pub use super::difficulty_table_db::{
     DifficultyTableEntryRecord, DifficultyTableRecord, TableEntryRow,
 };
@@ -653,6 +656,97 @@ impl LibraryDatabase {
 
     pub fn list_course_entries(&self, course_id: i64) -> Result<Vec<StoredCourseEntry>> {
         super::course_db::list_course_entries(&self.conn, course_id)
+    }
+
+    pub fn insert_course_score(&mut self, record: &CourseScoreInsert) -> Result<i64> {
+        super::course_db::insert_course_score(&mut self.conn, record)
+    }
+
+    pub fn best_course_score(&self, course_id: i64) -> Result<Option<CourseBestScore>> {
+        super::course_db::best_course_score(&self.conn, course_id)
+    }
+
+    pub fn best_course_clear(&self, course_id: i64) -> Result<Option<bmz_core::clear::ClearType>> {
+        super::course_db::best_course_clear(&self.conn, course_id)
+    }
+
+    pub fn best_course_scores_for_courses(
+        &self,
+        course_ids: &[i64],
+    ) -> Result<std::collections::HashMap<i64, CourseBestScore>> {
+        let mut out = std::collections::HashMap::new();
+        for id in course_ids {
+            if let Some(best) = super::course_db::best_course_score(&self.conn, *id)? {
+                out.insert(*id, best);
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn list_course_score_charts(
+        &self,
+        course_score_id: i64,
+    ) -> Result<Vec<CourseScoreChartRecord>> {
+        super::course_db::list_course_score_charts(&self.conn, course_score_id)
+    }
+
+    pub fn list_course_replays(&self, course_score_id: i64) -> Result<Vec<CourseReplayRecord>> {
+        super::course_db::list_course_replays(&self.conn, course_score_id)
+    }
+
+    pub fn latest_course_score_id(&self, course_id: i64) -> Result<Option<i64>> {
+        super::course_db::latest_course_score_id(&self.conn, course_id)
+    }
+
+    pub fn list_recent_course_scores(
+        &self,
+        course_id: i64,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<CourseScoreEntry>> {
+        super::course_db::list_recent_course_scores(&self.conn, course_id, limit, offset)
+    }
+
+    pub fn course_score_entry_by_id(
+        &self,
+        course_score_id: i64,
+    ) -> Result<Option<CourseScoreEntry>> {
+        super::course_db::course_score_entry_by_id(&self.conn, course_score_id)
+    }
+
+    pub fn upsert_course_replay_slot(&mut self, record: &CourseReplaySlotRecord) -> Result<()> {
+        super::course_db::upsert_course_replay_slot(&mut self.conn, record)
+    }
+
+    pub fn course_replay_slot(
+        &self,
+        course_id: i64,
+        slot: u8,
+    ) -> Result<Option<CourseReplaySlotRecord>> {
+        super::course_db::course_replay_slot(&self.conn, course_id, slot)
+    }
+
+    pub fn course_replay_slots_for_course(
+        &self,
+        course_id: i64,
+    ) -> Result<[Option<CourseReplaySlotRecord>; 4]> {
+        super::course_db::course_replay_slots_for_course(&self.conn, course_id)
+    }
+
+    pub fn course_replay_slot_presence(&self, course_id: i64) -> Result<[bool; 4]> {
+        super::course_db::course_replay_slot_presence(&self.conn, course_id)
+    }
+
+    pub fn achieved_trophy_names_for_course(&self, course_id: i64) -> Result<Vec<String>> {
+        super::course_db::achieved_trophy_names_for_course(&self.conn, course_id)
+    }
+
+    pub fn best_course_score_for_trophy(
+        &self,
+        course_id: i64,
+        trophy_name: &str,
+    ) -> Result<Option<CourseBestScore>> {
+        super::course_db::best_course_score_for_trophy(&self.conn, course_id, trophy_name)
     }
 
     /// Returns `(ChartListItem, raw_level)` pairs for charts in the library that

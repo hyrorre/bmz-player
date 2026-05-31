@@ -143,6 +143,8 @@ cargo run -p bmz-app -- songs list
 - `-a` / `--autoplay-on-start` — 起動譜面をオートプレイ
 - `-r1` / `-r2` / `-r3` / `-r4` / `--boot-replay <1..4>` / `--boot-replay=<1..4>` — リプレイスロット指定
 - `--boot-play-sample` — 同梱サンプル譜面で起動
+- `--boot-course <COURSE_ID>` / `--boot-course=<COURSE_ID>` — 指定コースを fresh で起動
+- `--boot-course-replay <COURSE_ID>` / `--boot-course-replay=<COURSE_ID>` — 指定コースの最新 attempt を replay 再生
 
 その他:
 
@@ -163,6 +165,13 @@ cargo run -p bmz-app -- songs list
 - `songs list`
 - `songs load [PATH|NAME]`
 - `songs reload [PATH|NAME]`
+
+`course`:
+
+- `course import <PATH>`
+- `course list`
+- `course history <COURSE_ID> [--limit N]`
+- `course attempt <SCORE_ID>`
 
 新しいデバッグフラグを追加するときも `crates/bmz-app/src/cli.rs` に集約してください。
 

@@ -28,11 +28,12 @@ pub struct StorePlayResultRequest {
     pub arrange_pattern: Option<Vec<u8>>,
 }
 
-struct CandidateMetrics {
-    ex_score: u32,
-    miss_count: u32,
-    max_combo: u32,
-    clear_rank: u8,
+#[derive(Debug, Clone, Copy)]
+pub struct CandidateMetrics {
+    pub ex_score: u32,
+    pub miss_count: u32,
+    pub max_combo: u32,
+    pub clear_rank: u8,
 }
 
 pub fn store_play_result(
@@ -131,18 +132,31 @@ fn evaluate_slot_update(
     prev: Option<&ReplaySlotRecord>,
     next: &CandidateMetrics,
 ) -> bool {
+    let prev_metrics = prev.map(|p| (p.ex_score, p.miss_count, p.max_combo, p.clear_rank));
+    slot_rule_passes(rule, prev_metrics, next)
+}
+
+/// Rule-only comparison shared by per-chart `replay_slots` and per-course
+/// `course_replay_slots`.  `prev` is `(ex_score, miss_count, max_combo,
+/// clear_rank)` of the row currently in the slot, or `None` if the slot is
+/// empty (in which case any rule passes — the first record always wins).
+pub fn slot_rule_passes(
+    rule: ReplaySlotRule,
+    prev: Option<(u32, u32, u32, u8)>,
+    next: &CandidateMetrics,
+) -> bool {
     if matches!(rule, ReplaySlotRule::Always) {
         return true;
     }
-    let Some(prev) = prev else {
+    let Some((prev_ex, prev_miss, prev_combo, prev_clear)) = prev else {
         return true;
     };
     match rule {
         ReplaySlotRule::Always => true,
-        ReplaySlotRule::ScoreUpdate => next.ex_score > prev.ex_score,
-        ReplaySlotRule::MissCountUpdate => next.miss_count < prev.miss_count,
-        ReplaySlotRule::MaxComboUpdate => next.max_combo > prev.max_combo,
-        ReplaySlotRule::ClearUpdate => next.clear_rank > prev.clear_rank,
+        ReplaySlotRule::ScoreUpdate => next.ex_score > prev_ex,
+        ReplaySlotRule::MissCountUpdate => next.miss_count < prev_miss,
+        ReplaySlotRule::MaxComboUpdate => next.max_combo > prev_combo,
+        ReplaySlotRule::ClearUpdate => next.clear_rank > prev_clear,
     }
 }
 

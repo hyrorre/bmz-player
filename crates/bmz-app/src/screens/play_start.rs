@@ -293,6 +293,26 @@ fn course_gauge_for(gauge: GaugeTypeConfig) -> GaugeType {
     }
 }
 
+/// Attach a queued course replay to `PlayStartOptions`.
+///
+/// Sets the replay player and copies the recorded arrange / arrange_seed /
+/// lane_shuffle_pattern from the replay file so the chart unfolds exactly as
+/// it did at record time.  Must be called *after* `apply_course_constraints`
+/// so that constraints don't overwrite the replay's arrange.
+pub fn apply_queued_replay(
+    options: &mut PlayStartOptions,
+    replay: &crate::storage::replay::QueuedCourseReplay,
+) {
+    let player =
+        bmz_gameplay::replay::ReplayPlayer { events: replay.replay.events.clone(), next_index: 0 };
+    options.replay_player = Some(player);
+    options.arrange = replay.replay.arrange_option();
+    options.arrange_seed = replay.replay.arrange_seed;
+    options.arrange_pattern = replay.replay.lane_shuffle_pattern.clone();
+    // Replays of past plays were recorded by a human; never autoplay them.
+    options.autoplay = false;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -7,6 +7,8 @@ pub const AUTOPLAY_SHORT_ARG: &str = "-a";
 pub const SMOKE_EXIT_AFTER_FRAMES_ARG: &str = "--smoke-exit-after-frames";
 pub const SMOKE_EXIT_ON_RESULT_ARG: &str = "--smoke-exit-on-result";
 pub const BOOT_REPLAY_ARG: &str = "--boot-replay";
+pub const BOOT_COURSE_REPLAY_ARG: &str = "--boot-course-replay";
+pub const BOOT_COURSE_ARG: &str = "--boot-course";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
@@ -33,8 +35,19 @@ pub enum SongsCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CourseCommand {
-    Import { path: String },
+    Import {
+        path: String,
+    },
     List,
+    /// `course history <COURSE_ID> [--limit N]` — print recent attempts.
+    History {
+        course_id: i64,
+        limit: u32,
+    },
+    /// `course attempt <SCORE_ID>` — print per-chart breakdown of a single attempt.
+    Attempt {
+        score_id: i64,
+    },
 }
 
 pub fn parse_command<I, S>(args: I) -> Result<Command>
@@ -101,8 +114,29 @@ where
                     Ok(Command::Course(CourseCommand::Import { path }))
                 }
                 Some("list") => Ok(Command::Course(CourseCommand::List)),
-                Some(sub) => bail!("unknown course subcommand: {sub}. Use: import, list"),
-                None => bail!("course requires a subcommand: import, list"),
+                Some("history") => {
+                    let id_str = rest
+                        .get(1)
+                        .ok_or_else(|| anyhow::anyhow!("course history requires a COURSE_ID"))?;
+                    let course_id = parse_course_history_id(id_str)?;
+                    // Optional `--limit N` flag; default 10.
+                    let limit = parse_course_history_limit(&rest[2..])?;
+                    Ok(Command::Course(CourseCommand::History { course_id, limit }))
+                }
+                Some("attempt") => {
+                    let id_str = rest
+                        .get(1)
+                        .ok_or_else(|| anyhow::anyhow!("course attempt requires a SCORE_ID"))?;
+                    let score_id = parse_course_attempt_id(id_str)?;
+                    if rest.len() > 2 {
+                        bail!("unknown flag for course attempt: {}", rest[2]);
+                    }
+                    Ok(Command::Course(CourseCommand::Attempt { score_id }))
+                }
+                Some(sub) => {
+                    bail!("unknown course subcommand: {sub}. Use: import, list, history, attempt")
+                }
+                None => bail!("course requires a subcommand: import, list, history, attempt"),
             }
         }
         _ => Ok(Command::Run(AppOptions::parse_args(args)?)),
@@ -119,6 +153,12 @@ pub struct AppOptions {
     pub smoke_exit_on_result: bool,
     /// `--boot-replay <SLOT>` / `-r1..4` で指定された 0-based のスロット index。
     pub boot_replay_slot: Option<u8>,
+    /// `--boot-course-replay <COURSE_ID>` で指定されたコース id。
+    /// 指定された場合、そのコースの最新 attempt を replay 再生する。
+    pub boot_course_replay_id: Option<i64>,
+    /// `--boot-course <COURSE_ID>` で指定されたコース id。
+    /// 指定された場合、そのコースを fresh で起動する。
+    pub boot_course_id: Option<i64>,
     /// `--renderer <backend>` で指定されたレンダラーバックエンド。
     pub renderer: Option<RendererBackend>,
 }
@@ -140,6 +180,14 @@ impl AppOptions {
             }
             if let Some(value) = arg.strip_prefix("--boot-replay=") {
                 options.boot_replay_slot = Some(parse_boot_replay_slot(value)?);
+                continue;
+            }
+            if let Some(value) = arg.strip_prefix("--boot-course-replay=") {
+                options.boot_course_replay_id = Some(parse_boot_course_replay_id(value)?);
+                continue;
+            }
+            if let Some(value) = arg.strip_prefix("--boot-course=") {
+                options.boot_course_id = Some(parse_boot_course_id(value)?);
                 continue;
             }
             if let Some(value) = arg.strip_prefix("--renderer=") {
@@ -164,6 +212,19 @@ impl AppOptions {
                         bail!("{BOOT_REPLAY_ARG} requires a slot number (1..4)");
                     };
                     options.boot_replay_slot = Some(parse_boot_replay_slot(value.as_ref())?);
+                }
+                BOOT_COURSE_REPLAY_ARG => {
+                    let Some(value) = args.next() else {
+                        bail!("{BOOT_COURSE_REPLAY_ARG} requires a course id");
+                    };
+                    options.boot_course_replay_id =
+                        Some(parse_boot_course_replay_id(value.as_ref())?);
+                }
+                BOOT_COURSE_ARG => {
+                    let Some(value) = args.next() else {
+                        bail!("{BOOT_COURSE_ARG} requires a course id");
+                    };
+                    options.boot_course_id = Some(parse_boot_course_id(value.as_ref())?);
                 }
                 "--renderer" => {
                     let Some(value) = args.next() else {
@@ -192,7 +253,7 @@ where
 }
 
 pub fn app_help_text() -> &'static str {
-    "bmz-app\n\nUsage:\n  bmz-app [OPTIONS] [PATH]\n  bmz-app table <SUBCOMMAND>\n  bmz-app songs <SUBCOMMAND>\n  bmz-app course <SUBCOMMAND>\n\nOptions:\n  [PATH]                          Start the chart at PATH (beatoraja-style alias)\n  -a                              Enable autoplay for the boot chart (alias of --autoplay-on-start)\n  -r1 | -r2 | -r3 | -r4           Start replay slot 1..4 for the boot chart\n  --boot-play-sample              Start the bundled sample chart on boot\n  --autoplay-on-start             Enable autoplay for started charts\n  --boot-replay <1..4>            Start replay slot N for the boot chart\n  --smoke-exit-after-frames <N>   Exit after N rendered frames, clamped to 1 or more\n  --smoke-exit-on-result          Exit when the app reaches the result screen\n  --renderer <backend>            wgpu renderer backend (vulkan, metal, dx12, gl, auto)\n  -h, --help                      Print this help\n\nTable subcommands:\n  table add <URL>       Add a difficulty table source and fetch it\n  table list            List all stored difficulty tables\n  table fetch [URL]     Fetch/update configured tables, or a single URL\n\nSongs subcommands:\n  songs add <PATH> [--no-recursive] [--disabled]   Add a song root directory\n  songs list                                        List configured song roots\n  songs load [PATH|NAME]                            Scan song roots (incremental)\n  songs reload [PATH|NAME]                          Force rescan song roots\n\nCourse subcommands:\n  course import <PATH>   Import beatoraja course JSON from a file or directory\n  course list            List stored courses\n\nExamples:\n  cargo run -p bmz-app -- /path/to/chart.bms\n  cargo run -p bmz-app -- -a /path/to/chart.bms\n  cargo run -p bmz-app -- -r2 /path/to/chart.bms\n  cargo run -p bmz-app -- --boot-play-sample --smoke-exit-after-frames 3\n  cargo run -p bmz-app -- --boot-play-sample --boot-replay 1 --smoke-exit-on-result\n  cargo run -p bmz-app -- table add https://example.com/table.html\n  cargo run -p bmz-app -- table list\n  cargo run -p bmz-app -- table fetch https://example.com/table.html\n  cargo run -p bmz-app -- songs add /path/to/bms\n  cargo run -p bmz-app -- songs list\n  cargo run -p bmz-app -- songs load\n  cargo run -p bmz-app -- songs reload my-bms-folder\n  cargo run -p bmz-app -- course import /path/to/course.json\n  cargo run -p bmz-app -- course list"
+    "bmz-app\n\nUsage:\n  bmz-app [OPTIONS] [PATH]\n  bmz-app table <SUBCOMMAND>\n  bmz-app songs <SUBCOMMAND>\n  bmz-app course <SUBCOMMAND>\n\nOptions:\n  [PATH]                          Start the chart at PATH (beatoraja-style alias)\n  -a                              Enable autoplay for the boot chart (alias of --autoplay-on-start)\n  -r1 | -r2 | -r3 | -r4           Start replay slot 1..4 for the boot chart\n  --boot-play-sample              Start the bundled sample chart on boot\n  --autoplay-on-start             Enable autoplay for started charts\n  --boot-replay <1..4>            Start replay slot N for the boot chart\n  --boot-course <ID>              Start course ID fresh on boot\n  --boot-course-replay <ID>       Replay the latest attempt of course ID on boot\n  --smoke-exit-after-frames <N>   Exit after N rendered frames, clamped to 1 or more\n  --smoke-exit-on-result          Exit when the app reaches the result screen\n  --renderer <backend>            wgpu renderer backend (vulkan, metal, dx12, gl, auto)\n  -h, --help                      Print this help\n\nTable subcommands:\n  table add <URL>       Add a difficulty table source and fetch it\n  table list            List all stored difficulty tables\n  table fetch [URL]     Fetch/update configured tables, or a single URL\n\nSongs subcommands:\n  songs add <PATH> [--no-recursive] [--disabled]   Add a song root directory\n  songs list                                        List configured song roots\n  songs load [PATH|NAME]                            Scan song roots (incremental)\n  songs reload [PATH|NAME]                          Force rescan song roots\n\nCourse subcommands:\n  course import <PATH>             Import beatoraja course JSON from a file or directory\n  course list                      List stored courses\n  course history <ID> [--limit N]  Show recent attempts of course ID (default limit 10)\n  course attempt <SCORE_ID>        Show per-chart breakdown of a single course attempt\n\nExamples:\n  cargo run -p bmz-app -- /path/to/chart.bms\n  cargo run -p bmz-app -- -a /path/to/chart.bms\n  cargo run -p bmz-app -- -r2 /path/to/chart.bms\n  cargo run -p bmz-app -- --boot-play-sample --smoke-exit-after-frames 3\n  cargo run -p bmz-app -- --boot-play-sample --boot-replay 1 --smoke-exit-on-result\n  cargo run -p bmz-app -- table add https://example.com/table.html\n  cargo run -p bmz-app -- table list\n  cargo run -p bmz-app -- table fetch https://example.com/table.html\n  cargo run -p bmz-app -- songs add /path/to/bms\n  cargo run -p bmz-app -- songs list\n  cargo run -p bmz-app -- songs load\n  cargo run -p bmz-app -- songs reload my-bms-folder\n  cargo run -p bmz-app -- course import /path/to/course.json\n  cargo run -p bmz-app -- course list"
 }
 
 fn parse_smoke_exit_after_frames_value(value: &str) -> Result<u32> {
@@ -205,6 +266,96 @@ fn parse_smoke_exit_after_frames_value(value: &str) -> Result<u32> {
         format!("invalid frame count for {SMOKE_EXIT_AFTER_FRAMES_ARG}: {value}")
     })?;
     Ok(frames.max(1))
+}
+
+fn parse_boot_course_replay_id(value: &str) -> Result<i64> {
+    let value = value.trim();
+    if value.is_empty() {
+        bail!("{BOOT_COURSE_REPLAY_ARG} requires a course id");
+    }
+    let id: i64 = value
+        .parse()
+        .with_context(|| format!("invalid course id for {BOOT_COURSE_REPLAY_ARG}: {value}"))?;
+    if id <= 0 {
+        bail!("{BOOT_COURSE_REPLAY_ARG} course id must be positive (got {id})");
+    }
+    Ok(id)
+}
+
+fn parse_course_history_id(value: &str) -> Result<i64> {
+    let value = value.trim();
+    if value.is_empty() {
+        bail!("course history requires a COURSE_ID");
+    }
+    let id: i64 =
+        value.parse().with_context(|| format!("invalid course id for course history: {value}"))?;
+    if id <= 0 {
+        bail!("course history COURSE_ID must be positive (got {id})");
+    }
+    Ok(id)
+}
+
+fn parse_course_history_limit(flags: &[String]) -> Result<u32> {
+    // No flags → default limit.
+    let Some(flag) = flags.first() else {
+        return Ok(10);
+    };
+    if let Some(value) = flag.strip_prefix("--limit=") {
+        // `--limit=N` consumes one token; any extra tokens are unknown.
+        if flags.len() > 1 {
+            bail!("unknown flag for course history: {}", flags[1]);
+        }
+        return parse_history_limit_value(value);
+    }
+    if flag == "--limit" {
+        let Some(value) = flags.get(1) else {
+            bail!("--limit requires a positive integer");
+        };
+        if flags.len() > 2 {
+            bail!("unknown flag for course history: {}", flags[2]);
+        }
+        return parse_history_limit_value(value);
+    }
+    bail!("unknown flag for course history: {flag}");
+}
+
+fn parse_course_attempt_id(value: &str) -> Result<i64> {
+    let value = value.trim();
+    if value.is_empty() {
+        bail!("course attempt requires a SCORE_ID");
+    }
+    let id: i64 =
+        value.parse().with_context(|| format!("invalid score id for course attempt: {value}"))?;
+    if id <= 0 {
+        bail!("course attempt SCORE_ID must be positive (got {id})");
+    }
+    Ok(id)
+}
+
+fn parse_history_limit_value(value: &str) -> Result<u32> {
+    let value = value.trim();
+    if value.is_empty() {
+        bail!("--limit requires a positive integer");
+    }
+    let n: u32 = value.parse().with_context(|| format!("invalid --limit value: {value}"))?;
+    if n == 0 {
+        bail!("--limit must be greater than 0");
+    }
+    Ok(n)
+}
+
+fn parse_boot_course_id(value: &str) -> Result<i64> {
+    let value = value.trim();
+    if value.is_empty() {
+        bail!("{BOOT_COURSE_ARG} requires a course id");
+    }
+    let id: i64 = value
+        .parse()
+        .with_context(|| format!("invalid course id for {BOOT_COURSE_ARG}: {value}"))?;
+    if id <= 0 {
+        bail!("{BOOT_COURSE_ARG} course id must be positive (got {id})");
+    }
+    Ok(id)
 }
 
 fn parse_boot_replay_slot(value: &str) -> Result<u8> {
@@ -486,5 +637,107 @@ mod tests {
     fn help_text_lists_boot_replay() {
         let help = app_help_text();
         assert!(help.contains("--boot-replay"));
+    }
+
+    #[test]
+    fn app_options_parse_boot_course_replay_id() {
+        let options = AppOptions::parse_args(["--boot-course-replay", "42"]).unwrap();
+        assert_eq!(options.boot_course_replay_id, Some(42));
+
+        let options = AppOptions::parse_args(["--boot-course-replay=7"]).unwrap();
+        assert_eq!(options.boot_course_replay_id, Some(7));
+    }
+
+    #[test]
+    fn app_options_reject_invalid_boot_course_replay_id() {
+        assert!(AppOptions::parse_args(["--boot-course-replay"]).is_err());
+        assert!(AppOptions::parse_args(["--boot-course-replay", "0"]).is_err());
+        assert!(AppOptions::parse_args(["--boot-course-replay", "-1"]).is_err());
+        assert!(AppOptions::parse_args(["--boot-course-replay", "abc"]).is_err());
+    }
+
+    #[test]
+    fn help_text_lists_boot_course_replay() {
+        let help = app_help_text();
+        assert!(help.contains("--boot-course-replay"));
+    }
+
+    #[test]
+    fn app_options_parse_boot_course_id() {
+        let options = AppOptions::parse_args(["--boot-course", "42"]).unwrap();
+        assert_eq!(options.boot_course_id, Some(42));
+
+        let options = AppOptions::parse_args(["--boot-course=7"]).unwrap();
+        assert_eq!(options.boot_course_id, Some(7));
+    }
+
+    #[test]
+    fn app_options_reject_invalid_boot_course_id() {
+        assert!(AppOptions::parse_args(["--boot-course"]).is_err());
+        assert!(AppOptions::parse_args(["--boot-course", "0"]).is_err());
+        assert!(AppOptions::parse_args(["--boot-course", "-1"]).is_err());
+        assert!(AppOptions::parse_args(["--boot-course", "abc"]).is_err());
+    }
+
+    #[test]
+    fn help_text_lists_boot_course() {
+        let help = app_help_text();
+        assert!(help.contains("--boot-course "));
+    }
+
+    #[test]
+    fn parse_command_routes_course_history() {
+        assert_eq!(
+            parse_command(["course", "history", "42"]).unwrap(),
+            Command::Course(CourseCommand::History { course_id: 42, limit: 10 }),
+        );
+        assert_eq!(
+            parse_command(["course", "history", "42", "--limit", "5"]).unwrap(),
+            Command::Course(CourseCommand::History { course_id: 42, limit: 5 }),
+        );
+        assert_eq!(
+            parse_command(["course", "history", "42", "--limit=20"]).unwrap(),
+            Command::Course(CourseCommand::History { course_id: 42, limit: 20 }),
+        );
+    }
+
+    #[test]
+    fn parse_command_rejects_invalid_course_history() {
+        assert!(parse_command(["course", "history"]).is_err());
+        assert!(parse_command(["course", "history", "0"]).is_err());
+        assert!(parse_command(["course", "history", "-1"]).is_err());
+        assert!(parse_command(["course", "history", "abc"]).is_err());
+        assert!(parse_command(["course", "history", "1", "--limit"]).is_err());
+        assert!(parse_command(["course", "history", "1", "--limit=0"]).is_err());
+        assert!(parse_command(["course", "history", "1", "--unknown"]).is_err());
+    }
+
+    #[test]
+    fn help_text_lists_course_history() {
+        let help = app_help_text();
+        assert!(help.contains("course history"));
+    }
+
+    #[test]
+    fn parse_command_routes_course_attempt() {
+        assert_eq!(
+            parse_command(["course", "attempt", "7"]).unwrap(),
+            Command::Course(CourseCommand::Attempt { score_id: 7 }),
+        );
+    }
+
+    #[test]
+    fn parse_command_rejects_invalid_course_attempt() {
+        assert!(parse_command(["course", "attempt"]).is_err());
+        assert!(parse_command(["course", "attempt", "0"]).is_err());
+        assert!(parse_command(["course", "attempt", "-1"]).is_err());
+        assert!(parse_command(["course", "attempt", "abc"]).is_err());
+        assert!(parse_command(["course", "attempt", "1", "--unknown"]).is_err());
+    }
+
+    #[test]
+    fn help_text_lists_course_attempt() {
+        let help = app_help_text();
+        assert!(help.contains("course attempt"));
     }
 }

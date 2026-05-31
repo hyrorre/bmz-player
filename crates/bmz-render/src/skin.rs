@@ -1310,6 +1310,8 @@ pub struct SkinDrawState {
     pub select_replay_index: Option<usize>,
     /// 選択中曲のクリアランプ番号。
     pub select_clear_index: i64,
+    /// 選択中バー種別。OPTION_FOLDERBAR / SONGBAR / GRADEBAR の判定に使う。
+    pub select_row_kind: SelectRowKind,
     /// 選択中バーがフォルダかどうか。
     pub select_is_folder: bool,
     /// 選択中曲が library.db に登録済みかどうか (OPTION_PLAYABLEBAR=5)。
@@ -1453,6 +1455,7 @@ impl Default for SkinDrawState {
             select_replay_slots: [false; 4],
             select_replay_index: None,
             select_clear_index: 0,
+            select_row_kind: SelectRowKind::Song,
             select_is_folder: false,
             select_in_library: true,
             select_total_notes: 0,
@@ -2455,6 +2458,7 @@ impl SkinDocument {
             select_replay_slots: selected_row.map(|row| row.replay_slots).unwrap_or([false; 4]),
             select_replay_index: selected_row.and_then(select_row_replay_index),
             select_clear_index: selected_row.map(select_row_clear_index).unwrap_or(0) as i64,
+            select_row_kind: selected_row.map(|row| row.kind).unwrap_or(SelectRowKind::Song),
             select_is_folder: selected_row.is_some_and(|row| row.is_folder),
             select_in_library: selected_row.is_none_or(|row| row.in_library),
             select_total_notes: selected_row.map(|row| row.total_notes).unwrap_or(0),
@@ -2546,6 +2550,7 @@ impl SkinDocument {
                 select_replay_slots: row.replay_slots,
                 select_replay_index: select_row_replay_index(row),
                 select_clear_index: select_row_clear_index(row) as i64,
+                select_row_kind: row.kind,
                 select_is_folder: row.is_folder,
                 select_in_library: row.in_library,
                 select_total_notes: row.total_notes,
@@ -4472,9 +4477,9 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool 
     match op {
         40 => false,
         41 => true,
-        1 => state.select_is_folder,
-        2 => !state.select_is_folder,
-        3 => false,
+        1 => matches!(state.select_row_kind, SelectRowKind::Folder | SelectRowKind::TableFolder),
+        2 => state.select_row_kind == SelectRowKind::Song,
+        3 => state.select_row_kind == SelectRowKind::Course,
         5 => !state.select_is_folder && state.select_in_library,
         21 => state.select_option_panel == 1,
         22 => state.select_option_panel == 2,
@@ -5876,6 +5881,20 @@ fn select_row_replay_index(row: &SelectRowSnapshot) -> Option<usize> {
 }
 
 fn select_row_trophy_index(row: &SelectRowSnapshot) -> Option<usize> {
+    let mut trophy_index = None;
+    for name in &row.achieved_trophy_names {
+        let rank = match name.as_str() {
+            "bronzemedal" => 0,
+            "silvermedal" => 1,
+            "goldmedal" => 2,
+            _ => continue,
+        };
+        trophy_index = Some(trophy_index.map_or(rank, |current: usize| current.max(rank)));
+    }
+    if trophy_index.is_some() {
+        return trophy_index;
+    }
+
     let ex_score = row.ex_score?;
     let max_score = row.total_notes.checked_mul(2)?;
     if max_score == 0 {
@@ -7818,6 +7837,58 @@ mod tests {
     }
 
     #[test]
+    fn select_bar_type_ops_match_song_folder_and_course_rows() {
+        let song = SkinDrawState {
+            select_row_kind: SelectRowKind::Song,
+            select_is_folder: false,
+            ..SkinDrawState::default()
+        };
+        let folder = SkinDrawState {
+            select_row_kind: SelectRowKind::Folder,
+            select_is_folder: true,
+            ..SkinDrawState::default()
+        };
+        let table_folder = SkinDrawState {
+            select_row_kind: SelectRowKind::TableFolder,
+            select_is_folder: true,
+            ..SkinDrawState::default()
+        };
+        let course = SkinDrawState {
+            select_row_kind: SelectRowKind::Course,
+            select_is_folder: false,
+            ..SkinDrawState::default()
+        };
+
+        assert!(test_skin_op(2, &[], song));
+        assert!(!test_skin_op(1, &[], song));
+        assert!(!test_skin_op(3, &[], song));
+        assert!(test_skin_op(1, &[], folder));
+        assert!(test_skin_op(1, &[], table_folder));
+        assert!(!test_skin_op(2, &[], folder));
+        assert!(test_skin_op(3, &[], course));
+        assert!(!test_skin_op(2, &[], course));
+    }
+
+    #[test]
+    fn select_row_trophy_index_prefers_achieved_course_trophy_names() {
+        let row = SelectRowSnapshot {
+            kind: SelectRowKind::Course,
+            achieved_trophy_names: vec!["bronzemedal".to_string(), "goldmedal".to_string()],
+            ex_score: Some(0),
+            total_notes: 100,
+            ..SelectRowSnapshot::default()
+        };
+        assert_eq!(select_row_trophy_index(&row), Some(2));
+
+        let silver = SelectRowSnapshot {
+            kind: SelectRowKind::Course,
+            achieved_trophy_names: vec!["silvermedal".to_string()],
+            ..SelectRowSnapshot::default()
+        };
+        assert_eq!(select_row_trophy_index(&silver), Some(1));
+    }
+
+    #[test]
     fn playable_bar_op_matches_library_presence() {
         let owned_song = SkinDrawState {
             select_is_folder: false,
@@ -8007,6 +8078,42 @@ mod tests {
         assert!(test_skin_op(1206, &[], second_replay));
         assert!(!test_skin_op(1205, &[], second_replay));
         assert!(!test_skin_op(198, &[], first_replay));
+    }
+
+    #[test]
+    fn select_row_snapshot_carries_achieved_trophy_names() {
+        // SelectRowSnapshot is the carrier — SkinDrawState intentionally does
+        // not duplicate this field (it must stay Copy).  This test simply
+        // pins down that course rows preserve the data and song rows default
+        // to empty, so future skin ops have a stable contract to consume.
+        use crate::scene::{SelectRowKind, SelectRowSnapshot};
+        let course = SelectRowSnapshot {
+            kind: SelectRowKind::Course,
+            achieved_trophy_names: vec!["gold".to_string(), "silver".to_string()],
+            ..SelectRowSnapshot::default()
+        };
+        let song = SelectRowSnapshot { kind: SelectRowKind::Song, ..SelectRowSnapshot::default() };
+
+        assert_eq!(course.achieved_trophy_names, vec!["gold".to_string(), "silver".to_string()]);
+        assert!(song.achieved_trophy_names.is_empty());
+    }
+
+    #[test]
+    fn select_row_replay_index_is_row_kind_agnostic() {
+        // Regression: course rows must surface their replay slot indicators
+        // exactly like song rows.  `select_row_replay_index` looks only at
+        // `row.replay_slots`, so swapping row.kind must not change the
+        // result.  This locks the invariant for future refactors.
+        use crate::scene::{SelectRowKind, SelectRowSnapshot};
+        let mut song = SelectRowSnapshot::default();
+        song.kind = SelectRowKind::Song;
+        song.replay_slots = [false, true, false, true];
+        let mut course = SelectRowSnapshot::default();
+        course.kind = SelectRowKind::Course;
+        course.replay_slots = [false, true, false, true];
+
+        assert_eq!(select_row_replay_index(&song), Some(1));
+        assert_eq!(select_row_replay_index(&course), Some(1));
     }
 
     #[test]

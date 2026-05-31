@@ -105,6 +105,11 @@ pub struct ScoreHistoryEntry {
     pub max_combo: u32,
     pub autoplay: bool,
     pub replay_path: String,
+    /// `library.db`'s `course_scores.id` if this chart play happened as part
+    /// of a course attempt, otherwise `None`.  No cross-database FK is
+    /// enforced — callers can join against `library.db.course_scores` if
+    /// they need the attempt details.
+    pub course_score_id: Option<i64>,
 }
 
 impl ScoreDatabase {
@@ -294,6 +299,32 @@ impl ScoreDatabase {
         Ok(())
     }
 
+    /// Tag the given `score_history` rows with a course attempt id.
+    ///
+    /// `course_score_id` references `library.db`'s `course_scores.id`.  No FK
+    /// is enforced because the two databases are separate; the caller is
+    /// responsible for passing a real id.
+    pub fn tag_score_history_with_course(
+        &mut self,
+        score_history_ids: &[i64],
+        course_score_id: i64,
+    ) -> Result<usize> {
+        if score_history_ids.is_empty() {
+            return Ok(0);
+        }
+        let tx = self.conn.transaction()?;
+        let mut total = 0_usize;
+        {
+            let mut stmt =
+                tx.prepare("UPDATE score_history SET course_score_id = ?1 WHERE id = ?2")?;
+            for id in score_history_ids {
+                total += stmt.execute(params![course_score_id, id])?;
+            }
+        }
+        tx.commit()?;
+        Ok(total)
+    }
+
     pub fn recent_history(&self, limit: u32, offset: u32) -> Result<Vec<ScoreHistoryEntry>> {
         let mut stmt = self.conn.prepare(
             "SELECT
@@ -307,7 +338,8 @@ impl ScoreDatabase {
                 ex_score,
                 max_combo,
                 autoplay,
-                replay_path
+                replay_path,
+                course_score_id
             FROM score_history
             ORDER BY played_at DESC, id DESC
             LIMIT ?1 OFFSET ?2",
@@ -368,6 +400,7 @@ fn score_history_entry_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Sco
         max_combo: row.get(8)?,
         autoplay: row.get(9)?,
         replay_path: row.get(10)?,
+        course_score_id: row.get(11)?,
     })
 }
 
@@ -866,6 +899,47 @@ mod tests {
     }
 
     #[test]
+    fn tag_score_history_with_course_updates_only_given_rows() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut db = ScoreDatabase::from_connection(conn);
+
+        let mut r1 = record(20, ClearType::Normal);
+        r1.chart_sha256 = [1; 32];
+        let mut r2 = record(30, ClearType::Easy);
+        r2.chart_sha256 = [2; 32];
+        let mut r3 = record(10, ClearType::Failed);
+        r3.chart_sha256 = [3; 32];
+        let id1 = db.insert_score(&r1).unwrap();
+        let id2 = db.insert_score(&r2).unwrap();
+        let id3 = db.insert_score(&r3).unwrap();
+
+        // Tag the first two with course_score_id=99, leave r3 untouched.
+        let updated = db.tag_score_history_with_course(&[id1, id2], 99).unwrap();
+        assert_eq!(updated, 2);
+
+        let rows: Vec<(i64, Option<i64>)> = db
+            .conn()
+            .prepare("SELECT id, course_score_id FROM score_history ORDER BY id")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(rows, vec![(id1, Some(99)), (id2, Some(99)), (id3, None)]);
+    }
+
+    #[test]
+    fn tag_score_history_with_course_no_op_on_empty_list() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut db = ScoreDatabase::from_connection(conn);
+        assert_eq!(db.tag_score_history_with_course(&[], 1).unwrap(), 0);
+    }
+
+    #[test]
     fn recent_history_returns_newest_scores_first() {
         let mut conn = Connection::open_in_memory().unwrap();
         configure_connection(&conn).unwrap();
@@ -889,6 +963,31 @@ mod tests {
         assert_eq!(history[0].played_at, 2);
         assert!(history[0].autoplay);
         assert_eq!(history[1].chart_sha256, [1; 32]);
+    }
+
+    #[test]
+    fn recent_history_exposes_course_score_id_when_tagged() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut db = ScoreDatabase::from_connection(conn);
+
+        let mut solo = record(20, ClearType::Normal);
+        solo.chart_sha256 = [1; 32];
+        let solo_id = db.insert_score(&solo).unwrap();
+
+        let mut course_play = record(30, ClearType::Easy);
+        course_play.chart_sha256 = [2; 32];
+        let course_play_id = db.insert_score(&course_play).unwrap();
+
+        // Tag the course-attempt row only.
+        db.tag_score_history_with_course(&[course_play_id], 77).unwrap();
+
+        let history = db.recent_history(10, 0).unwrap();
+        let by_id: std::collections::HashMap<i64, &ScoreHistoryEntry> =
+            history.iter().map(|h| (h.id, h)).collect();
+        assert_eq!(by_id.get(&solo_id).unwrap().course_score_id, None);
+        assert_eq!(by_id.get(&course_play_id).unwrap().course_score_id, Some(77));
     }
 
     #[test]

@@ -53,8 +53,8 @@ use crate::screens::play_snapshot::{
 };
 use crate::screens::play_start::{
     PlayStartOptions, PreloadedWinitPlaySession, StartedWinitPlaySession, apply_course_constraints,
-    open_prepared_winit_play_session, prepare_play_session_for_chart_with_winit_input,
-    prepare_winit_play_session_from_preloaded,
+    apply_queued_replay, open_prepared_winit_play_session,
+    prepare_play_session_for_chart_with_winit_input, prepare_winit_play_session_from_preloaded,
 };
 use crate::screens::result_model::ResultSummary;
 use crate::screens::select_model::{
@@ -572,6 +572,35 @@ impl WinitApp {
             } else {
                 app.start_chart(chart_id);
             }
+        } else if let Some(course_id) = options.boot_course_replay_id {
+            // `--boot-course-replay <COURSE_ID>` replays the most recent
+            // attempt of the given course on boot.
+            match app.boot.library_db.latest_course_score_id(course_id) {
+                Ok(Some(course_score_id)) => {
+                    tracing::info!(course_id, course_score_id, "booting into course replay");
+                    app.start_course_replay(course_id, course_score_id);
+                }
+                Ok(None) => {
+                    tracing::warn!(
+                        course_id,
+                        "no saved course attempt; --boot-course-replay has nothing to replay"
+                    );
+                }
+                Err(error) => {
+                    tracing::error!(
+                        %error,
+                        course_id,
+                        "failed to look up latest course score for replay boot"
+                    );
+                }
+            }
+        } else if let Some(course_id) = options.boot_course_id {
+            // `--boot-course <COURSE_ID>` starts the given course fresh on
+            // boot.  Symmetric to --boot-course-replay but no saved-attempt
+            // lookup; useful for smoke-testing the course play flow without
+            // a prior recording.
+            tracing::info!(course_id, "booting into fresh course");
+            app.start_course(course_id);
         }
 
         Ok(app)
@@ -1582,6 +1611,107 @@ impl WinitApp {
             definition,
             current_index: 0,
             entry_results: Vec::new(),
+            queued_replays: Vec::new(),
+        });
+        self.start_chart_with_options(first_chart_id, options);
+    }
+
+    /// Start a course in replay mode, replaying the saved per-chart inputs of
+    /// the given `course_score_id`.  Each chart of the course is launched in
+    /// sequence with its saved ReplayPlayer attached, so the user can watch
+    /// the entire course attempt back to back.
+    ///
+    /// If `course_score_id` refers to a partial course attempt (e.g. failed
+    /// at chart 2 of 4), only the played charts replay; the queue ends there
+    /// and the course session naturally finishes the same way the original
+    /// attempt did.
+    ///
+    /// Errors during replay load (missing file, chart re-imported with
+    /// different bytes) abort with a logged warning rather than crashing.
+    pub fn start_course_replay(&mut self, course_id: i64, course_score_id: i64) {
+        let stored = match self.boot.library_db.list_courses() {
+            Ok(courses) => courses.into_iter().find(|c| c.id == course_id),
+            Err(error) => {
+                tracing::error!(
+                    %error,
+                    course_id,
+                    "failed to load courses for start_course_replay"
+                );
+                return;
+            }
+        };
+        let Some(stored) = stored else {
+            tracing::warn!(course_id, "course not found");
+            return;
+        };
+
+        let entries = match self.boot.library_db.list_course_replays(course_score_id) {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::error!(
+                    %error,
+                    course_id,
+                    course_score_id,
+                    "failed to list course_replays rows"
+                );
+                return;
+            }
+        };
+        if entries.is_empty() {
+            tracing::warn!(course_id, course_score_id, "no replays saved for this attempt");
+            return;
+        }
+
+        let entry_tuples: Vec<(i64, i64, String)> =
+            entries.iter().map(|r| (r.position, r.chart_id, r.replay_path.clone())).collect();
+        let replay_root = self.boot.profile_paths.root_dir.clone();
+        let lookup = |chart_id: i64| -> anyhow::Result<Option<[u8; 32]>> {
+            self.boot.library_db.chart_sha256_by_chart_id(chart_id)
+        };
+        let queued = match crate::storage::replay::load_course_replays(
+            &entry_tuples,
+            &replay_root,
+            lookup,
+        ) {
+            Ok(q) => q,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    course_id,
+                    course_score_id,
+                    "failed to load queued course replays"
+                );
+                return;
+            }
+        };
+
+        let definition = stored.definition;
+        let first_chart_id = definition.entries.iter().find_map(|e| e.chart_id);
+        let Some(first_chart_id) = first_chart_id else {
+            tracing::warn!(course_id, "no resolved chart in course");
+            return;
+        };
+        tracing::info!(
+            course_id,
+            course_score_id,
+            title = %definition.title,
+            replays = queued.len(),
+            "starting course replay"
+        );
+        let mut options = self.play_start_options();
+        apply_course_constraints(&mut options, &definition.constraints);
+        // The first chart starts with its queued replay if available.
+        if let Some(first) = queued.first()
+            && first.chart_id == first_chart_id
+        {
+            apply_queued_replay(&mut options, first);
+        }
+        self.active_course = Some(ActiveCourseSession {
+            course_id,
+            definition,
+            current_index: 0,
+            entry_results: Vec::new(),
+            queued_replays: queued,
         });
         self.start_chart_with_options(first_chart_id, options);
     }
@@ -1608,6 +1738,15 @@ impl WinitApp {
             let mut options = self.play_start_options();
             apply_course_constraints(&mut options, &constraints);
             options.initial_gauge_value = Some(carried_gauge);
+            // If the course is being replayed, attach the next queued replay
+            // (when it exists and matches the next chart's id).  Mismatches
+            // are silently skipped so the chart still plays normally.
+            if let Some(course) = &self.active_course
+                && let Some(replay) = course.queued_replays.get(next_index)
+                && replay.chart_id == next_chart_id
+            {
+                apply_queued_replay(&mut options, replay);
+            }
             self.start_chart_with_options(next_chart_id, options);
             return;
         }
@@ -1615,8 +1754,65 @@ impl WinitApp {
         // Course is over either because every entry was played or because the
         // most recent chart was Failed (skip remaining entries).
         let course = self.active_course.take().unwrap();
+        let course_id = course.course_id;
+
+        // Extract data needed to persist the course score before `into_result`
+        // consumes `entry_results`.
+        let chart_records: Vec<crate::storage::library_db::CourseScoreChartRecord> = course
+            .entry_results
+            .iter()
+            .enumerate()
+            .map(|(i, r)| crate::storage::library_db::CourseScoreChartRecord {
+                position: i as i64,
+                chart_id: r.chart_id,
+                ex_score: r.finished.result.score.ex_score(),
+                max_combo: r.finished.result.score.max_combo,
+                clear_type: r.finished.result.clear_type.as_str().to_string(),
+                gauge_value: r.finished.result.gauge_value,
+            })
+            .collect();
+        let replay_records: Vec<crate::storage::library_db::CourseReplayRecord> = course
+            .entry_results
+            .iter()
+            .enumerate()
+            .map(|(i, r)| crate::storage::library_db::CourseReplayRecord {
+                position: i as i64,
+                chart_id: r.chart_id,
+                replay_path: r.finished.stored.replay_path.clone(),
+            })
+            .collect();
+        let any_autoplay = course.entry_results.iter().any(|r| r.finished.result.autoplay);
+        let any_replay_playback = course.entry_results.iter().any(|r| r.finished.replay_playback);
+        // Collect score_history row ids written by per-chart store_play_result
+        // so they can be tagged with the new course_score_id after insert.
+        // Autoplay charts have score_history_id == 0 and are filtered out.
+        let history_ids: Vec<i64> = course
+            .entry_results
+            .iter()
+            .map(|r| r.finished.stored.score_history_id)
+            .filter(|id| *id > 0)
+            .collect();
         let last_finished = course.entry_results.last().map(|r| r.finished.clone());
-        let course_result = course.into_result();
+        let last_clear_type = course
+            .entry_results
+            .last()
+            .map(|r| r.finished.result.clear_type)
+            .unwrap_or(bmz_core::clear::ClearType::NoPlay);
+        let last_gauge_type = course
+            .entry_results
+            .last()
+            .map(|r| r.finished.result.gauge_type)
+            .unwrap_or(bmz_core::clear::GaugeType::Normal);
+        let last_gauge_value =
+            course.entry_results.last().map(|r| r.finished.result.gauge_value).unwrap_or(0.0);
+        let max_combo: u32 = course
+            .entry_results
+            .iter()
+            .map(|r| r.finished.result.score.max_combo)
+            .max()
+            .unwrap_or(0);
+
+        let mut course_result = course.into_result();
         tracing::info!(
             title = %course_result.title,
             total_ex_score = course_result.total_ex_score,
@@ -1632,12 +1828,174 @@ impl WinitApp {
                 .collect::<Vec<_>>(),
             "course finished"
         );
+        // Persist course score + per-chart replay paths.
+        //
+        // - Autoplay / replay playback courses are not saved, matching the
+        //   per-chart policy in `finish_session_result`.
+        // - The course clear type is taken from the last played chart's
+        //   gauge survival result; a Failed at any point forces Failed.
+        // - The per-chart replay files have already been written by
+        //   `store_play_result` for each chart in the course; we only record
+        //   the relative paths here so the course can be replayed back to back
+        //   in a future iteration.
+        // - TODO(course-replay-reload): launching a course via a "replay slot"
+        //   from the select screen is out of scope for this change; only the
+        //   save path is wired up.
+        if !any_autoplay && !any_replay_playback {
+            let final_clear_type = if course_result.course_failed {
+                bmz_core::clear::ClearType::Failed
+            } else {
+                last_clear_type
+            };
+            let miss_count = course_result.judge_counts.bad
+                + course_result.judge_counts.poor
+                + course_result.judge_counts.empty_poor;
+            let played_at = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            // Store the names of trophies that were achieved on this attempt
+            // as a JSON array of strings (for round-trip / audit) and
+            // separately as structured rows in course_trophy_achievements via
+            // CourseScoreInsert.achieved_trophies, which is what powers
+            // per-trophy best queries.
+            let achieved_trophies: Vec<String> = course_result
+                .trophy_results
+                .iter()
+                .filter(|t| t.achieved)
+                .map(|t| t.name.clone())
+                .collect();
+            let trophies_json =
+                serde_json::to_string(&achieved_trophies).unwrap_or_else(|_| "[]".to_string());
+            let insert = crate::storage::library_db::CourseScoreInsert {
+                course_id,
+                ex_score: course_result.total_ex_score,
+                max_ex_score: course_result.max_ex_score,
+                clear_type: final_clear_type.as_str().to_string(),
+                gauge_type: last_gauge_type.as_str().to_string(),
+                gauge_value: last_gauge_value,
+                max_combo,
+                miss_count,
+                course_failed: course_result.course_failed,
+                course_clear: course_result.course_clear,
+                trophies_json,
+                played_at,
+                charts: chart_records,
+                replays: replay_records,
+                achieved_trophies,
+            };
+            match self.boot.library_db.insert_course_score(&insert) {
+                Ok(course_score_id) => {
+                    // Backfill the per-chart `score_history` rows with the
+                    // course attempt id so they can be filtered as part of
+                    // this course play later.
+                    if let Err(error) = self
+                        .boot
+                        .score_db
+                        .tag_score_history_with_course(&history_ids, course_score_id)
+                    {
+                        tracing::warn!(
+                            %error,
+                            course_id,
+                            course_score_id,
+                            "failed to tag score_history rows with course_score_id"
+                        );
+                    }
+
+                    // Update the four course replay slots that pass their
+                    // configured rule.  Reuses the per-chart slot_rule_passes
+                    // helper for identical semantics (Always overwrites
+                    // unconditionally; Score / MissCount / MaxCombo / Clear
+                    // require strict improvement; empty slot always wins).
+                    self.update_course_replay_slots(
+                        course_id,
+                        course_score_id,
+                        played_at,
+                        course_result.total_ex_score,
+                        miss_count,
+                        max_combo,
+                        final_clear_type as u8,
+                    );
+                }
+                Err(error) => {
+                    tracing::error!(%error, course_id, "failed to persist course score");
+                }
+            }
+
+            // Look up the best score *after* the insert above so the just-
+            // saved attempt is reflected when it improved the record.  The
+            // result overlay reads this to show a "BEST" section.
+            course_result.best_score =
+                self.boot.library_db.best_course_score(course_id).unwrap_or_else(|error| {
+                    tracing::warn!(%error, course_id, "failed to read best course score");
+                    None
+                });
+        }
+
         self.finished_course = Some(course_result);
         // Use the last chart's result for the standard result skin display.
         if let Some(last) = last_finished {
             self.finished_play = Some(last);
             self.result_scene_started_at = Instant::now();
             self.ensure_skin_ready(SkinKind::Result);
+        }
+    }
+
+    fn update_course_replay_slots(
+        &mut self,
+        course_id: i64,
+        course_score_id: i64,
+        played_at: i64,
+        ex_score: u32,
+        miss_count: u32,
+        max_combo: u32,
+        clear_rank: u8,
+    ) {
+        let slot_rules = self.boot.profile_config.replay.slot_rules;
+        let candidate = crate::storage::play_result::CandidateMetrics {
+            ex_score,
+            miss_count,
+            max_combo,
+            clear_rank,
+        };
+        for (slot_index, &rule) in slot_rules.iter().enumerate() {
+            let slot = slot_index as u8;
+            let prev = match self.boot.library_db.course_replay_slot(course_id, slot) {
+                Ok(record) => record,
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        course_id,
+                        slot,
+                        "failed to read course_replay_slot; skipping rule eval"
+                    );
+                    continue;
+                }
+            };
+            let prev_metrics =
+                prev.as_ref().map(|p| (p.ex_score, p.miss_count, p.max_combo, p.clear_rank));
+            if !crate::storage::play_result::slot_rule_passes(rule, prev_metrics, &candidate) {
+                continue;
+            }
+            let record = crate::storage::library_db::CourseReplaySlotRecord {
+                course_id,
+                slot,
+                rule: rule.as_str().to_string(),
+                course_score_id,
+                played_at,
+                ex_score,
+                miss_count,
+                max_combo,
+                clear_rank,
+            };
+            if let Err(error) = self.boot.library_db.upsert_course_replay_slot(&record) {
+                tracing::warn!(
+                    %error,
+                    course_id,
+                    slot,
+                    "failed to upsert course_replay_slot"
+                );
+            }
         }
     }
 
@@ -1939,9 +2297,30 @@ impl WinitApp {
         self.active_play = None;
         self.clear_play_backbmp_state();
         self.last_play_snapshot = None;
+        // An audio-open / audio-start failure bounces the user back to the
+        // select screen.  If they were in a course at the time, the course
+        // session is no longer valid — otherwise the next chart they pick
+        // would be treated as the next entry of a stale course (route
+        // through advance_course_after_finish with mismatched chart_id).
+        self.clear_active_course_state();
         let now = Instant::now();
         self.select_scene_started_at = now;
         self.select_bar_started_at = now;
+    }
+
+    /// Clears any active course session and the cached finished-course
+    /// summary.  Call from any path that returns to the select screen
+    /// without completing the course naturally.
+    fn clear_active_course_state(&mut self) {
+        if self.active_course.is_some() || self.finished_course.is_some() {
+            tracing::info!(
+                had_active = self.active_course.is_some(),
+                had_finished = self.finished_course.is_some(),
+                "clearing course session state (abort or cancel)"
+            );
+        }
+        self.active_course = None;
+        self.finished_course = None;
     }
 
     fn play_start_options(&self) -> PlayStartOptions {
@@ -2003,16 +2382,57 @@ impl WinitApp {
     }
 
     fn start_replay_for_selected(&mut self, slot: u8) -> bool {
-        let Some(chart_id) = self.currently_selected_chart_id() else {
-            return false;
-        };
-        self.try_start_replay_for_chart(chart_id, slot)
+        // Prefer the chart path when the cursor is on a chart row.
+        if let Some(chart_id) = self.currently_selected_chart_id() {
+            return self.try_start_replay_for_chart(chart_id, slot);
+        }
+        // Otherwise, if the cursor is on a course row, try to launch the
+        // course replay stored in the requested slot.
+        if let Some(course_id) = self.currently_selected_course_id() {
+            return self.try_start_course_replay_for_slot(course_id, slot);
+        }
+        false
     }
 
     fn currently_selected_chart_id(&self) -> Option<i64> {
         match self.select_items.get(self.selected_index)? {
             SelectItem::Chart(row) => row.chart.as_ref().map(|chart| chart.chart_id),
             SelectItem::Folder { .. } | SelectItem::Course(_) => None,
+        }
+    }
+
+    fn currently_selected_course_id(&self) -> Option<i64> {
+        match self.select_items.get(self.selected_index)? {
+            SelectItem::Course(row) => Some(row.course_id),
+            SelectItem::Chart(_) | SelectItem::Folder { .. } => None,
+        }
+    }
+
+    fn try_start_course_replay_for_slot(&mut self, course_id: i64, slot: u8) -> bool {
+        match self.boot.library_db.course_replay_slot(course_id, slot) {
+            Ok(Some(record)) => {
+                tracing::info!(
+                    course_id,
+                    course_score_id = record.course_score_id,
+                    slot,
+                    "starting course replay from select"
+                );
+                self.start_course_replay(course_id, record.course_score_id);
+                true
+            }
+            Ok(None) => {
+                tracing::info!(course_id, slot, "no saved course attempt in this replay slot");
+                false
+            }
+            Err(error) => {
+                tracing::error!(
+                    %error,
+                    course_id,
+                    slot,
+                    "failed to look up course_replay_slot"
+                );
+                false
+            }
         }
     }
 
@@ -2083,6 +2503,10 @@ impl WinitApp {
         };
         if decide.cancel {
             self.invalidate_play_preload();
+            // Decide screen cancel (Escape) returns to select.  If a course
+            // was being started, drop the course session — the user opted
+            // out before the first chart actually began.
+            self.clear_active_course_state();
             let now = Instant::now();
             self.select_scene_started_at = now;
             self.select_bar_started_at = now;
@@ -2167,8 +2591,7 @@ impl WinitApp {
 
     fn leave_result(&mut self) {
         self.finished_play = None;
-        self.finished_course = None;
-        self.active_course = None;
+        self.clear_active_course_state();
         self.result_exit = None;
         self.clear_play_backbmp_state();
         // リザルト画面を抜けたら、まだ鳴っていても余韻再生を止める。
@@ -4032,6 +4455,7 @@ fn select_snapshot_rows(
                     is_folder: true,
                     kind: *kind,
                     in_library: true,
+                    achieved_trophy_names: Vec::new(),
                 },
                 SelectItem::Chart(row) => {
                     let play_count = u32::from(row.best_score.is_some());
@@ -4096,6 +4520,8 @@ fn select_snapshot_rows(
                         is_folder: false,
                         kind: bmz_render::scene::SelectRowKind::Song,
                         in_library: row.in_library(),
+                        // Song rows have no course trophies.
+                        achieved_trophy_names: Vec::new(),
                     }
                 }
                 SelectItem::Course(row) => SelectRowSnapshot {
@@ -4115,20 +4541,27 @@ fn select_snapshot_rows(
                     min_bpm: row.min_bpm,
                     max_bpm: row.max_bpm,
                     length_ms: row.total_length_ms,
-                    clear_type: String::new(),
-                    ex_score: None,
-                    max_combo: None,
-                    gauge_value: None,
-                    miss_count: None,
-                    play_count: 0,
-                    clear_count: 0,
-                    replay_slots: [false; 4],
+                    clear_type: row
+                        .best_score
+                        .as_ref()
+                        .map(|best| best.clear_type.clone())
+                        .unwrap_or_default(),
+                    ex_score: row.best_score.as_ref().map(|best| best.ex_score),
+                    max_combo: row.best_score.as_ref().map(|best| best.max_combo),
+                    gauge_value: row.best_score.as_ref().map(|best| best.gauge_value),
+                    miss_count: row.best_score.as_ref().map(|best| best.miss_count),
+                    play_count: u32::from(row.best_score.is_some()),
+                    clear_count: u32::from(row.best_score.as_ref().is_some_and(|best| {
+                        !best.clear_type.is_empty() && best.clear_type != "Failed"
+                    })),
+                    replay_slots: row.replay_slots,
                     has_long_notes: false,
                     has_mines: false,
                     has_random: false,
                     is_folder: false,
                     kind: bmz_render::scene::SelectRowKind::Course,
                     in_library: row.resolved_count > 0,
+                    achieved_trophy_names: row.achieved_trophy_names.clone(),
                 },
             }
         })

@@ -163,6 +163,17 @@ pub struct SelectCourseRow {
     pub trophy_names: Vec<String>,
     /// Entries inside the course, used by the preview panel.
     pub entry_previews: Vec<CourseEntryPreview>,
+    /// Best persisted course score, if any.  Populated from the
+    /// `course_scores` table; `None` when the course has never been played
+    /// successfully or when the lookup failed.
+    pub best_score: Option<crate::storage::library_db::CourseBestScore>,
+    /// Which of the four course replay slots have a saved attempt.  Used by
+    /// the select skin to render slot indicators on course rows.
+    pub replay_slots: [bool; 4],
+    /// Names of trophies that have been earned at least once across all
+    /// stored attempts of this course (`course_trophy_achievements`).  A
+    /// strict subset of `trophy_names`.
+    pub achieved_trophy_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -295,6 +306,28 @@ fn build_select_course_row(
     let trophy_names: Vec<String> =
         stored.definition.trophies.iter().map(|t| t.name.clone()).collect();
 
+    let best_score = library_db.best_course_score(stored.id).unwrap_or_else(|error| {
+        tracing::warn!(%error, course_id = stored.id, "failed to load best course score");
+        None
+    });
+    let replay_slots = library_db.course_replay_slot_presence(stored.id).unwrap_or_else(|error| {
+        tracing::warn!(
+            %error,
+            course_id = stored.id,
+            "failed to load course_replay_slot_presence"
+        );
+        [false; 4]
+    });
+    let achieved_trophy_names =
+        library_db.achieved_trophy_names_for_course(stored.id).unwrap_or_else(|error| {
+            tracing::warn!(
+                %error,
+                course_id = stored.id,
+                "failed to load achieved_trophy_names_for_course"
+            );
+            Vec::new()
+        });
+
     SelectItem::Course(SelectCourseRow {
         course_id: stored.id,
         title: stored.definition.title,
@@ -308,6 +341,9 @@ fn build_select_course_row(
         category_label,
         trophy_names,
         entry_previews,
+        best_score,
+        replay_slots,
+        achieved_trophy_names,
     })
 }
 

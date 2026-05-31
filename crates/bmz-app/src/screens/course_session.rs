@@ -2,12 +2,18 @@ use bmz_core::course::{CourseDefinition, CourseEntry, CourseKind};
 
 use crate::screens::play_finish::FinishedPlaySession;
 use crate::screens::result_model::{ResultJudgeCounts, ResultSummary};
+use crate::storage::replay::QueuedCourseReplay;
 
 pub struct ActiveCourseSession {
     pub course_id: i64,
     pub definition: CourseDefinition,
     pub current_index: usize,
     pub entry_results: Vec<CourseEntryResult>,
+    /// Pre-loaded replays, one per course entry, when the course is being
+    /// played back from a saved attempt.  Empty for a fresh course play.
+    /// Indexed by entry position; absence at the current_index means the
+    /// chart is played normally (e.g. saved replay file is missing).
+    pub queued_replays: Vec<QueuedCourseReplay>,
 }
 
 pub struct CourseEntryResult {
@@ -34,6 +40,11 @@ pub struct CourseResultSummary {
     pub total_entries: usize,
     /// Number of entries the player actually played (includes the failed one).
     pub played_entries: usize,
+    /// Best persisted course score (queried after the current attempt was
+    /// inserted, so this reflects the new attempt when it improved the
+    /// record).  `None` if persistence is unavailable (autoplay, etc.) or
+    /// the lookup failed.
+    pub best_score: Option<crate::storage::library_db::CourseBestScore>,
 }
 
 #[derive(Debug, Clone)]
@@ -114,6 +125,10 @@ impl ActiveCourseSession {
             course_failed,
             total_entries,
             played_entries,
+            // Populated separately by the caller (advance_course_after_finish)
+            // after persisting this attempt, so the lookup includes the row
+            // we just inserted.
+            best_score: None,
         }
     }
 }
@@ -192,6 +207,7 @@ mod tests {
                             },
                             &bmz_chart::model::ChartMetadata::default(),
                         ),
+                        replay_playback: false,
                     },
                 }
             })
@@ -221,6 +237,7 @@ mod tests {
             },
             current_index: 0,
             entry_results,
+            queued_replays: Vec::new(),
         }
     }
 
@@ -297,6 +314,7 @@ mod tests {
                             },
                             &bmz_chart::model::ChartMetadata::default(),
                         ),
+                        replay_playback: false,
                     },
                 }
             })
@@ -319,6 +337,7 @@ mod tests {
             },
             current_index: 0,
             entry_results,
+            queued_replays: Vec::new(),
         }
     }
 

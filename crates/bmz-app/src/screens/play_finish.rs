@@ -15,6 +15,7 @@ pub struct FinishedPlaySession {
     pub result: PlayResult,
     pub stored: StoredPlayResult,
     pub summary: ResultSummary,
+    pub replay_playback: bool,
 }
 
 pub fn play_result_from_session(session: &GameSession) -> PlayResult {
@@ -58,8 +59,10 @@ pub fn finish_session_result(
 ) -> Result<FinishedPlaySession> {
     ensure_storable_state(session.state)?;
     let result = play_result_from_session(session);
-    // オートプレイ時はスコア・リプレイをDBに保存しない（リザルト画面の表示のみ行う）。
-    let stored = if session.autoplay.is_some() {
+    let replay_playback = session.replay_player.is_some();
+    // オートプレイ / リプレイ再生時はスコア・リプレイをDBに保存しない
+    // （リザルト画面の表示のみ行う）。
+    let stored = if session.autoplay.is_some() || replay_playback {
         StoredPlayResult {
             score_history_id: 0,
             replay_path: String::new(),
@@ -99,7 +102,7 @@ pub fn finish_session_result(
         summary.best_max_combo = Some(best.max_combo);
     }
 
-    Ok(FinishedPlaySession { result, stored, summary })
+    Ok(FinishedPlaySession { result, stored, summary, replay_playback })
 }
 
 fn clear_type_from_name(name: &str) -> Option<ClearType> {
@@ -354,6 +357,47 @@ mod tests {
         .unwrap();
 
         // オートプレイ時はDB保存・リプレイ保存をしない。
+        assert_eq!(finished.stored.score_history_id, 0);
+        assert!(finished.stored.replay_path.is_empty());
+        assert!(finished.stored.slot_paths.iter().all(Option::is_none));
+        assert_eq!(score_db.recent_history(10, 0).unwrap().len(), 0);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn finish_session_result_skips_storage_for_replay_playback() {
+        let root = make_temp_dir("finish-replay");
+        let paths = ProfilePaths {
+            root_dir: root.clone(),
+            profile_toml: root.join("profile.toml"),
+            score_db: root.join("score.db"),
+            replay_dir: root.join("replay"),
+        };
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut score_db = ScoreDatabase::from_connection(conn);
+        let replay_config = ReplayConfig {
+            auto_save: true,
+            compress: false,
+            slot_rules: crate::config::profile_config::default_slot_rules(),
+        };
+        let mut session = session();
+        session.replay_player = Some(bmz_gameplay::replay::ReplayPlayer::default());
+
+        let finished = finish_session_result(
+            &mut score_db,
+            &paths,
+            &replay_config,
+            &session,
+            1_700_000_106,
+            &AppliedArrange::default(),
+            None,
+        )
+        .unwrap();
+
+        assert!(finished.replay_playback);
         assert_eq!(finished.stored.score_history_id, 0);
         assert!(finished.stored.replay_path.is_empty());
         assert!(finished.stored.slot_paths.iter().all(Option::is_none));
