@@ -120,6 +120,7 @@ cargo run -p bmz-app -- songs list
 - `-a` / `--autoplay-on-start` — 起動譜面をオートプレイ
 - `-r1` / `-r2` / `-r3` / `-r4` / `--boot-replay <1..4>` / `--boot-replay=<1..4>` — リプレイスロット指定
 - `--boot-play-sample` — 同梱サンプル譜面で起動
+- `--boot-course <COURSE_ID>` / `--boot-course=<COURSE_ID>` — 指定コースを fresh で起動
 - `--boot-course-replay <COURSE_ID>` / `--boot-course-replay=<COURSE_ID>` — 指定コースの最新 attempt を replay 再生
 
 その他:

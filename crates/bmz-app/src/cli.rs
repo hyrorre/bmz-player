@@ -8,6 +8,7 @@ pub const SMOKE_EXIT_AFTER_FRAMES_ARG: &str = "--smoke-exit-after-frames";
 pub const SMOKE_EXIT_ON_RESULT_ARG: &str = "--smoke-exit-on-result";
 pub const BOOT_REPLAY_ARG: &str = "--boot-replay";
 pub const BOOT_COURSE_REPLAY_ARG: &str = "--boot-course-replay";
+pub const BOOT_COURSE_ARG: &str = "--boot-course";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
@@ -123,6 +124,9 @@ pub struct AppOptions {
     /// `--boot-course-replay <COURSE_ID>` で指定されたコース id。
     /// 指定された場合、そのコースの最新 attempt を replay 再生する。
     pub boot_course_replay_id: Option<i64>,
+    /// `--boot-course <COURSE_ID>` で指定されたコース id。
+    /// 指定された場合、そのコースを fresh で起動する。
+    pub boot_course_id: Option<i64>,
     /// `--renderer <backend>` で指定されたレンダラーバックエンド。
     pub renderer: Option<RendererBackend>,
 }
@@ -148,6 +152,10 @@ impl AppOptions {
             }
             if let Some(value) = arg.strip_prefix("--boot-course-replay=") {
                 options.boot_course_replay_id = Some(parse_boot_course_replay_id(value)?);
+                continue;
+            }
+            if let Some(value) = arg.strip_prefix("--boot-course=") {
+                options.boot_course_id = Some(parse_boot_course_id(value)?);
                 continue;
             }
             if let Some(value) = arg.strip_prefix("--renderer=") {
@@ -180,6 +188,12 @@ impl AppOptions {
                     options.boot_course_replay_id =
                         Some(parse_boot_course_replay_id(value.as_ref())?);
                 }
+                BOOT_COURSE_ARG => {
+                    let Some(value) = args.next() else {
+                        bail!("{BOOT_COURSE_ARG} requires a course id");
+                    };
+                    options.boot_course_id = Some(parse_boot_course_id(value.as_ref())?);
+                }
                 "--renderer" => {
                     let Some(value) = args.next() else {
                         bail!("--renderer requires a backend (vulkan, metal, dx12, gl, auto)");
@@ -207,7 +221,7 @@ where
 }
 
 pub fn app_help_text() -> &'static str {
-    "bmz-app\n\nUsage:\n  bmz-app [OPTIONS] [PATH]\n  bmz-app table <SUBCOMMAND>\n  bmz-app songs <SUBCOMMAND>\n  bmz-app course <SUBCOMMAND>\n\nOptions:\n  [PATH]                          Start the chart at PATH (beatoraja-style alias)\n  -a                              Enable autoplay for the boot chart (alias of --autoplay-on-start)\n  -r1 | -r2 | -r3 | -r4           Start replay slot 1..4 for the boot chart\n  --boot-play-sample              Start the bundled sample chart on boot\n  --autoplay-on-start             Enable autoplay for started charts\n  --boot-replay <1..4>            Start replay slot N for the boot chart\n  --boot-course-replay <ID>       Replay the latest attempt of course ID on boot\n  --smoke-exit-after-frames <N>   Exit after N rendered frames, clamped to 1 or more\n  --smoke-exit-on-result          Exit when the app reaches the result screen\n  --renderer <backend>            wgpu renderer backend (vulkan, metal, dx12, gl, auto)\n  -h, --help                      Print this help\n\nTable subcommands:\n  table add <URL>       Add a difficulty table source and fetch it\n  table list            List all stored difficulty tables\n  table fetch [URL]     Fetch/update configured tables, or a single URL\n\nSongs subcommands:\n  songs add <PATH> [--no-recursive] [--disabled]   Add a song root directory\n  songs list                                        List configured song roots\n  songs load [PATH|NAME]                            Scan song roots (incremental)\n  songs reload [PATH|NAME]                          Force rescan song roots\n\nCourse subcommands:\n  course import <PATH>   Import beatoraja course JSON from a file or directory\n  course list            List stored courses\n\nExamples:\n  cargo run -p bmz-app -- /path/to/chart.bms\n  cargo run -p bmz-app -- -a /path/to/chart.bms\n  cargo run -p bmz-app -- -r2 /path/to/chart.bms\n  cargo run -p bmz-app -- --boot-play-sample --smoke-exit-after-frames 3\n  cargo run -p bmz-app -- --boot-play-sample --boot-replay 1 --smoke-exit-on-result\n  cargo run -p bmz-app -- table add https://example.com/table.html\n  cargo run -p bmz-app -- table list\n  cargo run -p bmz-app -- table fetch https://example.com/table.html\n  cargo run -p bmz-app -- songs add /path/to/bms\n  cargo run -p bmz-app -- songs list\n  cargo run -p bmz-app -- songs load\n  cargo run -p bmz-app -- songs reload my-bms-folder\n  cargo run -p bmz-app -- course import /path/to/course.json\n  cargo run -p bmz-app -- course list"
+    "bmz-app\n\nUsage:\n  bmz-app [OPTIONS] [PATH]\n  bmz-app table <SUBCOMMAND>\n  bmz-app songs <SUBCOMMAND>\n  bmz-app course <SUBCOMMAND>\n\nOptions:\n  [PATH]                          Start the chart at PATH (beatoraja-style alias)\n  -a                              Enable autoplay for the boot chart (alias of --autoplay-on-start)\n  -r1 | -r2 | -r3 | -r4           Start replay slot 1..4 for the boot chart\n  --boot-play-sample              Start the bundled sample chart on boot\n  --autoplay-on-start             Enable autoplay for started charts\n  --boot-replay <1..4>            Start replay slot N for the boot chart\n  --boot-course <ID>              Start course ID fresh on boot\n  --boot-course-replay <ID>       Replay the latest attempt of course ID on boot\n  --smoke-exit-after-frames <N>   Exit after N rendered frames, clamped to 1 or more\n  --smoke-exit-on-result          Exit when the app reaches the result screen\n  --renderer <backend>            wgpu renderer backend (vulkan, metal, dx12, gl, auto)\n  -h, --help                      Print this help\n\nTable subcommands:\n  table add <URL>       Add a difficulty table source and fetch it\n  table list            List all stored difficulty tables\n  table fetch [URL]     Fetch/update configured tables, or a single URL\n\nSongs subcommands:\n  songs add <PATH> [--no-recursive] [--disabled]   Add a song root directory\n  songs list                                        List configured song roots\n  songs load [PATH|NAME]                            Scan song roots (incremental)\n  songs reload [PATH|NAME]                          Force rescan song roots\n\nCourse subcommands:\n  course import <PATH>   Import beatoraja course JSON from a file or directory\n  course list            List stored courses\n\nExamples:\n  cargo run -p bmz-app -- /path/to/chart.bms\n  cargo run -p bmz-app -- -a /path/to/chart.bms\n  cargo run -p bmz-app -- -r2 /path/to/chart.bms\n  cargo run -p bmz-app -- --boot-play-sample --smoke-exit-after-frames 3\n  cargo run -p bmz-app -- --boot-play-sample --boot-replay 1 --smoke-exit-on-result\n  cargo run -p bmz-app -- table add https://example.com/table.html\n  cargo run -p bmz-app -- table list\n  cargo run -p bmz-app -- table fetch https://example.com/table.html\n  cargo run -p bmz-app -- songs add /path/to/bms\n  cargo run -p bmz-app -- songs list\n  cargo run -p bmz-app -- songs load\n  cargo run -p bmz-app -- songs reload my-bms-folder\n  cargo run -p bmz-app -- course import /path/to/course.json\n  cargo run -p bmz-app -- course list"
 }
 
 fn parse_smoke_exit_after_frames_value(value: &str) -> Result<u32> {
@@ -232,6 +246,20 @@ fn parse_boot_course_replay_id(value: &str) -> Result<i64> {
         .with_context(|| format!("invalid course id for {BOOT_COURSE_REPLAY_ARG}: {value}"))?;
     if id <= 0 {
         bail!("{BOOT_COURSE_REPLAY_ARG} course id must be positive (got {id})");
+    }
+    Ok(id)
+}
+
+fn parse_boot_course_id(value: &str) -> Result<i64> {
+    let value = value.trim();
+    if value.is_empty() {
+        bail!("{BOOT_COURSE_ARG} requires a course id");
+    }
+    let id: i64 = value
+        .parse()
+        .with_context(|| format!("invalid course id for {BOOT_COURSE_ARG}: {value}"))?;
+    if id <= 0 {
+        bail!("{BOOT_COURSE_ARG} course id must be positive (got {id})");
     }
     Ok(id)
 }
@@ -538,5 +566,28 @@ mod tests {
     fn help_text_lists_boot_course_replay() {
         let help = app_help_text();
         assert!(help.contains("--boot-course-replay"));
+    }
+
+    #[test]
+    fn app_options_parse_boot_course_id() {
+        let options = AppOptions::parse_args(["--boot-course", "42"]).unwrap();
+        assert_eq!(options.boot_course_id, Some(42));
+
+        let options = AppOptions::parse_args(["--boot-course=7"]).unwrap();
+        assert_eq!(options.boot_course_id, Some(7));
+    }
+
+    #[test]
+    fn app_options_reject_invalid_boot_course_id() {
+        assert!(AppOptions::parse_args(["--boot-course"]).is_err());
+        assert!(AppOptions::parse_args(["--boot-course", "0"]).is_err());
+        assert!(AppOptions::parse_args(["--boot-course", "-1"]).is_err());
+        assert!(AppOptions::parse_args(["--boot-course", "abc"]).is_err());
+    }
+
+    #[test]
+    fn help_text_lists_boot_course() {
+        let help = app_help_text();
+        assert!(help.contains("--boot-course "));
     }
 }

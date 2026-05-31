@@ -587,6 +587,13 @@ impl WinitApp {
                     );
                 }
             }
+        } else if let Some(course_id) = options.boot_course_id {
+            // `--boot-course <COURSE_ID>` starts the given course fresh on
+            // boot.  Symmetric to --boot-course-replay but no saved-attempt
+            // lookup; useful for smoke-testing the course play flow without
+            // a prior recording.
+            tracing::info!(course_id, "booting into fresh course");
+            app.start_course(course_id);
         }
 
         Ok(app)
