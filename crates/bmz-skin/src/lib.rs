@@ -48,7 +48,7 @@ pub fn load_lua_skin(
     files: &BTreeMap<String, String>,
 ) -> Result<LoadedSkinDocument> {
     let loaded = load_lua_skin_value(path, options, files)?;
-    let value = normalize_json_skin_integer_numbers(loaded.value);
+    let value = normalize_lua_skin_document(loaded.value);
     let document = serde_json::from_value(value)
         .with_context(|| format!("failed to parse lua skin as document: {}", path.display()))?;
     Ok(LoadedSkinDocument { document, warnings: loaded.warnings })
@@ -64,6 +64,28 @@ pub fn load_lua_skin_value(
 
 pub fn load_lua_skin_header_value(path: &Path) -> Result<LoadedLuaSkinValue> {
     lua::load_lua_skin_header_value(path)
+}
+
+fn normalize_lua_skin_document(value: JsonValue) -> JsonValue {
+    let value = normalize_json_skin_integer_numbers(value);
+    normalize_lua_skin_category_map(value)
+}
+
+/// Rm-skin の `processHeader()` は `category = { property = {...}, filepath = {...} }` 形式。
+/// beatoraja / BMZ の `SkinDocument` は `category: [{ name, item }]` を期待する。
+fn normalize_lua_skin_category_map(value: JsonValue) -> JsonValue {
+    let JsonValue::Object(mut map) = value else {
+        return value;
+    };
+    if let Some(JsonValue::Object(category_map)) = map.get("category").cloned() {
+        let entries: Vec<JsonValue> = category_map.into_values().collect();
+        if !entries.is_empty()
+            && entries.iter().all(|entry| matches!(entry, JsonValue::Object(_)))
+        {
+            map.insert("category".to_string(), JsonValue::Array(entries));
+        }
+    }
+    JsonValue::Object(map)
 }
 
 fn normalize_json_skin_integer_numbers(value: JsonValue) -> JsonValue {
@@ -912,5 +934,74 @@ mod tests {
         let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
         let counter = TEST_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
         std::env::temp_dir().join(format!("{name}-{nanos}-{counter}"))
+    }
+
+    #[test]
+    fn normalize_lua_skin_category_map_converts_rm_skin_shape() {
+        let value = JsonValue::Object(JsonMap::from_iter([(
+            "category".to_string(),
+            JsonValue::Object(JsonMap::from_iter([
+                (
+                    "property".to_string(),
+                    JsonValue::Object(JsonMap::from_iter([
+                        ("name".to_string(), JsonValue::String("Option".to_string())),
+                        ("item".to_string(), JsonValue::Array(vec![])),
+                    ])),
+                ),
+                (
+                    "filepath".to_string(),
+                    JsonValue::Object(JsonMap::from_iter([
+                        ("name".to_string(), JsonValue::String("Image".to_string())),
+                        ("item".to_string(), JsonValue::Array(vec![])),
+                    ])),
+                ),
+            ])),
+        )]));
+        let normalized = normalize_lua_skin_category_map(value);
+        let JsonValue::Object(map) = normalized else {
+            panic!("expected object");
+        };
+        let JsonValue::Array(categories) = map.get("category").expect("category") else {
+            panic!("expected category array");
+        };
+        assert_eq!(categories.len(), 2);
+    }
+
+    /// Rm-skin 互換作業のベースライン。`data/skins/Rm-skin` が無い環境では skip する。
+    #[test]
+    fn rm_skin_play7_convert_warnings_baseline() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/Rm-skin/play7main.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let loaded = load_lua_skin_value(&skin_path, &BTreeMap::new(), &BTreeMap::new())
+            .expect("Rm-skin play7 should convert");
+        let messages: Vec<_> =
+            loaded.warnings.iter().map(|warning| warning.message.as_str()).collect();
+        assert!(
+            !messages.is_empty(),
+            "baseline expects known unsupported-function warnings until Rm-skin support lands"
+        );
+        assert!(
+            messages.iter().any(|message| message.contains("destination[51].draw")),
+            "unexpected warning set: {messages:?}"
+        );
+    }
+
+    /// Rm-skin ロード成功と destination 非空を確認する。
+    #[test]
+    fn rm_skin_play7_decodes_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/Rm-skin/play7main.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let loaded = load_lua_skin(&skin_path, SkinKind::Play, &BTreeMap::new(), &BTreeMap::new())
+            .expect("Rm-skin play7 should decode");
+        assert!(!loaded.document.destination.is_empty());
+        assert_eq!(loaded.document.skin_type, 0);
     }
 }

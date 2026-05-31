@@ -1061,6 +1061,23 @@ mod tests {
     }
 
     #[test]
+    fn rm_skin_play_lua_skins_can_be_decoded_when_available() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/skins/Rm-skin");
+        let cases = [
+            (root.join("play5main.luaskin"), SkinKind::Play),
+            (root.join("play7main.luaskin"), SkinKind::Play),
+            (root.join("play9main.luaskin"), SkinKind::Play),
+        ];
+        for (skin_path, kind) in cases {
+            if !skin_path.is_file() {
+                continue;
+            }
+            let decoded = decode_beatoraja_skin(&skin_path, kind).unwrap();
+            assert!(!decoded.document.destination.is_empty(), "{}", skin_path.display());
+        }
+    }
+
+    #[test]
     fn ecfn_lua_skins_can_be_decoded_when_available() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/skins/ECFN");
         let cases = [
