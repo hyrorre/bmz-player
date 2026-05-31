@@ -188,8 +188,26 @@ cargo run -p bmz-app -- songs list
 ## Coding Rules and Conventions
 
 - コミットメッセージは Conventional Commits にします。
+  - 既存履歴の Claude / Cursor 由来のメッセージに合わせ、subject は短い英語で「何を可能にしたか / 何を直したか」を具体的に書きます。
   - スコープに修正対象の crate 名を入れます。例: `fix(bmz-audio): ...`、`feat(bmz-skin): load json skin fonts`。
-  - 複数 crate にまたがる変更は、主対象の crate をスコープにするか、スコープを省きます。
+  - 複数 crate にまたがる変更は、主対象の crate をスコープにするか、`feat(bmz-render,bmz-skin): ...` のように主要 crate をカンマ区切りにします。全体的な作業だけスコープを省きます。
+  - subject は命令形の小文字動詞で始め、末尾にピリオドを付けません。例: `add`, `cover`, `infer`, `map`, `render`, `support`, `fix`, `skip`, `update`。
+  - `feat` はユーザー可視の機能追加、`fix` は不具合修正、`test` はテスト追加/修正、`chore` は docs/metadata/formatter など挙動に影響しない作業に使います。
+  - 良い例: `feat(bmz-app): add play9 skin catalog and UI slot`、`fix(bmz-chart): saturate extreme timing values`、`test(bmz-skin): add Rm-skin load baseline and category normalization`、`chore: update agents.md`。
+  - 1 行目に subject、2 行目を空行、3 行目以降に変更内容の詳細を書きます。本文は日本語で構いません。
+  - 本文には「なぜ必要か」「何を変えたか」「どのテストで担保したか」を、変更規模に応じて短い段落または箇条書きで書きます。
+  - Footer には対応した AI model / agent を `Co-Authored-By:` で書きます。モデル名を `GPT-5.5` のように詳しく特定できる場合は、その詳細名まで含めます。例: `Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>`、`Co-authored-by: Cursor <cursoragent@cursor.com>`、Codex の場合は `Co-Authored-By: Codex GPT-5.5 <noreply@openai.com>`。
+  - テンプレート:
+    ```text
+    feat(bmz-app): add example behavior
+
+    変更が必要だった背景を書く。
+
+    - 主要な変更点を書く。
+    - 検証したテストやリグレッションガードを書く。
+
+    Co-Authored-By: Codex GPT-5.5 <noreply@openai.com>
+    ```
 - Windows / PowerShell でコミットする場合、メッセージ本文に `@` が混入することがあります。
   - 原因は `git commit -m @'...'@` の here-string で、native command への引数渡しで先頭に `@` が紛れ込むためです。
   - 対策: メッセージを一時ファイルへ書き、`git commit -F <file>` で渡します。1 行メッセージなら `-m "..."` でも構いません。
