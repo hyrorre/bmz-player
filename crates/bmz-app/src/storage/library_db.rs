@@ -705,6 +705,13 @@ impl LibraryDatabase {
         super::course_db::list_recent_course_scores(&self.conn, course_id, limit, offset)
     }
 
+    pub fn course_score_entry_by_id(
+        &self,
+        course_score_id: i64,
+    ) -> Result<Option<CourseScoreEntry>> {
+        super::course_db::course_score_entry_by_id(&self.conn, course_score_id)
+    }
+
     pub fn upsert_course_replay_slot(&mut self, record: &CourseReplaySlotRecord) -> Result<()> {
         super::course_db::upsert_course_replay_slot(&mut self.conn, record)
     }

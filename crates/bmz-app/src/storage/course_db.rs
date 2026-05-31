@@ -593,6 +593,50 @@ pub(super) fn list_recent_course_scores(
     Ok(out)
 }
 
+pub(super) fn course_score_entry_by_id(
+    conn: &Connection,
+    course_score_id: i64,
+) -> Result<Option<CourseScoreEntry>> {
+    let best = conn
+        .query_row(
+            "SELECT id, course_id, ex_score, max_ex_score, clear_type, gauge_type,
+                    gauge_value, max_combo, miss_count, course_failed, course_clear,
+                    played_at
+             FROM course_scores
+             WHERE id = ?1",
+            params![course_score_id],
+            course_best_score_from_row,
+        )
+        .optional()?;
+    let Some(best) = best else { return Ok(None) };
+
+    let mut stmt = conn.prepare(
+        "SELECT trophy_name
+         FROM course_trophy_achievements
+         WHERE course_score_id = ?1
+         ORDER BY trophy_name",
+    )?;
+    let trophies: Vec<String> = stmt
+        .query_map(params![course_score_id], |row| row.get::<_, String>(0))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+
+    Ok(Some(CourseScoreEntry {
+        course_score_id: best.course_score_id,
+        course_id: best.course_id,
+        ex_score: best.ex_score,
+        max_ex_score: best.max_ex_score,
+        clear_type: best.clear_type,
+        gauge_type: best.gauge_type,
+        gauge_value: best.gauge_value,
+        max_combo: best.max_combo,
+        miss_count: best.miss_count,
+        course_failed: best.course_failed,
+        course_clear: best.course_clear,
+        played_at: best.played_at,
+        achieved_trophies: trophies,
+    }))
+}
+
 pub(super) fn latest_course_score_id(conn: &Connection, course_id: i64) -> Result<Option<i64>> {
     let row: Option<i64> = conn
         .query_row(
@@ -1275,6 +1319,28 @@ mod tests {
         // Newest first by played_at.
         assert!(page1[0].played_at > page1[1].played_at);
         assert!(page1[1].played_at > page2[0].played_at);
+    }
+
+    #[test]
+    fn course_score_entry_by_id_returns_attempt_with_trophies() {
+        let mut conn = open_db();
+        let course_id = insert_test_course(&mut conn);
+
+        let mut insert = sample_score_insert(course_id, 700, "Hard");
+        insert.achieved_trophies = vec!["gold".to_string(), "silver".to_string()];
+        let score_id = insert_course_score(&mut conn, &insert).unwrap();
+
+        let entry = course_score_entry_by_id(&conn, score_id).unwrap().unwrap();
+        assert_eq!(entry.course_score_id, score_id);
+        assert_eq!(entry.ex_score, 700);
+        assert_eq!(entry.clear_type, "Hard");
+        assert_eq!(entry.achieved_trophies, vec!["gold".to_string(), "silver".to_string()]);
+    }
+
+    #[test]
+    fn course_score_entry_by_id_returns_none_for_missing_id() {
+        let conn = open_db();
+        assert!(course_score_entry_by_id(&conn, 9999).unwrap().is_none());
     }
 
     #[test]

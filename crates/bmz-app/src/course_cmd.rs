@@ -12,6 +12,7 @@ pub fn run_course_command(cmd: CourseCommand) -> Result<()> {
         CourseCommand::Import { path } => import_courses(Path::new(&path)),
         CourseCommand::List => list_courses(),
         CourseCommand::History { course_id, limit } => course_history(course_id, limit),
+        CourseCommand::Attempt { score_id } => course_attempt(score_id),
     }
 }
 
@@ -133,6 +134,86 @@ fn course_history(course_id: i64, limit: u32) -> Result<()> {
             entry.clear_type,
             entry.max_combo,
             trophies,
+        );
+    }
+    Ok(())
+}
+
+fn course_attempt(score_id: i64) -> Result<()> {
+    let app_paths = resolve_app_paths()?;
+    migrate_library_db(&app_paths.library_db)?;
+    let library_db = LibraryDatabase::open(&app_paths.library_db)?;
+
+    let entry = library_db
+        .course_score_entry_by_id(score_id)?
+        .ok_or_else(|| anyhow::anyhow!("course attempt id {score_id} not found"))?;
+    let course =
+        library_db.list_courses()?.into_iter().find(|c| c.id == entry.course_id).ok_or_else(
+            || anyhow::anyhow!("course id {} not found for attempt", entry.course_id),
+        )?;
+
+    let trophies = if entry.achieved_trophies.is_empty() {
+        "-".to_string()
+    } else {
+        entry.achieved_trophies.join(",")
+    };
+    println!(
+        "[{}] {} — attempt {}",
+        kind_label(course.definition.kind),
+        course.definition.title,
+        entry.course_score_id,
+    );
+    println!("  Played:     {}", format_unix_utc(entry.played_at));
+    println!(
+        "  EX score:   {}/{}  (clear={}, max combo={}, miss={})",
+        entry.ex_score, entry.max_ex_score, entry.clear_type, entry.max_combo, entry.miss_count,
+    );
+    println!(
+        "  Course:     {} (failed={}, clear={})",
+        if entry.course_clear { "clear" } else { "no-clear" },
+        entry.course_failed,
+        entry.course_clear,
+    );
+    println!(
+        "  Gauge:      {} {:.1}%",
+        if entry.gauge_type.is_empty() { "-" } else { entry.gauge_type.as_str() },
+        entry.gauge_value,
+    );
+    println!("  Trophies:   {}", trophies);
+
+    // Per-chart breakdown.
+    let charts = library_db.list_course_score_charts(score_id)?;
+    let replays = library_db.list_course_replays(score_id)?;
+    let mut replay_by_position: std::collections::HashMap<i64, &str> =
+        std::collections::HashMap::new();
+    for r in &replays {
+        replay_by_position.insert(r.position, r.replay_path.as_str());
+    }
+
+    if charts.is_empty() {
+        println!("  (no per-chart rows stored for this attempt)");
+        return Ok(());
+    }
+    println!();
+    println!(
+        "  {:<4}  {:<10}  {:>7}  {:>8}  {:<10}  {:>6}  REPLAY",
+        "POS", "CHART_ID", "EX", "MAXCOMBO", "CLEAR", "GAUGE",
+    );
+    for chart in charts {
+        let replay = replay_by_position
+            .get(&chart.position)
+            .copied()
+            .filter(|p| !p.is_empty())
+            .unwrap_or("-");
+        println!(
+            "  {:<4}  {:<10}  {:>7}  {:>8}  {:<10}  {:>5.1}%  {}",
+            chart.position,
+            chart.chart_id,
+            chart.ex_score,
+            chart.max_combo,
+            chart.clear_type,
+            chart.gauge_value,
+            replay,
         );
     }
     Ok(())

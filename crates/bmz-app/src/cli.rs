@@ -44,6 +44,10 @@ pub enum CourseCommand {
         course_id: i64,
         limit: u32,
     },
+    /// `course attempt <SCORE_ID>` — print per-chart breakdown of a single attempt.
+    Attempt {
+        score_id: i64,
+    },
 }
 
 pub fn parse_command<I, S>(args: I) -> Result<Command>
@@ -119,10 +123,20 @@ where
                     let limit = parse_course_history_limit(&rest[2..])?;
                     Ok(Command::Course(CourseCommand::History { course_id, limit }))
                 }
-                Some(sub) => {
-                    bail!("unknown course subcommand: {sub}. Use: import, list, history")
+                Some("attempt") => {
+                    let id_str = rest
+                        .get(1)
+                        .ok_or_else(|| anyhow::anyhow!("course attempt requires a SCORE_ID"))?;
+                    let score_id = parse_course_attempt_id(id_str)?;
+                    if rest.len() > 2 {
+                        bail!("unknown flag for course attempt: {}", rest[2]);
+                    }
+                    Ok(Command::Course(CourseCommand::Attempt { score_id }))
                 }
-                None => bail!("course requires a subcommand: import, list, history"),
+                Some(sub) => {
+                    bail!("unknown course subcommand: {sub}. Use: import, list, history, attempt")
+                }
+                None => bail!("course requires a subcommand: import, list, history, attempt"),
             }
         }
         _ => Ok(Command::Run(AppOptions::parse_args(args)?)),
@@ -239,7 +253,7 @@ where
 }
 
 pub fn app_help_text() -> &'static str {
-    "bmz-app\n\nUsage:\n  bmz-app [OPTIONS] [PATH]\n  bmz-app table <SUBCOMMAND>\n  bmz-app songs <SUBCOMMAND>\n  bmz-app course <SUBCOMMAND>\n\nOptions:\n  [PATH]                          Start the chart at PATH (beatoraja-style alias)\n  -a                              Enable autoplay for the boot chart (alias of --autoplay-on-start)\n  -r1 | -r2 | -r3 | -r4           Start replay slot 1..4 for the boot chart\n  --boot-play-sample              Start the bundled sample chart on boot\n  --autoplay-on-start             Enable autoplay for started charts\n  --boot-replay <1..4>            Start replay slot N for the boot chart\n  --boot-course <ID>              Start course ID fresh on boot\n  --boot-course-replay <ID>       Replay the latest attempt of course ID on boot\n  --smoke-exit-after-frames <N>   Exit after N rendered frames, clamped to 1 or more\n  --smoke-exit-on-result          Exit when the app reaches the result screen\n  --renderer <backend>            wgpu renderer backend (vulkan, metal, dx12, gl, auto)\n  -h, --help                      Print this help\n\nTable subcommands:\n  table add <URL>       Add a difficulty table source and fetch it\n  table list            List all stored difficulty tables\n  table fetch [URL]     Fetch/update configured tables, or a single URL\n\nSongs subcommands:\n  songs add <PATH> [--no-recursive] [--disabled]   Add a song root directory\n  songs list                                        List configured song roots\n  songs load [PATH|NAME]                            Scan song roots (incremental)\n  songs reload [PATH|NAME]                          Force rescan song roots\n\nCourse subcommands:\n  course import <PATH>             Import beatoraja course JSON from a file or directory\n  course list                      List stored courses\n  course history <ID> [--limit N]  Show recent attempts of course ID (default limit 10)\n\nExamples:\n  cargo run -p bmz-app -- /path/to/chart.bms\n  cargo run -p bmz-app -- -a /path/to/chart.bms\n  cargo run -p bmz-app -- -r2 /path/to/chart.bms\n  cargo run -p bmz-app -- --boot-play-sample --smoke-exit-after-frames 3\n  cargo run -p bmz-app -- --boot-play-sample --boot-replay 1 --smoke-exit-on-result\n  cargo run -p bmz-app -- table add https://example.com/table.html\n  cargo run -p bmz-app -- table list\n  cargo run -p bmz-app -- table fetch https://example.com/table.html\n  cargo run -p bmz-app -- songs add /path/to/bms\n  cargo run -p bmz-app -- songs list\n  cargo run -p bmz-app -- songs load\n  cargo run -p bmz-app -- songs reload my-bms-folder\n  cargo run -p bmz-app -- course import /path/to/course.json\n  cargo run -p bmz-app -- course list"
+    "bmz-app\n\nUsage:\n  bmz-app [OPTIONS] [PATH]\n  bmz-app table <SUBCOMMAND>\n  bmz-app songs <SUBCOMMAND>\n  bmz-app course <SUBCOMMAND>\n\nOptions:\n  [PATH]                          Start the chart at PATH (beatoraja-style alias)\n  -a                              Enable autoplay for the boot chart (alias of --autoplay-on-start)\n  -r1 | -r2 | -r3 | -r4           Start replay slot 1..4 for the boot chart\n  --boot-play-sample              Start the bundled sample chart on boot\n  --autoplay-on-start             Enable autoplay for started charts\n  --boot-replay <1..4>            Start replay slot N for the boot chart\n  --boot-course <ID>              Start course ID fresh on boot\n  --boot-course-replay <ID>       Replay the latest attempt of course ID on boot\n  --smoke-exit-after-frames <N>   Exit after N rendered frames, clamped to 1 or more\n  --smoke-exit-on-result          Exit when the app reaches the result screen\n  --renderer <backend>            wgpu renderer backend (vulkan, metal, dx12, gl, auto)\n  -h, --help                      Print this help\n\nTable subcommands:\n  table add <URL>       Add a difficulty table source and fetch it\n  table list            List all stored difficulty tables\n  table fetch [URL]     Fetch/update configured tables, or a single URL\n\nSongs subcommands:\n  songs add <PATH> [--no-recursive] [--disabled]   Add a song root directory\n  songs list                                        List configured song roots\n  songs load [PATH|NAME]                            Scan song roots (incremental)\n  songs reload [PATH|NAME]                          Force rescan song roots\n\nCourse subcommands:\n  course import <PATH>             Import beatoraja course JSON from a file or directory\n  course list                      List stored courses\n  course history <ID> [--limit N]  Show recent attempts of course ID (default limit 10)\n  course attempt <SCORE_ID>        Show per-chart breakdown of a single course attempt\n\nExamples:\n  cargo run -p bmz-app -- /path/to/chart.bms\n  cargo run -p bmz-app -- -a /path/to/chart.bms\n  cargo run -p bmz-app -- -r2 /path/to/chart.bms\n  cargo run -p bmz-app -- --boot-play-sample --smoke-exit-after-frames 3\n  cargo run -p bmz-app -- --boot-play-sample --boot-replay 1 --smoke-exit-on-result\n  cargo run -p bmz-app -- table add https://example.com/table.html\n  cargo run -p bmz-app -- table list\n  cargo run -p bmz-app -- table fetch https://example.com/table.html\n  cargo run -p bmz-app -- songs add /path/to/bms\n  cargo run -p bmz-app -- songs list\n  cargo run -p bmz-app -- songs load\n  cargo run -p bmz-app -- songs reload my-bms-folder\n  cargo run -p bmz-app -- course import /path/to/course.json\n  cargo run -p bmz-app -- course list"
 }
 
 fn parse_smoke_exit_after_frames_value(value: &str) -> Result<u32> {
@@ -303,6 +317,19 @@ fn parse_course_history_limit(flags: &[String]) -> Result<u32> {
         return parse_history_limit_value(value);
     }
     bail!("unknown flag for course history: {flag}");
+}
+
+fn parse_course_attempt_id(value: &str) -> Result<i64> {
+    let value = value.trim();
+    if value.is_empty() {
+        bail!("course attempt requires a SCORE_ID");
+    }
+    let id: i64 =
+        value.parse().with_context(|| format!("invalid score id for course attempt: {value}"))?;
+    if id <= 0 {
+        bail!("course attempt SCORE_ID must be positive (got {id})");
+    }
+    Ok(id)
 }
 
 fn parse_history_limit_value(value: &str) -> Result<u32> {
@@ -689,5 +716,28 @@ mod tests {
     fn help_text_lists_course_history() {
         let help = app_help_text();
         assert!(help.contains("course history"));
+    }
+
+    #[test]
+    fn parse_command_routes_course_attempt() {
+        assert_eq!(
+            parse_command(["course", "attempt", "7"]).unwrap(),
+            Command::Course(CourseCommand::Attempt { score_id: 7 }),
+        );
+    }
+
+    #[test]
+    fn parse_command_rejects_invalid_course_attempt() {
+        assert!(parse_command(["course", "attempt"]).is_err());
+        assert!(parse_command(["course", "attempt", "0"]).is_err());
+        assert!(parse_command(["course", "attempt", "-1"]).is_err());
+        assert!(parse_command(["course", "attempt", "abc"]).is_err());
+        assert!(parse_command(["course", "attempt", "1", "--unknown"]).is_err());
+    }
+
+    #[test]
+    fn help_text_lists_course_attempt() {
+        let help = app_help_text();
+        assert!(help.contains("course attempt"));
     }
 }
