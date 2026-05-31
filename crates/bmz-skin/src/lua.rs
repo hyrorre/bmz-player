@@ -4,7 +4,7 @@ use std::path::Component;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow, bail};
 use mlua::{Function, HookTriggers, Lua, Table, Value, Variadic, VmState};
@@ -255,7 +255,7 @@ fn install_sandbox(
         skin_config.set("get_path", get_path)?;
         globals.set("skin_config", skin_config)?;
     }
-    globals.set("os", Value::Nil)?;
+    globals.set("os", create_os_stub(lua)?)?;
     globals.set("io", Value::Nil)?;
     globals.set("debug", Value::Nil)?;
     if let Ok(package) = globals.get::<Table>("package") {
@@ -696,6 +696,147 @@ fn lua_load_now_ms() -> i32 {
     static ORIGIN: OnceLock<Instant> = OnceLock::new();
     let origin = ORIGIN.get_or_init(Instant::now);
     origin.elapsed().as_millis().min(i32::MAX as u128) as i32
+}
+
+fn create_os_stub(lua: &Lua) -> mlua::Result<Value> {
+    let table = lua.create_table()?;
+    table.set(
+        "clock",
+        lua.create_function(|_, ()| {
+            static ORIGIN: OnceLock<Instant> = OnceLock::new();
+            let origin = ORIGIN.get_or_init(Instant::now);
+            Ok(origin.elapsed().as_secs_f64())
+        })?,
+    )?;
+    table.set(
+        "date",
+        lua.create_function(|lua, args: Variadic<Value>| {
+            let format = args
+                .first()
+                .and_then(|value| match value {
+                    Value::String(value) => Some(value.to_string_lossy()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| "%Y-%m-%d %H:%M:%S".to_string());
+            let seconds = args
+                .get(1)
+                .and_then(|value| match value {
+                    Value::Integer(value) => Some(*value),
+                    Value::Number(value) => Some(*value as i64),
+                    _ => None,
+                })
+                .unwrap_or_else(lua_os_now_seconds);
+            let date = unix_seconds_to_utc_datetime(seconds);
+            if format == "*t" || format == "!*t" {
+                let result = lua.create_table()?;
+                result.set("year", date.year)?;
+                result.set("month", date.month)?;
+                result.set("day", date.day)?;
+                result.set("hour", date.hour)?;
+                result.set("min", date.minute)?;
+                result.set("sec", date.second)?;
+                result.set("wday", date.weekday)?;
+                result.set("yday", date.yearday)?;
+                result.set("isdst", false)?;
+                Ok(Value::Table(result))
+            } else {
+                Ok(Value::String(lua.create_string(format_lua_date(&format, date))?))
+            }
+        })?,
+    )?;
+    Ok(Value::Table(table))
+}
+
+fn lua_os_now_seconds() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs().min(i64::MAX as u64) as i64)
+        .unwrap_or_default()
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LuaDateTime {
+    year: i32,
+    month: u32,
+    day: u32,
+    hour: u32,
+    minute: u32,
+    second: u32,
+    weekday: u32,
+    yearday: u32,
+}
+
+fn unix_seconds_to_utc_datetime(seconds: i64) -> LuaDateTime {
+    let days = seconds.div_euclid(86_400);
+    let seconds_of_day = seconds.rem_euclid(86_400) as u32;
+    let (year, month, day) = civil_from_days(days);
+    LuaDateTime {
+        year,
+        month,
+        day,
+        hour: seconds_of_day / 3_600,
+        minute: (seconds_of_day % 3_600) / 60,
+        second: seconds_of_day % 60,
+        // Lua's wday is 1-based with Sunday == 1. 1970-01-01 was Thursday.
+        weekday: ((days + 4).rem_euclid(7) + 1) as u32,
+        yearday: yearday(year, month, day),
+    }
+}
+
+fn civil_from_days(days: i64) -> (i32, u32, u32) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = mp + if mp < 10 { 3 } else { -9 };
+    let year = y + if month <= 2 { 1 } else { 0 };
+    (year as i32, month as u32, day as u32)
+}
+
+fn yearday(year: i32, month: u32, day: u32) -> u32 {
+    const COMMON_MONTH_DAYS: [u32; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let mut result = day;
+    for m in 1..month {
+        result += COMMON_MONTH_DAYS[(m - 1) as usize];
+        if m == 2 && is_leap_year(year) {
+            result += 1;
+        }
+    }
+    result
+}
+
+fn is_leap_year(year: i32) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+}
+
+fn format_lua_date(format: &str, date: LuaDateTime) -> String {
+    let mut output = String::new();
+    let mut chars = format.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '%' {
+            output.push(ch);
+            continue;
+        }
+        match chars.next() {
+            Some('Y') => output.push_str(&format!("{:04}", date.year)),
+            Some('m') => output.push_str(&format!("{:02}", date.month)),
+            Some('d') => output.push_str(&format!("{:02}", date.day)),
+            Some('H') => output.push_str(&format!("{:02}", date.hour)),
+            Some('M') => output.push_str(&format!("{:02}", date.minute)),
+            Some('S') => output.push_str(&format!("{:02}", date.second)),
+            Some('%') => output.push('%'),
+            Some(other) => {
+                output.push('%');
+                output.push(other);
+            }
+            None => output.push('%'),
+        }
+    }
+    output
 }
 
 #[derive(Debug)]
