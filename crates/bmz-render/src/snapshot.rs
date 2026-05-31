@@ -91,6 +91,8 @@ pub struct RenderSnapshot {
     pub visible_long_notes: Vec<VisibleLongNote>,
     pub recent_inputs: Vec<DisplayInput>,
     pub recent_judgements: Vec<DisplayJudgement>,
+    /// HitErrorVisualizer 用の直近判定タイミング (ms)。
+    pub hit_error_ring: HitErrorRingSnapshot,
     /// Full combo timer elapsed ms (skin timer 48/49). None while inactive.
     pub full_combo_elapsed_ms: Option<i32>,
     /// Scene fadeout timer elapsed ms (skin timer 2). None while inactive.
@@ -110,6 +112,22 @@ pub struct RenderSnapshot {
     pub backbmp_background: bool,
     /// BMS `#TEXT` / チャネル #99 で表示する譜面テキスト。
     pub chart_text: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HitErrorRingSnapshot {
+    pub values: [i64; bmz_gameplay::hit_error::HIT_ERROR_RING_LEN],
+    pub index: usize,
+}
+
+impl Default for HitErrorRingSnapshot {
+    fn default() -> Self {
+        Self {
+            values: [bmz_gameplay::hit_error::HIT_ERROR_EMPTY;
+                bmz_gameplay::hit_error::HIT_ERROR_RING_LEN],
+            index: 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

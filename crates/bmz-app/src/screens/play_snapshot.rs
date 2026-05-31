@@ -147,6 +147,10 @@ pub fn build_render_snapshot_with_target_and_bga_frames(
             .map(|input| DisplayInput { lane: input.lane, time: input.time })
             .collect(),
         recent_judgements: recent_judgements.iter().map(display_judgement).collect(),
+        hit_error_ring: bmz_render::snapshot::HitErrorRingSnapshot {
+            values: session.hit_error_ring.values,
+            index: session.hit_error_ring.index,
+        },
         full_combo_elapsed_ms: session.full_combo_started_at.and_then(|started_at| {
             (render_now.0 >= started_at.0)
                 .then_some(((render_now.0 - started_at.0) / 1_000).clamp(0, i32::MAX as i64) as i32)

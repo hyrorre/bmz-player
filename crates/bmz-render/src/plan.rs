@@ -881,6 +881,8 @@ fn plan_play(
         projected_best_ex_score: snapshot.projected_best_ex_score,
         target_ex_score: snapshot.target_ex_score,
         judge_timing_offset_ms: snapshot.judge_timing_offset_ms,
+        hit_error_ring: snapshot.hit_error_ring.values,
+        hit_error_ring_index: snapshot.hit_error_ring.index,
         autoplay: snapshot.autoplay,
         course_stage: snapshot.course_stage,
         ..crate::skin::SkinDrawState::default()

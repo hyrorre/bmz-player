@@ -100,6 +100,8 @@ pub struct SkinDocument {
     pub graph: Vec<SkinGraphDef>,
     #[serde(default, rename = "hiddenCover")]
     pub hidden_cover: Vec<SkinHiddenCoverDef>,
+    #[serde(default, rename = "hiterrorvisualizer")]
+    pub hiterror_visualizer: Vec<SkinHitErrorVisualizerDef>,
     pub note: Option<SkinNoteSetDef>,
     pub gauge: Option<SkinGaugeDef>,
     #[serde(default)]
@@ -464,6 +466,79 @@ pub struct SkinHiddenCoverDef {
     pub disappear_line: i32,
     #[serde(default = "default_true", rename = "isDisapearLineLinkLift")]
     pub is_disappear_line_link_lift: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SkinHitErrorVisualizerDef {
+    #[serde(default, deserialize_with = "deserialize_skin_id")]
+    pub id: String,
+    #[serde(default = "default_hiterror_width")]
+    pub width: i32,
+    #[serde(default = "default_hiterror_judge_width_millis", rename = "judgeWidthMillis")]
+    pub judge_width_millis: i32,
+    #[serde(default = "default_hiterror_line_width", rename = "lineWidth")]
+    pub line_width: i32,
+    #[serde(default, rename = "colorMode")]
+    pub color_mode: i32,
+    #[serde(default = "default_true_int", rename = "hiterrorMode")]
+    pub hiterror_mode: i32,
+    #[serde(default = "default_true_int", rename = "emaMode")]
+    pub ema_mode: i32,
+    #[serde(default = "default_hiterror_line_color", rename = "lineColor")]
+    pub line_color: String,
+    #[serde(default = "default_hiterror_center_color", rename = "centerColor")]
+    pub center_color: String,
+    #[serde(default = "default_hiterror_judge_color", rename = "PGColor")]
+    pub pg_color: String,
+    #[serde(default = "default_hiterror_judge_color", rename = "GRColor")]
+    pub gr_color: String,
+    #[serde(default = "default_hiterror_judge_color", rename = "GDColor")]
+    pub gd_color: String,
+    #[serde(default = "default_hiterror_judge_color", rename = "BDColor")]
+    pub bd_color: String,
+    #[serde(default = "default_hiterror_judge_color", rename = "PRColor")]
+    pub pr_color: String,
+    #[serde(default = "default_hiterror_ema_color", rename = "emaColor")]
+    pub ema_color: String,
+    #[serde(default = "default_hiterror_alpha")]
+    pub alpha: f32,
+    #[serde(default = "default_hiterror_window_length", rename = "windowLength")]
+    pub window_length: i32,
+    #[serde(default)]
+    pub transparent: i32,
+    #[serde(default = "default_true_int", rename = "drawDecay")]
+    pub draw_decay: i32,
+}
+
+fn default_hiterror_width() -> i32 {
+    301
+}
+fn default_hiterror_judge_width_millis() -> i32 {
+    150
+}
+fn default_hiterror_line_width() -> i32 {
+    1
+}
+fn default_true_int() -> i32 {
+    1
+}
+fn default_hiterror_line_color() -> String {
+    "99CCFF80".to_string()
+}
+fn default_hiterror_center_color() -> String {
+    "FFFFFFFF".to_string()
+}
+fn default_hiterror_judge_color() -> String {
+    "99CCFF80".to_string()
+}
+fn default_hiterror_ema_color() -> String {
+    "FF0000FF".to_string()
+}
+fn default_hiterror_alpha() -> f32 {
+    0.1
+}
+fn default_hiterror_window_length() -> i32 {
+    30
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -1195,6 +1270,9 @@ pub struct SkinDrawState {
     pub course_stage: Option<CourseStageMarker>,
     /// beatoraja `event_index(SKIN_EVENT_HSFIX)`。0=OFF, 1=START, 2=MAX, 3=MAIN, 4=MIN。
     pub hsfix_index: i32,
+    /// HitErrorVisualizer 用の直近判定タイミング (ms)。
+    pub hit_error_ring: [i64; bmz_gameplay::hit_error::HIT_ERROR_RING_LEN],
+    pub hit_error_ring_index: usize,
     /// `dynamicTimer` で定義された observe タイマーの経過 ms。None は timer_off。
     pub dynamic_timer_ms: [Option<i32>; SKIN_DYNAMIC_TIMER_COUNT],
 }
@@ -1301,6 +1379,9 @@ impl Default for SkinDrawState {
             autoplay: false,
             course_stage: None,
             hsfix_index: 0,
+            hit_error_ring: [bmz_gameplay::hit_error::HIT_ERROR_EMPTY;
+                bmz_gameplay::hit_error::HIT_ERROR_RING_LEN],
+            hit_error_ring_index: 0,
             dynamic_timer_ms: [None; SKIN_DYNAMIC_TIMER_COUNT],
         }
     }
@@ -1859,6 +1940,16 @@ impl SkinDocument {
         let is_hidden_cover_destination =
             self.hidden_cover.iter().any(|cover| cover.id == destination.id);
         apply_skin_offset_to_frame(destination, &mut frame, state, is_hidden_cover_destination);
+        if let Some(visualizer) =
+            self.hiterror_visualizer.iter().find(|visualizer| visualizer.id == destination.id)
+        {
+            return Some(self.hiterror_visualizer_render_items(
+                visualizer,
+                destination,
+                frame,
+                state,
+            ));
+        }
         if let Some(image) = skin_image_for_destination_id(destination.id.as_str(), images) {
             if self.should_skip_lift_lane_cover_render(destination, image)
                 && state.offset_lift_px == 0
@@ -3290,6 +3381,69 @@ impl SkinDocument {
             },
             blend: BlendMode::Normal,
         })
+    }
+
+    fn hiterror_visualizer_render_items(
+        &self,
+        visualizer: &SkinHitErrorVisualizerDef,
+        destination: &SkinDestinationDef,
+        frame: ResolvedSkinFrame,
+        state: SkinDrawState,
+    ) -> Vec<SkinRenderItem> {
+        if visualizer.hiterror_mode == 0 {
+            return Vec::new();
+        }
+        let rect = normalize_skin_frame_rect(frame, self.w, self.h);
+        let frame_alpha = frame.a as f32 / 255.0;
+        let blend = if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal };
+        let window = visualizer.window_length.clamp(1, 100) as usize;
+        let width = visualizer.width.max(1) as f32;
+        let line_width = visualizer.line_width.clamp(1, 4) as f32;
+        let center_ms = visualizer.judge_width_millis.max(1) as f32;
+        let judge_width_rate = width / (center_ms * 2.0 + 1.0);
+        let line_color =
+            skin_hex_color(&visualizer.line_color).unwrap_or(Color::rgba(0.6, 0.8, 1.0, 0.5));
+        let center_color =
+            skin_hex_color(&visualizer.center_color).unwrap_or(Color::rgba(1.0, 1.0, 1.0, 1.0));
+        let canvas_h = rect.height.max(1.0);
+        let mut items = Vec::new();
+        let center_x = rect.x + rect.width / 2.0 - line_width / 2.0;
+        items.push(SkinRenderItem::Rect {
+            rect: Rect { x: center_x, y: rect.y, width: line_width, height: canvas_h },
+            color: center_color.with_alpha(center_color.a * frame_alpha),
+            blend,
+        });
+        let index = state.hit_error_ring_index;
+        let recent = &state.hit_error_ring;
+        for i in 1..=window {
+            let ring_index = (index as i64 - window as i64 + i as i64)
+                .rem_euclid(bmz_gameplay::hit_error::HIT_ERROR_RING_LEN as i64)
+                as usize;
+            let sample = recent[ring_index];
+            if sample == bmz_gameplay::hit_error::HIT_ERROR_EMPTY {
+                continue;
+            }
+            let clamped = sample
+                .clamp(-visualizer.judge_width_millis as i64, visualizer.judge_width_millis as i64)
+                as f32;
+            let x = rect.x + width / 2.0 - line_width / 2.0 - clamped * judge_width_rate;
+            let alpha = if visualizer.color_mode == 0 {
+                line_color.a * (i as f32 / (window as f32 / 2.0)).min(1.0)
+            } else {
+                line_color.a
+            };
+            let bar_h = if visualizer.draw_decay != 0 {
+                canvas_h * i as f32 / window as f32
+            } else {
+                canvas_h
+            };
+            items.push(SkinRenderItem::Rect {
+                rect: Rect { x, y: rect.y + canvas_h - bar_h, width: line_width, height: bar_h },
+                color: Color::rgba(line_color.r, line_color.g, line_color.b, alpha * frame_alpha),
+                blend,
+            });
+        }
+        items
     }
 
     fn slider_render_item(

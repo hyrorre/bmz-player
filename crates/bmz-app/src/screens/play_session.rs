@@ -10,6 +10,7 @@ use bmz_core::lane::{KeyMode, LANE_COUNT, Lane};
 use bmz_core::time::TimeUs;
 use bmz_gameplay::autoplay::AutoplayController;
 use bmz_gameplay::gauge::{GaugeAutoShiftMode, GaugeState, gauge_total_for_chart};
+use bmz_gameplay::hit_error::HitErrorRing;
 use bmz_gameplay::input::backend::{InputBackend, NullInputBackend};
 use bmz_gameplay::input::system::InputSystem;
 use bmz_gameplay::input::translator::DefaultInputTranslator;
@@ -194,6 +195,7 @@ pub fn build_game_session_with_input_backend(
         lane_keyoff_started_at: Default::default(),
         lane_auto_release_at: Default::default(),
         recent_judgements: Vec::new(),
+        hit_error_ring: HitErrorRing::default(),
         full_combo_started_at: None,
         bgm_scheduler: BgmScheduler::default(),
         offsets: play_offsets_from_profile(profile),

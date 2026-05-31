@@ -11,6 +11,7 @@ use bmz_core::time::TimeUs;
 
 use crate::autoplay::AutoplayController;
 use crate::gauge::GaugeState;
+use crate::hit_error::HitErrorRing;
 use crate::input::system::InputSystem;
 use crate::input::translator::{InputTimestampAnchor, InputTimingContext};
 use crate::judge::engine::JudgeEngine;
@@ -95,6 +96,8 @@ pub struct GameSession {
     /// `audio_now` がこの時刻を超えたら keyon → keyoff へ遷移する。
     pub lane_auto_release_at: [Option<TimeUs>; LANE_COUNT],
     pub recent_judgements: Vec<JudgementEvent>,
+    /// HitErrorVisualizer 用の直近判定タイミング (ms)。beatoraja `recentJudges` 相当。
+    pub hit_error_ring: HitErrorRing,
     /// Full combo animation start time. Set once when all notes have been judged
     /// and the combo still matches the total note count.
     pub full_combo_started_at: Option<TimeUs>,
@@ -249,6 +252,9 @@ fn plays_keysound(judge: Judge) -> bool {
 }
 
 pub fn update_recent_judgements(session: &mut GameSession, events: &[JudgementEvent], now: TimeUs) {
+    for event in events {
+        session.hit_error_ring.push_judgement(event.judge, event.delta.0);
+    }
     session.recent_judgements.extend(events.iter().cloned());
     session.recent_judgements.retain(|event| now.0 <= event.time.0 + JUDGEMENT_DISPLAY_US);
 }
@@ -901,6 +907,7 @@ mod tests {
             lane_keyoff_started_at: Default::default(),
             lane_auto_release_at: Default::default(),
             recent_judgements: Vec::new(),
+            hit_error_ring: HitErrorRing::default(),
             full_combo_started_at: None,
             bgm_scheduler: BgmScheduler::default(),
             offsets: PlayOffsets { input_offset_us: 0, visual_offset_us: 0 },
