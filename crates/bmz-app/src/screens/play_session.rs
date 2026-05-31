@@ -449,25 +449,82 @@ pub fn apply_arrange(
 
 fn mirror_permutation(key_mode: KeyMode) -> Vec<usize> {
     let mut perm: Vec<usize> = (0..LANE_COUNT).collect();
-    let active = key_mode.active_lanes();
-    // P1 keys (skip Scratch at index 0)
-    let p1_keys: Vec<usize> =
-        active.iter().skip(1).take_while(|&&l| (l as usize) < 8).map(|&l| l as usize).collect();
-    let p1_reversed: Vec<usize> = p1_keys.iter().rev().copied().collect();
-    for (orig, rev) in p1_keys.iter().zip(p1_reversed.iter()) {
-        perm[*orig] = *rev;
-    }
-    // P2 keys (skip P2 Scratch)
-    let p2_keys: Vec<usize> = active
-        .iter()
-        .filter(|&&l| (l as usize) >= 8 && l != Lane::Scratch2)
-        .map(|&l| l as usize)
-        .collect();
-    let p2_reversed: Vec<usize> = p2_keys.iter().rev().copied().collect();
-    for (orig, rev) in p2_keys.iter().zip(p2_reversed.iter()) {
-        perm[*orig] = *rev;
+    for group in arrange_lane_groups(key_mode) {
+        reverse_lane_group(&mut perm, &group);
     }
     perm
+}
+
+fn random_lane_permutation(seed: u64, key_mode: KeyMode) -> Vec<usize> {
+    let mut perm: Vec<usize> = (0..LANE_COUNT).collect();
+    let mut rng = seed;
+    for group in arrange_lane_groups(key_mode) {
+        fisher_yates_shuffle(&mut rng, &group, &mut perm);
+    }
+    perm
+}
+
+fn arrange_lane_groups(key_mode: KeyMode) -> Vec<Vec<usize>> {
+    let active = key_mode.active_lanes();
+    match key_mode {
+        KeyMode::K4 | KeyMode::K6 | KeyMode::K9 => {
+            vec![active.iter().map(|&lane| lane as usize).collect()]
+        }
+        KeyMode::K5 | KeyMode::K7 | KeyMode::K8 => {
+            vec![
+                active
+                    .iter()
+                    .filter(|&&lane| lane != Lane::Scratch)
+                    .map(|&lane| lane as usize)
+                    .collect(),
+            ]
+        }
+        KeyMode::K10 | KeyMode::K14 => {
+            let p1 = active
+                .iter()
+                .filter(|&&lane| {
+                    matches!(
+                        lane,
+                        Lane::Key1
+                            | Lane::Key2
+                            | Lane::Key3
+                            | Lane::Key4
+                            | Lane::Key5
+                            | Lane::Key6
+                            | Lane::Key7
+                    )
+                })
+                .map(|&lane| lane as usize)
+                .collect();
+            let p2 = active
+                .iter()
+                .filter(|&&lane| {
+                    matches!(
+                        lane,
+                        Lane::Key8
+                            | Lane::Key9
+                            | Lane::Key10
+                            | Lane::Key11
+                            | Lane::Key12
+                            | Lane::Key13
+                            | Lane::Key14
+                    )
+                })
+                .map(|&lane| lane as usize)
+                .collect();
+            vec![p1, p2]
+        }
+    }
+}
+
+fn reverse_lane_group(perm: &mut [usize], lanes: &[usize]) {
+    if lanes.len() < 2 {
+        return;
+    }
+    let reversed: Vec<usize> = lanes.iter().rev().copied().collect();
+    for (orig, rev) in lanes.iter().zip(reversed.iter()) {
+        perm[*orig] = *rev;
+    }
 }
 
 fn apply_lane_permutation(chart: &mut PlayableChart, perm: &[usize]) {
@@ -494,27 +551,6 @@ fn apply_lane_permutation(chart: &mut PlayableChart, perm: &[usize]) {
     }
 }
 
-fn random_lane_permutation(seed: u64, key_mode: KeyMode) -> Vec<usize> {
-    let mut perm: Vec<usize> = (0..LANE_COUNT).collect();
-    let mut rng = seed;
-
-    let active = key_mode.active_lanes();
-    // P1 keys: active lanes with index < 8, skip Scratch (index 0)
-    let p1_keys: Vec<usize> =
-        active.iter().skip(1).take_while(|&&l| (l as usize) < 8).map(|&l| l as usize).collect();
-    fisher_yates_shuffle(&mut rng, &p1_keys, &mut perm);
-
-    // P2 keys: active lanes with index >= 8, skip Scratch2
-    let p2_keys: Vec<usize> = active
-        .iter()
-        .filter(|&&l| (l as usize) >= 8 && l != Lane::Scratch2)
-        .map(|&l| l as usize)
-        .collect();
-    fisher_yates_shuffle(&mut rng, &p2_keys, &mut perm);
-
-    perm
-}
-
 fn fisher_yates_shuffle(rng: &mut u64, lanes: &[usize], perm: &mut [usize]) {
     if lanes.len() < 2 {
         return;
@@ -532,6 +568,7 @@ fn fisher_yates_shuffle(rng: &mut u64, lanes: &[usize], perm: &mut [usize]) {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::sync::Arc;
 
     use bmz_audio::loader::LoadedSampleStatus;
@@ -540,7 +577,7 @@ mod tests {
     use bmz_core::clear::GaugeType;
     use bmz_core::ids::SoundId;
     use bmz_core::input::InputKind;
-    use bmz_core::lane::Lane;
+    use bmz_core::lane::{KeyMode, Lane};
     use bmz_core::time::TimeUs;
     use bmz_gameplay::input::backend::{
         BufferedInputBackend, DeviceId, DeviceInputEvent, DeviceTimestamp, PhysicalControl,
@@ -573,6 +610,24 @@ mod tests {
         assert!(session.bga_enabled);
         assert_eq!(session.poor_bga_duration_us, 500_000);
         assert_eq!(session.bga_stretch, 1);
+    }
+
+    #[test]
+    fn mirror_permutation_k9_reverses_all_nine_keys() {
+        let perm = mirror_permutation(KeyMode::K9);
+        assert_eq!(perm[Lane::Key1 as usize], Lane::Key9 as usize);
+        assert_eq!(perm[Lane::Key9 as usize], Lane::Key1 as usize);
+        assert_eq!(perm[Lane::Key5 as usize], Lane::Key5 as usize);
+    }
+
+    #[test]
+    fn random_lane_permutation_k9_preserves_active_lanes() {
+        let perm = random_lane_permutation(42, KeyMode::K9);
+        let active: HashSet<_> =
+            KeyMode::K9.active_lanes().iter().map(|&lane| lane as usize).collect();
+        let mapped: HashSet<_> =
+            KeyMode::K9.active_lanes().iter().map(|&lane| perm[lane as usize]).collect();
+        assert_eq!(active, mapped);
     }
 
     #[test]
