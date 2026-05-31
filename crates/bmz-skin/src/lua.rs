@@ -1622,11 +1622,13 @@ fn lua_value_to_json(
         Value::Nil => JsonValue::Null,
         Value::Boolean(value) => JsonValue::Bool(value),
         Value::Integer(value) => JsonValue::Number(JsonNumber::from(value)),
-        Value::Number(value) => {
-            JsonNumber::from_f64(value).map(JsonValue::Number).ok_or_else(|| {
-                anyhow!("non-finite lua number cannot be represented as JSON at {path}")
-            })?
-        }
+        Value::Number(value) => match JsonNumber::from_f64(value) {
+            Some(number) => JsonValue::Number(number),
+            None => {
+                warnings.push(format!("non-finite lua number converted to 0 at {path}"));
+                JsonValue::Number(JsonNumber::from(0))
+            }
+        },
         Value::String(value) => JsonValue::String(value.to_string_lossy()),
         Value::Table(table) => lua_table_to_json(
             lua,

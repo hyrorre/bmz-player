@@ -583,6 +583,37 @@ mod tests {
     }
 
     #[test]
+    fn lua_skin_non_finite_numbers_warn_and_convert_to_zero() {
+        let root = unique_test_dir("bmz-skin-lua");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("play7.luaskin"),
+            r#"
+            return {
+                type = 0,
+                destination = {
+                    { id = -110, dst = {{ x = 0 / 0, y = 1 / 0, w = 1, h = 1 }} }
+                }
+            }
+            "#,
+        )
+        .unwrap();
+
+        let loaded =
+            load_lua_skin_value(&root.join("play7.luaskin"), &BTreeMap::new(), &BTreeMap::new())
+                .unwrap();
+
+        assert_eq!(loaded.value["destination"][0]["dst"][0]["x"], 0);
+        assert_eq!(loaded.value["destination"][0]["dst"][0]["y"], 0);
+        assert!(
+            loaded
+                .warnings
+                .iter()
+                .any(|warning| warning.message.contains("non-finite lua number converted to 0"))
+        );
+    }
+
+    #[test]
     fn lua_skin_config_get_path_prefers_filepath_default() {
         let root = unique_test_dir("bmz-skin-lua");
         fs::create_dir_all(root.join("parts")).unwrap();
