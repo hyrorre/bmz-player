@@ -385,6 +385,10 @@ pub struct SkinSliderDef {
 
 /// beatoraja 予約 ID と衝突しない動的タイマー ID 範囲の先頭。
 pub const SKIN_DYNAMIC_TIMER_BASE: i32 = 9000;
+/// Play 中 imageset が `main_state.gauge_type()` で選ぶ ref (beatoraja 非予約)。
+pub const SKIN_REF_PLAY_GAUGE_TYPE: i32 = 44;
+/// beatoraja `BUTTON_HSFIX` (`event_index(55)`)。
+pub const SKIN_EVENT_HSFIX: i32 = 55;
 /// `SkinDrawState::dynamic_timer_ms` のスロット数。
 pub const SKIN_DYNAMIC_TIMER_COUNT: usize = 64;
 
@@ -1072,6 +1076,8 @@ pub struct SkinDrawState {
     pub total_duration_ms: i32,
     /// レーンカバー割合 0.0-1.0 (NUMBER_LANECOVER1=14 に使用)。0=なし, 1=全画面。
     pub lane_cover: f32,
+    /// リフト量 0.0-1.0 (NUMBER_LIFT1=314 に使用)。
+    pub lift: f32,
     /// HIDDEN カバー割合 0.0-1.0。未対応の間は 0.0 で hiddenCover を描画しない。
     pub hidden_cover: f32,
     /// OPTION_LANECOVER1_CHANGING (270)。Start/Select 押下中に true。
@@ -1184,6 +1190,8 @@ pub struct SkinDrawState {
     pub autoplay: bool,
     /// OPTION_MODE_COURSE (290) とステージ別 op (280..283 / 289) 用。未対応時は None。
     pub course_stage: Option<CourseStageMarker>,
+    /// beatoraja `event_index(SKIN_EVENT_HSFIX)`。0=OFF, 1=START, 2=MAX, 3=MAIN, 4=MIN。
+    pub hsfix_index: i32,
     /// `dynamicTimer` で定義された observe タイマーの経過 ms。None は timer_off。
     pub dynamic_timer_ms: [Option<i32>; SKIN_DYNAMIC_TIMER_COUNT],
 }
@@ -1232,6 +1240,7 @@ impl Default for SkinDrawState {
             timeleft_ms: 0,
             total_duration_ms: 0,
             lane_cover: 0.0,
+            lift: 0.0,
             hidden_cover: 0.0,
             lane_cover_changing: false,
             lanecover_enabled: true,
@@ -1288,6 +1297,7 @@ impl Default for SkinDrawState {
             failed_ms: None,
             autoplay: false,
             course_stage: None,
+            hsfix_index: 0,
             dynamic_timer_ms: [None; SKIN_DYNAMIC_TIMER_COUNT],
         }
     }
@@ -3550,6 +3560,7 @@ fn imageset_ref_lane(ref_id: i32) -> Option<Lane> {
 fn skin_state_imageset_index(ref_id: i32, state: SkinDrawState) -> Option<usize> {
     match ref_id {
         40 => Some(state.select_gauge_index),
+        SKIN_REF_PLAY_GAUGE_TYPE => Some(state.gauge_type.max(0) as usize),
         41 => Some(state.select_target_index),
         42 | 43 => Some(state.select_arrange_index),
         54 | 55 => Some(0),
@@ -4581,6 +4592,12 @@ fn eval_skin_draw_term(term: &str, state: SkinDrawState) -> Option<bool> {
 }
 
 fn eval_skin_draw_operand(operand: &str, state: SkinDrawState) -> Option<f32> {
+    if let Some(ref_id) = parse_skin_float_number_operand(operand) {
+        return skin_state_float_number(ref_id, state);
+    }
+    if let Some(event_id) = parse_skin_event_index_operand(operand) {
+        return Some(skin_state_event_index(event_id, state) as f32);
+    }
     if let Some(ref_id) = parse_skin_number_operand(operand) {
         return skin_state_number(ref_id, state).map(|value| value as f32);
     }
@@ -4604,6 +4621,31 @@ fn eval_skin_draw_operand(operand: &str, state: SkinDrawState) -> Option<f32> {
 fn parse_skin_number_operand(operand: &str) -> Option<i32> {
     let inner = operand.strip_prefix("number(")?.strip_suffix(')')?.trim();
     inner.parse::<i32>().ok()
+}
+
+fn parse_skin_float_number_operand(operand: &str) -> Option<i32> {
+    let inner = operand.strip_prefix("float_number(")?.strip_suffix(')')?.trim();
+    inner.parse::<i32>().ok()
+}
+
+fn parse_skin_event_index_operand(operand: &str) -> Option<i32> {
+    let inner = operand.strip_prefix("event_index(")?.strip_suffix(')')?.trim();
+    inner.parse::<i32>().ok()
+}
+
+fn skin_state_event_index(event_id: i32, state: SkinDrawState) -> i32 {
+    match event_id {
+        SKIN_EVENT_HSFIX => state.hsfix_index,
+        _ => 0,
+    }
+}
+
+/// beatoraja `main_state.float_number(ref)`。BARGRAPH / SLIDER 系の比率 0.0-1.0。
+fn skin_state_float_number(ref_id: i32, state: SkinDrawState) -> Option<f32> {
+    Some(match ref_id {
+        14 => state.lane_cover.clamp(0.0, 1.0),
+        _ => graph_value(ref_id, state),
+    })
 }
 
 fn parse_skin_option_operand(operand: &str) -> Option<i32> {
@@ -4731,6 +4773,12 @@ fn skin_state_additive_float_expr(expr: &str, state: SkinDrawState) -> Option<f3
 }
 
 fn skin_state_float_expr_term(term: &str, state: SkinDrawState) -> Option<f32> {
+    if let Some(ref_id) = parse_skin_float_number_operand(term) {
+        return skin_state_float_number(ref_id, state);
+    }
+    if let Some(event_id) = parse_skin_event_index_operand(term) {
+        return Some(skin_state_event_index(event_id, state) as f32);
+    }
     if let Some(ref_id) = parse_skin_number_operand(term) {
         return skin_state_number(ref_id, state).map(|value| value as f32);
     }
@@ -4799,6 +4847,8 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         }
         // レーンカバー: NUMBER_LANECOVER1=14 (0-100%)
         14 => Some((state.lane_cover.clamp(0.0, 1.0) * 100.0).round() as i64),
+        // リフト: NUMBER_LIFT1=314 (0-1000)
+        314 => Some((state.lift.clamp(0.0, 1.0) * 1000.0).round() as i64),
         // 選曲画面の音量表示: MASTER/BGM/KEY volume (0-100)
         57 => Some((state.select_master_volume.clamp(0.0, 1.0) * 100.0).round() as i64),
         58 => Some((state.select_bgm_volume.clamp(0.0, 1.0) * 100.0).round() as i64),
@@ -11984,6 +12034,22 @@ mod tests {
         assert_eq!(skin_state_number(90, state), Some(200));
         // NUMBER_LANECOVER1 (14) = round(0.25 * 100) = 25
         assert_eq!(skin_state_number(14, state), Some(25));
+        // NUMBER_LIFT1 (314) = round(0.42 * 1000) = 420
+        let lifted = SkinDrawState { lift: 0.42, ..state };
+        assert_eq!(skin_state_number(314, lifted), Some(420));
+        // float_number(113) tracks BARGRAPH_BESTSCORERATE
+        let best_rate = SkinDrawState {
+            total_notes: 100,
+            best_ex_score: Some(150),
+            ..SkinDrawState::default()
+        };
+        assert!((skin_state_float_number(113, best_rate).unwrap() - 0.75).abs() < 0.001);
+        assert!(!eval_skin_draw_condition("float_number(113) == 0", best_rate));
+        assert!(eval_skin_draw_condition("float_number(113) == 0", SkinDrawState {
+            total_notes: 100,
+            best_ex_score: Some(0),
+            ..SkinDrawState::default()
+        }));
         // NUMBER_DURATION (312) = current note display duration in ms.
         assert_eq!(skin_state_number(312, state), Some(183_000));
         // NUMBER_DURATION_GREEN (313) = duration * 3 / 5.

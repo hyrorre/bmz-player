@@ -829,6 +829,7 @@ fn plan_play(
             .clamp(0, i32::MAX as i64) as i32,
         total_duration_ms: snapshot.note_display_duration_ms,
         lane_cover: snapshot.lane_cover,
+        lift: snapshot.lift,
         lane_cover_changing: snapshot.lane_cover_changing,
         lanecover_enabled: snapshot.lanecover_enabled,
         lift_enabled: snapshot.lift_enabled,
