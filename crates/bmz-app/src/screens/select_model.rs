@@ -170,6 +170,10 @@ pub struct SelectCourseRow {
     /// Which of the four course replay slots have a saved attempt.  Used by
     /// the select skin to render slot indicators on course rows.
     pub replay_slots: [bool; 4],
+    /// Names of trophies that have been earned at least once across all
+    /// stored attempts of this course (`course_trophy_achievements`).  A
+    /// strict subset of `trophy_names`.
+    pub achieved_trophy_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -314,6 +318,15 @@ fn build_select_course_row(
         );
         [false; 4]
     });
+    let achieved_trophy_names =
+        library_db.achieved_trophy_names_for_course(stored.id).unwrap_or_else(|error| {
+            tracing::warn!(
+                %error,
+                course_id = stored.id,
+                "failed to load achieved_trophy_names_for_course"
+            );
+            Vec::new()
+        });
 
     SelectItem::Course(SelectCourseRow {
         course_id: stored.id,
@@ -330,6 +343,7 @@ fn build_select_course_row(
         entry_previews,
         best_score,
         replay_slots,
+        achieved_trophy_names,
     })
 }
 
