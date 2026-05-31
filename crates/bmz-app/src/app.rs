@@ -53,8 +53,8 @@ use crate::screens::play_snapshot::{
 };
 use crate::screens::play_start::{
     PlayStartOptions, PreloadedWinitPlaySession, StartedWinitPlaySession, apply_course_constraints,
-    open_prepared_winit_play_session, prepare_play_session_for_chart_with_winit_input,
-    prepare_winit_play_session_from_preloaded,
+    apply_queued_replay, open_prepared_winit_play_session,
+    prepare_play_session_for_chart_with_winit_input, prepare_winit_play_session_from_preloaded,
 };
 use crate::screens::result_model::ResultSummary;
 use crate::screens::select_model::{
@@ -1530,6 +1530,107 @@ impl WinitApp {
             definition,
             current_index: 0,
             entry_results: Vec::new(),
+            queued_replays: Vec::new(),
+        });
+        self.start_chart_with_options(first_chart_id, options);
+    }
+
+    /// Start a course in replay mode, replaying the saved per-chart inputs of
+    /// the given `course_score_id`.  Each chart of the course is launched in
+    /// sequence with its saved ReplayPlayer attached, so the user can watch
+    /// the entire course attempt back to back.
+    ///
+    /// If `course_score_id` refers to a partial course attempt (e.g. failed
+    /// at chart 2 of 4), only the played charts replay; the queue ends there
+    /// and the course session naturally finishes the same way the original
+    /// attempt did.
+    ///
+    /// Errors during replay load (missing file, chart re-imported with
+    /// different bytes) abort with a logged warning rather than crashing.
+    pub fn start_course_replay(&mut self, course_id: i64, course_score_id: i64) {
+        let stored = match self.boot.library_db.list_courses() {
+            Ok(courses) => courses.into_iter().find(|c| c.id == course_id),
+            Err(error) => {
+                tracing::error!(
+                    %error,
+                    course_id,
+                    "failed to load courses for start_course_replay"
+                );
+                return;
+            }
+        };
+        let Some(stored) = stored else {
+            tracing::warn!(course_id, "course not found");
+            return;
+        };
+
+        let entries = match self.boot.library_db.list_course_replays(course_score_id) {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::error!(
+                    %error,
+                    course_id,
+                    course_score_id,
+                    "failed to list course_replays rows"
+                );
+                return;
+            }
+        };
+        if entries.is_empty() {
+            tracing::warn!(course_id, course_score_id, "no replays saved for this attempt");
+            return;
+        }
+
+        let entry_tuples: Vec<(i64, i64, String)> =
+            entries.iter().map(|r| (r.position, r.chart_id, r.replay_path.clone())).collect();
+        let replay_root = self.boot.profile_paths.root_dir.clone();
+        let lookup = |chart_id: i64| -> anyhow::Result<Option<[u8; 32]>> {
+            self.boot.library_db.chart_sha256_by_chart_id(chart_id)
+        };
+        let queued = match crate::storage::replay::load_course_replays(
+            &entry_tuples,
+            &replay_root,
+            lookup,
+        ) {
+            Ok(q) => q,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    course_id,
+                    course_score_id,
+                    "failed to load queued course replays"
+                );
+                return;
+            }
+        };
+
+        let definition = stored.definition;
+        let first_chart_id = definition.entries.iter().find_map(|e| e.chart_id);
+        let Some(first_chart_id) = first_chart_id else {
+            tracing::warn!(course_id, "no resolved chart in course");
+            return;
+        };
+        tracing::info!(
+            course_id,
+            course_score_id,
+            title = %definition.title,
+            replays = queued.len(),
+            "starting course replay"
+        );
+        let mut options = self.play_start_options();
+        apply_course_constraints(&mut options, &definition.constraints);
+        // The first chart starts with its queued replay if available.
+        if let Some(first) = queued.first()
+            && first.chart_id == first_chart_id
+        {
+            apply_queued_replay(&mut options, first);
+        }
+        self.active_course = Some(ActiveCourseSession {
+            course_id,
+            definition,
+            current_index: 0,
+            entry_results: Vec::new(),
+            queued_replays: queued,
         });
         self.start_chart_with_options(first_chart_id, options);
     }
@@ -1556,6 +1657,15 @@ impl WinitApp {
             let mut options = self.play_start_options();
             apply_course_constraints(&mut options, &constraints);
             options.initial_gauge_value = Some(carried_gauge);
+            // If the course is being replayed, attach the next queued replay
+            // (when it exists and matches the next chart's id).  Mismatches
+            // are silently skipped so the chart still plays normally.
+            if let Some(course) = &self.active_course
+                && let Some(replay) = course.queued_replays.get(next_index)
+                && replay.chart_id == next_chart_id
+            {
+                apply_queued_replay(&mut options, replay);
+            }
             self.start_chart_with_options(next_chart_id, options);
             return;
         }

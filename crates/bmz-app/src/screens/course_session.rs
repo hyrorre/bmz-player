@@ -2,12 +2,18 @@ use bmz_core::course::{CourseDefinition, CourseEntry, CourseKind};
 
 use crate::screens::play_finish::FinishedPlaySession;
 use crate::screens::result_model::{ResultJudgeCounts, ResultSummary};
+use crate::storage::replay::QueuedCourseReplay;
 
 pub struct ActiveCourseSession {
     pub course_id: i64,
     pub definition: CourseDefinition,
     pub current_index: usize,
     pub entry_results: Vec<CourseEntryResult>,
+    /// Pre-loaded replays, one per course entry, when the course is being
+    /// played back from a saved attempt.  Empty for a fresh course play.
+    /// Indexed by entry position; absence at the current_index means the
+    /// chart is played normally (e.g. saved replay file is missing).
+    pub queued_replays: Vec<QueuedCourseReplay>,
 }
 
 pub struct CourseEntryResult {
@@ -221,6 +227,7 @@ mod tests {
             },
             current_index: 0,
             entry_results,
+            queued_replays: Vec::new(),
         }
     }
 
@@ -319,6 +326,7 @@ mod tests {
             },
             current_index: 0,
             entry_results,
+            queued_replays: Vec::new(),
         }
     }
 
