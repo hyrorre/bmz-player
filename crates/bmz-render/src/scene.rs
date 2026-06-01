@@ -43,6 +43,10 @@ pub struct SelectSnapshot {
     pub stage_background: bool,
     /// `#BANNER` テクスチャがロード済みなら true。
     pub banner_image: bool,
+    /// 楽曲検索バー (beatoraja `STRING_SEARCHWORD`, ref=30) に表示する文字列。
+    /// 検索モード中は入力中クエリ (+ カーソル記号)、非モード中は空 or 直前の
+    /// メッセージ ("no song found" 等)。
+    pub search_word: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]

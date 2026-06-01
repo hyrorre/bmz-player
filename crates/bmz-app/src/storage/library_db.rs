@@ -461,6 +461,26 @@ impl LibraryDatabase {
         rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
     }
 
+    /// Returns charts whose title / subtitle / artist / subartist / genre contain
+    /// `query` as a case-insensitive substring. Equivalent to beatoraja
+    /// `SQLiteSongDatabaseAccessor.getSongDatasByText`.
+    pub fn search_charts(&self, query: &str) -> Result<Vec<ChartListItem>> {
+        let pattern = format!("%{}%", escape_like(query));
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {CHART_LIST_ITEM_COLUMNS}
+            FROM charts
+            WHERE title LIKE ?1 ESCAPE '\\'
+               OR subtitle LIKE ?1 ESCAPE '\\'
+               OR artist LIKE ?1 ESCAPE '\\'
+               OR subartist LIKE ?1 ESCAPE '\\'
+               OR genre LIKE ?1 ESCAPE '\\'
+            GROUP BY sha256
+            ORDER BY title COLLATE NOCASE, artist COLLATE NOCASE, play_level COLLATE NOCASE"
+        ))?;
+        let rows = stmt.query_map(params![pattern], chart_list_item_from_row)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     pub fn primary_chart_file_path(&self, chart_id: i64) -> Result<Option<String>> {
         self.conn
             .query_row(
@@ -1092,6 +1112,19 @@ fn to_folder_key(path: &str) -> String {
     path.replace('\\', "/")
 }
 
+/// Escapes SQL LIKE wildcards so user input is matched literally.
+/// Pair with `LIKE ? ESCAPE '\\'`.
+fn escape_like(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for ch in input.chars() {
+        if matches!(ch, '\\' | '%' | '_') {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out
+}
+
 fn folder_path(path: &Path) -> String {
     to_folder_key(&path.parent().map(path_to_string).unwrap_or_default())
 }
@@ -1357,6 +1390,81 @@ mod tests {
         assert_eq!(charts[1].title, "beta");
         assert_eq!(charts[0].mode, "7K");
         assert_eq!(charts[0].length_ms, 10_000);
+    }
+
+    #[test]
+    fn search_charts_matches_substring_across_metadata_fields_case_insensitively() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase::from_connection(conn);
+
+        let mut by_title = chart("Blue Sky");
+        by_title.metadata.artist = "Composer A".to_string();
+        by_title.metadata.genre = "Trance".to_string();
+        let mut by_artist = chart("untitled");
+        by_artist.metadata.artist = "DJ Blueprint".to_string();
+        let mut by_genre = chart("other");
+        by_genre.metadata.artist = "Nobody".to_string();
+        by_genre.metadata.genre = "Drum & Bass (BLUE mix)".to_string();
+        let mut unrelated = chart("Sunset");
+        unrelated.metadata.artist = "Solo".to_string();
+        unrelated.metadata.genre = "Ambient".to_string();
+
+        for (path, c) in [
+            ("/songs/a.bms", &by_title),
+            ("/songs/b.bms", &by_artist),
+            ("/songs/c.bms", &by_genre),
+            ("/songs/d.bms", &unrelated),
+        ] {
+            db.upsert_chart_import(&ChartImportRecord {
+                root_id: None,
+                file_path: Path::new(path),
+                file_size: 1,
+                modified_at: 1,
+                scanned_at: 1,
+                chart: c,
+            })
+            .unwrap();
+        }
+
+        let hits = db.search_charts("blue").unwrap();
+        let titles: Vec<&str> = hits.iter().map(|c| c.title.as_str()).collect();
+        assert_eq!(titles.len(), 3, "expected three matches, got {titles:?}");
+        assert!(titles.contains(&"Blue Sky"));
+        assert!(titles.contains(&"untitled"));
+        assert!(titles.contains(&"other"));
+
+        assert!(db.search_charts("nonexistent_query_xyz").unwrap().is_empty());
+    }
+
+    #[test]
+    fn search_charts_treats_like_wildcards_as_literal() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase::from_connection(conn);
+
+        let mut with_percent = chart("100% pure");
+        with_percent.metadata.artist = "p".to_string();
+        let mut without = chart("zero");
+        without.metadata.artist = "z".to_string();
+
+        for (path, c) in [("/songs/a.bms", &with_percent), ("/songs/b.bms", &without)] {
+            db.upsert_chart_import(&ChartImportRecord {
+                root_id: None,
+                file_path: Path::new(path),
+                file_size: 1,
+                modified_at: 1,
+                scanned_at: 1,
+                chart: c,
+            })
+            .unwrap();
+        }
+
+        let hits = db.search_charts("%").unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].title, "100% pure");
     }
 
     #[test]

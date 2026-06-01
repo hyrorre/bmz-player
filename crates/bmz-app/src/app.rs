@@ -59,10 +59,11 @@ use crate::screens::play_start::{
 };
 use crate::screens::result_model::{ResultFastSlowJudgeCounts, ResultSummary};
 use crate::screens::select_model::{
-    COURSE_ROOT_PATH, SelectItem, TABLE_ROOT_PATH, TablePath, course_root_item,
-    load_select_items_for_courses, load_select_items_in_folder, load_select_items_in_table_level,
-    parse_table_path, root_folder_items, song_scan_path_from_context, table_folder_items,
-    table_level_folder_items, table_source_url_from_context,
+    COURSE_ROOT_PATH, MAX_SEARCH_HISTORY, SEARCH_PATH_PREFIX, SelectItem, TABLE_ROOT_PATH,
+    TablePath, course_root_item, load_select_items_for_courses, load_select_items_for_search,
+    load_select_items_in_folder, load_select_items_in_table_level, parse_search_query,
+    parse_table_path, root_folder_items, search_history_folder_items, song_scan_path_from_context,
+    table_folder_items, table_level_folder_items, table_source_url_from_context,
 };
 use crate::select_options::{ArrangeOption, AssistOption, TargetOption};
 use crate::skin_loader::{
@@ -275,6 +276,15 @@ struct WinitApp {
     /// リザルト画面終了アニメーションの進行状態。
     /// Some のあいだは終了フェードアウト中で、入力は受け付けない。
     result_exit: Option<ResultExit>,
+    /// 選曲画面で楽曲検索の入力モード中か。
+    search_mode: bool,
+    /// 現在入力中の検索クエリ。検索モード中はそのまま skin の search_word に渡る。
+    search_query: String,
+    /// 直近の検索クエリ履歴 (古い順)。`bmz-search:<q>` 仮想フォルダとしてルートに並ぶ。
+    search_history: std::collections::VecDeque<String>,
+    /// 直近の検索で「0 件ヒット」になった等のフィードバック文字列。
+    /// 検索モード解除時にクリアされる。
+    search_message: Option<String>,
 }
 
 type PlaySkinSignature = (KeyMode, String, BTreeMap<String, String>, BTreeMap<String, String>);
@@ -513,7 +523,7 @@ impl WinitApp {
         }
 
         let folder_stack = initial_folder_stack(&boot.app_config);
-        let select_items = load_items_for_stack(&boot, &folder_stack);
+        let select_items = load_items_for_stack(&boot, &folder_stack, &[]);
         let boot_chart_id = resolve_boot_chart_id(&boot.library_db, &options);
         log_startup_options(&options);
 
@@ -695,6 +705,10 @@ impl WinitApp {
             last_frame_at: None,
             wgpu_fps: 0.0,
             result_exit: None,
+            search_mode: false,
+            search_query: String::new(),
+            search_history: std::collections::VecDeque::new(),
+            search_message: None,
         };
         if let Some(chart_id) = boot_chart_id {
             tracing::info!(chart_id, "booting directly into chart");
@@ -1061,6 +1075,31 @@ impl WinitApp {
             overlay: OverlaySnapshot::default(),
             stage_background: self.select_stage_loaded,
             banner_image: self.select_banner_loaded,
+            search_word: self.display_search_word(),
+        }
+    }
+
+    /// Builds the string for beatoraja `STRING_SEARCHWORD` (ref=30). Shows the
+    /// in-progress query with a blinking caret while in search mode, otherwise
+    /// any standing feedback message ("no song found" …) or empty.
+    fn display_search_word(&self) -> String {
+        let blink_on = (self.select_time().0 / 500_000) % 2 == 0;
+        let caret = if blink_on { "_" } else { " " };
+        if self.search_mode {
+            // クエリ入力中はクエリ+カーソル。空 (Enter 直後にクリアされる) で
+            // メッセージがあるならメッセージ ("no song found" 等) を優先表示。
+            if self.search_query.is_empty() {
+                if let Some(message) = &self.search_message {
+                    return message.clone();
+                }
+            }
+            format!("{}{}", self.search_query, caret)
+        } else if let Some(message) = &self.search_message {
+            message.clone()
+        } else {
+            // beatoraja の TextField placeholder ("search song") 相当。
+            // 起動直後 / 検索モード OFF 中は使い方ヒントを常時表示する。
+            "type / to search song".to_string()
         }
     }
 
@@ -1404,6 +1443,12 @@ impl WinitApp {
             return;
         }
 
+        // 検索モード中はテキスト入力を最優先で処理し、通常ナビゲーションは抑制する。
+        // モード入りトリガ (`/`) も同じ select 画面チェックの直後に処理する。
+        if matches!(self.view_state(), AppViewState::Select) && self.handle_search_key(event) {
+            return;
+        }
+
         // Select 画面で ESC 長押し → アプリ終了 (実際の exit は redraw 時にチェック)。
         if event.physical_key == PhysicalKey::Code(KeyCode::Escape) {
             match event.state {
@@ -1701,6 +1746,120 @@ impl WinitApp {
                 tracing::warn!("no item is available to select");
             }
         }
+    }
+
+    /// Returns true when the event was consumed by the search input layer
+    /// (either because the user is in search mode or pressed the search-toggle
+    /// hotkey), which suppresses normal m-select navigation for this event.
+    fn handle_search_key(&mut self, event: &winit::event::KeyEvent) -> bool {
+        // 起動トリガ: 検索モードでない時に `/` 押下 → モード ON、クエリリセット。
+        if !self.search_mode {
+            if event.physical_key == PhysicalKey::Code(KeyCode::Slash)
+                && event.state == ElementState::Pressed
+                && !event.repeat
+            {
+                self.search_mode = true;
+                self.search_query.clear();
+                self.search_message = None;
+                tracing::info!("entered song search mode");
+                return true;
+            }
+            return false;
+        }
+
+        // 以下、検索モード中の処理。Release は無視する (Press / Repeat のみ反応)。
+        if event.state != ElementState::Pressed {
+            return true;
+        }
+
+        match event.physical_key {
+            PhysicalKey::Code(KeyCode::Escape) => {
+                self.search_mode = false;
+                self.search_query.clear();
+                self.search_message = None;
+                tracing::info!("exited song search mode");
+            }
+            PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => {
+                if event.repeat {
+                    return true;
+                }
+                self.execute_song_search();
+            }
+            PhysicalKey::Code(KeyCode::Backspace) => {
+                self.search_query.pop();
+            }
+            _ => {
+                // テキスト入力: winit が解決した text (キーレイアウト適用後) を採用。
+                // 制御文字 (\r, \t, \x08 等) は除外する。IME 入力は WindowEvent::Ime
+                // 経由で別途必要だが v1 では未対応。
+                if let Some(text) = event.text.as_ref() {
+                    // メッセージ表示中 ("no song found" 等) に `/` (検索モード
+                    // 起動キー) を押した場合は、メッセージのみクリアして文字
+                    // としては入力しない。`/` 連打でモード再起動感を出すため。
+                    if self.search_message.is_some()
+                        && self.search_query.is_empty()
+                        && text.as_str() == "/"
+                    {
+                        self.search_message = None;
+                        return true;
+                    }
+                    for ch in text.chars() {
+                        if !ch.is_control() {
+                            self.search_query.push(ch);
+                            self.search_message = None;
+                        }
+                    }
+                }
+            }
+        }
+        true
+    }
+
+    /// Runs the current `search_query` against the library DB. On hit: appends
+    /// to history (dedupe + bounded), pushes a virtual folder onto the stack,
+    /// and exits search mode. On miss: leaves the query intact and updates the
+    /// feedback message.
+    fn execute_song_search(&mut self) {
+        let query = self.search_query.trim().to_string();
+        if query.is_empty() {
+            return;
+        }
+        let hit_count = match self.boot.library_db.search_charts(&query) {
+            Ok(charts) => charts.len(),
+            Err(error) => {
+                tracing::error!(%error, %query, "song search failed");
+                0
+            }
+        };
+        if hit_count == 0 {
+            // クエリをクリアして次入力を待つ。display_search_word はクエリ空 +
+            // メッセージ有りの組み合わせで "no song found" を流す。
+            self.search_query.clear();
+            self.search_message = Some("no song found".to_string());
+            tracing::info!(%query, "song search returned no results");
+            return;
+        }
+
+        // dedupe + FIFO eviction
+        self.search_history.retain(|existing| existing != &query);
+        while self.search_history.len() >= MAX_SEARCH_HISTORY {
+            self.search_history.pop_front();
+        }
+        self.search_history.push_back(query.clone());
+
+        self.search_mode = false;
+        self.search_message = Some(format!("{hit_count} song(s) found"));
+        self.search_query.clear();
+
+        // 検索結果フォルダへ入る。`enter_or_play_selected` と同じ流儀でカーソル
+        // 位置を退避してから push する。
+        self.selected_index_stack.push(self.selected_index);
+        self.folder_stack.push(format!("{SEARCH_PATH_PREFIX}{query}"));
+        self.reload_select_items();
+        self.selected_index = 0;
+        self.select_bar_started_at = Instant::now();
+        self.play_system_sound(crate::system_sound::SoundType::FolderOpen);
+        tracing::info!(%query, hit_count, "entered search result folder");
     }
 
     fn exit_folder(&mut self) {
@@ -2872,7 +3031,8 @@ impl WinitApp {
     }
 
     fn reload_select_items(&mut self) {
-        let items = load_items_for_stack(&self.boot, &self.folder_stack);
+        let history: Vec<String> = self.search_history.iter().cloned().collect();
+        let items = load_items_for_stack(&self.boot, &self.folder_stack, &history);
         self.select_items = items;
         if self.selected_index >= self.select_items.len() {
             self.selected_index = self.select_items.len().saturating_sub(1);
@@ -4399,6 +4559,7 @@ fn enabled_root_paths(app_config: &crate::config::app_config::AppConfig) -> Vec<
 fn load_items_for_stack(
     boot: &crate::bootstrap::BootstrappedApp,
     stack: &[String],
+    search_history: &[String],
 ) -> Vec<SelectItem> {
     match stack.last() {
         Some(path) if path == COURSE_ROOT_PATH => {
@@ -4410,6 +4571,18 @@ fn load_items_for_stack(
                 }
             }
         }
+        Some(path) if path.starts_with(SEARCH_PATH_PREFIX) => match parse_search_query(path) {
+            Some(query) => {
+                match load_select_items_for_search(&boot.library_db, &boot.score_db, query) {
+                    Ok(items) => items,
+                    Err(error) => {
+                        tracing::error!(%error, query, "failed to load search results");
+                        Vec::new()
+                    }
+                }
+            }
+            None => Vec::new(),
+        },
         Some(path) if path.starts_with(TABLE_ROOT_PATH) => match parse_table_path(path) {
             Some(TablePath::Root) => match table_folder_items(&boot.library_db) {
                 Ok(items) => items,
@@ -4471,6 +4644,9 @@ fn load_items_for_stack(
                 Err(error) => {
                     tracing::error!(%error, "failed to load difficulty table folders");
                 }
+            }
+            if !search_history.is_empty() {
+                items.extend(search_history_folder_items(search_history));
             }
             items
         }

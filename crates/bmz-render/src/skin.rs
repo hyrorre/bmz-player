@@ -1794,6 +1794,9 @@ pub struct SkinTextState<'a> {
     pub table_text_fallback: &'a str,
     pub course_stage: Option<CourseStageMarker>,
     pub course_titles: [&'a str; 10],
+    /// beatoraja `SkinProperty.STRING_SEARCHWORD` (`ref=30`). Current song search
+    /// query as typed by the user.
+    pub search_word: &'a str,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -2765,6 +2768,7 @@ impl SkinDocument {
             course_titles: selected_row
                 .map(|row| string_array_refs(&row.course_titles))
                 .unwrap_or_default(),
+            search_word: &snapshot.search_word,
             ..SkinTextState::default()
         };
 
@@ -6669,6 +6673,7 @@ fn skin_state_text(text: &SkinTextDef, state: SkinTextState<'_>) -> String {
         15 => state.subartist.to_string(),
         16 => full_label(state.artist, state.subartist),
         17 => state.table_level.to_string(),
+        30 => state.search_word.to_string(),
         150..=159 => state.course_titles[(text.ref_id - 150) as usize].to_string(),
         1001 => state.table_text_primary.to_string(),
         1002 => state.table_text_secondary.to_string(),

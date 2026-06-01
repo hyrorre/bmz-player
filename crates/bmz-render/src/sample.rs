@@ -60,6 +60,7 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
         overlay: OverlaySnapshot::default(),
         stage_background: false,
         banner_image: false,
+        search_word: String::new(),
     })
 }
 

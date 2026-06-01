@@ -17,6 +17,33 @@ pub const TABLE_ROOT_PATH: &str = "bmz-table:";
 /// Virtual path for the course list root.
 pub const COURSE_ROOT_PATH: &str = "bmz-course:";
 
+/// Virtual path prefix for song search results.
+/// `"bmz-search:<query>"` resolves to the list of charts matching `<query>`.
+pub const SEARCH_PATH_PREFIX: &str = "bmz-search:";
+
+/// Maximum entries kept in the in-memory search history (FIFO eviction).
+pub const MAX_SEARCH_HISTORY: usize = 8;
+
+/// Returns the embedded query for a `"bmz-search:<query>"` virtual path.
+/// `None` when the path is not a search path or the query is empty.
+pub fn parse_search_query(path: &str) -> Option<&str> {
+    let rest = path.strip_prefix(SEARCH_PATH_PREFIX)?;
+    if rest.is_empty() { None } else { Some(rest) }
+}
+
+/// Returns one folder item per entry in the search history, newest last
+/// (matching the order in which `history` is maintained by the caller).
+pub fn search_history_folder_items(history: &[String]) -> Vec<SelectItem> {
+    history
+        .iter()
+        .map(|query| SelectItem::Folder {
+            path: format!("{SEARCH_PATH_PREFIX}{query}"),
+            name: format!("Search : '{query}'"),
+            kind: SelectRowKind::TableFolder,
+        })
+        .collect()
+}
+
 /// Separator between a table's `source_url` and a level inside a virtual
 /// table path.  A newline never appears in a difficulty-table source URL,
 /// so it is safe to use as a delimiter.
@@ -651,6 +678,36 @@ pub fn load_select_items_in_folder(
     fetch_paths.extend(leaf_folder_paths.iter().map(String::as_str));
     let all_charts = library_db.list_charts_in_folders(&fetch_paths)?;
 
+    let chart_items = chart_items_with_enrichment(library_db, score_db, all_charts)?;
+
+    let mut items = Vec::with_capacity(non_leaf_folders.len() + chart_items.len());
+    for (path, name) in non_leaf_folders {
+        items.push(SelectItem::Folder { path, name, kind: SelectRowKind::Folder });
+    }
+    items.extend(chart_items);
+
+    Ok(items)
+}
+
+/// Loads chart `SelectItem`s for a search query against title / subtitle / artist
+/// / subartist / genre. Enrichment (best score, replay slots, difficulty table
+/// level) mirrors `load_select_items_in_folder`.
+pub fn load_select_items_for_search(
+    library_db: &LibraryDatabase,
+    score_db: &ScoreDatabase,
+    query: &str,
+) -> Result<Vec<SelectItem>> {
+    let charts = library_db.search_charts(query)?;
+    chart_items_with_enrichment(library_db, score_db, charts)
+}
+
+/// Wraps a `ChartListItem` set into `SelectItem::Chart` entries with best-score,
+/// replay-slot, and difficulty-table-level metadata resolved.
+fn chart_items_with_enrichment(
+    library_db: &LibraryDatabase,
+    score_db: &ScoreDatabase,
+    all_charts: Vec<ChartListItem>,
+) -> Result<Vec<SelectItem>> {
     let hashes: Vec<[u8; 32]> = all_charts.iter().map(|c| c.sha256).collect();
     let mut score_map: HashMap<[u8; 32], BestScoreSummary> = score_db
         .best_scores_for_charts(&hashes)?
@@ -681,11 +738,7 @@ pub fn load_select_items_in_folder(
         }
     }
 
-    let mut items = Vec::with_capacity(non_leaf_folders.len() + all_charts.len());
-
-    for (path, name) in non_leaf_folders {
-        items.push(SelectItem::Folder { path, name, kind: SelectRowKind::Folder });
-    }
+    let mut items = Vec::with_capacity(all_charts.len());
     for chart in all_charts {
         let best_score = score_map.remove(&chart.sha256);
         let replay_slots = replay_slot_map.remove(&chart.sha256).unwrap_or([false; 4]);
@@ -1526,5 +1579,54 @@ mod tests {
             autoplay: false,
             replay_path: String::new(),
         }
+    }
+
+    #[test]
+    fn parse_search_query_round_trips() {
+        assert_eq!(parse_search_query("bmz-search:blue"), Some("blue"));
+        assert_eq!(parse_search_query("bmz-search:"), None);
+        assert_eq!(parse_search_query("/songs/blue"), None);
+        assert_eq!(parse_search_query("bmz-table:foo"), None);
+    }
+
+    #[test]
+    fn search_history_folder_items_formats_each_entry() {
+        let history = vec!["alpha".to_string(), "beta".to_string()];
+        let items = search_history_folder_items(&history);
+        assert_eq!(items.len(), 2);
+        match &items[0] {
+            SelectItem::Folder { path, name, kind } => {
+                assert_eq!(path, "bmz-search:alpha");
+                assert_eq!(name, "Search : 'alpha'");
+                assert_eq!(*kind, SelectRowKind::TableFolder);
+            }
+            other => panic!("expected folder, got {other:?}"),
+        }
+        match &items[1] {
+            SelectItem::Folder { name, .. } => assert_eq!(name, "Search : 'beta'"),
+            other => panic!("expected folder, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn load_select_items_for_search_returns_chart_rows_with_best_score() {
+        let (mut library_db, mut score_db) = open_in_memory_dbs();
+        let mut sky = chart("Blue Sky");
+        sky.metadata.artist = "Composer A".to_string();
+        let mut unrelated = chart("Sunset");
+        unrelated.metadata.artist = "Solo".to_string();
+
+        library_db.upsert_chart_import(&record_for_chart("/songs/a.bms", &sky)).unwrap();
+        library_db.upsert_chart_import(&record_for_chart("/songs/b.bms", &unrelated)).unwrap();
+        score_db.insert_score(&score_for_chart(sky.identity.file_sha256)).unwrap();
+
+        let items = load_select_items_for_search(&library_db, &score_db, "blue").unwrap();
+        assert_eq!(items.len(), 1);
+        let row = match &items[0] {
+            SelectItem::Chart(r) => r,
+            other => panic!("expected chart row, got {other:?}"),
+        };
+        assert_eq!(row.display_title(), "Blue Sky");
+        assert!(row.best_score.is_some());
     }
 }
