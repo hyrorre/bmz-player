@@ -146,6 +146,7 @@ pub struct SelectCourseRow {
     pub course_id: i64,
     pub title: String,
     pub kind: CourseKind,
+    pub constraints: bmz_core::course::CourseConstraints,
     /// Total number of entries in the course.
     pub entry_count: usize,
     /// Number of entries whose `chart_id` is resolved in the local library.
@@ -340,6 +341,7 @@ fn build_select_course_row(
         course_id: stored.id,
         title: stored.definition.title,
         kind: stored.definition.kind,
+        constraints: stored.definition.constraints,
         entry_count,
         resolved_count,
         total_notes,

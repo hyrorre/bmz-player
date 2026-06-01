@@ -13,7 +13,7 @@ use crate::plan::{
     Color, DrawCommand, Point, Rect, TextAlign, TextLayer, TextOutline, TextOverflow, TextShadow,
     TextStyle, TextureId, UvRect,
 };
-use crate::scene::{SelectRowKind, SelectRowSnapshot, SelectSnapshot};
+use crate::scene::{CourseConstraintFlags, SelectRowKind, SelectRowSnapshot, SelectSnapshot};
 use crate::skin_offset::{SKIN_OFFSET_BAR_LINE, SkinOffsetValues};
 use crate::snapshot::{CourseStageMarker, DisplayJudgeCounts};
 
@@ -1316,6 +1316,8 @@ pub struct SkinDrawState {
     pub select_clear_index: i64,
     /// 選択中バー種別。OPTION_FOLDERBAR / SONGBAR / GRADEBAR の判定に使う。
     pub select_row_kind: SelectRowKind,
+    /// 選択中 GradeBar の制約。OPTION_GRADEBAR_* (1002..1017) の判定に使う。
+    pub select_course_constraints: CourseConstraintFlags,
     /// 選択中バーがフォルダかどうか。
     pub select_is_folder: bool,
     /// 選択中曲が library.db に登録済みかどうか (OPTION_PLAYABLEBAR=5)。
@@ -1460,6 +1462,7 @@ impl Default for SkinDrawState {
             select_replay_index: None,
             select_clear_index: 0,
             select_row_kind: SelectRowKind::Song,
+            select_course_constraints: CourseConstraintFlags::default(),
             select_is_folder: false,
             select_in_library: true,
             select_total_notes: 0,
@@ -2464,6 +2467,9 @@ impl SkinDocument {
             select_replay_index: selected_row.and_then(select_row_replay_index),
             select_clear_index: selected_row.map(select_row_clear_index).unwrap_or(0) as i64,
             select_row_kind: selected_row.map(|row| row.kind).unwrap_or(SelectRowKind::Song),
+            select_course_constraints: selected_row
+                .map(|row| row.course_constraints)
+                .unwrap_or_default(),
             select_is_folder: selected_row.is_some_and(|row| row.is_folder),
             select_in_library: selected_row.is_none_or(|row| row.in_library),
             select_total_notes: selected_row.map(|row| row.total_notes).unwrap_or(0),
@@ -2559,6 +2565,7 @@ impl SkinDocument {
                 select_replay_index: select_row_replay_index(row),
                 select_clear_index: select_row_clear_index(row) as i64,
                 select_row_kind: row.kind,
+                select_course_constraints: row.course_constraints,
                 select_is_folder: row.is_folder,
                 select_in_library: row.in_library,
                 select_total_notes: row.total_notes,
@@ -4488,6 +4495,7 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool 
         1 => matches!(state.select_row_kind, SelectRowKind::Folder | SelectRowKind::TableFolder),
         2 => state.select_row_kind == SelectRowKind::Song,
         3 => state.select_row_kind == SelectRowKind::Course,
+        1002..=1017 => gradebar_constraint_op_matches(op, state),
         5 => !state.select_is_folder && state.select_in_library,
         21 => state.select_option_panel == 1,
         22 => state.select_option_panel == 2,
@@ -4533,6 +4541,30 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool 
         // false here instead of falling through to skin property defaults.
         291..=293 => false,
         value => test_json_option_number(value, enabled_options),
+    }
+}
+
+fn gradebar_constraint_op_matches(op: i32, state: SkinDrawState) -> bool {
+    if state.select_row_kind != SelectRowKind::Course {
+        return false;
+    }
+    let constraints = state.select_course_constraints;
+    match op {
+        1002 => constraints.class,
+        1003 => constraints.mirror,
+        1004 => constraints.random,
+        1005 => constraints.no_speed,
+        1006 => constraints.no_good,
+        1007 => constraints.no_great,
+        1010 => constraints.gauge_lr2,
+        1011 => constraints.gauge_5k,
+        1012 => constraints.gauge_7k,
+        1013 => constraints.gauge_9k,
+        1014 => constraints.gauge_24k,
+        1015 => constraints.ln,
+        1016 => constraints.cn,
+        1017 => constraints.hcn,
+        _ => false,
     }
 }
 
@@ -7880,6 +7912,37 @@ mod tests {
         assert!(!test_skin_op(2, &[], folder));
         assert!(test_skin_op(3, &[], course));
         assert!(!test_skin_op(2, &[], course));
+    }
+
+    #[test]
+    fn gradebar_constraint_ops_match_course_constraint_flags() {
+        let course = SkinDrawState {
+            select_row_kind: SelectRowKind::Course,
+            select_course_constraints: CourseConstraintFlags {
+                mirror: true,
+                no_speed: true,
+                no_great: true,
+                gauge_7k: true,
+                hcn: true,
+                ..CourseConstraintFlags::default()
+            },
+            ..SkinDrawState::default()
+        };
+        let song = SkinDrawState {
+            select_row_kind: SelectRowKind::Song,
+            select_course_constraints: course.select_course_constraints,
+            ..SkinDrawState::default()
+        };
+
+        assert!(test_skin_op(1003, &[], course));
+        assert!(test_skin_op(1005, &[], course));
+        assert!(test_skin_op(1007, &[], course));
+        assert!(test_skin_op(1012, &[], course));
+        assert!(test_skin_op(1017, &[], course));
+        assert!(!test_skin_op(1002, &[], course));
+        assert!(!test_skin_op(1016, &[], course));
+        assert!(!test_skin_op(1003, &[], song));
+        assert!(test_skin_op(-1003, &[], song));
     }
 
     #[test]

@@ -4505,6 +4505,7 @@ fn select_snapshot_rows(
                     in_library: true,
                     achieved_trophy_names: Vec::new(),
                     course_titles: Default::default(),
+                    course_constraints: Default::default(),
                 },
                 SelectItem::Chart(row) => {
                     let play_count = u32::from(row.best_score.is_some());
@@ -4572,6 +4573,7 @@ fn select_snapshot_rows(
                         // Song rows have no course trophies.
                         achieved_trophy_names: Vec::new(),
                         course_titles: Default::default(),
+                        course_constraints: Default::default(),
                     }
                 }
                 SelectItem::Course(row) => SelectRowSnapshot {
@@ -4617,6 +4619,7 @@ fn select_snapshot_rows(
                             .iter()
                             .map(|entry| (entry.title.as_str(), entry.resolved)),
                     ),
+                    course_constraints: course_constraint_flags(&row.constraints),
                 },
             }
         })
@@ -4711,6 +4714,32 @@ fn course_titles_from_entries<'a>(
         };
     }
     titles
+}
+
+fn course_constraint_flags(
+    constraints: &bmz_core::course::CourseConstraints,
+) -> bmz_render::scene::CourseConstraintFlags {
+    use bmz_core::course::{
+        CourseClassConstraint, CourseGaugeConstraint, CourseJudgeConstraint, CourseLnConstraint,
+        CourseSpeedConstraint,
+    };
+
+    bmz_render::scene::CourseConstraintFlags {
+        class: constraints.class == CourseClassConstraint::Grade,
+        mirror: constraints.class == CourseClassConstraint::GradeMirrorAllowed,
+        random: constraints.class == CourseClassConstraint::GradeRandomAllowed,
+        no_speed: constraints.speed == CourseSpeedConstraint::NoSpeed,
+        no_good: constraints.judge == CourseJudgeConstraint::NoGood,
+        no_great: constraints.judge == CourseJudgeConstraint::NoGreat,
+        gauge_lr2: constraints.gauge == CourseGaugeConstraint::Lr2,
+        gauge_5k: constraints.gauge == CourseGaugeConstraint::Keys5,
+        gauge_7k: constraints.gauge == CourseGaugeConstraint::Keys7,
+        gauge_9k: constraints.gauge == CourseGaugeConstraint::Keys9,
+        gauge_24k: constraints.gauge == CourseGaugeConstraint::Keys24,
+        ln: constraints.ln == CourseLnConstraint::Ln,
+        cn: constraints.ln == CourseLnConstraint::Cn,
+        hcn: constraints.ln == CourseLnConstraint::Hcn,
+    }
 }
 
 fn moved_select_index(current_index: usize, row_count: usize, select_move: SelectMove) -> usize {
@@ -5713,6 +5742,31 @@ mod tests {
     }
 
     #[test]
+    fn course_constraint_flags_match_beatoraja_gradebar_ops() {
+        let constraints = bmz_core::course::CourseConstraints {
+            class: bmz_core::course::CourseClassConstraint::GradeRandomAllowed,
+            speed: bmz_core::course::CourseSpeedConstraint::NoSpeed,
+            judge: bmz_core::course::CourseJudgeConstraint::NoGood,
+            gauge: bmz_core::course::CourseGaugeConstraint::Keys24,
+            ln: bmz_core::course::CourseLnConstraint::Cn,
+            source_constraints: Vec::new(),
+        };
+
+        let flags = course_constraint_flags(&constraints);
+
+        assert!(!flags.class);
+        assert!(!flags.mirror);
+        assert!(flags.random);
+        assert!(flags.no_speed);
+        assert!(flags.no_good);
+        assert!(!flags.no_great);
+        assert!(flags.gauge_24k);
+        assert!(!flags.gauge_7k);
+        assert!(flags.cn);
+        assert!(!flags.hcn);
+    }
+
+    #[test]
     fn moved_select_index_moves_by_single_page_and_wraps_edges() {
         assert_eq!(moved_select_index(4, 10, SelectMove::Previous), 3);
         assert_eq!(moved_select_index(4, 10, SelectMove::Next), 5);
@@ -5779,6 +5833,7 @@ mod tests {
             course_id: resolved_count as i64,
             title: format!("Course {resolved_count}/{entry_count}"),
             kind: bmz_core::course::CourseKind::Dan,
+            constraints: bmz_core::course::CourseConstraints::default(),
             entry_count,
             resolved_count,
             total_notes: 100,

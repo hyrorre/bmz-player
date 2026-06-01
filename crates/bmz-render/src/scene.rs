@@ -86,6 +86,8 @@ pub struct SelectRowSnapshot {
     /// beatoraja STRING_COURSE1_TITLE..10_TITLE (150..159) for course rows.
     /// Empty for non-course rows.
     pub course_titles: [String; 10],
+    /// beatoraja OPTION_GRADEBAR_* (1002..1017) for course rows.
+    pub course_constraints: CourseConstraintFlags,
 }
 
 impl Default for SelectRowSnapshot {
@@ -119,8 +121,27 @@ impl Default for SelectRowSnapshot {
             in_library: true,
             achieved_trophy_names: Vec::new(),
             course_titles: Default::default(),
+            course_constraints: CourseConstraintFlags::default(),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CourseConstraintFlags {
+    pub class: bool,
+    pub mirror: bool,
+    pub random: bool,
+    pub no_speed: bool,
+    pub no_good: bool,
+    pub no_great: bool,
+    pub gauge_lr2: bool,
+    pub gauge_5k: bool,
+    pub gauge_7k: bool,
+    pub gauge_9k: bool,
+    pub gauge_24k: bool,
+    pub ln: bool,
+    pub cn: bool,
+    pub hcn: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
