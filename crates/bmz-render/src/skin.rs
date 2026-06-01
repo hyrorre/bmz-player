@@ -5007,6 +5007,9 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool 
         3 => state.select_row_kind == SelectRowKind::Course,
         1002..=1017 => gradebar_constraint_op_matches(op, state),
         5 => !state.select_is_folder && state.select_in_library,
+        // BMZ currently has no IR backend, matching beatoraja's offline state.
+        50 => true,
+        51 => false,
         21 => state.select_option_panel == 1,
         22 => state.select_option_panel == 2,
         23 => state.select_option_panel == 3,
@@ -5049,6 +5052,7 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool 
         352 => state.target_ex_score.is_some_and(|target| state.ex_score > target),
         353 => state.target_ex_score.is_some_and(|target| state.ex_score < target),
         354 => state.target_ex_score.is_some_and(|target| state.ex_score == target),
+        601..=608 => false,
         // OPTION_DIFFICULTY0..5. 0 は UNKNOWN/OTHER、1..5 は BMS #DIFFICULTY。
         150 => state.difficulty <= 0 || state.difficulty > 5,
         151..=155 => state.difficulty == i64::from(op - 150),
@@ -5852,6 +5856,9 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         375 => state.average_timing_ms.map(timing_afterdot),
         376 => state.stddev_timing_ms.map(|value| value as i64),
         377 => state.stddev_timing_ms.map(|value| ((value.abs() * 100.0) as i64) % 100),
+        // IR numbers. BMZ does not have an IR backend yet, so mirror beatoraja's
+        // offline/no-ranking state by returning no value (Integer.MIN_VALUE).
+        179..=182 | 200..=242 => None,
         // ベストスコア / ターゲットスコア (DB から供給、未取得時は None)
         150 | 170 => projected_best_score_at_progress(state).map(|s| s as i64),
         121 | 151 => state.target_ex_score.map(|s| projected_score_at_progress(s, state) as i64),
@@ -6202,6 +6209,8 @@ fn skin_timer_elapsed_ms(timer: Option<i32>, state: SkinDrawState) -> Option<i32
         Some(150) => state.result_graph_begin_ms,
         Some(151) => state.result_graph_end_ms,
         Some(152) => state.result_update_score_ms,
+        // TIMER_IR_CONNECT_BEGIN/SUCCESS/FAIL. BMZ has no IR backend yet.
+        Some(172..=174) => None,
         Some(40) => state.ready_timer_ms,
         Some(41) => state.play_timer_ms,
         Some(11) => Some(state.select_bar_elapsed_ms),
@@ -6616,6 +6625,7 @@ fn skin_state_text(text: &SkinTextDef, state: SkinTextState<'_>) -> String {
         1001 => state.table_text_primary.to_string(),
         1002 => state.table_text_secondary.to_string(),
         1003 => state.table_text_fallback.to_string(),
+        1020 | 1021 => String::new(),
         200..=209 => select_target_name_by_offset(state.target, text.ref_id - 210),
         210..=219 => select_target_name_by_offset(state.target, text.ref_id - 209),
         1000 => state.current_folder.to_string(),
@@ -12539,6 +12549,9 @@ mod tests {
         assert_eq!(skin_timer_elapsed_ms(Some(150), inactive), None);
         assert_eq!(skin_timer_elapsed_ms(Some(151), inactive), None);
         assert_eq!(skin_timer_elapsed_ms(Some(152), inactive), None);
+        assert_eq!(skin_timer_elapsed_ms(Some(172), inactive), None);
+        assert_eq!(skin_timer_elapsed_ms(Some(173), inactive), None);
+        assert_eq!(skin_timer_elapsed_ms(Some(174), inactive), None);
 
         let active = SkinDrawState {
             result_graph_begin_ms: Some(120),
@@ -12549,6 +12562,21 @@ mod tests {
         assert_eq!(skin_timer_elapsed_ms(Some(150), active), Some(120));
         assert_eq!(skin_timer_elapsed_ms(Some(151), active), Some(120));
         assert_eq!(skin_timer_elapsed_ms(Some(152), active), Some(40));
+    }
+
+    #[test]
+    fn ir_skin_properties_use_offline_defaults() {
+        let state = SkinDrawState::default();
+
+        assert!(test_skin_op(50, &[], state));
+        assert!(!test_skin_op(51, &[], state));
+        for op in 601..=608 {
+            assert!(!test_skin_op(op, &[], state), "IR option {op} should be false offline");
+        }
+
+        for ref_id in [179, 180, 181, 182, 200, 201, 202, 220, 226, 227, 241, 242] {
+            assert_eq!(skin_state_number(ref_id, state), None, "IR number {ref_id}");
+        }
     }
 
     #[test]
@@ -13825,6 +13853,9 @@ mod tests {
         // STRING_COURSE1_TITLE..10_TITLE (150..159)
         assert_eq!(skin_state_text(&make_text(150), state), "Stage 1");
         assert_eq!(skin_state_text(&make_text(159), state), "Stage 10");
+        // STRING_IR_NAME / STRING_IR_USERNAME: BMZ has no IR backend yet.
+        assert_eq!(skin_state_text(&make_text(1020), state), "");
+        assert_eq!(skin_state_text(&make_text(1021), state), "");
         // Unknown ref → empty
         assert_eq!(skin_state_text(&make_text(99), state), "");
     }
