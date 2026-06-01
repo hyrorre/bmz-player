@@ -1099,6 +1099,12 @@ mod tests {
         };
         let items = context.select_document_items_with_dynamic_timers(&snapshot, None);
         assert!(!items.is_empty(), "m_select select skin should produce render items");
+        assert!(
+            items
+                .iter()
+                .any(|item| matches!(item, bmz_render::skin::SkinRenderItem::Text { text, .. } if text == "Song")),
+            "m_select select skin should render the song title text"
+        );
     }
 
     #[test]

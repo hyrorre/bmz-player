@@ -6645,7 +6645,7 @@ fn skin_state_text(text: &SkinTextDef, state: SkinTextState<'_>) -> String {
             state.table_text_fallback,
         );
     }
-    if text.id.starts_with("bartext") {
+    if text.id.contains("bartext") {
         return state.bar_text.to_string();
     }
     if text.id == "table_level" {
@@ -13980,6 +13980,16 @@ mod tests {
         assert_eq!(skin_state_text(&make_text(1021), state), "");
         // Unknown ref → empty
         assert_eq!(skin_state_text(&make_text(99), state), "");
+
+        let m_select_bar_text =
+            SkinTextDef { id: "default_songlist2_bartext".to_string(), ..SkinTextDef::default() };
+        assert_eq!(
+            skin_state_text(
+                &m_select_bar_text,
+                SkinTextState { bar_text: "Song Title", ..SkinTextState::default() },
+            ),
+            "Song Title"
+        );
     }
 
     #[test]

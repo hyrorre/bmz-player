@@ -553,7 +553,7 @@ impl MainStateProbe {
 
     fn number(&mut self, ref_id: i32) -> i32 {
         match self.mode {
-            MainStateProbeMode::RuntimeStub => 0,
+            MainStateProbeMode::RuntimeStub => lua_runtime_stub_number(ref_id),
             MainStateProbeMode::SymbolicNumbers { base_value } => {
                 self.number_calls.push(ref_id);
                 self.number_values.get(&ref_id).copied().unwrap_or(base_value + ref_id)
@@ -623,6 +623,17 @@ impl MainStateProbe {
     fn begin_draw_probe(&mut self, numbers: BTreeMap<i32, i32>, floats: BTreeMap<i32, f64>) {
         self.begin_number_recording_with_values(numbers);
         self.float_number_values = floats;
+    }
+}
+
+fn lua_runtime_stub_number(ref_id: i32) -> i32 {
+    let now = unix_seconds_to_utc_datetime(lua_os_now_seconds());
+    match ref_id {
+        // beatoraja IntegerProperty: currenttime_year/month/day
+        21 => now.year,
+        22 => now.month as i32,
+        23 => now.day as i32,
+        _ => 0,
     }
 }
 

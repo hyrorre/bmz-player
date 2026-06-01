@@ -712,6 +712,51 @@ mod tests {
     }
 
     #[test]
+    fn lua_skin_main_state_current_date_numbers_are_available_during_load() {
+        let root = unique_test_dir("bmz-skin-lua-date");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("select.luaskin"),
+            r#"
+            local main_state = require("main_state")
+            return {
+                type = 5,
+                text = {
+                    { id = "date", constantText = main_state.number(21) .. "/" .. main_state.number(22) .. "/" .. main_state.number(23) },
+                },
+            }
+            "#,
+        )
+        .unwrap();
+
+        let loaded =
+            load_lua_skin_value(&root.join("select.luaskin"), &BTreeMap::new(), &BTreeMap::new())
+                .unwrap();
+        let date = loaded.value["text"][0]["constantText"].as_str().unwrap_or_default();
+        let current_year = unix_epoch_year_for_test();
+
+        assert!(loaded.warnings.is_empty());
+        assert!(date.starts_with(&format!("{current_year}/")), "unexpected date: {date}");
+    }
+
+    fn unix_epoch_year_for_test() -> i32 {
+        let seconds = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs().min(i64::MAX as u64) as i64)
+            .unwrap_or_default();
+        let days = seconds.div_euclid(86_400);
+        let z = days + 719_468;
+        let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+        let doe = z - era * 146_097;
+        let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+        let y = yoe + era * 400;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let month = mp + if mp < 10 { 3 } else { -9 };
+        (y + if month <= 2 { 1 } else { 0 }) as i32
+    }
+
+    #[test]
     fn lua_skin_nil_integer_keys_do_not_warn_as_mixed_table() {
         let root = unique_test_dir("bmz-skin-lua");
         fs::create_dir_all(&root).unwrap();
