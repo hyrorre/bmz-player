@@ -49,7 +49,7 @@ pub fn load_lua_skin(
 ) -> Result<LoadedSkinDocument> {
     let loaded = load_lua_skin_value(path, options, files)?;
     let value = normalize_lua_skin_document(loaded.value);
-    let document = serde_json::from_value(value)
+    let document = serde_path_to_error::deserialize(value)
         .with_context(|| format!("failed to parse lua skin as document: {}", path.display()))?;
     Ok(LoadedSkinDocument { document, warnings: loaded.warnings })
 }
@@ -68,7 +68,8 @@ pub fn load_lua_skin_header_value(path: &Path) -> Result<LoadedLuaSkinValue> {
 
 fn normalize_lua_skin_document(value: JsonValue) -> JsonValue {
     let value = normalize_json_skin_integer_numbers(value);
-    normalize_lua_skin_category_map(value)
+    let value = normalize_lua_skin_category_map(value);
+    normalize_lua_skin_offset_map(value)
 }
 
 /// Rm-skin の `processHeader()` は `category = { property = {...}, filepath = {...} }` 形式。
@@ -85,6 +86,42 @@ fn normalize_lua_skin_category_map(value: JsonValue) -> JsonValue {
         }
     }
     JsonValue::Object(map)
+}
+
+/// `skin_config.offset` is keyed by display name for Lua access, while beatoraja JSON uses an
+/// array of offset definitions.
+fn normalize_lua_skin_offset_map(value: JsonValue) -> JsonValue {
+    normalize_lua_skin_offset_map_for_key(None, value)
+}
+
+fn normalize_lua_skin_offset_map_for_key(key: Option<&str>, value: JsonValue) -> JsonValue {
+    match value {
+        JsonValue::Array(values) => JsonValue::Array(
+            values
+                .into_iter()
+                .map(|value| normalize_lua_skin_offset_map_for_key(None, value))
+                .collect(),
+        ),
+        JsonValue::Object(map) => {
+            let map = map
+                .into_iter()
+                .map(|(key, value)| {
+                    let value = normalize_lua_skin_offset_map_for_key(Some(&key), value);
+                    (key, value)
+                })
+                .collect::<JsonMap<_, _>>();
+            if matches!(key, Some("offset")) {
+                if map.values().all(|entry| matches!(entry, JsonValue::Object(_))) {
+                    JsonValue::Array(map.into_values().collect())
+                } else {
+                    JsonValue::Array(vec![JsonValue::Object(map)])
+                }
+            } else {
+                JsonValue::Object(map)
+            }
+        }
+        value => value,
+    }
 }
 
 fn normalize_json_skin_integer_numbers(value: JsonValue) -> JsonValue {
@@ -1424,6 +1461,63 @@ mod tests {
             panic!("expected category array");
         };
         assert_eq!(categories.len(), 2);
+    }
+
+    #[test]
+    fn normalize_lua_skin_offset_map_converts_skin_config_shape() {
+        let value = JsonValue::Object(JsonMap::from_iter([(
+            "offset".to_string(),
+            JsonValue::Object(JsonMap::from_iter([(
+                "Song title".to_string(),
+                JsonValue::Object(JsonMap::from_iter([
+                    ("id".to_string(), JsonValue::Number(serde_json::Number::from(60))),
+                    ("name".to_string(), JsonValue::String("Song title".to_string())),
+                    ("y".to_string(), JsonValue::Bool(true)),
+                ])),
+            )])),
+        )]));
+        let normalized = normalize_lua_skin_offset_map(value);
+        let JsonValue::Object(map) = normalized else {
+            panic!("expected object");
+        };
+        let JsonValue::Array(offsets) = map.get("offset").expect("offset") else {
+            panic!("expected offset array");
+        };
+        assert_eq!(offsets.len(), 1);
+    }
+
+    #[test]
+    fn normalize_lua_skin_offset_map_wraps_single_offset_def() {
+        let value = JsonValue::Object(JsonMap::from_iter([(
+            "offset".to_string(),
+            JsonValue::Object(JsonMap::from_iter([
+                ("id".to_string(), JsonValue::Number(serde_json::Number::from(60))),
+                ("name".to_string(), JsonValue::String("Song title".to_string())),
+                ("y".to_string(), JsonValue::Bool(true)),
+            ])),
+        )]));
+        let normalized = normalize_lua_skin_offset_map(value);
+        let JsonValue::Object(map) = normalized else {
+            panic!("expected object");
+        };
+        let JsonValue::Array(offsets) = map.get("offset").expect("offset") else {
+            panic!("expected offset array");
+        };
+        assert_eq!(offsets.len(), 1);
+    }
+
+    #[test]
+    fn m_select_lua_select_skin_loads_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/m_select/music_select.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+        let loaded =
+            load_lua_skin(&skin_path, SkinKind::Select, &BTreeMap::new(), &BTreeMap::new())
+                .unwrap();
+        assert_eq!(loaded.document.skin_type, 5);
+        assert!(loaded.document.songlist.is_some());
     }
 
     #[test]

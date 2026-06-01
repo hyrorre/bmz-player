@@ -355,7 +355,7 @@ pub struct SkinTextDef {
     pub align: i32,
     #[serde(default, rename = "ref")]
     pub ref_id: i32,
-    #[serde(default, rename = "constantText")]
+    #[serde(default, rename = "constantText", deserialize_with = "deserialize_skin_string")]
     pub constant_text: String,
     #[serde(default)]
     pub wrapping: bool,
@@ -5976,7 +5976,10 @@ fn judge_rank_option_matches(op: i32, judge_rank: Option<i32>) -> bool {
 }
 
 fn judge_rate_int(count: u32, total_notes: u32) -> Option<i64> {
-    (total_notes > 0).then_some(count as i64 * 100 / total_notes as i64)
+    if total_notes == 0 {
+        return None;
+    }
+    Some(count as i64 * 100 / total_notes as i64)
 }
 
 fn score_rate_parts(ex_score: u32, total_notes: u32) -> (u32, u32) {
@@ -8057,6 +8060,13 @@ fn destination_render_layer<'a>(
 }
 
 fn deserialize_skin_id<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserializer.deserialize_any(SkinIdVisitor)
+}
+
+fn deserialize_skin_string<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -11580,12 +11590,14 @@ mod tests {
                 "text": [
                     { "id": "title", "font": "main", "size": 8, "align": 1, "wrapping": true, "outlineColor": "ff000080", "outlineWidth": 1, "shadowColor": "00000080", "shadowOffsetX": 2, "shadowOffsetY": 3, "ref": 12 },
                     { "id": "genre", "size": 6, "align": 2, "overflow": 1, "ref": 13 },
-                    { "id": "constant", "size": 5, "constantText": "READY" }
+                    { "id": "constant", "size": 5, "constantText": "READY" },
+                    { "id": "numeric-constant", "size": 5, "constantText": 1 }
                 ],
                 "destination": [
                     { "id": "title", "dst": [{ "x": 10, "y": 20, "w": 50, "h": 10, "r": 128, "g": 200, "b": 255 }] },
                     { "id": "genre", "dst": [{ "x": 10, "y": 40, "w": 40, "h": 6 }] },
-                    { "id": "constant", "dst": [{ "x": 10, "y": 60, "h": 5, "a": 128 }] }
+                    { "id": "constant", "dst": [{ "x": 10, "y": 60, "h": 5, "a": 128 }] },
+                    { "id": "numeric-constant", "dst": [{ "x": 10, "y": 70, "h": 5 }] }
                 ]
             }
             "#,
@@ -11603,7 +11615,7 @@ mod tests {
             },
         );
 
-        assert_eq!(items.len(), 3);
+        assert_eq!(items.len(), 4);
         assert!(matches!(&items[0], SkinRenderItem::Text {
                 origin: Point { x, y },
                 text,
@@ -11633,6 +11645,7 @@ mod tests {
         assert!(
             matches!(&items[2], SkinRenderItem::Text { text, style, .. } if text == "READY" && approx_eq(style.color.a, 128.0 / 255.0))
         );
+        assert!(matches!(&items[3], SkinRenderItem::Text { text, .. } if text == "1"));
     }
 
     #[test]

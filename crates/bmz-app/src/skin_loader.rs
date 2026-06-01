@@ -1061,6 +1061,47 @@ mod tests {
     }
 
     #[test]
+    fn m_select_lua_select_skin_renders_items_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/m_select/music_select.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+        let decoded = decode_beatoraja_skin_with_options(
+            &skin_path,
+            SkinKind::Select,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        let document_textures =
+            decoded.sources.iter().map(|source| bmz_render::skin::SkinDocumentTexture {
+                source_id: source.source_id.clone(),
+                texture: source.texture,
+                source_size: bmz_render::skin::SkinImageSize {
+                    width: source.asset.width as f32,
+                    height: source.asset.height as f32,
+                },
+            });
+        let context = bmz_render::skin::SkinContext::from_manifest_and_document(
+            bmz_render::skin::default_skin_manifest(),
+            decoded.document,
+            document_textures,
+        );
+        assert!(context.document().is_some_and(|document| document.skin_type == 5));
+        let snapshot = bmz_render::scene::SelectSnapshot {
+            rows: vec![bmz_render::scene::SelectRowSnapshot {
+                title: "Song".to_string(),
+                ..Default::default()
+            }],
+            chart_count: 1,
+            ..Default::default()
+        };
+        let items = context.select_document_items_with_dynamic_timers(&snapshot, None);
+        assert!(!items.is_empty(), "m_select select skin should produce render items");
+    }
+
+    #[test]
     fn rm_skin_play_lua_skins_can_be_decoded_when_available() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/skins/Rm-skin");
         let cases = [

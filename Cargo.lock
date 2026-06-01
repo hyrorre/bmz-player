@@ -609,6 +609,7 @@ dependencies = [
  "bmz-render",
  "mlua",
  "serde_json",
+ "serde_path_to_error",
  "tracing",
 ]
 
