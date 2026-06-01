@@ -2,6 +2,10 @@ use bmz_chart::model::ChartMetadata;
 use bmz_core::clear::{ClearType, GaugeType};
 use bmz_gameplay::result::PlayResult;
 use bmz_gameplay::score::JudgeCounts;
+use bmz_gameplay::session::FrameOutput;
+use bmz_render::snapshot::{
+    RenderSnapshot, ResultGaugeGraphPoint, ResultGraphSnapshot, ResultTimingPoint,
+};
 
 use crate::storage::play_result::StoredPlayResult;
 
@@ -32,6 +36,12 @@ pub struct ResultSummary {
     pub genre: String,
     pub difficulty_name: String,
     pub play_level: String,
+    pub graph: ResultGraphSnapshot,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ResultGraphCollector {
+    graph: ResultGraphSnapshot,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -124,6 +134,7 @@ impl ResultSummary {
             genre: metadata.genre.clone(),
             difficulty_name: metadata.difficulty_name.clone(),
             play_level: metadata.play_level.clone(),
+            graph: ResultGraphSnapshot::default(),
         }
     }
 
@@ -136,10 +147,60 @@ impl ResultSummary {
     }
 }
 
+impl ResultGraphCollector {
+    pub fn record_frame(&mut self, frame: &FrameOutput<RenderSnapshot>) {
+        let snapshot = &frame.render_snapshot;
+        self.record_gauge(snapshot);
+        self.graph.judge_graph_density = snapshot.judge_graph_density.clone();
+        self.graph.bpm_graph_segments = snapshot.bpm_graph_segments.clone();
+        self.graph.hit_error_ring = snapshot.hit_error_ring;
+
+        for event in &frame.judgements {
+            self.graph.timing_points.push(ResultTimingPoint {
+                time_ms: clamp_us_to_ms(event.time.0),
+                delta_us: event.delta.0,
+                judge: event.judge,
+            });
+        }
+    }
+
+    pub fn snapshot(&self) -> ResultGraphSnapshot {
+        self.graph.clone()
+    }
+
+    fn record_gauge(&mut self, snapshot: &RenderSnapshot) {
+        let time_ms = clamp_us_to_ms(snapshot.time.0.max(0));
+        let point = ResultGaugeGraphPoint {
+            time_ms,
+            value: snapshot.gauge,
+            border: snapshot.gauge_border,
+            gauge_type: snapshot.gauge_type,
+        };
+        if let Some(last) = self.graph.gauge_points.last_mut()
+            && last.time_ms == point.time_ms
+        {
+            *last = point;
+            return;
+        }
+        self.graph.gauge_points.push(point);
+    }
+}
+
+fn clamp_us_to_ms(us: i64) -> i32 {
+    (us / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32
+}
+
 #[cfg(test)]
 mod tests {
     use bmz_core::clear::{ClearType, GaugeType};
+    use bmz_core::judge::{Judge, TimingSide};
+    use bmz_core::lane::Lane;
+    use bmz_core::time::TimeUs;
+    use bmz_gameplay::judge::model::JudgementEvent;
     use bmz_gameplay::score::ScoreState;
+    use bmz_gameplay::session::PlayState;
+    use bmz_render::chart_graph::BpmGraphSegment;
+    use bmz_render::snapshot::HitErrorRingSnapshot;
 
     use super::*;
 
@@ -187,5 +248,59 @@ mod tests {
             summary.judge_counts,
             ResultJudgeCounts { pgreat: 2, great: 3, good: 4, bad: 5, poor: 6, empty_poor: 7 }
         );
+    }
+
+    #[test]
+    fn result_graph_collector_carries_frame_graph_data() {
+        let hit_error_ring = HitErrorRingSnapshot { index: 7, ..HitErrorRingSnapshot::default() };
+        let mut render_snapshot = RenderSnapshot {
+            time: TimeUs(1_234_000),
+            gauge: 72.5,
+            gauge_type: GaugeType::Hard as i32,
+            gauge_border: 30.0,
+            judge_graph_density: vec![1, 3, 2],
+            bpm_graph_segments: vec![BpmGraphSegment {
+                start_ratio: 0.0,
+                end_ratio: 1.0,
+                bpm: 180.0,
+                is_stop: false,
+            }],
+            hit_error_ring,
+            ..RenderSnapshot::default()
+        };
+        let frame = FrameOutput {
+            render_snapshot: render_snapshot.clone(),
+            judgements: vec![JudgementEvent {
+                note_id: None,
+                lane: Lane::Key1,
+                judge: Judge::Great,
+                side: TimingSide::Fast,
+                delta: TimeUs(-12_000),
+                time: TimeUs(1_200_000),
+            }],
+            mine_hits: Vec::new(),
+            state: PlayState::Playing,
+        };
+        let mut collector = ResultGraphCollector::default();
+        collector.record_frame(&frame);
+
+        render_snapshot.time = TimeUs(1_234_500);
+        render_snapshot.gauge = 74.0;
+        collector.record_frame(&FrameOutput {
+            render_snapshot,
+            judgements: Vec::new(),
+            mine_hits: Vec::new(),
+            state: PlayState::Playing,
+        });
+
+        let graph = collector.snapshot();
+        assert_eq!(graph.gauge_points.len(), 1);
+        assert_eq!(graph.gauge_points[0].time_ms, 1234);
+        assert_eq!(graph.gauge_points[0].value, 74.0);
+        assert_eq!(graph.timing_points.len(), 1);
+        assert_eq!(graph.timing_points[0].delta_us, -12_000);
+        assert_eq!(graph.judge_graph_density, vec![1, 3, 2]);
+        assert_eq!(graph.bpm_graph_segments.len(), 1);
+        assert_eq!(graph.hit_error_ring.index, 7);
     }
 }

@@ -1231,9 +1231,10 @@ fn plan_result(
     skin: &SkinContext,
     dynamic_timers: &mut crate::skin::DynamicTimerRuntime,
 ) -> DrawPlan {
+    let skin = skin.with_result_graphs(&snapshot.graph);
     if skin.document().is_some_and(|document| document.skin_type == 7) {
         let state = advance_skin_dynamic_timers(
-            skin,
+            &skin,
             dynamic_timers,
             build_result_skin_draw_state(snapshot),
             (snapshot.elapsed_time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32,
@@ -1348,6 +1349,8 @@ fn build_result_skin_draw_state(
         fadeout_ms: snapshot
             .fadeout_elapsed
             .map(|elapsed| (elapsed.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32),
+        hit_error_ring: snapshot.graph.hit_error_ring.values,
+        hit_error_ring_index: snapshot.graph.hit_error_ring.index,
         ..crate::skin::SkinDrawState::default()
     }
 }
@@ -2280,11 +2283,11 @@ mod tests {
     #[test]
     fn result_plan_uses_skin_document_when_skin_type_is_seven() {
         use crate::scene::ResultSnapshot;
-        use crate::skin::{SkinDocument, SkinTextureId};
+        use crate::skin::SkinTextureId;
         use crate::snapshot::FastSlowJudgeCounts;
         use bmz_core::clear::ClearType;
 
-        let document: SkinDocument = serde_json::from_str(
+        let document: crate::skin::SkinDocument = serde_json::from_str(
             r#"{
                 "type": 7,
                 "name": "test",
@@ -2334,6 +2337,7 @@ mod tests {
             genre: String::new(),
             difficulty_name: String::new(),
             play_level: String::new(),
+            graph: crate::snapshot::ResultGraphSnapshot::default(),
             overlay: crate::snapshot::OverlaySnapshot::default(),
         };
 
@@ -2347,6 +2351,75 @@ mod tests {
             command,
             DrawCommand::Image { texture, .. } if *texture == TextureId(99)
         )));
+    }
+
+    #[test]
+    fn result_plan_supplies_result_judge_graph_data_to_skin_document() {
+        use crate::scene::ResultSnapshot;
+        use crate::snapshot::{FastSlowJudgeCounts, ResultGraphSnapshot};
+        use bmz_core::clear::ClearType;
+
+        let document: crate::skin::SkinDocument = serde_json::from_str(
+            r#"{
+                "type": 7,
+                "name": "test",
+                "w": 100,
+                "h": 100,
+                "judgegraph": [{"id": "jg", "noGap": 1}],
+                "destination": [
+                    {"id": "jg", "dst": [{"x": 0, "y": 0, "w": 100, "h": 50}]}
+                ]
+            }"#,
+        )
+        .unwrap();
+        let skin = SkinContext::from_manifest_and_document(
+            toml::from_str("").unwrap(),
+            document,
+            std::iter::empty(),
+        );
+        let snapshot = ResultSnapshot {
+            clear_type: ClearType::Normal,
+            ex_score: 100,
+            ex_score_rate: 0.5,
+            max_combo: 50,
+            gauge_value: 80.0,
+            gauge_type: bmz_core::clear::GaugeType::Normal as i32,
+            total_notes: 100,
+            judge_counts: DisplayJudgeCounts::default(),
+            fast_slow_counts: FastSlowJudgeCounts::default(),
+            score_history_id: 0,
+            replay_saved: false,
+            best_ex_score: None,
+            best_clear_type: None,
+            target_ex_score: None,
+            best_max_combo: None,
+            target_max_combo: None,
+            best_misscount: None,
+            target_misscount: None,
+            target_clear_type: None,
+            elapsed_time: TimeUs(0),
+            fadeout_elapsed: None,
+            title: String::new(),
+            subtitle: String::new(),
+            artist: String::new(),
+            subartist: String::new(),
+            genre: String::new(),
+            difficulty_name: String::new(),
+            play_level: String::new(),
+            graph: ResultGraphSnapshot {
+                judge_graph_density: vec![1, 3, 2],
+                ..ResultGraphSnapshot::default()
+            },
+            overlay: crate::snapshot::OverlaySnapshot::default(),
+        };
+
+        let plan = DrawPlan::from_scene_with_skin(
+            &AppSceneSnapshot::Result(snapshot),
+            &skin,
+            &mut crate::skin::DynamicTimerRuntime::default(),
+        );
+
+        assert!(plan.commands.iter().any(|command| matches!(command, DrawCommand::Rect { .. })));
     }
 
     #[test]

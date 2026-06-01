@@ -137,6 +137,9 @@ pub struct GameSession {
 #[derive(Debug, Clone)]
 pub struct FrameOutput<TSnapshot> {
     pub render_snapshot: TSnapshot,
+    /// 当該フレームで発生した判定。result graph など、app 層がフレーム単位で
+    /// 蓄積する副作用に使う。
+    pub judgements: Vec<JudgementEvent>,
     /// 当該フレームで踏んだ Mine ノーツ。app 層が地雷 SE を鳴らすのに使う。
     pub mine_hits: Vec<MineHitEvent>,
     pub state: PlayState,

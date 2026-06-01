@@ -943,6 +943,15 @@ impl SkinContext {
         cloned
     }
 
+    pub fn with_result_graphs(&self, graph: &crate::snapshot::ResultGraphSnapshot) -> Self {
+        let mut cloned = self.clone();
+        if let Some(document) = &mut cloned.document {
+            document.play_judge_graph_density = graph.judge_graph_density.clone();
+            document.play_bpm_graph_segments = graph.bpm_graph_segments.clone();
+        }
+        cloned
+    }
+
     pub fn static_document_items(&self) -> Vec<SkinRenderItem> {
         self.static_document_items_for_state(SkinDrawState::default())
     }

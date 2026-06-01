@@ -744,6 +744,7 @@ impl WinitApp {
                 genre: summary.genre.clone(),
                 difficulty_name: summary.difficulty_name.clone(),
                 play_level: summary.play_level.clone(),
+                graph: summary.graph.clone(),
                 overlay: OverlaySnapshot::default(),
             }),
         };

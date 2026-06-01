@@ -1,8 +1,33 @@
+use bmz_core::judge::Judge;
 use bmz_core::lane::{KeyMode, LANE_COUNT, Lane};
 use bmz_core::time::TimeUs;
 
 pub use crate::chart_graph::BpmGraphSegment;
 use crate::skin_offset::SkinOffsetValues;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ResultGaugeGraphPoint {
+    pub time_ms: i32,
+    pub value: f32,
+    pub border: f32,
+    pub gauge_type: i32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResultTimingPoint {
+    pub time_ms: i32,
+    pub delta_us: i64,
+    pub judge: Judge,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ResultGraphSnapshot {
+    pub gauge_points: Vec<ResultGaugeGraphPoint>,
+    pub timing_points: Vec<ResultTimingPoint>,
+    pub judge_graph_density: Vec<u8>,
+    pub bpm_graph_segments: Vec<BpmGraphSegment>,
+    pub hit_error_ring: HitErrorRingSnapshot,
+}
 
 /// beatoraja の OPTION_COURSE_STAGE1..4 / OPTION_COURSE_STAGE_FINAL (280..283 / 289) に対応。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

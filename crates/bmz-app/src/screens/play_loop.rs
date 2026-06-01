@@ -79,7 +79,12 @@ pub fn advance_play_screen_with_bga_frames(
         target_ex_score,
         bga_frames,
     );
-    FrameOutput { render_snapshot, mine_hits: frame.mine_hits, state: frame.state }
+    FrameOutput {
+        render_snapshot,
+        judgements: frame.judgements,
+        mine_hits: frame.mine_hits,
+        state: frame.state,
+    }
 }
 
 pub fn advance_play_screen_until_result(
@@ -93,7 +98,7 @@ pub fn advance_play_screen_until_result(
 ) -> Result<PlayAdvanceOutcome> {
     let frame = advance_play_screen(session, audio, None);
     if matches!(frame.state, PlayState::Finished | PlayState::Failed) {
-        let finished = finish_session_result(
+        let mut finished = finish_session_result(
             score_db,
             profile_paths,
             replay_config,
@@ -102,6 +107,9 @@ pub fn advance_play_screen_until_result(
             applied_arrange,
             None,
         )?;
+        let mut result_graph = crate::screens::result_model::ResultGraphCollector::default();
+        result_graph.record_frame(&frame);
+        finished.summary.graph = result_graph.snapshot();
         return Ok(PlayAdvanceOutcome::Finished { frame, finished });
     }
 
@@ -151,8 +159,9 @@ pub fn advance_running_play_session_until_result(
             &running.bga_frames,
         )
     };
+    running.result_graph.record_frame(&frame);
     if matches!(frame.state, PlayState::Finished | PlayState::Failed) {
-        let finished = finish_session_result_once(
+        let mut finished = finish_session_result_once(
             &mut running.finished,
             score_db,
             profile_paths,
@@ -162,6 +171,8 @@ pub fn advance_running_play_session_until_result(
             &running.applied_arrange,
             running.target_ex_score,
         )?;
+        finished.summary.graph = running.result_graph.snapshot();
+        running.finished = Some(finished.clone());
         // ここでは音声を止めない。スケジュール済みの BGM/キー音は
         // オーディオ出力スレッド側で曲の最後まで鳴り切る。出力の解放は
         // リザルト画面側 (advance_draining_audio) がドレイン完了後に行う。
