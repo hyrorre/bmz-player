@@ -1565,6 +1565,10 @@ pub struct SkinDrawState {
     pub fadeout_ms: Option<i32>,
     /// 閉店/FAILED 演出のタイマー経過 ms (TIMER_FAILED=3)。
     pub failed_ms: Option<i32>,
+    /// Result timing distribution average (NUMBER_AVERAGE_TIMING=374).
+    pub average_timing_ms: Option<f32>,
+    /// Result timing distribution standard deviation (NUMBER_STDDEV_TIMING=376).
+    pub stddev_timing_ms: Option<f32>,
     /// OPTION_AUTOPLAYON (33) / OPTION_AUTOPLAYOFF (32) 用。
     pub autoplay: bool,
     /// OPTION_MODE_COURSE (290) とステージ別 op (280..283 / 289) 用。未対応時は None。
@@ -1689,6 +1693,8 @@ impl Default for SkinDrawState {
             result_failed: None,
             fadeout_ms: None,
             failed_ms: None,
+            average_timing_ms: None,
+            stddev_timing_ms: None,
             autoplay: false,
             course_stage: None,
             hsfix_index: 0,
@@ -5797,6 +5803,11 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         525 => state.judge_timing_ms.map(|ms| ms.unsigned_abs() as i64),
         // 判定タイミングオフセット設定値 (NUMBER_JUDGETIMING=12)
         12 => Some(state.judge_timing_offset_ms as i64),
+        // Result timing distribution stats.
+        374 => state.average_timing_ms.map(|value| value as i64),
+        375 => state.average_timing_ms.map(timing_afterdot),
+        376 => state.stddev_timing_ms.map(|value| value as i64),
+        377 => state.stddev_timing_ms.map(|value| ((value.abs() * 100.0) as i64) % 100),
         // ベストスコア / ターゲットスコア (DB から供給、未取得時は None)
         150 | 170 => projected_best_score_at_progress(state).map(|s| s as i64),
         121 | 151 => state.target_ex_score.map(|s| projected_score_at_progress(s, state) as i64),
@@ -5999,6 +6010,11 @@ fn skin_image_texture_region_for_state(
 
 fn gauge_after_dot(gauge: f32) -> u32 {
     if gauge > 0.0 && gauge < 0.1 { 1 } else { ((gauge.max(0.0) * 10.0) as u32) % 10 }
+}
+
+fn timing_afterdot(value: f32) -> i64 {
+    let afterdot = ((value.abs() * 100.0) as i64) % 100;
+    if value < 0.0 { -afterdot } else { afterdot }
 }
 
 /// Returns the graph bar fill ratio (0.0-1.0) for a given `BARGRAPH_*` type.
@@ -12251,6 +12267,8 @@ mod tests {
             best_misscount: Some(20),
             target_misscount: Some(0),
             target_clear_index: Some(8),
+            average_timing_ms: Some(-12.34),
+            stddev_timing_ms: Some(56.78),
             ..SkinDrawState::default()
         };
 
@@ -12296,11 +12314,18 @@ mod tests {
         // TOTAL_LATE = slow 全合計 = 427+154+10+1+2 = 594
         assert_eq!(skin_state_number(424, state), Some(594));
 
+        // Result timing distribution
+        assert_eq!(skin_state_number(374, state), Some(-12));
+        assert_eq!(skin_state_number(375, state), Some(-34));
+        assert_eq!(skin_state_number(376, state), Some(56));
+        assert_eq!(skin_state_number(377, state), Some(78));
+
         // best/target が None のとき None を返す
         let bare = SkinDrawState::default();
         assert_eq!(skin_state_number(152, bare), None);
         assert_eq!(skin_state_number(173, bare), None);
         assert_eq!(skin_state_number(410, bare), None);
+        assert_eq!(skin_state_number(374, bare), None);
     }
 
     #[test]

@@ -1319,6 +1319,7 @@ fn build_result_skin_draw_state(
 ) -> crate::skin::SkinDrawState {
     use bmz_core::clear::ClearType;
     let result_failed = matches!(snapshot.clear_type, ClearType::Failed | ClearType::NoPlay);
+    let timing_stats = result_timing_stats(&snapshot.graph.timing_points);
     crate::skin::SkinDrawState {
         elapsed_ms: (snapshot.elapsed_time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64)
             as i32,
@@ -1351,8 +1352,28 @@ fn build_result_skin_draw_state(
             .map(|elapsed| (elapsed.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32),
         hit_error_ring: snapshot.graph.hit_error_ring.values,
         hit_error_ring_index: snapshot.graph.hit_error_ring.index,
+        average_timing_ms: timing_stats.map(|stats| stats.0),
+        stddev_timing_ms: timing_stats.map(|stats| stats.1),
         ..crate::skin::SkinDrawState::default()
     }
+}
+
+fn result_timing_stats(points: &[crate::snapshot::ResultTimingPoint]) -> Option<(f32, f32)> {
+    if points.is_empty() {
+        return None;
+    }
+    let count = points.len() as f32;
+    let average_ms =
+        points.iter().map(|point| point.delta_us as f32 / 1_000.0).sum::<f32>() / count;
+    let variance = points
+        .iter()
+        .map(|point| {
+            let diff = point.delta_us as f32 / 1_000.0 - average_ms;
+            diff * diff
+        })
+        .sum::<f32>()
+        / count;
+    Some((average_ms, variance.sqrt()))
 }
 
 struct ResultFallbackSummary<'a> {
