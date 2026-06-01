@@ -367,6 +367,10 @@ pub fn display_bga_frame(id: BgaAssetId, width: u32, height: u32) -> DisplayBgaF
     DisplayBgaFrame::opaque(bga_texture_id(id), width.max(1) as f32, height.max(1) as f32)
 }
 
+pub fn display_video_bga_frame(id: BgaAssetId, width: u32, height: u32) -> DisplayBgaFrame {
+    DisplayBgaFrame::opaque_video(bga_texture_id(id), width.max(1) as f32, height.max(1) as f32)
+}
+
 pub fn bga_texture_id(id: BgaAssetId) -> u32 {
     CHART_BGA_TEXTURE_BASE + id.0
 }
@@ -1249,31 +1253,9 @@ mod tests {
 
         assert_eq!(early.bga_base.unwrap().texture_id, bga_texture_id(BgaAssetId(0)));
         assert!(early.bga_layer.is_none());
-        assert_eq!(
-            late.bga_base.unwrap(),
-            DisplayBgaFrame {
-                texture_id: bga_texture_id(BgaAssetId(1)),
-                width: 640.0,
-                height: 480.0,
-                tint_r: 1.0,
-                tint_g: 1.0,
-                tint_b: 1.0,
-                tint_a: 1.0,
-            }
-        );
+        assert_eq!(late.bga_base.unwrap(), display_bga_frame(BgaAssetId(1), 640, 480));
         assert_eq!(late.bga_layer.unwrap().texture_id, bga_texture_id(BgaAssetId(2)));
-        assert_eq!(
-            poor_active.bga_poor.unwrap(),
-            DisplayBgaFrame {
-                texture_id: bga_texture_id(BgaAssetId(3)),
-                width: 320.0,
-                height: 240.0,
-                tint_r: 1.0,
-                tint_g: 1.0,
-                tint_b: 1.0,
-                tint_a: 1.0,
-            }
-        );
+        assert_eq!(poor_active.bga_poor.unwrap(), display_bga_frame(BgaAssetId(3), 320, 240));
         assert!(poor_expired.bga_poor.is_none());
     }
 

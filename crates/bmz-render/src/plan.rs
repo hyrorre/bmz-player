@@ -261,13 +261,30 @@ fn push_fallback_bga_background(commands: &mut Vec<DrawCommand>, snapshot: &Rend
     }
     if snapshot.bga_poor.is_none() {
         // Layer / Layer2 は黒クロマキー (beatoraja の layer.frag 相当) で
-        // Base の上に重ねる。
+        // Base の上に重ねる。ただし動画 BGA Layer は beatoraja でも `ffmpeg.frag`
+        // を使ってクロマキーを適用しないため、is_video のときは Normal を選ぶ。
         if let Some(layer) = snapshot.bga_layer {
-            push_bga_fullscreen(commands, layer, snapshot.bga_stretch, BlendMode::LayerMask);
+            push_bga_fullscreen(commands, layer, snapshot.bga_stretch, bga_layer_blend(layer));
         }
         if let Some(layer2) = snapshot.bga_layer2 {
-            push_bga_fullscreen(commands, layer2, snapshot.bga_stretch, BlendMode::LayerMask);
+            push_bga_fullscreen(commands, layer2, snapshot.bga_stretch, bga_layer_blend(layer2));
         }
+    }
+}
+
+fn bga_layer_blend(frame: DisplayBgaFrame) -> BlendMode {
+    if frame.is_video { BlendMode::Normal } else { BlendMode::LayerMask }
+}
+
+fn skin_bga_frame_from_display(frame: DisplayBgaFrame) -> crate::skin::SkinBgaFrame {
+    crate::skin::SkinBgaFrame {
+        texture: SkinTextureId(frame.texture_id),
+        source_size: crate::skin::SkinImageSize { width: frame.width, height: frame.height },
+        tint_r: frame.tint_r,
+        tint_g: frame.tint_g,
+        tint_b: frame.tint_b,
+        tint_a: frame.tint_a,
+        is_video: frame.is_video,
     }
 }
 
@@ -855,38 +872,10 @@ fn plan_play(
         max_bpm: snapshot.max_bpm,
         has_bga: snapshot.has_bga,
         bga_enabled: snapshot.bga_enabled,
-        bga_base: snapshot.bga_base.map(|frame| crate::skin::SkinBgaFrame {
-            texture: SkinTextureId(frame.texture_id),
-            source_size: crate::skin::SkinImageSize { width: frame.width, height: frame.height },
-            tint_r: frame.tint_r,
-            tint_g: frame.tint_g,
-            tint_b: frame.tint_b,
-            tint_a: frame.tint_a,
-        }),
-        bga_layer: snapshot.bga_layer.map(|frame| crate::skin::SkinBgaFrame {
-            texture: SkinTextureId(frame.texture_id),
-            source_size: crate::skin::SkinImageSize { width: frame.width, height: frame.height },
-            tint_r: frame.tint_r,
-            tint_g: frame.tint_g,
-            tint_b: frame.tint_b,
-            tint_a: frame.tint_a,
-        }),
-        bga_layer2: snapshot.bga_layer2.map(|frame| crate::skin::SkinBgaFrame {
-            texture: SkinTextureId(frame.texture_id),
-            source_size: crate::skin::SkinImageSize { width: frame.width, height: frame.height },
-            tint_r: frame.tint_r,
-            tint_g: frame.tint_g,
-            tint_b: frame.tint_b,
-            tint_a: frame.tint_a,
-        }),
-        bga_poor: snapshot.bga_poor.map(|frame| crate::skin::SkinBgaFrame {
-            texture: SkinTextureId(frame.texture_id),
-            source_size: crate::skin::SkinImageSize { width: frame.width, height: frame.height },
-            tint_r: frame.tint_r,
-            tint_g: frame.tint_g,
-            tint_b: frame.tint_b,
-            tint_a: frame.tint_a,
-        }),
+        bga_base: snapshot.bga_base.map(skin_bga_frame_from_display),
+        bga_layer: snapshot.bga_layer.map(skin_bga_frame_from_display),
+        bga_layer2: snapshot.bga_layer2.map(skin_bga_frame_from_display),
+        bga_poor: snapshot.bga_poor.map(skin_bga_frame_from_display),
         bga_stretch: snapshot.bga_stretch,
         judge_timing_ms,
         best_ex_score: snapshot.best_ex_score,
@@ -3745,6 +3734,35 @@ mod tests {
             time: TimeUs(0),
             is_miss: false,
         })
+    }
+
+    #[test]
+    fn fallback_bga_uses_normal_blend_for_video_layer_textures() {
+        // 動画 BGA Layer は beatoraja の `ffmpeg.frag` 相当で黒クロマキー
+        // をかけないため、`is_video` が立っているときは Normal を選ぶ。
+        use crate::snapshot::DisplayBgaFrame;
+        let snapshot = RenderSnapshot {
+            has_bga: true,
+            bga_enabled: true,
+            bga_stretch: 1,
+            bga_base: Some(DisplayBgaFrame::opaque(100, 256.0, 256.0)),
+            bga_layer: Some(DisplayBgaFrame::opaque_video(201, 640.0, 360.0)),
+            bga_layer2: Some(DisplayBgaFrame::opaque(102, 256.0, 256.0)),
+            ..Default::default()
+        };
+        let mut commands = Vec::new();
+        push_fallback_bga_background(&mut commands, &snapshot);
+        let blends: Vec<(u32, BlendMode)> = commands
+            .iter()
+            .filter_map(|cmd| match cmd {
+                DrawCommand::Image { texture, blend, .. } => Some((texture.0, *blend)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            blends,
+            vec![(100, BlendMode::Normal), (201, BlendMode::Normal), (102, BlendMode::LayerMask),]
+        );
     }
 
     #[test]

@@ -1386,11 +1386,22 @@ pub struct SkinBgaFrame {
     pub tint_g: f32,
     pub tint_b: f32,
     pub tint_a: f32,
+    /// 動画 BGA フレームかどうか。Layer/Layer2 でも動画ならクロマキーを適用しない
+    /// (beatoraja の `ffmpeg.frag` 相当)。
+    pub is_video: bool,
 }
 
 impl SkinBgaFrame {
     pub fn opaque(texture: SkinTextureId, source_size: SkinImageSize) -> Self {
-        Self { texture, source_size, tint_r: 1.0, tint_g: 1.0, tint_b: 1.0, tint_a: 1.0 }
+        Self {
+            texture,
+            source_size,
+            tint_r: 1.0,
+            tint_g: 1.0,
+            tint_b: 1.0,
+            tint_a: 1.0,
+            is_video: false,
+        }
     }
 }
 
@@ -2418,10 +2429,17 @@ impl SkinDocument {
                     ));
                 }
                 // Layer / Layer2 は beatoraja の TYPE_LAYER と同様、黒ピクセルを
-                // 透過させて Base に重ねる。Add 指定時は本体側で既に色がブレンドされる
-                // ためクロマキーは不要 (黒は加算寄与ゼロ)。
-                let layer_blend =
-                    if matches!(blend, BlendMode::Add) { blend } else { BlendMode::LayerMask };
+                // 透過させて Base に重ねる。例外として:
+                //   - Add 指定時はクロマキー不要 (黒は加算寄与ゼロ)
+                //   - 動画 BGA Layer は beatoraja でも `ffmpeg.frag` を使い
+                //     クロマキーをかけない
+                let layer_blend_for = |bga: SkinBgaFrame| {
+                    if matches!(blend, BlendMode::Add) || bga.is_video {
+                        blend
+                    } else {
+                        BlendMode::LayerMask
+                    }
+                };
                 if state.bga_poor.is_none()
                     && let Some(bga) = state.bga_layer
                 {
@@ -2431,7 +2449,7 @@ impl SkinDocument {
                         stretch,
                         rect,
                         tint,
-                        layer_blend,
+                        layer_blend_for(bga),
                         self.w,
                         self.h,
                         destination.filter != 0,
@@ -2446,7 +2464,7 @@ impl SkinDocument {
                         stretch,
                         rect,
                         tint,
-                        layer_blend,
+                        layer_blend_for(bga),
                         self.w,
                         self.h,
                         destination.filter != 0,
@@ -8857,6 +8875,7 @@ mod tests {
                     tint_g: 1.0,
                     tint_b: 1.0,
                     tint_a: 1.0,
+                    is_video: false,
                 }),
                 ..SkinDrawState::default()
             },
@@ -9321,6 +9340,7 @@ mod tests {
                     tint_g: 1.0,
                     tint_b: 1.0,
                     tint_a: 1.0,
+                    is_video: false,
                 }),
                 bga_layer: Some(SkinBgaFrame {
                     texture: SkinTextureId(20001),
@@ -9329,6 +9349,7 @@ mod tests {
                     tint_g: 1.0,
                     tint_b: 1.0,
                     tint_a: 1.0,
+                    is_video: false,
                 }),
                 ..SkinDrawState::default()
             },
@@ -9381,6 +9402,7 @@ mod tests {
                     tint_g: 1.0,
                     tint_b: 1.0,
                     tint_a: 1.0,
+                    is_video: false,
                 }),
                 bga_layer: Some(SkinBgaFrame {
                     texture: SkinTextureId(20001),
@@ -9389,6 +9411,7 @@ mod tests {
                     tint_g: 1.0,
                     tint_b: 1.0,
                     tint_a: 1.0,
+                    is_video: false,
                 }),
                 bga_poor: Some(SkinBgaFrame {
                     texture: SkinTextureId(20002),
@@ -9397,6 +9420,7 @@ mod tests {
                     tint_g: 1.0,
                     tint_b: 1.0,
                     tint_a: 1.0,
+                    is_video: false,
                 }),
                 ..SkinDrawState::default()
             },
@@ -9437,6 +9461,7 @@ mod tests {
                     tint_g: 1.0,
                     tint_b: 1.0,
                     tint_a: 1.0,
+                    is_video: false,
                 }),
                 bga_stretch: 1,
                 ..SkinDrawState::default()
@@ -9485,6 +9510,7 @@ mod tests {
                     tint_g: 1.0,
                     tint_b: 1.0,
                     tint_a: 1.0,
+                    is_video: false,
                 }),
                 bga_stretch: 1,
                 ..SkinDrawState::default()

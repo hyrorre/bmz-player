@@ -277,10 +277,27 @@ pub struct DisplayBgaFrame {
     pub tint_g: f32,
     pub tint_b: f32,
     pub tint_a: f32,
+    /// 動画 BGA フレームかどうか。beatoraja は動画 Layer に対して
+    /// `layer.frag` (黒クロマキー) ではなく `ffmpeg.frag` を使うため、
+    /// Layer/Layer2 でも動画ならクロマキーを適用しない。
+    pub is_video: bool,
 }
 
 impl DisplayBgaFrame {
     pub fn opaque(texture_id: u32, width: f32, height: f32) -> Self {
-        Self { texture_id, width, height, tint_r: 1.0, tint_g: 1.0, tint_b: 1.0, tint_a: 1.0 }
+        Self {
+            texture_id,
+            width,
+            height,
+            tint_r: 1.0,
+            tint_g: 1.0,
+            tint_b: 1.0,
+            tint_a: 1.0,
+            is_video: false,
+        }
+    }
+
+    pub fn opaque_video(texture_id: u32, width: f32, height: f32) -> Self {
+        Self { is_video: true, ..Self::opaque(texture_id, width, height) }
     }
 }

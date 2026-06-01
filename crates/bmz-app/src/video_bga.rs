@@ -7,7 +7,7 @@ use bmz_render::plan::TextureId;
 use bmz_video::VideoBgaDecoder;
 
 use crate::audio::RunningPlaySession;
-use crate::screens::play_snapshot::{bga_texture_id, display_bga_frame};
+use crate::screens::play_snapshot::{bga_texture_id, display_video_bga_frame};
 
 pub struct ActiveVideoBgaDecoder {
     pub event_start_time: TimeUs,
@@ -131,7 +131,9 @@ fn update_single_video(
         match renderer.upsert_rgba_texture(texture_id, width, height, rgba) {
             Ok(()) => {
                 active.last_pts = Some(pts);
-                running.bga_frames.insert(asset_id, display_bga_frame(asset_id, width, height));
+                running
+                    .bga_frames
+                    .insert(asset_id, display_video_bga_frame(asset_id, width, height));
             }
             Err(e) => {
                 tracing::warn!(asset_id = asset_id.0, %e, "failed to upload video BGA frame");
