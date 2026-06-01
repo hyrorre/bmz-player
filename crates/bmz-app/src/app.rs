@@ -406,8 +406,8 @@ fn course_result_summary_for_skin(course: &CourseResultSummary) -> ResultSummary
         judge_counts: course.judge_counts.clone(),
         fast_slow_counts,
         replay_path: String::new(),
-        replay_slots: [false; 4],
-        saved_replay_slots: [false; 4],
+        replay_slots: course.replay_slots,
+        saved_replay_slots: course.saved_replay_slots,
         score_history_id: course.best_score.as_ref().map(|best| best.course_score_id).unwrap_or(0),
         best_ex_score: course.best_score.as_ref().map(|best| best.ex_score),
         best_clear_type,
@@ -2097,7 +2097,7 @@ impl WinitApp {
                     // helper for identical semantics (Always overwrites
                     // unconditionally; Score / MissCount / MaxCombo / Clear
                     // require strict improvement; empty slot always wins).
-                    self.update_course_replay_slots(
+                    course_result.saved_replay_slots = self.update_course_replay_slots(
                         course_id,
                         course_score_id,
                         played_at,
@@ -2106,6 +2106,22 @@ impl WinitApp {
                         max_combo,
                         final_clear_type as u8,
                     );
+                    course_result.replay_slots =
+                        self.boot.library_db.course_replay_slot_presence(course_id).unwrap_or_else(
+                            |error| {
+                                tracing::warn!(
+                                    %error,
+                                    course_id,
+                                    "failed to read course replay slot presence"
+                                );
+                                [false; 4]
+                            },
+                        );
+                    for (index, saved) in course_result.saved_replay_slots.iter().enumerate() {
+                        if *saved {
+                            course_result.replay_slots[index] = true;
+                        }
+                    }
                 }
                 Err(error) => {
                     tracing::error!(%error, course_id, "failed to persist course score");
@@ -2140,7 +2156,7 @@ impl WinitApp {
         miss_count: u32,
         max_combo: u32,
         clear_rank: u8,
-    ) {
+    ) -> [bool; 4] {
         let slot_rules = self.boot.profile_config.replay.slot_rules;
         let candidate = crate::storage::play_result::CandidateMetrics {
             ex_score,
@@ -2148,6 +2164,7 @@ impl WinitApp {
             max_combo,
             clear_rank,
         };
+        let mut saved_slots = [false; 4];
         for (slot_index, &rule) in slot_rules.iter().enumerate() {
             let slot = slot_index as u8;
             let prev = match self.boot.library_db.course_replay_slot(course_id, slot) {
@@ -2178,15 +2195,19 @@ impl WinitApp {
                 max_combo,
                 clear_rank,
             };
-            if let Err(error) = self.boot.library_db.upsert_course_replay_slot(&record) {
-                tracing::warn!(
-                    %error,
-                    course_id,
-                    slot,
-                    "failed to upsert course_replay_slot"
-                );
+            match self.boot.library_db.upsert_course_replay_slot(&record) {
+                Ok(()) => saved_slots[slot_index] = true,
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        course_id,
+                        slot,
+                        "failed to upsert course_replay_slot"
+                    );
+                }
             }
         }
+        saved_slots
     }
 
     fn begin_decide_for_chart(&mut self, chart_id: i64, options: PlayStartOptions) {
@@ -5524,6 +5545,8 @@ mod tests {
             course_failed: false,
             total_entries: 2,
             played_entries: 2,
+            replay_slots: [true, false, true, false],
+            saved_replay_slots: [false, false, true, false],
             best_score: None,
         };
 
@@ -5533,6 +5556,8 @@ mod tests {
         assert_eq!(summary.ex_score, 320);
         assert_eq!(summary.total_notes, 220);
         assert_eq!(summary.max_combo, 90);
+        assert_eq!(summary.replay_slots, [true, false, true, false]);
+        assert_eq!(summary.saved_replay_slots, [false, false, true, false]);
         assert_eq!(summary.judge_counts.pgreat, 160);
         assert_eq!(summary.fast_slow_counts.fast_pgreat, 160);
         assert_eq!(

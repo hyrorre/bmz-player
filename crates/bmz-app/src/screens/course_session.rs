@@ -40,6 +40,8 @@ pub struct CourseResultSummary {
     pub total_entries: usize,
     /// Number of entries the player actually played (includes the failed one).
     pub played_entries: usize,
+    pub replay_slots: [bool; 4],
+    pub saved_replay_slots: [bool; 4],
     /// Best persisted course score (queried after the current attempt was
     /// inserted, so this reflects the new attempt when it improved the
     /// record).  `None` if persistence is unavailable (autoplay, etc.) or
@@ -125,6 +127,8 @@ impl ActiveCourseSession {
             course_failed,
             total_entries,
             played_entries,
+            replay_slots: [false; 4],
+            saved_replay_slots: [false; 4],
             // Populated separately by the caller (advance_course_after_finish)
             // after persisting this attempt, so the lookup includes the row
             // we just inserted.
