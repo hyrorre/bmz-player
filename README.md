@@ -10,14 +10,24 @@ Supported Skin: beatoraja json skin / beatoraja lua skin
 
 ## How to build
 
+Use the same version of FFmpeg as specified in Cargo.toml
+
 ### Windows (stable-x86_64-pc-windows-msvc)
 
-Install vcpkg beforehand.
-
 ```powershell
-winget install llvm.llvm
+# Install vcpkg
+git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
+$Env:Path+=";C:\vcpkg"
 vcpkg integrate install
+
+# Install rust
+winget install Rustlang.Rustup llvm.llvm
+rustup toolchain install stable-msvc
+rustup default stable-msvc
+
+# Install dependencies
 vcpkg install ffmpeg:x64-windows
+
 cargo build
 cargo run
 ```
@@ -27,7 +37,31 @@ cargo run
 Install Homebrew beforehand.
 
 ```sh
+# Install rust
+brew install rust rustup
+rustup toolchain install stable
+
+# Install dependencies
 brew install ffmpeg
+
+cargo build
+cargo run
+```
+
+### Linux (stable-x86_64-unknown-linux-gnu)
+
+Example in `fedora`
+
+```sh
+# Install rust
+sudo dnf update -y
+sudo dnf install -y rustup
+rustup-init
+source ~/.bashrc
+
+# Install dependencies
+sudo dnf install -y gcc g++ make clang llvm git ffmpeg-free ffmpeg-free-devel openssl-devel alsa-lib-devel rust-libudev-devel fontconfig-devel pipewire pipewire-pulseaudio wireplumber alsa-utils alsa-plugins-pulseaudio google-noto-sans-cjk-fonts google-noto-sans-cjk-vf-fonts
+
 cargo build
 cargo run
 ```
