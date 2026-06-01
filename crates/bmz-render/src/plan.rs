@@ -788,6 +788,7 @@ fn plan_play(
         ready_timer_ms,
         play_timer_ms: (snapshot.time.0 >= 0)
             .then_some((snapshot.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32),
+        key_mode,
         combo: snapshot.combo,
         max_combo: snapshot.max_combo,
         ex_score: snapshot.ex_score,

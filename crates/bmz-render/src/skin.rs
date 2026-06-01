@@ -1398,6 +1398,7 @@ pub struct SkinDrawState {
     pub elapsed_ms: i32,
     pub ready_timer_ms: Option<i32>,
     pub play_timer_ms: Option<i32>,
+    pub key_mode: KeyMode,
     pub select_bar_elapsed_ms: i32,
     pub select_option_panel_elapsed_ms: i32,
     pub select_option_panel: u8,
@@ -1611,6 +1612,7 @@ impl Default for SkinDrawState {
             elapsed_ms: 0,
             ready_timer_ms: None,
             play_timer_ms: None,
+            key_mode: KeyMode::default(),
             select_bar_elapsed_ms: 0,
             select_option_panel_elapsed_ms: 0,
             select_option_panel: 0,
@@ -5793,6 +5795,7 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         370 => Some(state.select_clear_index),
         92 if state.select_screen => Some(state.select_bpm.round() as i64),
         92 => Some(state.main_bpm.round() as i64),
+        100 => Some(skin_point_score(state) as i64),
         71 | 101 | 171 => Some(state.ex_score as i64),
         72 => Some(state.total_notes as i64 * 2),
         74 | 106 | 333 => Some(state.total_notes.max(state.select_total_notes) as i64),
@@ -6021,9 +6024,9 @@ fn skin_image_texture_region_for_state(
     state: Option<SkinDrawState>,
     pixel_rect: (i32, i32, i32, i32),
 ) -> TextureRegion {
-    let (px, py, pw, ph) = pixel_rect;
     let source_width = source_size.width.max(1.0);
     let source_height = source_size.height.max(1.0);
+    let (px, py, pw, ph) = resolve_skin_image_pixel_rect(pixel_rect, source_width, source_height);
     let divx = image.divx.max(1);
     let divy = image.divy.max(1);
     let frame_count = divx * divy;
@@ -6059,6 +6062,19 @@ fn skin_image_texture_region_for_state(
     }
 }
 
+fn resolve_skin_image_pixel_rect(
+    pixel_rect: (i32, i32, i32, i32),
+    source_width: f32,
+    source_height: f32,
+) -> (i32, i32, i32, i32) {
+    let (px, py, pw, ph) = pixel_rect;
+    let resolved_w =
+        if pw < 0 { (source_width.round() as i32).saturating_sub(px).max(0) } else { pw };
+    let resolved_h =
+        if ph < 0 { (source_height.round() as i32).saturating_sub(py).max(0) } else { ph };
+    (px, py, resolved_w, resolved_h)
+}
+
 fn gauge_after_dot(gauge: f32) -> u32 {
     if gauge > 0.0 && gauge < 0.1 { 1 } else { ((gauge.max(0.0) * 10.0) as u32) % 10 }
 }
@@ -6070,6 +6086,33 @@ fn timing_afterdot(value: f32) -> i64 {
 
 fn current_misscount(state: SkinDrawState) -> u32 {
     state.judge_counts.bad + state.judge_counts.poor
+}
+
+fn skin_point_score(state: SkinDrawState) -> u32 {
+    let total_notes = state.total_notes;
+    if total_notes == 0 {
+        return 0;
+    }
+    let counts = state.judge_counts;
+    let numerator = match state.key_mode {
+        KeyMode::K5 | KeyMode::K10 => {
+            100_000_u64 * u64::from(counts.pgreat)
+                + 100_000_u64 * u64::from(counts.great)
+                + 50_000_u64 * u64::from(counts.good)
+        }
+        KeyMode::K7 | KeyMode::K14 | KeyMode::K4 | KeyMode::K6 | KeyMode::K8 => {
+            150_000_u64 * u64::from(counts.pgreat)
+                + 100_000_u64 * u64::from(counts.great)
+                + 20_000_u64 * u64::from(counts.good)
+                + 50_000_u64 * u64::from(state.max_combo)
+        }
+        KeyMode::K9 => {
+            100_000_u64 * u64::from(counts.pgreat)
+                + 70_000_u64 * u64::from(counts.great)
+                + 40_000_u64 * u64::from(counts.good)
+        }
+    };
+    (numerator / u64::from(total_notes)).min(u64::from(u32::MAX)) as u32
 }
 
 fn score_rate_cmp_value(ex_score: u32, total_notes: u32) -> u32 {
@@ -6877,8 +6920,10 @@ fn best_rank_op_matches(op: i32, state: SkinDrawState) -> bool {
 fn current_rank_inputs(state: SkinDrawState) -> (Option<u32>, u32) {
     if state.result_failed.is_some() {
         (Some(state.ex_score), state.total_notes)
-    } else {
+    } else if state.select_screen {
         (state.select_ex_score, state.select_total_notes)
+    } else {
+        (Some(state.ex_score), state.total_notes)
     }
 }
 
@@ -8938,16 +8983,19 @@ mod tests {
     #[test]
     fn select_rank_ops_reflect_selected_ex_score() {
         let aa_state = SkinDrawState {
+            select_screen: true,
             select_ex_score: Some(1556),
             select_total_notes: 1000,
             ..SkinDrawState::default()
         };
         let max_state = SkinDrawState {
+            select_screen: true,
             select_ex_score: Some(2000),
             select_total_notes: 1000,
             ..SkinDrawState::default()
         };
         let f_state = SkinDrawState {
+            select_screen: true,
             select_ex_score: Some(300),
             select_total_notes: 1000,
             ..SkinDrawState::default()
@@ -8962,6 +9010,18 @@ mod tests {
         assert!(test_skin_op(207, &[], f_state));
         assert!(!test_skin_op(307, &[], f_state));
         assert!(!test_skin_op(200, &[], SkinDrawState::default()));
+    }
+
+    #[test]
+    fn play_rank_ops_reflect_current_ex_score() {
+        let aa_state =
+            SkinDrawState { ex_score: 1556, total_notes: 1000, ..SkinDrawState::default() };
+        let aaa_state =
+            SkinDrawState { ex_score: 1800, total_notes: 1000, ..SkinDrawState::default() };
+
+        assert!(test_skin_op(201, &[], aa_state));
+        assert!(!test_skin_op(200, &[], aa_state));
+        assert!(test_skin_op(200, &[], aaa_state));
     }
 
     #[test]
@@ -11937,6 +11997,33 @@ mod tests {
         assert_eq!(rect, (black.x, black.y, black.w, black.h));
     }
 
+    #[test]
+    fn image_negative_crop_size_uses_remaining_source_extent() {
+        let image = SkinImageDef {
+            id: "frame".to_string(),
+            src: "src".to_string(),
+            x: 10,
+            y: 20,
+            w: -1,
+            h: -1,
+            divx: 1,
+            divy: 1,
+            timer: None,
+            cycle: 0,
+            len: 0,
+            ref_id: 0,
+            click: 0,
+        };
+
+        let uv =
+            skin_image_texture_region(&image, SkinImageSize { width: 110.0, height: 220.0 }, 0);
+
+        assert!(approx_eq(uv.x, 10.0 / 110.0));
+        assert!(approx_eq(uv.y, 20.0 / 220.0));
+        assert!(approx_eq(uv.width, 100.0 / 110.0));
+        assert!(approx_eq(uv.height, 200.0 / 220.0));
+    }
+
     /// Starseeker 閉店の `black` 相当: `src = "bg"` を `system` に解決し、timer 3 で暗転フェード。
     #[test]
     fn failed_close_black_fades_in_over_fullscreen() {
@@ -12333,6 +12420,28 @@ mod tests {
         assert_eq!(skin_state_number(427, state), Some(7));
         assert!(test_skin_op(181, &[], state));
         assert!(!test_skin_op(182, &[], state));
+    }
+
+    #[test]
+    fn skin_state_number_maps_beatoraja_point_score() {
+        let state = SkinDrawState {
+            key_mode: KeyMode::K7,
+            max_combo: 45,
+            total_notes: 100,
+            judge_counts: DisplayJudgeCounts {
+                pgreat: 30,
+                great: 20,
+                good: 10,
+                bad: 4,
+                poor: 3,
+                empty_poor: 2,
+            },
+            ..SkinDrawState::default()
+        };
+        assert_eq!(skin_state_number(100, state), Some(89_500));
+
+        let five_key = SkinDrawState { key_mode: KeyMode::K5, ..state };
+        assert_eq!(skin_state_number(100, five_key), Some(55_000));
     }
 
     #[test]
