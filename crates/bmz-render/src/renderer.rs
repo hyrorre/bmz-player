@@ -1133,8 +1133,8 @@ impl TextAtlasBuilder {
             }
         }
 
-        let mut scale =
-            (style.size * surface.height as f32 / font.line_height.max(1) as f32).max(0.01);
+        let design_size = if font.size > 0 { font.size } else { font.line_height.max(1) };
+        let mut scale = (style.size * surface.height as f32 / design_size as f32).max(0.01);
         let mut text_width = bitmap_text_width_px(text, font, scale);
         let max_width = style.max_width.max(0.0) * surface.width as f32;
         let text = if max_width > 0.0 && text_width > max_width {
@@ -2338,7 +2338,15 @@ mod tests {
         let mut bitmap_fonts = HashMap::new();
         bitmap_fonts.insert(
             "bitmap".to_string(),
-            BitmapFont { line_height: 10, base: 8, scale_width: 1, scale_height: 1, pages, glyphs },
+            BitmapFont {
+                size: 10,
+                line_height: 10,
+                base: 8,
+                scale_width: 1,
+                scale_height: 1,
+                pages,
+                glyphs,
+            },
         );
         let plan = DrawPlan {
             clear: Color::rgb(0.0, 0.0, 0.0),

@@ -7,6 +7,7 @@ use crate::assets::{RgbaImageAsset, load_png_rgba};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct BitmapFont {
+    pub size: i32,
     pub line_height: i32,
     pub base: i32,
     pub scale_width: u32,
@@ -45,6 +46,7 @@ pub fn load_bitmap_font(path: &Path) -> Result<BitmapFont> {
 }
 
 fn parse_bitmap_font(text: &str, base_dir: &Path) -> Result<BitmapFont> {
+    let mut size = 0;
     let mut line_height = 0;
     let mut base = 0;
     let mut scale_width = 0;
@@ -54,7 +56,9 @@ fn parse_bitmap_font(text: &str, base_dir: &Path) -> Result<BitmapFont> {
 
     for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
         let fields = parse_fields(line);
-        if line.starts_with("common ") {
+        if line.starts_with("info ") {
+            size = parse_i32(&fields, "size").unwrap_or_default().unsigned_abs() as i32;
+        } else if line.starts_with("common ") {
             line_height = parse_i32(&fields, "lineHeight")?;
             base = parse_i32(&fields, "base").unwrap_or(line_height);
             scale_width = parse_i32(&fields, "scaleW")?.max(1) as u32;
@@ -98,7 +102,7 @@ fn parse_bitmap_font(text: &str, base_dir: &Path) -> Result<BitmapFont> {
         pages.insert(id, BitmapFontPage { id, path, image });
     }
 
-    Ok(BitmapFont { line_height, base, scale_width, scale_height, pages, glyphs })
+    Ok(BitmapFont { size, line_height, base, scale_width, scale_height, pages, glyphs })
 }
 
 fn parse_fields(line: &str) -> HashMap<String, String> {
@@ -167,6 +171,7 @@ char id=65 x=0 y=0 width=1 height=1 xoffset=1 yoffset=2 xadvance=9 page=0 chnl=0
         let font = load_bitmap_font(&root.join("font.fnt")).unwrap();
 
         assert_eq!(font.line_height, 20);
+        assert_eq!(font.size, 16);
         assert_eq!(font.base, 15);
         assert_eq!(font.pages[&0].image.width, 2);
         assert_eq!(font.glyphs[&'A'].xadvance, 9);
