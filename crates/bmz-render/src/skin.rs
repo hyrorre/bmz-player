@@ -470,6 +470,10 @@ pub const SKIN_EVENT_HSFIX: i32 = 55;
 /// `SkinDrawState::dynamic_timer_ms` のスロット数。
 pub const SKIN_DYNAMIC_TIMER_COUNT: usize = 64;
 
+fn string_array_refs(values: &[String; 10]) -> [&str; 10] {
+    std::array::from_fn(|index| values[index].as_str())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct SkinDynamicTimerDef {
     pub id: i32,
@@ -1549,6 +1553,7 @@ pub struct SkinTextState<'a> {
     pub table_text_secondary: &'a str,
     pub table_text_fallback: &'a str,
     pub course_stage: Option<CourseStageMarker>,
+    pub course_titles: [&'a str; 10],
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -2491,6 +2496,9 @@ impl SkinDocument {
             target: &snapshot.target,
             current_folder: &snapshot.current_folder,
             table_level: selected_row.map(|row| row.table_level.as_str()).unwrap_or_default(),
+            course_titles: selected_row
+                .map(|row| string_array_refs(&row.course_titles))
+                .unwrap_or_default(),
             ..SkinTextState::default()
         };
 
@@ -5768,6 +5776,7 @@ fn skin_state_text(text: &SkinTextDef, state: SkinTextState<'_>) -> String {
         15 => state.subartist.to_string(),
         16 => full_label(state.artist, state.subartist),
         17 => state.table_level.to_string(),
+        150..=159 => state.course_titles[(text.ref_id - 150) as usize].to_string(),
         1001 => state.table_text_primary.to_string(),
         1002 => state.table_text_secondary.to_string(),
         1003 => state.table_text_fallback.to_string(),
@@ -12774,6 +12783,10 @@ mod tests {
             subartist: "Feat. X",
             genre: "TRANCE",
             target: "AAA",
+            course_titles: [
+                "Stage 1", "Stage 2", "Stage 3", "Stage 4", "Stage 5", "Stage 6", "Stage 7",
+                "Stage 8", "Stage 9", "Stage 10",
+            ],
             ..SkinTextState::default()
         };
 
@@ -12803,6 +12816,9 @@ mod tests {
         // STRING_TARGETNAME_P1/N1 (209/210)
         assert_eq!(skin_state_text(&make_text(209), state), "MAX");
         assert_eq!(skin_state_text(&make_text(210), state), "RANK AA");
+        // STRING_COURSE1_TITLE..10_TITLE (150..159)
+        assert_eq!(skin_state_text(&make_text(150), state), "Stage 1");
+        assert_eq!(skin_state_text(&make_text(159), state), "Stage 10");
         // Unknown ref → empty
         assert_eq!(skin_state_text(&make_text(99), state), "");
     }

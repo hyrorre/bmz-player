@@ -83,6 +83,9 @@ pub struct SelectRowSnapshot {
     /// あるため Vec を抱えられない) — 対応する skin op を実装するときは
     /// `select_skin_items` のループから row を直接参照して描画判定する。
     pub achieved_trophy_names: Vec<String>,
+    /// beatoraja STRING_COURSE1_TITLE..10_TITLE (150..159) for course rows.
+    /// Empty for non-course rows.
+    pub course_titles: [String; 10],
 }
 
 impl Default for SelectRowSnapshot {
@@ -115,6 +118,7 @@ impl Default for SelectRowSnapshot {
             kind: SelectRowKind::default(),
             in_library: true,
             achieved_trophy_names: Vec::new(),
+            course_titles: Default::default(),
         }
     }
 }

@@ -176,6 +176,7 @@ pub fn build_render_snapshot_with_target_and_bga_frames(
         bpm_graph_segments: build_bpm_graph_segments(&session.chart),
         autoplay: session.autoplay.is_some(),
         course_stage: None,
+        course_titles: Default::default(),
         table_text_primary: String::new(),
         table_text_secondary: String::new(),
         table_text_fallback: String::new(),

@@ -38,6 +38,10 @@ pub const SELECT_BANNER_TEXTURE: TextureId = TextureId(22);
 /// 20000 帯に置くと select スキン PNG をプレイ中に上書きし、リザルト復帰後も背景が壊れたままになる。
 pub const CHART_BGA_TEXTURE_BASE: u32 = 50_000;
 
+fn string_array_refs(values: &[String; 10]) -> [&str; 10] {
+    std::array::from_fn(|index| values[index].as_str())
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct DrawPlan {
     pub clear: Color,
@@ -910,6 +914,7 @@ fn plan_play(
         table_text_secondary: &snapshot.table_text_secondary,
         table_text_fallback: &snapshot.table_text_fallback,
         course_stage: snapshot.course_stage,
+        course_titles: string_array_refs(&snapshot.course_titles),
         ..SkinTextState::default()
     };
     // `{"id":"notes"}` マーカーと `timer: 3` (FAILED) で3分割。
@@ -1196,6 +1201,7 @@ fn plan_decide(
             genre: &snapshot.genre,
             difficulty_name: &snapshot.difficulty_name,
             play_level: &snapshot.play_level,
+            course_titles: string_array_refs(&snapshot.course_titles),
             ..SkinTextState::default()
         };
         let items = skin.static_document_items_for_state_and_text(state, text);

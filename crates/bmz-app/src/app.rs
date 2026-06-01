@@ -1589,6 +1589,24 @@ impl WinitApp {
         })
     }
 
+    fn current_course_titles(&self) -> [String; 10] {
+        let Some(course) = self.active_course.as_ref() else {
+            return Default::default();
+        };
+        course_titles_from_entries(
+            course
+                .definition
+                .entries
+                .iter()
+                .map(|entry| (entry.title_hint.as_str(), entry.chart_id.is_some())),
+        )
+    }
+
+    fn apply_course_skin_context(&self, snapshot: &mut RenderSnapshot) {
+        snapshot.course_stage = self.current_course_stage_marker();
+        snapshot.course_titles = self.current_course_titles();
+    }
+
     fn start_chart(&mut self, chart_id: i64) {
         let options = self.play_start_options();
         self.begin_decide_for_chart(chart_id, options);
@@ -2206,6 +2224,7 @@ impl WinitApp {
         snapshot.ready_elapsed_time = None;
         snapshot.time = self.play_skin_playstart_offset();
         self.capture_play_table_text_for_chart(chart_id);
+        self.apply_course_skin_context(&mut snapshot);
         self.apply_play_table_text(&mut snapshot);
         self.last_play_snapshot = Some(snapshot.clone());
         self.pending_play_start = Some(PendingPlayStart { chart_id });
@@ -2231,7 +2250,6 @@ impl WinitApp {
             );
         }
         let render_now = self.play_skin_playstart_offset();
-        let course_stage = self.current_course_stage_marker();
         let mut snapshot = build_render_snapshot_with_target_and_bga_frames(
             &active_play.running.session,
             render_now,
@@ -2244,7 +2262,7 @@ impl WinitApp {
         snapshot.backbmp_background = self.play_backbmp_loaded;
         snapshot.play_elapsed_time = self.play_elapsed_time();
         snapshot.ready_elapsed_time = self.play_ready_sound_started_at.map(elapsed_since);
-        snapshot.course_stage = course_stage;
+        self.apply_course_skin_context(&mut snapshot);
         self.apply_play_table_text(&mut snapshot);
         self.last_play_snapshot = Some(snapshot);
         self.active_play = Some(active_play);
@@ -2941,7 +2959,7 @@ impl WinitApp {
             self.update_pending_play_snapshot_timers();
             return;
         }
-        // Capture the course stage before borrowing self.active_play mutably below.
+        let course_titles = self.current_course_titles();
         let course_stage = self.current_course_stage_marker();
         let Some(active_play) = &mut self.active_play else {
             return;
@@ -2970,6 +2988,7 @@ impl WinitApp {
                 snapshot.ready_elapsed_time = self.play_ready_sound_started_at.map(elapsed_since);
                 snapshot.backbmp_background = self.play_backbmp_loaded;
                 snapshot.course_stage = course_stage;
+                snapshot.course_titles = course_titles.clone();
                 self.apply_play_table_text(&mut snapshot);
                 self.last_play_snapshot = Some(snapshot);
                 self.play_landmine_se(mine_hits);
@@ -2982,6 +3001,7 @@ impl WinitApp {
                 snapshot.ready_elapsed_time = self.play_ready_sound_started_at.map(elapsed_since);
                 snapshot.backbmp_background = self.play_backbmp_loaded;
                 snapshot.course_stage = course_stage;
+                snapshot.course_titles = course_titles.clone();
                 self.apply_play_table_text(&mut snapshot);
                 let full_combo_elapsed_at_finish_ms = snapshot.full_combo_elapsed_ms;
                 self.last_play_snapshot = Some(snapshot);
@@ -3076,7 +3096,7 @@ impl WinitApp {
         );
 
         let mut snapshot = refresh_play_ending_snapshot(&mut active_play.running, timers);
-        snapshot.course_stage = self.current_course_stage_marker();
+        self.apply_course_skin_context(&mut snapshot);
         self.apply_play_table_text(&mut snapshot);
         self.last_play_snapshot = Some(snapshot);
     }
@@ -4484,6 +4504,7 @@ fn select_snapshot_rows(
                     kind: *kind,
                     in_library: true,
                     achieved_trophy_names: Vec::new(),
+                    course_titles: Default::default(),
                 },
                 SelectItem::Chart(row) => {
                     let play_count = u32::from(row.best_score.is_some());
@@ -4550,6 +4571,7 @@ fn select_snapshot_rows(
                         in_library: row.in_library(),
                         // Song rows have no course trophies.
                         achieved_trophy_names: Vec::new(),
+                        course_titles: Default::default(),
                     }
                 }
                 SelectItem::Course(row) => SelectRowSnapshot {
@@ -4590,6 +4612,11 @@ fn select_snapshot_rows(
                     kind: bmz_render::scene::SelectRowKind::Course,
                     in_library: row.exists_all_songs(),
                     achieved_trophy_names: row.achieved_trophy_names.clone(),
+                    course_titles: course_titles_from_entries(
+                        row.entry_previews
+                            .iter()
+                            .map(|entry| (entry.title.as_str(), entry.resolved)),
+                    ),
                 },
             }
         })
@@ -4670,6 +4697,20 @@ fn select_wheel_move(delta: MouseScrollDelta) -> Option<SelectMove> {
     } else {
         None
     }
+}
+
+fn course_titles_from_entries<'a>(
+    entries: impl IntoIterator<Item = (&'a str, bool)>,
+) -> [String; 10] {
+    let mut titles: [String; 10] = Default::default();
+    for (index, (title, resolved)) in entries.into_iter().take(10).enumerate() {
+        titles[index] = if resolved {
+            title.to_string()
+        } else {
+            format!("(no song) {}", if title.is_empty() { "----" } else { title })
+        };
+    }
+    titles
 }
 
 fn moved_select_index(current_index: usize, row_count: usize, select_move: SelectMove) -> usize {
@@ -5666,6 +5707,9 @@ mod tests {
 
         assert!(snapshot_rows.iter().any(|row| row.title == "Course 4/4" && row.in_library));
         assert!(snapshot_rows.iter().any(|row| row.title == "Course 3/4" && !row.in_library));
+        let partial = snapshot_rows.iter().find(|row| row.title == "Course 3/4").unwrap();
+        assert_eq!(partial.course_titles[0], "Stage 1");
+        assert_eq!(partial.course_titles[3], "(no song) Stage 4");
     }
 
     #[test]
@@ -5721,6 +5765,16 @@ mod tests {
     }
 
     fn select_course_row(resolved_count: usize, entry_count: usize) -> SelectCourseRow {
+        let entry_previews = (0..entry_count)
+            .map(|index| crate::screens::select_model::CourseEntryPreview {
+                title: format!("Stage {}", index + 1),
+                artist: String::new(),
+                play_level: String::new(),
+                difficulty_name: String::new(),
+                total_notes: 0,
+                resolved: index < resolved_count,
+            })
+            .collect();
         SelectCourseRow {
             course_id: resolved_count as i64,
             title: format!("Course {resolved_count}/{entry_count}"),
@@ -5733,7 +5787,7 @@ mod tests {
             max_bpm: 128.0,
             category_label: "DAN".to_string(),
             trophy_names: Vec::new(),
-            entry_previews: Vec::new(),
+            entry_previews,
             best_score: None,
             replay_slots: [false; 4],
             achieved_trophy_names: Vec::new(),

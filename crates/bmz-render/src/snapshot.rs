@@ -101,6 +101,8 @@ pub struct RenderSnapshot {
     pub autoplay: bool,
     /// OPTION_MODE_COURSE (290) とステージ別 op (280..283 / 289) 用。未対応時は None。
     pub course_stage: Option<CourseStageMarker>,
+    /// beatoraja STRING_COURSE1_TITLE..10_TITLE (150..159) 用。
+    pub course_titles: [String; 10],
     /// beatoraja `TEXT_TABLE1` (1001): 難易度表名 (例: `[★] Insane`)。
     pub table_text_primary: String,
     /// beatoraja `TEXT_TABLE2` (1002): 表内レベル (例: `★12`)。
