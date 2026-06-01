@@ -4520,6 +4520,10 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool 
         289 => state.course_stage == Some(CourseStageMarker::Final),
         // OPTION_MODE_COURSE
         290 => state.course_stage.is_some(),
+        // beatoraja defines OPTION_MODE_NONSTOP / EXPERT / GRADE (291..293)
+        // but does not expose BooleanProperty handlers for them.  Return
+        // false here instead of falling through to skin property defaults.
+        291..=293 => false,
         value => test_json_option_number(value, enabled_options),
     }
 }
@@ -7940,6 +7944,15 @@ mod tests {
         assert!(test_skin_ops(&[32, 290, 280], &[], course_stage1));
         assert!(!test_skin_ops(&[32, 290, 280], &[], course_final));
         assert!(test_skin_ops(&[32, 290, 289], &[], course_final));
+
+        // beatoraja currently leaves these defined constants without BooleanProperty handlers.
+        for op in 291..=293 {
+            assert!(
+                !test_skin_op(op, &[op], course_stage1),
+                "{op} must not fall back to property defaults"
+            );
+            assert!(test_skin_op(-op, &[op], course_stage1), "negative {op} should invert false");
+        }
     }
 
     #[test]
