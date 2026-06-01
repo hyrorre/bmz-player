@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
+use bmz_core::judge::Judge;
 use bmz_core::lane::{KeyMode, LANE_COUNT, Lane};
 use serde::de::{Error as DeError, Visitor};
 use serde::{Deserialize, Deserializer};
@@ -103,6 +104,10 @@ pub struct SkinDocument {
     #[serde(default, rename = "hiterrorvisualizer")]
     pub hiterror_visualizer: Vec<SkinHitErrorVisualizerDef>,
     #[serde(default)]
+    pub timingvisualizer: Vec<SkinTimingVisualizerDef>,
+    #[serde(default)]
+    pub timingdistributiongraph: Vec<SkinTimingDistributionGraphDef>,
+    #[serde(default)]
     pub gaugegraph: Vec<SkinGaugeGraphDef>,
     #[serde(default)]
     pub judgegraph: Vec<SkinJudgeGraphDef>,
@@ -134,6 +139,9 @@ pub struct SkinDocument {
     /// リザルト描画時のみ plan 側が設定する gaugegraph 推移。
     #[serde(skip, default)]
     pub result_gauge_graph_points: Vec<crate::snapshot::ResultGaugeGraphPoint>,
+    /// リザルト描画時のみ plan 側が設定する timing graph 推移。
+    #[serde(skip, default)]
+    pub result_timing_points: Vec<crate::snapshot::ResultTimingPoint>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
@@ -644,6 +652,66 @@ pub struct SkinHitErrorVisualizerDef {
     pub draw_decay: i32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SkinTimingVisualizerDef {
+    #[serde(default, deserialize_with = "deserialize_skin_id")]
+    pub id: String,
+    #[serde(default = "default_timing_width")]
+    pub width: i32,
+    #[serde(default = "default_timing_judge_width_millis", rename = "judgeWidthMillis")]
+    pub judge_width_millis: i32,
+    #[serde(default = "default_true_int", rename = "lineWidth")]
+    pub line_width: i32,
+    #[serde(default = "default_timing_line_color", rename = "lineColor")]
+    pub line_color: String,
+    #[serde(default = "default_timing_center_color", rename = "centerColor")]
+    pub center_color: String,
+    #[serde(default = "default_timing_pg_color", rename = "PGColor")]
+    pub pg_color: String,
+    #[serde(default = "default_timing_gr_color", rename = "GRColor")]
+    pub gr_color: String,
+    #[serde(default = "default_timing_gd_color", rename = "GDColor")]
+    pub gd_color: String,
+    #[serde(default = "default_timing_bd_color", rename = "BDColor")]
+    pub bd_color: String,
+    #[serde(default = "default_timing_pr_color", rename = "PRColor")]
+    pub pr_color: String,
+    #[serde(default)]
+    pub transparent: i32,
+    #[serde(default = "default_true_int", rename = "drawDecay")]
+    pub draw_decay: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SkinTimingDistributionGraphDef {
+    #[serde(default, deserialize_with = "deserialize_skin_id")]
+    pub id: String,
+    #[serde(default = "default_timing_width")]
+    pub width: i32,
+    #[serde(default = "default_true_int", rename = "lineWidth")]
+    pub line_width: i32,
+    #[serde(default = "default_timing_line_color", rename = "graphColor")]
+    pub graph_color: String,
+    #[serde(default = "default_timing_center_color", rename = "averageColor")]
+    pub average_color: String,
+    #[serde(default = "default_timing_center_color", rename = "devColor")]
+    pub dev_color: String,
+    #[serde(default = "default_timing_pg_color", rename = "PGColor")]
+    pub pg_color: String,
+    #[serde(default = "default_timing_gr_color", rename = "GRColor")]
+    pub gr_color: String,
+    #[serde(default = "default_timing_gd_color", rename = "GDColor")]
+    pub gd_color: String,
+    #[serde(default = "default_timing_bd_color", rename = "BDColor")]
+    pub bd_color: String,
+    #[serde(default = "default_timing_pr_color", rename = "PRColor")]
+    pub pr_color: String,
+    #[serde(default = "default_true_int", rename = "drawAverage")]
+    pub draw_average: i32,
+    #[serde(default = "default_true_int", rename = "drawDev")]
+    pub draw_dev: i32,
+}
+
 fn default_hiterror_width() -> i32 {
     301
 }
@@ -673,6 +741,34 @@ fn default_hiterror_alpha() -> f32 {
 }
 fn default_hiterror_window_length() -> i32 {
     30
+}
+
+fn default_timing_width() -> i32 {
+    301
+}
+fn default_timing_judge_width_millis() -> i32 {
+    150
+}
+fn default_timing_line_color() -> String {
+    "00FF00FF".to_string()
+}
+fn default_timing_center_color() -> String {
+    "FFFFFFFF".to_string()
+}
+fn default_timing_pg_color() -> String {
+    "000088FF".to_string()
+}
+fn default_timing_gr_color() -> String {
+    "008800FF".to_string()
+}
+fn default_timing_gd_color() -> String {
+    "888800FF".to_string()
+}
+fn default_timing_bd_color() -> String {
+    "880000FF".to_string()
+}
+fn default_timing_pr_color() -> String {
+    "000000FF".to_string()
 }
 
 fn default_gaugegraph_assist_clear_bg_color() -> String {
@@ -1049,6 +1145,7 @@ impl SkinContext {
             document.play_judge_graph_density = graph.judge_graph_density.clone();
             document.play_bpm_graph_segments = graph.bpm_graph_segments.clone();
             document.result_gauge_graph_points = graph.gauge_points.clone();
+            document.result_timing_points = graph.timing_points.clone();
         }
         cloned
     }
@@ -2171,6 +2268,26 @@ impl SkinDocument {
         {
             return Some(self.hiterror_visualizer_render_items(
                 visualizer,
+                destination,
+                frame,
+                state,
+            ));
+        }
+        if let Some(visualizer) =
+            self.timingvisualizer.iter().find(|visualizer| visualizer.id == destination.id)
+        {
+            return Some(self.timing_visualizer_render_items(
+                visualizer,
+                destination,
+                frame,
+                state,
+            ));
+        }
+        if let Some(graph) =
+            self.timingdistributiongraph.iter().find(|graph| graph.id == destination.id)
+        {
+            return Some(self.timing_distribution_graph_render_items(
+                graph,
                 destination,
                 frame,
                 state,
@@ -3805,6 +3922,140 @@ impl SkinDocument {
                 color,
                 blend,
             });
+        }
+        items
+    }
+
+    fn timing_visualizer_render_items(
+        &self,
+        visualizer: &SkinTimingVisualizerDef,
+        destination: &SkinDestinationDef,
+        frame: ResolvedSkinFrame,
+        _state: SkinDrawState,
+    ) -> Vec<SkinRenderItem> {
+        if self.result_timing_points.is_empty() {
+            return Vec::new();
+        }
+        let rect = normalize_skin_frame_rect(frame, self.w, self.h);
+        let frame_alpha = frame.a as f32 / 255.0;
+        let blend = if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal };
+        let width = visualizer.width.max(1) as f32;
+        let center_ms = visualizer.judge_width_millis.max(1) as f32;
+        let line_w = (visualizer.line_width.clamp(1, 4) as f32 / self.w.max(1) as f32).max(0.001);
+        let judge_width_rate = width / (center_ms * 2.0 + 1.0);
+        let center_color = timing_color(&visualizer.center_color, frame_alpha);
+        let base_line_color = timing_color(&visualizer.line_color, frame_alpha);
+        let mut items = Vec::new();
+        items.extend(timing_judge_band_items(
+            rect,
+            center_ms,
+            frame_alpha,
+            blend,
+            timing_visualizer_judge_colors(visualizer),
+        ));
+        let center_x = rect.x + rect.width / 2.0 - line_w / 2.0;
+        items.push(SkinRenderItem::Rect {
+            rect: Rect { x: center_x, y: rect.y, width: line_w, height: rect.height },
+            color: center_color,
+            blend,
+        });
+
+        let window =
+            self.result_timing_points.len().min(bmz_gameplay::hit_error::HIT_ERROR_RING_LEN);
+        for (index, point) in self.result_timing_points.iter().rev().take(window).enumerate() {
+            let delta_ms = point.delta_us as f32 / 1_000.0;
+            if delta_ms.abs() > center_ms {
+                continue;
+            }
+            let x = rect.x + rect.width / 2.0 - line_w / 2.0
+                + delta_ms * judge_width_rate / width * rect.width;
+            let age = (window - index) as f32 / window.max(1) as f32;
+            let alpha = if visualizer.draw_decay == 1 { age } else { 1.0 };
+            let color = judge_timing_color(point.judge, visualizer, base_line_color)
+                .with_alpha(base_line_color.a * alpha);
+            let height = if visualizer.draw_decay == 1 { rect.height * age } else { rect.height };
+            items.push(SkinRenderItem::Rect {
+                rect: Rect { x, y: rect.y + rect.height - height, width: line_w, height },
+                color,
+                blend,
+            });
+        }
+        items
+    }
+
+    fn timing_distribution_graph_render_items(
+        &self,
+        graph: &SkinTimingDistributionGraphDef,
+        destination: &SkinDestinationDef,
+        frame: ResolvedSkinFrame,
+        _state: SkinDrawState,
+    ) -> Vec<SkinRenderItem> {
+        if self.result_timing_points.is_empty() {
+            return Vec::new();
+        }
+        let rect = normalize_skin_frame_rect(frame, self.w, self.h);
+        let frame_alpha = frame.a as f32 / 255.0;
+        let blend = if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal };
+        let width = graph.width.max(1);
+        let line_px = graph.line_width.clamp(1, width);
+        let buckets = (width / line_px).max(1) as usize;
+        let center = buckets / 2;
+        let mut counts = vec![0u32; buckets];
+        for point in &self.result_timing_points {
+            let delta_ms = (point.delta_us as f32 / 1_000.0).round() as i32;
+            let bucket = center as i32 + delta_ms;
+            if (0..buckets as i32).contains(&bucket) {
+                counts[bucket as usize] += 1;
+            }
+        }
+        let max_count = counts.iter().copied().max().unwrap_or(1).max(1) as f32;
+        let bar_w = (rect.width / buckets.max(1) as f32).max(1.0 / self.w.max(1) as f32);
+        let mut items = timing_judge_band_items(
+            rect,
+            center as f32,
+            frame_alpha,
+            blend,
+            timing_distribution_judge_colors(graph),
+        );
+        let graph_color = timing_color(&graph.graph_color, frame_alpha);
+        for (index, count) in counts.into_iter().enumerate() {
+            if count == 0 {
+                continue;
+            }
+            let height = rect.height * count as f32 / max_count;
+            items.push(SkinRenderItem::Rect {
+                rect: Rect {
+                    x: rect.x + index as f32 * bar_w,
+                    y: rect.y + rect.height - height,
+                    width: bar_w,
+                    height,
+                },
+                color: graph_color,
+                blend,
+            });
+        }
+        let stats = timing_stats(&self.result_timing_points);
+        if graph.draw_average == 1 {
+            let color = timing_color(&graph.average_color, frame_alpha);
+            let x = timing_distribution_x(rect, center, stats.average_ms);
+            items.push(SkinRenderItem::Rect {
+                rect: Rect { x, y: rect.y, width: bar_w.max(0.001), height: rect.height },
+                color,
+                blend,
+            });
+        }
+        if graph.draw_dev == 1 {
+            let color = timing_color(&graph.dev_color, frame_alpha);
+            for x in [
+                timing_distribution_x(rect, center, stats.average_ms + stats.stddev_ms),
+                timing_distribution_x(rect, center, stats.average_ms - stats.stddev_ms),
+            ] {
+                items.push(SkinRenderItem::Rect {
+                    rect: Rect { x, y: rect.y, width: bar_w.max(0.001), height: rect.height },
+                    color,
+                    blend,
+                });
+            }
         }
         items
     }
@@ -6103,6 +6354,120 @@ fn push_gaugegraph_segment(
         color,
         blend,
     });
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct TimingStats {
+    average_ms: f32,
+    stddev_ms: f32,
+}
+
+fn timing_stats(points: &[crate::snapshot::ResultTimingPoint]) -> TimingStats {
+    if points.is_empty() {
+        return TimingStats::default();
+    }
+    let count = points.len() as f32;
+    let average_ms =
+        points.iter().map(|point| point.delta_us as f32 / 1_000.0).sum::<f32>() / count;
+    let variance = points
+        .iter()
+        .map(|point| {
+            let diff = point.delta_us as f32 / 1_000.0 - average_ms;
+            diff * diff
+        })
+        .sum::<f32>()
+        / count;
+    TimingStats { average_ms, stddev_ms: variance.sqrt() }
+}
+
+fn timing_color(value: &str, frame_alpha: f32) -> Color {
+    skin_hex_color(value)
+        .or_else(|| skin_hex_color("FF0000FF"))
+        .unwrap_or(Color::rgb(1.0, 0.0, 0.0))
+        .with_alpha(frame_alpha)
+}
+
+fn timing_visualizer_judge_colors(visualizer: &SkinTimingVisualizerDef) -> [Color; 5] {
+    [
+        timing_color(&visualizer.pg_color, 1.0),
+        timing_color(&visualizer.gr_color, 1.0),
+        timing_color(&visualizer.gd_color, 1.0),
+        timing_color(&visualizer.bd_color, 1.0),
+        if visualizer.transparent == 1 {
+            Color::rgba(0.0, 0.0, 0.0, 0.0)
+        } else {
+            timing_color(&visualizer.pr_color, 1.0)
+        },
+    ]
+}
+
+fn timing_distribution_judge_colors(graph: &SkinTimingDistributionGraphDef) -> [Color; 5] {
+    [
+        timing_color(&graph.pg_color, 1.0),
+        timing_color(&graph.gr_color, 1.0),
+        timing_color(&graph.gd_color, 1.0),
+        timing_color(&graph.bd_color, 1.0),
+        timing_color(&graph.pr_color, 1.0),
+    ]
+}
+
+fn judge_timing_color(
+    judge: Judge,
+    visualizer: &SkinTimingVisualizerDef,
+    fallback: Color,
+) -> Color {
+    match judge {
+        Judge::PGreat => timing_color(&visualizer.pg_color, 1.0),
+        Judge::Great => timing_color(&visualizer.gr_color, 1.0),
+        Judge::Good => timing_color(&visualizer.gd_color, 1.0),
+        Judge::Bad => timing_color(&visualizer.bd_color, 1.0),
+        Judge::Poor | Judge::EmptyPoor if visualizer.transparent == 1 => {
+            Color::rgba(0.0, 0.0, 0.0, 0.0)
+        }
+        Judge::Poor | Judge::EmptyPoor => timing_color(&visualizer.pr_color, 1.0),
+    }
+    .with_alpha(fallback.a)
+}
+
+fn timing_judge_band_items(
+    rect: Rect,
+    center_ms: f32,
+    frame_alpha: f32,
+    blend: BlendMode,
+    colors: [Color; 5],
+) -> Vec<SkinRenderItem> {
+    let bands = [
+        (-16.0, 16.0, colors[0]),
+        (-33.0, -16.0, colors[1]),
+        (16.0, 33.0, colors[1]),
+        (-66.0, -33.0, colors[2]),
+        (33.0, 66.0, colors[2]),
+        (-100.0, -66.0, colors[3]),
+        (66.0, 100.0, colors[3]),
+        (-center_ms, -100.0, colors[4]),
+        (100.0, center_ms, colors[4]),
+    ];
+    let mut items = Vec::new();
+    for (start, end, color) in bands {
+        let start = start.clamp(-center_ms, center_ms);
+        let end = end.clamp(-center_ms, center_ms);
+        if end <= start {
+            continue;
+        }
+        let x1 = rect.x + ((start + center_ms) / (center_ms * 2.0)) * rect.width;
+        let x2 = rect.x + ((end + center_ms) / (center_ms * 2.0)) * rect.width;
+        items.push(SkinRenderItem::Rect {
+            rect: Rect { x: x1, y: rect.y, width: (x2 - x1).max(0.0), height: rect.height },
+            color: color.with_alpha(color.a * frame_alpha * 0.25),
+            blend,
+        });
+    }
+    items
+}
+
+fn timing_distribution_x(rect: Rect, center: usize, value_ms: f32) -> f32 {
+    let span = (center.max(1) * 2) as f32;
+    rect.x + ((center as f32 + value_ms) / span).clamp(0.0, 1.0) * rect.width
 }
 
 /// Rm-skin `text id="table"` と beatoraja `TEXT_TABLE1..3` (1001..1003) の表示ロジック。
