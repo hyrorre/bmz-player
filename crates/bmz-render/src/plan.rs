@@ -1232,7 +1232,8 @@ fn plan_result(
     dynamic_timers: &mut crate::skin::DynamicTimerRuntime,
 ) -> DrawPlan {
     let skin = skin.with_result_graphs(&snapshot.graph);
-    if let Some(document) = skin.document().filter(|document| document.skin_type == 7) {
+    if let Some(document) = skin.document().filter(|document| matches!(document.skin_type, 7 | 15))
+    {
         let state = advance_skin_dynamic_timers(
             &skin,
             dynamic_timers,
@@ -2317,15 +2318,15 @@ mod tests {
     }
 
     #[test]
-    fn result_plan_uses_skin_document_when_skin_type_is_seven() {
+    fn result_plan_uses_skin_document_for_result_and_course_result_types() {
         use crate::scene::ResultSnapshot;
         use crate::skin::SkinTextureId;
         use crate::snapshot::FastSlowJudgeCounts;
         use bmz_core::clear::ClearType;
 
-        let document: crate::skin::SkinDocument = serde_json::from_str(
-            r#"{
-                "type": 7,
+        for skin_type in [7, 15] {
+            let json = r#"{
+                "type": __TYPE__,
                 "name": "test",
                 "w": 100,
                 "h": 100,
@@ -2334,62 +2335,64 @@ mod tests {
                 "destination": [
                     {"id": "logo", "dst": [{"x": 0, "y": 0, "w": 8, "h": 8}]}
                 ]
-            }"#,
-        )
-        .unwrap();
-        let manifest: SkinManifest = toml::from_str("").unwrap();
-        let source_texture = crate::skin::SkinDocumentTexture {
-            source_id: "1".to_string(),
-            texture: SkinTextureId(99),
-            source_size: crate::skin::SkinImageSize { width: 64.0, height: 64.0 },
-        };
-        let skin = SkinContext::from_manifest_and_document(manifest, document, [source_texture]);
-        let snapshot = ResultSnapshot {
-            clear_type: ClearType::Normal,
-            ex_score: 100,
-            ex_score_rate: 0.5,
-            max_combo: 50,
-            gauge_value: 80.0,
-            gauge_type: bmz_core::clear::GaugeType::Normal as i32,
-            total_notes: 100,
-            judge_counts: DisplayJudgeCounts::default(),
-            fast_slow_counts: FastSlowJudgeCounts::default(),
-            score_history_id: 0,
-            replay_saved: false,
-            best_ex_score: None,
-            best_clear_type: None,
-            target_ex_score: None,
-            best_max_combo: None,
-            target_max_combo: None,
-            best_misscount: None,
-            target_misscount: None,
-            previous_best_ex_score: None,
-            previous_best_max_combo: None,
-            previous_best_misscount: None,
-            target_clear_type: None,
-            elapsed_time: TimeUs(0),
-            fadeout_elapsed: None,
-            title: String::new(),
-            subtitle: String::new(),
-            artist: String::new(),
-            subartist: String::new(),
-            genre: String::new(),
-            difficulty_name: String::new(),
-            play_level: String::new(),
-            graph: crate::snapshot::ResultGraphSnapshot::default(),
-            overlay: crate::snapshot::OverlaySnapshot::default(),
-        };
+            }"#
+            .replace("__TYPE__", &skin_type.to_string());
+            let document: crate::skin::SkinDocument = serde_json::from_str(&json).unwrap();
+            let manifest: SkinManifest = toml::from_str("").unwrap();
+            let source_texture = crate::skin::SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(99),
+                source_size: crate::skin::SkinImageSize { width: 64.0, height: 64.0 },
+            };
+            let skin =
+                SkinContext::from_manifest_and_document(manifest, document, [source_texture]);
+            let snapshot = ResultSnapshot {
+                clear_type: ClearType::Normal,
+                ex_score: 100,
+                ex_score_rate: 0.5,
+                max_combo: 50,
+                gauge_value: 80.0,
+                gauge_type: bmz_core::clear::GaugeType::Normal as i32,
+                total_notes: 100,
+                judge_counts: DisplayJudgeCounts::default(),
+                fast_slow_counts: FastSlowJudgeCounts::default(),
+                score_history_id: 0,
+                replay_saved: false,
+                best_ex_score: None,
+                best_clear_type: None,
+                target_ex_score: None,
+                best_max_combo: None,
+                target_max_combo: None,
+                best_misscount: None,
+                target_misscount: None,
+                previous_best_ex_score: None,
+                previous_best_max_combo: None,
+                previous_best_misscount: None,
+                target_clear_type: None,
+                elapsed_time: TimeUs(0),
+                fadeout_elapsed: None,
+                title: String::new(),
+                subtitle: String::new(),
+                artist: String::new(),
+                subartist: String::new(),
+                genre: String::new(),
+                difficulty_name: String::new(),
+                play_level: String::new(),
+                graph: crate::snapshot::ResultGraphSnapshot::default(),
+                overlay: crate::snapshot::OverlaySnapshot::default(),
+            };
 
-        let plan = DrawPlan::from_scene_with_skin(
-            &AppSceneSnapshot::Result(snapshot),
-            &skin,
-            &mut crate::skin::DynamicTimerRuntime::default(),
-        );
+            let plan = DrawPlan::from_scene_with_skin(
+                &AppSceneSnapshot::Result(snapshot),
+                &skin,
+                &mut crate::skin::DynamicTimerRuntime::default(),
+            );
 
-        assert!(plan.commands.iter().any(|command| matches!(
-            command,
-            DrawCommand::Image { texture, .. } if *texture == TextureId(99)
-        )));
+            assert!(plan.commands.iter().any(|command| matches!(
+                command,
+                DrawCommand::Image { texture, .. } if *texture == TextureId(99)
+            )));
+        }
     }
 
     #[test]

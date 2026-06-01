@@ -6,6 +6,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use bmz_chart::model::PlayableChart;
+use bmz_core::clear::{ClearType, GaugeType};
 use bmz_core::lane::KeyMode;
 use bmz_core::time::TimeUs;
 use bmz_gameplay::session::PlaySkinOffset;
@@ -56,7 +57,7 @@ use crate::screens::play_start::{
     apply_queued_replay, open_prepared_winit_play_session,
     prepare_play_session_for_chart_with_winit_input, prepare_winit_play_session_from_preloaded,
 };
-use crate::screens::result_model::ResultSummary;
+use crate::screens::result_model::{ResultFastSlowJudgeCounts, ResultSummary};
 use crate::screens::select_model::{
     COURSE_ROOT_PATH, SelectItem, TABLE_ROOT_PATH, TablePath, course_root_item,
     load_select_items_for_courses, load_select_items_in_folder, load_select_items_in_table_level,
@@ -366,6 +367,88 @@ enum AppSceneKind {
     Result,
 }
 
+fn course_result_summary_for_skin(course: &CourseResultSummary) -> ResultSummary {
+    let last = course.entry_summaries.last();
+    let clear_type = if course.course_failed {
+        ClearType::Failed
+    } else {
+        last.map(|summary| summary.clear_type).unwrap_or(ClearType::NoPlay)
+    };
+    let max_combo =
+        course.entry_summaries.iter().map(|summary| summary.max_combo).max().unwrap_or(0);
+    let fast_slow_counts =
+        course.entry_summaries.iter().fold(ResultFastSlowJudgeCounts::default(), |acc, summary| {
+            ResultFastSlowJudgeCounts {
+                fast_pgreat: acc.fast_pgreat + summary.fast_slow_counts.fast_pgreat,
+                slow_pgreat: acc.slow_pgreat + summary.fast_slow_counts.slow_pgreat,
+                fast_great: acc.fast_great + summary.fast_slow_counts.fast_great,
+                slow_great: acc.slow_great + summary.fast_slow_counts.slow_great,
+                fast_good: acc.fast_good + summary.fast_slow_counts.fast_good,
+                slow_good: acc.slow_good + summary.fast_slow_counts.slow_good,
+                fast_bad: acc.fast_bad + summary.fast_slow_counts.fast_bad,
+                slow_bad: acc.slow_bad + summary.fast_slow_counts.slow_bad,
+                fast_poor: acc.fast_poor + summary.fast_slow_counts.fast_poor,
+                slow_poor: acc.slow_poor + summary.fast_slow_counts.slow_poor,
+                fast_empty_poor: acc.fast_empty_poor + summary.fast_slow_counts.fast_empty_poor,
+                slow_empty_poor: acc.slow_empty_poor + summary.fast_slow_counts.slow_empty_poor,
+            }
+        });
+    let best_clear_type =
+        course.best_score.as_ref().and_then(|best| clear_type_from_label(&best.clear_type));
+
+    ResultSummary {
+        clear_type,
+        ex_score: course.total_ex_score,
+        max_combo,
+        gauge_value: last.map(|summary| summary.gauge_value).unwrap_or(0.0),
+        gauge_type: last.map(|summary| summary.gauge_type).unwrap_or(GaugeType::Normal),
+        total_notes: course.total_notes,
+        judge_counts: course.judge_counts.clone(),
+        fast_slow_counts,
+        replay_path: String::new(),
+        score_history_id: course.best_score.as_ref().map(|best| best.course_score_id).unwrap_or(0),
+        best_ex_score: course.best_score.as_ref().map(|best| best.ex_score),
+        best_clear_type,
+        best_max_combo: course.best_score.as_ref().map(|best| best.max_combo),
+        best_misscount: course.best_score.as_ref().map(|best| best.miss_count),
+        previous_best_ex_score: None,
+        previous_best_max_combo: None,
+        previous_best_misscount: None,
+        target_ex_score: None,
+        target_max_combo: None,
+        target_misscount: None,
+        target_clear_type: None,
+        title: course.title.clone(),
+        subtitle: String::new(),
+        artist: String::new(),
+        subartist: String::new(),
+        genre: match course.kind {
+            bmz_core::course::CourseKind::Dan => "DAN".to_string(),
+            bmz_core::course::CourseKind::Course => "COURSE".to_string(),
+        },
+        difficulty_name: String::new(),
+        play_level: String::new(),
+        graph: Default::default(),
+    }
+}
+
+fn clear_type_from_label(label: &str) -> Option<ClearType> {
+    match label {
+        "NoPlay" => Some(ClearType::NoPlay),
+        "Failed" => Some(ClearType::Failed),
+        "AssistEasy" => Some(ClearType::AssistEasy),
+        "LightAssistEasy" => Some(ClearType::LightAssistEasy),
+        "Easy" => Some(ClearType::Easy),
+        "Normal" => Some(ClearType::Normal),
+        "Hard" => Some(ClearType::Hard),
+        "ExHard" => Some(ClearType::ExHard),
+        "FullCombo" => Some(ClearType::FullCombo),
+        "Perfect" => Some(ClearType::Perfect),
+        "Max" => Some(ClearType::Max),
+        _ => None,
+    }
+}
+
 impl WinitApp {
     fn new(
         boot: BootstrappedApp,
@@ -667,6 +750,10 @@ impl WinitApp {
         }
         if self.active_play.is_some() || self.pending_play_start.is_some() {
             return AppViewState::Play;
+        }
+
+        if let Some(course) = &self.finished_course {
+            return AppViewState::Result(Box::new(course_result_summary_for_skin(course)));
         }
 
         if let Some(finished) = &self.finished_play {
@@ -3929,7 +4016,7 @@ fn push_skin_candidate(catalog: &mut SkinCatalog, skin_type: i32, candidate: Ski
         4 => catalog.play9.push(candidate),
         5 => catalog.select.push(candidate),
         6 => catalog.decide.push(candidate),
-        7 => catalog.result.push(candidate),
+        7 | 15 => catalog.result.push(candidate),
         _ => {}
     }
 }
@@ -5271,17 +5358,100 @@ mod tests {
                 path: "data/skins/example/play9.luaskin".to_string(),
             },
         );
+        push_skin_candidate(
+            &mut catalog,
+            15,
+            SkinCandidate {
+                name: "Course Result".to_string(),
+                path: "data/skins/example/course-result.luaskin".to_string(),
+            },
+        );
 
         assert_eq!(catalog.play5.len(), 1);
         assert_eq!(catalog.play7.len(), 1);
         assert_eq!(catalog.play9.len(), 1);
         assert_eq!(catalog.play10.len(), 1);
         assert_eq!(catalog.play14.len(), 1);
+        assert_eq!(catalog.result.len(), 1);
         assert_eq!(catalog.play5[0].path, "data/skins/example/play5.luaskin");
         assert_eq!(catalog.play7[0].path, "data/skins/example/play7.luaskin");
         assert_eq!(catalog.play9[0].path, "data/skins/example/play9.luaskin");
         assert_eq!(catalog.play10[0].path, "data/skins/example/play10.luaskin");
         assert_eq!(catalog.play14[0].path, "data/skins/example/play14.luaskin");
+        assert_eq!(catalog.result[0].path, "data/skins/example/course-result.luaskin");
+    }
+
+    #[test]
+    fn course_result_summary_for_skin_uses_aggregate_course_values() {
+        fn entry_summary(ex_score: u32, notes: u32, max_combo: u32) -> ResultSummary {
+            ResultSummary {
+                clear_type: ClearType::Normal,
+                ex_score,
+                max_combo,
+                gauge_value: 80.0,
+                gauge_type: GaugeType::Normal,
+                total_notes: notes,
+                judge_counts: crate::screens::result_model::ResultJudgeCounts {
+                    pgreat: ex_score / 2,
+                    ..Default::default()
+                },
+                fast_slow_counts: ResultFastSlowJudgeCounts {
+                    fast_pgreat: ex_score / 2,
+                    ..Default::default()
+                },
+                replay_path: String::new(),
+                score_history_id: 0,
+                best_ex_score: None,
+                best_clear_type: None,
+                best_max_combo: None,
+                best_misscount: None,
+                previous_best_ex_score: None,
+                previous_best_max_combo: None,
+                previous_best_misscount: None,
+                target_ex_score: None,
+                target_max_combo: None,
+                target_misscount: None,
+                target_clear_type: None,
+                title: String::new(),
+                subtitle: String::new(),
+                artist: String::new(),
+                subartist: String::new(),
+                genre: String::new(),
+                difficulty_name: String::new(),
+                play_level: String::new(),
+                graph: Default::default(),
+            }
+        }
+
+        let course = CourseResultSummary {
+            course_id: 1,
+            title: "Course Title".to_string(),
+            kind: bmz_core::course::CourseKind::Dan,
+            entry_summaries: vec![entry_summary(120, 100, 80), entry_summary(200, 120, 90)],
+            total_ex_score: 320,
+            max_ex_score: 440,
+            total_notes: 220,
+            judge_counts: crate::screens::result_model::ResultJudgeCounts {
+                pgreat: 160,
+                bad: 2,
+                ..Default::default()
+            },
+            trophy_results: Vec::new(),
+            course_clear: true,
+            course_failed: false,
+            total_entries: 2,
+            played_entries: 2,
+            best_score: None,
+        };
+
+        let summary = course_result_summary_for_skin(&course);
+        assert_eq!(summary.title, "Course Title");
+        assert_eq!(summary.genre, "DAN");
+        assert_eq!(summary.ex_score, 320);
+        assert_eq!(summary.total_notes, 220);
+        assert_eq!(summary.max_combo, 90);
+        assert_eq!(summary.judge_counts.pgreat, 160);
+        assert_eq!(summary.fast_slow_counts.fast_pgreat, 160);
     }
 
     #[test]
