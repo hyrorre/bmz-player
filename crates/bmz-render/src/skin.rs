@@ -1573,6 +1573,9 @@ pub struct SkinDrawState {
     pub result_graph_begin_ms: Option<i32>,
     pub result_graph_end_ms: Option<i32>,
     pub result_update_score_ms: Option<i32>,
+    /// RESULT replay slot status for OPTION_REPLAYDATA* / *_SAVED.
+    pub result_replay_slots: [bool; 4],
+    pub result_saved_replay_slots: [bool; 4],
     /// 閉店/FAILED 演出のタイマー経過 ms (TIMER_FAILED=3)。
     pub failed_ms: Option<i32>,
     /// Result timing distribution average (NUMBER_AVERAGE_TIMING=374).
@@ -1708,6 +1711,8 @@ impl Default for SkinDrawState {
             result_graph_begin_ms: None,
             result_graph_end_ms: None,
             result_update_score_ms: None,
+            result_replay_slots: [false; 4],
+            result_saved_replay_slots: [false; 4],
             failed_ms: None,
             average_timing_ms: None,
             stddev_timing_ms: None,
@@ -5006,6 +5011,9 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool 
         22 => state.select_option_panel == 2,
         23 => state.select_option_panel == 3,
         160 => !state.select_is_folder,
+        196 | 197 | 198 | 1196..=1208 if state.result_failed.is_some() => {
+            result_replay_op_matches(op, state)
+        }
         196 | 197 | 198 | 1196..=1208 => select_replay_op_matches(op, state),
         200..=207 => select_rank_op_matches(op, state),
         300..=318 if state.result_failed.is_some() => result_rank_op_matches(op, state),
@@ -6784,6 +6792,28 @@ fn select_replay_op_matches(op: i32, state: SkinDrawState) -> bool {
         196 | 1196 | 1199 | 1202 => !has_replay,
         197 | 1197 | 1200 | 1203 => has_replay,
         198 | 1198 | 1201 | 1204 => false,
+        _ => false,
+    }
+}
+
+fn result_replay_op_matches(op: i32, state: SkinDrawState) -> bool {
+    let slot = match op {
+        196..=198 => Some(0),
+        1196..=1198 => Some(1),
+        1199..=1201 => Some(2),
+        1202..=1204 => Some(3),
+        1205..=1208 => return false,
+        _ => None,
+    };
+    let Some(slot) = slot else {
+        return false;
+    };
+    let saved = state.result_saved_replay_slots.get(slot).copied().unwrap_or(false);
+    let exists = state.result_replay_slots.get(slot).copied().unwrap_or(false) && !saved;
+    match op {
+        196 | 1196 | 1199 | 1202 => !exists && !saved,
+        197 | 1197 | 1200 | 1203 => exists,
+        198 | 1198 | 1201 | 1204 => saved,
         _ => false,
     }
 }
@@ -8973,6 +9003,33 @@ mod tests {
         assert!(test_skin_op(1206, &[], second_replay));
         assert!(!test_skin_op(1205, &[], second_replay));
         assert!(!test_skin_op(198, &[], first_replay));
+    }
+
+    #[test]
+    fn result_replay_ops_reflect_result_replay_slots() {
+        let no_replay = SkinDrawState { result_failed: Some(false), ..SkinDrawState::default() };
+        let existing = SkinDrawState {
+            result_failed: Some(false),
+            result_replay_slots: [true, false, false, false],
+            ..SkinDrawState::default()
+        };
+        let saved = SkinDrawState {
+            result_failed: Some(false),
+            result_replay_slots: [true, true, false, false],
+            result_saved_replay_slots: [true, false, false, false],
+            ..SkinDrawState::default()
+        };
+
+        assert!(test_skin_op(196, &[], no_replay));
+        assert!(!test_skin_op(197, &[], no_replay));
+        assert!(!test_skin_op(198, &[], no_replay));
+        assert!(test_skin_op(197, &[], existing));
+        assert!(!test_skin_op(196, &[], existing));
+        assert!(!test_skin_op(198, &[], existing));
+        assert!(test_skin_op(198, &[], saved));
+        assert!(!test_skin_op(197, &[], saved));
+        assert!(test_skin_op(1197, &[], saved));
+        assert!(!test_skin_op(1198, &[], saved));
     }
 
     #[test]

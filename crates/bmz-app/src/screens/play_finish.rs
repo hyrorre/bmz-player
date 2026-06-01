@@ -96,6 +96,7 @@ pub fn finish_session_result(
     };
     let mut summary = ResultSummary::from_play_result(&result, &stored, &session.chart.metadata);
     summary.target_ex_score = target_ex_score;
+    summary.saved_replay_slots = stored.slot_paths.each_ref().map(Option::is_some);
     if let Some(best) = &previous_best {
         summary.previous_best_ex_score = Some(best.ex_score);
         summary.previous_best_max_combo = Some(best.max_combo);
@@ -111,6 +112,14 @@ pub fn finish_session_result(
         summary.best_clear_type = clear_type_from_name(&best.clear_type);
         summary.best_max_combo = Some(best.max_combo);
         summary.best_misscount = Some(best.miss_count);
+    }
+    if let Ok(slots) = score_db.replay_slots_for_chart(result.chart_sha256) {
+        summary.replay_slots = slots.each_ref().map(Option::is_some);
+        for (index, saved) in summary.saved_replay_slots.iter().enumerate() {
+            if *saved {
+                summary.replay_slots[index] = true;
+            }
+        }
     }
 
     Ok(FinishedPlaySession {
@@ -287,6 +296,8 @@ mod tests {
         assert_eq!(finished.summary.score_history_id, finished.stored.score_history_id);
         assert_eq!(finished.summary.clear_type, finished.result.clear_type);
         assert_eq!(finished.summary.target_ex_score, Some(1600));
+        assert_eq!(finished.summary.saved_replay_slots, [true; 4]);
+        assert_eq!(finished.summary.replay_slots, [true; 4]);
 
         std::fs::remove_dir_all(root).unwrap();
     }
