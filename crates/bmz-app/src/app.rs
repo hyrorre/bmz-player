@@ -1533,8 +1533,17 @@ impl WinitApp {
                 }
             }
             Some(SelectItem::Course(row)) => {
-                let course_id = row.course_id;
-                self.start_course(course_id);
+                if row.exists_all_songs() {
+                    self.start_course(row.course_id);
+                } else {
+                    tracing::info!(
+                        course_id = row.course_id,
+                        title = %row.title,
+                        resolved = row.resolved_count,
+                        total = row.entry_count,
+                        "skipping play for course missing entries"
+                    );
+                }
             }
             None => {
                 tracing::warn!("no item is available to select");
@@ -1598,7 +1607,20 @@ impl WinitApp {
             return;
         };
         let definition = stored.definition;
-        let first_chart_id = definition.entries.iter().find_map(|e| e.chart_id);
+        if definition.entries.is_empty()
+            || definition.entries.iter().any(|entry| entry.chart_id.is_none())
+        {
+            let resolved =
+                definition.entries.iter().filter(|entry| entry.chart_id.is_some()).count();
+            tracing::warn!(
+                course_id,
+                resolved,
+                total = definition.entries.len(),
+                "course is missing entries"
+            );
+            return;
+        }
+        let first_chart_id = definition.entries.first().and_then(|e| e.chart_id);
         let Some(first_chart_id) = first_chart_id else {
             tracing::warn!(course_id, "no resolved chart in course");
             return;
@@ -4560,7 +4582,7 @@ fn select_snapshot_rows(
                     has_random: false,
                     is_folder: false,
                     kind: bmz_render::scene::SelectRowKind::Course,
-                    in_library: row.resolved_count > 0,
+                    in_library: row.exists_all_songs(),
                     achieved_trophy_names: row.achieved_trophy_names.clone(),
                 },
             }
@@ -5027,7 +5049,7 @@ mod tests {
     use bmz_render::skin::SkinManifest;
 
     use crate::config::profile_config::ProfileConfig;
-    use crate::screens::select_model::SelectChartRow;
+    use crate::screens::select_model::{SelectChartRow, SelectCourseRow};
     use crate::skin_loader::default_skin_root;
     use crate::storage::library_db::ChartListItem;
     use crate::storage::score_db::BestScoreSummary;
@@ -5628,6 +5650,19 @@ mod tests {
     }
 
     #[test]
+    fn course_rows_are_playable_only_when_all_entries_resolve() {
+        let rows = vec![
+            SelectItem::Course(select_course_row(4, 4)),
+            SelectItem::Course(select_course_row(3, 4)),
+        ];
+
+        let snapshot_rows = select_snapshot_rows(&rows, 0, 2);
+
+        assert!(snapshot_rows.iter().any(|row| row.title == "Course 4/4" && row.in_library));
+        assert!(snapshot_rows.iter().any(|row| row.title == "Course 3/4" && !row.in_library));
+    }
+
+    #[test]
     fn moved_select_index_moves_by_single_page_and_wraps_edges() {
         assert_eq!(moved_select_index(4, 10, SelectMove::Previous), 3);
         assert_eq!(moved_select_index(4, 10, SelectMove::Next), 5);
@@ -5676,6 +5711,26 @@ mod tests {
             best_score: None,
             replay_slots: [false; 4],
             table_level: String::new(),
+        }
+    }
+
+    fn select_course_row(resolved_count: usize, entry_count: usize) -> SelectCourseRow {
+        SelectCourseRow {
+            course_id: resolved_count as i64,
+            title: format!("Course {resolved_count}/{entry_count}"),
+            kind: bmz_core::course::CourseKind::Dan,
+            entry_count,
+            resolved_count,
+            total_notes: 100,
+            total_length_ms: 90_000,
+            min_bpm: 128.0,
+            max_bpm: 128.0,
+            category_label: "DAN".to_string(),
+            trophy_names: Vec::new(),
+            entry_previews: Vec::new(),
+            best_score: None,
+            replay_slots: [false; 4],
+            achieved_trophy_names: Vec::new(),
         }
     }
 

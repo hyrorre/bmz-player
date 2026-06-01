@@ -176,6 +176,14 @@ pub struct SelectCourseRow {
     pub achieved_trophy_names: Vec<String>,
 }
 
+impl SelectCourseRow {
+    /// beatoraja `GradeBar.existsAllSongs()`: a course is playable only when
+    /// every declared entry resolves to a local song.
+    pub fn exists_all_songs(&self) -> bool {
+        self.entry_count > 0 && self.resolved_count == self.entry_count
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct CourseEntryPreview {
     /// Title taken from the resolved library chart when available, otherwise
