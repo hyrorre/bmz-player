@@ -430,8 +430,57 @@ fn course_result_summary_for_skin(course: &CourseResultSummary) -> ResultSummary
         },
         difficulty_name: String::new(),
         play_level: String::new(),
-        graph: Default::default(),
+        graph: aggregate_course_result_graph(&course.entry_summaries),
     }
+}
+
+fn aggregate_course_result_graph(
+    entries: &[ResultSummary],
+) -> bmz_render::snapshot::ResultGraphSnapshot {
+    let durations: Vec<i32> =
+        entries.iter().map(|entry| result_graph_duration_ms(&entry.graph)).collect();
+    let total_duration = durations.iter().copied().sum::<i32>().max(1);
+    let mut offset_ms = 0_i32;
+    let mut graph = bmz_render::snapshot::ResultGraphSnapshot::default();
+
+    for (entry, duration_ms) in entries.iter().zip(durations) {
+        graph.gauge_points.extend(entry.graph.gauge_points.iter().map(|point| {
+            let mut point = *point;
+            point.time_ms = point.time_ms.saturating_add(offset_ms);
+            point
+        }));
+        graph.timing_points.extend(entry.graph.timing_points.iter().map(|point| {
+            bmz_render::snapshot::ResultTimingPoint {
+                time_ms: point.time_ms.saturating_add(offset_ms),
+                delta_us: point.delta_us,
+                judge: point.judge,
+            }
+        }));
+        graph.judge_graph_density.extend_from_slice(&entry.graph.judge_graph_density);
+        graph.bpm_graph_segments.extend(entry.graph.bpm_graph_segments.iter().map(|segment| {
+            let start = offset_ms as f32 + segment.start_ratio * duration_ms as f32;
+            let end = offset_ms as f32 + segment.end_ratio * duration_ms as f32;
+            bmz_render::snapshot::BpmGraphSegment {
+                start_ratio: (start / total_duration as f32).clamp(0.0, 1.0),
+                end_ratio: (end / total_duration as f32).clamp(0.0, 1.0),
+                bpm: segment.bpm,
+                is_stop: segment.is_stop,
+            }
+        }));
+        if entry.graph.hit_error_ring != Default::default() {
+            graph.hit_error_ring = entry.graph.hit_error_ring;
+        }
+        offset_ms = offset_ms.saturating_add(duration_ms);
+    }
+
+    graph
+}
+
+fn result_graph_duration_ms(graph: &bmz_render::snapshot::ResultGraphSnapshot) -> i32 {
+    let gauge_ms = graph.gauge_points.last().map(|point| point.time_ms).unwrap_or(0);
+    let timing_ms = graph.timing_points.last().map(|point| point.time_ms).unwrap_or(0);
+    let density_ms = i32::try_from(graph.judge_graph_density.len()).unwrap_or(i32::MAX / 1_000);
+    gauge_ms.max(timing_ms).max(density_ms.saturating_mul(1_000)).max(1)
 }
 
 fn clear_type_from_label(label: &str) -> Option<ClearType> {
@@ -5387,7 +5436,12 @@ mod tests {
 
     #[test]
     fn course_result_summary_for_skin_uses_aggregate_course_values() {
-        fn entry_summary(ex_score: u32, notes: u32, max_combo: u32) -> ResultSummary {
+        fn entry_summary(
+            ex_score: u32,
+            notes: u32,
+            max_combo: u32,
+            duration_ms: i32,
+        ) -> ResultSummary {
             ResultSummary {
                 clear_type: ClearType::Normal,
                 ex_score,
@@ -5425,7 +5479,27 @@ mod tests {
                 genre: String::new(),
                 difficulty_name: String::new(),
                 play_level: String::new(),
-                graph: Default::default(),
+                graph: bmz_render::snapshot::ResultGraphSnapshot {
+                    gauge_points: vec![bmz_render::snapshot::ResultGaugeGraphPoint {
+                        time_ms: duration_ms,
+                        value: 80.0,
+                        border: 20.0,
+                        gauge_type: GaugeType::Normal as i32,
+                    }],
+                    timing_points: vec![bmz_render::snapshot::ResultTimingPoint {
+                        time_ms: duration_ms,
+                        delta_us: i64::from(duration_ms),
+                        judge: bmz_core::judge::Judge::PGreat,
+                    }],
+                    judge_graph_density: vec![notes as u8],
+                    bpm_graph_segments: vec![bmz_render::snapshot::BpmGraphSegment {
+                        start_ratio: 0.0,
+                        end_ratio: 1.0,
+                        bpm: 120.0 + duration_ms as f32,
+                        is_stop: false,
+                    }],
+                    ..Default::default()
+                },
             }
         }
 
@@ -5433,7 +5507,10 @@ mod tests {
             course_id: 1,
             title: "Course Title".to_string(),
             kind: bmz_core::course::CourseKind::Dan,
-            entry_summaries: vec![entry_summary(120, 100, 80), entry_summary(200, 120, 90)],
+            entry_summaries: vec![
+                entry_summary(120, 100, 80, 1_000),
+                entry_summary(200, 120, 90, 2_000),
+            ],
             total_ex_score: 320,
             max_ex_score: 440,
             total_notes: 220,
@@ -5458,6 +5535,19 @@ mod tests {
         assert_eq!(summary.max_combo, 90);
         assert_eq!(summary.judge_counts.pgreat, 160);
         assert_eq!(summary.fast_slow_counts.fast_pgreat, 160);
+        assert_eq!(
+            summary.graph.gauge_points.iter().map(|point| point.time_ms).collect::<Vec<_>>(),
+            vec![1_000, 3_000]
+        );
+        assert_eq!(
+            summary.graph.timing_points.iter().map(|point| point.time_ms).collect::<Vec<_>>(),
+            vec![1_000, 3_000]
+        );
+        assert_eq!(summary.graph.judge_graph_density, vec![100, 120]);
+        assert_eq!(summary.graph.bpm_graph_segments[0].start_ratio, 0.0);
+        assert!((summary.graph.bpm_graph_segments[0].end_ratio - 1.0 / 3.0).abs() < 0.001);
+        assert!((summary.graph.bpm_graph_segments[1].start_ratio - 1.0 / 3.0).abs() < 0.001);
+        assert_eq!(summary.graph.bpm_graph_segments[1].end_ratio, 1.0);
     }
 
     #[test]
