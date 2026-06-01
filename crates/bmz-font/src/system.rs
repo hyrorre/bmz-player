@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use ab_glyph::{Font, FontVec};
 use font_kit::family_name::FamilyName;
@@ -15,12 +15,6 @@ pub struct ResolvedFont {
     pub path: Option<PathBuf>,
     memory: Option<Arc<[u8]>>,
     pub font_index: u32,
-}
-
-static SYSTEM_SOURCE: OnceLock<SystemSource> = OnceLock::new();
-
-fn system_source() -> &'static SystemSource {
-    SYSTEM_SOURCE.get_or_init(SystemSource::new)
 }
 
 /// 日本語表示を優先する OS フォントファミリ名。
@@ -48,14 +42,14 @@ const JAPANESE_FONT_FAMILIES: &[&str] = &[
 /// `require_japanese` が true のときは CJK グリフ検証を通過した face のみ返す。
 /// false のときは `SansSerif` 系の一般フォントを返す（日本語非対応でも可）。
 pub fn resolve_system_font(require_japanese: bool) -> Option<ResolvedFont> {
-    let source = system_source();
+    let source = SystemSource::new();
     let properties =
         Properties { weight: Weight::NORMAL, style: Style::Normal, stretch: Default::default() };
 
     if require_japanese {
         for family in JAPANESE_FONT_FAMILIES {
             if let Some(resolved) =
-                resolve_family(source, FamilyName::Title(family.to_string()), properties)
+                resolve_family(&source, FamilyName::Title(family.to_string()), properties)
                 && font_supports_resolved(&resolved)
             {
                 return Some(resolved);
@@ -64,7 +58,7 @@ pub fn resolve_system_font(require_japanese: bool) -> Option<ResolvedFont> {
         return None;
     }
 
-    resolve_family(source, FamilyName::SansSerif, properties)
+    resolve_family(&source, FamilyName::SansSerif, properties)
 }
 
 /// 解決済みフォントの生バイト列を読み込む。
