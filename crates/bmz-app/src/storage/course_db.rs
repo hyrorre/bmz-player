@@ -45,6 +45,9 @@ pub struct CourseScoreInsert {
     pub miss_count: u32,
     pub course_failed: bool,
     pub course_clear: bool,
+    /// Arrange bucket used for this attempt.  Mirrors beatoraja course score
+    /// kind 0/1/2 (Normal / Mirror / Random).
+    pub arrange: String,
     pub trophies_json: String,
     pub played_at: i64,
     pub charts: Vec<CourseScoreChartRecord>,
@@ -298,8 +301,8 @@ pub(super) fn insert_course_score(
     tx.execute(
         "INSERT INTO course_scores (
             course_id, ex_score, max_ex_score, clear_type, gauge_type, gauge_value,
-            max_combo, miss_count, course_failed, course_clear, trophies_json, played_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            max_combo, miss_count, course_failed, course_clear, arrange, trophies_json, played_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         params![
             record.course_id,
             record.ex_score,
@@ -311,6 +314,7 @@ pub(super) fn insert_course_score(
             record.miss_count,
             record.course_failed,
             record.course_clear,
+            record.arrange,
             record.trophies_json,
             record.played_at,
         ],
@@ -468,8 +472,11 @@ pub(super) fn achieved_trophy_names_for_course(
 ) -> Result<Vec<String>> {
     let mut stmt = conn.prepare(
         "SELECT DISTINCT trophy_name
-         FROM course_trophy_achievements
-         WHERE course_id = ?1
+         FROM course_trophy_achievements cta
+         JOIN course_scores cs
+             ON cs.id = cta.course_score_id
+         WHERE cta.course_id = ?1
+           AND cs.arrange IN ('Normal', 'Mirror', 'Random')
          ORDER BY trophy_name",
     )?;
     let rows = stmt.query_map(params![course_id], |row| row.get::<_, String>(0))?;
@@ -939,6 +946,7 @@ mod tests {
             miss_count: 5,
             course_failed: clear == "Failed",
             course_clear: clear != "Failed" && clear != "NoPlay",
+            arrange: "Normal".to_string(),
             trophies_json: "[]".to_string(),
             played_at: 1_700_000_500,
             charts: vec![
@@ -1254,6 +1262,37 @@ mod tests {
         assert_eq!(
             achieved_trophy_names_for_course(&conn, course_id).unwrap(),
             vec!["gold".to_string(), "silver".to_string()],
+        );
+    }
+
+    #[test]
+    fn achieved_trophy_names_for_course_uses_beatoraja_gradebar_arrange_buckets() {
+        let mut conn = open_db();
+        let course_id = insert_test_course(&mut conn);
+
+        let mut normal = sample_score_insert(course_id, 400, "Normal");
+        normal.arrange = "Normal".to_string();
+        normal.achieved_trophies = vec!["bronzemedal".to_string()];
+        insert_course_score(&mut conn, &normal).unwrap();
+
+        let mut mirror = sample_score_insert(course_id, 500, "Normal");
+        mirror.arrange = "Mirror".to_string();
+        mirror.achieved_trophies = vec!["silvermedal".to_string()];
+        insert_course_score(&mut conn, &mirror).unwrap();
+
+        let mut random = sample_score_insert(course_id, 600, "Normal");
+        random.arrange = "Random".to_string();
+        random.achieved_trophies = vec!["goldmedal".to_string()];
+        insert_course_score(&mut conn, &random).unwrap();
+
+        let mut unsupported = sample_score_insert(course_id, 700, "Normal");
+        unsupported.arrange = "SRandom".to_string();
+        unsupported.achieved_trophies = vec!["ignored".to_string()];
+        insert_course_score(&mut conn, &unsupported).unwrap();
+
+        assert_eq!(
+            achieved_trophy_names_for_course(&conn, course_id).unwrap(),
+            vec!["bronzemedal".to_string(), "goldmedal".to_string(), "silvermedal".to_string(),],
         );
     }
 

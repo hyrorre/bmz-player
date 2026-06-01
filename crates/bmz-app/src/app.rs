@@ -1833,6 +1833,11 @@ impl WinitApp {
             .map(|r| r.finished.result.score.max_combo)
             .max()
             .unwrap_or(0);
+        let course_arrange = course
+            .entry_results
+            .first()
+            .map(|entry| entry.finished.arrange.to_persistent_str().to_string())
+            .unwrap_or_else(|| "Normal".to_string());
 
         let mut course_result = course.into_result();
         tracing::info!(
@@ -1900,6 +1905,7 @@ impl WinitApp {
                 miss_count,
                 course_failed: course_result.course_failed,
                 course_clear: course_result.course_clear,
+                arrange: course_arrange,
                 trophies_json,
                 played_at,
                 charts: chart_records,

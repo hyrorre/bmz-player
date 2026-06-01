@@ -360,6 +360,17 @@ pub const LIBRARY_MIGRATIONS: &[Migration] = &[
                 ON course_trophy_achievements(course_id, trophy_name);",
         ],
     },
+    Migration {
+        version: 13,
+        // beatoraja GradeBar keeps separate normal / mirror / random course
+        // scores.  Persist the arrange used for each course attempt so select
+        // trophies can be derived from the same three buckets.
+        statements: &[
+            "ALTER TABLE course_scores ADD COLUMN arrange TEXT NOT NULL DEFAULT 'Normal';",
+            "CREATE INDEX idx_course_scores_course_arrange
+                ON course_scores(course_id, arrange);",
+        ],
+    },
 ];
 
 pub const SCORE_MIGRATIONS: &[Migration] = &[

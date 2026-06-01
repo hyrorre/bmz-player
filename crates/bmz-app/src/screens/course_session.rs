@@ -208,6 +208,7 @@ mod tests {
                             &bmz_chart::model::ChartMetadata::default(),
                         ),
                         replay_playback: false,
+                        arrange: crate::select_options::ArrangeOption::Normal,
                     },
                 }
             })
@@ -315,6 +316,7 @@ mod tests {
                             &bmz_chart::model::ChartMetadata::default(),
                         ),
                         replay_playback: false,
+                        arrange: crate::select_options::ArrangeOption::Normal,
                     },
                 }
             })

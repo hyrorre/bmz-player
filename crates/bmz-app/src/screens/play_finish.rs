@@ -16,6 +16,7 @@ pub struct FinishedPlaySession {
     pub stored: StoredPlayResult,
     pub summary: ResultSummary,
     pub replay_playback: bool,
+    pub arrange: crate::select_options::ArrangeOption,
 }
 
 pub fn play_result_from_session(session: &GameSession) -> PlayResult {
@@ -102,7 +103,13 @@ pub fn finish_session_result(
         summary.best_max_combo = Some(best.max_combo);
     }
 
-    Ok(FinishedPlaySession { result, stored, summary, replay_playback })
+    Ok(FinishedPlaySession {
+        result,
+        stored,
+        summary,
+        replay_playback,
+        arrange: applied_arrange.arrange,
+    })
 }
 
 fn clear_type_from_name(name: &str) -> Option<ClearType> {
