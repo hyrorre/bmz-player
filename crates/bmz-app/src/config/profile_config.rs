@@ -155,10 +155,12 @@ pub enum JudgeAlgorithmConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LaneViewConfig {
     pub hispeed: f32,
-    pub lane_cover: f32,
-    pub lift: f32,
-    pub hidden: f32,
-    pub note_scale: f32,
+    /// SUDDEN+ レーンカバー量。0..=1000 の整数で持ち、ランタイムでは /1000 して扱う。
+    pub sudden: u32,
+    /// LIFT 量。0..=1000 の整数で持ち、ランタイムでは /1000 して扱う。
+    pub lift: u32,
+    /// HIDDEN レーンカバー量。0..=1000 の整数で持ち、ランタイムでは /1000 して扱う。
+    pub hidden: u32,
     pub target_green_number: u32,
 }
 
@@ -343,10 +345,28 @@ pub struct UiConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioMixConfig {
-    pub master_volume: f32,
-    pub key_volume: f32,
-    pub bgm_volume: f32,
-    pub preview_volume: f32,
+    /// マスターボリューム。0..=100 の整数で持ち、ランタイムでは /100 して扱う。
+    pub master_volume: u32,
+    /// キーボリューム。0..=100 の整数で持ち、ランタイムでは /100 して扱う。
+    pub key_volume: u32,
+    /// BGM ボリューム。0..=100 の整数で持ち、ランタイムでは /100 して扱う。
+    pub bgm_volume: u32,
+    /// 選曲プレビューのボリューム。0..=100 の整数で持ち、ランタイムでは /100 して扱う。
+    pub preview_volume: u32,
+    /// システム BGM (Select / Decide) のボリューム。0..=100 の整数。
+    #[serde(default = "default_system_bgm_volume")]
+    pub system_bgm_volume: u32,
+    /// システム SE のボリューム。0..=100 の整数。
+    #[serde(default = "default_system_se_volume")]
+    pub system_se_volume: u32,
+}
+
+pub fn default_system_bgm_volume() -> u32 {
+    100
+}
+
+pub fn default_system_se_volume() -> u32 {
+    100
 }
 
 /// beatoraja 互換のシステム SE / BGM (選曲 BGM、フォルダ SE 等) の設定。
@@ -365,17 +385,10 @@ pub struct SystemSoundConfig {
     /// 各システム音のフォールバック先(beatoraja 既定の `defaultsound/` 相当)。
     #[serde(default = "default_system_sound_default_dir")]
     pub default_sound_dir: String,
-    /// システム SE / BGM のマスターボリューム(0.0..=1.0)。
-    #[serde(default = "default_system_sound_volume")]
-    pub volume: f32,
 }
 
 pub fn default_system_sound_default_dir() -> String {
     "defaultsound".to_string()
-}
-
-pub fn default_system_sound_volume() -> f32 {
-    1.0
 }
 
 impl Default for SystemSoundConfig {
@@ -384,7 +397,6 @@ impl Default for SystemSoundConfig {
             bgm_dir: String::new(),
             se_dir: String::new(),
             default_sound_dir: default_system_sound_default_dir(),
-            volume: default_system_sound_volume(),
         }
     }
 }
@@ -539,10 +551,9 @@ impl ProfileConfig {
             },
             lane: LaneViewConfig {
                 hispeed: 2.0,
-                lane_cover: 0.0,
-                lift: 0.0,
-                hidden: 0.0,
-                note_scale: 1.0,
+                sudden: 0,
+                lift: 0,
+                hidden: 0,
                 target_green_number: 300,
             },
             input: crate::config::play_input::default_profile_input(),
@@ -559,10 +570,12 @@ impl ProfileConfig {
                 confirm_on_exit: true,
             },
             audio_mix: AudioMixConfig {
-                master_volume: 1.0,
-                key_volume: 1.0,
-                bgm_volume: 1.0,
-                preview_volume: 0.7,
+                master_volume: 20,
+                key_volume: 100,
+                bgm_volume: 100,
+                preview_volume: 100,
+                system_bgm_volume: default_system_bgm_volume(),
+                system_se_volume: default_system_se_volume(),
             },
             system_sound: SystemSoundConfig::default(),
             skin: SkinConfig::default(),

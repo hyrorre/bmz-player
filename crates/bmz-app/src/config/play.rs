@@ -29,10 +29,25 @@ pub fn play_offsets_from_profile(profile: &ProfileConfig) -> PlayOffsets {
 
 pub fn audio_mix_from_profile(profile: &ProfileConfig) -> PlayAudioMix {
     PlayAudioMix {
-        master_volume: profile.audio_mix.master_volume,
-        key_volume: profile.audio_mix.key_volume,
-        bgm_volume: profile.audio_mix.bgm_volume,
+        master_volume: volume_unit_to_f32(profile.audio_mix.master_volume),
+        key_volume: volume_unit_to_f32(profile.audio_mix.key_volume),
+        bgm_volume: volume_unit_to_f32(profile.audio_mix.bgm_volume),
     }
+}
+
+/// profile.toml の 0..=100 整数ボリュームを 0.0..=1.0 の f32 に変換する。
+pub fn volume_unit_to_f32(value: u32) -> f32 {
+    (value.min(100) as f32) / 100.0
+}
+
+/// profile.toml の 0..=1000 整数 (sudden / lift / hidden) を 0.0..=1.0 の f32 に変換する。
+pub fn lane_unit_to_f32(value: u32) -> f32 {
+    (value.min(1000) as f32) / 1000.0
+}
+
+/// ランタイムの 0.0..=1.0 を 0..=1000 整数 (sudden / lift) に変換する。
+pub fn lane_f32_to_unit(value: f32) -> u32 {
+    (value.clamp(0.0, 1.0) * 1000.0).round() as u32
 }
 
 pub fn gauge_type_from_config(config: GaugeTypeConfig) -> GaugeType {
@@ -116,15 +131,15 @@ mod tests {
     #[test]
     fn maps_profile_audio_mix() {
         let mut profile = ProfileConfig::new_default("default", "Default", 1);
-        profile.audio_mix.master_volume = 0.8;
-        profile.audio_mix.key_volume = 0.7;
-        profile.audio_mix.bgm_volume = 0.6;
+        profile.audio_mix.master_volume = 80;
+        profile.audio_mix.key_volume = 70;
+        profile.audio_mix.bgm_volume = 60;
 
         let mix = audio_mix_from_profile(&profile);
 
-        assert_eq!(mix.master_volume, 0.8);
-        assert_eq!(mix.key_volume, 0.7);
-        assert_eq!(mix.bgm_volume, 0.6);
+        assert!((mix.master_volume - 0.8).abs() < 1e-6);
+        assert!((mix.key_volume - 0.7).abs() < 1e-6);
+        assert!((mix.bgm_volume - 0.6).abs() < 1e-6);
     }
 
     #[test]

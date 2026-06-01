@@ -24,7 +24,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::play::{
     DEFAULT_JUDGE_WINDOW, audio_mix_from_profile, gauge_auto_shift_from_config,
-    gauge_type_from_config, lane_binding_for_chart, play_offsets_from_profile,
+    gauge_type_from_config, lane_binding_for_chart, lane_unit_to_f32, play_offsets_from_profile,
 };
 use crate::config::profile_config::{
     BgaExpandConfig, BgaModeConfig, LaneEffectConfig, ProfileConfig,
@@ -217,8 +217,8 @@ pub fn build_game_session_with_input_backend(
         offsets: play_offsets_from_profile(profile),
         audio_mix: audio_mix_from_profile(profile),
         hispeed: clamp_hispeed(profile.lane.hispeed),
-        lift: profile.lane.lift.clamp(0.0, 1.0),
-        lane_cover: profile.lane.lane_cover.clamp(0.0, 1.0),
+        lift: lane_unit_to_f32(profile.lane.lift),
+        lane_cover: lane_unit_to_f32(profile.lane.sudden),
         lane_cover_visible: true,
         lane_cover_changing: false,
         lanecover_enabled: lanecover_enabled_from_profile(profile),
@@ -243,10 +243,11 @@ fn clamp_hispeed(hispeed: f32) -> f32 {
 
 fn hidden_cover_from_profile(profile: &ProfileConfig) -> f32 {
     match profile.play.lane_effect {
-        LaneEffectConfig::Hidden | LaneEffectConfig::HiddenSudden => profile.lane.hidden,
+        LaneEffectConfig::Hidden | LaneEffectConfig::HiddenSudden => {
+            lane_unit_to_f32(profile.lane.hidden)
+        }
         LaneEffectConfig::Off | LaneEffectConfig::Sudden => 0.0,
     }
-    .clamp(0.0, 1.0)
 }
 
 fn lanecover_enabled_from_profile(profile: &ProfileConfig) -> bool {
@@ -622,7 +623,7 @@ mod tests {
         assert_eq!(session.gauge.selected, GaugeType::Normal);
         assert!(session.autoplay.is_some());
         assert_eq!(session.offsets.input_offset_us, 123);
-        assert_eq!(session.audio_mix.master_volume, 1.0);
+        assert!((session.audio_mix.master_volume - 0.2).abs() < 1e-6);
         assert_eq!(session.audio_clock.sample_rate, 48_000);
         assert_eq!(session.hispeed, 2.0);
         assert_eq!(session.hidden_cover, 0.0);
@@ -709,7 +710,7 @@ mod tests {
     #[test]
     fn build_game_session_uses_hidden_cover_only_for_hidden_effects() {
         let mut profile = ProfileConfig::new_default("default", "Default", 1);
-        profile.lane.hidden = 0.4;
+        profile.lane.hidden = 400;
         profile.play.lane_effect = LaneEffectConfig::Off;
         let off = build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
 

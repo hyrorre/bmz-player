@@ -1045,9 +1045,15 @@ impl WinitApp {
             gauge_auto_shift: gauge_auto_shift_as_str(self.gauge_auto_shift_option).to_string(),
             assist: self.assist_option.as_str().to_string(),
             bga: bga_mode_as_str(self.boot.profile_config.play.bga).to_string(),
-            master_volume: self.boot.profile_config.audio_mix.master_volume,
-            key_volume: self.boot.profile_config.audio_mix.key_volume,
-            bgm_volume: self.boot.profile_config.audio_mix.bgm_volume,
+            master_volume: crate::config::play::volume_unit_to_f32(
+                self.boot.profile_config.audio_mix.master_volume,
+            ),
+            key_volume: crate::config::play::volume_unit_to_f32(
+                self.boot.profile_config.audio_mix.key_volume,
+            ),
+            bgm_volume: crate::config::play::volume_unit_to_f32(
+                self.boot.profile_config.audio_mix.bgm_volume,
+            ),
             current_folder,
             key_hint: self.select_keys.key_hint.clone(),
             option_hint: self.select_keys.option_hint.clone(),
@@ -1073,7 +1079,9 @@ impl WinitApp {
         self.select_preview_source = cache_key.clone();
 
         let mix = &self.boot.profile_config.audio_mix;
-        let volume = (mix.master_volume * mix.preview_volume).clamp(0.0, 1.0);
+        let volume = crate::config::play::volume_unit_to_f32(mix.master_volume)
+            * crate::config::play::volume_unit_to_f32(mix.preview_volume);
+        let volume = volume.clamp(0.0, 1.0);
 
         let loaded = match (&self.select_preview, cache_key.as_deref()) {
             (Some(preview), Some(key)) => {
@@ -3700,11 +3708,17 @@ impl WinitApp {
         }
     }
 
-    /// `profile.[system_sound].volume` を反映してシステム音を鳴らす。
+    /// `profile.audio_mix.system_bgm_volume` / `system_se_volume` に
+    /// `master_volume` を乗算してシステム音を鳴らす。
     /// ボリュームは AudioEngine 側で 0.0..=1.0 にクランプされる。
     fn play_system_sound(&self, sound_type: crate::system_sound::SoundType) {
         if let Some(manager) = &self.system_sound {
-            manager.play(sound_type, self.boot.profile_config.system_sound.volume);
+            let mix = &self.boot.profile_config.audio_mix;
+            let unit =
+                if sound_type.is_bgm() { mix.system_bgm_volume } else { mix.system_se_volume };
+            let volume = crate::config::play::volume_unit_to_f32(mix.master_volume)
+                * crate::config::play::volume_unit_to_f32(unit);
+            manager.play(sound_type, volume.clamp(0.0, 1.0));
         }
     }
 
@@ -4606,8 +4620,8 @@ fn apply_current_play_options_to_profile(
         profile.lane.hispeed = clamp_hispeed_for_profile(hispeed);
     }
     if let Some(state) = lane_state {
-        profile.lane.lane_cover = state.lane_cover.clamp(0.0, 1.0);
-        profile.lane.lift = state.lift.clamp(0.0, 1.0);
+        profile.lane.sudden = crate::config::play::lane_f32_to_unit(state.lane_cover);
+        profile.lane.lift = crate::config::play::lane_f32_to_unit(state.lift);
     }
     profile.play.random = random_config_from_arrange(arrange);
     profile.play.target = target_config_from_option(target);
@@ -5921,8 +5935,8 @@ mod tests {
         );
 
         assert_eq!(profile.lane.hispeed, 3.25);
-        assert!((profile.lane.lane_cover - 0.42).abs() < 1e-6);
-        assert!((profile.lane.lift - 0.1).abs() < 1e-6);
+        assert_eq!(profile.lane.sudden, 420);
+        assert_eq!(profile.lane.lift, 100);
         assert!(matches!(profile.play.random, RandomOptionConfig::Mirror));
         assert!(matches!(profile.play.target, TargetOptionConfig::Aaa));
         assert!(matches!(profile.play.gauge, GaugeTypeConfig::Hard));
