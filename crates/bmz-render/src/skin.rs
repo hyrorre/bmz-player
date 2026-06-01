@@ -11354,6 +11354,7 @@ mod tests {
         assert!(approx_eq(clipped_uv.height, 200.0 / 723.0));
     }
 
+    #[test]
     fn hidden_cover_destination_applies_lift_and_hidden_offsets() {
         let document: SkinDocument = serde_json::from_str(
             r#"
