@@ -1232,11 +1232,11 @@ fn plan_result(
     dynamic_timers: &mut crate::skin::DynamicTimerRuntime,
 ) -> DrawPlan {
     let skin = skin.with_result_graphs(&snapshot.graph);
-    if skin.document().is_some_and(|document| document.skin_type == 7) {
+    if let Some(document) = skin.document().filter(|document| document.skin_type == 7) {
         let state = advance_skin_dynamic_timers(
             &skin,
             dynamic_timers,
-            build_result_skin_draw_state(snapshot),
+            build_result_skin_draw_state(snapshot, document.ranktime),
             (snapshot.elapsed_time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32,
         );
         let text = SkinTextState {
@@ -1316,13 +1316,22 @@ fn push_scene_overlay_text(commands: &mut Vec<DrawCommand>, overlay: &str, origi
 
 fn build_result_skin_draw_state(
     snapshot: &crate::scene::ResultSnapshot,
+    result_ranktime_ms: i32,
 ) -> crate::skin::SkinDrawState {
     use bmz_core::clear::ClearType;
     let result_failed = matches!(snapshot.clear_type, ClearType::Failed | ClearType::NoPlay);
     let timing_stats = result_timing_stats(&snapshot.graph.timing_points);
+    let elapsed_ms =
+        (snapshot.elapsed_time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+    let result_update_score_ms = if result_ranktime_ms <= 0 {
+        Some(elapsed_ms)
+    } else {
+        elapsed_ms
+            .checked_sub(result_ranktime_ms)
+            .filter(|elapsed_after_rank| *elapsed_after_rank >= 0)
+    };
     crate::skin::SkinDrawState {
-        elapsed_ms: (snapshot.elapsed_time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64)
-            as i32,
+        elapsed_ms,
         ex_score: snapshot.ex_score,
         total_notes: snapshot.total_notes,
         past_notes: snapshot.total_notes,
@@ -1353,6 +1362,9 @@ fn build_result_skin_draw_state(
         fadeout_ms: snapshot
             .fadeout_elapsed
             .map(|elapsed| (elapsed.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32),
+        result_graph_begin_ms: Some(elapsed_ms),
+        result_graph_end_ms: Some(elapsed_ms),
+        result_update_score_ms,
         hit_error_ring: snapshot.graph.hit_error_ring.values,
         hit_error_ring_index: snapshot.graph.hit_error_ring.index,
         average_timing_ms: timing_stats.map(|stats| stats.0),
@@ -2450,6 +2462,26 @@ mod tests {
         );
 
         assert!(plan.commands.iter().any(|command| matches!(command, DrawCommand::Rect { .. })));
+    }
+
+    #[test]
+    fn result_skin_state_sets_beatoraja_result_timers() {
+        let AppSceneSnapshot::Result(mut snapshot) = crate::sample::sample_result_scene() else {
+            panic!("sample result scene");
+        };
+        snapshot.elapsed_time = TimeUs(500_000);
+
+        let pending = build_result_skin_draw_state(&snapshot, 1000);
+        assert_eq!(pending.result_graph_begin_ms, Some(500));
+        assert_eq!(pending.result_graph_end_ms, Some(500));
+        assert_eq!(pending.result_update_score_ms, None);
+
+        snapshot.elapsed_time = TimeUs(1_500_000);
+        let active = build_result_skin_draw_state(&snapshot, 1000);
+        assert_eq!(active.result_update_score_ms, Some(500));
+
+        let immediate = build_result_skin_draw_state(&snapshot, 0);
+        assert_eq!(immediate.result_update_score_ms, Some(1500));
     }
 
     #[test]

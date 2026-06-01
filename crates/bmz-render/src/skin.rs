@@ -62,6 +62,8 @@ pub struct SkinDocument {
     #[serde(default)]
     pub input: i32,
     #[serde(default)]
+    pub ranktime: i32,
+    #[serde(default)]
     pub scene: i32,
     #[serde(default)]
     pub close: i32,
@@ -1567,6 +1569,10 @@ pub struct SkinDrawState {
     /// None ならフェードアウト中でない。`timer: 2` の destination はこの値が
     /// Some のときだけ描画され、リザルト画面終了時のアニメーションを駆動する。
     pub fadeout_ms: Option<i32>,
+    /// RESULT graph begin/end timers (150/151) and update score timer (152)。
+    pub result_graph_begin_ms: Option<i32>,
+    pub result_graph_end_ms: Option<i32>,
+    pub result_update_score_ms: Option<i32>,
     /// 閉店/FAILED 演出のタイマー経過 ms (TIMER_FAILED=3)。
     pub failed_ms: Option<i32>,
     /// Result timing distribution average (NUMBER_AVERAGE_TIMING=374).
@@ -1699,6 +1705,9 @@ impl Default for SkinDrawState {
             target_clear_index: None,
             result_failed: None,
             fadeout_ms: None,
+            result_graph_begin_ms: None,
+            result_graph_end_ms: None,
+            result_update_score_ms: None,
             failed_ms: None,
             average_timing_ms: None,
             stddev_timing_ms: None,
@@ -6179,6 +6188,9 @@ fn skin_timer_elapsed_ms(timer: Option<i32>, state: SkinDrawState) -> Option<i32
         None => Some(state.elapsed_ms),
         Some(2) => state.fadeout_ms,
         Some(3) => state.failed_ms,
+        Some(150) => state.result_graph_begin_ms,
+        Some(151) => state.result_graph_end_ms,
+        Some(152) => state.result_update_score_ms,
         Some(40) => state.ready_timer_ms,
         Some(41) => state.play_timer_ms,
         Some(11) => Some(state.select_bar_elapsed_ms),
@@ -12428,6 +12440,24 @@ mod tests {
         assert!(test_skin_op(1336, &[], reached));
         assert!(!test_skin_op(336, &[], reached));
         assert!(test_skin_op(336, &[], updated));
+    }
+
+    #[test]
+    fn result_timers_follow_result_state() {
+        let inactive = SkinDrawState::default();
+        assert_eq!(skin_timer_elapsed_ms(Some(150), inactive), None);
+        assert_eq!(skin_timer_elapsed_ms(Some(151), inactive), None);
+        assert_eq!(skin_timer_elapsed_ms(Some(152), inactive), None);
+
+        let active = SkinDrawState {
+            result_graph_begin_ms: Some(120),
+            result_graph_end_ms: Some(120),
+            result_update_score_ms: Some(40),
+            ..SkinDrawState::default()
+        };
+        assert_eq!(skin_timer_elapsed_ms(Some(150), active), Some(120));
+        assert_eq!(skin_timer_elapsed_ms(Some(151), active), Some(120));
+        assert_eq!(skin_timer_elapsed_ms(Some(152), active), Some(40));
     }
 
     #[test]
