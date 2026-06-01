@@ -105,9 +105,9 @@ cargo run
 
 ## Out of Scope (but welcome your contributions)
 
-- [ ] 22K / 44K BMS
+- [ ] 24K / 48K BMS
 - [ ] 18K PMS (9K DOUBLE PLAY)
 - [ ] LR2-style csv skin
 - [ ] More features like LR2
 - [ ] osu! mania charts
-- [ ] ModernChic skin support (too much code that relies on Java / JDX)
+- [ ] ModernChic skin support (too much code that relies on Java / libGDX)
