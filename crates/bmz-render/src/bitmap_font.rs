@@ -147,9 +147,6 @@ fn parse_i32(fields: &HashMap<String, String>, key: &str) -> Result<i32> {
 
 #[cfg(test)]
 mod tests {
-    use std::fs::File;
-    use std::io::BufWriter;
-
     use super::*;
 
     #[test]
@@ -185,14 +182,12 @@ char id=65 x=0 y=0 width=1 height=1 xoffset=1 yoffset=2 xadvance=9 page=0 chnl=0
     }
 
     fn write_test_png(path: &Path) {
-        let file = File::create(path).unwrap();
-        let writer = BufWriter::new(file);
-        let mut encoder = png::Encoder::new(writer, 2, 2);
-        encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(png::BitDepth::Eight);
-        let mut writer = encoder.write_header().unwrap();
-        writer
-            .write_image_data(&[255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 128])
-            .unwrap();
+        let buffer = image::RgbaImage::from_raw(
+            2,
+            2,
+            vec![255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 128],
+        )
+        .expect("rgba buffer dimensions match pixels");
+        buffer.save_with_format(path, image::ImageFormat::Png).unwrap();
     }
 }

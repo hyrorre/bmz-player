@@ -4204,7 +4204,7 @@ fn load_chart_bga_textures(renderer: &mut Renderer, chart: &PlayableChart) -> Bg
                 }
             }
             Err(error) => {
-                tracing::debug!(
+                tracing::warn!(
                     asset_id = asset.id.0,
                     path = %path.display(),
                     %error,

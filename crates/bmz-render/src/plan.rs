@@ -255,28 +255,35 @@ fn push_fallback_bga_background(commands: &mut Vec<DrawCommand>, snapshot: &Rend
         return;
     }
     if let Some(poor) = snapshot.bga_poor {
-        push_bga_fullscreen(commands, poor, snapshot.bga_stretch);
+        push_bga_fullscreen(commands, poor, snapshot.bga_stretch, BlendMode::Normal);
     } else if let Some(base) = snapshot.bga_base {
-        push_bga_fullscreen(commands, base, snapshot.bga_stretch);
+        push_bga_fullscreen(commands, base, snapshot.bga_stretch, BlendMode::Normal);
     }
     if snapshot.bga_poor.is_none() {
+        // Layer / Layer2 は黒クロマキー (beatoraja の layer.frag 相当) で
+        // Base の上に重ねる。
         if let Some(layer) = snapshot.bga_layer {
-            push_bga_fullscreen(commands, layer, snapshot.bga_stretch);
+            push_bga_fullscreen(commands, layer, snapshot.bga_stretch, BlendMode::LayerMask);
         }
         if let Some(layer2) = snapshot.bga_layer2 {
-            push_bga_fullscreen(commands, layer2, snapshot.bga_stretch);
+            push_bga_fullscreen(commands, layer2, snapshot.bga_stretch, BlendMode::LayerMask);
         }
     }
 }
 
-fn push_bga_fullscreen(commands: &mut Vec<DrawCommand>, frame: DisplayBgaFrame, stretch: i32) {
+fn push_bga_fullscreen(
+    commands: &mut Vec<DrawCommand>,
+    frame: DisplayBgaFrame,
+    stretch: i32,
+    blend: BlendMode,
+) {
     let (rect, uv) = bga_fullscreen_geometry(frame.width, frame.height, stretch);
     commands.push(DrawCommand::Image {
         rect,
         uv,
         texture: TextureId(frame.texture_id),
         tint: Color::rgba(frame.tint_r, frame.tint_g, frame.tint_b, frame.tint_a),
-        blend: BlendMode::Normal,
+        blend,
         linear_filter: true,
     });
 }
@@ -3738,6 +3745,40 @@ mod tests {
             time: TimeUs(0),
             is_miss: false,
         })
+    }
+
+    #[test]
+    fn fallback_bga_uses_layer_mask_blend_for_layer_textures() {
+        // BGA Layer / Layer2 は beatoraja の `layer.frag` 相当の黒クロマキー
+        // (`BlendMode::LayerMask`) を使うことを担保する。
+        // bl.jpg のような黒画像 Layer が Base を完全に覆い隠さないために必要。
+        use crate::snapshot::DisplayBgaFrame;
+        let snapshot = RenderSnapshot {
+            has_bga: true,
+            bga_enabled: true,
+            bga_stretch: 1,
+            bga_base: Some(DisplayBgaFrame::opaque(100, 256.0, 256.0)),
+            bga_layer: Some(DisplayBgaFrame::opaque(101, 256.0, 256.0)),
+            bga_layer2: Some(DisplayBgaFrame::opaque(102, 256.0, 256.0)),
+            ..Default::default()
+        };
+        let mut commands = Vec::new();
+        push_fallback_bga_background(&mut commands, &snapshot);
+        let blends: Vec<(u32, BlendMode)> = commands
+            .iter()
+            .filter_map(|cmd| match cmd {
+                DrawCommand::Image { texture, blend, .. } => Some((texture.0, *blend)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            blends,
+            vec![
+                (100, BlendMode::Normal),
+                (101, BlendMode::LayerMask),
+                (102, BlendMode::LayerMask),
+            ]
+        );
     }
 
     #[test]

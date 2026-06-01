@@ -109,6 +109,7 @@ struct WgpuRenderer {
     rect_buffer_capacity: usize,
     image_pipeline: wgpu::RenderPipeline,
     image_add_pipeline: wgpu::RenderPipeline,
+    image_layer_pipeline: wgpu::RenderPipeline,
     image_bind_group_layout: wgpu::BindGroupLayout,
     image_sampler: wgpu::Sampler,
     image_sampler_linear: wgpu::Sampler,
@@ -464,6 +465,12 @@ impl WgpuRenderer {
         );
         let image_add_pipeline =
             create_image_pipeline(&device, config.format, &image_bind_group_layout, BlendMode::Add);
+        let image_layer_pipeline = create_image_pipeline(
+            &device,
+            config.format,
+            &image_bind_group_layout,
+            BlendMode::LayerMask,
+        );
         let image_textures = create_default_image_textures(&device, &queue);
         let text_bind_group_layout = create_text_bind_group_layout(&device);
         let text_sampler = create_text_sampler(&device);
@@ -480,6 +487,7 @@ impl WgpuRenderer {
             rect_buffer_capacity: 0,
             image_pipeline,
             image_add_pipeline,
+            image_layer_pipeline,
             image_bind_group_layout,
             image_sampler,
             image_sampler_linear,
@@ -622,6 +630,7 @@ impl WgpuRenderer {
                         pass.set_pipeline(match blend {
                             BlendMode::Normal => &self.image_pipeline,
                             BlendMode::Add => &self.image_add_pipeline,
+                            BlendMode::LayerMask => &self.image_layer_pipeline,
                         });
                         pass.set_bind_group(0, bind_group, &[]);
                         pass.set_vertex_buffer(
@@ -1707,9 +1716,13 @@ fn create_image_pipeline(
     bind_group_layout: &wgpu::BindGroupLayout,
     blend_mode: BlendMode,
 ) -> wgpu::RenderPipeline {
+    let shader_source = match blend_mode {
+        BlendMode::LayerMask => IMAGE_SHADER_LAYER,
+        BlendMode::Normal | BlendMode::Add => IMAGE_SHADER,
+    };
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("bmz-render image shader"),
-        source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(IMAGE_SHADER)),
+        source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(shader_source)),
     });
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("bmz-render image pipeline layout"),
@@ -1721,6 +1734,7 @@ fn create_image_pipeline(
         label: Some(match blend_mode {
             BlendMode::Normal => "bmz-render image pipeline",
             BlendMode::Add => "bmz-render additive image pipeline",
+            BlendMode::LayerMask => "bmz-render layer-mask image pipeline",
         }),
         layout: Some(&layout),
         vertex: wgpu::VertexState {
@@ -1774,7 +1788,7 @@ fn create_image_pipeline(
 
 fn image_blend_state(blend_mode: BlendMode) -> wgpu::BlendState {
     match blend_mode {
-        BlendMode::Normal => wgpu::BlendState::ALPHA_BLENDING,
+        BlendMode::Normal | BlendMode::LayerMask => wgpu::BlendState::ALPHA_BLENDING,
         BlendMode::Add => wgpu::BlendState {
             color: wgpu::BlendComponent {
                 src_factor: wgpu::BlendFactor::SrcAlpha,
@@ -1973,6 +1987,63 @@ fn vs_main(
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     return textureSample(image_texture, image_sampler, input.uv) * input.tint;
+}
+"#;
+
+// beatoraja の layer.frag 相当: BGA Layer / Layer2 用に黒ピクセルを透過する。
+const IMAGE_SHADER_LAYER: &str = r#"
+@group(0) @binding(0)
+var image_texture: texture_2d<f32>;
+@group(0) @binding(1)
+var image_sampler: sampler;
+
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) tint: vec4<f32>,
+};
+
+@vertex
+fn vs_main(
+    @builtin(vertex_index) vertex_index: u32,
+    @location(0) rect: vec4<f32>,
+    @location(1) uv_rect: vec4<f32>,
+    @location(2) tint: vec4<f32>,
+    @location(3) rotation: vec4<f32>,
+) -> VertexOutput {
+    var corners = array<vec2<f32>, 6>(
+        vec2<f32>(0.0, 0.0),
+        vec2<f32>(1.0, 0.0),
+        vec2<f32>(0.0, 1.0),
+        vec2<f32>(0.0, 1.0),
+        vec2<f32>(1.0, 0.0),
+        vec2<f32>(1.0, 1.0),
+    );
+    let local = corners[vertex_index];
+    let pivot = rotation.yz;
+    let relative = (local - pivot) * rect.zw;
+    let c = cos(rotation.x);
+    let s = sin(rotation.x);
+    let rotated = vec2<f32>(
+        relative.x * c - relative.y * s,
+        relative.x * s + relative.y * c,
+    );
+    let pos01 = rect.xy + pivot * rect.zw + rotated;
+
+    var out: VertexOutput;
+    out.position = vec4<f32>(pos01.x * 2.0 - 1.0, 1.0 - pos01.y * 2.0, 0.0, 1.0);
+    out.uv = uv_rect.xy + local * uv_rect.zw;
+    out.tint = tint;
+    return out;
+}
+
+@fragment
+fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+    let sampled = textureSample(image_texture, image_sampler, input.uv);
+    if (sampled.r == 0.0 && sampled.g == 0.0 && sampled.b == 0.0) {
+        return input.tint * vec4<f32>(sampled.rgb, 0.0);
+    }
+    return input.tint * sampled;
 }
 "#;
 

@@ -1985,6 +1985,9 @@ pub enum SkinPhase {
 pub enum BlendMode {
     Normal,
     Add,
+    /// BGA Layer/Layer2 の黒クロマキー描画。
+    /// beatoraja の `layer.frag` 相当: RGB(0,0,0) ピクセルを α=0 として描画する。
+    LayerMask,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -2414,6 +2417,11 @@ impl SkinDocument {
                         destination.filter != 0,
                     ));
                 }
+                // Layer / Layer2 は beatoraja の TYPE_LAYER と同様、黒ピクセルを
+                // 透過させて Base に重ねる。Add 指定時は本体側で既に色がブレンドされる
+                // ためクロマキーは不要 (黒は加算寄与ゼロ)。
+                let layer_blend =
+                    if matches!(blend, BlendMode::Add) { blend } else { BlendMode::LayerMask };
                 if state.bga_poor.is_none()
                     && let Some(bga) = state.bga_layer
                 {
@@ -2423,7 +2431,7 @@ impl SkinDocument {
                         stretch,
                         rect,
                         tint,
-                        blend,
+                        layer_blend,
                         self.w,
                         self.h,
                         destination.filter != 0,
@@ -2438,7 +2446,7 @@ impl SkinDocument {
                         stretch,
                         rect,
                         tint,
-                        blend,
+                        layer_blend,
                         self.w,
                         self.h,
                         destination.filter != 0,

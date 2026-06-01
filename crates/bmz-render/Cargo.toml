@@ -7,8 +7,7 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 ab_glyph.workspace = true
-jpeg-decoder = "0.3"
-png = "0.17"
+image.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true
