@@ -46,6 +46,9 @@ cargo run
 - [ ] FAST/SLOW 表示条件変更機能 (ms単位)
 - [ ] SELECT画面UIベースの設定変更機能
 - [ ] Fontで `BIZ UDGothic` / `Noto Sans CJK JP` / `Noto Sans JP` を優先表示
+- [ ] SUDDEN / HIDDEN / LIFT をint 1000段階に
+- [ ] volume関係をint 100段階に
+- [ ] Select画面の操作変更とスキン側の不一致について考える
 
 ## Roadmap
 
@@ -63,6 +66,7 @@ cargo run
 - [ ] normalizing volume per-chart
 - [ ] OBS WebSocket control integration
 - [ ] Discord Rich Presence
+- [ ] Arena Mode
 - [ ] i18n
 
 ## Out of Scope (but welcome your contributions)
