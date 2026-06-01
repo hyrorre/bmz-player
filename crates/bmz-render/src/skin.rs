@@ -5008,6 +5008,7 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool 
         160 => !state.select_is_folder,
         196 | 197 | 198 | 1196..=1208 => select_replay_op_matches(op, state),
         200..=207 => select_rank_op_matches(op, state),
+        300..=318 if state.result_failed.is_some() => result_rank_op_matches(op, state),
         300..=307 => select_small_rank_op_matches(op, state),
         320..=327 => best_rank_op_matches(op, state),
         170 => !state.has_bga,
@@ -5035,6 +5036,8 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool 
         }),
         336 => state.target_ex_score.is_some_and(|target| state.ex_score > target),
         1336 => state.target_ex_score.is_some_and(|target| state.ex_score == target),
+        350 => true,
+        351 => false,
         352 => state.target_ex_score.is_some_and(|target| state.ex_score > target),
         353 => state.target_ex_score.is_some_and(|target| state.ex_score < target),
         354 => state.target_ex_score.is_some_and(|target| state.ex_score == target),
@@ -6806,6 +6809,20 @@ fn select_small_rank_op_matches(op: i32, state: SkinDrawState) -> bool {
         return false;
     };
     rank <= 6 && op == 301 + rank as i32
+}
+
+fn result_rank_op_matches(op: i32, state: SkinDrawState) -> bool {
+    if matches!(op, 308 | 318) {
+        return state.ex_score == 0 && state.total_notes > 0;
+    }
+    let Some(rank) = current_rank_index(state) else {
+        return false;
+    };
+    match op {
+        300..=307 => op == 300 + rank as i32,
+        310..=317 => op == 310 + rank as i32,
+        _ => false,
+    }
 }
 
 fn best_rank_op_matches(op: i32, state: SkinDrawState) -> bool {
@@ -12314,6 +12331,7 @@ mod tests {
             previous_best_misscount: Some(10),
             target_misscount: Some(0),
             target_clear_index: Some(8),
+            result_failed: Some(false),
             average_timing_ms: Some(-12.34),
             stddev_timing_ms: Some(56.78),
             ..SkinDrawState::default()
@@ -12350,6 +12368,12 @@ mod tests {
         assert!(!test_skin_op(1332, &[], state));
         assert!(test_skin_op(335, &[], state));
         assert!(!test_skin_op(1335, &[], state));
+        assert!(test_skin_op(300, &[], state));
+        assert!(test_skin_op(310, &[], state));
+        assert!(!test_skin_op(301, &[], state));
+        assert!(!test_skin_op(308, &[], state));
+        assert!(test_skin_op(350, &[], state));
+        assert!(!test_skin_op(351, &[], state));
         assert!(!test_skin_op(352, &[], state));
         assert!(test_skin_op(353, &[], state));
         assert!(!test_skin_op(354, &[], state));
@@ -12363,6 +12387,7 @@ mod tests {
             previous_best_max_combo: Some(700),
             previous_best_misscount: Some(10),
             target_ex_score: Some(1800),
+            result_failed: Some(false),
             ..SkinDrawState::default()
         };
         assert!(test_skin_op(1330, &[], draw_state));
@@ -12370,6 +12395,15 @@ mod tests {
         assert!(test_skin_op(1332, &[], draw_state));
         assert!(test_skin_op(1335, &[], draw_state));
         assert!(test_skin_op(354, &[], draw_state));
+
+        let zero_rank_state = SkinDrawState {
+            ex_score: 0,
+            total_notes: 1000,
+            result_failed: Some(true),
+            ..SkinDrawState::default()
+        };
+        assert!(test_skin_op(308, &[], zero_rank_state));
+        assert!(test_skin_op(318, &[], zero_rank_state));
 
         // Fast/Slow 内訳
         assert_eq!(skin_state_number(410, state), Some(350));
