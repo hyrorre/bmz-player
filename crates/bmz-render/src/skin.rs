@@ -103,6 +103,8 @@ pub struct SkinDocument {
     #[serde(default, rename = "hiterrorvisualizer")]
     pub hiterror_visualizer: Vec<SkinHitErrorVisualizerDef>,
     #[serde(default)]
+    pub gaugegraph: Vec<SkinGaugeGraphDef>,
+    #[serde(default)]
     pub judgegraph: Vec<SkinJudgeGraphDef>,
     #[serde(default)]
     pub bpmgraph: Vec<SkinBpmGraphDef>,
@@ -129,6 +131,9 @@ pub struct SkinDocument {
     /// プレイ描画時のみ plan 側が設定する bpmgraph 線分。
     #[serde(skip, default)]
     pub play_bpm_graph_segments: Vec<crate::chart_graph::BpmGraphSegment>,
+    /// リザルト描画時のみ plan 側が設定する gaugegraph 推移。
+    #[serde(skip, default)]
+    pub result_gauge_graph_points: Vec<crate::snapshot::ResultGaugeGraphPoint>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
@@ -431,6 +436,58 @@ impl SkinJudgeGraphDef {
     }
 }
 
+/// beatoraja `gaugegraph[]` 要素。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SkinGaugeGraphDef {
+    #[serde(default, deserialize_with = "deserialize_skin_id")]
+    pub id: String,
+    #[serde(default)]
+    pub color: Vec<String>,
+    #[serde(default = "default_gaugegraph_assist_clear_bg_color", rename = "assistClearBGColor")]
+    pub assist_clear_bg_color: String,
+    #[serde(
+        default = "default_gaugegraph_assist_easy_fail_bg_color",
+        rename = "assistAndEasyFailBGColor"
+    )]
+    pub assist_and_easy_fail_bg_color: String,
+    #[serde(default = "default_gaugegraph_groove_fail_bg_color", rename = "grooveFailBGColor")]
+    pub groove_fail_bg_color: String,
+    #[serde(
+        default = "default_gaugegraph_groove_clear_hard_bg_color",
+        rename = "grooveClearAndHardBGColor"
+    )]
+    pub groove_clear_and_hard_bg_color: String,
+    #[serde(default = "default_gaugegraph_exhard_bg_color", rename = "exHardBGColor")]
+    pub ex_hard_bg_color: String,
+    #[serde(default = "default_gaugegraph_hazard_bg_color", rename = "hazardBGColor")]
+    pub hazard_bg_color: String,
+    #[serde(
+        default = "default_gaugegraph_assist_clear_line_color",
+        rename = "assistClearLineColor"
+    )]
+    pub assist_clear_line_color: String,
+    #[serde(
+        default = "default_gaugegraph_assist_easy_fail_line_color",
+        rename = "assistAndEasyFailLineColor"
+    )]
+    pub assist_and_easy_fail_line_color: String,
+    #[serde(default = "default_gaugegraph_groove_fail_line_color", rename = "grooveFailLineColor")]
+    pub groove_fail_line_color: String,
+    #[serde(
+        default = "default_gaugegraph_groove_clear_hard_line_color",
+        rename = "grooveClearAndHardLineColor"
+    )]
+    pub groove_clear_and_hard_line_color: String,
+    #[serde(default = "default_gaugegraph_exhard_line_color", rename = "exHardLineColor")]
+    pub ex_hard_line_color: String,
+    #[serde(default = "default_gaugegraph_hazard_line_color", rename = "hazardLineColor")]
+    pub hazard_line_color: String,
+    #[serde(default = "default_gaugegraph_borderline_color", rename = "borderlineColor")]
+    pub borderline_color: String,
+    #[serde(default = "default_gaugegraph_border_color", rename = "borderColor")]
+    pub border_color: String,
+}
+
 /// beatoraja `bpmgraph[]` 要素。
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct SkinBpmGraphDef {
@@ -616,6 +673,49 @@ fn default_hiterror_alpha() -> f32 {
 }
 fn default_hiterror_window_length() -> i32 {
     30
+}
+
+fn default_gaugegraph_assist_clear_bg_color() -> String {
+    "440044".to_string()
+}
+fn default_gaugegraph_assist_easy_fail_bg_color() -> String {
+    "004444".to_string()
+}
+fn default_gaugegraph_groove_fail_bg_color() -> String {
+    "004400".to_string()
+}
+fn default_gaugegraph_groove_clear_hard_bg_color() -> String {
+    "440000".to_string()
+}
+fn default_gaugegraph_exhard_bg_color() -> String {
+    "444400".to_string()
+}
+fn default_gaugegraph_hazard_bg_color() -> String {
+    "444444".to_string()
+}
+fn default_gaugegraph_assist_clear_line_color() -> String {
+    "ff00ff".to_string()
+}
+fn default_gaugegraph_assist_easy_fail_line_color() -> String {
+    "00ffff".to_string()
+}
+fn default_gaugegraph_groove_fail_line_color() -> String {
+    "00ff00".to_string()
+}
+fn default_gaugegraph_groove_clear_hard_line_color() -> String {
+    "ff0000".to_string()
+}
+fn default_gaugegraph_exhard_line_color() -> String {
+    "ffff00".to_string()
+}
+fn default_gaugegraph_hazard_line_color() -> String {
+    "cccccc".to_string()
+}
+fn default_gaugegraph_borderline_color() -> String {
+    "ff0000".to_string()
+}
+fn default_gaugegraph_border_color() -> String {
+    "440000".to_string()
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -948,6 +1048,7 @@ impl SkinContext {
         if let Some(document) = &mut cloned.document {
             document.play_judge_graph_density = graph.judge_graph_density.clone();
             document.play_bpm_graph_segments = graph.bpm_graph_segments.clone();
+            document.result_gauge_graph_points = graph.gauge_points.clone();
         }
         cloned
     }
@@ -2074,6 +2175,9 @@ impl SkinDocument {
                 frame,
                 state,
             ));
+        }
+        if let Some(gauge_graph) = self.gaugegraph.iter().find(|graph| graph.id == destination.id) {
+            return Some(self.gaugegraph_render_items(gauge_graph, destination, frame, state));
         }
         if let Some(judge_graph) = self.judgegraph.iter().find(|graph| graph.id == destination.id) {
             return Some(self.judgegraph_render_items(judge_graph, destination, frame, state));
@@ -3580,6 +3684,125 @@ impl SkinDocument {
             items.push(SkinRenderItem::Rect {
                 rect: Rect { x, y: rect.y + canvas_h - bar_h, width: line_width, height: bar_h },
                 color: Color::rgba(line_color.r, line_color.g, line_color.b, alpha * frame_alpha),
+                blend,
+            });
+        }
+        items
+    }
+
+    fn gaugegraph_render_items(
+        &self,
+        graph: &SkinGaugeGraphDef,
+        destination: &SkinDestinationDef,
+        frame: ResolvedSkinFrame,
+        state: SkinDrawState,
+    ) -> Vec<SkinRenderItem> {
+        let points = &self.result_gauge_graph_points;
+        if points.is_empty() {
+            return Vec::new();
+        }
+        let rect = normalize_skin_frame_rect(frame, self.w, self.h);
+        let frame_alpha = frame.a as f32 / 255.0;
+        let blend = if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal };
+        let max = state.gauge_max.max(1.0);
+        let border = points.first().map(|point| point.border).unwrap_or(state.gauge_border);
+        let color_index = gaugegraph_color_index(
+            points.last().map(|point| point.gauge_type).unwrap_or(state.gauge_type),
+        );
+        let colors = gaugegraph_colors(graph, color_index, frame_alpha);
+        let border_y = rect.y + rect.height * (1.0 - (border / max).clamp(0.0, 1.0));
+        let line_w = (2.0 / self.w.max(1) as f32).max(0.001);
+        let line_h = (2.0 / self.h.max(1) as f32).max(0.001);
+        let render_progress = (state.elapsed_ms.max(0) as f32 / 1500.0).clamp(0.0, 1.0);
+        let render_x = rect.x + rect.width * render_progress;
+        let mut items = Vec::new();
+        items.push(SkinRenderItem::Rect { rect, color: colors.graph_bg, blend });
+        if border_y > rect.y {
+            items.push(SkinRenderItem::Rect {
+                rect: Rect { x: rect.x, y: rect.y, width: rect.width, height: border_y - rect.y },
+                color: colors.border_bg,
+                blend,
+            });
+        }
+        for pair in points.windows(2) {
+            let from = pair[0];
+            let to = pair[1];
+            let x1 = rect.x + point_ratio(points, from.time_ms) * rect.width;
+            if x1 > render_x {
+                break;
+            }
+            let x2 = (rect.x + point_ratio(points, to.time_ms) * rect.width).min(render_x);
+            let y1 = gaugegraph_y(rect, from.value, max);
+            let y2 = gaugegraph_y(rect, to.value, max);
+            if (x2 - x1).abs() <= f32::EPSILON {
+                continue;
+            }
+            if from.value < border && to.value < border {
+                push_gaugegraph_segment(
+                    &mut items,
+                    x1,
+                    x2,
+                    y1,
+                    y2,
+                    line_w,
+                    line_h,
+                    colors.graph_line,
+                    blend,
+                );
+            } else if from.value >= border && to.value >= border {
+                push_gaugegraph_segment(
+                    &mut items,
+                    x1,
+                    x2,
+                    y1,
+                    y2,
+                    line_w,
+                    line_h,
+                    colors.border_line,
+                    blend,
+                );
+            } else {
+                let split_x = if (to.value - from.value).abs() <= f32::EPSILON {
+                    x1
+                } else {
+                    x1 + (x2 - x1)
+                        * ((border - from.value) / (to.value - from.value)).clamp(0.0, 1.0)
+                };
+                let graph_color =
+                    if from.value < border { colors.graph_line } else { colors.border_line };
+                let border_color =
+                    if from.value < border { colors.border_line } else { colors.graph_line };
+                push_gaugegraph_segment(
+                    &mut items,
+                    x1,
+                    split_x,
+                    y1,
+                    border_y,
+                    line_w,
+                    line_h,
+                    graph_color,
+                    blend,
+                );
+                push_gaugegraph_segment(
+                    &mut items,
+                    split_x,
+                    x2,
+                    border_y,
+                    y2,
+                    line_w,
+                    line_h,
+                    border_color,
+                    blend,
+                );
+            }
+        }
+        if points.len() == 1 {
+            let y = gaugegraph_y(rect, points[0].value, max);
+            let color =
+                if points[0].value < border { colors.graph_line } else { colors.border_line };
+            items.push(SkinRenderItem::Rect {
+                rect: Rect { x: rect.x, y, width: (render_x - rect.x).max(line_w), height: line_h },
+                color,
                 blend,
             });
         }
@@ -5744,6 +5967,142 @@ fn skin_hex_color(value: &str) -> Option<Color> {
     let a =
         if hex.len() == 8 { u8::from_str_radix(&hex[6..8], 16).ok()? as f32 / 255.0 } else { 1.0 };
     Some(Color::rgba(r, g, b, a))
+}
+
+#[derive(Debug, Clone, Copy)]
+struct GaugeGraphColors {
+    graph_bg: Color,
+    graph_line: Color,
+    border_bg: Color,
+    border_line: Color,
+}
+
+fn gaugegraph_color_index(gauge_type: i32) -> usize {
+    const TYPE_TABLE: [usize; 10] = [0, 1, 2, 3, 4, 5, 3, 4, 5, 3];
+    TYPE_TABLE.get(gauge_type.max(0) as usize).copied().unwrap_or(3)
+}
+
+fn gaugegraph_colors(
+    graph: &SkinGaugeGraphDef,
+    color_index: usize,
+    frame_alpha: f32,
+) -> GaugeGraphColors {
+    let colors = if graph.color.is_empty() {
+        gaugegraph_default_color_strings(graph)
+    } else {
+        gaugegraph_explicit_color_strings(graph)
+    };
+    GaugeGraphColors {
+        border_line: skin_hex_color(&colors[color_index][0])
+            .unwrap_or(Color::rgb(0.0, 0.0, 0.0))
+            .with_alpha(frame_alpha),
+        border_bg: skin_hex_color(&colors[color_index][1])
+            .unwrap_or(Color::rgb(0.0, 0.0, 0.0))
+            .with_alpha(frame_alpha),
+        graph_line: skin_hex_color(&colors[color_index][2])
+            .unwrap_or(Color::rgb(0.0, 0.0, 0.0))
+            .with_alpha(frame_alpha),
+        graph_bg: skin_hex_color(&colors[color_index][3])
+            .unwrap_or(Color::rgb(0.0, 0.0, 0.0))
+            .with_alpha(frame_alpha),
+    }
+}
+
+fn gaugegraph_explicit_color_strings(graph: &SkinGaugeGraphDef) -> [[String; 4]; 6] {
+    std::array::from_fn(|row| {
+        std::array::from_fn(|column| {
+            graph.color.get(row * 4 + column).cloned().unwrap_or_else(|| "000000".to_string())
+        })
+    })
+}
+
+fn gaugegraph_default_color_strings(graph: &SkinGaugeGraphDef) -> [[String; 4]; 6] {
+    let mut colors = [
+        [
+            graph.borderline_color.clone(),
+            graph.border_color.clone(),
+            graph.assist_clear_line_color.clone(),
+            graph.assist_clear_bg_color.clone(),
+        ],
+        [
+            graph.borderline_color.clone(),
+            graph.border_color.clone(),
+            graph.assist_and_easy_fail_line_color.clone(),
+            graph.assist_and_easy_fail_bg_color.clone(),
+        ],
+        [
+            graph.borderline_color.clone(),
+            graph.border_color.clone(),
+            graph.groove_fail_line_color.clone(),
+            graph.groove_fail_bg_color.clone(),
+        ],
+        [
+            graph.groove_clear_and_hard_line_color.clone(),
+            graph.groove_clear_and_hard_bg_color.clone(),
+            graph.groove_clear_and_hard_line_color.clone(),
+            graph.groove_clear_and_hard_bg_color.clone(),
+        ],
+        [
+            graph.ex_hard_line_color.clone(),
+            graph.ex_hard_bg_color.clone(),
+            graph.ex_hard_line_color.clone(),
+            graph.ex_hard_bg_color.clone(),
+        ],
+        [
+            graph.hazard_line_color.clone(),
+            graph.hazard_bg_color.clone(),
+            graph.hazard_line_color.clone(),
+            graph.hazard_bg_color.clone(),
+        ],
+    ];
+    for row in &mut colors {
+        for color in row {
+            if color.is_empty() {
+                *color = "000000".to_string();
+            }
+        }
+    }
+    colors
+}
+
+fn gaugegraph_y(rect: Rect, gauge: f32, max: f32) -> f32 {
+    rect.y + rect.height * (1.0 - (gauge / max).clamp(0.0, 1.0))
+}
+
+fn point_ratio(points: &[crate::snapshot::ResultGaugeGraphPoint], time_ms: i32) -> f32 {
+    let Some(first) = points.first() else {
+        return 0.0;
+    };
+    let Some(last) = points.last() else {
+        return 0.0;
+    };
+    let span = (last.time_ms - first.time_ms).max(1) as f32;
+    (time_ms - first.time_ms).max(0) as f32 / span
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_gaugegraph_segment(
+    items: &mut Vec<SkinRenderItem>,
+    x1: f32,
+    x2: f32,
+    y1: f32,
+    y2: f32,
+    line_w: f32,
+    line_h: f32,
+    color: Color,
+    blend: BlendMode,
+) {
+    let width = (x2 - x1).max(line_w);
+    items.push(SkinRenderItem::Rect {
+        rect: Rect { x: x1, y: y1.min(y2), width: line_w, height: (y2 - y1).abs() + line_h },
+        color,
+        blend,
+    });
+    items.push(SkinRenderItem::Rect {
+        rect: Rect { x: x1, y: y2, width, height: line_h },
+        color,
+        blend,
+    });
 }
 
 /// Rm-skin `text id="table"` と beatoraja `TEXT_TABLE1..3` (1001..1003) の表示ロジック。

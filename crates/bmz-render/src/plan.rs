@@ -2423,6 +2423,92 @@ mod tests {
     }
 
     #[test]
+    fn result_plan_renders_gaugegraph_from_result_graph_data() {
+        use crate::scene::ResultSnapshot;
+        use crate::snapshot::{FastSlowJudgeCounts, ResultGaugeGraphPoint, ResultGraphSnapshot};
+        use bmz_core::clear::ClearType;
+
+        let document: crate::skin::SkinDocument = serde_json::from_str(
+            r#"{
+                "type": 7,
+                "name": "test",
+                "w": 100,
+                "h": 100,
+                "gaugegraph": [{"id": "gg"}],
+                "destination": [
+                    {"id": "gg", "dst": [{"x": 0, "y": 0, "w": 100, "h": 50}]}
+                ]
+            }"#,
+        )
+        .unwrap();
+        let skin = SkinContext::from_manifest_and_document(
+            toml::from_str("").unwrap(),
+            document,
+            std::iter::empty(),
+        );
+        let snapshot = ResultSnapshot {
+            clear_type: ClearType::Normal,
+            ex_score: 100,
+            ex_score_rate: 0.5,
+            max_combo: 50,
+            gauge_value: 80.0,
+            gauge_type: bmz_core::clear::GaugeType::Normal as i32,
+            total_notes: 100,
+            judge_counts: DisplayJudgeCounts::default(),
+            fast_slow_counts: FastSlowJudgeCounts::default(),
+            score_history_id: 0,
+            replay_saved: false,
+            best_ex_score: None,
+            best_clear_type: None,
+            target_ex_score: None,
+            best_max_combo: None,
+            target_max_combo: None,
+            best_misscount: None,
+            target_misscount: None,
+            target_clear_type: None,
+            elapsed_time: TimeUs(2_000_000),
+            fadeout_elapsed: None,
+            title: String::new(),
+            subtitle: String::new(),
+            artist: String::new(),
+            subartist: String::new(),
+            genre: String::new(),
+            difficulty_name: String::new(),
+            play_level: String::new(),
+            graph: ResultGraphSnapshot {
+                gauge_points: vec![
+                    ResultGaugeGraphPoint {
+                        time_ms: 0,
+                        value: 20.0,
+                        border: 80.0,
+                        gauge_type: bmz_core::clear::GaugeType::Normal as i32,
+                    },
+                    ResultGaugeGraphPoint {
+                        time_ms: 1_000,
+                        value: 90.0,
+                        border: 80.0,
+                        gauge_type: bmz_core::clear::GaugeType::Normal as i32,
+                    },
+                ],
+                ..ResultGraphSnapshot::default()
+            },
+            overlay: crate::snapshot::OverlaySnapshot::default(),
+        };
+
+        let plan = DrawPlan::from_scene_with_skin(
+            &AppSceneSnapshot::Result(snapshot),
+            &skin,
+            &mut crate::skin::DynamicTimerRuntime::default(),
+        );
+
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Rect { color: Color { r, g, b, .. }, .. }
+                if (*r - 0.0).abs() < 0.01 && (*g - 1.0).abs() < 0.01 && (*b - 0.0).abs() < 0.01
+        )));
+    }
+
+    #[test]
     fn play_plan_uses_supplied_skin_context() {
         let manifest: SkinManifest = toml::from_str(
             r#"
