@@ -68,6 +68,7 @@ pub struct BestScoreSummary {
     pub gauge_type: String,
     pub gauge_value: f32,
     pub ex_score: u32,
+    pub miss_count: u32,
     pub max_combo: u32,
     pub played_at: i64,
     pub replay_path: String,
@@ -182,6 +183,7 @@ impl ScoreDatabase {
                 gauge_type,
                 gauge_value,
                 ex_score,
+                fast_bad + slow_bad + fast_poor + slow_poor AS miss_count,
                 max_combo,
                 played_at,
                 replay_path
@@ -359,9 +361,10 @@ fn best_score_summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Best
         gauge_type: row.get(2)?,
         gauge_value: row.get(3)?,
         ex_score: row.get(4)?,
-        max_combo: row.get(5)?,
-        played_at: row.get(6)?,
-        replay_path: row.get(7)?,
+        miss_count: row.get(5)?,
+        max_combo: row.get(6)?,
+        played_at: row.get(7)?,
+        replay_path: row.get(8)?,
     })
 }
 

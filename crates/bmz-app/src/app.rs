@@ -728,6 +728,9 @@ impl WinitApp {
                 target_max_combo: summary.target_max_combo,
                 best_misscount: summary.best_misscount,
                 target_misscount: summary.target_misscount,
+                previous_best_ex_score: summary.previous_best_ex_score,
+                previous_best_max_combo: summary.previous_best_max_combo,
+                previous_best_misscount: summary.previous_best_misscount,
                 target_clear_type: summary.target_clear_type,
                 elapsed_time: bmz_core::time::TimeUs(
                     self.result_scene_started_at.elapsed().as_micros().min(i64::MAX as u128) as i64,
@@ -5857,6 +5860,7 @@ mod tests {
             gauge_type: "Normal".to_string(),
             gauge_value: 80.0,
             ex_score,
+            miss_count: 0,
             max_combo: 100,
             played_at: 1,
             replay_path: replay_path.to_string(),

@@ -61,6 +61,10 @@ pub fn finish_session_result(
     ensure_storable_state(session.state)?;
     let result = play_result_from_session(session);
     let replay_playback = session.replay_player.is_some();
+    let previous_best = score_db
+        .best_scores_for_charts(&[result.chart_sha256])
+        .ok()
+        .and_then(|mut bests| bests.pop());
     // オートプレイ / リプレイ再生時はスコア・リプレイをDBに保存しない
     // （リザルト画面の表示のみ行う）。
     let stored = if session.autoplay.is_some() || replay_playback {
@@ -92,6 +96,11 @@ pub fn finish_session_result(
     };
     let mut summary = ResultSummary::from_play_result(&result, &stored, &session.chart.metadata);
     summary.target_ex_score = target_ex_score;
+    if let Some(best) = &previous_best {
+        summary.previous_best_ex_score = Some(best.ex_score);
+        summary.previous_best_max_combo = Some(best.max_combo);
+        summary.previous_best_misscount = Some(best.miss_count);
+    }
     // 過去ベストスコア・ベストコンボを ResultSummary にフィルする。
     // 今回のスコアが直前に upsert_score_best されているので、`best_*` は
     // 「現在の最高記録」を返す。差分表示は `current - best` として 0 になり得る。
@@ -101,6 +110,7 @@ pub fn finish_session_result(
         summary.best_ex_score = Some(best.ex_score);
         summary.best_clear_type = clear_type_from_name(&best.clear_type);
         summary.best_max_combo = Some(best.max_combo);
+        summary.best_misscount = Some(best.miss_count);
     }
 
     Ok(FinishedPlaySession {

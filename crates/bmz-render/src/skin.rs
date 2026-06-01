@@ -1552,6 +1552,10 @@ pub struct SkinDrawState {
     pub target_max_combo: Option<u32>,
     /// 過去ベスト misscount (ref 178 で使用)。
     pub best_misscount: Option<u32>,
+    /// Result update/draw ops 用の保存前ベスト。
+    pub previous_best_ex_score: Option<u32>,
+    pub previous_best_max_combo: Option<u32>,
+    pub previous_best_misscount: Option<u32>,
     /// ターゲット misscount (ref 176, 178 で使用)。
     pub target_misscount: Option<u32>,
     /// ターゲットクリアタイプの index (ref 371)。
@@ -1688,6 +1692,9 @@ impl Default for SkinDrawState {
             best_max_combo: None,
             target_max_combo: None,
             best_misscount: None,
+            previous_best_ex_score: None,
+            previous_best_max_combo: None,
+            previous_best_misscount: None,
             target_misscount: None,
             target_clear_index: None,
             result_failed: None,
@@ -5003,8 +5010,25 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool 
         273 => state.hidden_enabled,
         // Result/update comparison options. In play skins these are often reused
         // as target-reached draw conditions.
+        330 => state.previous_best_ex_score.is_some_and(|best| state.ex_score > best),
+        1330 => state.previous_best_ex_score.is_some_and(|best| state.ex_score == best),
+        331 => state.previous_best_max_combo.is_some_and(|best| state.max_combo > best),
+        1331 => state.previous_best_max_combo.is_some_and(|best| state.max_combo == best),
+        332 => state.previous_best_misscount.is_some_and(|best| current_misscount(state) < best),
+        1332 => state.previous_best_misscount.is_some_and(|best| current_misscount(state) == best),
+        335 => state.previous_best_ex_score.is_some_and(|best| {
+            score_rate_cmp_value(state.ex_score, state.total_notes)
+                > score_rate_cmp_value(best, state.total_notes)
+        }),
+        1335 => state.previous_best_ex_score.is_some_and(|best| {
+            score_rate_cmp_value(state.ex_score, state.total_notes)
+                == score_rate_cmp_value(best, state.total_notes)
+        }),
         336 => state.target_ex_score.is_some_and(|target| state.ex_score > target),
         1336 => state.target_ex_score.is_some_and(|target| state.ex_score == target),
+        352 => state.target_ex_score.is_some_and(|target| state.ex_score > target),
+        353 => state.target_ex_score.is_some_and(|target| state.ex_score < target),
+        354 => state.target_ex_score.is_some_and(|target| state.ex_score == target),
         // OPTION_DIFFICULTY0..5. 0 は UNKNOWN/OTHER、1..5 は BMS #DIFFICULTY。
         150 => state.difficulty <= 0 || state.difficulty > 5,
         151..=155 => state.difficulty == i64::from(op - 150),
@@ -6015,6 +6039,14 @@ fn gauge_after_dot(gauge: f32) -> u32 {
 fn timing_afterdot(value: f32) -> i64 {
     let afterdot = ((value.abs() * 100.0) as i64) % 100;
     if value < 0.0 { -afterdot } else { afterdot }
+}
+
+fn current_misscount(state: SkinDrawState) -> u32 {
+    state.judge_counts.bad + state.judge_counts.poor
+}
+
+fn score_rate_cmp_value(ex_score: u32, total_notes: u32) -> u32 {
+    if total_notes == 0 { 0 } else { ex_score.saturating_mul(1000) / total_notes.max(1) }
 }
 
 /// Returns the graph bar fill ratio (0.0-1.0) for a given `BARGRAPH_*` type.
@@ -12265,6 +12297,9 @@ mod tests {
             best_max_combo: Some(800),
             target_max_combo: Some(1000),
             best_misscount: Some(20),
+            previous_best_ex_score: Some(1800),
+            previous_best_max_combo: Some(700),
+            previous_best_misscount: Some(10),
             target_misscount: Some(0),
             target_clear_index: Some(8),
             average_timing_ms: Some(-12.34),
@@ -12295,6 +12330,34 @@ mod tests {
         assert_eq!(skin_state_number(371, state), Some(6));
         assert!(test_skin_op(321, &[], state));
         assert!(!test_skin_op(320, &[], state));
+        assert!(test_skin_op(330, &[], state));
+        assert!(!test_skin_op(1330, &[], state));
+        assert!(test_skin_op(331, &[], state));
+        assert!(!test_skin_op(1331, &[], state));
+        assert!(test_skin_op(332, &[], state));
+        assert!(!test_skin_op(1332, &[], state));
+        assert!(test_skin_op(335, &[], state));
+        assert!(!test_skin_op(1335, &[], state));
+        assert!(!test_skin_op(352, &[], state));
+        assert!(test_skin_op(353, &[], state));
+        assert!(!test_skin_op(354, &[], state));
+
+        let draw_state = SkinDrawState {
+            ex_score: 1800,
+            max_combo: 700,
+            total_notes: 1000,
+            judge_counts: DisplayJudgeCounts { bad: 5, poor: 5, ..DisplayJudgeCounts::default() },
+            previous_best_ex_score: Some(1800),
+            previous_best_max_combo: Some(700),
+            previous_best_misscount: Some(10),
+            target_ex_score: Some(1800),
+            ..SkinDrawState::default()
+        };
+        assert!(test_skin_op(1330, &[], draw_state));
+        assert!(test_skin_op(1331, &[], draw_state));
+        assert!(test_skin_op(1332, &[], draw_state));
+        assert!(test_skin_op(1335, &[], draw_state));
+        assert!(test_skin_op(354, &[], draw_state));
 
         // Fast/Slow 内訳
         assert_eq!(skin_state_number(410, state), Some(350));
