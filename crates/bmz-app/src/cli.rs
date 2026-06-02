@@ -6,6 +6,7 @@ pub const AUTOPLAY_ON_START_ARG: &str = "--autoplay-on-start";
 pub const AUTOPLAY_SHORT_ARG: &str = "-a";
 pub const SMOKE_EXIT_AFTER_FRAMES_ARG: &str = "--smoke-exit-after-frames";
 pub const SMOKE_EXIT_ON_RESULT_ARG: &str = "--smoke-exit-on-result";
+pub const SMOKE_SCREENSHOT_ARG: &str = "--smoke-screenshot";
 pub const BOOT_REPLAY_ARG: &str = "--boot-replay";
 pub const BOOT_COURSE_REPLAY_ARG: &str = "--boot-course-replay";
 pub const BOOT_COURSE_ARG: &str = "--boot-course";
@@ -151,6 +152,7 @@ pub struct AppOptions {
     pub autoplay_on_start: bool,
     pub smoke_exit_after_frames: Option<u32>,
     pub smoke_exit_on_result: bool,
+    pub smoke_screenshot_path: Option<String>,
     /// `--boot-replay <SLOT>` / `-r1..4` で指定された 0-based のスロット index。
     pub boot_replay_slot: Option<u8>,
     /// `--boot-course-replay <COURSE_ID>` で指定されたコース id。
@@ -178,6 +180,11 @@ impl AppOptions {
                 options.smoke_exit_after_frames = Some(parse_smoke_exit_after_frames_value(value)?);
                 continue;
             }
+            if let Some(value) = arg.strip_prefix("--smoke-screenshot=") {
+                options.smoke_screenshot_path = Some(parse_smoke_screenshot_path(value)?);
+                options.smoke_exit_after_frames.get_or_insert(3);
+                continue;
+            }
             if let Some(value) = arg.strip_prefix("--boot-replay=") {
                 options.boot_replay_slot = Some(parse_boot_replay_slot(value)?);
                 continue;
@@ -199,6 +206,14 @@ impl AppOptions {
                 BOOT_PLAY_SAMPLE_ARG => options.boot_play_sample = true,
                 AUTOPLAY_ON_START_ARG | AUTOPLAY_SHORT_ARG => options.autoplay_on_start = true,
                 SMOKE_EXIT_ON_RESULT_ARG => options.smoke_exit_on_result = true,
+                SMOKE_SCREENSHOT_ARG => {
+                    let Some(value) = args.next() else {
+                        bail!("{SMOKE_SCREENSHOT_ARG} requires an output path");
+                    };
+                    options.smoke_screenshot_path =
+                        Some(parse_smoke_screenshot_path(value.as_ref())?);
+                    options.smoke_exit_after_frames.get_or_insert(3);
+                }
                 "--help" | "-h" => {}
                 SMOKE_EXIT_AFTER_FRAMES_ARG => {
                     let Some(value) = args.next() else {
@@ -253,7 +268,7 @@ where
 }
 
 pub fn app_help_text() -> &'static str {
-    "bmz-app\n\nUsage:\n  bmz-app [OPTIONS] [PATH]\n  bmz-app table <SUBCOMMAND>\n  bmz-app songs <SUBCOMMAND>\n  bmz-app course <SUBCOMMAND>\n\nOptions:\n  [PATH]                          Start the chart at PATH (beatoraja-style alias)\n  -a                              Enable autoplay for the boot chart (alias of --autoplay-on-start)\n  -r1 | -r2 | -r3 | -r4           Start replay slot 1..4 for the boot chart\n  --boot-play-sample              Start the bundled sample chart on boot\n  --autoplay-on-start             Enable autoplay for started charts\n  --boot-replay <1..4>            Start replay slot N for the boot chart\n  --boot-course <ID>              Start course ID fresh on boot\n  --boot-course-replay <ID>       Replay the latest attempt of course ID on boot\n  --smoke-exit-after-frames <N>   Exit after N rendered frames, clamped to 1 or more\n  --smoke-exit-on-result          Exit when the app reaches the result screen\n  --renderer <backend>            wgpu renderer backend (vulkan, metal, dx12, gl, auto)\n  -h, --help                      Print this help\n\nTable subcommands:\n  table add <URL>       Add a difficulty table source and fetch it\n  table list            List all stored difficulty tables\n  table fetch [URL]     Fetch/update configured tables, or a single URL\n\nSongs subcommands:\n  songs add <PATH> [--no-recursive] [--disabled]   Add a song root directory\n  songs list                                        List configured song roots\n  songs load [PATH|NAME]                            Scan song roots (incremental)\n  songs reload [PATH|NAME]                          Force rescan song roots\n\nCourse subcommands:\n  course import <PATH>             Import beatoraja course JSON from a file or directory\n  course list                      List stored courses\n  course history <ID> [--limit N]  Show recent attempts of course ID (default limit 10)\n  course attempt <SCORE_ID>        Show per-chart breakdown of a single course attempt\n\nExamples:\n  cargo run -p bmz-app -- /path/to/chart.bms\n  cargo run -p bmz-app -- -a /path/to/chart.bms\n  cargo run -p bmz-app -- -r2 /path/to/chart.bms\n  cargo run -p bmz-app -- --boot-play-sample --smoke-exit-after-frames 3\n  cargo run -p bmz-app -- --boot-play-sample --boot-replay 1 --smoke-exit-on-result\n  cargo run -p bmz-app -- table add https://example.com/table.html\n  cargo run -p bmz-app -- table list\n  cargo run -p bmz-app -- table fetch https://example.com/table.html\n  cargo run -p bmz-app -- songs add /path/to/bms\n  cargo run -p bmz-app -- songs list\n  cargo run -p bmz-app -- songs load\n  cargo run -p bmz-app -- songs reload my-bms-folder\n  cargo run -p bmz-app -- course import /path/to/course.json\n  cargo run -p bmz-app -- course list"
+    "bmz-app\n\nUsage:\n  bmz-app [OPTIONS] [PATH]\n  bmz-app table <SUBCOMMAND>\n  bmz-app songs <SUBCOMMAND>\n  bmz-app course <SUBCOMMAND>\n\nOptions:\n  [PATH]                          Start the chart at PATH (beatoraja-style alias)\n  -a                              Enable autoplay for the boot chart (alias of --autoplay-on-start)\n  -r1 | -r2 | -r3 | -r4           Start replay slot 1..4 for the boot chart\n  --boot-play-sample              Start the bundled sample chart on boot\n  --autoplay-on-start             Enable autoplay for started charts\n  --boot-replay <1..4>            Start replay slot N for the boot chart\n  --boot-course <ID>              Start course ID fresh on boot\n  --boot-course-replay <ID>       Replay the latest attempt of course ID on boot\n  --smoke-exit-after-frames <N>   Exit after N rendered frames, clamped to 1 or more\n  --smoke-exit-on-result          Exit when the app reaches the result screen\n  --smoke-screenshot <PATH>       Save a PNG screenshot on smoke exit (defaults to 3 frames)\n  --renderer <backend>            wgpu renderer backend (vulkan, metal, dx12, gl, auto)\n  -h, --help                      Print this help\n\nTable subcommands:\n  table add <URL>       Add a difficulty table source and fetch it\n  table list            List all stored difficulty tables\n  table fetch [URL]     Fetch/update configured tables, or a single URL\n\nSongs subcommands:\n  songs add <PATH> [--no-recursive] [--disabled]   Add a song root directory\n  songs list                                        List configured song roots\n  songs load [PATH|NAME]                            Scan song roots (incremental)\n  songs reload [PATH|NAME]                          Force rescan song roots\n\nCourse subcommands:\n  course import <PATH>             Import beatoraja course JSON from a file or directory\n  course list                      List stored courses\n  course history <ID> [--limit N]  Show recent attempts of course ID (default limit 10)\n  course attempt <SCORE_ID>        Show per-chart breakdown of a single course attempt\n\nExamples:\n  cargo run -p bmz-app -- /path/to/chart.bms\n  cargo run -p bmz-app -- -a /path/to/chart.bms\n  cargo run -p bmz-app -- -r2 /path/to/chart.bms\n  cargo run -p bmz-app -- --boot-play-sample --smoke-exit-after-frames 3\n  cargo run -p bmz-app -- --boot-play-sample --smoke-screenshot /tmp/bmz-play.png\n  cargo run -p bmz-app -- --boot-play-sample --boot-replay 1 --smoke-exit-on-result\n  cargo run -p bmz-app -- table add https://example.com/table.html\n  cargo run -p bmz-app -- table list\n  cargo run -p bmz-app -- table fetch https://example.com/table.html\n  cargo run -p bmz-app -- songs add /path/to/bms\n  cargo run -p bmz-app -- songs list\n  cargo run -p bmz-app -- songs load\n  cargo run -p bmz-app -- songs reload my-bms-folder\n  cargo run -p bmz-app -- course import /path/to/course.json\n  cargo run -p bmz-app -- course list"
 }
 
 fn parse_smoke_exit_after_frames_value(value: &str) -> Result<u32> {
@@ -266,6 +281,14 @@ fn parse_smoke_exit_after_frames_value(value: &str) -> Result<u32> {
         format!("invalid frame count for {SMOKE_EXIT_AFTER_FRAMES_ARG}: {value}")
     })?;
     Ok(frames.max(1))
+}
+
+fn parse_smoke_screenshot_path(value: &str) -> Result<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        bail!("{SMOKE_SCREENSHOT_ARG} requires an output path");
+    }
+    Ok(value.to_string())
 }
 
 fn parse_boot_course_replay_id(value: &str) -> Result<i64> {
@@ -457,6 +480,26 @@ mod tests {
     }
 
     #[test]
+    fn app_options_parse_smoke_screenshot_defaults_to_three_frames() {
+        let options = AppOptions::parse_args(["--smoke-screenshot", "/tmp/bmz.png"]).unwrap();
+
+        assert_eq!(options.smoke_screenshot_path.as_deref(), Some("/tmp/bmz.png"));
+        assert_eq!(options.smoke_exit_after_frames, Some(3));
+    }
+
+    #[test]
+    fn app_options_parse_smoke_screenshot_keeps_explicit_frame_count() {
+        let options = AppOptions::parse_args([
+            "--smoke-exit-after-frames=8",
+            "--smoke-screenshot=/tmp/bmz.png",
+        ])
+        .unwrap();
+
+        assert_eq!(options.smoke_screenshot_path.as_deref(), Some("/tmp/bmz.png"));
+        assert_eq!(options.smoke_exit_after_frames, Some(8));
+    }
+
+    #[test]
     fn app_options_clamps_zero_frame_count_to_one() {
         let options = AppOptions::parse_args(["--smoke-exit-after-frames", "0"]).unwrap();
 
@@ -468,6 +511,8 @@ mod tests {
         assert!(AppOptions::parse_args(["--unknown"]).is_err());
         assert!(AppOptions::parse_args(["--smoke-exit-after-frames"]).is_err());
         assert!(AppOptions::parse_args(["--smoke-exit-after-frames", "abc"]).is_err());
+        assert!(AppOptions::parse_args(["--smoke-screenshot"]).is_err());
+        assert!(AppOptions::parse_args(["--smoke-screenshot", ""]).is_err());
     }
 
     #[test]
@@ -486,6 +531,7 @@ mod tests {
         assert!(help.contains("--autoplay-on-start"));
         assert!(help.contains("--smoke-exit-after-frames"));
         assert!(help.contains("--smoke-exit-on-result"));
+        assert!(help.contains("--smoke-screenshot"));
         assert!(help.contains("--renderer"));
         assert!(help.contains("table add"));
         assert!(help.contains("table list"));
