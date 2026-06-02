@@ -331,15 +331,15 @@ mod tests {
             select_screen: true,
             select_row_kind: SelectRowKind::Config,
             in_settings: true,
+            select_has_banner: false,
             ..SkinDrawState::default()
         };
         let row = &snapshot.rows[0];
-        let enabled_192 = [192_i32];
 
         assert!(!test_select_destination_visible(
             &index,
             destination_at(&document, 0),
-            &enabled_192,
+            &[],
             state,
             &snapshot,
             Some(row),
@@ -349,7 +349,7 @@ mod tests {
         assert!(test_select_destination_visible(
             &index,
             destination_at(&document, 1),
-            &enabled_192,
+            &[],
             state,
             &snapshot,
             Some(row),
@@ -359,8 +359,30 @@ mod tests {
         assert!(!test_select_destination_visible(
             &index,
             destination_at(&document, 2),
-            &enabled_192,
+            &[],
             state,
+            &snapshot,
+            Some(row),
+            eval_draw,
+            test_ops,
+        ));
+
+        let banner_state = SkinDrawState { select_has_banner: true, ..state };
+        assert!(!test_select_destination_visible(
+            &index,
+            destination_at(&document, 1),
+            &[],
+            banner_state,
+            &snapshot,
+            Some(row),
+            eval_draw,
+            test_ops,
+        ));
+        assert!(test_select_destination_visible(
+            &index,
+            destination_at(&document, 2),
+            &[],
+            banner_state,
             &snapshot,
             Some(row),
             eval_draw,

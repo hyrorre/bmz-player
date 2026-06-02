@@ -1540,6 +1540,8 @@ pub struct SkinDrawState {
     pub select_master_volume: f32,
     pub select_key_volume: f32,
     pub select_bgm_volume: f32,
+    /// 選択中バーにバナー画像があるか (OPTION_NO_BANNER=192 / OPTION_BANNER=193)。
+    pub select_has_banner: bool,
     /// 選択中曲のレベル表記から取り出した数値。
     pub select_play_level: i64,
     /// 現在の曲のレベル表記から取り出した数値 (NUMBER_PLAYLEVEL=96)。
@@ -1717,6 +1719,7 @@ impl Default for SkinDrawState {
             select_master_volume: 1.0,
             select_key_volume: 1.0,
             select_bgm_volume: 1.0,
+            select_has_banner: false,
             select_play_level: 0,
             play_level: 0,
             difficulty: 0,
@@ -2864,6 +2867,7 @@ impl SkinDocument {
             select_master_volume: snapshot.master_volume,
             select_key_volume: snapshot.key_volume,
             select_bgm_volume: snapshot.bgm_volume,
+            select_has_banner: snapshot.banner_image,
             select_chart_count: snapshot.chart_count,
             select_screen: true,
             select_play_level: selected_row.map(select_row_level_number).unwrap_or(0),
@@ -5205,6 +5209,12 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool 
         320..=327 => best_rank_op_matches(op, state),
         170 => !state.has_bga,
         171 => state.has_bga,
+        // OPTION_NO_STAGEFILE / OPTION_STAGEFILE (190/191) は play 向け。選曲では未接続。
+        190 => false,
+        191 => false,
+        // OPTION_NO_BANNER / OPTION_BANNER (192/193)
+        192 => select_banner_option_matches(false, state),
+        193 => select_banner_option_matches(true, state),
         // OPTION_LANECOVER1_CHANGING / OPTION_LANECOVER1_ON / OPTION_LIFT1_ON / OPTION_HIDDEN1_ON
         270 => state.lane_cover_changing,
         271 => state.lanecover_enabled,
@@ -7099,6 +7109,13 @@ fn select_song_detail_row(state: SkinDrawState) -> bool {
         state.select_row_kind,
         SelectRowKind::Song if !state.select_is_folder && state.select_in_library
     )
+}
+
+fn select_banner_option_matches(want_banner: bool, state: SkinDrawState) -> bool {
+    if !state.select_screen {
+        return false;
+    }
+    state.select_has_banner == want_banner
 }
 
 fn select_key_mode_option_matches(op: i32, state: SkinDrawState) -> bool {
@@ -9292,6 +9309,37 @@ mod tests {
         assert!(!test_skin_op(-5, &[], owned_song));
         assert!(test_skin_op(-5, &[], unowned_song));
         assert!(test_skin_op(-5, &[], folder));
+    }
+
+    #[test]
+    fn select_banner_ops_follow_selected_banner_presence() {
+        let no_banner = SkinDrawState {
+            select_screen: true,
+            select_has_banner: false,
+            ..SkinDrawState::default()
+        };
+        let with_banner = SkinDrawState {
+            select_screen: true,
+            select_has_banner: true,
+            ..SkinDrawState::default()
+        };
+        let play_screen = SkinDrawState {
+            select_screen: false,
+            select_has_banner: true,
+            ..SkinDrawState::default()
+        };
+
+        assert!(test_skin_op(192, &[], no_banner));
+        assert!(!test_skin_op(193, &[], no_banner));
+        assert!(!test_skin_op(192, &[], with_banner));
+        assert!(test_skin_op(193, &[], with_banner));
+        assert!(!test_skin_op(192, &[], play_screen));
+        assert!(!test_skin_op(193, &[], play_screen));
+
+        assert!(test_skin_ops(&[2, 192], &[], no_banner));
+        assert!(!test_skin_ops(&[2, 193], &[], no_banner));
+        assert!(!test_skin_ops(&[2, 192], &[], with_banner));
+        assert!(test_skin_ops(&[2, 193], &[], with_banner));
     }
 
     #[test]
