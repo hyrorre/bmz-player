@@ -744,6 +744,36 @@ mod tests {
     }
 
     #[test]
+    fn lua_skin_volume_value_functions_map_to_number_refs() {
+        let root = unique_test_dir("bmz-skin-lua");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("select.luaskin"),
+            r#"
+            local main_state = require("main_state")
+            return {
+                type = 0,
+                value = {
+                    { id = "master", src = 1, x = 0, y = 0, w = 110, h = 10, divx = 11, digit = 3, value = function() return main_state.volume_sys() * 100 end },
+                    { id = "key", src = 1, x = 0, y = 0, w = 110, h = 10, divx = 11, digit = 3, value = function() return main_state.volume_key() * 100 end },
+                    { id = "bgm", src = 1, x = 0, y = 0, w = 110, h = 10, divx = 11, digit = 3, value = function() return main_state.volume_bg() * 100 end },
+                }
+            }
+            "#,
+        )
+        .unwrap();
+
+        let loaded =
+            load_lua_skin_value(&root.join("select.luaskin"), &BTreeMap::new(), &BTreeMap::new())
+                .unwrap();
+
+        assert!(loaded.warnings.is_empty());
+        assert_eq!(loaded.value["value"][0]["ref"], 57);
+        assert_eq!(loaded.value["value"][1]["ref"], 58);
+        assert_eq!(loaded.value["value"][2]["ref"], 59);
+    }
+
+    #[test]
     fn lua_skin_main_state_version_text_is_available_during_load() {
         let root = unique_test_dir("bmz-skin-lua");
         fs::create_dir_all(&root).unwrap();

@@ -15095,6 +15095,39 @@ mod tests {
     }
 
     #[test]
+    fn volume_number_uses_digit_cell_width_without_squashing() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "w": 1920, "h": 1080,
+                "source": [{ "id": "src", "path": "num.png" }],
+                "value": [{ "id": "volume", "src": "src", "x": 2401, "y": 510, "w": 242, "h": 15, "divx": 11, "digit": 3, "ref": 57 }],
+                "destination": [
+                    { "id": "volume", "dst": [{ "time": 0, "x": 1717, "y": 360, "w": 22, "h": 15 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        let sources = mock_source("src", 3170.0, 1500.0);
+        let items = document.static_image_render_items(
+            &sources,
+            SkinDrawState { select_master_volume: 0.37, ..SkinDrawState::default() },
+        );
+
+        assert_eq!(items.len(), 2);
+        let SkinRenderItem::Image { rect: r0, uv: uv0, .. } = &items[0] else { panic!() };
+        let SkinRenderItem::Image { rect: r1, uv: uv1, .. } = &items[1] else { panic!() };
+        let digit_width = 22.0 / 1920.0;
+        assert!(approx_eq(r0.width, digit_width));
+        assert!(approx_eq(r1.width, digit_width));
+        assert!(approx_eq(r1.x - r0.x, digit_width));
+        assert!(approx_eq(uv0.width, 22.0 / 3170.0));
+        assert!(approx_eq(uv1.width, 22.0 / 3170.0));
+    }
+
+    #[test]
     fn value_number_left_aligns_when_align_1() {
         let document: SkinDocument = serde_json::from_str(
             r#"
