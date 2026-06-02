@@ -197,6 +197,7 @@ pub fn build_render_snapshot_with_target_and_bga_frames(
             (render_now.0 >= started_at.0)
                 .then_some(((render_now.0 - started_at.0) / 1_000).clamp(0, i32::MAX as i64) as i32)
         }),
+        end_of_note_elapsed_ms: end_of_note_elapsed_ms(render_now, session.chart.end_time),
         fadeout_elapsed_ms: None,
         failed_elapsed_ms: None,
         music_end_elapsed_ms: None,
@@ -391,6 +392,13 @@ fn skin_offsets_from_session(session: &GameSession) -> SkinOffsetValues {
         );
     }
     values
+}
+
+fn end_of_note_elapsed_ms(render_now: TimeUs, end_time: TimeUs) -> Option<i32> {
+    if end_time.0 <= 0 || render_now.0 < end_time.0 {
+        return None;
+    }
+    Some(((render_now.0 - end_time.0) / 1_000).clamp(0, i32::MAX as i64) as i32)
 }
 
 /// ノーツ / 小節線 / ロングノートのスクロール計算に使う時刻。
@@ -697,6 +705,21 @@ mod tests {
         assert_eq!(snapshot.recent_judgements[0].lane, Lane::Key1);
         assert_eq!(snapshot.recent_judgements[0].text, "EMPTY POOR SLOW");
         assert_eq!(snapshot.recent_judgements[0].delta_us, 5_000);
+    }
+
+    #[test]
+    fn end_of_note_timer_counts_from_chart_end() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let session =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+
+        let before = build_render_snapshot(&session, TimeUs(999_999), &[], None);
+        let at_end = build_render_snapshot(&session, TimeUs(1_000_000), &[], None);
+        let after = build_render_snapshot(&session, TimeUs(1_250_000), &[], None);
+
+        assert_eq!(before.end_of_note_elapsed_ms, None);
+        assert_eq!(at_end.end_of_note_elapsed_ms, Some(0));
+        assert_eq!(after.end_of_note_elapsed_ms, Some(250));
     }
 
     #[test]

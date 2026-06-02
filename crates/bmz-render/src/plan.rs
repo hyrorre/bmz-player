@@ -847,6 +847,7 @@ fn plan_play(
         gauge_border: snapshot.gauge_border,
         play_progress: play_progress(snapshot),
         end_of_note: end_of_note(snapshot),
+        end_of_note_ms: snapshot.end_of_note_elapsed_ms,
         bomb_ms,
         keyon_ms,
         keyoff_ms,

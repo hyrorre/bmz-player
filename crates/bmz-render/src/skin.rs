@@ -1455,6 +1455,7 @@ pub struct SkinDrawState {
     pub gauge_border: f32,
     pub play_progress: f32,
     pub end_of_note: bool,
+    pub end_of_note_ms: Option<i32>,
     /// 各レーンのボムタイマー経過ms。Noneなら非アクティブ。
     pub bomb_ms: [Option<i32>; LANE_COUNT],
     /// 各レーンのkeyon(押下中ビーム)タイマー経過ms。Noneなら非アクティブ。
@@ -1683,6 +1684,7 @@ impl Default for SkinDrawState {
             gauge_border: 80.0,
             play_progress: 0.0,
             end_of_note: false,
+            end_of_note_ms: None,
             bomb_ms: [None; LANE_COUNT],
             keyon_ms: [None; LANE_COUNT],
             keyoff_ms: [None; LANE_COUNT],
@@ -6530,7 +6532,7 @@ fn skin_timer_elapsed_ms(timer: Option<i32>, state: SkinDrawState) -> Option<i32
         // 2P keyoff: timer 130=Scratch2, 131-137=Key8-14
         Some(130) => state.keyoff_ms[Lane::Scratch2.index()],
         Some(131..=137) => state.keyoff_ms[Lane::Key8.index() + (timer.unwrap() - 131) as usize],
-        Some(143) => state.end_of_note.then_some(state.elapsed_ms),
+        Some(143 | 144) => state.end_of_note_ms,
         Some(id)
             if (SKIN_DYNAMIC_TIMER_BASE
                 ..SKIN_DYNAMIC_TIMER_BASE + SKIN_DYNAMIC_TIMER_COUNT as i32)
@@ -12378,7 +12380,11 @@ mod tests {
         );
         let visible = document.static_image_render_items(
             &sources,
-            SkinDrawState { end_of_note: true, ..SkinDrawState::default() },
+            SkinDrawState {
+                end_of_note: true,
+                end_of_note_ms: Some(0),
+                ..SkinDrawState::default()
+            },
         );
 
         assert!(hidden.is_empty());
@@ -13292,6 +13298,23 @@ mod tests {
         assert_eq!(skin_timer_elapsed_ms(Some(150), active), Some(120));
         assert_eq!(skin_timer_elapsed_ms(Some(151), active), Some(120));
         assert_eq!(skin_timer_elapsed_ms(Some(152), active), Some(40));
+    }
+
+    #[test]
+    fn end_of_note_timers_use_elapsed_since_end_of_note() {
+        let inactive =
+            SkinDrawState { elapsed_ms: 5_000, end_of_note_ms: None, ..SkinDrawState::default() };
+        assert_eq!(skin_timer_elapsed_ms(Some(143), inactive), None);
+        assert_eq!(skin_timer_elapsed_ms(Some(144), inactive), None);
+
+        let active = SkinDrawState {
+            elapsed_ms: 5_000,
+            end_of_note: true,
+            end_of_note_ms: Some(250),
+            ..SkinDrawState::default()
+        };
+        assert_eq!(skin_timer_elapsed_ms(Some(143), active), Some(250));
+        assert_eq!(skin_timer_elapsed_ms(Some(144), active), Some(250));
     }
 
     #[test]

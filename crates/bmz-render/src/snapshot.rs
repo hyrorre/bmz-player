@@ -145,6 +145,8 @@ pub struct RenderSnapshot {
     pub hit_error_ring: HitErrorRingSnapshot,
     /// Full combo timer elapsed ms (skin timer 48/49). None while inactive.
     pub full_combo_elapsed_ms: Option<i32>,
+    /// End-of-note timer elapsed ms (skin timer 143/144). None while inactive.
+    pub end_of_note_elapsed_ms: Option<i32>,
     /// Scene fadeout timer elapsed ms (skin timer 2). None while inactive.
     pub fadeout_elapsed_ms: Option<i32>,
     /// Failed/close timer elapsed ms (skin timer 3). None while inactive.
