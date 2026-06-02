@@ -4084,8 +4084,12 @@ impl SkinDocument {
         };
         let divx = value.divx.max(1);
         let divy = value.divy.max(1);
-        let cell_width_px = value.w as f32 / divx as f32;
-        let cell_height_px = value.h as f32 / divy as f32;
+        let source_width_px =
+            if value.w == -1 { source.source_size.width.round() as i32 } else { value.w };
+        let source_height_px =
+            if value.h == -1 { source.source_size.height.round() as i32 } else { value.h };
+        let cell_width_px = (source_width_px / divx) as f32;
+        let cell_height_px = (source_height_px / divy) as f32;
         if cell_width_px <= 0.0 || cell_height_px <= 0.0 {
             return Vec::new();
         }
@@ -15175,6 +15179,41 @@ mod tests {
             "value sprite must be sliced into 11 cells, got uv.width={}",
             uv0.width
         );
+    }
+
+    #[test]
+    fn value_number_slices_source_with_beatoraja_integer_division() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "w": 1280, "h": 720,
+                "source": [{ "id": "src", "path": "num.png" }],
+                "value": [{ "id": "volume", "src": "src", "x": 3114, "y": 0, "w": 99, "h": 12, "divx": 10, "digit": 3, "ref": 57, "align": 2 }],
+                "destination": [
+                    { "id": "volume", "dst": [{ "time": 0, "x": 560, "y": 480, "w": 12, "h": 12 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        let source_width = 3224.0;
+        let sources = mock_source("src", source_width, 1024.0);
+        let items = document.static_image_render_items(
+            &sources,
+            SkinDrawState { select_master_volume: 0.37, ..SkinDrawState::default() },
+        );
+
+        assert_eq!(items.len(), 2);
+        let SkinRenderItem::Image { uv: uv0, .. } = &items[0] else { panic!() };
+        let SkinRenderItem::Image { uv: uv1, .. } = &items[1] else { panic!() };
+        assert!(
+            approx_eq(uv0.width, 9.0 / source_width),
+            "beatoraja slices 99px / 10 as 9px cells, got {}",
+            uv0.width * source_width
+        );
+        assert!(approx_eq(uv0.x, (3114.0 + 3.0 * 9.0) / source_width));
+        assert!(approx_eq(uv1.x, (3114.0 + 7.0 * 9.0) / source_width));
     }
 
     #[test]
