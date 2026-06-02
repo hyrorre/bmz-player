@@ -651,6 +651,52 @@ mod tests {
     }
 
     #[test]
+    fn lua_skin_m_select_result_graph_heights_become_runtime_exprs() {
+        let root = unique_test_dir("bmz-skin-lua-m-select-result");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("result.luaskin"),
+            r#"
+            local destinations = {}
+            for i = 1, 39 do
+                destinations[i] = { id = "dummy", dst = {{ x = 0, y = 0, w = 1, h = 1 }} }
+            end
+            for i = 40, 51 do
+                destinations[i] = {
+                    id = "graph",
+                    dst = {
+                        { time = 0, x = 0, y = 0, w = 1, h = 0 },
+                        { time = 500, h = 0 },
+                        { time = 1000, h = 0 / 0 },
+                    },
+                }
+            end
+            return { type = 7, destination = destinations }
+            "#,
+        )
+        .unwrap();
+
+        let loaded =
+            load_lua_skin_value(&root.join("result.luaskin"), &BTreeMap::new(), &BTreeMap::new())
+                .unwrap();
+
+        assert!(
+            loaded
+                .warnings
+                .iter()
+                .all(|warning| !warning.message.contains("non-finite lua number converted to 0"))
+        );
+        assert_eq!(
+            loaded.value["destination"][39]["dst"][2]["h_expr"],
+            "bmz:fast_slow_breakdown_height(422)"
+        );
+        assert_eq!(
+            loaded.value["destination"][50]["dst"][2]["h_expr"],
+            "bmz:fast_slow_breakdown_height(421)"
+        );
+    }
+
+    #[test]
     fn lua_skin_value_functions_fall_back_to_load_time_constants() {
         let root = unique_test_dir("bmz-skin-lua");
         fs::create_dir_all(&root).unwrap();

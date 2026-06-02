@@ -529,6 +529,7 @@ pub const SKIN_EXPR_ADJUSTED_RATE: &str = "bmz:adjusted_rate";
 pub const SKIN_EXPR_ADJUSTED_RATE_ADOT: &str = "bmz:adjusted_rate_adot";
 pub const SKIN_EXPR_FS_THRESHOLD: &str = "bmz:fs_threshold";
 pub const SKIN_EXPR_COURSE_TABLE_TEXT: &str = "bmz:course_table_text";
+pub const SKIN_EXPR_FAST_SLOW_BREAKDOWN_HEIGHT: &str = "bmz:fast_slow_breakdown_height";
 
 /// beatoraja 予約 ID と衝突しない動的タイマー ID 範囲の先頭。
 pub const SKIN_DYNAMIC_TIMER_BASE: i32 = 9000;
@@ -991,12 +992,19 @@ pub struct SkinAnimationDef {
     pub y: Option<i32>,
     pub w: Option<i32>,
     pub h: Option<i32>,
+    #[serde(default, deserialize_with = "deserialize_skin_frame_expr_opt")]
+    pub h_expr: Option<SkinFrameExpr>,
     pub acc: Option<i32>,
     pub a: Option<i32>,
     pub r: Option<i32>,
     pub g: Option<i32>,
     pub b: Option<i32>,
     pub angle: Option<i32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkinFrameExpr {
+    FastSlowBreakdownHeight(i32),
 }
 
 /// A single entry in a destination `dst` array — either a plain animation frame or a
@@ -2367,7 +2375,7 @@ impl SkinDocument {
         }
 
         let elapsed = skin_timer_elapsed_ms(destination.timer, state)?;
-        let mut frame = resolve_destination_frame(destination, elapsed, enabled_options)?;
+        let mut frame = resolve_destination_frame(destination, elapsed, enabled_options, state)?;
         let is_hidden_cover_destination =
             self.hidden_cover.iter().any(|cover| cover.id == destination.id);
         apply_skin_offset_to_frame(destination, &mut frame, state, is_hidden_cover_destination);
@@ -2655,7 +2663,7 @@ impl SkinDocument {
             return None;
         }
         let elapsed = skin_timer_elapsed_ms(destination.timer, state)?;
-        let mut frame = resolve_destination_frame(destination, elapsed, enabled_options)?;
+        let mut frame = resolve_destination_frame(destination, elapsed, enabled_options, state)?;
         frame.x += offset.0;
         frame.y += offset.1;
         apply_skin_offset_to_frame(destination, &mut frame, state, false);
@@ -3019,7 +3027,7 @@ impl SkinDocument {
             };
             let elapsed = skin_timer_elapsed_ms(row_destination.timer, state).unwrap_or(0);
             let Some(mut row_frame) =
-                resolve_destination_frame(row_destination, elapsed, enabled_options)
+                resolve_destination_frame(row_destination, elapsed, enabled_options, row_state)
             else {
                 continue;
             };
@@ -3368,7 +3376,8 @@ impl SkinDocument {
             let Some(elapsed) = skin_timer_elapsed_ms(destination.timer, state) else {
                 continue;
             };
-            let Some(mut frame) = resolve_destination_frame(destination, elapsed, &enabled_options)
+            let Some(mut frame) =
+                resolve_destination_frame(destination, elapsed, &enabled_options, state)
             else {
                 continue;
             };
@@ -3514,7 +3523,7 @@ impl SkinDocument {
     ) -> Option<Vec<SkinRenderItem>> {
         let gauge_def = self.gauge.as_ref()?;
         let elapsed_ms = skin_timer_elapsed_ms(destination.timer, state)?;
-        let frame = resolve_destination_frame(destination, elapsed_ms, enabled_options)?;
+        let frame = resolve_destination_frame(destination, elapsed_ms, enabled_options, state)?;
         let rect = normalize_skin_frame_rect(frame, self.w, self.h);
         let parts = gauge_def.parts.max(1);
         let max = state.gauge_max.max(1.0);
@@ -3632,8 +3641,12 @@ impl SkinDocument {
     ) -> Option<Vec<SkinRenderItem>> {
         let image_destination = judge.images.get(judge_index)?;
         let enabled_options = self.enabled_options();
-        let mut image_frame =
-            resolve_destination_frame_until_end(image_destination, elapsed_ms, &enabled_options)?;
+        let mut image_frame = resolve_destination_frame_until_end(
+            image_destination,
+            elapsed_ms,
+            &enabled_options,
+            state,
+        )?;
         let offset_state = SkinDrawState {
             skin_offsets: state.skin_offsets,
             offset_lift_px: state.offset_lift_px,
@@ -3654,6 +3667,7 @@ impl SkinDocument {
                 number_destination,
                 elapsed_ms,
                 &enabled_options,
+                state,
             )
         {
             image_frame.x -=
@@ -3686,6 +3700,7 @@ impl SkinDocument {
                 number_destination,
                 elapsed_ms,
                 &enabled_options,
+                state,
             )
         {
             // beatoraja は SkinNumber に `setRelative(true)` を立てるため、
@@ -6444,6 +6459,26 @@ fn fast_slow_ratio_slow(state: SkinDrawState) -> f32 {
     if total == 0 { 0.0 } else { counts.slow_total() as f32 / total as f32 }
 }
 
+fn skin_frame_expr_value(expr: SkinFrameExpr, state: SkinDrawState) -> Option<i32> {
+    match expr {
+        SkinFrameExpr::FastSlowBreakdownHeight(ref_id) => fast_slow_breakdown_height(ref_id, state),
+    }
+}
+
+fn fast_slow_breakdown_height(ref_id: i32, state: SkinDrawState) -> Option<i32> {
+    const REFS: [i32; 12] = [422, 419, 417, 415, 413, 411, 410, 412, 414, 416, 418, 421];
+    if !REFS.contains(&ref_id) {
+        return None;
+    }
+    let values = REFS.map(|candidate| skin_state_number(candidate, state).unwrap_or(0).max(0));
+    let max = values.into_iter().max().unwrap_or(0);
+    if max <= 0 {
+        return Some(0);
+    }
+    let value = skin_state_number(ref_id, state).unwrap_or(0).max(0);
+    Some((value as f32 / max as f32 * 100.0).round() as i32)
+}
+
 fn judge_rate(count: u32, total: u32) -> f32 {
     if total > 0 { count as f32 / total as f32 } else { 0.0 }
 }
@@ -7790,6 +7825,7 @@ fn resolve_destination_frame(
     destination: &SkinDestinationDef,
     elapsed_ms: i32,
     enabled_options: &[i32],
+    state: SkinDrawState,
 ) -> Option<ResolvedSkinFrame> {
     let animations = flatten_dst_entries(&destination.dst, enabled_options);
     // `cycle` はアニメーション終端（最後のキーフレーム時刻）。
@@ -7811,7 +7847,7 @@ fn resolve_destination_frame(
     let mut frame = ResolvedSkinFrame::default();
     let mut previous = None;
     for animation in &animations {
-        apply_skin_animation(&mut frame, animation);
+        apply_skin_animation(&mut frame, animation, state);
         if frame.time <= elapsed_ms {
             previous = Some(frame);
             continue;
@@ -7827,16 +7863,17 @@ fn resolve_destination_frame_until_end(
     destination: &SkinDestinationDef,
     elapsed_ms: i32,
     enabled_options: &[i32],
+    state: SkinDrawState,
 ) -> Option<ResolvedSkinFrame> {
     if matches!(destination.loop_time, Some(loop_point) if loop_point > 0) {
-        return resolve_destination_frame(destination, elapsed_ms, enabled_options);
+        return resolve_destination_frame(destination, elapsed_ms, enabled_options, state);
     }
     let animations = flatten_dst_entries(&destination.dst, enabled_options);
     let last_time = animations.iter().filter_map(|a| a.time).max()?;
     if elapsed_ms > last_time {
         return None;
     }
-    resolve_destination_frame(destination, elapsed_ms, enabled_options)
+    resolve_destination_frame(destination, elapsed_ms, enabled_options, state)
 }
 
 /// beatoraja の `loop` セマンティクスでアニメーション内の経過時刻を求める。
@@ -7887,7 +7924,7 @@ fn interpolate_skin_frame(
 fn destination_interpolation_acc_from_frames(animations: &[SkinAnimationDef]) -> i32 {
     let mut frame = ResolvedSkinFrame::default();
     for animation in animations {
-        apply_skin_animation(&mut frame, animation);
+        apply_skin_animation(&mut frame, animation, SkinDrawState::default());
         if frame.acc != 0 {
             return frame.acc;
         }
@@ -7908,7 +7945,11 @@ fn interpolate_i32(start: i32, end: i32, t: f32) -> i32 {
     (start as f32 + (end - start) as f32 * t).round() as i32
 }
 
-fn apply_skin_animation(frame: &mut ResolvedSkinFrame, animation: &SkinAnimationDef) {
+fn apply_skin_animation(
+    frame: &mut ResolvedSkinFrame,
+    animation: &SkinAnimationDef,
+    state: SkinDrawState,
+) {
     if let Some(time) = animation.time {
         frame.time = time;
     }
@@ -7922,6 +7963,11 @@ fn apply_skin_animation(frame: &mut ResolvedSkinFrame, animation: &SkinAnimation
         frame.w = w;
     }
     if let Some(h) = animation.h {
+        frame.h = h;
+    }
+    if let Some(expr) = animation.h_expr
+        && let Some(h) = skin_frame_expr_value(expr, state)
+    {
         frame.h = h;
     }
     if let Some(acc) = animation.acc {
@@ -8486,6 +8532,31 @@ where
     D: Deserializer<'de>,
 {
     deserializer.deserialize_any(SkinIdVisitor)
+}
+
+fn deserialize_skin_frame_expr_opt<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<SkinFrameExpr>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let Some(expr) = Option::<String>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    parse_skin_frame_expr(&expr).map(Some).map_err(D::Error::custom)
+}
+
+fn parse_skin_frame_expr(expr: &str) -> std::result::Result<SkinFrameExpr, String> {
+    let expr = expr.trim();
+    let prefix = format!("{SKIN_EXPR_FAST_SLOW_BREAKDOWN_HEIGHT}(");
+    let Some(arg) = expr.strip_prefix(&prefix).and_then(|rest| rest.strip_suffix(')')) else {
+        return Err(format!("unsupported skin frame expression `{expr}`"));
+    };
+    let ref_id = arg
+        .trim()
+        .parse::<i32>()
+        .map_err(|_| format!("invalid fast/slow breakdown ref `{arg}`"))?;
+    Ok(SkinFrameExpr::FastSlowBreakdownHeight(ref_id))
 }
 
 /// `op` フィールドは beatoraja Lua スキンで単一整数または整数配列のどちらでも
@@ -14560,11 +14631,7 @@ mod tests {
     fn text_render_item_applies_search_word_alpha_multiplier_for_ref_30() {
         let document: SkinDocument =
             serde_json::from_value(serde_json::json!({ "w": 1920, "h": 1080 })).unwrap();
-        let text = SkinTextDef {
-            id: "search".to_string(),
-            ref_id: 30,
-            ..SkinTextDef::default()
-        };
+        let text = SkinTextDef { id: "search".to_string(), ref_id: 30, ..SkinTextDef::default() };
         let frame = ResolvedSkinFrame { w: 100, h: 24, ..ResolvedSkinFrame::default() };
         let state = SkinTextState {
             search_word: "hello",
@@ -14767,9 +14834,42 @@ mod tests {
             ]}"#,
         )
         .unwrap();
-        assert!(resolve_destination_frame(&destination, 500, &[]).is_some());
-        assert!(resolve_destination_frame(&destination, 1000, &[]).is_some());
-        assert!(resolve_destination_frame(&destination, 1001, &[]).is_none());
+        assert!(
+            resolve_destination_frame(&destination, 500, &[], SkinDrawState::default()).is_some()
+        );
+        assert!(
+            resolve_destination_frame(&destination, 1000, &[], SkinDrawState::default()).is_some()
+        );
+        assert!(
+            resolve_destination_frame(&destination, 1001, &[], SkinDrawState::default()).is_none()
+        );
+    }
+
+    #[test]
+    fn destination_frame_h_expr_resolves_fast_slow_breakdown_height() {
+        let destination: SkinDestinationDef = serde_json::from_str(&format!(
+            r#"{{
+                "id": "graph_r",
+                "dst": [
+                    {{ "time": 0, "x": 0, "y": 0, "w": 10, "h": 0 }},
+                    {{ "time": 1000, "h_expr": "{}(422)" }}
+                ]
+            }}"#,
+            SKIN_EXPR_FAST_SLOW_BREAKDOWN_HEIGHT
+        ))
+        .unwrap();
+        let state = SkinDrawState {
+            fast_slow_counts: Some(crate::snapshot::FastSlowJudgeCounts {
+                slow_empty_poor: 5,
+                slow_poor: 10,
+                ..crate::snapshot::FastSlowJudgeCounts::default()
+            }),
+            ..SkinDrawState::default()
+        };
+
+        let frame = resolve_destination_frame(&destination, 1000, &[], state).unwrap();
+
+        assert_eq!(frame.h, 50);
     }
 
     #[test]

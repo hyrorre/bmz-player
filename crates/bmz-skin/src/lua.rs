@@ -12,8 +12,8 @@ use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 
 use bmz_render::skin::{
     SKIN_DYNAMIC_TIMER_BASE, SKIN_EXPR_ADJUSTED_COVER, SKIN_EXPR_ADJUSTED_RATE,
-    SKIN_EXPR_ADJUSTED_RATE_ADOT, SKIN_EXPR_COURSE_TABLE_TEXT, SKIN_EXPR_FS_THRESHOLD,
-    SKIN_REF_PLAY_GAUGE_TYPE,
+    SKIN_EXPR_ADJUSTED_RATE_ADOT, SKIN_EXPR_COURSE_TABLE_TEXT,
+    SKIN_EXPR_FAST_SLOW_BREAKDOWN_HEIGHT, SKIN_EXPR_FS_THRESHOLD, SKIN_REF_PLAY_GAUGE_TYPE,
 };
 
 use crate::{LoadedLuaSkinValue, SkinLoadWarning};
@@ -1634,6 +1634,25 @@ fn lua_value_to_log_string(value: &Value) -> String {
     }
 }
 
+fn infer_m_select_result_graph_height_expr(path: &str) -> Option<String> {
+    const DESTINATION_FIRST: i64 = 40;
+    const FAST_SLOW_REFS: [i32; 12] = [422, 419, 417, 415, 413, 411, 410, 412, 414, 416, 418, 421];
+    let destination_index = lua_path_array_index(path, "$.destination[")?;
+    let dst_index = lua_path_array_index(path, "].dst[")?;
+    if dst_index != 3 {
+        return None;
+    }
+    let ref_index = usize::try_from(destination_index - DESTINATION_FIRST).ok()?;
+    let ref_id = *FAST_SLOW_REFS.get(ref_index)?;
+    Some(format!("{SKIN_EXPR_FAST_SLOW_BREAKDOWN_HEIGHT}({ref_id})"))
+}
+
+fn lua_path_array_index(path: &str, marker: &str) -> Option<i64> {
+    let (_, rest) = path.split_once(marker)?;
+    let (index, _) = rest.split_once(']')?;
+    index.parse().ok()
+}
+
 fn lua_value_to_json(
     lua: &Lua,
     value: Value,
@@ -1862,6 +1881,15 @@ fn lua_table_to_json(
                 continue;
             }
             warnings.push(format!("skipping unsupported field `{key}` at {path}"));
+            continue;
+        }
+        if key == "h"
+            && let Value::Number(number) = &value
+            && !number.is_finite()
+            && let Some(expr) = infer_m_select_result_graph_height_expr(path)
+        {
+            object.insert(key.clone(), JsonValue::Number(JsonNumber::from(0)));
+            object.insert("h_expr".to_string(), JsonValue::String(expr));
             continue;
         }
         object.insert(
