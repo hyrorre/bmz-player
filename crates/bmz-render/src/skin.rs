@@ -1776,7 +1776,7 @@ impl DynamicTimerRuntime {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SkinTextState<'a> {
     pub title: &'a str,
     pub subtitle: &'a str,
@@ -1797,6 +1797,35 @@ pub struct SkinTextState<'a> {
     /// beatoraja `SkinProperty.STRING_SEARCHWORD` (`ref=30`). Current song search
     /// query as typed by the user.
     pub search_word: &'a str,
+    /// Multiplier applied to the rendered alpha of the `ref=30` text element.
+    /// `1.0` keeps the skin-defined alpha unchanged; values < 1.0 are used for
+    /// placeholder / inactive states (beatoraja `messageFontColor=GRAY` 相当).
+    pub search_word_alpha: f32,
+}
+
+impl<'a> Default for SkinTextState<'a> {
+    fn default() -> Self {
+        Self {
+            title: "",
+            subtitle: "",
+            artist: "",
+            subartist: "",
+            genre: "",
+            difficulty_name: "",
+            play_level: "",
+            target: "",
+            current_folder: "",
+            bar_text: "",
+            table_level: "",
+            table_text_primary: "",
+            table_text_secondary: "",
+            table_text_fallback: "",
+            course_stage: None,
+            course_titles: [""; 10],
+            search_word: "",
+            search_word_alpha: 1.0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -2823,6 +2852,7 @@ impl SkinDocument {
                 .map(|row| string_array_refs(&row.course_titles))
                 .unwrap_or_default(),
             search_word: &snapshot.search_word,
+            search_word_alpha: snapshot.search_word_alpha,
             ..SkinTextState::default()
         };
 
@@ -3808,6 +3838,13 @@ impl SkinDocument {
             2 => rect.x - rect.width,
             _ => rect.x,
         };
+        // beatoraja `STRING_SEARCHWORD` (ref=30) は placeholder 状態で
+        // messageFontColor=GRAY (半透明) になる。bmz では state から渡される
+        // multiplier を skin 由来の alpha に掛け合わせて同様の見た目を再現する。
+        let mut alpha = frame.a as f32 / 255.0;
+        if text.ref_id == 30 {
+            alpha *= state.search_word_alpha.clamp(0.0, 1.0);
+        }
         Some(SkinRenderItem::Text {
             origin: Point { x: origin_x, y: rect.y },
             text: content,
@@ -3818,7 +3855,7 @@ impl SkinDocument {
                     frame.r as f32 / 255.0,
                     frame.g as f32 / 255.0,
                     frame.b as f32 / 255.0,
-                    frame.a as f32 / 255.0,
+                    alpha,
                 ),
                 layer: TextLayer::Ui,
                 align: skin_text_align(text.align),
@@ -14193,6 +14230,55 @@ mod tests {
             ),
             "Song Title"
         );
+    }
+
+    #[test]
+    fn text_render_item_applies_search_word_alpha_multiplier_for_ref_30() {
+        let document: SkinDocument =
+            serde_json::from_value(serde_json::json!({ "w": 1920, "h": 1080 })).unwrap();
+        let text = SkinTextDef {
+            id: "search".to_string(),
+            ref_id: 30,
+            ..SkinTextDef::default()
+        };
+        let frame = ResolvedSkinFrame { w: 100, h: 24, ..ResolvedSkinFrame::default() };
+        let state = SkinTextState {
+            search_word: "hello",
+            search_word_alpha: 0.5,
+            ..SkinTextState::default()
+        };
+        let item = document.text_render_item(&text, frame, state).unwrap();
+        match item {
+            SkinRenderItem::Text { style, .. } => {
+                // frame.a=255 (1.0) * 0.5 = 0.5
+                assert!((style.color.a - 0.5).abs() < 1e-4, "got alpha {}", style.color.a);
+            }
+            other => panic!("expected SkinRenderItem::Text, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn text_render_item_leaves_alpha_unchanged_for_other_refs() {
+        let document: SkinDocument =
+            serde_json::from_value(serde_json::json!({ "w": 1920, "h": 1080 })).unwrap();
+        let text = SkinTextDef {
+            id: "title".to_string(),
+            ref_id: 10, // title, not search
+            ..SkinTextDef::default()
+        };
+        let frame = ResolvedSkinFrame { w: 100, h: 24, ..ResolvedSkinFrame::default() };
+        let state = SkinTextState {
+            title: "song name",
+            search_word_alpha: 0.1, // should be ignored for non-search refs
+            ..SkinTextState::default()
+        };
+        let item = document.text_render_item(&text, frame, state).unwrap();
+        match item {
+            SkinRenderItem::Text { style, .. } => {
+                assert!((style.color.a - 1.0).abs() < 1e-4, "got alpha {}", style.color.a);
+            }
+            other => panic!("expected SkinRenderItem::Text, got {other:?}"),
+        }
     }
 
     #[test]

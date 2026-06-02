@@ -1043,6 +1043,7 @@ impl WinitApp {
                 .unwrap_or("")
                 .to_string(),
         };
+        let (search_word, search_word_alpha) = self.display_search_word();
         SelectSnapshot {
             time: self.select_time(),
             selection_time: self.select_bar_time(),
@@ -1078,31 +1079,35 @@ impl WinitApp {
             overlay: OverlaySnapshot::default(),
             stage_background: self.select_stage_loaded,
             banner_image: self.select_banner_loaded,
-            search_word: self.display_search_word(),
+            search_word,
+            search_word_alpha,
         }
     }
 
     /// Builds the string for beatoraja `STRING_SEARCHWORD` (ref=30). Shows the
     /// in-progress query with a blinking caret while in search mode, otherwise
     /// any standing feedback message ("no song found" …) or empty.
-    fn display_search_word(&self) -> String {
+    /// Returns the string to render in the skin's `STRING_SEARCHWORD` (ref=30)
+    /// slot along with an alpha multiplier (0.0..=1.0). beatoraja's libgdx
+    /// `TextField` uses `messageFontColor=GRAY` for placeholder; we approximate
+    /// that by multiplying skin-resolved alpha by `< 1.0` for placeholder /
+    /// feedback states.
+    fn display_search_word(&self) -> (String, f32) {
+        const PLACEHOLDER_ALPHA: f32 = 0.45;
+        const MESSAGE_ALPHA: f32 = 0.6;
         let blink_on = (self.select_time().0 / 500_000) % 2 == 0;
         let caret = if blink_on { "_" } else { " " };
         if self.search_mode {
-            // クエリ入力中はクエリ + IME preedit + カーソル。両方空 (Enter
-            // 直後にクリアされる) でメッセージがあれば優先表示。
             if self.search_query.is_empty() && self.search_preedit.is_empty() {
                 if let Some(message) = &self.search_message {
-                    return message.clone();
+                    return (message.clone(), MESSAGE_ALPHA);
                 }
             }
-            format!("{}{}{}", self.search_query, self.search_preedit, caret)
+            (format!("{}{}{}", self.search_query, self.search_preedit, caret), 1.0)
         } else if let Some(message) = &self.search_message {
-            message.clone()
+            (message.clone(), MESSAGE_ALPHA)
         } else {
-            // beatoraja の TextField placeholder ("search song") 相当。
-            // 起動直後 / 検索モード OFF 中は使い方ヒントを常時表示する。
-            "type / to search song".to_string()
+            ("type / to search song".to_string(), PLACEHOLDER_ALPHA)
         }
     }
 

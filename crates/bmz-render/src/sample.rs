@@ -61,6 +61,7 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
         stage_background: false,
         banner_image: false,
         search_word: String::new(),
+        search_word_alpha: 1.0,
     })
 }
 
