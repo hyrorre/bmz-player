@@ -1445,7 +1445,8 @@ mod tests {
         assert!(decoded.document.w >= 1920);
         assert!(decoded.document.source.len() >= 10);
         assert!(decoded.document.image.len() >= 100);
-        assert!(decoded.document.note.is_some());
+        let note = decoded.document.note.as_ref().expect("lr2 play skin should define notes");
+        assert!(!note.group.is_empty());
         assert!(decoded.document.gauge.is_some());
         assert!(decoded.document.bga.is_some());
         assert!(!decoded.sources.is_empty());

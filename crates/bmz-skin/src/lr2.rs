@@ -139,6 +139,7 @@ struct NoteState {
     mine: Vec<String>,
     size: Vec<i32>,
     dst: Vec<JsonValue>,
+    group: Vec<JsonValue>,
 }
 
 #[derive(Default, Clone)]
@@ -338,6 +339,10 @@ impl<'a> CsvBuilder<'a> {
             "DST_BARGRAPH" => self.add_destination(line),
             "SRC_GROOVEGAUGE" | "SRC_GROOVEGAUGE_EX" => self.add_gauge(line),
             "DST_GROOVEGAUGE" => self.add_destination(line),
+            "SRC_LINE" => self.add_image(line),
+            "DST_LINE" => self.add_note_group_destination(line),
+            "SRC_JUDGELINE" => self.add_image(line),
+            "DST_JUDGELINE" => self.add_destination(line),
             "SRC_BGA" => self.add_bga(),
             "DST_BGA" => self.add_destination(line),
             "SRC_NOTE" | "SRC_AUTO_NOTE" => self.add_note_source(line, NoteSlot::Note),
@@ -614,6 +619,14 @@ impl<'a> CsvBuilder<'a> {
         }
     }
 
+    fn add_note_group_destination(&mut self, line: &CsvLine) {
+        let Some(current) = self.current.clone() else {
+            return;
+        };
+        let values = parse_values(line);
+        self.note.group.push(destination_def(&current.id, &values, self.header.h as i32));
+    }
+
     fn add_judge_image(&mut self, line: &CsvLine, index: usize) {
         let values = parse_values(line);
         let Some(region) = self.source_region(&values) else {
@@ -850,6 +863,7 @@ impl<'a> CsvBuilder<'a> {
                 "mine": self.note.mine,
                 "size": self.note.size,
                 "dst": self.note.dst,
+                "group": self.note.group,
             })
         });
         let judge = self
