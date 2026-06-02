@@ -2,10 +2,11 @@ use bmz_core::lane::KeyMode;
 use bmz_render::scene::SelectRowKind;
 
 use crate::config::key_config::{
-    KEY_BINDING_SLOTS, KEY_CONFIG_MODES, KeyBindingSlot, binding_row_label, format_play_binding,
-    key_mode_settings_path, lane_entries_for_key_mode,
+    KEY_BINDING_SLOTS, KEY_CONFIG_MODES, KeyBindingTarget, ScratchDirection, binding_row_label,
+    format_play_binding, key_lanes_for_key_mode, key_mode_settings_path,
+    scratch_lanes_for_key_mode,
 };
-use crate::config::profile_config::{LaneConfig, ProfileConfig};
+use crate::config::profile_config::ProfileConfig;
 use crate::config::settings_registry::{SettingsEntryId, format_settings_value};
 use crate::screens::select_model::SelectItem;
 
@@ -81,17 +82,16 @@ impl ConfigSelectRow {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KeyBindingSelectRow {
     pub key_mode: KeyMode,
-    pub lane: LaneConfig,
-    pub slot: KeyBindingSlot,
+    pub target: KeyBindingTarget,
 }
 
 impl KeyBindingSelectRow {
     pub fn label(self) -> String {
-        binding_row_label(self.lane, self.slot)
+        binding_row_label(self.target)
     }
 
     pub fn value_text(self, profile: &ProfileConfig) -> String {
-        format_play_binding(profile, self.key_mode, self.lane, self.slot)
+        format_play_binding(profile, self.key_mode, self.target)
     }
 }
 
@@ -156,14 +156,27 @@ fn key_mode_folder_items() -> Vec<SelectItem> {
 }
 
 fn key_binding_items(key_mode: KeyMode) -> Vec<SelectItem> {
-    let lanes = lane_entries_for_key_mode(key_mode);
+    let scratch_lanes = scratch_lanes_for_key_mode(key_mode);
+    let key_lanes = key_lanes_for_key_mode(key_mode);
     KEY_BINDING_SLOTS
         .iter()
         .copied()
         .flat_map(|slot| {
-            lanes.iter().copied().map(move |lane| {
-                SelectItem::KeyBinding(KeyBindingSelectRow { key_mode, lane, slot })
-            })
+            let scratch_rows = scratch_lanes.iter().copied().flat_map(move |lane| {
+                [ScratchDirection::Up, ScratchDirection::Down].into_iter().map(move |direction| {
+                    SelectItem::KeyBinding(KeyBindingSelectRow {
+                        key_mode,
+                        target: KeyBindingTarget::Scratch { lane, direction, slot },
+                    })
+                })
+            });
+            let key_rows = key_lanes.iter().copied().map(move |lane| {
+                SelectItem::KeyBinding(KeyBindingSelectRow {
+                    key_mode,
+                    target: KeyBindingTarget::Key { lane, slot },
+                })
+            });
+            scratch_rows.chain(key_rows)
         })
         .collect()
 }
@@ -179,6 +192,8 @@ fn config_items(entries: &'static [SettingsEntryId]) -> Vec<SelectItem> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::key_config::KeyBindingSlot;
+    use crate::config::profile_config::LaneConfig;
 
     #[test]
     fn parse_settings_paths() {
@@ -229,34 +244,53 @@ mod tests {
     #[test]
     fn settings_keys_7k_lists_lanes() {
         let items = load_settings_items("bmz-settings:keys:7k");
-        assert_eq!(items.len(), 8 * KEY_BINDING_SLOTS.len());
+        assert_eq!(items.len(), 9 * KEY_BINDING_SLOTS.len());
         assert!(matches!(
             &items[0],
             SelectItem::KeyBinding(row)
                 if row.key_mode == KeyMode::K7
-                    && row.lane == LaneConfig::Scratch
-                    && row.slot == KeyBindingSlot::KeyboardPrimary
+                    && row.target == KeyBindingTarget::Scratch {
+                        lane: LaneConfig::Scratch,
+                        direction: ScratchDirection::Up,
+                        slot: KeyBindingSlot::KeyboardPrimary,
+                    }
         ));
         assert!(matches!(
-            &items[8],
+            &items[1],
             SelectItem::KeyBinding(row)
                 if row.key_mode == KeyMode::K7
-                    && row.lane == LaneConfig::Scratch
-                    && row.slot == KeyBindingSlot::KeyboardSecondary
+                    && row.target == KeyBindingTarget::Scratch {
+                        lane: LaneConfig::Scratch,
+                        direction: ScratchDirection::Down,
+                        slot: KeyBindingSlot::KeyboardPrimary,
+                    }
         ));
         assert!(matches!(
-            &items[16],
+            &items[9],
             SelectItem::KeyBinding(row)
                 if row.key_mode == KeyMode::K7
-                    && row.lane == LaneConfig::Scratch
-                    && row.slot == KeyBindingSlot::Controller
+                    && row.target == KeyBindingTarget::Scratch {
+                        lane: LaneConfig::Scratch,
+                        direction: ScratchDirection::Up,
+                        slot: KeyBindingSlot::KeyboardSecondary,
+                    }
+        ));
+        assert!(matches!(
+            &items[18],
+            SelectItem::KeyBinding(row)
+                if row.key_mode == KeyMode::K7
+                    && row.target == KeyBindingTarget::Scratch {
+                        lane: LaneConfig::Scratch,
+                        direction: ScratchDirection::Up,
+                        slot: KeyBindingSlot::Controller,
+                    }
         ));
     }
 
     #[test]
     fn settings_keys_14k_lists_lanes() {
         let items = load_settings_items("bmz-settings:keys:14k");
-        assert_eq!(items.len(), 16 * KEY_BINDING_SLOTS.len());
+        assert_eq!(items.len(), 18 * KEY_BINDING_SLOTS.len());
     }
 
     #[test]

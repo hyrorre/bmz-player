@@ -35,7 +35,10 @@ use crate::cli::{
     AUTOPLAY_ON_START_ARG, AppOptions, SMOKE_EXIT_AFTER_FRAMES_ARG, SMOKE_EXIT_ON_RESULT_ARG,
 };
 use crate::config::app_config::{PathEntry, WindowMode};
-use crate::config::key_config::{KeyBindingSlot, apply_play_binding, clear_play_binding};
+use crate::config::key_config::{
+    KeyBindingSlot, KeyBindingTarget, apply_play_binding, clear_play_binding,
+    is_scratch_down_control, is_scratch_up_control,
+};
 use crate::config::load::load_profile_config;
 use crate::config::profile_config::{
     AssistOptionConfig, BgaModeConfig, GaugeAutoShiftConfig, GaugeTypeConfig, InputActionConfig,
@@ -1365,40 +1368,39 @@ impl WinitApp {
     fn begin_key_config_edit(
         &mut self,
         key_mode: bmz_core::lane::KeyMode,
-        lane: crate::config::profile_config::LaneConfig,
-        slot: KeyBindingSlot,
+        target: KeyBindingTarget,
     ) {
         self.key_config_edit =
-            Some(KeyConfigEditSession::begin(key_mode, lane, slot, &self.boot.profile_config));
+            Some(KeyConfigEditSession::begin(key_mode, target, &self.boot.profile_config));
         self.play_system_sound(crate::system_sound::SoundType::OptionChange);
-        tracing::info!(?key_mode, ?lane, ?slot, "key config listen started");
+        tracing::info!(?key_mode, ?target, "key config listen started");
     }
 
     fn cancel_key_config_edit(&mut self) {
         let Some(session) = self.key_config_edit.take() else {
             return;
         };
-        let lane = session.target;
+        let target = session.target;
         session.cancel(&mut self.boot.profile_config);
         self.play_system_sound(crate::system_sound::SoundType::FolderClose);
-        tracing::info!(?lane, "key config cancelled");
+        tracing::info!(?target, "key config cancelled");
     }
 
     fn commit_key_config_edit(&mut self) {
         let Some(session) = self.key_config_edit.take() else {
             return;
         };
-        let lane = session.target;
+        let target = session.target;
         self.boot.profile_config.updated_at = now_unix_seconds();
         match save_profile_config(&self.boot.profile_paths.profile_toml, &self.boot.profile_config)
         {
             Ok(()) => {
                 self.select_keys = SelectKeyBindings::from_profile(&self.boot.profile_config.input);
                 self.play_system_sound(crate::system_sound::SoundType::OptionChange);
-                tracing::info!(?lane, "key config saved");
+                tracing::info!(?target, "key config saved");
             }
             Err(error) => {
-                tracing::error!(%error, ?lane, "failed to save key config");
+                tracing::error!(%error, ?target, "failed to save key config");
                 session.cancel(&mut self.boot.profile_config);
             }
         }
@@ -1412,18 +1414,17 @@ impl WinitApp {
             return;
         }
         if !matches!(
-            session.slot,
+            session.target.slot(),
             KeyBindingSlot::KeyboardPrimary | KeyBindingSlot::KeyboardSecondary
         ) {
             return;
         }
-        let lane = session.target;
+        let target = session.target;
         let key_mode = session.key_mode;
-        let slot = session.slot;
         if let Err(error) =
-            apply_play_binding(&mut self.boot.profile_config.input, key_mode, lane, slot, control)
+            apply_play_binding(&mut self.boot.profile_config.input, key_mode, target, control)
         {
-            tracing::warn!(%error, ?key_mode, ?lane, ?slot, control, "failed to apply key binding");
+            tracing::warn!(%error, ?key_mode, ?target, control, "failed to apply key binding");
             return;
         }
         self.commit_key_config_edit();
@@ -1433,19 +1434,15 @@ impl WinitApp {
         let Some(session) = self.key_config_edit.as_ref() else {
             return;
         };
-        if !session.listening || session.slot != KeyBindingSlot::Controller {
+        if !session.listening || session.target.slot() != KeyBindingSlot::Controller {
             return;
         }
-        let lane = session.target;
+        let target = session.target;
         let key_mode = session.key_mode;
-        if let Err(error) = apply_play_binding(
-            &mut self.boot.profile_config.input,
-            key_mode,
-            lane,
-            KeyBindingSlot::Controller,
-            control,
-        ) {
-            tracing::warn!(%error, ?key_mode, ?lane, control, "failed to apply controller binding");
+        if let Err(error) =
+            apply_play_binding(&mut self.boot.profile_config.input, key_mode, target, control)
+        {
+            tracing::warn!(%error, ?key_mode, ?target, control, "failed to apply controller binding");
             return;
         }
         self.commit_key_config_edit();
@@ -1458,13 +1455,12 @@ impl WinitApp {
         if !session.listening {
             return;
         }
-        let lane = session.target;
+        let target = session.target;
         let key_mode = session.key_mode;
-        let slot = session.slot;
         if let Err(error) =
-            clear_play_binding(&mut self.boot.profile_config.input, key_mode, lane, slot)
+            clear_play_binding(&mut self.boot.profile_config.input, key_mode, target)
         {
-            tracing::warn!(%error, ?key_mode, ?lane, ?slot, "failed to clear key binding");
+            tracing::warn!(%error, ?key_mode, ?target, "failed to clear key binding");
             return;
         }
         self.commit_key_config_edit();
@@ -1559,7 +1555,7 @@ impl WinitApp {
                     true
                 }
                 Some(SelectItem::KeyBinding(row)) => {
-                    self.begin_key_config_edit(row.key_mode, row.lane, row.slot);
+                    self.begin_key_config_edit(row.key_mode, row.target);
                     true
                 }
                 Some(SelectItem::Folder { .. }) => {
@@ -2056,7 +2052,11 @@ impl WinitApp {
             "DPadLeft" | "Select" => Some(SelectAction::ExitFolder),
             "DPadRight" | "Button1" => Some(SelectAction::EnterOrPlay),
             _ => {
-                if self.select_keys.is_enter(button) {
+                if self.select_keys.is_scratch_up(button) {
+                    Some(SelectAction::Move(SelectMove::Previous))
+                } else if self.select_keys.is_scratch_down(button) {
+                    Some(SelectAction::Move(SelectMove::Next))
+                } else if self.select_keys.is_enter(button) {
                     Some(SelectAction::EnterOrPlay)
                 } else if self.select_keys.is_back(button) {
                     Some(SelectAction::ExitFolder)
@@ -2150,7 +2150,7 @@ impl WinitApp {
             }
             Some(SelectItem::Config(_)) => {}
             Some(SelectItem::KeyBinding(row)) => {
-                self.begin_key_config_edit(row.key_mode, row.lane, row.slot);
+                self.begin_key_config_edit(row.key_mode, row.target);
             }
             Some(SelectItem::AdvancedSettings) => {
                 self.open_advanced_settings_from_select();
@@ -5796,9 +5796,7 @@ fn select_snapshot_rows(
                 SelectItem::KeyBinding(row) => {
                     let value = key_config_edit
                         .filter(|session| {
-                            session.key_mode == row.key_mode
-                                && session.target == row.lane
-                                && session.slot == row.slot
+                            session.key_mode == row.key_mode && session.target == row.target
                         })
                         .map(|session| session.preview_value(profile))
                         .unwrap_or_else(|| row.value_text(profile));
@@ -6157,12 +6155,9 @@ fn target_cycle_from_control(control: &str, bindings: &SelectKeyBindings) -> Opt
         "ScratchDown" => return Some(TargetCycle::Next),
         _ => {}
     }
-    if !bindings.scratch_controls.iter().any(|scratch| scratch == control) {
-        return None;
-    }
-    if control.ends_with('-') {
+    if bindings.is_scratch_up(control) {
         Some(TargetCycle::Previous)
-    } else if control.ends_with('+') {
+    } else if bindings.is_scratch_down(control) {
         Some(TargetCycle::Next)
     } else {
         None
@@ -6174,7 +6169,8 @@ struct SelectKeyBindings {
     enter: Vec<String>,
     back: Vec<String>,
     key2_controls: Vec<String>,
-    scratch_controls: Vec<String>,
+    scratch_up_controls: Vec<String>,
+    scratch_down_controls: Vec<String>,
     cycle_arrange: Option<String>,
     cycle_gauge: Option<String>,
     cycle_assist: Option<String>,
@@ -6233,7 +6229,19 @@ impl SelectKeyBindings {
             keys_for(LaneConfig::Key2),
         );
         let key2_controls = keys_for(LaneConfig::Key2);
-        let scratch_controls = keys_for(LaneConfig::Scratch);
+        let scratch_all = keys_for(LaneConfig::Scratch);
+        let mut scratch_up_controls = Vec::new();
+        let mut scratch_down_controls = Vec::new();
+        for control in scratch_all {
+            if is_scratch_up_control(&control) {
+                scratch_up_controls.push(control);
+            } else if is_scratch_down_control(&control) {
+                scratch_down_controls.push(control);
+            } else {
+                scratch_up_controls.push(control.clone());
+                scratch_down_controls.push(control);
+            }
+        }
         let cycle_arrange = select_control_with_lane_fallback(
             actions_for(InputActionConfig::SelectOptionArrange),
             keys_for(LaneConfig::Key1),
@@ -6321,7 +6329,8 @@ impl SelectKeyBindings {
             enter,
             back,
             key2_controls,
-            scratch_controls,
+            scratch_up_controls,
+            scratch_down_controls,
             cycle_arrange,
             cycle_gauge,
             cycle_assist,
@@ -6345,6 +6354,14 @@ impl SelectKeyBindings {
 
     fn is_key2(&self, control: &str) -> bool {
         self.key2_controls.iter().any(|k| k == control)
+    }
+
+    fn is_scratch_up(&self, control: &str) -> bool {
+        self.scratch_up_controls.iter().any(|k| k == control)
+    }
+
+    fn is_scratch_down(&self, control: &str) -> bool {
+        self.scratch_down_controls.iter().any(|k| k == control)
     }
 
     fn back_uses_key2(&self) -> bool {
