@@ -1767,6 +1767,75 @@ mod tests {
     }
 
     #[test]
+    fn wmii_fhd_lr2skin_renders_judge_and_combo_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/WMII_FHD/play/FHDPLAY_AC.lr2skin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let decoded = decode_beatoraja_skin(&skin_path, SkinKind::Play).unwrap();
+        let judge_texture = decoded
+            .sources
+            .iter()
+            .find(|source| source.source_id == "13")
+            .expect("WMII judge source should load")
+            .texture;
+        let sources = decoded
+            .sources
+            .iter()
+            .map(|source| {
+                (
+                    source.source_id.clone(),
+                    SkinDocumentTexture {
+                        source_id: source.source_id.clone(),
+                        texture: source.texture,
+                        source_size: SkinImageSize {
+                            width: source.asset.width as f32,
+                            height: source.asset.height as f32,
+                        },
+                    },
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        let mut judge_ms = [None; bmz_render::skin::MAX_JUDGE_REGIONS];
+        judge_ms[0] = Some(100);
+        let mut judge_index = [None; bmz_render::skin::MAX_JUDGE_REGIONS];
+        judge_index[0] = Some(0);
+        let state = bmz_render::skin::SkinDrawState {
+            elapsed_ms: 2_000,
+            play_timer_ms: Some(2_000),
+            judge_ms,
+            judge_index,
+            combo: 123,
+            ..Default::default()
+        };
+
+        let items = decoded.document.static_render_items(
+            &sources,
+            state,
+            bmz_render::skin::SkinTextState::default(),
+        );
+        let judge_items = items
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item,
+                    bmz_render::skin::SkinRenderItem::Image { texture, rect, tint, .. }
+                        if *texture == judge_texture
+                            && rect.height > 0.01
+                            && tint.a > 0.5
+                )
+            })
+            .count();
+
+        assert!(
+            judge_items >= 2,
+            "expected WMII judge text and combo digits from source 13; got {items:?}"
+        );
+    }
+
+    #[test]
     fn wildcard_skin_source_prefers_filepath_default() {
         let root = unique_test_dir("bmz-json-source");
         std::fs::create_dir_all(root.join("parts")).unwrap();

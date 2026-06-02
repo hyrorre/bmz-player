@@ -6912,8 +6912,11 @@ fn skin_state_text(text: &SkinTextDef, state: SkinTextState<'_>) -> String {
         17 => state.table_level.to_string(),
         30 => state.search_word.to_string(),
         150..=159 => state.course_titles[(text.ref_id - 150) as usize].to_string(),
+        // beatoraja StringPropertyFactory: 1001=tablename, 1002=tablelevel,
+        // 1003=tablefull.  Rm-skin's combined table label is handled above by
+        // id/value_expr, so direct numeric refs follow the beatoraja mapping.
         1001 => state.table_text_primary.to_string(),
-        1002 => state.table_text_secondary.to_string(),
+        1002 => state.table_level.to_string(),
         1003 => state.table_text_fallback.to_string(),
         1020 | 1021 => String::new(),
         200..=209 => select_target_name_by_offset(state.target, text.ref_id - 210),
@@ -14691,6 +14694,7 @@ mod tests {
         use crate::snapshot::CourseStageMarker;
 
         let state = SkinTextState {
+            table_level: "★12",
             table_text_primary: "[★] Insane",
             table_text_secondary: "★12",
             table_text_fallback: "[★] Insane",
@@ -14709,6 +14713,9 @@ mod tests {
 
         let course_state = SkinTextState { course_stage: Some(CourseStageMarker::Stage1), ..state };
         assert_eq!(skin_state_text(&by_id, course_state), "COURSE : STAGE 1");
+
+        let by_ref = SkinTextDef { ref_id: 1002, ..SkinTextDef::default() };
+        assert_eq!(skin_state_text(&by_ref, state), "★12");
     }
 
     #[test]

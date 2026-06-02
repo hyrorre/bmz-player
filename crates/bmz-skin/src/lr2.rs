@@ -151,6 +151,8 @@ struct NoteState {
 struct JudgeState {
     images: Vec<JsonValue>,
     numbers: Vec<JsonValue>,
+    shift: bool,
+    marker_inserted: bool,
 }
 
 pub fn load_lr2_csv_skin_value(
@@ -577,7 +579,7 @@ impl<'a> CsvBuilder<'a> {
             .as_ref()
             .and_then(|gauge| gauge.get("nodes"))
             .and_then(JsonValue::as_array)
-            .map(|nodes| nodes.clone())
+            .cloned()
             .unwrap_or_default();
         let base_node_index = nodes.len();
         nodes.extend((0..node_count).map(|index| {
@@ -697,6 +699,11 @@ impl<'a> CsvBuilder<'a> {
             "timer": region.timer,
         }));
         self.ensure_judge(index);
+        if !self.judges[index].marker_inserted {
+            self.destinations.push(json!({ "id": format!("judge-{index}") }));
+            self.judges[index].marker_inserted = true;
+        }
+        self.judges[index].shift = values[11] != 1;
         self.judges[index].images.push(json!({ "id": id, "dst": [] }));
         self.current = Some(CurrentObject { id });
     }
@@ -718,8 +725,16 @@ impl<'a> CsvBuilder<'a> {
     }
 
     fn add_judge_number(&mut self, line: &CsvLine, index: usize) {
+        let values = parse_values(line);
         self.add_number(line);
         if let Some(current) = self.current.clone() {
+            if values[12] == 1
+                && let Some(value) = self.values.iter_mut().find(|value| {
+                    value.get("id").and_then(JsonValue::as_str) == Some(current.id.as_str())
+                })
+            {
+                value["align"] = json!(2);
+            }
             self.ensure_judge(index);
             self.judges[index].numbers.push(json!({ "id": current.id, "dst": [] }));
         }
@@ -731,7 +746,7 @@ impl<'a> CsvBuilder<'a> {
         };
         self.ensure_judge(index);
         let values = parse_values(line);
-        let dst = destination_def(&current.id, &values, self.header.h as i32);
+        let dst = judge_combo_destination_def(&current.id, &values);
         if let Some(entry) =
             self.judges[index].numbers.iter_mut().rev().find(|entry| {
                 entry.get("id").and_then(JsonValue::as_str) == Some(current.id.as_str())
@@ -960,6 +975,7 @@ impl<'a> CsvBuilder<'a> {
                     "index": index as i32,
                     "images": judge.images,
                     "numbers": judge.numbers,
+                    "shift": judge.shift,
                 })
             })
             .collect::<Vec<_>>();
@@ -1135,6 +1151,33 @@ fn gauge_destination_def(
         values[6] = add_y * 50;
     }
     destination_def(id, &values, canvas_h)
+}
+
+fn judge_combo_destination_def(id: &str, values: &[i32; 22]) -> JsonValue {
+    let frame = json!({
+        "time": values[2],
+        "x": values[3],
+        "y": -values[4],
+        "w": values[5].abs(),
+        "h": values[6].abs(),
+        "acc": values[7],
+        "a": values[8],
+        "r": values[9],
+        "g": values[10],
+        "b": values[11],
+        "angle": values[14],
+    });
+    let op = values[18..=20].iter().copied().filter(|value| *value != 0).collect::<Vec<_>>();
+    json!({
+        "id": id,
+        "blend": values[12],
+        "filter": values[13],
+        "timer": if values[17] != 0 { json!(values[17]) } else { JsonValue::Null },
+        "loop": values[16],
+        "center": values[15],
+        "op": op,
+        "dst": [frame],
+    })
 }
 
 fn push_destination(destinations: &mut Vec<JsonValue>, destination: JsonValue) {

@@ -132,7 +132,7 @@ pub struct RenderSnapshot {
     pub table_text_primary: String,
     /// beatoraja `TEXT_TABLE2` (1002): 表内レベル (例: `★12`)。
     pub table_text_secondary: String,
-    /// beatoraja `TEXT_TABLE3` (1003): 表名フォールバック。
+    /// beatoraja `TEXT_TABLE3` (1003): 表内レベル + 表名。
     pub table_text_fallback: String,
     pub key_mode: KeyMode,
     pub visible_notes: [Vec<VisibleNote>; LANE_COUNT],
