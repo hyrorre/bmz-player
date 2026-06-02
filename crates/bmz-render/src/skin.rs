@@ -1005,6 +1005,12 @@ pub struct SkinClickHit {
     pub rect: Rect,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SkinSliderHit {
+    pub slider_type: i32,
+    pub value: f32,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub struct SkinAnimationDef {
     pub time: Option<i32>,
@@ -1253,6 +1259,16 @@ impl SkinContext {
             x,
             y,
         )
+    }
+
+    pub fn select_slider_hit(
+        &self,
+        snapshot: &SelectSnapshot,
+        x: f32,
+        y: f32,
+    ) -> Option<SkinSliderHit> {
+        let document = self.document.as_ref()?;
+        document.select_slider_hit(snapshot, &self.select_settings_dest_index, x, y)
     }
 
     /// 静的 destination を `{"id":"notes"}` マーカーと `timer: 3` (FAILED) で分割して返す。
@@ -3065,6 +3081,39 @@ impl SkinDocument {
             .find(|hit| rect_contains(hit.rect, x, y))
     }
 
+    pub fn select_slider_hit(
+        &self,
+        snapshot: &SelectSnapshot,
+        settings_dest_index: &crate::select_settings_dest::SelectSettingsDestIndex,
+        x: f32,
+        y: f32,
+    ) -> Option<SkinSliderHit> {
+        let (state, selected_row) = self.select_draw_state(snapshot, None);
+        let enabled_options = self.enabled_options();
+        self.all_destinations(&enabled_options)
+            .into_iter()
+            .filter_map(|destination| {
+                if !crate::select_settings_dest::test_select_destination_visible(
+                    settings_dest_index,
+                    destination,
+                    &enabled_options,
+                    state,
+                    snapshot,
+                    selected_row,
+                    eval_skin_draw_condition,
+                    test_skin_ops,
+                ) {
+                    return None;
+                }
+                let slider = self.slider.iter().find(|slider| slider.id == destination.id)?;
+                self.destination_slider_hit(slider, destination, &enabled_options, state, x, y)
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .next()
+    }
+
     fn select_click_hits(
         &self,
         _sources: &HashMap<String, SkinDocumentTexture>,
@@ -3194,6 +3243,30 @@ impl SkinDocument {
         }
         let rect = normalize_skin_frame_rect(frame, self.w, self.h);
         if rect.width <= 0.0 || rect.height <= 0.0 { None } else { Some(rect) }
+    }
+
+    fn destination_slider_hit(
+        &self,
+        slider: &SkinSliderDef,
+        destination: &SkinDestinationDef,
+        enabled_options: &[i32],
+        state: SkinDrawState,
+        x: f32,
+        y: f32,
+    ) -> Option<SkinSliderHit> {
+        if !slider.changeable || !matches!(slider.slider_type, 17..=19) {
+            return None;
+        }
+        let elapsed = skin_timer_elapsed_ms(destination.timer, state)?;
+        let mut frame = resolve_destination_frame(destination, elapsed, enabled_options, state)?;
+        apply_skin_offset_to_frame(destination, &mut frame, state, false);
+        if !destination_mouse_rect_contains(destination, frame, state) {
+            return None;
+        }
+        let mouse_x = x.clamp(0.0, 1.0) * self.w as f32;
+        let mouse_y = y.clamp(0.0, 1.0) * self.h as f32;
+        let value = slider_value_at(slider, frame, mouse_x, mouse_y)?;
+        Some(SkinSliderHit { slider_type: slider.slider_type, value })
     }
 
     fn select_songlist_items(
@@ -8385,6 +8458,38 @@ fn destination_mouse_rect_contains(
         && relative_y <= y0.max(y1)
 }
 
+fn slider_value_at(
+    slider: &SkinSliderDef,
+    frame: ResolvedSkinFrame,
+    x: f32,
+    y: f32,
+) -> Option<f32> {
+    let range = slider.range.unsigned_abs() as f32;
+    if range <= f32::EPSILON {
+        return None;
+    }
+    let frame_x = frame.x as f32;
+    let frame_y = frame.y as f32;
+    let frame_w = frame.w as f32;
+    let frame_h = frame.h as f32;
+    let value = match slider.angle {
+        0 if frame_x <= x && x <= frame_x + frame_w && frame_y <= y && y <= frame_y + range => {
+            (y - frame_y) / range
+        }
+        1 if frame_x <= x && x <= frame_x + range && frame_y <= y && y <= frame_y + frame_h => {
+            (x - frame_x) / range
+        }
+        2 if frame_x <= x && x <= frame_x + frame_w && frame_y - range <= y && y <= frame_y => {
+            (frame_y - y) / range
+        }
+        3 if frame_x - range <= x && x <= frame_x && frame_y <= y && y <= frame_y + frame_h => {
+            (frame_x - x) / range
+        }
+        _ => return None,
+    };
+    Some(value.clamp(0.0, 1.0))
+}
+
 fn multiply_bga_tints(destination: Color, bga: SkinBgaFrame) -> Color {
     Color::rgba(
         destination.r * bga.tint_r,
@@ -12391,6 +12496,49 @@ mod tests {
                     &crate::select_settings_dest::SelectSettingsDestIndex::default(),
                     0.2,
                     0.75,
+                )
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn select_slider_hit_resolves_changeable_volume_slider() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 5,
+                "w": 100,
+                "h": 100,
+                "slider": [
+                    { "id": "master", "src": 1, "x": 0, "y": 0, "w": 10, "h": 5, "angle": 1, "range": 50, "type": 17 }
+                ],
+                "destination": [
+                    { "id": "master", "dst": [{ "x": 10, "y": 20, "w": 10, "h": 5 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let snapshot = SelectSnapshot::default();
+
+        let hit = document
+            .select_slider_hit(
+                &snapshot,
+                &crate::select_settings_dest::SelectSettingsDestIndex::default(),
+                0.35,
+                0.225,
+            )
+            .unwrap();
+
+        assert_eq!(hit.slider_type, 17);
+        assert!(approx_eq(hit.value, 0.5));
+        assert!(
+            document
+                .select_slider_hit(
+                    &snapshot,
+                    &crate::select_settings_dest::SelectSettingsDestIndex::default(),
+                    0.70,
+                    0.225,
                 )
                 .is_none()
         );

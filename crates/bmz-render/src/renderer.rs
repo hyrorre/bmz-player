@@ -19,7 +19,9 @@ use crate::plan::{
     UvRect,
 };
 use crate::scene::AppSceneSnapshot;
-use crate::skin::{BlendMode, DynamicTimerRuntime, SkinClickHit, SkinContext, SkinDocument};
+use crate::skin::{
+    BlendMode, DynamicTimerRuntime, SkinClickHit, SkinContext, SkinDocument, SkinSliderHit,
+};
 use crate::ui::{EguiFrame, EguiPainter};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -404,6 +406,15 @@ impl Renderer {
         y: f32,
     ) -> Option<SkinClickHit> {
         self.select_skin_context.select_click_hit(snapshot, x, y)
+    }
+
+    pub fn select_skin_slider_hit(
+        &self,
+        snapshot: &crate::scene::SelectSnapshot,
+        x: f32,
+        y: f32,
+    ) -> Option<SkinSliderHit> {
+        self.select_skin_context.select_slider_hit(snapshot, x, y)
     }
 
     /// プレイスキンの document。

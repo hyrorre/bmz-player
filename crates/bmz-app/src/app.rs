@@ -95,7 +95,7 @@ use crate::storage::migration::migrate_library_db;
 use crate::storage::replay::load_replay_for_chart;
 use crate::ui::{DebugInfo, EguiLayer, SceneSkinDefs, SkinCandidate, SkinCatalog, SkinConfigMeta};
 use bmz_render::skin::{
-    SkinClickHit, SkinClickTarget, SkinDocument, SkinDocumentTexture, SkinManifest,
+    SkinClickHit, SkinClickTarget, SkinDocument, SkinDocumentTexture, SkinManifest, SkinSliderHit,
 };
 use std::collections::BTreeMap;
 
@@ -310,6 +310,8 @@ struct WinitApp {
     search_query: String,
     /// 直近のマウスカーソル位置。select skin のクリック hit-test に使う。
     last_cursor_position: Option<PhysicalPosition<f64>>,
+    /// select skin slider をドラッグ中なら true。
+    select_slider_dragging: bool,
     /// IME 変換中の未確定文字列 (Preedit)。Commit で空になり search_query に追加される。
     search_preedit: String,
     /// 直近の検索クエリ履歴 (古い順)。`bmz-search:<q>` 仮想フォルダとしてルートに並ぶ。
@@ -769,6 +771,7 @@ impl WinitApp {
             search_mode: false,
             search_query: String::new(),
             last_cursor_position: None,
+            select_slider_dragging: false,
             search_preedit: String::new(),
             search_history: std::collections::VecDeque::new(),
             search_message: None,
@@ -2163,17 +2166,48 @@ impl WinitApp {
     }
 
     fn route_mouse_input(&mut self, state: ElementState, button: MouseButton) {
-        if state != ElementState::Pressed || !matches!(self.view_state(), AppViewState::Select) {
+        if !matches!(self.view_state(), AppViewState::Select) {
+            self.select_slider_dragging = false;
+            return;
+        }
+        if state == ElementState::Released {
+            if self.select_slider_dragging {
+                self.select_slider_dragging = false;
+                self.save_select_slider_profile();
+            }
+            return;
+        }
+        if state != ElementState::Pressed {
             return;
         }
         let Some((x, y)) = self.cursor_position_normalized() else {
             return;
         };
         let snapshot = self.select_snapshot();
+        if button == MouseButton::Left
+            && let Some(hit) = self.renderer.select_skin_slider_hit(&snapshot, x, y)
+        {
+            self.select_slider_dragging = true;
+            self.apply_select_slider_hit(hit);
+            return;
+        }
         let Some(hit) = self.renderer.select_skin_click_hit(&snapshot, x, y) else {
             return;
         };
         self.handle_select_skin_click(hit, button, x, y);
+    }
+
+    fn route_select_slider_drag(&mut self) {
+        if !self.select_slider_dragging || !matches!(self.view_state(), AppViewState::Select) {
+            return;
+        }
+        let Some((x, y)) = self.cursor_position_normalized() else {
+            return;
+        };
+        let snapshot = self.select_snapshot();
+        if let Some(hit) = self.renderer.select_skin_slider_hit(&snapshot, x, y) {
+            self.apply_select_slider_hit(hit);
+        }
     }
 
     fn cursor_position_normalized(&self) -> Option<(f32, f32)> {
@@ -2187,6 +2221,37 @@ impl WinitApp {
             (position.x as f32 / size.width as f32).clamp(0.0, 1.0),
             (position.y as f32 / size.height as f32).clamp(0.0, 1.0),
         ))
+    }
+
+    fn apply_select_slider_hit(&mut self, hit: SkinSliderHit) {
+        let value = volume_f32_to_unit(hit.value);
+        let mix = &mut self.boot.profile_config.audio_mix;
+        match hit.slider_type {
+            17 if mix.master_volume != value => {
+                mix.master_volume = value;
+                tracing::info!(value, "select skin master volume changed");
+            }
+            18 if mix.key_volume != value => {
+                mix.key_volume = value;
+                tracing::info!(value, "select skin key volume changed");
+            }
+            19 if mix.bgm_volume != value => {
+                mix.bgm_volume = value;
+                tracing::info!(value, "select skin bgm volume changed");
+            }
+            17 | 18 | 19 => {}
+            _ => {
+                tracing::debug!(slider_type = hit.slider_type, "unsupported select skin slider");
+            }
+        }
+    }
+
+    fn save_select_slider_profile(&mut self) {
+        match save_profile_config(&self.boot.profile_paths.profile_toml, &self.boot.profile_config)
+        {
+            Ok(()) => tracing::info!("profile config saved from select skin slider"),
+            Err(error) => tracing::error!(%error, "failed to save profile config"),
+        }
     }
 
     fn handle_select_skin_click(&mut self, hit: SkinClickHit, button: MouseButton, x: f32, y: f32) {
@@ -5436,6 +5501,9 @@ impl ApplicationHandler for WinitApp {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 self.last_cursor_position = Some(position);
+                if !egui_consumed {
+                    self.route_select_slider_drag();
+                }
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 if egui_consumed {
@@ -5964,6 +6032,10 @@ fn bga_mode_as_str(bga: BgaModeConfig) -> &'static str {
         BgaModeConfig::Auto => "AUTO",
         BgaModeConfig::Off => "OFF",
     }
+}
+
+fn volume_f32_to_unit(value: f32) -> u32 {
+    (value.clamp(0.0, 1.0) * 100.0).round() as u32
 }
 
 fn cycle_bga_option(current: BgaModeConfig) -> BgaModeConfig {
@@ -7474,6 +7546,13 @@ mod tests {
         assert!(matches!(cycle_bga_option(BgaModeConfig::On), BgaModeConfig::Auto));
         assert!(matches!(cycle_bga_option(BgaModeConfig::Auto), BgaModeConfig::Off));
         assert!(matches!(cycle_bga_option(BgaModeConfig::Off), BgaModeConfig::On));
+    }
+
+    #[test]
+    fn volume_f32_to_unit_clamps_and_rounds() {
+        assert_eq!(volume_f32_to_unit(-0.5), 0);
+        assert_eq!(volume_f32_to_unit(0.345), 35);
+        assert_eq!(volume_f32_to_unit(1.5), 100);
     }
 
     #[test]
