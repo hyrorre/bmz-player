@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1093,17 +1094,32 @@ pub struct SkinContext {
     manifest: SkinManifest,
     document: Option<SkinDocument>,
     document_sources: HashMap<String, SkinDocumentTexture>,
+    select_settings_dest_index: Arc<crate::select_settings_dest::SelectSettingsDestIndex>,
 }
 
 impl Default for SkinContext {
     fn default() -> Self {
-        Self { manifest: default_skin_manifest(), document: None, document_sources: HashMap::new() }
+        Self {
+            manifest: default_skin_manifest(),
+            document: None,
+            document_sources: HashMap::new(),
+            select_settings_dest_index: Arc::new(
+                crate::select_settings_dest::SelectSettingsDestIndex::default(),
+            ),
+        }
     }
 }
 
 impl SkinContext {
     pub fn from_manifest(manifest: SkinManifest) -> Self {
-        Self { manifest, document: None, document_sources: HashMap::new() }
+        Self {
+            manifest,
+            document: None,
+            document_sources: HashMap::new(),
+            select_settings_dest_index: Arc::new(
+                crate::select_settings_dest::SelectSettingsDestIndex::default(),
+            ),
+        }
     }
 
     pub fn from_manifest_and_document(
@@ -1111,6 +1127,8 @@ impl SkinContext {
         document: SkinDocument,
         document_sources: impl IntoIterator<Item = SkinDocumentTexture>,
     ) -> Self {
+        let select_settings_dest_index =
+            Arc::new(crate::select_settings_dest::build_select_settings_dest_index(&document));
         Self {
             manifest,
             document: Some(document),
@@ -1118,6 +1136,7 @@ impl SkinContext {
                 .into_iter()
                 .map(|source| (source.source_id.clone(), source))
                 .collect(),
+            select_settings_dest_index,
         }
     }
 
@@ -1188,6 +1207,7 @@ impl SkinContext {
             &self.document_sources,
             snapshot,
             dynamic_timers,
+            &self.select_settings_dest_index,
         )
     }
 
@@ -2722,7 +2742,12 @@ impl SkinDocument {
         sources: &HashMap<String, SkinDocumentTexture>,
         snapshot: &SelectSnapshot,
     ) -> Vec<SkinRenderItem> {
-        self.select_render_items_with_dynamic_timers(sources, snapshot, None)
+        self.select_render_items_with_dynamic_timers(
+            sources,
+            snapshot,
+            None,
+            &crate::select_settings_dest::SelectSettingsDestIndex::default(),
+        )
     }
 
     pub fn select_render_items_with_dynamic_timers(
@@ -2730,6 +2755,7 @@ impl SkinDocument {
         sources: &HashMap<String, SkinDocumentTexture>,
         snapshot: &SelectSnapshot,
         dynamic_timers: Option<&mut DynamicTimerRuntime>,
+        settings_dest_index: &crate::select_settings_dest::SelectSettingsDestIndex,
     ) -> Vec<SkinRenderItem> {
         let selected_row = snapshot.rows.iter().find(|row| row.index == snapshot.selected_index);
         let mut state = SkinDrawState {
@@ -2822,9 +2848,16 @@ impl SkinDocument {
                 ));
                 continue;
             }
-            if !test_skin_ops(&destination.op, &enabled_options, state)
-                || !eval_skin_draw_condition(&destination.draw, state)
-            {
+            if !crate::select_settings_dest::test_select_destination_visible(
+                settings_dest_index,
+                destination,
+                &enabled_options,
+                state,
+                snapshot,
+                selected_row,
+                eval_skin_draw_condition,
+                test_skin_ops,
+            ) {
                 continue;
             }
             if let Some(resolved) = self.resolve_destination_items(
@@ -5033,7 +5066,7 @@ fn test_json_option_number(option: i32, enabled_options: &[i32]) -> bool {
     }
 }
 
-fn test_skin_ops(ops: &[i32], enabled_options: &[i32], state: SkinDrawState) -> bool {
+pub(crate) fn test_skin_ops(ops: &[i32], enabled_options: &[i32], state: SkinDrawState) -> bool {
     ops.iter().all(|op| test_skin_op(*op, enabled_options, state))
 }
 
@@ -6966,11 +6999,10 @@ fn result_replay_op_matches(op: i32, state: SkinDrawState) -> bool {
 }
 
 fn select_song_detail_row(state: SkinDrawState) -> bool {
-    match state.select_row_kind {
-        SelectRowKind::Song if !state.select_is_folder && state.select_in_library => true,
-        SelectRowKind::Config if state.in_settings => true,
-        _ => false,
-    }
+    matches!(
+        state.select_row_kind,
+        SelectRowKind::Song if !state.select_is_folder && state.select_in_library
+    )
 }
 
 fn select_key_mode_option_matches(op: i32, state: SkinDrawState) -> bool {
@@ -9313,18 +9345,6 @@ mod tests {
 
         assert!(!test_skin_op(201, &[], state));
         assert!(!test_skin_op(302, &[], state));
-    }
-
-    #[test]
-    fn select_song_detail_op_matches_config_row_in_settings() {
-        let state = SkinDrawState {
-            select_screen: true,
-            select_row_kind: SelectRowKind::Config,
-            in_settings: true,
-            ..SkinDrawState::default()
-        };
-        assert!(test_skin_op(2, &[], state));
-        assert!(!test_skin_op(1, &[], state));
     }
 
     #[test]
@@ -11759,6 +11779,7 @@ mod tests {
             &sources,
             &snapshot,
             Some(&mut runtime),
+            &crate::select_settings_dest::SelectSettingsDestIndex::default(),
         );
 
         assert_eq!(items.len(), 1);

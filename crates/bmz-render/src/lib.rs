@@ -6,6 +6,7 @@ pub mod plan;
 pub mod renderer;
 pub mod sample;
 pub mod scene;
+pub mod select_settings_dest;
 pub mod skin;
 pub mod skin_offset;
 pub mod snapshot;
