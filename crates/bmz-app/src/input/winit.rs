@@ -133,6 +133,7 @@ fn key_code_name(code: KeyCode) -> String {
         KeyCode::Enter => "Enter",
         KeyCode::Escape => "Escape",
         KeyCode::Backspace => "Backspace",
+        KeyCode::Delete => "Delete",
         KeyCode::Tab => "Tab",
         KeyCode::Numpad0 => "Numpad0",
         KeyCode::Numpad1 => "Numpad1",

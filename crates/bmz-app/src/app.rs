@@ -35,7 +35,7 @@ use crate::cli::{
     AUTOPLAY_ON_START_ARG, AppOptions, SMOKE_EXIT_AFTER_FRAMES_ARG, SMOKE_EXIT_ON_RESULT_ARG,
 };
 use crate::config::app_config::{PathEntry, WindowMode};
-use crate::config::key_config::apply_play_keyboard_binding;
+use crate::config::key_config::{KeyBindingSlot, apply_play_binding, clear_play_binding};
 use crate::config::load::load_profile_config;
 use crate::config::profile_config::{
     AssistOptionConfig, BgaModeConfig, GaugeAutoShiftConfig, GaugeTypeConfig, InputActionConfig,
@@ -1100,7 +1100,7 @@ impl WinitApp {
                 Some(SelectItem::Chart(row)) => row.chart.as_ref().map(|chart| chart.chart_id),
                 _ => None,
             },
-            selected_title: selected.map(|i| i.display_name().to_string()).unwrap_or_default(),
+            selected_title: selected.map(|i| i.display_name()).unwrap_or_default(),
             rows: select_snapshot_rows(
                 &self.select_items,
                 self.selected_index,
@@ -1366,11 +1366,12 @@ impl WinitApp {
         &mut self,
         key_mode: bmz_core::lane::KeyMode,
         lane: crate::config::profile_config::LaneConfig,
+        slot: KeyBindingSlot,
     ) {
         self.key_config_edit =
-            Some(KeyConfigEditSession::begin(key_mode, lane, &self.boot.profile_config));
+            Some(KeyConfigEditSession::begin(key_mode, lane, slot, &self.boot.profile_config));
         self.play_system_sound(crate::system_sound::SoundType::OptionChange);
-        tracing::info!(?key_mode, ?lane, "key config listen started");
+        tracing::info!(?key_mode, ?lane, ?slot, "key config listen started");
     }
 
     fn cancel_key_config_edit(&mut self) {
@@ -1410,15 +1411,60 @@ impl WinitApp {
         if !session.listening {
             return;
         }
+        if !matches!(
+            session.slot,
+            KeyBindingSlot::KeyboardPrimary | KeyBindingSlot::KeyboardSecondary
+        ) {
+            return;
+        }
         let lane = session.target;
         let key_mode = session.key_mode;
-        if let Err(error) = apply_play_keyboard_binding(
+        let slot = session.slot;
+        if let Err(error) =
+            apply_play_binding(&mut self.boot.profile_config.input, key_mode, lane, slot, control)
+        {
+            tracing::warn!(%error, ?key_mode, ?lane, ?slot, control, "failed to apply key binding");
+            return;
+        }
+        self.commit_key_config_edit();
+    }
+
+    fn apply_key_config_gamepad(&mut self, control: &str) {
+        let Some(session) = self.key_config_edit.as_ref() else {
+            return;
+        };
+        if !session.listening || session.slot != KeyBindingSlot::Controller {
+            return;
+        }
+        let lane = session.target;
+        let key_mode = session.key_mode;
+        if let Err(error) = apply_play_binding(
             &mut self.boot.profile_config.input,
             key_mode,
             lane,
+            KeyBindingSlot::Controller,
             control,
         ) {
-            tracing::warn!(%error, ?key_mode, ?lane, control, "failed to apply key binding");
+            tracing::warn!(%error, ?key_mode, ?lane, control, "failed to apply controller binding");
+            return;
+        }
+        self.commit_key_config_edit();
+    }
+
+    fn clear_key_config_binding(&mut self) {
+        let Some(session) = self.key_config_edit.as_ref() else {
+            return;
+        };
+        if !session.listening {
+            return;
+        }
+        let lane = session.target;
+        let key_mode = session.key_mode;
+        let slot = session.slot;
+        if let Err(error) =
+            clear_play_binding(&mut self.boot.profile_config.input, key_mode, lane, slot)
+        {
+            tracing::warn!(%error, ?key_mode, ?lane, ?slot, "failed to clear key binding");
             return;
         }
         self.commit_key_config_edit();
@@ -1513,7 +1559,7 @@ impl WinitApp {
                     true
                 }
                 Some(SelectItem::KeyBinding(row)) => {
-                    self.begin_key_config_edit(row.key_mode, row.lane);
+                    self.begin_key_config_edit(row.key_mode, row.lane, row.slot);
                     true
                 }
                 Some(SelectItem::Folder { .. }) => {
@@ -1751,9 +1797,17 @@ impl WinitApp {
                 && event.state == ElementState::Pressed
                 && !event.repeat
             {
+                if event.physical_key == PhysicalKey::Code(KeyCode::Delete)
+                    || event.physical_key == PhysicalKey::Code(KeyCode::Backspace)
+                {
+                    self.clear_key_config_binding();
+                    return;
+                }
                 if let Some(control) = physical_key_name(event.physical_key) {
                     if control == "Escape" {
                         self.cancel_key_config_edit();
+                    } else if control == "Delete" || control == "Backspace" {
+                        self.clear_key_config_binding();
                     } else {
                         self.apply_key_config_control(&control);
                     }
@@ -1943,6 +1997,12 @@ impl WinitApp {
         }
 
         if in_settings_stack(&self.folder_stack) {
+            if self.key_config_edit.as_ref().is_some_and(|session| session.listening) {
+                if pressed {
+                    self.apply_key_config_gamepad(button);
+                }
+                return;
+            }
             let _ = self.route_settings_control(button);
             return;
         }
@@ -2090,7 +2150,7 @@ impl WinitApp {
             }
             Some(SelectItem::Config(_)) => {}
             Some(SelectItem::KeyBinding(row)) => {
-                self.begin_key_config_edit(row.key_mode, row.lane);
+                self.begin_key_config_edit(row.key_mode, row.lane, row.slot);
             }
             Some(SelectItem::AdvancedSettings) => {
                 self.open_advanced_settings_from_select();
@@ -5736,13 +5796,15 @@ fn select_snapshot_rows(
                 SelectItem::KeyBinding(row) => {
                     let value = key_config_edit
                         .filter(|session| {
-                            session.key_mode == row.key_mode && session.target == row.lane
+                            session.key_mode == row.key_mode
+                                && session.target == row.lane
+                                && session.slot == row.slot
                         })
                         .map(|session| session.preview_value(profile))
                         .unwrap_or_else(|| row.value_text(profile));
                     SelectRowSnapshot {
                         index: index as u32,
-                        title: row.label().to_string(),
+                        title: row.label(),
                         subtitle: String::new(),
                         artist: value.clone(),
                         difficulty_name: String::new(),

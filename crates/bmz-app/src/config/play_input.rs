@@ -381,7 +381,7 @@ pub fn play_binding(control: &str, lane: LaneConfig) -> BindingConfigEntry {
     }
 }
 
-fn gamepad_play_binding(control: &str, lane: LaneConfig) -> BindingConfigEntry {
+pub fn gamepad_play_binding(control: &str, lane: LaneConfig) -> BindingConfigEntry {
     BindingConfigEntry {
         device: "gamepad".to_string(),
         control: control.to_string(),

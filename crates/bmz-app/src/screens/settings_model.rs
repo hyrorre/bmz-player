@@ -2,8 +2,8 @@ use bmz_core::lane::KeyMode;
 use bmz_render::scene::SelectRowKind;
 
 use crate::config::key_config::{
-    KEY_CONFIG_MODES, format_play_keyboard_binding, key_mode_settings_path,
-    lane_entries_for_key_mode, lane_label,
+    KEY_BINDING_SLOTS, KEY_CONFIG_MODES, KeyBindingSlot, binding_row_label, format_play_binding,
+    key_mode_settings_path, lane_entries_for_key_mode,
 };
 use crate::config::profile_config::{LaneConfig, ProfileConfig};
 use crate::config::settings_registry::{SettingsEntryId, format_settings_value};
@@ -82,15 +82,16 @@ impl ConfigSelectRow {
 pub struct KeyBindingSelectRow {
     pub key_mode: KeyMode,
     pub lane: LaneConfig,
+    pub slot: KeyBindingSlot,
 }
 
 impl KeyBindingSelectRow {
-    pub fn label(self) -> &'static str {
-        lane_label(self.lane)
+    pub fn label(self) -> String {
+        binding_row_label(self.lane, self.slot)
     }
 
     pub fn value_text(self, profile: &ProfileConfig) -> String {
-        format_play_keyboard_binding(profile, self.key_mode, self.lane)
+        format_play_binding(profile, self.key_mode, self.lane, self.slot)
     }
 }
 
@@ -155,9 +156,15 @@ fn key_mode_folder_items() -> Vec<SelectItem> {
 }
 
 fn key_binding_items(key_mode: KeyMode) -> Vec<SelectItem> {
-    lane_entries_for_key_mode(key_mode)
-        .into_iter()
-        .map(|lane| SelectItem::KeyBinding(KeyBindingSelectRow { key_mode, lane }))
+    let lanes = lane_entries_for_key_mode(key_mode);
+    KEY_BINDING_SLOTS
+        .iter()
+        .copied()
+        .flat_map(|slot| {
+            lanes.iter().copied().map(move |lane| {
+                SelectItem::KeyBinding(KeyBindingSelectRow { key_mode, lane, slot })
+            })
+        })
         .collect()
 }
 
@@ -222,18 +229,34 @@ mod tests {
     #[test]
     fn settings_keys_7k_lists_lanes() {
         let items = load_settings_items("bmz-settings:keys:7k");
-        assert_eq!(items.len(), 8);
+        assert_eq!(items.len(), 8 * KEY_BINDING_SLOTS.len());
         assert!(matches!(
             &items[0],
             SelectItem::KeyBinding(row)
-                if row.key_mode == KeyMode::K7 && row.lane == LaneConfig::Scratch
+                if row.key_mode == KeyMode::K7
+                    && row.lane == LaneConfig::Scratch
+                    && row.slot == KeyBindingSlot::KeyboardPrimary
+        ));
+        assert!(matches!(
+            &items[8],
+            SelectItem::KeyBinding(row)
+                if row.key_mode == KeyMode::K7
+                    && row.lane == LaneConfig::Scratch
+                    && row.slot == KeyBindingSlot::KeyboardSecondary
+        ));
+        assert!(matches!(
+            &items[16],
+            SelectItem::KeyBinding(row)
+                if row.key_mode == KeyMode::K7
+                    && row.lane == LaneConfig::Scratch
+                    && row.slot == KeyBindingSlot::Controller
         ));
     }
 
     #[test]
     fn settings_keys_14k_lists_lanes() {
         let items = load_settings_items("bmz-settings:keys:14k");
-        assert_eq!(items.len(), 16);
+        assert_eq!(items.len(), 16 * KEY_BINDING_SLOTS.len());
     }
 
     #[test]

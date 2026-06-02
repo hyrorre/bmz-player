@@ -243,14 +243,14 @@ pub enum SelectItem {
 }
 
 impl SelectItem {
-    pub fn display_name(&self) -> &str {
+    pub fn display_name(&self) -> String {
         match self {
-            Self::Folder { name, .. } => name.as_str(),
-            Self::Chart(row) => row.display_title(),
-            Self::Course(row) => row.title.as_str(),
-            Self::Config(row) => row.label(),
+            Self::Folder { name, .. } => name.clone(),
+            Self::Chart(row) => row.display_title().to_string(),
+            Self::Course(row) => row.title.clone(),
+            Self::Config(row) => row.label().to_string(),
             Self::KeyBinding(row) => row.label(),
-            Self::AdvancedSettings => "詳細設定",
+            Self::AdvancedSettings => "詳細設定".to_string(),
         }
     }
 }

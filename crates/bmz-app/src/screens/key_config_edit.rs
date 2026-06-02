@@ -1,6 +1,6 @@
 use bmz_core::lane::KeyMode;
 
-use crate::config::key_config::{format_play_keyboard_binding, snapshot_play_bindings};
+use crate::config::key_config::{KeyBindingSlot, format_play_binding, snapshot_play_bindings};
 use crate::config::profile_config::{LaneConfig, ProfileConfig};
 
 /// キー割り当ての待ち受け状態。
@@ -8,15 +8,22 @@ use crate::config::profile_config::{LaneConfig, ProfileConfig};
 pub struct KeyConfigEditSession {
     pub key_mode: KeyMode,
     pub target: LaneConfig,
+    pub slot: KeyBindingSlot,
     baseline_bindings: Vec<crate::config::profile_config::BindingConfigEntry>,
     pub listening: bool,
 }
 
 impl KeyConfigEditSession {
-    pub fn begin(key_mode: KeyMode, target: LaneConfig, profile: &ProfileConfig) -> Self {
+    pub fn begin(
+        key_mode: KeyMode,
+        target: LaneConfig,
+        slot: KeyBindingSlot,
+        profile: &ProfileConfig,
+    ) -> Self {
         Self {
             key_mode,
             target,
+            slot,
             baseline_bindings: snapshot_play_bindings(&profile.input, key_mode),
             listening: true,
         }
@@ -32,9 +39,9 @@ impl KeyConfigEditSession {
 
     pub fn preview_value(&self, profile: &ProfileConfig) -> String {
         if self.listening {
-            "PRESS KEY".to_string()
+            self.slot.listen_hint().to_string()
         } else {
-            format_play_keyboard_binding(profile, self.key_mode, self.target)
+            format_play_binding(profile, self.key_mode, self.target, self.slot)
         }
     }
 }
