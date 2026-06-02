@@ -1213,6 +1213,7 @@ impl WinitApp {
             settings_editing: self.settings_edit.is_some() || self.key_config_edit.is_some(),
             search_word,
             search_word_alpha,
+            mouse_position: self.cursor_position_normalized(),
         }
     }
 

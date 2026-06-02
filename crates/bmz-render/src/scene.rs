@@ -57,6 +57,8 @@ pub struct SelectSnapshot {
     /// `search_word` に乗せる不透明度倍率 (0.0..=1.0)。placeholder /
     /// メッセージ表示時は薄く (< 1.0)、実入力中は 1.0。
     pub search_word_alpha: f32,
+    /// Select skin mouse position in normalized screen coordinates.
+    pub mouse_position: Option<(f32, f32)>,
 }
 
 impl Default for SelectSnapshot {
@@ -94,6 +96,7 @@ impl Default for SelectSnapshot {
             settings_editing: false,
             search_word: String::new(),
             search_word_alpha: 1.0,
+            mouse_position: None,
         }
     }
 }

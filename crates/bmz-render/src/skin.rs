@@ -1487,6 +1487,8 @@ pub struct SkinDrawState {
     pub select_mode_index: usize,
     pub select_sort_index: usize,
     pub select_ln_mode_index: usize,
+    pub mouse_x: Option<f32>,
+    pub mouse_y: Option<f32>,
     pub combo: u32,
     pub max_combo: u32,
     pub ex_score: u32,
@@ -1719,6 +1721,8 @@ impl Default for SkinDrawState {
             select_mode_index: 0,
             select_sort_index: 0,
             select_ln_mode_index: 0,
+            mouse_x: None,
+            mouse_y: None,
             combo: 0,
             max_combo: 0,
             ex_score: 0,
@@ -2432,6 +2436,9 @@ impl SkinDocument {
         let is_hidden_cover_destination =
             self.hidden_cover.iter().any(|cover| cover.id == destination.id);
         apply_skin_offset_to_frame(destination, &mut frame, state, is_hidden_cover_destination);
+        if !destination_mouse_rect_contains(destination, frame, state) {
+            return None;
+        }
         if let Some(visualizer) =
             self.hiterror_visualizer.iter().find(|visualizer| visualizer.id == destination.id)
         {
@@ -2976,6 +2983,9 @@ impl SkinDocument {
         dynamic_timers: Option<&mut DynamicTimerRuntime>,
     ) -> (SkinDrawState, Option<&'a SelectRowSnapshot>) {
         let selected_row = snapshot.rows.iter().find(|row| row.index == snapshot.selected_index);
+        let mouse_position = snapshot
+            .mouse_position
+            .map(|(x, y)| (x.clamp(0.0, 1.0) * self.w as f32, y.clamp(0.0, 1.0) * self.h as f32));
         let mut state = SkinDrawState {
             elapsed_ms: (snapshot.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32,
             select_bar_elapsed_ms: (snapshot.selection_time.0 / 1_000)
@@ -3031,6 +3041,8 @@ impl SkinDocument {
             in_settings: snapshot.in_settings,
             settings_editing: snapshot.settings_editing,
             select_chart_key_mode: selected_row.and_then(|row| row.chart_key_mode),
+            mouse_x: mouse_position.map(|position| position.0),
+            mouse_y: mouse_position.map(|position| position.1),
             ..SkinDrawState::default()
         };
         if let Some(runtime) = dynamic_timers {
@@ -3177,6 +3189,9 @@ impl SkinDocument {
         let elapsed = skin_timer_elapsed_ms(destination.timer, state)?;
         let mut frame = resolve_destination_frame(destination, elapsed, enabled_options, state)?;
         apply_skin_offset_to_frame(destination, &mut frame, state, false);
+        if !destination_mouse_rect_contains(destination, frame, state) {
+            return None;
+        }
         let rect = normalize_skin_frame_rect(frame, self.w, self.h);
         if rect.width <= 0.0 || rect.height <= 0.0 { None } else { Some(rect) }
     }
@@ -8347,6 +8362,29 @@ fn rect_contains(rect: Rect, x: f32, y: f32) -> bool {
     rect.x <= x && x <= rect.x + rect.width && rect.y <= y && y <= rect.y + rect.height
 }
 
+fn destination_mouse_rect_contains(
+    destination: &SkinDestinationDef,
+    frame: ResolvedSkinFrame,
+    state: SkinDrawState,
+) -> bool {
+    let Some(mouse_rect) = destination.mouse_rect else {
+        return true;
+    };
+    let (Some(mouse_x), Some(mouse_y)) = (state.mouse_x, state.mouse_y) else {
+        return true;
+    };
+    let relative_x = mouse_x - frame.x as f32;
+    let relative_y = mouse_y - frame.y as f32;
+    let x0 = mouse_rect.x as f32;
+    let x1 = (mouse_rect.x + mouse_rect.w) as f32;
+    let y0 = mouse_rect.y as f32;
+    let y1 = (mouse_rect.y + mouse_rect.h) as f32;
+    x0.min(x1) <= relative_x
+        && relative_x <= x0.max(x1)
+        && y0.min(y1) <= relative_y
+        && relative_y <= y0.max(y1)
+}
+
 fn multiply_bga_tints(destination: Color, bga: SkinBgaFrame) -> Color {
     Color::rgba(
         destination.r * bga.tint_r,
@@ -12296,6 +12334,66 @@ mod tests {
 
         assert_eq!(hit.target, SkinClickTarget::Event { event_id: 15, click: 2 });
         assert_eq!(hit.rect, Rect { x: 0.1, y: 0.7, width: 0.3, height: 0.1 });
+    }
+
+    #[test]
+    fn select_mouse_rect_gates_render_and_click_hits() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 5,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "button.png" }],
+                "image": [
+                    { "id": "button", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10, "act": 15 }
+                ],
+                "destination": [
+                    {
+                        "id": "button",
+                        "dst": [{ "x": 10, "y": 20, "w": 30, "h": 10 }],
+                        "mouseRect": { "x": 5, "y": 2, "w": 10, "h": 4 }
+                    }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = mock_source("1", 100.0, 100.0);
+        let inside =
+            SelectSnapshot { mouse_position: Some((0.16, 0.23)), ..SelectSnapshot::default() };
+        let outside =
+            SelectSnapshot { mouse_position: Some((0.01, 0.01)), ..SelectSnapshot::default() };
+
+        assert!(document.select_render_items(&sources, &inside).iter().any(|item| {
+            matches!(item, SkinRenderItem::Image { texture: SkinTextureId(9999), .. })
+        }));
+        assert!(!document.select_render_items(&sources, &outside).iter().any(|item| {
+            matches!(item, SkinRenderItem::Image { texture: SkinTextureId(9999), .. })
+        }));
+
+        assert!(
+            document
+                .select_click_hit(
+                    &sources,
+                    &inside,
+                    &crate::select_settings_dest::SelectSettingsDestIndex::default(),
+                    0.2,
+                    0.75,
+                )
+                .is_some()
+        );
+        assert!(
+            document
+                .select_click_hit(
+                    &sources,
+                    &outside,
+                    &crate::select_settings_dest::SelectSettingsDestIndex::default(),
+                    0.2,
+                    0.75,
+                )
+                .is_none()
+        );
     }
 
     #[test]
