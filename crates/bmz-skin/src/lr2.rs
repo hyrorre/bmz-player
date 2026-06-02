@@ -1134,7 +1134,9 @@ fn lr2_judge_slot(value: i32) -> usize {
 }
 
 fn set_judge_slot(slots: &mut Vec<JsonValue>, index: usize, value: JsonValue) {
-    slots.resize_with(index + 1, || json!({ "id": "", "dst": [] }));
+    if slots.len() <= index {
+        slots.resize_with(index + 1, || json!({ "id": "", "dst": [] }));
+    }
     slots[index] = value;
 }
 

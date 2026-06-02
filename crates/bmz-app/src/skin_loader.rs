@@ -1844,6 +1844,36 @@ mod tests {
             )),
             "expected PGREAT judge image to use the top WMII judge source row; got {items:?}"
         );
+
+        for (judge_index, label) in ["PGREAT", "GREAT", "GOOD", "BAD", "POOR"].iter().enumerate() {
+            let mut judge_ms = [None; bmz_render::skin::MAX_JUDGE_REGIONS];
+            judge_ms[0] = Some(100);
+            let mut judge_indices = [None; bmz_render::skin::MAX_JUDGE_REGIONS];
+            judge_indices[0] = Some(judge_index);
+            let state = bmz_render::skin::SkinDrawState {
+                elapsed_ms: 2_000,
+                play_timer_ms: Some(2_000),
+                judge_ms,
+                judge_index: judge_indices,
+                combo: 123,
+                ..Default::default()
+            };
+            let items = decoded.document.static_render_items(
+                &sources,
+                state,
+                bmz_render::skin::SkinTextState::default(),
+            );
+            assert!(
+                items.iter().any(|item| matches!(
+                    item,
+                    bmz_render::skin::SkinRenderItem::Image { texture, rect, tint, .. }
+                        if *texture == judge_texture
+                            && rect.height > 0.05
+                            && tint.a > 0.5
+                )),
+                "expected WMII {label} judge image to render; got {items:?}"
+            );
+        }
     }
 
     #[test]
