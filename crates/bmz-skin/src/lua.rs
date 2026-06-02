@@ -1858,6 +1858,12 @@ fn lua_table_to_json(
                 }
                 continue;
             }
+            if key == "act"
+                && let Some(event_id) = infer_constant_integer_at_load(function)
+            {
+                object.insert(key.clone(), JsonValue::Number(JsonNumber::from(event_id)));
+                continue;
+            }
             if key == "draw" {
                 if let Some(draw) =
                     infer_boolean_predicate(function, main_state_probe, object_id.as_deref())
@@ -2448,6 +2454,14 @@ fn infer_constant_number_at_load(function: &Function) -> Option<String> {
     match function.call::<Value>(()).ok()? {
         Value::Integer(value) => Some(value.to_string()),
         Value::Number(value) if value.is_finite() => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn infer_constant_integer_at_load(function: &Function) -> Option<i64> {
+    match function.call::<Value>(()).ok()? {
+        Value::Integer(value) => Some(value),
+        Value::Number(value) if value.is_finite() && value.fract() == 0.0 => Some(value as i64),
         _ => None,
     }
 }
