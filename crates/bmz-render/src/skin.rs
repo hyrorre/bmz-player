@@ -2670,6 +2670,60 @@ impl SkinDocument {
 
     /// 有効なオプション条件に基づいて `destination` エントリを展開し、
     /// 描画対象の `SkinDestinationDef` の参照リストを返す。
+    /// Returns the first dst frame of any text element whose `ref_id` equals
+    /// `ref_id`, normalized into the `0.0..=1.0` rendered viewport coordinate
+    /// space (top-left origin). Used by bmz-app to position the IME candidate
+    /// window over the search input region without touching the skin.
+    ///
+    /// Beatoraja skin sources use top-down y growing from the canvas top, but
+    /// `normalize_skin_frame_rect` flips that to a bottom-up rect before paint,
+    /// so directly using skin y here would land the IME cursor mirrored across
+    /// the canvas. Apply the same flip so the returned rect matches the on-
+    /// screen rendered position.
+    pub fn text_destination_rect_for_ref(&self, ref_id: i32) -> Option<(f32, f32, f32, f32)> {
+        let text_id = self.text.iter().find(|t| t.ref_id == ref_id)?.id.as_str();
+        let canvas_w = self.w.max(1) as f32;
+        let canvas_h = self.h.max(1) as f32;
+        // top-level destinations only — the search word region sits there
+        // in beatoraja m-select skins.
+        for entry in &self.destination {
+            let candidates: Vec<&SkinDestinationDef> = match entry {
+                DestinationListEntry::Single(d) => vec![d],
+                DestinationListEntry::Conditional { destinations, .. } => {
+                    destinations.iter().collect()
+                }
+            };
+            for dest in candidates {
+                if dest.id != text_id {
+                    continue;
+                }
+                for dst in &dest.dst {
+                    let frame_opt = match dst {
+                        SkinDstEntry::Frame(f) => Some(f),
+                        SkinDstEntry::Conditional { frames, .. } => frames.first(),
+                    };
+                    if let Some(frame) = frame_opt {
+                        let raw_x = frame.x.unwrap_or(0) as f32;
+                        let raw_y = frame.y.unwrap_or(0) as f32;
+                        let raw_w = frame.w.unwrap_or(0).max(0) as f32;
+                        let raw_h = frame.h.unwrap_or(0).max(0) as f32;
+                        if raw_w <= 0.0 || raw_h <= 0.0 {
+                            continue;
+                        }
+                        // Match `normalize_skin_frame_rect`: bottom-up render
+                        // origin → top-left coordinate the IME backend wants.
+                        let x = raw_x / canvas_w;
+                        let y = (canvas_h - (raw_y + raw_h)) / canvas_h;
+                        let w = raw_w / canvas_w;
+                        let h = raw_h / canvas_h;
+                        return Some((x, y, w, h));
+                    }
+                }
+            }
+        }
+        None
+    }
+
     pub fn all_destinations<'a>(&'a self, enabled_options: &[i32]) -> Vec<&'a SkinDestinationDef> {
         let mut result = Vec::new();
         for entry in &self.destination {
@@ -14355,6 +14409,38 @@ mod tests {
 
     fn approx_eq(actual: f32, expected: f32) -> bool {
         (actual - expected).abs() < 0.0001
+    }
+
+    #[test]
+    fn text_destination_rect_for_ref_returns_normalized_first_frame() {
+        let document: SkinDocument = serde_json::from_value(serde_json::json!({
+            "w": 1280,
+            "h": 720,
+            "text": [
+                { "id": "searchword", "ref": 30, "font": "f" },
+                { "id": "title", "ref": 10, "font": "f" }
+            ],
+            "destination": [
+                {
+                    "id": "title",
+                    "dst": [{ "x": 0, "y": 0, "w": 100, "h": 30 }]
+                },
+                {
+                    "id": "searchword",
+                    "dst": [{ "x": 640, "y": 360, "w": 320, "h": 36 }]
+                }
+            ]
+        }))
+        .unwrap();
+
+        let rect = document.text_destination_rect_for_ref(30).unwrap();
+        assert!(approx_eq(rect.0, 0.5));
+        // skin y=360, h=36 → flipped: (720 - 396) / 720 = 0.45
+        assert!(approx_eq(rect.1, 0.45));
+        assert!(approx_eq(rect.2, 0.25));
+        assert!(approx_eq(rect.3, 0.05));
+
+        assert!(document.text_destination_rect_for_ref(999).is_none());
     }
 
     fn unique_test_dir(name: &str) -> PathBuf {

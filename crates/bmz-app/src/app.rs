@@ -1790,6 +1790,41 @@ impl WinitApp {
         if let Some(window) = self.window.as_ref() {
             window.set_ime_allowed(enabled);
         }
+        if enabled {
+            self.update_search_ime_cursor_area();
+        }
+    }
+
+    /// Positions the OS IME candidate window over the search input region of
+    /// the active select skin (beatoraja `STRING_SEARCHWORD`, ref=30). No-op
+    /// when not in search mode or when the skin does not define such a text
+    /// element. Pixel coords are derived from the current window size and the
+    /// skin canvas; letterboxing is approximated by direct proportional scale,
+    /// which is close enough for IME candidate positioning.
+    fn update_search_ime_cursor_area(&self) {
+        if !self.search_mode {
+            return;
+        }
+        let Some(window) = self.window.as_ref() else { return };
+        let Some(document) = self.renderer.select_skin_document() else { return };
+        let Some((x_norm, y_norm, w_norm, h_norm)) =
+            document.text_destination_rect_for_ref(30)
+        else {
+            return;
+        };
+        // egui_winit と同じ規約で物理ピクセル top-left を渡す。winit 側で各
+        // バックエンドの座標系 (macOS は内部で `to_logical`) に変換される。
+        let size = window.inner_size();
+        let width = size.width as f32;
+        let height = size.height as f32;
+        let x = (x_norm * width).round() as i32;
+        let y = (y_norm * height).round() as i32;
+        let w = (w_norm * width).round().max(1.0) as u32;
+        let h = (h_norm * height).round().max(1.0) as u32;
+        window.set_ime_cursor_area(
+            winit::dpi::PhysicalPosition::new(x, y),
+            winit::dpi::PhysicalSize::new(w, h),
+        );
     }
 
     fn handle_search_key(&mut self, event: &winit::event::KeyEvent) -> bool {
@@ -4491,6 +4526,8 @@ impl ApplicationHandler for WinitApp {
             WindowEvent::Resized(size) => {
                 self.renderer
                     .resize_surface(SurfaceSize { width: size.width, height: size.height });
+                // 検索モード中はリサイズに合わせて IME 候補ウィンドウ位置を再計算する。
+                self.update_search_ime_cursor_area();
             }
             WindowEvent::Focused(focused) => {
                 self.focused = focused;
