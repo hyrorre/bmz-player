@@ -120,6 +120,10 @@ struct CsvBuilder<'a> {
     bga: Option<JsonValue>,
     destinations: Vec<JsonValue>,
     current: Option<CurrentObject>,
+    lr2_gauge_id: Option<String>,
+    lr2_gauge_add_x: i32,
+    lr2_gauge_add_y: i32,
+    current_has_destination: bool,
     next_id: usize,
 }
 
@@ -316,6 +320,10 @@ impl<'a> CsvBuilder<'a> {
             bga: None,
             destinations: Vec::new(),
             current: None,
+            lr2_gauge_id: None,
+            lr2_gauge_add_x: 0,
+            lr2_gauge_add_y: 0,
+            current_has_destination: false,
             next_id: 0,
         }
     }
@@ -556,28 +564,40 @@ impl<'a> CsvBuilder<'a> {
             self.current = None;
             return;
         };
-        let id = self.alloc_id("lr2-gauge");
+        let id = self.lr2_gauge_id.clone().unwrap_or_else(|| {
+            let id = self.alloc_id("lr2-gauge");
+            self.lr2_gauge_id = Some(id.clone());
+            id
+        });
         let node_count = (region.divx * region.divy).max(1);
-        let nodes = (0..node_count)
-            .map(|index| {
-                let image_id = format!("{id}-node-{index}");
-                let cell_w = (region.w / region.divx.max(1)).max(1);
-                let cell_h = (region.h / region.divy.max(1)).max(1);
-                self.images.push(json!({
-                    "id": image_id,
-                    "src": region.src,
-                    "x": region.x + cell_w * (index % region.divx.max(1)),
-                    "y": region.y + cell_h * (index / region.divx.max(1)),
-                    "w": cell_w,
-                    "h": cell_h,
-                    "divx": 1,
-                    "divy": 1,
-                    "cycle": region.cycle,
-                    "timer": region.timer,
-                }));
-                image_id
-            })
-            .collect::<Vec<_>>();
+        let mut nodes = self
+            .gauge
+            .as_ref()
+            .and_then(|gauge| gauge.get("nodes"))
+            .and_then(JsonValue::as_array)
+            .map(|nodes| nodes.clone())
+            .unwrap_or_default();
+        let base_node_index = nodes.len();
+        nodes.extend((0..node_count).map(|index| {
+            let image_id = format!("{id}-node-{}", base_node_index + index as usize);
+            let cell_w = (region.w / region.divx.max(1)).max(1);
+            let cell_h = (region.h / region.divy.max(1)).max(1);
+            self.images.push(json!({
+                "id": image_id,
+                "src": region.src,
+                "x": region.x + cell_w * (index % region.divx.max(1)),
+                "y": region.y + cell_h * (index / region.divx.max(1)),
+                "w": cell_w,
+                "h": cell_h,
+                "divx": 1,
+                "divy": 1,
+                "cycle": region.cycle,
+                "timer": region.timer,
+            }));
+            JsonValue::String(image_id)
+        }));
+        self.lr2_gauge_add_x = values[11];
+        self.lr2_gauge_add_y = values[12];
         self.gauge = Some(json!({
             "id": id,
             "nodes": nodes,
@@ -589,6 +609,7 @@ impl<'a> CsvBuilder<'a> {
             "endtime": values[18],
         }));
         self.current = Some(CurrentObject { id });
+        self.current_has_destination = false;
     }
 
     fn add_bga(&mut self) {
@@ -623,7 +644,7 @@ impl<'a> CsvBuilder<'a> {
         let Some(lane) = lr2_lane_to_beatoraja_index(values[1]) else {
             return;
         };
-        let frame = destination_frame(&values, self.header.h as i32);
+        let frame = note_destination_frame(&values, self.header.h as i32);
         self.note.size.push(values[6].abs());
         while self.note.dst.len() < lane as usize {
             self.note.dst.push(json!({ "time": 0, "x": 0, "y": 0, "w": 0, "h": 0 }));
@@ -738,8 +759,23 @@ impl<'a> CsvBuilder<'a> {
             return;
         };
         let values = parse_values(line);
-        let dst = destination_def(&current.id, &values, self.header.h as i32);
-        push_destination(&mut self.destinations, dst);
+        let dst = if self.lr2_gauge_id.as_deref() == Some(current.id.as_str()) {
+            gauge_destination_def(
+                &current.id,
+                &values,
+                self.header.h as i32,
+                self.lr2_gauge_add_x,
+                self.lr2_gauge_add_y,
+            )
+        } else {
+            destination_def(&current.id, &values, self.header.h as i32)
+        };
+        if self.current_has_destination {
+            push_destination(&mut self.destinations, dst);
+        } else {
+            self.destinations.push(dst);
+            self.current_has_destination = true;
+        }
     }
 
     fn ensure_judge(&mut self, index: usize) {
@@ -1073,6 +1109,23 @@ fn destination_def(id: &str, values: &[i32; 22], canvas_h: i32) -> JsonValue {
     })
 }
 
+fn gauge_destination_def(
+    id: &str,
+    values: &[i32; 22],
+    canvas_h: i32,
+    add_x: i32,
+    add_y: i32,
+) -> JsonValue {
+    let mut values = *values;
+    if add_x.abs() >= 1 {
+        values[5] = add_x * 50;
+    }
+    if add_y.abs() >= 1 {
+        values[6] = add_y * 50;
+    }
+    destination_def(id, &values, canvas_h)
+}
+
 fn push_destination(destinations: &mut Vec<JsonValue>, destination: JsonValue) {
     if let Some(previous) = destinations.last_mut()
         && merge_destination_entry(previous, destination.clone())
@@ -1137,6 +1190,26 @@ fn destination_frame(values: &[i32; 22], canvas_h: i32) -> JsonValue {
     })
 }
 
+fn note_destination_frame(values: &[i32; 22], canvas_h: i32) -> JsonValue {
+    let x = values[3];
+    let y = canvas_h - (values[4] + values[6]);
+    let w = values[5].abs();
+    let h = (values[4] + values[6]).max(values[6]).max(1);
+    json!({
+        "time": values[2],
+        "x": x,
+        "y": y,
+        "w": w,
+        "h": h,
+        "acc": values[7],
+        "a": values[8],
+        "r": values[9],
+        "g": values[10],
+        "b": values[11],
+        "angle": values[14],
+    })
+}
+
 fn note_vec_mut(note: &mut NoteState, slot: NoteSlot) -> &mut Vec<String> {
     match slot {
         NoteSlot::Note => &mut note.note,
@@ -1156,10 +1229,10 @@ fn note_vec_mut(note: &mut NoteState, slot: NoteSlot) -> &mut Vec<String> {
 
 fn lr2_lane_to_beatoraja_index(lane: i32) -> Option<i32> {
     match lane {
-        10 => Some(0),
-        1..=9 => Some(lane),
-        20 => Some(8),
-        11..=19 => Some(lane - 2),
+        0 => Some(7),
+        1..=9 => Some(lane - 1),
+        10 | 20 => Some(15),
+        11..=19 => Some(lane - 3),
         _ => None,
     }
 }
@@ -1500,6 +1573,42 @@ mod tests {
         assert_eq!(frames[0]["a"], 0);
         assert_eq!(frames[1]["a"], 255);
         assert_eq!(builder.destinations[0]["loop"], 500);
+    }
+
+    #[test]
+    fn lr2_note_destination_uses_lane_region_height() {
+        let mut values = [0; 22];
+        values[2] = 0;
+        values[3] = 75;
+        values[4] = 704;
+        values[5] = 90;
+        values[6] = 27;
+
+        let frame = note_destination_frame(&values, 1080);
+
+        assert_eq!(frame["x"], 75);
+        assert_eq!(frame["y"], 349);
+        assert_eq!(frame["w"], 90);
+        assert_eq!(frame["h"], 731);
+    }
+
+    #[test]
+    fn lr2_gauge_destination_uses_additive_part_span() {
+        let mut values = [0; 22];
+        values[2] = 1400;
+        values[3] = 54;
+        values[4] = 897;
+        values[5] = 8;
+        values[6] = 28;
+        values[8] = 255;
+
+        let destination = gauge_destination_def("gauge", &values, 1080, 9, 0);
+        let frame = destination["dst"].as_array().unwrap().first().unwrap();
+
+        assert_eq!(frame["x"], 54);
+        assert_eq!(frame["y"], 155);
+        assert_eq!(frame["w"], 450);
+        assert_eq!(frame["h"], 28);
     }
 
     #[test]

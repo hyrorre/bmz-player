@@ -5258,6 +5258,12 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool 
         352 => state.target_ex_score.is_some_and(|target| state.ex_score > target),
         353 => state.target_ex_score.is_some_and(|target| state.ex_score < target),
         354 => state.target_ex_score.is_some_and(|target| state.ex_score == target),
+        // OPTION_GAUGE_GROOVE / OPTION_GAUGE_HARD / OPTION_GAUGE_EX.
+        // beatoraja uses the current gauge type index: 0..2 are groove-family,
+        // 3+ are hard-family, and 1046 is true for assist/easy/ex variants.
+        42 => state.gauge_type <= 2,
+        43 => state.gauge_type >= 3,
+        1046 => matches!(state.gauge_type, 0 | 1 | 4 | 5 | 7 | 8),
         601..=608 => false,
         // OPTION_DIFFICULTY0..5. 0 は UNKNOWN/OTHER、1..5 は BMS #DIFFICULTY。
         150 => state.difficulty <= 0 || state.difficulty > 5,

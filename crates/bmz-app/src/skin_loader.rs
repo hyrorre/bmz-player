@@ -1642,6 +1642,91 @@ mod tests {
     }
 
     #[test]
+    fn wmii_fhd_lr2skin_uses_full_note_lane_region_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/WMII_FHD/play/FHDPLAY_AC.lr2skin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let decoded = decode_beatoraja_skin(&skin_path, SkinKind::Play).unwrap();
+        let area = decoded
+            .document
+            .note_lane_area(
+                bmz_core::lane::Lane::Scratch,
+                bmz_core::lane::KeyMode::K7,
+                &decoded.document.enabled_options(),
+            )
+            .expect("WMII scratch lane area should decode");
+
+        assert!((area.x - 75.0 / 1920.0).abs() < 0.001);
+        assert!(
+            area.height > 0.65,
+            "expected LR2 note.dst to define the full scroll lane height, got {area:?}"
+        );
+    }
+
+    #[test]
+    fn wmii_fhd_lr2skin_renders_groove_gauge_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/WMII_FHD/play/FHDPLAY_AC.lr2skin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let decoded = decode_beatoraja_skin(&skin_path, SkinKind::Play).unwrap();
+        let gauge_texture = decoded
+            .sources
+            .iter()
+            .find(|source| source.source_id == "19")
+            .expect("WMII gauge source should load")
+            .texture;
+        let sources = decoded
+            .sources
+            .iter()
+            .map(|source| {
+                (
+                    source.source_id.clone(),
+                    SkinDocumentTexture {
+                        source_id: source.source_id.clone(),
+                        texture: source.texture,
+                        source_size: SkinImageSize {
+                            width: source.asset.width as f32,
+                            height: source.asset.height as f32,
+                        },
+                    },
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        let state = bmz_render::skin::SkinDrawState {
+            elapsed_ms: 2_000,
+            play_timer_ms: Some(2_000),
+            gauge: 80.0,
+            gauge_max: 100.0,
+            gauge_border: 80.0,
+            gauge_type: bmz_core::clear::GaugeType::AssistEasy as i32,
+            ..Default::default()
+        };
+
+        let items = decoded.document.static_render_items(
+            &sources,
+            state,
+            bmz_render::skin::SkinTextState::default(),
+        );
+        assert!(
+            items.iter().any(|item| matches!(
+                item,
+                bmz_render::skin::SkinRenderItem::Image { texture, rect, tint, .. }
+                    if *texture == gauge_texture
+                        && (rect.x - 54.0 / 1920.0).abs() < 0.001
+                        && rect.width > 0.004
+                        && tint.a > 0.5
+            )),
+            "expected WMII groove gauge item from source 19; got {items:?}"
+        );
+    }
+
+    #[test]
     fn wildcard_skin_source_prefers_filepath_default() {
         let root = unique_test_dir("bmz-json-source");
         std::fs::create_dir_all(root.join("parts")).unwrap();
