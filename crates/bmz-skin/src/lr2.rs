@@ -640,7 +640,10 @@ impl<'a> CsvBuilder<'a> {
             return;
         };
         let values = parse_values(line);
-        self.note.group.push(destination_def(&current.id, &values, self.header.h as i32));
+        push_destination(
+            &mut self.note.group,
+            destination_def(&current.id, &values, self.header.h as i32),
+        );
     }
 
     fn add_judge_image(&mut self, line: &CsvLine, index: usize) {
@@ -678,7 +681,7 @@ impl<'a> CsvBuilder<'a> {
                 entry.get("id").and_then(JsonValue::as_str) == Some(current.id.as_str())
             })
         {
-            *entry = dst;
+            merge_destination_entry(entry, dst);
         }
     }
 
@@ -702,7 +705,7 @@ impl<'a> CsvBuilder<'a> {
                 entry.get("id").and_then(JsonValue::as_str) == Some(current.id.as_str())
             })
         {
-            *entry = dst;
+            merge_destination_entry(entry, dst);
         }
     }
 
@@ -736,7 +739,7 @@ impl<'a> CsvBuilder<'a> {
         };
         let values = parse_values(line);
         let dst = destination_def(&current.id, &values, self.header.h as i32);
-        self.destinations.push(dst);
+        push_destination(&mut self.destinations, dst);
     }
 
     fn ensure_judge(&mut self, index: usize) {
@@ -1040,7 +1043,7 @@ impl Processor {
     }
 
     fn active(&self) -> bool {
-        self.stack.last().map(|state| state.active).unwrap_or(true)
+        self.stack.iter().all(|state| state.active)
     }
 
     fn eval_if(&self, line: &CsvLine) -> bool {
@@ -1068,6 +1071,42 @@ fn destination_def(id: &str, values: &[i32; 22], canvas_h: i32) -> JsonValue {
         "op": op,
         "dst": [frame],
     })
+}
+
+fn push_destination(destinations: &mut Vec<JsonValue>, destination: JsonValue) {
+    if let Some(previous) = destinations.last_mut()
+        && merge_destination_entry(previous, destination.clone())
+    {
+        return;
+    }
+    destinations.push(destination);
+}
+
+fn merge_destination_entry(previous: &mut JsonValue, destination: JsonValue) -> bool {
+    let Some(previous_id) = previous.get("id").and_then(JsonValue::as_str) else {
+        return false;
+    };
+    let Some(next_id) = destination.get("id").and_then(JsonValue::as_str) else {
+        return false;
+    };
+    if previous_id != next_id {
+        return false;
+    }
+
+    let Some(next_frames) = destination.get("dst").and_then(JsonValue::as_array) else {
+        return false;
+    };
+    let is_empty_placeholder = previous.as_object().is_some_and(|object| object.len() == 2)
+        && previous.get("dst").and_then(JsonValue::as_array).is_some_and(Vec::is_empty);
+    if is_empty_placeholder {
+        *previous = destination;
+        return true;
+    }
+    let Some(previous_frames) = previous.get_mut("dst").and_then(JsonValue::as_array_mut) else {
+        return false;
+    };
+    previous_frames.extend(next_frames.iter().cloned());
+    true
 }
 
 fn destination_frame(values: &[i32; 22], canvas_h: i32) -> JsonValue {
@@ -1342,6 +1381,125 @@ mod tests {
             })
         );
         assert!(processor.active());
+    }
+
+    #[test]
+    fn processor_keeps_outer_false_branch_inactive_inside_true_nested_if() {
+        let mut ops = HashMap::new();
+        ops.insert(900, false);
+        ops.insert(901, true);
+        let mut processor = Processor::new(ops);
+        assert!(!processor.should_execute(&CsvLine {
+            command: "IF".into(),
+            fields: vec!["#IF".into(), "900".into()],
+        }));
+        assert!(!processor.active());
+        assert!(!processor.should_execute(&CsvLine {
+            command: "IF".into(),
+            fields: vec!["#IF".into(), "901".into()],
+        }));
+        assert!(!processor.active());
+        assert!(
+            !processor.should_execute(&CsvLine {
+                command: "ENDIF".into(),
+                fields: vec!["#ENDIF".into()],
+            })
+        );
+        assert!(!processor.active());
+        assert!(
+            !processor.should_execute(&CsvLine {
+                command: "ENDIF".into(),
+                fields: vec!["#ENDIF".into()],
+            })
+        );
+        assert!(processor.active());
+    }
+
+    #[test]
+    fn consecutive_lr2_destinations_merge_into_keyframes() {
+        let path = Path::new("skin/play/test.lr2skin");
+        let files = BTreeMap::new();
+        let mut builder = CsvBuilder::new(path, Header::default(), &files);
+        builder
+            .execute(&CsvLine {
+                command: "IMAGE".into(),
+                fields: vec!["#IMAGE".into(), "parts/frame.png".into()],
+            })
+            .unwrap();
+        builder
+            .execute(&CsvLine {
+                command: "SRC_IMAGE".into(),
+                fields: vec![
+                    "#SRC_IMAGE".into(),
+                    "0".into(),
+                    "0".into(),
+                    "0".into(),
+                    "0".into(),
+                    "10".into(),
+                    "20".into(),
+                    "1".into(),
+                    "1".into(),
+                    "0".into(),
+                    "0".into(),
+                ],
+            })
+            .unwrap();
+        builder
+            .execute(&CsvLine {
+                command: "DST_IMAGE".into(),
+                fields: vec![
+                    "#DST_IMAGE".into(),
+                    "0".into(),
+                    "0".into(),
+                    "10".into(),
+                    "20".into(),
+                    "30".into(),
+                    "40".into(),
+                    "0".into(),
+                    "0".into(),
+                    "255".into(),
+                    "255".into(),
+                    "255".into(),
+                    "1".into(),
+                    "1".into(),
+                    "0".into(),
+                    "0".into(),
+                    "500".into(),
+                    "0".into(),
+                    "41".into(),
+                    "30".into(),
+                    "0".into(),
+                ],
+            })
+            .unwrap();
+        builder
+            .execute(&CsvLine {
+                command: "DST_IMAGE".into(),
+                fields: vec![
+                    "#DST_IMAGE".into(),
+                    "0".into(),
+                    "500".into(),
+                    "10".into(),
+                    "20".into(),
+                    "30".into(),
+                    "40".into(),
+                    "0".into(),
+                    "255".into(),
+                    "255".into(),
+                    "255".into(),
+                    "255".into(),
+                    "1".into(),
+                    "1".into(),
+                ],
+            })
+            .unwrap();
+
+        assert_eq!(builder.destinations.len(), 1);
+        let frames = builder.destinations[0].get("dst").and_then(JsonValue::as_array).unwrap();
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[0]["a"], 0);
+        assert_eq!(frames[1]["a"], 255);
+        assert_eq!(builder.destinations[0]["loop"], 500);
     }
 
     #[test]

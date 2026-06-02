@@ -1543,6 +1543,7 @@ mod tests {
             })
             .collect::<std::collections::HashMap<_, _>>();
         let state = bmz_render::skin::SkinDrawState {
+            elapsed_ms: 2_000,
             play_timer_ms: Some(2_000),
             ready_timer_ms: Some(2_000),
             ..Default::default()
@@ -1554,6 +1555,90 @@ mod tests {
             bmz_render::skin::SkinTextState::default(),
         );
         assert!(!items.is_empty());
+    }
+
+    #[test]
+    fn wmii_fhd_lr2skin_renders_ac_bga_frame_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/WMII_FHD/play/FHDPLAY_AC.lr2skin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let decoded = decode_beatoraja_skin(&skin_path, SkinKind::Play).unwrap();
+        let frame_image = decoded
+            .document
+            .image
+            .iter()
+            .find(|image| image.src == "2" && image.x == 1016 && image.y == 1276 && image.w == 389)
+            .expect("WMII AC frame image should decode");
+        let frame_destination = decoded
+            .document
+            .destination
+            .iter()
+            .filter_map(|entry| match entry {
+                bmz_render::skin::DestinationListEntry::Single(destination) => Some(destination),
+                bmz_render::skin::DestinationListEntry::Conditional { destinations, .. } => {
+                    destinations.iter().find(|destination| destination.id == frame_image.id)
+                }
+            })
+            .find(|destination| destination.id == frame_image.id && destination.op == [41, 30])
+            .expect("WMII AC frame destination should decode");
+        assert!(
+            frame_destination.dst.len() >= 2,
+            "expected WMII AC frame destination keyframes, got {:?}",
+            frame_destination.dst
+        );
+        let frame_texture = decoded
+            .sources
+            .iter()
+            .find(|source| source.source_id == "2")
+            .expect("WMII AC frame source should load")
+            .texture;
+        let sources = decoded
+            .sources
+            .iter()
+            .map(|source| {
+                (
+                    source.source_id.clone(),
+                    SkinDocumentTexture {
+                        source_id: source.source_id.clone(),
+                        texture: source.texture,
+                        source_size: SkinImageSize {
+                            width: source.asset.width as f32,
+                            height: source.asset.height as f32,
+                        },
+                    },
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        let state = bmz_render::skin::SkinDrawState {
+            elapsed_ms: 2_000,
+            play_timer_ms: Some(2_000),
+            ready_timer_ms: Some(2_000),
+            has_bga: true,
+            bga_enabled: true,
+            autoplay: false,
+            skin_loaded: true,
+            ..Default::default()
+        };
+
+        let items = decoded.document.static_render_items(
+            &sources,
+            state,
+            bmz_render::skin::SkinTextState::default(),
+        );
+        assert!(
+            items.iter().any(|item| matches!(
+                item,
+                bmz_render::skin::SkinRenderItem::Image { texture, rect, tint, .. }
+                    if *texture == frame_texture
+                        && (rect.x - 845.0 / 1920.0).abs() < 0.001
+                        && (rect.width - 389.0 / 1920.0).abs() < 0.001
+                        && tint.a > 0.5
+            )),
+            "expected WMII AC BGA frame item from source 2; got {items:?}"
+        );
     }
 
     #[test]
