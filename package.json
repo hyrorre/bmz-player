@@ -1,0 +1,26 @@
+{
+  "name": "bmz-ir",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build": "nuxt build",
+    "dev": "TMPDIR=/tmp nuxt dev",
+    "generate": "nuxt generate",
+    "preview": "nuxt preview",
+    "postinstall": "nuxt prepare"
+  },
+  "dependencies": {
+    "nuxt": "^4.4.6"
+  },
+  "devDependencies": {
+    "@nuxt/eslint": "^1.15.2",
+    "@types/bun": "^1.3.14",
+    "prettier": "3.8.3",
+    "vue-tsc": "^3.3.3"
+  },
+  "overrides": {
+    "chokidar": "3.6.0",
+    "vite": "^8.0.0",
+    "vue": "3.6.0-beta.13"
+  }
+}

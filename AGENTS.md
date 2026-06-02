@@ -511,3 +511,9 @@ cargo run -p bmz-app -- --boot-play-sample --smoke-exit-after-frames 3
 cargo run -p bmz-app -- --boot-play-sample --autoplay-on-start --smoke-exit-on-result
 cargo run -p bmz-app -- --boot-play-sample --boot-replay 1 --smoke-exit-on-result
 ```
+
+## IR (Internet Ranking)
+
+bun / Nuxt を使用して、 Internet Ranking 機能の API と Frontend の作成中。
+
+`bun dev` 等でエラーが起きる場合は `export TMPDIR=/tmp` を実行してみる。
