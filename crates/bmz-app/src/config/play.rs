@@ -99,6 +99,27 @@ pub fn lane_from_config(config: LaneConfig) -> Lane {
     }
 }
 
+pub fn lane_to_config(lane: Lane) -> LaneConfig {
+    match lane {
+        Lane::Scratch => LaneConfig::Scratch,
+        Lane::Key1 => LaneConfig::Key1,
+        Lane::Key2 => LaneConfig::Key2,
+        Lane::Key3 => LaneConfig::Key3,
+        Lane::Key4 => LaneConfig::Key4,
+        Lane::Key5 => LaneConfig::Key5,
+        Lane::Key6 => LaneConfig::Key6,
+        Lane::Key7 => LaneConfig::Key7,
+        Lane::Scratch2 => LaneConfig::Scratch2,
+        Lane::Key8 => LaneConfig::Key8,
+        Lane::Key9 => LaneConfig::Key9,
+        Lane::Key10 => LaneConfig::Key10,
+        Lane::Key11 => LaneConfig::Key11,
+        Lane::Key12 => LaneConfig::Key12,
+        Lane::Key13 => LaneConfig::Key13,
+        Lane::Key14 => LaneConfig::Key14,
+    }
+}
+
 pub fn lane_binding_from_profile_input(input: &ProfileInputConfig) -> LaneBinding {
     lane_binding_for_key_mode(input, KeyMode::K7)
         .unwrap_or_else(|_| LaneBinding { entries: Vec::new() })

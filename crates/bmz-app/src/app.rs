@@ -1362,10 +1362,15 @@ impl WinitApp {
         }
     }
 
-    fn begin_key_config_edit(&mut self, lane: crate::config::profile_config::LaneConfig) {
-        self.key_config_edit = Some(KeyConfigEditSession::begin(lane, &self.boot.profile_config));
+    fn begin_key_config_edit(
+        &mut self,
+        key_mode: bmz_core::lane::KeyMode,
+        lane: crate::config::profile_config::LaneConfig,
+    ) {
+        self.key_config_edit =
+            Some(KeyConfigEditSession::begin(key_mode, lane, &self.boot.profile_config));
         self.play_system_sound(crate::system_sound::SoundType::OptionChange);
-        tracing::info!(?lane, "key config listen started");
+        tracing::info!(?key_mode, ?lane, "key config listen started");
     }
 
     fn cancel_key_config_edit(&mut self) {
@@ -1406,10 +1411,14 @@ impl WinitApp {
             return;
         }
         let lane = session.target;
-        if let Err(error) =
-            apply_play_keyboard_binding(&mut self.boot.profile_config.input, lane, control)
-        {
-            tracing::warn!(%error, ?lane, control, "failed to apply key binding");
+        let key_mode = session.key_mode;
+        if let Err(error) = apply_play_keyboard_binding(
+            &mut self.boot.profile_config.input,
+            key_mode,
+            lane,
+            control,
+        ) {
+            tracing::warn!(%error, ?key_mode, ?lane, control, "failed to apply key binding");
             return;
         }
         self.commit_key_config_edit();
@@ -1504,7 +1513,7 @@ impl WinitApp {
                     true
                 }
                 Some(SelectItem::KeyBinding(row)) => {
-                    self.begin_key_config_edit(row.lane);
+                    self.begin_key_config_edit(row.key_mode, row.lane);
                     true
                 }
                 Some(SelectItem::Folder { .. }) => {
@@ -2081,7 +2090,7 @@ impl WinitApp {
             }
             Some(SelectItem::Config(_)) => {}
             Some(SelectItem::KeyBinding(row)) => {
-                self.begin_key_config_edit(row.lane);
+                self.begin_key_config_edit(row.key_mode, row.lane);
             }
             Some(SelectItem::AdvancedSettings) => {
                 self.open_advanced_settings_from_select();
@@ -5726,7 +5735,9 @@ fn select_snapshot_rows(
                 }
                 SelectItem::KeyBinding(row) => {
                     let value = key_config_edit
-                        .filter(|session| session.target == row.lane)
+                        .filter(|session| {
+                            session.key_mode == row.key_mode && session.target == row.lane
+                        })
                         .map(|session| session.preview_value(profile))
                         .unwrap_or_else(|| row.value_text(profile));
                     SelectRowSnapshot {
