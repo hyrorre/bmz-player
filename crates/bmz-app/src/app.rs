@@ -1328,25 +1328,30 @@ impl WinitApp {
         let Some(session) = self.settings_edit.take() else {
             return;
         };
+        let entry_id = session.entry_id;
         session.restore(&mut self.boot.profile_config);
+        self.sync_select_play_options_from_profile_if_needed(entry_id);
         self.play_system_sound(crate::system_sound::SoundType::FolderClose);
-        tracing::info!(entry_id = ?session.entry_id, "settings edit cancelled");
+        tracing::info!(?entry_id, "settings edit cancelled");
     }
 
     fn commit_settings_edit(&mut self) {
         let Some(session) = self.settings_edit.take() else {
             return;
         };
+        let entry_id = session.entry_id;
         self.boot.profile_config.updated_at = now_unix_seconds();
         match save_profile_config(&self.boot.profile_paths.profile_toml, &self.boot.profile_config)
         {
             Ok(()) => {
+                self.sync_select_play_options_from_profile_if_needed(entry_id);
                 self.play_system_sound(crate::system_sound::SoundType::OptionChange);
-                tracing::info!(entry_id = ?session.entry_id, "settings edit saved");
+                tracing::info!(?entry_id, "settings edit saved");
             }
             Err(error) => {
-                tracing::error!(%error, entry_id = ?session.entry_id, "failed to save settings");
+                tracing::error!(%error, ?entry_id, "failed to save settings");
                 session.restore(&mut self.boot.profile_config);
+                self.sync_select_play_options_from_profile_if_needed(entry_id);
             }
         }
     }
@@ -1361,8 +1366,34 @@ impl WinitApp {
         let entry_id = session.entry_id;
         let delta = direction * crate::config::settings_registry::settings_adjust_step(entry_id);
         if adjust_settings_draft(&mut self.boot.profile_config, session, delta) {
+            self.sync_select_play_options_from_profile_if_needed(entry_id);
             self.play_system_sound(crate::system_sound::SoundType::OptionChange);
         }
+    }
+
+    fn sync_select_play_options_from_profile_if_needed(&mut self, entry_id: SettingsEntryId) {
+        if !SettingsEntryId::PLAY_ENTRIES.contains(&entry_id) {
+            return;
+        }
+        self.sync_select_play_options_from_profile();
+    }
+
+    fn sync_select_play_options_from_profile(&mut self) {
+        let play = &self.boot.profile_config.play;
+        self.gauge_option = if play.gauge == GaugeTypeConfig::AutoShift {
+            GaugeTypeConfig::ExHard
+        } else {
+            play.gauge
+        };
+        self.gauge_auto_shift_option = if play.gauge == GaugeTypeConfig::AutoShift {
+            GaugeAutoShiftConfig::BestClear
+        } else {
+            play.gauge_auto_shift
+        };
+        self.arrange_option = arrange_option_from_profile(play.random);
+        self.target_option = target_option_from_profile(play.target);
+        self.assist_option =
+            if play.auto_play { AssistOption::Autoplay } else { AssistOption::Normal };
     }
 
     fn route_settings_control(&mut self, control: &str) -> bool {
@@ -1408,6 +1439,10 @@ impl WinitApp {
                 }
                 Some(SelectItem::Folder { .. }) => {
                     self.enter_or_play_selected();
+                    true
+                }
+                Some(SelectItem::AdvancedSettings) => {
+                    self.open_advanced_settings_from_select();
                     true
                 }
                 _ => false,
@@ -1908,6 +1943,14 @@ impl WinitApp {
         }
     }
 
+    fn open_advanced_settings_from_select(&mut self) {
+        if let Some(egui) = self.egui.as_mut() {
+            egui.open_advanced_settings();
+        }
+        self.play_system_sound(crate::system_sound::SoundType::FolderOpen);
+        tracing::info!("opened egui advanced settings from select");
+    }
+
     fn enter_or_play_selected(&mut self) {
         if self.select_items.is_empty() {
             self.reload_select_items();
@@ -1949,6 +1992,9 @@ impl WinitApp {
                 }
             }
             Some(SelectItem::Config(_)) => {}
+            Some(SelectItem::AdvancedSettings) => {
+                self.open_advanced_settings_from_select();
+            }
             None => {
                 tracing::warn!("no item is available to select");
             }
@@ -2948,7 +2994,10 @@ impl WinitApp {
             SelectItem::Chart(row) => {
                 row.chart.as_ref().is_some_and(|chart| chart.chart_id == chart_id)
             }
-            SelectItem::Folder { .. } | SelectItem::Course(_) | SelectItem::Config(_) => false,
+            SelectItem::Folder { .. }
+            | SelectItem::Course(_)
+            | SelectItem::Config(_)
+            | SelectItem::AdvancedSettings => false,
         }) && let Some(chart) = &row.chart
         {
             snapshot.title = chart.title.clone();
@@ -3277,14 +3326,20 @@ impl WinitApp {
     fn currently_selected_chart_id(&self) -> Option<i64> {
         match self.select_items.get(self.selected_index)? {
             SelectItem::Chart(row) => row.chart.as_ref().map(|chart| chart.chart_id),
-            SelectItem::Folder { .. } | SelectItem::Course(_) | SelectItem::Config(_) => None,
+            SelectItem::Folder { .. }
+            | SelectItem::Course(_)
+            | SelectItem::Config(_)
+            | SelectItem::AdvancedSettings => None,
         }
     }
 
     fn currently_selected_course_id(&self) -> Option<i64> {
         match self.select_items.get(self.selected_index)? {
             SelectItem::Course(row) => Some(row.course_id),
-            SelectItem::Chart(_) | SelectItem::Folder { .. } | SelectItem::Config(_) => None,
+            SelectItem::Chart(_)
+            | SelectItem::Folder { .. }
+            | SelectItem::Config(_)
+            | SelectItem::AdvancedSettings => None,
         }
     }
 
@@ -5571,6 +5626,38 @@ fn select_snapshot_rows(
                         chart_key_mode: None,
                     }
                 }
+                SelectItem::AdvancedSettings => SelectRowSnapshot {
+                    index: index as u32,
+                    title: "詳細設定".to_string(),
+                    subtitle: String::new(),
+                    artist: String::new(),
+                    difficulty_name: String::new(),
+                    play_level: String::new(),
+                    table_level: String::new(),
+                    total_notes: 0,
+                    initial_bpm: 0.0,
+                    min_bpm: 0.0,
+                    max_bpm: 0.0,
+                    length_ms: 0,
+                    clear_type: String::new(),
+                    ex_score: None,
+                    max_combo: None,
+                    gauge_value: None,
+                    miss_count: None,
+                    play_count: 0,
+                    clear_count: 0,
+                    replay_slots: [false; 4],
+                    has_long_notes: false,
+                    has_mines: false,
+                    has_random: false,
+                    is_folder: true,
+                    kind: bmz_render::scene::SelectRowKind::SettingsFolder,
+                    in_library: true,
+                    achieved_trophy_names: Vec::new(),
+                    course_titles: Default::default(),
+                    course_constraints: Default::default(),
+                    chart_key_mode: None,
+                },
             }
         })
         .collect()

@@ -229,10 +229,16 @@ pub struct CourseEntryPreview {
 #[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::large_enum_variant)]
 pub enum SelectItem {
-    Folder { path: String, name: String, kind: SelectRowKind },
+    Folder {
+        path: String,
+        name: String,
+        kind: SelectRowKind,
+    },
     Chart(SelectChartRow),
     Course(SelectCourseRow),
     Config(ConfigSelectRow),
+    /// ゲーム内設定から egui の詳細設定ウィンドウを開くアクション行。
+    AdvancedSettings,
 }
 
 impl SelectItem {
@@ -242,6 +248,7 @@ impl SelectItem {
             Self::Chart(row) => row.display_title(),
             Self::Course(row) => row.title.as_str(),
             Self::Config(row) => row.label(),
+            Self::AdvancedSettings => "詳細設定",
         }
     }
 }

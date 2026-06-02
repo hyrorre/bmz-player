@@ -4,9 +4,13 @@ use bmz_core::lane::KeyMode;
 
 use crate::config::play_input::resolve_play_bindings;
 use crate::config::profile_config::{
-    InputActionConfig, LaneConfig, ProfileConfig, ProfileInputConfig,
+    AssistOptionConfig, BgaExpandConfig, BgaModeConfig, GaugeAutoShiftConfig, GaugeTypeConfig,
+    InputActionConfig, JudgeAlgorithmConfig, LaneConfig, LaneEffectConfig, ProfileConfig,
+    ProfileInputConfig, RandomOptionConfig, TargetOptionConfig,
 };
-use crate::config::settings_registry::{SettingsEntryId, adjust_settings_value};
+use crate::config::settings_registry::{
+    SettingsEntryId, adjust_settings_value, format_settings_value,
+};
 
 /// 7KEY + スクラッチ向けの設定画面入力マッピング。
 #[derive(Debug, Clone)]
@@ -118,44 +122,150 @@ fn classify_scratch_control(
     decrease.insert(control.to_string());
 }
 
+#[derive(Debug, Clone)]
+enum SettingsBaseline {
+    Volume(u32),
+    OffsetUs(i64),
+    F32(f32),
+    U32(u32),
+    Bool(bool),
+    JudgeAlgorithm(JudgeAlgorithmConfig),
+    Gauge(GaugeTypeConfig),
+    GaugeAutoShift(GaugeAutoShiftConfig),
+    Random(RandomOptionConfig),
+    Target(TargetOptionConfig),
+    LaneEffect(LaneEffectConfig),
+    Assist(AssistOptionConfig),
+    BgaMode(BgaModeConfig),
+    BgaExpand(BgaExpandConfig),
+}
+
 /// 編集開始時点の値。キャンセル時に profile へ戻す。
 #[derive(Debug, Clone)]
 pub struct SettingsEditSession {
     pub entry_id: SettingsEntryId,
-    baseline_volume: Option<u32>,
-    baseline_offset_us: Option<i64>,
+    baseline: SettingsBaseline,
 }
 
 impl SettingsEditSession {
     pub fn capture(profile: &ProfileConfig, entry_id: SettingsEntryId) -> Self {
-        let (baseline_volume, baseline_offset_us) = match entry_id {
-            SettingsEntryId::MasterVolume => (Some(profile.audio_mix.master_volume), None),
-            SettingsEntryId::KeyVolume => (Some(profile.audio_mix.key_volume), None),
-            SettingsEntryId::BgmVolume => (Some(profile.audio_mix.bgm_volume), None),
-            SettingsEntryId::PreviewVolume => (Some(profile.audio_mix.preview_volume), None),
-            SettingsEntryId::InputOffsetMs => (None, Some(profile.judge.input_offset_us)),
-            SettingsEntryId::VisualOffsetMs => (None, Some(profile.judge.visual_offset_us)),
+        let baseline = match entry_id {
+            SettingsEntryId::MasterVolume => {
+                SettingsBaseline::Volume(profile.audio_mix.master_volume)
+            }
+            SettingsEntryId::KeyVolume => SettingsBaseline::Volume(profile.audio_mix.key_volume),
+            SettingsEntryId::BgmVolume => SettingsBaseline::Volume(profile.audio_mix.bgm_volume),
+            SettingsEntryId::PreviewVolume => {
+                SettingsBaseline::Volume(profile.audio_mix.preview_volume)
+            }
+            SettingsEntryId::SystemBgmVolume => {
+                SettingsBaseline::Volume(profile.audio_mix.system_bgm_volume)
+            }
+            SettingsEntryId::SystemSeVolume => {
+                SettingsBaseline::Volume(profile.audio_mix.system_se_volume)
+            }
+            SettingsEntryId::InputOffsetMs => {
+                SettingsBaseline::OffsetUs(profile.judge.input_offset_us)
+            }
+            SettingsEntryId::VisualOffsetMs => {
+                SettingsBaseline::OffsetUs(profile.judge.visual_offset_us)
+            }
+            SettingsEntryId::JudgeAlgorithm => {
+                SettingsBaseline::JudgeAlgorithm(profile.judge.judge_algorithm)
+            }
+            SettingsEntryId::Gauge => SettingsBaseline::Gauge(profile.play.gauge),
+            SettingsEntryId::GaugeAutoShift => {
+                SettingsBaseline::GaugeAutoShift(profile.play.gauge_auto_shift)
+            }
+            SettingsEntryId::Random => SettingsBaseline::Random(profile.play.random),
+            SettingsEntryId::Target => SettingsBaseline::Target(profile.play.target),
+            SettingsEntryId::LaneEffect => SettingsBaseline::LaneEffect(profile.play.lane_effect),
+            SettingsEntryId::Assist => SettingsBaseline::Assist(profile.play.assist),
+            SettingsEntryId::BgaMode => SettingsBaseline::BgaMode(profile.play.bga),
+            SettingsEntryId::BgaExpand => SettingsBaseline::BgaExpand(profile.play.bga_expand),
+            SettingsEntryId::AutoPlay => SettingsBaseline::Bool(profile.play.auto_play),
+            SettingsEntryId::Hispeed => SettingsBaseline::F32(profile.lane.hispeed),
+            SettingsEntryId::Sudden => SettingsBaseline::U32(profile.lane.sudden),
+            SettingsEntryId::Lift => SettingsBaseline::U32(profile.lane.lift),
+            SettingsEntryId::Hidden => SettingsBaseline::U32(profile.lane.hidden),
         };
-        Self { entry_id, baseline_volume, baseline_offset_us }
+        Self { entry_id, baseline }
     }
 
     pub fn restore(&self, profile: &mut ProfileConfig) {
-        if let Some(value) = self.baseline_volume {
-            match self.entry_id {
-                SettingsEntryId::MasterVolume => profile.audio_mix.master_volume = value,
-                SettingsEntryId::KeyVolume => profile.audio_mix.key_volume = value,
-                SettingsEntryId::BgmVolume => profile.audio_mix.bgm_volume = value,
-                SettingsEntryId::PreviewVolume => profile.audio_mix.preview_volume = value,
-                _ => {}
+        match (&self.entry_id, &self.baseline) {
+            (SettingsEntryId::MasterVolume, SettingsBaseline::Volume(value)) => {
+                profile.audio_mix.master_volume = *value;
             }
-        }
-        if let Some(value) = self.baseline_offset_us {
-            match self.entry_id {
-                SettingsEntryId::InputOffsetMs => profile.judge.input_offset_us = value,
-                SettingsEntryId::VisualOffsetMs => profile.judge.visual_offset_us = value,
-                _ => {}
+            (SettingsEntryId::KeyVolume, SettingsBaseline::Volume(value)) => {
+                profile.audio_mix.key_volume = *value;
             }
+            (SettingsEntryId::BgmVolume, SettingsBaseline::Volume(value)) => {
+                profile.audio_mix.bgm_volume = *value;
+            }
+            (SettingsEntryId::PreviewVolume, SettingsBaseline::Volume(value)) => {
+                profile.audio_mix.preview_volume = *value;
+            }
+            (SettingsEntryId::SystemBgmVolume, SettingsBaseline::Volume(value)) => {
+                profile.audio_mix.system_bgm_volume = *value;
+            }
+            (SettingsEntryId::SystemSeVolume, SettingsBaseline::Volume(value)) => {
+                profile.audio_mix.system_se_volume = *value;
+            }
+            (SettingsEntryId::InputOffsetMs, SettingsBaseline::OffsetUs(value)) => {
+                profile.judge.input_offset_us = *value;
+            }
+            (SettingsEntryId::VisualOffsetMs, SettingsBaseline::OffsetUs(value)) => {
+                profile.judge.visual_offset_us = *value;
+            }
+            (SettingsEntryId::JudgeAlgorithm, SettingsBaseline::JudgeAlgorithm(value)) => {
+                profile.judge.judge_algorithm = *value;
+            }
+            (SettingsEntryId::Gauge, SettingsBaseline::Gauge(value)) => {
+                profile.play.gauge = *value;
+            }
+            (SettingsEntryId::GaugeAutoShift, SettingsBaseline::GaugeAutoShift(value)) => {
+                profile.play.gauge_auto_shift = *value;
+            }
+            (SettingsEntryId::Random, SettingsBaseline::Random(value)) => {
+                profile.play.random = *value;
+            }
+            (SettingsEntryId::Target, SettingsBaseline::Target(value)) => {
+                profile.play.target = *value;
+            }
+            (SettingsEntryId::LaneEffect, SettingsBaseline::LaneEffect(value)) => {
+                profile.play.lane_effect = *value;
+            }
+            (SettingsEntryId::Assist, SettingsBaseline::Assist(value)) => {
+                profile.play.assist = *value;
+            }
+            (SettingsEntryId::BgaMode, SettingsBaseline::BgaMode(value)) => {
+                profile.play.bga = *value;
+            }
+            (SettingsEntryId::BgaExpand, SettingsBaseline::BgaExpand(value)) => {
+                profile.play.bga_expand = *value;
+            }
+            (SettingsEntryId::AutoPlay, SettingsBaseline::Bool(value)) => {
+                profile.play.auto_play = *value;
+            }
+            (SettingsEntryId::Hispeed, SettingsBaseline::F32(value)) => {
+                profile.lane.hispeed = *value;
+            }
+            (SettingsEntryId::Sudden, SettingsBaseline::U32(value)) => {
+                profile.lane.sudden = *value;
+            }
+            (SettingsEntryId::Lift, SettingsBaseline::U32(value)) => {
+                profile.lane.lift = *value;
+            }
+            (SettingsEntryId::Hidden, SettingsBaseline::U32(value)) => {
+                profile.lane.hidden = *value;
+            }
+            _ => {}
         }
+    }
+
+    pub fn preview_value(&self, profile: &ProfileConfig) -> String {
+        format_settings_value(profile, self.entry_id)
     }
 }
 
@@ -191,5 +301,14 @@ mod tests {
         profile.audio_mix.master_volume = 50;
         session.restore(&mut profile);
         assert_eq!(profile.audio_mix.master_volume, 20);
+    }
+
+    #[test]
+    fn edit_session_restore_reverts_gauge() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 0);
+        let session = SettingsEditSession::capture(&profile, SettingsEntryId::Gauge);
+        profile.play.gauge = GaugeTypeConfig::Hazard;
+        session.restore(&mut profile);
+        assert_eq!(profile.play.gauge, GaugeTypeConfig::Normal);
     }
 }

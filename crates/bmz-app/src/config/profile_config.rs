@@ -95,7 +95,7 @@ pub enum GaugeAutoShiftConfig {
     SelectToUnder,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum RandomOptionConfig {
     Off,
@@ -120,7 +120,7 @@ pub enum TargetOptionConfig {
     E,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum LaneEffectConfig {
     Off,
@@ -129,7 +129,7 @@ pub enum LaneEffectConfig {
     HiddenSudden,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum AssistOptionConfig {
     None,
@@ -144,7 +144,7 @@ pub struct JudgeConfig {
     pub judge_algorithm: JudgeAlgorithmConfig,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum JudgeAlgorithmConfig {
     Combo,

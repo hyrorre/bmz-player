@@ -241,10 +241,17 @@ impl EguiLayer {
         }
     }
 
-    /// メニュー表示状態を反転する (F5)。
+    /// メニュー表示状態を反転する (F1)。
     pub fn toggle(&mut self) {
         self.visible = !self.visible;
         tracing::info!(visible = self.visible, "egui menu toggled");
+    }
+
+    /// 選曲画面の「詳細設定」から egui メニューと本体設定パネルを開く。
+    pub fn open_advanced_settings(&mut self) {
+        self.visible = true;
+        self.show_settings = true;
+        tracing::info!("egui advanced settings opened from select");
     }
 
     /// winit イベントを egui へ供給する。
@@ -384,7 +391,7 @@ fn build_menu(
         .constrain_to(ctx.content_rect().shrink(PANEL_VIEWPORT_MARGIN))
         .default_pos(egui::pos2(16.0, 16.0))
         .show(ctx, |ui| {
-            ui.label("F5 でこのメニューを開閉します。");
+            ui.label("F1 でこのメニューを開閉します。");
             ui.separator();
             ui.checkbox(show_debug, "デバッグ表示");
             ui.checkbox(show_settings, "本体設定");
