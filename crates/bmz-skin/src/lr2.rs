@@ -1175,10 +1175,10 @@ fn substitute_wildcard_default(asset_path: &str, definition: &str, default: &str
     let Some((asset_prefix, asset_suffix)) = asset_path.split_once('*') else {
         return asset_path.to_string();
     };
-    let Some((_, def_suffix)) = definition.split_once('*') else {
+    if definition.split_once('*').is_none() {
         return asset_path.to_string();
-    };
-    format!("{asset_prefix}{default}{def_suffix}{asset_suffix}")
+    }
+    format!("{asset_prefix}{default}{asset_suffix}")
 }
 
 fn parse_values(line: &CsvLine) -> [i32; 22] {
@@ -1280,6 +1280,14 @@ mod tests {
         assert_eq!(frame["y"], 1020);
         assert_eq!(frame["w"], 30);
         assert_eq!(frame["h"], 40);
+    }
+
+    #[test]
+    fn lr2_customfile_default_replaces_wildcard_once() {
+        assert_eq!(
+            substitute_wildcard_default("parts/note/*.png", "parts/note/*.png", "photon"),
+            "parts/note/photon.png"
+        );
     }
 
     #[test]

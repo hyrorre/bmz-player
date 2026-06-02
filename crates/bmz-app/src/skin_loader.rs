@@ -1449,7 +1449,13 @@ mod tests {
         assert!(!note.group.is_empty());
         assert!(decoded.document.gauge.is_some());
         assert!(decoded.document.bga.is_some());
-        assert!(!decoded.sources.is_empty());
+        assert!(
+            decoded.sources.len() >= 10,
+            "expected WMII sources to decode, got {}; source paths: {:?}; decoded: {:?}",
+            decoded.sources.len(),
+            decoded.document.source.iter().map(|source| source.path.as_str()).collect::<Vec<_>>(),
+            decoded.sources.iter().map(|source| source.path.clone()).collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -1462,6 +1468,46 @@ mod tests {
         let mut renderer = Renderer::default();
 
         apply_beatoraja_json_skin(&mut renderer, &skin_path).unwrap();
+    }
+
+    #[test]
+    fn wmii_fhd_lr2skin_produces_static_play_items_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/WMII_FHD/play/FHDPLAY_AC.lr2skin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let decoded = decode_beatoraja_skin(&skin_path, SkinKind::Play).unwrap();
+        let sources = decoded
+            .sources
+            .iter()
+            .map(|source| {
+                (
+                    source.source_id.clone(),
+                    SkinDocumentTexture {
+                        source_id: source.source_id.clone(),
+                        texture: source.texture,
+                        source_size: SkinImageSize {
+                            width: source.asset.width as f32,
+                            height: source.asset.height as f32,
+                        },
+                    },
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        let state = bmz_render::skin::SkinDrawState {
+            play_timer_ms: Some(2_000),
+            ready_timer_ms: Some(2_000),
+            ..Default::default()
+        };
+
+        let items = decoded.document.static_render_items(
+            &sources,
+            state,
+            bmz_render::skin::SkinTextState::default(),
+        );
+        assert!(!items.is_empty());
     }
 
     #[test]
