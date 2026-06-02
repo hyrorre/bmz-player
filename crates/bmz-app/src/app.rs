@@ -42,8 +42,9 @@ use crate::config::key_config::{
 };
 use crate::config::load::load_profile_config;
 use crate::config::profile_config::{
-    AssistOptionConfig, BgaModeConfig, GaugeAutoShiftConfig, GaugeTypeConfig, InputActionConfig,
-    LaneConfig, ProfileConfig, ProfileInputConfig, RandomOptionConfig, TargetOptionConfig,
+    AssistOptionConfig, BgaExpandConfig, BgaModeConfig, GaugeAutoShiftConfig, GaugeTypeConfig,
+    InputActionConfig, LaneConfig, ProfileConfig, ProfileInputConfig, RandomOptionConfig,
+    TargetOptionConfig,
 };
 use crate::config::save::{save_app_config, save_profile_config};
 use crate::config::settings_registry::SettingsEntryId;
@@ -2313,6 +2314,12 @@ impl WinitApp {
             }
             11 => self.cycle_select_mode_filter(arg),
             12 => self.cycle_select_sort(arg),
+            40 => self.cycle_select_gauge(arg),
+            42 | 43 | 54 => self.cycle_select_arrange(arg),
+            72 => self.cycle_select_bga(arg),
+            73 => self.cycle_select_bga_expand(arg),
+            77 => self.cycle_select_target(arg),
+            78 => self.cycle_select_gauge_auto_shift(arg),
             308 => self.cycle_select_ln_mode(arg),
             312 => {
                 // BMZ only exposes beatoraja's default sorter set for now.
@@ -2337,6 +2344,54 @@ impl WinitApp {
             previous_len,
             current_len = self.select_items.len(),
             "select mode filter changed"
+        );
+        self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+    }
+
+    fn cycle_select_gauge(&mut self, arg: i32) {
+        self.gauge_option = cycle_gauge_option_with_direction(self.gauge_option, arg);
+        tracing::info!(gauge = ?self.gauge_option, "gauge option changed");
+        self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+    }
+
+    fn cycle_select_arrange(&mut self, arg: i32) {
+        self.arrange_option = cycle_arrange_option_with_direction(self.arrange_option, arg);
+        tracing::info!(arrange = self.arrange_option.as_str(), "arrange option changed");
+        self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+    }
+
+    fn cycle_select_bga(&mut self, arg: i32) {
+        self.boot.profile_config.play.bga =
+            cycle_bga_option_with_direction(self.boot.profile_config.play.bga, arg);
+        tracing::info!(
+            bga = bga_mode_as_str(self.boot.profile_config.play.bga),
+            "bga option changed"
+        );
+        self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+    }
+
+    fn cycle_select_bga_expand(&mut self, arg: i32) {
+        self.boot.profile_config.play.bga_expand =
+            cycle_bga_expand_with_direction(self.boot.profile_config.play.bga_expand, arg);
+        tracing::info!(
+            bga_expand = ?self.boot.profile_config.play.bga_expand,
+            "bga expand changed"
+        );
+        self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+    }
+
+    fn cycle_select_target(&mut self, arg: i32) {
+        let cycle = if arg >= 0 { TargetCycle::Next } else { TargetCycle::Previous };
+        self.apply_target_option_cycle(cycle);
+        self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+    }
+
+    fn cycle_select_gauge_auto_shift(&mut self, arg: i32) {
+        self.gauge_auto_shift_option =
+            cycle_gauge_auto_shift_option_with_direction(self.gauge_auto_shift_option, arg);
+        tracing::info!(
+            gauge_auto_shift = gauge_auto_shift_as_str(self.gauge_auto_shift_option),
+            "gauge auto shift changed"
         );
         self.play_system_sound(crate::system_sound::SoundType::OptionChange);
     }
@@ -5994,6 +6049,25 @@ fn cycle_gauge_option(current: GaugeTypeConfig) -> GaugeTypeConfig {
     }
 }
 
+fn cycle_gauge_option_with_direction(current: GaugeTypeConfig, direction: i32) -> GaugeTypeConfig {
+    const VALUES: [GaugeTypeConfig; 6] = [
+        GaugeTypeConfig::AssistEasy,
+        GaugeTypeConfig::Easy,
+        GaugeTypeConfig::Normal,
+        GaugeTypeConfig::Hard,
+        GaugeTypeConfig::ExHard,
+        GaugeTypeConfig::Hazard,
+    ];
+    cycle_enum(VALUES, normalize_gauge_option(current), direction)
+}
+
+fn normalize_gauge_option(current: GaugeTypeConfig) -> GaugeTypeConfig {
+    match current {
+        GaugeTypeConfig::AutoShift => GaugeTypeConfig::ExHard,
+        _ => current,
+    }
+}
+
 fn gauge_option_as_str(gauge: GaugeTypeConfig) -> &'static str {
     match gauge {
         GaugeTypeConfig::AssistEasy => "A-EASY",
@@ -6014,6 +6088,20 @@ fn cycle_gauge_auto_shift_option(current: GaugeAutoShiftConfig) -> GaugeAutoShif
         GaugeAutoShiftConfig::BestClear => GaugeAutoShiftConfig::SelectToUnder,
         GaugeAutoShiftConfig::SelectToUnder => GaugeAutoShiftConfig::Off,
     }
+}
+
+fn cycle_gauge_auto_shift_option_with_direction(
+    current: GaugeAutoShiftConfig,
+    direction: i32,
+) -> GaugeAutoShiftConfig {
+    const VALUES: [GaugeAutoShiftConfig; 5] = [
+        GaugeAutoShiftConfig::Off,
+        GaugeAutoShiftConfig::Continue,
+        GaugeAutoShiftConfig::HardToGroove,
+        GaugeAutoShiftConfig::BestClear,
+        GaugeAutoShiftConfig::SelectToUnder,
+    ];
+    cycle_enum(VALUES, current, direction)
 }
 
 fn gauge_auto_shift_as_str(mode: GaugeAutoShiftConfig) -> &'static str {
@@ -6038,12 +6126,29 @@ fn volume_f32_to_unit(value: f32) -> u32 {
     (value.clamp(0.0, 1.0) * 100.0).round() as u32
 }
 
+fn cycle_arrange_option_with_direction(current: ArrangeOption, direction: i32) -> ArrangeOption {
+    const VALUES: [ArrangeOption; 3] =
+        [ArrangeOption::Normal, ArrangeOption::Mirror, ArrangeOption::Random];
+    cycle_enum(VALUES, current, direction)
+}
+
 fn cycle_bga_option(current: BgaModeConfig) -> BgaModeConfig {
     match current {
         BgaModeConfig::On => BgaModeConfig::Auto,
         BgaModeConfig::Auto => BgaModeConfig::Off,
         BgaModeConfig::Off => BgaModeConfig::On,
     }
+}
+
+fn cycle_bga_option_with_direction(current: BgaModeConfig, direction: i32) -> BgaModeConfig {
+    const VALUES: [BgaModeConfig; 3] = [BgaModeConfig::On, BgaModeConfig::Auto, BgaModeConfig::Off];
+    cycle_enum(VALUES, current, direction)
+}
+
+fn cycle_bga_expand_with_direction(current: BgaExpandConfig, direction: i32) -> BgaExpandConfig {
+    const VALUES: [BgaExpandConfig; 3] =
+        [BgaExpandConfig::KeepAspect, BgaExpandConfig::Full, BgaExpandConfig::Off];
+    cycle_enum(VALUES, current, direction)
 }
 
 fn select_option_panel_for_holds(start_held: bool, select_held: bool) -> u8 {
@@ -7818,6 +7923,27 @@ mod tests {
         assert_eq!(SelectLnMode::Ln.next(), SelectLnMode::Cn);
         assert_eq!(SelectLnMode::Ln.previous(), SelectLnMode::Hcn);
         assert_eq!(SelectLnMode::Hcn.long_note_mode(), LongNoteMode::Hcn);
+        assert_eq!(
+            cycle_gauge_option_with_direction(GaugeTypeConfig::Normal, 1),
+            GaugeTypeConfig::Hard
+        );
+        assert_eq!(
+            cycle_gauge_option_with_direction(GaugeTypeConfig::Normal, -1),
+            GaugeTypeConfig::Easy
+        );
+        assert_eq!(
+            cycle_arrange_option_with_direction(ArrangeOption::Normal, -1),
+            ArrangeOption::Random
+        );
+        assert_eq!(cycle_bga_option_with_direction(BgaModeConfig::On, -1), BgaModeConfig::Off);
+        assert_eq!(
+            cycle_bga_expand_with_direction(BgaExpandConfig::KeepAspect, 1),
+            BgaExpandConfig::Full
+        );
+        assert_eq!(
+            cycle_gauge_auto_shift_option_with_direction(GaugeAutoShiftConfig::Off, -1),
+            GaugeAutoShiftConfig::SelectToUnder
+        );
     }
 
     #[test]
