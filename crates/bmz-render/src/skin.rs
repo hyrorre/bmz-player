@@ -1816,7 +1816,7 @@ impl DynamicTimerRuntime {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SkinTextState<'a> {
     pub title: &'a str,
     pub subtitle: &'a str,
@@ -1834,6 +1834,38 @@ pub struct SkinTextState<'a> {
     pub table_text_fallback: &'a str,
     pub course_stage: Option<CourseStageMarker>,
     pub course_titles: [&'a str; 10],
+    /// beatoraja `SkinProperty.STRING_SEARCHWORD` (`ref=30`). Current song search
+    /// query as typed by the user.
+    pub search_word: &'a str,
+    /// Multiplier applied to the rendered alpha of the `ref=30` text element.
+    /// `1.0` keeps the skin-defined alpha unchanged; values < 1.0 are used for
+    /// placeholder / inactive states (beatoraja `messageFontColor=GRAY` 相当).
+    pub search_word_alpha: f32,
+}
+
+impl<'a> Default for SkinTextState<'a> {
+    fn default() -> Self {
+        Self {
+            title: "",
+            subtitle: "",
+            artist: "",
+            subartist: "",
+            genre: "",
+            difficulty_name: "",
+            play_level: "",
+            target: "",
+            current_folder: "",
+            bar_text: "",
+            table_level: "",
+            table_text_primary: "",
+            table_text_secondary: "",
+            table_text_fallback: "",
+            course_stage: None,
+            course_titles: [""; 10],
+            search_word: "",
+            search_word_alpha: 1.0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -2722,6 +2754,60 @@ impl SkinDocument {
 
     /// 有効なオプション条件に基づいて `destination` エントリを展開し、
     /// 描画対象の `SkinDestinationDef` の参照リストを返す。
+    /// Returns the first dst frame of any text element whose `ref_id` equals
+    /// `ref_id`, normalized into the `0.0..=1.0` rendered viewport coordinate
+    /// space (top-left origin). Used by bmz-app to position the IME candidate
+    /// window over the search input region without touching the skin.
+    ///
+    /// Beatoraja skin sources use top-down y growing from the canvas top, but
+    /// `normalize_skin_frame_rect` flips that to a bottom-up rect before paint,
+    /// so directly using skin y here would land the IME cursor mirrored across
+    /// the canvas. Apply the same flip so the returned rect matches the on-
+    /// screen rendered position.
+    pub fn text_destination_rect_for_ref(&self, ref_id: i32) -> Option<(f32, f32, f32, f32)> {
+        let text_id = self.text.iter().find(|t| t.ref_id == ref_id)?.id.as_str();
+        let canvas_w = self.w.max(1) as f32;
+        let canvas_h = self.h.max(1) as f32;
+        // top-level destinations only — the search word region sits there
+        // in beatoraja m-select skins.
+        for entry in &self.destination {
+            let candidates: Vec<&SkinDestinationDef> = match entry {
+                DestinationListEntry::Single(d) => vec![d],
+                DestinationListEntry::Conditional { destinations, .. } => {
+                    destinations.iter().collect()
+                }
+            };
+            for dest in candidates {
+                if dest.id != text_id {
+                    continue;
+                }
+                for dst in &dest.dst {
+                    let frame_opt = match dst {
+                        SkinDstEntry::Frame(f) => Some(f),
+                        SkinDstEntry::Conditional { frames, .. } => frames.first(),
+                    };
+                    if let Some(frame) = frame_opt {
+                        let raw_x = frame.x.unwrap_or(0) as f32;
+                        let raw_y = frame.y.unwrap_or(0) as f32;
+                        let raw_w = frame.w.unwrap_or(0).max(0) as f32;
+                        let raw_h = frame.h.unwrap_or(0).max(0) as f32;
+                        if raw_w <= 0.0 || raw_h <= 0.0 {
+                            continue;
+                        }
+                        // Match `normalize_skin_frame_rect`: bottom-up render
+                        // origin → top-left coordinate the IME backend wants.
+                        let x = raw_x / canvas_w;
+                        let y = (canvas_h - (raw_y + raw_h)) / canvas_h;
+                        let w = raw_w / canvas_w;
+                        let h = raw_h / canvas_h;
+                        return Some((x, y, w, h));
+                    }
+                }
+            }
+        }
+        None
+    }
+
     pub fn all_destinations<'a>(&'a self, enabled_options: &[i32]) -> Vec<&'a SkinDestinationDef> {
         let mut result = Vec::new();
         for entry in &self.destination {
@@ -2831,6 +2917,8 @@ impl SkinDocument {
             course_titles: selected_row
                 .map(|row| string_array_refs(&row.course_titles))
                 .unwrap_or_default(),
+            search_word: &snapshot.search_word,
+            search_word_alpha: snapshot.search_word_alpha,
             ..SkinTextState::default()
         };
 
@@ -3824,6 +3912,13 @@ impl SkinDocument {
             2 => rect.x - rect.width,
             _ => rect.x,
         };
+        // beatoraja `STRING_SEARCHWORD` (ref=30) は placeholder 状態で
+        // messageFontColor=GRAY (半透明) になる。bmz では state から渡される
+        // multiplier を skin 由来の alpha に掛け合わせて同様の見た目を再現する。
+        let mut alpha = frame.a as f32 / 255.0;
+        if text.ref_id == 30 {
+            alpha *= state.search_word_alpha.clamp(0.0, 1.0);
+        }
         Some(SkinRenderItem::Text {
             origin: Point { x: origin_x, y: rect.y },
             text: content,
@@ -3834,7 +3929,7 @@ impl SkinDocument {
                     frame.r as f32 / 255.0,
                     frame.g as f32 / 255.0,
                     frame.b as f32 / 255.0,
-                    frame.a as f32 / 255.0,
+                    alpha,
                 ),
                 layer: TextLayer::Ui,
                 align: skin_text_align(text.align),
@@ -6784,6 +6879,7 @@ fn skin_state_text(text: &SkinTextDef, state: SkinTextState<'_>) -> String {
         15 => state.subartist.to_string(),
         16 => full_label(state.artist, state.subartist),
         17 => state.table_level.to_string(),
+        30 => state.search_word.to_string(),
         150..=159 => state.course_titles[(text.ref_id - 150) as usize].to_string(),
         1001 => state.table_text_primary.to_string(),
         1002 => state.table_text_secondary.to_string(),
@@ -14413,6 +14509,55 @@ mod tests {
     }
 
     #[test]
+    fn text_render_item_applies_search_word_alpha_multiplier_for_ref_30() {
+        let document: SkinDocument =
+            serde_json::from_value(serde_json::json!({ "w": 1920, "h": 1080 })).unwrap();
+        let text = SkinTextDef {
+            id: "search".to_string(),
+            ref_id: 30,
+            ..SkinTextDef::default()
+        };
+        let frame = ResolvedSkinFrame { w: 100, h: 24, ..ResolvedSkinFrame::default() };
+        let state = SkinTextState {
+            search_word: "hello",
+            search_word_alpha: 0.5,
+            ..SkinTextState::default()
+        };
+        let item = document.text_render_item(&text, frame, state).unwrap();
+        match item {
+            SkinRenderItem::Text { style, .. } => {
+                // frame.a=255 (1.0) * 0.5 = 0.5
+                assert!((style.color.a - 0.5).abs() < 1e-4, "got alpha {}", style.color.a);
+            }
+            other => panic!("expected SkinRenderItem::Text, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn text_render_item_leaves_alpha_unchanged_for_other_refs() {
+        let document: SkinDocument =
+            serde_json::from_value(serde_json::json!({ "w": 1920, "h": 1080 })).unwrap();
+        let text = SkinTextDef {
+            id: "title".to_string(),
+            ref_id: 10, // title, not search
+            ..SkinTextDef::default()
+        };
+        let frame = ResolvedSkinFrame { w: 100, h: 24, ..ResolvedSkinFrame::default() };
+        let state = SkinTextState {
+            title: "song name",
+            search_word_alpha: 0.1, // should be ignored for non-search refs
+            ..SkinTextState::default()
+        };
+        let item = document.text_render_item(&text, frame, state).unwrap();
+        match item {
+            SkinRenderItem::Text { style, .. } => {
+                assert!((style.color.a - 1.0).abs() < 1e-4, "got alpha {}", style.color.a);
+            }
+            other => panic!("expected SkinRenderItem::Text, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn skin_state_text_uses_constant_text_over_ref_id() {
         let state = SkinTextState { title: "Ignored", ..SkinTextState::default() };
         let text = SkinTextDef {
@@ -14626,6 +14771,38 @@ mod tests {
 
     fn approx_eq(actual: f32, expected: f32) -> bool {
         (actual - expected).abs() < 0.0001
+    }
+
+    #[test]
+    fn text_destination_rect_for_ref_returns_normalized_first_frame() {
+        let document: SkinDocument = serde_json::from_value(serde_json::json!({
+            "w": 1280,
+            "h": 720,
+            "text": [
+                { "id": "searchword", "ref": 30, "font": "f" },
+                { "id": "title", "ref": 10, "font": "f" }
+            ],
+            "destination": [
+                {
+                    "id": "title",
+                    "dst": [{ "x": 0, "y": 0, "w": 100, "h": 30 }]
+                },
+                {
+                    "id": "searchword",
+                    "dst": [{ "x": 640, "y": 360, "w": 320, "h": 36 }]
+                }
+            ]
+        }))
+        .unwrap();
+
+        let rect = document.text_destination_rect_for_ref(30).unwrap();
+        assert!(approx_eq(rect.0, 0.5));
+        // skin y=360, h=36 → flipped: (720 - 396) / 720 = 0.45
+        assert!(approx_eq(rect.1, 0.45));
+        assert!(approx_eq(rect.2, 0.25));
+        assert!(approx_eq(rect.3, 0.05));
+
+        assert!(document.text_destination_rect_for_ref(999).is_none());
     }
 
     fn unique_test_dir(name: &str) -> PathBuf {

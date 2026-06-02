@@ -12,7 +12,7 @@ pub enum AppSceneSnapshot {
     Result(ResultSnapshot),
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SelectSnapshot {
     pub time: TimeUs,
     pub selection_time: TimeUs,
@@ -47,6 +47,49 @@ pub struct SelectSnapshot {
     pub in_settings: bool,
     /// 設定項目の編集モード中。
     pub settings_editing: bool,
+    /// 楽曲検索バー (beatoraja `STRING_SEARCHWORD`, ref=30) に表示する文字列。
+    /// 検索モード中は入力中クエリ (+ カーソル記号)、非モード中は空 or 直前の
+    /// メッセージ ("no song found" 等)。
+    pub search_word: String,
+    /// `search_word` に乗せる不透明度倍率 (0.0..=1.0)。placeholder /
+    /// メッセージ表示時は薄く (< 1.0)、実入力中は 1.0。
+    pub search_word_alpha: f32,
+}
+
+impl Default for SelectSnapshot {
+    fn default() -> Self {
+        Self {
+            time: TimeUs::default(),
+            selection_time: TimeUs::default(),
+            option_panel_time: TimeUs::default(),
+            option_panel: 0,
+            chart_count: 0,
+            selected_index: 0,
+            selected_chart_id: None,
+            selected_title: String::new(),
+            rows: Vec::new(),
+            arrange: String::new(),
+            target: String::new(),
+            gauge: String::new(),
+            gauge_auto_shift: String::new(),
+            assist: String::new(),
+            bga: String::new(),
+            master_volume: 0.0,
+            key_volume: 0.0,
+            bgm_volume: 0.0,
+            current_folder: String::new(),
+            key_hint: String::new(),
+            option_hint: String::new(),
+            exit_hold_progress: 0.0,
+            overlay: OverlaySnapshot::default(),
+            stage_background: false,
+            banner_image: false,
+            in_settings: false,
+            settings_editing: false,
+            search_word: String::new(),
+            search_word_alpha: 1.0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
