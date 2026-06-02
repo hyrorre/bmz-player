@@ -4677,10 +4677,10 @@ impl SkinDocument {
         let mut frame = frame;
         let offset = (slider.range as f32 * progress).round() as i32;
         match slider.angle {
-            0 => frame.x += offset,
-            1 => frame.x -= offset,
+            0 => frame.y += offset,
+            1 => frame.x += offset,
             2 => frame.y -= offset,
-            3 => frame.y += offset,
+            3 => frame.x -= offset,
             _ => {}
         }
         let mut uv = TextureRegion {
@@ -12975,7 +12975,7 @@ mod tests {
         assert!(matches!(
             items[2],
             SkinRenderItem::Image { rect: Rect { x, y, .. }, .. }
-                if approx_eq(x, 0.0) && approx_eq(y, 0.14)
+                if approx_eq(x, 0.6) && approx_eq(y, 0.14)
         ));
 
         let no_lane_cover = document.static_image_render_items(
@@ -12993,6 +12993,68 @@ mod tests {
             lane_cover[1],
             SkinRenderItem::Image { rect: Rect { x, y, .. }, .. }
                 if approx_eq(x, 0.1) && approx_eq(y, 0.5)
+        ));
+    }
+
+    #[test]
+    fn skin_document_moves_sliders_in_beatoraja_directions() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "system.png" }],
+                "slider": [
+                    { "id": "up", "src": 1, "x": 0, "y": 0, "w": 5, "h": 5, "angle": 0, "range": 20, "type": 17 },
+                    { "id": "right", "src": 1, "x": 0, "y": 0, "w": 5, "h": 5, "angle": 1, "range": 20, "type": 17 },
+                    { "id": "down", "src": 1, "x": 0, "y": 0, "w": 5, "h": 5, "angle": 2, "range": 20, "type": 17 },
+                    { "id": "left", "src": 1, "x": 0, "y": 0, "w": 5, "h": 5, "angle": 3, "range": 20, "type": 17 }
+                ],
+                "destination": [
+                    { "id": "up", "dst": [{ "x": 50, "y": 50, "w": 5, "h": 5 }] },
+                    { "id": "right", "dst": [{ "x": 50, "y": 50, "w": 5, "h": 5 }] },
+                    { "id": "down", "dst": [{ "x": 50, "y": 50, "w": 5, "h": 5 }] },
+                    { "id": "left", "dst": [{ "x": 50, "y": 50, "w": 5, "h": 5 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "1".to_string(),
+            SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 100.0, height: 100.0 },
+            },
+        )]);
+
+        let items = document.static_image_render_items(
+            &sources,
+            SkinDrawState { select_master_volume: 0.5, ..SkinDrawState::default() },
+        );
+
+        assert_eq!(items.len(), 4);
+        assert!(matches!(
+            items[0],
+            SkinRenderItem::Image { rect: Rect { x, y, .. }, .. }
+                if approx_eq(x, 0.5) && approx_eq(y, 0.35)
+        ));
+        assert!(matches!(
+            items[1],
+            SkinRenderItem::Image { rect: Rect { x, y, .. }, .. }
+                if approx_eq(x, 0.6) && approx_eq(y, 0.45)
+        ));
+        assert!(matches!(
+            items[2],
+            SkinRenderItem::Image { rect: Rect { x, y, .. }, .. }
+                if approx_eq(x, 0.5) && approx_eq(y, 0.55)
+        ));
+        assert!(matches!(
+            items[3],
+            SkinRenderItem::Image { rect: Rect { x, y, .. }, .. }
+                if approx_eq(x, 0.4) && approx_eq(y, 0.45)
         ));
     }
 
