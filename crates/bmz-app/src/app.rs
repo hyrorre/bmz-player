@@ -285,6 +285,7 @@ struct WinitApp {
     /// リザルト画面終了アニメーションの進行状態。
     /// Some のあいだは終了フェードアウト中で、入力は受け付けない。
     result_exit: Option<ResultExit>,
+    deferred_boot: Option<DeferredBoot>,
     /// 選曲画面で楽曲検索の入力モード中か。
     search_mode: bool,
     /// 現在入力中の検索クエリ。検索モード中はそのまま skin の search_word に渡る。
@@ -370,6 +371,12 @@ struct PendingUploadResult {
     path: PathBuf,
     kind: SkinKind,
     uploaded: Result<UploadedSkin>,
+}
+
+enum DeferredBoot {
+    Chart { chart_id: i64, replay_slot: Option<u8> },
+    CourseReplay { course_id: i64 },
+    Course { course_id: i64 },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -636,7 +643,7 @@ impl WinitApp {
         let select_preview =
             system_audio.as_ref().map(|audio| SelectChartPreview::new(audio.engine()));
 
-        let mut app = Self {
+        let app = Self {
             boot,
             window: None,
             active_play: None,
@@ -718,53 +725,13 @@ impl WinitApp {
             wgpu_fps: 0.0,
             settings_edit: None,
             result_exit: None,
+            deferred_boot: deferred_boot_action(boot_chart_id, &options),
             search_mode: false,
             search_query: String::new(),
             search_preedit: String::new(),
             search_history: std::collections::VecDeque::new(),
             search_message: None,
         };
-        if let Some(chart_id) = boot_chart_id {
-            tracing::info!(chart_id, "booting directly into chart");
-            if let Some(slot) = options.boot_replay_slot {
-                if !app.try_start_replay_for_chart(chart_id, slot) {
-                    tracing::warn!(slot, "boot replay slot empty; falling back to normal play");
-                    app.start_chart(chart_id);
-                }
-            } else {
-                app.start_chart(chart_id);
-            }
-        } else if let Some(course_id) = options.boot_course_replay_id {
-            // `--boot-course-replay <COURSE_ID>` replays the most recent
-            // attempt of the given course on boot.
-            match app.boot.library_db.latest_course_score_id(course_id) {
-                Ok(Some(course_score_id)) => {
-                    tracing::info!(course_id, course_score_id, "booting into course replay");
-                    app.start_course_replay(course_id, course_score_id);
-                }
-                Ok(None) => {
-                    tracing::warn!(
-                        course_id,
-                        "no saved course attempt; --boot-course-replay has nothing to replay"
-                    );
-                }
-                Err(error) => {
-                    tracing::error!(
-                        %error,
-                        course_id,
-                        "failed to look up latest course score for replay boot"
-                    );
-                }
-            }
-        } else if let Some(course_id) = options.boot_course_id {
-            // `--boot-course <COURSE_ID>` starts the given course fresh on
-            // boot.  Symmetric to --boot-course-replay but no saved-attempt
-            // lookup; useful for smoke-testing the course play flow without
-            // a prior recording.
-            tracing::info!(course_id, "booting into fresh course");
-            app.start_course(course_id);
-        }
-
         Ok(app)
     }
 
@@ -812,6 +779,7 @@ impl WinitApp {
                 // surface 接続後 (= GPU device/queue 利用可能) に upload worker を起動する。
                 // decode 結果はそれまで skin_decode_rx にバッファされ、起動後にドレインされる。
                 self.start_skin_upload_worker();
+                self.start_deferred_boot();
                 window.request_redraw();
                 self.egui = Some(EguiLayer::new(&window, self.boot.profile_config.ui.show_fps));
                 self.window = Some(window);
@@ -819,6 +787,50 @@ impl WinitApp {
             Err(error) => {
                 tracing::error!(%error, "failed to create window");
                 event_loop.exit();
+            }
+        }
+    }
+
+    fn start_deferred_boot(&mut self) {
+        let Some(boot) = self.deferred_boot.take() else {
+            return;
+        };
+        match boot {
+            DeferredBoot::Chart { chart_id, replay_slot } => {
+                tracing::info!(chart_id, "booting directly into chart");
+                if let Some(slot) = replay_slot {
+                    if !self.try_start_replay_for_chart(chart_id, slot) {
+                        tracing::warn!(slot, "boot replay slot empty; falling back to normal play");
+                        self.start_chart(chart_id);
+                    }
+                } else {
+                    self.start_chart(chart_id);
+                }
+            }
+            DeferredBoot::CourseReplay { course_id } => {
+                match self.boot.library_db.latest_course_score_id(course_id) {
+                    Ok(Some(course_score_id)) => {
+                        tracing::info!(course_id, course_score_id, "booting into course replay");
+                        self.start_course_replay(course_id, course_score_id);
+                    }
+                    Ok(None) => {
+                        tracing::warn!(
+                            course_id,
+                            "no saved course attempt; --boot-course-replay has nothing to replay"
+                        );
+                    }
+                    Err(error) => {
+                        tracing::error!(
+                            %error,
+                            course_id,
+                            "failed to look up latest course score for replay boot"
+                        );
+                    }
+                }
+            }
+            DeferredBoot::Course { course_id } => {
+                tracing::info!(course_id, "booting into fresh course");
+                self.start_course(course_id);
             }
         }
     }
@@ -4768,6 +4780,16 @@ fn now_unix_seconds() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs() as i64)
         .unwrap_or(0)
+}
+
+fn deferred_boot_action(boot_chart_id: Option<i64>, options: &AppOptions) -> Option<DeferredBoot> {
+    if let Some(chart_id) = boot_chart_id {
+        return Some(DeferredBoot::Chart { chart_id, replay_slot: options.boot_replay_slot });
+    }
+    if let Some(course_id) = options.boot_course_replay_id {
+        return Some(DeferredBoot::CourseReplay { course_id });
+    }
+    options.boot_course_id.map(|course_id| DeferredBoot::Course { course_id })
 }
 
 fn resolve_boot_chart_id(
