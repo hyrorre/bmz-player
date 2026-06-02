@@ -1453,6 +1453,18 @@ mod tests {
     }
 
     #[test]
+    fn wmii_fhd_lr2skin_can_be_applied_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/WMII_FHD/play/FHDPLAY_AC.lr2skin");
+        if !skin_path.is_file() {
+            return;
+        }
+        let mut renderer = Renderer::default();
+
+        apply_beatoraja_json_skin(&mut renderer, &skin_path).unwrap();
+    }
+
+    #[test]
     fn wildcard_skin_source_prefers_filepath_default() {
         let root = unique_test_dir("bmz-json-source");
         std::fs::create_dir_all(root.join("parts")).unwrap();
