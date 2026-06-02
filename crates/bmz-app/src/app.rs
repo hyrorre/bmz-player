@@ -13,7 +13,7 @@ use bmz_gameplay::session::PlaySkinOffset;
 use bmz_gameplay::session::compute_frame_times;
 use bmz_render::assets::load_static_rgba_image;
 use bmz_render::plan::{
-    PLAY_BACKBMP_TEXTURE, SELECT_BANNER_TEXTURE, SELECT_STAGE_TEXTURE, TextureId,
+    PLAY_BACKBMP_TEXTURE, Rect, SELECT_BANNER_TEXTURE, SELECT_STAGE_TEXTURE, TextureId,
 };
 use bmz_render::renderer::{RenderSurfaceStatus, Renderer, SurfaceSize};
 use bmz_render::scene::{AppSceneSnapshot, ResultSnapshot, SelectRowSnapshot, SelectSnapshot};
@@ -21,8 +21,8 @@ use bmz_render::snapshot::{
     CourseStageMarker, DisplayJudgeCounts, FastSlowJudgeCounts, OverlaySnapshot, RenderSnapshot,
 };
 use winit::application::ApplicationHandler;
-use winit::dpi::PhysicalSize;
-use winit::event::{ElementState, MouseScrollDelta, StartCause, WindowEvent};
+use winit::dpi::{PhysicalPosition, PhysicalSize};
+use winit::event::{ElementState, MouseButton, MouseScrollDelta, StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::monitor::{MonitorHandle, VideoModeHandle};
@@ -94,7 +94,9 @@ use crate::storage::library_db::LibraryDatabase;
 use crate::storage::migration::migrate_library_db;
 use crate::storage::replay::load_replay_for_chart;
 use crate::ui::{DebugInfo, EguiLayer, SceneSkinDefs, SkinCandidate, SkinCatalog, SkinConfigMeta};
-use bmz_render::skin::{SkinDocument, SkinDocumentTexture, SkinManifest};
+use bmz_render::skin::{
+    SkinClickHit, SkinClickTarget, SkinDocument, SkinDocumentTexture, SkinManifest,
+};
 use std::collections::BTreeMap;
 
 const SAMPLE_PLAYABLE_TITLE: &str = "BMZ Sample Playable";
@@ -303,6 +305,8 @@ struct WinitApp {
     search_mode: bool,
     /// 現在入力中の検索クエリ。検索モード中はそのまま skin の search_word に渡る。
     search_query: String,
+    /// 直近のマウスカーソル位置。select skin のクリック hit-test に使う。
+    last_cursor_position: Option<PhysicalPosition<f64>>,
     /// IME 変換中の未確定文字列 (Preedit)。Commit で空になり search_query に追加される。
     search_preedit: String,
     /// 直近の検索クエリ履歴 (古い順)。`bmz-search:<q>` 仮想フォルダとしてルートに並ぶ。
@@ -752,6 +756,7 @@ impl WinitApp {
             deferred_boot: deferred_boot_action(boot_chart_id, &options),
             search_mode: false,
             search_query: String::new(),
+            last_cursor_position: None,
             search_preedit: String::new(),
             search_history: std::collections::VecDeque::new(),
             search_message: None,
@@ -2138,6 +2143,101 @@ impl WinitApp {
         }
         if let Some(select_move) = select_wheel_move(delta) {
             self.move_selection(select_move);
+        }
+    }
+
+    fn route_mouse_input(&mut self, state: ElementState, button: MouseButton) {
+        if state != ElementState::Pressed || !matches!(self.view_state(), AppViewState::Select) {
+            return;
+        }
+        let Some((x, y)) = self.cursor_position_normalized() else {
+            return;
+        };
+        let snapshot = self.select_snapshot();
+        let Some(hit) = self.renderer.select_skin_click_hit(&snapshot, x, y) else {
+            return;
+        };
+        self.handle_select_skin_click(hit, button, x, y);
+    }
+
+    fn cursor_position_normalized(&self) -> Option<(f32, f32)> {
+        let window = self.window.as_ref()?;
+        let position = self.last_cursor_position?;
+        let size = window.inner_size();
+        if size.width == 0 || size.height == 0 {
+            return None;
+        }
+        Some((
+            (position.x as f32 / size.width as f32).clamp(0.0, 1.0),
+            (position.y as f32 / size.height as f32).clamp(0.0, 1.0),
+        ))
+    }
+
+    fn handle_select_skin_click(&mut self, hit: SkinClickHit, button: MouseButton, x: f32, y: f32) {
+        match hit.target {
+            SkinClickTarget::SelectRow { row_index } => {
+                self.handle_select_row_click(row_index, button);
+            }
+            SkinClickTarget::Event { event_id, click } => {
+                let Some(arg) = select_click_event_arg(click, button, hit.rect, x, y) else {
+                    return;
+                };
+                self.execute_select_skin_event(event_id, arg);
+            }
+        }
+    }
+
+    fn handle_select_row_click(&mut self, row_index: u32, button: MouseButton) {
+        match button {
+            MouseButton::Left => {
+                let next = row_index as usize;
+                if next < self.select_items.len() && self.selected_index != next {
+                    self.selected_index = next;
+                    self.select_bar_started_at = Instant::now();
+                    self.play_system_sound(crate::system_sound::SoundType::Scratch);
+                }
+            }
+            MouseButton::Right => self.exit_folder(),
+            _ => {}
+        }
+    }
+
+    fn execute_select_skin_event(&mut self, event_id: i32, arg: i32) {
+        match event_id {
+            // beatoraja EventFactory: play / autoplay / practice.
+            15 => {
+                self.set_assist_option(AssistOption::Normal);
+                self.enter_or_play_selected();
+            }
+            16 => {
+                self.set_assist_option(AssistOption::Autoplay);
+                self.enter_or_play_selected();
+            }
+            315 => {
+                if let Some(chart_id) = self.currently_selected_chart_id() {
+                    self.enter_practice(chart_id, PracticeCliOverrides::default());
+                }
+            }
+            19 | 316 | 317 | 318 => {
+                let slot = match event_id {
+                    19 => 0,
+                    316 => 1,
+                    317 => 2,
+                    318 => 3,
+                    _ => unreachable!(),
+                };
+                if !self.start_replay_for_selected(slot) {
+                    tracing::info!(slot, "select skin replay click ignored; slot is empty");
+                }
+            }
+            // These exist in beatoraja default select.json.  BMZ does not yet
+            // expose matching mode/sort/LN-mode state, so keep them harmless.
+            11 | 12 | 308 => {
+                tracing::debug!(event_id, arg, "select skin event is not implemented yet");
+            }
+            _ => {
+                tracing::debug!(event_id, arg, "unsupported select skin event");
+            }
         }
     }
 
@@ -5274,6 +5374,15 @@ impl ApplicationHandler for WinitApp {
                 }
                 self.route_mouse_wheel(delta);
             }
+            WindowEvent::CursorMoved { position, .. } => {
+                self.last_cursor_position = Some(position);
+            }
+            WindowEvent::MouseInput { state, button, .. } => {
+                if egui_consumed {
+                    return;
+                }
+                self.route_mouse_input(state, button);
+            }
             WindowEvent::Ime(ime) => {
                 if egui_consumed {
                     return;
@@ -6032,6 +6141,28 @@ fn select_wheel_move(delta: MouseScrollDelta) -> Option<SelectMove> {
         Some(SelectMove::Next)
     } else {
         None
+    }
+}
+
+fn select_click_event_arg(
+    click_type: i32,
+    button: MouseButton,
+    rect: Rect,
+    x: f32,
+    y: f32,
+) -> Option<i32> {
+    let button_arg = match button {
+        MouseButton::Left => 1,
+        MouseButton::Right => -1,
+        MouseButton::Middle => 1,
+        _ => return None,
+    };
+    match click_type {
+        0 => Some(button_arg),
+        1 => Some(-button_arg),
+        2 => Some(if x >= rect.x + rect.width * 0.5 { 1 } else { -1 }),
+        3 => Some(if y <= rect.y + rect.height * 0.5 { 1 } else { -1 }),
+        _ => None,
     }
 }
 
@@ -6931,6 +7062,19 @@ mod tests {
             ))),
             Some(SelectMove::Next)
         );
+    }
+
+    #[test]
+    fn select_click_event_arg_matches_beatoraja_click_types() {
+        let rect = Rect { x: 0.2, y: 0.3, width: 0.4, height: 0.2 };
+        assert_eq!(select_click_event_arg(0, MouseButton::Left, rect, 0.3, 0.4), Some(1));
+        assert_eq!(select_click_event_arg(0, MouseButton::Right, rect, 0.3, 0.4), Some(-1));
+        assert_eq!(select_click_event_arg(1, MouseButton::Right, rect, 0.3, 0.4), Some(1));
+        assert_eq!(select_click_event_arg(2, MouseButton::Left, rect, 0.39, 0.4), Some(-1));
+        assert_eq!(select_click_event_arg(2, MouseButton::Left, rect, 0.41, 0.4), Some(1));
+        assert_eq!(select_click_event_arg(3, MouseButton::Left, rect, 0.3, 0.39), Some(1));
+        assert_eq!(select_click_event_arg(3, MouseButton::Left, rect, 0.3, 0.41), Some(-1));
+        assert_eq!(select_click_event_arg(4, MouseButton::Left, rect, 0.3, 0.4), None);
     }
 
     #[test]
