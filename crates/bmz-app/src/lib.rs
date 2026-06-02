@@ -10,6 +10,7 @@ pub mod course_cmd;
 pub mod difficulty_table;
 pub mod input;
 pub mod paths;
+pub mod practice_ui;
 pub mod screens;
 pub mod select_options;
 pub mod skin_loader;

@@ -5,6 +5,7 @@ pub mod play_loop;
 pub mod play_session;
 pub mod play_snapshot;
 pub mod play_start;
+pub mod practice;
 pub mod result;
 pub mod result_model;
 pub mod select;

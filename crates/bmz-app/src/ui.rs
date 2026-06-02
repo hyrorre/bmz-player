@@ -20,6 +20,7 @@ use crate::config::app_config::{
 use crate::config::profile_config::{
     ProfileConfig, SkinConfig, SkinHistoryEntryConfig, SkinOffsetConfig,
 };
+use crate::practice_ui::{PracticePanelContext, build_practice_panel};
 use crate::screens::course_session::CourseResultSummary;
 use crate::screens::select_model::SelectCourseRow;
 use crate::songs_cmd::{add_song_root_entry, remove_song_root_entry};
@@ -192,6 +193,8 @@ pub struct EguiOutput {
     pub debug_panel_visible: bool,
     /// 有効な曲ルートをライブラリ DB へ再スキャンする要求。
     pub trigger_song_rescan: bool,
+    pub practice_start: bool,
+    pub practice_leave: bool,
 }
 
 /// egui の状態管理とフレーム構築を担うレイヤ。
@@ -248,9 +251,14 @@ impl EguiLayer {
     ///
     /// 戻り値が true のとき、その入力は egui が消費したのでゲーム側へ伝播させない。
     /// メニュー非表示中は egui に状態は渡すが消費とは扱わず、ゲーム操作を妨げない。
-    pub fn on_window_event(&mut self, window: &Window, event: &WindowEvent) -> bool {
+    pub fn on_window_event(
+        &mut self,
+        window: &Window,
+        event: &WindowEvent,
+        practice_overlay: bool,
+    ) -> bool {
         let response = self.state.on_window_event(window, event);
-        self.visible && response.consumed
+        (self.visible || practice_overlay) && response.consumed
     }
 
     /// 1 フレーム分の UI を構築し、描画データと要求されたアクションを返す。
@@ -264,6 +272,7 @@ impl EguiLayer {
         skin_catalog: &SkinCatalog,
         course_result: Option<&CourseResultSummary>,
         course_preview: Option<&SelectCourseRow>,
+        mut practice: Option<&mut PracticePanelContext<'_>>,
     ) -> EguiOutput {
         let raw_input = self.state.take_egui_input(window);
         let ctx = self.ctx.clone();
@@ -275,6 +284,8 @@ impl EguiLayer {
         let mut reset_skin_config = false;
         let mut skin_config_changed = false;
         let mut trigger_song_rescan = false;
+        let mut practice_start = false;
+        let mut practice_leave = false;
         let visible_flag = &mut self.visible;
         let full_output = ctx.run_ui(raw_input, |ui| {
             // Course result overlay is shown regardless of menu visibility — it's
@@ -286,6 +297,11 @@ impl EguiLayer {
             // select screen — the caller decides when to pass Some().
             if let Some(preview) = course_preview {
                 build_course_preview_panel(ui.ctx(), preview);
+            }
+            if let Some(practice_ctx) = practice.as_mut() {
+                let panel = build_practice_panel(ui.ctx(), practice_ctx);
+                practice_start |= panel.start_play;
+                practice_leave |= panel.leave;
             }
             if *visible_flag {
                 let ctx = ui.ctx();
@@ -326,6 +342,8 @@ impl EguiLayer {
             skin_config_changed,
             debug_panel_visible: *show_debug,
             trigger_song_rescan,
+            practice_start,
+            practice_leave,
         }
     }
 }

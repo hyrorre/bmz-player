@@ -35,6 +35,7 @@ pub struct RunningPlaySession {
     /// プレイ開始時のターゲット設定を譜面ノーツ数で解決した EX スコア。
     pub target_ex_score: Option<u32>,
     pub applied_arrange: AppliedArrange,
+    pub practice_mode: bool,
     pub bga_frames: BgaFrameCatalog,
     pub video_bga_decoders: HashMap<BgaAssetId, ActiveVideoBgaDecoder>,
     pub failed_video_bga: HashSet<BgaAssetId>,
@@ -122,6 +123,7 @@ pub fn open_prepared_play_audio(
         best_ghost: None,
         target_ex_score: prepared.target_ex_score,
         applied_arrange: prepared.applied_arrange,
+        practice_mode: prepared.practice_mode,
         bga_frames: BgaFrameCatalog::new(),
         video_bga_decoders: HashMap::new(),
         failed_video_bga: HashSet::new(),

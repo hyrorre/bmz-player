@@ -43,20 +43,26 @@ use crate::config::profile_config::{
 use crate::config::save::{save_app_config, save_profile_config};
 use crate::config::settings_registry::SettingsEntryId;
 use crate::input::winit::physical_key_to_control;
+use crate::practice_ui::PracticePanelContext;
 use crate::screens::course_session::{ActiveCourseSession, CourseEntryResult, CourseResultSummary};
 use crate::screens::play_finish::FinishedPlaySession;
 use crate::screens::play_loop::{
     PlayAdvanceOutcome, PlayEndingSkinTimers, advance_running_play_session_until_result,
     refresh_play_ending_snapshot,
 };
+use crate::screens::play_session::build_practice_prepared_from_preloaded;
 use crate::screens::play_snapshot::{
     BgaFrameCatalog, bga_texture_id, build_render_snapshot_with_target_and_bga_frames,
     display_bga_frame,
 };
 use crate::screens::play_start::{
     PlayStartOptions, PreloadedWinitPlaySession, StartedWinitPlaySession, apply_course_constraints,
-    apply_queued_replay, open_prepared_winit_play_session,
+    apply_queued_replay, open_prepared_winit_play_session, play_session_options_from_start,
     prepare_play_session_for_chart_with_winit_input, prepare_winit_play_session_from_preloaded,
+};
+use crate::screens::practice::{
+    PracticeCliOverrides, PracticePhase, PracticeSession, clamp_practice_property,
+    load_practice_property, practice_chart_zero_time, save_practice_property,
 };
 use crate::screens::result_model::{ResultFastSlowJudgeCounts, ResultSummary};
 use crate::screens::select_model::{
@@ -294,6 +300,10 @@ struct WinitApp {
     /// 直近の検索で「0 件ヒット」になった等のフィードバック文字列。
     /// 検索モード解除時にクリアされる。
     search_message: Option<String>,
+    /// CLI から入ったプラクティスセッション。選曲 UI からは未対応。
+    practice_session: Option<PracticeSession>,
+    /// 次の `RunningPlaySession::start` で使う chart zero（区間先頭の 1 秒前）。
+    practice_chart_zero_time: Option<TimeUs>,
 }
 
 type PlaySkinSignature = (KeyMode, String, BTreeMap<String, String>, BTreeMap<String, String>);
@@ -320,6 +330,12 @@ struct PlayPreloadResult {
     generation: u64,
     chart_id: i64,
     result: std::result::Result<PreloadedWinitPlaySession, String>,
+}
+
+struct PracticeChartDefaults {
+    property: crate::screens::practice::PracticeProperty,
+    title: String,
+    sha256: [u8; 32],
 }
 
 struct PlayEndingTransition {
@@ -720,16 +736,29 @@ impl WinitApp {
             search_preedit: String::new(),
             search_history: std::collections::VecDeque::new(),
             search_message: None,
+            practice_session: None,
+            practice_chart_zero_time: None,
         };
         if let Some(chart_id) = boot_chart_id {
-            tracing::info!(chart_id, "booting directly into chart");
-            if let Some(slot) = options.boot_replay_slot {
-                if !app.try_start_replay_for_chart(chart_id, slot) {
-                    tracing::warn!(slot, "boot replay slot empty; falling back to normal play");
+            if options.boot_practice {
+                tracing::info!(chart_id, "booting into practice mode");
+                app.enter_practice(
+                    chart_id,
+                    PracticeCliOverrides {
+                        start_time_ms: options.practice_start_ms,
+                        end_time_ms: options.practice_end_ms,
+                    },
+                );
+            } else {
+                tracing::info!(chart_id, "booting directly into chart");
+                if let Some(slot) = options.boot_replay_slot {
+                    if !app.try_start_replay_for_chart(chart_id, slot) {
+                        tracing::warn!(slot, "boot replay slot empty; falling back to normal play");
+                        app.start_chart(chart_id);
+                    }
+                } else {
                     app.start_chart(chart_id);
                 }
-            } else {
-                app.start_chart(chart_id);
             }
         } else if let Some(course_id) = options.boot_course_replay_id {
             // `--boot-course-replay <COURSE_ID>` replays the most recent
@@ -1982,8 +2011,7 @@ impl WinitApp {
         }
         let Some(window) = self.window.as_ref() else { return };
         let Some(document) = self.renderer.select_skin_document() else { return };
-        let Some((x_norm, y_norm, w_norm, h_norm)) =
-            document.text_destination_rect_for_ref(30)
+        let Some((x_norm, y_norm, w_norm, h_norm)) = document.text_destination_rect_for_ref(30)
         else {
             return;
         };
@@ -2178,6 +2206,215 @@ impl WinitApp {
     fn start_chart(&mut self, chart_id: i64) {
         let options = self.play_start_options();
         self.begin_decide_for_chart(chart_id, options);
+    }
+
+    fn enter_practice(&mut self, chart_id: i64, cli: PracticeCliOverrides) {
+        let defaults = match self.load_practice_defaults_for_chart(chart_id, &cli) {
+            Ok(defaults) => defaults,
+            Err(error) => {
+                tracing::error!(%error, chart_id, "failed to load practice configuration");
+                return;
+            }
+        };
+        let max_end_time_ms = defaults.property.end_time_ms;
+        self.practice_session = Some(PracticeSession {
+            chart_id,
+            chart_title: defaults.title,
+            chart_sha256: defaults.sha256,
+            property: defaults.property,
+            phase: PracticePhase::Config,
+            max_end_time_ms,
+        });
+        self.finished_play = None;
+        self.play_ending = None;
+        self.result_exit = None;
+        self.clear_active_course_state();
+
+        let preload_options = PlayStartOptions {
+            autoplay: false,
+            practice_mode: false,
+            arrange: ArrangeOption::Normal,
+            ..Default::default()
+        };
+        self.start_play_preload(chart_id, preload_options);
+        self.enter_play_scene(chart_id, self.decide_snapshot_for_chart(chart_id));
+        tracing::info!(chart_id, "practice configuration screen ready");
+    }
+
+    fn load_practice_defaults_for_chart(
+        &self,
+        chart_id: i64,
+        cli: &PracticeCliOverrides,
+    ) -> Result<PracticeChartDefaults> {
+        let Some(path) = self.boot.library_db.primary_chart_file_path(chart_id)? else {
+            anyhow::bail!("chart file not found for chart id {chart_id}");
+        };
+        let import = bmz_chart::import::import_bms_chart(Path::new(&path), None, true)
+            .with_context(|| format!("import chart for practice defaults: {path}"))?;
+        let property = load_practice_property(
+            &self.boot.profile_paths,
+            &import.chart.identity.file_sha256,
+            &import.chart,
+            self.gauge_option,
+            cli,
+        )?;
+        let title = if import.chart.metadata.title.is_empty() {
+            format!("chart {chart_id}")
+        } else {
+            import.chart.metadata.title.clone()
+        };
+        Ok(PracticeChartDefaults { property, title, sha256: import.chart.identity.file_sha256 })
+    }
+
+    fn practice_media_ready(&self) -> bool {
+        self.practice_session.is_some()
+            && self.preloaded_play_session.is_some()
+            && self.pending_play_preload.is_none()
+    }
+
+    fn leave_practice(&mut self) {
+        if let Some(practice) = &self.practice_session {
+            let _ = save_practice_property(
+                &self.boot.profile_paths,
+                &practice.chart_sha256,
+                &practice.property,
+            );
+        }
+        self.practice_session = None;
+        self.practice_chart_zero_time = None;
+        self.active_play = None;
+        self.pending_play_start = None;
+        self.preloaded_play_session = None;
+        self.invalidate_play_preload();
+        self.play_ending = None;
+        self.finished_play = None;
+        self.play_ready_sound_started_at = None;
+        self.draining_audio = None;
+        self.clear_play_backbmp_state();
+        self.last_play_snapshot = None;
+        self.reload_select_items();
+        let now = Instant::now();
+        self.select_scene_started_at = now;
+        self.select_bar_started_at = now;
+        tracing::info!("left practice mode");
+    }
+
+    fn start_practice_round(&mut self) {
+        if !self.practice_media_ready() {
+            tracing::debug!("practice start ignored: media not ready");
+            return;
+        }
+        let (chart_id, property, chart_sha256) = {
+            let Some(practice) = &mut self.practice_session else {
+                return;
+            };
+            if let Some(preloaded) = &self.preloaded_play_session {
+                clamp_practice_property(&mut practice.property, &preloaded.preloaded.chart);
+                practice.max_end_time_ms =
+                    crate::screens::practice::default_end_time_ms(&preloaded.preloaded.chart);
+            }
+            (practice.chart_id, practice.property.clone(), practice.chart_sha256)
+        };
+        if let Err(error) =
+            save_practice_property(&self.boot.profile_paths, &chart_sha256, &property)
+        {
+            tracing::warn!(%error, "failed to save practice property");
+        }
+        self.practice_chart_zero_time =
+            Some(practice_chart_zero_time(&property, self.play_skin_playstart_offset()));
+        if let Some(practice) = &mut self.practice_session {
+            practice.phase = PracticePhase::Playing;
+        }
+
+        let chart_zero = self.practice_chart_zero_time.unwrap_or(TimeUs(0));
+        let preloaded = match self.preloaded_play_session.take() {
+            Some(preloaded) => preloaded,
+            None => {
+                tracing::error!(chart_id, "practice start without preloaded session");
+                self.practice_chart_zero_time = None;
+                if let Some(practice) = &mut self.practice_session {
+                    practice.phase = PracticePhase::Config;
+                }
+                return;
+            }
+        };
+
+        let session_options = play_session_options_from_start(
+            &self.boot.app_config,
+            PlayStartOptions {
+                autoplay: false,
+                practice_mode: true,
+                gauge: Some(property.gauge),
+                gauge_auto_shift: GaugeAutoShiftConfig::Off,
+                arrange: property.arrange,
+                chart_zero_time: chart_zero,
+                ..Default::default()
+            },
+        );
+        let prepared = build_practice_prepared_from_preloaded(
+            preloaded.preloaded,
+            &self.boot.profile_config,
+            &property,
+            session_options,
+            Box::new(preloaded.input.clone()),
+        );
+        let prepared_winit = crate::screens::play_start::PreparedWinitPlaySession {
+            prepared,
+            input: preloaded.input,
+        };
+        match open_prepared_winit_play_session(
+            &self.boot.score_db,
+            &self.boot.app_config,
+            prepared_winit,
+        ) {
+            Ok(active_play) => {
+                self.pending_play_start = None;
+                self.install_active_play(active_play);
+                tracing::info!(chart_id, "practice round started");
+            }
+            Err(error) => {
+                tracing::error!(%error, chart_id, "failed to open practice play session");
+                self.practice_chart_zero_time = None;
+                if let Some(practice) = &mut self.practice_session {
+                    practice.phase = PracticePhase::Config;
+                }
+            }
+        }
+    }
+
+    fn finish_practice_round(&mut self) {
+        let (chart_id, chart_sha256, property) = {
+            let Some(practice) = &self.practice_session else {
+                return;
+            };
+            (practice.chart_id, practice.chart_sha256, practice.property.clone())
+        };
+        if let Err(error) =
+            save_practice_property(&self.boot.profile_paths, &chart_sha256, &property)
+        {
+            tracing::warn!(%error, "failed to save practice property after round");
+        }
+        if let Some(started) = self.active_play.take() {
+            self.draining_audio = Some(started.running.audio);
+        }
+        self.play_ending = None;
+        self.finished_play = None;
+        self.play_ready_sound_started_at = None;
+        self.practice_chart_zero_time = None;
+        if let Some(practice) = &mut self.practice_session {
+            practice.phase = PracticePhase::Config;
+        }
+
+        let preload_options = PlayStartOptions {
+            autoplay: false,
+            practice_mode: false,
+            arrange: ArrangeOption::Normal,
+            ..Default::default()
+        };
+        self.invalidate_play_preload();
+        self.start_play_preload(chart_id, preload_options);
+        self.pending_play_start = Some(PendingPlayStart { chart_id });
+        tracing::info!(chart_id, "practice round finished; back to configuration");
     }
 
     fn start_course(&mut self, course_id: i64) {
@@ -2905,6 +3142,13 @@ impl WinitApp {
         }
 
         // 2) Play 入場が確定 (pending_play_start) しており、バッファに preload があれば install。
+        if self
+            .practice_session
+            .as_ref()
+            .is_some_and(|practice| practice.phase == PracticePhase::Config)
+        {
+            return;
+        }
         let Some(play_start) = self.pending_play_start.as_ref() else {
             return;
         };
@@ -2998,6 +3242,7 @@ impl WinitApp {
         };
         let options = PlayStartOptions {
             autoplay: false,
+            practice_mode: false,
             replay_player: Some(player),
             chart_zero_time: TimeUs(0),
             gauge: Some(self.gauge_option),
@@ -3584,6 +3829,16 @@ impl WinitApp {
                 self.play_landmine_se(mine_hits);
             }
             Ok(PlayAdvanceOutcome::Finished { frame, finished }) => {
+                if self
+                    .practice_session
+                    .as_ref()
+                    .is_some_and(|practice| practice.phase == PracticePhase::Playing)
+                {
+                    let mine_hits = frame.mine_hits.len();
+                    self.play_landmine_se(mine_hits);
+                    self.finish_practice_round();
+                    return;
+                }
                 let hispeed = active_play.running.session.hispeed;
                 let mine_hits = frame.mine_hits.len();
                 let mut snapshot = frame.render_snapshot;
@@ -3623,7 +3878,10 @@ impl WinitApp {
         if self.play_elapsed_time().0 < self.play_skin_ready_delay().as_micros() as i64 {
             return;
         }
-        let chart_zero_time = self.play_skin_playstart_offset();
+        let chart_zero_time = self
+            .practice_chart_zero_time
+            .take()
+            .unwrap_or_else(|| self.play_skin_playstart_offset());
         let Some(active_play) = &mut self.active_play else {
             return;
         };
@@ -3775,6 +4033,18 @@ impl WinitApp {
                 })
             })
             .flatten();
+        let practice_media_ready = self.practice_media_ready();
+        let mut practice_panel_ctx = None;
+        if let Some(practice) = &mut self.practice_session
+            && practice.phase == PracticePhase::Config
+        {
+            practice_panel_ctx = Some(PracticePanelContext {
+                property: &mut practice.property,
+                chart_title: &practice.chart_title,
+                media_ready: practice_media_ready,
+                max_end_time_ms: practice.max_end_time_ms,
+            });
+        }
         let Some(egui) = self.egui.as_mut() else {
             return;
         };
@@ -3787,8 +4057,16 @@ impl WinitApp {
             &self.skin_catalog,
             course_result.as_ref(),
             course_preview.as_ref(),
+            practice_panel_ctx.as_mut(),
         );
         self.renderer.set_egui_frame(output.frame);
+        if output.practice_leave {
+            self.leave_practice();
+            return;
+        }
+        if output.practice_start {
+            self.start_practice_round();
+        }
         // デバッグパネルの開閉状態を profile config へ同期する。
         // 永続化は終了時 / プレイ後の save_profile_config に任せる。
         self.boot.profile_config.ui.show_fps = output.debug_panel_visible;
@@ -4662,8 +4940,12 @@ impl ApplicationHandler for WinitApp {
 
         // すべてのウィンドウイベントを egui へ供給する。RedrawRequested など
         // egui が関知しないイベントは egui_winit 側で無視される。
+        let practice_overlay = self
+            .practice_session
+            .as_ref()
+            .is_some_and(|practice| practice.phase == PracticePhase::Config);
         let egui_consumed = match (self.window.clone(), self.egui.as_mut()) {
-            (Some(window), Some(egui)) => egui.on_window_event(&window, &event),
+            (Some(window), Some(egui)) => egui.on_window_event(&window, &event, practice_overlay),
             _ => false,
         };
 
@@ -4808,6 +5090,9 @@ fn log_startup_options(options: &AppOptions) {
     }
     if options.smoke_exit_on_result {
         tracing::info!(arg = SMOKE_EXIT_ON_RESULT_ARG, "smoke auto-exit on result enabled");
+    }
+    if options.boot_practice {
+        tracing::info!("practice mode enabled for boot chart");
     }
 }
 

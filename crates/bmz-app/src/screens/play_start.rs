@@ -27,6 +27,8 @@ use crate::storage::score_db::ScoreDatabase;
 #[derive(Debug, Clone, Default)]
 pub struct PlayStartOptions {
     pub autoplay: bool,
+    /// Practice mode: section play without result DB update (CLI entry only for now).
+    pub practice_mode: bool,
     pub replay_player: Option<ReplayPlayer>,
     pub chart_zero_time: TimeUs,
     /// Override profile gauge type. None means use the profile default.
@@ -91,6 +93,7 @@ pub fn play_session_options_from_start(
 
     PlaySessionOptions {
         autoplay: start_options.autoplay,
+        practice_mode: start_options.practice_mode,
         replay_player: start_options.replay_player,
         sample_rate: app_config.audio.sample_rate,
         gauge_override,

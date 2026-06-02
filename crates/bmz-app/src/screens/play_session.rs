@@ -29,12 +29,17 @@ use crate::config::play::{
 use crate::config::profile_config::{
     BgaExpandConfig, BgaModeConfig, LaneEffectConfig, ProfileConfig,
 };
+use crate::screens::practice::{
+    PracticeProperty, apply_practice_property, apply_practice_start_gauge,
+};
 use crate::select_options::{ArrangeOption, TargetOption};
 use crate::storage::library_db::LibraryDatabase;
 
 #[derive(Debug, Clone)]
 pub struct PlaySessionOptions {
     pub autoplay: bool,
+    /// Practice section play: no score / replay persistence (like autoplay).
+    pub practice_mode: bool,
     pub replay_player: Option<ReplayPlayer>,
     pub sample_rate: u32,
     pub gauge_override: Option<GaugeType>,
@@ -72,6 +77,7 @@ pub struct PreparedPlaySession {
     pub sample_report: Vec<LoadedSampleReport>,
     pub applied_arrange: AppliedArrange,
     pub target_ex_score: Option<u32>,
+    pub practice_mode: bool,
 }
 
 pub struct PreloadedPlaySession {
@@ -85,6 +91,7 @@ impl Default for PlaySessionOptions {
     fn default() -> Self {
         Self {
             autoplay: false,
+            practice_mode: false,
             replay_player: None,
             sample_rate: 48_000,
             gauge_override: None,
@@ -406,6 +413,36 @@ pub fn preload_play_session_for_chart(
     Ok(PreloadedPlaySession { chart, audio, sample_report, applied_arrange })
 }
 
+pub fn build_practice_prepared_from_preloaded(
+    preloaded: PreloadedPlaySession,
+    profile: &ProfileConfig,
+    property: &PracticeProperty,
+    mut options: PlaySessionOptions,
+    input_backend: Box<dyn InputBackend>,
+) -> PreparedPlaySession {
+    let mut chart = (*preloaded.chart).clone();
+    let applied_arrange = apply_practice_property(&mut chart, property);
+    options.practice_mode = true;
+    options.autoplay = false;
+    options.replay_player = None;
+    options.gauge_override = Some(gauge_type_from_config(property.gauge));
+    options.gauge_auto_shift = GaugeAutoShiftMode::Off;
+    options.arrange = property.arrange;
+    let target_ex_score = None;
+    let practice_mode = options.practice_mode;
+    let mut session =
+        build_game_session_with_input_backend(Arc::new(chart), profile, options, input_backend);
+    apply_practice_start_gauge(&mut session.gauge, property.start_gauge);
+    PreparedPlaySession {
+        session,
+        audio: preloaded.audio,
+        sample_report: preloaded.sample_report,
+        applied_arrange,
+        target_ex_score,
+        practice_mode,
+    }
+}
+
 pub fn build_prepared_play_session_from_preloaded(
     preloaded: PreloadedPlaySession,
     profile: &ProfileConfig,
@@ -413,6 +450,7 @@ pub fn build_prepared_play_session_from_preloaded(
     input_backend: Box<dyn InputBackend>,
 ) -> PreparedPlaySession {
     let target_ex_score = options.target.target_ex_score(preloaded.chart.total_notes);
+    let practice_mode = options.practice_mode;
     let session =
         build_game_session_with_input_backend(preloaded.chart, profile, options, input_backend);
     PreparedPlaySession {
@@ -421,6 +459,7 @@ pub fn build_prepared_play_session_from_preloaded(
         sample_report: preloaded.sample_report,
         applied_arrange: preloaded.applied_arrange,
         target_ex_score,
+        practice_mode,
     }
 }
 

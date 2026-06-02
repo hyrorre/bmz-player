@@ -106,6 +106,7 @@ pub fn advance_play_screen_until_result(
             played_at,
             applied_arrange,
             None,
+            false,
         )?;
         let mut result_graph = crate::screens::result_model::ResultGraphCollector::default();
         result_graph.record_frame(&frame);
@@ -170,6 +171,7 @@ pub fn advance_running_play_session_until_result(
             played_at,
             &running.applied_arrange,
             running.target_ex_score,
+            running.practice_mode,
         )?;
         finished.summary.graph = running.result_graph.snapshot();
         running.finished = Some(finished.clone());

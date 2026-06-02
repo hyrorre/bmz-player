@@ -9,6 +9,10 @@ pub const SMOKE_EXIT_ON_RESULT_ARG: &str = "--smoke-exit-on-result";
 pub const BOOT_REPLAY_ARG: &str = "--boot-replay";
 pub const BOOT_COURSE_REPLAY_ARG: &str = "--boot-course-replay";
 pub const BOOT_COURSE_ARG: &str = "--boot-course";
+pub const PRACTICE_SHORT_ARG: &str = "-p";
+pub const PRACTICE_ARG: &str = "--practice";
+pub const PRACTICE_START_MS_ARG: &str = "--practice-start-ms";
+pub const PRACTICE_END_MS_ARG: &str = "--practice-end-ms";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
@@ -161,6 +165,10 @@ pub struct AppOptions {
     pub boot_course_id: Option<i64>,
     /// `--renderer <backend>` で指定されたレンダラーバックエンド。
     pub renderer: Option<RendererBackend>,
+    /// `-p` / `--practice`: boot into practice mode (CLI only).
+    pub boot_practice: bool,
+    pub practice_start_ms: Option<u32>,
+    pub practice_end_ms: Option<u32>,
 }
 
 impl AppOptions {
@@ -192,6 +200,14 @@ impl AppOptions {
             }
             if let Some(value) = arg.strip_prefix("--renderer=") {
                 options.renderer = Some(parse_renderer_backend(value)?);
+                continue;
+            }
+            if let Some(value) = arg.strip_prefix("--practice-start-ms=") {
+                options.practice_start_ms = Some(parse_practice_ms(value, PRACTICE_START_MS_ARG)?);
+                continue;
+            }
+            if let Some(value) = arg.strip_prefix("--practice-end-ms=") {
+                options.practice_end_ms = Some(parse_practice_ms(value, PRACTICE_END_MS_ARG)?);
                 continue;
             }
 
@@ -232,6 +248,21 @@ impl AppOptions {
                     };
                     options.renderer = Some(parse_renderer_backend(value.as_ref())?);
                 }
+                PRACTICE_SHORT_ARG | PRACTICE_ARG => options.boot_practice = true,
+                PRACTICE_START_MS_ARG => {
+                    let Some(value) = args.next() else {
+                        bail!("{PRACTICE_START_MS_ARG} requires milliseconds");
+                    };
+                    options.practice_start_ms =
+                        Some(parse_practice_ms(value.as_ref(), PRACTICE_START_MS_ARG)?);
+                }
+                PRACTICE_END_MS_ARG => {
+                    let Some(value) = args.next() else {
+                        bail!("{PRACTICE_END_MS_ARG} requires milliseconds");
+                    };
+                    options.practice_end_ms =
+                        Some(parse_practice_ms(value.as_ref(), PRACTICE_END_MS_ARG)?);
+                }
                 _ if let Some(slot) = parse_beatoraja_replay_flag(arg) => {
                     options.boot_replay_slot = Some(slot);
                 }
@@ -253,7 +284,17 @@ where
 }
 
 pub fn app_help_text() -> &'static str {
-    "bmz-app\n\nUsage:\n  bmz-app [OPTIONS] [PATH]\n  bmz-app table <SUBCOMMAND>\n  bmz-app songs <SUBCOMMAND>\n  bmz-app course <SUBCOMMAND>\n\nOptions:\n  [PATH]                          Start the chart at PATH (beatoraja-style alias)\n  -a                              Enable autoplay for the boot chart (alias of --autoplay-on-start)\n  -r1 | -r2 | -r3 | -r4           Start replay slot 1..4 for the boot chart\n  --boot-play-sample              Start the bundled sample chart on boot\n  --autoplay-on-start             Enable autoplay for started charts\n  --boot-replay <1..4>            Start replay slot N for the boot chart\n  --boot-course <ID>              Start course ID fresh on boot\n  --boot-course-replay <ID>       Replay the latest attempt of course ID on boot\n  --smoke-exit-after-frames <N>   Exit after N rendered frames, clamped to 1 or more\n  --smoke-exit-on-result          Exit when the app reaches the result screen\n  --renderer <backend>            wgpu renderer backend (vulkan, metal, dx12, gl, auto)\n  -h, --help                      Print this help\n\nTable subcommands:\n  table add <URL>       Add a difficulty table source and fetch it\n  table list            List all stored difficulty tables\n  table fetch [URL]     Fetch/update configured tables, or a single URL\n\nSongs subcommands:\n  songs add <PATH> [--no-recursive] [--disabled]   Add a song root directory\n  songs list                                        List configured song roots\n  songs load [PATH|NAME]                            Scan song roots (incremental)\n  songs reload [PATH|NAME]                          Force rescan song roots\n\nCourse subcommands:\n  course import <PATH>             Import beatoraja course JSON from a file or directory\n  course list                      List stored courses\n  course history <ID> [--limit N]  Show recent attempts of course ID (default limit 10)\n  course attempt <SCORE_ID>        Show per-chart breakdown of a single course attempt\n\nExamples:\n  cargo run -p bmz-app -- /path/to/chart.bms\n  cargo run -p bmz-app -- -a /path/to/chart.bms\n  cargo run -p bmz-app -- -r2 /path/to/chart.bms\n  cargo run -p bmz-app -- --boot-play-sample --smoke-exit-after-frames 3\n  cargo run -p bmz-app -- --boot-play-sample --boot-replay 1 --smoke-exit-on-result\n  cargo run -p bmz-app -- table add https://example.com/table.html\n  cargo run -p bmz-app -- table list\n  cargo run -p bmz-app -- table fetch https://example.com/table.html\n  cargo run -p bmz-app -- songs add /path/to/bms\n  cargo run -p bmz-app -- songs list\n  cargo run -p bmz-app -- songs load\n  cargo run -p bmz-app -- songs reload my-bms-folder\n  cargo run -p bmz-app -- course import /path/to/course.json\n  cargo run -p bmz-app -- course list"
+    "bmz-app\n\nUsage:\n  bmz-app [OPTIONS] [PATH]\n  bmz-app table <SUBCOMMAND>\n  bmz-app songs <SUBCOMMAND>\n  bmz-app course <SUBCOMMAND>\n\nOptions:\n  [PATH]                          Start the chart at PATH (beatoraja-style alias)\n  -p | --practice                 Start boot chart in practice mode (CLI only)\n  --practice-start-ms <MS>       Initial practice section start (milliseconds)\n  --practice-end-ms <MS>         Initial practice section end (milliseconds)\n  -a                              Enable autoplay for the boot chart (alias of --autoplay-on-start)\n  -r1 | -r2 | -r3 | -r4           Start replay slot 1..4 for the boot chart\n  --boot-play-sample              Start the bundled sample chart on boot\n  --autoplay-on-start             Enable autoplay for started charts\n  --boot-replay <1..4>            Start replay slot N for the boot chart\n  --boot-course <ID>              Start course ID fresh on boot\n  --boot-course-replay <ID>       Replay the latest attempt of course ID on boot\n  --smoke-exit-after-frames <N>   Exit after N rendered frames, clamped to 1 or more\n  --smoke-exit-on-result          Exit when the app reaches the result screen\n  --renderer <backend>            wgpu renderer backend (vulkan, metal, dx12, gl, auto)\n  -h, --help                      Print this help\n\nTable subcommands:\n  table add <URL>       Add a difficulty table source and fetch it\n  table list            List all stored difficulty tables\n  table fetch [URL]     Fetch/update configured tables, or a single URL\n\nSongs subcommands:\n  songs add <PATH> [--no-recursive] [--disabled]   Add a song root directory\n  songs list                                        List configured song roots\n  songs load [PATH|NAME]                            Scan song roots (incremental)\n  songs reload [PATH|NAME]                          Force rescan song roots\n\nCourse subcommands:\n  course import <PATH>             Import beatoraja course JSON from a file or directory\n  course list                      List stored courses\n  course history <ID> [--limit N]  Show recent attempts of course ID (default limit 10)\n  course attempt <SCORE_ID>        Show per-chart breakdown of a single course attempt\n\nExamples:\n  cargo run -p bmz-app -- /path/to/chart.bms\n  cargo run -p bmz-app -- -a /path/to/chart.bms\n  cargo run -p bmz-app -- -r2 /path/to/chart.bms\n  cargo run -p bmz-app -- --boot-play-sample --smoke-exit-after-frames 3\n  cargo run -p bmz-app -- --boot-play-sample --boot-replay 1 --smoke-exit-on-result\n  cargo run -p bmz-app -- table add https://example.com/table.html\n  cargo run -p bmz-app -- table list\n  cargo run -p bmz-app -- table fetch https://example.com/table.html\n  cargo run -p bmz-app -- songs add /path/to/bms\n  cargo run -p bmz-app -- songs list\n  cargo run -p bmz-app -- songs load\n  cargo run -p bmz-app -- songs reload my-bms-folder\n  cargo run -p bmz-app -- course import /path/to/course.json\n  cargo run -p bmz-app -- course list"
+}
+
+fn parse_practice_ms(value: &str, arg: &str) -> Result<u32> {
+    let value = value.trim();
+    if value.is_empty() {
+        bail!("{arg} requires milliseconds");
+    }
+    let ms: u64 =
+        value.parse().with_context(|| format!("invalid milliseconds for {arg}: {value}"))?;
+    u32::try_from(ms).with_context(|| format!("{arg} value out of range: {value}"))
 }
 
 fn parse_smoke_exit_after_frames_value(value: &str) -> Result<u32> {
@@ -422,6 +463,26 @@ mod tests {
         assert!(options.autoplay_on_start);
         assert_eq!(options.boot_replay_slot, Some(0));
         assert_eq!(options.boot_play_path.as_deref(), Some("/music/song.bms"));
+    }
+
+    #[test]
+    fn app_options_parse_practice_flags() {
+        let options =
+            AppOptions::parse_args(["-p", "--practice-start-ms=5000", "/music/song.bms"]).unwrap();
+        assert!(options.boot_practice);
+        assert_eq!(options.practice_start_ms, Some(5000));
+        assert_eq!(options.practice_end_ms, None);
+        assert_eq!(options.boot_play_path.as_deref(), Some("/music/song.bms"));
+
+        let options = AppOptions::parse_args([
+            "--practice",
+            "--practice-end-ms",
+            "120000",
+            "/music/song.bms",
+        ])
+        .unwrap();
+        assert!(options.boot_practice);
+        assert_eq!(options.practice_end_ms, Some(120_000));
     }
 
     #[test]

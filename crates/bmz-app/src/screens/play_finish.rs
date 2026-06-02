@@ -36,6 +36,7 @@ pub fn store_session_result(
     session: &GameSession,
     played_at: i64,
     applied_arrange: &AppliedArrange,
+    practice_mode: bool,
 ) -> Result<StoredPlayResult> {
     Ok(finish_session_result(
         score_db,
@@ -45,6 +46,7 @@ pub fn store_session_result(
         played_at,
         applied_arrange,
         None,
+        practice_mode,
     )?
     .stored)
 }
@@ -57,6 +59,7 @@ pub fn finish_session_result(
     played_at: i64,
     applied_arrange: &AppliedArrange,
     target_ex_score: Option<u32>,
+    practice_mode: bool,
 ) -> Result<FinishedPlaySession> {
     ensure_storable_state(session.state)?;
     let result = play_result_from_session(session);
@@ -65,9 +68,9 @@ pub fn finish_session_result(
         .best_scores_for_charts(&[result.chart_sha256])
         .ok()
         .and_then(|mut bests| bests.pop());
-    // オートプレイ / リプレイ再生時はスコア・リプレイをDBに保存しない
+    // オートプレイ / リプレイ再生 / プラクティス時はスコア・リプレイをDBに保存しない
     // （リザルト画面の表示のみ行う）。
-    let stored = if session.autoplay.is_some() || replay_playback {
+    let stored = if session.autoplay.is_some() || replay_playback || practice_mode {
         StoredPlayResult {
             score_history_id: 0,
             replay_path: String::new(),
@@ -157,6 +160,7 @@ pub fn finish_session_result_once(
     played_at: i64,
     applied_arrange: &AppliedArrange,
     target_ex_score: Option<u32>,
+    practice_mode: bool,
 ) -> Result<FinishedPlaySession> {
     if let Some(finished) = cached.clone() {
         return Ok(finished);
@@ -170,6 +174,7 @@ pub fn finish_session_result_once(
         played_at,
         applied_arrange,
         target_ex_score,
+        practice_mode,
     )?;
     *cached = Some(finished.clone());
     Ok(finished)
@@ -252,6 +257,7 @@ mod tests {
             &session,
             1_700_000_100,
             &AppliedArrange::default(),
+            false,
         )
         .unwrap();
 
@@ -290,6 +296,7 @@ mod tests {
             1_700_000_102,
             &AppliedArrange::default(),
             Some(1600),
+            false,
         )
         .unwrap();
 
@@ -332,6 +339,7 @@ mod tests {
             1_700_000_103,
             &AppliedArrange::default(),
             None,
+            false,
         )
         .unwrap();
         let second = finish_session_result_once(
@@ -343,6 +351,7 @@ mod tests {
             1_700_000_104,
             &AppliedArrange::default(),
             None,
+            false,
         )
         .unwrap();
 
@@ -381,6 +390,7 @@ mod tests {
             1_700_000_105,
             &AppliedArrange::default(),
             None,
+            false,
         )
         .unwrap();
 
@@ -422,6 +432,7 @@ mod tests {
             1_700_000_106,
             &AppliedArrange::default(),
             None,
+            false,
         )
         .unwrap();
 
@@ -462,6 +473,7 @@ mod tests {
             &session,
             1_700_000_101,
             &AppliedArrange::default(),
+            false,
         );
 
         assert!(result.is_err());
