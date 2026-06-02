@@ -6313,14 +6313,18 @@ fn select_settings_screen_number_hidden(ref_id: i32) -> bool {
     )
 }
 
+fn select_volume_number(volume: f32) -> i64 {
+    (volume.clamp(0.0, 1.0) * 100.0 + 0.0001) as i64
+}
+
 fn select_settings_screen_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
     match ref_id {
         96 if state.select_row_kind == SelectRowKind::Config => {
             Some(if state.play_level != 0 { state.play_level } else { state.select_play_level })
         }
-        57 => Some((state.select_master_volume.clamp(0.0, 1.0) * 100.0).round() as i64),
-        58 => Some((state.select_bgm_volume.clamp(0.0, 1.0) * 100.0).round() as i64),
-        59 => Some((state.select_key_volume.clamp(0.0, 1.0) * 100.0).round() as i64),
+        57 => Some(select_volume_number(state.select_master_volume)),
+        58 => Some(select_volume_number(state.select_key_volume)),
+        59 => Some(select_volume_number(state.select_bgm_volume)),
         12 => Some(state.judge_timing_offset_ms as i64),
         _ => None,
     }
@@ -6399,10 +6403,10 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         14 => Some((state.lane_cover.clamp(0.0, 1.0) * 100.0).round() as i64),
         // リフト: NUMBER_LIFT1=314 (0-1000)
         314 => Some((state.lift.clamp(0.0, 1.0) * 1000.0).round() as i64),
-        // 選曲画面の音量表示: MASTER/BGM/KEY volume (0-100)
-        57 => Some((state.select_master_volume.clamp(0.0, 1.0) * 100.0).round() as i64),
-        58 => Some((state.select_bgm_volume.clamp(0.0, 1.0) * 100.0).round() as i64),
-        59 => Some((state.select_key_volume.clamp(0.0, 1.0) * 100.0).round() as i64),
+        // 選曲画面の音量表示: MASTER/KEY/BGM volume (0-100)
+        57 => Some(select_volume_number(state.select_master_volume)),
+        58 => Some(select_volume_number(state.select_key_volume)),
+        59 => Some(select_volume_number(state.select_bgm_volume)),
         // 判定タイミングずれ: VALUE_JUDGE_1P_DURATION=525 (ms、絶対値)
         525 => state.judge_timing_ms.map(|ms| ms.unsigned_abs() as i64),
         // 判定タイミングオフセット設定値 (NUMBER_JUDGETIMING=12)
@@ -10025,6 +10029,22 @@ mod tests {
         };
         assert_eq!(skin_state_number(90, state), None);
         assert_eq!(skin_state_number(91, state), None);
+    }
+
+    #[test]
+    fn select_settings_screen_volume_numbers_match_beatoraja_refs() {
+        let state = SkinDrawState {
+            select_screen: true,
+            in_settings: true,
+            select_master_volume: 0.42,
+            select_key_volume: 0.73,
+            select_bgm_volume: 0.18,
+            ..SkinDrawState::default()
+        };
+
+        assert_eq!(skin_state_number(57, state), Some(42));
+        assert_eq!(skin_state_number(58, state), Some(73));
+        assert_eq!(skin_state_number(59, state), Some(18));
     }
 
     #[test]
@@ -14055,9 +14075,9 @@ mod tests {
             select_min_bpm: 120.0,
             select_max_bpm: 180.0,
             select_length_ms: 183_000,
-            select_master_volume: 0.57,
-            select_bgm_volume: 0.58,
+            select_master_volume: 0.575,
             select_key_volume: 0.59,
+            select_bgm_volume: 0.28,
             select_mode_index: 4,
             select_sort_index: 6,
             select_ln_mode_index: 2,
@@ -14087,8 +14107,8 @@ mod tests {
         assert_eq!(skin_state_number(1163, state), Some(3));
         assert_eq!(skin_state_number(1164, state), Some(3));
         assert_eq!(skin_state_number(57, state), Some(57));
-        assert_eq!(skin_state_number(58, state), Some(58));
-        assert_eq!(skin_state_number(59, state), Some(59));
+        assert_eq!(skin_state_number(58, state), Some(59));
+        assert_eq!(skin_state_number(59, state), Some(28));
         assert_eq!(skin_state_number(308, state), Some(2));
 
         assert!(skin_state_number(21, state).is_some_and(|value| value >= 2026));
