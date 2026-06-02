@@ -475,4 +475,10 @@ pub const SCORE_MIGRATIONS: &[Migration] = &[
                 WHERE course_score_id IS NOT NULL;",
         ],
     },
+    Migration {
+        version: 5,
+        statements: &[
+            "ALTER TABLE score_history ADD COLUMN rule_mode TEXT NOT NULL DEFAULT 'Beatoraja';",
+        ],
+    },
 ];

@@ -1,5 +1,7 @@
 use bmz_core::lane::KeyMode;
 
+use crate::rule::RuleMode;
+
 use super::model::JudgeWindow;
 
 /// BMS `#RANK` 値を beatoraja 準拠の判定窓倍率 (%) に変換する。
@@ -35,8 +37,39 @@ pub fn judge_window_for_rank(base: JudgeWindow, percent: i32) -> JudgeWindow {
     }
 }
 
+pub fn judge_window_for_rule_mode(
+    base: JudgeWindow,
+    percent: i32,
+    rule_mode: RuleMode,
+) -> JudgeWindow {
+    match rule_mode {
+        RuleMode::Beatoraja => judge_window_for_rank(base, percent),
+        RuleMode::Lr2Oraja => lr2oraja_judge_window_for_rank(base, percent),
+        RuleMode::Dx => base,
+    }
+}
+
 pub fn judge_window_from_chart_rank(judge_rank: Option<i32>, base: JudgeWindow) -> JudgeWindow {
     judge_window_for_rank(base, judge_rank_to_percent_optional(judge_rank))
+}
+
+pub fn judge_window_from_chart_rank_for_rule_mode(
+    judge_rank: Option<i32>,
+    base: JudgeWindow,
+    rule_mode: RuleMode,
+) -> JudgeWindow {
+    judge_window_for_rule_mode(base, judge_rank_to_percent_optional(judge_rank), rule_mode)
+}
+
+pub const fn note_judge_window_for_rule_mode(
+    key_mode: KeyMode,
+    rule_mode: RuleMode,
+) -> JudgeWindow {
+    match rule_mode {
+        RuleMode::Beatoraja => beatoraja_note_judge_window_for_keymode(key_mode),
+        RuleMode::Lr2Oraja => lr2oraja_note_judge_window(),
+        RuleMode::Dx => dx_note_judge_window(),
+    }
 }
 
 /// beatoraja `JudgeProperty` NOTE table for the default player rule of a key mode.
@@ -86,6 +119,34 @@ pub const fn beatoraja_note_judge_window_for_keymode(key_mode: KeyMode) -> Judge
     }
 }
 
+/// LR2oraja `JudgeProperty.LR2` NOTE window.
+pub const fn lr2oraja_note_judge_window() -> JudgeWindow {
+    JudgeWindow {
+        pgreat_us: 21_000,
+        great_us: 60_000,
+        good_us: 120_000,
+        bad_fast_us: 200_000,
+        bad_slow_us: 200_000,
+        empty_poor_fast_us: 1_000_000,
+        empty_poor_slow_us: 0,
+        mine_hit_us: 16_000,
+    }
+}
+
+/// LR2oraja `JudgeProperty.IIDX` NOTE window used by DX mode.
+pub const fn dx_note_judge_window() -> JudgeWindow {
+    JudgeWindow {
+        pgreat_us: 16_666,
+        great_us: 33_333,
+        good_us: 116_666,
+        bad_fast_us: 200_000,
+        bad_slow_us: 200_000,
+        empty_poor_fast_us: 1_000_000,
+        empty_poor_slow_us: 200_000,
+        mine_hit_us: 16_000,
+    }
+}
+
 /// 譜面ヘッダ `#RANK` と `#EXRANK` イベントから、指定時刻の判定倍率 (%) を求める。
 pub fn judge_percent_at_time(
     header_rank: Option<i32>,
@@ -109,6 +170,49 @@ fn scale_window_us(value: i64, percent: i32) -> i64 {
     } else {
         i64::MAX
     })
+}
+
+fn lr2oraja_judge_window_for_rank(base: JudgeWindow, percent: i32) -> JudgeWindow {
+    let bad = base.bad_fast_us.max(base.bad_slow_us);
+    JudgeWindow {
+        pgreat_us: lr2_scale_window_us(base.pgreat_us, percent, 0, bad),
+        great_us: lr2_scale_window_us(base.great_us, percent, 1, bad),
+        good_us: lr2_scale_window_us(base.good_us, percent, 2, bad),
+        bad_fast_us: base.bad_fast_us,
+        bad_slow_us: base.bad_slow_us,
+        empty_poor_fast_us: base.empty_poor_fast_us,
+        empty_poor_slow_us: base.empty_poor_slow_us,
+        mine_hit_us: base.mine_hit_us,
+    }
+}
+
+const LR2_SCALING: [[i64; 5]; 4] = [
+    [0, 0, 0, 0, 0],
+    [0, 8_000, 15_000, 18_000, 21_000],
+    [0, 24_000, 30_000, 40_000, 60_000],
+    [0, 40_000, 60_000, 100_000, 120_000],
+];
+
+fn lr2_scale_window_us(base: i64, percent: i32, index: usize, bad_window: i64) -> i64 {
+    if percent >= 100 {
+        return scale_window_us(base, percent);
+    }
+
+    let sign = base.signum();
+    let rank = percent.max(0);
+    let table_index = index + 1;
+    let low_index = (rank / 25).clamp(0, 4) as usize;
+    let high_index = (low_index + 1).min(4);
+    let low_rank = (low_index as i32) * 25;
+    let high_rank = (high_index as i32) * 25;
+    let low = LR2_SCALING[table_index][low_index];
+    let high = LR2_SCALING[table_index][high_index];
+    let scaled = if high_rank == low_rank {
+        low
+    } else {
+        low + (high - low) * (rank - low_rank) as i64 / (high_rank - low_rank) as i64
+    };
+    (sign * scaled).clamp(-bad_window, bad_window)
 }
 
 #[cfg(test)]
@@ -165,6 +269,32 @@ mod tests {
         assert_eq!(window.bad_slow_us, 220_000);
         assert_eq!(window.empty_poor_fast_us, 150_000);
         assert_eq!(window.empty_poor_slow_us, 500_000);
+    }
+
+    #[test]
+    fn lr2oraja_rank_scaling_matches_reference_table() {
+        let base = lr2oraja_note_judge_window();
+        let window = judge_window_for_rule_mode(base, 50, RuleMode::Lr2Oraja);
+
+        assert_eq!(window.pgreat_us, 15_000);
+        assert_eq!(window.great_us, 30_000);
+        assert_eq!(window.good_us, 60_000);
+        assert_eq!(window.bad_fast_us, 200_000);
+        assert_eq!(window.empty_poor_fast_us, 1_000_000);
+        assert_eq!(window.empty_poor_slow_us, 0);
+    }
+
+    #[test]
+    fn dx_mode_uses_iidx_window_without_rank_scaling() {
+        let base = dx_note_judge_window();
+        let window = judge_window_for_rule_mode(base, 25, RuleMode::Dx);
+
+        assert_eq!(window.pgreat_us, 16_666);
+        assert_eq!(window.great_us, 33_333);
+        assert_eq!(window.good_us, 116_666);
+        assert_eq!(window.bad_fast_us, 200_000);
+        assert_eq!(window.empty_poor_fast_us, 1_000_000);
+        assert_eq!(window.empty_poor_slow_us, 200_000);
     }
 
     #[test]

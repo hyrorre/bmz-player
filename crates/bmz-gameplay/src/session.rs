@@ -16,8 +16,9 @@ use crate::input::system::InputSystem;
 use crate::input::translator::{InputTimestampAnchor, InputTimingContext};
 use crate::judge::engine::JudgeEngine;
 use crate::judge::model::{JudgeOutcome, JudgeWindow, JudgementEvent, MineHitEvent};
-use crate::judge::window::{judge_percent_at_time, judge_window_for_rank};
+use crate::judge::window::{judge_percent_at_time, judge_window_for_rule_mode};
 use crate::replay::{ReplayPlayer, ReplayRecorder};
+use crate::rule::RuleMode;
 use crate::score::ScoreState;
 
 pub const AUDIO_SCHEDULE_AHEAD_US: i64 = 100_000;
@@ -82,6 +83,7 @@ pub struct GameSession {
     pub judge: JudgeEngine,
     /// プロファイル既定の判定窓。`#RANK` / `#EXRANK` 倍率の基準値。
     pub base_judge_window: JudgeWindow,
+    pub rule_mode: RuleMode,
     pub score: ScoreState,
     pub gauge: GaugeState,
     pub replay_recorder: ReplayRecorder,
@@ -424,7 +426,8 @@ pub fn sync_judge_windows(session: &mut GameSession, now: TimeUs) {
         &session.chart.judge_rank_events,
         now,
     );
-    session.judge.windows = judge_window_for_rank(session.base_judge_window, percent);
+    session.judge.windows =
+        judge_window_for_rule_mode(session.base_judge_window, percent, session.rule_mode);
 }
 
 pub fn advance_session_frame(
@@ -890,6 +893,7 @@ mod tests {
             base_judge_window: JudgeWindow::symmetric(
                 16_000, 40_000, 80_000, 120_000, 500_000, 200_000, 16_000,
             ),
+            rule_mode: RuleMode::Beatoraja,
             score: ScoreState::default(),
             gauge: GaugeState::new(bmz_core::clear::GaugeType::Normal, 160.0, chart.total_notes),
             replay_recorder: ReplayRecorder::default(),

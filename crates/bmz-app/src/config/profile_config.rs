@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use bmz_gameplay::rule::RuleMode;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,6 +27,8 @@ pub struct ProfileConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayDefaultsConfig {
+    #[serde(default)]
+    pub rule_mode: RuleMode,
     pub gauge: GaugeTypeConfig,
     #[serde(default)]
     pub gauge_auto_shift: GaugeAutoShiftConfig,
@@ -533,6 +536,7 @@ impl ProfileConfig {
             created_at: now,
             updated_at: now,
             play: PlayDefaultsConfig {
+                rule_mode: RuleMode::Beatoraja,
                 gauge: GaugeTypeConfig::Normal,
                 gauge_auto_shift: GaugeAutoShiftConfig::Off,
                 random: RandomOptionConfig::Off,
@@ -705,6 +709,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(play.target, TargetOptionConfig::None);
+        assert_eq!(play.rule_mode, RuleMode::Beatoraja);
         assert_eq!(play.bga, BgaModeConfig::On);
         assert_eq!(play.bga_expand, BgaExpandConfig::KeepAspect);
         assert_eq!(play.misslayer_duration_ms, 500);

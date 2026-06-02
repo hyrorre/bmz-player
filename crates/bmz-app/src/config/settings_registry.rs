@@ -2,6 +2,7 @@ use super::profile_config::{
     AssistOptionConfig, BgaExpandConfig, BgaModeConfig, GaugeAutoShiftConfig, GaugeTypeConfig,
     JudgeAlgorithmConfig, LaneEffectConfig, ProfileConfig, RandomOptionConfig, TargetOptionConfig,
 };
+use bmz_gameplay::rule::RuleMode;
 
 /// ゲーム内設定で編集可能な profile.toml 項目。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -15,6 +16,7 @@ pub enum SettingsEntryId {
     InputOffsetMs,
     VisualOffsetMs,
     JudgeAlgorithm,
+    RuleMode,
     Gauge,
     GaugeAutoShift,
     Random,
@@ -45,6 +47,7 @@ impl SettingsEntryId {
 
     pub const PLAY_ENTRIES: &'static [Self] = &[
         Self::Gauge,
+        Self::RuleMode,
         Self::GaugeAutoShift,
         Self::Random,
         Self::Target,
@@ -69,6 +72,7 @@ impl SettingsEntryId {
             Self::InputOffsetMs => "INPUT OFFSET",
             Self::VisualOffsetMs => "VISUAL OFFSET",
             Self::JudgeAlgorithm => "JUDGE ALGO",
+            Self::RuleMode => "RULE MODE",
             Self::Gauge => "GAUGE",
             Self::GaugeAutoShift => "GAUGE SHIFT",
             Self::Random => "RANDOM",
@@ -110,6 +114,7 @@ pub fn format_settings_value(profile: &ProfileConfig, id: SettingsEntryId) -> St
             format!("{} ms", profile.judge.visual_offset_us / 1_000)
         }
         SettingsEntryId::JudgeAlgorithm => format_judge_algorithm(profile.judge.judge_algorithm),
+        SettingsEntryId::RuleMode => format_rule_mode(profile.play.rule_mode),
         SettingsEntryId::Gauge => format_gauge(profile.play.gauge),
         SettingsEntryId::GaugeAutoShift => format_gauge_auto_shift(profile.play.gauge_auto_shift),
         SettingsEntryId::Random => format_random(profile.play.random),
@@ -157,6 +162,9 @@ pub fn adjust_settings_value(profile: &mut ProfileConfig, id: SettingsEntryId, d
                 .map(|next| profile.judge.judge_algorithm = next)
                 .is_some()
         }
+        SettingsEntryId::RuleMode => cycle_enum(delta, profile.play.rule_mode, cycle_rule_mode)
+            .map(|next| profile.play.rule_mode = next)
+            .is_some(),
         SettingsEntryId::Gauge => cycle_enum(delta, profile.play.gauge, cycle_gauge)
             .map(|next| profile.play.gauge = next)
             .is_some(),
@@ -238,6 +246,14 @@ fn format_gauge(value: GaugeTypeConfig) -> String {
         GaugeTypeConfig::ExHard => "EX HARD".to_string(),
         GaugeTypeConfig::AutoShift => "AUTO SHIFT".to_string(),
         GaugeTypeConfig::Hazard => "HAZARD".to_string(),
+    }
+}
+
+fn format_rule_mode(value: RuleMode) -> String {
+    match value {
+        RuleMode::Beatoraja => "BEATORAJA".to_string(),
+        RuleMode::Lr2Oraja => "LR2ORAJA".to_string(),
+        RuleMode::Dx => "DX".to_string(),
     }
 }
 
@@ -327,6 +343,11 @@ fn cycle_enum<T: Copy + PartialEq>(delta: i32, current: T, cycle: fn(T, bool) ->
 fn cycle_judge_algorithm(current: JudgeAlgorithmConfig, forward: bool) -> JudgeAlgorithmConfig {
     const VALUES: [JudgeAlgorithmConfig; 3] =
         [JudgeAlgorithmConfig::Combo, JudgeAlgorithmConfig::Duration, JudgeAlgorithmConfig::Lowest];
+    cycle_in_slice(&VALUES, current, forward)
+}
+
+fn cycle_rule_mode(current: RuleMode, forward: bool) -> RuleMode {
+    const VALUES: [RuleMode; 3] = [RuleMode::Beatoraja, RuleMode::Lr2Oraja, RuleMode::Dx];
     cycle_in_slice(&VALUES, current, forward)
 }
 
@@ -451,6 +472,20 @@ mod tests {
         profile.play.gauge = GaugeTypeConfig::Hazard;
         assert!(adjust_settings_value(&mut profile, SettingsEntryId::Gauge, 1));
         assert_eq!(profile.play.gauge, GaugeTypeConfig::AutoShift);
+    }
+
+    #[test]
+    fn cycle_rule_mode_and_format_value() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 0);
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::RuleMode), "BEATORAJA");
+
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::RuleMode, 1));
+        assert_eq!(profile.play.rule_mode, RuleMode::Lr2Oraja);
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::RuleMode), "LR2ORAJA");
+
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::RuleMode, 1));
+        assert_eq!(profile.play.rule_mode, RuleMode::Dx);
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::RuleMode), "DX");
     }
 
     #[test]

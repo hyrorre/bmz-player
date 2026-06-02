@@ -89,6 +89,7 @@ pub fn finish_session_result(
                 played_at,
                 random_seed: arrange_seed,
                 gauge_option: String::new(),
+                rule_mode: session.rule_mode.as_str().to_string(),
                 assist_mask: 0,
                 replay_events: session.replay_recorder.events.clone(),
                 arrange,
@@ -499,6 +500,7 @@ mod tests {
             },
             judge: JudgeEngine::new(DEFAULT_JUDGE_WINDOW),
             base_judge_window: DEFAULT_JUDGE_WINDOW,
+            rule_mode: bmz_gameplay::rule::RuleMode::Beatoraja,
             score: Default::default(),
             gauge: bmz_gameplay::gauge::GaugeState::new(
                 bmz_core::clear::GaugeType::Normal,

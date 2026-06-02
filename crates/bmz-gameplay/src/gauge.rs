@@ -2,6 +2,8 @@ use bmz_core::clear::{ClearType, GaugeType};
 use bmz_core::judge::Judge;
 use bmz_core::lane::KeyMode;
 
+use crate::rule::RuleMode;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum GaugeAutoShiftMode {
     #[default]
@@ -54,6 +56,7 @@ pub enum GaugeModifier {
     Total,
     LimitIncrement,
     ModifyDamage,
+    Iidx,
 }
 
 #[repr(u8)]
@@ -76,6 +79,7 @@ pub struct GaugeDefinition {
     pub max: f32,
     pub init: f32,
     pub border: f32,
+    pub death: f32,
     pub values: [f32; 6],
     pub guts: &'static [(f32, f32)],
 }
@@ -88,6 +92,7 @@ pub struct GaugeRuntimeDefinition {
     pub max: f32,
     pub init: f32,
     pub border: f32,
+    pub death: f32,
     pub values: [f32; 6],
     pub guts: &'static [(f32, f32)],
 }
@@ -120,7 +125,23 @@ impl GaugeState {
         total_notes: u32,
         property: GaugeProperty,
     ) -> Self {
-        let gauges = gauge_definitions_for(property)
+        Self::new_with_property_and_rule_mode(
+            selected,
+            total,
+            total_notes,
+            property,
+            RuleMode::Beatoraja,
+        )
+    }
+
+    pub fn new_with_property_and_rule_mode(
+        selected: GaugeType,
+        total: f64,
+        total_notes: u32,
+        property: GaugeProperty,
+        rule_mode: RuleMode,
+    ) -> Self {
+        let gauges = gauge_definitions_for_rule_mode(property, rule_mode)
             .into_iter()
             .map(|definition| {
                 let definition = compile_gauge_definition(&definition, total, total_notes);
@@ -168,6 +189,24 @@ impl GaugeState {
         total_notes: u32,
         property: GaugeProperty,
     ) -> Self {
+        Self::new_with_auto_shift_property_and_rule_mode(
+            selected,
+            mode,
+            total,
+            total_notes,
+            property,
+            RuleMode::Beatoraja,
+        )
+    }
+
+    pub fn new_with_auto_shift_property_and_rule_mode(
+        selected: GaugeType,
+        mode: GaugeAutoShiftMode,
+        total: f64,
+        total_notes: u32,
+        property: GaugeProperty,
+        rule_mode: RuleMode,
+    ) -> Self {
         let start = match mode {
             GaugeAutoShiftMode::BestClear => GaugeType::ExHard,
             GaugeAutoShiftMode::Off
@@ -175,7 +214,8 @@ impl GaugeState {
             | GaugeAutoShiftMode::HardToGroove
             | GaugeAutoShiftMode::SelectToUnder => selected,
         };
-        let mut state = Self::new_with_property(start, total, total_notes, property);
+        let mut state =
+            Self::new_with_property_and_rule_mode(start, total, total_notes, property, rule_mode);
         state.original = selected;
         state.auto_shift = mode != GaugeAutoShiftMode::Off;
         state.auto_shift_mode = mode;
@@ -347,6 +387,7 @@ impl SingleGaugeState {
 
         if self.value > 0.0 {
             self.value = (self.value + inc).clamp(self.definition.min, self.definition.max);
+            self.apply_death_threshold();
         }
     }
 
@@ -361,6 +402,13 @@ impl SingleGaugeState {
             return;
         }
         self.value = (self.value - damage as f32).clamp(self.definition.min, self.definition.max);
+        self.apply_death_threshold();
+    }
+
+    fn apply_death_threshold(&mut self) {
+        if self.value > self.definition.min && self.value < self.definition.death {
+            self.value = self.definition.min;
+        }
     }
 }
 
@@ -394,6 +442,7 @@ pub fn compile_gauge_definition(
         max: base.max,
         init: base.init,
         border: base.border,
+        death: base.death,
         values,
         guts: base.guts,
     }
@@ -424,6 +473,13 @@ fn apply_modifier(value: f32, modifier: GaugeModifier, total: f64, total_notes: 
                 value
             }
         }
+        GaugeModifier::Iidx => {
+            if value > 0.0 && total_notes > 0 {
+                value * iidx_total_value(total_notes) / total_notes as f32
+            } else {
+                value
+            }
+        }
     }
 }
 
@@ -441,12 +497,20 @@ fn modify_damage_scale(total: f64, total_notes: u32) -> f32 {
     let mut note = 1000_u32;
     let mut modifier = 0.002;
     while note > total_notes || note > 1 {
-        fix2 += modifier * (note - total_notes.max(note / 2)) as f32;
+        fix2 += modifier * note.saturating_sub(total_notes.max(note / 2)) as f32;
         note /= 2;
         modifier *= 2.0;
     }
 
     FIX1_TABLE[i].max(fix2)
+}
+
+fn iidx_total_value(total_notes: u32) -> f32 {
+    let notes = total_notes as f32;
+    if notes <= 0.0 {
+        return 0.0;
+    }
+    260.0_f32.max(7.605 * notes / (0.01 * notes + 6.5))
 }
 
 /// 既定 `SevenKeys` プロパティのゲージ定義（後方互換）。
@@ -458,6 +522,38 @@ pub fn default_gauge_definitions() -> Vec<GaugeDefinition> {
 /// beatoraja `GaugeProperty.java` の全ゲージ値をプロパティ別に引く。
 pub fn gauge_definitions_for(property: GaugeProperty) -> Vec<GaugeDefinition> {
     gauge_definition_table(property).to_vec()
+}
+
+pub fn gauge_definitions_for_rule_mode(
+    property: GaugeProperty,
+    rule_mode: RuleMode,
+) -> Vec<GaugeDefinition> {
+    match rule_mode {
+        RuleMode::Beatoraja => gauge_definitions_for(property),
+        RuleMode::Lr2Oraja => lr2oraja_gauge_definitions(),
+        RuleMode::Dx => dx_gauge_definition_table().to_vec(),
+    }
+}
+
+fn lr2oraja_gauge_definitions() -> Vec<GaugeDefinition> {
+    let mut definitions = gauge_definition_table(GaugeProperty::Lr2).to_vec();
+    for definition in &mut definitions {
+        match definition.gauge_type {
+            GaugeType::Hard => {
+                definition.guts = LR2_HARD_GUTS;
+                definition.death = 2.0;
+            }
+            GaugeType::ExHard | GaugeType::Hazard => {
+                definition.death = 2.0;
+            }
+            GaugeType::Class | GaugeType::ExClass => {
+                definition.guts = LR2_HARD_GUTS;
+                definition.death = 2.0;
+            }
+            _ => {}
+        }
+    }
+    definitions
 }
 
 /// beatoraja `GaugeProperty.java` の `GaugeElementProperty` 表。
@@ -971,6 +1067,110 @@ fn gauge_definition_table(property: GaugeProperty) -> [GaugeDefinition; 9] {
     }
 }
 
+fn dx_gauge_definition_table() -> [GaugeDefinition; 9] {
+    [
+        def(
+            GaugeType::AssistEasy,
+            Some(ClearType::AssistEasy),
+            GaugeModifier::Iidx,
+            2.0,
+            100.0,
+            20.0,
+            60.0,
+            [1.0, 1.0, 0.5, -1.6, -4.8, -1.6],
+            &[],
+        ),
+        def(
+            GaugeType::Easy,
+            Some(ClearType::Easy),
+            GaugeModifier::Iidx,
+            2.0,
+            100.0,
+            20.0,
+            80.0,
+            [1.0, 1.0, 0.5, -1.6, -4.8, -1.6],
+            &[],
+        ),
+        def(
+            GaugeType::Normal,
+            Some(ClearType::Normal),
+            GaugeModifier::Iidx,
+            2.0,
+            100.0,
+            20.0,
+            80.0,
+            [1.0, 1.0, 0.5, -2.0, -6.0, -2.0],
+            &[],
+        ),
+        def(
+            GaugeType::Hard,
+            Some(ClearType::Hard),
+            GaugeModifier::None,
+            0.0,
+            100.0,
+            100.0,
+            0.0,
+            [0.16, 0.16, 0.0, -4.5, -9.0, -4.5],
+            DX_HARD_GUTS,
+        ),
+        def(
+            GaugeType::ExHard,
+            Some(ClearType::ExHard),
+            GaugeModifier::None,
+            0.0,
+            100.0,
+            100.0,
+            0.0,
+            [0.16, 0.16, 0.0, -9.0, -18.0, -9.0],
+            &[],
+        ),
+        def(
+            GaugeType::Hazard,
+            None,
+            GaugeModifier::None,
+            0.0,
+            100.0,
+            100.0,
+            0.0,
+            [0.16, 0.16, 0.0, -100.0, -100.0, -9.0],
+            &[],
+        ),
+        def(
+            GaugeType::Class,
+            Some(ClearType::Normal),
+            GaugeModifier::None,
+            0.0,
+            100.0,
+            100.0,
+            0.0,
+            [0.16, 0.16, 0.04, -1.5, -2.5, -1.5],
+            DX_HARD_GUTS,
+        ),
+        def(
+            GaugeType::ExClass,
+            Some(ClearType::Hard),
+            GaugeModifier::None,
+            0.0,
+            100.0,
+            100.0,
+            0.0,
+            [0.16, 0.16, 0.04, -3.0, -5.0, -3.0],
+            &[],
+        ),
+        def(
+            GaugeType::ExHardClass,
+            Some(ClearType::ExHard),
+            GaugeModifier::None,
+            0.0,
+            100.0,
+            100.0,
+            0.0,
+            [0.16, 0.16, 0.04, -6.0, -10.0, -6.0],
+            &[],
+        ),
+    ]
+}
+
 fn def(
     gauge_type: GaugeType,
     clear_type: Option<ClearType>,
@@ -982,7 +1182,18 @@ fn def(
     values: [f32; 6],
     guts: &'static [(f32, f32)],
 ) -> GaugeDefinition {
-    GaugeDefinition { gauge_type, clear_type, modifier, min, max, init, border, values, guts }
+    GaugeDefinition {
+        gauge_type,
+        clear_type,
+        modifier,
+        min,
+        max,
+        init,
+        border,
+        death: 0.0,
+        values,
+        guts,
+    }
 }
 
 // beatoraja HARD guts テーブル（7keys / PMS / KB 共通）。
@@ -991,6 +1202,9 @@ const HARD_GUTS: &[(f32, f32)] = &[(10.0, 0.4), (20.0, 0.5), (30.0, 0.6), (40.0,
 const CLASS_GUTS: &[(f32, f32)] = &[(5.0, 0.4), (10.0, 0.5), (15.0, 0.6), (20.0, 0.7), (25.0, 0.8)];
 // beatoraja LR2 CLASS / EXCLASS の guts。30 以下で減衰量を 60% に弱める。
 const LR2_CLASS_GUTS: &[(f32, f32)] = &[(30.0, 0.6)];
+// LR2oraja 0.8.3+ の LR2 HARD 系 guts。32% 未満で減衰量を 60% に弱める。
+const LR2_HARD_GUTS: &[(f32, f32)] = &[(32.0, 0.6)];
+const DX_HARD_GUTS: &[(f32, f32)] = &[(30.0, 0.5)];
 
 /// beatoraja `BMSPlayerRule.calculateDefaultTotal` 相当。
 pub fn default_gauge_total(total_notes: u32) -> f64 {
@@ -1135,6 +1349,13 @@ mod tests {
             .expect("definition exists")
     }
 
+    fn definition_for_rule_mode(gauge_type: GaugeType, rule_mode: RuleMode) -> GaugeDefinition {
+        gauge_definitions_for_rule_mode(GaugeProperty::SevenKeys, rule_mode)
+            .into_iter()
+            .find(|def| def.gauge_type == gauge_type)
+            .expect("definition exists")
+    }
+
     #[test]
     fn class_gauges_start_full_and_clear_above_zero() {
         for &(ty, expected_clear) in &[
@@ -1230,6 +1451,75 @@ mod tests {
         let lr2_hard = definition_for_property(GaugeType::Hard, GaugeProperty::Lr2);
         assert_eq!(lr2_hard.modifier, GaugeModifier::ModifyDamage);
         assert_eq!(lr2_hard.values, [0.1, 0.1, 0.05, -6.0, -10.0, -2.0]);
+    }
+
+    #[test]
+    fn lr2oraja_hard_gauge_uses_32_percent_guts_and_2_percent_death() {
+        let hard = definition_for_rule_mode(GaugeType::Hard, RuleMode::Lr2Oraja);
+        assert_eq!(hard.guts, LR2_HARD_GUTS);
+        assert_eq!(hard.death, 2.0);
+
+        let mut at_threshold = GaugeState::new_with_property_and_rule_mode(
+            GaugeType::Hard,
+            160.0,
+            1000,
+            GaugeProperty::SevenKeys,
+            RuleMode::Lr2Oraja,
+        );
+        let hard_at_threshold = at_threshold
+            .gauges
+            .iter_mut()
+            .find(|gauge| gauge.definition.gauge_type == GaugeType::Hard)
+            .unwrap();
+        hard_at_threshold.value = 32.0;
+        let damage_without_guts = hard_at_threshold.definition.values[GaugeJudgeIndex::Pr as usize];
+        hard_at_threshold.apply(GaugeJudgeIndex::Pr, 1.0);
+        assert_eq!(hard_at_threshold.value, 32.0 + damage_without_guts);
+
+        let mut below_threshold = GaugeState::new_with_property_and_rule_mode(
+            GaugeType::Hard,
+            160.0,
+            1000,
+            GaugeProperty::SevenKeys,
+            RuleMode::Lr2Oraja,
+        );
+        let hard_below_threshold = below_threshold
+            .gauges
+            .iter_mut()
+            .find(|gauge| gauge.definition.gauge_type == GaugeType::Hard)
+            .unwrap();
+        hard_below_threshold.value = 31.9;
+        hard_below_threshold.apply(GaugeJudgeIndex::Pr, 1.0);
+        assert!((hard_below_threshold.value - (31.9 + damage_without_guts * 0.6)).abs() < 0.000_1);
+
+        hard_below_threshold.value = 2.1;
+        hard_below_threshold.apply(GaugeJudgeIndex::Epr, 0.1);
+        assert_eq!(hard_below_threshold.value, 0.0);
+    }
+
+    #[test]
+    fn dx_gauge_definitions_match_lr2oraja_iidx_mode() {
+        let normal = definition_for_rule_mode(GaugeType::Normal, RuleMode::Dx);
+        assert_eq!(normal.modifier, GaugeModifier::Iidx);
+        assert_eq!(normal.values, [1.0, 1.0, 0.5, -2.0, -6.0, -2.0]);
+
+        let hard = definition_for_rule_mode(GaugeType::Hard, RuleMode::Dx);
+        assert_eq!(hard.modifier, GaugeModifier::None);
+        assert_eq!(hard.values, [0.16, 0.16, 0.0, -4.5, -9.0, -4.5]);
+        assert_eq!(hard.guts, DX_HARD_GUTS);
+
+        let mut gauge = GaugeState::new_with_property_and_rule_mode(
+            GaugeType::Normal,
+            999.0,
+            1000,
+            GaugeProperty::SevenKeys,
+            RuleMode::Dx,
+        );
+        let start = gauge.current().value;
+        gauge.apply_judge(Judge::PGreat, 1.0);
+        assert!(
+            (gauge.current().value - (start + iidx_total_value(1000) / 1000.0)).abs() < 0.000_1
+        );
     }
 
     #[test]

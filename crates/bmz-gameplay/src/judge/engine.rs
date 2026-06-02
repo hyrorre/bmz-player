@@ -9,16 +9,22 @@ use super::model::{
     ActiveLongNote, JudgeOutcome, JudgeWindow, JudgementEvent, LaneJudgeState, LongNoteEndRef,
     MineHitEvent,
 };
+use crate::rule::RuleMode;
 
 #[derive(Debug, Clone)]
 pub struct JudgeEngine {
     pub windows: JudgeWindow,
+    pub rule_mode: RuleMode,
     pub lanes: [LaneJudgeState; LANE_COUNT],
 }
 
 impl JudgeEngine {
     pub fn new(windows: JudgeWindow) -> Self {
-        Self { windows, lanes: [LaneJudgeState::default(); LANE_COUNT] }
+        Self::new_with_rule_mode(windows, RuleMode::Beatoraja)
+    }
+
+    pub fn new_with_rule_mode(windows: JudgeWindow, rule_mode: RuleMode) -> Self {
+        Self { windows, rule_mode, lanes: [LaneJudgeState::default(); LANE_COUNT] }
     }
 
     pub fn process_input(&mut self, chart: &PlayableChart, input: InputEvent) -> JudgeOutcome {
@@ -103,6 +109,8 @@ impl JudgeEngine {
             mine_hits.push(hit);
         }
 
+        let rule_mode = self.rule_mode;
+        let windows = self.windows;
         let lane_state = &mut self.lanes[input.lane.index()];
         let Some((idx, note)) =
             next_press_reference_note(chart, input.lane, lane_state.next_note_index)
@@ -119,7 +127,9 @@ impl JudgeEngine {
 
         let delta = input.time.0 - note.time.0;
 
-        if let Some(judge) = classify_normal_delta(delta, self.windows) {
+        if let Some(judge) = classify_normal_delta(delta, windows).filter(|judge| {
+            !suppresses_long_start_late_bad(rule_mode, windows, note, delta, *judge)
+        }) {
             lane_state.next_note_index = idx + 1;
             lane_state.last_press_time = Some(note.time);
 
@@ -209,6 +219,19 @@ impl JudgeEngine {
             }
         }
     }
+}
+
+fn suppresses_long_start_late_bad(
+    rule_mode: RuleMode,
+    windows: JudgeWindow,
+    note: &NoteEvent,
+    delta: i64,
+    judge: Judge,
+) -> bool {
+    rule_mode == RuleMode::Lr2Oraja
+        && note.kind == NoteKind::LongStart
+        && judge == Judge::Bad
+        && delta > windows.good_us
 }
 
 fn next_press_reference_note(
@@ -323,7 +346,7 @@ fn classify_empty_poor_from_last_press(
 
 #[cfg(test)]
 mod tests {
-    use bmz_chart::model::{ChartMetadata, SoundAssetRef, SoundEvent};
+    use bmz_chart::model::{ChartMetadata, LongNotePair, LongNoteStyle, SoundAssetRef, SoundEvent};
     use bmz_core::chart::ChartIdentity;
     use bmz_core::input::InputSource;
 
@@ -372,6 +395,43 @@ mod tests {
             total_notes: 1,
             end_time: time,
         }
+    }
+
+    fn chart_with_long_start(time: TimeUs, end_time: TimeUs) -> PlayableChart {
+        let lane = Lane::Key1;
+        let start = NoteEvent {
+            id: NoteId(1),
+            lane,
+            kind: NoteKind::LongStart,
+            tick: Default::default(),
+            time,
+            sound: None,
+            damage: None,
+        };
+        let end = NoteEvent {
+            id: NoteId(2),
+            lane,
+            kind: NoteKind::LongEnd,
+            tick: Default::default(),
+            time: end_time,
+            sound: None,
+            damage: None,
+        };
+        let mut chart = chart_with_tap(time);
+        chart.metadata.long_note_mode = LongNoteMode::Ln;
+        chart.lane_notes[lane.index()] = vec![start, end];
+        chart.long_notes = vec![LongNotePair {
+            lane,
+            style: LongNoteStyle::ChannelPair,
+            start_note_id: NoteId(1),
+            end_note_id: NoteId(2),
+            start_tick: Default::default(),
+            end_tick: Default::default(),
+            start_time: time,
+            end_time,
+            sound: None,
+        }];
+        chart
     }
 
     fn press_at(time: TimeUs) -> InputEvent {
@@ -454,6 +514,23 @@ mod tests {
         assert_eq!(second.events[0].side, TimingSide::Slow);
         assert_eq!(second.events[0].note_id, None);
         assert_eq!(engine.lanes[Lane::Key1.index()].next_note_index, 1);
+    }
+
+    #[test]
+    fn lr2oraja_suppresses_late_bad_on_long_note_start() {
+        let chart = chart_with_long_start(TimeUs(1_000_000), TimeUs(2_000_000));
+        let input = press_at(TimeUs(1_100_000));
+
+        let mut beatoraja = JudgeEngine::new(windows());
+        let beatoraja_outcome = beatoraja.process_input(&chart, input);
+        assert_eq!(beatoraja_outcome.events[0].judge, Judge::Bad);
+        assert_eq!(beatoraja.lanes[Lane::Key1.index()].next_note_index, 1);
+
+        let mut lr2oraja = JudgeEngine::new_with_rule_mode(windows(), RuleMode::Lr2Oraja);
+        let lr2oraja_outcome = lr2oraja.process_input(&chart, input);
+        assert!(lr2oraja_outcome.events.is_empty());
+        assert!(!lr2oraja_outcome.consumed_input);
+        assert_eq!(lr2oraja.lanes[Lane::Key1.index()].next_note_index, 0);
     }
 
     fn chart_with_mine(time: TimeUs, damage: u16) -> PlayableChart {

@@ -1587,6 +1587,7 @@ mod tests {
             score,
             random_seed: None,
             gauge_option: String::new(),
+            rule_mode: String::new(),
             assist_mask: 0,
             autoplay: false,
             replay_path: String::new(),

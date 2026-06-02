@@ -16,7 +16,7 @@ use bmz_gameplay::input::system::InputSystem;
 use bmz_gameplay::input::translator::DefaultInputTranslator;
 use bmz_gameplay::judge::engine::JudgeEngine;
 use bmz_gameplay::judge::window::{
-    beatoraja_note_judge_window_for_keymode, judge_percent_at_time, judge_window_for_rank,
+    judge_percent_at_time, judge_window_for_rule_mode, note_judge_window_for_rule_mode,
 };
 use bmz_gameplay::replay::{ReplayPlayer, ReplayRecorder};
 use bmz_gameplay::score::ScoreState;
@@ -139,6 +139,7 @@ pub fn build_game_session_with_input_backend(
     let is_replay = replay_player.is_some();
     let autoplay = autoplay_enabled.then(AutoplayController::default);
     let key_mode = chart.metadata.key_mode;
+    let rule_mode = profile.play.rule_mode;
     let input_system = InputSystem {
         backend: input_backend,
         translator: Box::new(DefaultInputTranslator {
@@ -156,7 +157,7 @@ pub fn build_game_session_with_input_backend(
     // great_us and good_us.  Mirrors beatoraja JudgeManager's *JudgeWindowRate
     // = 0 path.
     let base_judge_window = {
-        let mut w = beatoraja_note_judge_window_for_keymode(chart.metadata.key_mode);
+        let mut w = note_judge_window_for_rule_mode(chart.metadata.key_mode, rule_mode);
         match options.judge_constraint {
             bmz_core::course::CourseJudgeConstraint::Normal => {}
             bmz_core::course::CourseJudgeConstraint::NoGood => {
@@ -178,19 +179,21 @@ pub fn build_game_session_with_input_backend(
             .gauge_property
             .unwrap_or_else(|| GaugeProperty::from_keymode(chart.metadata.key_mode));
         if gauge_auto_shift != GaugeAutoShiftMode::Off {
-            GaugeState::new_with_auto_shift_property(
+            GaugeState::new_with_auto_shift_property_and_rule_mode(
                 gauge_type,
                 gauge_auto_shift,
                 gauge_total,
                 chart.total_notes,
                 gauge_property,
+                rule_mode,
             )
         } else {
-            GaugeState::new_with_property(
+            GaugeState::new_with_property_and_rule_mode(
                 gauge_type,
                 gauge_total,
                 chart.total_notes,
                 gauge_property,
+                rule_mode,
             )
         }
     };
@@ -202,11 +205,20 @@ pub fn build_game_session_with_input_backend(
 
     GameSession {
         gauge,
-        judge: JudgeEngine::new(judge_window_for_rank(
-            base_judge_window,
-            judge_percent_at_time(chart.metadata.judge_rank, &chart.judge_rank_events, TimeUs(0)),
-        )),
+        judge: JudgeEngine::new_with_rule_mode(
+            judge_window_for_rule_mode(
+                base_judge_window,
+                judge_percent_at_time(
+                    chart.metadata.judge_rank,
+                    &chart.judge_rank_events,
+                    TimeUs(0),
+                ),
+                rule_mode,
+            ),
+            rule_mode,
+        ),
         base_judge_window,
+        rule_mode,
         audio_clock: AudioClock::stopped(options.sample_rate),
         chart,
         timing_map,
@@ -644,6 +656,7 @@ mod tests {
         BufferedInputBackend, DeviceId, DeviceInputEvent, DeviceTimestamp, PhysicalControl,
     };
     use bmz_gameplay::input::translator::InputTimingContext;
+    use bmz_gameplay::rule::RuleMode;
     use rusqlite::Connection;
 
     use super::*;
@@ -714,6 +727,47 @@ mod tests {
         // LR2 CLASS: BAD=-2.0、PG=0.10。
         assert_eq!(class_gauge_values(&session)[3], -2.0);
         assert_eq!(class_gauge_values(&session)[0], 0.10);
+    }
+
+    #[test]
+    fn build_game_session_applies_lr2oraja_rule_mode() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.play.rule_mode = RuleMode::Lr2Oraja;
+
+        let session =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+
+        assert_eq!(session.rule_mode, RuleMode::Lr2Oraja);
+        assert_eq!(session.base_judge_window.pgreat_us, 21_000);
+        assert_eq!(session.base_judge_window.empty_poor_slow_us, 0);
+        let hard = session
+            .gauge
+            .gauges
+            .iter()
+            .find(|g| g.definition.gauge_type == GaugeType::Hard)
+            .expect("Hard gauge present");
+        assert_eq!(hard.definition.guts, &[(32.0, 0.6)]);
+        assert_eq!(hard.definition.death, 2.0);
+    }
+
+    #[test]
+    fn build_game_session_applies_dx_rule_mode() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.play.rule_mode = RuleMode::Dx;
+
+        let session =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+
+        assert_eq!(session.rule_mode, RuleMode::Dx);
+        assert_eq!(session.base_judge_window.pgreat_us, 16_666);
+        assert_eq!(session.judge.windows.pgreat_us, 16_666);
+        let hard = session
+            .gauge
+            .gauges
+            .iter()
+            .find(|g| g.definition.gauge_type == GaugeType::Hard)
+            .expect("Hard gauge present");
+        assert_eq!(hard.definition.values, [0.16, 0.16, 0.0, -4.5, -9.0, -4.5]);
     }
 
     #[test]

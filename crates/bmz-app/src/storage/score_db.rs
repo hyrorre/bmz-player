@@ -30,6 +30,7 @@ pub struct ScoreRecord {
     pub score: ScoreState,
     pub random_seed: Option<i64>,
     pub gauge_option: String,
+    pub rule_mode: String,
     pub assist_mask: u32,
     pub autoplay: bool,
     pub replay_path: String,
@@ -41,6 +42,7 @@ impl ScoreRecord {
         played_at: i64,
         random_seed: Option<i64>,
         gauge_option: impl Into<String>,
+        rule_mode: impl Into<String>,
         assist_mask: u32,
         replay_path: impl Into<String>,
     ) -> Self {
@@ -54,6 +56,7 @@ impl ScoreRecord {
             score: result.score.clone(),
             random_seed,
             gauge_option: gauge_option.into(),
+            rule_mode: rule_mode.into(),
             assist_mask,
             autoplay: result.autoplay,
             replay_path: replay_path.into(),
@@ -434,13 +437,14 @@ fn insert_score_history(conn: &Connection, record: &ScoreRecord) -> Result<()> {
             slow_empty_poor,
             random_seed,
             gauge_option,
+            rule_mode,
             assist_mask,
             autoplay,
             replay_path,
             ghost
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-            ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26
+            ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27
         )",
         params![
             hash_to_hex(&record.chart_sha256),
@@ -465,6 +469,7 @@ fn insert_score_history(conn: &Connection, record: &ScoreRecord) -> Result<()> {
             judges.slow_empty_poor,
             record.random_seed,
             record.gauge_option.as_str(),
+            record.rule_mode.as_str(),
             record.assist_mask,
             record.autoplay,
             record.replay_path.as_str(),
@@ -661,6 +666,7 @@ mod tests {
             score: score_with_ex_score(ex_score),
             random_seed: None,
             gauge_option: String::new(),
+            rule_mode: String::new(),
             assist_mask: 0,
             autoplay: false,
             replay_path: String::new(),
@@ -676,20 +682,28 @@ mod tests {
 
         let mut record = record(20, ClearType::Normal);
         record.gauge_type = None;
+        record.rule_mode = "Dx".to_string();
         db.insert_score(&record).unwrap();
 
-        let (clear_type, gauge_type, gauge_option, replay_path): (String, String, String, String) =
-            db.conn()
-                .query_row(
-                    "SELECT clear_type, gauge_type, gauge_option, replay_path FROM score_history",
-                    [],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-                )
-                .unwrap();
+        let (clear_type, gauge_type, gauge_option, rule_mode, replay_path): (
+            String,
+            String,
+            String,
+            String,
+            String,
+        ) = db
+            .conn()
+            .query_row(
+                "SELECT clear_type, gauge_type, gauge_option, rule_mode, replay_path FROM score_history",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+            )
+            .unwrap();
 
         assert_eq!(clear_type, "Normal");
         assert_eq!(gauge_type, "");
         assert_eq!(gauge_option, "");
+        assert_eq!(rule_mode, "Dx");
         assert_eq!(replay_path, "");
     }
 
@@ -887,8 +901,15 @@ mod tests {
             autoplay: true,
         };
 
-        let record =
-            ScoreRecord::from_play_result(&result, 1_700_000_040, Some(123), "Hard", 0, "");
+        let record = ScoreRecord::from_play_result(
+            &result,
+            1_700_000_040,
+            Some(123),
+            "Hard",
+            "Lr2Oraja",
+            0,
+            "",
+        );
 
         assert_eq!(record.chart_sha256, [9; 32]);
         assert_eq!(record.played_at, 1_700_000_040);
@@ -898,6 +919,7 @@ mod tests {
         assert_eq!(record.score.ex_score(), 2);
         assert!(record.autoplay);
         assert_eq!(record.gauge_option, "Hard");
+        assert_eq!(record.rule_mode, "Lr2Oraja");
         assert_eq!(record.replay_path, "");
     }
 

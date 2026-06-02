@@ -300,5 +300,9 @@ mod tests {
             item,
             SelectItem::Config(row) if row.entry_id == SettingsEntryId::Gauge
         )));
+        assert!(items.iter().any(|item| matches!(
+            item,
+            SelectItem::Config(row) if row.entry_id == SettingsEntryId::RuleMode
+        )));
     }
 }

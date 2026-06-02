@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use bmz_core::lane::KeyMode;
+use bmz_gameplay::rule::RuleMode;
 
 use crate::config::play_input::resolve_play_bindings;
 use crate::config::profile_config::{
@@ -130,6 +131,7 @@ enum SettingsBaseline {
     U32(u32),
     Bool(bool),
     JudgeAlgorithm(JudgeAlgorithmConfig),
+    RuleMode(RuleMode),
     Gauge(GaugeTypeConfig),
     GaugeAutoShift(GaugeAutoShiftConfig),
     Random(RandomOptionConfig),
@@ -173,6 +175,7 @@ impl SettingsEditSession {
             SettingsEntryId::JudgeAlgorithm => {
                 SettingsBaseline::JudgeAlgorithm(profile.judge.judge_algorithm)
             }
+            SettingsEntryId::RuleMode => SettingsBaseline::RuleMode(profile.play.rule_mode),
             SettingsEntryId::Gauge => SettingsBaseline::Gauge(profile.play.gauge),
             SettingsEntryId::GaugeAutoShift => {
                 SettingsBaseline::GaugeAutoShift(profile.play.gauge_auto_shift)
@@ -220,6 +223,9 @@ impl SettingsEditSession {
             }
             (SettingsEntryId::JudgeAlgorithm, SettingsBaseline::JudgeAlgorithm(value)) => {
                 profile.judge.judge_algorithm = *value;
+            }
+            (SettingsEntryId::RuleMode, SettingsBaseline::RuleMode(value)) => {
+                profile.play.rule_mode = *value;
             }
             (SettingsEntryId::Gauge, SettingsBaseline::Gauge(value)) => {
                 profile.play.gauge = *value;

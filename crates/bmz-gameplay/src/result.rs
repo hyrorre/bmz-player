@@ -160,6 +160,7 @@ mod tests {
                     max: 100.0,
                     init: 20.0,
                     border: 80.0,
+                    death: 0.0,
                     values: [0.0; 6],
                     guts: &[],
                 },
