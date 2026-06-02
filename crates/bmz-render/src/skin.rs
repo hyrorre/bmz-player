@@ -1508,6 +1508,10 @@ pub struct SkinDrawState {
     pub has_bga: bool,
     /// BGA表示設定がONかどうか。曲の有無とは分けて扱う。
     pub bga_enabled: bool,
+    /// `#STAGEFILE` 相当の曲画像があるか (OPTION_NO_STAGEFILE=190 / OPTION_STAGEFILE=191)。
+    pub has_stagefile: bool,
+    /// `#BACKBMP` 相当の背景画像がロード済みか (OPTION_NO_BACKBMP=194 / OPTION_BACKBMP=195)。
+    pub has_backbmp: bool,
     /// 現在表示するBGA本体画像。
     pub bga_base: Option<SkinBgaFrame>,
     /// 現在表示するBGAレイヤー画像。
@@ -1619,6 +1623,8 @@ pub struct SkinDrawState {
     pub stddev_timing_ms: Option<f32>,
     /// OPTION_AUTOPLAYON (33) / OPTION_AUTOPLAYOFF (32) 用。
     pub autoplay: bool,
+    /// OPTION_NOW_LOADING (80) / OPTION_LOADED (81) 用。
+    pub skin_loaded: bool,
     /// OPTION_MODE_COURSE (290) とステージ別 op (280..283 / 289) 用。未対応時は None。
     pub course_stage: Option<CourseStageMarker>,
     /// beatoraja `event_index(SKIN_EVENT_HSFIX)`。0=OFF, 1=START, 2=MAX, 3=MAIN, 4=MIN。
@@ -1702,6 +1708,8 @@ impl Default for SkinDrawState {
             max_bpm: 0.0,
             has_bga: false,
             bga_enabled: true,
+            has_stagefile: false,
+            has_backbmp: false,
             bga_base: None,
             bga_layer: None,
             bga_layer2: None,
@@ -1760,6 +1768,7 @@ impl Default for SkinDrawState {
             average_timing_ms: None,
             stddev_timing_ms: None,
             autoplay: false,
+            skin_loaded: true,
             course_stage: None,
             hsfix_index: 0,
             main_bpm: 0.0,
@@ -5209,12 +5218,18 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool 
         320..=327 => best_rank_op_matches(op, state),
         170 => !state.has_bga,
         171 => state.has_bga,
-        // OPTION_NO_STAGEFILE / OPTION_STAGEFILE (190/191) は play 向け。選曲では未接続。
-        190 => false,
-        191 => false,
+        // OPTION_NOW_LOADING / OPTION_LOADED
+        80 => !state.skin_loaded,
+        81 => state.skin_loaded,
+        // OPTION_NO_STAGEFILE / OPTION_STAGEFILE
+        190 => !state.has_stagefile,
+        191 => state.has_stagefile,
         // OPTION_NO_BANNER / OPTION_BANNER (192/193)
         192 => select_banner_option_matches(false, state),
         193 => select_banner_option_matches(true, state),
+        // OPTION_NO_BACKBMP / OPTION_BACKBMP
+        194 => !state.has_backbmp,
+        195 => state.has_backbmp,
         // OPTION_LANECOVER1_CHANGING / OPTION_LANECOVER1_ON / OPTION_LIFT1_ON / OPTION_HIDDEN1_ON
         270 => state.lane_cover_changing,
         271 => state.lanecover_enabled,
@@ -9377,6 +9392,25 @@ mod tests {
             );
             assert!(test_skin_op(-op, &[op], course_stage1), "negative {op} should invert false");
         }
+    }
+
+    #[test]
+    fn play_asset_and_loading_ops_reflect_skin_state() {
+        let unloaded = SkinDrawState { skin_loaded: false, ..SkinDrawState::default() };
+        assert!(test_skin_op(80, &[], unloaded));
+        assert!(!test_skin_op(81, &[], unloaded));
+
+        let loaded = SkinDrawState::default();
+        assert!(!test_skin_op(80, &[], loaded));
+        assert!(test_skin_op(81, &[], loaded));
+        assert!(test_skin_op(190, &[], loaded));
+        assert!(!test_skin_op(191, &[], loaded));
+        assert!(test_skin_op(194, &[], loaded));
+        assert!(!test_skin_op(195, &[], loaded));
+
+        let with_backbmp = SkinDrawState { has_backbmp: true, ..SkinDrawState::default() };
+        assert!(!test_skin_op(194, &[], with_backbmp));
+        assert!(test_skin_op(195, &[], with_backbmp));
     }
 
     #[test]

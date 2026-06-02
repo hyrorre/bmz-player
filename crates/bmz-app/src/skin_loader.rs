@@ -126,6 +126,11 @@ pub struct DecodedSource {
     pub asset: RgbaImageAsset,
 }
 
+enum SourceDecodeTask {
+    File { index: usize, source_id: String, path: PathBuf },
+    Builtin { index: usize, source_id: String, path: PathBuf, asset: RgbaImageAsset },
+}
+
 /// GPU アップロード済みの 1 ソース。upload worker が `DecodedSource` から生成する。
 pub struct PreparedSource {
     pub source_id: String,
@@ -335,11 +340,19 @@ pub fn decode_beatoraja_skin_with_options(
 
     // ソースは ID 順を保つため、まず resolved path リストを順次組み立て、
     // PNG デコード本体だけを並列実行する。
-    let source_tasks: Vec<(usize, String, PathBuf)> = document
+    let source_tasks: Vec<SourceDecodeTask> = document
         .source
         .iter()
         .enumerate()
         .filter_map(|(index, source)| {
+            if let Some(asset) = lr2_builtin_source_asset(&source.path) {
+                return Some(SourceDecodeTask::Builtin {
+                    index,
+                    source_id: source.id.clone(),
+                    path: PathBuf::from(&source.path),
+                    asset,
+                });
+            }
             let source_path =
                 resolve_json_skin_source_path(&skin_root, &source.path, &document, files)?;
             if !source_path.to_string_lossy().to_ascii_lowercase().ends_with(".png") {
@@ -350,31 +363,38 @@ pub fn decode_beatoraja_skin_with_options(
                 );
                 return None;
             }
-            Some((index, source.id.clone(), source_path))
+            Some(SourceDecodeTask::File { index, source_id: source.id.clone(), path: source_path })
         })
         .collect();
 
     let mut decoded_pairs: Vec<(usize, String, PathBuf, RgbaImageAsset)> = source_tasks
         .into_par_iter()
-        .filter_map(|(index, source_id, source_path)| match load_png_rgba(&source_path) {
-            Ok(asset) => Some((index, source_id, source_path, asset)),
-            Err(error) => {
-                if warn_missing_required && required_sources.contains(&source_id) {
-                    tracing::warn!(
-                        source_id = %source_id,
-                        path = %source_path.display(),
-                        %error,
-                        "failed to load beatoraja skin source"
-                    );
-                } else {
-                    tracing::debug!(
-                        source_id = %source_id,
-                        path = %source_path.display(),
-                        %error,
-                        "skipping unused missing beatoraja skin source"
-                    );
+        .filter_map(|task| match task {
+            SourceDecodeTask::Builtin { index, source_id, path, asset } => {
+                Some((index, source_id, path, asset))
+            }
+            SourceDecodeTask::File { index, source_id, path: source_path } => {
+                match load_png_rgba(&source_path) {
+                    Ok(asset) => Some((index, source_id, source_path, asset)),
+                    Err(error) => {
+                        if warn_missing_required && required_sources.contains(&source_id) {
+                            tracing::warn!(
+                                source_id = %source_id,
+                                path = %source_path.display(),
+                                %error,
+                                "failed to load beatoraja skin source"
+                            );
+                        } else {
+                            tracing::debug!(
+                                source_id = %source_id,
+                                path = %source_path.display(),
+                                %error,
+                                "skipping unused missing beatoraja skin source"
+                            );
+                        }
+                        None
+                    }
                 }
-                None
             }
         })
         .collect();
@@ -391,6 +411,23 @@ pub fn decode_beatoraja_skin_with_options(
         .collect();
 
     Ok(DecodedSkin { kind, document, fonts, sources })
+}
+
+fn lr2_builtin_source_asset(path: &str) -> Option<RgbaImageAsset> {
+    let pixel = match path {
+        // BMZ does not yet emulate every LR2 transition timer exactly.  A real
+        // black reference source can leave WMII's fullscreen fade overlays
+        // covering play, so keep it transparent until that animation path is
+        // implemented more faithfully.
+        "bmz://lr2/black" => [0, 0, 0, 0],
+        "bmz://lr2/white" => [255, 255, 255, 255],
+        // BACKBMP itself is drawn by the play snapshot path.  Keep a transparent
+        // source so LR2 CSV objects using IMAGE_BACKBMP can be decoded without
+        // failing texture resolution when the chart has no backbmp.
+        "bmz://lr2/backbmp" => [0, 0, 0, 0],
+        _ => return None,
+    };
+    Some(RgbaImageAsset { width: 1, height: 1, pixels: pixel.to_vec() })
 }
 
 fn load_skin_document(
@@ -1445,6 +1482,11 @@ mod tests {
         assert!(decoded.document.w >= 1920);
         assert!(decoded.document.source.len() >= 10);
         assert!(decoded.document.image.len() >= 100);
+        assert!(
+            decoded.document.source.iter().any(|source| source.id == "110")
+                && decoded.document.source.iter().any(|source| source.id == "111"),
+            "expected LR2 black/white reference sources"
+        );
         let note = decoded.document.note.as_ref().expect("lr2 play skin should define notes");
         assert!(!note.group.is_empty());
         assert!(decoded.document.gauge.is_some());
@@ -1456,6 +1498,10 @@ mod tests {
             decoded.document.source.iter().map(|source| source.path.as_str()).collect::<Vec<_>>(),
             decoded.sources.iter().map(|source| source.path.clone()).collect::<Vec<_>>()
         );
+        let black = decoded.sources.iter().find(|source| source.source_id == "110").unwrap();
+        let white = decoded.sources.iter().find(|source| source.source_id == "111").unwrap();
+        assert_eq!(black.asset.pixels, vec![0, 0, 0, 0]);
+        assert_eq!(white.asset.pixels, vec![255, 255, 255, 255]);
     }
 
     #[test]

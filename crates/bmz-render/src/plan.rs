@@ -892,6 +892,7 @@ fn plan_play(
         max_bpm: snapshot.max_bpm,
         has_bga: snapshot.has_bga,
         bga_enabled: snapshot.bga_enabled,
+        has_backbmp: snapshot.backbmp_background,
         bga_base: snapshot.bga_base.map(skin_bga_frame_from_display),
         bga_layer: snapshot.bga_layer.map(skin_bga_frame_from_display),
         bga_layer2: snapshot.bga_layer2.map(skin_bga_frame_from_display),

@@ -396,6 +396,22 @@ impl<'a> CsvBuilder<'a> {
         self.source_paths.push(Some(path));
     }
 
+    fn ensure_reference_source(&mut self, source_index: i32) {
+        let path = match source_index {
+            // beatoraja SkinProperty.IMAGE_BACKBMP / IMAGE_BLACK / IMAGE_WHITE.
+            101 => "bmz://lr2/backbmp",
+            110 => "bmz://lr2/black",
+            111 => "bmz://lr2/white",
+            _ => return,
+        };
+        let id = source_index.to_string();
+        if !self.sources.iter().any(|source| {
+            source.get("id").and_then(JsonValue::as_str).is_some_and(|existing| existing == id)
+        }) {
+            self.sources.push(json!({ "id": id, "path": path }));
+        }
+    }
+
     fn add_system_font(&mut self, line: &CsvLine) {
         let id = format!("lr2font-{}", self.fonts.len());
         let size = parse_i32(line.fields.get(1)).max(1);
@@ -735,6 +751,24 @@ impl<'a> CsvBuilder<'a> {
             return None;
         }
         let source_id = source_index.to_string();
+        if source_index == 110 {
+            self.ensure_reference_source(source_index);
+            return None;
+        }
+        if matches!(source_index, 101 | 111) {
+            self.ensure_reference_source(source_index);
+            return Some(SourceRegion {
+                src: source_id,
+                x: values[3],
+                y: values[4],
+                w: values[5],
+                h: values[6],
+                divx: values[7].max(1),
+                divy: values[8].max(1),
+                cycle: values[9],
+                timer: (values[10] != 0).then_some(values[10]),
+            });
+        }
         if source_index as usize >= self.source_paths.len() {
             self.warn(format!("lr2 csv source index {source_index} is not defined"));
             return None;
@@ -1325,6 +1359,13 @@ mod tests {
                 .iter()
                 .all(|warning| !warning.message.contains("unsupported lr2 csv command")),
             "unexpected warnings: {:?}",
+            loaded.warnings
+        );
+        assert!(
+            loaded.warnings.iter().all(|warning| !warning.message.contains("source index 101")
+                && !warning.message.contains("source index 110")
+                && !warning.message.contains("source index 111")),
+            "unexpected reference source warnings: {:?}",
             loaded.warnings
         );
         assert_eq!(loaded.value["name"], "WMII FHD play AC");
