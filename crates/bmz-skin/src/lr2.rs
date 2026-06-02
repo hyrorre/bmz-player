@@ -124,6 +124,7 @@ struct CsvBuilder<'a> {
     lr2_gauge_add_x: i32,
     lr2_gauge_add_y: i32,
     current_has_destination: bool,
+    note_marker_inserted: bool,
     next_id: usize,
 }
 
@@ -324,6 +325,7 @@ impl<'a> CsvBuilder<'a> {
             lr2_gauge_add_x: 0,
             lr2_gauge_add_y: 0,
             current_has_destination: false,
+            note_marker_inserted: false,
             next_id: 0,
         }
     }
@@ -620,6 +622,9 @@ impl<'a> CsvBuilder<'a> {
 
     fn add_note_source(&mut self, line: &CsvLine, slot: NoteSlot) {
         let values = parse_values(line);
+        let Some(lane) = lr2_lane_to_beatoraja_index(values[1]) else {
+            return;
+        };
         let Some(region) = self.source_region(&values) else {
             return;
         };
@@ -636,7 +641,7 @@ impl<'a> CsvBuilder<'a> {
             "cycle": region.cycle,
             "timer": region.timer,
         }));
-        note_vec_mut(&mut self.note, slot).push(id);
+        set_lane_note_value_if_empty(note_vec_mut(&mut self.note, slot), lane, id);
     }
 
     fn add_note_destination(&mut self, line: &CsvLine) {
@@ -644,14 +649,20 @@ impl<'a> CsvBuilder<'a> {
         let Some(lane) = lr2_lane_to_beatoraja_index(values[1]) else {
             return;
         };
-        let frame = note_destination_frame(&values, self.header.h as i32);
-        self.note.size.push(values[6].abs());
+        if !self.note_marker_inserted {
+            self.destinations.push(json!({ "id": "notes" }));
+            self.note_marker_inserted = true;
+        }
         while self.note.dst.len() < lane as usize {
             self.note.dst.push(json!({ "time": 0, "x": 0, "y": 0, "w": 0, "h": 0 }));
         }
         if self.note.dst.len() == lane as usize {
+            let frame = note_destination_frame(&values, self.header.h as i32);
+            set_lane_note_size_if_empty(&mut self.note.size, lane, values[6].abs());
             self.note.dst.push(frame);
-        } else {
+        } else if is_empty_note_frame(&self.note.dst[lane as usize]) {
+            let frame = note_destination_frame(&values, self.header.h as i32);
+            set_lane_note_size_if_empty(&mut self.note.size, lane, values[6].abs());
             self.note.dst[lane as usize] = frame;
         }
     }
@@ -1210,6 +1221,12 @@ fn note_destination_frame(values: &[i32; 22], canvas_h: i32) -> JsonValue {
     })
 }
 
+fn is_empty_note_frame(value: &JsonValue) -> bool {
+    let w = value.get("w").and_then(JsonValue::as_i64).unwrap_or(0);
+    let h = value.get("h").and_then(JsonValue::as_i64).unwrap_or(0);
+    w == 0 || h == 0
+}
+
 fn note_vec_mut(note: &mut NoteState, slot: NoteSlot) -> &mut Vec<String> {
     match slot {
         NoteSlot::Note => &mut note.note,
@@ -1224,6 +1241,26 @@ fn note_vec_mut(note: &mut NoteState, slot: NoteSlot) -> &mut Vec<String> {
         NoteSlot::HcnDamage => &mut note.hcndamage,
         NoteSlot::HcnReactive => &mut note.hcnreactive,
         NoteSlot::Mine => &mut note.mine,
+    }
+}
+
+fn set_lane_note_value_if_empty(values: &mut Vec<String>, lane: i32, value: String) {
+    let lane = lane as usize;
+    if values.len() <= lane {
+        values.resize(lane + 1, String::new());
+    }
+    if values[lane].is_empty() {
+        values[lane] = value;
+    }
+}
+
+fn set_lane_note_size_if_empty(values: &mut Vec<i32>, lane: i32, value: i32) {
+    let lane = lane as usize;
+    if values.len() <= lane {
+        values.resize(lane + 1, 0);
+    }
+    if values[lane] <= 0 {
+        values[lane] = value;
     }
 }
 

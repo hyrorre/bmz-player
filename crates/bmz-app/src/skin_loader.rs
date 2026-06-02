@@ -1667,6 +1667,46 @@ mod tests {
     }
 
     #[test]
+    fn wmii_fhd_lr2skin_maps_note_sources_by_lr2_lane_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/WMII_FHD/play/FHDPLAY_AC.lr2skin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let decoded = decode_beatoraja_skin(&skin_path, SkinKind::Play).unwrap();
+        let note = decoded.document.note.as_ref().expect("WMII notes should decode");
+        let images = decoded.document.image_map();
+        let scratch =
+            images.get(note.note[7].as_str()).expect("WMII scratch note image should resolve");
+        let key1 = images.get(note.note[0].as_str()).expect("WMII key1 note image should resolve");
+        let key2 = images.get(note.note[1].as_str()).expect("WMII key2 note image should resolve");
+
+        assert_eq!((scratch.x, scratch.w), (94, 90));
+        assert_eq!((key1.x, key1.w), (187, 52));
+        assert_eq!((key2.x, key2.w), (241, 40));
+    }
+
+    #[test]
+    fn wmii_fhd_lr2skin_inserts_notes_marker_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/WMII_FHD/play/FHDPLAY_AC.lr2skin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let decoded = decode_beatoraja_skin(&skin_path, SkinKind::Play).unwrap();
+        assert!(
+            decoded
+                .document
+                .all_destinations(&decoded.document.enabled_options())
+                .iter()
+                .any(|destination| destination.id == "notes"),
+            "LR2 play skins should insert the notes marker at the first DST_NOTE command"
+        );
+    }
+
+    #[test]
     fn wmii_fhd_lr2skin_renders_groove_gauge_when_available() {
         let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../data/skins/WMII_FHD/play/FHDPLAY_AC.lr2skin");
