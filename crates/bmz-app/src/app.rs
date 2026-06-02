@@ -35,6 +35,7 @@ use crate::cli::{
     AUTOPLAY_ON_START_ARG, AppOptions, SMOKE_EXIT_AFTER_FRAMES_ARG, SMOKE_EXIT_ON_RESULT_ARG,
 };
 use crate::config::app_config::{PathEntry, WindowMode};
+use crate::config::key_config::apply_play_keyboard_binding;
 use crate::config::load::load_profile_config;
 use crate::config::profile_config::{
     AssistOptionConfig, BgaModeConfig, GaugeAutoShiftConfig, GaugeTypeConfig, InputActionConfig,
@@ -45,6 +46,7 @@ use crate::config::settings_registry::SettingsEntryId;
 use crate::input::winit::physical_key_to_control;
 use crate::practice_ui::PracticePanelContext;
 use crate::screens::course_session::{ActiveCourseSession, CourseEntryResult, CourseResultSummary};
+use crate::screens::key_config_edit::KeyConfigEditSession;
 use crate::screens::play_finish::FinishedPlaySession;
 use crate::screens::play_loop::{
     PlayAdvanceOutcome, PlayEndingSkinTimers, advance_running_play_session_until_result,
@@ -286,6 +288,8 @@ struct WinitApp {
     wgpu_fps: f32,
     /// 設定画面で編集中の項目。`None` なら一覧操作モード。
     settings_edit: Option<SettingsEditSession>,
+    /// キー設定の待ち受け状態。
+    key_config_edit: Option<KeyConfigEditSession>,
     /// リザルト画面終了アニメーションの進行状態。
     /// Some のあいだは終了フェードアウト中で、入力は受け付けない。
     result_exit: Option<ResultExit>,
@@ -730,6 +734,7 @@ impl WinitApp {
             last_frame_at: None,
             wgpu_fps: 0.0,
             settings_edit: None,
+            key_config_edit: None,
             result_exit: None,
             search_mode: false,
             search_query: String::new(),
@@ -1101,6 +1106,7 @@ impl WinitApp {
                 self.selected_index,
                 25,
                 &self.boot.profile_config,
+                self.key_config_edit.as_ref(),
             ),
             arrange: self.arrange_option.as_str().to_string(),
             target: self.target_option.as_str().to_string(),
@@ -1125,7 +1131,7 @@ impl WinitApp {
             stage_background: self.select_stage_loaded,
             banner_image: self.select_banner_loaded,
             in_settings: in_settings_stack(&self.folder_stack),
-            settings_editing: self.settings_edit.is_some(),
+            settings_editing: self.settings_edit.is_some() || self.key_config_edit.is_some(),
             search_word,
             search_word_alpha,
         }
@@ -1356,6 +1362,59 @@ impl WinitApp {
         }
     }
 
+    fn begin_key_config_edit(&mut self, lane: crate::config::profile_config::LaneConfig) {
+        self.key_config_edit = Some(KeyConfigEditSession::begin(lane, &self.boot.profile_config));
+        self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+        tracing::info!(?lane, "key config listen started");
+    }
+
+    fn cancel_key_config_edit(&mut self) {
+        let Some(session) = self.key_config_edit.take() else {
+            return;
+        };
+        let lane = session.target;
+        session.cancel(&mut self.boot.profile_config);
+        self.play_system_sound(crate::system_sound::SoundType::FolderClose);
+        tracing::info!(?lane, "key config cancelled");
+    }
+
+    fn commit_key_config_edit(&mut self) {
+        let Some(session) = self.key_config_edit.take() else {
+            return;
+        };
+        let lane = session.target;
+        self.boot.profile_config.updated_at = now_unix_seconds();
+        match save_profile_config(&self.boot.profile_paths.profile_toml, &self.boot.profile_config)
+        {
+            Ok(()) => {
+                self.select_keys = SelectKeyBindings::from_profile(&self.boot.profile_config.input);
+                self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+                tracing::info!(?lane, "key config saved");
+            }
+            Err(error) => {
+                tracing::error!(%error, ?lane, "failed to save key config");
+                session.cancel(&mut self.boot.profile_config);
+            }
+        }
+    }
+
+    fn apply_key_config_control(&mut self, control: &str) {
+        let Some(session) = self.key_config_edit.as_ref() else {
+            return;
+        };
+        if !session.listening {
+            return;
+        }
+        let lane = session.target;
+        if let Err(error) =
+            apply_play_keyboard_binding(&mut self.boot.profile_config.input, lane, control)
+        {
+            tracing::warn!(%error, ?lane, control, "failed to apply key binding");
+            return;
+        }
+        self.commit_key_config_edit();
+    }
+
     fn adjust_settings_edit(&mut self, direction: i32) {
         if direction == 0 {
             return;
@@ -1399,6 +1458,13 @@ impl WinitApp {
     fn route_settings_control(&mut self, control: &str) -> bool {
         let bindings = SettingsBindings::from_profile(&self.boot.profile_config.input);
 
+        if self.key_config_edit.is_some() {
+            if bindings.is_back(control) {
+                self.cancel_key_config_edit();
+            }
+            return true;
+        }
+
         if self.settings_edit.is_some() {
             if bindings.is_confirm(control) {
                 self.commit_settings_edit();
@@ -1435,6 +1501,10 @@ impl WinitApp {
             return match self.select_items.get(self.selected_index) {
                 Some(SelectItem::Config(row)) => {
                     self.begin_settings_edit(row.entry_id);
+                    true
+                }
+                Some(SelectItem::KeyBinding(row)) => {
+                    self.begin_key_config_edit(row.lane);
                     true
                 }
                 Some(SelectItem::Folder { .. }) => {
@@ -1644,10 +1714,15 @@ impl WinitApp {
             if in_settings_stack(&self.folder_stack)
                 && event.state == ElementState::Pressed
                 && !event.repeat
-                && self.settings_edit.is_some()
             {
-                self.cancel_settings_edit();
-                return;
+                if self.key_config_edit.is_some() {
+                    self.cancel_key_config_edit();
+                    return;
+                }
+                if self.settings_edit.is_some() {
+                    self.cancel_settings_edit();
+                    return;
+                }
             }
             match event.state {
                 ElementState::Pressed => {
@@ -1663,6 +1738,19 @@ impl WinitApp {
         }
 
         if in_settings_stack(&self.folder_stack) {
+            if self.key_config_edit.is_some()
+                && event.state == ElementState::Pressed
+                && !event.repeat
+            {
+                if let Some(control) = physical_key_name(event.physical_key) {
+                    if control == "Escape" {
+                        self.cancel_key_config_edit();
+                    } else {
+                        self.apply_key_config_control(&control);
+                    }
+                }
+                return;
+            }
             if event.state == ElementState::Released || event.repeat {
                 return;
             }
@@ -1992,6 +2080,9 @@ impl WinitApp {
                 }
             }
             Some(SelectItem::Config(_)) => {}
+            Some(SelectItem::KeyBinding(row)) => {
+                self.begin_key_config_edit(row.lane);
+            }
             Some(SelectItem::AdvancedSettings) => {
                 self.open_advanced_settings_from_select();
             }
@@ -2191,6 +2282,9 @@ impl WinitApp {
     }
 
     fn exit_folder(&mut self) {
+        if self.key_config_edit.is_some() {
+            self.cancel_key_config_edit();
+        }
         if self.settings_edit.is_some() {
             self.cancel_settings_edit();
         }
@@ -2997,6 +3091,7 @@ impl WinitApp {
             SelectItem::Folder { .. }
             | SelectItem::Course(_)
             | SelectItem::Config(_)
+            | SelectItem::KeyBinding(_)
             | SelectItem::AdvancedSettings => false,
         }) && let Some(chart) = &row.chart
         {
@@ -3329,6 +3424,7 @@ impl WinitApp {
             SelectItem::Folder { .. }
             | SelectItem::Course(_)
             | SelectItem::Config(_)
+            | SelectItem::KeyBinding(_)
             | SelectItem::AdvancedSettings => None,
         }
     }
@@ -3339,6 +3435,7 @@ impl WinitApp {
             SelectItem::Chart(_)
             | SelectItem::Folder { .. }
             | SelectItem::Config(_)
+            | SelectItem::KeyBinding(_)
             | SelectItem::AdvancedSettings => None,
         }
     }
@@ -5425,6 +5522,7 @@ fn select_snapshot_rows(
     selected_index: usize,
     visible_limit: usize,
     profile: &ProfileConfig,
+    key_config_edit: Option<&KeyConfigEditSession>,
 ) -> Vec<SelectRowSnapshot> {
     if items.is_empty() || visible_limit == 0 {
         return Vec::new();
@@ -5593,6 +5691,44 @@ fn select_snapshot_rows(
                 },
                 SelectItem::Config(row) => {
                     let value = row.value_text(profile);
+                    SelectRowSnapshot {
+                        index: index as u32,
+                        title: row.label().to_string(),
+                        subtitle: String::new(),
+                        artist: value.clone(),
+                        difficulty_name: String::new(),
+                        play_level: value,
+                        table_level: String::new(),
+                        total_notes: 0,
+                        initial_bpm: 0.0,
+                        min_bpm: 0.0,
+                        max_bpm: 0.0,
+                        length_ms: 0,
+                        clear_type: String::new(),
+                        ex_score: None,
+                        max_combo: None,
+                        gauge_value: None,
+                        miss_count: None,
+                        play_count: 0,
+                        clear_count: 0,
+                        replay_slots: [false; 4],
+                        has_long_notes: false,
+                        has_mines: false,
+                        has_random: false,
+                        is_folder: false,
+                        kind: bmz_render::scene::SelectRowKind::Config,
+                        in_library: true,
+                        achieved_trophy_names: Vec::new(),
+                        course_titles: Default::default(),
+                        course_constraints: Default::default(),
+                        chart_key_mode: None,
+                    }
+                }
+                SelectItem::KeyBinding(row) => {
+                    let value = key_config_edit
+                        .filter(|session| session.target == row.lane)
+                        .map(|session| session.preview_value(profile))
+                        .unwrap_or_else(|| row.value_text(profile));
                     SelectRowSnapshot {
                         index: index as u32,
                         title: row.label().to_string(),
@@ -6864,7 +7000,7 @@ mod tests {
             .collect();
 
         let profile = ProfileConfig::new_default("default", "Default", 0);
-        let snapshot_rows = select_snapshot_rows(&rows, 5, 7, &profile);
+        let snapshot_rows = select_snapshot_rows(&rows, 5, 7, &profile, None);
 
         assert_eq!(snapshot_rows.len(), 7);
         assert_eq!(snapshot_rows[0].index, 2);
@@ -6881,7 +7017,7 @@ mod tests {
             (0..4).map(|i| SelectItem::Chart(select_chart_row(i))).collect();
 
         let profile = ProfileConfig::new_default("default", "Default", 0);
-        let snapshot_rows = select_snapshot_rows(&rows, 0, 7, &profile);
+        let snapshot_rows = select_snapshot_rows(&rows, 0, 7, &profile, None);
 
         assert_eq!(snapshot_rows.len(), 7);
         assert_eq!(
@@ -6896,7 +7032,7 @@ mod tests {
             (0..30).map(|i| SelectItem::Chart(select_chart_row(i))).collect();
 
         let profile = ProfileConfig::new_default("default", "Default", 0);
-        let snapshot_rows = select_snapshot_rows(&rows, 2, 25, &profile);
+        let snapshot_rows = select_snapshot_rows(&rows, 2, 25, &profile, None);
 
         assert_eq!(snapshot_rows.len(), 25);
         assert_eq!(snapshot_rows[0].index, 20);
@@ -6912,7 +7048,7 @@ mod tests {
         ];
 
         let profile = ProfileConfig::new_default("default", "Default", 0);
-        let snapshot_rows = select_snapshot_rows(&rows, 0, 2, &profile);
+        let snapshot_rows = select_snapshot_rows(&rows, 0, 2, &profile, None);
 
         assert!(snapshot_rows.iter().any(|row| row.title == "Course 4/4" && row.in_library));
         assert!(snapshot_rows.iter().any(|row| row.title == "Course 3/4" && !row.in_library));

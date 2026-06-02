@@ -4,7 +4,7 @@ use anyhow::Result;
 use bmz_core::course::CourseKind;
 use bmz_render::scene::SelectRowKind;
 
-use crate::screens::settings_model::ConfigSelectRow;
+use crate::screens::settings_model::{ConfigSelectRow, KeyBindingSelectRow};
 use crate::storage::common::hash_to_hex;
 use crate::storage::library_db::{ChartListItem, LibraryDatabase, TableEntryListItem};
 use crate::storage::score_db::{BestScoreSummary, ReplaySlotSummary, ScoreDatabase};
@@ -237,6 +237,7 @@ pub enum SelectItem {
     Chart(SelectChartRow),
     Course(SelectCourseRow),
     Config(ConfigSelectRow),
+    KeyBinding(KeyBindingSelectRow),
     /// ゲーム内設定から egui の詳細設定ウィンドウを開くアクション行。
     AdvancedSettings,
 }
@@ -248,6 +249,7 @@ impl SelectItem {
             Self::Chart(row) => row.display_title(),
             Self::Course(row) => row.title.as_str(),
             Self::Config(row) => row.label(),
+            Self::KeyBinding(row) => row.label(),
             Self::AdvancedSettings => "詳細設定",
         }
     }

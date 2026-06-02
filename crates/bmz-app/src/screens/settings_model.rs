@@ -1,6 +1,7 @@
 use bmz_render::scene::SelectRowKind;
 
-use crate::config::profile_config::ProfileConfig;
+use crate::config::key_config::{KEY7_LANE_ENTRIES, format_play_keyboard_binding};
+use crate::config::profile_config::{LaneConfig, ProfileConfig};
 use crate::config::settings_registry::{SettingsEntryId, format_settings_value};
 use crate::screens::select_model::SelectItem;
 
@@ -9,6 +10,7 @@ const CONFIG_VOLUME_PATH: &str = "bmz-settings:volume";
 const CONFIG_JUDGE_PATH: &str = "bmz-settings:judge";
 const CONFIG_PLAY_PATH: &str = "bmz-settings:play";
 const CONFIG_DISPLAY_PATH: &str = "bmz-settings:display";
+pub const CONFIG_KEYS_PATH: &str = "bmz-settings:keys";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsPath<'a> {
@@ -17,6 +19,7 @@ pub enum SettingsPath<'a> {
     Judge,
     Play,
     Display,
+    Keys,
     Unknown(&'a str),
 }
 
@@ -28,6 +31,7 @@ pub fn parse_settings_path(path: &str) -> Option<SettingsPath<'_>> {
         "judge" => Some(SettingsPath::Judge),
         "play" => Some(SettingsPath::Play),
         "display" => Some(SettingsPath::Display),
+        "keys" => Some(SettingsPath::Keys),
         other => Some(SettingsPath::Unknown(other)),
     }
 }
@@ -43,6 +47,7 @@ pub fn settings_breadcrumb(path: &str) -> String {
         Some(SettingsPath::Judge) => "設定 > 判定".to_string(),
         Some(SettingsPath::Play) => "設定 > プレイ".to_string(),
         Some(SettingsPath::Display) => "設定 > 表示".to_string(),
+        Some(SettingsPath::Keys) => "設定 > キー設定".to_string(),
         Some(SettingsPath::Unknown(_)) => "設定".to_string(),
     }
 }
@@ -59,6 +64,25 @@ impl ConfigSelectRow {
 
     pub fn value_text(self, profile: &ProfileConfig) -> String {
         format_settings_value(profile, self.entry_id)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeyBindingSelectRow {
+    pub lane: LaneConfig,
+}
+
+impl KeyBindingSelectRow {
+    pub fn label(self) -> &'static str {
+        KEY7_LANE_ENTRIES
+            .iter()
+            .find(|(lane, _)| *lane == self.lane)
+            .map(|(_, label)| *label)
+            .unwrap_or("KEY")
+    }
+
+    pub fn value_text(self, profile: &ProfileConfig) -> String {
+        format_play_keyboard_binding(profile, self.lane)
     }
 }
 
@@ -93,14 +117,27 @@ pub fn load_settings_items(path: &str) -> Vec<SelectItem> {
                 name: "表示".to_string(),
                 kind: SelectRowKind::SettingsFolder,
             },
+            SelectItem::Folder {
+                path: CONFIG_KEYS_PATH.to_string(),
+                name: "キー設定".to_string(),
+                kind: SelectRowKind::SettingsFolder,
+            },
             SelectItem::AdvancedSettings,
         ],
         Some(SettingsPath::Volume) => config_items(SettingsEntryId::VOLUME_ENTRIES),
         Some(SettingsPath::Judge) => config_items(SettingsEntryId::JUDGE_ENTRIES),
         Some(SettingsPath::Play) => config_items(SettingsEntryId::PLAY_ENTRIES),
         Some(SettingsPath::Display) => config_items(SettingsEntryId::DISPLAY_ENTRIES),
+        Some(SettingsPath::Keys) => key_binding_items(),
         Some(SettingsPath::Unknown(_)) | None => Vec::new(),
     }
+}
+
+fn key_binding_items() -> Vec<SelectItem> {
+    KEY7_LANE_ENTRIES
+        .iter()
+        .map(|(lane, _)| SelectItem::KeyBinding(KeyBindingSelectRow { lane: *lane }))
+        .collect()
 }
 
 fn config_items(entries: &'static [SettingsEntryId]) -> Vec<SelectItem> {
@@ -122,13 +159,14 @@ mod tests {
         assert_eq!(parse_settings_path(CONFIG_JUDGE_PATH), Some(SettingsPath::Judge));
         assert_eq!(parse_settings_path(CONFIG_PLAY_PATH), Some(SettingsPath::Play));
         assert_eq!(parse_settings_path(CONFIG_DISPLAY_PATH), Some(SettingsPath::Display));
+        assert_eq!(parse_settings_path(CONFIG_KEYS_PATH), Some(SettingsPath::Keys));
         assert!(parse_settings_path("/songs").is_none());
     }
 
     #[test]
     fn settings_root_lists_categories() {
         let items = load_settings_items(CONFIG_ROOT_PATH);
-        assert_eq!(items.len(), 5);
+        assert_eq!(items.len(), 6);
         assert!(matches!(items.last(), Some(SelectItem::AdvancedSettings)));
         assert!(matches!(
             &items[0],
@@ -143,6 +181,16 @@ mod tests {
         assert!(
             matches!(&items[0], SelectItem::Config(row) if row.entry_id == SettingsEntryId::MasterVolume)
         );
+    }
+
+    #[test]
+    fn settings_keys_lists_7k_lanes() {
+        let items = load_settings_items(CONFIG_KEYS_PATH);
+        assert_eq!(items.len(), 8);
+        assert!(matches!(
+            &items[0],
+            SelectItem::KeyBinding(row) if row.lane == LaneConfig::Scratch
+        ));
     }
 
     #[test]

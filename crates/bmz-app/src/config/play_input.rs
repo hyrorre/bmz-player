@@ -372,7 +372,7 @@ pub fn default_play_9k_bindings() -> Vec<BindingConfigEntry> {
     ]
 }
 
-fn play_binding(control: &str, lane: LaneConfig) -> BindingConfigEntry {
+pub fn play_binding(control: &str, lane: LaneConfig) -> BindingConfigEntry {
     BindingConfigEntry {
         device: "keyboard".to_string(),
         control: control.to_string(),
