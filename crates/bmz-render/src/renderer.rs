@@ -19,7 +19,7 @@ use crate::plan::{
     UvRect,
 };
 use crate::scene::AppSceneSnapshot;
-use crate::skin::{BlendMode, DynamicTimerRuntime, SkinContext, SkinDocument};
+use crate::skin::{BlendMode, DynamicTimerRuntime, SkinClickHit, SkinContext, SkinDocument};
 use crate::ui::{EguiFrame, EguiPainter};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -395,6 +395,15 @@ impl Renderer {
     /// 選曲スキンの document (設定 UI が property/offset 定義を読むため公開)。
     pub fn select_skin_document(&self) -> Option<&SkinDocument> {
         self.select_skin_context.document()
+    }
+
+    pub fn select_skin_click_hit(
+        &self,
+        snapshot: &crate::scene::SelectSnapshot,
+        x: f32,
+        y: f32,
+    ) -> Option<SkinClickHit> {
+        self.select_skin_context.select_click_hit(snapshot, x, y)
     }
 
     /// プレイスキンの document。

@@ -157,6 +157,8 @@ pub struct SkinSongListDef {
     #[serde(default)]
     pub center: i32,
     #[serde(default)]
+    pub clickable: Vec<i32>,
+    #[serde(default)]
     pub listoff: Vec<DestinationListEntry>,
     #[serde(default)]
     pub liston: Vec<DestinationListEntry>,
@@ -290,6 +292,8 @@ pub struct SkinImageDef {
     pub ref_id: i32,
     #[serde(default)]
     pub click: i32,
+    #[serde(default)]
+    pub act: Option<i32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -302,6 +306,8 @@ pub struct SkinImageSetDef {
     pub images: Vec<String>,
     #[serde(default)]
     pub click: i32,
+    #[serde(default)]
+    pub act: Option<i32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
@@ -987,6 +993,18 @@ pub struct SkinRectDef {
     pub h: i32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkinClickTarget {
+    Event { event_id: i32, click: i32 },
+    SelectRow { row_index: u32 },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SkinClickHit {
+    pub target: SkinClickTarget,
+    pub rect: Rect,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub struct SkinAnimationDef {
     pub time: Option<i32>,
@@ -1218,6 +1236,22 @@ impl SkinContext {
             snapshot,
             dynamic_timers,
             &self.select_settings_dest_index,
+        )
+    }
+
+    pub fn select_click_hit(
+        &self,
+        snapshot: &SelectSnapshot,
+        x: f32,
+        y: f32,
+    ) -> Option<SkinClickHit> {
+        let document = self.document.as_ref()?;
+        document.select_click_hit(
+            &self.document_sources,
+            snapshot,
+            &self.select_settings_dest_index,
+            x,
+            y,
         )
     }
 
@@ -2867,64 +2901,7 @@ impl SkinDocument {
         dynamic_timers: Option<&mut DynamicTimerRuntime>,
         settings_dest_index: &crate::select_settings_dest::SelectSettingsDestIndex,
     ) -> Vec<SkinRenderItem> {
-        let selected_row = snapshot.rows.iter().find(|row| row.index == snapshot.selected_index);
-        let mut state = SkinDrawState {
-            elapsed_ms: (snapshot.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32,
-            select_bar_elapsed_ms: (snapshot.selection_time.0 / 1_000)
-                .clamp(i32::MIN as i64, i32::MAX as i64) as i32,
-            select_option_panel_elapsed_ms: (snapshot.option_panel_time.0 / 1_000)
-                .clamp(i32::MIN as i64, i32::MAX as i64)
-                as i32,
-            select_option_panel: snapshot.option_panel,
-            select_arrange_index: select_arrange_index(&snapshot.arrange),
-            select_gauge_index: select_gauge_index(&snapshot.gauge),
-            select_gauge_auto_shift_index: select_gauge_auto_shift_index(
-                &snapshot.gauge_auto_shift,
-            ),
-            select_target_index: select_target_index(&snapshot.target),
-            select_bga_index: select_bga_index(&snapshot.bga),
-            select_assist_index: select_assist_index(&snapshot.assist),
-            select_scroll_progress: select_scroll_progress(snapshot),
-            select_master_volume: snapshot.master_volume,
-            select_key_volume: snapshot.key_volume,
-            select_bgm_volume: snapshot.bgm_volume,
-            select_has_banner: snapshot.banner_image,
-            select_chart_count: snapshot.chart_count,
-            select_screen: true,
-            select_play_level: selected_row.map(select_row_level_number).unwrap_or(0),
-            play_level: selected_row.map(select_row_level_number).unwrap_or(0),
-            difficulty: selected_row.map(select_row_difficulty_code).unwrap_or(0),
-            select_ex_score: selected_row.and_then(|row| row.ex_score),
-            select_replay_slots: selected_row.map(|row| row.replay_slots).unwrap_or([false; 4]),
-            select_replay_index: selected_row.and_then(select_row_replay_index),
-            select_clear_index: selected_row.map(select_row_clear_index).unwrap_or(0) as i64,
-            select_row_kind: selected_row.map(|row| row.kind).unwrap_or(SelectRowKind::Song),
-            select_course_constraints: selected_row
-                .map(|row| row.course_constraints)
-                .unwrap_or_default(),
-            select_is_folder: selected_row.is_some_and(|row| row.is_folder),
-            select_in_library: selected_row.is_none_or(|row| row.in_library),
-            select_total_notes: selected_row.map(|row| row.total_notes).unwrap_or(0),
-            select_bpm: selected_row.map(|row| row.initial_bpm).unwrap_or(0.0),
-            select_min_bpm: selected_row.map(|row| row.min_bpm).unwrap_or(0.0),
-            select_max_bpm: selected_row.map(|row| row.max_bpm).unwrap_or(0.0),
-            select_length_ms: selected_row.map(|row| row.length_ms).unwrap_or(0),
-            select_play_count: selected_row.map(|row| row.play_count).unwrap_or(0),
-            select_clear_count: selected_row.map(|row| row.clear_count).unwrap_or(0),
-            select_miss_count: selected_row.and_then(|row| row.miss_count),
-            max_combo: selected_row.and_then(|row| row.max_combo).unwrap_or(0),
-            total_notes: selected_row.map(|row| row.total_notes).unwrap_or(0),
-            gauge: selected_row.and_then(|row| row.gauge_value).unwrap_or(0.0),
-            gauge_auto_shift: snapshot.gauge_auto_shift != "OFF",
-            ex_score: selected_row.and_then(|row| row.ex_score).unwrap_or(0),
-            in_settings: snapshot.in_settings,
-            settings_editing: snapshot.settings_editing,
-            select_chart_key_mode: selected_row.and_then(|row| row.chart_key_mode),
-            ..SkinDrawState::default()
-        };
-        if let Some(runtime) = dynamic_timers {
-            state = runtime.advance(self, state, state.elapsed_ms);
-        }
+        let (state, selected_row) = self.select_draw_state(snapshot, dynamic_timers);
         let text = SkinTextState {
             title: selected_row.map(|row| row.title.as_str()).unwrap_or(&snapshot.selected_title),
             subtitle: select_detail_subtitle(snapshot, selected_row),
@@ -2985,6 +2962,214 @@ impl SkinDocument {
             }
         }
         items
+    }
+
+    fn select_draw_state<'a>(
+        &self,
+        snapshot: &'a SelectSnapshot,
+        dynamic_timers: Option<&mut DynamicTimerRuntime>,
+    ) -> (SkinDrawState, Option<&'a SelectRowSnapshot>) {
+        let selected_row = snapshot.rows.iter().find(|row| row.index == snapshot.selected_index);
+        let mut state = SkinDrawState {
+            elapsed_ms: (snapshot.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+            select_bar_elapsed_ms: (snapshot.selection_time.0 / 1_000)
+                .clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+            select_option_panel_elapsed_ms: (snapshot.option_panel_time.0 / 1_000)
+                .clamp(i32::MIN as i64, i32::MAX as i64)
+                as i32,
+            select_option_panel: snapshot.option_panel,
+            select_arrange_index: select_arrange_index(&snapshot.arrange),
+            select_gauge_index: select_gauge_index(&snapshot.gauge),
+            select_gauge_auto_shift_index: select_gauge_auto_shift_index(
+                &snapshot.gauge_auto_shift,
+            ),
+            select_target_index: select_target_index(&snapshot.target),
+            select_bga_index: select_bga_index(&snapshot.bga),
+            select_assist_index: select_assist_index(&snapshot.assist),
+            select_scroll_progress: select_scroll_progress(snapshot),
+            select_master_volume: snapshot.master_volume,
+            select_key_volume: snapshot.key_volume,
+            select_bgm_volume: snapshot.bgm_volume,
+            select_has_banner: snapshot.banner_image,
+            select_chart_count: snapshot.chart_count,
+            select_screen: true,
+            select_play_level: selected_row.map(select_row_level_number).unwrap_or(0),
+            play_level: selected_row.map(select_row_level_number).unwrap_or(0),
+            difficulty: selected_row.map(select_row_difficulty_code).unwrap_or(0),
+            select_ex_score: selected_row.and_then(|row| row.ex_score),
+            select_replay_slots: selected_row.map(|row| row.replay_slots).unwrap_or([false; 4]),
+            select_replay_index: selected_row.and_then(select_row_replay_index),
+            select_clear_index: selected_row.map(select_row_clear_index).unwrap_or(0) as i64,
+            select_row_kind: selected_row.map(|row| row.kind).unwrap_or(SelectRowKind::Song),
+            select_course_constraints: selected_row
+                .map(|row| row.course_constraints)
+                .unwrap_or_default(),
+            select_is_folder: selected_row.is_some_and(|row| row.is_folder),
+            select_in_library: selected_row.is_none_or(|row| row.in_library),
+            select_total_notes: selected_row.map(|row| row.total_notes).unwrap_or(0),
+            select_bpm: selected_row.map(|row| row.initial_bpm).unwrap_or(0.0),
+            select_min_bpm: selected_row.map(|row| row.min_bpm).unwrap_or(0.0),
+            select_max_bpm: selected_row.map(|row| row.max_bpm).unwrap_or(0.0),
+            select_length_ms: selected_row.map(|row| row.length_ms).unwrap_or(0),
+            select_play_count: selected_row.map(|row| row.play_count).unwrap_or(0),
+            select_clear_count: selected_row.map(|row| row.clear_count).unwrap_or(0),
+            select_miss_count: selected_row.and_then(|row| row.miss_count),
+            max_combo: selected_row.and_then(|row| row.max_combo).unwrap_or(0),
+            total_notes: selected_row.map(|row| row.total_notes).unwrap_or(0),
+            gauge: selected_row.and_then(|row| row.gauge_value).unwrap_or(0.0),
+            gauge_auto_shift: snapshot.gauge_auto_shift != "OFF",
+            ex_score: selected_row.and_then(|row| row.ex_score).unwrap_or(0),
+            in_settings: snapshot.in_settings,
+            settings_editing: snapshot.settings_editing,
+            select_chart_key_mode: selected_row.and_then(|row| row.chart_key_mode),
+            ..SkinDrawState::default()
+        };
+        if let Some(runtime) = dynamic_timers {
+            state = runtime.advance(self, state, state.elapsed_ms);
+        }
+        (state, selected_row)
+    }
+
+    pub fn select_click_hit(
+        &self,
+        sources: &HashMap<String, SkinDocumentTexture>,
+        snapshot: &SelectSnapshot,
+        settings_dest_index: &crate::select_settings_dest::SelectSettingsDestIndex,
+        x: f32,
+        y: f32,
+    ) -> Option<SkinClickHit> {
+        self.select_click_hits(sources, snapshot, settings_dest_index)
+            .into_iter()
+            .rev()
+            .find(|hit| rect_contains(hit.rect, x, y))
+    }
+
+    fn select_click_hits(
+        &self,
+        _sources: &HashMap<String, SkinDocumentTexture>,
+        snapshot: &SelectSnapshot,
+        settings_dest_index: &crate::select_settings_dest::SelectSettingsDestIndex,
+    ) -> Vec<SkinClickHit> {
+        let (state, selected_row) = self.select_draw_state(snapshot, None);
+        let enabled_options = self.enabled_options();
+        let images = self.image_map();
+        let mut hits = Vec::new();
+        for destination in self.all_destinations(&enabled_options) {
+            if destination.id == self.songlist.as_ref().map(|list| list.id.as_str()).unwrap_or("") {
+                hits.extend(self.select_songlist_click_hits(snapshot, &enabled_options, state));
+                continue;
+            }
+            if !crate::select_settings_dest::test_select_destination_visible(
+                settings_dest_index,
+                destination,
+                &enabled_options,
+                state,
+                snapshot,
+                selected_row,
+                eval_skin_draw_condition,
+                test_skin_ops,
+            ) {
+                continue;
+            }
+            let Some(target) = self.click_target_for_destination(destination, &images) else {
+                continue;
+            };
+            let Some(rect) = self.destination_click_rect(destination, &enabled_options, state)
+            else {
+                continue;
+            };
+            hits.push(SkinClickHit { target, rect });
+        }
+        hits
+    }
+
+    fn select_songlist_click_hits(
+        &self,
+        snapshot: &SelectSnapshot,
+        enabled_options: &[i32],
+        state: SkinDrawState,
+    ) -> Vec<SkinClickHit> {
+        let Some(songlist) = &self.songlist else {
+            return Vec::new();
+        };
+        let selected_row_position =
+            select_snapshot_selected_row_position(&snapshot.rows, snapshot.selected_index) as i32;
+        let mut hits = Vec::new();
+        for (row_position, row) in snapshot.rows.iter().enumerate() {
+            let offset = row_position as i32 - selected_row_position;
+            let slot = songlist.center + offset;
+            if !songlist.clickable.contains(&slot) || slot < 0 {
+                continue;
+            }
+            let selected = row_position as i32 == selected_row_position;
+            let row_destinations = if selected { &songlist.liston } else { &songlist.listoff };
+            let Some(row_destination) =
+                destination_entry_at(row_destinations, slot as usize, enabled_options)
+            else {
+                continue;
+            };
+            let row_state = SkinDrawState {
+                select_play_level: select_row_level_number(row),
+                play_level: select_row_level_number(row),
+                difficulty: select_row_difficulty_code(row),
+                select_ex_score: row.ex_score,
+                select_replay_slots: row.replay_slots,
+                select_replay_index: select_row_replay_index(row),
+                select_clear_index: select_row_clear_index(row) as i64,
+                select_row_kind: row.kind,
+                select_course_constraints: row.course_constraints,
+                select_is_folder: row.is_folder,
+                select_in_library: row.in_library,
+                select_total_notes: row.total_notes,
+                select_length_ms: row.length_ms,
+                select_play_count: row.play_count,
+                select_clear_count: row.clear_count,
+                select_miss_count: row.miss_count,
+                max_combo: row.max_combo.unwrap_or(0),
+                total_notes: row.total_notes,
+                gauge: row.gauge_value.unwrap_or(0.0),
+                ex_score: row.ex_score.unwrap_or(0),
+                select_chart_key_mode: row.chart_key_mode,
+                ..state
+            };
+            let Some(rect) =
+                self.destination_click_rect(row_destination, enabled_options, row_state)
+            else {
+                continue;
+            };
+            hits.push(SkinClickHit {
+                target: SkinClickTarget::SelectRow { row_index: row.index },
+                rect,
+            });
+        }
+        hits
+    }
+
+    fn click_target_for_destination(
+        &self,
+        destination: &SkinDestinationDef,
+        images: &HashMap<&str, &SkinImageDef>,
+    ) -> Option<SkinClickTarget> {
+        if let Some(image) = images.get(destination.id.as_str())
+            && let Some(event_id) = image.act
+        {
+            return Some(SkinClickTarget::Event { event_id, click: image.click });
+        }
+        let imageset = self.imageset.iter().find(|set| set.id == destination.id)?;
+        imageset.act.map(|event_id| SkinClickTarget::Event { event_id, click: imageset.click })
+    }
+
+    fn destination_click_rect(
+        &self,
+        destination: &SkinDestinationDef,
+        enabled_options: &[i32],
+        state: SkinDrawState,
+    ) -> Option<Rect> {
+        let elapsed = skin_timer_elapsed_ms(destination.timer, state)?;
+        let mut frame = resolve_destination_frame(destination, elapsed, enabled_options, state)?;
+        apply_skin_offset_to_frame(destination, &mut frame, state, false);
+        let rect = normalize_skin_frame_rect(frame, self.w, self.h);
+        if rect.width <= 0.0 || rect.height <= 0.0 { None } else { Some(rect) }
     }
 
     fn select_songlist_items(
@@ -8109,6 +8294,10 @@ fn normalize_skin_frame_rect(
     }
 }
 
+fn rect_contains(rect: Rect, x: f32, y: f32) -> bool {
+    rect.x <= x && x <= rect.x + rect.width && rect.y <= y && y <= rect.y + rect.height
+}
+
 fn multiply_bga_tints(destination: Color, bga: SkinBgaFrame) -> Color {
     Color::rgba(
         destination.r * bga.tint_r,
@@ -10922,6 +11111,7 @@ mod tests {
                 len: 0,
                 ref_id: 0,
                 click: 0,
+                act: None,
             })
             .collect();
         let sources = HashMap::from([(
@@ -10996,6 +11186,7 @@ mod tests {
                 len: 0,
                 ref_id: 0,
                 click: 0,
+                act: None,
             })
             .collect();
         let sources = HashMap::from([(
@@ -11088,6 +11279,7 @@ mod tests {
                 len: 0,
                 ref_id: 0,
                 click: 0,
+                act: None,
             })
             .collect();
         let sources = HashMap::from([(
@@ -12019,6 +12211,99 @@ mod tests {
     }
 
     #[test]
+    fn select_click_hit_resolves_image_act_event() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 5,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "button.png" }],
+                "image": [
+                    { "id": "button_play", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10, "act": 15, "click": 2 }
+                ],
+                "destination": [
+                    { "id": "button_play", "dst": [{ "x": 10, "y": 20, "w": 30, "h": 10 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = mock_source("1", 100.0, 100.0);
+        let snapshot = match crate::sample::sample_select_scene() {
+            crate::scene::AppSceneSnapshot::Select(snapshot) => snapshot,
+            _ => unreachable!(),
+        };
+
+        let hit = document
+            .select_click_hit(
+                &sources,
+                &snapshot,
+                &crate::select_settings_dest::SelectSettingsDestIndex::default(),
+                0.2,
+                0.75,
+            )
+            .unwrap();
+
+        assert_eq!(hit.target, SkinClickTarget::Event { event_id: 15, click: 2 });
+        assert_eq!(hit.rect, Rect { x: 0.1, y: 0.7, width: 0.3, height: 0.1 });
+    }
+
+    #[test]
+    fn select_click_hit_resolves_clickable_songlist_row() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 5,
+                "w": 100,
+                "h": 100,
+                "songlist": {
+                    "id": "songlist",
+                    "center": 0,
+                    "clickable": [0],
+                    "liston": [
+                        { "id": "bar", "dst": [{ "x": 0, "y": 0, "w": 50, "h": 10 }] }
+                    ],
+                    "listoff": [
+                        { "id": "bar", "dst": [{ "x": 50, "y": 0, "w": 50, "h": 10 }] }
+                    ]
+                },
+                "destination": [{ "id": "songlist" }]
+            }
+            "#,
+        )
+        .unwrap();
+        let snapshot = match crate::sample::sample_select_scene() {
+            crate::scene::AppSceneSnapshot::Select(snapshot) => snapshot,
+            _ => unreachable!(),
+        };
+
+        let hit = document
+            .select_click_hit(
+                &HashMap::new(),
+                &snapshot,
+                &crate::select_settings_dest::SelectSettingsDestIndex::default(),
+                0.25,
+                0.95,
+            )
+            .unwrap();
+
+        assert_eq!(hit.target, SkinClickTarget::SelectRow { row_index: 0 });
+        assert_eq!(hit.rect, Rect { x: 0.0, y: 0.9, width: 0.5, height: 0.1 });
+        assert!(
+            document
+                .select_click_hit(
+                    &HashMap::new(),
+                    &snapshot,
+                    &crate::select_settings_dest::SelectSettingsDestIndex::default(),
+                    0.75,
+                    0.95,
+                )
+                .is_none()
+        );
+    }
+
+    #[test]
     fn select_skin_document_advances_dynamic_timers() {
         let document: SkinDocument = serde_json::from_str(
             r#"
@@ -12711,6 +12996,7 @@ mod tests {
             len: 0,
             ref_id: 0,
             click: 0,
+            act: None,
         };
 
         let uv =
