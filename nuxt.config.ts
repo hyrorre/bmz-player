@@ -2,6 +2,12 @@
 export default defineNuxtConfig({
   compatibilityDate: '2025-07-15',
   devtools: { enabled: true },
+  srcDir: 'bmz-ir-web/app',
+  serverDir: 'bmz-ir-web/server',
+  dir: {
+    public: 'bmz-ir-web/public',
+    shared: 'bmz-ir-web/shared',
+  },
   vite: {
     optimizeDeps: {
       include: ['@vue/devtools-core', '@vue/devtools-kit'],

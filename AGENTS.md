@@ -516,4 +516,13 @@ cargo run -p bmz-app -- --boot-play-sample --boot-replay 1 --smoke-exit-on-resul
 
 bun / Nuxt を使用して、 Internet Ranking 機能の API と Frontend の作成中。
 
+Nuxt 関連のアプリ構造は、bmz-player 本体と混同しないよう `bmz-ir-web/` 配下にまとめます。
+
+- `bmz-ir-web/app/` — Nuxt app root。`app.vue`, `pages`, `components`, `layouts`, `composables`, `plugins`, `assets` など。
+- `bmz-ir-web/server/` — Nitro server。`api`, `routes`, `middleware`, `plugins`, `services`, `repositories` など。
+- `bmz-ir-web/shared/` — app/server 共通の型、schema、定数、純粋関数。secret や DB query は置きません。
+- `bmz-ir-web/public/` — root URL で配信される静的ファイル。
+
+`bun dev` はリポジトリ root から実行します。Nuxt のディレクトリ対応は `nuxt.config.ts` の `srcDir` / `serverDir` / `dir.public` / `dir.shared` で設定します。
+
 `bun dev` 等でエラーが起きる場合は `export TMPDIR=/tmp` を実行してみる。
