@@ -4042,11 +4042,16 @@ impl SkinDocument {
             return 0;
         };
         let max_digits = value.digit.max(0) as usize;
-        let zero_pad = value.zeropadding != 0 || value.padding != 0;
+        let padding = number_padding(value);
         let digits = if ref_id_is_signed(value.ref_id) {
-            display_signed_number_digits(number, max_digits, zero_pad, value.divx.max(1) as u32)
+            display_signed_number_digits(
+                number,
+                max_digits,
+                padding.is_zero_padding(),
+                value.divx.max(1) as u32,
+            )
         } else {
-            display_number_digits(number, max_digits, zero_pad)
+            display_number_digits(number, max_digits, padding)
         };
         if digits.is_empty() { 0 } else { digits.len() as i32 * (frame.w + value.space) }
     }
@@ -4084,13 +4089,12 @@ impl SkinDocument {
         if cell_width_px <= 0.0 || cell_height_px <= 0.0 {
             return Vec::new();
         }
-        // `padding` は `zeropadding` の別名
-        let zero_pad = value.zeropadding != 0 || value.padding != 0;
+        let padding = number_padding(value);
         let max_digits = value.digit.max(0) as usize;
         let digits = if ref_id_is_signed(value.ref_id) {
-            display_signed_number_digits(number, max_digits, zero_pad, divx as u32)
+            display_signed_number_digits(number, max_digits, padding.is_zero_padding(), divx as u32)
         } else {
-            display_number_digits(number, max_digits, zero_pad)
+            display_number_digits(number, max_digits, padding)
         };
         // 桁間スペース (space フィールド、px 単位)
         let digit_step = frame.w + value.space;
@@ -5934,8 +5938,35 @@ fn format_number(value: i64, digits: u8) -> String {
     }
 }
 
-fn display_number_digits(value: i64, max_digits: usize, zero_pad: bool) -> Vec<u8> {
-    let mut text = if zero_pad && max_digits > 0 {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NumberPadding {
+    None,
+    Zero,
+    Blank,
+}
+
+impl NumberPadding {
+    fn is_zero_padding(self) -> bool {
+        matches!(self, Self::Zero)
+    }
+}
+
+fn number_padding(value: &SkinValueDef) -> NumberPadding {
+    if value.zeropadding == 2 || value.padding == 2 {
+        return NumberPadding::Blank;
+    }
+    if value.zeropadding != 0 || value.padding != 0 {
+        return NumberPadding::Zero;
+    }
+    let image_cells = value.divx.max(1).saturating_mul(value.divy.max(1));
+    if !ref_id_is_signed(value.ref_id) && image_cells % 10 != 0 {
+        return NumberPadding::Blank;
+    }
+    NumberPadding::None
+}
+
+fn display_number_digits(value: i64, max_digits: usize, padding: NumberPadding) -> Vec<u8> {
+    let mut text = if padding.is_zero_padding() && max_digits > 0 {
         format!("{:0width$}", value.max(0), width = max_digits)
     } else {
         value.max(0).to_string()
@@ -5943,7 +5974,14 @@ fn display_number_digits(value: i64, max_digits: usize, zero_pad: bool) -> Vec<u
     if max_digits > 0 && text.len() > max_digits {
         text = text[text.len() - max_digits..].to_string();
     }
-    text.bytes().filter(|byte| byte.is_ascii_digit()).map(|byte| byte - b'0').collect()
+    let mut digits: Vec<u8> =
+        text.bytes().filter(|byte| byte.is_ascii_digit()).map(|byte| byte - b'0').collect();
+    if matches!(padding, NumberPadding::Blank) && max_digits > digits.len() {
+        let mut padded = vec![10; max_digits - digits.len()];
+        padded.extend(digits);
+        digits = padded;
+    }
+    digits
 }
 
 /// 符号付き数値（beatoraja の mimage 慣習）用に、divx 列のテクスチャセル index を返す。
@@ -15095,7 +15133,7 @@ mod tests {
     }
 
     #[test]
-    fn volume_number_uses_digit_cell_width_without_squashing() {
+    fn volume_number_uses_blank_padding_and_digit_cell_width() {
         let document: SkinDocument = serde_json::from_str(
             r#"
             {
@@ -15116,15 +15154,22 @@ mod tests {
             SkinDrawState { select_master_volume: 0.37, ..SkinDrawState::default() },
         );
 
-        assert_eq!(items.len(), 2);
+        assert_eq!(items.len(), 3);
         let SkinRenderItem::Image { rect: r0, uv: uv0, .. } = &items[0] else { panic!() };
         let SkinRenderItem::Image { rect: r1, uv: uv1, .. } = &items[1] else { panic!() };
+        let SkinRenderItem::Image { rect: r2, uv: uv2, .. } = &items[2] else { panic!() };
         let digit_width = 22.0 / 1920.0;
         assert!(approx_eq(r0.width, digit_width));
         assert!(approx_eq(r1.width, digit_width));
+        assert!(approx_eq(r2.width, digit_width));
         assert!(approx_eq(r1.x - r0.x, digit_width));
+        assert!(approx_eq(r2.x - r1.x, digit_width));
         assert!(approx_eq(uv0.width, 22.0 / 3170.0));
         assert!(approx_eq(uv1.width, 22.0 / 3170.0));
+        assert!(approx_eq(uv2.width, 22.0 / 3170.0));
+        assert!(approx_eq(uv0.x, (2401.0 + 10.0 * 22.0) / 3170.0));
+        assert!(approx_eq(uv1.x, (2401.0 + 3.0 * 22.0) / 3170.0));
+        assert!(approx_eq(uv2.x, (2401.0 + 7.0 * 22.0) / 3170.0));
     }
 
     #[test]
