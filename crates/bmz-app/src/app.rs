@@ -41,6 +41,7 @@ use crate::config::profile_config::{
     LaneConfig, ProfileConfig, ProfileInputConfig, RandomOptionConfig, TargetOptionConfig,
 };
 use crate::config::save::{save_app_config, save_profile_config};
+use crate::config::settings_registry::SettingsEntryId;
 use crate::input::winit::physical_key_to_control;
 use crate::screens::course_session::{ActiveCourseSession, CourseEntryResult, CourseResultSummary};
 use crate::screens::play_finish::FinishedPlaySession;
@@ -63,6 +64,10 @@ use crate::screens::select_model::{
     load_select_items_for_courses, load_select_items_in_folder, load_select_items_in_table_level,
     parse_table_path, root_folder_items, song_scan_path_from_context, table_folder_items,
     table_level_folder_items, table_source_url_from_context,
+};
+use crate::screens::settings_edit::{SettingsBindings, SettingsEditSession, adjust_settings_draft};
+use crate::screens::settings_model::{
+    in_settings_stack, load_settings_items, settings_breadcrumb, settings_root_item,
 };
 use crate::select_options::{ArrangeOption, AssistOption, TargetOption};
 use crate::skin_loader::{
@@ -272,6 +277,8 @@ struct WinitApp {
     last_frame_at: Option<Instant>,
     /// RedrawRequested 間隔から平滑化した wgpu 描画 FPS。
     wgpu_fps: f32,
+    /// 設定画面で編集中の項目。`None` なら一覧操作モード。
+    settings_edit: Option<SettingsEditSession>,
     /// リザルト画面終了アニメーションの進行状態。
     /// Some のあいだは終了フェードアウト中で、入力は受け付けない。
     result_exit: Option<ResultExit>,
@@ -694,6 +701,7 @@ impl WinitApp {
             focused: true,
             last_frame_at: None,
             wgpu_fps: 0.0,
+            settings_edit: None,
             result_exit: None,
         };
         if let Some(chart_id) = boot_chart_id {
@@ -1020,6 +1028,9 @@ impl WinitApp {
                     format!("{table_name} > {symbol}{level}")
                 }
             },
+            Some(path) if in_settings_stack(std::slice::from_ref(path)) => {
+                settings_breadcrumb(path)
+            }
             Some(path) => std::path::Path::new(path)
                 .file_name()
                 .and_then(|n| n.to_str())
@@ -1038,7 +1049,12 @@ impl WinitApp {
                 _ => None,
             },
             selected_title: selected.map(|i| i.display_name().to_string()).unwrap_or_default(),
-            rows: select_snapshot_rows(&self.select_items, self.selected_index, 25),
+            rows: select_snapshot_rows(
+                &self.select_items,
+                self.selected_index,
+                25,
+                &self.boot.profile_config,
+            ),
             arrange: self.arrange_option.as_str().to_string(),
             target: self.target_option.as_str().to_string(),
             gauge: gauge_option_as_str(self.gauge_option).to_string(),
@@ -1061,6 +1077,8 @@ impl WinitApp {
             overlay: OverlaySnapshot::default(),
             stage_background: self.select_stage_loaded,
             banner_image: self.select_banner_loaded,
+            in_settings: in_settings_stack(&self.folder_stack),
+            settings_editing: self.settings_edit.is_some(),
         }
     }
 
@@ -1215,11 +1233,114 @@ impl WinitApp {
     }
 
     fn update_select_option_panel(&mut self) {
+        if in_settings_stack(&self.folder_stack) {
+            self.select_option_panel = 0;
+            return;
+        }
         let panel = select_option_panel_for_holds(self.start_held, self.select_held);
         if self.select_option_panel != panel {
             self.select_option_panel = panel;
             self.option_panel_started_at = Instant::now();
         }
+    }
+
+    fn begin_settings_edit(&mut self, entry_id: SettingsEntryId) {
+        self.settings_edit =
+            Some(SettingsEditSession::capture(&self.boot.profile_config, entry_id));
+        self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+        tracing::info!(?entry_id, "settings edit mode started");
+    }
+
+    fn cancel_settings_edit(&mut self) {
+        let Some(session) = self.settings_edit.take() else {
+            return;
+        };
+        session.restore(&mut self.boot.profile_config);
+        self.play_system_sound(crate::system_sound::SoundType::FolderClose);
+        tracing::info!(entry_id = ?session.entry_id, "settings edit cancelled");
+    }
+
+    fn commit_settings_edit(&mut self) {
+        let Some(session) = self.settings_edit.take() else {
+            return;
+        };
+        self.boot.profile_config.updated_at = now_unix_seconds();
+        match save_profile_config(&self.boot.profile_paths.profile_toml, &self.boot.profile_config)
+        {
+            Ok(()) => {
+                self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+                tracing::info!(entry_id = ?session.entry_id, "settings edit saved");
+            }
+            Err(error) => {
+                tracing::error!(%error, entry_id = ?session.entry_id, "failed to save settings");
+                session.restore(&mut self.boot.profile_config);
+            }
+        }
+    }
+
+    fn adjust_settings_edit(&mut self, direction: i32) {
+        if direction == 0 {
+            return;
+        }
+        let Some(session) = self.settings_edit.as_ref() else {
+            return;
+        };
+        let entry_id = session.entry_id;
+        let delta = direction * crate::config::settings_registry::settings_adjust_step(entry_id);
+        if adjust_settings_draft(&mut self.boot.profile_config, session, delta) {
+            self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+        }
+    }
+
+    fn route_settings_control(&mut self, control: &str) -> bool {
+        let bindings = SettingsBindings::from_profile(&self.boot.profile_config.input);
+
+        if self.settings_edit.is_some() {
+            if bindings.is_confirm(control) {
+                self.commit_settings_edit();
+                return true;
+            }
+            if bindings.is_back(control) {
+                self.cancel_settings_edit();
+                return true;
+            }
+            if bindings.is_increase(control) {
+                self.adjust_settings_edit(1);
+                return true;
+            }
+            if bindings.is_decrease(control) {
+                self.adjust_settings_edit(-1);
+                return true;
+            }
+            return true;
+        }
+
+        if bindings.is_back(control) {
+            self.exit_folder();
+            return true;
+        }
+        if bindings.is_increase(control) {
+            self.move_selection(SelectMove::Next);
+            return true;
+        }
+        if bindings.is_decrease(control) {
+            self.move_selection(SelectMove::Previous);
+            return true;
+        }
+        if bindings.is_confirm(control) {
+            return match self.select_items.get(self.selected_index) {
+                Some(SelectItem::Config(row)) => {
+                    self.begin_settings_edit(row.entry_id);
+                    true
+                }
+                Some(SelectItem::Folder { .. }) => {
+                    self.enter_or_play_selected();
+                    true
+                }
+                _ => false,
+            };
+        }
+        false
     }
 
     fn cycle_bga_option(&mut self) {
@@ -1406,6 +1527,14 @@ impl WinitApp {
 
         // Select 画面で ESC 長押し → アプリ終了 (実際の exit は redraw 時にチェック)。
         if event.physical_key == PhysicalKey::Code(KeyCode::Escape) {
+            if in_settings_stack(&self.folder_stack)
+                && event.state == ElementState::Pressed
+                && !event.repeat
+                && self.settings_edit.is_some()
+            {
+                self.cancel_settings_edit();
+                return;
+            }
             match event.state {
                 ElementState::Pressed => {
                     if self.select_exit_hold_started_at.is_none() {
@@ -1414,6 +1543,41 @@ impl WinitApp {
                 }
                 ElementState::Released => {
                     self.select_exit_hold_started_at = None;
+                }
+            }
+            return;
+        }
+
+        if in_settings_stack(&self.folder_stack) {
+            if event.state == ElementState::Released || event.repeat {
+                return;
+            }
+            if let Some(control) = physical_key_name(event.physical_key) {
+                self.route_settings_control(&control);
+            } else {
+                match event.physical_key {
+                    PhysicalKey::Code(KeyCode::ArrowUp) => {
+                        let _ = self.route_settings_control("ArrowUp");
+                    }
+                    PhysicalKey::Code(KeyCode::ArrowDown) => {
+                        let _ = self.route_settings_control("ArrowDown");
+                    }
+                    PhysicalKey::Code(KeyCode::ArrowLeft) => {
+                        let _ = self.route_settings_control("ArrowLeft");
+                    }
+                    PhysicalKey::Code(KeyCode::ArrowRight) => {
+                        let _ = self.route_settings_control("ArrowRight");
+                    }
+                    PhysicalKey::Code(KeyCode::Enter) => {
+                        let _ = self.route_settings_control("Enter");
+                    }
+                    PhysicalKey::Code(KeyCode::Space) => {
+                        let _ = self.route_settings_control("Space");
+                    }
+                    PhysicalKey::Code(KeyCode::Escape) => {
+                        let _ = self.route_settings_control("Escape");
+                    }
+                    _ => {}
                 }
             }
             return;
@@ -1527,6 +1691,9 @@ impl WinitApp {
             active_play.running.session.lane_cover_changing = pressed;
         }
         if !pressed {
+            if in_settings_stack(&self.folder_stack) {
+                return;
+            }
             if self.select_keys.is_start(button) {
                 self.set_start_held(false);
             } else if self.select_keys.is_back(button) || matches!(button, "Select" | "DPadLeft") {
@@ -1561,6 +1728,11 @@ impl WinitApp {
                     _ => {}
                 }
             }
+            return;
+        }
+
+        if in_settings_stack(&self.folder_stack) {
+            let _ = self.route_settings_control(button);
             return;
         }
 
@@ -1697,6 +1869,7 @@ impl WinitApp {
                     );
                 }
             }
+            Some(SelectItem::Config(_)) => {}
             None => {
                 tracing::warn!("no item is available to select");
             }
@@ -1704,6 +1877,9 @@ impl WinitApp {
     }
 
     fn exit_folder(&mut self) {
+        if self.settings_edit.is_some() {
+            self.cancel_settings_edit();
+        }
         if self.folder_stack.pop().is_some() {
             let restored = self.selected_index_stack.pop().unwrap_or(0);
             self.reload_select_items();
@@ -2295,7 +2471,7 @@ impl WinitApp {
             SelectItem::Chart(row) => {
                 row.chart.as_ref().is_some_and(|chart| chart.chart_id == chart_id)
             }
-            SelectItem::Folder { .. } | SelectItem::Course(_) => false,
+            SelectItem::Folder { .. } | SelectItem::Course(_) | SelectItem::Config(_) => false,
         }) && let Some(chart) = &row.chart
         {
             snapshot.title = chart.title.clone();
@@ -2616,14 +2792,14 @@ impl WinitApp {
     fn currently_selected_chart_id(&self) -> Option<i64> {
         match self.select_items.get(self.selected_index)? {
             SelectItem::Chart(row) => row.chart.as_ref().map(|chart| chart.chart_id),
-            SelectItem::Folder { .. } | SelectItem::Course(_) => None,
+            SelectItem::Folder { .. } | SelectItem::Course(_) | SelectItem::Config(_) => None,
         }
     }
 
     fn currently_selected_course_id(&self) -> Option<i64> {
         match self.select_items.get(self.selected_index)? {
             SelectItem::Course(row) => Some(row.course_id),
-            SelectItem::Chart(_) | SelectItem::Folder { .. } => None,
+            SelectItem::Chart(_) | SelectItem::Folder { .. } | SelectItem::Config(_) => None,
         }
     }
 
@@ -4386,10 +4562,9 @@ fn log_startup_options(options: &AppOptions) {
     }
 }
 
-fn initial_folder_stack(app_config: &crate::config::app_config::AppConfig) -> Vec<String> {
-    let enabled: Vec<String> =
-        app_config.songs.roots.iter().filter(|p| p.enabled).map(|p| p.path.clone()).collect();
-    if enabled.len() == 1 { enabled } else { Vec::new() }
+fn initial_folder_stack(_app_config: &crate::config::app_config::AppConfig) -> Vec<String> {
+    // 有効な曲フォルダが 1 つだけでも、設定フォルダ等を含む選曲ルートから始める。
+    Vec::new()
 }
 
 fn enabled_root_paths(app_config: &crate::config::app_config::AppConfig) -> Vec<String> {
@@ -4401,6 +4576,9 @@ fn load_items_for_stack(
     stack: &[String],
 ) -> Vec<SelectItem> {
     match stack.last() {
+        Some(path) if path.starts_with(crate::screens::settings_model::CONFIG_ROOT_PATH) => {
+            load_settings_items(path)
+        }
         Some(path) if path == COURSE_ROOT_PATH => {
             match load_select_items_for_courses(&boot.library_db) {
                 Ok(items) => items,
@@ -4472,6 +4650,7 @@ fn load_items_for_stack(
                     tracing::error!(%error, "failed to load difficulty table folders");
                 }
             }
+            items.push(settings_root_item());
             items
         }
     }
@@ -4640,6 +4819,7 @@ fn select_snapshot_rows(
     items: &[SelectItem],
     selected_index: usize,
     visible_limit: usize,
+    profile: &ProfileConfig,
 ) -> Vec<SelectRowSnapshot> {
     if items.is_empty() || visible_limit == 0 {
         return Vec::new();
@@ -4685,6 +4865,7 @@ fn select_snapshot_rows(
                     achieved_trophy_names: Vec::new(),
                     course_titles: Default::default(),
                     course_constraints: Default::default(),
+                    chart_key_mode: None,
                 },
                 SelectItem::Chart(row) => {
                     let play_count = u32::from(row.best_score.is_some());
@@ -4753,6 +4934,10 @@ fn select_snapshot_rows(
                         achieved_trophy_names: Vec::new(),
                         course_titles: Default::default(),
                         course_constraints: Default::default(),
+                        chart_key_mode: row
+                            .chart
+                            .as_ref()
+                            .and_then(|chart| KeyMode::from_str_opt(&chart.mode)),
                     }
                 }
                 SelectItem::Course(row) => SelectRowSnapshot {
@@ -4799,7 +4984,43 @@ fn select_snapshot_rows(
                             .map(|entry| (entry.title.as_str(), entry.resolved)),
                     ),
                     course_constraints: course_constraint_flags(&row.constraints),
+                    chart_key_mode: None,
                 },
+                SelectItem::Config(row) => {
+                    let value = row.value_text(profile);
+                    SelectRowSnapshot {
+                        index: index as u32,
+                        title: row.label().to_string(),
+                        subtitle: String::new(),
+                        artist: value.clone(),
+                        difficulty_name: String::new(),
+                        play_level: value,
+                        table_level: String::new(),
+                        total_notes: 0,
+                        initial_bpm: 0.0,
+                        min_bpm: 0.0,
+                        max_bpm: 0.0,
+                        length_ms: 0,
+                        clear_type: String::new(),
+                        ex_score: None,
+                        max_combo: None,
+                        gauge_value: None,
+                        miss_count: None,
+                        play_count: 0,
+                        clear_count: 0,
+                        replay_slots: [false; 4],
+                        has_long_notes: false,
+                        has_mines: false,
+                        has_random: false,
+                        is_folder: false,
+                        kind: bmz_render::scene::SelectRowKind::Config,
+                        in_library: true,
+                        achieved_trophy_names: Vec::new(),
+                        course_titles: Default::default(),
+                        course_constraints: Default::default(),
+                        chart_key_mode: None,
+                    }
+                }
             }
         })
         .collect()
@@ -5303,6 +5524,7 @@ fn select_control_with_lane_fallback(
 mod tests {
     use bmz_render::skin::SkinManifest;
 
+    use crate::config::app_config::{AppConfig, PathEntry};
     use crate::config::profile_config::ProfileConfig;
     use crate::screens::select_model::{SelectChartRow, SelectCourseRow};
     use crate::skin_loader::default_skin_root;
@@ -5310,6 +5532,14 @@ mod tests {
     use crate::storage::score_db::BestScoreSummary;
 
     use super::*;
+
+    #[test]
+    fn initial_folder_stack_starts_at_select_root_even_with_single_enabled_root() {
+        let mut config = AppConfig::default();
+        config.songs.roots =
+            vec![PathEntry { path: "/music/bms".to_string(), enabled: true, recursive: true }];
+        assert!(initial_folder_stack(&config).is_empty());
+    }
 
     #[test]
     fn default_skin_note_texture_exists() {
@@ -5996,7 +6226,8 @@ mod tests {
             })
             .collect();
 
-        let snapshot_rows = select_snapshot_rows(&rows, 5, 7);
+        let profile = ProfileConfig::new_default("default", "Default", 0);
+        let snapshot_rows = select_snapshot_rows(&rows, 5, 7, &profile);
 
         assert_eq!(snapshot_rows.len(), 7);
         assert_eq!(snapshot_rows[0].index, 2);
@@ -6012,7 +6243,8 @@ mod tests {
         let rows: Vec<SelectItem> =
             (0..4).map(|i| SelectItem::Chart(select_chart_row(i))).collect();
 
-        let snapshot_rows = select_snapshot_rows(&rows, 0, 7);
+        let profile = ProfileConfig::new_default("default", "Default", 0);
+        let snapshot_rows = select_snapshot_rows(&rows, 0, 7, &profile);
 
         assert_eq!(snapshot_rows.len(), 7);
         assert_eq!(
@@ -6026,7 +6258,8 @@ mod tests {
         let rows: Vec<SelectItem> =
             (0..30).map(|i| SelectItem::Chart(select_chart_row(i))).collect();
 
-        let snapshot_rows = select_snapshot_rows(&rows, 2, 25);
+        let profile = ProfileConfig::new_default("default", "Default", 0);
+        let snapshot_rows = select_snapshot_rows(&rows, 2, 25, &profile);
 
         assert_eq!(snapshot_rows.len(), 25);
         assert_eq!(snapshot_rows[0].index, 20);
@@ -6041,7 +6274,8 @@ mod tests {
             SelectItem::Course(select_course_row(3, 4)),
         ];
 
-        let snapshot_rows = select_snapshot_rows(&rows, 0, 2);
+        let profile = ProfileConfig::new_default("default", "Default", 0);
+        let snapshot_rows = select_snapshot_rows(&rows, 0, 2, &profile);
 
         assert!(snapshot_rows.iter().any(|row| row.title == "Course 4/4" && row.in_library));
         assert!(snapshot_rows.iter().any(|row| row.title == "Course 3/4" && !row.in_library));

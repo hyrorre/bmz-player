@@ -1,7 +1,7 @@
 use bmz_core::lane::{LANE_COUNT, Lane};
 use bmz_core::time::TimeUs;
 
-use crate::scene::{AppSceneSnapshot, SelectRowSnapshot, SelectSnapshot};
+use crate::scene::{AppSceneSnapshot, SelectRowKind, SelectRowSnapshot, SelectSnapshot};
 use crate::skin::{
     Animation, BlendMode, NumberSlot, SkinContext, SkinDefinition, SkinManifest, SkinObject,
     SkinObjectId, SkinPhase, SkinPlacement, SkinRenderContext, SkinRenderItem, SkinSource,
@@ -427,6 +427,23 @@ fn plan_select(
         BitmapTextStyle { x: 0.08, y: 0.170, cell: 0.005, color: Color::rgb(0.72, 0.86, 0.92) },
     );
     push_select_option_panel(&text, &mut commands, snapshot);
+    if snapshot.in_settings {
+        let hint = if snapshot.settings_editing {
+            "UP/DOWN/SCR: change   1/3/5/7 or ENTER: save   2/4/6 or LEFT/ESC: cancel"
+        } else {
+            "1/3/5/7 or ENTER: edit   2/4/6 or LEFT: back"
+        };
+        text.push_text(
+            &mut commands,
+            hint,
+            BitmapTextStyle {
+                x: 0.08,
+                y: 0.198,
+                cell: 0.0042,
+                color: Color::rgb(0.62, 0.78, 0.72),
+            },
+        );
+    }
 
     let visible_rows = rows.len().max(1);
     let selected_row_position = select_snapshot_selected_row_position(rows, selected_index);
@@ -692,6 +709,9 @@ fn row_status_label(row: Option<&SelectRowSnapshot>) -> String {
     let Some(row) = row else {
         return "EMPTY".to_string();
     };
+    if row.kind == SelectRowKind::Config {
+        return row.play_level.clone();
+    }
     if !row.in_library {
         return "NOT OWNED".to_string();
     }

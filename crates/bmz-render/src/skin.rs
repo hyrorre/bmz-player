@@ -1616,6 +1616,12 @@ pub struct SkinDrawState {
     pub hit_error_ring_index: usize,
     /// `dynamicTimer` で定義された observe タイマーの経過 ms。None は timer_off。
     pub dynamic_timer_ms: [Option<i32>; SKIN_DYNAMIC_TIMER_COUNT],
+    /// 選曲画面の設定フォルダ内。曲メタデータ用の op / text / number を抑制する。
+    pub in_settings: bool,
+    /// 設定項目の編集モード中 (`in_settings` と併用)。
+    pub settings_editing: bool,
+    /// 選曲中の曲行キーモード。beatoraja OPTION_MODE_* (160..164) 用。
+    pub select_chart_key_mode: Option<KeyMode>,
 }
 
 impl Default for SkinDrawState {
@@ -1742,6 +1748,9 @@ impl Default for SkinDrawState {
                 bmz_gameplay::hit_error::HIT_ERROR_RING_LEN],
             hit_error_ring_index: 0,
             dynamic_timer_ms: [None; SKIN_DYNAMIC_TIMER_COUNT],
+            in_settings: false,
+            settings_editing: false,
+            select_chart_key_mode: None,
         }
     }
 }
@@ -2771,6 +2780,9 @@ impl SkinDocument {
             gauge: selected_row.and_then(|row| row.gauge_value).unwrap_or(0.0),
             gauge_auto_shift: snapshot.gauge_auto_shift != "OFF",
             ex_score: selected_row.and_then(|row| row.ex_score).unwrap_or(0),
+            in_settings: snapshot.in_settings,
+            settings_editing: snapshot.settings_editing,
+            select_chart_key_mode: selected_row.and_then(|row| row.chart_key_mode),
             ..SkinDrawState::default()
         };
         if let Some(runtime) = dynamic_timers {
@@ -2778,14 +2790,16 @@ impl SkinDocument {
         }
         let text = SkinTextState {
             title: selected_row.map(|row| row.title.as_str()).unwrap_or(&snapshot.selected_title),
-            subtitle: selected_row.map(|row| row.subtitle.as_str()).unwrap_or_default(),
-            artist: selected_row.map(|row| row.artist.as_str()).unwrap_or_default(),
+            subtitle: select_detail_subtitle(snapshot, selected_row),
+            artist: select_detail_artist(snapshot, selected_row),
             genre: "",
-            difficulty_name: selected_row
-                .map(|row| row.difficulty_name.as_str())
-                .unwrap_or_default(),
+            difficulty_name: if snapshot.in_settings {
+                ""
+            } else {
+                selected_row.map(|row| row.difficulty_name.as_str()).unwrap_or_default()
+            },
             play_level: selected_row.map(|row| row.play_level.as_str()).unwrap_or_default(),
-            target: &snapshot.target,
+            target: if snapshot.in_settings { "" } else { &snapshot.target },
             current_folder: &snapshot.current_folder,
             table_level: selected_row.map(|row| row.table_level.as_str()).unwrap_or_default(),
             course_titles: selected_row
@@ -2863,6 +2877,7 @@ impl SkinDocument {
                 total_notes: row.total_notes,
                 gauge: row.gauge_value.unwrap_or(0.0),
                 ex_score: row.ex_score.unwrap_or(0),
+                select_chart_key_mode: row.chart_key_mode,
                 ..state
             };
             let offset = row_position as i32 - selected_row_position;
@@ -2888,7 +2903,7 @@ impl SkinDocument {
             if let Some(item) = self.select_bar_item(row, row_destination, row_frame, sources) {
                 items.push(item);
             }
-            if !row.is_folder && row.in_library {
+            if select_row_shows_score_decorations(row) {
                 let clear_index = select_row_clear_index(row);
                 let lamp_entries = if songlist.playerlamp.is_empty() {
                     &songlist.lamp
@@ -5031,18 +5046,27 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool 
     match op {
         40 => false,
         41 => true,
-        1 => matches!(state.select_row_kind, SelectRowKind::Folder | SelectRowKind::TableFolder),
-        2 => state.select_row_kind == SelectRowKind::Song,
+        1 => matches!(
+            state.select_row_kind,
+            SelectRowKind::Folder | SelectRowKind::TableFolder | SelectRowKind::SettingsFolder
+        ),
+        2 => select_song_detail_row(state),
         3 => state.select_row_kind == SelectRowKind::Course,
         1002..=1017 => gradebar_constraint_op_matches(op, state),
-        5 => !state.select_is_folder && state.select_in_library,
+        5 => {
+            !state.in_settings
+                && !state.select_is_folder
+                && state.select_in_library
+                && state.select_row_kind == SelectRowKind::Song
+        }
         // BMZ currently has no IR backend, matching beatoraja's offline state.
         50 => true,
         51 => false,
         21 => state.select_option_panel == 1,
         22 => state.select_option_panel == 2,
         23 => state.select_option_panel == 3,
-        160 => !state.select_is_folder,
+        160..=164 => select_key_mode_option_matches(op, state),
+        1160 | 1161 => select_key_mode_option_matches(op, state),
         196 | 197 | 198 | 1196..=1208 if state.result_failed.is_some() => {
             result_replay_op_matches(op, state)
         }
@@ -5086,7 +5110,10 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool 
         150 => state.difficulty <= 0 || state.difficulty > 5,
         151..=155 => state.difficulty == i64::from(op - 150),
         // OPTION_JUDGE_VERYHARD..VERYEASY (180..184)
-        180..=184 => judge_rank_option_matches(op, state.judge_rank),
+        180..=184 => {
+            !(state.select_screen && state.in_settings)
+                && judge_rank_option_matches(op, state.judge_rank)
+        }
         // OPTION_RESULT_CLEAR=90, OPTION_RESULT_FAIL=91
         // Result 画面以外 (result_failed == None) では両方 false。
         90 => state.result_failed == Some(false),
@@ -5812,7 +5839,36 @@ fn skin_state_float_product_expr_term(term: &str, state: SkinDrawState) -> Optio
     Some(product)
 }
 
+/// 設定フォルダ内で曲メタデータ用 number を出さない ref。
+fn select_settings_screen_number_hidden(ref_id: i32) -> bool {
+    matches!(
+        ref_id,
+        30 | 71 | 72 | 74 | 77 | 78 | 90 | 91 | 92 | 1163 | 1164 | 121 | 150 | 170 | 350 | 370
+    )
+}
+
+fn select_settings_screen_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
+    match ref_id {
+        96 if state.select_row_kind == SelectRowKind::Config => {
+            Some(if state.play_level != 0 { state.play_level } else { state.select_play_level })
+        }
+        57 => Some((state.select_master_volume.clamp(0.0, 1.0) * 100.0).round() as i64),
+        58 => Some((state.select_bgm_volume.clamp(0.0, 1.0) * 100.0).round() as i64),
+        59 => Some((state.select_key_volume.clamp(0.0, 1.0) * 100.0).round() as i64),
+        12 => Some(state.judge_timing_offset_ms as i64),
+        _ => None,
+    }
+}
+
 fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
+    if state.select_screen && state.in_settings {
+        if let Some(value) = select_settings_screen_number(ref_id, state) {
+            return Some(value);
+        }
+        if select_settings_screen_number_hidden(ref_id) {
+            return None;
+        }
+    }
     match ref_id {
         // Lua draw 畳み込みのプレースホルダ (`number(0) >= 0` 等)
         0 => Some(0),
@@ -6778,6 +6834,8 @@ fn select_row_bar_image_index(row: &SelectRowSnapshot) -> usize {
         SelectRowKind::Folder => 1,
         SelectRowKind::TableFolder => 2,
         SelectRowKind::Course => 3,
+        SelectRowKind::SettingsFolder => 1,
+        SelectRowKind::Config => 0,
     }
 }
 
@@ -6790,6 +6848,8 @@ fn select_row_bar_text_index(row: &SelectRowSnapshot) -> usize {
         // Course rows display the course title in the same slot as a song title
         // (text index 2), not the folder slot (6).
         SelectRowKind::Course => 2,
+        SelectRowKind::SettingsFolder => 4,
+        SelectRowKind::Config => 2,
     }
 }
 
@@ -6860,6 +6920,9 @@ fn select_row_label_indices(row: &SelectRowSnapshot) -> Vec<usize> {
 }
 
 fn select_replay_op_matches(op: i32, state: SkinDrawState) -> bool {
+    if state.in_settings {
+        return false;
+    }
     let slot = match op {
         196..=198 => Some(0),
         1196..=1198 => Some(1),
@@ -6902,6 +6965,66 @@ fn result_replay_op_matches(op: i32, state: SkinDrawState) -> bool {
     }
 }
 
+fn select_song_detail_row(state: SkinDrawState) -> bool {
+    match state.select_row_kind {
+        SelectRowKind::Song if !state.select_is_folder && state.select_in_library => true,
+        SelectRowKind::Config if state.in_settings => true,
+        _ => false,
+    }
+}
+
+fn select_key_mode_option_matches(op: i32, state: SkinDrawState) -> bool {
+    if state.in_settings || state.select_row_kind != SelectRowKind::Song {
+        return false;
+    }
+    let Some(mode) = state.select_chart_key_mode else {
+        return false;
+    };
+    match op {
+        160 => matches!(mode, KeyMode::K7 | KeyMode::K8),
+        161 => matches!(mode, KeyMode::K5),
+        162 => matches!(mode, KeyMode::K14),
+        163 => matches!(mode, KeyMode::K10),
+        164 => matches!(mode, KeyMode::K9),
+        1160 | 1161 => false,
+        _ => false,
+    }
+}
+
+fn select_detail_artist<'a>(
+    snapshot: &SelectSnapshot,
+    selected_row: Option<&'a SelectRowSnapshot>,
+) -> &'a str {
+    if !snapshot.in_settings {
+        return selected_row.map(|row| row.artist.as_str()).unwrap_or_default();
+    }
+    selected_row
+        .filter(|row| row.kind == SelectRowKind::Config)
+        .map(|row| row.artist.as_str())
+        .unwrap_or_default()
+}
+
+fn select_detail_subtitle<'a>(
+    snapshot: &SelectSnapshot,
+    selected_row: Option<&'a SelectRowSnapshot>,
+) -> &'a str {
+    if snapshot.in_settings {
+        if snapshot.settings_editing
+            && selected_row.is_some_and(|row| row.kind == SelectRowKind::Config)
+        {
+            return "[編集中]";
+        }
+        return "";
+    }
+    selected_row.map(|row| row.subtitle.as_str()).unwrap_or_default()
+}
+
+fn select_row_shows_score_decorations(row: &SelectRowSnapshot) -> bool {
+    !row.is_folder
+        && row.in_library
+        && !matches!(row.kind, SelectRowKind::Config | SelectRowKind::SettingsFolder)
+}
+
 fn select_rank_op_matches(op: i32, state: SkinDrawState) -> bool {
     if !select_rank_available(state) {
         return false;
@@ -6932,6 +7055,9 @@ fn select_small_rank_op_matches(op: i32, state: SkinDrawState) -> bool {
 }
 
 fn select_rank_available(state: SkinDrawState) -> bool {
+    if state.in_settings {
+        return false;
+    }
     !state.select_screen
         || (state.select_row_kind == SelectRowKind::Song
             && !state.select_is_folder
@@ -7053,6 +7179,9 @@ fn civil_from_days(days: i64) -> (i32, u32, u32) {
 }
 
 fn best_rank_op_matches(op: i32, state: SkinDrawState) -> bool {
+    if state.in_settings {
+        return false;
+    }
     let Some(rank) = rank_index(state.best_ex_score, state.total_notes) else {
         return false;
     };
@@ -9184,6 +9313,98 @@ mod tests {
 
         assert!(!test_skin_op(201, &[], state));
         assert!(!test_skin_op(302, &[], state));
+    }
+
+    #[test]
+    fn select_song_detail_op_matches_config_row_in_settings() {
+        let state = SkinDrawState {
+            select_screen: true,
+            select_row_kind: SelectRowKind::Config,
+            in_settings: true,
+            ..SkinDrawState::default()
+        };
+        assert!(test_skin_op(2, &[], state));
+        assert!(!test_skin_op(1, &[], state));
+    }
+
+    #[test]
+    fn select_key_mode_op_160_requires_song_row_key_mode() {
+        let config_row = SkinDrawState {
+            select_screen: true,
+            select_row_kind: SelectRowKind::Config,
+            in_settings: true,
+            ..SkinDrawState::default()
+        };
+        assert!(!test_skin_op(160, &[], config_row));
+
+        let song_7k = SkinDrawState {
+            select_screen: true,
+            select_row_kind: SelectRowKind::Song,
+            select_in_library: true,
+            select_chart_key_mode: Some(KeyMode::K7),
+            ..SkinDrawState::default()
+        };
+        assert!(test_skin_op(160, &[], song_7k));
+        assert!(!test_skin_op(161, &[], song_7k));
+    }
+
+    #[test]
+    fn select_settings_screen_hides_bpm_numbers() {
+        let state = SkinDrawState {
+            select_screen: true,
+            in_settings: true,
+            select_max_bpm: 180.0,
+            select_min_bpm: 120.0,
+            ..SkinDrawState::default()
+        };
+        assert_eq!(skin_state_number(90, state), None);
+        assert_eq!(skin_state_number(91, state), None);
+    }
+
+    #[test]
+    fn select_rank_and_judge_ops_are_hidden_in_settings() {
+        let state = SkinDrawState {
+            select_screen: true,
+            select_row_kind: SelectRowKind::Config,
+            select_in_library: true,
+            select_ex_score: Some(1556),
+            select_total_notes: 1000,
+            judge_rank: Some(2),
+            in_settings: true,
+            ..SkinDrawState::default()
+        };
+
+        assert!(!test_skin_op(200, &[], state));
+        assert!(!test_skin_op(201, &[], state));
+        assert!(!test_skin_op(302, &[], state));
+        assert!(!test_skin_op(180, &[], state));
+    }
+
+    #[test]
+    fn select_detail_artist_shows_config_value_in_settings() {
+        let snapshot = SelectSnapshot {
+            in_settings: true,
+            settings_editing: true,
+            selected_index: 0,
+            rows: vec![SelectRowSnapshot {
+                index: 0,
+                title: "MASTER".to_string(),
+                artist: "25".to_string(),
+                kind: SelectRowKind::Config,
+                ..SelectRowSnapshot::default()
+            }],
+            ..SelectSnapshot::default()
+        };
+        let row = &snapshot.rows[0];
+        assert_eq!(select_detail_artist(&snapshot, Some(row)), "25");
+        assert_eq!(select_detail_subtitle(&snapshot, Some(row)), "[編集中]");
+        assert_eq!(
+            skin_state_text(
+                &SkinTextDef { id: "t".to_string(), ref_id: 3, ..SkinTextDef::default() },
+                SkinTextState { target: "", ..SkinTextState::default() },
+            ),
+            ""
+        );
     }
 
     #[test]

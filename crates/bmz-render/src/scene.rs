@@ -43,6 +43,10 @@ pub struct SelectSnapshot {
     pub stage_background: bool,
     /// `#BANNER` テクスチャがロード済みなら true。
     pub banner_image: bool,
+    /// 設定フォルダ内にいるとき true。
+    pub in_settings: bool,
+    /// 設定項目の編集モード中。
+    pub settings_editing: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -88,6 +92,8 @@ pub struct SelectRowSnapshot {
     pub course_titles: [String; 10],
     /// beatoraja OPTION_GRADEBAR_* (1002..1017) for course rows.
     pub course_constraints: CourseConstraintFlags,
+    /// 曲行のみ。beatoraja OPTION_MODE_* (160..164, 1160..1161) 用。
+    pub chart_key_mode: Option<bmz_core::lane::KeyMode>,
 }
 
 impl Default for SelectRowSnapshot {
@@ -122,6 +128,7 @@ impl Default for SelectRowSnapshot {
             achieved_trophy_names: Vec::new(),
             course_titles: Default::default(),
             course_constraints: CourseConstraintFlags::default(),
+            chart_key_mode: None,
         }
     }
 }
@@ -151,6 +158,8 @@ pub enum SelectRowKind {
     Folder,
     TableFolder,
     Course,
+    SettingsFolder,
+    Config,
 }
 
 #[derive(Debug, Clone, PartialEq)]

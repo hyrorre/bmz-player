@@ -4,6 +4,7 @@ use anyhow::Result;
 use bmz_core::course::CourseKind;
 use bmz_render::scene::SelectRowKind;
 
+use crate::screens::settings_model::ConfigSelectRow;
 use crate::storage::common::hash_to_hex;
 use crate::storage::library_db::{ChartListItem, LibraryDatabase, TableEntryListItem};
 use crate::storage::score_db::{BestScoreSummary, ReplaySlotSummary, ScoreDatabase};
@@ -204,6 +205,7 @@ pub enum SelectItem {
     Folder { path: String, name: String, kind: SelectRowKind },
     Chart(SelectChartRow),
     Course(SelectCourseRow),
+    Config(ConfigSelectRow),
 }
 
 impl SelectItem {
@@ -212,6 +214,7 @@ impl SelectItem {
             Self::Folder { name, .. } => name.as_str(),
             Self::Chart(row) => row.display_title(),
             Self::Course(row) => row.title.as_str(),
+            Self::Config(row) => row.label(),
         }
     }
 }
