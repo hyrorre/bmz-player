@@ -115,6 +115,7 @@ struct CsvBuilder<'a> {
     graphs: Vec<JsonValue>,
     hidden_covers: Vec<JsonValue>,
     gauge: Option<JsonValue>,
+    gauges: Vec<JsonValue>,
     note: NoteState,
     judges: Vec<JudgeState>,
     bga: Option<JsonValue>,
@@ -318,6 +319,7 @@ impl<'a> CsvBuilder<'a> {
             graphs: Vec::new(),
             hidden_covers: Vec::new(),
             gauge: None,
+            gauges: Vec::new(),
             note: NoteState::default(),
             judges: Vec::new(),
             bga: None,
@@ -568,41 +570,35 @@ impl<'a> CsvBuilder<'a> {
             self.current = None;
             return;
         };
-        let id = self.lr2_gauge_id.clone().unwrap_or_else(|| {
-            let id = self.alloc_id("lr2-gauge");
-            self.lr2_gauge_id = Some(id.clone());
-            id
-        });
-        let node_count = (region.divx * region.divy).max(1);
-        let mut nodes = self
-            .gauge
-            .as_ref()
-            .and_then(|gauge| gauge.get("nodes"))
-            .and_then(JsonValue::as_array)
-            .cloned()
-            .unwrap_or_default();
-        let base_node_index = nodes.len();
-        nodes.extend((0..node_count).map(|index| {
-            let image_id = format!("{id}-node-{}", base_node_index + index as usize);
-            let cell_w = (region.w / region.divx.max(1)).max(1);
-            let cell_h = (region.h / region.divy.max(1)).max(1);
-            self.images.push(json!({
-                "id": image_id,
-                "src": region.src,
-                "x": region.x + cell_w * (index % region.divx.max(1)),
-                "y": region.y + cell_h * (index / region.divx.max(1)),
-                "w": cell_w,
-                "h": cell_h,
-                "divx": 1,
-                "divy": 1,
-                "cycle": region.cycle,
-                "timer": region.timer,
-            }));
-            JsonValue::String(image_id)
-        }));
+        let id = self.alloc_id("lr2-gauge");
+        let source_cells = (region.divx * region.divy).max(1);
+        let cell_ids = (0..source_cells)
+            .map(|index| {
+                let image_id = format!("{id}-cell-{index}");
+                let divx = region.divx.max(1);
+                let divy = region.divy.max(1);
+                let cell_w = (region.w / divx).max(1);
+                let cell_h = (region.h / divy).max(1);
+                self.images.push(json!({
+                    "id": image_id,
+                    "src": region.src,
+                    "x": region.x + cell_w * (index % divx),
+                    "y": region.y + cell_h * (index / divx),
+                    "w": cell_w,
+                    "h": cell_h,
+                    "divx": 1,
+                    "divy": 1,
+                    "cycle": region.cycle,
+                    "timer": region.timer,
+                }));
+                image_id
+            })
+            .collect::<Vec<_>>();
+        let nodes = lr2_gauge_nodes(&cell_ids, values[14], line.command == "SRC_GROOVEGAUGE_EX");
+        self.lr2_gauge_id = Some(id.clone());
         self.lr2_gauge_add_x = values[11];
         self.lr2_gauge_add_y = values[12];
-        self.gauge = Some(json!({
+        let gauge = json!({
             "id": id,
             "nodes": nodes,
             "parts": if values[13] == 0 { 50 } else { values[13] },
@@ -611,7 +607,11 @@ impl<'a> CsvBuilder<'a> {
             "cycle": values[16],
             "starttime": values[17],
             "endtime": values[18],
-        }));
+        });
+        if self.gauge.is_none() {
+            self.gauge = Some(gauge.clone());
+        }
+        self.gauges.push(gauge);
         self.current = Some(CurrentObject { id });
         self.current_has_destination = false;
     }
@@ -1006,6 +1006,7 @@ impl<'a> CsvBuilder<'a> {
             "graph": self.graphs,
             "hiddenCover": self.hidden_covers,
             "gauge": self.gauge,
+            "gauges": self.gauges,
             "note": note,
             "judge": judge,
             "bga": self.bga,
@@ -1170,6 +1171,67 @@ fn gauge_destination_def(
         values[6] = add_y * 50;
     }
     destination_def(id, &values, canvas_h)
+}
+
+fn lr2_gauge_nodes(cell_ids: &[String], animation_type: i32, is_ex: bool) -> Vec<String> {
+    let mut nodes = vec![cell_ids.first().cloned().unwrap_or_default(); 36];
+    let cells_per_frame = if is_ex {
+        if animation_type == 3 && cell_ids.len() % 12 == 0 { 12 } else { 8 }
+    } else if animation_type == 3 && cell_ids.len() % 6 == 0 {
+        6
+    } else {
+        4
+    };
+    let frame_cells = cells_per_frame.min(cell_ids.len().max(1));
+    for (dy, cell_id) in cell_ids.iter().take(frame_cells).enumerate() {
+        for slot in lr2_gauge_slots(dy, animation_type, is_ex, cells_per_frame) {
+            if let Some(node) = nodes.get_mut(slot) {
+                *node = cell_id.clone();
+            }
+        }
+    }
+    nodes
+}
+
+fn lr2_gauge_slots(
+    dy: usize,
+    animation_type: i32,
+    is_ex: bool,
+    cells_per_frame: usize,
+) -> Vec<usize> {
+    if !is_ex {
+        if animation_type == 3 && cells_per_frame == 6 {
+            return (0..6).map(|group| dy + group * 6).collect();
+        }
+        let mut slots = (0..6).map(|group| dy + group * 6).collect::<Vec<_>>();
+        if dy < 2 {
+            slots.extend((0..6).map(|group| dy + 4 + group * 6));
+        }
+        return slots;
+    }
+
+    if animation_type == 3 && cells_per_frame == 12 {
+        return match dy {
+            0..=3 => (0..4).map(|group| dy + group * 6).collect(),
+            4..=7 => vec![dy + 20, dy + 26],
+            8 | 9 => vec![dy - 4, dy + 2, dy + 8, dy + 14],
+            _ => vec![dy + 18, dy + 24],
+        };
+    }
+
+    if dy < 4 {
+        let mut slots = (0..4).map(|group| dy + group * 6).collect::<Vec<_>>();
+        if dy < 2 {
+            slots.extend((0..4).map(|group| dy + 4 + group * 6));
+        }
+        slots
+    } else {
+        let mut slots = vec![dy + 20, dy + 26];
+        if dy < 6 {
+            slots.extend([dy + 24, dy + 30]);
+        }
+        slots
+    }
 }
 
 fn judge_combo_destination_def(id: &str, values: &[i32; 22]) -> JsonValue {
@@ -1722,6 +1784,26 @@ mod tests {
     }
 
     #[test]
+    fn lr2_gauge_nodes_expand_standard_cells_to_beatoraja_slots() {
+        let cells =
+            ["red", "green", "back-red", "back-green"].map(|cell| cell.to_string()).to_vec();
+
+        let nodes = lr2_gauge_nodes(&cells, 0, false);
+
+        assert_eq!(nodes.len(), 36);
+        assert_eq!(nodes[0], "red");
+        assert_eq!(nodes[1], "green");
+        assert_eq!(nodes[2], "back-red");
+        assert_eq!(nodes[3], "back-green");
+        assert_eq!(nodes[4], "red");
+        assert_eq!(nodes[5], "green");
+        assert_eq!(nodes[18], "red");
+        assert_eq!(nodes[24], "red");
+        assert_eq!(nodes[34], "red");
+        assert_eq!(nodes[35], "green");
+    }
+
+    #[test]
     fn wmii_fhd_lr2skin_parse_has_no_unsupported_command_warnings_when_available() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../data/skins/WMII_FHD/play/FHDPLAY_AC.lr2skin");
@@ -1748,5 +1830,24 @@ mod tests {
         assert_eq!(loaded.value["name"], "WMII FHD play AC");
         assert!(loaded.value["destination"].as_array().unwrap().len() > 100);
         assert!(!loaded.value["note"]["group"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn wmii_fhd_lr2skin_keeps_gauge_sources_separate_when_available() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/WMII_FHD/play/FHDPLAY_AC.lr2skin");
+        if !path.is_file() {
+            return;
+        }
+
+        let loaded = load_lr2_csv_skin_value(&path, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+        let gauges = loaded.value["gauges"].as_array().expect("gauges array");
+
+        assert!(gauges.len() >= 4, "expected WMII gauge objects, got {gauges:?}");
+        for gauge in gauges.iter().take(4) {
+            let nodes = gauge["nodes"].as_array().unwrap();
+            assert_eq!(nodes.len(), 36);
+        }
+        assert_ne!(gauges[0]["id"], gauges[1]["id"]);
     }
 }

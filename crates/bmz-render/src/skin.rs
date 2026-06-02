@@ -120,6 +120,8 @@ pub struct SkinDocument {
     pub note: Option<SkinNoteSetDef>,
     pub gauge: Option<SkinGaugeDef>,
     #[serde(default)]
+    pub gauges: Vec<SkinGaugeDef>,
+    #[serde(default)]
     pub judge: Vec<SkinJudgeDef>,
     pub bga: Option<SkinBgaDef>,
     pub songlist: Option<SkinSongListDef>,
@@ -3500,18 +3502,24 @@ impl SkinDocument {
     }
 
     fn destination_uses_skin_gauge_bar_render(&self, destination: &SkinDestinationDef) -> bool {
-        self.gauge.as_ref().is_some_and(|gauge| {
-            gauge.id == destination.id
-                && destination.draw.trim().is_empty()
-                && destination.blend != 2
-        })
+        self.skin_gauge_for_destination(destination).is_some()
+            && destination.draw.trim().is_empty()
+            && destination.blend != 2
     }
 
     fn destination_uses_skin_gauge_overlay_render(&self, destination: &SkinDestinationDef) -> bool {
-        self.gauge.as_ref().is_some_and(|gauge| {
-            gauge.id == destination.id
-                && (!destination.draw.trim().is_empty() || destination.blend == 2)
-        })
+        self.skin_gauge_for_destination(destination).is_some()
+            && (!destination.draw.trim().is_empty() || destination.blend == 2)
+    }
+
+    fn skin_gauge_for_destination(
+        &self,
+        destination: &SkinDestinationDef,
+    ) -> Option<&SkinGaugeDef> {
+        self.gauges
+            .iter()
+            .find(|gauge| gauge.id == destination.id)
+            .or_else(|| self.gauge.as_ref().filter(|gauge| gauge.id == destination.id))
     }
 
     fn resolve_gauge_destination_items(
@@ -3521,7 +3529,7 @@ impl SkinDocument {
         state: SkinDrawState,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<Vec<SkinRenderItem>> {
-        let gauge_def = self.gauge.as_ref()?;
+        let gauge_def = self.skin_gauge_for_destination(destination)?;
         let elapsed_ms = skin_timer_elapsed_ms(destination.timer, state)?;
         let frame = resolve_destination_frame(destination, elapsed_ms, enabled_options)?;
         let rect = normalize_skin_frame_rect(frame, self.w, self.h);

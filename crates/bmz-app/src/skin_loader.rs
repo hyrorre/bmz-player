@@ -890,6 +890,13 @@ fn required_skin_source_ids(document: &SkinDocument) -> HashSet<&str> {
             }
         }
     }
+    for gauge in &document.gauges {
+        for image_id in &gauge.nodes {
+            if let Some(source_id) = image_sources.get(image_id.as_str()) {
+                required.insert(*source_id);
+            }
+        }
+    }
     for judge in &document.judge {
         for destination in judge.images.iter().chain(judge.numbers.iter()) {
             if let Some(source_id) = image_sources.get(destination.id.as_str()) {
@@ -1738,32 +1745,38 @@ mod tests {
                 )
             })
             .collect::<std::collections::HashMap<_, _>>();
-        let state = bmz_render::skin::SkinDrawState {
-            elapsed_ms: 2_000,
-            play_timer_ms: Some(2_000),
-            gauge: 80.0,
-            gauge_max: 100.0,
-            gauge_border: 80.0,
-            gauge_type: bmz_core::clear::GaugeType::AssistEasy as i32,
-            ..Default::default()
-        };
+        for gauge_type in [
+            bmz_core::clear::GaugeType::AssistEasy,
+            bmz_core::clear::GaugeType::Normal,
+            bmz_core::clear::GaugeType::Hard,
+        ] {
+            let state = bmz_render::skin::SkinDrawState {
+                elapsed_ms: 2_000,
+                play_timer_ms: Some(2_000),
+                gauge: 80.0,
+                gauge_max: 100.0,
+                gauge_border: 80.0,
+                gauge_type: gauge_type as i32,
+                ..Default::default()
+            };
 
-        let items = decoded.document.static_render_items(
-            &sources,
-            state,
-            bmz_render::skin::SkinTextState::default(),
-        );
-        assert!(
-            items.iter().any(|item| matches!(
-                item,
-                bmz_render::skin::SkinRenderItem::Image { texture, rect, tint, .. }
-                    if *texture == gauge_texture
-                        && (rect.x - 54.0 / 1920.0).abs() < 0.001
-                        && rect.width > 0.004
-                        && tint.a > 0.5
-            )),
-            "expected WMII groove gauge item from source 19; got {items:?}"
-        );
+            let items = decoded.document.static_render_items(
+                &sources,
+                state,
+                bmz_render::skin::SkinTextState::default(),
+            );
+            assert!(
+                items.iter().any(|item| matches!(
+                    item,
+                    bmz_render::skin::SkinRenderItem::Image { texture, rect, tint, .. }
+                        if *texture == gauge_texture
+                            && (rect.x - 54.0 / 1920.0).abs() < 0.001
+                            && rect.width > 0.004
+                            && tint.a > 0.5
+                )),
+                "expected WMII groove gauge item from source 19 for {gauge_type:?}; got {items:?}"
+            );
+        }
     }
 
     #[test]
