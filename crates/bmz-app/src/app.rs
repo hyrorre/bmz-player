@@ -280,6 +280,8 @@ struct WinitApp {
     search_mode: bool,
     /// 現在入力中の検索クエリ。検索モード中はそのまま skin の search_word に渡る。
     search_query: String,
+    /// IME 変換中の未確定文字列 (Preedit)。Commit で空になり search_query に追加される。
+    search_preedit: String,
     /// 直近の検索クエリ履歴 (古い順)。`bmz-search:<q>` 仮想フォルダとしてルートに並ぶ。
     search_history: std::collections::VecDeque<String>,
     /// 直近の検索で「0 件ヒット」になった等のフィードバック文字列。
@@ -707,6 +709,7 @@ impl WinitApp {
             result_exit: None,
             search_mode: false,
             search_query: String::new(),
+            search_preedit: String::new(),
             search_history: std::collections::VecDeque::new(),
             search_message: None,
         };
@@ -1086,14 +1089,14 @@ impl WinitApp {
         let blink_on = (self.select_time().0 / 500_000) % 2 == 0;
         let caret = if blink_on { "_" } else { " " };
         if self.search_mode {
-            // クエリ入力中はクエリ+カーソル。空 (Enter 直後にクリアされる) で
-            // メッセージがあるならメッセージ ("no song found" 等) を優先表示。
-            if self.search_query.is_empty() {
+            // クエリ入力中はクエリ + IME preedit + カーソル。両方空 (Enter
+            // 直後にクリアされる) でメッセージがあれば優先表示。
+            if self.search_query.is_empty() && self.search_preedit.is_empty() {
                 if let Some(message) = &self.search_message {
                     return message.clone();
                 }
             }
-            format!("{}{}", self.search_query, caret)
+            format!("{}{}{}", self.search_query, self.search_preedit, caret)
         } else if let Some(message) = &self.search_message {
             message.clone()
         } else {
@@ -1751,6 +1754,44 @@ impl WinitApp {
     /// Returns true when the event was consumed by the search input layer
     /// (either because the user is in search mode or pressed the search-toggle
     /// hotkey), which suppresses normal m-select navigation for this event.
+    /// Applies a winit IME event (Preedit / Commit / Enabled / Disabled) to the
+    /// search query state. Only acts while the user is in search mode on the
+    /// select screen — IME events received otherwise are ignored.
+    fn route_ime_event(&mut self, ime: &winit::event::Ime) {
+        if !matches!(self.view_state(), AppViewState::Select) || !self.search_mode {
+            return;
+        }
+        use winit::event::Ime;
+        match ime {
+            Ime::Enabled | Ime::Disabled => {
+                self.search_preedit.clear();
+            }
+            Ime::Preedit(text, _cursor) => {
+                self.search_preedit = text.clone();
+            }
+            Ime::Commit(text) => {
+                self.search_query.push_str(text);
+                self.search_preedit.clear();
+                self.search_message = None;
+            }
+        }
+    }
+
+    /// Toggles search mode and synchronizes IME enablement on the window.
+    /// IME is only enabled while search mode is active to avoid macOS / Linux
+    /// IMEs swallowing gameplay keypresses.
+    fn set_search_mode(&mut self, enabled: bool) {
+        self.search_mode = enabled;
+        self.search_query.clear();
+        self.search_preedit.clear();
+        if !enabled {
+            self.search_message = None;
+        }
+        if let Some(window) = self.window.as_ref() {
+            window.set_ime_allowed(enabled);
+        }
+    }
+
     fn handle_search_key(&mut self, event: &winit::event::KeyEvent) -> bool {
         // 起動トリガ: 検索モードでない時に `/` 押下 → モード ON、クエリリセット。
         if !self.search_mode {
@@ -1758,9 +1799,7 @@ impl WinitApp {
                 && event.state == ElementState::Pressed
                 && !event.repeat
             {
-                self.search_mode = true;
-                self.search_query.clear();
-                self.search_message = None;
+                self.set_search_mode(true);
                 tracing::info!("entered song search mode");
                 return true;
             }
@@ -1774,18 +1813,24 @@ impl WinitApp {
 
         match event.physical_key {
             PhysicalKey::Code(KeyCode::Escape) => {
-                self.search_mode = false;
-                self.search_query.clear();
-                self.search_message = None;
+                self.set_search_mode(false);
                 tracing::info!("exited song search mode");
             }
             PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => {
                 if event.repeat {
                     return true;
                 }
+                // IME 変換中の Enter は確定キー (IME が処理) なので検索実行しない。
+                if !self.search_preedit.is_empty() {
+                    return true;
+                }
                 self.execute_song_search();
             }
             PhysicalKey::Code(KeyCode::Backspace) => {
+                // IME 変換中の Backspace は IME に渡す (preedit の文字削除)。
+                if !self.search_preedit.is_empty() {
+                    return true;
+                }
                 self.search_query.pop();
             }
             _ => {
@@ -1847,9 +1892,8 @@ impl WinitApp {
         }
         self.search_history.push_back(query.clone());
 
-        self.search_mode = false;
+        self.set_search_mode(false);
         self.search_message = Some(format!("{hit_count} song(s) found"));
-        self.search_query.clear();
 
         // 検索結果フォルダへ入る。`enter_or_play_selected` と同じ流儀でカーソル
         // 位置を退避してから push する。
@@ -4437,6 +4481,12 @@ impl ApplicationHandler for WinitApp {
                     return;
                 }
                 self.route_mouse_wheel(delta);
+            }
+            WindowEvent::Ime(ime) => {
+                if egui_consumed {
+                    return;
+                }
+                self.route_ime_event(&ime);
             }
             WindowEvent::Resized(size) => {
                 self.renderer
