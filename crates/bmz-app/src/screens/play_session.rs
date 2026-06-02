@@ -15,7 +15,9 @@ use bmz_gameplay::input::backend::{InputBackend, NullInputBackend};
 use bmz_gameplay::input::system::InputSystem;
 use bmz_gameplay::input::translator::DefaultInputTranslator;
 use bmz_gameplay::judge::engine::JudgeEngine;
-use bmz_gameplay::judge::window::{judge_percent_at_time, judge_window_for_rank};
+use bmz_gameplay::judge::window::{
+    beatoraja_note_judge_window_for_keymode, judge_percent_at_time, judge_window_for_rank,
+};
 use bmz_gameplay::replay::{ReplayPlayer, ReplayRecorder};
 use bmz_gameplay::score::ScoreState;
 use bmz_gameplay::session::{BgmScheduler, GameSession, PlaySkinOffset, PlayState};
@@ -23,8 +25,8 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::play::{
-    DEFAULT_JUDGE_WINDOW, audio_mix_from_profile, gauge_auto_shift_from_config,
-    gauge_type_from_config, lane_binding_for_chart, lane_unit_to_f32, play_offsets_from_profile,
+    audio_mix_from_profile, gauge_auto_shift_from_config, gauge_type_from_config,
+    lane_binding_for_chart, lane_unit_to_f32, play_offsets_from_profile,
 };
 use crate::config::profile_config::{
     BgaExpandConfig, BgaModeConfig, LaneEffectConfig, ProfileConfig,
@@ -154,7 +156,7 @@ pub fn build_game_session_with_input_backend(
     // great_us and good_us.  Mirrors beatoraja JudgeManager's *JudgeWindowRate
     // = 0 path.
     let base_judge_window = {
-        let mut w = DEFAULT_JUDGE_WINDOW;
+        let mut w = beatoraja_note_judge_window_for_keymode(chart.metadata.key_mode);
         match options.judge_constraint {
             bmz_core::course::CourseJudgeConstraint::Normal => {}
             bmz_core::course::CourseJudgeConstraint::NoGood => {

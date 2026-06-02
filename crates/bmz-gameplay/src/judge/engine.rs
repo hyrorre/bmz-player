@@ -37,7 +37,7 @@ impl JudgeEngine {
             while let Some((idx, note)) =
                 next_press_reference_note(chart, lane, lane_state.next_note_index)
             {
-                if now.0 <= note.time.0 + self.windows.bad_us {
+                if now.0 <= note.time.0 + self.windows.bad_slow_us {
                     break;
                 }
 
@@ -60,7 +60,7 @@ impl JudgeEngine {
                         }
                     }
                     LongNoteMode::Cn | LongNoteMode::Hcn => {
-                        if now.0 > active.end.end_time.0 + self.windows.bad_us {
+                        if now.0 > active.end.end_time.0 + self.windows.bad_slow_us {
                             lane_state.active_long = None;
                             lane_state.hcn_draining = false;
                             outcome.events.push(JudgementEvent {
@@ -148,9 +148,9 @@ impl JudgeEngine {
             classify_empty_poor_from_last_press(lane_state.last_press_time, input, self.windows)
         {
             outcome
-        } else if delta > self.windows.bad_us && delta <= self.windows.empty_poor_slow_us {
+        } else if delta > self.windows.bad_slow_us && delta <= self.windows.empty_poor_slow_us {
             empty_poor(input.lane, TimingSide::Slow, TimeUs(delta), input.time)
-        } else if delta < -self.windows.bad_us && (-delta) <= self.windows.empty_poor_fast_us {
+        } else if delta < -self.windows.bad_fast_us && (-delta) <= self.windows.empty_poor_fast_us {
             empty_poor(input.lane, TimingSide::Fast, TimeUs(delta), input.time)
         } else {
             JudgeOutcome::default()
@@ -256,7 +256,9 @@ fn classify_normal_delta(delta_us: i64, windows: JudgeWindow) -> Option<Judge> {
         Some(Judge::Great)
     } else if abs <= windows.good_us {
         Some(Judge::Good)
-    } else if abs <= windows.bad_us {
+    } else if (delta_us < 0 && abs <= windows.bad_fast_us)
+        || (delta_us >= 0 && abs <= windows.bad_slow_us)
+    {
         Some(Judge::Bad)
     } else {
         None
@@ -328,15 +330,7 @@ mod tests {
     use super::*;
 
     fn windows() -> JudgeWindow {
-        JudgeWindow {
-            pgreat_us: 16_000,
-            great_us: 40_000,
-            good_us: 80_000,
-            bad_us: 120_000,
-            empty_poor_fast_us: 500_000,
-            empty_poor_slow_us: 200_000,
-            mine_hit_us: 16_000,
-        }
+        JudgeWindow::symmetric(16_000, 40_000, 80_000, 120_000, 500_000, 200_000, 16_000)
     }
 
     fn chart_with_tap(time: TimeUs) -> PlayableChart {

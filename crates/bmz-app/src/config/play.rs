@@ -11,12 +11,13 @@ use super::profile_config::{
 };
 
 pub const DEFAULT_JUDGE_WINDOW: JudgeWindow = JudgeWindow {
-    pgreat_us: 16_000,
-    great_us: 40_000,
-    good_us: 80_000,
-    bad_us: 120_000,
-    empty_poor_fast_us: 500_000,
-    empty_poor_slow_us: 200_000,
+    pgreat_us: 20_000,
+    great_us: 60_000,
+    good_us: 150_000,
+    bad_fast_us: 280_000,
+    bad_slow_us: 220_000,
+    empty_poor_fast_us: 150_000,
+    empty_poor_slow_us: 500_000,
     mine_hit_us: 16_000,
 };
 

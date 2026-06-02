@@ -583,7 +583,7 @@ mod tests {
         session.state = PlayState::Playing;
         session.gauge = GaugeState::new_auto_shift(160.0, 1000);
 
-        session.gauge.apply_judge(Judge::Poor, 6.0);
+        session.gauge.apply_judge(Judge::Poor, 7.0);
         update_failed_state_from_gauge(&mut session);
 
         assert_eq!(session.state, PlayState::Playing);
@@ -884,24 +884,12 @@ mod tests {
                     binding: LaneBinding { entries: Vec::new() },
                 }),
             },
-            judge: JudgeEngine::new(JudgeWindow {
-                pgreat_us: 16_000,
-                great_us: 40_000,
-                good_us: 80_000,
-                bad_us: 120_000,
-                empty_poor_fast_us: 500_000,
-                empty_poor_slow_us: 200_000,
-                mine_hit_us: 16_000,
-            }),
-            base_judge_window: JudgeWindow {
-                pgreat_us: 16_000,
-                great_us: 40_000,
-                good_us: 80_000,
-                bad_us: 120_000,
-                empty_poor_fast_us: 500_000,
-                empty_poor_slow_us: 200_000,
-                mine_hit_us: 16_000,
-            },
+            judge: JudgeEngine::new(JudgeWindow::symmetric(
+                16_000, 40_000, 80_000, 120_000, 500_000, 200_000, 16_000,
+            )),
+            base_judge_window: JudgeWindow::symmetric(
+                16_000, 40_000, 80_000, 120_000, 500_000, 200_000, 16_000,
+            ),
             score: ScoreState::default(),
             gauge: GaugeState::new(bmz_core::clear::GaugeType::Normal, 160.0, chart.total_notes),
             replay_recorder: ReplayRecorder::default(),

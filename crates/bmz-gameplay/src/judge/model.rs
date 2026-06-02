@@ -8,13 +8,41 @@ pub struct JudgeWindow {
     pub pgreat_us: i64,
     pub great_us: i64,
     pub good_us: i64,
-    pub bad_us: i64,
+    pub bad_fast_us: i64,
+    pub bad_slow_us: i64,
     pub empty_poor_fast_us: i64,
     pub empty_poor_slow_us: i64,
     /// Mine がヒットしたと判定する押下時刻の許容幅（前後）。
     /// beatoraja 準拠だと「踏んだ瞬間に一致」だが、フレームレート由来の
     /// 揺れを吸収するため小さな窓を設ける。
     pub mine_hit_us: i64,
+}
+
+impl JudgeWindow {
+    pub const fn symmetric(
+        pgreat_us: i64,
+        great_us: i64,
+        good_us: i64,
+        bad_us: i64,
+        empty_poor_fast_us: i64,
+        empty_poor_slow_us: i64,
+        mine_hit_us: i64,
+    ) -> Self {
+        Self {
+            pgreat_us,
+            great_us,
+            good_us,
+            bad_fast_us: bad_us,
+            bad_slow_us: bad_us,
+            empty_poor_fast_us,
+            empty_poor_slow_us,
+            mine_hit_us,
+        }
+    }
+
+    pub const fn bad_us(self) -> i64 {
+        if self.bad_fast_us > self.bad_slow_us { self.bad_fast_us } else { self.bad_slow_us }
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -236,28 +236,16 @@ impl GaugeState {
         self.auto_shift_if_needed();
     }
 
-    /// HCN 押下中のゲージ増加 (beatoraja 準拠の近似)。
+    /// HCN 押下中のゲージ増加。beatoraja `JudgeManager` は 200ms ごとに
+    /// GREAT を rate 0.5 でゲージ更新する。
     pub fn apply_hcn_hold(&mut self, delta_seconds: f32) {
-        const RATE_PER_SEC: f32 = 6.0;
-        let inc = RATE_PER_SEC * delta_seconds;
-        for gauge in &mut self.gauges {
-            if gauge.value > 0.0 {
-                gauge.value = (gauge.value + inc).clamp(gauge.definition.min, gauge.definition.max);
-            }
-        }
-        self.auto_shift_if_needed();
+        self.apply_judge(Judge::Great, hcn_rate(delta_seconds));
     }
 
-    /// HCN 早離し後のゲージ減衰 (beatoraja 準拠の近似)。
+    /// HCN 早離し後のゲージ減衰。beatoraja `JudgeManager` は 200ms ごとに
+    /// BAD を rate 0.5 でゲージ更新する。
     pub fn apply_hcn_drain(&mut self, delta_seconds: f32) {
-        const RATE_PER_SEC: f32 = 10.0;
-        let dec = RATE_PER_SEC * delta_seconds;
-        for gauge in &mut self.gauges {
-            if gauge.value > 0.0 {
-                gauge.value = (gauge.value - dec).clamp(gauge.definition.min, gauge.definition.max);
-            }
-        }
-        self.auto_shift_if_needed();
+        self.apply_judge(Judge::Bad, hcn_rate(delta_seconds));
     }
 
     fn best_auto_shift_clear_gauge(&self) -> Option<&SingleGaugeState> {
@@ -295,6 +283,11 @@ impl GaugeState {
     fn gauge(&self, gauge_type: GaugeType) -> Option<&SingleGaugeState> {
         self.gauges.iter().find(|gauge| gauge.definition.gauge_type == gauge_type)
     }
+}
+
+fn hcn_rate(delta_seconds: f32) -> f32 {
+    const HCN_UPDATE_SECONDS: f32 = 0.2;
+    delta_seconds / HCN_UPDATE_SECONDS * 0.5
 }
 
 const AUTO_SHIFT_RESULT_ORDER: &[GaugeType] = &[
@@ -424,8 +417,36 @@ fn apply_modifier(value: f32, modifier: GaugeModifier, total: f64, total_notes: 
                 value
             }
         }
-        GaugeModifier::ModifyDamage => value,
+        GaugeModifier::ModifyDamage => {
+            if value < 0.0 {
+                value * modify_damage_scale(total, total_notes)
+            } else {
+                value
+            }
+        }
     }
+}
+
+fn modify_damage_scale(total: f64, total_notes: u32) -> f32 {
+    const FIX1_TOTAL: [f64; 10] =
+        [240.0, 230.0, 210.0, 200.0, 180.0, 160.0, 150.0, 130.0, 120.0, 0.0];
+    const FIX1_TABLE: [f32; 10] = [1.0, 1.11, 1.25, 1.5, 1.666, 2.0, 2.5, 3.333, 5.0, 10.0];
+
+    let mut i = 0;
+    while i < FIX1_TOTAL.len() - 1 && total < FIX1_TOTAL[i] {
+        i += 1;
+    }
+
+    let mut fix2 = 1.0;
+    let mut note = 1000_u32;
+    let mut modifier = 0.002;
+    while note > total_notes || note > 1 {
+        fix2 += modifier * (note - total_notes.max(note / 2)) as f32;
+        note /= 2;
+        modifier *= 2.0;
+    }
+
+    FIX1_TABLE[i].max(fix2)
 }
 
 /// 既定 `SevenKeys` プロパティのゲージ定義（後方互換）。
@@ -434,181 +455,540 @@ pub fn default_gauge_definitions() -> Vec<GaugeDefinition> {
 }
 
 /// 指定 `GaugeProperty` に対応するゲージ定義一式を返す。
-/// グルーヴ系ゲージは全プロパティ共通（既存値を維持）、段位ゲージのみ
-/// beatoraja `GaugeProperty.java` のキーモード別値を引く。
+/// beatoraja `GaugeProperty.java` の全ゲージ値をプロパティ別に引く。
 pub fn gauge_definitions_for(property: GaugeProperty) -> Vec<GaugeDefinition> {
-    let mut defs = Vec::with_capacity(9);
-    defs.extend_from_slice(&GROOVE_GAUGE_DEFINITIONS);
-    let class = class_gauge_set(property);
-    defs.push(GaugeDefinition {
-        gauge_type: GaugeType::Class,
-        clear_type: Some(ClearType::Normal),
-        modifier: GaugeModifier::None,
-        min: 0.0,
-        max: 100.0,
-        init: 100.0,
-        border: 1.0,
-        values: class.class,
-        guts: class.class_guts,
-    });
-    defs.push(GaugeDefinition {
-        gauge_type: GaugeType::ExClass,
-        clear_type: Some(ClearType::Hard),
-        modifier: GaugeModifier::None,
-        min: 0.0,
-        max: 100.0,
-        init: 100.0,
-        border: 1.0,
-        values: class.exclass,
-        guts: class.exclass_guts,
-    });
-    defs.push(GaugeDefinition {
-        gauge_type: GaugeType::ExHardClass,
-        clear_type: Some(ClearType::ExHard),
-        modifier: GaugeModifier::None,
-        min: 0.0,
-        max: 100.0,
-        init: 100.0,
-        border: 1.0,
-        values: class.exhardclass,
-        guts: class.exhardclass_guts,
-    });
-    defs
+    gauge_definition_table(property).to_vec()
 }
 
-/// グルーヴ系ゲージ (AssistEasy..Hazard) の定義。本実装ではキーモードによらず
-/// 共通の値を使う（既存挙動の維持を優先し、beatoraja のキーモード別 groove 値
-/// 移植は将来対応）。
-const GROOVE_GAUGE_DEFINITIONS: [GaugeDefinition; 6] = [
-    GaugeDefinition {
-        gauge_type: GaugeType::AssistEasy,
-        clear_type: Some(ClearType::AssistEasy),
-        modifier: GaugeModifier::Total,
-        min: 0.0,
-        max: 100.0,
-        init: 20.0,
-        border: 60.0,
-        values: [0.16, 0.16, 0.0, -1.2, -2.0, -0.5],
-        guts: NORMAL_GUTS,
-    },
-    GaugeDefinition {
-        gauge_type: GaugeType::Easy,
-        clear_type: Some(ClearType::Easy),
-        modifier: GaugeModifier::Total,
-        min: 0.0,
-        max: 100.0,
-        init: 20.0,
-        border: 80.0,
-        values: [0.16, 0.16, 0.0, -2.0, -3.0, -1.0],
-        guts: NORMAL_GUTS,
-    },
-    GaugeDefinition {
-        gauge_type: GaugeType::Normal,
-        clear_type: Some(ClearType::Normal),
-        modifier: GaugeModifier::Total,
-        min: 0.0,
-        max: 100.0,
-        init: 20.0,
-        border: 80.0,
-        values: [0.16, 0.16, 0.0, -4.0, -6.0, -2.0],
-        guts: NORMAL_GUTS,
-    },
-    GaugeDefinition {
-        gauge_type: GaugeType::Hard,
-        clear_type: Some(ClearType::Hard),
-        modifier: GaugeModifier::LimitIncrement,
-        min: 0.0,
-        max: 100.0,
-        init: 100.0,
-        border: 1.0,
-        values: [0.15, 0.15, 0.0, -5.0, -9.0, -3.0],
-        guts: HARD_GUTS,
-    },
-    GaugeDefinition {
-        gauge_type: GaugeType::ExHard,
-        clear_type: Some(ClearType::ExHard),
-        modifier: GaugeModifier::LimitIncrement,
-        min: 0.0,
-        max: 100.0,
-        init: 100.0,
-        border: 1.0,
-        values: [0.15, 0.15, 0.0, -8.0, -18.0, -6.0],
-        guts: HARD_GUTS,
-    },
-    GaugeDefinition {
-        gauge_type: GaugeType::Hazard,
-        clear_type: None,
-        modifier: GaugeModifier::None,
-        min: 0.0,
-        max: 100.0,
-        init: 100.0,
-        border: 1.0,
-        values: [0.0, 0.0, 0.0, -100.0, -100.0, -100.0],
-        guts: &[],
-    },
-];
-
-/// 段位ゲージ 3 種の値と guts テーブルをまとめた組。
-struct ClassGaugeSet {
-    class: [f32; 6],
-    class_guts: &'static [(f32, f32)],
-    exclass: [f32; 6],
-    exclass_guts: &'static [(f32, f32)],
-    exhardclass: [f32; 6],
-    exhardclass_guts: &'static [(f32, f32)],
-}
-
-/// beatoraja `GaugeProperty.java` から CLASS_X / EXCLASS_X / EXHARDCLASS_X を引く。
-fn class_gauge_set(property: GaugeProperty) -> ClassGaugeSet {
+/// beatoraja `GaugeProperty.java` の `GaugeElementProperty` 表。
+fn gauge_definition_table(property: GaugeProperty) -> [GaugeDefinition; 9] {
     match property {
-        GaugeProperty::SevenKeys => ClassGaugeSet {
-            class: [0.15, 0.12, 0.06, -1.5, -3.0, -1.5],
-            class_guts: CLASS_7K_GUTS,
-            exclass: [0.15, 0.12, 0.03, -3.0, -6.0, -3.0],
-            exclass_guts: &[],
-            exhardclass: [0.15, 0.06, 0.0, -5.0, -10.0, -5.0],
-            exhardclass_guts: &[],
-        },
-        GaugeProperty::FiveKeys => ClassGaugeSet {
-            class: [0.01, 0.01, 0.0, -0.5, -1.0, -0.5],
-            class_guts: &[],
-            exclass: [0.01, 0.01, 0.0, -1.0, -2.0, -1.0],
-            exclass_guts: &[],
-            exhardclass: [0.01, 0.01, 0.0, -2.5, -5.0, -2.5],
-            exhardclass_guts: &[],
-        },
-        GaugeProperty::Pms => ClassGaugeSet {
-            class: [0.15, 0.12, 0.06, -1.5, -3.0, -3.0],
-            class_guts: CLASS_7K_GUTS,
-            exclass: [0.15, 0.12, 0.03, -3.0, -6.0, -6.0],
-            exclass_guts: &[],
-            exhardclass: [0.15, 0.06, 0.0, -5.0, -10.0, -10.0],
-            exhardclass_guts: &[],
-        },
-        GaugeProperty::Keyboard => ClassGaugeSet {
-            class: [0.20, 0.20, 0.10, -1.5, -3.0, -1.5],
-            class_guts: CLASS_7K_GUTS,
-            exclass: [0.20, 0.20, 0.10, -3.0, -6.0, -3.0],
-            exclass_guts: &[],
-            exhardclass: [0.20, 0.10, 0.0, -5.0, -10.0, -5.0],
-            exhardclass_guts: &[],
-        },
-        GaugeProperty::Lr2 => ClassGaugeSet {
-            class: [0.10, 0.10, 0.05, -2.0, -3.0, -2.0],
-            class_guts: LR2_CLASS_GUTS,
-            exclass: [0.10, 0.10, 0.05, -6.0, -10.0, -2.0],
-            exclass_guts: LR2_CLASS_GUTS,
-            exhardclass: [0.10, 0.10, 0.05, -12.0, -20.0, -2.0],
-            exhardclass_guts: &[],
-        },
+        GaugeProperty::FiveKeys => [
+            def(
+                GaugeType::AssistEasy,
+                Some(ClearType::AssistEasy),
+                GaugeModifier::Total,
+                2.0,
+                100.0,
+                20.0,
+                50.0,
+                [1.0, 1.0, 0.5, -1.5, -3.0, -0.5],
+                &[],
+            ),
+            def(
+                GaugeType::Easy,
+                Some(ClearType::Easy),
+                GaugeModifier::Total,
+                2.0,
+                100.0,
+                20.0,
+                75.0,
+                [1.0, 1.0, 0.5, -1.5, -4.5, -1.0],
+                &[],
+            ),
+            def(
+                GaugeType::Normal,
+                Some(ClearType::Normal),
+                GaugeModifier::Total,
+                2.0,
+                100.0,
+                20.0,
+                75.0,
+                [1.0, 1.0, 0.5, -3.0, -6.0, -2.0],
+                &[],
+            ),
+            def(
+                GaugeType::Hard,
+                Some(ClearType::Hard),
+                GaugeModifier::LimitIncrement,
+                0.0,
+                100.0,
+                100.0,
+                0.0,
+                [0.0, 0.0, 0.0, -5.0, -10.0, -5.0],
+                &[],
+            ),
+            def(
+                GaugeType::ExHard,
+                Some(ClearType::ExHard),
+                GaugeModifier::ModifyDamage,
+                0.0,
+                100.0,
+                100.0,
+                0.0,
+                [0.0, 0.0, 0.0, -10.0, -20.0, -10.0],
+                &[],
+            ),
+            def(
+                GaugeType::Hazard,
+                None,
+                GaugeModifier::None,
+                0.0,
+                100.0,
+                100.0,
+                0.0,
+                [0.0, 0.0, 0.0, -100.0, -100.0, -100.0],
+                &[],
+            ),
+            def(
+                GaugeType::Class,
+                Some(ClearType::Normal),
+                GaugeModifier::None,
+                0.0,
+                100.0,
+                100.0,
+                0.0,
+                [0.01, 0.01, 0.0, -0.5, -1.0, -0.5],
+                &[],
+            ),
+            def(
+                GaugeType::ExClass,
+                Some(ClearType::Hard),
+                GaugeModifier::None,
+                0.0,
+                100.0,
+                100.0,
+                0.0,
+                [0.01, 0.01, 0.0, -1.0, -2.0, -1.0],
+                &[],
+            ),
+            def(
+                GaugeType::ExHardClass,
+                Some(ClearType::ExHard),
+                GaugeModifier::None,
+                0.0,
+                100.0,
+                100.0,
+                0.0,
+                [0.01, 0.01, 0.0, -2.5, -5.0, -2.5],
+                &[],
+            ),
+        ],
+        GaugeProperty::SevenKeys => [
+            def(
+                GaugeType::AssistEasy,
+                Some(ClearType::AssistEasy),
+                GaugeModifier::Total,
+                2.0,
+                100.0,
+                20.0,
+                60.0,
+                [1.0, 1.0, 0.5, -1.5, -3.0, -0.5],
+                &[],
+            ),
+            def(
+                GaugeType::Easy,
+                Some(ClearType::Easy),
+                GaugeModifier::Total,
+                2.0,
+                100.0,
+                20.0,
+                80.0,
+                [1.0, 1.0, 0.5, -1.5, -4.5, -1.0],
+                &[],
+            ),
+            def(
+                GaugeType::Normal,
+                Some(ClearType::Normal),
+                GaugeModifier::Total,
+                2.0,
+                100.0,
+                20.0,
+                80.0,
+                [1.0, 1.0, 0.5, -3.0, -6.0, -2.0],
+                &[],
+            ),
+            def(
+                GaugeType::Hard,
+                Some(ClearType::Hard),
+                GaugeModifier::LimitIncrement,
+                0.0,
+                100.0,
+                100.0,
+                0.0,
+                [0.15, 0.12, 0.03, -5.0, -10.0, -5.0],
+                HARD_GUTS,
+            ),
+            def(
+                GaugeType::ExHard,
+                Some(ClearType::ExHard),
+                GaugeModifier::LimitIncrement,
+                0.0,
+                100.0,
+                100.0,
+                0.0,
+                [0.15, 0.06, 0.0, -8.0, -16.0, -8.0],
+                &[],
+            ),
+            def(
+                GaugeType::Hazard,
+                None,
+                GaugeModifier::None,
+                0.0,
+                100.0,
+                100.0,
+                0.0,
+                [0.15, 0.06, 0.0, -100.0, -100.0, -10.0],
+                &[],
+            ),
+            def(
+                GaugeType::Class,
+                Some(ClearType::Normal),
+                GaugeModifier::None,
+                0.0,
+                100.0,
+                100.0,
+                0.0,
+                [0.15, 0.12, 0.06, -1.5, -3.0, -1.5],
+                CLASS_GUTS,
+            ),
+            def(
+                GaugeType::ExClass,
+                Some(ClearType::Hard),
+                GaugeModifier::None,
+                0.0,
+                100.0,
+                100.0,
+                0.0,
+                [0.15, 0.12, 0.03, -3.0, -6.0, -3.0],
+                &[],
+            ),
+            def(
+                GaugeType::ExHardClass,
+                Some(ClearType::ExHard),
+                GaugeModifier::None,
+                0.0,
+                100.0,
+                100.0,
+                0.0,
+                [0.15, 0.06, 0.0, -5.0, -10.0, -5.0],
+                &[],
+            ),
+        ],
+        GaugeProperty::Pms => [
+            def(
+                GaugeType::AssistEasy,
+                Some(ClearType::AssistEasy),
+                GaugeModifier::Total,
+                2.0,
+                120.0,
+                30.0,
+                65.0,
+                [1.0, 1.0, 0.5, -1.0, -2.0, -2.0],
+                &[],
+            ),
+            def(
+                GaugeType::Easy,
+                Some(ClearType::Easy),
+                GaugeModifier::Total,
+                2.0,
+                120.0,
+                30.0,
+                85.0,
+                [1.0, 1.0, 0.5, -1.0, -3.0, -3.0],
+                &[],
+            ),
+            def(
+                GaugeType::Normal,
+                Some(ClearType::Normal),
+                GaugeModifier::Total,
+                2.0,
+                120.0,
+                30.0,
+                85.0,
+                [1.0, 1.0, 0.5, -2.0, -6.0, -6.0],
+                &[],
+            ),
+            def(
+                GaugeType::Hard,
+                Some(ClearType::Hard),
+                GaugeModifier::LimitIncrement,
+                0.0,
+                100.0,
+                100.0,
+                0.0,
+                [0.15, 0.12, 0.03, -5.0, -10.0, -10.0],
+                HARD_GUTS,
+            ),
+            def(
+                GaugeType::ExHard,
+                Some(ClearType::ExHard),
+                GaugeModifier::LimitIncrement,
+                0.0,
+                100.0,
+                100.0,
+                0.0,
+                [0.15, 0.06, 0.0, -10.0, -15.0, -15.0],
+                &[],
+            ),
+            def(
+                GaugeType::Hazard,
+                None,
+                GaugeModifier::None,
+                0.0,
+                100.0,
+                100.0,
+                0.0,
+                [0.15, 0.06, 0.0, -100.0, -100.0, -100.0],
+                &[],
+            ),
+            def(
+                GaugeType::Class,
+                Some(ClearType::Normal),
+                GaugeModifier::None,
+                0.0,
+                100.0,
+                100.0,
+                0.0,
+                [0.15, 0.12, 0.06, -1.5, -3.0, -3.0],
+                CLASS_GUTS,
+            ),
+            def(
+                GaugeType::ExClass,
+                Some(ClearType::Hard),
+                GaugeModifier::None,
+                0.0,
+                100.0,
+                100.0,
+                0.0,
+                [0.15, 0.12, 0.03, -3.0, -6.0, -6.0],
+                &[],
+            ),
+            def(
+                GaugeType::ExHardClass,
+                Some(ClearType::ExHard),
+                GaugeModifier::None,
+                0.0,
+                100.0,
+                100.0,
+                0.0,
+                [0.15, 0.06, 0.0, -5.0, -10.0, -10.0],
+                &[],
+            ),
+        ],
+        GaugeProperty::Keyboard => [
+            def(
+                GaugeType::AssistEasy,
+                Some(ClearType::AssistEasy),
+                GaugeModifier::Total,
+                2.0,
+                100.0,
+                30.0,
+                50.0,
+                [1.0, 1.0, 0.5, -1.0, -2.0, -1.0],
+                &[],
+            ),
+            def(
+                GaugeType::Easy,
+                Some(ClearType::Easy),
+                GaugeModifier::Total,
+                2.0,
+                100.0,
+                20.0,
+                70.0,
+                [1.0, 1.0, 0.5, -1.0, -3.0, -1.0],
+                &[],
+            ),
+            def(
+                GaugeType::Normal,
+                Some(ClearType::Normal),
+                GaugeModifier::Total,
+                2.0,
+                100.0,
+                20.0,
+                70.0,
+                [1.0, 1.0, 0.5, -2.0, -4.0, -2.0],
+                &[],
+            ),
+            def(
+                GaugeType::Hard,
+                Some(ClearType::Hard),
+                GaugeModifier::LimitIncrement,
+                0.0,
+                100.0,
+                100.0,
+                0.0,
+                [0.2, 0.2, 0.1, -4.0, -8.0, -4.0],
+                HARD_GUTS,
+            ),
+            def(
+                GaugeType::ExHard,
+                Some(ClearType::ExHard),
+                GaugeModifier::LimitIncrement,
+                0.0,
+                100.0,
+                100.0,
+                0.0,
+                [0.2, 0.1, 0.0, -6.0, -12.0, -6.0],
+                &[],
+            ),
+            def(
+                GaugeType::Hazard,
+                None,
+                GaugeModifier::None,
+                0.0,
+                100.0,
+                100.0,
+                0.0,
+                [0.2, 0.1, 0.0, -100.0, -100.0, -100.0],
+                &[],
+            ),
+            def(
+                GaugeType::Class,
+                Some(ClearType::Normal),
+                GaugeModifier::None,
+                0.0,
+                100.0,
+                100.0,
+                0.0,
+                [0.2, 0.2, 0.1, -1.5, -3.0, -1.5],
+                CLASS_GUTS,
+            ),
+            def(
+                GaugeType::ExClass,
+                Some(ClearType::Hard),
+                GaugeModifier::None,
+                0.0,
+                100.0,
+                100.0,
+                0.0,
+                [0.2, 0.2, 0.1, -3.0, -6.0, -3.0],
+                &[],
+            ),
+            def(
+                GaugeType::ExHardClass,
+                Some(ClearType::ExHard),
+                GaugeModifier::None,
+                0.0,
+                100.0,
+                100.0,
+                0.0,
+                [0.2, 0.1, 0.0, -5.0, -10.0, -5.0],
+                &[],
+            ),
+        ],
+        GaugeProperty::Lr2 => [
+            def(
+                GaugeType::AssistEasy,
+                Some(ClearType::AssistEasy),
+                GaugeModifier::Total,
+                2.0,
+                100.0,
+                20.0,
+                60.0,
+                [1.2, 1.2, 0.6, -3.2, -4.8, -1.6],
+                &[],
+            ),
+            def(
+                GaugeType::Easy,
+                Some(ClearType::Easy),
+                GaugeModifier::Total,
+                2.0,
+                100.0,
+                20.0,
+                80.0,
+                [1.2, 1.2, 0.6, -3.2, -4.8, -1.6],
+                &[],
+            ),
+            def(
+                GaugeType::Normal,
+                Some(ClearType::Normal),
+                GaugeModifier::Total,
+                2.0,
+                100.0,
+                20.0,
+                80.0,
+                [1.0, 1.0, 0.5, -4.0, -6.0, -2.0],
+                &[],
+            ),
+            def(
+                GaugeType::Hard,
+                Some(ClearType::Hard),
+                GaugeModifier::ModifyDamage,
+                0.0,
+                100.0,
+                100.0,
+                0.0,
+                [0.1, 0.1, 0.05, -6.0, -10.0, -2.0],
+                LR2_CLASS_GUTS,
+            ),
+            def(
+                GaugeType::ExHard,
+                Some(ClearType::ExHard),
+                GaugeModifier::ModifyDamage,
+                0.0,
+                100.0,
+                100.0,
+                0.0,
+                [0.1, 0.1, 0.05, -12.0, -20.0, -2.0],
+                &[],
+            ),
+            def(
+                GaugeType::Hazard,
+                None,
+                GaugeModifier::None,
+                0.0,
+                100.0,
+                100.0,
+                0.0,
+                [0.15, 0.06, 0.0, -100.0, -100.0, -10.0],
+                &[],
+            ),
+            def(
+                GaugeType::Class,
+                Some(ClearType::Normal),
+                GaugeModifier::None,
+                0.0,
+                100.0,
+                100.0,
+                0.0,
+                [0.1, 0.1, 0.05, -2.0, -3.0, -2.0],
+                LR2_CLASS_GUTS,
+            ),
+            def(
+                GaugeType::ExClass,
+                Some(ClearType::Hard),
+                GaugeModifier::None,
+                0.0,
+                100.0,
+                100.0,
+                0.0,
+                [0.1, 0.1, 0.05, -6.0, -10.0, -2.0],
+                LR2_CLASS_GUTS,
+            ),
+            def(
+                GaugeType::ExHardClass,
+                Some(ClearType::ExHard),
+                GaugeModifier::None,
+                0.0,
+                100.0,
+                100.0,
+                0.0,
+                [0.1, 0.1, 0.05, -12.0, -20.0, -2.0],
+                &[],
+            ),
+        ],
     }
 }
 
-const NORMAL_GUTS: &[(f32, f32)] = &[(30.0, 0.5), (50.0, 0.7)];
-const HARD_GUTS: &[(f32, f32)] = &[(30.0, 0.6), (50.0, 0.8)];
-// beatoraja CLASS の guts テーブル（7keys / PMS / KB 共通）。下限近くで減衰量が弱まる救済補正。
-const CLASS_7K_GUTS: &[(f32, f32)] =
-    &[(5.0, 0.4), (10.0, 0.5), (15.0, 0.6), (20.0, 0.7), (25.0, 0.8)];
+fn def(
+    gauge_type: GaugeType,
+    clear_type: Option<ClearType>,
+    modifier: GaugeModifier,
+    min: f32,
+    max: f32,
+    init: f32,
+    border: f32,
+    values: [f32; 6],
+    guts: &'static [(f32, f32)],
+) -> GaugeDefinition {
+    GaugeDefinition { gauge_type, clear_type, modifier, min, max, init, border, values, guts }
+}
+
+// beatoraja HARD guts テーブル（7keys / PMS / KB 共通）。
+const HARD_GUTS: &[(f32, f32)] = &[(10.0, 0.4), (20.0, 0.5), (30.0, 0.6), (40.0, 0.7), (50.0, 0.8)];
+// beatoraja CLASS guts テーブル（7keys / PMS / KB 共通）。
+const CLASS_GUTS: &[(f32, f32)] = &[(5.0, 0.4), (10.0, 0.5), (15.0, 0.6), (20.0, 0.7), (25.0, 0.8)];
 // beatoraja LR2 CLASS / EXCLASS の guts。30 以下で減衰量を 60% に弱める。
 const LR2_CLASS_GUTS: &[(f32, f32)] = &[(30.0, 0.6)];
 
@@ -669,7 +1049,7 @@ mod tests {
     fn auto_shift_starts_from_exhard_and_falls_back_to_hard() {
         let mut gauge = GaugeState::new_auto_shift(160.0, 1000);
 
-        gauge.apply_judge(Judge::Poor, 6.0);
+        gauge.apply_judge(Judge::Poor, 7.0);
 
         assert!(gauge.auto_shift);
         assert_eq!(gauge.original, GaugeType::ExHard);
@@ -766,7 +1146,7 @@ mod tests {
             assert_eq!(def.init, 100.0, "{ty:?} init");
             assert_eq!(def.max, 100.0, "{ty:?} max");
             assert_eq!(def.min, 0.0, "{ty:?} min");
-            assert_eq!(def.border, 1.0, "{ty:?} border");
+            assert_eq!(def.border, 0.0, "{ty:?} border");
             assert_eq!(def.clear_type, expected_clear, "{ty:?} clear_type");
         }
     }
@@ -822,18 +1202,46 @@ mod tests {
     }
 
     #[test]
-    fn groove_gauges_stay_constant_across_properties() {
-        // グルーヴゲージは本実装ではキーモード非依存。プロパティを変えても同じ定義。
-        for property in [
-            GaugeProperty::FiveKeys,
-            GaugeProperty::SevenKeys,
-            GaugeProperty::Pms,
-            GaugeProperty::Keyboard,
-            GaugeProperty::Lr2,
-        ] {
-            let normal = definition_for_property(GaugeType::Normal, property);
-            assert_eq!(normal.values, [0.16, 0.16, 0.0, -4.0, -6.0, -2.0], "{property:?}");
-        }
+    fn groove_gauge_values_match_beatoraja_gauge_property() {
+        let normal_7 = definition_for_property(GaugeType::Normal, GaugeProperty::SevenKeys);
+        assert_eq!(normal_7.min, 2.0);
+        assert_eq!(normal_7.max, 100.0);
+        assert_eq!(normal_7.init, 20.0);
+        assert_eq!(normal_7.border, 80.0);
+        assert_eq!(normal_7.values, [1.0, 1.0, 0.5, -3.0, -6.0, -2.0]);
+
+        let hard_7 = definition_for_property(GaugeType::Hard, GaugeProperty::SevenKeys);
+        assert_eq!(hard_7.values, [0.15, 0.12, 0.03, -5.0, -10.0, -5.0]);
+        assert_eq!(hard_7.guts, HARD_GUTS);
+
+        let exhard_7 = definition_for_property(GaugeType::ExHard, GaugeProperty::SevenKeys);
+        assert_eq!(exhard_7.values, [0.15, 0.06, 0.0, -8.0, -16.0, -8.0]);
+
+        let normal_pms = definition_for_property(GaugeType::Normal, GaugeProperty::Pms);
+        assert_eq!(normal_pms.max, 120.0);
+        assert_eq!(normal_pms.init, 30.0);
+        assert_eq!(normal_pms.border, 85.0);
+        assert_eq!(normal_pms.values, [1.0, 1.0, 0.5, -2.0, -6.0, -6.0]);
+
+        let normal_kb = definition_for_property(GaugeType::Normal, GaugeProperty::Keyboard);
+        assert_eq!(normal_kb.border, 70.0);
+        assert_eq!(normal_kb.values, [1.0, 1.0, 0.5, -2.0, -4.0, -2.0]);
+
+        let lr2_hard = definition_for_property(GaugeType::Hard, GaugeProperty::Lr2);
+        assert_eq!(lr2_hard.modifier, GaugeModifier::ModifyDamage);
+        assert_eq!(lr2_hard.values, [0.1, 0.1, 0.05, -6.0, -10.0, -2.0]);
+    }
+
+    #[test]
+    fn hcn_gauge_updates_use_beatoraja_great_and_bad_half_rate() {
+        let mut gauge = GaugeState::new(GaugeType::Normal, 160.0, 1000);
+        let start = gauge.current().value;
+
+        gauge.apply_hcn_hold(0.2);
+        assert!((gauge.current().value - (start + 0.08)).abs() < f32::EPSILON);
+
+        gauge.apply_hcn_drain(0.2);
+        assert!((gauge.current().value - (start - 1.42)).abs() < 0.000_1);
     }
 
     #[test]
