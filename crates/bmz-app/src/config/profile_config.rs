@@ -406,17 +406,17 @@ impl Default for SystemSoundConfig {
 pub struct SkinConfig {
     /// 選曲画面スキンのパス。
     /// 空文字列なら bmz の固定描画を使用。
-    /// `.json` で終わるパスは beatoraja JSON スキンとして扱う。
+    /// `.json` / `.lr2skin` で終わるパスは beatoraja スキンとして扱う。
     #[serde(default)]
     pub select: String,
     /// 決定画面スキンのパス。
     /// 空文字列ならプレイ開始前もプレイスキン側の描画を使用。
-    /// `.json` / `.luaskin` / `.lua` で終わるパスは beatoraja スキンとして扱う。
+    /// `.json` / `.luaskin` / `.lua` / `.lr2skin` で終わるパスは beatoraja スキンとして扱う。
     #[serde(default)]
     pub decide: String,
     /// 5K プレイ画面スキンのパス。
     /// 空文字列なら内蔵デフォルトスキンを使用。
-    /// `.json` で終わるパスは beatoraja JSON スキン、それ以外は
+    /// `.json` / `.lr2skin` で終わるパスは beatoraja スキン、それ以外は
     /// `skin.toml` を含む bmz スキンディレクトリとして扱う。
     #[serde(default)]
     pub play5: String,
@@ -435,7 +435,7 @@ pub struct SkinConfig {
     pub play9: String,
     /// リザルト画面スキンのパス。
     /// 空文字列なら bmz の固定描画を使用。
-    /// `.json` で終わるパスは beatoraja JSON スキンとして扱う。
+    /// `.json` / `.lr2skin` で終わるパスは beatoraja スキンとして扱う。
     #[serde(default)]
     pub result: String,
     #[serde(default)]

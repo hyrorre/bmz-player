@@ -6,6 +6,7 @@ use bmz_render::skin::SkinDocument;
 use serde_json::Map as JsonMap;
 use serde_json::Value as JsonValue;
 
+mod lr2;
 mod lua;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,6 +52,19 @@ pub fn load_lua_skin(
     let value = normalize_lua_skin_document(loaded.value);
     let document = serde_path_to_error::deserialize(value)
         .with_context(|| format!("failed to parse lua skin as document: {}", path.display()))?;
+    Ok(LoadedSkinDocument { document, warnings: loaded.warnings })
+}
+
+pub fn load_lr2_csv_skin(
+    path: &Path,
+    _kind: SkinKind,
+    options: &BTreeMap<String, String>,
+    files: &BTreeMap<String, String>,
+) -> Result<LoadedSkinDocument> {
+    let loaded = lr2::load_lr2_csv_skin_value(path, options, files)?;
+    let value = normalize_json_skin_integer_numbers(loaded.value);
+    let document = serde_path_to_error::deserialize(value)
+        .with_context(|| format!("failed to parse lr2 csv skin as document: {}", path.display()))?;
     Ok(LoadedSkinDocument { document, warnings: loaded.warnings })
 }
 

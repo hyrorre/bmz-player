@@ -199,7 +199,7 @@ pub fn apply_default_skin(renderer: &mut Renderer) -> Result<()> {
 }
 
 /// `profile.toml` の `[skin] play` 設定からスキンをロードする。
-/// 空文字列 → デフォルトスキン、`.json`/`.luaskin`/`.lua` 拡張子 → beatoraja スキン、
+/// 空文字列 → デフォルトスキン、`.json`/`.luaskin`/`.lua`/`.lr2skin` 拡張子 → beatoraja スキン、
 /// それ以外 → `skin.toml` を含む bmz スキンディレクトリとして扱う。
 pub fn apply_skin_from_config(renderer: &mut Renderer, play_skin_path: &str) -> Result<()> {
     if play_skin_path.is_empty() {
@@ -413,6 +413,18 @@ fn load_skin_document(
             );
         }
         loaded.document
+    } else if is_lr2_skin_path(skin_path) {
+        let loaded = bmz_skin::load_lr2_csv_skin(skin_path, decode_skin_kind(kind), options, files)
+            .with_context(|| format!("failed to load lr2 csv skin: {}", skin_path.display()))?;
+        for warning in loaded.warnings {
+            tracing::warn!(
+                path = %skin_path.display(),
+                kind = ?kind,
+                warning = %warning.message,
+                "lr2 csv skin load warning"
+            );
+        }
+        loaded.document
     } else {
         let document =
             bmz_skin::load_beatoraja_json_skin_with_defaults(skin_path).with_context(|| {
@@ -473,7 +485,7 @@ fn decode_skin_kind(kind: SkinKind) -> DecodeSkinKind {
 }
 
 pub fn is_decodable_skin_path(path: &Path) -> bool {
-    is_json_skin_path(path) || is_lua_skin_path(path)
+    is_json_skin_path(path) || is_lua_skin_path(path) || is_lr2_skin_path(path)
 }
 
 pub fn is_json_skin_path(path: &Path) -> bool {
@@ -486,6 +498,12 @@ pub fn is_lua_skin_path(path: &Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
         .is_some_and(|ext| ext.eq_ignore_ascii_case("luaskin") || ext.eq_ignore_ascii_case("lua"))
+}
+
+pub fn is_lr2_skin_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("lr2skin"))
 }
 
 fn decode_font(path: &Path) -> Result<DecodedFontData> {
@@ -1412,6 +1430,25 @@ mod tests {
         let mut renderer = Renderer::default();
 
         apply_skin_from_config(&mut renderer, skin_path.to_str().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn wmii_fhd_lr2skin_decodes_play_document_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/WMII_FHD/play/FHDPLAY_AC.lr2skin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let decoded = decode_beatoraja_skin(&skin_path, SkinKind::Play).unwrap();
+        assert_eq!(decoded.document.name, "WMII FHD play AC");
+        assert!(decoded.document.w >= 1920);
+        assert!(decoded.document.source.len() >= 10);
+        assert!(decoded.document.image.len() >= 100);
+        assert!(decoded.document.note.is_some());
+        assert!(decoded.document.gauge.is_some());
+        assert!(decoded.document.bga.is_some());
+        assert!(!decoded.sources.is_empty());
     }
 
     #[test]
