@@ -33,6 +33,7 @@ use crate::bootstrap::{self, BootstrappedApp};
 use crate::chart_preview::SelectChartPreview;
 use crate::cli::{
     AUTOPLAY_ON_START_ARG, AppOptions, SMOKE_EXIT_AFTER_FRAMES_ARG, SMOKE_EXIT_ON_RESULT_ARG,
+    SMOKE_SCREENSHOT_ARG,
 };
 use crate::config::app_config::{PathEntry, WindowMode};
 use crate::config::key_config::{
@@ -222,6 +223,7 @@ struct WinitApp {
     select_keys: SelectKeyBindings,
     smoke_exit_after_frames: Option<u32>,
     smoke_exit_on_result: bool,
+    smoke_screenshot_path: Option<PathBuf>,
     rendered_frames: u32,
     select_scene_started_at: Instant,
     select_bar_started_at: Instant,
@@ -296,6 +298,7 @@ struct WinitApp {
     /// リザルト画面終了アニメーションの進行状態。
     /// Some のあいだは終了フェードアウト中で、入力は受け付けない。
     result_exit: Option<ResultExit>,
+    deferred_boot: Option<DeferredBoot>,
     /// 選曲画面で楽曲検索の入力モード中か。
     search_mode: bool,
     /// 現在入力中の検索クエリ。検索モード中はそのまま skin の search_word に渡る。
@@ -391,6 +394,12 @@ struct PendingUploadResult {
     path: PathBuf,
     kind: SkinKind,
     uploaded: Result<UploadedSkin>,
+}
+
+enum DeferredBoot {
+    Chart { chart_id: i64, replay_slot: Option<u8> },
+    CourseReplay { course_id: i64 },
+    Course { course_id: i64 },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -696,6 +705,7 @@ impl WinitApp {
             select_keys,
             smoke_exit_after_frames: options.smoke_exit_after_frames,
             smoke_exit_on_result: options.smoke_exit_on_result,
+            smoke_screenshot_path: options.smoke_screenshot_path.as_ref().map(PathBuf::from),
             rendered_frames: 0,
             select_scene_started_at: now,
             select_bar_started_at: now,
@@ -739,6 +749,7 @@ impl WinitApp {
             settings_edit: None,
             key_config_edit: None,
             result_exit: None,
+            deferred_boot: deferred_boot_action(boot_chart_id, &options),
             search_mode: false,
             search_query: String::new(),
             search_preedit: String::new(),
@@ -846,6 +857,7 @@ impl WinitApp {
                 // surface 接続後 (= GPU device/queue 利用可能) に upload worker を起動する。
                 // decode 結果はそれまで skin_decode_rx にバッファされ、起動後にドレインされる。
                 self.start_skin_upload_worker();
+                self.start_deferred_boot();
                 window.request_redraw();
                 self.egui = Some(EguiLayer::new(&window, self.boot.profile_config.ui.show_fps));
                 self.window = Some(window);
@@ -853,6 +865,50 @@ impl WinitApp {
             Err(error) => {
                 tracing::error!(%error, "failed to create window");
                 event_loop.exit();
+            }
+        }
+    }
+
+    fn start_deferred_boot(&mut self) {
+        let Some(boot) = self.deferred_boot.take() else {
+            return;
+        };
+        match boot {
+            DeferredBoot::Chart { chart_id, replay_slot } => {
+                tracing::info!(chart_id, "booting directly into chart");
+                if let Some(slot) = replay_slot {
+                    if !self.try_start_replay_for_chart(chart_id, slot) {
+                        tracing::warn!(slot, "boot replay slot empty; falling back to normal play");
+                        self.start_chart(chart_id);
+                    }
+                } else {
+                    self.start_chart(chart_id);
+                }
+            }
+            DeferredBoot::CourseReplay { course_id } => {
+                match self.boot.library_db.latest_course_score_id(course_id) {
+                    Ok(Some(course_score_id)) => {
+                        tracing::info!(course_id, course_score_id, "booting into course replay");
+                        self.start_course_replay(course_id, course_score_id);
+                    }
+                    Ok(None) => {
+                        tracing::warn!(
+                            course_id,
+                            "no saved course attempt; --boot-course-replay has nothing to replay"
+                        );
+                    }
+                    Err(error) => {
+                        tracing::error!(
+                            %error,
+                            course_id,
+                            "failed to look up latest course score for replay boot"
+                        );
+                    }
+                }
+            }
+            DeferredBoot::Course { course_id } => {
+                tracing::info!(course_id, "booting into fresh course");
+                self.start_course(course_id);
             }
         }
     }
@@ -4500,6 +4556,12 @@ impl WinitApp {
             self.sync_select_banner_texture();
             self.sync_select_preview_audio();
         }
+        if let (Some(path), Some(exit_after_frames)) =
+            (&self.smoke_screenshot_path, self.smoke_exit_after_frames)
+            && self.rendered_frames.saturating_add(1) >= exit_after_frames
+        {
+            self.renderer.request_screenshot(path.clone());
+        }
         match self.renderer.render_scene_status(scene) {
             Ok(RenderSurfaceStatus::Rendered)
             | Ok(RenderSurfaceStatus::SkippedNoSurface)
@@ -4979,7 +5041,7 @@ fn play_skin_defs_from_path(path: &str) -> SceneSkinDefs {
 fn is_skin_candidate_file(path: &Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
-        .map(|ext| matches!(ext.to_ascii_lowercase().as_str(), "json" | "luaskin"))
+        .map(|ext| matches!(ext.to_ascii_lowercase().as_str(), "json" | "luaskin" | "lr2skin"))
         .unwrap_or(false)
 }
 
@@ -4992,6 +5054,19 @@ fn load_skin_header_document(path: &Path) -> Option<SkinDocument> {
         bmz_skin::load_lua_skin_header_value(path)
             .ok()
             .and_then(|loaded| serde_json::from_value::<SkinDocument>(loaded.value).ok())
+    } else if path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("lr2skin"))
+    {
+        bmz_skin::load_lr2_csv_skin(
+            path,
+            bmz_skin::SkinKind::Play,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .ok()
+        .map(|loaded| loaded.document)
     } else {
         SkinDocument::load_beatoraja_json(path).ok()
     }
@@ -5264,6 +5339,16 @@ fn now_unix_seconds() -> i64 {
         .unwrap_or(0)
 }
 
+fn deferred_boot_action(boot_chart_id: Option<i64>, options: &AppOptions) -> Option<DeferredBoot> {
+    if let Some(chart_id) = boot_chart_id {
+        return Some(DeferredBoot::Chart { chart_id, replay_slot: options.boot_replay_slot });
+    }
+    if let Some(course_id) = options.boot_course_replay_id {
+        return Some(DeferredBoot::CourseReplay { course_id });
+    }
+    options.boot_course_id.map(|course_id| DeferredBoot::Course { course_id })
+}
+
 fn resolve_boot_chart_id(
     library_db: &crate::storage::library_db::LibraryDatabase,
     options: &AppOptions,
@@ -5314,6 +5399,9 @@ fn log_startup_options(options: &AppOptions) {
     }
     if options.boot_practice {
         tracing::info!("practice mode enabled for boot chart");
+    }
+    if let Some(path) = &options.smoke_screenshot_path {
+        tracing::info!(arg = SMOKE_SCREENSHOT_ARG, path, "smoke screenshot enabled");
     }
 }
 
@@ -6493,7 +6581,23 @@ mod tests {
     fn skin_catalog_scan_ignores_lua_parts_files() {
         assert!(is_skin_candidate_file(Path::new("data/skins/ECFN/play/play7.luaskin")));
         assert!(is_skin_candidate_file(Path::new("data/skins/ECFN/play/play7-1p.json")));
+        assert!(is_skin_candidate_file(Path::new("data/skins/WMII_FHD/play/FHDPLAY_AC.lr2skin")));
         assert!(!is_skin_candidate_file(Path::new("data/skins/ECFN/play/play_parts.lua")));
+    }
+
+    #[test]
+    fn lr2skin_header_document_exposes_skin_config_defs_when_available() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/WMII_FHD/play/FHDPLAY_AC.lr2skin");
+        if !path.is_file() {
+            return;
+        }
+
+        let document = load_skin_header_document(&path).expect("load lr2 skin header");
+
+        assert!(document.property.iter().any(|property| property.name == "Displayjudge"));
+        assert!(document.filepath.iter().any(|filepath| filepath.name == "GAUGE COLOR"));
+        assert!(document.offset.iter().any(|offset| offset.id == 1));
     }
 
     #[test]

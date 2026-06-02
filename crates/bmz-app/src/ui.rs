@@ -1509,12 +1509,18 @@ fn fill_missing_skin_defaults(
         return changed;
     };
     for filepath in &defs.filepath {
-        if files.contains_key(&filepath.name) {
+        let candidates = glob_candidates(skin_root, &filepath.path);
+        let current = files.get(&filepath.name).map(|value| value.replace('\\', "/"));
+        if current.as_ref().is_some_and(|selected| candidates.contains(selected)) {
             continue;
         }
-        let candidates = glob_candidates(skin_root, &filepath.path);
         if let Some(default) = filepath_default(filepath, &candidates) {
-            files.insert(filepath.name.clone(), default);
+            if current.as_deref() != Some(default.as_str()) {
+                files.insert(filepath.name.clone(), default);
+                changed = true;
+            }
+        } else if current.as_deref() != Some("") {
+            files.insert(filepath.name.clone(), String::new());
             changed = true;
         }
     }
@@ -1789,6 +1795,30 @@ mod tests {
 
         assert_eq!(options.get("Lane").map(String::as_str), Some("On"));
         assert_eq!(options.get("Saved").map(String::as_str), Some("B"));
+        assert_eq!(files.get("Notes").map(String::as_str), Some("notes/default.png"));
+    }
+
+    #[test]
+    fn fill_missing_skin_defaults_replaces_stale_file_selection() {
+        let root = unique_test_dir("bmz-ui-defaults-stale");
+        fs::create_dir_all(root.join("notes")).unwrap();
+        fs::write(root.join("notes/aaa.png"), []).unwrap();
+        fs::write(root.join("notes/default.png"), []).unwrap();
+        let defs = SceneSkinDefs {
+            property: Vec::new(),
+            filepath: vec![SkinFilepathDef {
+                category: String::new(),
+                name: "Notes".to_string(),
+                path: "notes/*.png".to_string(),
+                def: "default".to_string(),
+            }],
+            offset: Vec::new(),
+        };
+        let mut options = BTreeMap::new();
+        let mut files = BTreeMap::from([("Notes".to_string(), "../old/default.png".to_string())]);
+
+        assert!(fill_missing_skin_defaults(&defs, Some(&root), &mut options, &mut files));
+
         assert_eq!(files.get("Notes").map(String::as_str), Some("notes/default.png"));
     }
 

@@ -3,7 +3,9 @@ use std::collections::HashMap;
 use std::fmt;
 use std::future::Future;
 use std::ops::Range;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::sync::mpsc;
 use std::task::{Context as TaskContext, Poll, RawWaker, RawWakerVTable, Waker};
 use std::thread;
 
@@ -55,6 +57,7 @@ pub struct Renderer {
     bitmap_fonts: HashMap<String, BitmapFont>,
     gpu: Option<WgpuRenderer>,
     pending_egui: Option<EguiFrame>,
+    pending_screenshot_path: Option<PathBuf>,
     play_dynamic_timer_runtime: DynamicTimerRuntime,
     select_dynamic_timer_runtime: DynamicTimerRuntime,
     decide_dynamic_timer_runtime: DynamicTimerRuntime,
@@ -126,6 +129,101 @@ struct WgpuRenderer {
     text_buffer_capacity: usize,
     font: Option<FontArc>,
     egui: EguiPainter,
+}
+
+struct ScreenshotCapture {
+    buffer: wgpu::Buffer,
+    width: u32,
+    height: u32,
+    padded_bytes_per_row: u32,
+    format: wgpu::TextureFormat,
+}
+
+impl ScreenshotCapture {
+    fn new(device: &wgpu::Device, width: u32, height: u32, format: wgpu::TextureFormat) -> Self {
+        let bytes_per_pixel = 4;
+        let unpadded_bytes_per_row = width.saturating_mul(bytes_per_pixel);
+        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let padded_bytes_per_row = unpadded_bytes_per_row.div_ceil(align).saturating_mul(align);
+        let buffer_size = u64::from(padded_bytes_per_row).saturating_mul(u64::from(height));
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("bmz-render screenshot buffer"),
+            size: buffer_size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        Self { buffer, width, height, padded_bytes_per_row, format }
+    }
+
+    fn copy_from_surface(&self, encoder: &mut wgpu::CommandEncoder, texture: &wgpu::Texture) {
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &self.buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(self.padded_bytes_per_row),
+                    rows_per_image: Some(self.height),
+                },
+            },
+            wgpu::Extent3d { width: self.width, height: self.height, depth_or_array_layers: 1 },
+        );
+    }
+
+    fn save_png(&self, device: &wgpu::Device, path: &Path) -> Result<()> {
+        let slice = self.buffer.slice(..);
+        let (tx, rx) = mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = tx.send(result);
+        });
+        device.poll(wgpu::PollType::wait_indefinitely())?;
+        rx.recv()
+            .context("screenshot readback callback dropped")?
+            .context("failed to map screenshot buffer")?;
+
+        let mapped = slice.get_mapped_range();
+        let mut rgba = vec![0; self.width as usize * self.height as usize * 4];
+        let row_bytes = self.width as usize * 4;
+        let padded_row_bytes = self.padded_bytes_per_row as usize;
+        for y in 0..self.height as usize {
+            let src_offset = y * padded_row_bytes;
+            let dst_offset = y * row_bytes;
+            rgba[dst_offset..dst_offset + row_bytes]
+                .copy_from_slice(&mapped[src_offset..src_offset + row_bytes]);
+        }
+        drop(mapped);
+        self.buffer.unmap();
+
+        if matches!(
+            self.format,
+            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+        ) {
+            for pixel in rgba.chunks_exact_mut(4) {
+                pixel.swap(0, 2);
+            }
+        }
+
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create {}", parent.display()))?;
+        }
+        image::save_buffer_with_format(
+            path,
+            &rgba,
+            self.width,
+            self.height,
+            image::ColorType::Rgba8,
+            image::ImageFormat::Png,
+        )
+        .with_context(|| format!("failed to save screenshot {}", path.display()))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -380,6 +478,7 @@ impl Renderer {
 
     pub fn render_last_plan(&mut self) -> Result<RenderSurfaceStatus> {
         let egui = self.pending_egui.take();
+        let screenshot_path = self.pending_screenshot_path.take();
         let Some(gpu) = &mut self.gpu else {
             return Ok(RenderSurfaceStatus::SkippedNoSurface);
         };
@@ -387,7 +486,17 @@ impl Renderer {
             return Ok(RenderSurfaceStatus::SkippedNoSurface);
         };
 
-        gpu.render_plan(plan, &self.fonts, &self.bitmap_fonts, egui.as_ref())
+        gpu.render_plan(
+            plan,
+            &self.fonts,
+            &self.bitmap_fonts,
+            egui.as_ref(),
+            screenshot_path.as_deref(),
+        )
+    }
+
+    pub fn request_screenshot(&mut self, path: impl Into<PathBuf>) {
+        self.pending_screenshot_path = Some(path.into());
     }
 
     pub fn last_scene(&self) -> Option<&AppSceneSnapshot> {
@@ -452,6 +561,7 @@ impl WgpuRenderer {
         // それと合わせるため sRGB サフィックスを除去して non-sRGB サーフェスとして使う。
         config.format = config.format.remove_srgb_suffix();
         config.present_mode = present_mode_for(vsync);
+        config.usage |= wgpu::TextureUsages::COPY_SRC;
         surface.configure(&device, &config);
         let rect_pipeline = create_rect_pipeline(&device, config.format);
         let image_bind_group_layout = create_image_bind_group_layout(&device);
@@ -523,6 +633,7 @@ impl WgpuRenderer {
         fonts: &HashMap<String, FontArc>,
         bitmap_fonts: &HashMap<String, BitmapFont>,
         egui: Option<&EguiFrame>,
+        screenshot_path: Option<&Path>,
     ) -> Result<RenderSurfaceStatus> {
         // egui のテクスチャ更新は、描画をスキップするフレームでも必ず適用する。
         // TexturesDelta は累積ストリームのため、取りこぼすと後続フレームの
@@ -675,7 +786,21 @@ impl WgpuRenderer {
             None => Vec::new(),
         };
 
+        let screenshot = screenshot_path.map(|path| {
+            let capture = ScreenshotCapture::new(
+                &self.device,
+                self.config.width,
+                self.config.height,
+                self.config.format,
+            );
+            capture.copy_from_surface(&mut encoder, &output.texture);
+            (path.to_path_buf(), capture)
+        });
         self.queue.submit(egui_staging.into_iter().chain(std::iter::once(encoder.finish())));
+        if let Some((path, capture)) = screenshot {
+            capture.save_png(&self.device, &path)?;
+            tracing::info!(path = %path.display(), "smoke screenshot saved");
+        }
         if let Some(frame) = egui {
             self.egui.free_textures(frame);
         }

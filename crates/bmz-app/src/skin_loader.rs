@@ -126,6 +126,11 @@ pub struct DecodedSource {
     pub asset: RgbaImageAsset,
 }
 
+enum SourceDecodeTask {
+    File { index: usize, source_id: String, path: PathBuf },
+    Builtin { index: usize, source_id: String, path: PathBuf, asset: RgbaImageAsset },
+}
+
 /// GPU アップロード済みの 1 ソース。upload worker が `DecodedSource` から生成する。
 pub struct PreparedSource {
     pub source_id: String,
@@ -199,7 +204,7 @@ pub fn apply_default_skin(renderer: &mut Renderer) -> Result<()> {
 }
 
 /// `profile.toml` の `[skin] play` 設定からスキンをロードする。
-/// 空文字列 → デフォルトスキン、`.json`/`.luaskin`/`.lua` 拡張子 → beatoraja スキン、
+/// 空文字列 → デフォルトスキン、`.json`/`.luaskin`/`.lua`/`.lr2skin` 拡張子 → beatoraja スキン、
 /// それ以外 → `skin.toml` を含む bmz スキンディレクトリとして扱う。
 pub fn apply_skin_from_config(renderer: &mut Renderer, play_skin_path: &str) -> Result<()> {
     if play_skin_path.is_empty() {
@@ -335,11 +340,19 @@ pub fn decode_beatoraja_skin_with_options(
 
     // ソースは ID 順を保つため、まず resolved path リストを順次組み立て、
     // PNG デコード本体だけを並列実行する。
-    let source_tasks: Vec<(usize, String, PathBuf)> = document
+    let source_tasks: Vec<SourceDecodeTask> = document
         .source
         .iter()
         .enumerate()
         .filter_map(|(index, source)| {
+            if let Some(asset) = lr2_builtin_source_asset(&source.path) {
+                return Some(SourceDecodeTask::Builtin {
+                    index,
+                    source_id: source.id.clone(),
+                    path: PathBuf::from(&source.path),
+                    asset,
+                });
+            }
             let source_path =
                 resolve_json_skin_source_path(&skin_root, &source.path, &document, files)?;
             if !source_path.to_string_lossy().to_ascii_lowercase().ends_with(".png") {
@@ -350,31 +363,38 @@ pub fn decode_beatoraja_skin_with_options(
                 );
                 return None;
             }
-            Some((index, source.id.clone(), source_path))
+            Some(SourceDecodeTask::File { index, source_id: source.id.clone(), path: source_path })
         })
         .collect();
 
     let mut decoded_pairs: Vec<(usize, String, PathBuf, RgbaImageAsset)> = source_tasks
         .into_par_iter()
-        .filter_map(|(index, source_id, source_path)| match load_png_rgba(&source_path) {
-            Ok(asset) => Some((index, source_id, source_path, asset)),
-            Err(error) => {
-                if warn_missing_required && required_sources.contains(&source_id) {
-                    tracing::warn!(
-                        source_id = %source_id,
-                        path = %source_path.display(),
-                        %error,
-                        "failed to load beatoraja skin source"
-                    );
-                } else {
-                    tracing::debug!(
-                        source_id = %source_id,
-                        path = %source_path.display(),
-                        %error,
-                        "skipping unused missing beatoraja skin source"
-                    );
+        .filter_map(|task| match task {
+            SourceDecodeTask::Builtin { index, source_id, path, asset } => {
+                Some((index, source_id, path, asset))
+            }
+            SourceDecodeTask::File { index, source_id, path: source_path } => {
+                match load_png_rgba(&source_path) {
+                    Ok(asset) => Some((index, source_id, source_path, asset)),
+                    Err(error) => {
+                        if warn_missing_required && required_sources.contains(&source_id) {
+                            tracing::warn!(
+                                source_id = %source_id,
+                                path = %source_path.display(),
+                                %error,
+                                "failed to load beatoraja skin source"
+                            );
+                        } else {
+                            tracing::debug!(
+                                source_id = %source_id,
+                                path = %source_path.display(),
+                                %error,
+                                "skipping unused missing beatoraja skin source"
+                            );
+                        }
+                        None
+                    }
                 }
-                None
             }
         })
         .collect();
@@ -391,6 +411,23 @@ pub fn decode_beatoraja_skin_with_options(
         .collect();
 
     Ok(DecodedSkin { kind, document, fonts, sources })
+}
+
+fn lr2_builtin_source_asset(path: &str) -> Option<RgbaImageAsset> {
+    let pixel = match path {
+        // BMZ does not yet emulate every LR2 transition timer exactly.  A real
+        // black reference source can leave WMII's fullscreen fade overlays
+        // covering play, so keep it transparent until that animation path is
+        // implemented more faithfully.
+        "bmz://lr2/black" => [0, 0, 0, 0],
+        "bmz://lr2/white" => [255, 255, 255, 255],
+        // BACKBMP itself is drawn by the play snapshot path.  Keep a transparent
+        // source so LR2 CSV objects using IMAGE_BACKBMP can be decoded without
+        // failing texture resolution when the chart has no backbmp.
+        "bmz://lr2/backbmp" => [0, 0, 0, 0],
+        _ => return None,
+    };
+    Some(RgbaImageAsset { width: 1, height: 1, pixels: pixel.to_vec() })
 }
 
 fn load_skin_document(
@@ -410,6 +447,18 @@ fn load_skin_document(
                 kind = ?kind,
                 warning = %warning.message,
                 "lua skin load warning"
+            );
+        }
+        loaded.document
+    } else if is_lr2_skin_path(skin_path) {
+        let loaded = bmz_skin::load_lr2_csv_skin(skin_path, decode_skin_kind(kind), options, files)
+            .with_context(|| format!("failed to load lr2 csv skin: {}", skin_path.display()))?;
+        for warning in loaded.warnings {
+            tracing::warn!(
+                path = %skin_path.display(),
+                kind = ?kind,
+                warning = %warning.message,
+                "lr2 csv skin load warning"
             );
         }
         loaded.document
@@ -473,7 +522,7 @@ fn decode_skin_kind(kind: SkinKind) -> DecodeSkinKind {
 }
 
 pub fn is_decodable_skin_path(path: &Path) -> bool {
-    is_json_skin_path(path) || is_lua_skin_path(path)
+    is_json_skin_path(path) || is_lua_skin_path(path) || is_lr2_skin_path(path)
 }
 
 pub fn is_json_skin_path(path: &Path) -> bool {
@@ -486,6 +535,12 @@ pub fn is_lua_skin_path(path: &Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
         .is_some_and(|ext| ext.eq_ignore_ascii_case("luaskin") || ext.eq_ignore_ascii_case("lua"))
+}
+
+pub fn is_lr2_skin_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("lr2skin"))
 }
 
 fn decode_font(path: &Path) -> Result<DecodedFontData> {
@@ -829,6 +884,13 @@ fn required_skin_source_ids(document: &SkinDocument) -> HashSet<&str> {
         }
     }
     if let Some(gauge) = &document.gauge {
+        for image_id in &gauge.nodes {
+            if let Some(source_id) = image_sources.get(image_id.as_str()) {
+                required.insert(*source_id);
+            }
+        }
+    }
+    for gauge in &document.gauges {
         for image_id in &gauge.nodes {
             if let Some(source_id) = image_sources.get(image_id.as_str()) {
                 required.insert(*source_id);
@@ -1412,6 +1474,419 @@ mod tests {
         let mut renderer = Renderer::default();
 
         apply_skin_from_config(&mut renderer, skin_path.to_str().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn wmii_fhd_lr2skin_decodes_play_document_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/WMII_FHD/play/FHDPLAY_AC.lr2skin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let decoded = decode_beatoraja_skin(&skin_path, SkinKind::Play).unwrap();
+        assert_eq!(decoded.document.name, "WMII FHD play AC");
+        assert!(decoded.document.w >= 1920);
+        assert!(decoded.document.source.len() >= 10);
+        assert!(decoded.document.image.len() >= 100);
+        assert!(
+            decoded.document.source.iter().any(|source| source.id == "110")
+                && decoded.document.source.iter().any(|source| source.id == "111"),
+            "expected LR2 black/white reference sources"
+        );
+        let note = decoded.document.note.as_ref().expect("lr2 play skin should define notes");
+        assert!(!note.group.is_empty());
+        assert!(decoded.document.gauge.is_some());
+        assert!(decoded.document.bga.is_some());
+        assert!(
+            decoded.sources.len() >= 10,
+            "expected WMII sources to decode, got {}; source paths: {:?}; decoded: {:?}",
+            decoded.sources.len(),
+            decoded.document.source.iter().map(|source| source.path.as_str()).collect::<Vec<_>>(),
+            decoded.sources.iter().map(|source| source.path.clone()).collect::<Vec<_>>()
+        );
+        let black = decoded.sources.iter().find(|source| source.source_id == "110").unwrap();
+        let white = decoded.sources.iter().find(|source| source.source_id == "111").unwrap();
+        assert_eq!(black.asset.pixels, vec![0, 0, 0, 0]);
+        assert_eq!(white.asset.pixels, vec![255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn wmii_fhd_lr2skin_can_be_applied_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/WMII_FHD/play/FHDPLAY_AC.lr2skin");
+        if !skin_path.is_file() {
+            return;
+        }
+        let mut renderer = Renderer::default();
+
+        apply_beatoraja_json_skin(&mut renderer, &skin_path).unwrap();
+    }
+
+    #[test]
+    fn wmii_fhd_lr2skin_produces_static_play_items_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/WMII_FHD/play/FHDPLAY_AC.lr2skin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let decoded = decode_beatoraja_skin(&skin_path, SkinKind::Play).unwrap();
+        let sources = decoded
+            .sources
+            .iter()
+            .map(|source| {
+                (
+                    source.source_id.clone(),
+                    SkinDocumentTexture {
+                        source_id: source.source_id.clone(),
+                        texture: source.texture,
+                        source_size: SkinImageSize {
+                            width: source.asset.width as f32,
+                            height: source.asset.height as f32,
+                        },
+                    },
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        let state = bmz_render::skin::SkinDrawState {
+            elapsed_ms: 2_000,
+            play_timer_ms: Some(2_000),
+            ready_timer_ms: Some(2_000),
+            ..Default::default()
+        };
+
+        let items = decoded.document.static_render_items(
+            &sources,
+            state,
+            bmz_render::skin::SkinTextState::default(),
+        );
+        assert!(!items.is_empty());
+    }
+
+    #[test]
+    fn wmii_fhd_lr2skin_renders_ac_bga_frame_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/WMII_FHD/play/FHDPLAY_AC.lr2skin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let decoded = decode_beatoraja_skin(&skin_path, SkinKind::Play).unwrap();
+        let frame_image = decoded
+            .document
+            .image
+            .iter()
+            .find(|image| image.src == "2" && image.x == 1016 && image.y == 1276 && image.w == 389)
+            .expect("WMII AC frame image should decode");
+        let frame_destination = decoded
+            .document
+            .destination
+            .iter()
+            .filter_map(|entry| match entry {
+                bmz_render::skin::DestinationListEntry::Single(destination) => Some(destination),
+                bmz_render::skin::DestinationListEntry::Conditional { destinations, .. } => {
+                    destinations.iter().find(|destination| destination.id == frame_image.id)
+                }
+            })
+            .find(|destination| destination.id == frame_image.id && destination.op == [41, 30])
+            .expect("WMII AC frame destination should decode");
+        assert!(
+            frame_destination.dst.len() >= 2,
+            "expected WMII AC frame destination keyframes, got {:?}",
+            frame_destination.dst
+        );
+        let frame_texture = decoded
+            .sources
+            .iter()
+            .find(|source| source.source_id == "2")
+            .expect("WMII AC frame source should load")
+            .texture;
+        let sources = decoded
+            .sources
+            .iter()
+            .map(|source| {
+                (
+                    source.source_id.clone(),
+                    SkinDocumentTexture {
+                        source_id: source.source_id.clone(),
+                        texture: source.texture,
+                        source_size: SkinImageSize {
+                            width: source.asset.width as f32,
+                            height: source.asset.height as f32,
+                        },
+                    },
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        let state = bmz_render::skin::SkinDrawState {
+            elapsed_ms: 2_000,
+            play_timer_ms: Some(2_000),
+            ready_timer_ms: Some(2_000),
+            has_bga: true,
+            bga_enabled: true,
+            autoplay: false,
+            skin_loaded: true,
+            ..Default::default()
+        };
+
+        let items = decoded.document.static_render_items(
+            &sources,
+            state,
+            bmz_render::skin::SkinTextState::default(),
+        );
+        assert!(
+            items.iter().any(|item| matches!(
+                item,
+                bmz_render::skin::SkinRenderItem::Image { texture, rect, tint, .. }
+                    if *texture == frame_texture
+                        && (rect.x - 845.0 / 1920.0).abs() < 0.001
+                        && (rect.width - 389.0 / 1920.0).abs() < 0.001
+                        && tint.a > 0.5
+            )),
+            "expected WMII AC BGA frame item from source 2; got {items:?}"
+        );
+    }
+
+    #[test]
+    fn wmii_fhd_lr2skin_uses_full_note_lane_region_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/WMII_FHD/play/FHDPLAY_AC.lr2skin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let decoded = decode_beatoraja_skin(&skin_path, SkinKind::Play).unwrap();
+        let area = decoded
+            .document
+            .note_lane_area(
+                bmz_core::lane::Lane::Scratch,
+                bmz_core::lane::KeyMode::K7,
+                &decoded.document.enabled_options(),
+            )
+            .expect("WMII scratch lane area should decode");
+
+        assert!((area.x - 75.0 / 1920.0).abs() < 0.001);
+        assert!(
+            area.height > 0.65,
+            "expected LR2 note.dst to define the full scroll lane height, got {area:?}"
+        );
+    }
+
+    #[test]
+    fn wmii_fhd_lr2skin_maps_note_sources_by_lr2_lane_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/WMII_FHD/play/FHDPLAY_AC.lr2skin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let decoded = decode_beatoraja_skin(&skin_path, SkinKind::Play).unwrap();
+        let note = decoded.document.note.as_ref().expect("WMII notes should decode");
+        let images = decoded.document.image_map();
+        let scratch =
+            images.get(note.note[7].as_str()).expect("WMII scratch note image should resolve");
+        let key1 = images.get(note.note[0].as_str()).expect("WMII key1 note image should resolve");
+        let key2 = images.get(note.note[1].as_str()).expect("WMII key2 note image should resolve");
+
+        assert_eq!((scratch.x, scratch.w), (94, 90));
+        assert_eq!((key1.x, key1.w), (187, 52));
+        assert_eq!((key2.x, key2.w), (241, 40));
+    }
+
+    #[test]
+    fn wmii_fhd_lr2skin_inserts_notes_marker_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/WMII_FHD/play/FHDPLAY_AC.lr2skin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let decoded = decode_beatoraja_skin(&skin_path, SkinKind::Play).unwrap();
+        assert!(
+            decoded
+                .document
+                .all_destinations(&decoded.document.enabled_options())
+                .iter()
+                .any(|destination| destination.id == "notes"),
+            "LR2 play skins should insert the notes marker at the first DST_NOTE command"
+        );
+    }
+
+    #[test]
+    fn wmii_fhd_lr2skin_renders_groove_gauge_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/WMII_FHD/play/FHDPLAY_AC.lr2skin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let decoded = decode_beatoraja_skin(&skin_path, SkinKind::Play).unwrap();
+        let gauge_texture = decoded
+            .sources
+            .iter()
+            .find(|source| source.source_id == "19")
+            .expect("WMII gauge source should load")
+            .texture;
+        let sources = decoded
+            .sources
+            .iter()
+            .map(|source| {
+                (
+                    source.source_id.clone(),
+                    SkinDocumentTexture {
+                        source_id: source.source_id.clone(),
+                        texture: source.texture,
+                        source_size: SkinImageSize {
+                            width: source.asset.width as f32,
+                            height: source.asset.height as f32,
+                        },
+                    },
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        for gauge_type in [
+            bmz_core::clear::GaugeType::AssistEasy,
+            bmz_core::clear::GaugeType::Normal,
+            bmz_core::clear::GaugeType::Hard,
+        ] {
+            let state = bmz_render::skin::SkinDrawState {
+                elapsed_ms: 2_000,
+                play_timer_ms: Some(2_000),
+                gauge: 80.0,
+                gauge_max: 100.0,
+                gauge_border: 80.0,
+                gauge_type: gauge_type as i32,
+                ..Default::default()
+            };
+
+            let items = decoded.document.static_render_items(
+                &sources,
+                state,
+                bmz_render::skin::SkinTextState::default(),
+            );
+            assert!(
+                items.iter().any(|item| matches!(
+                    item,
+                    bmz_render::skin::SkinRenderItem::Image { texture, rect, tint, .. }
+                        if *texture == gauge_texture
+                            && (rect.x - 54.0 / 1920.0).abs() < 0.001
+                            && rect.width > 0.004
+                            && tint.a > 0.5
+                )),
+                "expected WMII groove gauge item from source 19 for {gauge_type:?}; got {items:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn wmii_fhd_lr2skin_renders_judge_and_combo_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/WMII_FHD/play/FHDPLAY_AC.lr2skin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let decoded = decode_beatoraja_skin(&skin_path, SkinKind::Play).unwrap();
+        let judge_texture = decoded
+            .sources
+            .iter()
+            .find(|source| source.source_id == "13")
+            .expect("WMII judge source should load")
+            .texture;
+        let sources = decoded
+            .sources
+            .iter()
+            .map(|source| {
+                (
+                    source.source_id.clone(),
+                    SkinDocumentTexture {
+                        source_id: source.source_id.clone(),
+                        texture: source.texture,
+                        source_size: SkinImageSize {
+                            width: source.asset.width as f32,
+                            height: source.asset.height as f32,
+                        },
+                    },
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        let mut judge_ms = [None; bmz_render::skin::MAX_JUDGE_REGIONS];
+        judge_ms[0] = Some(100);
+        let mut judge_index = [None; bmz_render::skin::MAX_JUDGE_REGIONS];
+        judge_index[0] = Some(0);
+        let state = bmz_render::skin::SkinDrawState {
+            elapsed_ms: 2_000,
+            play_timer_ms: Some(2_000),
+            judge_ms,
+            judge_index,
+            combo: 123,
+            ..Default::default()
+        };
+
+        let items = decoded.document.static_render_items(
+            &sources,
+            state,
+            bmz_render::skin::SkinTextState::default(),
+        );
+        let judge_items = items
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item,
+                    bmz_render::skin::SkinRenderItem::Image { texture, rect, tint, .. }
+                        if *texture == judge_texture
+                            && rect.height > 0.01
+                            && tint.a > 0.5
+                )
+            })
+            .count();
+
+        assert!(
+            judge_items >= 2,
+            "expected WMII judge text and combo digits from source 13; got {items:?}"
+        );
+        assert!(
+            items.iter().any(|item| matches!(
+                item,
+                bmz_render::skin::SkinRenderItem::Image { texture, rect, uv, tint, .. }
+                    if *texture == judge_texture
+                        && rect.height > 0.05
+                        && uv.y < 0.001
+                        && tint.a > 0.5
+            )),
+            "expected PGREAT judge image to use the top WMII judge source row; got {items:?}"
+        );
+
+        for (judge_index, label) in ["PGREAT", "GREAT", "GOOD", "BAD", "POOR"].iter().enumerate() {
+            let mut judge_ms = [None; bmz_render::skin::MAX_JUDGE_REGIONS];
+            judge_ms[0] = Some(100);
+            let mut judge_indices = [None; bmz_render::skin::MAX_JUDGE_REGIONS];
+            judge_indices[0] = Some(judge_index);
+            let state = bmz_render::skin::SkinDrawState {
+                elapsed_ms: 2_000,
+                play_timer_ms: Some(2_000),
+                judge_ms,
+                judge_index: judge_indices,
+                combo: 123,
+                ..Default::default()
+            };
+            let items = decoded.document.static_render_items(
+                &sources,
+                state,
+                bmz_render::skin::SkinTextState::default(),
+            );
+            assert!(
+                items.iter().any(|item| matches!(
+                    item,
+                    bmz_render::skin::SkinRenderItem::Image { texture, rect, tint, .. }
+                        if *texture == judge_texture
+                            && rect.height > 0.05
+                            && tint.a > 0.5
+                )),
+                "expected WMII {label} judge image to render; got {items:?}"
+            );
+        }
     }
 
     #[test]

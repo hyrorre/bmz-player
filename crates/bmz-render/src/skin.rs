@@ -120,6 +120,8 @@ pub struct SkinDocument {
     pub note: Option<SkinNoteSetDef>,
     pub gauge: Option<SkinGaugeDef>,
     #[serde(default)]
+    pub gauges: Vec<SkinGaugeDef>,
+    #[serde(default)]
     pub judge: Vec<SkinJudgeDef>,
     pub bga: Option<SkinBgaDef>,
     pub songlist: Option<SkinSongListDef>,
@@ -1461,6 +1463,7 @@ pub struct SkinDrawState {
     pub gauge_border: f32,
     pub play_progress: f32,
     pub end_of_note: bool,
+    pub end_of_note_ms: Option<i32>,
     /// 各レーンのボムタイマー経過ms。Noneなら非アクティブ。
     pub bomb_ms: [Option<i32>; LANE_COUNT],
     /// 各レーンのkeyon(押下中ビーム)タイマー経過ms。Noneなら非アクティブ。
@@ -1516,6 +1519,10 @@ pub struct SkinDrawState {
     pub has_bga: bool,
     /// BGA表示設定がONかどうか。曲の有無とは分けて扱う。
     pub bga_enabled: bool,
+    /// `#STAGEFILE` 相当の曲画像があるか (OPTION_NO_STAGEFILE=190 / OPTION_STAGEFILE=191)。
+    pub has_stagefile: bool,
+    /// `#BACKBMP` 相当の背景画像がロード済みか (OPTION_NO_BACKBMP=194 / OPTION_BACKBMP=195)。
+    pub has_backbmp: bool,
     /// 現在表示するBGA本体画像。
     pub bga_base: Option<SkinBgaFrame>,
     /// 現在表示するBGAレイヤー画像。
@@ -1627,6 +1634,8 @@ pub struct SkinDrawState {
     pub stddev_timing_ms: Option<f32>,
     /// OPTION_AUTOPLAYON (33) / OPTION_AUTOPLAYOFF (32) 用。
     pub autoplay: bool,
+    /// OPTION_NOW_LOADING (80) / OPTION_LOADED (81) 用。
+    pub skin_loaded: bool,
     /// OPTION_MODE_COURSE (290) とステージ別 op (280..283 / 289) 用。未対応時は None。
     pub course_stage: Option<CourseStageMarker>,
     /// beatoraja `event_index(SKIN_EVENT_HSFIX)`。0=OFF, 1=START, 2=MAX, 3=MAIN, 4=MIN。
@@ -1683,6 +1692,7 @@ impl Default for SkinDrawState {
             gauge_border: 80.0,
             play_progress: 0.0,
             end_of_note: false,
+            end_of_note_ms: None,
             bomb_ms: [None; LANE_COUNT],
             keyon_ms: [None; LANE_COUNT],
             keyoff_ms: [None; LANE_COUNT],
@@ -1710,6 +1720,8 @@ impl Default for SkinDrawState {
             max_bpm: 0.0,
             has_bga: false,
             bga_enabled: true,
+            has_stagefile: false,
+            has_backbmp: false,
             bga_base: None,
             bga_layer: None,
             bga_layer2: None,
@@ -1768,6 +1780,7 @@ impl Default for SkinDrawState {
             average_timing_ms: None,
             stddev_timing_ms: None,
             autoplay: false,
+            skin_loaded: true,
             course_stage: None,
             hsfix_index: 0,
             main_bpm: 0.0,
@@ -3500,18 +3513,24 @@ impl SkinDocument {
     }
 
     fn destination_uses_skin_gauge_bar_render(&self, destination: &SkinDestinationDef) -> bool {
-        self.gauge.as_ref().is_some_and(|gauge| {
-            gauge.id == destination.id
-                && destination.draw.trim().is_empty()
-                && destination.blend != 2
-        })
+        self.skin_gauge_for_destination(destination).is_some()
+            && destination.draw.trim().is_empty()
+            && destination.blend != 2
     }
 
     fn destination_uses_skin_gauge_overlay_render(&self, destination: &SkinDestinationDef) -> bool {
-        self.gauge.as_ref().is_some_and(|gauge| {
-            gauge.id == destination.id
-                && (!destination.draw.trim().is_empty() || destination.blend == 2)
-        })
+        self.skin_gauge_for_destination(destination).is_some()
+            && (!destination.draw.trim().is_empty() || destination.blend == 2)
+    }
+
+    fn skin_gauge_for_destination(
+        &self,
+        destination: &SkinDestinationDef,
+    ) -> Option<&SkinGaugeDef> {
+        self.gauges
+            .iter()
+            .find(|gauge| gauge.id == destination.id)
+            .or_else(|| self.gauge.as_ref().filter(|gauge| gauge.id == destination.id))
     }
 
     fn resolve_gauge_destination_items(
@@ -3521,7 +3540,7 @@ impl SkinDocument {
         state: SkinDrawState,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<Vec<SkinRenderItem>> {
-        let gauge_def = self.gauge.as_ref()?;
+        let gauge_def = self.skin_gauge_for_destination(destination)?;
         let elapsed_ms = skin_timer_elapsed_ms(destination.timer, state)?;
         let frame = resolve_destination_frame(destination, elapsed_ms, enabled_options, state)?;
         let rect = normalize_skin_frame_rect(frame, self.w, self.h);
@@ -5224,12 +5243,18 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool 
         320..=327 => best_rank_op_matches(op, state),
         170 => !state.has_bga,
         171 => state.has_bga,
-        // OPTION_NO_STAGEFILE / OPTION_STAGEFILE (190/191) は play 向け。選曲では未接続。
-        190 => false,
-        191 => false,
+        // OPTION_NOW_LOADING / OPTION_LOADED
+        80 => !state.skin_loaded,
+        81 => state.skin_loaded,
+        // OPTION_NO_STAGEFILE / OPTION_STAGEFILE
+        190 => !state.has_stagefile,
+        191 => state.has_stagefile,
         // OPTION_NO_BANNER / OPTION_BANNER (192/193)
         192 => select_banner_option_matches(false, state),
         193 => select_banner_option_matches(true, state),
+        // OPTION_NO_BACKBMP / OPTION_BACKBMP
+        194 => !state.has_backbmp,
+        195 => state.has_backbmp,
         // OPTION_LANECOVER1_CHANGING / OPTION_LANECOVER1_ON / OPTION_LIFT1_ON / OPTION_HIDDEN1_ON
         270 => state.lane_cover_changing,
         271 => state.lanecover_enabled,
@@ -5258,6 +5283,12 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool 
         352 => state.target_ex_score.is_some_and(|target| state.ex_score > target),
         353 => state.target_ex_score.is_some_and(|target| state.ex_score < target),
         354 => state.target_ex_score.is_some_and(|target| state.ex_score == target),
+        // OPTION_GAUGE_GROOVE / OPTION_GAUGE_HARD / OPTION_GAUGE_EX.
+        // beatoraja uses the current gauge type index: 0..2 are groove-family,
+        // 3+ are hard-family, and 1046 is true for assist/easy/ex variants.
+        42 => state.gauge_type <= 2,
+        43 => state.gauge_type >= 3,
+        1046 => matches!(state.gauge_type, 0 | 1 | 4 | 5 | 7 | 8),
         601..=608 => false,
         // OPTION_DIFFICULTY0..5. 0 は UNKNOWN/OTHER、1..5 は BMS #DIFFICULTY。
         150 => state.difficulty <= 0 || state.difficulty > 5,
@@ -6536,7 +6567,7 @@ fn skin_timer_elapsed_ms(timer: Option<i32>, state: SkinDrawState) -> Option<i32
         // 2P keyoff: timer 130=Scratch2, 131-137=Key8-14
         Some(130) => state.keyoff_ms[Lane::Scratch2.index()],
         Some(131..=137) => state.keyoff_ms[Lane::Key8.index() + (timer.unwrap() - 131) as usize],
-        Some(143) => state.end_of_note.then_some(state.elapsed_ms),
+        Some(143 | 144) => state.end_of_note_ms,
         Some(id)
             if (SKIN_DYNAMIC_TIMER_BASE
                 ..SKIN_DYNAMIC_TIMER_BASE + SKIN_DYNAMIC_TIMER_COUNT as i32)
@@ -6926,8 +6957,11 @@ fn skin_state_text(text: &SkinTextDef, state: SkinTextState<'_>) -> String {
         17 => state.table_level.to_string(),
         30 => state.search_word.to_string(),
         150..=159 => state.course_titles[(text.ref_id - 150) as usize].to_string(),
+        // beatoraja StringPropertyFactory: 1001=tablename, 1002=tablelevel,
+        // 1003=tablefull.  Rm-skin's combined table label is handled above by
+        // id/value_expr, so direct numeric refs follow the beatoraja mapping.
         1001 => state.table_text_primary.to_string(),
-        1002 => state.table_text_secondary.to_string(),
+        1002 => state.table_level.to_string(),
         1003 => state.table_text_fallback.to_string(),
         1020 | 1021 => String::new(),
         200..=209 => select_target_name_by_offset(state.target, text.ref_id - 210),
@@ -9448,6 +9482,25 @@ mod tests {
             );
             assert!(test_skin_op(-op, &[op], course_stage1), "negative {op} should invert false");
         }
+    }
+
+    #[test]
+    fn play_asset_and_loading_ops_reflect_skin_state() {
+        let unloaded = SkinDrawState { skin_loaded: false, ..SkinDrawState::default() };
+        assert!(test_skin_op(80, &[], unloaded));
+        assert!(!test_skin_op(81, &[], unloaded));
+
+        let loaded = SkinDrawState::default();
+        assert!(!test_skin_op(80, &[], loaded));
+        assert!(test_skin_op(81, &[], loaded));
+        assert!(test_skin_op(190, &[], loaded));
+        assert!(!test_skin_op(191, &[], loaded));
+        assert!(test_skin_op(194, &[], loaded));
+        assert!(!test_skin_op(195, &[], loaded));
+
+        let with_backbmp = SkinDrawState { has_backbmp: true, ..SkinDrawState::default() };
+        assert!(!test_skin_op(194, &[], with_backbmp));
+        assert!(test_skin_op(195, &[], with_backbmp));
     }
 
     #[test]
@@ -12398,7 +12451,11 @@ mod tests {
         );
         let visible = document.static_image_render_items(
             &sources,
-            SkinDrawState { end_of_note: true, ..SkinDrawState::default() },
+            SkinDrawState {
+                end_of_note: true,
+                end_of_note_ms: Some(0),
+                ..SkinDrawState::default()
+            },
         );
 
         assert!(hidden.is_empty());
@@ -13312,6 +13369,23 @@ mod tests {
         assert_eq!(skin_timer_elapsed_ms(Some(150), active), Some(120));
         assert_eq!(skin_timer_elapsed_ms(Some(151), active), Some(120));
         assert_eq!(skin_timer_elapsed_ms(Some(152), active), Some(40));
+    }
+
+    #[test]
+    fn end_of_note_timers_use_elapsed_since_end_of_note() {
+        let inactive =
+            SkinDrawState { elapsed_ms: 5_000, end_of_note_ms: None, ..SkinDrawState::default() };
+        assert_eq!(skin_timer_elapsed_ms(Some(143), inactive), None);
+        assert_eq!(skin_timer_elapsed_ms(Some(144), inactive), None);
+
+        let active = SkinDrawState {
+            elapsed_ms: 5_000,
+            end_of_note: true,
+            end_of_note_ms: Some(250),
+            ..SkinDrawState::default()
+        };
+        assert_eq!(skin_timer_elapsed_ms(Some(143), active), Some(250));
+        assert_eq!(skin_timer_elapsed_ms(Some(144), active), Some(250));
     }
 
     #[test]
@@ -14718,6 +14792,7 @@ mod tests {
         use crate::snapshot::CourseStageMarker;
 
         let state = SkinTextState {
+            table_level: "★12",
             table_text_primary: "[★] Insane",
             table_text_secondary: "★12",
             table_text_fallback: "[★] Insane",
@@ -14736,6 +14811,9 @@ mod tests {
 
         let course_state = SkinTextState { course_stage: Some(CourseStageMarker::Stage1), ..state };
         assert_eq!(skin_state_text(&by_id, course_state), "COURSE : STAGE 1");
+
+        let by_ref = SkinTextDef { ref_id: 1002, ..SkinTextDef::default() };
+        assert_eq!(skin_state_text(&by_ref, state), "★12");
     }
 
     #[test]
