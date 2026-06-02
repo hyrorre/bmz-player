@@ -1484,6 +1484,9 @@ pub struct SkinDrawState {
     pub select_target_index: usize,
     pub select_bga_index: usize,
     pub select_assist_index: usize,
+    pub select_mode_index: usize,
+    pub select_sort_index: usize,
+    pub select_ln_mode_index: usize,
     pub combo: u32,
     pub max_combo: u32,
     pub ex_score: u32,
@@ -1713,6 +1716,9 @@ impl Default for SkinDrawState {
             select_target_index: 0,
             select_bga_index: 0,
             select_assist_index: 0,
+            select_mode_index: 0,
+            select_sort_index: 0,
+            select_ln_mode_index: 0,
             combo: 0,
             max_combo: 0,
             ex_score: 0,
@@ -2986,6 +2992,9 @@ impl SkinDocument {
             select_target_index: select_target_index(&snapshot.target),
             select_bga_index: select_bga_index(&snapshot.bga),
             select_assist_index: select_assist_index(&snapshot.assist),
+            select_mode_index: select_mode_index(&snapshot.select_mode),
+            select_sort_index: select_sort_index(&snapshot.select_sort),
+            select_ln_mode_index: select_ln_mode_index(&snapshot.select_ln_mode),
             select_scroll_progress: select_scroll_progress(snapshot),
             select_master_volume: snapshot.master_volume,
             select_key_volume: snapshot.key_volume,
@@ -4845,7 +4854,10 @@ fn skin_state_imageset_index(ref_id: i32, state: SkinDrawState) -> Option<usize>
         54 | 55 => Some(0),
         72 => Some(state.select_bga_index),
         78 => Some(state.select_gauge_auto_shift_index),
+        11 => Some(state.select_mode_index),
+        12 => Some(state.select_sort_index),
         301..=307 => Some(0),
+        308 => Some(state.select_ln_mode_index),
         _ => None,
     }
 }
@@ -6242,6 +6254,8 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         // Lua draw 畳み込みのプレースホルダ (`number(0) >= 0` 等)
         0 => Some(0),
         21..=26 => current_datetime_number(ref_id),
+        11 if state.select_screen => Some(state.select_mode_index as i64),
+        12 if state.select_screen => Some(state.select_sort_index as i64),
         300 => Some(state.select_chart_count as i64),
         30 if state.select_screen => Some(state.select_play_count as i64),
         96 => Some(if state.play_level != 0 { state.play_level } else { state.select_play_level }),
@@ -6283,6 +6297,7 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         311 => Some(((state.hispeed * 100.0) as i64) % 100),
         312 => Some(state.total_duration_ms as i64),
         313 => Some((state.total_duration_ms as i64) * 3 / 5),
+        308 if state.select_screen => Some(state.select_ln_mode_index as i64),
         // BPM 系: NUMBER_MAXBPM=90, NUMBER_MINBPM=91, NUMBER_NOWBPM=160
         90 => {
             Some(if state.max_bpm > 0.0 { state.max_bpm } else { state.select_max_bpm }.round()
@@ -7687,6 +7702,40 @@ fn select_bga_index(bga: &str) -> usize {
 fn select_assist_index(assist: &str) -> usize {
     match assist {
         "AUTOPLAY" => 1,
+        _ => 0,
+    }
+}
+
+fn select_mode_index(mode: &str) -> usize {
+    match mode {
+        "7K" => 1,
+        "14K" => 2,
+        "9K" => 3,
+        "5K" => 4,
+        "10K" => 5,
+        "24K" => 6,
+        "24K_DOUBLE" => 7,
+        _ => 0,
+    }
+}
+
+fn select_sort_index(sort: &str) -> usize {
+    match sort {
+        "ARTIST" => 1,
+        "BPM" => 2,
+        "LENGTH" => 3,
+        "LEVEL" => 4,
+        "CLEAR" => 5,
+        "SCORE" => 6,
+        "MISSCOUNT" => 7,
+        _ => 0,
+    }
+}
+
+fn select_ln_mode_index(mode: &str) -> usize {
+    match mode {
+        "CN" => 1,
+        "HCN" => 2,
         _ => 0,
     }
 }
@@ -13704,10 +13753,15 @@ mod tests {
             select_master_volume: 0.57,
             select_bgm_volume: 0.58,
             select_key_volume: 0.59,
+            select_mode_index: 4,
+            select_sort_index: 6,
+            select_ln_mode_index: 2,
             ex_score: 1234,
             ..SkinDrawState::default()
         };
 
+        assert_eq!(skin_state_number(11, state), Some(4));
+        assert_eq!(skin_state_number(12, state), Some(6));
         assert_eq!(skin_state_number(300, state), Some(42));
         assert_eq!(skin_state_number(96, state), Some(12));
         assert_eq!(
@@ -13730,6 +13784,7 @@ mod tests {
         assert_eq!(skin_state_number(57, state), Some(57));
         assert_eq!(skin_state_number(58, state), Some(58));
         assert_eq!(skin_state_number(59, state), Some(59));
+        assert_eq!(skin_state_number(308, state), Some(2));
 
         assert!(skin_state_number(21, state).is_some_and(|value| value >= 2026));
         assert!(skin_state_number(22, state).is_some_and(|value| (1..=12).contains(&value)));

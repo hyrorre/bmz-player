@@ -5,7 +5,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use bmz_chart::model::PlayableChart;
+use bmz_chart::model::{LongNoteMode, PlayableChart};
 use bmz_core::clear::{ClearType, GaugeType};
 use bmz_core::lane::KeyMode;
 use bmz_core::time::TimeUs;
@@ -222,6 +222,9 @@ struct WinitApp {
     gauge_option: GaugeTypeConfig,
     gauge_auto_shift_option: GaugeAutoShiftConfig,
     assist_option: AssistOption,
+    select_mode_filter: SelectModeFilter,
+    select_sort: SelectSort,
+    select_ln_mode: SelectLnMode,
     select_keys: SelectKeyBindings,
     smoke_exit_after_frames: Option<u32>,
     smoke_exit_on_result: bool,
@@ -568,7 +571,13 @@ impl WinitApp {
         }
 
         let folder_stack = initial_folder_stack(&boot.app_config);
-        let select_items = load_items_for_stack(&boot, &folder_stack, &[]);
+        let select_items = load_items_for_stack(
+            &boot,
+            &folder_stack,
+            &[],
+            SelectModeFilter::All,
+            SelectSort::Title,
+        );
         let boot_chart_id = resolve_boot_chart_id(&boot.library_db, &options);
         log_startup_options(&options);
 
@@ -706,6 +715,9 @@ impl WinitApp {
             gauge_option,
             gauge_auto_shift_option,
             assist_option,
+            select_mode_filter: SelectModeFilter::All,
+            select_sort: SelectSort::Title,
+            select_ln_mode: SelectLnMode::Ln,
             select_keys,
             smoke_exit_after_frames: options.smoke_exit_after_frames,
             smoke_exit_on_result: options.smoke_exit_on_result,
@@ -1177,6 +1189,9 @@ impl WinitApp {
             gauge: gauge_option_as_str(self.gauge_option).to_string(),
             gauge_auto_shift: gauge_auto_shift_as_str(self.gauge_auto_shift_option).to_string(),
             assist: self.assist_option.as_str().to_string(),
+            select_mode: self.select_mode_filter.as_str().to_string(),
+            select_sort: self.select_sort.as_str().to_string(),
+            select_ln_mode: self.select_ln_mode.as_str().to_string(),
             bga: bga_mode_as_str(self.boot.profile_config.play.bga).to_string(),
             master_volume: crate::config::play::volume_unit_to_f32(
                 self.boot.profile_config.audio_mix.master_volume,
@@ -2230,15 +2245,50 @@ impl WinitApp {
                     tracing::info!(slot, "select skin replay click ignored; slot is empty");
                 }
             }
-            // These exist in beatoraja default select.json.  BMZ does not yet
-            // expose matching mode/sort/LN-mode state, so keep them harmless.
-            11 | 12 | 308 => {
-                tracing::debug!(event_id, arg, "select skin event is not implemented yet");
+            11 => self.cycle_select_mode_filter(arg),
+            12 => self.cycle_select_sort(arg),
+            308 => self.cycle_select_ln_mode(arg),
+            312 => {
+                // BMZ only exposes beatoraja's default sorter set for now.
+                self.cycle_select_sort(arg);
             }
             _ => {
                 tracing::debug!(event_id, arg, "unsupported select skin event");
             }
         }
+    }
+
+    fn cycle_select_mode_filter(&mut self, arg: i32) {
+        self.select_mode_filter = if arg >= 0 {
+            self.select_mode_filter.next()
+        } else {
+            self.select_mode_filter.previous()
+        };
+        let previous_len = self.select_items.len();
+        self.reload_select_items();
+        tracing::info!(
+            mode = self.select_mode_filter.as_str(),
+            previous_len,
+            current_len = self.select_items.len(),
+            "select mode filter changed"
+        );
+        self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+    }
+
+    fn cycle_select_sort(&mut self, arg: i32) {
+        self.select_sort =
+            if arg >= 0 { self.select_sort.next() } else { self.select_sort.previous() };
+        self.reload_select_items();
+        tracing::info!(sort = self.select_sort.as_str(), "select sort changed");
+        self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+    }
+
+    fn cycle_select_ln_mode(&mut self, arg: i32) {
+        self.select_ln_mode =
+            if arg >= 0 { self.select_ln_mode.next() } else { self.select_ln_mode.previous() };
+        self.invalidate_play_preload();
+        tracing::info!(ln_mode = self.select_ln_mode.as_str(), "select LN mode changed");
+        self.play_system_sound(crate::system_sound::SoundType::OptionChange);
     }
 
     fn move_selection(&mut self, select_move: SelectMove) {
@@ -2600,6 +2650,7 @@ impl WinitApp {
             autoplay: false,
             practice_mode: false,
             arrange: ArrangeOption::Normal,
+            ln_mode_override: Some(self.select_ln_mode.long_note_mode()),
             ..Default::default()
         };
         self.start_play_preload(chart_id, preload_options);
@@ -2714,6 +2765,7 @@ impl WinitApp {
                 gauge_auto_shift: GaugeAutoShiftConfig::Off,
                 arrange: property.arrange,
                 chart_zero_time: chart_zero,
+                ln_mode_override: Some(self.select_ln_mode.long_note_mode()),
                 ..Default::default()
             },
         );
@@ -3584,6 +3636,7 @@ impl WinitApp {
             arrange: self.arrange_option,
             target: self.target_option,
             arrange_seed,
+            ln_mode_override: Some(self.select_ln_mode.long_note_mode()),
             ..Default::default()
         }
     }
@@ -3623,7 +3676,7 @@ impl WinitApp {
             arrange_pattern: replay_file.lane_shuffle_pattern.clone(),
             initial_gauge_value: None,
             judge_constraint: bmz_core::course::CourseJudgeConstraint::Normal,
-            ln_mode_override: None,
+            ln_mode_override: Some(self.select_ln_mode.long_note_mode()),
             course_gauge_override: None,
             course_gauge_property_override: None,
         };
@@ -3912,7 +3965,13 @@ impl WinitApp {
 
     fn reload_select_items(&mut self) {
         let history: Vec<String> = self.search_history.iter().cloned().collect();
-        let items = load_items_for_stack(&self.boot, &self.folder_stack, &history);
+        let items = load_items_for_stack(
+            &self.boot,
+            &self.folder_stack,
+            &history,
+            self.select_mode_filter,
+            self.select_sort,
+        );
         self.select_items = items;
         if self.selected_index >= self.select_items.len() {
             self.selected_index = self.select_items.len().saturating_sub(1);
@@ -5520,6 +5579,146 @@ fn initial_folder_stack(_app_config: &crate::config::app_config::AppConfig) -> V
     Vec::new()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SelectModeFilter {
+    All,
+    K7,
+    K14,
+    K9,
+    K5,
+    K10,
+    K24,
+    K24Double,
+}
+
+impl SelectModeFilter {
+    const ORDER: [Self; 8] =
+        [Self::All, Self::K7, Self::K14, Self::K9, Self::K5, Self::K10, Self::K24, Self::K24Double];
+
+    fn next(self) -> Self {
+        cycle_enum(Self::ORDER, self, 1)
+    }
+
+    fn previous(self) -> Self {
+        cycle_enum(Self::ORDER, self, -1)
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::All => "ALL",
+            Self::K7 => "7K",
+            Self::K14 => "14K",
+            Self::K9 => "9K",
+            Self::K5 => "5K",
+            Self::K10 => "10K",
+            Self::K24 => "24K",
+            Self::K24Double => "24K_DOUBLE",
+        }
+    }
+
+    fn key_mode(self) -> Option<KeyMode> {
+        match self {
+            Self::All | Self::K24 | Self::K24Double => None,
+            Self::K7 => Some(KeyMode::K7),
+            Self::K14 => Some(KeyMode::K14),
+            Self::K9 => Some(KeyMode::K9),
+            Self::K5 => Some(KeyMode::K5),
+            Self::K10 => Some(KeyMode::K10),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SelectSort {
+    Title,
+    Artist,
+    Bpm,
+    Length,
+    Level,
+    Clear,
+    Score,
+    MissCount,
+}
+
+impl SelectSort {
+    const ORDER: [Self; 8] = [
+        Self::Title,
+        Self::Artist,
+        Self::Bpm,
+        Self::Length,
+        Self::Level,
+        Self::Clear,
+        Self::Score,
+        Self::MissCount,
+    ];
+
+    fn next(self) -> Self {
+        cycle_enum(Self::ORDER, self, 1)
+    }
+
+    fn previous(self) -> Self {
+        cycle_enum(Self::ORDER, self, -1)
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Title => "TITLE",
+            Self::Artist => "ARTIST",
+            Self::Bpm => "BPM",
+            Self::Length => "LENGTH",
+            Self::Level => "LEVEL",
+            Self::Clear => "CLEAR",
+            Self::Score => "SCORE",
+            Self::MissCount => "MISSCOUNT",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SelectLnMode {
+    Ln,
+    Cn,
+    Hcn,
+}
+
+impl SelectLnMode {
+    const ORDER: [Self; 3] = [Self::Ln, Self::Cn, Self::Hcn];
+
+    fn next(self) -> Self {
+        cycle_enum(Self::ORDER, self, 1)
+    }
+
+    fn previous(self) -> Self {
+        cycle_enum(Self::ORDER, self, -1)
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Ln => "LN",
+            Self::Cn => "CN",
+            Self::Hcn => "HCN",
+        }
+    }
+
+    fn long_note_mode(self) -> LongNoteMode {
+        match self {
+            Self::Ln => LongNoteMode::Ln,
+            Self::Cn => LongNoteMode::Cn,
+            Self::Hcn => LongNoteMode::Hcn,
+        }
+    }
+}
+
+fn cycle_enum<T: Copy + PartialEq, const N: usize>(
+    values: [T; N],
+    current: T,
+    direction: i32,
+) -> T {
+    let index = values.iter().position(|value| *value == current).unwrap_or(0);
+    let len = values.len();
+    if direction >= 0 { values[(index + 1) % len] } else { values[(index + len - 1) % len] }
+}
+
 fn enabled_root_paths(app_config: &crate::config::app_config::AppConfig) -> Vec<String> {
     app_config.songs.roots.iter().filter(|p| p.enabled).map(|p| p.path.clone()).collect()
 }
@@ -5528,8 +5727,10 @@ fn load_items_for_stack(
     boot: &crate::bootstrap::BootstrappedApp,
     stack: &[String],
     search_history: &[String],
+    mode_filter: SelectModeFilter,
+    sort: SelectSort,
 ) -> Vec<SelectItem> {
-    match stack.last() {
+    let mut items = match stack.last() {
         Some(path) if path.starts_with(crate::screens::settings_model::CONFIG_ROOT_PATH) => {
             load_settings_items(path)
         }
@@ -5622,7 +5823,95 @@ fn load_items_for_stack(
             }
             items
         }
+    };
+    apply_select_mode_filter(&mut items, mode_filter);
+    apply_select_sort(&mut items, sort);
+    items
+}
+
+fn apply_select_mode_filter(items: &mut Vec<SelectItem>, filter: SelectModeFilter) {
+    let Some(key_mode) = filter.key_mode() else {
+        return;
+    };
+    items.retain(|item| match item {
+        SelectItem::Chart(row) => row
+            .chart
+            .as_ref()
+            .and_then(|chart| KeyMode::from_str_opt(&chart.mode))
+            .is_some_and(|mode| mode == key_mode),
+        _ => true,
+    });
+}
+
+fn apply_select_sort(items: &mut [SelectItem], sort: SelectSort) {
+    items.sort_by(|a, b| match (a, b) {
+        (SelectItem::Chart(a), SelectItem::Chart(b)) => compare_select_chart_rows(a, b, sort),
+        _ => std::cmp::Ordering::Equal,
+    });
+}
+
+fn compare_select_chart_rows(
+    a: &crate::screens::select_model::SelectChartRow,
+    b: &crate::screens::select_model::SelectChartRow,
+    sort: SelectSort,
+) -> std::cmp::Ordering {
+    let ordering = match sort {
+        SelectSort::Title => compare_case_insensitive(a.display_title(), b.display_title()),
+        SelectSort::Artist => compare_case_insensitive(a.display_artist(), b.display_artist()),
+        SelectSort::Bpm => chart_initial_bpm(a).total_cmp(&chart_initial_bpm(b)),
+        SelectSort::Length => chart_length_ms(a).cmp(&chart_length_ms(b)),
+        SelectSort::Level => compare_play_level(a, b),
+        SelectSort::Clear => clear_rank(a).cmp(&clear_rank(b)),
+        SelectSort::Score => ex_score(a).cmp(&ex_score(b)),
+        SelectSort::MissCount => miss_count(a).cmp(&miss_count(b)),
+    };
+    ordering.then_with(|| compare_case_insensitive(a.display_title(), b.display_title()))
+}
+
+fn compare_case_insensitive(a: &str, b: &str) -> std::cmp::Ordering {
+    a.to_lowercase().cmp(&b.to_lowercase())
+}
+
+fn chart_initial_bpm(row: &crate::screens::select_model::SelectChartRow) -> f64 {
+    row.chart.as_ref().map(|chart| chart.initial_bpm).unwrap_or(0.0)
+}
+
+fn chart_length_ms(row: &crate::screens::select_model::SelectChartRow) -> i64 {
+    row.chart.as_ref().map(|chart| chart.length_ms).unwrap_or(0)
+}
+
+fn compare_play_level(
+    a: &crate::screens::select_model::SelectChartRow,
+    b: &crate::screens::select_model::SelectChartRow,
+) -> std::cmp::Ordering {
+    play_level_number(a)
+        .total_cmp(&play_level_number(b))
+        .then_with(|| compare_case_insensitive(a.display_title(), b.display_title()))
+}
+
+fn play_level_number(row: &crate::screens::select_model::SelectChartRow) -> f64 {
+    row.chart.as_ref().and_then(|chart| chart.play_level.parse::<f64>().ok()).unwrap_or(0.0)
+}
+
+fn clear_rank(row: &crate::screens::select_model::SelectChartRow) -> u8 {
+    match row.best_score.as_ref().map(|score| score.clear_type.as_str()).unwrap_or_default() {
+        "Perfect" => 8,
+        "FullCombo" => 7,
+        "Hard" => 6,
+        "Easy" => 5,
+        "Clear" => 4,
+        "AssistEasy" => 3,
+        "Failed" => 1,
+        _ => 0,
     }
+}
+
+fn ex_score(row: &crate::screens::select_model::SelectChartRow) -> u32 {
+    row.best_score.as_ref().map(|score| score.ex_score).unwrap_or(0)
+}
+
+fn miss_count(row: &crate::screens::select_model::SelectChartRow) -> u32 {
+    row.best_score.as_ref().map(|score| score.miss_count).unwrap_or(u32::MAX)
 }
 
 fn cycle_gauge_option(current: GaugeTypeConfig) -> GaugeTypeConfig {
@@ -6605,6 +6894,7 @@ fn select_control_with_lane_fallback(
 
 #[cfg(test)]
 mod tests {
+    use bmz_render::scene::SelectRowKind;
     use bmz_render::skin::SkinManifest;
 
     use crate::config::app_config::{AppConfig, PathEntry};
@@ -7437,6 +7727,65 @@ mod tests {
     #[test]
     fn moved_select_index_handles_empty_rows() {
         assert_eq!(moved_select_index(9, 0, SelectMove::Last), 0);
+    }
+
+    #[test]
+    fn select_skin_event_state_cycles_like_beatoraja_defaults() {
+        assert_eq!(SelectModeFilter::All.next(), SelectModeFilter::K7);
+        assert_eq!(SelectModeFilter::All.previous(), SelectModeFilter::K24Double);
+        assert_eq!(SelectSort::Title.next(), SelectSort::Artist);
+        assert_eq!(SelectSort::Title.previous(), SelectSort::MissCount);
+        assert_eq!(SelectLnMode::Ln.next(), SelectLnMode::Cn);
+        assert_eq!(SelectLnMode::Ln.previous(), SelectLnMode::Hcn);
+        assert_eq!(SelectLnMode::Hcn.long_note_mode(), LongNoteMode::Hcn);
+    }
+
+    #[test]
+    fn select_mode_filter_keeps_matching_chart_rows() {
+        let mut k7 = select_chart_row(1);
+        k7.chart.as_mut().unwrap().mode = "7K".to_string();
+        let mut k14 = select_chart_row(2);
+        k14.chart.as_mut().unwrap().mode = "14K".to_string();
+        let mut items = vec![
+            SelectItem::Folder {
+                path: "folder".to_string(),
+                name: "folder".to_string(),
+                kind: SelectRowKind::Folder,
+            },
+            SelectItem::Chart(k7),
+            SelectItem::Chart(k14),
+        ];
+
+        apply_select_mode_filter(&mut items, SelectModeFilter::K14);
+
+        assert_eq!(items.len(), 2);
+        assert!(matches!(items[0], SelectItem::Folder { .. }));
+        assert_eq!(items[1].display_name(), "Title 2");
+    }
+
+    #[test]
+    fn select_sort_orders_chart_rows_without_moving_folders() {
+        let mut slow = select_chart_row(1);
+        slow.chart.as_mut().unwrap().title = "Slow".to_string();
+        slow.chart.as_mut().unwrap().initial_bpm = 100.0;
+        let mut fast = select_chart_row(2);
+        fast.chart.as_mut().unwrap().title = "Fast".to_string();
+        fast.chart.as_mut().unwrap().initial_bpm = 200.0;
+        let mut items = vec![
+            SelectItem::Folder {
+                path: "folder".to_string(),
+                name: "folder".to_string(),
+                kind: SelectRowKind::Folder,
+            },
+            SelectItem::Chart(fast),
+            SelectItem::Chart(slow),
+        ];
+
+        apply_select_sort(&mut items, SelectSort::Bpm);
+
+        assert!(matches!(items[0], SelectItem::Folder { .. }));
+        assert_eq!(items[1].display_name(), "Slow");
+        assert_eq!(items[2].display_name(), "Fast");
     }
 
     fn select_chart_row(index: usize) -> SelectChartRow {
