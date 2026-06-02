@@ -15148,7 +15148,7 @@ mod tests {
         )
         .unwrap();
 
-        let sources = mock_source("src", 3170.0, 1500.0);
+        let sources = mock_source("src", 3200.0, 3200.0);
         let items = document.static_image_render_items(
             &sources,
             SkinDrawState { select_master_volume: 0.37, ..SkinDrawState::default() },
@@ -15164,12 +15164,17 @@ mod tests {
         assert!(approx_eq(r2.width, digit_width));
         assert!(approx_eq(r1.x - r0.x, digit_width));
         assert!(approx_eq(r2.x - r1.x, digit_width));
-        assert!(approx_eq(uv0.width, 22.0 / 3170.0));
-        assert!(approx_eq(uv1.width, 22.0 / 3170.0));
-        assert!(approx_eq(uv2.width, 22.0 / 3170.0));
-        assert!(approx_eq(uv0.x, (2401.0 + 10.0 * 22.0) / 3170.0));
-        assert!(approx_eq(uv1.x, (2401.0 + 3.0 * 22.0) / 3170.0));
-        assert!(approx_eq(uv2.x, (2401.0 + 7.0 * 22.0) / 3170.0));
+        assert!(approx_eq(uv0.width, 22.0 / 3200.0));
+        assert!(approx_eq(uv1.width, 22.0 / 3200.0));
+        assert!(approx_eq(uv2.width, 22.0 / 3200.0));
+        assert!(approx_eq(uv0.x, (2401.0 + 10.0 * 22.0) / 3200.0));
+        assert!(approx_eq(uv1.x, (2401.0 + 3.0 * 22.0) / 3200.0));
+        assert!(approx_eq(uv2.x, (2401.0 + 7.0 * 22.0) / 3200.0));
+        assert!(
+            approx_eq(uv0.width, 242.0 / 11.0 / 3200.0),
+            "value sprite must be sliced into 11 cells, got uv.width={}",
+            uv0.width
+        );
     }
 
     #[test]
