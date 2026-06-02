@@ -1168,7 +1168,7 @@ impl TextAtlasBuilder {
             _ => 0.0,
         };
         let mut cursor_x = origin.x * surface.width as f32 + align_offset.max(0.0);
-        let baseline_y = origin.y * surface.height as f32 + font.base as f32 * scale;
+        let text_top_y = origin.y * surface.height as f32;
 
         for ch in text.chars() {
             let Some(glyph) = font.glyphs.get(&ch) else {
@@ -1191,7 +1191,7 @@ impl TextAtlasBuilder {
                     scale,
                 );
                 let x = (cursor_x + glyph.xoffset as f32 * scale) / surface.width as f32;
-                let y = (baseline_y - font.base as f32 * scale + glyph.yoffset as f32 * scale)
+                let y = (text_top_y + (glyph.yoffset as f32 - font.ascent) * scale)
                     / surface.height as f32;
                 self.quads.push(TextQuad {
                     x,
@@ -2413,6 +2413,7 @@ mod tests {
                 size: 10,
                 line_height: 10,
                 base: 8,
+                ascent: 7.0,
                 scale_width: 1,
                 scale_height: 1,
                 pages,
@@ -2443,6 +2444,78 @@ mod tests {
 
         assert_eq!(frame.instances.len(), TEXT_INSTANCE_BYTES);
         assert!(frame.pixels.contains(&255));
+    }
+
+    #[test]
+    fn bitmap_font_text_positions_glyphs_from_destination_baseline() {
+        let Some(default_font) = load_default_font() else { return };
+        let surface = SurfaceSize { width: 100, height: 100 };
+        let mut pages = HashMap::new();
+        pages.insert(
+            0,
+            crate::bitmap_font::BitmapFontPage {
+                id: 0,
+                path: std::path::PathBuf::from("page.png"),
+                image: crate::assets::RgbaImageAsset {
+                    width: 1,
+                    height: 1,
+                    pixels: vec![255, 255, 255, 255],
+                },
+            },
+        );
+        let mut glyphs = HashMap::new();
+        glyphs.insert(
+            'A',
+            crate::bitmap_font::BitmapFontGlyph {
+                id: 'A',
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+                xoffset: 0,
+                yoffset: 7,
+                xadvance: 1,
+                page: 0,
+            },
+        );
+        let mut bitmap_fonts = HashMap::new();
+        bitmap_fonts.insert(
+            "bitmap".to_string(),
+            BitmapFont {
+                size: 30,
+                line_height: 45,
+                base: 34,
+                ascent: 12.0,
+                scale_width: 1,
+                scale_height: 1,
+                pages,
+                glyphs,
+            },
+        );
+        let plan = DrawPlan {
+            clear: Color::rgb(0.0, 0.0, 0.0),
+            commands: vec![DrawCommand::Text {
+                origin: Point { x: 0.1, y: 0.1 },
+                text: "A".to_string(),
+                style: TextStyle {
+                    font_id: Some("bitmap".to_string()),
+                    size: 0.3,
+                    color: Color::rgb(1.0, 1.0, 1.0),
+                    layer: crate::plan::TextLayer::Skin,
+                    align: TextAlign::Left,
+                    max_width: 0.0,
+                    overflow: TextOverflow::Overflow,
+                    wrapping: false,
+                    outline: None,
+                    shadow: None,
+                },
+            }],
+        };
+
+        let frame = build_text_frame(&plan, &default_font, &HashMap::new(), &bitmap_fonts, surface);
+        let y = f32::from_le_bytes(frame.instances[4..8].try_into().unwrap());
+
+        assert!((y - 0.05).abs() < f32::EPSILON);
     }
 
     #[test]
