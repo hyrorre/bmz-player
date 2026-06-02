@@ -4501,7 +4501,7 @@ fn play_skin_defs_from_path(path: &str) -> SceneSkinDefs {
 fn is_skin_candidate_file(path: &Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
-        .map(|ext| matches!(ext.to_ascii_lowercase().as_str(), "json" | "luaskin"))
+        .map(|ext| matches!(ext.to_ascii_lowercase().as_str(), "json" | "luaskin" | "lr2skin"))
         .unwrap_or(false)
 }
 
@@ -4514,6 +4514,19 @@ fn load_skin_header_document(path: &Path) -> Option<SkinDocument> {
         bmz_skin::load_lua_skin_header_value(path)
             .ok()
             .and_then(|loaded| serde_json::from_value::<SkinDocument>(loaded.value).ok())
+    } else if path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("lr2skin"))
+    {
+        bmz_skin::load_lr2_csv_skin(
+            path,
+            bmz_skin::SkinKind::Play,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .ok()
+        .map(|loaded| loaded.document)
     } else {
         SkinDocument::load_beatoraja_json(path).ok()
     }
@@ -5929,7 +5942,23 @@ mod tests {
     fn skin_catalog_scan_ignores_lua_parts_files() {
         assert!(is_skin_candidate_file(Path::new("data/skins/ECFN/play/play7.luaskin")));
         assert!(is_skin_candidate_file(Path::new("data/skins/ECFN/play/play7-1p.json")));
+        assert!(is_skin_candidate_file(Path::new("data/skins/WMII_FHD/play/FHDPLAY_AC.lr2skin")));
         assert!(!is_skin_candidate_file(Path::new("data/skins/ECFN/play/play_parts.lua")));
+    }
+
+    #[test]
+    fn lr2skin_header_document_exposes_skin_config_defs_when_available() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/WMII_FHD/play/FHDPLAY_AC.lr2skin");
+        if !path.is_file() {
+            return;
+        }
+
+        let document = load_skin_header_document(&path).expect("load lr2 skin header");
+
+        assert!(document.property.iter().any(|property| property.name == "Displayjudge"));
+        assert!(document.filepath.iter().any(|filepath| filepath.name == "GAUGE COLOR"));
+        assert!(document.offset.iter().any(|offset| offset.id == 1));
     }
 
     #[test]

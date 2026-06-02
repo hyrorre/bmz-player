@@ -100,6 +100,7 @@ enum NoteSlot {
 
 struct CsvBuilder<'a> {
     skin_root: PathBuf,
+    skin_file_dir: PathBuf,
     skin_file_dir_name: Option<String>,
     header: Header,
     files: &'a BTreeMap<String, String>,
@@ -298,8 +299,10 @@ fn add_builtin_offset(header: &mut Header, name: &str, id: i32, flags: [bool; 6]
 impl<'a> CsvBuilder<'a> {
     fn new(path: &'a Path, header: Header, files: &'a BTreeMap<String, String>) -> Self {
         let skin_root = infer_skin_root(path);
+        let skin_file_dir = path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
         Self {
             skin_root,
+            skin_file_dir,
             skin_file_dir_name: path
                 .parent()
                 .and_then(|parent| parent.file_name())
@@ -864,6 +867,7 @@ impl<'a> CsvBuilder<'a> {
         if let Some(file) = self.header.files.iter().find(|file| file.path == normalized)
             && let Some(selected) =
                 self.files.get(&file.name).filter(|selected| !selected.is_empty())
+            && self.selected_skin_file_exists(selected)
         {
             return selected.replace('\\', "/");
         }
@@ -872,6 +876,8 @@ impl<'a> CsvBuilder<'a> {
         {
             if let Some(selected) =
                 self.files.get(&file.name).filter(|selected| !selected.is_empty())
+                && selected_wildcard_value(&file.path, selected).is_some()
+                && self.selected_skin_file_exists(selected)
             {
                 return substitute_wildcard(&normalized, &file.path, selected);
             }
@@ -880,6 +886,25 @@ impl<'a> CsvBuilder<'a> {
             }
         }
         normalized
+    }
+
+    fn selected_skin_file_exists(&self, selected: &str) -> bool {
+        use std::path::Component;
+
+        let selected = selected.replace('\\', "/");
+        let relative = Path::new(&selected);
+        if relative.as_os_str().is_empty()
+            || relative.is_absolute()
+            || relative.components().any(|component| {
+                matches!(
+                    component,
+                    Component::ParentDir | Component::RootDir | Component::Prefix(_)
+                )
+            })
+        {
+            return false;
+        }
+        self.skin_file_dir.join(relative).is_file()
     }
 
     fn relative_source_path(&self, normalized: &str) -> String {
@@ -1151,6 +1176,7 @@ fn destination_def(id: &str, values: &[i32; 22], canvas_h: i32) -> JsonValue {
         "timer": if values[17] != 0 { json!(values[17]) } else { JsonValue::Null },
         "loop": values[16],
         "center": values[15],
+        "offset": values[21],
         "op": op,
         "dst": [frame],
     })
@@ -1256,6 +1282,7 @@ fn judge_combo_destination_def(id: &str, values: &[i32; 22]) -> JsonValue {
         "timer": if values[17] != 0 { json!(values[17]) } else { JsonValue::Null },
         "loop": values[16],
         "center": values[15],
+        "offset": values[21],
         "op": op,
         "dst": [frame],
     })
@@ -1466,16 +1493,18 @@ fn substitute_wildcard(asset_path: &str, definition: &str, selected: &str) -> St
     let Some((asset_prefix, asset_suffix)) = asset_path.split_once('*') else {
         return selected.replace('\\', "/");
     };
-    let Some((def_prefix, def_suffix)) = definition.split_once('*') else {
+    let Some(wildcard) = selected_wildcard_value(definition, selected) else {
         return selected.replace('\\', "/");
     };
-    let selected = selected.replace('\\', "/");
-    let wildcard = selected
-        .strip_prefix(def_prefix)
-        .unwrap_or(&selected)
-        .strip_suffix(def_suffix)
-        .unwrap_or_else(|| selected.strip_prefix(def_prefix).unwrap_or(&selected));
     format!("{asset_prefix}{wildcard}{asset_suffix}")
+}
+
+fn selected_wildcard_value(definition: &str, selected: &str) -> Option<String> {
+    let (def_prefix, def_suffix) = definition.split_once('*')?;
+    let selected = selected.replace('\\', "/");
+    let stripped = selected.strip_prefix(def_prefix)?;
+    let wildcard = stripped.strip_suffix(def_suffix)?;
+    Some(wildcard.to_string())
 }
 
 fn substitute_wildcard_default(asset_path: &str, definition: &str, default: &str) -> String {
@@ -1564,6 +1593,12 @@ fn split_csv_line(line: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_test_dir(name: &str) -> PathBuf {
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        std::env::temp_dir().join(format!("{name}-{nanos}"))
+    }
 
     #[test]
     fn lr2_asset_path_strips_theme_prefix() {
@@ -1590,6 +1625,16 @@ mod tests {
     }
 
     #[test]
+    fn lr2_destination_preserves_custom_offset_id() {
+        let mut values = [0; 22];
+        values[21] = 32;
+
+        let destination = destination_def("image", &values, 1080);
+
+        assert_eq!(destination["offset"], 32);
+    }
+
+    #[test]
     fn lr2_nowjudge_indices_match_beatoraja_slots() {
         assert_eq!(lr2_judge_slot(5), 0);
         assert_eq!(lr2_judge_slot(4), 1);
@@ -1605,6 +1650,55 @@ mod tests {
         assert_eq!(
             substitute_wildcard_default("parts/note/*.png", "parts/note/*.png", "photon"),
             "parts/note/photon.png"
+        );
+    }
+
+    #[test]
+    fn lr2_customfile_selection_uses_existing_skin_file() {
+        let root = unique_test_dir("bmz-lr2-customfile");
+        let play_dir = root.join("play");
+        std::fs::create_dir_all(play_dir.join("parts/gauge")).unwrap();
+        std::fs::write(play_dir.join("parts/gauge/default.png"), []).unwrap();
+        std::fs::write(play_dir.join("parts/gauge/blue.png"), []).unwrap();
+        let skin_path = play_dir.join("FHDPLAY_AC.lr2skin");
+        std::fs::write(&skin_path, []).unwrap();
+        let mut header = Header::default();
+        header.files.push(CustomFile {
+            name: "GAUGE COLOR".to_string(),
+            path: "parts/gauge/*.png".to_string(),
+            default: "default".to_string(),
+        });
+        let files =
+            BTreeMap::from([("GAUGE COLOR".to_string(), "parts/gauge/blue.png".to_string())]);
+        let builder = CsvBuilder::new(&skin_path, header, &files);
+
+        assert_eq!(
+            builder.resolve_source_path(r".\LR2files\Theme\WMII_FHD\play\parts\gauge\*.png"),
+            "parts/gauge/blue.png"
+        );
+    }
+
+    #[test]
+    fn lr2_customfile_selection_falls_back_when_saved_file_is_missing() {
+        let root = unique_test_dir("bmz-lr2-customfile-missing");
+        let play_dir = root.join("play");
+        std::fs::create_dir_all(play_dir.join("parts/gauge")).unwrap();
+        std::fs::write(play_dir.join("parts/gauge/default.png"), []).unwrap();
+        let skin_path = play_dir.join("FHDPLAY_AC.lr2skin");
+        std::fs::write(&skin_path, []).unwrap();
+        let mut header = Header::default();
+        header.files.push(CustomFile {
+            name: "GAUGE COLOR".to_string(),
+            path: "parts/gauge/*.png".to_string(),
+            default: "default".to_string(),
+        });
+        let files =
+            BTreeMap::from([("GAUGE COLOR".to_string(), "parts/gauge/missing.png".to_string())]);
+        let builder = CsvBuilder::new(&skin_path, header, &files);
+
+        assert_eq!(
+            builder.resolve_source_path(r".\LR2files\Theme\WMII_FHD\play\parts\gauge\*.png"),
+            "parts/gauge/default.png"
         );
     }
 
