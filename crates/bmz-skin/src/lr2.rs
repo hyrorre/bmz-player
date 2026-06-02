@@ -704,7 +704,11 @@ impl<'a> CsvBuilder<'a> {
             self.judges[index].marker_inserted = true;
         }
         self.judges[index].shift = values[11] != 1;
-        self.judges[index].images.push(json!({ "id": id, "dst": [] }));
+        set_judge_slot(
+            &mut self.judges[index].images,
+            lr2_judge_slot(values[1]),
+            json!({ "id": id, "dst": [] }),
+        );
         self.current = Some(CurrentObject { id });
     }
 
@@ -736,7 +740,11 @@ impl<'a> CsvBuilder<'a> {
                 value["align"] = json!(2);
             }
             self.ensure_judge(index);
-            self.judges[index].numbers.push(json!({ "id": current.id, "dst": [] }));
+            set_judge_slot(
+                &mut self.judges[index].numbers,
+                lr2_judge_slot(values[1]),
+                json!({ "id": current.id, "dst": [] }),
+            );
         }
     }
 
@@ -1119,6 +1127,15 @@ impl Processor {
             }
         })
     }
+}
+
+fn lr2_judge_slot(value: i32) -> usize {
+    if value <= 5 { (5 - value).max(0) as usize } else { value as usize }
+}
+
+fn set_judge_slot(slots: &mut Vec<JsonValue>, index: usize, value: JsonValue) {
+    slots.resize_with(index + 1, || json!({ "id": "", "dst": [] }));
+    slots[index] = value;
 }
 
 fn destination_def(id: &str, values: &[i32; 22], canvas_h: i32) -> JsonValue {
@@ -1506,6 +1523,17 @@ mod tests {
         assert_eq!(frame["y"], 1020);
         assert_eq!(frame["w"], 30);
         assert_eq!(frame["h"], 40);
+    }
+
+    #[test]
+    fn lr2_nowjudge_indices_match_beatoraja_slots() {
+        assert_eq!(lr2_judge_slot(5), 0);
+        assert_eq!(lr2_judge_slot(4), 1);
+        assert_eq!(lr2_judge_slot(3), 2);
+        assert_eq!(lr2_judge_slot(2), 3);
+        assert_eq!(lr2_judge_slot(1), 4);
+        assert_eq!(lr2_judge_slot(0), 5);
+        assert_eq!(lr2_judge_slot(6), 6);
     }
 
     #[test]

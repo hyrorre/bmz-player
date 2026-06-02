@@ -1833,6 +1833,17 @@ mod tests {
             judge_items >= 2,
             "expected WMII judge text and combo digits from source 13; got {items:?}"
         );
+        assert!(
+            items.iter().any(|item| matches!(
+                item,
+                bmz_render::skin::SkinRenderItem::Image { texture, rect, uv, tint, .. }
+                    if *texture == judge_texture
+                        && rect.height > 0.05
+                        && uv.y < 0.001
+                        && tint.a > 0.5
+            )),
+            "expected PGREAT judge image to use the top WMII judge source row; got {items:?}"
+        );
     }
 
     #[test]
