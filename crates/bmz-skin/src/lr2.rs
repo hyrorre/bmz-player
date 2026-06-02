@@ -1202,8 +1202,8 @@ fn gauge_destination_def(
 fn lr2_gauge_nodes(cell_ids: &[String], animation_type: i32, is_ex: bool) -> Vec<String> {
     let mut nodes = vec![cell_ids.first().cloned().unwrap_or_default(); 36];
     let cells_per_frame = if is_ex {
-        if animation_type == 3 && cell_ids.len() % 12 == 0 { 12 } else { 8 }
-    } else if animation_type == 3 && cell_ids.len() % 6 == 0 {
+        if animation_type == 3 && cell_ids.len().is_multiple_of(12) { 12 } else { 8 }
+    } else if animation_type == 3 && cell_ids.len().is_multiple_of(6) {
         6
     } else {
         4

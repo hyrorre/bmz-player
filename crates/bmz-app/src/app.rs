@@ -1207,10 +1207,11 @@ impl WinitApp {
         let blink_on = (self.select_time().0 / 500_000) % 2 == 0;
         let caret = if blink_on { "_" } else { " " };
         if self.search_mode {
-            if self.search_query.is_empty() && self.search_preedit.is_empty() {
-                if let Some(message) = &self.search_message {
-                    return (message.clone(), MESSAGE_ALPHA);
-                }
+            if self.search_query.is_empty()
+                && self.search_preedit.is_empty()
+                && let Some(message) = &self.search_message
+            {
+                return (message.clone(), MESSAGE_ALPHA);
             }
             (format!("{}{}{}", self.search_query, self.search_preedit, caret), 1.0)
         } else if let Some(message) = &self.search_message {
