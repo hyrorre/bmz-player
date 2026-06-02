@@ -1301,4 +1301,26 @@ mod tests {
         );
         assert!(processor.active());
     }
+
+    #[test]
+    fn wmii_fhd_lr2skin_parse_has_no_unsupported_command_warnings_when_available() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/WMII_FHD/play/FHDPLAY_AC.lr2skin");
+        if !path.is_file() {
+            return;
+        }
+
+        let loaded = load_lr2_csv_skin_value(&path, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+        assert!(
+            loaded
+                .warnings
+                .iter()
+                .all(|warning| !warning.message.contains("unsupported lr2 csv command")),
+            "unexpected warnings: {:?}",
+            loaded.warnings
+        );
+        assert_eq!(loaded.value["name"], "WMII FHD play AC");
+        assert!(loaded.value["destination"].as_array().unwrap().len() > 100);
+        assert!(!loaded.value["note"]["group"].as_array().unwrap().is_empty());
+    }
 }
