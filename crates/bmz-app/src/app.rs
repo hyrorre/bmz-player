@@ -2240,7 +2240,7 @@ impl WinitApp {
                 mix.bgm_volume = value;
                 tracing::info!(value, "select skin bgm volume changed");
             }
-            17 | 18 | 19 => {}
+            17..=19 => {}
             _ => {
                 tracing::debug!(slider_type = hit.slider_type, "unsupported select skin slider");
             }

@@ -3108,10 +3108,7 @@ impl SkinDocument {
                 let slider = self.slider.iter().find(|slider| slider.id == destination.id)?;
                 self.destination_slider_hit(slider, destination, &enabled_options, state, x, y)
             })
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .next()
+            .next_back()
     }
 
     fn select_click_hits(
