@@ -2999,9 +2999,9 @@ impl SkinDocument {
         dynamic_timers: Option<&mut DynamicTimerRuntime>,
     ) -> (SkinDrawState, Option<&'a SelectRowSnapshot>) {
         let selected_row = snapshot.rows.iter().find(|row| row.index == snapshot.selected_index);
-        let mouse_position = snapshot
-            .mouse_position
-            .map(|(x, y)| (x.clamp(0.0, 1.0) * self.w as f32, y.clamp(0.0, 1.0) * self.h as f32));
+        let mouse_position = snapshot.mouse_position.map(|(x, y)| {
+            (x.clamp(0.0, 1.0) * self.w as f32, (1.0 - y.clamp(0.0, 1.0)) * self.h as f32)
+        });
         let mut state = SkinDrawState {
             elapsed_ms: (snapshot.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32,
             select_bar_elapsed_ms: (snapshot.selection_time.0 / 1_000)
@@ -3261,7 +3261,7 @@ impl SkinDocument {
             return None;
         }
         let mouse_x = x.clamp(0.0, 1.0) * self.w as f32;
-        let mouse_y = y.clamp(0.0, 1.0) * self.h as f32;
+        let mouse_y = (1.0 - y.clamp(0.0, 1.0)) * self.h as f32;
         let value = slider_value_at(slider, frame, mouse_x, mouse_y)?;
         Some(SkinSliderHit { slider_type: slider.slider_type, value })
     }
@@ -12463,7 +12463,7 @@ mod tests {
         .unwrap();
         let sources = mock_source("1", 100.0, 100.0);
         let inside =
-            SelectSnapshot { mouse_position: Some((0.16, 0.23)), ..SelectSnapshot::default() };
+            SelectSnapshot { mouse_position: Some((0.16, 0.75)), ..SelectSnapshot::default() };
         let outside =
             SelectSnapshot { mouse_position: Some((0.01, 0.01)), ..SelectSnapshot::default() };
 
@@ -12523,7 +12523,7 @@ mod tests {
                 &snapshot,
                 &crate::select_settings_dest::SelectSettingsDestIndex::default(),
                 0.35,
-                0.225,
+                0.775,
             )
             .unwrap();
 
@@ -12535,7 +12535,7 @@ mod tests {
                     &snapshot,
                     &crate::select_settings_dest::SelectSettingsDestIndex::default(),
                     0.70,
-                    0.225,
+                    0.775,
                 )
                 .is_none()
         );
