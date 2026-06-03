@@ -96,6 +96,13 @@ pub fn build_timing_map(initial_bpm: f64, mut events: Vec<TickTimingEvent>) -> T
 
         match event.kind {
             TickTimingEventKind::StopRaw { value } => {
+                segments.push(TimingSegment {
+                    start_tick: current_tick,
+                    end_tick: current_tick,
+                    start_time: current_time,
+                    end_time: current_time,
+                    bpm: current_bpm,
+                });
                 current_time = add_time_us(current_time, stop_raw_to_us(value, current_bpm));
             }
             TickTimingEventKind::SetBpm(bpm) => {
@@ -129,6 +136,10 @@ impl TimingMap {
     }
 
     pub fn tick_to_time(&self, tick: ChartTick) -> TimeUs {
+        if let Some(seg) = self.first_segment_starting_at(tick) {
+            return seg.start_time;
+        }
+
         let seg = self.find_segment_by_tick(tick);
         let delta = tick.0.saturating_sub(seg.start_tick.0);
         add_time_us(seg.start_time, ticks_to_us(delta, seg.bpm))
@@ -157,6 +168,11 @@ impl TimingMap {
     pub fn find_segment_by_time(&self, time: TimeUs) -> &TimingSegment {
         let idx = self.segments.partition_point(|seg| seg.end_time <= time);
         &self.segments[idx.min(self.segments.len() - 1)]
+    }
+
+    fn first_segment_starting_at(&self, tick: ChartTick) -> Option<&TimingSegment> {
+        let idx = self.segments.partition_point(|seg| seg.start_tick < tick);
+        self.segments.get(idx).filter(|seg| seg.start_tick == tick)
     }
 
     /// `time_to_tick` の連続版。STOP 区間内では止まっている tick を返す。
@@ -212,6 +228,13 @@ impl TimingMap {
 
             match event.kind {
                 Kind::Stop { duration_us } => {
+                    segments.push(TimingSegment {
+                        start_tick: current_tick,
+                        end_tick: current_tick,
+                        start_time: current_time,
+                        end_time: current_time,
+                        bpm: current_bpm,
+                    });
                     current_time = add_time_us(current_time, duration_us.max(0));
                 }
                 Kind::BpmChange { bpm } => {
@@ -290,7 +313,8 @@ mod tests {
 
         let map = build_timing_map(1.0, events);
 
-        assert_eq!(map.segments[0].start_time, TimeUs(i64::MAX));
+        assert_eq!(map.tick_to_time(ChartTick(0)), TimeUs(0));
+        assert_eq!(map.segments.last().unwrap().start_time, TimeUs(i64::MAX));
     }
 
     #[test]
@@ -330,5 +354,42 @@ mod tests {
         let after_stop = map.time_to_tick_f64(TimeUs(2_000_000 + stop_us + 500_000));
         let expected = stop_tick as f64 + 0.5 * 120.0 * TICKS_PER_BEAT as f64 / 60.0;
         assert!((after_stop - expected).abs() < 1e-3);
+    }
+
+    #[test]
+    fn tick_to_time_uses_stop_start_for_same_tick_notes() {
+        let stop_tick = TICKS_PER_BEAT as u64 * 4;
+        let stop_us = 1_000_000;
+        let events = vec![TimingEvent {
+            tick: ChartTick(stop_tick),
+            time: TimeUs(0),
+            kind: TimingEventKind::Stop { duration_us: stop_us },
+        }];
+
+        let map = TimingMap::from_chart_timing_events(120.0, &events);
+
+        assert_eq!(map.tick_to_time(ChartTick(stop_tick)), TimeUs(2_000_000));
+        assert_eq!(
+            map.tick_to_time(ChartTick(stop_tick + TICKS_PER_BEAT as u64)),
+            TimeUs(3_500_000)
+        );
+    }
+
+    #[test]
+    fn tick_to_time_uses_bpm_change_start_for_same_tick_notes() {
+        let change_tick = TICKS_PER_BEAT as u64 * 4;
+        let events = vec![TimingEvent {
+            tick: ChartTick(change_tick),
+            time: TimeUs(0),
+            kind: TimingEventKind::BpmChange { bpm: 0.0 },
+        }];
+
+        let map = TimingMap::from_chart_timing_events(120.0, &events);
+
+        assert_eq!(map.tick_to_time(ChartTick(change_tick)), TimeUs(2_000_000));
+        assert_eq!(
+            map.tick_to_time(ChartTick(change_tick + TICKS_PER_BEAT as u64)),
+            TimeUs(62_000_000)
+        );
     }
 }
