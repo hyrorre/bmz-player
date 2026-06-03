@@ -1667,8 +1667,23 @@ impl WinitApp {
 
     fn decide_snapshot(&self, decide: &DecideTransition) -> RenderSnapshot {
         let mut snapshot = decide.snapshot.clone();
-        snapshot.play_elapsed_time = elapsed_since(decide.started_at);
-        snapshot.fadeout_elapsed_ms = decide.fadeout_started_at.map(elapsed_since_ms);
+        let elapsed = match decide.fadeout_started_at {
+            Some(fadeout_started_at) => {
+                let fadeout_duration = self.decide_fadeout_duration();
+                let fadeout_elapsed = fadeout_started_at.elapsed().min(fadeout_duration);
+                let total_elapsed =
+                    fadeout_started_at.duration_since(decide.started_at) + fadeout_elapsed;
+                TimeUs(total_elapsed.as_micros().min(i64::MAX as u128) as i64)
+            }
+            None => elapsed_since(decide.started_at),
+        };
+        snapshot.play_elapsed_time = elapsed;
+        snapshot.fadeout_elapsed_ms = decide.fadeout_started_at.map(|started_at| {
+            let elapsed_ms = elapsed_since_ms(started_at);
+            let fadeout_ms =
+                self.decide_fadeout_duration().as_millis().min(i32::MAX as u128) as i32;
+            elapsed_ms.min(fadeout_ms)
+        });
         snapshot
     }
 
@@ -2168,6 +2183,10 @@ impl WinitApp {
             return;
         }
 
+        if self.pending_play_start.is_some() {
+            return;
+        }
+
         if self.finished_play.is_some() {
             // 終了アニメーション中 (result_exit=Some) は追加入力を受け付けない。
             if self.result_exit.is_none()
@@ -2454,6 +2473,10 @@ impl WinitApp {
                     _ => {}
                 }
             }
+            return;
+        }
+
+        if self.pending_play_start.is_some() {
             return;
         }
 
@@ -4344,6 +4367,10 @@ impl WinitApp {
             return;
         }
 
+        if !decide.cancel && !self.decide_play_start_ready() {
+            return;
+        }
+
         let Some(decide) = self.pending_decide.take() else {
             return;
         };
@@ -4359,6 +4386,10 @@ impl WinitApp {
         } else {
             self.enter_play_scene(decide.chart_id, decide.snapshot);
         }
+    }
+
+    fn decide_play_start_ready(&self) -> bool {
+        !self.pending_play_skin && self.pending_play_preload.is_none()
     }
 
     fn advance_play_ending(&mut self) {
