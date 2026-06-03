@@ -21,7 +21,25 @@ const user = useSupabaseUser()
             :description="`${user.email ?? 'ログイン中のユーザー'} としてログインしています。`"
           />
           <div class="flex flex-col gap-3 sm:flex-row">
-            <UButton color="primary" icon="i-lucide-log-out" size="xl" to="/signout">
+            <UButton color="primary" icon="i-lucide-user-pen" size="xl" to="/profile">
+              プロフィール編集
+            </UButton>
+            <UButton
+              color="neutral"
+              icon="i-lucide-settings"
+              size="xl"
+              to="/settings"
+              variant="subtle"
+            >
+              アカウント設定
+            </UButton>
+            <UButton
+              color="neutral"
+              icon="i-lucide-log-out"
+              size="xl"
+              to="/signout"
+              variant="subtle"
+            >
               ログアウト
             </UButton>
           </div>

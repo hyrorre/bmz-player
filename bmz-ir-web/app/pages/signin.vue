@@ -96,12 +96,23 @@ async function submit(event: FormSubmitEvent<SigninState>) {
         </template>
 
         <template #footer>
-          <p class="text-center text-sm text-neutral-300">
-            アカウントをお持ちでない場合は
-            <NuxtLink class="font-medium text-primary-300 hover:text-primary-200" to="/signup">
-              登録
-            </NuxtLink>
-          </p>
+          <div class="space-y-2 text-center text-sm text-neutral-300">
+            <p>
+              アカウントをお持ちでない場合は
+              <NuxtLink class="font-medium text-primary-300 hover:text-primary-200" to="/signup">
+                登録
+              </NuxtLink>
+            </p>
+            <p>
+              パスワードを忘れた場合は
+              <NuxtLink
+                class="font-medium text-primary-300 hover:text-primary-200"
+                to="/reset-password"
+              >
+                再設定
+              </NuxtLink>
+            </p>
+          </div>
         </template>
       </UAuthForm>
     </section>
