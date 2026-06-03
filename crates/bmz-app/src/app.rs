@@ -6296,6 +6296,15 @@ fn select_snapshot_rows(
                     has_long_notes: false,
                     has_mines: false,
                     has_random: false,
+                    chart_normal_notes: 0,
+                    chart_long_notes: 0,
+                    chart_scratch_notes: 0,
+                    chart_long_scratch_notes: 0,
+                    chart_density: 0.0,
+                    chart_peak_density: 0.0,
+                    chart_end_density: 0.0,
+                    chart_total_gauge: 0.0,
+                    chart_main_bpm: 0.0,
                     is_folder: true,
                     kind: *kind,
                     in_library: true,
@@ -6364,6 +6373,58 @@ fn select_snapshot_rows(
                             .is_some_and(|chart| chart.has_long_notes),
                         has_mines: row.chart.as_ref().is_some_and(|chart| chart.has_mines),
                         has_random: false,
+                        chart_normal_notes: row
+                            .chart_analysis
+                            .as_ref()
+                            .map(|analysis| analysis.normal_notes)
+                            .unwrap_or_else(|| {
+                                row.chart.as_ref().map(|chart| chart.total_notes).unwrap_or(0)
+                            }),
+                        chart_long_notes: row
+                            .chart_analysis
+                            .as_ref()
+                            .map(|analysis| analysis.long_notes)
+                            .unwrap_or(0),
+                        chart_scratch_notes: row
+                            .chart_analysis
+                            .as_ref()
+                            .map(|analysis| analysis.scratch_notes)
+                            .unwrap_or(0),
+                        chart_long_scratch_notes: row
+                            .chart_analysis
+                            .as_ref()
+                            .map(|analysis| analysis.long_scratch_notes)
+                            .unwrap_or(0),
+                        chart_density: row
+                            .chart_analysis
+                            .as_ref()
+                            .map(|analysis| analysis.density as f32)
+                            .unwrap_or(0.0),
+                        chart_peak_density: row
+                            .chart_analysis
+                            .as_ref()
+                            .map(|analysis| analysis.peak_density as f32)
+                            .unwrap_or(0.0),
+                        chart_end_density: row
+                            .chart_analysis
+                            .as_ref()
+                            .map(|analysis| analysis.end_density as f32)
+                            .unwrap_or(0.0),
+                        chart_total_gauge: row
+                            .chart_analysis
+                            .as_ref()
+                            .map(|analysis| analysis.total_gauge as f32)
+                            .unwrap_or(0.0),
+                        chart_main_bpm: row
+                            .chart_analysis
+                            .as_ref()
+                            .map(|analysis| analysis.main_bpm as f32)
+                            .unwrap_or_else(|| {
+                                row.chart
+                                    .as_ref()
+                                    .map(|chart| chart.initial_bpm as f32)
+                                    .unwrap_or(0.0)
+                            }),
                         is_folder: false,
                         kind: bmz_render::scene::SelectRowKind::Song,
                         in_library: row.in_library(),
@@ -6411,6 +6472,15 @@ fn select_snapshot_rows(
                     has_long_notes: false,
                     has_mines: false,
                     has_random: false,
+                    chart_normal_notes: 0,
+                    chart_long_notes: 0,
+                    chart_scratch_notes: 0,
+                    chart_long_scratch_notes: 0,
+                    chart_density: 0.0,
+                    chart_peak_density: 0.0,
+                    chart_end_density: 0.0,
+                    chart_total_gauge: 0.0,
+                    chart_main_bpm: 0.0,
                     is_folder: false,
                     kind: bmz_render::scene::SelectRowKind::Course,
                     in_library: row.exists_all_songs(),
@@ -6449,6 +6519,15 @@ fn select_snapshot_rows(
                         has_long_notes: false,
                         has_mines: false,
                         has_random: false,
+                        chart_normal_notes: 0,
+                        chart_long_notes: 0,
+                        chart_scratch_notes: 0,
+                        chart_long_scratch_notes: 0,
+                        chart_density: 0.0,
+                        chart_peak_density: 0.0,
+                        chart_end_density: 0.0,
+                        chart_total_gauge: 0.0,
+                        chart_main_bpm: 0.0,
                         is_folder: false,
                         kind: bmz_render::scene::SelectRowKind::Config,
                         in_library: true,
@@ -6489,6 +6568,15 @@ fn select_snapshot_rows(
                         has_long_notes: false,
                         has_mines: false,
                         has_random: false,
+                        chart_normal_notes: 0,
+                        chart_long_notes: 0,
+                        chart_scratch_notes: 0,
+                        chart_long_scratch_notes: 0,
+                        chart_density: 0.0,
+                        chart_peak_density: 0.0,
+                        chart_end_density: 0.0,
+                        chart_total_gauge: 0.0,
+                        chart_main_bpm: 0.0,
                         is_folder: false,
                         kind: bmz_render::scene::SelectRowKind::Config,
                         in_library: true,
@@ -6522,6 +6610,15 @@ fn select_snapshot_rows(
                     has_long_notes: false,
                     has_mines: false,
                     has_random: false,
+                    chart_normal_notes: 0,
+                    chart_long_notes: 0,
+                    chart_scratch_notes: 0,
+                    chart_long_scratch_notes: 0,
+                    chart_density: 0.0,
+                    chart_peak_density: 0.0,
+                    chart_end_density: 0.0,
+                    chart_total_gauge: 0.0,
+                    chart_main_bpm: 0.0,
                     is_folder: true,
                     kind: bmz_render::scene::SelectRowKind::SettingsFolder,
                     in_library: true,
@@ -7823,6 +7920,9 @@ mod tests {
         assert_eq!(snapshot_rows[3].clear_type, "Normal");
         assert_eq!(snapshot_rows[3].ex_score, Some(1234));
         assert_eq!(snapshot_rows[3].replay_slots, [true, false, false, false]);
+        assert_eq!(snapshot_rows[3].chart_normal_notes, 45);
+        assert_eq!(snapshot_rows[3].chart_long_notes, 6);
+        assert_eq!(snapshot_rows[3].chart_peak_density, 12.5);
     }
 
     #[test]
@@ -8018,6 +8118,20 @@ mod tests {
                 preview_file: String::new(),
                 has_long_notes: false,
                 has_mines: false,
+            }),
+            chart_analysis: Some(crate::storage::library_db::ChartAnalysis {
+                normal_notes: 40 + index as u32,
+                long_notes: 1 + index as u32,
+                scratch_notes: 3,
+                long_scratch_notes: 1,
+                density: 4.5,
+                peak_density: 12.5,
+                end_density: 8.25,
+                total_gauge: 260.0,
+                main_bpm: 128.0,
+                distribution: Vec::new(),
+                speed_changes: Vec::new(),
+                lane_notes: Vec::new(),
             }),
             fallback_title: String::new(),
             fallback_artist: String::new(),

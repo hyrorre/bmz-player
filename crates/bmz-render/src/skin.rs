@@ -1638,6 +1638,16 @@ pub struct SkinDrawState {
     pub select_in_library: bool,
     /// 選択中曲のノーツ数。
     pub select_total_notes: u32,
+    /// beatoraja SongInformation-derived selected chart detail numbers.
+    pub select_chart_normal_notes: u32,
+    pub select_chart_long_notes: u32,
+    pub select_chart_scratch_notes: u32,
+    pub select_chart_long_scratch_notes: u32,
+    pub select_chart_density: f32,
+    pub select_chart_peak_density: f32,
+    pub select_chart_end_density: f32,
+    pub select_chart_total_gauge: f32,
+    pub select_chart_main_bpm: f32,
     /// 選択中曲の代表BPM。
     pub select_bpm: f32,
     /// 選択中曲の最小BPM。
@@ -1813,6 +1823,15 @@ impl Default for SkinDrawState {
             select_is_folder: false,
             select_in_library: true,
             select_total_notes: 0,
+            select_chart_normal_notes: 0,
+            select_chart_long_notes: 0,
+            select_chart_scratch_notes: 0,
+            select_chart_long_scratch_notes: 0,
+            select_chart_density: 0.0,
+            select_chart_peak_density: 0.0,
+            select_chart_end_density: 0.0,
+            select_chart_total_gauge: 0.0,
+            select_chart_main_bpm: 0.0,
             select_bpm: 0.0,
             select_min_bpm: 0.0,
             select_max_bpm: 0.0,
@@ -3042,6 +3061,21 @@ impl SkinDocument {
             select_is_folder: selected_row.is_some_and(|row| row.is_folder),
             select_in_library: selected_row.is_none_or(|row| row.in_library),
             select_total_notes: selected_row.map(|row| row.total_notes).unwrap_or(0),
+            select_chart_normal_notes: selected_row.map(|row| row.chart_normal_notes).unwrap_or(0),
+            select_chart_long_notes: selected_row.map(|row| row.chart_long_notes).unwrap_or(0),
+            select_chart_scratch_notes: selected_row
+                .map(|row| row.chart_scratch_notes)
+                .unwrap_or(0),
+            select_chart_long_scratch_notes: selected_row
+                .map(|row| row.chart_long_scratch_notes)
+                .unwrap_or(0),
+            select_chart_density: selected_row.map(|row| row.chart_density).unwrap_or(0.0),
+            select_chart_peak_density: selected_row
+                .map(|row| row.chart_peak_density)
+                .unwrap_or(0.0),
+            select_chart_end_density: selected_row.map(|row| row.chart_end_density).unwrap_or(0.0),
+            select_chart_total_gauge: selected_row.map(|row| row.chart_total_gauge).unwrap_or(0.0),
+            select_chart_main_bpm: selected_row.map(|row| row.chart_main_bpm).unwrap_or(0.0),
             select_bpm: selected_row.map(|row| row.initial_bpm).unwrap_or(0.0),
             select_min_bpm: selected_row.map(|row| row.min_bpm).unwrap_or(0.0),
             select_max_bpm: selected_row.map(|row| row.max_bpm).unwrap_or(0.0),
@@ -3188,6 +3222,15 @@ impl SkinDocument {
                 select_is_folder: row.is_folder,
                 select_in_library: row.in_library,
                 select_total_notes: row.total_notes,
+                select_chart_normal_notes: row.chart_normal_notes,
+                select_chart_long_notes: row.chart_long_notes,
+                select_chart_scratch_notes: row.chart_scratch_notes,
+                select_chart_long_scratch_notes: row.chart_long_scratch_notes,
+                select_chart_density: row.chart_density,
+                select_chart_peak_density: row.chart_peak_density,
+                select_chart_end_density: row.chart_end_density,
+                select_chart_total_gauge: row.chart_total_gauge,
+                select_chart_main_bpm: row.chart_main_bpm,
                 select_length_ms: row.length_ms,
                 select_play_count: row.play_count,
                 select_clear_count: row.clear_count,
@@ -3294,6 +3337,15 @@ impl SkinDocument {
                 select_is_folder: row.is_folder,
                 select_in_library: row.in_library,
                 select_total_notes: row.total_notes,
+                select_chart_normal_notes: row.chart_normal_notes,
+                select_chart_long_notes: row.chart_long_notes,
+                select_chart_scratch_notes: row.chart_scratch_notes,
+                select_chart_long_scratch_notes: row.chart_long_scratch_notes,
+                select_chart_density: row.chart_density,
+                select_chart_peak_density: row.chart_peak_density,
+                select_chart_end_density: row.chart_end_density,
+                select_chart_total_gauge: row.chart_total_gauge,
+                select_chart_main_bpm: row.chart_main_bpm,
                 select_length_ms: row.length_ms,
                 select_play_count: row.play_count,
                 select_clear_count: row.clear_count,
@@ -6391,13 +6443,25 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         30 if state.select_screen => Some(state.select_play_count as i64),
         96 => Some(if state.play_level != 0 { state.play_level } else { state.select_play_level }),
         370 => Some(state.select_clear_index),
-        92 if state.select_screen => Some(state.select_bpm.round() as i64),
+        92 if state.select_screen => {
+            Some(select_chart_main_bpm(state).unwrap_or(state.select_bpm).round() as i64)
+        }
         92 => Some(state.main_bpm.round() as i64),
         100 => Some(skin_point_score(state) as i64),
         71 | 101 | 171 => Some(state.ex_score as i64),
         72 => Some(state.total_notes as i64 * 2),
         74 | 106 | 333 => Some(state.total_notes.max(state.select_total_notes) as i64),
-        350 => Some(state.select_total_notes as i64),
+        350 if state.select_screen => Some(select_chart_normal_notes(state) as i64),
+        351 if state.select_screen => Some(state.select_chart_long_notes as i64),
+        352 if state.select_screen => Some(state.select_chart_scratch_notes as i64),
+        353 if state.select_screen => Some(state.select_chart_long_scratch_notes as i64),
+        360 if state.select_screen => Some(state.select_chart_peak_density.floor() as i64),
+        361 if state.select_screen => Some(decimal_afterdot(state.select_chart_peak_density)),
+        362 if state.select_screen => Some(state.select_chart_end_density.floor() as i64),
+        363 if state.select_screen => Some(decimal_afterdot(state.select_chart_end_density)),
+        364 if state.select_screen => Some(state.select_chart_density.floor() as i64),
+        365 if state.select_screen => Some(decimal_afterdot(state.select_chart_density)),
+        368 if state.select_screen => Some(state.select_chart_total_gauge.floor() as i64),
         75 | 105 | 174 => Some(state.max_combo as i64),
         76 if state.select_screen => state.select_miss_count.map(|count| count as i64).or(Some(0)),
         76 => Some((state.judge_counts.bad + state.judge_counts.poor) as i64),
@@ -6684,6 +6748,22 @@ fn gauge_after_dot(gauge: f32) -> u32 {
 fn timing_afterdot(value: f32) -> i64 {
     let afterdot = ((value.abs() * 100.0) as i64) % 100;
     if value < 0.0 { -afterdot } else { afterdot }
+}
+
+fn decimal_afterdot(value: f32) -> i64 {
+    ((value.abs() * 100.0) as i64) % 100
+}
+
+fn select_chart_normal_notes(state: SkinDrawState) -> u32 {
+    if state.select_chart_normal_notes > 0 {
+        state.select_chart_normal_notes
+    } else {
+        state.select_total_notes
+    }
+}
+
+fn select_chart_main_bpm(state: SkinDrawState) -> Option<f32> {
+    (state.select_chart_main_bpm > 0.0).then_some(state.select_chart_main_bpm)
 }
 
 fn current_misscount(state: SkinDrawState) -> u32 {
@@ -14114,6 +14194,15 @@ mod tests {
             select_clear_index: 5,
             select_total_notes: 1200,
             select_bpm: 148.0,
+            select_chart_normal_notes: 900,
+            select_chart_long_notes: 180,
+            select_chart_scratch_notes: 100,
+            select_chart_long_scratch_notes: 20,
+            select_chart_density: 4.56,
+            select_chart_peak_density: 12.34,
+            select_chart_end_density: 7.89,
+            select_chart_total_gauge: 260.0,
+            select_chart_main_bpm: 150.0,
             select_min_bpm: 120.0,
             select_max_bpm: 180.0,
             select_length_ms: 183_000,
@@ -14142,9 +14231,19 @@ mod tests {
         assert_eq!(skin_state_number(74, state), Some(1200));
         assert_eq!(skin_state_number(90, state), Some(180));
         assert_eq!(skin_state_number(91, state), Some(120));
-        assert_eq!(skin_state_number(92, state), Some(148));
+        assert_eq!(skin_state_number(92, state), Some(150));
         assert_eq!(skin_state_number(160, state), Some(148));
-        assert_eq!(skin_state_number(350, state), Some(1200));
+        assert_eq!(skin_state_number(350, state), Some(900));
+        assert_eq!(skin_state_number(351, state), Some(180));
+        assert_eq!(skin_state_number(352, state), Some(100));
+        assert_eq!(skin_state_number(353, state), Some(20));
+        assert_eq!(skin_state_number(360, state), Some(12));
+        assert_eq!(skin_state_number(361, state), Some(34));
+        assert_eq!(skin_state_number(362, state), Some(7));
+        assert_eq!(skin_state_number(363, state), Some(89));
+        assert_eq!(skin_state_number(364, state), Some(4));
+        assert_eq!(skin_state_number(365, state), Some(56));
+        assert_eq!(skin_state_number(368, state), Some(260));
         assert_eq!(skin_state_number(71, state), Some(1234));
         assert_eq!(skin_state_number(1163, state), Some(3));
         assert_eq!(skin_state_number(1164, state), Some(3));
