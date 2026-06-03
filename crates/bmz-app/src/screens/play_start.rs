@@ -10,7 +10,7 @@ use bmz_gameplay::gauge::{GaugeAutoShiftMode, GaugeProperty};
 use bmz_gameplay::input::backend::{InputBackend, NullInputBackend};
 use bmz_gameplay::replay::ReplayPlayer;
 
-use crate::audio::{RunningPlaySession, open_prepared_play_audio};
+use crate::audio::{AudioRuntime, RunningPlaySession, open_prepared_play_audio};
 use crate::config::app_config::AppConfig;
 use crate::config::play::{gauge_auto_shift_from_config, gauge_type_from_config};
 use crate::config::profile_config::{GaugeAutoShiftConfig, GaugeTypeConfig, ProfileConfig};
@@ -139,6 +139,29 @@ pub fn start_running_play_session_for_chart_with_input_backend(
     start_options: PlayStartOptions,
     input_backend: Box<dyn InputBackend>,
 ) -> Result<RunningPlaySession> {
+    let runtime = AudioRuntime::open(&app_config.audio)?;
+    start_running_play_session_for_chart_with_audio_runtime_and_input_backend(
+        library_db,
+        score_db,
+        app_config,
+        profile,
+        chart_id,
+        start_options,
+        input_backend,
+        &runtime,
+    )
+}
+
+pub fn start_running_play_session_for_chart_with_audio_runtime_and_input_backend(
+    library_db: &LibraryDatabase,
+    score_db: &ScoreDatabase,
+    app_config: &AppConfig,
+    profile: &ProfileConfig,
+    chart_id: i64,
+    start_options: PlayStartOptions,
+    input_backend: Box<dyn InputBackend>,
+    runtime: &AudioRuntime,
+) -> Result<RunningPlaySession> {
     let chart_zero_time = start_options.chart_zero_time;
     let mut session_options = play_session_options_from_start(app_config, start_options);
     session_options.ln_policy_setting = profile.play.ln_mode_policy;
@@ -150,7 +173,7 @@ pub fn start_running_play_session_for_chart_with_input_backend(
         input_backend,
     )?;
     let score_key = prepared.score_key;
-    let mut running = open_prepared_play_audio(&app_config.audio, prepared, score_key)?;
+    let mut running = open_prepared_play_audio(runtime, prepared, score_key);
     running.best_ex_score = score_db.best_ex_score(score_key).unwrap_or(None);
     running.best_ghost =
         score_db.best_ghost(score_key, running.session.chart.total_notes).unwrap_or(None);
@@ -193,11 +216,11 @@ pub fn prepare_winit_play_session_from_preloaded(
 
 pub fn open_prepared_winit_play_session(
     score_db: &ScoreDatabase,
-    app_config: &AppConfig,
+    runtime: &AudioRuntime,
     prepared: PreparedWinitPlaySession,
 ) -> Result<StartedWinitPlaySession> {
     let score_key = prepared.prepared.score_key;
-    let mut running = open_prepared_play_audio(&app_config.audio, prepared.prepared, score_key)?;
+    let mut running = open_prepared_play_audio(runtime, prepared.prepared, score_key);
     running.best_ex_score = score_db.best_ex_score(score_key).unwrap_or(None);
     running.best_ghost =
         score_db.best_ghost(score_key, running.session.chart.total_notes).unwrap_or(None);
@@ -213,7 +236,8 @@ pub fn start_running_play_session_for_chart_with_winit_input(
     start_options: PlayStartOptions,
 ) -> Result<StartedWinitPlaySession> {
     let input = WinitInputBackend::default();
-    let running = start_running_play_session_for_chart_with_input_backend(
+    let runtime = AudioRuntime::open(&app_config.audio)?;
+    let running = start_running_play_session_for_chart_with_audio_runtime_and_input_backend(
         library_db,
         score_db,
         app_config,
@@ -221,6 +245,7 @@ pub fn start_running_play_session_for_chart_with_winit_input(
         chart_id,
         start_options,
         Box::new(input.clone()),
+        &runtime,
     )?;
     Ok(StartedWinitPlaySession { running, input })
 }

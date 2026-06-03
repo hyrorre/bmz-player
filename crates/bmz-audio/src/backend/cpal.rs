@@ -1,3 +1,4 @@
+use std::rc::{Rc, Weak as RcWeak};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -10,13 +11,40 @@ use crate::clock::AudioClock;
 use crate::engine::AudioEngine;
 
 pub type SharedAudioEngine = Arc<Mutex<AudioEngine>>;
+type SharedAudioSources = Arc<Mutex<Vec<AudioSource>>>;
 
 #[derive(Debug, Default)]
 pub struct CpalBackend;
 
 pub struct CpalOutput {
+    _shared: CpalSharedOutput,
+    source: CpalOutputSource,
+}
+
+#[derive(Clone)]
+pub struct CpalSharedOutput {
+    inner: Rc<CpalSharedOutputInner>,
+}
+
+struct CpalSharedOutputInner {
     stream: ::cpal::Stream,
+    sample_rate: u32,
+    current_frame: Arc<AtomicU64>,
+    sources: SharedAudioSources,
+    next_source_id: AtomicU64,
+}
+
+pub struct CpalOutputSource {
+    id: u64,
+    inner: RcWeak<CpalSharedOutputInner>,
+    pub engine: SharedAudioEngine,
     pub clock: AudioClock,
+}
+
+#[derive(Clone)]
+struct AudioSource {
+    id: u64,
+    engine: SharedAudioEngine,
 }
 
 #[derive(Debug, Error)]
@@ -36,6 +64,13 @@ pub enum CpalBackendError {
 
 impl CpalBackend {
     pub fn open_default(engine: SharedAudioEngine) -> Result<CpalOutput, CpalBackendError> {
+        let mut shared = Self::open_shared_default()?;
+        shared.play()?;
+        let source = shared.add_source(engine);
+        Ok(CpalOutput { _shared: shared, source })
+    }
+
+    pub fn open_shared_default() -> Result<CpalSharedOutput, CpalBackendError> {
         let host = ::cpal::default_host();
         let device =
             host.default_output_device().ok_or(CpalBackendError::MissingDefaultOutputDevice)?;
@@ -44,70 +79,134 @@ impl CpalBackend {
         let config = supported_config.config();
         let sample_rate = config.sample_rate.0;
         let current_frame = Arc::new(AtomicU64::new(0));
-
-        if let Ok(mut engine) = engine.lock() {
-            engine.mixer.output_sample_rate = sample_rate;
-        }
+        let sources = Arc::new(Mutex::new(Vec::new()));
 
         let stream = match sample_format {
             SampleFormat::F32 => build_output_stream::<f32>(
                 &device,
                 &config,
-                Arc::clone(&engine),
+                Arc::clone(&sources),
                 Arc::clone(&current_frame),
             )?,
             SampleFormat::I16 => build_output_stream::<i16>(
                 &device,
                 &config,
-                Arc::clone(&engine),
+                Arc::clone(&sources),
                 Arc::clone(&current_frame),
             )?,
             SampleFormat::U16 => build_output_stream::<u16>(
                 &device,
                 &config,
-                Arc::clone(&engine),
+                Arc::clone(&sources),
                 Arc::clone(&current_frame),
             )?,
-            _ => build_output_stream::<f32>(&device, &config, engine, Arc::clone(&current_frame))?,
+            _ => build_output_stream::<f32>(
+                &device,
+                &config,
+                Arc::clone(&sources),
+                Arc::clone(&current_frame),
+            )?,
         };
 
-        let clock = AudioClock::with_position(sample_rate, 0, 0, current_frame, false);
-
-        Ok(CpalOutput { stream, clock })
+        Ok(CpalSharedOutput {
+            inner: Rc::new(CpalSharedOutputInner {
+                stream,
+                sample_rate,
+                current_frame,
+                sources,
+                next_source_id: AtomicU64::new(1),
+            }),
+        })
     }
 }
 
 impl CpalOutput {
     pub fn play(&mut self, chart_zero_time: TimeUs) -> Result<(), CpalBackendError> {
-        self.clock.chart_zero_time_us = chart_zero_time.0;
-        self.clock.start_output_frame = self.clock.current_frame.load(Ordering::Relaxed);
-        self.stream.play()?;
-        self.clock.running = true;
+        self.source.play(chart_zero_time);
         Ok(())
     }
 
     pub fn pause(&mut self) -> Result<(), ::cpal::PauseStreamError> {
-        if !self.clock.running {
-            return Ok(());
+        self.source.pause();
+        Ok(())
+    }
+
+    pub fn clock(&self) -> AudioClock {
+        self.source.clock()
+    }
+}
+
+impl CpalSharedOutput {
+    pub fn play(&mut self) -> Result<(), CpalBackendError> {
+        self.inner.stream.play()?;
+        Ok(())
+    }
+
+    pub fn sample_rate(&self) -> u32 {
+        self.inner.sample_rate
+    }
+
+    pub fn add_source(&self, engine: SharedAudioEngine) -> CpalOutputSource {
+        if let Ok(mut engine) = engine.lock() {
+            engine.mixer.output_sample_rate = self.inner.sample_rate;
         }
 
-        self.stream.pause()?;
+        let id = self.inner.next_source_id.fetch_add(1, Ordering::Relaxed);
+        if let Ok(mut sources) = self.inner.sources.lock() {
+            sources.push(AudioSource { id, engine: Arc::clone(&engine) });
+        }
+
+        let clock = AudioClock::with_position(
+            self.inner.sample_rate,
+            0,
+            0,
+            Arc::clone(&self.inner.current_frame),
+            false,
+        );
+        CpalOutputSource { id, inner: Rc::downgrade(&self.inner), engine, clock }
+    }
+}
+
+impl CpalOutputSource {
+    pub fn play(&mut self, chart_zero_time: TimeUs) {
+        self.clock.chart_zero_time_us = chart_zero_time.0;
+        self.clock.start_output_frame = self.clock.current_frame.load(Ordering::Relaxed);
+        self.clock.running = true;
+    }
+
+    pub fn pause(&mut self) {
         self.clock.running = false;
-        Ok(())
+    }
+
+    pub fn clock(&self) -> AudioClock {
+        self.clock.clone()
+    }
+}
+
+impl Drop for CpalOutputSource {
+    fn drop(&mut self) {
+        let Some(inner) = self.inner.upgrade() else {
+            return;
+        };
+        if let Ok(mut sources) = inner.sources.lock() {
+            sources.retain(|source| source.id != self.id);
+        }
     }
 }
 
 fn build_output_stream<T>(
     device: &::cpal::Device,
     config: &StreamConfig,
-    engine: SharedAudioEngine,
+    sources: SharedAudioSources,
     current_frame: Arc<AtomicU64>,
 ) -> Result<::cpal::Stream, ::cpal::BuildStreamError>
 where
     T: ::cpal::SizedSample + OutputSample,
 {
     let channels = config.channels as usize;
-    let mut stereo_scratch = Vec::new();
+    let mut mix = Vec::new();
+    let mut source_scratch = Vec::new();
+    let mut source_engines = Vec::new();
     device.build_output_stream(
         config,
         move |data: &mut [T], _| {
@@ -117,7 +216,15 @@ where
             }
 
             let start_frame = current_frame.load(Ordering::Relaxed);
-            render_output(data, channels, start_frame, &engine, &mut stereo_scratch);
+            render_output(
+                data,
+                channels,
+                start_frame,
+                &sources,
+                &mut mix,
+                &mut source_scratch,
+                &mut source_engines,
+            );
             current_frame.fetch_add((data.len() / channels) as u64, Ordering::Relaxed);
         },
         move |error| {
@@ -131,22 +238,46 @@ fn render_output<T: OutputSample>(
     data: &mut [T],
     channels: usize,
     output_start_frame: u64,
-    engine: &SharedAudioEngine,
-    stereo: &mut Vec<f32>,
+    sources: &SharedAudioSources,
+    mix: &mut Vec<f32>,
+    source_scratch: &mut Vec<f32>,
+    source_engines: &mut Vec<SharedAudioEngine>,
 ) {
     if channels == 0 {
         return;
     }
 
     let frames = data.len() / channels;
-    stereo.resize(frames * 2, 0.0);
-    if let Ok(mut engine) = engine.lock() {
-        engine.render_stereo(output_start_frame, stereo);
-    } else {
-        stereo.fill(0.0);
+    mix_sources_stereo(output_start_frame, frames, sources, mix, source_scratch, source_engines);
+
+    write_interleaved_output(data, channels, mix);
+}
+
+fn mix_sources_stereo(
+    output_start_frame: u64,
+    frames: usize,
+    sources: &SharedAudioSources,
+    mix: &mut Vec<f32>,
+    source_scratch: &mut Vec<f32>,
+    source_engines: &mut Vec<SharedAudioEngine>,
+) {
+    mix.resize(frames * 2, 0.0);
+    mix.fill(0.0);
+
+    source_engines.clear();
+    if let Ok(sources) = sources.lock() {
+        source_engines.extend(sources.iter().map(|source| Arc::clone(&source.engine)));
     }
 
-    write_interleaved_output(data, channels, stereo);
+    source_scratch.resize(frames * 2, 0.0);
+    for engine in source_engines.iter() {
+        if let Ok(mut engine) = engine.lock() {
+            engine.render_stereo(output_start_frame, source_scratch);
+            for (dst, src) in mix.iter_mut().zip(source_scratch.iter()) {
+                *dst += *src;
+            }
+        }
+    }
 }
 
 fn write_interleaved_output<T: OutputSample>(data: &mut [T], channels: usize, stereo: &[f32]) {
@@ -218,13 +349,67 @@ mod tests {
     #[test]
     fn render_output_reuses_scratch_buffer() {
         let engine = Arc::new(Mutex::new(AudioEngine::default()));
+        let sources = Arc::new(Mutex::new(vec![AudioSource { id: 1, engine }]));
         let mut output = vec![1.0_f32; 4];
-        let mut scratch = Vec::with_capacity(16);
+        let mut mix = Vec::with_capacity(16);
+        let mut source_scratch = Vec::new();
+        let mut source_engines = Vec::new();
 
-        render_output(&mut output, 2, 0, &engine, &mut scratch);
+        render_output(
+            &mut output,
+            2,
+            0,
+            &sources,
+            &mut mix,
+            &mut source_scratch,
+            &mut source_engines,
+        );
 
         assert_eq!(output, vec![0.0, 0.0, 0.0, 0.0]);
-        assert_eq!(scratch.len(), 4);
-        assert!(scratch.capacity() >= 16);
+        assert_eq!(mix.len(), 4);
+        assert!(mix.capacity() >= 16);
+    }
+
+    #[test]
+    fn mix_sources_stereo_adds_registered_engines() {
+        use bmz_core::ids::SoundId;
+
+        let first = Arc::new(Mutex::new(AudioEngine::default()));
+        let second = Arc::new(Mutex::new(AudioEngine::default()));
+        {
+            let mut first = first.lock().unwrap();
+            first.insert_sample(
+                SoundId(1),
+                crate::sample::DecodedSample {
+                    channels: 1,
+                    sample_rate: 48_000,
+                    frames: vec![0.25],
+                },
+            );
+            first.play_now(SoundId(1), 1.0, false);
+        }
+        {
+            let mut second = second.lock().unwrap();
+            second.insert_sample(
+                SoundId(1),
+                crate::sample::DecodedSample {
+                    channels: 1,
+                    sample_rate: 48_000,
+                    frames: vec![0.5],
+                },
+            );
+            second.play_now(SoundId(1), 1.0, false);
+        }
+        let sources = Arc::new(Mutex::new(vec![
+            AudioSource { id: 1, engine: first },
+            AudioSource { id: 2, engine: second },
+        ]));
+        let mut mix = Vec::new();
+        let mut scratch = Vec::new();
+        let mut engines = Vec::new();
+
+        mix_sources_stereo(0, 1, &sources, &mut mix, &mut scratch, &mut engines);
+
+        assert_eq!(mix, vec![0.75, 0.75]);
     }
 }

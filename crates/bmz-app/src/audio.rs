@@ -2,7 +2,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, bail};
-use bmz_audio::backend::cpal::{CpalBackend, CpalOutput, SharedAudioEngine};
+use bmz_audio::backend::cpal::{
+    CpalBackend, CpalOutputSource, CpalSharedOutput, SharedAudioEngine,
+};
 use bmz_audio::clock::AudioClock;
 use bmz_audio::engine::AudioEngine;
 use bmz_audio::loader::LoadedSampleReport;
@@ -20,7 +22,13 @@ use crate::video_bga::ActiveVideoBgaDecoder;
 
 pub struct AppAudioOutput {
     pub engine: SharedAudioEngine,
-    pub output: CpalOutput,
+    _runtime: AudioRuntime,
+    source: CpalOutputSource,
+}
+
+#[derive(Clone)]
+pub struct AudioRuntime {
+    output: CpalSharedOutput,
 }
 
 pub struct RunningPlaySession {
@@ -45,15 +53,17 @@ pub struct RunningPlaySession {
 
 impl AppAudioOutput {
     pub fn clock(&self) -> AudioClock {
-        self.output.clock.clone()
+        self.source.clock()
     }
 
     pub fn pause(&mut self) -> Result<()> {
-        self.output.pause().context("failed to pause audio output")
+        self.source.pause();
+        Ok(())
     }
 
     pub fn play(&mut self, chart_zero_time: TimeUs) -> Result<()> {
-        self.output.play(chart_zero_time).context("failed to start audio output")
+        self.source.play(chart_zero_time);
+        Ok(())
     }
 }
 
@@ -71,35 +81,50 @@ impl RunningPlaySession {
     }
 }
 
-pub fn open_app_audio_output(config: &AudioConfig, engine: AudioEngine) -> Result<AppAudioOutput> {
-    ensure_default_device_supported(config)?;
+impl AudioRuntime {
+    pub fn open(config: &AudioConfig) -> Result<Self> {
+        ensure_default_device_supported(config)?;
+        let mut output = CpalBackend::open_shared_default()
+            .context("failed to open shared audio output stream")?;
+        output.play().context("failed to start shared audio output stream")?;
+        Ok(Self { output })
+    }
 
+    pub fn sample_rate(&self) -> u32 {
+        self.output.sample_rate()
+    }
+
+    fn add_source(&self, engine: SharedAudioEngine) -> CpalOutputSource {
+        self.output.add_source(engine)
+    }
+}
+
+pub fn open_app_audio_output(runtime: &AudioRuntime, engine: AudioEngine) -> AppAudioOutput {
     let engine = Arc::new(Mutex::new(engine));
-    let output = CpalBackend::open_default(Arc::clone(&engine))?;
-    Ok(AppAudioOutput { engine, output })
+    let source = runtime.add_source(Arc::clone(&engine));
+    AppAudioOutput { engine, _runtime: runtime.clone(), source }
 }
 
 /// アプリ全体で常時 ON のシステム SE / BGM 出力。
 ///
-/// プレイセッションの [`AppAudioOutput`] とは別の `cpal` ストリームを持ち、
-/// 選曲画面の BGM やシーン遷移の効果音をプレイ中であっても並行して鳴らせる。
-/// macOS / WASAPI shared / PulseAudio など、デフォルト出力デバイスに対して
-/// 複数ストリームの mix を OS 側がサポートしている環境を前提とする。
+/// プレイセッションの [`AppAudioOutput`] と同じ shared cpal stream に source
+/// として登録される。ASIO のようにデバイス側で複数 stream を開けない環境でも、
+/// BMZ 側で system / preview / play 音を 1 本に mix する。
 pub struct SystemAudio {
     pub engine: SharedAudioEngine,
-    pub output: CpalOutput,
+    _runtime: AudioRuntime,
+    _source: CpalOutputSource,
 }
 
 impl SystemAudio {
     /// クロックを開始してストリームを走らせ、`play_now` / `stop_sound` を即座に
     /// 反映できる状態にする。`chart_zero_time` 引数はシステム音のスケジューリング
     /// (`start_frame = 0`)には影響しないため `TimeUs(0)` 固定で良い。
-    pub fn open(config: &AudioConfig) -> Result<Self> {
-        ensure_default_device_supported(config)?;
+    pub fn open(runtime: &AudioRuntime) -> Self {
         let engine = Arc::new(Mutex::new(AudioEngine::default()));
-        let mut output = CpalBackend::open_default(Arc::clone(&engine))?;
-        output.play(TimeUs(0)).context("failed to start system audio output stream")?;
-        Ok(Self { engine, output })
+        let mut source = runtime.add_source(Arc::clone(&engine));
+        source.play(TimeUs(0));
+        Self { engine, _runtime: runtime.clone(), _source: source }
     }
 
     pub fn engine(&self) -> SharedAudioEngine {
@@ -108,15 +133,15 @@ impl SystemAudio {
 }
 
 pub fn open_prepared_play_audio(
-    config: &AudioConfig,
+    runtime: &AudioRuntime,
     prepared: PreparedPlaySession,
     score_key: ScoreKey,
-) -> Result<RunningPlaySession> {
-    let audio = open_app_audio_output(config, prepared.audio)?;
+) -> RunningPlaySession {
+    let audio = open_app_audio_output(runtime, prepared.audio);
     let mut session = prepared.session;
     session.audio_clock = audio.clock();
 
-    Ok(RunningPlaySession {
+    RunningPlaySession {
         session,
         audio,
         sample_report: prepared.sample_report,
@@ -131,7 +156,7 @@ pub fn open_prepared_play_audio(
         bga_frames: BgaFrameCatalog::new(),
         video_bga_decoders: HashMap::new(),
         failed_video_bga: HashSet::new(),
-    })
+    }
 }
 
 fn ensure_default_device_supported(config: &AudioConfig) -> Result<()> {
