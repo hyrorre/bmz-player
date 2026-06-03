@@ -127,6 +127,7 @@ struct WgpuRenderer {
     text_texture: Option<wgpu::Texture>,
     text_texture_view: Option<wgpu::TextureView>,
     text_texture_size: AtlasSize,
+    text_atlas: TextAtlasCache,
     text_buffer: Option<wgpu::Buffer>,
     text_buffer_capacity: usize,
     font: Option<FontArc>,
@@ -317,6 +318,9 @@ impl Renderer {
         let font = FontArc::try_from_vec(bytes)
             .map_err(|error| anyhow!("failed to parse font {}: {error}", path.display()))?;
         self.fonts.insert(id, font);
+        if let Some(gpu) = &mut self.gpu {
+            gpu.reset_text_atlas();
+        }
         Ok(())
     }
 
@@ -327,6 +331,9 @@ impl Renderer {
     ) -> Result<()> {
         let font = load_bitmap_font(path)?;
         self.bitmap_fonts.insert(id.into(), font);
+        if let Some(gpu) = &mut self.gpu {
+            gpu.reset_text_atlas();
+        }
         Ok(())
     }
 
@@ -336,12 +343,18 @@ impl Renderer {
         let font = FontArc::try_from_vec(bytes)
             .map_err(|error| anyhow!("failed to parse font bytes: {error}"))?;
         self.fonts.insert(id.into(), font);
+        if let Some(gpu) = &mut self.gpu {
+            gpu.reset_text_atlas();
+        }
         Ok(())
     }
 
     /// 事前にパース済みの bitmap font を登録する。
     pub fn install_bitmap_font(&mut self, id: impl Into<String>, font: BitmapFont) {
         self.bitmap_fonts.insert(id.into(), font);
+        if let Some(gpu) = &mut self.gpu {
+            gpu.reset_text_atlas();
+        }
     }
 
     pub fn set_skin_context(&mut self, skin_context: SkinContext) {
@@ -628,6 +641,7 @@ impl WgpuRenderer {
             text_texture: None,
             text_texture_view: None,
             text_texture_size: AtlasSize::default(),
+            text_atlas: TextAtlasCache::new(TEXT_ATLAS_WIDTH),
             text_buffer: None,
             text_buffer_capacity: 0,
             font: load_default_font(),
@@ -866,20 +880,21 @@ impl WgpuRenderer {
     }
 
     fn build_text_frame(
-        &self,
+        &mut self,
         plan: &DrawPlan,
         fonts: &HashMap<String, FontArc>,
         bitmap_fonts: &HashMap<String, BitmapFont>,
     ) -> TextFrame {
-        let Some(font) = &self.font else {
+        let Some(default_font) = self.font.clone() else {
             return TextFrame::default();
         };
-        build_text_frame(
+        build_text_frame_with_cache(
             plan,
-            font,
+            &default_font,
             fonts,
             bitmap_fonts,
             SurfaceSize { width: self.config.width, height: self.config.height },
+            &mut self.text_atlas,
         )
     }
 
@@ -891,31 +906,68 @@ impl WgpuRenderer {
             self.queue.write_buffer(buffer, 0, &frame.instances);
         }
 
-        if frame.pixels.is_empty() || frame.size.width == 0 || frame.size.height == 0 {
+        if frame.size.width == 0 || frame.size.height == 0 {
             return;
         }
 
+        let recreate_texture = self.text_texture_size != frame.size || self.text_texture.is_none();
         self.ensure_text_texture(frame.size);
         let texture = self.text_texture.as_ref().expect("text texture exists after ensure");
-        self.queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &frame.pixels,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(frame.size.width * 4),
-                rows_per_image: Some(frame.size.height),
-            },
-            wgpu::Extent3d {
-                width: frame.size.width,
-                height: frame.size.height,
-                depth_or_array_layers: 1,
-            },
-        );
+        if recreate_texture {
+            let pixels = self.text_atlas.pixels_for_size(frame.size);
+            self.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &pixels,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(frame.size.width * 4),
+                    rows_per_image: Some(frame.size.height),
+                },
+                wgpu::Extent3d {
+                    width: frame.size.width,
+                    height: frame.size.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+            return;
+        }
+
+        for region in &frame.dirty_regions {
+            if region.pixels.is_empty() || region.size.width == 0 || region.size.height == 0 {
+                continue;
+            }
+            self.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d { x: region.origin.0, y: region.origin.1, z: 0 },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &region.pixels,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(region.size.width * 4),
+                    rows_per_image: Some(region.size.height),
+                },
+                wgpu::Extent3d {
+                    width: region.size.width,
+                    height: region.size.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+    }
+
+    fn reset_text_atlas(&mut self) {
+        self.text_atlas = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
+        self.text_texture = None;
+        self.text_texture_view = None;
+        self.text_texture_size = AtlasSize::default();
     }
 
     fn ensure_text_buffer(&mut self, used_bytes: usize) {
@@ -1022,11 +1074,20 @@ struct AtlasSize {
 #[derive(Debug, Default)]
 struct TextFrame {
     size: AtlasSize,
+    #[cfg(test)]
     pixels: Vec<u8>,
+    dirty_regions: Vec<TextAtlasDirtyRegion>,
     instances: Vec<u8>,
     /// `DrawCommand::Text` ごとに生成された quad 数を、commands 内の出現順で持つ。
     /// 描画ステップ単位で text instance buffer をスライスするのに使う。
     command_quad_counts: Vec<usize>,
+}
+
+#[derive(Debug, Clone)]
+struct TextAtlasDirtyRegion {
+    origin: (u32, u32),
+    size: AtlasSize,
+    pixels: Vec<u8>,
 }
 
 /// `DrawPlan.commands` の順序を保ったまま 1 レンダーパスで描くための描画ステップ。
@@ -1183,6 +1244,7 @@ fn push_or_extend_image(
     steps.push(DrawStep::Image { texture, blend, linear, range });
 }
 
+#[cfg(test)]
 fn build_text_frame(
     plan: &DrawPlan,
     default_font: &FontArc,
@@ -1221,6 +1283,543 @@ fn build_text_frame(
     frame
 }
 
+fn build_text_frame_with_cache(
+    plan: &DrawPlan,
+    default_font: &FontArc,
+    fonts: &HashMap<String, FontArc>,
+    bitmap_fonts: &HashMap<String, BitmapFont>,
+    surface: SurfaceSize,
+    atlas: &mut TextAtlasCache,
+) -> TextFrame {
+    if !surface.is_drawable() {
+        return TextFrame::default();
+    }
+
+    atlas.begin_frame();
+    let mut builder = CachedTextFrameBuilder::new(atlas);
+    let mut command_quad_counts = Vec::new();
+    for command in &plan.commands {
+        let DrawCommand::Text { origin, text, style } = command else {
+            continue;
+        };
+        let quads_before = builder.quads.len();
+        if let Some(font_id) = style.font_id.as_deref()
+            && let Some(bitmap_font) = bitmap_fonts.get(font_id)
+        {
+            builder.push_bitmap_text(origin, text, style.clone(), font_id, bitmap_font, surface);
+        } else {
+            let font_id = style.font_id.as_deref().unwrap_or(DEFAULT_TEXT_FONT_ID);
+            let font = style
+                .font_id
+                .as_ref()
+                .and_then(|font_id| fonts.get(font_id))
+                .unwrap_or(default_font);
+            builder.push_text(origin, text, style.clone(), font_id, font, surface);
+        }
+        command_quad_counts.push(builder.quads.len() - quads_before);
+    }
+    builder.finish(command_quad_counts)
+}
+
+const DEFAULT_TEXT_FONT_ID: &str = "<default>";
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct TextGlyphKey {
+    kind: TextGlyphKind,
+    font_id: String,
+    ch: char,
+    scale_bits: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum TextGlyphKind {
+    Vector,
+    Bitmap,
+}
+
+#[derive(Debug, Clone)]
+struct CachedGlyph {
+    atlas_origin: (u32, u32),
+    width: u32,
+    height: u32,
+    offset_x: f32,
+    offset_y: f32,
+}
+
+#[derive(Debug)]
+struct TextAtlasCache {
+    width: u32,
+    pen_x: u32,
+    pen_y: u32,
+    row_height: u32,
+    pixels: Vec<u8>,
+    glyphs: HashMap<TextGlyphKey, CachedGlyph>,
+    dirty_regions: Vec<TextAtlasDirtyRegion>,
+}
+
+impl TextAtlasCache {
+    fn new(width: u32) -> Self {
+        Self {
+            width,
+            pen_x: 0,
+            pen_y: 0,
+            row_height: 0,
+            pixels: Vec::new(),
+            glyphs: HashMap::new(),
+            dirty_regions: Vec::new(),
+        }
+    }
+
+    fn begin_frame(&mut self) {
+        self.dirty_regions.clear();
+    }
+
+    fn atlas_height(&self) -> u32 {
+        (self.pen_y + self.row_height).max(1)
+    }
+
+    fn size(&self) -> AtlasSize {
+        AtlasSize { width: self.width, height: self.atlas_height() }
+    }
+
+    fn pixels_for_size(&self, size: AtlasSize) -> Vec<u8> {
+        let mut pixels = self.pixels.clone();
+        pixels.resize((size.width * size.height * 4) as usize, 0);
+        pixels
+    }
+
+    fn cached_vector_glyph(
+        &mut self,
+        font_id: &str,
+        ch: char,
+        scale: PxScale,
+        font: &FontArc,
+    ) -> Option<CachedGlyph> {
+        let key = TextGlyphKey {
+            kind: TextGlyphKind::Vector,
+            font_id: font_id.to_string(),
+            ch,
+            scale_bits: scale.x.to_bits(),
+        };
+        if let Some(glyph) = self.glyphs.get(&key) {
+            return Some(glyph.clone());
+        }
+
+        let scaled_font = font.as_scaled(scale);
+        let baseline_y = scaled_font.ascent();
+        let glyph = Glyph { id: font.glyph_id(ch), scale, position: point(0.0, baseline_y) };
+        let outlined = font.outline_glyph(glyph)?;
+        let bounds = outlined.px_bounds();
+        let width = bounds.width().ceil().max(0.0) as u32;
+        let height = bounds.height().ceil().max(0.0) as u32;
+        if width == 0 || height == 0 {
+            return None;
+        }
+
+        let mut pixels = vec![0; (width * height * 4) as usize];
+        outlined.draw(|x, y, coverage| {
+            let index = ((y * width + x) * 4) as usize;
+            let coverage_u8 = (coverage * 255.0).clamp(0.0, 255.0) as u8;
+            if let Some(pixel) = pixels.get_mut(index..index + 4)
+                && coverage_u8 >= pixel[3]
+            {
+                pixel[0] = 255;
+                pixel[1] = 255;
+                pixel[2] = 255;
+                pixel[3] = coverage_u8;
+            }
+        });
+
+        Some(self.insert_glyph_pixels(
+            key,
+            width,
+            height,
+            bounds.min.x,
+            bounds.min.y - baseline_y,
+            pixels,
+        ))
+    }
+
+    fn cached_bitmap_glyph(
+        &mut self,
+        font_id: &str,
+        ch: char,
+        glyph: crate::bitmap_font::BitmapFontGlyph,
+        page: &crate::bitmap_font::BitmapFontPage,
+        font: &BitmapFont,
+        scale: f32,
+    ) -> CachedGlyph {
+        let key = TextGlyphKey {
+            kind: TextGlyphKind::Bitmap,
+            font_id: font_id.to_string(),
+            ch,
+            scale_bits: scale.to_bits(),
+        };
+        if let Some(glyph) = self.glyphs.get(&key) {
+            return glyph.clone();
+        }
+
+        let width = (glyph.width as f32 * scale).ceil().max(1.0) as u32;
+        let height = (glyph.height as f32 * scale).ceil().max(1.0) as u32;
+        let mut pixels = vec![0; (width * height * 4) as usize];
+        for dst_y in 0..height {
+            for dst_x in 0..width {
+                let src_x = glyph.x + (dst_x as f32 / scale).floor() as u32;
+                let src_y = glyph.y + (dst_y as f32 / scale).floor() as u32;
+                if src_x >= page.image.width || src_y >= page.image.height {
+                    continue;
+                }
+                let src_index = ((src_y * page.image.width + src_x) * 4) as usize;
+                let dst_index = ((dst_y * width + dst_x) * 4) as usize;
+                if let (Some(src), Some(dst)) = (
+                    page.image.pixels.get(src_index..src_index + 4),
+                    pixels.get_mut(dst_index..dst_index + 4),
+                ) && src[3] >= dst[3]
+                {
+                    dst.copy_from_slice(src);
+                }
+            }
+        }
+
+        self.insert_glyph_pixels(
+            key,
+            width,
+            height,
+            glyph.xoffset as f32 * scale,
+            (glyph.yoffset as f32 - font.ascent) * scale,
+            pixels,
+        )
+    }
+
+    fn insert_glyph_pixels(
+        &mut self,
+        key: TextGlyphKey,
+        width: u32,
+        height: u32,
+        offset_x: f32,
+        offset_y: f32,
+        pixels: Vec<u8>,
+    ) -> CachedGlyph {
+        let atlas_origin = self.reserve(width, height);
+        self.blit_region(atlas_origin, width, height, &pixels);
+        self.dirty_regions.push(TextAtlasDirtyRegion {
+            origin: atlas_origin,
+            size: AtlasSize { width, height },
+            pixels,
+        });
+        let cached = CachedGlyph { atlas_origin, width, height, offset_x, offset_y };
+        self.glyphs.insert(key, cached.clone());
+        cached
+    }
+
+    fn reserve(&mut self, glyph_width: u32, glyph_height: u32) -> (u32, u32) {
+        let padded_width = glyph_width + TEXT_ATLAS_PADDING * 2;
+        let padded_height = glyph_height + TEXT_ATLAS_PADDING * 2;
+        if self.pen_x + padded_width > self.width {
+            self.pen_x = 0;
+            self.pen_y += self.row_height;
+            self.row_height = 0;
+        }
+
+        let origin = (self.pen_x + TEXT_ATLAS_PADDING, self.pen_y + TEXT_ATLAS_PADDING);
+        self.pen_x += padded_width;
+        self.row_height = self.row_height.max(padded_height);
+        self.ensure_height(self.pen_y + self.row_height);
+        origin
+    }
+
+    fn ensure_height(&mut self, height: u32) {
+        let needed = (self.width * height * 4) as usize;
+        if self.pixels.len() < needed {
+            self.pixels.resize(needed, 0);
+        }
+    }
+
+    fn blit_region(&mut self, atlas_origin: (u32, u32), width: u32, height: u32, pixels: &[u8]) {
+        for y in 0..height {
+            let dst_start = (((atlas_origin.1 + y) * self.width + atlas_origin.0) * 4) as usize;
+            let src_start = (y * width * 4) as usize;
+            let len = (width * 4) as usize;
+            if let (Some(dst), Some(src)) = (
+                self.pixels.get_mut(dst_start..dst_start + len),
+                pixels.get(src_start..src_start + len),
+            ) {
+                dst.copy_from_slice(src);
+            }
+        }
+    }
+}
+
+struct CachedTextFrameBuilder<'a> {
+    atlas: &'a mut TextAtlasCache,
+    quads: Vec<TextQuad>,
+}
+
+impl<'a> CachedTextFrameBuilder<'a> {
+    fn new(atlas: &'a mut TextAtlasCache) -> Self {
+        Self { atlas, quads: Vec::new() }
+    }
+
+    fn push_bitmap_text(
+        &mut self,
+        origin: &Point,
+        text: &str,
+        style: TextStyle,
+        font_id: &str,
+        font: &BitmapFont,
+        surface: SurfaceSize,
+    ) {
+        if let Some(shadow) = style.shadow.filter(|shadow| shadow.color.a > 0.0) {
+            let mut shadow_style = style.clone();
+            shadow_style.color = shadow.color;
+            shadow_style.outline = None;
+            shadow_style.shadow = None;
+            let shadow_origin =
+                Point { x: origin.x + shadow.offset.x, y: origin.y + shadow.offset.y };
+            self.push_bitmap_text(&shadow_origin, text, shadow_style, font_id, font, surface);
+        }
+        if let Some(outline) = style.outline.filter(|outline| outline.color.a > 0.0) {
+            let mut outline_style = style.clone();
+            outline_style.color = outline.color;
+            outline_style.outline = None;
+            outline_style.shadow = None;
+            let outline_y = outline.width;
+            let outline_x = outline.width * surface.height as f32 / surface.width as f32;
+            for (offset_x, offset_y) in [
+                (-outline_x, -outline_y),
+                (0.0, -outline_y),
+                (outline_x, -outline_y),
+                (-outline_x, 0.0),
+                (outline_x, 0.0),
+                (-outline_x, outline_y),
+                (0.0, outline_y),
+                (outline_x, outline_y),
+            ] {
+                let outline_origin = Point { x: origin.x + offset_x, y: origin.y + offset_y };
+                self.push_bitmap_text(
+                    &outline_origin,
+                    text,
+                    outline_style.clone(),
+                    font_id,
+                    font,
+                    surface,
+                );
+            }
+        }
+
+        let design_size = if font.size > 0 { font.size } else { font.line_height.max(1) };
+        let mut scale = (style.size * surface.height as f32 / design_size as f32).max(0.01);
+        let mut text_width = bitmap_text_width_px(text, font, scale);
+        let max_width = style.max_width.max(0.0) * surface.width as f32;
+        let text = if max_width > 0.0 && text_width > max_width {
+            match style.overflow {
+                TextOverflow::Overflow => std::borrow::Cow::Borrowed(text),
+                TextOverflow::Shrink => {
+                    scale = (scale * max_width / text_width).max(0.01);
+                    std::borrow::Cow::Borrowed(text)
+                }
+                TextOverflow::Truncate => std::borrow::Cow::Owned(truncate_bitmap_text_to_width(
+                    text, font, max_width, scale,
+                )),
+            }
+        } else {
+            std::borrow::Cow::Borrowed(text)
+        };
+        text_width = bitmap_text_width_px(&text, font, scale);
+        let align_offset = match style.align {
+            TextAlign::Left => 0.0,
+            TextAlign::Center if max_width > 0.0 => (max_width - text_width) / 2.0,
+            TextAlign::Right if max_width > 0.0 => max_width - text_width,
+            _ => 0.0,
+        };
+        let mut cursor_x = origin.x * surface.width as f32 + align_offset.max(0.0);
+        let text_top_y = origin.y * surface.height as f32;
+
+        for ch in text.chars() {
+            let Some(glyph) = font.glyphs.get(&ch) else {
+                continue;
+            };
+            if glyph.width > 0
+                && glyph.height > 0
+                && let Some(page) = font.pages.get(&glyph.page)
+            {
+                let cached = self.atlas.cached_bitmap_glyph(font_id, ch, *glyph, page, font, scale);
+                self.quads.push(TextQuad {
+                    x: (cursor_x + cached.offset_x) / surface.width as f32,
+                    y: (text_top_y + cached.offset_y) / surface.height as f32,
+                    width: cached.width as f32 / surface.width as f32,
+                    height: cached.height as f32 / surface.height as f32,
+                    atlas_origin: cached.atlas_origin,
+                    glyph_width: cached.width,
+                    glyph_height: cached.height,
+                    color: style.color,
+                });
+            }
+            cursor_x += glyph.xadvance as f32 * scale;
+        }
+    }
+
+    fn push_text(
+        &mut self,
+        origin: &Point,
+        text: &str,
+        style: TextStyle,
+        font_id: &str,
+        font: &FontArc,
+        surface: SurfaceSize,
+    ) {
+        if let Some(shadow) = style.shadow.filter(|shadow| shadow.color.a > 0.0) {
+            let mut shadow_style = style.clone();
+            shadow_style.color = shadow.color;
+            shadow_style.outline = None;
+            shadow_style.shadow = None;
+            let shadow_origin =
+                Point { x: origin.x + shadow.offset.x, y: origin.y + shadow.offset.y };
+            self.push_text(&shadow_origin, text, shadow_style, font_id, font, surface);
+        }
+        if let Some(outline) = style.outline.filter(|outline| outline.color.a > 0.0) {
+            let mut outline_style = style.clone();
+            outline_style.color = outline.color;
+            outline_style.outline = None;
+            outline_style.shadow = None;
+            let outline_y = outline.width;
+            let outline_x = outline.width * surface.height as f32 / surface.width as f32;
+            for (offset_x, offset_y) in [
+                (-outline_x, -outline_y),
+                (0.0, -outline_y),
+                (outline_x, -outline_y),
+                (-outline_x, 0.0),
+                (outline_x, 0.0),
+                (-outline_x, outline_y),
+                (0.0, outline_y),
+                (outline_x, outline_y),
+            ] {
+                let outline_origin = Point { x: origin.x + offset_x, y: origin.y + offset_y };
+                self.push_text(
+                    &outline_origin,
+                    text,
+                    outline_style.clone(),
+                    font_id,
+                    font,
+                    surface,
+                );
+            }
+        }
+
+        let mut px_size = (style.size * surface.height as f32).max(1.0);
+        let max_width = style.max_width.max(0.0) * surface.width as f32;
+        let mut text = std::borrow::Cow::Borrowed(text);
+        let mut scale = PxScale::from(px_size);
+        let mut scaled_font = font.as_scaled(scale);
+        let mut text_width = text_width_px(&text, font, &scaled_font);
+        if style.wrapping && max_width > 0.0 {
+            let lines = wrap_text_to_width(&text, font, &scaled_font, max_width);
+            let line_height = (scaled_font.ascent() - scaled_font.descent()
+                + scaled_font.line_gap())
+            .max(px_size);
+            let origin_x = origin.x * surface.width as f32;
+            let first_baseline_y = origin.y * surface.height as f32 + scaled_font.ascent();
+            for (index, line) in lines.iter().enumerate() {
+                let line_width = text_width_px(line, font, &scaled_font);
+                let baseline_y = first_baseline_y + line_height * index as f32;
+                self.push_text_line(
+                    origin_x,
+                    baseline_y,
+                    line,
+                    line_width,
+                    scale,
+                    style.clone(),
+                    font_id,
+                    font,
+                    surface,
+                );
+            }
+            return;
+        }
+        if max_width > 0.0 && text_width > max_width {
+            match style.overflow {
+                TextOverflow::Overflow => {}
+                TextOverflow::Shrink => {
+                    px_size = (px_size * max_width / text_width).max(1.0);
+                    scale = PxScale::from(px_size);
+                    scaled_font = font.as_scaled(scale);
+                    text_width = text_width_px(&text, font, &scaled_font);
+                }
+                TextOverflow::Truncate => {
+                    text = std::borrow::Cow::Owned(truncate_text_to_width(
+                        &text,
+                        font,
+                        &scaled_font,
+                        max_width,
+                    ));
+                    text_width = text_width_px(&text, font, &scaled_font);
+                }
+            }
+        }
+        let cursor_x = origin.x * surface.width as f32;
+        let baseline_y = origin.y * surface.height as f32 + scaled_font.ascent();
+
+        self.push_text_line(
+            cursor_x, baseline_y, &text, text_width, scale, style, font_id, font, surface,
+        );
+    }
+
+    fn push_text_line(
+        &mut self,
+        origin_x: f32,
+        baseline_y: f32,
+        text: &str,
+        text_width: f32,
+        scale: PxScale,
+        style: TextStyle,
+        font_id: &str,
+        font: &FontArc,
+        surface: SurfaceSize,
+    ) {
+        let scaled_font = font.as_scaled(scale);
+        let max_width = style.max_width.max(0.0) * surface.width as f32;
+        let align_offset = match style.align {
+            TextAlign::Left => 0.0,
+            TextAlign::Center if max_width > 0.0 => (max_width - text_width) / 2.0,
+            TextAlign::Right if max_width > 0.0 => max_width - text_width,
+            _ => 0.0,
+        };
+        let mut cursor_x = origin_x + align_offset.max(0.0);
+
+        for ch in text.chars() {
+            let glyph_id = font.glyph_id(ch);
+            let advance = scaled_font.h_advance(glyph_id);
+            if let Some(cached) = self.atlas.cached_vector_glyph(font_id, ch, scale, font) {
+                self.quads.push(TextQuad {
+                    x: (cursor_x + cached.offset_x) / surface.width as f32,
+                    y: (baseline_y + cached.offset_y) / surface.height as f32,
+                    width: cached.width as f32 / surface.width as f32,
+                    height: cached.height as f32 / surface.height as f32,
+                    atlas_origin: cached.atlas_origin,
+                    glyph_width: cached.width,
+                    glyph_height: cached.height,
+                    color: style.color,
+                });
+            }
+            cursor_x += advance;
+        }
+    }
+
+    fn finish(self, command_quad_counts: Vec<usize>) -> TextFrame {
+        let size = self.atlas.size();
+        let instances = encode_text_quads(&self.quads, size.width, size.height);
+        TextFrame {
+            size,
+            #[cfg(test)]
+            pixels: Vec::new(),
+            dirty_regions: self.atlas.dirty_regions.clone(),
+            instances,
+            command_quad_counts,
+        }
+    }
+}
+
+#[cfg(test)]
 struct TextAtlasBuilder {
     width: u32,
     pen_x: u32,
@@ -1241,6 +1840,7 @@ struct TextQuad {
     color: Color,
 }
 
+#[cfg(test)]
 impl TextAtlasBuilder {
     fn new(width: u32) -> Self {
         Self { width, pen_x: 0, pen_y: 0, row_height: 0, pixels: Vec::new(), quads: Vec::new() }
@@ -1575,7 +2175,9 @@ impl TextAtlasBuilder {
         let instances = encode_text_quads(&self.quads, self.width, height);
         TextFrame {
             size: AtlasSize { width: self.width, height },
+            #[cfg(test)]
             pixels: self.pixels,
+            dirty_regions: Vec::new(),
             instances,
             command_quad_counts: Vec::new(),
         }
@@ -2442,6 +3044,54 @@ mod tests {
         let frame = build_text_frame(&plan, &font, &HashMap::new(), &HashMap::new(), surface);
 
         assert_eq!(frame.instances.len(), TEXT_INSTANCE_BYTES * 2);
+    }
+
+    #[test]
+    fn cached_text_frame_only_marks_new_glyphs_dirty() {
+        let Some(font) = load_default_font() else { return };
+        let surface = SurfaceSize { width: 320, height: 240 };
+        let plan = DrawPlan {
+            clear: Color::rgb(0.0, 0.0, 0.0),
+            commands: vec![DrawCommand::Text {
+                origin: Point { x: 0.1, y: 0.1 },
+                text: "FPS 20".to_string(),
+                style: TextStyle {
+                    font_id: None,
+                    size: 0.1,
+                    color: Color::rgb(1.0, 1.0, 1.0),
+                    layer: crate::plan::TextLayer::Skin,
+                    align: TextAlign::Left,
+                    max_width: 0.0,
+                    overflow: TextOverflow::Overflow,
+                    wrapping: false,
+                    outline: None,
+                    shadow: None,
+                },
+            }],
+        };
+        let mut atlas = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
+
+        let first = build_text_frame_with_cache(
+            &plan,
+            &font,
+            &HashMap::new(),
+            &HashMap::new(),
+            surface,
+            &mut atlas,
+        );
+        let second = build_text_frame_with_cache(
+            &plan,
+            &font,
+            &HashMap::new(),
+            &HashMap::new(),
+            surface,
+            &mut atlas,
+        );
+
+        assert!(!first.instances.is_empty());
+        assert!(!first.dirty_regions.is_empty());
+        assert_eq!(second.instances.len(), first.instances.len());
+        assert!(second.dirty_regions.is_empty());
     }
 
     #[test]
