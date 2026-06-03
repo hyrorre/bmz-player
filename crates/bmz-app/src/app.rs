@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
@@ -94,15 +96,13 @@ use crate::skin_loader::{
     set_decoded_skin_context, upload_decoded_skin,
 };
 use crate::songs_cmd::scan_songs;
-use crate::storage::library_db::LibraryDatabase;
+use crate::storage::library_db::{ChartDistributionSecond, LibraryDatabase};
 use crate::storage::migration::migrate_library_db;
 use crate::storage::replay::load_replay_for_chart;
 use crate::ui::{DebugInfo, EguiLayer, SceneSkinDefs, SkinCandidate, SkinCatalog, SkinConfigMeta};
 use bmz_render::skin::{
     SkinClickHit, SkinClickTarget, SkinDocument, SkinDocumentTexture, SkinManifest, SkinSliderHit,
 };
-use std::collections::BTreeMap;
-
 const SAMPLE_PLAYABLE_TITLE: &str = "BMZ Sample Playable";
 
 pub async fn run() -> Result<()> {
@@ -209,6 +209,7 @@ struct WinitApp {
     play_table_text_secondary: String,
     play_table_text_fallback: String,
     select_items: Vec<SelectItem>,
+    select_distribution_cache: RefCell<HashMap<i64, Vec<ChartDistributionSecond>>>,
     folder_stack: Vec<String>,
     /// `folder_stack` の各階層に入る直前の `selected_index`。
     /// フォルダから出た時にカーソル位置を復元するために使う。長さは `folder_stack` と一致。
@@ -715,6 +716,7 @@ impl WinitApp {
             play_table_text_secondary: String::new(),
             play_table_text_fallback: String::new(),
             select_items,
+            select_distribution_cache: RefCell::new(HashMap::new()),
             selected_index_stack: vec![0; folder_stack.len()],
             folder_stack,
             selected_index: 0,
@@ -1184,6 +1186,8 @@ impl WinitApp {
                 .to_string(),
         };
         let (search_word, search_word_alpha) = self.display_search_word();
+        self.ensure_visible_select_chart_distributions(25);
+        let chart_distributions = self.select_distribution_cache.borrow();
         SelectSnapshot {
             time: self.select_time(),
             selection_time: self.select_bar_time(),
@@ -1202,6 +1206,7 @@ impl WinitApp {
                 25,
                 &self.boot.profile_config,
                 self.key_config_edit.as_ref(),
+                &chart_distributions,
             ),
             arrange: self.arrange_option.as_str().to_string(),
             target: self.target_option.as_str().to_string(),
@@ -1234,6 +1239,47 @@ impl WinitApp {
             search_word_alpha,
             mouse_position: self.cursor_position_normalized(),
         }
+    }
+
+    fn ensure_visible_select_chart_distributions(&self, visible_limit: usize) {
+        let chart_ids: Vec<i64> = select_visible_item_indices(
+            self.select_items.len(),
+            self.selected_index,
+            visible_limit,
+        )
+        .into_iter()
+        .filter_map(|index| match self.select_items.get(index) {
+            Some(SelectItem::Chart(row)) => row.chart.as_ref().map(|chart| chart.chart_id),
+            _ => None,
+        })
+        .collect();
+        if chart_ids.is_empty() {
+            return;
+        }
+
+        let missing_ids: Vec<i64> = {
+            let cache = self.select_distribution_cache.borrow();
+            chart_ids.iter().copied().filter(|chart_id| !cache.contains_key(chart_id)).collect()
+        };
+        if !missing_ids.is_empty() {
+            match self.boot.library_db.chart_distributions_by_chart_ids(&missing_ids) {
+                Ok(distributions) => {
+                    let mut cache = self.select_distribution_cache.borrow_mut();
+                    for (chart_id, distribution) in distributions {
+                        cache.insert(chart_id, distribution);
+                    }
+                    for chart_id in missing_ids {
+                        cache.entry(chart_id).or_default();
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "failed to load visible chart distributions");
+                }
+            }
+        }
+        self.select_distribution_cache
+            .borrow_mut()
+            .retain(|chart_id, _| chart_ids.contains(chart_id));
     }
 
     /// Returns the string to render in the skin's `STRING_SEARCHWORD` (ref=30)
@@ -4227,6 +4273,7 @@ impl WinitApp {
             self.select_sort,
         );
         self.select_items = items;
+        self.select_distribution_cache.borrow_mut().clear();
         if self.selected_index >= self.select_items.len() {
             self.selected_index = self.select_items.len().saturating_sub(1);
         }
@@ -6487,10 +6534,9 @@ fn hispeed_mode_to_config(mode: HispeedMode) -> HispeedModeConfig {
 }
 
 fn select_chart_distribution(
-    analysis: &crate::storage::library_db::ChartAnalysis,
+    distribution: &[ChartDistributionSecond],
 ) -> Vec<SelectChartDistributionSecond> {
-    analysis
-        .distribution
+    distribution
         .iter()
         .map(|second| SelectChartDistributionSecond {
             scratch_long_heads: second.scratch_long_heads,
@@ -6504,25 +6550,39 @@ fn select_chart_distribution(
         .collect()
 }
 
+fn select_visible_item_indices(
+    item_len: usize,
+    selected_index: usize,
+    visible_limit: usize,
+) -> Vec<usize> {
+    if item_len == 0 || visible_limit == 0 {
+        return Vec::new();
+    }
+
+    let row_count = visible_limit;
+    let selected_index = selected_index.min(item_len - 1);
+    let half_window = row_count / 2;
+    let start = (selected_index + item_len - (half_window % item_len)) % item_len;
+
+    (0..row_count).map(|offset| (start + offset) % item_len).collect()
+}
+
 fn select_snapshot_rows(
     items: &[SelectItem],
     selected_index: usize,
     visible_limit: usize,
     profile: &ProfileConfig,
     key_config_edit: Option<&KeyConfigEditSession>,
+    chart_distributions: &HashMap<i64, Vec<ChartDistributionSecond>>,
 ) -> Vec<SelectRowSnapshot> {
-    if items.is_empty() || visible_limit == 0 {
+    let visible_indices = select_visible_item_indices(items.len(), selected_index, visible_limit);
+    if visible_indices.is_empty() {
         return Vec::new();
     }
 
-    let row_count = visible_limit;
-    let selected_index = selected_index.min(items.len() - 1);
-    let half_window = row_count / 2;
-    let start = (selected_index + items.len() - (half_window % items.len())) % items.len();
-
-    (0..row_count)
-        .map(|offset| {
-            let index = (start + offset) % items.len();
+    visible_indices
+        .into_iter()
+        .map(|index| {
             let item = &items[index];
             match item {
                 SelectItem::Folder { name, kind, .. } => SelectRowSnapshot {
@@ -6680,9 +6740,10 @@ fn select_snapshot_rows(
                                     .unwrap_or(0.0)
                             }),
                         chart_distribution: row
-                            .chart_analysis
+                            .chart
                             .as_ref()
-                            .map(select_chart_distribution)
+                            .and_then(|chart| chart_distributions.get(&chart.chart_id))
+                            .map(|distribution| select_chart_distribution(distribution))
                             .unwrap_or_default(),
                         is_folder: false,
                         kind: bmz_render::scene::SelectRowKind::Song,
@@ -8531,7 +8592,16 @@ mod tests {
             .collect();
 
         let profile = ProfileConfig::new_default("default", "Default", 0);
-        let snapshot_rows = select_snapshot_rows(&rows, 5, 7, &profile, None);
+        let mut chart_distributions = HashMap::new();
+        chart_distributions.insert(
+            5,
+            vec![crate::storage::library_db::ChartDistributionSecond {
+                key_taps: 2,
+                key_long_heads: 1,
+                ..Default::default()
+            }],
+        );
+        let snapshot_rows = select_snapshot_rows(&rows, 5, 7, &profile, None, &chart_distributions);
 
         assert_eq!(snapshot_rows.len(), 7);
         assert_eq!(snapshot_rows[0].index, 2);
@@ -8553,7 +8623,7 @@ mod tests {
             (0..4).map(|i| SelectItem::Chart(select_chart_row(i))).collect();
 
         let profile = ProfileConfig::new_default("default", "Default", 0);
-        let snapshot_rows = select_snapshot_rows(&rows, 0, 7, &profile, None);
+        let snapshot_rows = select_snapshot_rows(&rows, 0, 7, &profile, None, &HashMap::new());
 
         assert_eq!(snapshot_rows.len(), 7);
         assert_eq!(
@@ -8568,7 +8638,7 @@ mod tests {
             (0..30).map(|i| SelectItem::Chart(select_chart_row(i))).collect();
 
         let profile = ProfileConfig::new_default("default", "Default", 0);
-        let snapshot_rows = select_snapshot_rows(&rows, 2, 25, &profile, None);
+        let snapshot_rows = select_snapshot_rows(&rows, 2, 25, &profile, None, &HashMap::new());
 
         assert_eq!(snapshot_rows.len(), 25);
         assert_eq!(snapshot_rows[0].index, 20);
@@ -8584,7 +8654,7 @@ mod tests {
         ];
 
         let profile = ProfileConfig::new_default("default", "Default", 0);
-        let snapshot_rows = select_snapshot_rows(&rows, 0, 2, &profile, None);
+        let snapshot_rows = select_snapshot_rows(&rows, 0, 2, &profile, None, &HashMap::new());
 
         assert!(snapshot_rows.iter().any(|row| row.title == "Course 4/4" && row.in_library));
         assert!(snapshot_rows.iter().any(|row| row.title == "Course 3/4" && !row.in_library));
@@ -8741,7 +8811,7 @@ mod tests {
                 has_long_notes: false,
                 has_mines: false,
             }),
-            chart_analysis: Some(crate::storage::library_db::ChartAnalysis {
+            chart_analysis: Some(crate::storage::library_db::ChartAnalysisSummary {
                 normal_notes: 40 + index as u32,
                 long_notes: 1 + index as u32,
                 scratch_notes: 3,
@@ -8751,13 +8821,6 @@ mod tests {
                 end_density: 8.25,
                 total_gauge: 260.0,
                 main_bpm: 128.0,
-                distribution: vec![crate::storage::library_db::ChartDistributionSecond {
-                    key_taps: 2,
-                    key_long_heads: 1,
-                    ..Default::default()
-                }],
-                speed_changes: Vec::new(),
-                lane_notes: Vec::new(),
             }),
             fallback_title: String::new(),
             fallback_artist: String::new(),

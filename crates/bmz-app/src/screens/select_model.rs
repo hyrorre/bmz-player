@@ -7,7 +7,7 @@ use bmz_render::scene::SelectRowKind;
 use crate::screens::settings_model::{ConfigSelectRow, KeyBindingSelectRow};
 use crate::storage::common::hash_to_hex;
 use crate::storage::library_db::{
-    ChartAnalysis, ChartListItem, LibraryDatabase, TableEntryListItem,
+    ChartAnalysisSummary, ChartListItem, LibraryDatabase, TableEntryListItem,
 };
 use crate::storage::score_db::{BestScoreSummary, ReplaySlotSummary, ScoreDatabase};
 
@@ -137,7 +137,7 @@ fn insert_table_level(map: &mut HashMap<String, String>, key: String, symbol: &s
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelectChartRow {
     pub chart: Option<ChartListItem>,
-    pub chart_analysis: Option<ChartAnalysis>,
+    pub chart_analysis: Option<ChartAnalysisSummary>,
     pub fallback_title: String,
     pub fallback_artist: String,
     pub entry_sha256: Option<[u8; 32]>,
@@ -496,7 +496,7 @@ fn load_select_items_in_table_filtered(
         .iter()
         .filter_map(|entry| entry.chart.as_ref().map(|chart| chart.chart_id))
         .collect();
-    let mut analysis_map = library_db.chart_analyses_by_chart_ids(&chart_ids)?;
+    let mut analysis_map = library_db.chart_analysis_summaries_by_chart_ids(&chart_ids)?;
 
     Ok(entries
         .into_iter()
@@ -626,7 +626,7 @@ fn entry_score_sha256(entry: &TableEntryListItem) -> Option<[u8; 32]> {
 
 fn select_chart_row_from_table_entry(
     entry: TableEntryListItem,
-    chart_analysis: Option<ChartAnalysis>,
+    chart_analysis: Option<ChartAnalysisSummary>,
     best_score: Option<BestScoreSummary>,
     replay_slots: [bool; 4],
     table_level: String,
@@ -741,7 +741,7 @@ fn chart_items_with_enrichment(
         .collect();
     let mut replay_slot_map = replay_slot_map(score_db, &hashes)?;
     let chart_ids: Vec<i64> = all_charts.iter().map(|c| c.chart_id).collect();
-    let mut analysis_map = library_db.chart_analyses_by_chart_ids(&chart_ids)?;
+    let mut analysis_map = library_db.chart_analysis_summaries_by_chart_ids(&chart_ids)?;
 
     // MD5 lookup (multiple tables per MD5 joined with '/')
     let md5_hexes: Vec<String> = all_charts.iter().map(|c| hash_to_hex(&c.md5)).collect();

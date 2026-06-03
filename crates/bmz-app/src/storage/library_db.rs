@@ -20,7 +20,7 @@ pub use super::difficulty_table_db::{
 use super::common::{configure_connection, hash_to_hex, hex_to_hash};
 
 pub const CHART_IMPORT_VERSION: i64 = 2;
-const MAX_ANALYSIS_DISTRIBUTION_SECONDS: usize = 24 * 60 * 60;
+const MAX_ANALYSIS_DISTRIBUTION_SECONDS: usize = 10 * 60;
 
 pub struct LibraryDatabase {
     conn: Connection,
@@ -75,6 +75,19 @@ pub struct ChartAnalysis {
     pub distribution: Vec<ChartDistributionSecond>,
     pub speed_changes: Vec<ChartSpeedChange>,
     pub lane_notes: Vec<ChartLaneNotes>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ChartAnalysisSummary {
+    pub normal_notes: u32,
+    pub long_notes: u32,
+    pub scratch_notes: u32,
+    pub long_scratch_notes: u32,
+    pub density: f64,
+    pub peak_density: f64,
+    pub end_density: f64,
+    pub total_gauge: f64,
+    pub main_bpm: f64,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -540,6 +553,58 @@ impl LibraryDatabase {
                 .optional()?
             {
                 out.insert(chart_id, analysis);
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn chart_analysis_summaries_by_chart_ids(
+        &self,
+        ids: &[i64],
+    ) -> Result<HashMap<i64, ChartAnalysisSummary>> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let mut stmt = self.conn.prepare(
+            "SELECT chart_id, normal_notes, long_notes, scratch_notes, long_scratch_notes,
+                density, peak_density, end_density, total_gauge, main_bpm
+             FROM chart_analysis
+             WHERE chart_id = ?1",
+        )?;
+        let mut out = HashMap::with_capacity(ids.len());
+        for id in ids {
+            if let Some((chart_id, summary)) = stmt
+                .query_row(params![id], |row| {
+                    Ok((row.get(0)?, chart_analysis_summary_from_row_with_offset(row, 1)?))
+                })
+                .optional()?
+            {
+                out.insert(chart_id, summary);
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn chart_distributions_by_chart_ids(
+        &self,
+        ids: &[i64],
+    ) -> Result<HashMap<i64, Vec<ChartDistributionSecond>>> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let mut stmt = self.conn.prepare(
+            "SELECT chart_id, distribution_json
+             FROM chart_analysis
+             WHERE chart_id = ?1",
+        )?;
+        let mut out = HashMap::with_capacity(ids.len());
+        for id in ids {
+            if let Some((chart_id, distribution_json)) = stmt
+                .query_row(params![id], |row| Ok((row.get(0)?, row.get::<_, String>(1)?)))
+                .optional()?
+            {
+                let distribution = serde_json::from_str(&distribution_json).unwrap_or_default();
+                out.insert(chart_id, distribution);
             }
         }
         Ok(out)
@@ -1341,7 +1406,28 @@ fn chart_analysis_from_row_with_offset(
     let distribution_json: String = row.get(offset + 9)?;
     let speed_changes_json: String = row.get(offset + 10)?;
     let lane_notes_json: String = row.get(offset + 11)?;
+    let summary = chart_analysis_summary_from_row_with_offset(row, offset)?;
     Ok(ChartAnalysis {
+        normal_notes: summary.normal_notes,
+        long_notes: summary.long_notes,
+        scratch_notes: summary.scratch_notes,
+        long_scratch_notes: summary.long_scratch_notes,
+        density: summary.density,
+        peak_density: summary.peak_density,
+        end_density: summary.end_density,
+        total_gauge: summary.total_gauge,
+        main_bpm: summary.main_bpm,
+        distribution: serde_json::from_str(&distribution_json).unwrap_or_default(),
+        speed_changes: serde_json::from_str(&speed_changes_json).unwrap_or_default(),
+        lane_notes: serde_json::from_str(&lane_notes_json).unwrap_or_default(),
+    })
+}
+
+fn chart_analysis_summary_from_row_with_offset(
+    row: &rusqlite::Row<'_>,
+    offset: usize,
+) -> rusqlite::Result<ChartAnalysisSummary> {
+    Ok(ChartAnalysisSummary {
         normal_notes: row.get(offset)?,
         long_notes: row.get(offset + 1)?,
         scratch_notes: row.get(offset + 2)?,
@@ -1351,9 +1437,6 @@ fn chart_analysis_from_row_with_offset(
         end_density: row.get(offset + 6)?,
         total_gauge: row.get(offset + 7)?,
         main_bpm: row.get(offset + 8)?,
-        distribution: serde_json::from_str(&distribution_json).unwrap_or_default(),
-        speed_changes: serde_json::from_str(&speed_changes_json).unwrap_or_default(),
-        lane_notes: serde_json::from_str(&lane_notes_json).unwrap_or_default(),
     })
 }
 
