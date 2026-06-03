@@ -7,13 +7,16 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
+use bmz_audio::ffmpeg_loader::FfmpegSampleLoader;
+use bmz_audio::loader::SampleLoader;
+use bmz_audio::sample::DecodedSample;
 use bmz_chart::model::{LongNoteMode, PlayableChart};
 use bmz_core::clear::{ClearType, GaugeType};
 use bmz_core::lane::KeyMode;
 use bmz_core::time::TimeUs;
 use bmz_gameplay::session::compute_frame_times;
 use bmz_gameplay::session::{HispeedMode, PlaySkinOffset};
-use bmz_render::assets::load_static_rgba_image;
+use bmz_render::assets::{RgbaImageAsset, load_static_rgba_image};
 use bmz_render::plan::{
     PLAY_BACKBMP_TEXTURE, Rect, SELECT_BANNER_TEXTURE, SELECT_STAGE_TEXTURE, TextureId,
 };
@@ -284,6 +287,12 @@ struct WinitApp {
     select_preview_source: Option<String>,
     select_preview_playing: bool,
     select_preview: Option<SelectChartPreview>,
+    select_meta_image_cache: HashMap<String, SelectMetaImageCacheEntry>,
+    select_meta_image_tx: mpsc::Sender<SelectMetaImageResult>,
+    select_meta_image_rx: Receiver<SelectMetaImageResult>,
+    select_preview_cache: HashMap<String, SelectPreviewCacheEntry>,
+    select_preview_tx: mpsc::Sender<SelectPreviewResult>,
+    select_preview_rx: Receiver<SelectPreviewResult>,
     /// プレイ `#BACKBMP` のロード済みキャッシュキー。
     play_backbmp_source: Option<String>,
     play_backbmp_loaded: bool,
@@ -337,6 +346,37 @@ struct WinitApp {
 }
 
 type PlaySkinSignature = (KeyMode, String, BTreeMap<String, String>, BTreeMap<String, String>);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SelectMetaImageSlot {
+    Stage,
+    Banner,
+}
+
+enum SelectMetaImageCacheEntry {
+    Loading,
+    Ready(RgbaImageAsset),
+    Missing,
+}
+
+struct SelectMetaImageResult {
+    slot: SelectMetaImageSlot,
+    key: String,
+    path: Option<PathBuf>,
+    result: std::result::Result<RgbaImageAsset, String>,
+}
+
+enum SelectPreviewCacheEntry {
+    Loading,
+    Ready(DecodedSample),
+    Missing,
+}
+
+struct SelectPreviewResult {
+    key: String,
+    path: Option<PathBuf>,
+    result: std::result::Result<DecodedSample, String>,
+}
 
 struct DecideTransition {
     chart_id: i64,
@@ -622,6 +662,8 @@ impl WinitApp {
         let skin_catalog = scan_skin_catalog();
         let (skin_decode_tx, skin_decode_rx) = mpsc::channel::<PendingSkinResult>();
         let (skin_upload_tx, skin_upload_rx) = mpsc::channel::<PendingUploadResult>();
+        let (select_meta_image_tx, select_meta_image_rx) = mpsc::channel::<SelectMetaImageResult>();
+        let (select_preview_tx, select_preview_rx) = mpsc::channel::<SelectPreviewResult>();
         let (default_skin_manifest, pending_select_skin, pending_decide_skin, pending_result_skin) =
             load_initial_skin_textures(
                 &mut renderer,
@@ -771,6 +813,12 @@ impl WinitApp {
             select_preview_source: None,
             select_preview_playing: false,
             select_preview,
+            select_meta_image_cache: HashMap::new(),
+            select_meta_image_tx,
+            select_meta_image_rx,
+            select_preview_cache: HashMap::new(),
+            select_preview_tx,
+            select_preview_rx,
             play_backbmp_source: None,
             play_backbmp_loaded: false,
             last_play_start_press_at: None,
@@ -1307,6 +1355,69 @@ impl WinitApp {
         }
     }
 
+    fn poll_select_asset_loads(&mut self) {
+        while let Ok(result) = self.select_meta_image_rx.try_recv() {
+            let is_current = match result.slot {
+                SelectMetaImageSlot::Stage => {
+                    self.select_stage_source.as_deref() == Some(result.key.as_str())
+                }
+                SelectMetaImageSlot::Banner => {
+                    self.select_banner_source.as_deref() == Some(result.key.as_str())
+                }
+            };
+            match result.result {
+                Ok(image) => {
+                    if is_current {
+                        let loaded = self.upload_select_meta_image(result.slot, &image);
+                        self.set_select_meta_image_loaded(result.slot, loaded);
+                    }
+                    self.select_meta_image_cache
+                        .insert(result.key, SelectMetaImageCacheEntry::Ready(image));
+                }
+                Err(error) => {
+                    if let Some(path) = result.path {
+                        tracing::debug!(path = %path.display(), %error, "skipping select meta image");
+                    } else {
+                        tracing::debug!(%error, "skipping select meta image");
+                    }
+                    if is_current {
+                        self.set_select_meta_image_loaded(result.slot, false);
+                    }
+                    self.select_meta_image_cache
+                        .insert(result.key, SelectMetaImageCacheEntry::Missing);
+                }
+            }
+        }
+
+        while let Ok(result) = self.select_preview_rx.try_recv() {
+            let is_current = self.select_preview_source.as_deref() == Some(result.key.as_str());
+            match result.result {
+                Ok(sample) => {
+                    if is_current {
+                        let loaded = self.play_select_preview_sample(sample.clone());
+                        self.select_preview_playing = loaded;
+                        if loaded {
+                            self.stop_all_system_bgm();
+                        }
+                    }
+                    self.select_preview_cache
+                        .insert(result.key, SelectPreviewCacheEntry::Ready(sample));
+                }
+                Err(error) => {
+                    if let Some(path) = result.path {
+                        tracing::debug!(path = %path.display(), %error, "skipping chart preview audio");
+                    } else {
+                        tracing::debug!(%error, "skipping chart preview audio");
+                    }
+                    if is_current {
+                        self.select_preview_playing = false;
+                    }
+                    self.select_preview_cache.insert(result.key, SelectPreviewCacheEntry::Missing);
+                }
+            }
+        }
+    }
+
     fn sync_select_preview_audio(&mut self) {
         let cache_key = match self.select_items.get(self.selected_index) {
             Some(SelectItem::Chart(row)) => row.chart.as_ref().and_then(|chart| {
@@ -1316,28 +1427,50 @@ impl WinitApp {
             _ => None,
         };
         if cache_key.as_deref() == self.select_preview_source.as_deref() {
+            if !self.select_preview_playing
+                && let Some(key) = cache_key.as_deref()
+                && let Some(SelectPreviewCacheEntry::Ready(sample)) =
+                    self.select_preview_cache.get(key)
+            {
+                self.select_preview_playing = self.play_select_preview_sample(sample.clone());
+                if self.select_preview_playing {
+                    self.stop_all_system_bgm();
+                }
+            }
             return;
         }
         let had_preview = self.select_preview_playing;
         self.select_preview_source = cache_key.clone();
 
-        let mix = &self.boot.profile_config.audio_mix;
-        let volume = crate::config::play::volume_unit_to_f32(mix.master_volume)
-            * crate::config::play::volume_unit_to_f32(mix.preview_volume);
-        let volume = volume.clamp(0.0, 1.0);
-
-        let loaded = match (&self.select_preview, cache_key.as_deref()) {
-            (Some(preview), Some(key)) => {
-                let (folder, file) = key.split_once('|').unwrap_or(("", ""));
-                preview.stop();
-                crate::chart_asset::resolve_chart_asset_path(folder, file)
-                    .is_some_and(|path| preview.load_and_play(&path, volume))
-            }
-            (Some(preview), None) => {
-                preview.stop();
+        let loaded = match cache_key.as_deref() {
+            Some(_) if self.select_preview.is_none() => false,
+            Some(key) => match self.select_preview_cache.get(key) {
+                Some(SelectPreviewCacheEntry::Ready(sample)) => {
+                    if let Some(preview) = &self.select_preview {
+                        preview.stop();
+                    }
+                    self.play_select_preview_sample(sample.clone())
+                }
+                Some(SelectPreviewCacheEntry::Loading) | Some(SelectPreviewCacheEntry::Missing) => {
+                    if let Some(preview) = &self.select_preview {
+                        preview.stop();
+                    }
+                    false
+                }
+                None => {
+                    if let Some(preview) = &self.select_preview {
+                        preview.stop();
+                    }
+                    self.spawn_select_preview_load(key.to_string());
+                    false
+                }
+            },
+            None => {
+                if let Some(preview) = &self.select_preview {
+                    preview.stop();
+                }
                 false
             }
-            (None, _) => false,
         };
 
         self.select_preview_playing = loaded;
@@ -1359,38 +1492,140 @@ impl WinitApp {
     }
 
     fn sync_select_banner_texture(&mut self) {
-        let cache_key = match self.select_items.get(self.selected_index) {
-            Some(SelectItem::Chart(row)) => row.chart.as_ref().and_then(|chart| {
-                (!chart.banner_file.is_empty())
-                    .then(|| format!("{}|{}", chart.folder_path, chart.banner_file))
-            }),
-            _ => None,
-        };
-        if cache_key.as_deref() == self.select_banner_source.as_deref() {
-            return;
-        }
-        self.select_banner_source = cache_key.clone();
-        self.select_banner_loaded = cache_key.is_some_and(|key| {
-            let (folder, file) = key.split_once('|').unwrap_or(("", ""));
-            load_chart_meta_texture(&mut self.renderer, SELECT_BANNER_TEXTURE, folder, file)
-        });
+        self.sync_select_meta_image_texture(SelectMetaImageSlot::Banner);
     }
 
     fn sync_select_stage_texture(&mut self) {
+        self.sync_select_meta_image_texture(SelectMetaImageSlot::Stage);
+    }
+
+    fn sync_select_meta_image_texture(&mut self, slot: SelectMetaImageSlot) {
         let cache_key = match self.select_items.get(self.selected_index) {
             Some(SelectItem::Chart(row)) => row.chart.as_ref().and_then(|chart| {
-                (!chart.stage_file.is_empty())
-                    .then(|| format!("{}|{}", chart.folder_path, chart.stage_file))
+                let file = match slot {
+                    SelectMetaImageSlot::Stage => &chart.stage_file,
+                    SelectMetaImageSlot::Banner => &chart.banner_file,
+                };
+                (!file.is_empty()).then(|| format!("{}|{}", chart.folder_path, file))
             }),
             _ => None,
         };
-        if cache_key.as_deref() == self.select_stage_source.as_deref() {
+        if cache_key.as_deref() == self.select_meta_image_source(slot).as_deref() {
+            if !self.select_meta_image_loaded(slot)
+                && let Some(key) = cache_key.as_deref()
+                && let Some(SelectMetaImageCacheEntry::Ready(image)) =
+                    self.select_meta_image_cache.get(key)
+            {
+                let image = image.clone();
+                let loaded = self.upload_select_meta_image(slot, &image);
+                self.set_select_meta_image_loaded(slot, loaded);
+            }
             return;
         }
-        self.select_stage_source = cache_key.clone();
-        self.select_stage_loaded = cache_key.is_some_and(|key| {
+        self.set_select_meta_image_source(slot, cache_key.clone());
+        self.set_select_meta_image_loaded(slot, false);
+        let Some(key) = cache_key else {
+            return;
+        };
+
+        match self.select_meta_image_cache.get(&key) {
+            Some(SelectMetaImageCacheEntry::Ready(image)) => {
+                let image = image.clone();
+                let loaded = self.upload_select_meta_image(slot, &image);
+                self.set_select_meta_image_loaded(slot, loaded);
+            }
+            Some(SelectMetaImageCacheEntry::Loading) | Some(SelectMetaImageCacheEntry::Missing) => {
+            }
+            None => self.spawn_select_meta_image_load(slot, key),
+        }
+    }
+
+    fn select_meta_image_source(&self, slot: SelectMetaImageSlot) -> &Option<String> {
+        match slot {
+            SelectMetaImageSlot::Stage => &self.select_stage_source,
+            SelectMetaImageSlot::Banner => &self.select_banner_source,
+        }
+    }
+
+    fn set_select_meta_image_source(&mut self, slot: SelectMetaImageSlot, source: Option<String>) {
+        match slot {
+            SelectMetaImageSlot::Stage => self.select_stage_source = source,
+            SelectMetaImageSlot::Banner => self.select_banner_source = source,
+        }
+    }
+
+    fn select_meta_image_loaded(&self, slot: SelectMetaImageSlot) -> bool {
+        match slot {
+            SelectMetaImageSlot::Stage => self.select_stage_loaded,
+            SelectMetaImageSlot::Banner => self.select_banner_loaded,
+        }
+    }
+
+    fn set_select_meta_image_loaded(&mut self, slot: SelectMetaImageSlot, loaded: bool) {
+        match slot {
+            SelectMetaImageSlot::Stage => self.select_stage_loaded = loaded,
+            SelectMetaImageSlot::Banner => self.select_banner_loaded = loaded,
+        }
+    }
+
+    fn upload_select_meta_image(
+        &mut self,
+        slot: SelectMetaImageSlot,
+        image: &RgbaImageAsset,
+    ) -> bool {
+        let texture_id = match slot {
+            SelectMetaImageSlot::Stage => SELECT_STAGE_TEXTURE,
+            SelectMetaImageSlot::Banner => SELECT_BANNER_TEXTURE,
+        };
+        if let Err(error) = self.renderer.upsert_image_asset(texture_id, image) {
+            tracing::warn!(%error, "failed to upload select meta image");
+            false
+        } else {
+            true
+        }
+    }
+
+    fn spawn_select_meta_image_load(&mut self, slot: SelectMetaImageSlot, key: String) {
+        self.select_meta_image_cache.insert(key.clone(), SelectMetaImageCacheEntry::Loading);
+        let tx = self.select_meta_image_tx.clone();
+        thread::spawn(move || {
             let (folder, file) = key.split_once('|').unwrap_or(("", ""));
-            load_chart_meta_texture(&mut self.renderer, SELECT_STAGE_TEXTURE, folder, file)
+            let path = crate::chart_asset::resolve_chart_asset_path(folder, file);
+            let result = match path.as_ref() {
+                Some(path) => load_static_rgba_image(path).map_err(|error| error.to_string()),
+                None => Err("select meta image file not found".to_string()),
+            };
+            let _ = tx.send(SelectMetaImageResult { slot, key, path, result });
+        });
+    }
+
+    fn select_preview_volume(&self) -> f32 {
+        let mix = &self.boot.profile_config.audio_mix;
+        let volume = crate::config::play::volume_unit_to_f32(mix.master_volume)
+            * crate::config::play::volume_unit_to_f32(mix.preview_volume);
+        volume.clamp(0.0, 1.0)
+    }
+
+    fn play_select_preview_sample(&self, sample: DecodedSample) -> bool {
+        self.select_preview
+            .as_ref()
+            .is_some_and(|preview| preview.play_sample(sample, self.select_preview_volume()))
+    }
+
+    fn spawn_select_preview_load(&mut self, key: String) {
+        self.select_preview_cache.insert(key.clone(), SelectPreviewCacheEntry::Loading);
+        let tx = self.select_preview_tx.clone();
+        thread::spawn(move || {
+            let (folder, file) = key.split_once('|').unwrap_or(("", ""));
+            let path = crate::chart_asset::resolve_preview_file(Path::new(folder), file);
+            let result = match path.as_ref() {
+                Some(path) => {
+                    let mut loader = FfmpegSampleLoader;
+                    loader.load(path).map_err(|error| error.to_string())
+                }
+                None => Err("chart preview audio file not found".to_string()),
+            };
+            let _ = tx.send(SelectPreviewResult { key, path, result });
         });
     }
 
@@ -5099,6 +5334,7 @@ impl WinitApp {
         let scene_kind = scene_kind(&scene);
         self.update_window_title_for_scene(scene_kind);
         if matches!(self.view_state(), AppViewState::Select) {
+            self.poll_select_asset_loads();
             self.sync_select_stage_texture();
             self.sync_select_banner_texture();
             self.sync_select_preview_audio();

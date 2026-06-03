@@ -1,8 +1,5 @@
-use std::path::Path;
-
 use bmz_audio::backend::cpal::SharedAudioEngine;
-use bmz_audio::ffmpeg_loader::FfmpegSampleLoader;
-use bmz_audio::loader::SampleLoader;
+use bmz_audio::sample::DecodedSample;
 use bmz_core::ids::SoundId;
 
 /// 選曲プレビュー用の予約 SoundId。システム音 (100_000 帯) および chart キー音と衝突しない。
@@ -24,15 +21,7 @@ impl SelectChartPreview {
         }
     }
 
-    pub fn load_and_play(&self, path: &Path, volume: f32) -> bool {
-        let mut loader = FfmpegSampleLoader;
-        let sample = match loader.load(path) {
-            Ok(sample) => sample,
-            Err(error) => {
-                tracing::debug!(path = %path.display(), %error, "skipping chart preview audio");
-                return false;
-            }
-        };
+    pub fn play_sample(&self, sample: DecodedSample, volume: f32) -> bool {
         let Ok(mut engine) = self.engine.lock() else {
             return false;
         };
