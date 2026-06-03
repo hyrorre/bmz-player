@@ -2466,7 +2466,12 @@ impl SkinDocument {
             );
         }
 
-        let elapsed = skin_timer_elapsed_ms(destination.timer, state)?;
+        let value_for_destination = self.value.iter().find(|value| value.id == destination.id);
+        let elapsed = skin_timer_elapsed_ms(destination.timer, state).or_else(|| {
+            value_for_destination
+                .filter(|value| pre_ready_lane_cover_value_destination(destination, value, state))
+                .map(|_| 0)
+        })?;
         let mut frame = resolve_destination_frame(destination, elapsed, enabled_options, state)?;
         let is_hidden_cover_destination =
             self.hidden_cover.iter().any(|cover| cover.id == destination.id);
@@ -2687,7 +2692,7 @@ impl SkinDocument {
             )]);
         }
 
-        if let Some(value) = self.value.iter().find(|value| value.id == destination.id) {
+        if let Some(value) = value_for_destination {
             let number = skin_value_number(value, state)?;
             return Some(self.value_number_render_items(
                 &value.id,
@@ -6760,6 +6765,28 @@ fn skin_image_texture_region(
         None,
         (image.x, image.y, image.w, image.h),
     )
+}
+
+fn pre_ready_lane_cover_value_destination(
+    destination: &SkinDestinationDef,
+    value: &SkinValueDef,
+    state: SkinDrawState,
+) -> bool {
+    destination.timer == Some(40)
+        && state.ready_timer_ms.is_none()
+        && state.lane_cover_changing
+        && destination.op.contains(&270)
+        && skin_value_is_lane_cover_number(value)
+}
+
+fn skin_value_is_lane_cover_number(value: &SkinValueDef) -> bool {
+    matches!(value.ref_id, 14 | 312 | 313)
+        || skin_expr_references_lane_cover_number(&value.expr)
+        || skin_expr_references_lane_cover_number(&value.value_expr)
+}
+
+fn skin_expr_references_lane_cover_number(expr: &str) -> bool {
+    ["number(14)", "number(312)", "number(313)"].iter().any(|needle| expr.contains(needle))
 }
 
 /// Starseeker 閉店の `src = 0` は `system` の黒 1px (`black` image と同じ UV) を指す。
@@ -13136,6 +13163,58 @@ mod tests {
                 uv: TextureRegion { x: u, .. },
                 ..
             } if approx_eq(x, 0.20) && approx_eq(u, 0.0)));
+    }
+
+    #[test]
+    fn lane_cover_numbers_render_before_ready_while_changing() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "number.png" }],
+                "value": [
+                    { "id": "white", "src": 1, "x": 0, "y": 0, "w": 100, "h": 10, "divx": 10, "digit": 3, "ref": 14 },
+                    { "id": "green", "src": 1, "x": 0, "y": 0, "w": 100, "h": 10, "divx": 10, "digit": 3, "ref": 313 },
+                    { "id": "combo", "src": 1, "x": 0, "y": 0, "w": 100, "h": 10, "divx": 10, "digit": 3, "ref": 104 }
+                ],
+                "destination": [
+                    { "id": "white", "timer": 40, "op": [270], "dst": [{ "x": 10, "y": 20, "w": 5, "h": 10 }] },
+                    { "id": "green", "timer": 40, "op": [270], "dst": [{ "x": 10, "y": 30, "w": 5, "h": 10 }] },
+                    { "id": "combo", "timer": 40, "op": [270], "dst": [{ "x": 10, "y": 40, "w": 5, "h": 10 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "1".to_string(),
+            SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 100.0, height: 100.0 },
+            },
+        )]);
+
+        let inactive = document.static_image_render_items(
+            &sources,
+            SkinDrawState { ready_timer_ms: None, ..SkinDrawState::default() },
+        );
+        assert!(inactive.is_empty());
+
+        let active = document.static_image_render_items(
+            &sources,
+            SkinDrawState {
+                ready_timer_ms: None,
+                lane_cover_changing: true,
+                lane_cover: 0.25,
+                total_duration_ms: 300,
+                combo: 123,
+                ..SkinDrawState::default()
+            },
+        );
+        assert_eq!(active.len(), 6);
     }
 
     #[test]

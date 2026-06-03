@@ -1732,6 +1732,11 @@ impl WinitApp {
             {
                 active_play.running.session.lane_cover_changing =
                     event.state == ElementState::Pressed;
+                update_pre_ready_play_snapshot_options_for_session(
+                    self.play_ready_sound_started_at,
+                    &mut self.last_play_snapshot,
+                    &active_play.running.session,
+                );
             }
             if event.state == ElementState::Pressed
                 && !event.repeat
@@ -1758,6 +1763,7 @@ impl WinitApp {
                 } else {
                     tracing::debug!("play option change ignored: course NoSpeed constraint");
                 }
+                self.update_pre_ready_play_snapshot_options();
                 return;
             }
             if let Some(change) = hispeed_action(event.physical_key, event.state, event.repeat) {
@@ -1773,6 +1779,7 @@ impl WinitApp {
                 active_play.running.session.hispeed =
                     adjusted_hispeed(active_play.running.session.hispeed, change);
                 tracing::info!(hispeed = active_play.running.session.hispeed, "adjusted hispeed");
+                self.update_pre_ready_play_snapshot_options();
                 return;
             }
             if event.physical_key == PhysicalKey::Code(KeyCode::Escape)
@@ -1800,6 +1807,7 @@ impl WinitApp {
                     hispeed = session.hispeed,
                     "adjusted lane cover"
                 );
+                self.update_pre_ready_play_snapshot_options();
                 return;
             }
             if event.physical_key == PhysicalKey::Code(KeyCode::KeyH)
@@ -1837,6 +1845,11 @@ impl WinitApp {
                         "toggled lane cover visibility",
                     );
                     self.last_play_start_press_at = None;
+                    update_pre_ready_play_snapshot_options_for_session(
+                        self.play_ready_sound_started_at,
+                        &mut self.last_play_snapshot,
+                        &active_play.running.session,
+                    );
                 } else {
                     self.last_play_start_press_at = Some(now);
                 }
@@ -2074,6 +2087,11 @@ impl WinitApp {
             && self.select_keys.is_start(button)
         {
             active_play.running.session.lane_cover_changing = pressed;
+            update_pre_ready_play_snapshot_options_for_session(
+                self.play_ready_sound_started_at,
+                &mut self.last_play_snapshot,
+                &active_play.running.session,
+            );
         }
         if pressed {
             let speed_locked = self.active_course.as_ref().is_some_and(|c| {
@@ -2098,6 +2116,7 @@ impl WinitApp {
                 } else {
                     tracing::debug!("play option change ignored: course NoSpeed constraint");
                 }
+                self.update_pre_ready_play_snapshot_options();
                 return;
             }
         }
@@ -2240,6 +2259,7 @@ impl WinitApp {
                 hispeed = session.hispeed,
                 "adjusted lane cover from mouse wheel"
             );
+            self.update_pre_ready_play_snapshot_options();
             return;
         }
         if !matches!(self.view_state(), AppViewState::Select) {
@@ -4551,6 +4571,17 @@ impl WinitApp {
         snapshot.ready_elapsed_time = ready_elapsed_time;
     }
 
+    fn update_pre_ready_play_snapshot_options(&mut self) {
+        let Some(active_play) = &self.active_play else {
+            return;
+        };
+        update_pre_ready_play_snapshot_options_for_session(
+            self.play_ready_sound_started_at,
+            &mut self.last_play_snapshot,
+            &active_play.running.session,
+        );
+    }
+
     fn update_play_ending_snapshot(&mut self) {
         let Some(ending) = &self.play_ending else {
             return;
@@ -6849,6 +6880,24 @@ fn mouse_wheel_y(delta: MouseScrollDelta) -> f32 {
         MouseScrollDelta::LineDelta(_, y) => y,
         MouseScrollDelta::PixelDelta(position) => position.y as f32,
     }
+}
+
+fn update_pre_ready_play_snapshot_options_for_session(
+    ready_sound_started_at: Option<Instant>,
+    last_play_snapshot: &mut Option<RenderSnapshot>,
+    session: &bmz_gameplay::session::GameSession,
+) {
+    if ready_sound_started_at.is_some() {
+        return;
+    }
+    let Some(snapshot) = last_play_snapshot else {
+        return;
+    };
+    crate::screens::play_snapshot::update_render_snapshot_play_options(
+        snapshot,
+        session,
+        snapshot.time,
+    );
 }
 
 fn select_click_event_arg(
