@@ -288,6 +288,12 @@ struct WinitApp {
     play_backbmp_loaded: bool,
     /// プレイ中の Start キー直近の押下時刻。連続押し判定で使用。
     last_play_start_press_at: Option<Instant>,
+    /// プレイ中の E2 押下状態。E2+E3 即終了 / E1+E2 長押し終了に使う。
+    play_e2_held: bool,
+    /// プレイ中の E3 押下状態。E2+E3 即終了に使う。
+    play_e3_held: bool,
+    /// E1+E2 が押され続けている開始時刻。beatoraja 既定 1000ms で途中終了。
+    play_exit_hold_started_at: Option<Instant>,
     /// 本体設定 / スキン設定 / デバッグ表示用の egui レイヤ。
     /// ウィンドウ生成時に初期化される。
     egui: Option<EguiLayer>,
@@ -388,6 +394,8 @@ enum ResultExitAction {
 const SELECT_EXIT_HOLD_DURATION: Duration = Duration::from_millis(1_200);
 /// プレイ中の Start ボタンを「2回連続押し」と判定する間隔上限。
 const PLAY_START_DOUBLE_PRESS_WINDOW: Duration = Duration::from_millis(400);
+/// beatoraja 既定の START+SELECT 途中終了長押し時間。
+const PLAY_EXIT_HOLD_DURATION: Duration = Duration::from_millis(1_000);
 /// レーンカバー / LIFT を上下キーで動かす際のステップ幅。
 const LANE_COVER_STEP: f32 = 0.001;
 const LANE_COVER_REPEAT_STEP: f32 = 0.01;
@@ -764,6 +772,9 @@ impl WinitApp {
             play_backbmp_source: None,
             play_backbmp_loaded: false,
             last_play_start_press_at: None,
+            play_e2_held: false,
+            play_e3_held: false,
+            play_exit_hold_started_at: None,
             egui: None,
             applied_window_mode: initial_window_mode,
             focused: true,
@@ -1725,6 +1736,13 @@ impl WinitApp {
     }
 
     fn route_keyboard_input(&mut self, event: &winit::event::KeyEvent) {
+        if self.active_play.is_some()
+            && let Some(control) = physical_key_name(event.physical_key)
+            && !event.repeat
+            && self.update_play_exit_control_state(&control, event.state == ElementState::Pressed)
+        {
+            return;
+        }
         if let Some(active_play) = &mut self.active_play {
             if let Some(control) = physical_key_name(event.physical_key)
                 && self.select_keys.is_start(&control)
@@ -1736,6 +1754,12 @@ impl WinitApp {
                     self.play_ready_sound_started_at,
                     &mut self.last_play_snapshot,
                     &active_play.running.session,
+                );
+                update_play_exit_hold_started_at(
+                    &mut self.play_exit_hold_started_at,
+                    active_play.running.session.lane_cover_changing,
+                    self.play_e2_held,
+                    Instant::now(),
                 );
             }
             if event.state == ElementState::Pressed
@@ -1786,12 +1810,7 @@ impl WinitApp {
                 && event.state == ElementState::Pressed
                 && !event.repeat
             {
-                let session = &mut active_play.running.session;
-                if !session.judge.is_exhausted(&session.chart) {
-                    tracing::info!("escape pressed during play; marking session as failed");
-                    session.state = bmz_gameplay::session::PlayState::Failed;
-                    self.play_system_sound(crate::system_sound::SoundType::PlayStop);
-                }
+                self.stop_active_play_like_escape("escape pressed during play");
                 return;
             }
             if let Some(delta) = lane_cover_step(event.physical_key, event.state, event.repeat) {
@@ -2083,6 +2102,9 @@ impl WinitApp {
     }
 
     fn route_gamepad_button(&mut self, button: &str, pressed: bool) {
+        if self.active_play.is_some() && self.update_play_exit_control_state(button, pressed) {
+            return;
+        }
         if let Some(active_play) = &mut self.active_play
             && self.select_keys.is_start(button)
         {
@@ -2091,6 +2113,12 @@ impl WinitApp {
                 self.play_ready_sound_started_at,
                 &mut self.last_play_snapshot,
                 &active_play.running.session,
+            );
+            update_play_exit_hold_started_at(
+                &mut self.play_exit_hold_started_at,
+                active_play.running.session.lane_cover_changing,
+                self.play_e2_held,
+                Instant::now(),
             );
         }
         if pressed {
@@ -3689,6 +3717,7 @@ impl WinitApp {
         self.result_exit = None;
         self.play_ready_sound_started_at = None;
         self.active_play = None;
+        self.clear_play_control_holds();
         self.clear_play_backbmp_state();
         self.finished_play = None;
         self.draining_audio = None;
@@ -4451,6 +4480,9 @@ impl WinitApp {
         if self.active_play.is_none() {
             return;
         }
+        if self.stop_play_if_exit_hold_elapsed() {
+            self.clear_play_control_holds();
+        }
         self.maybe_start_ready_phase();
         if self.play_ready_sound_started_at.is_none() {
             self.update_pending_play_snapshot_timers();
@@ -4580,6 +4612,78 @@ impl WinitApp {
             &mut self.last_play_snapshot,
             &active_play.running.session,
         );
+    }
+
+    fn stop_active_play_like_escape(&mut self, reason: &'static str) -> bool {
+        let stopped = {
+            let Some(active_play) = &mut self.active_play else {
+                return false;
+            };
+            let session = &mut active_play.running.session;
+            if session.judge.is_exhausted(&session.chart)
+                || matches!(
+                    session.state,
+                    bmz_gameplay::session::PlayState::Failed
+                        | bmz_gameplay::session::PlayState::Finished
+                )
+            {
+                return false;
+            }
+            tracing::info!(reason, "stopping active play");
+            session.state = bmz_gameplay::session::PlayState::Failed;
+            true
+        };
+        self.clear_play_control_holds();
+        self.play_system_sound(crate::system_sound::SoundType::PlayStop);
+        stopped
+    }
+
+    fn update_play_exit_hold_timer(&mut self) {
+        let e1_held = self
+            .active_play
+            .as_ref()
+            .is_some_and(|active| active.running.session.lane_cover_changing);
+        update_play_exit_hold_started_at(
+            &mut self.play_exit_hold_started_at,
+            e1_held,
+            self.play_e2_held,
+            Instant::now(),
+        );
+    }
+
+    fn clear_play_control_holds(&mut self) {
+        self.last_play_start_press_at = None;
+        self.play_e2_held = false;
+        self.play_e3_held = false;
+        self.play_exit_hold_started_at = None;
+    }
+
+    fn update_play_exit_control_state(&mut self, control: &str, pressed: bool) -> bool {
+        let mut changed = false;
+        if self.select_keys.is_e2_action(control) {
+            self.play_e2_held = pressed;
+            changed = true;
+        }
+        if self.select_keys.is_e3_action(control) {
+            self.play_e3_held = pressed;
+            changed = true;
+        }
+        if !changed {
+            return false;
+        }
+        self.update_play_exit_hold_timer();
+        if self.play_e2_held && self.play_e3_held {
+            return self.stop_active_play_like_escape("E2+E3 pressed during play");
+        }
+        false
+    }
+
+    fn stop_play_if_exit_hold_elapsed(&mut self) -> bool {
+        if play_exit_hold_elapsed(self.play_exit_hold_started_at, Instant::now()) {
+            self.play_exit_hold_started_at = None;
+            return self.stop_active_play_like_escape("E1+E2 held during play");
+        }
+        false
     }
 
     fn update_play_ending_snapshot(&mut self) {
@@ -6900,6 +7004,23 @@ fn update_pre_ready_play_snapshot_options_for_session(
     );
 }
 
+fn update_play_exit_hold_started_at(
+    started_at: &mut Option<Instant>,
+    e1_held: bool,
+    e2_held: bool,
+    now: Instant,
+) {
+    if e1_held && e2_held {
+        started_at.get_or_insert(now);
+    } else {
+        *started_at = None;
+    }
+}
+
+fn play_exit_hold_elapsed(started_at: Option<Instant>, now: Instant) -> bool {
+    started_at.is_some_and(|started_at| now.duration_since(started_at) >= PLAY_EXIT_HOLD_DURATION)
+}
+
 fn select_click_event_arg(
     click_type: i32,
     button: MouseButton,
@@ -7297,6 +7418,7 @@ fn target_cycle_from_control(control: &str, bindings: &SelectKeyBindings) -> Opt
 struct SelectKeyBindings {
     start: Vec<String>,
     e2_action_controls: Vec<String>,
+    e3_action_controls: Vec<String>,
     enter: Vec<String>,
     back: Vec<String>,
     key2_controls: Vec<String>,
@@ -7362,6 +7484,7 @@ impl SelectKeyBindings {
             keys_for(LaneConfig::Key2),
         );
         let e2_action_controls = actions_for(InputActionConfig::E2);
+        let e3_action_controls = actions_for(InputActionConfig::E3);
         let key2_controls = keys_for(LaneConfig::Key2);
         let hispeed_down_controls: Vec<String> =
             [LaneConfig::Key1, LaneConfig::Key3, LaneConfig::Key5, LaneConfig::Key7]
@@ -7471,6 +7594,7 @@ impl SelectKeyBindings {
         Self {
             start,
             e2_action_controls,
+            e3_action_controls,
             enter,
             back,
             key2_controls,
@@ -7505,6 +7629,10 @@ impl SelectKeyBindings {
 
     fn is_e2_action(&self, control: &str) -> bool {
         self.e2_action_controls.iter().any(|k| k == control)
+    }
+
+    fn is_e3_action(&self, control: &str) -> bool {
+        self.e3_action_controls.iter().any(|k| k == control)
     }
 
     fn is_hispeed_down_key(&self, control: &str) -> bool {
@@ -8121,6 +8249,13 @@ mod tests {
     }
 
     #[test]
+    fn select_key_bindings_include_e3_action() {
+        let keys = default_select_keys();
+
+        assert!(keys.is_e3_action("E"));
+    }
+
+    #[test]
     fn select_key_bindings_expose_key2_for_gas_toggle() {
         let keys = default_select_keys();
 
@@ -8129,6 +8264,28 @@ mod tests {
         assert!(!keys.is_back("S"));
         assert!(keys.is_key2("S"));
         assert!(!keys.back_uses_key2());
+    }
+
+    #[test]
+    fn play_exit_hold_timer_uses_beatoraja_default_duration() {
+        let start = Instant::now();
+        let mut held_since = None;
+
+        update_play_exit_hold_started_at(&mut held_since, true, false, start);
+        assert!(held_since.is_none());
+
+        update_play_exit_hold_started_at(&mut held_since, true, true, start);
+        assert_eq!(held_since, Some(start));
+        assert!(!play_exit_hold_elapsed(held_since, start + PLAY_EXIT_HOLD_DURATION / 2));
+        assert!(play_exit_hold_elapsed(held_since, start + PLAY_EXIT_HOLD_DURATION));
+
+        update_play_exit_hold_started_at(
+            &mut held_since,
+            false,
+            true,
+            start + PLAY_EXIT_HOLD_DURATION,
+        );
+        assert!(held_since.is_none());
     }
 
     #[test]

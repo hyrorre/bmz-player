@@ -230,13 +230,15 @@ pub struct BindingConfigEntry {
     pub action: Option<InputActionConfig>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum InputActionConfig {
     E1,
     #[serde(rename = "Enter")]
     SelectEnter,
     E2,
+    E3,
+    E4,
     #[serde(rename = "OptionArrange")]
     SelectOptionArrange,
     #[serde(rename = "OptionGauge")]
@@ -639,6 +641,8 @@ pub fn default_keyboard_bindings() -> Vec<BindingConfigEntry> {
         action_binding("C", InputActionConfig::SelectEnter),
         action_binding("V", InputActionConfig::SelectEnter),
         action_binding("W", InputActionConfig::E2),
+        action_binding("E", InputActionConfig::E3),
+        action_binding("R", InputActionConfig::E4),
         action_binding("Z", InputActionConfig::SelectOptionArrange),
         action_binding("X", InputActionConfig::SelectOptionGauge),
         action_binding("C", InputActionConfig::SelectOptionAssist),
@@ -771,5 +775,7 @@ mod tests {
         assert!(!toml.contains("start_key"));
         assert!(toml.contains("action = \"E1\""));
         assert!(toml.contains("action = \"E2\""));
+        assert!(toml.contains("action = \"E3\""));
+        assert!(toml.contains("action = \"E4\""));
     }
 }

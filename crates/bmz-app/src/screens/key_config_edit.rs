@@ -9,6 +9,7 @@ pub struct KeyConfigEditSession {
     pub key_mode: KeyMode,
     pub target: KeyBindingTarget,
     baseline_bindings: Vec<crate::config::profile_config::BindingConfigEntry>,
+    baseline_ui_bindings: Vec<crate::config::profile_config::BindingConfigEntry>,
     pub listening: bool,
 }
 
@@ -18,6 +19,7 @@ impl KeyConfigEditSession {
             key_mode,
             target,
             baseline_bindings: snapshot_play_bindings(&profile.input, key_mode),
+            baseline_ui_bindings: profile.input.ui.bindings.clone(),
             listening: true,
         }
     }
@@ -28,6 +30,7 @@ impl KeyConfigEditSession {
             self.key_mode,
             self.baseline_bindings.clone(),
         );
+        profile.input.ui.bindings = self.baseline_ui_bindings.clone();
     }
 
     pub fn preview_value(&self, profile: &ProfileConfig) -> String {

@@ -2,8 +2,8 @@ use bmz_core::lane::KeyMode;
 use bmz_render::scene::SelectRowKind;
 
 use crate::config::key_config::{
-    KEY_BINDING_SLOTS, KEY_CONFIG_MODES, KeyBindingTarget, ScratchDirection, binding_row_label,
-    format_play_binding, key_lanes_for_key_mode, key_mode_settings_path,
+    COMMON_ACTIONS, KEY_BINDING_SLOTS, KEY_CONFIG_MODES, KeyBindingTarget, ScratchDirection,
+    binding_row_label, format_play_binding, key_lanes_for_key_mode, key_mode_settings_path,
     scratch_lanes_for_key_mode,
 };
 use crate::config::profile_config::ProfileConfig;
@@ -16,6 +16,7 @@ const CONFIG_JUDGE_PATH: &str = "bmz-settings:judge";
 const CONFIG_PLAY_PATH: &str = "bmz-settings:play";
 const CONFIG_DISPLAY_PATH: &str = "bmz-settings:display";
 pub const CONFIG_KEYS_PATH: &str = "bmz-settings:keys";
+const CONFIG_KEYS_COMMON_PATH: &str = "bmz-settings:keys:common";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsPath<'a> {
@@ -25,6 +26,7 @@ pub enum SettingsPath<'a> {
     Play,
     Display,
     KeysRoot,
+    KeysCommon,
     KeysMode(KeyMode),
     Unknown(&'a str),
 }
@@ -38,6 +40,7 @@ pub fn parse_settings_path(path: &str) -> Option<SettingsPath<'_>> {
         "play" => Some(SettingsPath::Play),
         "display" => Some(SettingsPath::Display),
         "keys" => Some(SettingsPath::KeysRoot),
+        "keys:common" => Some(SettingsPath::KeysCommon),
         _ if let Some(mode_key) = rest.strip_prefix("keys:") => {
             KeyMode::from_play_map_key(mode_key).map(SettingsPath::KeysMode)
         }
@@ -57,6 +60,7 @@ pub fn settings_breadcrumb(path: &str) -> String {
         Some(SettingsPath::Play) => "設定 > プレイ".to_string(),
         Some(SettingsPath::Display) => "設定 > 表示".to_string(),
         Some(SettingsPath::KeysRoot) => "設定 > キー設定".to_string(),
+        Some(SettingsPath::KeysCommon) => "設定 > キー設定 > 共通".to_string(),
         Some(SettingsPath::KeysMode(key_mode)) => {
             format!("設定 > キー設定 > {}", key_mode.as_str())
         }
@@ -138,19 +142,37 @@ pub fn load_settings_items(path: &str) -> Vec<SelectItem> {
         Some(SettingsPath::Play) => config_items(SettingsEntryId::PLAY_ENTRIES),
         Some(SettingsPath::Display) => config_items(SettingsEntryId::DISPLAY_ENTRIES),
         Some(SettingsPath::KeysRoot) => key_mode_folder_items(),
+        Some(SettingsPath::KeysCommon) => common_key_binding_items(),
         Some(SettingsPath::KeysMode(key_mode)) => key_binding_items(key_mode),
         Some(SettingsPath::Unknown(_)) | None => Vec::new(),
     }
 }
 
 fn key_mode_folder_items() -> Vec<SelectItem> {
-    KEY_CONFIG_MODES
+    std::iter::once(SelectItem::Folder {
+        path: CONFIG_KEYS_COMMON_PATH.to_string(),
+        name: "共通".to_string(),
+        kind: SelectRowKind::SettingsFolder,
+    })
+    .chain(KEY_CONFIG_MODES.iter().copied().map(|key_mode| SelectItem::Folder {
+        path: key_mode_settings_path(CONFIG_KEYS_PATH, key_mode),
+        name: key_mode.as_str().to_string(),
+        kind: SelectRowKind::SettingsFolder,
+    }))
+    .collect()
+}
+
+fn common_key_binding_items() -> Vec<SelectItem> {
+    KEY_BINDING_SLOTS
         .iter()
         .copied()
-        .map(|key_mode| SelectItem::Folder {
-            path: key_mode_settings_path(CONFIG_KEYS_PATH, key_mode),
-            name: key_mode.as_str().to_string(),
-            kind: SelectRowKind::SettingsFolder,
+        .flat_map(|slot| {
+            COMMON_ACTIONS.iter().copied().map(move |action| {
+                SelectItem::KeyBinding(KeyBindingSelectRow {
+                    key_mode: KeyMode::K7,
+                    target: KeyBindingTarget::Action { action, slot },
+                })
+            })
         })
         .collect()
 }
@@ -193,7 +215,7 @@ fn config_items(entries: &'static [SettingsEntryId]) -> Vec<SelectItem> {
 mod tests {
     use super::*;
     use crate::config::key_config::KeyBindingSlot;
-    use crate::config::profile_config::LaneConfig;
+    use crate::config::profile_config::{InputActionConfig, LaneConfig};
 
     #[test]
     fn parse_settings_paths() {
@@ -203,6 +225,7 @@ mod tests {
         assert_eq!(parse_settings_path(CONFIG_PLAY_PATH), Some(SettingsPath::Play));
         assert_eq!(parse_settings_path(CONFIG_DISPLAY_PATH), Some(SettingsPath::Display));
         assert_eq!(parse_settings_path(CONFIG_KEYS_PATH), Some(SettingsPath::KeysRoot));
+        assert_eq!(parse_settings_path(CONFIG_KEYS_COMMON_PATH), Some(SettingsPath::KeysCommon));
         assert_eq!(
             parse_settings_path("bmz-settings:keys:7k"),
             Some(SettingsPath::KeysMode(KeyMode::K7))
@@ -233,12 +256,39 @@ mod tests {
     #[test]
     fn settings_keys_lists_key_mode_folders() {
         let items = load_settings_items(CONFIG_KEYS_PATH);
-        assert_eq!(items.len(), KEY_CONFIG_MODES.len());
+        assert_eq!(items.len(), KEY_CONFIG_MODES.len() + 1);
+        assert!(matches!(
+            &items[0],
+            SelectItem::Folder { name, path, .. }
+                if name == "共通" && path == CONFIG_KEYS_COMMON_PATH
+        ));
         assert!(matches!(
             &items[1],
             SelectItem::Folder { name, path, .. }
-                if name == "7K" && path == "bmz-settings:keys:7k"
+                if name == "5K" && path == "bmz-settings:keys:5k"
         ));
+    }
+
+    #[test]
+    fn settings_keys_common_lists_e_actions() {
+        let items = load_settings_items(CONFIG_KEYS_COMMON_PATH);
+        assert_eq!(items.len(), COMMON_ACTIONS.len() * KEY_BINDING_SLOTS.len());
+        assert!(matches!(
+            &items[0],
+            SelectItem::KeyBinding(row)
+                if row.target == KeyBindingTarget::Action {
+                    action: InputActionConfig::E1,
+                    slot: KeyBindingSlot::KeyboardPrimary,
+                }
+        ));
+        assert!(items.iter().any(|item| matches!(
+            item,
+            SelectItem::KeyBinding(row)
+                if row.target == KeyBindingTarget::Action {
+                    action: InputActionConfig::E4,
+                    slot: KeyBindingSlot::Controller,
+                }
+        )));
     }
 
     #[test]
