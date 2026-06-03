@@ -6829,6 +6829,7 @@ fn select_snapshot_rows(
                     difficulty_name: String::new(),
                     play_level: String::new(),
                     table_level: String::new(),
+                    judge_rank: None,
                     total_notes: 0,
                     initial_bpm: 0.0,
                     min_bpm: 0.0,
@@ -6888,6 +6889,7 @@ fn select_snapshot_rows(
                             .map(|chart| chart.play_level.clone())
                             .unwrap_or_default(),
                         table_level: row.table_level.clone(),
+                        judge_rank: row.chart.as_ref().and_then(|chart| chart.judge_rank),
                         total_notes: row.chart.as_ref().map(|chart| chart.total_notes).unwrap_or(0),
                         initial_bpm: row
                             .chart
@@ -7006,6 +7008,7 @@ fn select_snapshot_rows(
                     // Show "N stages" in the play_level slot.
                     play_level: format!("{} stages", row.entry_count),
                     table_level: String::new(),
+                    judge_rank: None,
                     total_notes: row.total_notes,
                     initial_bpm: row.min_bpm,
                     min_bpm: row.min_bpm,
@@ -7060,6 +7063,7 @@ fn select_snapshot_rows(
                         difficulty_name: String::new(),
                         play_level: value,
                         table_level: String::new(),
+                        judge_rank: None,
                         total_notes: 0,
                         initial_bpm: 0.0,
                         min_bpm: 0.0,
@@ -7110,6 +7114,7 @@ fn select_snapshot_rows(
                         difficulty_name: String::new(),
                         play_level: value,
                         table_level: String::new(),
+                        judge_rank: None,
                         total_notes: 0,
                         initial_bpm: 0.0,
                         min_bpm: 0.0,
@@ -7153,6 +7158,7 @@ fn select_snapshot_rows(
                     difficulty_name: String::new(),
                     play_level: String::new(),
                     table_level: String::new(),
+                    judge_rank: None,
                     total_notes: 0,
                     initial_bpm: 0.0,
                     min_bpm: 0.0,
@@ -8845,6 +8851,7 @@ mod tests {
         assert_eq!(snapshot_rows[3].title, "Title 5");
         assert_eq!(snapshot_rows[3].clear_type, "Normal");
         assert_eq!(snapshot_rows[3].ex_score, Some(1234));
+        assert_eq!(snapshot_rows[3].judge_rank, Some(1));
         assert_eq!(snapshot_rows[3].replay_slots, [true, false, false, false]);
         assert_eq!(snapshot_rows[3].chart_normal_notes, 45);
         assert_eq!(snapshot_rows[3].chart_long_notes, 6);
@@ -9046,6 +9053,7 @@ mod tests {
                 preview_file: String::new(),
                 has_long_notes: false,
                 has_mines: false,
+                judge_rank: Some(1),
             }),
             chart_analysis: Some(crate::storage::library_db::ChartAnalysisSummary {
                 normal_notes: 40 + index as u32,

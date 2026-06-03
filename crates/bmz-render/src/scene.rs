@@ -110,6 +110,8 @@ pub struct SelectRowSnapshot {
     pub difficulty_name: String,
     pub play_level: String,
     pub table_level: String,
+    /// 現在の曲の #RANK / 判定ランク。0..4 は VERYHARD..VERYEASY、10 以上は直接倍率。
+    pub judge_rank: Option<i32>,
     pub total_notes: u32,
     pub initial_bpm: f32,
     pub min_bpm: f32,
@@ -169,6 +171,7 @@ impl Default for SelectRowSnapshot {
             difficulty_name: String::new(),
             play_level: String::new(),
             table_level: String::new(),
+            judge_rank: None,
             total_notes: 0,
             initial_bpm: 0.0,
             min_bpm: 0.0,

@@ -59,6 +59,7 @@ pub struct ChartListItem {
     pub preview_file: String,
     pub has_long_notes: bool,
     pub has_mines: bool,
+    pub judge_rank: Option<i32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -971,7 +972,7 @@ impl LibraryDatabase {
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(params![source_url], |row| {
             let chart = chart_list_item_from_row(row)?;
-            let level: String = row.get(21)?;
+            let level: String = row.get(22)?;
             Ok((chart, level))
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
@@ -984,7 +985,7 @@ const CHART_LIST_ITEM_LOOKUP_SQL: &str = "
            initial_bpm, COALESCE(min_bpm, initial_bpm),
            COALESCE(max_bpm, initial_bpm), length_ms, folder_path,
            stage_file, banner_file, backbmp_file, preview_file,
-           has_long_notes, has_mines
+           has_long_notes, has_mines, judge_rank
     FROM charts
     WHERE {column} = ?1
     ORDER BY id DESC
@@ -1035,7 +1036,8 @@ const CHART_LIST_ITEM_COLUMNS: &str = "
     backbmp_file,
     preview_file,
     has_long_notes,
-    has_mines";
+    has_mines,
+    judge_rank";
 
 const CHART_LIST_ITEM_COLUMNS_C: &str = "
     c.id,
@@ -1058,7 +1060,8 @@ const CHART_LIST_ITEM_COLUMNS_C: &str = "
     c.backbmp_file,
     c.preview_file,
     c.has_long_notes,
-    c.has_mines";
+    c.has_mines,
+    c.judge_rank";
 
 fn chart_list_item_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChartListItem> {
     let md5_hex: String = row.get(1)?;
@@ -1088,6 +1091,7 @@ fn chart_list_item_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChartLi
         preview_file: row.get(18)?,
         has_long_notes: row.get(19)?,
         has_mines: row.get(20)?,
+        judge_rank: row.get(21)?,
     })
 }
 

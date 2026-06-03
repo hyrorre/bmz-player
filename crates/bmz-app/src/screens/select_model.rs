@@ -1231,6 +1231,7 @@ mod tests {
                 preview_file: String::new(),
                 has_long_notes: false,
                 has_mines: false,
+                judge_rank: None,
             }),
             chart_analysis: None,
             fallback_title: String::new(),
