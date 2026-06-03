@@ -31,7 +31,7 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::monitor::{MonitorHandle, VideoModeHandle};
 use winit::window::{Fullscreen, Window, WindowAttributes, WindowId};
 
-use crate::audio::AppAudioOutput;
+use crate::audio::{AppAudioOutput, AudioRuntime};
 use crate::bootstrap::{self, BootstrappedApp};
 use crate::chart_preview::SelectChartPreview;
 use crate::cli::{
@@ -66,9 +66,10 @@ use crate::screens::play_snapshot::{
     display_bga_frame,
 };
 use crate::screens::play_start::{
-    PlayStartOptions, PreloadedWinitPlaySession, StartedWinitPlaySession, apply_course_constraints,
-    apply_queued_replay, open_prepared_winit_play_session, play_session_options_from_start,
-    prepare_play_session_for_chart_with_winit_input, prepare_winit_play_session_from_preloaded,
+    PlayStartOptions, PreloadedWinitPlaySession, PreparedWinitPlaySession, StartedWinitPlaySession,
+    apply_course_constraints, apply_queued_replay, open_prepared_winit_play_session,
+    play_session_options_from_start, prepare_play_session_for_chart_with_winit_input,
+    prepare_winit_play_session_from_preloaded,
 };
 use crate::screens::practice::{
     PracticeCliOverrides, PracticePhase, PracticeSession, clamp_practice_property,
@@ -118,18 +119,19 @@ pub async fn run_with_options(options: AppOptions) -> Result<()> {
 
     // システム SE / BGM 用の cpal ストリームを起動する。
     // 開けない環境(ヘッドレス CI 等)はサイレントモードでアプリ起動を継続する。
-    let system_audio = match crate::audio::SystemAudio::open(&boot.app_config.audio) {
-        Ok(audio) => Some(audio),
+    let audio_runtime = match AudioRuntime::open(&boot.app_config.audio) {
+        Ok(runtime) => Some(runtime),
         Err(error) => {
-            tracing::warn!(%error, "failed to open system audio output; running without system sounds");
+            tracing::warn!(%error, "failed to open shared audio output; running without audio");
             None
         }
     };
+    let system_audio = audio_runtime.as_ref().map(crate::audio::SystemAudio::open);
 
     let event_loop = EventLoop::new().context("failed to create event loop")?;
     event_loop.set_control_flow(ControlFlow::Poll);
 
-    let mut app = WinitApp::new(boot, options, system_audio)?;
+    let mut app = WinitApp::new(boot, options, audio_runtime, system_audio)?;
     tracing::info!("starting winit event loop");
     event_loop.run_app(&mut app).context("winit event loop failed")
 }
@@ -190,6 +192,7 @@ struct WinitApp {
     /// プレイ終了でリザルトへ移った後、曲の余韻を鳴らし切るために保持する音声出力。
     /// ドレインが完了するか、選曲復帰・次プレイ開始で解放される。
     draining_audio: Option<AppAudioOutput>,
+    audio_runtime: Option<AudioRuntime>,
     finished_play: Option<FinishedPlaySession>,
     /// 直近のプレイがオートプレイだったか。Result 画面の常時表示に使う。
     last_play_was_autoplay: bool,
@@ -568,6 +571,7 @@ impl WinitApp {
     fn new(
         boot: BootstrappedApp,
         options: AppOptions,
+        audio_runtime: Option<AudioRuntime>,
         system_audio: Option<crate::audio::SystemAudio>,
     ) -> Result<Self> {
         let mut boot = boot;
@@ -692,6 +696,7 @@ impl WinitApp {
             active_course: None,
             finished_course: None,
             draining_audio: None,
+            audio_runtime,
             finished_play: None,
             last_play_was_autoplay: false,
             last_play_snapshot: None,
@@ -2904,11 +2909,7 @@ impl WinitApp {
             prepared,
             input: preloaded.input,
         };
-        match open_prepared_winit_play_session(
-            &self.boot.score_db,
-            &self.boot.app_config,
-            prepared_winit,
-        ) {
+        match self.open_prepared_winit_play_session(prepared_winit) {
             Ok(active_play) => {
                 self.pending_play_start = None;
                 self.install_active_play(active_play);
@@ -3484,6 +3485,14 @@ impl WinitApp {
             .unwrap_or_default()
     }
 
+    fn open_prepared_winit_play_session(
+        &self,
+        prepared: PreparedWinitPlaySession,
+    ) -> Result<StartedWinitPlaySession> {
+        let runtime = self.audio_runtime.as_ref().context("audio output is not available")?;
+        open_prepared_winit_play_session(&self.boot.score_db, runtime, prepared)
+    }
+
     fn decide_snapshot_for_chart(&self, chart_id: i64) -> RenderSnapshot {
         let mut snapshot = RenderSnapshot::default();
         if let Some(SelectItem::Chart(row)) = self.select_items.iter().find(|item| match item {
@@ -3533,11 +3542,7 @@ impl WinitApp {
                 tracing::debug!(chart_id, "using buffered play preload");
                 let prepared =
                     prepare_winit_play_session_from_preloaded(&self.boot.profile_config, preloaded);
-                open_prepared_winit_play_session(
-                    &self.boot.score_db,
-                    &self.boot.app_config,
-                    prepared,
-                )
+                self.open_prepared_winit_play_session(prepared)
             }
             None => prepare_play_session_for_chart_with_winit_input(
                 &self.boot.library_db,
@@ -3546,13 +3551,7 @@ impl WinitApp {
                 chart_id,
                 options.clone(),
             )
-            .and_then(|prepared| {
-                open_prepared_winit_play_session(
-                    &self.boot.score_db,
-                    &self.boot.app_config,
-                    prepared,
-                )
-            }),
+            .and_then(|prepared| self.open_prepared_winit_play_session(prepared)),
         };
         match opened {
             Ok(active_play) => {
@@ -3704,8 +3703,7 @@ impl WinitApp {
         let chart_id = play_start.chart_id;
         let prepared =
             prepare_winit_play_session_from_preloaded(&self.boot.profile_config, prepared);
-        match open_prepared_winit_play_session(&self.boot.score_db, &self.boot.app_config, prepared)
-        {
+        match self.open_prepared_winit_play_session(prepared) {
             Ok(active_play) => {
                 tracing::info!(chart_id, "play preload installed");
                 self.install_active_play(active_play);
