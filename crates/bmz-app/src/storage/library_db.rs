@@ -1269,8 +1269,8 @@ impl ChartAnalysis {
                 density_count = density_count.saturating_add(1);
             }
         }
-        let density = if density_count == 0 {
-            0.0
+        let density: f64 = if density_count == 0 {
+            0.0_f64
         } else {
             f64::from(density_sum) / f64::from(density_count)
         };
@@ -1286,7 +1286,7 @@ impl ChartAnalysis {
             }
         }
 
-        let main_bpm = bpm_note_counts
+        let main_bpm: f64 = bpm_note_counts
             .into_iter()
             .max_by_key(|(_, count)| *count)
             .map(|(bpm, _)| bpm)
@@ -1445,8 +1445,8 @@ struct ChartStats {
 
 impl ChartStats {
     fn from_chart(chart: &PlayableChart) -> Self {
-        let mut min_bpm = chart.metadata.initial_bpm;
-        let mut max_bpm = chart.metadata.initial_bpm;
+        let mut min_bpm: f64 = chart.metadata.initial_bpm;
+        let mut max_bpm: f64 = chart.metadata.initial_bpm;
         for event in &chart.timing_events {
             if let TimingEventKind::BpmChange { bpm } = event.kind {
                 min_bpm = min_bpm.min(bpm);
