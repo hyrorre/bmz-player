@@ -38,14 +38,20 @@ pub struct TickTimingEvent {
 }
 
 pub fn ticks_to_us(delta_ticks: u64, bpm: f64) -> i64 {
+    let bpm = sanitize_bpm(bpm);
     let beats = delta_ticks as f64 / TICKS_PER_BEAT as f64;
     let us = beats * 60.0 * 1_000_000.0 / bpm;
     us.round() as i64
 }
 
 pub fn us_to_ticks(delta_us: i64, bpm: f64) -> u64 {
+    let bpm = sanitize_bpm(bpm);
     let ticks = delta_us as f64 * bpm * TICKS_PER_BEAT as f64 / 60.0 / 1_000_000.0;
     ticks.floor().max(0.0) as u64
+}
+
+fn sanitize_bpm(bpm: f64) -> f64 {
+    if bpm.is_finite() && bpm > 0.0 { bpm } else { 1.0 }
 }
 
 /// BMS `#STOPxx` の raw 値 (1/192 measure 単位) を microsecond duration へ変換する。
@@ -69,7 +75,7 @@ pub fn build_timing_map(initial_bpm: f64, mut events: Vec<TickTimingEvent>) -> T
     let mut segments = Vec::new();
     let mut current_tick = ChartTick(0);
     let mut current_time = TimeUs(0);
-    let mut current_bpm = initial_bpm;
+    let mut current_bpm = sanitize_bpm(initial_bpm);
 
     for event in events {
         if event.tick > current_tick {
@@ -93,7 +99,7 @@ pub fn build_timing_map(initial_bpm: f64, mut events: Vec<TickTimingEvent>) -> T
                 current_time = add_time_us(current_time, stop_raw_to_us(value, current_bpm));
             }
             TickTimingEventKind::SetBpm(bpm) => {
-                current_bpm = bpm;
+                current_bpm = sanitize_bpm(bpm);
             }
         }
     }
@@ -285,6 +291,19 @@ mod tests {
         let map = build_timing_map(1.0, events);
 
         assert_eq!(map.segments[0].start_time, TimeUs(i64::MAX));
+    }
+
+    #[test]
+    fn build_timing_map_sanitizes_zero_bpm_changes() {
+        let events = vec![TickTimingEvent {
+            tick: ChartTick(TICKS_PER_MEASURE as u64),
+            kind: TickTimingEventKind::SetBpm(0.0),
+        }];
+
+        let map = build_timing_map(120.0, events);
+
+        assert_eq!(map.tick_to_time(ChartTick(TICKS_PER_MEASURE as u64)), TimeUs(2_000_000));
+        assert_eq!(map.tick_to_time(ChartTick(TICKS_PER_MEASURE as u64 * 2)), TimeUs(242_000_000));
     }
 
     #[test]

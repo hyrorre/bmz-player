@@ -1,12 +1,12 @@
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use anyhow::Result;
-use rayon::prelude::*;
-
 use bmz_chart::import::ImportResult;
 use bmz_chart::import::error::ImportError;
 use bmz_chart::import::import_bms_chart;
+use rayon::prelude::*;
 
 use crate::config::app_config::{PathEntry, ScanConfig};
 
@@ -133,7 +133,7 @@ pub fn scan_song_roots(
                     path: todo.path.clone(),
                     file_size: todo.file_size,
                     modified_at: todo.modified_at,
-                    result: import_bms_chart(&todo.path, None, false),
+                    result: import_bms_chart_catching_unwind(&todo.path),
                 })
                 .collect();
             let parse_ms = parse_start.elapsed().as_millis();
@@ -206,6 +206,23 @@ pub fn scan_song_roots(
     }
 
     Ok(report)
+}
+
+fn import_bms_chart_catching_unwind(path: &Path) -> Result<ImportResult, ImportError> {
+    match catch_unwind(AssertUnwindSafe(|| import_bms_chart(path, None, false))) {
+        Ok(result) => result,
+        Err(payload) => {
+            let message = payload
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| payload.downcast_ref::<&'static str>().copied())
+                .unwrap_or("unknown panic");
+            Err(ImportError::Parse {
+                path: path.to_path_buf(),
+                message: format!("chart import panicked: {message}"),
+            })
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -20,6 +20,7 @@ pub use super::difficulty_table_db::{
 use super::common::{configure_connection, hash_to_hex, hex_to_hash};
 
 pub const CHART_IMPORT_VERSION: i64 = 2;
+const MAX_ANALYSIS_DISTRIBUTION_SECONDS: usize = 24 * 60 * 60;
 
 pub struct LibraryDatabase {
     conn: Connection,
@@ -1192,7 +1193,8 @@ fn write_chart_analysis(conn: &Connection, chart_id: i64, chart: &PlayableChart)
 
 impl ChartAnalysis {
     pub fn from_chart(chart: &PlayableChart) -> Self {
-        let seconds = (chart.end_time.0 / 1_000_000).max(0) as usize + 2;
+        let seconds = ((chart.end_time.0 / 1_000_000).max(0) as usize + 2)
+            .min(MAX_ANALYSIS_DISTRIBUTION_SECONDS);
         let mut distribution = vec![ChartDistributionSecond::default(); seconds.max(1)];
         let mut lane_notes = Lane::ALL
             .iter()
@@ -1741,6 +1743,16 @@ mod tests {
         assert_eq!(analysis.lane_notes[Lane::Scratch.index()].long_notes, 1);
         assert_eq!(analysis.lane_notes[Lane::Key2.index()].mines, 1);
         assert_eq!(analysis.peak_density, 1.0);
+    }
+
+    #[test]
+    fn chart_analysis_caps_extreme_distribution_length() {
+        let mut chart = chart("long analysis");
+        chart.end_time = TimeUs(i64::MAX);
+
+        let analysis = ChartAnalysis::from_chart(&chart);
+
+        assert_eq!(analysis.distribution.len(), MAX_ANALYSIS_DISTRIBUTION_SECONDS);
     }
 
     #[test]
