@@ -376,18 +376,6 @@ impl Renderer {
         self.result_skin_context = skin_context;
     }
 
-    fn dynamic_timer_runtime_for_scene(
-        &mut self,
-        scene: &AppSceneSnapshot,
-    ) -> &mut DynamicTimerRuntime {
-        match scene {
-            AppSceneSnapshot::Select(_) => &mut self.select_dynamic_timer_runtime,
-            AppSceneSnapshot::Decide(_) => &mut self.decide_dynamic_timer_runtime,
-            AppSceneSnapshot::Play(_) => &mut self.play_dynamic_timer_runtime,
-            AppSceneSnapshot::Result(_) => &mut self.result_dynamic_timer_runtime,
-        }
-    }
-
     /// リザルトスキンが宣言する終了フェードアウト時間 (ms)。
     /// ドキュメントスキンが無い場合や未指定の場合は 0 を返す。
     pub fn result_skin_fadeout_ms(&self) -> i32 {
@@ -436,15 +424,6 @@ impl Renderer {
         self.result_skin_context.document()
     }
 
-    fn skin_context_for_scene(&self, scene: &AppSceneSnapshot) -> &SkinContext {
-        match scene {
-            AppSceneSnapshot::Select(_) => &self.select_skin_context,
-            AppSceneSnapshot::Decide(_) => &self.decide_skin_context,
-            AppSceneSnapshot::Play(_) => &self.play_skin_context,
-            AppSceneSnapshot::Result(_) => &self.result_skin_context,
-        }
-    }
-
     pub fn resize_surface(&mut self, size: SurfaceSize) {
         let Some(gpu) = &mut self.gpu else {
             return;
@@ -461,9 +440,28 @@ impl Renderer {
     }
 
     pub fn render_scene_status(&mut self, scene: AppSceneSnapshot) -> Result<RenderSurfaceStatus> {
-        let skin = self.skin_context_for_scene(&scene).clone();
-        let dynamic_timers = self.dynamic_timer_runtime_for_scene(&scene);
-        let plan = DrawPlan::from_scene_with_skin(&scene, &skin, dynamic_timers);
+        let plan = match &scene {
+            AppSceneSnapshot::Select(_) => DrawPlan::from_scene_with_skin(
+                &scene,
+                &self.select_skin_context,
+                &mut self.select_dynamic_timer_runtime,
+            ),
+            AppSceneSnapshot::Decide(_) => DrawPlan::from_scene_with_skin(
+                &scene,
+                &self.decide_skin_context,
+                &mut self.decide_dynamic_timer_runtime,
+            ),
+            AppSceneSnapshot::Play(_) => DrawPlan::from_scene_with_skin(
+                &scene,
+                &self.play_skin_context,
+                &mut self.play_dynamic_timer_runtime,
+            ),
+            AppSceneSnapshot::Result(_) => DrawPlan::from_scene_with_skin(
+                &scene,
+                &self.result_skin_context,
+                &mut self.result_dynamic_timer_runtime,
+            ),
+        };
         self.last_scene = Some(scene);
         self.last_plan = Some(plan);
 
