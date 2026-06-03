@@ -108,6 +108,7 @@ pub struct TextureId(pub u32);
 pub struct TextStyle {
     pub font_id: Option<String>,
     pub size: f32,
+    pub bitmap_size: Option<f32>,
     pub color: Color,
     pub layer: TextLayer,
     pub align: TextAlign,
@@ -1320,6 +1321,7 @@ fn push_scene_overlay_text(commands: &mut Vec<DrawCommand>, overlay: &str, origi
         style: TextStyle {
             font_id: None,
             size: OVERLAY_FONT_SIZE_RATIO,
+            bitmap_size: None,
             color: Color::rgba(0.9, 0.9, 0.9, 0.65),
             layer: TextLayer::Ui,
             align: TextAlign::Right,
@@ -1837,6 +1839,7 @@ fn default_play_skin(snapshot: &RenderSnapshot) -> SkinDefinition {
                 style: TextStyle {
                     font_id: None,
                     size: 0.05,
+                    bitmap_size: None,
                     color: Color::rgb(0.94, 0.98, 1.0),
                     layer: TextLayer::Skin,
                     align: TextAlign::Left,
@@ -1860,6 +1863,7 @@ fn default_play_skin(snapshot: &RenderSnapshot) -> SkinDefinition {
                 style: TextStyle {
                     font_id: None,
                     size: 0.03,
+                    bitmap_size: None,
                     color: Color::rgb(0.96, 0.92, 0.54),
                     layer: TextLayer::Skin,
                     align: TextAlign::Left,

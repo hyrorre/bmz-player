@@ -1608,7 +1608,8 @@ impl<'a> CachedTextFrameBuilder<'a> {
         }
 
         let design_size = if font.size > 0 { font.size } else { font.line_height.max(1) };
-        let mut scale = (style.size * surface.height as f32 / design_size as f32).max(0.01);
+        let bitmap_size = style.bitmap_size.unwrap_or(style.size);
+        let mut scale = (bitmap_size * surface.height as f32 / design_size as f32).max(0.01);
         let mut text_width = bitmap_text_width_px(text, font, scale);
         let max_width = style.max_width.max(0.0) * surface.width as f32;
         let text = if max_width > 0.0 && text_width > max_width {
@@ -1886,7 +1887,8 @@ impl TextAtlasBuilder {
         }
 
         let design_size = if font.size > 0 { font.size } else { font.line_height.max(1) };
-        let mut scale = (style.size * surface.height as f32 / design_size as f32).max(0.01);
+        let bitmap_size = style.bitmap_size.unwrap_or(style.size);
+        let mut scale = (bitmap_size * surface.height as f32 / design_size as f32).max(0.01);
         let mut text_width = bitmap_text_width_px(text, font, scale);
         let max_width = style.max_width.max(0.0) * surface.width as f32;
         let text = if max_width > 0.0 && text_width > max_width {
@@ -3027,6 +3029,7 @@ mod tests {
                 style: TextStyle {
                     font_id: None,
                     size: 0.1,
+                    bitmap_size: None,
                     color: Color::rgb(1.0, 1.0, 1.0),
                     layer: crate::plan::TextLayer::Skin,
                     align: TextAlign::Left,
@@ -3058,6 +3061,7 @@ mod tests {
                 style: TextStyle {
                     font_id: None,
                     size: 0.1,
+                    bitmap_size: None,
                     color: Color::rgb(1.0, 1.0, 1.0),
                     layer: crate::plan::TextLayer::Skin,
                     align: TextAlign::Left,
@@ -3106,6 +3110,7 @@ mod tests {
                 style: TextStyle {
                     font_id: None,
                     size: 0.1,
+                    bitmap_size: None,
                     color: Color::rgb(1.0, 1.0, 1.0),
                     layer: crate::plan::TextLayer::Skin,
                     align: TextAlign::Left,
@@ -3150,6 +3155,7 @@ mod tests {
                 style: TextStyle {
                     font_id: None,
                     size: 0.1,
+                    bitmap_size: None,
                     color: Color::rgb(1.0, 1.0, 1.0),
                     layer: crate::plan::TextLayer::Skin,
                     align: TextAlign::Left,
@@ -3221,6 +3227,7 @@ mod tests {
                 style: TextStyle {
                     font_id: Some("bitmap".to_string()),
                     size: 0.1,
+                    bitmap_size: None,
                     color: Color::rgb(1.0, 1.0, 1.0),
                     layer: crate::plan::TextLayer::Skin,
                     align: TextAlign::Left,
@@ -3293,6 +3300,7 @@ mod tests {
                 style: TextStyle {
                     font_id: Some("bitmap".to_string()),
                     size: 0.3,
+                    bitmap_size: None,
                     color: Color::rgb(1.0, 1.0, 1.0),
                     layer: crate::plan::TextLayer::Skin,
                     align: TextAlign::Left,
@@ -3309,6 +3317,79 @@ mod tests {
         let y = f32::from_le_bytes(frame.instances[4..8].try_into().unwrap());
 
         assert!((y - 0.05).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn bitmap_font_text_uses_bitmap_size_for_scale() {
+        let Some(default_font) = load_default_font() else { return };
+        let surface = SurfaceSize { width: 100, height: 100 };
+        let mut pages = HashMap::new();
+        pages.insert(
+            0,
+            crate::bitmap_font::BitmapFontPage {
+                id: 0,
+                path: std::path::PathBuf::from("page.png"),
+                image: crate::assets::RgbaImageAsset {
+                    width: 1,
+                    height: 1,
+                    pixels: vec![255, 255, 255, 255],
+                },
+            },
+        );
+        let mut glyphs = HashMap::new();
+        glyphs.insert(
+            'A',
+            crate::bitmap_font::BitmapFontGlyph {
+                id: 'A',
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+                xoffset: 0,
+                yoffset: 0,
+                xadvance: 1,
+                page: 0,
+            },
+        );
+        let mut bitmap_fonts = HashMap::new();
+        bitmap_fonts.insert(
+            "bitmap".to_string(),
+            BitmapFont {
+                size: 10,
+                line_height: 10,
+                base: 8,
+                ascent: 7.0,
+                scale_width: 1,
+                scale_height: 1,
+                pages,
+                glyphs,
+            },
+        );
+        let plan = DrawPlan {
+            clear: Color::rgb(0.0, 0.0, 0.0),
+            commands: vec![DrawCommand::Text {
+                origin: Point { x: 0.1, y: 0.1 },
+                text: "A".to_string(),
+                style: TextStyle {
+                    font_id: Some("bitmap".to_string()),
+                    size: 0.3,
+                    bitmap_size: Some(0.1),
+                    color: Color::rgb(1.0, 1.0, 1.0),
+                    layer: crate::plan::TextLayer::Skin,
+                    align: TextAlign::Left,
+                    max_width: 0.0,
+                    overflow: TextOverflow::Overflow,
+                    wrapping: false,
+                    outline: None,
+                    shadow: None,
+                },
+            }],
+        };
+
+        let frame = build_text_frame(&plan, &default_font, &HashMap::new(), &bitmap_fonts, surface);
+        let width = f32::from_le_bytes(frame.instances[8..12].try_into().unwrap());
+
+        assert!((width - 0.01).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -3355,6 +3436,7 @@ mod tests {
             style: TextStyle {
                 font_id: None,
                 size: 0.1,
+                bitmap_size: None,
                 color: Color::rgb(1.0, 1.0, 1.0),
                 layer: crate::plan::TextLayer::Skin,
                 align: TextAlign::Left,

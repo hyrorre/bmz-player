@@ -4365,6 +4365,7 @@ impl SkinDocument {
             style: TextStyle {
                 font_id: (!text.font.is_empty()).then(|| text.font.clone()),
                 size: frame.h.abs().max(text.size).max(1) as f32 / self.h.max(1) as f32,
+                bitmap_size: skin_text_bitmap_size(text, &self.font, self.h),
                 color: Color::rgba(
                     frame.r as f32 / 255.0,
                     frame.g as f32 / 255.0,
@@ -7166,6 +7167,20 @@ fn skin_text_align(align: i32) -> TextAlign {
     }
 }
 
+fn skin_text_bitmap_size(
+    text: &SkinTextDef,
+    fonts: &[SkinFontDef],
+    skin_height: u32,
+) -> Option<f32> {
+    if text.size <= 0 || text.font.is_empty() {
+        return None;
+    }
+    let font_id = text.font.rsplit_once(':').map_or(text.font.as_str(), |(_, id)| id);
+    let font = fonts.iter().find(|font| font.id == text.font || font.id == font_id)?;
+    let extension = Path::new(&font.path).extension()?.to_str()?;
+    extension.eq_ignore_ascii_case("fnt").then_some(text.size as f32 / skin_height.max(1) as f32)
+}
+
 fn skin_text_overflow(overflow: i32) -> TextOverflow {
     match overflow {
         1 => TextOverflow::Shrink,
@@ -9416,6 +9431,7 @@ mod tests {
                 style: TextStyle {
                     font_id: None,
                     size: 0.04,
+                    bitmap_size: None,
                     color: Color::rgb(1.0, 1.0, 1.0),
                     layer: TextLayer::Skin,
                     align: TextAlign::Left,
@@ -9483,6 +9499,7 @@ mod tests {
                     style: TextStyle {
                         font_id: None,
                         size: 0.04,
+                        bitmap_size: None,
                         color: Color::rgb(1.0, 1.0, 1.0),
                         layer: TextLayer::Skin,
                         align: TextAlign::Left,
@@ -15987,6 +16004,53 @@ mod tests {
         match item {
             SkinRenderItem::Text { style, .. } => {
                 assert!((style.color.a - 1.0).abs() < 1e-4, "got alpha {}", style.color.a);
+            }
+            other => panic!("expected SkinRenderItem::Text, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn text_render_item_separates_bitmap_font_size_from_destination_height() {
+        let document: SkinDocument = serde_json::from_value(serde_json::json!({
+            "w": 100,
+            "h": 100,
+            "font": [
+                { "id": "bitmap", "path": "artist.fnt" },
+                { "id": "vector", "path": "artist.ttf" }
+            ]
+        }))
+        .unwrap();
+        let frame = ResolvedSkinFrame { w: 80, h: 28, ..ResolvedSkinFrame::default() };
+        let state = SkinTextState::default();
+        let bitmap_text = SkinTextDef {
+            id: "artist".to_string(),
+            font: "result:bitmap".to_string(),
+            size: 17,
+            constant_text: "Aoi".to_string(),
+            ..SkinTextDef::default()
+        };
+        let vector_text = SkinTextDef {
+            id: "artist_vector".to_string(),
+            font: "vector".to_string(),
+            size: 17,
+            constant_text: "Aoi".to_string(),
+            ..SkinTextDef::default()
+        };
+
+        let bitmap_item = document.text_render_item(&bitmap_text, frame, state).unwrap();
+        let vector_item = document.text_render_item(&vector_text, frame, state).unwrap();
+
+        match bitmap_item {
+            SkinRenderItem::Text { style, .. } => {
+                assert!(approx_eq(style.size, 0.28), "got {}", style.size);
+                assert_eq!(style.bitmap_size, Some(0.17));
+            }
+            other => panic!("expected SkinRenderItem::Text, got {other:?}"),
+        }
+        match vector_item {
+            SkinRenderItem::Text { style, .. } => {
+                assert!(approx_eq(style.size, 0.28), "got {}", style.size);
+                assert_eq!(style.bitmap_size, None);
             }
             other => panic!("expected SkinRenderItem::Text, got {other:?}"),
         }
