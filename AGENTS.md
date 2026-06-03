@@ -538,7 +538,9 @@ IR Website の DB は Supabase CLI と migration を正とします。MCP / Hook
 - local Supabase は `bun run db:start` / `bun run db:stop` で操作します。
 - production / remote への `bun run db:push`、destructive SQL、remote write は必ずユーザー確認を取ります。
 - RLS policy、grant、index、constraint、SQL function は migration に含めます。
-- `.env`, service role key, DB password, refresh token, production data は commit しません。必要な環境変数名だけ `.env.example` に書きます。
+- `.env`, `sb_secret_...`, legacy service role key, DB password, refresh token, production data は commit しません。必要な環境変数名だけ `.env.example` に書きます。
+- ブラウザ / desktop / public client へ渡す Supabase key は `sb_publishable_...` を基本にし、`NUXT_PUBLIC_SUPABASE_KEY` / `SUPABASE_PUBLISHABLE_KEY` に入れます。legacy `anon` key は local CLI などで必要な場合だけ互換用として扱います。
+- server-only の elevated key は `sb_secret_...` を基本にし、`NUXT_SUPABASE_SECRET_KEY` / `SUPABASE_SECRET_KEY` に入れます。legacy `service_role` key は互換用として扱い、絶対に public env に入れません。
 - Supabase DB / migration / RLS / generated types / server-side Supabase 接続処理を触るときは repo skill `supabase-ir-db` を使います。
 
 Supabase 関連の主なコマンド:
