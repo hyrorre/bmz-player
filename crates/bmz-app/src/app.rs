@@ -104,7 +104,8 @@ use crate::storage::migration::migrate_library_db;
 use crate::storage::replay::load_replay_for_chart;
 use crate::ui::{DebugInfo, EguiLayer, SceneSkinDefs, SkinCandidate, SkinCatalog, SkinConfigMeta};
 use bmz_render::skin::{
-    SkinClickHit, SkinClickTarget, SkinDocument, SkinDocumentTexture, SkinManifest, SkinSliderHit,
+    DestinationListEntry, SkinAnimationDef, SkinClickHit, SkinClickTarget, SkinDocument,
+    SkinDocumentTexture, SkinDstEntry, SkinManifest, SkinSliderHit,
 };
 const SAMPLE_PLAYABLE_TITLE: &str = "BMZ Sample Playable";
 
@@ -298,6 +299,8 @@ struct WinitApp {
     play_backbmp_loaded: bool,
     /// プレイ中の Start キー直近の押下時刻。連続押し判定で使用。
     last_play_start_press_at: Option<Instant>,
+    /// Decide 中の E1 押下状態。E1+E2 長押しキャンセルに使う。
+    decide_e1_held: bool,
     /// プレイ中の E2 押下状態。E2+E3 即終了 / E1+E2 長押し終了に使う。
     play_e2_held: bool,
     /// プレイ中の E3 押下状態。E2+E3 即終了に使う。
@@ -822,6 +825,7 @@ impl WinitApp {
             play_backbmp_source: None,
             play_backbmp_loaded: false,
             last_play_start_press_at: None,
+            decide_e1_held: false,
             play_e2_held: false,
             play_e3_held: false,
             play_exit_hold_started_at: None,
@@ -1671,9 +1675,14 @@ impl WinitApp {
             Some(fadeout_started_at) => {
                 let fadeout_duration = self.decide_fadeout_duration();
                 let fadeout_elapsed = fadeout_started_at.elapsed().min(fadeout_duration);
-                let total_elapsed =
-                    fadeout_started_at.duration_since(decide.started_at) + fadeout_elapsed;
-                TimeUs(total_elapsed.as_micros().min(i64::MAX as u128) as i64)
+                let scene_elapsed = decide_fadeout_scene_elapsed(
+                    fadeout_started_at.duration_since(decide.started_at),
+                    fadeout_elapsed,
+                    self.decide_scene_duration(),
+                    fadeout_duration,
+                    self.decide_fadeout_scene_timing(),
+                );
+                TimeUs(scene_elapsed.as_micros().min(i64::MAX as u128) as i64)
             }
             None => elapsed_since(decide.started_at),
         };
@@ -2175,9 +2184,16 @@ impl WinitApp {
         }
 
         if self.pending_decide.is_some() {
-            if self.decide_input_ready()
-                && let Some(action) = decide_action(event.physical_key, event.state, event.repeat)
+            if let Some(control) = physical_key_name(event.physical_key)
+                && !event.repeat
+                && self.update_decide_cancel_control_state(
+                    &control,
+                    event.state == ElementState::Pressed,
+                )
             {
+                return;
+            }
+            if let Some(action) = decide_action(event.physical_key, event.state, event.repeat) {
                 self.begin_decide_fadeout(matches!(action, DecideAction::Cancel));
             }
             return;
@@ -2466,11 +2482,15 @@ impl WinitApp {
         }
 
         if self.pending_decide.is_some() {
-            if self.decide_input_ready() {
-                match button {
-                    "Button1" | "Start" => self.begin_decide_fadeout(false),
-                    "Button2" | "Select" => self.begin_decide_fadeout(true),
-                    _ => {}
+            if self.update_decide_cancel_control_state(button, pressed) {
+                return;
+            }
+            match button {
+                "Button1" => self.begin_decide_fadeout(false),
+                _ => {
+                    if self.select_keys.is_enter(button) {
+                        self.begin_decide_fadeout(false);
+                    }
                 }
             }
             return;
@@ -4329,14 +4349,11 @@ impl WinitApp {
         self.play_system_sound(crate::system_sound::SoundType::ResultClose);
     }
 
-    fn decide_input_ready(&self) -> bool {
-        let Some(decide) = &self.pending_decide else {
-            return false;
-        };
-        decide.started_at.elapsed() >= self.decide_input_duration()
-    }
-
     fn begin_decide_fadeout(&mut self, cancel: bool) {
+        if self.pending_decide.is_none() {
+            return;
+        }
+        self.clear_play_control_holds();
         let Some(decide) = &mut self.pending_decide else {
             return;
         };
@@ -4348,6 +4365,14 @@ impl WinitApp {
     }
 
     fn advance_decide_transition(&mut self) {
+        let Some(fadeout_started) =
+            self.pending_decide.as_ref().map(|decide| decide.fadeout_started_at.is_some())
+        else {
+            return;
+        };
+        if !fadeout_started && self.cancel_decide_if_exit_hold_elapsed() {
+            return;
+        }
         let Some(decide) = &self.pending_decide else {
             return;
         };
@@ -4390,6 +4415,44 @@ impl WinitApp {
 
     fn decide_play_start_ready(&self) -> bool {
         !self.pending_play_skin && self.pending_play_preload.is_none()
+    }
+
+    fn update_decide_cancel_control_state(&mut self, control: &str, pressed: bool) -> bool {
+        let mut handled = false;
+        if self.select_keys.is_start(control) {
+            self.decide_e1_held = pressed;
+            handled = true;
+        }
+        if self.select_keys.is_e2_action(control) {
+            self.play_e2_held = pressed;
+            handled = true;
+        }
+        if self.select_keys.is_e3_action(control) {
+            self.play_e3_held = pressed;
+            handled = true;
+        }
+        if !handled {
+            return false;
+        }
+        update_play_exit_hold_started_at(
+            &mut self.play_exit_hold_started_at,
+            self.decide_e1_held,
+            self.play_e2_held,
+            Instant::now(),
+        );
+        if pressed && self.play_e2_held && self.play_e3_held {
+            self.begin_decide_fadeout(true);
+            return true;
+        }
+        true
+    }
+
+    fn cancel_decide_if_exit_hold_elapsed(&mut self) -> bool {
+        if play_exit_hold_elapsed(self.play_exit_hold_started_at, Instant::now()) {
+            self.begin_decide_fadeout(true);
+            return true;
+        }
+        false
     }
 
     fn advance_play_ending(&mut self) {
@@ -4480,16 +4543,16 @@ impl WinitApp {
         self.select_bar_started_at = now;
     }
 
-    fn decide_input_duration(&self) -> Duration {
-        skin_duration_ms(self.renderer.decide_skin_document().map(|d| d.input).unwrap_or(0))
-    }
-
     fn decide_scene_duration(&self) -> Duration {
         skin_duration_ms(self.renderer.decide_skin_document().map(|d| d.scene).unwrap_or(0))
     }
 
     fn decide_fadeout_duration(&self) -> Duration {
         skin_duration_ms(self.renderer.decide_skin_document().map(|d| d.fadeout).unwrap_or(0))
+    }
+
+    fn decide_fadeout_scene_timing(&self) -> DecideFadeoutSceneTiming {
+        decide_fadeout_scene_timing(self.renderer.decide_skin_document())
     }
 
     fn play_finishmargin_duration(&self) -> Duration {
@@ -4966,6 +5029,7 @@ impl WinitApp {
 
     fn clear_play_control_holds(&mut self) {
         self.last_play_start_press_at = None;
+        self.decide_e1_held = false;
         self.play_e2_held = false;
         self.play_e3_held = false;
         self.play_exit_hold_started_at = None;
@@ -7684,6 +7748,201 @@ fn skin_duration_ms(ms: i32) -> Duration {
     Duration::from_millis(ms.max(0) as u64)
 }
 
+fn decide_fadeout_scene_elapsed(
+    fadeout_started_elapsed: Duration,
+    fadeout_elapsed: Duration,
+    scene_duration: Duration,
+    fadeout_duration: Duration,
+    timing: DecideFadeoutSceneTiming,
+) -> Duration {
+    let direct_elapsed = fadeout_started_elapsed.saturating_add(fadeout_elapsed);
+    let tail_elapsed = match timing {
+        DecideFadeoutSceneTiming::DirectOnly => direct_elapsed,
+        DecideFadeoutSceneTiming::TailStart(tail_start) if fadeout_duration > Duration::ZERO => {
+            let tail_start = tail_start.min(scene_duration);
+            let tail_duration = scene_duration.saturating_sub(tail_start);
+            if tail_duration > Duration::ZERO {
+                let scaled = scale_duration(
+                    fadeout_elapsed.min(fadeout_duration),
+                    tail_duration,
+                    fadeout_duration,
+                );
+                tail_start.saturating_add(scaled).min(scene_duration)
+            } else {
+                scene_duration
+            }
+        }
+        DecideFadeoutSceneTiming::TailStart(_) => scene_duration,
+        DecideFadeoutSceneTiming::DefaultTail => {
+            let tail_start = scene_duration.checked_sub(fadeout_duration).unwrap_or_default();
+            tail_start.saturating_add(fadeout_elapsed).min(scene_duration)
+        }
+    };
+    direct_elapsed.max(tail_elapsed)
+}
+
+fn scale_duration(value: Duration, numerator: Duration, denominator: Duration) -> Duration {
+    if denominator == Duration::ZERO {
+        return Duration::ZERO;
+    }
+    let micros = value
+        .as_micros()
+        .saturating_mul(numerator.as_micros())
+        .checked_div(denominator.as_micros())
+        .unwrap_or(0);
+    Duration::from_micros(micros.min(u64::MAX as u128) as u64)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DecideFadeoutSceneTiming {
+    /// `timer=2` が fadeout を担う skin。scene 時刻を終端へ飛ばすと
+    /// timer なしの終了演出まで同時に進み、暗転が即飽和する。
+    DirectOnly,
+    /// timer=2 が無い skin 向け。従来通り fadeout 中は scene 末尾へ寄せる。
+    DefaultTail,
+    /// m-select のように scene 末尾の黒フェードを fadeout として使う skin。
+    TailStart(Duration),
+}
+
+fn decide_fadeout_scene_timing(document: Option<&SkinDocument>) -> DecideFadeoutSceneTiming {
+    let Some(document) = document else {
+        return DecideFadeoutSceneTiming::DefaultTail;
+    };
+    if document_has_fadeout_timer_black(document) {
+        return DecideFadeoutSceneTiming::DirectOnly;
+    }
+    decide_scene_fadeout_tail_start(Some(document))
+        .map(skin_duration_ms)
+        .map_or(DecideFadeoutSceneTiming::DefaultTail, DecideFadeoutSceneTiming::TailStart)
+}
+
+fn decide_scene_fadeout_tail_start(document: Option<&SkinDocument>) -> Option<i32> {
+    let document = document?;
+    if document.scene <= 0 || document.w == 0 || document.h == 0 {
+        return None;
+    }
+    if document_has_fadeout_timer_black(document) {
+        return None;
+    }
+    document
+        .destination
+        .iter()
+        .flat_map(destination_entry_values)
+        .filter_map(|destination| {
+            if destination.id != "-110" || destination.timer.is_some() {
+                return None;
+            }
+            scene_black_fade_tail_start(destination.dst.iter().flat_map(dst_entry_frames), document)
+        })
+        .max()
+}
+
+fn document_has_fadeout_timer_black(document: &SkinDocument) -> bool {
+    document.destination.iter().flat_map(destination_entry_values).any(|destination| {
+        destination.id == "-110"
+            && destination.timer == Some(2)
+            && black_fade_start(destination.dst.iter().flat_map(dst_entry_frames), document, 0)
+                .is_some()
+    })
+}
+
+fn destination_entry_values(
+    entry: &DestinationListEntry,
+) -> &[bmz_render::skin::SkinDestinationDef] {
+    match entry {
+        DestinationListEntry::Single(destination) => std::slice::from_ref(destination),
+        DestinationListEntry::Conditional { destinations, .. } => destinations.as_slice(),
+    }
+}
+
+fn dst_entry_frames(entry: &SkinDstEntry) -> &[SkinAnimationDef] {
+    match entry {
+        SkinDstEntry::Frame(frame) => std::slice::from_ref(frame),
+        SkinDstEntry::Conditional { frames, .. } => frames.as_slice(),
+    }
+}
+
+fn scene_black_fade_tail_start<'a>(
+    frames: impl Iterator<Item = &'a SkinAnimationDef>,
+    document: &SkinDocument,
+) -> Option<i32> {
+    black_fade_start(frames, document, document.scene)
+}
+
+fn black_fade_start<'a>(
+    frames: impl Iterator<Item = &'a SkinAnimationDef>,
+    document: &SkinDocument,
+    min_end_time: i32,
+) -> Option<i32> {
+    let mut resolved = ResolvedTailFrame::default();
+    let mut previous: Option<ResolvedTailFrame> = None;
+    let mut start = None;
+    for frame in frames {
+        resolved.apply(frame);
+        let Some(previous_frame) = previous else {
+            previous = Some(resolved);
+            continue;
+        };
+        if resolved.time >= min_end_time
+            && previous_frame.time < resolved.time
+            && previous_frame.a < resolved.a
+            && previous_frame.is_fullscreen(document)
+        {
+            start = Some(previous_frame.time);
+        }
+        previous = Some(resolved);
+    }
+    start
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ResolvedTailFrame {
+    time: i32,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    a: i32,
+}
+
+impl Default for ResolvedTailFrame {
+    fn default() -> Self {
+        Self { time: 0, x: 0, y: 0, w: 0, h: 0, a: 255 }
+    }
+}
+
+impl ResolvedTailFrame {
+    fn apply(&mut self, frame: &SkinAnimationDef) {
+        if let Some(time) = frame.time {
+            self.time = time;
+        }
+        if let Some(x) = frame.x {
+            self.x = x;
+        }
+        if let Some(y) = frame.y {
+            self.y = y;
+        }
+        if let Some(w) = frame.w {
+            self.w = w;
+        }
+        if let Some(h) = frame.h {
+            self.h = h;
+        }
+        if let Some(a) = frame.a {
+            self.a = a;
+        }
+    }
+
+    fn is_fullscreen(self, document: &SkinDocument) -> bool {
+        let width = document.w as i32;
+        let height = document.h as i32;
+        self.x <= width / 20
+            && self.y <= height / 20
+            && self.w >= width * 9 / 10
+            && self.h >= height * 9 / 10
+    }
+}
+
 fn scene_kind(scene: &AppSceneSnapshot) -> AppSceneKind {
     match scene {
         AppSceneSnapshot::Select(_) => AppSceneKind::Select,
@@ -8620,6 +8879,119 @@ mod tests {
             start + PLAY_EXIT_HOLD_DURATION,
         );
         assert!(held_since.is_none());
+    }
+
+    #[test]
+    fn decide_fadeout_scene_elapsed_enters_scene_tail_on_early_skip() {
+        let elapsed = decide_fadeout_scene_elapsed(
+            Duration::from_millis(100),
+            Duration::from_millis(250),
+            Duration::from_millis(2500),
+            Duration::from_millis(1000),
+            DecideFadeoutSceneTiming::DefaultTail,
+        );
+
+        assert_eq!(elapsed, Duration::from_millis(1750));
+    }
+
+    #[test]
+    fn decide_fadeout_scene_elapsed_stretches_detected_tail_fadeout() {
+        let elapsed = decide_fadeout_scene_elapsed(
+            Duration::from_millis(100),
+            Duration::from_millis(500),
+            Duration::from_millis(2500),
+            Duration::from_millis(1000),
+            DecideFadeoutSceneTiming::TailStart(Duration::from_millis(2300)),
+        );
+
+        assert_eq!(elapsed, Duration::from_millis(2400));
+    }
+
+    #[test]
+    fn decide_fadeout_scene_elapsed_stays_direct_when_timer_fadeout_exists() {
+        let elapsed = decide_fadeout_scene_elapsed(
+            Duration::from_millis(100),
+            Duration::from_millis(0),
+            Duration::from_millis(2500),
+            Duration::from_millis(500),
+            DecideFadeoutSceneTiming::DirectOnly,
+        );
+
+        assert_eq!(elapsed, Duration::from_millis(100));
+    }
+
+    #[test]
+    fn decide_fadeout_scene_elapsed_does_not_rewind_auto_fadeout() {
+        let elapsed = decide_fadeout_scene_elapsed(
+            Duration::from_millis(2500),
+            Duration::from_millis(250),
+            Duration::from_millis(2500),
+            Duration::from_millis(1000),
+            DecideFadeoutSceneTiming::DefaultTail,
+        );
+
+        assert_eq!(elapsed, Duration::from_millis(2750));
+    }
+
+    #[test]
+    fn decide_scene_fadeout_tail_start_detects_scene_end_black_fade() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 6,
+                "w": 1920,
+                "h": 1080,
+                "scene": 2500,
+                "fadeout": 1000,
+                "destination": [
+                    { "id": -110, "loop": 800, "dst": [
+                        { "time": 0, "x": 0, "y": 0, "w": 1920, "h": 1080, "a": 255 },
+                        { "time": 800, "a": 0 }
+                    ] },
+                    { "id": -110, "loop": 2500, "dst": [
+                        { "time": 2300, "x": 0, "y": 0, "w": 1920, "h": 1080, "a": 0 },
+                        { "time": 2500, "a": 255 }
+                    ] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(decide_scene_fadeout_tail_start(Some(&document)), Some(2300));
+    }
+
+    #[test]
+    fn decide_scene_fadeout_tail_start_ignores_scene_tail_when_timer_fadeout_exists() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 6,
+                "w": 1920,
+                "h": 1080,
+                "scene": 2500,
+                "fadeout": 500,
+                "destination": [
+                    { "id": -110, "loop": 2000, "dst": [
+                        { "time": 1500, "x": 0, "y": 0, "w": 1920, "h": 1080, "a": 0 },
+                        { "time": 2000, "a": 255 }
+                    ] },
+                    { "id": -110, "loop": 500, "timer": 2, "dst": [
+                        { "time": 0, "x": 0, "y": 0, "w": 1920, "h": 1080, "a": 0 },
+                        { "time": 500, "a": 255 }
+                    ] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        assert!(document_has_fadeout_timer_black(&document));
+        assert_eq!(
+            decide_fadeout_scene_timing(Some(&document)),
+            DecideFadeoutSceneTiming::DirectOnly
+        );
+        assert_eq!(decide_scene_fadeout_tail_start(Some(&document)), None);
     }
 
     #[test]
