@@ -915,6 +915,7 @@ fn plan_play(
         course_stage: snapshot.course_stage,
         hit_error_ring: snapshot.hit_error_ring.values,
         hit_error_ring_index: snapshot.hit_error_ring.index,
+        skin_loaded: ready_timer_ms.is_some(),
         ..crate::skin::SkinDrawState::default()
     };
     let play_skin = skin.with_play_graphs(
@@ -3087,6 +3088,9 @@ mod tests {
                 "source": [{"id": 1, "path": "panel.png"}],
                 "image": [{"id": "panel", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10}],
                 "destination": [
+                    {"id": "panel", "op": [80], "dst": [
+                        {"time": 0, "x": 80, "y": 0, "w": 10, "h": 10}
+                    ]},
                     {"id": "panel", "timer": 40, "dst": [
                         {"time": 0, "x": 0, "y": 0, "w": 10, "h": 10},
                         {"time": 1000, "x": 50, "y": 0, "w": 10, "h": 10}
@@ -3127,14 +3131,20 @@ mod tests {
             &mut dynamic_timers,
         );
 
-        assert!(!before_plan
-            .commands
-            .iter()
-            .any(|command| matches!(command, DrawCommand::Image { texture, .. } if *texture == TextureId(99))));
+        assert!(before_plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Image { texture, rect, .. }
+                if *texture == TextureId(99) && approx_eq(rect.x, 0.8)
+        )));
         assert!(after_plan.commands.iter().any(|command| matches!(
             command,
             DrawCommand::Image { texture, rect, .. }
                 if *texture == TextureId(99) && approx_eq(rect.x, 0.25)
+        )));
+        assert!(!after_plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Image { texture, rect, .. }
+                if *texture == TextureId(99) && approx_eq(rect.x, 0.8)
         )));
     }
 
