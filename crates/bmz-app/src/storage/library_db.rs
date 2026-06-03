@@ -19,7 +19,7 @@ pub use super::difficulty_table_db::{
 
 use super::common::{configure_connection, hash_to_hex, hex_to_hash};
 
-pub const CHART_IMPORT_VERSION: i64 = 2;
+pub const CHART_IMPORT_VERSION: i64 = 3;
 const MAX_ANALYSIS_DISTRIBUTION_SECONDS: usize = 10 * 60;
 
 pub struct LibraryDatabase {

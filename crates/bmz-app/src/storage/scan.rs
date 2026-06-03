@@ -210,7 +210,13 @@ pub fn scan_song_roots(
 
 fn import_bms_chart_catching_unwind(path: &Path) -> Result<ImportResult, ImportError> {
     match catch_unwind(AssertUnwindSafe(|| import_bms_chart(path, None, false))) {
-        Ok(result) => result,
+        Ok(result) => result.map(|mut result| {
+            result.chart.metadata.preview_file = crate::chart_asset::normalize_preview_file(
+                path,
+                &result.chart.metadata.preview_file,
+            );
+            result
+        }),
         Err(payload) => {
             let message = payload
                 .downcast_ref::<String>()
@@ -464,6 +470,75 @@ mod tests {
         assert_eq!(second.summary.skipped, 1);
         assert_eq!(forced.summary.imported, 1);
         assert_eq!(forced.summary.skipped, 0);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn scan_song_roots_normalizes_preview_extension() {
+        let root = make_temp_dir("scan-preview-extension");
+        write_file(&root.join("_Preview.ogg"), "ogg");
+        write_file(
+            &root.join("song.bms"),
+            "\
+#TITLE Preview Extension
+#BPM 120
+#PREVIEW _Preview.wav
+#00011:01
+",
+        );
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase::from_connection(conn);
+        let roots = vec![PathEntry {
+            path: root.to_string_lossy().into_owned(),
+            enabled: true,
+            recursive: true,
+        }];
+
+        let report =
+            scan_song_roots(&mut db, &roots, &scan_config(), 1_700_000_025, false).unwrap();
+
+        assert_eq!(report.summary.imported, 1);
+        let preview_file: String =
+            db.conn().query_row("SELECT preview_file FROM charts", [], |row| row.get(0)).unwrap();
+        assert_eq!(preview_file, "_Preview.ogg");
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn scan_song_roots_fills_preview_prefix_audio_when_header_is_empty() {
+        let root = make_temp_dir("scan-preview-prefix");
+        write_file(&root.join("preview.ogg"), "ogg");
+        write_file(
+            &root.join("song.bms"),
+            "\
+#TITLE Preview Prefix
+#BPM 120
+#00011:01
+",
+        );
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase::from_connection(conn);
+        let roots = vec![PathEntry {
+            path: root.to_string_lossy().into_owned(),
+            enabled: true,
+            recursive: true,
+        }];
+
+        let report =
+            scan_song_roots(&mut db, &roots, &scan_config(), 1_700_000_026, false).unwrap();
+
+        assert_eq!(report.summary.imported, 1);
+        let preview_file: String =
+            db.conn().query_row("SELECT preview_file FROM charts", [], |row| row.get(0)).unwrap();
+        assert_eq!(preview_file, "preview.ogg");
 
         std::fs::remove_dir_all(root).unwrap();
     }
