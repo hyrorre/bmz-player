@@ -389,7 +389,8 @@ const SELECT_EXIT_HOLD_DURATION: Duration = Duration::from_millis(1_200);
 /// プレイ中の Start ボタンを「2回連続押し」と判定する間隔上限。
 const PLAY_START_DOUBLE_PRESS_WINDOW: Duration = Duration::from_millis(400);
 /// レーンカバー / LIFT を上下キーで動かす際のステップ幅。
-const LANE_COVER_STEP: f32 = 0.01;
+const LANE_COVER_STEP: f32 = 0.001;
+const LANE_COVER_REPEAT_STEP: f32 = 0.01;
 const SKIN_RELOAD_DEBOUNCE: Duration = Duration::from_millis(300);
 
 struct PendingSkinResult {
@@ -2225,6 +2226,22 @@ impl WinitApp {
     }
 
     fn route_mouse_wheel(&mut self, delta: MouseScrollDelta) {
+        if let Some(change) = lane_cover_wheel_change(delta)
+            && let Some(active_play) = &mut self.active_play
+        {
+            let speed_locked = self.active_course.as_ref().is_some_and(|c| {
+                c.definition.constraints.speed == bmz_core::course::CourseSpeedConstraint::NoSpeed
+            });
+            let session = &mut active_play.running.session;
+            apply_lane_cover_step_to_session(session, lane_cover_change_step(change), speed_locked);
+            tracing::info!(
+                lane_cover = session.lane_cover,
+                lift = session.lift,
+                hispeed = session.hispeed,
+                "adjusted lane cover from mouse wheel"
+            );
+            return;
+        }
         if !matches!(self.view_state(), AppViewState::Select) {
             return;
         }
@@ -6805,10 +6822,7 @@ fn select_action(
 }
 
 fn select_wheel_move(delta: MouseScrollDelta) -> Option<SelectMove> {
-    let y = match delta {
-        MouseScrollDelta::LineDelta(_, y) => y,
-        MouseScrollDelta::PixelDelta(position) => position.y as f32,
-    };
+    let y = mouse_wheel_y(delta);
 
     if y > 0.0 {
         Some(SelectMove::Previous)
@@ -6816,6 +6830,24 @@ fn select_wheel_move(delta: MouseScrollDelta) -> Option<SelectMove> {
         Some(SelectMove::Next)
     } else {
         None
+    }
+}
+
+fn lane_cover_wheel_change(delta: MouseScrollDelta) -> Option<LaneCoverChange> {
+    let y = mouse_wheel_y(delta);
+    if y > 0.0 {
+        Some(LaneCoverChange::Up)
+    } else if y < 0.0 {
+        Some(LaneCoverChange::Down)
+    } else {
+        None
+    }
+}
+
+fn mouse_wheel_y(delta: MouseScrollDelta) -> f32 {
+    match delta {
+        MouseScrollDelta::LineDelta(_, y) => y,
+        MouseScrollDelta::PixelDelta(position) => position.y as f32,
     }
 }
 
@@ -6962,14 +6994,15 @@ fn play_option_control(control: &str, bindings: &SelectKeyBindings) -> Option<Pl
     None
 }
 
-fn lane_cover_step(physical_key: PhysicalKey, state: ElementState, _repeat: bool) -> Option<f32> {
+fn lane_cover_step(physical_key: PhysicalKey, state: ElementState, repeat: bool) -> Option<f32> {
     if state != ElementState::Pressed {
         return None;
     }
+    let step = if repeat { LANE_COVER_REPEAT_STEP } else { LANE_COVER_STEP };
     match physical_key {
         // 上キー: カバー位置を上げる(下方向への余白を縮める = 値を増やす)
-        PhysicalKey::Code(KeyCode::ArrowUp) => Some(LANE_COVER_STEP),
-        PhysicalKey::Code(KeyCode::ArrowDown) => Some(-LANE_COVER_STEP),
+        PhysicalKey::Code(KeyCode::ArrowUp) => Some(step),
+        PhysicalKey::Code(KeyCode::ArrowDown) => Some(-step),
         _ => None,
     }
 }
@@ -7003,6 +7036,7 @@ fn apply_play_option_control_to_session(
                     session.hispeed_mode = HispeedMode::Floating;
                 }
                 HispeedMode::Floating => {
+                    session.hispeed = clamp_hispeed_for_profile(session.hispeed);
                     session.hispeed_mode = HispeedMode::Normal;
                 }
             }
@@ -7085,7 +7119,7 @@ fn hispeed_for_green_number(
     let initial_bpm = session.chart.metadata.initial_bpm.max(1.0);
     let now_bpm = crate::screens::play_snapshot::current_bpm(&session.chart, now).max(1.0);
     let hispeed = hispeed_for_green_number_values(target_green, visible_max, initial_bpm, now_bpm);
-    clamp_hispeed_for_profile(hispeed)
+    hispeed.clamp(0.5, 10.0)
 }
 
 fn hispeed_for_green_number_values(
@@ -7922,6 +7956,19 @@ mod tests {
     }
 
     #[test]
+    fn lane_cover_wheel_change_maps_vertical_scroll() {
+        assert_eq!(
+            lane_cover_wheel_change(MouseScrollDelta::LineDelta(0.0, 1.0)),
+            Some(LaneCoverChange::Up)
+        );
+        assert_eq!(
+            lane_cover_wheel_change(MouseScrollDelta::LineDelta(0.0, -1.0)),
+            Some(LaneCoverChange::Down)
+        );
+        assert_eq!(lane_cover_wheel_change(MouseScrollDelta::LineDelta(1.0, 0.0)), None);
+    }
+
+    #[test]
     fn select_click_event_arg_matches_beatoraja_click_types() {
         let rect = Rect { x: 0.2, y: 0.3, width: 0.4, height: 0.2 };
         assert_eq!(select_click_event_arg(0, MouseButton::Left, rect, 0.3, 0.4), Some(1));
@@ -8114,6 +8161,27 @@ mod tests {
     }
 
     #[test]
+    fn lane_cover_step_moves_one_profile_unit() {
+        assert!((LANE_COVER_STEP - 0.001).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn lane_cover_step_accelerates_on_key_repeat() {
+        assert_eq!(
+            lane_cover_step(PhysicalKey::Code(KeyCode::ArrowUp), ElementState::Pressed, false),
+            Some(0.001)
+        );
+        assert_eq!(
+            lane_cover_step(PhysicalKey::Code(KeyCode::ArrowUp), ElementState::Pressed, true),
+            Some(0.01)
+        );
+        assert_eq!(
+            lane_cover_step(PhysicalKey::Code(KeyCode::ArrowDown), ElementState::Pressed, true),
+            Some(-0.01)
+        );
+    }
+
+    #[test]
     fn play_option_control_maps_e1_combo_targets() {
         let keys = default_select_keys();
 
@@ -8146,18 +8214,18 @@ mod tests {
 
     #[test]
     fn floating_hispeed_formula_uses_green_number_and_lane_cover() {
-        assert_eq!(
-            clamp_hispeed_for_profile(hispeed_for_green_number_values(300.0, 1.0, 120.0, 120.0)),
-            4.0
+        assert_eq!(hispeed_for_green_number_values(300.0, 1.0, 120.0, 120.0), 4.0);
+        assert_eq!(hispeed_for_green_number_values(300.0, 0.5, 120.0, 120.0), 2.0);
+        assert_eq!(hispeed_for_green_number_values(300.0, 1.0, 120.0, 240.0), 2.0);
+        assert!(
+            (hispeed_for_green_number_values(295.0, 0.93, 120.0, 120.0) - 3.783_051).abs()
+                < 0.000_01
         );
-        assert_eq!(
-            clamp_hispeed_for_profile(hispeed_for_green_number_values(300.0, 0.5, 120.0, 120.0)),
-            2.0
-        );
-        assert_eq!(
-            clamp_hispeed_for_profile(hispeed_for_green_number_values(300.0, 1.0, 120.0, 240.0)),
-            2.0
-        );
+    }
+
+    #[test]
+    fn normal_hispeed_rounding_restores_quarter_steps() {
+        assert_eq!(clamp_hispeed_for_profile(3.783_051), 3.75);
     }
 
     #[test]

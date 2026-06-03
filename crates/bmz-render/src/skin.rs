@@ -1550,7 +1550,7 @@ pub struct SkinDrawState {
     pub timeleft_ms: i32,
     /// ノーツ表示時間 ms (NUMBER_DURATION=312 / NUMBER_DURATION_GREEN=313 に使用)。
     pub total_duration_ms: i32,
-    /// レーンカバー割合 0.0-1.0 (NUMBER_LANECOVER1=14 に使用)。0=なし, 1=全画面。
+    /// レーンカバー割合 0.0-1.0 (NUMBER_LANECOVER1=14 は 0..=1000 で返す)。
     pub lane_cover: f32,
     /// リフト量 0.0-1.0 (NUMBER_LIFT1=314 に使用)。
     pub lift: f32,
@@ -6586,7 +6586,7 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         310 => Some(state.hispeed.floor() as i64),
         311 => Some(((state.hispeed * 100.0) as i64) % 100),
         312 => Some(state.total_duration_ms as i64),
-        313 => Some((state.total_duration_ms as i64) * 3 / 5),
+        313 => Some(((state.total_duration_ms as i64) * 3 + 2) / 5),
         308 if state.select_screen => Some(state.select_ln_mode_index as i64),
         // BPM 系: NUMBER_MAXBPM=90, NUMBER_MINBPM=91, NUMBER_NOWBPM=160
         90 => {
@@ -6600,8 +6600,8 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         160 => {
             Some(if state.now_bpm > 0.0 { state.now_bpm } else { state.select_bpm }.round() as i64)
         }
-        // レーンカバー: NUMBER_LANECOVER1=14 (0-100%)
-        14 => Some((state.lane_cover.clamp(0.0, 1.0) * 100.0).round() as i64),
+        // レーンカバー: NUMBER_LANECOVER1=14 (0-1000)
+        14 => Some((state.lane_cover.clamp(0.0, 1.0) * 1000.0).round() as i64),
         // リフト: NUMBER_LIFT1=314 (0-1000)
         314 => Some((state.lift.clamp(0.0, 1.0) * 1000.0).round() as i64),
         // 選曲画面の音量表示: MASTER/KEY/BGM volume (0-100)
@@ -15538,8 +15538,8 @@ mod tests {
         assert_eq!(skin_state_number(91, state), Some(80));
         // NUMBER_MAXBPM (90) = round(200.3) = 200
         assert_eq!(skin_state_number(90, state), Some(200));
-        // NUMBER_LANECOVER1 (14) = round(0.25 * 100) = 25
-        assert_eq!(skin_state_number(14, state), Some(25));
+        // NUMBER_LANECOVER1 (14) = round(0.25 * 1000) = 250
+        assert_eq!(skin_state_number(14, state), Some(250));
         // NUMBER_LIFT1 (314) = round(0.42 * 1000) = 420
         let lifted = SkinDrawState { lift: 0.42, ..state };
         assert_eq!(skin_state_number(314, lifted), Some(420));
@@ -15559,6 +15559,10 @@ mod tests {
         assert_eq!(skin_state_number(312, state), Some(183_000));
         // NUMBER_DURATION_GREEN (313) = duration * 3 / 5.
         assert_eq!(skin_state_number(313, state), Some(109_800));
+        assert_eq!(
+            skin_state_number(313, SkinDrawState { total_duration_ms: 183_001, ..state }),
+            Some(109_801)
+        );
         // VALUE_JUDGE_1P_DURATION (525) = abs(-3) = 3
         assert_eq!(skin_state_number(525, state), Some(3));
         // When no recent judgement, 525 returns None
@@ -15583,11 +15587,13 @@ mod tests {
         let expr = "0.102*option(180)*number(350)+0.09*option(181)*number(350)";
         let very_hard = SkinDrawState {
             judge_rank: Some(0),
+            select_screen: true,
             select_total_notes: 100,
             ..SkinDrawState::default()
         };
         let hard = SkinDrawState {
             judge_rank: Some(1),
+            select_screen: true,
             select_total_notes: 100,
             ..SkinDrawState::default()
         };
