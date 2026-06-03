@@ -9,8 +9,8 @@ use bmz_chart::model::{LongNoteMode, PlayableChart};
 use bmz_core::clear::{ClearType, GaugeType};
 use bmz_core::lane::KeyMode;
 use bmz_core::time::TimeUs;
-use bmz_gameplay::session::PlaySkinOffset;
 use bmz_gameplay::session::compute_frame_times;
+use bmz_gameplay::session::{HispeedMode, PlaySkinOffset};
 use bmz_render::assets::load_static_rgba_image;
 use bmz_render::plan::{
     PLAY_BACKBMP_TEXTURE, Rect, SELECT_BANNER_TEXTURE, SELECT_STAGE_TEXTURE, TextureId,
@@ -46,8 +46,8 @@ use crate::config::key_config::{
 use crate::config::load::load_profile_config;
 use crate::config::profile_config::{
     AssistOptionConfig, BgaExpandConfig, BgaModeConfig, GaugeAutoShiftConfig, GaugeTypeConfig,
-    InputActionConfig, LaneConfig, ProfileConfig, ProfileInputConfig, RandomOptionConfig,
-    TargetOptionConfig,
+    HispeedModeConfig, InputActionConfig, LaneConfig, ProfileConfig, ProfileInputConfig,
+    RandomOptionConfig, TargetOptionConfig,
 };
 use crate::config::save::{save_app_config, save_profile_config};
 use crate::config::settings_registry::SettingsEntryId;
@@ -1732,6 +1732,33 @@ impl WinitApp {
                 active_play.running.session.lane_cover_changing =
                     event.state == ElementState::Pressed;
             }
+            if event.state == ElementState::Pressed
+                && !event.repeat
+                && active_play.running.session.lane_cover_changing
+                && let Some(control) = physical_key_name(event.physical_key)
+                && let Some(action) = play_option_control(&control, &self.select_keys)
+            {
+                let speed_locked = self.active_course.as_ref().is_some_and(|c| {
+                    c.definition.constraints.speed
+                        == bmz_core::course::CourseSpeedConstraint::NoSpeed
+                });
+                if apply_play_option_control_to_session(
+                    &mut active_play.running.session,
+                    action,
+                    speed_locked,
+                ) {
+                    tracing::info!(
+                        hispeed = active_play.running.session.hispeed,
+                        hispeed_mode = ?active_play.running.session.hispeed_mode,
+                        target_green_number = active_play.running.session.target_green_number,
+                        lane_cover = active_play.running.session.lane_cover,
+                        "adjusted play option"
+                    );
+                } else {
+                    tracing::debug!("play option change ignored: course NoSpeed constraint");
+                }
+                return;
+            }
             if let Some(change) = hispeed_action(event.physical_key, event.state, event.repeat) {
                 // Beatoraja: NoSpeed constraint locks the hispeed during course play.
                 let speed_locked = self.active_course.as_ref().is_some_and(|c| {
@@ -1761,14 +1788,17 @@ impl WinitApp {
             }
             if let Some(delta) = lane_cover_step(event.physical_key, event.state, event.repeat) {
                 let session = &mut active_play.running.session;
-                if session.lane_cover_visible {
-                    // SUDDEN+ は ArrowDown で値を大きくする (上下逆操作)。
-                    session.lane_cover = (session.lane_cover - delta).clamp(0.0, 1.0);
-                    tracing::info!(lane_cover = session.lane_cover, "adjusted lane cover");
-                } else {
-                    session.lift = (session.lift + delta).clamp(0.0, 1.0);
-                    tracing::info!(lift = session.lift, "adjusted lift");
-                }
+                let speed_locked = self.active_course.as_ref().is_some_and(|c| {
+                    c.definition.constraints.speed
+                        == bmz_core::course::CourseSpeedConstraint::NoSpeed
+                });
+                apply_lane_cover_step_to_session(session, delta, speed_locked);
+                tracing::info!(
+                    lane_cover = session.lane_cover,
+                    lift = session.lift,
+                    hispeed = session.hispeed,
+                    "adjusted lane cover"
+                );
                 return;
             }
             if event.physical_key == PhysicalKey::Code(KeyCode::KeyH)
@@ -1792,7 +1822,15 @@ impl WinitApp {
                     .is_some_and(|prev| now.duration_since(prev) <= PLAY_START_DOUBLE_PRESS_WINDOW);
                 if is_double {
                     let session = &mut active_play.running.session;
+                    let was_visible = session.lane_cover_visible;
                     session.lane_cover_visible = !session.lane_cover_visible;
+                    if !was_visible && session.lane_cover_visible {
+                        let speed_locked = self.active_course.as_ref().is_some_and(|c| {
+                            c.definition.constraints.speed
+                                == bmz_core::course::CourseSpeedConstraint::NoSpeed
+                        });
+                        reset_floating_hispeed_if_enabled(session, speed_locked);
+                    }
                     tracing::info!(
                         lane_cover_visible = session.lane_cover_visible,
                         "toggled lane cover visibility",
@@ -2035,6 +2073,32 @@ impl WinitApp {
             && self.select_keys.is_start(button)
         {
             active_play.running.session.lane_cover_changing = pressed;
+        }
+        if pressed {
+            let speed_locked = self.active_course.as_ref().is_some_and(|c| {
+                c.definition.constraints.speed == bmz_core::course::CourseSpeedConstraint::NoSpeed
+            });
+            if let Some(active_play) = &mut self.active_play
+                && active_play.running.session.lane_cover_changing
+                && let Some(action) = play_option_control(button, &self.select_keys)
+            {
+                if apply_play_option_control_to_session(
+                    &mut active_play.running.session,
+                    action,
+                    speed_locked,
+                ) {
+                    tracing::info!(
+                        hispeed = active_play.running.session.hispeed,
+                        hispeed_mode = ?active_play.running.session.hispeed_mode,
+                        target_green_number = active_play.running.session.target_green_number,
+                        lane_cover = active_play.running.session.lane_cover,
+                        "adjusted play option"
+                    );
+                } else {
+                    tracing::debug!("play option change ignored: course NoSpeed constraint");
+                }
+                return;
+            }
         }
         if !pressed {
             if in_settings_stack(&self.folder_stack) {
@@ -4894,7 +4958,12 @@ impl WinitApp {
     fn active_lane_state(&self) -> Option<ActiveLaneState> {
         self.active_play.as_ref().map(|active| {
             let session = &active.running.session;
-            ActiveLaneState { lane_cover: session.lane_cover, lift: session.lift }
+            ActiveLaneState {
+                lane_cover: session.lane_cover,
+                lift: session.lift,
+                hispeed_mode: session.hispeed_mode,
+                target_green_number: session.target_green_number,
+            }
         })
     }
 
@@ -6221,6 +6290,8 @@ fn target_config_from_option(target: TargetOption) -> TargetOptionConfig {
 struct ActiveLaneState {
     lane_cover: f32,
     lift: f32,
+    hispeed_mode: HispeedMode,
+    target_green_number: u32,
 }
 
 fn apply_current_play_options_to_profile(
@@ -6240,6 +6311,8 @@ fn apply_current_play_options_to_profile(
     if let Some(state) = lane_state {
         profile.lane.sudden = crate::config::play::lane_f32_to_unit(state.lane_cover);
         profile.lane.lift = crate::config::play::lane_f32_to_unit(state.lift);
+        profile.lane.hispeed_mode = hispeed_mode_to_config(state.hispeed_mode);
+        profile.lane.target_green_number = state.target_green_number.max(1);
     }
     profile.play.random = random_config_from_arrange(arrange);
     profile.play.target = target_config_from_option(target);
@@ -6252,6 +6325,13 @@ fn apply_current_play_options_to_profile(
 
 fn clamp_hispeed_for_profile(hispeed: f32) -> f32 {
     (hispeed * 4.0).round().clamp(2.0, 40.0) / 4.0
+}
+
+fn hispeed_mode_to_config(mode: HispeedMode) -> HispeedModeConfig {
+    match mode {
+        HispeedMode::Normal => HispeedModeConfig::Normal,
+        HispeedMode::Floating => HispeedModeConfig::Floating,
+    }
 }
 
 fn select_chart_distribution(
@@ -6834,6 +6914,19 @@ enum HispeedChange {
     Up,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlayOptionControl {
+    ToggleHispeedMode,
+    Hispeed(HispeedChange),
+    LaneCover(LaneCoverChange),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LaneCoverChange {
+    Up,
+    Down,
+}
+
 fn hispeed_action(
     physical_key: PhysicalKey,
     state: ElementState,
@@ -6850,6 +6943,25 @@ fn hispeed_action(
     }
 }
 
+fn play_option_control(control: &str, bindings: &SelectKeyBindings) -> Option<PlayOptionControl> {
+    if bindings.is_e2_action(control) {
+        return Some(PlayOptionControl::ToggleHispeedMode);
+    }
+    if bindings.is_hispeed_down_key(control) {
+        return Some(PlayOptionControl::Hispeed(HispeedChange::Down));
+    }
+    if bindings.is_hispeed_up_key(control) {
+        return Some(PlayOptionControl::Hispeed(HispeedChange::Up));
+    }
+    if bindings.is_scratch_up(control) {
+        return Some(PlayOptionControl::LaneCover(LaneCoverChange::Up));
+    }
+    if bindings.is_scratch_down(control) {
+        return Some(PlayOptionControl::LaneCover(LaneCoverChange::Down));
+    }
+    None
+}
+
 fn lane_cover_step(physical_key: PhysicalKey, state: ElementState, _repeat: bool) -> Option<f32> {
     if state != ElementState::Pressed {
         return None;
@@ -6862,12 +6974,132 @@ fn lane_cover_step(physical_key: PhysicalKey, state: ElementState, _repeat: bool
     }
 }
 
+fn lane_cover_change_step(change: LaneCoverChange) -> f32 {
+    match change {
+        LaneCoverChange::Up => LANE_COVER_STEP,
+        LaneCoverChange::Down => -LANE_COVER_STEP,
+    }
+}
+
 fn adjusted_hispeed(current: f32, change: HispeedChange) -> f32 {
     let delta = match change {
         HispeedChange::Down => -0.25,
         HispeedChange::Up => 0.25,
     };
     ((current + delta) * 4.0).round().clamp(2.0, 40.0) / 4.0
+}
+
+fn apply_play_option_control_to_session(
+    session: &mut bmz_gameplay::session::GameSession,
+    action: PlayOptionControl,
+    speed_locked: bool,
+) -> bool {
+    match action {
+        PlayOptionControl::ToggleHispeedMode => {
+            match session.hispeed_mode {
+                HispeedMode::Normal => {
+                    let now = session.audio_clock.now();
+                    session.target_green_number = current_green_number(session, now);
+                    session.hispeed_mode = HispeedMode::Floating;
+                }
+                HispeedMode::Floating => {
+                    session.hispeed_mode = HispeedMode::Normal;
+                }
+            }
+            true
+        }
+        PlayOptionControl::Hispeed(change) => {
+            if speed_locked {
+                return false;
+            }
+            session.hispeed = adjusted_hispeed(session.hispeed, change);
+            true
+        }
+        PlayOptionControl::LaneCover(change) => {
+            apply_lane_cover_step_to_session(session, lane_cover_change_step(change), speed_locked)
+        }
+    }
+}
+
+fn apply_lane_cover_step_to_session(
+    session: &mut bmz_gameplay::session::GameSession,
+    delta: f32,
+    speed_locked: bool,
+) -> bool {
+    if session.lane_cover_visible {
+        session.lane_cover = (session.lane_cover - delta).clamp(0.0, 1.0);
+        if session.hispeed_mode == HispeedMode::Floating && !speed_locked {
+            let now = session.audio_clock.now();
+            session.hispeed = hispeed_for_green_number(session, session.lane_cover, now);
+        }
+    } else {
+        session.lift = (session.lift + delta).clamp(0.0, 1.0);
+    }
+    true
+}
+
+fn reset_floating_hispeed_if_enabled(
+    session: &mut bmz_gameplay::session::GameSession,
+    speed_locked: bool,
+) {
+    if session.hispeed_mode == HispeedMode::Floating && !speed_locked {
+        let now = session.audio_clock.now();
+        let lane_cover = if session.lane_cover_visible { session.lane_cover } else { 0.0 };
+        session.hispeed = hispeed_for_green_number(session, lane_cover, now);
+    }
+}
+
+fn current_green_number(session: &bmz_gameplay::session::GameSession, now: TimeUs) -> u32 {
+    let total = note_display_duration_ms_for_hispeed(
+        session,
+        session.hispeed,
+        if session.lane_cover_visible { session.lane_cover } else { 0.0 },
+        now,
+    );
+    ((total * 0.6).round().clamp(1.0, u32::MAX as f32)) as u32
+}
+
+fn note_display_duration_ms_for_hispeed(
+    session: &bmz_gameplay::session::GameSession,
+    hispeed: f32,
+    lane_cover: f32,
+    now: TimeUs,
+) -> f32 {
+    let visible_max = (1.0 - lane_cover).clamp(0.0, 1.0);
+    let initial_bpm = session.chart.metadata.initial_bpm.max(1.0);
+    let now_bpm = crate::screens::play_snapshot::current_bpm(&session.chart, now).max(1.0);
+    let bpm_ratio = (initial_bpm / now_bpm) as f32;
+    crate::screens::play_snapshot::DEFAULT_LOOKAHEAD_US as f32 / hispeed.max(0.01)
+        * visible_max
+        * bpm_ratio
+        / 1_000.0
+}
+
+fn hispeed_for_green_number(
+    session: &bmz_gameplay::session::GameSession,
+    lane_cover: f32,
+    now: TimeUs,
+) -> f32 {
+    let target_green = session.target_green_number.max(1) as f32;
+    let visible_max = (1.0 - lane_cover).clamp(0.0, 1.0);
+    let initial_bpm = session.chart.metadata.initial_bpm.max(1.0);
+    let now_bpm = crate::screens::play_snapshot::current_bpm(&session.chart, now).max(1.0);
+    let hispeed = hispeed_for_green_number_values(target_green, visible_max, initial_bpm, now_bpm);
+    clamp_hispeed_for_profile(hispeed)
+}
+
+fn hispeed_for_green_number_values(
+    target_green: f32,
+    visible_max: f32,
+    initial_bpm: f64,
+    now_bpm: f64,
+) -> f32 {
+    let bpm_ratio = (initial_bpm.max(1.0) / now_bpm.max(1.0)) as f32;
+    crate::screens::play_snapshot::DEFAULT_LOOKAHEAD_US as f32
+        * visible_max.clamp(0.0, 1.0)
+        * bpm_ratio
+        * 0.6
+        / (target_green.max(1.0) * 1_000.0)
 }
 
 fn result_action(
@@ -6981,9 +7213,12 @@ fn target_cycle_from_control(control: &str, bindings: &SelectKeyBindings) -> Opt
 
 struct SelectKeyBindings {
     start: Vec<String>,
+    e2_action_controls: Vec<String>,
     enter: Vec<String>,
     back: Vec<String>,
     key2_controls: Vec<String>,
+    hispeed_down_controls: Vec<String>,
+    hispeed_up_controls: Vec<String>,
     scratch_up_controls: Vec<String>,
     scratch_down_controls: Vec<String>,
     cycle_arrange: Option<String>,
@@ -7043,7 +7278,18 @@ impl SelectKeyBindings {
             actions_for(InputActionConfig::E2),
             keys_for(LaneConfig::Key2),
         );
+        let e2_action_controls = actions_for(InputActionConfig::E2);
         let key2_controls = keys_for(LaneConfig::Key2);
+        let hispeed_down_controls: Vec<String> =
+            [LaneConfig::Key1, LaneConfig::Key3, LaneConfig::Key5, LaneConfig::Key7]
+                .iter()
+                .flat_map(|&l| keys_for(l))
+                .collect();
+        let hispeed_up_controls: Vec<String> =
+            [LaneConfig::Key2, LaneConfig::Key4, LaneConfig::Key6]
+                .iter()
+                .flat_map(|&l| keys_for(l))
+                .collect();
         let scratch_all = keys_for(LaneConfig::Scratch);
         let mut scratch_up_controls = Vec::new();
         let mut scratch_down_controls = Vec::new();
@@ -7141,9 +7387,12 @@ impl SelectKeyBindings {
 
         Self {
             start,
+            e2_action_controls,
             enter,
             back,
             key2_controls,
+            hispeed_down_controls,
+            hispeed_up_controls,
             scratch_up_controls,
             scratch_down_controls,
             cycle_arrange,
@@ -7169,6 +7418,18 @@ impl SelectKeyBindings {
 
     fn is_key2(&self, control: &str) -> bool {
         self.key2_controls.iter().any(|k| k == control)
+    }
+
+    fn is_e2_action(&self, control: &str) -> bool {
+        self.e2_action_controls.iter().any(|k| k == control)
+    }
+
+    fn is_hispeed_down_key(&self, control: &str) -> bool {
+        self.hispeed_down_controls.iter().any(|k| k == control)
+    }
+
+    fn is_hispeed_up_key(&self, control: &str) -> bool {
+        self.hispeed_up_controls.iter().any(|k| k == control)
     }
 
     fn is_scratch_up(&self, control: &str) -> bool {
@@ -7853,6 +8114,53 @@ mod tests {
     }
 
     #[test]
+    fn play_option_control_maps_e1_combo_targets() {
+        let keys = default_select_keys();
+
+        assert_eq!(play_option_control("W", &keys), Some(PlayOptionControl::ToggleHispeedMode));
+        assert_eq!(
+            play_option_control("Z", &keys),
+            Some(PlayOptionControl::Hispeed(HispeedChange::Down))
+        );
+        assert_eq!(
+            play_option_control("V", &keys),
+            Some(PlayOptionControl::Hispeed(HispeedChange::Down))
+        );
+        assert_eq!(
+            play_option_control("S", &keys),
+            Some(PlayOptionControl::Hispeed(HispeedChange::Up))
+        );
+        assert_eq!(
+            play_option_control("F", &keys),
+            Some(PlayOptionControl::Hispeed(HispeedChange::Up))
+        );
+        assert_eq!(
+            play_option_control("AxisLeftX-", &keys),
+            Some(PlayOptionControl::LaneCover(LaneCoverChange::Up))
+        );
+        assert_eq!(
+            play_option_control("AxisLeftX+", &keys),
+            Some(PlayOptionControl::LaneCover(LaneCoverChange::Down))
+        );
+    }
+
+    #[test]
+    fn floating_hispeed_formula_uses_green_number_and_lane_cover() {
+        assert_eq!(
+            clamp_hispeed_for_profile(hispeed_for_green_number_values(300.0, 1.0, 120.0, 120.0)),
+            4.0
+        );
+        assert_eq!(
+            clamp_hispeed_for_profile(hispeed_for_green_number_values(300.0, 0.5, 120.0, 120.0)),
+            2.0
+        );
+        assert_eq!(
+            clamp_hispeed_for_profile(hispeed_for_green_number_values(300.0, 1.0, 120.0, 240.0)),
+            2.0
+        );
+    }
+
+    #[test]
     fn gauge_option_cycle_includes_auto_shift() {
         assert_eq!(cycle_gauge_option(GaugeTypeConfig::ExHard), GaugeTypeConfig::Hazard);
         assert_eq!(
@@ -7870,7 +8178,12 @@ mod tests {
         apply_current_play_options_to_profile(
             &mut profile,
             Some(3.37),
-            Some(ActiveLaneState { lane_cover: 0.42, lift: 0.1 }),
+            Some(ActiveLaneState {
+                lane_cover: 0.42,
+                lift: 0.1,
+                hispeed_mode: HispeedMode::Floating,
+                target_green_number: 280,
+            }),
             ArrangeOption::Mirror,
             TargetOption::Aaa,
             GaugeTypeConfig::Hard,
@@ -7882,6 +8195,8 @@ mod tests {
         assert_eq!(profile.lane.hispeed, 3.25);
         assert_eq!(profile.lane.sudden, 420);
         assert_eq!(profile.lane.lift, 100);
+        assert_eq!(profile.lane.hispeed_mode, HispeedModeConfig::Floating);
+        assert_eq!(profile.lane.target_green_number, 280);
         assert!(matches!(profile.play.random, RandomOptionConfig::Mirror));
         assert!(matches!(profile.play.target, TargetOptionConfig::Aaa));
         assert!(matches!(profile.play.gauge, GaugeTypeConfig::Hard));

@@ -158,6 +158,8 @@ pub enum JudgeAlgorithmConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LaneViewConfig {
     pub hispeed: f32,
+    #[serde(default = "default_hispeed_mode")]
+    pub hispeed_mode: HispeedModeConfig,
     /// SUDDEN+ レーンカバー量。0..=1000 の整数で持ち、ランタイムでは /1000 して扱う。
     pub sudden: u32,
     /// LIFT 量。0..=1000 の整数で持ち、ランタイムでは /1000 して扱う。
@@ -165,6 +167,17 @@ pub struct LaneViewConfig {
     /// HIDDEN レーンカバー量。0..=1000 の整数で持ち、ランタイムでは /1000 して扱う。
     pub hidden: u32,
     pub target_green_number: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum HispeedModeConfig {
+    Normal,
+    Floating,
+}
+
+fn default_hispeed_mode() -> HispeedModeConfig {
+    HispeedModeConfig::Normal
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -555,6 +568,7 @@ impl ProfileConfig {
             },
             lane: LaneViewConfig {
                 hispeed: 2.0,
+                hispeed_mode: default_hispeed_mode(),
                 sudden: 0,
                 lift: 0,
                 hidden: 0,

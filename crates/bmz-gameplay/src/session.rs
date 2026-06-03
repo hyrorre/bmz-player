@@ -37,6 +37,12 @@ pub enum PlayState {
     Failed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HispeedMode {
+    Normal,
+    Floating,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct PlayOffsets {
     pub input_offset_us: i64,
@@ -107,6 +113,8 @@ pub struct GameSession {
     pub offsets: PlayOffsets,
     pub audio_mix: PlayAudioMix,
     pub hispeed: f32,
+    pub hispeed_mode: HispeedMode,
+    pub target_green_number: u32,
     pub lift: f32,
     pub lane_cover: f32,
     /// レーンカバー(SUDDEN+)の表示有無。
@@ -910,6 +918,8 @@ mod tests {
             offsets: PlayOffsets { input_offset_us: 0, visual_offset_us: 0 },
             audio_mix: PlayAudioMix { master_volume: 1.0, key_volume: 1.0, bgm_volume: 1.0 },
             hispeed: 2.0,
+            hispeed_mode: HispeedMode::Normal,
+            target_green_number: 300,
             lift: 0.0,
             lane_cover: 0.0,
             lane_cover_visible: true,

@@ -596,7 +596,7 @@ fn display_judgement(event: &JudgementEvent) -> DisplayJudgement {
 }
 
 /// `render_now` の時点で有効な BPM を返す。
-fn current_bpm(chart: &bmz_chart::model::PlayableChart, render_now: TimeUs) -> f64 {
+pub(crate) fn current_bpm(chart: &bmz_chart::model::PlayableChart, render_now: TimeUs) -> f64 {
     let mut bpm = chart.metadata.initial_bpm;
     for event in &chart.timing_events {
         if event.time > render_now {

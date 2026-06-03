@@ -20,7 +20,7 @@ use bmz_gameplay::judge::window::{
 };
 use bmz_gameplay::replay::{ReplayPlayer, ReplayRecorder};
 use bmz_gameplay::score::ScoreState;
-use bmz_gameplay::session::{BgmScheduler, GameSession, PlaySkinOffset, PlayState};
+use bmz_gameplay::session::{BgmScheduler, GameSession, HispeedMode, PlaySkinOffset, PlayState};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -29,7 +29,7 @@ use crate::config::play::{
     lane_binding_for_chart, lane_unit_to_f32, play_offsets_from_profile,
 };
 use crate::config::profile_config::{
-    BgaExpandConfig, BgaModeConfig, LaneEffectConfig, ProfileConfig,
+    BgaExpandConfig, BgaModeConfig, HispeedModeConfig, LaneEffectConfig, ProfileConfig,
 };
 use crate::screens::practice::{
     PracticeProperty, apply_practice_property, apply_practice_start_gauge,
@@ -238,6 +238,8 @@ pub fn build_game_session_with_input_backend(
         offsets: play_offsets_from_profile(profile),
         audio_mix: audio_mix_from_profile(profile),
         hispeed: clamp_hispeed(profile.lane.hispeed),
+        hispeed_mode: hispeed_mode_from_profile(profile.lane.hispeed_mode),
+        target_green_number: profile.lane.target_green_number.max(1),
         lift: lane_unit_to_f32(profile.lane.lift),
         lane_cover: lane_unit_to_f32(profile.lane.sudden),
         lane_cover_visible: true,
@@ -260,6 +262,13 @@ pub fn build_game_session_with_input_backend(
 
 fn clamp_hispeed(hispeed: f32) -> f32 {
     hispeed.clamp(0.5, 10.0)
+}
+
+fn hispeed_mode_from_profile(mode: HispeedModeConfig) -> HispeedMode {
+    match mode {
+        HispeedModeConfig::Normal => HispeedMode::Normal,
+        HispeedModeConfig::Floating => HispeedMode::Floating,
+    }
 }
 
 fn hidden_cover_from_profile(profile: &ProfileConfig) -> f32 {
