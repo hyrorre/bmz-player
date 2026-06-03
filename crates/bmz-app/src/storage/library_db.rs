@@ -1202,8 +1202,8 @@ impl ChartAnalysis {
         for pair in &chart.long_notes {
             let start_sec = second_index(pair.start_time.0);
             let end_sec = second_index(pair.end_time.0).min(distribution.len().saturating_sub(1));
-            for sec in start_sec..=end_sec {
-                add_long_body(&mut distribution[sec], pair.lane, 1);
+            for second in distribution.iter_mut().take(end_sec + 1).skip(start_sec) {
+                add_long_body(second, pair.lane, 1);
             }
         }
 
