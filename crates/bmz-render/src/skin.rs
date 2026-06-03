@@ -3429,6 +3429,7 @@ impl SkinDocument {
                 }
                 items.extend(self.select_songlist_all_child_items(
                     &songlist.graph,
+                    row,
                     row_origin,
                     images,
                     enabled_options,
@@ -3437,6 +3438,7 @@ impl SkinDocument {
                 ));
                 items.extend(self.select_songlist_all_child_items(
                     &songlist.judgegraph,
+                    row,
                     row_origin,
                     images,
                     enabled_options,
@@ -3445,6 +3447,7 @@ impl SkinDocument {
                 ));
                 items.extend(self.select_songlist_all_child_items(
                     &songlist.bpmgraph,
+                    row,
                     row_origin,
                     images,
                     enabled_options,
@@ -3467,6 +3470,7 @@ impl SkinDocument {
     fn select_songlist_all_child_items(
         &self,
         entries: &[DestinationListEntry],
+        row: &SelectRowSnapshot,
         row_origin: (i32, i32),
         images: &HashMap<&str, &SkinImageDef>,
         enabled_options: &[i32],
@@ -3475,6 +3479,19 @@ impl SkinDocument {
     ) -> Vec<SkinRenderItem> {
         let mut items = Vec::new();
         for destination in destination_entries(entries, enabled_options) {
+            if let Some(judge_graph) =
+                self.judgegraph.iter().find(|graph| graph.id == destination.id)
+            {
+                items.extend(self.select_note_distribution_graph_render_items(
+                    row,
+                    judge_graph,
+                    destination,
+                    row_origin,
+                    enabled_options,
+                    state,
+                ));
+                continue;
+            }
             if let Some(mut resolved) = self.resolve_offset_destination_items(
                 destination,
                 row_origin,
@@ -4668,6 +4685,84 @@ impl SkinDocument {
                 blend,
             });
         }
+        items
+    }
+
+    fn select_note_distribution_graph_render_items(
+        &self,
+        row: &SelectRowSnapshot,
+        graph: &SkinJudgeGraphDef,
+        destination: &SkinDestinationDef,
+        row_origin: (i32, i32),
+        enabled_options: &[i32],
+        state: SkinDrawState,
+    ) -> Vec<SkinRenderItem> {
+        if row.chart_distribution.is_empty()
+            || !test_skin_ops(&destination.op, enabled_options, state)
+            || !eval_skin_draw_condition(&destination.draw, state)
+        {
+            return Vec::new();
+        }
+        let Some(elapsed) = skin_timer_elapsed_ms(destination.timer, state) else {
+            return Vec::new();
+        };
+        let Some(mut frame) =
+            resolve_destination_frame(destination, elapsed, enabled_options, state)
+        else {
+            return Vec::new();
+        };
+        frame.x += row_origin.0;
+        frame.y += row_origin.1;
+        apply_skin_offset_to_frame(destination, &mut frame, state, false);
+        if !destination_mouse_rect_contains(destination, frame, state) {
+            return Vec::new();
+        }
+
+        let rect = normalize_skin_frame_rect(frame, self.w, self.h);
+        if rect.width <= 0.0 || rect.height <= 0.0 {
+            return Vec::new();
+        }
+        let frame_alpha = frame.a as f32 / 255.0;
+        let blend = if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal };
+        let max_density =
+            row.chart_distribution.iter().map(|second| second.total()).max().unwrap_or(1).max(20)
+                as f32;
+        let count = row.chart_distribution.len().max(1) as f32;
+        let pixel_w = 1.0 / self.w.max(1) as f32;
+        let pixel_h = 1.0 / self.h.max(1) as f32;
+        let gap_x = if graph.no_gap_x != 0 { 0.0 } else { pixel_w };
+        let gap_y = if graph.no_gap != 0 { 0.0 } else { pixel_h };
+        let bar_w = ((rect.width - gap_x * (count - 1.0)).max(pixel_w) / count).max(pixel_w);
+        let colors = note_distribution_colors(frame_alpha);
+        let mut items = Vec::new();
+
+        for (index, second) in row.chart_distribution.iter().enumerate() {
+            let x = rect.x + index as f32 * (bar_w + gap_x);
+            let values = second.values();
+            let iter: Box<dyn Iterator<Item = (usize, u16)>> = if graph.order_reverse != 0 {
+                Box::new(values.into_iter().enumerate().rev())
+            } else {
+                Box::new(values.into_iter().enumerate())
+            };
+            let mut y_cursor = rect.y + rect.height;
+            for (series, value) in iter {
+                if value == 0 {
+                    continue;
+                }
+                let height = (rect.height * (value as f32 / max_density) - gap_y).max(pixel_h);
+                y_cursor -= height;
+                items.push(SkinRenderItem::Rect {
+                    rect: Rect { x, y: y_cursor, width: bar_w, height },
+                    color: colors[series],
+                    blend,
+                });
+                y_cursor -= gap_y;
+                if y_cursor <= rect.y {
+                    break;
+                }
+            }
+        }
+
         items
     }
 
@@ -7210,6 +7305,18 @@ fn timing_color(value: &str, frame_alpha: f32) -> Color {
         .or_else(|| skin_hex_color("FF0000FF"))
         .unwrap_or(Color::rgb(1.0, 0.0, 0.0))
         .with_alpha(frame_alpha)
+}
+
+fn note_distribution_colors(alpha: f32) -> [Color; 7] {
+    [
+        Color::rgba(0.27, 1.0, 0.27, alpha),
+        Color::rgba(0.13, 0.53, 0.13, alpha),
+        Color::rgba(1.0, 0.27, 0.27, alpha),
+        Color::rgba(0.27, 0.27, 1.0, alpha),
+        Color::rgba(0.13, 0.13, 0.53, alpha),
+        Color::rgba(0.80, 0.80, 0.80, alpha),
+        Color::rgba(0.53, 0.0, 0.0, alpha),
+    ]
 }
 
 fn timing_visualizer_judge_colors(visualizer: &SkinTimingVisualizerDef) -> [Color; 5] {
@@ -12539,6 +12646,58 @@ mod tests {
                 .iter()
                 .any(|item| matches!(item, SkinRenderItem::Text { text, .. } if text == "Second"))
         );
+    }
+
+    #[test]
+    fn select_songlist_judgegraph_renders_chart_distribution() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 5,
+                "w": 100,
+                "h": 100,
+                "judgegraph": [{ "id": "density", "noGap": 1, "noGapX": 1 }],
+                "songlist": {
+                    "id": "songlist",
+                    "center": 0,
+                    "liston": [{ "id": "row", "dst": [{ "x": 10, "y": 40, "w": 80, "h": 20 }] }],
+                    "listoff": [{ "id": "row", "dst": [{ "x": 10, "y": 40, "w": 80, "h": 20 }] }],
+                    "judgegraph": [{ "id": "density", "dst": [{ "x": 0, "y": 0, "w": 40, "h": 10 }] }]
+                },
+                "destination": [{ "id": "songlist" }]
+            }
+            "#,
+        )
+        .unwrap();
+        let snapshot = SelectSnapshot {
+            selected_index: 0,
+            rows: vec![SelectRowSnapshot {
+                index: 0,
+                kind: SelectRowKind::Song,
+                in_library: true,
+                chart_distribution: vec![
+                    crate::scene::SelectChartDistributionSecond {
+                        key_taps: 4,
+                        mines: 1,
+                        ..Default::default()
+                    },
+                    crate::scene::SelectChartDistributionSecond {
+                        scratch_taps: 2,
+                        key_long_bodies: 3,
+                        ..Default::default()
+                    },
+                ],
+                ..SelectRowSnapshot::default()
+            }],
+            ..SelectSnapshot::default()
+        };
+
+        let sources = HashMap::new();
+        let items = document.select_render_items(&sources, &snapshot);
+        let rect_count =
+            items.iter().filter(|item| matches!(item, SkinRenderItem::Rect { .. })).count();
+
+        assert_eq!(rect_count, 4);
     }
 
     #[test]

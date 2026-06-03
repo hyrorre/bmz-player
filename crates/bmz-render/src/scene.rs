@@ -136,6 +136,7 @@ pub struct SelectRowSnapshot {
     pub chart_end_density: f32,
     pub chart_total_gauge: f32,
     pub chart_main_bpm: f32,
+    pub chart_distribution: Vec<SelectChartDistributionSecond>,
     pub is_folder: bool,
     pub kind: SelectRowKind,
     /// library.db に登録済みかどうか。未登録の難易度表エントリは false。
@@ -193,6 +194,7 @@ impl Default for SelectRowSnapshot {
             chart_end_density: 0.0,
             chart_total_gauge: 0.0,
             chart_main_bpm: 0.0,
+            chart_distribution: Vec::new(),
             is_folder: false,
             kind: SelectRowKind::default(),
             in_library: true,
@@ -201,6 +203,41 @@ impl Default for SelectRowSnapshot {
             course_constraints: CourseConstraintFlags::default(),
             chart_key_mode: None,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SelectChartDistributionSecond {
+    pub scratch_long_heads: u16,
+    pub scratch_long_bodies: u16,
+    pub scratch_taps: u16,
+    pub key_long_heads: u16,
+    pub key_long_bodies: u16,
+    pub key_taps: u16,
+    pub mines: u16,
+}
+
+impl SelectChartDistributionSecond {
+    pub fn total(self) -> u32 {
+        u32::from(self.scratch_long_heads)
+            + u32::from(self.scratch_long_bodies)
+            + u32::from(self.scratch_taps)
+            + u32::from(self.key_long_heads)
+            + u32::from(self.key_long_bodies)
+            + u32::from(self.key_taps)
+            + u32::from(self.mines)
+    }
+
+    pub fn values(self) -> [u16; 7] {
+        [
+            self.scratch_long_heads,
+            self.scratch_long_bodies,
+            self.scratch_taps,
+            self.key_long_heads,
+            self.key_long_bodies,
+            self.key_taps,
+            self.mines,
+        ]
     }
 }
 

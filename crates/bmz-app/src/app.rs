@@ -16,7 +16,10 @@ use bmz_render::plan::{
     PLAY_BACKBMP_TEXTURE, Rect, SELECT_BANNER_TEXTURE, SELECT_STAGE_TEXTURE, TextureId,
 };
 use bmz_render::renderer::{RenderSurfaceStatus, Renderer, SurfaceSize};
-use bmz_render::scene::{AppSceneSnapshot, ResultSnapshot, SelectRowSnapshot, SelectSnapshot};
+use bmz_render::scene::{
+    AppSceneSnapshot, ResultSnapshot, SelectChartDistributionSecond, SelectRowSnapshot,
+    SelectSnapshot,
+};
 use bmz_render::snapshot::{
     CourseStageMarker, DisplayJudgeCounts, FastSlowJudgeCounts, OverlaySnapshot, RenderSnapshot,
 };
@@ -6251,6 +6254,24 @@ fn clamp_hispeed_for_profile(hispeed: f32) -> f32 {
     (hispeed * 4.0).round().clamp(2.0, 40.0) / 4.0
 }
 
+fn select_chart_distribution(
+    analysis: &crate::storage::library_db::ChartAnalysis,
+) -> Vec<SelectChartDistributionSecond> {
+    analysis
+        .distribution
+        .iter()
+        .map(|second| SelectChartDistributionSecond {
+            scratch_long_heads: second.scratch_long_heads,
+            scratch_long_bodies: second.scratch_long_bodies,
+            scratch_taps: second.scratch_taps,
+            key_long_heads: second.key_long_heads,
+            key_long_bodies: second.key_long_bodies,
+            key_taps: second.key_taps,
+            mines: second.mines,
+        })
+        .collect()
+}
+
 fn select_snapshot_rows(
     items: &[SelectItem],
     selected_index: usize,
@@ -6305,6 +6326,7 @@ fn select_snapshot_rows(
                     chart_end_density: 0.0,
                     chart_total_gauge: 0.0,
                     chart_main_bpm: 0.0,
+                    chart_distribution: Vec::new(),
                     is_folder: true,
                     kind: *kind,
                     in_library: true,
@@ -6425,6 +6447,11 @@ fn select_snapshot_rows(
                                     .map(|chart| chart.initial_bpm as f32)
                                     .unwrap_or(0.0)
                             }),
+                        chart_distribution: row
+                            .chart_analysis
+                            .as_ref()
+                            .map(select_chart_distribution)
+                            .unwrap_or_default(),
                         is_folder: false,
                         kind: bmz_render::scene::SelectRowKind::Song,
                         in_library: row.in_library(),
@@ -6481,6 +6508,7 @@ fn select_snapshot_rows(
                     chart_end_density: 0.0,
                     chart_total_gauge: 0.0,
                     chart_main_bpm: 0.0,
+                    chart_distribution: Vec::new(),
                     is_folder: false,
                     kind: bmz_render::scene::SelectRowKind::Course,
                     in_library: row.exists_all_songs(),
@@ -6528,6 +6556,7 @@ fn select_snapshot_rows(
                         chart_end_density: 0.0,
                         chart_total_gauge: 0.0,
                         chart_main_bpm: 0.0,
+                        chart_distribution: Vec::new(),
                         is_folder: false,
                         kind: bmz_render::scene::SelectRowKind::Config,
                         in_library: true,
@@ -6577,6 +6606,7 @@ fn select_snapshot_rows(
                         chart_end_density: 0.0,
                         chart_total_gauge: 0.0,
                         chart_main_bpm: 0.0,
+                        chart_distribution: Vec::new(),
                         is_folder: false,
                         kind: bmz_render::scene::SelectRowKind::Config,
                         in_library: true,
@@ -6619,6 +6649,7 @@ fn select_snapshot_rows(
                     chart_end_density: 0.0,
                     chart_total_gauge: 0.0,
                     chart_main_bpm: 0.0,
+                    chart_distribution: Vec::new(),
                     is_folder: true,
                     kind: bmz_render::scene::SelectRowKind::SettingsFolder,
                     in_library: true,
@@ -7923,6 +7954,8 @@ mod tests {
         assert_eq!(snapshot_rows[3].chart_normal_notes, 45);
         assert_eq!(snapshot_rows[3].chart_long_notes, 6);
         assert_eq!(snapshot_rows[3].chart_peak_density, 12.5);
+        assert_eq!(snapshot_rows[3].chart_distribution.len(), 1);
+        assert_eq!(snapshot_rows[3].chart_distribution[0].key_taps, 2);
     }
 
     #[test]
@@ -8129,7 +8162,11 @@ mod tests {
                 end_density: 8.25,
                 total_gauge: 260.0,
                 main_bpm: 128.0,
-                distribution: Vec::new(),
+                distribution: vec![crate::storage::library_db::ChartDistributionSecond {
+                    key_taps: 2,
+                    key_long_heads: 1,
+                    ..Default::default()
+                }],
                 speed_changes: Vec::new(),
                 lane_notes: Vec::new(),
             }),
