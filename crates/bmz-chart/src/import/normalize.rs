@@ -832,8 +832,14 @@ fn compute_end_time(draft: &PlayableChartDraft) -> TimeUs {
         .flat_map(|notes| notes.iter().map(|note| note.time.0))
         .max()
         .unwrap_or(0);
+    let long_end = draft.long_notes.iter().map(|pair| pair.end_time.0).max().unwrap_or(0);
+    let playable_end = lane_end.max(long_end);
+    if playable_end > 0 {
+        return TimeUs(playable_end);
+    }
+
     let bgm_end = draft.bgm_events.iter().map(|event| event.time.0).max().unwrap_or(0);
-    TimeUs(lane_end.max(bgm_end))
+    TimeUs(bgm_end)
 }
 
 impl PlayableChartDraft {
@@ -868,5 +874,56 @@ impl PlayableChartDraft {
             total_notes: 0,
             end_time: TimeUs(0),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bmz_core::ids::SoundId;
+
+    use crate::hash::compute_chart_identity;
+
+    use super::*;
+
+    fn draft() -> PlayableChartDraft {
+        PlayableChartDraft::new(
+            compute_chart_identity(b"end-time"),
+            ChartMetadata::default(),
+            Vec::new(),
+            Vec::new(),
+        )
+    }
+
+    #[test]
+    fn compute_end_time_ignores_distant_bgm_when_playable_notes_exist() {
+        let mut draft = draft();
+        draft.lane_notes[Lane::Key1.index()].push(NoteEvent {
+            id: NoteId(1),
+            lane: Lane::Key1,
+            kind: NoteKind::Tap,
+            tick: ChartTick(0),
+            time: TimeUs(2_000_000),
+            sound: None,
+            damage: None,
+        });
+        draft.bgm_events.push(SoundEvent {
+            tick: ChartTick(0),
+            time: TimeUs(60 * 60 * 1_000_000),
+            sound: SoundId(1),
+        });
+
+        assert_eq!(compute_end_time(&draft), TimeUs(2_000_000));
+    }
+
+    #[test]
+    fn compute_end_time_uses_bgm_for_empty_charts() {
+        let mut draft = draft();
+        draft.bgm_events.push(SoundEvent {
+            tick: ChartTick(0),
+            time: TimeUs(3_000_000),
+            sound: SoundId(1),
+        });
+
+        assert_eq!(compute_end_time(&draft), TimeUs(3_000_000));
     }
 }

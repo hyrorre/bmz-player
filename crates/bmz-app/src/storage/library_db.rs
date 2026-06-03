@@ -110,6 +110,16 @@ impl ChartDistributionSecond {
             + u32::from(self.key_long_bodies)
             + u32::from(self.key_taps)
     }
+
+    fn is_empty(self) -> bool {
+        self.scratch_long_heads == 0
+            && self.scratch_long_bodies == 0
+            && self.scratch_taps == 0
+            && self.key_long_heads == 0
+            && self.key_long_bodies == 0
+            && self.key_taps == 0
+            && self.mines == 0
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -603,7 +613,7 @@ impl LibraryDatabase {
                 .query_row(params![id], |row| Ok((row.get(0)?, row.get::<_, String>(1)?)))
                 .optional()?
             {
-                let distribution = serde_json::from_str(&distribution_json).unwrap_or_default();
+                let distribution = decode_distribution(&distribution_json);
                 out.insert(chart_id, distribution);
             }
         }
@@ -1248,7 +1258,7 @@ fn write_chart_analysis(conn: &Connection, chart_id: i64, chart: &PlayableChart)
         analysis.end_density,
         analysis.total_gauge,
         analysis.main_bpm,
-        serde_json::to_string(&analysis.distribution)?,
+        encode_distribution_compact(&analysis.distribution),
         serde_json::to_string(&analysis.speed_changes)?,
         serde_json::to_string(&analysis.lane_notes)?,
         CHART_IMPORT_VERSION,
@@ -1258,8 +1268,7 @@ fn write_chart_analysis(conn: &Connection, chart_id: i64, chart: &PlayableChart)
 
 impl ChartAnalysis {
     pub fn from_chart(chart: &PlayableChart) -> Self {
-        let seconds = ((chart.end_time.0 / 1_000_000).max(0) as usize + 2)
-            .min(MAX_ANALYSIS_DISTRIBUTION_SECONDS);
+        let seconds = analysis_distribution_seconds(chart);
         let mut distribution = vec![ChartDistributionSecond::default(); seconds.max(1)];
         let mut lane_notes = Lane::ALL
             .iter()
@@ -1378,6 +1387,8 @@ impl ChartAnalysis {
             .map(|lane| lane.long_notes)
             .sum();
 
+        trim_trailing_empty_distribution(&mut distribution);
+
         Self {
             normal_notes,
             long_notes,
@@ -1392,6 +1403,98 @@ impl ChartAnalysis {
             speed_changes: chart_speed_changes(chart),
             lane_notes,
         }
+    }
+}
+
+fn analysis_distribution_seconds(chart: &PlayableChart) -> usize {
+    let last_note_us = chart
+        .lane_notes
+        .iter()
+        .flat_map(|notes| notes.iter().map(|note| note.time.0))
+        .max()
+        .unwrap_or(0);
+    let last_long_us = chart.long_notes.iter().map(|pair| pair.end_time.0).max().unwrap_or(0);
+    let last_us = last_note_us.max(last_long_us).max(0);
+    ((last_us / 1_000_000) as usize + 2).clamp(1, MAX_ANALYSIS_DISTRIBUTION_SECONDS)
+}
+
+fn trim_trailing_empty_distribution(distribution: &mut Vec<ChartDistributionSecond>) {
+    while distribution.len() > 1
+        && distribution.last().copied().is_some_and(ChartDistributionSecond::is_empty)
+    {
+        distribution.pop();
+    }
+}
+
+fn encode_distribution_compact(distribution: &[ChartDistributionSecond]) -> String {
+    let mut out = String::with_capacity(1 + distribution.len() * 14);
+    out.push('#');
+    for second in distribution {
+        for value in [
+            second.scratch_long_heads,
+            second.scratch_long_bodies,
+            second.scratch_taps,
+            second.key_long_heads,
+            second.key_long_bodies,
+            second.key_taps,
+            second.mines,
+        ] {
+            push_base36_2(&mut out, value);
+        }
+    }
+    out
+}
+
+fn decode_distribution(value: &str) -> Vec<ChartDistributionSecond> {
+    if let Some(compact) = value.strip_prefix('#') {
+        return decode_distribution_compact(compact).unwrap_or_default();
+    }
+    serde_json::from_str(value).unwrap_or_default()
+}
+
+fn decode_distribution_compact(value: &str) -> Option<Vec<ChartDistributionSecond>> {
+    if !value.len().is_multiple_of(14) || !value.is_ascii() {
+        return None;
+    }
+    let mut out = Vec::with_capacity(value.len() / 14);
+    for chunk in value.as_bytes().chunks_exact(14) {
+        out.push(ChartDistributionSecond {
+            scratch_long_heads: parse_base36_2(&chunk[0..2])?,
+            scratch_long_bodies: parse_base36_2(&chunk[2..4])?,
+            scratch_taps: parse_base36_2(&chunk[4..6])?,
+            key_long_heads: parse_base36_2(&chunk[6..8])?,
+            key_long_bodies: parse_base36_2(&chunk[8..10])?,
+            key_taps: parse_base36_2(&chunk[10..12])?,
+            mines: parse_base36_2(&chunk[12..14])?,
+        });
+    }
+    Some(out)
+}
+
+fn push_base36_2(out: &mut String, value: u16) {
+    let value = value.min(36 * 36 - 1);
+    out.push(base36_digit((value / 36) as u8));
+    out.push(base36_digit((value % 36) as u8));
+}
+
+fn parse_base36_2(bytes: &[u8]) -> Option<u16> {
+    Some(u16::from(parse_base36_digit(bytes[0])?) * 36 + u16::from(parse_base36_digit(bytes[1])?))
+}
+
+fn base36_digit(value: u8) -> char {
+    match value {
+        0..=9 => (b'0' + value) as char,
+        10..=35 => (b'a' + value - 10) as char,
+        _ => unreachable!("base36 digit out of range"),
+    }
+}
+
+fn parse_base36_digit(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'z' => Some(value - b'a' + 10),
+        b'A'..=b'Z' => Some(value - b'A' + 10),
+        _ => None,
     }
 }
 
@@ -1417,7 +1520,7 @@ fn chart_analysis_from_row_with_offset(
         end_density: summary.end_density,
         total_gauge: summary.total_gauge,
         main_bpm: summary.main_bpm,
-        distribution: serde_json::from_str(&distribution_json).unwrap_or_default(),
+        distribution: decode_distribution(&distribution_json),
         speed_changes: serde_json::from_str(&speed_changes_json).unwrap_or_default(),
         lane_notes: serde_json::from_str(&lane_notes_json).unwrap_or_default(),
     })
@@ -1826,16 +1929,75 @@ mod tests {
         assert_eq!(analysis.lane_notes[Lane::Scratch.index()].long_notes, 1);
         assert_eq!(analysis.lane_notes[Lane::Key2.index()].mines, 1);
         assert_eq!(analysis.peak_density, 1.0);
+
+        let stored_distribution: String = db
+            .conn()
+            .query_row(
+                "SELECT distribution_json FROM chart_analysis WHERE chart_id = ?1",
+                params![chart_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(stored_distribution.starts_with('#'));
+        assert_eq!(stored_distribution.len(), 1 + analysis.distribution.len() * 14);
     }
 
     #[test]
     fn chart_analysis_caps_extreme_distribution_length() {
         let mut chart = chart("long analysis");
         chart.end_time = TimeUs(i64::MAX);
+        chart.long_notes.push(LongNotePair {
+            lane: Lane::Key1,
+            style: LongNoteStyle::ChannelPair,
+            start_note_id: NoteId(1),
+            end_note_id: NoteId(2),
+            start_tick: ChartTick(0),
+            end_tick: ChartTick(0),
+            start_time: TimeUs(0),
+            end_time: TimeUs(i64::MAX),
+            sound: None,
+        });
 
         let analysis = ChartAnalysis::from_chart(&chart);
 
         assert_eq!(analysis.distribution.len(), MAX_ANALYSIS_DISTRIBUTION_SECONDS);
+    }
+
+    #[test]
+    fn chart_analysis_trims_distribution_to_last_note_second() {
+        let mut chart = chart("trim analysis");
+        chart.end_time = TimeUs(i64::MAX);
+        chart.lane_notes[Lane::Key1.index()].push(note(1, Lane::Key1, NoteKind::Tap, 2_000_000));
+
+        let analysis = ChartAnalysis::from_chart(&chart);
+
+        assert_eq!(analysis.distribution.len(), 3);
+        assert_eq!(analysis.distribution[2].key_taps, 1);
+    }
+
+    #[test]
+    fn compact_distribution_round_trips_and_accepts_legacy_json() {
+        let distribution = vec![
+            ChartDistributionSecond {
+                scratch_long_heads: 1,
+                scratch_long_bodies: 2,
+                scratch_taps: 3,
+                key_long_heads: 4,
+                key_long_bodies: 5,
+                key_taps: 6,
+                mines: 7,
+            },
+            ChartDistributionSecond { key_taps: 36 * 36, ..Default::default() },
+        ];
+
+        let compact = encode_distribution_compact(&distribution);
+        assert_eq!(compact.len(), 1 + distribution.len() * 14);
+        let decoded = decode_distribution(&compact);
+        assert_eq!(decoded[0], distribution[0]);
+        assert_eq!(decoded[1].key_taps, 36 * 36 - 1);
+
+        let legacy_json = serde_json::to_string(&distribution).unwrap();
+        assert_eq!(decode_distribution(&legacy_json), distribution);
     }
 
     #[test]
