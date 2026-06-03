@@ -3,9 +3,11 @@ use std::path::Path;
 
 use anyhow::Result;
 use bmz_chart::import::error::ImportWarning;
-use bmz_chart::model::{NoteKind, PlayableChart, TimingEventKind};
+use bmz_chart::model::{LongNoteMode, NoteKind, PlayableChart, TimingEventKind};
+use bmz_core::lane::Lane;
 use bmz_gameplay::gauge::gauge_total_for_chart;
 use rusqlite::{Connection, OptionalExtension, params};
+use serde::{Deserialize, Serialize};
 
 pub use super::course_db::{
     CourseBestScore, CourseReplayRecord, CourseReplaySlotRecord, CourseScoreChartRecord,
@@ -17,7 +19,7 @@ pub use super::difficulty_table_db::{
 
 use super::common::{configure_connection, hash_to_hex, hex_to_hash};
 
-pub const CHART_IMPORT_VERSION: i64 = 1;
+pub const CHART_IMPORT_VERSION: i64 = 2;
 
 pub struct LibraryDatabase {
     conn: Connection,
@@ -56,6 +58,58 @@ pub struct ChartListItem {
     pub preview_file: String,
     pub has_long_notes: bool,
     pub has_mines: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChartAnalysis {
+    pub normal_notes: u32,
+    pub long_notes: u32,
+    pub scratch_notes: u32,
+    pub long_scratch_notes: u32,
+    pub density: f64,
+    pub peak_density: f64,
+    pub end_density: f64,
+    pub total_gauge: f64,
+    pub main_bpm: f64,
+    pub distribution: Vec<ChartDistributionSecond>,
+    pub speed_changes: Vec<ChartSpeedChange>,
+    pub lane_notes: Vec<ChartLaneNotes>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChartDistributionSecond {
+    pub scratch_long_heads: u16,
+    pub scratch_long_bodies: u16,
+    pub scratch_taps: u16,
+    pub key_long_heads: u16,
+    pub key_long_bodies: u16,
+    pub key_taps: u16,
+    pub mines: u16,
+}
+
+impl ChartDistributionSecond {
+    fn playable_notes(self) -> u32 {
+        u32::from(self.scratch_long_heads)
+            + u32::from(self.scratch_long_bodies)
+            + u32::from(self.scratch_taps)
+            + u32::from(self.key_long_heads)
+            + u32::from(self.key_long_bodies)
+            + u32::from(self.key_taps)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ChartSpeedChange {
+    pub speed: f64,
+    pub time_ms: i64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChartLaneNotes {
+    pub lane_index: u8,
+    pub normal_notes: u32,
+    pub long_notes: u32,
+    pub mines: u32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -132,6 +186,8 @@ impl LibraryDatabase {
             )?;
             new_id
         };
+
+        write_chart_analysis(conn, chart_id, record.chart)?;
 
         Ok((chart_id, chart_file_id))
     }
@@ -443,6 +499,46 @@ impl LibraryDatabase {
             let row = stmt.query_row(params![id], chart_list_item_from_row).ok();
             if let Some(row) = row {
                 out.push(row);
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn chart_analysis_by_chart_id(&self, chart_id: i64) -> Result<Option<ChartAnalysis>> {
+        self.conn
+            .query_row(
+                "SELECT normal_notes, long_notes, scratch_notes, long_scratch_notes,
+                    density, peak_density, end_density, total_gauge, main_bpm,
+                    distribution_json, speed_changes_json, lane_notes_json
+                 FROM chart_analysis
+                 WHERE chart_id = ?1",
+                params![chart_id],
+                chart_analysis_from_row,
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    pub fn chart_analyses_by_chart_ids(&self, ids: &[i64]) -> Result<HashMap<i64, ChartAnalysis>> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let mut stmt = self.conn.prepare(
+            "SELECT chart_id, normal_notes, long_notes, scratch_notes, long_scratch_notes,
+                density, peak_density, end_density, total_gauge, main_bpm,
+                distribution_json, speed_changes_json, lane_notes_json
+             FROM chart_analysis
+             WHERE chart_id = ?1",
+        )?;
+        let mut out = HashMap::with_capacity(ids.len());
+        for id in ids {
+            if let Some((chart_id, analysis)) = stmt
+                .query_row(params![id], |row| {
+                    Ok((row.get(0)?, chart_analysis_from_row_with_offset(row, 1)?))
+                })
+                .optional()?
+            {
+                out.insert(chart_id, analysis);
             }
         }
         Ok(out)
@@ -1050,6 +1146,294 @@ fn update_chart(conn: &Connection, chart_id: i64, record: &ChartImportRecord<'_>
     Ok(())
 }
 
+fn write_chart_analysis(conn: &Connection, chart_id: i64, chart: &PlayableChart) -> Result<()> {
+    let analysis = ChartAnalysis::from_chart(chart);
+    conn.prepare_cached(
+        "INSERT INTO chart_analysis (
+            chart_id, normal_notes, long_notes, scratch_notes, long_scratch_notes,
+            density, peak_density, end_density, total_gauge, main_bpm,
+            distribution_json, speed_changes_json, lane_notes_json, analysis_version
+        ) VALUES (
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14
+        )
+        ON CONFLICT(chart_id) DO UPDATE SET
+            normal_notes = excluded.normal_notes,
+            long_notes = excluded.long_notes,
+            scratch_notes = excluded.scratch_notes,
+            long_scratch_notes = excluded.long_scratch_notes,
+            density = excluded.density,
+            peak_density = excluded.peak_density,
+            end_density = excluded.end_density,
+            total_gauge = excluded.total_gauge,
+            main_bpm = excluded.main_bpm,
+            distribution_json = excluded.distribution_json,
+            speed_changes_json = excluded.speed_changes_json,
+            lane_notes_json = excluded.lane_notes_json,
+            analysis_version = excluded.analysis_version",
+    )?
+    .execute(params![
+        chart_id,
+        analysis.normal_notes,
+        analysis.long_notes,
+        analysis.scratch_notes,
+        analysis.long_scratch_notes,
+        analysis.density,
+        analysis.peak_density,
+        analysis.end_density,
+        analysis.total_gauge,
+        analysis.main_bpm,
+        serde_json::to_string(&analysis.distribution)?,
+        serde_json::to_string(&analysis.speed_changes)?,
+        serde_json::to_string(&analysis.lane_notes)?,
+        CHART_IMPORT_VERSION,
+    ])?;
+    Ok(())
+}
+
+impl ChartAnalysis {
+    pub fn from_chart(chart: &PlayableChart) -> Self {
+        let seconds = (chart.end_time.0 / 1_000_000).max(0) as usize + 2;
+        let mut distribution = vec![ChartDistributionSecond::default(); seconds.max(1)];
+        let mut lane_notes = Lane::ALL
+            .iter()
+            .map(|lane| ChartLaneNotes { lane_index: lane.index() as u8, ..Default::default() })
+            .collect::<Vec<_>>();
+
+        for pair in &chart.long_notes {
+            let start_sec = second_index(pair.start_time.0);
+            let end_sec = second_index(pair.end_time.0).min(distribution.len().saturating_sub(1));
+            for sec in start_sec..=end_sec {
+                add_long_body(&mut distribution[sec], pair.lane, 1);
+            }
+        }
+
+        let ignore_long_end = chart.metadata.long_note_mode == LongNoteMode::Ln;
+        let mut bpm_note_counts: Vec<(f64, u32)> = Vec::new();
+        let mut total_countdown = chart.total_notes as i64
+            - gauge_border_note_count(chart.metadata.total, chart.total_notes);
+        let mut border_sec = 0usize;
+
+        for notes in &chart.lane_notes {
+            for note in notes {
+                let sec = second_index(note.time.0);
+                let Some(slot) = distribution.get_mut(sec) else {
+                    continue;
+                };
+                let lane = note.lane;
+                let lane_slot = &mut lane_notes[lane.index()];
+                match note.kind {
+                    NoteKind::Tap | NoteKind::Invisible => {
+                        if is_scratch_lane(lane) {
+                            slot.scratch_taps = slot.scratch_taps.saturating_add(1);
+                            lane_slot.normal_notes = lane_slot.normal_notes.saturating_add(1);
+                        } else {
+                            slot.key_taps = slot.key_taps.saturating_add(1);
+                            lane_slot.normal_notes = lane_slot.normal_notes.saturating_add(1);
+                        }
+                        total_countdown -= 1;
+                        add_bpm_note_count(&mut bpm_note_counts, bpm_at(chart, note.time.0), 1);
+                    }
+                    NoteKind::LongStart => {
+                        add_long_head(slot, lane);
+                        add_long_body(slot, lane, -1);
+                        lane_slot.long_notes = lane_slot.long_notes.saturating_add(1);
+                        total_countdown -= 1;
+                        add_bpm_note_count(&mut bpm_note_counts, bpm_at(chart, note.time.0), 1);
+                    }
+                    NoteKind::LongEnd if !ignore_long_end => {
+                        add_long_head(slot, lane);
+                        lane_slot.long_notes = lane_slot.long_notes.saturating_add(1);
+                        total_countdown -= 1;
+                        add_bpm_note_count(&mut bpm_note_counts, bpm_at(chart, note.time.0), 1);
+                    }
+                    NoteKind::LongEnd => {}
+                    NoteKind::Mine => {
+                        slot.mines = slot.mines.saturating_add(1);
+                        lane_slot.mines = lane_slot.mines.saturating_add(1);
+                    }
+                }
+                if total_countdown == 0 {
+                    border_sec = sec;
+                }
+            }
+        }
+
+        let peak_density =
+            distribution.iter().map(|second| second.playable_notes()).max().unwrap_or(0) as f64;
+        let threshold = chart.total_notes as usize / distribution.len().max(1) / 4;
+        let mut density_sum = 0u32;
+        let mut density_count = 0u32;
+        for notes in distribution.iter().map(|second| second.playable_notes()) {
+            if notes as usize >= threshold {
+                density_sum = density_sum.saturating_add(notes);
+                density_count = density_count.saturating_add(1);
+            }
+        }
+        let density = if density_count == 0 {
+            0.0
+        } else {
+            f64::from(density_sum) / f64::from(density_count)
+        };
+
+        let end_window = 5usize.min(distribution.len().saturating_sub(border_sec + 1));
+        let mut end_density: f64 = 0.0;
+        if end_window > 0 {
+            for start in border_sec..distribution.len().saturating_sub(end_window) {
+                let notes = (0..end_window)
+                    .map(|offset| distribution[start + offset].playable_notes())
+                    .sum::<u32>();
+                end_density = end_density.max(f64::from(notes) / end_window as f64);
+            }
+        }
+
+        let main_bpm = bpm_note_counts
+            .into_iter()
+            .max_by_key(|(_, count)| *count)
+            .map(|(bpm, _)| bpm)
+            .unwrap_or(chart.metadata.initial_bpm);
+
+        let normal_notes = lane_notes.iter().map(|lane| lane.normal_notes).sum();
+        let long_notes = lane_notes.iter().map(|lane| lane.long_notes).sum();
+        let scratch_notes = lane_notes
+            .iter()
+            .filter(|lane| {
+                lane.lane_index == Lane::Scratch.index() as u8
+                    || lane.lane_index == Lane::Scratch2.index() as u8
+            })
+            .map(|lane| lane.normal_notes)
+            .sum();
+        let long_scratch_notes = lane_notes
+            .iter()
+            .filter(|lane| {
+                lane.lane_index == Lane::Scratch.index() as u8
+                    || lane.lane_index == Lane::Scratch2.index() as u8
+            })
+            .map(|lane| lane.long_notes)
+            .sum();
+
+        Self {
+            normal_notes,
+            long_notes,
+            scratch_notes,
+            long_scratch_notes,
+            density,
+            peak_density,
+            end_density,
+            total_gauge: gauge_total_for_chart(chart.metadata.total, chart.total_notes),
+            main_bpm,
+            distribution,
+            speed_changes: chart_speed_changes(chart),
+            lane_notes,
+        }
+    }
+}
+
+fn chart_analysis_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChartAnalysis> {
+    chart_analysis_from_row_with_offset(row, 0)
+}
+
+fn chart_analysis_from_row_with_offset(
+    row: &rusqlite::Row<'_>,
+    offset: usize,
+) -> rusqlite::Result<ChartAnalysis> {
+    let distribution_json: String = row.get(offset + 9)?;
+    let speed_changes_json: String = row.get(offset + 10)?;
+    let lane_notes_json: String = row.get(offset + 11)?;
+    Ok(ChartAnalysis {
+        normal_notes: row.get(offset)?,
+        long_notes: row.get(offset + 1)?,
+        scratch_notes: row.get(offset + 2)?,
+        long_scratch_notes: row.get(offset + 3)?,
+        density: row.get(offset + 4)?,
+        peak_density: row.get(offset + 5)?,
+        end_density: row.get(offset + 6)?,
+        total_gauge: row.get(offset + 7)?,
+        main_bpm: row.get(offset + 8)?,
+        distribution: serde_json::from_str(&distribution_json).unwrap_or_default(),
+        speed_changes: serde_json::from_str(&speed_changes_json).unwrap_or_default(),
+        lane_notes: serde_json::from_str(&lane_notes_json).unwrap_or_default(),
+    })
+}
+
+fn second_index(time_us: i64) -> usize {
+    (time_us / 1_000_000).max(0) as usize
+}
+
+fn is_scratch_lane(lane: Lane) -> bool {
+    matches!(lane, Lane::Scratch | Lane::Scratch2)
+}
+
+fn add_long_head(second: &mut ChartDistributionSecond, lane: Lane) {
+    if is_scratch_lane(lane) {
+        second.scratch_long_heads = second.scratch_long_heads.saturating_add(1);
+    } else {
+        second.key_long_heads = second.key_long_heads.saturating_add(1);
+    }
+}
+
+fn add_long_body(second: &mut ChartDistributionSecond, lane: Lane, amount: i16) {
+    let value = if is_scratch_lane(lane) {
+        &mut second.scratch_long_bodies
+    } else {
+        &mut second.key_long_bodies
+    };
+    if amount >= 0 {
+        *value = value.saturating_add(amount as u16);
+    } else {
+        *value = value.saturating_sub((-amount) as u16);
+    }
+}
+
+fn gauge_border_note_count(total: Option<f64>, total_notes: u32) -> i64 {
+    let total = total.unwrap_or(0.0);
+    if total <= 0.0 {
+        return 0;
+    }
+    (f64::from(total_notes) * (1.0 - 100.0 / total)) as i64
+}
+
+fn add_bpm_note_count(counts: &mut Vec<(f64, u32)>, bpm: f64, notes: u32) {
+    if let Some((_, count)) =
+        counts.iter_mut().find(|(candidate, _)| (*candidate - bpm).abs() < 0.0001)
+    {
+        *count = count.saturating_add(notes);
+    } else {
+        counts.push((bpm, notes));
+    }
+}
+
+fn bpm_at(chart: &PlayableChart, time_us: i64) -> f64 {
+    let mut bpm = chart.metadata.initial_bpm;
+    for event in &chart.timing_events {
+        if event.time.0 > time_us {
+            break;
+        }
+        if let TimingEventKind::BpmChange { bpm: event_bpm } = event.kind {
+            bpm = event_bpm;
+        }
+    }
+    bpm
+}
+
+fn chart_speed_changes(chart: &PlayableChart) -> Vec<ChartSpeedChange> {
+    let mut out = vec![ChartSpeedChange { speed: chart.metadata.initial_bpm, time_ms: 0 }];
+    let mut current = chart.metadata.initial_bpm;
+    for event in &chart.timing_events {
+        let next = match event.kind {
+            TimingEventKind::BpmChange { bpm } => bpm,
+            TimingEventKind::Stop { .. } => 0.0,
+        };
+        if (next - current).abs() > f64::EPSILON {
+            out.push(ChartSpeedChange { speed: next, time_ms: event.time.0 / 1_000 });
+            current = next;
+        }
+    }
+    if out.last().is_some_and(|last| last.time_ms != chart.end_time.0 / 1_000) {
+        out.push(ChartSpeedChange { speed: current, time_ms: chart.end_time.0 / 1_000 });
+    }
+    out
+}
+
 #[derive(Debug, Clone, Copy)]
 struct ChartStats {
     min_bpm: f64,
@@ -1180,8 +1564,10 @@ fn warning_details(warning: &ImportWarning) -> (String, String) {
 #[cfg(test)]
 mod tests {
     use bmz_chart::hash::compute_chart_identity;
-    use bmz_chart::model::{ChartMetadata, PlayableChart};
-    use bmz_core::time::TimeUs;
+    use bmz_chart::model::{ChartMetadata, LongNotePair, LongNoteStyle, NoteEvent, PlayableChart};
+    use bmz_core::ids::NoteId;
+    use bmz_core::lane::Lane;
+    use bmz_core::time::{ChartTick, TimeUs};
 
     use super::*;
     use crate::storage::migration::{LIBRARY_MIGRATIONS, run_migrations};
@@ -1229,6 +1615,18 @@ mod tests {
             bga_assets: Vec::new(),
             total_notes: 0,
             end_time: TimeUs(10_000_000),
+        }
+    }
+
+    fn note(id: u32, lane: Lane, kind: NoteKind, time_us: i64) -> NoteEvent {
+        NoteEvent {
+            id: NoteId(id),
+            lane,
+            kind,
+            tick: ChartTick(0),
+            time: TimeUs(time_us),
+            sound: None,
+            damage: None,
         }
     }
 
@@ -1286,6 +1684,63 @@ mod tests {
         assert_eq!(mode, "7K");
         assert_eq!(ln_type, "");
         assert!(has_bga);
+
+        let analysis = db.chart_analysis_by_chart_id(chart_id).unwrap().unwrap();
+        assert_eq!(analysis.total_gauge, 260.0);
+        assert_eq!(analysis.main_bpm, 128.0);
+    }
+
+    #[test]
+    fn upsert_chart_import_persists_chart_analysis_distribution() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase { conn };
+        let mut chart = chart("analysis");
+        chart.total_notes = 3;
+        chart.end_time = TimeUs(3_000_000);
+        chart.lane_notes[Lane::Key1.index()].push(note(1, Lane::Key1, NoteKind::Tap, 100_000));
+        chart.lane_notes[Lane::Scratch.index()].push(note(
+            2,
+            Lane::Scratch,
+            NoteKind::LongStart,
+            1_000_000,
+        ));
+        chart.lane_notes[Lane::Scratch.index()].push(note(
+            3,
+            Lane::Scratch,
+            NoteKind::LongEnd,
+            2_000_000,
+        ));
+        chart.lane_notes[Lane::Key2.index()].push(note(4, Lane::Key2, NoteKind::Mine, 1_500_000));
+        chart.long_notes.push(LongNotePair {
+            lane: Lane::Scratch,
+            style: LongNoteStyle::ChannelPair,
+            start_note_id: NoteId(2),
+            end_note_id: NoteId(3),
+            start_tick: ChartTick(0),
+            end_tick: ChartTick(192),
+            start_time: TimeUs(1_000_000),
+            end_time: TimeUs(2_000_000),
+            sound: None,
+        });
+
+        let chart_id =
+            db.upsert_chart_import(&record_for_chart("/songs/analysis.bms", &chart)).unwrap();
+        let analysis = db.chart_analysis_by_chart_id(chart_id).unwrap().unwrap();
+
+        assert_eq!(analysis.normal_notes, 1);
+        assert_eq!(analysis.long_notes, 1);
+        assert_eq!(analysis.scratch_notes, 0);
+        assert_eq!(analysis.long_scratch_notes, 1);
+        assert_eq!(analysis.distribution[0].key_taps, 1);
+        assert_eq!(analysis.distribution[1].scratch_long_heads, 1);
+        assert_eq!(analysis.distribution[1].scratch_long_bodies, 0);
+        assert_eq!(analysis.distribution[1].mines, 1);
+        assert_eq!(analysis.distribution[2].scratch_long_bodies, 1);
+        assert_eq!(analysis.lane_notes[Lane::Scratch.index()].long_notes, 1);
+        assert_eq!(analysis.lane_notes[Lane::Key2.index()].mines, 1);
+        assert_eq!(analysis.peak_density, 1.0);
     }
 
     #[test]
