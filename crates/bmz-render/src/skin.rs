@@ -2344,7 +2344,8 @@ impl SkinDocument {
         let mut front = Vec::new();
         let mut failed_overlay = Vec::new();
         let mut after_notes_marker = false;
-        for destination in self.all_destinations(&enabled_options) {
+        let destinations = self.all_destinations(&enabled_options);
+        for (index, destination) in destinations.iter().enumerate() {
             // `{"id":"notes"}` はノーツ描画位置マーカー。以降の destination はノーツ前面に積む。
             if destination.id == "notes" {
                 after_notes_marker = true;
@@ -2382,6 +2383,14 @@ impl SkinDocument {
                 text_state,
                 sources,
             ) {
+                let after_notes_marker = after_notes_marker
+                    || self.destination_looks_like_pre_notes_judge_line(
+                        destination,
+                        &images,
+                        &enabled_options,
+                        state,
+                        destinations.get(index + 1).copied(),
+                    );
                 let target = destination_render_layer(
                     destination.timer,
                     after_notes_marker,
@@ -2393,6 +2402,38 @@ impl SkinDocument {
             }
         }
         (behind, front, failed_overlay)
+    }
+
+    fn destination_looks_like_pre_notes_judge_line(
+        &self,
+        destination: &SkinDestinationDef,
+        images: &HashMap<&str, &SkinImageDef>,
+        enabled_options: &[i32],
+        state: SkinDrawState,
+        next_destination: Option<&SkinDestinationDef>,
+    ) -> bool {
+        if !matches!(next_destination, Some(next) if next.id == "notes")
+            || destination.timer.is_some()
+            || !destination_uses_lift_offset_only(destination)
+            || skin_image_for_destination_id(destination.id.as_str(), images).is_none()
+        {
+            return false;
+        }
+        let Some(frame) = resolve_destination_frame(destination, 0, enabled_options, state) else {
+            return false;
+        };
+        if frame.w < 100 || frame.h <= 0 || frame.h > 48 {
+            return false;
+        }
+        let Some(note) = &self.note else {
+            return false;
+        };
+        flatten_dst_entries(&note.dst, enabled_options).into_iter().any(|note_frame| {
+            let Some(note_y) = note_frame.y else {
+                return false;
+            };
+            frame.y >= note_y && frame.y <= note_y.saturating_add(64)
+        })
     }
 
     /// `hiddenCover.disapearLine` をレーンカバー系 (HIDDEN / SUDDEN+ / LIFT) のクロップ境界として使う。
@@ -6789,12 +6830,16 @@ fn skin_expr_references_lane_cover_number(expr: &str) -> bool {
     ["number(14)", "number(312)", "number(313)"].iter().any(|needle| expr.contains(needle))
 }
 
-/// Starseeker 閉店の `src = 0` は `system` の黒 1px (`black` image と同じ UV) を指す。
+/// Starseeker 閉店の `src = 0, x = 0, y = 0` sentinel は `system` の黒 1px
+/// (`black` image と同じ UV) を指す。ECFN の判定ラインなど、`src = 0` でも
+/// 明示的な crop 座標を持つ画像はそのまま扱う。
 fn skin_image_pixel_rect(
     image: &SkinImageDef,
     images: &HashMap<&str, &SkinImageDef>,
 ) -> (i32, i32, i32, i32) {
     if image.src == "0"
+        && image.x == 0
+        && image.y == 0
         && let Some(black) = images.get("black")
     {
         return (black.x, black.y, black.w, black.h);
@@ -10895,6 +10940,53 @@ mod tests {
     }
 
     #[test]
+    fn pre_notes_lift_line_at_note_origin_renders_in_front() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 720,
+                "h": 720,
+                "source": [{ "id": 1, "path": "system.png" }],
+                "image": [
+                    { "id": "backdrop", "src": 1, "x": 0, "y": 0, "w": 8, "h": 8 },
+                    { "id": 15, "src": 1, "x": 16, "y": 0, "w": 8, "h": 8 },
+                    { "id": "note", "src": 1, "x": 0, "y": 0, "w": 51, "h": 36 }
+                ],
+                "destination": [
+                    { "id": "backdrop", "dst": [{ "x": 0, "y": 0, "w": 720, "h": 720 }] },
+                    { "id": 15, "offset": 3, "dst": [{ "x": 76, "y": 357, "w": 431, "h": 8 }] },
+                    { "id": "notes" }
+                ],
+                "note": {
+                    "id": "notes",
+                    "note": ["note"],
+                    "dst": [{ "x": 168, "y": 345, "w": 51, "h": 723 }]
+                }
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = mock_source("1", 720.0, 720.0);
+
+        let (behind, front, failed_overlay) = document.static_render_items_split(
+            &sources,
+            SkinDrawState::default(),
+            SkinTextState::default(),
+        );
+
+        assert_eq!(behind.len(), 1, "ordinary pre-notes items stay behind notes");
+        assert_eq!(front.len(), 1, "ECFN-style judge line is drawn in front of notes");
+        assert!(failed_overlay.is_empty());
+        assert!(matches!(
+            front.first(),
+            Some(SkinRenderItem::Image { rect, .. })
+                if approx_eq(rect.y, 355.0 / 720.0)
+                    && approx_eq(rect.height, 8.0 / 720.0)
+        ));
+    }
+
+    #[test]
     fn skin_document_applies_destination_stretch_to_static_images() {
         let document: SkinDocument = serde_json::from_str(
             r#"
@@ -13712,6 +13804,29 @@ mod tests {
         let black = images.get("black").unwrap();
         let rect = skin_image_pixel_rect(image, &images);
         assert_eq!(rect, (black.x, black.y, black.w, black.h));
+    }
+
+    #[test]
+    fn src_zero_with_explicit_crop_keeps_pixel_rect() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 1920,
+                "h": 1080,
+                "source": [{ "id": "system", "path": "system.png" }],
+                "image": [
+                    { "id": "black", "src": "bg", "x": 391, "y": 1080, "w": 8, "h": 8 },
+                    { "id": 15, "src": 0, "x": 16, "y": 0, "w": 8, "h": 8 }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let images = document.image_map();
+        let image = images.get("15").unwrap();
+        let rect = skin_image_pixel_rect(image, &images);
+        assert_eq!(rect, (16, 0, 8, 8));
     }
 
     #[test]

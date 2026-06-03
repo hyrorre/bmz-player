@@ -1266,6 +1266,100 @@ mod tests {
     }
 
     #[test]
+    fn ecfn_play7_pre_notes_judge_line_renders_in_front_when_available() {
+        use std::collections::HashMap;
+
+        use bmz_render::skin::{
+            SkinDocumentTexture, SkinDrawState, SkinImageSize, SkinRenderItem, SkinTextState,
+        };
+
+        let skin_path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/skins/ECFN/play/play7.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+        let decoded = decode_beatoraja_skin(&skin_path, SkinKind::Play).unwrap();
+        let image_15 = decoded
+            .document
+            .image
+            .iter()
+            .find(|image| image.id == "15")
+            .expect("ECFN id=15 image should decode");
+        assert_eq!((image_15.src.as_str(), image_15.x, image_15.y), ("0", 16, 0));
+        let image_15_map = decoded.document.image_map();
+        let mapped_15 = image_15_map.get("15").expect("ECFN id=15 image should map");
+        assert_eq!((mapped_15.src.as_str(), mapped_15.x, mapped_15.y), ("0", 16, 0));
+        let system_texture = decoded
+            .sources
+            .iter()
+            .find(|source| source.source_id == "0")
+            .map(|source| source.texture)
+            .expect("ECFN source 0 should decode");
+        let system_size = decoded
+            .sources
+            .iter()
+            .find(|source| source.source_id == "0")
+            .map(|source| SkinImageSize {
+                width: source.asset.width as f32,
+                height: source.asset.height as f32,
+            })
+            .expect("ECFN source 0 should decode");
+        let sources: HashMap<String, SkinDocumentTexture> = decoded
+            .sources
+            .iter()
+            .map(|source| {
+                (
+                    source.source_id.clone(),
+                    SkinDocumentTexture {
+                        source_id: source.source_id.clone(),
+                        texture: source.texture,
+                        source_size: SkinImageSize {
+                            width: source.asset.width as f32,
+                            height: source.asset.height as f32,
+                        },
+                    },
+                )
+            })
+            .collect();
+
+        let (behind, front, _) = decoded.document.static_render_items_split(
+            &sources,
+            SkinDrawState::default(),
+            SkinTextState::default(),
+        );
+
+        assert!(
+            behind.iter().all(|item| !matches!(
+                item,
+                SkinRenderItem::Image {
+                    texture,
+                    rect,
+                    ..
+                } if *texture == system_texture
+                    && (rect.y - 715.0 / 1080.0).abs() < 0.001
+                    && (rect.height - 8.0 / 1080.0).abs() < 0.001
+            )),
+            "ECFN judge line should not remain behind notes"
+        );
+        assert!(
+            front.iter().any(|item| matches!(
+                item,
+                SkinRenderItem::Image {
+                    texture,
+                    rect,
+                    uv,
+                    ..
+                } if *texture == system_texture
+                    && (rect.y - 715.0 / 1080.0).abs() < 0.001
+                    && (rect.height - 8.0 / 1080.0).abs() < 0.001
+                    && (uv.x - 16.0 / system_size.width).abs() < 0.001
+                    && uv.y.abs() < 0.001
+            )),
+            "expected ECFN id=15 judge line in front items; got {front:?}"
+        );
+    }
+
+    #[test]
     fn ecfn_play14_judge1_combo_is_right_of_judge_when_available() {
         use std::collections::HashMap;
 
