@@ -5,6 +5,13 @@
   "scripts": {
     "build": "nuxt build",
     "dev": "TMPDIR=/tmp nuxt dev",
+    "db:new": "supabase migration new",
+    "db:push": "supabase db push",
+    "db:reset": "supabase db reset",
+    "db:start": "supabase start",
+    "db:stop": "supabase stop",
+    "db:types": "supabase gen types typescript --local > bmz-ir-web/shared/types/database.types.ts",
+    "db:types:remote": "supabase gen types typescript --project-id \"$SUPABASE_PROJECT_REF\" --schema public > bmz-ir-web/shared/types/database.types.ts",
     "generate": "nuxt generate",
     "preview": "nuxt preview",
     "postinstall": "nuxt prepare"
@@ -19,6 +26,7 @@
     "@nuxt/eslint": "^1.15.2",
     "@types/bun": "^1.3.14",
     "prettier": "3.8.3",
+    "supabase": "^2.104.0",
     "vue-tsc": "^3.3.3"
   },
   "overrides": {

@@ -526,3 +526,28 @@ Nuxt 関連のアプリ構造は、bmz-player 本体と混同しないよう `bm
 `bun dev` はリポジトリ root から実行します。Nuxt のディレクトリ対応は `nuxt.config.ts` の `srcDir` / `serverDir` / `dir.public` / `dir.shared` で設定します。
 
 `bun dev` 等でエラーが起きる場合は `export TMPDIR=/tmp` を実行してみる。
+
+### Supabase / DB
+
+IR Website の DB は Supabase CLI と migration を正とします。MCP / Hooks は現時点では使いません。
+
+- DB schema は `supabase/migrations/*.sql` を source of truth とし、Dashboard 変更や ad hoc SQL をそのまま本番反映しません。
+- remote 側で先に変更した場合は `supabase db pull` で migration 化し、SQL を確認してから commit します。
+- migration 追加は `bun run db:new <name>`、local reset は `bun run db:reset`、型生成は `bun run db:types` を使います。
+- 生成型は `bmz-ir-web/shared/types/database.types.ts` に置きます。
+- local Supabase は `bun run db:start` / `bun run db:stop` で操作します。
+- production / remote への `bun run db:push`、destructive SQL、remote write は必ずユーザー確認を取ります。
+- RLS policy、grant、index、constraint、SQL function は migration に含めます。
+- `.env`, service role key, DB password, refresh token, production data は commit しません。必要な環境変数名だけ `.env.example` に書きます。
+- Supabase DB / migration / RLS / generated types / server-side Supabase 接続処理を触るときは repo skill `supabase-ir-db` を使います。
+
+Supabase 関連の主なコマンド:
+
+```bash
+bun run db:start
+bun run db:new <name>
+bun run db:reset
+bun run db:types
+bun run db:push
+bun run db:stop
+```
