@@ -15,6 +15,8 @@ pub const REPLAY_FILE_VERSION: u32 = 2;
 pub struct ReplayFile {
     pub version: u32,
     pub chart_sha256: String,
+    #[serde(default)]
+    pub ln_policy: String,
     pub played_at: i64,
     #[serde(default)]
     pub random_seed: Option<i64>,
@@ -41,9 +43,32 @@ impl ReplayFile {
         lane_shuffle_pattern: Option<Vec<u8>>,
         events: Vec<ReplayEvent>,
     ) -> Self {
+        Self::new_with_policy(
+            chart_sha256,
+            LnScorePolicy::ForceLn,
+            played_at,
+            random_seed,
+            arrange,
+            arrange_seed,
+            lane_shuffle_pattern,
+            events,
+        )
+    }
+
+    pub fn new_with_policy(
+        chart_sha256: [u8; 32],
+        ln_policy: LnScorePolicy,
+        played_at: i64,
+        random_seed: Option<i64>,
+        arrange: ArrangeOption,
+        arrange_seed: Option<i64>,
+        lane_shuffle_pattern: Option<Vec<u8>>,
+        events: Vec<ReplayEvent>,
+    ) -> Self {
         Self {
             version: REPLAY_FILE_VERSION,
             chart_sha256: hex_encode(&chart_sha256),
+            ln_policy: ln_policy.as_str().to_string(),
             played_at,
             random_seed,
             arrange: arrange.to_persistent_str().to_string(),
@@ -92,6 +117,20 @@ pub fn load_replay_for_chart(path: &Path, chart_sha256: [u8; 32]) -> Result<Repl
     let replay = load_replay(path)?;
     if replay.chart_sha256_bytes()? != chart_sha256 {
         bail!("replay chart hash does not match selected chart");
+    }
+    Ok(replay)
+}
+
+pub fn load_replay_for_chart_and_policy(
+    path: &Path,
+    chart_sha256: [u8; 32],
+    ln_policy: LnScorePolicy,
+) -> Result<ReplayFile> {
+    let replay = load_replay_for_chart(path, chart_sha256)?;
+    if !replay.ln_policy.is_empty()
+        && LnScorePolicy::from_str_opt(&replay.ln_policy) != Some(ln_policy)
+    {
+        bail!("replay long note policy does not match selected chart policy");
     }
     Ok(replay)
 }
@@ -218,6 +257,7 @@ mod tests {
             loaded.chart_sha256,
             "0101010101010101010101010101010101010101010101010101010101010101"
         );
+        assert_eq!(loaded.ln_policy, "ForceLn");
         assert_eq!(loaded.events, replay.events);
 
         std::fs::remove_file(path).unwrap();
@@ -285,6 +325,57 @@ mod tests {
 
         assert!(load_replay_player_for_chart(&path, [3; 32]).is_err());
         assert!(load_replay_player_for_chart(&path, [2; 32]).is_ok());
+
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn load_replay_for_chart_and_policy_rejects_mismatched_ln_policy() {
+        let path = std::env::temp_dir().join(format!(
+            "bmz-replay-policy-mismatch-{}-{}.toml",
+            std::process::id(),
+            TimeUs(45).0
+        ));
+        let replay = ReplayFile::new_with_policy(
+            [4; 32],
+            LnScorePolicy::ForceCn,
+            1_700_000_052,
+            None,
+            ArrangeOption::Normal,
+            None,
+            None,
+            Vec::new(),
+        );
+        save_replay(&path, &replay).unwrap();
+
+        assert!(load_replay_for_chart_and_policy(&path, [4; 32], LnScorePolicy::ForceLn).is_err());
+        assert!(load_replay_for_chart_and_policy(&path, [4; 32], LnScorePolicy::ForceCn).is_ok());
+
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn load_replay_for_chart_and_policy_accepts_legacy_replay_without_ln_policy() {
+        let path = std::env::temp_dir().join(format!(
+            "bmz-replay-policy-legacy-{}-{}.toml",
+            std::process::id(),
+            TimeUs(46).0
+        ));
+        std::fs::write(
+            &path,
+            r#"
+version = 1
+chart_sha256 = "0505050505050505050505050505050505050505050505050505050505050505"
+played_at = 1700000053
+events = []
+"#,
+        )
+        .unwrap();
+
+        let replay =
+            load_replay_for_chart_and_policy(&path, [5; 32], LnScorePolicy::ForceHcn).unwrap();
+
+        assert!(replay.ln_policy.is_empty());
 
         std::fs::remove_file(path).unwrap();
     }

@@ -55,8 +55,9 @@ pub fn store_play_result(
     let replay_path = if should_save_replay(replay_config, result) {
         let file_name = replay_file_name(result.chart_sha256, request.played_at);
         let path = profile_paths.replay_dir.join(&file_name);
-        let replay = ReplayFile::new(
+        let replay = ReplayFile::new_with_policy(
             result.chart_sha256,
+            request.ln_policy,
             request.played_at,
             request.random_seed,
             arrange,
@@ -94,8 +95,9 @@ pub fn store_play_result(
             }
             let file_name = replay_slot_file_name(result.chart_sha256, request.ln_policy, slot);
             let path = profile_paths.replay_dir.join(&file_name);
-            let replay = ReplayFile::new(
+            let replay = ReplayFile::new_with_policy(
                 result.chart_sha256,
+                request.ln_policy,
                 request.played_at,
                 request.random_seed,
                 arrange,

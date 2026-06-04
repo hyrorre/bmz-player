@@ -6,7 +6,7 @@ use bmz_chart::model::{LongNoteMode, PlayableChart};
 use bmz_chart::timing::TimingMap;
 use bmz_core::input::{InputEvent, InputKind, InputSource};
 use bmz_core::judge::Judge;
-use bmz_core::lane::{LANE_COUNT, Lane};
+use bmz_core::lane::LANE_COUNT;
 use bmz_core::time::TimeUs;
 
 use crate::autoplay::AutoplayController;
@@ -404,9 +404,7 @@ pub fn process_misses(session: &mut GameSession, audio_now: TimeUs) -> Vec<Judge
 }
 
 pub fn apply_hcn_gauge(session: &mut GameSession, audio_now: TimeUs) {
-    let has_hcn_lane = Lane::ALL.iter().copied().any(|lane| {
-        let idx = lane.index();
-        let lane_state = &session.judge.lanes[idx];
+    let has_hcn_lane = session.judge.lanes.iter().any(|lane_state| {
         lane_state.active_long.is_some_and(|active| active.mode == LongNoteMode::Hcn)
             || lane_state.hcn_draining
     });
@@ -415,23 +413,32 @@ pub fn apply_hcn_gauge(session: &mut GameSession, audio_now: TimeUs) {
         return;
     }
 
-    let delta_us =
-        session.last_hcn_gauge_at.map(|prev| audio_now.0.saturating_sub(prev.0)).unwrap_or(0);
+    let previous = session.last_hcn_gauge_at.unwrap_or(audio_now);
     session.last_hcn_gauge_at = Some(audio_now);
-    if delta_us <= 0 {
+    if audio_now.0 <= previous.0 {
         return;
     }
-    let delta_secs = delta_us as f32 / 1_000_000.0;
 
-    for lane in Lane::ALL {
-        let idx = lane.index();
-        let lane_state = &session.judge.lanes[idx];
-        let is_hcn_active =
-            lane_state.active_long.is_some_and(|active| active.mode == LongNoteMode::Hcn);
-        if is_hcn_active && session.lane_keyon_started_at[idx].is_some() {
-            session.gauge.apply_hcn_hold(delta_secs);
+    for idx in 0..LANE_COUNT {
+        let lane_state = &mut session.judge.lanes[idx];
+        if let Some(active) = lane_state.active_long
+            && active.mode == LongNoteMode::Hcn
+            && session.lane_keyon_started_at[idx].is_some()
+        {
+            let end = audio_now.0.min(active.end.end_time.0);
+            if end > previous.0 {
+                session.gauge.apply_hcn_hold((end - previous.0) as f32 / 1_000_000.0);
+            }
         } else if lane_state.hcn_draining {
-            session.gauge.apply_hcn_drain(delta_secs);
+            let drain_until = lane_state.hcn_drain_until.unwrap_or(audio_now);
+            let end = audio_now.0.min(drain_until.0);
+            if end > previous.0 {
+                session.gauge.apply_hcn_drain((end - previous.0) as f32 / 1_000_000.0);
+            }
+            if audio_now.0 >= drain_until.0 {
+                lane_state.hcn_draining = false;
+                lane_state.hcn_drain_until = None;
+            }
         }
     }
 }
@@ -536,7 +543,7 @@ mod tests {
     use crate::input::binding::LaneBinding;
     use crate::input::system::InputSystem;
     use crate::input::translator::DefaultInputTranslator;
-    use crate::judge::model::JudgeWindow;
+    use crate::judge::model::{ActiveLongNote, JudgeWindow, LongNoteEndRef};
 
     use super::*;
 
@@ -607,6 +614,50 @@ mod tests {
 
         assert_eq!(session.state, PlayState::Playing);
         assert_eq!(session.gauge.selected, bmz_core::clear::GaugeType::Hard);
+    }
+
+    #[test]
+    fn hcn_hold_is_clamped_to_long_note_end_time() {
+        let mut session = session_with_autoplay(chart_with_keysound());
+        session.gauge.set_initial_value(50.0);
+        session.judge.lanes[Lane::Key1.index()].active_long = Some(ActiveLongNote {
+            pair_index: 0,
+            mode: LongNoteMode::Hcn,
+            start_note_id: NoteId(1),
+            end: LongNoteEndRef {
+                end_note_id: NoteId(2),
+                end_tick: ChartTick(192),
+                end_time: TimeUs(1_000_000),
+            },
+        });
+        session.lane_keyon_started_at[Lane::Key1.index()] = Some(TimeUs(0));
+
+        apply_hcn_gauge(&mut session, TimeUs(0));
+        apply_hcn_gauge(&mut session, TimeUs(2_000_000));
+        let at_end = session.gauge.current().value;
+        apply_hcn_gauge(&mut session, TimeUs(3_000_000));
+
+        assert!(at_end > 50.0);
+        assert!((session.gauge.current().value - at_end).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn hcn_drain_stops_at_drain_until() {
+        let mut session = session_with_autoplay(chart_with_keysound());
+        session.gauge.set_initial_value(50.0);
+        let lane = &mut session.judge.lanes[Lane::Key1.index()];
+        lane.hcn_draining = true;
+        lane.hcn_drain_until = Some(TimeUs(1_000_000));
+
+        apply_hcn_gauge(&mut session, TimeUs(0));
+        apply_hcn_gauge(&mut session, TimeUs(2_000_000));
+        let at_end = session.gauge.current().value;
+        apply_hcn_gauge(&mut session, TimeUs(3_000_000));
+
+        assert!(at_end < 50.0);
+        assert!(!session.judge.lanes[Lane::Key1.index()].hcn_draining);
+        assert_eq!(session.judge.lanes[Lane::Key1.index()].hcn_drain_until, None);
+        assert!((session.gauge.current().value - at_end).abs() < f32::EPSILON);
     }
 
     #[test]

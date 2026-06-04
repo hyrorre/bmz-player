@@ -101,7 +101,7 @@ use crate::skin_loader::{
 use crate::songs_cmd::scan_songs;
 use crate::storage::library_db::{ChartDistributionSecond, LibraryDatabase};
 use crate::storage::migration::migrate_library_db;
-use crate::storage::replay::load_replay_for_chart;
+use crate::storage::replay::load_replay_for_chart_and_policy;
 use crate::ui::{DebugInfo, EguiLayer, SceneSkinDefs, SkinCandidate, SkinCatalog, SkinConfigMeta};
 use bmz_render::skin::{
     DestinationListEntry, SkinAnimationDef, SkinClickHit, SkinClickTarget, SkinDocument,
@@ -4254,13 +4254,14 @@ impl WinitApp {
             return false;
         };
         let abs_path = self.boot.profile_paths.root_dir.join(&slot_record.replay_path);
-        let replay_file = match load_replay_for_chart(&abs_path, sha) {
-            Ok(file) => file,
-            Err(error) => {
-                tracing::warn!(%error, path = %abs_path.display(), "replay load failed");
-                return false;
-            }
-        };
+        let replay_file =
+            match load_replay_for_chart_and_policy(&abs_path, sha, slot_record.ln_policy) {
+                Ok(file) => file,
+                Err(error) => {
+                    tracing::warn!(%error, path = %abs_path.display(), "replay load failed");
+                    return false;
+                }
+            };
         let player = bmz_gameplay::replay::ReplayPlayer {
             events: replay_file.events.clone(),
             next_index: 0,

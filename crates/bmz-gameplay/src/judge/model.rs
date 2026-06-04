@@ -95,6 +95,7 @@ pub struct LaneJudgeState {
     pub active_long: Option<ActiveLongNote>,
     /// HCN モードで終点前に離したあと、終点までゲージを継続減衰させる。
     pub hcn_draining: bool,
+    pub hcn_drain_until: Option<TimeUs>,
     pub last_press_time: Option<TimeUs>,
     /// 直近にヒットした Mine の time。同一 Mine への二重ヒットを防ぐ簡易ガード。
     /// Mine は密集しないという前提で「直近1個」だけ覚えておけば十分。

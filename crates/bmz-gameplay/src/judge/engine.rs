@@ -69,6 +69,7 @@ impl JudgeEngine {
                         if now.0 > active.end.end_time.0 + self.windows.bad_slow_us {
                             lane_state.active_long = None;
                             lane_state.hcn_draining = false;
+                            lane_state.hcn_drain_until = None;
                             outcome.events.push(JudgementEvent {
                                 note_id: Some(active.end.end_note_id),
                                 lane,
@@ -138,6 +139,7 @@ impl JudgeEngine {
             {
                 lane_state.active_long = Some(active);
                 lane_state.hcn_draining = false;
+                lane_state.hcn_drain_until = None;
             }
 
             return JudgeOutcome {
@@ -202,6 +204,10 @@ impl JudgeEngine {
                 lane_state.active_long = None;
                 if early_release {
                     lane_state.hcn_draining = true;
+                    lane_state.hcn_drain_until = Some(active.end.end_time);
+                } else {
+                    lane_state.hcn_draining = false;
+                    lane_state.hcn_drain_until = None;
                 }
 
                 JudgeOutcome {

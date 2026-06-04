@@ -1,3 +1,4 @@
+use bmz_chart::model::LongNoteMode;
 use bmz_core::lane::{LANE_COUNT, Lane};
 use bmz_core::time::TimeUs;
 
@@ -15,6 +16,8 @@ const JUDGE_LINE_Y_RATIO: f32 = 0.86;
 const NOTE_HEIGHT: f32 = 0.018;
 /// デフォルトスキンのロングノート胴体色（半透明）。
 const LONG_NOTE_BODY_COLOR: Color = Color::rgba(0.5, 0.78, 0.88, 0.5);
+const CN_BODY_COLOR: Color = Color::rgba(0.45, 0.88, 0.62, 0.5);
+const HCN_BODY_COLOR: Color = Color::rgba(0.95, 0.68, 0.35, 0.5);
 pub const DEFAULT_NOTE_TEXTURE: TextureId = TextureId(1);
 pub const DEFAULT_KEY_EVEN_NOTE_TEXTURE: TextureId = TextureId(2);
 pub const DEFAULT_SCRATCH_NOTE_TEXTURE: TextureId = TextureId(3);
@@ -993,7 +996,7 @@ fn plan_play(
                         width: lane_width * 0.64,
                         height: (bottom - top).max(0.0),
                     },
-                    color: LONG_NOTE_BODY_COLOR,
+                    color: long_note_body_color(body.mode),
                 });
             }
 
@@ -2113,6 +2116,14 @@ fn lane_flash_color(snapshot: &RenderSnapshot, lane: Lane) -> Option<Color> {
     input_lane_flash_color(snapshot, lane)
 }
 
+fn long_note_body_color(mode: LongNoteMode) -> Color {
+    match mode {
+        LongNoteMode::Ln => LONG_NOTE_BODY_COLOR,
+        LongNoteMode::Cn => CN_BODY_COLOR,
+        LongNoteMode::Hcn => HCN_BODY_COLOR,
+    }
+}
+
 fn judgement_lane_flash_color(snapshot: &RenderSnapshot, lane: Lane) -> Option<Color> {
     let judgement = snapshot.recent_judgements.iter().rev().find(|judgement| {
         judgement.lane == lane
@@ -2290,6 +2301,32 @@ mod tests {
         let board = Rect { x: 0.18, y: 0.05, width: 0.64, height: 0.9 };
         assert!(approx_eq(body.y, play_object_y(board, 0.0, 0.7)));
         assert!(approx_eq(body.y + body.height, play_object_y(board, 0.0, 0.1)));
+    }
+
+    #[test]
+    fn play_plan_colors_long_note_body_by_mode() {
+        let mut snapshot = RenderSnapshot::default();
+        snapshot.visible_long_notes.push(VisibleLongNote {
+            lane: Lane::Key4,
+            mode: LongNoteMode::Cn,
+            head_y: 0.1,
+            tail_y: 0.7,
+        });
+        snapshot.visible_long_notes.push(VisibleLongNote {
+            lane: Lane::Key6,
+            mode: LongNoteMode::Hcn,
+            head_y: 0.1,
+            tail_y: 0.7,
+        });
+
+        let plan = DrawPlan::from_scene(&AppSceneSnapshot::Play(snapshot));
+
+        assert!(plan.commands.iter().any(
+            |command| matches!(command, DrawCommand::Rect { color, .. } if *color == CN_BODY_COLOR)
+        ));
+        assert!(plan.commands.iter().any(
+            |command| matches!(command, DrawCommand::Rect { color, .. } if *color == HCN_BODY_COLOR)
+        ));
     }
 
     #[test]
