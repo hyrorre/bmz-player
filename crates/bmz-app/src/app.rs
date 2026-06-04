@@ -98,10 +98,11 @@ use crate::skin_loader::{
     is_decodable_skin_path, load_default_skin_into_renderer, play_skin_selection_for,
     set_decoded_skin_context, upload_decoded_skin,
 };
-use crate::songs_cmd::scan_songs;
+use crate::songs_cmd::scan_songs_with_progress;
 use crate::storage::library_db::{ChartDistributionSecond, LibraryDatabase};
 use crate::storage::migration::migrate_library_db;
 use crate::storage::replay::load_replay_for_chart_and_policy;
+use crate::storage::scan::{ScanProgress, ScanReport};
 use crate::storage::score_import::{ScoreImportRequest, import_scores};
 use crate::ui::{DebugInfo, EguiLayer, SceneSkinDefs, SkinCandidate, SkinCatalog, SkinConfigMeta};
 use bmz_render::skin::{
@@ -224,6 +225,8 @@ struct WinitApp {
     skin_catalog: SkinCatalog,
     skin_defs_cache: BTreeMap<String, SceneSkinDefs>,
     pending_table_fetch: Option<Receiver<Result<()>>>,
+    pending_song_scan: Option<Receiver<SongScanEvent>>,
+    song_scan_progress: Option<ScanProgress>,
     last_scene_kind: Option<AppSceneKind>,
     start_held: bool,
     select_held: bool,
@@ -403,6 +406,11 @@ struct PlayPreloadResult {
     generation: u64,
     chart_id: i64,
     result: std::result::Result<PreloadedWinitPlaySession, String>,
+}
+
+enum SongScanEvent {
+    Progress(ScanProgress),
+    Finished(Result<ScanReport>),
 }
 
 struct PracticeChartDefaults {
@@ -774,6 +782,8 @@ impl WinitApp {
             skin_catalog,
             skin_defs_cache: BTreeMap::new(),
             pending_table_fetch: None,
+            pending_song_scan: None,
+            song_scan_progress: None,
             last_scene_kind: None,
             start_held: false,
             select_held: false,
@@ -1109,7 +1119,17 @@ impl WinitApp {
     }
 
     fn build_overlay_snapshot(&self) -> OverlaySnapshot {
-        OverlaySnapshot { text: self.always_overlay_text(), fps_text: self.wgpu_fps_overlay_text() }
+        OverlaySnapshot {
+            left_text: self.song_scan_overlay_text(),
+            text: self.always_overlay_text(),
+            fps_text: self.wgpu_fps_overlay_text(),
+        }
+    }
+
+    fn song_scan_overlay_text(&self) -> String {
+        self.song_scan_progress
+            .map(|progress| format!("SCAN {} / {}", progress.done, progress.total))
+            .unwrap_or_default()
     }
 
     fn always_overlay_text(&self) -> String {
@@ -4643,24 +4663,8 @@ impl WinitApp {
         let scan_roots = self.song_load_roots_from_stack();
 
         if !scan_roots.is_empty() {
-            match scan_songs(
-                &mut self.boot.library_db,
-                &scan_roots,
-                &self.boot.app_config.scan,
-                now_unix_seconds(),
-                false,
-            ) {
-                Ok(report) => tracing::info!(
-                    imported = report.summary.imported,
-                    skipped = report.summary.skipped,
-                    failed = report.summary.failed,
-                    "song load complete"
-                ),
-                Err(error) => tracing::error!(%error, "song load failed"),
-            }
+            self.spawn_song_scan(scan_roots, false, "song-scan".to_string());
         }
-
-        self.reload_select_items();
     }
 
     fn import_external_scores(&mut self, request: ScoreImportRequest) {
@@ -4713,25 +4717,85 @@ impl WinitApp {
         }
         if let Some(path) = song_scan_path_from_context(&self.folder_stack, selected) {
             let roots = vec![PathEntry { path, enabled: true, recursive: true }];
-            match scan_songs(
-                &mut self.boot.library_db,
-                &roots,
-                &self.boot.app_config.scan,
-                now_unix_seconds(),
-                true,
-            ) {
-                Ok(report) => tracing::info!(
-                    imported = report.summary.imported,
-                    skipped = report.summary.skipped,
-                    failed = report.summary.failed,
-                    "F5 song reload complete"
-                ),
-                Err(error) => tracing::error!(%error, "F5 song reload failed"),
-            }
-            self.reload_select_items();
+            self.spawn_song_scan(roots, true, "F5 song reload".to_string());
             return;
         }
         tracing::debug!("F5 reload: no applicable target in select context");
+    }
+
+    fn spawn_song_scan(&mut self, roots: Vec<PathEntry>, force: bool, label: String) {
+        if self.pending_song_scan.is_some() {
+            tracing::debug!(%label, "song scan already in progress");
+            return;
+        }
+        let library_db_path = self.boot.app_paths.library_db.clone();
+        let scan_config = self.boot.app_config.scan.clone();
+        let (tx, rx) = mpsc::channel();
+        self.song_scan_progress = Some(ScanProgress::default());
+        thread::Builder::new()
+            .name("song-scan".to_string())
+            .spawn(move || {
+                let result = (|| -> Result<ScanReport> {
+                    migrate_library_db(&library_db_path)?;
+                    let mut library_db = LibraryDatabase::open(&library_db_path)?;
+                    scan_songs_with_progress(
+                        &mut library_db,
+                        &roots,
+                        &scan_config,
+                        now_unix_seconds(),
+                        force,
+                        |progress| {
+                            let _ = tx.send(SongScanEvent::Progress(progress));
+                        },
+                    )
+                })();
+                let _ = tx.send(SongScanEvent::Finished(result));
+            })
+            .expect("failed to spawn song scan thread");
+        self.pending_song_scan = Some(rx);
+        tracing::info!(%label, force, "started song scan");
+    }
+
+    fn poll_pending_song_scan(&mut self) {
+        let Some(rx) = self.pending_song_scan.take() else {
+            return;
+        };
+        let mut keep_pending = true;
+        loop {
+            match rx.try_recv() {
+                Ok(SongScanEvent::Progress(progress)) => {
+                    self.song_scan_progress = Some(progress);
+                }
+                Ok(SongScanEvent::Finished(Ok(report))) => {
+                    tracing::info!(
+                        imported = report.summary.imported,
+                        skipped = report.summary.skipped,
+                        failed = report.summary.failed,
+                        "song scan complete"
+                    );
+                    self.song_scan_progress = None;
+                    self.reload_select_items();
+                    keep_pending = false;
+                    break;
+                }
+                Ok(SongScanEvent::Finished(Err(error))) => {
+                    tracing::error!(%error, "song scan failed");
+                    self.song_scan_progress = None;
+                    keep_pending = false;
+                    break;
+                }
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    tracing::warn!("song scan worker disconnected");
+                    self.song_scan_progress = None;
+                    keep_pending = false;
+                    break;
+                }
+            }
+        }
+        if keep_pending {
+            self.pending_song_scan = Some(rx);
+        }
     }
 
     fn spawn_table_fetch(&mut self, url: String) {
@@ -6257,6 +6321,7 @@ impl ApplicationHandler for WinitApp {
                 self.drain_pending_skins();
                 self.poll_play_preload();
                 self.poll_pending_table_fetch();
+                self.poll_pending_song_scan();
                 self.advance_decide_transition();
                 self.advance_play_ending();
                 self.advance_result_exit();

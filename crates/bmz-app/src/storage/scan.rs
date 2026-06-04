@@ -34,6 +34,12 @@ pub struct ScanReport {
     pub failures: Vec<ScanFailure>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ScanProgress {
+    pub done: u32,
+    pub total: u32,
+}
+
 /// 1回のバッチで並列パースするファイル数
 const IMPORT_BATCH_SIZE: usize = 256;
 
@@ -43,6 +49,17 @@ pub fn scan_song_roots(
     scan: &ScanConfig,
     scanned_at: i64,
     force: bool,
+) -> Result<ScanReport> {
+    scan_song_roots_with_progress(db, roots, scan, scanned_at, force, |_| {})
+}
+
+pub fn scan_song_roots_with_progress(
+    db: &mut LibraryDatabase,
+    roots: &[PathEntry],
+    scan: &ScanConfig,
+    scanned_at: i64,
+    force: bool,
+    mut on_progress: impl FnMut(ScanProgress),
 ) -> Result<ScanReport> {
     let mut report = ScanReport::default();
     let enabled_roots: Vec<&PathEntry> = roots.iter().filter(|r| r.enabled).collect();
@@ -54,6 +71,9 @@ pub fn scan_song_roots(
         let root_id = db.upsert_root(root_path, root.enabled, root.recursive)?;
         let entries = discover_chart_files(root_path, root.recursive, scan)?;
         let files_total = entries.len();
+        let root_skipped_start = report.summary.skipped;
+        let root_imported_start = report.summary.imported;
+        let root_failed_start = report.summary.failed;
 
         tracing::info!(
             root = %root_path.display(),
@@ -69,6 +89,7 @@ pub fn scan_song_roots(
             file_size: u64,
             modified_at: i64,
         }
+        on_progress(ScanProgress { done: 0, total: files_total as u32 });
         let fingerprints = db.load_fingerprints_for_root(root_id)?;
         let mut to_import: Vec<FileTodo> = Vec::new();
         for entry in &entries {
@@ -90,6 +111,10 @@ pub fn scan_song_roots(
                 });
             }
         }
+        on_progress(ScanProgress {
+            done: report.summary.skipped.saturating_sub(root_skipped_start).min(files_total as u32),
+            total: files_total as u32,
+        });
 
         let new_total = to_import.len();
         tracing::info!(
@@ -192,6 +217,13 @@ pub fn scan_song_roots(
                 root = %root_path.display(),
                 "batch timing"
             );
+            on_progress(ScanProgress {
+                done: (report.summary.skipped.saturating_sub(root_skipped_start)
+                    + report.summary.imported.saturating_sub(root_imported_start)
+                    + report.summary.failed.saturating_sub(root_failed_start))
+                .min(files_total as u32),
+                total: files_total as u32,
+            });
         }
 
         tracing::info!(
@@ -392,6 +424,40 @@ mod tests {
             db.conn().query_row("SELECT last_scan_at FROM roots", [], |row| row.get(0)).unwrap();
         assert_eq!(title, "Scan Song");
         assert_eq!(last_scan_at, 1_700_000_020);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn scan_song_roots_reports_progress() {
+        let root = make_temp_dir("scan-progress");
+        write_file(&root.join("a.bms"), "#TITLE A\n#BPM 120\n#00011:01\n");
+        write_file(&root.join("b.bms"), "#TITLE B\n#BPM 120\n#00011:01\n");
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase::from_connection(conn);
+        let roots = vec![PathEntry {
+            path: root.to_string_lossy().into_owned(),
+            enabled: true,
+            recursive: true,
+        }];
+        let mut progress = Vec::new();
+
+        let report = scan_song_roots_with_progress(
+            &mut db,
+            &roots,
+            &scan_config(),
+            1_700_000_020,
+            false,
+            |p| progress.push(p),
+        )
+        .unwrap();
+
+        assert_eq!(report.summary.imported, 2);
+        assert_eq!(progress.first(), Some(&ScanProgress { done: 0, total: 2 }));
+        assert_eq!(progress.last(), Some(&ScanProgress { done: 2, total: 2 }));
 
         std::fs::remove_dir_all(root).unwrap();
     }

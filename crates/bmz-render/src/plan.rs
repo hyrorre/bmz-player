@@ -1306,11 +1306,21 @@ fn push_scene_overlays(
     commands: &mut Vec<DrawCommand>,
     overlay: &crate::snapshot::OverlaySnapshot,
 ) {
+    push_scene_overlay_text_aligned(commands, &overlay.left_text, 0.015, TextAlign::Left);
     push_scene_overlay_text(commands, &overlay.fps_text, 0.015);
     push_scene_overlay_text(commands, &overlay.text, 0.975);
 }
 
 fn push_scene_overlay_text(commands: &mut Vec<DrawCommand>, overlay: &str, origin_y: f32) {
+    push_scene_overlay_text_aligned(commands, overlay, origin_y, TextAlign::Right);
+}
+
+fn push_scene_overlay_text_aligned(
+    commands: &mut Vec<DrawCommand>,
+    overlay: &str,
+    origin_y: f32,
+    align: TextAlign,
+) {
     if overlay.is_empty() {
         return;
     }
@@ -1320,8 +1330,9 @@ fn push_scene_overlay_text(commands: &mut Vec<DrawCommand>, overlay: &str, origi
     const OVERLAY_SHADOW_OFFSET_RATIO: f32 = 1.0 / 1080.0;
     // TextAlign::Right は max_width > 0 のときだけ効く (renderer.rs)。
     // origin.x を右端ボックスの左端、max_width をボックス幅にして右寄せする。
+    let origin_x = if align == TextAlign::Left { 0.015 } else { -0.015 };
     commands.push(DrawCommand::Text {
-        origin: Point { x: -0.015, y: origin_y },
+        origin: Point { x: origin_x, y: origin_y },
         text: overlay.to_string(),
         style: TextStyle {
             font_id: None,
@@ -1329,7 +1340,7 @@ fn push_scene_overlay_text(commands: &mut Vec<DrawCommand>, overlay: &str, origi
             bitmap_size: None,
             color: Color::rgba(0.9, 0.9, 0.9, 0.65),
             layer: TextLayer::Ui,
-            align: TextAlign::Right,
+            align,
             max_width: 1.0,
             overflow: TextOverflow::Overflow,
             wrapping: false,

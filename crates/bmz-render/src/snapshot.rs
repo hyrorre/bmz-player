@@ -42,6 +42,8 @@ pub enum CourseStageMarker {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct OverlaySnapshot {
+    /// 左上に常時表示する文字列。
+    pub left_text: String,
     /// 右下に常時表示する文字列。
     pub text: String,
     /// 右上に常時表示する FPS 文字列。

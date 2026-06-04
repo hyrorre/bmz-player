@@ -9,7 +9,9 @@ use crate::config::save::save_app_config;
 use crate::paths::resolve_app_paths;
 use crate::storage::library_db::LibraryDatabase;
 use crate::storage::migration::migrate_library_db;
-use crate::storage::scan::{ScanReport, scan_song_roots};
+use crate::storage::scan::{
+    ScanProgress, ScanReport, scan_song_roots, scan_song_roots_with_progress,
+};
 
 pub fn run_songs_command(cmd: SongsCommand) -> Result<()> {
     match cmd {
@@ -87,6 +89,17 @@ pub fn scan_songs(
     force: bool,
 ) -> Result<ScanReport> {
     scan_song_roots(db, roots, scan, scanned_at, force)
+}
+
+pub fn scan_songs_with_progress(
+    db: &mut LibraryDatabase,
+    roots: &[PathEntry],
+    scan: &crate::config::app_config::ScanConfig,
+    scanned_at: i64,
+    force: bool,
+    on_progress: impl FnMut(ScanProgress),
+) -> Result<ScanReport> {
+    scan_song_roots_with_progress(db, roots, scan, scanned_at, force, on_progress)
 }
 
 fn looks_like_path(s: &str) -> bool {
