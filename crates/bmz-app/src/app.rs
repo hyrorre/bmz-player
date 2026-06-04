@@ -9459,6 +9459,7 @@ mod tests {
                 has_long_notes: false,
                 has_mines: false,
                 judge_rank: Some(1),
+                ln_profile: Default::default(),
             }),
             chart_analysis: Some(crate::storage::library_db::ChartAnalysisSummary {
                 normal_notes: 40 + index as u32,

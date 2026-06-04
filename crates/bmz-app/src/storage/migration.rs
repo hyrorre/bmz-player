@@ -397,6 +397,18 @@ pub const LIBRARY_MIGRATIONS: &[Migration] = &[
             "CREATE INDEX idx_chart_analysis_main_bpm ON chart_analysis(main_bpm);",
         ],
     },
+    Migration {
+        version: 15,
+        // Store the long-note makeup needed to normalize BMZ score policies.
+        // Existing rows default to no long notes; rescanning charts refreshes
+        // the four flags from the parsed chart model.
+        statements: &[
+            "ALTER TABLE charts ADD COLUMN has_undefined_ln INTEGER NOT NULL DEFAULT 0;",
+            "ALTER TABLE charts ADD COLUMN has_defined_ln INTEGER NOT NULL DEFAULT 0;",
+            "ALTER TABLE charts ADD COLUMN has_defined_cn INTEGER NOT NULL DEFAULT 0;",
+            "ALTER TABLE charts ADD COLUMN has_defined_hcn INTEGER NOT NULL DEFAULT 0;",
+        ],
+    },
 ];
 
 pub const SCORE_MIGRATIONS: &[Migration] = &[

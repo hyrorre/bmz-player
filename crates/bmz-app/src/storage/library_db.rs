@@ -9,6 +9,8 @@ use bmz_gameplay::gauge::gauge_total_for_chart;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
+use crate::ln_policy::ChartLnProfile;
+
 pub use super::course_db::{
     CourseBestScore, CourseReplayRecord, CourseReplaySlotRecord, CourseScoreChartRecord,
     CourseScoreEntry, CourseScoreInsert, StoredCourse, StoredCourseEntry,
@@ -60,6 +62,7 @@ pub struct ChartListItem {
     pub has_long_notes: bool,
     pub has_mines: bool,
     pub judge_rank: Option<i32>,
+    pub ln_profile: ChartLnProfile,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -985,7 +988,8 @@ const CHART_LIST_ITEM_LOOKUP_SQL: &str = "
            initial_bpm, COALESCE(min_bpm, initial_bpm),
            COALESCE(max_bpm, initial_bpm), length_ms, folder_path,
            stage_file, banner_file, backbmp_file, preview_file,
-           has_long_notes, has_mines, judge_rank
+           has_long_notes, has_mines, judge_rank,
+           has_undefined_ln, has_defined_ln, has_defined_cn, has_defined_hcn
     FROM charts
     WHERE {column} = ?1
     ORDER BY id DESC
@@ -1037,7 +1041,11 @@ const CHART_LIST_ITEM_COLUMNS: &str = "
     preview_file,
     has_long_notes,
     has_mines,
-    judge_rank";
+    judge_rank,
+    has_undefined_ln,
+    has_defined_ln,
+    has_defined_cn,
+    has_defined_hcn";
 
 const CHART_LIST_ITEM_COLUMNS_C: &str = "
     c.id,
@@ -1061,7 +1069,11 @@ const CHART_LIST_ITEM_COLUMNS_C: &str = "
     c.preview_file,
     c.has_long_notes,
     c.has_mines,
-    c.judge_rank";
+    c.judge_rank,
+    c.has_undefined_ln,
+    c.has_defined_ln,
+    c.has_defined_cn,
+    c.has_defined_hcn";
 
 fn chart_list_item_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChartListItem> {
     let md5_hex: String = row.get(1)?;
@@ -1092,6 +1104,12 @@ fn chart_list_item_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChartLi
         has_long_notes: row.get(19)?,
         has_mines: row.get(20)?,
         judge_rank: row.get(21)?,
+        ln_profile: ChartLnProfile {
+            has_undefined_ln: row.get(22)?,
+            has_defined_ln: row.get(23)?,
+            has_defined_cn: row.get(24)?,
+            has_defined_hcn: row.get(25)?,
+        },
     })
 }
 
@@ -1141,10 +1159,13 @@ fn insert_chart(conn: &Connection, record: &ChartImportRecord<'_>) -> Result<i64
             difficulty_name, play_level, mode, total_notes, initial_bpm,
             min_bpm, max_bpm, length_ms, ln_type, has_bga, has_long_notes,
             has_mines, folder_path, stage_file, preview_file,
-            banner_file, backbmp_file, judge_rank, gauge_total, import_version
+            banner_file, backbmp_file, judge_rank, gauge_total,
+            has_undefined_ln, has_defined_ln, has_defined_cn, has_defined_hcn,
+            import_version
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
-            ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27
+            ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27,
+            ?28, ?29, ?30, ?31
         )",
     )?
     .execute(params![
@@ -1174,6 +1195,10 @@ fn insert_chart(conn: &Connection, record: &ChartImportRecord<'_>) -> Result<i64
         chart.metadata.backbmp_file.as_str(),
         chart.metadata.judge_rank,
         gauge_total_for_chart(chart.metadata.total, chart.total_notes),
+        stats.ln_profile.has_undefined_ln,
+        stats.ln_profile.has_defined_ln,
+        stats.ln_profile.has_defined_cn,
+        stats.ln_profile.has_defined_hcn,
         CHART_IMPORT_VERSION,
     ])?;
     Ok(conn.last_insert_rowid())
@@ -1190,8 +1215,9 @@ fn update_chart(conn: &Connection, chart_id: i64, record: &ChartImportRecord<'_>
             length_ms = ?15, ln_type = ?16, has_bga = ?17, has_long_notes = ?18,
             has_mines = ?19, folder_path = ?20, stage_file = ?21, preview_file = ?22,
             banner_file = ?23, backbmp_file = ?24, judge_rank = ?25, gauge_total = ?26,
-            import_version = ?27
-         WHERE id = ?28",
+            has_undefined_ln = ?27, has_defined_ln = ?28, has_defined_cn = ?29,
+            has_defined_hcn = ?30, import_version = ?31
+         WHERE id = ?32",
     )?
     .execute(params![
         hash_to_hex(&chart.identity.file_sha256),
@@ -1220,6 +1246,10 @@ fn update_chart(conn: &Connection, chart_id: i64, record: &ChartImportRecord<'_>
         chart.metadata.backbmp_file.as_str(),
         chart.metadata.judge_rank,
         gauge_total_for_chart(chart.metadata.total, chart.total_notes),
+        stats.ln_profile.has_undefined_ln,
+        stats.ln_profile.has_defined_ln,
+        stats.ln_profile.has_defined_cn,
+        stats.ln_profile.has_defined_hcn,
         CHART_IMPORT_VERSION,
         chart_id,
     ])?;
@@ -1633,6 +1663,7 @@ struct ChartStats {
     ln_type: &'static str,
     has_long_notes: bool,
     has_mines: bool,
+    ln_profile: ChartLnProfile,
 }
 
 impl ChartStats {
@@ -1651,13 +1682,25 @@ impl ChartStats {
             .iter()
             .flat_map(|notes| notes.iter())
             .any(|note| note.kind == NoteKind::Mine);
+        let ln_profile = ChartLnProfile::from_chart(chart);
 
         Self {
             min_bpm,
             max_bpm,
-            ln_type: if chart.long_notes.is_empty() { "" } else { "LongNote" },
+            ln_type: if chart.long_notes.is_empty() {
+                ""
+            } else if chart.metadata.long_note_mode_defined {
+                match chart.metadata.long_note_mode {
+                    LongNoteMode::Ln => "Ln",
+                    LongNoteMode::Cn => "Cn",
+                    LongNoteMode::Hcn => "Hcn",
+                }
+            } else {
+                "LongNote"
+            },
             has_long_notes: !chart.long_notes.is_empty(),
             has_mines,
+            ln_profile,
         }
     }
 }
@@ -1880,6 +1923,45 @@ mod tests {
         let analysis = db.chart_analysis_by_chart_id(chart_id).unwrap().unwrap();
         assert_eq!(analysis.total_gauge, 260.0);
         assert_eq!(analysis.main_bpm, 128.0);
+    }
+
+    #[test]
+    fn upsert_chart_import_persists_ln_profile_flags() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase { conn };
+        let mut chart = chart("defined cn");
+        chart.metadata.long_note_mode = LongNoteMode::Cn;
+        chart.metadata.long_note_mode_defined = true;
+        chart.long_notes.push(LongNotePair {
+            lane: Lane::Key1,
+            style: LongNoteStyle::ChannelPair,
+            mode: Some(LongNoteMode::Cn),
+            start_note_id: NoteId(1),
+            end_note_id: NoteId(2),
+            start_tick: ChartTick(0),
+            end_tick: ChartTick(192),
+            start_time: TimeUs(1_000_000),
+            end_time: TimeUs(2_000_000),
+            sound: None,
+        });
+        let record = ChartImportRecord {
+            root_id: None,
+            file_path: Path::new("/songs/defined-cn.bms"),
+            file_size: 123,
+            modified_at: 1_700_000_001,
+            scanned_at: 1_700_000_002,
+            chart: &chart,
+        };
+
+        let chart_id = db.upsert_chart_import(&record).unwrap();
+        let row = db.list_charts_by_ids(&[chart_id]).unwrap().pop().unwrap();
+
+        assert_eq!(row.ln_profile.has_undefined_ln, false);
+        assert_eq!(row.ln_profile.has_defined_ln, false);
+        assert_eq!(row.ln_profile.has_defined_cn, true);
+        assert_eq!(row.ln_profile.has_defined_hcn, false);
     }
 
     #[test]
