@@ -3,6 +3,7 @@ use bmz_core::replay::ReplayEvent;
 use bmz_gameplay::result::PlayResult;
 
 use crate::config::profile_config::{ReplayConfig, ReplaySlotRule};
+use crate::ln_policy::LnScorePolicy;
 use crate::paths::ProfilePaths;
 use crate::select_options::ArrangeOption;
 
@@ -19,6 +20,7 @@ pub struct StoredPlayResult {
 #[derive(Debug, Clone)]
 pub struct StorePlayResultRequest {
     pub played_at: i64,
+    pub ln_policy: LnScorePolicy,
     pub random_seed: Option<i64>,
     pub gauge_option: String,
     pub rule_mode: String,
@@ -70,6 +72,7 @@ pub fn store_play_result(
 
     let record = ScoreRecord::from_play_result(
         result,
+        request.ln_policy,
         request.played_at,
         request.random_seed,
         request.gauge_option,
@@ -84,11 +87,12 @@ pub fn store_play_result(
         let candidate = candidate_metrics(result);
         for (slot_index, &rule) in replay_config.slot_rules.iter().enumerate() {
             let slot = slot_index as u8;
-            let prev = score_db.replay_slot(result.chart_sha256, slot)?;
+            let key = super::score_db::ScoreKey::new(result.chart_sha256, request.ln_policy);
+            let prev = score_db.replay_slot(key, slot)?;
             if !evaluate_slot_update(rule, prev.as_ref(), &candidate) {
                 continue;
             }
-            let file_name = replay_slot_file_name(result.chart_sha256, slot);
+            let file_name = replay_slot_file_name(result.chart_sha256, request.ln_policy, slot);
             let path = profile_paths.replay_dir.join(&file_name);
             let replay = ReplayFile::new(
                 result.chart_sha256,
@@ -103,6 +107,7 @@ pub fn store_play_result(
             let rel_path = format!("replay/{file_name}");
             score_db.upsert_replay_slot(&ReplaySlotRecord {
                 chart_sha256: result.chart_sha256,
+                ln_policy: request.ln_policy,
                 slot,
                 rule,
                 replay_path: rel_path.clone(),
@@ -210,6 +215,7 @@ mod tests {
             &config,
             &result,
             StorePlayResultRequest {
+                ln_policy: LnScorePolicy::ForceLn,
                 played_at: 1_700_000_060,
                 random_seed: Some(77),
                 gauge_option: String::new(),
@@ -230,7 +236,15 @@ mod tests {
         assert!(stored.score_history_id > 0);
         assert!(!stored.replay_path.is_empty());
         assert!(root.join(&stored.replay_path).exists());
-        assert_eq!(score_db.best_ex_score([4; 32]).unwrap(), Some(0));
+        assert_eq!(
+            score_db
+                .best_ex_score(super::super::score_db::ScoreKey::new(
+                    [4; 32],
+                    LnScorePolicy::ForceLn
+                ))
+                .unwrap(),
+            Some(0)
+        );
 
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -261,6 +275,7 @@ mod tests {
             &config,
             &result,
             StorePlayResultRequest {
+                ln_policy: LnScorePolicy::ForceLn,
                 played_at: 1_700_000_061,
                 random_seed: None,
                 gauge_option: String::new(),
@@ -308,6 +323,7 @@ mod tests {
             &config,
             &result,
             StorePlayResultRequest {
+                ln_policy: LnScorePolicy::ForceLn,
                 played_at: 1_700_000_062,
                 random_seed: None,
                 gauge_option: String::new(),
@@ -353,6 +369,7 @@ mod tests {
             &config,
             &result,
             StorePlayResultRequest {
+                ln_policy: LnScorePolicy::ForceLn,
                 played_at: 1_700_000_100,
                 random_seed: None,
                 gauge_option: String::new(),
@@ -379,6 +396,7 @@ mod tests {
             &config,
             &result,
             StorePlayResultRequest {
+                ln_policy: LnScorePolicy::ForceLn,
                 played_at: 1_700_000_101,
                 random_seed: None,
                 gauge_option: String::new(),
@@ -428,6 +446,7 @@ mod tests {
             &config,
             &result,
             StorePlayResultRequest {
+                ln_policy: LnScorePolicy::ForceLn,
                 played_at: 1_700_000_110,
                 random_seed: None,
                 gauge_option: String::new(),
@@ -454,6 +473,7 @@ mod tests {
             slot: 0,
             rule: ReplaySlotRule::ScoreUpdate,
             replay_path: String::new(),
+            ln_policy: LnScorePolicy::ForceLn,
             played_at: 0,
             ex_score: 100,
             bp: 10,
@@ -499,6 +519,7 @@ mod tests {
             slot: 0,
             rule: ReplaySlotRule::BpUpdate,
             replay_path: String::new(),
+            ln_policy: LnScorePolicy::ForceLn,
             played_at: 0,
             ex_score: 100,
             bp: 10,
@@ -526,6 +547,7 @@ mod tests {
             slot: 0,
             rule: ReplaySlotRule::ClearUpdate,
             replay_path: String::new(),
+            ln_policy: LnScorePolicy::ForceLn,
             played_at: 0,
             ex_score: 100,
             bp: 10,
@@ -565,6 +587,7 @@ mod tests {
             slot: 0,
             rule: ReplaySlotRule::Always,
             replay_path: String::new(),
+            ln_policy: LnScorePolicy::ForceLn,
             played_at: 0,
             ex_score: 10_000,
             bp: 0,

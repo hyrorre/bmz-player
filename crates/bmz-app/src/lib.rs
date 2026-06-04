@@ -9,6 +9,7 @@ pub mod course;
 pub mod course_cmd;
 pub mod difficulty_table;
 pub mod input;
+pub mod ln_policy;
 pub mod paths;
 pub mod practice_ui;
 pub mod screens;

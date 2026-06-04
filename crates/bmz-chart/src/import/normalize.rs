@@ -162,6 +162,7 @@ fn normalize_metadata(input: &IntermediateMetadata) -> ChartMetadata {
         preview_file: input.preview_file.clone(),
         volwav_percent: input.volwav_percent,
         long_note_mode: input.long_note_mode,
+        long_note_mode_defined: input.long_note_mode_defined,
         has_bga: input.has_bga,
         key_mode: input.key_mode,
     }
@@ -483,6 +484,10 @@ fn emit_resolved_lane_events(
                 draft.long_notes.push(LongNotePair {
                     lane,
                     style: pair.style,
+                    mode: draft
+                        .metadata
+                        .long_note_mode_defined
+                        .then_some(draft.metadata.long_note_mode),
                     start_note_id,
                     end_note_id,
                     start_tick: pair.start_tick,

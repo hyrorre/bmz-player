@@ -15,6 +15,7 @@ use crate::config::app_config::AppConfig;
 use crate::config::play::{gauge_auto_shift_from_config, gauge_type_from_config};
 use crate::config::profile_config::{GaugeAutoShiftConfig, GaugeTypeConfig, ProfileConfig};
 use crate::input::winit::WinitInputBackend;
+use crate::ln_policy::score_ln_policy_for_chart;
 use crate::screens::play_session::{
     PlaySessionOptions, PreloadedPlaySession, PreparedPlaySession,
     build_prepared_play_session_from_preloaded,
@@ -22,7 +23,7 @@ use crate::screens::play_session::{
 };
 use crate::select_options::{ArrangeOption, TargetOption};
 use crate::storage::library_db::LibraryDatabase;
-use crate::storage::score_db::ScoreDatabase;
+use crate::storage::score_db::{ScoreDatabase, ScoreKey};
 
 #[derive(Debug, Clone, Default)]
 pub struct PlayStartOptions {
@@ -147,10 +148,14 @@ pub fn start_running_play_session_for_chart_with_input_backend(
         input_backend,
     )?;
     let chart_sha256 = prepared.session.chart.identity.file_sha256;
-    let mut running = open_prepared_play_audio(&app_config.audio, prepared)?;
-    running.best_ex_score = score_db.best_ex_score(chart_sha256).unwrap_or(None);
+    let score_key = ScoreKey::new(
+        chart_sha256,
+        score_ln_policy_for_chart(profile.play.ln_mode_policy, &prepared.session.chart),
+    );
+    let mut running = open_prepared_play_audio(&app_config.audio, prepared, score_key)?;
+    running.best_ex_score = score_db.best_ex_score(score_key).unwrap_or(None);
     running.best_ghost =
-        score_db.best_ghost(chart_sha256, running.session.chart.total_notes).unwrap_or(None);
+        score_db.best_ghost(score_key, running.session.chart.total_notes).unwrap_or(None);
     running.start(chart_zero_time)?;
     Ok(running)
 }
@@ -190,13 +195,18 @@ pub fn prepare_winit_play_session_from_preloaded(
 pub fn open_prepared_winit_play_session(
     score_db: &ScoreDatabase,
     app_config: &AppConfig,
+    profile: &ProfileConfig,
     prepared: PreparedWinitPlaySession,
 ) -> Result<StartedWinitPlaySession> {
     let chart_sha256 = prepared.prepared.session.chart.identity.file_sha256;
-    let mut running = open_prepared_play_audio(&app_config.audio, prepared.prepared)?;
-    running.best_ex_score = score_db.best_ex_score(chart_sha256).unwrap_or(None);
+    let score_key = ScoreKey::new(
+        chart_sha256,
+        score_ln_policy_for_chart(profile.play.ln_mode_policy, &prepared.prepared.session.chart),
+    );
+    let mut running = open_prepared_play_audio(&app_config.audio, prepared.prepared, score_key)?;
+    running.best_ex_score = score_db.best_ex_score(score_key).unwrap_or(None);
     running.best_ghost =
-        score_db.best_ghost(chart_sha256, running.session.chart.total_notes).unwrap_or(None);
+        score_db.best_ghost(score_key, running.session.chart.total_notes).unwrap_or(None);
     Ok(StartedWinitPlaySession { running, input: prepared.input })
 }
 

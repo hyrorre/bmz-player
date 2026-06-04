@@ -6,6 +6,7 @@ use bmz_core::replay::ReplayEvent;
 use bmz_gameplay::replay::ReplayPlayer;
 use serde::{Deserialize, Serialize};
 
+use crate::ln_policy::LnScorePolicy;
 use crate::select_options::ArrangeOption;
 
 pub const REPLAY_FILE_VERSION: u32 = 2;
@@ -143,8 +144,8 @@ pub fn load_course_replays(
     Ok(out)
 }
 
-pub fn replay_slot_file_name(chart_sha256: [u8; 32], slot: u8) -> String {
-    format!("{}-slot{slot}.toml", hex_encode(&chart_sha256))
+pub fn replay_slot_file_name(chart_sha256: [u8; 32], ln_policy: LnScorePolicy, slot: u8) -> String {
+    format!("{}-{}-slot{slot}.toml", hex_encode(&chart_sha256), ln_policy.as_str())
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
@@ -231,10 +232,10 @@ mod tests {
     }
 
     #[test]
-    fn replay_slot_file_name_uses_hash_and_slot_index() {
+    fn replay_slot_file_name_uses_hash_policy_and_slot_index() {
         assert_eq!(
-            replay_slot_file_name([0xab; 32], 2),
-            "abababababababababababababababababababababababababababababababab-slot2.toml"
+            replay_slot_file_name([0xab; 32], LnScorePolicy::ForceCn, 2),
+            "abababababababababababababababababababababababababababababababab-ForceCn-slot2.toml"
         );
     }
 

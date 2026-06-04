@@ -3360,6 +3360,7 @@ impl WinitApp {
         match open_prepared_winit_play_session(
             &self.boot.score_db,
             &self.boot.app_config,
+            &self.boot.profile_config,
             prepared_winit,
         ) {
             Ok(active_play) => {
@@ -3989,6 +3990,7 @@ impl WinitApp {
                 open_prepared_winit_play_session(
                     &self.boot.score_db,
                     &self.boot.app_config,
+                    &self.boot.profile_config,
                     prepared,
                 )
             }
@@ -4003,6 +4005,7 @@ impl WinitApp {
                 open_prepared_winit_play_session(
                     &self.boot.score_db,
                     &self.boot.app_config,
+                    &self.boot.profile_config,
                     prepared,
                 )
             }),
@@ -4158,8 +4161,12 @@ impl WinitApp {
         let chart_id = play_start.chart_id;
         let prepared =
             prepare_winit_play_session_from_preloaded(&self.boot.profile_config, prepared);
-        match open_prepared_winit_play_session(&self.boot.score_db, &self.boot.app_config, prepared)
-        {
+        match open_prepared_winit_play_session(
+            &self.boot.score_db,
+            &self.boot.app_config,
+            &self.boot.profile_config,
+            prepared,
+        ) {
             Ok(active_play) => {
                 tracing::info!(chart_id, "play preload installed");
                 self.install_active_play(active_play);
@@ -4220,12 +4227,25 @@ impl WinitApp {
     }
 
     fn try_start_replay_for_chart(&mut self, chart_id: i64, slot: u8) -> bool {
-        let Some(sha) = self.boot.library_db.chart_sha256_by_chart_id(chart_id).ok().flatten()
+        let Some(chart) = self
+            .boot
+            .library_db
+            .list_charts_by_ids(&[chart_id])
+            .ok()
+            .and_then(|mut charts| charts.pop())
         else {
-            tracing::warn!(chart_id, "replay start failed: chart sha256 not found");
+            tracing::warn!(chart_id, "replay start failed: chart not found");
             return false;
         };
-        let Some(slot_record) = self.boot.score_db.replay_slot(sha, slot).ok().flatten() else {
+        let sha = chart.sha256;
+        let key = crate::storage::score_db::ScoreKey::new(
+            sha,
+            crate::ln_policy::score_ln_policy(
+                self.boot.profile_config.play.ln_mode_policy,
+                chart.ln_profile,
+            ),
+        );
+        let Some(slot_record) = self.boot.score_db.replay_slot(key, slot).ok().flatten() else {
             tracing::info!(slot, "no replay saved for slot");
             return false;
         };
@@ -6471,7 +6491,12 @@ fn load_items_for_stack(
         }
         Some(path) if path.starts_with(SEARCH_PATH_PREFIX) => match parse_search_query(path) {
             Some(query) => {
-                match load_select_items_for_search(&boot.library_db, &boot.score_db, query) {
+                match load_select_items_for_search(
+                    &boot.library_db,
+                    &boot.score_db,
+                    query,
+                    boot.profile_config.play.ln_mode_policy,
+                ) {
                     Ok(items) => items,
                     Err(error) => {
                         tracing::error!(%error, query, "failed to load search results");
@@ -6504,6 +6529,7 @@ fn load_items_for_stack(
                     &boot.score_db,
                     source_url,
                     level,
+                    boot.profile_config.play.ln_mode_policy,
                 ) {
                     Ok(items) => items,
                     Err(error) => {
@@ -6515,7 +6541,12 @@ fn load_items_for_stack(
             None => Vec::new(),
         },
         Some(folder) => {
-            match load_select_items_in_folder(&boot.library_db, &boot.score_db, folder) {
+            match load_select_items_in_folder(
+                &boot.library_db,
+                &boot.score_db,
+                folder,
+                boot.profile_config.play.ln_mode_policy,
+            ) {
                 Ok(items) => items,
                 Err(error) => {
                     tracing::error!(%error, "failed to load select items");
@@ -9459,6 +9490,7 @@ mod tests {
                 has_long_notes: false,
                 has_mines: false,
                 judge_rank: Some(1),
+                ln_profile: Default::default(),
             }),
             chart_analysis: Some(crate::storage::library_db::ChartAnalysisSummary {
                 normal_notes: 40 + index as u32,
@@ -9514,6 +9546,7 @@ mod tests {
     fn best_score_with_replay(ex_score: u32, replay_path: &str) -> BestScoreSummary {
         BestScoreSummary {
             chart_sha256: [0; 32],
+            ln_policy: crate::ln_policy::LnScorePolicy::ForceLn,
             clear_type: "Normal".to_string(),
             gauge_type: "Normal".to_string(),
             gauge_value: 80.0,

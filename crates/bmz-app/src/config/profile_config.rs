@@ -3,6 +3,8 @@ use std::collections::BTreeMap;
 use bmz_gameplay::rule::RuleMode;
 use serde::{Deserialize, Serialize};
 
+use crate::ln_policy::LnPolicySetting;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProfileConfig {
     pub version: u32,
@@ -29,6 +31,8 @@ pub struct ProfileConfig {
 pub struct PlayDefaultsConfig {
     #[serde(default)]
     pub rule_mode: RuleMode,
+    #[serde(default)]
+    pub ln_mode_policy: LnPolicySetting,
     pub gauge: GaugeTypeConfig,
     #[serde(default)]
     pub gauge_auto_shift: GaugeAutoShiftConfig,
@@ -552,6 +556,7 @@ impl ProfileConfig {
             updated_at: now,
             play: PlayDefaultsConfig {
                 rule_mode: RuleMode::Beatoraja,
+                ln_mode_policy: LnPolicySetting::AutoLn,
                 gauge: GaugeTypeConfig::Normal,
                 gauge_auto_shift: GaugeAutoShiftConfig::Off,
                 random: RandomOptionConfig::Off,
@@ -728,6 +733,7 @@ mod tests {
 
         assert_eq!(play.target, TargetOptionConfig::None);
         assert_eq!(play.rule_mode, RuleMode::Beatoraja);
+        assert_eq!(play.ln_mode_policy, LnPolicySetting::AutoLn);
         assert_eq!(play.bga, BgaModeConfig::On);
         assert_eq!(play.bga_expand, BgaExpandConfig::KeepAspect);
         assert_eq!(play.misslayer_duration_ms, 500);
@@ -737,6 +743,7 @@ mod tests {
     fn default_profile_stores_select_start_in_bindings() {
         let profile = ProfileConfig::new_default("default", "Default", 1);
 
+        assert_eq!(profile.play.ln_mode_policy, LnPolicySetting::AutoLn);
         assert!(profile.input.start_key.is_none());
         assert!(profile.input.ui.bindings.iter().any(|entry| {
             entry.device == "keyboard"
