@@ -529,13 +529,13 @@ fn course_result_summary_for_skin(course: &CourseResultSummary) -> ResultSummary
         best_ex_score: course.best_score.as_ref().map(|best| best.ex_score),
         best_clear_type,
         best_max_combo: course.best_score.as_ref().map(|best| best.max_combo),
-        best_misscount: course.best_score.as_ref().map(|best| best.miss_count),
+        best_bp: course.best_score.as_ref().map(|best| best.bp),
         previous_best_ex_score: None,
         previous_best_max_combo: None,
-        previous_best_misscount: None,
+        previous_best_bp: None,
         target_ex_score: None,
         target_max_combo: None,
-        target_misscount: None,
+        target_bp: None,
         target_clear_type: None,
         title: course.title.clone(),
         subtitle: String::new(),
@@ -1074,11 +1074,11 @@ impl WinitApp {
                 target_ex_score: summary.target_ex_score,
                 best_max_combo: summary.best_max_combo,
                 target_max_combo: summary.target_max_combo,
-                best_misscount: summary.best_misscount,
-                target_misscount: summary.target_misscount,
+                best_bp: summary.best_bp,
+                target_bp: summary.target_bp,
                 previous_best_ex_score: summary.previous_best_ex_score,
                 previous_best_max_combo: summary.previous_best_max_combo,
-                previous_best_misscount: summary.previous_best_misscount,
+                previous_best_bp: summary.previous_best_bp,
                 target_clear_type: summary.target_clear_type,
                 elapsed_time: bmz_core::time::TimeUs(
                     self.result_scene_started_at.elapsed().as_micros().min(i64::MAX as u128) as i64,
@@ -3692,7 +3692,7 @@ impl WinitApp {
             } else {
                 last_clear_type
             };
-            let miss_count = course_result.judge_counts.bad
+            let bp = course_result.judge_counts.bad
                 + course_result.judge_counts.poor
                 + course_result.judge_counts.empty_poor;
             let played_at = SystemTime::now()
@@ -3720,7 +3720,7 @@ impl WinitApp {
                 gauge_type: last_gauge_type.as_str().to_string(),
                 gauge_value: last_gauge_value,
                 max_combo,
-                miss_count,
+                bp,
                 course_failed: course_result.course_failed,
                 course_clear: course_result.course_clear,
                 arrange: course_arrange,
@@ -3751,14 +3751,14 @@ impl WinitApp {
                     // Update the four course replay slots that pass their
                     // configured rule.  Reuses the per-chart slot_rule_passes
                     // helper for identical semantics (Always overwrites
-                    // unconditionally; Score / MissCount / MaxCombo / Clear
+                    // unconditionally; Score / Bp / MaxCombo / Clear
                     // require strict improvement; empty slot always wins).
                     course_result.saved_replay_slots = self.update_course_replay_slots(
                         course_id,
                         course_score_id,
                         played_at,
                         course_result.total_ex_score,
-                        miss_count,
+                        bp,
                         max_combo,
                         final_clear_type as u8,
                     );
@@ -3809,14 +3809,15 @@ impl WinitApp {
         course_score_id: i64,
         played_at: i64,
         ex_score: u32,
-        miss_count: u32,
+        bp: u32,
         max_combo: u32,
         clear_rank: u8,
     ) -> [bool; 4] {
         let slot_rules = self.boot.profile_config.replay.slot_rules;
         let candidate = crate::storage::play_result::CandidateMetrics {
             ex_score,
-            miss_count,
+            bp,
+            cb: bp,
             max_combo,
             clear_rank,
         };
@@ -3835,8 +3836,7 @@ impl WinitApp {
                     continue;
                 }
             };
-            let prev_metrics =
-                prev.as_ref().map(|p| (p.ex_score, p.miss_count, p.max_combo, p.clear_rank));
+            let prev_metrics = prev.as_ref().map(|p| (p.ex_score, p.bp, p.max_combo, p.clear_rank));
             if !crate::storage::play_result::slot_rule_passes(rule, prev_metrics, &candidate) {
                 continue;
             }
@@ -3847,7 +3847,7 @@ impl WinitApp {
                 course_score_id,
                 played_at,
                 ex_score,
-                miss_count,
+                bp,
                 max_combo,
                 clear_rank,
             };
@@ -6363,7 +6363,7 @@ enum SelectSort {
     Level,
     Clear,
     Score,
-    MissCount,
+    Bp,
 }
 
 impl SelectSort {
@@ -6375,7 +6375,7 @@ impl SelectSort {
         Self::Level,
         Self::Clear,
         Self::Score,
-        Self::MissCount,
+        Self::Bp,
     ];
 
     fn next(self) -> Self {
@@ -6395,7 +6395,7 @@ impl SelectSort {
             Self::Level => "LEVEL",
             Self::Clear => "CLEAR",
             Self::Score => "SCORE",
-            Self::MissCount => "MISSCOUNT",
+            Self::Bp => "BPCOUNT",
         }
     }
 }
@@ -6589,7 +6589,7 @@ fn compare_select_chart_rows(
         SelectSort::Level => compare_play_level(a, b),
         SelectSort::Clear => clear_rank(a).cmp(&clear_rank(b)),
         SelectSort::Score => ex_score(a).cmp(&ex_score(b)),
-        SelectSort::MissCount => miss_count(a).cmp(&miss_count(b)),
+        SelectSort::Bp => bp(a).cmp(&bp(b)),
     };
     ordering.then_with(|| compare_case_insensitive(a.display_title(), b.display_title()))
 }
@@ -6636,8 +6636,8 @@ fn ex_score(row: &crate::screens::select_model::SelectChartRow) -> u32 {
     row.best_score.as_ref().map(|score| score.ex_score).unwrap_or(0)
 }
 
-fn miss_count(row: &crate::screens::select_model::SelectChartRow) -> u32 {
-    row.best_score.as_ref().map(|score| score.miss_count).unwrap_or(u32::MAX)
+fn bp(row: &crate::screens::select_model::SelectChartRow) -> u32 {
+    row.best_score.as_ref().map(|score| score.bp).unwrap_or(u32::MAX)
 }
 
 fn cycle_gauge_option(current: GaugeTypeConfig) -> GaugeTypeConfig {
@@ -6934,7 +6934,7 @@ fn select_snapshot_rows(
                     ex_score: None,
                     max_combo: None,
                     gauge_value: None,
-                    miss_count: None,
+                    bp: None,
                     play_count: 0,
                     clear_count: 0,
                     replay_slots: [false; 4],
@@ -7010,7 +7010,7 @@ fn select_snapshot_rows(
                         ex_score: row.best_score.as_ref().map(|score| score.ex_score),
                         max_combo: row.best_score.as_ref().map(|score| score.max_combo),
                         gauge_value: row.best_score.as_ref().map(|score| score.gauge_value),
-                        miss_count: None,
+                        bp: None,
                         play_count,
                         clear_count,
                         replay_slots: row.replay_slots,
@@ -7117,7 +7117,7 @@ fn select_snapshot_rows(
                     ex_score: row.best_score.as_ref().map(|best| best.ex_score),
                     max_combo: row.best_score.as_ref().map(|best| best.max_combo),
                     gauge_value: row.best_score.as_ref().map(|best| best.gauge_value),
-                    miss_count: row.best_score.as_ref().map(|best| best.miss_count),
+                    bp: row.best_score.as_ref().map(|best| best.bp),
                     play_count: u32::from(row.best_score.is_some()),
                     clear_count: u32::from(row.best_score.as_ref().is_some_and(|best| {
                         !best.clear_type.is_empty() && best.clear_type != "Failed"
@@ -7168,7 +7168,7 @@ fn select_snapshot_rows(
                         ex_score: None,
                         max_combo: None,
                         gauge_value: None,
-                        miss_count: None,
+                        bp: None,
                         play_count: 0,
                         clear_count: 0,
                         replay_slots: [false; 4],
@@ -7219,7 +7219,7 @@ fn select_snapshot_rows(
                         ex_score: None,
                         max_combo: None,
                         gauge_value: None,
-                        miss_count: None,
+                        bp: None,
                         play_count: 0,
                         clear_count: 0,
                         replay_slots: [false; 4],
@@ -7263,7 +7263,7 @@ fn select_snapshot_rows(
                     ex_score: None,
                     max_combo: None,
                     gauge_value: None,
-                    miss_count: None,
+                    bp: None,
                     play_count: 0,
                     clear_count: 0,
                     replay_slots: [false; 4],
@@ -8489,13 +8489,13 @@ mod tests {
                 best_ex_score: None,
                 best_clear_type: None,
                 best_max_combo: None,
-                best_misscount: None,
+                best_bp: None,
                 previous_best_ex_score: None,
                 previous_best_max_combo: None,
-                previous_best_misscount: None,
+                previous_best_bp: None,
                 target_ex_score: None,
                 target_max_combo: None,
-                target_misscount: None,
+                target_bp: None,
                 target_clear_type: None,
                 title: String::new(),
                 subtitle: String::new(),
@@ -9357,7 +9357,7 @@ mod tests {
         assert_eq!(SelectModeFilter::All.next(), SelectModeFilter::K7);
         assert_eq!(SelectModeFilter::All.previous(), SelectModeFilter::K24Double);
         assert_eq!(SelectSort::Title.next(), SelectSort::Artist);
-        assert_eq!(SelectSort::Title.previous(), SelectSort::MissCount);
+        assert_eq!(SelectSort::Title.previous(), SelectSort::Bp);
         assert_eq!(SelectLnMode::Ln.next(), SelectLnMode::Cn);
         assert_eq!(SelectLnMode::Ln.previous(), SelectLnMode::Hcn);
         assert_eq!(SelectLnMode::Hcn.long_note_mode(), LongNoteMode::Hcn);
@@ -9516,7 +9516,8 @@ mod tests {
             gauge_type: "Normal".to_string(),
             gauge_value: 80.0,
             ex_score,
-            miss_count: 0,
+            bp: 0,
+            cb: 0,
             max_combo: 100,
             played_at: 1,
             replay_path: replay_path.to_string(),

@@ -308,7 +308,7 @@ pub enum RivalSourceConfig {
 pub enum ReplaySlotRule {
     Always,
     ScoreUpdate,
-    MissCountUpdate,
+    BpUpdate,
     MaxComboUpdate,
     ClearUpdate,
 }
@@ -318,7 +318,7 @@ impl ReplaySlotRule {
         match self {
             Self::Always => "Always",
             Self::ScoreUpdate => "ScoreUpdate",
-            Self::MissCountUpdate => "MissCountUpdate",
+            Self::BpUpdate => "BpUpdate",
             Self::MaxComboUpdate => "MaxComboUpdate",
             Self::ClearUpdate => "ClearUpdate",
         }
@@ -328,7 +328,7 @@ impl ReplaySlotRule {
         match value {
             "Always" => Some(Self::Always),
             "ScoreUpdate" => Some(Self::ScoreUpdate),
-            "MissCountUpdate" => Some(Self::MissCountUpdate),
+            "BpUpdate" => Some(Self::BpUpdate),
             "MaxComboUpdate" => Some(Self::MaxComboUpdate),
             "ClearUpdate" => Some(Self::ClearUpdate),
             _ => None,
@@ -340,7 +340,7 @@ pub fn default_slot_rules() -> [ReplaySlotRule; 4] {
     [
         ReplaySlotRule::Always,
         ReplaySlotRule::ScoreUpdate,
-        ReplaySlotRule::MissCountUpdate,
+        ReplaySlotRule::BpUpdate,
         ReplaySlotRule::MaxComboUpdate,
     ]
 }

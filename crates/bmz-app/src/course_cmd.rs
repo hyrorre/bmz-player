@@ -167,7 +167,7 @@ fn course_attempt(score_id: i64) -> Result<()> {
     println!("  Played:     {}", format_unix_utc(entry.played_at));
     println!(
         "  EX score:   {}/{}  (clear={}, max combo={}, miss={})",
-        entry.ex_score, entry.max_ex_score, entry.clear_type, entry.max_combo, entry.miss_count,
+        entry.ex_score, entry.max_ex_score, entry.clear_type, entry.max_combo, entry.bp,
     );
     println!(
         "  Course:     {} (failed={}, clear={})",

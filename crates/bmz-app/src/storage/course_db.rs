@@ -42,7 +42,7 @@ pub struct CourseScoreInsert {
     pub gauge_type: String,
     pub gauge_value: f32,
     pub max_combo: u32,
-    pub miss_count: u32,
+    pub bp: u32,
     pub course_failed: bool,
     pub course_clear: bool,
     /// Arrange bucket used for this attempt.  Mirrors beatoraja course score
@@ -68,7 +68,7 @@ pub struct CourseReplaySlotRecord {
     pub course_score_id: i64,
     pub played_at: i64,
     pub ex_score: u32,
-    pub miss_count: u32,
+    pub bp: u32,
     pub max_combo: u32,
     pub clear_rank: u8,
 }
@@ -83,7 +83,7 @@ pub struct CourseBestScore {
     pub gauge_type: String,
     pub gauge_value: f32,
     pub max_combo: u32,
-    pub miss_count: u32,
+    pub bp: u32,
     pub course_failed: bool,
     pub course_clear: bool,
     pub played_at: i64,
@@ -301,7 +301,7 @@ pub(super) fn insert_course_score(
     tx.execute(
         "INSERT INTO course_scores (
             course_id, ex_score, max_ex_score, clear_type, gauge_type, gauge_value,
-            max_combo, miss_count, course_failed, course_clear, arrange, trophies_json, played_at
+            max_combo, bp, course_failed, course_clear, arrange, trophies_json, played_at
          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         params![
             record.course_id,
@@ -311,7 +311,7 @@ pub(super) fn insert_course_score(
             record.gauge_type,
             record.gauge_value,
             record.max_combo,
-            record.miss_count,
+            record.bp,
             record.course_failed,
             record.course_clear,
             record.arrange,
@@ -382,7 +382,7 @@ pub(super) fn best_course_score(
     let row = conn
         .query_row(
             "SELECT id, course_id, ex_score, max_ex_score, clear_type, gauge_type,
-                    gauge_value, max_combo, miss_count, course_failed, course_clear,
+                    gauge_value, max_combo, bp, course_failed, course_clear,
                     played_at
              FROM course_scores
              WHERE course_id = ?1
@@ -498,7 +498,7 @@ pub(super) fn best_course_score_for_trophy(
     let row = conn
         .query_row(
             "SELECT cs.id, cs.course_id, cs.ex_score, cs.max_ex_score, cs.clear_type,
-                    cs.gauge_type, cs.gauge_value, cs.max_combo, cs.miss_count,
+                    cs.gauge_type, cs.gauge_value, cs.max_combo, cs.bp,
                     cs.course_failed, cs.course_clear, cs.played_at
              FROM course_scores cs
              JOIN course_trophy_achievements cta
@@ -542,7 +542,7 @@ pub struct CourseScoreEntry {
     pub gauge_type: String,
     pub gauge_value: f32,
     pub max_combo: u32,
-    pub miss_count: u32,
+    pub bp: u32,
     pub course_failed: bool,
     pub course_clear: bool,
     pub played_at: i64,
@@ -557,7 +557,7 @@ pub(super) fn list_recent_course_scores(
 ) -> Result<Vec<CourseScoreEntry>> {
     let mut stmt = conn.prepare(
         "SELECT id, course_id, ex_score, max_ex_score, clear_type, gauge_type,
-                gauge_value, max_combo, miss_count, course_failed, course_clear,
+                gauge_value, max_combo, bp, course_failed, course_clear,
                 played_at
          FROM course_scores
          WHERE course_id = ?1
@@ -590,7 +590,7 @@ pub(super) fn list_recent_course_scores(
             gauge_type: best.gauge_type,
             gauge_value: best.gauge_value,
             max_combo: best.max_combo,
-            miss_count: best.miss_count,
+            bp: best.bp,
             course_failed: best.course_failed,
             course_clear: best.course_clear,
             played_at: best.played_at,
@@ -607,7 +607,7 @@ pub(super) fn course_score_entry_by_id(
     let best = conn
         .query_row(
             "SELECT id, course_id, ex_score, max_ex_score, clear_type, gauge_type,
-                    gauge_value, max_combo, miss_count, course_failed, course_clear,
+                    gauge_value, max_combo, bp, course_failed, course_clear,
                     played_at
              FROM course_scores
              WHERE id = ?1",
@@ -636,7 +636,7 @@ pub(super) fn course_score_entry_by_id(
         gauge_type: best.gauge_type,
         gauge_value: best.gauge_value,
         max_combo: best.max_combo,
-        miss_count: best.miss_count,
+        bp: best.bp,
         course_failed: best.course_failed,
         course_clear: best.course_clear,
         played_at: best.played_at,
@@ -692,14 +692,14 @@ pub(super) fn upsert_course_replay_slot(
     conn.execute(
         "INSERT INTO course_replay_slots (
             course_id, slot, rule, course_score_id, played_at,
-            ex_score, miss_count, max_combo, clear_rank
+            ex_score, bp, max_combo, clear_rank
          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
          ON CONFLICT(course_id, slot) DO UPDATE SET
             rule = excluded.rule,
             course_score_id = excluded.course_score_id,
             played_at = excluded.played_at,
             ex_score = excluded.ex_score,
-            miss_count = excluded.miss_count,
+            bp = excluded.bp,
             max_combo = excluded.max_combo,
             clear_rank = excluded.clear_rank",
         params![
@@ -709,7 +709,7 @@ pub(super) fn upsert_course_replay_slot(
             record.course_score_id,
             record.played_at,
             record.ex_score,
-            record.miss_count,
+            record.bp,
             record.max_combo,
             record.clear_rank,
         ],
@@ -724,7 +724,7 @@ pub(super) fn course_replay_slot(
 ) -> Result<Option<CourseReplaySlotRecord>> {
     conn.query_row(
         "SELECT course_id, slot, rule, course_score_id, played_at,
-                ex_score, miss_count, max_combo, clear_rank
+                ex_score, bp, max_combo, clear_rank
          FROM course_replay_slots
          WHERE course_id = ?1 AND slot = ?2",
         params![course_id, slot],
@@ -740,7 +740,7 @@ pub(super) fn course_replay_slots_for_course(
 ) -> Result<[Option<CourseReplaySlotRecord>; 4]> {
     let mut stmt = conn.prepare(
         "SELECT course_id, slot, rule, course_score_id, played_at,
-                ex_score, miss_count, max_combo, clear_rank
+                ex_score, bp, max_combo, clear_rank
          FROM course_replay_slots
          WHERE course_id = ?1",
     )?;
@@ -780,7 +780,7 @@ fn course_replay_slot_from_row(
         course_score_id: row.get(3)?,
         played_at: row.get(4)?,
         ex_score: row.get(5)?,
-        miss_count: row.get(6)?,
+        bp: row.get(6)?,
         max_combo: row.get(7)?,
         clear_rank: row.get(8)?,
     })
@@ -796,7 +796,7 @@ fn course_best_score_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Cours
         gauge_type: row.get(5)?,
         gauge_value: row.get(6)?,
         max_combo: row.get(7)?,
-        miss_count: row.get(8)?,
+        bp: row.get(8)?,
         course_failed: row.get(9)?,
         course_clear: row.get(10)?,
         played_at: row.get(11)?,
@@ -943,7 +943,7 @@ mod tests {
             gauge_type: "Normal".to_string(),
             gauge_value: 80.0,
             max_combo: 200,
-            miss_count: 5,
+            bp: 5,
             course_failed: clear == "Failed",
             course_clear: clear != "Failed" && clear != "NoPlay",
             arrange: "Normal".to_string(),
@@ -1100,7 +1100,7 @@ mod tests {
             course_score_id,
             played_at: 1_700_000_500 + slot as i64,
             ex_score,
-            miss_count: 0,
+            bp: 0,
             max_combo: 100,
             clear_rank: 5,
         }
