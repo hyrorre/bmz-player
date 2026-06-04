@@ -387,6 +387,13 @@ POST /api/v1/scores?include=rankings&ranking_scopes=global,self_and_rivals&ranki
 これらはクライアントが自己申告する値ではなく、IR Server が `scores` 投稿履歴から集計する値として扱う。
 Local BMZ がローカル表示用に `play_count` / `clear_count` を保持していても、IR 送信 payload には含めない。
 
+`device_type` は BMS IR の慣習に合わせ、スコアを記録した主入力デバイスとして必ず送る。
+値は `keyboard` / `controller` の2種類だけにし、`mixed` は作らない。
+BMZ はプレイ中の human press input を集計し、controller 入力数が keyboard 入力数より多ければ `controller`、
+それ以外は `keyboard` と判定する。
+controller のスクラッチだけ keyboard 入力へ変換している環境でも、鍵盤側が controller なら `controller` になる。
+`device_type` はランキング分離キーではなく、表示・検索・検証補助用の score metadata として扱う。
+
 ```json
 {
   "client": {
@@ -721,6 +728,7 @@ rival_only=true&include_self=false -> scope=rivals
           "max_combo": 1234,
           "min_bp": 12,
           "min_cb": 10,
+          "device_type": "controller",
           "played_at": "2026-06-04T12:34:56Z",
           "option": "random",
           "seed": 123456789,
@@ -749,6 +757,7 @@ rival_only=true&include_self=false -> scope=rivals
           "max_combo": 1000,
           "min_bp": 20,
           "min_cb": 18,
+          "device_type": "keyboard",
           "played_at": "2026-06-03T12:00:00Z",
           "option": "mirror",
           "seed": 987654321,
@@ -813,6 +822,15 @@ clear_count = そのうち clear_type が Failed / NoPlay 以外の投稿数
 
 集計単位は ranking query と同じ `chart_sha256` / `gauge` / `ln_policy` / `scoring` を基本にする。
 `play_count` / `clear_count` が不要な画面では response から省略してよい。
+
+### Device type
+
+Ranking API / Chart detail API は score 表示に `device_type` を含める。
+`device_type` は `keyboard` / `controller` の2値で、`mixed` は返さない。
+
+集計・順位の key には含めない。
+同じ player / chart / gauge / ln_policy / scoring の best score が更新された場合、`best_scores.device_type` は
+その best score を記録した投稿の値で上書きする。
 
 ### EX score 同点順位
 
@@ -1227,6 +1245,24 @@ BMZ の local score DB は `score_history` / `score_best` / `replay_slots` に `
 - local best 更新条件は `ex_score`、`clear_type`、`bp`、`cb`、`max_combo` の順に比較する。
 - IR 側の `min_bp` / `min_cb` は、送信された `bp` / `cb` の自己ベスト最小値として扱う。
 
+### Device type
+
+BMZ の local score DB は `score_history` / `score_best` に `device_type` を保存する。
+`replay_slots` は score history の snapshot 表示に必要なら `device_type` を持ってよいが、IR payload の元データは
+`score_history.device_type` を正とする。
+
+判定ルール:
+
+```txt
+human controller press count > human keyboard press count => controller
+otherwise                                             => keyboard
+```
+
+- `mixed` は保存しない。
+- `InputKind::Press` だけを数え、release による二重カウントを避ける。
+- `InputSource::Human` だけを数え、autoplay / replay 再生入力はローカル実プレイの device 判定に含めない。
+- 旧 replay や device 情報のない入力は `keyboard` fallback でよい。
+
 ---
 
 ## 12. Clear Lamp
@@ -1274,6 +1310,7 @@ device_keys
 
 投稿履歴をすべて保存する。`play_count` / `clear_count` は submission payload から受け取らず、
 この `scores` 履歴から IR Server 側で集計する。
+`device_type` は投稿時点の主入力デバイスとして `scores.device_type` に保存する。
 
 集計の基本条件:
 
@@ -1295,6 +1332,9 @@ clear_count = COUNT(*) FILTER (WHERE clear_rank > Failed)
 Chart detail の global stats のように player 単位でない集計が必要な場合は、`player_id` 条件を外す。
 負荷が問題になるまでは `scores` から都度集計でよく、必要になったら materialized view や summary table を検討する。
 
+`device_type` は集計条件に含めない。
+controller / keyboard 別ランキングを作る場合は v1 の score identity とは別の filter / view として追加する。
+
 ### best_scores
 
 ランキング用に正規化する。
@@ -1312,6 +1352,7 @@ CREATE TABLE best_scores (
     max_combo integer NOT NULL,
     min_bp integer NOT NULL,
     min_cb integer NOT NULL,
+    device_type text NOT NULL,
 
     gauge text NOT NULL,
     ln_policy text NOT NULL,
@@ -1324,6 +1365,9 @@ CREATE TABLE best_scores (
     UNIQUE (player_id, chart_sha256, gauge, ln_policy, scoring)
 );
 ```
+
+`scores` 側にも同じ `device_type text NOT NULL` を持たせる。
+`best_scores.device_type` は best 更新に採用された `scores.device_type` をコピーする。
 
 `effective_ln_mode` は表示・互換・将来の検証用に保存するが、best の unique key には使わない。
 BMZ local DB と同じく、score 分離の正規化キーは `ln_policy` とする。
@@ -1571,6 +1615,19 @@ CREATE TABLE ir_score_submissions (
     response_json TEXT
 );
 ```
+
+### Local score device type
+
+IR 実装前準備として、BMZ 本体の通常スコア保存にも `device_type` を持たせる。
+
+```sql
+ALTER TABLE score_history ADD COLUMN device_type TEXT NOT NULL DEFAULT 'keyboard';
+ALTER TABLE score_best ADD COLUMN device_type TEXT NOT NULL DEFAULT 'keyboard';
+```
+
+`device_type` は `keyboard` / `controller` の2値に固定する。
+local best が更新された場合、`score_best.device_type` は更新元の `score_history.device_type` で上書きする。
+IR job 作成時は `score_history.device_type` から payload の `play_options.device_type` を生成する。
 
 ---
 
@@ -1877,6 +1934,8 @@ impl MochaAdapter {
 
 - BMZ 本体の score 保存に `bp` / `cb` 集計を追加する。
 - `score_history` / `score_best` / replay slot metrics の `bp` / `cb` を IR payload / best update に接続する。
+- BMZ 本体の入力 pipeline に `keyboard` / `controller` の device kind を残し、human press input の多数決で `device_type` を決める。
+- `score_history` / `score_best` に `device_type` を保存し、IR payload の `play_options.device_type` へ接続する。
 - ローカル表示用の `play_count` / `clear_count` を local score DB から集計または保存する。ただし IR 送信値には使わない。
 - `ir_accounts`
 - `ir_score_jobs`
@@ -1958,6 +2017,8 @@ BMZ IR API v1:
   - LN/CN/HCN score identity follows BMZ LnScorePolicy from docs/ln.md
   - BP means bad + poor + empty_poor; CB means bad + poor
   - min_bp / min_cb are required from v1 and are derived from submitted bp / cb
+  - device_type is required from v1 as keyboard/controller only; mixed is not used
+  - BMZ classifies device_type by human press input majority and stores it in local score_history / score_best
   - play_count / clear_count are not sent by Score Submission API
   - IR Server aggregates play_count / clear_count from scores history
   - Ranking API / Chart detail API may return play_count / clear_count when needed
