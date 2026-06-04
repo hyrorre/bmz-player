@@ -200,6 +200,7 @@ mod tests {
                             score_history_id: 0,
                             replay_path: String::new(),
                             slot_paths: [None, None, None, None],
+                            device_type: bmz_core::input::InputDeviceKind::Keyboard,
                         },
                         summary: ResultSummary::from_play_result(
                             &make_play_result(ScoreState::default(), total_notes),
@@ -207,6 +208,7 @@ mod tests {
                                 score_history_id: 0,
                                 replay_path: String::new(),
                                 slot_paths: [None, None, None, None],
+                                device_type: bmz_core::input::InputDeviceKind::Keyboard,
                             },
                             &bmz_chart::model::ChartMetadata::default(),
                         ),
@@ -308,6 +310,7 @@ mod tests {
                             score_history_id: 0,
                             replay_path: String::new(),
                             slot_paths: [None, None, None, None],
+                            device_type: bmz_core::input::InputDeviceKind::Keyboard,
                         },
                         summary: ResultSummary::from_play_result(
                             &make_play_result(ScoreState::default(), total_notes),
@@ -315,6 +318,7 @@ mod tests {
                                 score_history_id: 0,
                                 replay_path: String::new(),
                                 slot_paths: [None, None, None, None],
+                                device_type: bmz_core::input::InputDeviceKind::Keyboard,
                             },
                             &bmz_chart::model::ChartMetadata::default(),
                         ),

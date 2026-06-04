@@ -39,6 +39,7 @@ export type Database = {
           chart_sha256: string
           clear_rank: number
           clear_type: string
+          device_type: string
           effective_ln_mode: string
           ex_score: number
           gauge: string
@@ -59,6 +60,7 @@ export type Database = {
           chart_sha256: string
           clear_rank: number
           clear_type: string
+          device_type?: string
           effective_ln_mode: string
           ex_score: number
           gauge: string
@@ -79,6 +81,7 @@ export type Database = {
           chart_sha256?: string
           clear_rank?: number
           clear_type?: string
+          device_type?: string
           effective_ln_mode?: string
           ex_score?: number
           gauge?: string
@@ -388,6 +391,7 @@ export type Database = {
           client_name: string
           client_version: string
           created_at: string
+          device_type: string
           duration_ms: number | null
           effective_ln_mode: string
           evidence: Json
@@ -428,6 +432,7 @@ export type Database = {
           client_name: string
           client_version: string
           created_at?: string
+          device_type?: string
           duration_ms?: number | null
           effective_ln_mode: string
           evidence?: Json
@@ -468,6 +473,7 @@ export type Database = {
           client_name?: string
           client_version?: string
           created_at?: string
+          device_type?: string
           duration_ms?: number | null
           effective_ln_mode?: string
           evidence?: Json

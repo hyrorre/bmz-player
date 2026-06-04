@@ -1,5 +1,5 @@
 use bmz_audio::clock::AudioClock;
-use bmz_core::input::{InputEvent, InputSource};
+use bmz_core::input::{InputDeviceKind, InputEvent, InputSource};
 use bmz_core::time::TimeUs;
 
 use crate::session::PlayOffsets;
@@ -40,7 +40,17 @@ impl InputTranslator for DefaultInputTranslator {
     ) -> Option<InputEvent> {
         let lane = self.binding.resolve(event.device, &event.control)?;
         let time = estimate_audio_time(&event.timestamp, ctx);
-        Some(InputEvent { lane, kind: event.kind, time, source: InputSource::Human })
+        let device_kind = device_kind_for_control(&event.control);
+        Some(InputEvent { lane, kind: event.kind, time, source: InputSource::Human, device_kind })
+    }
+}
+
+fn device_kind_for_control(control: &PhysicalControl) -> InputDeviceKind {
+    match control {
+        PhysicalControl::KeyboardKey(_) => InputDeviceKind::Keyboard,
+        PhysicalControl::GamepadButton(_) | PhysicalControl::HidButton(_) => {
+            InputDeviceKind::Controller
+        }
     }
 }
 
@@ -69,7 +79,7 @@ mod tests {
     use std::sync::atomic::AtomicU64;
 
     use bmz_audio::clock::AudioClock;
-    use bmz_core::input::InputKind;
+    use bmz_core::input::{InputDeviceKind, InputKind};
     use bmz_core::lane::Lane;
 
     use super::super::backend::{DeviceId, DeviceInputEvent};
@@ -116,5 +126,45 @@ mod tests {
             .unwrap();
 
         assert_eq!(input.time, TimeUs(10_750));
+        assert_eq!(input.device_kind, InputDeviceKind::Keyboard);
+    }
+
+    #[test]
+    fn translator_marks_gamepad_controls_as_controller() {
+        let clock = AudioClock {
+            sample_rate: 48_000,
+            start_output_frame: 0,
+            chart_zero_time_us: 0,
+            current_frame: Arc::new(AtomicU64::new(0)),
+            running: false,
+        };
+        let ctx = InputTimingContext {
+            audio_clock: &clock,
+            offsets: PlayOffsets { input_offset_us: 0, visual_offset_us: 0 },
+            timestamp_anchor: None,
+        };
+        let mut translator = DefaultInputTranslator {
+            binding: LaneBinding {
+                entries: vec![BindingEntry {
+                    device: None,
+                    control: PhysicalControl::GamepadButton("South".to_string()),
+                    lane: Lane::Key1,
+                }],
+            },
+        };
+
+        let input = translator
+            .translate(
+                DeviceInputEvent {
+                    device: DeviceId(1),
+                    control: PhysicalControl::GamepadButton("South".to_string()),
+                    kind: InputKind::Press,
+                    timestamp: DeviceTimestamp::Unknown,
+                },
+                &ctx,
+            )
+            .unwrap();
+
+        assert_eq!(input.device_kind, InputDeviceKind::Controller);
     }
 }

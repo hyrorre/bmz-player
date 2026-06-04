@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::input::InputKind;
+use crate::input::{InputDeviceKind, InputKind};
 use crate::lane::Lane;
 use crate::time::TimeUs;
 
@@ -9,4 +9,6 @@ pub struct ReplayEvent {
     pub lane: Lane,
     pub kind: InputKind,
     pub time: TimeUs,
+    #[serde(default)]
+    pub device_kind: InputDeviceKind,
 }

@@ -436,7 +436,13 @@ mod tests {
     }
 
     fn press_at(time: TimeUs) -> InputEvent {
-        InputEvent { source: InputSource::Human, lane: Lane::Key1, kind: InputKind::Press, time }
+        InputEvent {
+            source: InputSource::Human,
+            lane: Lane::Key1,
+            kind: InputKind::Press,
+            time,
+            device_kind: bmz_core::input::InputDeviceKind::Keyboard,
+        }
     }
 
     #[test]

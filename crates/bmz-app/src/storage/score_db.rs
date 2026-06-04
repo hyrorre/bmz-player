@@ -5,6 +5,7 @@ use anyhow::{Result, bail};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE;
 use bmz_core::clear::{ClearType, GaugeType};
+use bmz_core::input::InputDeviceKind;
 use bmz_gameplay::result::PlayResult;
 use bmz_gameplay::score::ScoreState;
 use flate2::Compression;
@@ -47,6 +48,7 @@ pub struct ScoreRecord {
     pub rule_mode: String,
     pub assist_mask: u32,
     pub autoplay: bool,
+    pub device_type: InputDeviceKind,
     pub replay_path: String,
 }
 
@@ -59,6 +61,7 @@ impl ScoreRecord {
         gauge_option: impl Into<String>,
         rule_mode: impl Into<String>,
         assist_mask: u32,
+        device_type: InputDeviceKind,
         replay_path: impl Into<String>,
     ) -> Self {
         Self {
@@ -75,6 +78,7 @@ impl ScoreRecord {
             rule_mode: rule_mode.into(),
             assist_mask,
             autoplay: result.autoplay,
+            device_type,
             replay_path: replay_path.into(),
         }
     }
@@ -93,6 +97,7 @@ pub struct BestScoreSummary {
     pub max_combo: u32,
     pub play_count: u32,
     pub clear_count: u32,
+    pub device_type: InputDeviceKind,
     pub played_at: i64,
     pub replay_path: String,
 }
@@ -143,6 +148,7 @@ pub struct ScoreHistoryEntry {
     pub cb: u32,
     pub max_combo: u32,
     pub autoplay: bool,
+    pub device_type: InputDeviceKind,
     pub replay_path: String,
     /// `library.db`'s `course_scores.id` if this chart play happened as part
     /// of a course attempt, otherwise `None`.  No cross-database FK is
@@ -284,6 +290,7 @@ impl ScoreDatabase {
                 max_combo,
                 play_count,
                 clear_count,
+                device_type,
                 played_at,
                 replay_path
             FROM score_best
@@ -538,7 +545,8 @@ impl ScoreDatabase {
                 autoplay,
                 replay_path,
                 course_score_id,
-                ln_policy
+                ln_policy,
+                device_type
             FROM score_history
             ORDER BY played_at DESC, id DESC
             LIMIT ?1 OFFSET ?2",
@@ -565,8 +573,9 @@ fn best_score_summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Best
         max_combo: row.get(8)?,
         play_count: row.get(9)?,
         clear_count: row.get(10)?,
-        played_at: row.get(11)?,
-        replay_path: row.get(12)?,
+        device_type: device_type_from_row(row, 11)?,
+        played_at: row.get(12)?,
+        replay_path: row.get(13)?,
     })
 }
 
@@ -631,7 +640,24 @@ fn score_history_entry_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Sco
         autoplay: row.get(11)?,
         replay_path: row.get(12)?,
         course_score_id: row.get(13)?,
+        device_type: device_type_from_row(row, 15)?,
     })
+}
+
+fn device_type_from_row(
+    row: &rusqlite::Row<'_>,
+    index: usize,
+) -> rusqlite::Result<InputDeviceKind> {
+    let value: String = row.get(index)?;
+    match value.as_str() {
+        "keyboard" => Ok(InputDeviceKind::Keyboard),
+        "controller" => Ok(InputDeviceKind::Controller),
+        _ => Err(rusqlite::Error::FromSqlConversionFailure(
+            index,
+            rusqlite::types::Type::Text,
+            format!("invalid input device type: {value}").into(),
+        )),
+    }
 }
 
 fn ln_policy_from_row(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<LnScorePolicy> {
@@ -678,11 +704,12 @@ fn insert_score_history(conn: &Connection, record: &ScoreRecord) -> Result<()> {
             rule_mode,
             assist_mask,
             autoplay,
+            device_type,
             replay_path,
             ghost
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-            ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30
+            ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31
         )",
         params![
             hash_to_hex(&record.chart_sha256),
@@ -713,6 +740,7 @@ fn insert_score_history(conn: &Connection, record: &ScoreRecord) -> Result<()> {
             record.rule_mode.as_str(),
             record.assist_mask,
             record.autoplay,
+            record.device_type.as_str(),
             record.replay_path.as_str(),
             ghost,
         ],
@@ -750,11 +778,12 @@ fn upsert_score_best(conn: &Connection, record: &ScoreRecord) -> Result<()> {
             played_at,
             replay_path,
             ghost,
+            device_type,
             play_count,
             clear_count
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-            ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26
+            ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27
         )
         ON CONFLICT(chart_sha256, ln_policy) DO NOTHING",
         params![
@@ -782,6 +811,7 @@ fn upsert_score_best(conn: &Connection, record: &ScoreRecord) -> Result<()> {
             record.played_at,
             record.replay_path.as_str(),
             ghost,
+            record.device_type.as_str(),
             1_u32,
             clear_increment,
         ],
@@ -842,8 +872,9 @@ fn upsert_score_best(conn: &Connection, record: &ScoreRecord) -> Result<()> {
             slow_empty_poor = ?20,
             played_at = ?21,
             replay_path = ?22,
-            ghost = ?23
-         WHERE chart_sha256 = ?1 AND ln_policy = ?24",
+            ghost = ?23,
+            device_type = ?24
+         WHERE chart_sha256 = ?1 AND ln_policy = ?25",
         params![
             hash_to_hex(&record.chart_sha256),
             record.clear_type.as_str(),
@@ -868,6 +899,7 @@ fn upsert_score_best(conn: &Connection, record: &ScoreRecord) -> Result<()> {
             record.played_at,
             record.replay_path.as_str(),
             ghost,
+            record.device_type.as_str(),
             record.ln_policy.as_str(),
         ],
     )?;
@@ -954,6 +986,7 @@ pub fn decode_beatoraja_ghost(encoded: &str, total_notes: u32) -> Result<Vec<u8>
 mod tests {
     use bmz_core::clear::{ClearType, GaugeType};
     use bmz_core::ids::NoteId;
+    use bmz_core::input::InputDeviceKind;
     use bmz_core::judge::{Judge, TimingSide};
     use bmz_core::lane::Lane;
     use bmz_core::time::TimeUs;
@@ -994,6 +1027,7 @@ mod tests {
             rule_mode: String::new(),
             assist_mask: 0,
             autoplay: false,
+            device_type: InputDeviceKind::Keyboard,
             replay_path: String::new(),
         }
     }
@@ -1012,9 +1046,11 @@ mod tests {
         let mut record = record(20, ClearType::Normal);
         record.gauge_type = None;
         record.rule_mode = "Dx".to_string();
+        record.device_type = InputDeviceKind::Controller;
         db.insert_score(&record).unwrap();
 
-        let (clear_type, gauge_type, gauge_option, rule_mode, replay_path): (
+        let (clear_type, gauge_type, gauge_option, rule_mode, device_type, replay_path): (
+            String,
             String,
             String,
             String,
@@ -1023,9 +1059,11 @@ mod tests {
         ) = db
             .conn()
             .query_row(
-                "SELECT clear_type, gauge_type, gauge_option, rule_mode, replay_path FROM score_history",
+                "SELECT clear_type, gauge_type, gauge_option, rule_mode, device_type, replay_path FROM score_history",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+                |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?))
+                },
             )
             .unwrap();
 
@@ -1033,6 +1071,7 @@ mod tests {
         assert_eq!(gauge_type, "");
         assert_eq!(gauge_option, "");
         assert_eq!(rule_mode, "Dx");
+        assert_eq!(device_type, "controller");
         assert_eq!(replay_path, "");
     }
 
@@ -1348,6 +1387,7 @@ mod tests {
             "Hard",
             "Lr2Oraja",
             0,
+            InputDeviceKind::Controller,
             "",
         );
 
@@ -1357,6 +1397,7 @@ mod tests {
         assert_eq!(record.clear_type, ClearType::Normal);
         assert_eq!(record.gauge_type, Some(GaugeType::Hard));
         assert_eq!(record.gauge_value, 76.5);
+        assert_eq!(record.device_type, InputDeviceKind::Controller);
         assert_eq!(record.score.ex_score(), 2);
         assert!(record.autoplay);
         assert_eq!(record.gauge_option, "Hard");

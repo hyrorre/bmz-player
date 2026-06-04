@@ -9564,6 +9564,7 @@ mod tests {
             max_combo: 100,
             play_count: 42,
             clear_count: 31,
+            device_type: bmz_core::input::InputDeviceKind::Keyboard,
             played_at: 1,
             replay_path: replay_path.to_string(),
         }

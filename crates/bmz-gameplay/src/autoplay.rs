@@ -1,5 +1,5 @@
 use bmz_chart::model::{NoteKind, PlayableChart};
-use bmz_core::input::{InputEvent, InputKind, InputSource};
+use bmz_core::input::{InputDeviceKind, InputEvent, InputKind, InputSource};
 use bmz_core::lane::{LANE_COUNT, Lane};
 use bmz_core::time::TimeUs;
 
@@ -31,12 +31,14 @@ impl AutoplayController {
                         kind: InputKind::Press,
                         time: note.time,
                         source: InputSource::Auto,
+                        device_kind: InputDeviceKind::Keyboard,
                     }),
                     NoteKind::LongEnd => out.push(InputEvent {
                         lane,
                         kind: InputKind::Release,
                         time: note.time,
                         source: InputSource::Auto,
+                        device_kind: InputDeviceKind::Keyboard,
                     }),
                     NoteKind::Invisible | NoteKind::Mine => {}
                 }

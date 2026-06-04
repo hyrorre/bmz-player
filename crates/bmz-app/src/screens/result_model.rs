@@ -246,6 +246,7 @@ mod tests {
             score_history_id: 9,
             replay_path: "replay/test.toml".to_string(),
             slot_paths: [None, None, None, None],
+            device_type: bmz_core::input::InputDeviceKind::Keyboard,
         };
         let metadata = ChartMetadata { title: "Test".to_string(), ..ChartMetadata::default() };
 

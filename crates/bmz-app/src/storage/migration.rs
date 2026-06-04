@@ -680,4 +680,11 @@ pub const SCORE_MIGRATIONS: &[Migration] = &[
                 ON ir_score_submissions(local_score_id);",
         ],
     },
+    Migration {
+        version: 9,
+        statements: &[
+            "ALTER TABLE score_history ADD COLUMN device_type TEXT NOT NULL DEFAULT 'keyboard';",
+            "ALTER TABLE score_best ADD COLUMN device_type TEXT NOT NULL DEFAULT 'keyboard';",
+        ],
+    },
 ];

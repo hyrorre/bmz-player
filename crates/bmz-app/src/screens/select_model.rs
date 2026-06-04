@@ -1713,6 +1713,7 @@ mod tests {
             rule_mode: String::new(),
             assist_mask: 0,
             autoplay: false,
+            device_type: bmz_core::input::InputDeviceKind::Keyboard,
             replay_path: String::new(),
         }
     }

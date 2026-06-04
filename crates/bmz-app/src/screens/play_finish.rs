@@ -1,6 +1,7 @@
 use anyhow::{Result, bail};
 use bmz_chart::model::LongNoteMode;
 use bmz_core::clear::ClearType;
+use bmz_core::input::InputDeviceKind;
 use bmz_gameplay::result::PlayResult;
 use bmz_gameplay::session::{GameSession, PlayState};
 
@@ -82,6 +83,7 @@ pub fn finish_session_result(
             score_history_id: 0,
             replay_path: String::new(),
             slot_paths: [None, None, None, None],
+            device_type: InputDeviceKind::Keyboard,
         }
     } else {
         let arrange = applied_arrange.arrange;
@@ -195,6 +197,7 @@ fn enqueue_ir_jobs(
             ln_policy: score_key.ln_policy,
             effective_ln_mode: effective_ln_mode_from_score_policy(score_key.ln_policy),
             gauge_option: result.gauge_type.as_str().to_string(),
+            device_type: stored.device_type,
             idempotency_key: format!("bmz-score-{}", stored.score_history_id),
         },
     );
@@ -283,7 +286,7 @@ mod tests {
     use bmz_chart::model::{ChartMetadata, NoteEvent, NoteKind, PlayableChart};
     use bmz_core::clear::ClearType;
     use bmz_core::ids::NoteId;
-    use bmz_core::input::{InputKind, InputSource};
+    use bmz_core::input::{InputDeviceKind, InputKind, InputSource};
     use bmz_core::lane::Lane;
     use bmz_core::time::{ChartTick, TimeUs};
     use bmz_gameplay::input::backend::NullInputBackend;
@@ -336,6 +339,7 @@ mod tests {
             kind: InputKind::Press,
             time: TimeUs(10),
             source: InputSource::Human,
+            device_kind: InputDeviceKind::Keyboard,
         });
 
         let stored = store_session_result(

@@ -1,4 +1,5 @@
 use bmz_chart::model::{LongNoteMode, PlayableChart};
+use bmz_core::input::InputDeviceKind;
 use bmz_gameplay::result::PlayResult;
 
 use crate::ln_policy::{ChartLnProfile, LnScorePolicy};
@@ -16,6 +17,7 @@ pub struct IrSubmissionContext {
     pub ln_policy: LnScorePolicy,
     pub effective_ln_mode: LongNoteMode,
     pub gauge_option: String,
+    pub device_type: InputDeviceKind,
     pub idempotency_key: String,
 }
 
@@ -26,6 +28,12 @@ pub fn build_score_submission(
 ) -> IrScoreSubmission {
     let judges = &result.score.judges;
     let ln_profile = ChartLnProfile::from_chart(chart);
+    let mut play_options = std::collections::BTreeMap::new();
+    play_options.insert(
+        "device_type".to_string(),
+        serde_json::Value::String(context.device_type.as_str().to_string()),
+    );
+
     IrScoreSubmission {
         client: IrClientInfo {
             name: "BMZ".to_string(),
@@ -111,7 +119,7 @@ pub fn build_score_submission(
             min_bp: result.score.bp(),
             min_cb: result.score.cb(),
         },
-        play_options: Default::default(),
+        play_options,
         replay: None,
         evidence: Default::default(),
         idempotency_key: context.idempotency_key,
@@ -213,6 +221,7 @@ mod tests {
                 ln_policy: LnScorePolicy::ForceLn,
                 effective_ln_mode: LongNoteMode::Ln,
                 gauge_option: "normal".to_string(),
+                device_type: InputDeviceKind::Controller,
                 idempotency_key: "score_local_1".to_string(),
             },
         );
@@ -221,5 +230,9 @@ mod tests {
         assert_eq!(payload.result.min_cb, 3);
         assert_eq!(payload.rule.ln_policy, LnScorePolicy::ForceLn);
         assert_eq!(payload.rule.key_mode, "keys_7");
+        assert_eq!(
+            payload.play_options.get("device_type"),
+            Some(&serde_json::Value::String("controller".to_string()))
+        );
     }
 }

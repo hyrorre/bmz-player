@@ -1,6 +1,7 @@
 import type { SupabaseClient, User } from '@supabase/supabase-js'
 import type {
   IrChartLnProfile,
+  IrDeviceType,
   IrRanking,
   IrRankingEntry,
   IrRankingScope,
@@ -12,6 +13,7 @@ import type { Database } from '../../shared/types/database.types'
 
 const LN_POLICIES = new Set(['AutoLn', 'AutoCn', 'AutoHcn', 'ForceLn', 'ForceCn', 'ForceHcn'])
 const EFFECTIVE_LN_MODES = new Set(['ln', 'cn', 'hcn'])
+const DEVICE_TYPES = new Set(['keyboard', 'controller'])
 const RANKING_SCOPES = new Set(['global', 'self_and_rivals', 'rivals', 'self', 'around_self'])
 const CLEAR_RANK: Record<string, number> = {
   no_play: 0,
@@ -65,6 +67,7 @@ interface BestScoreRow extends BestScoreCandidate {
   ln_policy: LnScorePolicy
   effective_ln_mode: 'ln' | 'cn' | 'hcn'
   scoring: 'bms_ex_score_v1'
+  device_type: IrDeviceType
   played_at: string | null
   verification: 'unverified' | 'signed' | 'invalid' | 'trusted'
 }
@@ -118,6 +121,12 @@ export function validateScoreSubmission(value: unknown): IrScoreSubmission {
   if (!payload.idempotency_key || typeof payload.idempotency_key !== 'string') {
     throw new Error('idempotency_key is required')
   }
+  if (!isRecord(payload.play_options)) {
+    throw new Error('play_options is required')
+  }
+  if (!DEVICE_TYPES.has(String(payload.play_options.device_type))) {
+    throw new Error('play_options.device_type is invalid')
+  }
   return payload
 }
 
@@ -134,6 +143,7 @@ export async function submitScore(
   const cb = judgeTotal(payload, 'bad') + judgeTotal(payload, 'poor')
   const clearRank = CLEAR_RANK[payload.result.clear] ?? 0
   const verification = payload.evidence?.client_signature ? 'signed' : 'unverified'
+  const deviceType = payload.play_options.device_type
 
   const scoreInsert = {
     player_id: user.id,
@@ -162,6 +172,7 @@ export async function submitScore(
     cb,
     min_bp: payload.result.min_bp,
     min_cb: payload.result.min_cb,
+    device_type: deviceType,
     play_options: payload.play_options ?? {},
     replay_hash: payload.replay?.hash ?? null,
     replay_format: payload.replay?.format ?? null,
@@ -235,7 +246,7 @@ export async function getRanking(db: Db, user: User | null, sha256: string, quer
   const { data: rows, error } = await db
     .from('best_scores')
     .select(
-      'player_id, chart_sha256, score_id, ex_score, clear_type, clear_rank, max_combo, min_bp, min_cb, gauge, ln_policy, effective_ln_mode, scoring, played_at, server_received_at, verification',
+      'player_id, chart_sha256, score_id, ex_score, clear_type, clear_rank, max_combo, min_bp, min_cb, device_type, gauge, ln_policy, effective_ln_mode, scoring, played_at, server_received_at, verification',
     )
     .eq('chart_sha256', sha256)
     .eq('gauge', query.gauge)
@@ -376,6 +387,7 @@ async function upsertBestScore(
       max_combo: candidate.max_combo,
       min_bp: candidate.min_bp,
       min_cb: candidate.min_cb,
+      device_type: payload.play_options.device_type,
       gauge: payload.rule.gauge,
       ln_policy: payload.rule.ln_policy,
       effective_ln_mode: payload.rule.effective_ln_mode,
@@ -445,6 +457,7 @@ function rankRows(
         max_combo: row.max_combo,
         min_bp: row.min_bp,
         min_cb: row.min_cb,
+        device_type: row.device_type,
         played_at: row.played_at,
         verification: row.verification,
       },

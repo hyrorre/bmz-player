@@ -17,9 +17,33 @@ pub enum InputSource {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum InputDeviceKind {
+    Keyboard,
+    Controller,
+}
+
+impl Default for InputDeviceKind {
+    fn default() -> Self {
+        Self::Keyboard
+    }
+}
+
+impl InputDeviceKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Keyboard => "keyboard",
+            Self::Controller => "controller",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InputEvent {
     pub lane: Lane,
     pub kind: InputKind,
     pub time: TimeUs,
     pub source: InputSource,
+    #[serde(default)]
+    pub device_kind: InputDeviceKind,
 }

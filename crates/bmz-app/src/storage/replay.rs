@@ -187,7 +187,7 @@ fn hex_digit(byte: u8) -> Result<u8> {
 
 #[cfg(test)]
 mod tests {
-    use bmz_core::input::InputKind;
+    use bmz_core::input::{InputDeviceKind, InputKind};
     use bmz_core::lane::Lane;
     use bmz_core::time::TimeUs;
 
@@ -207,7 +207,12 @@ mod tests {
             ArrangeOption::Normal,
             None,
             None,
-            vec![ReplayEvent { lane: Lane::Key1, kind: InputKind::Press, time: TimeUs(1_000) }],
+            vec![ReplayEvent {
+                lane: Lane::Key1,
+                kind: InputKind::Press,
+                time: TimeUs(1_000),
+                device_kind: InputDeviceKind::Keyboard,
+            }],
         );
 
         save_replay(&path, &replay).unwrap();
@@ -253,7 +258,12 @@ mod tests {
             ArrangeOption::Normal,
             None,
             None,
-            vec![ReplayEvent { lane: Lane::Key2, kind: InputKind::Release, time: TimeUs(2_000) }],
+            vec![ReplayEvent {
+                lane: Lane::Key2,
+                kind: InputKind::Release,
+                time: TimeUs(2_000),
+                device_kind: InputDeviceKind::Keyboard,
+            }],
         );
         save_replay(&path, &replay).unwrap();
 
@@ -355,7 +365,12 @@ events = []
             ArrangeOption::Normal,
             None,
             None,
-            vec![ReplayEvent { lane: Lane::Key1, kind: InputKind::Press, time: TimeUs(10) }],
+            vec![ReplayEvent {
+                lane: Lane::Key1,
+                kind: InputKind::Press,
+                time: TimeUs(10),
+                device_kind: InputDeviceKind::Keyboard,
+            }],
         );
         let r1 = ReplayFile::new(
             [2; 32],
@@ -364,7 +379,12 @@ events = []
             ArrangeOption::Mirror,
             None,
             None,
-            vec![ReplayEvent { lane: Lane::Key2, kind: InputKind::Release, time: TimeUs(20) }],
+            vec![ReplayEvent {
+                lane: Lane::Key2,
+                kind: InputKind::Release,
+                time: TimeUs(20),
+                device_kind: InputDeviceKind::Keyboard,
+            }],
         );
         let p0 = replay_subdir.join("c0.toml");
         let p1 = replay_subdir.join("c1.toml");

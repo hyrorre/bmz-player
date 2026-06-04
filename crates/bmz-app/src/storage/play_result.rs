@@ -1,4 +1,5 @@
 use anyhow::Result;
+use bmz_core::input::{InputDeviceKind, InputKind};
 use bmz_core::replay::ReplayEvent;
 use bmz_gameplay::result::PlayResult;
 
@@ -15,6 +16,7 @@ pub struct StoredPlayResult {
     pub score_history_id: i64,
     pub replay_path: String,
     pub slot_paths: [Option<String>; 4],
+    pub device_type: InputDeviceKind,
 }
 
 #[derive(Debug, Clone)]
@@ -51,6 +53,7 @@ pub fn store_play_result(
     let arrange_seed = request.arrange_seed;
     let arrange_pattern = request.arrange_pattern.clone();
     let replay_events = request.replay_events.clone();
+    let device_type = classify_replay_device_type(&replay_events);
 
     let replay_path = if should_save_replay(replay_config, result) {
         let file_name = replay_file_name(result.chart_sha256, request.played_at);
@@ -78,6 +81,7 @@ pub fn store_play_result(
         request.gauge_option,
         request.rule_mode,
         request.assist_mask,
+        device_type,
         replay_path.clone(),
     );
     let score_history_id = score_db.insert_score(&record)?;
@@ -122,7 +126,7 @@ pub fn store_play_result(
         }
     }
 
-    Ok(StoredPlayResult { score_history_id, replay_path, slot_paths })
+    Ok(StoredPlayResult { score_history_id, replay_path, slot_paths, device_type })
 }
 
 fn candidate_metrics(result: &PlayResult) -> CandidateMetrics {
@@ -133,6 +137,17 @@ fn candidate_metrics(result: &PlayResult) -> CandidateMetrics {
         max_combo: result.score.max_combo,
         clear_rank: result.clear_type as u8,
     }
+}
+
+pub fn classify_replay_device_type(events: &[ReplayEvent]) -> InputDeviceKind {
+    let (keyboard, controller) = events.iter().filter(|event| event.kind == InputKind::Press).fold(
+        (0_u32, 0_u32),
+        |(keyboard, controller), event| match event.device_kind {
+            InputDeviceKind::Keyboard => (keyboard + 1, controller),
+            InputDeviceKind::Controller => (keyboard, controller + 1),
+        },
+    );
+    if controller > keyboard { InputDeviceKind::Controller } else { InputDeviceKind::Keyboard }
 }
 
 fn evaluate_slot_update(
@@ -177,7 +192,7 @@ fn should_save_replay(config: &ReplayConfig, result: &PlayResult) -> bool {
 #[cfg(test)]
 mod tests {
     use bmz_core::clear::{ClearType, GaugeType};
-    use bmz_core::input::InputKind;
+    use bmz_core::input::{InputDeviceKind, InputKind};
     use bmz_core::lane::Lane;
     use bmz_core::replay::ReplayEvent;
     use bmz_core::time::TimeUs;
@@ -225,6 +240,7 @@ mod tests {
                     lane: Lane::Key1,
                     kind: InputKind::Press,
                     time: TimeUs(10),
+                    device_kind: InputDeviceKind::Keyboard,
                 }],
                 arrange: ArrangeOption::Normal,
                 arrange_seed: None,
@@ -630,6 +646,58 @@ mod tests {
                 "first record must be written for rule {rule:?}"
             );
         }
+    }
+
+    #[test]
+    fn classify_replay_device_type_uses_controller_majority() {
+        let events = vec![
+            ReplayEvent {
+                lane: Lane::Key1,
+                kind: InputKind::Press,
+                time: TimeUs(10),
+                device_kind: InputDeviceKind::Controller,
+            },
+            ReplayEvent {
+                lane: Lane::Key2,
+                kind: InputKind::Press,
+                time: TimeUs(20),
+                device_kind: InputDeviceKind::Controller,
+            },
+            ReplayEvent {
+                lane: Lane::Scratch,
+                kind: InputKind::Press,
+                time: TimeUs(30),
+                device_kind: InputDeviceKind::Keyboard,
+            },
+            ReplayEvent {
+                lane: Lane::Key1,
+                kind: InputKind::Release,
+                time: TimeUs(40),
+                device_kind: InputDeviceKind::Keyboard,
+            },
+        ];
+
+        assert_eq!(classify_replay_device_type(&events), InputDeviceKind::Controller);
+    }
+
+    #[test]
+    fn classify_replay_device_type_defaults_keyboard_for_ties() {
+        let events = vec![
+            ReplayEvent {
+                lane: Lane::Key1,
+                kind: InputKind::Press,
+                time: TimeUs(10),
+                device_kind: InputDeviceKind::Controller,
+            },
+            ReplayEvent {
+                lane: Lane::Key2,
+                kind: InputKind::Press,
+                time: TimeUs(20),
+                device_kind: InputDeviceKind::Keyboard,
+            },
+        ];
+
+        assert_eq!(classify_replay_device_type(&events), InputDeviceKind::Keyboard);
     }
 
     fn play_result(autoplay: bool) -> PlayResult {

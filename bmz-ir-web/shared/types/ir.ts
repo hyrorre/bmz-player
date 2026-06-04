@@ -12,6 +12,8 @@ export type IrRankingScope = 'global' | 'self_and_rivals' | 'rivals' | 'self' | 
 
 export type IrVerificationStatus = 'unverified' | 'signed' | 'invalid' | 'trusted'
 
+export type IrDeviceType = 'keyboard' | 'controller'
+
 export interface IrChartLnProfile {
   has_undefined_ln: boolean
   has_defined_ln: boolean
@@ -81,7 +83,9 @@ export interface IrScoreSubmission {
     min_bp: number
     min_cb: number
   }
-  play_options?: Record<string, unknown>
+  play_options: {
+    device_type: IrDeviceType
+  } & Record<string, unknown>
   replay?: {
     hash?: string | null
     format?: string | null
@@ -162,6 +166,7 @@ export interface IrRankingEntry {
     max_combo: number
     min_bp: number
     min_cb: number
+    device_type: IrDeviceType
     played_at: string | null
     verification: IrVerificationStatus
   }
