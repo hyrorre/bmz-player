@@ -4,7 +4,6 @@ use bmz_gameplay::result::PlayResult;
 use bmz_gameplay::session::{GameSession, PlayState};
 
 use crate::config::profile_config::ReplayConfig;
-use crate::ln_policy::LnScorePolicy;
 use crate::paths::ProfilePaths;
 use crate::screens::play_session::AppliedArrange;
 use crate::screens::result_model::ResultSummary;
@@ -37,6 +36,7 @@ pub fn store_session_result(
     session: &GameSession,
     played_at: i64,
     applied_arrange: &AppliedArrange,
+    score_key: ScoreKey,
     practice_mode: bool,
 ) -> Result<StoredPlayResult> {
     Ok(finish_session_result(
@@ -47,6 +47,7 @@ pub fn store_session_result(
         played_at,
         applied_arrange,
         None,
+        score_key,
         practice_mode,
     )?
     .stored)
@@ -60,11 +61,11 @@ pub fn finish_session_result(
     played_at: i64,
     applied_arrange: &AppliedArrange,
     target_ex_score: Option<u32>,
+    score_key: ScoreKey,
     practice_mode: bool,
 ) -> Result<FinishedPlaySession> {
     ensure_storable_state(session.state)?;
     let result = play_result_from_session(session);
-    let score_key = ScoreKey::new(result.chart_sha256, LnScorePolicy::ForceLn);
     let replay_playback = session.replay_player.is_some();
     let previous_best =
         score_db.best_scores_for_charts(&[score_key]).ok().and_then(|mut bests| bests.pop());
@@ -162,6 +163,7 @@ pub fn finish_session_result_once(
     played_at: i64,
     applied_arrange: &AppliedArrange,
     target_ex_score: Option<u32>,
+    score_key: ScoreKey,
     practice_mode: bool,
 ) -> Result<FinishedPlaySession> {
     if let Some(finished) = cached.clone() {
@@ -176,6 +178,7 @@ pub fn finish_session_result_once(
         played_at,
         applied_arrange,
         target_ex_score,
+        score_key,
         practice_mode,
     )?;
     *cached = Some(finished.clone());
@@ -259,6 +262,7 @@ mod tests {
             &session,
             1_700_000_100,
             &AppliedArrange::default(),
+            score_key(&session),
             false,
         )
         .unwrap();
@@ -298,6 +302,7 @@ mod tests {
             1_700_000_102,
             &AppliedArrange::default(),
             Some(1600),
+            score_key(&session),
             false,
         )
         .unwrap();
@@ -341,6 +346,7 @@ mod tests {
             1_700_000_103,
             &AppliedArrange::default(),
             None,
+            score_key(&session),
             false,
         )
         .unwrap();
@@ -353,6 +359,7 @@ mod tests {
             1_700_000_104,
             &AppliedArrange::default(),
             None,
+            score_key(&session),
             false,
         )
         .unwrap();
@@ -392,6 +399,7 @@ mod tests {
             1_700_000_105,
             &AppliedArrange::default(),
             None,
+            score_key(&session),
             false,
         )
         .unwrap();
@@ -434,6 +442,7 @@ mod tests {
             1_700_000_106,
             &AppliedArrange::default(),
             None,
+            score_key(&session),
             false,
         )
         .unwrap();
@@ -475,6 +484,7 @@ mod tests {
             &session,
             1_700_000_101,
             &AppliedArrange::default(),
+            score_key(&session),
             false,
         );
 
@@ -584,6 +594,10 @@ mod tests {
             total_notes: 1,
             end_time: TimeUs(0),
         }
+    }
+
+    fn score_key(session: &GameSession) -> ScoreKey {
+        ScoreKey::new(session.chart.identity.file_sha256, crate::ln_policy::LnScorePolicy::ForceLn)
     }
 
     fn make_temp_dir(label: &str) -> std::path::PathBuf {

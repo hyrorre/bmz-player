@@ -4,7 +4,7 @@ use anyhow::Result;
 use bmz_core::course::CourseKind;
 use bmz_render::scene::SelectRowKind;
 
-use crate::ln_policy::LnScorePolicy;
+use crate::ln_policy::{LnPolicySetting, LnScorePolicy, score_ln_policy};
 use crate::screens::settings_model::{ConfigSelectRow, KeyBindingSelectRow};
 use crate::storage::common::hash_to_hex;
 use crate::storage::library_db::{
@@ -442,8 +442,9 @@ pub fn load_select_items_in_table(
     library_db: &LibraryDatabase,
     score_db: &ScoreDatabase,
     source_url: &str,
+    ln_policy_setting: LnPolicySetting,
 ) -> Result<Vec<SelectItem>> {
-    load_select_items_in_table_filtered(library_db, score_db, source_url, None)
+    load_select_items_in_table_filtered(library_db, score_db, source_url, None, ln_policy_setting)
 }
 
 /// Loads the charts of a single level of the difficulty table.
@@ -452,8 +453,15 @@ pub fn load_select_items_in_table_level(
     score_db: &ScoreDatabase,
     source_url: &str,
     level: &str,
+    ln_policy_setting: LnPolicySetting,
 ) -> Result<Vec<SelectItem>> {
-    load_select_items_in_table_filtered(library_db, score_db, source_url, Some(level))
+    load_select_items_in_table_filtered(
+        library_db,
+        score_db,
+        source_url,
+        Some(level),
+        ln_policy_setting,
+    )
 }
 
 fn load_select_items_in_table_filtered(
@@ -461,6 +469,7 @@ fn load_select_items_in_table_filtered(
     score_db: &ScoreDatabase,
     source_url: &str,
     level_filter: Option<&str>,
+    ln_policy_setting: LnPolicySetting,
 ) -> Result<Vec<SelectItem>> {
     // Fetch table metadata for symbol and level ordering.
     let (symbol, level_order) = library_db
@@ -487,13 +496,13 @@ fn load_select_items_in_table_filtered(
     });
 
     // Batch score lookup.
-    let keys: Vec<ScoreKey> = entries
-        .iter()
-        .filter_map(entry_score_sha256)
-        .map(|hash| ScoreKey::new(hash, LnScorePolicy::ForceLn))
+    let keys: Vec<ScoreKey> =
+        entries.iter().filter_map(|entry| entry_score_key(entry, ln_policy_setting)).collect();
+    let mut score_map: HashMap<ScoreKey, BestScoreSummary> = score_db
+        .best_scores_for_charts(&keys)?
+        .into_iter()
+        .map(|s| (ScoreKey::new(s.chart_sha256, s.ln_policy), s))
         .collect();
-    let mut score_map: HashMap<[u8; 32], BestScoreSummary> =
-        score_db.best_scores_for_charts(&keys)?.into_iter().map(|s| (s.chart_sha256, s)).collect();
     let mut replay_slot_map = replay_slot_map(score_db, &keys)?;
     let chart_ids: Vec<i64> = entries
         .iter()
@@ -505,10 +514,10 @@ fn load_select_items_in_table_filtered(
         .into_iter()
         .map(|entry| {
             let table_level = format!("{symbol}{}", entry.level);
-            let score_sha256 = entry_score_sha256(&entry);
-            let best_score = score_sha256.and_then(|hash| score_map.remove(&hash));
+            let score_key = entry_score_key(&entry, ln_policy_setting);
+            let best_score = score_key.and_then(|key| score_map.remove(&key));
             let replay_slots =
-                score_sha256.and_then(|hash| replay_slot_map.remove(&hash)).unwrap_or([false; 4]);
+                score_key.and_then(|key| replay_slot_map.remove(&key)).unwrap_or([false; 4]);
             let chart_analysis =
                 entry.chart.as_ref().and_then(|chart| analysis_map.remove(&chart.chart_id));
             SelectItem::Chart(select_chart_row_from_table_entry(
@@ -627,6 +636,16 @@ fn entry_score_sha256(entry: &TableEntryListItem) -> Option<[u8; 32]> {
     None
 }
 
+fn entry_score_key(
+    entry: &TableEntryListItem,
+    ln_policy_setting: LnPolicySetting,
+) -> Option<ScoreKey> {
+    if let Some(chart) = &entry.chart {
+        return Some(score_key_for_chart(chart, ln_policy_setting));
+    }
+    entry_score_sha256(entry).map(|sha256| ScoreKey::new(sha256, LnScorePolicy::ForceLn))
+}
+
 fn select_chart_row_from_table_entry(
     entry: TableEntryListItem,
     chart_analysis: Option<ChartAnalysisSummary>,
@@ -659,6 +678,7 @@ pub fn load_select_items_in_folder(
     library_db: &LibraryDatabase,
     score_db: &ScoreDatabase,
     folder_path: &str,
+    ln_policy_setting: LnPolicySetting,
 ) -> Result<Vec<SelectItem>> {
     // 子孫 folder_path を 1 回だけ引き、直下の子と各子が leaf かどうかを
     // Rust 側で集計する。`/` 区切り後の最初のセグメントが「直下の子の名前」、
@@ -706,7 +726,8 @@ pub fn load_select_items_in_folder(
     fetch_paths.extend(leaf_folder_paths.iter().map(String::as_str));
     let all_charts = library_db.list_charts_in_folders(&fetch_paths)?;
 
-    let chart_items = chart_items_with_enrichment(library_db, score_db, all_charts)?;
+    let chart_items =
+        chart_items_with_enrichment(library_db, score_db, all_charts, ln_policy_setting)?;
 
     let mut items = Vec::with_capacity(non_leaf_folders.len() + chart_items.len());
     for (path, name) in non_leaf_folders {
@@ -724,9 +745,10 @@ pub fn load_select_items_for_search(
     library_db: &LibraryDatabase,
     score_db: &ScoreDatabase,
     query: &str,
+    ln_policy_setting: LnPolicySetting,
 ) -> Result<Vec<SelectItem>> {
     let charts = library_db.search_charts(query)?;
-    chart_items_with_enrichment(library_db, score_db, charts)
+    chart_items_with_enrichment(library_db, score_db, charts, ln_policy_setting)
 }
 
 /// Wraps a `ChartListItem` set into `SelectItem::Chart` entries with best-score,
@@ -735,11 +757,15 @@ fn chart_items_with_enrichment(
     library_db: &LibraryDatabase,
     score_db: &ScoreDatabase,
     all_charts: Vec<ChartListItem>,
+    ln_policy_setting: LnPolicySetting,
 ) -> Result<Vec<SelectItem>> {
     let keys: Vec<ScoreKey> =
-        all_charts.iter().map(|c| ScoreKey::new(c.sha256, LnScorePolicy::ForceLn)).collect();
-    let mut score_map: HashMap<[u8; 32], BestScoreSummary> =
-        score_db.best_scores_for_charts(&keys)?.into_iter().map(|s| (s.chart_sha256, s)).collect();
+        all_charts.iter().map(|c| score_key_for_chart(c, ln_policy_setting)).collect();
+    let mut score_map: HashMap<ScoreKey, BestScoreSummary> = score_db
+        .best_scores_for_charts(&keys)?
+        .into_iter()
+        .map(|s| (ScoreKey::new(s.chart_sha256, s.ln_policy), s))
+        .collect();
     let mut replay_slot_map = replay_slot_map(score_db, &keys)?;
     let chart_ids: Vec<i64> = all_charts.iter().map(|c| c.chart_id).collect();
     let mut analysis_map = library_db.chart_analysis_summaries_by_chart_ids(&chart_ids)?;
@@ -768,8 +794,9 @@ fn chart_items_with_enrichment(
 
     let mut items = Vec::with_capacity(all_charts.len());
     for chart in all_charts {
-        let best_score = score_map.remove(&chart.sha256);
-        let replay_slots = replay_slot_map.remove(&chart.sha256).unwrap_or([false; 4]);
+        let score_key = score_key_for_chart(&chart, ln_policy_setting);
+        let best_score = score_map.remove(&score_key);
+        let replay_slots = replay_slot_map.remove(&score_key).unwrap_or([false; 4]);
         let table_level = md5_level_map
             .remove(&hash_to_hex(&chart.md5))
             .or_else(|| sha256_level_map.remove(&hash_to_hex(&chart.sha256)))
@@ -792,22 +819,29 @@ fn chart_items_with_enrichment(
 fn replay_slot_map(
     score_db: &ScoreDatabase,
     keys: &[ScoreKey],
-) -> Result<HashMap<[u8; 32], [bool; 4]>> {
+) -> Result<HashMap<ScoreKey, [bool; 4]>> {
     Ok(score_db
         .replay_slots_for_charts(keys)?
         .into_iter()
-        .map(|ReplaySlotSummary { chart_sha256, replay_slots, .. }| (chart_sha256, replay_slots))
+        .map(|ReplaySlotSummary { chart_sha256, ln_policy, replay_slots }| {
+            (ScoreKey::new(chart_sha256, ln_policy), replay_slots)
+        })
         .collect())
+}
+
+fn score_key_for_chart(chart: &ChartListItem, ln_policy_setting: LnPolicySetting) -> ScoreKey {
+    ScoreKey::new(chart.sha256, score_ln_policy(ln_policy_setting, chart.ln_profile))
 }
 
 #[cfg(test)]
 mod tests {
     use bmz_chart::hash::compute_chart_identity;
-    use bmz_chart::model::{ChartMetadata, PlayableChart};
+    use bmz_chart::model::{ChartMetadata, LongNotePair, LongNoteStyle, PlayableChart};
     use bmz_core::clear::{ClearType, GaugeType};
     use bmz_core::ids::NoteId;
     use bmz_core::judge::{Judge, TimingSide};
-    use bmz_core::time::TimeUs;
+    use bmz_core::lane::Lane;
+    use bmz_core::time::{ChartTick, TimeUs};
     use bmz_gameplay::judge::model::JudgementEvent;
     use bmz_gameplay::score::ScoreState;
     use rusqlite::Connection;
@@ -828,7 +862,9 @@ mod tests {
         library_db.upsert_chart_import(&record_for_chart("/songs/beta.bms", &beta)).unwrap();
         score_db.insert_score(&score_for_chart(alpha.identity.file_sha256)).unwrap();
 
-        let items = load_select_items_in_folder(&library_db, &score_db, "/songs").unwrap();
+        let items =
+            load_select_items_in_folder(&library_db, &score_db, "/songs", LnPolicySetting::AutoLn)
+                .unwrap();
 
         let charts: Vec<_> = items
             .iter()
@@ -865,13 +901,42 @@ mod tests {
                 .unwrap();
         }
 
-        let items = load_select_items_in_folder(&library_db, &score_db, "/songs").unwrap();
+        let items =
+            load_select_items_in_folder(&library_db, &score_db, "/songs", LnPolicySetting::AutoLn)
+                .unwrap();
 
         let row = items
             .iter()
             .find_map(|i| if let SelectItem::Chart(r) = i { Some(r) } else { None })
             .unwrap();
         assert_eq!(row.replay_slots, [true, true, true, true]);
+    }
+
+    #[test]
+    fn load_select_items_uses_profile_ln_policy_for_score_lookup() {
+        let (mut library_db, mut score_db) = open_in_memory_dbs();
+        let mut alpha = chart("Alpha");
+        alpha.long_notes.push(undefined_ln_pair());
+        library_db.upsert_chart_import(&record_for_chart("/songs/alpha.bms", &alpha)).unwrap();
+        let mut force_ln_score = score_for_chart(alpha.identity.file_sha256);
+        force_ln_score.ln_policy = LnScorePolicy::ForceLn;
+        force_ln_score.score.judges.slow_pgreat = 50;
+        let mut force_cn_score = score_for_chart(alpha.identity.file_sha256);
+        force_cn_score.ln_policy = LnScorePolicy::ForceCn;
+        force_cn_score.score.judges.slow_pgreat = 100;
+        score_db.insert_score(&force_ln_score).unwrap();
+        score_db.insert_score(&force_cn_score).unwrap();
+
+        let items =
+            load_select_items_in_folder(&library_db, &score_db, "/songs", LnPolicySetting::AutoCn)
+                .unwrap();
+
+        let row = items
+            .iter()
+            .find_map(|i| if let SelectItem::Chart(r) = i { Some(r) } else { None })
+            .unwrap();
+        assert_eq!(row.best_score.as_ref().map(|s| s.ln_policy), Some(LnScorePolicy::ForceCn));
+        assert_eq!(row.best_score.as_ref().map(|s| s.ex_score), Some(200));
     }
 
     #[test]
@@ -886,7 +951,9 @@ mod tests {
             .unwrap();
         library_db.upsert_chart_import(&record_for_chart("/bms/song_b.bms", &chart_b)).unwrap();
 
-        let items = load_select_items_in_folder(&library_db, &score_db, "/bms").unwrap();
+        let items =
+            load_select_items_in_folder(&library_db, &score_db, "/bms", LnPolicySetting::AutoLn)
+                .unwrap();
 
         // genre is a leaf folder so its chart appears directly, not as a Folder entry
         assert_eq!(items.len(), 2);
@@ -914,7 +981,9 @@ mod tests {
             .unwrap();
         library_db.upsert_chart_import(&record_for_chart("/bms/song_b.bms", &chart_b)).unwrap();
 
-        let items = load_select_items_in_folder(&library_db, &score_db, "/bms").unwrap();
+        let items =
+            load_select_items_in_folder(&library_db, &score_db, "/bms", LnPolicySetting::AutoLn)
+                .unwrap();
 
         assert_eq!(items.len(), 2);
         assert!(matches!(&items[0], SelectItem::Folder { name, .. } if name == "genre"));
@@ -987,6 +1056,21 @@ mod tests {
         }
     }
 
+    fn undefined_ln_pair() -> LongNotePair {
+        LongNotePair {
+            lane: Lane::Key1,
+            style: LongNoteStyle::ChannelPair,
+            mode: None,
+            start_note_id: NoteId(10),
+            end_note_id: NoteId(11),
+            start_tick: ChartTick(0),
+            end_tick: ChartTick(192),
+            start_time: TimeUs(0),
+            end_time: TimeUs(1_000_000),
+            sound: None,
+        }
+    }
+
     #[test]
     fn load_select_items_attaches_table_level_via_md5() {
         let (mut library_db, score_db) = open_in_memory_dbs();
@@ -996,7 +1080,9 @@ mod tests {
         let table = difficulty_table_for_md5(&alpha.identity.file_md5, "★", "3");
         library_db.upsert_difficulty_table(&table).unwrap();
 
-        let items = load_select_items_in_folder(&library_db, &score_db, "/songs").unwrap();
+        let items =
+            load_select_items_in_folder(&library_db, &score_db, "/songs", LnPolicySetting::AutoLn)
+                .unwrap();
 
         let row = items
             .iter()
@@ -1018,7 +1104,9 @@ mod tests {
             .upsert_difficulty_table(&difficulty_table_for_md5(&alpha.identity.file_md5, "☆", "5"))
             .unwrap();
 
-        let items = load_select_items_in_folder(&library_db, &score_db, "/songs").unwrap();
+        let items =
+            load_select_items_in_folder(&library_db, &score_db, "/songs", LnPolicySetting::AutoLn)
+                .unwrap();
 
         let row = items
             .iter()
@@ -1038,7 +1126,9 @@ mod tests {
         let table = difficulty_table_for_sha256(&alpha.identity.file_sha256, "◆", "7");
         library_db.upsert_difficulty_table(&table).unwrap();
 
-        let items = load_select_items_in_folder(&library_db, &score_db, "/songs").unwrap();
+        let items =
+            load_select_items_in_folder(&library_db, &score_db, "/songs", LnPolicySetting::AutoLn)
+                .unwrap();
 
         let row = items
             .iter()
@@ -1155,9 +1245,13 @@ mod tests {
         };
         library_db.upsert_difficulty_table(&table).unwrap();
 
-        let items =
-            load_select_items_in_table(&library_db, &score_db, "https://example.com/table/")
-                .unwrap();
+        let items = load_select_items_in_table(
+            &library_db,
+            &score_db,
+            "https://example.com/table/",
+            LnPolicySetting::AutoLn,
+        )
+        .unwrap();
 
         assert_eq!(items.len(), 2);
         let titles: Vec<_> =
@@ -1343,6 +1437,7 @@ mod tests {
             &score_db,
             "https://example.com/insane/",
             "5",
+            LnPolicySetting::AutoLn,
         )
         .unwrap();
 
@@ -1379,6 +1474,7 @@ mod tests {
             &score_db,
             "https://example.com/missing/",
             "12",
+            LnPolicySetting::AutoLn,
         )
         .unwrap();
 
@@ -1423,6 +1519,7 @@ mod tests {
             &score_db,
             "https://example.com/registered/",
             "12",
+            LnPolicySetting::AutoLn,
         )
         .unwrap();
 
@@ -1475,6 +1572,7 @@ mod tests {
             &score_db,
             "https://example.com/dedupe/",
             "12",
+            LnPolicySetting::AutoLn,
         )
         .unwrap();
 
@@ -1527,6 +1625,7 @@ mod tests {
             &score_db,
             "https://example.com/dual/",
             "12",
+            LnPolicySetting::AutoLn,
         )
         .unwrap();
 
@@ -1581,6 +1680,7 @@ mod tests {
             &score_db,
             "https://example.com/dup-import/",
             "12",
+            LnPolicySetting::AutoLn,
         )
         .unwrap();
 
@@ -1656,7 +1756,9 @@ mod tests {
         library_db.upsert_chart_import(&record_for_chart("/songs/b.bms", &unrelated)).unwrap();
         score_db.insert_score(&score_for_chart(sky.identity.file_sha256)).unwrap();
 
-        let items = load_select_items_for_search(&library_db, &score_db, "blue").unwrap();
+        let items =
+            load_select_items_for_search(&library_db, &score_db, "blue", LnPolicySetting::AutoLn)
+                .unwrap();
         assert_eq!(items.len(), 1);
         let row = match &items[0] {
             SelectItem::Chart(r) => r,

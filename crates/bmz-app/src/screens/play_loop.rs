@@ -106,6 +106,13 @@ pub fn advance_play_screen_until_result(
             played_at,
             applied_arrange,
             None,
+            crate::storage::score_db::ScoreKey::new(
+                session.chart.identity.file_sha256,
+                crate::ln_policy::score_ln_policy(
+                    crate::ln_policy::LnPolicySetting::AutoLn,
+                    crate::ln_policy::ChartLnProfile::from_chart(&session.chart),
+                ),
+            ),
             false,
         )?;
         let mut result_graph = crate::screens::result_model::ResultGraphCollector::default();
@@ -171,6 +178,7 @@ pub fn advance_running_play_session_until_result(
             played_at,
             &running.applied_arrange,
             running.target_ex_score,
+            running.score_key,
             running.practice_mode,
         )?;
         finished.summary.graph = running.result_graph.snapshot();

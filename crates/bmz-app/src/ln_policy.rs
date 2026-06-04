@@ -142,6 +142,10 @@ pub fn score_ln_policy(setting: LnPolicySetting, profile: ChartLnProfile) -> LnS
     LnScorePolicy::auto(setting.mode())
 }
 
+pub fn score_ln_policy_for_chart(setting: LnPolicySetting, chart: &PlayableChart) -> LnScorePolicy {
+    score_ln_policy(setting, ChartLnProfile::from_chart(chart))
+}
+
 pub fn effective_ln_mode(setting: LnPolicySetting, profile: ChartLnProfile) -> LongNoteMode {
     match score_ln_policy(setting, profile) {
         LnScorePolicy::AutoLn | LnScorePolicy::ForceLn => LongNoteMode::Ln,

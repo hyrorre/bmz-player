@@ -15,7 +15,7 @@ use crate::config::app_config::AppConfig;
 use crate::config::play::{gauge_auto_shift_from_config, gauge_type_from_config};
 use crate::config::profile_config::{GaugeAutoShiftConfig, GaugeTypeConfig, ProfileConfig};
 use crate::input::winit::WinitInputBackend;
-use crate::ln_policy::LnScorePolicy;
+use crate::ln_policy::score_ln_policy_for_chart;
 use crate::screens::play_session::{
     PlaySessionOptions, PreloadedPlaySession, PreparedPlaySession,
     build_prepared_play_session_from_preloaded,
@@ -148,8 +148,11 @@ pub fn start_running_play_session_for_chart_with_input_backend(
         input_backend,
     )?;
     let chart_sha256 = prepared.session.chart.identity.file_sha256;
-    let score_key = ScoreKey::new(chart_sha256, LnScorePolicy::ForceLn);
-    let mut running = open_prepared_play_audio(&app_config.audio, prepared)?;
+    let score_key = ScoreKey::new(
+        chart_sha256,
+        score_ln_policy_for_chart(profile.play.ln_mode_policy, &prepared.session.chart),
+    );
+    let mut running = open_prepared_play_audio(&app_config.audio, prepared, score_key)?;
     running.best_ex_score = score_db.best_ex_score(score_key).unwrap_or(None);
     running.best_ghost =
         score_db.best_ghost(score_key, running.session.chart.total_notes).unwrap_or(None);
@@ -192,11 +195,15 @@ pub fn prepare_winit_play_session_from_preloaded(
 pub fn open_prepared_winit_play_session(
     score_db: &ScoreDatabase,
     app_config: &AppConfig,
+    profile: &ProfileConfig,
     prepared: PreparedWinitPlaySession,
 ) -> Result<StartedWinitPlaySession> {
     let chart_sha256 = prepared.prepared.session.chart.identity.file_sha256;
-    let score_key = ScoreKey::new(chart_sha256, LnScorePolicy::ForceLn);
-    let mut running = open_prepared_play_audio(&app_config.audio, prepared.prepared)?;
+    let score_key = ScoreKey::new(
+        chart_sha256,
+        score_ln_policy_for_chart(profile.play.ln_mode_policy, &prepared.prepared.session.chart),
+    );
+    let mut running = open_prepared_play_audio(&app_config.audio, prepared.prepared, score_key)?;
     running.best_ex_score = score_db.best_ex_score(score_key).unwrap_or(None);
     running.best_ghost =
         score_db.best_ghost(score_key, running.session.chart.total_notes).unwrap_or(None);

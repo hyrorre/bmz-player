@@ -92,7 +92,7 @@ pub fn store_play_result(
             if !evaluate_slot_update(rule, prev.as_ref(), &candidate) {
                 continue;
             }
-            let file_name = replay_slot_file_name(result.chart_sha256, slot);
+            let file_name = replay_slot_file_name(result.chart_sha256, request.ln_policy, slot);
             let path = profile_paths.replay_dir.join(&file_name);
             let replay = ReplayFile::new(
                 result.chart_sha256,

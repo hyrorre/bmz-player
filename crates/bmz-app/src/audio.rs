@@ -15,6 +15,7 @@ use crate::screens::play_finish::FinishedPlaySession;
 use crate::screens::play_session::{AppliedArrange, PreparedPlaySession};
 use crate::screens::play_snapshot::BgaFrameCatalog;
 use crate::screens::result_model::ResultGraphCollector;
+use crate::storage::score_db::ScoreKey;
 use crate::video_bga::ActiveVideoBgaDecoder;
 
 pub struct AppAudioOutput {
@@ -28,6 +29,7 @@ pub struct RunningPlaySession {
     pub sample_report: Vec<LoadedSampleReport>,
     pub finished: Option<FinishedPlaySession>,
     pub result_graph: ResultGraphCollector,
+    pub score_key: ScoreKey,
     /// プレイ開始時に DB から取得したベスト EX スコア。未取得なら None。
     pub best_ex_score: Option<u32>,
     /// プレイ開始時に DB から取得した beatoraja 互換 ghost。
@@ -108,6 +110,7 @@ impl SystemAudio {
 pub fn open_prepared_play_audio(
     config: &AudioConfig,
     prepared: PreparedPlaySession,
+    score_key: ScoreKey,
 ) -> Result<RunningPlaySession> {
     let audio = open_app_audio_output(config, prepared.audio)?;
     let mut session = prepared.session;
@@ -119,6 +122,7 @@ pub fn open_prepared_play_audio(
         sample_report: prepared.sample_report,
         finished: None,
         result_graph: ResultGraphCollector::default(),
+        score_key,
         best_ex_score: None,
         best_ghost: None,
         target_ex_score: prepared.target_ex_score,
