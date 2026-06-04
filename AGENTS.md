@@ -229,6 +229,10 @@ cargo run -p bmz-app -- songs list
 - 手編集は `apply_patch` を使います。
 - `cargo fmt` が広範囲を整形した場合、今回の作業と無関係な差分はコミットに混ぜないでください。
 - 既存 warning は、今回の作業に関係しないなら原則触りません。
+- Windowsで作業する時は、以下の点に注意。
+  - Codex の sandbox 下では `pwsh` ではなく Windows 標準の `powershell.exe` 5.1 を使います。
+  - Python は Codex 付属のものを使います。
+
 
 ## Gameplay Notes
 
