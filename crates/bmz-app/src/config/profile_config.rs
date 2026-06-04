@@ -158,6 +158,8 @@ pub enum JudgeAlgorithmConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LaneViewConfig {
     pub hispeed: f32,
+    #[serde(default = "default_hispeed_mode")]
+    pub hispeed_mode: HispeedModeConfig,
     /// SUDDEN+ レーンカバー量。0..=1000 の整数で持ち、ランタイムでは /1000 して扱う。
     pub sudden: u32,
     /// LIFT 量。0..=1000 の整数で持ち、ランタイムでは /1000 して扱う。
@@ -165,6 +167,17 @@ pub struct LaneViewConfig {
     /// HIDDEN レーンカバー量。0..=1000 の整数で持ち、ランタイムでは /1000 して扱う。
     pub hidden: u32,
     pub target_green_number: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum HispeedModeConfig {
+    Normal,
+    Floating,
+}
+
+fn default_hispeed_mode() -> HispeedModeConfig {
+    HispeedModeConfig::Normal
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -217,13 +230,15 @@ pub struct BindingConfigEntry {
     pub action: Option<InputActionConfig>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum InputActionConfig {
     E1,
     #[serde(rename = "Enter")]
     SelectEnter,
     E2,
+    E3,
+    E4,
     #[serde(rename = "OptionArrange")]
     SelectOptionArrange,
     #[serde(rename = "OptionGauge")]
@@ -555,6 +570,7 @@ impl ProfileConfig {
             },
             lane: LaneViewConfig {
                 hispeed: 2.0,
+                hispeed_mode: default_hispeed_mode(),
                 sudden: 0,
                 lift: 0,
                 hidden: 0,
@@ -625,6 +641,8 @@ pub fn default_keyboard_bindings() -> Vec<BindingConfigEntry> {
         action_binding("C", InputActionConfig::SelectEnter),
         action_binding("V", InputActionConfig::SelectEnter),
         action_binding("W", InputActionConfig::E2),
+        action_binding("E", InputActionConfig::E3),
+        action_binding("R", InputActionConfig::E4),
         action_binding("Z", InputActionConfig::SelectOptionArrange),
         action_binding("X", InputActionConfig::SelectOptionGauge),
         action_binding("C", InputActionConfig::SelectOptionAssist),
@@ -757,5 +775,7 @@ mod tests {
         assert!(!toml.contains("start_key"));
         assert!(toml.contains("action = \"E1\""));
         assert!(toml.contains("action = \"E2\""));
+        assert!(toml.contains("action = \"E3\""));
+        assert!(toml.contains("action = \"E4\""));
     }
 }

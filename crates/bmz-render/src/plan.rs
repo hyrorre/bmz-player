@@ -108,6 +108,7 @@ pub struct TextureId(pub u32);
 pub struct TextStyle {
     pub font_id: Option<String>,
     pub size: f32,
+    pub bitmap_size: Option<f32>,
     pub color: Color,
     pub layer: TextLayer,
     pub align: TextAlign,
@@ -914,6 +915,7 @@ fn plan_play(
         course_stage: snapshot.course_stage,
         hit_error_ring: snapshot.hit_error_ring.values,
         hit_error_ring_index: snapshot.hit_error_ring.index,
+        skin_loaded: ready_timer_ms.is_some(),
         ..crate::skin::SkinDrawState::default()
     };
     let play_skin = skin.with_play_graphs(
@@ -1210,6 +1212,7 @@ fn plan_decide(
             total_duration_ms: snapshot.note_display_duration_ms,
             lane_cover: snapshot.lane_cover,
             hidden_cover: snapshot.hidden_cover,
+            fadeout_ms: snapshot.fadeout_elapsed_ms,
             ..crate::skin::SkinDrawState::default()
         };
         let state = advance_skin_dynamic_timers(skin, dynamic_timers, state, play_elapsed_ms);
@@ -1320,6 +1323,7 @@ fn push_scene_overlay_text(commands: &mut Vec<DrawCommand>, overlay: &str, origi
         style: TextStyle {
             font_id: None,
             size: OVERLAY_FONT_SIZE_RATIO,
+            bitmap_size: None,
             color: Color::rgba(0.9, 0.9, 0.9, 0.65),
             layer: TextLayer::Ui,
             align: TextAlign::Right,
@@ -1837,6 +1841,7 @@ fn default_play_skin(snapshot: &RenderSnapshot) -> SkinDefinition {
                 style: TextStyle {
                     font_id: None,
                     size: 0.05,
+                    bitmap_size: None,
                     color: Color::rgb(0.94, 0.98, 1.0),
                     layer: TextLayer::Skin,
                     align: TextAlign::Left,
@@ -1860,6 +1865,7 @@ fn default_play_skin(snapshot: &RenderSnapshot) -> SkinDefinition {
                 style: TextStyle {
                     font_id: None,
                     size: 0.03,
+                    bitmap_size: None,
                     color: Color::rgb(0.96, 0.92, 0.54),
                     layer: TextLayer::Skin,
                     align: TextAlign::Left,
@@ -2254,6 +2260,7 @@ mod tests {
     use bmz_core::lane::Lane;
     use bmz_core::time::TimeUs;
 
+    use crate::skin::SkinDocument;
     use crate::snapshot::{
         DisplayInput, DisplayJudgeCounts, DisplayJudgement, RenderSnapshot, VisibleBarLine,
         VisibleLongNote, VisibleNote,
@@ -3083,6 +3090,9 @@ mod tests {
                 "source": [{"id": 1, "path": "panel.png"}],
                 "image": [{"id": "panel", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10}],
                 "destination": [
+                    {"id": "panel", "op": [80], "dst": [
+                        {"time": 0, "x": 80, "y": 0, "w": 10, "h": 10}
+                    ]},
                     {"id": "panel", "timer": 40, "dst": [
                         {"time": 0, "x": 0, "y": 0, "w": 10, "h": 10},
                         {"time": 1000, "x": 50, "y": 0, "w": 10, "h": 10}
@@ -3123,14 +3133,20 @@ mod tests {
             &mut dynamic_timers,
         );
 
-        assert!(!before_plan
-            .commands
-            .iter()
-            .any(|command| matches!(command, DrawCommand::Image { texture, .. } if *texture == TextureId(99))));
+        assert!(before_plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Image { texture, rect, .. }
+                if *texture == TextureId(99) && approx_eq(rect.x, 0.8)
+        )));
         assert!(after_plan.commands.iter().any(|command| matches!(
             command,
             DrawCommand::Image { texture, rect, .. }
                 if *texture == TextureId(99) && approx_eq(rect.x, 0.25)
+        )));
+        assert!(!after_plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Image { texture, rect, .. }
+                if *texture == TextureId(99) && approx_eq(rect.x, 0.8)
         )));
     }
 
@@ -3326,6 +3342,69 @@ mod tests {
         let plan = DrawPlan::from_scene(&AppSceneSnapshot::Select(Default::default()));
 
         assert!(!plan.commands.is_empty());
+    }
+
+    #[test]
+    fn decide_plan_activates_fadeout_timer_destinations() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 6,
+                "w": 100,
+                "h": 100,
+                "destination": [
+                    { "id": -110, "timer": 2, "dst": [
+                        { "time": 0, "x": 0, "y": 0, "w": 100, "h": 100, "a": 0 },
+                        { "time": 200, "a": 255 }
+                    ] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let manifest: SkinManifest = toml::from_str("").unwrap();
+        let skin = SkinContext::from_manifest_and_document(manifest, document, Vec::new());
+        let mut dynamic_timers = crate::skin::DynamicTimerRuntime::default();
+
+        let inactive = plan_decide(&RenderSnapshot::default(), &skin, &mut dynamic_timers);
+        let active = plan_decide(
+            &RenderSnapshot { fadeout_elapsed_ms: Some(100), ..RenderSnapshot::default() },
+            &skin,
+            &mut dynamic_timers,
+        );
+
+        assert!(!inactive.commands.iter().any(|command| {
+            matches!(
+                command,
+                DrawCommand::Rect {
+                    rect: Rect { x, y, width, height },
+                    color: Color { r, g, b, a },
+                } if approx_eq(*x, 0.0)
+                    && approx_eq(*y, 0.0)
+                    && approx_eq(*width, 1.0)
+                    && approx_eq(*height, 1.0)
+                    && approx_eq(*r, 0.0)
+                    && approx_eq(*g, 0.0)
+                    && approx_eq(*b, 0.0)
+                    && approx_eq(*a, 128.0 / 255.0)
+            )
+        }));
+        assert!(active.commands.iter().any(|command| {
+            matches!(
+                command,
+                DrawCommand::Rect {
+                    rect: Rect { x, y, width, height },
+                    color: Color { r, g, b, a },
+                } if approx_eq(*x, 0.0)
+                    && approx_eq(*y, 0.0)
+                    && approx_eq(*width, 1.0)
+                    && approx_eq(*height, 1.0)
+                    && approx_eq(*r, 0.0)
+                    && approx_eq(*g, 0.0)
+                    && approx_eq(*b, 0.0)
+                    && approx_eq(*a, 128.0 / 255.0)
+            )
+        }));
     }
 
     #[test]

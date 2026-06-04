@@ -1005,6 +1005,12 @@ pub struct SkinClickHit {
     pub rect: Rect,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SkinSliderHit {
+    pub slider_type: i32,
+    pub value: f32,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub struct SkinAnimationDef {
     pub time: Option<i32>,
@@ -1255,6 +1261,16 @@ impl SkinContext {
         )
     }
 
+    pub fn select_slider_hit(
+        &self,
+        snapshot: &SelectSnapshot,
+        x: f32,
+        y: f32,
+    ) -> Option<SkinSliderHit> {
+        let document = self.document.as_ref()?;
+        document.select_slider_hit(snapshot, &self.select_settings_dest_index, x, y)
+    }
+
     /// 静的 destination を `{"id":"notes"}` マーカーと `timer: 3` (FAILED) で分割して返す。
     /// `.0` はノーツ背面、`.1` はノーツ前面、`.2` は閉店/暗転オーバーレイ（最前面）。
     pub fn static_document_items_split_for_state_and_text(
@@ -1484,6 +1500,11 @@ pub struct SkinDrawState {
     pub select_target_index: usize,
     pub select_bga_index: usize,
     pub select_assist_index: usize,
+    pub select_mode_index: usize,
+    pub select_sort_index: usize,
+    pub select_ln_mode_index: usize,
+    pub mouse_x: Option<f32>,
+    pub mouse_y: Option<f32>,
     pub combo: u32,
     pub max_combo: u32,
     pub ex_score: u32,
@@ -1529,7 +1550,7 @@ pub struct SkinDrawState {
     pub timeleft_ms: i32,
     /// ノーツ表示時間 ms (NUMBER_DURATION=312 / NUMBER_DURATION_GREEN=313 に使用)。
     pub total_duration_ms: i32,
-    /// レーンカバー割合 0.0-1.0 (NUMBER_LANECOVER1=14 に使用)。0=なし, 1=全画面。
+    /// レーンカバー割合 0.0-1.0 (NUMBER_LANECOVER1=14 は 0..=1000 で返す)。
     pub lane_cover: f32,
     /// リフト量 0.0-1.0 (NUMBER_LIFT1=314 に使用)。
     pub lift: f32,
@@ -1617,6 +1638,16 @@ pub struct SkinDrawState {
     pub select_in_library: bool,
     /// 選択中曲のノーツ数。
     pub select_total_notes: u32,
+    /// beatoraja SongInformation-derived selected chart detail numbers.
+    pub select_chart_normal_notes: u32,
+    pub select_chart_long_notes: u32,
+    pub select_chart_scratch_notes: u32,
+    pub select_chart_long_scratch_notes: u32,
+    pub select_chart_density: f32,
+    pub select_chart_peak_density: f32,
+    pub select_chart_end_density: f32,
+    pub select_chart_total_gauge: f32,
+    pub select_chart_main_bpm: f32,
     /// 選択中曲の代表BPM。
     pub select_bpm: f32,
     /// 選択中曲の最小BPM。
@@ -1713,6 +1744,11 @@ impl Default for SkinDrawState {
             select_target_index: 0,
             select_bga_index: 0,
             select_assist_index: 0,
+            select_mode_index: 0,
+            select_sort_index: 0,
+            select_ln_mode_index: 0,
+            mouse_x: None,
+            mouse_y: None,
             combo: 0,
             max_combo: 0,
             ex_score: 0,
@@ -1787,6 +1823,15 @@ impl Default for SkinDrawState {
             select_is_folder: false,
             select_in_library: true,
             select_total_notes: 0,
+            select_chart_normal_notes: 0,
+            select_chart_long_notes: 0,
+            select_chart_scratch_notes: 0,
+            select_chart_long_scratch_notes: 0,
+            select_chart_density: 0.0,
+            select_chart_peak_density: 0.0,
+            select_chart_end_density: 0.0,
+            select_chart_total_gauge: 0.0,
+            select_chart_main_bpm: 0.0,
             select_bpm: 0.0,
             select_min_bpm: 0.0,
             select_max_bpm: 0.0,
@@ -2299,7 +2344,8 @@ impl SkinDocument {
         let mut front = Vec::new();
         let mut failed_overlay = Vec::new();
         let mut after_notes_marker = false;
-        for destination in self.all_destinations(&enabled_options) {
+        let destinations = self.all_destinations(&enabled_options);
+        for (index, destination) in destinations.iter().enumerate() {
             // `{"id":"notes"}` はノーツ描画位置マーカー。以降の destination はノーツ前面に積む。
             if destination.id == "notes" {
                 after_notes_marker = true;
@@ -2337,6 +2383,14 @@ impl SkinDocument {
                 text_state,
                 sources,
             ) {
+                let after_notes_marker = after_notes_marker
+                    || self.destination_looks_like_pre_notes_judge_line(
+                        destination,
+                        &images,
+                        &enabled_options,
+                        state,
+                        destinations.get(index + 1).copied(),
+                    );
                 let target = destination_render_layer(
                     destination.timer,
                     after_notes_marker,
@@ -2348,6 +2402,38 @@ impl SkinDocument {
             }
         }
         (behind, front, failed_overlay)
+    }
+
+    fn destination_looks_like_pre_notes_judge_line(
+        &self,
+        destination: &SkinDestinationDef,
+        images: &HashMap<&str, &SkinImageDef>,
+        enabled_options: &[i32],
+        state: SkinDrawState,
+        next_destination: Option<&SkinDestinationDef>,
+    ) -> bool {
+        if !matches!(next_destination, Some(next) if next.id == "notes")
+            || destination.timer.is_some()
+            || !destination_uses_lift_offset_only(destination)
+            || skin_image_for_destination_id(destination.id.as_str(), images).is_none()
+        {
+            return false;
+        }
+        let Some(frame) = resolve_destination_frame(destination, 0, enabled_options, state) else {
+            return false;
+        };
+        if frame.w < 100 || frame.h <= 0 || frame.h > 48 {
+            return false;
+        }
+        let Some(note) = &self.note else {
+            return false;
+        };
+        flatten_dst_entries(&note.dst, enabled_options).into_iter().any(|note_frame| {
+            let Some(note_y) = note_frame.y else {
+                return false;
+            };
+            frame.y >= note_y && frame.y <= note_y.saturating_add(64)
+        })
     }
 
     /// `hiddenCover.disapearLine` をレーンカバー系 (HIDDEN / SUDDEN+ / LIFT) のクロップ境界として使う。
@@ -2421,11 +2507,19 @@ impl SkinDocument {
             );
         }
 
-        let elapsed = skin_timer_elapsed_ms(destination.timer, state)?;
+        let value_for_destination = self.value.iter().find(|value| value.id == destination.id);
+        let elapsed = skin_timer_elapsed_ms(destination.timer, state).or_else(|| {
+            value_for_destination
+                .filter(|value| pre_ready_lane_cover_value_destination(destination, value, state))
+                .map(|_| 0)
+        })?;
         let mut frame = resolve_destination_frame(destination, elapsed, enabled_options, state)?;
         let is_hidden_cover_destination =
             self.hidden_cover.iter().any(|cover| cover.id == destination.id);
         apply_skin_offset_to_frame(destination, &mut frame, state, is_hidden_cover_destination);
+        if !destination_mouse_rect_contains(destination, frame, state) {
+            return None;
+        }
         if let Some(visualizer) =
             self.hiterror_visualizer.iter().find(|visualizer| visualizer.id == destination.id)
         {
@@ -2639,7 +2733,7 @@ impl SkinDocument {
             )]);
         }
 
-        if let Some(value) = self.value.iter().find(|value| value.id == destination.id) {
+        if let Some(value) = value_for_destination {
             let number = skin_value_number(value, state)?;
             return Some(self.value_number_render_items(
                 &value.id,
@@ -2672,13 +2766,12 @@ impl SkinDocument {
         }
 
         if self.destination_uses_skin_gauge_overlay_render(destination) {
-            let rect = normalize_skin_frame_rect(frame, self.w, self.h);
-            let blend = if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal };
-            return Some(vec![SkinRenderItem::Rect {
-                rect,
-                color: Color::rgba(1.0, 1.0, 1.0, frame.a as f32 / 255.0),
-                blend,
-            }]);
+            return self.resolve_gauge_destination_items(
+                destination,
+                enabled_options,
+                state,
+                sources,
+            );
         }
 
         if let Some(graph) = self.graph.iter().find(|g| g.id == destination.id) {
@@ -2970,6 +3063,9 @@ impl SkinDocument {
         dynamic_timers: Option<&mut DynamicTimerRuntime>,
     ) -> (SkinDrawState, Option<&'a SelectRowSnapshot>) {
         let selected_row = snapshot.rows.iter().find(|row| row.index == snapshot.selected_index);
+        let mouse_position = snapshot.mouse_position.map(|(x, y)| {
+            (x.clamp(0.0, 1.0) * self.w as f32, (1.0 - y.clamp(0.0, 1.0)) * self.h as f32)
+        });
         let mut state = SkinDrawState {
             elapsed_ms: (snapshot.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32,
             select_bar_elapsed_ms: (snapshot.selection_time.0 / 1_000)
@@ -2986,6 +3082,9 @@ impl SkinDocument {
             select_target_index: select_target_index(&snapshot.target),
             select_bga_index: select_bga_index(&snapshot.bga),
             select_assist_index: select_assist_index(&snapshot.assist),
+            select_mode_index: select_mode_index(&snapshot.select_mode),
+            select_sort_index: select_sort_index(&snapshot.select_sort),
+            select_ln_mode_index: select_ln_mode_index(&snapshot.select_ln_mode),
             select_scroll_progress: select_scroll_progress(snapshot),
             select_master_volume: snapshot.master_volume,
             select_key_volume: snapshot.key_volume,
@@ -2996,6 +3095,7 @@ impl SkinDocument {
             select_play_level: selected_row.map(select_row_level_number).unwrap_or(0),
             play_level: selected_row.map(select_row_level_number).unwrap_or(0),
             difficulty: selected_row.map(select_row_difficulty_code).unwrap_or(0),
+            judge_rank: selected_row.and_then(|row| row.judge_rank),
             select_ex_score: selected_row.and_then(|row| row.ex_score),
             select_replay_slots: selected_row.map(|row| row.replay_slots).unwrap_or([false; 4]),
             select_replay_index: selected_row.and_then(select_row_replay_index),
@@ -3007,6 +3107,21 @@ impl SkinDocument {
             select_is_folder: selected_row.is_some_and(|row| row.is_folder),
             select_in_library: selected_row.is_none_or(|row| row.in_library),
             select_total_notes: selected_row.map(|row| row.total_notes).unwrap_or(0),
+            select_chart_normal_notes: selected_row.map(|row| row.chart_normal_notes).unwrap_or(0),
+            select_chart_long_notes: selected_row.map(|row| row.chart_long_notes).unwrap_or(0),
+            select_chart_scratch_notes: selected_row
+                .map(|row| row.chart_scratch_notes)
+                .unwrap_or(0),
+            select_chart_long_scratch_notes: selected_row
+                .map(|row| row.chart_long_scratch_notes)
+                .unwrap_or(0),
+            select_chart_density: selected_row.map(|row| row.chart_density).unwrap_or(0.0),
+            select_chart_peak_density: selected_row
+                .map(|row| row.chart_peak_density)
+                .unwrap_or(0.0),
+            select_chart_end_density: selected_row.map(|row| row.chart_end_density).unwrap_or(0.0),
+            select_chart_total_gauge: selected_row.map(|row| row.chart_total_gauge).unwrap_or(0.0),
+            select_chart_main_bpm: selected_row.map(|row| row.chart_main_bpm).unwrap_or(0.0),
             select_bpm: selected_row.map(|row| row.initial_bpm).unwrap_or(0.0),
             select_min_bpm: selected_row.map(|row| row.min_bpm).unwrap_or(0.0),
             select_max_bpm: selected_row.map(|row| row.max_bpm).unwrap_or(0.0),
@@ -3022,6 +3137,8 @@ impl SkinDocument {
             in_settings: snapshot.in_settings,
             settings_editing: snapshot.settings_editing,
             select_chart_key_mode: selected_row.and_then(|row| row.chart_key_mode),
+            mouse_x: mouse_position.map(|position| position.0),
+            mouse_y: mouse_position.map(|position| position.1),
             ..SkinDrawState::default()
         };
         if let Some(runtime) = dynamic_timers {
@@ -3042,6 +3159,36 @@ impl SkinDocument {
             .into_iter()
             .rev()
             .find(|hit| rect_contains(hit.rect, x, y))
+    }
+
+    pub fn select_slider_hit(
+        &self,
+        snapshot: &SelectSnapshot,
+        settings_dest_index: &crate::select_settings_dest::SelectSettingsDestIndex,
+        x: f32,
+        y: f32,
+    ) -> Option<SkinSliderHit> {
+        let (state, selected_row) = self.select_draw_state(snapshot, None);
+        let enabled_options = self.enabled_options();
+        self.all_destinations(&enabled_options)
+            .into_iter()
+            .filter_map(|destination| {
+                if !crate::select_settings_dest::test_select_destination_visible(
+                    settings_dest_index,
+                    destination,
+                    &enabled_options,
+                    state,
+                    snapshot,
+                    selected_row,
+                    eval_skin_draw_condition,
+                    test_skin_ops,
+                ) {
+                    return None;
+                }
+                let slider = self.slider.iter().find(|slider| slider.id == destination.id)?;
+                self.destination_slider_hit(slider, destination, &enabled_options, state, x, y)
+            })
+            .next_back()
     }
 
     fn select_click_hits(
@@ -3112,6 +3259,7 @@ impl SkinDocument {
                 select_play_level: select_row_level_number(row),
                 play_level: select_row_level_number(row),
                 difficulty: select_row_difficulty_code(row),
+                judge_rank: row.judge_rank,
                 select_ex_score: row.ex_score,
                 select_replay_slots: row.replay_slots,
                 select_replay_index: select_row_replay_index(row),
@@ -3121,6 +3269,15 @@ impl SkinDocument {
                 select_is_folder: row.is_folder,
                 select_in_library: row.in_library,
                 select_total_notes: row.total_notes,
+                select_chart_normal_notes: row.chart_normal_notes,
+                select_chart_long_notes: row.chart_long_notes,
+                select_chart_scratch_notes: row.chart_scratch_notes,
+                select_chart_long_scratch_notes: row.chart_long_scratch_notes,
+                select_chart_density: row.chart_density,
+                select_chart_peak_density: row.chart_peak_density,
+                select_chart_end_density: row.chart_end_density,
+                select_chart_total_gauge: row.chart_total_gauge,
+                select_chart_main_bpm: row.chart_main_bpm,
                 select_length_ms: row.length_ms,
                 select_play_count: row.play_count,
                 select_clear_count: row.clear_count,
@@ -3168,8 +3325,35 @@ impl SkinDocument {
         let elapsed = skin_timer_elapsed_ms(destination.timer, state)?;
         let mut frame = resolve_destination_frame(destination, elapsed, enabled_options, state)?;
         apply_skin_offset_to_frame(destination, &mut frame, state, false);
+        if !destination_mouse_rect_contains(destination, frame, state) {
+            return None;
+        }
         let rect = normalize_skin_frame_rect(frame, self.w, self.h);
         if rect.width <= 0.0 || rect.height <= 0.0 { None } else { Some(rect) }
+    }
+
+    fn destination_slider_hit(
+        &self,
+        slider: &SkinSliderDef,
+        destination: &SkinDestinationDef,
+        enabled_options: &[i32],
+        state: SkinDrawState,
+        x: f32,
+        y: f32,
+    ) -> Option<SkinSliderHit> {
+        if !slider.changeable || !matches!(slider.slider_type, 17..=19) {
+            return None;
+        }
+        let elapsed = skin_timer_elapsed_ms(destination.timer, state)?;
+        let mut frame = resolve_destination_frame(destination, elapsed, enabled_options, state)?;
+        apply_skin_offset_to_frame(destination, &mut frame, state, false);
+        if !destination_mouse_rect_contains(destination, frame, state) {
+            return None;
+        }
+        let mouse_x = x.clamp(0.0, 1.0) * self.w as f32;
+        let mouse_y = (1.0 - y.clamp(0.0, 1.0)) * self.h as f32;
+        let value = slider_value_at(slider, frame, mouse_x, mouse_y)?;
+        Some(SkinSliderHit { slider_type: slider.slider_type, value })
     }
 
     fn select_songlist_items(
@@ -3200,6 +3384,15 @@ impl SkinDocument {
                 select_is_folder: row.is_folder,
                 select_in_library: row.in_library,
                 select_total_notes: row.total_notes,
+                select_chart_normal_notes: row.chart_normal_notes,
+                select_chart_long_notes: row.chart_long_notes,
+                select_chart_scratch_notes: row.chart_scratch_notes,
+                select_chart_long_scratch_notes: row.chart_long_scratch_notes,
+                select_chart_density: row.chart_density,
+                select_chart_peak_density: row.chart_peak_density,
+                select_chart_end_density: row.chart_end_density,
+                select_chart_total_gauge: row.chart_total_gauge,
+                select_chart_main_bpm: row.chart_main_bpm,
                 select_length_ms: row.length_ms,
                 select_play_count: row.play_count,
                 select_clear_count: row.clear_count,
@@ -3283,6 +3476,7 @@ impl SkinDocument {
                 }
                 items.extend(self.select_songlist_all_child_items(
                     &songlist.graph,
+                    row,
                     row_origin,
                     images,
                     enabled_options,
@@ -3291,6 +3485,7 @@ impl SkinDocument {
                 ));
                 items.extend(self.select_songlist_all_child_items(
                     &songlist.judgegraph,
+                    row,
                     row_origin,
                     images,
                     enabled_options,
@@ -3299,6 +3494,7 @@ impl SkinDocument {
                 ));
                 items.extend(self.select_songlist_all_child_items(
                     &songlist.bpmgraph,
+                    row,
                     row_origin,
                     images,
                     enabled_options,
@@ -3321,6 +3517,7 @@ impl SkinDocument {
     fn select_songlist_all_child_items(
         &self,
         entries: &[DestinationListEntry],
+        row: &SelectRowSnapshot,
         row_origin: (i32, i32),
         images: &HashMap<&str, &SkinImageDef>,
         enabled_options: &[i32],
@@ -3329,6 +3526,19 @@ impl SkinDocument {
     ) -> Vec<SkinRenderItem> {
         let mut items = Vec::new();
         for destination in destination_entries(entries, enabled_options) {
+            if let Some(judge_graph) =
+                self.judgegraph.iter().find(|graph| graph.id == destination.id)
+            {
+                items.extend(self.select_note_distribution_graph_render_items(
+                    row,
+                    judge_graph,
+                    destination,
+                    row_origin,
+                    enabled_options,
+                    state,
+                ));
+                continue;
+            }
             if let Some(mut resolved) = self.resolve_offset_destination_items(
                 destination,
                 row_origin,
@@ -3948,11 +4158,16 @@ impl SkinDocument {
             return 0;
         };
         let max_digits = value.digit.max(0) as usize;
-        let zero_pad = value.zeropadding != 0 || value.padding != 0;
+        let padding = number_padding(value);
         let digits = if ref_id_is_signed(value.ref_id) {
-            display_signed_number_digits(number, max_digits, zero_pad, value.divx.max(1) as u32)
+            display_signed_number_digits(
+                number,
+                max_digits,
+                padding.is_zero_padding(),
+                value.divx.max(1) as u32,
+            )
         } else {
-            display_number_digits(number, max_digits, zero_pad)
+            display_number_digits(number, max_digits, padding)
         };
         if digits.is_empty() { 0 } else { digits.len() as i32 * (frame.w + value.space) }
     }
@@ -3985,18 +4200,21 @@ impl SkinDocument {
         };
         let divx = value.divx.max(1);
         let divy = value.divy.max(1);
-        let cell_width_px = value.w as f32 / divx as f32;
-        let cell_height_px = value.h as f32 / divy as f32;
+        let source_width_px =
+            if value.w == -1 { source.source_size.width.round() as i32 } else { value.w };
+        let source_height_px =
+            if value.h == -1 { source.source_size.height.round() as i32 } else { value.h };
+        let cell_width_px = (source_width_px / divx) as f32;
+        let cell_height_px = (source_height_px / divy) as f32;
         if cell_width_px <= 0.0 || cell_height_px <= 0.0 {
             return Vec::new();
         }
-        // `padding` は `zeropadding` の別名
-        let zero_pad = value.zeropadding != 0 || value.padding != 0;
+        let padding = number_padding(value);
         let max_digits = value.digit.max(0) as usize;
         let digits = if ref_id_is_signed(value.ref_id) {
-            display_signed_number_digits(number, max_digits, zero_pad, divx as u32)
+            display_signed_number_digits(number, max_digits, padding.is_zero_padding(), divx as u32)
         } else {
-            display_number_digits(number, max_digits, zero_pad)
+            display_number_digits(number, max_digits, padding)
         };
         // 桁間スペース (space フィールド、px 単位)
         let digit_step = frame.w + value.space;
@@ -4148,6 +4366,7 @@ impl SkinDocument {
             style: TextStyle {
                 font_id: (!text.font.is_empty()).then(|| text.font.clone()),
                 size: frame.h.abs().max(text.size).max(1) as f32 / self.h.max(1) as f32,
+                bitmap_size: skin_text_bitmap_size(text, &self.font, self.h),
                 color: Color::rgba(
                     frame.r as f32 / 255.0,
                     frame.g as f32 / 255.0,
@@ -4517,6 +4736,84 @@ impl SkinDocument {
         items
     }
 
+    fn select_note_distribution_graph_render_items(
+        &self,
+        row: &SelectRowSnapshot,
+        graph: &SkinJudgeGraphDef,
+        destination: &SkinDestinationDef,
+        row_origin: (i32, i32),
+        enabled_options: &[i32],
+        state: SkinDrawState,
+    ) -> Vec<SkinRenderItem> {
+        if row.chart_distribution.is_empty()
+            || !test_skin_ops(&destination.op, enabled_options, state)
+            || !eval_skin_draw_condition(&destination.draw, state)
+        {
+            return Vec::new();
+        }
+        let Some(elapsed) = skin_timer_elapsed_ms(destination.timer, state) else {
+            return Vec::new();
+        };
+        let Some(mut frame) =
+            resolve_destination_frame(destination, elapsed, enabled_options, state)
+        else {
+            return Vec::new();
+        };
+        frame.x += row_origin.0;
+        frame.y += row_origin.1;
+        apply_skin_offset_to_frame(destination, &mut frame, state, false);
+        if !destination_mouse_rect_contains(destination, frame, state) {
+            return Vec::new();
+        }
+
+        let rect = normalize_skin_frame_rect(frame, self.w, self.h);
+        if rect.width <= 0.0 || rect.height <= 0.0 {
+            return Vec::new();
+        }
+        let frame_alpha = frame.a as f32 / 255.0;
+        let blend = if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal };
+        let max_density =
+            row.chart_distribution.iter().map(|second| second.total()).max().unwrap_or(1).max(20)
+                as f32;
+        let count = row.chart_distribution.len().max(1) as f32;
+        let pixel_w = 1.0 / self.w.max(1) as f32;
+        let pixel_h = 1.0 / self.h.max(1) as f32;
+        let gap_x = if graph.no_gap_x != 0 { 0.0 } else { pixel_w };
+        let gap_y = if graph.no_gap != 0 { 0.0 } else { pixel_h };
+        let bar_w = ((rect.width - gap_x * (count - 1.0)).max(pixel_w) / count).max(pixel_w);
+        let colors = note_distribution_colors(frame_alpha);
+        let mut items = Vec::new();
+
+        for (index, second) in row.chart_distribution.iter().enumerate() {
+            let x = rect.x + index as f32 * (bar_w + gap_x);
+            let values = second.values();
+            let iter: Box<dyn Iterator<Item = (usize, u16)>> = if graph.order_reverse != 0 {
+                Box::new(values.into_iter().enumerate().rev())
+            } else {
+                Box::new(values.into_iter().enumerate())
+            };
+            let mut y_cursor = rect.y + rect.height;
+            for (series, value) in iter {
+                if value == 0 {
+                    continue;
+                }
+                let height = (rect.height * (value as f32 / max_density) - gap_y).max(pixel_h);
+                y_cursor -= height;
+                items.push(SkinRenderItem::Rect {
+                    rect: Rect { x, y: y_cursor, width: bar_w, height },
+                    color: colors[series],
+                    blend,
+                });
+                y_cursor -= gap_y;
+                if y_cursor <= rect.y {
+                    break;
+                }
+            }
+        }
+
+        items
+    }
+
     fn bpmgraph_render_items(
         &self,
         graph: &SkinBpmGraphDef,
@@ -4583,10 +4880,10 @@ impl SkinDocument {
         let mut frame = frame;
         let offset = (slider.range as f32 * progress).round() as i32;
         match slider.angle {
-            0 => frame.x += offset,
-            1 => frame.x -= offset,
+            0 => frame.y += offset,
+            1 => frame.x += offset,
             2 => frame.y -= offset,
-            3 => frame.y += offset,
+            3 => frame.x -= offset,
             _ => {}
         }
         let mut uv = TextureRegion {
@@ -4845,7 +5142,10 @@ fn skin_state_imageset_index(ref_id: i32, state: SkinDrawState) -> Option<usize>
         54 | 55 => Some(0),
         72 => Some(state.select_bga_index),
         78 => Some(state.select_gauge_auto_shift_index),
+        11 => Some(state.select_mode_index),
+        12 => Some(state.select_sort_index),
         301..=307 => Some(0),
+        308 => Some(state.select_ln_mode_index),
         _ => None,
     }
 }
@@ -5837,8 +6137,35 @@ fn format_number(value: i64, digits: u8) -> String {
     }
 }
 
-fn display_number_digits(value: i64, max_digits: usize, zero_pad: bool) -> Vec<u8> {
-    let mut text = if zero_pad && max_digits > 0 {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NumberPadding {
+    None,
+    Zero,
+    Blank,
+}
+
+impl NumberPadding {
+    fn is_zero_padding(self) -> bool {
+        matches!(self, Self::Zero)
+    }
+}
+
+fn number_padding(value: &SkinValueDef) -> NumberPadding {
+    if value.zeropadding == 2 || value.padding == 2 {
+        return NumberPadding::Blank;
+    }
+    if value.zeropadding != 0 || value.padding != 0 {
+        return NumberPadding::Zero;
+    }
+    let image_cells = value.divx.max(1).saturating_mul(value.divy.max(1));
+    if !ref_id_is_signed(value.ref_id) && image_cells % 10 != 0 {
+        return NumberPadding::Blank;
+    }
+    NumberPadding::None
+}
+
+fn display_number_digits(value: i64, max_digits: usize, padding: NumberPadding) -> Vec<u8> {
+    let mut text = if padding.is_zero_padding() && max_digits > 0 {
         format!("{:0width$}", value.max(0), width = max_digits)
     } else {
         value.max(0).to_string()
@@ -5846,7 +6173,14 @@ fn display_number_digits(value: i64, max_digits: usize, zero_pad: bool) -> Vec<u
     if max_digits > 0 && text.len() > max_digits {
         text = text[text.len() - max_digits..].to_string();
     }
-    text.bytes().filter(|byte| byte.is_ascii_digit()).map(|byte| byte - b'0').collect()
+    let mut digits: Vec<u8> =
+        text.bytes().filter(|byte| byte.is_ascii_digit()).map(|byte| byte - b'0').collect();
+    if matches!(padding, NumberPadding::Blank) && max_digits > digits.len() {
+        let mut padded = vec![10; max_digits - digits.len()];
+        padded.extend(digits);
+        digits = padded;
+    }
+    digits
 }
 
 /// 符号付き数値（beatoraja の mimage 慣習）用に、divx 列のテクスチャセル index を返す。
@@ -6216,14 +6550,18 @@ fn select_settings_screen_number_hidden(ref_id: i32) -> bool {
     )
 }
 
+fn select_volume_number(volume: f32) -> i64 {
+    (volume.clamp(0.0, 1.0) * 100.0 + 0.0001) as i64
+}
+
 fn select_settings_screen_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
     match ref_id {
         96 if state.select_row_kind == SelectRowKind::Config => {
             Some(if state.play_level != 0 { state.play_level } else { state.select_play_level })
         }
-        57 => Some((state.select_master_volume.clamp(0.0, 1.0) * 100.0).round() as i64),
-        58 => Some((state.select_bgm_volume.clamp(0.0, 1.0) * 100.0).round() as i64),
-        59 => Some((state.select_key_volume.clamp(0.0, 1.0) * 100.0).round() as i64),
+        57 => Some(select_volume_number(state.select_master_volume)),
+        58 => Some(select_volume_number(state.select_key_volume)),
+        59 => Some(select_volume_number(state.select_bgm_volume)),
         12 => Some(state.judge_timing_offset_ms as i64),
         _ => None,
     }
@@ -6242,17 +6580,31 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         // Lua draw 畳み込みのプレースホルダ (`number(0) >= 0` 等)
         0 => Some(0),
         21..=26 => current_datetime_number(ref_id),
+        11 if state.select_screen => Some(state.select_mode_index as i64),
+        12 if state.select_screen => Some(state.select_sort_index as i64),
         300 => Some(state.select_chart_count as i64),
         30 if state.select_screen => Some(state.select_play_count as i64),
         96 => Some(if state.play_level != 0 { state.play_level } else { state.select_play_level }),
         370 => Some(state.select_clear_index),
-        92 if state.select_screen => Some(state.select_bpm.round() as i64),
+        92 if state.select_screen => {
+            Some(select_chart_main_bpm(state).unwrap_or(state.select_bpm).round() as i64)
+        }
         92 => Some(state.main_bpm.round() as i64),
         100 => Some(skin_point_score(state) as i64),
         71 | 101 | 171 => Some(state.ex_score as i64),
         72 => Some(state.total_notes as i64 * 2),
         74 | 106 | 333 => Some(state.total_notes.max(state.select_total_notes) as i64),
-        350 => Some(state.select_total_notes as i64),
+        350 if state.select_screen => Some(select_chart_normal_notes(state) as i64),
+        351 if state.select_screen => Some(state.select_chart_long_notes as i64),
+        352 if state.select_screen => Some(state.select_chart_scratch_notes as i64),
+        353 if state.select_screen => Some(state.select_chart_long_scratch_notes as i64),
+        360 if state.select_screen => Some(state.select_chart_peak_density.floor() as i64),
+        361 if state.select_screen => Some(decimal_afterdot(state.select_chart_peak_density)),
+        362 if state.select_screen => Some(state.select_chart_end_density.floor() as i64),
+        363 if state.select_screen => Some(decimal_afterdot(state.select_chart_end_density)),
+        364 if state.select_screen => Some(state.select_chart_density.floor() as i64),
+        365 if state.select_screen => Some(decimal_afterdot(state.select_chart_density)),
+        368 if state.select_screen => Some(state.select_chart_total_gauge.floor() as i64),
         75 | 105 | 174 => Some(state.max_combo as i64),
         76 if state.select_screen => state.select_miss_count.map(|count| count as i64).or(Some(0)),
         76 => Some((state.judge_counts.bad + state.judge_counts.poor) as i64),
@@ -6282,7 +6634,8 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         310 => Some(state.hispeed.floor() as i64),
         311 => Some(((state.hispeed * 100.0) as i64) % 100),
         312 => Some(state.total_duration_ms as i64),
-        313 => Some((state.total_duration_ms as i64) * 3 / 5),
+        313 => Some(((state.total_duration_ms as i64) * 3 + 2) / 5),
+        308 if state.select_screen => Some(state.select_ln_mode_index as i64),
         // BPM 系: NUMBER_MAXBPM=90, NUMBER_MINBPM=91, NUMBER_NOWBPM=160
         90 => {
             Some(if state.max_bpm > 0.0 { state.max_bpm } else { state.select_max_bpm }.round()
@@ -6295,14 +6648,14 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         160 => {
             Some(if state.now_bpm > 0.0 { state.now_bpm } else { state.select_bpm }.round() as i64)
         }
-        // レーンカバー: NUMBER_LANECOVER1=14 (0-100%)
-        14 => Some((state.lane_cover.clamp(0.0, 1.0) * 100.0).round() as i64),
+        // レーンカバー: NUMBER_LANECOVER1=14 (0-1000)
+        14 => Some((state.lane_cover.clamp(0.0, 1.0) * 1000.0).round() as i64),
         // リフト: NUMBER_LIFT1=314 (0-1000)
         314 => Some((state.lift.clamp(0.0, 1.0) * 1000.0).round() as i64),
-        // 選曲画面の音量表示: MASTER/BGM/KEY volume (0-100)
-        57 => Some((state.select_master_volume.clamp(0.0, 1.0) * 100.0).round() as i64),
-        58 => Some((state.select_bgm_volume.clamp(0.0, 1.0) * 100.0).round() as i64),
-        59 => Some((state.select_key_volume.clamp(0.0, 1.0) * 100.0).round() as i64),
+        // 選曲画面の音量表示: MASTER/KEY/BGM volume (0-100)
+        57 => Some(select_volume_number(state.select_master_volume)),
+        58 => Some(select_volume_number(state.select_key_volume)),
+        59 => Some(select_volume_number(state.select_bgm_volume)),
         // 判定タイミングずれ: VALUE_JUDGE_1P_DURATION=525 (ms、絶対値)
         525 => state.judge_timing_ms.map(|ms| ms.unsigned_abs() as i64),
         // 判定タイミングオフセット設定値 (NUMBER_JUDGETIMING=12)
@@ -6457,12 +6810,38 @@ fn skin_image_texture_region(
     )
 }
 
-/// Starseeker 閉店の `src = 0` は `system` の黒 1px (`black` image と同じ UV) を指す。
+fn pre_ready_lane_cover_value_destination(
+    destination: &SkinDestinationDef,
+    value: &SkinValueDef,
+    state: SkinDrawState,
+) -> bool {
+    destination.timer == Some(40)
+        && state.ready_timer_ms.is_none()
+        && state.lane_cover_changing
+        && destination.op.contains(&270)
+        && skin_value_is_lane_cover_number(value)
+}
+
+fn skin_value_is_lane_cover_number(value: &SkinValueDef) -> bool {
+    matches!(value.ref_id, 14 | 312 | 313)
+        || skin_expr_references_lane_cover_number(&value.expr)
+        || skin_expr_references_lane_cover_number(&value.value_expr)
+}
+
+fn skin_expr_references_lane_cover_number(expr: &str) -> bool {
+    ["number(14)", "number(312)", "number(313)"].iter().any(|needle| expr.contains(needle))
+}
+
+/// Starseeker 閉店の `src = 0, x = 0, y = 0` sentinel は `system` の黒 1px
+/// (`black` image と同じ UV) を指す。ECFN の判定ラインなど、`src = 0` でも
+/// 明示的な crop 座標を持つ画像はそのまま扱う。
 fn skin_image_pixel_rect(
     image: &SkinImageDef,
     images: &HashMap<&str, &SkinImageDef>,
 ) -> (i32, i32, i32, i32) {
     if image.src == "0"
+        && image.x == 0
+        && image.y == 0
         && let Some(black) = images.get("black")
     {
         return (black.x, black.y, black.w, black.h);
@@ -6538,6 +6917,22 @@ fn gauge_after_dot(gauge: f32) -> u32 {
 fn timing_afterdot(value: f32) -> i64 {
     let afterdot = ((value.abs() * 100.0) as i64) % 100;
     if value < 0.0 { -afterdot } else { afterdot }
+}
+
+fn decimal_afterdot(value: f32) -> i64 {
+    ((value.abs() * 100.0) as i64) % 100
+}
+
+fn select_chart_normal_notes(state: SkinDrawState) -> u32 {
+    if state.select_chart_normal_notes > 0 {
+        state.select_chart_normal_notes
+    } else {
+        state.select_total_notes
+    }
+}
+
+fn select_chart_main_bpm(state: SkinDrawState) -> Option<f32> {
+    (state.select_chart_main_bpm > 0.0).then_some(state.select_chart_main_bpm)
 }
 
 fn current_misscount(state: SkinDrawState) -> u32 {
@@ -6773,6 +7168,20 @@ fn skin_text_align(align: i32) -> TextAlign {
     }
 }
 
+fn skin_text_bitmap_size(
+    text: &SkinTextDef,
+    fonts: &[SkinFontDef],
+    skin_height: u32,
+) -> Option<f32> {
+    if text.size <= 0 || text.font.is_empty() {
+        return None;
+    }
+    let font_id = text.font.rsplit_once(':').map_or(text.font.as_str(), |(_, id)| id);
+    let font = fonts.iter().find(|font| font.id == text.font || font.id == font_id)?;
+    let extension = Path::new(&font.path).extension()?.to_str()?;
+    extension.eq_ignore_ascii_case("fnt").then_some(text.size as f32 / skin_height.max(1) as f32)
+}
+
 fn skin_text_overflow(overflow: i32) -> TextOverflow {
     match overflow {
         1 => TextOverflow::Shrink,
@@ -6984,6 +7393,18 @@ fn timing_color(value: &str, frame_alpha: f32) -> Color {
         .or_else(|| skin_hex_color("FF0000FF"))
         .unwrap_or(Color::rgb(1.0, 0.0, 0.0))
         .with_alpha(frame_alpha)
+}
+
+fn note_distribution_colors(alpha: f32) -> [Color; 7] {
+    [
+        Color::rgba(0.27, 1.0, 0.27, alpha),
+        Color::rgba(0.13, 0.53, 0.13, alpha),
+        Color::rgba(1.0, 0.27, 0.27, alpha),
+        Color::rgba(0.27, 0.27, 1.0, alpha),
+        Color::rgba(0.13, 0.13, 0.53, alpha),
+        Color::rgba(0.80, 0.80, 0.80, alpha),
+        Color::rgba(0.53, 0.0, 0.0, alpha),
+    ]
 }
 
 fn timing_visualizer_judge_colors(visualizer: &SkinTimingVisualizerDef) -> [Color; 5] {
@@ -7691,6 +8112,40 @@ fn select_assist_index(assist: &str) -> usize {
     }
 }
 
+fn select_mode_index(mode: &str) -> usize {
+    match mode {
+        "7K" => 1,
+        "14K" => 2,
+        "9K" => 3,
+        "5K" => 4,
+        "10K" => 5,
+        "24K" => 6,
+        "24K_DOUBLE" => 7,
+        _ => 0,
+    }
+}
+
+fn select_sort_index(sort: &str) -> usize {
+    match sort {
+        "ARTIST" => 1,
+        "BPM" => 2,
+        "LENGTH" => 3,
+        "LEVEL" => 4,
+        "CLEAR" => 5,
+        "SCORE" => 6,
+        "MISSCOUNT" => 7,
+        _ => 0,
+    }
+}
+
+fn select_ln_mode_index(mode: &str) -> usize {
+    match mode {
+        "CN" => 1,
+        "HCN" => 2,
+        _ => 0,
+    }
+}
+
 fn select_scroll_progress(snapshot: &SelectSnapshot) -> f32 {
     if snapshot.chart_count <= 1 {
         return 0.0;
@@ -8298,6 +8753,61 @@ fn rect_contains(rect: Rect, x: f32, y: f32) -> bool {
     rect.x <= x && x <= rect.x + rect.width && rect.y <= y && y <= rect.y + rect.height
 }
 
+fn destination_mouse_rect_contains(
+    destination: &SkinDestinationDef,
+    frame: ResolvedSkinFrame,
+    state: SkinDrawState,
+) -> bool {
+    let Some(mouse_rect) = destination.mouse_rect else {
+        return true;
+    };
+    let (Some(mouse_x), Some(mouse_y)) = (state.mouse_x, state.mouse_y) else {
+        return true;
+    };
+    let relative_x = mouse_x - frame.x as f32;
+    let relative_y = mouse_y - frame.y as f32;
+    let x0 = mouse_rect.x as f32;
+    let x1 = (mouse_rect.x + mouse_rect.w) as f32;
+    let y0 = mouse_rect.y as f32;
+    let y1 = (mouse_rect.y + mouse_rect.h) as f32;
+    x0.min(x1) <= relative_x
+        && relative_x <= x0.max(x1)
+        && y0.min(y1) <= relative_y
+        && relative_y <= y0.max(y1)
+}
+
+fn slider_value_at(
+    slider: &SkinSliderDef,
+    frame: ResolvedSkinFrame,
+    x: f32,
+    y: f32,
+) -> Option<f32> {
+    let range = slider.range.unsigned_abs() as f32;
+    if range <= f32::EPSILON {
+        return None;
+    }
+    let frame_x = frame.x as f32;
+    let frame_y = frame.y as f32;
+    let frame_w = frame.w as f32;
+    let frame_h = frame.h as f32;
+    let value = match slider.angle {
+        0 if frame_x <= x && x <= frame_x + frame_w && frame_y <= y && y <= frame_y + range => {
+            (y - frame_y) / range
+        }
+        1 if frame_x <= x && x <= frame_x + range && frame_y <= y && y <= frame_y + frame_h => {
+            (x - frame_x) / range
+        }
+        2 if frame_x <= x && x <= frame_x + frame_w && frame_y - range <= y && y <= frame_y => {
+            (frame_y - y) / range
+        }
+        3 if frame_x - range <= x && x <= frame_x && frame_y <= y && y <= frame_y + frame_h => {
+            (frame_x - x) / range
+        }
+        _ => return None,
+    };
+    Some(value.clamp(0.0, 1.0))
+}
+
 fn multiply_bga_tints(destination: Color, bga: SkinBgaFrame) -> Color {
     Color::rgba(
         destination.r * bga.tint_r,
@@ -8582,6 +9092,8 @@ fn default_graph_angle() -> i32 {
 }
 
 /// beatoraja `SkinGauge.ANIMATION_*` (JSON `gauge.type` フィールド)。
+const SKIN_GAUGE_ANIM_RANDOM: i32 = 0;
+const SKIN_GAUGE_ANIM_DECREASE: i32 = 2;
 const SKIN_GAUGE_ANIM_FLICKERING: i32 = 3;
 const SKIN_GAUGE_ANIM_INCREASE: i32 = 1;
 
@@ -8611,14 +9123,43 @@ fn skin_gauge_destination_blend(destination: &SkinDestinationDef) -> BlendMode {
 
 fn skin_gauge_animation_index(gauge_def: &SkinGaugeDef, state: SkinDrawState) -> i32 {
     let cycle = gauge_def.cycle.max(1);
+    let range = gauge_def.range.max(0);
     match gauge_def.gauge_type {
+        SKIN_GAUGE_ANIM_RANDOM => {
+            let tick = skin_gauge_animation_tick(state, cycle);
+            skin_gauge_random_animation_index(tick, range)
+        }
         SKIN_GAUGE_ANIM_FLICKERING => {
             let time = state.play_timer_ms.unwrap_or(state.elapsed_ms);
             time.rem_euclid(cycle)
         }
-        SKIN_GAUGE_ANIM_INCREASE => (state.elapsed_ms / cycle) % (gauge_def.range + 1),
+        SKIN_GAUGE_ANIM_INCREASE => {
+            let tick = skin_gauge_animation_tick(state, cycle);
+            (tick * range).rem_euclid(range + 1)
+        }
+        SKIN_GAUGE_ANIM_DECREASE => {
+            let tick = skin_gauge_animation_tick(state, cycle);
+            tick.rem_euclid(range + 1)
+        }
         _ => 0,
     }
+}
+
+fn skin_gauge_animation_tick(state: SkinDrawState, cycle: i32) -> i32 {
+    let time = state.play_timer_ms.unwrap_or(state.elapsed_ms);
+    time.div_euclid(cycle.max(1))
+}
+
+fn skin_gauge_random_animation_index(tick: i32, range: i32) -> i32 {
+    let span = range + 1;
+    if span <= 1 {
+        return 0;
+    }
+    let mut value = tick as u32;
+    value ^= value.wrapping_shl(13);
+    value ^= value.wrapping_shr(17);
+    value ^= value.wrapping_shl(5);
+    (value % span as u32) as i32
 }
 
 /// beatoraja `SkinGauge.draw` のスプライト選択 (`exgauge + offset + underclear`)。
@@ -8922,6 +9463,7 @@ mod tests {
                 style: TextStyle {
                     font_id: None,
                     size: 0.04,
+                    bitmap_size: None,
                     color: Color::rgb(1.0, 1.0, 1.0),
                     layer: TextLayer::Skin,
                     align: TextAlign::Left,
@@ -8989,6 +9531,7 @@ mod tests {
                     style: TextStyle {
                         font_id: None,
                         size: 0.04,
+                        bitmap_size: None,
                         color: Color::rgb(1.0, 1.0, 1.0),
                         layer: TextLayer::Skin,
                         align: TextAlign::Left,
@@ -9839,6 +10382,22 @@ mod tests {
     }
 
     #[test]
+    fn select_settings_screen_volume_numbers_match_beatoraja_refs() {
+        let state = SkinDrawState {
+            select_screen: true,
+            in_settings: true,
+            select_master_volume: 0.42,
+            select_key_volume: 0.73,
+            select_bgm_volume: 0.18,
+            ..SkinDrawState::default()
+        };
+
+        assert_eq!(skin_state_number(57, state), Some(42));
+        assert_eq!(skin_state_number(58, state), Some(73));
+        assert_eq!(skin_state_number(59, state), Some(18));
+    }
+
+    #[test]
     fn select_rank_and_judge_ops_are_hidden_in_settings() {
         let state = SkinDrawState {
             select_screen: true,
@@ -10430,6 +10989,53 @@ mod tests {
     }
 
     #[test]
+    fn pre_notes_lift_line_at_note_origin_renders_in_front() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 720,
+                "h": 720,
+                "source": [{ "id": 1, "path": "system.png" }],
+                "image": [
+                    { "id": "backdrop", "src": 1, "x": 0, "y": 0, "w": 8, "h": 8 },
+                    { "id": 15, "src": 1, "x": 16, "y": 0, "w": 8, "h": 8 },
+                    { "id": "note", "src": 1, "x": 0, "y": 0, "w": 51, "h": 36 }
+                ],
+                "destination": [
+                    { "id": "backdrop", "dst": [{ "x": 0, "y": 0, "w": 720, "h": 720 }] },
+                    { "id": 15, "offset": 3, "dst": [{ "x": 76, "y": 357, "w": 431, "h": 8 }] },
+                    { "id": "notes" }
+                ],
+                "note": {
+                    "id": "notes",
+                    "note": ["note"],
+                    "dst": [{ "x": 168, "y": 345, "w": 51, "h": 723 }]
+                }
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = mock_source("1", 720.0, 720.0);
+
+        let (behind, front, failed_overlay) = document.static_render_items_split(
+            &sources,
+            SkinDrawState::default(),
+            SkinTextState::default(),
+        );
+
+        assert_eq!(behind.len(), 1, "ordinary pre-notes items stay behind notes");
+        assert_eq!(front.len(), 1, "ECFN-style judge line is drawn in front of notes");
+        assert!(failed_overlay.is_empty());
+        assert!(matches!(
+            front.first(),
+            Some(SkinRenderItem::Image { rect, .. })
+                if approx_eq(rect.y, 355.0 / 720.0)
+                    && approx_eq(rect.height, 8.0 / 720.0)
+        ));
+    }
+
+    #[test]
     fn skin_document_applies_destination_stretch_to_static_images() {
         let document: SkinDocument = serde_json::from_str(
             r#"
@@ -10774,15 +11380,15 @@ mod tests {
             SkinTextState::default(),
         );
         let items = behind.into_iter().chain(front).collect::<Vec<_>>();
-        assert_eq!(items.len(), 1);
-        assert!(matches!(
-            items[0],
-            SkinRenderItem::Rect {
-                color: Color { a, .. },
+        assert_eq!(items.len(), 2);
+        assert!(items.iter().all(|item| matches!(
+            item,
+            SkinRenderItem::Image {
+                tint: Color { a, .. },
                 blend: BlendMode::Add,
                 ..
-            } if (a - 80.0 / 255.0).abs() < 0.01
-        ));
+            } if (*a - 80.0 / 255.0).abs() < 0.01
+        )));
     }
 
     #[test]
@@ -11235,6 +11841,61 @@ mod tests {
             serde_json::from_str(r#"{"type":0,"w":100,"h":100,"gauge":{"id":"g","nodes":[]}}"#)
                 .unwrap();
         assert_eq!(document.gauge.as_ref().unwrap().gauge_type, 0);
+    }
+
+    #[test]
+    fn skin_gauge_random_animation_changes_by_cycle() {
+        let gauge = SkinGaugeDef {
+            id: "g".to_string(),
+            nodes: Vec::new(),
+            parts: 4,
+            gauge_type: 0,
+            range: 3,
+            cycle: 33,
+            starttime: 0,
+            endtime: 500,
+        };
+        let first = skin_gauge_animation_index(
+            &gauge,
+            SkinDrawState { elapsed_ms: 33, ..Default::default() },
+        );
+        let second = skin_gauge_animation_index(
+            &gauge,
+            SkinDrawState { elapsed_ms: 66, ..Default::default() },
+        );
+
+        assert_ne!(first, second, "type=0 RANDOM should not stay fixed at frame 0");
+        assert!((0..=3).contains(&first));
+        assert!((0..=3).contains(&second));
+    }
+
+    #[test]
+    fn skin_gauge_decrease_animation_advances_forward() {
+        let gauge = SkinGaugeDef {
+            id: "g".to_string(),
+            nodes: Vec::new(),
+            parts: 4,
+            gauge_type: 2,
+            range: 3,
+            cycle: 33,
+            starttime: 0,
+            endtime: 500,
+        };
+
+        assert_eq!(
+            skin_gauge_animation_index(
+                &gauge,
+                SkinDrawState { elapsed_ms: 33, ..Default::default() }
+            ),
+            1
+        );
+        assert_eq!(
+            skin_gauge_animation_index(
+                &gauge,
+                SkinDrawState { elapsed_ms: 66, ..Default::default() }
+            ),
+            2
+        );
     }
 
     #[test]
@@ -12211,6 +12872,58 @@ mod tests {
     }
 
     #[test]
+    fn select_songlist_judgegraph_renders_chart_distribution() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 5,
+                "w": 100,
+                "h": 100,
+                "judgegraph": [{ "id": "density", "noGap": 1, "noGapX": 1 }],
+                "songlist": {
+                    "id": "songlist",
+                    "center": 0,
+                    "liston": [{ "id": "row", "dst": [{ "x": 10, "y": 40, "w": 80, "h": 20 }] }],
+                    "listoff": [{ "id": "row", "dst": [{ "x": 10, "y": 40, "w": 80, "h": 20 }] }],
+                    "judgegraph": [{ "id": "density", "dst": [{ "x": 0, "y": 0, "w": 40, "h": 10 }] }]
+                },
+                "destination": [{ "id": "songlist" }]
+            }
+            "#,
+        )
+        .unwrap();
+        let snapshot = SelectSnapshot {
+            selected_index: 0,
+            rows: vec![SelectRowSnapshot {
+                index: 0,
+                kind: SelectRowKind::Song,
+                in_library: true,
+                chart_distribution: vec![
+                    crate::scene::SelectChartDistributionSecond {
+                        key_taps: 4,
+                        mines: 1,
+                        ..Default::default()
+                    },
+                    crate::scene::SelectChartDistributionSecond {
+                        scratch_taps: 2,
+                        key_long_bodies: 3,
+                        ..Default::default()
+                    },
+                ],
+                ..SelectRowSnapshot::default()
+            }],
+            ..SelectSnapshot::default()
+        };
+
+        let sources = HashMap::new();
+        let items = document.select_render_items(&sources, &snapshot);
+        let rect_count =
+            items.iter().filter(|item| matches!(item, SkinRenderItem::Rect { .. })).count();
+
+        assert_eq!(rect_count, 4);
+    }
+
+    #[test]
     fn select_click_hit_resolves_image_act_event() {
         let document: SkinDocument = serde_json::from_str(
             r#"
@@ -12247,6 +12960,109 @@ mod tests {
 
         assert_eq!(hit.target, SkinClickTarget::Event { event_id: 15, click: 2 });
         assert_eq!(hit.rect, Rect { x: 0.1, y: 0.7, width: 0.3, height: 0.1 });
+    }
+
+    #[test]
+    fn select_mouse_rect_gates_render_and_click_hits() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 5,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "button.png" }],
+                "image": [
+                    { "id": "button", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10, "act": 15 }
+                ],
+                "destination": [
+                    {
+                        "id": "button",
+                        "dst": [{ "x": 10, "y": 20, "w": 30, "h": 10 }],
+                        "mouseRect": { "x": 5, "y": 2, "w": 10, "h": 4 }
+                    }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = mock_source("1", 100.0, 100.0);
+        let inside =
+            SelectSnapshot { mouse_position: Some((0.16, 0.75)), ..SelectSnapshot::default() };
+        let outside =
+            SelectSnapshot { mouse_position: Some((0.01, 0.01)), ..SelectSnapshot::default() };
+
+        assert!(document.select_render_items(&sources, &inside).iter().any(|item| {
+            matches!(item, SkinRenderItem::Image { texture: SkinTextureId(9999), .. })
+        }));
+        assert!(!document.select_render_items(&sources, &outside).iter().any(|item| {
+            matches!(item, SkinRenderItem::Image { texture: SkinTextureId(9999), .. })
+        }));
+
+        assert!(
+            document
+                .select_click_hit(
+                    &sources,
+                    &inside,
+                    &crate::select_settings_dest::SelectSettingsDestIndex::default(),
+                    0.2,
+                    0.75,
+                )
+                .is_some()
+        );
+        assert!(
+            document
+                .select_click_hit(
+                    &sources,
+                    &outside,
+                    &crate::select_settings_dest::SelectSettingsDestIndex::default(),
+                    0.2,
+                    0.75,
+                )
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn select_slider_hit_resolves_changeable_volume_slider() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 5,
+                "w": 100,
+                "h": 100,
+                "slider": [
+                    { "id": "master", "src": 1, "x": 0, "y": 0, "w": 10, "h": 5, "angle": 1, "range": 50, "type": 17 }
+                ],
+                "destination": [
+                    { "id": "master", "dst": [{ "x": 10, "y": 20, "w": 10, "h": 5 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let snapshot = SelectSnapshot::default();
+
+        let hit = document
+            .select_slider_hit(
+                &snapshot,
+                &crate::select_settings_dest::SelectSettingsDestIndex::default(),
+                0.35,
+                0.775,
+            )
+            .unwrap();
+
+        assert_eq!(hit.slider_type, 17);
+        assert!(approx_eq(hit.value, 0.5));
+        assert!(
+            document
+                .select_slider_hit(
+                    &snapshot,
+                    &crate::select_settings_dest::SelectSettingsDestIndex::default(),
+                    0.70,
+                    0.775,
+                )
+                .is_none()
+        );
     }
 
     #[test]
@@ -12546,6 +13362,58 @@ mod tests {
     }
 
     #[test]
+    fn lane_cover_numbers_render_before_ready_while_changing() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "number.png" }],
+                "value": [
+                    { "id": "white", "src": 1, "x": 0, "y": 0, "w": 100, "h": 10, "divx": 10, "digit": 3, "ref": 14 },
+                    { "id": "green", "src": 1, "x": 0, "y": 0, "w": 100, "h": 10, "divx": 10, "digit": 3, "ref": 313 },
+                    { "id": "combo", "src": 1, "x": 0, "y": 0, "w": 100, "h": 10, "divx": 10, "digit": 3, "ref": 104 }
+                ],
+                "destination": [
+                    { "id": "white", "timer": 40, "op": [270], "dst": [{ "x": 10, "y": 20, "w": 5, "h": 10 }] },
+                    { "id": "green", "timer": 40, "op": [270], "dst": [{ "x": 10, "y": 30, "w": 5, "h": 10 }] },
+                    { "id": "combo", "timer": 40, "op": [270], "dst": [{ "x": 10, "y": 40, "w": 5, "h": 10 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "1".to_string(),
+            SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 100.0, height: 100.0 },
+            },
+        )]);
+
+        let inactive = document.static_image_render_items(
+            &sources,
+            SkinDrawState { ready_timer_ms: None, ..SkinDrawState::default() },
+        );
+        assert!(inactive.is_empty());
+
+        let active = document.static_image_render_items(
+            &sources,
+            SkinDrawState {
+                ready_timer_ms: None,
+                lane_cover_changing: true,
+                lane_cover: 0.25,
+                total_duration_ms: 300,
+                combo: 123,
+                ..SkinDrawState::default()
+            },
+        );
+        assert_eq!(active.len(), 6);
+    }
+
+    #[test]
     fn skin_document_resolves_static_text_destinations() {
         let document: SkinDocument = serde_json::from_str(
             r#"
@@ -12683,7 +13551,7 @@ mod tests {
         assert!(matches!(
             items[2],
             SkinRenderItem::Image { rect: Rect { x, y, .. }, .. }
-                if approx_eq(x, 0.0) && approx_eq(y, 0.14)
+                if approx_eq(x, 0.6) && approx_eq(y, 0.14)
         ));
 
         let no_lane_cover = document.static_image_render_items(
@@ -12701,6 +13569,68 @@ mod tests {
             lane_cover[1],
             SkinRenderItem::Image { rect: Rect { x, y, .. }, .. }
                 if approx_eq(x, 0.1) && approx_eq(y, 0.5)
+        ));
+    }
+
+    #[test]
+    fn skin_document_moves_sliders_in_beatoraja_directions() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "system.png" }],
+                "slider": [
+                    { "id": "up", "src": 1, "x": 0, "y": 0, "w": 5, "h": 5, "angle": 0, "range": 20, "type": 17 },
+                    { "id": "right", "src": 1, "x": 0, "y": 0, "w": 5, "h": 5, "angle": 1, "range": 20, "type": 17 },
+                    { "id": "down", "src": 1, "x": 0, "y": 0, "w": 5, "h": 5, "angle": 2, "range": 20, "type": 17 },
+                    { "id": "left", "src": 1, "x": 0, "y": 0, "w": 5, "h": 5, "angle": 3, "range": 20, "type": 17 }
+                ],
+                "destination": [
+                    { "id": "up", "dst": [{ "x": 50, "y": 50, "w": 5, "h": 5 }] },
+                    { "id": "right", "dst": [{ "x": 50, "y": 50, "w": 5, "h": 5 }] },
+                    { "id": "down", "dst": [{ "x": 50, "y": 50, "w": 5, "h": 5 }] },
+                    { "id": "left", "dst": [{ "x": 50, "y": 50, "w": 5, "h": 5 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "1".to_string(),
+            SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 100.0, height: 100.0 },
+            },
+        )]);
+
+        let items = document.static_image_render_items(
+            &sources,
+            SkinDrawState { select_master_volume: 0.5, ..SkinDrawState::default() },
+        );
+
+        assert_eq!(items.len(), 4);
+        assert!(matches!(
+            items[0],
+            SkinRenderItem::Image { rect: Rect { x, y, .. }, .. }
+                if approx_eq(x, 0.5) && approx_eq(y, 0.35)
+        ));
+        assert!(matches!(
+            items[1],
+            SkinRenderItem::Image { rect: Rect { x, y, .. }, .. }
+                if approx_eq(x, 0.6) && approx_eq(y, 0.45)
+        ));
+        assert!(matches!(
+            items[2],
+            SkinRenderItem::Image { rect: Rect { x, y, .. }, .. }
+                if approx_eq(x, 0.5) && approx_eq(y, 0.55)
+        ));
+        assert!(matches!(
+            items[3],
+            SkinRenderItem::Image { rect: Rect { x, y, .. }, .. }
+                if approx_eq(x, 0.4) && approx_eq(y, 0.45)
         ));
     }
 
@@ -12978,6 +13908,29 @@ mod tests {
         let black = images.get("black").unwrap();
         let rect = skin_image_pixel_rect(image, &images);
         assert_eq!(rect, (black.x, black.y, black.w, black.h));
+    }
+
+    #[test]
+    fn src_zero_with_explicit_crop_keeps_pixel_rect() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 1920,
+                "h": 1080,
+                "source": [{ "id": "system", "path": "system.png" }],
+                "image": [
+                    { "id": "black", "src": "bg", "x": 391, "y": 1080, "w": 8, "h": 8 },
+                    { "id": 15, "src": 0, "x": 16, "y": 0, "w": 8, "h": 8 }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let images = document.image_map();
+        let image = images.get("15").unwrap();
+        let rect = skin_image_pixel_rect(image, &images);
+        assert_eq!(rect, (16, 0, 8, 8));
     }
 
     #[test]
@@ -13698,16 +14651,30 @@ mod tests {
             select_clear_index: 5,
             select_total_notes: 1200,
             select_bpm: 148.0,
+            select_chart_normal_notes: 900,
+            select_chart_long_notes: 180,
+            select_chart_scratch_notes: 100,
+            select_chart_long_scratch_notes: 20,
+            select_chart_density: 4.56,
+            select_chart_peak_density: 12.34,
+            select_chart_end_density: 7.89,
+            select_chart_total_gauge: 260.0,
+            select_chart_main_bpm: 150.0,
             select_min_bpm: 120.0,
             select_max_bpm: 180.0,
             select_length_ms: 183_000,
-            select_master_volume: 0.57,
-            select_bgm_volume: 0.58,
+            select_master_volume: 0.575,
             select_key_volume: 0.59,
+            select_bgm_volume: 0.28,
+            select_mode_index: 4,
+            select_sort_index: 6,
+            select_ln_mode_index: 2,
             ex_score: 1234,
             ..SkinDrawState::default()
         };
 
+        assert_eq!(skin_state_number(11, state), Some(4));
+        assert_eq!(skin_state_number(12, state), Some(6));
         assert_eq!(skin_state_number(300, state), Some(42));
         assert_eq!(skin_state_number(96, state), Some(12));
         assert_eq!(
@@ -13721,15 +14688,26 @@ mod tests {
         assert_eq!(skin_state_number(74, state), Some(1200));
         assert_eq!(skin_state_number(90, state), Some(180));
         assert_eq!(skin_state_number(91, state), Some(120));
-        assert_eq!(skin_state_number(92, state), Some(148));
+        assert_eq!(skin_state_number(92, state), Some(150));
         assert_eq!(skin_state_number(160, state), Some(148));
-        assert_eq!(skin_state_number(350, state), Some(1200));
+        assert_eq!(skin_state_number(350, state), Some(900));
+        assert_eq!(skin_state_number(351, state), Some(180));
+        assert_eq!(skin_state_number(352, state), Some(100));
+        assert_eq!(skin_state_number(353, state), Some(20));
+        assert_eq!(skin_state_number(360, state), Some(12));
+        assert_eq!(skin_state_number(361, state), Some(34));
+        assert_eq!(skin_state_number(362, state), Some(7));
+        assert_eq!(skin_state_number(363, state), Some(89));
+        assert_eq!(skin_state_number(364, state), Some(4));
+        assert_eq!(skin_state_number(365, state), Some(56));
+        assert_eq!(skin_state_number(368, state), Some(260));
         assert_eq!(skin_state_number(71, state), Some(1234));
         assert_eq!(skin_state_number(1163, state), Some(3));
         assert_eq!(skin_state_number(1164, state), Some(3));
         assert_eq!(skin_state_number(57, state), Some(57));
-        assert_eq!(skin_state_number(58, state), Some(58));
-        assert_eq!(skin_state_number(59, state), Some(59));
+        assert_eq!(skin_state_number(58, state), Some(59));
+        assert_eq!(skin_state_number(59, state), Some(28));
+        assert_eq!(skin_state_number(308, state), Some(2));
 
         assert!(skin_state_number(21, state).is_some_and(|value| value >= 2026));
         assert!(skin_state_number(22, state).is_some_and(|value| (1..=12).contains(&value)));
@@ -14715,6 +15693,86 @@ mod tests {
     }
 
     #[test]
+    fn volume_number_uses_blank_padding_and_digit_cell_width() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "w": 1920, "h": 1080,
+                "source": [{ "id": "src", "path": "num.png" }],
+                "value": [{ "id": "volume", "src": "src", "x": 2401, "y": 510, "w": 242, "h": 15, "divx": 11, "digit": 3, "ref": 57 }],
+                "destination": [
+                    { "id": "volume", "dst": [{ "time": 0, "x": 1717, "y": 360, "w": 22, "h": 15 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        let sources = mock_source("src", 3200.0, 3200.0);
+        let items = document.static_image_render_items(
+            &sources,
+            SkinDrawState { select_master_volume: 0.37, ..SkinDrawState::default() },
+        );
+
+        assert_eq!(items.len(), 3);
+        let SkinRenderItem::Image { rect: r0, uv: uv0, .. } = &items[0] else { panic!() };
+        let SkinRenderItem::Image { rect: r1, uv: uv1, .. } = &items[1] else { panic!() };
+        let SkinRenderItem::Image { rect: r2, uv: uv2, .. } = &items[2] else { panic!() };
+        let digit_width = 22.0 / 1920.0;
+        assert!(approx_eq(r0.width, digit_width));
+        assert!(approx_eq(r1.width, digit_width));
+        assert!(approx_eq(r2.width, digit_width));
+        assert!(approx_eq(r1.x - r0.x, digit_width));
+        assert!(approx_eq(r2.x - r1.x, digit_width));
+        assert!(approx_eq(uv0.width, 22.0 / 3200.0));
+        assert!(approx_eq(uv1.width, 22.0 / 3200.0));
+        assert!(approx_eq(uv2.width, 22.0 / 3200.0));
+        assert!(approx_eq(uv0.x, (2401.0 + 10.0 * 22.0) / 3200.0));
+        assert!(approx_eq(uv1.x, (2401.0 + 3.0 * 22.0) / 3200.0));
+        assert!(approx_eq(uv2.x, (2401.0 + 7.0 * 22.0) / 3200.0));
+        assert!(
+            approx_eq(uv0.width, 242.0 / 11.0 / 3200.0),
+            "value sprite must be sliced into 11 cells, got uv.width={}",
+            uv0.width
+        );
+    }
+
+    #[test]
+    fn value_number_slices_source_with_beatoraja_integer_division() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "w": 1280, "h": 720,
+                "source": [{ "id": "src", "path": "num.png" }],
+                "value": [{ "id": "volume", "src": "src", "x": 3114, "y": 0, "w": 99, "h": 12, "divx": 10, "digit": 3, "ref": 57, "align": 2 }],
+                "destination": [
+                    { "id": "volume", "dst": [{ "time": 0, "x": 560, "y": 480, "w": 12, "h": 12 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        let source_width = 3224.0;
+        let sources = mock_source("src", source_width, 1024.0);
+        let items = document.static_image_render_items(
+            &sources,
+            SkinDrawState { select_master_volume: 0.37, ..SkinDrawState::default() },
+        );
+
+        assert_eq!(items.len(), 2);
+        let SkinRenderItem::Image { uv: uv0, .. } = &items[0] else { panic!() };
+        let SkinRenderItem::Image { uv: uv1, .. } = &items[1] else { panic!() };
+        assert!(
+            approx_eq(uv0.width, 9.0 / source_width),
+            "beatoraja slices 99px / 10 as 9px cells, got {}",
+            uv0.width * source_width
+        );
+        assert!(approx_eq(uv0.x, (3114.0 + 3.0 * 9.0) / source_width));
+        assert!(approx_eq(uv1.x, (3114.0 + 7.0 * 9.0) / source_width));
+    }
+
+    #[test]
     fn value_number_left_aligns_when_align_1() {
         let document: SkinDocument = serde_json::from_str(
             r#"
@@ -14778,8 +15836,8 @@ mod tests {
         assert_eq!(skin_state_number(91, state), Some(80));
         // NUMBER_MAXBPM (90) = round(200.3) = 200
         assert_eq!(skin_state_number(90, state), Some(200));
-        // NUMBER_LANECOVER1 (14) = round(0.25 * 100) = 25
-        assert_eq!(skin_state_number(14, state), Some(25));
+        // NUMBER_LANECOVER1 (14) = round(0.25 * 1000) = 250
+        assert_eq!(skin_state_number(14, state), Some(250));
         // NUMBER_LIFT1 (314) = round(0.42 * 1000) = 420
         let lifted = SkinDrawState { lift: 0.42, ..state };
         assert_eq!(skin_state_number(314, lifted), Some(420));
@@ -14799,6 +15857,10 @@ mod tests {
         assert_eq!(skin_state_number(312, state), Some(183_000));
         // NUMBER_DURATION_GREEN (313) = duration * 3 / 5.
         assert_eq!(skin_state_number(313, state), Some(109_800));
+        assert_eq!(
+            skin_state_number(313, SkinDrawState { total_duration_ms: 183_001, ..state }),
+            Some(109_801)
+        );
         // VALUE_JUDGE_1P_DURATION (525) = abs(-3) = 3
         assert_eq!(skin_state_number(525, state), Some(3));
         // When no recent judgement, 525 returns None
@@ -14823,11 +15885,13 @@ mod tests {
         let expr = "0.102*option(180)*number(350)+0.09*option(181)*number(350)";
         let very_hard = SkinDrawState {
             judge_rank: Some(0),
+            select_screen: true,
             select_total_notes: 100,
             ..SkinDrawState::default()
         };
         let hard = SkinDrawState {
             judge_rank: Some(1),
+            select_screen: true,
             select_total_notes: 100,
             ..SkinDrawState::default()
         };
@@ -15027,6 +16091,53 @@ mod tests {
         match item {
             SkinRenderItem::Text { style, .. } => {
                 assert!((style.color.a - 1.0).abs() < 1e-4, "got alpha {}", style.color.a);
+            }
+            other => panic!("expected SkinRenderItem::Text, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn text_render_item_separates_bitmap_font_size_from_destination_height() {
+        let document: SkinDocument = serde_json::from_value(serde_json::json!({
+            "w": 100,
+            "h": 100,
+            "font": [
+                { "id": "bitmap", "path": "artist.fnt" },
+                { "id": "vector", "path": "artist.ttf" }
+            ]
+        }))
+        .unwrap();
+        let frame = ResolvedSkinFrame { w: 80, h: 28, ..ResolvedSkinFrame::default() };
+        let state = SkinTextState::default();
+        let bitmap_text = SkinTextDef {
+            id: "artist".to_string(),
+            font: "result:bitmap".to_string(),
+            size: 17,
+            constant_text: "Aoi".to_string(),
+            ..SkinTextDef::default()
+        };
+        let vector_text = SkinTextDef {
+            id: "artist_vector".to_string(),
+            font: "vector".to_string(),
+            size: 17,
+            constant_text: "Aoi".to_string(),
+            ..SkinTextDef::default()
+        };
+
+        let bitmap_item = document.text_render_item(&bitmap_text, frame, state).unwrap();
+        let vector_item = document.text_render_item(&vector_text, frame, state).unwrap();
+
+        match bitmap_item {
+            SkinRenderItem::Text { style, .. } => {
+                assert!(approx_eq(style.size, 0.28), "got {}", style.size);
+                assert_eq!(style.bitmap_size, Some(0.17));
+            }
+            other => panic!("expected SkinRenderItem::Text, got {other:?}"),
+        }
+        match vector_item {
+            SkinRenderItem::Text { style, .. } => {
+                assert!(approx_eq(style.size, 0.28), "got {}", style.size);
+                assert_eq!(style.bitmap_size, None);
             }
             other => panic!("expected SkinRenderItem::Text, got {other:?}"),
         }

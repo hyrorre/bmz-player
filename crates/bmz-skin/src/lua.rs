@@ -605,6 +605,13 @@ impl MainStateProbe {
         self.float_number_values.get(&ref_id).copied().unwrap_or(0.0)
     }
 
+    fn volume_number(&mut self, ref_id: i32) -> f64 {
+        if matches!(self.mode, MainStateProbeMode::RuntimeStub) {
+            return 1.0;
+        }
+        f64::from(self.number(ref_id)) / 100.0
+    }
+
     fn text(&mut self, ref_id: i32) -> String {
         if ref_id == 1010 {
             return "BMZ Player 0.1.0".to_string();
@@ -700,7 +707,7 @@ fn create_main_state_stub(lua: &Lua, probe: Arc<Mutex<MainStateProbe>>) -> mlua:
                 .timer(timer_id))
         })?,
     )?;
-    let probe_for_gauge_type = probe;
+    let probe_for_gauge_type = probe.clone();
     table.set(
         "gauge_type",
         lua.create_function(move |_, ()| {
@@ -710,9 +717,36 @@ fn create_main_state_stub(lua: &Lua, probe: Arc<Mutex<MainStateProbe>>) -> mlua:
                 .gauge_type())
         })?,
     )?;
-    table.set("volume_sys", lua.create_function(|_, ()| Ok(1.0f64))?)?;
-    table.set("volume_key", lua.create_function(|_, ()| Ok(1.0f64))?)?;
-    table.set("volume_bg", lua.create_function(|_, ()| Ok(1.0f64))?)?;
+    let probe_for_volume_sys = probe.clone();
+    table.set(
+        "volume_sys",
+        lua.create_function(move |_, ()| {
+            Ok(probe_for_volume_sys
+                .lock()
+                .map_err(|_| mlua::Error::external("main_state probe lock poisoned"))?
+                .volume_number(57))
+        })?,
+    )?;
+    let probe_for_volume_key = probe.clone();
+    table.set(
+        "volume_key",
+        lua.create_function(move |_, ()| {
+            Ok(probe_for_volume_key
+                .lock()
+                .map_err(|_| mlua::Error::external("main_state probe lock poisoned"))?
+                .volume_number(58))
+        })?,
+    )?;
+    let probe_for_volume_bg = probe;
+    table.set(
+        "volume_bg",
+        lua.create_function(move |_, ()| {
+            Ok(probe_for_volume_bg
+                .lock()
+                .map_err(|_| mlua::Error::external("main_state probe lock poisoned"))?
+                .volume_number(59))
+        })?,
+    )?;
     table.set("set_volume_sys", lua.create_function(|_, _: Value| Ok(true))?)?;
     table.set("set_volume_key", lua.create_function(|_, _: Value| Ok(true))?)?;
     table.set("set_volume_bg", lua.create_function(|_, _: Value| Ok(true))?)?;
@@ -1858,6 +1892,12 @@ fn lua_table_to_json(
                 }
                 continue;
             }
+            if key == "act"
+                && let Some(event_id) = infer_constant_integer_at_load(function)
+            {
+                object.insert(key.clone(), JsonValue::Number(JsonNumber::from(event_id)));
+                continue;
+            }
             if key == "draw" {
                 if let Some(draw) =
                     infer_boolean_predicate(function, main_state_probe, object_id.as_deref())
@@ -2448,6 +2488,14 @@ fn infer_constant_number_at_load(function: &Function) -> Option<String> {
     match function.call::<Value>(()).ok()? {
         Value::Integer(value) => Some(value.to_string()),
         Value::Number(value) if value.is_finite() => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn infer_constant_integer_at_load(function: &Function) -> Option<i64> {
+    match function.call::<Value>(()).ok()? {
+        Value::Integer(value) => Some(value),
+        Value::Number(value) if value.is_finite() && value.fract() == 0.0 => Some(value as i64),
         _ => None,
     }
 }

@@ -31,6 +31,7 @@ pub fn push_text_command(commands: &mut Vec<DrawCommand>, text: &str, style: Bit
         style: TextStyle {
             font_id: None,
             size: style.cell * GLYPH_HEIGHT as f32,
+            bitmap_size: None,
             color: style.color,
             layer: TextLayer::Ui,
             align: TextAlign::Left,

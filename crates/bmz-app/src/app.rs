@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
@@ -5,24 +7,30 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use bmz_chart::model::PlayableChart;
+use bmz_audio::ffmpeg_loader::FfmpegSampleLoader;
+use bmz_audio::loader::SampleLoader;
+use bmz_audio::sample::DecodedSample;
+use bmz_chart::model::{LongNoteMode, PlayableChart};
 use bmz_core::clear::{ClearType, GaugeType};
 use bmz_core::lane::KeyMode;
 use bmz_core::time::TimeUs;
-use bmz_gameplay::session::PlaySkinOffset;
 use bmz_gameplay::session::compute_frame_times;
-use bmz_render::assets::load_static_rgba_image;
+use bmz_gameplay::session::{HispeedMode, PlaySkinOffset};
+use bmz_render::assets::{RgbaImageAsset, load_static_rgba_image};
 use bmz_render::plan::{
-    PLAY_BACKBMP_TEXTURE, SELECT_BANNER_TEXTURE, SELECT_STAGE_TEXTURE, TextureId,
+    PLAY_BACKBMP_TEXTURE, Rect, SELECT_BANNER_TEXTURE, SELECT_STAGE_TEXTURE, TextureId,
 };
 use bmz_render::renderer::{RenderSurfaceStatus, Renderer, SurfaceSize};
-use bmz_render::scene::{AppSceneSnapshot, ResultSnapshot, SelectRowSnapshot, SelectSnapshot};
+use bmz_render::scene::{
+    AppSceneSnapshot, ResultSnapshot, SelectChartDistributionSecond, SelectRowSnapshot,
+    SelectSnapshot,
+};
 use bmz_render::snapshot::{
     CourseStageMarker, DisplayJudgeCounts, FastSlowJudgeCounts, OverlaySnapshot, RenderSnapshot,
 };
 use winit::application::ApplicationHandler;
-use winit::dpi::PhysicalSize;
-use winit::event::{ElementState, MouseScrollDelta, StartCause, WindowEvent};
+use winit::dpi::{PhysicalPosition, PhysicalSize};
+use winit::event::{ElementState, MouseButton, MouseScrollDelta, StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::monitor::{MonitorHandle, VideoModeHandle};
@@ -42,8 +50,9 @@ use crate::config::key_config::{
 };
 use crate::config::load::load_profile_config;
 use crate::config::profile_config::{
-    AssistOptionConfig, BgaModeConfig, GaugeAutoShiftConfig, GaugeTypeConfig, InputActionConfig,
-    LaneConfig, ProfileConfig, ProfileInputConfig, RandomOptionConfig, TargetOptionConfig,
+    AssistOptionConfig, BgaExpandConfig, BgaModeConfig, GaugeAutoShiftConfig, GaugeTypeConfig,
+    HispeedModeConfig, InputActionConfig, LaneConfig, ProfileConfig, ProfileInputConfig,
+    RandomOptionConfig, TargetOptionConfig,
 };
 use crate::config::save::{save_app_config, save_profile_config};
 use crate::config::settings_registry::SettingsEntryId;
@@ -90,13 +99,14 @@ use crate::skin_loader::{
     set_decoded_skin_context, upload_decoded_skin,
 };
 use crate::songs_cmd::scan_songs;
-use crate::storage::library_db::LibraryDatabase;
+use crate::storage::library_db::{ChartDistributionSecond, LibraryDatabase};
 use crate::storage::migration::migrate_library_db;
 use crate::storage::replay::load_replay_for_chart;
 use crate::ui::{DebugInfo, EguiLayer, SceneSkinDefs, SkinCandidate, SkinCatalog, SkinConfigMeta};
-use bmz_render::skin::{SkinDocument, SkinDocumentTexture, SkinManifest};
-use std::collections::BTreeMap;
-
+use bmz_render::skin::{
+    DestinationListEntry, SkinAnimationDef, SkinClickHit, SkinClickTarget, SkinDocument,
+    SkinDocumentTexture, SkinDstEntry, SkinManifest, SkinSliderHit,
+};
 const SAMPLE_PLAYABLE_TITLE: &str = "BMZ Sample Playable";
 
 pub async fn run() -> Result<()> {
@@ -203,6 +213,7 @@ struct WinitApp {
     play_table_text_secondary: String,
     play_table_text_fallback: String,
     select_items: Vec<SelectItem>,
+    select_distribution_cache: RefCell<HashMap<i64, Vec<ChartDistributionSecond>>>,
     folder_stack: Vec<String>,
     /// `folder_stack` の各階層に入る直前の `selected_index`。
     /// フォルダから出た時にカーソル位置を復元するために使う。長さは `folder_stack` と一致。
@@ -220,6 +231,9 @@ struct WinitApp {
     gauge_option: GaugeTypeConfig,
     gauge_auto_shift_option: GaugeAutoShiftConfig,
     assist_option: AssistOption,
+    select_mode_filter: SelectModeFilter,
+    select_sort: SelectSort,
+    select_ln_mode: SelectLnMode,
     select_keys: SelectKeyBindings,
     smoke_exit_after_frames: Option<u32>,
     smoke_exit_on_result: bool,
@@ -274,11 +288,25 @@ struct WinitApp {
     select_preview_source: Option<String>,
     select_preview_playing: bool,
     select_preview: Option<SelectChartPreview>,
+    select_meta_image_cache: HashMap<String, SelectMetaImageCacheEntry>,
+    select_meta_image_tx: mpsc::Sender<SelectMetaImageResult>,
+    select_meta_image_rx: Receiver<SelectMetaImageResult>,
+    select_preview_cache: HashMap<String, SelectPreviewCacheEntry>,
+    select_preview_tx: mpsc::Sender<SelectPreviewResult>,
+    select_preview_rx: Receiver<SelectPreviewResult>,
     /// プレイ `#BACKBMP` のロード済みキャッシュキー。
     play_backbmp_source: Option<String>,
     play_backbmp_loaded: bool,
     /// プレイ中の Start キー直近の押下時刻。連続押し判定で使用。
     last_play_start_press_at: Option<Instant>,
+    /// Decide 中の E1 押下状態。E1+E2 長押しキャンセルに使う。
+    decide_e1_held: bool,
+    /// プレイ中の E2 押下状態。E2+E3 即終了 / E1+E2 長押し終了に使う。
+    play_e2_held: bool,
+    /// プレイ中の E3 押下状態。E2+E3 即終了に使う。
+    play_e3_held: bool,
+    /// E1+E2 が押され続けている開始時刻。beatoraja 既定 1000ms で途中終了。
+    play_exit_hold_started_at: Option<Instant>,
     /// 本体設定 / スキン設定 / デバッグ表示用の egui レイヤ。
     /// ウィンドウ生成時に初期化される。
     egui: Option<EguiLayer>,
@@ -303,6 +331,10 @@ struct WinitApp {
     search_mode: bool,
     /// 現在入力中の検索クエリ。検索モード中はそのまま skin の search_word に渡る。
     search_query: String,
+    /// 直近のマウスカーソル位置。select skin のクリック hit-test に使う。
+    last_cursor_position: Option<PhysicalPosition<f64>>,
+    /// select skin slider をドラッグ中なら true。
+    select_slider_dragging: bool,
     /// IME 変換中の未確定文字列 (Preedit)。Commit で空になり search_query に追加される。
     search_preedit: String,
     /// 直近の検索クエリ履歴 (古い順)。`bmz-search:<q>` 仮想フォルダとしてルートに並ぶ。
@@ -317,6 +349,37 @@ struct WinitApp {
 }
 
 type PlaySkinSignature = (KeyMode, String, BTreeMap<String, String>, BTreeMap<String, String>);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SelectMetaImageSlot {
+    Stage,
+    Banner,
+}
+
+enum SelectMetaImageCacheEntry {
+    Loading,
+    Ready(RgbaImageAsset),
+    Missing,
+}
+
+struct SelectMetaImageResult {
+    slot: SelectMetaImageSlot,
+    key: String,
+    path: Option<PathBuf>,
+    result: std::result::Result<RgbaImageAsset, String>,
+}
+
+enum SelectPreviewCacheEntry {
+    Loading,
+    Ready(DecodedSample),
+    Missing,
+}
+
+struct SelectPreviewResult {
+    key: String,
+    path: Option<PathBuf>,
+    result: std::result::Result<DecodedSample, String>,
+}
 
 struct DecideTransition {
     chart_id: i64,
@@ -375,8 +438,11 @@ enum ResultExitAction {
 const SELECT_EXIT_HOLD_DURATION: Duration = Duration::from_millis(1_200);
 /// プレイ中の Start ボタンを「2回連続押し」と判定する間隔上限。
 const PLAY_START_DOUBLE_PRESS_WINDOW: Duration = Duration::from_millis(400);
+/// beatoraja 既定の START+SELECT 途中終了長押し時間。
+const PLAY_EXIT_HOLD_DURATION: Duration = Duration::from_millis(1_000);
 /// レーンカバー / LIFT を上下キーで動かす際のステップ幅。
-const LANE_COVER_STEP: f32 = 0.01;
+const LANE_COVER_STEP: f32 = 0.001;
+const LANE_COVER_REPEAT_STEP: f32 = 0.01;
 const SKIN_RELOAD_DEBOUNCE: Duration = Duration::from_millis(300);
 
 struct PendingSkinResult {
@@ -564,7 +630,13 @@ impl WinitApp {
         }
 
         let folder_stack = initial_folder_stack(&boot.app_config);
-        let select_items = load_items_for_stack(&boot, &folder_stack, &[]);
+        let select_items = load_items_for_stack(
+            &boot,
+            &folder_stack,
+            &[],
+            SelectModeFilter::All,
+            SelectSort::Title,
+        );
         let boot_chart_id = resolve_boot_chart_id(&boot.library_db, &options);
         log_startup_options(&options);
 
@@ -593,6 +665,8 @@ impl WinitApp {
         let skin_catalog = scan_skin_catalog();
         let (skin_decode_tx, skin_decode_rx) = mpsc::channel::<PendingSkinResult>();
         let (skin_upload_tx, skin_upload_rx) = mpsc::channel::<PendingUploadResult>();
+        let (select_meta_image_tx, select_meta_image_rx) = mpsc::channel::<SelectMetaImageResult>();
+        let (select_preview_tx, select_preview_rx) = mpsc::channel::<SelectPreviewResult>();
         let (default_skin_manifest, pending_select_skin, pending_decide_skin, pending_result_skin) =
             load_initial_skin_textures(
                 &mut renderer,
@@ -687,6 +761,7 @@ impl WinitApp {
             play_table_text_secondary: String::new(),
             play_table_text_fallback: String::new(),
             select_items,
+            select_distribution_cache: RefCell::new(HashMap::new()),
             selected_index_stack: vec![0; folder_stack.len()],
             folder_stack,
             selected_index: 0,
@@ -702,6 +777,9 @@ impl WinitApp {
             gauge_option,
             gauge_auto_shift_option,
             assist_option,
+            select_mode_filter: SelectModeFilter::All,
+            select_sort: SelectSort::Title,
+            select_ln_mode: SelectLnMode::Ln,
             select_keys,
             smoke_exit_after_frames: options.smoke_exit_after_frames,
             smoke_exit_on_result: options.smoke_exit_on_result,
@@ -738,9 +816,19 @@ impl WinitApp {
             select_preview_source: None,
             select_preview_playing: false,
             select_preview,
+            select_meta_image_cache: HashMap::new(),
+            select_meta_image_tx,
+            select_meta_image_rx,
+            select_preview_cache: HashMap::new(),
+            select_preview_tx,
+            select_preview_rx,
             play_backbmp_source: None,
             play_backbmp_loaded: false,
             last_play_start_press_at: None,
+            decide_e1_held: false,
+            play_e2_held: false,
+            play_e3_held: false,
+            play_exit_hold_started_at: None,
             egui: None,
             applied_window_mode: initial_window_mode,
             focused: true,
@@ -752,6 +840,8 @@ impl WinitApp {
             deferred_boot: deferred_boot_action(boot_chart_id, &options),
             search_mode: false,
             search_query: String::new(),
+            last_cursor_position: None,
+            select_slider_dragging: false,
             search_preedit: String::new(),
             search_history: std::collections::VecDeque::new(),
             search_message: None,
@@ -1148,6 +1238,8 @@ impl WinitApp {
                 .to_string(),
         };
         let (search_word, search_word_alpha) = self.display_search_word();
+        self.ensure_visible_select_chart_distributions(25);
+        let chart_distributions = self.select_distribution_cache.borrow();
         SelectSnapshot {
             time: self.select_time(),
             selection_time: self.select_bar_time(),
@@ -1166,12 +1258,16 @@ impl WinitApp {
                 25,
                 &self.boot.profile_config,
                 self.key_config_edit.as_ref(),
+                &chart_distributions,
             ),
             arrange: self.arrange_option.as_str().to_string(),
             target: self.target_option.as_str().to_string(),
             gauge: gauge_option_as_str(self.gauge_option).to_string(),
             gauge_auto_shift: gauge_auto_shift_as_str(self.gauge_auto_shift_option).to_string(),
             assist: self.assist_option.as_str().to_string(),
+            select_mode: self.select_mode_filter.as_str().to_string(),
+            select_sort: self.select_sort.as_str().to_string(),
+            select_ln_mode: self.select_ln_mode.as_str().to_string(),
             bga: bga_mode_as_str(self.boot.profile_config.play.bga).to_string(),
             master_volume: crate::config::play::volume_unit_to_f32(
                 self.boot.profile_config.audio_mix.master_volume,
@@ -1193,7 +1289,49 @@ impl WinitApp {
             settings_editing: self.settings_edit.is_some() || self.key_config_edit.is_some(),
             search_word,
             search_word_alpha,
+            mouse_position: self.cursor_position_normalized(),
         }
+    }
+
+    fn ensure_visible_select_chart_distributions(&self, visible_limit: usize) {
+        let chart_ids: Vec<i64> = select_visible_item_indices(
+            self.select_items.len(),
+            self.selected_index,
+            visible_limit,
+        )
+        .into_iter()
+        .filter_map(|index| match self.select_items.get(index) {
+            Some(SelectItem::Chart(row)) => row.chart.as_ref().map(|chart| chart.chart_id),
+            _ => None,
+        })
+        .collect();
+        if chart_ids.is_empty() {
+            return;
+        }
+
+        let missing_ids: Vec<i64> = {
+            let cache = self.select_distribution_cache.borrow();
+            chart_ids.iter().copied().filter(|chart_id| !cache.contains_key(chart_id)).collect()
+        };
+        if !missing_ids.is_empty() {
+            match self.boot.library_db.chart_distributions_by_chart_ids(&missing_ids) {
+                Ok(distributions) => {
+                    let mut cache = self.select_distribution_cache.borrow_mut();
+                    for (chart_id, distribution) in distributions {
+                        cache.insert(chart_id, distribution);
+                    }
+                    for chart_id in missing_ids {
+                        cache.entry(chart_id).or_default();
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "failed to load visible chart distributions");
+                }
+            }
+        }
+        self.select_distribution_cache
+            .borrow_mut()
+            .retain(|chart_id, _| chart_ids.contains(chart_id));
     }
 
     /// Returns the string to render in the skin's `STRING_SEARCHWORD` (ref=30)
@@ -1221,6 +1359,69 @@ impl WinitApp {
         }
     }
 
+    fn poll_select_asset_loads(&mut self) {
+        while let Ok(result) = self.select_meta_image_rx.try_recv() {
+            let is_current = match result.slot {
+                SelectMetaImageSlot::Stage => {
+                    self.select_stage_source.as_deref() == Some(result.key.as_str())
+                }
+                SelectMetaImageSlot::Banner => {
+                    self.select_banner_source.as_deref() == Some(result.key.as_str())
+                }
+            };
+            match result.result {
+                Ok(image) => {
+                    if is_current {
+                        let loaded = self.upload_select_meta_image(result.slot, &image);
+                        self.set_select_meta_image_loaded(result.slot, loaded);
+                    }
+                    self.select_meta_image_cache
+                        .insert(result.key, SelectMetaImageCacheEntry::Ready(image));
+                }
+                Err(error) => {
+                    if let Some(path) = result.path {
+                        tracing::debug!(path = %path.display(), %error, "skipping select meta image");
+                    } else {
+                        tracing::debug!(%error, "skipping select meta image");
+                    }
+                    if is_current {
+                        self.set_select_meta_image_loaded(result.slot, false);
+                    }
+                    self.select_meta_image_cache
+                        .insert(result.key, SelectMetaImageCacheEntry::Missing);
+                }
+            }
+        }
+
+        while let Ok(result) = self.select_preview_rx.try_recv() {
+            let is_current = self.select_preview_source.as_deref() == Some(result.key.as_str());
+            match result.result {
+                Ok(sample) => {
+                    if is_current {
+                        let loaded = self.play_select_preview_sample(sample.clone());
+                        self.select_preview_playing = loaded;
+                        if loaded {
+                            self.stop_all_system_bgm();
+                        }
+                    }
+                    self.select_preview_cache
+                        .insert(result.key, SelectPreviewCacheEntry::Ready(sample));
+                }
+                Err(error) => {
+                    if let Some(path) = result.path {
+                        tracing::debug!(path = %path.display(), %error, "skipping chart preview audio");
+                    } else {
+                        tracing::debug!(%error, "skipping chart preview audio");
+                    }
+                    if is_current {
+                        self.select_preview_playing = false;
+                    }
+                    self.select_preview_cache.insert(result.key, SelectPreviewCacheEntry::Missing);
+                }
+            }
+        }
+    }
+
     fn sync_select_preview_audio(&mut self) {
         let cache_key = match self.select_items.get(self.selected_index) {
             Some(SelectItem::Chart(row)) => row.chart.as_ref().and_then(|chart| {
@@ -1230,28 +1431,50 @@ impl WinitApp {
             _ => None,
         };
         if cache_key.as_deref() == self.select_preview_source.as_deref() {
+            if !self.select_preview_playing
+                && let Some(key) = cache_key.as_deref()
+                && let Some(SelectPreviewCacheEntry::Ready(sample)) =
+                    self.select_preview_cache.get(key)
+            {
+                self.select_preview_playing = self.play_select_preview_sample(sample.clone());
+                if self.select_preview_playing {
+                    self.stop_all_system_bgm();
+                }
+            }
             return;
         }
         let had_preview = self.select_preview_playing;
         self.select_preview_source = cache_key.clone();
 
-        let mix = &self.boot.profile_config.audio_mix;
-        let volume = crate::config::play::volume_unit_to_f32(mix.master_volume)
-            * crate::config::play::volume_unit_to_f32(mix.preview_volume);
-        let volume = volume.clamp(0.0, 1.0);
-
-        let loaded = match (&self.select_preview, cache_key.as_deref()) {
-            (Some(preview), Some(key)) => {
-                let (folder, file) = key.split_once('|').unwrap_or(("", ""));
-                preview.stop();
-                crate::chart_asset::resolve_chart_asset_path(folder, file)
-                    .is_some_and(|path| preview.load_and_play(&path, volume))
-            }
-            (Some(preview), None) => {
-                preview.stop();
+        let loaded = match cache_key.as_deref() {
+            Some(_) if self.select_preview.is_none() => false,
+            Some(key) => match self.select_preview_cache.get(key) {
+                Some(SelectPreviewCacheEntry::Ready(sample)) => {
+                    if let Some(preview) = &self.select_preview {
+                        preview.stop();
+                    }
+                    self.play_select_preview_sample(sample.clone())
+                }
+                Some(SelectPreviewCacheEntry::Loading) | Some(SelectPreviewCacheEntry::Missing) => {
+                    if let Some(preview) = &self.select_preview {
+                        preview.stop();
+                    }
+                    false
+                }
+                None => {
+                    if let Some(preview) = &self.select_preview {
+                        preview.stop();
+                    }
+                    self.spawn_select_preview_load(key.to_string());
+                    false
+                }
+            },
+            None => {
+                if let Some(preview) = &self.select_preview {
+                    preview.stop();
+                }
                 false
             }
-            (None, _) => false,
         };
 
         self.select_preview_playing = loaded;
@@ -1273,38 +1496,140 @@ impl WinitApp {
     }
 
     fn sync_select_banner_texture(&mut self) {
-        let cache_key = match self.select_items.get(self.selected_index) {
-            Some(SelectItem::Chart(row)) => row.chart.as_ref().and_then(|chart| {
-                (!chart.banner_file.is_empty())
-                    .then(|| format!("{}|{}", chart.folder_path, chart.banner_file))
-            }),
-            _ => None,
-        };
-        if cache_key.as_deref() == self.select_banner_source.as_deref() {
-            return;
-        }
-        self.select_banner_source = cache_key.clone();
-        self.select_banner_loaded = cache_key.is_some_and(|key| {
-            let (folder, file) = key.split_once('|').unwrap_or(("", ""));
-            load_chart_meta_texture(&mut self.renderer, SELECT_BANNER_TEXTURE, folder, file)
-        });
+        self.sync_select_meta_image_texture(SelectMetaImageSlot::Banner);
     }
 
     fn sync_select_stage_texture(&mut self) {
+        self.sync_select_meta_image_texture(SelectMetaImageSlot::Stage);
+    }
+
+    fn sync_select_meta_image_texture(&mut self, slot: SelectMetaImageSlot) {
         let cache_key = match self.select_items.get(self.selected_index) {
             Some(SelectItem::Chart(row)) => row.chart.as_ref().and_then(|chart| {
-                (!chart.stage_file.is_empty())
-                    .then(|| format!("{}|{}", chart.folder_path, chart.stage_file))
+                let file = match slot {
+                    SelectMetaImageSlot::Stage => &chart.stage_file,
+                    SelectMetaImageSlot::Banner => &chart.banner_file,
+                };
+                (!file.is_empty()).then(|| format!("{}|{}", chart.folder_path, file))
             }),
             _ => None,
         };
-        if cache_key.as_deref() == self.select_stage_source.as_deref() {
+        if cache_key.as_deref() == self.select_meta_image_source(slot).as_deref() {
+            if !self.select_meta_image_loaded(slot)
+                && let Some(key) = cache_key.as_deref()
+                && let Some(SelectMetaImageCacheEntry::Ready(image)) =
+                    self.select_meta_image_cache.get(key)
+            {
+                let image = image.clone();
+                let loaded = self.upload_select_meta_image(slot, &image);
+                self.set_select_meta_image_loaded(slot, loaded);
+            }
             return;
         }
-        self.select_stage_source = cache_key.clone();
-        self.select_stage_loaded = cache_key.is_some_and(|key| {
+        self.set_select_meta_image_source(slot, cache_key.clone());
+        self.set_select_meta_image_loaded(slot, false);
+        let Some(key) = cache_key else {
+            return;
+        };
+
+        match self.select_meta_image_cache.get(&key) {
+            Some(SelectMetaImageCacheEntry::Ready(image)) => {
+                let image = image.clone();
+                let loaded = self.upload_select_meta_image(slot, &image);
+                self.set_select_meta_image_loaded(slot, loaded);
+            }
+            Some(SelectMetaImageCacheEntry::Loading) | Some(SelectMetaImageCacheEntry::Missing) => {
+            }
+            None => self.spawn_select_meta_image_load(slot, key),
+        }
+    }
+
+    fn select_meta_image_source(&self, slot: SelectMetaImageSlot) -> &Option<String> {
+        match slot {
+            SelectMetaImageSlot::Stage => &self.select_stage_source,
+            SelectMetaImageSlot::Banner => &self.select_banner_source,
+        }
+    }
+
+    fn set_select_meta_image_source(&mut self, slot: SelectMetaImageSlot, source: Option<String>) {
+        match slot {
+            SelectMetaImageSlot::Stage => self.select_stage_source = source,
+            SelectMetaImageSlot::Banner => self.select_banner_source = source,
+        }
+    }
+
+    fn select_meta_image_loaded(&self, slot: SelectMetaImageSlot) -> bool {
+        match slot {
+            SelectMetaImageSlot::Stage => self.select_stage_loaded,
+            SelectMetaImageSlot::Banner => self.select_banner_loaded,
+        }
+    }
+
+    fn set_select_meta_image_loaded(&mut self, slot: SelectMetaImageSlot, loaded: bool) {
+        match slot {
+            SelectMetaImageSlot::Stage => self.select_stage_loaded = loaded,
+            SelectMetaImageSlot::Banner => self.select_banner_loaded = loaded,
+        }
+    }
+
+    fn upload_select_meta_image(
+        &mut self,
+        slot: SelectMetaImageSlot,
+        image: &RgbaImageAsset,
+    ) -> bool {
+        let texture_id = match slot {
+            SelectMetaImageSlot::Stage => SELECT_STAGE_TEXTURE,
+            SelectMetaImageSlot::Banner => SELECT_BANNER_TEXTURE,
+        };
+        if let Err(error) = self.renderer.upsert_image_asset(texture_id, image) {
+            tracing::warn!(%error, "failed to upload select meta image");
+            false
+        } else {
+            true
+        }
+    }
+
+    fn spawn_select_meta_image_load(&mut self, slot: SelectMetaImageSlot, key: String) {
+        self.select_meta_image_cache.insert(key.clone(), SelectMetaImageCacheEntry::Loading);
+        let tx = self.select_meta_image_tx.clone();
+        thread::spawn(move || {
             let (folder, file) = key.split_once('|').unwrap_or(("", ""));
-            load_chart_meta_texture(&mut self.renderer, SELECT_STAGE_TEXTURE, folder, file)
+            let path = crate::chart_asset::resolve_chart_asset_path(folder, file);
+            let result = match path.as_ref() {
+                Some(path) => load_static_rgba_image(path).map_err(|error| error.to_string()),
+                None => Err("select meta image file not found".to_string()),
+            };
+            let _ = tx.send(SelectMetaImageResult { slot, key, path, result });
+        });
+    }
+
+    fn select_preview_volume(&self) -> f32 {
+        let mix = &self.boot.profile_config.audio_mix;
+        let volume = crate::config::play::volume_unit_to_f32(mix.master_volume)
+            * crate::config::play::volume_unit_to_f32(mix.preview_volume);
+        volume.clamp(0.0, 1.0)
+    }
+
+    fn play_select_preview_sample(&self, sample: DecodedSample) -> bool {
+        self.select_preview
+            .as_ref()
+            .is_some_and(|preview| preview.play_sample(sample, self.select_preview_volume()))
+    }
+
+    fn spawn_select_preview_load(&mut self, key: String) {
+        self.select_preview_cache.insert(key.clone(), SelectPreviewCacheEntry::Loading);
+        let tx = self.select_preview_tx.clone();
+        thread::spawn(move || {
+            let (folder, file) = key.split_once('|').unwrap_or(("", ""));
+            let path = crate::chart_asset::resolve_preview_file(Path::new(folder), file);
+            let result = match path.as_ref() {
+                Some(path) => {
+                    let mut loader = FfmpegSampleLoader;
+                    loader.load(path).map_err(|error| error.to_string())
+                }
+                None => Err("chart preview audio file not found".to_string()),
+            };
+            let _ = tx.send(SelectPreviewResult { key, path, result });
         });
     }
 
@@ -1346,8 +1671,28 @@ impl WinitApp {
 
     fn decide_snapshot(&self, decide: &DecideTransition) -> RenderSnapshot {
         let mut snapshot = decide.snapshot.clone();
-        snapshot.play_elapsed_time = elapsed_since(decide.started_at);
-        snapshot.fadeout_elapsed_ms = decide.fadeout_started_at.map(elapsed_since_ms);
+        let elapsed = match decide.fadeout_started_at {
+            Some(fadeout_started_at) => {
+                let fadeout_duration = self.decide_fadeout_duration();
+                let fadeout_elapsed = fadeout_started_at.elapsed().min(fadeout_duration);
+                let scene_elapsed = decide_fadeout_scene_elapsed(
+                    fadeout_started_at.duration_since(decide.started_at),
+                    fadeout_elapsed,
+                    self.decide_scene_duration(),
+                    fadeout_duration,
+                    self.decide_fadeout_scene_timing(),
+                );
+                TimeUs(scene_elapsed.as_micros().min(i64::MAX as u128) as i64)
+            }
+            None => elapsed_since(decide.started_at),
+        };
+        snapshot.play_elapsed_time = elapsed;
+        snapshot.fadeout_elapsed_ms = decide.fadeout_started_at.map(|started_at| {
+            let elapsed_ms = elapsed_since_ms(started_at);
+            let fadeout_ms =
+                self.decide_fadeout_duration().as_millis().min(i32::MAX as u128) as i32;
+            elapsed_ms.min(fadeout_ms)
+        });
         snapshot
     }
 
@@ -1696,6 +2041,13 @@ impl WinitApp {
     }
 
     fn route_keyboard_input(&mut self, event: &winit::event::KeyEvent) {
+        if self.active_play.is_some()
+            && let Some(control) = physical_key_name(event.physical_key)
+            && !event.repeat
+            && self.update_play_exit_control_state(&control, event.state == ElementState::Pressed)
+        {
+            return;
+        }
         if let Some(active_play) = &mut self.active_play {
             if let Some(control) = physical_key_name(event.physical_key)
                 && self.select_keys.is_start(&control)
@@ -1703,6 +2055,45 @@ impl WinitApp {
             {
                 active_play.running.session.lane_cover_changing =
                     event.state == ElementState::Pressed;
+                update_pre_ready_play_snapshot_options_for_session(
+                    self.play_ready_sound_started_at,
+                    &mut self.last_play_snapshot,
+                    &active_play.running.session,
+                );
+                update_play_exit_hold_started_at(
+                    &mut self.play_exit_hold_started_at,
+                    active_play.running.session.lane_cover_changing,
+                    self.play_e2_held,
+                    Instant::now(),
+                );
+            }
+            if event.state == ElementState::Pressed
+                && !event.repeat
+                && active_play.running.session.lane_cover_changing
+                && let Some(control) = physical_key_name(event.physical_key)
+                && let Some(action) = play_option_control(&control, &self.select_keys)
+            {
+                let speed_locked = self.active_course.as_ref().is_some_and(|c| {
+                    c.definition.constraints.speed
+                        == bmz_core::course::CourseSpeedConstraint::NoSpeed
+                });
+                if apply_play_option_control_to_session(
+                    &mut active_play.running.session,
+                    action,
+                    speed_locked,
+                ) {
+                    tracing::info!(
+                        hispeed = active_play.running.session.hispeed,
+                        hispeed_mode = ?active_play.running.session.hispeed_mode,
+                        target_green_number = active_play.running.session.target_green_number,
+                        lane_cover = active_play.running.session.lane_cover,
+                        "adjusted play option"
+                    );
+                } else {
+                    tracing::debug!("play option change ignored: course NoSpeed constraint");
+                }
+                self.update_pre_ready_play_snapshot_options();
+                return;
             }
             if let Some(change) = hispeed_action(event.physical_key, event.state, event.repeat) {
                 // Beatoraja: NoSpeed constraint locks the hispeed during course play.
@@ -1717,30 +2108,30 @@ impl WinitApp {
                 active_play.running.session.hispeed =
                     adjusted_hispeed(active_play.running.session.hispeed, change);
                 tracing::info!(hispeed = active_play.running.session.hispeed, "adjusted hispeed");
+                self.update_pre_ready_play_snapshot_options();
                 return;
             }
             if event.physical_key == PhysicalKey::Code(KeyCode::Escape)
                 && event.state == ElementState::Pressed
                 && !event.repeat
             {
-                let session = &mut active_play.running.session;
-                if !session.judge.is_exhausted(&session.chart) {
-                    tracing::info!("escape pressed during play; marking session as failed");
-                    session.state = bmz_gameplay::session::PlayState::Failed;
-                    self.play_system_sound(crate::system_sound::SoundType::PlayStop);
-                }
+                self.stop_active_play_like_escape("escape pressed during play");
                 return;
             }
             if let Some(delta) = lane_cover_step(event.physical_key, event.state, event.repeat) {
                 let session = &mut active_play.running.session;
-                if session.lane_cover_visible {
-                    // SUDDEN+ は ArrowDown で値を大きくする (上下逆操作)。
-                    session.lane_cover = (session.lane_cover - delta).clamp(0.0, 1.0);
-                    tracing::info!(lane_cover = session.lane_cover, "adjusted lane cover");
-                } else {
-                    session.lift = (session.lift + delta).clamp(0.0, 1.0);
-                    tracing::info!(lift = session.lift, "adjusted lift");
-                }
+                let speed_locked = self.active_course.as_ref().is_some_and(|c| {
+                    c.definition.constraints.speed
+                        == bmz_core::course::CourseSpeedConstraint::NoSpeed
+                });
+                apply_lane_cover_step_to_session(session, delta, speed_locked);
+                tracing::info!(
+                    lane_cover = session.lane_cover,
+                    lift = session.lift,
+                    hispeed = session.hispeed,
+                    "adjusted lane cover"
+                );
+                self.update_pre_ready_play_snapshot_options();
                 return;
             }
             if event.physical_key == PhysicalKey::Code(KeyCode::KeyH)
@@ -1764,12 +2155,25 @@ impl WinitApp {
                     .is_some_and(|prev| now.duration_since(prev) <= PLAY_START_DOUBLE_PRESS_WINDOW);
                 if is_double {
                     let session = &mut active_play.running.session;
+                    let was_visible = session.lane_cover_visible;
                     session.lane_cover_visible = !session.lane_cover_visible;
+                    if !was_visible && session.lane_cover_visible {
+                        let speed_locked = self.active_course.as_ref().is_some_and(|c| {
+                            c.definition.constraints.speed
+                                == bmz_core::course::CourseSpeedConstraint::NoSpeed
+                        });
+                        reset_floating_hispeed_if_enabled(session, speed_locked);
+                    }
                     tracing::info!(
                         lane_cover_visible = session.lane_cover_visible,
                         "toggled lane cover visibility",
                     );
                     self.last_play_start_press_at = None;
+                    update_pre_ready_play_snapshot_options_for_session(
+                        self.play_ready_sound_started_at,
+                        &mut self.last_play_snapshot,
+                        &active_play.running.session,
+                    );
                 } else {
                     self.last_play_start_press_at = Some(now);
                 }
@@ -1780,11 +2184,22 @@ impl WinitApp {
         }
 
         if self.pending_decide.is_some() {
-            if self.decide_input_ready()
-                && let Some(action) = decide_action(event.physical_key, event.state, event.repeat)
+            if let Some(control) = physical_key_name(event.physical_key)
+                && !event.repeat
+                && self.update_decide_cancel_control_state(
+                    &control,
+                    event.state == ElementState::Pressed,
+                )
             {
+                return;
+            }
+            if let Some(action) = decide_action(event.physical_key, event.state, event.repeat) {
                 self.begin_decide_fadeout(matches!(action, DecideAction::Cancel));
             }
+            return;
+        }
+
+        if self.pending_play_start.is_some() {
             return;
         }
 
@@ -2003,10 +2418,51 @@ impl WinitApp {
     }
 
     fn route_gamepad_button(&mut self, button: &str, pressed: bool) {
+        if self.active_play.is_some() && self.update_play_exit_control_state(button, pressed) {
+            return;
+        }
         if let Some(active_play) = &mut self.active_play
             && self.select_keys.is_start(button)
         {
             active_play.running.session.lane_cover_changing = pressed;
+            update_pre_ready_play_snapshot_options_for_session(
+                self.play_ready_sound_started_at,
+                &mut self.last_play_snapshot,
+                &active_play.running.session,
+            );
+            update_play_exit_hold_started_at(
+                &mut self.play_exit_hold_started_at,
+                active_play.running.session.lane_cover_changing,
+                self.play_e2_held,
+                Instant::now(),
+            );
+        }
+        if pressed {
+            let speed_locked = self.active_course.as_ref().is_some_and(|c| {
+                c.definition.constraints.speed == bmz_core::course::CourseSpeedConstraint::NoSpeed
+            });
+            if let Some(active_play) = &mut self.active_play
+                && active_play.running.session.lane_cover_changing
+                && let Some(action) = play_option_control(button, &self.select_keys)
+            {
+                if apply_play_option_control_to_session(
+                    &mut active_play.running.session,
+                    action,
+                    speed_locked,
+                ) {
+                    tracing::info!(
+                        hispeed = active_play.running.session.hispeed,
+                        hispeed_mode = ?active_play.running.session.hispeed_mode,
+                        target_green_number = active_play.running.session.target_green_number,
+                        lane_cover = active_play.running.session.lane_cover,
+                        "adjusted play option"
+                    );
+                } else {
+                    tracing::debug!("play option change ignored: course NoSpeed constraint");
+                }
+                self.update_pre_ready_play_snapshot_options();
+                return;
+            }
         }
         if !pressed {
             if in_settings_stack(&self.folder_stack) {
@@ -2026,13 +2482,21 @@ impl WinitApp {
         }
 
         if self.pending_decide.is_some() {
-            if self.decide_input_ready() {
-                match button {
-                    "Button1" | "Start" => self.begin_decide_fadeout(false),
-                    "Button2" | "Select" => self.begin_decide_fadeout(true),
-                    _ => {}
+            if self.update_decide_cancel_control_state(button, pressed) {
+                return;
+            }
+            match button {
+                "Button1" => self.begin_decide_fadeout(false),
+                _ => {
+                    if self.select_keys.is_enter(button) {
+                        self.begin_decide_fadeout(false);
+                    }
                 }
             }
+            return;
+        }
+
+        if self.pending_play_start.is_some() {
             return;
         }
 
@@ -2133,12 +2597,275 @@ impl WinitApp {
     }
 
     fn route_mouse_wheel(&mut self, delta: MouseScrollDelta) {
+        if let Some(change) = lane_cover_wheel_change(delta)
+            && let Some(active_play) = &mut self.active_play
+        {
+            let speed_locked = self.active_course.as_ref().is_some_and(|c| {
+                c.definition.constraints.speed == bmz_core::course::CourseSpeedConstraint::NoSpeed
+            });
+            let session = &mut active_play.running.session;
+            apply_lane_cover_step_to_session(session, lane_cover_change_step(change), speed_locked);
+            tracing::info!(
+                lane_cover = session.lane_cover,
+                lift = session.lift,
+                hispeed = session.hispeed,
+                "adjusted lane cover from mouse wheel"
+            );
+            self.update_pre_ready_play_snapshot_options();
+            return;
+        }
         if !matches!(self.view_state(), AppViewState::Select) {
             return;
         }
         if let Some(select_move) = select_wheel_move(delta) {
             self.move_selection(select_move);
         }
+    }
+
+    fn route_mouse_input(&mut self, state: ElementState, button: MouseButton) {
+        if !matches!(self.view_state(), AppViewState::Select) {
+            self.select_slider_dragging = false;
+            return;
+        }
+        if state == ElementState::Released {
+            if self.select_slider_dragging {
+                self.select_slider_dragging = false;
+                self.save_select_slider_profile();
+            }
+            return;
+        }
+        if state != ElementState::Pressed {
+            return;
+        }
+        let Some((x, y)) = self.cursor_position_normalized() else {
+            return;
+        };
+        let snapshot = self.select_snapshot();
+        if button == MouseButton::Left
+            && let Some(hit) = self.renderer.select_skin_slider_hit(&snapshot, x, y)
+        {
+            self.select_slider_dragging = true;
+            self.apply_select_slider_hit(hit);
+            return;
+        }
+        let Some(hit) = self.renderer.select_skin_click_hit(&snapshot, x, y) else {
+            return;
+        };
+        self.handle_select_skin_click(hit, button, x, y);
+    }
+
+    fn route_select_slider_drag(&mut self) {
+        if !self.select_slider_dragging || !matches!(self.view_state(), AppViewState::Select) {
+            return;
+        }
+        let Some((x, y)) = self.cursor_position_normalized() else {
+            return;
+        };
+        let snapshot = self.select_snapshot();
+        if let Some(hit) = self.renderer.select_skin_slider_hit(&snapshot, x, y) {
+            self.apply_select_slider_hit(hit);
+        }
+    }
+
+    fn cursor_position_normalized(&self) -> Option<(f32, f32)> {
+        let window = self.window.as_ref()?;
+        let position = self.last_cursor_position?;
+        let size = window.inner_size();
+        if size.width == 0 || size.height == 0 {
+            return None;
+        }
+        Some((
+            (position.x as f32 / size.width as f32).clamp(0.0, 1.0),
+            (position.y as f32 / size.height as f32).clamp(0.0, 1.0),
+        ))
+    }
+
+    fn apply_select_slider_hit(&mut self, hit: SkinSliderHit) {
+        let value = volume_f32_to_unit(hit.value);
+        let mix = &mut self.boot.profile_config.audio_mix;
+        match hit.slider_type {
+            17 if mix.master_volume != value => {
+                mix.master_volume = value;
+                tracing::info!(value, "select skin master volume changed");
+            }
+            18 if mix.key_volume != value => {
+                mix.key_volume = value;
+                tracing::info!(value, "select skin key volume changed");
+            }
+            19 if mix.bgm_volume != value => {
+                mix.bgm_volume = value;
+                tracing::info!(value, "select skin bgm volume changed");
+            }
+            17..=19 => {}
+            _ => {
+                tracing::debug!(slider_type = hit.slider_type, "unsupported select skin slider");
+            }
+        }
+    }
+
+    fn save_select_slider_profile(&mut self) {
+        match save_profile_config(&self.boot.profile_paths.profile_toml, &self.boot.profile_config)
+        {
+            Ok(()) => tracing::info!("profile config saved from select skin slider"),
+            Err(error) => tracing::error!(%error, "failed to save profile config"),
+        }
+    }
+
+    fn handle_select_skin_click(&mut self, hit: SkinClickHit, button: MouseButton, x: f32, y: f32) {
+        match hit.target {
+            SkinClickTarget::SelectRow { row_index } => {
+                self.handle_select_row_click(row_index, button);
+            }
+            SkinClickTarget::Event { event_id, click } => {
+                let Some(arg) = select_click_event_arg(click, button, hit.rect, x, y) else {
+                    return;
+                };
+                self.execute_select_skin_event(event_id, arg);
+            }
+        }
+    }
+
+    fn handle_select_row_click(&mut self, row_index: u32, button: MouseButton) {
+        match button {
+            MouseButton::Left => {
+                let next = row_index as usize;
+                if next < self.select_items.len() && self.selected_index != next {
+                    self.selected_index = next;
+                    self.select_bar_started_at = Instant::now();
+                    self.play_system_sound(crate::system_sound::SoundType::Scratch);
+                }
+            }
+            MouseButton::Right => self.exit_folder(),
+            _ => {}
+        }
+    }
+
+    fn execute_select_skin_event(&mut self, event_id: i32, arg: i32) {
+        match event_id {
+            // beatoraja EventFactory: play / autoplay / practice.
+            15 => {
+                self.set_assist_option(AssistOption::Normal);
+                self.enter_or_play_selected();
+            }
+            16 => {
+                self.set_assist_option(AssistOption::Autoplay);
+                self.enter_or_play_selected();
+            }
+            315 => {
+                if let Some(chart_id) = self.currently_selected_chart_id() {
+                    self.enter_practice(chart_id, PracticeCliOverrides::default());
+                }
+            }
+            19 | 316 | 317 | 318 => {
+                let slot = match event_id {
+                    19 => 0,
+                    316 => 1,
+                    317 => 2,
+                    318 => 3,
+                    _ => unreachable!(),
+                };
+                if !self.start_replay_for_selected(slot) {
+                    tracing::info!(slot, "select skin replay click ignored; slot is empty");
+                }
+            }
+            11 => self.cycle_select_mode_filter(arg),
+            12 => self.cycle_select_sort(arg),
+            40 => self.cycle_select_gauge(arg),
+            42 | 43 | 54 => self.cycle_select_arrange(arg),
+            72 => self.cycle_select_bga(arg),
+            73 => self.cycle_select_bga_expand(arg),
+            77 => self.cycle_select_target(arg),
+            78 => self.cycle_select_gauge_auto_shift(arg),
+            308 => self.cycle_select_ln_mode(arg),
+            312 => {
+                // BMZ only exposes beatoraja's default sorter set for now.
+                self.cycle_select_sort(arg);
+            }
+            _ => {
+                tracing::debug!(event_id, arg, "unsupported select skin event");
+            }
+        }
+    }
+
+    fn cycle_select_mode_filter(&mut self, arg: i32) {
+        self.select_mode_filter = if arg >= 0 {
+            self.select_mode_filter.next()
+        } else {
+            self.select_mode_filter.previous()
+        };
+        let previous_len = self.select_items.len();
+        self.reload_select_items();
+        tracing::info!(
+            mode = self.select_mode_filter.as_str(),
+            previous_len,
+            current_len = self.select_items.len(),
+            "select mode filter changed"
+        );
+        self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+    }
+
+    fn cycle_select_gauge(&mut self, arg: i32) {
+        self.gauge_option = cycle_gauge_option_with_direction(self.gauge_option, arg);
+        tracing::info!(gauge = ?self.gauge_option, "gauge option changed");
+        self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+    }
+
+    fn cycle_select_arrange(&mut self, arg: i32) {
+        self.arrange_option = cycle_arrange_option_with_direction(self.arrange_option, arg);
+        tracing::info!(arrange = self.arrange_option.as_str(), "arrange option changed");
+        self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+    }
+
+    fn cycle_select_bga(&mut self, arg: i32) {
+        self.boot.profile_config.play.bga =
+            cycle_bga_option_with_direction(self.boot.profile_config.play.bga, arg);
+        tracing::info!(
+            bga = bga_mode_as_str(self.boot.profile_config.play.bga),
+            "bga option changed"
+        );
+        self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+    }
+
+    fn cycle_select_bga_expand(&mut self, arg: i32) {
+        self.boot.profile_config.play.bga_expand =
+            cycle_bga_expand_with_direction(self.boot.profile_config.play.bga_expand, arg);
+        tracing::info!(
+            bga_expand = ?self.boot.profile_config.play.bga_expand,
+            "bga expand changed"
+        );
+        self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+    }
+
+    fn cycle_select_target(&mut self, arg: i32) {
+        let cycle = if arg >= 0 { TargetCycle::Next } else { TargetCycle::Previous };
+        self.apply_target_option_cycle(cycle);
+        self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+    }
+
+    fn cycle_select_gauge_auto_shift(&mut self, arg: i32) {
+        self.gauge_auto_shift_option =
+            cycle_gauge_auto_shift_option_with_direction(self.gauge_auto_shift_option, arg);
+        tracing::info!(
+            gauge_auto_shift = gauge_auto_shift_as_str(self.gauge_auto_shift_option),
+            "gauge auto shift changed"
+        );
+        self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+    }
+
+    fn cycle_select_sort(&mut self, arg: i32) {
+        self.select_sort =
+            if arg >= 0 { self.select_sort.next() } else { self.select_sort.previous() };
+        self.reload_select_items();
+        tracing::info!(sort = self.select_sort.as_str(), "select sort changed");
+        self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+    }
+
+    fn cycle_select_ln_mode(&mut self, arg: i32) {
+        self.select_ln_mode =
+            if arg >= 0 { self.select_ln_mode.next() } else { self.select_ln_mode.previous() };
+        self.invalidate_play_preload();
+        tracing::info!(ln_mode = self.select_ln_mode.as_str(), "select LN mode changed");
+        self.play_system_sound(crate::system_sound::SoundType::OptionChange);
     }
 
     fn move_selection(&mut self, select_move: SelectMove) {
@@ -2500,6 +3227,7 @@ impl WinitApp {
             autoplay: false,
             practice_mode: false,
             arrange: ArrangeOption::Normal,
+            ln_mode_override: Some(self.select_ln_mode.long_note_mode()),
             ..Default::default()
         };
         self.start_play_preload(chart_id, preload_options);
@@ -2614,6 +3342,7 @@ impl WinitApp {
                 gauge_auto_shift: GaugeAutoShiftConfig::Off,
                 arrange: property.arrange,
                 chart_zero_time: chart_zero,
+                ln_mode_override: Some(self.select_ln_mode.long_note_mode()),
                 ..Default::default()
             },
         );
@@ -3312,6 +4041,7 @@ impl WinitApp {
         self.result_exit = None;
         self.play_ready_sound_started_at = None;
         self.active_play = None;
+        self.clear_play_control_holds();
         self.clear_play_backbmp_state();
         self.finished_play = None;
         self.draining_audio = None;
@@ -3484,6 +4214,7 @@ impl WinitApp {
             arrange: self.arrange_option,
             target: self.target_option,
             arrange_seed,
+            ln_mode_override: Some(self.select_ln_mode.long_note_mode()),
             ..Default::default()
         }
     }
@@ -3523,7 +4254,7 @@ impl WinitApp {
             arrange_pattern: replay_file.lane_shuffle_pattern.clone(),
             initial_gauge_value: None,
             judge_constraint: bmz_core::course::CourseJudgeConstraint::Normal,
-            ln_mode_override: None,
+            ln_mode_override: Some(self.select_ln_mode.long_note_mode()),
             course_gauge_override: None,
             course_gauge_property_override: None,
         };
@@ -3618,14 +4349,11 @@ impl WinitApp {
         self.play_system_sound(crate::system_sound::SoundType::ResultClose);
     }
 
-    fn decide_input_ready(&self) -> bool {
-        let Some(decide) = &self.pending_decide else {
-            return false;
-        };
-        decide.started_at.elapsed() >= self.decide_input_duration()
-    }
-
     fn begin_decide_fadeout(&mut self, cancel: bool) {
+        if self.pending_decide.is_none() {
+            return;
+        }
+        self.clear_play_control_holds();
         let Some(decide) = &mut self.pending_decide else {
             return;
         };
@@ -3637,6 +4365,14 @@ impl WinitApp {
     }
 
     fn advance_decide_transition(&mut self) {
+        let Some(fadeout_started) =
+            self.pending_decide.as_ref().map(|decide| decide.fadeout_started_at.is_some())
+        else {
+            return;
+        };
+        if !fadeout_started && self.cancel_decide_if_exit_hold_elapsed() {
+            return;
+        }
         let Some(decide) = &self.pending_decide else {
             return;
         };
@@ -3656,6 +4392,10 @@ impl WinitApp {
             return;
         }
 
+        if !decide.cancel && !self.decide_play_start_ready() {
+            return;
+        }
+
         let Some(decide) = self.pending_decide.take() else {
             return;
         };
@@ -3671,6 +4411,48 @@ impl WinitApp {
         } else {
             self.enter_play_scene(decide.chart_id, decide.snapshot);
         }
+    }
+
+    fn decide_play_start_ready(&self) -> bool {
+        !self.pending_play_skin && self.pending_play_preload.is_none()
+    }
+
+    fn update_decide_cancel_control_state(&mut self, control: &str, pressed: bool) -> bool {
+        let mut handled = false;
+        if self.select_keys.is_start(control) {
+            self.decide_e1_held = pressed;
+            handled = true;
+        }
+        if self.select_keys.is_e2_action(control) {
+            self.play_e2_held = pressed;
+            handled = true;
+        }
+        if self.select_keys.is_e3_action(control) {
+            self.play_e3_held = pressed;
+            handled = true;
+        }
+        if !handled {
+            return false;
+        }
+        update_play_exit_hold_started_at(
+            &mut self.play_exit_hold_started_at,
+            self.decide_e1_held,
+            self.play_e2_held,
+            Instant::now(),
+        );
+        if pressed && self.play_e2_held && self.play_e3_held {
+            self.begin_decide_fadeout(true);
+            return true;
+        }
+        true
+    }
+
+    fn cancel_decide_if_exit_hold_elapsed(&mut self) -> bool {
+        if play_exit_hold_elapsed(self.play_exit_hold_started_at, Instant::now()) {
+            self.begin_decide_fadeout(true);
+            return true;
+        }
+        false
     }
 
     fn advance_play_ending(&mut self) {
@@ -3761,16 +4543,16 @@ impl WinitApp {
         self.select_bar_started_at = now;
     }
 
-    fn decide_input_duration(&self) -> Duration {
-        skin_duration_ms(self.renderer.decide_skin_document().map(|d| d.input).unwrap_or(0))
-    }
-
     fn decide_scene_duration(&self) -> Duration {
         skin_duration_ms(self.renderer.decide_skin_document().map(|d| d.scene).unwrap_or(0))
     }
 
     fn decide_fadeout_duration(&self) -> Duration {
         skin_duration_ms(self.renderer.decide_skin_document().map(|d| d.fadeout).unwrap_or(0))
+    }
+
+    fn decide_fadeout_scene_timing(&self) -> DecideFadeoutSceneTiming {
+        decide_fadeout_scene_timing(self.renderer.decide_skin_document())
     }
 
     fn play_finishmargin_duration(&self) -> Duration {
@@ -3812,8 +4594,15 @@ impl WinitApp {
 
     fn reload_select_items(&mut self) {
         let history: Vec<String> = self.search_history.iter().cloned().collect();
-        let items = load_items_for_stack(&self.boot, &self.folder_stack, &history);
+        let items = load_items_for_stack(
+            &self.boot,
+            &self.folder_stack,
+            &history,
+            self.select_mode_filter,
+            self.select_sort,
+        );
         self.select_items = items;
+        self.select_distribution_cache.borrow_mut().clear();
         if self.selected_index >= self.select_items.len() {
             self.selected_index = self.select_items.len().saturating_sub(1);
         }
@@ -4067,6 +4856,9 @@ impl WinitApp {
         if self.active_play.is_none() {
             return;
         }
+        if self.stop_play_if_exit_hold_elapsed() {
+            self.clear_play_control_holds();
+        }
         self.maybe_start_ready_phase();
         if self.play_ready_sound_started_at.is_none() {
             self.update_pending_play_snapshot_timers();
@@ -4185,6 +4977,90 @@ impl WinitApp {
         };
         snapshot.play_elapsed_time = play_elapsed_time;
         snapshot.ready_elapsed_time = ready_elapsed_time;
+    }
+
+    fn update_pre_ready_play_snapshot_options(&mut self) {
+        let Some(active_play) = &self.active_play else {
+            return;
+        };
+        update_pre_ready_play_snapshot_options_for_session(
+            self.play_ready_sound_started_at,
+            &mut self.last_play_snapshot,
+            &active_play.running.session,
+        );
+    }
+
+    fn stop_active_play_like_escape(&mut self, reason: &'static str) -> bool {
+        let stopped = {
+            let Some(active_play) = &mut self.active_play else {
+                return false;
+            };
+            let session = &mut active_play.running.session;
+            if session.judge.is_exhausted(&session.chart)
+                || matches!(
+                    session.state,
+                    bmz_gameplay::session::PlayState::Failed
+                        | bmz_gameplay::session::PlayState::Finished
+                )
+            {
+                return false;
+            }
+            tracing::info!(reason, "stopping active play");
+            session.state = bmz_gameplay::session::PlayState::Failed;
+            true
+        };
+        self.clear_play_control_holds();
+        self.play_system_sound(crate::system_sound::SoundType::PlayStop);
+        stopped
+    }
+
+    fn update_play_exit_hold_timer(&mut self) {
+        let e1_held = self
+            .active_play
+            .as_ref()
+            .is_some_and(|active| active.running.session.lane_cover_changing);
+        update_play_exit_hold_started_at(
+            &mut self.play_exit_hold_started_at,
+            e1_held,
+            self.play_e2_held,
+            Instant::now(),
+        );
+    }
+
+    fn clear_play_control_holds(&mut self) {
+        self.last_play_start_press_at = None;
+        self.decide_e1_held = false;
+        self.play_e2_held = false;
+        self.play_e3_held = false;
+        self.play_exit_hold_started_at = None;
+    }
+
+    fn update_play_exit_control_state(&mut self, control: &str, pressed: bool) -> bool {
+        let mut changed = false;
+        if self.select_keys.is_e2_action(control) {
+            self.play_e2_held = pressed;
+            changed = true;
+        }
+        if self.select_keys.is_e3_action(control) {
+            self.play_e3_held = pressed;
+            changed = true;
+        }
+        if !changed {
+            return false;
+        }
+        self.update_play_exit_hold_timer();
+        if self.play_e2_held && self.play_e3_held {
+            return self.stop_active_play_like_escape("E2+E3 pressed during play");
+        }
+        false
+    }
+
+    fn stop_play_if_exit_hold_elapsed(&mut self) -> bool {
+        if play_exit_hold_elapsed(self.play_exit_hold_started_at, Instant::now()) {
+            self.play_exit_hold_started_at = None;
+            return self.stop_active_play_like_escape("E1+E2 held during play");
+        }
+        false
     }
 
     fn update_play_ending_snapshot(&mut self) {
@@ -4553,6 +5429,7 @@ impl WinitApp {
         let scene_kind = scene_kind(&scene);
         self.update_window_title_for_scene(scene_kind);
         if matches!(self.view_state(), AppViewState::Select) {
+            self.poll_select_asset_loads();
             self.sync_select_stage_texture();
             self.sync_select_banner_texture();
             self.sync_select_preview_audio();
@@ -4611,7 +5488,12 @@ impl WinitApp {
     fn active_lane_state(&self) -> Option<ActiveLaneState> {
         self.active_play.as_ref().map(|active| {
             let session = &active.running.session;
-            ActiveLaneState { lane_cover: session.lane_cover, lift: session.lift }
+            ActiveLaneState {
+                lane_cover: session.lane_cover,
+                lift: session.lift,
+                hispeed_mode: session.hispeed_mode,
+                target_green_number: session.target_green_number,
+            }
         })
     }
 
@@ -5274,6 +6156,18 @@ impl ApplicationHandler for WinitApp {
                 }
                 self.route_mouse_wheel(delta);
             }
+            WindowEvent::CursorMoved { position, .. } => {
+                self.last_cursor_position = Some(position);
+                if !egui_consumed {
+                    self.route_select_slider_drag();
+                }
+            }
+            WindowEvent::MouseInput { state, button, .. } => {
+                if egui_consumed {
+                    return;
+                }
+                self.route_mouse_input(state, button);
+            }
             WindowEvent::Ime(ime) => {
                 if egui_consumed {
                     return;
@@ -5411,6 +6305,146 @@ fn initial_folder_stack(_app_config: &crate::config::app_config::AppConfig) -> V
     Vec::new()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SelectModeFilter {
+    All,
+    K7,
+    K14,
+    K9,
+    K5,
+    K10,
+    K24,
+    K24Double,
+}
+
+impl SelectModeFilter {
+    const ORDER: [Self; 8] =
+        [Self::All, Self::K7, Self::K14, Self::K9, Self::K5, Self::K10, Self::K24, Self::K24Double];
+
+    fn next(self) -> Self {
+        cycle_enum(Self::ORDER, self, 1)
+    }
+
+    fn previous(self) -> Self {
+        cycle_enum(Self::ORDER, self, -1)
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::All => "ALL",
+            Self::K7 => "7K",
+            Self::K14 => "14K",
+            Self::K9 => "9K",
+            Self::K5 => "5K",
+            Self::K10 => "10K",
+            Self::K24 => "24K",
+            Self::K24Double => "24K_DOUBLE",
+        }
+    }
+
+    fn key_mode(self) -> Option<KeyMode> {
+        match self {
+            Self::All | Self::K24 | Self::K24Double => None,
+            Self::K7 => Some(KeyMode::K7),
+            Self::K14 => Some(KeyMode::K14),
+            Self::K9 => Some(KeyMode::K9),
+            Self::K5 => Some(KeyMode::K5),
+            Self::K10 => Some(KeyMode::K10),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SelectSort {
+    Title,
+    Artist,
+    Bpm,
+    Length,
+    Level,
+    Clear,
+    Score,
+    MissCount,
+}
+
+impl SelectSort {
+    const ORDER: [Self; 8] = [
+        Self::Title,
+        Self::Artist,
+        Self::Bpm,
+        Self::Length,
+        Self::Level,
+        Self::Clear,
+        Self::Score,
+        Self::MissCount,
+    ];
+
+    fn next(self) -> Self {
+        cycle_enum(Self::ORDER, self, 1)
+    }
+
+    fn previous(self) -> Self {
+        cycle_enum(Self::ORDER, self, -1)
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Title => "TITLE",
+            Self::Artist => "ARTIST",
+            Self::Bpm => "BPM",
+            Self::Length => "LENGTH",
+            Self::Level => "LEVEL",
+            Self::Clear => "CLEAR",
+            Self::Score => "SCORE",
+            Self::MissCount => "MISSCOUNT",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SelectLnMode {
+    Ln,
+    Cn,
+    Hcn,
+}
+
+impl SelectLnMode {
+    const ORDER: [Self; 3] = [Self::Ln, Self::Cn, Self::Hcn];
+
+    fn next(self) -> Self {
+        cycle_enum(Self::ORDER, self, 1)
+    }
+
+    fn previous(self) -> Self {
+        cycle_enum(Self::ORDER, self, -1)
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Ln => "LN",
+            Self::Cn => "CN",
+            Self::Hcn => "HCN",
+        }
+    }
+
+    fn long_note_mode(self) -> LongNoteMode {
+        match self {
+            Self::Ln => LongNoteMode::Ln,
+            Self::Cn => LongNoteMode::Cn,
+            Self::Hcn => LongNoteMode::Hcn,
+        }
+    }
+}
+
+fn cycle_enum<T: Copy + PartialEq, const N: usize>(
+    values: [T; N],
+    current: T,
+    direction: i32,
+) -> T {
+    let index = values.iter().position(|value| *value == current).unwrap_or(0);
+    let len = values.len();
+    if direction >= 0 { values[(index + 1) % len] } else { values[(index + len - 1) % len] }
+}
+
 fn enabled_root_paths(app_config: &crate::config::app_config::AppConfig) -> Vec<String> {
     app_config.songs.roots.iter().filter(|p| p.enabled).map(|p| p.path.clone()).collect()
 }
@@ -5419,8 +6453,10 @@ fn load_items_for_stack(
     boot: &crate::bootstrap::BootstrappedApp,
     stack: &[String],
     search_history: &[String],
+    mode_filter: SelectModeFilter,
+    sort: SelectSort,
 ) -> Vec<SelectItem> {
-    match stack.last() {
+    let mut items = match stack.last() {
         Some(path) if path.starts_with(crate::screens::settings_model::CONFIG_ROOT_PATH) => {
             load_settings_items(path)
         }
@@ -5513,7 +6549,95 @@ fn load_items_for_stack(
             }
             items
         }
+    };
+    apply_select_mode_filter(&mut items, mode_filter);
+    apply_select_sort(&mut items, sort);
+    items
+}
+
+fn apply_select_mode_filter(items: &mut Vec<SelectItem>, filter: SelectModeFilter) {
+    let Some(key_mode) = filter.key_mode() else {
+        return;
+    };
+    items.retain(|item| match item {
+        SelectItem::Chart(row) => row
+            .chart
+            .as_ref()
+            .and_then(|chart| KeyMode::from_str_opt(&chart.mode))
+            .is_some_and(|mode| mode == key_mode),
+        _ => true,
+    });
+}
+
+fn apply_select_sort(items: &mut [SelectItem], sort: SelectSort) {
+    items.sort_by(|a, b| match (a, b) {
+        (SelectItem::Chart(a), SelectItem::Chart(b)) => compare_select_chart_rows(a, b, sort),
+        _ => std::cmp::Ordering::Equal,
+    });
+}
+
+fn compare_select_chart_rows(
+    a: &crate::screens::select_model::SelectChartRow,
+    b: &crate::screens::select_model::SelectChartRow,
+    sort: SelectSort,
+) -> std::cmp::Ordering {
+    let ordering = match sort {
+        SelectSort::Title => compare_case_insensitive(a.display_title(), b.display_title()),
+        SelectSort::Artist => compare_case_insensitive(a.display_artist(), b.display_artist()),
+        SelectSort::Bpm => chart_initial_bpm(a).total_cmp(&chart_initial_bpm(b)),
+        SelectSort::Length => chart_length_ms(a).cmp(&chart_length_ms(b)),
+        SelectSort::Level => compare_play_level(a, b),
+        SelectSort::Clear => clear_rank(a).cmp(&clear_rank(b)),
+        SelectSort::Score => ex_score(a).cmp(&ex_score(b)),
+        SelectSort::MissCount => miss_count(a).cmp(&miss_count(b)),
+    };
+    ordering.then_with(|| compare_case_insensitive(a.display_title(), b.display_title()))
+}
+
+fn compare_case_insensitive(a: &str, b: &str) -> std::cmp::Ordering {
+    a.to_lowercase().cmp(&b.to_lowercase())
+}
+
+fn chart_initial_bpm(row: &crate::screens::select_model::SelectChartRow) -> f64 {
+    row.chart.as_ref().map(|chart| chart.initial_bpm).unwrap_or(0.0)
+}
+
+fn chart_length_ms(row: &crate::screens::select_model::SelectChartRow) -> i64 {
+    row.chart.as_ref().map(|chart| chart.length_ms).unwrap_or(0)
+}
+
+fn compare_play_level(
+    a: &crate::screens::select_model::SelectChartRow,
+    b: &crate::screens::select_model::SelectChartRow,
+) -> std::cmp::Ordering {
+    play_level_number(a)
+        .total_cmp(&play_level_number(b))
+        .then_with(|| compare_case_insensitive(a.display_title(), b.display_title()))
+}
+
+fn play_level_number(row: &crate::screens::select_model::SelectChartRow) -> f64 {
+    row.chart.as_ref().and_then(|chart| chart.play_level.parse::<f64>().ok()).unwrap_or(0.0)
+}
+
+fn clear_rank(row: &crate::screens::select_model::SelectChartRow) -> u8 {
+    match row.best_score.as_ref().map(|score| score.clear_type.as_str()).unwrap_or_default() {
+        "Perfect" => 8,
+        "FullCombo" => 7,
+        "Hard" => 6,
+        "Easy" => 5,
+        "Clear" => 4,
+        "AssistEasy" => 3,
+        "Failed" => 1,
+        _ => 0,
     }
+}
+
+fn ex_score(row: &crate::screens::select_model::SelectChartRow) -> u32 {
+    row.best_score.as_ref().map(|score| score.ex_score).unwrap_or(0)
+}
+
+fn miss_count(row: &crate::screens::select_model::SelectChartRow) -> u32 {
+    row.best_score.as_ref().map(|score| score.miss_count).unwrap_or(u32::MAX)
 }
 
 fn cycle_gauge_option(current: GaugeTypeConfig) -> GaugeTypeConfig {
@@ -5524,6 +6648,25 @@ fn cycle_gauge_option(current: GaugeTypeConfig) -> GaugeTypeConfig {
         GaugeTypeConfig::Hard => GaugeTypeConfig::ExHard,
         GaugeTypeConfig::ExHard | GaugeTypeConfig::AutoShift => GaugeTypeConfig::Hazard,
         GaugeTypeConfig::Hazard => GaugeTypeConfig::AssistEasy,
+    }
+}
+
+fn cycle_gauge_option_with_direction(current: GaugeTypeConfig, direction: i32) -> GaugeTypeConfig {
+    const VALUES: [GaugeTypeConfig; 6] = [
+        GaugeTypeConfig::AssistEasy,
+        GaugeTypeConfig::Easy,
+        GaugeTypeConfig::Normal,
+        GaugeTypeConfig::Hard,
+        GaugeTypeConfig::ExHard,
+        GaugeTypeConfig::Hazard,
+    ];
+    cycle_enum(VALUES, normalize_gauge_option(current), direction)
+}
+
+fn normalize_gauge_option(current: GaugeTypeConfig) -> GaugeTypeConfig {
+    match current {
+        GaugeTypeConfig::AutoShift => GaugeTypeConfig::ExHard,
+        _ => current,
     }
 }
 
@@ -5549,6 +6692,20 @@ fn cycle_gauge_auto_shift_option(current: GaugeAutoShiftConfig) -> GaugeAutoShif
     }
 }
 
+fn cycle_gauge_auto_shift_option_with_direction(
+    current: GaugeAutoShiftConfig,
+    direction: i32,
+) -> GaugeAutoShiftConfig {
+    const VALUES: [GaugeAutoShiftConfig; 5] = [
+        GaugeAutoShiftConfig::Off,
+        GaugeAutoShiftConfig::Continue,
+        GaugeAutoShiftConfig::HardToGroove,
+        GaugeAutoShiftConfig::BestClear,
+        GaugeAutoShiftConfig::SelectToUnder,
+    ];
+    cycle_enum(VALUES, current, direction)
+}
+
 fn gauge_auto_shift_as_str(mode: GaugeAutoShiftConfig) -> &'static str {
     match mode {
         GaugeAutoShiftConfig::Off => "OFF",
@@ -5567,12 +6724,33 @@ fn bga_mode_as_str(bga: BgaModeConfig) -> &'static str {
     }
 }
 
+fn volume_f32_to_unit(value: f32) -> u32 {
+    (value.clamp(0.0, 1.0) * 100.0).round() as u32
+}
+
+fn cycle_arrange_option_with_direction(current: ArrangeOption, direction: i32) -> ArrangeOption {
+    const VALUES: [ArrangeOption; 3] =
+        [ArrangeOption::Normal, ArrangeOption::Mirror, ArrangeOption::Random];
+    cycle_enum(VALUES, current, direction)
+}
+
 fn cycle_bga_option(current: BgaModeConfig) -> BgaModeConfig {
     match current {
         BgaModeConfig::On => BgaModeConfig::Auto,
         BgaModeConfig::Auto => BgaModeConfig::Off,
         BgaModeConfig::Off => BgaModeConfig::On,
     }
+}
+
+fn cycle_bga_option_with_direction(current: BgaModeConfig, direction: i32) -> BgaModeConfig {
+    const VALUES: [BgaModeConfig; 3] = [BgaModeConfig::On, BgaModeConfig::Auto, BgaModeConfig::Off];
+    cycle_enum(VALUES, current, direction)
+}
+
+fn cycle_bga_expand_with_direction(current: BgaExpandConfig, direction: i32) -> BgaExpandConfig {
+    const VALUES: [BgaExpandConfig; 3] =
+        [BgaExpandConfig::KeepAspect, BgaExpandConfig::Full, BgaExpandConfig::Off];
+    cycle_enum(VALUES, current, direction)
 }
 
 fn select_option_panel_for_holds(start_held: bool, select_held: bool) -> u8 {
@@ -5642,6 +6820,8 @@ fn target_config_from_option(target: TargetOption) -> TargetOptionConfig {
 struct ActiveLaneState {
     lane_cover: f32,
     lift: f32,
+    hispeed_mode: HispeedMode,
+    target_green_number: u32,
 }
 
 fn apply_current_play_options_to_profile(
@@ -5661,6 +6841,8 @@ fn apply_current_play_options_to_profile(
     if let Some(state) = lane_state {
         profile.lane.sudden = crate::config::play::lane_f32_to_unit(state.lane_cover);
         profile.lane.lift = crate::config::play::lane_f32_to_unit(state.lift);
+        profile.lane.hispeed_mode = hispeed_mode_to_config(state.hispeed_mode);
+        profile.lane.target_green_number = state.target_green_number.max(1);
     }
     profile.play.random = random_config_from_arrange(arrange);
     profile.play.target = target_config_from_option(target);
@@ -5675,25 +6857,63 @@ fn clamp_hispeed_for_profile(hispeed: f32) -> f32 {
     (hispeed * 4.0).round().clamp(2.0, 40.0) / 4.0
 }
 
+fn hispeed_mode_to_config(mode: HispeedMode) -> HispeedModeConfig {
+    match mode {
+        HispeedMode::Normal => HispeedModeConfig::Normal,
+        HispeedMode::Floating => HispeedModeConfig::Floating,
+    }
+}
+
+fn select_chart_distribution(
+    distribution: &[ChartDistributionSecond],
+) -> Vec<SelectChartDistributionSecond> {
+    distribution
+        .iter()
+        .map(|second| SelectChartDistributionSecond {
+            scratch_long_heads: second.scratch_long_heads,
+            scratch_long_bodies: second.scratch_long_bodies,
+            scratch_taps: second.scratch_taps,
+            key_long_heads: second.key_long_heads,
+            key_long_bodies: second.key_long_bodies,
+            key_taps: second.key_taps,
+            mines: second.mines,
+        })
+        .collect()
+}
+
+fn select_visible_item_indices(
+    item_len: usize,
+    selected_index: usize,
+    visible_limit: usize,
+) -> Vec<usize> {
+    if item_len == 0 || visible_limit == 0 {
+        return Vec::new();
+    }
+
+    let row_count = visible_limit;
+    let selected_index = selected_index.min(item_len - 1);
+    let half_window = row_count / 2;
+    let start = (selected_index + item_len - (half_window % item_len)) % item_len;
+
+    (0..row_count).map(|offset| (start + offset) % item_len).collect()
+}
+
 fn select_snapshot_rows(
     items: &[SelectItem],
     selected_index: usize,
     visible_limit: usize,
     profile: &ProfileConfig,
     key_config_edit: Option<&KeyConfigEditSession>,
+    chart_distributions: &HashMap<i64, Vec<ChartDistributionSecond>>,
 ) -> Vec<SelectRowSnapshot> {
-    if items.is_empty() || visible_limit == 0 {
+    let visible_indices = select_visible_item_indices(items.len(), selected_index, visible_limit);
+    if visible_indices.is_empty() {
         return Vec::new();
     }
 
-    let row_count = visible_limit;
-    let selected_index = selected_index.min(items.len() - 1);
-    let half_window = row_count / 2;
-    let start = (selected_index + items.len() - (half_window % items.len())) % items.len();
-
-    (0..row_count)
-        .map(|offset| {
-            let index = (start + offset) % items.len();
+    visible_indices
+        .into_iter()
+        .map(|index| {
             let item = &items[index];
             match item {
                 SelectItem::Folder { name, kind, .. } => SelectRowSnapshot {
@@ -5704,6 +6924,7 @@ fn select_snapshot_rows(
                     difficulty_name: String::new(),
                     play_level: String::new(),
                     table_level: String::new(),
+                    judge_rank: None,
                     total_notes: 0,
                     initial_bpm: 0.0,
                     min_bpm: 0.0,
@@ -5720,6 +6941,16 @@ fn select_snapshot_rows(
                     has_long_notes: false,
                     has_mines: false,
                     has_random: false,
+                    chart_normal_notes: 0,
+                    chart_long_notes: 0,
+                    chart_scratch_notes: 0,
+                    chart_long_scratch_notes: 0,
+                    chart_density: 0.0,
+                    chart_peak_density: 0.0,
+                    chart_end_density: 0.0,
+                    chart_total_gauge: 0.0,
+                    chart_main_bpm: 0.0,
+                    chart_distribution: Vec::new(),
                     is_folder: true,
                     kind: *kind,
                     in_library: true,
@@ -5753,6 +6984,7 @@ fn select_snapshot_rows(
                             .map(|chart| chart.play_level.clone())
                             .unwrap_or_default(),
                         table_level: row.table_level.clone(),
+                        judge_rank: row.chart.as_ref().and_then(|chart| chart.judge_rank),
                         total_notes: row.chart.as_ref().map(|chart| chart.total_notes).unwrap_or(0),
                         initial_bpm: row
                             .chart
@@ -5788,6 +7020,64 @@ fn select_snapshot_rows(
                             .is_some_and(|chart| chart.has_long_notes),
                         has_mines: row.chart.as_ref().is_some_and(|chart| chart.has_mines),
                         has_random: false,
+                        chart_normal_notes: row
+                            .chart_analysis
+                            .as_ref()
+                            .map(|analysis| analysis.normal_notes)
+                            .unwrap_or_else(|| {
+                                row.chart.as_ref().map(|chart| chart.total_notes).unwrap_or(0)
+                            }),
+                        chart_long_notes: row
+                            .chart_analysis
+                            .as_ref()
+                            .map(|analysis| analysis.long_notes)
+                            .unwrap_or(0),
+                        chart_scratch_notes: row
+                            .chart_analysis
+                            .as_ref()
+                            .map(|analysis| analysis.scratch_notes)
+                            .unwrap_or(0),
+                        chart_long_scratch_notes: row
+                            .chart_analysis
+                            .as_ref()
+                            .map(|analysis| analysis.long_scratch_notes)
+                            .unwrap_or(0),
+                        chart_density: row
+                            .chart_analysis
+                            .as_ref()
+                            .map(|analysis| analysis.density as f32)
+                            .unwrap_or(0.0),
+                        chart_peak_density: row
+                            .chart_analysis
+                            .as_ref()
+                            .map(|analysis| analysis.peak_density as f32)
+                            .unwrap_or(0.0),
+                        chart_end_density: row
+                            .chart_analysis
+                            .as_ref()
+                            .map(|analysis| analysis.end_density as f32)
+                            .unwrap_or(0.0),
+                        chart_total_gauge: row
+                            .chart_analysis
+                            .as_ref()
+                            .map(|analysis| analysis.total_gauge as f32)
+                            .unwrap_or(0.0),
+                        chart_main_bpm: row
+                            .chart_analysis
+                            .as_ref()
+                            .map(|analysis| analysis.main_bpm as f32)
+                            .unwrap_or_else(|| {
+                                row.chart
+                                    .as_ref()
+                                    .map(|chart| chart.initial_bpm as f32)
+                                    .unwrap_or(0.0)
+                            }),
+                        chart_distribution: row
+                            .chart
+                            .as_ref()
+                            .and_then(|chart| chart_distributions.get(&chart.chart_id))
+                            .map(|distribution| select_chart_distribution(distribution))
+                            .unwrap_or_default(),
                         is_folder: false,
                         kind: bmz_render::scene::SelectRowKind::Song,
                         in_library: row.in_library(),
@@ -5813,6 +7103,7 @@ fn select_snapshot_rows(
                     // Show "N stages" in the play_level slot.
                     play_level: format!("{} stages", row.entry_count),
                     table_level: String::new(),
+                    judge_rank: None,
                     total_notes: row.total_notes,
                     initial_bpm: row.min_bpm,
                     min_bpm: row.min_bpm,
@@ -5835,6 +7126,16 @@ fn select_snapshot_rows(
                     has_long_notes: false,
                     has_mines: false,
                     has_random: false,
+                    chart_normal_notes: 0,
+                    chart_long_notes: 0,
+                    chart_scratch_notes: 0,
+                    chart_long_scratch_notes: 0,
+                    chart_density: 0.0,
+                    chart_peak_density: 0.0,
+                    chart_end_density: 0.0,
+                    chart_total_gauge: 0.0,
+                    chart_main_bpm: 0.0,
+                    chart_distribution: Vec::new(),
                     is_folder: false,
                     kind: bmz_render::scene::SelectRowKind::Course,
                     in_library: row.exists_all_songs(),
@@ -5857,6 +7158,7 @@ fn select_snapshot_rows(
                         difficulty_name: String::new(),
                         play_level: value,
                         table_level: String::new(),
+                        judge_rank: None,
                         total_notes: 0,
                         initial_bpm: 0.0,
                         min_bpm: 0.0,
@@ -5873,6 +7175,16 @@ fn select_snapshot_rows(
                         has_long_notes: false,
                         has_mines: false,
                         has_random: false,
+                        chart_normal_notes: 0,
+                        chart_long_notes: 0,
+                        chart_scratch_notes: 0,
+                        chart_long_scratch_notes: 0,
+                        chart_density: 0.0,
+                        chart_peak_density: 0.0,
+                        chart_end_density: 0.0,
+                        chart_total_gauge: 0.0,
+                        chart_main_bpm: 0.0,
+                        chart_distribution: Vec::new(),
                         is_folder: false,
                         kind: bmz_render::scene::SelectRowKind::Config,
                         in_library: true,
@@ -5897,6 +7209,7 @@ fn select_snapshot_rows(
                         difficulty_name: String::new(),
                         play_level: value,
                         table_level: String::new(),
+                        judge_rank: None,
                         total_notes: 0,
                         initial_bpm: 0.0,
                         min_bpm: 0.0,
@@ -5913,6 +7226,16 @@ fn select_snapshot_rows(
                         has_long_notes: false,
                         has_mines: false,
                         has_random: false,
+                        chart_normal_notes: 0,
+                        chart_long_notes: 0,
+                        chart_scratch_notes: 0,
+                        chart_long_scratch_notes: 0,
+                        chart_density: 0.0,
+                        chart_peak_density: 0.0,
+                        chart_end_density: 0.0,
+                        chart_total_gauge: 0.0,
+                        chart_main_bpm: 0.0,
+                        chart_distribution: Vec::new(),
                         is_folder: false,
                         kind: bmz_render::scene::SelectRowKind::Config,
                         in_library: true,
@@ -5930,6 +7253,7 @@ fn select_snapshot_rows(
                     difficulty_name: String::new(),
                     play_level: String::new(),
                     table_level: String::new(),
+                    judge_rank: None,
                     total_notes: 0,
                     initial_bpm: 0.0,
                     min_bpm: 0.0,
@@ -5946,6 +7270,16 @@ fn select_snapshot_rows(
                     has_long_notes: false,
                     has_mines: false,
                     has_random: false,
+                    chart_normal_notes: 0,
+                    chart_long_notes: 0,
+                    chart_scratch_notes: 0,
+                    chart_long_scratch_notes: 0,
+                    chart_density: 0.0,
+                    chart_peak_density: 0.0,
+                    chart_end_density: 0.0,
+                    chart_total_gauge: 0.0,
+                    chart_main_bpm: 0.0,
+                    chart_distribution: Vec::new(),
                     is_folder: true,
                     kind: bmz_render::scene::SelectRowKind::SettingsFolder,
                     in_library: true,
@@ -6021,10 +7355,7 @@ fn select_action(
 }
 
 fn select_wheel_move(delta: MouseScrollDelta) -> Option<SelectMove> {
-    let y = match delta {
-        MouseScrollDelta::LineDelta(_, y) => y,
-        MouseScrollDelta::PixelDelta(position) => position.y as f32,
-    };
+    let y = mouse_wheel_y(delta);
 
     if y > 0.0 {
         Some(SelectMove::Previous)
@@ -6032,6 +7363,81 @@ fn select_wheel_move(delta: MouseScrollDelta) -> Option<SelectMove> {
         Some(SelectMove::Next)
     } else {
         None
+    }
+}
+
+fn lane_cover_wheel_change(delta: MouseScrollDelta) -> Option<LaneCoverChange> {
+    let y = mouse_wheel_y(delta);
+    if y > 0.0 {
+        Some(LaneCoverChange::Up)
+    } else if y < 0.0 {
+        Some(LaneCoverChange::Down)
+    } else {
+        None
+    }
+}
+
+fn mouse_wheel_y(delta: MouseScrollDelta) -> f32 {
+    match delta {
+        MouseScrollDelta::LineDelta(_, y) => y,
+        MouseScrollDelta::PixelDelta(position) => position.y as f32,
+    }
+}
+
+fn update_pre_ready_play_snapshot_options_for_session(
+    ready_sound_started_at: Option<Instant>,
+    last_play_snapshot: &mut Option<RenderSnapshot>,
+    session: &bmz_gameplay::session::GameSession,
+) {
+    if ready_sound_started_at.is_some() {
+        return;
+    }
+    let Some(snapshot) = last_play_snapshot else {
+        return;
+    };
+    crate::screens::play_snapshot::update_render_snapshot_play_options(
+        snapshot,
+        session,
+        snapshot.time,
+    );
+}
+
+fn update_play_exit_hold_started_at(
+    started_at: &mut Option<Instant>,
+    e1_held: bool,
+    e2_held: bool,
+    now: Instant,
+) {
+    if e1_held && e2_held {
+        started_at.get_or_insert(now);
+    } else {
+        *started_at = None;
+    }
+}
+
+fn play_exit_hold_elapsed(started_at: Option<Instant>, now: Instant) -> bool {
+    started_at.is_some_and(|started_at| now.duration_since(started_at) >= PLAY_EXIT_HOLD_DURATION)
+}
+
+fn select_click_event_arg(
+    click_type: i32,
+    button: MouseButton,
+    rect: Rect,
+    x: f32,
+    y: f32,
+) -> Option<i32> {
+    let button_arg = match button {
+        MouseButton::Left => 1,
+        MouseButton::Right => -1,
+        MouseButton::Middle => 1,
+        _ => return None,
+    };
+    match click_type {
+        0 => Some(button_arg),
+        1 => Some(-button_arg),
+        2 => Some(if x >= rect.x + rect.width * 0.5 { 1 } else { -1 }),
+        3 => Some(if y <= rect.y + rect.height * 0.5 { 1 } else { -1 }),
+        _ => None,
     }
 }
 
@@ -6108,6 +7514,19 @@ enum HispeedChange {
     Up,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlayOptionControl {
+    ToggleHispeedMode,
+    Hispeed(HispeedChange),
+    LaneCover(LaneCoverChange),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LaneCoverChange {
+    Up,
+    Down,
+}
+
 fn hispeed_action(
     physical_key: PhysicalKey,
     state: ElementState,
@@ -6124,15 +7543,42 @@ fn hispeed_action(
     }
 }
 
-fn lane_cover_step(physical_key: PhysicalKey, state: ElementState, _repeat: bool) -> Option<f32> {
+fn play_option_control(control: &str, bindings: &SelectKeyBindings) -> Option<PlayOptionControl> {
+    if bindings.is_e2_action(control) {
+        return Some(PlayOptionControl::ToggleHispeedMode);
+    }
+    if bindings.is_hispeed_down_key(control) {
+        return Some(PlayOptionControl::Hispeed(HispeedChange::Down));
+    }
+    if bindings.is_hispeed_up_key(control) {
+        return Some(PlayOptionControl::Hispeed(HispeedChange::Up));
+    }
+    if bindings.is_scratch_up(control) {
+        return Some(PlayOptionControl::LaneCover(LaneCoverChange::Up));
+    }
+    if bindings.is_scratch_down(control) {
+        return Some(PlayOptionControl::LaneCover(LaneCoverChange::Down));
+    }
+    None
+}
+
+fn lane_cover_step(physical_key: PhysicalKey, state: ElementState, repeat: bool) -> Option<f32> {
     if state != ElementState::Pressed {
         return None;
     }
+    let step = if repeat { LANE_COVER_REPEAT_STEP } else { LANE_COVER_STEP };
     match physical_key {
         // 上キー: カバー位置を上げる(下方向への余白を縮める = 値を増やす)
-        PhysicalKey::Code(KeyCode::ArrowUp) => Some(LANE_COVER_STEP),
-        PhysicalKey::Code(KeyCode::ArrowDown) => Some(-LANE_COVER_STEP),
+        PhysicalKey::Code(KeyCode::ArrowUp) => Some(step),
+        PhysicalKey::Code(KeyCode::ArrowDown) => Some(-step),
         _ => None,
+    }
+}
+
+fn lane_cover_change_step(change: LaneCoverChange) -> f32 {
+    match change {
+        LaneCoverChange::Up => LANE_COVER_STEP,
+        LaneCoverChange::Down => -LANE_COVER_STEP,
     }
 }
 
@@ -6142,6 +7588,120 @@ fn adjusted_hispeed(current: f32, change: HispeedChange) -> f32 {
         HispeedChange::Up => 0.25,
     };
     ((current + delta) * 4.0).round().clamp(2.0, 40.0) / 4.0
+}
+
+fn apply_play_option_control_to_session(
+    session: &mut bmz_gameplay::session::GameSession,
+    action: PlayOptionControl,
+    speed_locked: bool,
+) -> bool {
+    match action {
+        PlayOptionControl::ToggleHispeedMode => {
+            match session.hispeed_mode {
+                HispeedMode::Normal => {
+                    let now = session.audio_clock.now();
+                    session.target_green_number = current_green_number(session, now);
+                    session.hispeed_mode = HispeedMode::Floating;
+                }
+                HispeedMode::Floating => {
+                    session.hispeed = clamp_hispeed_for_profile(session.hispeed);
+                    session.hispeed_mode = HispeedMode::Normal;
+                }
+            }
+            true
+        }
+        PlayOptionControl::Hispeed(change) => {
+            if speed_locked {
+                return false;
+            }
+            session.hispeed = adjusted_hispeed(session.hispeed, change);
+            true
+        }
+        PlayOptionControl::LaneCover(change) => {
+            apply_lane_cover_step_to_session(session, lane_cover_change_step(change), speed_locked)
+        }
+    }
+}
+
+fn apply_lane_cover_step_to_session(
+    session: &mut bmz_gameplay::session::GameSession,
+    delta: f32,
+    speed_locked: bool,
+) -> bool {
+    if session.lane_cover_visible {
+        session.lane_cover = (session.lane_cover - delta).clamp(0.0, 1.0);
+        if session.hispeed_mode == HispeedMode::Floating && !speed_locked {
+            let now = session.audio_clock.now();
+            session.hispeed = hispeed_for_green_number(session, session.lane_cover, now);
+        }
+    } else {
+        session.lift = (session.lift + delta).clamp(0.0, 1.0);
+    }
+    true
+}
+
+fn reset_floating_hispeed_if_enabled(
+    session: &mut bmz_gameplay::session::GameSession,
+    speed_locked: bool,
+) {
+    if session.hispeed_mode == HispeedMode::Floating && !speed_locked {
+        let now = session.audio_clock.now();
+        let lane_cover = if session.lane_cover_visible { session.lane_cover } else { 0.0 };
+        session.hispeed = hispeed_for_green_number(session, lane_cover, now);
+    }
+}
+
+fn current_green_number(session: &bmz_gameplay::session::GameSession, now: TimeUs) -> u32 {
+    let total = note_display_duration_ms_for_hispeed(
+        session,
+        session.hispeed,
+        if session.lane_cover_visible { session.lane_cover } else { 0.0 },
+        now,
+    );
+    ((total * 0.6).round().clamp(1.0, u32::MAX as f32)) as u32
+}
+
+fn note_display_duration_ms_for_hispeed(
+    session: &bmz_gameplay::session::GameSession,
+    hispeed: f32,
+    lane_cover: f32,
+    now: TimeUs,
+) -> f32 {
+    let visible_max = (1.0 - lane_cover).clamp(0.0, 1.0);
+    let initial_bpm = session.chart.metadata.initial_bpm.max(1.0);
+    let now_bpm = crate::screens::play_snapshot::current_bpm(&session.chart, now).max(1.0);
+    let bpm_ratio = (initial_bpm / now_bpm) as f32;
+    crate::screens::play_snapshot::DEFAULT_LOOKAHEAD_US as f32 / hispeed.max(0.01)
+        * visible_max
+        * bpm_ratio
+        / 1_000.0
+}
+
+fn hispeed_for_green_number(
+    session: &bmz_gameplay::session::GameSession,
+    lane_cover: f32,
+    now: TimeUs,
+) -> f32 {
+    let target_green = session.target_green_number.max(1) as f32;
+    let visible_max = (1.0 - lane_cover).clamp(0.0, 1.0);
+    let initial_bpm = session.chart.metadata.initial_bpm.max(1.0);
+    let now_bpm = crate::screens::play_snapshot::current_bpm(&session.chart, now).max(1.0);
+    let hispeed = hispeed_for_green_number_values(target_green, visible_max, initial_bpm, now_bpm);
+    hispeed.clamp(0.5, 10.0)
+}
+
+fn hispeed_for_green_number_values(
+    target_green: f32,
+    visible_max: f32,
+    initial_bpm: f64,
+    now_bpm: f64,
+) -> f32 {
+    let bpm_ratio = (initial_bpm.max(1.0) / now_bpm.max(1.0)) as f32;
+    crate::screens::play_snapshot::DEFAULT_LOOKAHEAD_US as f32
+        * visible_max.clamp(0.0, 1.0)
+        * bpm_ratio
+        * 0.6
+        / (target_green.max(1.0) * 1_000.0)
 }
 
 fn result_action(
@@ -6186,6 +7746,201 @@ fn elapsed_since_ms(started_at: Instant) -> i32 {
 
 fn skin_duration_ms(ms: i32) -> Duration {
     Duration::from_millis(ms.max(0) as u64)
+}
+
+fn decide_fadeout_scene_elapsed(
+    fadeout_started_elapsed: Duration,
+    fadeout_elapsed: Duration,
+    scene_duration: Duration,
+    fadeout_duration: Duration,
+    timing: DecideFadeoutSceneTiming,
+) -> Duration {
+    let direct_elapsed = fadeout_started_elapsed.saturating_add(fadeout_elapsed);
+    let tail_elapsed = match timing {
+        DecideFadeoutSceneTiming::DirectOnly => direct_elapsed,
+        DecideFadeoutSceneTiming::TailStart(tail_start) if fadeout_duration > Duration::ZERO => {
+            let tail_start = tail_start.min(scene_duration);
+            let tail_duration = scene_duration.saturating_sub(tail_start);
+            if tail_duration > Duration::ZERO {
+                let scaled = scale_duration(
+                    fadeout_elapsed.min(fadeout_duration),
+                    tail_duration,
+                    fadeout_duration,
+                );
+                tail_start.saturating_add(scaled).min(scene_duration)
+            } else {
+                scene_duration
+            }
+        }
+        DecideFadeoutSceneTiming::TailStart(_) => scene_duration,
+        DecideFadeoutSceneTiming::DefaultTail => {
+            let tail_start = scene_duration.checked_sub(fadeout_duration).unwrap_or_default();
+            tail_start.saturating_add(fadeout_elapsed).min(scene_duration)
+        }
+    };
+    direct_elapsed.max(tail_elapsed)
+}
+
+fn scale_duration(value: Duration, numerator: Duration, denominator: Duration) -> Duration {
+    if denominator == Duration::ZERO {
+        return Duration::ZERO;
+    }
+    let micros = value
+        .as_micros()
+        .saturating_mul(numerator.as_micros())
+        .checked_div(denominator.as_micros())
+        .unwrap_or(0);
+    Duration::from_micros(micros.min(u64::MAX as u128) as u64)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DecideFadeoutSceneTiming {
+    /// `timer=2` が fadeout を担う skin。scene 時刻を終端へ飛ばすと
+    /// timer なしの終了演出まで同時に進み、暗転が即飽和する。
+    DirectOnly,
+    /// timer=2 が無い skin 向け。従来通り fadeout 中は scene 末尾へ寄せる。
+    DefaultTail,
+    /// m-select のように scene 末尾の黒フェードを fadeout として使う skin。
+    TailStart(Duration),
+}
+
+fn decide_fadeout_scene_timing(document: Option<&SkinDocument>) -> DecideFadeoutSceneTiming {
+    let Some(document) = document else {
+        return DecideFadeoutSceneTiming::DefaultTail;
+    };
+    if document_has_fadeout_timer_black(document) {
+        return DecideFadeoutSceneTiming::DirectOnly;
+    }
+    decide_scene_fadeout_tail_start(Some(document))
+        .map(skin_duration_ms)
+        .map_or(DecideFadeoutSceneTiming::DefaultTail, DecideFadeoutSceneTiming::TailStart)
+}
+
+fn decide_scene_fadeout_tail_start(document: Option<&SkinDocument>) -> Option<i32> {
+    let document = document?;
+    if document.scene <= 0 || document.w == 0 || document.h == 0 {
+        return None;
+    }
+    if document_has_fadeout_timer_black(document) {
+        return None;
+    }
+    document
+        .destination
+        .iter()
+        .flat_map(destination_entry_values)
+        .filter_map(|destination| {
+            if destination.id != "-110" || destination.timer.is_some() {
+                return None;
+            }
+            scene_black_fade_tail_start(destination.dst.iter().flat_map(dst_entry_frames), document)
+        })
+        .max()
+}
+
+fn document_has_fadeout_timer_black(document: &SkinDocument) -> bool {
+    document.destination.iter().flat_map(destination_entry_values).any(|destination| {
+        destination.id == "-110"
+            && destination.timer == Some(2)
+            && black_fade_start(destination.dst.iter().flat_map(dst_entry_frames), document, 0)
+                .is_some()
+    })
+}
+
+fn destination_entry_values(
+    entry: &DestinationListEntry,
+) -> &[bmz_render::skin::SkinDestinationDef] {
+    match entry {
+        DestinationListEntry::Single(destination) => std::slice::from_ref(destination),
+        DestinationListEntry::Conditional { destinations, .. } => destinations.as_slice(),
+    }
+}
+
+fn dst_entry_frames(entry: &SkinDstEntry) -> &[SkinAnimationDef] {
+    match entry {
+        SkinDstEntry::Frame(frame) => std::slice::from_ref(frame),
+        SkinDstEntry::Conditional { frames, .. } => frames.as_slice(),
+    }
+}
+
+fn scene_black_fade_tail_start<'a>(
+    frames: impl Iterator<Item = &'a SkinAnimationDef>,
+    document: &SkinDocument,
+) -> Option<i32> {
+    black_fade_start(frames, document, document.scene)
+}
+
+fn black_fade_start<'a>(
+    frames: impl Iterator<Item = &'a SkinAnimationDef>,
+    document: &SkinDocument,
+    min_end_time: i32,
+) -> Option<i32> {
+    let mut resolved = ResolvedTailFrame::default();
+    let mut previous: Option<ResolvedTailFrame> = None;
+    let mut start = None;
+    for frame in frames {
+        resolved.apply(frame);
+        let Some(previous_frame) = previous else {
+            previous = Some(resolved);
+            continue;
+        };
+        if resolved.time >= min_end_time
+            && previous_frame.time < resolved.time
+            && previous_frame.a < resolved.a
+            && previous_frame.is_fullscreen(document)
+        {
+            start = Some(previous_frame.time);
+        }
+        previous = Some(resolved);
+    }
+    start
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ResolvedTailFrame {
+    time: i32,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    a: i32,
+}
+
+impl Default for ResolvedTailFrame {
+    fn default() -> Self {
+        Self { time: 0, x: 0, y: 0, w: 0, h: 0, a: 255 }
+    }
+}
+
+impl ResolvedTailFrame {
+    fn apply(&mut self, frame: &SkinAnimationDef) {
+        if let Some(time) = frame.time {
+            self.time = time;
+        }
+        if let Some(x) = frame.x {
+            self.x = x;
+        }
+        if let Some(y) = frame.y {
+            self.y = y;
+        }
+        if let Some(w) = frame.w {
+            self.w = w;
+        }
+        if let Some(h) = frame.h {
+            self.h = h;
+        }
+        if let Some(a) = frame.a {
+            self.a = a;
+        }
+    }
+
+    fn is_fullscreen(self, document: &SkinDocument) -> bool {
+        let width = document.w as i32;
+        let height = document.h as i32;
+        self.x <= width / 20
+            && self.y <= height / 20
+            && self.w >= width * 9 / 10
+            && self.h >= height * 9 / 10
+    }
 }
 
 fn scene_kind(scene: &AppSceneSnapshot) -> AppSceneKind {
@@ -6255,9 +8010,13 @@ fn target_cycle_from_control(control: &str, bindings: &SelectKeyBindings) -> Opt
 
 struct SelectKeyBindings {
     start: Vec<String>,
+    e2_action_controls: Vec<String>,
+    e3_action_controls: Vec<String>,
     enter: Vec<String>,
     back: Vec<String>,
     key2_controls: Vec<String>,
+    hispeed_down_controls: Vec<String>,
+    hispeed_up_controls: Vec<String>,
     scratch_up_controls: Vec<String>,
     scratch_down_controls: Vec<String>,
     cycle_arrange: Option<String>,
@@ -6317,7 +8076,19 @@ impl SelectKeyBindings {
             actions_for(InputActionConfig::E2),
             keys_for(LaneConfig::Key2),
         );
+        let e2_action_controls = actions_for(InputActionConfig::E2);
+        let e3_action_controls = actions_for(InputActionConfig::E3);
         let key2_controls = keys_for(LaneConfig::Key2);
+        let hispeed_down_controls: Vec<String> =
+            [LaneConfig::Key1, LaneConfig::Key3, LaneConfig::Key5, LaneConfig::Key7]
+                .iter()
+                .flat_map(|&l| keys_for(l))
+                .collect();
+        let hispeed_up_controls: Vec<String> =
+            [LaneConfig::Key2, LaneConfig::Key4, LaneConfig::Key6]
+                .iter()
+                .flat_map(|&l| keys_for(l))
+                .collect();
         let scratch_all = keys_for(LaneConfig::Scratch);
         let mut scratch_up_controls = Vec::new();
         let mut scratch_down_controls = Vec::new();
@@ -6415,9 +8186,13 @@ impl SelectKeyBindings {
 
         Self {
             start,
+            e2_action_controls,
+            e3_action_controls,
             enter,
             back,
             key2_controls,
+            hispeed_down_controls,
+            hispeed_up_controls,
             scratch_up_controls,
             scratch_down_controls,
             cycle_arrange,
@@ -6443,6 +8218,22 @@ impl SelectKeyBindings {
 
     fn is_key2(&self, control: &str) -> bool {
         self.key2_controls.iter().any(|k| k == control)
+    }
+
+    fn is_e2_action(&self, control: &str) -> bool {
+        self.e2_action_controls.iter().any(|k| k == control)
+    }
+
+    fn is_e3_action(&self, control: &str) -> bool {
+        self.e3_action_controls.iter().any(|k| k == control)
+    }
+
+    fn is_hispeed_down_key(&self, control: &str) -> bool {
+        self.hispeed_down_controls.iter().any(|k| k == control)
+    }
+
+    fn is_hispeed_up_key(&self, control: &str) -> bool {
+        self.hispeed_up_controls.iter().any(|k| k == control)
     }
 
     fn is_scratch_up(&self, control: &str) -> bool {
@@ -6474,6 +8265,7 @@ fn select_control_with_lane_fallback(
 
 #[cfg(test)]
 mod tests {
+    use bmz_render::scene::SelectRowKind;
     use bmz_render::skin::SkinManifest;
 
     use crate::config::app_config::{AppConfig, PathEntry};
@@ -6934,6 +8726,32 @@ mod tests {
     }
 
     #[test]
+    fn lane_cover_wheel_change_maps_vertical_scroll() {
+        assert_eq!(
+            lane_cover_wheel_change(MouseScrollDelta::LineDelta(0.0, 1.0)),
+            Some(LaneCoverChange::Up)
+        );
+        assert_eq!(
+            lane_cover_wheel_change(MouseScrollDelta::LineDelta(0.0, -1.0)),
+            Some(LaneCoverChange::Down)
+        );
+        assert_eq!(lane_cover_wheel_change(MouseScrollDelta::LineDelta(1.0, 0.0)), None);
+    }
+
+    #[test]
+    fn select_click_event_arg_matches_beatoraja_click_types() {
+        let rect = Rect { x: 0.2, y: 0.3, width: 0.4, height: 0.2 };
+        assert_eq!(select_click_event_arg(0, MouseButton::Left, rect, 0.3, 0.4), Some(1));
+        assert_eq!(select_click_event_arg(0, MouseButton::Right, rect, 0.3, 0.4), Some(-1));
+        assert_eq!(select_click_event_arg(1, MouseButton::Right, rect, 0.3, 0.4), Some(1));
+        assert_eq!(select_click_event_arg(2, MouseButton::Left, rect, 0.39, 0.4), Some(-1));
+        assert_eq!(select_click_event_arg(2, MouseButton::Left, rect, 0.41, 0.4), Some(1));
+        assert_eq!(select_click_event_arg(3, MouseButton::Left, rect, 0.3, 0.39), Some(1));
+        assert_eq!(select_click_event_arg(3, MouseButton::Left, rect, 0.3, 0.41), Some(-1));
+        assert_eq!(select_click_event_arg(4, MouseButton::Left, rect, 0.3, 0.4), None);
+    }
+
+    #[test]
     fn select_key_bindings_builds_correct_hints() {
         let keys = default_select_keys();
         assert!(keys.key_hint.contains("Z/X/C/V"), "enter keys in hint: {}", keys.key_hint);
@@ -7024,6 +8842,13 @@ mod tests {
     }
 
     #[test]
+    fn select_key_bindings_include_e3_action() {
+        let keys = default_select_keys();
+
+        assert!(keys.is_e3_action("E"));
+    }
+
+    #[test]
     fn select_key_bindings_expose_key2_for_gas_toggle() {
         let keys = default_select_keys();
 
@@ -7035,10 +8860,152 @@ mod tests {
     }
 
     #[test]
+    fn play_exit_hold_timer_uses_beatoraja_default_duration() {
+        let start = Instant::now();
+        let mut held_since = None;
+
+        update_play_exit_hold_started_at(&mut held_since, true, false, start);
+        assert!(held_since.is_none());
+
+        update_play_exit_hold_started_at(&mut held_since, true, true, start);
+        assert_eq!(held_since, Some(start));
+        assert!(!play_exit_hold_elapsed(held_since, start + PLAY_EXIT_HOLD_DURATION / 2));
+        assert!(play_exit_hold_elapsed(held_since, start + PLAY_EXIT_HOLD_DURATION));
+
+        update_play_exit_hold_started_at(
+            &mut held_since,
+            false,
+            true,
+            start + PLAY_EXIT_HOLD_DURATION,
+        );
+        assert!(held_since.is_none());
+    }
+
+    #[test]
+    fn decide_fadeout_scene_elapsed_enters_scene_tail_on_early_skip() {
+        let elapsed = decide_fadeout_scene_elapsed(
+            Duration::from_millis(100),
+            Duration::from_millis(250),
+            Duration::from_millis(2500),
+            Duration::from_millis(1000),
+            DecideFadeoutSceneTiming::DefaultTail,
+        );
+
+        assert_eq!(elapsed, Duration::from_millis(1750));
+    }
+
+    #[test]
+    fn decide_fadeout_scene_elapsed_stretches_detected_tail_fadeout() {
+        let elapsed = decide_fadeout_scene_elapsed(
+            Duration::from_millis(100),
+            Duration::from_millis(500),
+            Duration::from_millis(2500),
+            Duration::from_millis(1000),
+            DecideFadeoutSceneTiming::TailStart(Duration::from_millis(2300)),
+        );
+
+        assert_eq!(elapsed, Duration::from_millis(2400));
+    }
+
+    #[test]
+    fn decide_fadeout_scene_elapsed_stays_direct_when_timer_fadeout_exists() {
+        let elapsed = decide_fadeout_scene_elapsed(
+            Duration::from_millis(100),
+            Duration::from_millis(0),
+            Duration::from_millis(2500),
+            Duration::from_millis(500),
+            DecideFadeoutSceneTiming::DirectOnly,
+        );
+
+        assert_eq!(elapsed, Duration::from_millis(100));
+    }
+
+    #[test]
+    fn decide_fadeout_scene_elapsed_does_not_rewind_auto_fadeout() {
+        let elapsed = decide_fadeout_scene_elapsed(
+            Duration::from_millis(2500),
+            Duration::from_millis(250),
+            Duration::from_millis(2500),
+            Duration::from_millis(1000),
+            DecideFadeoutSceneTiming::DefaultTail,
+        );
+
+        assert_eq!(elapsed, Duration::from_millis(2750));
+    }
+
+    #[test]
+    fn decide_scene_fadeout_tail_start_detects_scene_end_black_fade() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 6,
+                "w": 1920,
+                "h": 1080,
+                "scene": 2500,
+                "fadeout": 1000,
+                "destination": [
+                    { "id": -110, "loop": 800, "dst": [
+                        { "time": 0, "x": 0, "y": 0, "w": 1920, "h": 1080, "a": 255 },
+                        { "time": 800, "a": 0 }
+                    ] },
+                    { "id": -110, "loop": 2500, "dst": [
+                        { "time": 2300, "x": 0, "y": 0, "w": 1920, "h": 1080, "a": 0 },
+                        { "time": 2500, "a": 255 }
+                    ] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(decide_scene_fadeout_tail_start(Some(&document)), Some(2300));
+    }
+
+    #[test]
+    fn decide_scene_fadeout_tail_start_ignores_scene_tail_when_timer_fadeout_exists() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 6,
+                "w": 1920,
+                "h": 1080,
+                "scene": 2500,
+                "fadeout": 500,
+                "destination": [
+                    { "id": -110, "loop": 2000, "dst": [
+                        { "time": 1500, "x": 0, "y": 0, "w": 1920, "h": 1080, "a": 0 },
+                        { "time": 2000, "a": 255 }
+                    ] },
+                    { "id": -110, "loop": 500, "timer": 2, "dst": [
+                        { "time": 0, "x": 0, "y": 0, "w": 1920, "h": 1080, "a": 0 },
+                        { "time": 500, "a": 255 }
+                    ] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        assert!(document_has_fadeout_timer_black(&document));
+        assert_eq!(
+            decide_fadeout_scene_timing(Some(&document)),
+            DecideFadeoutSceneTiming::DirectOnly
+        );
+        assert_eq!(decide_scene_fadeout_tail_start(Some(&document)), None);
+    }
+
+    #[test]
     fn bga_option_cycles_on_auto_off() {
         assert!(matches!(cycle_bga_option(BgaModeConfig::On), BgaModeConfig::Auto));
         assert!(matches!(cycle_bga_option(BgaModeConfig::Auto), BgaModeConfig::Off));
         assert!(matches!(cycle_bga_option(BgaModeConfig::Off), BgaModeConfig::On));
+    }
+
+    #[test]
+    fn volume_f32_to_unit_clamps_and_rounds() {
+        assert_eq!(volume_f32_to_unit(-0.5), 0);
+        assert_eq!(volume_f32_to_unit(0.345), 35);
+        assert_eq!(volume_f32_to_unit(1.5), 100);
     }
 
     #[test]
@@ -7106,6 +9073,74 @@ mod tests {
     }
 
     #[test]
+    fn lane_cover_step_moves_one_profile_unit() {
+        assert!((LANE_COVER_STEP - 0.001).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn lane_cover_step_accelerates_on_key_repeat() {
+        assert_eq!(
+            lane_cover_step(PhysicalKey::Code(KeyCode::ArrowUp), ElementState::Pressed, false),
+            Some(0.001)
+        );
+        assert_eq!(
+            lane_cover_step(PhysicalKey::Code(KeyCode::ArrowUp), ElementState::Pressed, true),
+            Some(0.01)
+        );
+        assert_eq!(
+            lane_cover_step(PhysicalKey::Code(KeyCode::ArrowDown), ElementState::Pressed, true),
+            Some(-0.01)
+        );
+    }
+
+    #[test]
+    fn play_option_control_maps_e1_combo_targets() {
+        let keys = default_select_keys();
+
+        assert_eq!(play_option_control("W", &keys), Some(PlayOptionControl::ToggleHispeedMode));
+        assert_eq!(
+            play_option_control("Z", &keys),
+            Some(PlayOptionControl::Hispeed(HispeedChange::Down))
+        );
+        assert_eq!(
+            play_option_control("V", &keys),
+            Some(PlayOptionControl::Hispeed(HispeedChange::Down))
+        );
+        assert_eq!(
+            play_option_control("S", &keys),
+            Some(PlayOptionControl::Hispeed(HispeedChange::Up))
+        );
+        assert_eq!(
+            play_option_control("F", &keys),
+            Some(PlayOptionControl::Hispeed(HispeedChange::Up))
+        );
+        assert_eq!(
+            play_option_control("AxisLeftX-", &keys),
+            Some(PlayOptionControl::LaneCover(LaneCoverChange::Up))
+        );
+        assert_eq!(
+            play_option_control("AxisLeftX+", &keys),
+            Some(PlayOptionControl::LaneCover(LaneCoverChange::Down))
+        );
+    }
+
+    #[test]
+    fn floating_hispeed_formula_uses_green_number_and_lane_cover() {
+        assert_eq!(hispeed_for_green_number_values(300.0, 1.0, 120.0, 120.0), 4.0);
+        assert_eq!(hispeed_for_green_number_values(300.0, 0.5, 120.0, 120.0), 2.0);
+        assert_eq!(hispeed_for_green_number_values(300.0, 1.0, 120.0, 240.0), 2.0);
+        assert!(
+            (hispeed_for_green_number_values(295.0, 0.93, 120.0, 120.0) - 3.783_051).abs()
+                < 0.000_01
+        );
+    }
+
+    #[test]
+    fn normal_hispeed_rounding_restores_quarter_steps() {
+        assert_eq!(clamp_hispeed_for_profile(3.783_051), 3.75);
+    }
+
+    #[test]
     fn gauge_option_cycle_includes_auto_shift() {
         assert_eq!(cycle_gauge_option(GaugeTypeConfig::ExHard), GaugeTypeConfig::Hazard);
         assert_eq!(
@@ -7123,7 +9158,12 @@ mod tests {
         apply_current_play_options_to_profile(
             &mut profile,
             Some(3.37),
-            Some(ActiveLaneState { lane_cover: 0.42, lift: 0.1 }),
+            Some(ActiveLaneState {
+                lane_cover: 0.42,
+                lift: 0.1,
+                hispeed_mode: HispeedMode::Floating,
+                target_green_number: 280,
+            }),
             ArrangeOption::Mirror,
             TargetOption::Aaa,
             GaugeTypeConfig::Hard,
@@ -7135,6 +9175,8 @@ mod tests {
         assert_eq!(profile.lane.hispeed, 3.25);
         assert_eq!(profile.lane.sudden, 420);
         assert_eq!(profile.lane.lift, 100);
+        assert_eq!(profile.lane.hispeed_mode, HispeedModeConfig::Floating);
+        assert_eq!(profile.lane.target_green_number, 280);
         assert!(matches!(profile.play.random, RandomOptionConfig::Mirror));
         assert!(matches!(profile.play.target, TargetOptionConfig::Aaa));
         assert!(matches!(profile.play.gauge, GaugeTypeConfig::Hard));
@@ -7195,7 +9237,16 @@ mod tests {
             .collect();
 
         let profile = ProfileConfig::new_default("default", "Default", 0);
-        let snapshot_rows = select_snapshot_rows(&rows, 5, 7, &profile, None);
+        let mut chart_distributions = HashMap::new();
+        chart_distributions.insert(
+            5,
+            vec![crate::storage::library_db::ChartDistributionSecond {
+                key_taps: 2,
+                key_long_heads: 1,
+                ..Default::default()
+            }],
+        );
+        let snapshot_rows = select_snapshot_rows(&rows, 5, 7, &profile, None, &chart_distributions);
 
         assert_eq!(snapshot_rows.len(), 7);
         assert_eq!(snapshot_rows[0].index, 2);
@@ -7203,7 +9254,13 @@ mod tests {
         assert_eq!(snapshot_rows[3].title, "Title 5");
         assert_eq!(snapshot_rows[3].clear_type, "Normal");
         assert_eq!(snapshot_rows[3].ex_score, Some(1234));
+        assert_eq!(snapshot_rows[3].judge_rank, Some(1));
         assert_eq!(snapshot_rows[3].replay_slots, [true, false, false, false]);
+        assert_eq!(snapshot_rows[3].chart_normal_notes, 45);
+        assert_eq!(snapshot_rows[3].chart_long_notes, 6);
+        assert_eq!(snapshot_rows[3].chart_peak_density, 12.5);
+        assert_eq!(snapshot_rows[3].chart_distribution.len(), 1);
+        assert_eq!(snapshot_rows[3].chart_distribution[0].key_taps, 2);
     }
 
     #[test]
@@ -7212,7 +9269,7 @@ mod tests {
             (0..4).map(|i| SelectItem::Chart(select_chart_row(i))).collect();
 
         let profile = ProfileConfig::new_default("default", "Default", 0);
-        let snapshot_rows = select_snapshot_rows(&rows, 0, 7, &profile, None);
+        let snapshot_rows = select_snapshot_rows(&rows, 0, 7, &profile, None, &HashMap::new());
 
         assert_eq!(snapshot_rows.len(), 7);
         assert_eq!(
@@ -7227,7 +9284,7 @@ mod tests {
             (0..30).map(|i| SelectItem::Chart(select_chart_row(i))).collect();
 
         let profile = ProfileConfig::new_default("default", "Default", 0);
-        let snapshot_rows = select_snapshot_rows(&rows, 2, 25, &profile, None);
+        let snapshot_rows = select_snapshot_rows(&rows, 2, 25, &profile, None, &HashMap::new());
 
         assert_eq!(snapshot_rows.len(), 25);
         assert_eq!(snapshot_rows[0].index, 20);
@@ -7243,7 +9300,7 @@ mod tests {
         ];
 
         let profile = ProfileConfig::new_default("default", "Default", 0);
-        let snapshot_rows = select_snapshot_rows(&rows, 0, 2, &profile, None);
+        let snapshot_rows = select_snapshot_rows(&rows, 0, 2, &profile, None, &HashMap::new());
 
         assert!(snapshot_rows.iter().any(|row| row.title == "Course 4/4" && row.in_library));
         assert!(snapshot_rows.iter().any(|row| row.title == "Course 3/4" && !row.in_library));
@@ -7295,6 +9352,86 @@ mod tests {
         assert_eq!(moved_select_index(9, 0, SelectMove::Last), 0);
     }
 
+    #[test]
+    fn select_skin_event_state_cycles_like_beatoraja_defaults() {
+        assert_eq!(SelectModeFilter::All.next(), SelectModeFilter::K7);
+        assert_eq!(SelectModeFilter::All.previous(), SelectModeFilter::K24Double);
+        assert_eq!(SelectSort::Title.next(), SelectSort::Artist);
+        assert_eq!(SelectSort::Title.previous(), SelectSort::MissCount);
+        assert_eq!(SelectLnMode::Ln.next(), SelectLnMode::Cn);
+        assert_eq!(SelectLnMode::Ln.previous(), SelectLnMode::Hcn);
+        assert_eq!(SelectLnMode::Hcn.long_note_mode(), LongNoteMode::Hcn);
+        assert_eq!(
+            cycle_gauge_option_with_direction(GaugeTypeConfig::Normal, 1),
+            GaugeTypeConfig::Hard
+        );
+        assert_eq!(
+            cycle_gauge_option_with_direction(GaugeTypeConfig::Normal, -1),
+            GaugeTypeConfig::Easy
+        );
+        assert_eq!(
+            cycle_arrange_option_with_direction(ArrangeOption::Normal, -1),
+            ArrangeOption::Random
+        );
+        assert_eq!(cycle_bga_option_with_direction(BgaModeConfig::On, -1), BgaModeConfig::Off);
+        assert_eq!(
+            cycle_bga_expand_with_direction(BgaExpandConfig::KeepAspect, 1),
+            BgaExpandConfig::Full
+        );
+        assert_eq!(
+            cycle_gauge_auto_shift_option_with_direction(GaugeAutoShiftConfig::Off, -1),
+            GaugeAutoShiftConfig::SelectToUnder
+        );
+    }
+
+    #[test]
+    fn select_mode_filter_keeps_matching_chart_rows() {
+        let mut k7 = select_chart_row(1);
+        k7.chart.as_mut().unwrap().mode = "7K".to_string();
+        let mut k14 = select_chart_row(2);
+        k14.chart.as_mut().unwrap().mode = "14K".to_string();
+        let mut items = vec![
+            SelectItem::Folder {
+                path: "folder".to_string(),
+                name: "folder".to_string(),
+                kind: SelectRowKind::Folder,
+            },
+            SelectItem::Chart(k7),
+            SelectItem::Chart(k14),
+        ];
+
+        apply_select_mode_filter(&mut items, SelectModeFilter::K14);
+
+        assert_eq!(items.len(), 2);
+        assert!(matches!(items[0], SelectItem::Folder { .. }));
+        assert_eq!(items[1].display_name(), "Title 2");
+    }
+
+    #[test]
+    fn select_sort_orders_chart_rows_without_moving_folders() {
+        let mut slow = select_chart_row(1);
+        slow.chart.as_mut().unwrap().title = "Slow".to_string();
+        slow.chart.as_mut().unwrap().initial_bpm = 100.0;
+        let mut fast = select_chart_row(2);
+        fast.chart.as_mut().unwrap().title = "Fast".to_string();
+        fast.chart.as_mut().unwrap().initial_bpm = 200.0;
+        let mut items = vec![
+            SelectItem::Folder {
+                path: "folder".to_string(),
+                name: "folder".to_string(),
+                kind: SelectRowKind::Folder,
+            },
+            SelectItem::Chart(fast),
+            SelectItem::Chart(slow),
+        ];
+
+        apply_select_sort(&mut items, SelectSort::Bpm);
+
+        assert!(matches!(items[0], SelectItem::Folder { .. }));
+        assert_eq!(items[1].display_name(), "Slow");
+        assert_eq!(items[2].display_name(), "Fast");
+    }
+
     fn select_chart_row(index: usize) -> SelectChartRow {
         SelectChartRow {
             chart: Some(ChartListItem {
@@ -7319,6 +9456,18 @@ mod tests {
                 preview_file: String::new(),
                 has_long_notes: false,
                 has_mines: false,
+                judge_rank: Some(1),
+            }),
+            chart_analysis: Some(crate::storage::library_db::ChartAnalysisSummary {
+                normal_notes: 40 + index as u32,
+                long_notes: 1 + index as u32,
+                scratch_notes: 3,
+                long_scratch_notes: 1,
+                density: 4.5,
+                peak_density: 12.5,
+                end_density: 8.25,
+                total_gauge: 260.0,
+                main_bpm: 128.0,
             }),
             fallback_title: String::new(),
             fallback_artist: String::new(),

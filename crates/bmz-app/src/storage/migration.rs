@@ -371,6 +371,32 @@ pub const LIBRARY_MIGRATIONS: &[Migration] = &[
                 ON course_scores(course_id, arrange);",
         ],
     },
+    Migration {
+        version: 14,
+        // beatoraja keeps per-chart SongInformation in a separate information
+        // table.  BMZ stores the same scan-time analysis beside charts, keyed
+        // by chart_id because library.db can intentionally keep multiple chart
+        // rows with the same sha256 at different paths.
+        statements: &[
+            "CREATE TABLE chart_analysis (
+                chart_id INTEGER PRIMARY KEY REFERENCES charts(id) ON DELETE CASCADE,
+                normal_notes INTEGER NOT NULL,
+                long_notes INTEGER NOT NULL,
+                scratch_notes INTEGER NOT NULL,
+                long_scratch_notes INTEGER NOT NULL,
+                density REAL NOT NULL,
+                peak_density REAL NOT NULL,
+                end_density REAL NOT NULL,
+                total_gauge REAL NOT NULL,
+                main_bpm REAL NOT NULL,
+                distribution_json TEXT NOT NULL,
+                speed_changes_json TEXT NOT NULL,
+                lane_notes_json TEXT NOT NULL,
+                analysis_version INTEGER NOT NULL
+            );",
+            "CREATE INDEX idx_chart_analysis_main_bpm ON chart_analysis(main_bpm);",
+        ],
+    },
 ];
 
 pub const SCORE_MIGRATIONS: &[Migration] = &[

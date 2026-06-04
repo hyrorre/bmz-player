@@ -744,6 +744,36 @@ mod tests {
     }
 
     #[test]
+    fn lua_skin_volume_value_functions_map_to_number_refs() {
+        let root = unique_test_dir("bmz-skin-lua");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("select.luaskin"),
+            r#"
+            local main_state = require("main_state")
+            return {
+                type = 0,
+                value = {
+                    { id = "master", src = 1, x = 0, y = 0, w = 110, h = 10, divx = 11, digit = 3, value = function() return main_state.volume_sys() * 100 end },
+                    { id = "key", src = 1, x = 0, y = 0, w = 110, h = 10, divx = 11, digit = 3, value = function() return main_state.volume_key() * 100 end },
+                    { id = "bgm", src = 1, x = 0, y = 0, w = 110, h = 10, divx = 11, digit = 3, value = function() return main_state.volume_bg() * 100 end },
+                }
+            }
+            "#,
+        )
+        .unwrap();
+
+        let loaded =
+            load_lua_skin_value(&root.join("select.luaskin"), &BTreeMap::new(), &BTreeMap::new())
+                .unwrap();
+
+        assert!(loaded.warnings.is_empty());
+        assert_eq!(loaded.value["value"][0]["ref"], 57);
+        assert_eq!(loaded.value["value"][1]["ref"], 58);
+        assert_eq!(loaded.value["value"][2]["ref"], 59);
+    }
+
+    #[test]
     fn lua_skin_main_state_version_text_is_available_during_load() {
         let root = unique_test_dir("bmz-skin-lua");
         fs::create_dir_all(&root).unwrap();
@@ -871,7 +901,7 @@ mod tests {
     }
 
     #[test]
-    fn lua_skin_silently_skips_loader_callback_fields() {
+    fn lua_skin_preserves_constant_act_and_skips_loader_callback_fields() {
         let root = unique_test_dir("bmz-skin-lua");
         fs::create_dir_all(&root).unwrap();
         fs::write(
@@ -880,7 +910,9 @@ mod tests {
             return {
                 type = 0,
                 image = {
-                    { id = "button", src = "src", x = 0, y = 0, w = 10, h = 10, act = function() return true end }
+                    { id = "button", src = "src", x = 0, y = 0, w = 10, h = 10, act = 15 },
+                    { id = "sort", src = "src", x = 0, y = 0, w = 10, h = 10, act = function() return 12 end },
+                    { id = "callback", src = "src", x = 0, y = 0, w = 10, h = 10, act = function() return true end }
                 },
                 customTimers = {
                     { id = 9001, timer = function() return 0 end }
@@ -895,7 +927,9 @@ mod tests {
                 .unwrap();
 
         assert!(loaded.warnings.is_empty());
-        assert!(loaded.value["image"][0].get("act").is_none());
+        assert_eq!(loaded.value["image"][0]["act"], serde_json::json!(15));
+        assert_eq!(loaded.value["image"][1]["act"], serde_json::json!(12));
+        assert!(loaded.value["image"][2].get("act").is_none());
         assert!(loaded.value["customTimers"][0].get("timer").is_none());
     }
 

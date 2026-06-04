@@ -6,7 +6,9 @@ use bmz_render::scene::SelectRowKind;
 
 use crate::screens::settings_model::{ConfigSelectRow, KeyBindingSelectRow};
 use crate::storage::common::hash_to_hex;
-use crate::storage::library_db::{ChartListItem, LibraryDatabase, TableEntryListItem};
+use crate::storage::library_db::{
+    ChartAnalysisSummary, ChartListItem, LibraryDatabase, TableEntryListItem,
+};
 use crate::storage::score_db::{BestScoreSummary, ReplaySlotSummary, ScoreDatabase};
 
 /// Virtual path prefix used for difficulty-table navigation.
@@ -135,6 +137,7 @@ fn insert_table_level(map: &mut HashMap<String, String>, key: String, symbol: &s
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelectChartRow {
     pub chart: Option<ChartListItem>,
+    pub chart_analysis: Option<ChartAnalysisSummary>,
     pub fallback_title: String,
     pub fallback_artist: String,
     pub entry_sha256: Option<[u8; 32]>,
@@ -489,6 +492,11 @@ fn load_select_items_in_table_filtered(
         .map(|s| (s.chart_sha256, s))
         .collect();
     let mut replay_slot_map = replay_slot_map(score_db, &hashes)?;
+    let chart_ids: Vec<i64> = entries
+        .iter()
+        .filter_map(|entry| entry.chart.as_ref().map(|chart| chart.chart_id))
+        .collect();
+    let mut analysis_map = library_db.chart_analysis_summaries_by_chart_ids(&chart_ids)?;
 
     Ok(entries
         .into_iter()
@@ -498,8 +506,11 @@ fn load_select_items_in_table_filtered(
             let best_score = score_sha256.and_then(|hash| score_map.remove(&hash));
             let replay_slots =
                 score_sha256.and_then(|hash| replay_slot_map.remove(&hash)).unwrap_or([false; 4]);
+            let chart_analysis =
+                entry.chart.as_ref().and_then(|chart| analysis_map.remove(&chart.chart_id));
             SelectItem::Chart(select_chart_row_from_table_entry(
                 entry,
+                chart_analysis,
                 best_score,
                 replay_slots,
                 table_level,
@@ -615,6 +626,7 @@ fn entry_score_sha256(entry: &TableEntryListItem) -> Option<[u8; 32]> {
 
 fn select_chart_row_from_table_entry(
     entry: TableEntryListItem,
+    chart_analysis: Option<ChartAnalysisSummary>,
     best_score: Option<BestScoreSummary>,
     replay_slots: [bool; 4],
     table_level: String,
@@ -622,6 +634,7 @@ fn select_chart_row_from_table_entry(
     let entry_sha256 = entry_score_sha256(&entry);
     SelectChartRow {
         chart: entry.chart,
+        chart_analysis,
         fallback_title: entry.title,
         fallback_artist: entry.artist,
         entry_sha256,
@@ -727,6 +740,8 @@ fn chart_items_with_enrichment(
         .map(|s| (s.chart_sha256, s))
         .collect();
     let mut replay_slot_map = replay_slot_map(score_db, &hashes)?;
+    let chart_ids: Vec<i64> = all_charts.iter().map(|c| c.chart_id).collect();
+    let mut analysis_map = library_db.chart_analysis_summaries_by_chart_ids(&chart_ids)?;
 
     // MD5 lookup (multiple tables per MD5 joined with '/')
     let md5_hexes: Vec<String> = all_charts.iter().map(|c| hash_to_hex(&c.md5)).collect();
@@ -759,6 +774,7 @@ fn chart_items_with_enrichment(
             .or_else(|| sha256_level_map.remove(&hash_to_hex(&chart.sha256)))
             .unwrap_or_default();
         items.push(SelectItem::Chart(SelectChartRow {
+            chart_analysis: analysis_map.remove(&chart.chart_id),
             chart: Some(chart),
             fallback_title: String::new(),
             fallback_artist: String::new(),
@@ -1215,7 +1231,9 @@ mod tests {
                 preview_file: String::new(),
                 has_long_notes: false,
                 has_mines: false,
+                judge_rank: None,
             }),
+            chart_analysis: None,
             fallback_title: String::new(),
             fallback_artist: String::new(),
             entry_sha256: None,

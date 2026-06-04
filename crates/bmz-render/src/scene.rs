@@ -28,6 +28,9 @@ pub struct SelectSnapshot {
     pub gauge: String,
     pub gauge_auto_shift: String,
     pub assist: String,
+    pub select_mode: String,
+    pub select_sort: String,
+    pub select_ln_mode: String,
     pub bga: String,
     pub master_volume: f32,
     pub key_volume: f32,
@@ -54,6 +57,8 @@ pub struct SelectSnapshot {
     /// `search_word` に乗せる不透明度倍率 (0.0..=1.0)。placeholder /
     /// メッセージ表示時は薄く (< 1.0)、実入力中は 1.0。
     pub search_word_alpha: f32,
+    /// Select skin mouse position in normalized screen coordinates.
+    pub mouse_position: Option<(f32, f32)>,
 }
 
 impl Default for SelectSnapshot {
@@ -73,6 +78,9 @@ impl Default for SelectSnapshot {
             gauge: String::new(),
             gauge_auto_shift: String::new(),
             assist: String::new(),
+            select_mode: String::new(),
+            select_sort: String::new(),
+            select_ln_mode: String::new(),
             bga: String::new(),
             master_volume: 0.0,
             key_volume: 0.0,
@@ -88,6 +96,7 @@ impl Default for SelectSnapshot {
             settings_editing: false,
             search_word: String::new(),
             search_word_alpha: 1.0,
+            mouse_position: None,
         }
     }
 }
@@ -101,6 +110,8 @@ pub struct SelectRowSnapshot {
     pub difficulty_name: String,
     pub play_level: String,
     pub table_level: String,
+    /// 現在の曲の #RANK / 判定ランク。0..4 は VERYHARD..VERYEASY、10 以上は直接倍率。
+    pub judge_rank: Option<i32>,
     pub total_notes: u32,
     pub initial_bpm: f32,
     pub min_bpm: f32,
@@ -117,6 +128,17 @@ pub struct SelectRowSnapshot {
     pub has_long_notes: bool,
     pub has_mines: bool,
     pub has_random: bool,
+    /// beatoraja SongInformation-derived chart details for selected song rows.
+    pub chart_normal_notes: u32,
+    pub chart_long_notes: u32,
+    pub chart_scratch_notes: u32,
+    pub chart_long_scratch_notes: u32,
+    pub chart_density: f32,
+    pub chart_peak_density: f32,
+    pub chart_end_density: f32,
+    pub chart_total_gauge: f32,
+    pub chart_main_bpm: f32,
+    pub chart_distribution: Vec<SelectChartDistributionSecond>,
     pub is_folder: bool,
     pub kind: SelectRowKind,
     /// library.db に登録済みかどうか。未登録の難易度表エントリは false。
@@ -149,6 +171,7 @@ impl Default for SelectRowSnapshot {
             difficulty_name: String::new(),
             play_level: String::new(),
             table_level: String::new(),
+            judge_rank: None,
             total_notes: 0,
             initial_bpm: 0.0,
             min_bpm: 0.0,
@@ -165,6 +188,16 @@ impl Default for SelectRowSnapshot {
             has_long_notes: false,
             has_mines: false,
             has_random: false,
+            chart_normal_notes: 0,
+            chart_long_notes: 0,
+            chart_scratch_notes: 0,
+            chart_long_scratch_notes: 0,
+            chart_density: 0.0,
+            chart_peak_density: 0.0,
+            chart_end_density: 0.0,
+            chart_total_gauge: 0.0,
+            chart_main_bpm: 0.0,
+            chart_distribution: Vec::new(),
             is_folder: false,
             kind: SelectRowKind::default(),
             in_library: true,
@@ -173,6 +206,41 @@ impl Default for SelectRowSnapshot {
             course_constraints: CourseConstraintFlags::default(),
             chart_key_mode: None,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SelectChartDistributionSecond {
+    pub scratch_long_heads: u16,
+    pub scratch_long_bodies: u16,
+    pub scratch_taps: u16,
+    pub key_long_heads: u16,
+    pub key_long_bodies: u16,
+    pub key_taps: u16,
+    pub mines: u16,
+}
+
+impl SelectChartDistributionSecond {
+    pub fn total(self) -> u32 {
+        u32::from(self.scratch_long_heads)
+            + u32::from(self.scratch_long_bodies)
+            + u32::from(self.scratch_taps)
+            + u32::from(self.key_long_heads)
+            + u32::from(self.key_long_bodies)
+            + u32::from(self.key_taps)
+            + u32::from(self.mines)
+    }
+
+    pub fn values(self) -> [u16; 7] {
+        [
+            self.scratch_long_heads,
+            self.scratch_long_bodies,
+            self.scratch_taps,
+            self.key_long_heads,
+            self.key_long_bodies,
+            self.key_taps,
+            self.mines,
+        ]
     }
 }
 

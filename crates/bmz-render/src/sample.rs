@@ -47,6 +47,9 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
         gauge: "NORMAL".to_string(),
         gauge_auto_shift: "OFF".to_string(),
         assist: "NORMAL".to_string(),
+        select_mode: "ALL".to_string(),
+        select_sort: "TITLE".to_string(),
+        select_ln_mode: "LN".to_string(),
         bga: "ON".to_string(),
         master_volume: 1.0,
         key_volume: 1.0,
@@ -64,6 +67,7 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
         settings_editing: false,
         search_word: String::new(),
         search_word_alpha: 1.0,
+        mouse_position: None,
     })
 }
 

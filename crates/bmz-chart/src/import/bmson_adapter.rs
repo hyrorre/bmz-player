@@ -5,11 +5,13 @@
 
 use std::path::{Path, PathBuf};
 
-use bms_rs::bms::command::LnMode;
 use bms_rs::bms::command::channel::mapper::KeyLayoutBeat;
+use bms_rs::bms::command::graphics::Argb;
+use bms_rs::bms::command::{JudgeLevel, LnMode, ObjId, StringValue};
 use bms_rs::bms::model::Bms;
+use bms_rs::bms::model::bmp::Bmp;
 use bms_rs::bmson::bmson_to_bms::BmsonToBmsWarning;
-use bms_rs::bmson::parse_bmson;
+use bms_rs::bmson::{Bmson, parse_bmson};
 use bmz_core::lane::ChartKeyLayout;
 
 use crate::hash::compute_chart_identity;
@@ -55,26 +57,11 @@ pub fn import_bmson_to_intermediate(
     let boundaries =
         build_measure_boundaries(bmson.lines.as_deref(), bmson.info.resolution.get(), max_pulse);
 
-    let mut converted = Bms::from_bmson(bmson.clone());
+    let mut converted = bms_from_bmson_headers_and_resources(&bmson, warnings);
     let mut timing_warnings = Vec::new();
     rebuild_bms_timing_from_bmson(&mut converted.bms, &bmson, &boundaries, &mut timing_warnings);
     for warning in timing_warnings {
         push_bmson_to_bms_warning(warning, warnings);
-    }
-    for warning in converted.warnings {
-        push_bmson_to_bms_warning(warning, warnings);
-    }
-    for warning in converted.playing_warnings {
-        warnings.push(ImportWarning::ParserDiagnostic {
-            code: "BmsonPlayingWarning".into(),
-            message: format!("{warning:?}"),
-        });
-    }
-    for error in converted.playing_errors {
-        warnings.push(ImportWarning::ParserDiagnostic {
-            code: "BmsonPlayingError".into(),
-            message: format!("{error:?}"),
-        });
     }
 
     converted.bms.repr.ln_mode = ln_type;
@@ -86,10 +73,57 @@ pub fn import_bmson_to_intermediate(
         &converted.bms,
         ChartKeyLayout::beat(),
         warnings,
-    );
+    )?;
     intermediate.identity = identity;
     intermediate.metadata.suppress_bar_lines = suppress_bar_lines;
     Ok(intermediate)
+}
+
+struct BmzBmsonToBmsOutput {
+    bms: Bms,
+}
+
+fn bms_from_bmson_headers_and_resources(
+    bmson: &Bmson<'_>,
+    warnings: &mut Vec<ImportWarning>,
+) -> BmzBmsonToBmsOutput {
+    let mut bms = Bms::default();
+
+    bms.music_info.title = Some(bmson.info.title.clone().into_owned());
+    bms.music_info.subtitle = Some(bmson.info.subtitle.clone().into_owned());
+    bms.music_info.artist = Some(bmson.info.artist.clone().into_owned());
+    bms.music_info.sub_artist = bmson.info.subartists.first().map(|s| s.clone().into_owned());
+    bms.music_info.genre = Some(bmson.info.genre.clone().into_owned());
+    bms.metadata.play_level = Some(bmson.info.level as u8);
+    bms.judge.total = Some(StringValue::from_value(bmson.info.total));
+    bms.sprite.back_bmp = bmson.info.back_image.clone().map(|s| PathBuf::from(s.into_owned()));
+    bms.sprite.stage_file =
+        bmson.info.eyecatch_image.clone().map(|s| PathBuf::from(s.into_owned()));
+    bms.sprite.banner = bmson.info.banner_image.clone().map(|s| PathBuf::from(s.into_owned()));
+    bms.music_info.preview_music =
+        bmson.info.preview_music.clone().map(|s| PathBuf::from(s.into_owned()));
+    bms.judge.rank = Some(JudgeLevel::OtherInt((bmson.info.judge_rank.as_f64() * 18.0) as i64));
+    bms.bpm.bpm = Some(StringValue::from_value(bmson.info.init_bpm));
+
+    let mut bga_header_obj_id_issuer = ObjId::all_values();
+    for bga_header in &bmson.bga.bga_header {
+        let Some(obj_id) = bga_header_obj_id_issuer.next() else {
+            warnings.push(ImportWarning::ParserDiagnostic {
+                code: "BmsonToBmsBgaHeaderObjIdOutOfRange".into(),
+                message: BmsonToBmsWarning::BgaHeaderObjIdOutOfRange.to_string(),
+            });
+            continue;
+        };
+        bms.bmp.bmp_files.insert(
+            obj_id,
+            Bmp {
+                file: PathBuf::from(bga_header.name.as_ref()),
+                transparent_color: Argb::default(),
+            },
+        );
+    }
+
+    BmzBmsonToBmsOutput { bms }
 }
 
 fn push_bmson_to_bms_warning(warning: BmsonToBmsWarning, warnings: &mut Vec<ImportWarning>) {

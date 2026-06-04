@@ -282,6 +282,22 @@ pub fn build_render_snapshot_with_target_and_bga_frames(
     snapshot
 }
 
+pub fn update_render_snapshot_play_options(
+    snapshot: &mut RenderSnapshot,
+    session: &GameSession,
+    render_now: TimeUs,
+) {
+    snapshot.hispeed = session.hispeed;
+    snapshot.lift = session.lift;
+    snapshot.lane_cover = if session.lane_cover_visible { session.lane_cover } else { 0.0 };
+    snapshot.lane_cover_changing = session.lane_cover_changing;
+    snapshot.lanecover_enabled = session.lanecover_enabled;
+    snapshot.lift_enabled = session.lift_enabled;
+    snapshot.hidden_enabled = session.hidden_enabled;
+    snapshot.note_display_duration_ms = note_display_duration_ms(session, render_now);
+    snapshot.hidden_cover = session.hidden_cover;
+}
+
 fn current_poor_bga_frame(
     chart: &PlayableChart,
     render_now: TimeUs,
@@ -596,7 +612,7 @@ fn display_judgement(event: &JudgementEvent) -> DisplayJudgement {
 }
 
 /// `render_now` の時点で有効な BPM を返す。
-fn current_bpm(chart: &bmz_chart::model::PlayableChart, render_now: TimeUs) -> f64 {
+pub(crate) fn current_bpm(chart: &bmz_chart::model::PlayableChart, render_now: TimeUs) -> f64 {
     let mut bpm = chart.metadata.initial_bpm;
     for event in &chart.timing_events {
         if event.time > render_now {
@@ -976,6 +992,24 @@ mod tests {
 
         let snapshot = build_render_snapshot(&session, TimeUs(0), &[], None);
 
+        assert!(snapshot.lane_cover_changing);
+        assert_eq!(snapshot.note_display_duration_ms, 750);
+    }
+
+    #[test]
+    fn update_render_snapshot_play_options_refreshes_ready_snapshot_values() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+        let mut snapshot = build_render_snapshot(&session, TimeUs(0), &[], None);
+
+        session.hispeed = 2.0;
+        session.lane_cover = 0.25;
+        session.lane_cover_changing = true;
+        update_render_snapshot_play_options(&mut snapshot, &session, TimeUs(0));
+
+        assert_eq!(snapshot.hispeed, 2.0);
+        assert_eq!(snapshot.lane_cover, 0.25);
         assert!(snapshot.lane_cover_changing);
         assert_eq!(snapshot.note_display_duration_ms, 750);
     }

@@ -423,6 +423,36 @@ mod tests {
     }
 
     #[test]
+    fn imports_sparse_long_bms_bpm_message_without_dense_expansion() {
+        let mut payload = vec!["00"; 10_000];
+        payload[9_999] = "01";
+        let text = format!(
+            "\
+#TITLE Sparse BPM
+#BPM 120
+#TOTAL 200
+#BPM01 180
+#00108:{}
+#00211:01
+",
+            payload.join("")
+        );
+        let path = write_temp_bms(&text);
+        let result = import_bms_chart(&path, None, false).unwrap();
+
+        assert!(result.warnings.iter().any(|warning| {
+            matches!(
+                warning,
+                ImportWarning::ParserDiagnostic { code, .. } if code == "SparseBmsMessage"
+            )
+        }));
+        assert!(result.chart.timing_events.iter().any(|event| {
+            matches!(event.kind, TimingEventKind::BpmChange { bpm } if bpm == 180.0)
+        }));
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn imports_bmson_into_playable_chart() {
         let json = r#"{
             "version": "1.0.0",
