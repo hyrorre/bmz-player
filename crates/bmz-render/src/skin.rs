@@ -3429,13 +3429,8 @@ impl SkinDocument {
             }
             if select_row_shows_score_decorations(row) {
                 let clear_index = select_row_clear_index(row);
-                let lamp_entries = if songlist.playerlamp.is_empty() {
-                    &songlist.lamp
-                } else {
-                    &songlist.playerlamp
-                };
                 items.extend(self.select_songlist_child_items_by_index(
-                    lamp_entries,
+                    &songlist.lamp,
                     clear_index,
                     row_origin,
                     images,
@@ -3463,7 +3458,9 @@ impl SkinDocument {
                         sources,
                     ));
                 }
-                if let Some(trophy_index) = select_row_trophy_index(row) {
+                if select_row_shows_course_trophy(row)
+                    && let Some(trophy_index) = select_row_trophy_index(row)
+                {
                     items.extend(self.select_songlist_child_items_by_index(
                         &songlist.trophy,
                         trophy_index,
@@ -3475,15 +3472,6 @@ impl SkinDocument {
                     ));
                 }
                 items.extend(self.select_songlist_all_child_items(
-                    &songlist.graph,
-                    row,
-                    row_origin,
-                    images,
-                    enabled_options,
-                    row_state,
-                    sources,
-                ));
-                items.extend(self.select_songlist_all_child_items(
                     &songlist.judgegraph,
                     row,
                     row_origin,
@@ -3494,6 +3482,17 @@ impl SkinDocument {
                 ));
                 items.extend(self.select_songlist_all_child_items(
                     &songlist.bpmgraph,
+                    row,
+                    row_origin,
+                    images,
+                    enabled_options,
+                    row_state,
+                    sources,
+                ));
+            }
+            if select_row_shows_folder_distribution(row) {
+                items.extend(self.select_songlist_all_child_items(
+                    &songlist.graph,
                     row,
                     row_origin,
                     images,
@@ -7843,6 +7842,14 @@ fn select_row_shows_score_decorations(row: &SelectRowSnapshot) -> bool {
     !row.is_folder
         && row.in_library
         && !matches!(row.kind, SelectRowKind::Config | SelectRowKind::SettingsFolder)
+}
+
+fn select_row_shows_course_trophy(row: &SelectRowSnapshot) -> bool {
+    row.kind == SelectRowKind::Course
+}
+
+fn select_row_shows_folder_distribution(row: &SelectRowSnapshot) -> bool {
+    row.is_folder && matches!(row.kind, SelectRowKind::Folder | SelectRowKind::TableFolder)
 }
 
 fn select_rank_op_matches(op: i32, state: SkinDrawState) -> bool {
@@ -12647,13 +12654,21 @@ mod tests {
                         { "id": "label-mine", "dst": [{ "x": 48, "y": 1, "w": 4, "h": 4 }] }
                     ],
                     "graph": { "id": "graph-lamp", "dst": [{ "x": 5, "y": 1, "w": 20, "h": 2 }] },
-                    "playerlamp": [
+                    "lamp": [
                         { "id": "lamp-none", "dst": [{ "x": 1, "y": 1, "w": 4, "h": 4 }] },
                         { "id": "lamp-failed", "dst": [{ "x": 1, "y": 1, "w": 4, "h": 4 }] },
                         { "id": "lamp-assist", "dst": [{ "x": 1, "y": 1, "w": 4, "h": 4 }] },
                         { "id": "lamp-light-assist", "dst": [{ "x": 1, "y": 1, "w": 4, "h": 4 }] },
                         { "id": "lamp-easy", "dst": [{ "x": 1, "y": 1, "w": 4, "h": 4 }] },
                         { "id": "lamp-normal", "dst": [{ "x": 1, "y": 1, "w": 4, "h": 4 }] }
+                    ],
+                    "playerlamp": [
+                        { "id": "lamp-none", "dst": [{ "x": 60, "y": 1, "w": 4, "h": 4 }] },
+                        { "id": "lamp-failed", "dst": [{ "x": 60, "y": 1, "w": 4, "h": 4 }] },
+                        { "id": "lamp-assist", "dst": [{ "x": 60, "y": 1, "w": 4, "h": 4 }] },
+                        { "id": "lamp-light-assist", "dst": [{ "x": 60, "y": 1, "w": 4, "h": 4 }] },
+                        { "id": "lamp-easy", "dst": [{ "x": 60, "y": 1, "w": 4, "h": 4 }] },
+                        { "id": "lamp-normal", "dst": [{ "x": 60, "y": 1, "w": 4, "h": 4 }] }
                     ]
                 },
                 "destination": [{ "id": "songlist" }]
@@ -12672,6 +12687,7 @@ mod tests {
                     index: 1,
                     title: "Folder".to_string(),
                     play_level: "0".to_string(),
+                    clear_type: "Normal".to_string(),
                     is_folder: true,
                     kind: SelectRowKind::Folder,
                     ..SelectRowSnapshot::default()
@@ -12747,7 +12763,15 @@ mod tests {
                 && approx_eq(*width, 0.04)
                 && approx_eq(*height, 0.04)
                 && approx_eq(*u, 20.0 / 24.0))));
-        assert!(items.iter().any(|item| matches!(item, SkinRenderItem::Image {
+        assert!(!items.iter().any(|item| matches!(item, SkinRenderItem::Image {
+                texture: SkinTextureId(9999),
+                rect: Rect { x, y, width, height },
+                ..
+            } if approx_eq(*x, 0.72)
+                && approx_eq(*y, 0.45)
+                && approx_eq(*width, 0.04)
+                && approx_eq(*height, 0.04))));
+        assert!(!items.iter().any(|item| matches!(item, SkinRenderItem::Image {
                 texture: SkinTextureId(9999),
                 rect: Rect { x, y, .. },
                 uv: TextureRegion { x: u, .. },
@@ -12755,12 +12779,42 @@ mod tests {
             } if approx_eq(*x, 0.47)
                 && approx_eq(*y, 0.45)
                 && approx_eq(*u, 8.0 / 24.0))));
-        assert!(items.iter().any(|item| matches!(item, SkinRenderItem::Image {
+        let course_snapshot = SelectSnapshot {
+            selected_index: 4,
+            rows: vec![SelectRowSnapshot {
+                index: 4,
+                title: "Course".to_string(),
+                kind: SelectRowKind::Course,
+                achieved_trophy_names: vec!["goldmedal".to_string()],
+                ..SelectRowSnapshot::default()
+            }],
+            ..SelectSnapshot::default()
+        };
+        let course_items = document.select_render_items(&sources, &course_snapshot);
+        assert!(course_items.iter().any(|item| matches!(item, SkinRenderItem::Image {
                 texture: SkinTextureId(9999),
-                rect: Rect { x, width, .. },
+                rect: Rect { x, y, .. },
+                uv: TextureRegion { x: u, .. },
+                ..
+            } if approx_eq(*x, 0.47)
+                && approx_eq(*y, 0.45)
+                && approx_eq(*u, 8.0 / 24.0))));
+        assert!(!items.iter().any(|item| matches!(item, SkinRenderItem::Image {
+                texture: SkinTextureId(9999),
+                rect: Rect { x, y, width, .. },
                 uv: TextureRegion { width: u_width, .. },
                 ..
             } if approx_eq(*x, 0.17)
+                && approx_eq(*y, 0.47)
+                && approx_eq(*width, 0.1)
+                && approx_eq(*u_width, 0.5))));
+        assert!(items.iter().any(|item| matches!(item, SkinRenderItem::Image {
+                texture: SkinTextureId(9999),
+                rect: Rect { x, y, width, .. },
+                uv: TextureRegion { width: u_width, .. },
+                ..
+            } if approx_eq(*x, 0.15)
+                && approx_eq(*y, 0.27)
                 && approx_eq(*width, 0.1)
                 && approx_eq(*u_width, 0.5))));
         assert!(items.iter().any(|item| matches!(item, SkinRenderItem::Image {
