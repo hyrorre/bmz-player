@@ -381,6 +381,10 @@ POST /api/v1/scores?include=rankings&ranking_scopes=global,self_and_rivals&ranki
 
 ### Request payload
 
+`play_count` / `clear_count` は Score Submission API では送らない。
+これらはクライアントが自己申告する値ではなく、IR Server が `scores` 投稿履歴から集計する値として扱う。
+Local BMZ がローカル表示用に `play_count` / `clear_count` を保持していても、IR 送信 payload には含めない。
+
 ```json
 {
   "client": {
@@ -690,6 +694,10 @@ rival_only=true&include_self=false -> scope=rivals
           "seed": 123456789,
           "verification": "signed"
         },
+        "stats": {
+          "play_count": 42,
+          "clear_count": 31
+        },
         "relation": {
           "is_self": true,
           "is_rival": false
@@ -713,6 +721,10 @@ rival_only=true&include_self=false -> scope=rivals
           "option": "mirror",
           "seed": 987654321,
           "verification": "signed"
+        },
+        "stats": {
+          "play_count": 12,
+          "clear_count": 9
         },
         "relation": {
           "is_self": false,
@@ -756,6 +768,19 @@ scope=self_and_rivals:
   rank=3, scope_rank=1 自分
   rank=7, scope_rank=2 ライバル
 ```
+
+### play_count / clear_count
+
+Ranking API は必要なら entry ごとに `stats.play_count` / `stats.clear_count` を返す。
+これらは投稿 payload 由来ではなく、IR Server が `scores` 投稿履歴から集計する。
+
+```txt
+play_count  = 対象 player + chart + rule の accepted score 投稿数
+clear_count = そのうち clear_type が Failed / NoPlay 以外の投稿数
+```
+
+集計単位は ranking query と同じ `chart_sha256` / `gauge` / `ln_type` / `scoring` を基本にする。
+`play_count` / `clear_count` が不要な画面では response から省略してよい。
 
 ### EX score 同点順位
 
@@ -880,6 +905,34 @@ pub struct IrChartIdentity {
   }
 }
 ```
+
+### Chart detail response stats
+
+`GET /api/v1/charts/{sha256}` は必要なら chart 全体、またはログイン中 player の
+`play_count` / `clear_count` を返してよい。これも Score Submission payload の値ではなく、
+IR Server が `scores` 投稿履歴から集計する。
+
+例:
+
+```json
+{
+  "chart": {
+    "sha256": "abc..."
+  },
+  "stats": {
+    "global": {
+      "play_count": 1200,
+      "clear_count": 840
+    },
+    "self": {
+      "play_count": 42,
+      "clear_count": 31
+    }
+  }
+}
+```
+
+Chart detail に stats が不要な画面では省略してよい。
 
 ---
 
@@ -1177,6 +1230,31 @@ rival_relationships
 replay_objects
 device_keys
 ```
+
+### scores
+
+投稿履歴をすべて保存する。`play_count` / `clear_count` は submission payload から受け取らず、
+この `scores` 履歴から IR Server 側で集計する。
+
+集計の基本条件:
+
+```txt
+player_id
+chart_sha256
+gauge
+ln_type
+scoring
+accepted = true
+```
+
+```txt
+play_count  = COUNT(*)
+clear_count = COUNT(*) FILTER (WHERE clear_rank > Failed)
+```
+
+`clear_rank > Failed` は `NoPlay` / `Failed` を除外する意味。
+Chart detail の global stats のように player 単位でない集計が必要な場合は、`player_id` 条件を外す。
+負荷が問題になるまでは `scores` から都度集計でよく、必要になったら materialized view や summary table を検討する。
 
 ### best_scores
 
@@ -1756,6 +1834,7 @@ impl MochaAdapter {
 
 - BMZ 本体の score 保存に `bp` / `cb` 集計を追加する。
 - `score_history` / `score_best` / replay slot metrics に `bp` / `cb`、必要なら `min_bp` / `min_cb` を追加する。
+- ローカル表示用の `play_count` / `clear_count` を local score DB から集計または保存する。ただし IR 送信値には使わない。
 - `ir_accounts`
 - `ir_score_jobs`
 - `ir_score_submissions`
@@ -1773,7 +1852,9 @@ impl MochaAdapter {
 
 - `players`, `charts`, `scores`, `best_scores`, `rival_relationships`, `device_keys`, `replay_objects` を作成。
 - Score submission route 実装。
+- `play_count` / `clear_count` は submission payload から受け取らず、`scores` 投稿履歴から集計する。
 - Ranking route 実装。
+- Ranking / Chart detail response で必要に応じて `play_count` / `clear_count` を返す。
 - Rival route 実装。
 - `include=rankings&ranking_scopes=...` に対応。
 
@@ -1831,6 +1912,10 @@ BMZ IR API v1:
   - Clear payload follows BMZ ClearType::as_str()
   - BP means bad + poor + empty_poor; CB means bad + poor
   - min_bp / min_cb require BMZ local score storage support before becoming required
+  - play_count / clear_count are not sent by Score Submission API
+  - IR Server aggregates play_count / clear_count from scores history
+  - Ranking API / Chart detail API may return play_count / clear_count when needed
+  - Local BMZ may keep local-only play_count / clear_count, but never uses them as IR submitted values
   - Score submit response can optionally include rankings
   - Multiple ranking scopes can be requested at submit time
   - Ranking API supports global / self_and_rivals / rivals / self / around_self
