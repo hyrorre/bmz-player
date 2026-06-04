@@ -102,6 +102,7 @@ use crate::songs_cmd::scan_songs;
 use crate::storage::library_db::{ChartDistributionSecond, LibraryDatabase};
 use crate::storage::migration::migrate_library_db;
 use crate::storage::replay::load_replay_for_chart_and_policy;
+use crate::storage::score_import::{ScoreImportRequest, import_scores};
 use crate::ui::{DebugInfo, EguiLayer, SceneSkinDefs, SkinCandidate, SkinCatalog, SkinConfigMeta};
 use bmz_render::skin::{
     DestinationListEntry, SkinAnimationDef, SkinClickHit, SkinClickTarget, SkinDocument,
@@ -4662,6 +4663,39 @@ impl WinitApp {
         self.reload_select_items();
     }
 
+    fn import_external_scores(&mut self, request: ScoreImportRequest) {
+        let label = request.kind.label();
+        let path = request.path.display().to_string();
+        match import_scores(
+            &request,
+            &self.boot.library_db,
+            &mut self.boot.score_db,
+            now_unix_seconds(),
+        ) {
+            Ok(report) => {
+                let summary = report.summary();
+                tracing::info!(kind = label, path, summary, "external scores imported");
+                self.reload_select_items();
+                if let Some(egui) = self.egui.as_mut() {
+                    egui.set_score_import_status(
+                        format!(
+                            "{label}: {} をインポートしました ({summary})",
+                            request.path.display()
+                        ),
+                        false,
+                    );
+                }
+            }
+            Err(error) => {
+                let message = format!("{label}: インポートに失敗しました: {error}");
+                tracing::error!(kind = label, path, error = %format_error_chain(&error), "external score import failed");
+                if let Some(egui) = self.egui.as_mut() {
+                    egui.set_score_import_status(message, true);
+                }
+            }
+        }
+    }
+
     fn song_load_roots_from_stack(&self) -> Vec<PathEntry> {
         if let Some(folder) = self.folder_stack.last()
             && !folder.starts_with(TABLE_ROOT_PATH)
@@ -5272,6 +5306,9 @@ impl WinitApp {
         }
         if output.trigger_song_rescan {
             self.load_songs_and_reload();
+        }
+        if let Some(request) = output.score_import_request {
+            self.import_external_scores(request);
         }
         if output.save_profile_config {
             match save_profile_config(

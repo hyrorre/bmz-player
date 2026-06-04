@@ -24,6 +24,7 @@ use crate::practice_ui::{PracticePanelContext, build_practice_panel};
 use crate::screens::course_session::CourseResultSummary;
 use crate::screens::select_model::SelectCourseRow;
 use crate::songs_cmd::{add_song_root_entry, remove_song_root_entry};
+use crate::storage::score_import::{ScoreImportKind, ScoreImportRequest};
 
 /// スキンが宣言する設定可能項目の定義 (1 シーン分)。
 ///
@@ -193,6 +194,7 @@ pub struct EguiOutput {
     pub debug_panel_visible: bool,
     /// 有効な曲ルートをライブラリ DB へ再スキャンする要求。
     pub trigger_song_rescan: bool,
+    pub score_import_request: Option<ScoreImportRequest>,
     pub practice_start: bool,
     pub practice_leave: bool,
 }
@@ -213,6 +215,10 @@ pub struct EguiLayer {
     settings_new_root_path: String,
     /// 本体設定パネル: 曲フォルダ追加の直近エラー。
     settings_add_root_error: String,
+    score_import_path: String,
+    score_import_kind: ScoreImportKind,
+    score_import_status: String,
+    score_import_error: String,
 }
 
 impl EguiLayer {
@@ -238,6 +244,10 @@ impl EguiLayer {
             show_skin: false,
             settings_new_root_path: String::new(),
             settings_add_root_error: String::new(),
+            score_import_path: String::new(),
+            score_import_kind: ScoreImportKind::default(),
+            score_import_status: String::new(),
+            score_import_error: String::new(),
         }
     }
 
@@ -252,6 +262,16 @@ impl EguiLayer {
         self.visible = true;
         self.show_settings = true;
         tracing::info!("egui advanced settings opened from select");
+    }
+
+    pub fn set_score_import_status(&mut self, status: String, error: bool) {
+        if error {
+            self.score_import_error = status;
+            self.score_import_status.clear();
+        } else {
+            self.score_import_status = status;
+            self.score_import_error.clear();
+        }
     }
 
     /// winit イベントを egui へ供給する。
@@ -291,6 +311,7 @@ impl EguiLayer {
         let mut reset_skin_config = false;
         let mut skin_config_changed = false;
         let mut trigger_song_rescan = false;
+        let mut score_import_request = None;
         let mut practice_start = false;
         let mut practice_leave = false;
         let visible_flag = &mut self.visible;
@@ -320,9 +341,14 @@ impl EguiLayer {
                     app_config,
                     &mut self.settings_new_root_path,
                     &mut self.settings_add_root_error,
+                    &mut self.score_import_path,
+                    &mut self.score_import_kind,
+                    &self.score_import_status,
+                    &self.score_import_error,
                 );
                 save_app_config |= settings_actions.save;
                 trigger_song_rescan |= settings_actions.rescan;
+                score_import_request = settings_actions.score_import_request;
                 let skin_actions = build_skin_panel(
                     ctx,
                     show_skin,
@@ -349,6 +375,7 @@ impl EguiLayer {
             skin_config_changed,
             debug_panel_visible: *show_debug,
             trigger_song_rescan,
+            score_import_request,
             practice_start,
             practice_leave,
         }
@@ -765,6 +792,7 @@ fn build_debug_panel(ctx: &egui::Context, open: &mut bool, info: &DebugInfo) {
 struct SettingsPanelActions {
     save: bool,
     rescan: bool,
+    score_import_request: Option<ScoreImportRequest>,
 }
 
 /// `AppConfig` を編集する本体設定パネル。
@@ -774,9 +802,14 @@ fn build_settings_panel(
     config: &mut AppConfig,
     new_root_path: &mut String,
     add_root_error: &mut String,
+    score_import_path: &mut String,
+    score_import_kind: &mut ScoreImportKind,
+    score_import_status: &str,
+    score_import_error: &str,
 ) -> SettingsPanelActions {
     let mut save_clicked = false;
     let mut rescan_clicked = false;
+    let mut score_import_request = None;
     sized_panel_window("本体設定", ctx, open, 440.0, 520.0, egui::pos2(16.0, 320.0)).show(
         ctx,
         |ui| {
@@ -863,6 +896,15 @@ fn build_settings_panel(
                         "存在しないファイルを DB から除去 (未実装)",
                     );
                 });
+
+                build_score_import_section(
+                    ui,
+                    score_import_path,
+                    score_import_kind,
+                    score_import_status,
+                    score_import_error,
+                    &mut score_import_request,
+                );
 
                 egui::CollapsingHeader::new("音声").show(ui, |ui| {
                     egui::ComboBox::from_label("バックエンド")
@@ -1017,7 +1059,70 @@ fn build_settings_panel(
                 }
             });
         });
-    SettingsPanelActions { save: save_clicked, rescan: rescan_clicked }
+    SettingsPanelActions { save: save_clicked, rescan: rescan_clicked, score_import_request }
+}
+
+fn build_score_import_section(
+    ui: &mut egui::Ui,
+    path: &mut String,
+    kind: &mut ScoreImportKind,
+    status: &str,
+    error: &str,
+    request: &mut Option<ScoreImportRequest>,
+) {
+    egui::CollapsingHeader::new("スコアインポート").show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.label("DB");
+            ui.add(
+                egui::TextEdit::singleline(path)
+                    .desired_width(260.0)
+                    .hint_text("score.db / scoredatalog.db / LR2 score db"),
+            );
+        });
+        ui.horizontal(|ui| {
+            if ui.button("ファイルを選択…").clicked()
+                && let Some(file) =
+                    rfd::FileDialog::new().add_filter("SQLite DB", &["db"]).pick_file()
+            {
+                *path = file.to_string_lossy().into_owned();
+            }
+            egui::ComboBox::from_id_salt("score_import_kind").selected_text(kind.label()).show_ui(
+                ui,
+                |ui| {
+                    ui.selectable_value(kind, ScoreImportKind::Lr2, ScoreImportKind::Lr2.label());
+                    ui.selectable_value(
+                        kind,
+                        ScoreImportKind::Beatoraja,
+                        ScoreImportKind::Beatoraja.label(),
+                    );
+                    ui.selectable_value(
+                        kind,
+                        ScoreImportKind::Lr2Oraja,
+                        ScoreImportKind::Lr2Oraja.label(),
+                    );
+                    ui.selectable_value(
+                        kind,
+                        ScoreImportKind::Lr2OrajaDx,
+                        ScoreImportKind::Lr2OrajaDx.label(),
+                    );
+                },
+            );
+        });
+        if ui.button("インポート").clicked() {
+            let trimmed = path.trim();
+            if trimmed.is_empty() {
+                *request = None;
+            } else {
+                *request = Some(ScoreImportRequest { path: PathBuf::from(trimmed), kind: *kind });
+            }
+        }
+        if !status.is_empty() {
+            ui.colored_label(egui::Color32::LIGHT_GREEN, status);
+        }
+        if !error.is_empty() {
+            ui.colored_label(egui::Color32::RED, error);
+        }
+    });
 }
 
 fn audio_backend_label(backend: &AudioBackend) -> &'static str {

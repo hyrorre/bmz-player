@@ -247,6 +247,21 @@ impl LibraryDatabase {
             .map_err(Into::into)
     }
 
+    pub fn chart_sha256_by_md5(&self, md5: [u8; 16]) -> Result<Option<[u8; 32]>> {
+        let result: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT sha256 FROM charts WHERE md5 = ?1 ORDER BY id DESC LIMIT 1",
+                params![hash_to_hex(&md5)],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match result {
+            Some(hex) => Ok(Some(hex_to_hash::<32>(&hex)?)),
+            None => Ok(None),
+        }
+    }
+
     pub fn chart_sha256_by_chart_id(&self, chart_id: i64) -> Result<Option<[u8; 32]>> {
         let result: Option<String> = self
             .conn

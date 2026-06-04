@@ -9,3 +9,4 @@ pub mod profile;
 pub mod replay;
 pub mod scan;
 pub mod score_db;
+pub mod score_import;
