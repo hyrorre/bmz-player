@@ -512,4 +512,23 @@ pub const SCORE_MIGRATIONS: &[Migration] = &[
             "ALTER TABLE score_history ADD COLUMN rule_mode TEXT NOT NULL DEFAULT 'Beatoraja';",
         ],
     },
+    Migration {
+        version: 6,
+        statements: &[
+            "ALTER TABLE score_best ADD COLUMN play_count INTEGER NOT NULL DEFAULT 0;",
+            "ALTER TABLE score_best ADD COLUMN clear_count INTEGER NOT NULL DEFAULT 0;",
+            "UPDATE score_best
+                SET play_count = (
+                    SELECT COUNT(*)
+                    FROM score_history
+                    WHERE score_history.chart_sha256 = score_best.chart_sha256
+                ),
+                clear_count = (
+                    SELECT COUNT(*)
+                    FROM score_history
+                    WHERE score_history.chart_sha256 = score_best.chart_sha256
+                      AND score_history.clear_type NOT IN ('', 'NoPlay', 'Failed')
+                );",
+        ],
+    },
 ];

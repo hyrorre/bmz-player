@@ -74,8 +74,19 @@ pub struct BestScoreSummary {
     pub bp: u32,
     pub cb: u32,
     pub max_combo: u32,
+    pub play_count: u32,
+    pub clear_count: u32,
     pub played_at: i64,
     pub replay_path: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ScoreBestRank {
+    ex_score: u32,
+    clear_rank: u8,
+    bp: u32,
+    cb: u32,
+    max_combo: u32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -193,6 +204,8 @@ impl ScoreDatabase {
                 bp,
                 cb,
                 max_combo,
+                play_count,
+                clear_count,
                 played_at,
                 replay_path
             FROM score_best
@@ -376,8 +389,10 @@ fn best_score_summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Best
         bp: row.get(5)?,
         cb: row.get(6)?,
         max_combo: row.get(7)?,
-        played_at: row.get(8)?,
-        replay_path: row.get(9)?,
+        play_count: row.get(8)?,
+        clear_count: row.get(9)?,
+        played_at: row.get(10)?,
+        replay_path: row.get(11)?,
     })
 }
 
@@ -499,7 +514,8 @@ fn insert_score_history(conn: &Connection, record: &ScoreRecord) -> Result<()> {
 fn upsert_score_best(conn: &Connection, record: &ScoreRecord) -> Result<()> {
     let judges = &record.score.judges;
     let ghost = encode_beatoraja_ghost(&record.score.ghost)?;
-    conn.execute(
+    let clear_increment = u32::from(is_counted_clear(record.clear_type));
+    let inserted = conn.execute(
         "INSERT INTO score_best (
             chart_sha256,
             clear_type,
@@ -523,84 +539,100 @@ fn upsert_score_best(conn: &Connection, record: &ScoreRecord) -> Result<()> {
             slow_empty_poor,
             played_at,
             replay_path,
-            ghost
+            ghost,
+            play_count,
+            clear_count
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-            ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23
+            ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25
         )
-        ON CONFLICT(chart_sha256) DO UPDATE SET
-            clear_type = excluded.clear_type,
-            gauge_type = excluded.gauge_type,
-            gauge_value = excluded.gauge_value,
-            ex_score = excluded.ex_score,
-            bp = excluded.bp,
-            cb = excluded.cb,
-            max_combo = excluded.max_combo,
-            fast_pgreat = excluded.fast_pgreat,
-            slow_pgreat = excluded.slow_pgreat,
-            fast_great = excluded.fast_great,
-            slow_great = excluded.slow_great,
-            fast_good = excluded.fast_good,
-            slow_good = excluded.slow_good,
-            fast_bad = excluded.fast_bad,
-            slow_bad = excluded.slow_bad,
-            fast_poor = excluded.fast_poor,
-            slow_poor = excluded.slow_poor,
-            fast_empty_poor = excluded.fast_empty_poor,
-            slow_empty_poor = excluded.slow_empty_poor,
-            played_at = excluded.played_at,
-            replay_path = excluded.replay_path,
-            ghost = excluded.ghost
-        WHERE
-            excluded.ex_score > score_best.ex_score
-            OR (
-                excluded.ex_score = score_best.ex_score
-                AND CASE excluded.clear_type
-                    WHEN 'NoPlay' THEN 0
-                    WHEN 'Failed' THEN 1
-                    WHEN 'AssistEasy' THEN 2
-                    WHEN 'LightAssistEasy' THEN 3
-                    WHEN 'Easy' THEN 4
-                    WHEN 'Normal' THEN 5
-                    WHEN 'Hard' THEN 6
-                    WHEN 'ExHard' THEN 7
-                    WHEN 'FullCombo' THEN 8
-                    WHEN 'Perfect' THEN 9
-                    WHEN 'Max' THEN 10
-                    ELSE 0
-                END > CASE score_best.clear_type
-                    WHEN 'NoPlay' THEN 0
-                    WHEN 'Failed' THEN 1
-                    WHEN 'AssistEasy' THEN 2
-                    WHEN 'LightAssistEasy' THEN 3
-                    WHEN 'Easy' THEN 4
-                    WHEN 'Normal' THEN 5
-                    WHEN 'Hard' THEN 6
-                    WHEN 'ExHard' THEN 7
-                    WHEN 'FullCombo' THEN 8
-                    WHEN 'Perfect' THEN 9
-                    WHEN 'Max' THEN 10
-                    ELSE 0
-                END
-            )
-            OR (
-                excluded.ex_score = score_best.ex_score
-                AND excluded.clear_type = score_best.clear_type
-                AND excluded.bp < score_best.bp
-            )
-            OR (
-                excluded.ex_score = score_best.ex_score
-                AND excluded.clear_type = score_best.clear_type
-                AND excluded.bp = score_best.bp
-                AND excluded.cb < score_best.cb
-            )
-            OR (
-                excluded.ex_score = score_best.ex_score
-                AND excluded.clear_type = score_best.clear_type
-                AND excluded.bp = score_best.bp
-                AND excluded.cb = score_best.cb
-                AND excluded.max_combo > score_best.max_combo
-            )",
+        ON CONFLICT(chart_sha256) DO NOTHING",
+        params![
+            hash_to_hex(&record.chart_sha256),
+            record.clear_type.as_str(),
+            gauge_type_str(record.gauge_type),
+            record.gauge_value,
+            record.score.ex_score(),
+            record.score.bp(),
+            record.score.cb(),
+            record.score.max_combo,
+            judges.fast_pgreat,
+            judges.slow_pgreat,
+            judges.fast_great,
+            judges.slow_great,
+            judges.fast_good,
+            judges.slow_good,
+            judges.fast_bad,
+            judges.slow_bad,
+            judges.fast_poor,
+            judges.slow_poor,
+            judges.fast_empty_poor,
+            judges.slow_empty_poor,
+            record.played_at,
+            record.replay_path.as_str(),
+            ghost,
+            1_u32,
+            clear_increment,
+        ],
+    )?;
+    if inserted > 0 {
+        return Ok(());
+    }
+
+    let chart_sha256 = hash_to_hex(&record.chart_sha256);
+    conn.execute(
+        "UPDATE score_best
+         SET play_count = play_count + 1,
+             clear_count = clear_count + ?2
+         WHERE chart_sha256 = ?1",
+        params![chart_sha256, clear_increment],
+    )?;
+
+    let current = conn.query_row(
+        "SELECT ex_score, clear_type, bp, cb, max_combo
+         FROM score_best
+         WHERE chart_sha256 = ?1",
+        params![hash_to_hex(&record.chart_sha256)],
+        |row| {
+            let clear_type: String = row.get(1)?;
+            Ok(ScoreBestRank {
+                ex_score: row.get(0)?,
+                clear_rank: clear_rank_from_name(&clear_type),
+                bp: row.get(2)?,
+                cb: row.get(3)?,
+                max_combo: row.get(4)?,
+            })
+        },
+    )?;
+    if !score_best_should_update(record, current) {
+        return Ok(());
+    }
+
+    conn.execute(
+        "UPDATE score_best SET
+            clear_type = ?2,
+            gauge_type = ?3,
+            gauge_value = ?4,
+            ex_score = ?5,
+            bp = ?6,
+            cb = ?7,
+            max_combo = ?8,
+            fast_pgreat = ?9,
+            slow_pgreat = ?10,
+            fast_great = ?11,
+            slow_great = ?12,
+            fast_good = ?13,
+            slow_good = ?14,
+            fast_bad = ?15,
+            slow_bad = ?16,
+            fast_poor = ?17,
+            slow_poor = ?18,
+            fast_empty_poor = ?19,
+            slow_empty_poor = ?20,
+            played_at = ?21,
+            replay_path = ?22,
+            ghost = ?23
+         WHERE chart_sha256 = ?1",
         params![
             hash_to_hex(&record.chart_sha256),
             record.clear_type.as_str(),
@@ -632,6 +664,50 @@ fn upsert_score_best(conn: &Connection, record: &ScoreRecord) -> Result<()> {
 
 fn gauge_type_str(gauge_type: Option<GaugeType>) -> &'static str {
     gauge_type.map(GaugeType::as_str).unwrap_or("")
+}
+
+fn is_counted_clear(clear_type: ClearType) -> bool {
+    !matches!(clear_type, ClearType::NoPlay | ClearType::Failed)
+}
+
+fn score_best_should_update(record: &ScoreRecord, current: ScoreBestRank) -> bool {
+    let next = ScoreBestRank {
+        ex_score: record.score.ex_score(),
+        clear_rank: record.clear_type as u8,
+        bp: record.score.bp(),
+        cb: record.score.cb(),
+        max_combo: record.score.max_combo,
+    };
+    (
+        next.ex_score,
+        next.clear_rank,
+        std::cmp::Reverse(next.bp),
+        std::cmp::Reverse(next.cb),
+        next.max_combo,
+    ) > (
+        current.ex_score,
+        current.clear_rank,
+        std::cmp::Reverse(current.bp),
+        std::cmp::Reverse(current.cb),
+        current.max_combo,
+    )
+}
+
+fn clear_rank_from_name(value: &str) -> u8 {
+    match value {
+        "NoPlay" => ClearType::NoPlay as u8,
+        "Failed" => ClearType::Failed as u8,
+        "AssistEasy" => ClearType::AssistEasy as u8,
+        "LightAssistEasy" => ClearType::LightAssistEasy as u8,
+        "Easy" => ClearType::Easy as u8,
+        "Normal" => ClearType::Normal as u8,
+        "Hard" => ClearType::Hard as u8,
+        "ExHard" => ClearType::ExHard as u8,
+        "FullCombo" => ClearType::FullCombo as u8,
+        "Perfect" => ClearType::Perfect as u8,
+        "Max" => ClearType::Max as u8,
+        _ => ClearType::NoPlay as u8,
+    }
 }
 
 pub fn encode_beatoraja_ghost(ghost: &[u8]) -> Result<String> {
@@ -795,6 +871,30 @@ mod tests {
         let best = db.best_scores_for_charts(&[[7; 32]]).unwrap().pop().unwrap();
         assert_eq!(best.bp, 4);
         assert_eq!(best.cb, 1);
+        assert_eq!(best.play_count, 4);
+        assert_eq!(best.clear_count, 4);
+    }
+
+    #[test]
+    fn score_best_counts_every_play_but_only_clear_results() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut db = ScoreDatabase { conn };
+
+        db.insert_score(&record(20, ClearType::Normal)).unwrap();
+        let mut failed = record(10, ClearType::Failed);
+        failed.played_at = 2;
+        db.insert_score(&failed).unwrap();
+        let mut clear = record(10, ClearType::Easy);
+        clear.played_at = 3;
+        db.insert_score(&clear).unwrap();
+
+        let best = db.best_scores_for_charts(&[[7; 32]]).unwrap().pop().unwrap();
+        assert_eq!(best.ex_score, 20);
+        assert_eq!(best.clear_type, "Normal");
+        assert_eq!(best.play_count, 3);
+        assert_eq!(best.clear_count, 2);
     }
 
     #[test]
