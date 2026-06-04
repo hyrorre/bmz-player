@@ -6960,10 +6960,10 @@ fn select_snapshot_rows(
                     chart_key_mode: None,
                 },
                 SelectItem::Chart(row) => {
-                    let play_count = u32::from(row.best_score.is_some());
-                    let clear_count = u32::from(row.best_score.as_ref().is_some_and(|score| {
-                        !score.clear_type.is_empty() && score.clear_type != "Failed"
-                    }));
+                    let play_count =
+                        row.best_score.as_ref().map(|score| score.play_count).unwrap_or(0);
+                    let clear_count =
+                        row.best_score.as_ref().map(|score| score.clear_count).unwrap_or(0);
                     SelectRowSnapshot {
                         index: index as u32,
                         title: row.display_title().to_string(),
@@ -9255,6 +9255,8 @@ mod tests {
         assert_eq!(snapshot_rows[3].clear_type, "Normal");
         assert_eq!(snapshot_rows[3].ex_score, Some(1234));
         assert_eq!(snapshot_rows[3].judge_rank, Some(1));
+        assert_eq!(snapshot_rows[3].play_count, 42);
+        assert_eq!(snapshot_rows[3].clear_count, 31);
         assert_eq!(snapshot_rows[3].replay_slots, [true, false, false, false]);
         assert_eq!(snapshot_rows[3].chart_normal_notes, 45);
         assert_eq!(snapshot_rows[3].chart_long_notes, 6);
@@ -9519,6 +9521,8 @@ mod tests {
             bp: 0,
             cb: 0,
             max_combo: 100,
+            play_count: 42,
+            clear_count: 31,
             played_at: 1,
             replay_path: replay_path.to_string(),
         }
