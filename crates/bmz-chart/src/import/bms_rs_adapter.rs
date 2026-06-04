@@ -399,6 +399,9 @@ fn inject_sparse_bms_message<T: KeyLayoutMapper>(
         let Ok(obj_id) = ObjId::try_from(&object.id, bms_uses_base62_obj_ids(bms)) else {
             continue;
         };
+        if obj_id.as_u16() == 0 {
+            continue;
+        }
 
         match channel {
             Channel::Bgm => {
@@ -798,6 +801,9 @@ fn push_bga_objects(bms: &Bms, objects: &mut Vec<IntermediateObject>) {
 
 fn push_bpm_change_objects(bms: &Bms, objects: &mut Vec<IntermediateObject>) {
     for (time, bpm) in &bms.bpm.bpm_changes_u8 {
+        if *bpm == 0 {
+            continue;
+        }
         objects.push(IntermediateObject {
             measure: track_of(*time),
             position_num: time.numerator() as u32,

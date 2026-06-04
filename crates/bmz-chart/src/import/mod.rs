@@ -173,6 +173,33 @@ mod tests {
     }
 
     #[test]
+    fn ignores_zero_objects_in_legacy_bpm_channel() {
+        let text = "\
+#TITLE Legacy BPM Zero Placeholders
+#BPM 97.5
+#TOTAL 200
+#00803:00005F00005A
+#00811:01
+";
+        let path = write_temp_bms(text);
+        let result = import_bms_chart(&path, None, false).unwrap();
+
+        let bpm_changes: Vec<_> = result
+            .chart
+            .timing_events
+            .iter()
+            .filter_map(|event| match event.kind {
+                TimingEventKind::BpmChange { bpm } => Some(bpm),
+                _ => None,
+            })
+            .collect();
+        assert!(!bpm_changes.is_empty());
+        assert!(bpm_changes.iter().all(|bpm| *bpm > 0.0), "bpm changes: {bpm_changes:?}");
+
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn imports_random_branch_with_deterministic_seed() {
         // RANDOM 2 / IF 1 を含むので、seed=1 で同じ結果になることを確認する。
         let text = "\
