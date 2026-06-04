@@ -4,11 +4,12 @@ use bmz_gameplay::result::PlayResult;
 use bmz_gameplay::session::{GameSession, PlayState};
 
 use crate::config::profile_config::ReplayConfig;
+use crate::ln_policy::LnScorePolicy;
 use crate::paths::ProfilePaths;
 use crate::screens::play_session::AppliedArrange;
 use crate::screens::result_model::ResultSummary;
 use crate::storage::play_result::{StorePlayResultRequest, StoredPlayResult, store_play_result};
-use crate::storage::score_db::ScoreDatabase;
+use crate::storage::score_db::{ScoreDatabase, ScoreKey};
 
 #[derive(Debug, Clone)]
 pub struct FinishedPlaySession {
@@ -63,11 +64,10 @@ pub fn finish_session_result(
 ) -> Result<FinishedPlaySession> {
     ensure_storable_state(session.state)?;
     let result = play_result_from_session(session);
+    let score_key = ScoreKey::new(result.chart_sha256, LnScorePolicy::ForceLn);
     let replay_playback = session.replay_player.is_some();
-    let previous_best = score_db
-        .best_scores_for_charts(&[result.chart_sha256])
-        .ok()
-        .and_then(|mut bests| bests.pop());
+    let previous_best =
+        score_db.best_scores_for_charts(&[score_key]).ok().and_then(|mut bests| bests.pop());
     // オートプレイ / リプレイ再生 / プラクティス時はスコア・リプレイをDBに保存しない
     // （リザルト画面の表示のみ行う）。
     let stored = if session.autoplay.is_some() || replay_playback || practice_mode {
@@ -87,6 +87,7 @@ pub fn finish_session_result(
             &result,
             StorePlayResultRequest {
                 played_at,
+                ln_policy: score_key.ln_policy,
                 random_seed: arrange_seed,
                 gauge_option: String::new(),
                 rule_mode: session.rule_mode.as_str().to_string(),
@@ -109,7 +110,7 @@ pub fn finish_session_result(
     // 過去ベストスコア・ベストコンボを ResultSummary にフィルする。
     // 今回のスコアが直前に upsert_score_best されているので、`best_*` は
     // 「現在の最高記録」を返す。差分表示は `current - best` として 0 になり得る。
-    if let Ok(bests) = score_db.best_scores_for_charts(&[result.chart_sha256])
+    if let Ok(bests) = score_db.best_scores_for_charts(&[score_key])
         && let Some(best) = bests.into_iter().next()
     {
         summary.best_ex_score = Some(best.ex_score);
@@ -117,7 +118,7 @@ pub fn finish_session_result(
         summary.best_max_combo = Some(best.max_combo);
         summary.best_bp = Some(best.bp);
     }
-    if let Ok(slots) = score_db.replay_slots_for_chart(result.chart_sha256) {
+    if let Ok(slots) = score_db.replay_slots_for_chart(score_key) {
         summary.replay_slots = slots.each_ref().map(Option::is_some);
         for (index, saved) in summary.saved_replay_slots.iter().enumerate() {
             if *saved {

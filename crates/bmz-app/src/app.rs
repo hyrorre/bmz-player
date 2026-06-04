@@ -4225,7 +4225,9 @@ impl WinitApp {
             tracing::warn!(chart_id, "replay start failed: chart sha256 not found");
             return false;
         };
-        let Some(slot_record) = self.boot.score_db.replay_slot(sha, slot).ok().flatten() else {
+        let key =
+            crate::storage::score_db::ScoreKey::new(sha, crate::ln_policy::LnScorePolicy::ForceLn);
+        let Some(slot_record) = self.boot.score_db.replay_slot(key, slot).ok().flatten() else {
             tracing::info!(slot, "no replay saved for slot");
             return false;
         };
@@ -9515,6 +9517,7 @@ mod tests {
     fn best_score_with_replay(ex_score: u32, replay_path: &str) -> BestScoreSummary {
         BestScoreSummary {
             chart_sha256: [0; 32],
+            ln_policy: crate::ln_policy::LnScorePolicy::ForceLn,
             clear_type: "Normal".to_string(),
             gauge_type: "Normal".to_string(),
             gauge_value: 80.0,

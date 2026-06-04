@@ -4,11 +4,13 @@ use anyhow::Result;
 use bmz_core::course::CourseKind;
 use bmz_render::scene::SelectRowKind;
 
+use crate::ln_policy::LnScorePolicy;
 use crate::screens::settings_model::{ConfigSelectRow, KeyBindingSelectRow};
 use crate::storage::common::hash_to_hex;
 use crate::storage::library_db::{
     ChartAnalysisSummary, ChartListItem, LibraryDatabase, TableEntryListItem,
 };
+use crate::storage::score_db::ScoreKey;
 use crate::storage::score_db::{BestScoreSummary, ReplaySlotSummary, ScoreDatabase};
 
 /// Virtual path prefix used for difficulty-table navigation.
@@ -485,13 +487,14 @@ fn load_select_items_in_table_filtered(
     });
 
     // Batch score lookup.
-    let hashes: Vec<[u8; 32]> = entries.iter().filter_map(entry_score_sha256).collect();
-    let mut score_map: HashMap<[u8; 32], BestScoreSummary> = score_db
-        .best_scores_for_charts(&hashes)?
-        .into_iter()
-        .map(|s| (s.chart_sha256, s))
+    let keys: Vec<ScoreKey> = entries
+        .iter()
+        .filter_map(entry_score_sha256)
+        .map(|hash| ScoreKey::new(hash, LnScorePolicy::ForceLn))
         .collect();
-    let mut replay_slot_map = replay_slot_map(score_db, &hashes)?;
+    let mut score_map: HashMap<[u8; 32], BestScoreSummary> =
+        score_db.best_scores_for_charts(&keys)?.into_iter().map(|s| (s.chart_sha256, s)).collect();
+    let mut replay_slot_map = replay_slot_map(score_db, &keys)?;
     let chart_ids: Vec<i64> = entries
         .iter()
         .filter_map(|entry| entry.chart.as_ref().map(|chart| chart.chart_id))
@@ -733,13 +736,11 @@ fn chart_items_with_enrichment(
     score_db: &ScoreDatabase,
     all_charts: Vec<ChartListItem>,
 ) -> Result<Vec<SelectItem>> {
-    let hashes: Vec<[u8; 32]> = all_charts.iter().map(|c| c.sha256).collect();
-    let mut score_map: HashMap<[u8; 32], BestScoreSummary> = score_db
-        .best_scores_for_charts(&hashes)?
-        .into_iter()
-        .map(|s| (s.chart_sha256, s))
-        .collect();
-    let mut replay_slot_map = replay_slot_map(score_db, &hashes)?;
+    let keys: Vec<ScoreKey> =
+        all_charts.iter().map(|c| ScoreKey::new(c.sha256, LnScorePolicy::ForceLn)).collect();
+    let mut score_map: HashMap<[u8; 32], BestScoreSummary> =
+        score_db.best_scores_for_charts(&keys)?.into_iter().map(|s| (s.chart_sha256, s)).collect();
+    let mut replay_slot_map = replay_slot_map(score_db, &keys)?;
     let chart_ids: Vec<i64> = all_charts.iter().map(|c| c.chart_id).collect();
     let mut analysis_map = library_db.chart_analysis_summaries_by_chart_ids(&chart_ids)?;
 
@@ -790,12 +791,12 @@ fn chart_items_with_enrichment(
 
 fn replay_slot_map(
     score_db: &ScoreDatabase,
-    hashes: &[[u8; 32]],
+    keys: &[ScoreKey],
 ) -> Result<HashMap<[u8; 32], [bool; 4]>> {
     Ok(score_db
-        .replay_slots_for_charts(hashes)?
+        .replay_slots_for_charts(keys)?
         .into_iter()
-        .map(|ReplaySlotSummary { chart_sha256, replay_slots }| (chart_sha256, replay_slots))
+        .map(|ReplaySlotSummary { chart_sha256, replay_slots, .. }| (chart_sha256, replay_slots))
         .collect())
 }
 
@@ -850,6 +851,7 @@ mod tests {
             score_db
                 .upsert_replay_slot(&crate::storage::score_db::ReplaySlotRecord {
                     chart_sha256: alpha.identity.file_sha256,
+                    ln_policy: LnScorePolicy::ForceLn,
                     slot,
                     rule: crate::config::profile_config::ReplaySlotRule::Always,
                     replay_path: format!("replay/{slot}.toml"),
@@ -1599,6 +1601,7 @@ mod tests {
 
         ScoreRecord {
             chart_sha256,
+            ln_policy: LnScorePolicy::ForceLn,
             played_at: 1_700_000_030,
             clear_type: ClearType::Normal,
             gauge_type: Some(GaugeType::Normal),
