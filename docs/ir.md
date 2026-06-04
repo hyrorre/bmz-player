@@ -1,0 +1,1862 @@
+# BMZ IR (Internet Ranking) API 設計メモ
+
+Codex に最終レビューと実装を引き継ぐための設計まとめ。  
+本ドキュメントでは、BMZ 新BMSプレイヤー向けの IR API、クライアント側 Provider trait、認証、ランキング取得、リザルト画面連携、replay 拡張、Supabase 実装方針を整理する。
+
+---
+
+## 0. 前提・設計ゴール
+
+### 前提
+
+- BMZ は新規 BMS プレイヤー。
+- IR は beatoraja IR API 互換そのものではなく、BMZ 内部モデルを中心に設計する。
+- beatoraja の `IRConnection` 的な公開境界は参考にする。
+- 将来 Mocha / MinIR 互換 Provider を追加する可能性がある。
+- BMZ 公式 IR サーバーも作成中だが、現時点では動作確認・reference implementation 寄り。
+- 公式 IR サーバーは Nuxt + Supabase Auth / Supabase DB で実装中。
+- 長期的に BMZ 公式 IR をサポートし続けるかは未確定。
+- BMZ 本体は公式 IR API に密結合しない。
+- 譜面 hash は SHA256 を主キーにする。
+- MD5 は beatoraja 系互換・外部IR連携用に保持する。
+- ランキングの主軸は EX score 固定。
+- replay は将来アップロードする可能性があるため、初期設計から hash / format / status を持たせる。
+
+### 設計ゴール
+
+- BMZ 内部モデルを中心にして、Provider Adapter で外部IR差分を吸収する。
+- スコア送信とランキング取得がセットになりやすい BMS プレイヤーの UX に合わせる。
+- リザルト画面で全体ランキング / ライバルランキングを切り替え可能にする。
+- スコア送信時にランキングを同時取得するかどうかを設定可能にする。
+- ランキング取得失敗でスコア送信成功まで失敗扱いにしない。
+- replay upload / verification に将来拡張できる。
+- tamper evidence として canonical hash / client signature を入れる。
+- 完全なチート防止ではなく、「提出内容があとから改変されていない」ことを示す仕組みを作る。
+
+---
+
+## 1. 全体アーキテクチャ
+
+```txt
+BMZ Core
+  ├─ Local Score DB
+  ├─ IR Job Queue
+  ├─ IR Provider Trait
+  │    ├─ BMZ Official IR Provider
+  │    ├─ Mocha-compatible Provider Adapter
+  │    └─ MinIR-compatible Provider Adapter
+  └─ Credential Store
+       ├─ macOS Keychain
+       ├─ Windows Credential Manager
+       └─ Linux Secret Service
+```
+
+### 基本方針
+
+- BMZ 内部では独自の `IrProvider` trait を定義する。
+- 公式IRも外部IRも trait 実装として扱う。
+- スコア送信は有効な全 IR に送る。
+- ランキング取得、ライバル取得、表取得、URL open は Primary IR のみで行う。
+- Secondary IR は原則スコア送信用。
+
+```txt
+全IR:
+  - スコア送信
+
+Primary IR:
+  - スコア送信
+  - ランキング取得
+  - ライバル取得
+  - テーブル取得
+  - URL解決
+  - open_ir / F11 系の画面遷移
+```
+
+---
+
+## 2. 認証・Token 保存
+
+### 方針
+
+- ブラウザ認証 + token 保存。
+- デスクトップアプリでは OAuth/OIDC の device authorization flow または loopback redirect を使う。
+- BMZ の config には秘密情報を置かない。
+- refresh token は OS credential store に保存する。
+
+### OS credential store
+
+候補:
+
+- macOS: Keychain
+- Windows: Credential Manager
+- Linux: Secret Service / libsecret
+- Rust: `keyring` crate 系を候補にする
+
+### Config に置くもの
+
+IR 関連設定はユーザー / profile 単位の状態なので、BMZ 本体の global
+`config.toml` ではなく `data/profiles/{profile}/profile.toml` に保存する。
+
+```toml
+[ir]
+primary_provider = "bmz-official"
+
+[[ir.providers]]
+provider = "bmz-official"
+enabled = true
+account_display_name = "Hyrorre"
+send_policy = "update_score"
+role = "primary"
+
+[[ir.providers]]
+provider = "mocha-compatible"
+enabled = true
+account_display_name = "ExampleUser"
+send_policy = "complete_song"
+role = "submit_only"
+```
+
+保存してよいもの:
+
+```txt
+provider
+account_display_name
+account_id
+enabled
+primaryかどうか
+send_policy
+last_login_at
+last_success_at
+```
+
+保存しないもの:
+
+```txt
+refresh_token
+access_token
+client secret
+署名秘密鍵
+```
+
+### Credential Store のキー例
+
+```txt
+service: bmz.ir.bmz-official
+user:    account_id
+secret:  refresh_token
+
+service: bmz.ir.device-key.bmz-official
+user:    account_id
+secret:  private_key
+```
+
+---
+
+## 3. BMZ Provider Trait 案
+
+```rust
+#[async_trait::async_trait]
+pub trait IrProvider: Send + Sync {
+    fn provider_id(&self) -> &'static str;
+    fn display_name(&self) -> &'static str;
+
+    async fn auth_status(&self) -> IrResult<IrAuthStatus>;
+
+    async fn begin_login(&self) -> IrResult<IrLoginFlow>;
+    async fn complete_login(&self, flow: IrLoginFlowResult) -> IrResult<IrAccount>;
+
+    async fn logout(&self) -> IrResult<()>;
+    async fn refresh_token_if_needed(&self) -> IrResult<()>;
+
+    async fn get_rivals(&self) -> IrResult<Vec<IrPlayer>>;
+    async fn get_tables(&self) -> IrResult<Vec<IrTable>>;
+
+    async fn get_chart_ranking(
+        &self,
+        chart: &IrChartIdentity,
+        query: IrRankingQuery,
+    ) -> IrResult<IrRanking>;
+
+    async fn get_player_chart_score(
+        &self,
+        player: &IrPlayerRef,
+        chart: &IrChartIdentity,
+    ) -> IrResult<Option<IrScore>>;
+
+    async fn submit_score(
+        &self,
+        request: IrScoreSubmission,
+        options: IrSubmitOptions,
+    ) -> IrResult<IrSubmitResponse>;
+
+    async fn submit_course_score(
+        &self,
+        request: IrCourseScoreSubmission,
+    ) -> IrResult<IrSubmitResponse>;
+
+    fn get_chart_url(&self, chart: &IrChartIdentity) -> Option<Url>;
+    fn get_course_url(&self, course: &IrCourseIdentity) -> Option<Url>;
+    fn get_player_url(&self, player: &IrPlayerRef) -> Option<Url>;
+}
+```
+
+### AuthManager 分離案
+
+Login flow は OS / UI / ブラウザ起動が絡むため、Provider に閉じ込めすぎない。
+
+```txt
+IrProvider
+  - OAuth/OIDC設定を返す
+  - token endpointを知っている
+  - refreshできる
+  - API呼び出しできる
+
+IrAuthManager
+  - ブラウザを開く
+  - loopback serverを一時起動する
+  - device codeを表示する
+  - credential storeに保存する
+```
+
+---
+
+## 4. IR 送信ポリシー
+
+beatoraja の三択を踏襲する。
+
+```rust
+pub enum IrSendPolicy {
+    Always,
+    CompleteSong,
+    UpdateScore,
+}
+```
+
+意味:
+
+```txt
+Always:
+  更新スコアなら常に送る
+
+CompleteSong:
+  最終ゲージが 0 より大きい場合だけ送る
+
+UpdateScore:
+  EX score、clear、combo、minbp のいずれかが改善した場合だけ送る
+```
+
+### 注意
+
+- 送信ポリシーはクライアント側 UX の制御。
+- サーバー側はサーバー側で best 更新判定を行う。
+- クライアントが送ってきたからといって必ず best として採用しない。
+
+---
+
+## 5. リザルト画面用ランキング取得設定
+
+本体設定にチェックボックスを2つ用意する。
+
+```txt
+[ ] スコア送信時に全体ランキングを取得する
+[ ] スコア送信時にライバルランキングを取得する
+```
+
+### 内部設定名
+
+ユーザー向け文言は上記でよいが、内部名は `prefetch` として扱う。
+
+```toml
+[ir.result]
+prefetch_global_ranking_on_score_submit = true
+prefetch_rival_ranking_on_score_submit = true
+```
+
+```rust
+pub struct IrResultOptions {
+    pub prefetch_global_ranking_on_submit: bool,
+    pub prefetch_rival_ranking_on_submit: bool,
+}
+```
+
+### 推奨挙動
+
+```txt
+スコア送信時:
+  設定ONのランキングだけ一緒に取得
+
+リザルト画面切り替え時:
+  既に取得済みなら即表示
+  未取得ならその場で Ranking API を叩く
+```
+
+設定パターン:
+
+| 全体取得 | ライバル取得 | スコア送信時 | 切り替え時 |
+|---|---|---|---|
+| OFF | OFF | スコア送信のみ | 初めて開いたランキングを都度取得 |
+| ON | OFF | global だけ取得 | self_and_rivals は切替時に取得 |
+| OFF | ON | self_and_rivals だけ取得 | global は切替時に取得 |
+| ON | ON | global と self_and_rivals を取得 | 両方即切替可能 |
+
+### リザルト画面状態管理案
+
+```rust
+pub enum ResultRankingTab {
+    Global,
+    SelfAndRivals,
+}
+
+pub enum RankingLoadState {
+    NotRequested,
+    Loading,
+    Loaded(IrRanking),
+    Failed(String),
+}
+
+pub struct ResultRankingState {
+    pub global: RankingLoadState,
+    pub self_and_rivals: RankingLoadState,
+    pub active_tab: ResultRankingTab,
+}
+```
+
+タブ切り替え時:
+
+```rust
+match selected_tab_state {
+    RankingLoadState::Loaded(_) => {
+        // 即表示
+    }
+    RankingLoadState::Loading => {
+        // ローディング表示
+    }
+    RankingLoadState::NotRequested | RankingLoadState::Failed(_) => {
+        // Ranking APIで取得
+    }
+}
+```
+
+---
+
+## 6. Score Submission API
+
+### Endpoint
+
+```http
+POST /api/v1/scores
+```
+
+### ランキング同時取得なし
+
+```http
+POST /api/v1/scores
+```
+
+### 全体ランキングのみ同時取得
+
+```http
+POST /api/v1/scores?include=rankings&ranking_scopes=global&ranking_limit=100
+```
+
+### ライバルランキングのみ同時取得
+
+```http
+POST /api/v1/scores?include=rankings&ranking_scopes=self_and_rivals&ranking_limit=100
+```
+
+### 全体 + ライバルランキングを同時取得
+
+```http
+POST /api/v1/scores?include=rankings&ranking_scopes=global,self_and_rivals&ranking_limit=100
+```
+
+### Query parameters
+
+| parameter | type | description |
+|---|---|---|
+| `include` | string | `rankings` を指定するとランキングを同時取得する |
+| `ranking_scopes` | comma-separated string | `global`, `self_and_rivals` など |
+| `ranking_limit` | integer | 各ランキングの最大件数。初期値は 100 など |
+
+### Request payload
+
+```json
+{
+  "client": {
+    "name": "BMZ",
+    "version": "0.1.0",
+    "platform": "windows-x86_64"
+  },
+  "chart": {
+    "sha256": "chart_sha256...",
+    "md5": "chart_md5...",
+    "ln_type": "ln"
+  },
+  "rule": {
+    "play_mode": "single",
+    "key_mode": "keys_7",
+    "gauge": "normal",
+    "judge_algorithm": "bmz_v1",
+    "scoring": "bms_ex_score_v1"
+  },
+  "result": {
+    "clear": "hard_clear",
+    "played_at": "2026-06-04T12:34:56Z",
+    "duration_ms": 123456,
+    "judges": {
+      "fast": {
+        "pgreat": 500,
+        "great": 100,
+        "good": 20,
+        "bad": 3,
+        "poor": 2,
+        "empty_poor": 1
+      },
+      "slow": {
+        "pgreat": 480,
+        "great": 90,
+        "good": 15,
+        "bad": 4,
+        "poor": 2,
+        "empty_poor": 1
+      }
+    },
+    "ex_score": 2140,
+    "avg_judge_ms": -1.42,
+    "max_combo": 1234,
+    "notes": 1800,
+    "pass_notes": 1800,
+    "min_bp": 12,
+    "min_cb": 10
+  },
+  "play_options": {
+    "option": "random",
+    "seed": 123456789,
+    "assist": "none",
+    "device_type": "keyboard",
+    "skin": "default"
+  },
+  "replay": {
+    "hash": "replay_sha256...",
+    "format": "bmz-replay-v1",
+    "upload_intent": "later"
+  },
+  "evidence": {
+    "schema": "bmz-score-evidence-v1",
+    "canonical_hash": "sha256_of_canonical_submission",
+    "client_signature": "base64url_signature",
+    "public_key_id": "key_01H..."
+  },
+  "idempotency_key": "score_01H..."
+}
+```
+
+### Response: ランキングなし
+
+```json
+{
+  "succeeded": true,
+  "message": "Score submitted",
+  "data": {
+    "score_id": "sc_01H...",
+    "accepted": true,
+    "updated_best": true,
+    "best_fields": {
+      "ex_score": true,
+      "clear": false,
+      "max_combo": true,
+      "min_bp": false
+    },
+    "server_received_at": "2026-06-04T12:35:01Z",
+    "verification": {
+      "status": "signed",
+      "canonical_hash": "abc..."
+    },
+    "replay": {
+      "status": "hash_received",
+      "hash": "replay_sha256...",
+      "upload_url": null
+    }
+  }
+}
+```
+
+### Response: ランキングあり
+
+`rankings` は request された scope だけ含める。
+
+```json
+{
+  "succeeded": true,
+  "message": "Score submitted",
+  "data": {
+    "score_id": "sc_01H...",
+    "accepted": true,
+    "updated_best": true,
+    "best_fields": {
+      "ex_score": true,
+      "clear": false,
+      "max_combo": true,
+      "min_bp": false
+    },
+    "server_received_at": "2026-06-04T12:35:01Z",
+    "verification": {
+      "status": "signed",
+      "canonical_hash": "abc..."
+    },
+    "replay": {
+      "status": "hash_received",
+      "hash": "replay_sha256...",
+      "upload_url": null
+    },
+    "rankings": {
+      "global": {
+        "succeeded": true,
+        "data": {
+          "scope": "global",
+          "sort": "ex_score_desc",
+          "chart": {
+            "sha256": "chart_sha256..."
+          },
+          "entries": [],
+          "self": {
+            "rank": 20,
+            "score_id": "sc_01H...",
+            "included_in_entries": true
+          }
+        }
+      },
+      "self_and_rivals": {
+        "succeeded": true,
+        "data": {
+          "scope": "self_and_rivals",
+          "sort": "ex_score_desc",
+          "chart": {
+            "sha256": "chart_sha256..."
+          },
+          "entries": [],
+          "self": {
+            "rank": 3,
+            "score_id": "sc_01H...",
+            "included_in_entries": true
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+### Ranking 部分だけ失敗した場合
+
+スコア送信自体は成功扱いにする。
+
+```json
+{
+  "succeeded": true,
+  "message": "Score submitted, but one ranking request failed",
+  "data": {
+    "score_id": "sc_01H...",
+    "accepted": true,
+    "updated_best": true,
+    "rankings": {
+      "global": {
+        "succeeded": true,
+        "data": {
+          "scope": "global",
+          "entries": []
+        }
+      },
+      "self_and_rivals": {
+        "succeeded": false,
+        "message": "Failed to fetch rival ranking",
+        "error": {
+          "code": "ranking_fetch_failed",
+          "retryable": true
+        }
+      }
+    }
+  }
+}
+```
+
+### 重要な処理順序
+
+ランキング同時取得時は、必ず best 更新後にランキングを取得する。
+
+```txt
+access token検証
+  ↓
+payload validation
+  ↓
+idempotency_key確認
+  ↓
+chart upsert/check
+  ↓
+score insert
+  ↓
+best_scores更新判定
+  ↓
+include=rankings なら ranking query 実行
+  ↓
+response返却
+```
+
+---
+
+## 7. Ranking API
+
+### Endpoint
+
+```http
+GET /api/v1/charts/{sha256}/ranking
+```
+
+### Query parameters
+
+```txt
+scope=global
+limit=100
+offset=0
+gauge=normal
+ln_type=ln
+scoring=bms_ex_score_v1
+```
+
+| parameter | type | description |
+|---|---|---|
+| `scope` | string | `global`, `self_and_rivals`, `rivals`, `self`, `around_self` |
+| `limit` | integer | 最大件数 |
+| `offset` | integer | pagination 用 |
+| `gauge` | string | gauge 種別 |
+| `ln_type` | string | LN type |
+| `scoring` | string | 初期は `bms_ex_score_v1` |
+
+### Ranking scope
+
+| scope | 内容 |
+|---|---|
+| `global` | 全体ランキング |
+| `self_and_rivals` | 自分 + ライバル |
+| `rivals` | ライバルのみ。自分は含めない |
+| `self` | 自分だけ |
+| `around_self` | 全体ランキング上で自分の周辺 |
+
+ユーザーが希望している「ライバルと自分のみ」は `self_and_rivals` を使う。
+
+### `rival_only` alias
+
+正式には `scope` を推奨する。  
+互換・分かりやすさ用に alias を受けてもよい。
+
+```txt
+rival_only=true&include_self=true  -> scope=self_and_rivals
+rival_only=true&include_self=false -> scope=rivals
+```
+
+### Response
+
+```json
+{
+  "chart": {
+    "sha256": "chart_sha256..."
+  },
+  "rule": {
+    "scoring": "bms_ex_score_v1",
+    "gauge": "normal",
+    "ln_type": "ln"
+  },
+  "ranking": {
+    "scope": "self_and_rivals",
+    "sort": "ex_score_desc",
+    "entries": [
+      {
+        "rank": 3,
+        "scope_rank": 1,
+        "player": {
+          "id": "pl_self",
+          "display_name": "Hyrorre"
+        },
+        "score": {
+          "score_id": "sc_self",
+          "clear": "clear",
+          "ex_score": 3000,
+          "max_combo": 1234,
+          "min_bp": 12,
+          "min_cb": 10,
+          "played_at": "2026-06-04T12:34:56Z",
+          "option": "random",
+          "seed": 123456789,
+          "verification": "signed"
+        },
+        "relation": {
+          "is_self": true,
+          "is_rival": false
+        }
+      },
+      {
+        "rank": 7,
+        "scope_rank": 2,
+        "player": {
+          "id": "pl_rival",
+          "display_name": "RivalPlayer"
+        },
+        "score": {
+          "score_id": "sc_rival",
+          "clear": "hard_clear",
+          "ex_score": 2800,
+          "max_combo": 1000,
+          "min_bp": 20,
+          "min_cb": 18,
+          "played_at": "2026-06-03T12:00:00Z",
+          "option": "mirror",
+          "seed": 987654321,
+          "verification": "signed"
+        },
+        "relation": {
+          "is_self": false,
+          "is_rival": true
+        }
+      }
+    ],
+    "self": {
+      "rank": 3,
+      "score_id": "sc_self",
+      "included_in_entries": true
+    },
+    "pagination": {
+      "limit": 100,
+      "offset": 0,
+      "has_more": false
+    }
+  }
+}
+```
+
+### 順位の考え方
+
+- `rank` は常に全体ランキング上の順位。
+- `scope_rank` は scope 内での表示順位。
+- `self_and_rivals` でも `rank` は全体順位を返す。
+
+例:
+
+```txt
+global ranking:
+  1位 A
+  2位 B
+  3位 自分
+  4位 C
+  5位 D
+  6位 E
+  7位 ライバル
+
+scope=self_and_rivals:
+  rank=3, scope_rank=1 自分
+  rank=7, scope_rank=2 ライバル
+```
+
+### EX score 同点順位
+
+BMS IR らしさを考えると、順位は EX score のみで同点同順位にする。
+
+```sql
+RANK() OVER (
+    ORDER BY bs.ex_score DESC
+) AS rank
+```
+
+表示順の安定化には追加条件を使う。
+
+```sql
+ORDER BY
+    rank ASC,
+    clear_rank DESC,
+    min_bp ASC,
+    min_cb ASC,
+    max_combo DESC,
+    played_at ASC
+```
+
+---
+
+## 8. Chart API / Chart Identity
+
+### Endpoint
+
+```http
+PUT /api/v1/charts/{sha256}
+GET /api/v1/charts/{sha256}
+```
+
+`PUT` にしておくと、スコア送信前に chart metadata を upsert できる。
+
+### Chart identity
+
+```rust
+pub struct IrChartIdentity {
+    pub sha256: String,
+    pub md5: Option<String>,
+
+    pub title: String,
+    pub subtitle: Option<String>,
+    pub genre: Option<String>,
+    pub artist: Option<String>,
+    pub subartists: Vec<String>,
+
+    pub mode: BmsMode,
+    pub ln_type: LnType,
+
+    pub level: Option<f32>,
+    pub total: Option<f32>,
+    pub judge_rank: Option<f32>,
+
+    pub min_bpm: f32,
+    pub max_bpm: f32,
+
+    pub notes: u32,
+    pub ln_notes: u32,
+    pub cn_notes: u32,
+    pub hcn_notes: u32,
+    pub mine_notes: u32,
+
+    pub has_random: bool,
+    pub has_stop: bool,
+    pub has_ln: bool,
+    pub has_cn: bool,
+    pub has_hcn: bool,
+    pub has_mine: bool,
+
+    pub source_url: Option<String>,
+    pub append_url: Option<String>,
+
+    pub header: BTreeMap<String, String>,
+}
+```
+
+### Payload example
+
+```json
+{
+  "sha256": "abc...",
+  "md5": "def...",
+  "title": "song title",
+  "subtitle": null,
+  "genre": "Artcore",
+  "artist": "artist",
+  "subartists": [],
+  "mode": "keys_7",
+  "ln_type": "ln",
+  "level": 12,
+  "total": 350.0,
+  "judge": 100,
+  "bpm": {
+    "min": 150.0,
+    "max": 180.0
+  },
+  "notes": {
+    "total": 1800,
+    "ln": 120,
+    "cn": 0,
+    "hcn": 0,
+    "mine": 0
+  },
+  "features": {
+    "random": false,
+    "stop": true,
+    "ln": true,
+    "cn": false,
+    "hcn": false,
+    "mine": false
+  },
+  "urls": {
+    "source": null,
+    "append": null
+  },
+  "headers": {
+    "TITLE": "song title",
+    "ARTIST": "artist"
+  }
+}
+```
+
+---
+
+## 9. Replay 設計
+
+### 初期方針
+
+- replay 本体アップロードは初期実装では必須にしない。
+- Score submission payload には replay hash / format / upload_intent を入れる。
+- 将来 replay upload API を追加できるように DB と response を設計する。
+
+### Score submission の replay field
+
+```json
+{
+  "replay": {
+    "hash": "sha256...",
+    "format": "bmz-replay-v1",
+    "upload_intent": "later"
+  }
+}
+```
+
+`upload_intent`:
+
+| value | description |
+|---|---|
+| `none` | replay なし |
+| `later` | hash だけ送って、あとでアップロード予定 |
+| `now` | score submit 後に続けてアップロード予定。初期は未実装でもよい |
+
+### Replay status
+
+```txt
+none
+hash_received
+upload_pending
+uploaded
+hash_mismatch
+verified
+```
+
+初期実装では最低限これだけでよい。
+
+```txt
+none
+hash_received
+```
+
+### 将来API
+
+```http
+POST /api/v1/scores/{score_id}/replay
+GET  /api/v1/scores/{score_id}/replay
+```
+
+Supabase Storage を使う場合の将来案:
+
+```http
+POST /api/v1/scores/{score_id}/replay/upload-url
+```
+
+Response:
+
+```json
+{
+  "upload_url": "signed_upload_url",
+  "expires_in": 300,
+  "required_hash": "sha256..."
+}
+```
+
+Flow:
+
+```txt
+score submit成功
+  ↓
+score_id取得
+  ↓
+replay upload job作成
+  ↓
+signed upload URL取得
+  ↓
+Client uploads replay to Supabase Storage
+  ↓
+Server verifies hash
+  ↓
+replay status = uploaded / verified
+```
+
+---
+
+## 10. Tamper Evidence 設計
+
+### 方針
+
+- 完全なチート防止ではない。
+- 改造クライアントなら偽スコアに署名できる。
+- 目的は「提出内容があとから改変されていない」ことを示すこと。
+- 将来 replay upload / replay verification と組み合わせる。
+
+### 署名対象
+
+Canonical JSON または MessagePack などで正規化する。  
+JSON の素朴な文字列化は避ける。
+
+署名対象に含めるもの:
+
+```txt
+BMZ client name/version
+platform
+chart sha256
+chart md5
+LN type
+score fields
+judge counts
+clear
+max combo
+minbp
+avgjudge
+option
+seed
+assist
+gauge
+device type
+judge algorithm
+rule
+skin
+played_at
+replay hash
+```
+
+`played_at` はクライアント時計由来なので、署名対象に入れる場合でも信用時刻として扱わない。
+ランキングや監査の基準時刻には、サーバー側で付与する `server_received_at` / `created_at` を別に保存する。
+クライアント時計が大きくずれている場合は、表示用の参考値として保持しつつ warning / suspicious flag を付けられるようにする。
+
+含めないもの:
+
+```txt
+access token
+refresh token
+サーバー側で付与するID
+サーバー受信時刻
+ランキング順位
+```
+
+### Device key
+
+初回ログイン時に device key を生成する。
+
+```txt
+private key: OS credential store
+public key: serverに登録
+```
+
+署名:
+
+```txt
+canonical_submission_hash = SHA256(canonical_payload)
+signature = Ed25519(private_key, canonical_submission_hash)
+```
+
+サーバー側:
+
+```txt
+public keyで検証
+canonical hashを保存
+署名を保存
+受信時刻を保存
+```
+
+### Verification status
+
+```txt
+unverified       replayなし / 署名なし
+signed           BMZ client keyで署名済み
+replay_uploaded  replay hash一致
+verified         replay検証済み
+trusted          将来の追加検証済み
+```
+
+初期は `signed` まででよい。
+
+---
+
+## 11. EX Score / Judge model
+
+### EX Score
+
+beatoraja メモに合わせる。
+
+```txt
+(epg + lpg) * 2 + egr + lgr
+```
+
+BMZ 内部関数案:
+
+```rust
+pub fn ex_score(j: &JudgeCounts) -> u32 {
+    (j.fast_pgreat + j.slow_pgreat) * 2
+        + j.fast_great
+        + j.slow_great
+}
+```
+
+### Judge counts
+
+IR payload は現行 BMZ の `ScoreState::JudgeCounts` に合わせる。
+BMZ では `Miss` という判定名は使わず、見逃しは `Poor`、空押しは `EmptyPoor` として扱う。
+`EmptyPoor` にも FAST/SLOW があるため、IR でも丸めずに保存する。
+
+```txt
+fast.pgreat
+fast.great
+fast.good
+fast.bad
+fast.poor
+fast.empty_poor
+
+slow.pgreat
+slow.great
+slow.good
+slow.bad
+slow.poor
+slow.empty_poor
+```
+
+将来 FAST/SLOW に分類できない独立イベントが必要になった場合は、v1 payload へ `neutral` を足すのではなく、
+用途を明確にした別 field として追加する。
+
+### BP / CB
+
+BMS 文脈での BP は BMZ では `miss_count` と同じ意味として扱う。
+
+```txt
+bp = bad + poor + empty_poor
+cb = bad + poor
+```
+
+`empty_poor` は combo を切らないため、combo break 集計の `cb` からは除外する。
+IR v1 では最小値として次を扱う。
+
+```txt
+min_bp = best play の最小 bp
+min_cb = best play の最小 cb
+```
+
+現行 BMZ の local score DB は `min_bp` / `min_cb` 列をまだ持たないため、IR 実装前に本体側へ追加する。
+必要な追加作業:
+
+- `ScoreState` または保存直前の集計 helper に `bp()` / `cb()` を追加する。
+- `score_history` と `score_best` に `bp` / `cb`、必要なら `min_bp` / `min_cb` 相当の列を追加する。
+- `BestScoreSummary` / result 表示 / replay slot metrics で `miss_count` だけでなく `bp` / `cb` を扱えるようにする。
+- local best 更新条件と IR best 更新条件のどちらに `min_bp` / `min_cb` を使うかを明示する。
+
+---
+
+## 12. Clear Lamp
+
+サーバー・クライアントで順序を固定する。IR v1 は BMZ の `ClearType::as_str()` に準拠する。
+文字列表現は local DB と同じ PascalCase を送る。
+
+```rust
+pub enum ClearType {
+    NoPlay = 0,
+    Failed = 1,
+    AssistEasy = 2,
+    LightAssistEasy = 3,
+    Easy = 4,
+    Normal = 5,
+    Hard = 6,
+    ExHard = 7,
+    FullCombo = 8,
+    Perfect = 9,
+    Max = 10,
+}
+```
+
+API の human-friendly alias として `hard_clear` などを受ける場合でも、保存時・response 時は
+`ClearType::as_str()` の値へ正規化する。
+BMS系ではアシスト、EASY、HARD、EXHARD、FULLCOMBO、MAX の扱いがズレやすいので、早めに固定する。
+
+---
+
+## 13. Server DB 設計案: Supabase / Postgres
+
+### 主なテーブル
+
+```txt
+players
+charts
+scores
+best_scores
+rival_relationships
+replay_objects
+device_keys
+```
+
+### best_scores
+
+ランキング用に正規化する。
+
+```sql
+CREATE TABLE best_scores (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    player_id uuid NOT NULL,
+    chart_sha256 text NOT NULL,
+    score_id uuid NOT NULL,
+
+    ex_score integer NOT NULL,
+    clear_type text NOT NULL,
+    clear_rank integer NOT NULL,
+    max_combo integer NOT NULL,
+    min_bp integer NOT NULL,
+    min_cb integer NOT NULL,
+
+    gauge text NOT NULL,
+    ln_type text NOT NULL,
+    scoring text NOT NULL,
+
+    played_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL DEFAULT now(),
+
+    UNIQUE (player_id, chart_sha256, gauge, ln_type, scoring)
+);
+```
+
+### scores と best_scores を分ける
+
+```txt
+scores:
+  投稿履歴全部
+
+best_scores:
+  chart_id + player_id + rule ごとの現在ベスト
+```
+
+### best 更新条件
+
+EX score ranking 固定のため、基本は EX score を主軸にする。
+
+```txt
+1. EX score が高い
+2. 同点なら clear が高い
+3. 同点なら minbp が低い
+4. 同点なら mincb が低い
+5. 同点なら max combo が高い
+6. 同点なら played_at が古い/新しい、どちらか仕様で固定
+```
+
+ただし beatoraja 的な `IR_SEND_UPDATE_SCORE` は次のいずれかが改善したら送信する。
+
+```txt
+EX score
+clear
+combo
+minbp
+mincb
+```
+
+そのため、将来は項目別 best を分けてもよい。
+
+```txt
+best_score_by_ex_score
+best_clear
+best_combo
+best_minbp
+best_mincb
+```
+
+初期は `best_scores` にランキング用 best を保存するだけでよい。
+ただし BMZ 本体の local DB が `min_bp` / `min_cb` を持つまでは、IR payload の必須項目にはしない。
+
+---
+
+## 14. Ranking SQL 案
+
+### Global ranking
+
+順位は EX score のみで同点同順位。
+
+```sql
+WITH ranked AS (
+    SELECT
+        bs.*,
+        p.display_name,
+        RANK() OVER (
+            ORDER BY bs.ex_score DESC
+        ) AS rank
+    FROM best_scores bs
+    JOIN players p ON p.id = bs.player_id
+    WHERE bs.chart_sha256 = $1
+      AND bs.gauge = $2
+      AND bs.ln_type = $3
+      AND bs.scoring = 'bms_ex_score_v1'
+)
+SELECT *
+FROM ranked
+ORDER BY
+    rank ASC,
+    clear_rank DESC,
+    min_bp ASC,
+    min_cb ASC,
+    max_combo DESC,
+    played_at ASC
+LIMIT $4 OFFSET $5;
+```
+
+### self_and_rivals
+
+全体順位を維持したまま表示対象だけ絞る。
+
+```sql
+WITH ranked AS (
+    SELECT
+        bs.*,
+        p.display_name,
+        RANK() OVER (
+            ORDER BY bs.ex_score DESC
+        ) AS rank
+    FROM best_scores bs
+    JOIN players p ON p.id = bs.player_id
+    WHERE bs.chart_sha256 = $1
+      AND bs.gauge = $2
+      AND bs.ln_type = $3
+      AND bs.scoring = 'bms_ex_score_v1'
+),
+targets AS (
+    SELECT target_player_id AS player_id
+    FROM rival_relationships
+    WHERE owner_player_id = $4
+      AND relation_type = 'rival'
+
+    UNION
+
+    SELECT $4 AS player_id
+)
+SELECT *
+FROM ranked
+WHERE player_id IN (SELECT player_id FROM targets)
+ORDER BY
+    rank ASC,
+    clear_rank DESC,
+    min_bp ASC,
+    min_cb ASC,
+    max_combo DESC,
+    played_at ASC;
+```
+
+### rivals only
+
+`self_and_rivals` から `UNION SELECT $4` を抜く。
+
+---
+
+## 15. Rival model
+
+### Table
+
+```sql
+CREATE TABLE rival_relationships (
+    owner_player_id uuid NOT NULL,
+    target_player_id uuid NOT NULL,
+    relation_type text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (owner_player_id, target_player_id)
+);
+```
+
+### 初期 relation_type
+
+```txt
+rival
+```
+
+### 将来候補
+
+```txt
+rival
+favorite
+blocked
+mutual_rival
+team_member
+```
+
+### API
+
+```http
+GET    /api/v1/rivals
+POST   /api/v1/rivals
+DELETE /api/v1/rivals/{player_id}
+```
+
+Response:
+
+```json
+{
+  "rivals": [
+    {
+      "id": "pl_01H...",
+      "display_name": "RivalPlayer",
+      "relationship": "rival"
+    }
+  ]
+}
+```
+
+---
+
+## 16. Client local DB 設計案
+
+### ir_accounts
+
+```sql
+CREATE TABLE ir_accounts (
+    provider_id TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    is_primary INTEGER NOT NULL DEFAULT 0,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    send_policy TEXT NOT NULL,
+    last_login_at TEXT,
+    last_success_at TEXT,
+    PRIMARY KEY (provider_id, account_id)
+);
+```
+
+### ir_score_jobs
+
+```sql
+CREATE TABLE ir_score_jobs (
+    id TEXT PRIMARY KEY,
+    provider_id TEXT NOT NULL,
+    local_score_id TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    status TEXT NOT NULL,
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    next_retry_at TEXT,
+    last_error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+```
+
+Status:
+
+```txt
+pending
+sending
+succeeded
+failed_retryable
+failed_permanent
+cancelled
+```
+
+### ir_score_submissions
+
+```sql
+CREATE TABLE ir_score_submissions (
+    id TEXT PRIMARY KEY,
+    provider_id TEXT NOT NULL,
+    local_score_id TEXT NOT NULL,
+    remote_score_id TEXT,
+    canonical_hash TEXT,
+    verification_status TEXT,
+    submitted_at TEXT,
+    updated_best INTEGER,
+    response_json TEXT
+);
+```
+
+---
+
+## 17. Client submit flow
+
+### 通常リザルト
+
+```txt
+Result Scene
+  ↓
+Local score save
+  ↓
+Score comparison
+  ↓
+Create IR jobs for enabled providers
+  ↓
+Background worker
+  ↓
+Refresh access token if needed
+  ↓
+Submit score
+  ↓
+Save response
+  ↓
+If provider == primary:
+       use included rankings if present
+       otherwise fetch ranking lazily on tab switch
+```
+
+### Primary / Secondary の扱い
+
+```txt
+Primary IR:
+  submit_score + optional rankings
+
+Secondary IR:
+  submit_score only
+```
+
+### Submit options 構築
+
+```rust
+let mut ranking_scopes = vec![];
+
+if settings.prefetch_global_ranking_on_submit {
+    ranking_scopes.push(IrRankingScope::Global);
+}
+
+if settings.prefetch_rival_ranking_on_submit {
+    ranking_scopes.push(IrRankingScope::SelfAndRivals);
+}
+
+let submit_options = IrSubmitOptions {
+    include_rankings: !ranking_scopes.is_empty(),
+    ranking_scopes,
+    ranking_limit: Some(100),
+};
+```
+
+### Trait types
+
+```rust
+pub struct IrSubmitOptions {
+    pub include_rankings: bool,
+    pub ranking_scopes: Vec<IrRankingScope>,
+    pub ranking_limit: Option<u32>,
+}
+
+pub struct IrSubmitResponse {
+    pub score_id: Option<String>,
+    pub accepted: bool,
+    pub updated_best: bool,
+    pub best_fields: IrBestUpdatedFields,
+    pub verification: Option<IrVerificationStatus>,
+    pub replay: Option<IrReplaySubmitStatus>,
+    pub rankings: BTreeMap<IrRankingScope, IrScopedResponse<IrRanking>>,
+    pub message: Option<String>,
+}
+
+pub struct IrRankingQuery {
+    pub scoring: IrScoringRule,
+    pub gauge: GaugeType,
+    pub ln_type: LnType,
+    pub scope: IrRankingScope,
+    pub limit: u32,
+    pub offset: u32,
+}
+
+pub enum IrRankingScope {
+    Global,
+    SelfAndRivals,
+    Rivals,
+    SelfOnly,
+    AroundSelf,
+}
+```
+
+---
+
+## 18. Retry / Offline handling
+
+### 方針
+
+- スコア送信は job queue 化する。
+- オフライン時や一時失敗時は retry する。
+- `idempotency_key` を使い二重投稿を防ぐ。
+
+### Retry schedule example
+
+```txt
+1分後
+5分後
+30分後
+2時間後
+24時間後
+```
+
+### 通信設定の将来案
+
+```txt
+IR送信:
+  - 常に自動送信
+  - リザルト画面のみ送信
+  - 手動送信
+```
+
+初期は自動送信 + retry でよい。
+
+---
+
+## 19. Course Score API
+
+初期実装では後回しでよいが、設計だけ残す。
+
+```http
+POST /api/v1/course-scores
+```
+
+Payload:
+
+```json
+{
+  "course": {
+    "course_id": "course_abc",
+    "title": "Example Course",
+    "charts": [
+      {
+        "sha256": "chart1..."
+      },
+      {
+        "sha256": "chart2..."
+      }
+    ],
+    "course_hash": "sha256_of_course_definition"
+  },
+  "result": {
+    "clear": "clear",
+    "ex_score": 8000,
+    "max_combo": 4000,
+    "min_bp": 50,
+    "played_at": "2026-06-04T12:34:56Z"
+  },
+  "evidence": {
+    "schema": "bmz-course-score-evidence-v1",
+    "canonical_hash": "abc...",
+    "client_signature": "..."
+  },
+  "idempotency_key": "course_score_01H..."
+}
+```
+
+---
+
+## 20. URL Resolver
+
+beatoraja の `getSongURL`, `getCourseURL`, `getPlayerURL` 相当。
+
+```rust
+pub trait IrUrlResolver {
+    fn chart_url(&self, chart: &IrChartIdentity) -> Option<Url>;
+    fn course_url(&self, course: &IrCourseIdentity) -> Option<Url>;
+    fn player_url(&self, player: &IrPlayerRef) -> Option<Url>;
+}
+```
+
+BMZ公式IRの例:
+
+```txt
+https://ir.example.com/charts/{sha256}
+https://ir.example.com/courses/{course_id}
+https://ir.example.com/players/{player_id}
+```
+
+---
+
+## 21. API 一覧: 初期実装優先度
+
+### Must have
+
+```http
+GET  /api/v1/me
+PUT  /api/v1/charts/{sha256}
+GET  /api/v1/charts/{sha256}
+POST /api/v1/scores
+GET  /api/v1/charts/{sha256}/ranking
+GET  /api/v1/rivals
+POST /api/v1/rivals
+DELETE /api/v1/rivals/{player_id}
+```
+
+### Later
+
+```http
+POST /api/v1/scores/{score_id}/replay
+GET  /api/v1/scores/{score_id}/replay
+POST /api/v1/scores/{score_id}/replay/upload-url
+GET  /api/v1/tables
+GET  /api/v1/tables/{table_id}
+POST /api/v1/course-scores
+GET  /api/v1/courses/{course_id}/ranking
+```
+
+---
+
+## 22. Nuxt + Supabase 実装方針
+
+### Nuxt server routes
+
+```txt
+/server/api/v1/me.get.ts
+/server/api/v1/charts/[sha256].put.ts
+/server/api/v1/charts/[sha256].get.ts
+/server/api/v1/scores.post.ts
+/server/api/v1/charts/[sha256]/ranking.get.ts
+/server/api/v1/rivals/index.get.ts
+/server/api/v1/rivals/index.post.ts
+/server/api/v1/rivals/[playerId].delete.ts
+```
+
+### Supabase Auth
+
+- Bearer access token を検証する。
+- `auth.users` と `players` を紐付ける。
+- BMZ クライアントは OIDC/OAuth 経由でログインする想定。
+
+### Supabase DB
+
+- RLS を使う場合でも、ranking query は server route / service role 経由に寄せる方が実装しやすい。
+- 複雑な submit + best update + ranking fetch は Postgres function / RPC 化を検討する。
+
+### Transaction
+
+Score submission では次を transaction 的に扱う。
+
+```txt
+score insert
+best_scores upsert
+ranking select
+```
+
+Nuxt server route だけでつらくなったら RPC 化する。
+
+---
+
+## 23. Provider Adapter 方針
+
+BMZ 内部では情報をリッチに持つ。
+
+```txt
+BMZ Score
+  - avg_judge_ms
+  - replay_hash
+  - device_type
+  - rule
+  - skin
+  - signature
+```
+
+外部IRが受け取れない項目は Adapter で明示的に落とす。
+
+```rust
+impl MochaAdapter {
+    fn to_mocha_score(&self, score: &IrScoreSubmission) -> MochaScorePayload {
+        // BMZ固有項目は捨てる or meta/commentに詰める
+    }
+}
+```
+
+情報を落とす箇所はログ・コメントで明示する。
+
+---
+
+## 24. Codex 実装タスク案
+
+### Phase 1: BMZ client model / trait
+
+- `IrProvider` trait を追加。
+- `IrSubmitOptions` / `IrSubmitResponse` / `IrRankingQuery` / `IrRankingScope` を追加。
+- `IrChartIdentity` / `IrScoreSubmission` / `IrRanking` を定義。
+- リザルト画面用の `ResultRankingState` を追加。
+- IR 設定項目を `profile.toml` 側に追加。
+
+### Phase 2: Local DB / Job Queue
+
+- BMZ 本体の score 保存に `bp` / `cb` 集計を追加する。
+- `score_history` / `score_best` / replay slot metrics に `bp` / `cb`、必要なら `min_bp` / `min_cb` を追加する。
+- `ir_accounts`
+- `ir_score_jobs`
+- `ir_score_submissions`
+- retry / idempotency 管理
+
+### Phase 3: BMZ Official Provider
+
+- OAuth/OIDC login flow 連携。
+- token refresh。
+- Credential Store 保存。
+- `POST /api/v1/scores` 実装。
+- `GET /api/v1/charts/{sha256}/ranking` 実装。
+
+### Phase 4: Nuxt + Supabase IR server
+
+- `players`, `charts`, `scores`, `best_scores`, `rival_relationships`, `device_keys`, `replay_objects` を作成。
+- Score submission route 実装。
+- Ranking route 実装。
+- Rival route 実装。
+- `include=rankings&ranking_scopes=...` に対応。
+
+### Phase 5: Replay / Evidence
+
+- canonical payload hash 実装。
+- Ed25519 device key 署名。
+- server-side signature verification。
+- replay hash 保存。
+- replay upload API は後回し。
+
+---
+
+## 25. 未決事項 / 要レビュー
+
+Codex にレビューしてほしい点。
+
+1. `rankings` response の wrapper 形式
+   - `rankings.global.succeeded/data` の形でよいか。
+   - それとも `rankings.global = null | IrRanking` にして error は別 field にするか。
+
+2. `best_scores` の採用条件
+   - ランキング主軸は EX score 固定。
+   - 同点時に clear / minbp / mincb / combo を best 更新判定に含めるか。
+   - ランキング順位は EX score のみで同点同順位にする。
+
+3. `scope_rank` の必要性
+   - 初期から返すか。
+   - UI側で計算するか。
+
+4. replay upload API
+   - 初期実装では未実装。
+   - DB schema だけ先に作るか。
+
+5. tamper evidence
+   - canonical JSON を採用するか。
+   - MessagePack 等の binary canonical format を採用するか。
+   - Ed25519 key の生成・保存・rotate・revoke をどう実装するか。
+   - クライアント時計由来の `played_at` とサーバー受信時刻のズレをどう表示・警告するか。
+
+6. Nuxt + Supabase route / RPC 分担
+   - submit + best update + ranking fetch を route 内で書くか。
+   - Postgres function / RPC に寄せるか。
+
+---
+
+## 26. 最終結論
+
+```txt
+BMZ IR API v1:
+  - SHA256 primary
+  - MD5 compatibility
+  - EX score ranking fixed
+  - Judge payload follows BMZ ScoreState: fast/slow + empty_poor, no miss field
+  - Clear payload follows BMZ ClearType::as_str()
+  - BP means bad + poor + empty_poor; CB means bad + poor
+  - min_bp / min_cb require BMZ local score storage support before becoming required
+  - Score submit response can optionally include rankings
+  - Multiple ranking scopes can be requested at submit time
+  - Ranking API supports global / self_and_rivals / rivals / self / around_self
+  - Result screen caches rankings by scope
+  - Missing ranking is fetched lazily when switching tabs
+  - Ranking fetch failure does not fail score submission
+  - Replay hash/format/status are included from v1
+  - Replay upload is reserved for later
+  - Tamper evidence uses canonical hash + client signature
+  - played_at is client-clock data; server_received_at is the authoritative server timestamp
+  - BMZ official IR is a reference implementation, not the core abstraction
+  - BMZ core depends on IrProvider trait, not on official IR API directly
+```
+
+Recommended score submit variants:
+
+```http
+POST /api/v1/scores
+POST /api/v1/scores?include=rankings&ranking_scopes=global&ranking_limit=100
+POST /api/v1/scores?include=rankings&ranking_scopes=self_and_rivals&ranking_limit=100
+POST /api/v1/scores?include=rankings&ranking_scopes=global,self_and_rivals&ranking_limit=100
+```
+
+Recommended lazy fetch variants:
+
+```http
+GET /api/v1/charts/{sha256}/ranking?scope=global&limit=100
+GET /api/v1/charts/{sha256}/ranking?scope=self_and_rivals&limit=100
+```
