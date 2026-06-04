@@ -537,6 +537,11 @@ fn course_result_summary_for_skin(course: &CourseResultSummary) -> ResultSummary
         target_max_combo: None,
         target_bp: None,
         target_clear_type: None,
+        ir_queued_jobs: course.entry_summaries.iter().map(|summary| summary.ir_queued_jobs).sum(),
+        ir_last_error: course
+            .entry_summaries
+            .iter()
+            .find_map(|summary| summary.ir_last_error.clone()),
         title: course.title.clone(),
         subtitle: String::new(),
         artist: String::new(),
@@ -4904,6 +4909,7 @@ impl WinitApp {
             &mut self.boot.score_db,
             &self.boot.profile_paths,
             &self.boot.profile_config.replay,
+            &self.boot.profile_config.ir,
             now_unix_seconds(),
         ) {
             Ok(PlayAdvanceOutcome::Playing(frame)) => {
@@ -8528,6 +8534,8 @@ mod tests {
                 target_max_combo: None,
                 target_bp: None,
                 target_clear_type: None,
+                ir_queued_jobs: 0,
+                ir_last_error: None,
                 title: String::new(),
                 subtitle: String::new(),
                 artist: String::new(),

@@ -15,14 +15,25 @@ const EFFECTIVE_LN_MODES = new Set(['ln', 'cn', 'hcn'])
 const RANKING_SCOPES = new Set(['global', 'self_and_rivals', 'rivals', 'self', 'around_self'])
 const CLEAR_RANK: Record<string, number> = {
   no_play: 0,
+  NoPlay: 0,
   failed: 1,
+  Failed: 1,
   assisted_easy_clear: 2,
+  AssistEasy: 2,
+  LightAssistEasy: 2,
   easy_clear: 3,
+  Easy: 3,
   clear: 4,
+  Normal: 4,
   hard_clear: 5,
+  Hard: 5,
   ex_hard_clear: 6,
+  ExHard: 6,
   full_combo: 7,
+  FullCombo: 7,
   perfect: 8,
+  Perfect: 8,
+  Max: 9,
 }
 
 type Db = SupabaseClient<Database>
