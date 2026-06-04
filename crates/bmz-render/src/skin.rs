@@ -1659,7 +1659,7 @@ pub struct SkinDrawState {
     /// 選択中曲のプレイ回数 / クリア回数 / ミスカウント。
     pub select_play_count: u32,
     pub select_clear_count: u32,
-    pub select_miss_count: Option<u32>,
+    pub select_bp: Option<u32>,
     /// Fast/Slow 内訳 (ref 410-419/421-424)。
     /// Play/Result 中は Some、それ以外は None。
     pub fast_slow_counts: Option<crate::snapshot::FastSlowJudgeCounts>,
@@ -1667,14 +1667,14 @@ pub struct SkinDrawState {
     pub best_max_combo: Option<u32>,
     /// ターゲット max combo (ref 173, 175 で使用)。
     pub target_max_combo: Option<u32>,
-    /// 過去ベスト misscount (ref 178 で使用)。
-    pub best_misscount: Option<u32>,
+    /// 過去ベスト bp (ref 178 で使用)。
+    pub best_bp: Option<u32>,
     /// Result update/draw ops 用の保存前ベスト。
     pub previous_best_ex_score: Option<u32>,
     pub previous_best_max_combo: Option<u32>,
-    pub previous_best_misscount: Option<u32>,
-    /// ターゲット misscount (ref 176, 178 で使用)。
-    pub target_misscount: Option<u32>,
+    pub previous_best_bp: Option<u32>,
+    /// ターゲット bp (ref 176, 178 で使用)。
+    pub target_bp: Option<u32>,
     /// ターゲットクリアタイプの index (ref 371)。
     pub target_clear_index: Option<i64>,
     /// リザルト画面でクリアしたか (op 90=CLEAR, op 91=FAIL)。
@@ -1838,15 +1838,15 @@ impl Default for SkinDrawState {
             select_length_ms: 0,
             select_play_count: 0,
             select_clear_count: 0,
-            select_miss_count: None,
+            select_bp: None,
             fast_slow_counts: None,
             best_max_combo: None,
             target_max_combo: None,
-            best_misscount: None,
+            best_bp: None,
             previous_best_ex_score: None,
             previous_best_max_combo: None,
-            previous_best_misscount: None,
-            target_misscount: None,
+            previous_best_bp: None,
+            target_bp: None,
             target_clear_index: None,
             result_failed: None,
             fadeout_ms: None,
@@ -3128,7 +3128,7 @@ impl SkinDocument {
             select_length_ms: selected_row.map(|row| row.length_ms).unwrap_or(0),
             select_play_count: selected_row.map(|row| row.play_count).unwrap_or(0),
             select_clear_count: selected_row.map(|row| row.clear_count).unwrap_or(0),
-            select_miss_count: selected_row.and_then(|row| row.miss_count),
+            select_bp: selected_row.and_then(|row| row.bp),
             max_combo: selected_row.and_then(|row| row.max_combo).unwrap_or(0),
             total_notes: selected_row.map(|row| row.total_notes).unwrap_or(0),
             gauge: selected_row.and_then(|row| row.gauge_value).unwrap_or(0.0),
@@ -3281,7 +3281,7 @@ impl SkinDocument {
                 select_length_ms: row.length_ms,
                 select_play_count: row.play_count,
                 select_clear_count: row.clear_count,
-                select_miss_count: row.miss_count,
+                select_bp: row.bp,
                 max_combo: row.max_combo.unwrap_or(0),
                 total_notes: row.total_notes,
                 gauge: row.gauge_value.unwrap_or(0.0),
@@ -3396,7 +3396,7 @@ impl SkinDocument {
                 select_length_ms: row.length_ms,
                 select_play_count: row.play_count,
                 select_clear_count: row.clear_count,
-                select_miss_count: row.miss_count,
+                select_bp: row.bp,
                 max_combo: row.max_combo.unwrap_or(0),
                 total_notes: row.total_notes,
                 gauge: row.gauge_value.unwrap_or(0.0),
@@ -5751,8 +5751,8 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool 
         1330 => state.previous_best_ex_score.is_some_and(|best| state.ex_score == best),
         331 => state.previous_best_max_combo.is_some_and(|best| state.max_combo > best),
         1331 => state.previous_best_max_combo.is_some_and(|best| state.max_combo == best),
-        332 => state.previous_best_misscount.is_some_and(|best| current_misscount(state) < best),
-        1332 => state.previous_best_misscount.is_some_and(|best| current_misscount(state) == best),
+        332 => state.previous_best_bp.is_some_and(|best| current_bp(state) < best),
+        1332 => state.previous_best_bp.is_some_and(|best| current_bp(state) == best),
         335 => state.previous_best_ex_score.is_some_and(|best| {
             score_rate_cmp_value(state.ex_score, state.total_notes)
                 > score_rate_cmp_value(best, state.total_notes)
@@ -6606,7 +6606,7 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         365 if state.select_screen => Some(decimal_afterdot(state.select_chart_density)),
         368 if state.select_screen => Some(state.select_chart_total_gauge.floor() as i64),
         75 | 105 | 174 => Some(state.max_combo as i64),
-        76 if state.select_screen => state.select_miss_count.map(|count| count as i64).or(Some(0)),
+        76 if state.select_screen => state.select_bp.map(|count| count as i64).or(Some(0)),
         76 => Some((state.judge_counts.bad + state.judge_counts.poor) as i64),
         77 if state.select_screen => Some(state.select_play_count as i64),
         77 => Some(state.select_target_index as i64),
@@ -6694,10 +6694,10 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         173 => state.target_max_combo.map(|c| c as i64),
         // NUMBER_DIFF_MAXCOMBO=175 (符号付き、max_combo - target_max_combo)
         175 => state.target_max_combo.map(|target| state.max_combo as i64 - target as i64),
-        // NUMBER_TARGET_MISSCOUNT=176
-        176 => state.target_misscount.map(|c| c as i64),
-        // NUMBER_DIFF_MISSCOUNT=178 (符号付き、現在 misscount - target_misscount)
-        178 => state.target_misscount.map(|target| {
+        // NUMBER_TARGET_BPCOUNT=176
+        176 => state.target_bp.map(|c| c as i64),
+        // NUMBER_DIFF_BPCOUNT=178 (符号付き、現在 bp - target_bp)
+        178 => state.target_bp.map(|target| {
             (state.judge_counts.bad + state.judge_counts.poor) as i64 - target as i64
         }),
         // NUMBER_TARGET_CLEAR=371
@@ -6935,7 +6935,7 @@ fn select_chart_main_bpm(state: SkinDrawState) -> Option<f32> {
     (state.select_chart_main_bpm > 0.0).then_some(state.select_chart_main_bpm)
 }
 
-fn current_misscount(state: SkinDrawState) -> u32 {
+fn current_bp(state: SkinDrawState) -> u32 {
     state.judge_counts.bad + state.judge_counts.poor
 }
 
@@ -8133,7 +8133,7 @@ fn select_sort_index(sort: &str) -> usize {
         "LEVEL" => 4,
         "CLEAR" => 5,
         "SCORE" => 6,
-        "MISSCOUNT" => 7,
+        "BPCOUNT" => 7,
         _ => 0,
     }
 }
@@ -14438,11 +14438,11 @@ mod tests {
             target_ex_score: Some(1900),
             best_max_combo: Some(800),
             target_max_combo: Some(1000),
-            best_misscount: Some(20),
+            best_bp: Some(20),
             previous_best_ex_score: Some(1800),
             previous_best_max_combo: Some(700),
-            previous_best_misscount: Some(10),
-            target_misscount: Some(0),
+            previous_best_bp: Some(10),
+            target_bp: Some(0),
             target_clear_index: Some(8),
             result_failed: Some(false),
             average_timing_ms: Some(-12.34),
@@ -14468,7 +14468,7 @@ mod tests {
         assert_eq!(skin_state_number(173, state), Some(1000));
         assert_eq!(skin_state_number(175, state), Some(777 - 1000));
         assert_eq!(skin_state_number(176, state), Some(0));
-        // 現在 misscount = bad+poor = 8、target = 0 → diff = 8
+        // 現在 bp = bad+poor = 8、target = 0 → diff = 8
         assert_eq!(skin_state_number(178, state), Some(8));
         assert_eq!(skin_state_number(371, state), Some(6));
         assert!(test_skin_op(321, &[], state));
@@ -14498,7 +14498,7 @@ mod tests {
             judge_counts: DisplayJudgeCounts { bad: 5, poor: 5, ..DisplayJudgeCounts::default() },
             previous_best_ex_score: Some(1800),
             previous_best_max_combo: Some(700),
-            previous_best_misscount: Some(10),
+            previous_best_bp: Some(10),
             target_ex_score: Some(1800),
             result_failed: Some(false),
             ..SkinDrawState::default()

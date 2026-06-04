@@ -87,9 +87,8 @@ impl ActiveCourseSession {
         let total_entries = self.definition.entries.len();
         let played_entries = self.entry_results.len();
 
-        let miss_count = judge_counts.bad + judge_counts.poor + judge_counts.empty_poor;
-        let miss_rate =
-            if total_notes > 0 { miss_count as f32 / total_notes as f32 * 100.0 } else { 0.0 };
+        let bp = judge_counts.bad + judge_counts.poor + judge_counts.empty_poor;
+        let miss_rate = if total_notes > 0 { bp as f32 / total_notes as f32 * 100.0 } else { 0.0 };
         let score_rate = if max_ex_score > 0 {
             total_ex_score as f32 / max_ex_score as f32 * 100.0
         } else {

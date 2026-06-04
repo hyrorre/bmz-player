@@ -276,7 +276,7 @@ pub const LIBRARY_MIGRATIONS: &[Migration] = &[
                 gauge_type TEXT NOT NULL,
                 gauge_value REAL NOT NULL,
                 max_combo INTEGER NOT NULL,
-                miss_count INTEGER NOT NULL,
+                bp INTEGER NOT NULL,
                 course_failed INTEGER NOT NULL,
                 course_clear INTEGER NOT NULL,
                 trophies_json TEXT NOT NULL,
@@ -318,7 +318,7 @@ pub const LIBRARY_MIGRATIONS: &[Migration] = &[
         // Course-level replay slots, mirroring the per-chart `replay_slots`
         // shape in `score.db`.  Slots are addressed by (course_id, slot)
         // and point at a course_scores row whose aggregate metrics passed
-        // the slot's rule (Always / ScoreUpdate / MissCountUpdate /
+        // the slot's rule (Always / ScoreUpdate / BpUpdate /
         // MaxComboUpdate / ClearUpdate).
         statements: &[
             "CREATE TABLE course_replay_slots (
@@ -329,7 +329,7 @@ pub const LIBRARY_MIGRATIONS: &[Migration] = &[
                     REFERENCES course_scores(id) ON DELETE CASCADE,
                 played_at INTEGER NOT NULL,
                 ex_score INTEGER NOT NULL,
-                miss_count INTEGER NOT NULL,
+                bp INTEGER NOT NULL,
                 max_combo INTEGER NOT NULL,
                 clear_rank INTEGER NOT NULL,
                 PRIMARY KEY(course_id, slot)
@@ -412,6 +412,8 @@ pub const SCORE_MIGRATIONS: &[Migration] = &[
             gauge_value REAL NOT NULL,
             total_notes INTEGER NOT NULL,
             ex_score INTEGER NOT NULL,
+            bp INTEGER NOT NULL,
+            cb INTEGER NOT NULL,
             max_combo INTEGER NOT NULL,
             fast_pgreat INTEGER NOT NULL,
             slow_pgreat INTEGER NOT NULL,
@@ -437,6 +439,8 @@ pub const SCORE_MIGRATIONS: &[Migration] = &[
             gauge_type TEXT NOT NULL,
             gauge_value REAL NOT NULL,
             ex_score INTEGER NOT NULL,
+            bp INTEGER NOT NULL,
+            cb INTEGER NOT NULL,
             max_combo INTEGER NOT NULL,
             fast_pgreat INTEGER NOT NULL,
             slow_pgreat INTEGER NOT NULL,
@@ -469,7 +473,8 @@ pub const SCORE_MIGRATIONS: &[Migration] = &[
             replay_path  TEXT NOT NULL,
             played_at    INTEGER NOT NULL,
             ex_score     INTEGER NOT NULL,
-            miss_count   INTEGER NOT NULL,
+            bp           INTEGER NOT NULL,
+            cb           INTEGER NOT NULL,
             max_combo    INTEGER NOT NULL,
             clear_rank   INTEGER NOT NULL,
             PRIMARY KEY(chart_sha256, slot)

@@ -1112,7 +1112,7 @@ slow.empty_poor
 
 ### BP / CB
 
-BMS 文脈での BP は BMZ では `miss_count` と同じ意味として扱う。
+BMZ 本体では `miss_count` 名を廃止し、BMS 文脈の BP / CB をそのまま保存・表示名に使う。
 
 ```txt
 bp = bad + poor + empty_poor
@@ -1127,13 +1127,13 @@ min_bp = best play の最小 bp
 min_cb = best play の最小 cb
 ```
 
-現行 BMZ の local score DB は `min_bp` / `min_cb` 列をまだ持たないため、IR 実装前に本体側へ追加する。
-必要な追加作業:
+BMZ の local score DB は `score_history` / `score_best` / `replay_slots` に `bp` / `cb` を直接保存する。
+本体側の対応方針:
 
-- `ScoreState` または保存直前の集計 helper に `bp()` / `cb()` を追加する。
-- `score_history` と `score_best` に `bp` / `cb`、必要なら `min_bp` / `min_cb` 相当の列を追加する。
-- `BestScoreSummary` / result 表示 / replay slot metrics で `miss_count` だけでなく `bp` / `cb` を扱えるようにする。
-- local best 更新条件と IR best 更新条件のどちらに `min_bp` / `min_cb` を使うかを明示する。
+- `ScoreState::bp()` は `bad + poor + empty_poor`、`ScoreState::cb()` は `bad + poor` を返す。
+- `score_history` / `score_best` / `replay_slots` に `bp` / `cb` を保存し、表示・リプレイ slot metrics でも `miss_count` 名を使わない。
+- local best 更新条件は `ex_score`、`clear_type`、`bp`、`cb`、`max_combo` の順に比較する。
+- IR 側の `min_bp` / `min_cb` は、送信された `bp` / `cb` の自己ベスト最小値として扱う。
 
 ---
 

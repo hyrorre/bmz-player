@@ -32,7 +32,8 @@ pub struct StorePlayResultRequest {
 #[derive(Debug, Clone, Copy)]
 pub struct CandidateMetrics {
     pub ex_score: u32,
-    pub miss_count: u32,
+    pub bp: u32,
+    pub cb: u32,
     pub max_combo: u32,
     pub clear_rank: u8,
 }
@@ -107,7 +108,8 @@ pub fn store_play_result(
                 replay_path: rel_path.clone(),
                 played_at: request.played_at,
                 ex_score: candidate.ex_score,
-                miss_count: candidate.miss_count,
+                bp: candidate.bp,
+                cb: candidate.cb,
                 max_combo: candidate.max_combo,
                 clear_rank: candidate.clear_rank,
             })?;
@@ -119,11 +121,10 @@ pub fn store_play_result(
 }
 
 fn candidate_metrics(result: &PlayResult) -> CandidateMetrics {
-    let judges = &result.score.judges;
-    let miss_count = judges.fast_bad + judges.slow_bad + judges.fast_poor + judges.slow_poor;
     CandidateMetrics {
         ex_score: result.score.ex_score(),
-        miss_count,
+        bp: result.score.bp(),
+        cb: result.score.cb(),
         max_combo: result.score.max_combo,
         clear_rank: result.clear_type as u8,
     }
@@ -134,12 +135,12 @@ fn evaluate_slot_update(
     prev: Option<&ReplaySlotRecord>,
     next: &CandidateMetrics,
 ) -> bool {
-    let prev_metrics = prev.map(|p| (p.ex_score, p.miss_count, p.max_combo, p.clear_rank));
+    let prev_metrics = prev.map(|p| (p.ex_score, p.bp, p.max_combo, p.clear_rank));
     slot_rule_passes(rule, prev_metrics, next)
 }
 
 /// Rule-only comparison shared by per-chart `replay_slots` and per-course
-/// `course_replay_slots`.  `prev` is `(ex_score, miss_count, max_combo,
+/// `course_replay_slots`.  `prev` is `(ex_score, bp, max_combo,
 /// clear_rank)` of the row currently in the slot, or `None` if the slot is
 /// empty (in which case any rule passes — the first record always wins).
 pub fn slot_rule_passes(
@@ -150,13 +151,13 @@ pub fn slot_rule_passes(
     if matches!(rule, ReplaySlotRule::Always) {
         return true;
     }
-    let Some((prev_ex, prev_miss, prev_combo, prev_clear)) = prev else {
+    let Some((prev_ex, prev_bp, prev_combo, prev_clear)) = prev else {
         return true;
     };
     match rule {
         ReplaySlotRule::Always => true,
         ReplaySlotRule::ScoreUpdate => next.ex_score > prev_ex,
-        ReplaySlotRule::MissCountUpdate => next.miss_count < prev_miss,
+        ReplaySlotRule::BpUpdate => next.bp < prev_bp,
         ReplaySlotRule::MaxComboUpdate => next.max_combo > prev_combo,
         ReplaySlotRule::ClearUpdate => next.clear_rank > prev_clear,
     }
@@ -393,7 +394,7 @@ mod tests {
 
         // Default slot 0 = Always (always overwrites)
         assert!(stored2.slot_paths[0].is_some());
-        // Slot 1..3 use Score/MissCount/MaxCombo which require strict improvement
+        // Slot 1..3 use Score/Bp/MaxCombo which require strict improvement
         assert!(stored2.slot_paths[1].is_none());
         assert!(stored2.slot_paths[2].is_none());
         assert!(stored2.slot_paths[3].is_none());
@@ -455,7 +456,8 @@ mod tests {
             replay_path: String::new(),
             played_at: 0,
             ex_score: 100,
-            miss_count: 10,
+            bp: 10,
+            cb: 10,
             max_combo: 50,
             clear_rank: ClearType::Normal as u8,
         };
@@ -463,43 +465,57 @@ mod tests {
         assert!(evaluate_slot_update(
             ReplaySlotRule::ScoreUpdate,
             Some(&prev),
-            &CandidateMetrics { ex_score: 101, miss_count: 10, max_combo: 50, clear_rank: 5 }
+            &CandidateMetrics { ex_score: 101, bp: 10, cb: 10, max_combo: 50, clear_rank: 5 }
         ));
         assert!(!evaluate_slot_update(
             ReplaySlotRule::ScoreUpdate,
             Some(&prev),
-            &CandidateMetrics { ex_score: 100, miss_count: 10, max_combo: 50, clear_rank: 5 }
+            &CandidateMetrics { ex_score: 100, bp: 10, cb: 10, max_combo: 50, clear_rank: 5 }
         ));
         assert!(!evaluate_slot_update(
             ReplaySlotRule::ScoreUpdate,
             Some(&prev),
-            &CandidateMetrics { ex_score: 50, miss_count: 0, max_combo: 100, clear_rank: 6 }
+            &CandidateMetrics { ex_score: 50, bp: 0, cb: 0, max_combo: 100, clear_rank: 6 }
         ));
     }
 
     #[test]
-    fn slot_rule_misscount_update_only_when_strictly_smaller() {
+    fn candidate_metrics_uses_bp_and_cb_helpers() {
+        let mut result = play_result(false);
+        result.score.judges.fast_bad = 1;
+        result.score.judges.slow_poor = 2;
+        result.score.judges.fast_empty_poor = 3;
+
+        let metrics = candidate_metrics(&result);
+
+        assert_eq!(metrics.cb, 3);
+        assert_eq!(metrics.bp, 6);
+    }
+
+    #[test]
+    fn slot_rule_bp_update_only_when_strictly_smaller() {
         let prev = ReplaySlotRecord {
             chart_sha256: [0; 32],
             slot: 0,
-            rule: ReplaySlotRule::MissCountUpdate,
+            rule: ReplaySlotRule::BpUpdate,
             replay_path: String::new(),
             played_at: 0,
             ex_score: 100,
-            miss_count: 10,
+            bp: 10,
+            cb: 10,
             max_combo: 50,
             clear_rank: ClearType::Normal as u8,
         };
 
         assert!(evaluate_slot_update(
-            ReplaySlotRule::MissCountUpdate,
+            ReplaySlotRule::BpUpdate,
             Some(&prev),
-            &CandidateMetrics { ex_score: 90, miss_count: 9, max_combo: 30, clear_rank: 5 }
+            &CandidateMetrics { ex_score: 90, bp: 9, cb: 9, max_combo: 30, clear_rank: 5 }
         ));
         assert!(!evaluate_slot_update(
-            ReplaySlotRule::MissCountUpdate,
+            ReplaySlotRule::BpUpdate,
             Some(&prev),
-            &CandidateMetrics { ex_score: 90, miss_count: 10, max_combo: 30, clear_rank: 5 }
+            &CandidateMetrics { ex_score: 90, bp: 10, cb: 10, max_combo: 30, clear_rank: 5 }
         ));
     }
 
@@ -512,7 +528,8 @@ mod tests {
             replay_path: String::new(),
             played_at: 0,
             ex_score: 100,
-            miss_count: 10,
+            bp: 10,
+            cb: 10,
             max_combo: 50,
             clear_rank: ClearType::Normal as u8,
         };
@@ -522,7 +539,8 @@ mod tests {
             Some(&prev),
             &CandidateMetrics {
                 ex_score: 90,
-                miss_count: 9,
+                bp: 9,
+                cb: 9,
                 max_combo: 30,
                 clear_rank: ClearType::Hard as u8,
             }
@@ -532,7 +550,8 @@ mod tests {
             Some(&prev),
             &CandidateMetrics {
                 ex_score: 90,
-                miss_count: 9,
+                bp: 9,
+                cb: 9,
                 max_combo: 30,
                 clear_rank: ClearType::Failed as u8,
             }
@@ -548,7 +567,8 @@ mod tests {
             replay_path: String::new(),
             played_at: 0,
             ex_score: 10_000,
-            miss_count: 0,
+            bp: 0,
+            cb: 0,
             max_combo: 9_999,
             clear_rank: ClearType::Perfect as u8,
         };
@@ -558,7 +578,8 @@ mod tests {
             Some(&prev),
             &CandidateMetrics {
                 ex_score: 0,
-                miss_count: 9_999,
+                bp: 9_999,
+                cb: 9_999,
                 max_combo: 0,
                 clear_rank: ClearType::Failed as u8,
             }
@@ -569,14 +590,15 @@ mod tests {
     fn slot_rule_first_record_always_written() {
         let candidate = CandidateMetrics {
             ex_score: 0,
-            miss_count: 0,
+            bp: 0,
+            cb: 0,
             max_combo: 0,
             clear_rank: ClearType::Failed as u8,
         };
         for &rule in &[
             ReplaySlotRule::Always,
             ReplaySlotRule::ScoreUpdate,
-            ReplaySlotRule::MissCountUpdate,
+            ReplaySlotRule::BpUpdate,
             ReplaySlotRule::MaxComboUpdate,
             ReplaySlotRule::ClearUpdate,
         ] {

@@ -71,7 +71,8 @@ pub struct BestScoreSummary {
     pub gauge_type: String,
     pub gauge_value: f32,
     pub ex_score: u32,
-    pub miss_count: u32,
+    pub bp: u32,
+    pub cb: u32,
     pub max_combo: u32,
     pub played_at: i64,
     pub replay_path: String,
@@ -91,7 +92,8 @@ pub struct ReplaySlotRecord {
     pub replay_path: String,
     pub played_at: i64,
     pub ex_score: u32,
-    pub miss_count: u32,
+    pub bp: u32,
+    pub cb: u32,
     pub max_combo: u32,
     pub clear_rank: u8,
 }
@@ -106,6 +108,8 @@ pub struct ScoreHistoryEntry {
     pub gauge_value: f32,
     pub total_notes: u32,
     pub ex_score: u32,
+    pub bp: u32,
+    pub cb: u32,
     pub max_combo: u32,
     pub autoplay: bool,
     pub replay_path: String,
@@ -186,7 +190,8 @@ impl ScoreDatabase {
                 gauge_type,
                 gauge_value,
                 ex_score,
-                fast_bad + slow_bad + fast_poor + slow_poor AS miss_count,
+                bp,
+                cb,
                 max_combo,
                 played_at,
                 replay_path
@@ -240,7 +245,7 @@ impl ScoreDatabase {
     ) -> Result<Option<ReplaySlotRecord>> {
         self.conn
             .query_row(
-                "SELECT chart_sha256, slot, rule, replay_path, played_at, ex_score, miss_count, max_combo, clear_rank
+                "SELECT chart_sha256, slot, rule, replay_path, played_at, ex_score, bp, cb, max_combo, clear_rank
                  FROM replay_slots
                  WHERE chart_sha256 = ?1 AND slot = ?2",
                 params![hash_to_hex(&chart_sha256), slot],
@@ -255,7 +260,7 @@ impl ScoreDatabase {
         chart_sha256: [u8; 32],
     ) -> Result<[Option<ReplaySlotRecord>; 4]> {
         let mut stmt = self.conn.prepare(
-            "SELECT chart_sha256, slot, rule, replay_path, played_at, ex_score, miss_count, max_combo, clear_rank
+            "SELECT chart_sha256, slot, rule, replay_path, played_at, ex_score, bp, cb, max_combo, clear_rank
              FROM replay_slots
              WHERE chart_sha256 = ?1",
         )?;
@@ -279,14 +284,15 @@ impl ScoreDatabase {
         self.conn.execute(
             "INSERT INTO replay_slots (
                 chart_sha256, slot, rule, replay_path, played_at,
-                ex_score, miss_count, max_combo, clear_rank
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                ex_score, bp, cb, max_combo, clear_rank
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
             ON CONFLICT(chart_sha256, slot) DO UPDATE SET
                 rule = excluded.rule,
                 replay_path = excluded.replay_path,
                 played_at = excluded.played_at,
                 ex_score = excluded.ex_score,
-                miss_count = excluded.miss_count,
+                bp = excluded.bp,
+                cb = excluded.cb,
                 max_combo = excluded.max_combo,
                 clear_rank = excluded.clear_rank",
             params![
@@ -296,7 +302,8 @@ impl ScoreDatabase {
                 record.replay_path,
                 record.played_at,
                 record.ex_score,
-                record.miss_count,
+                record.bp,
+                record.cb,
                 record.max_combo,
                 record.clear_rank,
             ],
@@ -341,6 +348,8 @@ impl ScoreDatabase {
                 gauge_value,
                 total_notes,
                 ex_score,
+                bp,
+                cb,
                 max_combo,
                 autoplay,
                 replay_path,
@@ -364,10 +373,11 @@ fn best_score_summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Best
         gauge_type: row.get(2)?,
         gauge_value: row.get(3)?,
         ex_score: row.get(4)?,
-        miss_count: row.get(5)?,
-        max_combo: row.get(6)?,
-        played_at: row.get(7)?,
-        replay_path: row.get(8)?,
+        bp: row.get(5)?,
+        cb: row.get(6)?,
+        max_combo: row.get(7)?,
+        played_at: row.get(8)?,
+        replay_path: row.get(9)?,
     })
 }
 
@@ -384,9 +394,10 @@ fn replay_slot_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Repl
         replay_path: row.get(3)?,
         played_at: row.get(4)?,
         ex_score: row.get(5)?,
-        miss_count: row.get(6)?,
-        max_combo: row.get(7)?,
-        clear_rank: row.get(8)?,
+        bp: row.get(6)?,
+        cb: row.get(7)?,
+        max_combo: row.get(8)?,
+        clear_rank: row.get(9)?,
     })
 }
 
@@ -403,10 +414,12 @@ fn score_history_entry_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Sco
         gauge_value: row.get(5)?,
         total_notes: row.get(6)?,
         ex_score: row.get(7)?,
-        max_combo: row.get(8)?,
-        autoplay: row.get(9)?,
-        replay_path: row.get(10)?,
-        course_score_id: row.get(11)?,
+        bp: row.get(8)?,
+        cb: row.get(9)?,
+        max_combo: row.get(10)?,
+        autoplay: row.get(11)?,
+        replay_path: row.get(12)?,
+        course_score_id: row.get(13)?,
     })
 }
 
@@ -422,6 +435,8 @@ fn insert_score_history(conn: &Connection, record: &ScoreRecord) -> Result<()> {
             gauge_value,
             total_notes,
             ex_score,
+            bp,
+            cb,
             max_combo,
             fast_pgreat,
             slow_pgreat,
@@ -444,7 +459,7 @@ fn insert_score_history(conn: &Connection, record: &ScoreRecord) -> Result<()> {
             ghost
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-            ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27
+            ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29
         )",
         params![
             hash_to_hex(&record.chart_sha256),
@@ -454,6 +469,8 @@ fn insert_score_history(conn: &Connection, record: &ScoreRecord) -> Result<()> {
             record.gauge_value,
             record.total_notes,
             record.score.ex_score(),
+            record.score.bp(),
+            record.score.cb(),
             record.score.max_combo,
             judges.fast_pgreat,
             judges.slow_pgreat,
@@ -489,6 +506,8 @@ fn upsert_score_best(conn: &Connection, record: &ScoreRecord) -> Result<()> {
             gauge_type,
             gauge_value,
             ex_score,
+            bp,
+            cb,
             max_combo,
             fast_pgreat,
             slow_pgreat,
@@ -507,13 +526,15 @@ fn upsert_score_best(conn: &Connection, record: &ScoreRecord) -> Result<()> {
             ghost
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-            ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21
+            ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23
         )
         ON CONFLICT(chart_sha256) DO UPDATE SET
             clear_type = excluded.clear_type,
             gauge_type = excluded.gauge_type,
             gauge_value = excluded.gauge_value,
             ex_score = excluded.ex_score,
+            bp = excluded.bp,
+            cb = excluded.cb,
             max_combo = excluded.max_combo,
             fast_pgreat = excluded.fast_pgreat,
             slow_pgreat = excluded.slow_pgreat,
@@ -565,6 +586,19 @@ fn upsert_score_best(conn: &Connection, record: &ScoreRecord) -> Result<()> {
             OR (
                 excluded.ex_score = score_best.ex_score
                 AND excluded.clear_type = score_best.clear_type
+                AND excluded.bp < score_best.bp
+            )
+            OR (
+                excluded.ex_score = score_best.ex_score
+                AND excluded.clear_type = score_best.clear_type
+                AND excluded.bp = score_best.bp
+                AND excluded.cb < score_best.cb
+            )
+            OR (
+                excluded.ex_score = score_best.ex_score
+                AND excluded.clear_type = score_best.clear_type
+                AND excluded.bp = score_best.bp
+                AND excluded.cb = score_best.cb
                 AND excluded.max_combo > score_best.max_combo
             )",
         params![
@@ -573,6 +607,8 @@ fn upsert_score_best(conn: &Connection, record: &ScoreRecord) -> Result<()> {
             gauge_type_str(record.gauge_type),
             record.gauge_value,
             record.score.ex_score(),
+            record.score.bp(),
+            record.score.cb(),
             record.score.max_combo,
             judges.fast_pgreat,
             judges.slow_pgreat,
@@ -722,6 +758,46 @@ mod tests {
     }
 
     #[test]
+    fn best_score_tiebreaks_by_lower_bp_then_lower_cb() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut db = ScoreDatabase { conn };
+
+        let mut high_bp = record(20, ClearType::Normal);
+        high_bp.score.judges.fast_bad = 3;
+        high_bp.score.judges.fast_empty_poor = 2;
+        db.insert_score(&high_bp).unwrap();
+
+        let mut lower_bp = record(20, ClearType::Normal);
+        lower_bp.score.judges.fast_bad = 2;
+        lower_bp.score.judges.fast_empty_poor = 2;
+        db.insert_score(&lower_bp).unwrap();
+
+        let best = db.best_scores_for_charts(&[[7; 32]]).unwrap().pop().unwrap();
+        assert_eq!(best.bp, 4);
+        assert_eq!(best.cb, 2);
+
+        let mut higher_cb = record(20, ClearType::Normal);
+        higher_cb.score.judges.fast_bad = 4;
+        higher_cb.score.judges.fast_empty_poor = 1;
+        db.insert_score(&higher_cb).unwrap();
+
+        let best = db.best_scores_for_charts(&[[7; 32]]).unwrap().pop().unwrap();
+        assert_eq!(best.bp, 4);
+        assert_eq!(best.cb, 2);
+
+        let mut lower_cb = record(20, ClearType::Normal);
+        lower_cb.score.judges.fast_bad = 1;
+        lower_cb.score.judges.fast_empty_poor = 3;
+        db.insert_score(&lower_cb).unwrap();
+
+        let best = db.best_scores_for_charts(&[[7; 32]]).unwrap().pop().unwrap();
+        assert_eq!(best.bp, 4);
+        assert_eq!(best.cb, 1);
+    }
+
+    #[test]
     fn beatoraja_ghost_round_trips_as_gzip_urlsafe_base64() {
         let ghost = vec![0, 1, 2, 3, 4];
 
@@ -834,7 +910,8 @@ mod tests {
             replay_path: format!("replay/{slot}.toml"),
             played_at: 1_700_000_000 + slot as i64,
             ex_score,
-            miss_count: 0,
+            bp: 0,
+            cb: 0,
             max_combo: ex_score,
             clear_rank: ClearType::Normal as u8,
         }

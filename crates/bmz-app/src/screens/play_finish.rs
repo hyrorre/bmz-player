@@ -104,7 +104,7 @@ pub fn finish_session_result(
     if let Some(best) = &previous_best {
         summary.previous_best_ex_score = Some(best.ex_score);
         summary.previous_best_max_combo = Some(best.max_combo);
-        summary.previous_best_misscount = Some(best.miss_count);
+        summary.previous_best_bp = Some(best.bp);
     }
     // 過去ベストスコア・ベストコンボを ResultSummary にフィルする。
     // 今回のスコアが直前に upsert_score_best されているので、`best_*` は
@@ -115,7 +115,7 @@ pub fn finish_session_result(
         summary.best_ex_score = Some(best.ex_score);
         summary.best_clear_type = clear_type_from_name(&best.clear_type);
         summary.best_max_combo = Some(best.max_combo);
-        summary.best_misscount = Some(best.miss_count);
+        summary.best_bp = Some(best.bp);
     }
     if let Ok(slots) = score_db.replay_slots_for_chart(result.chart_sha256) {
         summary.replay_slots = slots.each_ref().map(Option::is_some);

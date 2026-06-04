@@ -855,7 +855,8 @@ mod tests {
                     replay_path: format!("replay/{slot}.toml"),
                     played_at: 1_700_000_030 + slot as i64,
                     ex_score: 10 * slot as u32,
-                    miss_count: 0,
+                    bp: 0,
+                    cb: 0,
                     max_combo: 10,
                     clear_rank: ClearType::Normal as u8,
                 })

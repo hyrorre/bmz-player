@@ -65,6 +65,14 @@ impl ScoreState {
         self.judges.fast_good + self.judges.slow_good
     }
 
+    pub fn bp(&self) -> u32 {
+        self.cb() + self.judges.fast_empty_poor + self.judges.slow_empty_poor
+    }
+
+    pub fn cb(&self) -> u32 {
+        self.judges.fast_bad + self.judges.slow_bad + self.judges.fast_poor + self.judges.slow_poor
+    }
+
     pub fn ex_score_rate(&self, total_notes: u32) -> f32 {
         if total_notes == 0 { 1.0 } else { self.ex_score() as f32 / (total_notes * 2) as f32 }
     }
@@ -114,4 +122,30 @@ pub fn compute_clear_type(failed_state: bool, score: &ScoreState, gauge: &GaugeS
     }
 
     result_gauge.definition.clear_type.unwrap_or(ClearType::Failed)
+}
+
+#[cfg(test)]
+mod tests {
+    use bmz_core::ids::NoteId;
+    use bmz_core::judge::{Judge, TimingSide};
+    use bmz_core::lane::Lane;
+    use bmz_core::time::TimeUs;
+
+    use super::*;
+
+    fn event(judge: Judge, side: TimingSide, note_id: Option<NoteId>) -> JudgementEvent {
+        JudgementEvent { note_id, lane: Lane::Key1, judge, side, delta: TimeUs(0), time: TimeUs(0) }
+    }
+
+    #[test]
+    fn bp_counts_empty_poor_but_cb_does_not() {
+        let mut score = ScoreState::default();
+
+        score.apply(&event(Judge::Bad, TimingSide::Fast, Some(NoteId(1))));
+        score.apply(&event(Judge::Poor, TimingSide::Slow, Some(NoteId(2))));
+        score.apply(&event(Judge::EmptyPoor, TimingSide::Slow, None));
+
+        assert_eq!(score.cb(), 2);
+        assert_eq!(score.bp(), 3);
+    }
 }

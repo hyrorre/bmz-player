@@ -644,7 +644,7 @@ fn build_course_result_panel(ctx: &egui::Context, summary: &CourseResultSummary)
                         ui.label("EX");
                         ui.label("COMBO");
                         ui.label("CLEAR");
-                        ui.label("MISS");
+                        ui.label("BP");
                         ui.end_row();
                         for (i, entry) in summary.entry_summaries.iter().enumerate() {
                             ui.label(format!("{}", i + 1));
