@@ -139,6 +139,9 @@ pub struct SelectRowSnapshot {
     pub chart_total_gauge: f32,
     pub chart_main_bpm: f32,
     pub chart_distribution: Vec<SelectChartDistributionSecond>,
+    /// beatoraja DirectoryBar-style lamp distribution for folder rows.
+    /// Indexes match SkinBar BARLAMP IDs: 0 no play, 1 failed, ... 10 max.
+    pub folder_lamp_counts: [u32; 11],
     pub is_folder: bool,
     pub kind: SelectRowKind,
     /// library.db に登録済みかどうか。未登録の難易度表エントリは false。
@@ -198,6 +201,7 @@ impl Default for SelectRowSnapshot {
             chart_total_gauge: 0.0,
             chart_main_bpm: 0.0,
             chart_distribution: Vec::new(),
+            folder_lamp_counts: [0; 11],
             is_folder: false,
             kind: SelectRowKind::default(),
             in_library: true,

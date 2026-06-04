@@ -104,6 +104,7 @@ pub fn settings_root_item() -> SelectItem {
         path: CONFIG_ROOT_PATH.to_string(),
         name: "設定".to_string(),
         kind: SelectRowKind::SettingsFolder,
+        summary: None,
     }
 }
 
@@ -114,26 +115,31 @@ pub fn load_settings_items(path: &str) -> Vec<SelectItem> {
                 path: CONFIG_VOLUME_PATH.to_string(),
                 name: "音量".to_string(),
                 kind: SelectRowKind::SettingsFolder,
+                summary: None,
             },
             SelectItem::Folder {
                 path: CONFIG_JUDGE_PATH.to_string(),
                 name: "判定".to_string(),
                 kind: SelectRowKind::SettingsFolder,
+                summary: None,
             },
             SelectItem::Folder {
                 path: CONFIG_PLAY_PATH.to_string(),
                 name: "プレイ".to_string(),
                 kind: SelectRowKind::SettingsFolder,
+                summary: None,
             },
             SelectItem::Folder {
                 path: CONFIG_DISPLAY_PATH.to_string(),
                 name: "表示".to_string(),
                 kind: SelectRowKind::SettingsFolder,
+                summary: None,
             },
             SelectItem::Folder {
                 path: CONFIG_KEYS_PATH.to_string(),
                 name: "キー設定".to_string(),
                 kind: SelectRowKind::SettingsFolder,
+                summary: None,
             },
             SelectItem::AdvancedSettings,
         ],
@@ -153,11 +159,13 @@ fn key_mode_folder_items() -> Vec<SelectItem> {
         path: CONFIG_KEYS_COMMON_PATH.to_string(),
         name: "共通".to_string(),
         kind: SelectRowKind::SettingsFolder,
+        summary: None,
     })
     .chain(KEY_CONFIG_MODES.iter().copied().map(|key_mode| SelectItem::Folder {
         path: key_mode_settings_path(CONFIG_KEYS_PATH, key_mode),
         name: key_mode.as_str().to_string(),
         kind: SelectRowKind::SettingsFolder,
+        summary: None,
     }))
     .collect()
 }

@@ -3427,7 +3427,7 @@ impl SkinDocument {
             if let Some(item) = self.select_bar_item(row, row_destination, row_frame, sources) {
                 items.push(item);
             }
-            if select_row_shows_score_decorations(row) {
+            if select_row_shows_lamp(row) {
                 let clear_index = select_row_clear_index(row);
                 items.extend(self.select_songlist_child_items_by_index(
                     &songlist.lamp,
@@ -3438,6 +3438,8 @@ impl SkinDocument {
                     row_state,
                     sources,
                 ));
+            }
+            if select_row_shows_score_decorations(row) {
                 items.extend(self.select_songlist_level_items(
                     &songlist.level,
                     row,
@@ -3538,6 +3540,20 @@ impl SkinDocument {
                 ));
                 continue;
             }
+            if select_row_shows_folder_distribution(row)
+                && let Some(graph) = self.graph.iter().find(|graph| graph.id == destination.id)
+            {
+                items.extend(self.select_folder_distribution_graph_render_items(
+                    row,
+                    graph,
+                    destination,
+                    row_origin,
+                    enabled_options,
+                    state,
+                    sources,
+                ));
+                continue;
+            }
             if let Some(mut resolved) = self.resolve_offset_destination_items(
                 destination,
                 row_origin,
@@ -3549,6 +3565,90 @@ impl SkinDocument {
             ) {
                 items.append(&mut resolved);
             }
+        }
+        items
+    }
+
+    fn select_folder_distribution_graph_render_items(
+        &self,
+        row: &SelectRowSnapshot,
+        graph: &SkinGraphDef,
+        destination: &SkinDestinationDef,
+        row_origin: (i32, i32),
+        enabled_options: &[i32],
+        state: SkinDrawState,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Vec<SkinRenderItem> {
+        let Some(source) = sources.get(&graph.src) else {
+            return Vec::new();
+        };
+        if !test_skin_ops(&destination.op, enabled_options, state)
+            || !eval_skin_draw_condition(&destination.draw, state)
+        {
+            return Vec::new();
+        }
+        let Some(elapsed) = skin_timer_elapsed_ms(destination.timer, state) else {
+            return Vec::new();
+        };
+        let Some(mut frame) =
+            resolve_destination_frame(destination, elapsed, enabled_options, state)
+        else {
+            return Vec::new();
+        };
+        frame.x += row_origin.0;
+        frame.y += row_origin.1;
+        apply_skin_offset_to_frame(destination, &mut frame, state, false);
+
+        let total: u32 = row.folder_lamp_counts.iter().sum();
+        if total == 0 {
+            return Vec::new();
+        }
+
+        let dst = normalize_skin_frame_rect(frame, self.w, self.h);
+        let source_w = source.source_size.width.max(1.0);
+        let source_h = source.source_size.height.max(1.0);
+        let cell_w = skin_grid_cell_size(graph.w, graph.divx.max(11));
+        let cell_h = skin_grid_cell_size(graph.h, graph.divy);
+        if cell_w <= 0 || cell_h <= 0 {
+            return Vec::new();
+        }
+
+        let mut items = Vec::new();
+        let mut filled = 0.0;
+        for lamp_index in (0..row.folder_lamp_counts.len()).rev() {
+            let count = row.folder_lamp_counts[lamp_index];
+            if count == 0 {
+                continue;
+            }
+            let width = dst.width * (count as f32 / total as f32);
+            if width <= 0.0 {
+                continue;
+            }
+            let rect = Rect { x: dst.x + filled, width, ..dst };
+            let source_x = graph.x + cell_w * lamp_index as i32;
+            let uv = TextureRegion {
+                x: source_x as f32 / source_w,
+                y: graph.y as f32 / source_h,
+                width: cell_w as f32 / source_w,
+                height: cell_h as f32 / source_h,
+            };
+            items.push(SkinRenderItem::Image {
+                texture: source.texture,
+                rect,
+                uv,
+                tint: Color::rgba(
+                    frame.r as f32 / 255.0,
+                    frame.g as f32 / 255.0,
+                    frame.b as f32 / 255.0,
+                    frame.a as f32 / 255.0,
+                ),
+                blend: BlendMode::Normal,
+                scale: SkinImageScale::Stretch,
+                border: None,
+                source_size: Some(source.source_size),
+                linear_filter: false,
+            });
+            filled += width;
         }
         items
     }
@@ -7053,6 +7153,11 @@ fn graph_fill_ratio(graph: &SkinGraphDef, state: SkinDrawState) -> f32 {
     graph_value(graph.graph_type, state)
 }
 
+fn skin_grid_cell_size(size: i32, divisions: i32) -> i32 {
+    let divisions = divisions.max(1);
+    size / divisions
+}
+
 fn fast_slow_ratio_fast(state: SkinDrawState) -> f32 {
     let Some(counts) = state.fast_slow_counts else {
         return 0.0;
@@ -7842,6 +7947,10 @@ fn select_row_shows_score_decorations(row: &SelectRowSnapshot) -> bool {
     !row.is_folder
         && row.in_library
         && !matches!(row.kind, SelectRowKind::Config | SelectRowKind::SettingsFolder)
+}
+
+fn select_row_shows_lamp(row: &SelectRowSnapshot) -> bool {
+    row.in_library && !matches!(row.kind, SelectRowKind::Config | SelectRowKind::SettingsFolder)
 }
 
 fn select_row_shows_course_trophy(row: &SelectRowSnapshot) -> bool {
@@ -12611,7 +12720,7 @@ mod tests {
                     { "id": "level-beginner", "src": 2, "x": 0, "y": 10, "w": 100, "h": 10, "divx": 10, "digit": 2 },
                     { "id": "level-normal", "src": 2, "x": 0, "y": 20, "w": 100, "h": 10, "divx": 10, "digit": 2 }
                 ],
-                "graph": [{ "id": "graph-lamp", "src": 4, "x": 0, "y": 0, "w": 40, "h": 4, "angle": 0, "type": -1 }],
+                "graph": [{ "id": "graph-lamp", "src": 4, "x": 0, "y": 0, "w": 44, "h": 4, "divx": 11, "angle": 0, "type": -1 }],
                 "songlist": {
                     "id": "songlist",
                     "center": 1,
@@ -12679,7 +12788,7 @@ mod tests {
         let mut sources = mock_source("1", 100.0, 100.0);
         sources.extend(mock_source("2", 100.0, 100.0));
         sources.extend(mock_source("3", 24.0, 4.0));
-        sources.extend(mock_source("4", 40.0, 4.0));
+        sources.extend(mock_source("4", 44.0, 4.0));
         let snapshot = SelectSnapshot {
             selected_index: 2,
             rows: vec![
@@ -12688,6 +12797,12 @@ mod tests {
                     title: "Folder".to_string(),
                     play_level: "0".to_string(),
                     clear_type: "Normal".to_string(),
+                    folder_lamp_counts: {
+                        let mut counts = [0; 11];
+                        counts[5] = 1;
+                        counts[6] = 1;
+                        counts
+                    },
                     is_folder: true,
                     kind: SelectRowKind::Folder,
                     ..SelectRowSnapshot::default()
@@ -12763,6 +12878,16 @@ mod tests {
                 && approx_eq(*width, 0.04)
                 && approx_eq(*height, 0.04)
                 && approx_eq(*u, 20.0 / 24.0))));
+        assert!(items.iter().any(|item| matches!(item, SkinRenderItem::Image {
+                texture: SkinTextureId(9999),
+                rect: Rect { x, y, width, height },
+                uv: TextureRegion { x: u, .. },
+                ..
+            } if approx_eq(*x, 0.11)
+                && approx_eq(*y, 0.25)
+                && approx_eq(*width, 0.04)
+                && approx_eq(*height, 0.04)
+                && approx_eq(*u, 20.0 / 24.0))));
         assert!(!items.iter().any(|item| matches!(item, SkinRenderItem::Image {
                 texture: SkinTextureId(9999),
                 rect: Rect { x, y, width, height },
@@ -12811,12 +12936,23 @@ mod tests {
         assert!(items.iter().any(|item| matches!(item, SkinRenderItem::Image {
                 texture: SkinTextureId(9999),
                 rect: Rect { x, y, width, .. },
-                uv: TextureRegion { width: u_width, .. },
+                uv: TextureRegion { x: u, width: u_width, .. },
                 ..
             } if approx_eq(*x, 0.15)
                 && approx_eq(*y, 0.27)
                 && approx_eq(*width, 0.1)
-                && approx_eq(*u_width, 0.5))));
+                && approx_eq(*u, 24.0 / 44.0)
+                && approx_eq(*u_width, 4.0 / 44.0))));
+        assert!(items.iter().any(|item| matches!(item, SkinRenderItem::Image {
+                texture: SkinTextureId(9999),
+                rect: Rect { x, y, width, .. },
+                uv: TextureRegion { x: u, width: u_width, .. },
+                ..
+            } if approx_eq(*x, 0.25)
+                && approx_eq(*y, 0.27)
+                && approx_eq(*width, 0.1)
+                && approx_eq(*u, 20.0 / 44.0)
+                && approx_eq(*u_width, 4.0 / 44.0))));
         assert!(items.iter().any(|item| matches!(item, SkinRenderItem::Image {
                 texture: SkinTextureId(9999),
                 rect: Rect { x, y, .. },

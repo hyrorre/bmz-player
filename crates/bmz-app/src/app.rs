@@ -84,8 +84,9 @@ use crate::screens::select_model::{
     COURSE_ROOT_PATH, MAX_SEARCH_HISTORY, SEARCH_PATH_PREFIX, SelectItem, TABLE_ROOT_PATH,
     TablePath, course_root_item, load_select_items_for_courses, load_select_items_for_search,
     load_select_items_in_folder, load_select_items_in_table_level, parse_search_query,
-    parse_table_path, root_folder_items, search_history_folder_items, song_scan_path_from_context,
-    table_folder_items, table_level_folder_items, table_source_url_from_context,
+    parse_table_path, root_folder_items, search_history_folder_items, select_folder_summary,
+    song_scan_path_from_context, table_folder_items, table_level_folder_items,
+    table_source_url_from_context,
 };
 use crate::screens::settings_edit::{SettingsBindings, SettingsEditSession, adjust_settings_draft};
 use crate::screens::settings_model::{
@@ -6661,7 +6662,34 @@ fn load_items_for_stack(
     };
     apply_select_mode_filter(&mut items, mode_filter);
     apply_select_sort(&mut items, sort);
+    attach_select_folder_summaries(&mut items, boot);
     items
+}
+
+fn attach_select_folder_summaries(
+    items: &mut [SelectItem],
+    boot: &crate::bootstrap::BootstrappedApp,
+) {
+    for item in items {
+        let SelectItem::Folder { path, kind, summary, .. } = item else {
+            continue;
+        };
+        if summary.is_some() {
+            continue;
+        }
+        match select_folder_summary(
+            &boot.library_db,
+            &boot.score_db,
+            path,
+            *kind,
+            boot.profile_config.play.ln_mode_policy,
+        ) {
+            Ok(next) => *summary = next,
+            Err(error) => {
+                tracing::warn!(%error, path, "failed to load select folder lamp summary");
+            }
+        }
+    }
 }
 
 fn apply_select_mode_filter(items: &mut Vec<SelectItem>, filter: SelectModeFilter) {
@@ -7025,7 +7053,7 @@ fn select_snapshot_rows(
         .map(|index| {
             let item = &items[index];
             match item {
-                SelectItem::Folder { name, kind, .. } => SelectRowSnapshot {
+                SelectItem::Folder { name, kind, summary, .. } => SelectRowSnapshot {
                     index: index as u32,
                     title: name.clone(),
                     subtitle: String::new(),
@@ -7039,7 +7067,10 @@ fn select_snapshot_rows(
                     min_bpm: 0.0,
                     max_bpm: 0.0,
                     length_ms: 0,
-                    clear_type: String::new(),
+                    clear_type: summary
+                        .as_ref()
+                        .map(|summary| summary.clear_type())
+                        .unwrap_or_default(),
                     ex_score: None,
                     max_combo: None,
                     gauge_value: None,
@@ -7060,6 +7091,10 @@ fn select_snapshot_rows(
                     chart_total_gauge: 0.0,
                     chart_main_bpm: 0.0,
                     chart_distribution: Vec::new(),
+                    folder_lamp_counts: summary
+                        .as_ref()
+                        .map(|summary| summary.lamp_counts)
+                        .unwrap_or([0; 11]),
                     is_folder: true,
                     kind: *kind,
                     in_library: true,
@@ -7187,6 +7222,7 @@ fn select_snapshot_rows(
                             .and_then(|chart| chart_distributions.get(&chart.chart_id))
                             .map(|distribution| select_chart_distribution(distribution))
                             .unwrap_or_default(),
+                        folder_lamp_counts: [0; 11],
                         is_folder: false,
                         kind: bmz_render::scene::SelectRowKind::Song,
                         in_library: row.in_library(),
@@ -7245,6 +7281,7 @@ fn select_snapshot_rows(
                     chart_total_gauge: 0.0,
                     chart_main_bpm: 0.0,
                     chart_distribution: Vec::new(),
+                    folder_lamp_counts: [0; 11],
                     is_folder: false,
                     kind: bmz_render::scene::SelectRowKind::Course,
                     in_library: row.exists_all_songs(),
@@ -7294,6 +7331,7 @@ fn select_snapshot_rows(
                         chart_total_gauge: 0.0,
                         chart_main_bpm: 0.0,
                         chart_distribution: Vec::new(),
+                        folder_lamp_counts: [0; 11],
                         is_folder: false,
                         kind: bmz_render::scene::SelectRowKind::Config,
                         in_library: true,
@@ -7345,6 +7383,7 @@ fn select_snapshot_rows(
                         chart_total_gauge: 0.0,
                         chart_main_bpm: 0.0,
                         chart_distribution: Vec::new(),
+                        folder_lamp_counts: [0; 11],
                         is_folder: false,
                         kind: bmz_render::scene::SelectRowKind::Config,
                         in_library: true,
@@ -7389,6 +7428,7 @@ fn select_snapshot_rows(
                     chart_total_gauge: 0.0,
                     chart_main_bpm: 0.0,
                     chart_distribution: Vec::new(),
+                    folder_lamp_counts: [0; 11],
                     is_folder: true,
                     kind: bmz_render::scene::SelectRowKind::SettingsFolder,
                     in_library: true,
@@ -9514,6 +9554,7 @@ mod tests {
                 path: "folder".to_string(),
                 name: "folder".to_string(),
                 kind: SelectRowKind::Folder,
+                summary: None,
             },
             SelectItem::Chart(k7),
             SelectItem::Chart(k14),
@@ -9539,6 +9580,7 @@ mod tests {
                 path: "folder".to_string(),
                 name: "folder".to_string(),
                 kind: SelectRowKind::Folder,
+                summary: None,
             },
             SelectItem::Chart(fast),
             SelectItem::Chart(slow),

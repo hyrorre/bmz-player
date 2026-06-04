@@ -45,6 +45,7 @@ pub fn search_history_folder_items(history: &[String]) -> Vec<SelectItem> {
             path: format!("{SEARCH_PATH_PREFIX}{query}"),
             name: format!("Search : '{query}'"),
             kind: SelectRowKind::TableFolder,
+            summary: None,
         })
         .collect()
 }
@@ -232,12 +233,72 @@ pub struct CourseEntryPreview {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct SelectFolderSummary {
+    pub lamp_counts: [u32; 11],
+}
+
+impl SelectFolderSummary {
+    pub fn clear_type(&self) -> String {
+        let index = self.lamp_counts.iter().position(|count| *count > 0).unwrap_or(0);
+        clear_type_name_for_folder_lamp(index).to_string()
+    }
+}
+
+impl From<&[SelectChartRow]> for SelectFolderSummary {
+    fn from(rows: &[SelectChartRow]) -> Self {
+        let mut lamp_counts = [0; 11];
+        for row in rows {
+            let index = row
+                .best_score
+                .as_ref()
+                .map(|score| folder_lamp_index_from_clear_type(&score.clear_type))
+                .unwrap_or(0);
+            lamp_counts[index] += 1;
+        }
+        Self { lamp_counts }
+    }
+}
+
+fn folder_lamp_index_from_clear_type(clear_type: &str) -> usize {
+    match clear_type {
+        "Failed" => 1,
+        "AssistEasy" => 2,
+        "LightAssistEasy" => 3,
+        "Easy" => 4,
+        "Normal" => 5,
+        "Hard" => 6,
+        "ExHard" => 7,
+        "FullCombo" => 8,
+        "Perfect" => 9,
+        "Max" => 10,
+        _ => 0,
+    }
+}
+
+fn clear_type_name_for_folder_lamp(index: usize) -> &'static str {
+    match index {
+        1 => "Failed",
+        2 => "AssistEasy",
+        3 => "LightAssistEasy",
+        4 => "Easy",
+        5 => "Normal",
+        6 => "Hard",
+        7 => "ExHard",
+        8 => "FullCombo",
+        9 => "Perfect",
+        10 => "Max",
+        _ => "",
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::large_enum_variant)]
 pub enum SelectItem {
     Folder {
         path: String,
         name: String,
         kind: SelectRowKind,
+        summary: Option<SelectFolderSummary>,
     },
     Chart(SelectChartRow),
     Course(SelectCourseRow),
@@ -270,7 +331,12 @@ pub fn root_folder_items(root_paths: &[String]) -> Vec<SelectItem> {
                 .and_then(|n| n.to_str())
                 .unwrap_or(path.as_str())
                 .to_string();
-            SelectItem::Folder { path: path.clone(), name, kind: SelectRowKind::Folder }
+            SelectItem::Folder {
+                path: path.clone(),
+                name,
+                kind: SelectRowKind::Folder,
+                summary: None,
+            }
         })
         .collect()
 }
@@ -284,6 +350,7 @@ pub fn table_folder_items(library_db: &LibraryDatabase) -> Result<Vec<SelectItem
             path: format!("{TABLE_ROOT_PATH}{}", t.source_url),
             name: format!("[{}] {}", t.symbol, t.name),
             kind: SelectRowKind::TableFolder,
+            summary: None,
         })
         .collect())
 }
@@ -294,6 +361,7 @@ pub fn course_root_item() -> SelectItem {
         path: COURSE_ROOT_PATH.to_string(),
         name: "COURSE".to_string(),
         kind: SelectRowKind::TableFolder,
+        summary: None,
     }
 }
 
@@ -420,6 +488,7 @@ pub fn table_level_folder_items(
             path: format!("{TABLE_ROOT_PATH}{source_url}{TABLE_LEVEL_SEPARATOR}{level}"),
             name: format!("{}{}", table.symbol, level),
             kind: SelectRowKind::TableFolder,
+            summary: None,
         })
         .collect();
 
@@ -731,7 +800,7 @@ pub fn load_select_items_in_folder(
 
     let mut items = Vec::with_capacity(non_leaf_folders.len() + chart_items.len());
     for (path, name) in non_leaf_folders {
-        items.push(SelectItem::Folder { path, name, kind: SelectRowKind::Folder });
+        items.push(SelectItem::Folder { path, name, kind: SelectRowKind::Folder, summary: None });
     }
     items.extend(chart_items);
 
@@ -814,6 +883,117 @@ fn chart_items_with_enrichment(
     }
 
     Ok(items)
+}
+
+pub fn select_folder_summary(
+    library_db: &LibraryDatabase,
+    score_db: &ScoreDatabase,
+    path: &str,
+    kind: SelectRowKind,
+    ln_policy_setting: LnPolicySetting,
+) -> Result<Option<SelectFolderSummary>> {
+    match kind {
+        SelectRowKind::Folder => {
+            folder_summary_for_song_folder(library_db, score_db, path, ln_policy_setting).map(Some)
+        }
+        SelectRowKind::TableFolder => {
+            if let Some(query) = parse_search_query(path) {
+                return folder_summary_for_charts(
+                    score_db,
+                    library_db.search_charts(query)?,
+                    ln_policy_setting,
+                )
+                .map(Some);
+            }
+            match parse_table_path(path) {
+                Some(TablePath::Table { source_url }) => folder_summary_for_table(
+                    library_db,
+                    score_db,
+                    source_url,
+                    None,
+                    ln_policy_setting,
+                )
+                .map(Some),
+                Some(TablePath::Level { source_url, level }) => folder_summary_for_table(
+                    library_db,
+                    score_db,
+                    source_url,
+                    Some(level),
+                    ln_policy_setting,
+                )
+                .map(Some),
+                Some(TablePath::Root) | None => Ok(None),
+            }
+        }
+        SelectRowKind::Song
+        | SelectRowKind::Course
+        | SelectRowKind::SettingsFolder
+        | SelectRowKind::Config => Ok(None),
+    }
+}
+
+fn folder_summary_for_song_folder(
+    library_db: &LibraryDatabase,
+    score_db: &ScoreDatabase,
+    folder_path: &str,
+    ln_policy_setting: LnPolicySetting,
+) -> Result<SelectFolderSummary> {
+    let folder_key = folder_path.replace('\\', "/");
+    let mut paths = Vec::new();
+    paths.push(folder_key.clone());
+    paths.extend(library_db.list_descendant_folder_paths(&folder_key)?);
+    let path_refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+    folder_summary_for_charts(
+        score_db,
+        library_db.list_charts_in_folders(&path_refs)?,
+        ln_policy_setting,
+    )
+}
+
+fn folder_summary_for_table(
+    library_db: &LibraryDatabase,
+    score_db: &ScoreDatabase,
+    source_url: &str,
+    level_filter: Option<&str>,
+    ln_policy_setting: LnPolicySetting,
+) -> Result<SelectFolderSummary> {
+    let mut entries = library_db.list_table_entries_with_chart(source_url)?;
+    if let Some(level) = level_filter {
+        entries.retain(|entry| entry.level == level);
+    }
+    entries = dedupe_table_entries(entries);
+    let charts = entries.into_iter().filter_map(|entry| entry.chart).collect();
+    folder_summary_for_charts(score_db, charts, ln_policy_setting)
+}
+
+fn folder_summary_for_charts(
+    score_db: &ScoreDatabase,
+    charts: Vec<ChartListItem>,
+    ln_policy_setting: LnPolicySetting,
+) -> Result<SelectFolderSummary> {
+    let mut seen = HashSet::new();
+    let keys: Vec<ScoreKey> = charts
+        .iter()
+        .filter_map(|chart| {
+            let key = score_key_for_chart(chart, ln_policy_setting);
+            seen.insert(key).then_some(key)
+        })
+        .collect();
+    let score_map: HashMap<ScoreKey, BestScoreSummary> = score_db
+        .best_scores_for_charts(&keys)?
+        .into_iter()
+        .map(|score| (ScoreKey::new(score.chart_sha256, score.ln_policy), score))
+        .collect();
+
+    let mut lamp_counts = [0; 11];
+    for key in keys {
+        let index = score_map
+            .get(&key)
+            .map(|score| folder_lamp_index_from_clear_type(&score.clear_type))
+            .unwrap_or(0);
+        lamp_counts[index] += 1;
+    }
+    Ok(SelectFolderSummary { lamp_counts })
 }
 
 fn replay_slot_map(
@@ -988,6 +1168,46 @@ mod tests {
         assert_eq!(items.len(), 2);
         assert!(matches!(&items[0], SelectItem::Folder { name, .. } if name == "genre"));
         assert!(matches!(&items[1], SelectItem::Chart(r) if r.display_title() == "B"));
+    }
+
+    #[test]
+    fn select_folder_summary_counts_recursive_folder_lamps() {
+        let (mut library_db, mut score_db) = open_in_memory_dbs();
+        let normal = chart("Normal");
+        let hard = chart("Hard");
+        let unplayed = chart("Unplayed");
+        let outside = chart("Outside");
+        library_db
+            .upsert_chart_import(&record_for_chart("/songs/folder/normal.bms", &normal))
+            .unwrap();
+        library_db
+            .upsert_chart_import(&record_for_chart("/songs/folder/sub/hard.bms", &hard))
+            .unwrap();
+        library_db
+            .upsert_chart_import(&record_for_chart("/songs/folder/sub/unplayed.bms", &unplayed))
+            .unwrap();
+        library_db.upsert_chart_import(&record_for_chart("/songs/outside.bms", &outside)).unwrap();
+        score_db.insert_score(&score_for_chart(normal.identity.file_sha256)).unwrap();
+        let mut hard_score = score_for_chart(hard.identity.file_sha256);
+        hard_score.clear_type = ClearType::Hard;
+        score_db.insert_score(&hard_score).unwrap();
+        score_db.insert_score(&score_for_chart(outside.identity.file_sha256)).unwrap();
+
+        let summary = select_folder_summary(
+            &library_db,
+            &score_db,
+            "/songs/folder",
+            SelectRowKind::Folder,
+            LnPolicySetting::AutoLn,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(summary.lamp_counts[0], 1);
+        assert_eq!(summary.lamp_counts[5], 1);
+        assert_eq!(summary.lamp_counts[6], 1);
+        assert_eq!(summary.lamp_counts.iter().sum::<u32>(), 3);
+        assert_eq!(summary.clear_type(), "");
     }
 
     #[test]
@@ -1200,7 +1420,7 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert!(matches!(
             &items[0],
-            SelectItem::Folder { path, name, kind }
+            SelectItem::Folder { path, name, kind, .. }
             if path.starts_with(TABLE_ROOT_PATH) && name.contains("★") && *kind == SelectRowKind::TableFolder
         ));
     }
@@ -1287,6 +1507,7 @@ mod tests {
             path: "bmz-table:https://example.com/other/".to_string(),
             name: "[★] Other".to_string(),
             kind: SelectRowKind::TableFolder,
+            summary: None,
         };
         assert_eq!(
             table_source_url_from_context(&[], Some(&selected)),
@@ -1302,6 +1523,7 @@ mod tests {
             path: "/music/bms".to_string(),
             name: "bms".to_string(),
             kind: SelectRowKind::Folder,
+            summary: None,
         };
         assert_eq!(song_scan_path_from_context(&[], Some(&folder)), Some("/music/bms".to_string()));
 
@@ -1388,7 +1610,7 @@ mod tests {
         assert_eq!(items.len(), 3);
         assert!(matches!(
             &items[0],
-            SelectItem::Folder { path, name, kind }
+            SelectItem::Folder { path, name, kind, .. }
             if name == "★1" && path == "bmz-table:https://example.com/insane/\n1" && *kind == SelectRowKind::TableFolder
         ));
         assert!(matches!(&items[2], SelectItem::Folder { name, .. } if name == "★25"));
@@ -1732,10 +1954,11 @@ mod tests {
         let items = search_history_folder_items(&history);
         assert_eq!(items.len(), 2);
         match &items[0] {
-            SelectItem::Folder { path, name, kind } => {
+            SelectItem::Folder { path, name, kind, summary } => {
                 assert_eq!(path, "bmz-search:alpha");
                 assert_eq!(name, "Search : 'alpha'");
                 assert_eq!(*kind, SelectRowKind::TableFolder);
+                assert_eq!(*summary, None);
             }
             other => panic!("expected folder, got {other:?}"),
         }
