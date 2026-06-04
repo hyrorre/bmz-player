@@ -34,6 +34,7 @@ pub struct IntermediateMetadata {
     pub preview_file: String,
     pub volwav_percent: u8,
     pub long_note_mode: LongNoteMode,
+    pub long_note_mode_defined: bool,
     pub has_bga: bool,
     pub key_mode: KeyMode,
     /// `#BASE 62` 相当。`true` のときオブジェクト ID は base62 換算する。

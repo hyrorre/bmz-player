@@ -58,6 +58,10 @@ pub struct ChartMetadata {
     pub key_mode: KeyMode,
     /// `#LNMODE` / BMSON `ln_type`。未指定時は LR2 互換の LN (終点判定なし)。
     pub long_note_mode: LongNoteMode,
+    /// True when the source chart explicitly declared its long-note mode.
+    /// False means long notes should be treated as undefined until player
+    /// policy resolves them.
+    pub long_note_mode_defined: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -92,6 +96,7 @@ impl Default for ChartMetadata {
             has_bga: false,
             key_mode: KeyMode::default(),
             long_note_mode: LongNoteMode::default(),
+            long_note_mode_defined: false,
         }
     }
 }
@@ -128,6 +133,7 @@ pub enum LongNoteStyle {
 pub struct LongNotePair {
     pub lane: Lane,
     pub style: LongNoteStyle,
+    pub mode: Option<LongNoteMode>,
     pub start_note_id: NoteId,
     pub end_note_id: NoteId,
     pub start_tick: ChartTick,

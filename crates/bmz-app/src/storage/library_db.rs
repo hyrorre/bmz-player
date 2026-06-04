@@ -1908,6 +1908,7 @@ mod tests {
         chart.long_notes.push(LongNotePair {
             lane: Lane::Scratch,
             style: LongNoteStyle::ChannelPair,
+            mode: None,
             start_note_id: NoteId(2),
             end_note_id: NoteId(3),
             start_tick: ChartTick(0),
@@ -1953,6 +1954,7 @@ mod tests {
         chart.long_notes.push(LongNotePair {
             lane: Lane::Key1,
             style: LongNoteStyle::ChannelPair,
+            mode: None,
             start_note_id: NoteId(1),
             end_note_id: NoteId(2),
             start_tick: ChartTick(0),

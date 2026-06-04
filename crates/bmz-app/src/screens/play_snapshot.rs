@@ -1476,6 +1476,7 @@ mod tests {
             long_notes: vec![LongNotePair {
                 lane: Lane::Key1,
                 style: LongNoteStyle::ChannelPair,
+                mode: None,
                 start_note_id: NoteId(1),
                 end_note_id: NoteId(2),
                 start_tick: ChartTick(0),

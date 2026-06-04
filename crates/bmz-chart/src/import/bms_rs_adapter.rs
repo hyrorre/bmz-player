@@ -603,6 +603,7 @@ fn build_metadata(bms: &Bms) -> IntermediateMetadata {
             .unwrap_or_default(),
         volwav_percent: bms.volume.volume.relative_percent,
         long_note_mode: map_ln_mode(bms.repr.ln_mode),
+        long_note_mode_defined: bms_has_explicit_ln_mode(bms),
         has_bga: false,
         key_mode: KeyMode::default(),
         base62_obj_ids: bms_uses_base62_obj_ids(bms),
@@ -617,6 +618,13 @@ fn bms_uses_base62_obj_ids(bms: &Bms) -> bool {
     // bms-rs は `#BASE 62` 処理時に RefCell だけ更新し `repr.case_sensitive_obj_id` を
     // 立てないことがあるため、記録済みヘッダ行も見る。
     bms.repr.raw_command_lines.iter().any(|line| line.eq_ignore_ascii_case("#BASE 62"))
+}
+
+fn bms_has_explicit_ln_mode(bms: &Bms) -> bool {
+    bms.repr.raw_command_lines.iter().any(|line| {
+        let trimmed = line.trim_start();
+        trimmed.get(..7).is_some_and(|prefix| prefix.eq_ignore_ascii_case("#LNMODE"))
+    })
 }
 
 fn map_ln_mode(mode: LnMode) -> LongNoteMode {
