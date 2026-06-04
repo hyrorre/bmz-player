@@ -8140,8 +8140,8 @@ fn select_sort_index(sort: &str) -> usize {
 
 fn select_ln_mode_index(mode: &str) -> usize {
     match mode {
-        "CN" => 1,
-        "HCN" => 2,
+        "CN" | "AUTO(CN)" | "FORCE(CN)" => 1,
+        "HCN" | "AUTO(HCN)" | "FORCE(HCN)" => 2,
         _ => 0,
     }
 }

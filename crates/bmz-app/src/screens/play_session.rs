@@ -31,11 +31,15 @@ use crate::config::play::{
 use crate::config::profile_config::{
     BgaExpandConfig, BgaModeConfig, HispeedModeConfig, LaneEffectConfig, ProfileConfig,
 };
+use crate::ln_policy::{
+    LnPolicySetting, apply_ln_policy_to_chart, force_ln_mode_for_chart, score_ln_policy_for_chart,
+};
 use crate::screens::practice::{
     PracticeProperty, apply_practice_property, apply_practice_start_gauge,
 };
 use crate::select_options::{ArrangeOption, TargetOption};
 use crate::storage::library_db::LibraryDatabase;
+use crate::storage::score_db::ScoreKey;
 
 #[derive(Debug, Clone)]
 pub struct PlaySessionOptions {
@@ -60,6 +64,7 @@ pub struct PlaySessionOptions {
     /// Course-forced long-note mode (Ln/Cn/Hcn).  `None` keeps the chart's
     /// declared mode.
     pub ln_mode_override: Option<bmz_chart::model::LongNoteMode>,
+    pub ln_policy_setting: LnPolicySetting,
     /// 段位ゲージ用の `GaugeProperty` 上書き。コース時に
     /// `apply_course_constraints` が `CourseGaugeConstraint::Lr2/Keys5/...` を
     /// 解釈して設定する。`None` の場合はチャートの `KeyMode` から自動推定する。
@@ -78,6 +83,7 @@ pub struct PreparedPlaySession {
     pub audio: AudioEngine,
     pub sample_report: Vec<LoadedSampleReport>,
     pub applied_arrange: AppliedArrange,
+    pub score_key: ScoreKey,
     pub target_ex_score: Option<u32>,
     pub practice_mode: bool,
 }
@@ -87,6 +93,7 @@ pub struct PreloadedPlaySession {
     pub audio: AudioEngine,
     pub sample_report: Vec<LoadedSampleReport>,
     pub applied_arrange: AppliedArrange,
+    pub score_key: ScoreKey,
 }
 
 impl Default for PlaySessionOptions {
@@ -105,6 +112,7 @@ impl Default for PlaySessionOptions {
             initial_gauge_value: None,
             judge_constraint: bmz_core::course::CourseJudgeConstraint::Normal,
             ln_mode_override: None,
+            ln_policy_setting: LnPolicySetting::AutoLn,
             gauge_property: None,
         }
     }
@@ -417,10 +425,15 @@ pub fn preload_play_session_for_chart(
         import_bms_chart(std::path::Path::new(&path), random_seed_for_chart(&options), true)
             .with_context(|| format!("failed to import chart file: {path}"))?;
     let mut chart = import.chart;
+    let score_key = ScoreKey::new(
+        chart.identity.file_sha256,
+        score_ln_policy_for_chart(options.ln_policy_setting, &chart),
+    );
+    apply_ln_policy_to_chart(options.ln_policy_setting, &mut chart);
     // Course constraint may force a specific LN mode (Ln/Cn/Hcn) regardless of
     // what the chart declared. Mirrors beatoraja PlayerConfig.setLnmode().
     if let Some(ln_mode) = options.ln_mode_override {
-        chart.metadata.long_note_mode = ln_mode;
+        force_ln_mode_for_chart(ln_mode, &mut chart);
     }
     let applied_arrange = apply_arrange(
         &mut chart,
@@ -433,7 +446,7 @@ pub fn preload_play_session_for_chart(
     let (audio, sample_report) =
         build_audio_engine_for_chart(&chart, options.sample_rate, &mut loader);
 
-    Ok(PreloadedPlaySession { chart, audio, sample_report, applied_arrange })
+    Ok(PreloadedPlaySession { chart, audio, sample_report, applied_arrange, score_key })
 }
 
 pub fn build_practice_prepared_from_preloaded(
@@ -461,6 +474,7 @@ pub fn build_practice_prepared_from_preloaded(
         audio: preloaded.audio,
         sample_report: preloaded.sample_report,
         applied_arrange,
+        score_key: preloaded.score_key,
         target_ex_score,
         practice_mode,
     }
@@ -481,6 +495,7 @@ pub fn build_prepared_play_session_from_preloaded(
         audio: preloaded.audio,
         sample_report: preloaded.sample_report,
         applied_arrange: preloaded.applied_arrange,
+        score_key: preloaded.score_key,
         target_ex_score,
         practice_mode,
     }

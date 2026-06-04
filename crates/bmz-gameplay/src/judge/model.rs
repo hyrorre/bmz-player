@@ -1,3 +1,4 @@
+use bmz_chart::model::LongNoteMode;
 use bmz_core::ids::NoteId;
 use bmz_core::judge::{Judge, TimingSide};
 use bmz_core::lane::Lane;
@@ -83,6 +84,7 @@ pub struct LongNoteEndRef {
 #[derive(Debug, Clone, Copy)]
 pub struct ActiveLongNote {
     pub pair_index: usize,
+    pub mode: LongNoteMode,
     pub start_note_id: NoteId,
     pub end: LongNoteEndRef,
 }

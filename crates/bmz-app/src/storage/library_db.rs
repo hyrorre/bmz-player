@@ -1317,7 +1317,11 @@ impl ChartAnalysis {
             }
         }
 
-        let ignore_long_end = chart.metadata.long_note_mode == LongNoteMode::Ln;
+        let long_end_modes = chart
+            .long_notes
+            .iter()
+            .map(|pair| (pair.end_note_id, pair.mode.unwrap_or(chart.metadata.long_note_mode)))
+            .collect::<std::collections::HashMap<_, _>>();
         let mut bpm_note_counts: Vec<(f64, u32)> = Vec::new();
         let mut total_countdown = chart.total_notes as i64
             - gauge_border_note_count(chart.metadata.total, chart.total_notes);
@@ -1350,7 +1354,11 @@ impl ChartAnalysis {
                         total_countdown -= 1;
                         add_bpm_note_count(&mut bpm_note_counts, bpm_at(chart, note.time.0), 1);
                     }
-                    NoteKind::LongEnd if !ignore_long_end => {
+                    NoteKind::LongEnd
+                        if long_end_modes
+                            .get(&note.id)
+                            .is_some_and(|mode| *mode != LongNoteMode::Ln) =>
+                    {
                         add_long_head(slot, lane);
                         lane_slot.long_notes = lane_slot.long_notes.saturating_add(1);
                         total_countdown -= 1;
@@ -2027,6 +2035,50 @@ mod tests {
             .unwrap();
         assert!(stored_distribution.starts_with('#'));
         assert_eq!(stored_distribution.len(), 1 + analysis.distribution.len() * 14);
+    }
+
+    #[test]
+    fn chart_analysis_counts_defined_cn_long_end_independently_of_chart_default() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase { conn };
+        let mut chart = chart("mixed analysis");
+        chart.metadata.long_note_mode = LongNoteMode::Ln;
+        chart.total_notes = 2;
+        chart.end_time = TimeUs(2_000_000);
+        chart.lane_notes[Lane::Key1.index()].push(note(
+            1,
+            Lane::Key1,
+            NoteKind::LongStart,
+            1_000_000,
+        ));
+        chart.lane_notes[Lane::Key1.index()].push(note(
+            2,
+            Lane::Key1,
+            NoteKind::LongEnd,
+            2_000_000,
+        ));
+        chart.long_notes.push(LongNotePair {
+            lane: Lane::Key1,
+            style: LongNoteStyle::ChannelPair,
+            mode: Some(LongNoteMode::Cn),
+            start_note_id: NoteId(1),
+            end_note_id: NoteId(2),
+            start_tick: ChartTick(0),
+            end_tick: ChartTick(192),
+            start_time: TimeUs(1_000_000),
+            end_time: TimeUs(2_000_000),
+            sound: None,
+        });
+
+        let chart_id =
+            db.upsert_chart_import(&record_for_chart("/songs/mixed-analysis.bms", &chart)).unwrap();
+        let analysis = db.chart_analysis_by_chart_id(chart_id).unwrap().unwrap();
+
+        assert_eq!(analysis.long_notes, 2);
+        assert_eq!(analysis.lane_notes[Lane::Key1.index()].long_notes, 2);
+        assert_eq!(analysis.distribution[2].key_long_heads, 1);
     }
 
     #[test]

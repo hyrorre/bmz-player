@@ -273,6 +273,7 @@ pub fn build_render_snapshot_with_target_and_bga_frames(
             }
             snapshot.visible_long_notes.push(VisibleLongNote {
                 lane: long.lane,
+                mode: long.mode.unwrap_or(session.chart.metadata.long_note_mode),
                 head_y: head.clamp(0.0, 1.0),
                 tail_y: tail.clamp(0.0, 1.0),
             });

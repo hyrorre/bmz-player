@@ -1,3 +1,4 @@
+use bmz_chart::model::LongNoteMode;
 use bmz_core::judge::Judge;
 use bmz_core::lane::{KeyMode, LANE_COUNT, Lane};
 use bmz_core::time::TimeUs;
@@ -243,6 +244,7 @@ pub struct VisibleMine {
 #[derive(Debug, Clone, PartialEq)]
 pub struct VisibleLongNote {
     pub lane: Lane,
+    pub mode: LongNoteMode,
     pub head_y: f32,
     pub tail_y: f32,
 }

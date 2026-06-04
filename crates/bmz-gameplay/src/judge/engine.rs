@@ -59,7 +59,7 @@ impl JudgeEngine {
             }
 
             if let Some(active) = lane_state.active_long {
-                match chart.metadata.long_note_mode {
+                match active.mode {
                     LongNoteMode::Ln => {
                         if now.0 >= active.end.end_time.0 {
                             lane_state.active_long = None;
@@ -169,13 +169,13 @@ impl JudgeEngine {
         outcome
     }
 
-    fn process_release(&mut self, chart: &PlayableChart, input: InputEvent) -> JudgeOutcome {
+    fn process_release(&mut self, _chart: &PlayableChart, input: InputEvent) -> JudgeOutcome {
         let lane_state = &mut self.lanes[input.lane.index()];
         let Some(active) = lane_state.active_long else {
             return JudgeOutcome::default();
         };
 
-        match chart.metadata.long_note_mode {
+        match active.mode {
             LongNoteMode::Ln => {
                 lane_state.active_long = None;
                 if input.time.0 >= active.end.end_time.0 {
@@ -198,7 +198,7 @@ impl JudgeEngine {
                 let delta = input.time.0 - active.end.end_time.0;
                 let side = side_from_delta(delta);
                 let judge = classify_normal_delta(delta, self.windows).unwrap_or(Judge::Poor);
-                let early_release = chart.metadata.long_note_mode == LongNoteMode::Hcn && delta < 0;
+                let early_release = active.mode == LongNoteMode::Hcn && delta < 0;
                 lane_state.active_long = None;
                 if early_release {
                     lane_state.hcn_draining = true;
@@ -301,6 +301,7 @@ fn make_active_long(chart: &PlayableChart, start_note_id: NoteId) -> Option<Acti
 
     Some(ActiveLongNote {
         pair_index,
+        mode: pair.mode.unwrap_or(chart.metadata.long_note_mode),
         start_note_id,
         end: LongNoteEndRef {
             end_note_id: pair.end_note_id,
@@ -439,6 +440,10 @@ mod tests {
         InputEvent { source: InputSource::Human, lane: Lane::Key1, kind: InputKind::Press, time }
     }
 
+    fn release_at(time: TimeUs) -> InputEvent {
+        InputEvent { source: InputSource::Human, lane: Lane::Key1, kind: InputKind::Release, time }
+    }
+
     #[test]
     fn normal_window_consumes_note() {
         let chart = chart_with_tap(TimeUs(1_000_000));
@@ -532,6 +537,38 @@ mod tests {
         assert!(lr2oraja_outcome.events.is_empty());
         assert!(!lr2oraja_outcome.consumed_input);
         assert_eq!(lr2oraja.lanes[Lane::Key1.index()].next_note_index, 0);
+    }
+
+    #[test]
+    fn defined_cn_pair_judges_release_even_when_chart_default_is_ln() {
+        let mut chart = chart_with_long_start(TimeUs(1_000_000), TimeUs(2_000_000));
+        chart.metadata.long_note_mode = LongNoteMode::Ln;
+        chart.long_notes[0].mode = Some(LongNoteMode::Cn);
+        let mut engine = JudgeEngine::new(windows());
+
+        let press = engine.process_input(&chart, press_at(TimeUs(1_000_000)));
+        let release = engine.process_input(&chart, release_at(TimeUs(2_000_000)));
+
+        assert_eq!(press.events[0].judge, Judge::PGreat);
+        assert_eq!(release.events.len(), 1);
+        assert_eq!(release.events[0].note_id, Some(NoteId(2)));
+        assert_eq!(release.events[0].judge, Judge::PGreat);
+    }
+
+    #[test]
+    fn defined_hcn_pair_starts_drain_even_when_chart_default_is_ln() {
+        let mut chart = chart_with_long_start(TimeUs(1_000_000), TimeUs(2_000_000));
+        chart.metadata.long_note_mode = LongNoteMode::Ln;
+        chart.long_notes[0].mode = Some(LongNoteMode::Hcn);
+        let mut engine = JudgeEngine::new(windows());
+
+        let press = engine.process_input(&chart, press_at(TimeUs(1_000_000)));
+        let release = engine.process_input(&chart, release_at(TimeUs(1_500_000)));
+
+        assert_eq!(press.events[0].judge, Judge::PGreat);
+        assert_eq!(release.events[0].note_id, Some(NoteId(2)));
+        assert_eq!(release.events[0].judge, Judge::Poor);
+        assert!(engine.lanes[Lane::Key1.index()].hcn_draining);
     }
 
     fn chart_with_mine(time: TimeUs, damage: u16) -> PlayableChart {

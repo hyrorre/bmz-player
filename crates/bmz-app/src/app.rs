@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 use bmz_audio::ffmpeg_loader::FfmpegSampleLoader;
 use bmz_audio::loader::SampleLoader;
 use bmz_audio::sample::DecodedSample;
-use bmz_chart::model::{LongNoteMode, PlayableChart};
+use bmz_chart::model::PlayableChart;
 use bmz_core::clear::{ClearType, GaugeType};
 use bmz_core::lane::KeyMode;
 use bmz_core::time::TimeUs;
@@ -233,7 +233,6 @@ struct WinitApp {
     assist_option: AssistOption,
     select_mode_filter: SelectModeFilter,
     select_sort: SelectSort,
-    select_ln_mode: SelectLnMode,
     select_keys: SelectKeyBindings,
     smoke_exit_after_frames: Option<u32>,
     smoke_exit_on_result: bool,
@@ -779,7 +778,6 @@ impl WinitApp {
             assist_option,
             select_mode_filter: SelectModeFilter::All,
             select_sort: SelectSort::Title,
-            select_ln_mode: SelectLnMode::Ln,
             select_keys,
             smoke_exit_after_frames: options.smoke_exit_after_frames,
             smoke_exit_on_result: options.smoke_exit_on_result,
@@ -1267,7 +1265,13 @@ impl WinitApp {
             assist: self.assist_option.as_str().to_string(),
             select_mode: self.select_mode_filter.as_str().to_string(),
             select_sort: self.select_sort.as_str().to_string(),
-            select_ln_mode: self.select_ln_mode.as_str().to_string(),
+            select_ln_mode: self
+                .boot
+                .profile_config
+                .play
+                .ln_mode_policy
+                .display_label()
+                .to_string(),
             bga: bga_mode_as_str(self.boot.profile_config.play.bga).to_string(),
             master_volume: crate::config::play::volume_unit_to_f32(
                 self.boot.profile_config.audio_mix.master_volume,
@@ -2861,10 +2865,17 @@ impl WinitApp {
     }
 
     fn cycle_select_ln_mode(&mut self, arg: i32) {
-        self.select_ln_mode =
-            if arg >= 0 { self.select_ln_mode.next() } else { self.select_ln_mode.previous() };
+        self.boot.profile_config.play.ln_mode_policy = if arg >= 0 {
+            self.boot.profile_config.play.ln_mode_policy.next()
+        } else {
+            self.boot.profile_config.play.ln_mode_policy.previous()
+        };
+        self.reload_select_items();
         self.invalidate_play_preload();
-        tracing::info!(ln_mode = self.select_ln_mode.as_str(), "select LN mode changed");
+        tracing::info!(
+            ln_mode = self.boot.profile_config.play.ln_mode_policy.display_label(),
+            "select LN mode policy changed"
+        );
         self.play_system_sound(crate::system_sound::SoundType::OptionChange);
     }
 
@@ -3227,7 +3238,6 @@ impl WinitApp {
             autoplay: false,
             practice_mode: false,
             arrange: ArrangeOption::Normal,
-            ln_mode_override: Some(self.select_ln_mode.long_note_mode()),
             ..Default::default()
         };
         self.start_play_preload(chart_id, preload_options);
@@ -3333,7 +3343,7 @@ impl WinitApp {
             }
         };
 
-        let session_options = play_session_options_from_start(
+        let mut session_options = play_session_options_from_start(
             &self.boot.app_config,
             PlayStartOptions {
                 autoplay: false,
@@ -3342,10 +3352,10 @@ impl WinitApp {
                 gauge_auto_shift: GaugeAutoShiftConfig::Off,
                 arrange: property.arrange,
                 chart_zero_time: chart_zero,
-                ln_mode_override: Some(self.select_ln_mode.long_note_mode()),
                 ..Default::default()
             },
         );
+        session_options.ln_policy_setting = self.boot.profile_config.play.ln_mode_policy;
         let prepared = build_practice_prepared_from_preloaded(
             preloaded.preloaded,
             &self.boot.profile_config,
@@ -3360,7 +3370,6 @@ impl WinitApp {
         match open_prepared_winit_play_session(
             &self.boot.score_db,
             &self.boot.app_config,
-            &self.boot.profile_config,
             prepared_winit,
         ) {
             Ok(active_play) => {
@@ -3889,6 +3898,7 @@ impl WinitApp {
         let (tx, rx) = mpsc::channel();
         let library_db_path = self.boot.app_paths.library_db.clone();
         let app_config = self.boot.app_config.clone();
+        let ln_policy_setting = self.boot.profile_config.play.ln_mode_policy;
         thread::Builder::new()
             .name(format!("play-preload-{chart_id}"))
             .spawn(move || {
@@ -3896,11 +3906,12 @@ impl WinitApp {
                     let library_db =
                         crate::storage::library_db::LibraryDatabase::open(&library_db_path)?;
                     let input = crate::input::winit::WinitInputBackend::default();
-                    let session_options =
+                    let mut session_options =
                         crate::screens::play_start::play_session_options_from_start(
                             &app_config,
                             options,
                         );
+                    session_options.ln_policy_setting = ln_policy_setting;
                     let preloaded = crate::screens::play_session::preload_play_session_for_chart(
                         &library_db,
                         chart_id,
@@ -3990,7 +4001,6 @@ impl WinitApp {
                 open_prepared_winit_play_session(
                     &self.boot.score_db,
                     &self.boot.app_config,
-                    &self.boot.profile_config,
                     prepared,
                 )
             }
@@ -4005,7 +4015,6 @@ impl WinitApp {
                 open_prepared_winit_play_session(
                     &self.boot.score_db,
                     &self.boot.app_config,
-                    &self.boot.profile_config,
                     prepared,
                 )
             }),
@@ -4161,12 +4170,8 @@ impl WinitApp {
         let chart_id = play_start.chart_id;
         let prepared =
             prepare_winit_play_session_from_preloaded(&self.boot.profile_config, prepared);
-        match open_prepared_winit_play_session(
-            &self.boot.score_db,
-            &self.boot.app_config,
-            &self.boot.profile_config,
-            prepared,
-        ) {
+        match open_prepared_winit_play_session(&self.boot.score_db, &self.boot.app_config, prepared)
+        {
             Ok(active_play) => {
                 tracing::info!(chart_id, "play preload installed");
                 self.install_active_play(active_play);
@@ -4221,7 +4226,6 @@ impl WinitApp {
             arrange: self.arrange_option,
             target: self.target_option,
             arrange_seed,
-            ln_mode_override: Some(self.select_ln_mode.long_note_mode()),
             ..Default::default()
         }
     }
@@ -4274,7 +4278,7 @@ impl WinitApp {
             arrange_pattern: replay_file.lane_shuffle_pattern.clone(),
             initial_gauge_value: None,
             judge_constraint: bmz_core::course::CourseJudgeConstraint::Normal,
-            ln_mode_override: Some(self.select_ln_mode.long_note_mode()),
+            ln_mode_override: None,
             course_gauge_override: None,
             course_gauge_property_override: None,
         };
@@ -6416,41 +6420,6 @@ impl SelectSort {
             Self::Clear => "CLEAR",
             Self::Score => "SCORE",
             Self::Bp => "BPCOUNT",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SelectLnMode {
-    Ln,
-    Cn,
-    Hcn,
-}
-
-impl SelectLnMode {
-    const ORDER: [Self; 3] = [Self::Ln, Self::Cn, Self::Hcn];
-
-    fn next(self) -> Self {
-        cycle_enum(Self::ORDER, self, 1)
-    }
-
-    fn previous(self) -> Self {
-        cycle_enum(Self::ORDER, self, -1)
-    }
-
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Ln => "LN",
-            Self::Cn => "CN",
-            Self::Hcn => "HCN",
-        }
-    }
-
-    fn long_note_mode(self) -> LongNoteMode {
-        match self {
-            Self::Ln => LongNoteMode::Ln,
-            Self::Cn => LongNoteMode::Cn,
-            Self::Hcn => LongNoteMode::Hcn,
         }
     }
 }
@@ -9391,9 +9360,15 @@ mod tests {
         assert_eq!(SelectModeFilter::All.previous(), SelectModeFilter::K24Double);
         assert_eq!(SelectSort::Title.next(), SelectSort::Artist);
         assert_eq!(SelectSort::Title.previous(), SelectSort::Bp);
-        assert_eq!(SelectLnMode::Ln.next(), SelectLnMode::Cn);
-        assert_eq!(SelectLnMode::Ln.previous(), SelectLnMode::Hcn);
-        assert_eq!(SelectLnMode::Hcn.long_note_mode(), LongNoteMode::Hcn);
+        assert_eq!(
+            crate::ln_policy::LnPolicySetting::AutoLn.next(),
+            crate::ln_policy::LnPolicySetting::AutoCn
+        );
+        assert_eq!(
+            crate::ln_policy::LnPolicySetting::AutoLn.previous(),
+            crate::ln_policy::LnPolicySetting::ForceHcn
+        );
+        assert_eq!(crate::ln_policy::LnPolicySetting::ForceHcn.display_label(), "FORCE(HCN)");
         assert_eq!(
             cycle_gauge_option_with_direction(GaugeTypeConfig::Normal, 1),
             GaugeTypeConfig::Hard

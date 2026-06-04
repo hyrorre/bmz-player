@@ -2273,6 +2273,7 @@ mod tests {
         let mut snapshot = RenderSnapshot::default();
         snapshot.visible_long_notes.push(VisibleLongNote {
             lane: Lane::Key4,
+            mode: bmz_chart::model::LongNoteMode::Ln,
             head_y: 0.1,
             tail_y: 0.7,
         });

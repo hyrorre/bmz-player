@@ -1,3 +1,4 @@
+use bmz_chart::model::LongNoteMode;
 use bmz_core::lane::Lane;
 use bmz_core::time::TimeUs;
 
@@ -103,11 +104,13 @@ pub fn sample_play_scene() -> AppSceneSnapshot {
     // ホールド中のロングノート（Key4）と上空に伸びるロングノート（Key6）
     snapshot.visible_long_notes.push(VisibleLongNote {
         lane: Lane::Key4,
+        mode: LongNoteMode::Ln,
         head_y: 0.0,
         tail_y: 0.45,
     });
     snapshot.visible_long_notes.push(VisibleLongNote {
         lane: Lane::Key6,
+        mode: LongNoteMode::Hcn,
         head_y: 0.3,
         tail_y: 0.82,
     });

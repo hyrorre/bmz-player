@@ -404,7 +404,13 @@ pub fn process_misses(session: &mut GameSession, audio_now: TimeUs) -> Vec<Judge
 }
 
 pub fn apply_hcn_gauge(session: &mut GameSession, audio_now: TimeUs) {
-    if session.chart.metadata.long_note_mode != LongNoteMode::Hcn {
+    let has_hcn_lane = Lane::ALL.iter().copied().any(|lane| {
+        let idx = lane.index();
+        let lane_state = &session.judge.lanes[idx];
+        lane_state.active_long.is_some_and(|active| active.mode == LongNoteMode::Hcn)
+            || lane_state.hcn_draining
+    });
+    if !has_hcn_lane {
         session.last_hcn_gauge_at = None;
         return;
     }
@@ -420,7 +426,9 @@ pub fn apply_hcn_gauge(session: &mut GameSession, audio_now: TimeUs) {
     for lane in Lane::ALL {
         let idx = lane.index();
         let lane_state = &session.judge.lanes[idx];
-        if lane_state.active_long.is_some() && session.lane_keyon_started_at[idx].is_some() {
+        let is_hcn_active =
+            lane_state.active_long.is_some_and(|active| active.mode == LongNoteMode::Hcn);
+        if is_hcn_active && session.lane_keyon_started_at[idx].is_some() {
             session.gauge.apply_hcn_hold(delta_secs);
         } else if lane_state.hcn_draining {
             session.gauge.apply_hcn_drain(delta_secs);

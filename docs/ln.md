@@ -78,14 +78,16 @@ score policy は profile policy と chart LN profile から決める。
 
 ## Effective LN Mode
 
-現在の実装では、score policy から実際に降らせる LN 種別を決める。
+score policy から undefined LN の fallback 種別を決める。
 
 - `AutoLn` / `ForceLn` -> `LN`
 - `AutoCn` / `ForceCn` -> `CN`
 - `AutoHcn` / `ForceHcn` -> `HCN`
 
 defined 種別が混在する譜面では score policy は `AutoLn` になる。
-この場合、将来的には note ごとの defined 種別を尊重し、undefined 部分だけ `LN` として解釈するのが意図した仕様。
+実プレイでは note ごとの defined 種別を尊重し、undefined 部分だけ fallback 種別で解釈する。
+
+`force_*` の場合は defined / undefined に関係なく全 long note を指定種別として扱う。
 
 ## Score DB
 

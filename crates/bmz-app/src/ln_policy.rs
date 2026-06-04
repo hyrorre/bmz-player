@@ -65,6 +65,9 @@ impl ChartLnProfile {
 }
 
 impl LnPolicySetting {
+    pub const ORDER: [Self; 6] =
+        [Self::AutoLn, Self::AutoCn, Self::AutoHcn, Self::ForceLn, Self::ForceCn, Self::ForceHcn];
+
     pub const fn is_force(self) -> bool {
         matches!(self, Self::ForceLn | Self::ForceCn | Self::ForceHcn)
     }
@@ -75,6 +78,35 @@ impl LnPolicySetting {
             Self::AutoCn | Self::ForceCn => LongNoteMode::Cn,
             Self::AutoHcn | Self::ForceHcn => LongNoteMode::Hcn,
         }
+    }
+
+    pub fn next(self) -> Self {
+        cycle_ln_policy_setting(self, 1)
+    }
+
+    pub fn previous(self) -> Self {
+        cycle_ln_policy_setting(self, -1)
+    }
+
+    pub const fn display_label(self) -> &'static str {
+        match self {
+            Self::AutoLn => "AUTO(LN)",
+            Self::AutoCn => "AUTO(CN)",
+            Self::AutoHcn => "AUTO(HCN)",
+            Self::ForceLn => "FORCE(LN)",
+            Self::ForceCn => "FORCE(CN)",
+            Self::ForceHcn => "FORCE(HCN)",
+        }
+    }
+}
+
+fn cycle_ln_policy_setting(current: LnPolicySetting, direction: i32) -> LnPolicySetting {
+    let index = LnPolicySetting::ORDER.iter().position(|value| *value == current).unwrap_or(0);
+    let len = LnPolicySetting::ORDER.len();
+    if direction >= 0 {
+        LnPolicySetting::ORDER[(index + 1) % len]
+    } else {
+        LnPolicySetting::ORDER[(index + len - 1) % len]
     }
 }
 
@@ -146,6 +178,23 @@ pub fn score_ln_policy_for_chart(setting: LnPolicySetting, chart: &PlayableChart
     score_ln_policy(setting, ChartLnProfile::from_chart(chart))
 }
 
+pub fn apply_ln_policy_to_chart(setting: LnPolicySetting, chart: &mut PlayableChart) {
+    let effective_mode = effective_ln_mode(setting, ChartLnProfile::from_chart(chart));
+    chart.metadata.long_note_mode = effective_mode;
+    if setting.is_force() {
+        for pair in &mut chart.long_notes {
+            pair.mode = Some(effective_mode);
+        }
+    }
+}
+
+pub fn force_ln_mode_for_chart(mode: LongNoteMode, chart: &mut PlayableChart) {
+    chart.metadata.long_note_mode = mode;
+    for pair in &mut chart.long_notes {
+        pair.mode = Some(mode);
+    }
+}
+
 pub fn effective_ln_mode(setting: LnPolicySetting, profile: ChartLnProfile) -> LongNoteMode {
     match score_ln_policy(setting, profile) {
         LnScorePolicy::AutoLn | LnScorePolicy::ForceLn => LongNoteMode::Ln,
@@ -156,6 +205,12 @@ pub fn effective_ln_mode(setting: LnPolicySetting, profile: ChartLnProfile) -> L
 
 #[cfg(test)]
 mod tests {
+    use bmz_chart::model::{ChartMetadata, LongNotePair, LongNoteStyle};
+    use bmz_core::chart::ChartIdentity;
+    use bmz_core::ids::NoteId;
+    use bmz_core::lane::Lane;
+    use bmz_core::time::{ChartTick, TimeUs};
+
     use super::*;
 
     const NONE: ChartLnProfile = ChartLnProfile {
@@ -246,5 +301,69 @@ mod tests {
             score_ln_policy(LnPolicySetting::ForceHcn, DEFINED_CN_ONLY),
             LnScorePolicy::ForceHcn
         );
+    }
+
+    #[test]
+    fn auto_policy_keeps_defined_modes_and_sets_undefined_fallback() {
+        let mut chart = chart_with_long_modes(&[None, Some(LongNoteMode::Hcn)]);
+
+        apply_ln_policy_to_chart(LnPolicySetting::AutoCn, &mut chart);
+
+        assert_eq!(chart.metadata.long_note_mode, LongNoteMode::Cn);
+        assert_eq!(chart.long_notes[0].mode, None);
+        assert_eq!(chart.long_notes[1].mode, Some(LongNoteMode::Hcn));
+    }
+
+    #[test]
+    fn force_policy_overwrites_defined_and_undefined_modes() {
+        let mut chart = chart_with_long_modes(&[None, Some(LongNoteMode::Ln)]);
+
+        apply_ln_policy_to_chart(LnPolicySetting::ForceHcn, &mut chart);
+
+        assert_eq!(chart.metadata.long_note_mode, LongNoteMode::Hcn);
+        assert!(chart.long_notes.iter().all(|pair| pair.mode == Some(LongNoteMode::Hcn)));
+    }
+
+    fn chart_with_long_modes(modes: &[Option<LongNoteMode>]) -> PlayableChart {
+        PlayableChart {
+            identity: ChartIdentity { file_md5: [0; 16], file_sha256: [0; 32] },
+            metadata: ChartMetadata::default(),
+            lane_notes: std::array::from_fn(|_| Vec::new()),
+            long_notes: modes
+                .iter()
+                .enumerate()
+                .map(|(index, mode)| LongNotePair {
+                    lane: Lane::Key1,
+                    style: LongNoteStyle::ChannelPair,
+                    mode: *mode,
+                    start_note_id: NoteId((index * 2 + 1) as u32),
+                    end_note_id: NoteId((index * 2 + 2) as u32),
+                    start_tick: ChartTick(0),
+                    end_tick: ChartTick(192),
+                    start_time: TimeUs(0),
+                    end_time: TimeUs(1_000_000),
+                    sound: None,
+                })
+                .collect(),
+            bgm_events: Vec::new(),
+            bga_events: Vec::new(),
+            timing_events: Vec::new(),
+            scroll_events: Vec::new(),
+            speed_events: Vec::new(),
+            judge_rank_events: Vec::new(),
+            bgm_volume_events: Vec::new(),
+            key_volume_events: Vec::new(),
+            text_events: Vec::new(),
+            bga_opacity_events: Vec::new(),
+            bga_argb_events: Vec::new(),
+            swbga_definitions: Vec::new(),
+            bga_keybound_events: Vec::new(),
+            bga_asset_by_bmp_key: std::collections::HashMap::new(),
+            bar_lines: Vec::new(),
+            sounds: Vec::new(),
+            bga_assets: Vec::new(),
+            total_notes: modes.len() as u32,
+            end_time: TimeUs(1_000_000),
+        }
     }
 }

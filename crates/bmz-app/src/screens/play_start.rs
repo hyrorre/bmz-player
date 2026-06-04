@@ -15,7 +15,6 @@ use crate::config::app_config::AppConfig;
 use crate::config::play::{gauge_auto_shift_from_config, gauge_type_from_config};
 use crate::config::profile_config::{GaugeAutoShiftConfig, GaugeTypeConfig, ProfileConfig};
 use crate::input::winit::WinitInputBackend;
-use crate::ln_policy::score_ln_policy_for_chart;
 use crate::screens::play_session::{
     PlaySessionOptions, PreloadedPlaySession, PreparedPlaySession,
     build_prepared_play_session_from_preloaded,
@@ -23,7 +22,7 @@ use crate::screens::play_session::{
 };
 use crate::select_options::{ArrangeOption, TargetOption};
 use crate::storage::library_db::LibraryDatabase;
-use crate::storage::score_db::{ScoreDatabase, ScoreKey};
+use crate::storage::score_db::ScoreDatabase;
 
 #[derive(Debug, Clone, Default)]
 pub struct PlayStartOptions {
@@ -106,6 +105,7 @@ pub fn play_session_options_from_start(
         initial_gauge_value: start_options.initial_gauge_value,
         judge_constraint: start_options.judge_constraint,
         ln_mode_override: start_options.ln_mode_override,
+        ln_policy_setting: Default::default(),
         gauge_property: start_options.course_gauge_property_override,
     }
 }
@@ -139,7 +139,8 @@ pub fn start_running_play_session_for_chart_with_input_backend(
     input_backend: Box<dyn InputBackend>,
 ) -> Result<RunningPlaySession> {
     let chart_zero_time = start_options.chart_zero_time;
-    let session_options = play_session_options_from_start(app_config, start_options);
+    let mut session_options = play_session_options_from_start(app_config, start_options);
+    session_options.ln_policy_setting = profile.play.ln_mode_policy;
     let prepared = load_prepared_play_session_for_chart_with_input_backend(
         library_db,
         chart_id,
@@ -147,11 +148,7 @@ pub fn start_running_play_session_for_chart_with_input_backend(
         session_options,
         input_backend,
     )?;
-    let chart_sha256 = prepared.session.chart.identity.file_sha256;
-    let score_key = ScoreKey::new(
-        chart_sha256,
-        score_ln_policy_for_chart(profile.play.ln_mode_policy, &prepared.session.chart),
-    );
+    let score_key = prepared.score_key;
     let mut running = open_prepared_play_audio(&app_config.audio, prepared, score_key)?;
     running.best_ex_score = score_db.best_ex_score(score_key).unwrap_or(None);
     running.best_ghost =
@@ -168,7 +165,8 @@ pub fn prepare_play_session_for_chart_with_winit_input(
     start_options: PlayStartOptions,
 ) -> Result<PreparedWinitPlaySession> {
     let input = WinitInputBackend::default();
-    let session_options = play_session_options_from_start(app_config, start_options);
+    let mut session_options = play_session_options_from_start(app_config, start_options);
+    session_options.ln_policy_setting = profile.play.ln_mode_policy;
     let prepared = load_prepared_play_session_for_chart_with_input_backend(
         library_db,
         chart_id,
@@ -195,14 +193,9 @@ pub fn prepare_winit_play_session_from_preloaded(
 pub fn open_prepared_winit_play_session(
     score_db: &ScoreDatabase,
     app_config: &AppConfig,
-    profile: &ProfileConfig,
     prepared: PreparedWinitPlaySession,
 ) -> Result<StartedWinitPlaySession> {
-    let chart_sha256 = prepared.prepared.session.chart.identity.file_sha256;
-    let score_key = ScoreKey::new(
-        chart_sha256,
-        score_ln_policy_for_chart(profile.play.ln_mode_policy, &prepared.prepared.session.chart),
-    );
+    let score_key = prepared.prepared.score_key;
     let mut running = open_prepared_play_audio(&app_config.audio, prepared.prepared, score_key)?;
     running.best_ex_score = score_db.best_ex_score(score_key).unwrap_or(None);
     running.best_ghost =
