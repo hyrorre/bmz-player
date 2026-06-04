@@ -2766,13 +2766,12 @@ impl SkinDocument {
         }
 
         if self.destination_uses_skin_gauge_overlay_render(destination) {
-            let rect = normalize_skin_frame_rect(frame, self.w, self.h);
-            let blend = if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal };
-            return Some(vec![SkinRenderItem::Rect {
-                rect,
-                color: Color::rgba(1.0, 1.0, 1.0, frame.a as f32 / 255.0),
-                blend,
-            }]);
+            return self.resolve_gauge_destination_items(
+                destination,
+                enabled_options,
+                state,
+                sources,
+            );
         }
 
         if let Some(graph) = self.graph.iter().find(|g| g.id == destination.id) {
@@ -9093,6 +9092,8 @@ fn default_graph_angle() -> i32 {
 }
 
 /// beatoraja `SkinGauge.ANIMATION_*` (JSON `gauge.type` フィールド)。
+const SKIN_GAUGE_ANIM_RANDOM: i32 = 0;
+const SKIN_GAUGE_ANIM_DECREASE: i32 = 2;
 const SKIN_GAUGE_ANIM_FLICKERING: i32 = 3;
 const SKIN_GAUGE_ANIM_INCREASE: i32 = 1;
 
@@ -9122,14 +9123,43 @@ fn skin_gauge_destination_blend(destination: &SkinDestinationDef) -> BlendMode {
 
 fn skin_gauge_animation_index(gauge_def: &SkinGaugeDef, state: SkinDrawState) -> i32 {
     let cycle = gauge_def.cycle.max(1);
+    let range = gauge_def.range.max(0);
     match gauge_def.gauge_type {
+        SKIN_GAUGE_ANIM_RANDOM => {
+            let tick = skin_gauge_animation_tick(state, cycle);
+            skin_gauge_random_animation_index(tick, range)
+        }
         SKIN_GAUGE_ANIM_FLICKERING => {
             let time = state.play_timer_ms.unwrap_or(state.elapsed_ms);
             time.rem_euclid(cycle)
         }
-        SKIN_GAUGE_ANIM_INCREASE => (state.elapsed_ms / cycle) % (gauge_def.range + 1),
+        SKIN_GAUGE_ANIM_INCREASE => {
+            let tick = skin_gauge_animation_tick(state, cycle);
+            (tick * range).rem_euclid(range + 1)
+        }
+        SKIN_GAUGE_ANIM_DECREASE => {
+            let tick = skin_gauge_animation_tick(state, cycle);
+            tick.rem_euclid(range + 1)
+        }
         _ => 0,
     }
+}
+
+fn skin_gauge_animation_tick(state: SkinDrawState, cycle: i32) -> i32 {
+    let time = state.play_timer_ms.unwrap_or(state.elapsed_ms);
+    time.div_euclid(cycle.max(1))
+}
+
+fn skin_gauge_random_animation_index(tick: i32, range: i32) -> i32 {
+    let span = range + 1;
+    if span <= 1 {
+        return 0;
+    }
+    let mut value = tick as u32;
+    value ^= value.wrapping_shl(13);
+    value ^= value.wrapping_shr(17);
+    value ^= value.wrapping_shl(5);
+    (value % span as u32) as i32
 }
 
 /// beatoraja `SkinGauge.draw` のスプライト選択 (`exgauge + offset + underclear`)。
@@ -11350,15 +11380,15 @@ mod tests {
             SkinTextState::default(),
         );
         let items = behind.into_iter().chain(front).collect::<Vec<_>>();
-        assert_eq!(items.len(), 1);
-        assert!(matches!(
-            items[0],
-            SkinRenderItem::Rect {
-                color: Color { a, .. },
+        assert_eq!(items.len(), 2);
+        assert!(items.iter().all(|item| matches!(
+            item,
+            SkinRenderItem::Image {
+                tint: Color { a, .. },
                 blend: BlendMode::Add,
                 ..
-            } if (a - 80.0 / 255.0).abs() < 0.01
-        ));
+            } if (*a - 80.0 / 255.0).abs() < 0.01
+        )));
     }
 
     #[test]
@@ -11811,6 +11841,61 @@ mod tests {
             serde_json::from_str(r#"{"type":0,"w":100,"h":100,"gauge":{"id":"g","nodes":[]}}"#)
                 .unwrap();
         assert_eq!(document.gauge.as_ref().unwrap().gauge_type, 0);
+    }
+
+    #[test]
+    fn skin_gauge_random_animation_changes_by_cycle() {
+        let gauge = SkinGaugeDef {
+            id: "g".to_string(),
+            nodes: Vec::new(),
+            parts: 4,
+            gauge_type: 0,
+            range: 3,
+            cycle: 33,
+            starttime: 0,
+            endtime: 500,
+        };
+        let first = skin_gauge_animation_index(
+            &gauge,
+            SkinDrawState { elapsed_ms: 33, ..Default::default() },
+        );
+        let second = skin_gauge_animation_index(
+            &gauge,
+            SkinDrawState { elapsed_ms: 66, ..Default::default() },
+        );
+
+        assert_ne!(first, second, "type=0 RANDOM should not stay fixed at frame 0");
+        assert!((0..=3).contains(&first));
+        assert!((0..=3).contains(&second));
+    }
+
+    #[test]
+    fn skin_gauge_decrease_animation_advances_forward() {
+        let gauge = SkinGaugeDef {
+            id: "g".to_string(),
+            nodes: Vec::new(),
+            parts: 4,
+            gauge_type: 2,
+            range: 3,
+            cycle: 33,
+            starttime: 0,
+            endtime: 500,
+        };
+
+        assert_eq!(
+            skin_gauge_animation_index(
+                &gauge,
+                SkinDrawState { elapsed_ms: 33, ..Default::default() }
+            ),
+            1
+        );
+        assert_eq!(
+            skin_gauge_animation_index(
+                &gauge,
+                SkinDrawState { elapsed_ms: 66, ..Default::default() }
+            ),
+            2
+        );
     }
 
     #[test]
