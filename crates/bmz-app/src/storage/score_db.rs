@@ -5,6 +5,7 @@ use anyhow::{Result, bail};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE;
 use bmz_core::clear::{ClearType, GaugeType};
+use bmz_core::input::InputDeviceKind;
 use bmz_gameplay::result::PlayResult;
 use bmz_gameplay::score::ScoreState;
 use flate2::Compression;
@@ -75,6 +76,7 @@ pub struct ScoreRecord {
     pub rule_mode: String,
     pub assist_mask: u32,
     pub autoplay: bool,
+    pub device_type: InputDeviceKind,
     pub replay_path: String,
 }
 
@@ -87,6 +89,7 @@ impl ScoreRecord {
         gauge_option: impl Into<String>,
         rule_mode: impl Into<String>,
         assist_mask: u32,
+        device_type: InputDeviceKind,
         replay_path: impl Into<String>,
     ) -> Self {
         Self {
@@ -103,6 +106,7 @@ impl ScoreRecord {
             rule_mode: rule_mode.into(),
             assist_mask,
             autoplay: result.autoplay,
+            device_type,
             replay_path: replay_path.into(),
         }
     }
@@ -121,6 +125,7 @@ pub struct BestScoreSummary {
     pub max_combo: u32,
     pub play_count: u32,
     pub clear_count: u32,
+    pub device_type: InputDeviceKind,
     pub played_at: i64,
     pub replay_path: String,
 }
@@ -180,6 +185,7 @@ pub struct ScoreHistoryEntry {
     pub cb: u32,
     pub max_combo: u32,
     pub autoplay: bool,
+    pub device_type: InputDeviceKind,
     pub replay_path: String,
     /// `library.db`'s `course_scores.id` if this chart play happened as part
     /// of a course attempt, otherwise `None`.  No cross-database FK is
@@ -187,6 +193,66 @@ pub struct ScoreHistoryEntry {
     /// they need the attempt details.
     pub course_score_id: Option<i64>,
     pub previous_best: Option<PreviousBestSnapshot>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IrScoreJobStatus {
+    Pending,
+    Sending,
+    Succeeded,
+    Failed,
+}
+
+impl IrScoreJobStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Sending => "sending",
+            Self::Succeeded => "succeeded",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct IrScoreJobRecord {
+    pub id: i64,
+    pub provider: String,
+    pub account_id: String,
+    pub local_score_id: i64,
+    pub chart_sha256: [u8; 32],
+    pub ln_policy: LnScorePolicy,
+    pub payload_json: String,
+    pub status: String,
+    pub attempt_count: u32,
+    pub next_attempt_at: i64,
+    pub last_error: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewIrScoreJob {
+    pub provider: String,
+    pub account_id: String,
+    pub local_score_id: i64,
+    pub chart_sha256: [u8; 32],
+    pub ln_policy: LnScorePolicy,
+    pub payload_json: String,
+    pub now: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewIrScoreSubmission {
+    pub job_id: i64,
+    pub provider: String,
+    pub account_id: String,
+    pub local_score_id: i64,
+    pub remote_score_id: String,
+    pub status: String,
+    pub submitted_at: i64,
+    pub response_json: String,
+    pub error: String,
 }
 
 impl ScoreDatabase {
@@ -322,6 +388,7 @@ impl ScoreDatabase {
                 max_combo,
                 play_count,
                 clear_count,
+                device_type,
                 played_at,
                 replay_path
             FROM score_best
@@ -445,6 +512,94 @@ impl ScoreDatabase {
         Ok(())
     }
 
+    pub fn enqueue_ir_score_job(&mut self, job: &NewIrScoreJob) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO ir_score_jobs (
+                provider, account_id, local_score_id, chart_sha256, ln_policy,
+                payload_json, status, attempt_count, next_attempt_at, last_error,
+                created_at, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', 0, ?7, '', ?7, ?7)
+            ON CONFLICT(provider, account_id, local_score_id) DO UPDATE SET
+                payload_json = excluded.payload_json,
+                status = 'pending',
+                next_attempt_at = excluded.next_attempt_at,
+                last_error = '',
+                updated_at = excluded.updated_at",
+            params![
+                job.provider,
+                job.account_id,
+                job.local_score_id,
+                hash_to_hex(&job.chart_sha256),
+                job.ln_policy.as_str(),
+                job.payload_json,
+                job.now,
+            ],
+        )?;
+        let id = self.conn.query_row(
+            "SELECT id FROM ir_score_jobs
+             WHERE provider = ?1 AND account_id = ?2 AND local_score_id = ?3",
+            params![job.provider, job.account_id, job.local_score_id],
+            |row| row.get::<_, i64>(0),
+        )?;
+        Ok(id)
+    }
+
+    pub fn pending_ir_score_jobs(&self, now: i64, limit: u32) -> Result<Vec<IrScoreJobRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, provider, account_id, local_score_id, chart_sha256, ln_policy,
+                payload_json, status, attempt_count, next_attempt_at, last_error,
+                created_at, updated_at
+             FROM ir_score_jobs
+             WHERE status IN ('pending', 'failed') AND next_attempt_at <= ?1
+             ORDER BY next_attempt_at ASC, id ASC
+             LIMIT ?2",
+        )?;
+        stmt.query_map(params![now, limit], ir_score_job_from_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    pub fn mark_ir_score_job_status(
+        &mut self,
+        job_id: i64,
+        status: IrScoreJobStatus,
+        now: i64,
+        last_error: &str,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE ir_score_jobs
+             SET status = ?2,
+                 attempt_count = attempt_count + CASE WHEN ?2 = 'failed' THEN 1 ELSE 0 END,
+                 next_attempt_at = CASE WHEN ?2 = 'failed' THEN ?3 + 60 ELSE next_attempt_at END,
+                 last_error = ?4,
+                 updated_at = ?3
+             WHERE id = ?1",
+            params![job_id, status.as_str(), now, last_error],
+        )?;
+        Ok(())
+    }
+
+    pub fn insert_ir_score_submission(&mut self, record: &NewIrScoreSubmission) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO ir_score_submissions (
+                job_id, provider, account_id, local_score_id, remote_score_id,
+                status, submitted_at, response_json, error
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                record.job_id,
+                record.provider,
+                record.account_id,
+                record.local_score_id,
+                record.remote_score_id,
+                record.status,
+                record.submitted_at,
+                record.response_json,
+                record.error,
+            ],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
     /// Tag the given `score_history` rows with a course attempt id.
     ///
     /// `course_score_id` references `library.db`'s `course_scores.id`.  No FK
@@ -493,7 +648,8 @@ impl ScoreDatabase {
                 old_ex_score,
                 old_max_combo,
                 old_bp,
-                old_cb
+                old_cb,
+                device_type
             FROM score_history
             ORDER BY played_at DESC, id DESC
             LIMIT ?1 OFFSET ?2",
@@ -520,8 +676,9 @@ fn best_score_summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Best
         max_combo: row.get(8)?,
         play_count: row.get(9)?,
         clear_count: row.get(10)?,
-        played_at: row.get(11)?,
-        replay_path: row.get(12)?,
+        device_type: device_type_from_row(row, 11)?,
+        played_at: row.get(12)?,
+        replay_path: row.get(13)?,
     })
 }
 
@@ -544,6 +701,25 @@ fn replay_slot_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Repl
         cb: row.get(8)?,
         max_combo: row.get(9)?,
         clear_rank: row.get(10)?,
+    })
+}
+
+fn ir_score_job_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<IrScoreJobRecord> {
+    let chart_sha256: String = row.get(4)?;
+    Ok(IrScoreJobRecord {
+        id: row.get(0)?,
+        provider: row.get(1)?,
+        account_id: row.get(2)?,
+        local_score_id: row.get(3)?,
+        chart_sha256: hex_to_hash(&chart_sha256)?,
+        ln_policy: ln_policy_from_row(row, 5)?,
+        payload_json: row.get(6)?,
+        status: row.get(7)?,
+        attempt_count: row.get(8)?,
+        next_attempt_at: row.get(9)?,
+        last_error: row.get(10)?,
+        created_at: row.get(11)?,
+        updated_at: row.get(12)?,
     })
 }
 
@@ -579,6 +755,7 @@ fn score_history_entry_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Sco
         autoplay: row.get(11)?,
         replay_path: row.get(12)?,
         course_score_id: row.get(13)?,
+        device_type: device_type_from_row(row, 20)?,
         previous_best,
     })
 }
@@ -602,6 +779,22 @@ fn player_stats_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PlayerStat
         slow_empty_poor: row.get(14)?,
         updated_at: row.get(15)?,
     })
+}
+
+fn device_type_from_row(
+    row: &rusqlite::Row<'_>,
+    index: usize,
+) -> rusqlite::Result<InputDeviceKind> {
+    let value: String = row.get(index)?;
+    match value.as_str() {
+        "keyboard" => Ok(InputDeviceKind::Keyboard),
+        "controller" => Ok(InputDeviceKind::Controller),
+        _ => Err(rusqlite::Error::FromSqlConversionFailure(
+            index,
+            rusqlite::types::Type::Text,
+            format!("invalid input device type: {value}").into(),
+        )),
+    }
 }
 
 fn ln_policy_from_row(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<LnScorePolicy> {
@@ -675,6 +868,7 @@ fn insert_score_history(
             rule_mode,
             assist_mask,
             autoplay,
+            device_type,
             replay_path,
             ghost,
             old_clear_type,
@@ -685,7 +879,7 @@ fn insert_score_history(
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
             ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30,
-            ?31, ?32, ?33, ?34, ?35
+            ?31, ?32, ?33, ?34, ?35, ?36
         )",
         params![
             hash_to_hex(&record.chart_sha256),
@@ -716,6 +910,7 @@ fn insert_score_history(
             record.rule_mode.as_str(),
             record.assist_mask,
             record.autoplay,
+            record.device_type.as_str(),
             record.replay_path.as_str(),
             ghost,
             previous_best.map(|best| best.clear_type.as_str()),
@@ -821,11 +1016,12 @@ fn upsert_score_best(conn: &Connection, record: &ScoreRecord) -> Result<()> {
             played_at,
             replay_path,
             ghost,
+            device_type,
             play_count,
             clear_count
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-            ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26
+            ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27
         )
         ON CONFLICT(chart_sha256, ln_policy) DO NOTHING",
         params![
@@ -853,6 +1049,7 @@ fn upsert_score_best(conn: &Connection, record: &ScoreRecord) -> Result<()> {
             record.played_at,
             record.replay_path.as_str(),
             ghost,
+            record.device_type.as_str(),
             1_u32,
             clear_increment,
         ],
@@ -913,8 +1110,9 @@ fn upsert_score_best(conn: &Connection, record: &ScoreRecord) -> Result<()> {
             slow_empty_poor = ?20,
             played_at = ?21,
             replay_path = ?22,
-            ghost = ?23
-         WHERE chart_sha256 = ?1 AND ln_policy = ?24",
+            ghost = ?23,
+            device_type = ?24
+         WHERE chart_sha256 = ?1 AND ln_policy = ?25",
         params![
             hash_to_hex(&record.chart_sha256),
             record.clear_type.as_str(),
@@ -939,6 +1137,7 @@ fn upsert_score_best(conn: &Connection, record: &ScoreRecord) -> Result<()> {
             record.played_at,
             record.replay_path.as_str(),
             ghost,
+            record.device_type.as_str(),
             record.ln_policy.as_str(),
         ],
     )?;
@@ -1025,6 +1224,7 @@ pub fn decode_beatoraja_ghost(encoded: &str, total_notes: u32) -> Result<Vec<u8>
 mod tests {
     use bmz_core::clear::{ClearType, GaugeType};
     use bmz_core::ids::NoteId;
+    use bmz_core::input::InputDeviceKind;
     use bmz_core::judge::{Judge, TimingSide};
     use bmz_core::lane::Lane;
     use bmz_core::time::TimeUs;
@@ -1065,6 +1265,7 @@ mod tests {
             rule_mode: String::new(),
             assist_mask: 0,
             autoplay: false,
+            device_type: InputDeviceKind::Keyboard,
             replay_path: String::new(),
         }
     }
@@ -1083,9 +1284,11 @@ mod tests {
         let mut record = record(20, ClearType::Normal);
         record.gauge_type = None;
         record.rule_mode = "Dx".to_string();
+        record.device_type = InputDeviceKind::Controller;
         db.insert_score(&record).unwrap();
 
-        let (clear_type, gauge_type, gauge_option, rule_mode, replay_path): (
+        let (clear_type, gauge_type, gauge_option, rule_mode, device_type, replay_path): (
+            String,
             String,
             String,
             String,
@@ -1094,9 +1297,11 @@ mod tests {
         ) = db
             .conn()
             .query_row(
-                "SELECT clear_type, gauge_type, gauge_option, rule_mode, replay_path FROM score_history",
+                "SELECT clear_type, gauge_type, gauge_option, rule_mode, device_type, replay_path FROM score_history",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+                |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?))
+                },
             )
             .unwrap();
 
@@ -1104,6 +1309,7 @@ mod tests {
         assert_eq!(gauge_type, "");
         assert_eq!(gauge_option, "");
         assert_eq!(rule_mode, "Dx");
+        assert_eq!(device_type, "controller");
         assert_eq!(replay_path, "");
     }
 
@@ -1590,6 +1796,7 @@ mod tests {
             "Hard",
             "Lr2Oraja",
             0,
+            InputDeviceKind::Controller,
             "",
         );
 
@@ -1599,6 +1806,7 @@ mod tests {
         assert_eq!(record.clear_type, ClearType::Normal);
         assert_eq!(record.gauge_type, Some(GaugeType::Hard));
         assert_eq!(record.gauge_value, 76.5);
+        assert_eq!(record.device_type, InputDeviceKind::Controller);
         assert_eq!(record.score.ex_score(), 2);
         assert!(record.autoplay);
         assert_eq!(record.gauge_option, "Hard");
@@ -1696,6 +1904,54 @@ mod tests {
             history.iter().map(|h| (h.id, h)).collect();
         assert_eq!(by_id.get(&solo_id).unwrap().course_score_id, None);
         assert_eq!(by_id.get(&course_play_id).unwrap().course_score_id, Some(77));
+    }
+
+    #[test]
+    fn ir_score_jobs_round_trip_and_dedupe_by_provider_account_score() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut db = ScoreDatabase::from_connection(conn);
+        let local_score_id = db.insert_score(&record(20, ClearType::Normal)).unwrap();
+
+        let job = NewIrScoreJob {
+            provider: "bmz-official".to_string(),
+            account_id: "account-1".to_string(),
+            local_score_id,
+            chart_sha256: [7; 32],
+            ln_policy: LnScorePolicy::ForceLn,
+            payload_json: "{\"score\":1}".to_string(),
+            now: 100,
+        };
+        let first_id = db.enqueue_ir_score_job(&job).unwrap();
+        let mut updated = job.clone();
+        updated.payload_json = "{\"score\":2}".to_string();
+        updated.now = 200;
+        let second_id = db.enqueue_ir_score_job(&updated).unwrap();
+
+        assert_eq!(first_id, second_id);
+        let pending = db.pending_ir_score_jobs(200, 10).unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].payload_json, "{\"score\":2}");
+        assert_eq!(pending[0].ln_policy, LnScorePolicy::ForceLn);
+
+        db.mark_ir_score_job_status(first_id, IrScoreJobStatus::Succeeded, 210, "").unwrap();
+        assert!(db.pending_ir_score_jobs(300, 10).unwrap().is_empty());
+
+        let submission_id = db
+            .insert_ir_score_submission(&NewIrScoreSubmission {
+                job_id: first_id,
+                provider: "bmz-official".to_string(),
+                account_id: "account-1".to_string(),
+                local_score_id,
+                remote_score_id: "sc_remote".to_string(),
+                status: "succeeded".to_string(),
+                submitted_at: 220,
+                response_json: "{\"accepted\":true}".to_string(),
+                error: String::new(),
+            })
+            .unwrap();
+        assert!(submission_id > 0);
     }
 
     #[test]

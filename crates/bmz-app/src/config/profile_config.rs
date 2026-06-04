@@ -19,6 +19,8 @@ pub struct ProfileConfig {
     pub input: ProfileInputConfig,
     pub rival: RivalConfig,
     pub replay: ReplayConfig,
+    #[serde(default)]
+    pub ir: IrConfig,
     pub ui: UiConfig,
     pub audio_mix: AudioMixConfig,
     #[serde(default)]
@@ -545,6 +547,54 @@ pub struct SkinOffsetConfig {
     pub a: i32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct IrConfig {
+    #[serde(default)]
+    pub primary_provider: String,
+    #[serde(default)]
+    pub providers: Vec<IrProviderConfig>,
+    #[serde(default)]
+    pub prefetch_global_ranking_on_score_submit: bool,
+    #[serde(default)]
+    pub prefetch_rival_ranking_on_score_submit: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct IrProviderConfig {
+    pub provider: String,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub account_display_name: String,
+    #[serde(default)]
+    pub account_id: String,
+    #[serde(default)]
+    pub send_policy: IrSendPolicyConfig,
+    #[serde(default)]
+    pub role: IrProviderRoleConfig,
+    #[serde(default)]
+    pub last_login_at: Option<i64>,
+    #[serde(default)]
+    pub last_success_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum IrSendPolicyConfig {
+    #[default]
+    UpdateScore,
+    Always,
+    CompleteSong,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum IrProviderRoleConfig {
+    #[default]
+    SubmitOnly,
+    Primary,
+}
+
 impl ProfileConfig {
     pub fn new_default(id: &str, display_name: &str, now: i64) -> Self {
         Self {
@@ -588,6 +638,7 @@ impl ProfileConfig {
                 compress: false,
                 slot_rules: default_slot_rules(),
             },
+            ir: IrConfig::default(),
             ui: UiConfig {
                 language: "ja".to_string(),
                 theme: "default".to_string(),

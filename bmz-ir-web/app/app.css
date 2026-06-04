@@ -1,0 +1,27 @@
+@import 'tailwindcss';
+@import '@nuxt/ui';
+
+:root {
+  --ui-primary: var(--ui-color-primary-600);
+  --default-font-family:
+    'Helvetica Neue', Arial, 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', 'Noto Sans JP',
+    sans-serif, ui-sans-serif, system-ui, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol',
+    'Noto Color Emoji';
+  --default-mono-font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New',
+    monospace;
+}
+
+.dark {
+  --ui-primary: var(--ui-color-primary-500);
+}
+
+* {
+  text-autospace: normal;
+}
+
+html,
+body,
+#__nuxt {
+  @apply w-full h-full;
+}

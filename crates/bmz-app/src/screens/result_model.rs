@@ -34,6 +34,8 @@ pub struct ResultSummary {
     pub target_max_combo: Option<u32>,
     pub target_bp: Option<u32>,
     pub target_clear_type: Option<ClearType>,
+    pub ir_queued_jobs: u32,
+    pub ir_last_error: Option<String>,
     pub title: String,
     pub subtitle: String,
     pub artist: String,
@@ -137,6 +139,8 @@ impl ResultSummary {
             target_max_combo: None,
             target_bp: None,
             target_clear_type: None,
+            ir_queued_jobs: 0,
+            ir_last_error: None,
             title: metadata.title.clone(),
             subtitle: metadata.subtitle.clone(),
             artist: metadata.artist.clone(),
@@ -242,6 +246,7 @@ mod tests {
             score_history_id: 9,
             replay_path: "replay/test.toml".to_string(),
             slot_paths: [None, None, None, None],
+            device_type: bmz_core::input::InputDeviceKind::Keyboard,
         };
         let metadata = ChartMetadata { title: "Test".to_string(), ..ChartMetadata::default() };
 

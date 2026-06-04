@@ -9,7 +9,12 @@ pub struct ReplayRecorder {
 
 impl ReplayRecorder {
     pub fn record(&mut self, input: InputEvent) {
-        self.events.push(ReplayEvent { lane: input.lane, kind: input.kind, time: input.time });
+        self.events.push(ReplayEvent {
+            lane: input.lane,
+            kind: input.kind,
+            time: input.time,
+            device_kind: input.device_kind,
+        });
     }
 }
 
@@ -32,6 +37,7 @@ impl ReplayPlayer {
                 kind: event.kind,
                 time: event.time,
                 source: bmz_core::input::InputSource::Replay,
+                device_kind: event.device_kind,
             });
         }
         out

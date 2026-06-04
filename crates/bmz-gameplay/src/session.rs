@@ -534,7 +534,7 @@ mod tests {
     use bmz_chart::model::{ChartMetadata, NoteEvent, NoteKind, SoundAssetRef, SoundEvent};
     use bmz_core::chart::ChartIdentity;
     use bmz_core::ids::{NoteId, SoundId};
-    use bmz_core::input::InputSource;
+    use bmz_core::input::{InputDeviceKind, InputSource};
     use bmz_core::judge::TimingSide;
     use bmz_core::lane::Lane;
     use bmz_core::time::{ChartTick, TimeUs};
@@ -837,6 +837,7 @@ mod tests {
             kind: InputKind::Press,
             time: TimeUs(5_000),
             source: InputSource::Human,
+            device_kind: InputDeviceKind::Keyboard,
         }];
         update_lane_key_states(&mut session, &inputs);
 
@@ -856,6 +857,7 @@ mod tests {
             kind: InputKind::Release,
             time: TimeUs(10_000),
             source: InputSource::Human,
+            device_kind: InputDeviceKind::Keyboard,
         }];
         update_lane_key_states(&mut session, &inputs);
 
@@ -872,6 +874,7 @@ mod tests {
             kind: InputKind::Press,
             time: TimeUs(5_000),
             source: InputSource::Auto,
+            device_kind: InputDeviceKind::Keyboard,
         }];
         update_lane_key_states(&mut session, &inputs);
 
@@ -890,6 +893,7 @@ mod tests {
             kind: InputKind::Press,
             time: TimeUs(0),
             source: InputSource::Auto,
+            device_kind: InputDeviceKind::Keyboard,
         }];
         update_lane_key_states(&mut session, &inputs);
 
@@ -917,12 +921,14 @@ mod tests {
                 kind: InputKind::Press,
                 time: TimeUs(10_000),
                 source: InputSource::Human,
+                device_kind: InputDeviceKind::Keyboard,
             },
             InputEvent {
                 lane: Lane::Key2,
                 kind: InputKind::Release,
                 time: TimeUs(20_000),
                 source: InputSource::Human,
+                device_kind: InputDeviceKind::Keyboard,
             },
         ];
 

@@ -511,3 +511,45 @@ cargo run -p bmz-app -- --boot-play-sample --smoke-exit-after-frames 3
 cargo run -p bmz-app -- --boot-play-sample --autoplay-on-start --smoke-exit-on-result
 cargo run -p bmz-app -- --boot-play-sample --boot-replay 1 --smoke-exit-on-result
 ```
+
+## IR (Internet Ranking)
+
+bun / Nuxt を使用して、 Internet Ranking 機能の API と Frontend の作成中。
+
+Nuxt 関連のアプリ構造は、bmz-player 本体と混同しないよう `bmz-ir-web/` 配下にまとめます。
+
+- `bmz-ir-web/app/` — Nuxt app root。`app.vue`, `pages`, `components`, `layouts`, `composables`, `plugins`, `assets` など。
+- `bmz-ir-web/server/` — Nitro server。`api`, `routes`, `middleware`, `plugins`, `services`, `repositories` など。
+- `bmz-ir-web/shared/` — app/server 共通の型、schema、定数、純粋関数。secret や DB query は置きません。
+- `bmz-ir-web/public/` — root URL で配信される静的ファイル。
+
+`bun dev` はリポジトリ root から実行します。Nuxt のディレクトリ対応は `nuxt.config.ts` の `srcDir` / `serverDir` / `dir.public` / `dir.shared` で設定します。
+
+`bun dev` 等でエラーが起きる場合は `export TMPDIR=/tmp` を実行してみる。
+
+### Supabase / DB
+
+IR Website の DB は Supabase CLI と migration を正とします。MCP / Hooks は現時点では使いません。
+
+- DB schema は `supabase/migrations/*.sql` を source of truth とし、Dashboard 変更や ad hoc SQL をそのまま本番反映しません。
+- remote 側で先に変更した場合は `supabase db pull` で migration 化し、SQL を確認してから commit します。
+- migration 追加は `bun run db:new <name>`、local reset は `bun run db:reset`、型生成は `bun run db:types` を使います。
+- 生成型は `bmz-ir-web/shared/types/database.types.ts` に置きます。
+- local Supabase は `bun run db:start` / `bun run db:stop` で操作します。
+- production / remote への `bun run db:push`、destructive SQL、remote write は必ずユーザー確認を取ります。
+- RLS policy、grant、index、constraint、SQL function は migration に含めます。
+- `.env`, `sb_secret_...`, legacy service role key, DB password, refresh token, production data は commit しません。必要な環境変数名だけ `.env.example` に書きます。
+- ブラウザ / desktop / public client へ渡す Supabase key は `sb_publishable_...` を基本にし、`NUXT_PUBLIC_SUPABASE_KEY` / `SUPABASE_PUBLISHABLE_KEY` に入れます。legacy `anon` key は local CLI などで必要な場合だけ互換用として扱います。
+- server-only の elevated key は `sb_secret_...` を基本にし、`NUXT_SUPABASE_SECRET_KEY` / `SUPABASE_SECRET_KEY` に入れます。legacy `service_role` key は互換用として扱い、絶対に public env に入れません。
+- Supabase DB / migration / RLS / generated types / server-side Supabase 接続処理を触るときは repo skill `supabase-ir-db` を使います。
+
+Supabase 関連の主なコマンド:
+
+```bash
+bun run db:start
+bun run db:new <name>
+bun run db:reset
+bun run db:types
+bun run db:push
+bun run db:stop
+```

@@ -9,7 +9,7 @@ use bmz_gameplay::session::{
 use bmz_render::snapshot::RenderSnapshot;
 
 use crate::audio::RunningPlaySession;
-use crate::config::profile_config::ReplayConfig;
+use crate::config::profile_config::{IrConfig, ReplayConfig};
 use crate::paths::ProfilePaths;
 use crate::screens::play_finish::{
     FinishedPlaySession, finish_session_result, finish_session_result_once,
@@ -93,6 +93,7 @@ pub fn advance_play_screen_until_result(
     score_db: &mut ScoreDatabase,
     profile_paths: &ProfilePaths,
     replay_config: &ReplayConfig,
+    ir_config: &IrConfig,
     played_at: i64,
     applied_arrange: &AppliedArrange,
 ) -> Result<PlayAdvanceOutcome> {
@@ -102,6 +103,7 @@ pub fn advance_play_screen_until_result(
             score_db,
             profile_paths,
             replay_config,
+            ir_config,
             session,
             played_at,
             applied_arrange,
@@ -153,6 +155,7 @@ pub fn advance_running_play_session_until_result(
     score_db: &mut ScoreDatabase,
     profile_paths: &ProfilePaths,
     replay_config: &ReplayConfig,
+    ir_config: &IrConfig,
     played_at: i64,
 ) -> Result<PlayAdvanceOutcome> {
     let frame = {
@@ -174,6 +177,7 @@ pub fn advance_running_play_session_until_result(
             score_db,
             profile_paths,
             replay_config,
+            ir_config,
             &running.session,
             played_at,
             &running.applied_arrange,
@@ -341,6 +345,7 @@ mod tests {
             &mut score_db,
             &paths,
             &replay_config,
+            &crate::config::profile_config::IrConfig::default(),
             1_700_000_200,
             &AppliedArrange::default(),
         )

@@ -1065,7 +1065,7 @@ mod tests {
 
     #[test]
     fn build_render_snapshot_copies_recent_inputs() {
-        use bmz_core::input::{InputEvent, InputKind, InputSource};
+        use bmz_core::input::{InputDeviceKind, InputEvent, InputKind, InputSource};
 
         let profile = ProfileConfig::new_default("default", "Default", 1);
         let mut session =
@@ -1075,6 +1075,7 @@ mod tests {
             kind: InputKind::Press,
             time: TimeUs(42_000),
             source: InputSource::Human,
+            device_kind: InputDeviceKind::Keyboard,
         });
 
         let snapshot = build_render_snapshot(&session, TimeUs(50_000), &[], None);
