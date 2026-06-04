@@ -630,4 +630,78 @@ pub const SCORE_MIGRATIONS: &[Migration] = &[
             "CREATE INDEX idx_replay_slots_chart ON replay_slots(chart_sha256, ln_policy);",
         ],
     },
+    Migration {
+        version: 8,
+        // Profile-wide player metadata/statistics and per-play previous-best
+        // snapshots.  `score_history.old_*` stores the best score before this
+        // play for the same (chart_sha256, ln_policy), so result/update deltas
+        // can be reconstructed without a separate log database.
+        statements: &[
+            "CREATE TABLE player_info (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                player_uuid TEXT NOT NULL,
+                display_name TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );",
+            "INSERT INTO player_info (id, player_uuid, display_name, created_at, updated_at)
+             VALUES (
+                1,
+                lower(hex(randomblob(16))),
+                '',
+                CAST(strftime('%s', 'now') AS INTEGER),
+                CAST(strftime('%s', 'now') AS INTEGER)
+             );",
+            "CREATE TABLE player_stats (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                play_count INTEGER NOT NULL DEFAULT 0,
+                clear_count INTEGER NOT NULL DEFAULT 0,
+                max_combo INTEGER NOT NULL DEFAULT 0,
+                fast_pgreat INTEGER NOT NULL DEFAULT 0,
+                slow_pgreat INTEGER NOT NULL DEFAULT 0,
+                fast_great INTEGER NOT NULL DEFAULT 0,
+                slow_great INTEGER NOT NULL DEFAULT 0,
+                fast_good INTEGER NOT NULL DEFAULT 0,
+                slow_good INTEGER NOT NULL DEFAULT 0,
+                fast_bad INTEGER NOT NULL DEFAULT 0,
+                slow_bad INTEGER NOT NULL DEFAULT 0,
+                fast_poor INTEGER NOT NULL DEFAULT 0,
+                slow_poor INTEGER NOT NULL DEFAULT 0,
+                fast_empty_poor INTEGER NOT NULL DEFAULT 0,
+                slow_empty_poor INTEGER NOT NULL DEFAULT 0,
+                updated_at INTEGER NOT NULL DEFAULT 0
+            );",
+            "INSERT INTO player_stats (
+                id, play_count, clear_count, max_combo,
+                fast_pgreat, slow_pgreat, fast_great, slow_great,
+                fast_good, slow_good, fast_bad, slow_bad,
+                fast_poor, slow_poor, fast_empty_poor, slow_empty_poor,
+                updated_at
+            )
+            SELECT
+                1,
+                COUNT(*),
+                COALESCE(SUM(CASE WHEN clear_type NOT IN ('', 'NoPlay', 'Failed') THEN 1 ELSE 0 END), 0),
+                COALESCE(MAX(max_combo), 0),
+                COALESCE(SUM(fast_pgreat), 0),
+                COALESCE(SUM(slow_pgreat), 0),
+                COALESCE(SUM(fast_great), 0),
+                COALESCE(SUM(slow_great), 0),
+                COALESCE(SUM(fast_good), 0),
+                COALESCE(SUM(slow_good), 0),
+                COALESCE(SUM(fast_bad), 0),
+                COALESCE(SUM(slow_bad), 0),
+                COALESCE(SUM(fast_poor), 0),
+                COALESCE(SUM(slow_poor), 0),
+                COALESCE(SUM(fast_empty_poor), 0),
+                COALESCE(SUM(slow_empty_poor), 0),
+                COALESCE(MAX(played_at), 0)
+            FROM score_history;",
+            "ALTER TABLE score_history ADD COLUMN old_clear_type TEXT;",
+            "ALTER TABLE score_history ADD COLUMN old_ex_score INTEGER;",
+            "ALTER TABLE score_history ADD COLUMN old_max_combo INTEGER;",
+            "ALTER TABLE score_history ADD COLUMN old_bp INTEGER;",
+            "ALTER TABLE score_history ADD COLUMN old_cb INTEGER;",
+        ],
+    },
 ];

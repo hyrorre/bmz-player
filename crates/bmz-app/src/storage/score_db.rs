@@ -20,6 +20,34 @@ pub struct ScoreDatabase {
     conn: Connection,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayerInfo {
+    pub player_uuid: String,
+    pub display_name: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayerStats {
+    pub play_count: u64,
+    pub clear_count: u64,
+    pub max_combo: u32,
+    pub fast_pgreat: u64,
+    pub slow_pgreat: u64,
+    pub fast_great: u64,
+    pub slow_great: u64,
+    pub fast_good: u64,
+    pub slow_good: u64,
+    pub fast_bad: u64,
+    pub slow_bad: u64,
+    pub fast_poor: u64,
+    pub slow_poor: u64,
+    pub fast_empty_poor: u64,
+    pub slow_empty_poor: u64,
+    pub updated_at: i64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ScoreKey {
     pub chart_sha256: [u8; 32],
@@ -106,6 +134,15 @@ struct ScoreBestRank {
     max_combo: u32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreviousBestSnapshot {
+    pub clear_type: String,
+    pub ex_score: u32,
+    pub max_combo: u32,
+    pub bp: u32,
+    pub cb: u32,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReplaySlotSummary {
     pub chart_sha256: [u8; 32],
@@ -149,6 +186,7 @@ pub struct ScoreHistoryEntry {
     /// enforced — callers can join against `library.db.course_scores` if
     /// they need the attempt details.
     pub course_score_id: Option<i64>,
+    pub previous_best: Option<PreviousBestSnapshot>,
 }
 
 impl ScoreDatabase {
@@ -173,11 +211,71 @@ impl ScoreDatabase {
 
     pub fn insert_score(&mut self, record: &ScoreRecord) -> Result<i64> {
         let tx = self.conn.transaction()?;
-        insert_score_history(&tx, record)?;
+        let previous_best =
+            previous_best_snapshot(&tx, ScoreKey::new(record.chart_sha256, record.ln_policy))?;
+        insert_score_history(&tx, record, previous_best.as_ref())?;
         let history_id = tx.last_insert_rowid();
         upsert_score_best(&tx, record)?;
+        update_player_stats(&tx, record)?;
         tx.commit()?;
         Ok(history_id)
+    }
+
+    pub fn player_info(&self) -> Result<PlayerInfo> {
+        self.conn
+            .query_row(
+                "SELECT player_uuid, display_name, created_at, updated_at
+                 FROM player_info
+                 WHERE id = 1",
+                [],
+                |row| {
+                    Ok(PlayerInfo {
+                        player_uuid: row.get(0)?,
+                        display_name: row.get(1)?,
+                        created_at: row.get(2)?,
+                        updated_at: row.get(3)?,
+                    })
+                },
+            )
+            .map_err(Into::into)
+    }
+
+    pub fn set_player_display_name(&mut self, display_name: &str, updated_at: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE player_info
+             SET display_name = ?1, updated_at = ?2
+             WHERE id = 1",
+            params![display_name, updated_at],
+        )?;
+        Ok(())
+    }
+
+    pub fn player_stats(&self) -> Result<PlayerStats> {
+        self.conn
+            .query_row(
+                "SELECT
+                    play_count,
+                    clear_count,
+                    max_combo,
+                    fast_pgreat,
+                    slow_pgreat,
+                    fast_great,
+                    slow_great,
+                    fast_good,
+                    slow_good,
+                    fast_bad,
+                    slow_bad,
+                    fast_poor,
+                    slow_poor,
+                    fast_empty_poor,
+                    slow_empty_poor,
+                    updated_at
+                 FROM player_stats
+                 WHERE id = 1",
+                [],
+                player_stats_from_row,
+            )
+            .map_err(Into::into)
     }
 
     pub fn best_ex_score(&self, key: ScoreKey) -> Result<Option<u32>> {
@@ -390,7 +488,12 @@ impl ScoreDatabase {
                 autoplay,
                 replay_path,
                 course_score_id,
-                ln_policy
+                ln_policy,
+                old_clear_type,
+                old_ex_score,
+                old_max_combo,
+                old_bp,
+                old_cb
             FROM score_history
             ORDER BY played_at DESC, id DESC
             LIMIT ?1 OFFSET ?2",
@@ -447,6 +550,18 @@ fn replay_slot_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Repl
 fn score_history_entry_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ScoreHistoryEntry> {
     let sha256_hex: String = row.get(1)?;
     let chart_sha256 = hex_to_hash::<32>(&sha256_hex)?;
+    let old_clear_type: Option<String> = row.get(15)?;
+    let previous_best = if let Some(clear_type) = old_clear_type {
+        Some(PreviousBestSnapshot {
+            clear_type,
+            ex_score: row.get(16)?,
+            max_combo: row.get(17)?,
+            bp: row.get(18)?,
+            cb: row.get(19)?,
+        })
+    } else {
+        None
+    };
 
     Ok(ScoreHistoryEntry {
         id: row.get(0)?,
@@ -464,6 +579,28 @@ fn score_history_entry_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Sco
         autoplay: row.get(11)?,
         replay_path: row.get(12)?,
         course_score_id: row.get(13)?,
+        previous_best,
+    })
+}
+
+fn player_stats_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PlayerStats> {
+    Ok(PlayerStats {
+        play_count: row.get(0)?,
+        clear_count: row.get(1)?,
+        max_combo: row.get(2)?,
+        fast_pgreat: row.get(3)?,
+        slow_pgreat: row.get(4)?,
+        fast_great: row.get(5)?,
+        slow_great: row.get(6)?,
+        fast_good: row.get(7)?,
+        slow_good: row.get(8)?,
+        fast_bad: row.get(9)?,
+        slow_bad: row.get(10)?,
+        fast_poor: row.get(11)?,
+        slow_poor: row.get(12)?,
+        fast_empty_poor: row.get(13)?,
+        slow_empty_poor: row.get(14)?,
+        updated_at: row.get(15)?,
     })
 }
 
@@ -478,7 +615,34 @@ fn ln_policy_from_row(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result
     })
 }
 
-fn insert_score_history(conn: &Connection, record: &ScoreRecord) -> Result<()> {
+fn previous_best_snapshot(
+    conn: &Connection,
+    key: ScoreKey,
+) -> Result<Option<PreviousBestSnapshot>> {
+    conn.query_row(
+        "SELECT clear_type, ex_score, max_combo, bp, cb
+         FROM score_best
+         WHERE chart_sha256 = ?1 AND ln_policy = ?2",
+        params![hash_to_hex(&key.chart_sha256), key.ln_policy.as_str()],
+        |row| {
+            Ok(PreviousBestSnapshot {
+                clear_type: row.get(0)?,
+                ex_score: row.get(1)?,
+                max_combo: row.get(2)?,
+                bp: row.get(3)?,
+                cb: row.get(4)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+fn insert_score_history(
+    conn: &Connection,
+    record: &ScoreRecord,
+    previous_best: Option<&PreviousBestSnapshot>,
+) -> Result<()> {
     let judges = &record.score.judges;
     let ghost = encode_beatoraja_ghost(&record.score.ghost)?;
     conn.execute(
@@ -512,10 +676,16 @@ fn insert_score_history(conn: &Connection, record: &ScoreRecord) -> Result<()> {
             assist_mask,
             autoplay,
             replay_path,
-            ghost
+            ghost,
+            old_clear_type,
+            old_ex_score,
+            old_max_combo,
+            old_bp,
+            old_cb
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-            ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30
+            ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30,
+            ?31, ?32, ?33, ?34, ?35
         )",
         params![
             hash_to_hex(&record.chart_sha256),
@@ -548,6 +718,74 @@ fn insert_score_history(conn: &Connection, record: &ScoreRecord) -> Result<()> {
             record.autoplay,
             record.replay_path.as_str(),
             ghost,
+            previous_best.map(|best| best.clear_type.as_str()),
+            previous_best.map(|best| best.ex_score),
+            previous_best.map(|best| best.max_combo),
+            previous_best.map(|best| best.bp),
+            previous_best.map(|best| best.cb),
+        ],
+    )?;
+    Ok(())
+}
+
+fn update_player_stats(conn: &Connection, record: &ScoreRecord) -> Result<()> {
+    let judges = &record.score.judges;
+    let clear_increment = u32::from(is_counted_clear(record.clear_type));
+    conn.execute(
+        "INSERT INTO player_stats (
+            id,
+            play_count,
+            clear_count,
+            max_combo,
+            fast_pgreat,
+            slow_pgreat,
+            fast_great,
+            slow_great,
+            fast_good,
+            slow_good,
+            fast_bad,
+            slow_bad,
+            fast_poor,
+            slow_poor,
+            fast_empty_poor,
+            slow_empty_poor,
+            updated_at
+        ) VALUES (
+            1, 1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15
+        )
+        ON CONFLICT(id) DO UPDATE SET
+            play_count = play_count + 1,
+            clear_count = clear_count + excluded.clear_count,
+            max_combo = max(max_combo, excluded.max_combo),
+            fast_pgreat = fast_pgreat + excluded.fast_pgreat,
+            slow_pgreat = slow_pgreat + excluded.slow_pgreat,
+            fast_great = fast_great + excluded.fast_great,
+            slow_great = slow_great + excluded.slow_great,
+            fast_good = fast_good + excluded.fast_good,
+            slow_good = slow_good + excluded.slow_good,
+            fast_bad = fast_bad + excluded.fast_bad,
+            slow_bad = slow_bad + excluded.slow_bad,
+            fast_poor = fast_poor + excluded.fast_poor,
+            slow_poor = slow_poor + excluded.slow_poor,
+            fast_empty_poor = fast_empty_poor + excluded.fast_empty_poor,
+            slow_empty_poor = slow_empty_poor + excluded.slow_empty_poor,
+            updated_at = max(updated_at, excluded.updated_at)",
+        params![
+            clear_increment,
+            record.score.max_combo,
+            judges.fast_pgreat,
+            judges.slow_pgreat,
+            judges.fast_great,
+            judges.slow_great,
+            judges.fast_good,
+            judges.slow_good,
+            judges.fast_bad,
+            judges.slow_bad,
+            judges.fast_poor,
+            judges.slow_poor,
+            judges.fast_empty_poor,
+            judges.slow_empty_poor,
+            record.played_at,
         ],
     )?;
     Ok(())
@@ -967,6 +1205,177 @@ mod tests {
             db.best_ex_score(ScoreKey::new([7; 32], LnScorePolicy::ForceCn)).unwrap(),
             Some(40)
         );
+    }
+
+    #[test]
+    fn player_info_is_created_and_display_name_updates() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut db = ScoreDatabase { conn };
+
+        let info = db.player_info().unwrap();
+        assert_eq!(info.player_uuid.len(), 32);
+        assert!(info.player_uuid.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(info.display_name, "");
+
+        db.set_player_display_name("hyrorre", 1_700_000_099).unwrap();
+
+        let info = db.player_info().unwrap();
+        assert_eq!(info.display_name, "hyrorre");
+        assert_eq!(info.updated_at, 1_700_000_099);
+    }
+
+    #[test]
+    fn player_stats_accumulates_profile_wide_scores() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut db = ScoreDatabase { conn };
+
+        let mut first = record(20, ClearType::Normal);
+        first.played_at = 10;
+        first.score.judges.fast_great = 3;
+        first.score.judges.slow_bad = 2;
+        let mut failed = record(10, ClearType::Failed);
+        failed.played_at = 20;
+        failed.score.max_combo = 99;
+        failed.score.judges.fast_empty_poor = 4;
+
+        db.insert_score(&first).unwrap();
+        db.insert_score(&failed).unwrap();
+
+        let stats = db.player_stats().unwrap();
+        assert_eq!(stats.play_count, 2);
+        assert_eq!(stats.clear_count, 1);
+        assert_eq!(stats.max_combo, 99);
+        assert_eq!(stats.fast_pgreat, 0);
+        assert_eq!(stats.slow_pgreat, 15);
+        assert_eq!(stats.fast_great, 3);
+        assert_eq!(stats.slow_bad, 2);
+        assert_eq!(stats.fast_empty_poor, 4);
+        assert_eq!(stats.updated_at, 20);
+    }
+
+    #[test]
+    fn player_stats_migration_backfills_existing_history() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, &SCORE_MIGRATIONS[..7]).unwrap();
+        conn.execute(
+            "INSERT INTO score_history (
+                chart_sha256, ln_policy, played_at, clear_type, gauge_type, gauge_value,
+                total_notes, ex_score, bp, cb, max_combo,
+                fast_pgreat, slow_pgreat, fast_great, slow_great,
+                fast_good, slow_good, fast_bad, slow_bad,
+                fast_poor, slow_poor, fast_empty_poor, slow_empty_poor,
+                random_seed, gauge_option, rule_mode, assist_mask, autoplay,
+                replay_path, ghost
+            ) VALUES (
+                ?1, 'ForceLn', 10, 'Normal', 'Normal', 80.0,
+                10, 20, 1, 1, 8,
+                1, 2, 3, 4,
+                5, 6, 7, 8,
+                9, 10, 11, 12,
+                NULL, '', 'Beatoraja', 0, 0,
+                '', ''
+            )",
+            params![hash_to_hex(&[1; 32])],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO score_history (
+                chart_sha256, ln_policy, played_at, clear_type, gauge_type, gauge_value,
+                total_notes, ex_score, bp, cb, max_combo,
+                fast_pgreat, slow_pgreat, fast_great, slow_great,
+                fast_good, slow_good, fast_bad, slow_bad,
+                fast_poor, slow_poor, fast_empty_poor, slow_empty_poor,
+                random_seed, gauge_option, rule_mode, assist_mask, autoplay,
+                replay_path, ghost
+            ) VALUES (
+                ?1, 'ForceLn', 20, 'Failed', 'Normal', 20.0,
+                10, 10, 5, 5, 12,
+                2, 3, 4, 5,
+                6, 7, 8, 9,
+                10, 11, 12, 13,
+                NULL, '', 'Beatoraja', 0, 0,
+                '', ''
+            )",
+            params![hash_to_hex(&[2; 32])],
+        )
+        .unwrap();
+
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let db = ScoreDatabase { conn };
+
+        let stats = db.player_stats().unwrap();
+        assert_eq!(stats.play_count, 2);
+        assert_eq!(stats.clear_count, 1);
+        assert_eq!(stats.max_combo, 12);
+        assert_eq!(stats.fast_pgreat, 3);
+        assert_eq!(stats.slow_empty_poor, 25);
+        assert_eq!(stats.updated_at, 20);
+    }
+
+    #[test]
+    fn score_history_records_previous_best_snapshot() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut db = ScoreDatabase { conn };
+
+        let mut first = record(20, ClearType::Normal);
+        first.played_at = 10;
+        first.score.max_combo = 15;
+        first.score.judges.fast_bad = 2;
+        db.insert_score(&first).unwrap();
+
+        let mut second = record(30, ClearType::Hard);
+        second.played_at = 20;
+        db.insert_score(&second).unwrap();
+
+        let history = db.recent_history(10, 0).unwrap();
+        assert_eq!(history[1].previous_best, None);
+        assert_eq!(
+            history[0].previous_best,
+            Some(PreviousBestSnapshot {
+                clear_type: "Normal".to_string(),
+                ex_score: 20,
+                max_combo: 15,
+                bp: 2,
+                cb: 2,
+            })
+        );
+    }
+
+    #[test]
+    fn score_history_previous_best_is_separate_per_ln_policy() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut db = ScoreDatabase { conn };
+
+        let mut ln = record(20, ClearType::Normal);
+        ln.ln_policy = LnScorePolicy::ForceLn;
+        ln.played_at = 10;
+        let mut cn_first = record(40, ClearType::Hard);
+        cn_first.ln_policy = LnScorePolicy::ForceCn;
+        cn_first.played_at = 20;
+        let mut cn_second = record(10, ClearType::Easy);
+        cn_second.ln_policy = LnScorePolicy::ForceCn;
+        cn_second.played_at = 30;
+
+        db.insert_score(&ln).unwrap();
+        db.insert_score(&cn_first).unwrap();
+        db.insert_score(&cn_second).unwrap();
+
+        let history = db.recent_history(10, 0).unwrap();
+        assert_eq!(
+            history[0].previous_best.as_ref().map(|best| (best.clear_type.as_str(), best.ex_score)),
+            Some(("Hard", 40))
+        );
+        assert_eq!(history[1].previous_best, None);
+        assert_eq!(history[2].previous_best, None);
     }
 
     #[test]
