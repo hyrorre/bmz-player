@@ -16,17 +16,12 @@ pub enum InputSource {
     Replay,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum InputDeviceKind {
+    #[default]
     Keyboard,
     Controller,
-}
-
-impl Default for InputDeviceKind {
-    fn default() -> Self {
-        Self::Keyboard
-    }
 }
 
 impl InputDeviceKind {

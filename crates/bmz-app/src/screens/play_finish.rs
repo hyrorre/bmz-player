@@ -241,15 +241,7 @@ fn effective_ln_mode_from_score_policy(policy: crate::ln_policy::LnScorePolicy) 
 pub fn finish_session_result_once(
     cached: &mut Option<FinishedPlaySession>,
     score_db: &mut ScoreDatabase,
-    profile_paths: &ProfilePaths,
-    replay_config: &ReplayConfig,
-    ir_config: &IrConfig,
-    session: &GameSession,
-    played_at: i64,
-    applied_arrange: &AppliedArrange,
-    target_ex_score: Option<u32>,
-    score_key: ScoreKey,
-    practice_mode: bool,
+    request: FinishSessionResultOnceRequest<'_>,
 ) -> Result<FinishedPlaySession> {
     if let Some(finished) = cached.clone() {
         return Ok(finished);
@@ -257,18 +249,30 @@ pub fn finish_session_result_once(
 
     let finished = finish_session_result(
         score_db,
-        profile_paths,
-        replay_config,
-        ir_config,
-        session,
-        played_at,
-        applied_arrange,
-        target_ex_score,
-        score_key,
-        practice_mode,
+        request.profile_paths,
+        request.replay_config,
+        request.ir_config,
+        request.session,
+        request.played_at,
+        request.applied_arrange,
+        request.target_ex_score,
+        request.score_key,
+        request.practice_mode,
     )?;
     *cached = Some(finished.clone());
     Ok(finished)
+}
+
+pub struct FinishSessionResultOnceRequest<'a> {
+    pub profile_paths: &'a ProfilePaths,
+    pub replay_config: &'a ReplayConfig,
+    pub ir_config: &'a IrConfig,
+    pub session: &'a GameSession,
+    pub played_at: i64,
+    pub applied_arrange: &'a AppliedArrange,
+    pub target_ex_score: Option<u32>,
+    pub score_key: ScoreKey,
+    pub practice_mode: bool,
 }
 
 fn ensure_storable_state(state: PlayState) -> Result<()> {
@@ -483,29 +487,33 @@ mod tests {
         let first = finish_session_result_once(
             &mut cached,
             &mut score_db,
-            &paths,
-            &replay_config,
-            &crate::config::profile_config::IrConfig::default(),
-            &session,
-            1_700_000_103,
-            &AppliedArrange::default(),
-            None,
-            score_key(&session),
-            false,
+            FinishSessionResultOnceRequest {
+                profile_paths: &paths,
+                replay_config: &replay_config,
+                ir_config: &crate::config::profile_config::IrConfig::default(),
+                session: &session,
+                played_at: 1_700_000_103,
+                applied_arrange: &AppliedArrange::default(),
+                target_ex_score: None,
+                score_key: score_key(&session),
+                practice_mode: false,
+            },
         )
         .unwrap();
         let second = finish_session_result_once(
             &mut cached,
             &mut score_db,
-            &paths,
-            &replay_config,
-            &crate::config::profile_config::IrConfig::default(),
-            &session,
-            1_700_000_104,
-            &AppliedArrange::default(),
-            None,
-            score_key(&session),
-            false,
+            FinishSessionResultOnceRequest {
+                profile_paths: &paths,
+                replay_config: &replay_config,
+                ir_config: &crate::config::profile_config::IrConfig::default(),
+                session: &session,
+                played_at: 1_700_000_104,
+                applied_arrange: &AppliedArrange::default(),
+                target_ex_score: None,
+                score_key: score_key(&session),
+                practice_mode: false,
+            },
         )
         .unwrap();
 

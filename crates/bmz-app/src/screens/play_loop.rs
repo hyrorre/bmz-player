@@ -12,7 +12,8 @@ use crate::audio::RunningPlaySession;
 use crate::config::profile_config::{IrConfig, ReplayConfig};
 use crate::paths::ProfilePaths;
 use crate::screens::play_finish::{
-    FinishedPlaySession, finish_session_result, finish_session_result_once,
+    FinishSessionResultOnceRequest, FinishedPlaySession, finish_session_result,
+    finish_session_result_once,
 };
 use crate::screens::play_session::AppliedArrange;
 use crate::screens::play_snapshot::{
@@ -175,15 +176,17 @@ pub fn advance_running_play_session_until_result(
         let mut finished = finish_session_result_once(
             &mut running.finished,
             score_db,
-            profile_paths,
-            replay_config,
-            ir_config,
-            &running.session,
-            played_at,
-            &running.applied_arrange,
-            running.target_ex_score,
-            running.score_key,
-            running.practice_mode,
+            FinishSessionResultOnceRequest {
+                profile_paths,
+                replay_config,
+                ir_config,
+                session: &running.session,
+                played_at,
+                applied_arrange: &running.applied_arrange,
+                target_ex_score: running.target_ex_score,
+                score_key: running.score_key,
+                practice_mode: running.practice_mode,
+            },
         )?;
         finished.summary.graph = running.result_graph.snapshot();
         running.finished = Some(finished.clone());
