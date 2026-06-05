@@ -6943,10 +6943,10 @@ fn beatoraja_next_rank_diff(state: SkinDrawState) -> Option<i64> {
     for rank_step in (0..=24).step_by(3) {
         let threshold = div_ceil(rank_step as i64 * max_score, 27);
         if ex_score < threshold {
-            return Some(threshold - ex_score);
+            return Some(ex_score - threshold);
         }
     }
-    Some(max_score - ex_score)
+    Some(ex_score - max_score)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -10840,8 +10840,8 @@ mod tests {
             ..SkinDrawState::default()
         };
 
-        assert_eq!(skin_state_number(154, a_state), Some(34));
-        assert_eq!(skin_state_number(154, aaa_state), Some(200));
+        assert_eq!(skin_state_number(154, a_state), Some(-34));
+        assert_eq!(skin_state_number(154, aaa_state), Some(-200));
         assert_eq!(skin_state_number(154, max_state), Some(0));
         assert_eq!(skin_state_number(154, SkinDrawState::default()), None);
 
