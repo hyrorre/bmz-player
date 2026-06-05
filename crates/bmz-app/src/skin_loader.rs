@@ -1909,12 +1909,14 @@ mod tests {
         judge_ms[0] = Some(100);
         let mut judge_index = [None; bmz_render::skin::MAX_JUDGE_REGIONS];
         judge_index[0] = Some(0);
+        let mut judge_combo = [0; bmz_render::skin::MAX_JUDGE_REGIONS];
+        judge_combo[0] = 123;
         let state = bmz_render::skin::SkinDrawState {
             elapsed_ms: 2_000,
             play_timer_ms: Some(2_000),
             judge_ms,
             judge_index,
-            combo: 123,
+            judge_combo,
             ..Default::default()
         };
 
@@ -1957,12 +1959,14 @@ mod tests {
             judge_ms[0] = Some(100);
             let mut judge_indices = [None; bmz_render::skin::MAX_JUDGE_REGIONS];
             judge_indices[0] = Some(judge_index);
+            let mut judge_combo = [0; bmz_render::skin::MAX_JUDGE_REGIONS];
+            judge_combo[0] = 123;
             let state = bmz_render::skin::SkinDrawState {
                 elapsed_ms: 2_000,
                 play_timer_ms: Some(2_000),
                 judge_ms,
                 judge_index: judge_indices,
-                combo: 123,
+                judge_combo,
                 ..Default::default()
             };
             let items = decoded.document.static_render_items(

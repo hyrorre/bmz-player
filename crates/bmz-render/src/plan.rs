@@ -815,7 +815,7 @@ fn plan_play(
     let keyoff_ms = snapshot.keyoff_ms;
 
     let judge_region_count = skin.document().map(|d| d.judge_region_count()).unwrap_or(1);
-    let (judge_ms, judge_index) = crate::skin::build_judge_region_state(
+    let judge_region_state = crate::skin::build_judge_region_state(
         &snapshot.recent_judgements,
         snapshot.time.0,
         judge_region_count,
@@ -856,12 +856,14 @@ fn plan_play(
         keyon_ms,
         keyoff_ms,
         lane_judge,
-        judge_ms,
+        judge_ms: judge_region_state.judge_ms,
         full_combo_ms: snapshot.full_combo_elapsed_ms,
         fadeout_ms: snapshot.fadeout_elapsed_ms,
         failed_ms: snapshot.failed_elapsed_ms,
         music_end_ms: snapshot.music_end_elapsed_ms,
-        judge_index,
+        judge_index: judge_region_state.judge_index,
+        judge_combo: judge_region_state.judge_combo,
+        judge_timing_sign: judge_region_state.judge_timing_sign,
         offset_lift_px: {
             let canvas_h = skin.document().map_or(720, |d| d.h) as f32;
             (snapshot.lift * canvas_h).round() as i32
@@ -2279,6 +2281,7 @@ fn label_width(label: &str, cell: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    use bmz_core::judge::{Judge, TimingSide};
     use bmz_core::lane::Lane;
     use bmz_core::time::TimeUs;
 
@@ -3657,7 +3660,10 @@ mod tests {
             time: TimeUs(1_000_000),
             recent_judgements: vec![DisplayJudgement {
                 lane: Lane::Key2,
+                judge: Judge::PGreat,
+                side: TimingSide::Fast,
                 text: "PGREAT FAST".to_string(),
+                combo: 1,
                 delta_us: -3_000,
                 time: TimeUs(920_000),
                 is_miss: false,
@@ -3706,7 +3712,10 @@ mod tests {
             time: TimeUs(1_000_000),
             recent_judgements: vec![DisplayJudgement {
                 lane: Lane::Key2,
+                judge: Judge::PGreat,
+                side: TimingSide::Fast,
                 text: "PGREAT FAST".to_string(),
+                combo: 1,
                 delta_us: -3_000,
                 time: TimeUs(920_000),
                 is_miss: false,
@@ -3728,7 +3737,10 @@ mod tests {
             time: TimeUs(1_000_000),
             recent_judgements: vec![DisplayJudgement {
                 lane: Lane::Key2,
+                judge: Judge::EmptyPoor,
+                side: TimingSide::Slow,
                 text: "EMPTY POOR SLOW".to_string(),
+                combo: 0,
                 delta_us: 50_000,
                 time: TimeUs(980_000),
                 is_miss: false,
@@ -3750,7 +3762,10 @@ mod tests {
             time: TimeUs(1_000_000),
             recent_judgements: vec![DisplayJudgement {
                 lane: Lane::Key2,
+                judge: Judge::Bad,
+                side: TimingSide::Slow,
                 text: "BAD SLOW".to_string(),
+                combo: 0,
                 delta_us: 88_000,
                 time: TimeUs(700_000),
                 is_miss: false,
@@ -3880,7 +3895,10 @@ mod tests {
     fn history_label(text: &str) -> String {
         judgement_history_label(&DisplayJudgement {
             lane: Lane::Key1,
+            judge: Judge::PGreat,
+            side: TimingSide::Fast,
             text: text.to_string(),
+            combo: 0,
             delta_us: 0,
             time: TimeUs(0),
             is_miss: false,
@@ -3964,7 +3982,10 @@ mod tests {
             time: TimeUs(1_000_000),
             recent_judgements: vec![DisplayJudgement {
                 lane: Lane::Key3,
+                judge: Judge::Poor,
+                side: TimingSide::Slow,
                 text: "POOR SLOW".to_string(),
+                combo: 0,
                 delta_us: 50_000,
                 time: TimeUs(950_000),
                 is_miss: true,

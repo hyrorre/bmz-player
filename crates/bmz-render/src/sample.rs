@@ -116,7 +116,10 @@ pub fn sample_play_scene() -> AppSceneSnapshot {
     });
     snapshot.recent_judgements.push(DisplayJudgement {
         lane: Lane::Key3,
+        judge: bmz_core::judge::Judge::PGreat,
+        side: bmz_core::judge::TimingSide::Fast,
         text: "PGREAT FAST".to_string(),
+        combo: 1234,
         delta_us: -12_000,
         time: TimeUs(12_300_000),
         is_miss: false,

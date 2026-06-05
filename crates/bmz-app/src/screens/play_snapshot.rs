@@ -188,7 +188,10 @@ pub fn build_render_snapshot_with_target_and_bga_frames(
             .iter()
             .map(|input| DisplayInput { lane: input.lane, time: input.time })
             .collect(),
-        recent_judgements: recent_judgements.iter().map(display_judgement).collect(),
+        recent_judgements: recent_judgements
+            .iter()
+            .map(|event| display_judgement(event, session.score.combo))
+            .collect(),
         hit_error_ring: bmz_render::snapshot::HitErrorRingSnapshot {
             values: session.hit_error_ring.values,
             index: session.hit_error_ring.index,
@@ -602,10 +605,13 @@ fn display_fast_slow_counts(session: &GameSession) -> bmz_render::snapshot::Fast
     }
 }
 
-fn display_judgement(event: &JudgementEvent) -> DisplayJudgement {
+fn display_judgement(event: &JudgementEvent, combo: u32) -> DisplayJudgement {
     DisplayJudgement {
         lane: event.lane,
+        judge: event.judge,
+        side: event.side,
         text: format!("{}{}", judge_text(event.judge), side_suffix(event.side)),
+        combo: if event.judge == Judge::EmptyPoor { 0 } else { combo },
         delta_us: event.delta.0,
         time: event.time,
         is_miss: event.judge == Judge::Poor,

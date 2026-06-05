@@ -5,7 +5,7 @@ use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use bmz_core::judge::Judge;
+use bmz_core::judge::{Judge, TimingSide};
 use bmz_core::lane::{KeyMode, LANE_COUNT, Lane};
 use serde::de::{Error as DeError, Visitor};
 use serde::{Deserialize, Deserializer};
@@ -911,6 +911,14 @@ pub struct SkinJudgeDef {
 /// beatoraja `PlaySkin.judgeregion` 上限 (TIMER_JUDGE_1P/2P/3P = 46/47/247)。
 pub const MAX_JUDGE_REGIONS: usize = 3;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JudgeRegionState {
+    pub judge_ms: [Option<i32>; MAX_JUDGE_REGIONS],
+    pub judge_index: [Option<usize>; MAX_JUDGE_REGIONS],
+    pub judge_combo: [u32; MAX_JUDGE_REGIONS],
+    pub judge_timing_sign: [Option<i8>; MAX_JUDGE_REGIONS],
+}
+
 /// レーン index から判定領域 index へ (beatoraja `JudgeManager.updateMicro` 同式)。
 pub fn lane_judge_region(lane_index: usize, lane_count: usize, region_count: usize) -> usize {
     if lane_count == 0 || region_count == 0 {
@@ -925,9 +933,11 @@ pub fn build_judge_region_state(
     recent_judgements: &[crate::snapshot::DisplayJudgement],
     render_now_us: i64,
     region_count: usize,
-) -> ([Option<i32>; MAX_JUDGE_REGIONS], [Option<usize>; MAX_JUDGE_REGIONS]) {
+) -> JudgeRegionState {
     let mut judge_ms = [None; MAX_JUDGE_REGIONS];
     let mut judge_index = [None; MAX_JUDGE_REGIONS];
+    let mut judge_combo = [0; MAX_JUDGE_REGIONS];
+    let mut judge_timing_sign = [None; MAX_JUDGE_REGIONS];
     let region_count = region_count.min(MAX_JUDGE_REGIONS);
     for judgement in recent_judgements.iter().rev() {
         let region = lane_judge_region(judgement.lane.index(), LANE_COUNT, region_count);
@@ -938,9 +948,14 @@ pub fn build_judge_region_state(
             ((render_now_us - judgement.time.0) / 1_000).clamp(i32::MIN as i64, i32::MAX as i64)
                 as i32,
         );
-        judge_index[region] = judge_image_index(&judgement.text);
+        judge_index[region] = Some(judge_image_index_for_judge(judgement.judge));
+        judge_combo[region] = judgement.combo;
+        judge_timing_sign[region] = Some(match judgement.side {
+            TimingSide::Fast => 1,
+            TimingSide::Slow => -1,
+        });
     }
-    (judge_ms, judge_index)
+    JudgeRegionState { judge_ms, judge_index, judge_combo, judge_timing_sign }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -1536,6 +1551,10 @@ pub struct SkinDrawState {
     pub music_end_ms: Option<i32>,
     /// 領域別の判定画像インデックス (0=PGREAT,1=GREAT,2=GOOD,3=BAD,4=POOR)。
     pub judge_index: [Option<usize>; MAX_JUDGE_REGIONS],
+    /// 領域別の判定表示用 combo。beatoraja `JudgeManager.judgecombo` 相当。
+    pub judge_combo: [u32; MAX_JUDGE_REGIONS],
+    /// 領域別の判定タイミング符号。1=EARLY/FAST, -1=LATE/SLOW。
+    pub judge_timing_sign: [Option<i8>; MAX_JUDGE_REGIONS],
     /// OFFSET_LIFT (id=3) の y 値 (skin canvas pixel 単位)。リフト量に応じて要素をシフトする。
     pub offset_lift_px: i32,
     /// OFFSET_LANECOVER (id=4) の y 値 (skin canvas pixel 単位)。レーンカバー位置インジケータのシフト。
@@ -1771,6 +1790,8 @@ impl Default for SkinDrawState {
             full_combo_ms: None,
             music_end_ms: None,
             judge_index: [None; MAX_JUDGE_REGIONS],
+            judge_combo: [0; MAX_JUDGE_REGIONS],
+            judge_timing_sign: [None; MAX_JUDGE_REGIONS],
             offset_lift_px: 0,
             offset_lanecover_px: 0,
             offset_hidden_cover_px: 0,
@@ -2500,7 +2521,7 @@ impl SkinDocument {
             return self.judge_render_items_for_def(
                 judge_def,
                 judge_image_index,
-                state.combo,
+                state.judge_combo[region],
                 elapsed,
                 sources,
                 state,
@@ -5284,6 +5305,16 @@ pub(crate) fn judge_image_index(judge: &str) -> Option<usize> {
     }
 }
 
+pub(crate) fn judge_image_index_for_judge(judge: Judge) -> usize {
+    match judge {
+        Judge::PGreat => 0,
+        Judge::Great => 1,
+        Judge::Good => 2,
+        Judge::Bad => 3,
+        Judge::Poor | Judge::EmptyPoor => 4,
+    }
+}
+
 impl SkinManifest {
     pub fn load(path: &Path) -> Result<Self> {
         let text = std::fs::read_to_string(path)
@@ -5889,6 +5920,35 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool 
         // OPTION_AUTOPLAYOFF / OPTION_AUTOPLAYON
         32 => !state.autoplay,
         33 => state.autoplay,
+        // OPTION_1P/2P/3P_PERFECT and EARLY/LATE judge-detail conditions.
+        // beatoraja maps FAST/EARLY to positive recent judge timing, LATE/SLOW to negative.
+        241 => state.judge_index[0] == Some(0),
+        1242 => {
+            state.judge_index[0].is_some_and(|index| index > 0)
+                && state.judge_timing_sign[0] == Some(1)
+        }
+        1243 => {
+            state.judge_index[0].is_some_and(|index| index > 0)
+                && state.judge_timing_sign[0] == Some(-1)
+        }
+        261 => state.judge_index[1] == Some(0),
+        1262 => {
+            state.judge_index[1].is_some_and(|index| index > 0)
+                && state.judge_timing_sign[1] == Some(1)
+        }
+        1263 => {
+            state.judge_index[1].is_some_and(|index| index > 0)
+                && state.judge_timing_sign[1] == Some(-1)
+        }
+        361 => state.judge_index[2] == Some(0),
+        1362 => {
+            state.judge_index[2].is_some_and(|index| index > 0)
+                && state.judge_timing_sign[2] == Some(1)
+        }
+        1363 => {
+            state.judge_index[2].is_some_and(|index| index > 0)
+                && state.judge_timing_sign[2] == Some(-1)
+        }
         // OPTION_COURSE_STAGE1..4 / OPTION_COURSE_STAGE_FINAL
         280 => state.course_stage == Some(CourseStageMarker::Stage1),
         281 => state.course_stage == Some(CourseStageMarker::Stage2),
@@ -9556,18 +9616,18 @@ mod tests {
 
     use super::*;
 
-    fn judge_region_state(
-        region: usize,
-        ms: i32,
-        image_index: usize,
-    ) -> ([Option<i32>; MAX_JUDGE_REGIONS], [Option<usize>; MAX_JUDGE_REGIONS]) {
+    fn judge_region_state(region: usize, ms: i32, image_index: usize) -> JudgeRegionState {
         let mut judge_ms = [None; MAX_JUDGE_REGIONS];
         let mut judge_index = [None; MAX_JUDGE_REGIONS];
+        let mut judge_combo = [0; MAX_JUDGE_REGIONS];
+        let mut judge_timing_sign = [None; MAX_JUDGE_REGIONS];
         if region < MAX_JUDGE_REGIONS {
             judge_ms[region] = Some(ms);
             judge_index[region] = Some(image_index);
+            judge_combo[region] = 42;
+            judge_timing_sign[region] = Some(1);
         }
-        (judge_ms, judge_index)
+        JudgeRegionState { judge_ms, judge_index, judge_combo, judge_timing_sign }
     }
 
     #[test]
@@ -11367,12 +11427,15 @@ mod tests {
         assert!(eval_skin_draw_condition("timer(46) == timer_off", SkinDrawState::default()));
         assert!(eval_skin_draw_condition(
             "timer(46) != timer_off",
-            SkinDrawState { judge_ms: judge_region_state(0, 120, 0).0, ..Default::default() }
+            SkinDrawState {
+                judge_ms: judge_region_state(0, 120, 0).judge_ms,
+                ..Default::default()
+            }
         ));
         assert!(eval_skin_draw_condition(
             "timer(46) > 0 and option(197)",
             SkinDrawState {
-                judge_ms: judge_region_state(0, 120, 0).0,
+                judge_ms: judge_region_state(0, 120, 0).judge_ms,
                 select_replay_slots: [true, false, false, false],
                 ..Default::default()
             }
@@ -12378,9 +12441,13 @@ mod tests {
         let items = document.static_render_items(
             &sources,
             SkinDrawState {
-                combo: 123,
-                judge_ms: judge_region_state(0, 100, 0).0,
-                judge_index: judge_region_state(0, 100, 0).1,
+                judge_ms: judge_region_state(0, 100, 0).judge_ms,
+                judge_index: judge_region_state(0, 100, 0).judge_index,
+                judge_combo: {
+                    let mut combo = [0; MAX_JUDGE_REGIONS];
+                    combo[0] = 123;
+                    combo
+                },
                 offset_lift_px: 10,
                 ..SkinDrawState::default()
             },
@@ -12469,6 +12536,12 @@ mod tests {
                 idx[1] = Some(0);
                 idx
             },
+            judge_combo: {
+                let mut combo = [0; MAX_JUDGE_REGIONS];
+                combo[0] = 42;
+                combo[1] = 42;
+                combo
+            },
             combo: 42,
             ..SkinDrawState::default()
         };
@@ -12502,6 +12575,75 @@ mod tests {
             _ => panic!(),
         };
         assert!(static_right > static_left + 0.2);
+    }
+
+    #[test]
+    fn skin_document_hides_judge_combo_when_region_combo_is_zero() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "judge.png" }],
+                "image": [
+                    { "id": "judge-poor", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10 }
+                ],
+                "value": [
+                    { "id": "combo", "src": 1, "x": 0, "y": 20, "w": 100, "h": 10, "divx": 10, "digit": 3 }
+                ],
+                "judge": [{
+                    "id": "judge",
+                    "images": [
+                        { "id": "judge-poor", "dst": [{ "time": 0, "x": 10, "y": 20, "w": 20, "h": 10 }, { "time": 500 }] }
+                    ],
+                    "numbers": [
+                        { "id": "combo", "dst": [{ "time": 0, "x": 20, "y": 5, "w": 5, "h": 10 }, { "time": 500 }] }
+                    ]
+                }],
+                "destination": [{ "id": "judge" }]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = mock_source("1", 100.0, 100.0);
+        let state = SkinDrawState {
+            combo: 123,
+            judge_ms: judge_region_state(0, 100, 0).judge_ms,
+            judge_index: judge_region_state(0, 100, 0).judge_index,
+            judge_combo: [0; MAX_JUDGE_REGIONS],
+            ..SkinDrawState::default()
+        };
+
+        let items = document.static_render_items(&sources, state, SkinTextState::default());
+
+        assert_eq!(items.len(), 1);
+    }
+
+    #[test]
+    fn skin_draw_options_match_judge_fast_slow_regions() {
+        let fast = SkinDrawState {
+            judge_index: [Some(1), None, None],
+            judge_timing_sign: [Some(1), None, None],
+            ..SkinDrawState::default()
+        };
+        let slow = SkinDrawState {
+            judge_index: [Some(1), None, None],
+            judge_timing_sign: [Some(-1), None, None],
+            ..SkinDrawState::default()
+        };
+        let perfect = SkinDrawState {
+            judge_index: [Some(0), None, None],
+            judge_timing_sign: [Some(1), None, None],
+            ..SkinDrawState::default()
+        };
+
+        assert!(test_skin_op(1242, &[], fast));
+        assert!(!test_skin_op(1243, &[], fast));
+        assert!(test_skin_op(1243, &[], slow));
+        assert!(!test_skin_op(1242, &[], slow));
+        assert!(test_skin_op(241, &[], perfect));
+        assert!(!test_skin_op(1242, &[], perfect));
     }
 
     #[test]
@@ -12540,9 +12682,13 @@ mod tests {
         let items = document.static_render_items(
             &sources,
             SkinDrawState {
-                combo: 123,
-                judge_ms: judge_region_state(0, 100, 0).0,
-                judge_index: judge_region_state(0, 100, 0).1,
+                judge_ms: judge_region_state(0, 100, 0).judge_ms,
+                judge_index: judge_region_state(0, 100, 0).judge_index,
+                judge_combo: {
+                    let mut combo = [0; MAX_JUDGE_REGIONS];
+                    combo[0] = 123;
+                    combo
+                },
                 ..Default::default()
             },
             SkinTextState::default(),
@@ -15167,8 +15313,10 @@ mod tests {
         )]);
 
         // judge_ms=Some(100) → between frame 0 and frame 200 → x should be 0.25 (interpolated)
-        let state_early =
-            SkinDrawState { judge_ms: judge_region_state(0, 100, 0).0, ..SkinDrawState::default() };
+        let state_early = SkinDrawState {
+            judge_ms: judge_region_state(0, 100, 0).judge_ms,
+            ..SkinDrawState::default()
+        };
         let items_early = document.static_image_render_items(&sources, state_early);
         assert_eq!(items_early.len(), 1);
         assert!(
@@ -15178,8 +15326,10 @@ mod tests {
         );
 
         // judge_ms=Some(300) → past last frame → last frame x=0.5
-        let state_late =
-            SkinDrawState { judge_ms: judge_region_state(0, 300, 0).0, ..SkinDrawState::default() };
+        let state_late = SkinDrawState {
+            judge_ms: judge_region_state(0, 300, 0).judge_ms,
+            ..SkinDrawState::default()
+        };
         let items_late = document.static_image_render_items(&sources, state_late);
         assert_eq!(items_late.len(), 1);
         assert!(

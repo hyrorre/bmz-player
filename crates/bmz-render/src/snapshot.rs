@@ -1,5 +1,5 @@
 use bmz_chart::model::LongNoteMode;
-use bmz_core::judge::Judge;
+use bmz_core::judge::{Judge, TimingSide};
 use bmz_core::lane::{KeyMode, LANE_COUNT, Lane};
 use bmz_core::time::TimeUs;
 
@@ -254,7 +254,10 @@ pub struct VisibleLongNote {
 #[derive(Debug, Clone, PartialEq)]
 pub struct DisplayJudgement {
     pub lane: Lane,
+    pub judge: Judge,
+    pub side: TimingSide,
     pub text: String,
+    pub combo: u32,
     pub delta_us: i64,
     pub time: TimeUs,
     /// ノートを押さずに通過した見逃し判定（Poor）。
