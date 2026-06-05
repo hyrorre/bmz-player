@@ -36,6 +36,22 @@ impl PlayResult {
             autoplay,
         }
     }
+
+    pub fn record_bp(&self) -> u32 {
+        if self.clear_type == ClearType::Failed {
+            self.score.bp_with_unprocessed_notes(self.total_notes)
+        } else {
+            self.score.bp()
+        }
+    }
+
+    pub fn record_cb(&self) -> u32 {
+        if self.clear_type == ClearType::Failed {
+            self.score.cb_with_unprocessed_notes(self.total_notes)
+        } else {
+            self.score.cb()
+        }
+    }
 }
 
 #[cfg(test)]
@@ -74,6 +90,19 @@ mod tests {
         assert_eq!(result.gauge_value, 82.0);
         assert_eq!(result.score.ex_score(), 2);
         assert!(!result.autoplay);
+    }
+
+    #[test]
+    fn failed_play_result_counts_unprocessed_notes_for_record_bp_and_cb() {
+        let chart = chart();
+        let score = ScoreState::default();
+        let gauge = gauge(0.0);
+
+        let result = PlayResult::from_states(&chart, &score, &gauge, PlayState::Failed, false);
+
+        assert_eq!(result.total_notes, chart.total_notes);
+        assert_eq!(result.record_bp(), chart.total_notes);
+        assert_eq!(result.record_cb(), chart.total_notes);
     }
 
     #[test]

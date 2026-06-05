@@ -73,6 +73,14 @@ impl ScoreState {
         self.judges.fast_bad + self.judges.slow_bad + self.judges.fast_poor + self.judges.slow_poor
     }
 
+    pub fn bp_with_unprocessed_notes(&self, total_notes: u32) -> u32 {
+        self.bp().saturating_add(total_notes.saturating_sub(self.past_notes))
+    }
+
+    pub fn cb_with_unprocessed_notes(&self, total_notes: u32) -> u32 {
+        self.cb().saturating_add(total_notes.saturating_sub(self.past_notes))
+    }
+
     pub fn ex_score_rate(&self, total_notes: u32) -> f32 {
         if total_notes == 0 { 1.0 } else { self.ex_score() as f32 / (total_notes * 2) as f32 }
     }
@@ -147,5 +155,18 @@ mod tests {
 
         assert_eq!(score.cb(), 2);
         assert_eq!(score.bp(), 3);
+    }
+
+    #[test]
+    fn failed_record_counts_unprocessed_notes_as_bp_and_cb() {
+        let mut score = ScoreState::default();
+
+        score.apply(&event(Judge::PGreat, TimingSide::Fast, Some(NoteId(1))));
+        score.apply(&event(Judge::Bad, TimingSide::Slow, Some(NoteId(2))));
+        score.apply(&event(Judge::EmptyPoor, TimingSide::Slow, None));
+
+        assert_eq!(score.past_notes, 2);
+        assert_eq!(score.cb_with_unprocessed_notes(10), 9);
+        assert_eq!(score.bp_with_unprocessed_notes(10), 10);
     }
 }

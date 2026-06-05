@@ -134,8 +134,8 @@ pub fn store_play_result(
 fn candidate_metrics(result: &PlayResult) -> CandidateMetrics {
     CandidateMetrics {
         ex_score: result.score.ex_score(),
-        bp: result.score.bp(),
-        cb: result.score.cb(),
+        bp: result.record_bp(),
+        cb: result.record_cb(),
         max_combo: result.score.max_combo,
         clear_rank: result.clear_type as u8,
     }
@@ -528,6 +528,18 @@ mod tests {
 
         assert_eq!(metrics.cb, 3);
         assert_eq!(metrics.bp, 6);
+    }
+
+    #[test]
+    fn candidate_metrics_counts_unprocessed_notes_for_failed_runs() {
+        let mut result = play_result(false);
+        result.clear_type = ClearType::Failed;
+        result.total_notes = 10;
+
+        let metrics = candidate_metrics(&result);
+
+        assert_eq!(metrics.cb, 10);
+        assert_eq!(metrics.bp, 10);
     }
 
     #[test]

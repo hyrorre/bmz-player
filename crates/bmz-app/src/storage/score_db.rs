@@ -838,6 +838,8 @@ fn insert_score_history(
 ) -> Result<()> {
     let judges = &record.score.judges;
     let ghost = encode_beatoraja_ghost(&record.score.ghost)?;
+    let bp = score_record_bp(record);
+    let cb = score_record_cb(record);
     conn.execute(
         "INSERT INTO score_history (
             chart_sha256,
@@ -890,8 +892,8 @@ fn insert_score_history(
             record.gauge_value,
             record.total_notes,
             record.score.ex_score(),
-            record.score.bp(),
-            record.score.cb(),
+            bp,
+            cb,
             record.score.max_combo,
             judges.fast_pgreat,
             judges.slow_pgreat,
@@ -990,6 +992,8 @@ fn upsert_score_best(conn: &Connection, record: &ScoreRecord) -> Result<()> {
     let judges = &record.score.judges;
     let ghost = encode_beatoraja_ghost(&record.score.ghost)?;
     let clear_increment = u32::from(is_counted_clear(record.clear_type));
+    let bp = score_record_bp(record);
+    let cb = score_record_cb(record);
     let inserted = conn.execute(
         "INSERT INTO score_best (
             chart_sha256,
@@ -1031,8 +1035,8 @@ fn upsert_score_best(conn: &Connection, record: &ScoreRecord) -> Result<()> {
             gauge_type_str(record.gauge_type),
             record.gauge_value,
             record.score.ex_score(),
-            record.score.bp(),
-            record.score.cb(),
+            bp,
+            cb,
             record.score.max_combo,
             judges.fast_pgreat,
             judges.slow_pgreat,
@@ -1092,8 +1096,8 @@ fn upsert_score_best(conn: &Connection, record: &ScoreRecord) -> Result<()> {
              WHERE chart_sha256 = ?1 AND ln_policy = ?5",
             params![
                 hash_to_hex(&record.chart_sha256),
-                record.score.bp(),
-                record.score.cb(),
+                bp,
+                cb,
                 record.score.max_combo,
                 record.ln_policy.as_str(),
             ],
@@ -1133,8 +1137,8 @@ fn upsert_score_best(conn: &Connection, record: &ScoreRecord) -> Result<()> {
             gauge_type_str(record.gauge_type),
             record.gauge_value,
             record.score.ex_score(),
-            record.score.bp(),
-            record.score.cb(),
+            bp,
+            cb,
             record.score.max_combo,
             judges.fast_pgreat,
             judges.slow_pgreat,
@@ -1170,8 +1174,8 @@ fn score_best_should_update(record: &ScoreRecord, current: ScoreBestRank) -> boo
     let next = ScoreBestRank {
         ex_score: record.score.ex_score(),
         clear_rank: record.clear_type as u8,
-        bp: record.score.bp(),
-        cb: record.score.cb(),
+        bp: score_record_bp(record),
+        cb: score_record_cb(record),
         max_combo: record.score.max_combo,
     };
     (
@@ -1187,6 +1191,22 @@ fn score_best_should_update(record: &ScoreRecord, current: ScoreBestRank) -> boo
         std::cmp::Reverse(current.cb),
         current.max_combo,
     )
+}
+
+fn score_record_bp(record: &ScoreRecord) -> u32 {
+    if record.clear_type == ClearType::Failed {
+        record.score.bp_with_unprocessed_notes(record.total_notes)
+    } else {
+        record.score.bp()
+    }
+}
+
+fn score_record_cb(record: &ScoreRecord) -> u32 {
+    if record.clear_type == ClearType::Failed {
+        record.score.cb_with_unprocessed_notes(record.total_notes)
+    } else {
+        record.score.cb()
+    }
 }
 
 fn clear_rank_from_name(value: &str) -> u8 {
@@ -1431,6 +1451,27 @@ mod tests {
         assert_eq!(best.cb, 2);
         assert_eq!(best.play_count, 2);
         assert_eq!(best.clear_count, 1);
+    }
+
+    #[test]
+    fn failed_score_counts_unprocessed_notes_for_bp_and_cb_records() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut db = ScoreDatabase { conn };
+
+        let mut failed = record(0, ClearType::Failed);
+        failed.total_notes = 100;
+        db.insert_score(&failed).unwrap();
+
+        let history = db.recent_history(10, 0).unwrap();
+        assert_eq!(history[0].bp, 100);
+        assert_eq!(history[0].cb, 100);
+
+        let best = db.best_scores_for_charts(&[key([7; 32])]).unwrap().pop().unwrap();
+        assert_eq!(best.clear_type, "Failed");
+        assert_eq!(best.bp, 100);
+        assert_eq!(best.cb, 100);
     }
 
     #[test]
