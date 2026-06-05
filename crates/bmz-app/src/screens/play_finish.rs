@@ -109,6 +109,7 @@ pub fn finish_session_result(
         )?
     };
     let mut summary = ResultSummary::from_play_result(&result, &stored, &session.chart.metadata);
+    summary.arrange = applied_arrange.arrange.as_str().to_string();
     summary.target_ex_score = target_ex_score;
     summary.saved_replay_slots = stored.slot_paths.each_ref().map(Option::is_some);
     if let Some(best) = &previous_best {

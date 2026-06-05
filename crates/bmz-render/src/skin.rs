@@ -1511,6 +1511,7 @@ pub struct SkinDrawState {
     pub select_option_panel_elapsed_ms: i32,
     pub select_option_panel: u8,
     pub select_arrange_index: usize,
+    pub result_arrange_index: usize,
     pub select_gauge_index: usize,
     pub select_gauge_auto_shift_index: usize,
     pub select_target_index: usize,
@@ -1759,6 +1760,7 @@ impl Default for SkinDrawState {
             select_option_panel_elapsed_ms: 0,
             select_option_panel: 0,
             select_arrange_index: 0,
+            result_arrange_index: 0,
             select_gauge_index: 2,
             select_gauge_auto_shift_index: 0,
             select_target_index: 0,
@@ -5266,7 +5268,7 @@ fn skin_state_imageset_index(ref_id: i32, state: SkinDrawState) -> Option<usize>
         40 => Some(state.select_gauge_index),
         SKIN_REF_PLAY_GAUGE_TYPE => Some(state.gauge_type.max(0) as usize),
         41 => Some(state.select_target_index),
-        42 | 43 => Some(state.select_arrange_index),
+        42 | 43 => Some(arrange_ref_index(state)),
         54 | 55 => Some(0),
         72 => Some(state.select_bga_index),
         78 => Some(state.select_gauge_auto_shift_index),
@@ -5861,6 +5863,9 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool 
         1160 | 1161 => select_key_mode_option_matches(op, state),
         196 | 197 | 198 | 1196..=1208 if state.result_failed.is_some() => {
             result_replay_op_matches(op, state)
+        }
+        126..=131 | 1128..=1131 if state.result_failed.is_some() => {
+            result_arrange_op_matches(op, state)
         }
         196 | 197 | 198 | 1196..=1208 => select_replay_op_matches(op, state),
         200..=207 => select_rank_op_matches(op, state),
@@ -6750,6 +6755,7 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         // Lua draw 畳み込みのプレースホルダ (`number(0) >= 0` 等)
         0 => Some(0),
         21..=26 => current_datetime_number(ref_id),
+        42 | 43 if state.result_failed.is_some() => Some(state.result_arrange_index as i64),
         11 if state.select_screen => Some(state.select_mode_index as i64),
         12 if state.select_screen => Some(state.select_sort_index as i64),
         300 => Some(state.select_chart_count as i64),
@@ -7069,8 +7075,16 @@ fn skin_image_texture_region_for_state(
 
 fn skin_image_ref_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
     match ref_id {
-        42 | 43 => Some(state.select_arrange_index as i64),
+        42 | 43 => Some(arrange_ref_index(state) as i64),
         _ => skin_state_number(ref_id, state),
+    }
+}
+
+fn arrange_ref_index(state: SkinDrawState) -> usize {
+    if state.result_failed.is_some() {
+        state.result_arrange_index
+    } else {
+        state.select_arrange_index
     }
 }
 
@@ -7961,6 +7975,25 @@ fn result_replay_op_matches(op: i32, state: SkinDrawState) -> bool {
     }
 }
 
+fn result_arrange_op_matches(op: i32, state: SkinDrawState) -> bool {
+    let Some(index) = (match op {
+        126 => Some(0),  // OPTION_CLEAR_NORMAL
+        127 => Some(1),  // OPTION_CLEAR_MIRROR
+        128 => Some(2),  // OPTION_CLEAR_RANDOM
+        1128 => Some(3), // OPTION_CLEAR_RRANDOM
+        129 => Some(4),  // OPTION_CLEAR_SRANDOM
+        1129 => Some(5), // OPTION_CLEAR_SPIRAL
+        130 => Some(6),  // OPTION_CLEAR_HRANDOM
+        131 => Some(7),  // OPTION_CLEAR_ALLSCR
+        1130 => Some(8), // OPTION_CLEAR_EXRANDOM
+        1131 => Some(9), // OPTION_CLEAR_EXSRANDOM
+        _ => None,
+    }) else {
+        return false;
+    };
+    state.result_arrange_index == index
+}
+
 fn select_song_detail_row(state: SkinDrawState) -> bool {
     matches!(
         state.select_row_kind,
@@ -8251,6 +8284,13 @@ pub(crate) fn select_arrange_index(arrange: &str) -> usize {
     match arrange {
         "MIRROR" => 1,
         "RANDOM" => 2,
+        "R-RANDOM" => 3,
+        "S-RANDOM" => 4,
+        "SPIRAL" => 5,
+        "H-RANDOM" => 6,
+        "ALL-SCR" => 7,
+        "RANDOM-EX" => 8,
+        "S-RANDOM-EX" => 9,
         _ => 0,
     }
 }
@@ -14855,11 +14895,14 @@ mod tests {
             target_bp: Some(0),
             target_clear_index: Some(8),
             result_failed: Some(false),
+            result_arrange_index: 9,
             average_timing_ms: Some(-12.34),
             stddev_timing_ms: Some(56.78),
             ..SkinDrawState::default()
         };
 
+        assert_eq!(skin_state_number(42, state), Some(9));
+        assert_eq!(skin_state_number(43, state), Some(9));
         // 符号付き差分
         assert_eq!(skin_state_number(170, state), Some(1700));
         assert_eq!(skin_state_number(121, state), Some(1900));
@@ -14958,6 +15001,44 @@ mod tests {
         assert_eq!(skin_state_number(173, bare), None);
         assert_eq!(skin_state_number(410, bare), None);
         assert_eq!(skin_state_number(374, bare), None);
+    }
+
+    #[test]
+    fn result_skin_state_maps_arrange_ops() {
+        let cases = [
+            (0, 126),
+            (1, 127),
+            (2, 128),
+            (3, 1128),
+            (4, 129),
+            (5, 1129),
+            (6, 130),
+            (7, 131),
+            (8, 1130),
+            (9, 1131),
+        ];
+        for (index, op) in cases {
+            let state = SkinDrawState {
+                result_failed: Some(false),
+                result_arrange_index: index,
+                ..SkinDrawState::default()
+            };
+            assert!(test_skin_op(op, &[], state), "op {op} should match index {index}");
+            for (_, other_op) in cases {
+                if other_op != op {
+                    assert!(
+                        !test_skin_op(other_op, &[], state),
+                        "op {other_op} should not match index {index}"
+                    );
+                }
+            }
+        }
+
+        assert!(!test_skin_op(
+            1131,
+            &[],
+            SkinDrawState { result_arrange_index: 9, ..SkinDrawState::default() }
+        ));
     }
 
     #[test]
@@ -15144,6 +15225,107 @@ mod tests {
         assert_eq!(skin_state_imageset_index(72, state), Some(1));
         assert_eq!(skin_state_imageset_index(301, state), Some(0));
         assert_eq!(skin_state_imageset_index(500, state), None);
+    }
+
+    #[test]
+    fn select_arrange_index_maps_beatoraja_random_options() {
+        assert_eq!(select_arrange_index("NORMAL"), 0);
+        assert_eq!(select_arrange_index("MIRROR"), 1);
+        assert_eq!(select_arrange_index("RANDOM"), 2);
+        assert_eq!(select_arrange_index("R-RANDOM"), 3);
+        assert_eq!(select_arrange_index("S-RANDOM"), 4);
+        assert_eq!(select_arrange_index("SPIRAL"), 5);
+        assert_eq!(select_arrange_index("H-RANDOM"), 6);
+        assert_eq!(select_arrange_index("ALL-SCR"), 7);
+        assert_eq!(select_arrange_index("RANDOM-EX"), 8);
+        assert_eq!(select_arrange_index("S-RANDOM-EX"), 9);
+        assert_eq!(select_arrange_index("unknown"), 0);
+    }
+
+    #[test]
+    fn skin_image_ref_number_maps_extended_select_arrange() {
+        let state = SkinDrawState { select_arrange_index: 9, ..SkinDrawState::default() };
+
+        assert_eq!(skin_image_ref_number(42, state), Some(9));
+        assert_eq!(skin_image_ref_number(43, state), Some(9));
+    }
+
+    #[test]
+    fn arrange_ref_uses_result_arrange_on_result_screen() {
+        let state = SkinDrawState {
+            select_arrange_index: 2,
+            result_arrange_index: 8,
+            result_failed: Some(false),
+            ..SkinDrawState::default()
+        };
+
+        assert_eq!(skin_state_imageset_index(42, state), Some(8));
+        assert_eq!(skin_state_imageset_index(43, state), Some(8));
+        assert_eq!(skin_image_ref_number(42, state), Some(8));
+        assert_eq!(skin_image_ref_number(43, state), Some(8));
+    }
+
+    #[test]
+    fn select_skin_imageset_uses_extended_arrange_index() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 5,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "arrange.png" }],
+                "image": [
+                    { "id": "normal", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10 },
+                    { "id": "mirror", "src": 1, "x": 10, "y": 0, "w": 10, "h": 10 },
+                    { "id": "random", "src": 1, "x": 20, "y": 0, "w": 10, "h": 10 },
+                    { "id": "r-random", "src": 1, "x": 30, "y": 0, "w": 10, "h": 10 },
+                    { "id": "s-random", "src": 1, "x": 40, "y": 0, "w": 10, "h": 10 },
+                    { "id": "spiral", "src": 1, "x": 50, "y": 0, "w": 10, "h": 10 },
+                    { "id": "h-random", "src": 1, "x": 60, "y": 0, "w": 10, "h": 10 },
+                    { "id": "all-scr", "src": 1, "x": 70, "y": 0, "w": 10, "h": 10 },
+                    { "id": "random-ex", "src": 1, "x": 80, "y": 0, "w": 10, "h": 10 },
+                    { "id": "s-random-ex", "src": 1, "x": 90, "y": 0, "w": 10, "h": 10 }
+                ],
+                "imageset": [{
+                    "id": "option-random",
+                    "ref": 42,
+                    "images": [
+                        "normal", "mirror", "random", "r-random", "s-random",
+                        "spiral", "h-random", "all-scr", "random-ex", "s-random-ex"
+                    ]
+                }],
+                "destination": [{
+                    "id": "option-random",
+                    "dst": [{ "x": 10, "y": 20, "w": 20, "h": 10 }]
+                }]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "1".to_string(),
+            SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 100.0, height: 10.0 },
+            },
+        )]);
+        let items = document.select_render_items(
+            &sources,
+            &crate::scene::SelectSnapshot {
+                arrange: "S-RANDOM-EX".to_string(),
+                ..Default::default()
+            },
+        );
+
+        assert!(matches!(
+            items.as_slice(),
+            [SkinRenderItem::Image {
+                texture: SkinTextureId(42),
+                uv: TextureRegion { x, .. },
+                ..
+            }] if approx_eq(*x, 0.9)
+        ));
     }
 
     #[test]

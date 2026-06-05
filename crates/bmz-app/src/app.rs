@@ -541,6 +541,7 @@ fn course_result_summary_for_skin(course: &CourseResultSummary) -> ResultSummary
 
     ResultSummary {
         clear_type,
+        arrange: "NORMAL".to_string(),
         ex_score: course.total_ex_score,
         max_combo,
         gauge_value: last.map(|summary| summary.gauge_value).unwrap_or(0.0),
@@ -1074,6 +1075,7 @@ impl WinitApp {
             }
             AppViewState::Result(summary) => AppSceneSnapshot::Result(ResultSnapshot {
                 clear_type: summary.clear_type,
+                arrange: summary.arrange.as_str().to_string(),
                 ex_score: summary.ex_score,
                 ex_score_rate: summary.ex_score_rate(),
                 max_combo: summary.max_combo,
@@ -4299,10 +4301,10 @@ impl WinitApp {
     }
 
     fn play_start_options(&self) -> PlayStartOptions {
-        let arrange_seed = match self.arrange_option {
-            ArrangeOption::Random => Some(crate::screens::play_session::generate_arrange_seed()),
-            _ => None,
-        };
+        let arrange_seed = self
+            .arrange_option
+            .uses_seed()
+            .then(crate::screens::play_session::generate_arrange_seed);
         PlayStartOptions {
             autoplay: self.assist_option == AssistOption::Autoplay,
             gauge: Some(self.gauge_option),
@@ -7016,9 +7018,7 @@ fn volume_f32_to_unit(value: f32) -> u32 {
 }
 
 fn cycle_arrange_option_with_direction(current: ArrangeOption, direction: i32) -> ArrangeOption {
-    const VALUES: [ArrangeOption; 3] =
-        [ArrangeOption::Normal, ArrangeOption::Mirror, ArrangeOption::Random];
-    cycle_enum(VALUES, current, direction)
+    cycle_enum(ArrangeOption::VALUES, current, direction)
 }
 
 fn cycle_bga_option(current: BgaModeConfig) -> BgaModeConfig {
@@ -7060,9 +7060,14 @@ fn is_select_modifier_key(physical_key: PhysicalKey, bindings: &SelectKeyBinding
 fn arrange_option_from_profile(random: RandomOptionConfig) -> ArrangeOption {
     match random {
         RandomOptionConfig::Mirror => ArrangeOption::Mirror,
-        RandomOptionConfig::Random | RandomOptionConfig::RRandom | RandomOptionConfig::SRandom => {
-            ArrangeOption::Random
-        }
+        RandomOptionConfig::Random => ArrangeOption::Random,
+        RandomOptionConfig::RRandom => ArrangeOption::RRandom,
+        RandomOptionConfig::SRandom => ArrangeOption::SRandom,
+        RandomOptionConfig::Spiral => ArrangeOption::Spiral,
+        RandomOptionConfig::HRandom => ArrangeOption::HRandom,
+        RandomOptionConfig::AllScratch => ArrangeOption::AllScratch,
+        RandomOptionConfig::RandomEx => ArrangeOption::RandomEx,
+        RandomOptionConfig::SRandomEx => ArrangeOption::SRandomEx,
         RandomOptionConfig::Off => ArrangeOption::Normal,
     }
 }
@@ -7072,6 +7077,13 @@ fn random_config_from_arrange(arrange: ArrangeOption) -> RandomOptionConfig {
         ArrangeOption::Normal => RandomOptionConfig::Off,
         ArrangeOption::Mirror => RandomOptionConfig::Mirror,
         ArrangeOption::Random => RandomOptionConfig::Random,
+        ArrangeOption::RRandom => RandomOptionConfig::RRandom,
+        ArrangeOption::SRandom => RandomOptionConfig::SRandom,
+        ArrangeOption::Spiral => RandomOptionConfig::Spiral,
+        ArrangeOption::HRandom => RandomOptionConfig::HRandom,
+        ArrangeOption::AllScratch => RandomOptionConfig::AllScratch,
+        ArrangeOption::RandomEx => RandomOptionConfig::RandomEx,
+        ArrangeOption::SRandomEx => RandomOptionConfig::SRandomEx,
     }
 }
 
@@ -8783,6 +8795,7 @@ mod tests {
         ) -> ResultSummary {
             ResultSummary {
                 clear_type: ClearType::Normal,
+                arrange: "NORMAL".to_string(),
                 ex_score,
                 max_combo,
                 gauge_value: 80.0,
@@ -9507,6 +9520,31 @@ mod tests {
         assert_eq!(arrange_option_from_profile(RandomOptionConfig::Off), ArrangeOption::Normal);
         assert_eq!(arrange_option_from_profile(RandomOptionConfig::Mirror), ArrangeOption::Mirror);
         assert_eq!(arrange_option_from_profile(RandomOptionConfig::Random), ArrangeOption::Random);
+        assert_eq!(
+            arrange_option_from_profile(RandomOptionConfig::RRandom),
+            ArrangeOption::RRandom
+        );
+        assert_eq!(
+            arrange_option_from_profile(RandomOptionConfig::SRandom),
+            ArrangeOption::SRandom
+        );
+        assert_eq!(arrange_option_from_profile(RandomOptionConfig::Spiral), ArrangeOption::Spiral);
+        assert_eq!(
+            arrange_option_from_profile(RandomOptionConfig::HRandom),
+            ArrangeOption::HRandom
+        );
+        assert_eq!(
+            arrange_option_from_profile(RandomOptionConfig::AllScratch),
+            ArrangeOption::AllScratch
+        );
+        assert_eq!(
+            arrange_option_from_profile(RandomOptionConfig::RandomEx),
+            ArrangeOption::RandomEx
+        );
+        assert_eq!(
+            arrange_option_from_profile(RandomOptionConfig::SRandomEx),
+            ArrangeOption::SRandomEx
+        );
         assert!(matches!(
             random_config_from_arrange(ArrangeOption::Normal),
             RandomOptionConfig::Off
@@ -9518,6 +9556,34 @@ mod tests {
         assert!(matches!(
             random_config_from_arrange(ArrangeOption::Random),
             RandomOptionConfig::Random
+        ));
+        assert!(matches!(
+            random_config_from_arrange(ArrangeOption::RRandom),
+            RandomOptionConfig::RRandom
+        ));
+        assert!(matches!(
+            random_config_from_arrange(ArrangeOption::SRandom),
+            RandomOptionConfig::SRandom
+        ));
+        assert!(matches!(
+            random_config_from_arrange(ArrangeOption::Spiral),
+            RandomOptionConfig::Spiral
+        ));
+        assert!(matches!(
+            random_config_from_arrange(ArrangeOption::HRandom),
+            RandomOptionConfig::HRandom
+        ));
+        assert!(matches!(
+            random_config_from_arrange(ArrangeOption::AllScratch),
+            RandomOptionConfig::AllScratch
+        ));
+        assert!(matches!(
+            random_config_from_arrange(ArrangeOption::RandomEx),
+            RandomOptionConfig::RandomEx
+        ));
+        assert!(matches!(
+            random_config_from_arrange(ArrangeOption::SRandomEx),
+            RandomOptionConfig::SRandomEx
         ));
     }
 
@@ -9701,7 +9767,7 @@ mod tests {
         );
         assert_eq!(
             cycle_arrange_option_with_direction(ArrangeOption::Normal, -1),
-            ArrangeOption::Random
+            ArrangeOption::SRandomEx
         );
         assert_eq!(cycle_bga_option_with_direction(BgaModeConfig::On, -1), BgaModeConfig::Off);
         assert_eq!(

@@ -133,6 +133,7 @@ pub fn sample_play_scene() -> AppSceneSnapshot {
 pub fn sample_result_scene() -> AppSceneSnapshot {
     AppSceneSnapshot::Result(ResultSnapshot {
         clear_type: bmz_core::clear::ClearType::Normal,
+        arrange: "NORMAL".to_string(),
         ex_score: 1888,
         ex_score_rate: 0.944,
         max_combo: 777,

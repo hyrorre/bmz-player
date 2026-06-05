@@ -274,6 +274,11 @@ fn format_random(value: RandomOptionConfig) -> String {
         RandomOptionConfig::Random => "RANDOM".to_string(),
         RandomOptionConfig::RRandom => "R-RANDOM".to_string(),
         RandomOptionConfig::SRandom => "S-RANDOM".to_string(),
+        RandomOptionConfig::Spiral => "SPIRAL".to_string(),
+        RandomOptionConfig::HRandom => "H-RANDOM".to_string(),
+        RandomOptionConfig::AllScratch => "ALL-SCR".to_string(),
+        RandomOptionConfig::RandomEx => "RANDOM-EX".to_string(),
+        RandomOptionConfig::SRandomEx => "S-RANDOM-EX".to_string(),
     }
 }
 
@@ -376,12 +381,17 @@ fn cycle_gauge_auto_shift(current: GaugeAutoShiftConfig, forward: bool) -> Gauge
 }
 
 fn cycle_random(current: RandomOptionConfig, forward: bool) -> RandomOptionConfig {
-    const VALUES: [RandomOptionConfig; 5] = [
+    const VALUES: [RandomOptionConfig; 10] = [
         RandomOptionConfig::Off,
         RandomOptionConfig::Mirror,
         RandomOptionConfig::Random,
         RandomOptionConfig::RRandom,
         RandomOptionConfig::SRandom,
+        RandomOptionConfig::Spiral,
+        RandomOptionConfig::HRandom,
+        RandomOptionConfig::AllScratch,
+        RandomOptionConfig::RandomEx,
+        RandomOptionConfig::SRandomEx,
     ];
     cycle_in_slice(&VALUES, current, forward)
 }

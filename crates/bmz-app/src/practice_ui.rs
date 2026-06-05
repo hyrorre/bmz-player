@@ -89,11 +89,7 @@ pub fn build_practice_panel(
                         egui::ComboBox::from_id_salt("practice_arrange")
                             .selected_text(practice.property.arrange.as_str())
                             .show_ui(ui, |ui| {
-                                for arrange in [
-                                    ArrangeOption::Normal,
-                                    ArrangeOption::Mirror,
-                                    ArrangeOption::Random,
-                                ] {
+                                for arrange in ArrangeOption::VALUES {
                                     ui.selectable_value(
                                         &mut practice.property.arrange,
                                         arrange,

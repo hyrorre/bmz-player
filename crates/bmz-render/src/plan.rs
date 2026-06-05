@@ -1374,6 +1374,8 @@ fn build_result_skin_draw_state(
     };
     crate::skin::SkinDrawState {
         elapsed_ms,
+        select_arrange_index: crate::skin::select_arrange_index(&snapshot.arrange),
+        result_arrange_index: crate::skin::select_arrange_index(&snapshot.arrange),
         ex_score: snapshot.ex_score,
         total_notes: snapshot.total_notes,
         past_notes: snapshot.total_notes,
@@ -2434,6 +2436,7 @@ mod tests {
                 SkinContext::from_manifest_and_document(manifest, document, [source_texture]);
             let snapshot = ResultSnapshot {
                 clear_type: ClearType::Normal,
+                arrange: "NORMAL".to_string(),
                 ex_score: 100,
                 ex_score_rate: 0.5,
                 max_combo: 50,
@@ -2509,6 +2512,7 @@ mod tests {
         );
         let snapshot = ResultSnapshot {
             clear_type: ClearType::Normal,
+            arrange: "NORMAL".to_string(),
             ex_score: 100,
             ex_score_rate: 0.5,
             max_combo: 50,
@@ -2578,6 +2582,19 @@ mod tests {
     }
 
     #[test]
+    fn result_skin_state_maps_arrange_option() {
+        let AppSceneSnapshot::Result(mut snapshot) = crate::sample::sample_result_scene() else {
+            panic!("sample result scene");
+        };
+        snapshot.arrange = "S-RANDOM-EX".to_string();
+
+        let state = build_result_skin_draw_state(&snapshot, 0);
+
+        assert_eq!(state.select_arrange_index, 9);
+        assert_eq!(state.result_arrange_index, 9);
+    }
+
+    #[test]
     fn result_plan_renders_gaugegraph_from_result_graph_data() {
         use crate::scene::ResultSnapshot;
         use crate::snapshot::{FastSlowJudgeCounts, ResultGaugeGraphPoint, ResultGraphSnapshot};
@@ -2603,6 +2620,7 @@ mod tests {
         );
         let snapshot = ResultSnapshot {
             clear_type: ClearType::Normal,
+            arrange: "NORMAL".to_string(),
             ex_score: 100,
             ex_score_rate: 0.5,
             max_combo: 50,
@@ -2695,6 +2713,7 @@ mod tests {
         );
         let snapshot = ResultSnapshot {
             clear_type: ClearType::Normal,
+            arrange: "NORMAL".to_string(),
             ex_score: 100,
             ex_score_rate: 0.5,
             max_combo: 50,

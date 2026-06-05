@@ -274,9 +274,14 @@ pub fn apply_course_constraints(options: &mut PlayStartOptions, constraints: &Co
         CourseClassConstraint::GradeMirrorAllowed => {
             &[ArrangeOption::Normal, ArrangeOption::Mirror]
         }
-        CourseClassConstraint::GradeRandomAllowed => {
-            &[ArrangeOption::Normal, ArrangeOption::Random]
-        }
+        CourseClassConstraint::GradeRandomAllowed => &[
+            ArrangeOption::Normal,
+            ArrangeOption::Mirror,
+            ArrangeOption::Random,
+            ArrangeOption::RRandom,
+            ArrangeOption::SRandom,
+            ArrangeOption::Spiral,
+        ],
     };
     if !allowed.contains(&options.arrange) {
         options.arrange = ArrangeOption::Normal;

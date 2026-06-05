@@ -67,7 +67,7 @@ pub struct RenderSnapshot {
     pub difficulty_name: String,
     pub judge_rank: Option<i32>,
     pub play_level: String,
-    /// Play option arrange label (`NORMAL` / `MIRROR` / `RANDOM`) for skin ref 42/43.
+    /// Play option arrange label for skin ref 42/43.
     pub arrange: String,
     pub combo: u32,
     pub max_combo: u32,

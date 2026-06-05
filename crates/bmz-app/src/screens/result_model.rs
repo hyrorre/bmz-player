@@ -12,6 +12,7 @@ use crate::storage::play_result::StoredPlayResult;
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResultSummary {
     pub clear_type: ClearType,
+    pub arrange: String,
     pub ex_score: u32,
     pub max_combo: u32,
     pub gauge_value: f32,
@@ -117,6 +118,7 @@ impl ResultSummary {
     ) -> Self {
         Self {
             clear_type: result.clear_type,
+            arrange: "NORMAL".to_string(),
             ex_score: result.score.ex_score(),
             max_combo: result.score.max_combo,
             gauge_value: result.gauge_value,

@@ -4,7 +4,7 @@ use bmz_audio::engine::AudioEngine;
 use bmz_audio::ffmpeg_loader::FfmpegSampleLoader;
 use bmz_audio::loader::{LoadedSampleReport, SampleLoader, load_chart_samples};
 use bmz_chart::import::import_bms_chart;
-use bmz_chart::model::{NoteEvent, PlayableChart};
+use bmz_chart::model::{NoteEvent, NoteKind, PlayableChart};
 use bmz_core::clear::GaugeType;
 use bmz_core::lane::{KeyMode, LANE_COUNT, Lane};
 use bmz_core::time::TimeUs;
@@ -533,7 +533,7 @@ pub fn apply_arrange(
         }
         ArrangeOption::Random => {
             let used_seed = seed.unwrap_or_else(generate_arrange_seed);
-            let perm = random_lane_permutation(used_seed as u64, key_mode);
+            let perm = random_lane_permutation(used_seed, key_mode, false);
             apply_lane_permutation(chart, &perm);
             AppliedArrange {
                 arrange: ArrangeOption::Random,
@@ -541,27 +541,80 @@ pub fn apply_arrange(
                 pattern: Some(perm.iter().map(|&i| i as u8).collect()),
             }
         }
+        ArrangeOption::RRandom => {
+            let used_seed = seed.unwrap_or_else(generate_arrange_seed);
+            let perm = rotate_lane_permutation(used_seed, key_mode, false);
+            apply_lane_permutation(chart, &perm);
+            AppliedArrange {
+                arrange: ArrangeOption::RRandom,
+                seed: Some(used_seed),
+                pattern: Some(perm.iter().map(|&i| i as u8).collect()),
+            }
+        }
+        ArrangeOption::RandomEx => {
+            let used_seed = seed.unwrap_or_else(generate_arrange_seed);
+            let perm = random_lane_permutation(used_seed, key_mode, true);
+            apply_lane_permutation(chart, &perm);
+            AppliedArrange {
+                arrange: ArrangeOption::RandomEx,
+                seed: Some(used_seed),
+                pattern: Some(perm.iter().map(|&i| i as u8).collect()),
+            }
+        }
+        ArrangeOption::SRandom
+        | ArrangeOption::Spiral
+        | ArrangeOption::HRandom
+        | ArrangeOption::AllScratch
+        | ArrangeOption::SRandomEx => {
+            let used_seed = seed.unwrap_or_else(generate_arrange_seed);
+            apply_note_arrange(chart, arrange, used_seed);
+            AppliedArrange { arrange, seed: Some(used_seed), pattern: None }
+        }
     }
 }
 
 fn mirror_permutation(key_mode: KeyMode) -> Vec<usize> {
     let mut perm: Vec<usize> = (0..LANE_COUNT).collect();
-    for group in arrange_lane_groups(key_mode) {
+    for group in arrange_lane_groups(key_mode, false) {
         reverse_lane_group(&mut perm, &group);
     }
     perm
 }
 
-fn random_lane_permutation(seed: u64, key_mode: KeyMode) -> Vec<usize> {
+fn random_lane_permutation(seed: i64, key_mode: KeyMode, include_scratch: bool) -> Vec<usize> {
     let mut perm: Vec<usize> = (0..LANE_COUNT).collect();
-    let mut rng = seed;
-    for group in arrange_lane_groups(key_mode) {
+    let mut rng = SplitMix64::new(seed);
+    for group in arrange_lane_groups(key_mode, include_scratch) {
         fisher_yates_shuffle(&mut rng, &group, &mut perm);
     }
     perm
 }
 
-fn arrange_lane_groups(key_mode: KeyMode) -> Vec<Vec<usize>> {
+fn rotate_lane_permutation(seed: i64, key_mode: KeyMode, include_scratch: bool) -> Vec<usize> {
+    let mut perm: Vec<usize> = (0..LANE_COUNT).collect();
+    let mut rng = SplitMix64::new(seed);
+    for group in arrange_lane_groups(key_mode, include_scratch) {
+        if group.len() < 2 {
+            continue;
+        }
+        let inc = rng.next_bool();
+        let mut index = rng.next_usize(group.len() - 1);
+        if inc {
+            index += 1;
+        }
+        for &lane in &group {
+            perm[lane] = group[index];
+            index = if inc {
+                (index + 1) % group.len()
+            } else {
+                (index + group.len() - 1) % group.len()
+            };
+        }
+    }
+    perm
+}
+
+fn arrange_lane_groups(key_mode: KeyMode, include_scratch: bool) -> Vec<Vec<usize>> {
     let active = key_mode.active_lanes();
     match key_mode {
         KeyMode::K4 | KeyMode::K6 | KeyMode::K9 => {
@@ -571,7 +624,7 @@ fn arrange_lane_groups(key_mode: KeyMode) -> Vec<Vec<usize>> {
             vec![
                 active
                     .iter()
-                    .filter(|&&lane| lane != Lane::Scratch)
+                    .filter(|&&lane| include_scratch || lane != Lane::Scratch)
                     .map(|&lane| lane as usize)
                     .collect(),
             ]
@@ -582,14 +635,15 @@ fn arrange_lane_groups(key_mode: KeyMode) -> Vec<Vec<usize>> {
                 .filter(|&&lane| {
                     matches!(
                         lane,
-                        Lane::Key1
+                        Lane::Scratch
+                            | Lane::Key1
                             | Lane::Key2
                             | Lane::Key3
                             | Lane::Key4
                             | Lane::Key5
                             | Lane::Key6
                             | Lane::Key7
-                    )
+                    ) && (include_scratch || lane != Lane::Scratch)
                 })
                 .map(|&lane| lane as usize)
                 .collect();
@@ -605,7 +659,8 @@ fn arrange_lane_groups(key_mode: KeyMode) -> Vec<Vec<usize>> {
                             | Lane::Key12
                             | Lane::Key13
                             | Lane::Key14
-                    )
+                            | Lane::Scratch2
+                    ) && (include_scratch || lane != Lane::Scratch2)
                 })
                 .map(|&lane| lane as usize)
                 .collect();
@@ -648,14 +703,328 @@ fn apply_lane_permutation(chart: &mut PlayableChart, perm: &[usize]) {
     }
 }
 
-fn fisher_yates_shuffle(rng: &mut u64, lanes: &[usize], perm: &mut [usize]) {
+fn apply_note_arrange(chart: &mut PlayableChart, arrange: ArrangeOption, seed: i64) {
+    let include_scratch = matches!(arrange, ArrangeOption::AllScratch | ArrangeOption::SRandomEx);
+    let groups = arrange_lane_groups(chart.metadata.key_mode, include_scratch);
+    let mut engine = NoteArrangeEngine::new(arrange, seed, &groups);
+    let mut notes: Vec<NoteEvent> = chart.lane_notes.iter_mut().flat_map(std::mem::take).collect();
+    notes.sort_by_key(|note| (note.tick, note.time, note.lane as u8, note.id));
+
+    let mut start_to_end = std::collections::HashMap::new();
+    let mut end_to_start = std::collections::HashMap::new();
+    for ln in &chart.long_notes {
+        start_to_end.insert(ln.start_note_id, ln.end_note_id);
+        end_to_start.insert(ln.end_note_id, ln.start_note_id);
+    }
+
+    let mut arranged = Vec::with_capacity(notes.len());
+    let mut index = 0;
+    while index < notes.len() {
+        let tick = notes[index].tick;
+        let mut end = index + 1;
+        while end < notes.len() && notes[end].tick == tick {
+            end += 1;
+        }
+        let mut group_notes = notes[index..end].to_vec();
+        engine.arrange_timeline(&mut group_notes, &start_to_end, &end_to_start);
+        arranged.extend(group_notes);
+        index = end;
+    }
+
+    for lane_notes in &mut chart.lane_notes {
+        lane_notes.clear();
+    }
+    let mut start_lane = std::collections::HashMap::new();
+    for note in arranged {
+        if note.kind == NoteKind::LongStart {
+            start_lane.insert(note.id, note.lane);
+        }
+        chart.lane_notes[note.lane.index()].push(note);
+    }
+    for ln in &mut chart.long_notes {
+        if let Some(&lane) = start_lane.get(&ln.start_note_id) {
+            ln.lane = lane;
+        }
+    }
+}
+
+struct NoteArrangeEngine {
+    arrange: ArrangeOption,
+    rng: SplitMix64,
+    groups: Vec<NoteArrangeGroup>,
+}
+
+impl NoteArrangeEngine {
+    fn new(arrange: ArrangeOption, seed: i64, groups: &[Vec<usize>]) -> Self {
+        Self {
+            arrange,
+            rng: SplitMix64::new(seed),
+            groups: groups.iter().map(|lanes| NoteArrangeGroup::new(lanes)).collect(),
+        }
+    }
+
+    fn arrange_timeline(
+        &mut self,
+        notes: &mut [NoteEvent],
+        start_to_end: &std::collections::HashMap<bmz_core::ids::NoteId, bmz_core::ids::NoteId>,
+        end_to_start: &std::collections::HashMap<bmz_core::ids::NoteId, bmz_core::ids::NoteId>,
+    ) {
+        let time = notes.first().map(|note| note.time).unwrap_or(TimeUs(0));
+        for group in &mut self.groups {
+            let map = group.randomize(notes, time, self.arrange, &mut self.rng);
+            for note in notes.iter_mut() {
+                let source = note.lane.index();
+                let Some(&dest) = map.get(&source) else {
+                    continue;
+                };
+                note.lane = Lane::ALL[dest];
+                if note.kind == NoteKind::LongStart {
+                    if start_to_end.contains_key(&note.id) {
+                        group.active_ln.insert(source, dest);
+                    }
+                } else if note.kind == NoteKind::LongEnd && end_to_start.contains_key(&note.id) {
+                    group.active_ln.remove(&source);
+                }
+            }
+        }
+    }
+}
+
+struct NoteArrangeGroup {
+    lanes: Vec<usize>,
+    last_note_time: std::collections::HashMap<usize, TimeUs>,
+    active_ln: std::collections::HashMap<usize, usize>,
+    spiral_increment: usize,
+    spiral_head: usize,
+    scratch_lanes: Vec<usize>,
+    scratch_index: usize,
+}
+
+impl NoteArrangeGroup {
+    fn new(lanes: &[usize]) -> Self {
+        let scratch_lanes: Vec<usize> = lanes
+            .iter()
+            .copied()
+            .filter(|&lane| lane == Lane::Scratch.index() || lane == Lane::Scratch2.index())
+            .collect();
+        Self {
+            lanes: lanes.to_vec(),
+            last_note_time: lanes.iter().copied().map(|lane| (lane, TimeUs(-10_000_000))).collect(),
+            active_ln: std::collections::HashMap::new(),
+            spiral_increment: 0,
+            spiral_head: 0,
+            scratch_lanes,
+            scratch_index: 0,
+        }
+    }
+
+    fn randomize(
+        &mut self,
+        notes: &[NoteEvent],
+        time: TimeUs,
+        arrange: ArrangeOption,
+        rng: &mut SplitMix64,
+    ) -> std::collections::HashMap<usize, usize> {
+        if self.lanes.is_empty() {
+            return std::collections::HashMap::new();
+        }
+        if arrange == ArrangeOption::Spiral {
+            return self.spiral_map(rng);
+        }
+
+        let mut changeable = self.changeable_lanes();
+        let mut assignable = self.assignable_lanes();
+        let mut map = std::collections::HashMap::new();
+        map.extend(self.active_ln.iter().map(|(&source, &dest)| (source, dest)));
+
+        if arrange == ArrangeOption::AllScratch {
+            self.assign_all_scratch(notes, time, rng, &mut changeable, &mut assignable, &mut map);
+        }
+
+        let threshold = match arrange {
+            ArrangeOption::SRandom => TimeUs(40_000),
+            ArrangeOption::SRandomEx => TimeUs(40_000),
+            ArrangeOption::HRandom | ArrangeOption::AllScratch => TimeUs(100_000),
+            _ => TimeUs(40_000),
+        };
+        map.extend(self.time_based_shuffle(notes, time, threshold, rng, changeable, assignable));
+        map
+    }
+
+    fn changeable_lanes(&self) -> Vec<usize> {
+        self.lanes.iter().copied().filter(|lane| !self.active_ln.contains_key(lane)).collect()
+    }
+
+    fn assignable_lanes(&self) -> Vec<usize> {
+        self.lanes
+            .iter()
+            .copied()
+            .filter(|lane| !self.active_ln.values().any(|active| active == lane))
+            .collect()
+    }
+
+    fn time_based_shuffle(
+        &mut self,
+        notes: &[NoteEvent],
+        time: TimeUs,
+        threshold: TimeUs,
+        rng: &mut SplitMix64,
+        changeable: Vec<usize>,
+        assignable: Vec<usize>,
+    ) -> std::collections::HashMap<usize, usize> {
+        let mut note_lane = Vec::new();
+        let mut empty_lane = Vec::new();
+        for lane in changeable {
+            if notes.iter().any(|note| note.lane.index() == lane && note.kind != NoteKind::Mine) {
+                note_lane.push(lane);
+            } else {
+                empty_lane.push(lane);
+            }
+        }
+
+        let mut primary_lane = Vec::new();
+        let mut inferior_lane = Vec::new();
+        for lane in assignable {
+            let last = self.last_note_time.get(&lane).copied().unwrap_or(TimeUs(-10_000_000));
+            if time.0 - last.0 > threshold.0 {
+                primary_lane.push(lane);
+            } else {
+                inferior_lane.push(lane);
+            }
+        }
+
+        let mut map = std::collections::HashMap::new();
+        while !note_lane.is_empty() && !primary_lane.is_empty() {
+            let index = rng.next_usize(primary_lane.len());
+            map.insert(note_lane.remove(0), primary_lane.remove(index));
+        }
+        while !note_lane.is_empty() && !inferior_lane.is_empty() {
+            let min_time = inferior_lane
+                .iter()
+                .filter_map(|lane| self.last_note_time.get(lane))
+                .map(|time| time.0)
+                .min()
+                .unwrap_or(-10_000_000);
+            let candidates: Vec<usize> = inferior_lane
+                .iter()
+                .copied()
+                .filter(|lane| {
+                    self.last_note_time.get(lane).map(|time| time.0).unwrap_or(-10_000_000)
+                        == min_time
+                })
+                .collect();
+            let dest = candidates[rng.next_usize(candidates.len())];
+            map.insert(note_lane.remove(0), dest);
+            inferior_lane.retain(|&lane| lane != dest);
+        }
+
+        primary_lane.extend(inferior_lane);
+        while !empty_lane.is_empty() && !primary_lane.is_empty() {
+            let index = rng.next_usize(primary_lane.len());
+            map.insert(empty_lane.remove(0), primary_lane.remove(index));
+        }
+
+        for (&source, &dest) in &map {
+            if notes.iter().any(|note| note.lane.index() == source && note.kind != NoteKind::Mine) {
+                self.last_note_time.insert(dest, time);
+            }
+        }
+        map
+    }
+
+    fn spiral_map(&mut self, rng: &mut SplitMix64) -> std::collections::HashMap<usize, usize> {
+        if self.lanes.len() < 2 {
+            return std::collections::HashMap::new();
+        }
+        if self.spiral_increment == 0 {
+            self.spiral_increment = rng.next_usize(self.lanes.len() - 1) + 1;
+        }
+        let changeable = self.changeable_lanes();
+        if changeable.len() == self.lanes.len() {
+            self.spiral_head = (self.spiral_head + self.spiral_increment) % self.lanes.len();
+        }
+        let mut map = std::collections::HashMap::new();
+        map.extend(self.active_ln.iter().map(|(&source, &dest)| (source, dest)));
+        for (index, &lane) in self.lanes.iter().enumerate() {
+            if changeable.contains(&lane) {
+                map.insert(lane, self.lanes[(index + self.spiral_head) % self.lanes.len()]);
+            }
+        }
+        map
+    }
+
+    fn assign_all_scratch(
+        &mut self,
+        notes: &[NoteEvent],
+        time: TimeUs,
+        _rng: &mut SplitMix64,
+        changeable: &mut Vec<usize>,
+        assignable: &mut Vec<usize>,
+        map: &mut std::collections::HashMap<usize, usize>,
+    ) {
+        if self.scratch_lanes.is_empty() {
+            return;
+        }
+        let scratch = self.scratch_lanes[self.scratch_index];
+        let last = self.last_note_time.get(&scratch).copied().unwrap_or(TimeUs(-10_000_000));
+        if !assignable.contains(&scratch) || time.0 - last.0 <= 40_000 {
+            return;
+        }
+        let Some(source) = changeable.iter().copied().find(|&lane| {
+            notes.iter().any(|note| note.lane.index() == lane && note.kind != NoteKind::Mine)
+        }) else {
+            return;
+        };
+        map.insert(source, scratch);
+        changeable.retain(|&lane| lane != source);
+        assignable.retain(|&lane| lane != scratch);
+        self.last_note_time.insert(scratch, time);
+        self.scratch_index = (self.scratch_index + 1) % self.scratch_lanes.len();
+    }
+}
+
+#[derive(Debug, Clone)]
+struct SplitMix64 {
+    seed: u64,
+}
+
+impl SplitMix64 {
+    fn new(seed: i64) -> Self {
+        Self { seed: seed as u64 }
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        self.seed = self.seed.wrapping_add(0x9E3779B97F4A7C15);
+        let mut value = self.seed;
+        value = (value ^ (value >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+        value = (value ^ (value >> 27)).wrapping_mul(0x94D049BB133111EB);
+        value ^ (value >> 31)
+    }
+
+    fn next_bool(&mut self) -> bool {
+        self.next_u64() & 1 == 1
+    }
+
+    fn next_usize(&mut self, bound: usize) -> usize {
+        assert!(bound > 0);
+        let bound = bound as u128;
+        let zone = ((1u128 << 64) / bound) * bound;
+        loop {
+            let value = self.next_u64() as u128;
+            if value < zone {
+                return (value % bound) as usize;
+            }
+        }
+    }
+}
+
+fn fisher_yates_shuffle(rng: &mut SplitMix64, lanes: &[usize], perm: &mut [usize]) {
     if lanes.len() < 2 {
         return;
     }
     let mut indices: Vec<usize> = lanes.to_vec();
     for i in (1..indices.len()).rev() {
-        *rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-        let j = (*rng >> 33) as usize % (i + 1);
+        let j = rng.next_usize(i + 1);
         indices.swap(i, j);
     }
     for (orig, new_target) in lanes.iter().zip(indices.iter()) {
@@ -672,7 +1041,7 @@ mod tests {
     use bmz_chart::hash::compute_chart_identity;
     use bmz_chart::model::{ChartMetadata, PlayableChart, SoundAssetRef};
     use bmz_core::clear::GaugeType;
-    use bmz_core::ids::SoundId;
+    use bmz_core::ids::{NoteId, SoundId};
     use bmz_core::input::InputKind;
     use bmz_core::lane::{KeyMode, Lane};
     use bmz_core::time::TimeUs;
@@ -804,7 +1173,7 @@ mod tests {
 
     #[test]
     fn random_lane_permutation_k9_preserves_active_lanes() {
-        let perm = random_lane_permutation(42, KeyMode::K9);
+        let perm = random_lane_permutation(42, KeyMode::K9, false);
         let active: HashSet<_> =
             KeyMode::K9.active_lanes().iter().map(|&lane| lane as usize).collect();
         let mapped: HashSet<_> =
@@ -813,9 +1182,17 @@ mod tests {
     }
 
     #[test]
+    fn splitmix64_matches_known_seed_zero_outputs() {
+        let mut rng = SplitMix64::new(0);
+
+        assert_eq!(rng.next_u64(), 0xE220_A839_7B1D_CDAF);
+        assert_eq!(rng.next_u64(), 0x6E78_9E6A_A1B9_65F4);
+        assert_eq!(rng.next_u64(), 0x06C4_5D18_8009_454F);
+    }
+
+    #[test]
     fn apply_arrange_random_moves_notes_between_lanes() {
         use bmz_chart::model::{NoteEvent, NoteKind};
-        use bmz_core::ids::NoteId;
         use bmz_core::time::ChartTick;
 
         let mut chart = chart();
@@ -838,6 +1215,93 @@ mod tests {
         assert!(chart.lane_notes.iter().enumerate().any(|(lane_index, notes)| lane_index
             != Lane::Key1.index()
             && notes.iter().any(|note| note.id == NoteId(1) && note.lane.index() == lane_index)));
+    }
+
+    #[test]
+    fn rotate_random_uses_non_identity_lane_rotation() {
+        let perm = rotate_lane_permutation(7, KeyMode::K7, false);
+        let key_lanes: Vec<usize> = (Lane::Key1.index()..=Lane::Key7.index()).collect();
+        let mapped: HashSet<_> = key_lanes.iter().map(|&lane| perm[lane]).collect();
+
+        assert_eq!(mapped, key_lanes.iter().copied().collect());
+        assert!(key_lanes.iter().any(|&lane| perm[lane] != lane));
+        assert_eq!(perm[Lane::Scratch.index()], Lane::Scratch.index());
+    }
+
+    #[test]
+    fn random_ex_includes_scratch_lane() {
+        let mut chart = chart();
+        chart.metadata.key_mode = KeyMode::K7;
+        chart.lane_notes[Lane::Scratch.index()].push(note(1, Lane::Scratch, 1_000_000));
+
+        let applied = apply_arrange(&mut chart, ArrangeOption::RandomEx, Some(1), None);
+
+        assert_eq!(applied.arrange, ArrangeOption::RandomEx);
+        assert!(chart.lane_notes.iter().enumerate().any(|(lane_index, notes)| lane_index
+            != Lane::Scratch.index()
+            && notes.iter().any(|note| note.id == NoteId(1) && note.lane.index() == lane_index)));
+    }
+
+    #[test]
+    fn s_random_is_reproducible_from_seed() {
+        let mut first = chart_with_two_notes_same_lane();
+        let mut second = chart_with_two_notes_same_lane();
+
+        let first_applied = apply_arrange(&mut first, ArrangeOption::SRandom, Some(99), None);
+        let _second_applied = apply_arrange(&mut second, ArrangeOption::SRandom, Some(99), None);
+
+        assert_eq!(first_applied.pattern, None);
+        assert_eq!(lanes_for_notes(&first), lanes_for_notes(&second));
+    }
+
+    #[test]
+    fn s_random_keeps_long_note_end_on_start_lane() {
+        use bmz_chart::model::{LongNoteMode, LongNotePair, LongNoteStyle};
+        use bmz_core::time::ChartTick;
+
+        let mut chart = chart();
+        chart.metadata.key_mode = KeyMode::K7;
+        chart.lane_notes[Lane::Key1.index()].push(NoteEvent {
+            kind: NoteKind::LongStart,
+            tick: ChartTick(0),
+            ..note(1, Lane::Key1, 1_000_000)
+        });
+        chart.lane_notes[Lane::Key1.index()].push(NoteEvent {
+            kind: NoteKind::LongEnd,
+            tick: ChartTick(48),
+            ..note(2, Lane::Key1, 2_000_000)
+        });
+        chart.long_notes.push(LongNotePair {
+            lane: Lane::Key1,
+            style: LongNoteStyle::ChannelPair,
+            mode: Some(LongNoteMode::Cn),
+            start_note_id: NoteId(1),
+            end_note_id: NoteId(2),
+            start_tick: ChartTick(0),
+            end_tick: ChartTick(48),
+            start_time: TimeUs(1_000_000),
+            end_time: TimeUs(2_000_000),
+            sound: None,
+        });
+
+        apply_arrange(&mut chart, ArrangeOption::SRandom, Some(5), None);
+
+        let start_lane = chart
+            .lane_notes
+            .iter()
+            .flatten()
+            .find(|note| note.id == NoteId(1))
+            .map(|note| note.lane)
+            .expect("start note");
+        let end_lane = chart
+            .lane_notes
+            .iter()
+            .flatten()
+            .find(|note| note.id == NoteId(2))
+            .map(|note| note.lane)
+            .expect("end note");
+        assert_eq!(start_lane, end_lane);
+        assert_eq!(chart.long_notes[0].lane, start_lane);
     }
 
     #[test]
@@ -1104,6 +1568,35 @@ mod tests {
             total_notes: 1,
             end_time: TimeUs(0),
         }
+    }
+
+    fn note(id: u32, lane: Lane, time_us: i64) -> NoteEvent {
+        use bmz_core::time::ChartTick;
+
+        NoteEvent {
+            id: NoteId(id),
+            lane,
+            kind: NoteKind::Tap,
+            tick: ChartTick((time_us / 1_000) as u64),
+            time: TimeUs(time_us),
+            sound: None,
+            damage: None,
+        }
+    }
+
+    fn chart_with_two_notes_same_lane() -> PlayableChart {
+        let mut chart = chart();
+        chart.metadata.key_mode = KeyMode::K7;
+        chart.lane_notes[Lane::Key1.index()].push(note(1, Lane::Key1, 1_000_000));
+        chart.lane_notes[Lane::Key1.index()].push(note(2, Lane::Key1, 1_020_000));
+        chart
+    }
+
+    fn lanes_for_notes(chart: &PlayableChart) -> Vec<(NoteId, Lane)> {
+        let mut lanes: Vec<_> =
+            chart.lane_notes.iter().flatten().map(|note| (note.id, note.lane)).collect();
+        lanes.sort_by_key(|(id, _)| *id);
+        lanes
     }
 
     fn write_temp_bms(text: &str) -> std::path::PathBuf {

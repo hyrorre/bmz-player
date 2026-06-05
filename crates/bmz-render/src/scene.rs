@@ -280,6 +280,7 @@ pub enum SelectRowKind {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResultSnapshot {
     pub clear_type: ClearType,
+    pub arrange: String,
     pub ex_score: u32,
     pub ex_score_rate: f32,
     pub max_combo: u32,
@@ -340,6 +341,7 @@ mod tests {
     fn result_snapshot_detects_full_combo() {
         let snapshot = ResultSnapshot {
             clear_type: ClearType::Normal,
+            arrange: "NORMAL".to_string(),
             ex_score: 20,
             ex_score_rate: 1.0,
             max_combo: 10,
@@ -383,6 +385,7 @@ mod tests {
     fn zero_note_result_is_not_full_combo() {
         let snapshot = ResultSnapshot {
             clear_type: ClearType::Normal,
+            arrange: "NORMAL".to_string(),
             ex_score: 0,
             ex_score_rate: 1.0,
             max_combo: 0,

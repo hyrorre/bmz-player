@@ -5,15 +5,32 @@ pub enum ArrangeOption {
     Normal,
     Mirror,
     Random,
+    RRandom,
+    SRandom,
+    Spiral,
+    HRandom,
+    AllScratch,
+    RandomEx,
+    SRandomEx,
 }
 
 impl ArrangeOption {
+    pub const VALUES: [Self; 10] = [
+        Self::Normal,
+        Self::Mirror,
+        Self::Random,
+        Self::RRandom,
+        Self::SRandom,
+        Self::Spiral,
+        Self::HRandom,
+        Self::AllScratch,
+        Self::RandomEx,
+        Self::SRandomEx,
+    ];
+
     pub fn cycle(self) -> Self {
-        match self {
-            Self::Normal => Self::Mirror,
-            Self::Mirror => Self::Random,
-            Self::Random => Self::Normal,
-        }
+        let index = Self::VALUES.iter().position(|&value| value == self).unwrap_or(0);
+        Self::VALUES[(index + 1) % Self::VALUES.len()]
     }
 
     pub fn as_str(self) -> &'static str {
@@ -21,6 +38,13 @@ impl ArrangeOption {
             Self::Normal => "NORMAL",
             Self::Mirror => "MIRROR",
             Self::Random => "RANDOM",
+            Self::RRandom => "R-RANDOM",
+            Self::SRandom => "S-RANDOM",
+            Self::Spiral => "SPIRAL",
+            Self::HRandom => "H-RANDOM",
+            Self::AllScratch => "ALL-SCR",
+            Self::RandomEx => "RANDOM-EX",
+            Self::SRandomEx => "S-RANDOM-EX",
         }
     }
 
@@ -29,6 +53,13 @@ impl ArrangeOption {
             Self::Normal => "Normal",
             Self::Mirror => "Mirror",
             Self::Random => "Random",
+            Self::RRandom => "RRandom",
+            Self::SRandom => "SRandom",
+            Self::Spiral => "Spiral",
+            Self::HRandom => "HRandom",
+            Self::AllScratch => "AllScratch",
+            Self::RandomEx => "RandomEx",
+            Self::SRandomEx => "SRandomEx",
         }
     }
 
@@ -36,8 +67,19 @@ impl ArrangeOption {
         match value {
             "Mirror" => Self::Mirror,
             "Random" => Self::Random,
+            "RRandom" => Self::RRandom,
+            "SRandom" => Self::SRandom,
+            "Spiral" => Self::Spiral,
+            "HRandom" => Self::HRandom,
+            "AllScratch" => Self::AllScratch,
+            "RandomEx" => Self::RandomEx,
+            "SRandomEx" => Self::SRandomEx,
             _ => Self::Normal,
         }
+    }
+
+    pub fn uses_seed(self) -> bool {
+        !matches!(self, Self::Normal | Self::Mirror)
     }
 }
 
