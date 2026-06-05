@@ -228,6 +228,8 @@ pub struct VisibleNote {
     pub lane: Lane,
     pub time: TimeUs,
     pub y: f32,
+    /// beatoraja の `Note.state` 相当。判定済みでも本来の時刻までは描画に残す。
+    pub processed_judge: Option<Judge>,
 }
 
 /// 画面上に見えている Mine ノーツ。座標系は [`VisibleNote`] と同じ。

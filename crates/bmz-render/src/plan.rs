@@ -2350,6 +2350,7 @@ mod tests {
             lane: Lane::Key1,
             time: TimeUs(1_000),
             y: 0.5,
+            processed_judge: None,
         });
         snapshot.bar_lines.push(VisibleBarLine { time: TimeUs(900), y: 0.25 });
 
@@ -2370,16 +2371,19 @@ mod tests {
             lane: Lane::Scratch,
             time: TimeUs(1_000),
             y: 0.5,
+            processed_judge: None,
         });
         snapshot.visible_notes[Lane::Key1.index()].push(VisibleNote {
             lane: Lane::Key1,
             time: TimeUs(1_000),
             y: 0.5,
+            processed_judge: None,
         });
         snapshot.visible_notes[Lane::Key2.index()].push(VisibleNote {
             lane: Lane::Key2,
             time: TimeUs(1_000),
             y: 0.5,
+            processed_judge: None,
         });
 
         let plan = DrawPlan::from_scene(&AppSceneSnapshot::Play(snapshot));
@@ -2760,6 +2764,7 @@ mod tests {
             lane: Lane::Key1,
             time: TimeUs(1_000),
             y: 0.5,
+            processed_judge: None,
         });
 
         let plan = DrawPlan::from_scene_with_skin(
@@ -3083,6 +3088,7 @@ mod tests {
             lane: Lane::Key1,
             time: TimeUs(1_000),
             y: 0.0,
+            processed_judge: None,
         });
 
         let plan = DrawPlan::from_scene_with_skin(
@@ -3322,11 +3328,13 @@ mod tests {
             lane: Lane::Key1,
             time: TimeUs(1_000),
             y: 0.75,
+            processed_judge: None,
         });
         snapshot.visible_notes[Lane::Key1.index()].push(VisibleNote {
             lane: Lane::Key1,
             time: TimeUs(2_000),
             y: 0.25,
+            processed_judge: None,
         });
 
         let plan = DrawPlan::from_scene(&AppSceneSnapshot::Play(snapshot));

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use bmz_chart::model::{LongNoteMode, NoteEvent, NoteKind, PlayableChart};
 use bmz_core::ids::NoteId;
 use bmz_core::input::{InputEvent, InputKind};
@@ -16,6 +18,7 @@ pub struct JudgeEngine {
     pub windows: JudgeWindow,
     pub rule_mode: RuleMode,
     pub lanes: [LaneJudgeState; LANE_COUNT],
+    pub judged_notes: HashMap<NoteId, Judge>,
 }
 
 impl JudgeEngine {
@@ -24,7 +27,12 @@ impl JudgeEngine {
     }
 
     pub fn new_with_rule_mode(windows: JudgeWindow, rule_mode: RuleMode) -> Self {
-        Self { windows, rule_mode, lanes: [LaneJudgeState::default(); LANE_COUNT] }
+        Self {
+            windows,
+            rule_mode,
+            lanes: [LaneJudgeState::default(); LANE_COUNT],
+            judged_notes: HashMap::new(),
+        }
     }
 
     pub fn process_input(&mut self, chart: &PlayableChart, input: InputEvent) -> JudgeOutcome {
@@ -48,6 +56,7 @@ impl JudgeEngine {
                 }
 
                 lane_state.next_note_index = idx + 1;
+                self.judged_notes.insert(note.id, Judge::Poor);
                 outcome.events.push(JudgementEvent {
                     note_id: Some(note.id),
                     lane,
@@ -133,6 +142,7 @@ impl JudgeEngine {
         }) {
             lane_state.next_note_index = idx + 1;
             lane_state.last_press_time = Some(note.time);
+            self.judged_notes.insert(note.id, judge);
 
             if note.kind == NoteKind::LongStart
                 && let Some(active) = make_active_long(chart, note.id)
@@ -183,6 +193,7 @@ impl JudgeEngine {
                 if input.time.0 >= active.end.end_time.0 {
                     return JudgeOutcome::default();
                 }
+                self.judged_notes.insert(active.start_note_id, Judge::Poor);
                 JudgeOutcome {
                     events: vec![JudgementEvent {
                         note_id: Some(active.start_note_id),
@@ -209,6 +220,7 @@ impl JudgeEngine {
                     lane_state.hcn_draining = false;
                     lane_state.hcn_drain_until = None;
                 }
+                self.judged_notes.insert(active.end.end_note_id, judge);
 
                 JudgeOutcome {
                     events: vec![JudgementEvent {
@@ -453,7 +465,13 @@ mod tests {
     }
 
     fn release_at(time: TimeUs) -> InputEvent {
-        InputEvent { source: InputSource::Human, lane: Lane::Key1, kind: InputKind::Release, time }
+        InputEvent {
+            source: InputSource::Human,
+            lane: Lane::Key1,
+            kind: InputKind::Release,
+            time,
+            device_kind: bmz_core::input::InputDeviceKind::Keyboard,
+        }
     }
 
     #[test]

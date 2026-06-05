@@ -92,12 +92,14 @@ pub fn sample_play_scene() -> AppSceneSnapshot {
             lane,
             time: TimeUs(12_500_000 + index as i64 * 80_000),
             y: 0.18 + index as f32 * 0.08,
+            processed_judge: None,
         });
     }
     snapshot.visible_notes[Lane::Key2.index()].push(VisibleNote {
         lane: Lane::Key2,
         time: TimeUs(13_200_000),
         y: 0.86,
+        processed_judge: None,
     });
     snapshot.bar_lines.push(VisibleBarLine { time: TimeUs(12_000_000), y: 0.25 });
     snapshot.bar_lines.push(VisibleBarLine { time: TimeUs(13_000_000), y: 0.78 });

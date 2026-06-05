@@ -233,8 +233,7 @@ pub fn build_render_snapshot_with_target_and_bga_frames(
         let cursor_tick = scroll.cursor_tick(scroll_time);
 
         for lane in Lane::ALL {
-            let next_note_index = session.judge.lanes[lane.index()].next_note_index;
-            for note in session.chart.notes_for_lane(lane).iter().skip(next_note_index) {
+            for note in session.chart.notes_for_lane(lane) {
                 match note.kind {
                     NoteKind::Invisible => continue,
                     NoteKind::Mine => {
@@ -253,6 +252,7 @@ pub fn build_render_snapshot_with_target_and_bga_frames(
                                 lane,
                                 time: note.time,
                                 y,
+                                processed_judge: session.judge.judged_notes.get(&note.id).copied(),
                             });
                         }
                     }
@@ -677,6 +677,7 @@ mod tests {
     use bmz_chart::hash::compute_chart_identity;
     use bmz_chart::model::{ChartMetadata, NoteEvent, NoteKind, PlayableChart};
     use bmz_core::ids::NoteId;
+    use bmz_core::input::{InputDeviceKind, InputEvent, InputKind, InputSource};
     use bmz_core::judge::{Judge, TimingSide};
     use bmz_core::lane::Lane;
     use bmz_core::time::{ChartTick, TimeUs};
@@ -728,6 +729,37 @@ mod tests {
         assert_eq!(snapshot.recent_judgements[0].lane, Lane::Key1);
         assert_eq!(snapshot.recent_judgements[0].text, "EMPTY POOR SLOW");
         assert_eq!(snapshot.recent_judgements[0].delta_us, 5_000);
+    }
+
+    #[test]
+    fn judged_notes_remain_visible_until_their_scheduled_time() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+        session.hispeed = 1.0;
+
+        let outcome = session.judge.process_input(
+            &session.chart,
+            InputEvent {
+                lane: Lane::Key1,
+                kind: InputKind::Press,
+                time: TimeUs(990_000),
+                source: InputSource::Human,
+                device_kind: InputDeviceKind::Keyboard,
+            },
+        );
+        assert_eq!(outcome.events.len(), 1);
+        assert_eq!(session.judge.lanes[Lane::Key1.index()].next_note_index, 1);
+
+        let before_scheduled_time = build_render_snapshot(&session, TimeUs(990_000), &[], None);
+        assert_eq!(before_scheduled_time.visible_notes[Lane::Key1.index()].len(), 1);
+        assert_eq!(
+            before_scheduled_time.visible_notes[Lane::Key1.index()][0].processed_judge,
+            Some(outcome.events[0].judge)
+        );
+
+        let after_scheduled_time = build_render_snapshot(&session, TimeUs(1_000_001), &[], None);
+        assert!(after_scheduled_time.visible_notes[Lane::Key1.index()].is_empty());
     }
 
     #[test]
@@ -1022,7 +1054,7 @@ mod tests {
     }
 
     #[test]
-    fn build_render_snapshot_hides_consumed_notes() {
+    fn build_render_snapshot_keeps_notes_after_judge_cursor_advances() {
         let profile = ProfileConfig::new_default("default", "Default", 1);
         let mut session =
             build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
@@ -1030,7 +1062,8 @@ mod tests {
 
         let snapshot = build_render_snapshot(&session, TimeUs(0), &[], None);
 
-        assert!(snapshot.visible_notes[Lane::Key1.index()].is_empty());
+        assert_eq!(snapshot.visible_notes[Lane::Key1.index()].len(), 1);
+        assert_eq!(snapshot.visible_notes[Lane::Key1.index()][0].processed_judge, None);
     }
 
     #[test]
