@@ -4144,6 +4144,7 @@ impl WinitApp {
             active_play.running.target_ex_score,
             &active_play.running.bga_frames,
         );
+        snapshot.arrange = active_play.running.applied_arrange.arrange.as_str().to_string();
         snapshot.backbmp_background = self.play_backbmp_loaded;
         snapshot.play_elapsed_time = self.play_elapsed_time();
         snapshot.ready_elapsed_time = self.play_ready_sound_started_at.map(elapsed_since);

@@ -837,6 +837,7 @@ fn plan_play(
         play_timer_ms: (snapshot.time.0 >= 0)
             .then_some((snapshot.time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32),
         key_mode,
+        select_arrange_index: crate::skin::select_arrange_index(&snapshot.arrange),
         combo: snapshot.combo,
         max_combo: snapshot.max_combo,
         ex_score: snapshot.ex_score,
@@ -3659,6 +3660,52 @@ mod tests {
         assert!(plan.commands.iter().any(|command| matches!(
             command,
             DrawCommand::Text { text, .. } if text.contains("DIFFICULTY ANOTHER") && text.contains("LEVEL 12")
+        )));
+    }
+
+    #[test]
+    fn play_plan_uses_snapshot_arrange_for_skin_imageset() {
+        let document: crate::skin::SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "arrange.png" }],
+                "image": [
+                    { "id": "normal", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10 },
+                    { "id": "mirror", "src": 1, "x": 10, "y": 0, "w": 10, "h": 10 },
+                    { "id": "random", "src": 1, "x": 20, "y": 0, "w": 10, "h": 10 }
+                ],
+                "imageset": [
+                    { "id": "arrange", "ref": 42, "images": ["normal", "mirror", "random"] }
+                ],
+                "destination": [
+                    { "id": "arrange", "dst": [{ "time": 0, "x": 10, "y": 20, "w": 20, "h": 10 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let manifest: SkinManifest = toml::from_str("").unwrap();
+        let source_texture = crate::skin::SkinDocumentTexture {
+            source_id: "1".to_string(),
+            texture: crate::skin::SkinTextureId(77),
+            source_size: crate::skin::SkinImageSize { width: 30.0, height: 10.0 },
+        };
+        let skin = SkinContext::from_manifest_and_document(manifest, document, [source_texture]);
+        let snapshot = RenderSnapshot { arrange: "RANDOM".to_string(), ..Default::default() };
+
+        let plan = DrawPlan::from_scene_with_skin(
+            &AppSceneSnapshot::Play(snapshot),
+            &skin,
+            &mut crate::skin::DynamicTimerRuntime::default(),
+        );
+
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Image { texture, uv, .. }
+                if *texture == TextureId(77) && (uv.x - 20.0 / 30.0).abs() < 0.001
         )));
     }
 

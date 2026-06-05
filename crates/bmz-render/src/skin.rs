@@ -8232,7 +8232,7 @@ fn rank_index(ex_score: Option<u32>, total_notes: u32) -> Option<usize> {
     Some(rank)
 }
 
-fn select_arrange_index(arrange: &str) -> usize {
+pub(crate) fn select_arrange_index(arrange: &str) -> usize {
     match arrange {
         "MIRROR" => 1,
         "RANDOM" => 2,

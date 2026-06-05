@@ -78,6 +78,7 @@ pub fn build_render_snapshot_with_target_and_bga_frames(
         difficulty_name: session.chart.metadata.difficulty_name.clone(),
         judge_rank: session.chart.metadata.judge_rank,
         play_level: session.chart.metadata.play_level.clone(),
+        arrange: "NORMAL".to_string(),
         combo: session.score.combo,
         max_combo: session.score.max_combo,
         ex_score: session.score.ex_score(),

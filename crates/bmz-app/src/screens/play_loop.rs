@@ -141,14 +141,16 @@ pub fn advance_running_play_session(
 ) -> Result<FrameOutput<RenderSnapshot>> {
     let mut audio =
         running.audio.engine.lock().map_err(|_| anyhow!("audio engine lock poisoned"))?;
-    Ok(advance_play_screen_with_bga_frames(
+    let mut frame = advance_play_screen_with_bga_frames(
         &mut running.session,
         &mut *audio,
         running.best_ex_score,
         running.best_ghost.as_deref(),
         running.target_ex_score,
         &running.bga_frames,
-    ))
+    );
+    apply_play_arrange_to_snapshot(&mut frame.render_snapshot, running.applied_arrange.arrange);
+    Ok(frame)
 }
 
 pub fn advance_running_play_session_until_result(
@@ -162,14 +164,16 @@ pub fn advance_running_play_session_until_result(
     let frame = {
         let mut audio =
             running.audio.engine.lock().map_err(|_| anyhow!("audio engine lock poisoned"))?;
-        advance_play_screen_with_bga_frames(
+        let mut frame = advance_play_screen_with_bga_frames(
             &mut running.session,
             &mut *audio,
             running.best_ex_score,
             running.best_ghost.as_deref(),
             running.target_ex_score,
             &running.bga_frames,
-        )
+        );
+        apply_play_arrange_to_snapshot(&mut frame.render_snapshot, running.applied_arrange.arrange);
+        frame
     };
     running.result_graph.record_frame(&frame);
     if matches!(frame.state, PlayState::Finished | PlayState::Failed) {
@@ -215,14 +219,23 @@ pub fn refresh_play_ending_snapshot(
     running: &mut RunningPlaySession,
     timers: PlayEndingSkinTimers,
 ) -> RenderSnapshot {
-    refresh_play_ending_snapshot_with_session(
+    let mut snapshot = refresh_play_ending_snapshot_with_session(
         &mut running.session,
         running.best_ex_score,
         running.best_ghost.as_deref(),
         running.target_ex_score,
         &running.bga_frames,
         timers,
-    )
+    );
+    apply_play_arrange_to_snapshot(&mut snapshot, running.applied_arrange.arrange);
+    snapshot
+}
+
+fn apply_play_arrange_to_snapshot(
+    snapshot: &mut RenderSnapshot,
+    arrange: crate::select_options::ArrangeOption,
+) {
+    snapshot.arrange = arrange.as_str().to_string();
 }
 
 pub fn refresh_play_ending_snapshot_with_session(
@@ -277,6 +290,7 @@ mod tests {
     use crate::config::profile_config::ProfileConfig;
     use crate::config::profile_config::ReplayConfig;
     use crate::screens::play_session::{PlaySessionOptions, build_game_session};
+    use crate::select_options::ArrangeOption;
     use crate::storage::common::configure_connection;
     use crate::storage::migration::{SCORE_MIGRATIONS, run_migrations};
     use crate::storage::score_db::ScoreDatabase;
@@ -305,6 +319,15 @@ mod tests {
 
         assert_eq!(frame.render_snapshot.time, TimeUs(0));
         assert_eq!(frame.render_snapshot.visible_notes[Lane::Key1.index()].len(), 1);
+    }
+
+    #[test]
+    fn apply_play_arrange_to_snapshot_sets_skin_label() {
+        let mut snapshot = RenderSnapshot::default();
+
+        apply_play_arrange_to_snapshot(&mut snapshot, ArrangeOption::Mirror);
+
+        assert_eq!(snapshot.arrange, "MIRROR");
     }
 
     #[test]
