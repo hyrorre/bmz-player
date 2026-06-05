@@ -1614,7 +1614,8 @@ pub struct SkinDrawState {
     pub bga_stretch: i32,
     /// 最後の判定のタイミングずれ ms (VALUE_JUDGE_1P_DURATION=525 に使用)。Noneなら非表示。
     pub judge_timing_ms: Option<i32>,
-    /// 過去ベストスコアのexスコア (NUMBER_HIGHSCORE=150, BARGRAPH_BESTSCORERATE=113 に使用)。
+    /// DB 上のベスト ex スコア。
+    /// Result では保存前ベスト (`previous_best_ex_score`) を MYBEST 表示に優先する。
     pub best_ex_score: Option<u32>,
     /// ghost から現在進行度まで積算した過去ベスト EX。None の場合は final score の線形投影を使う。
     pub projected_best_ex_score: Option<u32>,
@@ -6867,8 +6868,7 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
                 |parts| (if matches!(ref_id, 122 | 135 | 157) { parts.0 } else { parts.1 }) as i64,
             )
         }
-        183 | 184 => state
-            .best_ex_score
+        183 | 184 => result_mybest_ex_score(state)
             .map(|best| score_rate_parts(best, state.total_notes))
             .map(|parts| if ref_id == 183 { parts.0 } else { parts.1 } as i64),
         400 => state.judge_rank.map(|rank| rank as i64),
@@ -7016,9 +7016,9 @@ fn projected_score_at_progress(final_score: u32, state: SkinDrawState) -> u32 {
 }
 
 fn projected_best_score_at_progress(state: SkinDrawState) -> Option<u32> {
-    state
-        .projected_best_ex_score
-        .or_else(|| state.best_ex_score.map(|score| projected_score_at_progress(score, state)))
+    state.projected_best_ex_score.or_else(|| {
+        result_mybest_ex_score(state).map(|score| projected_score_at_progress(score, state))
+    })
 }
 
 fn div_ceil(numerator: i64, denominator: i64) -> i64 {
@@ -7220,7 +7220,19 @@ fn current_bp(state: SkinDrawState) -> u32 {
 }
 
 fn result_mybest_bp(state: SkinDrawState) -> Option<u32> {
-    state.best_bp.or(state.previous_best_bp)
+    if state.result_failed.is_some() {
+        state.previous_best_bp.or(state.best_bp)
+    } else {
+        state.best_bp
+    }
+}
+
+fn result_mybest_ex_score(state: SkinDrawState) -> Option<u32> {
+    if state.result_failed.is_some() {
+        state.previous_best_ex_score.or(state.best_ex_score)
+    } else {
+        state.best_ex_score
+    }
 }
 
 fn skin_point_score(state: SkinDrawState) -> u32 {
@@ -7299,7 +7311,7 @@ fn graph_value(graph_type: i32, state: SkinDrawState) -> f32 {
         // BARGRAPH_BESTSCORERATE (113): best_ex_score / (total_notes * 2)
         113 => {
             let max = (state.total_notes * 2) as f32;
-            if max > 0.0 { state.best_ex_score.unwrap_or(0) as f32 / max } else { 0.0 }
+            if max > 0.0 { result_mybest_ex_score(state).unwrap_or(0) as f32 / max } else { 0.0 }
         }
         // BARGRAPH_TARGETSCORERATE_NOW (114): target_ex_score * past_notes / (total_notes^2 * 2)
         114 => {
@@ -15059,7 +15071,7 @@ mod tests {
         assert_eq!(skin_state_number(42, state), Some(9));
         assert_eq!(skin_state_number(43, state), Some(9));
         // 符号付き差分
-        assert_eq!(skin_state_number(170, state), Some(1700));
+        assert_eq!(skin_state_number(170, state), Some(1800));
         assert_eq!(skin_state_number(121, state), Some(1900));
         assert_eq!(skin_state_number(151, state), Some(1900));
         assert_eq!(skin_state_number(122, state), Some(95));
@@ -15068,17 +15080,17 @@ mod tests {
         assert_eq!(skin_state_number(136, state), Some(0));
         assert_eq!(skin_state_number(157, state), Some(95));
         assert_eq!(skin_state_number(158, state), Some(0));
-        assert_eq!(skin_state_number(183, state), Some(85));
+        assert_eq!(skin_state_number(183, state), Some(90));
         assert_eq!(skin_state_number(184, state), Some(0));
-        assert_eq!(skin_state_number(152, state), Some(1888 - 1700));
-        assert_eq!(skin_state_number(172, state), Some(1888 - 1700));
+        assert_eq!(skin_state_number(152, state), Some(1888 - 1800));
+        assert_eq!(skin_state_number(172, state), Some(1888 - 1800));
         assert_eq!(skin_state_number(153, state), Some(1888 - 1900));
         assert_eq!(skin_state_number(173, state), Some(1000));
         assert_eq!(skin_state_number(175, state), Some(777 - 1000));
-        assert_eq!(skin_state_number(176, state), Some(20));
+        assert_eq!(skin_state_number(176, state), Some(10));
         assert_eq!(skin_state_number(177, state), Some(8));
-        // 現在 bp = bad+poor = 8、MYBEST = 20 → diff = -12
-        assert_eq!(skin_state_number(178, state), Some(-12));
+        // 現在 bp = bad+poor = 8、MYBEST = 更新前の 10 → diff = -2
+        assert_eq!(skin_state_number(178, state), Some(-2));
         assert_eq!(skin_state_number(371, state), Some(6));
         assert!(test_skin_op(321, &[], state));
         assert!(!test_skin_op(320, &[], state));
@@ -15117,6 +15129,21 @@ mod tests {
         assert!(test_skin_op(1332, &[], draw_state));
         assert!(test_skin_op(1335, &[], draw_state));
         assert!(test_skin_op(354, &[], draw_state));
+
+        let updated_result_state = SkinDrawState {
+            ex_score: 1900,
+            total_notes: 1000,
+            past_notes: 1000,
+            best_ex_score: Some(1900),
+            previous_best_ex_score: Some(1700),
+            result_failed: Some(false),
+            ..SkinDrawState::default()
+        };
+        assert_eq!(skin_state_number(150, updated_result_state), Some(1700));
+        assert_eq!(skin_state_number(170, updated_result_state), Some(1700));
+        assert_eq!(skin_state_number(152, updated_result_state), Some(200));
+        assert_eq!(skin_state_number(183, updated_result_state), Some(85));
+        assert!((graph_value(113, updated_result_state) - 0.85).abs() < 1e-5);
 
         let zero_rank_state = SkinDrawState {
             ex_score: 0,
