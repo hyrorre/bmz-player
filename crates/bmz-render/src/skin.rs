@@ -14951,8 +14951,8 @@ mod tests {
         assert_eq!(skin_state_number(184, state), Some(5));
         assert_eq!(skin_state_number(400, state), Some(1));
         assert_eq!(skin_state_number(420, state), Some(2));
-        assert_eq!(skin_state_number(423, state), Some(70));
-        assert_eq!(skin_state_number(424, state), Some(75));
+        assert_eq!(skin_state_number(423, state), Some(60));
+        assert_eq!(skin_state_number(424, state), Some(64));
         assert_eq!(skin_state_number(425, state), Some(7));
         assert_eq!(skin_state_number(426, state), Some(3));
         assert_eq!(skin_state_number(427, state), Some(7));
@@ -15140,10 +15140,10 @@ mod tests {
         assert_eq!(skin_state_number(419, state), Some(2));
         assert_eq!(skin_state_number(421, state), Some(5));
         assert_eq!(skin_state_number(422, state), Some(4));
-        // TOTAL_EARLY = fast 全合計 = 350+180+12+2+3 = 547
-        assert_eq!(skin_state_number(423, state), Some(547));
-        // TOTAL_LATE = slow 全合計 = 427+154+10+1+2 = 594
-        assert_eq!(skin_state_number(424, state), Some(594));
+        // TOTAL_EARLY = fast 合計 (PGREAT 除外) = 180+12+2+3 = 197
+        assert_eq!(skin_state_number(423, state), Some(197));
+        // TOTAL_LATE = slow 合計 (PGREAT 除外) = 154+10+1+2 = 167
+        assert_eq!(skin_state_number(424, state), Some(167));
 
         // Result timing distribution
         assert_eq!(skin_state_number(374, state), Some(-12));
