@@ -1,5 +1,6 @@
-use bmz_chart::model::ChartMetadata;
 use bmz_core::clear::{ClearType, GaugeType};
+use bmz_core::lane::KeyMode;
+use bmz_gameplay::gauge::gauge_total_for_chart;
 use bmz_gameplay::result::PlayResult;
 use bmz_gameplay::score::JudgeCounts;
 use bmz_gameplay::session::FrameOutput;
@@ -18,6 +19,14 @@ pub struct ResultSummary {
     pub gauge_value: f32,
     pub gauge_type: GaugeType,
     pub total_notes: u32,
+    pub duration_ms: i32,
+    pub initial_bpm: f32,
+    pub min_bpm: f32,
+    pub max_bpm: f32,
+    pub main_bpm: f32,
+    pub total_gauge: f32,
+    pub judge_rank: Option<i32>,
+    pub key_mode: KeyMode,
     pub judge_counts: ResultJudgeCounts,
     pub fast_slow_counts: ResultFastSlowJudgeCounts,
     pub replay_path: String,
@@ -114,8 +123,11 @@ impl ResultSummary {
     pub fn from_play_result(
         result: &PlayResult,
         stored: &StoredPlayResult,
-        metadata: &ChartMetadata,
+        chart: &bmz_chart::model::PlayableChart,
     ) -> Self {
+        let metadata = &chart.metadata;
+        let duration_ms = (chart.end_time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+        let initial_bpm = metadata.initial_bpm as f32;
         Self {
             clear_type: result.clear_type,
             arrange: "NORMAL".to_string(),
@@ -124,6 +136,14 @@ impl ResultSummary {
             gauge_value: result.gauge_value,
             gauge_type: result.gauge_type,
             total_notes: result.total_notes,
+            duration_ms,
+            initial_bpm,
+            min_bpm: initial_bpm,
+            max_bpm: initial_bpm,
+            main_bpm: initial_bpm,
+            total_gauge: gauge_total_for_chart(metadata.total, result.total_notes) as f32,
+            judge_rank: metadata.judge_rank,
+            key_mode: metadata.key_mode,
             judge_counts: ResultJudgeCounts::from_judge_counts(&result.score.judges),
             fast_slow_counts: ResultFastSlowJudgeCounts::from_judge_counts(&result.score.judges),
             replay_path: stored.replay_path.clone(),
@@ -250,11 +270,41 @@ mod tests {
             slot_paths: [None, None, None, None],
             device_type: bmz_core::input::InputDeviceKind::Keyboard,
         };
-        let metadata = ChartMetadata { title: "Test".to_string(), ..ChartMetadata::default() };
+        let chart = bmz_chart::model::PlayableChart {
+            identity: bmz_core::chart::ChartIdentity { file_md5: [0; 16], file_sha256: [0; 32] },
+            metadata: bmz_chart::model::ChartMetadata {
+                title: "Test".to_string(),
+                initial_bpm: 128.0,
+                ..bmz_chart::model::ChartMetadata::default()
+            },
+            lane_notes: std::array::from_fn(|_| Vec::new()),
+            long_notes: Vec::new(),
+            bgm_events: Vec::new(),
+            bga_events: Vec::new(),
+            timing_events: Vec::new(),
+            scroll_events: Vec::new(),
+            speed_events: Vec::new(),
+            judge_rank_events: Vec::new(),
+            bgm_volume_events: Vec::new(),
+            key_volume_events: Vec::new(),
+            text_events: Vec::new(),
+            bga_opacity_events: Vec::new(),
+            bga_argb_events: Vec::new(),
+            swbga_definitions: Vec::new(),
+            bga_keybound_events: Vec::new(),
+            bga_asset_by_bmp_key: std::collections::HashMap::new(),
+            bar_lines: Vec::new(),
+            sounds: Vec::new(),
+            bga_assets: Vec::new(),
+            total_notes: 20,
+            end_time: TimeUs(90_000_000),
+        };
 
-        let summary = ResultSummary::from_play_result(&result, &stored, &metadata);
+        let summary = ResultSummary::from_play_result(&result, &stored, &chart);
 
         assert_eq!(summary.title, "Test");
+        assert_eq!(summary.duration_ms, 90_000);
+        assert_eq!(summary.initial_bpm, 128.0);
         assert_eq!(summary.clear_type, ClearType::Normal);
         assert_eq!(summary.gauge_type, GaugeType::Normal);
         assert_eq!(summary.max_combo, 12);

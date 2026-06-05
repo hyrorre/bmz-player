@@ -173,6 +173,37 @@ mod tests {
         }
     }
 
+    fn make_result_chart(total_notes: u32) -> bmz_chart::model::PlayableChart {
+        bmz_chart::model::PlayableChart {
+            identity: bmz_core::chart::ChartIdentity { file_md5: [0; 16], file_sha256: [0; 32] },
+            metadata: bmz_chart::model::ChartMetadata {
+                initial_bpm: 128.0,
+                ..bmz_chart::model::ChartMetadata::default()
+            },
+            lane_notes: std::array::from_fn(|_| Vec::new()),
+            long_notes: Vec::new(),
+            bgm_events: Vec::new(),
+            bga_events: Vec::new(),
+            timing_events: Vec::new(),
+            scroll_events: Vec::new(),
+            speed_events: Vec::new(),
+            judge_rank_events: Vec::new(),
+            bgm_volume_events: Vec::new(),
+            key_volume_events: Vec::new(),
+            text_events: Vec::new(),
+            bga_opacity_events: Vec::new(),
+            bga_argb_events: Vec::new(),
+            swbga_definitions: Vec::new(),
+            bga_keybound_events: Vec::new(),
+            bga_asset_by_bmp_key: std::collections::HashMap::new(),
+            bar_lines: Vec::new(),
+            sounds: Vec::new(),
+            bga_assets: Vec::new(),
+            total_notes,
+            end_time: bmz_core::time::TimeUs(1_000_000),
+        }
+    }
+
     fn make_session(course_id: i64, entry_scores: Vec<(ScoreState, u32)>) -> ActiveCourseSession {
         use crate::screens::result_model::ResultSummary;
         use crate::storage::play_result::StoredPlayResult;
@@ -210,10 +241,11 @@ mod tests {
                                 slot_paths: [None, None, None, None],
                                 device_type: bmz_core::input::InputDeviceKind::Keyboard,
                             },
-                            &bmz_chart::model::ChartMetadata::default(),
+                            &make_result_chart(total_notes),
                         ),
                         replay_playback: false,
                         arrange: crate::select_options::ArrangeOption::Normal,
+                        applied_arrange: crate::screens::play_session::AppliedArrange::default(),
                     },
                 }
             })
@@ -320,10 +352,11 @@ mod tests {
                                 slot_paths: [None, None, None, None],
                                 device_type: bmz_core::input::InputDeviceKind::Keyboard,
                             },
-                            &bmz_chart::model::ChartMetadata::default(),
+                            &make_result_chart(total_notes),
                         ),
                         replay_playback: false,
                         arrange: crate::select_options::ArrangeOption::Normal,
+                        applied_arrange: crate::screens::play_session::AppliedArrange::default(),
                     },
                 }
             })

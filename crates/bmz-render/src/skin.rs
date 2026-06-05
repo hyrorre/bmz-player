@@ -1709,6 +1709,8 @@ pub struct SkinDrawState {
     pub result_graph_begin_ms: Option<i32>,
     pub result_graph_end_ms: Option<i32>,
     pub result_update_score_ms: Option<i32>,
+    /// Result gaugegraph display type selected by result key CHANGE_GRAPH.
+    pub result_gauge_graph_type: Option<i32>,
     /// RESULT replay slot status for OPTION_REPLAYDATA* / *_SAVED.
     pub result_replay_slots: [bool; 4],
     pub result_saved_replay_slots: [bool; 4],
@@ -1877,6 +1879,7 @@ impl Default for SkinDrawState {
             result_graph_begin_ms: None,
             result_graph_end_ms: None,
             result_update_score_ms: None,
+            result_gauge_graph_type: None,
             result_replay_slots: [false; 4],
             result_saved_replay_slots: [false; 4],
             failed_ms: None,
@@ -4593,10 +4596,14 @@ impl SkinDocument {
         let frame_alpha = frame.a as f32 / 255.0;
         let blend = if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal };
         let max = state.gauge_max.max(1.0);
-        let border = points.first().map(|point| point.border).unwrap_or(state.gauge_border);
-        let color_index = gaugegraph_color_index(
-            points.last().map(|point| point.gauge_type).unwrap_or(state.gauge_type),
-        );
+        let display_gauge_type = state.result_gauge_graph_type.unwrap_or_else(|| {
+            points.last().map(|point| point.gauge_type).unwrap_or(state.gauge_type)
+        });
+        let border =
+            state.result_gauge_graph_type.map(gaugegraph_border_for_type).unwrap_or_else(|| {
+                points.first().map(|point| point.border).unwrap_or(state.gauge_border)
+            });
+        let color_index = gaugegraph_color_index(display_gauge_type);
         let colors = gaugegraph_colors(graph, color_index, frame_alpha);
         let border_y = rect.y + rect.height * (1.0 - (border / max).clamp(0.0, 1.0));
         let line_w = (2.0 / self.w.max(1) as f32).max(0.001);
@@ -6780,7 +6787,9 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         363 if state.select_screen => Some(decimal_afterdot(state.select_chart_end_density)),
         364 if state.select_screen => Some(state.select_chart_density.floor() as i64),
         365 if state.select_screen => Some(decimal_afterdot(state.select_chart_density)),
-        368 if state.select_screen => Some(state.select_chart_total_gauge.floor() as i64),
+        368 if state.select_screen || state.result_failed.is_some() => {
+            Some(state.select_chart_total_gauge.floor() as i64)
+        }
         75 | 105 | 174 => Some(state.max_combo as i64),
         76 if state.select_screen => state.select_bp.map(|count| count as i64).or(Some(0)),
         76 => Some((state.judge_counts.bad + state.judge_counts.poor) as i64),
@@ -7437,6 +7446,10 @@ fn gaugegraph_color_index(gauge_type: i32) -> usize {
     TYPE_TABLE.get(gauge_type.max(0) as usize).copied().unwrap_or(3)
 }
 
+fn gaugegraph_border_for_type(gauge_type: i32) -> f32 {
+    if matches!(gauge_type, 0..=2) { 80.0 } else { 0.0 }
+}
+
 fn gaugegraph_colors(
     graph: &SkinGaugeGraphDef,
     color_index: usize,
@@ -8009,12 +8022,19 @@ fn select_banner_option_matches(want_banner: bool, state: SkinDrawState) -> bool
 }
 
 fn select_key_mode_option_matches(op: i32, state: SkinDrawState) -> bool {
+    if state.result_failed.is_some() {
+        return key_mode_option_matches(op, state.key_mode);
+    }
     if state.in_settings || state.select_row_kind != SelectRowKind::Song {
         return false;
     }
     let Some(mode) = state.select_chart_key_mode else {
         return false;
     };
+    key_mode_option_matches(op, mode)
+}
+
+fn key_mode_option_matches(op: i32, mode: KeyMode) -> bool {
     match op {
         160 => matches!(mode, KeyMode::K7 | KeyMode::K8),
         161 => matches!(mode, KeyMode::K5),
@@ -10600,6 +10620,20 @@ mod tests {
         };
         assert!(test_skin_op(160, &[], song_7k));
         assert!(!test_skin_op(161, &[], song_7k));
+    }
+
+    #[test]
+    fn result_key_mode_ops_use_result_key_mode() {
+        let result_5k = SkinDrawState {
+            result_failed: Some(false),
+            key_mode: KeyMode::K5,
+            ..SkinDrawState::default()
+        };
+        assert!(test_skin_op(161, &[], result_5k));
+        assert!(!test_skin_op(160, &[], result_5k));
+
+        let result_14k = SkinDrawState { key_mode: KeyMode::K14, ..result_5k };
+        assert!(test_skin_op(162, &[], result_14k));
     }
 
     #[test]
@@ -15001,6 +15035,30 @@ mod tests {
         assert_eq!(skin_state_number(173, bare), None);
         assert_eq!(skin_state_number(410, bare), None);
         assert_eq!(skin_state_number(374, bare), None);
+    }
+
+    #[test]
+    fn skin_state_number_maps_result_chart_detail_refs() {
+        let state = SkinDrawState {
+            result_failed: Some(false),
+            now_bpm: 128.0,
+            min_bpm: 100.0,
+            max_bpm: 180.0,
+            main_bpm: 150.0,
+            total_duration_ms: 120_000,
+            select_chart_total_gauge: 260.0,
+            judge_rank: Some(2),
+            ..SkinDrawState::default()
+        };
+
+        assert_eq!(skin_state_number(160, state), Some(128));
+        assert_eq!(skin_state_number(91, state), Some(100));
+        assert_eq!(skin_state_number(90, state), Some(180));
+        assert_eq!(skin_state_number(92, state), Some(150));
+        assert_eq!(skin_state_number(312, state), Some(120_000));
+        assert_eq!(skin_state_number(313, state), Some(72_000));
+        assert_eq!(skin_state_number(368, state), Some(260));
+        assert_eq!(skin_state_number(400, state), Some(2));
     }
 
     #[test]

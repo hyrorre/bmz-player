@@ -12,8 +12,9 @@ use bmz_audio::loader::SampleLoader;
 use bmz_audio::sample::DecodedSample;
 use bmz_chart::model::PlayableChart;
 use bmz_core::clear::{ClearType, GaugeType};
-use bmz_core::lane::KeyMode;
+use bmz_core::lane::{KeyMode, Lane};
 use bmz_core::time::TimeUs;
+use bmz_gameplay::input::backend::{DeviceId, PhysicalControl};
 use bmz_gameplay::session::compute_frame_times;
 use bmz_gameplay::session::{HispeedMode, PlaySkinOffset};
 use bmz_render::assets::{RgbaImageAsset, load_static_rgba_image};
@@ -334,6 +335,9 @@ struct WinitApp {
     /// リザルト画面終了アニメーションの進行状態。
     /// Some のあいだは終了フェードアウト中で、入力は受け付けない。
     result_exit: Option<ResultExit>,
+    result_retry_same_hold_started_at: Option<Instant>,
+    result_retry_different_hold_started_at: Option<Instant>,
+    result_gauge_graph_type: i32,
     deferred_boot: Option<DeferredBoot>,
     /// 選曲画面で楽曲検索の入力モード中か。
     search_mode: bool,
@@ -453,12 +457,19 @@ struct ResultExit {
 }
 
 /// リザルト画面を抜けたあとに実行する遷移。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum ResultExitAction {
     /// 選曲画面へ戻る。
     Leave,
     /// 直前と同じ譜面をもう一度プレイする。
-    Retry,
+    Retry(ResultRetryMode),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResultRetryMode {
+    CurrentOptions,
+    SameArrange,
+    DifferentArrange,
 }
 
 const SELECT_EXIT_HOLD_DURATION: Duration = Duration::from_millis(1_200);
@@ -547,6 +558,26 @@ fn course_result_summary_for_skin(course: &CourseResultSummary) -> ResultSummary
         gauge_value: last.map(|summary| summary.gauge_value).unwrap_or(0.0),
         gauge_type: last.map(|summary| summary.gauge_type).unwrap_or(GaugeType::Normal),
         total_notes: course.total_notes,
+        duration_ms: last.map(|summary| summary.duration_ms).unwrap_or(0),
+        initial_bpm: last.map(|summary| summary.initial_bpm).unwrap_or(0.0),
+        min_bpm: course
+            .entry_summaries
+            .iter()
+            .map(|summary| summary.min_bpm)
+            .filter(|bpm| *bpm > 0.0)
+            .reduce(f32::min)
+            .unwrap_or(0.0),
+        max_bpm: course
+            .entry_summaries
+            .iter()
+            .map(|summary| summary.max_bpm)
+            .filter(|bpm| *bpm > 0.0)
+            .reduce(f32::max)
+            .unwrap_or(0.0),
+        main_bpm: last.map(|summary| summary.main_bpm).unwrap_or(0.0),
+        total_gauge: last.map(|summary| summary.total_gauge).unwrap_or(0.0),
+        judge_rank: last.and_then(|summary| summary.judge_rank),
+        key_mode: last.map(|summary| summary.key_mode).unwrap_or_default(),
         judge_counts: course.judge_counts.clone(),
         fast_slow_counts,
         replay_path: String::new(),
@@ -630,6 +661,43 @@ fn result_graph_duration_ms(graph: &bmz_render::snapshot::ResultGraphSnapshot) -
     let timing_ms = graph.timing_points.last().map(|point| point.time_ms).unwrap_or(0);
     let density_ms = i32::try_from(graph.judge_graph_density.len()).unwrap_or(i32::MAX / 1_000);
     gauge_ms.max(timing_ms).max(density_ms.saturating_mul(1_000)).max(1)
+}
+
+fn result_min_bpm(summary: &ResultSummary) -> f32 {
+    summary
+        .graph
+        .bpm_graph_segments
+        .iter()
+        .filter(|segment| !segment.is_stop && segment.bpm > 0.0)
+        .map(|segment| segment.bpm)
+        .reduce(f32::min)
+        .unwrap_or(summary.min_bpm)
+}
+
+fn result_max_bpm(summary: &ResultSummary) -> f32 {
+    summary
+        .graph
+        .bpm_graph_segments
+        .iter()
+        .filter(|segment| !segment.is_stop && segment.bpm > 0.0)
+        .map(|segment| segment.bpm)
+        .reduce(f32::max)
+        .unwrap_or(summary.max_bpm)
+}
+
+fn result_main_bpm(summary: &ResultSummary) -> f32 {
+    summary
+        .graph
+        .bpm_graph_segments
+        .iter()
+        .filter(|segment| !segment.is_stop && segment.bpm > 0.0)
+        .max_by(|a, b| {
+            let a_width = a.end_ratio - a.start_ratio;
+            let b_width = b.end_ratio - b.start_ratio;
+            a_width.total_cmp(&b_width)
+        })
+        .map(|segment| segment.bpm)
+        .unwrap_or(summary.main_bpm)
 }
 
 fn clear_type_from_label(label: &str) -> Option<ClearType> {
@@ -875,6 +943,9 @@ impl WinitApp {
             settings_edit: None,
             key_config_edit: None,
             result_exit: None,
+            result_retry_same_hold_started_at: None,
+            result_retry_different_hold_started_at: None,
+            result_gauge_graph_type: GaugeType::Normal as i32,
             deferred_boot: deferred_boot_action(boot_chart_id, &options),
             search_mode: false,
             search_query: String::new(),
@@ -1082,6 +1153,15 @@ impl WinitApp {
                 gauge_value: summary.gauge_value,
                 gauge_type: summary.gauge_type as i32,
                 total_notes: summary.total_notes,
+                duration_ms: summary.duration_ms,
+                initial_bpm: summary.initial_bpm,
+                min_bpm: result_min_bpm(&summary),
+                max_bpm: result_max_bpm(&summary),
+                main_bpm: result_main_bpm(&summary),
+                total_gauge: summary.total_gauge,
+                judge_rank: summary.judge_rank,
+                key_mode: summary.key_mode,
+                result_gauge_graph_type: self.result_gauge_graph_type,
                 judge_counts: DisplayJudgeCounts {
                     pgreat: summary.judge_counts.pgreat,
                     great: summary.judge_counts.great,
@@ -2260,15 +2340,28 @@ impl WinitApp {
             return;
         }
 
-        if self.finished_play.is_some() {
+        if self.finished_play.is_some() && self.finished_course.is_none() {
             // 終了アニメーション中 (result_exit=Some) は追加入力を受け付けない。
-            if self.result_exit.is_none()
-                && self.result_input_ready()
-                && let Some(action) = result_action(event.physical_key, event.state, event.repeat)
-            {
-                match action {
-                    ResultAction::Retry => self.begin_result_exit(ResultExitAction::Retry),
-                    ResultAction::Leave => self.begin_result_exit(ResultExitAction::Leave),
+            if self.result_exit.is_none() {
+                if let Some(control) = physical_key_to_control(event.physical_key)
+                    && self.handle_result_control(
+                        control,
+                        event.state == ElementState::Pressed,
+                        event.repeat,
+                    )
+                {
+                    return;
+                }
+                if self.result_input_ready()
+                    && let Some(action) =
+                        result_action(event.physical_key, event.state, event.repeat)
+                {
+                    match action {
+                        ResultAction::Retry => self.begin_result_exit(ResultExitAction::Retry(
+                            ResultRetryMode::CurrentOptions,
+                        )),
+                        ResultAction::Leave => self.begin_result_exit(ResultExitAction::Leave),
+                    }
                 }
             }
             return;
@@ -2559,13 +2652,26 @@ impl WinitApp {
         }
 
         // リザルト画面
-        if self.finished_play.is_some() {
+        if self.finished_play.is_some() && self.finished_course.is_none() {
             // 終了アニメーション中 (result_exit=Some) は追加入力を受け付けない。
-            if self.result_exit.is_none() && self.result_input_ready() {
-                match button {
-                    "Button1" | "Start" => self.begin_result_exit(ResultExitAction::Retry),
-                    "Button2" | "Select" => self.begin_result_exit(ResultExitAction::Leave),
-                    _ => {}
+            if self.result_exit.is_none() {
+                if self.handle_result_control(
+                    PhysicalControl::GamepadButton(button.to_string()),
+                    pressed,
+                    false,
+                ) {
+                    return;
+                }
+                if self.result_input_ready() {
+                    match button {
+                        "Button1" | "Start" if pressed => self.begin_result_exit(
+                            ResultExitAction::Retry(ResultRetryMode::CurrentOptions),
+                        ),
+                        "Button2" | "Select" if pressed => {
+                            self.begin_result_exit(ResultExitAction::Leave)
+                        }
+                        _ => {}
+                    }
                 }
             }
             return;
@@ -3861,7 +3967,10 @@ impl WinitApp {
         self.finished_course = Some(course_result);
         // Use the last chart's result for the standard result skin display.
         if let Some(last) = last_finished {
+            self.result_gauge_graph_type = last.summary.gauge_type as i32;
             self.finished_play = Some(last);
+            self.result_retry_same_hold_started_at = None;
+            self.result_retry_different_hold_started_at = None;
             self.result_scene_started_at = Instant::now();
             self.ensure_skin_ready(SkinKind::Result);
         }
@@ -4039,6 +4148,8 @@ impl WinitApp {
         self.invalidate_play_preload();
         self.play_ending = None;
         self.result_exit = None;
+        self.result_retry_same_hold_started_at = None;
+        self.result_retry_different_hold_started_at = None;
         self.play_ready_sound_started_at = None;
         if options.chart_zero_time == TimeUs(0) {
             options.chart_zero_time = self.play_skin_playstart_offset();
@@ -4436,13 +4547,116 @@ impl WinitApp {
         }
     }
 
-    fn retry_last_chart(&mut self) {
+    fn retry_last_chart_with_mode(&mut self, mode: ResultRetryMode) {
         let Some(chart_id) = self.last_started_chart_id else {
             tracing::warn!("no previous chart is available to retry");
             return;
         };
-        let options = self.play_start_options();
+        let options = match mode {
+            ResultRetryMode::CurrentOptions => self.play_start_options(),
+            ResultRetryMode::SameArrange => self.result_retry_same_arrange_options(),
+            ResultRetryMode::DifferentArrange => self.result_retry_different_arrange_options(),
+        };
         self.start_chart_with_options(chart_id, options);
+    }
+
+    fn result_retry_same_arrange_options(&self) -> PlayStartOptions {
+        let mut options = self.play_start_options();
+        if let Some(applied) = self.finished_play.as_ref().map(|finished| &finished.applied_arrange)
+        {
+            options.arrange = applied.arrange;
+            options.arrange_seed = applied.seed;
+            options.arrange_pattern = applied.pattern.clone();
+        }
+        options
+    }
+
+    fn result_retry_different_arrange_options(&self) -> PlayStartOptions {
+        let mut options = self.play_start_options();
+        if let Some(applied) = self.finished_play.as_ref().map(|finished| &finished.applied_arrange)
+        {
+            options.arrange = applied.arrange;
+            options.arrange_seed = None;
+            options.arrange_pattern = None;
+        }
+        options
+    }
+
+    fn handle_result_control(
+        &mut self,
+        control: PhysicalControl,
+        pressed: bool,
+        repeat: bool,
+    ) -> bool {
+        let Some(lane) = self.result_lane_for_control(&control) else {
+            return false;
+        };
+        match lane {
+            Lane::Key5 => match result_retry_mode_for_lane(lane) {
+                Some(ResultRetryMode::SameArrange) => {
+                    update_single_hold_started_at(
+                        &mut self.result_retry_same_hold_started_at,
+                        pressed,
+                        Instant::now(),
+                    );
+                    true
+                }
+                _ => false,
+            },
+            Lane::Key6 => {
+                if pressed && !repeat && self.result_input_ready() {
+                    self.cycle_result_gauge_graph_type();
+                }
+                true
+            }
+            Lane::Key7 => match result_retry_mode_for_lane(lane) {
+                Some(ResultRetryMode::DifferentArrange) => {
+                    update_single_hold_started_at(
+                        &mut self.result_retry_different_hold_started_at,
+                        pressed,
+                        Instant::now(),
+                    );
+                    true
+                }
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    fn result_lane_for_control(&self, control: &PhysicalControl) -> Option<Lane> {
+        let key_mode = self.finished_play.as_ref()?.summary.key_mode;
+        crate::config::play::lane_binding_for_chart(&self.boot.profile_config.input, key_mode)
+            .resolve(DeviceId(0), control)
+    }
+
+    fn cycle_result_gauge_graph_type(&mut self) {
+        self.result_gauge_graph_type = cycle_result_gauge_graph_type(self.result_gauge_graph_type);
+        tracing::info!(
+            gauge_type = self.result_gauge_graph_type,
+            "result gauge graph type changed"
+        );
+        self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+    }
+
+    fn advance_result_retry_holds(&mut self) {
+        if self.result_exit.is_some()
+            || self.finished_play.is_none()
+            || self.finished_course.is_some()
+            || !self.result_input_ready()
+        {
+            return;
+        }
+        let now = Instant::now();
+        if play_exit_hold_elapsed(self.result_retry_same_hold_started_at, now) {
+            self.result_retry_same_hold_started_at = None;
+            self.result_retry_different_hold_started_at = None;
+            self.begin_result_exit(ResultExitAction::Retry(ResultRetryMode::SameArrange));
+        } else if play_exit_hold_elapsed(self.result_retry_different_hold_started_at, now) {
+            self.result_retry_same_hold_started_at = None;
+            self.result_retry_different_hold_started_at = None;
+            self.begin_result_exit(ResultExitAction::Retry(ResultRetryMode::DifferentArrange));
+        }
     }
 
     /// リザルト画面の終了アニメーションを開始する。
@@ -4454,6 +4668,8 @@ impl WinitApp {
         }
         tracing::info!(?action, "result screen exit animation started");
         self.result_exit = Some(ResultExit { started_at: Instant::now(), action });
+        self.result_retry_same_hold_started_at = None;
+        self.result_retry_different_hold_started_at = None;
         // ResultClear / ResultFail のループ風長尺音を止めて、close SE を鳴らす。
         self.stop_system_sound(crate::system_sound::SoundType::ResultClear);
         self.stop_system_sound(crate::system_sound::SoundType::ResultFail);
@@ -4607,6 +4823,13 @@ impl WinitApp {
             return;
         }
         self.finished_play = Some(ending.finished);
+        self.result_gauge_graph_type = self
+            .finished_play
+            .as_ref()
+            .map(|finished| finished.summary.gauge_type as i32)
+            .unwrap_or(GaugeType::Normal as i32);
+        self.result_retry_same_hold_started_at = None;
+        self.result_retry_different_hold_started_at = None;
         self.result_scene_started_at = Instant::now();
         self.ensure_skin_ready(SkinKind::Result);
     }
@@ -4614,6 +4837,7 @@ impl WinitApp {
     /// 終了フェードアウトの経過を監視し、スキンのフェードアウト時間を過ぎたら
     /// 保留していた遷移を実行する。毎フレーム描画前に呼ぶ。
     fn advance_result_exit(&mut self) {
+        self.advance_result_retry_holds();
         if self.finished_play.is_some()
             && self.result_exit.is_none()
             && self.result_scene_started_at.elapsed() >= self.result_scene_duration()
@@ -4632,11 +4856,11 @@ impl WinitApp {
         if exit.started_at.elapsed() < fadeout {
             return;
         }
-        let action = exit.action;
+        let action = exit.action.clone();
         self.result_exit = None;
         match action {
             ResultExitAction::Leave => self.leave_result(),
-            ResultExitAction::Retry => self.retry_last_chart(),
+            ResultExitAction::Retry(mode) => self.retry_last_chart_with_mode(mode),
         }
     }
 
@@ -4644,6 +4868,8 @@ impl WinitApp {
         self.finished_play = None;
         self.clear_active_course_state();
         self.result_exit = None;
+        self.result_retry_same_hold_started_at = None;
+        self.result_retry_different_hold_started_at = None;
         self.clear_play_backbmp_state();
         // リザルト画面を抜けたら、まだ鳴っていても余韻再生を止める。
         self.draining_audio = None;
@@ -7029,6 +7255,22 @@ fn cycle_bga_option(current: BgaModeConfig) -> BgaModeConfig {
     }
 }
 
+fn cycle_result_gauge_graph_type(current: i32) -> i32 {
+    if (GaugeType::AssistEasy as i32..=GaugeType::Hazard as i32).contains(&current) {
+        (current + 1).rem_euclid(6)
+    } else {
+        (current - 5).rem_euclid(3) + 6
+    }
+}
+
+fn result_retry_mode_for_lane(lane: Lane) -> Option<ResultRetryMode> {
+    match lane {
+        Lane::Key5 => Some(ResultRetryMode::SameArrange),
+        Lane::Key7 => Some(ResultRetryMode::DifferentArrange),
+        _ => None,
+    }
+}
+
 fn cycle_bga_option_with_direction(current: BgaModeConfig, direction: i32) -> BgaModeConfig {
     const VALUES: [BgaModeConfig; 3] = [BgaModeConfig::On, BgaModeConfig::Auto, BgaModeConfig::Off];
     cycle_enum(VALUES, current, direction)
@@ -7722,6 +7964,14 @@ fn update_play_exit_hold_started_at(
     now: Instant,
 ) {
     if e1_held && e2_held {
+        started_at.get_or_insert(now);
+    } else {
+        *started_at = None;
+    }
+}
+
+fn update_single_hold_started_at(started_at: &mut Option<Instant>, held: bool, now: Instant) {
+    if held {
         started_at.get_or_insert(now);
     } else {
         *started_at = None;
@@ -8801,6 +9051,14 @@ mod tests {
                 gauge_value: 80.0,
                 gauge_type: GaugeType::Normal,
                 total_notes: notes,
+                duration_ms,
+                initial_bpm: 128.0,
+                min_bpm: 128.0,
+                max_bpm: 128.0,
+                main_bpm: 128.0,
+                total_gauge: 260.0,
+                judge_rank: Some(2),
+                key_mode: KeyMode::K7,
                 judge_counts: crate::screens::result_model::ResultJudgeCounts {
                     pgreat: ex_score / 2,
                     ..Default::default()
@@ -9367,6 +9625,13 @@ mod tests {
             result_action(PhysicalKey::Code(KeyCode::Space), ElementState::Pressed, false),
             None
         );
+    }
+
+    #[test]
+    fn result_retry_lanes_match_requested_mapping() {
+        assert_eq!(result_retry_mode_for_lane(Lane::Key5), Some(ResultRetryMode::SameArrange));
+        assert_eq!(result_retry_mode_for_lane(Lane::Key7), Some(ResultRetryMode::DifferentArrange));
+        assert_eq!(result_retry_mode_for_lane(Lane::Key6), None);
     }
 
     #[test]

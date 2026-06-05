@@ -21,6 +21,7 @@ pub struct FinishedPlaySession {
     pub summary: ResultSummary,
     pub replay_playback: bool,
     pub arrange: crate::select_options::ArrangeOption,
+    pub applied_arrange: AppliedArrange,
 }
 
 pub fn play_result_from_session(session: &GameSession) -> PlayResult {
@@ -108,7 +109,7 @@ pub fn finish_session_result(
             },
         )?
     };
-    let mut summary = ResultSummary::from_play_result(&result, &stored, &session.chart.metadata);
+    let mut summary = ResultSummary::from_play_result(&result, &stored, &session.chart);
     summary.arrange = applied_arrange.arrange.as_str().to_string();
     summary.target_ex_score = target_ex_score;
     summary.saved_replay_slots = stored.slot_paths.each_ref().map(Option::is_some);
@@ -153,6 +154,7 @@ pub fn finish_session_result(
         summary,
         replay_playback,
         arrange: applied_arrange.arrange,
+        applied_arrange: applied_arrange.clone(),
     })
 }
 
