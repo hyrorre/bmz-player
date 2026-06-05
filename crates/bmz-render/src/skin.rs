@@ -1685,6 +1685,7 @@ pub struct SkinDrawState {
     pub select_play_count: u32,
     pub select_clear_count: u32,
     pub select_bp: Option<u32>,
+    pub select_cb: Option<u32>,
     /// Fast/Slow 内訳 (ref 410-419/421-424)。
     /// Play/Result 中は Some、それ以外は None。
     pub fast_slow_counts: Option<crate::snapshot::FastSlowJudgeCounts>,
@@ -1870,6 +1871,7 @@ impl Default for SkinDrawState {
             select_play_count: 0,
             select_clear_count: 0,
             select_bp: None,
+            select_cb: None,
             fast_slow_counts: None,
             best_max_combo: None,
             target_max_combo: None,
@@ -3163,6 +3165,7 @@ impl SkinDocument {
             select_play_count: selected_row.map(|row| row.play_count).unwrap_or(0),
             select_clear_count: selected_row.map(|row| row.clear_count).unwrap_or(0),
             select_bp: selected_row.and_then(|row| row.bp),
+            select_cb: selected_row.and_then(|row| row.cb),
             max_combo: selected_row.and_then(|row| row.max_combo).unwrap_or(0),
             total_notes: selected_row.map(|row| row.total_notes).unwrap_or(0),
             gauge: selected_row.and_then(|row| row.gauge_value).unwrap_or(0.0),
@@ -3316,6 +3319,7 @@ impl SkinDocument {
                 select_play_count: row.play_count,
                 select_clear_count: row.clear_count,
                 select_bp: row.bp,
+                select_cb: row.cb,
                 max_combo: row.max_combo.unwrap_or(0),
                 total_notes: row.total_notes,
                 gauge: row.gauge_value.unwrap_or(0.0),
@@ -3431,6 +3435,7 @@ impl SkinDocument {
                 select_play_count: row.play_count,
                 select_clear_count: row.clear_count,
                 select_bp: row.bp,
+                select_cb: row.cb,
                 max_combo: row.max_combo.unwrap_or(0),
                 total_notes: row.total_notes,
                 gauge: row.gauge_value.unwrap_or(0.0),
@@ -6910,6 +6915,7 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         // NUMBER_TOTALEARLY=423, NUMBER_TOTALLATE=424
         423 => state.fast_slow_counts.map(|c| c.fast_total() as i64),
         424 => state.fast_slow_counts.map(|c| c.slow_total() as i64),
+        425 | 427 if state.select_screen => state.select_cb.map(|count| count as i64).or(Some(0)),
         425 | 427 => Some((state.judge_counts.bad + state.judge_counts.poor) as i64),
         426 => Some(state.judge_counts.poor as i64),
         _ => None,
@@ -15368,6 +15374,7 @@ mod tests {
             select_sort_index: 6,
             select_ln_mode_index: 2,
             select_bp: Some(12),
+            select_cb: Some(8),
             ex_score: 1234,
             max_combo: 345,
             ..SkinDrawState::default()
@@ -15388,6 +15395,7 @@ mod tests {
         assert_eq!(skin_state_number(74, state), Some(1200));
         assert_eq!(skin_state_number(75, state), Some(345));
         assert_eq!(skin_state_number(76, state), Some(12));
+        assert_eq!(skin_state_number(425, state), Some(8));
         assert_eq!(skin_state_number(90, state), Some(180));
         assert_eq!(skin_state_number(91, state), Some(120));
         assert_eq!(skin_state_number(92, state), Some(150));

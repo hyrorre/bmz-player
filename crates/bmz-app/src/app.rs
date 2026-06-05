@@ -7480,6 +7480,7 @@ fn select_snapshot_rows(
                     max_combo: None,
                     gauge_value: None,
                     bp: None,
+                    cb: None,
                     play_count: 0,
                     clear_count: 0,
                     replay_slots: [false; 4],
@@ -7560,6 +7561,7 @@ fn select_snapshot_rows(
                         max_combo: row.best_score.as_ref().map(|score| score.max_combo),
                         gauge_value: row.best_score.as_ref().map(|score| score.gauge_value),
                         bp: row.best_score.as_ref().map(|score| score.bp),
+                        cb: row.best_score.as_ref().map(|score| score.cb),
                         play_count,
                         clear_count,
                         replay_slots: row.replay_slots,
@@ -7668,6 +7670,7 @@ fn select_snapshot_rows(
                     max_combo: row.best_score.as_ref().map(|best| best.max_combo),
                     gauge_value: row.best_score.as_ref().map(|best| best.gauge_value),
                     bp: row.best_score.as_ref().map(|best| best.bp),
+                    cb: None,
                     play_count: u32::from(row.best_score.is_some()),
                     clear_count: u32::from(row.best_score.as_ref().is_some_and(|best| {
                         !best.clear_type.is_empty() && best.clear_type != "Failed"
@@ -7720,6 +7723,7 @@ fn select_snapshot_rows(
                         max_combo: None,
                         gauge_value: None,
                         bp: None,
+                        cb: None,
                         play_count: 0,
                         clear_count: 0,
                         replay_slots: [false; 4],
@@ -7772,6 +7776,7 @@ fn select_snapshot_rows(
                         max_combo: None,
                         gauge_value: None,
                         bp: None,
+                        cb: None,
                         play_count: 0,
                         clear_count: 0,
                         replay_slots: [false; 4],
@@ -7817,6 +7822,7 @@ fn select_snapshot_rows(
                     max_combo: None,
                     gauge_value: None,
                     bp: None,
+                    cb: None,
                     play_count: 0,
                     clear_count: 0,
                     replay_slots: [false; 4],
@@ -9885,6 +9891,7 @@ mod tests {
                 if index == 5 {
                     let mut best_score = best_score_with_replay(1234, "replay/test.toml");
                     best_score.bp = 12;
+                    best_score.cb = 8;
                     best_score.max_combo = 345;
                     row.best_score = Some(best_score);
                     row.replay_slots = [true, false, false, false];
@@ -9912,6 +9919,7 @@ mod tests {
         assert_eq!(snapshot_rows[3].clear_type, "Normal");
         assert_eq!(snapshot_rows[3].ex_score, Some(1234));
         assert_eq!(snapshot_rows[3].bp, Some(12));
+        assert_eq!(snapshot_rows[3].cb, Some(8));
         assert_eq!(snapshot_rows[3].max_combo, Some(345));
         assert_eq!(snapshot_rows[3].judge_rank, Some(1));
         assert_eq!(snapshot_rows[3].play_count, 42);

@@ -1084,6 +1084,20 @@ fn upsert_score_best(conn: &Connection, record: &ScoreRecord) -> Result<()> {
         },
     )?;
     if !score_best_should_update(record, current) {
+        conn.execute(
+            "UPDATE score_best SET
+                bp = min(bp, ?2),
+                cb = min(cb, ?3),
+                max_combo = max(max_combo, ?4)
+             WHERE chart_sha256 = ?1 AND ln_policy = ?5",
+            params![
+                hash_to_hex(&record.chart_sha256),
+                record.score.bp(),
+                record.score.cb(),
+                record.score.max_combo,
+                record.ln_policy.as_str(),
+            ],
+        )?;
         return Ok(());
     }
 
@@ -1389,6 +1403,34 @@ mod tests {
         assert_eq!(best.clear_type, "Normal");
         assert_eq!(best.play_count, 3);
         assert_eq!(best.clear_count, 2);
+    }
+
+    #[test]
+    fn score_best_keeps_independent_bp_cb_and_max_combo_records() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut db = ScoreDatabase { conn };
+
+        let mut best_score = record(20, ClearType::Normal);
+        best_score.score.max_combo = 30;
+        best_score.score.judges.fast_bad = 4;
+        db.insert_score(&best_score).unwrap();
+
+        let mut lower_score = record(10, ClearType::Failed);
+        lower_score.played_at = 2;
+        lower_score.score.max_combo = 80;
+        lower_score.score.judges.fast_bad = 2;
+        db.insert_score(&lower_score).unwrap();
+
+        let best = db.best_scores_for_charts(&[key([7; 32])]).unwrap().pop().unwrap();
+        assert_eq!(best.ex_score, 20);
+        assert_eq!(best.clear_type, "Normal");
+        assert_eq!(best.max_combo, 80);
+        assert_eq!(best.bp, 2);
+        assert_eq!(best.cb, 2);
+        assert_eq!(best.play_count, 2);
+        assert_eq!(best.clear_count, 1);
     }
 
     #[test]
