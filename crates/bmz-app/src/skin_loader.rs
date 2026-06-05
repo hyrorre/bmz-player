@@ -1503,6 +1503,121 @@ mod tests {
     }
 
     #[test]
+    fn starseeker_result_lua_skin_renders_stat_details_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/Starseeker/result/result.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let options = BTreeMap::from([
+            ("F/Sリスト".to_string(), "Default".to_string()),
+            ("逆サイド詳細フレーム".to_string(), "ON".to_string()),
+            ("プレーサイド".to_string(), "1P".to_string()),
+        ]);
+        let files = BTreeMap::from([
+            ("使用テーマ".to_string(), "Theme/starseeker".to_string()),
+            ("フォント".to_string(), "_font/TYPE-M".to_string()),
+            ("シャッター".to_string(), "Shutter/TYPE-M".to_string()),
+        ]);
+        let decoded =
+            decode_beatoraja_skin_with_options(&skin_path, SkinKind::Result, &options, &files)
+                .expect("decode starseeker result skin");
+        assert!(
+            decoded.document.all_destinations(&[]).iter().any(|destination| {
+                matches!(
+                    destination.id.as_str(),
+                    "judge_detail" | "judgegraph" | "fsgraph" | "timingGraph"
+                )
+            }),
+            "starseeker result stat destinations should survive lua conversion"
+        );
+        assert!(
+            decoded.document.source.iter().any(|source| source.id == "jud_detail_main"),
+            "starseeker result document should keep jud_detail_main source; sources: {:?}",
+            decoded.document.source.iter().map(|source| source.id.as_str()).collect::<Vec<_>>()
+        );
+        let stat_texture = decoded
+            .sources
+            .iter()
+            .find(|source| source.source_id == "jud_detail_main")
+            .map(|source| source.texture)
+            .expect("starseeker result should load jud_detail_main source");
+        let document_textures =
+            decoded.sources.iter().map(|source| bmz_render::skin::SkinDocumentTexture {
+                source_id: source.source_id.clone(),
+                texture: source.texture,
+                source_size: bmz_render::skin::SkinImageSize {
+                    width: source.asset.width as f32,
+                    height: source.asset.height as f32,
+                },
+            });
+        let context = bmz_render::skin::SkinContext::from_manifest_and_document(
+            bmz_render::skin::default_skin_manifest(),
+            decoded.document,
+            document_textures,
+        );
+        let bmz_render::scene::AppSceneSnapshot::Result(mut snapshot) =
+            bmz_render::sample::sample_result_scene()
+        else {
+            panic!("sample result scene");
+        };
+        snapshot.elapsed_time = bmz_core::time::TimeUs(1_000_000);
+        snapshot.judge_counts = bmz_render::snapshot::DisplayJudgeCounts {
+            pgreat: 120,
+            great: 40,
+            good: 12,
+            bad: 4,
+            poor: 3,
+            empty_poor: 2,
+        };
+        snapshot.fast_slow_counts = bmz_render::snapshot::FastSlowJudgeCounts {
+            fast_pgreat: 80,
+            slow_pgreat: 40,
+            fast_great: 12,
+            slow_great: 28,
+            fast_good: 4,
+            slow_good: 8,
+            fast_bad: 1,
+            slow_bad: 3,
+            fast_poor: 1,
+            slow_poor: 2,
+            fast_empty_poor: 1,
+            slow_empty_poor: 1,
+        };
+        snapshot.graph.judge_graph_density = vec![1, 3, 2, 4];
+        snapshot.graph.timing_points = vec![
+            bmz_render::snapshot::ResultTimingPoint {
+                time_ms: 100,
+                delta_us: -12_000,
+                judge: bmz_core::judge::Judge::Great,
+            },
+            bmz_render::snapshot::ResultTimingPoint {
+                time_ms: 200,
+                delta_us: 8_000,
+                judge: bmz_core::judge::Judge::PGreat,
+            },
+        ];
+
+        let plan = bmz_render::plan::DrawPlan::from_scene_with_skin(
+            &bmz_render::scene::AppSceneSnapshot::Result(snapshot),
+            &context,
+            &mut bmz_render::skin::DynamicTimerRuntime::default(),
+        );
+
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            bmz_render::plan::DrawCommand::Image { texture, .. }
+                if *texture == bmz_render::plan::TextureId(stat_texture.0)
+        )));
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            bmz_render::plan::DrawCommand::Rect { rect, .. }
+                if rect.x > 0.70 && rect.y > 0.20 && rect.y < 0.55
+        )));
+    }
+
+    #[test]
     fn play_skin_selection_for_returns_per_mode_fields() {
         let mut skin = SkinConfig {
             play5: "skin5.json".to_string(),

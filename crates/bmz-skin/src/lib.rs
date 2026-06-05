@@ -445,6 +445,51 @@ mod tests {
     }
 
     #[test]
+    fn lua_skin_config_get_path_applies_directory_selection_to_child_wildcard() {
+        let root = unique_test_dir("bmz-skin-lua");
+        fs::create_dir_all(root.join("Theme/a/_lua")).unwrap();
+        fs::create_dir_all(root.join("Theme/z/_lua")).unwrap();
+        fs::write(
+            root.join("Theme/a/_lua/frame.lua"),
+            r#"return { source = { { id = "frame", path = "Theme/a/frame.png" } } }"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("Theme/z/_lua/frame.lua"),
+            r#"return { source = { { id = "frame", path = "Theme/z/frame.png" } } }"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("result.luaskin"),
+            r#"
+            if skin_config then
+                local parts = dofile(skin_config.get_path("Theme/*/_lua") .. "/frame.lua")
+                return {
+                    type = 7,
+                    filepath = {
+                        { name = "Theme", path = "Theme/*", def = "a" }
+                    },
+                    source = parts.source
+                }
+            end
+            return {
+                type = 7,
+                filepath = {
+                    { name = "Theme", path = "Theme/*", def = "a" }
+                }
+            }
+            "#,
+        )
+        .unwrap();
+
+        let files = BTreeMap::from([("Theme".to_string(), "Theme/z".to_string())]);
+        let loaded =
+            load_lua_skin_value(&root.join("result.luaskin"), &BTreeMap::new(), &files).unwrap();
+
+        assert_eq!(loaded.value["source"][0]["path"], "Theme/z/frame.png");
+    }
+
+    #[test]
     fn lua_skin_config_offset_exposes_zero_defaults_by_name() {
         let root = unique_test_dir("bmz-skin-lua");
         fs::create_dir_all(&root).unwrap();

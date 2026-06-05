@@ -9,7 +9,10 @@ use crate::skin::{
     SkinTextState, SkinTextureId, TextSlot, append_skin_render_items, judge_image_index,
 };
 use crate::skin_offset::{SKIN_OFFSET_BAR_LINE, SkinOffsetValues};
-use crate::snapshot::{DisplayBgaFrame, DisplayJudgeCounts, RenderSnapshot};
+use crate::snapshot::{
+    DisplayBgaFrame, DisplayJudgeCounts, FastSlowJudgeCounts, RenderSnapshot, ResultGraphSnapshot,
+    ResultTimingPoint,
+};
 use crate::text::{BitmapTextStyle, TextRenderer};
 
 const JUDGE_LINE_Y_RATIO: f32 = 0.86;
@@ -1299,6 +1302,8 @@ fn plan_result(
         gauge_value: snapshot.gauge_value,
         total_notes: snapshot.total_notes,
         judge_counts: &snapshot.judge_counts,
+        fast_slow_counts: &snapshot.fast_slow_counts,
+        graph: &snapshot.graph,
         score_history_id: snapshot.score_history_id,
         replay_saved: snapshot.replay_saved,
         difficulty_name: &snapshot.difficulty_name,
@@ -1460,6 +1465,8 @@ struct ResultFallbackSummary<'a> {
     gauge_value: f32,
     total_notes: u32,
     judge_counts: &'a DisplayJudgeCounts,
+    fast_slow_counts: &'a FastSlowJudgeCounts,
+    graph: &'a ResultGraphSnapshot,
     score_history_id: i64,
     replay_saved: bool,
     difficulty_name: &'a str,
@@ -1476,6 +1483,8 @@ fn plan_result_fallback(summary: ResultFallbackSummary<'_>) -> DrawPlan {
         gauge_value,
         total_notes,
         judge_counts,
+        fast_slow_counts,
+        graph,
         score_history_id,
         replay_saved,
         difficulty_name,
@@ -1565,38 +1574,273 @@ fn plan_result_fallback(summary: ResultFallbackSummary<'_>) -> DrawPlan {
         if replay_saved { "REPLAY SAVED" } else { "REPLAY NONE" },
         BitmapTextStyle { x: 0.68, y: 0.675, cell: 0.005, color: Color::rgb(0.66, 0.78, 0.76) },
     );
-    for (index, label) in result_judge_labels(judge_counts).into_iter().enumerate() {
-        let column = index % 3;
-        let row = index / 3;
-        text.push_text(
-            &mut commands,
-            &label,
-            BitmapTextStyle {
-                x: 0.16 + column as f32 * 0.18,
-                y: 0.735 + row as f32 * 0.045,
-                cell: 0.006,
-                color: Color::rgb(0.78, 0.82, 0.8),
-            },
-        );
-    }
+    push_result_detail_panels(&text, &mut commands, judge_counts, fast_slow_counts, graph);
     text.push_text(
         &mut commands,
         "R RETRY  ENTER/ESC SELECT",
-        BitmapTextStyle { x: 0.14, y: 0.86, cell: 0.006, color: Color::rgb(0.74, 0.78, 0.8) },
+        BitmapTextStyle { x: 0.14, y: 0.925, cell: 0.005, color: Color::rgb(0.74, 0.78, 0.8) },
     );
 
     DrawPlan { clear: Color::rgb(0.025, 0.02, 0.018), commands }
 }
 
-fn result_judge_labels(judge_counts: &DisplayJudgeCounts) -> [String; 6] {
-    [
-        format!("PG {}", judge_counts.pgreat),
-        format!("GR {}", judge_counts.great),
-        format!("GD {}", judge_counts.good),
-        format!("BD {}", judge_counts.bad),
-        format!("PR {}", judge_counts.poor),
-        format!("EP {}", judge_counts.empty_poor),
-    ]
+fn push_result_detail_panels(
+    text: &TextRenderer,
+    commands: &mut Vec<DrawCommand>,
+    judge_counts: &DisplayJudgeCounts,
+    fast_slow_counts: &FastSlowJudgeCounts,
+    graph: &ResultGraphSnapshot,
+) {
+    push_result_panel(commands, Rect { x: 0.14, y: 0.715, width: 0.22, height: 0.17 });
+    push_result_panel(commands, Rect { x: 0.38, y: 0.715, width: 0.22, height: 0.17 });
+    push_result_panel(commands, Rect { x: 0.62, y: 0.715, width: 0.24, height: 0.17 });
+
+    text.push_text(
+        commands,
+        "JUDGE DETAILS",
+        BitmapTextStyle { x: 0.155, y: 0.732, cell: 0.0044, color: Color::rgb(0.86, 0.9, 0.88) },
+    );
+    text.push_text(
+        commands,
+        "FAST/SLOW DETAILS",
+        BitmapTextStyle { x: 0.395, y: 0.732, cell: 0.0044, color: Color::rgb(0.86, 0.9, 0.88) },
+    );
+    text.push_text(
+        commands,
+        "TIMING DETAILS",
+        BitmapTextStyle { x: 0.635, y: 0.732, cell: 0.0044, color: Color::rgb(0.86, 0.9, 0.88) },
+    );
+
+    push_result_judge_details(text, commands, judge_counts, graph);
+    push_result_fast_slow_details(text, commands, fast_slow_counts);
+    push_result_timing_details(text, commands, &graph.timing_points);
+}
+
+fn push_result_panel(commands: &mut Vec<DrawCommand>, rect: Rect) {
+    commands.push(DrawCommand::Rect { rect, color: Color::rgb(0.055, 0.052, 0.05) });
+    commands.push(DrawCommand::Rect {
+        rect: Rect { x: rect.x, y: rect.y, width: rect.width, height: 0.002 },
+        color: Color::rgb(0.36, 0.46, 0.48),
+    });
+}
+
+fn push_result_judge_details(
+    text: &TextRenderer,
+    commands: &mut Vec<DrawCommand>,
+    judge_counts: &DisplayJudgeCounts,
+    graph: &ResultGraphSnapshot,
+) {
+    let values = [
+        ("PG", judge_counts.pgreat, Color::rgb(0.68, 0.9, 1.0)),
+        ("GR", judge_counts.great, Color::rgb(0.76, 0.94, 0.68)),
+        ("GD", judge_counts.good, Color::rgb(0.95, 0.86, 0.48)),
+        ("BD", judge_counts.bad, Color::rgb(0.96, 0.55, 0.42)),
+        ("PR", judge_counts.poor, Color::rgb(0.84, 0.48, 0.58)),
+        ("EP", judge_counts.empty_poor, Color::rgb(0.68, 0.58, 0.82)),
+    ];
+    let max = values.iter().map(|(_, value, _)| *value).max().unwrap_or(0).max(1) as f32;
+    for (index, (label, value, color)) in values.iter().enumerate() {
+        let y = 0.756 + index as f32 * 0.014;
+        text.push_text(
+            commands,
+            &format!("{label} {value}"),
+            BitmapTextStyle { x: 0.155, y, cell: 0.0039, color: Color::rgb(0.78, 0.82, 0.8) },
+        );
+        let width = 0.105 * (*value as f32 / max);
+        commands.push(DrawCommand::Rect {
+            rect: Rect { x: 0.245, y: y + 0.0015, width, height: 0.006 },
+            color: *color,
+        });
+    }
+    push_result_density_graph(
+        commands,
+        Rect { x: 0.245, y: 0.855, width: 0.095, height: 0.018 },
+        &graph.judge_graph_density,
+    );
+}
+
+fn push_result_fast_slow_details(
+    text: &TextRenderer,
+    commands: &mut Vec<DrawCommand>,
+    counts: &FastSlowJudgeCounts,
+) {
+    let rows = [
+        ("PG", counts.fast_pgreat, counts.slow_pgreat),
+        ("GR", counts.fast_great, counts.slow_great),
+        ("GD", counts.fast_good, counts.slow_good),
+        ("BD", counts.fast_bad, counts.slow_bad),
+        ("PR", counts.fast_poor, counts.slow_poor),
+        ("EP", counts.fast_empty_poor, counts.slow_empty_poor),
+    ];
+    let max =
+        rows.iter().map(|(_, fast, slow)| fast.saturating_add(*slow)).max().unwrap_or(0).max(1)
+            as f32;
+    for (index, (label, fast, slow)) in rows.iter().enumerate() {
+        let y = 0.756 + index as f32 * 0.014;
+        text.push_text(
+            commands,
+            label,
+            BitmapTextStyle { x: 0.395, y, cell: 0.0039, color: Color::rgb(0.78, 0.82, 0.8) },
+        );
+        let total = fast.saturating_add(*slow) as f32;
+        let bar_total_w = 0.122 * (total / max);
+        let fast_w = if total <= 0.0 { 0.0 } else { bar_total_w * *fast as f32 / total };
+        commands.push(DrawCommand::Rect {
+            rect: Rect { x: 0.425, y: y + 0.0015, width: fast_w, height: 0.006 },
+            color: Color::rgb(0.45, 0.86, 0.96),
+        });
+        commands.push(DrawCommand::Rect {
+            rect: Rect {
+                x: 0.425 + fast_w,
+                y: y + 0.0015,
+                width: (bar_total_w - fast_w).max(0.0),
+                height: 0.006,
+            },
+            color: Color::rgb(0.96, 0.52, 0.64),
+        });
+        text.push_text(
+            commands,
+            &format!("{fast}/{slow}"),
+            BitmapTextStyle { x: 0.55, y, cell: 0.0034, color: Color::rgb(0.7, 0.75, 0.74) },
+        );
+    }
+    text.push_text(
+        commands,
+        &format!("F {}  S {}", counts.fast_total(), counts.slow_total()),
+        BitmapTextStyle { x: 0.395, y: 0.868, cell: 0.0038, color: Color::rgb(0.72, 0.84, 0.86) },
+    );
+}
+
+fn push_result_timing_details(
+    text: &TextRenderer,
+    commands: &mut Vec<DrawCommand>,
+    points: &[ResultTimingPoint],
+) {
+    let graph_rect = Rect { x: 0.635, y: 0.758, width: 0.21, height: 0.07 };
+    commands.push(DrawCommand::Rect { rect: graph_rect, color: Color::rgb(0.032, 0.034, 0.036) });
+    commands.push(DrawCommand::Rect {
+        rect: Rect {
+            x: graph_rect.x + graph_rect.width / 2.0,
+            y: graph_rect.y,
+            width: 0.001,
+            height: graph_rect.height,
+        },
+        color: Color::rgb(0.5, 0.56, 0.56),
+    });
+    push_result_timing_distribution(commands, graph_rect, points);
+
+    if let Some((average, stddev)) = result_timing_stats(points) {
+        text.push_text(
+            commands,
+            &format!("AVG {}ms", format_timing_ms(average)),
+            BitmapTextStyle {
+                x: 0.635,
+                y: 0.845,
+                cell: 0.0038,
+                color: Color::rgb(0.74, 0.84, 0.86),
+            },
+        );
+        text.push_text(
+            commands,
+            &format!("DEV {}ms", format_timing_ms(stddev)),
+            BitmapTextStyle {
+                x: 0.735,
+                y: 0.845,
+                cell: 0.0038,
+                color: Color::rgb(0.74, 0.84, 0.86),
+            },
+        );
+        text.push_text(
+            commands,
+            &format!("N {}", points.len()),
+            BitmapTextStyle {
+                x: 0.635,
+                y: 0.868,
+                cell: 0.0038,
+                color: Color::rgb(0.68, 0.76, 0.74),
+            },
+        );
+    } else {
+        text.push_text(
+            commands,
+            "NO TIMING DATA",
+            BitmapTextStyle {
+                x: 0.635,
+                y: 0.845,
+                cell: 0.004,
+                color: Color::rgb(0.68, 0.72, 0.72),
+            },
+        );
+    }
+}
+
+fn push_result_density_graph(commands: &mut Vec<DrawCommand>, rect: Rect, density: &[u8]) {
+    if density.is_empty() {
+        return;
+    }
+    let max = density.iter().copied().max().unwrap_or(1).max(1) as f32;
+    let bar_w = (rect.width / density.len().max(1) as f32).max(0.001);
+    for (index, value) in density.iter().enumerate() {
+        if *value == 0 {
+            continue;
+        }
+        let height = rect.height * (*value as f32 / max);
+        commands.push(DrawCommand::Rect {
+            rect: Rect {
+                x: rect.x + index as f32 * bar_w,
+                y: rect.y + rect.height - height,
+                width: bar_w * 0.8,
+                height,
+            },
+            color: Color::rgba(0.64, 0.75, 0.9, 0.75),
+        });
+    }
+}
+
+fn push_result_timing_distribution(
+    commands: &mut Vec<DrawCommand>,
+    rect: Rect,
+    points: &[ResultTimingPoint],
+) {
+    if points.is_empty() {
+        return;
+    }
+    const BUCKETS: usize = 21;
+    const RANGE_MS: f32 = 50.0;
+    let mut counts = [0u32; BUCKETS];
+    for point in points {
+        let delta_ms = (point.delta_us as f32 / 1_000.0).clamp(-RANGE_MS, RANGE_MS);
+        let bucket =
+            (((delta_ms + RANGE_MS) / (RANGE_MS * 2.0)) * (BUCKETS as f32 - 1.0)).round() as usize;
+        counts[bucket.min(BUCKETS - 1)] += 1;
+    }
+    let max = counts.iter().copied().max().unwrap_or(1).max(1) as f32;
+    let bar_w = rect.width / BUCKETS as f32;
+    for (index, count) in counts.iter().enumerate() {
+        if *count == 0 {
+            continue;
+        }
+        let height = rect.height * (*count as f32 / max);
+        let t = index as f32 / (BUCKETS - 1) as f32;
+        let color = if t < 0.5 {
+            Color::rgba(0.45, 0.86, 0.96, 0.78)
+        } else {
+            Color::rgba(0.96, 0.52, 0.64, 0.78)
+        };
+        commands.push(DrawCommand::Rect {
+            rect: Rect {
+                x: rect.x + index as f32 * bar_w,
+                y: rect.y + rect.height - height,
+                width: bar_w * 0.8,
+                height,
+            },
+            color,
+        });
+    }
+}
+
+fn format_timing_ms(value: f32) -> String {
+    format!("{value:.2}")
 }
 
 fn push_judge_line(
@@ -3608,6 +3852,8 @@ mod tests {
     #[test]
     fn result_plan_clamps_ex_score_bar() {
         let judge_counts = DisplayJudgeCounts::default();
+        let fast_slow_counts = FastSlowJudgeCounts::default();
+        let graph = ResultGraphSnapshot::default();
         let plan = plan_result_fallback(ResultFallbackSummary {
             clear_type: "Normal",
             ex_score: 0,
@@ -3616,6 +3862,8 @@ mod tests {
             gauge_value: 0.0,
             total_notes: 100,
             judge_counts: &judge_counts,
+            fast_slow_counts: &fast_slow_counts,
+            graph: &graph,
             score_history_id: 1,
             replay_saved: true,
             difficulty_name: "",
@@ -3632,6 +3880,8 @@ mod tests {
     #[test]
     fn result_plan_includes_extended_summary_text() {
         let judge_counts = DisplayJudgeCounts::default();
+        let fast_slow_counts = FastSlowJudgeCounts::default();
+        let graph = ResultGraphSnapshot::default();
         let plan = plan_result_fallback(ResultFallbackSummary {
             clear_type: "Normal",
             ex_score: 1500,
@@ -3640,6 +3890,8 @@ mod tests {
             gauge_value: 82.0,
             total_notes: 1000,
             judge_counts: &judge_counts,
+            fast_slow_counts: &fast_slow_counts,
+            graph: &graph,
             score_history_id: 42,
             replay_saved: true,
             difficulty_name: "HYPER",
@@ -3663,17 +3915,71 @@ mod tests {
     }
 
     #[test]
-    fn result_judge_labels_include_all_counts() {
-        let labels = result_judge_labels(&DisplayJudgeCounts {
-            pgreat: 1,
-            great: 2,
-            good: 3,
-            bad: 4,
-            poor: 5,
-            empty_poor: 6,
+    fn result_plan_includes_stat_detail_panels() {
+        let judge_counts =
+            DisplayJudgeCounts { pgreat: 12, great: 8, good: 4, bad: 2, poor: 1, empty_poor: 3 };
+        let fast_slow_counts = FastSlowJudgeCounts {
+            fast_pgreat: 7,
+            slow_pgreat: 5,
+            fast_great: 3,
+            slow_great: 5,
+            fast_good: 1,
+            slow_good: 3,
+            fast_bad: 1,
+            slow_bad: 1,
+            fast_poor: 0,
+            slow_poor: 1,
+            fast_empty_poor: 2,
+            slow_empty_poor: 1,
+        };
+        let graph = ResultGraphSnapshot {
+            timing_points: vec![
+                ResultTimingPoint {
+                    time_ms: 100,
+                    delta_us: -12_000,
+                    judge: bmz_core::judge::Judge::Great,
+                },
+                ResultTimingPoint {
+                    time_ms: 200,
+                    delta_us: 8_000,
+                    judge: bmz_core::judge::Judge::PGreat,
+                },
+            ],
+            judge_graph_density: vec![1, 3, 2],
+            ..ResultGraphSnapshot::default()
+        };
+
+        let plan = plan_result_fallback(ResultFallbackSummary {
+            clear_type: "Normal",
+            ex_score: 1500,
+            ex_score_rate: 0.75,
+            max_combo: 500,
+            gauge_value: 82.0,
+            total_notes: 1000,
+            judge_counts: &judge_counts,
+            fast_slow_counts: &fast_slow_counts,
+            graph: &graph,
+            score_history_id: 42,
+            replay_saved: true,
+            difficulty_name: "HYPER",
+            play_level: "10",
+            grade_diff: "AA+56".to_string(),
         });
 
-        assert_eq!(labels, ["PG 1", "GR 2", "GD 3", "BD 4", "PR 5", "EP 6"]);
+        for label in ["JUDGE DETAILS", "FAST/SLOW DETAILS", "TIMING DETAILS"] {
+            assert!(plan.commands.iter().any(|command| matches!(
+                command,
+                DrawCommand::Text { text, .. } if text == label
+            )));
+        }
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Text { text, .. } if text.starts_with("AVG ")
+        )));
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Text { text, .. } if text == "F 12  S 15"
+        )));
     }
 
     #[test]

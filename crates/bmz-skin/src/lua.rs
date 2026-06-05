@@ -1494,6 +1494,11 @@ fn skin_config_get_path(
     {
         return Ok(path);
     }
+    if let Some(path) =
+        resolve_selected_skin_path_for_wildcard_child(root, requested_path, skin_files)
+    {
+        return Ok(path);
+    }
 
     let Some((prefix, suffix)) = requested_path.split_once('*') else {
         return Ok(root.join(requested_path));
@@ -1530,6 +1535,28 @@ fn skin_config_get_path(
     }
     candidates.sort();
     candidates.into_iter().next().ok_or_else(|| anyhow!("skin_config path not found: {requested}"))
+}
+
+fn resolve_selected_skin_path_for_wildcard_child(
+    root: &Path,
+    requested: &str,
+    skin_files: &BTreeMap<String, String>,
+) -> Option<PathBuf> {
+    let (requested_prefix, requested_suffix) = requested.split_once('*')?;
+    for (configured, selected) in skin_files {
+        let (configured_prefix, configured_suffix) = configured.split_once('*')?;
+        if requested_prefix != configured_prefix {
+            continue;
+        }
+        let wildcard = selected
+            .strip_prefix(configured_prefix)
+            .and_then(|rest| rest.strip_suffix(configured_suffix))?;
+        let candidate = format!("{requested_prefix}{wildcard}{requested_suffix}");
+        if let Some(path) = resolve_selected_skin_path(root, &candidate) {
+            return Some(path);
+        }
+    }
+    None
 }
 
 fn strip_beatoraja_asset_filter(path: &str) -> &str {
