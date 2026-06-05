@@ -15367,7 +15367,9 @@ mod tests {
             select_mode_index: 4,
             select_sort_index: 6,
             select_ln_mode_index: 2,
+            select_bp: Some(12),
             ex_score: 1234,
+            max_combo: 345,
             ..SkinDrawState::default()
         };
 
@@ -15384,6 +15386,8 @@ mod tests {
         );
         assert_eq!(skin_state_number(370, state), Some(5));
         assert_eq!(skin_state_number(74, state), Some(1200));
+        assert_eq!(skin_state_number(75, state), Some(345));
+        assert_eq!(skin_state_number(76, state), Some(12));
         assert_eq!(skin_state_number(90, state), Some(180));
         assert_eq!(skin_state_number(91, state), Some(120));
         assert_eq!(skin_state_number(92, state), Some(150));

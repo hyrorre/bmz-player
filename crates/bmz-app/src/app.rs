@@ -7559,7 +7559,7 @@ fn select_snapshot_rows(
                         ex_score: row.best_score.as_ref().map(|score| score.ex_score),
                         max_combo: row.best_score.as_ref().map(|score| score.max_combo),
                         gauge_value: row.best_score.as_ref().map(|score| score.gauge_value),
-                        bp: None,
+                        bp: row.best_score.as_ref().map(|score| score.bp),
                         play_count,
                         clear_count,
                         replay_slots: row.replay_slots,
@@ -9883,7 +9883,10 @@ mod tests {
             .map(|index| {
                 let mut row = select_chart_row(index);
                 if index == 5 {
-                    row.best_score = Some(best_score_with_replay(1234, "replay/test.toml"));
+                    let mut best_score = best_score_with_replay(1234, "replay/test.toml");
+                    best_score.bp = 12;
+                    best_score.max_combo = 345;
+                    row.best_score = Some(best_score);
                     row.replay_slots = [true, false, false, false];
                 }
                 SelectItem::Chart(row)
@@ -9908,6 +9911,8 @@ mod tests {
         assert_eq!(snapshot_rows[3].title, "Title 5");
         assert_eq!(snapshot_rows[3].clear_type, "Normal");
         assert_eq!(snapshot_rows[3].ex_score, Some(1234));
+        assert_eq!(snapshot_rows[3].bp, Some(12));
+        assert_eq!(snapshot_rows[3].max_combo, Some(345));
         assert_eq!(snapshot_rows[3].judge_rank, Some(1));
         assert_eq!(snapshot_rows[3].play_count, 42);
         assert_eq!(snapshot_rows[3].clear_count, 31);
