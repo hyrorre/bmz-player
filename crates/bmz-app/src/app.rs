@@ -5847,7 +5847,12 @@ impl WinitApp {
         use crate::system_sound::SoundType;
         self.stop_all_system_bgm();
         match scene_kind {
-            AppSceneKind::Select => self.play_system_sound(SoundType::Select),
+            AppSceneKind::Select
+                if should_play_select_bgm_on_enter(self.select_preview_playing) =>
+            {
+                self.play_system_sound(SoundType::Select);
+            }
+            AppSceneKind::Select => {}
             AppSceneKind::Decide => self.play_system_sound(SoundType::Decide),
             AppSceneKind::Play => {}
             AppSceneKind::Result => {
@@ -5901,6 +5906,10 @@ impl WinitApp {
             manager.stop_all_bgm();
         }
     }
+}
+
+fn should_play_select_bgm_on_enter(select_preview_playing: bool) -> bool {
+    !select_preview_playing
 }
 
 fn window_attributes_from_config(
@@ -9517,6 +9526,12 @@ mod tests {
         assert_eq!(window_title_for_scene(AppSceneKind::Select), "bmz-player - Select");
         assert_eq!(window_title_for_scene(AppSceneKind::Play), "bmz-player - Play");
         assert_eq!(window_title_for_scene(AppSceneKind::Result), "bmz-player - Result");
+    }
+
+    #[test]
+    fn select_bgm_is_skipped_when_preview_is_already_playing() {
+        assert!(should_play_select_bgm_on_enter(false));
+        assert!(!should_play_select_bgm_on_enter(true));
     }
 
     #[test]
