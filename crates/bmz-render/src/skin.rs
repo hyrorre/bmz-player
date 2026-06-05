@@ -1695,6 +1695,9 @@ pub struct SkinDrawState {
     pub target_max_combo: Option<u32>,
     /// 過去ベスト bp (ref 178 で使用)。
     pub best_bp: Option<u32>,
+    /// Result 画面で表示する今回 BP/CB。Failed では未処理ノーツを含む記録用値。
+    pub result_bp: Option<u32>,
+    pub result_cb: Option<u32>,
     /// Result update/draw ops 用の保存前ベスト。
     pub previous_best_ex_score: Option<u32>,
     pub previous_best_max_combo: Option<u32>,
@@ -1876,6 +1879,8 @@ impl Default for SkinDrawState {
             best_max_combo: None,
             target_max_combo: None,
             best_bp: None,
+            result_bp: None,
+            result_cb: None,
             previous_best_ex_score: None,
             previous_best_max_combo: None,
             previous_best_bp: None,
@@ -7222,6 +7227,9 @@ fn select_chart_main_bpm(state: SkinDrawState) -> Option<f32> {
 }
 
 fn current_bp(state: SkinDrawState) -> u32 {
+    if state.result_failed.is_some() {
+        return state.result_bp.unwrap_or(state.judge_counts.bad + state.judge_counts.poor);
+    }
     state.judge_counts.bad + state.judge_counts.poor
 }
 
@@ -15135,6 +15143,18 @@ mod tests {
         assert!(test_skin_op(1332, &[], draw_state));
         assert!(test_skin_op(1335, &[], draw_state));
         assert!(test_skin_op(354, &[], draw_state));
+
+        let failed_record_bp_state = SkinDrawState {
+            judge_counts: DisplayJudgeCounts { bad: 1, poor: 2, ..DisplayJudgeCounts::default() },
+            previous_best_bp: Some(10),
+            result_bp: Some(100),
+            result_failed: Some(true),
+            ..SkinDrawState::default()
+        };
+        assert_eq!(skin_state_number(177, failed_record_bp_state), Some(100));
+        assert_eq!(skin_state_number(178, failed_record_bp_state), Some(90));
+        assert!(!test_skin_op(332, &[], failed_record_bp_state));
+        assert!(!test_skin_op(1332, &[], failed_record_bp_state));
 
         let updated_result_state = SkinDrawState {
             ex_score: 1900,

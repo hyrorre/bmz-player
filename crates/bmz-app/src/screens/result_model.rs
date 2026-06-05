@@ -16,6 +16,8 @@ pub struct ResultSummary {
     pub arrange: String,
     pub ex_score: u32,
     pub max_combo: u32,
+    pub bp: u32,
+    pub cb: u32,
     pub gauge_value: f32,
     pub gauge_type: GaugeType,
     pub total_notes: u32,
@@ -133,6 +135,8 @@ impl ResultSummary {
             arrange: "NORMAL".to_string(),
             ex_score: result.score.ex_score(),
             max_combo: result.score.max_combo,
+            bp: result.record_bp(),
+            cb: result.record_cb(),
             gauge_value: result.gauge_value,
             gauge_type: result.gauge_type,
             total_notes: result.total_notes,
@@ -242,6 +246,44 @@ mod tests {
 
     #[test]
     fn result_summary_uses_play_and_storage_values() {
+        let result = play_result();
+        let stored = stored_result();
+        let chart = chart();
+
+        let summary = ResultSummary::from_play_result(&result, &stored, &chart);
+
+        assert_eq!(summary.title, "Test");
+        assert_eq!(summary.duration_ms, 90_000);
+        assert_eq!(summary.initial_bpm, 128.0);
+        assert_eq!(summary.clear_type, ClearType::Normal);
+        assert_eq!(summary.gauge_type, GaugeType::Normal);
+        assert_eq!(summary.max_combo, 12);
+        assert_eq!(summary.bp, 18);
+        assert_eq!(summary.cb, 11);
+        assert_eq!(summary.gauge_value, 82.0);
+        assert_eq!(summary.score_history_id, 9);
+        assert_eq!(summary.replay_path, "replay/test.toml");
+        assert_eq!(
+            summary.judge_counts,
+            ResultJudgeCounts { pgreat: 2, great: 3, good: 4, bad: 5, poor: 6, empty_poor: 7 }
+        );
+    }
+
+    #[test]
+    fn failed_result_summary_uses_record_bp_and_cb() {
+        let mut result = play_result();
+        result.clear_type = ClearType::Failed;
+        result.score = bmz_gameplay::score::ScoreState::default();
+        let stored = stored_result();
+        let chart = chart();
+
+        let summary = ResultSummary::from_play_result(&result, &stored, &chart);
+
+        assert_eq!(summary.bp, chart.total_notes);
+        assert_eq!(summary.cb, chart.total_notes);
+    }
+
+    fn play_result() -> PlayResult {
         let score = ScoreState {
             max_combo: 12,
             judges: bmz_gameplay::score::JudgeCounts {
@@ -255,7 +297,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let result = PlayResult {
+        PlayResult {
             chart_sha256: [1; 32],
             clear_type: ClearType::Normal,
             gauge_type: GaugeType::Normal,
@@ -263,14 +305,20 @@ mod tests {
             total_notes: 20,
             score,
             autoplay: false,
-        };
-        let stored = StoredPlayResult {
+        }
+    }
+
+    fn stored_result() -> StoredPlayResult {
+        StoredPlayResult {
             score_history_id: 9,
             replay_path: "replay/test.toml".to_string(),
             slot_paths: [None, None, None, None],
             device_type: bmz_core::input::InputDeviceKind::Keyboard,
-        };
-        let chart = bmz_chart::model::PlayableChart {
+        }
+    }
+
+    fn chart() -> bmz_chart::model::PlayableChart {
+        bmz_chart::model::PlayableChart {
             identity: bmz_core::chart::ChartIdentity { file_md5: [0; 16], file_sha256: [0; 32] },
             metadata: bmz_chart::model::ChartMetadata {
                 title: "Test".to_string(),
@@ -298,23 +346,7 @@ mod tests {
             bga_assets: Vec::new(),
             total_notes: 20,
             end_time: TimeUs(90_000_000),
-        };
-
-        let summary = ResultSummary::from_play_result(&result, &stored, &chart);
-
-        assert_eq!(summary.title, "Test");
-        assert_eq!(summary.duration_ms, 90_000);
-        assert_eq!(summary.initial_bpm, 128.0);
-        assert_eq!(summary.clear_type, ClearType::Normal);
-        assert_eq!(summary.gauge_type, GaugeType::Normal);
-        assert_eq!(summary.max_combo, 12);
-        assert_eq!(summary.gauge_value, 82.0);
-        assert_eq!(summary.score_history_id, 9);
-        assert_eq!(summary.replay_path, "replay/test.toml");
-        assert_eq!(
-            summary.judge_counts,
-            ResultJudgeCounts { pgreat: 2, great: 3, good: 4, bad: 5, poor: 6, empty_poor: 7 }
-        );
+        }
     }
 
     #[test]

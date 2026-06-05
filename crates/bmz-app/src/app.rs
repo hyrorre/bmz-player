@@ -530,6 +530,8 @@ fn course_result_summary_for_skin(course: &CourseResultSummary) -> ResultSummary
     };
     let max_combo =
         course.entry_summaries.iter().map(|summary| summary.max_combo).max().unwrap_or(0);
+    let bp = course.entry_summaries.iter().map(|summary| summary.bp).sum();
+    let cb = course.entry_summaries.iter().map(|summary| summary.cb).sum();
     let fast_slow_counts =
         course.entry_summaries.iter().fold(ResultFastSlowJudgeCounts::default(), |acc, summary| {
             ResultFastSlowJudgeCounts {
@@ -555,6 +557,8 @@ fn course_result_summary_for_skin(course: &CourseResultSummary) -> ResultSummary
         arrange: "NORMAL".to_string(),
         ex_score: course.total_ex_score,
         max_combo,
+        bp,
+        cb,
         gauge_value: last.map(|summary| summary.gauge_value).unwrap_or(0.0),
         gauge_type: last.map(|summary| summary.gauge_type).unwrap_or(GaugeType::Normal),
         total_notes: course.total_notes,
@@ -1150,6 +1154,8 @@ impl WinitApp {
                 ex_score: summary.ex_score,
                 ex_score_rate: summary.ex_score_rate(),
                 max_combo: summary.max_combo,
+                bp: summary.bp,
+                cb: summary.cb,
                 gauge_value: summary.gauge_value,
                 gauge_type: summary.gauge_type as i32,
                 total_notes: summary.total_notes,
@@ -9055,6 +9061,8 @@ mod tests {
                 arrange: "NORMAL".to_string(),
                 ex_score,
                 max_combo,
+                bp: 0,
+                cb: 0,
                 gauge_value: 80.0,
                 gauge_type: GaugeType::Normal,
                 total_notes: notes,
