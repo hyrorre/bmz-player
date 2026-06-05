@@ -1541,7 +1541,7 @@ pub struct SkinDrawState {
     /// 各レーンのkeyoff(離した直後の演出)タイマー経過ms。Noneなら非アクティブ。
     /// beatoraja の TIMER_KEYOFF_1P_KEY1..7 (121..127) / SCRATCH (120) に対応。
     pub keyoff_ms: [Option<i32>; LANE_COUNT],
-    /// 各レーンの直近判定の画像インデックス (0=PGREAT,1=GREAT,2=GOOD,3=BAD,4=POOR)。
+    /// 各レーンの直近判定の画像インデックス (0=PGREAT,1=GREAT,2=GOOD,3=BAD,4=POOR,5=MISS)。
     /// imageset (ボム・キービーム) の画像選択に使う。Noneなら判定なし。
     pub lane_judge: [Option<usize>; LANE_COUNT],
     /// 判定タイマー経過ms。index 0/1/2 = TIMER_JUDGE_1P/2P/3P (46/47/247)。Noneなら非アクティブ。
@@ -1549,7 +1549,7 @@ pub struct SkinDrawState {
     /// Full combo timer elapsed ms (TIMER_FULLCOMBO_1P/2P=48/49)。Noneなら非アクティブ。
     pub full_combo_ms: Option<i32>,
     pub music_end_ms: Option<i32>,
-    /// 領域別の判定画像インデックス (0=PGREAT,1=GREAT,2=GOOD,3=BAD,4=POOR)。
+    /// 領域別の判定画像インデックス (0=PGREAT,1=GREAT,2=GOOD,3=BAD,4=POOR,5=MISS)。
     pub judge_index: [Option<usize>; MAX_JUDGE_REGIONS],
     /// 領域別の判定表示用 combo。beatoraja `JudgeManager.judgecombo` 相当。
     pub judge_combo: [u32; MAX_JUDGE_REGIONS],
@@ -5270,7 +5270,7 @@ fn skin_state_imageset_index(ref_id: i32, state: SkinDrawState) -> Option<usize>
     }
 }
 
-/// imageset の画像を判定インデックス (0=PGREAT..4=POOR) で選ぶ。
+/// imageset の画像を判定インデックス (0=PGREAT..4=POOR,5=MISS) で選ぶ。
 /// 2枚構成 (通常/PGREAT) は PGREAT 判定でのみ2枚目を使う。
 fn imageset_image_for_index(
     imageset: &SkinImageSetDef,
@@ -5298,8 +5298,10 @@ pub(crate) fn judge_image_index(judge: &str) -> Option<usize> {
         Some(2)
     } else if judge.starts_with("BAD") {
         Some(3)
-    } else if judge.starts_with("POOR") || judge.starts_with("EMPTY") {
+    } else if judge.starts_with("POOR") {
         Some(4)
+    } else if judge.starts_with("EMPTY") {
+        Some(5)
     } else {
         None
     }
@@ -5311,7 +5313,8 @@ pub(crate) fn judge_image_index_for_judge(judge: Judge) -> usize {
         Judge::Great => 1,
         Judge::Good => 2,
         Judge::Bad => 3,
-        Judge::Poor | Judge::EmptyPoor => 4,
+        Judge::Poor => 4,
+        Judge::EmptyPoor => 5,
     }
 }
 
@@ -12252,6 +12255,8 @@ mod tests {
 
         let pgreat = document.judge_image_render_item("PGREAT FAST", 175, &sources).unwrap();
         let poor = document.judge_image_render_item("POOR SLOW", 120, &sources).unwrap();
+        let empty_poor =
+            document.judge_image_render_item("EMPTY POOR SLOW", 120, &sources).unwrap();
         let expired = document.judge_image_render_item("PGREAT", 600, &sources);
 
         assert!(matches!(pgreat, SkinRenderItem::Image {
@@ -12267,6 +12272,10 @@ mod tests {
                 uv: TextureRegion { x, .. },
                 ..
             } if approx_eq(x, 0.4)));
+        assert!(matches!(empty_poor, SkinRenderItem::Image {
+                uv: TextureRegion { x, .. },
+                ..
+            } if approx_eq(x, 0.5)));
         assert!(expired.is_none());
     }
 
