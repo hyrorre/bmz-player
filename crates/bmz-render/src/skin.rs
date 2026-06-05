@@ -7040,7 +7040,7 @@ fn skin_image_texture_region_for_state(
     // ref 値が解決できない場合 (state 未提供 or 値 None) は行 0 にフォールバックし、
     // 全フレームを順次再生する cycle モードへは落とさない（高速点滅を防ぐため）。
     let frame_index = if image.ref_id != 0 {
-        let row = state.and_then(|s| skin_state_number(image.ref_id, s)).unwrap_or(0);
+        let row = state.and_then(|s| skin_image_ref_number(image.ref_id, s)).unwrap_or(0);
         let max_row = if image.len > 0 { image.len.min(divy) } else { divy };
         let row = row.clamp(0, (max_row - 1).max(0) as i64) as i32;
         let col = if image.cycle > 0 && divx > 1 {
@@ -7064,6 +7064,13 @@ fn skin_image_texture_region_for_state(
         y: (py as f32 + cell_height * source_row as f32) / source_height,
         width: cell_width / source_width,
         height: cell_height / source_height,
+    }
+}
+
+fn skin_image_ref_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
+    match ref_id {
+        42 | 43 => Some(state.select_arrange_index as i64),
+        _ => skin_state_number(ref_id, state),
     }
 }
 

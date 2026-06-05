@@ -813,6 +813,34 @@ mod tests {
     }
 
     #[test]
+    fn apply_arrange_random_moves_notes_between_lanes() {
+        use bmz_chart::model::{NoteEvent, NoteKind};
+        use bmz_core::ids::NoteId;
+        use bmz_core::time::ChartTick;
+
+        let mut chart = chart();
+        chart.metadata.key_mode = KeyMode::K7;
+        chart.lane_notes[Lane::Key1.index()].push(NoteEvent {
+            id: NoteId(1),
+            lane: Lane::Key1,
+            kind: NoteKind::Tap,
+            tick: ChartTick(0),
+            time: TimeUs(1_000_000),
+            sound: None,
+            damage: None,
+        });
+
+        let applied = apply_arrange(&mut chart, ArrangeOption::Random, Some(42), None);
+
+        assert_eq!(applied.arrange, ArrangeOption::Random);
+        assert_ne!(applied.pattern, Some((0u8..LANE_COUNT as u8).collect()));
+        assert!(chart.lane_notes[Lane::Key1.index()].is_empty());
+        assert!(chart.lane_notes.iter().enumerate().any(|(lane_index, notes)| lane_index
+            != Lane::Key1.index()
+            && notes.iter().any(|note| note.id == NoteId(1) && note.lane.index() == lane_index)));
+    }
+
+    #[test]
     fn build_game_session_enables_gauge_auto_shift_from_profile() {
         let mut profile = ProfileConfig::new_default("default", "Default", 1);
         profile.play.gauge_auto_shift =

@@ -402,6 +402,7 @@ struct SelectFolderSummaryResult {
 
 struct DecideTransition {
     chart_id: i64,
+    options: PlayStartOptions,
     started_at: Instant,
     fadeout_started_at: Option<Instant>,
     cancel: bool,
@@ -410,6 +411,7 @@ struct DecideTransition {
 
 struct PendingPlayStart {
     chart_id: i64,
+    options: PlayStartOptions,
 }
 
 struct PendingPlayPreload {
@@ -2110,6 +2112,7 @@ impl WinitApp {
                     self.play_ready_sound_started_at,
                     &mut self.last_play_snapshot,
                     &active_play.running.session,
+                    active_play.running.applied_arrange.arrange,
                 );
                 update_play_exit_hold_started_at(
                     &mut self.play_exit_hold_started_at,
@@ -2224,6 +2227,7 @@ impl WinitApp {
                         self.play_ready_sound_started_at,
                         &mut self.last_play_snapshot,
                         &active_play.running.session,
+                        active_play.running.applied_arrange.arrange,
                     );
                 } else {
                     self.last_play_start_press_at = Some(now);
@@ -2480,6 +2484,7 @@ impl WinitApp {
                 self.play_ready_sound_started_at,
                 &mut self.last_play_snapshot,
                 &active_play.running.session,
+                active_play.running.applied_arrange.arrange,
             );
             update_play_exit_hold_started_at(
                 &mut self.play_exit_hold_started_at,
@@ -3287,8 +3292,8 @@ impl WinitApp {
             arrange: ArrangeOption::Normal,
             ..Default::default()
         };
-        self.start_play_preload(chart_id, preload_options);
-        self.enter_play_scene(chart_id, self.decide_snapshot_for_chart(chart_id));
+        self.start_play_preload(chart_id, preload_options.clone());
+        self.enter_play_scene(chart_id, preload_options, self.decide_snapshot_for_chart(chart_id));
         tracing::info!(chart_id, "practice configuration screen ready");
     }
 
@@ -3464,8 +3469,8 @@ impl WinitApp {
             ..Default::default()
         };
         self.invalidate_play_preload();
-        self.start_play_preload(chart_id, preload_options);
-        self.pending_play_start = Some(PendingPlayStart { chart_id });
+        self.start_play_preload(chart_id, preload_options.clone());
+        self.pending_play_start = Some(PendingPlayStart { chart_id, options: preload_options });
         tracing::info!(chart_id, "practice round finished; back to configuration");
     }
 
@@ -3932,6 +3937,7 @@ impl WinitApp {
         let now = Instant::now();
         self.pending_decide = Some(DecideTransition {
             chart_id,
+            options,
             started_at: now,
             fadeout_started_at: None,
             cancel: false,
@@ -3942,6 +3948,7 @@ impl WinitApp {
     fn start_play_preload(&mut self, chart_id: i64, options: PlayStartOptions) {
         self.play_preload_generation = self.play_preload_generation.wrapping_add(1);
         let generation = self.play_preload_generation;
+        self.preloaded_play_session = None;
         let (tx, rx) = mpsc::channel();
         let library_db_path = self.boot.app_paths.library_db.clone();
         let app_config = self.boot.app_config.clone();
@@ -3964,7 +3971,7 @@ impl WinitApp {
                         chart_id,
                         session_options.clone(),
                     )?;
-                    Ok(PreloadedWinitPlaySession { preloaded, input, session_options })
+                    Ok(PreloadedWinitPlaySession { chart_id, preloaded, input, session_options })
                 })()
                 .map_err(|error| format!("{error:#}"));
                 let _ = tx.send(PlayPreloadResult { generation, chart_id, result });
@@ -4068,7 +4075,11 @@ impl WinitApp {
         };
         match opened {
             Ok(active_play) => {
-                self.enter_play_scene(chart_id, self.decide_snapshot_for_chart(chart_id));
+                self.enter_play_scene(
+                    chart_id,
+                    options.clone(),
+                    self.decide_snapshot_for_chart(chart_id),
+                );
                 self.install_active_play(active_play);
             }
             Err(error) => {
@@ -4095,7 +4106,12 @@ impl WinitApp {
         self.play_backbmp_loaded = false;
     }
 
-    fn enter_play_scene(&mut self, chart_id: i64, mut snapshot: RenderSnapshot) {
+    fn enter_play_scene(
+        &mut self,
+        chart_id: i64,
+        options: PlayStartOptions,
+        mut snapshot: RenderSnapshot,
+    ) {
         self.play_ending = None;
         self.result_exit = None;
         self.play_ready_sound_started_at = None;
@@ -4105,6 +4121,7 @@ impl WinitApp {
         self.finished_play = None;
         self.draining_audio = None;
         self.play_scene_started_at = Instant::now();
+        snapshot.arrange = options.arrange.as_str().to_string();
         snapshot.play_elapsed_time = TimeUs(0);
         snapshot.ready_elapsed_time = None;
         snapshot.time = self.play_skin_playstart_offset();
@@ -4112,7 +4129,7 @@ impl WinitApp {
         self.apply_course_skin_context(&mut snapshot);
         self.apply_play_table_text(&mut snapshot);
         self.last_play_snapshot = Some(snapshot.clone());
-        self.pending_play_start = Some(PendingPlayStart { chart_id });
+        self.pending_play_start = Some(PendingPlayStart { chart_id, options });
         self.last_started_chart_id = Some(chart_id);
     }
 
@@ -4216,10 +4233,29 @@ impl WinitApp {
             return;
         };
         let chart_id = play_start.chart_id;
-        let prepared =
-            prepare_winit_play_session_from_preloaded(&self.boot.profile_config, prepared);
-        match open_prepared_winit_play_session(&self.boot.score_db, &self.boot.app_config, prepared)
-        {
+        let start_options = play_start.options.clone();
+        let opened = if preloaded_matches_start(&prepared, chart_id, &start_options) {
+            let prepared =
+                prepare_winit_play_session_from_preloaded(&self.boot.profile_config, prepared);
+            open_prepared_winit_play_session(&self.boot.score_db, &self.boot.app_config, prepared)
+        } else {
+            tracing::warn!(chart_id, "discarding mismatched play preload");
+            prepare_play_session_for_chart_with_winit_input(
+                &self.boot.library_db,
+                &self.boot.app_config,
+                &self.boot.profile_config,
+                chart_id,
+                start_options,
+            )
+            .and_then(|prepared| {
+                open_prepared_winit_play_session(
+                    &self.boot.score_db,
+                    &self.boot.app_config,
+                    prepared,
+                )
+            })
+        };
+        match opened {
             Ok(active_play) => {
                 tracing::info!(chart_id, "play preload installed");
                 self.install_active_play(active_play);
@@ -4482,7 +4518,7 @@ impl WinitApp {
             self.select_scene_started_at = now;
             self.select_bar_started_at = now;
         } else {
-            self.enter_play_scene(decide.chart_id, decide.snapshot);
+            self.enter_play_scene(decide.chart_id, decide.options, decide.snapshot);
         }
     }
 
@@ -5243,6 +5279,7 @@ impl WinitApp {
             self.play_ready_sound_started_at,
             &mut self.last_play_snapshot,
             &active_play.running.session,
+            active_play.running.applied_arrange.arrange,
         );
     }
 
@@ -7641,6 +7678,7 @@ fn update_pre_ready_play_snapshot_options_for_session(
     ready_sound_started_at: Option<Instant>,
     last_play_snapshot: &mut Option<RenderSnapshot>,
     session: &bmz_gameplay::session::GameSession,
+    arrange: ArrangeOption,
 ) {
     if ready_sound_started_at.is_some() {
         return;
@@ -7653,6 +7691,7 @@ fn update_pre_ready_play_snapshot_options_for_session(
         session,
         snapshot.time,
     );
+    snapshot.arrange = arrange.as_str().to_string();
 }
 
 fn update_play_exit_hold_started_at(
@@ -7995,6 +8034,19 @@ fn elapsed_since(started_at: Instant) -> TimeUs {
 
 fn elapsed_since_ms(started_at: Instant) -> i32 {
     (started_at.elapsed().as_millis().min(i32::MAX as u128)) as i32
+}
+
+fn preloaded_matches_start(
+    preloaded: &PreloadedWinitPlaySession,
+    chart_id: i64,
+    options: &PlayStartOptions,
+) -> bool {
+    preloaded.chart_id == chart_id
+        && preloaded.session_options.autoplay == options.autoplay
+        && preloaded.session_options.practice_mode == options.practice_mode
+        && preloaded.session_options.arrange == options.arrange
+        && preloaded.session_options.arrange_seed == options.arrange_seed
+        && preloaded.session_options.arrange_pattern == options.arrange_pattern
 }
 
 fn skin_duration_ms(ms: i32) -> Duration {

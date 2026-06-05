@@ -69,6 +69,7 @@ pub struct PreparedWinitPlaySession {
 }
 
 pub struct PreloadedWinitPlaySession {
+    pub chart_id: i64,
     pub preloaded: PreloadedPlaySession,
     pub input: WinitInputBackend,
     pub session_options: PlaySessionOptions,
