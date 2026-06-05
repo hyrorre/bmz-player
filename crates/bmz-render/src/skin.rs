@@ -1442,7 +1442,7 @@ impl SkinContext {
     }
 
     /// ロングノート胴体の矩形を計算する。`head_y`/`tail_y` は `VisibleNote::y` と同じ
-    /// 正規化座標（0.0=判定ライン, 1.0=最奥）。胴体は両端の中心を結ぶ。
+    /// 正規化座標（0.0=判定ライン, 1.0=最奥）。
     pub fn note_body_rect(
         &self,
         lane: Lane,
@@ -1455,10 +1455,11 @@ impl SkinContext {
         let enabled_options = document.enabled_options();
         let area = document.note_lane_area(lane, key_mode, &enabled_options)?;
         let canvas_h = document.h.max(1) as f32;
-        let head_center = note_progress_to_y(area, head_y, state, canvas_h);
-        let tail_center = note_progress_to_y(area, tail_y, state, canvas_h);
-        let top = head_center.min(tail_center);
-        let bottom = head_center.max(tail_center);
+        let note_height = document.note_height_for_lane(lane, key_mode)?;
+        let head_bottom = note_progress_to_y(area, head_y, state, canvas_h);
+        let tail_bottom = note_progress_to_y(area, tail_y, state, canvas_h);
+        let top = head_bottom.min(tail_bottom) - note_height;
+        let bottom = head_bottom.max(tail_bottom) - note_height;
         Some(document.apply_notes_offset_to_rect(
             Rect { x: area.x, y: top, width: area.width, height: bottom - top },
             state,
@@ -3812,8 +3813,11 @@ impl SkinDocument {
         self.note_part_render_item(image_id, rect, sources)
     }
 
-    /// ロングノート胴体画像（`note.lnbody`）を描画する。
-    /// `lnbody` が未定義のレーンは通常ノート画像（`note.note`）で代用する。
+    /// ロングノート胴体画像を描画する。
+    ///
+    /// beatoraja の JSON skin は `lnbodyActive` が無い場合、未押下 LN の胴体に
+    /// `lnactive` を割り当てる。BMZ はまだ押下状態を持たないため、通常表示は
+    /// beatoraja の未押下側に合わせる。
     pub fn note_long_body_render_item(
         &self,
         lane: Lane,
@@ -3823,7 +3827,11 @@ impl SkinDocument {
     ) -> Option<SkinRenderItem> {
         let note = self.note.as_ref()?;
         let index = beatoraja_note_index(lane, key_mode);
-        let image_id = note.lnbody.get(index).or_else(|| note.note.get(index))?;
+        let image_id = note
+            .lnactive
+            .get(index)
+            .or_else(|| note.lnbody.get(index))
+            .or_else(|| note.note.get(index))?;
         self.note_part_render_item(image_id, rect, sources)
     }
 
@@ -11825,6 +11833,56 @@ mod tests {
     }
 
     #[test]
+    fn skin_document_uses_scratch_lnactive_for_unpressed_long_body() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "source": [{ "id": 1, "path": "notes.png" }],
+                "image": [
+                    { "id": "note-w", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10 },
+                    { "id": "lnb-s", "src": 1, "x": 20, "y": 0, "w": 20, "h": 1 },
+                    { "id": "lna-s", "src": 1, "x": 50, "y": 0, "w": 30, "h": 1 }
+                ],
+                "note": {
+                    "id": "notes",
+                    "note": ["note-w", "note-w", "note-w", "note-w", "note-w", "note-w", "note-w", "note-w"],
+                    "lnbody": ["note-w", "note-w", "note-w", "note-w", "note-w", "note-w", "note-w", "lnb-s"],
+                    "lnactive": ["note-w", "note-w", "note-w", "note-w", "note-w", "note-w", "note-w", "lna-s"]
+                }
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "1".to_string(),
+            SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 100.0, height: 50.0 },
+            },
+        )]);
+
+        let scratch = document
+            .note_long_body_render_item(
+                Lane::Scratch,
+                KeyMode::K7,
+                Rect { x: 0.0, y: 0.0, width: 0.1, height: 0.1 },
+                &sources,
+            )
+            .unwrap();
+
+        assert!(matches!(
+            scratch,
+            SkinRenderItem::Image {
+                texture: SkinTextureId(42),
+                uv: TextureRegion { x, width, .. },
+                ..
+            } if approx_eq(x, 0.5) && approx_eq(width, 0.3)
+        ));
+    }
+
+    #[test]
     fn skin_document_resolves_gauge_nodes_into_parts() {
         let document: SkinDocument = serde_json::from_str(
             r#"
@@ -15613,6 +15671,9 @@ mod tests {
             r#"
             {
                 "w": 720, "h": 720,
+                "image": [
+                    { "id": "n1", "src": 1, "x": 0, "y": 0, "w": 50, "h": 12 }
+                ],
                 "note": {
                     "id": "notes",
                     "note": ["n1"],
@@ -15652,6 +15713,9 @@ mod tests {
             r#"
             {
                 "w": 720, "h": 720,
+                "image": [
+                    { "id": "n1", "src": 1, "x": 0, "y": 0, "w": 50, "h": 12 }
+                ],
                 "note": {
                     "id": "notes",
                     "note": ["n1"],
@@ -15670,6 +15734,8 @@ mod tests {
         let rect_lifted =
             skin.note_body_rect(Lane::Key1, KeyMode::K7, 0.0, 0.5, state_lifted).unwrap();
 
+        assert!(approx_eq(rect_no_lift.y, (580.0 * 0.5 - 12.0) / 720.0));
+        assert!(approx_eq(rect_no_lift.height, (580.0 * 0.5) / 720.0));
         assert!(
             rect_lifted.y < rect_no_lift.y,
             "expected lifted long body higher on screen, got no_lift={} lifted={}",
