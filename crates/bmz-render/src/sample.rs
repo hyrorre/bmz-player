@@ -140,6 +140,7 @@ pub fn sample_result_scene() -> AppSceneSnapshot {
         gauge_value: 84.0,
         gauge_type: bmz_core::clear::GaugeType::Normal as i32,
         total_notes: 1000,
+        grade_diff_display: crate::scene::ResultGradeDiffDisplay::default(),
         duration_ms: 120_000,
         initial_bpm: 150.0,
         min_bpm: 150.0,

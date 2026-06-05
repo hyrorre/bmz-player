@@ -16,7 +16,9 @@ use crate::plan::{
     Color, DrawCommand, Point, Rect, TextAlign, TextLayer, TextOutline, TextOverflow, TextShadow,
     TextStyle, TextureId, UvRect,
 };
-use crate::scene::{CourseConstraintFlags, SelectRowKind, SelectRowSnapshot, SelectSnapshot};
+use crate::scene::{
+    CourseConstraintFlags, ResultGradeDiffDisplay, SelectRowKind, SelectRowSnapshot, SelectSnapshot,
+};
 use crate::skin_offset::{SKIN_OFFSET_BAR_LINE, SkinOffsetValues};
 use crate::snapshot::{CourseStageMarker, DisplayJudgeCounts};
 
@@ -1527,6 +1529,7 @@ pub struct SkinDrawState {
     pub ex_score: u32,
     pub total_notes: u32,
     pub past_notes: u32,
+    pub result_grade_diff_display: ResultGradeDiffDisplay,
     pub judge_counts: DisplayJudgeCounts,
     pub gauge: f32,
     pub gauge_type: i32,
@@ -1778,6 +1781,7 @@ impl Default for SkinDrawState {
             ex_score: 0,
             total_notes: 0,
             past_notes: 0,
+            result_grade_diff_display: ResultGradeDiffDisplay::default(),
             judge_counts: DisplayJudgeCounts::default(),
             gauge: 0.0,
             gauge_type: 2,
@@ -1955,6 +1959,7 @@ pub struct SkinTextState<'a> {
     pub genre: &'a str,
     pub difficulty_name: &'a str,
     pub play_level: &'a str,
+    pub grade_diff: &'a str,
     pub target: &'a str,
     pub current_folder: &'a str,
     pub bar_text: &'a str,
@@ -1983,6 +1988,7 @@ impl<'a> Default for SkinTextState<'a> {
             genre: "",
             difficulty_name: "",
             play_level: "",
+            grade_diff: "",
             target: "",
             current_folder: "",
             bar_text: "",
@@ -6408,9 +6414,9 @@ fn display_signed_number_digits(
 }
 
 /// `ref_id` が符号付き表示を要求する Result 系 ref か。
-/// beatoraja の `NUMBER_DIFF_*` 系 (152, 153, 172, 175, 178) を対象とする。
+/// beatoraja の `NUMBER_DIFF_*` 系と次 DJ LEVEL までの差分を対象とする。
 fn ref_id_is_signed(ref_id: i32) -> bool {
-    matches!(ref_id, 152 | 153 | 172 | 175 | 178)
+    matches!(ref_id, 152 | 153 | 154 | 172 | 175 | 178)
 }
 
 fn lookup_text(values: &[(TextSlot, String)], slot: TextSlot) -> String {
@@ -6866,7 +6872,7 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
             .map(|best| score_rate_parts(best, state.total_notes))
             .map(|parts| if ref_id == 183 { parts.0 } else { parts.1 } as i64),
         400 => state.judge_rank.map(|rank| rank as i64),
-        154 => next_rank_diff(state),
+        154 => result_grade_diff_number(state),
         // NUMBER_DIFF_HIGHSCORE=152, NUMBER_DIFF_HIGHSCORE2=172 (符号付き、ex_score - best)
         152 | 172 => {
             projected_best_score_at_progress(state).map(|best| state.ex_score as i64 - best as i64)
@@ -6879,12 +6885,12 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         173 => state.target_max_combo.map(|c| c as i64),
         // NUMBER_DIFF_MAXCOMBO=175 (符号付き、max_combo - target_max_combo)
         175 => state.target_max_combo.map(|target| state.max_combo as i64 - target as i64),
-        // NUMBER_TARGET_BPCOUNT=176
-        176 => state.target_bp.map(|c| c as i64),
-        // NUMBER_DIFF_BPCOUNT=178 (符号付き、現在 bp - target_bp)
-        178 => state.target_bp.map(|target| {
-            (state.judge_counts.bad + state.judge_counts.poor) as i64 - target as i64
-        }),
+        // NUMBER_TARGET_BPCOUNT=176 (Result では old/mybest BP)
+        176 => result_mybest_bp(state).map(|c| c as i64),
+        // NUMBER_BPCOUNT2=177 (Result では今回の BP)
+        177 => Some(current_bp(state) as i64),
+        // NUMBER_DIFF_BPCOUNT=178 (符号付き、現在 bp - old/mybest BP)
+        178 => result_mybest_bp(state).map(|best| current_bp(state) as i64 - best as i64),
         // NUMBER_TARGET_CLEAR=371
         371 => state.best_clear_index.or(state.target_clear_index),
         // Fast/Slow split (PGREAT/GREAT/GOOD/BAD/POOR)
@@ -6910,7 +6916,23 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
     }
 }
 
-fn next_rank_diff(state: SkinDrawState) -> Option<i64> {
+fn result_grade_diff_number(state: SkinDrawState) -> Option<i64> {
+    match state.result_grade_diff_display {
+        ResultGradeDiffDisplay::Beatoraja => beatoraja_next_rank_diff(state),
+        ResultGradeDiffDisplay::HalfGrade => half_grade_diff(state).map(|diff| diff.value),
+    }
+}
+
+pub(crate) fn result_grade_diff_label(state: SkinDrawState) -> Option<String> {
+    match state.result_grade_diff_display {
+        ResultGradeDiffDisplay::Beatoraja => {
+            beatoraja_next_rank_diff(state).map(|value| format!("{value:+}"))
+        }
+        ResultGradeDiffDisplay::HalfGrade => half_grade_diff(state).map(|diff| diff.label()),
+    }
+}
+
+fn beatoraja_next_rank_diff(state: SkinDrawState) -> Option<i64> {
     let ex_score = state.select_ex_score.unwrap_or(state.ex_score) as i64;
     let total_notes = state.select_total_notes.max(state.total_notes) as i64;
     let max_score = total_notes.checked_mul(2)?;
@@ -6925,6 +6947,64 @@ fn next_rank_diff(state: SkinDrawState) -> Option<i64> {
         }
     }
     Some(max_score - ex_score)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct HalfGradeDiff {
+    grade: &'static str,
+    value: i64,
+}
+
+impl HalfGradeDiff {
+    fn label(self) -> String {
+        format!("{}{:+}", self.grade, self.value)
+    }
+}
+
+fn half_grade_diff(state: SkinDrawState) -> Option<HalfGradeDiff> {
+    let score = state.select_ex_score.unwrap_or(state.ex_score) as i64;
+    let total_notes = state.select_total_notes.max(state.total_notes) as i64;
+    let max = total_notes.checked_mul(2)?;
+    if max <= 0 {
+        return None;
+    }
+    let score = score.clamp(0, max);
+    if score * 9 < max * 2 {
+        return Some(if score * 18 < max * 2 {
+            HalfGradeDiff { grade: "F", value: score }
+        } else {
+            HalfGradeDiff { grade: "E", value: -div_ceil(max * 2 - score * 9, 9) }
+        });
+    }
+    for (lower_step, plus_grade, minus_grade, half_step, upper_step) in [
+        (2, "E", "D", 5, 3),
+        (3, "D", "C", 7, 4),
+        (4, "C", "B", 9, 5),
+        (5, "B", "A", 11, 6),
+        (6, "A", "AA", 13, 7),
+        (7, "AA", "AAA", 15, 8),
+    ] {
+        if score * 9 < max * upper_step {
+            return Some(if score * 18 < max * half_step {
+                HalfGradeDiff {
+                    grade: plus_grade,
+                    value: div_ceil(score * 9 - max * lower_step, 9),
+                }
+            } else {
+                HalfGradeDiff {
+                    grade: minus_grade,
+                    value: -div_ceil(max * upper_step - score * 9, 9),
+                }
+            });
+        }
+    }
+    if score * 18 < max * 17 {
+        Some(HalfGradeDiff { grade: "AAA", value: div_ceil(score * 9 - max * 8, 9) })
+    } else if score < max {
+        Some(HalfGradeDiff { grade: "MAX", value: -(max - score) })
+    } else {
+        Some(HalfGradeDiff { grade: "MAX", value: 0 })
+    }
 }
 
 fn projected_score_at_progress(final_score: u32, state: SkinDrawState) -> u32 {
@@ -7137,6 +7217,10 @@ fn select_chart_main_bpm(state: SkinDrawState) -> Option<f32> {
 
 fn current_bp(state: SkinDrawState) -> u32 {
     state.judge_counts.bad + state.judge_counts.poor
+}
+
+fn result_mybest_bp(state: SkinDrawState) -> Option<u32> {
+    state.best_bp.or(state.previous_best_bp)
 }
 
 fn skin_point_score(state: SkinDrawState) -> u32 {
@@ -7759,6 +7843,9 @@ fn skin_state_text(text: &SkinTextDef, state: SkinTextState<'_>) -> String {
     }
     if text.id == "level" || text.id == "play_level" {
         return state.play_level.to_string();
+    }
+    if matches!(text.id.as_str(), "grade_diff" | "gradediff" | "dj_level_diff") {
+        return state.grade_diff.to_string();
     }
     match text.ref_id {
         3 => select_target_name(state.target),
@@ -10745,6 +10832,36 @@ mod tests {
         assert_eq!(skin_state_number(154, aaa_state), Some(200));
         assert_eq!(skin_state_number(154, max_state), Some(0));
         assert_eq!(skin_state_number(154, SkinDrawState::default()), None);
+
+        let half_grade = SkinDrawState {
+            result_grade_diff_display: ResultGradeDiffDisplay::HalfGrade,
+            select_total_notes: 1000,
+            ..SkinDrawState::default()
+        };
+        assert_eq!(
+            result_grade_diff_label(SkinDrawState { select_ex_score: Some(100), ..half_grade }),
+            Some("F+100".to_string())
+        );
+        assert_eq!(
+            result_grade_diff_label(SkinDrawState { select_ex_score: Some(300), ..half_grade }),
+            Some("E-145".to_string())
+        );
+        assert_eq!(
+            skin_state_number(154, SkinDrawState { select_ex_score: Some(300), ..half_grade }),
+            Some(-145)
+        );
+        assert_eq!(
+            result_grade_diff_label(SkinDrawState { select_ex_score: Some(500), ..half_grade }),
+            Some("E+56".to_string())
+        );
+        assert_eq!(
+            result_grade_diff_label(SkinDrawState { select_ex_score: Some(1900), ..half_grade }),
+            Some("MAX-100".to_string())
+        );
+        assert_eq!(
+            result_grade_diff_label(SkinDrawState { select_ex_score: Some(2000), ..half_grade }),
+            Some("MAX+0".to_string())
+        );
     }
 
     #[test]
@@ -14885,6 +15002,10 @@ mod tests {
         let zero = display_signed_number_digits(0, 5, true, 12);
         assert_eq!(zero.first(), Some(&11));
         assert!(zero.iter().all(|&d| d < 12));
+
+        // NUMBER_DIFF_NEXTRANK (154) も同じ符号セル付き mimage レイアウトを使う。
+        assert_eq!(display_signed_number_digits(-34, 4, false, 12), vec![23, 15, 16]);
+        assert!(ref_id_is_signed(154));
     }
 
     #[test]
@@ -14954,9 +15075,10 @@ mod tests {
         assert_eq!(skin_state_number(153, state), Some(1888 - 1900));
         assert_eq!(skin_state_number(173, state), Some(1000));
         assert_eq!(skin_state_number(175, state), Some(777 - 1000));
-        assert_eq!(skin_state_number(176, state), Some(0));
-        // 現在 bp = bad+poor = 8、target = 0 → diff = 8
-        assert_eq!(skin_state_number(178, state), Some(8));
+        assert_eq!(skin_state_number(176, state), Some(20));
+        assert_eq!(skin_state_number(177, state), Some(8));
+        // 現在 bp = bad+poor = 8、MYBEST = 20 → diff = -12
+        assert_eq!(skin_state_number(178, state), Some(-12));
         assert_eq!(skin_state_number(371, state), Some(6));
         assert!(test_skin_op(321, &[], state));
         assert!(!test_skin_op(320, &[], state));

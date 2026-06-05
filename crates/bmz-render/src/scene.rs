@@ -4,6 +4,14 @@ use bmz_core::time::TimeUs;
 
 use crate::snapshot::{DisplayJudgeCounts, FastSlowJudgeCounts, OverlaySnapshot, RenderSnapshot};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum ResultGradeDiffDisplay {
+    #[default]
+    Beatoraja,
+    HalfGrade,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::large_enum_variant)]
 pub enum AppSceneSnapshot {
@@ -288,6 +296,7 @@ pub struct ResultSnapshot {
     pub gauge_value: f32,
     pub gauge_type: i32,
     pub total_notes: u32,
+    pub grade_diff_display: ResultGradeDiffDisplay,
     pub duration_ms: i32,
     pub initial_bpm: f32,
     pub min_bpm: f32,
@@ -358,6 +367,7 @@ mod tests {
             gauge_value: 100.0,
             gauge_type: 2,
             total_notes: 10,
+            grade_diff_display: ResultGradeDiffDisplay::default(),
             duration_ms: 0,
             initial_bpm: 0.0,
             min_bpm: 0.0,
@@ -411,6 +421,7 @@ mod tests {
             gauge_value: 100.0,
             gauge_type: 2,
             total_notes: 0,
+            grade_diff_display: ResultGradeDiffDisplay::default(),
             duration_ms: 0,
             initial_bpm: 0.0,
             min_bpm: 0.0,

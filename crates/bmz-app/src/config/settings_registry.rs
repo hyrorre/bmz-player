@@ -3,6 +3,7 @@ use super::profile_config::{
     JudgeAlgorithmConfig, LaneEffectConfig, ProfileConfig, RandomOptionConfig, TargetOptionConfig,
 };
 use bmz_gameplay::rule::RuleMode;
+use bmz_render::scene::ResultGradeDiffDisplay;
 
 /// ゲーム内設定で編集可能な profile.toml 項目。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -21,6 +22,7 @@ pub enum SettingsEntryId {
     GaugeAutoShift,
     Random,
     Target,
+    GradeDiffDisplay,
     LaneEffect,
     Assist,
     BgaMode,
@@ -51,6 +53,7 @@ impl SettingsEntryId {
         Self::GaugeAutoShift,
         Self::Random,
         Self::Target,
+        Self::GradeDiffDisplay,
         Self::LaneEffect,
         Self::Assist,
         Self::BgaMode,
@@ -77,6 +80,7 @@ impl SettingsEntryId {
             Self::GaugeAutoShift => "GAUGE SHIFT",
             Self::Random => "RANDOM",
             Self::Target => "TARGET",
+            Self::GradeDiffDisplay => "GRADE DIFF",
             Self::LaneEffect => "LANE FX",
             Self::Assist => "ASSIST",
             Self::BgaMode => "BGA",
@@ -119,6 +123,9 @@ pub fn format_settings_value(profile: &ProfileConfig, id: SettingsEntryId) -> St
         SettingsEntryId::GaugeAutoShift => format_gauge_auto_shift(profile.play.gauge_auto_shift),
         SettingsEntryId::Random => format_random(profile.play.random),
         SettingsEntryId::Target => format_target(profile.play.target),
+        SettingsEntryId::GradeDiffDisplay => {
+            format_grade_diff_display(profile.play.grade_diff_display)
+        }
         SettingsEntryId::LaneEffect => format_lane_effect(profile.play.lane_effect),
         SettingsEntryId::Assist => format_assist(profile.play.assist),
         SettingsEntryId::BgaMode => format_bga_mode(profile.play.bga),
@@ -179,6 +186,11 @@ pub fn adjust_settings_value(profile: &mut ProfileConfig, id: SettingsEntryId, d
         SettingsEntryId::Target => cycle_enum(delta, profile.play.target, cycle_target)
             .map(|next| profile.play.target = next)
             .is_some(),
+        SettingsEntryId::GradeDiffDisplay => {
+            cycle_enum(delta, profile.play.grade_diff_display, cycle_grade_diff_display)
+                .map(|next| profile.play.grade_diff_display = next)
+                .is_some()
+        }
         SettingsEntryId::LaneEffect => {
             cycle_enum(delta, profile.play.lane_effect, cycle_lane_effect)
                 .map(|next| profile.play.lane_effect = next)
@@ -293,6 +305,13 @@ fn format_target(value: TargetOptionConfig) -> String {
         TargetOptionConfig::C => "C".to_string(),
         TargetOptionConfig::D => "D".to_string(),
         TargetOptionConfig::E => "E".to_string(),
+    }
+}
+
+fn format_grade_diff_display(value: ResultGradeDiffDisplay) -> String {
+    match value {
+        ResultGradeDiffDisplay::Beatoraja => "BEATORAJA".to_string(),
+        ResultGradeDiffDisplay::HalfGrade => "HALF GRADE".to_string(),
     }
 }
 
@@ -411,6 +430,15 @@ fn cycle_target(current: TargetOptionConfig, forward: bool) -> TargetOptionConfi
     cycle_in_slice(&VALUES, current, forward)
 }
 
+fn cycle_grade_diff_display(
+    current: ResultGradeDiffDisplay,
+    forward: bool,
+) -> ResultGradeDiffDisplay {
+    const VALUES: [ResultGradeDiffDisplay; 2] =
+        [ResultGradeDiffDisplay::Beatoraja, ResultGradeDiffDisplay::HalfGrade];
+    cycle_in_slice(&VALUES, current, forward)
+}
+
 fn cycle_lane_effect(current: LaneEffectConfig, forward: bool) -> LaneEffectConfig {
     const VALUES: [LaneEffectConfig; 4] = [
         LaneEffectConfig::Off,
@@ -482,6 +510,19 @@ mod tests {
         profile.play.gauge = GaugeTypeConfig::Hazard;
         assert!(adjust_settings_value(&mut profile, SettingsEntryId::Gauge, 1));
         assert_eq!(profile.play.gauge, GaugeTypeConfig::AutoShift);
+    }
+
+    #[test]
+    fn cycle_grade_diff_display_wraps() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 0);
+        assert!(SettingsEntryId::PLAY_ENTRIES.contains(&SettingsEntryId::GradeDiffDisplay));
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::GradeDiffDisplay), "BEATORAJA");
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::GradeDiffDisplay, 1));
+        assert_eq!(profile.play.grade_diff_display, ResultGradeDiffDisplay::HalfGrade);
+        assert_eq!(
+            format_settings_value(&profile, SettingsEntryId::GradeDiffDisplay),
+            "HALF GRADE"
+        );
     }
 
     #[test]

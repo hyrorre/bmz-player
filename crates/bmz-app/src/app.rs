@@ -1153,6 +1153,7 @@ impl WinitApp {
                 gauge_value: summary.gauge_value,
                 gauge_type: summary.gauge_type as i32,
                 total_notes: summary.total_notes,
+                grade_diff_display: self.boot.profile_config.play.grade_diff_display,
                 duration_ms: summary.duration_ms,
                 initial_bpm: summary.initial_bpm,
                 min_bpm: result_min_bpm(&summary),

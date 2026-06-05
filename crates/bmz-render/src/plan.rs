@@ -1269,6 +1269,7 @@ fn plan_result(
             build_result_skin_draw_state(snapshot, document.ranktime),
             (snapshot.elapsed_time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32,
         );
+        let grade_diff = crate::skin::result_grade_diff_label(state).unwrap_or_default();
         let text = SkinTextState {
             title: snapshot.title.as_str(),
             subtitle: snapshot.subtitle.as_str(),
@@ -1277,6 +1278,7 @@ fn plan_result(
             genre: snapshot.genre.as_str(),
             difficulty_name: snapshot.difficulty_name.as_str(),
             play_level: snapshot.play_level.as_str(),
+            grade_diff: grade_diff.as_str(),
             table_level: snapshot.play_level.as_str(),
             ..SkinTextState::default()
         };
@@ -1301,6 +1303,8 @@ fn plan_result(
         replay_saved: snapshot.replay_saved,
         difficulty_name: &snapshot.difficulty_name,
         play_level: &snapshot.play_level,
+        grade_diff: crate::skin::result_grade_diff_label(build_result_skin_draw_state(snapshot, 0))
+            .unwrap_or_default(),
     });
     push_scene_overlays(&mut plan.commands, &snapshot.overlay);
     plan
@@ -1380,6 +1384,7 @@ fn build_result_skin_draw_state(
         ex_score: snapshot.ex_score,
         total_notes: snapshot.total_notes,
         past_notes: snapshot.total_notes,
+        result_grade_diff_display: snapshot.grade_diff_display,
         total_duration_ms: snapshot.duration_ms,
         max_combo: snapshot.max_combo,
         judge_counts: snapshot.judge_counts,
@@ -1459,6 +1464,7 @@ struct ResultFallbackSummary<'a> {
     replay_saved: bool,
     difficulty_name: &'a str,
     play_level: &'a str,
+    grade_diff: String,
 }
 
 fn plan_result_fallback(summary: ResultFallbackSummary<'_>) -> DrawPlan {
@@ -1474,6 +1480,7 @@ fn plan_result_fallback(summary: ResultFallbackSummary<'_>) -> DrawPlan {
         replay_saved,
         difficulty_name,
         play_level,
+        grade_diff,
     } = summary;
     let mut commands = Vec::new();
     let text = TextRenderer;
@@ -1537,6 +1544,11 @@ fn plan_result_fallback(summary: ResultFallbackSummary<'_>) -> DrawPlan {
         &mut commands,
         &format!("RATE {}", format_percent(ex_score_rate)),
         BitmapTextStyle { x: 0.16, y: 0.675, cell: 0.006, color: Color::rgb(0.72, 0.84, 0.86) },
+    );
+    text.push_text(
+        &mut commands,
+        &format!("GRADE {}", grade_diff),
+        BitmapTextStyle { x: 0.52, y: 0.675, cell: 0.006, color: Color::rgb(0.72, 0.84, 0.86) },
     );
     text.push_text(
         &mut commands,
@@ -2453,6 +2465,7 @@ mod tests {
                 gauge_value: 80.0,
                 gauge_type: bmz_core::clear::GaugeType::Normal as i32,
                 total_notes: 100,
+                grade_diff_display: crate::scene::ResultGradeDiffDisplay::default(),
                 duration_ms: 0,
                 initial_bpm: 0.0,
                 min_bpm: 0.0,
@@ -2538,6 +2551,7 @@ mod tests {
             gauge_value: 80.0,
             gauge_type: bmz_core::clear::GaugeType::Normal as i32,
             total_notes: 100,
+            grade_diff_display: crate::scene::ResultGradeDiffDisplay::default(),
             duration_ms: 0,
             initial_bpm: 0.0,
             min_bpm: 0.0,
@@ -2655,6 +2669,7 @@ mod tests {
             gauge_value: 80.0,
             gauge_type: bmz_core::clear::GaugeType::Normal as i32,
             total_notes: 100,
+            grade_diff_display: crate::scene::ResultGradeDiffDisplay::default(),
             duration_ms: 0,
             initial_bpm: 0.0,
             min_bpm: 0.0,
@@ -2757,6 +2772,7 @@ mod tests {
             gauge_value: 80.0,
             gauge_type: bmz_core::clear::GaugeType::Normal as i32,
             total_notes: 100,
+            grade_diff_display: crate::scene::ResultGradeDiffDisplay::default(),
             duration_ms: 0,
             initial_bpm: 0.0,
             min_bpm: 0.0,
@@ -3604,6 +3620,7 @@ mod tests {
             replay_saved: true,
             difficulty_name: "",
             play_level: "",
+            grade_diff: String::new(),
         });
 
         assert!(plan.commands.iter().any(|command| matches!(
@@ -3627,6 +3644,7 @@ mod tests {
             replay_saved: true,
             difficulty_name: "HYPER",
             play_level: "10",
+            grade_diff: "AA+56".to_string(),
         });
 
         assert!(plan.commands.iter().any(|command| matches!(
@@ -3636,6 +3654,10 @@ mod tests {
         assert!(plan.commands.iter().any(|command| matches!(
             command,
             DrawCommand::Text { text, .. } if text.contains("DIFFICULTY HYPER") && text.contains("LEVEL 10")
+        )));
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Text { text, .. } if text.contains("GRADE AA+56")
         )));
         assert_eq!(format_percent(0.754), "75%");
     }

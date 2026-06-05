@@ -12,6 +12,7 @@ use crate::config::profile_config::{
 use crate::config::settings_registry::{
     SettingsEntryId, adjust_settings_value, format_settings_value,
 };
+use bmz_render::scene::ResultGradeDiffDisplay;
 
 /// 7KEY + スクラッチ向けの設定画面入力マッピング。
 #[derive(Debug, Clone)]
@@ -136,6 +137,7 @@ enum SettingsBaseline {
     GaugeAutoShift(GaugeAutoShiftConfig),
     Random(RandomOptionConfig),
     Target(TargetOptionConfig),
+    GradeDiffDisplay(ResultGradeDiffDisplay),
     LaneEffect(LaneEffectConfig),
     Assist(AssistOptionConfig),
     BgaMode(BgaModeConfig),
@@ -182,6 +184,9 @@ impl SettingsEditSession {
             }
             SettingsEntryId::Random => SettingsBaseline::Random(profile.play.random),
             SettingsEntryId::Target => SettingsBaseline::Target(profile.play.target),
+            SettingsEntryId::GradeDiffDisplay => {
+                SettingsBaseline::GradeDiffDisplay(profile.play.grade_diff_display)
+            }
             SettingsEntryId::LaneEffect => SettingsBaseline::LaneEffect(profile.play.lane_effect),
             SettingsEntryId::Assist => SettingsBaseline::Assist(profile.play.assist),
             SettingsEntryId::BgaMode => SettingsBaseline::BgaMode(profile.play.bga),
@@ -238,6 +243,9 @@ impl SettingsEditSession {
             }
             (SettingsEntryId::Target, SettingsBaseline::Target(value)) => {
                 profile.play.target = *value;
+            }
+            (SettingsEntryId::GradeDiffDisplay, SettingsBaseline::GradeDiffDisplay(value)) => {
+                profile.play.grade_diff_display = *value;
             }
             (SettingsEntryId::LaneEffect, SettingsBaseline::LaneEffect(value)) => {
                 profile.play.lane_effect = *value;

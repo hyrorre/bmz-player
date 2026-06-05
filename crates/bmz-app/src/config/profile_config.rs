@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use bmz_gameplay::rule::RuleMode;
+use bmz_render::scene::ResultGradeDiffDisplay;
 use serde::{Deserialize, Serialize};
 
 use crate::ln_policy::LnPolicySetting;
@@ -41,6 +42,8 @@ pub struct PlayDefaultsConfig {
     pub random: RandomOptionConfig,
     #[serde(default)]
     pub target: TargetOptionConfig,
+    #[serde(default)]
+    pub grade_diff_display: ResultGradeDiffDisplay,
     pub lane_effect: LaneEffectConfig,
     pub assist: AssistOptionConfig,
     pub auto_play: bool,
@@ -616,6 +619,7 @@ impl ProfileConfig {
                 gauge_auto_shift: GaugeAutoShiftConfig::Off,
                 random: RandomOptionConfig::Off,
                 target: TargetOptionConfig::None,
+                grade_diff_display: ResultGradeDiffDisplay::default(),
                 lane_effect: LaneEffectConfig::Off,
                 assist: AssistOptionConfig::None,
                 auto_play: false,
@@ -788,6 +792,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(play.target, TargetOptionConfig::None);
+        assert_eq!(play.grade_diff_display, ResultGradeDiffDisplay::Beatoraja);
         assert_eq!(play.rule_mode, RuleMode::Beatoraja);
         assert_eq!(play.ln_mode_policy, LnPolicySetting::AutoLn);
         assert_eq!(play.bga, BgaModeConfig::On);
