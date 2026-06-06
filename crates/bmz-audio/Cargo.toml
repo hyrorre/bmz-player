@@ -14,3 +14,7 @@ ffmpeg-next.workspace = true
 bmz-core = { path = "../bmz-core" }
 bmz-chart = { path = "../bmz-chart" }
 bmz-ffmpeg = { path = "../bmz-ffmpeg" }
+
+[features]
+default = []
+asio = ["cpal/asio"]

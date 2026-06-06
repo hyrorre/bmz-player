@@ -16,6 +16,21 @@ type SharedAudioSources = Arc<Mutex<Vec<AudioSource>>>;
 #[derive(Debug, Default)]
 pub struct CpalBackend;
 
+#[derive(Debug, Clone, Default)]
+pub struct CpalOutputConfig {
+    pub host: Option<CpalHostId>,
+    pub output_device_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CpalHostId {
+    Wasapi,
+    Asio,
+    CoreAudio,
+    Alsa,
+    Pulse,
+}
+
 pub struct CpalOutput {
     _shared: CpalSharedOutput,
     source: CpalOutputSource,
@@ -52,6 +67,21 @@ pub enum CpalBackendError {
     #[error("no default output device is available")]
     MissingDefaultOutputDevice,
 
+    #[error("requested output device is not available: {0}")]
+    MissingRequestedOutputDevice(String),
+
+    #[error("requested cpal host is not available on this build or platform: {0:?}")]
+    UnsupportedHost(CpalHostId),
+
+    #[error("requested cpal host is unavailable")]
+    HostUnavailable(#[from] ::cpal::HostUnavailable),
+
+    #[error("failed to enumerate output devices")]
+    OutputDevices(#[from] ::cpal::DevicesError),
+
+    #[error("failed to query output device name")]
+    OutputDeviceName(#[from] ::cpal::DeviceNameError),
+
     #[error("failed to query default output config")]
     DefaultOutputConfig(#[from] ::cpal::DefaultStreamConfigError),
 
@@ -71,9 +101,20 @@ impl CpalBackend {
     }
 
     pub fn open_shared_default() -> Result<CpalSharedOutput, CpalBackendError> {
-        let host = ::cpal::default_host();
-        let device =
-            host.default_output_device().ok_or(CpalBackendError::MissingDefaultOutputDevice)?;
+        Self::open_shared(CpalOutputConfig::default())
+    }
+
+    pub fn open_shared(config: CpalOutputConfig) -> Result<CpalSharedOutput, CpalBackendError> {
+        let host = match config.host {
+            Some(host_id) => {
+                let Some(cpal_host_id) = cpal_host_id(host_id) else {
+                    return Err(CpalBackendError::UnsupportedHost(host_id));
+                };
+                ::cpal::host_from_id(cpal_host_id)?
+            }
+            None => ::cpal::default_host(),
+        };
+        let device = output_device(&host, config.output_device_name.as_deref())?;
         let supported_config = device.default_output_config()?;
         let sample_format = supported_config.sample_format();
         let config = supported_config.config();
@@ -118,6 +159,57 @@ impl CpalBackend {
             }),
         })
     }
+}
+
+fn cpal_host_id(host: CpalHostId) -> Option<::cpal::HostId> {
+    match host {
+        #[cfg(windows)]
+        CpalHostId::Wasapi => Some(::cpal::HostId::Wasapi),
+        #[cfg(not(windows))]
+        CpalHostId::Wasapi => None,
+
+        #[cfg(all(windows, feature = "asio"))]
+        CpalHostId::Asio => Some(::cpal::HostId::Asio),
+        #[cfg(not(all(windows, feature = "asio")))]
+        CpalHostId::Asio => None,
+
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        CpalHostId::CoreAudio => Some(::cpal::HostId::CoreAudio),
+        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+        CpalHostId::CoreAudio => None,
+
+        #[cfg(target_os = "linux")]
+        CpalHostId::Alsa => Some(::cpal::HostId::Alsa),
+        #[cfg(not(target_os = "linux"))]
+        CpalHostId::Alsa => None,
+
+        #[cfg(target_os = "linux")]
+        CpalHostId::Pulse => Some(::cpal::HostId::Pulse),
+        #[cfg(not(target_os = "linux"))]
+        CpalHostId::Pulse => None,
+    }
+}
+
+pub fn is_host_supported(host: CpalHostId) -> bool {
+    cpal_host_id(host).is_some()
+}
+
+fn output_device(
+    host: &::cpal::Host,
+    requested_name: Option<&str>,
+) -> Result<::cpal::Device, CpalBackendError> {
+    let requested_name = requested_name.map(str::trim).filter(|name| !name.is_empty());
+    let Some(requested_name) = requested_name else {
+        return host.default_output_device().ok_or(CpalBackendError::MissingDefaultOutputDevice);
+    };
+
+    for device in host.output_devices()? {
+        if device.name()? == requested_name {
+            return Ok(device);
+        }
+    }
+
+    Err(CpalBackendError::MissingRequestedOutputDevice(requested_name.to_string()))
 }
 
 impl CpalOutput {

@@ -4,6 +4,10 @@ edition.workspace = true
 version.workspace = true
 license.workspace = true
 
+[features]
+default = []
+asio = ["bmz-audio/asio"]
+
 [dependencies]
 anyhow.workspace = true
 serde.workspace = true

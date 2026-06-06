@@ -3,7 +3,8 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, bail};
 use bmz_audio::backend::cpal::{
-    CpalBackend, CpalOutputSource, CpalSharedOutput, SharedAudioEngine,
+    CpalBackend, CpalHostId, CpalOutputConfig, CpalOutputSource, CpalSharedOutput,
+    SharedAudioEngine,
 };
 use bmz_audio::clock::AudioClock;
 use bmz_audio::engine::AudioEngine;
@@ -83,8 +84,8 @@ impl RunningPlaySession {
 
 impl AudioRuntime {
     pub fn open(config: &AudioConfig) -> Result<Self> {
-        ensure_default_device_supported(config)?;
-        let mut output = CpalBackend::open_shared_default()
+        let output_config = cpal_output_config(config)?;
+        let mut output = CpalBackend::open_shared(output_config)
             .context("failed to open shared audio output stream")?;
         output.play().context("failed to start shared audio output stream")?;
         Ok(Self { output })
@@ -159,25 +160,50 @@ pub fn open_prepared_play_audio(
     }
 }
 
-fn ensure_default_device_supported(config: &AudioConfig) -> Result<()> {
-    if !config.output_device.is_empty() {
-        bail!("named output devices are not implemented yet: {}", config.output_device);
-    }
+fn cpal_output_config(config: &AudioConfig) -> Result<CpalOutputConfig> {
+    let host = cpal_host_for_backend(&config.backend)?;
+    let output_device_name = cpal_output_device_name(config);
 
-    match config.backend {
-        AudioBackend::Auto
-        | AudioBackend::Wasapi
-        | AudioBackend::CoreAudio
-        | AudioBackend::Alsa
-        | AudioBackend::Pulse => Ok(()),
-        AudioBackend::Asio => {
-            if config.asio_driver.is_empty() {
-                Ok(())
-            } else {
-                bail!("named ASIO drivers are not implemented yet: {}", config.asio_driver)
-            }
-        }
+    Ok(CpalOutputConfig { host, output_device_name })
+}
+
+fn cpal_host_for_backend(backend: &AudioBackend) -> Result<Option<CpalHostId>> {
+    match backend {
+        AudioBackend::Auto => Ok(None),
+        AudioBackend::Wasapi => cpal_host_for_platform(CpalHostId::Wasapi, "WASAPI"),
+        AudioBackend::Asio => cpal_asio_host(),
+        AudioBackend::CoreAudio => cpal_host_for_platform(CpalHostId::CoreAudio, "Core Audio"),
+        AudioBackend::Alsa => cpal_host_for_platform(CpalHostId::Alsa, "ALSA"),
+        AudioBackend::Pulse => cpal_host_for_platform(CpalHostId::Pulse, "PulseAudio"),
     }
+}
+
+fn cpal_output_device_name(config: &AudioConfig) -> Option<String> {
+    if matches!(config.backend, AudioBackend::Asio) && !config.asio_driver.trim().is_empty() {
+        Some(config.asio_driver.trim().to_string())
+    } else if !config.output_device.trim().is_empty() {
+        Some(config.output_device.trim().to_string())
+    } else {
+        None
+    }
+}
+
+fn cpal_host_for_platform(host: CpalHostId, label: &str) -> Result<Option<CpalHostId>> {
+    if bmz_audio::backend::cpal::is_host_supported(host) {
+        Ok(Some(host))
+    } else {
+        bail!("{label} audio backend is not available on this platform")
+    }
+}
+
+#[cfg(all(windows, feature = "asio"))]
+fn cpal_asio_host() -> Result<Option<CpalHostId>> {
+    Ok(Some(CpalHostId::Asio))
+}
+
+#[cfg(not(all(windows, feature = "asio")))]
+fn cpal_asio_host() -> Result<Option<CpalHostId>> {
+    bail!("ASIO audio backend requires building bmz-app on Windows with the `asio` feature")
 }
 
 #[cfg(test)]
@@ -189,14 +215,39 @@ mod tests {
     fn default_audio_config_can_use_cpal_default_output() {
         let config = AppConfig::default();
 
-        ensure_default_device_supported(&config.audio).unwrap();
+        let output = cpal_output_config(&config.audio).unwrap();
+
+        assert_eq!(output.host, None);
+        assert_eq!(output.output_device_name, None);
     }
 
     #[test]
-    fn named_output_device_is_rejected_until_device_selection_exists() {
+    fn named_output_device_is_passed_to_cpal_config() {
         let mut config = AppConfig::default().audio;
         config.output_device = "External DAC".to_string();
 
-        assert!(ensure_default_device_supported(&config).is_err());
+        let output = cpal_output_config(&config).unwrap();
+
+        assert_eq!(output.output_device_name.as_deref(), Some("External DAC"));
+    }
+
+    #[test]
+    fn asio_driver_is_used_as_asio_device_name() {
+        let mut config = AppConfig::default().audio;
+        config.backend = AudioBackend::Asio;
+        config.output_device = "External DAC".to_string();
+        config.asio_driver = "ASIO Driver".to_string();
+
+        let output = cpal_output_config(&config);
+
+        #[cfg(all(windows, feature = "asio"))]
+        {
+            let output = output.unwrap();
+            assert_eq!(output.host, Some(CpalHostId::Asio));
+            assert_eq!(output.output_device_name.as_deref(), Some("ASIO Driver"));
+        }
+
+        #[cfg(not(all(windows, feature = "asio")))]
+        assert!(output.is_err());
     }
 }
