@@ -1523,6 +1523,17 @@ mod tests {
         let decoded =
             decode_beatoraja_skin_with_options(&skin_path, SkinKind::Result, &options, &files)
                 .expect("decode starseeker result skin");
+        let destinations = decoded.document.all_destinations(&[]);
+        let slow_judgement_timing = destinations
+            .iter()
+            .find(|destination| destination.id == "judge_adv_s")
+            .expect("starseeker result should keep SLOW timing label destination");
+        let fast_judgement_timing = destinations
+            .iter()
+            .find(|destination| destination.id == "judge_adv_f")
+            .expect("starseeker result should keep FAST timing label destination");
+        assert_eq!(slow_judgement_timing.draw, "number(374) < 0 or number(375) < 0");
+        assert_eq!(fast_judgement_timing.draw, "number(374) > 0 or number(375) > 0");
         assert!(
             decoded.document.all_destinations(&[]).iter().any(|destination| {
                 matches!(

@@ -2470,26 +2470,29 @@ fn infer_boolean_predicate(
     object_id: Option<&str>,
 ) -> Option<String> {
     let refs = collect_number_refs(function, main_state_probe).unwrap_or_default();
-    if refs.len() >= 2 {
-        infer_or_of_number_gt_zero(function, main_state_probe)
-            .or_else(|| infer_or_of_number_eq_zero(function, main_state_probe))
-            .or_else(|| infer_or_of_number_lt_zero(function, main_state_probe))
-            .or_else(|| infer_two_number_compare_and(function, main_state_probe))
-    } else {
-        None
-    }
-    .or_else(|| infer_float_number_and_number_and_draw(function, main_state_probe))
-    .or_else(|| infer_main_state_draw_condition(function, main_state_probe))
-    .or_else(|| infer_main_state_option_draw_condition(function, main_state_probe))
-    .or_else(|| infer_main_state_gauge_type_draw_condition(function, main_state_probe))
-    .or_else(|| infer_main_state_timer_option_draw_condition(function, main_state_probe))
-    .or_else(|| infer_judge_fast_slow_draw_condition(function, main_state_probe, object_id))
-    .or_else(|| infer_or_of_number_gt_zero(function, main_state_probe))
-    .or_else(|| infer_or_of_number_eq_zero(function, main_state_probe))
-    .or_else(|| infer_or_of_number_lt_zero(function, main_state_probe))
-    .or_else(|| infer_two_number_compare_and(function, main_state_probe))
-    .or_else(|| infer_number_eq_zero_with_constant_tail(function, main_state_probe))
-    .or_else(|| infer_constant_draw_at_load(function))
+    infer_result_average_timing_sign_draw_condition(function, main_state_probe)
+        .or_else(|| {
+            if refs.len() >= 2 {
+                infer_or_of_number_gt_zero(function, main_state_probe)
+                    .or_else(|| infer_or_of_number_eq_zero(function, main_state_probe))
+                    .or_else(|| infer_or_of_number_lt_zero(function, main_state_probe))
+                    .or_else(|| infer_two_number_compare_and(function, main_state_probe))
+            } else {
+                None
+            }
+        })
+        .or_else(|| infer_float_number_and_number_and_draw(function, main_state_probe))
+        .or_else(|| infer_main_state_draw_condition(function, main_state_probe))
+        .or_else(|| infer_main_state_option_draw_condition(function, main_state_probe))
+        .or_else(|| infer_main_state_gauge_type_draw_condition(function, main_state_probe))
+        .or_else(|| infer_main_state_timer_option_draw_condition(function, main_state_probe))
+        .or_else(|| infer_judge_fast_slow_draw_condition(function, main_state_probe, object_id))
+        .or_else(|| infer_or_of_number_gt_zero(function, main_state_probe))
+        .or_else(|| infer_or_of_number_eq_zero(function, main_state_probe))
+        .or_else(|| infer_or_of_number_lt_zero(function, main_state_probe))
+        .or_else(|| infer_two_number_compare_and(function, main_state_probe))
+        .or_else(|| infer_number_eq_zero_with_constant_tail(function, main_state_probe))
+        .or_else(|| infer_constant_draw_at_load(function))
 }
 
 /// `skin_config.option` のみ等、ロード時に結果が決まる draw function を畳み込む。
@@ -2726,6 +2729,41 @@ fn infer_or_of_number_lt_zero(
         refs.iter().any(|ref_id| values.get(ref_id).copied().unwrap_or(0) < 0)
     })
     .then_some(condition)
+}
+
+fn infer_result_average_timing_sign_draw_condition(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    let refs = collect_number_refs(function, main_state_probe)?;
+    if refs.as_slice() != [374, 375] {
+        return None;
+    }
+
+    let samples = [(0, 0), (0, 34), (0, -34), (1, 0), (-1, 0), (12, 34), (-12, -34)];
+    let observed = samples
+        .iter()
+        .map(|(integer, afterdot)| {
+            call_draw_with_numbers(
+                function,
+                main_state_probe,
+                BTreeMap::from([(374, *integer), (375, *afterdot)]),
+            )
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let expected_negative = samples
+        .iter()
+        .map(|(integer, afterdot)| *integer as f64 + *afterdot as f64 * 0.01 < 0.0)
+        .collect::<Vec<_>>();
+    if observed == expected_negative {
+        return Some("number(374) < 0 or number(375) < 0".to_string());
+    }
+
+    let expected_positive = samples
+        .iter()
+        .map(|(integer, afterdot)| *integer as f64 + *afterdot as f64 * 0.01 > 0.0)
+        .collect::<Vec<_>>();
+    (observed == expected_positive).then(|| "number(374) > 0 or number(375) > 0".to_string())
 }
 
 fn infer_or_of_number_eq_zero(

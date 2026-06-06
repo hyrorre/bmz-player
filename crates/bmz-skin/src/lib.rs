@@ -1414,6 +1414,67 @@ mod tests {
     }
 
     #[test]
+    fn lua_skin_infers_result_average_timing_sign_draw() {
+        let root = unique_test_dir("bmz-skin-lua-average-timing-sign");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("result.luaskin"),
+            r#"
+            local main_state = require("main_state")
+            return {
+                type = 7,
+                image = {
+                    { id = "judge_adv_f", src = "src", x = 0, y = 0, w = 52, h = 12 },
+                    { id = "judge_adv_s", src = "src", x = 0, y = 12, w = 52, h = 12 },
+                },
+                destination = {
+                    {
+                        id = "judge_adv_s",
+                        draw = function()
+                            local ave_timing = main_state.number(374) + (main_state.number(375) * 0.01)
+                            return ave_timing < 0
+                        end,
+                        dst = {{ x = 424, y = 132, w = 52, h = 12 }},
+                    },
+                    {
+                        id = "judge_adv_f",
+                        draw = function()
+                            local ave_timing = main_state.number(374) + (main_state.number(375) * 0.01)
+                            return 0 < ave_timing
+                        end,
+                        dst = {{ x = 424, y = 132, w = 52, h = 12 }},
+                    },
+                },
+            }
+            "#,
+        )
+        .unwrap();
+
+        let loaded = load_lua_skin(
+            &root.join("result.luaskin"),
+            SkinKind::Result,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert!(
+            loaded.warnings.is_empty(),
+            "warnings: {:?}",
+            loaded.warnings.iter().map(|w| w.message.as_str()).collect::<Vec<_>>()
+        );
+        let bmz_render::skin::DestinationListEntry::Single(slow) = &loaded.document.destination[0]
+        else {
+            panic!("expected slow destination");
+        };
+        let bmz_render::skin::DestinationListEntry::Single(fast) = &loaded.document.destination[1]
+        else {
+            panic!("expected fast destination");
+        };
+        assert_eq!(slow.draw, "number(374) < 0 or number(375) < 0");
+        assert_eq!(fast.draw, "number(374) > 0 or number(375) > 0");
+    }
+
+    #[test]
     fn lua_skin_infers_draw_with_skin_config_option_and_number() {
         let root = unique_test_dir("bmz-skin-lua-skin-config-draw");
         fs::create_dir_all(&root).unwrap();
