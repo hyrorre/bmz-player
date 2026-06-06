@@ -2,6 +2,7 @@ use bmz_core::clear::ClearType;
 use bmz_core::lane::KeyMode;
 use bmz_core::time::TimeUs;
 
+use crate::skin::SkinImageSize;
 use crate::snapshot::{DisplayJudgeCounts, FastSlowJudgeCounts, OverlaySnapshot, RenderSnapshot};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -53,8 +54,16 @@ pub struct SelectSnapshot {
     pub overlay: OverlaySnapshot,
     /// `#STAGEFILE` テクスチャがロード済みなら true。
     pub stage_background: bool,
+    /// ロード済み `#STAGEFILE` の画像サイズ。
+    pub stage_image_size: Option<SkinImageSize>,
+    /// `#BACKBMP` テクスチャがロード済みなら true。
+    pub backbmp_image: bool,
+    /// ロード済み `#BACKBMP` の画像サイズ。
+    pub backbmp_image_size: Option<SkinImageSize>,
     /// `#BANNER` テクスチャがロード済みなら true。
     pub banner_image: bool,
+    /// ロード済み `#BANNER` の画像サイズ。
+    pub banner_image_size: Option<SkinImageSize>,
     /// 設定フォルダ内にいるとき true。
     pub in_settings: bool,
     /// 設定項目の編集モード中。
@@ -100,7 +109,11 @@ impl Default for SelectSnapshot {
             exit_hold_progress: 0.0,
             overlay: OverlaySnapshot::default(),
             stage_background: false,
+            stage_image_size: None,
+            backbmp_image: false,
+            backbmp_image_size: None,
             banner_image: false,
+            banner_image_size: None,
             in_settings: false,
             settings_editing: false,
             search_word: String::new(),

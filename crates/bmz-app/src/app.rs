@@ -26,6 +26,7 @@ use bmz_render::scene::{
     AppSceneSnapshot, ResultSnapshot, SelectChartDistributionSecond, SelectRowSnapshot,
     SelectSnapshot,
 };
+use bmz_render::skin::SkinImageSize;
 use bmz_render::snapshot::{
     CourseStageMarker, DisplayJudgeCounts, FastSlowJudgeCounts, OverlaySnapshot, RenderSnapshot,
 };
@@ -293,9 +294,15 @@ struct WinitApp {
     /// 選曲 `#STAGEFILE` のロード済みキャッシュキー (`folder|file`)。
     select_stage_source: Option<String>,
     select_stage_loaded: bool,
+    select_stage_size: Option<SkinImageSize>,
+    /// 選曲 skin 用 `#BACKBMP` のロード済みキャッシュキー (`folder|file`)。
+    select_backbmp_source: Option<String>,
+    select_backbmp_loaded: bool,
+    select_backbmp_size: Option<SkinImageSize>,
     /// 選曲 `#BANNER` のロード済みキャッシュキー (`folder|file`)。
     select_banner_source: Option<String>,
     select_banner_loaded: bool,
+    select_banner_size: Option<SkinImageSize>,
     /// 選曲 `#PREVIEW` のロード済みキャッシュキー (`folder|file`)。
     select_preview_source: Option<String>,
     select_preview_playing: bool,
@@ -368,6 +375,7 @@ type PlaySkinSignature = (KeyMode, String, BTreeMap<String, String>, BTreeMap<St
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SelectMetaImageSlot {
     Stage,
+    Backbmp,
     Banner,
 }
 
@@ -944,8 +952,13 @@ impl WinitApp {
             select_exit_hold_started_at: None,
             select_stage_source: None,
             select_stage_loaded: false,
+            select_stage_size: None,
+            select_backbmp_source: None,
+            select_backbmp_loaded: false,
+            select_backbmp_size: None,
             select_banner_source: None,
             select_banner_loaded: false,
+            select_banner_size: None,
             select_preview_source: None,
             select_preview_playing: false,
             select_preview,
@@ -1449,7 +1462,11 @@ impl WinitApp {
             exit_hold_progress: self.select_exit_hold_progress(),
             overlay: OverlaySnapshot::default(),
             stage_background: self.select_stage_loaded,
+            stage_image_size: self.select_stage_size,
+            backbmp_image: self.select_backbmp_loaded,
+            backbmp_image_size: self.select_backbmp_size,
             banner_image: self.select_banner_loaded,
+            banner_image_size: self.select_banner_size,
             in_settings: in_settings_stack(&self.folder_stack),
             settings_editing: self.settings_edit.is_some() || self.key_config_edit.is_some(),
             search_word,
@@ -1529,6 +1546,9 @@ impl WinitApp {
             let is_current = match result.slot {
                 SelectMetaImageSlot::Stage => {
                     self.select_stage_source.as_deref() == Some(result.key.as_str())
+                }
+                SelectMetaImageSlot::Backbmp => {
+                    self.select_backbmp_source.as_deref() == Some(result.key.as_str())
                 }
                 SelectMetaImageSlot::Banner => {
                     self.select_banner_source.as_deref() == Some(result.key.as_str())
@@ -1668,11 +1688,16 @@ impl WinitApp {
         self.sync_select_meta_image_texture(SelectMetaImageSlot::Stage);
     }
 
+    fn sync_select_backbmp_texture(&mut self) {
+        self.sync_select_meta_image_texture(SelectMetaImageSlot::Backbmp);
+    }
+
     fn sync_select_meta_image_texture(&mut self, slot: SelectMetaImageSlot) {
         let cache_key = match self.select_items.get(self.selected_index) {
             Some(SelectItem::Chart(row)) => row.chart.as_ref().and_then(|chart| {
                 let file = match slot {
                     SelectMetaImageSlot::Stage => &chart.stage_file,
+                    SelectMetaImageSlot::Backbmp => &chart.backbmp_file,
                     SelectMetaImageSlot::Banner => &chart.banner_file,
                 };
                 (!file.is_empty()).then(|| format!("{}|{}", chart.folder_path, file))
@@ -1693,6 +1718,7 @@ impl WinitApp {
         }
         self.set_select_meta_image_source(slot, cache_key.clone());
         self.set_select_meta_image_loaded(slot, false);
+        self.set_select_meta_image_size(slot, None);
         let Some(key) = cache_key else {
             return;
         };
@@ -1712,6 +1738,7 @@ impl WinitApp {
     fn select_meta_image_source(&self, slot: SelectMetaImageSlot) -> &Option<String> {
         match slot {
             SelectMetaImageSlot::Stage => &self.select_stage_source,
+            SelectMetaImageSlot::Backbmp => &self.select_backbmp_source,
             SelectMetaImageSlot::Banner => &self.select_banner_source,
         }
     }
@@ -1719,6 +1746,7 @@ impl WinitApp {
     fn set_select_meta_image_source(&mut self, slot: SelectMetaImageSlot, source: Option<String>) {
         match slot {
             SelectMetaImageSlot::Stage => self.select_stage_source = source,
+            SelectMetaImageSlot::Backbmp => self.select_backbmp_source = source,
             SelectMetaImageSlot::Banner => self.select_banner_source = source,
         }
     }
@@ -1726,6 +1754,7 @@ impl WinitApp {
     fn select_meta_image_loaded(&self, slot: SelectMetaImageSlot) -> bool {
         match slot {
             SelectMetaImageSlot::Stage => self.select_stage_loaded,
+            SelectMetaImageSlot::Backbmp => self.select_backbmp_loaded,
             SelectMetaImageSlot::Banner => self.select_banner_loaded,
         }
     }
@@ -1733,7 +1762,20 @@ impl WinitApp {
     fn set_select_meta_image_loaded(&mut self, slot: SelectMetaImageSlot, loaded: bool) {
         match slot {
             SelectMetaImageSlot::Stage => self.select_stage_loaded = loaded,
+            SelectMetaImageSlot::Backbmp => self.select_backbmp_loaded = loaded,
             SelectMetaImageSlot::Banner => self.select_banner_loaded = loaded,
+        }
+    }
+
+    fn set_select_meta_image_size(
+        &mut self,
+        slot: SelectMetaImageSlot,
+        size: Option<SkinImageSize>,
+    ) {
+        match slot {
+            SelectMetaImageSlot::Stage => self.select_stage_size = size,
+            SelectMetaImageSlot::Backbmp => self.select_backbmp_size = size,
+            SelectMetaImageSlot::Banner => self.select_banner_size = size,
         }
     }
 
@@ -1744,12 +1786,18 @@ impl WinitApp {
     ) -> bool {
         let texture_id = match slot {
             SelectMetaImageSlot::Stage => SELECT_STAGE_TEXTURE,
+            SelectMetaImageSlot::Backbmp => PLAY_BACKBMP_TEXTURE,
             SelectMetaImageSlot::Banner => SELECT_BANNER_TEXTURE,
         };
         if let Err(error) = self.renderer.upsert_image_asset(texture_id, image) {
             tracing::warn!(%error, "failed to upload select meta image");
+            self.set_select_meta_image_size(slot, None);
             false
         } else {
+            self.set_select_meta_image_size(
+                slot,
+                Some(SkinImageSize { width: image.width as f32, height: image.height as f32 }),
+            );
             true
         }
     }
@@ -5971,6 +6019,7 @@ impl WinitApp {
             self.refresh_visible_select_folder_summaries();
             self.poll_select_asset_loads();
             self.sync_select_stage_texture();
+            self.sync_select_backbmp_texture();
             self.sync_select_banner_texture();
             self.sync_select_preview_audio();
         }

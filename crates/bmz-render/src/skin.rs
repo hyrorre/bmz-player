@@ -13,8 +13,9 @@ use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::assets::load_png_rgba;
 use crate::plan::{
-    Color, DrawCommand, Point, Rect, TextAlign, TextLayer, TextOutline, TextOverflow, TextShadow,
-    TextStyle, TextureId, UvRect,
+    Color, DrawCommand, PLAY_BACKBMP_TEXTURE, Point, Rect, SELECT_BANNER_TEXTURE,
+    SELECT_STAGE_TEXTURE, TextAlign, TextLayer, TextOutline, TextOverflow, TextShadow, TextStyle,
+    TextureId, UvRect,
 };
 use crate::scene::{
     CourseConstraintFlags, ResultGradeDiffDisplay, SelectRowKind, SelectRowSnapshot, SelectSnapshot,
@@ -1266,8 +1267,9 @@ impl SkinContext {
         let Some(document) = &self.document else {
             return Vec::new();
         };
+        let runtime_sources = select_runtime_document_sources(&self.document_sources, snapshot);
         document.select_render_items_with_dynamic_timers(
-            &self.document_sources,
+            &runtime_sources,
             snapshot,
             dynamic_timers,
             &self.select_settings_dest_index,
@@ -1479,6 +1481,45 @@ impl SkinContext {
             state,
         ))
     }
+}
+
+fn select_runtime_document_sources(
+    base_sources: &HashMap<String, SkinDocumentTexture>,
+    snapshot: &SelectSnapshot,
+) -> HashMap<String, SkinDocumentTexture> {
+    let mut sources = base_sources.clone();
+    if snapshot.stage_background
+        && let Some(source_size) = snapshot.stage_image_size
+    {
+        insert_runtime_document_source(&mut sources, "100", SELECT_STAGE_TEXTURE, source_size);
+    }
+    if snapshot.backbmp_image
+        && let Some(source_size) = snapshot.backbmp_image_size
+    {
+        insert_runtime_document_source(&mut sources, "101", PLAY_BACKBMP_TEXTURE, source_size);
+    }
+    if snapshot.banner_image
+        && let Some(source_size) = snapshot.banner_image_size
+    {
+        insert_runtime_document_source(&mut sources, "102", SELECT_BANNER_TEXTURE, source_size);
+    }
+    sources
+}
+
+fn insert_runtime_document_source(
+    sources: &mut HashMap<String, SkinDocumentTexture>,
+    source_id: &str,
+    texture: TextureId,
+    source_size: SkinImageSize,
+) {
+    sources.insert(
+        source_id.to_string(),
+        SkinDocumentTexture {
+            source_id: source_id.to_string(),
+            texture: SkinTextureId(texture.0),
+            source_size,
+        },
+    );
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -3156,6 +3197,8 @@ impl SkinDocument {
             select_key_volume: snapshot.key_volume,
             select_bgm_volume: snapshot.bgm_volume,
             select_has_banner: snapshot.banner_image,
+            has_stagefile: snapshot.stage_background,
+            has_backbmp: snapshot.backbmp_image,
             select_chart_count: snapshot.chart_count,
             select_screen: true,
             select_play_level: selected_row.map(select_row_level_number).unwrap_or(0),
@@ -14019,6 +14062,123 @@ mod tests {
             items.iter().filter(|item| matches!(item, SkinRenderItem::Rect { .. })).count();
 
         assert_eq!(rect_count, 4);
+    }
+
+    #[test]
+    fn select_context_exposes_chart_image_sources_to_skin_document() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 5,
+                "w": 100,
+                "h": 100,
+                "image": [
+                    { "id": "stage", "src": 100, "x": 0, "y": 0, "w": 40, "h": 20 },
+                    { "id": "back", "src": 101, "x": 0, "y": 0, "w": 20, "h": 10 },
+                    { "id": "banner", "src": 102, "x": 0, "y": 0, "w": 30, "h": 12 }
+                ],
+                "destination": [
+                    { "id": "stage", "op": [191], "dst": [{ "x": 0, "y": 0, "w": 40, "h": 20 }] },
+                    { "id": "back", "op": [195], "dst": [{ "x": 40, "y": 0, "w": 20, "h": 10 }] },
+                    { "id": "banner", "op": [193], "dst": [{ "x": 60, "y": 0, "w": 30, "h": 12 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let context =
+            SkinContext::from_manifest_and_document(default_skin_manifest(), document, []);
+        let snapshot = SelectSnapshot {
+            stage_background: true,
+            stage_image_size: Some(SkinImageSize { width: 400.0, height: 200.0 }),
+            backbmp_image: true,
+            backbmp_image_size: Some(SkinImageSize { width: 200.0, height: 100.0 }),
+            banner_image: true,
+            banner_image_size: Some(SkinImageSize { width: 300.0, height: 120.0 }),
+            ..SelectSnapshot::default()
+        };
+
+        let items = context.select_document_items(&snapshot);
+
+        assert!(items.iter().any(|item| matches!(
+            item,
+            SkinRenderItem::Image { texture, .. } if *texture == SkinTextureId(SELECT_STAGE_TEXTURE.0)
+        )));
+        assert!(items.iter().any(|item| matches!(
+            item,
+            SkinRenderItem::Image { texture, .. } if *texture == SkinTextureId(PLAY_BACKBMP_TEXTURE.0)
+        )));
+        assert!(items.iter().any(|item| matches!(
+            item,
+            SkinRenderItem::Image { texture, .. } if *texture == SkinTextureId(SELECT_BANNER_TEXTURE.0)
+        )));
+    }
+
+    #[test]
+    fn select_chart_image_ops_follow_loaded_runtime_images() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 5,
+                "w": 100,
+                "h": 100,
+                "image": [
+                    { "id": "no_stage", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10 },
+                    { "id": "stage", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10 },
+                    { "id": "no_back", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10 },
+                    { "id": "back", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10 }
+                ],
+                "destination": [
+                    { "id": "no_stage", "op": [190], "dst": [{ "x": 0, "y": 0, "w": 10, "h": 10 }] },
+                    { "id": "stage", "op": [191], "dst": [{ "x": 10, "y": 0, "w": 10, "h": 10 }] },
+                    { "id": "no_back", "op": [194], "dst": [{ "x": 20, "y": 0, "w": 10, "h": 10 }] },
+                    { "id": "back", "op": [195], "dst": [{ "x": 30, "y": 0, "w": 10, "h": 10 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let context = SkinContext::from_manifest_and_document(
+            default_skin_manifest(),
+            document,
+            [SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(1),
+                source_size: SkinImageSize { width: 10.0, height: 10.0 },
+            }],
+        );
+
+        let missing = context.select_document_items(&SelectSnapshot::default());
+        assert!(missing.iter().any(|item| matches!(
+            item,
+            SkinRenderItem::Image { rect, .. } if approx_eq(rect.x, 0.0)
+        )));
+        assert!(missing.iter().any(|item| matches!(
+            item,
+            SkinRenderItem::Image { rect, .. } if approx_eq(rect.x, 0.2)
+        )));
+        assert!(!missing.iter().any(|item| matches!(
+            item,
+            SkinRenderItem::Image { rect, .. } if approx_eq(rect.x, 0.1) || approx_eq(rect.x, 0.3)
+        )));
+
+        let loaded = context.select_document_items(&SelectSnapshot {
+            stage_background: true,
+            backbmp_image: true,
+            ..SelectSnapshot::default()
+        });
+        assert!(loaded.iter().any(|item| matches!(
+            item,
+            SkinRenderItem::Image { rect, .. } if approx_eq(rect.x, 0.1)
+        )));
+        assert!(loaded.iter().any(|item| matches!(
+            item,
+            SkinRenderItem::Image { rect, .. } if approx_eq(rect.x, 0.3)
+        )));
+        assert!(!loaded.iter().any(|item| matches!(
+            item,
+            SkinRenderItem::Image { rect, .. } if approx_eq(rect.x, 0.0) || approx_eq(rect.x, 0.2)
+        )));
     }
 
     #[test]
