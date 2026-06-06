@@ -4,8 +4,12 @@ edition.workspace = true
 version.workspace = true
 license.workspace = true
 
+# ASIO は Windows でのみ実体を持つ(cpal の asio-sys が cfg(windows) 限定)。
+# default で有効化しておくと Windows ビルドは追加フラグ無しで ASIO 対応、
+# macOS / Linux では cpal 側が no-op になるため実質無効。
+# ASIO SDK / LLVM を用意できない環境では `--no-default-features` で除外できる。
 [features]
-default = []
+default = ["asio"]
 asio = ["bmz-audio/asio"]
 
 [dependencies]
