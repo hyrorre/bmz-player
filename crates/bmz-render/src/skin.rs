@@ -5025,6 +5025,7 @@ impl SkinDocument {
         if row.chart_distribution.is_empty()
             || !test_skin_ops(&destination.op, enabled_options, state)
             || !eval_skin_draw_condition(&destination.draw, state)
+            || graph.graph_type() != 0
         {
             return Vec::new();
         }
@@ -5049,9 +5050,7 @@ impl SkinDocument {
         }
         let frame_alpha = frame.a as f32 / 255.0;
         let blend = if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal };
-        let max_density =
-            row.chart_distribution.iter().map(|second| second.total()).max().unwrap_or(1).max(20)
-                as f32;
+        let max_density = select_note_distribution_max_density(&row.chart_distribution) as f32;
         let count = row.chart_distribution.len().max(1) as f32;
         let pixel_w = 1.0 / self.w.max(1) as f32;
         let pixel_h = 1.0 / self.h.max(1) as f32;
@@ -5060,9 +5059,33 @@ impl SkinDocument {
         let bar_w = ((rect.width - gap_x * (count - 1.0)).max(pixel_w) / count).max(pixel_w);
         let colors = note_distribution_colors(frame_alpha);
         let mut items = Vec::new();
+        if graph.back_tex_off == 0 {
+            items.extend(select_note_distribution_background_items(
+                rect,
+                row.chart_distribution.len(),
+                max_density as u32,
+                frame_alpha,
+                blend,
+                pixel_w,
+                pixel_h,
+            ));
+        }
+        let reveal = if graph.delay > 0 {
+            (elapsed as f32 / graph.delay as f32).clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        let reveal_right = rect.x + rect.width * reveal;
 
         for (index, second) in row.chart_distribution.iter().enumerate() {
             let x = rect.x + index as f32 * (bar_w + gap_x);
+            if x >= reveal_right {
+                break;
+            }
+            let visible_bar_w = bar_w.min((reveal_right - x).max(0.0));
+            if visible_bar_w <= 0.0 {
+                continue;
+            }
             let values = second.values();
             let iter: Box<dyn Iterator<Item = (usize, u16)>> = if graph.order_reverse != 0 {
                 Box::new(values.into_iter().enumerate().rev())
@@ -5077,7 +5100,7 @@ impl SkinDocument {
                 let height = (rect.height * (value as f32 / max_density) - gap_y).max(pixel_h);
                 y_cursor -= height;
                 items.push(SkinRenderItem::Rect {
-                    rect: Rect { x, y: y_cursor, width: bar_w, height },
+                    rect: Rect { x, y: y_cursor, width: visible_bar_w, height },
                     color: colors[series],
                     blend,
                 });
@@ -7843,6 +7866,57 @@ fn timing_color(value: &str, frame_alpha: f32) -> Color {
         .or_else(|| skin_hex_color("FF0000FF"))
         .unwrap_or(Color::rgb(1.0, 0.0, 0.0))
         .with_alpha(frame_alpha)
+}
+
+fn select_note_distribution_max_density(
+    distribution: &[crate::scene::SelectChartDistributionSecond],
+) -> u32 {
+    let peak = distribution.iter().map(|second| second.total()).max().unwrap_or(0);
+    if peak <= 20 { 20 } else { (((peak / 10) * 10 + 10).min(100)).max(20) }
+}
+
+fn select_note_distribution_background_items(
+    rect: Rect,
+    seconds: usize,
+    max_density: u32,
+    frame_alpha: f32,
+    blend: BlendMode,
+    pixel_w: f32,
+    pixel_h: f32,
+) -> Vec<SkinRenderItem> {
+    let mut items = vec![SkinRenderItem::Rect {
+        rect,
+        color: Color::rgba(0.0, 0.0, 0.0, 0.8 * frame_alpha),
+        blend,
+    }];
+
+    for density in (10..max_density).step_by(10) {
+        let y = rect.y + rect.height - rect.height * density as f32 / max_density.max(1) as f32;
+        items.push(SkinRenderItem::Rect {
+            rect: Rect { x: rect.x, y, width: rect.width, height: pixel_h },
+            color: Color::rgba(0.007 * density as f32, 0.007 * density as f32, 0.0, frame_alpha),
+            blend,
+        });
+    }
+
+    for second in 0..seconds {
+        let color = if second % 60 == 0 {
+            Some(Color::rgba(0.25, 0.25, 0.25, frame_alpha))
+        } else if second % 10 == 0 {
+            Some(Color::rgba(0.125, 0.125, 0.125, frame_alpha))
+        } else {
+            None
+        };
+        if let Some(color) = color {
+            let x = rect.x + rect.width * second as f32 / seconds.max(1) as f32;
+            items.push(SkinRenderItem::Rect {
+                rect: Rect { x, y: rect.y, width: pixel_w, height: rect.height },
+                color,
+                blend,
+            });
+        }
+    }
+    items
 }
 
 fn note_distribution_colors(alpha: f32) -> [Color; 7] {
@@ -14020,7 +14094,7 @@ mod tests {
                 "type": 5,
                 "w": 100,
                 "h": 100,
-                "judgegraph": [{ "id": "density", "noGap": 1, "noGapX": 1 }],
+                "judgegraph": [{ "id": "density", "delay": 0, "noGap": 1, "noGapX": 1 }],
                 "songlist": {
                     "id": "songlist",
                     "center": 0,
@@ -14061,7 +14135,63 @@ mod tests {
         let rect_count =
             items.iter().filter(|item| matches!(item, SkinRenderItem::Rect { .. })).count();
 
-        assert_eq!(rect_count, 4);
+        assert_eq!(rect_count, 7);
+    }
+
+    #[test]
+    fn select_songlist_judgegraph_honors_delay_backtexoff_and_type() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 5,
+                "w": 100,
+                "h": 100,
+                "judgegraph": [
+                    { "id": "density", "type": 0, "delay": 1000, "backTexOff": 1, "noGap": 1, "noGapX": 1 },
+                    { "id": "judge", "type": 1, "delay": 0 }
+                ],
+                "songlist": {
+                    "id": "songlist",
+                    "center": 0,
+                    "liston": [{ "id": "row", "dst": [{ "x": 0, "y": 0, "w": 100, "h": 20 }] }],
+                    "listoff": [{ "id": "row", "dst": [{ "x": 0, "y": 0, "w": 100, "h": 20 }] }],
+                    "judgegraph": [
+                        { "id": "density", "dst": [{ "x": 0, "y": 0, "w": 100, "h": 20 }] },
+                        { "id": "judge", "dst": [{ "x": 0, "y": 20, "w": 100, "h": 20 }] }
+                    ]
+                },
+                "destination": [{ "id": "songlist" }]
+            }
+            "#,
+        )
+        .unwrap();
+        let row = SelectRowSnapshot {
+            index: 0,
+            kind: SelectRowKind::Song,
+            in_library: true,
+            chart_distribution: vec![
+                crate::scene::SelectChartDistributionSecond { key_taps: 4, ..Default::default() },
+                crate::scene::SelectChartDistributionSecond { key_taps: 4, ..Default::default() },
+            ],
+            ..SelectRowSnapshot::default()
+        };
+        let snapshot = SelectSnapshot {
+            time: TimeUs(500_000),
+            selected_index: 0,
+            rows: vec![row],
+            ..SelectSnapshot::default()
+        };
+
+        let items = document.select_render_items(&HashMap::new(), &snapshot);
+
+        assert_eq!(
+            items.iter().filter(|item| matches!(item, SkinRenderItem::Rect { .. })).count(),
+            1
+        );
+        assert!(items.iter().any(|item| matches!(
+            item,
+            SkinRenderItem::Rect { rect, .. } if approx_eq(rect.x, 0.0) && approx_eq(rect.width, 0.5)
+        )));
     }
 
     #[test]
