@@ -200,6 +200,28 @@ pub fn is_host_supported(host: CpalHostId) -> bool {
     cpal_host_id(host).is_some()
 }
 
+/// 指定ホスト(`None` は既定ホスト)の出力デバイス名を列挙する。
+///
+/// UI のデバイス選択用。列挙に失敗した場合やホストが利用不可の場合は空 Vec を返す
+/// (致命的エラーにはしない)。ASIO ホストではドライバ名が列挙される。
+pub fn list_output_device_names(host: Option<CpalHostId>) -> Vec<String> {
+    let host = match host {
+        Some(host_id) => match cpal_host_id(host_id) {
+            Some(cpal_host_id) => match ::cpal::host_from_id(cpal_host_id) {
+                Ok(host) => host,
+                Err(_) => return Vec::new(),
+            },
+            None => return Vec::new(),
+        },
+        None => ::cpal::default_host(),
+    };
+
+    let Ok(devices) = host.output_devices() else {
+        return Vec::new();
+    };
+    devices.filter_map(|device| device.name().ok()).collect()
+}
+
 fn output_device(
     host: &::cpal::Host,
     requested_name: Option<&str>,

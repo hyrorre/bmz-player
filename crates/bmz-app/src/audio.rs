@@ -167,6 +167,15 @@ fn cpal_output_config(config: &AudioConfig) -> Result<CpalOutputConfig> {
     Ok(CpalOutputConfig { host, output_device_name })
 }
 
+/// 設定 UI 用に、選択中バックエンドの出力デバイス名(ASIO ならドライバ名)を列挙する。
+/// ホストが利用不可・列挙失敗なら空 Vec を返す。
+pub fn list_output_devices(backend: &AudioBackend) -> Vec<String> {
+    let Ok(host) = cpal_host_for_backend(backend) else {
+        return Vec::new();
+    };
+    bmz_audio::backend::cpal::list_output_device_names(host)
+}
+
 fn cpal_host_for_backend(backend: &AudioBackend) -> Result<Option<CpalHostId>> {
     match backend {
         AudioBackend::Auto => Ok(None),

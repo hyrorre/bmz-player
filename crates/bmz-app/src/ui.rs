@@ -219,6 +219,17 @@ pub struct EguiLayer {
     score_import_kind: ScoreImportKind,
     score_import_status: String,
     score_import_error: String,
+    /// 本体設定パネル: 出力デバイス選択用の列挙キャッシュ。
+    audio_device_picker: AudioDevicePickerState,
+}
+
+/// 設定パネルの出力デバイス選択 ComboBox 用キャッシュ。
+#[derive(Default)]
+struct AudioDevicePickerState {
+    /// 列挙済み出力デバイス名(ASIO ならドライバ名)。
+    names: Vec<String>,
+    /// `names` を列挙したときのバックエンド。変化したら再列挙する。
+    backend: Option<AudioBackend>,
 }
 
 impl EguiLayer {
@@ -248,6 +259,7 @@ impl EguiLayer {
             score_import_kind: ScoreImportKind::default(),
             score_import_status: String::new(),
             score_import_error: String::new(),
+            audio_device_picker: AudioDevicePickerState::default(),
         }
     }
 
@@ -345,6 +357,7 @@ impl EguiLayer {
                     &mut self.score_import_kind,
                     &self.score_import_status,
                     &self.score_import_error,
+                    &mut self.audio_device_picker,
                 );
                 save_app_config |= settings_actions.save;
                 trigger_song_rescan |= settings_actions.rescan;
@@ -806,6 +819,7 @@ fn build_settings_panel(
     score_import_kind: &mut ScoreImportKind,
     score_import_status: &str,
     score_import_error: &str,
+    audio_device_picker: &mut AudioDevicePickerState,
 ) -> SettingsPanelActions {
     let mut save_clicked = false;
     let mut rescan_clicked = false;
@@ -964,24 +978,69 @@ fn build_settings_panel(
                             .text("バッファサイズ (フレーム)"),
                     );
                     ui.checkbox(&mut config.audio.exclusive_mode, "排他モード");
-                    ui.add_enabled_ui(false, |ui| {
-                        ui.label(format!(
-                            "出力デバイス (未実装): {}",
-                            if config.audio.output_device.is_empty() {
-                                "(デフォルト)"
-                            } else {
-                                config.audio.output_device.as_str()
-                            }
-                        ));
-                        ui.label(format!(
-                            "ASIO ドライバ (未実装): {}",
-                            if config.audio.asio_driver.is_empty() {
+
+                    // ASIO 以外は安価なのでバックエンド変更時に自動列挙する。
+                    // ASIO はドライバ初期化を伴い得るため、更新ボタンでのみ列挙する。
+                    let backend = config.audio.backend.clone();
+                    if backend != AudioBackend::Asio
+                        && audio_device_picker.backend.as_ref() != Some(&backend)
+                    {
+                        audio_device_picker.names = crate::audio::list_output_devices(&backend);
+                        audio_device_picker.backend = Some(backend);
+                    }
+
+                    ui.horizontal(|ui| {
+                        if ui.button("デバイス一覧を更新").clicked() {
+                            audio_device_picker.names =
+                                crate::audio::list_output_devices(&config.audio.backend);
+                            audio_device_picker.backend = Some(config.audio.backend.clone());
+                        }
+                        ui.label(format!("{} 件", audio_device_picker.names.len()));
+                    });
+
+                    if config.audio.backend == AudioBackend::Asio {
+                        egui::ComboBox::from_label("ASIO ドライバ")
+                            .selected_text(if config.audio.asio_driver.is_empty() {
                                 "(未指定)"
                             } else {
                                 config.audio.asio_driver.as_str()
-                            }
-                        ));
-                    });
+                            })
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut config.audio.asio_driver,
+                                    String::new(),
+                                    "(未指定)",
+                                );
+                                for name in audio_device_picker.names.iter() {
+                                    ui.selectable_value(
+                                        &mut config.audio.asio_driver,
+                                        name.clone(),
+                                        name,
+                                    );
+                                }
+                            });
+                    } else {
+                        egui::ComboBox::from_label("出力デバイス")
+                            .selected_text(if config.audio.output_device.is_empty() {
+                                "(デフォルト)"
+                            } else {
+                                config.audio.output_device.as_str()
+                            })
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut config.audio.output_device,
+                                    String::new(),
+                                    "(デフォルト)",
+                                );
+                                for name in audio_device_picker.names.iter() {
+                                    ui.selectable_value(
+                                        &mut config.audio.output_device,
+                                        name.clone(),
+                                        name,
+                                    );
+                                }
+                            });
+                    }
                     ui.label("音声設定は次回起動時に反映されます。");
                 });
 
