@@ -141,6 +141,12 @@ impl CpalBackend {
                 Arc::clone(&sources),
                 Arc::clone(&current_frame),
             )?,
+            SampleFormat::I32 => build_output_stream::<i32>(
+                &device,
+                &config,
+                Arc::clone(&sources),
+                Arc::clone(&current_frame),
+            )?,
             _ => build_output_stream::<f32>(
                 &device,
                 &config,
@@ -413,6 +419,12 @@ impl OutputSample for i16 {
 impl OutputSample for u16 {
     fn from_f32(value: f32) -> Self {
         ((value.clamp(-1.0, 1.0) * 0.5 + 0.5) * u16::MAX as f32) as u16
+    }
+}
+
+impl OutputSample for i32 {
+    fn from_f32(value: f32) -> Self {
+        (value.clamp(-1.0, 1.0) as f64 * i32::MAX as f64) as i32
     }
 }
 
