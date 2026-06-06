@@ -367,9 +367,6 @@ fn plan_select(
 ) -> DrawPlan {
     if skin.document().is_some_and(|document| document.skin_type == 5) {
         let mut commands = Vec::new();
-        if snapshot.stage_background {
-            push_fullscreen_image(&mut commands, SELECT_STAGE_TEXTURE);
-        }
         crate::skin::append_skin_render_items(
             &mut commands,
             &skin.select_document_items_with_dynamic_timers(snapshot, Some(dynamic_timers)),
@@ -2560,7 +2557,7 @@ mod tests {
     use bmz_core::lane::Lane;
     use bmz_core::time::TimeUs;
 
-    use crate::skin::SkinDocument;
+    use crate::skin::{SkinDocument, SkinDocumentTexture, SkinImageSize, SkinTextureId};
     use crate::snapshot::{
         DisplayInput, DisplayJudgeCounts, DisplayJudgement, RenderSnapshot, VisibleBarLine,
         VisibleLongNote, VisibleNote,
@@ -3855,6 +3852,52 @@ mod tests {
         assert!(plan.commands.iter().any(|command| matches!(
             command,
             DrawCommand::Text { text, .. } if text == "GAS      BEST CLEAR"
+        )));
+    }
+
+    #[test]
+    fn custom_select_skin_does_not_force_stagefile_fullscreen_fallback() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 5,
+                "w": 100,
+                "h": 100,
+                "image": [{ "id": "panel", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10 }],
+                "destination": [{ "id": "panel", "dst": [{ "x": 10, "y": 10, "w": 10, "h": 10 }] }]
+            }
+            "#,
+        )
+        .unwrap();
+        let manifest: SkinManifest = toml::from_str("").unwrap();
+        let skin = SkinContext::from_manifest_and_document(
+            manifest,
+            document,
+            [SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(1),
+                source_size: SkinImageSize { width: 10.0, height: 10.0 },
+            }],
+        );
+        let mut dynamic_timers = crate::skin::DynamicTimerRuntime::default();
+        let plan = DrawPlan::from_scene_with_skin(
+            &AppSceneSnapshot::Select(crate::scene::SelectSnapshot {
+                stage_background: true,
+                stage_image_size: Some(SkinImageSize { width: 640.0, height: 480.0 }),
+                ..Default::default()
+            }),
+            &skin,
+            &mut dynamic_timers,
+        );
+
+        assert!(!plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Image { texture, rect, .. }
+                if *texture == SELECT_STAGE_TEXTURE
+                    && approx_eq(rect.x, 0.0)
+                    && approx_eq(rect.y, 0.0)
+                    && approx_eq(rect.width, 1.0)
+                    && approx_eq(rect.height, 1.0)
         )));
     }
 

@@ -3150,6 +3150,20 @@ impl SkinDocument {
             ) {
                 continue;
             }
+            if let (Some(row), Some(judge_graph)) = (
+                selected_row.filter(|row| select_row_shows_score_decorations(row)),
+                self.judgegraph.iter().find(|graph| graph.id == destination.id),
+            ) {
+                items.extend(self.select_note_distribution_graph_render_items(
+                    row,
+                    judge_graph,
+                    destination,
+                    (0, 0),
+                    &enabled_options,
+                    state,
+                ));
+                continue;
+            }
             if let Some(resolved) = self.resolve_destination_items(
                 destination,
                 &images,
@@ -14136,6 +14150,78 @@ mod tests {
             items.iter().filter(|item| matches!(item, SkinRenderItem::Rect { .. })).count();
 
         assert_eq!(rect_count, 7);
+    }
+
+    #[test]
+    fn select_destination_judgegraph_renders_selected_chart_distribution() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 5,
+                "w": 100,
+                "h": 100,
+                "judgegraph": [{ "id": "density", "delay": 0, "backTexOff": 1, "noGap": 1, "noGapX": 1 }],
+                "destination": [{ "id": "density", "dst": [{ "x": 0, "y": 0, "w": 40, "h": 10 }] }]
+            }
+            "#,
+        )
+        .unwrap();
+        let snapshot = SelectSnapshot {
+            selected_index: 0,
+            rows: vec![SelectRowSnapshot {
+                index: 0,
+                kind: SelectRowKind::Song,
+                in_library: true,
+                chart_distribution: vec![
+                    crate::scene::SelectChartDistributionSecond {
+                        key_taps: 4,
+                        ..Default::default()
+                    },
+                    crate::scene::SelectChartDistributionSecond {
+                        scratch_taps: 2,
+                        ..Default::default()
+                    },
+                ],
+                ..SelectRowSnapshot::default()
+            }],
+            ..SelectSnapshot::default()
+        };
+
+        let items = document.select_render_items(&HashMap::new(), &snapshot);
+
+        assert_eq!(
+            items.iter().filter(|item| matches!(item, SkinRenderItem::Rect { .. })).count(),
+            2
+        );
+    }
+
+    #[test]
+    fn select_option_panel_three_renders_judge_timing_value() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 5,
+                "w": 100,
+                "h": 100,
+                "value": [{ "id": "judgetiming", "src": 1, "x": 0, "y": 0, "w": 120, "h": 20, "divx": 12, "divy": 2, "digit": 3, "ref": 12 }],
+                "destination": [{ "id": "judgetiming", "timer": 23, "op": [23], "dst": [{ "x": 40, "y": 0, "w": 10, "h": 10 }] }]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = mock_source("1", 120.0, 40.0);
+        let snapshot = SelectSnapshot {
+            option_panel: 3,
+            option_panel_time: TimeUs(100_000),
+            ..SelectSnapshot::default()
+        };
+
+        let items = document.select_render_items(&sources, &snapshot);
+
+        assert!(items.iter().any(|item| matches!(
+            item,
+            SkinRenderItem::Image { rect, .. } if approx_eq(rect.x, 0.4)
+        )));
     }
 
     #[test]
