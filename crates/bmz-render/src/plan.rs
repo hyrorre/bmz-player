@@ -1372,7 +1372,7 @@ fn build_result_skin_draw_state(
 ) -> crate::skin::SkinDrawState {
     use bmz_core::clear::ClearType;
     let result_failed = matches!(snapshot.clear_type, ClearType::Failed | ClearType::NoPlay);
-    let timing_stats = result_timing_stats(&snapshot.graph.timing_points);
+    let timing_stats = snapshot.graph.timing_distribution.stats();
     let elapsed_ms =
         (snapshot.elapsed_time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32;
     let result_update_score_ms = if result_ranktime_ms <= 0 {
@@ -2769,7 +2769,7 @@ mod tests {
     #[test]
     fn result_plan_supplies_result_judge_graph_data_to_skin_document() {
         use crate::scene::ResultSnapshot;
-        use crate::snapshot::{FastSlowJudgeCounts, ResultGraphSnapshot};
+        use crate::snapshot::{FastSlowJudgeCounts, ResultGraphSnapshot, ResultJudgeGraphBucket};
         use bmz_core::clear::ClearType;
 
         let document: crate::skin::SkinDocument = serde_json::from_str(
@@ -2778,7 +2778,7 @@ mod tests {
                 "name": "test",
                 "w": 100,
                 "h": 100,
-                "judgegraph": [{"id": "jg", "noGap": 1}],
+                "judgegraph": [{"id": "jg", "type": 1, "backTexOff": 1, "noGap": 1}],
                 "destination": [
                     {"id": "jg", "dst": [{"x": 0, "y": 0, "w": 100, "h": 50}]}
                 ]
@@ -2839,6 +2839,7 @@ mod tests {
             play_level: String::new(),
             graph: ResultGraphSnapshot {
                 judge_graph_density: vec![1, 3, 2],
+                judge_graph_buckets: vec![ResultJudgeGraphBucket { values: [0, 0, 1, 0, 0, 0] }],
                 ..ResultGraphSnapshot::default()
             },
             overlay: crate::snapshot::OverlaySnapshot::default(),
@@ -2850,7 +2851,11 @@ mod tests {
             &mut crate::skin::DynamicTimerRuntime::default(),
         );
 
-        assert!(plan.commands.iter().any(|command| matches!(command, DrawCommand::Rect { .. })));
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Rect { color: Color { r, g, b, .. }, .. }
+                if (*r - 0.0).abs() < 0.01 && (*g - 1.0).abs() < 0.01 && (*b - 0.53).abs() < 0.01
+        )));
     }
 
     #[test]
@@ -2993,7 +2998,9 @@ mod tests {
     #[test]
     fn result_plan_renders_timing_distribution_from_result_graph_data() {
         use crate::scene::ResultSnapshot;
-        use crate::snapshot::{FastSlowJudgeCounts, ResultGraphSnapshot, ResultTimingPoint};
+        use crate::snapshot::{
+            FastSlowJudgeCounts, ResultGraphSnapshot, ResultTimingDistribution, ResultTimingPoint,
+        };
         use bmz_core::clear::ClearType;
         use bmz_core::judge::Judge;
 
@@ -3015,6 +3022,9 @@ mod tests {
             document,
             std::iter::empty(),
         );
+        let mut timing_distribution = ResultTimingDistribution::default();
+        timing_distribution.add(-12);
+        timing_distribution.add(8);
         let snapshot = ResultSnapshot {
             clear_type: ClearType::Normal,
             arrange: "NORMAL".to_string(),
@@ -3063,6 +3073,7 @@ mod tests {
             difficulty_name: String::new(),
             play_level: String::new(),
             graph: ResultGraphSnapshot {
+                timing_distribution,
                 timing_points: vec![
                     ResultTimingPoint { time_ms: 0, delta_us: -12_000, judge: Judge::Great },
                     ResultTimingPoint { time_ms: 100, delta_us: 8_000, judge: Judge::PGreat },

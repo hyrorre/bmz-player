@@ -1,11 +1,13 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use bmz_audio::clock::AudioClock;
 use bmz_audio::queue::{AudioScheduler, ScheduledSound};
 use bmz_chart::model::{LongNoteMode, PlayableChart};
 use bmz_chart::timing::TimingMap;
+use bmz_core::ids::NoteId;
 use bmz_core::input::{InputEvent, InputKind, InputSource};
-use bmz_core::judge::Judge;
+use bmz_core::judge::{Judge, TimingSide};
 use bmz_core::lane::LANE_COUNT;
 use bmz_core::time::TimeUs;
 
@@ -104,6 +106,10 @@ pub struct GameSession {
     /// `audio_now` がこの時刻を超えたら keyon → keyoff へ遷移する。
     pub lane_auto_release_at: [Option<TimeUs>; LANE_COUNT],
     pub recent_judgements: Vec<JudgementEvent>,
+    /// Result 統計グラフ用の最終ノート判定詳細。
+    /// beatoraja の Result は譜面上の Note.state / playTime を走査してグラフ化するため、
+    /// BMZ でも score 集計とは別に note_id 単位の判定差分を保持する。
+    pub result_judgements: HashMap<NoteId, ResultJudgementDetail>,
     /// HitErrorVisualizer 用の直近判定タイミング (ms)。beatoraja `recentJudges` 相当。
     pub hit_error_ring: HitErrorRing,
     /// Full combo animation start time. Set once when all notes have been judged
@@ -142,6 +148,15 @@ pub struct GameSession {
     pub state: PlayState,
     /// HCN ゲージ増減の前回更新時刻。
     pub last_hcn_gauge_at: Option<TimeUs>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResultJudgementDetail {
+    pub judge: Judge,
+    pub side: TimingSide,
+    /// BMZ 判定エンジンの差分。正が入力遅れ、負が入力早め。
+    pub delta: TimeUs,
+    pub time: TimeUs,
 }
 
 #[derive(Debug, Clone)]
@@ -214,6 +229,17 @@ pub fn apply_judge_outcome(
     for event in outcome.events {
         session.score.apply(&event);
         session.gauge.apply_judge(event.judge, 1.0);
+        if let Some(note_id) = event.note_id {
+            session.result_judgements.insert(
+                note_id,
+                ResultJudgementDetail {
+                    judge: event.judge,
+                    side: event.side,
+                    delta: event.delta,
+                    time: event.time,
+                },
+            );
+        }
         events.push(event);
     }
     for hit in outcome.mine_hits {
@@ -977,6 +1003,7 @@ mod tests {
             lane_keyoff_started_at: Default::default(),
             lane_auto_release_at: Default::default(),
             recent_judgements: Vec::new(),
+            result_judgements: Default::default(),
             hit_error_ring: HitErrorRing::default(),
             full_combo_started_at: None,
             bgm_scheduler: BgmScheduler::default(),

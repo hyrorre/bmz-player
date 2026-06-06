@@ -1,11 +1,16 @@
+use std::collections::HashMap;
+
+use bmz_chart::model::{LongNoteMode, NoteEvent, NoteKind, PlayableChart};
 use bmz_core::clear::{ClearType, GaugeType};
+use bmz_core::ids::NoteId;
 use bmz_core::lane::KeyMode;
 use bmz_gameplay::gauge::gauge_total_for_chart;
 use bmz_gameplay::result::PlayResult;
 use bmz_gameplay::score::JudgeCounts;
-use bmz_gameplay::session::FrameOutput;
+use bmz_gameplay::session::{FrameOutput, GameSession, ResultJudgementDetail};
 use bmz_render::snapshot::{
-    RenderSnapshot, ResultGaugeGraphPoint, ResultGraphSnapshot, ResultTimingPoint,
+    RenderSnapshot, ResultEarlyLateGraphBucket, ResultGaugeGraphPoint, ResultGraphSnapshot,
+    ResultJudgeGraphBucket, ResultTimingDistribution, ResultTimingPoint,
 };
 
 use crate::storage::play_result::StoredPlayResult;
@@ -196,16 +201,24 @@ impl ResultGraphCollector {
         self.graph.hit_error_ring = snapshot.hit_error_ring;
 
         for event in &frame.judgements {
+            let delta_us = -event.delta.0;
             self.graph.timing_points.push(ResultTimingPoint {
-                time_ms: clamp_us_to_ms(event.time.0),
-                delta_us: event.delta.0,
+                time_ms: clamp_us_to_ms(event.time.0 - event.delta.0),
+                delta_us,
                 judge: event.judge,
             });
+            self.graph.timing_distribution.add(clamp_us_to_ms(delta_us));
         }
     }
 
     pub fn snapshot(&self) -> ResultGraphSnapshot {
         self.graph.clone()
+    }
+
+    pub fn snapshot_for_session(&self, session: &GameSession) -> ResultGraphSnapshot {
+        let mut graph = self.graph.clone();
+        populate_result_note_graphs(&mut graph, &session.chart, &session.result_judgements);
+        graph
     }
 
     fn record_gauge(&mut self, snapshot: &RenderSnapshot) {
@@ -224,6 +237,112 @@ impl ResultGraphCollector {
         }
         self.graph.gauge_points.push(point);
     }
+}
+
+fn populate_result_note_graphs(
+    graph: &mut ResultGraphSnapshot,
+    chart: &PlayableChart,
+    judgements: &HashMap<NoteId, ResultJudgementDetail>,
+) {
+    let seconds = result_graph_seconds(chart).max(graph.judge_graph_density.len()).max(1);
+    let mut judge_buckets = vec![ResultJudgeGraphBucket::default(); seconds];
+    let mut early_late_buckets = vec![ResultEarlyLateGraphBucket::default(); seconds];
+    let mut timing_points = Vec::new();
+
+    let mut notes: Vec<&NoteEvent> = chart
+        .lane_notes
+        .iter()
+        .flatten()
+        .filter(|note| result_graph_includes_note(chart, note))
+        .collect();
+    notes.sort_by_key(|note| (note.time.0, note.lane.index(), note.id.0));
+
+    for note in notes {
+        let second = clamp_note_second(note, seconds);
+        let Some(detail) = judgements.get(&note.id) else {
+            judge_buckets[second].values[0] = judge_buckets[second].values[0].saturating_add(1);
+            early_late_buckets[second].values[0] =
+                early_late_buckets[second].values[0].saturating_add(1);
+            continue;
+        };
+
+        let state = beatoraja_note_state(detail.judge);
+        judge_buckets[second].values[state] = judge_buckets[second].values[state].saturating_add(1);
+        let early_late = beatoraja_early_late_state(state, detail);
+        early_late_buckets[second].values[early_late] =
+            early_late_buckets[second].values[early_late].saturating_add(1);
+
+        let delta_us = -detail.delta.0;
+        timing_points.push(ResultTimingPoint {
+            time_ms: clamp_us_to_ms(note.time.0),
+            delta_us,
+            judge: detail.judge,
+        });
+    }
+
+    graph.judge_graph_buckets = judge_buckets;
+    graph.early_late_graph_buckets = early_late_buckets;
+    graph.timing_points = timing_points;
+    graph.timing_distribution = timing_distribution_from_points(&graph.timing_points);
+    if graph.judge_graph_density.is_empty() {
+        graph.judge_graph_density = graph
+            .judge_graph_buckets
+            .iter()
+            .map(|bucket| bucket.total().min(u8::MAX as u32) as u8)
+            .collect();
+    }
+}
+
+fn result_graph_seconds(chart: &PlayableChart) -> usize {
+    (chart.end_time.0 / 1_000_000).max(0) as usize + 1
+}
+
+fn result_graph_includes_note(chart: &PlayableChart, note: &NoteEvent) -> bool {
+    match note.kind {
+        NoteKind::Tap | NoteKind::LongStart => true,
+        NoteKind::LongEnd => !is_ignored_long_end(chart, note.id),
+        NoteKind::Invisible | NoteKind::Mine => false,
+    }
+}
+
+fn is_ignored_long_end(chart: &PlayableChart, note_id: NoteId) -> bool {
+    let mode = chart
+        .long_notes
+        .iter()
+        .find(|pair| pair.end_note_id == note_id)
+        .and_then(|pair| pair.mode)
+        .unwrap_or(chart.metadata.long_note_mode);
+    mode == LongNoteMode::Ln
+}
+
+fn clamp_note_second(note: &NoteEvent, seconds: usize) -> usize {
+    let second = (note.time.0 / 1_000_000).max(0) as usize;
+    second.min(seconds.max(1) - 1)
+}
+
+fn beatoraja_note_state(judge: bmz_core::judge::Judge) -> usize {
+    match judge {
+        bmz_core::judge::Judge::PGreat => 1,
+        bmz_core::judge::Judge::Great => 2,
+        bmz_core::judge::Judge::Good => 3,
+        bmz_core::judge::Judge::Bad => 4,
+        bmz_core::judge::Judge::Poor | bmz_core::judge::Judge::EmptyPoor => 5,
+    }
+}
+
+fn beatoraja_early_late_state(state: usize, detail: &ResultJudgementDetail) -> usize {
+    if state <= 1 {
+        return state;
+    }
+    if detail.delta.0 <= 0 { state } else { state + 4 }
+}
+
+fn timing_distribution_from_points(points: &[ResultTimingPoint]) -> ResultTimingDistribution {
+    let mut distribution = ResultTimingDistribution::default();
+    for point in points {
+        distribution.add(clamp_us_to_ms(point.delta_us));
+    }
+    distribution
 }
 
 fn clamp_us_to_ms(us: i64) -> i32 {
@@ -397,9 +516,66 @@ mod tests {
         assert_eq!(graph.gauge_points[0].time_ms, 1234);
         assert_eq!(graph.gauge_points[0].value, 74.0);
         assert_eq!(graph.timing_points.len(), 1);
-        assert_eq!(graph.timing_points[0].delta_us, -12_000);
+        assert_eq!(graph.timing_points[0].delta_us, 12_000);
+        assert_eq!(graph.timing_distribution.counts[(150 + 12) as usize], 1);
         assert_eq!(graph.judge_graph_density, vec![1, 3, 2]);
         assert_eq!(graph.bpm_graph_segments.len(), 1);
         assert_eq!(graph.hit_error_ring.index, 7);
+    }
+
+    #[test]
+    fn result_graph_collector_builds_beatoraja_result_buckets_from_session_judgements() {
+        let mut chart = chart();
+        chart.end_time = TimeUs(2_000_000);
+        chart.total_notes = 3;
+        chart.lane_notes[Lane::Key1.index()] =
+            vec![note(1, 0), note(2, 1_000_000), note(3, 1_000_000)];
+        let mut judgements = std::collections::HashMap::new();
+        judgements.insert(
+            bmz_core::ids::NoteId(1),
+            bmz_gameplay::session::ResultJudgementDetail {
+                judge: Judge::Great,
+                side: TimingSide::Fast,
+                delta: TimeUs(-12_000),
+                time: TimeUs(12_000),
+            },
+        );
+        judgements.insert(
+            bmz_core::ids::NoteId(2),
+            bmz_gameplay::session::ResultJudgementDetail {
+                judge: Judge::Bad,
+                side: TimingSide::Slow,
+                delta: TimeUs(45_000),
+                time: TimeUs(1_045_000),
+            },
+        );
+
+        let mut graph = ResultGraphSnapshot::default();
+        populate_result_note_graphs(&mut graph, &chart, &judgements);
+
+        assert_eq!(graph.judge_graph_buckets[0].values[2], 1);
+        assert_eq!(graph.early_late_graph_buckets[0].values[2], 1);
+        assert_eq!(graph.judge_graph_buckets[1].values[4], 1);
+        assert_eq!(graph.judge_graph_buckets[1].values[0], 1);
+        assert_eq!(graph.early_late_graph_buckets[1].values[8], 1);
+        assert_eq!(graph.early_late_graph_buckets[1].values[0], 1);
+        assert_eq!(
+            graph.timing_points.iter().map(|point| point.delta_us).collect::<Vec<_>>(),
+            vec![12_000, -45_000]
+        );
+        assert_eq!(graph.timing_distribution.counts[(150 + 12) as usize], 1);
+        assert_eq!(graph.timing_distribution.counts[(150 - 45) as usize], 1);
+    }
+
+    fn note(id: u32, time_us: i64) -> bmz_chart::model::NoteEvent {
+        bmz_chart::model::NoteEvent {
+            id: bmz_core::ids::NoteId(id),
+            lane: Lane::Key1,
+            kind: bmz_chart::model::NoteKind::Tap,
+            tick: bmz_core::time::ChartTick(0),
+            time: TimeUs(time_us),
+            sound: None,
+            damage: None,
+        }
     }
 }

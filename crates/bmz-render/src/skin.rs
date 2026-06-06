@@ -150,6 +150,15 @@ pub struct SkinDocument {
     /// リザルト描画時のみ plan 側が設定する timing graph 推移。
     #[serde(skip, default)]
     pub result_timing_points: Vec<crate::snapshot::ResultTimingPoint>,
+    /// リザルト描画時のみ plan 側が設定する judgegraph(type=1) 用の秒別 state 集計。
+    #[serde(skip, default)]
+    pub result_judge_graph_buckets: Vec<crate::snapshot::ResultJudgeGraphBucket>,
+    /// リザルト描画時のみ plan 側が設定する judgegraph(type=2) 用の FAST/SLOW 秒別集計。
+    #[serde(skip, default)]
+    pub result_early_late_graph_buckets: Vec<crate::snapshot::ResultEarlyLateGraphBucket>,
+    /// リザルト描画時のみ plan 側が設定する timingdistributiongraph 用の固定分布。
+    #[serde(skip, default)]
+    pub result_timing_distribution: crate::snapshot::ResultTimingDistribution,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
@@ -1219,6 +1228,9 @@ impl SkinContext {
             document.play_bpm_graph_segments = graph.bpm_graph_segments.clone();
             document.result_gauge_graph_points = graph.gauge_points.clone();
             document.result_timing_points = graph.timing_points.clone();
+            document.result_judge_graph_buckets = graph.judge_graph_buckets.clone();
+            document.result_early_late_graph_buckets = graph.early_late_graph_buckets.clone();
+            document.result_timing_distribution = graph.timing_distribution.clone();
         }
         cloned
     }
@@ -2595,7 +2607,13 @@ impl SkinDocument {
             return Some(self.gaugegraph_render_items(gauge_graph, destination, frame, state));
         }
         if let Some(judge_graph) = self.judgegraph.iter().find(|graph| graph.id == destination.id) {
-            return Some(self.judgegraph_render_items(judge_graph, destination, frame, state));
+            return Some(self.judgegraph_render_items(
+                judge_graph,
+                destination,
+                frame,
+                elapsed,
+                state,
+            ));
         }
         if let Some(bpm_graph) = self.bpmgraph.iter().find(|graph| graph.id == destination.id) {
             return Some(self.bpmgraph_render_items(bpm_graph, destination, frame, state));
@@ -4726,7 +4744,7 @@ impl SkinDocument {
         visualizer: &SkinTimingVisualizerDef,
         destination: &SkinDestinationDef,
         frame: ResolvedSkinFrame,
-        _state: SkinDrawState,
+        state: SkinDrawState,
     ) -> Vec<SkinRenderItem> {
         if self.result_timing_points.is_empty() {
             return Vec::new();
@@ -4747,6 +4765,7 @@ impl SkinDocument {
             frame_alpha,
             blend,
             timing_visualizer_judge_colors(visualizer),
+            state,
         ));
         let center_x = rect.x + rect.width / 2.0 - line_w / 2.0;
         items.push(SkinRenderItem::Rect {
@@ -4783,11 +4802,18 @@ impl SkinDocument {
         graph: &SkinTimingDistributionGraphDef,
         destination: &SkinDestinationDef,
         frame: ResolvedSkinFrame,
-        _state: SkinDrawState,
+        state: SkinDrawState,
     ) -> Vec<SkinRenderItem> {
-        if self.result_timing_points.is_empty() {
-            return Vec::new();
-        }
+        let fallback_distribution;
+        let distribution = if self.result_timing_distribution.total() > 0
+            || self.result_timing_points.is_empty()
+        {
+            &self.result_timing_distribution
+        } else {
+            fallback_distribution =
+                skin_timing_distribution_from_points(&self.result_timing_points);
+            &fallback_distribution
+        };
         let rect = normalize_skin_frame_rect(frame, self.w, self.h);
         let frame_alpha = frame.a as f32 / 255.0;
         let blend = if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal };
@@ -4796,14 +4822,16 @@ impl SkinDocument {
         let buckets = (width / line_px).max(1) as usize;
         let center = buckets / 2;
         let mut counts = vec![0u32; buckets];
-        for point in &self.result_timing_points {
-            let delta_ms = (point.delta_us as f32 / 1_000.0).round() as i32;
-            let bucket = center as i32 + delta_ms;
-            if (0..buckets as i32).contains(&bucket) {
-                counts[bucket as usize] += 1;
+        for (bucket_index, count) in counts.iter_mut().enumerate() {
+            let timing_ms = bucket_index as i32 - center as i32;
+            if -distribution.range_ms < timing_ms && timing_ms < distribution.range_ms {
+                let source_index = (timing_ms + distribution.range_ms) as usize;
+                if let Some(source_count) = distribution.counts.get(source_index) {
+                    *count = *source_count;
+                }
             }
         }
-        let max_count = counts.iter().copied().max().unwrap_or(1).max(1) as f32;
+        let max_count = beatoraja_timing_distribution_max(distribution) as f32;
         let bar_w = (rect.width / buckets.max(1) as f32).max(1.0 / self.w.max(1) as f32);
         let mut items = timing_judge_band_items(
             rect,
@@ -4811,6 +4839,7 @@ impl SkinDocument {
             frame_alpha,
             blend,
             timing_distribution_judge_colors(graph),
+            state,
         );
         let graph_color = timing_color(&graph.graph_color, frame_alpha);
         for (index, count) in counts.into_iter().enumerate() {
@@ -4829,21 +4858,25 @@ impl SkinDocument {
                 blend,
             });
         }
-        let stats = timing_stats(&self.result_timing_points);
-        if graph.draw_average == 1 {
+        let stats = distribution.stats();
+        if graph.draw_average == 1
+            && let Some((average_ms, _)) = stats
+        {
             let color = timing_color(&graph.average_color, frame_alpha);
-            let x = timing_distribution_x(rect, center, stats.average_ms);
+            let x = timing_distribution_x(rect, center, average_ms);
             items.push(SkinRenderItem::Rect {
                 rect: Rect { x, y: rect.y, width: bar_w.max(0.001), height: rect.height },
                 color,
                 blend,
             });
         }
-        if graph.draw_dev == 1 {
+        if graph.draw_dev == 1
+            && let Some((average_ms, stddev_ms)) = stats
+        {
             let color = timing_color(&graph.dev_color, frame_alpha);
             for x in [
-                timing_distribution_x(rect, center, stats.average_ms + stats.stddev_ms),
-                timing_distribution_x(rect, center, stats.average_ms - stats.stddev_ms),
+                timing_distribution_x(rect, center, average_ms + stddev_ms),
+                timing_distribution_x(rect, center, average_ms - stddev_ms),
             ] {
                 items.push(SkinRenderItem::Rect {
                     rect: Rect { x, y: rect.y, width: bar_w.max(0.001), height: rect.height },
@@ -4860,7 +4893,47 @@ impl SkinDocument {
         graph: &SkinJudgeGraphDef,
         destination: &SkinDestinationDef,
         frame: ResolvedSkinFrame,
-        _state: SkinDrawState,
+        elapsed_ms: i32,
+        state: SkinDrawState,
+    ) -> Vec<SkinRenderItem> {
+        let graph_type = graph.graph_type();
+        let pms_colors = state.key_mode == KeyMode::K9;
+        if graph_type == 1 && !self.result_judge_graph_buckets.is_empty() {
+            let series: Vec<[u32; 6]> =
+                self.result_judge_graph_buckets.iter().map(|bucket| bucket.values).collect();
+            return stacked_result_note_graph_render_items(
+                &series,
+                &result_judge_graph_colors(frame.a as f32 / 255.0, pms_colors),
+                graph,
+                destination,
+                frame,
+                self.w,
+                self.h,
+                elapsed_ms,
+            );
+        }
+        if graph_type == 2 && !self.result_early_late_graph_buckets.is_empty() {
+            let series: Vec<[u32; 10]> =
+                self.result_early_late_graph_buckets.iter().map(|bucket| bucket.values).collect();
+            return stacked_result_note_graph_render_items(
+                &series,
+                &result_early_late_graph_colors(frame.a as f32 / 255.0, pms_colors),
+                graph,
+                destination,
+                frame,
+                self.w,
+                self.h,
+                elapsed_ms,
+            );
+        }
+        self.density_judgegraph_render_items(graph, destination, frame)
+    }
+
+    fn density_judgegraph_render_items(
+        &self,
+        graph: &SkinJudgeGraphDef,
+        destination: &SkinDestinationDef,
+        frame: ResolvedSkinFrame,
     ) -> Vec<SkinRenderItem> {
         let density = &self.play_judge_graph_density;
         if density.is_empty() {
@@ -7692,28 +7765,26 @@ fn push_gaugegraph_segment(
     });
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-struct TimingStats {
-    average_ms: f32,
-    stddev_ms: f32,
+fn skin_timing_distribution_from_points(
+    points: &[crate::snapshot::ResultTimingPoint],
+) -> crate::snapshot::ResultTimingDistribution {
+    let mut distribution = crate::snapshot::ResultTimingDistribution::default();
+    for point in points {
+        distribution.add((point.delta_us / 1_000) as i32);
+    }
+    distribution
 }
 
-fn timing_stats(points: &[crate::snapshot::ResultTimingPoint]) -> TimingStats {
-    if points.is_empty() {
-        return TimingStats::default();
+fn beatoraja_timing_distribution_max(
+    distribution: &crate::snapshot::ResultTimingDistribution,
+) -> u32 {
+    let mut max = 10;
+    for count in &distribution.counts {
+        if max < *count {
+            max = (count / 10) * 10 + 10;
+        }
     }
-    let count = points.len() as f32;
-    let average_ms =
-        points.iter().map(|point| point.delta_us as f32 / 1_000.0).sum::<f32>() / count;
-    let variance = points
-        .iter()
-        .map(|point| {
-            let diff = point.delta_us as f32 / 1_000.0 - average_ms;
-            diff * diff
-        })
-        .sum::<f32>()
-        / count;
-    TimingStats { average_ms, stddev_ms: variance.sqrt() }
+    max
 }
 
 fn timing_color(value: &str, frame_alpha: f32) -> Color {
@@ -7733,6 +7804,222 @@ fn note_distribution_colors(alpha: f32) -> [Color; 7] {
         Color::rgba(0.80, 0.80, 0.80, alpha),
         Color::rgba(0.53, 0.0, 0.0, alpha),
     ]
+}
+
+fn result_judge_graph_colors(alpha: f32, pms: bool) -> [Color; 6] {
+    if pms {
+        return [
+            Color::rgba(0.33, 0.33, 0.33, alpha),
+            Color::rgba(1.0, 0.37, 0.69, alpha),
+            Color::rgba(1.0, 0.75, 0.20, alpha),
+            Color::rgba(0.86, 0.27, 0.24, alpha),
+            Color::rgba(0.42, 0.78, 1.0, alpha),
+            Color::rgba(0.42, 0.78, 1.0, alpha),
+        ];
+    }
+    [
+        Color::rgba(0.33, 0.33, 0.33, alpha),
+        Color::rgba(0.0, 0.53, 1.0, alpha),
+        Color::rgba(0.0, 1.0, 0.53, alpha),
+        Color::rgba(1.0, 1.0, 0.0, alpha),
+        Color::rgba(1.0, 0.53, 0.0, alpha),
+        Color::rgba(1.0, 0.0, 0.0, alpha),
+    ]
+}
+
+fn result_early_late_graph_colors(alpha: f32, pms: bool) -> [Color; 10] {
+    if pms {
+        return [
+            Color::rgba(0.33, 0.33, 0.33, alpha),
+            Color::rgba(1.0, 0.37, 0.69, alpha),
+            Color::rgba(0.0, 0.53, 1.0, alpha),
+            Color::rgba(0.0, 0.4, 0.8, alpha),
+            Color::rgba(0.0, 0.27, 0.53, alpha),
+            Color::rgba(0.0, 0.13, 0.27, alpha),
+            Color::rgba(1.0, 0.53, 0.0, alpha),
+            Color::rgba(0.8, 0.4, 0.0, alpha),
+            Color::rgba(0.53, 0.27, 0.0, alpha),
+            Color::rgba(0.27, 0.13, 0.0, alpha),
+        ];
+    }
+    [
+        Color::rgba(0.33, 0.33, 0.33, alpha),
+        Color::rgba(0.27, 1.0, 0.27, alpha),
+        Color::rgba(0.0, 0.53, 1.0, alpha),
+        Color::rgba(0.0, 0.4, 0.8, alpha),
+        Color::rgba(0.0, 0.27, 0.53, alpha),
+        Color::rgba(0.0, 0.13, 0.27, alpha),
+        Color::rgba(1.0, 0.53, 0.0, alpha),
+        Color::rgba(0.8, 0.4, 0.0, alpha),
+        Color::rgba(0.53, 0.27, 0.0, alpha),
+        Color::rgba(0.27, 0.13, 0.0, alpha),
+    ]
+}
+
+fn stacked_result_note_graph_render_items<const N: usize>(
+    buckets: &[[u32; N]],
+    colors: &[Color; N],
+    graph: &SkinJudgeGraphDef,
+    destination: &SkinDestinationDef,
+    frame: ResolvedSkinFrame,
+    canvas_w: u32,
+    canvas_h: u32,
+    elapsed_ms: i32,
+) -> Vec<SkinRenderItem> {
+    if buckets.is_empty() {
+        return Vec::new();
+    }
+    let rect = normalize_skin_frame_rect(frame, canvas_w, canvas_h);
+    if rect.width <= 0.0 || rect.height <= 0.0 {
+        return Vec::new();
+    }
+    let frame_alpha = frame.a as f32 / 255.0;
+    let blend = if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal };
+    let max_stack =
+        buckets.iter().map(|bucket| bucket.iter().copied().sum::<u32>()).max().unwrap_or(0);
+    let graph_max = beatoraja_note_graph_max(max_stack);
+    let mut items = Vec::new();
+    if graph.back_tex_off == 0 {
+        push_result_note_graph_background(
+            &mut items,
+            rect,
+            buckets.len(),
+            graph_max,
+            frame_alpha,
+            blend,
+        );
+    }
+    let render_ratio = if graph.delay > 0 {
+        (elapsed_ms as f32 / graph.delay as f32).clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    let visible_len = ((buckets.len() as f32) * render_ratio).ceil() as usize;
+    if visible_len == 0 {
+        return items;
+    }
+    let bucket_w = rect.width / buckets.len().max(1) as f32;
+    let chip_w = bucket_w * if graph.no_gap_x != 0 { 1.0 } else { 0.8 };
+    let unit_h = rect.height / graph_max.max(1) as f32;
+    let chip_h = unit_h * if graph.no_gap != 0 { 1.0 } else { 0.8 };
+
+    for (second, bucket) in buckets.iter().take(visible_len).enumerate() {
+        let x = rect.x + second as f32 * bucket_w;
+        let mut drawn = 0_u32;
+        if graph.order_reverse != 0 {
+            for (series, value) in bucket.iter().copied().enumerate().rev() {
+                push_result_note_graph_chips(
+                    &mut items,
+                    rect,
+                    x,
+                    chip_w,
+                    unit_h,
+                    chip_h,
+                    graph_max,
+                    &mut drawn,
+                    value,
+                    colors[series],
+                    blend,
+                );
+            }
+        } else {
+            for (series, value) in bucket.iter().copied().enumerate() {
+                push_result_note_graph_chips(
+                    &mut items,
+                    rect,
+                    x,
+                    chip_w,
+                    unit_h,
+                    chip_h,
+                    graph_max,
+                    &mut drawn,
+                    value,
+                    colors[series],
+                    blend,
+                );
+            }
+        }
+    }
+    items
+}
+
+fn beatoraja_note_graph_max(max_stack: u32) -> u32 {
+    if max_stack <= 20 { 20 } else { ((max_stack / 10) * 10 + 10).min(100) }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_result_note_graph_chips(
+    items: &mut Vec<SkinRenderItem>,
+    rect: Rect,
+    x: f32,
+    chip_w: f32,
+    unit_h: f32,
+    chip_h: f32,
+    graph_max: u32,
+    drawn: &mut u32,
+    value: u32,
+    color: Color,
+    blend: BlendMode,
+) {
+    for _ in 0..value {
+        if *drawn >= graph_max {
+            break;
+        }
+        let y = rect.y + rect.height - (*drawn as f32 + 1.0) * unit_h;
+        items.push(SkinRenderItem::Rect {
+            rect: Rect { x, y, width: chip_w, height: chip_h },
+            color,
+            blend,
+        });
+        *drawn = (*drawn).saturating_add(1);
+    }
+}
+
+fn push_result_note_graph_background(
+    items: &mut Vec<SkinRenderItem>,
+    rect: Rect,
+    bucket_count: usize,
+    graph_max: u32,
+    frame_alpha: f32,
+    blend: BlendMode,
+) {
+    items.push(SkinRenderItem::Rect {
+        rect,
+        color: Color::rgba(0.0, 0.0, 0.0, 0.8 * frame_alpha),
+        blend,
+    });
+    for count in (10..graph_max).step_by(10) {
+        let band_y =
+            rect.y + rect.height * (1.0 - (count + 10).min(graph_max) as f32 / graph_max as f32);
+        let band_h = rect.height * 10.0 / graph_max as f32;
+        items.push(SkinRenderItem::Rect {
+            rect: Rect { x: rect.x, y: band_y, width: rect.width, height: band_h },
+            color: Color::rgba(0.007 * count as f32, 0.007 * count as f32, 0.0, frame_alpha),
+            blend,
+        });
+    }
+    let line_w = (rect.width / (bucket_count.max(1) * 5) as f32).max(0.0005);
+    for second in 0..bucket_count {
+        let color = if second % 60 == 0 {
+            Some(Color::rgba(0.25, 0.25, 0.25, frame_alpha))
+        } else if second % 10 == 0 {
+            Some(Color::rgba(0.125, 0.125, 0.125, frame_alpha))
+        } else {
+            None
+        };
+        if let Some(color) = color {
+            items.push(SkinRenderItem::Rect {
+                rect: Rect {
+                    x: rect.x + second as f32 * rect.width / bucket_count.max(1) as f32,
+                    y: rect.y,
+                    width: line_w,
+                    height: rect.height,
+                },
+                color,
+                blend,
+            });
+        }
+    }
 }
 
 fn timing_visualizer_judge_colors(visualizer: &SkinTimingVisualizerDef) -> [Color; 5] {
@@ -7783,34 +8070,158 @@ fn timing_judge_band_items(
     frame_alpha: f32,
     blend: BlendMode,
     colors: [Color; 5],
+    state: SkinDrawState,
 ) -> Vec<SkinRenderItem> {
-    let bands = [
-        (-16.0, 16.0, colors[0]),
-        (-33.0, -16.0, colors[1]),
-        (16.0, 33.0, colors[1]),
-        (-66.0, -33.0, colors[2]),
-        (33.0, 66.0, colors[2]),
-        (-100.0, -66.0, colors[3]),
-        (66.0, 100.0, colors[3]),
-        (-center_ms, -100.0, colors[4]),
-        (100.0, center_ms, colors[4]),
-    ];
+    let areas = beatoraja_timing_judge_areas(state);
     let mut items = Vec::new();
-    for (start, end, color) in bands {
-        let start = start.clamp(-center_ms, center_ms);
-        let end = end.clamp(-center_ms, center_ms);
-        if end <= start {
-            continue;
-        }
-        let x1 = rect.x + ((start + center_ms) / (center_ms * 2.0)) * rect.width;
-        let x2 = rect.x + ((end + center_ms) / (center_ms * 2.0)) * rect.width;
-        items.push(SkinRenderItem::Rect {
-            rect: Rect { x: x1, y: rect.y, width: (x2 - x1).max(0.0), height: rect.height },
-            color: color.with_alpha(color.a * frame_alpha * 0.25),
+    let mut inner_late_ms = 0.0;
+    let mut inner_early_ms = 0.0;
+    for (area, color) in areas.into_iter().zip(colors) {
+        let late_ms = area.late_ms.clamp(-center_ms, center_ms);
+        let early_ms = area.early_ms.clamp(-center_ms, center_ms);
+        push_timing_judge_band_rect(
+            &mut items,
+            rect,
+            center_ms,
+            late_ms,
+            inner_late_ms,
+            color,
+            frame_alpha,
             blend,
-        });
+        );
+        push_timing_judge_band_rect(
+            &mut items,
+            rect,
+            center_ms,
+            inner_early_ms,
+            early_ms,
+            color,
+            frame_alpha,
+            blend,
+        );
+        inner_late_ms = inner_late_ms.min(late_ms);
+        inner_early_ms = inner_early_ms.max(early_ms);
     }
     items
+}
+
+fn push_timing_judge_band_rect(
+    items: &mut Vec<SkinRenderItem>,
+    rect: Rect,
+    center_ms: f32,
+    start_ms: f32,
+    end_ms: f32,
+    color: Color,
+    frame_alpha: f32,
+    blend: BlendMode,
+) {
+    if end_ms <= start_ms {
+        return;
+    }
+    let x1 = rect.x + ((start_ms + center_ms) / (center_ms * 2.0)) * rect.width;
+    let x2 = rect.x + ((end_ms + center_ms) / (center_ms * 2.0)) * rect.width;
+    items.push(SkinRenderItem::Rect {
+        rect: Rect { x: x1, y: rect.y, width: (x2 - x1).max(0.0), height: rect.height },
+        color: color.with_alpha(color.a * frame_alpha * 0.25),
+        blend,
+    });
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct TimingJudgeArea {
+    late_ms: f32,
+    early_ms: f32,
+}
+
+fn beatoraja_timing_judge_areas(state: SkinDrawState) -> [TimingJudgeArea; 5] {
+    let base = bmz_gameplay::judge::window::beatoraja_note_judge_window_for_keymode(state.key_mode);
+    let percent = beatoraja_judge_rank_percent_for_mode(state.key_mode, state.judge_rank);
+    if state.key_mode == KeyMode::K9 {
+        beatoraja_pms_timing_judge_areas(base, percent)
+    } else {
+        let window = bmz_gameplay::judge::window::judge_window_for_rank(base, percent);
+        timing_judge_areas_from_window(window)
+    }
+}
+
+fn timing_judge_areas_from_window(
+    window: bmz_gameplay::judge::model::JudgeWindow,
+) -> [TimingJudgeArea; 5] {
+    [
+        symmetric_timing_judge_area(window.pgreat_us),
+        symmetric_timing_judge_area(window.great_us),
+        symmetric_timing_judge_area(window.good_us),
+        TimingJudgeArea {
+            late_ms: -window.bad_fast_us as f32 / 1_000.0,
+            early_ms: window.bad_slow_us as f32 / 1_000.0,
+        },
+        TimingJudgeArea {
+            late_ms: -window.empty_poor_fast_us as f32 / 1_000.0,
+            early_ms: window.empty_poor_slow_us as f32 / 1_000.0,
+        },
+    ]
+}
+
+fn symmetric_timing_judge_area(us: i64) -> TimingJudgeArea {
+    let ms = us as f32 / 1_000.0;
+    TimingJudgeArea { late_ms: -ms, early_ms: ms }
+}
+
+fn beatoraja_pms_timing_judge_areas(
+    base: bmz_gameplay::judge::model::JudgeWindow,
+    percent: i32,
+) -> [TimingJudgeArea; 5] {
+    let pgreat = symmetric_timing_judge_area(base.pgreat_us);
+    let bad = TimingJudgeArea {
+        late_ms: -base.bad_fast_us as f32 / 1_000.0,
+        early_ms: base.bad_slow_us as f32 / 1_000.0,
+    };
+    let miss = TimingJudgeArea {
+        late_ms: -base.empty_poor_fast_us as f32 / 1_000.0,
+        early_ms: base.empty_poor_slow_us as f32 / 1_000.0,
+    };
+    let great = clamp_timing_judge_area(
+        symmetric_timing_judge_area(scale_timing_window_us(base.great_us, percent)),
+        pgreat,
+        bad,
+    );
+    let good = clamp_timing_judge_area(
+        symmetric_timing_judge_area(scale_timing_window_us(base.good_us, percent)),
+        pgreat,
+        bad,
+    );
+    [pgreat, great, good, bad, miss]
+}
+
+fn clamp_timing_judge_area(
+    area: TimingJudgeArea,
+    min: TimingJudgeArea,
+    max: TimingJudgeArea,
+) -> TimingJudgeArea {
+    TimingJudgeArea {
+        late_ms: area.late_ms.min(min.late_ms).max(max.late_ms),
+        early_ms: area.early_ms.max(min.early_ms).min(max.early_ms),
+    }
+}
+
+fn scale_timing_window_us(value: i64, percent: i32) -> i64 {
+    ((value as i128) * percent as i128 / 100).try_into().unwrap_or(if value < 0 {
+        i64::MIN
+    } else {
+        i64::MAX
+    })
+}
+
+fn beatoraja_judge_rank_percent_for_mode(key_mode: KeyMode, judge_rank: Option<i32>) -> i32 {
+    let Some(rank) = judge_rank else {
+        return 100;
+    };
+    if rank >= 10 {
+        return rank;
+    }
+    let table =
+        if key_mode == KeyMode::K9 { [33, 50, 70, 100, 133] } else { [25, 50, 75, 100, 125] };
+    table.get(rank as usize).copied().unwrap_or(table[2])
 }
 
 fn timing_distribution_x(rect: Rect, center: usize, value_ms: f32) -> f32 {
@@ -13560,6 +13971,47 @@ mod tests {
     }
 
     #[test]
+    fn result_judgegraphs_render_beatoraja_judge_and_early_late_series() {
+        let mut document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 7,
+                "w": 100,
+                "h": 100,
+                "judgegraph": [
+                    { "id": "judge", "type": 1, "backTexOff": 1, "noGap": 1, "noGapX": 1 },
+                    { "id": "fs", "type": 2, "backTexOff": 1, "noGap": 1, "noGapX": 1 }
+                ],
+                "destination": [
+                    { "id": "judge", "dst": [{ "x": 0, "y": 0, "w": 50, "h": 20, "a": 255 }] },
+                    { "id": "fs", "dst": [{ "x": 0, "y": 20, "w": 50, "h": 20, "a": 255 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        document.result_judge_graph_buckets =
+            vec![crate::snapshot::ResultJudgeGraphBucket { values: [0, 0, 1, 0, 0, 0] }];
+        document.result_early_late_graph_buckets =
+            vec![crate::snapshot::ResultEarlyLateGraphBucket {
+                values: [0, 0, 0, 0, 0, 0, 1, 0, 0, 0],
+            }];
+
+        let items = document.static_image_render_items(&HashMap::new(), SkinDrawState::default());
+
+        assert!(items.iter().any(|item| matches!(
+            item,
+            SkinRenderItem::Rect { color: Color { r, g, b, .. }, .. }
+                if approx_eq(*r, 0.0) && approx_eq(*g, 1.0) && approx_eq(*b, 0.53)
+        )));
+        assert!(items.iter().any(|item| matches!(
+            item,
+            SkinRenderItem::Rect { color: Color { r, g, b, .. }, .. }
+                if approx_eq(*r, 1.0) && approx_eq(*g, 0.53) && approx_eq(*b, 0.0)
+        )));
+    }
+
+    #[test]
     fn select_click_hit_resolves_image_act_event() {
         let document: SkinDocument = serde_json::from_str(
             r#"
@@ -16722,6 +17174,36 @@ mod tests {
         // When no recent judgement, 525 returns None
         let no_judge = SkinDrawState { judge_timing_ms: None, ..state };
         assert_eq!(skin_state_number(525, no_judge), None);
+    }
+
+    #[test]
+    fn timing_judge_areas_follow_beatoraja_mode_windows() {
+        let areas = beatoraja_timing_judge_areas(SkinDrawState {
+            key_mode: KeyMode::K7,
+            judge_rank: None,
+            ..SkinDrawState::default()
+        });
+
+        assert_eq!(areas[0], TimingJudgeArea { late_ms: -20.0, early_ms: 20.0 });
+        assert_eq!(areas[1], TimingJudgeArea { late_ms: -60.0, early_ms: 60.0 });
+        assert_eq!(areas[2], TimingJudgeArea { late_ms: -150.0, early_ms: 150.0 });
+        assert_eq!(areas[3], TimingJudgeArea { late_ms: -280.0, early_ms: 220.0 });
+        assert_eq!(areas[4], TimingJudgeArea { late_ms: -150.0, early_ms: 500.0 });
+    }
+
+    #[test]
+    fn timing_judge_areas_apply_pms_rank_rule() {
+        let areas = beatoraja_timing_judge_areas(SkinDrawState {
+            key_mode: KeyMode::K9,
+            judge_rank: Some(0),
+            ..SkinDrawState::default()
+        });
+
+        assert_eq!(areas[0], TimingJudgeArea { late_ms: -20.0, early_ms: 20.0 });
+        assert_eq!(areas[1], TimingJudgeArea { late_ms: -20.0, early_ms: 20.0 });
+        assert_eq!(areas[2], TimingJudgeArea { late_ms: -38.61, early_ms: 38.61 });
+        assert_eq!(areas[3], TimingJudgeArea { late_ms: -183.0, early_ms: 183.0 });
+        assert_eq!(areas[4], TimingJudgeArea { late_ms: -175.0, early_ms: 500.0 });
     }
 
     #[test]

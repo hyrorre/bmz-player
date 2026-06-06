@@ -685,6 +685,7 @@ mod tests {
             lane_keyoff_started_at: Default::default(),
             lane_auto_release_at: Default::default(),
             recent_judgements: Vec::new(),
+            result_judgements: Default::default(),
             hit_error_ring: bmz_gameplay::hit_error::HitErrorRing::default(),
             full_combo_started_at: None,
             bgm_scheduler: BgmScheduler::default(),

@@ -643,6 +643,8 @@ fn aggregate_course_result_graph(
                 judge: point.judge,
             }
         }));
+        graph.judge_graph_buckets.extend_from_slice(&entry.graph.judge_graph_buckets);
+        graph.early_late_graph_buckets.extend_from_slice(&entry.graph.early_late_graph_buckets);
         graph.judge_graph_density.extend_from_slice(&entry.graph.judge_graph_density);
         graph.bpm_graph_segments.extend(entry.graph.bpm_graph_segments.iter().map(|segment| {
             let start = offset_ms as f32 + segment.start_ratio * duration_ms as f32;
@@ -660,6 +662,11 @@ fn aggregate_course_result_graph(
         offset_ms = offset_ms.saturating_add(duration_ms);
     }
 
+    graph.timing_distribution = bmz_render::snapshot::ResultTimingDistribution::default();
+    for point in &graph.timing_points {
+        graph.timing_distribution.add((point.delta_us / 1_000) as i32);
+    }
+
     graph
 }
 
@@ -667,7 +674,18 @@ fn result_graph_duration_ms(graph: &bmz_render::snapshot::ResultGraphSnapshot) -
     let gauge_ms = graph.gauge_points.last().map(|point| point.time_ms).unwrap_or(0);
     let timing_ms = graph.timing_points.last().map(|point| point.time_ms).unwrap_or(0);
     let density_ms = i32::try_from(graph.judge_graph_density.len()).unwrap_or(i32::MAX / 1_000);
-    gauge_ms.max(timing_ms).max(density_ms.saturating_mul(1_000)).max(1)
+    let judge_ms = i32::try_from(graph.judge_graph_buckets.len())
+        .unwrap_or(i32::MAX / 1_000)
+        .saturating_mul(1_000);
+    let early_late_ms = i32::try_from(graph.early_late_graph_buckets.len())
+        .unwrap_or(i32::MAX / 1_000)
+        .saturating_mul(1_000);
+    gauge_ms
+        .max(timing_ms)
+        .max(density_ms.saturating_mul(1_000))
+        .max(judge_ms)
+        .max(early_late_ms)
+        .max(1)
 }
 
 fn result_min_bpm(summary: &ResultSummary) -> f32 {
