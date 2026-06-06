@@ -674,12 +674,13 @@ impl WgpuRenderer {
             self.egui.update_textures(&self.device, &self.queue, frame);
         }
 
-        if !(SurfaceSize { width: self.config.width, height: self.config.height }).is_drawable() {
+        let surface_size = SurfaceSize { width: self.config.width, height: self.config.height };
+        if !surface_size.is_drawable() {
             return Ok(RenderSurfaceStatus::SkippedZeroSize);
         }
 
         let text_frame = self.build_text_frame(plan, fonts, bitmap_fonts);
-        let geometry = encode_plan_geometry(plan, &text_frame);
+        let geometry = encode_plan_geometry(plan, &text_frame, surface_size);
         self.ensure_rect_buffer(geometry.rects.len());
         if let Some(buffer) = &self.rect_buffer
             && !geometry.rects.is_empty()
@@ -1113,10 +1114,19 @@ struct PlanGeometry {
 /// commands を 1 回走査し、rect/image インスタンスバッファと、コマンド順を尊重した
 /// 描画ステップ列を作る。`text_frame` の `command_quad_counts` から各 Text コマンドが
 /// 占める text instance buffer の範囲を割り出す。
-fn encode_plan_geometry(plan: &DrawPlan, text_frame: &TextFrame) -> PlanGeometry {
+fn encode_plan_geometry(
+    plan: &DrawPlan,
+    text_frame: &TextFrame,
+    surface_size: SurfaceSize,
+) -> PlanGeometry {
     let mut rects = Vec::new();
     let mut images = Vec::new();
     let mut steps: Vec<DrawStep> = Vec::new();
+    let image_rotation_aspect = if surface_size.height == 0 {
+        1.0
+    } else {
+        surface_size.width as f32 / surface_size.height as f32
+    };
     // text instance buffer 上での現在位置 (quad 単位) と、次に参照する Text コマンド番号。
     let mut text_quad_cursor = 0_usize;
     let mut text_command_index = 0_usize;
@@ -1134,7 +1144,15 @@ fn encode_plan_geometry(plan: &DrawPlan, text_frame: &TextFrame) -> PlanGeometry
             }
             DrawCommand::Image { rect, uv, texture, tint, blend, linear_filter } => {
                 let start = images.len();
-                encode_image_instance(&mut images, rect, uv, tint, 0.0, Point { x: 0.5, y: 0.5 });
+                encode_image_instance(
+                    &mut images,
+                    rect,
+                    uv,
+                    tint,
+                    0.0,
+                    Point { x: 0.5, y: 0.5 },
+                    image_rotation_aspect,
+                );
                 push_or_extend_image(
                     &mut steps,
                     *texture,
@@ -1154,7 +1172,15 @@ fn encode_plan_geometry(plan: &DrawPlan, text_frame: &TextFrame) -> PlanGeometry
                 center,
             } => {
                 let start = images.len();
-                encode_image_instance(&mut images, rect, uv, tint, *angle_rad, *center);
+                encode_image_instance(
+                    &mut images,
+                    rect,
+                    uv,
+                    tint,
+                    *angle_rad,
+                    *center,
+                    image_rotation_aspect,
+                );
                 push_or_extend_image(
                     &mut steps,
                     *texture,
@@ -1188,6 +1214,7 @@ fn encode_image_instance(
     tint: &Color,
     angle_rad: f32,
     center: Point,
+    rotation_aspect: f32,
 ) {
     for value in [
         rect.x,
@@ -1205,7 +1232,7 @@ fn encode_image_instance(
         angle_rad,
         center.x,
         center.y,
-        0.0,
+        rotation_aspect,
     ] {
         images.extend_from_slice(&value.to_le_bytes());
     }
@@ -1610,6 +1637,7 @@ impl<'a> CachedTextFrameBuilder<'a> {
         let design_size = if font.size > 0 { font.size } else { font.line_height.max(1) };
         let bitmap_size = style.bitmap_size.unwrap_or(style.size);
         let mut scale = (bitmap_size * surface.height as f32 / design_size as f32).max(0.01);
+        let original_scale = scale;
         let mut text_width = bitmap_text_width_px(text, font, scale);
         let max_width = style.max_width.max(0.0) * surface.width as f32;
         let text = if max_width > 0.0 && text_width > max_width {
@@ -1634,7 +1662,13 @@ impl<'a> CachedTextFrameBuilder<'a> {
             _ => 0.0,
         };
         let mut cursor_x = origin.x * surface.width as f32 + align_offset.max(0.0);
-        let text_top_y = origin.y * surface.height as f32;
+        let shrink_offset_y =
+            if matches!(style.overflow, TextOverflow::Shrink) && scale < original_scale {
+                (design_size as f32 * (original_scale - scale)) / 2.0
+            } else {
+                0.0
+            };
+        let text_top_y = origin.y * surface.height as f32 + shrink_offset_y;
 
         for ch in text.chars() {
             let Some(glyph) = font.glyphs.get(&ch) else {
@@ -1708,6 +1742,7 @@ impl<'a> CachedTextFrameBuilder<'a> {
         }
 
         let mut px_size = (style.size * surface.height as f32).max(1.0);
+        let original_px_size = px_size;
         let max_width = style.max_width.max(0.0) * surface.width as f32;
         let mut text = std::borrow::Cow::Borrowed(text);
         let mut scale = PxScale::from(px_size);
@@ -1758,7 +1793,13 @@ impl<'a> CachedTextFrameBuilder<'a> {
             }
         }
         let cursor_x = origin.x * surface.width as f32;
-        let baseline_y = origin.y * surface.height as f32 + scaled_font.ascent();
+        let shrink_offset_y =
+            if matches!(style.overflow, TextOverflow::Shrink) && px_size < original_px_size {
+                (original_px_size - px_size) / 2.0
+            } else {
+                0.0
+            };
+        let baseline_y = origin.y * surface.height as f32 + shrink_offset_y + scaled_font.ascent();
 
         self.push_text_line(
             cursor_x, baseline_y, &text, text_width, scale, style, font_id, font, surface,
@@ -1889,6 +1930,7 @@ impl TextAtlasBuilder {
         let design_size = if font.size > 0 { font.size } else { font.line_height.max(1) };
         let bitmap_size = style.bitmap_size.unwrap_or(style.size);
         let mut scale = (bitmap_size * surface.height as f32 / design_size as f32).max(0.01);
+        let original_scale = scale;
         let mut text_width = bitmap_text_width_px(text, font, scale);
         let max_width = style.max_width.max(0.0) * surface.width as f32;
         let text = if max_width > 0.0 && text_width > max_width {
@@ -1913,7 +1955,13 @@ impl TextAtlasBuilder {
             _ => 0.0,
         };
         let mut cursor_x = origin.x * surface.width as f32 + align_offset.max(0.0);
-        let text_top_y = origin.y * surface.height as f32;
+        let shrink_offset_y =
+            if matches!(style.overflow, TextOverflow::Shrink) && scale < original_scale {
+                (design_size as f32 * (original_scale - scale)) / 2.0
+            } else {
+                0.0
+            };
+        let text_top_y = origin.y * surface.height as f32 + shrink_offset_y;
 
         for ch in text.chars() {
             let Some(glyph) = font.glyphs.get(&ch) else {
@@ -2027,6 +2075,7 @@ impl TextAtlasBuilder {
         }
 
         let mut px_size = (style.size * surface.height as f32).max(1.0);
+        let original_px_size = px_size;
         let max_width = style.max_width.max(0.0) * surface.width as f32;
         let mut text = std::borrow::Cow::Borrowed(text);
         let mut scale = PxScale::from(px_size);
@@ -2076,7 +2125,13 @@ impl TextAtlasBuilder {
             }
         }
         let cursor_x = origin.x * surface.width as f32;
-        let baseline_y = origin.y * surface.height as f32 + scaled_font.ascent();
+        let shrink_offset_y =
+            if matches!(style.overflow, TextOverflow::Shrink) && px_size < original_px_size {
+                (original_px_size - px_size) / 2.0
+            } else {
+                0.0
+            };
+        let baseline_y = origin.y * surface.height as f32 + shrink_offset_y + scaled_font.ascent();
 
         self.push_text_line(cursor_x, baseline_y, &text, text_width, scale, style, font, surface);
     }
@@ -2716,12 +2771,15 @@ fn vs_main(
     let local = corners[vertex_index];
     let pivot = rotation.yz;
     let relative = (local - pivot) * rect.zw;
+    let aspect = max(rotation.w, 0.0001);
+    let relative_aspect = vec2<f32>(relative.x * aspect, relative.y);
     let c = cos(rotation.x);
     let s = sin(rotation.x);
-    let rotated = vec2<f32>(
-        relative.x * c - relative.y * s,
-        relative.x * s + relative.y * c,
+    let rotated_aspect = vec2<f32>(
+        relative_aspect.x * c - relative_aspect.y * s,
+        relative_aspect.x * s + relative_aspect.y * c,
     );
+    let rotated = vec2<f32>(rotated_aspect.x / aspect, rotated_aspect.y);
     let pos01 = rect.xy + pivot * rect.zw + rotated;
 
     var out: VertexOutput;
@@ -2769,12 +2827,15 @@ fn vs_main(
     let local = corners[vertex_index];
     let pivot = rotation.yz;
     let relative = (local - pivot) * rect.zw;
+    let aspect = max(rotation.w, 0.0001);
+    let relative_aspect = vec2<f32>(relative.x * aspect, relative.y);
     let c = cos(rotation.x);
     let s = sin(rotation.x);
-    let rotated = vec2<f32>(
-        relative.x * c - relative.y * s,
-        relative.x * s + relative.y * c,
+    let rotated_aspect = vec2<f32>(
+        relative_aspect.x * c - relative_aspect.y * s,
+        relative_aspect.x * s + relative_aspect.y * c,
     );
+    let rotated = vec2<f32>(rotated_aspect.x / aspect, rotated_aspect.y);
     let pos01 = rect.xy + pivot * rect.zw + rotated;
 
     var out: VertexOutput;
@@ -2925,6 +2986,10 @@ mod tests {
     use crate::scene::{AppSceneSnapshot, SelectSnapshot};
 
     use super::*;
+
+    fn test_surface_size() -> SurfaceSize {
+        SurfaceSize { width: 16, height: 9 }
+    }
 
     fn font_supports_japanese<F: Font>(font: &F) -> bool {
         font.glyph_id('あ').0 != 0 && font.glyph_id('日').0 != 0
@@ -3320,6 +3385,79 @@ mod tests {
     }
 
     #[test]
+    fn bitmap_font_shrink_keeps_text_vertically_centered_in_destination() {
+        let Some(default_font) = load_default_font() else { return };
+        let surface = SurfaceSize { width: 100, height: 100 };
+        let mut pages = HashMap::new();
+        pages.insert(
+            0,
+            crate::bitmap_font::BitmapFontPage {
+                id: 0,
+                path: std::path::PathBuf::from("page.png"),
+                image: crate::assets::RgbaImageAsset {
+                    width: 10,
+                    height: 10,
+                    pixels: vec![255; 10 * 10 * 4],
+                },
+            },
+        );
+        let mut glyphs = HashMap::new();
+        glyphs.insert(
+            'A',
+            crate::bitmap_font::BitmapFontGlyph {
+                id: 'A',
+                x: 0,
+                y: 0,
+                width: 10,
+                height: 10,
+                xoffset: 0,
+                yoffset: 7,
+                xadvance: 10,
+                page: 0,
+            },
+        );
+        let mut bitmap_fonts = HashMap::new();
+        bitmap_fonts.insert(
+            "bitmap".to_string(),
+            BitmapFont {
+                size: 10,
+                line_height: 10,
+                base: 7,
+                ascent: 7.0,
+                scale_width: 10,
+                scale_height: 10,
+                pages,
+                glyphs,
+            },
+        );
+        let plan = DrawPlan {
+            clear: Color::rgb(0.0, 0.0, 0.0),
+            commands: vec![DrawCommand::Text {
+                origin: Point { x: 0.1, y: 0.1 },
+                text: "AAAA".to_string(),
+                style: TextStyle {
+                    font_id: Some("bitmap".to_string()),
+                    size: 0.2,
+                    bitmap_size: None,
+                    color: Color::rgb(1.0, 1.0, 1.0),
+                    layer: crate::plan::TextLayer::Skin,
+                    align: TextAlign::Left,
+                    max_width: 0.4,
+                    overflow: TextOverflow::Shrink,
+                    wrapping: false,
+                    outline: None,
+                    shadow: None,
+                },
+            }],
+        };
+
+        let frame = build_text_frame(&plan, &default_font, &HashMap::new(), &bitmap_fonts, surface);
+        let y = f32::from_le_bytes(frame.instances[4..8].try_into().unwrap());
+
+        assert!((y - 0.15).abs() < f32::EPSILON);
+    }
+
+    #[test]
     fn bitmap_font_text_uses_bitmap_size_for_scale() {
         let Some(default_font) = load_default_font() else { return };
         let surface = SurfaceSize { width: 100, height: 100 };
@@ -3456,7 +3594,7 @@ mod tests {
             ..Default::default()
         }));
 
-        let geometry = encode_plan_geometry(&plan, &TextFrame::default());
+        let geometry = encode_plan_geometry(&plan, &TextFrame::default(), test_surface_size());
         let rect_count = plan
             .commands
             .iter()
@@ -3477,7 +3615,7 @@ mod tests {
             ],
         };
 
-        let geometry = encode_plan_geometry(&plan, &TextFrame::default());
+        let geometry = encode_plan_geometry(&plan, &TextFrame::default(), test_surface_size());
         let image_step_sizes: Vec<_> = geometry
             .steps
             .iter()
@@ -3498,7 +3636,7 @@ mod tests {
             commands: vec![sample_image(0, BlendMode::Normal), sample_image(0, BlendMode::Add)],
         };
 
-        let geometry = encode_plan_geometry(&plan, &TextFrame::default());
+        let geometry = encode_plan_geometry(&plan, &TextFrame::default(), test_surface_size());
         let blends: Vec<_> = geometry
             .steps
             .iter()
@@ -3533,7 +3671,7 @@ mod tests {
             ],
         };
 
-        let geometry = encode_plan_geometry(&plan, &TextFrame::default());
+        let geometry = encode_plan_geometry(&plan, &TextFrame::default(), test_surface_size());
 
         assert_eq!(geometry.steps.len(), 3);
         assert!(matches!(geometry.steps[0], DrawStep::Image { .. }));
@@ -3551,7 +3689,7 @@ mod tests {
         // sample_text が 2 quad を生成したと仮定したテキストフレーム。
         let text_frame = TextFrame { command_quad_counts: vec![2], ..TextFrame::default() };
 
-        let geometry = encode_plan_geometry(&plan, &text_frame);
+        let geometry = encode_plan_geometry(&plan, &text_frame, test_surface_size());
 
         assert_eq!(geometry.steps.len(), 2);
         assert_eq!(geometry.steps[0], DrawStep::Text { range: 0..TEXT_INSTANCE_BYTES * 2 });
@@ -3574,7 +3712,7 @@ mod tests {
             }],
         };
 
-        let geometry = encode_plan_geometry(&plan, &TextFrame::default());
+        let geometry = encode_plan_geometry(&plan, &TextFrame::default(), test_surface_size());
         let floats: Vec<f32> = geometry
             .images
             .chunks_exact(std::mem::size_of::<f32>())
@@ -3585,6 +3723,7 @@ mod tests {
         assert_eq!(floats[12], 1.25);
         assert_eq!(floats[13], 0.0);
         assert_eq!(floats[14], 1.0);
+        assert!((floats[15] - 16.0 / 9.0).abs() < f32::EPSILON);
     }
 
     #[test]

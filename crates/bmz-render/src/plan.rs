@@ -1372,7 +1372,11 @@ fn build_result_skin_draw_state(
 ) -> crate::skin::SkinDrawState {
     use bmz_core::clear::ClearType;
     let result_failed = matches!(snapshot.clear_type, ClearType::Failed | ClearType::NoPlay);
-    let timing_stats = snapshot.graph.timing_distribution.stats();
+    let timing_stats = snapshot
+        .graph
+        .timing_distribution
+        .stats()
+        .or_else(|| result_timing_stats(&snapshot.graph.timing_points));
     let elapsed_ms =
         (snapshot.elapsed_time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32;
     let result_update_score_ms = if result_ranktime_ms <= 0 {
@@ -2889,6 +2893,30 @@ mod tests {
 
         assert_eq!(state.select_arrange_index, 9);
         assert_eq!(state.result_arrange_index, 9);
+    }
+
+    #[test]
+    fn result_skin_state_falls_back_to_timing_points_for_average_timing() {
+        let AppSceneSnapshot::Result(mut snapshot) = crate::sample::sample_result_scene() else {
+            panic!("sample result scene");
+        };
+        snapshot.graph.timing_points = vec![
+            crate::snapshot::ResultTimingPoint {
+                time_ms: 0,
+                delta_us: -12_000,
+                judge: bmz_core::judge::Judge::Great,
+            },
+            crate::snapshot::ResultTimingPoint {
+                time_ms: 1000,
+                delta_us: 20_000,
+                judge: bmz_core::judge::Judge::PGreat,
+            },
+        ];
+
+        let state = build_result_skin_draw_state(&snapshot, 0);
+
+        assert_eq!(state.average_timing_ms, Some(4.0));
+        assert_eq!(state.stddev_timing_ms, Some(16.0));
     }
 
     #[test]

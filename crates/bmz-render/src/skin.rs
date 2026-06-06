@@ -2624,6 +2624,13 @@ impl SkinDocument {
             {
                 return None;
             }
+            if let Some((r, g, b)) =
+                result_judge_pie_segment_color(destination, image, frame, state)
+            {
+                frame.r = r;
+                frame.g = g;
+                frame.b = b;
+            }
             let source = resolve_document_source(sources, &image.src)?;
             let pixel_rect = skin_image_pixel_rect(image, images);
             let mut uv = skin_image_texture_region_for_state(
@@ -6437,10 +6444,11 @@ fn number_padding(value: &SkinValueDef) -> NumberPadding {
 }
 
 fn display_number_digits(value: i64, max_digits: usize, padding: NumberPadding) -> Vec<u8> {
+    let value = value.saturating_abs();
     let mut text = if padding.is_zero_padding() && max_digits > 0 {
-        format!("{:0width$}", value.max(0), width = max_digits)
+        format!("{value:0width$}", width = max_digits)
     } else {
-        value.max(0).to_string()
+        value.to_string()
     };
     if max_digits > 0 && text.len() > max_digits {
         text = text[text.len() - max_digits..].to_string();
@@ -9231,6 +9239,49 @@ fn apply_all_offset_to_point(
     translate_y: f32,
 ) -> Point {
     Point { x: point.x * scale_x + translate_x, y: point.y * scale_y - translate_y }
+}
+
+fn result_judge_pie_segment_color(
+    destination: &SkinDestinationDef,
+    image: &SkinImageDef,
+    frame: ResolvedSkinFrame,
+    state: SkinDrawState,
+) -> Option<(i32, i32, i32)> {
+    if state.result_failed.is_none()
+        || destination.id != "judge_graph"
+        || image.id != "judge_graph"
+        || image.w != 140
+        || image.h != 8
+        || frame.w != 140
+        || frame.h != 8
+        || frame.angle == 0
+    {
+        return None;
+    }
+
+    let counts = state.judge_counts;
+    let total = counts.pgreat + counts.great + counts.good + counts.bad + counts.poor;
+    if total == 0 {
+        return None;
+    }
+    let total = total as f32;
+    let sweep = (frame.angle - 90).clamp(0, 360) as f32;
+    let poor = 360.0 * counts.poor as f32 / total;
+    let bad = 360.0 * (counts.poor + counts.bad) as f32 / total;
+    let good = 360.0 * (counts.poor + counts.bad + counts.good) as f32 / total;
+    let great = 360.0 * (counts.poor + counts.bad + counts.good + counts.great) as f32 / total;
+
+    Some(if sweep < poor {
+        (217, 68, 35)
+    } else if sweep < bad {
+        (226, 135, 42)
+    } else if sweep <= good {
+        (240, 190, 15)
+    } else if sweep <= great {
+        (240, 239, 10)
+    } else {
+        (8, 179, 239)
+    })
 }
 
 fn skin_image_item_for_frame(
@@ -15496,6 +15547,12 @@ mod tests {
     }
 
     #[test]
+    fn display_number_digits_uses_absolute_value_like_beatoraja_skin_number() {
+        assert_eq!(display_number_digits(-34, 2, NumberPadding::Zero), vec![3, 4]);
+        assert_eq!(display_number_digits(-34, 4, NumberPadding::Blank), vec![10, 10, 3, 4]);
+    }
+
+    #[test]
     fn skin_state_number_maps_result_value_refs() {
         let fast_slow = crate::snapshot::FastSlowJudgeCounts {
             fast_pgreat: 350,
@@ -16819,6 +16876,60 @@ mod tests {
             SkinRenderItem::RotatedImage { angle_deg, center, .. }
                 if approx_eq(angle_deg, 90.0) && approx_eq(center.x, 0.0) && approx_eq(center.y, 1.0)
         ));
+    }
+
+    #[test]
+    fn result_judge_pie_segments_use_runtime_judge_counts() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "w": 200, "h": 200,
+                "source": [{ "id": "src", "path": "jud_detail.png" }],
+                "image": [
+                    { "id": "judge_graph", "src": "src", "x": 574, "y": 1, "w": 140, "h": 8 }
+                ],
+                "destination": [
+                    { "id": "judge_graph", "dst": [{ "x": 41, "y": 241, "w": 140, "h": 8, "r": 8, "g": 179, "b": 239, "angle": 91 }] },
+                    { "id": "judge_graph", "dst": [{ "x": 41, "y": 241, "w": 140, "h": 8, "r": 8, "g": 179, "b": 239, "angle": 100 }] },
+                    { "id": "judge_graph", "dst": [{ "x": 41, "y": 241, "w": 140, "h": 8, "r": 8, "g": 179, "b": 239, "angle": 120 }] },
+                    { "id": "judge_graph", "dst": [{ "x": 41, "y": 241, "w": 140, "h": 8, "r": 8, "g": 179, "b": 239, "angle": 150 }] },
+                    { "id": "judge_graph", "dst": [{ "x": 41, "y": 241, "w": 140, "h": 8, "r": 8, "g": 179, "b": 239, "angle": 290 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        let sources = mock_source("src", 800.0, 800.0);
+        let state = SkinDrawState {
+            result_failed: Some(false),
+            judge_counts: DisplayJudgeCounts {
+                pgreat: 70,
+                great: 20,
+                good: 5,
+                bad: 3,
+                poor: 2,
+                empty_poor: 0,
+            },
+            ..SkinDrawState::default()
+        };
+        let items = document.static_image_render_items(&sources, state);
+
+        let colors = items
+            .iter()
+            .map(|item| match item {
+                SkinRenderItem::RotatedImage { tint, .. } => (
+                    (tint.r * 255.0).round() as i32,
+                    (tint.g * 255.0).round() as i32,
+                    (tint.b * 255.0).round() as i32,
+                ),
+                _ => panic!("expected rotated judge pie segment"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            colors,
+            vec![(217, 68, 35), (226, 135, 42), (240, 190, 15), (240, 239, 10), (8, 179, 239),]
+        );
     }
 
     #[test]
