@@ -81,7 +81,7 @@ cargo run
 - [ ] SELECT画面UIベースの設定変更機能
 - [ ] Fontで `BIZ UDGothic` / `Noto Sans CJK JP` / `Noto Sans JP` を優先表示
 - [ ] Select画面の操作変更とスキン側の不一致について考える
-- [ ] song search機能
+- [ ] song searchのカーソル移動機能
 
 ## Roadmap
 
@@ -89,13 +89,13 @@ cargo run
 - [x] course
 - [x] BMSON
 - [x] PMS (9K)
+- [x] csv skin (beatoraja compliant)
+- [ ] score database migration from LR2 / beatoraja
 - [ ] UE-style BMS (4K / 6K / 8K)
 - [ ] Aery-style BMS (5K / 7K)
-- [ ] csv skin (beatoraja compliant)
-- [ ] score database migration from LR2 / beatoraja
 - [ ] practice mode
-- [ ] read-only IR (LR2IR, Mocha, MinIR)
 - [ ] new IR (bmz-ir)
+- [ ] read-only IR (LR2IR, Mocha, MinIR)
 - [ ] normalizing volume per-chart
 - [ ] OBS WebSocket control integration
 - [ ] Discord Rich Presence
