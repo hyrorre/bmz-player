@@ -6809,6 +6809,7 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         }
         75 | 105 | 174 => Some(state.max_combo as i64),
         76 if state.select_screen => state.select_bp.map(|count| count as i64).or(Some(0)),
+        76 if state.result_failed.is_some() => Some(current_bp(state) as i64),
         76 => Some((state.judge_counts.bad + state.judge_counts.poor) as i64),
         77 if state.select_screen => Some(state.select_play_count as i64),
         77 => Some(state.select_target_index as i64),
@@ -6921,6 +6922,7 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         423 => state.fast_slow_counts.map(|c| c.fast_total() as i64),
         424 => state.fast_slow_counts.map(|c| c.slow_total() as i64),
         425 | 427 if state.select_screen => state.select_cb.map(|count| count as i64).or(Some(0)),
+        425 | 427 if state.result_failed.is_some() => Some(current_cb(state) as i64),
         425 | 427 => Some((state.judge_counts.bad + state.judge_counts.poor) as i64),
         426 => Some(state.judge_counts.poor as i64),
         _ => None,
@@ -7229,6 +7231,13 @@ fn select_chart_main_bpm(state: SkinDrawState) -> Option<f32> {
 fn current_bp(state: SkinDrawState) -> u32 {
     if state.result_failed.is_some() {
         return state.result_bp.unwrap_or(state.judge_counts.bad + state.judge_counts.poor);
+    }
+    state.judge_counts.bad + state.judge_counts.poor
+}
+
+fn current_cb(state: SkinDrawState) -> u32 {
+    if state.result_failed.is_some() {
+        return state.result_cb.unwrap_or(state.judge_counts.bad + state.judge_counts.poor);
     }
     state.judge_counts.bad + state.judge_counts.poor
 }
@@ -15148,11 +15157,15 @@ mod tests {
             judge_counts: DisplayJudgeCounts { bad: 1, poor: 2, ..DisplayJudgeCounts::default() },
             previous_best_bp: Some(10),
             result_bp: Some(100),
+            result_cb: Some(80),
             result_failed: Some(true),
             ..SkinDrawState::default()
         };
+        assert_eq!(skin_state_number(76, failed_record_bp_state), Some(100));
         assert_eq!(skin_state_number(177, failed_record_bp_state), Some(100));
         assert_eq!(skin_state_number(178, failed_record_bp_state), Some(90));
+        assert_eq!(skin_state_number(425, failed_record_bp_state), Some(80));
+        assert_eq!(skin_state_number(427, failed_record_bp_state), Some(80));
         assert!(!test_skin_op(332, &[], failed_record_bp_state));
         assert!(!test_skin_op(1332, &[], failed_record_bp_state));
 
