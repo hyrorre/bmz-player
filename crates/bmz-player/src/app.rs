@@ -1179,6 +1179,19 @@ impl WinitApp {
         AppViewState::Select
     }
 
+    fn current_scene_kind(&self) -> AppSceneKind {
+        if self.pending_decide.is_some() {
+            return AppSceneKind::Decide;
+        }
+        if self.active_play.is_some() || self.pending_play_start.is_some() {
+            return AppSceneKind::Play;
+        }
+        if self.finished_course.is_some() || self.finished_play.is_some() {
+            return AppSceneKind::Result;
+        }
+        AppSceneKind::Select
+    }
+
     fn scene_snapshot(&self) -> AppSceneSnapshot {
         let mut scene = match self.view_state() {
             AppViewState::Select => AppSceneSnapshot::Select(self.select_snapshot()),
@@ -5894,7 +5907,8 @@ impl WinitApp {
         let Some(window) = self.window.clone() else {
             return;
         };
-        let scene = match scene_kind(&self.scene_snapshot()) {
+        let scene_kind = self.current_scene_kind();
+        let scene = match scene_kind {
             AppSceneKind::Select => "Select",
             AppSceneKind::Decide => "Decide",
             AppSceneKind::Play => "Play",
@@ -5928,7 +5942,7 @@ impl WinitApp {
         let course_result = self.finished_course.clone();
         // Only show the course preview when the user is on the select screen
         // and the cursor is over a course row.
-        let course_preview = matches!(scene_kind(&self.scene_snapshot()), AppSceneKind::Select)
+        let course_preview = matches!(scene_kind, AppSceneKind::Select)
             .then(|| {
                 self.select_items.get(self.selected_index).and_then(|item| match item {
                     SelectItem::Course(row) => Some(row.clone()),
