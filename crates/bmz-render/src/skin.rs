@@ -7554,7 +7554,12 @@ fn graph_value(graph_type: i32, state: SkinDrawState) -> f32 {
         }
         147 => {
             // BARGRAPH_RATE_EXSCORE: ex_score so far / (past_notes * 2)
-            let max = (state.past_notes * 2) as f32;
+            let notes = if state.select_screen {
+                state.select_total_notes.max(state.total_notes)
+            } else {
+                state.past_notes
+            };
+            let max = (notes * 2) as f32;
             if max > 0.0 { state.ex_score as f32 / max } else { 0.0 }
         }
         // BARGRAPH_BESTSCORERATE_NOW (112): best score at current progress / max_ex_score.
@@ -17940,6 +17945,22 @@ mod tests {
         };
         let v = graph_value(115, state);
         assert!((v - 0.5).abs() < 1e-5, "target score rate: expected 0.5, got {v}");
+    }
+
+    #[test]
+    fn graph_value_select_rate_exscore_uses_selected_total_notes() {
+        // ECFN select uses BARGRAPH_RATE_EXSCORE (147) for the score rate bar.
+        // Select has no play-progress past_notes, so it should use the selected chart total.
+        let state = SkinDrawState {
+            select_screen: true,
+            ex_score: 418,
+            total_notes: 594,
+            select_total_notes: 594,
+            past_notes: 0,
+            ..SkinDrawState::default()
+        };
+        let v = graph_value(147, state);
+        assert!((v - (418.0 / 1188.0)).abs() < 1e-5, "select ex rate: got {v}");
     }
 
     #[test]
