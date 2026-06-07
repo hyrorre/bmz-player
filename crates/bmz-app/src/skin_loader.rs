@@ -128,6 +128,7 @@ pub struct DecodedSource {
 
 enum SourceDecodeTask {
     File { index: usize, source_id: String, path: PathBuf },
+    Video { index: usize, source_id: String, path: PathBuf },
     Builtin { index: usize, source_id: String, path: PathBuf, asset: RgbaImageAsset },
 }
 
@@ -339,7 +340,7 @@ pub fn decode_beatoraja_skin_with_options(
         .collect();
 
     // ソースは ID 順を保つため、まず resolved path リストを順次組み立て、
-    // PNG デコード本体だけを並列実行する。
+    // PNG/動画先頭フレームのデコード本体だけを並列実行する。
     let source_tasks: Vec<SourceDecodeTask> = document
         .source
         .iter()
@@ -355,7 +356,26 @@ pub fn decode_beatoraja_skin_with_options(
             }
             let source_path =
                 resolve_json_skin_source_path(&skin_root, &source.path, &document, files)?;
-            if !source_path.to_string_lossy().to_ascii_lowercase().ends_with(".png") {
+            let extension = source_path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .map(str::to_ascii_lowercase)
+                .unwrap_or_default();
+            if extension == "png" {
+                return Some(SourceDecodeTask::File {
+                    index,
+                    source_id: source.id.clone(),
+                    path: source_path,
+                });
+            }
+            if is_skin_video_source_extension(&extension) {
+                return Some(SourceDecodeTask::Video {
+                    index,
+                    source_id: source.id.clone(),
+                    path: source_path,
+                });
+            }
+            {
                 tracing::debug!(
                     source_id = %source.id,
                     path = %source_path.display(),
@@ -363,7 +383,6 @@ pub fn decode_beatoraja_skin_with_options(
                 );
                 return None;
             }
-            Some(SourceDecodeTask::File { index, source_id: source.id.clone(), path: source_path })
         })
         .collect();
 
@@ -392,6 +411,20 @@ pub fn decode_beatoraja_skin_with_options(
                                 "skipping unused missing beatoraja skin source"
                             );
                         }
+                        None
+                    }
+                }
+            }
+            SourceDecodeTask::Video { index, source_id, path: source_path } => {
+                match load_skin_video_first_frame_rgba(&source_path) {
+                    Ok(asset) => Some((index, source_id, source_path, asset)),
+                    Err(error) => {
+                        tracing::warn!(
+                            source_id = %source_id,
+                            path = %source_path.display(),
+                            %error,
+                            "failed to load beatoraja skin video source"
+                        );
                         None
                     }
                 }
@@ -428,6 +461,16 @@ fn lr2_builtin_source_asset(path: &str) -> Option<RgbaImageAsset> {
         _ => return None,
     };
     Some(RgbaImageAsset { width: 1, height: 1, pixels: pixel.to_vec() })
+}
+
+fn is_skin_video_source_extension(extension: &str) -> bool {
+    matches!(extension, "mp4" | "wmv" | "m4v" | "webm" | "mpg" | "mpeg" | "m1v" | "m2v" | "avi")
+}
+
+fn load_skin_video_first_frame_rgba(path: &Path) -> Result<RgbaImageAsset> {
+    let frame = bmz_video::decode_first_frame(path)
+        .with_context(|| format!("failed to decode first video frame: {}", path.display()))?;
+    Ok(RgbaImageAsset { width: frame.width, height: frame.height, pixels: frame.rgba })
 }
 
 fn load_skin_document(
@@ -1120,6 +1163,29 @@ mod tests {
         let mut renderer = Renderer::default();
 
         apply_beatoraja_select_json_skin(&mut renderer, &skin_path).unwrap();
+    }
+
+    #[test]
+    fn ecfn_select_lua_skin_decodes_movie_source_first_frame_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/ECFN/select/select.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let decoded = decode_beatoraja_skin_with_options(
+            &skin_path,
+            SkinKind::Select,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        let mv = decoded.sources.iter().find(|source| source.source_id == "mv").unwrap();
+
+        assert!(mv.path.to_string_lossy().ends_with("mv/default.mp4"));
+        assert!(mv.asset.width > 0);
+        assert!(mv.asset.height > 0);
+        assert_eq!(mv.asset.pixels.len(), mv.asset.width as usize * mv.asset.height as usize * 4);
     }
 
     #[test]

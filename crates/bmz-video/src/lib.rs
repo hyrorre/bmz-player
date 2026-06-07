@@ -54,6 +54,46 @@ impl VideoBgaDecoder {
     }
 }
 
+pub fn decode_first_frame(path: &Path) -> Result<DecodedFrame> {
+    bmz_ffmpeg::ensure_init().map_err(|e| anyhow::anyhow!(e))?;
+
+    let mut ictx = ffmpeg_next::format::input(path)?;
+    let stream = ictx
+        .streams()
+        .best(ffmpeg_next::media::Type::Video)
+        .ok_or_else(|| anyhow::anyhow!("no video stream found"))?;
+
+    let stream_index = stream.index();
+    let time_base_num = stream.time_base().numerator() as i64;
+    let time_base_den = stream.time_base().denominator() as i64;
+    let context = ffmpeg_next::codec::context::Context::from_parameters(stream.parameters())?;
+    let mut decoder = context.decoder().video()?;
+    let mut decoded = ffmpeg_next::frame::Video::empty();
+
+    for (stream, packet) in ictx.packets() {
+        if stream.index() != stream_index {
+            continue;
+        }
+        decoder.send_packet(&packet)?;
+        loop {
+            match decoder.receive_frame(&mut decoded) {
+                Ok(()) => return rgba_frame_from_video(&decoded, time_base_num, time_base_den),
+                Err(ffmpeg_next::Error::Other { errno: ffmpeg_next::error::EAGAIN }) => break,
+                Err(ffmpeg_next::Error::Eof) => {
+                    return Err(anyhow::anyhow!("video ended before first frame"));
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+    }
+
+    decoder.send_eof()?;
+    match decoder.receive_frame(&mut decoded) {
+        Ok(()) => rgba_frame_from_video(&decoded, time_base_num, time_base_den),
+        Err(e) => Err(e.into()),
+    }
+}
+
 fn decode_video(path: &Path, sender: SyncSender<DecodedFrame>) -> Result<()> {
     let mut ictx = ffmpeg_next::format::input(path)?;
 
@@ -99,46 +139,12 @@ fn decode_video(path: &Path, sender: SyncSender<DecodedFrame>) -> Result<()> {
                 Err(e) => return Err(e.into()),
             }
 
-            let w = decoded.width();
-            let h = decoded.height();
-
-            // スケーラを lazily 作成
-            if scaler.is_none() {
-                scaler = Some(ffmpeg_next::software::scaling::context::Context::get(
-                    decoded.format(),
-                    w,
-                    h,
-                    ffmpeg_next::format::Pixel::RGBA,
-                    w,
-                    h,
-                    ffmpeg_next::software::scaling::flag::Flags::BILINEAR,
-                )?);
-            }
-
-            let scaler = scaler.as_mut().unwrap();
-            let mut rgba_frame = ffmpeg_next::frame::Video::empty();
-            scaler.run(&decoded, &mut rgba_frame)?;
-
-            // PTS を µs に変換
-            let pts_raw = decoded.pts().unwrap_or(0);
-            let pts_us = if time_base_den != 0 {
-                pts_raw * time_base_num * 1_000_000 / time_base_den
-            } else {
-                0
-            };
-
-            // ストライドに注意してRGBAデータをコピー
-            let data = rgba_frame.data(0);
-            let stride = rgba_frame.stride(0);
-            let row_bytes = (w as usize) * 4;
-            let mut rgba = vec![0u8; row_bytes * h as usize];
-            for row in 0..h as usize {
-                let src = &data[row * stride..row * stride + row_bytes];
-                let dst = &mut rgba[row * row_bytes..(row + 1) * row_bytes];
-                dst.copy_from_slice(src);
-            }
-
-            let frame = DecodedFrame { pts_us, rgba, width: w, height: h };
+            let frame = rgba_frame_from_video_with_scaler(
+                &decoded,
+                time_base_num,
+                time_base_den,
+                &mut scaler,
+            )?;
 
             if sender.send(frame).is_err() {
                 // receiver が drop された
@@ -157,36 +163,62 @@ fn decode_video(path: &Path, sender: SyncSender<DecodedFrame>) -> Result<()> {
             Err(e) => return Err(e.into()),
         }
 
-        let w = decoded.width();
-        let h = decoded.height();
-
-        if let Some(scaler) = scaler.as_mut() {
-            let mut rgba_frame = ffmpeg_next::frame::Video::empty();
-            scaler.run(&decoded, &mut rgba_frame)?;
-
-            let pts_raw = decoded.pts().unwrap_or(0);
-            let pts_us = if time_base_den != 0 {
-                pts_raw * time_base_num * 1_000_000 / time_base_den
-            } else {
-                0
-            };
-
-            let data = rgba_frame.data(0);
-            let stride = rgba_frame.stride(0);
-            let row_bytes = (w as usize) * 4;
-            let mut rgba = vec![0u8; row_bytes * h as usize];
-            for row in 0..h as usize {
-                let src = &data[row * stride..row * stride + row_bytes];
-                let dst = &mut rgba[row * row_bytes..(row + 1) * row_bytes];
-                dst.copy_from_slice(src);
-            }
-
-            let frame = DecodedFrame { pts_us, rgba, width: w, height: h };
-            if sender.send(frame).is_err() {
-                return Ok(());
-            }
+        let frame =
+            rgba_frame_from_video_with_scaler(&decoded, time_base_num, time_base_den, &mut scaler)?;
+        if sender.send(frame).is_err() {
+            return Ok(());
         }
     }
 
     Ok(())
+}
+
+fn rgba_frame_from_video(
+    decoded: &ffmpeg_next::frame::Video,
+    time_base_num: i64,
+    time_base_den: i64,
+) -> Result<DecodedFrame> {
+    let mut scaler = None;
+    rgba_frame_from_video_with_scaler(decoded, time_base_num, time_base_den, &mut scaler)
+}
+
+fn rgba_frame_from_video_with_scaler(
+    decoded: &ffmpeg_next::frame::Video,
+    time_base_num: i64,
+    time_base_den: i64,
+    scaler: &mut Option<ffmpeg_next::software::scaling::context::Context>,
+) -> Result<DecodedFrame> {
+    let w = decoded.width();
+    let h = decoded.height();
+
+    if scaler.is_none() {
+        *scaler = Some(ffmpeg_next::software::scaling::context::Context::get(
+            decoded.format(),
+            w,
+            h,
+            ffmpeg_next::format::Pixel::RGBA,
+            w,
+            h,
+            ffmpeg_next::software::scaling::flag::Flags::BILINEAR,
+        )?);
+    }
+
+    let mut rgba_frame = ffmpeg_next::frame::Video::empty();
+    scaler.as_mut().unwrap().run(decoded, &mut rgba_frame)?;
+
+    let pts_raw = decoded.pts().unwrap_or(0);
+    let pts_us =
+        if time_base_den != 0 { pts_raw * time_base_num * 1_000_000 / time_base_den } else { 0 };
+
+    let data = rgba_frame.data(0);
+    let stride = rgba_frame.stride(0);
+    let row_bytes = (w as usize) * 4;
+    let mut rgba = vec![0u8; row_bytes * h as usize];
+    for row in 0..h as usize {
+        let src = &data[row * stride..row * stride + row_bytes];
+        let dst = &mut rgba[row * row_bytes..(row + 1) * row_bytes];
+        dst.copy_from_slice(src);
+    }
+
+    Ok(DecodedFrame { pts_us, rgba, width: w, height: h })
 }
