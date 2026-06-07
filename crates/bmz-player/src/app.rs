@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -22,7 +22,7 @@ use bmz_render::assets::{RgbaImageAsset, load_static_rgba_image};
 use bmz_render::plan::{
     PLAY_BACKBMP_TEXTURE, Rect, SELECT_BANNER_TEXTURE, SELECT_STAGE_TEXTURE, TextureId,
 };
-use bmz_render::renderer::{RenderSurfaceStatus, Renderer, SurfaceSize};
+use bmz_render::renderer::{RenderFrameTimings, RenderSurfaceStatus, Renderer, SurfaceSize};
 use bmz_render::scene::{
     AppSceneSnapshot, ResultSnapshot, SelectChartDistributionSecond, SelectRowSnapshot,
     SelectSnapshot,
@@ -114,8 +114,8 @@ use crate::storage::score_db::ScoreDatabase;
 use crate::storage::score_import::{ScoreImportRequest, import_scores};
 use crate::ui::{DebugInfo, EguiLayer, SceneSkinDefs, SkinCandidate, SkinCatalog, SkinConfigMeta};
 use bmz_render::skin::{
-    DestinationListEntry, SkinAnimationDef, SkinClickHit, SkinClickTarget, SkinDocument,
-    SkinDocumentTexture, SkinDstEntry, SkinManifest, SkinSliderHit,
+    DestinationListEntry, SkinAnimationDef, SkinClickHit, SkinClickTarget, SkinDestinationDef,
+    SkinDocument, SkinDocumentTexture, SkinDstEntry, SkinManifest, SkinSliderHit,
 };
 const SAMPLE_PLAYABLE_TITLE: &str = "BMZ Sample Playable";
 
@@ -242,6 +242,7 @@ struct WinitApp {
     play_table_text_fallback: String,
     select_items: Vec<SelectItem>,
     select_distribution_cache: RefCell<HashMap<i64, Vec<ChartDistributionSecond>>>,
+    table_breadcrumb_cache: RefCell<HashMap<String, TableBreadcrumb>>,
     select_folder_summary_cache: HashMap<String, SelectFolderSummaryCacheEntry>,
     select_folder_summary_tx: mpsc::Sender<SelectFolderSummaryResult>,
     select_folder_summary_rx: Receiver<SelectFolderSummaryResult>,
@@ -379,8 +380,8 @@ struct WinitApp {
     search_query: String,
     /// 直近のマウスカーソル位置。select skin のクリック hit-test に使う。
     last_cursor_position: Option<PhysicalPosition<f64>>,
-    /// select skin slider をドラッグ中なら true。
-    select_slider_dragging: bool,
+    /// ドラッグ中の select skin slider type。
+    select_slider_dragging_type: Option<i32>,
     /// IME 変換中の未確定文字列 (Preedit)。Commit で空になり search_query に追加される。
     search_preedit: String,
     /// 直近の検索クエリ履歴 (古い順)。`bmz-search:<q>` 仮想フォルダとしてルートに並ぶ。
@@ -392,6 +393,7 @@ struct WinitApp {
     practice_session: Option<PracticeSession>,
     /// 次の `RunningPlaySession::start` で使う chart zero（区間先頭の 1 秒前）。
     practice_chart_zero_time: Option<TimeUs>,
+    select_frame_profiler: SelectFrameProfiler,
 }
 
 struct ActiveSkinVideoSource {
@@ -399,7 +401,77 @@ struct ActiveSkinVideoSource {
     path: PathBuf,
     decoder: Option<VideoBgaDecoder>,
     last_pts: Option<i64>,
+    loop_start_us: i64,
+    active: bool,
     failed: bool,
+}
+
+#[derive(Debug, Default)]
+struct SelectFrameProfiler {
+    frames: u32,
+    video_us: u128,
+    snapshot_us: u128,
+    render_us: u128,
+    plan_us: u128,
+    draw_us: u128,
+    text_us: u128,
+    geometry_us: u128,
+    upload_us: u128,
+    submit_us: u128,
+    commands: u128,
+}
+
+impl SelectFrameProfiler {
+    const LOG_EVERY_FRAMES: u32 = 120;
+
+    fn record(
+        &mut self,
+        video_us: u128,
+        snapshot_us: u128,
+        render_us: u128,
+        timings: Option<RenderFrameTimings>,
+    ) {
+        self.frames += 1;
+        self.video_us += video_us;
+        self.snapshot_us += snapshot_us;
+        self.render_us += render_us;
+        if let Some(timings) = timings {
+            self.plan_us += timings.plan_us;
+            self.draw_us += timings.draw_us;
+            self.text_us += timings.text_us;
+            self.geometry_us += timings.geometry_us;
+            self.upload_us += timings.upload_us;
+            self.submit_us += timings.submit_us;
+            self.commands += timings.commands as u128;
+        }
+        if self.frames >= Self::LOG_EVERY_FRAMES {
+            self.log_and_reset();
+        }
+    }
+
+    fn log_and_reset(&mut self) {
+        let frames = self.frames.max(1) as u128;
+        tracing::debug!(
+            target: "bmz_player::select_profile",
+            frames = self.frames,
+            video_ms = fmt_profile_ms(self.video_us, frames),
+            snapshot_ms = fmt_profile_ms(self.snapshot_us, frames),
+            render_ms = fmt_profile_ms(self.render_us, frames),
+            plan_ms = fmt_profile_ms(self.plan_us, frames),
+            draw_ms = fmt_profile_ms(self.draw_us, frames),
+            text_ms = fmt_profile_ms(self.text_us, frames),
+            geometry_ms = fmt_profile_ms(self.geometry_us, frames),
+            upload_ms = fmt_profile_ms(self.upload_us, frames),
+            submit_ms = fmt_profile_ms(self.submit_us, frames),
+            commands = (self.commands / frames) as u64,
+            "select frame profile"
+        );
+        *self = Self::default();
+    }
+}
+
+fn fmt_profile_ms(total_us: u128, frames: u128) -> String {
+    format!("{:.3}", total_us as f64 / frames as f64 / 1000.0)
 }
 
 type PlaySkinSignature = (KeyMode, String, BTreeMap<String, String>, BTreeMap<String, String>);
@@ -458,6 +530,12 @@ enum SelectFolderSummaryCacheEntry {
 struct SelectFolderSummaryResult {
     key: String,
     result: std::result::Result<Option<SelectFolderSummary>, String>,
+}
+
+#[derive(Debug, Clone)]
+struct TableBreadcrumb {
+    name: String,
+    symbol: String,
 }
 
 struct DecideTransition {
@@ -946,6 +1024,7 @@ impl WinitApp {
             play_table_text_fallback: String::new(),
             select_items,
             select_distribution_cache: RefCell::new(HashMap::new()),
+            table_breadcrumb_cache: RefCell::new(HashMap::new()),
             select_folder_summary_cache: HashMap::new(),
             select_folder_summary_tx,
             select_folder_summary_rx,
@@ -1039,12 +1118,13 @@ impl WinitApp {
             search_mode: false,
             search_query: String::new(),
             last_cursor_position: None,
-            select_slider_dragging: false,
+            select_slider_dragging_type: None,
             search_preedit: String::new(),
             search_history: std::collections::VecDeque::new(),
             search_message: None,
             practice_session: None,
             practice_chart_zero_time: None,
+            select_frame_profiler: SelectFrameProfiler::default(),
         };
         if let Some(chart_id) = boot_chart_id {
             if options.boot_practice {
@@ -1114,23 +1194,9 @@ impl WinitApp {
                 let window = Arc::new(window);
                 window.set_visible(true);
                 let size = surface_size_for_window(&window);
-                // サーフェス生成前に VSync とバックエンド設定を反映させておく。
-                self.renderer.set_vsync(self.boot.app_config.video.vsync);
-                let backend = match self.boot.app_config.video.renderer {
-                    crate::config::app_config::RendererBackend::Auto => {
-                        bmz_render::WgpuBackend::Auto
-                    }
-                    crate::config::app_config::RendererBackend::Vulkan => {
-                        bmz_render::WgpuBackend::Vulkan
-                    }
-                    crate::config::app_config::RendererBackend::Metal => {
-                        bmz_render::WgpuBackend::Metal
-                    }
-                    crate::config::app_config::RendererBackend::Dx12 => {
-                        bmz_render::WgpuBackend::Dx12
-                    }
-                    crate::config::app_config::RendererBackend::Gl => bmz_render::WgpuBackend::Gl,
-                };
+                // サーフェス生成前に present mode とバックエンド設定を反映させておく。
+                self.renderer.set_present_mode(config_present_mode(&self.boot.app_config.video));
+                let backend = config_renderer_backend(self.boot.app_config.video.renderer.clone());
                 self.renderer.set_backend(backend);
                 if let Err(error) = self.renderer.attach_surface(Arc::clone(&window), size) {
                     tracing::error!(%error, "failed to initialize renderer surface");
@@ -1218,6 +1284,19 @@ impl WinitApp {
         }
 
         AppViewState::Select
+    }
+
+    fn current_scene_kind(&self) -> AppSceneKind {
+        if self.pending_decide.is_some() {
+            return AppSceneKind::Decide;
+        }
+        if self.active_play.is_some() || self.pending_play_start.is_some() {
+            return AppSceneKind::Play;
+        }
+        if self.finished_course.is_some() || self.finished_play.is_some() {
+            return AppSceneKind::Result;
+        }
+        AppSceneKind::Select
     }
 
     fn scene_snapshot(&self) -> AppSceneSnapshot {
@@ -1376,22 +1455,45 @@ impl WinitApp {
         }
     }
 
+    fn fallback_table_breadcrumb(source_url: &str) -> TableBreadcrumb {
+        TableBreadcrumb {
+            name: std::path::Path::new(source_url)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(source_url)
+                .to_string(),
+            symbol: String::new(),
+        }
+    }
+
+    fn table_breadcrumb(&self, source_url: &str) -> TableBreadcrumb {
+        if let Some(cached) = self.table_breadcrumb_cache.borrow().get(source_url) {
+            return cached.clone();
+        }
+
+        let mut cache = self.table_breadcrumb_cache.borrow_mut();
+        if let Ok(tables) = self.boot.library_db.list_difficulty_tables() {
+            for table in tables {
+                cache.insert(
+                    table.source_url,
+                    TableBreadcrumb {
+                        name: format!("[{}] {}", table.symbol, table.name),
+                        symbol: table.symbol,
+                    },
+                );
+            }
+        }
+
+        cache
+            .entry(source_url.to_string())
+            .or_insert_with(|| Self::fallback_table_breadcrumb(source_url))
+            .clone()
+    }
+
     /// 難易度表のパンくず表示名。テーブルが既知なら `[symbol] name`、
     /// 不明なら URL のファイル名部分にフォールバックする。
     fn table_breadcrumb_name(&self, source_url: &str) -> String {
-        self.boot
-            .library_db
-            .list_difficulty_tables()
-            .ok()
-            .and_then(|ts| ts.into_iter().find(|t| t.source_url == source_url))
-            .map(|t| format!("[{}] {}", t.symbol, t.name))
-            .unwrap_or_else(|| {
-                std::path::Path::new(source_url)
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or(source_url)
-                    .to_string()
-            })
+        self.table_breadcrumb(source_url).name
     }
 
     fn table_text_context_for_chart(&self, chart_id: i64) -> (String, String, String) {
@@ -1438,16 +1540,8 @@ impl WinitApp {
                 Some(TablePath::Root) | None => "難易度表".to_string(),
                 Some(TablePath::Table { source_url }) => self.table_breadcrumb_name(source_url),
                 Some(TablePath::Level { source_url, level }) => {
-                    let table_name = self.table_breadcrumb_name(source_url);
-                    let symbol = self
-                        .boot
-                        .library_db
-                        .list_difficulty_tables()
-                        .ok()
-                        .and_then(|ts| ts.into_iter().find(|t| t.source_url == source_url))
-                        .map(|t| t.symbol)
-                        .unwrap_or_default();
-                    format!("{table_name} > {symbol}{level}")
+                    let table = self.table_breadcrumb(source_url);
+                    format!("{} > {}{}", table.name, table.symbol, level)
                 }
             },
             Some(path) if in_settings_stack(std::slice::from_ref(path)) => {
@@ -3094,14 +3188,11 @@ impl WinitApp {
 
     fn route_mouse_input(&mut self, state: ElementState, button: MouseButton) {
         if !matches!(self.view_state(), AppViewState::Select) {
-            self.select_slider_dragging = false;
+            self.select_slider_dragging_type = None;
             return;
         }
         if state == ElementState::Released {
-            if self.select_slider_dragging {
-                self.select_slider_dragging = false;
-                self.save_select_slider_profile();
-            }
+            self.select_slider_dragging_type = None;
             return;
         }
         if state != ElementState::Pressed {
@@ -3114,7 +3205,7 @@ impl WinitApp {
         if button == MouseButton::Left
             && let Some(hit) = self.renderer.select_skin_slider_hit(&snapshot, x, y)
         {
-            self.select_slider_dragging = true;
+            self.select_slider_dragging_type = Some(hit.slider_type);
             self.apply_select_slider_hit(hit);
             return;
         }
@@ -3125,7 +3216,9 @@ impl WinitApp {
     }
 
     fn route_select_slider_drag(&mut self) {
-        if !self.select_slider_dragging || !matches!(self.view_state(), AppViewState::Select) {
+        if self.select_slider_dragging_type.is_none()
+            || !matches!(self.view_state(), AppViewState::Select)
+        {
             return;
         }
         let Some((x, y)) = self.cursor_position_normalized() else {
@@ -3151,36 +3244,44 @@ impl WinitApp {
     }
 
     fn apply_select_slider_hit(&mut self, hit: SkinSliderHit) {
-        let value = volume_f32_to_unit(hit.value);
-        let mix = &mut self.boot.profile_config.audio_mix;
         match hit.slider_type {
-            17 if mix.master_volume != value => {
-                mix.master_volume = value;
-                self.sync_realtime_profile_settings();
-                tracing::info!(value, "select skin master volume changed");
+            1 => self.apply_select_scroll_slider(hit.value),
+            17..=19 => {
+                let value = volume_f32_to_unit(hit.value);
+                let mix = &mut self.boot.profile_config.audio_mix;
+                match hit.slider_type {
+                    17 if mix.master_volume != value => {
+                        mix.master_volume = value;
+                        self.sync_realtime_profile_settings();
+                        tracing::info!(value, "select skin master volume changed");
+                    }
+                    18 if mix.key_volume != value => {
+                        mix.key_volume = value;
+                        self.sync_realtime_profile_settings();
+                        tracing::info!(value, "select skin key volume changed");
+                    }
+                    19 if mix.bgm_volume != value => {
+                        mix.bgm_volume = value;
+                        self.sync_realtime_profile_settings();
+                        tracing::info!(value, "select skin bgm volume changed");
+                    }
+                    _ => {}
+                }
             }
-            18 if mix.key_volume != value => {
-                mix.key_volume = value;
-                self.sync_realtime_profile_settings();
-                tracing::info!(value, "select skin key volume changed");
-            }
-            19 if mix.bgm_volume != value => {
-                mix.bgm_volume = value;
-                self.sync_realtime_profile_settings();
-                tracing::info!(value, "select skin bgm volume changed");
-            }
-            17..=19 => {}
             _ => {
                 tracing::debug!(slider_type = hit.slider_type, "unsupported select skin slider");
             }
         }
     }
 
-    fn save_select_slider_profile(&mut self) {
-        match save_profile_config(&self.boot.profile_paths.profile_toml, &self.boot.profile_config)
-        {
-            Ok(()) => tracing::info!("profile config saved from select skin slider"),
-            Err(error) => tracing::error!(%error, "failed to save profile config"),
+    fn apply_select_scroll_slider(&mut self, value: f32) {
+        let Some(next) = select_scroll_slider_index(value, self.select_items.len()) else {
+            return;
+        };
+        if self.selected_index != next {
+            self.selected_index = next;
+            self.select_bar_started_at = Instant::now();
+            self.play_system_sound(crate::system_sound::SoundType::Scratch);
         }
     }
 
@@ -3199,17 +3300,20 @@ impl WinitApp {
     }
 
     fn handle_select_row_click(&mut self, row_index: u32, button: MouseButton) {
-        match button {
-            MouseButton::Left => {
-                let next = row_index as usize;
-                if next < self.select_items.len() && self.selected_index != next {
-                    self.selected_index = next;
-                    self.select_bar_started_at = Instant::now();
-                    self.play_system_sound(crate::system_sound::SoundType::Scratch);
-                }
+        match select_row_click_action(
+            row_index,
+            button,
+            self.selected_index,
+            self.select_items.len(),
+        ) {
+            Some(SelectRowClickAction::Select(next)) => {
+                self.selected_index = next;
+                self.select_bar_started_at = Instant::now();
+                self.play_system_sound(crate::system_sound::SoundType::Scratch);
             }
-            MouseButton::Right => self.exit_folder(),
-            _ => {}
+            Some(SelectRowClickAction::EnterOrPlay) => self.enter_or_play_selected(),
+            Some(SelectRowClickAction::ExitFolder) => self.exit_folder(),
+            None => {}
         }
     }
 
@@ -5601,6 +5705,7 @@ impl WinitApp {
             Ok(Ok(())) => {
                 tracing::info!("table fetch complete");
                 self.pending_table_fetch = None;
+                self.table_breadcrumb_cache.borrow_mut().clear();
                 self.reload_select_items();
             }
             Ok(Err(error)) => {
@@ -5830,11 +5935,14 @@ impl WinitApp {
             let PreparedSource { source_id, path, texture, prepared, size, is_video } = source;
             self.renderer.insert_prepared_texture(TextureId(texture.0), prepared);
             if is_video {
+                let active = skin_video_source_is_enabled(&document, &source_id);
                 video_sources.push(ActiveSkinVideoSource {
                     texture,
                     path,
                     decoder: None,
                     last_pts: None,
+                    loop_start_us: 0,
+                    active,
                     failed: false,
                 });
             }
@@ -6164,7 +6272,8 @@ impl WinitApp {
         let Some(window) = self.window.clone() else {
             return;
         };
-        let scene = match scene_kind(&self.scene_snapshot()) {
+        let scene_kind = self.current_scene_kind();
+        let scene = match scene_kind {
             AppSceneKind::Select => "Select",
             AppSceneKind::Decide => "Decide",
             AppSceneKind::Play => "Play",
@@ -6198,7 +6307,7 @@ impl WinitApp {
         let course_result = self.finished_course.clone();
         // Only show the course preview when the user is on the select screen
         // and the cursor is over a course row.
-        let course_preview = matches!(scene_kind(&self.scene_snapshot()), AppSceneKind::Select)
+        let course_preview = matches!(scene_kind, AppSceneKind::Select)
             .then(|| {
                 self.select_items.get(self.selected_index).and_then(|item| match item {
                     SelectItem::Course(row) => Some(row.clone()),
@@ -6244,8 +6353,8 @@ impl WinitApp {
         // デバッグパネルの開閉状態を profile config へ同期する。
         // 永続化は終了時 / プレイ後の save_profile_config に任せる。
         self.boot.profile_config.ui.show_fps = output.debug_panel_visible;
-        // 本体設定パネルでの VSync 変更を即座に反映する (set_vsync は変化時のみ再構成)。
-        self.renderer.set_vsync(self.boot.app_config.video.vsync);
+        // 本体設定パネルでの present mode 変更を即座に反映する。
+        self.renderer.set_present_mode(config_present_mode(&self.boot.app_config.video));
         // ウィンドウモード変更をライブ反映する (差分があるときのみ適用)。
         let desired_mode = self.boot.app_config.video.mode.clone();
         if desired_mode != self.applied_window_mode {
@@ -6477,7 +6586,7 @@ impl WinitApp {
             return;
         };
         for source in sources {
-            if source.failed {
+            if source.failed || !source.active {
                 continue;
             }
             if source.decoder.is_none() {
@@ -6508,15 +6617,16 @@ impl WinitApp {
             let Some(decoder) = source.decoder.as_mut() else {
                 continue;
             };
-            if let Some(frame) = decoder.poll_frame(elapsed_us)
+            let video_offset_us = elapsed_us.saturating_sub(source.loop_start_us);
+            if let Some(frame) = decoder.poll_frame(video_offset_us)
                 && source.last_pts != Some(frame.pts_us)
             {
                 let pts = frame.pts_us;
-                match self.renderer.upsert_rgba_texture(
+                match self.renderer.upsert_rgba_texture_ref(
                     TextureId(source.texture.0),
                     frame.width,
                     frame.height,
-                    frame.rgba.clone(),
+                    &frame.rgba,
                 ) {
                     Ok(()) => {
                         source.last_pts = Some(pts);
@@ -6531,6 +6641,11 @@ impl WinitApp {
                         );
                     }
                 }
+            }
+            if source.decoder.as_ref().is_some_and(VideoBgaDecoder::is_finished) {
+                source.decoder = None;
+                source.last_pts = None;
+                source.loop_start_us = elapsed_us;
             }
         }
     }
@@ -6550,7 +6665,10 @@ impl WinitApp {
     }
 
     fn render_current_scene(&mut self) {
-        if matches!(self.view_state(), AppViewState::Select) {
+        let select_view = matches!(self.view_state(), AppViewState::Select);
+        let profiling_select = select_view
+            && tracing::enabled!(target: "bmz_player::select_profile", tracing::Level::DEBUG);
+        if select_view {
             self.refresh_visible_select_folder_summaries();
             self.poll_select_asset_loads();
             self.sync_select_stage_texture();
@@ -6559,8 +6677,12 @@ impl WinitApp {
             self.sync_select_preview_audio();
             self.update_select_preview_fade();
         }
+        let video_start = Instant::now();
         self.update_current_skin_video_sources();
+        let video_us = video_start.elapsed().as_micros();
+        let snapshot_start = Instant::now();
         let scene = self.scene_snapshot();
+        let snapshot_us = snapshot_start.elapsed().as_micros();
         let scene_kind = scene_kind(&scene);
         self.update_window_title_for_scene(scene_kind);
         if let (Some(path), Some(exit_after_frames)) =
@@ -6569,7 +6691,18 @@ impl WinitApp {
         {
             self.renderer.request_screenshot(path.clone());
         }
-        match self.renderer.render_scene_status(scene) {
+        let render_start = Instant::now();
+        let render_status = self.renderer.render_scene_status(scene);
+        let render_us = render_start.elapsed().as_micros();
+        if profiling_select {
+            self.select_frame_profiler.record(
+                video_us,
+                snapshot_us,
+                render_us,
+                self.renderer.last_frame_timings(),
+            );
+        }
+        match render_status {
             Ok(RenderSurfaceStatus::Rendered)
             | Ok(RenderSurfaceStatus::SkippedNoSurface)
             | Ok(RenderSurfaceStatus::SkippedZeroSize) => {}
@@ -7057,9 +7190,77 @@ fn skin_video_sources_from_decoded(decoded: &DecodedSkin) -> Vec<ActiveSkinVideo
             path: source.path.clone(),
             decoder: None,
             last_pts: None,
+            loop_start_us: 0,
+            active: skin_video_source_is_enabled(&decoded.document, &source.source_id),
             failed: false,
         })
         .collect()
+}
+
+fn skin_video_source_is_enabled(document: &SkinDocument, source_id: &str) -> bool {
+    let image_ids: HashSet<&str> = document
+        .image
+        .iter()
+        .filter(|image| image.src == source_id)
+        .map(|image| image.id.as_str())
+        .collect();
+    if image_ids.is_empty() {
+        return true;
+    }
+
+    let mut render_object_ids = image_ids.clone();
+    for imageset in &document.imageset {
+        if imageset.images.iter().any(|id| image_ids.contains(id.as_str())) {
+            render_object_ids.insert(imageset.id.as_str());
+        }
+    }
+
+    let property_ops: HashSet<i32> = document
+        .property
+        .iter()
+        .flat_map(|property| property.item.iter().filter_map(|item| item.op.checked_abs()))
+        .collect();
+    let enabled_options = document.enabled_options();
+    let mut referenced = false;
+    for destination in skin_document_destinations(document) {
+        if !render_object_ids.contains(destination.id.as_str()) {
+            continue;
+        }
+        referenced = true;
+        if destination_property_ops_allow(&destination.op, &enabled_options, &property_ops) {
+            return true;
+        }
+    }
+    !referenced
+}
+
+fn skin_document_destinations(document: &SkinDocument) -> Vec<&SkinDestinationDef> {
+    document
+        .destination
+        .iter()
+        .flat_map(|entry| match entry {
+            DestinationListEntry::Single(destination) => vec![destination],
+            DestinationListEntry::Conditional { destinations, .. } => {
+                destinations.iter().collect::<Vec<_>>()
+            }
+        })
+        .collect()
+}
+
+fn destination_property_ops_allow(
+    ops: &[i32],
+    enabled_options: &[i32],
+    property_ops: &HashSet<i32>,
+) -> bool {
+    ops.iter().all(|op| {
+        let Some(abs_op) = op.checked_abs() else {
+            return true;
+        };
+        if !property_ops.contains(&abs_op) {
+            return true;
+        }
+        if *op >= 0 { enabled_options.contains(op) } else { !enabled_options.contains(&abs_op) }
+    })
 }
 
 fn spawn_skin_decode(
@@ -7307,6 +7508,48 @@ fn load_chart_bga_textures(renderer: &mut Renderer, chart: &PlayableChart) -> Bg
 
 fn format_error_chain(error: &anyhow::Error) -> String {
     error.chain().map(ToString::to_string).collect::<Vec<_>>().join(": ")
+}
+
+fn config_renderer_backend(
+    backend: crate::config::app_config::RendererBackend,
+) -> bmz_render::WgpuBackend {
+    match backend {
+        crate::config::app_config::RendererBackend::Auto => bmz_render::WgpuBackend::Auto,
+        crate::config::app_config::RendererBackend::Vulkan => bmz_render::WgpuBackend::Vulkan,
+        crate::config::app_config::RendererBackend::Metal => bmz_render::WgpuBackend::Metal,
+        crate::config::app_config::RendererBackend::Dx12 => bmz_render::WgpuBackend::Dx12,
+        crate::config::app_config::RendererBackend::Gl => bmz_render::WgpuBackend::Gl,
+    }
+}
+
+fn config_present_mode(
+    video: &crate::config::app_config::VideoConfig,
+) -> bmz_render::WgpuPresentMode {
+    match video.present_mode {
+        crate::config::app_config::PresentModeConfig::Auto => {
+            if video.vsync {
+                bmz_render::WgpuPresentMode::AutoVsync
+            } else {
+                bmz_render::WgpuPresentMode::AutoNoVsync
+            }
+        }
+        crate::config::app_config::PresentModeConfig::AutoVsync => {
+            bmz_render::WgpuPresentMode::AutoVsync
+        }
+        crate::config::app_config::PresentModeConfig::AutoNoVsync => {
+            bmz_render::WgpuPresentMode::AutoNoVsync
+        }
+        crate::config::app_config::PresentModeConfig::Immediate => {
+            bmz_render::WgpuPresentMode::Immediate
+        }
+        crate::config::app_config::PresentModeConfig::Mailbox => {
+            bmz_render::WgpuPresentMode::Mailbox
+        }
+        crate::config::app_config::PresentModeConfig::Fifo => bmz_render::WgpuPresentMode::Fifo,
+        crate::config::app_config::PresentModeConfig::FifoRelaxed => {
+            bmz_render::WgpuPresentMode::FifoRelaxed
+        }
+    }
 }
 
 impl ApplicationHandler for WinitApp {
@@ -8758,6 +9001,46 @@ enum SelectMove {
     Last,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SelectRowClickAction {
+    Select(usize),
+    EnterOrPlay,
+    ExitFolder,
+}
+
+fn select_row_click_action(
+    row_index: u32,
+    button: MouseButton,
+    selected_index: usize,
+    item_len: usize,
+) -> Option<SelectRowClickAction> {
+    match button {
+        MouseButton::Left => {
+            let next = row_index as usize;
+            if next >= item_len {
+                None
+            } else if next == selected_index {
+                Some(SelectRowClickAction::EnterOrPlay)
+            } else {
+                Some(SelectRowClickAction::Select(next))
+            }
+        }
+        MouseButton::Right => Some(SelectRowClickAction::ExitFolder),
+        _ => None,
+    }
+}
+
+fn select_scroll_slider_index(value: f32, item_len: usize) -> Option<usize> {
+    if item_len == 0 {
+        return None;
+    }
+    if item_len == 1 {
+        return Some(0);
+    }
+    let max_index = item_len - 1;
+    Some((value.clamp(0.0, 1.0) * max_index as f32).round() as usize)
+}
+
 fn select_action(
     physical_key: PhysicalKey,
     state: ElementState,
@@ -9755,7 +10038,7 @@ mod tests {
     use bmz_render::scene::SelectRowKind;
     use bmz_render::skin::SkinManifest;
 
-    use crate::config::app_config::{AppConfig, PathEntry};
+    use crate::config::app_config::{AppConfig, PathEntry, PresentModeConfig};
     use crate::config::profile_config::ProfileConfig;
     use crate::screens::select_model::{SelectChartRow, SelectCourseRow};
     use crate::skin_loader::default_skin_root;
@@ -9770,6 +10053,27 @@ mod tests {
         config.songs.roots =
             vec![PathEntry { path: "/music/bms".to_string(), enabled: true, recursive: true }];
         assert!(initial_folder_stack(&config).is_empty());
+    }
+
+    #[test]
+    fn config_present_mode_auto_follows_vsync() {
+        let mut config = AppConfig::default().video;
+        config.present_mode = PresentModeConfig::Auto;
+
+        config.vsync = true;
+        assert_eq!(config_present_mode(&config), bmz_render::WgpuPresentMode::AutoVsync);
+
+        config.vsync = false;
+        assert_eq!(config_present_mode(&config), bmz_render::WgpuPresentMode::AutoNoVsync);
+    }
+
+    #[test]
+    fn config_present_mode_explicit_overrides_vsync() {
+        let mut config = AppConfig::default().video;
+        config.vsync = true;
+        config.present_mode = PresentModeConfig::Immediate;
+
+        assert_eq!(config_present_mode(&config), bmz_render::WgpuPresentMode::Immediate);
     }
 
     #[test]
@@ -10120,6 +10424,67 @@ mod tests {
             ),
             Some(SelectAction::Move(SelectMove::Next))
         );
+    }
+
+    #[test]
+    fn select_row_click_enters_only_when_row_is_already_selected() {
+        assert_eq!(
+            select_row_click_action(2, MouseButton::Left, 0, 4),
+            Some(SelectRowClickAction::Select(2))
+        );
+        assert_eq!(
+            select_row_click_action(2, MouseButton::Left, 2, 4),
+            Some(SelectRowClickAction::EnterOrPlay)
+        );
+        assert_eq!(select_row_click_action(4, MouseButton::Left, 2, 4), None);
+        assert_eq!(
+            select_row_click_action(2, MouseButton::Right, 2, 4),
+            Some(SelectRowClickAction::ExitFolder)
+        );
+        assert_eq!(select_row_click_action(2, MouseButton::Middle, 2, 4), None);
+    }
+
+    #[test]
+    fn select_scroll_slider_value_maps_to_nearest_row() {
+        assert_eq!(select_scroll_slider_index(0.0, 0), None);
+        assert_eq!(select_scroll_slider_index(0.5, 1), Some(0));
+        assert_eq!(select_scroll_slider_index(-1.0, 10), Some(0));
+        assert_eq!(select_scroll_slider_index(0.0, 10), Some(0));
+        assert_eq!(select_scroll_slider_index(0.49, 10), Some(4));
+        assert_eq!(select_scroll_slider_index(0.50, 10), Some(5));
+        assert_eq!(select_scroll_slider_index(1.0, 10), Some(9));
+        assert_eq!(select_scroll_slider_index(2.0, 10), Some(9));
+    }
+
+    #[test]
+    fn skin_video_source_respects_static_property_ops() {
+        let mut document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 5,
+                "property": [
+                    {
+                        "name": "動画を使用する",
+                        "def": "ON",
+                        "item": [
+                            { "name": "ON", "op": 920 },
+                            { "name": "OFF", "op": 921 }
+                        ]
+                    }
+                ],
+                "source": [{ "id": "mv", "path": "mv/default.mp4" }],
+                "image": [{ "id": "mv", "src": "mv", "x": 0, "y": 0, "w": 10, "h": 10 }],
+                "destination": [{ "id": "mv", "op": [920], "dst": [{ "x": 0, "y": 0, "w": 10, "h": 10 }] }]
+            }
+            "#,
+        )
+        .unwrap();
+
+        assert!(skin_video_source_is_enabled(&document, "mv"));
+
+        document.user_selected_options = Some(vec![921]);
+        assert!(!skin_video_source_is_enabled(&document, "mv"));
+        assert!(skin_video_source_is_enabled(&document, "unknown-source"));
     }
 
     #[test]

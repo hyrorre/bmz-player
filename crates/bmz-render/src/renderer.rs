@@ -8,6 +8,7 @@ use std::pin::Pin;
 use std::sync::mpsc;
 use std::task::{Context as TaskContext, Poll, RawWaker, RawWakerVTable, Waker};
 use std::thread;
+use std::time::Instant;
 
 use ab_glyph::{Font, FontArc, FontVec, Glyph, PxScale, ScaleFont, point};
 use anyhow::{Context, Result, anyhow};
@@ -32,6 +33,17 @@ pub enum WgpuBackend {
     Metal,
     Dx12,
     Gl,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WgpuPresentMode {
+    #[default]
+    AutoVsync,
+    AutoNoVsync,
+    Immediate,
+    Mailbox,
+    Fifo,
+    FifoRelaxed,
 }
 
 impl WgpuBackend {
@@ -64,9 +76,30 @@ pub struct Renderer {
     select_dynamic_timer_runtime: DynamicTimerRuntime,
     decide_dynamic_timer_runtime: DynamicTimerRuntime,
     result_dynamic_timer_runtime: DynamicTimerRuntime,
-    /// VSync の希望状態。サーフェス生成時および `set_vsync` で参照する。
-    vsync: bool,
+    last_frame_timings: Option<RenderFrameTimings>,
+    /// サーフェス生成時および `set_present_mode` で参照する希望 present mode。
+    present_mode: WgpuPresentMode,
     backend: WgpuBackend,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RenderFrameTimings {
+    pub plan_us: u128,
+    pub draw_us: u128,
+    pub text_us: u128,
+    pub geometry_us: u128,
+    pub upload_us: u128,
+    pub submit_us: u128,
+    pub commands: usize,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct GpuRenderTimings {
+    draw_us: u128,
+    text_us: u128,
+    geometry_us: u128,
+    upload_us: u128,
+    submit_us: u128,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -109,6 +142,7 @@ struct WgpuRenderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
+    present_modes: Vec<wgpu::PresentMode>,
     rect_pipeline: wgpu::RenderPipeline,
     rect_buffer: Option<wgpu::Buffer>,
     rect_buffer_capacity: usize,
@@ -255,7 +289,7 @@ impl Renderer {
             return Ok(());
         }
 
-        let mut gpu = WgpuRenderer::new(window, size, self.vsync, self.backend)?;
+        let mut gpu = WgpuRenderer::new(window, size, self.present_mode, self.backend)?;
         for texture in self.pending_textures.drain(..) {
             gpu.upsert_rgba_texture(texture.id, texture.width, texture.height, &texture.rgba);
         }
@@ -275,6 +309,22 @@ impl Renderer {
             gpu.upsert_rgba_texture(id, width, height, &rgba);
         } else {
             self.pending_textures.push(PendingTexture { id, width, height, rgba });
+        }
+        Ok(())
+    }
+
+    pub fn upsert_rgba_texture_ref(
+        &mut self,
+        id: TextureId,
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+    ) -> Result<()> {
+        validate_rgba_texture(width, height, rgba)?;
+        if let Some(gpu) = &mut self.gpu {
+            gpu.upsert_rgba_texture(id, width, height, rgba);
+        } else {
+            self.pending_textures.push(PendingTexture { id, width, height, rgba: rgba.to_vec() });
         }
         Ok(())
     }
@@ -453,6 +503,7 @@ impl Renderer {
     }
 
     pub fn render_scene_status(&mut self, scene: AppSceneSnapshot) -> Result<RenderSurfaceStatus> {
+        let plan_start = Instant::now();
         let plan = match &scene {
             AppSceneSnapshot::Select(_) => DrawPlan::from_scene_with_skin(
                 &scene,
@@ -475,10 +526,18 @@ impl Renderer {
                 &mut self.result_dynamic_timer_runtime,
             ),
         };
+        let plan_us = plan_start.elapsed().as_micros();
+        let commands = plan.commands.len();
         self.last_scene = Some(scene);
         self.last_plan = Some(plan);
 
-        self.render_last_plan()
+        let status = self.render_last_plan()?;
+        self.last_frame_timings = Some(RenderFrameTimings {
+            plan_us,
+            commands,
+            ..self.last_frame_timings.unwrap_or_default()
+        });
+        Ok(status)
     }
 
     /// 次の描画フレームで重ねる egui の描画データを差し込む。
@@ -493,13 +552,21 @@ impl Renderer {
     /// サーフェス生成済みなら present mode を即座に再構成する (要再起動なし)。
     /// 値が変わらない場合は何もしないため、毎フレーム呼んでも安全。
     pub fn set_vsync(&mut self, vsync: bool) {
-        if self.vsync == vsync {
+        self.set_present_mode(if vsync {
+            WgpuPresentMode::AutoVsync
+        } else {
+            WgpuPresentMode::AutoNoVsync
+        });
+    }
+
+    pub fn set_present_mode(&mut self, present_mode: WgpuPresentMode) {
+        if self.present_mode == present_mode {
             return;
         }
-        self.vsync = vsync;
+        self.present_mode = present_mode;
         if let Some(gpu) = &mut self.gpu {
-            gpu.set_present_mode(vsync);
-            tracing::info!(vsync, "vsync updated");
+            gpu.set_present_mode(present_mode);
+            tracing::info!(requested = ?present_mode, "present mode updated");
         }
     }
 
@@ -517,13 +584,22 @@ impl Renderer {
             return Ok(RenderSurfaceStatus::SkippedNoSurface);
         };
 
-        gpu.render_plan(
+        let (status, gpu_timings) = gpu.render_plan(
             plan,
             &self.fonts,
             &self.bitmap_fonts,
             egui.as_ref(),
             screenshot_path.as_deref(),
-        )
+        )?;
+        self.last_frame_timings = Some(RenderFrameTimings {
+            draw_us: gpu_timings.draw_us,
+            text_us: gpu_timings.text_us,
+            geometry_us: gpu_timings.geometry_us,
+            upload_us: gpu_timings.upload_us,
+            submit_us: gpu_timings.submit_us,
+            ..self.last_frame_timings.unwrap_or_default()
+        });
+        Ok(status)
     }
 
     pub fn request_screenshot(&mut self, path: impl Into<PathBuf>) {
@@ -536,6 +612,10 @@ impl Renderer {
 
     pub fn last_plan(&self) -> Option<&DrawPlan> {
         self.last_plan.as_ref()
+    }
+
+    pub fn last_frame_timings(&self) -> Option<RenderFrameTimings> {
+        self.last_frame_timings
     }
 }
 
@@ -552,7 +632,12 @@ impl fmt::Debug for Renderer {
 }
 
 impl WgpuRenderer {
-    fn new<T>(window: T, size: SurfaceSize, vsync: bool, backend: WgpuBackend) -> Result<Self>
+    fn new<T>(
+        window: T,
+        size: SurfaceSize,
+        present_mode: WgpuPresentMode,
+        backend: WgpuBackend,
+    ) -> Result<Self>
     where
         T: Into<wgpu::SurfaceTarget<'static>>,
     {
@@ -584,6 +669,7 @@ impl WgpuRenderer {
             trace: wgpu::Trace::Off,
         }))
         .context("failed to request wgpu device")?;
+        let capabilities = surface.get_capabilities(&adapter);
         let mut config = surface
             .get_default_config(&adapter, size.width, size.height)
             .ok_or_else(|| anyhow!("surface is not supported by the selected adapter"))?;
@@ -591,9 +677,16 @@ impl WgpuRenderer {
         // beatoraja (libGDX) は GL_FRAMEBUFFER_SRGB を使わないため値をそのまま表示する。
         // それと合わせるため sRGB サフィックスを除去して non-sRGB サーフェスとして使う。
         config.format = config.format.remove_srgb_suffix();
-        config.present_mode = present_mode_for(vsync);
+        config.present_mode = resolve_wgpu_present_mode(present_mode, &capabilities.present_modes);
         config.usage |= wgpu::TextureUsages::COPY_SRC;
         surface.configure(&device, &config);
+        tracing::info!(
+            requested = ?present_mode,
+            configured = ?config.present_mode,
+            available = ?capabilities.present_modes,
+            backend = ?backend,
+            "configured renderer present mode"
+        );
         let rect_pipeline = create_rect_pipeline(&device, config.format);
         let image_bind_group_layout = create_image_bind_group_layout(&device);
         let image_sampler = create_image_sampler(&device);
@@ -623,6 +716,7 @@ impl WgpuRenderer {
             device,
             queue,
             config,
+            present_modes: capabilities.present_modes,
             rect_pipeline,
             rect_buffer: None,
             rect_buffer_capacity: 0,
@@ -666,7 +760,9 @@ impl WgpuRenderer {
         bitmap_fonts: &HashMap<String, BitmapFont>,
         egui: Option<&EguiFrame>,
         screenshot_path: Option<&Path>,
-    ) -> Result<RenderSurfaceStatus> {
+    ) -> Result<(RenderSurfaceStatus, GpuRenderTimings)> {
+        let draw_start = Instant::now();
+        let mut timings = GpuRenderTimings::default();
         // egui のテクスチャ更新は、描画をスキップするフレームでも必ず適用する。
         // TexturesDelta は累積ストリームのため、取りこぼすと後続フレームの
         // 部分更新が未確保テクスチャを参照して panic する。
@@ -676,11 +772,17 @@ impl WgpuRenderer {
 
         let surface_size = SurfaceSize { width: self.config.width, height: self.config.height };
         if !surface_size.is_drawable() {
-            return Ok(RenderSurfaceStatus::SkippedZeroSize);
+            timings.draw_us = draw_start.elapsed().as_micros();
+            return Ok((RenderSurfaceStatus::SkippedZeroSize, timings));
         }
 
+        let text_start = Instant::now();
         let text_frame = self.build_text_frame(plan, fonts, bitmap_fonts);
+        timings.text_us = text_start.elapsed().as_micros();
+        let geometry_start = Instant::now();
         let geometry = encode_plan_geometry(plan, &text_frame, surface_size);
+        timings.geometry_us = geometry_start.elapsed().as_micros();
+        let upload_start = Instant::now();
         self.ensure_rect_buffer(geometry.rects.len());
         if let Some(buffer) = &self.rect_buffer
             && !geometry.rects.is_empty()
@@ -694,17 +796,27 @@ impl WgpuRenderer {
             self.queue.write_buffer(buffer, 0, &geometry.images);
         }
         self.upload_text_frame(&text_frame);
+        timings.upload_us = upload_start.elapsed().as_micros();
 
+        let submit_start = Instant::now();
         let output = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(output)
             | wgpu::CurrentSurfaceTexture::Suboptimal(output) => output,
             wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
                 self.configure_surface();
-                return Ok(RenderSurfaceStatus::Reconfigured);
+                timings.submit_us = submit_start.elapsed().as_micros();
+                timings.draw_us = draw_start.elapsed().as_micros();
+                return Ok((RenderSurfaceStatus::Reconfigured, timings));
             }
-            wgpu::CurrentSurfaceTexture::Timeout => return Ok(RenderSurfaceStatus::TimedOut),
+            wgpu::CurrentSurfaceTexture::Timeout => {
+                timings.submit_us = submit_start.elapsed().as_micros();
+                timings.draw_us = draw_start.elapsed().as_micros();
+                return Ok((RenderSurfaceStatus::TimedOut, timings));
+            }
             wgpu::CurrentSurfaceTexture::Occluded | wgpu::CurrentSurfaceTexture::Validation => {
-                return Ok(RenderSurfaceStatus::TimedOut);
+                timings.submit_us = submit_start.elapsed().as_micros();
+                timings.draw_us = draw_start.elapsed().as_micros();
+                return Ok((RenderSurfaceStatus::TimedOut, timings));
             }
         };
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -838,7 +950,9 @@ impl WgpuRenderer {
             self.egui.free_textures(frame);
         }
         output.present();
-        Ok(RenderSurfaceStatus::Rendered)
+        timings.submit_us = submit_start.elapsed().as_micros();
+        timings.draw_us = draw_start.elapsed().as_micros();
+        Ok((RenderSurfaceStatus::Rendered, timings))
     }
 
     fn ensure_rect_buffer(&mut self, used_bytes: usize) {
@@ -875,9 +989,15 @@ impl WgpuRenderer {
         self.surface.configure(&self.device, &self.config);
     }
 
-    fn set_present_mode(&mut self, vsync: bool) {
-        self.config.present_mode = present_mode_for(vsync);
+    fn set_present_mode(&mut self, present_mode: WgpuPresentMode) {
+        self.config.present_mode = resolve_wgpu_present_mode(present_mode, &self.present_modes);
         self.configure_surface();
+        tracing::info!(
+            requested = ?present_mode,
+            configured = ?self.config.present_mode,
+            available = ?self.present_modes,
+            "configured renderer present mode"
+        );
     }
 
     fn build_text_frame(
@@ -2920,12 +3040,31 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 }
 "#;
 
-/// VSync 設定に対応する wgpu の present mode。
-///
-/// `Auto*` は環境に応じて `Fifo` / `Immediate` / `Mailbox` へ解決され、
-/// 常にサポートされるため安全に使える。
-fn present_mode_for(vsync: bool) -> wgpu::PresentMode {
-    if vsync { wgpu::PresentMode::AutoVsync } else { wgpu::PresentMode::AutoNoVsync }
+fn resolve_wgpu_present_mode(
+    requested: WgpuPresentMode,
+    available: &[wgpu::PresentMode],
+) -> wgpu::PresentMode {
+    let preferred: &[wgpu::PresentMode] = match requested {
+        WgpuPresentMode::AutoVsync => &[wgpu::PresentMode::FifoRelaxed, wgpu::PresentMode::Fifo],
+        WgpuPresentMode::AutoNoVsync => {
+            &[wgpu::PresentMode::Immediate, wgpu::PresentMode::Mailbox, wgpu::PresentMode::Fifo]
+        }
+        WgpuPresentMode::Immediate => &[wgpu::PresentMode::Immediate],
+        WgpuPresentMode::Mailbox => &[wgpu::PresentMode::Mailbox],
+        WgpuPresentMode::Fifo => &[wgpu::PresentMode::Fifo],
+        WgpuPresentMode::FifoRelaxed => &[wgpu::PresentMode::FifoRelaxed],
+    };
+    if let Some(mode) = preferred.iter().copied().find(|mode| available.contains(mode)) {
+        return mode;
+    }
+    let fallback = available.first().copied().unwrap_or(wgpu::PresentMode::Fifo);
+    tracing::warn!(
+        requested = ?requested,
+        available = ?available,
+        fallback = ?fallback,
+        "requested present mode is unavailable; using fallback"
+    );
+    fallback
 }
 
 fn load_default_font() -> Option<FontArc> {

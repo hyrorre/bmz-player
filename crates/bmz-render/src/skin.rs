@@ -3558,7 +3558,7 @@ impl SkinDocument {
         x: f32,
         y: f32,
     ) -> Option<SkinSliderHit> {
-        if !slider.changeable || !matches!(slider.slider_type, 17..=19) {
+        if !slider.changeable || !matches!(slider.slider_type, 1 | 17..=19) {
             return None;
         }
         let elapsed = skin_timer_elapsed_ms(destination.timer, state)?;
@@ -3569,7 +3569,11 @@ impl SkinDocument {
         }
         let mouse_x = x.clamp(0.0, 1.0) * self.w as f32;
         let mouse_y = (1.0 - y.clamp(0.0, 1.0)) * self.h as f32;
-        let value = slider_value_at(slider, frame, mouse_x, mouse_y)?;
+        let value = if slider.slider_type == 1 {
+            scroll_slider_value_at(slider, frame, mouse_x, mouse_y)?
+        } else {
+            slider_value_at(slider, frame, mouse_x, mouse_y)?
+        };
         Some(SkinSliderHit { slider_type: slider.slider_type, value })
     }
 
@@ -7363,6 +7367,9 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
 }
 
 fn result_grade_diff_number(state: SkinDrawState) -> Option<i64> {
+    if !grade_diff_score_available(state) {
+        return None;
+    }
     match state.result_grade_diff_display {
         ResultGradeDiffDisplay::Beatoraja => beatoraja_next_rank_diff(state),
         ResultGradeDiffDisplay::HalfGrade => {
@@ -7372,12 +7379,21 @@ fn result_grade_diff_number(state: SkinDrawState) -> Option<i64> {
 }
 
 pub(crate) fn result_grade_diff_label(state: SkinDrawState) -> Option<String> {
+    if !grade_diff_score_available(state) {
+        return None;
+    }
     match state.result_grade_diff_display {
         ResultGradeDiffDisplay::Beatoraja => {
             beatoraja_next_rank_diff(state).map(|value| format!("{value:+}"))
         }
         ResultGradeDiffDisplay::HalfGrade => half_grade_diff(state).map(|diff| diff.label()),
     }
+}
+
+fn grade_diff_score_available(state: SkinDrawState) -> bool {
+    !state.select_screen
+        || state.select_play_count > 0
+        || state.select_ex_score.is_some_and(|score| score > 0)
 }
 
 fn beatoraja_next_rank_diff(state: SkinDrawState) -> Option<i64> {
@@ -9228,6 +9244,9 @@ fn grade_diff_rank_target_grade(
     state: SkinDrawState,
     has_half_grade_f_diff_rank_destination: bool,
 ) -> Option<&'static str> {
+    if !grade_diff_score_available(state) {
+        return None;
+    }
     match state.result_grade_diff_display {
         ResultGradeDiffDisplay::Beatoraja => beatoraja_next_rank_grade(state),
         ResultGradeDiffDisplay::HalfGrade => {
@@ -10386,6 +10405,56 @@ fn slider_value_at(
         }
         3 if frame_x - range <= x && x <= frame_x && frame_y <= y && y <= frame_y + frame_h => {
             (frame_x - x) / range
+        }
+        _ => return None,
+    };
+    Some(value.clamp(0.0, 1.0))
+}
+
+fn scroll_slider_value_at(
+    slider: &SkinSliderDef,
+    frame: ResolvedSkinFrame,
+    x: f32,
+    y: f32,
+) -> Option<f32> {
+    let range = slider.range.unsigned_abs() as f32;
+    if range <= f32::EPSILON {
+        return None;
+    }
+    let frame_x = frame.x as f32;
+    let frame_y = frame.y as f32;
+    let frame_w = frame.w as f32;
+    let frame_h = frame.h as f32;
+    let half_w = frame_w * 0.5;
+    let half_h = frame_h * 0.5;
+    let value = match slider.angle {
+        0 if frame_x <= x
+            && x <= frame_x + frame_w
+            && frame_y + half_h <= y
+            && y <= frame_y + range + half_h =>
+        {
+            (y - frame_y - half_h) / range
+        }
+        1 if frame_x + half_w <= x
+            && x <= frame_x + range + half_w
+            && frame_y <= y
+            && y <= frame_y + frame_h =>
+        {
+            (x - frame_x - half_w) / range
+        }
+        2 if frame_x <= x
+            && x <= frame_x + frame_w
+            && frame_y - range + half_h <= y
+            && y <= frame_y + half_h =>
+        {
+            (frame_y + half_h - y) / range
+        }
+        3 if frame_x - range + half_w <= x
+            && x <= frame_x + half_w
+            && frame_y <= y
+            && y <= frame_y + frame_h =>
+        {
+            (frame_x + half_w - x) / range
         }
         _ => return None,
     };
@@ -12209,6 +12278,7 @@ mod tests {
         let beatoraja_e_minus = SkinDrawState {
             select_ex_score: Some(0),
             select_total_notes: 2253,
+            select_play_count: 1,
             select_screen: true,
             ..SkinDrawState::default()
         };
@@ -12471,6 +12541,7 @@ mod tests {
             rows: vec![SelectRowSnapshot {
                 index: 0,
                 ex_score: Some(0),
+                play_count: 1,
                 total_notes: 2253,
                 in_library: true,
                 ..SelectRowSnapshot::default()
@@ -12494,6 +12565,46 @@ mod tests {
                 SkinRenderItem::Image { texture: SkinTextureId(7), .. }
             ))
         );
+
+        let no_play_snapshot = SelectSnapshot {
+            rows: vec![SelectRowSnapshot {
+                index: 0,
+                ex_score: None,
+                play_count: 0,
+                total_notes: 2253,
+                in_library: true,
+                ..SelectRowSnapshot::default()
+            }],
+            chart_count: 1,
+            ..SelectSnapshot::default()
+        };
+        let no_play_items = document.select_render_items(&sources, &no_play_snapshot);
+        let (no_play_state, _) = document.select_draw_state(&no_play_snapshot, None);
+        assert_eq!(skin_state_number(154, no_play_state), None);
+        assert!(!no_play_items.iter().any(|item| matches!(
+            item,
+            SkinRenderItem::Image { texture: SkinTextureId(7) | SkinTextureId(42), .. }
+        )));
+
+        let no_play_zero_snapshot = SelectSnapshot {
+            rows: vec![SelectRowSnapshot {
+                index: 0,
+                ex_score: Some(0),
+                play_count: 0,
+                total_notes: 2253,
+                in_library: true,
+                ..SelectRowSnapshot::default()
+            }],
+            chart_count: 1,
+            ..SelectSnapshot::default()
+        };
+        let no_play_zero_items = document.select_render_items(&sources, &no_play_zero_snapshot);
+        let (no_play_zero_state, _) = document.select_draw_state(&no_play_zero_snapshot, None);
+        assert_eq!(skin_state_number(154, no_play_zero_state), None);
+        assert!(!no_play_zero_items.iter().any(|item| matches!(
+            item,
+            SkinRenderItem::Image { texture: SkinTextureId(7) | SkinTextureId(42), .. }
+        )));
     }
 
     #[test]
@@ -15701,6 +15812,49 @@ mod tests {
                 )
                 .is_none()
         );
+    }
+
+    #[test]
+    fn select_slider_hit_resolves_song_scroll_slider() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 5,
+                "w": 100,
+                "h": 100,
+                "slider": [
+                    { "id": "song-scroll", "src": 1, "x": 0, "y": 0, "w": 10, "h": 5, "angle": 2, "range": 50, "type": 1 }
+                ],
+                "destination": [
+                    { "id": "song-scroll", "dst": [{ "x": 10, "y": 70, "w": 10, "h": 5 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let snapshot = SelectSnapshot::default();
+
+        let hit = document
+            .select_slider_hit(
+                &snapshot,
+                &crate::select_settings_dest::SelectSettingsDestIndex::default(),
+                0.15,
+                0.525,
+            )
+            .unwrap();
+
+        assert_eq!(hit.slider_type, 1);
+        assert!(approx_eq(hit.value, 0.5));
+        let top_hit = document
+            .select_slider_hit(
+                &snapshot,
+                &crate::select_settings_dest::SelectSettingsDestIndex::default(),
+                0.15,
+                0.275,
+            )
+            .unwrap();
+        assert_eq!(top_hit.slider_type, 1);
+        assert!(approx_eq(top_hit.value, 0.0));
     }
 
     #[test]

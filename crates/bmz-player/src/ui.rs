@@ -18,7 +18,7 @@ use winit::window::Window;
 
 use crate::config::app_config::{
     AppConfig, AudioBackend, AudioBufferSizeMode, AudioSampleRateMode, DifficultyTableSource,
-    InputBackendKind, LogLevel, RendererBackend, WindowMode,
+    InputBackendKind, LogLevel, PresentModeConfig, RendererBackend, WindowMode,
 };
 use crate::config::profile_config::{
     AssistOptionConfig, BgaExpandConfig, BgaModeConfig, GaugeAutoShiftConfig, GaugeTypeConfig,
@@ -1220,6 +1220,45 @@ fn build_settings_panel(
                         egui::Slider::new(&mut config.video.height, 480..=2160).text("高さ (px)"),
                     );
                     ui.checkbox(&mut config.video.vsync, "垂直同期 (VSync)");
+                    egui::ComboBox::from_label("Present Mode")
+                        .selected_text(present_mode_label(&config.video.present_mode))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut config.video.present_mode,
+                                PresentModeConfig::Auto,
+                                "自動 (VSync設定に従う)",
+                            );
+                            ui.selectable_value(
+                                &mut config.video.present_mode,
+                                PresentModeConfig::AutoVsync,
+                                "Auto VSync",
+                            );
+                            ui.selectable_value(
+                                &mut config.video.present_mode,
+                                PresentModeConfig::AutoNoVsync,
+                                "Auto No VSync",
+                            );
+                            ui.selectable_value(
+                                &mut config.video.present_mode,
+                                PresentModeConfig::Immediate,
+                                "Immediate",
+                            );
+                            ui.selectable_value(
+                                &mut config.video.present_mode,
+                                PresentModeConfig::Mailbox,
+                                "Mailbox",
+                            );
+                            ui.selectable_value(
+                                &mut config.video.present_mode,
+                                PresentModeConfig::Fifo,
+                                "Fifo",
+                            );
+                            ui.selectable_value(
+                                &mut config.video.present_mode,
+                                PresentModeConfig::FifoRelaxed,
+                                "Fifo Relaxed",
+                            );
+                        });
                     ui.add(
                         egui::Slider::new(&mut config.video.target_fps, 30..=480).text("目標 FPS"),
                     );
@@ -1257,7 +1296,7 @@ fn build_settings_panel(
                             );
                         });
                     ui.label(
-                        "VSync / ウィンドウモード / 目標 FPS は即時反映。幅 / 高さ / レンダリングバックエンドは次回起動時に反映されます。",
+                        "VSync / Present Mode / ウィンドウモード / 目標 FPS は即時反映。幅 / 高さ / レンダリングバックエンドは次回起動時に反映されます。",
                     );
                 });
 
@@ -1458,6 +1497,18 @@ fn renderer_backend_label(backend: &RendererBackend) -> &'static str {
         RendererBackend::Metal => "Metal",
         RendererBackend::Dx12 => "DirectX 12",
         RendererBackend::Gl => "OpenGL",
+    }
+}
+
+fn present_mode_label(mode: &PresentModeConfig) -> &'static str {
+    match mode {
+        PresentModeConfig::Auto => "自動 (VSync設定に従う)",
+        PresentModeConfig::AutoVsync => "Auto VSync",
+        PresentModeConfig::AutoNoVsync => "Auto No VSync",
+        PresentModeConfig::Immediate => "Immediate",
+        PresentModeConfig::Mailbox => "Mailbox",
+        PresentModeConfig::Fifo => "Fifo",
+        PresentModeConfig::FifoRelaxed => "Fifo Relaxed",
     }
 }
 
