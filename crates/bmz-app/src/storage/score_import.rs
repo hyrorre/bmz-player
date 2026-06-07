@@ -178,6 +178,19 @@ fn import_beatoraja_scores(
                 continue;
             }
         };
+        // beatoraja stores course (dan) results in the same `score` table, keyed
+        // by the concatenation of every constituent chart sha256.  A single chart
+        // hash is 64 hex chars, so a course key is a multiple of 64 longer than 64
+        // (e.g. 256 for a 4-song course).  These are not importable as single-chart
+        // scores: bmz models course results in dedicated tables, and the concatenated
+        // key cannot be unambiguously mapped back to a bmz course (table-defined
+        // courses sharing a song set differ only by constraint, which the key omits).
+        // Treat them as skipped rather than failed, and keep the log quiet.
+        if is_course_sha256(&row.sha256) {
+            report.skipped += 1;
+            tracing::debug!(len = row.sha256.len(), "skipped beatoraja course score");
+            continue;
+        }
         let chart_sha256 = match hex_to_hash::<32>(&row.sha256) {
             Ok(sha256) => sha256,
             Err(error) => {
@@ -234,6 +247,14 @@ fn imported_score_record(
         device_type: InputDeviceKind::Keyboard,
         replay_path: String::new(),
     }
+}
+
+/// Returns true when `sha256` is a beatoraja course key: a concatenation of two
+/// or more 64-char chart hashes (length is a non-zero multiple of 64 greater than
+/// a single hash).  Single-chart scores are exactly 64 chars and return false.
+fn is_course_sha256(sha256: &str) -> bool {
+    let len = sha256.len();
+    len > 64 && len.is_multiple_of(64)
 }
 
 fn ensure_table(conn: &Connection, table: &str) -> Result<()> {
@@ -592,6 +613,39 @@ mod tests {
         assert_eq!(report.imported, 0);
     }
 
+    #[test]
+    fn beatoraja_import_skips_course_scores_without_failing() {
+        let (library_db, mut score_db, _, _) = open_test_databases();
+        let source = Connection::open_in_memory().unwrap();
+        // A 4-song course key: four 64-char hashes concatenated (256 chars).
+        let course_key = "a".repeat(256);
+        create_beatoraja_source_with_sha256(&source, &course_key, 1_700_000_001_000);
+
+        let report = import_beatoraja_scores(
+            &source,
+            ScoreImportKind::Beatoraja,
+            &library_db,
+            &mut score_db,
+            1_700_000_000,
+        )
+        .unwrap();
+
+        assert_eq!(report.scanned, 1);
+        assert_eq!(report.skipped, 1);
+        assert_eq!(report.failed, 0);
+        assert_eq!(report.imported, 0);
+    }
+
+    #[test]
+    fn is_course_sha256_classifies_by_length() {
+        assert!(!is_course_sha256(&"a".repeat(64)));
+        assert!(is_course_sha256(&"a".repeat(128)));
+        assert!(is_course_sha256(&"a".repeat(256)));
+        // Genuinely malformed (not a multiple of 64) stays a hard failure.
+        assert!(!is_course_sha256(&"a".repeat(100)));
+        assert!(!is_course_sha256(""));
+    }
+
     fn open_test_databases() -> (LibraryDatabase, ScoreDatabase, [u8; 32], [u8; 16]) {
         let mut library_conn = Connection::open_in_memory().unwrap();
         super::super::common::configure_connection(&library_conn).unwrap();
@@ -671,6 +725,10 @@ mod tests {
     }
 
     fn create_beatoraja_source(conn: &Connection, sha256: &[u8; 32], date: i64) {
+        create_beatoraja_source_with_sha256(conn, &hash_to_hex(sha256), date);
+    }
+
+    fn create_beatoraja_source_with_sha256(conn: &Connection, sha256: &str, date: i64) {
         conn.execute_batch(
             "CREATE TABLE score (
                 sha256 TEXT, clear INTEGER, epg INTEGER, lpg INTEGER,
@@ -683,7 +741,7 @@ mod tests {
         .unwrap();
         conn.execute(
             "INSERT INTO score VALUES (?1, 7, 10, 3, 4, 2, 1, 1, 0, 0, 2, 1, 3, 1, 128, 80, 2, '', 456, ?2)",
-            params![hash_to_hex(sha256), date],
+            params![sha256, date],
         )
         .unwrap();
     }
