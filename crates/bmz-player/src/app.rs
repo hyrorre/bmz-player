@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
@@ -113,8 +113,8 @@ use crate::storage::score_db::ScoreDatabase;
 use crate::storage::score_import::{ScoreImportRequest, import_scores};
 use crate::ui::{DebugInfo, EguiLayer, SceneSkinDefs, SkinCandidate, SkinCatalog, SkinConfigMeta};
 use bmz_render::skin::{
-    DestinationListEntry, SkinAnimationDef, SkinClickHit, SkinClickTarget, SkinDocument,
-    SkinDocumentTexture, SkinDstEntry, SkinManifest, SkinSliderHit,
+    DestinationListEntry, SkinAnimationDef, SkinClickHit, SkinClickTarget, SkinDestinationDef,
+    SkinDocument, SkinDocumentTexture, SkinDstEntry, SkinManifest, SkinSliderHit,
 };
 const SAMPLE_PLAYABLE_TITLE: &str = "BMZ Sample Playable";
 
@@ -382,6 +382,7 @@ struct ActiveSkinVideoSource {
     path: PathBuf,
     decoder: Option<VideoBgaDecoder>,
     last_pts: Option<i64>,
+    active: bool,
     failed: bool,
 }
 
@@ -5597,11 +5598,13 @@ impl WinitApp {
             let PreparedSource { source_id, path, texture, prepared, size, is_video } = source;
             self.renderer.insert_prepared_texture(TextureId(texture.0), prepared);
             if is_video {
+                let active = skin_video_source_is_enabled(&document, &source_id);
                 video_sources.push(ActiveSkinVideoSource {
                     texture,
                     path,
                     decoder: None,
                     last_pts: None,
+                    active,
                     failed: false,
                 });
             }
@@ -6244,7 +6247,7 @@ impl WinitApp {
             return;
         };
         for source in sources {
-            if source.failed {
+            if source.failed || !source.active {
                 continue;
             }
             if source.decoder.is_none() {
@@ -6794,9 +6797,76 @@ fn skin_video_sources_from_decoded(decoded: &DecodedSkin) -> Vec<ActiveSkinVideo
             path: source.path.clone(),
             decoder: None,
             last_pts: None,
+            active: skin_video_source_is_enabled(&decoded.document, &source.source_id),
             failed: false,
         })
         .collect()
+}
+
+fn skin_video_source_is_enabled(document: &SkinDocument, source_id: &str) -> bool {
+    let image_ids: HashSet<&str> = document
+        .image
+        .iter()
+        .filter(|image| image.src == source_id)
+        .map(|image| image.id.as_str())
+        .collect();
+    if image_ids.is_empty() {
+        return true;
+    }
+
+    let mut render_object_ids = image_ids.clone();
+    for imageset in &document.imageset {
+        if imageset.images.iter().any(|id| image_ids.contains(id.as_str())) {
+            render_object_ids.insert(imageset.id.as_str());
+        }
+    }
+
+    let property_ops: HashSet<i32> = document
+        .property
+        .iter()
+        .flat_map(|property| property.item.iter().filter_map(|item| item.op.checked_abs()))
+        .collect();
+    let enabled_options = document.enabled_options();
+    let mut referenced = false;
+    for destination in skin_document_destinations(document) {
+        if !render_object_ids.contains(destination.id.as_str()) {
+            continue;
+        }
+        referenced = true;
+        if destination_property_ops_allow(&destination.op, &enabled_options, &property_ops) {
+            return true;
+        }
+    }
+    !referenced
+}
+
+fn skin_document_destinations(document: &SkinDocument) -> Vec<&SkinDestinationDef> {
+    document
+        .destination
+        .iter()
+        .flat_map(|entry| match entry {
+            DestinationListEntry::Single(destination) => vec![destination],
+            DestinationListEntry::Conditional { destinations, .. } => {
+                destinations.iter().collect::<Vec<_>>()
+            }
+        })
+        .collect()
+}
+
+fn destination_property_ops_allow(
+    ops: &[i32],
+    enabled_options: &[i32],
+    property_ops: &HashSet<i32>,
+) -> bool {
+    ops.iter().all(|op| {
+        let Some(abs_op) = op.checked_abs() else {
+            return true;
+        };
+        if !property_ops.contains(&abs_op) {
+            return true;
+        }
+        if *op >= 0 { enabled_options.contains(op) } else { !enabled_options.contains(&abs_op) }
+    })
 }
 
 fn spawn_skin_decode(
@@ -9904,6 +9974,37 @@ mod tests {
         assert_eq!(select_scroll_slider_index(0.50, 10), Some(5));
         assert_eq!(select_scroll_slider_index(1.0, 10), Some(9));
         assert_eq!(select_scroll_slider_index(2.0, 10), Some(9));
+    }
+
+    #[test]
+    fn skin_video_source_respects_static_property_ops() {
+        let mut document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 5,
+                "property": [
+                    {
+                        "name": "動画を使用する",
+                        "def": "ON",
+                        "item": [
+                            { "name": "ON", "op": 920 },
+                            { "name": "OFF", "op": 921 }
+                        ]
+                    }
+                ],
+                "source": [{ "id": "mv", "path": "mv/default.mp4" }],
+                "image": [{ "id": "mv", "src": "mv", "x": 0, "y": 0, "w": 10, "h": 10 }],
+                "destination": [{ "id": "mv", "op": [920], "dst": [{ "x": 0, "y": 0, "w": 10, "h": 10 }] }]
+            }
+            "#,
+        )
+        .unwrap();
+
+        assert!(skin_video_source_is_enabled(&document, "mv"));
+
+        document.user_selected_options = Some(vec![921]);
+        assert!(!skin_video_source_is_enabled(&document, "mv"));
+        assert!(skin_video_source_is_enabled(&document, "unknown-source"));
     }
 
     #[test]
