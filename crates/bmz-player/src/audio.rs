@@ -123,6 +123,17 @@ impl SystemAudio {
     /// (`start_frame = 0`)には影響しないため `TimeUs(0)` 固定で良い。
     pub fn open(runtime: &AudioRuntime) -> Self {
         let engine = Arc::new(Mutex::new(AudioEngine::default()));
+        Self::with_engine(runtime, engine)
+    }
+
+    /// 既存のシステムエンジンを別の `AudioRuntime`(新しい cpal ストリーム)へ
+    /// 載せ替える。設定変更時に音声出力を開き直しても、`SystemSoundManager` や
+    /// `SelectChartPreview` が共有しているエンジン Arc をそのまま使い続けられる。
+    pub fn reattach(runtime: &AudioRuntime, engine: SharedAudioEngine) -> Self {
+        Self::with_engine(runtime, engine)
+    }
+
+    fn with_engine(runtime: &AudioRuntime, engine: SharedAudioEngine) -> Self {
         let mut source = runtime.add_source(Arc::clone(&engine));
         source.play(TimeUs(0));
         Self { engine, _runtime: runtime.clone(), _source: source }

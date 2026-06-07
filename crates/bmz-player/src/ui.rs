@@ -202,6 +202,8 @@ pub struct EguiOutput {
     /// 有効な曲ルートをライブラリ DB へ再スキャンする要求。
     pub trigger_song_rescan: bool,
     pub score_import_request: Option<ScoreImportRequest>,
+    /// 現在の設定で音声出力(cpal ストリーム)を開き直す要求。
+    pub apply_audio_output: bool,
     pub practice_start: bool,
     pub practice_leave: bool,
 }
@@ -339,6 +341,7 @@ impl EguiLayer {
         let mut skin_config_changed = false;
         let mut trigger_song_rescan = false;
         let mut score_import_request = None;
+        let mut apply_audio_output = false;
         let mut practice_start = false;
         let mut practice_leave = false;
         let visible_flag = &mut self.visible;
@@ -386,6 +389,7 @@ impl EguiLayer {
                 );
                 save_app_config |= settings_actions.save;
                 trigger_song_rescan |= settings_actions.rescan;
+                apply_audio_output |= settings_actions.apply_audio;
                 score_import_request = settings_actions.score_import_request;
                 let profile_settings_actions = build_profile_settings_panel(
                     ctx,
@@ -421,6 +425,7 @@ impl EguiLayer {
             debug_panel_visible: *show_debug,
             trigger_song_rescan,
             score_import_request,
+            apply_audio_output,
             practice_start,
             practice_leave,
         }
@@ -840,6 +845,8 @@ struct SettingsPanelActions {
     save: bool,
     rescan: bool,
     score_import_request: Option<ScoreImportRequest>,
+    /// 音声出力(cpal ストリーム)を現在の設定で開き直す要求。
+    apply_audio: bool,
 }
 
 struct SettingsPanelState<'a> {
@@ -864,6 +871,7 @@ fn build_settings_panel(
     let mut save_clicked = false;
     let mut rescan_clicked = false;
     let mut score_import_request = None;
+    let mut apply_audio = false;
     sized_panel_window("本体設定", ctx, open, 440.0, 520.0, egui::pos2(16.0, 320.0)).show(
         ctx,
         |ui| {
@@ -1138,7 +1146,13 @@ fn build_settings_panel(
                             });
                     }
                     ui.label(
-                        "音声バックエンド / デバイスは次回起動時に反映されます。サンプルレート / バッファサイズ / 排他モードは未実装です。",
+                        "ASIO ではドライバ側のバッファ設定が優先される場合があります。",
+                    );
+                    if ui.button("適用 (音声出力を開き直す)").clicked() {
+                        apply_audio = true;
+                    }
+                    ui.label(
+                        "「適用」で現在の設定を保存し音声出力を再構築します(再生中は不可)。サンプルレート / 排他モードは未実装です。",
                     );
                 });
 
@@ -1288,7 +1302,12 @@ fn build_settings_panel(
                 }
             });
         });
-    SettingsPanelActions { save: save_clicked, rescan: rescan_clicked, score_import_request }
+    SettingsPanelActions {
+        save: save_clicked || apply_audio,
+        rescan: rescan_clicked,
+        score_import_request,
+        apply_audio,
+    }
 }
 
 fn build_score_import_section(

@@ -4404,6 +4404,41 @@ impl WinitApp {
         open_prepared_winit_play_session(&self.boot.score_db, runtime, prepared)
     }
 
+    /// 設定パネルの「適用」で、現在の `AppConfig` の音声設定を使って共有 cpal
+    /// ストリームを開き直す。ASIO は排他なので新ストリームを開く前に旧ストリームを
+    /// 完全に閉じる。プレイ中・プレイ開始待ち中はストリーム差し替えが危険なため何もしない。
+    fn reopen_audio_output(&mut self) {
+        if self.active_play.is_some() || self.pending_play_start.is_some() {
+            tracing::warn!("ignoring audio apply while a play session is active");
+            return;
+        }
+
+        // SystemSoundManager / SelectChartPreview と共有しているシステムエンジン
+        // Arc を保持し、新ストリームへそのまま載せ替える(samples を再ロードしない)。
+        let system_engine = self.system_audio.as_ref().map(crate::audio::SystemAudio::engine);
+
+        // 旧ストリームを参照する全ハンドルを drop し、ASIO デバイスを解放する。
+        self.draining_audio = None;
+        self.system_audio = None;
+        self.audio_runtime = None;
+
+        match AudioRuntime::open(&self.boot.app_config.audio) {
+            Ok(runtime) => {
+                if let Some(engine) = system_engine {
+                    self.system_audio = Some(crate::audio::SystemAudio::reattach(&runtime, engine));
+                }
+                self.audio_runtime = Some(runtime);
+                tracing::info!("audio output reopened with current settings");
+            }
+            Err(error) => {
+                tracing::error!(
+                    %error,
+                    "failed to reopen audio output; audio disabled until restart"
+                );
+            }
+        }
+    }
+
     fn decide_snapshot_for_chart(&self, chart_id: i64) -> RenderSnapshot {
         let mut snapshot = RenderSnapshot::default();
         if let Some(SelectItem::Chart(row)) = self.select_items.iter().find(|item| match item {
@@ -6063,6 +6098,9 @@ impl WinitApp {
                 Ok(()) => tracing::info!("app config saved from egui settings panel"),
                 Err(error) => tracing::error!(%error, "failed to save app config"),
             }
+        }
+        if output.apply_audio_output {
+            self.reopen_audio_output();
         }
         if output.trigger_song_rescan {
             self.load_songs_and_reload();
