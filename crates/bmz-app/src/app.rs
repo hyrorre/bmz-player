@@ -2180,12 +2180,8 @@ impl WinitApp {
             self.exit_folder();
             return true;
         }
-        if bindings.is_increase(control) {
-            self.move_selection(SelectMove::Next);
-            return true;
-        }
-        if bindings.is_decrease(control) {
-            self.move_selection(SelectMove::Previous);
+        if let Some(select_move) = settings_browse_move_control(control, &bindings) {
+            self.move_selection(select_move);
             return true;
         }
         if bindings.is_confirm(control) {
@@ -6392,6 +6388,16 @@ fn should_route_settings_key_event(
     state == ElementState::Pressed && (settings_editing || !repeat)
 }
 
+fn settings_browse_move_control(control: &str, bindings: &SettingsBindings) -> Option<SelectMove> {
+    match control {
+        "ArrowUp" | "DPadUp" | "ScratchUp" => Some(SelectMove::Previous),
+        "ArrowDown" | "DPadDown" | "ScratchDown" => Some(SelectMove::Next),
+        _ if bindings.is_increase(control) => Some(SelectMove::Next),
+        _ if bindings.is_decrease(control) => Some(SelectMove::Previous),
+        _ => None,
+    }
+}
+
 fn system_sound_volume_from_mix(
     mix: &crate::config::profile_config::AudioMixConfig,
     sound_type: crate::system_sound::SoundType,
@@ -9713,6 +9719,17 @@ mod tests {
         assert!(!should_route_settings_key_event(ElementState::Pressed, true, false));
         assert!(should_route_settings_key_event(ElementState::Pressed, true, true));
         assert!(!should_route_settings_key_event(ElementState::Released, true, true));
+    }
+
+    #[test]
+    fn settings_browse_keeps_cursor_navigation_direction() {
+        let profile = ProfileConfig::new_default("default", "Default", 0);
+        let bindings = SettingsBindings::from_profile(&profile.input);
+
+        assert_eq!(settings_browse_move_control("ArrowUp", &bindings), Some(SelectMove::Previous));
+        assert_eq!(settings_browse_move_control("ArrowDown", &bindings), Some(SelectMove::Next));
+        assert_eq!(settings_browse_move_control("DPadUp", &bindings), Some(SelectMove::Previous));
+        assert_eq!(settings_browse_move_control("DPadDown", &bindings), Some(SelectMove::Next));
     }
 
     #[test]
