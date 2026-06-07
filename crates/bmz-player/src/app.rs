@@ -309,6 +309,7 @@ struct WinitApp {
     /// 選曲 `#PREVIEW` のロード済みキャッシュキー (`folder|file`)。
     select_preview_source: Option<String>,
     select_preview_playing: bool,
+    select_preview_fade: SelectPreviewFade,
     select_preview: Option<SelectChartPreview>,
     select_meta_image_cache: HashMap<String, SelectMetaImageCacheEntry>,
     select_meta_image_tx: mpsc::Sender<SelectMetaImageResult>,
@@ -412,6 +413,19 @@ enum SelectPreviewCacheEntry {
     Missing,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum SelectPreviewFade {
+    #[default]
+    Silent,
+    FadingIn {
+        started_at: Instant,
+    },
+    Playing,
+    FadingOut {
+        started_at: Instant,
+    },
+}
+
 struct SelectPreviewResult {
     key: String,
     path: Option<PathBuf>,
@@ -507,6 +521,10 @@ const SELECT_EXIT_HOLD_DURATION: Duration = Duration::from_millis(1_200);
 const PLAY_START_DOUBLE_PRESS_WINDOW: Duration = Duration::from_millis(400);
 /// beatoraja 既定の START+SELECT 途中終了長押し時間。
 const PLAY_EXIT_HOLD_DURATION: Duration = Duration::from_millis(1_000);
+/// beatoraja PreviewMusicProcessor fades select BGM over 10 * 15ms steps.
+const SELECT_PREVIEW_FADE_DURATION: Duration = Duration::from_millis(150);
+/// beatoraja MusicSelector waits this long after a song-bar change before preview starts.
+const SELECT_PREVIEW_START_DELAY: Duration = Duration::from_millis(400);
 /// レーンカバー / LIFT を上下キーで動かす際のステップ幅。
 const LANE_COVER_STEP: f32 = 0.001;
 const LANE_COVER_REPEAT_STEP: f32 = 0.01;
@@ -969,6 +987,7 @@ impl WinitApp {
             select_banner_size: None,
             select_preview_source: None,
             select_preview_playing: false,
+            select_preview_fade: SelectPreviewFade::Silent,
             select_preview,
             select_meta_image_cache: HashMap::new(),
             select_meta_image_tx,
@@ -1595,10 +1614,10 @@ impl WinitApp {
             match result.result {
                 Ok(sample) => {
                     if is_current {
-                        let loaded = self.play_select_preview_sample(sample.clone());
+                        let loaded = self.play_select_preview_sample(sample.clone(), 0.0);
                         self.select_preview_playing = loaded;
                         if loaded {
-                            self.stop_all_system_bgm();
+                            self.begin_select_preview_fade_in();
                         }
                     }
                     self.select_preview_cache
@@ -1620,22 +1639,27 @@ impl WinitApp {
     }
 
     fn sync_select_preview_audio(&mut self) {
-        let cache_key = match self.select_items.get(self.selected_index) {
+        let selected_cache_key = match self.select_items.get(self.selected_index) {
             Some(SelectItem::Chart(row)) => row.chart.as_ref().and_then(|chart| {
                 (!chart.preview_file.is_empty())
                     .then(|| format!("{}|{}", chart.folder_path, chart.preview_file))
             }),
             _ => None,
         };
+        let cache_key = select_preview_key_after_delay(
+            selected_cache_key,
+            self.select_bar_started_at.elapsed(),
+            SELECT_PREVIEW_START_DELAY,
+        );
         if cache_key.as_deref() == self.select_preview_source.as_deref() {
             if !self.select_preview_playing
                 && let Some(key) = cache_key.as_deref()
                 && let Some(SelectPreviewCacheEntry::Ready(sample)) =
                     self.select_preview_cache.get(key)
             {
-                self.select_preview_playing = self.play_select_preview_sample(sample.clone());
+                self.select_preview_playing = self.play_select_preview_sample(sample.clone(), 0.0);
                 if self.select_preview_playing {
-                    self.stop_all_system_bgm();
+                    self.begin_select_preview_fade_in();
                 }
             }
             return;
@@ -1643,6 +1667,7 @@ impl WinitApp {
         let had_preview = self.select_preview_playing;
         self.select_preview_source = cache_key.clone();
 
+        let mut fading_out = false;
         let loaded = match cache_key.as_deref() {
             Some(_) if self.select_preview.is_none() => false,
             Some(key) => match self.select_preview_cache.get(key) {
@@ -1650,16 +1675,26 @@ impl WinitApp {
                     if let Some(preview) = &self.select_preview {
                         preview.stop();
                     }
-                    self.play_select_preview_sample(sample.clone())
+                    let loaded = self.play_select_preview_sample(sample.clone(), 0.0);
+                    if loaded {
+                        self.begin_select_preview_fade_in();
+                    }
+                    loaded
                 }
                 Some(SelectPreviewCacheEntry::Loading) | Some(SelectPreviewCacheEntry::Missing) => {
-                    if let Some(preview) = &self.select_preview {
+                    if had_preview {
+                        self.begin_select_preview_fade_out();
+                        fading_out = true;
+                    } else if let Some(preview) = &self.select_preview {
                         preview.stop();
                     }
                     false
                 }
                 None => {
-                    if let Some(preview) = &self.select_preview {
+                    if had_preview {
+                        self.begin_select_preview_fade_out();
+                        fading_out = true;
+                    } else if let Some(preview) = &self.select_preview {
                         preview.stop();
                     }
                     self.spawn_select_preview_load(key.to_string());
@@ -1667,21 +1702,17 @@ impl WinitApp {
                 }
             },
             None => {
-                if let Some(preview) = &self.select_preview {
+                if had_preview {
+                    self.begin_select_preview_fade_out();
+                    fading_out = true;
+                } else if let Some(preview) = &self.select_preview {
                     preview.stop();
                 }
                 false
             }
         };
 
-        self.select_preview_playing = loaded;
-        if loaded {
-            self.stop_all_system_bgm();
-        } else if had_preview {
-            // プレビュー再生中から離れたときだけ Select BGM に戻す。
-            // 起動直後やプレビュー未ロード時は fire_scene_transition_sounds が既に鳴らしている。
-            self.play_system_sound(crate::system_sound::SoundType::Select);
-        }
+        self.select_preview_playing = loaded || fading_out;
     }
 
     fn stop_select_preview(&mut self) {
@@ -1690,6 +1721,8 @@ impl WinitApp {
         }
         self.select_preview_source = None;
         self.select_preview_playing = false;
+        self.select_preview_fade = SelectPreviewFade::Silent;
+        self.set_select_bgm_volume_factor(1.0);
     }
 
     fn sync_select_banner_texture(&mut self) {
@@ -1835,10 +1868,62 @@ impl WinitApp {
         volume.clamp(0.0, 1.0)
     }
 
-    fn play_select_preview_sample(&self, sample: DecodedSample) -> bool {
-        self.select_preview
-            .as_ref()
-            .is_some_and(|preview| preview.play_sample(sample, self.select_preview_volume()))
+    fn play_select_preview_sample(&self, sample: DecodedSample, volume_factor: f32) -> bool {
+        self.select_preview.as_ref().is_some_and(|preview| {
+            preview
+                .play_sample(sample, self.select_preview_volume() * volume_factor.clamp(0.0, 1.0))
+        })
+    }
+
+    fn begin_select_preview_fade_in(&mut self) {
+        self.select_preview_fade = SelectPreviewFade::FadingIn { started_at: Instant::now() };
+        self.apply_select_preview_audio_mix();
+    }
+
+    fn begin_select_preview_fade_out(&mut self) {
+        self.select_preview_fade = SelectPreviewFade::FadingOut { started_at: Instant::now() };
+        self.apply_select_preview_audio_mix();
+    }
+
+    fn update_select_preview_fade(&mut self) {
+        let now = Instant::now();
+        match self.select_preview_fade {
+            SelectPreviewFade::FadingIn { started_at }
+                if now.duration_since(started_at) >= SELECT_PREVIEW_FADE_DURATION =>
+            {
+                self.select_preview_fade = SelectPreviewFade::Playing;
+            }
+            SelectPreviewFade::FadingOut { started_at }
+                if now.duration_since(started_at) >= SELECT_PREVIEW_FADE_DURATION =>
+            {
+                if let Some(preview) = &self.select_preview {
+                    preview.stop();
+                }
+                self.select_preview_playing = false;
+                self.select_preview_fade = SelectPreviewFade::Silent;
+            }
+            _ => {}
+        }
+        self.apply_select_preview_audio_mix();
+    }
+
+    fn apply_select_preview_audio_mix(&self) {
+        let preview_factor = select_preview_fade_factor(self.select_preview_fade, Instant::now());
+        if let Some(preview) = &self.select_preview {
+            preview.set_volume(self.select_preview_volume() * preview_factor);
+        }
+        self.set_select_bgm_volume_factor(1.0 - preview_factor);
+    }
+
+    fn set_select_bgm_volume_factor(&self, factor: f32) {
+        let Some(manager) = &self.system_sound else {
+            return;
+        };
+        let volume = system_sound_volume_from_mix(
+            &self.boot.profile_config.audio_mix,
+            crate::system_sound::SoundType::Select,
+        ) * factor.clamp(0.0, 1.0);
+        manager.set_volume(crate::system_sound::SoundType::Select, volume);
     }
 
     fn spawn_select_preview_load(&mut self, key: String) {
@@ -6011,13 +6096,11 @@ impl WinitApp {
 
     fn sync_realtime_profile_settings(&mut self) {
         self.sync_active_play_realtime_profile_settings();
-        if let Some(preview) = &self.select_preview {
-            preview.set_volume(self.select_preview_volume());
-        }
         if let Some(manager) = &self.system_sound {
             let mix = self.boot.profile_config.audio_mix.clone();
             manager.refresh_volumes(|sound_type| system_sound_volume_from_mix(&mix, sound_type));
         }
+        self.apply_select_preview_audio_mix();
     }
 
     fn sync_active_play_realtime_profile_settings(&mut self) {
@@ -6276,6 +6359,7 @@ impl WinitApp {
             self.sync_select_backbmp_texture();
             self.sync_select_banner_texture();
             self.sync_select_preview_audio();
+            self.update_select_preview_fade();
         }
         self.update_current_skin_video_sources();
         let scene = self.scene_snapshot();
@@ -6458,6 +6542,35 @@ impl WinitApp {
 
 fn should_play_select_bgm_on_enter(select_preview_playing: bool) -> bool {
     !select_preview_playing
+}
+
+fn select_preview_fade_factor(fade: SelectPreviewFade, now: Instant) -> f32 {
+    match fade {
+        SelectPreviewFade::Silent => 0.0,
+        SelectPreviewFade::Playing => 1.0,
+        SelectPreviewFade::FadingIn { started_at } => {
+            fade_progress(started_at, now, SELECT_PREVIEW_FADE_DURATION)
+        }
+        SelectPreviewFade::FadingOut { started_at } => {
+            1.0 - fade_progress(started_at, now, SELECT_PREVIEW_FADE_DURATION)
+        }
+    }
+    .clamp(0.0, 1.0)
+}
+
+fn select_preview_key_after_delay(
+    key: Option<String>,
+    elapsed: Duration,
+    delay: Duration,
+) -> Option<String> {
+    if elapsed >= delay { key } else { None }
+}
+
+fn fade_progress(started_at: Instant, now: Instant, duration: Duration) -> f32 {
+    if duration == Duration::ZERO {
+        return 1.0;
+    }
+    now.saturating_duration_since(started_at).as_secs_f32() / duration.as_secs_f32()
 }
 
 fn should_route_settings_key_event(
@@ -10492,6 +10605,58 @@ mod tests {
     fn select_bgm_is_skipped_when_preview_is_already_playing() {
         assert!(should_play_select_bgm_on_enter(false));
         assert!(!should_play_select_bgm_on_enter(true));
+    }
+
+    #[test]
+    fn select_preview_fade_factor_ramps_in_and_out() {
+        let started_at = Instant::now();
+        let half = started_at + SELECT_PREVIEW_FADE_DURATION / 2;
+        let done = started_at + SELECT_PREVIEW_FADE_DURATION;
+
+        assert_eq!(
+            select_preview_fade_factor(SelectPreviewFade::FadingIn { started_at }, started_at),
+            0.0
+        );
+        assert!(
+            (select_preview_fade_factor(SelectPreviewFade::FadingIn { started_at }, half) - 0.5)
+                .abs()
+                < 0.001
+        );
+        assert_eq!(
+            select_preview_fade_factor(SelectPreviewFade::FadingIn { started_at }, done),
+            1.0
+        );
+        assert!(
+            (select_preview_fade_factor(SelectPreviewFade::FadingOut { started_at }, half) - 0.5)
+                .abs()
+                < 0.001
+        );
+        assert_eq!(
+            select_preview_fade_factor(SelectPreviewFade::FadingOut { started_at }, done),
+            0.0
+        );
+    }
+
+    #[test]
+    fn select_preview_key_waits_for_beatoraja_start_delay() {
+        let key = Some("folder|preview.ogg".to_string());
+
+        assert_eq!(
+            select_preview_key_after_delay(
+                key.clone(),
+                SELECT_PREVIEW_START_DELAY - Duration::from_millis(1),
+                SELECT_PREVIEW_START_DELAY,
+            ),
+            None
+        );
+        assert_eq!(
+            select_preview_key_after_delay(
+                key.clone(),
+                SELECT_PREVIEW_START_DELAY,
+                SELECT_PREVIEW_START_DELAY,
+            ),
+            key
+        );
     }
 
     #[test]

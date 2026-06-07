@@ -110,6 +110,16 @@ impl SystemSoundManager {
         }
     }
 
+    /// 指定 SoundType の再生待ち/再生中音量を直接更新する。
+    pub fn set_volume(&self, sound_type: SoundType, volume: f32) {
+        let Some(&id) = self.id_map.get(&sound_type) else {
+            return;
+        };
+        if let Ok(mut engine) = self.engine.lock() {
+            engine.set_sound_volume(id, volume);
+        }
+    }
+
     /// 指定 SoundType を停止する。鳴っていなくても害は無い。
     pub fn stop(&self, sound_type: SoundType) {
         let Some(&id) = self.id_map.get(&sound_type) else {
@@ -215,6 +225,35 @@ mod tests {
         engine.lock().unwrap().render_stereo(1, &mut output);
 
         assert_eq!(output, vec![0.25, 0.25]);
+    }
+
+    #[test]
+    fn set_volume_updates_single_active_bgm_voice() {
+        use bmz_audio::sample::DecodedSample;
+
+        let engine: SharedAudioEngine = Arc::new(Mutex::new(AudioEngine::default()));
+        let mut id_map = HashMap::new();
+        id_map.insert(SoundType::Select, SoundId(SYSTEM_SOUND_BASE));
+        {
+            let mut guard = engine.lock().unwrap();
+            guard.insert_sample(
+                SoundId(SYSTEM_SOUND_BASE),
+                DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0, 1.0] },
+            );
+        }
+        let manager = SystemSoundManager { engine: Arc::clone(&engine), id_map };
+        manager.play(SoundType::Select, 1.0);
+        {
+            let mut guard = engine.lock().unwrap();
+            let mut output = vec![0.0; 2];
+            guard.render_stereo(0, &mut output);
+        }
+
+        manager.set_volume(SoundType::Select, 0.4);
+        let mut output = vec![0.0; 2];
+        engine.lock().unwrap().render_stereo(1, &mut output);
+
+        assert_eq!(output, vec![0.4, 0.4]);
     }
 
     #[test]
