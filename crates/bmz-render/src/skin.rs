@@ -8025,7 +8025,7 @@ fn select_note_distribution_max_density(
     distribution: &[crate::scene::SelectChartDistributionSecond],
 ) -> u32 {
     let peak = distribution.iter().map(|second| second.total()).max().unwrap_or(0);
-    if peak <= 20 { 20 } else { (((peak / 10) * 10 + 10).min(100)).max(20) }
+    if peak <= 20 { 20 } else { ((peak / 10) * 10 + 10).clamp(20, 100) }
 }
 
 fn select_note_distribution_background_items(

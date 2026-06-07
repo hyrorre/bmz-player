@@ -950,8 +950,8 @@ mod tests {
                 chart_id: None,
             })
             .collect();
-        let course = |key: &str, judge: CourseJudgeConstraint, ln: CourseLnConstraint| {
-            CourseDefinition {
+        let course =
+            |key: &str, judge: CourseJudgeConstraint, ln: CourseLnConstraint| CourseDefinition {
                 key: key.to_string(),
                 title: key.to_string(),
                 kind: CourseKind::Dan,
@@ -966,8 +966,7 @@ mod tests {
                 },
                 trophies: Vec::new(),
                 release: true,
-            }
-        };
+            };
         // Two canonical variants differing only by LN -> both receive the score.
         library_db
             .upsert_course(
@@ -1022,11 +1021,9 @@ mod tests {
         // ex = perfect*2 + great = 221).
         let (clear, ex): (String, u32) = library_db
             .conn()
-            .query_row(
-                "SELECT clear_type, ex_score FROM course_scores LIMIT 1",
-                [],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
+            .query_row("SELECT clear_type, ex_score FROM course_scores LIMIT 1", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
             .unwrap();
         assert_eq!(clear, "Hard");
         assert_eq!(ex, 221);

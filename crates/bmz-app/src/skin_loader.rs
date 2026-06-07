@@ -384,7 +384,7 @@ pub fn decode_beatoraja_skin_with_options(
                     path = %source_path.display(),
                     "skipping unsupported beatoraja skin source"
                 );
-                return None;
+                None
             }
         })
         .collect();
