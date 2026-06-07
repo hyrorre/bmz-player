@@ -1464,6 +1464,7 @@ impl WinitApp {
                 .display_label()
                 .to_string(),
             bga: bga_mode_as_str(self.boot.profile_config.play.bga).to_string(),
+            grade_diff_display: self.boot.profile_config.play.grade_diff_display,
             judge_timing_offset_ms: (self.boot.profile_config.judge.visual_offset_us / 1_000)
                 .clamp(i32::MIN as i64, i32::MAX as i64) as i32,
             master_volume: crate::config::play::volume_unit_to_f32(

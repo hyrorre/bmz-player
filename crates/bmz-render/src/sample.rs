@@ -52,6 +52,7 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
         select_sort: "TITLE".to_string(),
         select_ln_mode: "LN".to_string(),
         bga: "ON".to_string(),
+        grade_diff_display: crate::scene::ResultGradeDiffDisplay::default(),
         judge_timing_offset_ms: 0,
         master_volume: 1.0,
         key_volume: 1.0,

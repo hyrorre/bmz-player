@@ -1587,6 +1587,7 @@ pub struct SkinDrawState {
     pub total_notes: u32,
     pub past_notes: u32,
     pub result_grade_diff_display: ResultGradeDiffDisplay,
+    pub result_grade_diff_f_fallback_to_e: bool,
     pub judge_counts: DisplayJudgeCounts,
     pub gauge: f32,
     pub gauge_type: i32,
@@ -1845,6 +1846,7 @@ impl Default for SkinDrawState {
             total_notes: 0,
             past_notes: 0,
             result_grade_diff_display: ResultGradeDiffDisplay::default(),
+            result_grade_diff_f_fallback_to_e: false,
             judge_counts: DisplayJudgeCounts::default(),
             gauge: 0.0,
             gauge_type: 2,
@@ -2444,13 +2446,22 @@ impl SkinDocument {
         let mut failed_overlay = Vec::new();
         let mut after_notes_marker = false;
         let destinations = self.all_destinations(&enabled_options);
+        let has_half_grade_f_diff_rank_destination =
+            half_grade_f_diff_rank_destination_available(&destinations);
+        let state =
+            apply_half_grade_f_diff_rank_fallback(state, has_half_grade_f_diff_rank_destination);
         for (index, destination) in destinations.iter().enumerate() {
             // `{"id":"notes"}` はノーツ描画位置マーカー。以降の destination はノーツ前面に積む。
             if destination.id == "notes" {
                 after_notes_marker = true;
                 continue;
             }
-            if !test_skin_ops(&destination.op, &enabled_options, state) {
+            if !destination_ops_match(
+                destination,
+                &enabled_options,
+                state,
+                has_half_grade_f_diff_rank_destination,
+            ) {
                 continue;
             }
             if !eval_skin_draw_condition(&destination.draw, state) {
@@ -2592,6 +2603,11 @@ impl SkinDocument {
         text_state: SkinTextState<'_>,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<Vec<SkinRenderItem>> {
+        let destinations = self.all_destinations(enabled_options);
+        let has_half_grade_f_diff_rank_destination =
+            half_grade_f_diff_rank_destination_available(&destinations);
+        let state =
+            apply_half_grade_f_diff_rank_fallback(state, has_half_grade_f_diff_rank_destination);
         if let Some(judge_def) = self.judge.iter().find(|judge| judge.id == destination.id) {
             let region = judge_def.index.clamp(0, MAX_JUDGE_REGIONS as i32 - 1) as usize;
             let elapsed = state.judge_ms[region]?;
@@ -2849,7 +2865,11 @@ impl SkinDocument {
         }
 
         if let Some(value) = value_for_destination {
-            let number = skin_value_number(value, state)?;
+            let number = skin_value_number_for_destination(
+                value,
+                state,
+                has_half_grade_f_diff_rank_destination,
+            )?;
             let signed = value_ref_is_signed_for_state(value.ref_id, state);
             return Some(self.value_number_render_items(
                 &value.id,
@@ -2914,8 +2934,17 @@ impl SkinDocument {
         text_state: SkinTextState<'_>,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<Vec<SkinRenderItem>> {
-        if !test_skin_ops(&destination.op, enabled_options, state)
-            || !eval_skin_draw_condition(&destination.draw, state)
+        let destinations = self.all_destinations(enabled_options);
+        let has_half_grade_f_diff_rank_destination =
+            half_grade_f_diff_rank_destination_available(&destinations);
+        let state =
+            apply_half_grade_f_diff_rank_fallback(state, has_half_grade_f_diff_rank_destination);
+        if !destination_ops_match(
+            destination,
+            enabled_options,
+            state,
+            has_half_grade_f_diff_rank_destination,
+        ) || !eval_skin_draw_condition(&destination.draw, state)
         {
             return None;
         }
@@ -2975,7 +3004,11 @@ impl SkinDocument {
         }
 
         if let Some(value) = self.value.iter().find(|value| value.id == destination.id) {
-            let number = skin_value_number_or_songlist_level(value, state)?;
+            let number = skin_value_number_for_destination(
+                value,
+                state,
+                has_half_grade_f_diff_rank_destination,
+            )?;
             let signed = value_ref_is_signed_for_state(value.ref_id, state);
             return Some(self.value_number_render_items(
                 &value.id,
@@ -3138,8 +3171,11 @@ impl SkinDocument {
 
         let images = self.image_map();
         let enabled_options = self.enabled_options();
+        let destinations = self.all_destinations(&enabled_options);
+        let has_half_grade_f_diff_rank_destination =
+            half_grade_f_diff_rank_destination_available(&destinations);
         let mut items = Vec::new();
-        for destination in self.all_destinations(&enabled_options) {
+        for destination in destinations {
             if destination.id == self.songlist.as_ref().map(|list| list.id.as_str()).unwrap_or("") {
                 items.extend(self.select_songlist_items(
                     sources,
@@ -3158,7 +3194,18 @@ impl SkinDocument {
                 snapshot,
                 selected_row,
                 eval_skin_draw_condition,
-                test_skin_ops,
+                |ops, enabled_options, state| {
+                    if ops.len() == destination.op.len() && ops.iter().eq(destination.op.iter()) {
+                        destination_ops_match(
+                            destination,
+                            enabled_options,
+                            state,
+                            has_half_grade_f_diff_rank_destination,
+                        )
+                    } else {
+                        test_skin_ops(ops, enabled_options, state)
+                    }
+                },
             ) {
                 continue;
             }
@@ -3244,6 +3291,7 @@ impl SkinDocument {
             select_mode_index: select_mode_index(&snapshot.select_mode),
             select_sort_index: select_sort_index(&snapshot.select_sort),
             select_ln_mode_index: select_ln_mode_index(&snapshot.select_ln_mode),
+            result_grade_diff_display: snapshot.grade_diff_display,
             select_scroll_progress: select_scroll_progress(snapshot),
             select_master_volume: snapshot.master_volume,
             select_key_volume: snapshot.key_volume,
@@ -4506,7 +4554,13 @@ impl SkinDocument {
         let padding = number_padding(value);
         let max_digits = value.digit.max(0) as usize;
         let digits = if signed {
-            display_signed_number_digits(number, max_digits, padding.is_zero_padding(), divx as u32)
+            display_signed_number_digits_for_value(
+                value,
+                number,
+                max_digits,
+                padding.is_zero_padding(),
+                divx as u32,
+            )
         } else {
             display_number_digits(number, max_digits, padding)
         };
@@ -6125,6 +6179,55 @@ pub(crate) fn test_skin_ops(ops: &[i32], enabled_options: &[i32], state: SkinDra
     ops.iter().all(|op| test_skin_op(*op, enabled_options, state))
 }
 
+fn destination_ops_match(
+    destination: &SkinDestinationDef,
+    enabled_options: &[i32],
+    state: SkinDrawState,
+    has_half_grade_f_diff_rank_destination: bool,
+) -> bool {
+    if is_grade_diff_rank_destination(destination, state) {
+        return destination.op.iter().all(|&op| {
+            test_grade_diff_rank_op(
+                destination,
+                op,
+                enabled_options,
+                state,
+                has_half_grade_f_diff_rank_destination,
+            )
+        });
+    }
+    test_skin_ops(&destination.op, enabled_options, state)
+}
+
+fn test_grade_diff_rank_op(
+    destination: &SkinDestinationDef,
+    op: i32,
+    enabled_options: &[i32],
+    state: SkinDrawState,
+    has_half_grade_f_diff_rank_destination: bool,
+) -> bool {
+    if op < 0 {
+        return op.checked_neg().is_some_and(|positive| {
+            !test_grade_diff_rank_op(
+                destination,
+                positive,
+                enabled_options,
+                state,
+                has_half_grade_f_diff_rank_destination,
+            )
+        });
+    }
+    match op {
+        300..=307 => grade_diff_rank_destination_matches(
+            destination,
+            op,
+            state,
+            has_half_grade_f_diff_rank_destination,
+        ),
+        _ => test_skin_op(op, enabled_options, state),
+    }
+}
+
 fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool {
     if op < 0 {
         return op
@@ -6671,10 +6774,38 @@ fn display_signed_number_digits(
     zero_pad: bool,
     divx: u32,
 ) -> Vec<u8> {
+    display_signed_number_digits_with_row_order(value, max_digits, zero_pad, divx, false)
+}
+
+fn display_signed_number_digits_for_value(
+    value_def: &SkinValueDef,
+    value: i64,
+    max_digits: usize,
+    zero_pad: bool,
+    divx: u32,
+) -> Vec<u8> {
+    display_signed_number_digits_with_row_order(
+        value,
+        max_digits,
+        zero_pad,
+        divx,
+        value_uses_negative_first_signed_rows(value_def),
+    )
+}
+
+fn display_signed_number_digits_with_row_order(
+    value: i64,
+    max_digits: usize,
+    zero_pad: bool,
+    divx: u32,
+    negative_first: bool,
+) -> Vec<u8> {
     if max_digits == 0 {
         return Vec::new();
     }
-    let row_offset = if value < 0 { divx as u8 } else { 0 };
+    let negative_row = if negative_first { 0 } else { divx as u8 };
+    let positive_row = if negative_first { divx as u8 } else { 0 };
+    let row_offset = if value < 0 { negative_row } else { positive_row };
     let inner_width = max_digits.saturating_sub(1);
     let abs = value.unsigned_abs();
     let abs_text = if zero_pad && inner_width > 0 {
@@ -6696,6 +6827,10 @@ fn display_signed_number_digits(
         }
     }
     digits
+}
+
+fn value_uses_negative_first_signed_rows(value: &SkinValueDef) -> bool {
+    value.ref_id == 154 && value.id == "RANK_Diff_Exscore" && value.divx >= 12 && value.divy >= 2
 }
 
 /// `ref_id` が符号付き表示を要求する Result 系 ref か。
@@ -6860,6 +6995,29 @@ fn skin_value_number(value: &SkinValueDef, state: SkinDrawState) -> Option<i64> 
     skin_state_number(value.ref_id, state)
 }
 
+fn skin_value_number_for_destination(
+    value: &SkinValueDef,
+    state: SkinDrawState,
+    has_half_grade_f_diff_rank_destination: bool,
+) -> Option<i64> {
+    if value.ref_id == 154
+        && value.expr.trim().is_empty()
+        && value.value_expr.trim().is_empty()
+        && state.result_grade_diff_display == ResultGradeDiffDisplay::HalfGrade
+        && !has_half_grade_f_diff_rank_destination
+    {
+        return half_grade_diff_for_destination(state, false).map(|diff| diff.value);
+    }
+    if value.ref_id == 0 && value.expr.trim().is_empty() {
+        return Some(if state.play_level != 0 {
+            state.play_level
+        } else {
+            state.select_play_level
+        });
+    }
+    skin_value_number(value, state)
+}
+
 fn skin_state_digit_float_expr(expr: &str, state: SkinDrawState) -> Option<f32> {
     let expr = expr.trim();
     if expr.is_empty() {
@@ -6879,17 +7037,6 @@ fn skin_state_digit_float_expr(expr: &str, state: SkinDrawState) -> Option<f32> 
         return Some(numerator / denominator);
     }
     skin_state_additive_float_expr(expr, state)
-}
-
-fn skin_value_number_or_songlist_level(value: &SkinValueDef, state: SkinDrawState) -> Option<i64> {
-    if value.ref_id == 0 && value.expr.trim().is_empty() {
-        return Some(if state.play_level != 0 {
-            state.play_level
-        } else {
-            state.select_play_level
-        });
-    }
-    skin_value_number(value, state)
 }
 
 fn skin_state_number_expr(expr: &str, state: SkinDrawState) -> Option<i64> {
@@ -7218,7 +7365,9 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
 fn result_grade_diff_number(state: SkinDrawState) -> Option<i64> {
     match state.result_grade_diff_display {
         ResultGradeDiffDisplay::Beatoraja => beatoraja_next_rank_diff(state),
-        ResultGradeDiffDisplay::HalfGrade => half_grade_diff(state).map(|diff| diff.value),
+        ResultGradeDiffDisplay::HalfGrade => {
+            half_grade_diff_for_state(state).map(|diff| diff.value)
+        }
     }
 }
 
@@ -7246,6 +7395,37 @@ fn beatoraja_next_rank_diff(state: SkinDrawState) -> Option<i64> {
         }
     }
     Some(ex_score - max_score)
+}
+
+fn beatoraja_next_rank_grade(state: SkinDrawState) -> Option<&'static str> {
+    let ex_score = state.select_ex_score.unwrap_or(state.ex_score) as i64;
+    let total_notes = state.select_total_notes.max(state.total_notes) as i64;
+    let max_score = total_notes.checked_mul(2)?;
+    if max_score <= 0 {
+        return None;
+    }
+    let ex_score = ex_score.clamp(0, max_score);
+    for rank_step in (3..=24).step_by(3) {
+        let threshold = div_ceil(rank_step as i64 * max_score, 27);
+        if ex_score < threshold {
+            return beatoraja_next_rank_grade_for_step(rank_step);
+        }
+    }
+    Some("MAX")
+}
+
+fn beatoraja_next_rank_grade_for_step(rank_step: i32) -> Option<&'static str> {
+    match rank_step {
+        3 => Some("E"),
+        6 => Some("D"),
+        9 => Some("C"),
+        12 => Some("B"),
+        15 => Some("A"),
+        18 => Some("AA"),
+        21 => Some("AAA"),
+        24 => Some("MAX"),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -7304,6 +7484,13 @@ fn half_grade_diff(state: SkinDrawState) -> Option<HalfGradeDiff> {
     } else {
         Some(HalfGradeDiff { grade: "MAX", value: 0 })
     }
+}
+
+fn half_grade_diff_for_state(state: SkinDrawState) -> Option<HalfGradeDiff> {
+    if state.result_grade_diff_f_fallback_to_e {
+        return half_grade_diff_for_destination(state, false);
+    }
+    half_grade_diff(state)
 }
 
 fn projected_score_at_progress(final_score: u32, state: SkinDrawState) -> u32 {
@@ -9015,6 +9202,106 @@ fn result_rank_op_matches(op: i32, state: SkinDrawState) -> bool {
         310..=317 => op == 310 + rank as i32,
         _ => false,
     }
+}
+
+fn is_grade_diff_rank_destination(destination: &SkinDestinationDef, state: SkinDrawState) -> bool {
+    (state.result_failed.is_some() || state.select_screen) && destination.id.starts_with("RANK_s_")
+}
+
+fn grade_diff_rank_destination_matches(
+    destination: &SkinDestinationDef,
+    op: i32,
+    state: SkinDrawState,
+    has_half_grade_f_diff_rank_destination: bool,
+) -> bool {
+    let Some(grade) = grade_diff_rank_target_grade(state, has_half_grade_f_diff_rank_destination)
+    else {
+        return false;
+    };
+    if half_grade_diff_rank_destination_grade(&destination.id) != Some(grade) {
+        return false;
+    }
+    half_grade_diff_rank_op(grade).is_some_and(|rank_op| op == rank_op)
+}
+
+fn grade_diff_rank_target_grade(
+    state: SkinDrawState,
+    has_half_grade_f_diff_rank_destination: bool,
+) -> Option<&'static str> {
+    match state.result_grade_diff_display {
+        ResultGradeDiffDisplay::Beatoraja => beatoraja_next_rank_grade(state),
+        ResultGradeDiffDisplay::HalfGrade => {
+            half_grade_diff_for_destination(state, has_half_grade_f_diff_rank_destination)
+                .map(|diff| diff.grade)
+        }
+    }
+}
+
+fn half_grade_diff_rank_op(grade: &str) -> Option<i32> {
+    match grade {
+        "MAX" => Some(300),
+        "AAA" => Some(301),
+        "AA" => Some(302),
+        "A" => Some(303),
+        "B" => Some(304),
+        "C" => Some(305),
+        "D" => Some(306),
+        "E" | "F" => Some(307),
+        _ => None,
+    }
+}
+
+fn half_grade_diff_rank_destination_grade(id: &str) -> Option<&'static str> {
+    match id {
+        "RANK_s_MAX" => Some("MAX"),
+        "RANK_s_AAA" => Some("AAA"),
+        "RANK_s_AA" => Some("AA"),
+        "RANK_s_A" => Some("A"),
+        "RANK_s_B" => Some("B"),
+        "RANK_s_C" => Some("C"),
+        "RANK_s_D" => Some("D"),
+        "RANK_s_E" => Some("E"),
+        "RANK_s_F" => Some("F"),
+        _ => None,
+    }
+}
+
+fn half_grade_f_diff_rank_destination_available(destinations: &[&SkinDestinationDef]) -> bool {
+    destinations.iter().any(|destination| destination.id == "RANK_s_F")
+}
+
+fn apply_half_grade_f_diff_rank_fallback(
+    state: SkinDrawState,
+    has_half_grade_f_diff_rank_destination: bool,
+) -> SkinDrawState {
+    SkinDrawState {
+        result_grade_diff_f_fallback_to_e: state.result_grade_diff_display
+            == ResultGradeDiffDisplay::HalfGrade
+            && !has_half_grade_f_diff_rank_destination,
+        ..state
+    }
+}
+
+fn half_grade_diff_for_destination(
+    state: SkinDrawState,
+    has_half_grade_f_diff_rank_destination: bool,
+) -> Option<HalfGradeDiff> {
+    let diff = half_grade_diff(state)?;
+    if diff.grade == "F" && !has_half_grade_f_diff_rank_destination {
+        return half_grade_e_minus_diff(state);
+    }
+    Some(diff)
+}
+
+fn half_grade_e_minus_diff(state: SkinDrawState) -> Option<HalfGradeDiff> {
+    let score = state.select_ex_score.unwrap_or(state.ex_score) as i64;
+    let total_notes = state.select_total_notes.max(state.total_notes) as i64;
+    let max = total_notes.checked_mul(2)?;
+    if max <= 0 {
+        return None;
+    }
+    let score = score.clamp(0, max);
+    Some(HalfGradeDiff { grade: "E", value: -div_ceil(max * 2 - score * 9, 9) })
 }
 
 fn current_datetime_number(ref_id: i32) -> Option<i64> {
@@ -11823,6 +12110,16 @@ mod tests {
         assert_eq!(skin_state_number(154, aaa_state), Some(-200));
         assert_eq!(skin_state_number(154, max_state), Some(0));
         assert_eq!(skin_state_number(154, SkinDrawState::default()), None);
+        assert_eq!(beatoraja_next_rank_grade(a_state), Some("AA"));
+        assert_eq!(beatoraja_next_rank_grade(aaa_state), Some("MAX"));
+        assert_eq!(
+            beatoraja_next_rank_grade(SkinDrawState {
+                select_ex_score: Some(0),
+                select_total_notes: 2253,
+                ..SkinDrawState::default()
+            }),
+            Some("E")
+        );
 
         let half_grade = SkinDrawState {
             result_grade_diff_display: ResultGradeDiffDisplay::HalfGrade,
@@ -11852,6 +12149,350 @@ mod tests {
         assert_eq!(
             result_grade_diff_label(SkinDrawState { select_ex_score: Some(2000), ..half_grade }),
             Some("MAX+0".to_string())
+        );
+    }
+
+    #[test]
+    fn half_grade_result_diff_rank_destinations_use_target_grade() {
+        fn destination(id: &str, op: i32) -> SkinDestinationDef {
+            SkinDestinationDef {
+                id: id.to_string(),
+                blend: 0,
+                filter: 0,
+                timer: None,
+                loop_time: None,
+                center: 0,
+                offset: 0,
+                offsets: Vec::new(),
+                stretch: default_stretch(),
+                op: vec![op],
+                draw: String::new(),
+                dst: Vec::new(),
+                mouse_rect: None,
+            }
+        }
+        fn grade_diff_value() -> SkinValueDef {
+            SkinValueDef {
+                id: "RANK_Diff_Exscore".to_string(),
+                src: "num".to_string(),
+                x: 0,
+                y: 0,
+                w: 0,
+                h: 0,
+                divx: default_grid_division(),
+                divy: default_grid_division(),
+                timer: None,
+                cycle: 0,
+                align: 0,
+                digit: 0,
+                padding: 0,
+                zeropadding: 0,
+                space: 0,
+                ref_id: 154,
+                expr: String::new(),
+                value_expr: String::new(),
+                offset: Vec::new(),
+            }
+        }
+
+        let max_minus = SkinDrawState {
+            ex_score: 1900,
+            total_notes: 1000,
+            result_failed: Some(false),
+            result_grade_diff_display: ResultGradeDiffDisplay::HalfGrade,
+            ..SkinDrawState::default()
+        };
+        assert!(destination_ops_match(&destination("RANK_s_MAX", 300), &[], max_minus, false));
+        assert!(!destination_ops_match(&destination("RANK_s_AAA", 301), &[], max_minus, false));
+        assert!(destination_ops_match(&destination("RANK_m_AAA", 300), &[], max_minus, false));
+
+        let beatoraja_e_minus = SkinDrawState {
+            select_ex_score: Some(0),
+            select_total_notes: 2253,
+            select_screen: true,
+            ..SkinDrawState::default()
+        };
+        assert!(destination_ops_match(
+            &destination("RANK_s_E", 307),
+            &[],
+            beatoraja_e_minus,
+            false
+        ));
+        assert!(!destination_ops_match(
+            &destination("RANK_s_D", 306),
+            &[],
+            beatoraja_e_minus,
+            false
+        ));
+
+        let f_plus = SkinDrawState {
+            ex_score: 100,
+            total_notes: 1000,
+            result_failed: Some(false),
+            result_grade_diff_display: ResultGradeDiffDisplay::HalfGrade,
+            ..SkinDrawState::default()
+        };
+        assert!(destination_ops_match(&destination("RANK_s_E", 307), &[], f_plus, false));
+        assert!(!destination_ops_match(&destination("RANK_s_F", 307), &[], f_plus, false));
+        assert_eq!(
+            skin_value_number_for_destination(&grade_diff_value(), f_plus, false),
+            Some(-345)
+        );
+        assert_eq!(
+            skin_state_number(
+                154,
+                SkinDrawState { result_grade_diff_f_fallback_to_e: true, ..f_plus }
+            ),
+            Some(-345)
+        );
+
+        assert!(destination_ops_match(&destination("RANK_s_F", 307), &[], f_plus, true));
+        assert!(!destination_ops_match(&destination("RANK_s_E", 307), &[], f_plus, true));
+        assert_eq!(skin_value_number_for_destination(&grade_diff_value(), f_plus, true), Some(100));
+        assert!(destination_ops_match(&destination("RANK_m_F", 307), &[], f_plus, false));
+    }
+
+    #[test]
+    fn half_grade_result_diff_number_renders_negative_when_f_rank_destination_is_missing() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 7,
+                "w": 100,
+                "h": 100,
+                "value": [
+                    {
+                        "id": "RANK_Diff_Exscore",
+                        "src": "num",
+                        "x": 0,
+                        "y": 0,
+                        "w": 120,
+                        "h": 40,
+                        "divx": 12,
+                        "divy": 2,
+                        "digit": 5,
+                        "ref": 154,
+                        "zeropadding": 2
+                    }
+                ],
+                "destination": [
+                    {
+                        "id": "RANK_s_E",
+                        "op": [307],
+                        "dst": [{"x": 0, "y": 20, "w": 10, "h": 10}]
+                    },
+                    {
+                        "id": "RANK_Diff_Exscore",
+                        "dst": [{"x": 10, "y": 20, "w": 10, "h": 10}]
+                    }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "num".to_string(),
+            SkinDocumentTexture {
+                source_id: "num".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 120.0, height: 40.0 },
+            },
+        )]);
+        let state = SkinDrawState {
+            ex_score: 100,
+            total_notes: 1000,
+            result_failed: Some(false),
+            result_grade_diff_display: ResultGradeDiffDisplay::HalfGrade,
+            ..SkinDrawState::default()
+        };
+
+        let items = document.static_render_items(&sources, state, SkinTextState::default());
+        let first_digit_uv = items.iter().find_map(|item| match item {
+            SkinRenderItem::Image { texture: SkinTextureId(42), uv, .. } => Some(*uv),
+            _ => None,
+        });
+
+        assert_eq!(first_digit_uv.map(|uv| uv.y), Some(0.0));
+    }
+
+    #[test]
+    fn half_grade_select_diff_number_renders_e_minus_when_f_rank_destination_is_missing() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 5,
+                "w": 100,
+                "h": 100,
+                "source": [
+                    {"id": "rank", "path": "rank.png"}
+                ],
+                "image": [
+                    {"id": "RANK_s_E", "src": "rank", "x": 0, "y": 0, "w": 45, "h": 19}
+                ],
+                "value": [
+                    {
+                        "id": "RANK_Diff_Exscore",
+                        "src": "num",
+                        "x": 0,
+                        "y": 0,
+                        "w": 120,
+                        "h": 40,
+                        "divx": 12,
+                        "divy": 2,
+                        "digit": 4,
+                        "ref": 154,
+                        "zeropadding": 2
+                    }
+                ],
+                "destination": [
+                    {
+                        "id": "RANK_s_E",
+                        "op": [307],
+                        "dst": [{"x": 0, "y": 20, "w": 10, "h": 10}]
+                    },
+                    {
+                        "id": "RANK_Diff_Exscore",
+                        "dst": [{"x": 10, "y": 20, "w": 10, "h": 10}]
+                    }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([
+            (
+                "num".to_string(),
+                SkinDocumentTexture {
+                    source_id: "num".to_string(),
+                    texture: SkinTextureId(42),
+                    source_size: SkinImageSize { width: 120.0, height: 40.0 },
+                },
+            ),
+            (
+                "rank".to_string(),
+                SkinDocumentTexture {
+                    source_id: "rank".to_string(),
+                    texture: SkinTextureId(7),
+                    source_size: SkinImageSize { width: 45.0, height: 19.0 },
+                },
+            ),
+        ]);
+        let snapshot = SelectSnapshot {
+            rows: vec![SelectRowSnapshot {
+                index: 0,
+                ex_score: Some(100),
+                total_notes: 1000,
+                in_library: true,
+                ..SelectRowSnapshot::default()
+            }],
+            chart_count: 1,
+            grade_diff_display: ResultGradeDiffDisplay::HalfGrade,
+            ..SelectSnapshot::default()
+        };
+
+        let items = document.select_render_items(&sources, &snapshot);
+        let first_digit_uv = items.iter().find_map(|item| match item {
+            SkinRenderItem::Image { texture: SkinTextureId(42), uv, .. } => Some(*uv),
+            _ => None,
+        });
+
+        assert_eq!(first_digit_uv.map(|uv| uv.y), Some(0.0));
+        assert!(
+            items.iter().any(|item| matches!(
+                item,
+                SkinRenderItem::Image { texture: SkinTextureId(7), .. }
+            ))
+        );
+    }
+
+    #[test]
+    fn beatoraja_select_diff_number_renders_next_rank_label() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 5,
+                "w": 100,
+                "h": 100,
+                "source": [
+                    {"id": "rank", "path": "rank.png"}
+                ],
+                "image": [
+                    {"id": "RANK_s_E", "src": "rank", "x": 0, "y": 0, "w": 45, "h": 19}
+                ],
+                "value": [
+                    {
+                        "id": "RANK_Diff_Exscore",
+                        "src": "num",
+                        "x": 0,
+                        "y": 0,
+                        "w": 120,
+                        "h": 40,
+                        "divx": 12,
+                        "divy": 2,
+                        "digit": 4,
+                        "ref": 154,
+                        "zeropadding": 2
+                    }
+                ],
+                "destination": [
+                    {
+                        "id": "RANK_s_E",
+                        "op": [307],
+                        "dst": [{"x": 0, "y": 20, "w": 10, "h": 10}]
+                    },
+                    {
+                        "id": "RANK_Diff_Exscore",
+                        "dst": [{"x": 10, "y": 20, "w": 10, "h": 10}]
+                    }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([
+            (
+                "num".to_string(),
+                SkinDocumentTexture {
+                    source_id: "num".to_string(),
+                    texture: SkinTextureId(42),
+                    source_size: SkinImageSize { width: 120.0, height: 40.0 },
+                },
+            ),
+            (
+                "rank".to_string(),
+                SkinDocumentTexture {
+                    source_id: "rank".to_string(),
+                    texture: SkinTextureId(7),
+                    source_size: SkinImageSize { width: 45.0, height: 19.0 },
+                },
+            ),
+        ]);
+        let snapshot = SelectSnapshot {
+            rows: vec![SelectRowSnapshot {
+                index: 0,
+                ex_score: Some(0),
+                total_notes: 2253,
+                in_library: true,
+                ..SelectRowSnapshot::default()
+            }],
+            chart_count: 1,
+            ..SelectSnapshot::default()
+        };
+
+        let items = document.select_render_items(&sources, &snapshot);
+        let first_digit_uv = items.iter().find_map(|item| match item {
+            SkinRenderItem::Image { texture: SkinTextureId(42), uv, .. } => Some(*uv),
+            _ => None,
+        });
+
+        let (state, _) = document.select_draw_state(&snapshot, None);
+        assert_eq!(skin_state_number(154, state), Some(-501));
+        assert_eq!(first_digit_uv.map(|uv| uv.y), Some(0.0));
+        assert!(
+            items.iter().any(|item| matches!(
+                item,
+                SkinRenderItem::Image { texture: SkinTextureId(7), .. }
+            ))
         );
     }
 
@@ -16402,6 +17043,35 @@ mod tests {
         // NUMBER_DIFF_NEXTRANK (154) も同じ符号セル付き mimage レイアウトを使う。
         assert_eq!(display_signed_number_digits(-34, 4, false, 12), vec![23, 15, 16]);
         assert!(ref_id_is_signed(154));
+        let rank_diff_value = SkinValueDef {
+            id: "RANK_Diff_Exscore".to_string(),
+            src: "num".to_string(),
+            x: 0,
+            y: 0,
+            w: 0,
+            h: 0,
+            divx: 12,
+            divy: 2,
+            timer: None,
+            cycle: 0,
+            align: 0,
+            digit: 4,
+            padding: 0,
+            zeropadding: 0,
+            space: 0,
+            ref_id: 154,
+            expr: String::new(),
+            value_expr: String::new(),
+            offset: Vec::new(),
+        };
+        assert_eq!(
+            display_signed_number_digits_for_value(&rank_diff_value, -34, 4, false, 12),
+            vec![11, 3, 4]
+        );
+        assert_eq!(
+            display_signed_number_digits_for_value(&rank_diff_value, 34, 4, false, 12),
+            vec![23, 15, 16]
+        );
 
         let select_detail =
             SkinDrawState { select_screen: true, select_option_panel: 3, ..Default::default() };
