@@ -260,19 +260,7 @@ impl From<&[SelectChartRow]> for SelectFolderSummary {
 }
 
 fn folder_lamp_index_from_clear_type(clear_type: &str) -> usize {
-    match clear_type {
-        "Failed" => 1,
-        "AssistEasy" => 2,
-        "LightAssistEasy" => 3,
-        "Easy" => 4,
-        "Normal" => 5,
-        "Hard" => 6,
-        "ExHard" => 7,
-        "FullCombo" => 8,
-        "Perfect" => 9,
-        "Max" => 10,
-        _ => 0,
-    }
+    usize::from(bmz_core::clear::ClearType::rank_from_label(clear_type))
 }
 
 fn clear_type_name_for_folder_lamp(index: usize) -> &'static str {

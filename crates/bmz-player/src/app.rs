@@ -571,7 +571,7 @@ fn course_result_summary_for_skin(course: &CourseResultSummary) -> ResultSummary
             }
         });
     let best_clear_type =
-        course.best_score.as_ref().and_then(|best| clear_type_from_label(&best.clear_type));
+        course.best_score.as_ref().and_then(|best| ClearType::from_label(&best.clear_type));
 
     ResultSummary {
         clear_type,
@@ -742,23 +742,6 @@ fn result_main_bpm(summary: &ResultSummary) -> f32 {
         })
         .map(|segment| segment.bpm)
         .unwrap_or(summary.main_bpm)
-}
-
-fn clear_type_from_label(label: &str) -> Option<ClearType> {
-    match label {
-        "NoPlay" => Some(ClearType::NoPlay),
-        "Failed" => Some(ClearType::Failed),
-        "AssistEasy" => Some(ClearType::AssistEasy),
-        "LightAssistEasy" => Some(ClearType::LightAssistEasy),
-        "Easy" => Some(ClearType::Easy),
-        "Normal" => Some(ClearType::Normal),
-        "Hard" => Some(ClearType::Hard),
-        "ExHard" => Some(ClearType::ExHard),
-        "FullCombo" => Some(ClearType::FullCombo),
-        "Perfect" => Some(ClearType::Perfect),
-        "Max" => Some(ClearType::Max),
-        _ => None,
-    }
 }
 
 impl WinitApp {
@@ -7498,17 +7481,15 @@ fn play_level_number(row: &crate::screens::select_model::SelectChartRow) -> f64 
     row.chart.as_ref().and_then(|chart| chart.play_level.parse::<f64>().ok()).unwrap_or(0.0)
 }
 
-fn clear_rank(row: &crate::screens::select_model::SelectChartRow) -> u8 {
-    match row.best_score.as_ref().map(|score| score.clear_type.as_str()).unwrap_or_default() {
-        "Perfect" => 8,
-        "FullCombo" => 7,
-        "Hard" => 6,
-        "Easy" => 5,
-        "Clear" => 4,
-        "AssistEasy" => 3,
-        "Failed" => 1,
-        _ => 0,
+fn clear_rank(row: &crate::screens::select_model::SelectChartRow) -> i8 {
+    if !row.in_library() {
+        // 難易度表にあるがローカル未所持。NoPlay よりさらに下位へ並べる。
+        return -1;
     }
+    // 所持済み: NoPlay / 未記録 = 0、Failed=1 .. Max=10。
+    ClearType::rank_from_label(
+        row.best_score.as_ref().map(|score| score.clear_type.as_str()).unwrap_or_default(),
+    ) as i8
 }
 
 fn ex_score(row: &crate::screens::select_model::SelectChartRow) -> u32 {
@@ -10630,6 +10611,23 @@ mod tests {
         let mut row = select_chart_row(index);
         row.chart.as_mut().unwrap().mode = mode.to_string();
         SelectItem::Chart(row)
+    }
+
+    #[test]
+    fn clear_rank_separates_unowned_from_noplay() {
+        // 所持済み・スコア無し → NoPlay = 0。
+        let noplay = select_chart_row(1);
+        assert!(noplay.in_library());
+        assert_eq!(clear_rank(&noplay), 0);
+
+        // 難易度表エントリだがローカル未所持 → NoPlay より下位の -1。
+        let mut unowned = select_chart_row(2);
+        unowned.chart = None;
+        unowned.entry_sha256 = Some([2u8; 32]);
+        assert!(!unowned.in_library());
+        assert_eq!(clear_rank(&unowned), -1);
+
+        assert!(clear_rank(&unowned) < clear_rank(&noplay));
     }
 
     #[test]
