@@ -115,6 +115,16 @@ fn import_lr2_scores(
                 continue;
             }
         };
+        // LR2 stores course (dan) results in the same `score` table, keyed by a
+        // concatenation of a marker segment and the constituent chart md5s (e.g. a
+        // 160-char key for a 4-song course).  A single chart md5 is 32 hex chars, so
+        // a course key is a multiple of 32 longer than 32.  These are not importable
+        // as single-chart scores, so skip them rather than failing on the hex parse.
+        if is_course_hash(&row.md5, 32) {
+            report.skipped += 1;
+            tracing::debug!(len = row.md5.len(), "skipped LR2 course score");
+            continue;
+        }
         let md5 = match hex_to_hash::<16>(&row.md5) {
             Ok(md5) => md5,
             Err(error) => {
@@ -186,7 +196,7 @@ fn import_beatoraja_scores(
         // key cannot be unambiguously mapped back to a bmz course (table-defined
         // courses sharing a song set differ only by constraint, which the key omits).
         // Treat them as skipped rather than failed, and keep the log quiet.
-        if is_course_sha256(&row.sha256) {
+        if is_course_hash(&row.sha256, 64) {
             report.skipped += 1;
             tracing::debug!(len = row.sha256.len(), "skipped beatoraja course score");
             continue;
@@ -249,12 +259,17 @@ fn imported_score_record(
     }
 }
 
-/// Returns true when `sha256` is a beatoraja course key: a concatenation of two
-/// or more 64-char chart hashes (length is a non-zero multiple of 64 greater than
-/// a single hash).  Single-chart scores are exactly 64 chars and return false.
-fn is_course_sha256(sha256: &str) -> bool {
-    let len = sha256.len();
-    len > 64 && len.is_multiple_of(64)
+/// Returns true when `hash` is a course key rather than a single-chart hash.
+///
+/// Both LR2 and beatoraja store course (dan) results in the same `score` table,
+/// keyed by a concatenation of the constituent chart hashes (plus, for LR2, a
+/// leading marker segment).  A single chart hash has a fixed width
+/// (`single_len`: 32 for LR2 md5, 64 for beatoraja sha256), so a course key is a
+/// non-zero multiple of that width longer than a single hash.  These cannot be
+/// imported as single-chart scores, so callers skip them rather than fail.
+fn is_course_hash(hash: &str, single_len: usize) -> bool {
+    let len = hash.len();
+    len > single_len && len.is_multiple_of(single_len)
 }
 
 fn ensure_table(conn: &Connection, table: &str) -> Result<()> {
@@ -637,13 +652,40 @@ mod tests {
     }
 
     #[test]
-    fn is_course_sha256_classifies_by_length() {
-        assert!(!is_course_sha256(&"a".repeat(64)));
-        assert!(is_course_sha256(&"a".repeat(128)));
-        assert!(is_course_sha256(&"a".repeat(256)));
-        // Genuinely malformed (not a multiple of 64) stays a hard failure.
-        assert!(!is_course_sha256(&"a".repeat(100)));
-        assert!(!is_course_sha256(""));
+    fn lr2_import_skips_course_scores_without_failing() {
+        let (library_db, mut score_db, _, _) = open_test_databases();
+        let source = Connection::open_in_memory().unwrap();
+        // An LR2 course key: a 32-char marker plus four 32-char md5s (160 chars).
+        let course_key = "0".repeat(32) + &"a".repeat(128);
+        create_lr2_source_with_hash(&source, &course_key);
+
+        let report = import_lr2_scores(
+            &source,
+            ScoreImportKind::Lr2,
+            &library_db,
+            &mut score_db,
+            1_700_000_000,
+        )
+        .unwrap();
+
+        assert_eq!(report.scanned, 1);
+        assert_eq!(report.skipped, 1);
+        assert_eq!(report.failed, 0);
+        assert_eq!(report.imported, 0);
+    }
+
+    #[test]
+    fn is_course_hash_classifies_by_length() {
+        // beatoraja sha256 width.
+        assert!(!is_course_hash(&"a".repeat(64), 64));
+        assert!(is_course_hash(&"a".repeat(128), 64));
+        assert!(is_course_hash(&"a".repeat(256), 64));
+        // LR2 md5 width.
+        assert!(!is_course_hash(&"a".repeat(32), 32));
+        assert!(is_course_hash(&"a".repeat(160), 32));
+        // Genuinely malformed (not a multiple of the width) stays a hard failure.
+        assert!(!is_course_hash(&"a".repeat(100), 64));
+        assert!(!is_course_hash("", 64));
     }
 
     fn open_test_databases() -> (LibraryDatabase, ScoreDatabase, [u8; 32], [u8; 16]) {
@@ -708,6 +750,10 @@ mod tests {
     }
 
     fn create_lr2_source(conn: &Connection, md5: &[u8; 16]) {
+        create_lr2_source_with_hash(conn, &hash_to_hex(md5));
+    }
+
+    fn create_lr2_source_with_hash(conn: &Connection, hash: &str) {
         conn.execute_batch(
             "CREATE TABLE score (
                 hash TEXT, clear INTEGER, perfect INTEGER, great INTEGER,
@@ -719,7 +765,7 @@ mod tests {
         .unwrap();
         conn.execute(
             "INSERT INTO score VALUES (?1, 4, 100, 21, 3, 2, 1, 128, 64, 3, 2, 1, '', 123)",
-            params![hash_to_hex(md5)],
+            params![hash],
         )
         .unwrap();
     }
