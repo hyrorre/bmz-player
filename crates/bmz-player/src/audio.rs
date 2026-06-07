@@ -13,7 +13,7 @@ use bmz_chart::model::BgaAssetId;
 use bmz_core::time::TimeUs;
 use bmz_gameplay::session::GameSession;
 
-use crate::config::app_config::{AudioBackend, AudioConfig};
+use crate::config::app_config::{AudioBackend, AudioBufferSizeMode, AudioConfig};
 use crate::screens::play_finish::FinishedPlaySession;
 use crate::screens::play_session::{AppliedArrange, PreparedPlaySession};
 use crate::screens::play_snapshot::BgaFrameCatalog;
@@ -163,8 +163,18 @@ pub fn open_prepared_play_audio(
 fn cpal_output_config(config: &AudioConfig) -> Result<CpalOutputConfig> {
     let host = cpal_host_for_backend(&config.backend)?;
     let output_device_name = cpal_output_device_name(config);
+    let buffer_size = cpal_buffer_size(config);
 
-    Ok(CpalOutputConfig { host, output_device_name })
+    Ok(CpalOutputConfig { host, output_device_name, buffer_size })
+}
+
+/// バッファサイズモードが `Fixed` のときだけフレーム数を指定する。`Auto` は
+/// デバイス既定に任せるため `None`。
+fn cpal_buffer_size(config: &AudioConfig) -> Option<u32> {
+    match config.buffer_size_mode {
+        AudioBufferSizeMode::Fixed => Some(config.buffer_size),
+        AudioBufferSizeMode::Auto => None,
+    }
 }
 
 /// 設定 UI 用に、選択中バックエンドの出力デバイス名(ASIO ならドライバ名)を列挙する。
@@ -258,5 +268,27 @@ mod tests {
 
         #[cfg(not(all(windows, feature = "asio")))]
         assert!(output.is_err());
+    }
+
+    #[test]
+    fn fixed_buffer_size_mode_passes_frame_count() {
+        let mut config = AppConfig::default().audio;
+        config.buffer_size_mode = AudioBufferSizeMode::Fixed;
+        config.buffer_size = 96;
+
+        let output = cpal_output_config(&config).unwrap();
+
+        assert_eq!(output.buffer_size, Some(96));
+    }
+
+    #[test]
+    fn auto_buffer_size_mode_leaves_device_default() {
+        let mut config = AppConfig::default().audio;
+        config.buffer_size_mode = AudioBufferSizeMode::Auto;
+        config.buffer_size = 96;
+
+        let output = cpal_output_config(&config).unwrap();
+
+        assert_eq!(output.buffer_size, None);
     }
 }

@@ -20,6 +20,9 @@ pub struct CpalBackend;
 pub struct CpalOutputConfig {
     pub host: Option<CpalHostId>,
     pub output_device_name: Option<String>,
+    /// 1 コールバックあたりのバッファフレーム数。`None` はデバイス既定(自動)。
+    /// `Some(n)` でも端末がサポートする範囲にクランプされる。
+    pub buffer_size: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,9 +118,12 @@ impl CpalBackend {
             None => ::cpal::default_host(),
         };
         let device = output_device(&host, config.output_device_name.as_deref())?;
+        let requested_buffer_size = config.buffer_size;
         let supported_config = device.default_output_config()?;
         let sample_format = supported_config.sample_format();
-        let config = supported_config.config();
+        let supported_buffer_size = *supported_config.buffer_size();
+        let mut config = supported_config.config();
+        config.buffer_size = resolve_buffer_size(requested_buffer_size, &supported_buffer_size);
         let sample_rate = config.sample_rate.0;
         let current_frame = Arc::new(AtomicU64::new(0));
         let sources = Arc::new(Mutex::new(Vec::new()));
@@ -220,6 +226,24 @@ pub fn list_output_device_names(host: Option<CpalHostId>) -> Vec<String> {
         return Vec::new();
     };
     devices.filter_map(|device| device.name().ok()).collect()
+}
+
+/// 要求バッファサイズをデバイスのサポート範囲にクランプして `BufferSize` を決める。
+/// `None` はデバイス既定。範囲不明なら要求値をそのまま Fixed で渡す。
+fn resolve_buffer_size(
+    requested: Option<u32>,
+    supported: &::cpal::SupportedBufferSize,
+) -> ::cpal::BufferSize {
+    match requested {
+        None => ::cpal::BufferSize::Default,
+        Some(frames) => {
+            let frames = match supported {
+                ::cpal::SupportedBufferSize::Range { min, max } => frames.clamp(*min, *max),
+                ::cpal::SupportedBufferSize::Unknown => frames,
+            };
+            ::cpal::BufferSize::Fixed(frames)
+        }
+    }
 }
 
 fn output_device(
@@ -541,5 +565,37 @@ mod tests {
         mix_sources_stereo(0, 1, &sources, &mut mix, &mut scratch, &mut engines);
 
         assert_eq!(mix, vec![0.75, 0.75]);
+    }
+
+    #[test]
+    fn resolve_buffer_size_uses_default_when_unset() {
+        let resolved = resolve_buffer_size(None, &::cpal::SupportedBufferSize::Unknown);
+        assert!(matches!(resolved, ::cpal::BufferSize::Default));
+    }
+
+    #[test]
+    fn resolve_buffer_size_clamps_to_supported_range() {
+        let range = ::cpal::SupportedBufferSize::Range { min: 64, max: 1024 };
+
+        assert!(matches!(
+            resolve_buffer_size(Some(32), &range),
+            ::cpal::BufferSize::Fixed(64)
+        ));
+        assert!(matches!(
+            resolve_buffer_size(Some(256), &range),
+            ::cpal::BufferSize::Fixed(256)
+        ));
+        assert!(matches!(
+            resolve_buffer_size(Some(4096), &range),
+            ::cpal::BufferSize::Fixed(1024)
+        ));
+    }
+
+    #[test]
+    fn resolve_buffer_size_passes_through_when_range_unknown() {
+        assert!(matches!(
+            resolve_buffer_size(Some(96), &::cpal::SupportedBufferSize::Unknown),
+            ::cpal::BufferSize::Fixed(96)
+        ));
     }
 }
