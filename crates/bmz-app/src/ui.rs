@@ -7,6 +7,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use bmz_gameplay::rule::RuleMode;
+use bmz_render::scene::ResultGradeDiffDisplay;
 use bmz_render::skin::{SkinDocument, SkinFilepathDef, SkinOffsetDef, SkinPropertyDef};
 use bmz_render::skin_offset::SKIN_OFFSET_BAR_LINE;
 use bmz_render::ui::EguiFrame;
@@ -18,8 +20,11 @@ use crate::config::app_config::{
     AppConfig, AudioBackend, AudioBufferSizeMode, RendererBackend, WindowMode,
 };
 use crate::config::profile_config::{
-    ProfileConfig, SkinConfig, SkinHistoryEntryConfig, SkinOffsetConfig,
+    AssistOptionConfig, BgaExpandConfig, BgaModeConfig, GaugeAutoShiftConfig, GaugeTypeConfig,
+    HispeedModeConfig, JudgeAlgorithmConfig, LaneEffectConfig, ProfileConfig, RandomOptionConfig,
+    ScratchInputMode, SkinConfig, SkinHistoryEntryConfig, SkinOffsetConfig, TargetOptionConfig,
 };
+use crate::ln_policy::LnPolicySetting;
 use crate::practice_ui::{PracticePanelContext, build_practice_panel};
 use crate::screens::course_session::CourseResultSummary;
 use crate::screens::select_model::SelectCourseRow;
@@ -209,6 +214,8 @@ pub struct EguiLayer {
     show_debug: bool,
     /// 本体設定パネルの開閉状態。
     show_settings: bool,
+    /// プロファイル設定パネルの開閉状態。
+    show_profile_settings: bool,
     /// スキン設定パネルの開閉状態。
     show_skin: bool,
     /// 本体設定パネル: 曲フォルダ追加用の入力欄。
@@ -252,6 +259,7 @@ impl EguiLayer {
             visible: false,
             show_debug,
             show_settings: false,
+            show_profile_settings: false,
             show_skin: false,
             settings_new_root_path: String::new(),
             settings_add_root_error: String::new(),
@@ -317,6 +325,7 @@ impl EguiLayer {
         let ctx = self.ctx.clone();
         let show_debug = &mut self.show_debug;
         let show_settings = &mut self.show_settings;
+        let show_profile_settings = &mut self.show_profile_settings;
         let show_skin = &mut self.show_skin;
         let mut save_app_config = false;
         let mut save_profile_config = false;
@@ -345,7 +354,14 @@ impl EguiLayer {
             }
             if *visible_flag {
                 let ctx = ui.ctx();
-                build_menu(ctx, visible_flag, show_debug, show_settings, show_skin);
+                build_menu(
+                    ctx,
+                    visible_flag,
+                    show_debug,
+                    show_settings,
+                    show_profile_settings,
+                    show_skin,
+                );
                 build_debug_panel(ctx, show_debug, info);
                 let settings_actions = build_settings_panel(
                     ctx,
@@ -362,6 +378,13 @@ impl EguiLayer {
                 save_app_config |= settings_actions.save;
                 trigger_song_rescan |= settings_actions.rescan;
                 score_import_request = settings_actions.score_import_request;
+                let profile_settings_actions = build_profile_settings_panel(
+                    ctx,
+                    show_profile_settings,
+                    profile_config,
+                    show_debug,
+                );
+                save_profile_config |= profile_settings_actions.save;
                 let skin_actions = build_skin_panel(
                     ctx,
                     show_skin,
@@ -424,6 +447,7 @@ fn build_menu(
     visible: &mut bool,
     show_debug: &mut bool,
     show_settings: &mut bool,
+    show_profile_settings: &mut bool,
     show_skin: &mut bool,
 ) {
     egui::Window::new("BMZ メニュー")
@@ -435,6 +459,7 @@ fn build_menu(
             ui.separator();
             ui.checkbox(show_debug, "デバッグ表示");
             ui.checkbox(show_settings, "本体設定");
+            ui.checkbox(show_profile_settings, "プロファイル設定");
             ui.checkbox(show_skin, "スキン設定");
         });
 }
@@ -1217,6 +1242,450 @@ fn renderer_backend_label(backend: &RendererBackend) -> &'static str {
         RendererBackend::Metal => "Metal",
         RendererBackend::Dx12 => "DirectX 12",
         RendererBackend::Gl => "OpenGL",
+    }
+}
+
+struct ProfileSettingsPanelActions {
+    save: bool,
+}
+
+fn build_profile_settings_panel(
+    ctx: &egui::Context,
+    open: &mut bool,
+    profile: &mut ProfileConfig,
+    show_debug: &mut bool,
+) -> ProfileSettingsPanelActions {
+    let mut save_clicked = false;
+    sized_panel_window("プロファイル設定", ctx, open, 460.0, 560.0, egui::pos2(476.0, 320.0)).show(
+        ctx,
+        |ui| {
+            scrollable_window_content(ui, |ui| {
+                egui::CollapsingHeader::new("基本").default_open(true).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("表示名");
+                        ui.text_edit_singleline(&mut profile.display_name);
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("プレイヤー名");
+                        ui.text_edit_singleline(&mut profile.player_name);
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("ID");
+                        ui.monospace(&profile.id);
+                    });
+                });
+
+                egui::CollapsingHeader::new("音量").default_open(true).show(ui, |ui| {
+                    volume_slider(ui, &mut profile.audio_mix.master_volume, "マスター");
+                    volume_slider(ui, &mut profile.audio_mix.key_volume, "キー音");
+                    volume_slider(ui, &mut profile.audio_mix.bgm_volume, "BGM");
+                    volume_slider(ui, &mut profile.audio_mix.preview_volume, "選曲プレビュー");
+                    volume_slider(ui, &mut profile.audio_mix.system_bgm_volume, "システム BGM");
+                    volume_slider(ui, &mut profile.audio_mix.system_se_volume, "システム SE");
+                });
+
+                egui::CollapsingHeader::new("判定").show(ui, |ui| {
+                    offset_ms_slider(ui, &mut profile.judge.input_offset_us, "入力オフセット");
+                    offset_ms_slider(ui, &mut profile.judge.visual_offset_us, "表示オフセット");
+                    egui::ComboBox::from_label("判定アルゴリズム")
+                        .selected_text(judge_algorithm_label(profile.judge.judge_algorithm))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut profile.judge.judge_algorithm,
+                                JudgeAlgorithmConfig::Combo,
+                                judge_algorithm_label(JudgeAlgorithmConfig::Combo),
+                            );
+                            ui.selectable_value(
+                                &mut profile.judge.judge_algorithm,
+                                JudgeAlgorithmConfig::Duration,
+                                judge_algorithm_label(JudgeAlgorithmConfig::Duration),
+                            );
+                            ui.selectable_value(
+                                &mut profile.judge.judge_algorithm,
+                                JudgeAlgorithmConfig::Lowest,
+                                judge_algorithm_label(JudgeAlgorithmConfig::Lowest),
+                            );
+                        });
+                });
+
+                egui::CollapsingHeader::new("プレイ").show(ui, |ui| {
+                    egui::ComboBox::from_label("ルール")
+                        .selected_text(rule_mode_label(profile.play.rule_mode))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut profile.play.rule_mode,
+                                RuleMode::Beatoraja,
+                                rule_mode_label(RuleMode::Beatoraja),
+                            );
+                            ui.selectable_value(
+                                &mut profile.play.rule_mode,
+                                RuleMode::Lr2Oraja,
+                                rule_mode_label(RuleMode::Lr2Oraja),
+                            );
+                            ui.selectable_value(
+                                &mut profile.play.rule_mode,
+                                RuleMode::Dx,
+                                rule_mode_label(RuleMode::Dx),
+                            );
+                        });
+                    egui::ComboBox::from_label("LN モード")
+                        .selected_text(profile.play.ln_mode_policy.display_label())
+                        .show_ui(ui, |ui| {
+                            for value in LnPolicySetting::ORDER {
+                                ui.selectable_value(
+                                    &mut profile.play.ln_mode_policy,
+                                    value,
+                                    value.display_label(),
+                                );
+                            }
+                        });
+                    egui::ComboBox::from_label("ゲージ")
+                        .selected_text(gauge_label(profile.play.gauge))
+                        .show_ui(ui, |ui| {
+                            for (value, label) in [
+                                (GaugeTypeConfig::AssistEasy, "ASSIST EASY"),
+                                (GaugeTypeConfig::Easy, "EASY"),
+                                (GaugeTypeConfig::Normal, "NORMAL"),
+                                (GaugeTypeConfig::Hard, "HARD"),
+                                (GaugeTypeConfig::ExHard, "EX HARD"),
+                                (GaugeTypeConfig::Hazard, "HAZARD"),
+                                (GaugeTypeConfig::AutoShift, "AUTO SHIFT"),
+                            ] {
+                                ui.selectable_value(&mut profile.play.gauge, value, label);
+                            }
+                        });
+                    egui::ComboBox::from_label("ゲージオートシフト")
+                        .selected_text(gauge_auto_shift_label(profile.play.gauge_auto_shift))
+                        .show_ui(ui, |ui| {
+                            for (value, label) in [
+                                (GaugeAutoShiftConfig::Off, "OFF"),
+                                (GaugeAutoShiftConfig::Continue, "CONTINUE"),
+                                (GaugeAutoShiftConfig::HardToGroove, "HARD->GROOVE"),
+                                (GaugeAutoShiftConfig::BestClear, "BEST CLEAR"),
+                                (GaugeAutoShiftConfig::SelectToUnder, "SELECT UNDER"),
+                            ] {
+                                ui.selectable_value(
+                                    &mut profile.play.gauge_auto_shift,
+                                    value,
+                                    label,
+                                );
+                            }
+                        });
+                    egui::ComboBox::from_label("ランダム")
+                        .selected_text(random_label(profile.play.random))
+                        .show_ui(ui, |ui| {
+                            for (value, label) in [
+                                (RandomOptionConfig::Off, "OFF"),
+                                (RandomOptionConfig::Mirror, "MIRROR"),
+                                (RandomOptionConfig::Random, "RANDOM"),
+                                (RandomOptionConfig::RRandom, "R-RANDOM"),
+                                (RandomOptionConfig::SRandom, "S-RANDOM"),
+                                (RandomOptionConfig::Spiral, "SPIRAL"),
+                                (RandomOptionConfig::HRandom, "H-RANDOM"),
+                                (RandomOptionConfig::AllScratch, "ALL-SCR"),
+                                (RandomOptionConfig::RandomEx, "RANDOM-EX"),
+                                (RandomOptionConfig::SRandomEx, "S-RANDOM-EX"),
+                            ] {
+                                ui.selectable_value(&mut profile.play.random, value, label);
+                            }
+                        });
+                    egui::ComboBox::from_label("ターゲット")
+                        .selected_text(target_label(profile.play.target))
+                        .show_ui(ui, |ui| {
+                            for (value, label) in [
+                                (TargetOptionConfig::None, "NONE"),
+                                (TargetOptionConfig::Max, "MAX"),
+                                (TargetOptionConfig::Aaa, "AAA"),
+                                (TargetOptionConfig::Aa, "AA"),
+                                (TargetOptionConfig::A, "A"),
+                                (TargetOptionConfig::B, "B"),
+                                (TargetOptionConfig::C, "C"),
+                                (TargetOptionConfig::D, "D"),
+                                (TargetOptionConfig::E, "E"),
+                            ] {
+                                ui.selectable_value(&mut profile.play.target, value, label);
+                            }
+                        });
+                    egui::ComboBox::from_label("リザルト差分表示")
+                        .selected_text(grade_diff_display_label(profile.play.grade_diff_display))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut profile.play.grade_diff_display,
+                                ResultGradeDiffDisplay::Beatoraja,
+                                grade_diff_display_label(ResultGradeDiffDisplay::Beatoraja),
+                            );
+                            ui.selectable_value(
+                                &mut profile.play.grade_diff_display,
+                                ResultGradeDiffDisplay::HalfGrade,
+                                grade_diff_display_label(ResultGradeDiffDisplay::HalfGrade),
+                            );
+                        });
+                    egui::ComboBox::from_label("レーンエフェクト")
+                        .selected_text(lane_effect_label(profile.play.lane_effect))
+                        .show_ui(ui, |ui| {
+                            for (value, label) in [
+                                (LaneEffectConfig::Off, "OFF"),
+                                (LaneEffectConfig::Hidden, "HIDDEN"),
+                                (LaneEffectConfig::Sudden, "SUDDEN"),
+                                (LaneEffectConfig::HiddenSudden, "HIDDEN+SUDDEN"),
+                            ] {
+                                ui.selectable_value(&mut profile.play.lane_effect, value, label);
+                            }
+                        });
+                    egui::ComboBox::from_label("アシスト")
+                        .selected_text(assist_label(profile.play.assist))
+                        .show_ui(ui, |ui| {
+                            for (value, label) in [
+                                (AssistOptionConfig::None, "NONE"),
+                                (AssistOptionConfig::AutoScratch, "AUTO SCRATCH"),
+                                (AssistOptionConfig::LegacyNote, "LEGACY NOTE"),
+                            ] {
+                                ui.selectable_value(&mut profile.play.assist, value, label);
+                            }
+                        });
+                    egui::ComboBox::from_label("BGA")
+                        .selected_text(bga_mode_label(profile.play.bga))
+                        .show_ui(ui, |ui| {
+                            for (value, label) in [
+                                (BgaModeConfig::On, "ON"),
+                                (BgaModeConfig::Auto, "AUTO"),
+                                (BgaModeConfig::Off, "OFF"),
+                            ] {
+                                ui.selectable_value(&mut profile.play.bga, value, label);
+                            }
+                        });
+                    egui::ComboBox::from_label("BGA 表示")
+                        .selected_text(bga_expand_label(profile.play.bga_expand))
+                        .show_ui(ui, |ui| {
+                            for (value, label) in [
+                                (BgaExpandConfig::KeepAspect, "KEEP ASPECT"),
+                                (BgaExpandConfig::Full, "FULL"),
+                                (BgaExpandConfig::Off, "OFF"),
+                            ] {
+                                ui.selectable_value(&mut profile.play.bga_expand, value, label);
+                            }
+                        });
+                    ui.checkbox(&mut profile.play.auto_play, "オートプレイ");
+                    ui.add(
+                        egui::Slider::new(&mut profile.play.misslayer_duration_ms, 0..=5000)
+                            .text("ミスレイヤー表示時間 (ms)"),
+                    );
+                });
+
+                egui::CollapsingHeader::new("表示").show(ui, |ui| {
+                    ui.add(
+                        egui::Slider::new(&mut profile.lane.hispeed, 0.5..=10.0)
+                            .step_by(0.25)
+                            .text("ハイスピード"),
+                    );
+                    egui::ComboBox::from_label("ハイスピードモード")
+                        .selected_text(hispeed_mode_label(profile.lane.hispeed_mode))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut profile.lane.hispeed_mode,
+                                HispeedModeConfig::Normal,
+                                hispeed_mode_label(HispeedModeConfig::Normal),
+                            );
+                            ui.selectable_value(
+                                &mut profile.lane.hispeed_mode,
+                                HispeedModeConfig::Floating,
+                                hispeed_mode_label(HispeedModeConfig::Floating),
+                            );
+                        });
+                    lane_unit_slider(ui, &mut profile.lane.sudden, "SUDDEN+");
+                    lane_unit_slider(ui, &mut profile.lane.lift, "LIFT");
+                    lane_unit_slider(ui, &mut profile.lane.hidden, "HIDDEN");
+                    ui.add(
+                        egui::Slider::new(&mut profile.lane.target_green_number, 1..=999)
+                            .text("緑数字ターゲット"),
+                    );
+                });
+
+                egui::CollapsingHeader::new("入力").show(ui, |ui| {
+                    egui::ComboBox::from_label("スクラッチ")
+                        .selected_text(scratch_input_mode_label(profile.input.scratch_mode))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut profile.input.scratch_mode,
+                                ScratchInputMode::Normal,
+                                scratch_input_mode_label(ScratchInputMode::Normal),
+                            );
+                            ui.selectable_value(
+                                &mut profile.input.scratch_mode,
+                                ScratchInputMode::AnyDirection,
+                                scratch_input_mode_label(ScratchInputMode::AnyDirection),
+                            );
+                        });
+                    ui.add(
+                        egui::Slider::new(&mut profile.input.analog_scratch_sensitivity, 0.1..=5.0)
+                            .text("アナログ感度"),
+                    );
+                    ui.add(
+                        egui::Slider::new(&mut profile.input.analog_scratch_timeout_ms, 0..=5000)
+                            .text("アナログタイムアウト (ms)"),
+                    );
+                    ui.label("キー割り当ては選曲画面の設定ツリーで編集できます。");
+                });
+
+                egui::CollapsingHeader::new("UI").show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("言語");
+                        ui.text_edit_singleline(&mut profile.ui.language);
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("テーマ");
+                        ui.text_edit_singleline(&mut profile.ui.theme);
+                    });
+                    if ui.checkbox(show_debug, "FPS 表示").changed() {
+                        profile.ui.show_fps = *show_debug;
+                    }
+                    ui.checkbox(&mut profile.ui.confirm_on_exit, "終了確認");
+                });
+
+                ui.separator();
+                if ui.button("保存").clicked() {
+                    save_clicked = true;
+                }
+            });
+        },
+    );
+    ProfileSettingsPanelActions { save: save_clicked }
+}
+
+fn volume_slider(ui: &mut egui::Ui, value: &mut u32, label: &str) {
+    ui.add(egui::Slider::new(value, 0..=100).text(label));
+}
+
+fn lane_unit_slider(ui: &mut egui::Ui, value: &mut u32, label: &str) {
+    ui.add(egui::Slider::new(value, 0..=1000).text(label));
+}
+
+fn offset_ms_slider(ui: &mut egui::Ui, value_us: &mut i64, label: &str) {
+    let mut value_ms = (*value_us / 1_000).clamp(-500, 500);
+    if ui.add(egui::Slider::new(&mut value_ms, -500..=500).text(format!("{label} (ms)"))).changed()
+    {
+        *value_us = value_ms * 1_000;
+    }
+}
+
+fn judge_algorithm_label(value: JudgeAlgorithmConfig) -> &'static str {
+    match value {
+        JudgeAlgorithmConfig::Combo => "COMBO",
+        JudgeAlgorithmConfig::Duration => "DURATION",
+        JudgeAlgorithmConfig::Lowest => "LOWEST",
+    }
+}
+
+fn rule_mode_label(value: RuleMode) -> &'static str {
+    match value {
+        RuleMode::Beatoraja => "BEATORAJA",
+        RuleMode::Lr2Oraja => "LR2ORAJA",
+        RuleMode::Dx => "DX",
+    }
+}
+
+fn gauge_label(value: GaugeTypeConfig) -> &'static str {
+    match value {
+        GaugeTypeConfig::AssistEasy => "ASSIST EASY",
+        GaugeTypeConfig::Easy => "EASY",
+        GaugeTypeConfig::Normal => "NORMAL",
+        GaugeTypeConfig::Hard => "HARD",
+        GaugeTypeConfig::ExHard => "EX HARD",
+        GaugeTypeConfig::AutoShift => "AUTO SHIFT",
+        GaugeTypeConfig::Hazard => "HAZARD",
+    }
+}
+
+fn gauge_auto_shift_label(value: GaugeAutoShiftConfig) -> &'static str {
+    match value {
+        GaugeAutoShiftConfig::Off => "OFF",
+        GaugeAutoShiftConfig::Continue => "CONTINUE",
+        GaugeAutoShiftConfig::HardToGroove => "HARD->GROOVE",
+        GaugeAutoShiftConfig::BestClear => "BEST CLEAR",
+        GaugeAutoShiftConfig::SelectToUnder => "SELECT UNDER",
+    }
+}
+
+fn random_label(value: RandomOptionConfig) -> &'static str {
+    match value {
+        RandomOptionConfig::Off => "OFF",
+        RandomOptionConfig::Mirror => "MIRROR",
+        RandomOptionConfig::Random => "RANDOM",
+        RandomOptionConfig::RRandom => "R-RANDOM",
+        RandomOptionConfig::SRandom => "S-RANDOM",
+        RandomOptionConfig::Spiral => "SPIRAL",
+        RandomOptionConfig::HRandom => "H-RANDOM",
+        RandomOptionConfig::AllScratch => "ALL-SCR",
+        RandomOptionConfig::RandomEx => "RANDOM-EX",
+        RandomOptionConfig::SRandomEx => "S-RANDOM-EX",
+    }
+}
+
+fn target_label(value: TargetOptionConfig) -> &'static str {
+    match value {
+        TargetOptionConfig::None => "NONE",
+        TargetOptionConfig::Max => "MAX",
+        TargetOptionConfig::Aaa => "AAA",
+        TargetOptionConfig::Aa => "AA",
+        TargetOptionConfig::A => "A",
+        TargetOptionConfig::B => "B",
+        TargetOptionConfig::C => "C",
+        TargetOptionConfig::D => "D",
+        TargetOptionConfig::E => "E",
+    }
+}
+
+fn grade_diff_display_label(value: ResultGradeDiffDisplay) -> &'static str {
+    match value {
+        ResultGradeDiffDisplay::Beatoraja => "BEATORAJA",
+        ResultGradeDiffDisplay::HalfGrade => "HALF GRADE",
+    }
+}
+
+fn lane_effect_label(value: LaneEffectConfig) -> &'static str {
+    match value {
+        LaneEffectConfig::Off => "OFF",
+        LaneEffectConfig::Hidden => "HIDDEN",
+        LaneEffectConfig::Sudden => "SUDDEN",
+        LaneEffectConfig::HiddenSudden => "HIDDEN+SUDDEN",
+    }
+}
+
+fn assist_label(value: AssistOptionConfig) -> &'static str {
+    match value {
+        AssistOptionConfig::None => "NONE",
+        AssistOptionConfig::AutoScratch => "AUTO SCRATCH",
+        AssistOptionConfig::LegacyNote => "LEGACY NOTE",
+    }
+}
+
+fn bga_mode_label(value: BgaModeConfig) -> &'static str {
+    match value {
+        BgaModeConfig::On => "ON",
+        BgaModeConfig::Auto => "AUTO",
+        BgaModeConfig::Off => "OFF",
+    }
+}
+
+fn bga_expand_label(value: BgaExpandConfig) -> &'static str {
+    match value {
+        BgaExpandConfig::Full => "FULL",
+        BgaExpandConfig::KeepAspect => "KEEP ASPECT",
+        BgaExpandConfig::Off => "OFF",
+    }
+}
+
+fn hispeed_mode_label(value: HispeedModeConfig) -> &'static str {
+    match value {
+        HispeedModeConfig::Normal => "NORMAL",
+        HispeedModeConfig::Floating => "FLOATING",
+    }
+}
+
+fn scratch_input_mode_label(value: ScratchInputMode) -> &'static str {
+    match value {
+        ScratchInputMode::Normal => "NORMAL",
+        ScratchInputMode::AnyDirection => "ANY DIRECTION",
     }
 }
 
