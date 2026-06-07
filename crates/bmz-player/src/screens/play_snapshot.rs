@@ -19,6 +19,10 @@ use bmz_render::snapshot::{
 };
 
 pub const DEFAULT_LOOKAHEAD_US: i64 = 2_000_000;
+const SCRATCH_ANGLE_OFFSET_1P: i32 = 1;
+const SCRATCH_ANGLE_OFFSET_2P: i32 = 2;
+const SCRATCH_ANGLE_PERIOD_MS: i64 = 2_160;
+const SCRATCH_ANGLE_DEGREES_DIVISOR: i64 = 6;
 pub type BgaFrameCatalog = HashMap<BgaAssetId, DisplayBgaFrame>;
 
 pub fn build_render_snapshot(
@@ -100,7 +104,7 @@ pub fn build_render_snapshot_with_target_and_bga_frames(
         hidden_enabled: session.hidden_enabled,
         note_display_duration_ms: note_display_duration_ms(session, render_now),
         hidden_cover: session.hidden_cover,
-        skin_offsets: skin_offsets_from_session(session),
+        skin_offsets: skin_offsets_from_session(session, render_now),
         now_bpm: current_bpm(&session.chart, render_now) as f32,
         min_bpm: chart_min_bpm(&session.chart) as f32,
         max_bpm: chart_max_bpm(&session.chart) as f32,
@@ -397,7 +401,7 @@ pub fn bga_texture_id(id: BgaAssetId) -> u32 {
     CHART_BGA_TEXTURE_BASE + id.0
 }
 
-fn skin_offsets_from_session(session: &GameSession) -> SkinOffsetValues {
+fn skin_offsets_from_session(session: &GameSession, render_now: TimeUs) -> SkinOffsetValues {
     let mut values = SkinOffsetValues::default();
     for offset in &session.skin_offsets {
         values.set(
@@ -412,7 +416,35 @@ fn skin_offsets_from_session(session: &GameSession) -> SkinOffsetValues {
             },
         );
     }
+    let active_lanes = session.chart.metadata.key_mode.active_lanes();
+    if active_lanes.contains(&Lane::Scratch) {
+        set_scratch_angle_offset(&mut values, SCRATCH_ANGLE_OFFSET_1P, render_now, 0);
+    }
+    if active_lanes.contains(&Lane::Scratch2) {
+        set_scratch_angle_offset(&mut values, SCRATCH_ANGLE_OFFSET_2P, render_now, 1);
+    }
     values
+}
+
+fn set_scratch_angle_offset(
+    values: &mut SkinOffsetValues,
+    offset_id: i32,
+    render_now: TimeUs,
+    scratch_index: i32,
+) {
+    let mut offset = values.get(offset_id).unwrap_or_default();
+    offset.r = scratch_angle_degrees(render_now, scratch_index);
+    values.set(offset_id, offset);
+}
+
+fn scratch_angle_degrees(render_now: TimeUs, scratch_index: i32) -> i32 {
+    let elapsed_ms = (render_now.0.max(0) / 1_000).rem_euclid(SCRATCH_ANGLE_PERIOD_MS);
+    let angle_ms = if scratch_index % 2 == 0 {
+        (SCRATCH_ANGLE_PERIOD_MS - elapsed_ms).rem_euclid(SCRATCH_ANGLE_PERIOD_MS)
+    } else {
+        elapsed_ms
+    };
+    (angle_ms / SCRATCH_ANGLE_DEGREES_DIVISOR) as i32
 }
 
 fn end_of_note_elapsed_ms(render_now: TimeUs, end_time: TimeUs) -> Option<i32> {
@@ -1253,6 +1285,29 @@ mod tests {
         assert_eq!(
             snapshot.skin_offsets.get(42),
             Some(SkinOffsetValue { x: 1, y: 2, w: 3, h: 4, r: 5, a: -6 })
+        );
+    }
+
+    #[test]
+    fn build_render_snapshot_sets_scratch_angle_offset() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+        session.skin_offsets.push(bmz_gameplay::session::PlaySkinOffset {
+            id: SCRATCH_ANGLE_OFFSET_1P,
+            x: 1,
+            y: 2,
+            w: 3,
+            h: 4,
+            r: 5,
+            a: -6,
+        });
+
+        let snapshot = build_render_snapshot(&session, TimeUs(6_000_000), &[], None);
+
+        assert_eq!(
+            snapshot.skin_offsets.get(SCRATCH_ANGLE_OFFSET_1P),
+            Some(SkinOffsetValue { x: 1, y: 2, w: 3, h: 4, r: 80, a: -6 })
         );
     }
 

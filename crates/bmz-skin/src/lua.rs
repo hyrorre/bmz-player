@@ -2547,6 +2547,11 @@ fn infer_constant_boolean(function: &Function) -> Option<String> {
 fn infer_is_gauge_iidx_global_observe(lua: &Lua, function: &Function) -> Option<String> {
     let globals = lua.globals();
     let previous = globals.get::<Value>("is_gauge_iidx").ok();
+    let selected_gauge_display = globals
+        .get::<Table>("skin_config")
+        .ok()
+        .and_then(|skin_config| skin_config.get::<Table>("option").ok())
+        .and_then(|option| option.get::<i64>("グルーヴゲージ表示").ok());
 
     fn observe_truth(function: &Function) -> Option<bool> {
         match function.call::<Value>(()).ok()? {
@@ -2568,6 +2573,8 @@ fn infer_is_gauge_iidx_global_observe(lua: &Lua, function: &Function) -> Option<
     }
 
     match (when_false, when_true) {
+        (false, true) if selected_gauge_display == Some(930) => Some("number(0) < 0".to_string()),
+        (true, false) if selected_gauge_display == Some(930) => Some("number(0) >= 0".to_string()),
         (false, true) => Some("gauge_type() == 4 or gauge_type() == 5".to_string()),
         (true, false) => Some("gauge_type() != 4 and gauge_type() != 5".to_string()),
         _ => None,

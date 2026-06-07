@@ -43,6 +43,7 @@ pub struct SelectSnapshot {
     pub select_sort: String,
     pub select_ln_mode: String,
     pub bga: String,
+    pub grade_diff_display: ResultGradeDiffDisplay,
     /// Select detail option panelで表示する判定表示オフセット(ms)。
     pub judge_timing_offset_ms: i32,
     pub master_volume: f32,
@@ -103,6 +104,7 @@ impl Default for SelectSnapshot {
             select_sort: String::new(),
             select_ln_mode: String::new(),
             bga: String::new(),
+            grade_diff_display: ResultGradeDiffDisplay::default(),
             judge_timing_offset_ms: 0,
             master_volume: 0.0,
             key_volume: 0.0,
