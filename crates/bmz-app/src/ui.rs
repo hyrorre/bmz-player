@@ -373,15 +373,17 @@ impl EguiLayer {
                     ctx,
                     show_settings,
                     app_config,
-                    &mut self.settings_new_root_path,
-                    &mut self.settings_add_root_error,
-                    &mut self.settings_new_table_url,
-                    &mut self.settings_add_table_error,
-                    &mut self.score_import_path,
-                    &mut self.score_import_kind,
-                    &self.score_import_status,
-                    &self.score_import_error,
-                    &mut self.audio_device_picker,
+                    SettingsPanelState {
+                        new_root_path: &mut self.settings_new_root_path,
+                        add_root_error: &mut self.settings_add_root_error,
+                        new_table_url: &mut self.settings_new_table_url,
+                        add_table_error: &mut self.settings_add_table_error,
+                        score_import_path: &mut self.score_import_path,
+                        score_import_kind: &mut self.score_import_kind,
+                        score_import_status: &self.score_import_status,
+                        score_import_error: &self.score_import_error,
+                        audio_device_picker: &mut self.audio_device_picker,
+                    },
                 );
                 save_app_config |= settings_actions.save;
                 trigger_song_rescan |= settings_actions.rescan;
@@ -841,20 +843,24 @@ struct SettingsPanelActions {
     score_import_request: Option<ScoreImportRequest>,
 }
 
+struct SettingsPanelState<'a> {
+    new_root_path: &'a mut String,
+    add_root_error: &'a mut String,
+    new_table_url: &'a mut String,
+    add_table_error: &'a mut String,
+    score_import_path: &'a mut String,
+    score_import_kind: &'a mut ScoreImportKind,
+    score_import_status: &'a str,
+    score_import_error: &'a str,
+    audio_device_picker: &'a mut AudioDevicePickerState,
+}
+
 /// `AppConfig` を編集する本体設定パネル。
 fn build_settings_panel(
     ctx: &egui::Context,
     open: &mut bool,
     config: &mut AppConfig,
-    new_root_path: &mut String,
-    add_root_error: &mut String,
-    new_table_url: &mut String,
-    add_table_error: &mut String,
-    score_import_path: &mut String,
-    score_import_kind: &mut ScoreImportKind,
-    score_import_status: &str,
-    score_import_error: &str,
-    audio_device_picker: &mut AudioDevicePickerState,
+    state: SettingsPanelState<'_>,
 ) -> SettingsPanelActions {
     let mut save_clicked = false;
     let mut rescan_clicked = false;
@@ -891,7 +897,7 @@ fn build_settings_panel(
                         ui.horizontal(|ui| {
                             ui.label("パス");
                             ui.add(
-                                egui::TextEdit::singleline(new_root_path)
+                                egui::TextEdit::singleline(state.new_root_path)
                                     .desired_width(240.0)
                                     .hint_text("/path/to/bms"),
                             );
@@ -900,13 +906,13 @@ fn build_settings_panel(
                             if ui.button("フォルダを選択…").clicked()
                                 && let Some(folder) = rfd::FileDialog::new().pick_folder()
                             {
-                                *new_root_path = folder.to_string_lossy().into_owned();
-                                add_root_error.clear();
+                                *state.new_root_path = folder.to_string_lossy().into_owned();
+                                state.add_root_error.clear();
                             }
                             if ui.button("追加").clicked() {
-                                let path = new_root_path.trim();
+                                let path = state.new_root_path.trim();
                                 if path.is_empty() {
-                                    *add_root_error =
+                                    *state.add_root_error =
                                         "パスを入力するかフォルダを選択してください。".to_string();
                                 } else {
                                     match add_song_root_entry(
@@ -916,16 +922,16 @@ fn build_settings_panel(
                                         true,
                                     ) {
                                         Ok(()) => {
-                                            new_root_path.clear();
-                                            add_root_error.clear();
+                                            state.new_root_path.clear();
+                                            state.add_root_error.clear();
                                         }
-                                        Err(error) => *add_root_error = error.to_string(),
+                                        Err(error) => *state.add_root_error = error.to_string(),
                                     }
                                 }
                             }
                         });
-                        if !add_root_error.is_empty() {
-                            ui.colored_label(egui::Color32::RED, add_root_error.as_str());
+                        if !state.add_root_error.is_empty() {
+                            ui.colored_label(egui::Color32::RED, state.add_root_error.as_str());
                         }
                         if ui.button("ライブラリを再スキャン").clicked() {
                             rescan_clicked = true;
@@ -969,7 +975,7 @@ fn build_settings_panel(
                     ui.horizontal(|ui| {
                         ui.label("URL");
                         ui.add(
-                            egui::TextEdit::singleline(new_table_url)
+                            egui::TextEdit::singleline(state.new_table_url)
                                 .desired_width(300.0)
                                 .hint_text("https://.../header.json"),
                         );
@@ -977,27 +983,27 @@ fn build_settings_panel(
                     if ui.button("追加").clicked() {
                         match add_difficulty_table_source(
                             &mut config.tables.sources,
-                            new_table_url.trim(),
+                            state.new_table_url.trim(),
                         ) {
                             Ok(()) => {
-                                new_table_url.clear();
-                                add_table_error.clear();
+                                state.new_table_url.clear();
+                                state.add_table_error.clear();
                             }
-                            Err(error) => *add_table_error = error,
+                            Err(error) => *state.add_table_error = error,
                         }
                     }
-                    if !add_table_error.is_empty() {
-                        ui.colored_label(egui::Color32::RED, add_table_error.as_str());
+                    if !state.add_table_error.is_empty() {
+                        ui.colored_label(egui::Color32::RED, state.add_table_error.as_str());
                     }
                     ui.label("取得は保存後に table fetch または F5 の文脈 reload で実行します。");
                 });
 
                 build_score_import_section(
                     ui,
-                    score_import_path,
-                    score_import_kind,
-                    score_import_status,
-                    score_import_error,
+                    state.score_import_path,
+                    state.score_import_kind,
+                    state.score_import_status,
+                    state.score_import_error,
                     &mut score_import_request,
                 );
 
@@ -1064,19 +1070,20 @@ fn build_settings_panel(
                     // ASIO はドライバ初期化を伴い得るため、更新ボタンでのみ列挙する。
                     let backend = config.audio.backend.clone();
                     if backend != AudioBackend::Asio
-                        && audio_device_picker.backend.as_ref() != Some(&backend)
+                        && state.audio_device_picker.backend.as_ref() != Some(&backend)
                     {
-                        audio_device_picker.names = crate::audio::list_output_devices(&backend);
-                        audio_device_picker.backend = Some(backend);
+                        state.audio_device_picker.names =
+                            crate::audio::list_output_devices(&backend);
+                        state.audio_device_picker.backend = Some(backend);
                     }
 
                     ui.horizontal(|ui| {
                         if ui.button("デバイス一覧を更新").clicked() {
-                            audio_device_picker.names =
+                            state.audio_device_picker.names =
                                 crate::audio::list_output_devices(&config.audio.backend);
-                            audio_device_picker.backend = Some(config.audio.backend.clone());
+                            state.audio_device_picker.backend = Some(config.audio.backend.clone());
                         }
-                        ui.label(format!("{} 件", audio_device_picker.names.len()));
+                        ui.label(format!("{} 件", state.audio_device_picker.names.len()));
                     });
 
                     if config.audio.backend == AudioBackend::Asio {
@@ -1092,7 +1099,7 @@ fn build_settings_panel(
                                     String::new(),
                                     "(未指定)",
                                 );
-                                for name in audio_device_picker.names.iter() {
+                                for name in state.audio_device_picker.names.iter() {
                                     ui.selectable_value(
                                         &mut config.audio.asio_driver,
                                         name.clone(),
@@ -1113,7 +1120,7 @@ fn build_settings_panel(
                                     String::new(),
                                     "(デフォルト)",
                                 );
-                                for name in audio_device_picker.names.iter() {
+                                for name in state.audio_device_picker.names.iter() {
                                     ui.selectable_value(
                                         &mut config.audio.output_device,
                                         name.clone(),

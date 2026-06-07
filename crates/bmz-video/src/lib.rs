@@ -75,15 +75,13 @@ pub fn decode_first_frame(path: &Path) -> Result<DecodedFrame> {
             continue;
         }
         decoder.send_packet(&packet)?;
-        loop {
-            match decoder.receive_frame(&mut decoded) {
-                Ok(()) => return rgba_frame_from_video(&decoded, time_base_num, time_base_den),
-                Err(ffmpeg_next::Error::Other { errno: ffmpeg_next::error::EAGAIN }) => break,
-                Err(ffmpeg_next::Error::Eof) => {
-                    return Err(anyhow::anyhow!("video ended before first frame"));
-                }
-                Err(e) => return Err(e.into()),
+        match decoder.receive_frame(&mut decoded) {
+            Ok(()) => return rgba_frame_from_video(&decoded, time_base_num, time_base_den),
+            Err(ffmpeg_next::Error::Other { errno: ffmpeg_next::error::EAGAIN }) => {}
+            Err(ffmpeg_next::Error::Eof) => {
+                return Err(anyhow::anyhow!("video ended before first frame"));
             }
+            Err(e) => return Err(e.into()),
         }
     }
 
