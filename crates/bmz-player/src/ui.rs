@@ -1049,10 +1049,17 @@ fn build_settings_panel(
                                 "PulseAudio",
                             );
                         });
-                    ui.add(
-                        egui::Slider::new(&mut config.audio.sample_rate, 44_100..=96_000)
-                            .text("サンプルレート (未実装)"),
-                    );
+                    egui::ComboBox::from_label("サンプルレート")
+                        .selected_text(audio_sample_rate_label(config.audio.sample_rate))
+                        .show_ui(ui, |ui| {
+                            for hz in [44_100u32, 48_000, 96_000, 192_000, 384_000] {
+                                ui.selectable_value(
+                                    &mut config.audio.sample_rate,
+                                    hz,
+                                    audio_sample_rate_label(hz),
+                                );
+                            }
+                        });
                     egui::ComboBox::from_label("バッファサイズモード")
                         .selected_text(audio_buffer_size_mode_label(&config.audio.buffer_size_mode))
                         .show_ui(ui, |ui| {
@@ -1166,7 +1173,7 @@ fn build_settings_panel(
                         apply_audio = true;
                     }
                     ui.label(
-                        "「適用」で現在の設定を保存し音声出力を再構築します(再生中は不可)。サンプルレート / 排他モードは未実装です。",
+                        "「適用」で現在の設定を保存し音声出力を再構築します(再生中は不可)。排他モードは未実装です。",
                     );
                 });
 
@@ -1409,6 +1416,15 @@ fn audio_buffer_size_mode_label(mode: &AudioBufferSizeMode) -> &'static str {
 fn audio_channel_pair_label(pair: u32) -> String {
     let left = pair * 2 + 1;
     format!("{}-{}ch", left, left + 1)
+}
+
+/// サンプルレート(Hz)を "48kHz" / "44.1kHz" のような表示文字列にする。
+fn audio_sample_rate_label(hz: u32) -> String {
+    if hz.is_multiple_of(1000) {
+        format!("{}kHz", hz / 1000)
+    } else {
+        format!("{:.1}kHz", hz as f64 / 1000.0)
+    }
 }
 
 fn window_mode_label(mode: &WindowMode) -> &'static str {

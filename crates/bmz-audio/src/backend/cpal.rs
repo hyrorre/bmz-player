@@ -20,6 +20,9 @@ pub struct CpalBackend;
 pub struct CpalOutputConfig {
     pub host: Option<CpalHostId>,
     pub output_device_name: Option<String>,
+    /// 出力サンプルレート(Hz)。`None` はデバイス既定。デバイスが対応しない値は
+    /// 既定レートへフォールバックする。
+    pub sample_rate: Option<u32>,
     /// 1 コールバックあたりのバッファフレーム数。`None` はデバイス既定(自動)。
     /// `Some(n)` でも端末がサポートする範囲にクランプされる。
     pub buffer_size: Option<u32>,
@@ -122,14 +125,18 @@ impl CpalBackend {
             None => ::cpal::default_host(),
         };
         let device = output_device(&host, config.output_device_name.as_deref())?;
+        let requested_sample_rate = config.sample_rate;
         let requested_buffer_size = config.buffer_size;
         let requested_channel_offset = config.channel_offset;
         let supported_config = device.default_output_config()?;
         let sample_format = supported_config.sample_format();
+        let default_sample_rate = supported_config.sample_rate().0;
         let supported_buffer_size = *supported_config.buffer_size();
         let mut config = supported_config.config();
+        let sample_rate =
+            resolve_sample_rate(&device, requested_sample_rate, default_sample_rate, sample_format);
+        config.sample_rate = ::cpal::SampleRate(sample_rate);
         config.buffer_size = resolve_buffer_size(requested_buffer_size, &supported_buffer_size);
-        let sample_rate = config.sample_rate.0;
         let channel_offset = resolve_channel_offset(requested_channel_offset, config.channels as usize);
 
         // ASIO のバッファ問い合わせ結果を可視化する。ドライバが報告する
@@ -140,6 +147,7 @@ impl CpalBackend {
             host = ?host.id(),
             device = %device_name,
             sample_format = ?sample_format,
+            requested_sample_rate = ?requested_sample_rate,
             sample_rate,
             channels = config.channels,
             supported_buffer_size = ?supported_buffer_size,
@@ -256,6 +264,45 @@ pub fn list_output_device_names(host: Option<CpalHostId>) -> Vec<String> {
         return Vec::new();
     };
     devices.filter_map(|device| device.name().ok()).collect()
+}
+
+/// 要求サンプルレートがデバイスでサポートされていれば採用し、そうでなければ
+/// デバイス既定レートへフォールバックする。`None` は既定レート。
+fn resolve_sample_rate(
+    device: &::cpal::Device,
+    requested: Option<u32>,
+    default_rate: u32,
+    sample_format: SampleFormat,
+) -> u32 {
+    let Some(requested) = requested else {
+        return default_rate;
+    };
+    if requested == default_rate {
+        return requested;
+    }
+
+    let supported = match device.supported_output_configs() {
+        Ok(configs) => configs.into_iter().any(|range| {
+            range.sample_format() == sample_format
+                && range.min_sample_rate().0 <= requested
+                && requested <= range.max_sample_rate().0
+        }),
+        Err(error) => {
+            tracing::warn!(%error, "failed to query supported output configs for sample rate");
+            false
+        }
+    };
+
+    if supported {
+        requested
+    } else {
+        tracing::warn!(
+            requested,
+            fallback = default_rate,
+            "requested sample rate is not supported; using device default",
+        );
+        default_rate
+    }
 }
 
 /// 要求バッファサイズをデバイスのサポート範囲にクランプして `BufferSize` を決める。
