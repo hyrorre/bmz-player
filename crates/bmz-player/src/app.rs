@@ -2478,6 +2478,26 @@ impl WinitApp {
             return;
         }
 
+        // コース（段位）リザルトは retry を持たず、手動退出のみ対応する。
+        // Enter / Escape / Key1・Key3・Key5・Key7 押下で選曲へ戻る。
+        if self.finished_course.is_some() {
+            if self.result_exit.is_none() && self.result_input_ready() {
+                let leave_by_key = matches!(
+                    result_action(event.physical_key, event.state, event.repeat),
+                    Some(ResultAction::Leave)
+                );
+                let leave_by_lane = event.state == ElementState::Pressed
+                    && !event.repeat
+                    && physical_key_to_control(event.physical_key)
+                        .and_then(|control| self.result_lane_for_control(&control))
+                        .is_some_and(lane_starts_result_exit);
+                if leave_by_key || leave_by_lane {
+                    self.begin_result_exit(ResultExitAction::Leave);
+                }
+            }
+            return;
+        }
+
         if matches!(self.view_state(), AppViewState::Select)
             && event.physical_key == PhysicalKey::Code(KeyCode::F5)
             && event.state == ElementState::Pressed
@@ -2786,6 +2806,21 @@ impl WinitApp {
                         }
                         _ => {}
                     }
+                }
+            }
+            return;
+        }
+
+        // コース（段位）リザルトは retry を持たず、手動退出のみ対応する。
+        // Key1/Key3/Key5/Key7 または Button2/Select 押下で選曲へ戻る。
+        if self.finished_course.is_some() {
+            if pressed && self.result_exit.is_none() && self.result_input_ready() {
+                let control = PhysicalControl::GamepadButton(button.to_string());
+                let leave_by_lane =
+                    self.result_lane_for_control(&control).is_some_and(lane_starts_result_exit);
+                let leave_by_button = matches!(button, "Button2" | "Select");
+                if leave_by_lane || leave_by_button {
+                    self.begin_result_exit(ResultExitAction::Leave);
                 }
             }
             return;
