@@ -81,7 +81,7 @@ pub struct ChartAnalysis {
     pub lane_notes: Vec<ChartLaneNotes>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ChartAnalysisSummary {
     pub normal_notes: u32,
     pub long_notes: u32,
@@ -92,6 +92,7 @@ pub struct ChartAnalysisSummary {
     pub end_density: f64,
     pub total_gauge: f64,
     pub main_bpm: f64,
+    pub speed_changes: Vec<ChartSpeedChange>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -596,7 +597,7 @@ impl LibraryDatabase {
         }
         let mut stmt = self.conn.prepare(
             "SELECT chart_id, normal_notes, long_notes, scratch_notes, long_scratch_notes,
-                density, peak_density, end_density, total_gauge, main_bpm
+                density, peak_density, end_density, total_gauge, main_bpm, speed_changes_json
              FROM chart_analysis
              WHERE chart_id = ?1",
         )?;
@@ -1566,17 +1567,16 @@ fn chart_analysis_from_row_with_offset(
     let distribution_json: String = row.get(offset + 9)?;
     let speed_changes_json: String = row.get(offset + 10)?;
     let lane_notes_json: String = row.get(offset + 11)?;
-    let summary = chart_analysis_summary_from_row_with_offset(row, offset)?;
     Ok(ChartAnalysis {
-        normal_notes: summary.normal_notes,
-        long_notes: summary.long_notes,
-        scratch_notes: summary.scratch_notes,
-        long_scratch_notes: summary.long_scratch_notes,
-        density: summary.density,
-        peak_density: summary.peak_density,
-        end_density: summary.end_density,
-        total_gauge: summary.total_gauge,
-        main_bpm: summary.main_bpm,
+        normal_notes: row.get(offset)?,
+        long_notes: row.get(offset + 1)?,
+        scratch_notes: row.get(offset + 2)?,
+        long_scratch_notes: row.get(offset + 3)?,
+        density: row.get(offset + 4)?,
+        peak_density: row.get(offset + 5)?,
+        end_density: row.get(offset + 6)?,
+        total_gauge: row.get(offset + 7)?,
+        main_bpm: row.get(offset + 8)?,
         distribution: decode_distribution(&distribution_json),
         speed_changes: serde_json::from_str(&speed_changes_json).unwrap_or_default(),
         lane_notes: serde_json::from_str(&lane_notes_json).unwrap_or_default(),
@@ -1597,6 +1597,11 @@ fn chart_analysis_summary_from_row_with_offset(
         end_density: row.get(offset + 6)?,
         total_gauge: row.get(offset + 7)?,
         main_bpm: row.get(offset + 8)?,
+        speed_changes: row
+            .get::<_, Option<String>>(offset + 9)?
+            .as_deref()
+            .and_then(|json| serde_json::from_str(json).ok())
+            .unwrap_or_default(),
     })
 }
 

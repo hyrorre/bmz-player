@@ -3164,6 +3164,31 @@ impl SkinDocument {
                 ));
                 continue;
             }
+            if let (Some(row), Some(bpm_graph)) = (
+                selected_row.filter(|row| select_row_shows_score_decorations(row)),
+                self.bpmgraph.iter().find(|graph| graph.id == destination.id),
+            ) {
+                let Some(elapsed) = skin_timer_elapsed_ms(destination.timer, state) else {
+                    continue;
+                };
+                let Some(mut frame) =
+                    resolve_destination_frame(destination, elapsed, &enabled_options, state)
+                else {
+                    continue;
+                };
+                apply_skin_offset_to_frame(destination, &mut frame, state, false);
+                if !destination_mouse_rect_contains(destination, frame, state) {
+                    continue;
+                }
+                items.extend(self.bpmgraph_render_items_with_segments(
+                    bpm_graph,
+                    destination,
+                    frame,
+                    state,
+                    &row.chart_bpm_graph_segments,
+                ));
+                continue;
+            }
             if let Some(resolved) = self.resolve_destination_items(
                 destination,
                 &images,
@@ -3217,6 +3242,9 @@ impl SkinDocument {
             select_screen: true,
             select_play_level: selected_row.map(select_row_level_number).unwrap_or(0),
             play_level: selected_row.map(select_row_level_number).unwrap_or(0),
+            min_bpm: selected_row.map(|row| row.min_bpm).unwrap_or(0.0),
+            max_bpm: selected_row.map(|row| row.max_bpm).unwrap_or(0.0),
+            main_bpm: selected_row.map(|row| row.chart_main_bpm).unwrap_or(0.0),
             difficulty: selected_row.map(select_row_difficulty_code).unwrap_or(0),
             judge_rank: selected_row.and_then(|row| row.judge_rank),
             select_ex_score: selected_row.and_then(|row| row.ex_score),
@@ -5135,7 +5163,23 @@ impl SkinDocument {
         frame: ResolvedSkinFrame,
         state: SkinDrawState,
     ) -> Vec<SkinRenderItem> {
-        let segments = &self.play_bpm_graph_segments;
+        self.bpmgraph_render_items_with_segments(
+            graph,
+            destination,
+            frame,
+            state,
+            &self.play_bpm_graph_segments,
+        )
+    }
+
+    fn bpmgraph_render_items_with_segments(
+        &self,
+        graph: &SkinBpmGraphDef,
+        destination: &SkinDestinationDef,
+        frame: ResolvedSkinFrame,
+        state: SkinDrawState,
+        segments: &[crate::chart_graph::BpmGraphSegment],
+    ) -> Vec<SkinRenderItem> {
         if segments.is_empty() {
             return Vec::new();
         }
@@ -14180,6 +14224,56 @@ mod tests {
                     crate::scene::SelectChartDistributionSecond {
                         scratch_taps: 2,
                         ..Default::default()
+                    },
+                ],
+                ..SelectRowSnapshot::default()
+            }],
+            ..SelectSnapshot::default()
+        };
+
+        let items = document.select_render_items(&HashMap::new(), &snapshot);
+
+        assert_eq!(
+            items.iter().filter(|item| matches!(item, SkinRenderItem::Rect { .. })).count(),
+            2
+        );
+    }
+
+    #[test]
+    fn select_destination_bpmgraph_renders_selected_chart_segments() {
+        let document: SkinDocument = serde_json::from_str(
+            r##"
+            {
+                "type": 5,
+                "w": 100,
+                "h": 100,
+                "bpmgraph": [{ "id": "bpm", "lineWidth": 2, "mainBPMColor": "#ff0000", "otherBPMColor": "#00ff00" }],
+                "destination": [{ "id": "bpm", "dst": [{ "x": 0, "y": 0, "w": 40, "h": 20 }] }]
+            }
+            "##,
+        )
+        .unwrap();
+        let snapshot = SelectSnapshot {
+            selected_index: 0,
+            rows: vec![SelectRowSnapshot {
+                index: 0,
+                kind: SelectRowKind::Song,
+                in_library: true,
+                min_bpm: 100.0,
+                max_bpm: 200.0,
+                chart_main_bpm: 100.0,
+                chart_bpm_graph_segments: vec![
+                    crate::chart_graph::BpmGraphSegment {
+                        start_ratio: 0.0,
+                        end_ratio: 0.5,
+                        bpm: 100.0,
+                        is_stop: false,
+                    },
+                    crate::chart_graph::BpmGraphSegment {
+                        start_ratio: 0.5,
+                        end_ratio: 1.0,
+                        bpm: 200.0,
+                        is_stop: false,
                     },
                 ],
                 ..SelectRowSnapshot::default()

@@ -2,6 +2,7 @@ use bmz_core::clear::ClearType;
 use bmz_core::lane::KeyMode;
 use bmz_core::time::TimeUs;
 
+use crate::chart_graph::BpmGraphSegment;
 use crate::skin::SkinImageSize;
 use crate::snapshot::{DisplayJudgeCounts, FastSlowJudgeCounts, OverlaySnapshot, RenderSnapshot};
 
@@ -162,6 +163,7 @@ pub struct SelectRowSnapshot {
     pub chart_total_gauge: f32,
     pub chart_main_bpm: f32,
     pub chart_distribution: Vec<SelectChartDistributionSecond>,
+    pub chart_bpm_graph_segments: Vec<BpmGraphSegment>,
     /// beatoraja DirectoryBar-style lamp distribution for folder rows.
     /// Indexes match SkinBar BARLAMP IDs: 0 no play, 1 failed, ... 10 max.
     pub folder_lamp_counts: [u32; 11],
@@ -225,6 +227,7 @@ impl Default for SelectRowSnapshot {
             chart_total_gauge: 0.0,
             chart_main_bpm: 0.0,
             chart_distribution: Vec::new(),
+            chart_bpm_graph_segments: Vec::new(),
             folder_lamp_counts: [0; 11],
             is_folder: false,
             kind: SelectRowKind::default(),

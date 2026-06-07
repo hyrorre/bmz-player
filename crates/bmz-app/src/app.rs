@@ -7489,6 +7489,32 @@ fn select_chart_distribution(
         .collect()
 }
 
+fn select_bpm_graph_segments(
+    speed_changes: &[crate::storage::library_db::ChartSpeedChange],
+    length_ms: i64,
+) -> Vec<bmz_render::chart_graph::BpmGraphSegment> {
+    let duration_ms = length_ms.max(1) as f32;
+    let mut segments = Vec::new();
+    for (index, change) in speed_changes.iter().enumerate() {
+        let start_ms = change.time_ms.max(0) as f32;
+        let end_ms = speed_changes
+            .get(index + 1)
+            .map(|next| next.time_ms.max(change.time_ms) as f32)
+            .unwrap_or(duration_ms)
+            .min(duration_ms);
+        if end_ms <= start_ms {
+            continue;
+        }
+        segments.push(bmz_render::chart_graph::BpmGraphSegment {
+            start_ratio: (start_ms / duration_ms).clamp(0.0, 1.0),
+            end_ratio: (end_ms / duration_ms).clamp(0.0, 1.0),
+            bpm: change.speed.max(0.0) as f32,
+            is_stop: change.speed == 0.0,
+        });
+    }
+    segments
+}
+
 fn select_visible_item_indices(
     item_len: usize,
     selected_index: usize,
@@ -7563,6 +7589,7 @@ fn select_snapshot_rows(
                     chart_total_gauge: 0.0,
                     chart_main_bpm: 0.0,
                     chart_distribution: Vec::new(),
+                    chart_bpm_graph_segments: Vec::new(),
                     folder_lamp_counts: summary
                         .as_ref()
                         .map(|summary| summary.lamp_counts)
@@ -7695,6 +7722,16 @@ fn select_snapshot_rows(
                             .and_then(|chart| chart_distributions.get(&chart.chart_id))
                             .map(|distribution| select_chart_distribution(distribution))
                             .unwrap_or_default(),
+                        chart_bpm_graph_segments: row
+                            .chart_analysis
+                            .as_ref()
+                            .map(|analysis| {
+                                select_bpm_graph_segments(
+                                    &analysis.speed_changes,
+                                    row.chart.as_ref().map(|chart| chart.length_ms).unwrap_or(0),
+                                )
+                            })
+                            .unwrap_or_default(),
                         folder_lamp_counts: [0; 11],
                         is_folder: false,
                         kind: bmz_render::scene::SelectRowKind::Song,
@@ -7755,6 +7792,7 @@ fn select_snapshot_rows(
                     chart_total_gauge: 0.0,
                     chart_main_bpm: 0.0,
                     chart_distribution: Vec::new(),
+                    chart_bpm_graph_segments: Vec::new(),
                     folder_lamp_counts: [0; 11],
                     is_folder: false,
                     kind: bmz_render::scene::SelectRowKind::Course,
@@ -7806,6 +7844,7 @@ fn select_snapshot_rows(
                         chart_total_gauge: 0.0,
                         chart_main_bpm: 0.0,
                         chart_distribution: Vec::new(),
+                        chart_bpm_graph_segments: Vec::new(),
                         folder_lamp_counts: [0; 11],
                         is_folder: false,
                         kind: bmz_render::scene::SelectRowKind::Config,
@@ -7859,6 +7898,7 @@ fn select_snapshot_rows(
                         chart_total_gauge: 0.0,
                         chart_main_bpm: 0.0,
                         chart_distribution: Vec::new(),
+                        chart_bpm_graph_segments: Vec::new(),
                         folder_lamp_counts: [0; 11],
                         is_folder: false,
                         kind: bmz_render::scene::SelectRowKind::Config,
@@ -7905,6 +7945,7 @@ fn select_snapshot_rows(
                     chart_total_gauge: 0.0,
                     chart_main_bpm: 0.0,
                     chart_distribution: Vec::new(),
+                    chart_bpm_graph_segments: Vec::new(),
                     folder_lamp_counts: [0; 11],
                     is_folder: true,
                     kind: bmz_render::scene::SelectRowKind::SettingsFolder,
@@ -9957,6 +9998,18 @@ mod tests {
             .map(|index| {
                 let mut row = select_chart_row(index);
                 if index == 5 {
+                    if let Some(analysis) = &mut row.chart_analysis {
+                        analysis.speed_changes = vec![
+                            crate::storage::library_db::ChartSpeedChange {
+                                speed: 100.0,
+                                time_ms: 0,
+                            },
+                            crate::storage::library_db::ChartSpeedChange {
+                                speed: 200.0,
+                                time_ms: 45_000,
+                            },
+                        ];
+                    }
                     let mut best_score = best_score_with_replay(1234, "replay/test.toml");
                     best_score.bp = 12;
                     best_score.cb = 8;
@@ -9998,6 +10051,11 @@ mod tests {
         assert_eq!(snapshot_rows[3].chart_peak_density, 12.5);
         assert_eq!(snapshot_rows[3].chart_distribution.len(), 1);
         assert_eq!(snapshot_rows[3].chart_distribution[0].key_taps, 2);
+        assert_eq!(snapshot_rows[3].chart_bpm_graph_segments.len(), 2);
+        assert_eq!(snapshot_rows[3].chart_bpm_graph_segments[0].start_ratio, 0.0);
+        assert_eq!(snapshot_rows[3].chart_bpm_graph_segments[0].end_ratio, 0.5);
+        assert_eq!(snapshot_rows[3].chart_bpm_graph_segments[1].start_ratio, 0.5);
+        assert_eq!(snapshot_rows[3].chart_bpm_graph_segments[1].end_ratio, 1.0);
     }
 
     #[test]
@@ -10214,6 +10272,7 @@ mod tests {
                 end_density: 8.25,
                 total_gauge: 260.0,
                 main_bpm: 128.0,
+                speed_changes: Vec::new(),
             }),
             fallback_title: String::new(),
             fallback_artist: String::new(),
