@@ -1044,9 +1044,9 @@ fn build_settings_panel(
                         });
                     ui.add(
                         egui::Slider::new(&mut config.audio.sample_rate, 44_100..=96_000)
-                            .text("サンプルレート"),
+                            .text("サンプルレート (未実装)"),
                     );
-                    egui::ComboBox::from_label("バッファサイズモード")
+                    egui::ComboBox::from_label("バッファサイズモード (未実装)")
                         .selected_text(audio_buffer_size_mode_label(&config.audio.buffer_size_mode))
                         .show_ui(ui, |ui| {
                             ui.selectable_value(
@@ -1062,9 +1062,9 @@ fn build_settings_panel(
                         });
                     ui.add(
                         egui::Slider::new(&mut config.audio.buffer_size, 64..=4096)
-                            .text("バッファサイズ (フレーム)"),
+                            .text("バッファサイズ (フレーム・未実装)"),
                     );
-                    ui.checkbox(&mut config.audio.exclusive_mode, "排他モード");
+                    ui.checkbox(&mut config.audio.exclusive_mode, "排他モード (未実装)");
 
                     // ASIO 以外は安価なのでバックエンド変更時に自動列挙する。
                     // ASIO はドライバ初期化を伴い得るため、更新ボタンでのみ列挙する。
@@ -1129,7 +1129,9 @@ fn build_settings_panel(
                                 }
                             });
                     }
-                    ui.label("音声設定は次回起動時に反映されます。");
+                    ui.label(
+                        "音声バックエンド / デバイスは次回起動時に反映されます。サンプルレート / バッファサイズ / 排他モードは未実装です。",
+                    );
                 });
 
                 egui::CollapsingHeader::new("映像").show(ui, |ui| {
@@ -1232,11 +1234,13 @@ fn build_settings_panel(
                         });
                     ui.checkbox(&mut config.input.keyboard_enabled, "キーボード");
                     ui.checkbox(&mut config.input.gamepad_enabled, "ゲームパッド");
-                    ui.checkbox(&mut config.input.midi_enabled, "MIDI");
-                    ui.label("入力バックエンド設定は次回起動時に反映されます。");
+                    ui.checkbox(&mut config.input.midi_enabled, "MIDI (未実装)");
+                    ui.label(
+                        "入力バックエンド設定は次回起動時に反映されます。RawInput / HID / MIDI は未実装です。",
+                    );
                 });
 
-                egui::CollapsingHeader::new("ログ").show(ui, |ui| {
+                egui::CollapsingHeader::new("ログ (未実装)").show(ui, |ui| {
                     egui::ComboBox::from_label("レベル")
                         .selected_text(log_level_label(&config.logging.level))
                         .show_ui(ui, |ui| {
@@ -1266,8 +1270,8 @@ fn build_settings_panel(
                                 log_level_label(&LogLevel::Error),
                             );
                         });
-                    ui.checkbox(&mut config.logging.file_logging, "ファイル出力");
-                    ui.label("ログ設定は次回起動時に反映されます。");
+                    ui.checkbox(&mut config.logging.file_logging, "ファイル出力 (未実装)");
+                    ui.label("ログ設定は未実装です。現在は起動時の固定ログ設定を使用します。");
                 });
 
                 ui.separator();
@@ -1382,9 +1386,9 @@ fn input_backend_label(backend: &InputBackendKind) -> &'static str {
     match backend {
         InputBackendKind::Auto => "自動選択",
         InputBackendKind::Winit => "winit",
-        InputBackendKind::RawInput => "Raw Input",
-        InputBackendKind::Hid => "HID",
-        InputBackendKind::Midi => "MIDI",
+        InputBackendKind::RawInput => "Raw Input (未実装)",
+        InputBackendKind::Hid => "HID (未実装)",
+        InputBackendKind::Midi => "MIDI (未実装)",
     }
 }
 
@@ -1810,17 +1814,17 @@ fn build_profile_settings_panel(
 
                 egui::CollapsingHeader::new("UI").show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.label("言語");
+                        ui.label("言語 (未実装)");
                         ui.text_edit_singleline(&mut profile.ui.language);
                     });
                     ui.horizontal(|ui| {
-                        ui.label("テーマ");
+                        ui.label("テーマ (未実装)");
                         ui.text_edit_singleline(&mut profile.ui.theme);
                     });
                     if ui.checkbox(show_debug, "FPS 表示").changed() {
                         profile.ui.show_fps = *show_debug;
                     }
-                    ui.checkbox(&mut profile.ui.confirm_on_exit, "終了確認");
+                    ui.checkbox(&mut profile.ui.confirm_on_exit, "終了確認 (未実装)");
                 });
 
                 ui.separator();
