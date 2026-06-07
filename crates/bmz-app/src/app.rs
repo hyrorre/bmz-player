@@ -26,10 +26,11 @@ use bmz_render::scene::{
     AppSceneSnapshot, ResultSnapshot, SelectChartDistributionSecond, SelectRowSnapshot,
     SelectSnapshot,
 };
-use bmz_render::skin::SkinImageSize;
+use bmz_render::skin::{SkinImageSize, SkinTextureId};
 use bmz_render::snapshot::{
     CourseStageMarker, DisplayJudgeCounts, FastSlowJudgeCounts, OverlaySnapshot, RenderSnapshot,
 };
+use bmz_video::VideoBgaDecoder;
 use winit::application::ApplicationHandler;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, StartCause, WindowEvent};
@@ -272,6 +273,7 @@ struct WinitApp {
     skin_upload_rx: Receiver<PendingUploadResult>,
     /// upload worker を spawn 済みか (surface 接続時に一度だけ起動)。
     skin_upload_worker_started: bool,
+    skin_video_sources: HashMap<SkinKind, Vec<ActiveSkinVideoSource>>,
     pending_select_skin: bool,
     pending_decide_skin: bool,
     pending_play_skin: bool,
@@ -368,6 +370,14 @@ struct WinitApp {
     practice_session: Option<PracticeSession>,
     /// 次の `RunningPlaySession::start` で使う chart zero（区間先頭の 1 秒前）。
     practice_chart_zero_time: Option<TimeUs>,
+}
+
+struct ActiveSkinVideoSource {
+    texture: SkinTextureId,
+    path: PathBuf,
+    decoder: Option<VideoBgaDecoder>,
+    last_pts: Option<i64>,
+    failed: bool,
 }
 
 type PlaySkinSignature = (KeyMode, String, BTreeMap<String, String>, BTreeMap<String, String>);
@@ -940,6 +950,7 @@ impl WinitApp {
             skin_upload_tx,
             skin_upload_rx,
             skin_upload_worker_started: false,
+            skin_video_sources: HashMap::new(),
             pending_select_skin,
             pending_decide_skin,
             pending_play_skin,
@@ -5408,9 +5419,19 @@ impl WinitApp {
         }
         // アップロード済みテクスチャを差し込み、SkinDocumentTexture を組む。
         let mut document_textures = Vec::with_capacity(prepared.len());
+        let mut video_sources = Vec::new();
         for source in prepared {
-            let PreparedSource { source_id, texture, prepared, size } = source;
+            let PreparedSource { source_id, path, texture, prepared, size, is_video } = source;
             self.renderer.insert_prepared_texture(TextureId(texture.0), prepared);
+            if is_video {
+                video_sources.push(ActiveSkinVideoSource {
+                    texture,
+                    path,
+                    decoder: None,
+                    last_pts: None,
+                    failed: false,
+                });
+            }
             document_textures.push(SkinDocumentTexture { source_id, texture, source_size: size });
         }
         tracing::info!(
@@ -5419,6 +5440,11 @@ impl WinitApp {
             sources = document_textures.len(),
             "beatoraja skin fully installed"
         );
+        if video_sources.is_empty() {
+            self.skin_video_sources.remove(&kind);
+        } else {
+            self.skin_video_sources.insert(kind, video_sources);
+        }
         let preserve_play_dynamic_timers = kind == SkinKind::Play && self.active_play.is_some();
         set_decoded_skin_context(
             &mut self.renderer,
@@ -6014,6 +6040,86 @@ impl WinitApp {
         }
     }
 
+    fn update_current_skin_video_sources(&mut self) {
+        let Some((kind, elapsed_us)) = self.current_skin_video_context() else {
+            return;
+        };
+        let Some(sources) = self.skin_video_sources.get_mut(&kind) else {
+            return;
+        };
+        for source in sources {
+            if source.failed {
+                continue;
+            }
+            if source.decoder.is_none() {
+                match VideoBgaDecoder::open(&source.path) {
+                    Ok(decoder) => {
+                        tracing::info!(
+                            kind = ?kind,
+                            texture_id = source.texture.0,
+                            path = %source.path.display(),
+                            "opened skin video source decoder"
+                        );
+                        source.decoder = Some(decoder);
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            kind = ?kind,
+                            texture_id = source.texture.0,
+                            path = %source.path.display(),
+                            %error,
+                            "failed to open skin video source"
+                        );
+                        source.failed = true;
+                        continue;
+                    }
+                }
+            }
+
+            let Some(decoder) = source.decoder.as_mut() else {
+                continue;
+            };
+            if let Some(frame) = decoder.poll_frame(elapsed_us)
+                && source.last_pts != Some(frame.pts_us)
+            {
+                let pts = frame.pts_us;
+                match self.renderer.upsert_rgba_texture(
+                    TextureId(source.texture.0),
+                    frame.width,
+                    frame.height,
+                    frame.rgba.clone(),
+                ) {
+                    Ok(()) => {
+                        source.last_pts = Some(pts);
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            kind = ?kind,
+                            texture_id = source.texture.0,
+                            path = %source.path.display(),
+                            %error,
+                            "failed to upload skin video source frame"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    fn current_skin_video_context(&self) -> Option<(SkinKind, i64)> {
+        match self.view_state() {
+            AppViewState::Select => Some((SkinKind::Select, self.select_time().0)),
+            AppViewState::Decide => self
+                .pending_decide
+                .as_ref()
+                .map(|decide| (SkinKind::Decide, elapsed_since(decide.started_at).0)),
+            AppViewState::Play => Some((SkinKind::Play, self.play_elapsed_time().0)),
+            AppViewState::Result(_) => {
+                Some((SkinKind::Result, elapsed_since(self.result_scene_started_at).0))
+            }
+        }
+    }
+
     fn render_current_scene(&mut self) {
         if matches!(self.view_state(), AppViewState::Select) {
             self.refresh_visible_select_folder_summaries();
@@ -6023,6 +6129,7 @@ impl WinitApp {
             self.sync_select_banner_texture();
             self.sync_select_preview_audio();
         }
+        self.update_current_skin_video_sources();
         let scene = self.scene_snapshot();
         let scene_kind = scene_kind(&scene);
         self.update_window_title_for_scene(scene_kind);

@@ -67,7 +67,7 @@ pub fn play_skin_selection_for(skin: &SkinConfig, key_mode: KeyMode) -> PlaySkin
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SkinKind {
     Play,
     Select,
@@ -124,6 +124,7 @@ pub struct DecodedSource {
     pub path: PathBuf,
     pub texture: SkinTextureId,
     pub asset: RgbaImageAsset,
+    pub is_video: bool,
 }
 
 enum SourceDecodeTask {
@@ -135,9 +136,11 @@ enum SourceDecodeTask {
 /// GPU アップロード済みの 1 ソース。upload worker が `DecodedSource` から生成する。
 pub struct PreparedSource {
     pub source_id: String,
+    pub path: PathBuf,
     pub texture: SkinTextureId,
     pub prepared: PreparedTexture,
     pub size: SkinImageSize,
+    pub is_video: bool,
 }
 
 /// decode + GPU アップロードまで終わった 1 スキンぶん。upload worker → main で渡す。
@@ -156,7 +159,7 @@ pub fn upload_decoded_skin(uploader: &GpuUploader, decoded: DecodedSkin) -> Uplo
     let prepared = sources
         .into_iter()
         .filter_map(|source| {
-            let DecodedSource { source_id, path, texture, asset } = source;
+            let DecodedSource { source_id, path, texture, asset, is_video } = source;
             if let Err(error) = asset.validate() {
                 tracing::warn!(
                     source_id = %source_id,
@@ -169,7 +172,7 @@ pub fn upload_decoded_skin(uploader: &GpuUploader, decoded: DecodedSkin) -> Uplo
             }
             let size = SkinImageSize { width: asset.width as f32, height: asset.height as f32 };
             let prepared = uploader.upload(asset.width, asset.height, &asset.pixels);
-            Some(PreparedSource { source_id, texture, prepared, size })
+            Some(PreparedSource { source_id, path, texture, prepared, size, is_video })
         })
         .collect();
     UploadedSkin { kind, document, fonts, prepared }
@@ -386,15 +389,15 @@ pub fn decode_beatoraja_skin_with_options(
         })
         .collect();
 
-    let mut decoded_pairs: Vec<(usize, String, PathBuf, RgbaImageAsset)> = source_tasks
+    let mut decoded_pairs: Vec<(usize, String, PathBuf, RgbaImageAsset, bool)> = source_tasks
         .into_par_iter()
         .filter_map(|task| match task {
             SourceDecodeTask::Builtin { index, source_id, path, asset } => {
-                Some((index, source_id, path, asset))
+                Some((index, source_id, path, asset, false))
             }
             SourceDecodeTask::File { index, source_id, path: source_path } => {
                 match load_png_rgba(&source_path) {
-                    Ok(asset) => Some((index, source_id, source_path, asset)),
+                    Ok(asset) => Some((index, source_id, source_path, asset, false)),
                     Err(error) => {
                         if warn_missing_required && required_sources.contains(&source_id) {
                             tracing::warn!(
@@ -417,7 +420,7 @@ pub fn decode_beatoraja_skin_with_options(
             }
             SourceDecodeTask::Video { index, source_id, path: source_path } => {
                 match load_skin_video_first_frame_rgba(&source_path) {
-                    Ok(asset) => Some((index, source_id, source_path, asset)),
+                    Ok(asset) => Some((index, source_id, source_path, asset, true)),
                     Err(error) => {
                         tracing::warn!(
                             source_id = %source_id,
@@ -431,15 +434,15 @@ pub fn decode_beatoraja_skin_with_options(
             }
         })
         .collect();
-    decoded_pairs.sort_by_key(|(index, _, _, _)| *index);
+    decoded_pairs.sort_by_key(|(index, _, _, _, _)| *index);
 
     let mut next_texture_id = kind.first_texture_id();
     let sources: Vec<DecodedSource> = decoded_pairs
         .into_iter()
-        .map(|(_, source_id, path, asset)| {
+        .map(|(_, source_id, path, asset, is_video)| {
             let texture = SkinTextureId(next_texture_id);
             next_texture_id += 1;
-            DecodedSource { source_id, path, texture, asset }
+            DecodedSource { source_id, path, texture, asset, is_video }
         })
         .collect();
 
@@ -649,7 +652,7 @@ pub fn install_decoded_source(
     renderer: &mut Renderer,
     source: DecodedSource,
 ) -> Option<SkinDocumentTexture> {
-    let DecodedSource { source_id, path, texture, asset } = source;
+    let DecodedSource { source_id, path, texture, asset, is_video: _ } = source;
     let source_size = SkinImageSize { width: asset.width as f32, height: asset.height as f32 };
     if let Err(error) = renderer.upsert_image_asset(TextureId(texture.0), &asset) {
         tracing::warn!(
