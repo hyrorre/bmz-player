@@ -210,7 +210,7 @@ pub struct EguiOutput {
 pub struct EguiLayer {
     ctx: egui::Context,
     state: egui_winit::State,
-    /// メニュー全体の表示状態。F5 でトグルする。
+    /// メニュー全体の表示状態。F1 でトグルする。
     visible: bool,
     /// デバッグ表示パネルの開閉状態。
     show_debug: bool,
@@ -343,16 +343,6 @@ impl EguiLayer {
         let mut practice_leave = false;
         let visible_flag = &mut self.visible;
         let full_output = ctx.run_ui(raw_input, |ui| {
-            // Course result overlay is shown regardless of menu visibility — it's
-            // a gameplay-level summary, not a settings panel.
-            if let Some(summary) = course_result {
-                build_course_result_panel(ui.ctx(), summary);
-            }
-            // Course preview is shown only while hovering a course row on the
-            // select screen — the caller decides when to pass Some().
-            if let Some(preview) = course_preview {
-                build_course_preview_panel(ui.ctx(), preview);
-            }
             if let Some(practice_ctx) = practice.as_mut() {
                 let panel = build_practice_panel(ui.ctx(), practice_ctx);
                 practice_start |= panel.start_play;
@@ -360,6 +350,15 @@ impl EguiLayer {
             }
             if *visible_flag {
                 let ctx = ui.ctx();
+                // Course info panels are developer/debug egui overlays, so keep
+                // them behind the same F1 menu visibility gate as the other
+                // egui windows.
+                if let Some(summary) = course_result {
+                    build_course_result_panel(ctx, summary);
+                }
+                if let Some(preview) = course_preview {
+                    build_course_preview_panel(ctx, preview);
+                }
                 build_menu(
                     ctx,
                     visible_flag,
