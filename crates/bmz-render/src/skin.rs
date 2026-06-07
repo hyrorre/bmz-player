@@ -12278,6 +12278,7 @@ mod tests {
         let beatoraja_e_minus = SkinDrawState {
             select_ex_score: Some(0),
             select_total_notes: 2253,
+            select_play_count: 1,
             select_screen: true,
             ..SkinDrawState::default()
         };
