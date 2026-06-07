@@ -133,7 +133,7 @@ fn import_with_layout<T: KeyLayoutMapper>(
         .map_err(|source| ImportError::Io { path: source_path.to_path_buf(), source })?;
     let identity = compute_chart_identity(&bytes);
     let text = decode_bms_text(&bytes, warnings);
-    let text = clamp_zero_randoms_for_beatoraja_compat(&text, warnings);
+    let text = apply_beatoraja_random_control(&text, random_seed, warnings);
     let (parse_text, sparse_messages) = extract_sparse_bms_message_lines(&text, warnings);
 
     let BmsOutput { bms, warnings: bms_warnings } = parse_bms::<T, _, _, _>(
@@ -156,53 +156,165 @@ fn import_with_layout<T: KeyLayoutMapper>(
     Ok(intermediate)
 }
 
-fn clamp_zero_randoms_for_beatoraja_compat(
+#[derive(Debug, Clone, Copy)]
+enum BeatorajaRandomControl<'a> {
+    Random(&'a str),
+    SetRandom(&'a str),
+    If(&'a str),
+    Else,
+    ElseIf,
+    EndIf,
+    EndRandom,
+}
+
+fn apply_beatoraja_random_control(
     text: &str,
+    random_seed: Option<u64>,
     warnings: &mut Vec<ImportWarning>,
 ) -> String {
     let mut rewritten = String::with_capacity(text.len());
+    let mut rng = JavaRandom::new(random_seed.unwrap_or(0) as i64);
+    let mut random_stack = Vec::new();
+    let mut skip_stack = Vec::new();
+
     for (line_index, line) in text.lines().enumerate() {
         let line_number = line_index + 1;
-        if let Some((prefix, suffix)) = split_random_zero_line(line) {
-            warnings.push(ImportWarning::ParserDiagnostic {
-                code: "RandomZeroClamped".to_string(),
-                message: format!(
-                    "line {line_number} #RANDOM 0 is treated as #RANDOM 1 for beatoraja compatibility"
-                ),
-            });
-            rewritten.push_str(prefix);
-            rewritten.push('1');
-            rewritten.push_str(suffix);
-        } else {
-            rewritten.push_str(line);
+
+        match beatoraja_random_control_line(line) {
+            Some(BeatorajaRandomControl::Random(args)) => {
+                if let Some(max) =
+                    parse_beatoraja_control_int(args, line_number, "#RANDOM", warnings)
+                {
+                    let selected = if max <= 0 {
+                        warnings.push(ImportWarning::ParserDiagnostic {
+                            code: "RandomZeroClamped".to_string(),
+                            message: format!(
+                                "line {line_number} #RANDOM {max} is treated as #RANDOM 1 for beatoraja compatibility"
+                            ),
+                        });
+                        1
+                    } else {
+                        rng.next_int_bound(max) + 1
+                    };
+                    random_stack.push(selected);
+                }
+            }
+            Some(BeatorajaRandomControl::SetRandom(args)) => {
+                if let Some(selected) =
+                    parse_beatoraja_control_int(args, line_number, "#SETRANDOM", warnings)
+                {
+                    random_stack.push(selected);
+                }
+            }
+            Some(BeatorajaRandomControl::If(args)) => {
+                if let Some(&selected) = random_stack.last() {
+                    if let Some(condition) =
+                        parse_beatoraja_control_int(args, line_number, "#IF", warnings)
+                    {
+                        skip_stack.push(selected != condition);
+                    }
+                } else {
+                    warnings.push(ImportWarning::ParserDiagnostic {
+                        code: "BeatorajaRandomIfWithoutRandom".to_string(),
+                        message: format!(
+                            "line {line_number} #IF has no active #RANDOM; continuing like beatoraja"
+                        ),
+                    });
+                }
+            }
+            Some(BeatorajaRandomControl::Else | BeatorajaRandomControl::ElseIf) => {
+                warnings.push(ImportWarning::ParserDiagnostic {
+                    code: "BeatorajaRandomUnsupportedElse".to_string(),
+                    message: format!(
+                        "line {line_number} random #ELSE/#ELSEIF is ignored for beatoraja compatibility"
+                    ),
+                });
+            }
+            Some(BeatorajaRandomControl::EndIf) => {
+                if skip_stack.pop().is_none() {
+                    warnings.push(ImportWarning::ParserDiagnostic {
+                        code: "BeatorajaRandomEndifWithoutIf".to_string(),
+                        message: format!(
+                            "line {line_number} #ENDIF has no active #IF; continuing like beatoraja"
+                        ),
+                    });
+                }
+            }
+            Some(BeatorajaRandomControl::EndRandom) => {
+                if random_stack.pop().is_none() {
+                    warnings.push(ImportWarning::ParserDiagnostic {
+                        code: "BeatorajaRandomEndrandomWithoutRandom".to_string(),
+                        message: format!(
+                            "line {line_number} #ENDRANDOM has no active #RANDOM; continuing like beatoraja"
+                        ),
+                    });
+                }
+            }
+            None => {
+                if !skip_stack.last().copied().unwrap_or(false) {
+                    rewritten.push_str(line);
+                }
+            }
         }
+
         rewritten.push('\n');
     }
+
     rewritten
 }
 
-fn split_random_zero_line(line: &str) -> Option<(&str, &str)> {
-    let trimmed_start = line.trim_start();
-    let leading_len = line.len() - trimmed_start.len();
-    let body = trimmed_start.strip_prefix('#')?;
-    let command = body.get(..6)?;
-    if !command.eq_ignore_ascii_case("RANDOM") {
-        return None;
+fn beatoraja_random_control_line(line: &str) -> Option<BeatorajaRandomControl<'_>> {
+    let body = line.trim_start().strip_prefix('#')?;
+    if starts_ignore_ascii_case(body, "ENDRANDOM") {
+        return Some(BeatorajaRandomControl::EndRandom);
     }
-    let after_command = &body[6..];
-    let first = after_command.chars().next()?;
-    if !first.is_ascii_whitespace() {
-        return None;
+    if starts_ignore_ascii_case(body, "ENDIF") {
+        return Some(BeatorajaRandomControl::EndIf);
     }
-    let arg_start_in_after = after_command.len() - after_command.trim_start().len();
-    let arg = &after_command[arg_start_in_after..];
-    let rest_start = arg.find(|c: char| c.is_ascii_whitespace()).unwrap_or(arg.len());
-    let (value, suffix) = arg.split_at(rest_start);
-    if value != "0" {
-        return None;
+    if starts_ignore_ascii_case(body, "ELSEIF") {
+        return Some(BeatorajaRandomControl::ElseIf);
     }
-    let prefix_len = leading_len + 1 + 6 + arg_start_in_after;
-    Some((&line[..prefix_len], suffix))
+    if starts_ignore_ascii_case(body, "ELSE") {
+        return Some(BeatorajaRandomControl::Else);
+    }
+    if starts_ignore_ascii_case(body, "SETRANDOM") {
+        return Some(BeatorajaRandomControl::SetRandom(command_args(body, "SETRANDOM")));
+    }
+    if starts_ignore_ascii_case(body, "RANDOM") {
+        return Some(BeatorajaRandomControl::Random(command_args(body, "RANDOM")));
+    }
+    if starts_ignore_ascii_case(body, "IF") {
+        return Some(BeatorajaRandomControl::If(command_args(body, "IF")));
+    }
+    None
+}
+
+fn starts_ignore_ascii_case(value: &str, prefix: &str) -> bool {
+    value.get(..prefix.len()).is_some_and(|candidate| candidate.eq_ignore_ascii_case(prefix))
+}
+
+fn command_args<'a>(body: &'a str, command: &str) -> &'a str {
+    body.get(command.len() + 1..).unwrap_or("").trim()
+}
+
+fn parse_beatoraja_control_int(
+    args: &str,
+    line_number: usize,
+    command: &str,
+    warnings: &mut Vec<ImportWarning>,
+) -> Option<i32> {
+    match args.parse::<i32>() {
+        Ok(value) => Some(value),
+        Err(_) => {
+            warnings.push(ImportWarning::ParserDiagnostic {
+                code: "BeatorajaRandomInvalidArgument".to_string(),
+                message: format!(
+                    "line {line_number} {command} has invalid integer argument {args:?}; continuing like beatoraja"
+                ),
+            });
+            None
+        }
+    }
 }
 
 pub(crate) fn build_intermediate_from_bms<T: KeyLayoutMapper>(
@@ -1407,6 +1519,73 @@ mod tests {
             warning,
             ImportWarning::ParserDiagnostic { code, .. } if code == "RandomZeroClamped"
         )));
+    }
+
+    #[test]
+    fn bms_random_control_is_flattened_like_beatoraja() {
+        let (chart, _warnings) = import_bms_text_with_warnings(
+            "\
+#TITLE Random Flatten
+#BPM 120
+#WAV01 key.wav
+#RANDOM 1
+#IF 2
+#00111:01
+#ENDIF
+#IF 1
+#00212:01
+#ENDIF
+",
+        );
+
+        assert_eq!(note_lanes(&chart), vec![Lane::Key2]);
+    }
+
+    #[test]
+    fn bms_random_orphan_if_warns_and_continues_like_beatoraja() {
+        let (chart, warnings) = import_bms_text_with_warnings(
+            "\
+#TITLE Orphan If
+#BPM 120
+#WAV01 key.wav
+#IF 1
+#00111:01
+#ENDIF
+",
+        );
+
+        assert_eq!(note_lanes(&chart), vec![Lane::Key1]);
+        assert!(warnings.iter().any(|warning| matches!(
+            warning,
+            ImportWarning::ParserDiagnostic { code, .. }
+                if code == "BeatorajaRandomIfWithoutRandom"
+        )));
+        assert!(warnings.iter().any(|warning| matches!(
+            warning,
+            ImportWarning::ParserDiagnostic { code, .. }
+                if code == "BeatorajaRandomEndifWithoutIf"
+        )));
+    }
+
+    #[test]
+    fn bms_setrandom_is_flattened_with_fixed_condition() {
+        let (chart, _warnings) = import_bms_text_with_warnings(
+            "\
+#TITLE SetRandom
+#BPM 120
+#WAV01 key.wav
+#SETRANDOM 2
+#IF 1
+#00111:01
+#ENDIF
+#IF 2
+#00212:01
+#ENDIF
+#ENDRANDOM
+",
+        );
+
+        assert_eq!(note_lanes(&chart), vec![Lane::Key2]);
     }
 
     #[test]
