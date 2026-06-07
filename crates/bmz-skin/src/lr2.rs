@@ -1576,9 +1576,14 @@ fn split_csv_line(line: &str) -> Vec<String> {
     let mut fields = Vec::new();
     let mut current = String::new();
     let mut in_quotes = false;
-    for ch in line.chars() {
+    let mut chars = line.chars().peekable();
+    while let Some(ch) = chars.next() {
         match ch {
             '"' => in_quotes = !in_quotes,
+            // `//` starts a trailing comment in LR2 skins; drop the rest of the
+            // line so inline comments (e.g. `#IF,38,32 //scoregraph off`) are not
+            // parsed as extra fields/conditions.
+            '/' if !in_quotes && chars.peek() == Some(&'/') => break,
             ',' if !in_quotes => {
                 fields.push(current.trim().to_string());
                 current.clear();
