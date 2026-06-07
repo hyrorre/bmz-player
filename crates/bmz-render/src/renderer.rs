@@ -1065,6 +1065,11 @@ const TEXT_INSTANCE_FLOATS: usize = 12;
 const TEXT_INSTANCE_BYTES: usize = TEXT_INSTANCE_FLOATS * std::mem::size_of::<f32>();
 const TEXT_ATLAS_WIDTH: u32 = 1024;
 const TEXT_ATLAS_PADDING: u32 = 1;
+/// グリフは永続キャッシュされるため、選曲画面のスクロールなどで文字種が増え続けると
+/// アトラス高さが単調増加する。wgpu の `max_texture_dimension_2d` (一般に 16384) を
+/// 超えると `create_texture` がパニックするので、上限に達したらフレーム境界でキャッシュを
+/// 捨てて作り直す。1 フレーム分のグリフは十分この高さに収まるため、リセットしても破綻しない。
+const TEXT_ATLAS_MAX_HEIGHT: u32 = 8192;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct AtlasSize {
@@ -1398,6 +1403,20 @@ impl TextAtlasCache {
     }
 
     fn begin_frame(&mut self) {
+        self.dirty_regions.clear();
+        // アトラス高さが上限に達したらキャッシュを捨てて作り直す。フレーム描画前に
+        // 行うので、このフレームのグリフは新しいアトラスへ再ラスタライズされる。
+        if self.atlas_height() >= TEXT_ATLAS_MAX_HEIGHT {
+            self.clear();
+        }
+    }
+
+    fn clear(&mut self) {
+        self.pen_x = 0;
+        self.pen_y = 0;
+        self.row_height = 0;
+        self.pixels.clear();
+        self.glyphs.clear();
         self.dirty_regions.clear();
     }
 
@@ -3161,6 +3180,26 @@ mod tests {
         assert!(!first.dirty_regions.is_empty());
         assert_eq!(second.instances.len(), first.instances.len());
         assert!(second.dirty_regions.is_empty());
+    }
+
+    #[test]
+    fn text_atlas_resets_when_height_reaches_limit() {
+        let mut atlas = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
+        // 上限を超える行を積み、アトラス高さを限界まで成長させる。
+        let glyph_height = 64;
+        while atlas.atlas_height() < TEXT_ATLAS_MAX_HEIGHT {
+            for _ in 0..(TEXT_ATLAS_WIDTH / 32) {
+                atlas.reserve(16, glyph_height);
+            }
+        }
+        assert!(atlas.atlas_height() >= TEXT_ATLAS_MAX_HEIGHT);
+
+        // フレーム境界でリセットされ、GPU テクスチャ上限を超えない高さに戻る。
+        atlas.begin_frame();
+        assert_eq!(atlas.pen_y, 0);
+        assert_eq!(atlas.pen_x, 0);
+        assert!(atlas.atlas_height() < TEXT_ATLAS_MAX_HEIGHT);
+        assert!(atlas.glyphs.is_empty());
     }
 
     #[test]
