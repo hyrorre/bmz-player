@@ -7363,6 +7363,9 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
 }
 
 fn result_grade_diff_number(state: SkinDrawState) -> Option<i64> {
+    if !grade_diff_score_available(state) {
+        return None;
+    }
     match state.result_grade_diff_display {
         ResultGradeDiffDisplay::Beatoraja => beatoraja_next_rank_diff(state),
         ResultGradeDiffDisplay::HalfGrade => {
@@ -7372,12 +7375,21 @@ fn result_grade_diff_number(state: SkinDrawState) -> Option<i64> {
 }
 
 pub(crate) fn result_grade_diff_label(state: SkinDrawState) -> Option<String> {
+    if !grade_diff_score_available(state) {
+        return None;
+    }
     match state.result_grade_diff_display {
         ResultGradeDiffDisplay::Beatoraja => {
             beatoraja_next_rank_diff(state).map(|value| format!("{value:+}"))
         }
         ResultGradeDiffDisplay::HalfGrade => half_grade_diff(state).map(|diff| diff.label()),
     }
+}
+
+fn grade_diff_score_available(state: SkinDrawState) -> bool {
+    !state.select_screen
+        || state.select_play_count > 0
+        || state.select_ex_score.is_some_and(|score| score > 0)
 }
 
 fn beatoraja_next_rank_diff(state: SkinDrawState) -> Option<i64> {
@@ -9228,6 +9240,9 @@ fn grade_diff_rank_target_grade(
     state: SkinDrawState,
     has_half_grade_f_diff_rank_destination: bool,
 ) -> Option<&'static str> {
+    if !grade_diff_score_available(state) {
+        return None;
+    }
     match state.result_grade_diff_display {
         ResultGradeDiffDisplay::Beatoraja => beatoraja_next_rank_grade(state),
         ResultGradeDiffDisplay::HalfGrade => {
@@ -12471,6 +12486,7 @@ mod tests {
             rows: vec![SelectRowSnapshot {
                 index: 0,
                 ex_score: Some(0),
+                play_count: 1,
                 total_notes: 2253,
                 in_library: true,
                 ..SelectRowSnapshot::default()
@@ -12494,6 +12510,46 @@ mod tests {
                 SkinRenderItem::Image { texture: SkinTextureId(7), .. }
             ))
         );
+
+        let no_play_snapshot = SelectSnapshot {
+            rows: vec![SelectRowSnapshot {
+                index: 0,
+                ex_score: None,
+                play_count: 0,
+                total_notes: 2253,
+                in_library: true,
+                ..SelectRowSnapshot::default()
+            }],
+            chart_count: 1,
+            ..SelectSnapshot::default()
+        };
+        let no_play_items = document.select_render_items(&sources, &no_play_snapshot);
+        let (no_play_state, _) = document.select_draw_state(&no_play_snapshot, None);
+        assert_eq!(skin_state_number(154, no_play_state), None);
+        assert!(!no_play_items.iter().any(|item| matches!(
+            item,
+            SkinRenderItem::Image { texture: SkinTextureId(7) | SkinTextureId(42), .. }
+        )));
+
+        let no_play_zero_snapshot = SelectSnapshot {
+            rows: vec![SelectRowSnapshot {
+                index: 0,
+                ex_score: Some(0),
+                play_count: 0,
+                total_notes: 2253,
+                in_library: true,
+                ..SelectRowSnapshot::default()
+            }],
+            chart_count: 1,
+            ..SelectSnapshot::default()
+        };
+        let no_play_zero_items = document.select_render_items(&sources, &no_play_zero_snapshot);
+        let (no_play_zero_state, _) = document.select_draw_state(&no_play_zero_snapshot, None);
+        assert_eq!(skin_state_number(154, no_play_zero_state), None);
+        assert!(!no_play_zero_items.iter().any(|item| matches!(
+            item,
+            SkinRenderItem::Image { texture: SkinTextureId(7) | SkinTextureId(42), .. }
+        )));
     }
 
     #[test]
