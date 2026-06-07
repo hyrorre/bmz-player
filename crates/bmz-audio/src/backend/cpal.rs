@@ -384,14 +384,18 @@ fn mix_sources_stereo(
     mix.resize(frames * 2, 0.0);
     mix.fill(0.0);
 
+    // オーディオ(ASIO)コールバックはハードリアルタイム。ここで `lock()` すると
+    // ゲームスレッドがロックを保持している間ブロックし、小バッファでは締切を超えて
+    // xrun(全体のプツプツ)を起こす。`try_lock` で「決してブロックしない」を保証し、
+    // 競合したバッファだけスキップ(その音源は 1 バッファ無音)に留める。
     source_engines.clear();
-    if let Ok(sources) = sources.lock() {
+    if let Ok(sources) = sources.try_lock() {
         source_engines.extend(sources.iter().map(|source| Arc::clone(&source.engine)));
     }
 
     source_scratch.resize(frames * 2, 0.0);
     for engine in source_engines.iter() {
-        if let Ok(mut engine) = engine.lock() {
+        if let Ok(mut engine) = engine.try_lock() {
             engine.render_stereo(output_start_frame, source_scratch);
             for (dst, src) in mix.iter_mut().zip(source_scratch.iter()) {
                 *dst += *src;
