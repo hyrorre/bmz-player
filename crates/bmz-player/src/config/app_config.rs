@@ -69,6 +69,8 @@ pub struct VideoConfig {
     pub width: u32,
     pub height: u32,
     pub vsync: bool,
+    #[serde(default)]
+    pub present_mode: PresentModeConfig,
     pub target_fps: u32,
     pub frame_limit_in_background: u32,
     pub renderer: RendererBackend,
@@ -90,6 +92,20 @@ pub enum RendererBackend {
     Metal,
     Dx12,
     Gl,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "PascalCase")]
+pub enum PresentModeConfig {
+    /// `vsync` の値から従来通り AutoVsync / AutoNoVsync を選ぶ。
+    #[default]
+    Auto,
+    AutoVsync,
+    AutoNoVsync,
+    Immediate,
+    Mailbox,
+    Fifo,
+    FifoRelaxed,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -171,6 +187,7 @@ impl Default for AppConfig {
                 width: 1280,
                 height: 720,
                 vsync: true,
+                present_mode: PresentModeConfig::Auto,
                 target_fps: 240,
                 frame_limit_in_background: 30,
                 renderer: RendererBackend::Auto,

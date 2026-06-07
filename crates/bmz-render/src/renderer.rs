@@ -35,6 +35,17 @@ pub enum WgpuBackend {
     Gl,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WgpuPresentMode {
+    #[default]
+    AutoVsync,
+    AutoNoVsync,
+    Immediate,
+    Mailbox,
+    Fifo,
+    FifoRelaxed,
+}
+
 impl WgpuBackend {
     pub fn to_wgpu(self) -> wgpu::Backends {
         match self {
@@ -66,8 +77,8 @@ pub struct Renderer {
     decide_dynamic_timer_runtime: DynamicTimerRuntime,
     result_dynamic_timer_runtime: DynamicTimerRuntime,
     last_frame_timings: Option<RenderFrameTimings>,
-    /// VSync の希望状態。サーフェス生成時および `set_vsync` で参照する。
-    vsync: bool,
+    /// サーフェス生成時および `set_present_mode` で参照する希望 present mode。
+    present_mode: WgpuPresentMode,
     backend: WgpuBackend,
 }
 
@@ -131,6 +142,7 @@ struct WgpuRenderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
+    present_modes: Vec<wgpu::PresentMode>,
     rect_pipeline: wgpu::RenderPipeline,
     rect_buffer: Option<wgpu::Buffer>,
     rect_buffer_capacity: usize,
@@ -277,7 +289,7 @@ impl Renderer {
             return Ok(());
         }
 
-        let mut gpu = WgpuRenderer::new(window, size, self.vsync, self.backend)?;
+        let mut gpu = WgpuRenderer::new(window, size, self.present_mode, self.backend)?;
         for texture in self.pending_textures.drain(..) {
             gpu.upsert_rgba_texture(texture.id, texture.width, texture.height, &texture.rgba);
         }
@@ -540,13 +552,21 @@ impl Renderer {
     /// サーフェス生成済みなら present mode を即座に再構成する (要再起動なし)。
     /// 値が変わらない場合は何もしないため、毎フレーム呼んでも安全。
     pub fn set_vsync(&mut self, vsync: bool) {
-        if self.vsync == vsync {
+        self.set_present_mode(if vsync {
+            WgpuPresentMode::AutoVsync
+        } else {
+            WgpuPresentMode::AutoNoVsync
+        });
+    }
+
+    pub fn set_present_mode(&mut self, present_mode: WgpuPresentMode) {
+        if self.present_mode == present_mode {
             return;
         }
-        self.vsync = vsync;
+        self.present_mode = present_mode;
         if let Some(gpu) = &mut self.gpu {
-            gpu.set_present_mode(vsync);
-            tracing::info!(vsync, "vsync updated");
+            gpu.set_present_mode(present_mode);
+            tracing::info!(requested = ?present_mode, "present mode updated");
         }
     }
 
@@ -612,7 +632,12 @@ impl fmt::Debug for Renderer {
 }
 
 impl WgpuRenderer {
-    fn new<T>(window: T, size: SurfaceSize, vsync: bool, backend: WgpuBackend) -> Result<Self>
+    fn new<T>(
+        window: T,
+        size: SurfaceSize,
+        present_mode: WgpuPresentMode,
+        backend: WgpuBackend,
+    ) -> Result<Self>
     where
         T: Into<wgpu::SurfaceTarget<'static>>,
     {
@@ -644,6 +669,7 @@ impl WgpuRenderer {
             trace: wgpu::Trace::Off,
         }))
         .context("failed to request wgpu device")?;
+        let capabilities = surface.get_capabilities(&adapter);
         let mut config = surface
             .get_default_config(&adapter, size.width, size.height)
             .ok_or_else(|| anyhow!("surface is not supported by the selected adapter"))?;
@@ -651,9 +677,16 @@ impl WgpuRenderer {
         // beatoraja (libGDX) は GL_FRAMEBUFFER_SRGB を使わないため値をそのまま表示する。
         // それと合わせるため sRGB サフィックスを除去して non-sRGB サーフェスとして使う。
         config.format = config.format.remove_srgb_suffix();
-        config.present_mode = present_mode_for(vsync);
+        config.present_mode = resolve_wgpu_present_mode(present_mode, &capabilities.present_modes);
         config.usage |= wgpu::TextureUsages::COPY_SRC;
         surface.configure(&device, &config);
+        tracing::info!(
+            requested = ?present_mode,
+            configured = ?config.present_mode,
+            available = ?capabilities.present_modes,
+            backend = ?backend,
+            "configured renderer present mode"
+        );
         let rect_pipeline = create_rect_pipeline(&device, config.format);
         let image_bind_group_layout = create_image_bind_group_layout(&device);
         let image_sampler = create_image_sampler(&device);
@@ -683,6 +716,7 @@ impl WgpuRenderer {
             device,
             queue,
             config,
+            present_modes: capabilities.present_modes,
             rect_pipeline,
             rect_buffer: None,
             rect_buffer_capacity: 0,
@@ -955,9 +989,15 @@ impl WgpuRenderer {
         self.surface.configure(&self.device, &self.config);
     }
 
-    fn set_present_mode(&mut self, vsync: bool) {
-        self.config.present_mode = present_mode_for(vsync);
+    fn set_present_mode(&mut self, present_mode: WgpuPresentMode) {
+        self.config.present_mode = resolve_wgpu_present_mode(present_mode, &self.present_modes);
         self.configure_surface();
+        tracing::info!(
+            requested = ?present_mode,
+            configured = ?self.config.present_mode,
+            available = ?self.present_modes,
+            "configured renderer present mode"
+        );
     }
 
     fn build_text_frame(
@@ -3000,12 +3040,31 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 }
 "#;
 
-/// VSync 設定に対応する wgpu の present mode。
-///
-/// `Auto*` は環境に応じて `Fifo` / `Immediate` / `Mailbox` へ解決され、
-/// 常にサポートされるため安全に使える。
-fn present_mode_for(vsync: bool) -> wgpu::PresentMode {
-    if vsync { wgpu::PresentMode::AutoVsync } else { wgpu::PresentMode::AutoNoVsync }
+fn resolve_wgpu_present_mode(
+    requested: WgpuPresentMode,
+    available: &[wgpu::PresentMode],
+) -> wgpu::PresentMode {
+    let preferred: &[wgpu::PresentMode] = match requested {
+        WgpuPresentMode::AutoVsync => &[wgpu::PresentMode::FifoRelaxed, wgpu::PresentMode::Fifo],
+        WgpuPresentMode::AutoNoVsync => {
+            &[wgpu::PresentMode::Immediate, wgpu::PresentMode::Mailbox, wgpu::PresentMode::Fifo]
+        }
+        WgpuPresentMode::Immediate => &[wgpu::PresentMode::Immediate],
+        WgpuPresentMode::Mailbox => &[wgpu::PresentMode::Mailbox],
+        WgpuPresentMode::Fifo => &[wgpu::PresentMode::Fifo],
+        WgpuPresentMode::FifoRelaxed => &[wgpu::PresentMode::FifoRelaxed],
+    };
+    if let Some(mode) = preferred.iter().copied().find(|mode| available.contains(mode)) {
+        return mode;
+    }
+    let fallback = available.first().copied().unwrap_or(wgpu::PresentMode::Fifo);
+    tracing::warn!(
+        requested = ?requested,
+        available = ?available,
+        fallback = ?fallback,
+        "requested present mode is unavailable; using fallback"
+    );
+    fallback
 }
 
 fn load_default_font() -> Option<FontArc> {

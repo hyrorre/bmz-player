@@ -1153,23 +1153,9 @@ impl WinitApp {
                 let window = Arc::new(window);
                 window.set_visible(true);
                 let size = surface_size_for_window(&window);
-                // サーフェス生成前に VSync とバックエンド設定を反映させておく。
-                self.renderer.set_vsync(self.boot.app_config.video.vsync);
-                let backend = match self.boot.app_config.video.renderer {
-                    crate::config::app_config::RendererBackend::Auto => {
-                        bmz_render::WgpuBackend::Auto
-                    }
-                    crate::config::app_config::RendererBackend::Vulkan => {
-                        bmz_render::WgpuBackend::Vulkan
-                    }
-                    crate::config::app_config::RendererBackend::Metal => {
-                        bmz_render::WgpuBackend::Metal
-                    }
-                    crate::config::app_config::RendererBackend::Dx12 => {
-                        bmz_render::WgpuBackend::Dx12
-                    }
-                    crate::config::app_config::RendererBackend::Gl => bmz_render::WgpuBackend::Gl,
-                };
+                // サーフェス生成前に present mode とバックエンド設定を反映させておく。
+                self.renderer.set_present_mode(config_present_mode(&self.boot.app_config.video));
+                let backend = config_renderer_backend(self.boot.app_config.video.renderer.clone());
                 self.renderer.set_backend(backend);
                 if let Err(error) = self.renderer.attach_surface(Arc::clone(&window), size) {
                     tracing::error!(%error, "failed to initialize renderer surface");
@@ -6087,8 +6073,8 @@ impl WinitApp {
         // デバッグパネルの開閉状態を profile config へ同期する。
         // 永続化は終了時 / プレイ後の save_profile_config に任せる。
         self.boot.profile_config.ui.show_fps = output.debug_panel_visible;
-        // 本体設定パネルでの VSync 変更を即座に反映する (set_vsync は変化時のみ再構成)。
-        self.renderer.set_vsync(self.boot.app_config.video.vsync);
+        // 本体設定パネルでの present mode 変更を即座に反映する。
+        self.renderer.set_present_mode(config_present_mode(&self.boot.app_config.video));
         // ウィンドウモード変更をライブ反映する (差分があるときのみ適用)。
         let desired_mode = self.boot.app_config.video.mode.clone();
         if desired_mode != self.applied_window_mode {
@@ -7211,6 +7197,48 @@ fn load_chart_bga_textures(renderer: &mut Renderer, chart: &PlayableChart) -> Bg
 
 fn format_error_chain(error: &anyhow::Error) -> String {
     error.chain().map(ToString::to_string).collect::<Vec<_>>().join(": ")
+}
+
+fn config_renderer_backend(
+    backend: crate::config::app_config::RendererBackend,
+) -> bmz_render::WgpuBackend {
+    match backend {
+        crate::config::app_config::RendererBackend::Auto => bmz_render::WgpuBackend::Auto,
+        crate::config::app_config::RendererBackend::Vulkan => bmz_render::WgpuBackend::Vulkan,
+        crate::config::app_config::RendererBackend::Metal => bmz_render::WgpuBackend::Metal,
+        crate::config::app_config::RendererBackend::Dx12 => bmz_render::WgpuBackend::Dx12,
+        crate::config::app_config::RendererBackend::Gl => bmz_render::WgpuBackend::Gl,
+    }
+}
+
+fn config_present_mode(
+    video: &crate::config::app_config::VideoConfig,
+) -> bmz_render::WgpuPresentMode {
+    match video.present_mode {
+        crate::config::app_config::PresentModeConfig::Auto => {
+            if video.vsync {
+                bmz_render::WgpuPresentMode::AutoVsync
+            } else {
+                bmz_render::WgpuPresentMode::AutoNoVsync
+            }
+        }
+        crate::config::app_config::PresentModeConfig::AutoVsync => {
+            bmz_render::WgpuPresentMode::AutoVsync
+        }
+        crate::config::app_config::PresentModeConfig::AutoNoVsync => {
+            bmz_render::WgpuPresentMode::AutoNoVsync
+        }
+        crate::config::app_config::PresentModeConfig::Immediate => {
+            bmz_render::WgpuPresentMode::Immediate
+        }
+        crate::config::app_config::PresentModeConfig::Mailbox => {
+            bmz_render::WgpuPresentMode::Mailbox
+        }
+        crate::config::app_config::PresentModeConfig::Fifo => bmz_render::WgpuPresentMode::Fifo,
+        crate::config::app_config::PresentModeConfig::FifoRelaxed => {
+            bmz_render::WgpuPresentMode::FifoRelaxed
+        }
+    }
 }
 
 impl ApplicationHandler for WinitApp {
@@ -9676,7 +9704,7 @@ mod tests {
     use bmz_render::scene::SelectRowKind;
     use bmz_render::skin::SkinManifest;
 
-    use crate::config::app_config::{AppConfig, PathEntry};
+    use crate::config::app_config::{AppConfig, PathEntry, PresentModeConfig};
     use crate::config::profile_config::ProfileConfig;
     use crate::screens::select_model::{SelectChartRow, SelectCourseRow};
     use crate::skin_loader::default_skin_root;
@@ -9691,6 +9719,27 @@ mod tests {
         config.songs.roots =
             vec![PathEntry { path: "/music/bms".to_string(), enabled: true, recursive: true }];
         assert!(initial_folder_stack(&config).is_empty());
+    }
+
+    #[test]
+    fn config_present_mode_auto_follows_vsync() {
+        let mut config = AppConfig::default().video;
+        config.present_mode = PresentModeConfig::Auto;
+
+        config.vsync = true;
+        assert_eq!(config_present_mode(&config), bmz_render::WgpuPresentMode::AutoVsync);
+
+        config.vsync = false;
+        assert_eq!(config_present_mode(&config), bmz_render::WgpuPresentMode::AutoNoVsync);
+    }
+
+    #[test]
+    fn config_present_mode_explicit_overrides_vsync() {
+        let mut config = AppConfig::default().video;
+        config.vsync = true;
+        config.present_mode = PresentModeConfig::Immediate;
+
+        assert_eq!(config_present_mode(&config), bmz_render::WgpuPresentMode::Immediate);
     }
 
     #[test]
