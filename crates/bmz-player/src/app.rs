@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -143,7 +144,20 @@ pub async fn run_with_options(options: AppOptions) -> Result<()> {
     let event_loop = EventLoop::new().context("failed to create event loop")?;
     event_loop.set_control_flow(ControlFlow::Poll);
 
-    let mut app = WinitApp::new(boot, options, audio_runtime, system_audio)?;
+    // Ctrl-C(SIGINT)で event loop を正常終了させ、cpal/ASIO ストリームの Drop を
+    // 走らせる。捕捉しないと既定ハンドラがプロセスを即殺し、ASIO の停止処理が走らず
+    // ドライバがノイズを流し続ける。
+    let shutdown_requested = Arc::new(AtomicBool::new(false));
+    {
+        let shutdown_requested = Arc::clone(&shutdown_requested);
+        if let Err(error) =
+            ctrlc::set_handler(move || shutdown_requested.store(true, Ordering::SeqCst))
+        {
+            tracing::warn!(%error, "failed to install Ctrl-C handler");
+        }
+    }
+
+    let mut app = WinitApp::new(boot, options, audio_runtime, system_audio, shutdown_requested)?;
     tracing::info!("starting winit event loop");
     event_loop.run_app(&mut app).context("winit event loop failed")
 }
@@ -205,6 +219,9 @@ struct WinitApp {
     /// ドレインが完了するか、選曲復帰・次プレイ開始で解放される。
     draining_audio: Option<AppAudioOutput>,
     audio_runtime: Option<AudioRuntime>,
+    /// Ctrl-C(SIGINT)受信フラグ。セットされたら `about_to_wait` で event loop を
+    /// 正常終了させ、cpal/ASIO ストリームの Drop(停止・後処理)を確実に走らせる。
+    shutdown_requested: Arc<AtomicBool>,
     finished_play: Option<FinishedPlaySession>,
     /// 直近のプレイがオートプレイだったか。Result 画面の常時表示に使う。
     last_play_was_autoplay: bool,
@@ -777,6 +794,7 @@ impl WinitApp {
         options: AppOptions,
         audio_runtime: Option<AudioRuntime>,
         system_audio: Option<crate::audio::SystemAudio>,
+        shutdown_requested: Arc<AtomicBool>,
     ) -> Result<Self> {
         let mut boot = boot;
         if let Some(cli_renderer) = options.renderer.clone() {
@@ -909,6 +927,7 @@ impl WinitApp {
             finished_course: None,
             draining_audio: None,
             audio_runtime,
+            shutdown_requested,
             finished_play: None,
             last_play_was_autoplay: false,
             last_play_snapshot: None,
@@ -7273,8 +7292,20 @@ impl ApplicationHandler for WinitApp {
         }
     }
 
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self.shutdown_requested.load(Ordering::SeqCst) {
+            tracing::info!("Ctrl-C received; exiting cleanly");
+            event_loop.exit();
+        }
+    }
+
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
         self.save_current_play_options(self.active_hispeed(), "game exit");
+        // プロセス終了前に音声出力を確実に Drop し、ASIO の停止・後処理を走らせる。
+        self.draining_audio = None;
+        self.active_play = None;
+        self.system_audio = None;
+        self.audio_runtime = None;
     }
 }
 
