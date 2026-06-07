@@ -2659,6 +2659,9 @@ impl SkinDocument {
         if let Some(bpm_graph) = self.bpmgraph.iter().find(|graph| graph.id == destination.id) {
             return Some(self.bpmgraph_render_items(bpm_graph, destination, frame, state));
         }
+        if let Some(item) = self.direct_source_image_render_item(destination, frame, sources) {
+            return Some(vec![item]);
+        }
         if let Some(image) = skin_image_for_destination_id(destination.id.as_str(), images) {
             if self.should_skip_lift_lane_cover_render(destination, image)
                 && state.offset_lift_px == 0
@@ -5221,6 +5224,35 @@ impl SkinDocument {
             });
         }
         items
+    }
+
+    fn direct_source_image_render_item(
+        &self,
+        destination: &SkinDestinationDef,
+        frame: ResolvedSkinFrame,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Option<SkinRenderItem> {
+        let source_id = beatoraja_direct_image_source_id(&destination.id)?;
+        let source = resolve_document_source(sources, &source_id)?;
+        let uv = TextureRegion { x: 0.0, y: 0.0, width: 1.0, height: 1.0 };
+        let (rect, uv) = stretch_skin_image_geometry(
+            destination.stretch,
+            normalize_skin_frame_rect(frame, self.w, self.h),
+            uv,
+            source.source_size,
+            self.w,
+            self.h,
+        );
+        Some(skin_image_item_for_frame(
+            source.texture,
+            rect,
+            uv,
+            frame,
+            destination.center,
+            if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal },
+            Some(source.source_size),
+            destination.filter != 0,
+        ))
     }
 
     fn slider_render_item(
@@ -9696,6 +9728,11 @@ fn skin_image_for_destination_id<'a>(
         .get(destination_id)
         .copied()
         .or_else(|| destination_id.strip_suffix("_iidx").and_then(|base| images.get(base)).copied())
+}
+
+fn beatoraja_direct_image_source_id(destination_id: &str) -> Option<String> {
+    let id = destination_id.parse::<i32>().ok()?;
+    (id < 0).then(|| (-id).to_string())
 }
 
 fn is_lift_lane_cover_id(id: &str) -> bool {
@@ -14421,6 +14458,41 @@ mod tests {
         assert!(items.iter().any(|item| matches!(
             item,
             SkinRenderItem::Image { texture, .. } if *texture == SkinTextureId(SELECT_BANNER_TEXTURE.0)
+        )));
+    }
+
+    #[test]
+    fn select_destination_negative_image_id_renders_runtime_stagefile_source() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 5,
+                "w": 100,
+                "h": 100,
+                "destination": [
+                    { "id": "-100", "op": [191], "dst": [{ "x": 0, "y": 0, "w": 40, "h": 20 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let context =
+            SkinContext::from_manifest_and_document(default_skin_manifest(), document, []);
+        let snapshot = SelectSnapshot {
+            stage_background: true,
+            stage_image_size: Some(SkinImageSize { width: 400.0, height: 200.0 }),
+            ..SelectSnapshot::default()
+        };
+
+        let items = context.select_document_items(&snapshot);
+
+        assert!(items.iter().any(|item| matches!(
+            item,
+            SkinRenderItem::Image {
+                texture,
+                source_size: Some(SkinImageSize { width: 400.0, height: 200.0 }),
+                ..
+            } if *texture == SkinTextureId(SELECT_STAGE_TEXTURE.0)
         )));
     }
 
