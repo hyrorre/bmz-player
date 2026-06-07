@@ -251,7 +251,14 @@ fn apply_beatoraja_random_control(
                 }
             }
             None => {
-                if !skip_stack.last().copied().unwrap_or(false) {
+                if let Some(command) = bms_rs_random_typo_control_line(line) {
+                    warnings.push(ImportWarning::ParserDiagnostic {
+                        code: "BeatorajaRandomIgnoredTypoControl".to_string(),
+                        message: format!(
+                            "line {line_number} {command} is ignored for beatoraja compatibility"
+                        ),
+                    });
+                } else if !skip_stack.last().copied().unwrap_or(false) {
                     rewritten.push_str(line);
                 }
             }
@@ -285,6 +292,17 @@ fn beatoraja_random_control_line(line: &str) -> Option<BeatorajaRandomControl<'_
     }
     if starts_ignore_ascii_case(body, "IF") {
         return Some(BeatorajaRandomControl::If(command_args(body, "IF")));
+    }
+    None
+}
+
+fn bms_rs_random_typo_control_line(line: &str) -> Option<&'static str> {
+    let body = line.trim_start().strip_prefix('#')?.trim();
+    if body.eq_ignore_ascii_case("END IF") {
+        return Some("#END IF");
+    }
+    if body.eq_ignore_ascii_case("END RANDOM") {
+        return Some("#END RANDOM");
     }
     None
 }
@@ -1564,6 +1582,31 @@ mod tests {
             warning,
             ImportWarning::ParserDiagnostic { code, .. }
                 if code == "BeatorajaRandomEndifWithoutIf"
+        )));
+    }
+
+    #[test]
+    fn bms_end_if_typo_is_ignored_like_beatoraja() {
+        let (chart, warnings) = import_bms_text_with_warnings(
+            "\
+#TITLE End If Typo
+#BPM 120
+#WAV01 key.wav
+#SETRANDOM 2
+#IF 1
+#00111:01
+#end if
+#IF 2
+#00212:01
+#end if
+",
+        );
+
+        assert_eq!(note_lanes(&chart), vec![Lane::Key2]);
+        assert!(warnings.iter().any(|warning| matches!(
+            warning,
+            ImportWarning::ParserDiagnostic { code, .. }
+                if code == "BeatorajaRandomIgnoredTypoControl"
         )));
     }
 
