@@ -525,6 +525,9 @@ enum ResultExitAction {
     HeldLanes,
     /// コース（段位）リザルトから、コース全体を同配置で再プレイする。
     RetryCourseSameArrange,
+    /// コース曲間の中間リザルトを閉じて、コースの次の曲を開始する。
+    /// リトライは発生させず次譜面へ進むだけ (beatoraja の MusicResult コース分岐相当)。
+    AdvanceCourse,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2560,6 +2563,27 @@ impl WinitApp {
             return;
         }
 
+        // コース曲間の中間リザルト: リトライ無効、次の曲へ進むだけ。Key6 の
+        // ゲージグラフ切替のみ単曲リザルト同様に許可する。retry を持つ単曲
+        // リザルト分岐より先に評価し、R/Key5/Key7 等での誤 retry を防ぐ。
+        if self.is_course_intermediate_result() {
+            let pressed = event.state == ElementState::Pressed;
+            if self.result_exit.is_none()
+                && let Some(control) = physical_key_to_control(event.physical_key)
+                && self.handle_course_intermediate_control(&control, pressed, event.repeat)
+            {
+                return;
+            }
+            if self.result_exit.is_none()
+                && self.result_input_ready()
+                && result_action(event.physical_key, event.state, event.repeat).is_some()
+            {
+                // R / Enter / Escape いずれも次の曲へ進むだけ (retry/leave 区別なし)。
+                self.begin_result_exit(ResultExitAction::AdvanceCourse);
+            }
+            return;
+        }
+
         if self.finished_play.is_some() && self.finished_course.is_none() {
             let pressed = event.state == ElementState::Pressed;
             if let Some(control) = physical_key_to_control(event.physical_key) {
@@ -2894,6 +2918,24 @@ impl WinitApp {
         }
 
         if self.pending_play_start.is_some() {
+            return;
+        }
+
+        // コース曲間の中間リザルト: リトライ無効、次の曲へ進むだけ。
+        // retry を持つ単曲リザルト分岐より先に評価する。
+        if self.is_course_intermediate_result() {
+            if self.result_exit.is_none() {
+                let control = PhysicalControl::GamepadButton(button.to_string());
+                if self.handle_course_intermediate_control(&control, pressed, false) {
+                    return;
+                }
+                if pressed
+                    && self.result_input_ready()
+                    && matches!(button, "Button1" | "Start" | "Button2" | "Select")
+                {
+                    self.begin_result_exit(ResultExitAction::AdvanceCourse);
+                }
+            }
             return;
         }
 
@@ -4022,6 +4064,114 @@ impl WinitApp {
         self.start_chart_with_options(first_chart_id, options);
     }
 
+    /// コース曲間の中間リザルト状態かどうか。active_course を保持したまま
+    /// finished_play だけが立ち、finished_course はまだ無い状態を指す。
+    fn is_course_intermediate_result(&self) -> bool {
+        is_course_intermediate_result(
+            self.active_course.is_some(),
+            self.finished_course.is_some(),
+            self.finished_play.is_some(),
+        )
+    }
+
+    /// コース曲間の中間リザルト画面を表示する。直前に終わった曲の結果を
+    /// finished_play に入れて Result スキンを出すが、active_course は保持し
+    /// finished_course は立てないので「中間リザルト」状態になる。
+    fn show_course_intermediate_result(&mut self) {
+        let last = self
+            .active_course
+            .as_ref()
+            .and_then(|course| course.entry_results.last())
+            .map(|entry| entry.finished.clone());
+        let Some(last) = last else {
+            // 直前結果が無い異常系では中間リザルトを出さず、次の曲へ進む。
+            self.start_next_course_chart();
+            return;
+        };
+        self.result_gauge_graph_type = last.summary.gauge_type as i32;
+        self.finished_play = Some(last);
+        self.result_exit = None;
+        self.result_key5_held = false;
+        self.result_key7_held = false;
+        self.result_scene_started_at = Instant::now();
+        self.ensure_skin_ready(SkinKind::Result);
+    }
+
+    /// 中間リザルトを閉じて次の曲へ進む。finished_play をクリアして中間リザルト
+    /// 状態を抜け、active_course はそのまま次の曲を開始する。
+    fn advance_to_next_course_chart(&mut self) {
+        self.finished_play = None;
+        self.result_exit = None;
+        self.result_key5_held = false;
+        self.result_key7_held = false;
+        self.start_next_course_chart();
+    }
+
+    /// コースの (current_index が指す) 次の曲を開始する。ゲージ持ち越しや
+    /// replay / 同配置 arrange の適用は元の advance_course_after_finish と同じ。
+    fn start_next_course_chart(&mut self) {
+        let Some(course) = &self.active_course else {
+            return;
+        };
+        let next_index = course.current_index;
+        let Some(next_chart_id) =
+            course.definition.entries.get(next_index).and_then(|e| e.chart_id)
+        else {
+            return;
+        };
+        let constraints = course.definition.constraints.clone();
+        // Carry the gauge value of the previous chart over to the next chart in
+        // the course (beatoraja keeps the gauge between songs).
+        let carried_gauge =
+            course.entry_results.last().map(|r| r.finished.result.gauge_value).unwrap_or(0.0);
+        let mut options = self.play_start_options();
+        apply_course_constraints(&mut options, &constraints);
+        options.initial_gauge_value = Some(carried_gauge);
+        // If the course is being replayed, attach the next queued replay
+        // (when it exists and matches the next chart's id).  Mismatches
+        // are silently skipped so the chart still plays normally.
+        if let Some(course) = &self.active_course
+            && let Some(replay) = course.queued_replays.get(next_index)
+            && replay.chart_id == next_chart_id
+        {
+            apply_queued_replay(&mut options, replay);
+        } else if let Some(course) = &self.active_course
+            && let Some(arrange) = course.arrange_overrides.get(next_index)
+        {
+            // Same-arrange course retry: reproduce this chart's arrange.
+            apply_arrange_override(&mut options, arrange);
+        }
+        self.start_chart_with_options(next_chart_id, options);
+    }
+
+    /// コース中間リザルトのコントロール処理。Key6 はゲージグラフ切替のみ許可し、
+    /// それ以外の終了レーン (Key1-4/Key5/Key7) は retry せず次の曲へ進む。
+    fn handle_course_intermediate_control(
+        &mut self,
+        control: &PhysicalControl,
+        pressed: bool,
+        repeat: bool,
+    ) -> bool {
+        let Some(lane) = self.result_lane_for_control(control) else {
+            return false;
+        };
+        match lane {
+            Lane::Key6 => {
+                if pressed && !repeat && self.result_input_ready() {
+                    self.cycle_result_gauge_graph_type();
+                }
+                true
+            }
+            lane if lane_starts_result_exit(lane) => {
+                if pressed && self.result_input_ready() {
+                    self.begin_result_exit(ResultExitAction::AdvanceCourse);
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
     fn advance_course_after_finish(&mut self, finished: FinishedPlaySession) {
         let Some(course) = &mut self.active_course else {
             return;
@@ -4030,35 +4180,19 @@ impl WinitApp {
         // Beatoraja behavior: if any chart in the course is Failed, the course
         // ends immediately and remaining charts are skipped.
         let failed = finished.result.clear_type == bmz_core::clear::ClearType::Failed;
-        // Carry the gauge value of this chart over to the next chart in the
-        // course (beatoraja keeps the gauge between songs).
-        let carried_gauge = finished.result.gauge_value;
         course.entry_results.push(CourseEntryResult { chart_id, finished });
         course.current_index += 1;
 
-        let next_index = course.current_index;
-        let constraints = course.definition.constraints.clone();
-        let next_chart_id = course.definition.entries.get(next_index).and_then(|e| e.chart_id);
+        let next_chart_id =
+            course.definition.entries.get(course.current_index).and_then(|e| e.chart_id);
 
-        if !failed && let Some(next_chart_id) = next_chart_id {
-            let mut options = self.play_start_options();
-            apply_course_constraints(&mut options, &constraints);
-            options.initial_gauge_value = Some(carried_gauge);
-            // If the course is being replayed, attach the next queued replay
-            // (when it exists and matches the next chart's id).  Mismatches
-            // are silently skipped so the chart still plays normally.
-            if let Some(course) = &self.active_course
-                && let Some(replay) = course.queued_replays.get(next_index)
-                && replay.chart_id == next_chart_id
-            {
-                apply_queued_replay(&mut options, replay);
-            } else if let Some(course) = &self.active_course
-                && let Some(arrange) = course.arrange_overrides.get(next_index)
-            {
-                // Same-arrange course retry: reproduce this chart's arrange.
-                apply_arrange_override(&mut options, arrange);
-            }
-            self.start_chart_with_options(next_chart_id, options);
+        if !failed && next_chart_id.is_some() {
+            // 次の曲をすぐ始めず、まず直前の曲の単曲リザルト (中間リザルト) を出す。
+            // active_course を保持したまま finished_play に直前結果を入れることで、
+            // view_state は Result を返し、入力は中間リザルト分岐へ入る。実際の次曲
+            // 開始 (ゲージ持ち越し / replay / 同配置 arrange の適用を含む) は、結果画面
+            // を閉じたとき advance_to_next_course_chart まで遅延する。
+            self.show_course_intermediate_result();
             return;
         }
 
@@ -5173,7 +5307,13 @@ impl WinitApp {
             && self.result_exit.is_none()
             && self.result_scene_started_at.elapsed() >= self.result_scene_duration()
         {
-            self.begin_result_exit(ResultExitAction::Leave);
+            // 中間リザルトは scene 時間経過で次の曲へ、それ以外は選曲へ戻る。
+            let action = if self.is_course_intermediate_result() {
+                ResultExitAction::AdvanceCourse
+            } else {
+                ResultExitAction::Leave
+            };
+            self.begin_result_exit(action);
         }
         let Some(exit) = &self.result_exit else {
             return;
@@ -5199,6 +5339,7 @@ impl WinitApp {
                 }
             }
             ResultExitAction::RetryCourseSameArrange => self.retry_course_same_arrange(),
+            ResultExitAction::AdvanceCourse => self.advance_to_next_course_chart(),
         }
     }
 
@@ -7877,6 +8018,17 @@ fn cycle_result_gauge_graph_type(current: i32) -> i32 {
     }
 }
 
+/// コース曲間の中間リザルトかどうか。active_course を保持したまま finished_play
+/// だけが立ち、finished_course はまだ無い状態を指す。中間リザルトでは retry を
+/// 無効化し、次の曲へ進むだけにする (beatoraja MusicResult のコース分岐相当)。
+fn is_course_intermediate_result(
+    active_course: bool,
+    finished_course: bool,
+    finished_play: bool,
+) -> bool {
+    active_course && finished_play && !finished_course
+}
+
 /// リザルト画面で押すと終了アニメーションを開始するレーン。
 /// beatoraja の OK (Key1-4) / REPLAY_DIFFERENT (Key5) / REPLAY_SAME (Key7) に相当。
 /// Key6 は CHANGE_GRAPH、scratch は無割り当てなので開始しない。
@@ -10419,6 +10571,18 @@ mod tests {
         for lane in [Lane::Scratch, Lane::Key6] {
             assert!(!lane_starts_result_exit(lane), "{lane:?} should not start result exit");
         }
+    }
+
+    #[test]
+    fn course_intermediate_result_only_with_active_course_and_no_course_result() {
+        // active_course 保持 + finished_play あり + finished_course 無し → 中間リザルト。
+        assert!(is_course_intermediate_result(true, false, true));
+        // コース最終結果 (finished_course あり) は中間リザルトではない。
+        assert!(!is_course_intermediate_result(true, true, true));
+        // 単曲 (非コース) リザルトは中間リザルトではない。
+        assert!(!is_course_intermediate_result(false, false, true));
+        // 結果未表示なら中間リザルトではない。
+        assert!(!is_course_intermediate_result(true, false, false));
     }
 
     #[test]
