@@ -1200,6 +1200,61 @@ mod tests {
     }
 
     #[test]
+    fn lua_skin_timer_observe_infers_starseeker_default_gauge_iidx_global_as_constant() {
+        let root = unique_test_dir("bmz-skin-lua-iidx-gauge-default");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("play7.luaskin"),
+            r#"
+            local timer_util = require("timer_util")
+            return {
+                type = 0,
+                property = {
+                    {
+                        name = "グルーヴゲージ表示",
+                        def = "default",
+                        item = {
+                            { name = "default", op = 930 },
+                            { name = "gauge_off", op = 931 },
+                            { name = "all_off", op = 932 },
+                        },
+                    },
+                },
+                destination = {
+                    {
+                        id = "groove_frame",
+                        timer = timer_util.timer_observe_boolean(function()
+                            return not is_gauge_iidx
+                        end),
+                        dst = { { x = 0, y = 0, w = 1, h = 1 } },
+                    },
+                    {
+                        id = "groove_frame_iidx",
+                        timer = timer_util.timer_observe_boolean(function()
+                            return is_gauge_iidx
+                        end),
+                        dst = { { x = 0, y = 0, w = 1, h = 1 } },
+                    },
+                },
+            }
+            "#,
+        )
+        .unwrap();
+
+        let loaded = load_lua_skin(
+            &root.join("play7.luaskin"),
+            SkinKind::Play,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+
+        assert_eq!(loaded.document.dynamic_timers.len(), 2);
+        assert_eq!(loaded.document.dynamic_timers[0].observe, "number(0) >= 0");
+        assert_eq!(loaded.document.dynamic_timers[1].observe, "number(0) < 0");
+    }
+
+    #[test]
     fn lua_skin_infers_gauge_type_class_predicate_covers_ids_6_7_8() {
         // 段位ゲージ用 skin が `gauge_type() >= 6` のような draw 条件を書いたとき、
         // probe は 6 / 7 / 8 すべてを検出して or 連結する必要がある。

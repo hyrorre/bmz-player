@@ -4223,7 +4223,8 @@ impl SkinDocument {
     ) -> Option<Vec<SkinRenderItem>> {
         let gauge_def = self.skin_gauge_for_destination(destination)?;
         let elapsed_ms = skin_timer_elapsed_ms(destination.timer, state)?;
-        let frame = resolve_destination_frame(destination, elapsed_ms, enabled_options, state)?;
+        let mut frame = resolve_destination_frame(destination, elapsed_ms, enabled_options, state)?;
+        apply_skin_offset_to_frame(destination, &mut frame, state, false);
         let rect = normalize_skin_frame_rect(frame, self.w, self.h);
         let parts = gauge_def.parts.max(1);
         let max = state.gauge_max.max(1.0);
@@ -7786,6 +7787,7 @@ fn skin_timer_elapsed_ms(timer: Option<i32>, state: SkinDrawState) -> Option<i32
         Some(172..=174) => None,
         Some(40) => state.ready_timer_ms,
         Some(41) => state.play_timer_ms,
+        Some(44 | 45) => skin_gauge_max_timer_elapsed_ms(state),
         Some(11) => Some(state.select_bar_elapsed_ms),
         Some(21..=23) => Some(state.select_option_panel_elapsed_ms),
         Some(348..=352) => score_target_timer_elapsed_ms(timer.unwrap(), state),
@@ -7817,6 +7819,10 @@ fn skin_timer_elapsed_ms(timer: Option<i32>, state: SkinDrawState) -> Option<i32
         }
         _ => None,
     }
+}
+
+fn skin_gauge_max_timer_elapsed_ms(state: SkinDrawState) -> Option<i32> {
+    (state.gauge >= state.gauge_max.max(1.0)).then_some(state.elapsed_ms)
 }
 
 fn skin_text_align(align: i32) -> TextAlign {
@@ -12728,6 +12734,7 @@ mod tests {
                         "loop": 1200,
                         "draw": "gauge_type() == 4 or gauge_type() == 5",
                         "blend": 2,
+                        "offset": 11,
                         "dst": [
                             { "time": 1200, "x": 54, "y": 151, "w": 450, "h": 28, "a": 0 },
                             { "time": 1700, "a": 80 },
@@ -12747,9 +12754,12 @@ mod tests {
                 source_size: SkinImageSize { width: 100.0, height: 100.0 },
             },
         )]);
+        let mut skin_offsets = SkinOffsetValues::default();
+        skin_offsets
+            .set(11, crate::skin_offset::SkinOffsetValue { x: 10, y: 8, w: 4, h: 6, r: 0, a: 0 });
         let (behind, front, _) = document.static_render_items_split(
             &sources,
-            SkinDrawState { gauge_type: 4, elapsed_ms: 1700, ..Default::default() },
+            SkinDrawState { gauge_type: 4, elapsed_ms: 1700, skin_offsets, ..Default::default() },
             SkinTextState::default(),
         );
         let items = behind.into_iter().chain(front).collect::<Vec<_>>();
@@ -12762,6 +12772,16 @@ mod tests {
                 ..
             } if (*a - 80.0 / 255.0).abs() < 0.01
         )));
+        assert!(matches!(
+            items[0],
+            SkinRenderItem::Image {
+                rect: Rect { x, y, width, height },
+                ..
+            } if approx_eq(x, 62.0 / 1920.0)
+                && approx_eq(y, 890.0 / 1080.0)
+                && approx_eq(width, 227.0 / 1920.0)
+                && approx_eq(height, 34.0 / 1080.0)
+        ));
     }
 
     #[test]
@@ -16715,6 +16735,27 @@ mod tests {
         };
         assert_eq!(skin_timer_elapsed_ms(Some(143), active), Some(250));
         assert_eq!(skin_timer_elapsed_ms(Some(144), active), Some(250));
+    }
+
+    #[test]
+    fn gauge_max_timers_are_active_at_max_gauge() {
+        let below = SkinDrawState {
+            elapsed_ms: 1_700,
+            gauge: 99.9,
+            gauge_max: 100.0,
+            ..SkinDrawState::default()
+        };
+        assert_eq!(skin_timer_elapsed_ms(Some(44), below), None);
+        assert_eq!(skin_timer_elapsed_ms(Some(45), below), None);
+
+        let max = SkinDrawState {
+            elapsed_ms: 1_700,
+            gauge: 100.0,
+            gauge_max: 100.0,
+            ..SkinDrawState::default()
+        };
+        assert_eq!(skin_timer_elapsed_ms(Some(44), max), Some(1_700));
+        assert_eq!(skin_timer_elapsed_ms(Some(45), max), Some(1_700));
     }
 
     #[test]
