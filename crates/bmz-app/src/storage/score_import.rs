@@ -377,13 +377,8 @@ fn beatoraja_row(row: &Row<'_>) -> rusqlite::Result<BeatorajaScoreRow> {
 }
 
 fn score_state_from_lr2(row: &Lr2ScoreRow) -> ScoreState {
-    // LR2's `ghost` column uses LR2's own run-length encoding (a 62-symbol
-    // alphabet, length far shorter than the note count), which is not the
-    // gzip+base64 per-note format bmz uses.  Attempting to decode it with the
-    // beatoraja decoder always fails and floods the log, so we drop it and import
-    // the score without a ghost.  (Reconstructing bmz's per-note judge array from
-    // LR2's compressed graph is left as future work; see import notes.)
-    let _ = (row.min_bp, row.play_count, row.clear_count, &row.ghost);
+    let ghost = decode_lr2_ghost(&row.ghost, row.total_notes);
+    let _ = (row.min_bp, row.play_count, row.clear_count);
     ScoreState {
         judges: JudgeCounts {
             fast_pgreat: row.perfect,
@@ -396,7 +391,7 @@ fn score_state_from_lr2(row: &Lr2ScoreRow) -> ScoreState {
         combo: 0,
         max_combo: row.max_combo,
         past_notes: row.total_notes,
-        ghost: Vec::new(),
+        ghost,
     }
 }
 
@@ -436,6 +431,138 @@ fn decode_external_ghost(encoded: &str, total_notes: u32) -> Vec<u8> {
             Vec::new()
         }
     }
+}
+
+/// Decodes LR2's `score.ghost` column into bmz's per-note judge array.
+///
+/// The LR2 format (see OpenLR2 `LR2_ghost.cpp` `EncodeGhostData`/`DecodeGhostData`)
+/// is a run-length encoding of per-note judge symbols `@ A B C D E` (= judge codes
+/// 0..=5), wrapped in two layers of bigram dictionary compression.  We reverse the
+/// dictionaries (layer 2 then layer 1, as LR2 does), expand the run-length runs,
+/// then map LR2 judge codes to bmz's (`5 - code`): E/5=PGreat→0, D/4=Great→1,
+/// C/3=Good→2, B/2=Bad→3, A/1=Poor→4.  Code 0 (`@`) is an empty poor not tied to a
+/// scoreable note and is dropped.  The result is padded with Poor / truncated to
+/// `total_notes`, mirroring [`decode_beatoraja_ghost`].
+fn decode_lr2_ghost(encoded: &str, total_notes: u32) -> Vec<u8> {
+    if encoded.is_empty() {
+        return Vec::new();
+    }
+
+    let mut layer2 = String::with_capacity(encoded.len() * 2);
+    for c in encoded.chars() {
+        match lr2_ghost_layer2_symbol(c) {
+            Some(replacement) => layer2.push_str(replacement),
+            None => layer2.push(c),
+        }
+    }
+    let mut expanded = String::with_capacity(layer2.len() * 2);
+    for c in layer2.chars() {
+        match lr2_ghost_layer1_symbol(c) {
+            Some(replacement) => expanded.push_str(replacement),
+            None => expanded.push(c),
+        }
+    }
+
+    let mut ghost: Vec<u8> = Vec::with_capacity(total_notes as usize);
+    let mut current: Option<u8> = None;
+    let mut rep: i64 = -1;
+    for c in expanded.chars() {
+        let o = c as u32;
+        if (0x40..=0x45).contains(&o) {
+            if let Some(code) = current {
+                push_lr2_run(&mut ghost, code, if rep == 0 { 1 } else { rep });
+            }
+            rep = 0;
+            current = Some((o - 0x40) as u8);
+        } else if c.is_ascii_digit() {
+            let digit = (o - 0x30) as i64;
+            rep = if rep == 0 { digit } else { rep * 10 + digit };
+        }
+    }
+    if let Some(code) = current {
+        push_lr2_run(&mut ghost, code, if rep == 0 { 1 } else { rep });
+    }
+
+    let expected = total_notes as usize;
+    if expected > 0 {
+        if ghost.len() < expected {
+            ghost.resize(expected, 4);
+        } else {
+            ghost.truncate(expected);
+        }
+    }
+    ghost
+}
+
+/// Appends `count` copies of an LR2 judge `code` (0..=5) to a bmz ghost, mapping
+/// LR2 codes to bmz judge codes via `5 - code`.  Code 0 (empty poor) is not a
+/// scoreable note and is skipped.
+fn push_lr2_run(ghost: &mut Vec<u8>, code: u8, count: i64) {
+    if (1..=5).contains(&code) {
+        let bmz_code = 5 - code;
+        for _ in 0..count.max(1) {
+            ghost.push(bmz_code);
+        }
+    }
+}
+
+/// LR2 ghost layer-2 dictionary (`q`..`z`), reversed on decode before layer 1.
+fn lr2_ghost_layer2_symbol(c: char) -> Option<&'static str> {
+    Some(match c {
+        'q' => "XX",
+        'r' => "X1",
+        's' => "X2",
+        't' => "X3",
+        'u' => "X4",
+        'v' => "X5",
+        'w' => "X6",
+        'x' => "X7",
+        'y' => "X8",
+        'z' => "X9",
+        _ => return None,
+    })
+}
+
+/// LR2 ghost layer-1 dictionary (`F`..`p`), reversed after layer 2 on decode.
+fn lr2_ghost_layer1_symbol(c: char) -> Option<&'static str> {
+    Some(match c {
+        'F' => "E1",
+        'G' => "E2",
+        'H' => "E3",
+        'I' => "E4",
+        'J' => "E5",
+        'K' => "E6",
+        'L' => "E7",
+        'M' => "E8",
+        'N' => "E9",
+        'P' => "EC",
+        'Q' => "EB",
+        'R' => "EA",
+        'S' => "D2",
+        'T' => "D3",
+        'U' => "D4",
+        'V' => "D5",
+        'W' => "D6",
+        'X' => "DE",
+        'Y' => "DC",
+        'a' => "DB",
+        'b' => "DA",
+        'c' => "C2",
+        'd' => "C3",
+        'e' => "C4",
+        'f' => "C5",
+        'g' => "CE",
+        'h' => "CD",
+        'i' => "CB",
+        'j' => "CA",
+        'k' => "AB",
+        'l' => "AC",
+        'm' => "AD",
+        'n' => "AE",
+        'o' => "A2",
+        'p' => "A3",
+        _ => return None,
+    })
 }
 
 fn normalize_imported_played_at(value: i64) -> Option<i64> {
@@ -680,10 +807,37 @@ mod tests {
     }
 
     #[test]
-    fn lr2_score_state_drops_incompatible_ghost() {
-        // An LR2-format ghost string (62-symbol run-length, contains '@') is not
-        // decodable by the beatoraja decoder; the import must drop it silently
-        // rather than warn, leaving an empty ghost.
+    fn decode_lr2_ghost_handles_plain_symbols() {
+        // No dictionary tokens, no run counts: B A E D -> Bad, Poor, PGreat, Great.
+        assert_eq!(decode_lr2_ghost("BAED", 4), vec![3, 4, 0, 1]);
+        // Single PGreat.
+        assert_eq!(decode_lr2_ghost("E", 1), vec![0]);
+    }
+
+    #[test]
+    fn decode_lr2_ghost_expands_dictionary_and_runs() {
+        // Real LR2 ghost captured from a player DB.  Exercises both dictionary
+        // layers (m,c,k,S,c,b,Z tokens), a run count (`@2`, `8`) and the leading
+        // empty-poor (`@`) that must be dropped.  Validated against the LR2 score
+        // row's judge counts.
+        let ghost = decode_lr2_ghost("@2mBckScb8Z", 20);
+        assert_eq!(ghost, vec![4, 1, 3, 2, 2, 4, 3, 1, 1, 2, 2, 1, 4, 4, 4, 4, 4, 4, 4, 4]);
+    }
+
+    #[test]
+    fn decode_lr2_ghost_pads_and_truncates_to_total_notes() {
+        // Aborted play: decoded ghost shorter than the chart -> pad with Poor (4).
+        let padded = decode_lr2_ghost("E", 4);
+        assert_eq!(padded, vec![0, 4, 4, 4]);
+        // Over-long ghost is truncated to the note count.
+        let truncated = decode_lr2_ghost("E", 0);
+        assert_eq!(truncated, vec![0]); // total_notes 0 leaves the decode untouched
+        let truncated = decode_lr2_ghost("BAED", 2);
+        assert_eq!(truncated, vec![3, 4]);
+    }
+
+    #[test]
+    fn lr2_score_state_decodes_ghost() {
         let row = Lr2ScoreRow {
             md5: "0".repeat(32),
             clear: 4,
@@ -692,16 +846,16 @@ mod tests {
             good: 3,
             bad: 2,
             poor: 1,
-            total_notes: 128,
+            total_notes: 4,
             max_combo: 64,
             min_bp: 3,
             play_count: 2,
             clear_count: 1,
-            ghost: "Mqt4t3XhGBJSLSG@h2GjH1t7TEvSESF3r9SNr0q2uzs8XTI1sqSG3C@SPEsu".to_string(),
+            ghost: "BAED".to_string(),
             random_seed: Some(123),
         };
         let state = score_state_from_lr2(&row);
-        assert!(state.ghost.is_empty());
+        assert_eq!(state.ghost, vec![3, 4, 0, 1]);
         assert_eq!(state.judges.fast_pgreat, 100);
     }
 
