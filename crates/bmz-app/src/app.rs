@@ -813,21 +813,26 @@ impl WinitApp {
         let (select_preview_tx, select_preview_rx) = mpsc::channel::<SelectPreviewResult>();
         let (select_folder_summary_tx, select_folder_summary_rx) =
             mpsc::channel::<SelectFolderSummaryResult>();
-        let (default_skin_manifest, pending_select_skin, pending_decide_skin, pending_result_skin) =
-            load_initial_skin_textures(
-                &mut renderer,
-                &skin_decode_tx,
-                0,
-                &boot.profile_config.skin.select,
-                &boot.profile_config.skin.decide,
-                &boot.profile_config.skin.result,
-                &boot.profile_config.skin.select_options,
-                &boot.profile_config.skin.decide_options,
-                &boot.profile_config.skin.result_options,
-                &boot.profile_config.skin.select_files,
-                &boot.profile_config.skin.decide_files,
-                &boot.profile_config.skin.result_files,
-            );
+        let (
+            default_skin_manifest,
+            initial_skin_video_sources,
+            pending_select_skin,
+            pending_decide_skin,
+            pending_result_skin,
+        ) = load_initial_skin_textures(
+            &mut renderer,
+            &skin_decode_tx,
+            0,
+            &boot.profile_config.skin.select,
+            &boot.profile_config.skin.decide,
+            &boot.profile_config.skin.result,
+            &boot.profile_config.skin.select_options,
+            &boot.profile_config.skin.decide_options,
+            &boot.profile_config.skin.result_options,
+            &boot.profile_config.skin.select_files,
+            &boot.profile_config.skin.decide_files,
+            &boot.profile_config.skin.result_files,
+        );
         let pending_play_skin = false;
 
         let gilrs = if boot.app_config.input.gamepad_enabled {
@@ -950,7 +955,7 @@ impl WinitApp {
             skin_upload_tx,
             skin_upload_rx,
             skin_upload_worker_started: false,
-            skin_video_sources: HashMap::new(),
+            skin_video_sources: initial_skin_video_sources,
             pending_select_skin,
             pending_decide_skin,
             pending_play_skin,
@@ -6373,12 +6378,13 @@ fn load_initial_skin_textures(
     select_files: &BTreeMap<String, String>,
     decide_files: &BTreeMap<String, String>,
     result_files: &BTreeMap<String, String>,
-) -> (Option<SkinManifest>, bool, bool, bool) {
+) -> (Option<SkinManifest>, HashMap<SkinKind, Vec<ActiveSkinVideoSource>>, bool, bool, bool) {
     // Decide / Result の JSON skin は Select の同期ロードより**前**に decode スレッドを起動して
     // CPU をフル活用する。Select の sync 処理 (PNG GPU upload など) と並列に decode が進む。
     let pending_select = false;
     let mut pending_decide = false;
     let mut pending_result = false;
+    let mut skin_video_sources = HashMap::new();
 
     let decide_trimmed = decide_skin_path.trim().to_string();
     let result_trimmed = result_skin_path.trim().to_string();
@@ -6428,7 +6434,7 @@ fn load_initial_skin_textures(
     if !select_trimmed.is_empty() {
         let path = Path::new(select_trimmed);
         if is_decodable_skin_path(path) {
-            apply_json_skin_sync(
+            let video_sources = apply_json_skin_sync(
                 renderer,
                 path,
                 SkinKind::Select,
@@ -6436,6 +6442,9 @@ fn load_initial_skin_textures(
                 select_options,
                 select_files,
             );
+            if !video_sources.is_empty() {
+                skin_video_sources.insert(SkinKind::Select, video_sources);
+            }
         } else {
             tracing::warn!(
                 path = %path.display(),
@@ -6458,7 +6467,7 @@ fn load_initial_skin_textures(
         );
     }
 
-    (default_manifest, pending_select, pending_decide, pending_result)
+    (default_manifest, skin_video_sources, pending_select, pending_decide, pending_result)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -6524,14 +6533,14 @@ fn apply_json_skin_sync(
     default_manifest: Option<&SkinManifest>,
     options: &BTreeMap<String, String>,
     files: &BTreeMap<String, String>,
-) {
+) -> Vec<ActiveSkinVideoSource> {
     let Some(manifest) = default_manifest else {
         tracing::warn!(
             path = %path.display(),
             kind = ?kind,
             "skipping skin install because default skin manifest is unavailable"
         );
-        return;
+        return Vec::new();
     };
     let decoded = match decode_beatoraja_skin_with_options(path, kind, options, files) {
         Ok(decoded) => decoded,
@@ -6542,9 +6551,10 @@ fn apply_json_skin_sync(
                 error = %format_error_chain(&error),
                 "failed to decode beatoraja skin"
             );
-            return;
+            return Vec::new();
         }
     };
+    let video_sources = skin_video_sources_from_decoded(&decoded);
     if let Err(error) = install_decoded_skin(renderer, decoded, manifest.clone()) {
         tracing::warn!(
             path = %path.display(),
@@ -6552,7 +6562,24 @@ fn apply_json_skin_sync(
             error = %format_error_chain(&error),
             "failed to install beatoraja skin"
         );
+        return Vec::new();
     }
+    video_sources
+}
+
+fn skin_video_sources_from_decoded(decoded: &DecodedSkin) -> Vec<ActiveSkinVideoSource> {
+    decoded
+        .sources
+        .iter()
+        .filter(|source| source.is_video)
+        .map(|source| ActiveSkinVideoSource {
+            texture: source.texture,
+            path: source.path.clone(),
+            decoder: None,
+            last_pts: None,
+            failed: false,
+        })
+        .collect()
 }
 
 fn spawn_skin_decode(
