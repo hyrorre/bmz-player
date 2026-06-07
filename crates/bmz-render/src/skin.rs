@@ -3884,6 +3884,9 @@ impl SkinDocument {
         let destinations = destination_entries(&songlist.text, enabled_options);
         let Some(destination) = destinations
             .get(select_row_bar_text_index(row))
+            .or_else(|| {
+                select_row_bar_text_fallback_index(row).and_then(|index| destinations.get(index))
+            })
             .or_else(|| destinations.first())
             .copied()
         else {
@@ -3914,7 +3917,14 @@ impl SkinDocument {
     ) -> Option<SkinRenderItem> {
         let imageset = self.imageset.iter().find(|set| set.id == destination.id)?;
         let image_index = select_row_bar_image_index(row);
-        let image_id = imageset.images.get(image_index).or_else(|| imageset.images.first())?;
+        let image_id = imageset
+            .images
+            .get(image_index)
+            .or_else(|| {
+                select_row_bar_image_fallback_index(row)
+                    .and_then(|index| imageset.images.get(index))
+            })
+            .or_else(|| imageset.images.first())?;
         let image = self.image.iter().find(|image| image.id == *image_id)?;
         let source = resolve_document_source(sources, &image.src)?;
         let elapsed =
@@ -6105,7 +6115,10 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool 
         41 => true,
         1 => matches!(
             state.select_row_kind,
-            SelectRowKind::Folder | SelectRowKind::TableFolder | SelectRowKind::SettingsFolder
+            SelectRowKind::Folder
+                | SelectRowKind::TableFolder
+                | SelectRowKind::SearchFolder
+                | SelectRowKind::SettingsFolder
         ),
         2 => select_song_detail_row(state),
         3 => state.select_row_kind == SelectRowKind::Course,
@@ -8634,9 +8647,17 @@ fn select_row_bar_image_index(row: &SelectRowSnapshot) -> usize {
         SelectRowKind::Song => 0,
         SelectRowKind::Folder => 1,
         SelectRowKind::TableFolder => 2,
+        SelectRowKind::SearchFolder => 6,
         SelectRowKind::Course => 3,
-        SelectRowKind::SettingsFolder => 1,
+        SelectRowKind::SettingsFolder => 6,
         SelectRowKind::Config => 0,
+    }
+}
+
+fn select_row_bar_image_fallback_index(row: &SelectRowSnapshot) -> Option<usize> {
+    match row.kind {
+        SelectRowKind::SearchFolder | SelectRowKind::SettingsFolder => Some(1),
+        _ => None,
     }
 }
 
@@ -8646,11 +8667,19 @@ fn select_row_bar_text_index(row: &SelectRowSnapshot) -> usize {
         SelectRowKind::Song => 2,
         SelectRowKind::Folder => 4,
         SelectRowKind::TableFolder => 6,
+        SelectRowKind::SearchFolder => 10,
         // Course rows display the course title in the same slot as a song title
         // (text index 2), not the folder slot (6).
         SelectRowKind::Course => 2,
-        SelectRowKind::SettingsFolder => 4,
+        SelectRowKind::SettingsFolder => 10,
         SelectRowKind::Config => 2,
+    }
+}
+
+fn select_row_bar_text_fallback_index(row: &SelectRowSnapshot) -> Option<usize> {
+    match row.kind {
+        SelectRowKind::SearchFolder | SelectRowKind::SettingsFolder => Some(4),
+        _ => None,
     }
 }
 
@@ -8867,7 +8896,11 @@ fn select_row_shows_course_trophy(row: &SelectRowSnapshot) -> bool {
 }
 
 fn select_row_shows_folder_distribution(row: &SelectRowSnapshot) -> bool {
-    row.is_folder && matches!(row.kind, SelectRowKind::Folder | SelectRowKind::TableFolder)
+    row.is_folder
+        && matches!(
+            row.kind,
+            SelectRowKind::Folder | SelectRowKind::TableFolder | SelectRowKind::SearchFolder
+        )
 }
 
 fn select_rank_op_matches(op: i32, state: SkinDrawState) -> bool {
@@ -11120,6 +11153,29 @@ mod tests {
     }
 
     #[test]
+    fn select_search_and_settings_folders_use_search_bar_slots() {
+        let search = SelectRowSnapshot {
+            kind: SelectRowKind::SearchFolder,
+            is_folder: true,
+            ..SelectRowSnapshot::default()
+        };
+        let settings = SelectRowSnapshot {
+            kind: SelectRowKind::SettingsFolder,
+            is_folder: true,
+            ..SelectRowSnapshot::default()
+        };
+
+        assert_eq!(select_row_bar_image_index(&search), 6);
+        assert_eq!(select_row_bar_text_index(&search), 10);
+        assert_eq!(select_row_bar_image_index(&settings), 6);
+        assert_eq!(select_row_bar_text_index(&settings), 10);
+        assert_eq!(select_row_bar_image_fallback_index(&search), Some(1));
+        assert_eq!(select_row_bar_text_fallback_index(&search), Some(4));
+        assert_eq!(select_row_bar_image_fallback_index(&settings), Some(1));
+        assert_eq!(select_row_bar_text_fallback_index(&settings), Some(4));
+    }
+
+    #[test]
     fn select_bar_type_ops_match_song_folder_and_course_rows() {
         let song = SkinDrawState {
             select_row_kind: SelectRowKind::Song,
@@ -11136,6 +11192,16 @@ mod tests {
             select_is_folder: true,
             ..SkinDrawState::default()
         };
+        let search_folder = SkinDrawState {
+            select_row_kind: SelectRowKind::SearchFolder,
+            select_is_folder: true,
+            ..SkinDrawState::default()
+        };
+        let settings_folder = SkinDrawState {
+            select_row_kind: SelectRowKind::SettingsFolder,
+            select_is_folder: true,
+            ..SkinDrawState::default()
+        };
         let course = SkinDrawState {
             select_row_kind: SelectRowKind::Course,
             select_is_folder: false,
@@ -11147,6 +11213,8 @@ mod tests {
         assert!(!test_skin_op(3, &[], song));
         assert!(test_skin_op(1, &[], folder));
         assert!(test_skin_op(1, &[], table_folder));
+        assert!(test_skin_op(1, &[], search_folder));
+        assert!(test_skin_op(1, &[], settings_folder));
         assert!(!test_skin_op(2, &[], folder));
         assert!(test_skin_op(3, &[], course));
         assert!(!test_skin_op(2, &[], course));

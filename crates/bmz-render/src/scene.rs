@@ -303,6 +303,7 @@ pub enum SelectRowKind {
     Song,
     Folder,
     TableFolder,
+    SearchFolder,
     Course,
     SettingsFolder,
     Config,

@@ -44,7 +44,7 @@ pub fn search_history_folder_items(history: &[String]) -> Vec<SelectItem> {
         .map(|query| SelectItem::Folder {
             path: format!("{SEARCH_PATH_PREFIX}{query}"),
             name: format!("Search : '{query}'"),
-            kind: SelectRowKind::TableFolder,
+            kind: SelectRowKind::SearchFolder,
             summary: None,
         })
         .collect()
@@ -896,7 +896,7 @@ pub fn select_folder_summary(
         SelectRowKind::Folder => {
             folder_summary_for_song_folder(library_db, score_db, path, ln_policy_setting).map(Some)
         }
-        SelectRowKind::TableFolder => {
+        SelectRowKind::SearchFolder => {
             if let Some(query) = parse_search_query(path) {
                 return folder_summary_for_charts(
                     score_db,
@@ -905,26 +905,23 @@ pub fn select_folder_summary(
                 )
                 .map(Some);
             }
-            match parse_table_path(path) {
-                Some(TablePath::Table { source_url }) => folder_summary_for_table(
-                    library_db,
-                    score_db,
-                    source_url,
-                    None,
-                    ln_policy_setting,
-                )
-                .map(Some),
-                Some(TablePath::Level { source_url, level }) => folder_summary_for_table(
-                    library_db,
-                    score_db,
-                    source_url,
-                    Some(level),
-                    ln_policy_setting,
-                )
-                .map(Some),
-                Some(TablePath::Root) | None => Ok(None),
-            }
+            Ok(None)
         }
+        SelectRowKind::TableFolder => match parse_table_path(path) {
+            Some(TablePath::Table { source_url }) => {
+                folder_summary_for_table(library_db, score_db, source_url, None, ln_policy_setting)
+                    .map(Some)
+            }
+            Some(TablePath::Level { source_url, level }) => folder_summary_for_table(
+                library_db,
+                score_db,
+                source_url,
+                Some(level),
+                ln_policy_setting,
+            )
+            .map(Some),
+            Some(TablePath::Root) | None => Ok(None),
+        },
         SelectRowKind::Song
         | SelectRowKind::Course
         | SelectRowKind::SettingsFolder
@@ -1957,7 +1954,7 @@ mod tests {
             SelectItem::Folder { path, name, kind, summary } => {
                 assert_eq!(path, "bmz-search:alpha");
                 assert_eq!(name, "Search : 'alpha'");
-                assert_eq!(*kind, SelectRowKind::TableFolder);
+                assert_eq!(*kind, SelectRowKind::SearchFolder);
                 assert_eq!(*summary, None);
             }
             other => panic!("expected folder, got {other:?}"),
