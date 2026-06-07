@@ -17,7 +17,8 @@ use winit::event::WindowEvent;
 use winit::window::Window;
 
 use crate::config::app_config::{
-    AppConfig, AudioBackend, AudioBufferSizeMode, RendererBackend, WindowMode,
+    AppConfig, AudioBackend, AudioBufferSizeMode, DifficultyTableSource, InputBackendKind,
+    LogLevel, RendererBackend, WindowMode,
 };
 use crate::config::profile_config::{
     AssistOptionConfig, BgaExpandConfig, BgaModeConfig, GaugeAutoShiftConfig, GaugeTypeConfig,
@@ -222,6 +223,8 @@ pub struct EguiLayer {
     settings_new_root_path: String,
     /// 本体設定パネル: 曲フォルダ追加の直近エラー。
     settings_add_root_error: String,
+    settings_new_table_url: String,
+    settings_add_table_error: String,
     score_import_path: String,
     score_import_kind: ScoreImportKind,
     score_import_status: String,
@@ -263,6 +266,8 @@ impl EguiLayer {
             show_skin: false,
             settings_new_root_path: String::new(),
             settings_add_root_error: String::new(),
+            settings_new_table_url: String::new(),
+            settings_add_table_error: String::new(),
             score_import_path: String::new(),
             score_import_kind: ScoreImportKind::default(),
             score_import_status: String::new(),
@@ -369,6 +374,8 @@ impl EguiLayer {
                     app_config,
                     &mut self.settings_new_root_path,
                     &mut self.settings_add_root_error,
+                    &mut self.settings_new_table_url,
+                    &mut self.settings_add_table_error,
                     &mut self.score_import_path,
                     &mut self.score_import_kind,
                     &self.score_import_status,
@@ -840,6 +847,8 @@ fn build_settings_panel(
     config: &mut AppConfig,
     new_root_path: &mut String,
     add_root_error: &mut String,
+    new_table_url: &mut String,
+    add_table_error: &mut String,
     score_import_path: &mut String,
     score_import_kind: &mut ScoreImportKind,
     score_import_status: &str,
@@ -934,6 +943,52 @@ fn build_settings_panel(
                         &mut config.scan.rescan_missing_files,
                         "存在しないファイルを DB から除去 (未実装)",
                     );
+                });
+
+                egui::CollapsingHeader::new("難易度表").show(ui, |ui| {
+                    ui.checkbox(&mut config.tables.auto_fetch_on_startup, "起動時に自動取得");
+                    let mut remove_index = None;
+                    for (index, source) in config.tables.sources.iter_mut().enumerate() {
+                        ui.push_id(("table_source", index), |ui| {
+                            ui.horizontal(|ui| {
+                                ui.checkbox(&mut source.enabled, "");
+                                ui.label(&source.url);
+                                if ui.button("削除").clicked() {
+                                    remove_index = Some(index);
+                                }
+                            });
+                        });
+                    }
+                    if let Some(index) = remove_index {
+                        config.tables.sources.remove(index);
+                    }
+                    if config.tables.sources.is_empty() {
+                        ui.label("登録された難易度表はありません。");
+                    }
+                    ui.horizontal(|ui| {
+                        ui.label("URL");
+                        ui.add(
+                            egui::TextEdit::singleline(new_table_url)
+                                .desired_width(300.0)
+                                .hint_text("https://.../header.json"),
+                        );
+                    });
+                    if ui.button("追加").clicked() {
+                        match add_difficulty_table_source(
+                            &mut config.tables.sources,
+                            new_table_url.trim(),
+                        ) {
+                            Ok(()) => {
+                                new_table_url.clear();
+                                add_table_error.clear();
+                            }
+                            Err(error) => *add_table_error = error,
+                        }
+                    }
+                    if !add_table_error.is_empty() {
+                        ui.colored_label(egui::Color32::RED, add_table_error.as_str());
+                    }
+                    ui.label("取得は保存後に table fetch または F5 の文脈 reload で実行します。");
                 });
 
                 build_score_import_section(
@@ -1137,6 +1192,76 @@ fn build_settings_panel(
                     );
                 });
 
+                egui::CollapsingHeader::new("入力デバイス").show(ui, |ui| {
+                    egui::ComboBox::from_label("バックエンド")
+                        .selected_text(input_backend_label(&config.input.backend))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut config.input.backend,
+                                InputBackendKind::Auto,
+                                input_backend_label(&InputBackendKind::Auto),
+                            );
+                            ui.selectable_value(
+                                &mut config.input.backend,
+                                InputBackendKind::Winit,
+                                input_backend_label(&InputBackendKind::Winit),
+                            );
+                            ui.selectable_value(
+                                &mut config.input.backend,
+                                InputBackendKind::RawInput,
+                                input_backend_label(&InputBackendKind::RawInput),
+                            );
+                            ui.selectable_value(
+                                &mut config.input.backend,
+                                InputBackendKind::Hid,
+                                input_backend_label(&InputBackendKind::Hid),
+                            );
+                            ui.selectable_value(
+                                &mut config.input.backend,
+                                InputBackendKind::Midi,
+                                input_backend_label(&InputBackendKind::Midi),
+                            );
+                        });
+                    ui.checkbox(&mut config.input.keyboard_enabled, "キーボード");
+                    ui.checkbox(&mut config.input.gamepad_enabled, "ゲームパッド");
+                    ui.checkbox(&mut config.input.midi_enabled, "MIDI");
+                    ui.label("入力バックエンド設定は次回起動時に反映されます。");
+                });
+
+                egui::CollapsingHeader::new("ログ").show(ui, |ui| {
+                    egui::ComboBox::from_label("レベル")
+                        .selected_text(log_level_label(&config.logging.level))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut config.logging.level,
+                                LogLevel::Trace,
+                                log_level_label(&LogLevel::Trace),
+                            );
+                            ui.selectable_value(
+                                &mut config.logging.level,
+                                LogLevel::Debug,
+                                log_level_label(&LogLevel::Debug),
+                            );
+                            ui.selectable_value(
+                                &mut config.logging.level,
+                                LogLevel::Info,
+                                log_level_label(&LogLevel::Info),
+                            );
+                            ui.selectable_value(
+                                &mut config.logging.level,
+                                LogLevel::Warn,
+                                log_level_label(&LogLevel::Warn),
+                            );
+                            ui.selectable_value(
+                                &mut config.logging.level,
+                                LogLevel::Error,
+                                log_level_label(&LogLevel::Error),
+                            );
+                        });
+                    ui.checkbox(&mut config.logging.file_logging, "ファイル出力");
+                    ui.label("ログ設定は次回起動時に反映されます。");
+                });
+
                 ui.separator();
                 if ui.button("保存").clicked() {
                     save_clicked = true;
@@ -1243,6 +1368,40 @@ fn renderer_backend_label(backend: &RendererBackend) -> &'static str {
         RendererBackend::Dx12 => "DirectX 12",
         RendererBackend::Gl => "OpenGL",
     }
+}
+
+fn input_backend_label(backend: &InputBackendKind) -> &'static str {
+    match backend {
+        InputBackendKind::Auto => "自動選択",
+        InputBackendKind::Winit => "winit",
+        InputBackendKind::RawInput => "Raw Input",
+        InputBackendKind::Hid => "HID",
+        InputBackendKind::Midi => "MIDI",
+    }
+}
+
+fn log_level_label(level: &LogLevel) -> &'static str {
+    match level {
+        LogLevel::Trace => "trace",
+        LogLevel::Debug => "debug",
+        LogLevel::Info => "info",
+        LogLevel::Warn => "warn",
+        LogLevel::Error => "error",
+    }
+}
+
+fn add_difficulty_table_source(
+    sources: &mut Vec<DifficultyTableSource>,
+    url: &str,
+) -> Result<(), String> {
+    if url.is_empty() {
+        return Err("URL を入力してください。".to_string());
+    }
+    if sources.iter().any(|source| source.url == url) {
+        return Err("同じ URL の難易度表が既に登録されています。".to_string());
+    }
+    sources.push(DifficultyTableSource { url: url.to_string(), enabled: true });
+    Ok(())
 }
 
 struct ProfileSettingsPanelActions {
