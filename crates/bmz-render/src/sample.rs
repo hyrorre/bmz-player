@@ -52,6 +52,7 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
         select_sort: "TITLE".to_string(),
         select_ln_mode: "LN".to_string(),
         bga: "ON".to_string(),
+        judge_timing_offset_ms: 0,
         master_volume: 1.0,
         key_volume: 1.0,
         bgm_volume: 1.0,

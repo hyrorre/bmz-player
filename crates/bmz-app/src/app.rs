@@ -1463,6 +1463,8 @@ impl WinitApp {
                 .display_label()
                 .to_string(),
             bga: bga_mode_as_str(self.boot.profile_config.play.bga).to_string(),
+            judge_timing_offset_ms: (self.boot.profile_config.judge.visual_offset_us / 1_000)
+                .clamp(i32::MIN as i64, i32::MAX as i64) as i32,
             master_volume: crate::config::play::volume_unit_to_f32(
                 self.boot.profile_config.audio_mix.master_volume,
             ),
@@ -2275,9 +2277,28 @@ impl WinitApp {
         if self.select_keys.cycle_bga.as_deref() == Some(control) {
             self.cycle_bga_option();
             true
+        } else if let Some(delta_ms) = visual_offset_delta_control(control, &self.select_keys) {
+            self.adjust_visual_offset_ms(delta_ms)
         } else {
             false
         }
+    }
+
+    fn adjust_visual_offset_ms(&mut self, delta_ms: i32) -> bool {
+        let changed = crate::config::settings_registry::adjust_settings_value(
+            &mut self.boot.profile_config,
+            SettingsEntryId::VisualOffsetMs,
+            delta_ms,
+        );
+        if changed {
+            self.boot.profile_config.updated_at = now_unix_seconds();
+            self.sync_realtime_profile_settings();
+            tracing::info!(
+                visual_offset_ms = self.boot.profile_config.judge.visual_offset_us / 1_000,
+                "visual judge offset changed"
+            );
+        }
+        changed
     }
 
     fn route_keyboard_input(&mut self, event: &winit::event::KeyEvent) {
@@ -8502,6 +8523,16 @@ fn play_option_control(control: &str, bindings: &SelectKeyBindings) -> Option<Pl
     None
 }
 
+fn visual_offset_delta_control(control: &str, bindings: &SelectKeyBindings) -> Option<i32> {
+    if bindings.is_key5(control) {
+        Some(-1)
+    } else if bindings.is_key7(control) {
+        Some(1)
+    } else {
+        None
+    }
+}
+
 fn lane_cover_step(physical_key: PhysicalKey, state: ElementState, repeat: bool) -> Option<f32> {
     if state != ElementState::Pressed {
         return None;
@@ -8968,6 +8999,8 @@ struct SelectKeyBindings {
     enter: Vec<String>,
     back: Vec<String>,
     key2_controls: Vec<String>,
+    key5_controls: Vec<String>,
+    key7_controls: Vec<String>,
     hispeed_down_controls: Vec<String>,
     hispeed_up_controls: Vec<String>,
     scratch_up_controls: Vec<String>,
@@ -9032,6 +9065,8 @@ impl SelectKeyBindings {
         let e2_action_controls = actions_for(InputActionConfig::E2);
         let e3_action_controls = actions_for(InputActionConfig::E3);
         let key2_controls = keys_for(LaneConfig::Key2);
+        let key5_controls = keys_for(LaneConfig::Key5);
+        let key7_controls = keys_for(LaneConfig::Key7);
         let hispeed_down_controls: Vec<String> =
             [LaneConfig::Key1, LaneConfig::Key3, LaneConfig::Key5, LaneConfig::Key7]
                 .iter()
@@ -9144,6 +9179,8 @@ impl SelectKeyBindings {
             enter,
             back,
             key2_controls,
+            key5_controls,
+            key7_controls,
             hispeed_down_controls,
             hispeed_up_controls,
             scratch_up_controls,
@@ -9171,6 +9208,14 @@ impl SelectKeyBindings {
 
     fn is_key2(&self, control: &str) -> bool {
         self.key2_controls.iter().any(|k| k == control)
+    }
+
+    fn is_key5(&self, control: &str) -> bool {
+        self.key5_controls.iter().any(|k| k == control)
+    }
+
+    fn is_key7(&self, control: &str) -> bool {
+        self.key7_controls.iter().any(|k| k == control)
     }
 
     fn is_e2_action(&self, control: &str) -> bool {
@@ -10103,6 +10148,15 @@ mod tests {
             play_option_control("AxisLeftX+", &keys),
             Some(PlayOptionControl::LaneCover(LaneCoverChange::Down))
         );
+    }
+
+    #[test]
+    fn detail_option_control_maps_key5_and_key7_to_visual_offset() {
+        let keys = default_select_keys();
+
+        assert_eq!(visual_offset_delta_control("C", &keys), Some(-1));
+        assert_eq!(visual_offset_delta_control("V", &keys), Some(1));
+        assert_eq!(visual_offset_delta_control("Z", &keys), None);
     }
 
     #[test]

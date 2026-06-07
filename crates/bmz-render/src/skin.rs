@@ -3230,6 +3230,7 @@ impl SkinDocument {
             ),
             select_target_index: select_target_index(&snapshot.target),
             select_bga_index: select_bga_index(&snapshot.bga),
+            judge_timing_offset_ms: snapshot.judge_timing_offset_ms,
             select_assist_index: select_assist_index(&snapshot.assist),
             select_mode_index: select_mode_index(&snapshot.select_mode),
             select_sort_index: select_sort_index(&snapshot.select_sort),
@@ -7034,6 +7035,9 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         21..=26 => current_datetime_number(ref_id),
         42 | 43 if state.result_failed.is_some() => Some(state.result_arrange_index as i64),
         11 if state.select_screen => Some(state.select_mode_index as i64),
+        12 if state.select_screen && state.select_option_panel == 3 => {
+            Some(state.judge_timing_offset_ms as i64)
+        }
         12 if state.select_screen => Some(state.select_sort_index as i64),
         300 => Some(state.select_chart_count as i64),
         30 if state.select_screen => Some(state.select_play_count as i64),
@@ -14451,6 +14455,20 @@ mod tests {
             item,
             SkinRenderItem::Image { rect, .. } if approx_eq(rect.x, 0.4)
         )));
+    }
+
+    #[test]
+    fn select_draw_state_uses_select_judge_timing_offset() {
+        let document: SkinDocument = serde_json::from_str(r#"{ "type": 5 }"#).unwrap();
+        let snapshot = SelectSnapshot {
+            option_panel: 3,
+            judge_timing_offset_ms: -12,
+            ..SelectSnapshot::default()
+        };
+
+        let (state, _) = document.select_draw_state(&snapshot, None);
+
+        assert_eq!(skin_state_number(12, state), Some(-12));
     }
 
     #[test]

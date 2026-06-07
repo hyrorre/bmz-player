@@ -43,6 +43,8 @@ pub struct SelectSnapshot {
     pub select_sort: String,
     pub select_ln_mode: String,
     pub bga: String,
+    /// Select detail option panelで表示する判定表示オフセット(ms)。
+    pub judge_timing_offset_ms: i32,
     pub master_volume: f32,
     pub key_volume: f32,
     pub bgm_volume: f32,
@@ -101,6 +103,7 @@ impl Default for SelectSnapshot {
             select_sort: String::new(),
             select_ln_mode: String::new(),
             bga: String::new(),
+            judge_timing_offset_ms: 0,
             master_volume: 0.0,
             key_volume: 0.0,
             bgm_volume: 0.0,

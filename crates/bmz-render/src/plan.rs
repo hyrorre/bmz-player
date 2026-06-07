@@ -528,6 +528,7 @@ fn push_select_option_panel(
                 format!("GAS      {}", snapshot.gauge_auto_shift),
                 format!("GAUGE    {}", snapshot.gauge),
                 format!("BGA      {}", snapshot.bga),
+                format!("VISUAL   {} ms", snapshot.judge_timing_offset_ms),
             ],
         ),
         _ => return,
