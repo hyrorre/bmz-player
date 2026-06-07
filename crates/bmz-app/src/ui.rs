@@ -23,7 +23,8 @@ use crate::config::app_config::{
 use crate::config::profile_config::{
     AssistOptionConfig, BgaExpandConfig, BgaModeConfig, GaugeAutoShiftConfig, GaugeTypeConfig,
     HispeedModeConfig, JudgeAlgorithmConfig, LaneEffectConfig, ProfileConfig, RandomOptionConfig,
-    ScratchInputMode, SkinConfig, SkinHistoryEntryConfig, SkinOffsetConfig, TargetOptionConfig,
+    ReplaySlotRule, ScratchInputMode, SkinConfig, SkinHistoryEntryConfig, SkinOffsetConfig,
+    TargetOptionConfig,
 };
 use crate::ln_policy::LnPolicySetting;
 use crate::practice_ui::{PracticePanelContext, build_practice_panel};
@@ -1686,6 +1687,37 @@ fn build_profile_settings_panel(
                     ui.label("キー割り当ては選曲画面の設定ツリーで編集できます。");
                 });
 
+                egui::CollapsingHeader::new("リプレイ").show(ui, |ui| {
+                    ui.checkbox(&mut profile.replay.auto_save, "自動保存");
+                    ui.checkbox(&mut profile.replay.compress, "圧縮");
+                    for (index, rule) in profile.replay.slot_rules.iter_mut().enumerate() {
+                        egui::ComboBox::from_label(format!("スロット {}", index + 1))
+                            .selected_text(replay_slot_rule_label(*rule))
+                            .show_ui(ui, |ui| {
+                                for value in [
+                                    ReplaySlotRule::Always,
+                                    ReplaySlotRule::ScoreUpdate,
+                                    ReplaySlotRule::BpUpdate,
+                                    ReplaySlotRule::MaxComboUpdate,
+                                    ReplaySlotRule::ClearUpdate,
+                                ] {
+                                    ui.selectable_value(rule, value, replay_slot_rule_label(value));
+                                }
+                            });
+                    }
+                });
+
+                egui::CollapsingHeader::new("システム音").show(ui, |ui| {
+                    system_sound_path_row(ui, "BGM ルート", &mut profile.system_sound.bgm_dir);
+                    system_sound_path_row(ui, "SE ルート", &mut profile.system_sound.se_dir);
+                    system_sound_path_row(
+                        ui,
+                        "フォールバック",
+                        &mut profile.system_sound.default_sound_dir,
+                    );
+                    ui.label("システム音の再スキャンは次回起動時に反映されます。");
+                });
+
                 egui::CollapsingHeader::new("UI").show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.label("言語");
@@ -1846,6 +1878,28 @@ fn scratch_input_mode_label(value: ScratchInputMode) -> &'static str {
         ScratchInputMode::Normal => "NORMAL",
         ScratchInputMode::AnyDirection => "ANY DIRECTION",
     }
+}
+
+fn replay_slot_rule_label(value: ReplaySlotRule) -> &'static str {
+    match value {
+        ReplaySlotRule::Always => "ALWAYS",
+        ReplaySlotRule::ScoreUpdate => "SCORE UPDATE",
+        ReplaySlotRule::BpUpdate => "BP UPDATE",
+        ReplaySlotRule::MaxComboUpdate => "MAX COMBO UPDATE",
+        ReplaySlotRule::ClearUpdate => "CLEAR UPDATE",
+    }
+}
+
+fn system_sound_path_row(ui: &mut egui::Ui, label: &str, value: &mut String) {
+    ui.horizontal(|ui| {
+        ui.label(label);
+        ui.add(egui::TextEdit::singleline(value).desired_width(260.0));
+        if ui.button("選択…").clicked()
+            && let Some(folder) = rfd::FileDialog::new().pick_folder()
+        {
+            *value = folder.to_string_lossy().into_owned();
+        }
+    });
 }
 
 /// スキン設定パネルからのアクション要求。
