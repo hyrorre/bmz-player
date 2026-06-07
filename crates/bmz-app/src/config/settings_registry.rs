@@ -1,9 +1,12 @@
 use super::profile_config::{
     AssistOptionConfig, BgaExpandConfig, BgaModeConfig, GaugeAutoShiftConfig, GaugeTypeConfig,
-    JudgeAlgorithmConfig, LaneEffectConfig, ProfileConfig, RandomOptionConfig, TargetOptionConfig,
+    HispeedModeConfig, JudgeAlgorithmConfig, LaneEffectConfig, ProfileConfig, RandomOptionConfig,
+    ReplaySlotRule, ScratchInputMode, TargetOptionConfig,
 };
 use bmz_gameplay::rule::RuleMode;
 use bmz_render::scene::ResultGradeDiffDisplay;
+
+use crate::ln_policy::LnPolicySetting;
 
 /// ゲーム内設定で編集可能な profile.toml 項目。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -18,6 +21,7 @@ pub enum SettingsEntryId {
     VisualOffsetMs,
     JudgeAlgorithm,
     RuleMode,
+    LnModePolicy,
     Gauge,
     GaugeAutoShift,
     Random,
@@ -28,10 +32,21 @@ pub enum SettingsEntryId {
     BgaMode,
     BgaExpand,
     AutoPlay,
+    MisslayerDurationMs,
     Hispeed,
+    HispeedMode,
     Sudden,
     Lift,
     Hidden,
+    TargetGreenNumber,
+    ScratchInputMode,
+    AnalogScratchSensitivity,
+    AnalogScratchTimeoutMs,
+    ReplayAutoSave,
+    ReplaySlot1Rule,
+    ReplaySlot2Rule,
+    ReplaySlot3Rule,
+    ReplaySlot4Rule,
 }
 
 impl SettingsEntryId {
@@ -50,6 +65,7 @@ impl SettingsEntryId {
     pub const PLAY_ENTRIES: &'static [Self] = &[
         Self::Gauge,
         Self::RuleMode,
+        Self::LnModePolicy,
         Self::GaugeAutoShift,
         Self::Random,
         Self::Target,
@@ -59,10 +75,28 @@ impl SettingsEntryId {
         Self::BgaMode,
         Self::BgaExpand,
         Self::AutoPlay,
+        Self::MisslayerDurationMs,
     ];
 
-    pub const DISPLAY_ENTRIES: &'static [Self] =
-        &[Self::Hispeed, Self::Sudden, Self::Lift, Self::Hidden];
+    pub const DISPLAY_ENTRIES: &'static [Self] = &[
+        Self::Hispeed,
+        Self::HispeedMode,
+        Self::Sudden,
+        Self::Lift,
+        Self::Hidden,
+        Self::TargetGreenNumber,
+    ];
+
+    pub const INPUT_ENTRIES: &'static [Self] =
+        &[Self::ScratchInputMode, Self::AnalogScratchSensitivity, Self::AnalogScratchTimeoutMs];
+
+    pub const REPLAY_ENTRIES: &'static [Self] = &[
+        Self::ReplayAutoSave,
+        Self::ReplaySlot1Rule,
+        Self::ReplaySlot2Rule,
+        Self::ReplaySlot3Rule,
+        Self::ReplaySlot4Rule,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -76,6 +110,7 @@ impl SettingsEntryId {
             Self::VisualOffsetMs => "VISUAL OFFSET",
             Self::JudgeAlgorithm => "JUDGE ALGO",
             Self::RuleMode => "RULE MODE",
+            Self::LnModePolicy => "LN MODE",
             Self::Gauge => "GAUGE",
             Self::GaugeAutoShift => "GAUGE SHIFT",
             Self::Random => "RANDOM",
@@ -86,10 +121,21 @@ impl SettingsEntryId {
             Self::BgaMode => "BGA",
             Self::BgaExpand => "BGA FIT",
             Self::AutoPlay => "AUTO PLAY",
+            Self::MisslayerDurationMs => "MISSLAYER",
             Self::Hispeed => "HISPEED",
+            Self::HispeedMode => "HS MODE",
             Self::Sudden => "SUDDEN+",
             Self::Lift => "LIFT",
             Self::Hidden => "HIDDEN",
+            Self::TargetGreenNumber => "GREEN NO.",
+            Self::ScratchInputMode => "SCRATCH",
+            Self::AnalogScratchSensitivity => "ANALOG SENS",
+            Self::AnalogScratchTimeoutMs => "ANALOG TIME",
+            Self::ReplayAutoSave => "REPLAY SAVE",
+            Self::ReplaySlot1Rule => "REPLAY 1",
+            Self::ReplaySlot2Rule => "REPLAY 2",
+            Self::ReplaySlot3Rule => "REPLAY 3",
+            Self::ReplaySlot4Rule => "REPLAY 4",
         }
     }
 }
@@ -99,6 +145,8 @@ pub fn settings_adjust_step(id: SettingsEntryId) -> i32 {
     match id {
         SettingsEntryId::InputOffsetMs | SettingsEntryId::VisualOffsetMs => 1,
         SettingsEntryId::Sudden | SettingsEntryId::Lift | SettingsEntryId::Hidden => 25,
+        SettingsEntryId::TargetGreenNumber => 10,
+        SettingsEntryId::AnalogScratchTimeoutMs | SettingsEntryId::MisslayerDurationMs => 50,
         _ => 1,
     }
 }
@@ -119,6 +167,7 @@ pub fn format_settings_value(profile: &ProfileConfig, id: SettingsEntryId) -> St
         }
         SettingsEntryId::JudgeAlgorithm => format_judge_algorithm(profile.judge.judge_algorithm),
         SettingsEntryId::RuleMode => format_rule_mode(profile.play.rule_mode),
+        SettingsEntryId::LnModePolicy => profile.play.ln_mode_policy.display_label().to_string(),
         SettingsEntryId::Gauge => format_gauge(profile.play.gauge),
         SettingsEntryId::GaugeAutoShift => format_gauge_auto_shift(profile.play.gauge_auto_shift),
         SettingsEntryId::Random => format_random(profile.play.random),
@@ -131,10 +180,27 @@ pub fn format_settings_value(profile: &ProfileConfig, id: SettingsEntryId) -> St
         SettingsEntryId::BgaMode => format_bga_mode(profile.play.bga),
         SettingsEntryId::BgaExpand => format_bga_expand(profile.play.bga_expand),
         SettingsEntryId::AutoPlay => format_bool_on_off(profile.play.auto_play),
+        SettingsEntryId::MisslayerDurationMs => {
+            format!("{} ms", profile.play.misslayer_duration_ms)
+        }
         SettingsEntryId::Hispeed => format!("{:.2}", profile.lane.hispeed),
+        SettingsEntryId::HispeedMode => format_hispeed_mode(profile.lane.hispeed_mode),
         SettingsEntryId::Sudden => format_lane_unit(profile.lane.sudden),
         SettingsEntryId::Lift => format_lane_unit(profile.lane.lift),
         SettingsEntryId::Hidden => format_lane_unit(profile.lane.hidden),
+        SettingsEntryId::TargetGreenNumber => format!("{}", profile.lane.target_green_number),
+        SettingsEntryId::ScratchInputMode => format_scratch_input_mode(profile.input.scratch_mode),
+        SettingsEntryId::AnalogScratchSensitivity => {
+            format!("{:.1}", profile.input.analog_scratch_sensitivity)
+        }
+        SettingsEntryId::AnalogScratchTimeoutMs => {
+            format!("{} ms", profile.input.analog_scratch_timeout_ms)
+        }
+        SettingsEntryId::ReplayAutoSave => format_bool_on_off(profile.replay.auto_save),
+        SettingsEntryId::ReplaySlot1Rule => format_replay_slot_rule(profile.replay.slot_rules[0]),
+        SettingsEntryId::ReplaySlot2Rule => format_replay_slot_rule(profile.replay.slot_rules[1]),
+        SettingsEntryId::ReplaySlot3Rule => format_replay_slot_rule(profile.replay.slot_rules[2]),
+        SettingsEntryId::ReplaySlot4Rule => format_replay_slot_rule(profile.replay.slot_rules[3]),
     }
 }
 
@@ -172,6 +238,11 @@ pub fn adjust_settings_value(profile: &mut ProfileConfig, id: SettingsEntryId, d
         SettingsEntryId::RuleMode => cycle_enum(delta, profile.play.rule_mode, cycle_rule_mode)
             .map(|next| profile.play.rule_mode = next)
             .is_some(),
+        SettingsEntryId::LnModePolicy => {
+            cycle_enum(delta, profile.play.ln_mode_policy, cycle_ln_mode_policy)
+                .map(|next| profile.play.ln_mode_policy = next)
+                .is_some()
+        }
         SettingsEntryId::Gauge => cycle_enum(delta, profile.play.gauge, cycle_gauge)
             .map(|next| profile.play.gauge = next)
             .is_some(),
@@ -213,10 +284,52 @@ pub fn adjust_settings_value(profile: &mut ProfileConfig, id: SettingsEntryId, d
                 true
             }
         }
+        SettingsEntryId::MisslayerDurationMs => {
+            adjust_u32(&mut profile.play.misslayer_duration_ms, delta, 0, 5000)
+        }
         SettingsEntryId::Hispeed => adjust_hispeed(&mut profile.lane.hispeed, delta),
+        SettingsEntryId::HispeedMode => {
+            cycle_enum(delta, profile.lane.hispeed_mode, cycle_hispeed_mode)
+                .map(|next| profile.lane.hispeed_mode = next)
+                .is_some()
+        }
         SettingsEntryId::Sudden => adjust_u32(&mut profile.lane.sudden, delta, 0, 1000),
         SettingsEntryId::Lift => adjust_u32(&mut profile.lane.lift, delta, 0, 1000),
         SettingsEntryId::Hidden => adjust_u32(&mut profile.lane.hidden, delta, 0, 1000),
+        SettingsEntryId::TargetGreenNumber => {
+            adjust_u32(&mut profile.lane.target_green_number, delta, 1, 999)
+        }
+        SettingsEntryId::ScratchInputMode => {
+            cycle_enum(delta, profile.input.scratch_mode, cycle_scratch_input_mode)
+                .map(|next| profile.input.scratch_mode = next)
+                .is_some()
+        }
+        SettingsEntryId::AnalogScratchSensitivity => {
+            adjust_f32_tenths(&mut profile.input.analog_scratch_sensitivity, delta, 0.1, 5.0)
+        }
+        SettingsEntryId::AnalogScratchTimeoutMs => {
+            adjust_u32(&mut profile.input.analog_scratch_timeout_ms, delta, 0, 5000)
+        }
+        SettingsEntryId::ReplayAutoSave => {
+            if delta == 0 {
+                false
+            } else {
+                profile.replay.auto_save = !profile.replay.auto_save;
+                true
+            }
+        }
+        SettingsEntryId::ReplaySlot1Rule => {
+            adjust_replay_slot_rule(&mut profile.replay.slot_rules[0], delta)
+        }
+        SettingsEntryId::ReplaySlot2Rule => {
+            adjust_replay_slot_rule(&mut profile.replay.slot_rules[1], delta)
+        }
+        SettingsEntryId::ReplaySlot3Rule => {
+            adjust_replay_slot_rule(&mut profile.replay.slot_rules[2], delta)
+        }
+        SettingsEntryId::ReplaySlot4Rule => {
+            adjust_replay_slot_rule(&mut profile.replay.slot_rules[3], delta)
+        }
     }
 }
 
@@ -239,6 +352,18 @@ fn adjust_hispeed(value: &mut f32, delta: i32) -> bool {
     let step = 0.25 * delta.signum() as f32;
     *value = (*value + step).clamp(0.5, 10.0);
     (*value - before).abs() > f32::EPSILON
+}
+
+fn adjust_f32_tenths(value: &mut f32, delta: i32, min: f32, max: f32) -> bool {
+    let before = *value;
+    let next = ((*value * 10.0).round() as i32 + delta)
+        .clamp((min * 10.0).round() as i32, (max * 10.0).round() as i32);
+    *value = next as f32 / 10.0;
+    (*value - before).abs() > f32::EPSILON
+}
+
+fn adjust_replay_slot_rule(value: &mut ReplaySlotRule, delta: i32) -> bool {
+    cycle_enum(delta, *value, cycle_replay_slot_rule).map(|next| *value = next).is_some()
 }
 
 fn format_lane_unit(value: u32) -> String {
@@ -356,6 +481,30 @@ fn format_judge_algorithm(value: JudgeAlgorithmConfig) -> String {
     }
 }
 
+fn format_hispeed_mode(value: HispeedModeConfig) -> String {
+    match value {
+        HispeedModeConfig::Normal => "NORMAL".to_string(),
+        HispeedModeConfig::Floating => "FLOATING".to_string(),
+    }
+}
+
+fn format_scratch_input_mode(value: ScratchInputMode) -> String {
+    match value {
+        ScratchInputMode::Normal => "NORMAL".to_string(),
+        ScratchInputMode::AnyDirection => "ANY DIRECTION".to_string(),
+    }
+}
+
+fn format_replay_slot_rule(value: ReplaySlotRule) -> String {
+    match value {
+        ReplaySlotRule::Always => "ALWAYS".to_string(),
+        ReplaySlotRule::ScoreUpdate => "SCORE UPDATE".to_string(),
+        ReplaySlotRule::BpUpdate => "BP UPDATE".to_string(),
+        ReplaySlotRule::MaxComboUpdate => "MAX COMBO UPDATE".to_string(),
+        ReplaySlotRule::ClearUpdate => "CLEAR UPDATE".to_string(),
+    }
+}
+
 fn cycle_enum<T: Copy + PartialEq>(delta: i32, current: T, cycle: fn(T, bool) -> T) -> Option<T> {
     if delta == 0 {
         return None;
@@ -373,6 +522,10 @@ fn cycle_judge_algorithm(current: JudgeAlgorithmConfig, forward: bool) -> JudgeA
 fn cycle_rule_mode(current: RuleMode, forward: bool) -> RuleMode {
     const VALUES: [RuleMode; 3] = [RuleMode::Beatoraja, RuleMode::Lr2Oraja, RuleMode::Dx];
     cycle_in_slice(&VALUES, current, forward)
+}
+
+fn cycle_ln_mode_policy(current: LnPolicySetting, forward: bool) -> LnPolicySetting {
+    cycle_in_slice(&LnPolicySetting::ORDER, current, forward)
 }
 
 fn cycle_gauge(current: GaugeTypeConfig, forward: bool) -> GaugeTypeConfig {
@@ -466,6 +619,28 @@ fn cycle_bga_expand(current: BgaExpandConfig, forward: bool) -> BgaExpandConfig 
     cycle_in_slice(&VALUES, current, forward)
 }
 
+fn cycle_hispeed_mode(current: HispeedModeConfig, forward: bool) -> HispeedModeConfig {
+    const VALUES: [HispeedModeConfig; 2] = [HispeedModeConfig::Normal, HispeedModeConfig::Floating];
+    cycle_in_slice(&VALUES, current, forward)
+}
+
+fn cycle_scratch_input_mode(current: ScratchInputMode, forward: bool) -> ScratchInputMode {
+    const VALUES: [ScratchInputMode; 2] =
+        [ScratchInputMode::Normal, ScratchInputMode::AnyDirection];
+    cycle_in_slice(&VALUES, current, forward)
+}
+
+fn cycle_replay_slot_rule(current: ReplaySlotRule, forward: bool) -> ReplaySlotRule {
+    const VALUES: [ReplaySlotRule; 5] = [
+        ReplaySlotRule::Always,
+        ReplaySlotRule::ScoreUpdate,
+        ReplaySlotRule::BpUpdate,
+        ReplaySlotRule::MaxComboUpdate,
+        ReplaySlotRule::ClearUpdate,
+    ];
+    cycle_in_slice(&VALUES, current, forward)
+}
+
 fn cycle_in_slice<T: Copy + PartialEq>(values: &[T], current: T, forward: bool) -> T {
     let index = values.iter().position(|value| *value == current).unwrap_or(0);
     if forward {
@@ -545,5 +720,60 @@ mod tests {
         assert!(!profile.play.auto_play);
         assert!(adjust_settings_value(&mut profile, SettingsEntryId::AutoPlay, 1));
         assert!(profile.play.auto_play);
+    }
+
+    #[test]
+    fn cycle_ln_mode_policy_and_hispeed_mode() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 0);
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::LnModePolicy), "AUTO(LN)");
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::LnModePolicy, 1));
+        assert_eq!(profile.play.ln_mode_policy, crate::ln_policy::LnPolicySetting::AutoCn);
+
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::HispeedMode), "NORMAL");
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::HispeedMode, 1));
+        assert_eq!(
+            profile.lane.hispeed_mode,
+            crate::config::profile_config::HispeedModeConfig::Floating
+        );
+    }
+
+    #[test]
+    fn adjust_green_number_misslayer_and_analog_settings() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 0);
+        profile.lane.target_green_number = 995;
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::TargetGreenNumber, 10));
+        assert_eq!(profile.lane.target_green_number, 999);
+
+        profile.play.misslayer_duration_ms = 4_980;
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::MisslayerDurationMs, 50));
+        assert_eq!(profile.play.misslayer_duration_ms, 5_000);
+
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::AnalogScratchSensitivity, 1));
+        assert!((profile.input.analog_scratch_sensitivity - 1.1).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn cycle_input_and_replay_settings() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 0);
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::ScratchInputMode), "NORMAL");
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::ScratchInputMode, 1));
+        assert_eq!(
+            profile.input.scratch_mode,
+            crate::config::profile_config::ScratchInputMode::AnyDirection
+        );
+
+        assert!(profile.replay.auto_save);
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::ReplayAutoSave, 1));
+        assert!(!profile.replay.auto_save);
+
+        assert_eq!(
+            format_settings_value(&profile, SettingsEntryId::ReplaySlot2Rule),
+            "SCORE UPDATE"
+        );
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::ReplaySlot2Rule, 1));
+        assert_eq!(
+            profile.replay.slot_rules[1],
+            crate::config::profile_config::ReplaySlotRule::BpUpdate
+        );
     }
 }

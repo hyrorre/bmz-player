@@ -15,6 +15,8 @@ const CONFIG_VOLUME_PATH: &str = "bmz-settings:volume";
 const CONFIG_JUDGE_PATH: &str = "bmz-settings:judge";
 const CONFIG_PLAY_PATH: &str = "bmz-settings:play";
 const CONFIG_DISPLAY_PATH: &str = "bmz-settings:display";
+const CONFIG_INPUT_PATH: &str = "bmz-settings:input";
+const CONFIG_REPLAY_PATH: &str = "bmz-settings:replay";
 pub const CONFIG_KEYS_PATH: &str = "bmz-settings:keys";
 const CONFIG_KEYS_COMMON_PATH: &str = "bmz-settings:keys:common";
 
@@ -25,6 +27,8 @@ pub enum SettingsPath<'a> {
     Judge,
     Play,
     Display,
+    Input,
+    Replay,
     KeysRoot,
     KeysCommon,
     KeysMode(KeyMode),
@@ -39,6 +43,8 @@ pub fn parse_settings_path(path: &str) -> Option<SettingsPath<'_>> {
         "judge" => Some(SettingsPath::Judge),
         "play" => Some(SettingsPath::Play),
         "display" => Some(SettingsPath::Display),
+        "input" => Some(SettingsPath::Input),
+        "replay" => Some(SettingsPath::Replay),
         "keys" => Some(SettingsPath::KeysRoot),
         "keys:common" => Some(SettingsPath::KeysCommon),
         _ if let Some(mode_key) = rest.strip_prefix("keys:") => {
@@ -59,6 +65,8 @@ pub fn settings_breadcrumb(path: &str) -> String {
         Some(SettingsPath::Judge) => "設定 > 判定".to_string(),
         Some(SettingsPath::Play) => "設定 > プレイ".to_string(),
         Some(SettingsPath::Display) => "設定 > 表示".to_string(),
+        Some(SettingsPath::Input) => "設定 > 入力".to_string(),
+        Some(SettingsPath::Replay) => "設定 > リプレイ".to_string(),
         Some(SettingsPath::KeysRoot) => "設定 > キー設定".to_string(),
         Some(SettingsPath::KeysCommon) => "設定 > キー設定 > 共通".to_string(),
         Some(SettingsPath::KeysMode(key_mode)) => {
@@ -136,6 +144,18 @@ pub fn load_settings_items(path: &str) -> Vec<SelectItem> {
                 summary: None,
             },
             SelectItem::Folder {
+                path: CONFIG_INPUT_PATH.to_string(),
+                name: "入力".to_string(),
+                kind: SelectRowKind::SettingsFolder,
+                summary: None,
+            },
+            SelectItem::Folder {
+                path: CONFIG_REPLAY_PATH.to_string(),
+                name: "リプレイ".to_string(),
+                kind: SelectRowKind::SettingsFolder,
+                summary: None,
+            },
+            SelectItem::Folder {
                 path: CONFIG_KEYS_PATH.to_string(),
                 name: "キー設定".to_string(),
                 kind: SelectRowKind::SettingsFolder,
@@ -147,6 +167,8 @@ pub fn load_settings_items(path: &str) -> Vec<SelectItem> {
         Some(SettingsPath::Judge) => config_items(SettingsEntryId::JUDGE_ENTRIES),
         Some(SettingsPath::Play) => config_items(SettingsEntryId::PLAY_ENTRIES),
         Some(SettingsPath::Display) => config_items(SettingsEntryId::DISPLAY_ENTRIES),
+        Some(SettingsPath::Input) => config_items(SettingsEntryId::INPUT_ENTRIES),
+        Some(SettingsPath::Replay) => config_items(SettingsEntryId::REPLAY_ENTRIES),
         Some(SettingsPath::KeysRoot) => key_mode_folder_items(),
         Some(SettingsPath::KeysCommon) => common_key_binding_items(),
         Some(SettingsPath::KeysMode(key_mode)) => key_binding_items(key_mode),
@@ -232,6 +254,8 @@ mod tests {
         assert_eq!(parse_settings_path(CONFIG_JUDGE_PATH), Some(SettingsPath::Judge));
         assert_eq!(parse_settings_path(CONFIG_PLAY_PATH), Some(SettingsPath::Play));
         assert_eq!(parse_settings_path(CONFIG_DISPLAY_PATH), Some(SettingsPath::Display));
+        assert_eq!(parse_settings_path(CONFIG_INPUT_PATH), Some(SettingsPath::Input));
+        assert_eq!(parse_settings_path(CONFIG_REPLAY_PATH), Some(SettingsPath::Replay));
         assert_eq!(parse_settings_path(CONFIG_KEYS_PATH), Some(SettingsPath::KeysRoot));
         assert_eq!(parse_settings_path(CONFIG_KEYS_COMMON_PATH), Some(SettingsPath::KeysCommon));
         assert_eq!(
@@ -244,7 +268,7 @@ mod tests {
     #[test]
     fn settings_root_lists_categories() {
         let items = load_settings_items(CONFIG_ROOT_PATH);
-        assert_eq!(items.len(), 6);
+        assert_eq!(items.len(), 8);
         assert!(matches!(items.last(), Some(SelectItem::AdvancedSettings)));
         assert!(matches!(
             &items[0],
@@ -361,6 +385,39 @@ mod tests {
         assert!(items.iter().any(|item| matches!(
             item,
             SelectItem::Config(row) if row.entry_id == SettingsEntryId::RuleMode
+        )));
+        assert!(items.iter().any(|item| matches!(
+            item,
+            SelectItem::Config(row) if row.entry_id == SettingsEntryId::LnModePolicy
+        )));
+    }
+
+    #[test]
+    fn settings_display_lists_green_number_entry() {
+        let items = load_settings_items(CONFIG_DISPLAY_PATH);
+        assert!(items.iter().any(|item| matches!(
+            item,
+            SelectItem::Config(row) if row.entry_id == SettingsEntryId::TargetGreenNumber
+        )));
+    }
+
+    #[test]
+    fn settings_input_lists_scratch_entries() {
+        let items = load_settings_items(CONFIG_INPUT_PATH);
+        assert_eq!(items.len(), SettingsEntryId::INPUT_ENTRIES.len());
+        assert!(items.iter().any(|item| matches!(
+            item,
+            SelectItem::Config(row) if row.entry_id == SettingsEntryId::ScratchInputMode
+        )));
+    }
+
+    #[test]
+    fn settings_replay_lists_slot_rules() {
+        let items = load_settings_items(CONFIG_REPLAY_PATH);
+        assert_eq!(items.len(), SettingsEntryId::REPLAY_ENTRIES.len());
+        assert!(items.iter().any(|item| matches!(
+            item,
+            SelectItem::Config(row) if row.entry_id == SettingsEntryId::ReplaySlot4Rule
         )));
     }
 }

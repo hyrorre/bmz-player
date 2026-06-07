@@ -6,13 +6,16 @@ use bmz_gameplay::rule::RuleMode;
 use crate::config::play_input::resolve_play_bindings;
 use crate::config::profile_config::{
     AssistOptionConfig, BgaExpandConfig, BgaModeConfig, GaugeAutoShiftConfig, GaugeTypeConfig,
-    InputActionConfig, JudgeAlgorithmConfig, LaneConfig, LaneEffectConfig, ProfileConfig,
-    ProfileInputConfig, RandomOptionConfig, TargetOptionConfig,
+    HispeedModeConfig, InputActionConfig, JudgeAlgorithmConfig, LaneConfig, LaneEffectConfig,
+    ProfileConfig, ProfileInputConfig, RandomOptionConfig, ReplaySlotRule, ScratchInputMode,
+    TargetOptionConfig,
 };
 use crate::config::settings_registry::{
     SettingsEntryId, adjust_settings_value, format_settings_value,
 };
 use bmz_render::scene::ResultGradeDiffDisplay;
+
+use crate::ln_policy::LnPolicySetting;
 
 /// 7KEY + スクラッチ向けの設定画面入力マッピング。
 #[derive(Debug, Clone)]
@@ -133,6 +136,7 @@ enum SettingsBaseline {
     Bool(bool),
     JudgeAlgorithm(JudgeAlgorithmConfig),
     RuleMode(RuleMode),
+    LnModePolicy(LnPolicySetting),
     Gauge(GaugeTypeConfig),
     GaugeAutoShift(GaugeAutoShiftConfig),
     Random(RandomOptionConfig),
@@ -142,6 +146,9 @@ enum SettingsBaseline {
     Assist(AssistOptionConfig),
     BgaMode(BgaModeConfig),
     BgaExpand(BgaExpandConfig),
+    HispeedMode(HispeedModeConfig),
+    ScratchInputMode(ScratchInputMode),
+    ReplaySlotRule(ReplaySlotRule),
 }
 
 /// 編集開始時点の値。キャンセル時に profile へ戻す。
@@ -178,6 +185,9 @@ impl SettingsEditSession {
                 SettingsBaseline::JudgeAlgorithm(profile.judge.judge_algorithm)
             }
             SettingsEntryId::RuleMode => SettingsBaseline::RuleMode(profile.play.rule_mode),
+            SettingsEntryId::LnModePolicy => {
+                SettingsBaseline::LnModePolicy(profile.play.ln_mode_policy)
+            }
             SettingsEntryId::Gauge => SettingsBaseline::Gauge(profile.play.gauge),
             SettingsEntryId::GaugeAutoShift => {
                 SettingsBaseline::GaugeAutoShift(profile.play.gauge_auto_shift)
@@ -192,10 +202,41 @@ impl SettingsEditSession {
             SettingsEntryId::BgaMode => SettingsBaseline::BgaMode(profile.play.bga),
             SettingsEntryId::BgaExpand => SettingsBaseline::BgaExpand(profile.play.bga_expand),
             SettingsEntryId::AutoPlay => SettingsBaseline::Bool(profile.play.auto_play),
+            SettingsEntryId::MisslayerDurationMs => {
+                SettingsBaseline::U32(profile.play.misslayer_duration_ms)
+            }
             SettingsEntryId::Hispeed => SettingsBaseline::F32(profile.lane.hispeed),
+            SettingsEntryId::HispeedMode => {
+                SettingsBaseline::HispeedMode(profile.lane.hispeed_mode)
+            }
             SettingsEntryId::Sudden => SettingsBaseline::U32(profile.lane.sudden),
             SettingsEntryId::Lift => SettingsBaseline::U32(profile.lane.lift),
             SettingsEntryId::Hidden => SettingsBaseline::U32(profile.lane.hidden),
+            SettingsEntryId::TargetGreenNumber => {
+                SettingsBaseline::U32(profile.lane.target_green_number)
+            }
+            SettingsEntryId::ScratchInputMode => {
+                SettingsBaseline::ScratchInputMode(profile.input.scratch_mode)
+            }
+            SettingsEntryId::AnalogScratchSensitivity => {
+                SettingsBaseline::F32(profile.input.analog_scratch_sensitivity)
+            }
+            SettingsEntryId::AnalogScratchTimeoutMs => {
+                SettingsBaseline::U32(profile.input.analog_scratch_timeout_ms)
+            }
+            SettingsEntryId::ReplayAutoSave => SettingsBaseline::Bool(profile.replay.auto_save),
+            SettingsEntryId::ReplaySlot1Rule => {
+                SettingsBaseline::ReplaySlotRule(profile.replay.slot_rules[0])
+            }
+            SettingsEntryId::ReplaySlot2Rule => {
+                SettingsBaseline::ReplaySlotRule(profile.replay.slot_rules[1])
+            }
+            SettingsEntryId::ReplaySlot3Rule => {
+                SettingsBaseline::ReplaySlotRule(profile.replay.slot_rules[2])
+            }
+            SettingsEntryId::ReplaySlot4Rule => {
+                SettingsBaseline::ReplaySlotRule(profile.replay.slot_rules[3])
+            }
         };
         Self { entry_id, baseline }
     }
@@ -232,6 +273,9 @@ impl SettingsEditSession {
             (SettingsEntryId::RuleMode, SettingsBaseline::RuleMode(value)) => {
                 profile.play.rule_mode = *value;
             }
+            (SettingsEntryId::LnModePolicy, SettingsBaseline::LnModePolicy(value)) => {
+                profile.play.ln_mode_policy = *value;
+            }
             (SettingsEntryId::Gauge, SettingsBaseline::Gauge(value)) => {
                 profile.play.gauge = *value;
             }
@@ -262,8 +306,14 @@ impl SettingsEditSession {
             (SettingsEntryId::AutoPlay, SettingsBaseline::Bool(value)) => {
                 profile.play.auto_play = *value;
             }
+            (SettingsEntryId::MisslayerDurationMs, SettingsBaseline::U32(value)) => {
+                profile.play.misslayer_duration_ms = *value;
+            }
             (SettingsEntryId::Hispeed, SettingsBaseline::F32(value)) => {
                 profile.lane.hispeed = *value;
+            }
+            (SettingsEntryId::HispeedMode, SettingsBaseline::HispeedMode(value)) => {
+                profile.lane.hispeed_mode = *value;
             }
             (SettingsEntryId::Sudden, SettingsBaseline::U32(value)) => {
                 profile.lane.sudden = *value;
@@ -273,6 +323,33 @@ impl SettingsEditSession {
             }
             (SettingsEntryId::Hidden, SettingsBaseline::U32(value)) => {
                 profile.lane.hidden = *value;
+            }
+            (SettingsEntryId::TargetGreenNumber, SettingsBaseline::U32(value)) => {
+                profile.lane.target_green_number = *value;
+            }
+            (SettingsEntryId::ScratchInputMode, SettingsBaseline::ScratchInputMode(value)) => {
+                profile.input.scratch_mode = *value;
+            }
+            (SettingsEntryId::AnalogScratchSensitivity, SettingsBaseline::F32(value)) => {
+                profile.input.analog_scratch_sensitivity = *value;
+            }
+            (SettingsEntryId::AnalogScratchTimeoutMs, SettingsBaseline::U32(value)) => {
+                profile.input.analog_scratch_timeout_ms = *value;
+            }
+            (SettingsEntryId::ReplayAutoSave, SettingsBaseline::Bool(value)) => {
+                profile.replay.auto_save = *value;
+            }
+            (SettingsEntryId::ReplaySlot1Rule, SettingsBaseline::ReplaySlotRule(value)) => {
+                profile.replay.slot_rules[0] = *value;
+            }
+            (SettingsEntryId::ReplaySlot2Rule, SettingsBaseline::ReplaySlotRule(value)) => {
+                profile.replay.slot_rules[1] = *value;
+            }
+            (SettingsEntryId::ReplaySlot3Rule, SettingsBaseline::ReplaySlotRule(value)) => {
+                profile.replay.slot_rules[2] = *value;
+            }
+            (SettingsEntryId::ReplaySlot4Rule, SettingsBaseline::ReplaySlotRule(value)) => {
+                profile.replay.slot_rules[3] = *value;
             }
             _ => {}
         }
@@ -324,5 +401,21 @@ mod tests {
         profile.play.gauge = GaugeTypeConfig::Hazard;
         session.restore(&mut profile);
         assert_eq!(profile.play.gauge, GaugeTypeConfig::Normal);
+    }
+
+    #[test]
+    fn edit_session_restore_reverts_input_and_replay_settings() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 0);
+        let scratch_session =
+            SettingsEditSession::capture(&profile, SettingsEntryId::ScratchInputMode);
+        profile.input.scratch_mode = ScratchInputMode::AnyDirection;
+        scratch_session.restore(&mut profile);
+        assert_eq!(profile.input.scratch_mode, ScratchInputMode::Normal);
+
+        let replay_session =
+            SettingsEditSession::capture(&profile, SettingsEntryId::ReplaySlot2Rule);
+        profile.replay.slot_rules[1] = ReplaySlotRule::ClearUpdate;
+        replay_session.restore(&mut profile);
+        assert_eq!(profile.replay.slot_rules[1], ReplaySlotRule::ScoreUpdate);
     }
 }
