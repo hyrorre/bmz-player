@@ -5186,13 +5186,8 @@ impl SkinDocument {
         let graph_type = graph.graph_type();
         let pms_colors = state.key_mode == KeyMode::K9;
         if graph_type == 1 && !runtime_graphs.result_judge_graph_buckets.is_empty() {
-            let series: Vec<[u32; 6]> = runtime_graphs
-                .result_judge_graph_buckets
-                .iter()
-                .map(|bucket| bucket.values)
-                .collect();
             return stacked_result_note_graph_render_items(
-                &series,
+                runtime_graphs.result_judge_graph_buckets,
                 &result_judge_graph_colors(frame.a as f32 / 255.0, pms_colors),
                 graph,
                 destination,
@@ -5203,13 +5198,8 @@ impl SkinDocument {
             );
         }
         if graph_type == 2 && !runtime_graphs.result_early_late_graph_buckets.is_empty() {
-            let series: Vec<[u32; 10]> = runtime_graphs
-                .result_early_late_graph_buckets
-                .iter()
-                .map(|bucket| bucket.values)
-                .collect();
             return stacked_result_note_graph_render_items(
-                &series,
+                runtime_graphs.result_early_late_graph_buckets,
                 &result_early_late_graph_colors(frame.a as f32 / 255.0, pms_colors),
                 graph,
                 destination,
@@ -8476,8 +8466,30 @@ fn result_early_late_graph_colors(alpha: f32, pms: bool) -> [Color; 10] {
     ]
 }
 
-fn stacked_result_note_graph_render_items<const N: usize>(
-    buckets: &[[u32; N]],
+trait ResultNoteGraphBucket<const N: usize> {
+    fn values(&self) -> [u32; N];
+}
+
+impl<const N: usize> ResultNoteGraphBucket<N> for [u32; N] {
+    fn values(&self) -> [u32; N] {
+        *self
+    }
+}
+
+impl ResultNoteGraphBucket<6> for crate::snapshot::ResultJudgeGraphBucket {
+    fn values(&self) -> [u32; 6] {
+        self.values
+    }
+}
+
+impl ResultNoteGraphBucket<10> for crate::snapshot::ResultEarlyLateGraphBucket {
+    fn values(&self) -> [u32; 10] {
+        self.values
+    }
+}
+
+fn stacked_result_note_graph_render_items<const N: usize, B: ResultNoteGraphBucket<N>>(
+    buckets: &[B],
     colors: &[Color; N],
     graph: &SkinJudgeGraphDef,
     destination: &SkinDestinationDef,
@@ -8496,7 +8508,7 @@ fn stacked_result_note_graph_render_items<const N: usize>(
     let frame_alpha = frame.a as f32 / 255.0;
     let blend = if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal };
     let max_stack =
-        buckets.iter().map(|bucket| bucket.iter().copied().sum::<u32>()).max().unwrap_or(0);
+        buckets.iter().map(|bucket| bucket.values().into_iter().sum::<u32>()).max().unwrap_or(0);
     let graph_max = beatoraja_note_graph_max(max_stack);
     let mut items = Vec::new();
     if graph.back_tex_off == 0 {
@@ -8526,8 +8538,9 @@ fn stacked_result_note_graph_render_items<const N: usize>(
     for (second, bucket) in buckets.iter().take(visible_len).enumerate() {
         let x = rect.x + second as f32 * bucket_w;
         let mut drawn = 0_u32;
+        let values = bucket.values();
         if graph.order_reverse != 0 {
-            for (series, value) in bucket.iter().copied().enumerate().rev() {
+            for (series, value) in values.into_iter().enumerate().rev() {
                 push_result_note_graph_chips(
                     &mut items,
                     rect,
@@ -8543,7 +8556,7 @@ fn stacked_result_note_graph_render_items<const N: usize>(
                 );
             }
         } else {
-            for (series, value) in bucket.iter().copied().enumerate() {
+            for (series, value) in values.into_iter().enumerate() {
                 push_result_note_graph_chips(
                     &mut items,
                     rect,
