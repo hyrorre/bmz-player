@@ -347,8 +347,11 @@ struct WinitApp {
     /// リザルト画面終了アニメーションの進行状態。
     /// Some のあいだは終了フェードアウト中で、入力は受け付けない。
     result_exit: Option<ResultExit>,
-    result_retry_same_hold_started_at: Option<Instant>,
-    result_retry_different_hold_started_at: Option<Instant>,
+    /// リザルト画面で Key5 が現在押されているか。
+    /// 終了アニメーション終了時に retry arrange を決める判定に使う。
+    result_key5_held: bool,
+    /// リザルト画面で Key7 が現在押されているか。
+    result_key7_held: bool,
     result_gauge_graph_type: i32,
     deferred_boot: Option<DeferredBoot>,
     /// 選曲画面で楽曲検索の入力モード中か。
@@ -482,13 +485,15 @@ struct ResultExit {
 enum ResultExitAction {
     /// 選曲画面へ戻る。
     Leave,
-    /// 直前と同じ譜面をもう一度プレイする。
+    /// 直前と同じ譜面を、指定した arrange でもう一度プレイする。
     Retry(ResultRetryMode),
+    /// レーンキー (Key1/Key3/Key5/Key7) 押下で開始した retry。
+    /// arrange はフェードアウト終了時に Key5/Key7 の押下状態から決める。
+    RetryHeldLanes,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ResultRetryMode {
-    CurrentOptions,
     SameArrange,
     DifferentArrange,
 }
@@ -982,8 +987,8 @@ impl WinitApp {
             settings_edit: None,
             key_config_edit: None,
             result_exit: None,
-            result_retry_same_hold_started_at: None,
-            result_retry_different_hold_started_at: None,
+            result_key5_held: false,
+            result_key7_held: false,
             result_gauge_graph_type: GaugeType::Normal as i32,
             deferred_boot: deferred_boot_action(boot_chart_id, &options),
             search_mode: false,
@@ -2447,27 +2452,27 @@ impl WinitApp {
         }
 
         if self.finished_play.is_some() && self.finished_course.is_none() {
-            // 終了アニメーション中 (result_exit=Some) は追加入力を受け付けない。
-            if self.result_exit.is_none() {
-                if let Some(control) = physical_key_to_control(event.physical_key)
-                    && self.handle_result_control(
-                        control,
-                        event.state == ElementState::Pressed,
-                        event.repeat,
-                    )
+            let pressed = event.state == ElementState::Pressed;
+            if let Some(control) = physical_key_to_control(event.physical_key) {
+                // フェードアウト中でも Key5/Key7 の押下状態は追跡し、
+                // アニメーション終了時の retry arrange 判定に使う。
+                self.track_result_lane_hold(&control, pressed);
+                // 終了アニメーション中 (result_exit=Some) は held 追跡のみで、
+                // 新しいアクションは受け付けない。
+                if self.result_exit.is_none()
+                    && self.handle_result_control(&control, pressed, event.repeat)
                 {
                     return;
                 }
-                if self.result_input_ready()
-                    && let Some(action) =
-                        result_action(event.physical_key, event.state, event.repeat)
-                {
-                    match action {
-                        ResultAction::Retry => self.begin_result_exit(ResultExitAction::Retry(
-                            ResultRetryMode::CurrentOptions,
-                        )),
-                        ResultAction::Leave => self.begin_result_exit(ResultExitAction::Leave),
-                    }
+            }
+            if self.result_exit.is_none()
+                && self.result_input_ready()
+                && let Some(action) = result_action(event.physical_key, event.state, event.repeat)
+            {
+                match action {
+                    ResultAction::Retry => self
+                        .begin_result_exit(ResultExitAction::Retry(ResultRetryMode::SameArrange)),
+                    ResultAction::Leave => self.begin_result_exit(ResultExitAction::Leave),
                 }
             }
             return;
@@ -2763,19 +2768,18 @@ impl WinitApp {
 
         // リザルト画面
         if self.finished_play.is_some() && self.finished_course.is_none() {
-            // 終了アニメーション中 (result_exit=Some) は追加入力を受け付けない。
+            let control = PhysicalControl::GamepadButton(button.to_string());
+            // フェードアウト中でも Key5/Key7 の押下状態は追跡する。
+            self.track_result_lane_hold(&control, pressed);
+            // 終了アニメーション中 (result_exit=Some) は held 追跡のみ行う。
             if self.result_exit.is_none() {
-                if self.handle_result_control(
-                    PhysicalControl::GamepadButton(button.to_string()),
-                    pressed,
-                    false,
-                ) {
+                if self.handle_result_control(&control, pressed, false) {
                     return;
                 }
                 if self.result_input_ready() {
                     match button {
                         "Button1" | "Start" if pressed => self.begin_result_exit(
-                            ResultExitAction::Retry(ResultRetryMode::CurrentOptions),
+                            ResultExitAction::Retry(ResultRetryMode::SameArrange),
                         ),
                         "Button2" | "Select" if pressed => {
                             self.begin_result_exit(ResultExitAction::Leave)
@@ -4086,8 +4090,8 @@ impl WinitApp {
         if let Some(last) = last_finished {
             self.result_gauge_graph_type = last.summary.gauge_type as i32;
             self.finished_play = Some(last);
-            self.result_retry_same_hold_started_at = None;
-            self.result_retry_different_hold_started_at = None;
+            self.result_key5_held = false;
+            self.result_key7_held = false;
             self.result_scene_started_at = Instant::now();
             self.ensure_skin_ready(SkinKind::Result);
         }
@@ -4274,8 +4278,8 @@ impl WinitApp {
         self.invalidate_play_preload();
         self.play_ending = None;
         self.result_exit = None;
-        self.result_retry_same_hold_started_at = None;
-        self.result_retry_different_hold_started_at = None;
+        self.result_key5_held = false;
+        self.result_key7_held = false;
         self.play_ready_sound_started_at = None;
         if options.chart_zero_time == TimeUs(0) {
             options.chart_zero_time = self.play_skin_playstart_offset();
@@ -4665,7 +4669,6 @@ impl WinitApp {
             return;
         };
         let options = match mode {
-            ResultRetryMode::CurrentOptions => self.play_start_options(),
             ResultRetryMode::SameArrange => self.result_retry_same_arrange_options(),
             ResultRetryMode::DifferentArrange => self.result_retry_different_arrange_options(),
         };
@@ -4694,44 +4697,41 @@ impl WinitApp {
         options
     }
 
+    /// Key5/Key7 の現在の押下状態を記録する。フェードアウト中も含めて
+    /// 常に呼び、終了アニメーション終了時に retry arrange を決める。
+    fn track_result_lane_hold(&mut self, control: &PhysicalControl, pressed: bool) {
+        match self.result_lane_for_control(control) {
+            Some(Lane::Key5) => self.result_key5_held = pressed,
+            Some(Lane::Key7) => self.result_key7_held = pressed,
+            _ => {}
+        }
+    }
+
     fn handle_result_control(
         &mut self,
-        control: PhysicalControl,
+        control: &PhysicalControl,
         pressed: bool,
         repeat: bool,
     ) -> bool {
-        let Some(lane) = self.result_lane_for_control(&control) else {
+        let Some(lane) = self.result_lane_for_control(control) else {
             return false;
         };
         match lane {
-            Lane::Key5 => match result_retry_mode_for_lane(lane) {
-                Some(ResultRetryMode::SameArrange) => {
-                    update_single_hold_started_at(
-                        &mut self.result_retry_same_hold_started_at,
-                        pressed,
-                        Instant::now(),
-                    );
-                    true
-                }
-                _ => false,
-            },
+            // ゲージグラフ種別の切り替え。
             Lane::Key6 => {
                 if pressed && !repeat && self.result_input_ready() {
                     self.cycle_result_gauge_graph_type();
                 }
                 true
             }
-            Lane::Key7 => match result_retry_mode_for_lane(lane) {
-                Some(ResultRetryMode::DifferentArrange) => {
-                    update_single_hold_started_at(
-                        &mut self.result_retry_different_hold_started_at,
-                        pressed,
-                        Instant::now(),
-                    );
-                    true
+            // Key1/Key3/Key5/Key7 の押下で終了アニメーションを開始する。
+            // arrange はフェードアウト終了時に Key5/Key7 の押下状態で決める。
+            lane if lane_starts_result_exit(lane) => {
+                if pressed && self.result_input_ready() {
+                    self.begin_result_exit(ResultExitAction::RetryHeldLanes);
                 }
-                _ => false,
-            },
+                true
+            }
             _ => false,
         }
     }
@@ -4751,26 +4751,6 @@ impl WinitApp {
         self.play_system_sound(crate::system_sound::SoundType::OptionChange);
     }
 
-    fn advance_result_retry_holds(&mut self) {
-        if self.result_exit.is_some()
-            || self.finished_play.is_none()
-            || self.finished_course.is_some()
-            || !self.result_input_ready()
-        {
-            return;
-        }
-        let now = Instant::now();
-        if play_exit_hold_elapsed(self.result_retry_same_hold_started_at, now) {
-            self.result_retry_same_hold_started_at = None;
-            self.result_retry_different_hold_started_at = None;
-            self.begin_result_exit(ResultExitAction::Retry(ResultRetryMode::SameArrange));
-        } else if play_exit_hold_elapsed(self.result_retry_different_hold_started_at, now) {
-            self.result_retry_same_hold_started_at = None;
-            self.result_retry_different_hold_started_at = None;
-            self.begin_result_exit(ResultExitAction::Retry(ResultRetryMode::DifferentArrange));
-        }
-    }
-
     /// リザルト画面の終了アニメーションを開始する。
     /// スキンが宣言するフェードアウト時間が経過したら `advance_result_exit` が
     /// 実際の遷移 (選曲へ戻る / リトライ) を実行する。
@@ -4780,8 +4760,8 @@ impl WinitApp {
         }
         tracing::info!(?action, "result screen exit animation started");
         self.result_exit = Some(ResultExit { started_at: Instant::now(), action });
-        self.result_retry_same_hold_started_at = None;
-        self.result_retry_different_hold_started_at = None;
+        // RetryHeldLanes の arrange 判定はフェードアウト終了時に Key5/Key7 の
+        // 押下状態を読むため、ここでは held フラグをリセットしない。
         // ResultClear / ResultFail のループ風長尺音を止めて、close SE を鳴らす。
         self.stop_system_sound(crate::system_sound::SoundType::ResultClear);
         self.stop_system_sound(crate::system_sound::SoundType::ResultFail);
@@ -4940,8 +4920,8 @@ impl WinitApp {
             .as_ref()
             .map(|finished| finished.summary.gauge_type as i32)
             .unwrap_or(GaugeType::Normal as i32);
-        self.result_retry_same_hold_started_at = None;
-        self.result_retry_different_hold_started_at = None;
+        self.result_key5_held = false;
+        self.result_key7_held = false;
         self.result_scene_started_at = Instant::now();
         self.ensure_skin_ready(SkinKind::Result);
     }
@@ -4949,7 +4929,6 @@ impl WinitApp {
     /// 終了フェードアウトの経過を監視し、スキンのフェードアウト時間を過ぎたら
     /// 保留していた遷移を実行する。毎フレーム描画前に呼ぶ。
     fn advance_result_exit(&mut self) {
-        self.advance_result_retry_holds();
         if self.finished_play.is_some()
             && self.result_exit.is_none()
             && self.result_scene_started_at.elapsed() >= self.result_scene_duration()
@@ -4973,6 +4952,11 @@ impl WinitApp {
         match action {
             ResultExitAction::Leave => self.leave_result(),
             ResultExitAction::Retry(mode) => self.retry_last_chart_with_mode(mode),
+            ResultExitAction::RetryHeldLanes => {
+                let mode =
+                    result_retry_mode_for_held_lanes(self.result_key5_held, self.result_key7_held);
+                self.retry_last_chart_with_mode(mode);
+            }
         }
     }
 
@@ -4980,8 +4964,8 @@ impl WinitApp {
         self.finished_play = None;
         self.clear_active_course_state();
         self.result_exit = None;
-        self.result_retry_same_hold_started_at = None;
-        self.result_retry_different_hold_started_at = None;
+        self.result_key5_held = false;
+        self.result_key7_held = false;
         self.clear_play_backbmp_state();
         // リザルト画面を抜けたら、まだ鳴っていても余韻再生を止める。
         self.draining_audio = None;
@@ -7608,11 +7592,18 @@ fn cycle_result_gauge_graph_type(current: i32) -> i32 {
     }
 }
 
-fn result_retry_mode_for_lane(lane: Lane) -> Option<ResultRetryMode> {
-    match lane {
-        Lane::Key5 => Some(ResultRetryMode::SameArrange),
-        Lane::Key7 => Some(ResultRetryMode::DifferentArrange),
-        _ => None,
+/// リザルト画面で押すと終了アニメーションを開始するレーン。
+fn lane_starts_result_exit(lane: Lane) -> bool {
+    matches!(lane, Lane::Key1 | Lane::Key3 | Lane::Key5 | Lane::Key7)
+}
+
+/// フェードアウト終了時の Key5/Key7 押下状態から retry arrange を決める。
+/// Key7 のみ押下なら別配置、それ以外 (Key5 のみ / 両方 / どちらも無し) は同配置。
+fn result_retry_mode_for_held_lanes(key5_held: bool, key7_held: bool) -> ResultRetryMode {
+    if key7_held && !key5_held {
+        ResultRetryMode::DifferentArrange
+    } else {
+        ResultRetryMode::SameArrange
     }
 }
 
@@ -8423,14 +8414,6 @@ fn update_play_exit_hold_started_at(
     now: Instant,
 ) {
     if e1_held && e2_held {
-        started_at.get_or_insert(now);
-    } else {
-        *started_at = None;
-    }
-}
-
-fn update_single_hold_started_at(started_at: &mut Option<Instant>, held: bool, now: Instant) {
-    if held {
         started_at.get_or_insert(now);
     } else {
         *started_at = None;
@@ -10133,10 +10116,26 @@ mod tests {
     }
 
     #[test]
-    fn result_retry_lanes_match_requested_mapping() {
-        assert_eq!(result_retry_mode_for_lane(Lane::Key5), Some(ResultRetryMode::SameArrange));
-        assert_eq!(result_retry_mode_for_lane(Lane::Key7), Some(ResultRetryMode::DifferentArrange));
-        assert_eq!(result_retry_mode_for_lane(Lane::Key6), None);
+    fn result_exit_lanes_match_requested_mapping() {
+        for lane in [Lane::Key1, Lane::Key3, Lane::Key5, Lane::Key7] {
+            assert!(lane_starts_result_exit(lane), "{lane:?} should start result exit");
+        }
+        for lane in [Lane::Scratch, Lane::Key2, Lane::Key4, Lane::Key6] {
+            assert!(!lane_starts_result_exit(lane), "{lane:?} should not start result exit");
+        }
+    }
+
+    #[test]
+    fn result_retry_mode_resolves_from_held_lanes() {
+        // Key7 のみ押下なら別配置。
+        assert_eq!(
+            result_retry_mode_for_held_lanes(false, true),
+            ResultRetryMode::DifferentArrange
+        );
+        // Key5 のみ / 両方 / どちらも無しは同配置。
+        assert_eq!(result_retry_mode_for_held_lanes(true, false), ResultRetryMode::SameArrange);
+        assert_eq!(result_retry_mode_for_held_lanes(true, true), ResultRetryMode::SameArrange);
+        assert_eq!(result_retry_mode_for_held_lanes(false, false), ResultRetryMode::SameArrange);
     }
 
     #[test]
