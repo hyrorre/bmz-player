@@ -4977,7 +4977,7 @@ impl WinitApp {
         let path = request.path.display().to_string();
         match import_scores(
             &request,
-            &self.boot.library_db,
+            &mut self.boot.library_db,
             &mut self.boot.score_db,
             now_unix_seconds(),
         ) {
