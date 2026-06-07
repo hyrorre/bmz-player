@@ -46,11 +46,14 @@ impl MixerState {
         debug_assert_eq!(output.len() % 2, 0);
 
         let frame_count = output.len() / 2;
-        let mut retained = Vec::with_capacity(self.voices.len());
+        // オーディオコールバックから毎回呼ばれるホットパス。`retain_mut` で
+        // voice 配列を in-place 更新し、毎コールバックのヒープ確保
+        // (旧 `Vec::with_capacity` + voices 差し替え)を排してリアルタイム安全にする。
+        let output_sample_rate = self.output_sample_rate;
 
-        for mut voice in self.voices.drain(..) {
+        self.voices.retain_mut(|voice| {
             let Some(sample) = sample_bank.get(voice.sound.sound_id) else {
-                continue;
+                return false;
             };
 
             let mut alive = true;
@@ -80,18 +83,14 @@ impl MixerState {
 
                 output[out_frame * 2] += left;
                 output[out_frame * 2 + 1] += right;
-                voice.sample_position += sample.sample_rate as f64 / self.output_sample_rate as f64;
+                voice.sample_position += sample.sample_rate as f64 / output_sample_rate as f64;
             }
 
             // ループ voice はサンプル末尾を超えても破棄しない。
             let still_playing =
                 voice.sound.loop_playback || voice.sample_position.floor() < sample_frames as f64;
-            if alive && still_playing {
-                retained.push(voice);
-            }
-        }
-
-        self.voices = retained;
+            alive && still_playing
+        });
     }
 }
 
