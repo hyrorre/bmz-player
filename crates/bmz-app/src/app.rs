@@ -5832,6 +5832,7 @@ impl WinitApp {
             practice_panel_ctx.as_mut(),
         );
         self.renderer.set_egui_frame(output.frame);
+        self.sync_active_play_realtime_profile_settings();
         if output.practice_leave {
             self.leave_practice();
             return;
@@ -5885,6 +5886,15 @@ impl WinitApp {
             self.pending_skin_reload_at = None;
             self.reload_skins();
         }
+    }
+
+    fn sync_active_play_realtime_profile_settings(&mut self) {
+        let Some(active_play) = &mut self.active_play else {
+            return;
+        };
+        let session = &mut active_play.running.session;
+        session.audio_mix = crate::config::play::audio_mix_from_profile(&self.boot.profile_config);
+        session.offsets = crate::config::play::play_offsets_from_profile(&self.boot.profile_config);
     }
 
     fn play_skin_defs_for_path(&mut self, path: &str) -> SceneSkinDefs {
