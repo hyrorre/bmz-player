@@ -133,6 +133,7 @@ fn import_with_layout<T: KeyLayoutMapper>(
         .map_err(|source| ImportError::Io { path: source_path.to_path_buf(), source })?;
     let identity = compute_chart_identity(&bytes);
     let text = decode_bms_text(&bytes, warnings);
+    let text = clamp_zero_randoms_for_beatoraja_compat(&text, warnings);
     let (parse_text, sparse_messages) = extract_sparse_bms_message_lines(&text, warnings);
 
     let BmsOutput { bms, warnings: bms_warnings } = parse_bms::<T, _, _, _>(
@@ -153,6 +154,55 @@ fn import_with_layout<T: KeyLayoutMapper>(
     let mut intermediate = build_intermediate_from_bms::<T>(&bms, layout, warnings)?;
     intermediate.identity = identity;
     Ok(intermediate)
+}
+
+fn clamp_zero_randoms_for_beatoraja_compat(
+    text: &str,
+    warnings: &mut Vec<ImportWarning>,
+) -> String {
+    let mut rewritten = String::with_capacity(text.len());
+    for (line_index, line) in text.lines().enumerate() {
+        let line_number = line_index + 1;
+        if let Some((prefix, suffix)) = split_random_zero_line(line) {
+            warnings.push(ImportWarning::ParserDiagnostic {
+                code: "RandomZeroClamped".to_string(),
+                message: format!(
+                    "line {line_number} #RANDOM 0 is treated as #RANDOM 1 for beatoraja compatibility"
+                ),
+            });
+            rewritten.push_str(prefix);
+            rewritten.push('1');
+            rewritten.push_str(suffix);
+        } else {
+            rewritten.push_str(line);
+        }
+        rewritten.push('\n');
+    }
+    rewritten
+}
+
+fn split_random_zero_line(line: &str) -> Option<(&str, &str)> {
+    let trimmed_start = line.trim_start();
+    let leading_len = line.len() - trimmed_start.len();
+    let body = trimmed_start.strip_prefix('#')?;
+    let command = body.get(..6)?;
+    if !command.eq_ignore_ascii_case("RANDOM") {
+        return None;
+    }
+    let after_command = &body[6..];
+    let first = after_command.chars().next()?;
+    if !first.is_ascii_whitespace() {
+        return None;
+    }
+    let arg_start_in_after = after_command.len() - after_command.trim_start().len();
+    let arg = &after_command[arg_start_in_after..];
+    let rest_start = arg.find(|c: char| c.is_ascii_whitespace()).unwrap_or(arg.len());
+    let (value, suffix) = arg.split_at(rest_start);
+    if value != "0" {
+        return None;
+    }
+    let prefix_len = leading_len + 1 + 6 + arg_start_in_after;
+    Some((&line[..prefix_len], suffix))
 }
 
 pub(crate) fn build_intermediate_from_bms<T: KeyLayoutMapper>(
@@ -1245,6 +1295,16 @@ mod tests {
         import_bms_to_intermediate(&path, None, &mut warnings).unwrap()
     }
 
+    fn import_bms_text_with_warnings(text: &str) -> (IntermediateChart, Vec<ImportWarning>) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.bms");
+        std::fs::write(&path, text).unwrap();
+        std::fs::write(dir.path().join("key.wav"), b"wav").unwrap();
+        let mut warnings = Vec::new();
+        let chart = import_bms_to_intermediate(&path, None, &mut warnings).unwrap();
+        (chart, warnings)
+    }
+
     const BMS_HEADER: &str = "\
 #TITLE BMS Test
 #ARTIST Tester
@@ -1325,6 +1385,28 @@ mod tests {
         let mut text = ue_8k_note_lines();
         text.push_str("#6K\n");
         assert_eq!(import_bms_text(&text).metadata.key_mode, KeyMode::K6);
+    }
+
+    #[test]
+    fn bms_random_zero_is_clamped_to_one_for_beatoraja_compatibility() {
+        let (chart, warnings) = import_bms_text_with_warnings(
+            "\
+#TITLE Random Zero
+#BPM 120
+#WAV01 key.wav
+#RANDOM 0
+#IF 1
+#00111:01
+#ENDIF
+#ENDRANDOM
+",
+        );
+
+        assert_eq!(note_lanes(&chart), vec![Lane::Key1]);
+        assert!(warnings.iter().any(|warning| matches!(
+            warning,
+            ImportWarning::ParserDiagnostic { code, .. } if code == "RandomZeroClamped"
+        )));
     }
 
     #[test]
