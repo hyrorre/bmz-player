@@ -1,8 +1,8 @@
 use egui_wgpu::{Renderer as EguiWgpuRenderer, RendererOptions, ScreenDescriptor};
 
-/// bmz-app 側で構築した egui の 1 フレーム分の描画データ。
+/// bmz-player 側で構築した egui の 1 フレーム分の描画データ。
 ///
-/// `egui::Context` の状態管理は bmz-app が持ち、bmz-render はこのコンテナ経由で
+/// `egui::Context` の状態管理は bmz-player が持ち、bmz-render はこのコンテナ経由で
 /// 受け取った描画プリミティブをペイントするだけにする。
 pub struct EguiFrame {
     pub primitives: Vec<egui::ClippedPrimitive>,

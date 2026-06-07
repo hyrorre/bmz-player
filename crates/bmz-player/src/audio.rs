@@ -212,7 +212,7 @@ fn cpal_asio_host() -> Result<Option<CpalHostId>> {
 
 #[cfg(not(all(windows, feature = "asio")))]
 fn cpal_asio_host() -> Result<Option<CpalHostId>> {
-    bail!("ASIO audio backend requires building bmz-app on Windows with the `asio` feature")
+    bail!("ASIO audio backend requires building bmz-player on Windows with the `asio` feature")
 }
 
 #[cfg(test)]

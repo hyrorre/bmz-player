@@ -123,9 +123,9 @@ BMZ の score DB migration でも、既存行は `ForceLn` として移行する
 
 ## Implementation Pointers
 
-- policy calculation: `crates/bmz-app/src/ln_policy.rs`
-- profile config: `crates/bmz-app/src/config/profile_config.rs`
-- chart LN profile persistence: `crates/bmz-app/src/storage/library_db.rs`
-- score DB persistence: `crates/bmz-app/src/storage/score_db.rs`
-- play start / result wiring: `crates/bmz-app/src/screens/play_start.rs`, `crates/bmz-app/src/screens/play_finish.rs`
-- select screen lookup: `crates/bmz-app/src/screens/select_model.rs`
+- policy calculation: `crates/bmz-player/src/ln_policy.rs`
+- profile config: `crates/bmz-player/src/config/profile_config.rs`
+- chart LN profile persistence: `crates/bmz-player/src/storage/library_db.rs`
+- score DB persistence: `crates/bmz-player/src/storage/score_db.rs`
+- play start / result wiring: `crates/bmz-player/src/screens/play_start.rs`, `crates/bmz-player/src/screens/play_finish.rs`
+- select screen lookup: `crates/bmz-player/src/screens/select_model.rs`

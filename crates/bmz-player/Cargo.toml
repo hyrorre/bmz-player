@@ -1,5 +1,5 @@
 [package]
-name = "bmz-app"
+name = "bmz-player"
 edition.workspace = true
 version.workspace = true
 license.workspace = true

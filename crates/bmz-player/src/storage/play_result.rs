@@ -730,7 +730,7 @@ mod tests {
         let stamp =
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
         let path =
-            std::env::temp_dir().join(format!("bmz-app-{label}-{}-{stamp}", std::process::id()));
+            std::env::temp_dir().join(format!("bmz-player-{label}-{}-{stamp}", std::process::id()));
         std::fs::create_dir_all(&path).unwrap();
         path
     }

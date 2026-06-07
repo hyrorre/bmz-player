@@ -612,7 +612,7 @@ mod tests {
     fn make_temp_dir(label: &str) -> PathBuf {
         let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
         let path =
-            std::env::temp_dir().join(format!("bmz-app-{label}-{}-{stamp}", std::process::id()));
+            std::env::temp_dir().join(format!("bmz-player-{label}-{}-{stamp}", std::process::id()));
         std::fs::create_dir_all(&path).unwrap();
         path
     }

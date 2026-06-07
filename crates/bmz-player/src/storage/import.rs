@@ -93,8 +93,8 @@ mod tests {
 
     fn write_temp_bms(text: &str) -> std::path::PathBuf {
         let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        let path =
-            std::env::temp_dir().join(format!("bmz-app-import-{}-{stamp}.bms", std::process::id()));
+        let path = std::env::temp_dir()
+            .join(format!("bmz-player-import-{}-{stamp}.bms", std::process::id()));
         let mut file = std::fs::File::create(&path).unwrap();
         file.write_all(text.as_bytes()).unwrap();
         file.sync_all().unwrap();

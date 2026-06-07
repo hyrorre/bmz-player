@@ -6,13 +6,13 @@ members = [
     "crates/bmz-gameplay",
     "crates/bmz-render",
     "crates/bmz-skin",
-    "crates/bmz-app",
+    "crates/bmz-player",
     "crates/bmz-skin-convert",
     "crates/bmz-video",
     "crates/bmz-ffmpeg",
     "crates/bmz-font",
 ]
-default-members = ["crates/bmz-app"]
+default-members = ["crates/bmz-player"]
 resolver = "2"
 
 [workspace.package]

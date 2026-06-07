@@ -503,36 +503,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bmz-app"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64",
- "bmz-audio",
- "bmz-chart",
- "bmz-core",
- "bmz-gameplay",
- "bmz-render",
- "bmz-skin",
- "bmz-video",
- "egui",
- "egui-winit",
- "flate2",
- "gilrs",
- "rayon",
- "reqwest",
- "rfd",
- "rusqlite",
- "serde",
- "serde_json",
- "tokio",
- "toml",
- "tracing",
- "tracing-subscriber",
- "winit",
-]
-
-[[package]]
 name = "bmz-audio"
 version = "0.1.0"
 dependencies = [
@@ -594,6 +564,36 @@ dependencies = [
  "bmz-core",
  "serde",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "bmz-player"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "bmz-audio",
+ "bmz-chart",
+ "bmz-core",
+ "bmz-gameplay",
+ "bmz-render",
+ "bmz-skin",
+ "bmz-video",
+ "egui",
+ "egui-winit",
+ "flate2",
+ "gilrs",
+ "rayon",
+ "reqwest",
+ "rfd",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "winit",
 ]
 
 [[package]]
