@@ -487,9 +487,10 @@ enum ResultExitAction {
     Leave,
     /// 直前と同じ譜面を、指定した arrange でもう一度プレイする。
     Retry(ResultRetryMode),
-    /// レーンキー (Key1/Key3/Key5/Key7) 押下で開始した retry。
-    /// arrange はフェードアウト終了時に Key5/Key7 の押下状態から決める。
-    RetryHeldLanes,
+    /// レーンキー (Key1-4 / Key5 / Key7) 押下で開始した遷移。
+    /// フェードアウト終了時の Key5/Key7 押下状態で、retry(arrange) か
+    /// 選曲へ戻るかを決める (beatoraja の REPLAY_SAME / REPLAY_DIFFERENT / OK 相当)。
+    HeldLanes,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2479,7 +2480,7 @@ impl WinitApp {
         }
 
         // コース（段位）リザルトは retry を持たず、手動退出のみ対応する。
-        // Enter / Escape / Key1・Key3・Key5・Key7 押下で選曲へ戻る。
+        // Enter / Escape / Key1-4・Key5・Key7 押下で選曲へ戻る。
         if self.finished_course.is_some() {
             if self.result_exit.is_none() && self.result_input_ready() {
                 let leave_by_key = matches!(
@@ -2812,7 +2813,7 @@ impl WinitApp {
         }
 
         // コース（段位）リザルトは retry を持たず、手動退出のみ対応する。
-        // Key1/Key3/Key5/Key7 または Button2/Select 押下で選曲へ戻る。
+        // Key1-4/Key5/Key7 または Button2/Select 押下で選曲へ戻る。
         if self.finished_course.is_some() {
             if pressed && self.result_exit.is_none() && self.result_input_ready() {
                 let control = PhysicalControl::GamepadButton(button.to_string());
@@ -4759,11 +4760,11 @@ impl WinitApp {
                 }
                 true
             }
-            // Key1/Key3/Key5/Key7 の押下で終了アニメーションを開始する。
-            // arrange はフェードアウト終了時に Key5/Key7 の押下状態で決める。
+            // Key1-4 / Key5 / Key7 の押下で終了アニメーションを開始する。
+            // フェードアウト終了時の Key5/Key7 押下状態で retry か選曲へ戻るかを決める。
             lane if lane_starts_result_exit(lane) => {
                 if pressed && self.result_input_ready() {
-                    self.begin_result_exit(ResultExitAction::RetryHeldLanes);
+                    self.begin_result_exit(ResultExitAction::HeldLanes);
                 }
                 true
             }
@@ -4795,7 +4796,7 @@ impl WinitApp {
         }
         tracing::info!(?action, "result screen exit animation started");
         self.result_exit = Some(ResultExit { started_at: Instant::now(), action });
-        // RetryHeldLanes の arrange 判定はフェードアウト終了時に Key5/Key7 の
+        // HeldLanes の遷移判定はフェードアウト終了時に Key5/Key7 の
         // 押下状態を読むため、ここでは held フラグをリセットしない。
         // ResultClear / ResultFail のループ風長尺音を止めて、close SE を鳴らす。
         self.stop_system_sound(crate::system_sound::SoundType::ResultClear);
@@ -4987,10 +4988,11 @@ impl WinitApp {
         match action {
             ResultExitAction::Leave => self.leave_result(),
             ResultExitAction::Retry(mode) => self.retry_last_chart_with_mode(mode),
-            ResultExitAction::RetryHeldLanes => {
-                let mode =
-                    result_retry_mode_for_held_lanes(self.result_key5_held, self.result_key7_held);
-                self.retry_last_chart_with_mode(mode);
+            ResultExitAction::HeldLanes => {
+                match result_action_for_held_lanes(self.result_key5_held, self.result_key7_held) {
+                    Some(mode) => self.retry_last_chart_with_mode(mode),
+                    None => self.leave_result(),
+                }
             }
         }
     }
@@ -7628,17 +7630,25 @@ fn cycle_result_gauge_graph_type(current: i32) -> i32 {
 }
 
 /// リザルト画面で押すと終了アニメーションを開始するレーン。
+/// beatoraja の OK (Key1-4) / REPLAY_DIFFERENT (Key5) / REPLAY_SAME (Key7) に相当。
+/// Key6 は CHANGE_GRAPH、scratch は無割り当てなので開始しない。
 fn lane_starts_result_exit(lane: Lane) -> bool {
-    matches!(lane, Lane::Key1 | Lane::Key3 | Lane::Key5 | Lane::Key7)
+    matches!(lane, Lane::Key1 | Lane::Key2 | Lane::Key3 | Lane::Key4 | Lane::Key5 | Lane::Key7)
 }
 
-/// フェードアウト終了時の Key5/Key7 押下状態から retry arrange を決める。
-/// Key7 のみ押下なら別配置、それ以外 (Key5 のみ / 両方 / どちらも無し) は同配置。
-fn result_retry_mode_for_held_lanes(key5_held: bool, key7_held: bool) -> ResultRetryMode {
-    if key7_held && !key5_held {
-        ResultRetryMode::DifferentArrange
-    } else {
-        ResultRetryMode::SameArrange
+/// フェードアウト終了時の Key5/Key7 押下状態から遷移を決める。
+/// beatoraja 準拠: Key5=別配置 (REPLAY_DIFFERENT)、Key7=同配置 (REPLAY_SAME)。
+/// - Key7 押下 (両押し含む) → 同配置 (SameArrange)
+/// - Key5 のみ押下 → 別配置 (DifferentArrange)
+/// - どちらも非押下 → None (選曲へ戻る)
+///
+/// beatoraja は両押し時に index の若い Key5 (DIFFERENT) を優先するが、
+/// 本実装はユーザー仕様として両押しを SameArrange とする。
+fn result_action_for_held_lanes(key5_held: bool, key7_held: bool) -> Option<ResultRetryMode> {
+    match (key5_held, key7_held) {
+        (_, true) => Some(ResultRetryMode::SameArrange),
+        (true, false) => Some(ResultRetryMode::DifferentArrange),
+        (false, false) => None,
     }
 }
 
@@ -10152,25 +10162,29 @@ mod tests {
 
     #[test]
     fn result_exit_lanes_match_requested_mapping() {
-        for lane in [Lane::Key1, Lane::Key3, Lane::Key5, Lane::Key7] {
+        // beatoraja の OK (Key1-4) / REPLAY (Key5, Key7) が開始する。
+        for lane in [Lane::Key1, Lane::Key2, Lane::Key3, Lane::Key4, Lane::Key5, Lane::Key7] {
             assert!(lane_starts_result_exit(lane), "{lane:?} should start result exit");
         }
-        for lane in [Lane::Scratch, Lane::Key2, Lane::Key4, Lane::Key6] {
+        // Key6 は CHANGE_GRAPH、scratch は無割り当て。
+        for lane in [Lane::Scratch, Lane::Key6] {
             assert!(!lane_starts_result_exit(lane), "{lane:?} should not start result exit");
         }
     }
 
     #[test]
-    fn result_retry_mode_resolves_from_held_lanes() {
-        // Key7 のみ押下なら別配置。
+    fn result_action_resolves_from_held_lanes() {
+        // beatoraja 準拠: Key5 のみ → 別配置 (REPLAY_DIFFERENT)。
         assert_eq!(
-            result_retry_mode_for_held_lanes(false, true),
-            ResultRetryMode::DifferentArrange
+            result_action_for_held_lanes(true, false),
+            Some(ResultRetryMode::DifferentArrange)
         );
-        // Key5 のみ / 両方 / どちらも無しは同配置。
-        assert_eq!(result_retry_mode_for_held_lanes(true, false), ResultRetryMode::SameArrange);
-        assert_eq!(result_retry_mode_for_held_lanes(true, true), ResultRetryMode::SameArrange);
-        assert_eq!(result_retry_mode_for_held_lanes(false, false), ResultRetryMode::SameArrange);
+        // Key7 のみ → 同配置 (REPLAY_SAME)。
+        assert_eq!(result_action_for_held_lanes(false, true), Some(ResultRetryMode::SameArrange));
+        // 両押し → 同配置 (ユーザー仕様)。
+        assert_eq!(result_action_for_held_lanes(true, true), Some(ResultRetryMode::SameArrange));
+        // どちらも非押下 → 選曲へ戻る。
+        assert_eq!(result_action_for_held_lanes(false, false), None);
     }
 
     #[test]
