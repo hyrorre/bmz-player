@@ -125,6 +125,23 @@ impl CpalBackend {
         let mut config = supported_config.config();
         config.buffer_size = resolve_buffer_size(requested_buffer_size, &supported_buffer_size);
         let sample_rate = config.sample_rate.0;
+
+        // ASIO のバッファ問い合わせ結果を可視化する。ドライバが報告する
+        // サポート範囲(`supported_buffer_size`)と、要求値・実際にストリームへ
+        // 渡す値をログに残し、RME / ASIO4ALL などのレイテンシ調整を切り分けやすくする。
+        let device_name = device.name().unwrap_or_else(|_| "<unknown>".to_string());
+        tracing::info!(
+            host = ?host.id(),
+            device = %device_name,
+            sample_format = ?sample_format,
+            sample_rate,
+            channels = config.channels,
+            supported_buffer_size = ?supported_buffer_size,
+            requested_buffer_size = ?requested_buffer_size,
+            resolved_buffer_size = ?config.buffer_size,
+            "opening cpal output stream",
+        );
+
         let current_frame = Arc::new(AtomicU64::new(0));
         let sources = Arc::new(Mutex::new(Vec::new()));
 

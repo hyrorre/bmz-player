@@ -1045,7 +1045,7 @@ fn build_settings_panel(
                         egui::Slider::new(&mut config.audio.sample_rate, 44_100..=96_000)
                             .text("サンプルレート (未実装)"),
                     );
-                    egui::ComboBox::from_label("バッファサイズモード (未実装)")
+                    egui::ComboBox::from_label("バッファサイズモード")
                         .selected_text(audio_buffer_size_mode_label(&config.audio.buffer_size_mode))
                         .show_ui(ui, |ui| {
                             ui.selectable_value(
@@ -1060,9 +1060,18 @@ fn build_settings_panel(
                             );
                         });
                     ui.add(
-                        egui::Slider::new(&mut config.audio.buffer_size, 64..=4096)
-                            .text("バッファサイズ (フレーム・未実装)"),
+                        egui::Slider::new(&mut config.audio.buffer_size, 32..=4096)
+                            .text("バッファサイズ (フレーム)"),
                     );
+                    ui.horizontal(|ui| {
+                        ui.label("プリセット:");
+                        for frames in [32u32, 48, 64, 96, 128, 256] {
+                            if ui.button(frames.to_string()).clicked() {
+                                config.audio.buffer_size = frames;
+                                config.audio.buffer_size_mode = AudioBufferSizeMode::Fixed;
+                            }
+                        }
+                    });
                     ui.checkbox(&mut config.audio.exclusive_mode, "排他モード (未実装)");
 
                     // ASIO 以外は安価なのでバックエンド変更時に自動列挙する。
