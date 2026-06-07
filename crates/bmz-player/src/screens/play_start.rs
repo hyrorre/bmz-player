@@ -336,6 +336,20 @@ fn course_gauge_for(gauge: GaugeTypeConfig) -> GaugeType {
 /// lane_shuffle_pattern from the replay file so the chart unfolds exactly as
 /// it did at record time.  Must be called *after* `apply_course_constraints`
 /// so that constraints don't overwrite the replay's arrange.
+/// Reproduce a recorded arrange (option / seed / lane shuffle pattern) on a
+/// fresh PLAY start.  Unlike [`apply_queued_replay`] this attaches no replay
+/// player, so the chart is actually played, not played back.  Must be called
+/// *after* `apply_course_constraints` so constraints don't overwrite the
+/// arrange.
+pub fn apply_arrange_override(
+    options: &mut PlayStartOptions,
+    arrange: &crate::screens::play_session::AppliedArrange,
+) {
+    options.arrange = arrange.arrange;
+    options.arrange_seed = arrange.seed;
+    options.arrange_pattern = arrange.pattern.clone();
+}
+
 pub fn apply_queued_replay(
     options: &mut PlayStartOptions,
     replay: &crate::storage::replay::QueuedCourseReplay,
@@ -357,6 +371,26 @@ mod tests {
     use bmz_core::course::CourseGaugeConstraint;
     use winit::event::ElementState;
     use winit::keyboard::{KeyCode, PhysicalKey};
+
+    #[test]
+    fn apply_arrange_override_copies_arrange_without_replay() {
+        use crate::screens::play_session::AppliedArrange;
+        use crate::select_options::ArrangeOption;
+
+        let mut options = PlayStartOptions::default();
+        let arrange = AppliedArrange {
+            arrange: ArrangeOption::Random,
+            seed: Some(42),
+            pattern: Some(vec![3, 1, 2, 0]),
+        };
+        apply_arrange_override(&mut options, &arrange);
+
+        assert_eq!(options.arrange, ArrangeOption::Random);
+        assert_eq!(options.arrange_seed, Some(42));
+        assert_eq!(options.arrange_pattern, Some(vec![3, 1, 2, 0]));
+        // Unlike a replay, no playback player is attached: the chart is played.
+        assert!(options.replay_player.is_none());
+    }
 
     #[test]
     fn play_session_options_use_audio_sample_rate() {

@@ -68,6 +68,7 @@ use crate::screens::play_loop::{
     PlayAdvanceOutcome, PlayEndingSkinTimers, advance_running_play_session_until_result,
     refresh_play_ending_snapshot,
 };
+use crate::screens::play_session::AppliedArrange;
 use crate::screens::play_session::build_practice_prepared_from_preloaded;
 use crate::screens::play_snapshot::{
     BgaFrameCatalog, bga_texture_id, build_render_snapshot_with_target_and_bga_frames,
@@ -75,9 +76,9 @@ use crate::screens::play_snapshot::{
 };
 use crate::screens::play_start::{
     PlayStartOptions, PreloadedWinitPlaySession, PreparedWinitPlaySession, StartedWinitPlaySession,
-    apply_course_constraints, apply_queued_replay, open_prepared_winit_play_session,
-    play_session_options_from_start, prepare_play_session_for_chart_with_winit_input,
-    prepare_winit_play_session_from_preloaded,
+    apply_arrange_override, apply_course_constraints, apply_queued_replay,
+    open_prepared_winit_play_session, play_session_options_from_start,
+    prepare_play_session_for_chart_with_winit_input, prepare_winit_play_session_from_preloaded,
 };
 use crate::screens::practice::{
     PracticeCliOverrides, PracticePhase, PracticeSession, clamp_practice_property,
@@ -491,6 +492,8 @@ enum ResultExitAction {
     /// フェードアウト終了時の Key5/Key7 押下状態で、retry(arrange) か
     /// 選曲へ戻るかを決める (beatoraja の REPLAY_SAME / REPLAY_DIFFERENT / OK 相当)。
     HeldLanes,
+    /// コース（段位）リザルトから、コース全体を同配置で再プレイする。
+    RetryCourseSameArrange,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2479,20 +2482,22 @@ impl WinitApp {
             return;
         }
 
-        // コース（段位）リザルトは retry を持たず、手動退出のみ対応する。
-        // Enter / Escape / Key1-4・Key5・Key7 押下で選曲へ戻る。
+        // コース（段位）リザルト: コース全体を同配置で再プレイ、または選曲へ戻る。
+        // 同配置リトライ: R / Key5 / Key7。退出: Enter / Escape / Key1-4。
         if self.finished_course.is_some() {
             if self.result_exit.is_none() && self.result_input_ready() {
-                let leave_by_key = matches!(
-                    result_action(event.physical_key, event.state, event.repeat),
-                    Some(ResultAction::Leave)
-                );
-                let leave_by_lane = event.state == ElementState::Pressed
-                    && !event.repeat
-                    && physical_key_to_control(event.physical_key)
-                        .and_then(|control| self.result_lane_for_control(&control))
-                        .is_some_and(lane_starts_result_exit);
-                if leave_by_key || leave_by_lane {
+                let action = result_action(event.physical_key, event.state, event.repeat);
+                let lane = (event.state == ElementState::Pressed && !event.repeat)
+                    .then(|| physical_key_to_control(event.physical_key))
+                    .flatten()
+                    .and_then(|control| self.result_lane_for_control(&control));
+                if matches!(action, Some(ResultAction::Retry))
+                    || matches!(lane, Some(Lane::Key5 | Lane::Key7))
+                {
+                    self.begin_result_exit(ResultExitAction::RetryCourseSameArrange);
+                } else if matches!(action, Some(ResultAction::Leave))
+                    || matches!(lane, Some(Lane::Key1 | Lane::Key2 | Lane::Key3 | Lane::Key4))
+                {
                     self.begin_result_exit(ResultExitAction::Leave);
                 }
             }
@@ -2812,15 +2817,19 @@ impl WinitApp {
             return;
         }
 
-        // コース（段位）リザルトは retry を持たず、手動退出のみ対応する。
-        // Key1-4/Key5/Key7 または Button2/Select 押下で選曲へ戻る。
+        // コース（段位）リザルト: コース全体を同配置で再プレイ、または選曲へ戻る。
+        // 同配置リトライ: Start/Button1 / Key5 / Key7。退出: Button2/Select / Key1-4。
         if self.finished_course.is_some() {
             if pressed && self.result_exit.is_none() && self.result_input_ready() {
                 let control = PhysicalControl::GamepadButton(button.to_string());
-                let leave_by_lane =
-                    self.result_lane_for_control(&control).is_some_and(lane_starts_result_exit);
-                let leave_by_button = matches!(button, "Button2" | "Select");
-                if leave_by_lane || leave_by_button {
+                let lane = self.result_lane_for_control(&control);
+                if matches!(button, "Button1" | "Start")
+                    || matches!(lane, Some(Lane::Key5 | Lane::Key7))
+                {
+                    self.begin_result_exit(ResultExitAction::RetryCourseSameArrange);
+                } else if matches!(button, "Button2" | "Select")
+                    || matches!(lane, Some(Lane::Key1 | Lane::Key2 | Lane::Key3 | Lane::Key4))
+                {
                     self.begin_result_exit(ResultExitAction::Leave);
                 }
             }
@@ -3740,6 +3749,19 @@ impl WinitApp {
     }
 
     fn start_course(&mut self, course_id: i64) {
+        self.start_course_with_arrange(course_id, Vec::new());
+    }
+
+    /// Start a course in PLAY mode.  When `arrange_overrides` is non-empty, the
+    /// recorded per-entry arrange (seed/pattern) is reapplied so the whole
+    /// course replays with the same arrangement; entries without an override at
+    /// their index get a fresh arrange.  A fresh course start passes an empty
+    /// vec.
+    fn start_course_with_arrange(
+        &mut self,
+        course_id: i64,
+        arrange_overrides: Vec<AppliedArrange>,
+    ) {
         let stored = match self.boot.library_db.list_courses() {
             Ok(courses) => courses.into_iter().find(|c| c.id == course_id),
             Err(error) => {
@@ -3770,15 +3792,26 @@ impl WinitApp {
             tracing::warn!(course_id, "no resolved chart in course");
             return;
         };
-        tracing::info!(course_id, title = %definition.title, "starting course");
+        tracing::info!(
+            course_id,
+            title = %definition.title,
+            same_arrange = !arrange_overrides.is_empty(),
+            "starting course"
+        );
         let mut options = self.play_start_options();
         apply_course_constraints(&mut options, &definition.constraints);
+        // Reapply the first chart's recorded arrange after constraints so the
+        // constraint clamp doesn't overwrite it (same ordering as replay).
+        if let Some(arrange) = arrange_overrides.first() {
+            apply_arrange_override(&mut options, arrange);
+        }
         self.active_course = Some(ActiveCourseSession {
             course_id,
             definition,
             current_index: 0,
             entry_results: Vec::new(),
             queued_replays: Vec::new(),
+            arrange_overrides,
         });
         self.start_chart_with_options(first_chart_id, options);
     }
@@ -3879,6 +3912,7 @@ impl WinitApp {
             current_index: 0,
             entry_results: Vec::new(),
             queued_replays: queued,
+            arrange_overrides: Vec::new(),
         });
         self.start_chart_with_options(first_chart_id, options);
     }
@@ -3913,6 +3947,11 @@ impl WinitApp {
                 && replay.chart_id == next_chart_id
             {
                 apply_queued_replay(&mut options, replay);
+            } else if let Some(course) = &self.active_course
+                && let Some(arrange) = course.arrange_overrides.get(next_index)
+            {
+                // Same-arrange course retry: reproduce this chart's arrange.
+                apply_arrange_override(&mut options, arrange);
             }
             self.start_chart_with_options(next_chart_id, options);
             return;
@@ -4711,6 +4750,31 @@ impl WinitApp {
         self.start_chart_with_options(chart_id, options);
     }
 
+    /// Replay the whole course from its first chart, reproducing each chart's
+    /// recorded arrange.  Reads the just-finished course result for the course
+    /// id and per-entry arranges, then re-enters the course in PLAY mode.
+    fn retry_course_same_arrange(&mut self) {
+        let Some(course) = self.finished_course.as_ref() else {
+            tracing::warn!("no finished course is available to retry");
+            return;
+        };
+        let course_id = course.course_id;
+        let arrange_overrides = course.entry_arranges.clone();
+        tracing::info!(
+            course_id,
+            entries = arrange_overrides.len(),
+            "retrying course (same arrange)"
+        );
+        // Drop the finished-course/result state before re-entering the course;
+        // start_course_with_arrange installs a fresh active_course session.
+        self.finished_course = None;
+        self.finished_play = None;
+        self.result_exit = None;
+        self.result_key5_held = false;
+        self.result_key7_held = false;
+        self.start_course_with_arrange(course_id, arrange_overrides);
+    }
+
     fn result_retry_same_arrange_options(&self) -> PlayStartOptions {
         let mut options = self.play_start_options();
         if let Some(applied) = self.finished_play.as_ref().map(|finished| &finished.applied_arrange)
@@ -4994,6 +5058,7 @@ impl WinitApp {
                     None => self.leave_result(),
                 }
             }
+            ResultExitAction::RetryCourseSameArrange => self.retry_course_same_arrange(),
         }
     }
 
@@ -9637,6 +9702,7 @@ mod tests {
                 entry_summary(120, 100, 80, 1_000),
                 entry_summary(200, 120, 90, 2_000),
             ],
+            entry_arranges: Vec::new(),
             total_ex_score: 320,
             max_ex_score: 440,
             total_notes: 220,

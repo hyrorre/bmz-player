@@ -1,6 +1,7 @@
 use bmz_core::course::{CourseDefinition, CourseEntry, CourseKind};
 
 use crate::screens::play_finish::FinishedPlaySession;
+use crate::screens::play_session::AppliedArrange;
 use crate::screens::result_model::{ResultJudgeCounts, ResultSummary};
 use crate::storage::replay::QueuedCourseReplay;
 
@@ -14,6 +15,11 @@ pub struct ActiveCourseSession {
     /// Indexed by entry position; absence at the current_index means the
     /// chart is played normally (e.g. saved replay file is missing).
     pub queued_replays: Vec<QueuedCourseReplay>,
+    /// Per-entry arrange to reproduce when retrying the whole course with the
+    /// same arrangement.  Indexed by entry position; absence at an index means
+    /// that chart gets a fresh arrange (e.g. a chart never reached because the
+    /// previous attempt failed early).  Empty for a fresh course play.
+    pub arrange_overrides: Vec<AppliedArrange>,
 }
 
 pub struct CourseEntryResult {
@@ -27,6 +33,9 @@ pub struct CourseResultSummary {
     pub title: String,
     pub kind: CourseKind,
     pub entry_summaries: Vec<ResultSummary>,
+    /// Per-entry applied arrange (seed/pattern) of this attempt, in play order.
+    /// Used to retry the whole course with the same arrangement.
+    pub entry_arranges: Vec<AppliedArrange>,
     pub total_ex_score: u32,
     pub max_ex_score: u32,
     pub total_notes: u32,
@@ -110,6 +119,8 @@ impl ActiveCourseSession {
 
         let course_clear = !course_failed && trophy_results.iter().any(|t| t.achieved);
 
+        let entry_arranges: Vec<AppliedArrange> =
+            self.entry_results.iter().map(|r| r.finished.applied_arrange.clone()).collect();
         let entry_summaries = self.entry_results.into_iter().map(|r| r.finished.summary).collect();
 
         CourseResultSummary {
@@ -117,6 +128,7 @@ impl ActiveCourseSession {
             title: self.definition.title,
             kind: self.definition.kind,
             entry_summaries,
+            entry_arranges,
             total_ex_score,
             max_ex_score,
             total_notes,
@@ -276,6 +288,7 @@ mod tests {
             current_index: 0,
             entry_results,
             queued_replays: Vec::new(),
+            arrange_overrides: Vec::new(),
         }
     }
 
@@ -380,6 +393,7 @@ mod tests {
             current_index: 0,
             entry_results,
             queued_replays: Vec::new(),
+            arrange_overrides: Vec::new(),
         }
     }
 
