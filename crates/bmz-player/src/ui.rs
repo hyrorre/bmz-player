@@ -17,8 +17,8 @@ use winit::event::WindowEvent;
 use winit::window::Window;
 
 use crate::config::app_config::{
-    AppConfig, AudioBackend, AudioBufferSizeMode, DifficultyTableSource, InputBackendKind,
-    LogLevel, RendererBackend, WindowMode,
+    AppConfig, AudioBackend, AudioBufferSizeMode, AudioSampleRateMode, DifficultyTableSource,
+    InputBackendKind, LogLevel, RendererBackend, WindowMode,
 };
 use crate::config::profile_config::{
     AssistOptionConfig, BgaExpandConfig, BgaModeConfig, GaugeAutoShiftConfig, GaugeTypeConfig,
@@ -1049,15 +1049,31 @@ fn build_settings_panel(
                                 "PulseAudio",
                             );
                         });
+                    let sample_rate_text =
+                        if config.audio.sample_rate_mode == AudioSampleRateMode::Auto {
+                            "自動 (ドライバ / OS 既定)".to_string()
+                        } else {
+                            audio_sample_rate_label(config.audio.sample_rate)
+                        };
                     egui::ComboBox::from_label("サンプルレート")
-                        .selected_text(audio_sample_rate_label(config.audio.sample_rate))
+                        .selected_text(sample_rate_text)
                         .show_ui(ui, |ui| {
+                            let is_auto =
+                                config.audio.sample_rate_mode == AudioSampleRateMode::Auto;
+                            if ui.selectable_label(is_auto, "自動 (ドライバ / OS 既定)").clicked() {
+                                config.audio.sample_rate_mode = AudioSampleRateMode::Auto;
+                            }
                             for hz in [44_100u32, 48_000, 96_000, 192_000, 384_000] {
-                                ui.selectable_value(
-                                    &mut config.audio.sample_rate,
-                                    hz,
-                                    audio_sample_rate_label(hz),
-                                );
+                                let selected = config.audio.sample_rate_mode
+                                    == AudioSampleRateMode::Fixed
+                                    && config.audio.sample_rate == hz;
+                                if ui
+                                    .selectable_label(selected, audio_sample_rate_label(hz))
+                                    .clicked()
+                                {
+                                    config.audio.sample_rate_mode = AudioSampleRateMode::Fixed;
+                                    config.audio.sample_rate = hz;
+                                }
                             }
                         });
                     egui::ComboBox::from_label("バッファサイズモード")

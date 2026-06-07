@@ -13,7 +13,9 @@ use bmz_chart::model::BgaAssetId;
 use bmz_core::time::TimeUs;
 use bmz_gameplay::session::GameSession;
 
-use crate::config::app_config::{AudioBackend, AudioBufferSizeMode, AudioConfig};
+use crate::config::app_config::{
+    AudioBackend, AudioBufferSizeMode, AudioConfig, AudioSampleRateMode,
+};
 use crate::screens::play_finish::FinishedPlaySession;
 use crate::screens::play_session::{AppliedArrange, PreparedPlaySession};
 use crate::screens::play_snapshot::BgaFrameCatalog;
@@ -174,12 +176,21 @@ pub fn open_prepared_play_audio(
 fn cpal_output_config(config: &AudioConfig) -> Result<CpalOutputConfig> {
     let host = cpal_host_for_backend(&config.backend)?;
     let output_device_name = cpal_output_device_name(config);
-    let sample_rate = Some(config.sample_rate);
+    let sample_rate = cpal_sample_rate(config);
     let buffer_size = cpal_buffer_size(config);
     // ペア番号(0=1-2ch, 1=3-4ch …)をインターリーブ先頭チャンネル位置へ変換する。
     let channel_offset = config.output_channel_pair.saturating_mul(2);
 
     Ok(CpalOutputConfig { host, output_device_name, sample_rate, buffer_size, channel_offset })
+}
+
+/// サンプルレートモードが `Fixed` のときだけ Hz を指定する。`Auto` は
+/// ドライバ / OS 既定に任せるため `None`。
+fn cpal_sample_rate(config: &AudioConfig) -> Option<u32> {
+    match config.sample_rate_mode {
+        AudioSampleRateMode::Fixed => Some(config.sample_rate),
+        AudioSampleRateMode::Auto => None,
+    }
 }
 
 /// バッファサイズモードが `Fixed` のときだけフレーム数を指定する。`Auto` は
@@ -252,6 +263,30 @@ mod tests {
 
         assert_eq!(output.host, None);
         assert_eq!(output.output_device_name, None);
+        // 既定はサンプルレート Auto なので cpal へはレート未指定で渡す。
+        assert_eq!(output.sample_rate, None);
+    }
+
+    #[test]
+    fn auto_sample_rate_mode_leaves_driver_default() {
+        let mut config = AppConfig::default().audio;
+        config.sample_rate_mode = AudioSampleRateMode::Auto;
+        config.sample_rate = 96_000;
+
+        let output = cpal_output_config(&config).unwrap();
+
+        assert_eq!(output.sample_rate, None);
+    }
+
+    #[test]
+    fn fixed_sample_rate_mode_passes_requested_hz() {
+        let mut config = AppConfig::default().audio;
+        config.sample_rate_mode = AudioSampleRateMode::Fixed;
+        config.sample_rate = 96_000;
+
+        let output = cpal_output_config(&config).unwrap();
+
+        assert_eq!(output.sample_rate, Some(96_000));
     }
 
     #[test]
