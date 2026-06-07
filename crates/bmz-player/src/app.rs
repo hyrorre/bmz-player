@@ -225,6 +225,7 @@ struct WinitApp {
     play_table_text_fallback: String,
     select_items: Vec<SelectItem>,
     select_distribution_cache: RefCell<HashMap<i64, Vec<ChartDistributionSecond>>>,
+    table_breadcrumb_cache: RefCell<HashMap<String, TableBreadcrumb>>,
     select_folder_summary_cache: HashMap<String, SelectFolderSummaryCacheEntry>,
     select_folder_summary_tx: mpsc::Sender<SelectFolderSummaryResult>,
     select_folder_summary_rx: Receiver<SelectFolderSummaryResult>,
@@ -427,6 +428,12 @@ enum SelectFolderSummaryCacheEntry {
 struct SelectFolderSummaryResult {
     key: String,
     result: std::result::Result<Option<SelectFolderSummary>, String>,
+}
+
+#[derive(Debug, Clone)]
+struct TableBreadcrumb {
+    name: String,
+    symbol: String,
 }
 
 struct DecideTransition {
@@ -906,6 +913,7 @@ impl WinitApp {
             play_table_text_fallback: String::new(),
             select_items,
             select_distribution_cache: RefCell::new(HashMap::new()),
+            table_breadcrumb_cache: RefCell::new(HashMap::new()),
             select_folder_summary_cache: HashMap::new(),
             select_folder_summary_tx,
             select_folder_summary_rx,
@@ -1348,22 +1356,45 @@ impl WinitApp {
         }
     }
 
+    fn fallback_table_breadcrumb(source_url: &str) -> TableBreadcrumb {
+        TableBreadcrumb {
+            name: std::path::Path::new(source_url)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(source_url)
+                .to_string(),
+            symbol: String::new(),
+        }
+    }
+
+    fn table_breadcrumb(&self, source_url: &str) -> TableBreadcrumb {
+        if let Some(cached) = self.table_breadcrumb_cache.borrow().get(source_url) {
+            return cached.clone();
+        }
+
+        let mut cache = self.table_breadcrumb_cache.borrow_mut();
+        if let Ok(tables) = self.boot.library_db.list_difficulty_tables() {
+            for table in tables {
+                cache.insert(
+                    table.source_url,
+                    TableBreadcrumb {
+                        name: format!("[{}] {}", table.symbol, table.name),
+                        symbol: table.symbol,
+                    },
+                );
+            }
+        }
+
+        cache
+            .entry(source_url.to_string())
+            .or_insert_with(|| Self::fallback_table_breadcrumb(source_url))
+            .clone()
+    }
+
     /// 難易度表のパンくず表示名。テーブルが既知なら `[symbol] name`、
     /// 不明なら URL のファイル名部分にフォールバックする。
     fn table_breadcrumb_name(&self, source_url: &str) -> String {
-        self.boot
-            .library_db
-            .list_difficulty_tables()
-            .ok()
-            .and_then(|ts| ts.into_iter().find(|t| t.source_url == source_url))
-            .map(|t| format!("[{}] {}", t.symbol, t.name))
-            .unwrap_or_else(|| {
-                std::path::Path::new(source_url)
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or(source_url)
-                    .to_string()
-            })
+        self.table_breadcrumb(source_url).name
     }
 
     fn table_text_context_for_chart(&self, chart_id: i64) -> (String, String, String) {
@@ -1410,16 +1441,8 @@ impl WinitApp {
                 Some(TablePath::Root) | None => "難易度表".to_string(),
                 Some(TablePath::Table { source_url }) => self.table_breadcrumb_name(source_url),
                 Some(TablePath::Level { source_url, level }) => {
-                    let table_name = self.table_breadcrumb_name(source_url);
-                    let symbol = self
-                        .boot
-                        .library_db
-                        .list_difficulty_tables()
-                        .ok()
-                        .and_then(|ts| ts.into_iter().find(|t| t.source_url == source_url))
-                        .map(|t| t.symbol)
-                        .unwrap_or_default();
-                    format!("{table_name} > {symbol}{level}")
+                    let table = self.table_breadcrumb(source_url);
+                    format!("{} > {}{}", table.name, table.symbol, level)
                 }
             },
             Some(path) if in_settings_stack(std::slice::from_ref(path)) => {
@@ -5344,6 +5367,7 @@ impl WinitApp {
             Ok(Ok(())) => {
                 tracing::info!("table fetch complete");
                 self.pending_table_fetch = None;
+                self.table_breadcrumb_cache.borrow_mut().clear();
                 self.reload_select_items();
             }
             Ok(Err(error)) => {
