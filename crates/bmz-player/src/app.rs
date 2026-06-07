@@ -3053,17 +3053,20 @@ impl WinitApp {
     }
 
     fn handle_select_row_click(&mut self, row_index: u32, button: MouseButton) {
-        match button {
-            MouseButton::Left => {
-                let next = row_index as usize;
-                if next < self.select_items.len() && self.selected_index != next {
-                    self.selected_index = next;
-                    self.select_bar_started_at = Instant::now();
-                    self.play_system_sound(crate::system_sound::SoundType::Scratch);
-                }
+        match select_row_click_action(
+            row_index,
+            button,
+            self.selected_index,
+            self.select_items.len(),
+        ) {
+            Some(SelectRowClickAction::Select(next)) => {
+                self.selected_index = next;
+                self.select_bar_started_at = Instant::now();
+                self.play_system_sound(crate::system_sound::SoundType::Scratch);
             }
-            MouseButton::Right => self.exit_folder(),
-            _ => {}
+            Some(SelectRowClickAction::EnterOrPlay) => self.enter_or_play_selected(),
+            Some(SelectRowClickAction::ExitFolder) => self.exit_folder(),
+            None => {}
         }
     }
 
@@ -8424,6 +8427,35 @@ enum SelectMove {
     Last,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SelectRowClickAction {
+    Select(usize),
+    EnterOrPlay,
+    ExitFolder,
+}
+
+fn select_row_click_action(
+    row_index: u32,
+    button: MouseButton,
+    selected_index: usize,
+    item_len: usize,
+) -> Option<SelectRowClickAction> {
+    match button {
+        MouseButton::Left => {
+            let next = row_index as usize;
+            if next >= item_len {
+                None
+            } else if next == selected_index {
+                Some(SelectRowClickAction::EnterOrPlay)
+            } else {
+                Some(SelectRowClickAction::Select(next))
+            }
+        }
+        MouseButton::Right => Some(SelectRowClickAction::ExitFolder),
+        _ => None,
+    }
+}
+
 fn select_action(
     physical_key: PhysicalKey,
     state: ElementState,
@@ -9786,6 +9818,24 @@ mod tests {
             ),
             Some(SelectAction::Move(SelectMove::Next))
         );
+    }
+
+    #[test]
+    fn select_row_click_enters_only_when_row_is_already_selected() {
+        assert_eq!(
+            select_row_click_action(2, MouseButton::Left, 0, 4),
+            Some(SelectRowClickAction::Select(2))
+        );
+        assert_eq!(
+            select_row_click_action(2, MouseButton::Left, 2, 4),
+            Some(SelectRowClickAction::EnterOrPlay)
+        );
+        assert_eq!(select_row_click_action(4, MouseButton::Left, 2, 4), None);
+        assert_eq!(
+            select_row_click_action(2, MouseButton::Right, 2, 4),
+            Some(SelectRowClickAction::ExitFolder)
+        );
+        assert_eq!(select_row_click_action(2, MouseButton::Middle, 2, 4), None);
     }
 
     #[test]
