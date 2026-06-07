@@ -2,13 +2,27 @@
 
 Next-Generation BMS Player (WIP)
 
-Supported OS: Windows / macOS / Linux (probably works)
+beatoraja の後継を目指しています。 (LR2ではなく)  
+多くの機能はまだ未実装ですが、まずは開発者自身が快適にプレイできることを目指して開発しています。
 
-Supported Format: BMS (5K / 7K / 10K / 14K)
+Supported OS
+- Windows
+- macOS
+- Linux (probably works)
 
-Supported Skin: beatoraja json skin / beatoraja lua skin
+Supported Format
+- BMS (5K / 7K / 10K / 14K)
+- PMS (9K)
+- UE (4K / 6K / 8K)
+
+Supported Skin
+- beatoraja json skin
+- beatoraja lua skin
+- beatoraja csv skin
 
 ## How to build
+
+Install latest graphics driver.
 
 Use the same version of FFmpeg as specified in Cargo.toml
 
@@ -68,20 +82,16 @@ cargo run
 
 ## TODO
 
-- [x] スキンオプションのデフォルト解決をbeatoraja準拠にする
-- [x] wgpuバックエンド選択機能 (DirectX 12 / Metal / Vulkan / OpenGL)
-- [x] ファイル選択ダイアログ `rfd`
+- [ ] スキンオプションのデフォルト解決をbeatoraja準拠にする
 - [ ] アシストオプション、詳細オプション実装
-- [ ] select 画面の未実装要素、マウス操作など
 - [ ] result 画面終了時に音声のフェードアウト処理を追加
 - [ ] LNノーツの処理方法確認
 - [ ] Mineノーツの処理方法確認
-- [ ] 判定とゲージのアルゴリズム変更機能 (beatoraja Mode / LR2oraja Mode / DX Mode)
 - [ ] FAST/SLOW 表示条件変更機能 (ms単位)
-- [ ] SELECT画面UIベースの設定変更機能
 - [ ] Fontで `BIZ UDGothic` / `Noto Sans CJK JP` / `Noto Sans JP` を優先表示
 - [ ] Select画面の操作変更とスキン側の不一致について考える
 - [ ] song searchのカーソル移動機能
+- [ ] profile機能拡充
 
 ## Roadmap
 
@@ -90,9 +100,8 @@ cargo run
 - [x] BMSON
 - [x] PMS (9K)
 - [x] csv skin (beatoraja compliant)
-- [ ] score database migration from LR2 / beatoraja
+- [x] score database migration from LR2 / beatoraja
 - [ ] UE-style BMS (4K / 6K / 8K)
-- [ ] Aery-style BMS (5K / 7K)
 - [ ] practice mode
 - [ ] new IR (bmz-ir)
 - [ ] read-only IR (LR2IR, Mocha, MinIR)
