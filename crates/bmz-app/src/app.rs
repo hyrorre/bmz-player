@@ -7680,6 +7680,8 @@ fn select_snapshot_rows(
                     gauge_value: None,
                     bp: None,
                     cb: None,
+                    judge_counts: DisplayJudgeCounts::default(),
+                    fast_slow_counts: None,
                     play_count: 0,
                     clear_count: 0,
                     replay_slots: [false; 4],
@@ -7762,6 +7764,15 @@ fn select_snapshot_rows(
                         gauge_value: row.best_score.as_ref().map(|score| score.gauge_value),
                         bp: row.best_score.as_ref().map(|score| score.bp),
                         cb: row.best_score.as_ref().map(|score| score.cb),
+                        judge_counts: row
+                            .best_score
+                            .as_ref()
+                            .map(|score| score.judge_counts)
+                            .unwrap_or_default(),
+                        fast_slow_counts: row
+                            .best_score
+                            .as_ref()
+                            .map(|score| score.fast_slow_counts),
                         play_count,
                         clear_count,
                         replay_slots: row.replay_slots,
@@ -7881,6 +7892,8 @@ fn select_snapshot_rows(
                     gauge_value: row.best_score.as_ref().map(|best| best.gauge_value),
                     bp: row.best_score.as_ref().map(|best| best.bp),
                     cb: None,
+                    judge_counts: DisplayJudgeCounts::default(),
+                    fast_slow_counts: None,
                     play_count: u32::from(row.best_score.is_some()),
                     clear_count: u32::from(row.best_score.as_ref().is_some_and(|best| {
                         !best.clear_type.is_empty() && best.clear_type != "Failed"
@@ -7935,6 +7948,8 @@ fn select_snapshot_rows(
                         gauge_value: None,
                         bp: None,
                         cb: None,
+                        judge_counts: DisplayJudgeCounts::default(),
+                        fast_slow_counts: None,
                         play_count: 0,
                         clear_count: 0,
                         replay_slots: [false; 4],
@@ -7989,6 +8004,8 @@ fn select_snapshot_rows(
                         gauge_value: None,
                         bp: None,
                         cb: None,
+                        judge_counts: DisplayJudgeCounts::default(),
+                        fast_slow_counts: None,
                         play_count: 0,
                         clear_count: 0,
                         replay_slots: [false; 4],
@@ -8036,6 +8053,8 @@ fn select_snapshot_rows(
                     gauge_value: None,
                     bp: None,
                     cb: None,
+                    judge_counts: DisplayJudgeCounts::default(),
+                    fast_slow_counts: None,
                     play_count: 0,
                     clear_count: 0,
                     replay_slots: [false; 4],
@@ -10432,6 +10451,8 @@ mod tests {
             bp: 0,
             cb: 0,
             max_combo: 100,
+            judge_counts: DisplayJudgeCounts::default(),
+            fast_slow_counts: FastSlowJudgeCounts::default(),
             play_count: 42,
             clear_count: 31,
             device_type: bmz_core::input::InputDeviceKind::Keyboard,

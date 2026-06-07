@@ -8,6 +8,7 @@ use bmz_core::clear::{ClearType, GaugeType};
 use bmz_core::input::InputDeviceKind;
 use bmz_gameplay::result::PlayResult;
 use bmz_gameplay::score::ScoreState;
+use bmz_render::snapshot::{DisplayJudgeCounts, FastSlowJudgeCounts};
 use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
@@ -123,6 +124,8 @@ pub struct BestScoreSummary {
     pub bp: u32,
     pub cb: u32,
     pub max_combo: u32,
+    pub judge_counts: DisplayJudgeCounts,
+    pub fast_slow_counts: FastSlowJudgeCounts,
     pub play_count: u32,
     pub clear_count: u32,
     pub device_type: InputDeviceKind,
@@ -386,6 +389,18 @@ impl ScoreDatabase {
                 bp,
                 cb,
                 max_combo,
+                fast_pgreat,
+                slow_pgreat,
+                fast_great,
+                slow_great,
+                fast_good,
+                slow_good,
+                fast_bad,
+                slow_bad,
+                fast_poor,
+                slow_poor,
+                fast_empty_poor,
+                slow_empty_poor,
                 play_count,
                 clear_count,
                 device_type,
@@ -674,11 +689,33 @@ fn best_score_summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Best
         bp: row.get(6)?,
         cb: row.get(7)?,
         max_combo: row.get(8)?,
-        play_count: row.get(9)?,
-        clear_count: row.get(10)?,
-        device_type: device_type_from_row(row, 11)?,
-        played_at: row.get(12)?,
-        replay_path: row.get(13)?,
+        judge_counts: DisplayJudgeCounts {
+            pgreat: row.get::<_, u32>(9)? + row.get::<_, u32>(10)?,
+            great: row.get::<_, u32>(11)? + row.get::<_, u32>(12)?,
+            good: row.get::<_, u32>(13)? + row.get::<_, u32>(14)?,
+            bad: row.get::<_, u32>(15)? + row.get::<_, u32>(16)?,
+            poor: row.get::<_, u32>(17)? + row.get::<_, u32>(18)?,
+            empty_poor: row.get::<_, u32>(19)? + row.get::<_, u32>(20)?,
+        },
+        fast_slow_counts: FastSlowJudgeCounts {
+            fast_pgreat: row.get(9)?,
+            slow_pgreat: row.get(10)?,
+            fast_great: row.get(11)?,
+            slow_great: row.get(12)?,
+            fast_good: row.get(13)?,
+            slow_good: row.get(14)?,
+            fast_bad: row.get(15)?,
+            slow_bad: row.get(16)?,
+            fast_poor: row.get(17)?,
+            slow_poor: row.get(18)?,
+            fast_empty_poor: row.get(19)?,
+            slow_empty_poor: row.get(20)?,
+        },
+        play_count: row.get(21)?,
+        clear_count: row.get(22)?,
+        device_type: device_type_from_row(row, 23)?,
+        played_at: row.get(24)?,
+        replay_path: row.get(25)?,
     })
 }
 
@@ -1392,6 +1429,8 @@ mod tests {
         assert_eq!(best.cb, 2);
 
         let mut lower_cb = record(20, ClearType::Normal);
+        lower_cb.score.judges.fast_great = 6;
+        lower_cb.score.judges.slow_good = 5;
         lower_cb.score.judges.fast_bad = 1;
         lower_cb.score.judges.fast_empty_poor = 3;
         db.insert_score(&lower_cb).unwrap();
@@ -1399,6 +1438,14 @@ mod tests {
         let best = db.best_scores_for_charts(&[key([7; 32])]).unwrap().pop().unwrap();
         assert_eq!(best.bp, 4);
         assert_eq!(best.cb, 1);
+        assert_eq!(best.judge_counts.pgreat, 10);
+        assert_eq!(best.judge_counts.great, 6);
+        assert_eq!(best.judge_counts.good, 5);
+        assert_eq!(best.judge_counts.bad, 1);
+        assert_eq!(best.judge_counts.empty_poor, 3);
+        assert_eq!(best.fast_slow_counts.fast_great, 6);
+        assert_eq!(best.fast_slow_counts.slow_good, 5);
+        assert_eq!(best.fast_slow_counts.fast_empty_poor, 3);
         assert_eq!(best.play_count, 4);
         assert_eq!(best.clear_count, 4);
     }

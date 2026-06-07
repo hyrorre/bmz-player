@@ -3284,8 +3284,11 @@ impl SkinDocument {
             select_clear_count: selected_row.map(|row| row.clear_count).unwrap_or(0),
             select_bp: selected_row.and_then(|row| row.bp),
             select_cb: selected_row.and_then(|row| row.cb),
+            judge_counts: selected_row.map(|row| row.judge_counts).unwrap_or_default(),
+            fast_slow_counts: selected_row.and_then(|row| row.fast_slow_counts),
             max_combo: selected_row.and_then(|row| row.max_combo).unwrap_or(0),
             total_notes: selected_row.map(|row| row.total_notes).unwrap_or(0),
+            past_notes: selected_row.map(|row| row.total_notes).unwrap_or(0),
             gauge: selected_row.and_then(|row| row.gauge_value).unwrap_or(0.0),
             gauge_auto_shift: snapshot.gauge_auto_shift != "OFF",
             ex_score: selected_row.and_then(|row| row.ex_score).unwrap_or(0),
@@ -7624,16 +7627,38 @@ fn fast_slow_ratio_fast(state: SkinDrawState) -> f32 {
     let Some(counts) = state.fast_slow_counts else {
         return 0.0;
     };
-    let total = counts.fast_total() + counts.slow_total();
-    if total == 0 { 0.0 } else { counts.fast_total() as f32 / total as f32 }
+    let fast = fast_slow_ratio_fast_total(counts);
+    let slow = fast_slow_ratio_slow_total(counts);
+    let total = fast + slow;
+    if total == 0 { 0.0 } else { fast as f32 / total as f32 }
 }
 
 fn fast_slow_ratio_slow(state: SkinDrawState) -> f32 {
     let Some(counts) = state.fast_slow_counts else {
         return 0.0;
     };
-    let total = counts.fast_total() + counts.slow_total();
-    if total == 0 { 0.0 } else { counts.slow_total() as f32 / total as f32 }
+    let fast = fast_slow_ratio_fast_total(counts);
+    let slow = fast_slow_ratio_slow_total(counts);
+    let total = fast + slow;
+    if total == 0 { 0.0 } else { slow as f32 / total as f32 }
+}
+
+fn fast_slow_ratio_fast_total(counts: crate::snapshot::FastSlowJudgeCounts) -> u32 {
+    counts.fast_pgreat
+        + counts.fast_great
+        + counts.fast_good
+        + counts.fast_bad
+        + counts.fast_poor
+        + counts.fast_empty_poor
+}
+
+fn fast_slow_ratio_slow_total(counts: crate::snapshot::FastSlowJudgeCounts) -> u32 {
+    counts.slow_pgreat
+        + counts.slow_great
+        + counts.slow_good
+        + counts.slow_bad
+        + counts.slow_poor
+        + counts.slow_empty_poor
 }
 
 fn skin_frame_expr_value(expr: SkinFrameExpr, state: SkinDrawState) -> Option<i32> {
@@ -17961,6 +17986,49 @@ mod tests {
         };
         let v = graph_value(147, state);
         assert!((v - (418.0 / 1188.0)).abs() < 1e-5, "select ex rate: got {v}");
+    }
+
+    #[test]
+    fn select_state_exposes_best_judge_detail_counts() {
+        let document: SkinDocument = serde_json::from_str(r#"{ "w": 1280, "h": 720 }"#).unwrap();
+        let row = SelectRowSnapshot {
+            index: 0,
+            total_notes: 100,
+            judge_counts: crate::snapshot::DisplayJudgeCounts {
+                pgreat: 20,
+                great: 30,
+                good: 10,
+                bad: 5,
+                poor: 2,
+                empty_poor: 1,
+            },
+            fast_slow_counts: Some(crate::snapshot::FastSlowJudgeCounts {
+                fast_pgreat: 2,
+                slow_pgreat: 3,
+                fast_great: 7,
+                slow_good: 4,
+                fast_bad: 3,
+                slow_empty_poor: 2,
+                ..Default::default()
+            }),
+            ..SelectRowSnapshot::default()
+        };
+        let snapshot =
+            SelectSnapshot { selected_index: 0, rows: vec![row], ..SelectSnapshot::default() };
+
+        let (state, _) = document.select_draw_state(&snapshot, None);
+
+        assert_eq!(skin_state_number(110, state), Some(20));
+        assert_eq!(skin_state_number(111, state), Some(30));
+        assert_eq!(skin_state_number(112, state), Some(10));
+        assert_eq!(skin_state_number(113, state), Some(5));
+        assert_eq!(skin_state_number(426, state), Some(2));
+        assert_eq!(skin_state_number(412, state), Some(7));
+        assert_eq!(skin_state_number(422, state), Some(2));
+        assert!((graph_value(140, state) - 0.2).abs() < 1e-5);
+        assert!((graph_value(141, state) - 0.3).abs() < 1e-5);
+        assert!((graph_value(148, state) - (12.0 / 21.0)).abs() < 1e-5);
+        assert!((graph_value(149, state) - (9.0 / 21.0)).abs() < 1e-5);
     }
 
     #[test]
