@@ -175,8 +175,10 @@ fn cpal_output_config(config: &AudioConfig) -> Result<CpalOutputConfig> {
     let host = cpal_host_for_backend(&config.backend)?;
     let output_device_name = cpal_output_device_name(config);
     let buffer_size = cpal_buffer_size(config);
+    // ペア番号(0=1-2ch, 1=3-4ch …)をインターリーブ先頭チャンネル位置へ変換する。
+    let channel_offset = config.output_channel_pair.saturating_mul(2);
 
-    Ok(CpalOutputConfig { host, output_device_name, buffer_size })
+    Ok(CpalOutputConfig { host, output_device_name, buffer_size, channel_offset })
 }
 
 /// バッファサイズモードが `Fixed` のときだけフレーム数を指定する。`Auto` は

@@ -1145,6 +1145,20 @@ fn build_settings_panel(
                                 }
                             });
                     }
+                    egui::ComboBox::from_label("出力チャンネル")
+                        .selected_text(audio_channel_pair_label(config.audio.output_channel_pair))
+                        .show_ui(ui, |ui| {
+                            for pair in 0u32..6 {
+                                ui.selectable_value(
+                                    &mut config.audio.output_channel_pair,
+                                    pair,
+                                    audio_channel_pair_label(pair),
+                                );
+                            }
+                        });
+                    ui.label(
+                        "出力チャンネルは多ch ASIO デバイス向け。デバイスのch数を超える指定は先頭ペアに戻ります。",
+                    );
                     ui.label(
                         "ASIO ではドライバ側のバッファ設定が優先される場合があります。",
                     );
@@ -1389,6 +1403,12 @@ fn audio_buffer_size_mode_label(mode: &AudioBufferSizeMode) -> &'static str {
         AudioBufferSizeMode::Auto => "自動",
         AudioBufferSizeMode::Fixed => "固定",
     }
+}
+
+/// 出力チャンネルペア(0 始まり)を "1-2ch" のような表示文字列にする。
+fn audio_channel_pair_label(pair: u32) -> String {
+    let left = pair * 2 + 1;
+    format!("{}-{}ch", left, left + 1)
 }
 
 fn window_mode_label(mode: &WindowMode) -> &'static str {

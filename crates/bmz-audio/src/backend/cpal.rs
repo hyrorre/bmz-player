@@ -23,6 +23,10 @@ pub struct CpalOutputConfig {
     /// 1 コールバックあたりのバッファフレーム数。`None` はデバイス既定(自動)。
     /// `Some(n)` でも端末がサポートする範囲にクランプされる。
     pub buffer_size: Option<u32>,
+    /// ステレオを書き込む先頭チャンネル(0 始まりのインターリーブ位置)。
+    /// 0 = 1-2ch, 2 = 3-4ch, 4 = 5-6ch …。デバイスのチャンネル数を超える場合は
+    /// ストリーム生成時に有効な範囲へクランプされる。
+    pub channel_offset: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,12 +123,14 @@ impl CpalBackend {
         };
         let device = output_device(&host, config.output_device_name.as_deref())?;
         let requested_buffer_size = config.buffer_size;
+        let requested_channel_offset = config.channel_offset;
         let supported_config = device.default_output_config()?;
         let sample_format = supported_config.sample_format();
         let supported_buffer_size = *supported_config.buffer_size();
         let mut config = supported_config.config();
         config.buffer_size = resolve_buffer_size(requested_buffer_size, &supported_buffer_size);
         let sample_rate = config.sample_rate.0;
+        let channel_offset = resolve_channel_offset(requested_channel_offset, config.channels as usize);
 
         // ASIO のバッファ問い合わせ結果を可視化する。ドライバが報告する
         // サポート範囲(`supported_buffer_size`)と、要求値・実際にストリームへ
@@ -139,6 +145,8 @@ impl CpalBackend {
             supported_buffer_size = ?supported_buffer_size,
             requested_buffer_size = ?requested_buffer_size,
             resolved_buffer_size = ?config.buffer_size,
+            requested_channel_offset,
+            channel_offset,
             "opening cpal output stream",
         );
 
@@ -149,30 +157,35 @@ impl CpalBackend {
             SampleFormat::F32 => build_output_stream::<f32>(
                 &device,
                 &config,
+                channel_offset,
                 Arc::clone(&sources),
                 Arc::clone(&current_frame),
             )?,
             SampleFormat::I16 => build_output_stream::<i16>(
                 &device,
                 &config,
+                channel_offset,
                 Arc::clone(&sources),
                 Arc::clone(&current_frame),
             )?,
             SampleFormat::U16 => build_output_stream::<u16>(
                 &device,
                 &config,
+                channel_offset,
                 Arc::clone(&sources),
                 Arc::clone(&current_frame),
             )?,
             SampleFormat::I32 => build_output_stream::<i32>(
                 &device,
                 &config,
+                channel_offset,
                 Arc::clone(&sources),
                 Arc::clone(&current_frame),
             )?,
             _ => build_output_stream::<f32>(
                 &device,
                 &config,
+                channel_offset,
                 Arc::clone(&sources),
                 Arc::clone(&current_frame),
             )?,
@@ -261,6 +274,17 @@ fn resolve_buffer_size(
             ::cpal::BufferSize::Fixed(frames)
         }
     }
+}
+
+/// ステレオを書き込む先頭チャンネル位置を、デバイスのチャンネル数に収まるよう
+/// クランプする。ステレオ(2ch)が収まらない場合は 0(先頭ペア)へフォールバック。
+fn resolve_channel_offset(requested: u32, channels: usize) -> usize {
+    if channels < 2 {
+        return 0;
+    }
+    // ステレオペアが収まる最大の先頭インデックス。
+    let max_offset = channels - 2;
+    (requested as usize).min(max_offset)
 }
 
 fn output_device(
@@ -358,6 +382,7 @@ impl Drop for CpalOutputSource {
 fn build_output_stream<T>(
     device: &::cpal::Device,
     config: &StreamConfig,
+    channel_offset: usize,
     sources: SharedAudioSources,
     current_frame: Arc<AtomicU64>,
 ) -> Result<::cpal::Stream, ::cpal::BuildStreamError>
@@ -380,6 +405,7 @@ where
             render_output(
                 data,
                 channels,
+                channel_offset,
                 start_frame,
                 &sources,
                 &mut mix,
@@ -398,6 +424,7 @@ where
 fn render_output<T: OutputSample>(
     data: &mut [T],
     channels: usize,
+    channel_offset: usize,
     output_start_frame: u64,
     sources: &SharedAudioSources,
     mix: &mut Vec<f32>,
@@ -411,7 +438,7 @@ fn render_output<T: OutputSample>(
     let frames = data.len() / channels;
     mix_sources_stereo(output_start_frame, frames, sources, mix, source_scratch, source_engines);
 
-    write_interleaved_output(data, channels, mix);
+    write_interleaved_output(data, channels, channel_offset, mix);
 }
 
 fn mix_sources_stereo(
@@ -445,25 +472,33 @@ fn mix_sources_stereo(
     }
 }
 
-fn write_interleaved_output<T: OutputSample>(data: &mut [T], channels: usize, stereo: &[f32]) {
+fn write_interleaved_output<T: OutputSample>(
+    data: &mut [T],
+    channels: usize,
+    channel_offset: usize,
+    stereo: &[f32],
+) {
     if channels == 0 {
         return;
     }
 
+    // ステレオを書き込む先頭チャンネル。ペア(offset, offset+1)が収まらない場合は 0 へ。
+    let left_channel = if channels >= 2 && channel_offset + 1 < channels { channel_offset } else { 0 };
+    let silence = T::from_f32(0.0);
+
     for (frame_index, frame) in data.chunks_mut(channels).enumerate() {
         let left = stereo.get(frame_index * 2).copied().unwrap_or(0.0);
         let right = stereo.get(frame_index * 2 + 1).copied().unwrap_or(0.0);
-        match frame {
-            [mono] => *mono = T::from_f32((left + right) * 0.5),
-            [left_out, right_out, rest @ ..] => {
-                *left_out = T::from_f32(left);
-                *right_out = T::from_f32(right);
-                for sample in rest {
-                    *sample = T::from_f32(0.0);
-                }
-            }
-            [] => {}
+        if channels == 1 {
+            frame[0] = T::from_f32((left + right) * 0.5);
+            continue;
         }
+        // 対象ペア以外は無音にして、選択チャンネルへ L/R を書く。
+        for sample in frame.iter_mut() {
+            *sample = silence;
+        }
+        frame[left_channel] = T::from_f32(left);
+        frame[left_channel + 1] = T::from_f32(right);
     }
 }
 
@@ -503,7 +538,7 @@ mod tests {
     fn write_interleaved_output_downmixes_mono() {
         let mut output = vec![0.0_f32; 2];
 
-        write_interleaved_output(&mut output, 1, &[0.25, 0.75, -0.5, 0.25]);
+        write_interleaved_output(&mut output, 1, 0, &[0.25, 0.75, -0.5, 0.25]);
 
         assert_eq!(output, vec![0.5, -0.125]);
     }
@@ -512,9 +547,40 @@ mod tests {
     fn write_interleaved_output_fills_extra_channels_with_silence() {
         let mut output = vec![1.0_f32; 6];
 
-        write_interleaved_output(&mut output, 3, &[0.25, 0.75, -0.5, 0.25]);
+        write_interleaved_output(&mut output, 3, 0, &[0.25, 0.75, -0.5, 0.25]);
 
         assert_eq!(output, vec![0.25, 0.75, 0.0, -0.5, 0.25, 0.0]);
+    }
+
+    #[test]
+    fn write_interleaved_output_routes_to_selected_channel_pair() {
+        // 4ch 出力で 3-4ch(offset 2)へルーティングする。
+        let mut output = vec![1.0_f32; 8];
+
+        write_interleaved_output(&mut output, 4, 2, &[0.25, 0.75, -0.5, 0.25]);
+
+        assert_eq!(output, vec![0.0, 0.0, 0.25, 0.75, 0.0, 0.0, -0.5, 0.25]);
+    }
+
+    #[test]
+    fn write_interleaved_output_falls_back_when_pair_does_not_fit() {
+        // offset がデバイスチャンネル数に収まらない場合は先頭ペアへ。
+        let mut output = vec![1.0_f32; 4];
+
+        write_interleaved_output(&mut output, 2, 5, &[0.25, 0.75, -0.5, 0.25]);
+
+        assert_eq!(output, vec![0.25, 0.75, -0.5, 0.25]);
+    }
+
+    #[test]
+    fn resolve_channel_offset_clamps_to_last_pair() {
+        assert_eq!(resolve_channel_offset(0, 12), 0);
+        assert_eq!(resolve_channel_offset(2, 12), 2);
+        assert_eq!(resolve_channel_offset(10, 12), 10);
+        assert_eq!(resolve_channel_offset(11, 12), 10);
+        assert_eq!(resolve_channel_offset(99, 12), 10);
+        assert_eq!(resolve_channel_offset(4, 2), 0);
+        assert_eq!(resolve_channel_offset(4, 1), 0);
     }
 
     #[test]
@@ -529,6 +595,7 @@ mod tests {
         render_output(
             &mut output,
             2,
+            0,
             0,
             &sources,
             &mut mix,

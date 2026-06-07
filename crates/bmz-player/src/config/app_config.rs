@@ -43,6 +43,11 @@ pub struct AudioConfig {
     pub buffer_size: u32,
     pub exclusive_mode: bool,
     pub asio_driver: String,
+    /// 出力するステレオチャンネルペア(0 始まり)。0 = 1-2ch, 1 = 3-4ch, 2 = 5-6ch …。
+    /// Babyface など多チャンネル出力デバイスで出力先ペアを選ぶ。デバイスの
+    /// チャンネル数を超える指定はストリーム生成時にクランプされる。
+    #[serde(default)]
+    pub output_channel_pair: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -165,6 +170,7 @@ impl Default for AppConfig {
                 buffer_size: 256,
                 exclusive_mode: false,
                 asio_driver: String::new(),
+                output_channel_pair: 0,
             },
             video: VideoConfig {
                 mode: WindowMode::Windowed,
