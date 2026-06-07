@@ -29,12 +29,31 @@ struct HeaderJson {
     symbol: String,
     #[serde(default)]
     data_url: DataUrl,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_level_order")]
     level_order: Vec<String>,
     /// Embedded course definitions in beatoraja table format.
     /// Stored as raw JSON to reuse `parse_beatoraja_course_json`.
     #[serde(default)]
     course: Option<serde_json::Value>,
+}
+
+/// Deserializes `level_order`, tolerating entries that are numbers or strings.
+///
+/// Some tables (e.g. genocide insane) write `level_order` as a mix of integers
+/// and strings, e.g. `[1, 2, ..., "???"]`.
+fn deserialize_level_order<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let values: Vec<serde_json::Value> = Vec::deserialize(deserializer)?;
+    Ok(values
+        .into_iter()
+        .filter_map(|v| match v {
+            serde_json::Value::String(s) => Some(s),
+            serde_json::Value::Number(n) => Some(n.to_string()),
+            _ => None,
+        })
+        .collect())
 }
 
 #[derive(Deserialize, Default)]
@@ -90,7 +109,8 @@ pub async fn fetch_difficulty_table(
         resolve_url(source_url, &rel)
     };
 
-    let header: HeaderJson = client.get(&head_url).send().await?.json().await?;
+    let header_body = client.get(&head_url).send().await?.text().await?;
+    let header: HeaderJson = serde_json::from_str(strip_bom(&header_body))?;
 
     let data_urls: Vec<String> =
         header.data_url.into_vec().into_iter().map(|u| resolve_url(&head_url, &u)).collect();
@@ -103,7 +123,8 @@ pub async fn fetch_difficulty_table(
     let mut level_order = header.level_order;
 
     for data_url in &data_urls {
-        let data: Vec<DataEntry> = client.get(data_url).send().await?.json().await?;
+        let data_body = client.get(data_url).send().await?.text().await?;
+        let data: Vec<DataEntry> = serde_json::from_str(strip_bom(&data_body))?;
 
         for entry in data {
             let md5 = entry.md5.unwrap_or_default().to_lowercase();
@@ -192,6 +213,14 @@ pub fn parse_courses_from_header_for_test(
     parse_courses_from_header(source_url, course_json)
 }
 
+/// Strips a leading UTF-8 BOM (U+FEFF) if present.
+///
+/// Some tables (e.g. genocide insane) serve their header/data JSON with a BOM,
+/// which `serde_json` refuses to parse.
+fn strip_bom(s: &str) -> &str {
+    s.strip_prefix('\u{feff}').unwrap_or(s)
+}
+
 fn find_bmstable_meta(html: &str) -> Option<String> {
     for line in html.lines() {
         let lower = line.to_lowercase();
@@ -238,6 +267,29 @@ mod tests {
     #[test]
     fn find_bmstable_meta_returns_none_when_absent() {
         assert_eq!(find_bmstable_meta("<html></html>"), None);
+    }
+
+    #[test]
+    fn strip_bom_removes_leading_bom() {
+        assert_eq!(strip_bom("\u{feff}{\"a\":1}"), "{\"a\":1}");
+        assert_eq!(strip_bom("{\"a\":1}"), "{\"a\":1}");
+    }
+
+    #[test]
+    fn parse_header_json_with_bom() {
+        let body = "\u{feff}{\"name\":\"X\",\"symbol\":\"x\",\"data_url\":\"score.json\"}";
+        let header: HeaderJson =
+            serde_json::from_str(strip_bom(body)).expect("BOM-prefixed header should parse");
+        assert_eq!(header.name, "X");
+    }
+
+    #[test]
+    fn parse_header_with_mixed_level_order() {
+        let body = r#"{"name":"X","symbol":"x","data_url":"score.json",
+            "level_order":[1,2,3,"???"]}"#;
+        let header: HeaderJson =
+            serde_json::from_str(body).expect("mixed numeric/string level_order should parse");
+        assert_eq!(header.level_order, vec!["1", "2", "3", "???"]);
     }
 
     #[test]
