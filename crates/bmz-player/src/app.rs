@@ -382,6 +382,7 @@ struct ActiveSkinVideoSource {
     path: PathBuf,
     decoder: Option<VideoBgaDecoder>,
     last_pts: Option<i64>,
+    loop_start_us: i64,
     active: bool,
     failed: bool,
 }
@@ -5604,6 +5605,7 @@ impl WinitApp {
                     path,
                     decoder: None,
                     last_pts: None,
+                    loop_start_us: 0,
                     active,
                     failed: false,
                 });
@@ -6278,7 +6280,8 @@ impl WinitApp {
             let Some(decoder) = source.decoder.as_mut() else {
                 continue;
             };
-            if let Some(frame) = decoder.poll_frame(elapsed_us)
+            let video_offset_us = elapsed_us.saturating_sub(source.loop_start_us);
+            if let Some(frame) = decoder.poll_frame(video_offset_us)
                 && source.last_pts != Some(frame.pts_us)
             {
                 let pts = frame.pts_us;
@@ -6301,6 +6304,11 @@ impl WinitApp {
                         );
                     }
                 }
+            }
+            if source.decoder.as_ref().is_some_and(VideoBgaDecoder::is_finished) {
+                source.decoder = None;
+                source.last_pts = None;
+                source.loop_start_us = elapsed_us;
             }
         }
     }
@@ -6797,6 +6805,7 @@ fn skin_video_sources_from_decoded(decoded: &DecodedSkin) -> Vec<ActiveSkinVideo
             path: source.path.clone(),
             decoder: None,
             last_pts: None,
+            loop_start_us: 0,
             active: skin_video_source_is_enabled(&decoded.document, &source.source_id),
             failed: false,
         })

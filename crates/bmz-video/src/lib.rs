@@ -16,6 +16,7 @@ pub struct VideoBgaDecoder {
     receiver: std::sync::mpsc::Receiver<DecodedFrame>,
     pending: VecDeque<DecodedFrame>,
     current: Option<DecodedFrame>,
+    finished: bool,
 }
 
 impl VideoBgaDecoder {
@@ -31,14 +32,21 @@ impl VideoBgaDecoder {
             }
         })?;
 
-        Ok(Self { receiver, pending: VecDeque::new(), current: None })
+        Ok(Self { receiver, pending: VecDeque::new(), current: None, finished: false })
     }
 
     /// チャンネルをdrainして `video_offset_us` 以下の最新フレームを返す。
     pub fn poll_frame(&mut self, video_offset_us: i64) -> Option<&DecodedFrame> {
         // チャンネルから利用可能なフレームをすべて受信
-        while let Ok(frame) = self.receiver.try_recv() {
-            self.pending.push_back(frame);
+        loop {
+            match self.receiver.try_recv() {
+                Ok(frame) => self.pending.push_back(frame),
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.finished = true;
+                    break;
+                }
+            }
         }
 
         // video_offset_us 以下のフレームのうち最新のものを current に設定
@@ -51,6 +59,10 @@ impl VideoBgaDecoder {
         }
 
         self.current.as_ref()
+    }
+
+    pub fn is_finished(&self) -> bool {
+        self.finished && self.pending.is_empty()
     }
 }
 
