@@ -69,10 +69,10 @@ impl SettingsBindings {
         for key in ["ArrowLeft", "Escape"] {
             back.insert(key.to_string());
         }
-        for key in ["ArrowDown", "DPadDown", "ScratchDown"] {
+        for key in ["ArrowUp", "DPadDown", "ScratchDown"] {
             increase.insert(key.to_string());
         }
-        for key in ["ArrowUp", "DPadUp", "ScratchUp"] {
+        for key in ["ArrowDown", "DPadUp", "ScratchUp"] {
             decrease.insert(key.to_string());
         }
         for key in ["DPadRight", "Button1"] {
@@ -383,6 +383,17 @@ mod tests {
         assert!(bindings.is_back("S"));
         assert!(bindings.is_back("D"));
         assert!(bindings.is_increase("AxisLeftX+") || bindings.is_increase("LShift"));
+    }
+
+    #[test]
+    fn cursor_up_increases_and_down_decreases_settings_values() {
+        let profile = ProfileConfig::new_default("default", "Default", 0);
+        let bindings = SettingsBindings::from_profile(&profile.input);
+
+        assert!(bindings.is_increase("ArrowUp"));
+        assert!(!bindings.is_decrease("ArrowUp"));
+        assert!(bindings.is_decrease("ArrowDown"));
+        assert!(!bindings.is_increase("ArrowDown"));
     }
 
     #[test]

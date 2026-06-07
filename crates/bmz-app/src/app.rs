@@ -2537,7 +2537,11 @@ impl WinitApp {
                 }
                 return;
             }
-            if event.state == ElementState::Released || event.repeat {
+            if !should_route_settings_key_event(
+                event.state,
+                event.repeat,
+                self.settings_edit.is_some(),
+            ) {
                 return;
             }
             if let Some(control) = physical_key_name(event.physical_key) {
@@ -6359,6 +6363,14 @@ fn should_play_select_bgm_on_enter(select_preview_playing: bool) -> bool {
     !select_preview_playing
 }
 
+fn should_route_settings_key_event(
+    state: ElementState,
+    repeat: bool,
+    settings_editing: bool,
+) -> bool {
+    state == ElementState::Pressed && (settings_editing || !repeat)
+}
+
 fn system_sound_volume_from_mix(
     mix: &crate::config::profile_config::AudioMixConfig,
     sound_type: crate::system_sound::SoundType,
@@ -9648,6 +9660,14 @@ mod tests {
             select_action(PhysicalKey::Code(KeyCode::KeyA), ElementState::Pressed, false, &keys),
             None
         );
+    }
+
+    #[test]
+    fn settings_key_repeat_is_accepted_only_while_editing_value() {
+        assert!(should_route_settings_key_event(ElementState::Pressed, false, false));
+        assert!(!should_route_settings_key_event(ElementState::Pressed, true, false));
+        assert!(should_route_settings_key_event(ElementState::Pressed, true, true));
+        assert!(!should_route_settings_key_event(ElementState::Released, true, true));
     }
 
     #[test]
