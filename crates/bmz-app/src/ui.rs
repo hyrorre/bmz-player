@@ -1198,7 +1198,7 @@ fn build_settings_panel(
                             );
                         });
                     ui.label(
-                        "VSync / ウィンドウモードは即時反映。幅 / 高さ / 目標 FPS / レンダリングバックエンドは次回起動時に反映されます。",
+                        "VSync / ウィンドウモード / 目標 FPS は即時反映。幅 / 高さ / レンダリングバックエンドは次回起動時に反映されます。",
                     );
                 });
 
@@ -1453,6 +1453,7 @@ fn build_profile_settings_panel(
                     volume_slider(ui, &mut profile.audio_mix.preview_volume, "選曲プレビュー");
                     volume_slider(ui, &mut profile.audio_mix.system_bgm_volume, "システム BGM");
                     volume_slider(ui, &mut profile.audio_mix.system_se_volume, "システム SE");
+                    ui.label("音量は即時反映されます。");
                 });
 
                 egui::CollapsingHeader::new("判定").show(ui, |ui| {

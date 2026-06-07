@@ -29,6 +29,13 @@ impl AudioEngine {
         self.mixer.voices.retain(|voice| voice.sound.sound_id != id);
     }
 
+    /// 指定 sound_id のスケジュール済み音および再生中 voice の音量を更新する。
+    pub fn set_sound_volume(&mut self, id: bmz_core::ids::SoundId, volume: f32) {
+        let volume = volume.clamp(0.0, 1.0);
+        self.queue.set_volume_for_sound(id, volume);
+        self.mixer.set_volume_for_sound(id, volume);
+    }
+
     /// `start_frame = 0`(=即時再生)で sound_id を 1 ショット再生する。
     /// 必要なら `loop_playback = true` でループ再生も可能。
     pub fn play_now(&mut self, sound_id: bmz_core::ids::SoundId, volume: f32, loop_playback: bool) {
@@ -107,6 +114,37 @@ mod tests {
 
         // stop 後はキューも voice も空。
         assert!(engine.is_idle());
+    }
+
+    #[test]
+    fn set_sound_volume_updates_queue_and_active_voice() {
+        let mut engine = AudioEngine::default();
+        engine.insert_sample(
+            SoundId(1),
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0, 1.0] },
+        );
+        engine.schedule(ScheduledSound {
+            start_frame: 2,
+            sound_id: SoundId(1),
+            volume: 1.0,
+            pan: 0.0,
+            loop_playback: false,
+        });
+        engine.set_sound_volume(SoundId(1), 0.25);
+
+        let mut output = vec![0.0; 8];
+        engine.render_stereo(0, &mut output);
+
+        assert_eq!(output, vec![0.0, 0.0, 0.0, 0.0, 0.25, 0.25, 0.25, 0.25]);
+
+        engine.play_now(SoundId(1), 1.0, true);
+        let mut output = vec![0.0; 2];
+        engine.render_stereo(4, &mut output);
+        engine.set_sound_volume(SoundId(1), 0.5);
+        let mut output = vec![0.0; 2];
+        engine.render_stereo(5, &mut output);
+
+        assert_eq!(output, vec![0.5, 0.5]);
     }
 
     #[test]

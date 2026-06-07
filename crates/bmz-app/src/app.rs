@@ -1970,7 +1970,7 @@ impl WinitApp {
         };
         let entry_id = session.entry_id;
         session.restore(&mut self.boot.profile_config);
-        self.sync_select_play_options_from_profile_if_needed(entry_id);
+        self.sync_select_settings_from_profile_if_needed(entry_id);
         self.play_system_sound(crate::system_sound::SoundType::FolderClose);
         tracing::info!(?entry_id, "settings edit cancelled");
     }
@@ -1984,14 +1984,14 @@ impl WinitApp {
         match save_profile_config(&self.boot.profile_paths.profile_toml, &self.boot.profile_config)
         {
             Ok(()) => {
-                self.sync_select_play_options_from_profile_if_needed(entry_id);
+                self.sync_select_settings_from_profile_if_needed(entry_id);
                 self.play_system_sound(crate::system_sound::SoundType::OptionChange);
                 tracing::info!(?entry_id, "settings edit saved");
             }
             Err(error) => {
                 tracing::error!(%error, ?entry_id, "failed to save settings");
                 session.restore(&mut self.boot.profile_config);
-                self.sync_select_play_options_from_profile_if_needed(entry_id);
+                self.sync_select_settings_from_profile_if_needed(entry_id);
             }
         }
     }
@@ -2107,8 +2107,15 @@ impl WinitApp {
         let entry_id = session.entry_id;
         let delta = direction * crate::config::settings_registry::settings_adjust_step(entry_id);
         if adjust_settings_draft(&mut self.boot.profile_config, session, delta) {
-            self.sync_select_play_options_from_profile_if_needed(entry_id);
+            self.sync_select_settings_from_profile_if_needed(entry_id);
             self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+        }
+    }
+
+    fn sync_select_settings_from_profile_if_needed(&mut self, entry_id: SettingsEntryId) {
+        self.sync_select_play_options_from_profile_if_needed(entry_id);
+        if SettingsEntryId::VOLUME_ENTRIES.contains(&entry_id) {
+            self.sync_realtime_profile_settings();
         }
     }
 
@@ -2948,14 +2955,17 @@ impl WinitApp {
         match hit.slider_type {
             17 if mix.master_volume != value => {
                 mix.master_volume = value;
+                self.sync_realtime_profile_settings();
                 tracing::info!(value, "select skin master volume changed");
             }
             18 if mix.key_volume != value => {
                 mix.key_volume = value;
+                self.sync_realtime_profile_settings();
                 tracing::info!(value, "select skin key volume changed");
             }
             19 if mix.bgm_volume != value => {
                 mix.bgm_volume = value;
+                self.sync_realtime_profile_settings();
                 tracing::info!(value, "select skin bgm volume changed");
             }
             17..=19 => {}
@@ -5842,7 +5852,7 @@ impl WinitApp {
             practice_panel_ctx.as_mut(),
         );
         self.renderer.set_egui_frame(output.frame);
-        self.sync_active_play_realtime_profile_settings();
+        self.sync_realtime_profile_settings();
         if output.practice_leave {
             self.leave_practice();
             return;
@@ -5898,13 +5908,25 @@ impl WinitApp {
         }
     }
 
+    fn sync_realtime_profile_settings(&mut self) {
+        self.sync_active_play_realtime_profile_settings();
+        if let Some(preview) = &self.select_preview {
+            preview.set_volume(self.select_preview_volume());
+        }
+        if let Some(manager) = &self.system_sound {
+            let mix = self.boot.profile_config.audio_mix.clone();
+            manager.refresh_volumes(|sound_type| system_sound_volume_from_mix(&mix, sound_type));
+        }
+    }
+
     fn sync_active_play_realtime_profile_settings(&mut self) {
-        let Some(active_play) = &mut self.active_play else {
-            return;
-        };
-        let session = &mut active_play.running.session;
-        session.audio_mix = crate::config::play::audio_mix_from_profile(&self.boot.profile_config);
-        session.offsets = crate::config::play::play_offsets_from_profile(&self.boot.profile_config);
+        if let Some(active_play) = &mut self.active_play {
+            let session = &mut active_play.running.session;
+            session.audio_mix =
+                crate::config::play::audio_mix_from_profile(&self.boot.profile_config);
+            session.offsets =
+                crate::config::play::play_offsets_from_profile(&self.boot.profile_config);
+        }
     }
 
     fn play_skin_defs_for_path(&mut self, path: &str) -> SceneSkinDefs {
@@ -6303,12 +6325,10 @@ impl WinitApp {
     /// ボリュームは AudioEngine 側で 0.0..=1.0 にクランプされる。
     fn play_system_sound(&self, sound_type: crate::system_sound::SoundType) {
         if let Some(manager) = &self.system_sound {
-            let mix = &self.boot.profile_config.audio_mix;
-            let unit =
-                if sound_type.is_bgm() { mix.system_bgm_volume } else { mix.system_se_volume };
-            let volume = crate::config::play::volume_unit_to_f32(mix.master_volume)
-                * crate::config::play::volume_unit_to_f32(unit);
-            manager.play(sound_type, volume.clamp(0.0, 1.0));
+            manager.play(
+                sound_type,
+                system_sound_volume_from_mix(&self.boot.profile_config.audio_mix, sound_type),
+            );
         }
     }
 
@@ -6337,6 +6357,16 @@ impl WinitApp {
 
 fn should_play_select_bgm_on_enter(select_preview_playing: bool) -> bool {
     !select_preview_playing
+}
+
+fn system_sound_volume_from_mix(
+    mix: &crate::config::profile_config::AudioMixConfig,
+    sound_type: crate::system_sound::SoundType,
+) -> f32 {
+    let unit = if sound_type.is_bgm() { mix.system_bgm_volume } else { mix.system_se_volume };
+    let volume = crate::config::play::volume_unit_to_f32(mix.master_volume)
+        * crate::config::play::volume_unit_to_f32(unit);
+    volume.clamp(0.0, 1.0)
 }
 
 fn window_attributes_from_config(

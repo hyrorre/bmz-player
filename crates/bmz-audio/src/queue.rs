@@ -49,6 +49,16 @@ impl ScheduledSoundQueue {
     pub fn retain(&mut self, mut keep: impl FnMut(&ScheduledSound) -> bool) {
         self.sounds.retain(|sound| keep(sound));
     }
+
+    /// 指定 sound_id の再生待ち音量を更新する。ループ BGM や preview の
+    /// 設定変更を、次に mixer へ渡る前の queue に反映するために使う。
+    pub fn set_volume_for_sound(&mut self, id: SoundId, volume: f32) {
+        for sound in &mut self.sounds {
+            if sound.sound_id == id {
+                sound.volume = volume;
+            }
+        }
+    }
 }
 
 impl AudioScheduler for ScheduledSoundQueue {

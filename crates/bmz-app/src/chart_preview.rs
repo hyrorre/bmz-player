@@ -21,6 +21,12 @@ impl SelectChartPreview {
         }
     }
 
+    pub fn set_volume(&self, volume: f32) {
+        if let Ok(mut engine) = self.engine.lock() {
+            engine.set_sound_volume(CHART_PREVIEW_SOUND_ID, volume);
+        }
+    }
+
     pub fn play_sample(&self, sample: DecodedSample, volume: f32) -> bool {
         let Ok(mut engine) = self.engine.lock() else {
             return false;
@@ -51,5 +57,26 @@ mod tests {
         let engine: SharedAudioEngine = Arc::new(Mutex::new(AudioEngine::default()));
         let preview = SelectChartPreview::new(engine);
         preview.stop();
+    }
+
+    #[test]
+    fn set_volume_updates_looping_preview_voice() {
+        let engine: SharedAudioEngine = Arc::new(Mutex::new(AudioEngine::default()));
+        let preview = SelectChartPreview::new(Arc::clone(&engine));
+        assert!(preview.play_sample(
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0, 1.0] },
+            1.0,
+        ));
+
+        {
+            let mut guard = engine.lock().unwrap();
+            let mut output = vec![0.0; 2];
+            guard.render_stereo(0, &mut output);
+        }
+        preview.set_volume(0.25);
+        let mut output = vec![0.0; 2];
+        engine.lock().unwrap().render_stereo(1, &mut output);
+
+        assert_eq!(output, vec![0.25, 0.25]);
     }
 }

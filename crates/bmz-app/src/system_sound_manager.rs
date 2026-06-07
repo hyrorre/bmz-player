@@ -100,6 +100,16 @@ impl SystemSoundManager {
         }
     }
 
+    /// 登録済み sound の再生待ち/再生中音量を、SoundType ごとの最新設定で更新する。
+    pub fn refresh_volumes(&self, mut volume_for: impl FnMut(SoundType) -> f32) {
+        let Ok(mut engine) = self.engine.lock() else {
+            return;
+        };
+        for (&sound_type, &id) in &self.id_map {
+            engine.set_sound_volume(id, volume_for(sound_type));
+        }
+    }
+
     /// 指定 SoundType を停止する。鳴っていなくても害は無い。
     pub fn stop(&self, sound_type: SoundType) {
         let Some(&id) = self.id_map.get(&sound_type) else {
@@ -176,6 +186,35 @@ mod tests {
             guard.render_stereo(8, &mut output);
             assert_eq!(guard.mixer.voices.len(), 1, "duplicate BGM play should not stack voices");
         }
+    }
+
+    #[test]
+    fn refresh_volumes_updates_active_bgm_voice() {
+        use bmz_audio::sample::DecodedSample;
+
+        let engine: SharedAudioEngine = Arc::new(Mutex::new(AudioEngine::default()));
+        let mut id_map = HashMap::new();
+        id_map.insert(SoundType::Select, SoundId(SYSTEM_SOUND_BASE));
+        {
+            let mut guard = engine.lock().unwrap();
+            guard.insert_sample(
+                SoundId(SYSTEM_SOUND_BASE),
+                DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0, 1.0] },
+            );
+        }
+        let manager = SystemSoundManager { engine: Arc::clone(&engine), id_map };
+        manager.play(SoundType::Select, 1.0);
+        {
+            let mut guard = engine.lock().unwrap();
+            let mut output = vec![0.0; 2];
+            guard.render_stereo(0, &mut output);
+        }
+
+        manager.refresh_volumes(|sound_type| if sound_type.is_bgm() { 0.25 } else { 1.0 });
+        let mut output = vec![0.0; 2];
+        engine.lock().unwrap().render_stereo(1, &mut output);
+
+        assert_eq!(output, vec![0.25, 0.25]);
     }
 
     #[test]

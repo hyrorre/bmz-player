@@ -29,6 +29,14 @@ impl MixerState {
             .extend(sounds.into_iter().map(|sound| ActiveVoice { sound, sample_position: 0.0 }));
     }
 
+    pub fn set_volume_for_sound(&mut self, id: bmz_core::ids::SoundId, volume: f32) {
+        for voice in &mut self.voices {
+            if voice.sound.sound_id == id {
+                voice.sound.volume = volume;
+            }
+        }
+    }
+
     pub fn mix_stereo(
         &mut self,
         sample_bank: &SampleBank,
