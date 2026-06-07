@@ -231,14 +231,33 @@ impl ResultGraphCollector {
             border: snapshot.gauge_border,
             gauge_type: snapshot.gauge_type,
         };
-        if let Some(last) = self.graph.gauge_points.last_mut()
-            && last.time_ms == point.time_ms
-        {
-            *last = point;
-            return;
+        let len = self.graph.gauge_points.len();
+        if len > 0 {
+            let last = self.graph.gauge_points[len - 1];
+            if last.time_ms == point.time_ms {
+                self.graph.gauge_points[len - 1] = point;
+                return;
+            }
+            if same_gauge_graph_state(last, point) {
+                let previous = len
+                    .checked_sub(2)
+                    .and_then(|index| self.graph.gauge_points.get(index).copied());
+                if previous.is_none_or(|previous| same_gauge_graph_state(previous, last)) {
+                    self.graph.gauge_points[len - 1] = point;
+                } else {
+                    self.graph.gauge_points.push(point);
+                }
+                return;
+            }
         }
         self.graph.gauge_points.push(point);
     }
+}
+
+fn same_gauge_graph_state(a: ResultGaugeGraphPoint, b: ResultGaugeGraphPoint) -> bool {
+    a.value.to_bits() == b.value.to_bits()
+        && a.border.to_bits() == b.border.to_bits()
+        && a.gauge_type == b.gauge_type
 }
 
 fn populate_result_note_graphs(
@@ -523,6 +542,38 @@ mod tests {
         assert_eq!(graph.judge_graph_density, vec![1, 3, 2]);
         assert_eq!(graph.bpm_graph_segments.len(), 1);
         assert_eq!(graph.hit_error_ring.index, 7);
+    }
+
+    #[test]
+    fn result_graph_collector_compresses_unchanged_gauge_points() {
+        fn record(collector: &mut ResultGraphCollector, time_us: i64, gauge: f32) {
+            collector.record_frame(&FrameOutput {
+                render_snapshot: RenderSnapshot {
+                    time: TimeUs(time_us),
+                    gauge,
+                    gauge_type: GaugeType::Normal as i32,
+                    gauge_border: 80.0,
+                    ..RenderSnapshot::default()
+                },
+                judgements: Vec::new(),
+                mine_hits: Vec::new(),
+                state: PlayState::Playing,
+            });
+        }
+
+        let mut collector = ResultGraphCollector::default();
+        record(&mut collector, 0, 20.0);
+        record(&mut collector, 16_000, 20.0);
+        record(&mut collector, 32_000, 35.0);
+        record(&mut collector, 48_000, 35.0);
+        record(&mut collector, 64_000, 35.0);
+        record(&mut collector, 80_000, 42.0);
+
+        let graph = collector.snapshot();
+        assert_eq!(
+            graph.gauge_points.iter().map(|point| (point.time_ms, point.value)).collect::<Vec<_>>(),
+            vec![(16, 20.0), (32, 35.0), (64, 35.0), (80, 42.0)]
+        );
     }
 
     #[test]
