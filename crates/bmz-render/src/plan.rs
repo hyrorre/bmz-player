@@ -1261,11 +1261,10 @@ fn plan_result(
     skin: &SkinContext,
     dynamic_timers: &mut crate::skin::DynamicTimerRuntime,
 ) -> DrawPlan {
-    let skin = skin.with_result_graphs(&snapshot.graph);
     if let Some(document) = skin.document().filter(|document| matches!(document.skin_type, 7 | 15))
     {
         let state = advance_skin_dynamic_timers(
-            &skin,
+            skin,
             dynamic_timers,
             build_result_skin_draw_state(snapshot, document.ranktime),
             (snapshot.elapsed_time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32,
@@ -1283,7 +1282,8 @@ fn plan_result(
             table_level: snapshot.play_level.as_str(),
             ..SkinTextState::default()
         };
-        let items = skin.static_document_items_for_state_and_text(state, text);
+        let items =
+            skin.static_document_items_for_result_state_and_text(&snapshot.graph, state, text);
         if !items.is_empty() {
             let mut commands = Vec::new();
             crate::skin::append_skin_render_items(&mut commands, &items);

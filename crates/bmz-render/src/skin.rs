@@ -162,6 +162,43 @@ pub struct SkinDocument {
     pub result_timing_distribution: crate::snapshot::ResultTimingDistribution,
 }
 
+#[derive(Clone, Copy)]
+struct SkinRuntimeGraphs<'a> {
+    play_judge_graph_density: &'a [u8],
+    play_bpm_graph_segments: &'a [crate::chart_graph::BpmGraphSegment],
+    result_gauge_graph_points: &'a [crate::snapshot::ResultGaugeGraphPoint],
+    result_timing_points: &'a [crate::snapshot::ResultTimingPoint],
+    result_judge_graph_buckets: &'a [crate::snapshot::ResultJudgeGraphBucket],
+    result_early_late_graph_buckets: &'a [crate::snapshot::ResultEarlyLateGraphBucket],
+    result_timing_distribution: &'a crate::snapshot::ResultTimingDistribution,
+}
+
+impl<'a> SkinRuntimeGraphs<'a> {
+    fn from_document(document: &'a SkinDocument) -> Self {
+        Self {
+            play_judge_graph_density: &document.play_judge_graph_density,
+            play_bpm_graph_segments: &document.play_bpm_graph_segments,
+            result_gauge_graph_points: &document.result_gauge_graph_points,
+            result_timing_points: &document.result_timing_points,
+            result_judge_graph_buckets: &document.result_judge_graph_buckets,
+            result_early_late_graph_buckets: &document.result_early_late_graph_buckets,
+            result_timing_distribution: &document.result_timing_distribution,
+        }
+    }
+
+    fn from_result_graph(graph: &'a crate::snapshot::ResultGraphSnapshot) -> Self {
+        Self {
+            play_judge_graph_density: &graph.judge_graph_density,
+            play_bpm_graph_segments: &graph.bpm_graph_segments,
+            result_gauge_graph_points: &graph.gauge_points,
+            result_timing_points: &graph.timing_points,
+            result_judge_graph_buckets: &graph.judge_graph_buckets,
+            result_early_late_graph_buckets: &graph.early_late_graph_buckets,
+            result_timing_distribution: &graph.timing_distribution,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct SkinSongListDef {
     #[serde(default, deserialize_with = "deserialize_skin_id")]
@@ -1256,6 +1293,23 @@ impl SkinContext {
             return Vec::new();
         };
         document.static_render_items(&self.document_sources, state, text)
+    }
+
+    pub fn static_document_items_for_result_state_and_text(
+        &self,
+        graph: &crate::snapshot::ResultGraphSnapshot,
+        state: SkinDrawState,
+        text: SkinTextState<'_>,
+    ) -> Vec<SkinRenderItem> {
+        let Some(document) = &self.document else {
+            return Vec::new();
+        };
+        document.static_render_items_with_graphs(
+            &self.document_sources,
+            state,
+            text,
+            SkinRuntimeGraphs::from_result_graph(graph),
+        )
     }
 
     pub fn select_document_items(&self, snapshot: &SelectSnapshot) -> Vec<SkinRenderItem> {
@@ -2424,8 +2478,23 @@ impl SkinDocument {
         state: SkinDrawState,
         text_state: SkinTextState<'_>,
     ) -> Vec<SkinRenderItem> {
+        self.static_render_items_with_graphs(
+            sources,
+            state,
+            text_state,
+            SkinRuntimeGraphs::from_document(self),
+        )
+    }
+
+    fn static_render_items_with_graphs(
+        &self,
+        sources: &HashMap<String, SkinDocumentTexture>,
+        state: SkinDrawState,
+        text_state: SkinTextState<'_>,
+        runtime_graphs: SkinRuntimeGraphs<'_>,
+    ) -> Vec<SkinRenderItem> {
         let (mut behind, front, failed_overlay) =
-            self.static_render_items_split(sources, state, text_state);
+            self.static_render_items_split_with_graphs(sources, state, text_state, runtime_graphs);
         behind.extend(front);
         behind.extend(failed_overlay);
         behind
@@ -2438,6 +2507,21 @@ impl SkinDocument {
         sources: &HashMap<String, SkinDocumentTexture>,
         state: SkinDrawState,
         text_state: SkinTextState<'_>,
+    ) -> (Vec<SkinRenderItem>, Vec<SkinRenderItem>, Vec<SkinRenderItem>) {
+        self.static_render_items_split_with_graphs(
+            sources,
+            state,
+            text_state,
+            SkinRuntimeGraphs::from_document(self),
+        )
+    }
+
+    fn static_render_items_split_with_graphs(
+        &self,
+        sources: &HashMap<String, SkinDocumentTexture>,
+        state: SkinDrawState,
+        text_state: SkinTextState<'_>,
+        runtime_graphs: SkinRuntimeGraphs<'_>,
     ) -> (Vec<SkinRenderItem>, Vec<SkinRenderItem>, Vec<SkinRenderItem>) {
         let images = self.image_map();
         let enabled_options = self.enabled_options();
@@ -2492,6 +2576,7 @@ impl SkinDocument {
                 state,
                 text_state,
                 sources,
+                runtime_graphs,
             ) {
                 let after_notes_marker = after_notes_marker
                     || self.destination_looks_like_pre_notes_judge_line(
@@ -2602,6 +2687,7 @@ impl SkinDocument {
         state: SkinDrawState,
         text_state: SkinTextState<'_>,
         sources: &HashMap<String, SkinDocumentTexture>,
+        runtime_graphs: SkinRuntimeGraphs<'_>,
     ) -> Option<Vec<SkinRenderItem>> {
         let destinations = self.all_destinations(enabled_options);
         let has_half_grade_f_diff_rank_destination =
@@ -2653,6 +2739,7 @@ impl SkinDocument {
                 destination,
                 frame,
                 state,
+                runtime_graphs.result_timing_points,
             ));
         }
         if let Some(graph) =
@@ -2663,10 +2750,18 @@ impl SkinDocument {
                 destination,
                 frame,
                 state,
+                runtime_graphs.result_timing_points,
+                runtime_graphs.result_timing_distribution,
             ));
         }
         if let Some(gauge_graph) = self.gaugegraph.iter().find(|graph| graph.id == destination.id) {
-            return Some(self.gaugegraph_render_items(gauge_graph, destination, frame, state));
+            return Some(self.gaugegraph_render_items(
+                gauge_graph,
+                destination,
+                frame,
+                state,
+                runtime_graphs.result_gauge_graph_points,
+            ));
         }
         if let Some(judge_graph) = self.judgegraph.iter().find(|graph| graph.id == destination.id) {
             return Some(self.judgegraph_render_items(
@@ -2675,10 +2770,17 @@ impl SkinDocument {
                 frame,
                 elapsed,
                 state,
+                runtime_graphs,
             ));
         }
         if let Some(bpm_graph) = self.bpmgraph.iter().find(|graph| graph.id == destination.id) {
-            return Some(self.bpmgraph_render_items(bpm_graph, destination, frame, state));
+            return Some(self.bpmgraph_render_items_with_segments(
+                bpm_graph,
+                destination,
+                frame,
+                state,
+                runtime_graphs.play_bpm_graph_segments,
+            ));
         }
         if let Some(item) = self.direct_source_image_render_item(destination, frame, sources) {
             return Some(vec![item]);
@@ -3255,6 +3357,7 @@ impl SkinDocument {
                 state,
                 text,
                 sources,
+                SkinRuntimeGraphs::from_document(self),
             ) {
                 items.extend(resolved);
             }
@@ -4806,8 +4909,8 @@ impl SkinDocument {
         destination: &SkinDestinationDef,
         frame: ResolvedSkinFrame,
         state: SkinDrawState,
+        points: &[crate::snapshot::ResultGaugeGraphPoint],
     ) -> Vec<SkinRenderItem> {
-        let points = &self.result_gauge_graph_points;
         if points.is_empty() {
             return Vec::new();
         }
@@ -4929,8 +5032,9 @@ impl SkinDocument {
         destination: &SkinDestinationDef,
         frame: ResolvedSkinFrame,
         state: SkinDrawState,
+        timing_points: &[crate::snapshot::ResultTimingPoint],
     ) -> Vec<SkinRenderItem> {
-        if self.result_timing_points.is_empty() {
+        if timing_points.is_empty() {
             return Vec::new();
         }
         let rect = normalize_skin_frame_rect(frame, self.w, self.h);
@@ -4958,9 +5062,8 @@ impl SkinDocument {
             blend,
         });
 
-        let window =
-            self.result_timing_points.len().min(bmz_gameplay::hit_error::HIT_ERROR_RING_LEN);
-        for (index, point) in self.result_timing_points.iter().rev().take(window).enumerate() {
+        let window = timing_points.len().min(bmz_gameplay::hit_error::HIT_ERROR_RING_LEN);
+        for (index, point) in timing_points.iter().rev().take(window).enumerate() {
             let delta_ms = point.delta_us as f32 / 1_000.0;
             if delta_ms.abs() > center_ms {
                 continue;
@@ -4987,15 +5090,14 @@ impl SkinDocument {
         destination: &SkinDestinationDef,
         frame: ResolvedSkinFrame,
         state: SkinDrawState,
+        timing_points: &[crate::snapshot::ResultTimingPoint],
+        timing_distribution: &crate::snapshot::ResultTimingDistribution,
     ) -> Vec<SkinRenderItem> {
         let fallback_distribution;
-        let distribution = if self.result_timing_distribution.total() > 0
-            || self.result_timing_points.is_empty()
-        {
-            &self.result_timing_distribution
+        let distribution = if timing_distribution.total() > 0 || timing_points.is_empty() {
+            timing_distribution
         } else {
-            fallback_distribution =
-                skin_timing_distribution_from_points(&self.result_timing_points);
+            fallback_distribution = skin_timing_distribution_from_points(timing_points);
             &fallback_distribution
         };
         let rect = normalize_skin_frame_rect(frame, self.w, self.h);
@@ -5079,12 +5181,16 @@ impl SkinDocument {
         frame: ResolvedSkinFrame,
         elapsed_ms: i32,
         state: SkinDrawState,
+        runtime_graphs: SkinRuntimeGraphs<'_>,
     ) -> Vec<SkinRenderItem> {
         let graph_type = graph.graph_type();
         let pms_colors = state.key_mode == KeyMode::K9;
-        if graph_type == 1 && !self.result_judge_graph_buckets.is_empty() {
-            let series: Vec<[u32; 6]> =
-                self.result_judge_graph_buckets.iter().map(|bucket| bucket.values).collect();
+        if graph_type == 1 && !runtime_graphs.result_judge_graph_buckets.is_empty() {
+            let series: Vec<[u32; 6]> = runtime_graphs
+                .result_judge_graph_buckets
+                .iter()
+                .map(|bucket| bucket.values)
+                .collect();
             return stacked_result_note_graph_render_items(
                 &series,
                 &result_judge_graph_colors(frame.a as f32 / 255.0, pms_colors),
@@ -5096,9 +5202,12 @@ impl SkinDocument {
                 elapsed_ms,
             );
         }
-        if graph_type == 2 && !self.result_early_late_graph_buckets.is_empty() {
-            let series: Vec<[u32; 10]> =
-                self.result_early_late_graph_buckets.iter().map(|bucket| bucket.values).collect();
+        if graph_type == 2 && !runtime_graphs.result_early_late_graph_buckets.is_empty() {
+            let series: Vec<[u32; 10]> = runtime_graphs
+                .result_early_late_graph_buckets
+                .iter()
+                .map(|bucket| bucket.values)
+                .collect();
             return stacked_result_note_graph_render_items(
                 &series,
                 &result_early_late_graph_colors(frame.a as f32 / 255.0, pms_colors),
@@ -5110,7 +5219,12 @@ impl SkinDocument {
                 elapsed_ms,
             );
         }
-        self.density_judgegraph_render_items(graph, destination, frame)
+        self.density_judgegraph_render_items(
+            graph,
+            destination,
+            frame,
+            runtime_graphs.play_judge_graph_density,
+        )
     }
 
     fn density_judgegraph_render_items(
@@ -5118,8 +5232,8 @@ impl SkinDocument {
         graph: &SkinJudgeGraphDef,
         destination: &SkinDestinationDef,
         frame: ResolvedSkinFrame,
+        density: &[u8],
     ) -> Vec<SkinRenderItem> {
-        let density = &self.play_judge_graph_density;
         if density.is_empty() {
             return Vec::new();
         }
@@ -5246,22 +5360,6 @@ impl SkinDocument {
         }
 
         items
-    }
-
-    fn bpmgraph_render_items(
-        &self,
-        graph: &SkinBpmGraphDef,
-        destination: &SkinDestinationDef,
-        frame: ResolvedSkinFrame,
-        state: SkinDrawState,
-    ) -> Vec<SkinRenderItem> {
-        self.bpmgraph_render_items_with_segments(
-            graph,
-            destination,
-            frame,
-            state,
-            &self.play_bpm_graph_segments,
-        )
     }
 
     fn bpmgraph_render_items_with_segments(
