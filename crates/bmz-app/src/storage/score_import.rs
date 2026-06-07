@@ -377,8 +377,13 @@ fn beatoraja_row(row: &Row<'_>) -> rusqlite::Result<BeatorajaScoreRow> {
 }
 
 fn score_state_from_lr2(row: &Lr2ScoreRow) -> ScoreState {
-    let ghost = decode_external_ghost(&row.ghost, row.total_notes);
-    let _ = (row.min_bp, row.play_count, row.clear_count);
+    // LR2's `ghost` column uses LR2's own run-length encoding (a 62-symbol
+    // alphabet, length far shorter than the note count), which is not the
+    // gzip+base64 per-note format bmz uses.  Attempting to decode it with the
+    // beatoraja decoder always fails and floods the log, so we drop it and import
+    // the score without a ghost.  (Reconstructing bmz's per-note judge array from
+    // LR2's compressed graph is left as future work; see import notes.)
+    let _ = (row.min_bp, row.play_count, row.clear_count, &row.ghost);
     ScoreState {
         judges: JudgeCounts {
             fast_pgreat: row.perfect,
@@ -391,7 +396,7 @@ fn score_state_from_lr2(row: &Lr2ScoreRow) -> ScoreState {
         combo: 0,
         max_combo: row.max_combo,
         past_notes: row.total_notes,
-        ghost,
+        ghost: Vec::new(),
     }
 }
 
@@ -672,6 +677,32 @@ mod tests {
         assert_eq!(report.skipped, 1);
         assert_eq!(report.failed, 0);
         assert_eq!(report.imported, 0);
+    }
+
+    #[test]
+    fn lr2_score_state_drops_incompatible_ghost() {
+        // An LR2-format ghost string (62-symbol run-length, contains '@') is not
+        // decodable by the beatoraja decoder; the import must drop it silently
+        // rather than warn, leaving an empty ghost.
+        let row = Lr2ScoreRow {
+            md5: "0".repeat(32),
+            clear: 4,
+            perfect: 100,
+            great: 21,
+            good: 3,
+            bad: 2,
+            poor: 1,
+            total_notes: 128,
+            max_combo: 64,
+            min_bp: 3,
+            play_count: 2,
+            clear_count: 1,
+            ghost: "Mqt4t3XhGBJSLSG@h2GjH1t7TEvSESF3r9SNr0q2uzs8XTI1sqSG3C@SPEsu".to_string(),
+            random_seed: Some(123),
+        };
+        let state = score_state_from_lr2(&row);
+        assert!(state.ghost.is_empty());
+        assert_eq!(state.judges.fast_pgreat, 100);
     }
 
     #[test]
