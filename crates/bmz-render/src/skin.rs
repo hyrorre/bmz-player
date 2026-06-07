@@ -3558,7 +3558,7 @@ impl SkinDocument {
         x: f32,
         y: f32,
     ) -> Option<SkinSliderHit> {
-        if !slider.changeable || !matches!(slider.slider_type, 17..=19) {
+        if !slider.changeable || !matches!(slider.slider_type, 1 | 17..=19) {
             return None;
         }
         let elapsed = skin_timer_elapsed_ms(destination.timer, state)?;
@@ -15757,6 +15757,39 @@ mod tests {
                 )
                 .is_none()
         );
+    }
+
+    #[test]
+    fn select_slider_hit_resolves_song_scroll_slider() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 5,
+                "w": 100,
+                "h": 100,
+                "slider": [
+                    { "id": "song-scroll", "src": 1, "x": 0, "y": 0, "w": 10, "h": 5, "angle": 2, "range": 50, "type": 1 }
+                ],
+                "destination": [
+                    { "id": "song-scroll", "dst": [{ "x": 10, "y": 70, "w": 10, "h": 5 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let snapshot = SelectSnapshot::default();
+
+        let hit = document
+            .select_slider_hit(
+                &snapshot,
+                &crate::select_settings_dest::SelectSettingsDestIndex::default(),
+                0.15,
+                0.55,
+            )
+            .unwrap();
+
+        assert_eq!(hit.slider_type, 1);
+        assert!(approx_eq(hit.value, 0.5));
     }
 
     #[test]

@@ -361,8 +361,8 @@ struct WinitApp {
     search_query: String,
     /// 直近のマウスカーソル位置。select skin のクリック hit-test に使う。
     last_cursor_position: Option<PhysicalPosition<f64>>,
-    /// select skin slider をドラッグ中なら true。
-    select_slider_dragging: bool,
+    /// ドラッグ中の select skin slider type。
+    select_slider_dragging_type: Option<i32>,
     /// IME 変換中の未確定文字列 (Preedit)。Commit で空になり search_query に追加される。
     search_preedit: String,
     /// 直近の検索クエリ履歴 (古い順)。`bmz-search:<q>` 仮想フォルダとしてルートに並ぶ。
@@ -998,7 +998,7 @@ impl WinitApp {
             search_mode: false,
             search_query: String::new(),
             last_cursor_position: None,
-            select_slider_dragging: false,
+            select_slider_dragging_type: None,
             search_preedit: String::new(),
             search_history: std::collections::VecDeque::new(),
             search_message: None,
@@ -2948,12 +2948,13 @@ impl WinitApp {
 
     fn route_mouse_input(&mut self, state: ElementState, button: MouseButton) {
         if !matches!(self.view_state(), AppViewState::Select) {
-            self.select_slider_dragging = false;
+            self.select_slider_dragging_type = None;
             return;
         }
         if state == ElementState::Released {
-            if self.select_slider_dragging {
-                self.select_slider_dragging = false;
+            if let Some(slider_type) = self.select_slider_dragging_type.take()
+                && matches!(slider_type, 17..=19)
+            {
                 self.save_select_slider_profile();
             }
             return;
@@ -2968,7 +2969,7 @@ impl WinitApp {
         if button == MouseButton::Left
             && let Some(hit) = self.renderer.select_skin_slider_hit(&snapshot, x, y)
         {
-            self.select_slider_dragging = true;
+            self.select_slider_dragging_type = Some(hit.slider_type);
             self.apply_select_slider_hit(hit);
             return;
         }
@@ -2979,7 +2980,9 @@ impl WinitApp {
     }
 
     fn route_select_slider_drag(&mut self) {
-        if !self.select_slider_dragging || !matches!(self.view_state(), AppViewState::Select) {
+        if self.select_slider_dragging_type.is_none()
+            || !matches!(self.view_state(), AppViewState::Select)
+        {
             return;
         }
         let Some((x, y)) = self.cursor_position_normalized() else {
@@ -3005,28 +3008,44 @@ impl WinitApp {
     }
 
     fn apply_select_slider_hit(&mut self, hit: SkinSliderHit) {
-        let value = volume_f32_to_unit(hit.value);
-        let mix = &mut self.boot.profile_config.audio_mix;
         match hit.slider_type {
-            17 if mix.master_volume != value => {
-                mix.master_volume = value;
-                self.sync_realtime_profile_settings();
-                tracing::info!(value, "select skin master volume changed");
+            1 => self.apply_select_scroll_slider(hit.value),
+            17..=19 => {
+                let value = volume_f32_to_unit(hit.value);
+                let mix = &mut self.boot.profile_config.audio_mix;
+                match hit.slider_type {
+                    17 if mix.master_volume != value => {
+                        mix.master_volume = value;
+                        self.sync_realtime_profile_settings();
+                        tracing::info!(value, "select skin master volume changed");
+                    }
+                    18 if mix.key_volume != value => {
+                        mix.key_volume = value;
+                        self.sync_realtime_profile_settings();
+                        tracing::info!(value, "select skin key volume changed");
+                    }
+                    19 if mix.bgm_volume != value => {
+                        mix.bgm_volume = value;
+                        self.sync_realtime_profile_settings();
+                        tracing::info!(value, "select skin bgm volume changed");
+                    }
+                    _ => {}
+                }
             }
-            18 if mix.key_volume != value => {
-                mix.key_volume = value;
-                self.sync_realtime_profile_settings();
-                tracing::info!(value, "select skin key volume changed");
-            }
-            19 if mix.bgm_volume != value => {
-                mix.bgm_volume = value;
-                self.sync_realtime_profile_settings();
-                tracing::info!(value, "select skin bgm volume changed");
-            }
-            17..=19 => {}
             _ => {
                 tracing::debug!(slider_type = hit.slider_type, "unsupported select skin slider");
             }
+        }
+    }
+
+    fn apply_select_scroll_slider(&mut self, value: f32) {
+        let Some(next) = select_scroll_slider_index(value, self.select_items.len()) else {
+            return;
+        };
+        if self.selected_index != next {
+            self.selected_index = next;
+            self.select_bar_started_at = Instant::now();
+            self.play_system_sound(crate::system_sound::SoundType::Scratch);
         }
     }
 
@@ -8456,6 +8475,17 @@ fn select_row_click_action(
     }
 }
 
+fn select_scroll_slider_index(value: f32, item_len: usize) -> Option<usize> {
+    if item_len == 0 {
+        return None;
+    }
+    if item_len == 1 {
+        return Some(0);
+    }
+    let max_index = item_len - 1;
+    Some((value.clamp(0.0, 1.0) * max_index as f32).round() as usize)
+}
+
 fn select_action(
     physical_key: PhysicalKey,
     state: ElementState,
@@ -9836,6 +9866,18 @@ mod tests {
             Some(SelectRowClickAction::ExitFolder)
         );
         assert_eq!(select_row_click_action(2, MouseButton::Middle, 2, 4), None);
+    }
+
+    #[test]
+    fn select_scroll_slider_value_maps_to_nearest_row() {
+        assert_eq!(select_scroll_slider_index(0.0, 0), None);
+        assert_eq!(select_scroll_slider_index(0.5, 1), Some(0));
+        assert_eq!(select_scroll_slider_index(-1.0, 10), Some(0));
+        assert_eq!(select_scroll_slider_index(0.0, 10), Some(0));
+        assert_eq!(select_scroll_slider_index(0.49, 10), Some(4));
+        assert_eq!(select_scroll_slider_index(0.50, 10), Some(5));
+        assert_eq!(select_scroll_slider_index(1.0, 10), Some(9));
+        assert_eq!(select_scroll_slider_index(2.0, 10), Some(9));
     }
 
     #[test]
