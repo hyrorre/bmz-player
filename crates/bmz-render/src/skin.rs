@@ -2845,6 +2845,7 @@ impl SkinDocument {
 
         if let Some(value) = value_for_destination {
             let number = skin_value_number(value, state)?;
+            let signed = value_ref_is_signed_for_state(value.ref_id, state);
             return Some(self.value_number_render_items(
                 &value.id,
                 number,
@@ -2854,6 +2855,7 @@ impl SkinDocument {
                 sources,
                 false,
                 None,
+                signed,
             ));
         }
 
@@ -2969,6 +2971,7 @@ impl SkinDocument {
 
         if let Some(value) = self.value.iter().find(|value| value.id == destination.id) {
             let number = skin_value_number_or_songlist_level(value, state)?;
+            let signed = value_ref_is_signed_for_state(value.ref_id, state);
             return Some(self.value_number_render_items(
                 &value.id,
                 number,
@@ -2978,6 +2981,7 @@ impl SkinDocument {
                 sources,
                 false,
                 None,
+                signed,
             ));
         }
 
@@ -4407,16 +4411,22 @@ impl SkinDocument {
             if let Some(value) = self.value.iter().find(|value| value.id == number_destination.id) {
                 Self::apply_beatoraja_judge_number_dst_x(&mut number_frame, value.digit);
             }
-            items.extend(self.value_number_render_items(
-                &number_destination.id,
-                combo as i64,
-                image_frame_for_numbers,
-                number_frame,
-                elapsed_ms,
-                sources,
-                false,
-                Some(2),
-            ));
+            items.extend(
+                self.value_number_render_items(
+                    &number_destination.id,
+                    combo as i64,
+                    image_frame_for_numbers,
+                    number_frame,
+                    elapsed_ms,
+                    sources,
+                    false,
+                    Some(2),
+                    self.value
+                        .iter()
+                        .find(|value| value.id == number_destination.id)
+                        .is_some_and(|value| ref_id_is_signed(value.ref_id)),
+                ),
+            );
         }
         Some(items)
     }
@@ -4468,6 +4478,7 @@ impl SkinDocument {
         sources: &HashMap<String, SkinDocumentTexture>,
         compact_digits: bool,
         align_override: Option<i32>,
+        signed: bool,
     ) -> Vec<SkinRenderItem> {
         let Some(value) = self.value.iter().find(|value| value.id == value_id) else {
             return Vec::new();
@@ -4488,7 +4499,7 @@ impl SkinDocument {
         }
         let padding = number_padding(value);
         let max_digits = value.digit.max(0) as usize;
-        let digits = if ref_id_is_signed(value.ref_id) {
+        let digits = if signed {
             display_signed_number_digits(number, max_digits, padding.is_zero_padding(), divx as u32)
         } else {
             display_number_digits(number, max_digits, padding)
@@ -6682,6 +6693,11 @@ fn display_signed_number_digits(
 /// beatoraja の `NUMBER_DIFF_*` 系と次 DJ LEVEL までの差分を対象とする。
 fn ref_id_is_signed(ref_id: i32) -> bool {
     matches!(ref_id, 152 | 153 | 154 | 172 | 175 | 178)
+}
+
+fn value_ref_is_signed_for_state(ref_id: i32, state: SkinDrawState) -> bool {
+    ref_id_is_signed(ref_id)
+        || (ref_id == 12 && state.select_screen && state.select_option_panel == 3)
 }
 
 fn lookup_text(values: &[(TextSlot, String)], slot: TextSlot) -> String {
@@ -14446,6 +14462,7 @@ mod tests {
         let snapshot = SelectSnapshot {
             option_panel: 3,
             option_panel_time: TimeUs(100_000),
+            judge_timing_offset_ms: -12,
             ..SelectSnapshot::default()
         };
 
@@ -14454,6 +14471,11 @@ mod tests {
         assert!(items.iter().any(|item| matches!(
             item,
             SkinRenderItem::Image { rect, .. } if approx_eq(rect.x, 0.4)
+        )));
+        assert!(items.iter().any(|item| matches!(
+            item,
+            SkinRenderItem::Image { rect, uv, .. }
+                if approx_eq(rect.x, 0.4) && approx_eq(uv.x, 11.0 / 12.0) && uv.y > 0.0
         )));
     }
 
@@ -16202,6 +16224,12 @@ mod tests {
         // NUMBER_DIFF_NEXTRANK (154) も同じ符号セル付き mimage レイアウトを使う。
         assert_eq!(display_signed_number_digits(-34, 4, false, 12), vec![23, 15, 16]);
         assert!(ref_id_is_signed(154));
+
+        let select_detail =
+            SkinDrawState { select_screen: true, select_option_panel: 3, ..Default::default() };
+        let select_normal = SkinDrawState { select_screen: true, ..Default::default() };
+        assert!(value_ref_is_signed_for_state(12, select_detail));
+        assert!(!value_ref_is_signed_for_state(12, select_normal));
     }
 
     #[test]
