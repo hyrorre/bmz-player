@@ -1,12 +1,17 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 use bmz_core::clear::{ClearType, GaugeType};
+use bmz_core::course::{
+    CourseClassConstraint, CourseGaugeConstraint, CourseJudgeConstraint, CourseSpeedConstraint,
+};
 use bmz_core::input::InputDeviceKind;
 use bmz_gameplay::score::{JudgeCounts, ScoreState};
 use rusqlite::{Connection, OpenFlags, Row};
 
 use super::common::hex_to_hash;
+use super::course_db::CourseScoreInsert;
 use super::library_db::LibraryDatabase;
 use super::score_db::{ScoreDatabase, ScoreRecord, decode_beatoraja_ghost};
 use crate::ln_policy::LnScorePolicy;
@@ -69,7 +74,7 @@ impl ScoreImportReport {
 
 pub fn import_scores(
     request: &ScoreImportRequest,
-    library_db: &LibraryDatabase,
+    library_db: &mut LibraryDatabase,
     score_db: &mut ScoreDatabase,
     imported_at: i64,
 ) -> Result<ScoreImportReport> {
@@ -93,11 +98,15 @@ pub fn import_scores(
 fn import_lr2_scores(
     source: &Connection,
     kind: ScoreImportKind,
-    library_db: &LibraryDatabase,
+    library_db: &mut LibraryDatabase,
     score_db: &mut ScoreDatabase,
     imported_at: i64,
 ) -> Result<ScoreImportReport> {
     ensure_table(source, "score")?;
+    // Owned index of canonical LR2-dan courses (md5 stage sequence -> course ids),
+    // built once before the row loop so the immutable borrow of `library_db` is
+    // released before we start inserting course scores into it.
+    let course_index = build_lr2_course_index(library_db)?;
     let mut report = ScoreImportReport::default();
     let mut stmt = source.prepare(
         "SELECT hash, clear, perfect, great, good, bad, poor,
@@ -115,6 +124,14 @@ fn import_lr2_scores(
                 continue;
             }
         };
+        // LR2 stores course (dan) results in the same `score` table, keyed by a
+        // 32-char marker segment followed by the constituent chart md5s (e.g. a
+        // 160-char key for a 4-song course).  Resolve these to bmz courses and
+        // import a course score for each canonical match (see import_lr2_course).
+        if is_course_hash(&row.md5, 32) {
+            import_lr2_course(&row, &course_index, library_db, imported_at, &mut report)?;
+            continue;
+        }
         let md5 = match hex_to_hash::<16>(&row.md5) {
             Ok(md5) => md5,
             Err(error) => {
@@ -178,6 +195,19 @@ fn import_beatoraja_scores(
                 continue;
             }
         };
+        // beatoraja stores course (dan) results in the same `score` table, keyed
+        // by the concatenation of every constituent chart sha256.  A single chart
+        // hash is 64 hex chars, so a course key is a multiple of 64 longer than 64
+        // (e.g. 256 for a 4-song course).  These are not importable as single-chart
+        // scores: bmz models course results in dedicated tables, and the concatenated
+        // key cannot be unambiguously mapped back to a bmz course (table-defined
+        // courses sharing a song set differ only by constraint, which the key omits).
+        // Treat them as skipped rather than failed, and keep the log quiet.
+        if is_course_hash(&row.sha256, 64) {
+            report.skipped += 1;
+            tracing::debug!(len = row.sha256.len(), "skipped beatoraja course score");
+            continue;
+        }
         let chart_sha256 = match hex_to_hash::<32>(&row.sha256) {
             Ok(sha256) => sha256,
             Err(error) => {
@@ -234,6 +264,133 @@ fn imported_score_record(
         device_type: InputDeviceKind::Keyboard,
         replay_path: String::new(),
     }
+}
+
+/// Imports an LR2 course (dan) result into every canonical bmz course it matches.
+///
+/// LR2 course keys cannot be mapped to a single bmz course unambiguously, but for
+/// dan认定 the play options are canonical: normal+mirror class, free HS, no judge
+/// constraint, LR2 gauge.  After filtering candidates to that set, the only
+/// remaining ambiguity is the LN constraint, and we deliberately import into every
+/// matching LN variant (a course whose charts contain no LN scores identically with
+/// or without the constraint, and LR2 dan is always LN-on).  Per-chart breakdown is
+/// not available from LR2's aggregate course row, so `charts`/`replays` are empty.
+fn import_lr2_course(
+    row: &Lr2ScoreRow,
+    course_index: &HashMap<Vec<[u8; 16]>, Vec<i64>>,
+    library_db: &mut LibraryDatabase,
+    imported_at: i64,
+    report: &mut ScoreImportReport,
+) -> Result<()> {
+    let Some(stages) = lr2_course_stage_md5s(&row.md5) else {
+        report.skipped += 1;
+        tracing::debug!(len = row.md5.len(), "LR2 course key not splittable into stage md5s");
+        return Ok(());
+    };
+    let Some(course_ids) = course_index.get(&stages) else {
+        report.skipped += 1;
+        tracing::debug!(stages = stages.len(), "LR2 course has no matching bmz course");
+        return Ok(());
+    };
+    let record = lr2_course_score_insert(row, imported_at);
+    for &course_id in course_ids {
+        let mut insert = record.clone();
+        insert.course_id = course_id;
+        library_db.insert_course_score(&insert)?;
+        report.imported += 1;
+    }
+    report.matched += 1;
+    Ok(())
+}
+
+/// Splits an LR2 course key into its constituent chart md5s, dropping the leading
+/// 32-char marker segment.  Returns `None` if the remainder is not a whole number
+/// of 32-char md5s or any md5 is not valid hex.
+fn lr2_course_stage_md5s(hash: &str) -> Option<Vec<[u8; 16]>> {
+    if hash.len() <= 32 || !(hash.len() - 32).is_multiple_of(32) {
+        return None;
+    }
+    let mut stages = Vec::with_capacity((hash.len() - 32) / 32);
+    let mut start = 32;
+    while start < hash.len() {
+        stages.push(hex_to_hash::<16>(&hash[start..start + 32]).ok()?);
+        start += 32;
+    }
+    Some(stages)
+}
+
+/// Builds a course score from an LR2 aggregate course row.  `course_id` is left as
+/// 0 and filled in per matching course by the caller.
+fn lr2_course_score_insert(row: &Lr2ScoreRow, imported_at: i64) -> CourseScoreInsert {
+    let clear_type = lr2_clear_type(row.clear);
+    let course_failed = matches!(clear_type, ClearType::NoPlay | ClearType::Failed);
+    CourseScoreInsert {
+        course_id: 0,
+        ex_score: row.perfect * 2 + row.great,
+        max_ex_score: row.total_notes * 2,
+        clear_type: clear_type.as_str().to_string(),
+        gauge_type: GaugeType::Normal.as_str().to_string(),
+        gauge_value: gauge_value_for_clear(clear_type),
+        max_combo: row.max_combo,
+        bp: row.min_bp,
+        course_failed,
+        course_clear: !course_failed,
+        arrange: "Normal".to_string(),
+        trophies_json: "[]".to_string(),
+        played_at: imported_at,
+        charts: Vec::new(),
+        replays: Vec::new(),
+        achieved_trophies: Vec::new(),
+    }
+}
+
+/// Builds an index of canonical LR2-dan courses, keyed by their ordered stage md5
+/// sequence.  Courses are kept only if their constraints match the canonical LR2
+/// dan profile (normal+mirror class, free HS, normal judge, LR2 gauge); the LN
+/// dimension is intentionally not filtered (see [`import_lr2_course`]).  Courses
+/// with any entry lacking an md5 are skipped (they cannot be matched by md5).
+fn build_lr2_course_index(
+    library_db: &LibraryDatabase,
+) -> Result<HashMap<Vec<[u8; 16]>, Vec<i64>>> {
+    let mut index: HashMap<Vec<[u8; 16]>, Vec<i64>> = HashMap::new();
+    for course in library_db.list_courses()? {
+        let constraints = &course.definition.constraints;
+        if constraints.class != CourseClassConstraint::GradeMirrorAllowed
+            || constraints.speed != CourseSpeedConstraint::Free
+            || constraints.judge != CourseJudgeConstraint::Normal
+            || constraints.gauge != CourseGaugeConstraint::Lr2
+        {
+            continue;
+        }
+        let mut key = Vec::with_capacity(course.definition.entries.len());
+        let mut complete = true;
+        for entry in &course.definition.entries {
+            match entry.md5.as_deref().and_then(|md5| hex_to_hash::<16>(md5).ok()) {
+                Some(md5) => key.push(md5),
+                None => {
+                    complete = false;
+                    break;
+                }
+            }
+        }
+        if complete && !key.is_empty() {
+            index.entry(key).or_default().push(course.id);
+        }
+    }
+    Ok(index)
+}
+
+/// Returns true when `hash` is a course key rather than a single-chart hash.
+///
+/// Both LR2 and beatoraja store course (dan) results in the same `score` table,
+/// keyed by a concatenation of the constituent chart hashes (plus, for LR2, a
+/// leading marker segment).  A single chart hash has a fixed width
+/// (`single_len`: 32 for LR2 md5, 64 for beatoraja sha256), so a course key is a
+/// non-zero multiple of that width longer than a single hash.  These cannot be
+/// imported as single-chart scores, so callers skip them rather than fail.
+fn is_course_hash(hash: &str, single_len: usize) -> bool {
+    let len = hash.len();
+    len > single_len && len.is_multiple_of(single_len)
 }
 
 fn ensure_table(conn: &Connection, table: &str) -> Result<()> {
@@ -341,7 +498,7 @@ fn beatoraja_row(row: &Row<'_>) -> rusqlite::Result<BeatorajaScoreRow> {
 }
 
 fn score_state_from_lr2(row: &Lr2ScoreRow) -> ScoreState {
-    let ghost = decode_external_ghost(&row.ghost, row.total_notes);
+    let ghost = decode_lr2_ghost(&row.ghost, row.total_notes);
     let _ = (row.min_bp, row.play_count, row.clear_count);
     ScoreState {
         judges: JudgeCounts {
@@ -395,6 +552,138 @@ fn decode_external_ghost(encoded: &str, total_notes: u32) -> Vec<u8> {
             Vec::new()
         }
     }
+}
+
+/// Decodes LR2's `score.ghost` column into bmz's per-note judge array.
+///
+/// The LR2 format (see OpenLR2 `LR2_ghost.cpp` `EncodeGhostData`/`DecodeGhostData`)
+/// is a run-length encoding of per-note judge symbols `@ A B C D E` (= judge codes
+/// 0..=5), wrapped in two layers of bigram dictionary compression.  We reverse the
+/// dictionaries (layer 2 then layer 1, as LR2 does), expand the run-length runs,
+/// then map LR2 judge codes to bmz's (`5 - code`): E/5=PGreat→0, D/4=Great→1,
+/// C/3=Good→2, B/2=Bad→3, A/1=Poor→4.  Code 0 (`@`) is an empty poor not tied to a
+/// scoreable note and is dropped.  The result is padded with Poor / truncated to
+/// `total_notes`, mirroring [`decode_beatoraja_ghost`].
+fn decode_lr2_ghost(encoded: &str, total_notes: u32) -> Vec<u8> {
+    if encoded.is_empty() {
+        return Vec::new();
+    }
+
+    let mut layer2 = String::with_capacity(encoded.len() * 2);
+    for c in encoded.chars() {
+        match lr2_ghost_layer2_symbol(c) {
+            Some(replacement) => layer2.push_str(replacement),
+            None => layer2.push(c),
+        }
+    }
+    let mut expanded = String::with_capacity(layer2.len() * 2);
+    for c in layer2.chars() {
+        match lr2_ghost_layer1_symbol(c) {
+            Some(replacement) => expanded.push_str(replacement),
+            None => expanded.push(c),
+        }
+    }
+
+    let mut ghost: Vec<u8> = Vec::with_capacity(total_notes as usize);
+    let mut current: Option<u8> = None;
+    let mut rep: i64 = -1;
+    for c in expanded.chars() {
+        let o = c as u32;
+        if (0x40..=0x45).contains(&o) {
+            if let Some(code) = current {
+                push_lr2_run(&mut ghost, code, if rep == 0 { 1 } else { rep });
+            }
+            rep = 0;
+            current = Some((o - 0x40) as u8);
+        } else if c.is_ascii_digit() {
+            let digit = (o - 0x30) as i64;
+            rep = if rep == 0 { digit } else { rep * 10 + digit };
+        }
+    }
+    if let Some(code) = current {
+        push_lr2_run(&mut ghost, code, if rep == 0 { 1 } else { rep });
+    }
+
+    let expected = total_notes as usize;
+    if expected > 0 {
+        if ghost.len() < expected {
+            ghost.resize(expected, 4);
+        } else {
+            ghost.truncate(expected);
+        }
+    }
+    ghost
+}
+
+/// Appends `count` copies of an LR2 judge `code` (0..=5) to a bmz ghost, mapping
+/// LR2 codes to bmz judge codes via `5 - code`.  Code 0 (empty poor) is not a
+/// scoreable note and is skipped.
+fn push_lr2_run(ghost: &mut Vec<u8>, code: u8, count: i64) {
+    if (1..=5).contains(&code) {
+        let bmz_code = 5 - code;
+        for _ in 0..count.max(1) {
+            ghost.push(bmz_code);
+        }
+    }
+}
+
+/// LR2 ghost layer-2 dictionary (`q`..`z`), reversed on decode before layer 1.
+fn lr2_ghost_layer2_symbol(c: char) -> Option<&'static str> {
+    Some(match c {
+        'q' => "XX",
+        'r' => "X1",
+        's' => "X2",
+        't' => "X3",
+        'u' => "X4",
+        'v' => "X5",
+        'w' => "X6",
+        'x' => "X7",
+        'y' => "X8",
+        'z' => "X9",
+        _ => return None,
+    })
+}
+
+/// LR2 ghost layer-1 dictionary (`F`..`p`), reversed after layer 2 on decode.
+fn lr2_ghost_layer1_symbol(c: char) -> Option<&'static str> {
+    Some(match c {
+        'F' => "E1",
+        'G' => "E2",
+        'H' => "E3",
+        'I' => "E4",
+        'J' => "E5",
+        'K' => "E6",
+        'L' => "E7",
+        'M' => "E8",
+        'N' => "E9",
+        'P' => "EC",
+        'Q' => "EB",
+        'R' => "EA",
+        'S' => "D2",
+        'T' => "D3",
+        'U' => "D4",
+        'V' => "D5",
+        'W' => "D6",
+        'X' => "DE",
+        'Y' => "DC",
+        'a' => "DB",
+        'b' => "DA",
+        'c' => "C2",
+        'd' => "C3",
+        'e' => "C4",
+        'f' => "C5",
+        'g' => "CE",
+        'h' => "CD",
+        'i' => "CB",
+        'j' => "CA",
+        'k' => "AB",
+        'l' => "AC",
+        'm' => "AD",
+        'n' => "AE",
+        'o' => "A2",
+        'p' => "A3",
+        _ => return None,
+    })
 }
 
 fn normalize_imported_played_at(value: i64) -> Option<i64> {
@@ -475,14 +764,14 @@ mod tests {
 
     #[test]
     fn lr2_import_maps_md5_and_clear_type() {
-        let (library_db, mut score_db, sha256, md5) = open_test_databases();
+        let (mut library_db, mut score_db, sha256, md5) = open_test_databases();
         let source = Connection::open_in_memory().unwrap();
         create_lr2_source(&source, &md5);
 
         let report = import_lr2_scores(
             &source,
             ScoreImportKind::Lr2,
-            &library_db,
+            &mut library_db,
             &mut score_db,
             1_700_000_000,
         )
@@ -552,14 +841,14 @@ mod tests {
 
     #[test]
     fn lr2oraja_dx_import_sets_dx_rule_mode() {
-        let (library_db, mut score_db, _, md5) = open_test_databases();
+        let (mut library_db, mut score_db, _, md5) = open_test_databases();
         let source = Connection::open_in_memory().unwrap();
         create_lr2_source(&source, &md5);
 
         import_lr2_scores(
             &source,
             ScoreImportKind::Lr2OrajaDx,
-            &library_db,
+            &mut library_db,
             &mut score_db,
             1_700_000_000,
         )
@@ -574,14 +863,14 @@ mod tests {
 
     #[test]
     fn lr2_import_skips_unregistered_md5() {
-        let (library_db, mut score_db, _, _) = open_test_databases();
+        let (mut library_db, mut score_db, _, _) = open_test_databases();
         let source = Connection::open_in_memory().unwrap();
         create_lr2_source(&source, &[9; 16]);
 
         let report = import_lr2_scores(
             &source,
             ScoreImportKind::Lr2,
-            &library_db,
+            &mut library_db,
             &mut score_db,
             1_700_000_000,
         )
@@ -590,6 +879,224 @@ mod tests {
         assert_eq!(report.scanned, 1);
         assert_eq!(report.skipped, 1);
         assert_eq!(report.imported, 0);
+    }
+
+    #[test]
+    fn beatoraja_import_skips_course_scores_without_failing() {
+        let (library_db, mut score_db, _, _) = open_test_databases();
+        let source = Connection::open_in_memory().unwrap();
+        // A 4-song course key: four 64-char hashes concatenated (256 chars).
+        let course_key = "a".repeat(256);
+        create_beatoraja_source_with_sha256(&source, &course_key, 1_700_000_001_000);
+
+        let report = import_beatoraja_scores(
+            &source,
+            ScoreImportKind::Beatoraja,
+            &library_db,
+            &mut score_db,
+            1_700_000_000,
+        )
+        .unwrap();
+
+        assert_eq!(report.scanned, 1);
+        assert_eq!(report.skipped, 1);
+        assert_eq!(report.failed, 0);
+        assert_eq!(report.imported, 0);
+    }
+
+    #[test]
+    fn lr2_import_skips_course_scores_without_failing() {
+        let (mut library_db, mut score_db, _, _) = open_test_databases();
+        let source = Connection::open_in_memory().unwrap();
+        // An LR2 course key: a 32-char marker plus four 32-char md5s (160 chars).
+        let course_key = "0".repeat(32) + &"a".repeat(128);
+        create_lr2_source_with_hash(&source, &course_key);
+
+        let report = import_lr2_scores(
+            &source,
+            ScoreImportKind::Lr2,
+            &mut library_db,
+            &mut score_db,
+            1_700_000_000,
+        )
+        .unwrap();
+
+        assert_eq!(report.scanned, 1);
+        assert_eq!(report.skipped, 1);
+        assert_eq!(report.failed, 0);
+        assert_eq!(report.imported, 0);
+    }
+
+    #[test]
+    fn lr2_course_import_resolves_canonical_and_fans_out_ln_variants() {
+        use bmz_core::course::{
+            CourseConstraints, CourseDefinition, CourseEntry, CourseKind, CourseLnConstraint,
+        };
+
+        let (mut library_db, mut score_db, _, _) = open_test_databases();
+        let stage_md5s = [
+            "11111111111111111111111111111111",
+            "22222222222222222222222222222222",
+            "33333333333333333333333333333333",
+            "44444444444444444444444444444444",
+        ];
+        let entries: Vec<CourseEntry> = stage_md5s
+            .iter()
+            .enumerate()
+            .map(|(i, m)| CourseEntry {
+                title_hint: format!("stage{i}"),
+                md5: Some(m.to_string()),
+                sha256: None,
+                chart_id: None,
+            })
+            .collect();
+        let course = |key: &str, judge: CourseJudgeConstraint, ln: CourseLnConstraint| {
+            CourseDefinition {
+                key: key.to_string(),
+                title: key.to_string(),
+                kind: CourseKind::Dan,
+                entries: entries.clone(),
+                constraints: CourseConstraints {
+                    class: CourseClassConstraint::GradeMirrorAllowed,
+                    speed: CourseSpeedConstraint::Free,
+                    judge,
+                    gauge: CourseGaugeConstraint::Lr2,
+                    ln,
+                    source_constraints: Vec::new(),
+                },
+                trophies: Vec::new(),
+                release: true,
+            }
+        };
+        // Two canonical variants differing only by LN -> both receive the score.
+        library_db
+            .upsert_course(
+                "table:x",
+                &course("dan_default", CourseJudgeConstraint::Normal, CourseLnConstraint::Default),
+                0,
+                1,
+            )
+            .unwrap();
+        library_db
+            .upsert_course(
+                "table:x",
+                &course("dan_ln", CourseJudgeConstraint::Normal, CourseLnConstraint::Ln),
+                1,
+                1,
+            )
+            .unwrap();
+        // Non-canonical (no_good judge) sharing the same songs -> must be ignored.
+        library_db
+            .upsert_course(
+                "table:x",
+                &course("dan_nogood", CourseJudgeConstraint::NoGood, CourseLnConstraint::Default),
+                2,
+                1,
+            )
+            .unwrap();
+
+        // LR2 course record: 32-char marker + the four stage md5s (160 chars).
+        let hash = "0".repeat(32) + &stage_md5s.concat();
+        let source = Connection::open_in_memory().unwrap();
+        create_lr2_source_with_hash(&source, &hash);
+
+        let report = import_lr2_scores(
+            &source,
+            ScoreImportKind::Lr2,
+            &mut library_db,
+            &mut score_db,
+            1_700_000_000,
+        )
+        .unwrap();
+
+        assert_eq!(report.scanned, 1);
+        assert_eq!(report.matched, 1);
+        // Fanned out into the two canonical LN variants, not the no_good course.
+        assert_eq!(report.imported, 2);
+        let count: i64 = library_db
+            .conn()
+            .query_row("SELECT COUNT(*) FROM course_scores", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 2);
+        // The imported course score reflects the LR2 aggregate row (clear=4 -> Hard,
+        // ex = perfect*2 + great = 221).
+        let (clear, ex): (String, u32) = library_db
+            .conn()
+            .query_row(
+                "SELECT clear_type, ex_score FROM course_scores LIMIT 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(clear, "Hard");
+        assert_eq!(ex, 221);
+    }
+
+    #[test]
+    fn decode_lr2_ghost_handles_plain_symbols() {
+        // No dictionary tokens, no run counts: B A E D -> Bad, Poor, PGreat, Great.
+        assert_eq!(decode_lr2_ghost("BAED", 4), vec![3, 4, 0, 1]);
+        // Single PGreat.
+        assert_eq!(decode_lr2_ghost("E", 1), vec![0]);
+    }
+
+    #[test]
+    fn decode_lr2_ghost_expands_dictionary_and_runs() {
+        // Real LR2 ghost captured from a player DB.  Exercises both dictionary
+        // layers (m,c,k,S,c,b,Z tokens), a run count (`@2`, `8`) and the leading
+        // empty-poor (`@`) that must be dropped.  Validated against the LR2 score
+        // row's judge counts.
+        let ghost = decode_lr2_ghost("@2mBckScb8Z", 20);
+        assert_eq!(ghost, vec![4, 1, 3, 2, 2, 4, 3, 1, 1, 2, 2, 1, 4, 4, 4, 4, 4, 4, 4, 4]);
+    }
+
+    #[test]
+    fn decode_lr2_ghost_pads_and_truncates_to_total_notes() {
+        // Aborted play: decoded ghost shorter than the chart -> pad with Poor (4).
+        let padded = decode_lr2_ghost("E", 4);
+        assert_eq!(padded, vec![0, 4, 4, 4]);
+        // Over-long ghost is truncated to the note count.
+        let truncated = decode_lr2_ghost("E", 0);
+        assert_eq!(truncated, vec![0]); // total_notes 0 leaves the decode untouched
+        let truncated = decode_lr2_ghost("BAED", 2);
+        assert_eq!(truncated, vec![3, 4]);
+    }
+
+    #[test]
+    fn lr2_score_state_decodes_ghost() {
+        let row = Lr2ScoreRow {
+            md5: "0".repeat(32),
+            clear: 4,
+            perfect: 100,
+            great: 21,
+            good: 3,
+            bad: 2,
+            poor: 1,
+            total_notes: 4,
+            max_combo: 64,
+            min_bp: 3,
+            play_count: 2,
+            clear_count: 1,
+            ghost: "BAED".to_string(),
+            random_seed: Some(123),
+        };
+        let state = score_state_from_lr2(&row);
+        assert_eq!(state.ghost, vec![3, 4, 0, 1]);
+        assert_eq!(state.judges.fast_pgreat, 100);
+    }
+
+    #[test]
+    fn is_course_hash_classifies_by_length() {
+        // beatoraja sha256 width.
+        assert!(!is_course_hash(&"a".repeat(64), 64));
+        assert!(is_course_hash(&"a".repeat(128), 64));
+        assert!(is_course_hash(&"a".repeat(256), 64));
+        // LR2 md5 width.
+        assert!(!is_course_hash(&"a".repeat(32), 32));
+        assert!(is_course_hash(&"a".repeat(160), 32));
+        // Genuinely malformed (not a multiple of the width) stays a hard failure.
+        assert!(!is_course_hash(&"a".repeat(100), 64));
+        assert!(!is_course_hash("", 64));
     }
 
     fn open_test_databases() -> (LibraryDatabase, ScoreDatabase, [u8; 32], [u8; 16]) {
@@ -654,6 +1161,10 @@ mod tests {
     }
 
     fn create_lr2_source(conn: &Connection, md5: &[u8; 16]) {
+        create_lr2_source_with_hash(conn, &hash_to_hex(md5));
+    }
+
+    fn create_lr2_source_with_hash(conn: &Connection, hash: &str) {
         conn.execute_batch(
             "CREATE TABLE score (
                 hash TEXT, clear INTEGER, perfect INTEGER, great INTEGER,
@@ -665,12 +1176,16 @@ mod tests {
         .unwrap();
         conn.execute(
             "INSERT INTO score VALUES (?1, 4, 100, 21, 3, 2, 1, 128, 64, 3, 2, 1, '', 123)",
-            params![hash_to_hex(md5)],
+            params![hash],
         )
         .unwrap();
     }
 
     fn create_beatoraja_source(conn: &Connection, sha256: &[u8; 32], date: i64) {
+        create_beatoraja_source_with_sha256(conn, &hash_to_hex(sha256), date);
+    }
+
+    fn create_beatoraja_source_with_sha256(conn: &Connection, sha256: &str, date: i64) {
         conn.execute_batch(
             "CREATE TABLE score (
                 sha256 TEXT, clear INTEGER, epg INTEGER, lpg INTEGER,
@@ -683,7 +1198,7 @@ mod tests {
         .unwrap();
         conn.execute(
             "INSERT INTO score VALUES (?1, 7, 10, 3, 4, 2, 1, 1, 0, 0, 2, 1, 3, 1, 128, 80, 2, '', 456, ?2)",
-            params![hash_to_hex(sha256), date],
+            params![sha256, date],
         )
         .unwrap();
     }
