@@ -316,6 +316,7 @@ pub enum SelectRowKind {
 pub struct ResultSnapshot {
     pub clear_type: ClearType,
     pub arrange: String,
+    pub lane_shuffle_pattern: Vec<u8>,
     pub ex_score: u32,
     pub ex_score_rate: f32,
     pub max_combo: u32,
@@ -389,6 +390,7 @@ mod tests {
         let snapshot = ResultSnapshot {
             clear_type: ClearType::Normal,
             arrange: "NORMAL".to_string(),
+            lane_shuffle_pattern: Vec::new(),
             ex_score: 20,
             ex_score_rate: 1.0,
             max_combo: 10,
@@ -445,6 +447,7 @@ mod tests {
         let snapshot = ResultSnapshot {
             clear_type: ClearType::Normal,
             arrange: "NORMAL".to_string(),
+            lane_shuffle_pattern: Vec::new(),
             ex_score: 0,
             ex_score_rate: 1.0,
             max_combo: 0,

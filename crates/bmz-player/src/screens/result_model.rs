@@ -19,6 +19,7 @@ use crate::storage::play_result::StoredPlayResult;
 pub struct ResultSummary {
     pub clear_type: ClearType,
     pub arrange: String,
+    pub lane_shuffle_pattern: Vec<u8>,
     pub ex_score: u32,
     pub max_combo: u32,
     pub bp: u32,
@@ -138,6 +139,7 @@ impl ResultSummary {
         Self {
             clear_type: result.clear_type,
             arrange: "NORMAL".to_string(),
+            lane_shuffle_pattern: Vec::new(),
             ex_score: result.score.ex_score(),
             max_combo: result.score.max_combo,
             bp: result.record_bp(),

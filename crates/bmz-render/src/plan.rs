@@ -1388,6 +1388,10 @@ fn build_result_skin_draw_state(
         elapsed_ms,
         select_arrange_index: crate::skin::select_arrange_index(&snapshot.arrange),
         result_arrange_index: crate::skin::select_arrange_index(&snapshot.arrange),
+        result_random_lane_refs: crate::skin::result_random_lane_refs(
+            &snapshot.lane_shuffle_pattern,
+            snapshot.key_mode,
+        ),
         ex_score: snapshot.ex_score,
         total_notes: snapshot.total_notes,
         past_notes: snapshot.total_notes,
@@ -2707,6 +2711,7 @@ mod tests {
             let snapshot = ResultSnapshot {
                 clear_type: ClearType::Normal,
                 arrange: "NORMAL".to_string(),
+                lane_shuffle_pattern: Vec::new(),
                 ex_score: 100,
                 ex_score_rate: 0.5,
                 max_combo: 50,
@@ -2795,6 +2800,7 @@ mod tests {
         let snapshot = ResultSnapshot {
             clear_type: ClearType::Normal,
             arrange: "NORMAL".to_string(),
+            lane_shuffle_pattern: Vec::new(),
             ex_score: 100,
             ex_score_rate: 0.5,
             max_combo: 50,
@@ -2894,6 +2900,22 @@ mod tests {
     }
 
     #[test]
+    fn result_skin_state_maps_random_lane_pattern() {
+        let AppSceneSnapshot::Result(mut snapshot) = crate::sample::sample_result_scene() else {
+            panic!("sample result scene");
+        };
+        let mut pattern = (0..bmz_core::lane::LANE_COUNT as u8).collect::<Vec<_>>();
+        pattern[bmz_core::lane::Lane::Key1.index()] = bmz_core::lane::Lane::Key7.index() as u8;
+        snapshot.arrange = "RANDOM".to_string();
+        snapshot.lane_shuffle_pattern = pattern;
+
+        let state = build_result_skin_draw_state(&snapshot, 0);
+
+        assert_eq!(state.result_arrange_index, 2);
+        assert_eq!(state.result_random_lane_refs[0], 7);
+    }
+
+    #[test]
     fn result_skin_state_falls_back_to_timing_points_for_average_timing() {
         let AppSceneSnapshot::Result(mut snapshot) = crate::sample::sample_result_scene() else {
             panic!("sample result scene");
@@ -2944,6 +2966,7 @@ mod tests {
         let snapshot = ResultSnapshot {
             clear_type: ClearType::Normal,
             arrange: "NORMAL".to_string(),
+            lane_shuffle_pattern: Vec::new(),
             ex_score: 100,
             ex_score_rate: 0.5,
             max_combo: 50,
@@ -3054,6 +3077,7 @@ mod tests {
         let snapshot = ResultSnapshot {
             clear_type: ClearType::Normal,
             arrange: "NORMAL".to_string(),
+            lane_shuffle_pattern: Vec::new(),
             ex_score: 100,
             ex_score_rate: 0.5,
             max_combo: 50,

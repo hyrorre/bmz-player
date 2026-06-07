@@ -576,6 +576,7 @@ fn course_result_summary_for_skin(course: &CourseResultSummary) -> ResultSummary
     ResultSummary {
         clear_type,
         arrange: "NORMAL".to_string(),
+        lane_shuffle_pattern: Vec::new(),
         ex_score: course.total_ex_score,
         max_combo,
         bp,
@@ -1203,6 +1204,7 @@ impl WinitApp {
             AppViewState::Result(summary) => AppSceneSnapshot::Result(ResultSnapshot {
                 clear_type: summary.clear_type,
                 arrange: summary.arrange.as_str().to_string(),
+                lane_shuffle_pattern: summary.lane_shuffle_pattern.clone(),
                 ex_score: summary.ex_score,
                 ex_score_rate: summary.ex_score_rate(),
                 max_combo: summary.max_combo,
@@ -9474,6 +9476,7 @@ mod tests {
             ResultSummary {
                 clear_type: ClearType::Normal,
                 arrange: "NORMAL".to_string(),
+                lane_shuffle_pattern: Vec::new(),
                 ex_score,
                 max_combo,
                 bp: 0,

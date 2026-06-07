@@ -354,6 +354,8 @@ struct MainStateProbe {
     option_values: BTreeMap<i32, bool>,
     timer_calls: Vec<i32>,
     timer_values: BTreeMap<i32, i32>,
+    event_index_calls: Vec<i32>,
+    event_index_values: BTreeMap<i32, i32>,
     gauge_type_calls: usize,
     gauge_type_value: i32,
     float_number_calls: Vec<i32>,
@@ -373,6 +375,8 @@ impl Default for MainStateProbe {
             option_values: BTreeMap::new(),
             timer_calls: Vec::new(),
             timer_values: BTreeMap::new(),
+            event_index_calls: Vec::new(),
+            event_index_values: BTreeMap::new(),
             gauge_type_calls: 0,
             gauge_type_value: 0,
             float_number_calls: Vec::new(),
@@ -401,6 +405,8 @@ impl MainStateProbe {
         self.float_number_calls.clear();
         self.float_number_values.clear();
         self.text_calls.clear();
+        self.event_index_calls.clear();
+        self.event_index_values.clear();
     }
 
     fn begin_number_recording(&mut self, default_value: i32) {
@@ -411,6 +417,8 @@ impl MainStateProbe {
         self.option_values.clear();
         self.timer_calls.clear();
         self.timer_values.clear();
+        self.event_index_calls.clear();
+        self.event_index_values.clear();
         self.gauge_type_calls = 0;
         self.gauge_type_value = 0;
         self.clear_aux_calls();
@@ -424,6 +432,8 @@ impl MainStateProbe {
         self.option_values.clear();
         self.timer_calls.clear();
         self.timer_values.clear();
+        self.event_index_calls.clear();
+        self.event_index_values.clear();
         self.gauge_type_calls = 0;
         self.gauge_type_value = 0;
         self.clear_aux_calls();
@@ -442,6 +452,8 @@ impl MainStateProbe {
         self.option_values.clear();
         self.timer_calls.clear();
         self.timer_values.clear();
+        self.event_index_calls.clear();
+        self.event_index_values.clear();
         self.gauge_type_calls = 0;
         self.gauge_type_value = 0;
         self.number_values.insert(ref_id, value);
@@ -455,6 +467,8 @@ impl MainStateProbe {
         self.option_values.clear();
         self.timer_calls.clear();
         self.timer_values.clear();
+        self.event_index_calls.clear();
+        self.event_index_values.clear();
         self.gauge_type_calls = 0;
         self.gauge_type_value = 0;
     }
@@ -476,6 +490,8 @@ impl MainStateProbe {
         self.option_values.clear();
         self.timer_calls.clear();
         self.timer_values.clear();
+        self.event_index_calls.clear();
+        self.event_index_values.clear();
         self.gauge_type_calls = 0;
         self.gauge_type_value = 0;
         self.option_values.insert(i32::MIN, default_value);
@@ -489,6 +505,8 @@ impl MainStateProbe {
         self.option_values.clear();
         self.timer_calls.clear();
         self.timer_values.clear();
+        self.event_index_calls.clear();
+        self.event_index_values.clear();
         self.gauge_type_calls = 0;
         self.gauge_type_value = 0;
         self.option_values.insert(option_id, value);
@@ -502,6 +520,8 @@ impl MainStateProbe {
         self.option_values.clear();
         self.timer_calls.clear();
         self.timer_values.clear();
+        self.event_index_calls.clear();
+        self.event_index_values.clear();
         self.option_values.insert(i32::MIN, true);
         self.timer_values.insert(i32::MIN, i32::MIN);
     }
@@ -520,6 +540,8 @@ impl MainStateProbe {
         self.option_values.clear();
         self.timer_calls.clear();
         self.timer_values.clear();
+        self.event_index_calls.clear();
+        self.event_index_values.clear();
         self.timer_values.insert(timer_id, timer_value);
         self.option_values.insert(option_id, option_value);
         self.gauge_type_calls = 0;
@@ -534,6 +556,8 @@ impl MainStateProbe {
         self.option_values.clear();
         self.timer_calls.clear();
         self.timer_values.clear();
+        self.event_index_calls.clear();
+        self.event_index_values.clear();
         self.gauge_type_calls = 0;
         self.gauge_type_value = value;
     }
@@ -542,11 +566,33 @@ impl MainStateProbe {
         self.begin_gauge_type_call_recording(value);
     }
 
+    fn begin_event_index_call_recording(&mut self, default_value: i32) {
+        self.mode = MainStateProbeMode::RecordNumbers { default_value };
+        self.number_calls.clear();
+        self.number_values.clear();
+        self.option_calls.clear();
+        self.option_values.clear();
+        self.timer_calls.clear();
+        self.timer_values.clear();
+        self.event_index_calls.clear();
+        self.event_index_values.clear();
+        self.gauge_type_calls = 0;
+        self.gauge_type_value = 0;
+        self.clear_aux_calls();
+    }
+
+    fn begin_event_index_recording_with_value(&mut self, event_id: i32, value: i32) {
+        self.begin_event_index_call_recording(0);
+        self.event_index_values.insert(event_id, value);
+    }
+
     fn end_recording(&mut self) {
         self.mode = MainStateProbeMode::RuntimeStub;
         self.number_values.clear();
         self.option_values.clear();
         self.timer_values.clear();
+        self.event_index_values.clear();
+        self.event_index_calls.clear();
         self.gauge_type_calls = 0;
         self.gauge_type_value = 0;
     }
@@ -623,8 +669,18 @@ impl MainStateProbe {
         format!("Text{ref_id}")
     }
 
-    fn event_index(&mut self, _event_id: i32) -> i32 {
-        0
+    fn event_index(&mut self, event_id: i32) -> i32 {
+        match self.mode {
+            MainStateProbeMode::RuntimeStub => 0,
+            MainStateProbeMode::SymbolicNumbers { base_value } => {
+                self.event_index_calls.push(event_id);
+                self.event_index_values.get(&event_id).copied().unwrap_or(base_value + event_id)
+            }
+            MainStateProbeMode::RecordNumbers { default_value } => {
+                self.event_index_calls.push(event_id);
+                self.event_index_values.get(&event_id).copied().unwrap_or(default_value)
+            }
+        }
     }
 
     fn begin_draw_probe(&mut self, numbers: BTreeMap<i32, i32>, floats: BTreeMap<i32, f64>) {
@@ -691,11 +747,11 @@ fn create_main_state_stub(lua: &Lua, probe: Arc<Mutex<MainStateProbe>>) -> mlua:
     let probe_for_event_index = probe.clone();
     table.set(
         "event_index",
-        lua.create_function(move |_, _event_id: i32| {
+        lua.create_function(move |_, event_id: i32| {
             Ok(probe_for_event_index
                 .lock()
                 .map_err(|_| mlua::Error::external("main_state probe lock poisoned"))?
-                .event_index(0))
+                .event_index(event_id))
         })?,
     )?;
     table.set(
@@ -2190,6 +2246,60 @@ fn call_draw_with_number(
     }
 }
 
+fn infer_main_state_event_index_draw_condition(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+) -> Option<String> {
+    {
+        main_state_probe.lock().ok()?.begin_event_index_call_recording(0);
+    }
+    let _ = function.call::<Value>(()).ok();
+    let calls = {
+        let mut probe = main_state_probe.lock().ok()?;
+        let calls = probe.event_index_calls.clone();
+        probe.end_recording();
+        calls
+    };
+    let event_id = single_number_call(&calls)?;
+    let samples = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+    let observed = samples
+        .iter()
+        .map(|sample| call_draw_with_event_index(function, main_state_probe, event_id, *sample))
+        .collect::<Option<Vec<_>>>()?;
+    let enabled = samples
+        .iter()
+        .zip(observed)
+        .filter_map(|(value, enabled)| enabled.then_some(*value))
+        .collect::<Vec<_>>();
+    if enabled.is_empty() || enabled.len() == samples.len() {
+        return None;
+    }
+    Some(
+        enabled
+            .into_iter()
+            .map(|value| format!("event_index({event_id}) == {value}"))
+            .collect::<Vec<_>>()
+            .join(" or "),
+    )
+}
+
+fn call_draw_with_event_index(
+    function: &Function,
+    main_state_probe: &Arc<Mutex<MainStateProbe>>,
+    event_id: i32,
+    value: i32,
+) -> Option<bool> {
+    {
+        main_state_probe.lock().ok()?.begin_event_index_recording_with_value(event_id, value);
+    }
+    let result = function.call::<Value>(()).ok();
+    main_state_probe.lock().ok()?.end_recording();
+    match result? {
+        Value::Boolean(value) => Some(value),
+        _ => None,
+    }
+}
+
 fn infer_main_state_option_draw_condition(
     function: &Function,
     main_state_probe: &Arc<Mutex<MainStateProbe>>,
@@ -2483,6 +2593,7 @@ fn infer_boolean_predicate(
         })
         .or_else(|| infer_float_number_and_number_and_draw(function, main_state_probe))
         .or_else(|| infer_main_state_draw_condition(function, main_state_probe))
+        .or_else(|| infer_main_state_event_index_draw_condition(function, main_state_probe))
         .or_else(|| infer_main_state_option_draw_condition(function, main_state_probe))
         .or_else(|| infer_main_state_gauge_type_draw_condition(function, main_state_probe))
         .or_else(|| infer_main_state_timer_option_draw_condition(function, main_state_probe))
@@ -3432,5 +3543,33 @@ fn lua_key_to_json_key(key: Value, path: &str, warnings: &mut Vec<String>) -> Re
             warnings.push(format!("unsupported table key converted with debug fallback at {path}"));
             Ok(lua_value_to_log_string(&key))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn infers_event_index_or_draw_condition() {
+        let lua = Lua::new();
+        let probe = Arc::new(Mutex::new(MainStateProbe::default()));
+        let main_state = create_main_state_stub(&lua, probe.clone()).unwrap();
+        lua.globals().set("main_state", main_state).unwrap();
+        let function = lua
+            .load(
+                r#"
+                return function()
+                    return main_state.event_index(42) == 2 or main_state.event_index(42) == 3
+                end
+                "#,
+            )
+            .eval::<Function>()
+            .unwrap();
+
+        assert_eq!(
+            infer_main_state_event_index_draw_condition(&function, &probe),
+            Some("event_index(42) == 2 or event_index(42) == 3".to_string())
+        );
     }
 }
