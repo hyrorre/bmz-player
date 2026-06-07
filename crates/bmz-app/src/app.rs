@@ -2193,6 +2193,10 @@ impl WinitApp {
                     self.enter_or_play_selected();
                     true
                 }
+                Some(SelectItem::Back) => {
+                    self.exit_folder();
+                    true
+                }
                 Some(SelectItem::AdvancedSettings) => {
                     self.open_advanced_settings_from_select();
                     true
@@ -3200,6 +3204,9 @@ impl WinitApp {
             Some(SelectItem::Config(_)) => {}
             Some(SelectItem::KeyBinding(row)) => {
                 self.begin_key_config_edit(row.key_mode, row.target);
+            }
+            Some(SelectItem::Back) => {
+                self.exit_folder();
             }
             Some(SelectItem::AdvancedSettings) => {
                 self.open_advanced_settings_from_select();
@@ -4222,6 +4229,7 @@ impl WinitApp {
             | SelectItem::Course(_)
             | SelectItem::Config(_)
             | SelectItem::KeyBinding(_)
+            | SelectItem::Back
             | SelectItem::AdvancedSettings => false,
         }) && let Some(chart) = &row.chart
         {
@@ -4586,6 +4594,7 @@ impl WinitApp {
             | SelectItem::Course(_)
             | SelectItem::Config(_)
             | SelectItem::KeyBinding(_)
+            | SelectItem::Back
             | SelectItem::AdvancedSettings => None,
         }
     }
@@ -4597,6 +4606,7 @@ impl WinitApp {
             | SelectItem::Folder { .. }
             | SelectItem::Config(_)
             | SelectItem::KeyBinding(_)
+            | SelectItem::Back
             | SelectItem::AdvancedSettings => None,
         }
     }
@@ -8070,6 +8080,54 @@ fn select_snapshot_rows(
                         chart_key_mode: None,
                     }
                 }
+                SelectItem::Back => SelectRowSnapshot {
+                    index: index as u32,
+                    title: "戻る".to_string(),
+                    subtitle: String::new(),
+                    artist: String::new(),
+                    difficulty_name: String::new(),
+                    play_level: String::new(),
+                    table_level: String::new(),
+                    judge_rank: None,
+                    total_notes: 0,
+                    initial_bpm: 0.0,
+                    min_bpm: 0.0,
+                    max_bpm: 0.0,
+                    length_ms: 0,
+                    clear_type: String::new(),
+                    ex_score: None,
+                    max_combo: None,
+                    gauge_value: None,
+                    bp: None,
+                    cb: None,
+                    judge_counts: DisplayJudgeCounts::default(),
+                    fast_slow_counts: None,
+                    play_count: 0,
+                    clear_count: 0,
+                    replay_slots: [false; 4],
+                    has_long_notes: false,
+                    has_mines: false,
+                    has_random: false,
+                    chart_normal_notes: 0,
+                    chart_long_notes: 0,
+                    chart_scratch_notes: 0,
+                    chart_long_scratch_notes: 0,
+                    chart_density: 0.0,
+                    chart_peak_density: 0.0,
+                    chart_end_density: 0.0,
+                    chart_total_gauge: 0.0,
+                    chart_main_bpm: 0.0,
+                    chart_distribution: Vec::new(),
+                    chart_bpm_graph_segments: Vec::new(),
+                    folder_lamp_counts: [0; 11],
+                    is_folder: true,
+                    kind: bmz_render::scene::SelectRowKind::SearchFolder,
+                    in_library: true,
+                    achieved_trophy_names: Vec::new(),
+                    course_titles: Default::default(),
+                    course_constraints: Default::default(),
+                    chart_key_mode: None,
+                },
                 SelectItem::AdvancedSettings => SelectRowSnapshot {
                     index: index as u32,
                     title: "詳細設定".to_string(),

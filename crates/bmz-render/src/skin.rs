@@ -8649,14 +8649,14 @@ fn select_row_bar_image_index(row: &SelectRowSnapshot) -> usize {
         SelectRowKind::TableFolder => 2,
         SelectRowKind::SearchFolder => 6,
         SelectRowKind::Course => 3,
-        SelectRowKind::SettingsFolder => 6,
+        SelectRowKind::SettingsFolder => 1,
         SelectRowKind::Config => 0,
     }
 }
 
 fn select_row_bar_image_fallback_index(row: &SelectRowSnapshot) -> Option<usize> {
     match row.kind {
-        SelectRowKind::SearchFolder | SelectRowKind::SettingsFolder => Some(1),
+        SelectRowKind::SearchFolder => Some(1),
         _ => None,
     }
 }
@@ -8671,14 +8671,14 @@ fn select_row_bar_text_index(row: &SelectRowSnapshot) -> usize {
         // Course rows display the course title in the same slot as a song title
         // (text index 2), not the folder slot (6).
         SelectRowKind::Course => 2,
-        SelectRowKind::SettingsFolder => 10,
+        SelectRowKind::SettingsFolder => 4,
         SelectRowKind::Config => 2,
     }
 }
 
 fn select_row_bar_text_fallback_index(row: &SelectRowSnapshot) -> Option<usize> {
     match row.kind {
-        SelectRowKind::SearchFolder | SelectRowKind::SettingsFolder => Some(4),
+        SelectRowKind::SearchFolder => Some(4),
         _ => None,
     }
 }
@@ -11153,7 +11153,7 @@ mod tests {
     }
 
     #[test]
-    fn select_search_and_settings_folders_use_search_bar_slots() {
+    fn select_search_folders_use_search_bar_slots_and_settings_folders_use_folder_slots() {
         let search = SelectRowSnapshot {
             kind: SelectRowKind::SearchFolder,
             is_folder: true,
@@ -11167,12 +11167,12 @@ mod tests {
 
         assert_eq!(select_row_bar_image_index(&search), 6);
         assert_eq!(select_row_bar_text_index(&search), 10);
-        assert_eq!(select_row_bar_image_index(&settings), 6);
-        assert_eq!(select_row_bar_text_index(&settings), 10);
         assert_eq!(select_row_bar_image_fallback_index(&search), Some(1));
         assert_eq!(select_row_bar_text_fallback_index(&search), Some(4));
-        assert_eq!(select_row_bar_image_fallback_index(&settings), Some(1));
-        assert_eq!(select_row_bar_text_fallback_index(&settings), Some(4));
+        assert_eq!(select_row_bar_image_index(&settings), 1);
+        assert_eq!(select_row_bar_text_index(&settings), 4);
+        assert_eq!(select_row_bar_image_fallback_index(&settings), None);
+        assert_eq!(select_row_bar_text_fallback_index(&settings), None);
     }
 
     #[test]

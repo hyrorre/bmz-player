@@ -304,6 +304,8 @@ pub enum SelectItem {
     Course(SelectCourseRow),
     Config(ConfigSelectRow),
     KeyBinding(KeyBindingSelectRow),
+    /// 現在のフォルダから 1 階層戻るアクション行。
+    Back,
     /// ゲーム内設定から egui の詳細設定ウィンドウを開くアクション行。
     AdvancedSettings,
 }
@@ -316,6 +318,7 @@ impl SelectItem {
             Self::Course(row) => row.title.clone(),
             Self::Config(row) => row.label().to_string(),
             Self::KeyBinding(row) => row.label(),
+            Self::Back => "戻る".to_string(),
             Self::AdvancedSettings => "詳細設定".to_string(),
         }
     }

@@ -111,13 +111,13 @@ pub fn settings_root_item() -> SelectItem {
     SelectItem::Folder {
         path: CONFIG_ROOT_PATH.to_string(),
         name: "設定".to_string(),
-        kind: SelectRowKind::SettingsFolder,
+        kind: SelectRowKind::SearchFolder,
         summary: None,
     }
 }
 
 pub fn load_settings_items(path: &str) -> Vec<SelectItem> {
-    match parse_settings_path(path) {
+    let mut items = match parse_settings_path(path) {
         Some(SettingsPath::Root) => vec![
             SelectItem::Folder {
                 path: CONFIG_VOLUME_PATH.to_string(),
@@ -173,7 +173,11 @@ pub fn load_settings_items(path: &str) -> Vec<SelectItem> {
         Some(SettingsPath::KeysCommon) => common_key_binding_items(),
         Some(SettingsPath::KeysMode(key_mode)) => key_binding_items(key_mode),
         Some(SettingsPath::Unknown(_)) | None => Vec::new(),
+    };
+    if !items.is_empty() {
+        items.insert(0, SelectItem::Back);
     }
+    items
 }
 
 fn key_mode_folder_items() -> Vec<SelectItem> {
@@ -268,10 +272,11 @@ mod tests {
     #[test]
     fn settings_root_lists_categories() {
         let items = load_settings_items(CONFIG_ROOT_PATH);
-        assert_eq!(items.len(), 8);
+        assert_eq!(items.len(), 9);
+        assert!(matches!(items.first(), Some(SelectItem::Back)));
         assert!(matches!(items.last(), Some(SelectItem::AdvancedSettings)));
         assert!(matches!(
-            &items[0],
+            &items[1],
             SelectItem::Folder { name, .. } if name == "音量"
         ));
     }
@@ -279,23 +284,25 @@ mod tests {
     #[test]
     fn settings_volume_lists_entries() {
         let items = load_settings_items(CONFIG_VOLUME_PATH);
-        assert_eq!(items.len(), 6);
+        assert_eq!(items.len(), 7);
+        assert!(matches!(items.first(), Some(SelectItem::Back)));
         assert!(
-            matches!(&items[0], SelectItem::Config(row) if row.entry_id == SettingsEntryId::MasterVolume)
+            matches!(&items[1], SelectItem::Config(row) if row.entry_id == SettingsEntryId::MasterVolume)
         );
     }
 
     #[test]
     fn settings_keys_lists_key_mode_folders() {
         let items = load_settings_items(CONFIG_KEYS_PATH);
-        assert_eq!(items.len(), KEY_CONFIG_MODES.len() + 1);
+        assert_eq!(items.len(), KEY_CONFIG_MODES.len() + 2);
+        assert!(matches!(items.first(), Some(SelectItem::Back)));
         assert!(matches!(
-            &items[0],
+            &items[1],
             SelectItem::Folder { name, path, .. }
                 if name == "共通" && path == CONFIG_KEYS_COMMON_PATH
         ));
         assert!(matches!(
-            &items[1],
+            &items[2],
             SelectItem::Folder { name, path, .. }
                 if name == "5K" && path == "bmz-settings:keys:5k"
         ));
@@ -304,9 +311,10 @@ mod tests {
     #[test]
     fn settings_keys_common_lists_e_actions() {
         let items = load_settings_items(CONFIG_KEYS_COMMON_PATH);
-        assert_eq!(items.len(), COMMON_ACTIONS.len() * KEY_BINDING_SLOTS.len());
+        assert_eq!(items.len(), COMMON_ACTIONS.len() * KEY_BINDING_SLOTS.len() + 1);
+        assert!(matches!(items.first(), Some(SelectItem::Back)));
         assert!(matches!(
-            &items[0],
+            &items[1],
             SelectItem::KeyBinding(row)
                 if row.target == KeyBindingTarget::Action {
                     action: InputActionConfig::E1,
@@ -326,9 +334,10 @@ mod tests {
     #[test]
     fn settings_keys_7k_lists_lanes() {
         let items = load_settings_items("bmz-settings:keys:7k");
-        assert_eq!(items.len(), 9 * KEY_BINDING_SLOTS.len());
+        assert_eq!(items.len(), 9 * KEY_BINDING_SLOTS.len() + 1);
+        assert!(matches!(items.first(), Some(SelectItem::Back)));
         assert!(matches!(
-            &items[0],
+            &items[1],
             SelectItem::KeyBinding(row)
                 if row.key_mode == KeyMode::K7
                     && row.target == KeyBindingTarget::Scratch {
@@ -338,7 +347,7 @@ mod tests {
                     }
         ));
         assert!(matches!(
-            &items[1],
+            &items[2],
             SelectItem::KeyBinding(row)
                 if row.key_mode == KeyMode::K7
                     && row.target == KeyBindingTarget::Scratch {
@@ -348,7 +357,7 @@ mod tests {
                     }
         ));
         assert!(matches!(
-            &items[9],
+            &items[10],
             SelectItem::KeyBinding(row)
                 if row.key_mode == KeyMode::K7
                     && row.target == KeyBindingTarget::Scratch {
@@ -358,7 +367,7 @@ mod tests {
                     }
         ));
         assert!(matches!(
-            &items[18],
+            &items[19],
             SelectItem::KeyBinding(row)
                 if row.key_mode == KeyMode::K7
                     && row.target == KeyBindingTarget::Scratch {
@@ -372,7 +381,8 @@ mod tests {
     #[test]
     fn settings_keys_14k_lists_lanes() {
         let items = load_settings_items("bmz-settings:keys:14k");
-        assert_eq!(items.len(), 18 * KEY_BINDING_SLOTS.len());
+        assert_eq!(items.len(), 18 * KEY_BINDING_SLOTS.len() + 1);
+        assert!(matches!(items.first(), Some(SelectItem::Back)));
     }
 
     #[test]
@@ -404,7 +414,8 @@ mod tests {
     #[test]
     fn settings_input_lists_scratch_entries() {
         let items = load_settings_items(CONFIG_INPUT_PATH);
-        assert_eq!(items.len(), SettingsEntryId::INPUT_ENTRIES.len());
+        assert_eq!(items.len(), SettingsEntryId::INPUT_ENTRIES.len() + 1);
+        assert!(matches!(items.first(), Some(SelectItem::Back)));
         assert!(items.iter().any(|item| matches!(
             item,
             SelectItem::Config(row) if row.entry_id == SettingsEntryId::ScratchInputMode
@@ -414,7 +425,8 @@ mod tests {
     #[test]
     fn settings_replay_lists_slot_rules() {
         let items = load_settings_items(CONFIG_REPLAY_PATH);
-        assert_eq!(items.len(), SettingsEntryId::REPLAY_ENTRIES.len());
+        assert_eq!(items.len(), SettingsEntryId::REPLAY_ENTRIES.len() + 1);
+        assert!(matches!(items.first(), Some(SelectItem::Back)));
         assert!(items.iter().any(|item| matches!(
             item,
             SelectItem::Config(row) if row.entry_id == SettingsEntryId::ReplaySlot4Rule
