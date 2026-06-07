@@ -22,9 +22,9 @@ use crate::config::app_config::{
 };
 use crate::config::profile_config::{
     AssistOptionConfig, BgaExpandConfig, BgaModeConfig, GaugeAutoShiftConfig, GaugeTypeConfig,
-    HispeedModeConfig, JudgeAlgorithmConfig, LaneEffectConfig, ProfileConfig, RandomOptionConfig,
-    ReplaySlotRule, ScratchInputMode, SkinConfig, SkinHistoryEntryConfig, SkinOffsetConfig,
-    TargetOptionConfig,
+    HispeedModeConfig, IrProviderConfig, IrProviderRoleConfig, IrSendPolicyConfig,
+    JudgeAlgorithmConfig, LaneEffectConfig, ProfileConfig, RandomOptionConfig, ReplaySlotRule,
+    ScratchInputMode, SkinConfig, SkinHistoryEntryConfig, SkinOffsetConfig, TargetOptionConfig,
 };
 use crate::ln_policy::LnPolicySetting;
 use crate::practice_ui::{PracticePanelContext, build_practice_panel};
@@ -1718,6 +1718,89 @@ fn build_profile_settings_panel(
                     ui.label("システム音の再スキャンは次回起動時に反映されます。");
                 });
 
+                egui::CollapsingHeader::new("IR").show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("主 provider");
+                        ui.text_edit_singleline(&mut profile.ir.primary_provider);
+                    });
+                    ui.checkbox(
+                        &mut profile.ir.prefetch_global_ranking_on_score_submit,
+                        "スコア送信後に全体順位を取得",
+                    );
+                    ui.checkbox(
+                        &mut profile.ir.prefetch_rival_ranking_on_score_submit,
+                        "スコア送信後にライバル順位を取得",
+                    );
+                    let mut remove_index = None;
+                    for (index, provider) in profile.ir.providers.iter_mut().enumerate() {
+                        ui.push_id(("ir_provider", index), |ui| {
+                            ui.separator();
+                            ui.horizontal(|ui| {
+                                ui.checkbox(&mut provider.enabled, "");
+                                ui.label(format!("provider {}", index + 1));
+                                if ui.button("削除").clicked() {
+                                    remove_index = Some(index);
+                                }
+                            });
+                            ir_provider_text_row(ui, "ID", &mut provider.provider);
+                            ir_provider_text_row(ui, "表示名", &mut provider.account_display_name);
+                            ir_provider_text_row(ui, "アカウント ID", &mut provider.account_id);
+                            egui::ComboBox::from_label("送信方針")
+                                .selected_text(ir_send_policy_label(provider.send_policy))
+                                .show_ui(ui, |ui| {
+                                    for value in [
+                                        IrSendPolicyConfig::UpdateScore,
+                                        IrSendPolicyConfig::Always,
+                                        IrSendPolicyConfig::CompleteSong,
+                                    ] {
+                                        ui.selectable_value(
+                                            &mut provider.send_policy,
+                                            value,
+                                            ir_send_policy_label(value),
+                                        );
+                                    }
+                                });
+                            egui::ComboBox::from_label("役割")
+                                .selected_text(ir_provider_role_label(provider.role))
+                                .show_ui(ui, |ui| {
+                                    for value in [
+                                        IrProviderRoleConfig::SubmitOnly,
+                                        IrProviderRoleConfig::Primary,
+                                    ] {
+                                        ui.selectable_value(
+                                            &mut provider.role,
+                                            value,
+                                            ir_provider_role_label(value),
+                                        );
+                                    }
+                                });
+                            ui.horizontal(|ui| {
+                                ui.label("最終ログイン");
+                                ui.monospace(format_optional_timestamp(provider.last_login_at));
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("最終成功");
+                                ui.monospace(format_optional_timestamp(provider.last_success_at));
+                            });
+                        });
+                    }
+                    if let Some(index) = remove_index {
+                        profile.ir.providers.remove(index);
+                    }
+                    if ui.button("provider を追加").clicked() {
+                        profile.ir.providers.push(IrProviderConfig {
+                            provider: "bmz".to_string(),
+                            enabled: false,
+                            account_display_name: String::new(),
+                            account_id: String::new(),
+                            send_policy: IrSendPolicyConfig::default(),
+                            role: IrProviderRoleConfig::default(),
+                            last_login_at: None,
+                            last_success_at: None,
+                        });
+                    }
+                });
+
                 egui::CollapsingHeader::new("UI").show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.label("言語");
@@ -1900,6 +1983,32 @@ fn system_sound_path_row(ui: &mut egui::Ui, label: &str, value: &mut String) {
             *value = folder.to_string_lossy().into_owned();
         }
     });
+}
+
+fn ir_provider_text_row(ui: &mut egui::Ui, label: &str, value: &mut String) {
+    ui.horizontal(|ui| {
+        ui.label(label);
+        ui.text_edit_singleline(value);
+    });
+}
+
+fn ir_send_policy_label(value: IrSendPolicyConfig) -> &'static str {
+    match value {
+        IrSendPolicyConfig::UpdateScore => "UPDATE SCORE",
+        IrSendPolicyConfig::Always => "ALWAYS",
+        IrSendPolicyConfig::CompleteSong => "COMPLETE SONG",
+    }
+}
+
+fn ir_provider_role_label(value: IrProviderRoleConfig) -> &'static str {
+    match value {
+        IrProviderRoleConfig::SubmitOnly => "SUBMIT ONLY",
+        IrProviderRoleConfig::Primary => "PRIMARY",
+    }
+}
+
+fn format_optional_timestamp(value: Option<i64>) -> String {
+    value.map(|value| value.to_string()).unwrap_or_else(|| "-".to_string())
 }
 
 /// スキン設定パネルからのアクション要求。
