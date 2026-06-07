@@ -28,6 +28,33 @@ pub struct ProfileConfig {
     pub system_sound: SystemSoundConfig,
     #[serde(default)]
     pub skin: SkinConfig,
+    #[serde(default)]
+    pub select: SelectStateConfig,
+}
+
+/// 選曲画面の表示状態。フィルター (5K/7K など) とソートを永続化する。
+/// 値は app 層の `SelectModeFilter` / `SelectSort` の `as_str()` を文字列で保持し、
+/// 読込時に未知の値なら既定へフォールバックする。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SelectStateConfig {
+    #[serde(default = "default_select_mode_filter")]
+    pub mode_filter: String,
+    #[serde(default = "default_select_sort")]
+    pub sort: String,
+}
+
+pub fn default_select_mode_filter() -> String {
+    "ALL".to_string()
+}
+
+pub fn default_select_sort() -> String {
+    "TITLE".to_string()
+}
+
+impl Default for SelectStateConfig {
+    fn default() -> Self {
+        Self { mode_filter: default_select_mode_filter(), sort: default_select_sort() }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -664,6 +691,7 @@ impl ProfileConfig {
             },
             system_sound: SystemSoundConfig::default(),
             skin: SkinConfig::default(),
+            select: SelectStateConfig::default(),
         }
     }
 }
@@ -798,6 +826,26 @@ mod tests {
         assert_eq!(play.bga, BgaModeConfig::On);
         assert_eq!(play.bga_expand, BgaExpandConfig::KeepAspect);
         assert_eq!(play.misslayer_duration_ms, 500);
+    }
+
+    #[test]
+    fn select_state_uses_defaults_for_old_profiles() {
+        // `[select]` セクションが無い旧 profile.toml でも既定値になる。
+        let select: SelectStateConfig = toml::from_str("").unwrap();
+
+        assert_eq!(select.mode_filter, "ALL");
+        assert_eq!(select.sort, "TITLE");
+    }
+
+    #[test]
+    fn select_state_roundtrips_through_toml() {
+        let select = SelectStateConfig { mode_filter: "7K".to_string(), sort: "LEVEL".to_string() };
+
+        let toml = toml::to_string(&select).unwrap();
+        let parsed: SelectStateConfig = toml::from_str(&toml).unwrap();
+
+        assert_eq!(parsed.mode_filter, "7K");
+        assert_eq!(parsed.sort, "LEVEL");
     }
 
     #[test]

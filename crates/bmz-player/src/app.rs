@@ -775,13 +775,12 @@ impl WinitApp {
         }
 
         let folder_stack = initial_folder_stack(&boot.app_config);
-        let select_items = load_items_for_stack(
-            &boot,
-            &folder_stack,
-            &[],
-            SelectModeFilter::All,
-            SelectSort::Title,
-        );
+        let initial_mode_filter =
+            SelectModeFilter::from_str_or_default(&boot.profile_config.select.mode_filter);
+        let select_sort = SelectSort::from_str_or_default(&boot.profile_config.select.sort);
+        let (select_items, select_mode_filter) =
+            load_items_for_stack(&boot, &folder_stack, &[], initial_mode_filter, select_sort);
+        boot.profile_config.select.mode_filter = select_mode_filter.as_str().to_string();
         let boot_chart_id = resolve_boot_chart_id(&boot.library_db, &options);
         log_startup_options(&options);
 
@@ -935,8 +934,8 @@ impl WinitApp {
             gauge_option,
             gauge_auto_shift_option,
             assist_option,
-            select_mode_filter: SelectModeFilter::All,
-            select_sort: SelectSort::Title,
+            select_mode_filter,
+            select_sort,
             select_keys,
             smoke_exit_after_frames: options.smoke_exit_after_frames,
             smoke_exit_on_result: options.smoke_exit_on_result,
@@ -3088,6 +3087,8 @@ impl WinitApp {
         } else {
             self.select_mode_filter.previous()
         };
+        // reload_select_items 内で beatoraja 準拠の自動送りと profile config への
+        // 永続化（退出 / プレイ後の save_current_play_options 用）を行う。
         let previous_len = self.select_items.len();
         self.reload_select_items();
         tracing::info!(
@@ -3150,6 +3151,9 @@ impl WinitApp {
     fn cycle_select_sort(&mut self, arg: i32) {
         self.select_sort =
             if arg >= 0 { self.select_sort.next() } else { self.select_sort.previous() };
+        // 退出 / プレイ後の save_current_play_options で永続化されるよう、
+        // profile config をメモリ上で先に更新しておく。
+        self.boot.profile_config.select.sort = self.select_sort.as_str().to_string();
         self.reload_select_items();
         tracing::info!(sort = self.select_sort.as_str(), "select sort changed");
         self.play_system_sound(crate::system_sound::SoundType::OptionChange);
@@ -5056,13 +5060,17 @@ impl WinitApp {
 
     fn reload_select_items(&mut self) {
         let history: Vec<String> = self.search_history.iter().cloned().collect();
-        let items = load_items_for_stack(
+        let (items, resolved_mode_filter) = load_items_for_stack(
             &self.boot,
             &self.folder_stack,
             &history,
             self.select_mode_filter,
             self.select_sort,
         );
+        // beatoraja 準拠の自動送りで mode filter が変わることがあるので、
+        // 表示状態と永続化用 profile config を実際に適用したモードへ揃える。
+        self.select_mode_filter = resolved_mode_filter;
+        self.boot.profile_config.select.mode_filter = resolved_mode_filter.as_str().to_string();
         self.select_items = items;
         self.select_distribution_cache.borrow_mut().clear();
         self.select_folder_summary_cache.clear();
@@ -7179,6 +7187,11 @@ impl SelectModeFilter {
             Self::K10 => Some(KeyMode::K10),
         }
     }
+
+    /// `as_str()` の逆変換。未知の値は `ALL` へフォールバックする。
+    fn from_str_or_default(value: &str) -> Self {
+        Self::ORDER.into_iter().find(|mode| mode.as_str() == value).unwrap_or(Self::All)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -7225,6 +7238,11 @@ impl SelectSort {
             Self::Bp => "BPCOUNT",
         }
     }
+
+    /// `as_str()` の逆変換。未知の値は `TITLE` へフォールバックする。
+    fn from_str_or_default(value: &str) -> Self {
+        Self::ORDER.into_iter().find(|sort| sort.as_str() == value).unwrap_or(Self::Title)
+    }
 }
 
 fn cycle_enum<T: Copy + PartialEq, const N: usize>(
@@ -7241,14 +7259,32 @@ fn enabled_root_paths(app_config: &crate::config::app_config::AppConfig) -> Vec<
     app_config.songs.roots.iter().filter(|p| p.enabled).map(|p| p.path.clone()).collect()
 }
 
+/// 選曲リストを構築し、mode filter / sort を適用して返す。
+///
+/// mode filter は beatoraja `BarManager` 準拠で、指定モードがこの一覧の
+/// チャートを「全て」消してしまう場合のみ、チャートが残るモードへ前方向に
+/// 自動送りする。実際に適用したモードを items と共に返すので、呼び出し側で
+/// 永続化 / 表示状態を更新できる。
 fn load_items_for_stack(
     boot: &crate::bootstrap::BootstrappedApp,
     stack: &[String],
     search_history: &[String],
     mode_filter: SelectModeFilter,
     sort: SelectSort,
+) -> (Vec<SelectItem>, SelectModeFilter) {
+    let mut items = build_select_items_for_stack(boot, stack, search_history);
+    let resolved = resolve_non_empty_mode_filter(&items, mode_filter);
+    apply_select_mode_filter(&mut items, resolved);
+    apply_select_sort(&mut items, sort);
+    (items, resolved)
+}
+
+fn build_select_items_for_stack(
+    boot: &crate::bootstrap::BootstrappedApp,
+    stack: &[String],
+    search_history: &[String],
 ) -> Vec<SelectItem> {
-    let mut items = match stack.last() {
+    match stack.last() {
         Some(path) if path.starts_with(crate::screens::settings_model::CONFIG_ROOT_PATH) => {
             load_settings_items(path)
         }
@@ -7352,10 +7388,46 @@ fn load_items_for_stack(
             }
             items
         }
+    }
+}
+
+/// beatoraja `BarManager` 準拠の mode filter 自動送り。
+///
+/// 指定モードがこの一覧の全 bar を消す（= 残るのが mismatch のチャート行だけ）
+/// 場合のみ、チャートが残るモードへ前方向に送る。フォルダ等チャート以外の行が
+/// 1 つでも残る、または ALL/24K のように絞り込まないモードの場合は据え置く。
+fn resolve_non_empty_mode_filter(
+    items: &[SelectItem],
+    start: SelectModeFilter,
+) -> SelectModeFilter {
+    let mut candidate = start;
+    for _ in 0..SelectModeFilter::ORDER.len() {
+        if !mode_filter_removes_everything(items, candidate) {
+            return candidate;
+        }
+        candidate = candidate.next();
+    }
+    start
+}
+
+/// `apply_select_mode_filter` を適用すると一覧が空になるか。
+fn mode_filter_removes_everything(items: &[SelectItem], filter: SelectModeFilter) -> bool {
+    if items.is_empty() {
+        return false;
+    }
+    let Some(key_mode) = filter.key_mode() else {
+        // ALL / 24K 系は絞り込まないので空にはならない。
+        return false;
     };
-    apply_select_mode_filter(&mut items, mode_filter);
-    apply_select_sort(&mut items, sort);
-    items
+    items.iter().all(|item| match item {
+        SelectItem::Chart(row) => !row
+            .chart
+            .as_ref()
+            .and_then(|chart| KeyMode::from_str_opt(&chart.mode))
+            .is_some_and(|mode| mode == key_mode),
+        // フォルダ・コース等は除去対象外なので、残れば「全除去」ではない。
+        _ => false,
+    })
 }
 
 fn select_folder_summary_cache_key(path: &str, kind: bmz_render::scene::SelectRowKind) -> String {
@@ -10552,6 +10624,76 @@ mod tests {
         assert_eq!(items.len(), 2);
         assert!(matches!(items[0], SelectItem::Folder { .. }));
         assert_eq!(items[1].display_name(), "Title 2");
+    }
+
+    fn chart_row_with_mode(index: usize, mode: &str) -> SelectItem {
+        let mut row = select_chart_row(index);
+        row.chart.as_mut().unwrap().mode = mode.to_string();
+        SelectItem::Chart(row)
+    }
+
+    #[test]
+    fn resolve_mode_filter_keeps_mode_with_matching_charts() {
+        let items = vec![chart_row_with_mode(1, "7K"), chart_row_with_mode(2, "5K")];
+        // 7K のチャートがあるので据え置く。
+        assert_eq!(
+            resolve_non_empty_mode_filter(&items, SelectModeFilter::K7),
+            SelectModeFilter::K7
+        );
+    }
+
+    #[test]
+    fn resolve_mode_filter_advances_when_all_charts_mismatch() {
+        // 5K しか無いフォルダで 7K フィルターを掛けると全消えになるため、
+        // beatoraja 同様に前方向 (K7 -> K14 -> K9 -> K5) へ送って K5 で止まる。
+        let items = vec![chart_row_with_mode(1, "5K"), chart_row_with_mode(2, "5K")];
+        assert_eq!(
+            resolve_non_empty_mode_filter(&items, SelectModeFilter::K7),
+            SelectModeFilter::K5
+        );
+    }
+
+    #[test]
+    fn resolve_mode_filter_does_not_advance_when_folder_remains() {
+        // フォルダ行が残るなら全消えにはならないので据え置く（beatoraja 準拠）。
+        let items = vec![
+            SelectItem::Folder {
+                path: "folder".to_string(),
+                name: "folder".to_string(),
+                kind: SelectRowKind::Folder,
+                summary: None,
+            },
+            chart_row_with_mode(1, "5K"),
+        ];
+        assert_eq!(
+            resolve_non_empty_mode_filter(&items, SelectModeFilter::K7),
+            SelectModeFilter::K7
+        );
+    }
+
+    #[test]
+    fn resolve_mode_filter_keeps_all_filter() {
+        let items = vec![chart_row_with_mode(1, "5K")];
+        assert_eq!(
+            resolve_non_empty_mode_filter(&items, SelectModeFilter::All),
+            SelectModeFilter::All
+        );
+    }
+
+    #[test]
+    fn select_mode_filter_roundtrips_through_str() {
+        for mode in SelectModeFilter::ORDER {
+            assert_eq!(SelectModeFilter::from_str_or_default(mode.as_str()), mode);
+        }
+        assert_eq!(SelectModeFilter::from_str_or_default("unknown"), SelectModeFilter::All);
+    }
+
+    #[test]
+    fn select_sort_roundtrips_through_str() {
+        for sort in SelectSort::ORDER {
+            assert_eq!(SelectSort::from_str_or_default(sort.as_str()), sort);
+        }
+        assert_eq!(SelectSort::from_str_or_default("unknown"), SelectSort::Title);
     }
 
     #[test]
