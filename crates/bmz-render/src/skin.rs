@@ -3569,7 +3569,11 @@ impl SkinDocument {
         }
         let mouse_x = x.clamp(0.0, 1.0) * self.w as f32;
         let mouse_y = (1.0 - y.clamp(0.0, 1.0)) * self.h as f32;
-        let value = slider_value_at(slider, frame, mouse_x, mouse_y)?;
+        let value = if slider.slider_type == 1 {
+            scroll_slider_value_at(slider, frame, mouse_x, mouse_y)?
+        } else {
+            slider_value_at(slider, frame, mouse_x, mouse_y)?
+        };
         Some(SkinSliderHit { slider_type: slider.slider_type, value })
     }
 
@@ -10407,6 +10411,56 @@ fn slider_value_at(
     Some(value.clamp(0.0, 1.0))
 }
 
+fn scroll_slider_value_at(
+    slider: &SkinSliderDef,
+    frame: ResolvedSkinFrame,
+    x: f32,
+    y: f32,
+) -> Option<f32> {
+    let range = slider.range.unsigned_abs() as f32;
+    if range <= f32::EPSILON {
+        return None;
+    }
+    let frame_x = frame.x as f32;
+    let frame_y = frame.y as f32;
+    let frame_w = frame.w as f32;
+    let frame_h = frame.h as f32;
+    let half_w = frame_w * 0.5;
+    let half_h = frame_h * 0.5;
+    let value = match slider.angle {
+        0 if frame_x <= x
+            && x <= frame_x + frame_w
+            && frame_y + half_h <= y
+            && y <= frame_y + range + half_h =>
+        {
+            (y - frame_y - half_h) / range
+        }
+        1 if frame_x + half_w <= x
+            && x <= frame_x + range + half_w
+            && frame_y <= y
+            && y <= frame_y + frame_h =>
+        {
+            (x - frame_x - half_w) / range
+        }
+        2 if frame_x <= x
+            && x <= frame_x + frame_w
+            && frame_y - range + half_h <= y
+            && y <= frame_y + half_h =>
+        {
+            (frame_y + half_h - y) / range
+        }
+        3 if frame_x - range + half_w <= x
+            && x <= frame_x + half_w
+            && frame_y <= y
+            && y <= frame_y + frame_h =>
+        {
+            (frame_x + half_w - x) / range
+        }
+        _ => return None,
+    };
+    Some(value.clamp(0.0, 1.0))
+}
+
 fn multiply_bga_tints(destination: Color, bga: SkinBgaFrame) -> Color {
     Color::rgba(
         destination.r * bga.tint_r,
@@ -15784,12 +15838,22 @@ mod tests {
                 &snapshot,
                 &crate::select_settings_dest::SelectSettingsDestIndex::default(),
                 0.15,
-                0.55,
+                0.525,
             )
             .unwrap();
 
         assert_eq!(hit.slider_type, 1);
         assert!(approx_eq(hit.value, 0.5));
+        let top_hit = document
+            .select_slider_hit(
+                &snapshot,
+                &crate::select_settings_dest::SelectSettingsDestIndex::default(),
+                0.15,
+                0.275,
+            )
+            .unwrap();
+        assert_eq!(top_hit.slider_type, 1);
+        assert!(approx_eq(top_hit.value, 0.0));
     }
 
     #[test]
