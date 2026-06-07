@@ -21,7 +21,7 @@ use bmz_render::assets::{RgbaImageAsset, load_static_rgba_image};
 use bmz_render::plan::{
     PLAY_BACKBMP_TEXTURE, Rect, SELECT_BANNER_TEXTURE, SELECT_STAGE_TEXTURE, TextureId,
 };
-use bmz_render::renderer::{RenderSurfaceStatus, Renderer, SurfaceSize};
+use bmz_render::renderer::{RenderFrameTimings, RenderSurfaceStatus, Renderer, SurfaceSize};
 use bmz_render::scene::{
     AppSceneSnapshot, ResultSnapshot, SelectChartDistributionSecond, SelectRowSnapshot,
     SelectSnapshot,
@@ -375,6 +375,7 @@ struct WinitApp {
     practice_session: Option<PracticeSession>,
     /// 次の `RunningPlaySession::start` で使う chart zero（区間先頭の 1 秒前）。
     practice_chart_zero_time: Option<TimeUs>,
+    select_frame_profiler: SelectFrameProfiler,
 }
 
 struct ActiveSkinVideoSource {
@@ -385,6 +386,74 @@ struct ActiveSkinVideoSource {
     loop_start_us: i64,
     active: bool,
     failed: bool,
+}
+
+#[derive(Debug, Default)]
+struct SelectFrameProfiler {
+    frames: u32,
+    video_us: u128,
+    snapshot_us: u128,
+    render_us: u128,
+    plan_us: u128,
+    draw_us: u128,
+    text_us: u128,
+    geometry_us: u128,
+    upload_us: u128,
+    submit_us: u128,
+    commands: u128,
+}
+
+impl SelectFrameProfiler {
+    const LOG_EVERY_FRAMES: u32 = 120;
+
+    fn record(
+        &mut self,
+        video_us: u128,
+        snapshot_us: u128,
+        render_us: u128,
+        timings: Option<RenderFrameTimings>,
+    ) {
+        self.frames += 1;
+        self.video_us += video_us;
+        self.snapshot_us += snapshot_us;
+        self.render_us += render_us;
+        if let Some(timings) = timings {
+            self.plan_us += timings.plan_us;
+            self.draw_us += timings.draw_us;
+            self.text_us += timings.text_us;
+            self.geometry_us += timings.geometry_us;
+            self.upload_us += timings.upload_us;
+            self.submit_us += timings.submit_us;
+            self.commands += timings.commands as u128;
+        }
+        if self.frames >= Self::LOG_EVERY_FRAMES {
+            self.log_and_reset();
+        }
+    }
+
+    fn log_and_reset(&mut self) {
+        let frames = self.frames.max(1) as u128;
+        tracing::debug!(
+            target: "bmz_player::select_profile",
+            frames = self.frames,
+            video_ms = fmt_profile_ms(self.video_us, frames),
+            snapshot_ms = fmt_profile_ms(self.snapshot_us, frames),
+            render_ms = fmt_profile_ms(self.render_us, frames),
+            plan_ms = fmt_profile_ms(self.plan_us, frames),
+            draw_ms = fmt_profile_ms(self.draw_us, frames),
+            text_ms = fmt_profile_ms(self.text_us, frames),
+            geometry_ms = fmt_profile_ms(self.geometry_us, frames),
+            upload_ms = fmt_profile_ms(self.upload_us, frames),
+            submit_ms = fmt_profile_ms(self.submit_us, frames),
+            commands = (self.commands / frames) as u64,
+            "select frame profile"
+        );
+        *self = Self::default();
+    }
+}
+
+fn fmt_profile_ms(total_us: u128, frames: u128) -> String {
+    format!("{:.3}", total_us as f64 / frames as f64 / 1000.0)
 }
 
 type PlaySkinSignature = (KeyMode, String, BTreeMap<String, String>, BTreeMap<String, String>);
@@ -1014,6 +1083,7 @@ impl WinitApp {
             search_message: None,
             practice_session: None,
             practice_chart_zero_time: None,
+            select_frame_profiler: SelectFrameProfiler::default(),
         };
         if let Some(chart_id) = boot_chart_id {
             if options.boot_practice {
@@ -6285,11 +6355,11 @@ impl WinitApp {
                 && source.last_pts != Some(frame.pts_us)
             {
                 let pts = frame.pts_us;
-                match self.renderer.upsert_rgba_texture(
+                match self.renderer.upsert_rgba_texture_ref(
                     TextureId(source.texture.0),
                     frame.width,
                     frame.height,
-                    frame.rgba.clone(),
+                    &frame.rgba,
                 ) {
                     Ok(()) => {
                         source.last_pts = Some(pts);
@@ -6328,7 +6398,10 @@ impl WinitApp {
     }
 
     fn render_current_scene(&mut self) {
-        if matches!(self.view_state(), AppViewState::Select) {
+        let select_view = matches!(self.view_state(), AppViewState::Select);
+        let profiling_select = select_view
+            && tracing::enabled!(target: "bmz_player::select_profile", tracing::Level::DEBUG);
+        if select_view {
             self.refresh_visible_select_folder_summaries();
             self.poll_select_asset_loads();
             self.sync_select_stage_texture();
@@ -6336,8 +6409,12 @@ impl WinitApp {
             self.sync_select_banner_texture();
             self.sync_select_preview_audio();
         }
+        let video_start = Instant::now();
         self.update_current_skin_video_sources();
+        let video_us = video_start.elapsed().as_micros();
+        let snapshot_start = Instant::now();
         let scene = self.scene_snapshot();
+        let snapshot_us = snapshot_start.elapsed().as_micros();
         let scene_kind = scene_kind(&scene);
         self.update_window_title_for_scene(scene_kind);
         if let (Some(path), Some(exit_after_frames)) =
@@ -6346,7 +6423,18 @@ impl WinitApp {
         {
             self.renderer.request_screenshot(path.clone());
         }
-        match self.renderer.render_scene_status(scene) {
+        let render_start = Instant::now();
+        let render_status = self.renderer.render_scene_status(scene);
+        let render_us = render_start.elapsed().as_micros();
+        if profiling_select {
+            self.select_frame_profiler.record(
+                video_us,
+                snapshot_us,
+                render_us,
+                self.renderer.last_frame_timings(),
+            );
+        }
+        match render_status {
             Ok(RenderSurfaceStatus::Rendered)
             | Ok(RenderSurfaceStatus::SkippedNoSurface)
             | Ok(RenderSurfaceStatus::SkippedZeroSize) => {}

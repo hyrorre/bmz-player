@@ -1011,7 +1011,14 @@ fn resolve_wildcard_directory_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::hint::black_box;
+    use std::time::Instant;
+
+    use bmz_core::time::TimeUs;
+    use bmz_render::plan::DrawPlan;
     use bmz_render::renderer::Renderer;
+    use bmz_render::scene::{AppSceneSnapshot, SelectRowSnapshot, SelectSnapshot};
+    use bmz_render::skin::{DynamicTimerRuntime, SkinContext, SkinDocumentTexture, SkinImageSize};
 
     #[test]
     fn default_skin_root_contains_manifest() {
@@ -1189,6 +1196,131 @@ mod tests {
         assert!(mv.asset.width > 0);
         assert!(mv.asset.height > 0);
         assert_eq!(mv.asset.pixels.len(), mv.asset.width as usize * mv.asset.height as usize * 4);
+    }
+
+    #[test]
+    #[ignore = "manual select skin profiling helper"]
+    fn profile_ecfn_select_plan_generation() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/ECFN/select/select.luaskin");
+        if !skin_path.is_file() {
+            eprintln!("skip: {} is missing", skin_path.display());
+            return;
+        }
+
+        let decoded = decode_beatoraja_skin_with_options(
+            &skin_path,
+            SkinKind::Select,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        let document_textures = decoded.sources.iter().map(|source| SkinDocumentTexture {
+            source_id: source.source_id.clone(),
+            texture: source.texture,
+            source_size: SkinImageSize {
+                width: source.asset.width as f32,
+                height: source.asset.height as f32,
+            },
+        });
+        let skin = SkinContext::from_manifest_and_document(
+            bmz_render::skin::default_skin_manifest(),
+            decoded.document,
+            document_textures,
+        );
+        let rows = (0..25)
+            .map(|index| SelectRowSnapshot {
+                index,
+                title: format!("War in the Mirrorworld[{index:02}]"),
+                artist: "Aoi".to_string(),
+                difficulty_name: "ANOTHER".to_string(),
+                play_level: "12".to_string(),
+                total_notes: 2253,
+                chart_normal_notes: 2167,
+                chart_scratch_notes: 86,
+                chart_density: 19.0,
+                chart_peak_density: 38.0,
+                chart_end_density: 25.0,
+                min_bpm: 171.0,
+                max_bpm: 171.0,
+                chart_main_bpm: 171.0,
+                initial_bpm: 171.0,
+                length_ms: 115_000,
+                ..SelectRowSnapshot::default()
+            })
+            .collect();
+        let mut runtime = DynamicTimerRuntime::default();
+        let mut snapshot = SelectSnapshot {
+            time: TimeUs(0),
+            selection_time: TimeUs(0),
+            chart_count: 1_000,
+            selected_index: 12,
+            rows,
+            stage_background: true,
+            banner_image: true,
+            ..SelectSnapshot::default()
+        };
+
+        for frame in 0..30 {
+            snapshot.time = TimeUs(frame * 16_666);
+            black_box(DrawPlan::from_scene_with_skin(
+                &AppSceneSnapshot::Select(snapshot.clone()),
+                &skin,
+                &mut runtime,
+            ));
+        }
+
+        let frames = 300;
+        let start = Instant::now();
+        let mut commands = 0_usize;
+        for frame in 0..frames {
+            snapshot.time = TimeUs((frame + 30) * 16_666);
+            let plan = DrawPlan::from_scene_with_skin(
+                &AppSceneSnapshot::Select(snapshot.clone()),
+                &skin,
+                &mut runtime,
+            );
+            commands += plan.commands.len();
+            black_box(plan);
+        }
+        let elapsed = start.elapsed();
+        println!(
+            "profile_ecfn_select_plan_generation frames={frames} avg_plan_ms={:.3} avg_commands={}",
+            elapsed.as_secs_f64() * 1000.0 / frames as f64,
+            commands / frames as usize
+        );
+    }
+
+    #[test]
+    #[ignore = "manual select skin profiling helper"]
+    fn profile_rgba_frame_clone_cost() {
+        let width = 1920_usize;
+        let height = 1080_usize;
+        let rgba = vec![127_u8; width * height * 4];
+        let frames = 240;
+
+        let clone_start = Instant::now();
+        let mut cloned_len = 0_usize;
+        for _ in 0..frames {
+            let cloned = black_box(rgba.clone());
+            cloned_len += black_box(cloned.len());
+        }
+        let clone_elapsed = clone_start.elapsed();
+
+        let borrow_start = Instant::now();
+        let mut borrowed_len = 0_usize;
+        for _ in 0..frames {
+            borrowed_len += black_box(rgba.as_slice()).len();
+        }
+        let borrow_elapsed = borrow_start.elapsed();
+
+        assert_eq!(cloned_len, borrowed_len);
+        println!(
+            "profile_rgba_frame_clone_cost frames={frames} bytes={} avg_clone_ms={:.3} avg_borrow_ms={:.6}",
+            rgba.len(),
+            clone_elapsed.as_secs_f64() * 1000.0 / frames as f64,
+            borrow_elapsed.as_secs_f64() * 1000.0 / frames as f64
+        );
     }
 
     #[test]
