@@ -2952,11 +2952,7 @@ impl WinitApp {
             return;
         }
         if state == ElementState::Released {
-            if let Some(slider_type) = self.select_slider_dragging_type.take()
-                && matches!(slider_type, 17..=19)
-            {
-                self.save_select_slider_profile();
-            }
+            self.select_slider_dragging_type = None;
             return;
         }
         if state != ElementState::Pressed {
@@ -3046,14 +3042,6 @@ impl WinitApp {
             self.selected_index = next;
             self.select_bar_started_at = Instant::now();
             self.play_system_sound(crate::system_sound::SoundType::Scratch);
-        }
-    }
-
-    fn save_select_slider_profile(&mut self) {
-        match save_profile_config(&self.boot.profile_paths.profile_toml, &self.boot.profile_config)
-        {
-            Ok(()) => tracing::info!("profile config saved from select skin slider"),
-            Err(error) => tracing::error!(%error, "failed to save profile config"),
         }
     }
 
