@@ -58,6 +58,10 @@ impl MixerState {
 
             let mut alive = true;
             let sample_frames = sample.frame_count();
+            // 読込時リサンプル後はサンプルが出力レートと一致するため、補間不要の
+            // ファストパス(整数インデックスで直接読み出し)で再生できる。
+            let native_rate = sample.sample_rate == output_sample_rate;
+            let step = sample.sample_rate as f64 / output_sample_rate as f64;
             for out_frame in 0..frame_count {
                 let absolute_frame = output_start_frame + out_frame as u64;
                 if absolute_frame < voice.sound.start_frame {
@@ -77,13 +81,17 @@ impl MixerState {
                     }
                 }
 
-                let (mut left, mut right) = sample.sample_stereo_linear(voice.sample_position);
+                let (mut left, mut right) = if native_rate {
+                    sample.sample_stereo(voice.sample_position as usize)
+                } else {
+                    sample.sample_stereo_linear(voice.sample_position)
+                };
                 left *= voice.sound.volume * pan_left(voice.sound.pan);
                 right *= voice.sound.volume * pan_right(voice.sound.pan);
 
                 output[out_frame * 2] += left;
                 output[out_frame * 2 + 1] += right;
-                voice.sample_position += sample.sample_rate as f64 / output_sample_rate as f64;
+                voice.sample_position += step;
             }
 
             // ループ voice はサンプル末尾を超えても破棄しない。

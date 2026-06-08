@@ -380,7 +380,9 @@ impl CpalSharedOutput {
 
     pub fn add_source(&self, engine: SharedAudioEngine) -> CpalOutputSource {
         if let Ok(mut engine) = engine.lock() {
-            engine.mixer.output_sample_rate = self.inner.sample_rate;
+            // 実ストリームレートへ揃える。既に読込済みのサンプルもここで再変換され、
+            // ミキサーは等倍(補間なし)で再生できる。
+            engine.set_output_sample_rate(self.inner.sample_rate);
         }
 
         let id = self.inner.next_source_id.fetch_add(1, Ordering::Relaxed);

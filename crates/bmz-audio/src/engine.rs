@@ -19,7 +19,19 @@ impl AudioEngine {
     }
 
     pub fn insert_sample(&mut self, id: bmz_core::ids::SoundId, sample: DecodedSample) {
+        // 読込時に出力レートへ揃えておき、ミキサーでの逐次リサンプルを避ける。
+        let sample = sample.resampled_to(self.mixer.output_sample_rate);
         self.samples.insert(id, sample);
+    }
+
+    /// 出力サンプルレートを変更し、保持中の全サンプルを新レートへ揃える。
+    /// cpal ストリームへ source 登録される際(実レート確定時)に呼ばれる。
+    pub fn set_output_sample_rate(&mut self, rate: u32) {
+        if rate == 0 || rate == self.mixer.output_sample_rate {
+            return;
+        }
+        self.samples.resample_all_to(rate);
+        self.mixer.output_sample_rate = rate;
     }
 
     /// 指定 sound_id のスケジュール済み音および再生中 voice をすべて停止する。
@@ -95,6 +107,35 @@ mod tests {
         engine.render_stereo(0, &mut output);
 
         assert_eq!(output, vec![0.0, 0.0, 0.0, 0.0, 0.5, 0.5, 0.25, 0.25]);
+    }
+
+    #[test]
+    fn insert_sample_resamples_to_output_rate() {
+        let mut engine = AudioEngine::new(48_000);
+        engine.insert_sample(
+            SoundId(1),
+            DecodedSample { channels: 1, sample_rate: 24_000, frames: vec![0.0, 1.0] },
+        );
+
+        let sample = engine.samples.get(SoundId(1)).unwrap();
+        assert_eq!(sample.sample_rate, 48_000);
+        assert_eq!(sample.frames, vec![0.0, 0.5, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn set_output_sample_rate_resamples_loaded_samples() {
+        let mut engine = AudioEngine::new(24_000);
+        engine.insert_sample(
+            SoundId(1),
+            DecodedSample { channels: 1, sample_rate: 24_000, frames: vec![0.0, 1.0] },
+        );
+
+        engine.set_output_sample_rate(48_000);
+
+        assert_eq!(engine.mixer.output_sample_rate, 48_000);
+        let sample = engine.samples.get(SoundId(1)).unwrap();
+        assert_eq!(sample.sample_rate, 48_000);
+        assert_eq!(sample.frames, vec![0.0, 0.5, 1.0, 1.0]);
     }
 
     #[test]
