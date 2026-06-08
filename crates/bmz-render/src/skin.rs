@@ -2557,6 +2557,23 @@ impl SkinDocument {
             {
                 continue;
             }
+            if let Some(item) = self.result_judge_pie_destination_item(
+                destination,
+                &images,
+                &enabled_options,
+                state,
+                sources,
+            ) {
+                let target = destination_render_layer(
+                    destination.timer,
+                    after_notes_marker,
+                    &mut behind,
+                    &mut front,
+                    &mut failed_overlay,
+                );
+                target.push(item);
+                continue;
+            }
             if self.destination_uses_skin_gauge_bar_render(destination) {
                 if let Some(items) = self.resolve_gauge_destination_items(
                     destination,
@@ -2605,6 +2622,59 @@ impl SkinDocument {
             }
         }
         (behind, front, failed_overlay)
+    }
+
+    fn result_judge_pie_destination_item(
+        &self,
+        destination: &SkinDestinationDef,
+        images: &HashMap<&str, &SkinImageDef>,
+        enabled_options: &[i32],
+        state: SkinDrawState,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Option<SkinRenderItem> {
+        if state.result_failed.is_none() || destination.id != "judge_graph" {
+            return None;
+        }
+        let elapsed = skin_timer_elapsed_ms(destination.timer, state)?;
+        let mut frame = resolve_destination_frame(destination, elapsed, enabled_options, state)?;
+        let image = skin_image_for_destination_id(destination.id.as_str(), images)?;
+        let is_hidden_cover_destination =
+            self.hidden_cover.iter().any(|cover| cover.id == destination.id);
+        apply_skin_offset_to_frame(destination, &mut frame, state, is_hidden_cover_destination);
+        if !destination_mouse_rect_contains(destination, frame, state) {
+            return None;
+        }
+        let (r, g, b) = result_judge_pie_segment_color(destination, image, frame, state)?;
+        frame.r = r;
+        frame.g = g;
+        frame.b = b;
+        let source = resolve_document_source(sources, &image.src)?;
+        let pixel_rect = skin_image_pixel_rect(image, images);
+        let uv = skin_image_texture_region_for_state(
+            image,
+            source.source_size,
+            elapsed,
+            Some(state),
+            pixel_rect,
+        );
+        let (rect, uv) = stretch_skin_image_geometry(
+            destination.stretch,
+            normalize_skin_frame_rect(frame, self.w, self.h),
+            uv,
+            source.source_size,
+            self.w,
+            self.h,
+        );
+        Some(skin_image_item_for_frame(
+            source.texture,
+            rect,
+            uv,
+            frame,
+            destination.center,
+            if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal },
+            Some(source.source_size),
+            destination.filter != 0,
+        ))
     }
 
     fn destination_looks_like_pre_notes_judge_line(
