@@ -1444,6 +1444,22 @@ fn skin_files_from_header(
     result
 }
 
+/// beatoraja のファイル選択カスタマイズで「ランダム」を表す番兵値。
+/// `skin_files` の値がこれのとき、`skin_config.get_path` はロードごとに候補から
+/// ランダムに選ぶ。
+const RANDOM_FILE_SELECTION: &str = "Random";
+
+/// `0..len` の範囲でロードごとに変わる擬似乱数インデックスを返す。
+/// `RandomState` のプロセス内ランダムキーを使い、追加クレートなしで beatoraja
+/// 相当の「毎ロードでランダム」を満たす。
+fn random_skin_file_index(len: usize) -> usize {
+    use std::hash::BuildHasher;
+
+    debug_assert!(len > 0);
+    let hash = std::collections::hash_map::RandomState::new().hash_one(len as u64);
+    (hash % len as u64) as usize
+}
+
 fn default_skin_file_from_filepath(
     root: &Path,
     normalized_path: &str,
@@ -1455,10 +1471,16 @@ fn default_skin_file_from_filepath(
     }
     if let Some(default_name) = filepath.get("def").and_then(JsonValue::as_str)
         && !default_name.is_empty()
-        && let Some(candidate) =
-            candidates.iter().find(|candidate| filename_matches_def(candidate, default_name))
     {
-        return Some(candidate.clone());
+        // def="Random" は具体ファイルへ固定せず、ランダム番兵を既定にする。
+        if default_name.eq_ignore_ascii_case(RANDOM_FILE_SELECTION) {
+            return Some(RANDOM_FILE_SELECTION.to_string());
+        }
+        if let Some(candidate) =
+            candidates.iter().find(|candidate| filename_matches_def(candidate, default_name))
+        {
+            return Some(candidate.clone());
+        }
     }
     candidates.into_iter().next()
 }
@@ -1543,17 +1565,24 @@ fn skin_config_get_path(
         bail!("skin_config.get_path escapes skin root: {requested}");
     }
 
+    // ユーザがスキン設定パネルで「ランダム」を選んだときは、候補からロードごとに
+    // ランダムに選ぶ (beatoraja のファイル選択 "Random" 相当)。
+    let want_random =
+        skin_files.get(&requested.replace('\\', "/")).is_some_and(|s| s == RANDOM_FILE_SELECTION);
+
     // ユーザがスキン設定パネルで選んだファイルを最優先で返す。
     // 選択が存在しない / ファイルが消えている場合は従来通り候補解決へ委ねる。
-    if let Some(selected) = skin_files.get(&requested.replace('\\', "/"))
-        && let Some(path) = resolve_selected_skin_path(root, selected)
-    {
-        return Ok(path);
-    }
-    if let Some(path) =
-        resolve_selected_skin_path_for_wildcard_child(root, requested_path, skin_files)
-    {
-        return Ok(path);
+    if !want_random {
+        if let Some(selected) = skin_files.get(&requested.replace('\\', "/"))
+            && let Some(path) = resolve_selected_skin_path(root, selected)
+        {
+            return Ok(path);
+        }
+        if let Some(path) =
+            resolve_selected_skin_path_for_wildcard_child(root, requested_path, skin_files)
+        {
+            return Ok(path);
+        }
     }
 
     let Some((prefix, suffix)) = requested_path.split_once('*') else {
@@ -1590,7 +1619,11 @@ fn skin_config_get_path(
         }
     }
     candidates.sort();
-    candidates.into_iter().next().ok_or_else(|| anyhow!("skin_config path not found: {requested}"))
+    if candidates.is_empty() {
+        bail!("skin_config path not found: {requested}");
+    }
+    let index = if want_random { random_skin_file_index(candidates.len()) } else { 0 };
+    Ok(candidates.swap_remove(index))
 }
 
 fn resolve_selected_skin_path_for_wildcard_child(
@@ -3578,5 +3611,54 @@ mod tests {
             infer_main_state_event_index_draw_condition(&function, &probe),
             Some("event_index(42) == 2 or event_index(42) == 3".to_string())
         );
+    }
+
+    fn unique_skin_test_dir(tag: &str) -> PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("bmz-lua-{tag}-{nanos}-{n}"));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn default_skin_file_uses_random_sentinel_for_random_def() {
+        let root = unique_skin_test_dir("random-def");
+        fs::create_dir_all(root.join("bg")).unwrap();
+        fs::write(root.join("bg/one.mp4"), []).unwrap();
+        fs::write(root.join("bg/two.mp4"), []).unwrap();
+        let filepath: JsonValue =
+            serde_json::from_str(r#"{ "name": "BG", "path": "bg/*.mp4", "def": "Random" }"#)
+                .unwrap();
+
+        assert_eq!(
+            default_skin_file_from_filepath(&root, "bg/*.mp4", &filepath).as_deref(),
+            Some(RANDOM_FILE_SELECTION)
+        );
+    }
+
+    #[test]
+    fn get_path_randomizes_when_selection_is_random_sentinel() {
+        let root = unique_skin_test_dir("random-getpath");
+        fs::create_dir_all(root.join("bg")).unwrap();
+        fs::write(root.join("bg/one.mp4"), []).unwrap();
+        fs::write(root.join("bg/two.mp4"), []).unwrap();
+        let skin_files =
+            BTreeMap::from([("bg/*.mp4".to_string(), RANDOM_FILE_SELECTION.to_string())]);
+
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..200 {
+            let resolved = skin_config_get_path(&root, "bg/*.mp4", &skin_files).unwrap();
+            let name =
+                resolved.file_name().and_then(|name| name.to_str()).unwrap_or_default().to_string();
+            assert!(name == "one.mp4" || name == "two.mp4", "unexpected match {name}");
+            seen.insert(name);
+        }
+        assert_eq!(seen.len(), 2, "Random selection should pick randomly among matches");
     }
 }

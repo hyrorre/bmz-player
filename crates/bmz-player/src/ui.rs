@@ -30,6 +30,7 @@ use crate::ln_policy::LnPolicySetting;
 use crate::practice_ui::{PracticePanelContext, build_practice_panel};
 use crate::screens::course_session::CourseResultSummary;
 use crate::screens::select_model::SelectCourseRow;
+use crate::skin_loader::RANDOM_FILE_SELECTION;
 use crate::songs_cmd::{add_song_root_entry, remove_song_root_entry};
 use crate::storage::score_import::{ScoreImportKind, ScoreImportRequest};
 
@@ -2513,11 +2514,23 @@ fn build_scene_skin_defs(
                 for filepath in &defs.filepath {
                     let mut selected = files.get(&filepath.name).cloned().unwrap_or_default();
                     let before = selected.clone();
-                    let display =
-                        if selected.is_empty() { "(未選択)" } else { selected.as_str() };
+                    let display = if selected.is_empty() {
+                        "(未選択)"
+                    } else if selected == RANDOM_FILE_SELECTION {
+                        "ランダム"
+                    } else {
+                        selected.as_str()
+                    };
                     egui::ComboBox::from_label(&filepath.name).selected_text(display).show_ui(
                         ui,
                         |ui| {
+                            // beatoraja 同様、具体ファイルに加えて「ランダム」を選べる。
+                            // ランダム選択時は毎ロードで候補からランダムに解決する。
+                            ui.selectable_value(
+                                &mut selected,
+                                RANDOM_FILE_SELECTION.to_string(),
+                                "ランダム",
+                            );
                             // 候補列挙は ComboBox を開いたときだけ行う (毎フレームの fs 走査を回避)。
                             let candidates = match skin_root {
                                 Some(root) => glob_candidates(root, &filepath.path),
@@ -2608,7 +2621,10 @@ fn fill_missing_skin_defaults(
     for filepath in &defs.filepath {
         let candidates = glob_candidates(skin_root, &filepath.path);
         let current = files.get(&filepath.name).map(|value| value.replace('\\', "/"));
-        if current.as_ref().is_some_and(|selected| candidates.contains(selected)) {
+        // 既存の選択 (具体ファイル or ランダム番兵) はそのまま尊重する。
+        if current.as_ref().is_some_and(|selected| {
+            selected == RANDOM_FILE_SELECTION || candidates.contains(selected)
+        }) {
             continue;
         }
         if let Some(default) = filepath_default(filepath, &candidates) {
@@ -2717,6 +2733,11 @@ fn property_default(prop: &SkinPropertyDef) -> String {
 fn filepath_default(filepath: &SkinFilepathDef, candidates: &[String]) -> Option<String> {
     if candidates.is_empty() {
         return None;
+    }
+    // def が "Random" のときは具体ファイルへ固定せず、ランダム番兵を既定にする
+    // (beatoraja の def="Random" 相当)。
+    if filepath.def.eq_ignore_ascii_case(RANDOM_FILE_SELECTION) {
+        return Some(RANDOM_FILE_SELECTION.to_string());
     }
     if !filepath.def.is_empty()
         && let Some(candidate) =
@@ -2848,6 +2869,22 @@ mod tests {
 
         let filepath = SkinFilepathDef { def: "missing".to_string(), ..filepath };
         assert_eq!(filepath_default(&filepath, &candidates).as_deref(), Some("notes/aaa.png"));
+    }
+
+    #[test]
+    fn filepath_default_uses_random_sentinel_for_random_def() {
+        // def="Random" は具体ファイルへ固定せず、ランダム番兵を既定にする。
+        let filepath = SkinFilepathDef {
+            category: String::new(),
+            name: "BG".to_string(),
+            path: "bg/*.mp4".to_string(),
+            def: "Random".to_string(),
+        };
+        let candidates = vec!["bg/one.mp4".to_string(), "bg/two.mp4".to_string()];
+        assert_eq!(
+            filepath_default(&filepath, &candidates).as_deref(),
+            Some(RANDOM_FILE_SELECTION)
+        );
     }
 
     #[test]

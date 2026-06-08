@@ -740,6 +740,14 @@ fn resolve_json_skin_asset_path(
     let filepath =
         document.filepath.iter().find(|filepath| filepath.path.replace('\\', "/") == normalized);
 
+    // 0. ユーザが明示的に「ランダム」を選んだときは、def を無視して候補から
+    //    ランダムに選ぶ (beatoraja のファイル選択 "Random" 相当)。
+    if let Some(filepath) = filepath
+        && files.get(&filepath.name).is_some_and(|selected| selected == RANDOM_FILE_SELECTION)
+    {
+        return resolve_wildcard_path(skin_root, &normalized, None);
+    }
+
     // 1. パスが filepath 定義と完全一致するときは、選択ファイルをそのまま使う。
     if let Some(filepath) = filepath
         && let Some(selected) = files.get(&filepath.name).filter(|selected| !selected.is_empty())
@@ -865,6 +873,12 @@ fn resolve_wildcard_path(
 fn strip_beatoraja_asset_filter(pattern: &str) -> &str {
     pattern.split_once('|').map_or(pattern, |(path, _)| path)
 }
+
+/// beatoraja のファイル選択カスタマイズで「ランダム」を表す番兵値。
+/// `def == "Random"` や、設定パネルでユーザが明示的にランダムを選んだとき、
+/// `files` マップにこの文字列が入る。具体ファイル名と衝突しないよう beatoraja
+/// 同様 "Random" を用いる。
+pub(crate) const RANDOM_FILE_SELECTION: &str = "Random";
 
 /// ワイルドカードのマッチ候補から 1 つを選ぶ。
 ///
@@ -2471,6 +2485,37 @@ mod tests {
             seen.insert(name);
         }
         assert_eq!(seen.len(), 2, "both candidates should be selected over many loads");
+    }
+
+    #[test]
+    fn wildcard_skin_source_explicit_random_overrides_def() {
+        // ユーザが明示的に "Random" を選んだら、具体 def があってもランダムにする。
+        let root = unique_test_dir("bmz-json-source-explicit-random");
+        std::fs::create_dir_all(root.join("parts")).unwrap();
+        std::fs::write(root.join("parts/blue.png"), []).unwrap();
+        std::fs::write(root.join("parts/red.png"), []).unwrap();
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "filepath": [
+                    { "name": "Parts", "path": "parts/*.png", "def": "blue" }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let files = BTreeMap::from([("Parts".to_string(), RANDOM_FILE_SELECTION.to_string())]);
+
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..200 {
+            let resolved =
+                resolve_json_skin_source_path(&root, "parts/*.png", &document, &files).unwrap();
+            let name =
+                resolved.file_name().and_then(|name| name.to_str()).unwrap_or_default().to_string();
+            assert!(name == "blue.png" || name == "red.png", "unexpected match {name}");
+            seen.insert(name);
+        }
+        assert_eq!(seen.len(), 2, "explicit Random should ignore def and pick randomly");
     }
 
     #[test]
