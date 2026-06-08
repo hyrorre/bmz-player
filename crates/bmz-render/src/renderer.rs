@@ -1244,9 +1244,10 @@ fn encode_plan_geometry(
     text_frame: &TextFrame,
     surface_size: SurfaceSize,
 ) -> PlanGeometry {
-    let mut rects = Vec::new();
+    let command_count = plan.commands.len();
+    let mut rects = Vec::with_capacity(command_count.saturating_mul(RECT_INSTANCE_BYTES));
     let mut images = Vec::new();
-    let mut steps: Vec<DrawStep> = Vec::new();
+    let mut steps: Vec<DrawStep> = Vec::with_capacity(command_count);
     let image_rotation_aspect = if surface_size.height == 0 {
         1.0
     } else {
