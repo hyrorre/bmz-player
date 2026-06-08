@@ -2577,6 +2577,7 @@ impl SkinDocument {
                 text_state,
                 sources,
                 runtime_graphs,
+                has_half_grade_f_diff_rank_destination,
             ) {
                 let after_notes_marker = after_notes_marker
                     || self.destination_looks_like_pre_notes_judge_line(
@@ -2688,10 +2689,8 @@ impl SkinDocument {
         text_state: SkinTextState<'_>,
         sources: &HashMap<String, SkinDocumentTexture>,
         runtime_graphs: SkinRuntimeGraphs<'_>,
+        has_half_grade_f_diff_rank_destination: bool,
     ) -> Option<Vec<SkinRenderItem>> {
-        let destinations = self.all_destinations(enabled_options);
-        let has_half_grade_f_diff_rank_destination =
-            half_grade_f_diff_rank_destination_available(&destinations);
         let state =
             apply_half_grade_f_diff_rank_fallback(state, has_half_grade_f_diff_rank_destination);
         if let Some(judge_def) = self.judge.iter().find(|judge| judge.id == destination.id) {
@@ -3358,6 +3357,7 @@ impl SkinDocument {
                 text,
                 sources,
                 SkinRuntimeGraphs::from_document(self),
+                has_half_grade_f_diff_rank_destination,
             ) {
                 items.extend(resolved);
             }
@@ -4932,7 +4932,7 @@ impl SkinDocument {
         let line_h = (2.0 / self.h.max(1) as f32).max(0.001);
         let render_progress = (state.elapsed_ms.max(0) as f32 / 1500.0).clamp(0.0, 1.0);
         let render_x = rect.x + rect.width * render_progress;
-        let mut items = Vec::new();
+        let mut items = Vec::with_capacity(points.len().saturating_mul(2).saturating_add(3));
         items.push(SkinRenderItem::Rect { rect, color: colors.graph_bg, blend });
         if border_y > rect.y {
             items.push(SkinRenderItem::Rect {
@@ -5127,6 +5127,7 @@ impl SkinDocument {
             timing_distribution_judge_colors(graph),
             state,
         );
+        items.reserve(buckets.saturating_add(3));
         let graph_color = timing_color(&graph.graph_color, frame_alpha);
         for (index, count) in counts.into_iter().enumerate() {
             if count == 0 {
@@ -6552,6 +6553,7 @@ fn fill_image_source_size(
 }
 
 pub fn append_skin_render_items(commands: &mut Vec<DrawCommand>, items: &[SkinRenderItem]) {
+    commands.reserve(items.len());
     for item in items {
         match item {
             SkinRenderItem::Rect { rect, color, .. } => {
@@ -8510,7 +8512,23 @@ fn stacked_result_note_graph_render_items<const N: usize, B: ResultNoteGraphBuck
     let max_stack =
         buckets.iter().map(|bucket| bucket.values().into_iter().sum::<u32>()).max().unwrap_or(0);
     let graph_max = beatoraja_note_graph_max(max_stack);
-    let mut items = Vec::new();
+    let render_ratio = if graph.delay > 0 {
+        (elapsed_ms as f32 / graph.delay as f32).clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    let visible_len = ((buckets.len() as f32) * render_ratio).ceil() as usize;
+    let background_items = if graph.back_tex_off == 0 {
+        result_note_graph_background_item_count(buckets.len(), graph_max)
+    } else {
+        0
+    };
+    let chip_items = buckets
+        .iter()
+        .take(visible_len)
+        .map(|bucket| bucket.values().into_iter().sum::<u32>().min(graph_max) as usize)
+        .sum::<usize>();
+    let mut items = Vec::with_capacity(background_items.saturating_add(chip_items));
     if graph.back_tex_off == 0 {
         push_result_note_graph_background(
             &mut items,
@@ -8521,12 +8539,6 @@ fn stacked_result_note_graph_render_items<const N: usize, B: ResultNoteGraphBuck
             blend,
         );
     }
-    let render_ratio = if graph.delay > 0 {
-        (elapsed_ms as f32 / graph.delay as f32).clamp(0.0, 1.0)
-    } else {
-        1.0
-    };
-    let visible_len = ((buckets.len() as f32) * render_ratio).ceil() as usize;
     if visible_len == 0 {
         return items;
     }
@@ -8653,6 +8665,12 @@ fn push_result_note_graph_background(
             });
         }
     }
+}
+
+fn result_note_graph_background_item_count(bucket_count: usize, graph_max: u32) -> usize {
+    let band_count = (10..graph_max).step_by(10).count();
+    let line_count = (0..bucket_count).filter(|second| second % 10 == 0).count();
+    1 + band_count + line_count
 }
 
 fn timing_visualizer_judge_colors(visualizer: &SkinTimingVisualizerDef) -> [Color; 5] {
