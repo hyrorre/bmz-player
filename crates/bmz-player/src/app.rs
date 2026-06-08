@@ -7668,8 +7668,8 @@ fn skin_video_sources_from_decoded(decoded: &DecodedSkin) -> Vec<ActiveSkinVideo
 struct SkinVideoSourceGating {
     /// スキン config の option による静的な有効判定。
     active: bool,
-    /// このソースを参照する各 destination の op 条件。空なら参照されていない
-    /// (= 常時可視)。
+    /// このソースを参照する各 destination の op 条件。conditional destination の
+    /// outer `if` 条件も合成済み。空なら参照されていない (= 常時可視)。
     op_sets: Vec<Vec<i32>>,
 }
 
@@ -7700,15 +7700,15 @@ fn skin_video_source_gating(document: &SkinDocument, source_id: &str) -> SkinVid
     let mut referenced = false;
     let mut active = false;
     let mut op_sets = Vec::new();
-    for destination in skin_document_destinations(document) {
+    for (destination, op_set) in skin_document_destination_op_sets(document) {
         if !render_object_ids.contains(destination.id.as_str()) {
             continue;
         }
         referenced = true;
-        op_sets.push(destination.op.clone());
-        if destination_property_ops_allow(&destination.op, &enabled_options, &property_ops) {
+        if destination_property_ops_allow(&op_set, &enabled_options, &property_ops) {
             active = true;
         }
+        op_sets.push(op_set);
     }
     if !referenced {
         return SkinVideoSourceGating { active: true, op_sets: Vec::new() };
@@ -7731,15 +7731,24 @@ fn skin_video_source_runtime_visible(
         .any(|ops| bmz_render::skin::test_skin_ops(ops, &source.enabled_options, state))
 }
 
-fn skin_document_destinations(document: &SkinDocument) -> Vec<&SkinDestinationDef> {
+fn skin_document_destination_op_sets(
+    document: &SkinDocument,
+) -> Vec<(&SkinDestinationDef, Vec<i32>)> {
     document
         .destination
         .iter()
         .flat_map(|entry| match entry {
-            DestinationListEntry::Single(destination) => vec![destination],
-            DestinationListEntry::Conditional { destinations, .. } => {
-                destinations.iter().collect::<Vec<_>>()
+            DestinationListEntry::Single(destination) => {
+                vec![(destination, destination.op.clone())]
             }
+            DestinationListEntry::Conditional { if_ops, destinations } => destinations
+                .iter()
+                .map(|destination| {
+                    let mut op_set = if_ops.clone();
+                    op_set.extend(destination.op.iter().copied());
+                    (destination, op_set)
+                })
+                .collect::<Vec<_>>(),
         })
         .collect()
 }
@@ -11072,6 +11081,80 @@ mod tests {
         };
         assert!(skin_video_source_runtime_visible(&bg_a, a_state));
         assert!(!skin_video_source_runtime_visible(&bg_aaa, a_state));
+    }
+
+    #[test]
+    fn skin_video_source_gating_respects_conditional_destination_if_ops() {
+        use bmz_render::skin::SkinDrawState;
+
+        let mut document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 7,
+                "property": [
+                    {
+                        "name": "動画を使用する",
+                        "def": "ON",
+                        "item": [
+                            { "name": "ON", "op": 920 },
+                            { "name": "OFF", "op": 921 }
+                        ]
+                    }
+                ],
+                "source": [{ "id": "BG_AAA", "path": "BG/AAA/aaa.mp4" }],
+                "image": [{ "id": "BG_AAA", "src": "BG_AAA", "x": 0, "y": 0, "w": 10, "h": 10 }],
+                "destination": [
+                    {
+                        "if": [920],
+                        "values": [
+                            { "id": "BG_AAA", "op": [90, 300], "dst": [{ "x": 0, "y": 0, "w": 10, "h": 10 }] }
+                        ]
+                    }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        let gating = skin_video_source_gating(&document, "BG_AAA");
+        assert!(gating.active);
+        assert_eq!(gating.op_sets, vec![vec![920, 90, 300]]);
+        let aaa_state = SkinDrawState {
+            result_failed: Some(false),
+            ex_score: 18,
+            total_notes: 9,
+            ..SkinDrawState::default()
+        };
+        let source = ActiveSkinVideoSource {
+            texture: SkinTextureId(0),
+            path: PathBuf::new(),
+            decoder: None,
+            last_pts: None,
+            loop_start_us: 0,
+            active: gating.active,
+            gating_op_sets: gating.op_sets,
+            enabled_options: document.enabled_options(),
+            result_ranktime_ms: document.ranktime,
+            failed: false,
+        };
+        assert!(skin_video_source_runtime_visible(&source, aaa_state));
+
+        document.user_selected_options = Some(vec![921]);
+        let gating = skin_video_source_gating(&document, "BG_AAA");
+        assert!(!gating.active);
+        let disabled_source = ActiveSkinVideoSource {
+            texture: SkinTextureId(0),
+            path: PathBuf::new(),
+            decoder: None,
+            last_pts: None,
+            loop_start_us: 0,
+            active: gating.active,
+            gating_op_sets: gating.op_sets,
+            enabled_options: document.enabled_options(),
+            result_ranktime_ms: document.ranktime,
+            failed: false,
+        };
+        assert!(!skin_video_source_runtime_visible(&disabled_source, aaa_state));
     }
 
     #[test]
