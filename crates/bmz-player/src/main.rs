@@ -1,5 +1,6 @@
 use anyhow::Result;
 use bmz_player::cli::Command;
+use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -9,7 +10,8 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    tracing_subscriber::fmt().with_max_level(tracing::Level::INFO).init();
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    tracing_subscriber::fmt().with_env_filter(filter).init();
 
     match bmz_player::cli::parse_command(args)? {
         Command::Run(options) => bmz_player::app::run_with_options(options).await,

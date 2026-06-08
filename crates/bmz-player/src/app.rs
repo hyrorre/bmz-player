@@ -393,7 +393,8 @@ struct WinitApp {
     practice_session: Option<PracticeSession>,
     /// 次の `RunningPlaySession::start` で使う chart zero（区間先頭の 1 秒前）。
     practice_chart_zero_time: Option<TimeUs>,
-    select_frame_profiler: SelectFrameProfiler,
+    select_frame_profiler: SceneFrameProfiler,
+    result_frame_profiler: SceneFrameProfiler,
 }
 
 struct ActiveSkinVideoSource {
@@ -407,7 +408,7 @@ struct ActiveSkinVideoSource {
 }
 
 #[derive(Debug, Default)]
-struct SelectFrameProfiler {
+struct SceneFrameProfiler {
     frames: u32,
     video_us: u128,
     snapshot_us: u128,
@@ -421,11 +422,12 @@ struct SelectFrameProfiler {
     commands: u128,
 }
 
-impl SelectFrameProfiler {
+impl SceneFrameProfiler {
     const LOG_EVERY_FRAMES: u32 = 120;
 
     fn record(
         &mut self,
+        profile: FrameProfileKind,
         video_us: u128,
         snapshot_us: u128,
         render_us: u128,
@@ -445,29 +447,66 @@ impl SelectFrameProfiler {
             self.commands += timings.commands as u128;
         }
         if self.frames >= Self::LOG_EVERY_FRAMES {
-            self.log_and_reset();
+            self.log_and_reset(profile);
         }
     }
 
-    fn log_and_reset(&mut self) {
+    fn log_and_reset(&mut self, profile: FrameProfileKind) {
         let frames = self.frames.max(1) as u128;
-        tracing::debug!(
-            target: "bmz_player::select_profile",
-            frames = self.frames,
-            video_ms = fmt_profile_ms(self.video_us, frames),
-            snapshot_ms = fmt_profile_ms(self.snapshot_us, frames),
-            render_ms = fmt_profile_ms(self.render_us, frames),
-            plan_ms = fmt_profile_ms(self.plan_us, frames),
-            draw_ms = fmt_profile_ms(self.draw_us, frames),
-            text_ms = fmt_profile_ms(self.text_us, frames),
-            geometry_ms = fmt_profile_ms(self.geometry_us, frames),
-            upload_ms = fmt_profile_ms(self.upload_us, frames),
-            submit_ms = fmt_profile_ms(self.submit_us, frames),
-            commands = (self.commands / frames) as u64,
-            "select frame profile"
-        );
+        let commands = (self.commands / frames) as u64;
+        let video_ms = fmt_profile_ms(self.video_us, frames);
+        let snapshot_ms = fmt_profile_ms(self.snapshot_us, frames);
+        let render_ms = fmt_profile_ms(self.render_us, frames);
+        let plan_ms = fmt_profile_ms(self.plan_us, frames);
+        let draw_ms = fmt_profile_ms(self.draw_us, frames);
+        let text_ms = fmt_profile_ms(self.text_us, frames);
+        let geometry_ms = fmt_profile_ms(self.geometry_us, frames);
+        let upload_ms = fmt_profile_ms(self.upload_us, frames);
+        let submit_ms = fmt_profile_ms(self.submit_us, frames);
+        match profile {
+            FrameProfileKind::Select => {
+                tracing::debug!(
+                    target: "bmz_player::select_profile",
+                    frames = self.frames,
+                    video_ms,
+                    snapshot_ms,
+                    render_ms,
+                    plan_ms,
+                    draw_ms,
+                    text_ms,
+                    geometry_ms,
+                    upload_ms,
+                    submit_ms,
+                    commands,
+                    "select frame profile"
+                );
+            }
+            FrameProfileKind::Result => {
+                tracing::debug!(
+                    target: "bmz_player::result_profile",
+                    frames = self.frames,
+                    video_ms,
+                    snapshot_ms,
+                    render_ms,
+                    plan_ms,
+                    draw_ms,
+                    text_ms,
+                    geometry_ms,
+                    upload_ms,
+                    submit_ms,
+                    commands,
+                    "result frame profile"
+                );
+            }
+        }
         *self = Self::default();
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FrameProfileKind {
+    Select,
+    Result,
 }
 
 fn fmt_profile_ms(total_us: u128, frames: u128) -> String {
@@ -1124,7 +1163,8 @@ impl WinitApp {
             search_message: None,
             practice_session: None,
             practice_chart_zero_time: None,
-            select_frame_profiler: SelectFrameProfiler::default(),
+            select_frame_profiler: SceneFrameProfiler::default(),
+            result_frame_profiler: SceneFrameProfiler::default(),
         };
         if let Some(chart_id) = boot_chart_id {
             if options.boot_practice {
@@ -6666,8 +6706,11 @@ impl WinitApp {
 
     fn render_current_scene(&mut self) {
         let select_view = matches!(self.view_state(), AppViewState::Select);
+        let result_view = matches!(self.view_state(), AppViewState::Result(_));
         let profiling_select = select_view
             && tracing::enabled!(target: "bmz_player::select_profile", tracing::Level::DEBUG);
+        let profiling_result = result_view
+            && tracing::enabled!(target: "bmz_player::result_profile", tracing::Level::DEBUG);
         if select_view {
             self.refresh_visible_select_folder_summaries();
             self.poll_select_asset_loads();
@@ -6696,6 +6739,16 @@ impl WinitApp {
         let render_us = render_start.elapsed().as_micros();
         if profiling_select {
             self.select_frame_profiler.record(
+                FrameProfileKind::Select,
+                video_us,
+                snapshot_us,
+                render_us,
+                self.renderer.last_frame_timings(),
+            );
+        }
+        if profiling_result {
+            self.result_frame_profiler.record(
+                FrameProfileKind::Result,
                 video_us,
                 snapshot_us,
                 render_us,
