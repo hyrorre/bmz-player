@@ -13,11 +13,16 @@ pub struct SampleBank {
 }
 
 impl SampleBank {
-    pub fn insert(&mut self, id: SoundId, sample: DecodedSample) {
+    pub fn reserve_slot(&mut self, id: SoundId) {
         let index = id.0 as usize;
         if self.samples.len() <= index {
             self.samples.resize_with(index + 1, || None);
         }
+    }
+
+    pub fn insert(&mut self, id: SoundId, sample: DecodedSample) {
+        let index = id.0 as usize;
+        self.reserve_slot(id);
         self.samples[index] = Some(sample);
     }
 
@@ -133,6 +138,20 @@ mod tests {
 
         assert_eq!(bank.get(SoundId(2)).unwrap().sample_stereo(0), (0.5, 0.5));
         assert!(bank.get(SoundId(1)).is_none());
+    }
+
+    #[test]
+    fn reserve_slot_keeps_empty_slot_without_sample() {
+        let mut bank = SampleBank::default();
+
+        bank.reserve_slot(SoundId(2));
+
+        assert!(bank.get(SoundId(2)).is_none());
+        bank.insert(
+            SoundId(2),
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![0.5] },
+        );
+        assert_eq!(bank.get(SoundId(2)).unwrap().sample_stereo(0), (0.5, 0.5));
     }
 
     #[test]

@@ -9,6 +9,7 @@ use bmz_audio::backend::cpal::{
 use bmz_audio::clock::AudioClock;
 use bmz_audio::engine::AudioEngine;
 use bmz_audio::loader::LoadedSampleReport;
+use bmz_audio::queue::ScheduledSoundQueue;
 use bmz_chart::model::BgaAssetId;
 use bmz_core::time::TimeUs;
 use bmz_gameplay::session::GameSession;
@@ -37,6 +38,7 @@ pub struct AudioRuntime {
 pub struct RunningPlaySession {
     pub session: GameSession,
     pub audio: AppAudioOutput,
+    pub pending_audio: ScheduledSoundQueue,
     pub sample_report: Vec<LoadedSampleReport>,
     pub finished: Option<FinishedPlaySession>,
     pub result_graph: ResultGraphCollector,
@@ -158,6 +160,7 @@ pub fn open_prepared_play_audio(
     RunningPlaySession {
         session,
         audio,
+        pending_audio: ScheduledSoundQueue::new(),
         sample_report: prepared.sample_report,
         finished: None,
         result_graph: ResultGraphCollector::default(),

@@ -24,6 +24,23 @@ impl AudioEngine {
         self.samples.insert(id, sample);
     }
 
+    pub fn output_sample_rate(&self) -> u32 {
+        self.mixer.output_sample_rate
+    }
+
+    pub fn reserve_sample_slot(&mut self, id: bmz_core::ids::SoundId) {
+        self.samples.reserve_slot(id);
+    }
+
+    pub fn insert_prepared_sample(&mut self, id: bmz_core::ids::SoundId, sample: DecodedSample) {
+        let sample = if sample.sample_rate == self.mixer.output_sample_rate {
+            sample
+        } else {
+            sample.resampled_to(self.mixer.output_sample_rate)
+        };
+        self.samples.insert(id, sample);
+    }
+
     /// 出力サンプルレートを変更し、保持中の全サンプルを新レートへ揃える。
     /// cpal ストリームへ source 登録される際(実レート確定時)に呼ばれる。
     pub fn set_output_sample_rate(&mut self, rate: u32) {
@@ -86,6 +103,12 @@ impl AudioEngine {
         self.mixer.push_scheduled(self.queue.drain_due(output_end_frame));
         self.mixer.mix_stereo(&self.samples, output_start_frame, output);
     }
+
+    pub fn schedule_all(&mut self, sounds: impl IntoIterator<Item = ScheduledSound>) {
+        for sound in sounds {
+            self.schedule(sound);
+        }
+    }
 }
 
 impl AudioScheduler for AudioEngine {
@@ -134,6 +157,68 @@ mod tests {
         let sample = engine.samples.get(SoundId(1)).unwrap();
         assert_eq!(sample.sample_rate, 48_000);
         assert_eq!(sample.frames, vec![0.0, 0.5, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn insert_prepared_sample_keeps_matching_output_rate() {
+        let mut engine = AudioEngine::new(48_000);
+        engine.insert_prepared_sample(
+            SoundId(1),
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![0.0, 1.0] },
+        );
+
+        let sample = engine.samples.get(SoundId(1)).unwrap();
+        assert_eq!(sample.sample_rate, 48_000);
+        assert_eq!(sample.frames, vec![0.0, 1.0]);
+    }
+
+    #[test]
+    fn insert_prepared_sample_resamples_if_rate_changed() {
+        let mut engine = AudioEngine::new(48_000);
+        engine.insert_prepared_sample(
+            SoundId(1),
+            DecodedSample { channels: 1, sample_rate: 24_000, frames: vec![0.0, 1.0] },
+        );
+
+        let sample = engine.samples.get(SoundId(1)).unwrap();
+        assert_eq!(sample.sample_rate, 48_000);
+        assert_eq!(sample.frames, vec![0.0, 0.5, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn schedule_all_preserves_scheduled_sounds() {
+        let mut engine = AudioEngine::default();
+
+        engine.schedule_all([
+            ScheduledSound {
+                start_frame: 20,
+                sound_id: SoundId(2),
+                volume: 1.0,
+                pan: 0.0,
+                loop_playback: false,
+                fade_in_frames: 0,
+                catch_up: true,
+            },
+            ScheduledSound {
+                start_frame: 10,
+                sound_id: SoundId(1),
+                volume: 1.0,
+                pan: 0.0,
+                loop_playback: false,
+                fade_in_frames: 0,
+                catch_up: true,
+            },
+        ]);
+
+        assert_eq!(
+            engine
+                .queue
+                .drain_until_frame(20)
+                .iter()
+                .map(|sound| sound.sound_id.0)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
     }
 
     #[test]

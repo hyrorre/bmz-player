@@ -60,6 +60,10 @@ impl ScheduledSoundQueue {
         self.sounds.drain(..split)
     }
 
+    pub fn drain_all(&mut self) -> std::vec::Drain<'_, ScheduledSound> {
+        self.sounds.drain(..)
+    }
+
     pub fn len(&self) -> usize {
         self.sounds.len()
     }

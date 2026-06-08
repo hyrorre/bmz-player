@@ -13,6 +13,9 @@ pub struct SelectChartPreview {
 
 impl SelectChartPreview {
     pub fn new(engine: SharedAudioEngine) -> Self {
+        if let Ok(mut guard) = engine.lock() {
+            guard.reserve_sample_slot(CHART_PREVIEW_SOUND_ID);
+        }
         Self { engine }
     }
 
@@ -29,12 +32,18 @@ impl SelectChartPreview {
     }
 
     pub fn play_sample(&self, sample: DecodedSample, volume: f32) -> bool {
+        let output_sample_rate = match self.engine.lock() {
+            Ok(engine) => engine.output_sample_rate(),
+            Err(_) => return false,
+        };
+        let sample = sample.resampled_to(output_sample_rate);
+
         let Ok(mut engine) = self.engine.lock() else {
             return false;
         };
         engine.stop_sound(CHART_PREVIEW_SOUND_ID);
-        engine.insert_sample(CHART_PREVIEW_SOUND_ID, sample);
-        let fade_in_frames = attack_fade_frames(engine.mixer.output_sample_rate);
+        engine.insert_prepared_sample(CHART_PREVIEW_SOUND_ID, sample);
+        let fade_in_frames = attack_fade_frames(engine.output_sample_rate());
         engine.play_now_with_fade_in(CHART_PREVIEW_SOUND_ID, volume, true, fade_in_frames);
         true
     }
@@ -105,5 +114,21 @@ mod tests {
         let mut output = vec![0.0; 2];
         engine.lock().unwrap().render_stereo(10, &mut output);
         assert_eq!(output, vec![1.0, 1.0]);
+    }
+
+    #[test]
+    fn play_sample_prepares_sample_at_engine_output_rate() {
+        let engine: SharedAudioEngine = Arc::new(Mutex::new(AudioEngine::new(2_000)));
+        let preview = SelectChartPreview::new(Arc::clone(&engine));
+
+        assert!(preview.play_sample(
+            DecodedSample { channels: 1, sample_rate: 1_000, frames: vec![0.0, 1.0] },
+            1.0,
+        ));
+
+        let guard = engine.lock().unwrap();
+        let sample = guard.samples.get(CHART_PREVIEW_SOUND_ID).unwrap();
+        assert_eq!(sample.sample_rate, 2_000);
+        assert_eq!(sample.frames, vec![0.0, 0.5, 1.0, 1.0]);
     }
 }

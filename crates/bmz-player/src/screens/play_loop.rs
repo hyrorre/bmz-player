@@ -1,6 +1,8 @@
+use std::sync::TryLockError;
+
 use anyhow::{Result, anyhow};
 use bmz_audio::backend::cpal::SharedAudioEngine;
-use bmz_audio::queue::AudioScheduler;
+use bmz_audio::queue::{AudioScheduler, ScheduledSoundQueue};
 use bmz_core::time::TimeUs;
 use bmz_gameplay::session::{
     FrameOutput, GameSession, PlayState, SessionFrame, advance_session_frame,
@@ -132,8 +134,17 @@ pub fn advance_play_screen_with_shared_audio(
     audio: &SharedAudioEngine,
     best_ex_score: Option<u32>,
 ) -> Result<FrameOutput<RenderSnapshot>> {
-    let mut audio = audio.lock().map_err(|_| anyhow!("audio engine lock poisoned"))?;
-    Ok(advance_play_screen(session, &mut *audio, best_ex_score))
+    let mut scheduled = ScheduledSoundQueue::new();
+    let frame = advance_session_frame(session, &mut scheduled);
+    flush_scheduled_audio_blocking(audio, &mut scheduled)?;
+    Ok(frame_output_from_session_frame(
+        session,
+        frame,
+        best_ex_score,
+        None,
+        None,
+        &BgaFrameCatalog::new(),
+    ))
 }
 
 /// `SessionFrame`(audio スケジューリング結果)から、ロック不要な render
@@ -164,17 +175,40 @@ fn frame_output_from_session_frame(
     }
 }
 
+fn flush_scheduled_audio_blocking(
+    audio: &SharedAudioEngine,
+    scheduled: &mut ScheduledSoundQueue,
+) -> Result<()> {
+    if scheduled.is_empty() {
+        return Ok(());
+    }
+    let mut audio = audio.lock().map_err(|_| anyhow!("audio engine lock poisoned"))?;
+    audio.schedule_all(scheduled.drain_all());
+    Ok(())
+}
+
+fn flush_scheduled_audio_nonblocking(
+    audio: &SharedAudioEngine,
+    scheduled: &mut ScheduledSoundQueue,
+) -> Result<()> {
+    if scheduled.is_empty() {
+        return Ok(());
+    }
+    match audio.try_lock() {
+        Ok(mut audio) => {
+            audio.schedule_all(scheduled.drain_all());
+            Ok(())
+        }
+        Err(TryLockError::WouldBlock) => Ok(()),
+        Err(TryLockError::Poisoned(_)) => Err(anyhow!("audio engine lock poisoned")),
+    }
+}
+
 pub fn advance_running_play_session(
     running: &mut RunningPlaySession,
 ) -> Result<FrameOutput<RenderSnapshot>> {
-    // audio エンジンロックは音のスケジューリング(advance_session_frame)中だけ
-    // 保持する。重い render snapshot 構築をロック外に出すことで、audio callback の
-    // try_lock スキップ(= 全バックエンドで音切れ)を防ぐ。
-    let frame = {
-        let mut audio =
-            running.audio.engine.lock().map_err(|_| anyhow!("audio engine lock poisoned"))?;
-        advance_session_frame(&mut running.session, &mut *audio)
-    };
+    let frame = advance_session_frame(&mut running.session, &mut running.pending_audio);
+    flush_scheduled_audio_nonblocking(&running.audio.engine, &mut running.pending_audio)?;
     let mut output = frame_output_from_session_frame(
         &running.session,
         frame,
@@ -195,11 +229,8 @@ pub fn advance_running_play_session_until_result(
     ir_config: &IrConfig,
     played_at: i64,
 ) -> Result<PlayAdvanceOutcome> {
-    let session_frame = {
-        let mut audio =
-            running.audio.engine.lock().map_err(|_| anyhow!("audio engine lock poisoned"))?;
-        advance_session_frame(&mut running.session, &mut *audio)
-    };
+    let session_frame = advance_session_frame(&mut running.session, &mut running.pending_audio);
+    flush_scheduled_audio_nonblocking(&running.audio.engine, &mut running.pending_audio)?;
     let mut frame = frame_output_from_session_frame(
         &running.session,
         session_frame,
@@ -253,6 +284,7 @@ pub fn refresh_play_ending_snapshot(
     running: &mut RunningPlaySession,
     timers: PlayEndingSkinTimers,
 ) -> RenderSnapshot {
+    let _ = flush_scheduled_audio_nonblocking(&running.audio.engine, &mut running.pending_audio);
     let mut snapshot = refresh_play_ending_snapshot_with_session(
         &mut running.session,
         running.best_ex_score,
@@ -312,10 +344,10 @@ mod tests {
     use bmz_audio::backend::cpal::SharedAudioEngine;
     use bmz_audio::clock::AudioClock;
     use bmz_audio::engine::AudioEngine;
-    use bmz_audio::queue::{AudioScheduler, ScheduledSound};
+    use bmz_audio::queue::{AudioScheduler, ScheduledSound, ScheduledSoundQueue};
     use bmz_chart::hash::compute_chart_identity;
-    use bmz_chart::model::{ChartMetadata, NoteEvent, NoteKind, PlayableChart};
-    use bmz_core::ids::NoteId;
+    use bmz_chart::model::{ChartMetadata, NoteEvent, NoteKind, PlayableChart, SoundEvent};
+    use bmz_core::ids::{NoteId, SoundId};
     use bmz_core::judge::Judge;
     use bmz_core::lane::Lane;
     use bmz_core::time::{ChartTick, TimeUs};
@@ -365,7 +397,7 @@ mod tests {
     }
 
     #[test]
-    fn advance_play_screen_with_shared_audio_locks_engine() {
+    fn advance_play_screen_with_shared_audio_returns_snapshot() {
         let profile = ProfileConfig::new_default("default", "Default", 1);
         let mut session =
             build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
@@ -374,6 +406,39 @@ mod tests {
         let frame = advance_play_screen_with_shared_audio(&mut session, &audio, None).unwrap();
 
         assert_eq!(frame.render_snapshot.visible_notes[Lane::Key1.index()].len(), 1);
+    }
+
+    #[test]
+    fn advance_play_screen_with_shared_audio_flushes_scheduled_sounds() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session =
+            build_game_session(Arc::new(chart_with_bgm()), &profile, PlaySessionOptions::default());
+        let audio: SharedAudioEngine = Arc::new(Mutex::new(AudioEngine::default()));
+
+        let frame = advance_play_screen_with_shared_audio(&mut session, &audio, None).unwrap();
+
+        assert_eq!(frame.state, PlayState::Playing);
+        let mut guard = audio.lock().unwrap();
+        let scheduled = guard.queue.drain_until_frame(0);
+        assert_eq!(scheduled.len(), 1);
+        assert_eq!(scheduled[0].sound_id, SoundId(3));
+    }
+
+    #[test]
+    fn nonblocking_audio_flush_keeps_sounds_when_engine_is_busy() {
+        let audio: SharedAudioEngine = Arc::new(Mutex::new(AudioEngine::default()));
+        let held = audio.lock().unwrap();
+        let mut scheduled = ScheduledSoundQueue::new();
+        scheduled.schedule(scheduled_sound(0, 3));
+
+        flush_scheduled_audio_nonblocking(&audio, &mut scheduled).unwrap();
+
+        assert_eq!(scheduled.len(), 1);
+        drop(held);
+        flush_scheduled_audio_nonblocking(&audio, &mut scheduled).unwrap();
+        assert!(scheduled.is_empty());
+        let mut guard = audio.lock().unwrap();
+        assert_eq!(guard.queue.drain_until_frame(0)[0].sound_id, SoundId(3));
     }
 
     #[test]
@@ -600,6 +665,28 @@ mod tests {
             bga_assets: Vec::new(),
             total_notes: 0,
             end_time: TimeUs(-1_000_000),
+        }
+    }
+
+    fn chart_with_bgm() -> PlayableChart {
+        let mut chart = chart();
+        chart.bgm_events.push(SoundEvent {
+            tick: ChartTick(0),
+            time: TimeUs(0),
+            sound: SoundId(3),
+        });
+        chart
+    }
+
+    fn scheduled_sound(start_frame: u64, sound_id: u32) -> ScheduledSound {
+        ScheduledSound {
+            start_frame,
+            sound_id: SoundId(sound_id),
+            volume: 1.0,
+            pan: 0.0,
+            loop_playback: false,
+            fade_in_frames: 0,
+            catch_up: true,
         }
     }
 
