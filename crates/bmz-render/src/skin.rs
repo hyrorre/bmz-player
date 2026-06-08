@@ -200,6 +200,18 @@ impl<'a> SkinRuntimeGraphs<'a> {
     }
 }
 
+struct DestinationResolveContext<'a> {
+    images: &'a HashMap<&'a str, &'a SkinImageDef>,
+    values: &'a HashMap<&'a str, &'a SkinValueDef>,
+    enabled_options: &'a [i32],
+    state: SkinDrawState,
+    text_state: SkinTextState<'a>,
+    sources: &'a HashMap<String, SkinDocumentTexture>,
+    runtime_graphs: SkinRuntimeGraphs<'a>,
+    has_half_grade_f_diff_rank_destination: bool,
+    cache: Option<&'a mut ResultRenderCache>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct SkinSongListDef {
     #[serde(default, deserialize_with = "deserialize_skin_id")]
@@ -2687,15 +2699,17 @@ impl SkinDocument {
             if let Some(items) = self.resolve_destination_items(
                 index,
                 destination,
-                &images,
-                &values,
-                &enabled_options,
-                state,
-                text_state,
-                sources,
-                runtime_graphs,
-                has_half_grade_f_diff_rank_destination,
-                cache.as_deref_mut(),
+                DestinationResolveContext {
+                    images: &images,
+                    values: &values,
+                    enabled_options: &enabled_options,
+                    state,
+                    text_state,
+                    sources,
+                    runtime_graphs,
+                    has_half_grade_f_diff_rank_destination,
+                    cache: cache.as_deref_mut(),
+                },
             ) {
                 let after_notes_marker = after_notes_marker
                     || self.destination_looks_like_pre_notes_judge_line(
@@ -2855,16 +2869,19 @@ impl SkinDocument {
         &self,
         destination_index: usize,
         destination: &SkinDestinationDef,
-        images: &HashMap<&str, &SkinImageDef>,
-        values: &HashMap<&str, &SkinValueDef>,
-        enabled_options: &[i32],
-        state: SkinDrawState,
-        text_state: SkinTextState<'_>,
-        sources: &HashMap<String, SkinDocumentTexture>,
-        runtime_graphs: SkinRuntimeGraphs<'_>,
-        has_half_grade_f_diff_rank_destination: bool,
-        cache: Option<&mut ResultRenderCache>,
+        context: DestinationResolveContext<'_>,
     ) -> Option<Vec<SkinRenderItem>> {
+        let DestinationResolveContext {
+            images,
+            values,
+            enabled_options,
+            state,
+            text_state,
+            sources,
+            runtime_graphs,
+            has_half_grade_f_diff_rank_destination,
+            cache,
+        } = context;
         let state =
             apply_half_grade_f_diff_rank_fallback(state, has_half_grade_f_diff_rank_destination);
         if let Some(judge_def) = self.judge.iter().find(|judge| judge.id == destination.id) {
@@ -3524,15 +3541,17 @@ impl SkinDocument {
             if let Some(resolved) = self.resolve_destination_items(
                 destination_index,
                 destination,
-                &images,
-                &values,
-                &enabled_options,
-                state,
-                text,
-                sources,
-                SkinRuntimeGraphs::from_document(self),
-                has_half_grade_f_diff_rank_destination,
-                None,
+                DestinationResolveContext {
+                    images: &images,
+                    values: &values,
+                    enabled_options: &enabled_options,
+                    state,
+                    text_state: text,
+                    sources,
+                    runtime_graphs: SkinRuntimeGraphs::from_document(self),
+                    has_half_grade_f_diff_rank_destination,
+                    cache: None,
+                },
             ) {
                 items.extend(resolved);
             }

@@ -137,7 +137,8 @@ impl CpalBackend {
             resolve_sample_rate(&device, requested_sample_rate, default_sample_rate, sample_format);
         config.sample_rate = ::cpal::SampleRate(sample_rate);
         config.buffer_size = resolve_buffer_size(requested_buffer_size, &supported_buffer_size);
-        let channel_offset = resolve_channel_offset(requested_channel_offset, config.channels as usize);
+        let channel_offset =
+            resolve_channel_offset(requested_channel_offset, config.channels as usize);
 
         // ASIO のバッファ問い合わせ結果を可視化する。ドライバが報告する
         // サポート範囲(`supported_buffer_size`)と、要求値・実際にストリームへ
@@ -532,7 +533,8 @@ fn write_interleaved_output<T: OutputSample>(
     }
 
     // ステレオを書き込む先頭チャンネル。ペア(offset, offset+1)が収まらない場合は 0 へ。
-    let left_channel = if channels >= 2 && channel_offset + 1 < channels { channel_offset } else { 0 };
+    let left_channel =
+        if channels >= 2 && channel_offset + 1 < channels { channel_offset } else { 0 };
     let silence = T::from_f32(0.0);
 
     for (frame_index, frame) in data.chunks_mut(channels).enumerate() {
@@ -710,18 +712,9 @@ mod tests {
     fn resolve_buffer_size_clamps_to_supported_range() {
         let range = ::cpal::SupportedBufferSize::Range { min: 64, max: 1024 };
 
-        assert!(matches!(
-            resolve_buffer_size(Some(32), &range),
-            ::cpal::BufferSize::Fixed(64)
-        ));
-        assert!(matches!(
-            resolve_buffer_size(Some(256), &range),
-            ::cpal::BufferSize::Fixed(256)
-        ));
-        assert!(matches!(
-            resolve_buffer_size(Some(4096), &range),
-            ::cpal::BufferSize::Fixed(1024)
-        ));
+        assert!(matches!(resolve_buffer_size(Some(32), &range), ::cpal::BufferSize::Fixed(64)));
+        assert!(matches!(resolve_buffer_size(Some(256), &range), ::cpal::BufferSize::Fixed(256)));
+        assert!(matches!(resolve_buffer_size(Some(4096), &range), ::cpal::BufferSize::Fixed(1024)));
     }
 
     #[test]
