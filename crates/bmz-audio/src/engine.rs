@@ -70,8 +70,8 @@ impl AudioEngine {
         output.fill(0.0);
         let frame_count = output.len() / 2;
         let output_end_frame = output_start_frame + frame_count.saturating_sub(1) as u64;
-        let due = self.queue.drain_until_frame(output_end_frame);
-        self.mixer.push_scheduled(due);
+        // 中間 Vec を確保せず、期日到来分を直接 mixer へ流し込む(RT 安全)。
+        self.mixer.push_scheduled(self.queue.drain_due(output_end_frame));
         self.mixer.mix_stereo(&self.samples, output_start_frame, output);
     }
 }

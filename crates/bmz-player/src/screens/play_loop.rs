@@ -3,8 +3,8 @@ use bmz_audio::backend::cpal::SharedAudioEngine;
 use bmz_audio::queue::AudioScheduler;
 use bmz_core::time::TimeUs;
 use bmz_gameplay::session::{
-    FrameOutput, GameSession, PlayState, advance_session_frame, apply_auto_key_release,
-    compute_frame_times, update_recent_inputs, update_recent_judgements,
+    FrameOutput, GameSession, PlayState, SessionFrame, advance_session_frame,
+    apply_auto_key_release, compute_frame_times, update_recent_inputs, update_recent_judgements,
 };
 use bmz_render::snapshot::RenderSnapshot;
 
@@ -136,21 +136,55 @@ pub fn advance_play_screen_with_shared_audio(
     Ok(advance_play_screen(session, &mut *audio, best_ex_score))
 }
 
+/// `SessionFrame`(audio スケジューリング結果)から、ロック不要な render
+/// snapshot を構築して `FrameOutput` を組み立てる。重い処理はここに集約し、
+/// audio エンジンロックの外で実行する。
+fn frame_output_from_session_frame(
+    session: &GameSession,
+    frame: SessionFrame,
+    best_ex_score: Option<u32>,
+    best_ghost: Option<&[u8]>,
+    target_ex_score: Option<u32>,
+    bga_frames: &BgaFrameCatalog,
+) -> FrameOutput<RenderSnapshot> {
+    let render_snapshot = build_render_snapshot_with_target_and_bga_frames(
+        session,
+        frame.times.render_now,
+        &session.recent_judgements,
+        best_ex_score,
+        best_ghost,
+        target_ex_score,
+        bga_frames,
+    );
+    FrameOutput {
+        render_snapshot,
+        judgements: frame.judgements,
+        mine_hits: frame.mine_hits,
+        state: frame.state,
+    }
+}
+
 pub fn advance_running_play_session(
     running: &mut RunningPlaySession,
 ) -> Result<FrameOutput<RenderSnapshot>> {
-    let mut audio =
-        running.audio.engine.lock().map_err(|_| anyhow!("audio engine lock poisoned"))?;
-    let mut frame = advance_play_screen_with_bga_frames(
-        &mut running.session,
-        &mut *audio,
+    // audio エンジンロックは音のスケジューリング(advance_session_frame)中だけ
+    // 保持する。重い render snapshot 構築をロック外に出すことで、audio callback の
+    // try_lock スキップ(= 全バックエンドで音切れ)を防ぐ。
+    let frame = {
+        let mut audio =
+            running.audio.engine.lock().map_err(|_| anyhow!("audio engine lock poisoned"))?;
+        advance_session_frame(&mut running.session, &mut *audio)
+    };
+    let mut output = frame_output_from_session_frame(
+        &running.session,
+        frame,
         running.best_ex_score,
         running.best_ghost.as_deref(),
         running.target_ex_score,
         &running.bga_frames,
     );
-    apply_play_arrange_to_snapshot(&mut frame.render_snapshot, running.applied_arrange.arrange);
-    Ok(frame)
+    apply_play_arrange_to_snapshot(&mut output.render_snapshot, running.applied_arrange.arrange);
+    Ok(output)
 }
 
 pub fn advance_running_play_session_until_result(
@@ -161,20 +195,20 @@ pub fn advance_running_play_session_until_result(
     ir_config: &IrConfig,
     played_at: i64,
 ) -> Result<PlayAdvanceOutcome> {
-    let frame = {
+    let session_frame = {
         let mut audio =
             running.audio.engine.lock().map_err(|_| anyhow!("audio engine lock poisoned"))?;
-        let mut frame = advance_play_screen_with_bga_frames(
-            &mut running.session,
-            &mut *audio,
-            running.best_ex_score,
-            running.best_ghost.as_deref(),
-            running.target_ex_score,
-            &running.bga_frames,
-        );
-        apply_play_arrange_to_snapshot(&mut frame.render_snapshot, running.applied_arrange.arrange);
-        frame
+        advance_session_frame(&mut running.session, &mut *audio)
     };
+    let mut frame = frame_output_from_session_frame(
+        &running.session,
+        session_frame,
+        running.best_ex_score,
+        running.best_ghost.as_deref(),
+        running.target_ex_score,
+        &running.bga_frames,
+    );
+    apply_play_arrange_to_snapshot(&mut frame.render_snapshot, running.applied_arrange.arrange);
     running.result_graph.record_frame(&frame);
     if matches!(frame.state, PlayState::Finished | PlayState::Failed) {
         let mut finished = finish_session_result_once(

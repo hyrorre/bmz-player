@@ -37,6 +37,14 @@ impl ScheduledSoundQueue {
         self.sounds.drain(..split).collect()
     }
 
+    /// `drain_until_frame` のアロケーションなし版。期日到来分を `Drain` として返し、
+    /// 呼び出し側で直接消費する。オーディオコールバック(`render_stereo`)から
+    /// 毎回呼ばれるため、中間 `Vec` を確保しない。
+    pub fn drain_due(&mut self, frame: u64) -> std::vec::Drain<'_, ScheduledSound> {
+        let split = self.sounds.partition_point(|sound| sound.start_frame <= frame);
+        self.sounds.drain(..split)
+    }
+
     pub fn len(&self) -> usize {
         self.sounds.len()
     }
