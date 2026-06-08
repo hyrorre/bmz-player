@@ -14,7 +14,7 @@
 use std::path::{Path, PathBuf};
 
 /// beatoraja の `SystemSoundManager.SoundType` と対応する列挙体。
-/// `path` は beatoraja 既定のファイル名、`is_bgm` はループ再生対象かどうか。
+/// `path` は beatoraja 既定のファイル名、`is_bgm` は BGM セット探索対象かどうか。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SoundType {
     Scratch,
@@ -112,9 +112,13 @@ impl SoundType {
         }
     }
 
-    /// BGM (ループ再生)対象かどうか。
+    /// BGM セット探索とシーン遷移時の停止対象かどうか。
     pub fn is_bgm(&self) -> bool {
         matches!(self, SoundType::Select | SoundType::Decide)
+    }
+
+    pub fn loops(&self) -> bool {
+        matches!(self, SoundType::Select)
     }
 }
 
@@ -259,6 +263,8 @@ mod tests {
     fn sound_type_classification() {
         assert!(SoundType::Select.is_bgm());
         assert!(SoundType::Decide.is_bgm());
+        assert!(SoundType::Select.loops());
+        assert!(!SoundType::Decide.loops());
         assert!(!SoundType::Scratch.is_bgm());
         assert_eq!(SoundType::Scratch.file_name(), "scratch.wav");
         assert_eq!(SoundType::ResultClear.file_name(), "clear.wav");

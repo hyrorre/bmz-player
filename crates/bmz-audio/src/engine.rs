@@ -51,12 +51,23 @@ impl AudioEngine {
     /// `start_frame = 0`(=即時再生)で sound_id を 1 ショット再生する。
     /// 必要なら `loop_playback = true` でループ再生も可能。
     pub fn play_now(&mut self, sound_id: bmz_core::ids::SoundId, volume: f32, loop_playback: bool) {
+        self.play_now_with_fade_in(sound_id, volume, loop_playback, 0);
+    }
+
+    pub fn play_now_with_fade_in(
+        &mut self,
+        sound_id: bmz_core::ids::SoundId,
+        volume: f32,
+        loop_playback: bool,
+        fade_in_frames: u32,
+    ) {
         self.schedule(ScheduledSound {
             start_frame: 0,
             sound_id,
             volume: volume.clamp(0.0, 1.0),
             pan: 0.0,
             loop_playback,
+            fade_in_frames,
             catch_up: false,
         });
     }
@@ -102,6 +113,7 @@ mod tests {
             volume: 1.0,
             pan: 0.0,
             loop_playback: false,
+            fade_in_frames: 0,
             catch_up: true,
         });
         let mut output = vec![1.0; 8];
@@ -172,6 +184,7 @@ mod tests {
             volume: 1.0,
             pan: 0.0,
             loop_playback: false,
+            fade_in_frames: 0,
             catch_up: true,
         });
         engine.set_sound_volume(SoundId(1), 0.25);
@@ -206,6 +219,7 @@ mod tests {
             volume: 1.0,
             pan: 0.0,
             loop_playback: false,
+            fade_in_frames: 0,
             catch_up: true,
         });
         // スケジュール済みの音が残っている間はアイドルではない。

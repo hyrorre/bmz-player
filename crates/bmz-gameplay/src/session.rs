@@ -203,6 +203,7 @@ impl BgmScheduler {
                 volume: (volume * chart_volume).clamp(0.0, 1.0),
                 pan: 0.0,
                 loop_playback: false,
+                fade_in_frames: 0,
                 catch_up: true,
             });
 
@@ -285,6 +286,7 @@ pub fn schedule_keysounds(
                 .clamp(0.0, 1.0),
             pan: 0.0,
             loop_playback: false,
+            fade_in_frames: 0,
             catch_up: true,
         });
     }

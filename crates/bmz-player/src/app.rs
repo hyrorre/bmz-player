@@ -50,7 +50,7 @@ use crate::cli::{
     AUTOPLAY_ON_START_ARG, AppOptions, BOOT_RESULT_SAMPLE_ARG, SMOKE_EXIT_AFTER_FRAMES_ARG,
     SMOKE_EXIT_AFTER_RESULT_FRAMES_ARG, SMOKE_EXIT_ON_RESULT_ARG, SMOKE_SCREENSHOT_ARG,
 };
-use crate::config::app_config::{PathEntry, WindowMode};
+use crate::config::app_config::{AppConfig, PathEntry, WindowMode};
 use crate::config::key_config::{
     KeyBindingSlot, KeyBindingTarget, apply_play_binding, clear_play_binding,
     is_scratch_down_control, is_scratch_up_control,
@@ -2121,10 +2121,12 @@ impl WinitApp {
         let loaded = match cache_key.as_deref() {
             Some(_) if self.select_preview.is_none() => false,
             Some(key) => match self.select_preview_cache.get(key) {
+                Some(SelectPreviewCacheEntry::Ready(_)) if had_preview => {
+                    self.begin_select_preview_fade_out();
+                    fading_out = true;
+                    false
+                }
                 Some(SelectPreviewCacheEntry::Ready(sample)) => {
-                    if let Some(preview) = &self.select_preview {
-                        preview.stop();
-                    }
                     let loaded = self.play_select_preview_sample(sample.clone(), 0.0);
                     if loaded {
                         self.begin_select_preview_fade_in();
@@ -4258,8 +4260,9 @@ impl WinitApp {
             }
         };
 
+        let app_config = self.play_session_app_config();
         let mut session_options = play_session_options_from_start(
-            &self.boot.app_config,
+            &app_config,
             PlayStartOptions {
                 autoplay: false,
                 practice_mode: true,
@@ -4935,7 +4938,7 @@ impl WinitApp {
         self.preloaded_play_session = None;
         let (tx, rx) = mpsc::channel();
         let library_db_path = self.boot.app_paths.library_db.clone();
-        let app_config = self.boot.app_config.clone();
+        let app_config = self.play_session_app_config();
         let ln_policy_setting = self.boot.profile_config.play.ln_mode_policy;
         thread::Builder::new()
             .name(format!("play-preload-{chart_id}"))
@@ -4993,6 +4996,19 @@ impl WinitApp {
     ) -> Result<StartedWinitPlaySession> {
         let runtime = self.audio_runtime.as_ref().context("audio output is not available")?;
         open_prepared_winit_play_session(&self.boot.score_db, runtime, prepared)
+    }
+
+    fn play_output_sample_rate(&self) -> u32 {
+        self.audio_runtime
+            .as_ref()
+            .map(AudioRuntime::sample_rate)
+            .unwrap_or(self.boot.app_config.audio.sample_rate)
+    }
+
+    fn play_session_app_config(&self) -> AppConfig {
+        let mut app_config = self.boot.app_config.clone();
+        app_config.audio.sample_rate = self.play_output_sample_rate();
+        app_config
     }
 
     /// 設定パネルの「適用」で、現在の `AppConfig` の音声設定を使って共有 cpal
@@ -5084,14 +5100,17 @@ impl WinitApp {
                     prepare_winit_play_session_from_preloaded(&self.boot.profile_config, preloaded);
                 self.open_prepared_winit_play_session(prepared)
             }
-            None => prepare_play_session_for_chart_with_winit_input(
-                &self.boot.library_db,
-                &self.boot.app_config,
-                &self.boot.profile_config,
-                chart_id,
-                options.clone(),
-            )
-            .and_then(|prepared| self.open_prepared_winit_play_session(prepared)),
+            None => {
+                let app_config = self.play_session_app_config();
+                prepare_play_session_for_chart_with_winit_input(
+                    &self.boot.library_db,
+                    &app_config,
+                    &self.boot.profile_config,
+                    chart_id,
+                    options.clone(),
+                )
+                .and_then(|prepared| self.open_prepared_winit_play_session(prepared))
+            }
         };
         match opened {
             Ok(active_play) => {
@@ -5260,9 +5279,10 @@ impl WinitApp {
             self.open_prepared_winit_play_session(prepared)
         } else {
             tracing::warn!(chart_id, "discarding mismatched play preload");
+            let app_config = self.play_session_app_config();
             prepare_play_session_for_chart_with_winit_input(
                 &self.boot.library_db,
-                &self.boot.app_config,
+                &app_config,
                 &self.boot.profile_config,
                 chart_id,
                 start_options,

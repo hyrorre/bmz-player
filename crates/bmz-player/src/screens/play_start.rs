@@ -164,6 +164,7 @@ pub fn start_running_play_session_for_chart_with_audio_runtime_and_input_backend
 ) -> Result<RunningPlaySession> {
     let chart_zero_time = start_options.chart_zero_time;
     let mut session_options = play_session_options_from_start(app_config, start_options);
+    session_options.sample_rate = runtime.sample_rate();
     session_options.ln_policy_setting = profile.play.ln_mode_policy;
     let prepared = load_prepared_play_session_for_chart_with_input_backend(
         library_db,

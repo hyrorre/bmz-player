@@ -5,6 +5,7 @@ use crate::sample::SampleBank;
 pub struct ActiveVoice {
     pub sound: ScheduledSound,
     pub sample_position: f64,
+    pub played_output_frames: u64,
     pub next_output_frame: u64,
     pub started: bool,
 }
@@ -31,6 +32,7 @@ impl MixerState {
             next_output_frame: sound.start_frame,
             sound,
             sample_position: 0.0,
+            played_output_frames: 0,
             started: false,
         }));
     }
@@ -114,12 +116,15 @@ impl MixerState {
                 } else {
                     sample.sample_stereo_linear(voice.sample_position)
                 };
-                left *= voice.sound.volume * pan_left(voice.sound.pan);
-                right *= voice.sound.volume * pan_right(voice.sound.pan);
+                let fade_gain =
+                    fade_in_gain(voice.sound.fade_in_frames, voice.played_output_frames);
+                left *= voice.sound.volume * fade_gain * pan_left(voice.sound.pan);
+                right *= voice.sound.volume * fade_gain * pan_right(voice.sound.pan);
 
                 output[out_frame * 2] += left;
                 output[out_frame * 2 + 1] += right;
                 voice.sample_position += step;
+                voice.played_output_frames = voice.played_output_frames.saturating_add(1);
                 voice.next_output_frame = absolute_frame.saturating_add(1);
             }
 
@@ -145,12 +150,20 @@ fn advance_voice_position(
     }
 
     voice.sample_position += frames as f64 * step;
+    voice.played_output_frames = voice.played_output_frames.saturating_add(frames);
     if voice.sound.loop_playback {
         voice.sample_position = voice.sample_position.rem_euclid(sample_frames as f64);
         true
     } else {
         voice.sample_position.floor() < sample_frames as f64
     }
+}
+
+fn fade_in_gain(fade_in_frames: u32, played_output_frames: u64) -> f32 {
+    if fade_in_frames == 0 {
+        return 1.0;
+    }
+    (played_output_frames as f32 / fade_in_frames as f32).clamp(0.0, 1.0)
 }
 
 fn pan_left(pan: f32) -> f32 {
@@ -184,6 +197,7 @@ mod tests {
             volume: 2.0,
             pan: 0.0,
             loop_playback: false,
+            fade_in_frames: 0,
             catch_up: true,
         }]);
         let mut output = vec![0.0; 6];
@@ -208,6 +222,7 @@ mod tests {
             volume: 1.0,
             pan: 0.0,
             loop_playback: true,
+            fade_in_frames: 0,
             catch_up: false,
         }]);
         let mut output = vec![0.0; 12]; // 6 frames, 3 ループ分
@@ -218,6 +233,30 @@ mod tests {
         assert_eq!(output, vec![0.5, 0.5, 0.25, 0.25, 0.5, 0.5, 0.25, 0.25, 0.5, 0.5, 0.25, 0.25]);
         // ループ voice はサンプル末尾を超えても残る。
         assert!(!mixer.voices.is_empty());
+    }
+
+    #[test]
+    fn fade_in_applies_once_to_looping_voice() {
+        let mut bank = SampleBank::default();
+        bank.insert(
+            SoundId(1),
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0, 1.0] },
+        );
+        let mut mixer = MixerState::default();
+        mixer.push_scheduled([ScheduledSound {
+            start_frame: 0,
+            sound_id: SoundId(1),
+            volume: 1.0,
+            pan: 0.0,
+            loop_playback: true,
+            fade_in_frames: 2,
+            catch_up: false,
+        }]);
+        let mut output = vec![0.0; 12];
+
+        mixer.mix_stereo(&bank, 0, &mut output);
+
+        assert_eq!(output, vec![0.0, 0.0, 0.5, 0.5, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]);
     }
 
     #[test]
@@ -234,6 +273,7 @@ mod tests {
             volume: 1.0,
             pan: 0.0,
             loop_playback: false,
+            fade_in_frames: 0,
             catch_up: true,
         }]);
         let mut output = vec![0.0; 8];
@@ -258,6 +298,7 @@ mod tests {
             volume: 1.0,
             pan: 0.0,
             loop_playback: false,
+            fade_in_frames: 0,
             catch_up: true,
         }]);
         let mut output = vec![0.0; 4];
@@ -282,6 +323,7 @@ mod tests {
             volume: 1.0,
             pan: 0.0,
             loop_playback: false,
+            fade_in_frames: 0,
             catch_up: false,
         }]);
         let mut output = vec![0.0; 4];
@@ -310,6 +352,7 @@ mod tests {
             volume: 1.0,
             pan: 0.0,
             loop_playback: false,
+            fade_in_frames: 0,
             catch_up: false,
         }]);
 

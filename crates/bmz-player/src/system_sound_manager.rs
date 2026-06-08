@@ -91,9 +91,9 @@ impl SystemSoundManager {
         let Some(&id) = self.id_map.get(&sound_type) else {
             return;
         };
-        let loop_playback = sound_type.is_bgm();
+        let loop_playback = sound_type.loops();
         if let Ok(mut engine) = self.engine.lock() {
-            if loop_playback {
+            if sound_type.is_bgm() {
                 engine.stop_sound(id);
             }
             engine.play_now(id, master_volume, loop_playback);
@@ -195,6 +195,32 @@ mod tests {
             let mut output = vec![0.0; 8];
             guard.render_stereo(8, &mut output);
             assert_eq!(guard.mixer.voices.len(), 1, "duplicate BGM play should not stack voices");
+        }
+    }
+
+    #[test]
+    fn play_decide_does_not_loop() {
+        use bmz_audio::sample::DecodedSample;
+
+        let engine: SharedAudioEngine = Arc::new(Mutex::new(AudioEngine::default()));
+        let mut id_map = HashMap::new();
+        id_map.insert(SoundType::Decide, SoundId(SYSTEM_SOUND_BASE));
+        {
+            let mut guard = engine.lock().unwrap();
+            guard.insert_sample(
+                SoundId(SYSTEM_SOUND_BASE),
+                DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![0.5, 0.25] },
+            );
+        }
+
+        let manager = SystemSoundManager { engine: Arc::clone(&engine), id_map };
+        manager.play(SoundType::Decide, 1.0);
+        {
+            let mut guard = engine.lock().unwrap();
+            let mut output = vec![0.0; 4];
+            guard.render_stereo(0, &mut output);
+            assert_eq!(output, vec![0.5, 0.5, 0.25, 0.25]);
+            assert!(guard.mixer.voices.is_empty());
         }
     }
 
