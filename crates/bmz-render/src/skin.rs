@@ -2524,6 +2524,8 @@ impl SkinDocument {
         runtime_graphs: SkinRuntimeGraphs<'_>,
     ) -> (Vec<SkinRenderItem>, Vec<SkinRenderItem>, Vec<SkinRenderItem>) {
         let images = self.image_map();
+        let values: HashMap<&str, &SkinValueDef> =
+            self.value.iter().map(|value| (value.id.as_str(), value)).collect();
         let enabled_options = self.enabled_options();
         let mut behind = Vec::new();
         let mut front = Vec::new();
@@ -2572,6 +2574,7 @@ impl SkinDocument {
             if let Some(items) = self.resolve_destination_items(
                 destination,
                 &images,
+                &values,
                 &enabled_options,
                 state,
                 text_state,
@@ -2684,6 +2687,7 @@ impl SkinDocument {
         &self,
         destination: &SkinDestinationDef,
         images: &HashMap<&str, &SkinImageDef>,
+        values: &HashMap<&str, &SkinValueDef>,
         enabled_options: &[i32],
         state: SkinDrawState,
         text_state: SkinTextState<'_>,
@@ -2707,7 +2711,7 @@ impl SkinDocument {
             );
         }
 
-        let value_for_destination = self.value.iter().find(|value| value.id == destination.id);
+        let value_for_destination = values.get(destination.id.as_str()).copied();
         let elapsed = skin_timer_elapsed_ms(destination.timer, state).or_else(|| {
             value_for_destination
                 .filter(|value| pre_ready_lane_cover_value_destination(destination, value, state))
@@ -3265,6 +3269,8 @@ impl SkinDocument {
         };
 
         let images = self.image_map();
+        let values: HashMap<&str, &SkinValueDef> =
+            self.value.iter().map(|value| (value.id.as_str(), value)).collect();
         let enabled_options = self.enabled_options();
         let destinations = self.all_destinations(&enabled_options);
         let has_half_grade_f_diff_rank_destination =
@@ -3346,6 +3352,7 @@ impl SkinDocument {
             if let Some(resolved) = self.resolve_destination_items(
                 destination,
                 &images,
+                &values,
                 &enabled_options,
                 state,
                 text,
