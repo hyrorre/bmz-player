@@ -9,12 +9,17 @@ pub struct ScheduledSound {
     /// `true` のときはサンプル末尾でループ再生する(BGM 等)。
     /// `false` なら従来通り 1 回再生して voice を破棄する。
     pub loop_playback: bool,
+    /// If rendering reaches this sound late, advance the sample cursor by the
+    /// missed frames. Chart-timeline sounds use this to stay synced to the
+    /// audio clock; immediate UI sounds keep it false so their first audible
+    /// buffer starts from the sample head.
+    pub catch_up: bool,
 }
 
 impl ScheduledSound {
     /// 既存呼び出し互換用: ループしない通常のスケジュール音。
     pub fn one_shot(start_frame: u64, sound_id: SoundId, volume: f32, pan: f32) -> Self {
-        Self { start_frame, sound_id, volume, pan, loop_playback: false }
+        Self { start_frame, sound_id, volume, pan, loop_playback: false, catch_up: true }
     }
 }
 
@@ -104,6 +109,7 @@ mod tests {
             volume: 1.0,
             pan: 0.0,
             loop_playback: false,
+            catch_up: true,
         }
     }
 }

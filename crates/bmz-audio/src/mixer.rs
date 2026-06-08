@@ -5,6 +5,8 @@ use crate::sample::SampleBank;
 pub struct ActiveVoice {
     pub sound: ScheduledSound,
     pub sample_position: f64,
+    pub next_output_frame: u64,
+    pub started: bool,
 }
 
 #[derive(Debug)]
@@ -25,8 +27,12 @@ impl MixerState {
     }
 
     pub fn push_scheduled(&mut self, sounds: impl IntoIterator<Item = ScheduledSound>) {
-        self.voices
-            .extend(sounds.into_iter().map(|sound| ActiveVoice { sound, sample_position: 0.0 }));
+        self.voices.extend(sounds.into_iter().map(|sound| ActiveVoice {
+            next_output_frame: sound.start_frame,
+            sound,
+            sample_position: 0.0,
+            started: false,
+        }));
     }
 
     pub fn set_volume_for_sound(&mut self, id: bmz_core::ids::SoundId, volume: f32) {
@@ -62,10 +68,32 @@ impl MixerState {
             // ファストパス(整数インデックスで直接読み出し)で再生できる。
             let native_rate = sample.sample_rate == output_sample_rate;
             let step = sample.sample_rate as f64 / output_sample_rate as f64;
+
+            if voice.started {
+                if output_start_frame > voice.next_output_frame {
+                    let missed_frames = output_start_frame - voice.next_output_frame;
+                    if !advance_voice_position(voice, missed_frames, step, sample_frames) {
+                        return false;
+                    }
+                    voice.next_output_frame = output_start_frame;
+                }
+            } else if voice.sound.catch_up && output_start_frame > voice.sound.start_frame {
+                let missed_frames = output_start_frame - voice.sound.start_frame;
+                if !advance_voice_position(voice, missed_frames, step, sample_frames) {
+                    return false;
+                }
+                voice.started = true;
+                voice.next_output_frame = output_start_frame;
+            }
+
             for out_frame in 0..frame_count {
                 let absolute_frame = output_start_frame + out_frame as u64;
-                if absolute_frame < voice.sound.start_frame {
+                if !voice.started && absolute_frame < voice.sound.start_frame {
                     continue;
+                }
+                if !voice.started {
+                    voice.started = true;
+                    voice.next_output_frame = absolute_frame;
                 }
 
                 let sample_frame = voice.sample_position.floor() as usize;
@@ -92,6 +120,7 @@ impl MixerState {
                 output[out_frame * 2] += left;
                 output[out_frame * 2 + 1] += right;
                 voice.sample_position += step;
+                voice.next_output_frame = absolute_frame.saturating_add(1);
             }
 
             // ループ voice はサンプル末尾を超えても破棄しない。
@@ -99,6 +128,28 @@ impl MixerState {
                 voice.sound.loop_playback || voice.sample_position.floor() < sample_frames as f64;
             alive && still_playing
         });
+    }
+}
+
+fn advance_voice_position(
+    voice: &mut ActiveVoice,
+    frames: u64,
+    step: f64,
+    sample_frames: usize,
+) -> bool {
+    if frames == 0 {
+        return true;
+    }
+    if sample_frames == 0 {
+        return false;
+    }
+
+    voice.sample_position += frames as f64 * step;
+    if voice.sound.loop_playback {
+        voice.sample_position = voice.sample_position.rem_euclid(sample_frames as f64);
+        true
+    } else {
+        voice.sample_position.floor() < sample_frames as f64
     }
 }
 
@@ -133,6 +184,7 @@ mod tests {
             volume: 2.0,
             pan: 0.0,
             loop_playback: false,
+            catch_up: true,
         }]);
         let mut output = vec![0.0; 6];
 
@@ -156,6 +208,7 @@ mod tests {
             volume: 1.0,
             pan: 0.0,
             loop_playback: true,
+            catch_up: false,
         }]);
         let mut output = vec![0.0; 12]; // 6 frames, 3 ループ分
 
@@ -181,6 +234,7 @@ mod tests {
             volume: 1.0,
             pan: 0.0,
             loop_playback: false,
+            catch_up: true,
         }]);
         let mut output = vec![0.0; 8];
 
@@ -188,5 +242,84 @@ mod tests {
 
         assert_eq!(output, vec![0.25, 0.25, 0.375, 0.375, 0.5, 0.5, 0.625, 0.625]);
         assert!(!mixer.voices.is_empty());
+    }
+
+    #[test]
+    fn timeline_sound_catches_up_when_rendered_late() {
+        let mut bank = SampleBank::default();
+        bank.insert(
+            SoundId(1),
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![0.25, 0.5, 0.75, 1.0] },
+        );
+        let mut mixer = MixerState::default();
+        mixer.push_scheduled([ScheduledSound {
+            start_frame: 10,
+            sound_id: SoundId(1),
+            volume: 1.0,
+            pan: 0.0,
+            loop_playback: false,
+            catch_up: true,
+        }]);
+        let mut output = vec![0.0; 4];
+
+        mixer.mix_stereo(&bank, 12, &mut output);
+
+        assert_eq!(output, vec![0.75, 0.75, 1.0, 1.0]);
+        assert!(mixer.voices.is_empty());
+    }
+
+    #[test]
+    fn immediate_sound_starts_from_head_when_first_render_is_late() {
+        let mut bank = SampleBank::default();
+        bank.insert(
+            SoundId(1),
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![0.25, 0.5] },
+        );
+        let mut mixer = MixerState::default();
+        mixer.push_scheduled([ScheduledSound {
+            start_frame: 0,
+            sound_id: SoundId(1),
+            volume: 1.0,
+            pan: 0.0,
+            loop_playback: false,
+            catch_up: false,
+        }]);
+        let mut output = vec![0.0; 4];
+
+        mixer.mix_stereo(&bank, 100, &mut output);
+
+        assert_eq!(output, vec![0.25, 0.25, 0.5, 0.5]);
+        assert!(mixer.voices.is_empty());
+    }
+
+    #[test]
+    fn active_voice_advances_across_skipped_output_frames() {
+        let mut bank = SampleBank::default();
+        bank.insert(
+            SoundId(1),
+            DecodedSample {
+                channels: 1,
+                sample_rate: 48_000,
+                frames: vec![0.0, 0.1, 0.2, 0.3, 0.4, 0.5],
+            },
+        );
+        let mut mixer = MixerState::default();
+        mixer.push_scheduled([ScheduledSound {
+            start_frame: 100,
+            sound_id: SoundId(1),
+            volume: 1.0,
+            pan: 0.0,
+            loop_playback: false,
+            catch_up: false,
+        }]);
+
+        let mut first = vec![0.0; 4];
+        mixer.mix_stereo(&bank, 100, &mut first);
+        let mut after_skip = vec![0.0; 4];
+        mixer.mix_stereo(&bank, 104, &mut after_skip);
+
+        assert_eq!(first, vec![0.0, 0.0, 0.1, 0.1]);
+        assert_eq!(after_skip, vec![0.4, 0.4, 0.5, 0.5]);
+        assert!(mixer.voices.is_empty());
     }
 }

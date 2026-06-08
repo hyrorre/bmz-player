@@ -57,6 +57,7 @@ impl AudioEngine {
             volume: volume.clamp(0.0, 1.0),
             pan: 0.0,
             loop_playback,
+            catch_up: false,
         });
     }
 
@@ -101,6 +102,7 @@ mod tests {
             volume: 1.0,
             pan: 0.0,
             loop_playback: false,
+            catch_up: true,
         });
         let mut output = vec![1.0; 8];
 
@@ -170,6 +172,7 @@ mod tests {
             volume: 1.0,
             pan: 0.0,
             loop_playback: false,
+            catch_up: true,
         });
         engine.set_sound_volume(SoundId(1), 0.25);
 
@@ -203,6 +206,7 @@ mod tests {
             volume: 1.0,
             pan: 0.0,
             loop_playback: false,
+            catch_up: true,
         });
         // スケジュール済みの音が残っている間はアイドルではない。
         assert!(!engine.is_idle());
