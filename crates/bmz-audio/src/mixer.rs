@@ -14,17 +14,20 @@ pub struct ActiveVoice {
 pub struct MixerState {
     pub output_sample_rate: u32,
     pub voices: Vec<ActiveVoice>,
+    /// 全 voice 合成後に掛けるマスターゲイン。リザルト退出時のフェードアウト等、
+    /// 出力全体を一括で絞るために使う。既定は 1.0(素通し)。
+    pub master_gain: f32,
 }
 
 impl Default for MixerState {
     fn default() -> Self {
-        Self { output_sample_rate: 48_000, voices: Vec::new() }
+        Self { output_sample_rate: 48_000, voices: Vec::new(), master_gain: 1.0 }
     }
 }
 
 impl MixerState {
     pub fn new(output_sample_rate: u32) -> Self {
-        Self { output_sample_rate, voices: Vec::new() }
+        Self { output_sample_rate, voices: Vec::new(), master_gain: 1.0 }
     }
 
     pub fn push_scheduled(&mut self, sounds: impl IntoIterator<Item = ScheduledSound>) {
@@ -133,6 +136,13 @@ impl MixerState {
                 voice.sound.loop_playback || voice.sample_position.floor() < sample_frames as f64;
             alive && still_playing
         });
+
+        // マスターゲインは全 voice 合成後に一括適用する。素通し時は走査を省く。
+        if self.master_gain != 1.0 {
+            for sample in output.iter_mut() {
+                *sample *= self.master_gain;
+            }
+        }
     }
 }
 
@@ -206,6 +216,32 @@ mod tests {
 
         assert_eq!(output, vec![0.0, 0.0, 0.5, 0.5, 1.0, 1.0]);
         assert!(mixer.voices.is_empty());
+    }
+
+    #[test]
+    fn master_gain_scales_mixed_output() {
+        let mut bank = SampleBank::default();
+        bank.insert(
+            SoundId(1),
+            DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0, 0.5] },
+        );
+        let mut mixer = MixerState::default();
+        mixer.master_gain = 0.25;
+        mixer.push_scheduled([ScheduledSound {
+            start_frame: 0,
+            sound_id: SoundId(1),
+            volume: 1.0,
+            pan: 0.0,
+            loop_playback: false,
+            fade_in_frames: 0,
+            catch_up: false,
+        }]);
+        let mut output = vec![0.0; 4];
+
+        mixer.mix_stereo(&bank, 0, &mut output);
+
+        // master_gain は全 voice 合成後に一括で掛かる。
+        assert_eq!(output, vec![0.25, 0.25, 0.125, 0.125]);
     }
 
     #[test]

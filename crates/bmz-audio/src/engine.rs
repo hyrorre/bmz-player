@@ -58,6 +58,12 @@ impl AudioEngine {
         self.mixer.voices.retain(|voice| voice.sound.sound_id != id);
     }
 
+    /// 出力全体に掛かるマスターゲインを設定する。リザルト退出時に残響を
+    /// フェードアウトさせる用途で、毎フレーム 1.0 → 0.0 へ更新する。
+    pub fn set_master_gain(&mut self, gain: f32) {
+        self.mixer.master_gain = gain.clamp(0.0, 1.0);
+    }
+
     /// 指定 sound_id のスケジュール済み音および再生中 voice の音量を更新する。
     pub fn set_sound_volume(&mut self, id: bmz_core::ids::SoundId, volume: f32) {
         let volume = volume.clamp(0.0, 1.0);

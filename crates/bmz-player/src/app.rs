@@ -724,6 +724,10 @@ const SELECT_EXIT_HOLD_DURATION: Duration = Duration::from_millis(1_200);
 const PLAY_START_DOUBLE_PRESS_WINDOW: Duration = Duration::from_millis(400);
 /// beatoraja 既定の START+SELECT 途中終了長押し時間。
 const PLAY_EXIT_HOLD_DURATION: Duration = Duration::from_millis(1_000);
+/// リザルト退出時にプレイ残響(draining_audio)を絞り切るまでの上限時間。
+/// スキンの終了アニメーション (`fadeout`) が長くても (例: Starseeker は 3000ms)、
+/// 音声はこの時間内でフェードし切る。スキンの fadeout がこれより短ければそちらを優先。
+const RESULT_EXIT_AUDIO_FADE: Duration = Duration::from_millis(1_500);
 /// beatoraja PreviewMusicProcessor fades select BGM over 10 * 15ms steps.
 const SELECT_PREVIEW_FADE_DURATION: Duration = Duration::from_millis(150);
 /// beatoraja MusicSelector waits this long after a song-bar change before preview starts.
@@ -5773,7 +5777,7 @@ impl WinitApp {
             };
             self.begin_result_exit(action);
         }
-        let Some(exit) = &self.result_exit else {
+        let Some(exit) = self.result_exit.as_ref() else {
             return;
         };
         // 何らかの理由でリザルトを抜けていたら終了状態を破棄する。
@@ -5781,11 +5785,17 @@ impl WinitApp {
             self.result_exit = None;
             return;
         }
+        let started_at = exit.started_at;
+        let action = exit.action.clone();
         let fadeout = Duration::from_millis(self.renderer.result_skin_fadeout_ms().max(0) as u64);
-        if exit.started_at.elapsed() < fadeout {
+        let elapsed = started_at.elapsed();
+        // スキンの終了アニメーション時間に合わせて、プレイ残響(draining_audio)を
+        // 1.0 → 0.0 へ絞る。遷移時に音量が 0 付近まで落ちているので、
+        // draining_audio を破棄しても唐突な音切れにならない。
+        self.fade_draining_audio_for_result_exit(elapsed, fadeout);
+        if elapsed < fadeout {
             return;
         }
-        let action = exit.action.clone();
         self.result_exit = None;
         match action {
             ResultExitAction::Leave => self.leave_result(),
@@ -5798,6 +5808,27 @@ impl WinitApp {
             }
             ResultExitAction::RetryCourseSameArrange => self.retry_course_same_arrange(),
             ResultExitAction::AdvanceCourse => self.advance_to_next_course_chart(),
+        }
+    }
+
+    /// リザルト終了アニメ中、プレイ残響(draining_audio)のマスターゲインを
+    /// 1.0 → 0.0 へランプする。毎フレーム呼ぶ。
+    /// フェード時間は `RESULT_EXIT_AUDIO_FADE` を上限とし、スキンの終了アニメ時間
+    /// (`fadeout`) がそれより短ければ遷移前に絞り切れるよう短い方を採用する。
+    /// 見た目の遷移タイミング自体は `fadeout` のまま変えない。
+    /// ResultClose SE 等のシステム音は別エンジンなので影響を受けない。
+    fn fade_draining_audio_for_result_exit(&mut self, elapsed: Duration, fadeout: Duration) {
+        let Some(audio) = &self.draining_audio else {
+            return;
+        };
+        let audio_fade = fadeout.min(RESULT_EXIT_AUDIO_FADE);
+        let gain = if audio_fade.is_zero() {
+            0.0
+        } else {
+            (1.0 - elapsed.as_secs_f32() / audio_fade.as_secs_f32()).clamp(0.0, 1.0)
+        };
+        if let Ok(mut engine) = audio.engine.lock() {
+            engine.set_master_gain(gain);
         }
     }
 
