@@ -1380,6 +1380,26 @@ fn encode_plan_geometry(
                 ]));
                 push_or_extend_rects(&mut steps, start..rects.len());
             }
+            DrawCommand::RectBatch { rects: batch } => {
+                let start = rects.len();
+                for command in batch.iter() {
+                    let rect = command.rect;
+                    let color = command.color;
+                    rects.extend_from_slice(bytemuck::bytes_of(&[
+                        rect.x,
+                        rect.y,
+                        rect.width,
+                        rect.height,
+                        color.r,
+                        color.g,
+                        color.b,
+                        color.a,
+                    ]));
+                }
+                if rects.len() > start {
+                    push_or_extend_rects(&mut steps, start..rects.len());
+                }
+            }
             DrawCommand::Image { rect, uv, texture, tint, blend, linear_filter } => {
                 let start = images.len();
                 encode_image_instance(
@@ -3891,6 +3911,28 @@ mod tests {
             .count();
 
         assert_eq!(geometry.rects.len(), rect_count * RECT_INSTANCE_BYTES);
+    }
+
+    #[test]
+    fn plan_geometry_encodes_rect_batch_instances() {
+        let rect = crate::plan::Rect { x: 0.1, y: 0.2, width: 0.3, height: 0.4 };
+        let plan = DrawPlan {
+            clear: Color::rgb(0.0, 0.0, 0.0),
+            commands: vec![DrawCommand::RectBatch {
+                rects: std::sync::Arc::from([
+                    crate::plan::RectCommand { rect, color: Color::rgb(1.0, 0.0, 0.0) },
+                    crate::plan::RectCommand { rect, color: Color::rgb(0.0, 1.0, 0.0) },
+                ]),
+            }],
+        };
+
+        let geometry = encode_plan_geometry(&plan, &TextFrame::default(), test_surface_size());
+
+        assert_eq!(geometry.rects.len(), RECT_INSTANCE_BYTES * 2);
+        assert_eq!(
+            geometry.stats(),
+            DrawStepStats { steps: 1, rect_steps: 1, rect_instances: 2, ..Default::default() }
+        );
     }
 
     #[test]

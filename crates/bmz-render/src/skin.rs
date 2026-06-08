@@ -1,7 +1,8 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, hash_map::DefaultHasher};
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::OnceLock;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
@@ -13,7 +14,7 @@ use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::assets::load_png_rgba;
 use crate::plan::{
-    Color, DrawCommand, PLAY_BACKBMP_TEXTURE, Point, Rect, SELECT_BANNER_TEXTURE,
+    Color, DrawCommand, PLAY_BACKBMP_TEXTURE, Point, Rect, RectCommand, SELECT_BANNER_TEXTURE,
     SELECT_STAGE_TEXTURE, TextAlign, TextLayer, TextOutline, TextOverflow, TextShadow, TextStyle,
     TextureId, UvRect,
 };
@@ -1190,12 +1191,64 @@ where
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct SkinContext {
     manifest: SkinManifest,
     document: Option<SkinDocument>,
     document_sources: HashMap<String, SkinDocumentTexture>,
     select_settings_dest_index: Arc<crate::select_settings_dest::SelectSettingsDestIndex>,
+    result_render_cache: Arc<Mutex<ResultRenderCache>>,
+}
+
+impl PartialEq for SkinContext {
+    fn eq(&self, other: &Self) -> bool {
+        self.manifest == other.manifest
+            && self.document == other.document
+            && self.document_sources == other.document_sources
+            && self.select_settings_dest_index == other.select_settings_dest_index
+    }
+}
+
+const RESULT_RENDER_CACHE_MAX_ENTRIES: usize = 64;
+
+#[derive(Debug, Default)]
+struct ResultRenderCache {
+    rect_batches: HashMap<ResultRectBatchCacheKey, Arc<[RectCommand]>>,
+}
+
+impl ResultRenderCache {
+    fn cached_rect_batch(
+        &mut self,
+        key: ResultRectBatchCacheKey,
+        build: impl FnOnce() -> Arc<[RectCommand]>,
+    ) -> Arc<[RectCommand]> {
+        if let Some(rects) = self.rect_batches.get(&key) {
+            return Arc::clone(rects);
+        }
+        let rects = build();
+        if self.rect_batches.len() >= RESULT_RENDER_CACHE_MAX_ENTRIES {
+            self.rect_batches.clear();
+        }
+        self.rect_batches.insert(key, Arc::clone(&rects));
+        rects
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct ResultRectBatchCacheKey {
+    destination_index: usize,
+    kind: ResultRectBatchKind,
+    frame: ResolvedSkinFrame,
+    key_mode: KeyMode,
+    judge_rank: Option<i32>,
+    visible_len: usize,
+    data_hash: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum ResultRectBatchKind {
+    Judge,
+    EarlyLate,
 }
 
 impl Default for SkinContext {
@@ -1207,6 +1260,7 @@ impl Default for SkinContext {
             select_settings_dest_index: Arc::new(
                 crate::select_settings_dest::SelectSettingsDestIndex::default(),
             ),
+            result_render_cache: Arc::new(Mutex::new(ResultRenderCache::default())),
         }
     }
 }
@@ -1220,6 +1274,7 @@ impl SkinContext {
             select_settings_dest_index: Arc::new(
                 crate::select_settings_dest::SelectSettingsDestIndex::default(),
             ),
+            result_render_cache: Arc::new(Mutex::new(ResultRenderCache::default())),
         }
     }
 
@@ -1238,6 +1293,7 @@ impl SkinContext {
                 .map(|source| (source.source_id.clone(), source))
                 .collect(),
             select_settings_dest_index,
+            result_render_cache: Arc::new(Mutex::new(ResultRenderCache::default())),
         }
     }
 
@@ -1304,6 +1360,15 @@ impl SkinContext {
         let Some(document) = &self.document else {
             return Vec::new();
         };
+        if let Ok(mut cache) = self.result_render_cache.lock() {
+            return document.static_render_items_with_graphs_cached(
+                &self.document_sources,
+                state,
+                text,
+                SkinRuntimeGraphs::from_result_graph(graph),
+                Some(&mut cache),
+            );
+        }
         document.static_render_items_with_graphs(
             &self.document_sources,
             state,
@@ -2367,6 +2432,9 @@ pub enum SkinRenderItem {
         color: Color,
         blend: BlendMode,
     },
+    RectBatch {
+        rects: Arc<[RectCommand]>,
+    },
 }
 
 impl SkinObject {
@@ -2493,8 +2561,30 @@ impl SkinDocument {
         text_state: SkinTextState<'_>,
         runtime_graphs: SkinRuntimeGraphs<'_>,
     ) -> Vec<SkinRenderItem> {
-        let (mut behind, front, failed_overlay) =
-            self.static_render_items_split_with_graphs(sources, state, text_state, runtime_graphs);
+        self.static_render_items_with_graphs_cached(
+            sources,
+            state,
+            text_state,
+            runtime_graphs,
+            None,
+        )
+    }
+
+    fn static_render_items_with_graphs_cached(
+        &self,
+        sources: &HashMap<String, SkinDocumentTexture>,
+        state: SkinDrawState,
+        text_state: SkinTextState<'_>,
+        runtime_graphs: SkinRuntimeGraphs<'_>,
+        cache: Option<&mut ResultRenderCache>,
+    ) -> Vec<SkinRenderItem> {
+        let (mut behind, front, failed_overlay) = self.static_render_items_split_with_graphs(
+            sources,
+            state,
+            text_state,
+            runtime_graphs,
+            cache,
+        );
         behind.extend(front);
         behind.extend(failed_overlay);
         behind
@@ -2513,6 +2603,7 @@ impl SkinDocument {
             state,
             text_state,
             SkinRuntimeGraphs::from_document(self),
+            None,
         )
     }
 
@@ -2522,6 +2613,7 @@ impl SkinDocument {
         state: SkinDrawState,
         text_state: SkinTextState<'_>,
         runtime_graphs: SkinRuntimeGraphs<'_>,
+        mut cache: Option<&mut ResultRenderCache>,
     ) -> (Vec<SkinRenderItem>, Vec<SkinRenderItem>, Vec<SkinRenderItem>) {
         let images = self.image_map();
         let values: HashMap<&str, &SkinValueDef> =
@@ -2593,6 +2685,7 @@ impl SkinDocument {
                 continue;
             }
             if let Some(items) = self.resolve_destination_items(
+                index,
                 destination,
                 &images,
                 &values,
@@ -2602,6 +2695,7 @@ impl SkinDocument {
                 sources,
                 runtime_graphs,
                 has_half_grade_f_diff_rank_destination,
+                cache.as_deref_mut(),
             ) {
                 let after_notes_marker = after_notes_marker
                     || self.destination_looks_like_pre_notes_judge_line(
@@ -2759,6 +2853,7 @@ impl SkinDocument {
 
     fn resolve_destination_items(
         &self,
+        destination_index: usize,
         destination: &SkinDestinationDef,
         images: &HashMap<&str, &SkinImageDef>,
         values: &HashMap<&str, &SkinValueDef>,
@@ -2768,6 +2863,7 @@ impl SkinDocument {
         sources: &HashMap<String, SkinDocumentTexture>,
         runtime_graphs: SkinRuntimeGraphs<'_>,
         has_half_grade_f_diff_rank_destination: bool,
+        cache: Option<&mut ResultRenderCache>,
     ) -> Option<Vec<SkinRenderItem>> {
         let state =
             apply_half_grade_f_diff_rank_fallback(state, has_half_grade_f_diff_rank_destination);
@@ -2842,12 +2938,14 @@ impl SkinDocument {
         }
         if let Some(judge_graph) = self.judgegraph.iter().find(|graph| graph.id == destination.id) {
             return Some(self.judgegraph_render_items(
+                destination_index,
                 judge_graph,
                 destination,
                 frame,
                 elapsed,
                 state,
                 runtime_graphs,
+                cache,
             ));
         }
         if let Some(bpm_graph) = self.bpmgraph.iter().find(|graph| graph.id == destination.id) {
@@ -3350,7 +3448,7 @@ impl SkinDocument {
         let has_half_grade_f_diff_rank_destination =
             half_grade_f_diff_rank_destination_available(&destinations);
         let mut items = Vec::new();
-        for destination in destinations {
+        for (destination_index, destination) in destinations.into_iter().enumerate() {
             if destination.id == self.songlist.as_ref().map(|list| list.id.as_str()).unwrap_or("") {
                 items.extend(self.select_songlist_items(
                     sources,
@@ -3424,6 +3522,7 @@ impl SkinDocument {
                 continue;
             }
             if let Some(resolved) = self.resolve_destination_items(
+                destination_index,
                 destination,
                 &images,
                 &values,
@@ -3433,6 +3532,7 @@ impl SkinDocument {
                 sources,
                 SkinRuntimeGraphs::from_document(self),
                 has_half_grade_f_diff_rank_destination,
+                None,
             ) {
                 items.extend(resolved);
             }
@@ -5252,38 +5352,68 @@ impl SkinDocument {
 
     fn judgegraph_render_items(
         &self,
+        destination_index: usize,
         graph: &SkinJudgeGraphDef,
         destination: &SkinDestinationDef,
         frame: ResolvedSkinFrame,
         elapsed_ms: i32,
         state: SkinDrawState,
         runtime_graphs: SkinRuntimeGraphs<'_>,
+        cache: Option<&mut ResultRenderCache>,
     ) -> Vec<SkinRenderItem> {
         let graph_type = graph.graph_type();
         let pms_colors = state.key_mode == KeyMode::K9;
         if graph_type == 1 && !runtime_graphs.result_judge_graph_buckets.is_empty() {
-            return stacked_result_note_graph_render_items(
+            let key = result_note_graph_cache_key(
+                destination_index,
+                ResultRectBatchKind::Judge,
                 runtime_graphs.result_judge_graph_buckets,
-                &result_judge_graph_colors(frame.a as f32 / 255.0, pms_colors),
                 graph,
-                destination,
                 frame,
-                self.w,
-                self.h,
+                state,
                 elapsed_ms,
             );
+            let build = || {
+                stacked_result_note_graph_rect_batch(
+                    runtime_graphs.result_judge_graph_buckets,
+                    &result_judge_graph_colors(frame.a as f32 / 255.0, pms_colors),
+                    graph,
+                    destination,
+                    frame,
+                    self.w,
+                    self.h,
+                    elapsed_ms,
+                )
+            };
+            let rects =
+                if let Some(cache) = cache { cache.cached_rect_batch(key, build) } else { build() };
+            return rect_batch_render_items(rects);
         }
         if graph_type == 2 && !runtime_graphs.result_early_late_graph_buckets.is_empty() {
-            return stacked_result_note_graph_render_items(
+            let key = result_note_graph_cache_key(
+                destination_index,
+                ResultRectBatchKind::EarlyLate,
                 runtime_graphs.result_early_late_graph_buckets,
-                &result_early_late_graph_colors(frame.a as f32 / 255.0, pms_colors),
                 graph,
-                destination,
                 frame,
-                self.w,
-                self.h,
+                state,
                 elapsed_ms,
             );
+            let build = || {
+                stacked_result_note_graph_rect_batch(
+                    runtime_graphs.result_early_late_graph_buckets,
+                    &result_early_late_graph_colors(frame.a as f32 / 255.0, pms_colors),
+                    graph,
+                    destination,
+                    frame,
+                    self.w,
+                    self.h,
+                    elapsed_ms,
+                )
+            };
+            let rects =
+                if let Some(cache) = cache { cache.cached_rect_batch(key, build) } else { build() };
+            return rect_batch_render_items(rects);
         }
         self.density_judgegraph_render_items(
             graph,
@@ -6633,6 +6763,11 @@ pub fn append_skin_render_items(commands: &mut Vec<DrawCommand>, items: &[SkinRe
         match item {
             SkinRenderItem::Rect { rect, color, .. } => {
                 commands.push(DrawCommand::Rect { rect: *rect, color: *color });
+            }
+            SkinRenderItem::RectBatch { rects } => {
+                if !rects.is_empty() {
+                    commands.push(DrawCommand::RectBatch { rects: Arc::clone(rects) });
+                }
             }
             SkinRenderItem::Text { origin, text, style, .. } => {
                 if !text.is_empty() {
@@ -8565,7 +8700,7 @@ impl ResultNoteGraphBucket<10> for crate::snapshot::ResultEarlyLateGraphBucket {
     }
 }
 
-fn stacked_result_note_graph_render_items<const N: usize, B: ResultNoteGraphBucket<N>>(
+fn stacked_result_note_graph_rect_batch<const N: usize, B: ResultNoteGraphBucket<N>>(
     buckets: &[B],
     colors: &[Color; N],
     graph: &SkinJudgeGraphDef,
@@ -8574,25 +8709,20 @@ fn stacked_result_note_graph_render_items<const N: usize, B: ResultNoteGraphBuck
     canvas_w: u32,
     canvas_h: u32,
     elapsed_ms: i32,
-) -> Vec<SkinRenderItem> {
+) -> Arc<[RectCommand]> {
     if buckets.is_empty() {
-        return Vec::new();
+        return Arc::from([]);
     }
     let rect = normalize_skin_frame_rect(frame, canvas_w, canvas_h);
     if rect.width <= 0.0 || rect.height <= 0.0 {
-        return Vec::new();
+        return Arc::from([]);
     }
     let frame_alpha = frame.a as f32 / 255.0;
     let blend = if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal };
     let max_stack =
         buckets.iter().map(|bucket| bucket.values().into_iter().sum::<u32>()).max().unwrap_or(0);
     let graph_max = beatoraja_note_graph_max(max_stack);
-    let render_ratio = if graph.delay > 0 {
-        (elapsed_ms as f32 / graph.delay as f32).clamp(0.0, 1.0)
-    } else {
-        1.0
-    };
-    let visible_len = ((buckets.len() as f32) * render_ratio).ceil() as usize;
+    let visible_len = result_note_graph_visible_len(buckets.len(), graph, elapsed_ms);
     let background_items = if graph.back_tex_off == 0 {
         result_note_graph_background_item_count(buckets.len(), graph_max)
     } else {
@@ -8603,10 +8733,10 @@ fn stacked_result_note_graph_render_items<const N: usize, B: ResultNoteGraphBuck
         .take(visible_len)
         .map(|bucket| bucket.values().into_iter().sum::<u32>().min(graph_max) as usize)
         .sum::<usize>();
-    let mut items = Vec::with_capacity(background_items.saturating_add(chip_items));
+    let mut rects = Vec::with_capacity(background_items.saturating_add(chip_items));
     if graph.back_tex_off == 0 {
         push_result_note_graph_background(
-            &mut items,
+            &mut rects,
             rect,
             buckets.len(),
             graph_max,
@@ -8615,7 +8745,7 @@ fn stacked_result_note_graph_render_items<const N: usize, B: ResultNoteGraphBuck
         );
     }
     if visible_len == 0 {
-        return items;
+        return Arc::from(rects);
     }
     let bucket_w = rect.width / buckets.len().max(1) as f32;
     let chip_w = bucket_w * if graph.no_gap_x != 0 { 1.0 } else { 0.8 };
@@ -8629,7 +8759,7 @@ fn stacked_result_note_graph_render_items<const N: usize, B: ResultNoteGraphBuck
         if graph.order_reverse != 0 {
             for (series, value) in values.into_iter().enumerate().rev() {
                 push_result_note_graph_chips(
-                    &mut items,
+                    &mut rects,
                     rect,
                     x,
                     chip_w,
@@ -8645,7 +8775,7 @@ fn stacked_result_note_graph_render_items<const N: usize, B: ResultNoteGraphBuck
         } else {
             for (series, value) in values.into_iter().enumerate() {
                 push_result_note_graph_chips(
-                    &mut items,
+                    &mut rects,
                     rect,
                     x,
                     chip_w,
@@ -8660,7 +8790,62 @@ fn stacked_result_note_graph_render_items<const N: usize, B: ResultNoteGraphBuck
             }
         }
     }
-    items
+    Arc::from(rects)
+}
+
+fn rect_batch_render_items(rects: Arc<[RectCommand]>) -> Vec<SkinRenderItem> {
+    if rects.is_empty() { Vec::new() } else { vec![SkinRenderItem::RectBatch { rects }] }
+}
+
+fn result_note_graph_cache_key<const N: usize, B: ResultNoteGraphBucket<N>>(
+    destination_index: usize,
+    kind: ResultRectBatchKind,
+    buckets: &[B],
+    graph: &SkinJudgeGraphDef,
+    frame: ResolvedSkinFrame,
+    state: SkinDrawState,
+    elapsed_ms: i32,
+) -> ResultRectBatchCacheKey {
+    ResultRectBatchCacheKey {
+        destination_index,
+        kind,
+        frame,
+        key_mode: state.key_mode,
+        judge_rank: state.judge_rank,
+        visible_len: result_note_graph_visible_len(buckets.len(), graph, elapsed_ms),
+        data_hash: result_note_graph_data_hash(buckets, graph),
+    }
+}
+
+fn result_note_graph_data_hash<const N: usize, B: ResultNoteGraphBucket<N>>(
+    buckets: &[B],
+    graph: &SkinJudgeGraphDef,
+) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    graph.graph_type().hash(&mut hasher);
+    graph.back_tex_off.hash(&mut hasher);
+    graph.delay.hash(&mut hasher);
+    graph.order_reverse.hash(&mut hasher);
+    graph.no_gap.hash(&mut hasher);
+    graph.no_gap_x.hash(&mut hasher);
+    buckets.len().hash(&mut hasher);
+    for bucket in buckets {
+        bucket.values().hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+fn result_note_graph_visible_len(
+    bucket_count: usize,
+    graph: &SkinJudgeGraphDef,
+    elapsed_ms: i32,
+) -> usize {
+    let render_ratio = if graph.delay > 0 {
+        (elapsed_ms as f32 / graph.delay as f32).clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    ((bucket_count as f32) * render_ratio).ceil() as usize
 }
 
 fn beatoraja_note_graph_max(max_stack: u32) -> u32 {
@@ -8669,7 +8854,7 @@ fn beatoraja_note_graph_max(max_stack: u32) -> u32 {
 
 #[allow(clippy::too_many_arguments)]
 fn push_result_note_graph_chips(
-    items: &mut Vec<SkinRenderItem>,
+    rects: &mut Vec<RectCommand>,
     rect: Rect,
     x: f32,
     chip_w: f32,
@@ -8679,43 +8864,34 @@ fn push_result_note_graph_chips(
     drawn: &mut u32,
     value: u32,
     color: Color,
-    blend: BlendMode,
+    _blend: BlendMode,
 ) {
     for _ in 0..value {
         if *drawn >= graph_max {
             break;
         }
         let y = rect.y + rect.height - (*drawn as f32 + 1.0) * unit_h;
-        items.push(SkinRenderItem::Rect {
-            rect: Rect { x, y, width: chip_w, height: chip_h },
-            color,
-            blend,
-        });
+        rects.push(RectCommand { rect: Rect { x, y, width: chip_w, height: chip_h }, color });
         *drawn = (*drawn).saturating_add(1);
     }
 }
 
 fn push_result_note_graph_background(
-    items: &mut Vec<SkinRenderItem>,
+    rects: &mut Vec<RectCommand>,
     rect: Rect,
     bucket_count: usize,
     graph_max: u32,
     frame_alpha: f32,
-    blend: BlendMode,
+    _blend: BlendMode,
 ) {
-    items.push(SkinRenderItem::Rect {
-        rect,
-        color: Color::rgba(0.0, 0.0, 0.0, 0.8 * frame_alpha),
-        blend,
-    });
+    rects.push(RectCommand { rect, color: Color::rgba(0.0, 0.0, 0.0, 0.8 * frame_alpha) });
     for count in (10..graph_max).step_by(10) {
         let band_y =
             rect.y + rect.height * (1.0 - (count + 10).min(graph_max) as f32 / graph_max as f32);
         let band_h = rect.height * 10.0 / graph_max as f32;
-        items.push(SkinRenderItem::Rect {
+        rects.push(RectCommand {
             rect: Rect { x: rect.x, y: band_y, width: rect.width, height: band_h },
             color: Color::rgba(0.007 * count as f32, 0.007 * count as f32, 0.0, frame_alpha),
-            blend,
         });
     }
     let line_w = (rect.width / (bucket_count.max(1) * 5) as f32).max(0.0005);
@@ -8728,7 +8904,7 @@ fn push_result_note_graph_background(
             None
         };
         if let Some(color) = color {
-            items.push(SkinRenderItem::Rect {
+            rects.push(RectCommand {
                 rect: Rect {
                     x: rect.x + second as f32 * rect.width / bucket_count.max(1) as f32,
                     y: rect.y,
@@ -8736,7 +8912,6 @@ fn push_result_note_graph_background(
                     height: rect.height,
                 },
                 color,
-                blend,
             });
         }
     }
@@ -10177,6 +10352,22 @@ fn apply_all_offset_to_render_item(item: SkinRenderItem, state: SkinDrawState) -
             color,
             blend,
         },
+        SkinRenderItem::RectBatch { rects } => SkinRenderItem::RectBatch {
+            rects: rects
+                .iter()
+                .map(|command| RectCommand {
+                    rect: apply_all_offset_to_rect(
+                        command.rect,
+                        scale_x,
+                        scale_y,
+                        translate_x,
+                        translate_y,
+                    ),
+                    color: command.color,
+                })
+                .collect::<Vec<_>>()
+                .into(),
+        },
     }
 }
 
@@ -10928,7 +11119,7 @@ fn resize_about_center(rect: SkinPixelRect, width: f32, height: f32) -> SkinPixe
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct ResolvedSkinFrame {
     time: i32,
     x: i32,
@@ -15889,16 +16080,16 @@ mod tests {
 
         let items = document.static_image_render_items(&HashMap::new(), SkinDrawState::default());
 
-        assert!(items.iter().any(|item| matches!(
-            item,
-            SkinRenderItem::Rect { color: Color { r, g, b, .. }, .. }
-                if approx_eq(*r, 0.0) && approx_eq(*g, 1.0) && approx_eq(*b, 0.53)
-        )));
-        assert!(items.iter().any(|item| matches!(
-            item,
-            SkinRenderItem::Rect { color: Color { r, g, b, .. }, .. }
-                if approx_eq(*r, 1.0) && approx_eq(*g, 0.53) && approx_eq(*b, 0.0)
-        )));
+        assert!(items.iter().any(|item| {
+            skin_render_item_has_rect_color(item, |Color { r, g, b, .. }| {
+                approx_eq(*r, 0.0) && approx_eq(*g, 1.0) && approx_eq(*b, 0.53)
+            })
+        }));
+        assert!(items.iter().any(|item| {
+            skin_render_item_has_rect_color(item, |Color { r, g, b, .. }| {
+                approx_eq(*r, 1.0) && approx_eq(*g, 0.53) && approx_eq(*b, 0.0)
+            })
+        }));
     }
 
     #[test]
@@ -19900,6 +20091,17 @@ mod tests {
 
     fn approx_eq(actual: f32, expected: f32) -> bool {
         (actual - expected).abs() < 0.0001
+    }
+
+    fn skin_render_item_has_rect_color(
+        item: &SkinRenderItem,
+        predicate: impl Fn(&Color) -> bool,
+    ) -> bool {
+        match item {
+            SkinRenderItem::Rect { color, .. } => predicate(color),
+            SkinRenderItem::RectBatch { rects } => rects.iter().any(|rect| predicate(&rect.color)),
+            _ => false,
+        }
     }
 
     #[test]

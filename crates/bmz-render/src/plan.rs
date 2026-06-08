@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use bmz_chart::model::LongNoteMode;
 use bmz_core::lane::{LANE_COUNT, Lane};
 use bmz_core::time::TimeUs;
@@ -60,6 +62,9 @@ pub enum DrawCommand {
         rect: Rect,
         color: Color,
     },
+    RectBatch {
+        rects: Arc<[RectCommand]>,
+    },
     Image {
         rect: Rect,
         uv: UvRect,
@@ -83,6 +88,12 @@ pub enum DrawCommand {
         text: String,
         style: TextStyle,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RectCommand {
+    pub rect: Rect,
+    pub color: Color,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1919,6 +1930,11 @@ fn apply_bar_line_alpha_offset(commands: &mut [DrawCommand], skin_offsets: SkinO
             DrawCommand::Rect { color, .. } => {
                 color.a = (color.a + alpha_delta).clamp(0.0, 1.0);
             }
+            DrawCommand::RectBatch { rects } => {
+                for rect in Arc::make_mut(rects) {
+                    rect.color.a = (rect.color.a + alpha_delta).clamp(0.0, 1.0);
+                }
+            }
             DrawCommand::Text { .. } => {}
         }
     }
@@ -2859,11 +2875,11 @@ mod tests {
             &mut crate::skin::DynamicTimerRuntime::default(),
         );
 
-        assert!(plan.commands.iter().any(|command| matches!(
-            command,
-            DrawCommand::Rect { color: Color { r, g, b, .. }, .. }
-                if (*r - 0.0).abs() < 0.01 && (*g - 1.0).abs() < 0.01 && (*b - 0.53).abs() < 0.01
-        )));
+        assert!(plan.commands.iter().any(|command| {
+            draw_command_has_rect_color(command, |Color { r, g, b, .. }| {
+                (*r - 0.0).abs() < 0.01 && (*g - 1.0).abs() < 0.01 && (*b - 0.53).abs() < 0.01
+            })
+        }));
     }
 
     #[test]
@@ -4609,5 +4625,16 @@ mod tests {
 
     fn approx_eq(actual: f32, expected: f32) -> bool {
         (actual - expected).abs() < 0.0001
+    }
+
+    fn draw_command_has_rect_color(
+        command: &DrawCommand,
+        predicate: impl Fn(&Color) -> bool,
+    ) -> bool {
+        match command {
+            DrawCommand::Rect { color, .. } => predicate(color),
+            DrawCommand::RectBatch { rects } => rects.iter().any(|rect| predicate(&rect.color)),
+            _ => false,
+        }
     }
 }
