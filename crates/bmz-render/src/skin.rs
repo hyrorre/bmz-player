@@ -6492,7 +6492,7 @@ fn test_json_option_number(option: i32, enabled_options: &[i32]) -> bool {
     }
 }
 
-pub(crate) fn test_skin_ops(ops: &[i32], enabled_options: &[i32], state: SkinDrawState) -> bool {
+pub fn test_skin_ops(ops: &[i32], enabled_options: &[i32], state: SkinDrawState) -> bool {
     ops.iter().all(|op| test_skin_op(*op, enabled_options, state))
 }
 

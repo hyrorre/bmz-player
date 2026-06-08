@@ -409,7 +409,16 @@ struct ActiveSkinVideoSource {
     decoder: Option<VideoBgaDecoder>,
     last_pts: Option<i64>,
     loop_start_us: i64,
+    /// スキン config の option による静的な有効判定。
     active: bool,
+    /// このソースを参照する各 destination の op 条件。実行時 state に対して
+    /// 評価し、現在のシーン状態 (例: リザルトのランク) で実際に表示されるソース
+    /// だけをデコードするために使う。空なら参照されておらず常時可視扱い。
+    gating_op_sets: Vec<Vec<i32>>,
+    /// `gating_op_sets` 評価に必要な document の有効 option 一覧。
+    enabled_options: Vec<i32>,
+    /// リザルト draw state 構築に使う document の ranktime。
+    result_ranktime_ms: i32,
     failed: bool,
 }
 
@@ -6320,14 +6329,17 @@ impl WinitApp {
             let PreparedSource { source_id, path, texture, prepared, size, is_video } = source;
             self.renderer.insert_prepared_texture(TextureId(texture.0), prepared);
             if is_video {
-                let active = skin_video_source_is_enabled(&document, &source_id);
+                let gating = skin_video_source_gating(&document, &source_id);
                 video_sources.push(ActiveSkinVideoSource {
                     texture,
                     path,
                     decoder: None,
                     last_pts: None,
                     loop_start_us: 0,
-                    active,
+                    active: gating.active,
+                    gating_op_sets: gating.op_sets,
+                    enabled_options: document.enabled_options(),
+                    result_ranktime_ms: document.ranktime,
                     failed: false,
                 });
             }
@@ -6967,11 +6979,24 @@ impl WinitApp {
         let Some((kind, elapsed_us)) = self.current_skin_video_context() else {
             return;
         };
+        // 実行時 op 条件 (例: リザルトのランク別 BG) で実際に表示されるソースだけを
+        // デコードする。state を作れないシーンでは静的な `active` 判定に従う。
+        let runtime_state = self.current_skin_video_draw_state(kind);
         let Some(sources) = self.skin_video_sources.get_mut(&kind) else {
             return;
         };
         for source in sources {
             if source.failed || !source.active {
+                continue;
+            }
+            if let Some(state) = runtime_state
+                && !skin_video_source_runtime_visible(source, state)
+            {
+                // 現在のシーン状態では非表示。デコード中なら止めて開放する。
+                if source.decoder.is_some() {
+                    source.decoder = None;
+                    source.last_pts = None;
+                }
                 continue;
             }
             if source.decoder.is_none() {
@@ -7047,6 +7072,27 @@ impl WinitApp {
                 Some((SkinKind::Result, elapsed_since(self.result_scene_started_at).0))
             }
         }
+    }
+
+    /// 動画ソースの実行時可視判定に使う `SkinDrawState` を、現在のシーン用に構築する。
+    /// 現状はランク別 BG を持つリザルト画面だけ対応し、他シーンは静的な `active`
+    /// 判定に委ねるため `None` を返す。
+    fn current_skin_video_draw_state(
+        &self,
+        kind: SkinKind,
+    ) -> Option<bmz_render::skin::SkinDrawState> {
+        if kind != SkinKind::Result {
+            return None;
+        }
+        let AppSceneSnapshot::Result(snapshot) = self.scene_snapshot() else {
+            return None;
+        };
+        let ranktime = self
+            .skin_video_sources
+            .get(&SkinKind::Result)
+            .and_then(|sources| sources.first())
+            .map_or(0, |source| source.result_ranktime_ms);
+        Some(bmz_render::plan::result_skin_draw_state(&snapshot, ranktime))
     }
 
     fn render_current_scene(&mut self) {
@@ -7595,23 +7641,39 @@ fn apply_json_skin_sync(
 }
 
 fn skin_video_sources_from_decoded(decoded: &DecodedSkin) -> Vec<ActiveSkinVideoSource> {
+    let enabled_options = decoded.document.enabled_options();
     decoded
         .sources
         .iter()
         .filter(|source| source.is_video)
-        .map(|source| ActiveSkinVideoSource {
-            texture: source.texture,
-            path: source.path.clone(),
-            decoder: None,
-            last_pts: None,
-            loop_start_us: 0,
-            active: skin_video_source_is_enabled(&decoded.document, &source.source_id),
-            failed: false,
+        .map(|source| {
+            let gating = skin_video_source_gating(&decoded.document, &source.source_id);
+            ActiveSkinVideoSource {
+                texture: source.texture,
+                path: source.path.clone(),
+                decoder: None,
+                last_pts: None,
+                loop_start_us: 0,
+                active: gating.active,
+                gating_op_sets: gating.op_sets,
+                enabled_options: enabled_options.clone(),
+                result_ranktime_ms: decoded.document.ranktime,
+                failed: false,
+            }
         })
         .collect()
 }
 
-fn skin_video_source_is_enabled(document: &SkinDocument, source_id: &str) -> bool {
+/// 動画ソースの可視判定に必要なゲーティング情報。
+struct SkinVideoSourceGating {
+    /// スキン config の option による静的な有効判定。
+    active: bool,
+    /// このソースを参照する各 destination の op 条件。空なら参照されていない
+    /// (= 常時可視)。
+    op_sets: Vec<Vec<i32>>,
+}
+
+fn skin_video_source_gating(document: &SkinDocument, source_id: &str) -> SkinVideoSourceGating {
     let image_ids: HashSet<&str> = document
         .image
         .iter()
@@ -7619,7 +7681,7 @@ fn skin_video_source_is_enabled(document: &SkinDocument, source_id: &str) -> boo
         .map(|image| image.id.as_str())
         .collect();
     if image_ids.is_empty() {
-        return true;
+        return SkinVideoSourceGating { active: true, op_sets: Vec::new() };
     }
 
     let mut render_object_ids = image_ids.clone();
@@ -7636,16 +7698,37 @@ fn skin_video_source_is_enabled(document: &SkinDocument, source_id: &str) -> boo
         .collect();
     let enabled_options = document.enabled_options();
     let mut referenced = false;
+    let mut active = false;
+    let mut op_sets = Vec::new();
     for destination in skin_document_destinations(document) {
         if !render_object_ids.contains(destination.id.as_str()) {
             continue;
         }
         referenced = true;
+        op_sets.push(destination.op.clone());
         if destination_property_ops_allow(&destination.op, &enabled_options, &property_ops) {
-            return true;
+            active = true;
         }
     }
-    !referenced
+    if !referenced {
+        return SkinVideoSourceGating { active: true, op_sets: Vec::new() };
+    }
+    SkinVideoSourceGating { active, op_sets }
+}
+
+/// 実行時 state に対して、動画ソースが現在のシーン状態で表示されるかどうかを判定する。
+/// `op_sets` が空 (= destination から参照されていない) 場合は常時可視。
+fn skin_video_source_runtime_visible(
+    source: &ActiveSkinVideoSource,
+    state: bmz_render::skin::SkinDrawState,
+) -> bool {
+    if source.gating_op_sets.is_empty() {
+        return true;
+    }
+    source
+        .gating_op_sets
+        .iter()
+        .any(|ops| bmz_render::skin::test_skin_ops(ops, &source.enabled_options, state))
 }
 
 fn skin_document_destinations(document: &SkinDocument) -> Vec<&SkinDestinationDef> {
@@ -10919,11 +11002,76 @@ mod tests {
         )
         .unwrap();
 
-        assert!(skin_video_source_is_enabled(&document, "mv"));
+        assert!(skin_video_source_gating(&document, "mv").active);
 
         document.user_selected_options = Some(vec![921]);
-        assert!(!skin_video_source_is_enabled(&document, "mv"));
-        assert!(skin_video_source_is_enabled(&document, "unknown-source"));
+        assert!(!skin_video_source_gating(&document, "mv").active);
+        assert!(skin_video_source_gating(&document, "unknown-source").active);
+    }
+
+    #[test]
+    fn skin_video_source_runtime_visibility_follows_result_rank_op() {
+        use bmz_render::skin::SkinDrawState;
+
+        // ランク別 BG を op で出し分けるリザルトスキン構成 (Starseeker 相当)。
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 7,
+                "source": [
+                    { "id": "BG_A", "path": "BG/A/a.mp4" },
+                    { "id": "BG_AAA", "path": "BG/AAA/aaa.mp4" }
+                ],
+                "image": [
+                    { "id": "BG_A", "src": "BG_A", "x": 0, "y": 0, "w": 10, "h": 10 },
+                    { "id": "BG_AAA", "src": "BG_AAA", "x": 0, "y": 0, "w": 10, "h": 10 }
+                ],
+                "destination": [
+                    { "id": "BG_A", "op": [90, 302], "dst": [{ "x": 0, "y": 0, "w": 10, "h": 10 }] },
+                    { "id": "BG_AAA", "op": [90, 300], "dst": [{ "x": 0, "y": 0, "w": 10, "h": 10 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        let make_source = |source_id: &str| {
+            let gating = skin_video_source_gating(&document, source_id);
+            ActiveSkinVideoSource {
+                texture: SkinTextureId(0),
+                path: PathBuf::new(),
+                decoder: None,
+                last_pts: None,
+                loop_start_us: 0,
+                active: gating.active,
+                gating_op_sets: gating.op_sets,
+                enabled_options: document.enabled_options(),
+                result_ranktime_ms: document.ranktime,
+                failed: false,
+            }
+        };
+        let bg_a = make_source("BG_A");
+        let bg_aaa = make_source("BG_AAA");
+
+        // ex_score / total_notes でランクが決まる。9/9 = AAA, 6/9 = A 付近。
+        let aaa_state = SkinDrawState {
+            result_failed: Some(false),
+            ex_score: 18,
+            total_notes: 9,
+            ..SkinDrawState::default()
+        };
+        assert!(skin_video_source_runtime_visible(&bg_aaa, aaa_state));
+        assert!(!skin_video_source_runtime_visible(&bg_a, aaa_state));
+
+        // 13/18 = 72.2% は rank index 2 (= A), op 302 に対応する。
+        let a_state = SkinDrawState {
+            result_failed: Some(false),
+            ex_score: 13,
+            total_notes: 9,
+            ..SkinDrawState::default()
+        };
+        assert!(skin_video_source_runtime_visible(&bg_a, a_state));
+        assert!(!skin_video_source_runtime_visible(&bg_aaa, a_state));
     }
 
     #[test]

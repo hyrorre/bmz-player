@@ -1375,6 +1375,17 @@ fn push_scene_overlay_text_aligned(
     });
 }
 
+/// リザルト画面の `SkinDrawState` を snapshot から構築する。
+///
+/// op 条件評価 (ランク別 BG など) を描画前に行いたい呼び出し側 (例: 動画ソースの
+/// 可視判定) が、描画と同じ state を得るための公開エントリ。
+pub fn result_skin_draw_state(
+    snapshot: &crate::scene::ResultSnapshot,
+    result_ranktime_ms: i32,
+) -> crate::skin::SkinDrawState {
+    build_result_skin_draw_state(snapshot, result_ranktime_ms)
+}
+
 fn build_result_skin_draw_state(
     snapshot: &crate::scene::ResultSnapshot,
     result_ranktime_ms: i32,
