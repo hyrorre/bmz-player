@@ -2542,15 +2542,19 @@ impl SkinDocument {
                 after_notes_marker = true;
                 continue;
             }
-            if !destination_ops_match(
-                destination,
-                &enabled_options,
-                state,
-                has_half_grade_f_diff_rank_destination,
-            ) {
+            if !destination.op.is_empty()
+                && !destination_ops_match(
+                    destination,
+                    &enabled_options,
+                    state,
+                    has_half_grade_f_diff_rank_destination,
+                )
+            {
                 continue;
             }
-            if !eval_skin_draw_condition(&destination.draw, state) {
+            if !destination.draw.trim().is_empty()
+                && !eval_skin_draw_condition(&destination.draw, state)
+            {
                 continue;
             }
             if self.destination_uses_skin_gauge_bar_render(destination) {
