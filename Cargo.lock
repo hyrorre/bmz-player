@@ -607,6 +607,7 @@ dependencies = [
  "bmz-core",
  "bmz-font",
  "bmz-gameplay",
+ "bytemuck",
  "egui",
  "egui-wgpu",
  "image",

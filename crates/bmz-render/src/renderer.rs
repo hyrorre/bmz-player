@@ -1261,11 +1261,16 @@ fn encode_plan_geometry(
         match command {
             DrawCommand::Rect { rect, color } => {
                 let start = rects.len();
-                for value in
-                    [rect.x, rect.y, rect.width, rect.height, color.r, color.g, color.b, color.a]
-                {
-                    rects.extend_from_slice(&value.to_le_bytes());
-                }
+                rects.extend_from_slice(bytemuck::bytes_of(&[
+                    rect.x,
+                    rect.y,
+                    rect.width,
+                    rect.height,
+                    color.r,
+                    color.g,
+                    color.b,
+                    color.a,
+                ]));
                 push_or_extend_rects(&mut steps, start..rects.len());
             }
             DrawCommand::Image { rect, uv, texture, tint, blend, linear_filter } => {
@@ -1342,7 +1347,7 @@ fn encode_image_instance(
     center: Point,
     rotation_aspect: f32,
 ) {
-    for value in [
+    images.extend_from_slice(bytemuck::bytes_of(&[
         rect.x,
         rect.y,
         rect.width,
@@ -1359,9 +1364,7 @@ fn encode_image_instance(
         center.x,
         center.y,
         rotation_aspect,
-    ] {
-        images.extend_from_slice(&value.to_le_bytes());
-    }
+    ]));
 }
 
 fn push_or_extend_rects(steps: &mut Vec<DrawStep>, range: Range<usize>) {

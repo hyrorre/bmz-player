@@ -33,6 +33,7 @@ serde_path_to_error = "0.1"
 toml = "0.8"
 base64 = "0.22"
 flate2 = "1"
+bytemuck = "1"
 
 rusqlite = { version = "0.31", features = ["bundled"] }
 
