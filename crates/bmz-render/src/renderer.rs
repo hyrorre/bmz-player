@@ -90,6 +90,11 @@ pub struct RenderFrameTimings {
     pub geometry_us: u128,
     pub upload_us: u128,
     pub submit_us: u128,
+    pub surface_us: u128,
+    pub bind_us: u128,
+    pub encode_us: u128,
+    pub queue_us: u128,
+    pub present_us: u128,
     pub commands: usize,
 }
 
@@ -100,6 +105,11 @@ struct GpuRenderTimings {
     geometry_us: u128,
     upload_us: u128,
     submit_us: u128,
+    surface_us: u128,
+    bind_us: u128,
+    encode_us: u128,
+    queue_us: u128,
+    present_us: u128,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -599,6 +609,11 @@ impl Renderer {
             geometry_us: gpu_timings.geometry_us,
             upload_us: gpu_timings.upload_us,
             submit_us: gpu_timings.submit_us,
+            surface_us: gpu_timings.surface_us,
+            bind_us: gpu_timings.bind_us,
+            encode_us: gpu_timings.encode_us,
+            queue_us: gpu_timings.queue_us,
+            present_us: gpu_timings.present_us,
             ..self.last_frame_timings.unwrap_or_default()
         });
         Ok(status)
@@ -802,29 +817,35 @@ impl WgpuRenderer {
         timings.upload_us = upload_start.elapsed().as_micros();
 
         let submit_start = Instant::now();
+        let surface_start = Instant::now();
         let output = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(output)
             | wgpu::CurrentSurfaceTexture::Suboptimal(output) => output,
             wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
                 self.configure_surface();
+                timings.surface_us = surface_start.elapsed().as_micros();
                 timings.submit_us = submit_start.elapsed().as_micros();
                 timings.draw_us = draw_start.elapsed().as_micros();
                 return Ok((RenderSurfaceStatus::Reconfigured, timings));
             }
             wgpu::CurrentSurfaceTexture::Timeout => {
+                timings.surface_us = surface_start.elapsed().as_micros();
                 timings.submit_us = submit_start.elapsed().as_micros();
                 timings.draw_us = draw_start.elapsed().as_micros();
                 return Ok((RenderSurfaceStatus::TimedOut, timings));
             }
             wgpu::CurrentSurfaceTexture::Occluded | wgpu::CurrentSurfaceTexture::Validation => {
+                timings.surface_us = surface_start.elapsed().as_micros();
                 timings.submit_us = submit_start.elapsed().as_micros();
                 timings.draw_us = draw_start.elapsed().as_micros();
                 return Ok((RenderSurfaceStatus::TimedOut, timings));
             }
         };
+        timings.surface_us = surface_start.elapsed().as_micros();
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
         // image ステップごとの bind group を、レンダーパスが encoder を借りる前に作る。
         // steps 内の image ステップと同じ順序で並ぶ。
+        let bind_start = Instant::now();
         let image_bind_groups: Vec<wgpu::BindGroup> = geometry
             .steps
             .iter()
@@ -836,6 +857,8 @@ impl WgpuRenderer {
             })
             .collect();
         let text_bind_group = self.text_bind_group();
+        timings.bind_us = bind_start.elapsed().as_micros();
+        let encode_start = Instant::now();
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("bmz-render clear encoder"),
         });
@@ -944,7 +967,11 @@ impl WgpuRenderer {
             capture.copy_from_surface(&mut encoder, &output.texture);
             (path.to_path_buf(), capture)
         });
-        self.queue.submit(egui_staging.into_iter().chain(std::iter::once(encoder.finish())));
+        let command_buffer = encoder.finish();
+        timings.encode_us = encode_start.elapsed().as_micros();
+        let queue_start = Instant::now();
+        self.queue.submit(egui_staging.into_iter().chain(std::iter::once(command_buffer)));
+        timings.queue_us = queue_start.elapsed().as_micros();
         if let Some((path, capture)) = screenshot {
             capture.save_png(&self.device, &path)?;
             tracing::info!(path = %path.display(), "smoke screenshot saved");
@@ -952,7 +979,9 @@ impl WgpuRenderer {
         if let Some(frame) = egui {
             self.egui.free_textures(frame);
         }
+        let present_start = Instant::now();
         output.present();
+        timings.present_us = present_start.elapsed().as_micros();
         timings.submit_us = submit_start.elapsed().as_micros();
         timings.draw_us = draw_start.elapsed().as_micros();
         Ok((RenderSurfaceStatus::Rendered, timings))

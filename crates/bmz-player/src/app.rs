@@ -421,6 +421,11 @@ struct SceneFrameProfiler {
     geometry_us: u128,
     upload_us: u128,
     submit_us: u128,
+    surface_us: u128,
+    bind_us: u128,
+    encode_us: u128,
+    queue_us: u128,
+    present_us: u128,
     commands: u128,
 }
 
@@ -446,6 +451,11 @@ impl SceneFrameProfiler {
             self.geometry_us += timings.geometry_us;
             self.upload_us += timings.upload_us;
             self.submit_us += timings.submit_us;
+            self.surface_us += timings.surface_us;
+            self.bind_us += timings.bind_us;
+            self.encode_us += timings.encode_us;
+            self.queue_us += timings.queue_us;
+            self.present_us += timings.present_us;
             self.commands += timings.commands as u128;
         }
         if self.frames >= Self::LOG_EVERY_FRAMES {
@@ -465,6 +475,11 @@ impl SceneFrameProfiler {
         let geometry_ms = fmt_profile_ms(self.geometry_us, frames);
         let upload_ms = fmt_profile_ms(self.upload_us, frames);
         let submit_ms = fmt_profile_ms(self.submit_us, frames);
+        let surface_ms = fmt_profile_ms(self.surface_us, frames);
+        let bind_ms = fmt_profile_ms(self.bind_us, frames);
+        let encode_ms = fmt_profile_ms(self.encode_us, frames);
+        let queue_ms = fmt_profile_ms(self.queue_us, frames);
+        let present_ms = fmt_profile_ms(self.present_us, frames);
         match profile {
             FrameProfileKind::Select => {
                 tracing::debug!(
@@ -479,6 +494,11 @@ impl SceneFrameProfiler {
                     geometry_ms,
                     upload_ms,
                     submit_ms,
+                    surface_ms,
+                    bind_ms,
+                    encode_ms,
+                    queue_ms,
+                    present_ms,
                     commands,
                     "select frame profile"
                 );
@@ -496,6 +516,11 @@ impl SceneFrameProfiler {
                     geometry_ms,
                     upload_ms,
                     submit_ms,
+                    surface_ms,
+                    bind_ms,
+                    encode_ms,
+                    queue_ms,
+                    present_ms,
                     commands,
                     "result frame profile"
                 );
