@@ -759,8 +759,11 @@ fn resolve_json_skin_asset_path(
         }
     }
 
-    let preferred =
-        filepath.and_then(|filepath| (!filepath.def.is_empty()).then_some(filepath.def.as_str()));
+    // `def` が空、または beatoraja のランダム指定 ("Random") のときは具体的な
+    // 優先ファイルを持たず、候補からランダムに選ぶ。
+    let preferred = filepath.and_then(|filepath| {
+        (!filepath.def.is_empty() && filepath.def != "Random").then_some(filepath.def.as_str())
+    });
     resolve_wildcard_path(skin_root, &normalized, preferred)
 }
 
@@ -856,11 +859,38 @@ fn resolve_wildcard_path(
         return Some(candidate.clone());
     }
 
-    candidates.into_iter().next()
+    choose_wildcard_candidate(candidates)
 }
 
 fn strip_beatoraja_asset_filter(pattern: &str) -> &str {
     pattern.split_once('|').map_or(pattern, |(path, _)| path)
+}
+
+/// ワイルドカードのマッチ候補から 1 つを選ぶ。
+///
+/// beatoraja の `SkinLoader.getPath` は、ユーザ選択 (filemap) が無いワイルドカードを
+/// ロードごとに `Math.random()` でランダム解決する。`def == "Random"` の filepath も
+/// 同様にランダムへ展開される (`SkinHeader.setSkinConfigProperty`)。これに合わせ、
+/// `preferred` (具体的な def 値 / ユーザ選択) が候補に無いときはランダムに選ぶ。
+fn choose_wildcard_candidate(candidates: Vec<PathBuf>) -> Option<PathBuf> {
+    if candidates.len() <= 1 {
+        return candidates.into_iter().next();
+    }
+    let index = random_wildcard_index(candidates.len());
+    candidates.into_iter().nth(index)
+}
+
+/// `0..len` の範囲でロードごとに変わる擬似乱数インデックスを返す。
+///
+/// `RandomState` はプロセス内でランダムなキーを持ち、`new()` ごとに異なる状態に
+/// なるため、同じ値をハッシュしても呼び出しごとに違う結果になる。追加の乱数
+/// クレートを増やさずに beatoraja 相当の「毎ロードでランダム」を満たす。
+fn random_wildcard_index(len: usize) -> usize {
+    use std::hash::BuildHasher;
+
+    debug_assert!(len > 0);
+    let hash = std::collections::hash_map::RandomState::new().hash_one(len as u64);
+    (hash % len as u64) as usize
 }
 
 fn required_skin_source_ids(document: &SkinDocument) -> HashSet<&str> {
@@ -1005,7 +1035,7 @@ fn resolve_wildcard_directory_path(
         return Some(candidate.clone());
     }
 
-    candidates.into_iter().next()
+    choose_wildcard_candidate(candidates)
 }
 
 #[cfg(test)]
@@ -2421,18 +2451,57 @@ mod tests {
     }
 
     #[test]
-    fn wildcard_skin_source_falls_back_to_first_match() {
+    fn wildcard_skin_source_randomly_selects_match() {
+        // beatoraja の SkinLoader.getPath 同様、ユーザ選択も def も無いワイルドカードは
+        // ロードごとにランダムへ解決する。複数回呼んで両方の候補が選ばれることを確認。
         let root = unique_test_dir("bmz-json-source");
         std::fs::create_dir_all(root.join("parts")).unwrap();
-        std::fs::write(root.join("parts/b.png"), []).unwrap();
         std::fs::write(root.join("parts/a.png"), []).unwrap();
+        std::fs::write(root.join("parts/b.png"), []).unwrap();
         let document: SkinDocument = serde_json::from_str("{}").unwrap();
 
-        let resolved =
-            resolve_json_skin_source_path(&root, "parts/*.png", &document, &BTreeMap::new())
-                .unwrap();
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..200 {
+            let resolved =
+                resolve_json_skin_source_path(&root, "parts/*.png", &document, &BTreeMap::new())
+                    .unwrap();
+            let name =
+                resolved.file_name().and_then(|name| name.to_str()).unwrap_or_default().to_string();
+            assert!(name == "a.png" || name == "b.png", "unexpected match {name}");
+            seen.insert(name);
+        }
+        assert_eq!(seen.len(), 2, "both candidates should be selected over many loads");
+    }
 
-        assert_eq!(resolved.file_name().and_then(|name| name.to_str()), Some("a.png"));
+    #[test]
+    fn wildcard_skin_source_random_def_selects_match() {
+        // filepath の def が "Random" の場合も具体ファイルとして解決せずランダムにする。
+        let root = unique_test_dir("bmz-json-source-random-def");
+        std::fs::create_dir_all(root.join("bg")).unwrap();
+        std::fs::write(root.join("bg/one.mp4"), []).unwrap();
+        std::fs::write(root.join("bg/two.mp4"), []).unwrap();
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "filepath": [
+                    { "name": "BG", "path": "bg/*.mp4", "def": "Random" }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..200 {
+            let resolved =
+                resolve_json_skin_source_path(&root, "bg/*.mp4", &document, &BTreeMap::new())
+                    .unwrap();
+            let name =
+                resolved.file_name().and_then(|name| name.to_str()).unwrap_or_default().to_string();
+            assert!(name == "one.mp4" || name == "two.mp4", "unexpected match {name}");
+            seen.insert(name);
+        }
+        assert_eq!(seen.len(), 2, "def=Random should pick randomly among matches");
     }
 
     #[test]
