@@ -13,9 +13,12 @@ use bmz_audio::loader::SampleLoader;
 use bmz_audio::sample::DecodedSample;
 use bmz_chart::model::PlayableChart;
 use bmz_core::clear::{ClearType, GaugeType};
+use bmz_core::input::InputDeviceKind;
 use bmz_core::lane::{KeyMode, Lane};
 use bmz_core::time::TimeUs;
 use bmz_gameplay::input::backend::{DeviceId, PhysicalControl};
+use bmz_gameplay::result::PlayResult;
+use bmz_gameplay::score::{JudgeCounts, ScoreState};
 use bmz_gameplay::session::compute_frame_times;
 use bmz_gameplay::session::{HispeedMode, PlaySkinOffset};
 use bmz_render::assets::{RgbaImageAsset, load_static_rgba_image};
@@ -44,7 +47,7 @@ use crate::audio::{AppAudioOutput, AudioRuntime};
 use crate::bootstrap::{self, BootstrappedApp};
 use crate::chart_preview::SelectChartPreview;
 use crate::cli::{
-    AUTOPLAY_ON_START_ARG, AppOptions, SMOKE_EXIT_AFTER_FRAMES_ARG,
+    AUTOPLAY_ON_START_ARG, AppOptions, BOOT_RESULT_SAMPLE_ARG, SMOKE_EXIT_AFTER_FRAMES_ARG,
     SMOKE_EXIT_AFTER_RESULT_FRAMES_ARG, SMOKE_EXIT_ON_RESULT_ARG, SMOKE_SCREENSHOT_ARG,
 };
 use crate::config::app_config::{PathEntry, WindowMode};
@@ -108,6 +111,7 @@ use crate::skin_loader::{
 use crate::songs_cmd::scan_songs_with_progress;
 use crate::storage::library_db::{ChartDistributionSecond, LibraryDatabase};
 use crate::storage::migration::{migrate_library_db, migrate_score_db};
+use crate::storage::play_result::StoredPlayResult;
 use crate::storage::replay::load_replay_for_chart_and_policy;
 use crate::storage::scan::{ScanProgress, ScanReport};
 use crate::storage::score_db::ScoreDatabase;
@@ -427,6 +431,13 @@ struct SceneFrameProfiler {
     queue_us: u128,
     present_us: u128,
     commands: u128,
+    steps: u128,
+    rect_steps: u128,
+    image_steps: u128,
+    text_steps: u128,
+    rect_instances: u128,
+    image_instances: u128,
+    text_instances: u128,
 }
 
 impl SceneFrameProfiler {
@@ -457,6 +468,13 @@ impl SceneFrameProfiler {
             self.queue_us += timings.queue_us;
             self.present_us += timings.present_us;
             self.commands += timings.commands as u128;
+            self.steps += timings.steps as u128;
+            self.rect_steps += timings.rect_steps as u128;
+            self.image_steps += timings.image_steps as u128;
+            self.text_steps += timings.text_steps as u128;
+            self.rect_instances += timings.rect_instances as u128;
+            self.image_instances += timings.image_instances as u128;
+            self.text_instances += timings.text_instances as u128;
         }
         if self.frames >= Self::LOG_EVERY_FRAMES {
             self.log_and_reset(profile);
@@ -466,6 +484,13 @@ impl SceneFrameProfiler {
     fn log_and_reset(&mut self, profile: FrameProfileKind) {
         let frames = self.frames.max(1) as u128;
         let commands = (self.commands / frames) as u64;
+        let steps = (self.steps / frames) as u64;
+        let rect_steps = (self.rect_steps / frames) as u64;
+        let image_steps = (self.image_steps / frames) as u64;
+        let text_steps = (self.text_steps / frames) as u64;
+        let rect_instances = (self.rect_instances / frames) as u64;
+        let image_instances = (self.image_instances / frames) as u64;
+        let text_instances = (self.text_instances / frames) as u64;
         let video_ms = fmt_profile_ms(self.video_us, frames);
         let snapshot_ms = fmt_profile_ms(self.snapshot_us, frames);
         let render_ms = fmt_profile_ms(self.render_us, frames);
@@ -500,6 +525,13 @@ impl SceneFrameProfiler {
                     queue_ms,
                     present_ms,
                     commands,
+                    steps,
+                    rect_steps,
+                    image_steps,
+                    text_steps,
+                    rect_instances,
+                    image_instances,
+                    text_instances,
                     "select frame profile"
                 );
             }
@@ -522,6 +554,13 @@ impl SceneFrameProfiler {
                     queue_ms,
                     present_ms,
                     commands,
+                    steps,
+                    rect_steps,
+                    image_steps,
+                    text_steps,
+                    rect_instances,
+                    image_instances,
+                    text_instances,
                     "result frame profile"
                 );
             }
@@ -898,6 +937,218 @@ fn result_graph_duration_ms(graph: &bmz_render::snapshot::ResultGraphSnapshot) -
         .max(1)
 }
 
+fn debug_boot_finished_play_session() -> FinishedPlaySession {
+    let summary = debug_boot_result_summary();
+    let judge_counts = JudgeCounts {
+        fast_pgreat: summary.fast_slow_counts.fast_pgreat,
+        slow_pgreat: summary.fast_slow_counts.slow_pgreat,
+        fast_great: summary.fast_slow_counts.fast_great,
+        slow_great: summary.fast_slow_counts.slow_great,
+        fast_good: summary.fast_slow_counts.fast_good,
+        slow_good: summary.fast_slow_counts.slow_good,
+        fast_bad: summary.fast_slow_counts.fast_bad,
+        slow_bad: summary.fast_slow_counts.slow_bad,
+        fast_poor: summary.fast_slow_counts.fast_poor,
+        slow_poor: summary.fast_slow_counts.slow_poor,
+        fast_empty_poor: summary.fast_slow_counts.fast_empty_poor,
+        slow_empty_poor: summary.fast_slow_counts.slow_empty_poor,
+    };
+    let result = PlayResult {
+        chart_sha256: [0; 32],
+        clear_type: summary.clear_type,
+        gauge_type: summary.gauge_type,
+        gauge_value: summary.gauge_value,
+        total_notes: summary.total_notes,
+        score: ScoreState {
+            judges: judge_counts,
+            combo: 0,
+            max_combo: summary.max_combo,
+            past_notes: summary.total_notes,
+            ghost: Vec::new(),
+        },
+        autoplay: false,
+    };
+    FinishedPlaySession {
+        result,
+        stored: StoredPlayResult {
+            score_history_id: 0,
+            replay_path: String::new(),
+            slot_paths: [None, None, None, None],
+            device_type: InputDeviceKind::Keyboard,
+        },
+        summary,
+        replay_playback: false,
+        arrange: ArrangeOption::Normal,
+        applied_arrange: AppliedArrange::default(),
+    }
+}
+
+fn debug_boot_result_summary() -> ResultSummary {
+    let fast_slow_counts = ResultFastSlowJudgeCounts {
+        fast_pgreat: 128,
+        slow_pgreat: 92,
+        fast_great: 31,
+        slow_great: 69,
+        fast_good: 9,
+        slow_good: 20,
+        fast_bad: 3,
+        slow_bad: 5,
+        fast_poor: 2,
+        slow_poor: 8,
+        fast_empty_poor: 1,
+        slow_empty_poor: 2,
+    };
+    let judge_counts = crate::screens::result_model::ResultJudgeCounts {
+        pgreat: fast_slow_counts.fast_pgreat + fast_slow_counts.slow_pgreat,
+        great: fast_slow_counts.fast_great + fast_slow_counts.slow_great,
+        good: fast_slow_counts.fast_good + fast_slow_counts.slow_good,
+        bad: fast_slow_counts.fast_bad + fast_slow_counts.slow_bad,
+        poor: fast_slow_counts.fast_poor + fast_slow_counts.slow_poor,
+        empty_poor: fast_slow_counts.fast_empty_poor + fast_slow_counts.slow_empty_poor,
+    };
+    let total_notes = 594;
+    let duration_ms = 180_000;
+    ResultSummary {
+        clear_type: ClearType::Failed,
+        arrange: "RANDOM".to_string(),
+        lane_shuffle_pattern: vec![3, 1, 4, 2, 7, 5, 6],
+        ex_score: judge_counts.pgreat * 2 + judge_counts.great,
+        max_combo: 239,
+        bp: 30,
+        cb: 345,
+        gauge_value: 39.4,
+        gauge_type: GaugeType::Normal,
+        total_notes,
+        duration_ms,
+        initial_bpm: 171.0,
+        min_bpm: 128.0,
+        max_bpm: 192.0,
+        main_bpm: 171.0,
+        total_gauge: 363.0,
+        judge_rank: Some(2),
+        key_mode: KeyMode::K7,
+        judge_counts,
+        fast_slow_counts,
+        replay_path: String::new(),
+        replay_slots: [true, false, true, false],
+        saved_replay_slots: [false, false, false, false],
+        score_history_id: 0,
+        best_ex_score: Some(780),
+        best_clear_type: Some(ClearType::Easy),
+        best_max_combo: Some(412),
+        best_bp: Some(24),
+        previous_best_ex_score: Some(760),
+        previous_best_max_combo: Some(390),
+        previous_best_bp: Some(36),
+        target_ex_score: Some(1_056),
+        target_max_combo: Some(594),
+        target_bp: Some(10),
+        target_clear_type: Some(ClearType::Hard),
+        ir_queued_jobs: 0,
+        ir_last_error: None,
+        title: "Debug Result Boot [ANOTHER]".to_string(),
+        subtitle: "synthetic result".to_string(),
+        artist: "bmz-player".to_string(),
+        subartist: "Codex".to_string(),
+        genre: "DEBUG".to_string(),
+        difficulty_name: "ANOTHER".to_string(),
+        play_level: "12".to_string(),
+        graph: debug_boot_result_graph(duration_ms),
+    }
+}
+
+fn debug_boot_result_graph(duration_ms: i32) -> bmz_render::snapshot::ResultGraphSnapshot {
+    let mut graph = bmz_render::snapshot::ResultGraphSnapshot {
+        gauge_points: (0..=18)
+            .map(|index| bmz_render::snapshot::ResultGaugeGraphPoint {
+                time_ms: index * 10_000,
+                value: (100.0 - index as f32 * 3.2).max(12.0),
+                border: 20.0,
+                gauge_type: GaugeType::Normal as i32,
+            })
+            .collect(),
+        judge_graph_buckets: (0..360)
+            .map(|index| bmz_render::snapshot::ResultJudgeGraphBucket {
+                values: [
+                    0,
+                    1 + (index % 5) as u32,
+                    (index % 4) as u32,
+                    (index % 3) as u32,
+                    (index % 2) as u32,
+                    ((index + 1) % 2) as u32,
+                ],
+            })
+            .collect(),
+        early_late_graph_buckets: (0..360)
+            .map(|index| bmz_render::snapshot::ResultEarlyLateGraphBucket {
+                values: [
+                    0,
+                    1 + (index % 5) as u32,
+                    (index % 4) as u32,
+                    ((index + 2) % 3) as u32,
+                    (index % 2) as u32,
+                    0,
+                    ((index + 1) % 5) as u32,
+                    ((index + 3) % 4) as u32,
+                    ((index + 1) % 3) as u32,
+                    ((index + 1) % 2) as u32,
+                ],
+            })
+            .collect(),
+        bpm_graph_segments: vec![
+            bmz_render::snapshot::BpmGraphSegment {
+                start_ratio: 0.0,
+                end_ratio: 0.35,
+                bpm: 171.0,
+                is_stop: false,
+            },
+            bmz_render::snapshot::BpmGraphSegment {
+                start_ratio: 0.35,
+                end_ratio: 0.55,
+                bpm: 128.0,
+                is_stop: false,
+            },
+            bmz_render::snapshot::BpmGraphSegment {
+                start_ratio: 0.55,
+                end_ratio: 0.56,
+                bpm: 0.0,
+                is_stop: true,
+            },
+            bmz_render::snapshot::BpmGraphSegment {
+                start_ratio: 0.56,
+                end_ratio: 1.0,
+                bpm: 192.0,
+                is_stop: false,
+            },
+        ],
+        ..Default::default()
+    };
+    graph.judge_graph_density =
+        graph.judge_graph_buckets.iter().map(|bucket| bucket.total().min(255) as u8).collect();
+    graph.timing_points = (-60..=60)
+        .map(|index| {
+            let delta_ms: i32 = if index % 7 == 0 { index / 2 } else { index / 4 };
+            let judge = if delta_ms.abs() <= 8 {
+                bmz_core::judge::Judge::PGreat
+            } else if delta_ms.abs() <= 24 {
+                bmz_core::judge::Judge::Great
+            } else {
+                bmz_core::judge::Judge::Good
+            };
+            bmz_render::snapshot::ResultTimingPoint {
+                time_ms: ((index + 60) * duration_ms / 120).clamp(0, duration_ms),
+                delta_us: i64::from(delta_ms) * 1_000,
+                judge,
+            }
+        })
+        .collect();
+    graph.timing_distribution = bmz_render::snapshot::ResultTimingDistribution::default();
+    for point in &graph.timing_points {
+        graph.timing_distribution.add((point.delta_us / 1_000) as i32);
+    }
+    graph
+}
+
 fn result_min_bpm(summary: &ResultSummary) -> f32 {
     summary
         .graph
@@ -1195,7 +1446,18 @@ impl WinitApp {
             select_frame_profiler: SceneFrameProfiler::default(),
             result_frame_profiler: SceneFrameProfiler::default(),
         };
-        if let Some(chart_id) = boot_chart_id {
+        if options.boot_result_sample {
+            tracing::info!("booting directly into synthetic result screen");
+            app.finished_play = Some(debug_boot_finished_play_session());
+            app.result_gauge_graph_type = app
+                .finished_play
+                .as_ref()
+                .map(|finished| finished.summary.gauge_type as i32)
+                .unwrap_or(GaugeType::Normal as i32);
+            app.result_key5_held = false;
+            app.result_key7_held = false;
+            app.result_scene_started_at = Instant::now();
+        } else if let Some(chart_id) = boot_chart_id {
             if options.boot_practice {
                 tracing::info!(chart_id, "booting into practice mode");
                 app.enter_practice(
@@ -1281,6 +1543,9 @@ impl WinitApp {
                 // decode 結果はそれまで skin_decode_rx にバッファされ、起動後にドレインされる。
                 self.start_skin_upload_worker();
                 self.start_deferred_boot();
+                if self.current_scene_kind() == AppSceneKind::Result {
+                    self.ensure_skin_ready(SkinKind::Result);
+                }
                 window.request_redraw();
                 self.egui = Some(EguiLayer::new(&window, self.boot.profile_config.ui.show_fps));
                 self.window = Some(window);
@@ -7852,6 +8117,9 @@ fn log_startup_options(options: &AppOptions) {
     if let Some(path) = &options.boot_play_path {
         tracing::info!(boot_play_path = %path, "boot chart path specified");
     }
+    if options.boot_result_sample {
+        tracing::info!(arg = BOOT_RESULT_SAMPLE_ARG, "debug result boot enabled");
+    }
     if options.autoplay_on_start {
         tracing::info!(arg = AUTOPLAY_ON_START_ARG, "autoplay enabled for started charts");
     }
@@ -10194,6 +10462,21 @@ mod tests {
         assert!(default_skin_root().join("gauge-fill.png").is_file());
         assert!(default_skin_root().join("combo-panel.png").is_file());
         assert!(default_skin_root().join("combo-panel-inactive.png").is_file());
+    }
+
+    #[test]
+    fn debug_boot_result_summary_has_stat_graph_data() {
+        let finished = debug_boot_finished_play_session();
+        let summary = &finished.summary;
+
+        assert_eq!(summary.title, "Debug Result Boot [ANOTHER]");
+        assert_eq!(summary.key_mode, KeyMode::K7);
+        assert!(summary.ex_score > 0);
+        assert!(!summary.graph.gauge_points.is_empty());
+        assert!(!summary.graph.judge_graph_buckets.is_empty());
+        assert!(!summary.graph.early_late_graph_buckets.is_empty());
+        assert!(!summary.graph.timing_points.is_empty());
+        assert!(summary.graph.timing_distribution.total() > 0);
     }
 
     #[test]

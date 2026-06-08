@@ -96,6 +96,13 @@ pub struct RenderFrameTimings {
     pub queue_us: u128,
     pub present_us: u128,
     pub commands: usize,
+    pub steps: usize,
+    pub rect_steps: usize,
+    pub image_steps: usize,
+    pub text_steps: usize,
+    pub rect_instances: usize,
+    pub image_instances: usize,
+    pub text_instances: usize,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -110,6 +117,13 @@ struct GpuRenderTimings {
     encode_us: u128,
     queue_us: u128,
     present_us: u128,
+    steps: usize,
+    rect_steps: usize,
+    image_steps: usize,
+    text_steps: usize,
+    rect_instances: usize,
+    image_instances: usize,
+    text_instances: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -614,6 +628,13 @@ impl Renderer {
             encode_us: gpu_timings.encode_us,
             queue_us: gpu_timings.queue_us,
             present_us: gpu_timings.present_us,
+            steps: gpu_timings.steps,
+            rect_steps: gpu_timings.rect_steps,
+            image_steps: gpu_timings.image_steps,
+            text_steps: gpu_timings.text_steps,
+            rect_instances: gpu_timings.rect_instances,
+            image_instances: gpu_timings.image_instances,
+            text_instances: gpu_timings.text_instances,
             ..self.last_frame_timings.unwrap_or_default()
         });
         Ok(status)
@@ -799,6 +820,14 @@ impl WgpuRenderer {
         timings.text_us = text_start.elapsed().as_micros();
         let geometry_start = Instant::now();
         let geometry = encode_plan_geometry(plan, &text_frame, surface_size);
+        let geometry_stats = geometry.stats();
+        timings.steps = geometry_stats.steps;
+        timings.rect_steps = geometry_stats.rect_steps;
+        timings.image_steps = geometry_stats.image_steps;
+        timings.text_steps = geometry_stats.text_steps;
+        timings.rect_instances = geometry_stats.rect_instances;
+        timings.image_instances = geometry_stats.image_instances;
+        timings.text_instances = geometry_stats.text_instances;
         timings.geometry_us = geometry_start.elapsed().as_micros();
         let upload_start = Instant::now();
         self.ensure_rect_buffer(geometry.rects.len());
@@ -1275,6 +1304,43 @@ struct PlanGeometry {
     rects: Vec<u8>,
     images: Vec<u8>,
     steps: Vec<DrawStep>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct DrawStepStats {
+    steps: usize,
+    rect_steps: usize,
+    image_steps: usize,
+    text_steps: usize,
+    rect_instances: usize,
+    image_instances: usize,
+    text_instances: usize,
+}
+
+impl PlanGeometry {
+    fn stats(&self) -> DrawStepStats {
+        let mut stats = DrawStepStats {
+            steps: self.steps.len(),
+            rect_instances: self.rects.len() / RECT_INSTANCE_BYTES,
+            image_instances: self.images.len() / IMAGE_INSTANCE_BYTES,
+            ..Default::default()
+        };
+        for step in &self.steps {
+            match step {
+                DrawStep::Rects { .. } => {
+                    stats.rect_steps += 1;
+                }
+                DrawStep::Image { .. } => {
+                    stats.image_steps += 1;
+                }
+                DrawStep::Text { range } => {
+                    stats.text_steps += 1;
+                    stats.text_instances += range.len() / TEXT_INSTANCE_BYTES;
+                }
+            }
+        }
+        stats
+    }
 }
 
 /// commands を 1 回走査し、rect/image インスタンスバッファと、コマンド順を尊重した
@@ -3850,6 +3916,10 @@ mod tests {
 
         assert_eq!(image_step_sizes, vec![IMAGE_INSTANCE_BYTES * 2, IMAGE_INSTANCE_BYTES]);
         assert_eq!(geometry.images.len(), IMAGE_INSTANCE_BYTES * 3);
+        assert_eq!(
+            geometry.stats(),
+            DrawStepStats { steps: 2, image_steps: 2, image_instances: 3, ..Default::default() }
+        );
     }
 
     #[test]
@@ -3917,6 +3987,17 @@ mod tests {
         assert_eq!(geometry.steps.len(), 2);
         assert_eq!(geometry.steps[0], DrawStep::Text { range: 0..TEXT_INSTANCE_BYTES * 2 });
         assert!(matches!(geometry.steps[1], DrawStep::Image { .. }));
+        assert_eq!(
+            geometry.stats(),
+            DrawStepStats {
+                steps: 2,
+                image_steps: 1,
+                text_steps: 1,
+                image_instances: 1,
+                text_instances: 2,
+                ..Default::default()
+            }
+        );
     }
 
     #[test]
