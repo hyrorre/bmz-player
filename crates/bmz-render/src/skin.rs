@@ -2985,10 +2985,8 @@ impl SkinDocument {
             ));
         }
 
-        if let Some(graph) = self.graph.iter().find(|graph| graph.id == destination.id)
-            && let Some(item) = self.graph_render_item(graph, frame, state, sources)
-        {
-            return Some(vec![item]);
+        if let Some(graph) = self.graph.iter().find(|graph| graph.id == destination.id) {
+            return self.graph_render_item(graph, frame, state, sources).map(|item| vec![item]);
         }
 
         if let Some(text) = self.text.iter().find(|text| text.id == destination.id)
@@ -3010,10 +3008,6 @@ impl SkinDocument {
                 state,
                 sources,
             );
-        }
-
-        if let Some(graph) = self.graph.iter().find(|g| g.id == destination.id) {
-            return self.graph_render_item(graph, frame, state, sources).map(|item| vec![item]);
         }
 
         if let Some(item) = special_image_render_item(destination, frame, self.w, self.h) {
