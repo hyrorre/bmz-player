@@ -44,8 +44,8 @@ use crate::audio::{AppAudioOutput, AudioRuntime};
 use crate::bootstrap::{self, BootstrappedApp};
 use crate::chart_preview::SelectChartPreview;
 use crate::cli::{
-    AUTOPLAY_ON_START_ARG, AppOptions, SMOKE_EXIT_AFTER_FRAMES_ARG, SMOKE_EXIT_ON_RESULT_ARG,
-    SMOKE_SCREENSHOT_ARG,
+    AUTOPLAY_ON_START_ARG, AppOptions, SMOKE_EXIT_AFTER_FRAMES_ARG,
+    SMOKE_EXIT_AFTER_RESULT_FRAMES_ARG, SMOKE_EXIT_ON_RESULT_ARG, SMOKE_SCREENSHOT_ARG,
 };
 use crate::config::app_config::{PathEntry, WindowMode};
 use crate::config::key_config::{
@@ -269,9 +269,11 @@ struct WinitApp {
     select_sort: SelectSort,
     select_keys: SelectKeyBindings,
     smoke_exit_after_frames: Option<u32>,
+    smoke_exit_after_result_frames: Option<u32>,
     smoke_exit_on_result: bool,
     smoke_screenshot_path: Option<PathBuf>,
     rendered_frames: u32,
+    rendered_result_frames: u32,
     select_scene_started_at: Instant,
     select_bar_started_at: Instant,
     play_scene_started_at: Instant,
@@ -1088,9 +1090,11 @@ impl WinitApp {
             select_sort,
             select_keys,
             smoke_exit_after_frames: options.smoke_exit_after_frames,
+            smoke_exit_after_result_frames: options.smoke_exit_after_result_frames,
             smoke_exit_on_result: options.smoke_exit_on_result,
             smoke_screenshot_path: options.smoke_screenshot_path.as_ref().map(PathBuf::from),
             rendered_frames: 0,
+            rendered_result_frames: 0,
             select_scene_started_at: now,
             select_bar_started_at: now,
             play_scene_started_at: now,
@@ -6780,6 +6784,22 @@ impl WinitApp {
             return;
         }
 
+        if let Some(exit_after_result_frames) = self.smoke_exit_after_result_frames
+            && self.finished_play.is_some()
+        {
+            self.rendered_result_frames = self.rendered_result_frames.saturating_add(1);
+            if self.rendered_result_frames >= exit_after_result_frames {
+                self.smoke_exit_after_result_frames = None;
+                tracing::info!(
+                    frames = self.rendered_result_frames,
+                    "smoke result frame count reached; leaving event loop"
+                );
+                self.save_current_play_options(None, "game exit");
+                event_loop.exit();
+                return;
+            }
+        }
+
         let Some(exit_after_frames) = self.smoke_exit_after_frames else {
             return;
         };
@@ -7812,6 +7832,13 @@ fn log_startup_options(options: &AppOptions) {
     }
     if let Some(frames) = options.smoke_exit_after_frames {
         tracing::info!(arg = SMOKE_EXIT_AFTER_FRAMES_ARG, frames, "smoke auto-exit enabled");
+    }
+    if let Some(frames) = options.smoke_exit_after_result_frames {
+        tracing::info!(
+            arg = SMOKE_EXIT_AFTER_RESULT_FRAMES_ARG,
+            frames,
+            "smoke result-frame auto-exit enabled"
+        );
     }
     if options.smoke_exit_on_result {
         tracing::info!(arg = SMOKE_EXIT_ON_RESULT_ARG, "smoke auto-exit on result enabled");

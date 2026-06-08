@@ -5,6 +5,7 @@ pub const BOOT_PLAY_SAMPLE_ARG: &str = "--boot-play-sample";
 pub const AUTOPLAY_ON_START_ARG: &str = "--autoplay-on-start";
 pub const AUTOPLAY_SHORT_ARG: &str = "-a";
 pub const SMOKE_EXIT_AFTER_FRAMES_ARG: &str = "--smoke-exit-after-frames";
+pub const SMOKE_EXIT_AFTER_RESULT_FRAMES_ARG: &str = "--smoke-exit-after-result-frames";
 pub const SMOKE_EXIT_ON_RESULT_ARG: &str = "--smoke-exit-on-result";
 pub const SMOKE_SCREENSHOT_ARG: &str = "--smoke-screenshot";
 pub const BOOT_REPLAY_ARG: &str = "--boot-replay";
@@ -155,6 +156,7 @@ pub struct AppOptions {
     pub boot_play_path: Option<String>,
     pub autoplay_on_start: bool,
     pub smoke_exit_after_frames: Option<u32>,
+    pub smoke_exit_after_result_frames: Option<u32>,
     pub smoke_exit_on_result: bool,
     pub smoke_screenshot_path: Option<String>,
     /// `--boot-replay <SLOT>` / `-r1..4` で指定された 0-based のスロット index。
@@ -186,6 +188,11 @@ impl AppOptions {
             let arg = arg.as_ref();
             if let Some(value) = arg.strip_prefix("--smoke-exit-after-frames=") {
                 options.smoke_exit_after_frames = Some(parse_smoke_exit_after_frames_value(value)?);
+                continue;
+            }
+            if let Some(value) = arg.strip_prefix("--smoke-exit-after-result-frames=") {
+                options.smoke_exit_after_result_frames =
+                    Some(parse_smoke_exit_after_result_frames_value(value)?);
                 continue;
             }
             if let Some(value) = arg.strip_prefix("--smoke-screenshot=") {
@@ -237,6 +244,13 @@ impl AppOptions {
                     };
                     options.smoke_exit_after_frames =
                         Some(parse_smoke_exit_after_frames_value(value.as_ref())?);
+                }
+                SMOKE_EXIT_AFTER_RESULT_FRAMES_ARG => {
+                    let Some(value) = args.next() else {
+                        bail!("{SMOKE_EXIT_AFTER_RESULT_FRAMES_ARG} requires a frame count");
+                    };
+                    options.smoke_exit_after_result_frames =
+                        Some(parse_smoke_exit_after_result_frames_value(value.as_ref())?);
                 }
                 BOOT_REPLAY_ARG => {
                     let Some(value) = args.next() else {
@@ -299,7 +313,7 @@ where
 }
 
 pub fn app_help_text() -> &'static str {
-    "bmz-player\n\nUsage:\n  bmz-player [OPTIONS] [PATH]\n  bmz-player table <SUBCOMMAND>\n  bmz-player songs <SUBCOMMAND>\n  bmz-player course <SUBCOMMAND>\n\nOptions:\n  [PATH]                          Start the chart at PATH (beatoraja-style alias)\n  -p | --practice                 Start boot chart in practice mode (CLI only)\n  --practice-start-ms <MS>        Initial practice section start (milliseconds)\n  --practice-end-ms <MS>          Initial practice section end (milliseconds)\n  -a                              Enable autoplay for the boot chart (alias of --autoplay-on-start)\n  -r1 | -r2 | -r3 | -r4           Start replay slot 1..4 for the boot chart\n  --boot-play-sample              Start the bundled sample chart on boot\n  --autoplay-on-start             Enable autoplay for started charts\n  --boot-replay <1..4>            Start replay slot N for the boot chart\n  --boot-course <ID>              Start course ID fresh on boot\n  --boot-course-replay <ID>       Replay the latest attempt of course ID on boot\n  --smoke-exit-after-frames <N>   Exit after N rendered frames, clamped to 1 or more\n  --smoke-exit-on-result          Exit when the app reaches the result screen\n  --smoke-screenshot <PATH>       Save a PNG screenshot on smoke exit (defaults to 3 frames)\n  --renderer <backend>            wgpu renderer backend (vulkan, metal, dx12, gl, auto)\n  -h, --help                      Print this help\n\nTable subcommands:\n  table add <URL>       Add a difficulty table source and fetch it\n  table list            List all stored difficulty tables\n  table fetch [URL]     Fetch/update configured tables, or a single URL\n\nSongs subcommands:\n  songs add <PATH> [--no-recursive] [--disabled]   Add a song root directory\n  songs list                                        List configured song roots\n  songs load [PATH|NAME]                            Scan song roots (incremental)\n  songs reload [PATH|NAME]                          Force rescan song roots\n\nCourse subcommands:\n  course import <PATH>             Import beatoraja course JSON from a file or directory\n  course list                      List stored courses\n  course history <ID> [--limit N]  Show recent attempts of course ID (default limit 10)\n  course attempt <SCORE_ID>        Show per-chart breakdown of a single course attempt\n\nExamples:\n  cargo run -p bmz-player -- /path/to/chart.bms\n  cargo run -p bmz-player -- -a /path/to/chart.bms\n  cargo run -p bmz-player -- -r2 /path/to/chart.bms\n  cargo run -p bmz-player -- --boot-play-sample --smoke-exit-after-frames 3\n  cargo run -p bmz-player -- --boot-play-sample --smoke-screenshot /tmp/bmz-play.png\n  cargo run -p bmz-player -- --boot-play-sample --boot-replay 1 --smoke-exit-on-result\n  cargo run -p bmz-player -- table add https://example.com/table.html\n  cargo run -p bmz-player -- table list\n  cargo run -p bmz-player -- table fetch https://example.com/table.html\n  cargo run -p bmz-player -- songs add /path/to/bms\n  cargo run -p bmz-player -- songs list\n  cargo run -p bmz-player -- songs load\n  cargo run -p bmz-player -- songs reload my-bms-folder\n  cargo run -p bmz-player -- course import /path/to/course.json\n  cargo run -p bmz-player -- course list"
+    "bmz-player\n\nUsage:\n  bmz-player [OPTIONS] [PATH]\n  bmz-player table <SUBCOMMAND>\n  bmz-player songs <SUBCOMMAND>\n  bmz-player course <SUBCOMMAND>\n\nOptions:\n  [PATH]                                 Start the chart at PATH (beatoraja-style alias)\n  -p | --practice                        Start boot chart in practice mode (CLI only)\n  --practice-start-ms <MS>               Initial practice section start (milliseconds)\n  --practice-end-ms <MS>                 Initial practice section end (milliseconds)\n  -a                                     Enable autoplay for the boot chart (alias of --autoplay-on-start)\n  -r1 | -r2 | -r3 | -r4                  Start replay slot 1..4 for the boot chart\n  --boot-play-sample                     Start the bundled sample chart on boot\n  --autoplay-on-start                    Enable autoplay for started charts\n  --boot-replay <1..4>                   Start replay slot N for the boot chart\n  --boot-course <ID>                     Start course ID fresh on boot\n  --boot-course-replay <ID>              Replay the latest attempt of course ID on boot\n  --smoke-exit-after-frames <N>          Exit after N rendered frames, clamped to 1 or more\n  --smoke-exit-after-result-frames <N>   Exit after N rendered result frames, clamped to 1 or more\n  --smoke-exit-on-result                 Exit when the app reaches the result screen\n  --smoke-screenshot <PATH>              Save a PNG screenshot on smoke exit (defaults to 3 frames)\n  --renderer <backend>                   wgpu renderer backend (vulkan, metal, dx12, gl, auto)\n  -h, --help                             Print this help\n\nTable subcommands:\n  table add <URL>       Add a difficulty table source and fetch it\n  table list            List all stored difficulty tables\n  table fetch [URL]     Fetch/update configured tables, or a single URL\n\nSongs subcommands:\n  songs add <PATH> [--no-recursive] [--disabled]   Add a song root directory\n  songs list                                        List configured song roots\n  songs load [PATH|NAME]                            Scan song roots (incremental)\n  songs reload [PATH|NAME]                          Force rescan song roots\n\nCourse subcommands:\n  course import <PATH>             Import beatoraja course JSON from a file or directory\n  course list                      List stored courses\n  course history <ID> [--limit N]  Show recent attempts of course ID (default limit 10)\n  course attempt <SCORE_ID>        Show per-chart breakdown of a single course attempt\n\nExamples:\n  cargo run -p bmz-player -- /path/to/chart.bms\n  cargo run -p bmz-player -- -a /path/to/chart.bms\n  cargo run -p bmz-player -- -r2 /path/to/chart.bms\n  cargo run -p bmz-player -- --boot-play-sample --smoke-exit-after-frames 3\n  cargo run -p bmz-player -- --boot-play-sample --smoke-screenshot /tmp/bmz-play.png\n  cargo run -p bmz-player -- --boot-play-sample --boot-replay 1 --smoke-exit-on-result\n  cargo run -p bmz-player -- table add https://example.com/table.html\n  cargo run -p bmz-player -- table list\n  cargo run -p bmz-player -- table fetch https://example.com/table.html\n  cargo run -p bmz-player -- songs add /path/to/bms\n  cargo run -p bmz-player -- songs list\n  cargo run -p bmz-player -- songs load\n  cargo run -p bmz-player -- songs reload my-bms-folder\n  cargo run -p bmz-player -- course import /path/to/course.json\n  cargo run -p bmz-player -- course list"
 }
 
 fn parse_practice_ms(value: &str, arg: &str) -> Result<u32> {
@@ -313,14 +327,21 @@ fn parse_practice_ms(value: &str, arg: &str) -> Result<u32> {
 }
 
 fn parse_smoke_exit_after_frames_value(value: &str) -> Result<u32> {
+    parse_smoke_frame_count_value(value, SMOKE_EXIT_AFTER_FRAMES_ARG)
+}
+
+fn parse_smoke_exit_after_result_frames_value(value: &str) -> Result<u32> {
+    parse_smoke_frame_count_value(value, SMOKE_EXIT_AFTER_RESULT_FRAMES_ARG)
+}
+
+fn parse_smoke_frame_count_value(value: &str, arg: &str) -> Result<u32> {
     let value = value.trim();
     if value.is_empty() {
-        bail!("{SMOKE_EXIT_AFTER_FRAMES_ARG} requires a frame count");
+        bail!("{arg} requires a frame count");
     }
 
-    let frames = value.parse::<u32>().with_context(|| {
-        format!("invalid frame count for {SMOKE_EXIT_AFTER_FRAMES_ARG}: {value}")
-    })?;
+    let frames =
+        value.parse::<u32>().with_context(|| format!("invalid frame count for {arg}: {value}"))?;
     Ok(frames.max(1))
 }
 
@@ -523,6 +544,8 @@ mod tests {
             "--autoplay-on-start",
             "--smoke-exit-after-frames",
             "12",
+            "--smoke-exit-after-result-frames",
+            "120",
             "--smoke-exit-on-result",
         ])
         .unwrap();
@@ -530,14 +553,20 @@ mod tests {
         assert!(options.boot_play_sample);
         assert!(options.autoplay_on_start);
         assert_eq!(options.smoke_exit_after_frames, Some(12));
+        assert_eq!(options.smoke_exit_after_result_frames, Some(120));
         assert!(options.smoke_exit_on_result);
     }
 
     #[test]
     fn app_options_parse_equals_form() {
-        let options = AppOptions::parse_args(["--smoke-exit-after-frames=3"]).unwrap();
+        let options = AppOptions::parse_args([
+            "--smoke-exit-after-frames=3",
+            "--smoke-exit-after-result-frames=60",
+        ])
+        .unwrap();
 
         assert_eq!(options.smoke_exit_after_frames, Some(3));
+        assert_eq!(options.smoke_exit_after_result_frames, Some(60));
     }
 
     #[test]
@@ -562,9 +591,16 @@ mod tests {
 
     #[test]
     fn app_options_clamps_zero_frame_count_to_one() {
-        let options = AppOptions::parse_args(["--smoke-exit-after-frames", "0"]).unwrap();
+        let options = AppOptions::parse_args([
+            "--smoke-exit-after-frames",
+            "0",
+            "--smoke-exit-after-result-frames",
+            "0",
+        ])
+        .unwrap();
 
         assert_eq!(options.smoke_exit_after_frames, Some(1));
+        assert_eq!(options.smoke_exit_after_result_frames, Some(1));
     }
 
     #[test]
@@ -572,6 +608,8 @@ mod tests {
         assert!(AppOptions::parse_args(["--unknown"]).is_err());
         assert!(AppOptions::parse_args(["--smoke-exit-after-frames"]).is_err());
         assert!(AppOptions::parse_args(["--smoke-exit-after-frames", "abc"]).is_err());
+        assert!(AppOptions::parse_args(["--smoke-exit-after-result-frames"]).is_err());
+        assert!(AppOptions::parse_args(["--smoke-exit-after-result-frames", "abc"]).is_err());
         assert!(AppOptions::parse_args(["--smoke-screenshot"]).is_err());
         assert!(AppOptions::parse_args(["--smoke-screenshot", ""]).is_err());
     }
@@ -591,6 +629,7 @@ mod tests {
         assert!(help.contains("--boot-play-sample"));
         assert!(help.contains("--autoplay-on-start"));
         assert!(help.contains("--smoke-exit-after-frames"));
+        assert!(help.contains("--smoke-exit-after-result-frames"));
         assert!(help.contains("--smoke-exit-on-result"));
         assert!(help.contains("--smoke-screenshot"));
         assert!(help.contains("--renderer"));
