@@ -10229,6 +10229,9 @@ fn resolve_destination_frame(
     enabled_options: &[i32],
     state: SkinDrawState,
 ) -> Option<ResolvedSkinFrame> {
+    if let [SkinDstEntry::Frame(animation)] = destination.dst.as_slice() {
+        return resolve_single_destination_frame(destination, *animation, elapsed_ms, state);
+    }
     let animations = flatten_dst_entries(&destination.dst, enabled_options);
     // `cycle` はアニメーション終端（最後のキーフレーム時刻）。
     let cycle = animations.iter().filter_map(|a| a.time).max().unwrap_or(0);
@@ -10259,6 +10262,28 @@ fn resolve_destination_frame(
         return previous.map(|previous| interpolate_skin_frame(previous, frame, elapsed_ms, acc));
     }
     previous.or_else(|| animations.first().map(|_| frame))
+}
+
+fn resolve_single_destination_frame(
+    destination: &SkinDestinationDef,
+    animation: SkinAnimationDef,
+    elapsed_ms: i32,
+    state: SkinDrawState,
+) -> Option<ResolvedSkinFrame> {
+    let cycle = animation.time.unwrap_or(0);
+    let elapsed_ms = match destination.loop_time {
+        Some(loop_point) if loop_point < 0 => {
+            if elapsed_ms > cycle {
+                return None;
+            }
+            elapsed_ms
+        }
+        Some(loop_point) => resolve_loop_elapsed(loop_point, elapsed_ms, cycle),
+        None => elapsed_ms,
+    };
+    let mut frame = ResolvedSkinFrame::default();
+    apply_skin_animation(&mut frame, &animation, state);
+    (frame.time <= elapsed_ms).then_some(frame)
 }
 
 fn resolve_destination_frame_until_end(
@@ -19701,6 +19726,29 @@ mod tests {
         );
         assert!(
             resolve_destination_frame(&destination, 1001, &[], SkinDrawState::default()).is_none()
+        );
+    }
+
+    #[test]
+    fn single_frame_destination_preserves_start_and_loop_semantics() {
+        let destination: SkinDestinationDef = serde_json::from_str(
+            r#"{ "id": "flash", "dst": [{ "time": 1000, "x": 2, "y": 3, "w": 10, "h": 20 }] }"#,
+        )
+        .unwrap();
+
+        assert!(
+            resolve_destination_frame(&destination, 999, &[], SkinDrawState::default()).is_none()
+        );
+        let frame = resolve_destination_frame(&destination, 1000, &[], SkinDrawState::default())
+            .expect("single frame starts at its keyframe time");
+        assert_eq!((frame.x, frame.y, frame.w, frame.h), (2, 3, 10, 20));
+
+        let disappearing: SkinDestinationDef = serde_json::from_str(
+            r#"{ "id": "flash", "loop": -1, "dst": [{ "time": 1000, "x": 2, "y": 3, "w": 10, "h": 20 }] }"#,
+        )
+        .unwrap();
+        assert!(
+            resolve_destination_frame(&disappearing, 1001, &[], SkinDrawState::default()).is_none()
         );
     }
 
