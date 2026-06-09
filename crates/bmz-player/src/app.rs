@@ -272,6 +272,10 @@ struct WinitApp {
     select_mode_filter: SelectModeFilter,
     select_sort: SelectSort,
     select_keys: SelectKeyBindings,
+    select_hold_move: Option<SelectMove>,
+    select_hold_started_at: Option<Instant>,
+    select_hold_last_trigger_at: Option<Instant>,
+    select_hold_control: Option<String>,
     smoke_exit_after_frames: Option<u32>,
     smoke_exit_after_result_frames: Option<u32>,
     smoke_exit_on_result: bool,
@@ -747,6 +751,10 @@ const SELECT_PREVIEW_START_DELAY: Duration = Duration::from_millis(400);
 const LANE_COVER_STEP: f32 = 0.001;
 const LANE_COVER_REPEAT_STEP: f32 = 0.01;
 const SKIN_RELOAD_DEBOUNCE: Duration = Duration::from_millis(300);
+/// 選曲画面でキー長押しを始めてからリピート移動を開始するまでの遅延 (ms)。
+const SELECT_HOLD_INITIAL_DELAY_MS: u64 = 300;
+/// 選曲画面のキーリピート移動の間隔 (ms)。
+const SELECT_HOLD_REPEAT_INTERVAL_MS: u64 = 50;
 
 struct PendingSkinResult {
     generation: u64,
@@ -1380,6 +1388,10 @@ impl WinitApp {
             select_mode_filter,
             select_sort,
             select_keys,
+            select_hold_move: None,
+            select_hold_started_at: None,
+            select_hold_last_trigger_at: None,
+            select_hold_control: None,
             smoke_exit_after_frames: options.smoke_exit_after_frames,
             smoke_exit_after_result_frames: options.smoke_exit_after_result_frames,
             smoke_exit_on_result: options.smoke_exit_on_result,
@@ -3261,13 +3273,44 @@ impl WinitApp {
             return;
         }
 
-        if let Some(action) =
-            select_action(event.physical_key, event.state, event.repeat, &self.select_keys)
-        {
-            match action {
-                SelectAction::EnterOrPlay => self.enter_or_play_selected(),
-                SelectAction::ExitFolder => self.exit_folder(),
-                SelectAction::Move(select_move) => self.move_selection(select_move),
+        if matches!(self.view_state(), AppViewState::Select) {
+            if event.state == ElementState::Pressed && !event.repeat {
+                if let Some(action) = select_action(
+                    event.physical_key,
+                    event.state,
+                    event.repeat,
+                    &self.select_keys,
+                ) {
+                    match action {
+                        SelectAction::EnterOrPlay => self.enter_or_play_selected(),
+                        SelectAction::ExitFolder => self.exit_folder(),
+                        SelectAction::Move(select_move) => {
+                            self.move_selection(select_move);
+                            if matches!(
+                                select_move,
+                                SelectMove::Previous
+                                    | SelectMove::Next
+                                    | SelectMove::PagePrevious
+                                    | SelectMove::PageNext
+                            ) {
+                                let control_name = physical_key_name(event.physical_key);
+                                self.select_hold_move = Some(select_move);
+                                self.select_hold_started_at = Some(Instant::now());
+                                self.select_hold_last_trigger_at = Some(Instant::now());
+                                self.select_hold_control = control_name;
+                            }
+                        }
+                    }
+                }
+            } else if event.state == ElementState::Released {
+                if let Some(control_name) = physical_key_name(event.physical_key) {
+                    if self.select_hold_control.as_ref() == Some(&control_name) {
+                        self.select_hold_move = None;
+                        self.select_hold_started_at = None;
+                        self.select_hold_last_trigger_at = None;
+                        self.select_hold_control = None;
+                    }
+                }
             }
         }
     }
@@ -3483,32 +3526,60 @@ impl WinitApp {
             return;
         }
 
-        // セレクト画面: 固定ナビゲーション + プロファイルバインド
-        let action = match button {
-            "DPadUp" => Some(SelectAction::Move(SelectMove::Previous)),
-            "DPadDown" => Some(SelectAction::Move(SelectMove::Next)),
-            "DPadLeft" | "Select" => Some(SelectAction::ExitFolder),
-            "DPadRight" | "Button1" => Some(SelectAction::EnterOrPlay),
-            _ => {
-                if self.select_keys.is_scratch_up(button) {
-                    Some(SelectAction::Move(SelectMove::Previous))
-                } else if self.select_keys.is_scratch_down(button) {
-                    Some(SelectAction::Move(SelectMove::Next))
-                } else if self.select_keys.is_enter(button) {
-                    Some(SelectAction::EnterOrPlay)
-                } else if self.select_keys.is_back(button) {
-                    Some(SelectAction::ExitFolder)
-                } else {
-                    None
-                }
-            }
-        };
+        if matches!(self.view_state(), AppViewState::Select) {
+            if pressed {
+                let action = match button {
+                    "DPadUp" => Some(SelectAction::Move(SelectMove::Previous)),
+                    "DPadDown" => Some(SelectAction::Move(SelectMove::Next)),
+                    "DPadLeft" | "Select" => Some(SelectAction::ExitFolder),
+                    "DPadRight" | "Button1" => Some(SelectAction::EnterOrPlay),
+                    _ => {
+                        if self.select_keys.is_scratch_up(button) {
+                            if self.select_keys.is_scratch_down(button) {
+                                Some(SelectAction::Move(SelectMove::Next))
+                            } else {
+                                Some(SelectAction::Move(SelectMove::Previous))
+                            }
+                        } else if self.select_keys.is_scratch_down(button) {
+                            Some(SelectAction::Move(SelectMove::Next))
+                        } else if self.select_keys.is_enter(button) {
+                            Some(SelectAction::EnterOrPlay)
+                        } else if self.select_keys.is_back(button) {
+                            Some(SelectAction::ExitFolder)
+                        } else {
+                            None
+                        }
+                    }
+                };
 
-        if let Some(action) = action {
-            match action {
-                SelectAction::EnterOrPlay => self.enter_or_play_selected(),
-                SelectAction::ExitFolder => self.exit_folder(),
-                SelectAction::Move(m) => self.move_selection(m),
+                if let Some(action) = action {
+                    match action {
+                        SelectAction::EnterOrPlay => self.enter_or_play_selected(),
+                        SelectAction::ExitFolder => self.exit_folder(),
+                        SelectAction::Move(select_move) => {
+                            self.move_selection(select_move);
+                            if matches!(
+                                select_move,
+                                SelectMove::Previous
+                                    | SelectMove::Next
+                                    | SelectMove::PagePrevious
+                                    | SelectMove::PageNext
+                            ) {
+                                self.select_hold_move = Some(select_move);
+                                self.select_hold_started_at = Some(Instant::now());
+                                self.select_hold_last_trigger_at = Some(Instant::now());
+                                self.select_hold_control = Some(button.to_string());
+                            }
+                        }
+                    }
+                }
+            } else {
+                if self.select_hold_control.as_ref().map(|s| s.as_str()) == Some(button) {
+                    self.select_hold_move = None;
+                    self.select_hold_started_at = None;
+                    self.select_hold_last_trigger_at = None;
+                    self.select_hold_control = None;
+                }
             }
         }
     }
@@ -3823,6 +3894,33 @@ impl WinitApp {
         if self.selected_index != previous_index {
             self.select_bar_started_at = Instant::now();
             self.play_system_sound(crate::system_sound::SoundType::Scratch);
+        }
+    }
+
+    fn advance_select_hold_move(&mut self) {
+        if !matches!(self.view_state(), AppViewState::Select) {
+            self.select_hold_move = None;
+            self.select_hold_started_at = None;
+            self.select_hold_last_trigger_at = None;
+            self.select_hold_control = None;
+            return;
+        }
+        let (Some(select_move), Some(started_at), Some(last_trigger_at)) = (
+            self.select_hold_move,
+            self.select_hold_started_at,
+            self.select_hold_last_trigger_at,
+        ) else {
+            return;
+        };
+        let now = Instant::now();
+        let elapsed = now.duration_since(started_at);
+        if elapsed < Duration::from_millis(SELECT_HOLD_INITIAL_DELAY_MS) {
+            return;
+        }
+        let since_last = now.duration_since(last_trigger_at);
+        if since_last >= Duration::from_millis(SELECT_HOLD_REPEAT_INTERVAL_MS) {
+            self.select_hold_last_trigger_at = Some(now);
+            self.move_selection(select_move);
         }
     }
 
@@ -8190,6 +8288,7 @@ impl ApplicationHandler for WinitApp {
                 }
                 self.limit_frame_rate();
                 self.poll_gamepad_events();
+                self.advance_select_hold_move();
                 self.drain_pending_skins();
                 self.poll_play_preload();
                 self.poll_pending_table_fetch();
@@ -9636,6 +9735,14 @@ fn select_action(
         Some(SelectAction::EnterOrPlay)
     } else if bindings.is_back(&control) {
         Some(SelectAction::ExitFolder)
+    } else if bindings.is_scratch_up(&control) {
+        if bindings.is_scratch_down(&control) {
+            Some(SelectAction::Move(SelectMove::Next))
+        } else {
+            Some(SelectAction::Move(SelectMove::Previous))
+        }
+    } else if bindings.is_scratch_down(&control) {
+        Some(SelectAction::Move(SelectMove::Next))
     } else {
         None
     }
