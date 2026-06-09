@@ -1609,6 +1609,14 @@ fn build_profile_settings_panel(
                                 judge_algorithm_label(JudgeAlgorithmConfig::Lowest),
                             );
                         });
+                    ui.add(
+                        egui::Slider::new(
+                            &mut profile.judge.fast_slow_display_threshold_ms,
+                            0..=50,
+                        )
+                        .text("FAST/SLOW 表示閾値 (ms)"),
+                    );
+                    ui.label("0 = 常時表示。|差分| がこれ未満の判定は FAST/SLOW を表示しません。");
                 });
 
                 egui::CollapsingHeader::new("プレイ").show(ui, |ui| {
@@ -1772,6 +1780,13 @@ fn build_profile_settings_panel(
                     ui.add(
                         egui::Slider::new(&mut profile.play.misslayer_duration_ms, 0..=5000)
                             .text("ミスレイヤー表示時間 (ms)"),
+                    );
+                    ui.add(
+                        egui::Slider::new(
+                            &mut profile.play.play_exit_hold_ms,
+                            100..=5000,
+                        )
+                        .text("E1+E2 強制終了長押し時間 (ms)"),
                     );
                 });
 

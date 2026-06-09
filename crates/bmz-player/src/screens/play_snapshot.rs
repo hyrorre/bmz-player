@@ -642,12 +642,30 @@ fn display_judgement(event: &JudgementEvent, combo: u32) -> DisplayJudgement {
     DisplayJudgement {
         lane: event.lane,
         judge: event.judge,
-        side: event.side,
+        side: Some(event.side),
         text: format!("{}{}", judge_text(event.judge), side_suffix(event.side)),
         combo: if event.judge == Judge::EmptyPoor { 0 } else { combo },
         delta_us: event.delta.0,
         time: event.time,
         is_miss: event.judge == Judge::Poor,
+    }
+}
+
+/// `threshold_ms > 0` のとき、|delta| < threshold_ms の判定から FAST/SLOW 表示を除去する。
+pub fn apply_fast_slow_display_threshold(snapshot: &mut RenderSnapshot, threshold_ms: u32) {
+    if threshold_ms == 0 {
+        return;
+    }
+    for judgement in &mut snapshot.recent_judgements {
+        if judgement.delta_us.unsigned_abs() / 1_000 < threshold_ms as u64 {
+            judgement.side = None;
+            let base = judgement
+                .text
+                .strip_suffix(" FAST")
+                .or_else(|| judgement.text.strip_suffix(" SLOW"))
+                .unwrap_or(&judgement.text);
+            judgement.text = base.to_string();
+        }
     }
 }
 

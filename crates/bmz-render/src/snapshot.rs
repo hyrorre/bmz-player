@@ -347,7 +347,8 @@ pub struct VisibleLongNote {
 pub struct DisplayJudgement {
     pub lane: Lane,
     pub judge: Judge,
-    pub side: TimingSide,
+    /// `None` = FAST/SLOW 表示なし（閾値以内の JUST 判定）。
+    pub side: Option<TimingSide>,
     pub text: String,
     pub combo: u32,
     pub delta_us: i64,

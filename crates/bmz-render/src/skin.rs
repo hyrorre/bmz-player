@@ -1015,7 +1015,7 @@ pub fn build_judge_region_state(
         );
         judge_index[region] = Some(judge_image_index_for_judge(judgement.judge));
         judge_combo[region] = judgement.combo;
-        judge_timing_sign[region] = Some(match judgement.side {
+        judge_timing_sign[region] = judgement.side.map(|side| match side {
             TimingSide::Fast => 1,
             TimingSide::Slow => -1,
         });
