@@ -83,6 +83,10 @@ pub struct PlayDefaultsConfig {
     /// E1+E2 長押し強制終了までの時間(ms)。beatoraja 既定 1000ms。
     #[serde(default = "default_play_exit_hold_ms")]
     pub play_exit_hold_ms: u32,
+    /// LN モードでも終端 (tail) キャップを描画するか。
+    /// beatoraja は LN モードで tail キャップを描画しないため既定 OFF。
+    #[serde(default)]
+    pub show_ln_tail_cap: bool,
 }
 
 pub fn default_play_exit_hold_ms() -> u32 {
@@ -680,6 +684,7 @@ impl ProfileConfig {
                 bga_expand: default_bga_expand(),
                 misslayer_duration_ms: default_misslayer_duration_ms(),
                 play_exit_hold_ms: default_play_exit_hold_ms(),
+                show_ln_tail_cap: false,
             },
             judge: JudgeConfig {
                 input_offset_us: 0,

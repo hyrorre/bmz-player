@@ -226,6 +226,7 @@ pub fn build_render_snapshot_with_target_and_bga_frames(
                 ((render_now.0 - t.0) / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32
             })
         }),
+        show_ln_tail_cap: session.show_ln_tail_cap,
         // beatoraja の TIMER_HOLD: LN ホールド中 (processing != null) のみアクティブ。
         hold_ms: std::array::from_fn(|lane_index| {
             session.judge.lanes[lane_index].active_long.map(|active| {

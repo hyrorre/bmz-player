@@ -33,6 +33,7 @@ pub enum SettingsEntryId {
     BgaExpand,
     AutoPlay,
     MisslayerDurationMs,
+    ShowLnTailCap,
     Hispeed,
     HispeedMode,
     Sudden,
@@ -76,6 +77,7 @@ impl SettingsEntryId {
         Self::BgaExpand,
         Self::AutoPlay,
         Self::MisslayerDurationMs,
+        Self::ShowLnTailCap,
     ];
 
     pub const DISPLAY_ENTRIES: &'static [Self] = &[
@@ -122,6 +124,7 @@ impl SettingsEntryId {
             Self::BgaExpand => "BGA FIT",
             Self::AutoPlay => "AUTO PLAY",
             Self::MisslayerDurationMs => "MISSLAYER",
+            Self::ShowLnTailCap => "LN TAIL CAP",
             Self::Hispeed => "HISPEED",
             Self::HispeedMode => "HS MODE",
             Self::Sudden => "SUDDEN+",
@@ -180,6 +183,7 @@ pub fn format_settings_value(profile: &ProfileConfig, id: SettingsEntryId) -> St
         SettingsEntryId::BgaMode => format_bga_mode(profile.play.bga),
         SettingsEntryId::BgaExpand => format_bga_expand(profile.play.bga_expand),
         SettingsEntryId::AutoPlay => format_bool_on_off(profile.play.auto_play),
+        SettingsEntryId::ShowLnTailCap => format_bool_on_off(profile.play.show_ln_tail_cap),
         SettingsEntryId::MisslayerDurationMs => {
             format!("{} ms", profile.play.misslayer_duration_ms)
         }
@@ -286,6 +290,14 @@ pub fn adjust_settings_value(profile: &mut ProfileConfig, id: SettingsEntryId, d
         }
         SettingsEntryId::MisslayerDurationMs => {
             adjust_u32(&mut profile.play.misslayer_duration_ms, delta, 0, 5000)
+        }
+        SettingsEntryId::ShowLnTailCap => {
+            if delta == 0 {
+                false
+            } else {
+                profile.play.show_ln_tail_cap = !profile.play.show_ln_tail_cap;
+                true
+            }
         }
         SettingsEntryId::Hispeed => adjust_hispeed(&mut profile.lane.hispeed, delta),
         SettingsEntryId::HispeedMode => {

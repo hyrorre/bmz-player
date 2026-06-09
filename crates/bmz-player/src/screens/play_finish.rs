@@ -715,6 +715,7 @@ mod tests {
             bga_enabled: true,
             poor_bga_duration_us: 500_000,
             bga_stretch: 1,
+            show_ln_tail_cap: false,
             hsfix_index: 0,
             input_timestamp_anchor: None,
             pending_mine_hits: Vec::new(),

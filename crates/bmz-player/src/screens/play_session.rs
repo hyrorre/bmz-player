@@ -261,6 +261,7 @@ pub fn build_game_session_with_input_backend(
         bga_enabled: bga_enabled_from_profile(profile, autoplay_enabled, is_replay),
         poor_bga_duration_us: poor_bga_duration_us_from_profile(profile),
         bga_stretch: bga_stretch_from_profile(profile),
+        show_ln_tail_cap: profile.play.show_ln_tail_cap,
         hsfix_index: 0,
         input_timestamp_anchor: None,
         pending_mine_hits: Vec::new(),

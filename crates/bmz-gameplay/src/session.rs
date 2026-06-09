@@ -139,6 +139,8 @@ pub struct GameSession {
     pub bga_enabled: bool,
     pub poor_bga_duration_us: i64,
     pub bga_stretch: i32,
+    /// LN モードでも終端 (tail) キャップを描画するか。既定 OFF (beatoraja 準拠)。
+    pub show_ln_tail_cap: bool,
     /// beatoraja `event_index(BUTTON_HSFIX=55)`。
     pub hsfix_index: i32,
     pub input_timestamp_anchor: Option<InputTimestampAnchor>,
@@ -1031,6 +1033,7 @@ mod tests {
             bga_enabled: true,
             poor_bga_duration_us: 500_000,
             bga_stretch: 1,
+            show_ln_tail_cap: false,
             hsfix_index: 0,
             input_timestamp_anchor: None,
             pending_mine_hits: Vec::new(),

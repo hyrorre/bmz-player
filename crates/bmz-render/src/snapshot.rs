@@ -255,6 +255,8 @@ pub struct RenderSnapshot {
     /// 各レーンの LN ホールド開始からの経過 ms(ホールド中のみ Some)。
     /// beatoraja の TIMER_HOLD (skin timer 70..=77 / 80..=87) に渡る。
     pub hold_ms: [Option<i32>; LANE_COUNT],
+    /// LN モードでも終端 (tail) キャップを描画するか。既定 OFF (beatoraja 準拠)。
+    pub show_ln_tail_cap: bool,
     /// 右下に常時表示するオーバーレイ文字列。
     pub overlay: OverlaySnapshot,
     /// `#BACKBMP` テクスチャがロード済みなら true (BGA より下に描画)。

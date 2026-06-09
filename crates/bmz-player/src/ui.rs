@@ -1800,6 +1800,7 @@ fn build_profile_settings_panel(
                             }
                         });
                     ui.checkbox(&mut profile.play.auto_play, "オートプレイ");
+                    ui.checkbox(&mut profile.play.show_ln_tail_cap, "LN終端キャップを表示");
                     ui.add(
                         egui::Slider::new(&mut profile.play.misslayer_duration_ms, 0..=5000)
                             .text("ミスレイヤー表示時間 (ms)"),

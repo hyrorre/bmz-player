@@ -1028,6 +1028,7 @@ fn plan_play(
                 // beatoraja の drawLongNote 同様、キャップは胴体側で描画する。
                 // head キャップは押下中も判定ライン (head_y=0) に留まる。
                 // LN モードは head キャップのみ、CN/HCN は tail キャップも描画する。
+                // show_ln_tail_cap 有効時は LN モードでも tail キャップを描画する。
                 let head_rect = Rect {
                     x: x + lane_width * 0.08,
                     y: note_rect_y(board, snapshot.lift, body.head_y),
@@ -1035,7 +1036,9 @@ fn plan_play(
                     height: NOTE_HEIGHT,
                 };
                 push_ln_start_skin(skin_manifest, &mut commands, lane, head_rect);
-                if body.mode != LongNoteMode::Ln && body.tail_y < 1.0 {
+                if (body.mode != LongNoteMode::Ln || snapshot.show_ln_tail_cap)
+                    && body.tail_y < 1.0
+                {
                     let tail_rect = Rect {
                         x: x + lane_width * 0.08,
                         y: note_rect_y(board, snapshot.lift, body.tail_y),
@@ -1160,6 +1163,7 @@ fn plan_play(
             // beatoraja の drawLongNote 同様、キャップは胴体の上に重ねて描画する。
             // head キャップは押下中も判定ライン (head_y=0) に留まり描画され続ける。
             // LN モードは head キャップのみ、CN/HCN は tail キャップも描画する。
+            // show_ln_tail_cap 有効時は LN モードでも tail キャップを描画する。
             let note_height =
                 skin.document_note_height(body.lane, key_mode).unwrap_or(NOTE_HEIGHT);
             if let Some(rect) = skin.note_rect_for_progress(
@@ -1169,7 +1173,7 @@ fn plan_play(
                 let item = skin.apply_play_skin_global_offset_to_item(item, skin_state);
                 append_skin_render_items(&mut commands, &[item]);
             }
-            if body.mode != LongNoteMode::Ln
+            if (body.mode != LongNoteMode::Ln || snapshot.show_ln_tail_cap)
                 && body.tail_y < 1.0
                 && let Some(rect) = skin.note_rect_for_progress(
                     body.lane, key_mode, body.tail_y, note_height, skin_state,
