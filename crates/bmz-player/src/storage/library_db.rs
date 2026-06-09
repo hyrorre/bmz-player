@@ -1924,12 +1924,11 @@ mod tests {
         }
     }
 
-    fn timing_event(time_us: i64, kind: bmz_chart::model::TimingEventKind) -> bmz_chart::model::TimingEvent {
-        bmz_chart::model::TimingEvent {
-            tick: ChartTick(0),
-            time: TimeUs(time_us),
-            kind,
-        }
+    fn timing_event(
+        time_us: i64,
+        kind: bmz_chart::model::TimingEventKind,
+    ) -> bmz_chart::model::TimingEvent {
+        bmz_chart::model::TimingEvent { tick: ChartTick(0), time: TimeUs(time_us), kind }
     }
 
     /// STOP 後の resume エントリが正しく追加されるか確認。
@@ -1939,10 +1938,8 @@ mod tests {
         use bmz_chart::model::TimingEventKind;
         let mut c = chart("stop_test");
         // BPM=128 で始まり、2 秒目に 0.5 秒の STOP
-        c.timing_events.push(timing_event(
-            2_000_000,
-            TimingEventKind::Stop { duration_us: 500_000 },
-        ));
+        c.timing_events
+            .push(timing_event(2_000_000, TimingEventKind::Stop { duration_us: 500_000 }));
         let changes = chart_speed_changes(&c);
         // 期待: [{128, 0}, {0, 2000}, {128, 2500}, {128, 10000}]
         // STOP 直後の resume (speed=128 at 2500ms) が必須
@@ -1950,7 +1947,8 @@ mod tests {
         assert!(resume.is_some(), "resume entry after stop must exist: {changes:?}");
         // 末尾エントリが speed=0 になってはいけない
         assert_ne!(
-            changes.last().unwrap().speed, 0.0,
+            changes.last().unwrap().speed,
+            0.0,
             "last entry must not be stop speed: {changes:?}"
         );
     }
@@ -1961,15 +1959,10 @@ mod tests {
         use bmz_chart::model::TimingEventKind;
         let mut c = chart("stop_bpm_change");
         // 1 秒目: STOP 2 秒間 (終了 3 秒)
-        c.timing_events.push(timing_event(
-            1_000_000,
-            TimingEventKind::Stop { duration_us: 2_000_000 },
-        ));
+        c.timing_events
+            .push(timing_event(1_000_000, TimingEventKind::Stop { duration_us: 2_000_000 }));
         // 2 秒目 (STOP 中): BPM 200 に変化
-        c.timing_events.push(timing_event(
-            2_000_000,
-            TimingEventKind::BpmChange { bpm: 200.0 },
-        ));
+        c.timing_events.push(timing_event(2_000_000, TimingEventKind::BpmChange { bpm: 200.0 }));
         let changes = chart_speed_changes(&c);
         // resume は STOP 終了 (3 秒) に BPM=200 で出るはず
         let resume = changes.iter().find(|c| c.time_ms == 3_000);

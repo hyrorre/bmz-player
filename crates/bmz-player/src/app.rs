@@ -3275,12 +3275,9 @@ impl WinitApp {
 
         if matches!(self.view_state(), AppViewState::Select) {
             if event.state == ElementState::Pressed && !event.repeat {
-                if let Some(action) = select_action(
-                    event.physical_key,
-                    event.state,
-                    event.repeat,
-                    &self.select_keys,
-                ) {
+                if let Some(action) =
+                    select_action(event.physical_key, event.state, event.repeat, &self.select_keys)
+                {
                     match action {
                         SelectAction::EnterOrPlay => self.enter_or_play_selected(),
                         SelectAction::ExitFolder => self.exit_folder(),
@@ -3905,11 +3902,9 @@ impl WinitApp {
             self.select_hold_control = None;
             return;
         }
-        let (Some(select_move), Some(started_at), Some(last_trigger_at)) = (
-            self.select_hold_move,
-            self.select_hold_started_at,
-            self.select_hold_last_trigger_at,
-        ) else {
+        let (Some(select_move), Some(started_at), Some(last_trigger_at)) =
+            (self.select_hold_move, self.select_hold_started_at, self.select_hold_last_trigger_at)
+        else {
             return;
         };
         let now = Instant::now();
@@ -8280,7 +8275,9 @@ impl ApplicationHandler for WinitApp {
                 self.focused = focused;
             }
             WindowEvent::RedrawRequested => {
-                if self.cursor_visible && self.last_cursor_action_at.elapsed() >= Duration::from_secs(2) {
+                if self.cursor_visible
+                    && self.last_cursor_action_at.elapsed() >= Duration::from_secs(2)
+                {
                     if let Some(window) = &self.window {
                         window.set_cursor_visible(false);
                     }
@@ -11576,12 +11573,7 @@ mod tests {
         assert!(!play_exit_hold_elapsed(held_since, start + default_hold / 2, default_hold));
         assert!(play_exit_hold_elapsed(held_since, start + default_hold, default_hold));
 
-        update_play_exit_hold_started_at(
-            &mut held_since,
-            false,
-            true,
-            start + default_hold,
-        );
+        update_play_exit_hold_started_at(&mut held_since, false, true, start + default_hold);
         assert!(held_since.is_none());
     }
 

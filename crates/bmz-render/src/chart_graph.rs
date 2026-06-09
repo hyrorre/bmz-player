@@ -301,7 +301,8 @@ mod tests {
             "stop end_ratio should be at stop_time + duration"
         );
         // STOP 直前のセグメントは is_stop=false でなければならない。
-        let pre_stop = segments.iter().find(|s| !s.is_stop && s.end_ratio <= stop_seg.start_ratio + 1e-4);
+        let pre_stop =
+            segments.iter().find(|s| !s.is_stop && s.end_ratio <= stop_seg.start_ratio + 1e-4);
         assert!(pre_stop.is_some_and(|s| !s.is_stop), "pre-stop segment must not be a stop");
     }
 }

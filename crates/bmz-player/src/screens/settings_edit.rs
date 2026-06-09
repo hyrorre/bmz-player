@@ -205,9 +205,7 @@ impl SettingsEditSession {
             SettingsEntryId::MisslayerDurationMs => {
                 SettingsBaseline::U32(profile.play.misslayer_duration_ms)
             }
-            SettingsEntryId::ShowLnTailCap => {
-                SettingsBaseline::Bool(profile.play.show_ln_tail_cap)
-            }
+            SettingsEntryId::ShowLnTailCap => SettingsBaseline::Bool(profile.play.show_ln_tail_cap),
             SettingsEntryId::Hispeed => SettingsBaseline::F32(profile.lane.hispeed),
             SettingsEntryId::HispeedMode => {
                 SettingsBaseline::HispeedMode(profile.lane.hispeed_mode)

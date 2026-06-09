@@ -1561,7 +1561,13 @@ impl SkinContext {
         is_pressing: bool,
     ) -> Option<SkinRenderItem> {
         let document = self.document.as_ref()?;
-        document.note_long_body_render_item(lane, key_mode, rect, is_pressing, &self.document_sources)
+        document.note_long_body_render_item(
+            lane,
+            key_mode,
+            rect,
+            is_pressing,
+            &self.document_sources,
+        )
     }
 
     /// Mine ノート（`note.mine`）を指定矩形に描画する。スキン側に定義が無ければ
@@ -4193,9 +4199,7 @@ impl SkinDocument {
                 ));
                 continue;
             }
-            if let Some(bpm_graph) =
-                self.bpmgraph.iter().find(|graph| graph.id == destination.id)
-            {
+            if let Some(bpm_graph) = self.bpmgraph.iter().find(|graph| graph.id == destination.id) {
                 items.extend(self.select_bpmgraph_row_render_items(
                     row,
                     bpm_graph,
@@ -4477,10 +4481,7 @@ impl SkinDocument {
     ) -> Option<SkinRenderItem> {
         let note = self.note.as_ref()?;
         let index = beatoraja_note_index(lane, key_mode);
-        let image_id = note
-            .lnstart
-            .get(index)
-            .or_else(|| note.note.get(index))?;
+        let image_id = note.lnstart.get(index).or_else(|| note.note.get(index))?;
         self.note_part_render_item(image_id, rect, sources)
     }
 
@@ -4494,10 +4495,7 @@ impl SkinDocument {
     ) -> Option<SkinRenderItem> {
         let note = self.note.as_ref()?;
         let index = beatoraja_note_index(lane, key_mode);
-        let image_id = note
-            .lnend
-            .get(index)
-            .or_else(|| note.note.get(index))?;
+        let image_id = note.lnend.get(index).or_else(|| note.note.get(index))?;
         self.note_part_render_item(image_id, rect, sources)
     }
 
@@ -5863,9 +5861,8 @@ impl SkinDocument {
             ((r.log10() - min_log) / log_range).clamp(0.0, 1.0)
         };
         // ratio=0 → top (rect.y + rect.height)、ratio=1 → bottom (rect.y)
-        let ratio_to_y = |ratio: f32| -> f32 {
-            rect.y + rect.height * (1.0 - ratio) - line_h / 2.0
-        };
+        let ratio_to_y =
+            |ratio: f32| -> f32 { rect.y + rect.height * (1.0 - ratio) - line_h / 2.0 };
         let mut items = Vec::new();
         let mut prev_ratio: Option<f32> = None;
         for segment in segments {

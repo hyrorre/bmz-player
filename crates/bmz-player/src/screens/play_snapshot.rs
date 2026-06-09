@@ -688,8 +688,7 @@ pub fn apply_fast_slow_display_filter(
         let suppress = match scope {
             FastSlowDisplayScope::Auto => judgement.judge == Judge::PGreat,
             FastSlowDisplayScope::ThresholdMs => {
-                threshold_ms > 0
-                    && judgement.delta_us.unsigned_abs() / 1_000 < threshold_ms as u64
+                threshold_ms > 0 && judgement.delta_us.unsigned_abs() / 1_000 < threshold_ms as u64
             }
         };
         if suppress {

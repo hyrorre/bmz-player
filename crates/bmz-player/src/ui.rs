@@ -21,11 +21,10 @@ use crate::config::app_config::{
     InputBackendKind, LogLevel, PresentModeConfig, RendererBackend, WindowMode,
 };
 use crate::config::profile_config::{
-    AssistOptionConfig, BgaExpandConfig, BgaModeConfig, FastSlowDisplayScope,
-    GaugeAutoShiftConfig, GaugeTypeConfig, HispeedModeConfig, IrProviderConfig,
-    IrProviderRoleConfig, IrSendPolicyConfig, JudgeAlgorithmConfig, LaneEffectConfig,
-    ProfileConfig, RandomOptionConfig, ReplaySlotRule, ScratchInputMode, SkinConfig,
-    SkinHistoryEntryConfig, SkinOffsetConfig, TargetOptionConfig,
+    AssistOptionConfig, BgaExpandConfig, BgaModeConfig, FastSlowDisplayScope, GaugeAutoShiftConfig,
+    GaugeTypeConfig, HispeedModeConfig, IrProviderConfig, IrProviderRoleConfig, IrSendPolicyConfig,
+    JudgeAlgorithmConfig, LaneEffectConfig, ProfileConfig, RandomOptionConfig, ReplaySlotRule,
+    ScratchInputMode, SkinConfig, SkinHistoryEntryConfig, SkinOffsetConfig, TargetOptionConfig,
 };
 use crate::ln_policy::LnPolicySetting;
 use crate::practice_ui::{PracticePanelContext, build_practice_panel};
@@ -1611,9 +1610,7 @@ fn build_profile_settings_panel(
                             );
                         });
                     egui::ComboBox::from_label("FAST/SLOW 表示モード")
-                        .selected_text(fast_slow_scope_label(
-                            profile.judge.fast_slow_display_scope,
-                        ))
+                        .selected_text(fast_slow_scope_label(profile.judge.fast_slow_display_scope))
                         .show_ui(ui, |ui| {
                             ui.selectable_value(
                                 &mut profile.judge.fast_slow_display_scope,
@@ -1626,9 +1623,7 @@ fn build_profile_settings_panel(
                                 fast_slow_scope_label(FastSlowDisplayScope::ThresholdMs),
                             );
                         });
-                    if profile.judge.fast_slow_display_scope
-                        == FastSlowDisplayScope::ThresholdMs
-                    {
+                    if profile.judge.fast_slow_display_scope == FastSlowDisplayScope::ThresholdMs {
                         ui.add(
                             egui::Slider::new(
                                 &mut profile.judge.fast_slow_display_threshold_ms,
@@ -1806,11 +1801,8 @@ fn build_profile_settings_panel(
                             .text("ミスレイヤー表示時間 (ms)"),
                     );
                     ui.add(
-                        egui::Slider::new(
-                            &mut profile.play.play_exit_hold_ms,
-                            100..=5000,
-                        )
-                        .text("E1+E2 強制終了長押し時間 (ms)"),
+                        egui::Slider::new(&mut profile.play.play_exit_hold_ms, 100..=5000)
+                            .text("E1+E2 強制終了長押し時間 (ms)"),
                     );
                 });
 

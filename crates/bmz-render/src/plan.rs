@@ -8,7 +8,8 @@ use crate::scene::{AppSceneSnapshot, SelectRowKind, SelectRowSnapshot, SelectSna
 use crate::skin::{
     Animation, BlendMode, NumberSlot, SkinContext, SkinDefinition, SkinImageManifest, SkinManifest,
     SkinObject, SkinObjectId, SkinPhase, SkinPlacement, SkinRenderContext, SkinRenderItem,
-    SkinSource, SkinTextState, SkinTextureId, TextSlot, append_skin_render_items, judge_image_index,
+    SkinSource, SkinTextState, SkinTextureId, TextSlot, append_skin_render_items,
+    judge_image_index,
 };
 use crate::skin_offset::{SKIN_OFFSET_BAR_LINE, SkinOffsetValues};
 use crate::snapshot::{
@@ -1036,8 +1037,7 @@ fn plan_play(
                     height: NOTE_HEIGHT,
                 };
                 push_ln_start_skin(skin_manifest, &mut commands, lane, head_rect);
-                if (body.mode != LongNoteMode::Ln || snapshot.show_ln_tail_cap)
-                    && body.tail_y < 1.0
+                if (body.mode != LongNoteMode::Ln || snapshot.show_ln_tail_cap) && body.tail_y < 1.0
                 {
                     let tail_rect = Rect {
                         x: x + lane_width * 0.08,
@@ -1164,10 +1164,13 @@ fn plan_play(
             // head キャップは押下中も判定ライン (head_y=0) に留まり描画され続ける。
             // LN モードは head キャップのみ、CN/HCN は tail キャップも描画する。
             // show_ln_tail_cap 有効時は LN モードでも tail キャップを描画する。
-            let note_height =
-                skin.document_note_height(body.lane, key_mode).unwrap_or(NOTE_HEIGHT);
+            let note_height = skin.document_note_height(body.lane, key_mode).unwrap_or(NOTE_HEIGHT);
             if let Some(rect) = skin.note_rect_for_progress(
-                body.lane, key_mode, body.head_y, note_height, skin_state,
+                body.lane,
+                key_mode,
+                body.head_y,
+                note_height,
+                skin_state,
             ) && let Some(item) = skin.document_ln_start_item(body.lane, key_mode, rect)
             {
                 let item = skin.apply_play_skin_global_offset_to_item(item, skin_state);
@@ -1176,7 +1179,11 @@ fn plan_play(
             if (body.mode != LongNoteMode::Ln || snapshot.show_ln_tail_cap)
                 && body.tail_y < 1.0
                 && let Some(rect) = skin.note_rect_for_progress(
-                    body.lane, key_mode, body.tail_y, note_height, skin_state,
+                    body.lane,
+                    key_mode,
+                    body.tail_y,
+                    note_height,
+                    skin_state,
                 )
                 && let Some(item) = skin.document_ln_end_item(body.lane, key_mode, rect)
             {
@@ -1195,9 +1202,7 @@ fn plan_play(
                         NoteVisualKind::LnStart => {
                             skin.document_ln_start_item(lane, key_mode, rect)
                         }
-                        NoteVisualKind::LnEnd => {
-                            skin.document_ln_end_item(lane, key_mode, rect)
-                        }
+                        NoteVisualKind::LnEnd => skin.document_ln_end_item(lane, key_mode, rect),
                         NoteVisualKind::Tap => skin.document_note_item(lane, key_mode, rect),
                     };
                     if let Some(item) = item {
