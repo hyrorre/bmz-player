@@ -518,6 +518,7 @@ mod tests {
                 time: TimeUs(1_200_000),
             }],
             mine_hits: Vec::new(),
+            keysound_volumes: Vec::new(),
             state: PlayState::Playing,
         };
         let mut collector = ResultGraphCollector::default();
@@ -529,6 +530,7 @@ mod tests {
             render_snapshot,
             judgements: Vec::new(),
             mine_hits: Vec::new(),
+            keysound_volumes: Vec::new(),
             state: PlayState::Playing,
         });
 
@@ -557,6 +559,7 @@ mod tests {
                 },
                 judgements: Vec::new(),
                 mine_hits: Vec::new(),
+                keysound_volumes: Vec::new(),
                 state: PlayState::Playing,
             });
         }

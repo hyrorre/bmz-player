@@ -5,7 +5,7 @@ use bmz_audio::clock::AudioClock;
 use bmz_audio::queue::{AudioScheduler, ScheduledSound};
 use bmz_chart::model::{LongNoteMode, PlayableChart};
 use bmz_chart::timing::TimingMap;
-use bmz_core::ids::NoteId;
+use bmz_core::ids::{NoteId, SoundId};
 use bmz_core::input::{InputEvent, InputKind, InputSource};
 use bmz_core::judge::{Judge, TimingSide};
 use bmz_core::lane::LANE_COUNT;
@@ -144,6 +144,11 @@ pub struct GameSession {
     /// HCN passing 中のレーン状態。beatoraja の TIMER_HCN_ACTIVE / TIMER_HCN_DAMAGE 相当。
     /// HCN の区間内 (始端ノート判定済み) のレーンのみ Some。
     pub lane_hcn_timer: [Option<HcnLaneTimer>; LANE_COUNT],
+    /// HCN キー音のミュート状態。終端を BAD 以下で判定済みの passing HCN のみ Some。
+    pub lane_hcn_keysound_muted: [Option<bool>; LANE_COUNT],
+    /// 当該フレームで適用するキー音音量変更。`advance_session_frame` の終端で
+    /// `SessionFrame.keysound_volumes` に吸い出される (app 層が audio engine に反映)。
+    pub pending_keysound_volumes: Vec<(SoundId, f32)>,
     /// beatoraja `event_index(BUTTON_HSFIX=55)`。
     pub hsfix_index: i32,
     pub input_timestamp_anchor: Option<InputTimestampAnchor>,
@@ -172,6 +177,8 @@ pub struct FrameOutput<TSnapshot> {
     pub judgements: Vec<JudgementEvent>,
     /// 当該フレームで踏んだ Mine ノーツ。app 層が地雷 SE を鳴らすのに使う。
     pub mine_hits: Vec<MineHitEvent>,
+    /// 当該フレームで適用するキー音音量変更 (HCN 早離し時のミュート/復帰)。
+    pub keysound_volumes: Vec<(SoundId, f32)>,
     pub state: PlayState,
 }
 
@@ -182,6 +189,9 @@ pub struct SessionFrame {
     /// 当該フレームで踏んだ Mine ノーツ。地雷 SE 再生など、UI / audio 側の
     /// 副作用処理に使う。`apply_judge_outcome` の中ですでにゲージは削っている。
     pub mine_hits: Vec<MineHitEvent>,
+    /// 当該フレームで適用するキー音音量変更 (HCN 早離し時のミュート/復帰)。
+    /// app 層が audio engine の `set_volume_for_sound` に反映する。
+    pub keysound_volumes: Vec<(SoundId, f32)>,
     pub state: PlayState,
 }
 
@@ -449,12 +459,17 @@ pub struct HcnLaneTimer {
     pub since: TimeUs,
 }
 
-/// beatoraja の TIMER_HCN_ACTIVE / TIMER_HCN_DAMAGE 切り替えに対応する。
+/// beatoraja の TIMER_HCN_ACTIVE / TIMER_HCN_DAMAGE 切り替えと
+/// HCN キー音の音量制御に対応する。
 /// 「HCN の始端〜終端の区間内 (passing) かつ始端ノート判定済み」のレーンで、
-/// キー押下状態 (inclease) に応じて active/damage を切り替える。
-/// 状態が反転したらタイマー起点 (`since`) をリセットする。
+/// inclease（押下中、または終端を PG/GR/GD で判定済み）に応じて
+/// active/damage を切り替える。状態が反転したらタイマー起点 (`since`) を
+/// リセットする。
+/// キー音は beatoraja 同様、終端が BAD 以下で判定済み（早離し）の passing HCN
+/// に限り、離している間は音量 0、押し直したら元の音量に戻す。
 pub fn update_hcn_lane_timers(session: &mut GameSession, audio_now: TimeUs) {
     let mut next: [Option<HcnLaneTimer>; LANE_COUNT] = [None; LANE_COUNT];
+    let mut next_muted: [Option<bool>; LANE_COUNT] = [None; LANE_COUNT];
     for pair in &session.chart.long_notes {
         let mode = pair.mode.unwrap_or(session.chart.metadata.long_note_mode);
         if mode != LongNoteMode::Hcn
@@ -465,22 +480,50 @@ pub fn update_hcn_lane_timers(session: &mut GameSession, audio_now: TimeUs) {
             continue;
         }
         let idx = pair.lane.index();
-        let inclease = session.lane_keyon_started_at[idx].is_some();
+        let end_judge = session.judge.judged_notes.get(&pair.end_note_id).copied();
+        // beatoraja: pressed || 終端が PG/GR/GD で判定済みなら inclease。
+        let inclease = session.lane_keyon_started_at[idx].is_some()
+            || matches!(end_judge, Some(Judge::PGreat | Judge::Great | Judge::Good));
         let since = match session.lane_hcn_timer[idx] {
             Some(prev) if prev.inclease == inclease => prev.since,
             _ => audio_now,
         };
         next[idx] = Some(HcnLaneTimer { inclease, since });
+
+        // beatoraja: passing.getPair().getState() > 3 (終端 BAD 以下で判定済み)
+        // のときのみキー音音量を制御する。
+        if matches!(end_judge, Some(Judge::Bad | Judge::Poor | Judge::EmptyPoor))
+            && let Some(sound_id) = pair.sound
+        {
+            let muted = !inclease;
+            if session.lane_hcn_keysound_muted[idx] != Some(muted) {
+                let volume = if muted {
+                    0.0
+                } else {
+                    let chart_volume = bmz_chart::volume::chart_channel_volume_factor(
+                        bmz_chart::volume::chart_volume_at_time(
+                            &session.chart.key_volume_events,
+                            pair.start_time,
+                        ),
+                    );
+                    (session.audio_mix.master_volume * session.audio_mix.key_volume * chart_volume)
+                        .clamp(0.0, 1.0)
+                };
+                session.pending_keysound_volumes.push((sound_id, volume));
+            }
+            next_muted[idx] = Some(muted);
+        }
     }
     session.lane_hcn_timer = next;
+    session.lane_hcn_keysound_muted = next_muted;
 }
 
+/// beatoraja の HCN ゲージ増減判定 (passing ベース)。
+/// `lane_hcn_timer` (HCN 区間内かつ始端判定済みのレーン) を参照し、
+/// inclease なら回復、そうでなければ減衰させる。始端を見逃しても
+/// 途中から押し直せば回復する。
 pub fn apply_hcn_gauge(session: &mut GameSession, audio_now: TimeUs) {
-    let has_hcn_lane = session.judge.lanes.iter().any(|lane_state| {
-        lane_state.active_long.is_some_and(|active| active.mode == LongNoteMode::Hcn)
-            || lane_state.hcn_draining
-    });
-    if !has_hcn_lane {
+    if session.lane_hcn_timer.iter().all(Option::is_none) {
         session.last_hcn_gauge_at = None;
         return;
     }
@@ -491,25 +534,13 @@ pub fn apply_hcn_gauge(session: &mut GameSession, audio_now: TimeUs) {
         return;
     }
 
+    let delta_seconds = (audio_now.0 - previous.0) as f32 / 1_000_000.0;
     for idx in 0..LANE_COUNT {
-        let lane_state = &mut session.judge.lanes[idx];
-        if let Some(active) = lane_state.active_long
-            && active.mode == LongNoteMode::Hcn
-            && session.lane_keyon_started_at[idx].is_some()
-        {
-            let end = audio_now.0.min(active.end.end_time.0);
-            if end > previous.0 {
-                session.gauge.apply_hcn_hold((end - previous.0) as f32 / 1_000_000.0);
-            }
-        } else if lane_state.hcn_draining {
-            let drain_until = lane_state.hcn_drain_until.unwrap_or(audio_now);
-            let end = audio_now.0.min(drain_until.0);
-            if end > previous.0 {
-                session.gauge.apply_hcn_drain((end - previous.0) as f32 / 1_000_000.0);
-            }
-            if audio_now.0 >= drain_until.0 {
-                lane_state.hcn_draining = false;
-                lane_state.hcn_drain_until = None;
+        if let Some(timer) = session.lane_hcn_timer[idx] {
+            if timer.inclease {
+                session.gauge.apply_hcn_hold(delta_seconds);
+            } else {
+                session.gauge.apply_hcn_drain(delta_seconds);
             }
         }
     }
@@ -561,8 +592,8 @@ pub fn advance_session_frame(
             judgements.extend(process_human_inputs(session));
         }
         judgements.extend(process_misses(session, times.audio_now));
-        apply_hcn_gauge(session, times.audio_now);
         update_hcn_lane_timers(session, times.audio_now);
+        apply_hcn_gauge(session, times.audio_now);
         update_failed_state_from_gauge(session);
         schedule_keysounds(session, &judgements, audio);
         update_recent_judgements(session, &judgements, times.render_now);
@@ -574,7 +605,8 @@ pub fn advance_session_frame(
     }
 
     let mine_hits = std::mem::take(&mut session.pending_mine_hits);
-    SessionFrame { times, judgements, mine_hits, state: session.state }
+    let keysound_volumes = std::mem::take(&mut session.pending_keysound_volumes);
+    SessionFrame { times, judgements, mine_hits, keysound_volumes, state: session.state }
 }
 
 fn update_full_combo_timer(session: &mut GameSession, judgements: &[JudgementEvent]) {
@@ -616,7 +648,7 @@ mod tests {
     use crate::input::binding::LaneBinding;
     use crate::input::system::InputSystem;
     use crate::input::translator::DefaultInputTranslator;
-    use crate::judge::model::{ActiveLongNote, JudgeWindow, LongNoteEndRef};
+    use crate::judge::model::JudgeWindow;
 
     use super::*;
 
@@ -689,49 +721,115 @@ mod tests {
         assert_eq!(session.gauge.selected, bmz_core::clear::GaugeType::Hard);
     }
 
-    #[test]
-    fn hcn_hold_is_clamped_to_long_note_end_time() {
-        let mut session = session_with_autoplay(chart_with_keysound());
-        session.gauge.set_initial_value(50.0);
-        session.judge.lanes[Lane::Key1.index()].active_long = Some(ActiveLongNote {
-            pair_index: 0,
-            mode: LongNoteMode::Hcn,
-            start_note_id: NoteId(1),
-            end: LongNoteEndRef {
-                end_note_id: NoteId(2),
-                end_tick: ChartTick(192),
-                end_time: TimeUs(1_000_000),
-            },
-            started_at: TimeUs(0),
+    /// Key1 に HCN ロングノート (0s 〜 1s, キー音 SoundId(7)) を持つ譜面。
+    fn chart_with_hcn_long_note() -> PlayableChart {
+        let mut chart = chart_with_keysound();
+        chart.lane_notes = std::array::from_fn(|_| Vec::new());
+        chart.lane_notes[Lane::Key1.index()].push(NoteEvent {
+            id: NoteId(1),
+            lane: Lane::Key1,
+            kind: NoteKind::LongStart,
+            tick: ChartTick(0),
+            time: TimeUs(0),
+            sound: Some(SoundId(7)),
+            damage: None,
         });
-        session.lane_keyon_started_at[Lane::Key1.index()] = Some(TimeUs(0));
-
-        apply_hcn_gauge(&mut session, TimeUs(0));
-        apply_hcn_gauge(&mut session, TimeUs(2_000_000));
-        let at_end = session.gauge.current().value;
-        apply_hcn_gauge(&mut session, TimeUs(3_000_000));
-
-        assert!(at_end > 50.0);
-        assert!((session.gauge.current().value - at_end).abs() < f32::EPSILON);
+        chart.lane_notes[Lane::Key1.index()].push(NoteEvent {
+            id: NoteId(2),
+            lane: Lane::Key1,
+            kind: NoteKind::LongEnd,
+            tick: ChartTick(192),
+            time: TimeUs(1_000_000),
+            sound: None,
+            damage: None,
+        });
+        chart.long_notes.push(bmz_chart::model::LongNotePair {
+            lane: Lane::Key1,
+            style: bmz_chart::model::LongNoteStyle::ChannelPair,
+            mode: Some(LongNoteMode::Hcn),
+            start_note_id: NoteId(1),
+            end_note_id: NoteId(2),
+            start_tick: ChartTick(0),
+            end_tick: ChartTick(192),
+            start_time: TimeUs(0),
+            end_time: TimeUs(1_000_000),
+            sound: Some(SoundId(7)),
+        });
+        chart
     }
 
     #[test]
-    fn hcn_drain_stops_at_drain_until() {
-        let mut session = session_with_autoplay(chart_with_keysound());
+    fn hcn_gauge_increases_while_passing_and_pressed_until_end() {
+        let mut session = session_with_autoplay(chart_with_hcn_long_note());
         session.gauge.set_initial_value(50.0);
-        let lane = &mut session.judge.lanes[Lane::Key1.index()];
-        lane.hcn_draining = true;
-        lane.hcn_drain_until = Some(TimeUs(1_000_000));
+        session.judge.judged_notes.insert(NoteId(1), Judge::PGreat);
+        session.lane_keyon_started_at[Lane::Key1.index()] = Some(TimeUs(0));
 
+        update_hcn_lane_timers(&mut session, TimeUs(0));
         apply_hcn_gauge(&mut session, TimeUs(0));
+        update_hcn_lane_timers(&mut session, TimeUs(500_000));
+        apply_hcn_gauge(&mut session, TimeUs(500_000));
+        let mid = session.gauge.current().value;
+        // 終端通過後は passing が外れ、ゲージは変化しない。
+        update_hcn_lane_timers(&mut session, TimeUs(2_000_000));
         apply_hcn_gauge(&mut session, TimeUs(2_000_000));
-        let at_end = session.gauge.current().value;
+        update_hcn_lane_timers(&mut session, TimeUs(3_000_000));
         apply_hcn_gauge(&mut session, TimeUs(3_000_000));
 
-        assert!(at_end < 50.0);
-        assert!(!session.judge.lanes[Lane::Key1.index()].hcn_draining);
-        assert_eq!(session.judge.lanes[Lane::Key1.index()].hcn_drain_until, None);
-        assert!((session.gauge.current().value - at_end).abs() < f32::EPSILON);
+        assert!(mid > 50.0);
+        assert!((session.gauge.current().value - mid).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn hcn_gauge_recovers_when_pressed_after_missed_start() {
+        let mut session = session_with_autoplay(chart_with_hcn_long_note());
+        session.gauge.set_initial_value(50.0);
+        // 始端を見逃し (POOR) て離している → 減衰。
+        session.judge.judged_notes.insert(NoteId(1), Judge::Poor);
+
+        update_hcn_lane_timers(&mut session, TimeUs(100_000));
+        apply_hcn_gauge(&mut session, TimeUs(100_000));
+        update_hcn_lane_timers(&mut session, TimeUs(300_000));
+        apply_hcn_gauge(&mut session, TimeUs(300_000));
+        let drained = session.gauge.current().value;
+        assert!(drained < 50.0);
+
+        // 途中から押し直すと回復に転じる (beatoraja passing ベース)。
+        session.lane_keyon_started_at[Lane::Key1.index()] = Some(TimeUs(300_000));
+        update_hcn_lane_timers(&mut session, TimeUs(500_000));
+        apply_hcn_gauge(&mut session, TimeUs(500_000));
+
+        assert!(session.gauge.current().value > drained);
+    }
+
+    #[test]
+    fn hcn_keysound_mutes_on_release_after_early_end_judge() {
+        let mut session = session_with_autoplay(chart_with_hcn_long_note());
+        session.judge.judged_notes.insert(NoteId(1), Judge::PGreat);
+        // 早離しで終端が BAD 判定済み、キーは離している。
+        session.judge.judged_notes.insert(NoteId(2), Judge::Bad);
+
+        update_hcn_lane_timers(&mut session, TimeUs(500_000));
+        assert_eq!(session.pending_keysound_volumes, vec![(SoundId(7), 0.0)]);
+
+        // 押し直すと元の音量へ復帰する。同一状態の継続では再送しない。
+        session.pending_keysound_volumes.clear();
+        update_hcn_lane_timers(&mut session, TimeUs(600_000));
+        assert!(session.pending_keysound_volumes.is_empty());
+        session.lane_keyon_started_at[Lane::Key1.index()] = Some(TimeUs(700_000));
+        update_hcn_lane_timers(&mut session, TimeUs(700_000));
+        assert_eq!(session.pending_keysound_volumes.len(), 1);
+        assert_eq!(session.pending_keysound_volumes[0].0, SoundId(7));
+        assert!(session.pending_keysound_volumes[0].1 > 0.0);
+    }
+
+    #[test]
+    fn hcn_keysound_volume_untouched_while_end_unjudged() {
+        let mut session = session_with_autoplay(chart_with_hcn_long_note());
+        session.judge.judged_notes.insert(NoteId(1), Judge::PGreat);
+        // 終端未判定で離していても音量は触らない (beatoraja: pair state > 3 のみ)。
+        update_hcn_lane_timers(&mut session, TimeUs(500_000));
+        assert!(session.pending_keysound_volumes.is_empty());
     }
 
     #[test]
@@ -1074,6 +1172,8 @@ mod tests {
             bga_stretch: 1,
             show_ln_tail_cap: false,
             lane_hcn_timer: [None; LANE_COUNT],
+            lane_hcn_keysound_muted: [None; LANE_COUNT],
+            pending_keysound_volumes: Vec::new(),
             hsfix_index: 0,
             input_timestamp_anchor: None,
             pending_mine_hits: Vec::new(),

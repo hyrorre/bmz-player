@@ -86,6 +86,7 @@ pub fn advance_play_screen_with_bga_frames(
         render_snapshot,
         judgements: frame.judgements,
         mine_hits: frame.mine_hits,
+        keysound_volumes: frame.keysound_volumes,
         state: frame.state,
     }
 }
@@ -171,6 +172,7 @@ fn frame_output_from_session_frame(
         render_snapshot,
         judgements: frame.judgements,
         mine_hits: frame.mine_hits,
+        keysound_volumes: frame.keysound_volumes,
         state: frame.state,
     }
 }
@@ -204,11 +206,28 @@ fn flush_scheduled_audio_nonblocking(
     }
 }
 
+/// HCN 早離し時のミュート/復帰など、フレームで発生したキー音音量変更を
+/// audio engine に反映する。発生頻度が低いイベントなのでブロッキングロックで良い。
+fn apply_keysound_volumes(
+    audio: &SharedAudioEngine,
+    volumes: &[(bmz_core::ids::SoundId, f32)],
+) -> Result<()> {
+    if volumes.is_empty() {
+        return Ok(());
+    }
+    let mut audio = audio.lock().map_err(|_| anyhow!("audio engine lock poisoned"))?;
+    for &(sound_id, volume) in volumes {
+        audio.set_sound_volume(sound_id, volume);
+    }
+    Ok(())
+}
+
 pub fn advance_running_play_session(
     running: &mut RunningPlaySession,
 ) -> Result<FrameOutput<RenderSnapshot>> {
     let frame = advance_session_frame(&mut running.session, &mut running.pending_audio);
     flush_scheduled_audio_nonblocking(&running.audio.engine, &mut running.pending_audio)?;
+    apply_keysound_volumes(&running.audio.engine, &frame.keysound_volumes)?;
     let mut output = frame_output_from_session_frame(
         &running.session,
         frame,
@@ -231,6 +250,7 @@ pub fn advance_running_play_session_until_result(
 ) -> Result<PlayAdvanceOutcome> {
     let session_frame = advance_session_frame(&mut running.session, &mut running.pending_audio);
     flush_scheduled_audio_nonblocking(&running.audio.engine, &mut running.pending_audio)?;
+    apply_keysound_volumes(&running.audio.engine, &session_frame.keysound_volumes)?;
     let mut frame = frame_output_from_session_frame(
         &running.session,
         session_frame,

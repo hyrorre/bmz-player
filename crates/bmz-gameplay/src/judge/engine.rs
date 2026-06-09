@@ -77,8 +77,6 @@ impl JudgeEngine {
                     LongNoteMode::Cn | LongNoteMode::Hcn => {
                         if now.0 > active.end.end_time.0 + self.windows.bad_slow_us {
                             lane_state.active_long = None;
-                            lane_state.hcn_draining = false;
-                            lane_state.hcn_drain_until = None;
                             outcome.events.push(JudgementEvent {
                                 note_id: Some(active.end.end_note_id),
                                 lane,
@@ -148,8 +146,6 @@ impl JudgeEngine {
                 && let Some(active) = make_active_long(chart, note.id, input.time)
             {
                 lane_state.active_long = Some(active);
-                lane_state.hcn_draining = false;
-                lane_state.hcn_drain_until = None;
             }
 
             return JudgeOutcome {
@@ -211,15 +207,7 @@ impl JudgeEngine {
                 let delta = input.time.0 - active.end.end_time.0;
                 let side = side_from_delta(delta);
                 let judge = classify_normal_delta(delta, self.windows).unwrap_or(Judge::Poor);
-                let early_release = active.mode == LongNoteMode::Hcn && delta < 0;
                 lane_state.active_long = None;
-                if early_release {
-                    lane_state.hcn_draining = true;
-                    lane_state.hcn_drain_until = Some(active.end.end_time);
-                } else {
-                    lane_state.hcn_draining = false;
-                    lane_state.hcn_drain_until = None;
-                }
                 self.judged_notes.insert(active.end.end_note_id, judge);
 
                 JudgeOutcome {
@@ -591,7 +579,9 @@ mod tests {
     }
 
     #[test]
-    fn defined_hcn_pair_starts_drain_even_when_chart_default_is_ln() {
+    fn defined_hcn_pair_judges_early_release_even_when_chart_default_is_ln() {
+        // 早離し後の減衰は judge engine ではなく session 側の passing ベース
+        // (update_hcn_lane_timers / apply_hcn_gauge) で処理される。
         let mut chart = chart_with_long_start(TimeUs(1_000_000), TimeUs(2_000_000));
         chart.metadata.long_note_mode = LongNoteMode::Ln;
         chart.long_notes[0].mode = Some(LongNoteMode::Hcn);
@@ -603,7 +593,7 @@ mod tests {
         assert_eq!(press.events[0].judge, Judge::PGreat);
         assert_eq!(release.events[0].note_id, Some(NoteId(2)));
         assert_eq!(release.events[0].judge, Judge::Poor);
-        assert!(engine.lanes[Lane::Key1.index()].hcn_draining);
+        assert_eq!(engine.judged_notes.get(&NoteId(2)), Some(&Judge::Poor));
     }
 
     fn chart_with_mine(time: TimeUs, damage: u16) -> PlayableChart {
