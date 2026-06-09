@@ -14,9 +14,9 @@ use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::assets::load_png_rgba;
 use crate::plan::{
-    Color, DrawCommand, PLAY_BACKBMP_TEXTURE, Point, Rect, RectCommand, SELECT_BANNER_TEXTURE,
-    SELECT_STAGE_TEXTURE, TextAlign, TextLayer, TextOutline, TextOverflow, TextShadow, TextStyle,
-    TextureId, UvRect,
+    Color, DrawCommand, PLAY_BACKBMP_TEXTURE, Point, Rect, RectBatchCache, RectBatchCacheKey,
+    RectCommand, SELECT_BANNER_TEXTURE, SELECT_STAGE_TEXTURE, TextAlign, TextLayer, TextOutline,
+    TextOverflow, TextShadow, TextStyle, TextureId, UvRect,
 };
 use crate::scene::{
     CourseConstraintFlags, ResultGradeDiffDisplay, SelectRowKind, SelectRowSnapshot, SelectSnapshot,
@@ -2446,6 +2446,7 @@ pub enum SkinRenderItem {
     },
     RectBatch {
         rects: Arc<[RectCommand]>,
+        cache: Option<RectBatchCache>,
     },
 }
 
@@ -5406,7 +5407,10 @@ impl SkinDocument {
             };
             let rects =
                 if let Some(cache) = cache { cache.cached_rect_batch(key, build) } else { build() };
-            return rect_batch_render_items(rects);
+            return rect_batch_render_items(
+                rects,
+                result_note_graph_rect_batch_cache(key, graph, frame, self.w, self.h),
+            );
         }
         if graph_type == 2 && !runtime_graphs.result_early_late_graph_buckets.is_empty() {
             let key = result_note_graph_cache_key(
@@ -5432,7 +5436,10 @@ impl SkinDocument {
             };
             let rects =
                 if let Some(cache) = cache { cache.cached_rect_batch(key, build) } else { build() };
-            return rect_batch_render_items(rects);
+            return rect_batch_render_items(
+                rects,
+                result_note_graph_rect_batch_cache(key, graph, frame, self.w, self.h),
+            );
         }
         self.density_judgegraph_render_items(
             graph,
@@ -6783,9 +6790,10 @@ pub fn append_skin_render_items(commands: &mut Vec<DrawCommand>, items: &[SkinRe
             SkinRenderItem::Rect { rect, color, .. } => {
                 commands.push(DrawCommand::Rect { rect: *rect, color: *color });
             }
-            SkinRenderItem::RectBatch { rects } => {
+            SkinRenderItem::RectBatch { rects, cache } => {
                 if !rects.is_empty() {
-                    commands.push(DrawCommand::RectBatch { rects: Arc::clone(rects) });
+                    commands
+                        .push(DrawCommand::RectBatch { rects: Arc::clone(rects), cache: *cache });
                 }
             }
             SkinRenderItem::Text { origin, text, style, .. } => {
@@ -8812,8 +8820,11 @@ fn stacked_result_note_graph_rect_batch<const N: usize, B: ResultNoteGraphBucket
     Arc::from(rects)
 }
 
-fn rect_batch_render_items(rects: Arc<[RectCommand]>) -> Vec<SkinRenderItem> {
-    if rects.is_empty() { Vec::new() } else { vec![SkinRenderItem::RectBatch { rects }] }
+fn rect_batch_render_items(
+    rects: Arc<[RectCommand]>,
+    cache: Option<RectBatchCache>,
+) -> Vec<SkinRenderItem> {
+    if rects.is_empty() { Vec::new() } else { vec![SkinRenderItem::RectBatch { rects, cache }] }
 }
 
 fn result_note_graph_cache_key<const N: usize, B: ResultNoteGraphBucket<N>>(
@@ -8834,6 +8845,26 @@ fn result_note_graph_cache_key<const N: usize, B: ResultNoteGraphBucket<N>>(
         visible_len: result_note_graph_visible_len(buckets.len(), graph, elapsed_ms),
         data_hash: result_note_graph_data_hash(buckets, graph),
     }
+}
+
+fn result_note_graph_rect_batch_cache(
+    key: ResultRectBatchCacheKey,
+    graph: &SkinJudgeGraphDef,
+    frame: ResolvedSkinFrame,
+    canvas_w: u32,
+    canvas_h: u32,
+) -> Option<RectBatchCache> {
+    if graph.back_tex_off == 0 {
+        return None;
+    }
+    let bounds = normalize_skin_frame_rect(frame, canvas_w, canvas_h);
+    if bounds.width <= f32::EPSILON || bounds.height <= f32::EPSILON {
+        return None;
+    }
+    let mut hasher = DefaultHasher::new();
+    "result-note-graph-rect-batch".hash(&mut hasher);
+    key.hash(&mut hasher);
+    Some(RectBatchCache { key: RectBatchCacheKey(hasher.finish()), bounds })
 }
 
 fn result_note_graph_data_hash<const N: usize, B: ResultNoteGraphBucket<N>>(
@@ -10371,7 +10402,7 @@ fn apply_all_offset_to_render_item(item: SkinRenderItem, state: SkinDrawState) -
             color,
             blend,
         },
-        SkinRenderItem::RectBatch { rects } => SkinRenderItem::RectBatch {
+        SkinRenderItem::RectBatch { rects, cache } => SkinRenderItem::RectBatch {
             rects: rects
                 .iter()
                 .map(|command| RectCommand {
@@ -10386,6 +10417,16 @@ fn apply_all_offset_to_render_item(item: SkinRenderItem, state: SkinDrawState) -
                 })
                 .collect::<Vec<_>>()
                 .into(),
+            cache: cache.map(|cache| RectBatchCache {
+                bounds: apply_all_offset_to_rect(
+                    cache.bounds,
+                    scale_x,
+                    scale_y,
+                    translate_x,
+                    translate_y,
+                ),
+                ..cache
+            }),
         },
     }
 }
@@ -20118,7 +20159,9 @@ mod tests {
     ) -> bool {
         match item {
             SkinRenderItem::Rect { color, .. } => predicate(color),
-            SkinRenderItem::RectBatch { rects } => rects.iter().any(|rect| predicate(&rect.color)),
+            SkinRenderItem::RectBatch { rects, .. } => {
+                rects.iter().any(|rect| predicate(&rect.color))
+            }
             _ => false,
         }
     }

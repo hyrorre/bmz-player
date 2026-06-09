@@ -64,6 +64,7 @@ pub enum DrawCommand {
     },
     RectBatch {
         rects: Arc<[RectCommand]>,
+        cache: Option<RectBatchCache>,
     },
     Image {
         rect: Rect,
@@ -89,6 +90,15 @@ pub enum DrawCommand {
         style: TextStyle,
     },
 }
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RectBatchCache {
+    pub key: RectBatchCacheKey,
+    pub bounds: Rect,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RectBatchCacheKey(pub u64);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RectCommand {
@@ -1296,7 +1306,7 @@ fn plan_result(
         let items =
             skin.static_document_items_for_result_state_and_text(&snapshot.graph, state, text);
         if !items.is_empty() {
-            let mut commands = Vec::new();
+            let mut commands = Vec::with_capacity(items.len() + 3);
             crate::skin::append_skin_render_items(&mut commands, &items);
             push_scene_overlays(&mut commands, &snapshot.overlay);
             return DrawPlan { clear: Color::rgb(0.0, 0.0, 0.0), commands };
@@ -1941,7 +1951,7 @@ fn apply_bar_line_alpha_offset(commands: &mut [DrawCommand], skin_offsets: SkinO
             DrawCommand::Rect { color, .. } => {
                 color.a = (color.a + alpha_delta).clamp(0.0, 1.0);
             }
-            DrawCommand::RectBatch { rects } => {
+            DrawCommand::RectBatch { rects, .. } => {
                 for rect in Arc::make_mut(rects) {
                     rect.color.a = (rect.color.a + alpha_delta).clamp(0.0, 1.0);
                 }
@@ -4644,7 +4654,7 @@ mod tests {
     ) -> bool {
         match command {
             DrawCommand::Rect { color, .. } => predicate(color),
-            DrawCommand::RectBatch { rects } => rects.iter().any(|rect| predicate(&rect.color)),
+            DrawCommand::RectBatch { rects, .. } => rects.iter().any(|rect| predicate(&rect.color)),
             _ => false,
         }
     }

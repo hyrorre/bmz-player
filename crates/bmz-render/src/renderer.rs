@@ -16,8 +16,8 @@ use anyhow::{Context, Result, anyhow};
 use crate::assets::{RgbaImageAsset, load_png_rgba};
 use crate::bitmap_font::{BitmapFont, load_bitmap_font};
 use crate::plan::{
-    Color, DrawCommand, DrawPlan, Point, Rect, TextAlign, TextOverflow, TextStyle, TextureId,
-    UvRect,
+    Color, DrawCommand, DrawPlan, Point, Rect, RectBatchCache, RectBatchCacheKey, RectCommand,
+    TextAlign, TextOverflow, TextStyle, TextureId, UvRect,
 };
 use crate::scene::AppSceneSnapshot;
 use crate::skin::{
@@ -178,6 +178,8 @@ struct WgpuRenderer {
     image_sampler_linear: wgpu::Sampler,
     image_textures: HashMap<TextureId, PreparedTexture>,
     image_bind_group_cache: HashMap<(TextureId, bool), wgpu::BindGroup>,
+    offscreen_rect_batches: HashMap<OffscreenRectBatchTextureKey, TextureId>,
+    next_offscreen_rect_batch_texture_id: u32,
     image_buffer: Option<wgpu::Buffer>,
     image_buffer_capacity: usize,
     text_pipeline: wgpu::RenderPipeline,
@@ -192,6 +194,16 @@ struct WgpuRenderer {
     font: Option<FontArc>,
     egui: EguiPainter,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct OffscreenRectBatchTextureKey {
+    key: RectBatchCacheKey,
+    width: u32,
+    height: u32,
+}
+
+const OFFSCREEN_RECT_BATCH_TEXTURE_BASE: u32 = 0xF000_0000;
+const OFFSCREEN_RECT_BATCH_TEXTURE_MAX_ENTRIES: usize = 64;
 
 struct ScreenshotCapture {
     buffer: wgpu::Buffer,
@@ -766,6 +778,8 @@ impl WgpuRenderer {
             image_sampler_linear,
             image_textures,
             image_bind_group_cache: HashMap::new(),
+            offscreen_rect_batches: HashMap::new(),
+            next_offscreen_rect_batch_texture_id: OFFSCREEN_RECT_BATCH_TEXTURE_BASE,
             image_buffer: None,
             image_buffer_capacity: 0,
             text_pipeline,
@@ -789,6 +803,7 @@ impl WgpuRenderer {
 
         self.config.width = size.width;
         self.config.height = size.height;
+        self.clear_offscreen_rect_batches();
         self.configure_surface();
     }
 
@@ -819,7 +834,12 @@ impl WgpuRenderer {
         let text_frame = self.build_text_frame(plan, fonts, bitmap_fonts);
         timings.text_us = text_start.elapsed().as_micros();
         let geometry_start = Instant::now();
-        let geometry = encode_plan_geometry(plan, &text_frame, surface_size);
+        let geometry = encode_plan_geometry_with_rect_batch_resolver(
+            plan,
+            &text_frame,
+            surface_size,
+            &mut |rects, cache| self.offscreen_rect_batch_texture(rects, cache, surface_size),
+        );
         let geometry_stats = geometry.stats();
         timings.steps = geometry_stats.steps;
         timings.rect_steps = geometry_stats.rect_steps;
@@ -1046,6 +1066,110 @@ impl WgpuRenderer {
         self.image_buffer_capacity = capacity;
     }
 
+    fn offscreen_rect_batch_texture(
+        &mut self,
+        rects: &[RectCommand],
+        cache: RectBatchCache,
+        surface_size: SurfaceSize,
+    ) -> Option<TextureId> {
+        if rects.is_empty() || !surface_size.is_drawable() {
+            return None;
+        }
+        let width = normalized_extent_to_pixels(cache.bounds.width, surface_size.width);
+        let height = normalized_extent_to_pixels(cache.bounds.height, surface_size.height);
+        if width == 0 || height == 0 {
+            return None;
+        }
+        let key = OffscreenRectBatchTextureKey { key: cache.key, width, height };
+        if let Some(texture) = self.offscreen_rect_batches.get(&key) {
+            return Some(*texture);
+        }
+        if self.offscreen_rect_batches.len() >= OFFSCREEN_RECT_BATCH_TEXTURE_MAX_ENTRIES {
+            self.clear_offscreen_rect_batches();
+        }
+        let texture_id = self.allocate_offscreen_rect_batch_texture_id();
+        self.render_rect_batch_to_offscreen_texture(texture_id, rects, cache.bounds, width, height);
+        self.offscreen_rect_batches.insert(key, texture_id);
+        Some(texture_id)
+    }
+
+    fn allocate_offscreen_rect_batch_texture_id(&mut self) -> TextureId {
+        let texture_id = TextureId(self.next_offscreen_rect_batch_texture_id);
+        self.next_offscreen_rect_batch_texture_id = self
+            .next_offscreen_rect_batch_texture_id
+            .checked_add(1)
+            .unwrap_or(OFFSCREEN_RECT_BATCH_TEXTURE_BASE);
+        texture_id
+    }
+
+    fn render_rect_batch_to_offscreen_texture(
+        &mut self,
+        texture_id: TextureId,
+        rects: &[RectCommand],
+        bounds: Rect,
+        width: u32,
+        height: u32,
+    ) {
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("bmz-render offscreen rect batch"),
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.config.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let rect_bytes = encode_local_rect_batch(rects, bounds);
+        if !rect_bytes.is_empty() {
+            let rect_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("bmz-render offscreen rect batch buffer"),
+                size: rect_bytes.len() as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.queue.write_buffer(&rect_buffer, 0, &rect_bytes);
+            let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("bmz-render offscreen rect batch encoder"),
+            });
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("bmz-render offscreen rect batch pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(&self.rect_pipeline);
+                pass.set_vertex_buffer(0, rect_buffer.slice(..));
+                pass.draw(0..6, 0..(rect_bytes.len() / RECT_INSTANCE_BYTES) as u32);
+            }
+            self.queue.submit(std::iter::once(encoder.finish()));
+        }
+        self.image_textures.insert(texture_id, PreparedTexture { texture, view });
+        self.image_bind_group_cache
+            .retain(|(cached_texture_id, _), _| *cached_texture_id != texture_id);
+    }
+
+    fn clear_offscreen_rect_batches(&mut self) {
+        for texture_id in self.offscreen_rect_batches.drain().map(|(_, texture_id)| texture_id) {
+            self.image_textures.remove(&texture_id);
+            self.image_bind_group_cache
+                .retain(|(cached_texture_id, _), _| *cached_texture_id != texture_id);
+        }
+        self.next_offscreen_rect_batch_texture_id = OFFSCREEN_RECT_BATCH_TEXTURE_BASE;
+    }
+
     fn configure_surface(&self) {
         self.surface.configure(&self.device, &self.config);
     }
@@ -1261,6 +1385,41 @@ const TEXT_ATLAS_PADDING: u32 = 1;
 /// 捨てて作り直す。1 フレーム分のグリフは十分この高さに収まるため、リセットしても破綻しない。
 const TEXT_ATLAS_MAX_HEIGHT: u32 = 8192;
 
+fn normalized_extent_to_pixels(normalized: f32, surface_extent: u32) -> u32 {
+    if normalized <= f32::EPSILON || surface_extent == 0 {
+        return 0;
+    }
+    (normalized * surface_extent as f32).ceil().clamp(1.0, surface_extent.max(1) as f32) as u32
+}
+
+fn encode_local_rect_batch(rects: &[RectCommand], bounds: Rect) -> Vec<u8> {
+    if bounds.width <= f32::EPSILON || bounds.height <= f32::EPSILON {
+        return Vec::new();
+    }
+    let mut bytes = Vec::with_capacity(rects.len() * RECT_INSTANCE_BYTES);
+    for command in rects {
+        let rect = command.rect;
+        let color = command.color;
+        let local = Rect {
+            x: (rect.x - bounds.x) / bounds.width,
+            y: (rect.y - bounds.y) / bounds.height,
+            width: rect.width / bounds.width,
+            height: rect.height / bounds.height,
+        };
+        bytes.extend_from_slice(bytemuck::bytes_of(&[
+            local.x,
+            local.y,
+            local.width,
+            local.height,
+            color.r,
+            color.g,
+            color.b,
+            color.a,
+        ]));
+    }
+    bytes
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct AtlasSize {
     width: u32,
@@ -1346,10 +1505,20 @@ impl PlanGeometry {
 /// commands を 1 回走査し、rect/image インスタンスバッファと、コマンド順を尊重した
 /// 描画ステップ列を作る。`text_frame` の `command_quad_counts` から各 Text コマンドが
 /// 占める text instance buffer の範囲を割り出す。
+#[cfg(test)]
 fn encode_plan_geometry(
     plan: &DrawPlan,
     text_frame: &TextFrame,
     surface_size: SurfaceSize,
+) -> PlanGeometry {
+    encode_plan_geometry_with_rect_batch_resolver(plan, text_frame, surface_size, &mut |_, _| None)
+}
+
+fn encode_plan_geometry_with_rect_batch_resolver(
+    plan: &DrawPlan,
+    text_frame: &TextFrame,
+    surface_size: SurfaceSize,
+    resolve_rect_batch_texture: &mut impl FnMut(&[RectCommand], RectBatchCache) -> Option<TextureId>,
 ) -> PlanGeometry {
     let command_count = plan.commands.len();
     let mut rects = Vec::with_capacity(command_count.saturating_mul(RECT_INSTANCE_BYTES));
@@ -1380,24 +1549,46 @@ fn encode_plan_geometry(
                 ]));
                 push_or_extend_rects(&mut steps, start..rects.len());
             }
-            DrawCommand::RectBatch { rects: batch } => {
-                let start = rects.len();
-                for command in batch.iter() {
-                    let rect = command.rect;
-                    let color = command.color;
-                    rects.extend_from_slice(bytemuck::bytes_of(&[
-                        rect.x,
-                        rect.y,
-                        rect.width,
-                        rect.height,
-                        color.r,
-                        color.g,
-                        color.b,
-                        color.a,
-                    ]));
-                }
-                if rects.len() > start {
-                    push_or_extend_rects(&mut steps, start..rects.len());
+            DrawCommand::RectBatch { rects: batch, cache } => {
+                if let Some(cache) = *cache
+                    && let Some(texture) = resolve_rect_batch_texture(batch, cache)
+                {
+                    let start = images.len();
+                    encode_image_instance(
+                        &mut images,
+                        &cache.bounds,
+                        &UvRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+                        &Color::rgb(1.0, 1.0, 1.0),
+                        0.0,
+                        Point { x: 0.5, y: 0.5 },
+                        image_rotation_aspect,
+                    );
+                    push_or_extend_image(
+                        &mut steps,
+                        texture,
+                        BlendMode::Normal,
+                        false,
+                        start..images.len(),
+                    );
+                } else {
+                    let start = rects.len();
+                    for command in batch.iter() {
+                        let rect = command.rect;
+                        let color = command.color;
+                        rects.extend_from_slice(bytemuck::bytes_of(&[
+                            rect.x,
+                            rect.y,
+                            rect.width,
+                            rect.height,
+                            color.r,
+                            color.g,
+                            color.b,
+                            color.a,
+                        ]));
+                    }
+                    if rects.len() > start {
+                        push_or_extend_rects(&mut steps, start..rects.len());
+                    }
                 }
             }
             DrawCommand::Image { rect, uv, texture, tint, blend, linear_filter } => {
@@ -3923,6 +4114,7 @@ mod tests {
                     crate::plan::RectCommand { rect, color: Color::rgb(1.0, 0.0, 0.0) },
                     crate::plan::RectCommand { rect, color: Color::rgb(0.0, 1.0, 0.0) },
                 ]),
+                cache: None,
             }],
         };
 
@@ -3932,6 +4124,46 @@ mod tests {
         assert_eq!(
             geometry.stats(),
             DrawStepStats { steps: 1, rect_steps: 1, rect_instances: 2, ..Default::default() }
+        );
+    }
+
+    #[test]
+    fn plan_geometry_can_replace_cached_rect_batch_with_image_instance() {
+        let rect = crate::plan::Rect { x: 0.1, y: 0.2, width: 0.3, height: 0.4 };
+        let cache =
+            crate::plan::RectBatchCache { key: crate::plan::RectBatchCacheKey(42), bounds: rect };
+        let texture = TextureId(123);
+        let plan = DrawPlan {
+            clear: Color::rgb(0.0, 0.0, 0.0),
+            commands: vec![DrawCommand::RectBatch {
+                rects: std::sync::Arc::from([crate::plan::RectCommand {
+                    rect,
+                    color: Color::rgb(1.0, 0.0, 0.0),
+                }]),
+                cache: Some(cache),
+            }],
+        };
+
+        let geometry = encode_plan_geometry_with_rect_batch_resolver(
+            &plan,
+            &TextFrame::default(),
+            test_surface_size(),
+            &mut |_, _| Some(texture),
+        );
+
+        assert!(geometry.rects.is_empty());
+        assert_eq!(
+            geometry.stats(),
+            DrawStepStats { steps: 1, image_steps: 1, image_instances: 1, ..Default::default() }
+        );
+        assert_eq!(
+            geometry.steps,
+            vec![DrawStep::Image {
+                texture,
+                blend: BlendMode::Normal,
+                linear: false,
+                range: 0..IMAGE_INSTANCE_BYTES,
+            }]
         );
     }
 
