@@ -6,7 +6,7 @@ use super::play_input::{
 };
 use super::profile_config::{
     BindingConfigEntry, InputActionConfig, LaneConfig, PlayModeInputConfig, ProfileConfig,
-    ProfileInputConfig,
+    ProfileInputConfig, ScratchDirectionConfig,
 };
 
 /// 選曲画面のキー設定で編集対象とする KEY モード。
@@ -324,13 +324,22 @@ fn read_scratch_gamepad_slots(
     let mut slots = ScratchGamepadSlots::default();
     let mut undirected = Vec::new();
 
-    for control in gamepad_controls_for_lane(bindings, lane) {
-        if is_scratch_up_control(&control) {
-            slots.up = Some(control);
-        } else if is_scratch_down_control(&control) {
-            slots.down = Some(control);
-        } else {
-            undirected.push(control);
+    // 明示の direction タグを最優先する。コントロール名 (+/-) からの推測は
+    // 旧 entry 向けのフォールバックで、軸極性が逆のデバイスでは当てにならない。
+    for entry in bindings.iter().filter(|e| e.device == "gamepad" && e.lane == Some(lane)) {
+        let control = entry.control.clone();
+        match entry.scratch {
+            Some(ScratchDirectionConfig::Up) => slots.up = Some(control),
+            Some(ScratchDirectionConfig::Down) => slots.down = Some(control),
+            None => {
+                if is_scratch_up_control(&control) {
+                    slots.up = Some(control);
+                } else if is_scratch_down_control(&control) {
+                    slots.down = Some(control);
+                } else {
+                    undirected.push(control);
+                }
+            }
         }
     }
 
@@ -438,6 +447,7 @@ fn action_binding_for_device(
         control: control.to_string(),
         lane: None,
         action: Some(action),
+        scratch: None,
     }
 }
 
@@ -540,9 +550,14 @@ fn write_scratch_gamepad_bindings(
     slots: &ScratchGamepadSlots,
 ) {
     remove_lane_device_bindings(bindings, lane, "gamepad");
-    for control in [slots.up.as_deref(), slots.down.as_deref()] {
+    for (control, direction) in [
+        (slots.up.as_deref(), ScratchDirectionConfig::Up),
+        (slots.down.as_deref(), ScratchDirectionConfig::Down),
+    ] {
         if let Some(control) = control.filter(|value| !value.is_empty()) {
-            bindings.push(gamepad_play_binding(control, lane));
+            let mut entry = gamepad_play_binding(control, lane);
+            entry.scratch = Some(direction);
+            bindings.push(entry);
         }
     }
 }
@@ -1121,6 +1136,51 @@ mod tests {
                 ),
             ),
             "AxisLeftX+"
+        );
+    }
+
+    #[test]
+    fn scratch_controller_keeps_both_directions_with_reversed_axis_polarity() {
+        // 軸極性が逆のデバイス: UP に '+'、DOWN に '-' を割り当てても
+        // 名前推測で再分類されず、両方向が保持される。
+        let mut profile = ProfileConfig::new_default("default", "Default", 0);
+        apply_play_binding(
+            &mut profile.input,
+            KeyMode::K7,
+            scratch_target(LaneConfig::Scratch, ScratchDirection::Up, KeyBindingSlot::Controller),
+            "AxisLeftZ+",
+        )
+        .unwrap();
+        apply_play_binding(
+            &mut profile.input,
+            KeyMode::K7,
+            scratch_target(LaneConfig::Scratch, ScratchDirection::Down, KeyBindingSlot::Controller),
+            "AxisLeftZ-",
+        )
+        .unwrap();
+        assert_eq!(
+            format_play_binding(
+                &profile,
+                KeyMode::K7,
+                scratch_target(
+                    LaneConfig::Scratch,
+                    ScratchDirection::Up,
+                    KeyBindingSlot::Controller,
+                ),
+            ),
+            "AxisLeftZ+"
+        );
+        assert_eq!(
+            format_play_binding(
+                &profile,
+                KeyMode::K7,
+                scratch_target(
+                    LaneConfig::Scratch,
+                    ScratchDirection::Down,
+                    KeyBindingSlot::Controller,
+                ),
+            ),
+            "AxisLeftZ-"
         );
     }
 

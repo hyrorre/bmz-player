@@ -306,6 +306,18 @@ pub struct BindingConfigEntry {
     pub lane: Option<LaneConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action: Option<InputActionConfig>,
+    /// スクラッチレーンの回転方向。コントロール名からの推測 (`+`/`-` 等) に
+    /// 依存せず方向を確定させるため、キーコンフィグで設定した entry に保存する。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scratch: Option<ScratchDirectionConfig>,
+}
+
+/// スクラッチバインドの方向タグ。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ScratchDirectionConfig {
+    Up,
+    Down,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -813,6 +825,7 @@ fn binding(control: &str, lane: LaneConfig) -> BindingConfigEntry {
         control: control.to_string(),
         lane: Some(lane),
         action: None,
+        scratch: None,
     }
 }
 
@@ -822,6 +835,7 @@ fn gamepad_binding(control: &str, lane: LaneConfig) -> BindingConfigEntry {
         control: control.to_string(),
         lane: Some(lane),
         action: None,
+        scratch: None,
     }
 }
 
@@ -831,6 +845,7 @@ fn action_binding(control: &str, action: InputActionConfig) -> BindingConfigEntr
         control: control.to_string(),
         lane: None,
         action: Some(action),
+        scratch: None,
     }
 }
 
@@ -840,6 +855,7 @@ fn gamepad_action_binding(control: &str, action: InputActionConfig) -> BindingCo
         control: control.to_string(),
         lane: None,
         action: Some(action),
+        scratch: None,
     }
 }
 

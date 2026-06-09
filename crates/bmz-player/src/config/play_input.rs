@@ -211,6 +211,7 @@ fn apply_inherit(
                     control: entry.control.clone(),
                     lane: Some(lane_to_config(child_lane)),
                     action: None,
+                    scratch: entry.scratch,
                 });
             }
             remapped
@@ -378,6 +379,7 @@ pub fn play_binding(control: &str, lane: LaneConfig) -> BindingConfigEntry {
         control: control.to_string(),
         lane: Some(lane),
         action: None,
+        scratch: None,
     }
 }
 
@@ -387,6 +389,7 @@ pub fn gamepad_play_binding(control: &str, lane: LaneConfig) -> BindingConfigEnt
         control: control.to_string(),
         lane: Some(lane),
         action: None,
+        scratch: None,
     }
 }
 

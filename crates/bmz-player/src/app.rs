@@ -59,7 +59,7 @@ use crate::config::load::load_profile_config;
 use crate::config::profile_config::{
     AssistOptionConfig, BgaExpandConfig, BgaModeConfig, GaugeAutoShiftConfig, GaugeTypeConfig,
     HispeedModeConfig, InputActionConfig, LaneConfig, ProfileConfig, ProfileInputConfig,
-    RandomOptionConfig, TargetOptionConfig,
+    RandomOptionConfig, ScratchDirectionConfig, TargetOptionConfig,
 };
 use crate::config::save::{save_app_config, save_profile_config};
 use crate::config::settings_registry::SettingsEntryId;
@@ -10600,17 +10600,24 @@ impl SelectKeyBindings {
                 .iter()
                 .flat_map(|&l| keys_for(l))
                 .collect();
-        let scratch_all = keys_for(LaneConfig::Scratch);
         let mut scratch_up_controls = Vec::new();
         let mut scratch_down_controls = Vec::new();
-        for control in scratch_all {
-            if is_scratch_up_control(&control) {
-                scratch_up_controls.push(control);
-            } else if is_scratch_down_control(&control) {
-                scratch_down_controls.push(control);
-            } else {
-                scratch_up_controls.push(control.clone());
-                scratch_down_controls.push(control);
+        for entry in play_all.iter().filter(|e| e.lane == Some(LaneConfig::Scratch)) {
+            let control = entry.control.clone();
+            // 明示の direction タグを最優先し、無ければコントロール名から推測する。
+            match entry.scratch {
+                Some(ScratchDirectionConfig::Up) => scratch_up_controls.push(control),
+                Some(ScratchDirectionConfig::Down) => scratch_down_controls.push(control),
+                None => {
+                    if is_scratch_up_control(&control) {
+                        scratch_up_controls.push(control);
+                    } else if is_scratch_down_control(&control) {
+                        scratch_down_controls.push(control);
+                    } else {
+                        scratch_up_controls.push(control.clone());
+                        scratch_down_controls.push(control);
+                    }
+                }
             }
         }
         let cycle_arrange = select_control_with_lane_fallback(

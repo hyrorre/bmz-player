@@ -7,8 +7,8 @@ use crate::config::play_input::resolve_play_bindings;
 use crate::config::profile_config::{
     AssistOptionConfig, BgaExpandConfig, BgaModeConfig, GaugeAutoShiftConfig, GaugeTypeConfig,
     HispeedModeConfig, InputActionConfig, JudgeAlgorithmConfig, LaneConfig, LaneEffectConfig,
-    ProfileConfig, ProfileInputConfig, RandomOptionConfig, ReplaySlotRule, ScratchInputMode,
-    TargetOptionConfig,
+    ProfileConfig, ProfileInputConfig, RandomOptionConfig, ReplaySlotRule, ScratchDirectionConfig,
+    ScratchInputMode, TargetOptionConfig,
 };
 use crate::config::settings_registry::{
     SettingsEntryId, adjust_settings_value, format_settings_value,
@@ -43,9 +43,17 @@ impl SettingsBindings {
                     LaneConfig::Key2 | LaneConfig::Key4 | LaneConfig::Key6 => {
                         back.insert(entry.control.clone());
                     }
-                    LaneConfig::Scratch => {
-                        classify_scratch_control(&entry.control, &mut increase, &mut decrease);
-                    }
+                    LaneConfig::Scratch => match entry.scratch {
+                        Some(ScratchDirectionConfig::Down) => {
+                            increase.insert(entry.control.clone());
+                        }
+                        Some(ScratchDirectionConfig::Up) => {
+                            decrease.insert(entry.control.clone());
+                        }
+                        None => {
+                            classify_scratch_control(&entry.control, &mut increase, &mut decrease);
+                        }
+                    },
                     _ => {}
                 }
             }
