@@ -109,6 +109,11 @@ pub fn build_render_snapshot_with_target_and_bga_frames(
         min_bpm: chart_min_bpm(&session.chart) as f32,
         max_bpm: chart_max_bpm(&session.chart) as f32,
         has_bga: session.chart.metadata.has_bga,
+        has_bpm_stop: session
+            .chart
+            .timing_events
+            .iter()
+            .any(|e| matches!(e.kind, bmz_chart::model::TimingEventKind::Stop { .. })),
         bga_enabled: session.bga_enabled,
         bga_base: session
             .bga_enabled

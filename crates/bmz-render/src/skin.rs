@@ -1858,6 +1858,8 @@ pub struct SkinDrawState {
     pub max_bpm: f32,
     /// 現在の曲にBGAイベントが含まれるかどうか (OPTION_NO_BGA=170 / OPTION_BGA=171)。
     pub has_bga: bool,
+    /// 現在の曲に STOP イベントが含まれるかどうか (OPTION_BPMSTOP=1177)。
+    pub has_bpm_stop: bool,
     /// BGA表示設定がONかどうか。曲の有無とは分けて扱う。
     pub bga_enabled: bool,
     /// `#STAGEFILE` 相当の曲画像があるか (OPTION_NO_STAGEFILE=190 / OPTION_STAGEFILE=191)。
@@ -2088,6 +2090,7 @@ impl Default for SkinDrawState {
             min_bpm: 0.0,
             max_bpm: 0.0,
             has_bga: false,
+            has_bpm_stop: false,
             bga_enabled: true,
             has_stagefile: false,
             has_backbmp: false,
@@ -3699,6 +3702,9 @@ impl SkinDocument {
             play_level: selected_row.map(select_row_level_number).unwrap_or(0),
             min_bpm: selected_row.map(|row| row.min_bpm).unwrap_or(0.0),
             max_bpm: selected_row.map(|row| row.max_bpm).unwrap_or(0.0),
+            has_bpm_stop: selected_row
+                .map(|row| row.chart_bpm_graph_segments.iter().any(|s| s.is_stop))
+                .unwrap_or(false),
             main_bpm: selected_row.map(|row| row.chart_main_bpm).unwrap_or(0.0),
             difficulty: selected_row.map(select_row_difficulty_code).unwrap_or(0),
             judge_rank: selected_row.and_then(|row| row.judge_rank),
@@ -4149,6 +4155,19 @@ impl SkinDocument {
                 items.extend(self.select_note_distribution_graph_render_items(
                     row,
                     judge_graph,
+                    destination,
+                    row_origin,
+                    enabled_options,
+                    state,
+                ));
+                continue;
+            }
+            if let Some(bpm_graph) =
+                self.bpmgraph.iter().find(|graph| graph.id == destination.id)
+            {
+                items.extend(self.select_bpmgraph_row_render_items(
+                    row,
+                    bpm_graph,
                     destination,
                     row_origin,
                     enabled_options,
@@ -5680,6 +5699,44 @@ impl SkinDocument {
         items
     }
 
+    fn select_bpmgraph_row_render_items(
+        &self,
+        row: &SelectRowSnapshot,
+        graph: &SkinBpmGraphDef,
+        destination: &SkinDestinationDef,
+        row_origin: (i32, i32),
+        enabled_options: &[i32],
+        state: SkinDrawState,
+    ) -> Vec<SkinRenderItem> {
+        if row.chart_bpm_graph_segments.is_empty()
+            || !test_skin_ops(&destination.op, enabled_options, state)
+            || !eval_skin_draw_condition(&destination.draw, state)
+        {
+            return Vec::new();
+        }
+        let Some(elapsed) = skin_timer_elapsed_ms(destination.timer, state) else {
+            return Vec::new();
+        };
+        let Some(mut frame) =
+            resolve_destination_frame(destination, elapsed, enabled_options, state)
+        else {
+            return Vec::new();
+        };
+        frame.x += row_origin.0;
+        frame.y += row_origin.1;
+        apply_skin_offset_to_frame(destination, &mut frame, state, false);
+        if !destination_mouse_rect_contains(destination, frame, state) {
+            return Vec::new();
+        }
+        self.bpmgraph_render_items_with_segments(
+            graph,
+            destination,
+            frame,
+            state,
+            &row.chart_bpm_graph_segments,
+        )
+    }
+
     fn bpmgraph_render_items_with_segments(
         &self,
         graph: &SkinBpmGraphDef,
@@ -5694,39 +5751,86 @@ impl SkinDocument {
         let rect = normalize_skin_frame_rect(frame, self.w, self.h);
         let frame_alpha = frame.a as f32 / 255.0;
         let blend = if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal };
-        let min_bpm = state.min_bpm.max(1.0);
-        let max_bpm = state.max_bpm.max(min_bpm + 1.0);
-        let line_width = graph.line_width.max(1) as f32;
+        let main_bpm = state.main_bpm.max(1.0);
+        let canvas_w = self.w.max(1) as f32;
+        let canvas_h = self.h.max(1) as f32;
+        // lineWidth は canvas pixel 単位。正規化座標系に変換する。
+        // 未指定 (0) のときは beatoraja デフォルトの 2 を使う。
+        let canvas_line_px = if graph.line_width > 0 { graph.line_width } else { 2 } as f32;
+        let line_w = canvas_line_px / canvas_w;
+        let line_h = canvas_line_px / canvas_h;
+        // beatoraja デフォルト色: main=緑, min=青, max=赤, other=黄, stop=紫, transition=灰
         let main_color = skin_hex_color(&graph.main_bpm_color)
-            .unwrap_or(Color::rgba(1.0, 0.4, 0.4, 0.9))
+            .unwrap_or(Color::rgba(0.0, 1.0, 0.0, 1.0))
             .with_alpha(frame_alpha);
-        let stop_color = skin_hex_color(&graph.stop_line_color)
-            .unwrap_or(Color::rgba(1.0, 1.0, 1.0, 0.8))
+        let min_color = skin_hex_color(&graph.min_bpm_color)
+            .unwrap_or(Color::rgba(0.0, 0.0, 1.0, 1.0))
+            .with_alpha(frame_alpha);
+        let max_color = skin_hex_color(&graph.max_bpm_color)
+            .unwrap_or(Color::rgba(1.0, 0.0, 0.0, 1.0))
             .with_alpha(frame_alpha);
         let other_color = skin_hex_color(&graph.other_bpm_color)
-            .unwrap_or(Color::rgba(0.7, 0.7, 0.7, 0.8))
+            .unwrap_or(Color::rgba(1.0, 1.0, 0.0, 1.0))
             .with_alpha(frame_alpha);
+        let stop_color = skin_hex_color(&graph.stop_line_color)
+            .unwrap_or(Color::rgba(1.0, 0.0, 1.0, 1.0))
+            .with_alpha(frame_alpha);
+        let transition_color = skin_hex_color(&graph.transition_line_color)
+            .unwrap_or(Color::rgba(0.5, 0.5, 0.5, 1.0))
+            .with_alpha(frame_alpha);
+        // beatoraja: log10(bpm/mainbpm) を [log10(1/8), log10(8)] に正規化。
+        // ratio=0 → グラフ上部 (低BPM / stop)、ratio=1 → グラフ下部 (高BPM)。
+        let min_log: f32 = (1.0_f32 / 8.0).log10();
+        let max_log: f32 = 8.0_f32.log10();
+        let log_range = max_log - min_log;
+        // bpm=0 (stop) は min 側にクランプされグラフ上部に描画される。
+        let bpm_to_ratio = |bpm: f32| -> f32 {
+            let r = (bpm / main_bpm).clamp(1.0 / 8.0, 8.0);
+            ((r.log10() - min_log) / log_range).clamp(0.0, 1.0)
+        };
+        // ratio=0 → top (rect.y + rect.height)、ratio=1 → bottom (rect.y)
+        let ratio_to_y = |ratio: f32| -> f32 {
+            rect.y + rect.height * (1.0 - ratio) - line_h / 2.0
+        };
         let mut items = Vec::new();
+        let mut prev_ratio: Option<f32> = None;
         for segment in segments {
             let x0 = rect.x + segment.start_ratio.clamp(0.0, 1.0) * rect.width;
             let x1 = rect.x + segment.end_ratio.clamp(0.0, 1.0) * rect.width;
-            if segment.is_stop {
-                items.push(SkinRenderItem::Rect {
-                    rect: Rect { x: x0, y: rect.y, width: line_width, height: rect.height },
-                    color: stop_color,
-                    blend,
-                });
-                continue;
+            let bpm = if segment.is_stop { 0.0 } else { segment.bpm };
+            let cur_ratio = bpm_to_ratio(bpm);
+            // BPM変化点を transitionLineColor の縦線で繋ぐ (beatoraja 互換)。
+            if let Some(prev) = prev_ratio {
+                let y_prev = ratio_to_y(prev);
+                let y_cur = ratio_to_y(cur_ratio);
+                let height = (y_prev - y_cur).abs() - line_h;
+                if height > 0.0 {
+                    let y_bottom = y_prev.min(y_cur) + line_h;
+                    items.push(SkinRenderItem::Rect {
+                        rect: Rect { x: x0 - line_w / 2.0, y: y_bottom, width: line_w, height },
+                        color: transition_color,
+                        blend,
+                    });
+                }
             }
-            let ratio = ((segment.bpm - min_bpm) / (max_bpm - min_bpm)).clamp(0.0, 1.0);
-            let y = rect.y + rect.height * (1.0 - ratio) - line_width / 2.0;
-            let color =
-                if (segment.bpm - state.main_bpm).abs() < 0.5 { main_color } else { other_color };
+            let y = ratio_to_y(cur_ratio);
+            let color = if segment.is_stop {
+                stop_color
+            } else if (segment.bpm - state.main_bpm).abs() < 0.5 {
+                main_color
+            } else if (segment.bpm - state.min_bpm).abs() < 0.5 {
+                min_color
+            } else if (segment.bpm - state.max_bpm).abs() < 0.5 {
+                max_color
+            } else {
+                other_color
+            };
             items.push(SkinRenderItem::Rect {
-                rect: Rect { x: x0, y, width: (x1 - x0).max(line_width), height: line_width },
+                rect: Rect { x: x0, y, width: (x1 - x0).max(line_w), height: line_h },
                 color,
                 blend,
             });
+            prev_ratio = Some(cur_ratio);
         }
         items
     }
@@ -6694,6 +6798,9 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool 
         320..=327 => best_rank_op_matches(op, state),
         170 => !state.has_bga,
         171 => state.has_bga,
+        // OPTION_BPMCHANGE (BPM変化あり) / OPTION_BPMSTOP (STOP命令あり)
+        177 => state.min_bpm < state.max_bpm,
+        1177 => state.has_bpm_stop,
         // OPTION_NOW_LOADING / OPTION_LOADED
         80 => !state.skin_loaded,
         81 => state.skin_loaded,
@@ -15962,9 +16069,68 @@ mod tests {
 
         let items = document.select_render_items(&HashMap::new(), &snapshot);
 
+        // 横線2本 + BPM変化縦線1本 = 3
         assert_eq!(
             items.iter().filter(|item| matches!(item, SkinRenderItem::Rect { .. })).count(),
-            2
+            3
+        );
+    }
+
+    #[test]
+    fn select_songlist_bpmgraph_renders_row_segments() {
+        let document: SkinDocument = serde_json::from_str(
+            r##"
+            {
+                "type": 5,
+                "w": 100,
+                "h": 100,
+                "bpmgraph": [{ "id": "bpm", "lineWidth": 2, "mainBPMColor": "#ff0000", "otherBPMColor": "#00ff00" }],
+                "songlist": {
+                    "id": "list",
+                    "center": 0,
+                    "liston": [{ "id": "row", "dst": [{ "x": 0, "y": 0, "w": 100, "h": 100 }] }],
+                    "listoff": [{ "id": "row", "dst": [{ "x": 0, "y": 0, "w": 100, "h": 100 }] }],
+                    "bpmgraph": [{ "id": "bpm", "dst": [{ "x": 0, "y": 0, "w": 40, "h": 20 }] }]
+                },
+                "destination": [{ "id": "list" }]
+            }
+            "##,
+        )
+        .unwrap();
+        let snapshot = SelectSnapshot {
+            selected_index: 0,
+            rows: vec![SelectRowSnapshot {
+                index: 0,
+                kind: SelectRowKind::Song,
+                in_library: true,
+                min_bpm: 100.0,
+                max_bpm: 200.0,
+                chart_main_bpm: 100.0,
+                chart_bpm_graph_segments: vec![
+                    crate::chart_graph::BpmGraphSegment {
+                        start_ratio: 0.0,
+                        end_ratio: 0.5,
+                        bpm: 100.0,
+                        is_stop: false,
+                    },
+                    crate::chart_graph::BpmGraphSegment {
+                        start_ratio: 0.5,
+                        end_ratio: 1.0,
+                        bpm: 200.0,
+                        is_stop: false,
+                    },
+                ],
+                ..SelectRowSnapshot::default()
+            }],
+            ..SelectSnapshot::default()
+        };
+
+        let items = document.select_render_items(&HashMap::new(), &snapshot);
+
+        // 横線2本 + BPM変化縦線1本 = 3
+        assert_eq!(
+            items.iter().filter(|item| matches!(item, SkinRenderItem::Rect { .. })).count(),
+            3
         );
     }
 

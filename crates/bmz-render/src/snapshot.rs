@@ -189,6 +189,7 @@ pub struct RenderSnapshot {
     pub min_bpm: f32,
     pub max_bpm: f32,
     pub has_bga: bool,
+    pub has_bpm_stop: bool,
     pub bga_enabled: bool,
     pub bga_base: Option<DisplayBgaFrame>,
     pub bga_layer: Option<DisplayBgaFrame>,
