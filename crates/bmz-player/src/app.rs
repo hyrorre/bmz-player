@@ -401,6 +401,10 @@ struct WinitApp {
     practice_chart_zero_time: Option<TimeUs>,
     select_frame_profiler: SceneFrameProfiler,
     result_frame_profiler: SceneFrameProfiler,
+    /// 直近のマウスカーソル移動 / 操作時刻。カーソル非表示判定に使う。
+    last_cursor_action_at: Instant,
+    /// 現在マウスカーソルが表示されているか。
+    cursor_visible: bool,
 }
 
 struct ActiveSkinVideoSource {
@@ -1456,6 +1460,8 @@ impl WinitApp {
             practice_chart_zero_time: None,
             select_frame_profiler: SceneFrameProfiler::default(),
             result_frame_profiler: SceneFrameProfiler::default(),
+            last_cursor_action_at: now,
+            cursor_visible: true,
         };
         if options.boot_result_sample {
             tracing::info!("booting directly into synthetic result screen");
@@ -8122,6 +8128,13 @@ impl ApplicationHandler for WinitApp {
                 self.route_keyboard_input(&event);
             }
             WindowEvent::MouseWheel { delta, .. } => {
+                self.last_cursor_action_at = Instant::now();
+                if !self.cursor_visible {
+                    if let Some(window) = &self.window {
+                        window.set_cursor_visible(true);
+                    }
+                    self.cursor_visible = true;
+                }
                 if egui_consumed {
                     return;
                 }
@@ -8129,11 +8142,25 @@ impl ApplicationHandler for WinitApp {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 self.last_cursor_position = Some(position);
+                self.last_cursor_action_at = Instant::now();
+                if !self.cursor_visible {
+                    if let Some(window) = &self.window {
+                        window.set_cursor_visible(true);
+                    }
+                    self.cursor_visible = true;
+                }
                 if !egui_consumed {
                     self.route_select_slider_drag();
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
+                self.last_cursor_action_at = Instant::now();
+                if !self.cursor_visible {
+                    if let Some(window) = &self.window {
+                        window.set_cursor_visible(true);
+                    }
+                    self.cursor_visible = true;
+                }
                 if egui_consumed {
                     return;
                 }
@@ -8155,6 +8182,12 @@ impl ApplicationHandler for WinitApp {
                 self.focused = focused;
             }
             WindowEvent::RedrawRequested => {
+                if self.cursor_visible && self.last_cursor_action_at.elapsed() >= Duration::from_secs(2) {
+                    if let Some(window) = &self.window {
+                        window.set_cursor_visible(false);
+                    }
+                    self.cursor_visible = false;
+                }
                 self.limit_frame_rate();
                 self.poll_gamepad_events();
                 self.drain_pending_skins();
