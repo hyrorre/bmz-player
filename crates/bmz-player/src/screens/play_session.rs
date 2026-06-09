@@ -1316,7 +1316,7 @@ mod tests {
 
         assert!(session.gauge.auto_shift);
         assert_eq!(session.gauge.auto_shift_mode, GaugeAutoShiftMode::BestClear);
-        assert_eq!(session.gauge.selected, GaugeType::ExHard);
+        assert_eq!(session.gauge.selected, GaugeType::Hazard);
     }
 
     #[test]
