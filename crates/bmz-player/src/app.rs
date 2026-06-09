@@ -5281,6 +5281,16 @@ impl WinitApp {
         self.last_started_chart_id = Some(chart_id);
     }
 
+    /// FAST/SLOW 表示モード (Auto / ThresholdMs) を snapshot へ適用する。
+    /// プレイ snapshot を `last_play_snapshot` に入れる全パスで呼ぶこと。
+    fn apply_profile_fast_slow_filter(&self, snapshot: &mut RenderSnapshot) {
+        apply_fast_slow_display_filter(
+            snapshot,
+            self.boot.profile_config.judge.fast_slow_display_threshold_ms,
+            self.boot.profile_config.judge.fast_slow_display_scope,
+        );
+    }
+
     fn install_active_play(&mut self, mut active_play: StartedWinitPlaySession) {
         self.last_play_was_autoplay = active_play.running.session.autoplay.is_some();
         active_play.running.bga_frames =
@@ -5309,11 +5319,7 @@ impl WinitApp {
             active_play.running.target_ex_score,
             &active_play.running.bga_frames,
         );
-        apply_fast_slow_display_filter(
-            &mut snapshot,
-            self.boot.profile_config.judge.fast_slow_display_threshold_ms,
-            self.boot.profile_config.judge.fast_slow_display_scope,
-        );
+        self.apply_profile_fast_slow_filter(&mut snapshot);
         snapshot.arrange = active_play.running.applied_arrange.arrange.as_str().to_string();
         snapshot.backbmp_background = self.play_backbmp_loaded;
         snapshot.play_elapsed_time = self.play_elapsed_time();
@@ -6515,6 +6521,7 @@ impl WinitApp {
             Ok(PlayAdvanceOutcome::Playing(frame)) => {
                 let mine_hits = frame.mine_hits.len();
                 let mut snapshot = frame.render_snapshot;
+                self.apply_profile_fast_slow_filter(&mut snapshot);
                 snapshot.play_elapsed_time = self.play_elapsed_time();
                 snapshot.ready_elapsed_time = self.play_ready_sound_started_at.map(elapsed_since);
                 snapshot.backbmp_background = self.play_backbmp_loaded;
@@ -6538,6 +6545,7 @@ impl WinitApp {
                 let hispeed = active_play.running.session.hispeed;
                 let mine_hits = frame.mine_hits.len();
                 let mut snapshot = frame.render_snapshot;
+                self.apply_profile_fast_slow_filter(&mut snapshot);
                 snapshot.play_elapsed_time = self.play_elapsed_time();
                 snapshot.ready_elapsed_time = self.play_ready_sound_started_at.map(elapsed_since);
                 snapshot.backbmp_background = self.play_backbmp_loaded;
@@ -6727,6 +6735,7 @@ impl WinitApp {
         );
 
         let mut snapshot = refresh_play_ending_snapshot(&mut active_play.running, timers);
+        self.apply_profile_fast_slow_filter(&mut snapshot);
         self.apply_course_skin_context(&mut snapshot);
         self.apply_play_table_text(&mut snapshot);
         self.last_play_snapshot = Some(snapshot);
