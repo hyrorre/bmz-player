@@ -14,8 +14,8 @@ use bmz_render::chart_graph::{
 use bmz_render::plan::CHART_BGA_TEXTURE_BASE;
 use bmz_render::skin_offset::{SkinOffsetValue, SkinOffsetValues};
 use bmz_render::snapshot::{
-    DisplayBgaFrame, DisplayInput, DisplayJudgeCounts, DisplayJudgement, OverlaySnapshot,
-    RenderSnapshot, VisibleBarLine, VisibleLongNote, VisibleMine, VisibleNote,
+    DisplayBgaFrame, DisplayInput, DisplayJudgeCounts, DisplayJudgement, NoteVisualKind,
+    OverlaySnapshot, RenderSnapshot, VisibleBarLine, VisibleLongNote, VisibleMine, VisibleNote,
 };
 
 pub const DEFAULT_LOOKAHEAD_US: i64 = 2_000_000;
@@ -258,10 +258,16 @@ pub fn build_render_snapshot_with_target_and_bga_frames(
                     }
                     NoteKind::Tap | NoteKind::LongStart | NoteKind::LongEnd => {
                         if let Some(y) = scroll.note_y(note.time, cursor_tick) {
+                            let kind = match note.kind {
+                                NoteKind::LongStart => NoteVisualKind::LnStart,
+                                NoteKind::LongEnd => NoteVisualKind::LnEnd,
+                                _ => NoteVisualKind::Tap,
+                            };
                             snapshot.visible_notes[lane.index()].push(VisibleNote {
                                 lane,
                                 time: note.time,
                                 y,
+                                kind,
                                 processed_judge: session.judge.judged_notes.get(&note.id).copied(),
                             });
                         }
@@ -276,7 +282,7 @@ pub fn build_render_snapshot_with_target_and_bga_frames(
             }
         }
 
-        for long in &session.chart.long_notes {
+        for (pair_index, long) in session.chart.long_notes.iter().enumerate() {
             let head = scroll.note_progress(long.start_time, cursor_tick);
             let tail = scroll.note_progress(long.end_time, cursor_tick);
             // 終端が判定ラインを過ぎた、または始端が画面上端より奥なら非表示。
@@ -284,11 +290,16 @@ pub fn build_render_snapshot_with_target_and_bga_frames(
             if tail < 0.0 || head > 1.0 {
                 continue;
             }
+            let is_pressing = session.judge.lanes[long.lane.index()]
+                .active_long
+                .is_some_and(|active| active.pair_index == pair_index)
+                && session.lane_keyon_started_at[long.lane.index()].is_some();
             snapshot.visible_long_notes.push(VisibleLongNote {
                 lane: long.lane,
                 mode: long.mode.unwrap_or(session.chart.metadata.long_note_mode),
                 head_y: head.clamp(0.0, 1.0),
                 tail_y: tail.clamp(0.0, 1.0),
+                is_pressing,
             });
         }
     }

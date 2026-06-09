@@ -6,14 +6,14 @@ use bmz_core::time::TimeUs;
 
 use crate::scene::{AppSceneSnapshot, SelectRowKind, SelectRowSnapshot, SelectSnapshot};
 use crate::skin::{
-    Animation, BlendMode, NumberSlot, SkinContext, SkinDefinition, SkinManifest, SkinObject,
-    SkinObjectId, SkinPhase, SkinPlacement, SkinRenderContext, SkinRenderItem, SkinSource,
-    SkinTextState, SkinTextureId, TextSlot, append_skin_render_items, judge_image_index,
+    Animation, BlendMode, NumberSlot, SkinContext, SkinDefinition, SkinImageManifest, SkinManifest,
+    SkinObject, SkinObjectId, SkinPhase, SkinPlacement, SkinRenderContext, SkinRenderItem,
+    SkinSource, SkinTextState, SkinTextureId, TextSlot, append_skin_render_items, judge_image_index,
 };
 use crate::skin_offset::{SKIN_OFFSET_BAR_LINE, SkinOffsetValues};
 use crate::snapshot::{
-    DisplayBgaFrame, DisplayJudgeCounts, FastSlowJudgeCounts, RenderSnapshot, ResultGraphSnapshot,
-    ResultTimingPoint,
+    DisplayBgaFrame, DisplayJudgeCounts, FastSlowJudgeCounts, NoteVisualKind, RenderSnapshot,
+    ResultGraphSnapshot, ResultTimingPoint,
 };
 use crate::text::{BitmapTextStyle, TextRenderer};
 
@@ -1034,7 +1034,17 @@ fn plan_play(
                     width: lane_width * 0.84,
                     height: NOTE_HEIGHT,
                 };
-                push_default_note_skin(skin_manifest, &mut commands, lane, rect);
+                match note.kind {
+                    NoteVisualKind::LnStart => {
+                        push_ln_start_skin(skin_manifest, &mut commands, lane, rect)
+                    }
+                    NoteVisualKind::LnEnd => {
+                        push_ln_end_skin(skin_manifest, &mut commands, lane, rect)
+                    }
+                    NoteVisualKind::Tap => {
+                        push_default_note_skin(skin_manifest, &mut commands, lane, rect)
+                    }
+                }
             }
 
             // Mine: 通常ノーツより前面に「警告ストライプ」テクスチャを重ねる。
@@ -1121,7 +1131,8 @@ fn plan_play(
         for body in &snapshot.visible_long_notes {
             if let Some(rect) =
                 skin.note_body_rect(body.lane, key_mode, body.head_y, body.tail_y, skin_state)
-                && let Some(item) = skin.document_long_body_item(body.lane, key_mode, rect)
+                && let Some(item) =
+                    skin.document_long_body_item(body.lane, key_mode, rect, body.is_pressing)
             {
                 let item = skin.apply_play_skin_global_offset_to_item(item, skin_state);
                 append_skin_render_items(&mut commands, &[item]);
@@ -1133,10 +1144,20 @@ fn plan_play(
             for note in &snapshot.visible_notes[lane_index] {
                 if let Some(rect) =
                     skin.note_rect_for_progress(lane, key_mode, note.y, note_height, skin_state)
-                    && let Some(item) = skin.document_note_item(lane, key_mode, rect)
                 {
-                    let item = skin.apply_play_skin_global_offset_to_item(item, skin_state);
-                    append_skin_render_items(&mut commands, &[item]);
+                    let item = match note.kind {
+                        NoteVisualKind::LnStart => {
+                            skin.document_ln_start_item(lane, key_mode, rect)
+                        }
+                        NoteVisualKind::LnEnd => {
+                            skin.document_ln_end_item(lane, key_mode, rect)
+                        }
+                        NoteVisualKind::Tap => skin.document_note_item(lane, key_mode, rect),
+                    };
+                    if let Some(item) = item {
+                        let item = skin.apply_play_skin_global_offset_to_item(item, skin_state);
+                        append_skin_render_items(&mut commands, &[item]);
+                    }
                 }
             }
             // Mine ノーツ: スキン側に `note.mine` が定義されていればそれを使い、
@@ -2146,7 +2167,33 @@ fn push_default_note_skin(
     lane: Lane,
     rect: Rect,
 ) {
-    let note = skin_manifest.play_note_image();
+    push_note_skin_image(commands, lane, rect, skin_manifest.play_note_image());
+}
+
+fn push_ln_start_skin(
+    skin_manifest: &SkinManifest,
+    commands: &mut Vec<DrawCommand>,
+    lane: Lane,
+    rect: Rect,
+) {
+    push_note_skin_image(commands, lane, rect, skin_manifest.play_ln_start_image());
+}
+
+fn push_ln_end_skin(
+    skin_manifest: &SkinManifest,
+    commands: &mut Vec<DrawCommand>,
+    lane: Lane,
+    rect: Rect,
+) {
+    push_note_skin_image(commands, lane, rect, skin_manifest.play_ln_end_image());
+}
+
+fn push_note_skin_image(
+    commands: &mut Vec<DrawCommand>,
+    lane: Lane,
+    rect: Rect,
+    note: SkinImageManifest,
+) {
     append_skin_render_items(
         commands,
         &[SkinRenderItem::Image {
@@ -2603,8 +2650,8 @@ mod tests {
 
     use crate::skin::{SkinDocument, SkinDocumentTexture, SkinImageSize, SkinTextureId};
     use crate::snapshot::{
-        DisplayInput, DisplayJudgeCounts, DisplayJudgement, RenderSnapshot, VisibleBarLine,
-        VisibleLongNote, VisibleNote,
+        DisplayInput, DisplayJudgeCounts, DisplayJudgement, NoteVisualKind, RenderSnapshot,
+        VisibleBarLine, VisibleLongNote, VisibleNote,
     };
 
     use super::*;
@@ -2617,6 +2664,7 @@ mod tests {
             mode: bmz_chart::model::LongNoteMode::Ln,
             head_y: 0.1,
             tail_y: 0.7,
+            is_pressing: false,
         });
 
         let plan = DrawPlan::from_scene(&AppSceneSnapshot::Play(snapshot));
@@ -2641,12 +2689,14 @@ mod tests {
             mode: LongNoteMode::Cn,
             head_y: 0.1,
             tail_y: 0.7,
+            is_pressing: false,
         });
         snapshot.visible_long_notes.push(VisibleLongNote {
             lane: Lane::Key6,
             mode: LongNoteMode::Hcn,
             head_y: 0.1,
             tail_y: 0.7,
+            is_pressing: false,
         });
 
         let plan = DrawPlan::from_scene(&AppSceneSnapshot::Play(snapshot));
@@ -2666,6 +2716,7 @@ mod tests {
             lane: Lane::Key1,
             time: TimeUs(1_000),
             y: 0.5,
+            kind: NoteVisualKind::Tap,
             processed_judge: None,
         });
         snapshot.bar_lines.push(VisibleBarLine { time: TimeUs(900), y: 0.25 });
@@ -2687,18 +2738,21 @@ mod tests {
             lane: Lane::Scratch,
             time: TimeUs(1_000),
             y: 0.5,
+            kind: NoteVisualKind::Tap,
             processed_judge: None,
         });
         snapshot.visible_notes[Lane::Key1.index()].push(VisibleNote {
             lane: Lane::Key1,
             time: TimeUs(1_000),
             y: 0.5,
+            kind: NoteVisualKind::Tap,
             processed_judge: None,
         });
         snapshot.visible_notes[Lane::Key2.index()].push(VisibleNote {
             lane: Lane::Key2,
             time: TimeUs(1_000),
             y: 0.5,
+            kind: NoteVisualKind::Tap,
             processed_judge: None,
         });
 
@@ -3200,6 +3254,7 @@ mod tests {
             lane: Lane::Key1,
             time: TimeUs(1_000),
             y: 0.5,
+            kind: NoteVisualKind::Tap,
             processed_judge: None,
         });
 
@@ -3524,6 +3579,7 @@ mod tests {
             lane: Lane::Key1,
             time: TimeUs(1_000),
             y: 0.0,
+            kind: NoteVisualKind::Tap,
             processed_judge: None,
         });
 
@@ -3764,12 +3820,14 @@ mod tests {
             lane: Lane::Key1,
             time: TimeUs(1_000),
             y: 0.75,
+            kind: NoteVisualKind::Tap,
             processed_judge: None,
         });
         snapshot.visible_notes[Lane::Key1.index()].push(VisibleNote {
             lane: Lane::Key1,
             time: TimeUs(2_000),
             y: 0.25,
+            kind: NoteVisualKind::Tap,
             processed_judge: None,
         });
 

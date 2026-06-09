@@ -1532,15 +1532,36 @@ impl SkinContext {
         document.note_image_render_item(lane, key_mode, rect, &self.document_sources)
     }
 
-    /// ロングノート胴体（`note.lnbody`）を指定矩形に伸縮描画する。
-    pub fn document_long_body_item(
+    pub fn document_ln_start_item(
         &self,
         lane: Lane,
         key_mode: KeyMode,
         rect: Rect,
     ) -> Option<SkinRenderItem> {
         let document = self.document.as_ref()?;
-        document.note_long_body_render_item(lane, key_mode, rect, &self.document_sources)
+        document.note_ln_start_render_item(lane, key_mode, rect, &self.document_sources)
+    }
+
+    pub fn document_ln_end_item(
+        &self,
+        lane: Lane,
+        key_mode: KeyMode,
+        rect: Rect,
+    ) -> Option<SkinRenderItem> {
+        let document = self.document.as_ref()?;
+        document.note_ln_end_render_item(lane, key_mode, rect, &self.document_sources)
+    }
+
+    /// ロングノート胴体（`note.lnbody` / `note.lnactive`）を指定矩形に伸縮描画する。
+    pub fn document_long_body_item(
+        &self,
+        lane: Lane,
+        key_mode: KeyMode,
+        rect: Rect,
+        is_pressing: bool,
+    ) -> Option<SkinRenderItem> {
+        let document = self.document.as_ref()?;
+        document.note_long_body_render_item(lane, key_mode, rect, is_pressing, &self.document_sources)
     }
 
     /// Mine ノート（`note.mine`）を指定矩形に描画する。スキン側に定義が無ければ
@@ -1681,8 +1702,10 @@ impl SkinContext {
         let note_height = document.note_height_for_lane(lane, key_mode)?;
         let head_bottom = note_progress_to_y(area, head_y, state, canvas_h);
         let tail_bottom = note_progress_to_y(area, tail_y, state, canvas_h);
+        // 胴体は tail キャップの上端から head キャップの下端まで伸ばす。
+        // キャップ自体はこの上に重ねて描画されるため重複は問題ない。
         let top = head_bottom.min(tail_bottom) - note_height;
-        let bottom = head_bottom.max(tail_bottom) - note_height;
+        let bottom = head_bottom.max(tail_bottom);
         Some(document.apply_notes_offset_to_rect(
             Rect { x: area.x, y: top, width: area.width, height: bottom - top },
             state,
@@ -2296,6 +2319,8 @@ pub struct SkinTextureManifest {
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct SkinPlayManifest {
     pub note: Option<SkinImageManifest>,
+    pub ln_start: Option<SkinImageManifest>,
+    pub ln_end: Option<SkinImageManifest>,
     pub receptor: Option<SkinImageManifest>,
     pub judge_line: Option<SkinImageManifest>,
     pub gauge_frame: Option<SkinImageManifest>,
@@ -4436,12 +4461,8 @@ impl SkinDocument {
         self.note_part_render_item(image_id, rect, sources)
     }
 
-    /// ロングノート胴体画像を描画する。
-    ///
-    /// beatoraja の JSON skin は `lnbodyActive` が無い場合、未押下 LN の胴体に
-    /// `lnactive` を割り当てる。BMZ はまだ押下状態を持たないため、通常表示は
-    /// beatoraja の未押下側に合わせる。
-    pub fn note_long_body_render_item(
+    /// LN START（ヘッドキャップ）画像を描画する。未定義なら `note` にフォールバックする。
+    pub fn note_ln_start_render_item(
         &self,
         lane: Lane,
         key_mode: KeyMode,
@@ -4451,10 +4472,53 @@ impl SkinDocument {
         let note = self.note.as_ref()?;
         let index = beatoraja_note_index(lane, key_mode);
         let image_id = note
-            .lnactive
+            .lnstart
             .get(index)
-            .or_else(|| note.lnbody.get(index))
             .or_else(|| note.note.get(index))?;
+        self.note_part_render_item(image_id, rect, sources)
+    }
+
+    /// LN END（テールキャップ）画像を描画する。未定義なら `note` にフォールバックする。
+    pub fn note_ln_end_render_item(
+        &self,
+        lane: Lane,
+        key_mode: KeyMode,
+        rect: Rect,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Option<SkinRenderItem> {
+        let note = self.note.as_ref()?;
+        let index = beatoraja_note_index(lane, key_mode);
+        let image_id = note
+            .lnend
+            .get(index)
+            .or_else(|| note.note.get(index))?;
+        self.note_part_render_item(image_id, rect, sources)
+    }
+
+    /// ロングノート胴体画像を描画する。
+    /// `is_pressing` が `true` のとき（LN HEAD 判定済みでキー押下中）は
+    /// `lnactive` を使い、そうでなければ `lnbody` を使う。どちらも未定義なら `note` へフォールバック。
+    pub fn note_long_body_render_item(
+        &self,
+        lane: Lane,
+        key_mode: KeyMode,
+        rect: Rect,
+        is_pressing: bool,
+        sources: &HashMap<String, SkinDocumentTexture>,
+    ) -> Option<SkinRenderItem> {
+        let note = self.note.as_ref()?;
+        let index = beatoraja_note_index(lane, key_mode);
+        let image_id = if is_pressing {
+            note.lnactive
+                .get(index)
+                .or_else(|| note.lnbody.get(index))
+                .or_else(|| note.note.get(index))?
+        } else {
+            note.lnbody
+                .get(index)
+                .or_else(|| note.lnactive.get(index))
+                .or_else(|| note.note.get(index))?
+        };
         self.note_part_render_item(image_id, rect, sources)
     }
 
@@ -6255,6 +6319,16 @@ impl SkinManifest {
             scale: SkinImageScale::Stretch,
             border: None,
         })
+    }
+
+    /// LN START（ヘッドキャップ）用画像。未設定なら通常ノーツ画像にフォールバック。
+    pub fn play_ln_start_image(&self) -> SkinImageManifest {
+        self.play.ln_start.unwrap_or_else(|| self.play_note_image())
+    }
+
+    /// LN END（テールキャップ）用画像。未設定なら通常ノーツ画像にフォールバック。
+    pub fn play_ln_end_image(&self) -> SkinImageManifest {
+        self.play.ln_end.unwrap_or_else(|| self.play_note_image())
     }
 
     pub fn play_receptor_image(&self) -> SkinImageManifest {
@@ -14508,6 +14582,7 @@ mod tests {
                 Lane::Scratch,
                 KeyMode::K7,
                 Rect { x: 0.0, y: 0.0, width: 0.1, height: 0.1 },
+                false,
                 &sources,
             )
             .unwrap();
@@ -19186,7 +19261,8 @@ mod tests {
             skin.note_body_rect(Lane::Key1, KeyMode::K7, 0.0, 0.5, state_lifted).unwrap();
 
         assert!(approx_eq(rect_no_lift.y, (580.0 * 0.5 - 12.0) / 720.0));
-        assert!(approx_eq(rect_no_lift.height, (580.0 * 0.5) / 720.0));
+        // 胴体は tail キャップ上端から head キャップ下端まで: height = (head_bottom - top) = (580 - 418 + 140) / 720
+        assert!(approx_eq(rect_no_lift.height, (580.0 * 0.5 + 12.0) / 720.0));
         assert!(
             rect_lifted.y < rect_no_lift.y,
             "expected lifted long body higher on screen, got no_lift={} lifted={}",

@@ -4,8 +4,8 @@ use bmz_core::time::TimeUs;
 
 use crate::scene::{AppSceneSnapshot, ResultSnapshot, SelectRowSnapshot, SelectSnapshot};
 use crate::snapshot::{
-    DisplayJudgeCounts, DisplayJudgement, FastSlowJudgeCounts, OverlaySnapshot, RenderSnapshot,
-    VisibleBarLine, VisibleLongNote, VisibleNote,
+    DisplayJudgeCounts, DisplayJudgement, FastSlowJudgeCounts, NoteVisualKind, OverlaySnapshot,
+    RenderSnapshot, VisibleBarLine, VisibleLongNote, VisibleNote,
 };
 
 pub fn sample_select_scene() -> AppSceneSnapshot {
@@ -98,6 +98,7 @@ pub fn sample_play_scene() -> AppSceneSnapshot {
             lane,
             time: TimeUs(12_500_000 + index as i64 * 80_000),
             y: 0.18 + index as f32 * 0.08,
+            kind: NoteVisualKind::Tap,
             processed_judge: None,
         });
     }
@@ -105,6 +106,7 @@ pub fn sample_play_scene() -> AppSceneSnapshot {
         lane: Lane::Key2,
         time: TimeUs(13_200_000),
         y: 0.86,
+        kind: NoteVisualKind::Tap,
         processed_judge: None,
     });
     snapshot.bar_lines.push(VisibleBarLine { time: TimeUs(12_000_000), y: 0.25 });
@@ -115,12 +117,14 @@ pub fn sample_play_scene() -> AppSceneSnapshot {
         mode: LongNoteMode::Ln,
         head_y: 0.0,
         tail_y: 0.45,
+        is_pressing: true,
     });
     snapshot.visible_long_notes.push(VisibleLongNote {
         lane: Lane::Key6,
         mode: LongNoteMode::Hcn,
         head_y: 0.3,
         tail_y: 0.82,
+        is_pressing: false,
     });
     snapshot.recent_judgements.push(DisplayJudgement {
         lane: Lane::Key3,

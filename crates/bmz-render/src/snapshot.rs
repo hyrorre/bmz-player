@@ -314,11 +314,20 @@ impl FastSlowJudgeCounts {
     }
 }
 
+/// [`VisibleNote`] の種別。描画に使う画像を切り替えるために使う。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoteVisualKind {
+    Tap,
+    LnStart,
+    LnEnd,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct VisibleNote {
     pub lane: Lane,
     pub time: TimeUs,
     pub y: f32,
+    pub kind: NoteVisualKind,
     /// beatoraja の `Note.state` 相当。判定済みでも本来の時刻までは描画に残す。
     pub processed_judge: Option<Judge>,
 }
@@ -342,6 +351,8 @@ pub struct VisibleLongNote {
     pub mode: LongNoteMode,
     pub head_y: f32,
     pub tail_y: f32,
+    /// LN HEAD を判定済みでキーを押し続けている状態。胴体の画像を切り替えるために使う。
+    pub is_pressing: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
