@@ -10969,18 +10969,36 @@ fn slider_value_at(
     let frame_y = frame.y as f32;
     let frame_w = frame.w as f32;
     let frame_h = frame.h as f32;
+    let half_w = frame_w * 0.5;
+    let half_h = frame_h * 0.5;
     let value = match slider.angle {
-        0 if frame_x <= x && x <= frame_x + frame_w && frame_y <= y && y <= frame_y + range => {
-            (y - frame_y) / range
+        0 if frame_x <= x
+            && x <= frame_x + frame_w
+            && frame_y + half_h <= y
+            && y <= frame_y + range + half_h =>
+        {
+            (y - frame_y - half_h) / range
         }
-        1 if frame_x <= x && x <= frame_x + range && frame_y <= y && y <= frame_y + frame_h => {
-            (x - frame_x) / range
+        1 if frame_x + half_w <= x
+            && x <= frame_x + range + half_w
+            && frame_y <= y
+            && y <= frame_y + frame_h =>
+        {
+            (x - frame_x - half_w) / range
         }
-        2 if frame_x <= x && x <= frame_x + frame_w && frame_y - range <= y && y <= frame_y => {
-            (frame_y - y) / range
+        2 if frame_x <= x
+            && x <= frame_x + frame_w
+            && frame_y - range + half_h <= y
+            && y <= frame_y + half_h =>
+        {
+            (frame_y + half_h - y) / range
         }
-        3 if frame_x - range <= x && x <= frame_x && frame_y <= y && y <= frame_y + frame_h => {
-            (frame_x - x) / range
+        3 if frame_x - range + half_w <= x
+            && x <= frame_x + half_w
+            && frame_y <= y
+            && y <= frame_y + frame_h =>
+        {
+            (frame_x + half_w - x) / range
         }
         _ => return None,
     };
@@ -16371,7 +16389,7 @@ mod tests {
             .select_slider_hit(
                 &snapshot,
                 &crate::select_settings_dest::SelectSettingsDestIndex::default(),
-                0.35,
+                0.40,
                 0.775,
             )
             .unwrap();
