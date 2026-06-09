@@ -457,6 +457,10 @@ pub struct HcnLaneTimer {
     pub inclease: bool,
     /// 現在の inclease 状態が始まった時刻。タイマー経過時間の起点。
     pub since: TimeUs,
+    /// beatoraja `mpassingcount`: inclease 中は加算、離している間は減算する
+    /// 符号付き経過時間 (us)。±200ms を超えるたびにゲージを 1 tick 更新する。
+    /// inclease の反転ではリセットせず (相殺される)、passing 終了でリセットする。
+    pub passing_count_us: i64,
 }
 
 /// beatoraja の TIMER_HCN_ACTIVE / TIMER_HCN_DAMAGE 切り替えと
@@ -488,7 +492,9 @@ pub fn update_hcn_lane_timers(session: &mut GameSession, audio_now: TimeUs) {
             Some(prev) if prev.inclease == inclease => prev.since,
             _ => audio_now,
         };
-        next[idx] = Some(HcnLaneTimer { inclease, since });
+        // mpassingcount は inclease 反転でもリセットしない (beatoraja 準拠)。
+        let passing_count_us = session.lane_hcn_timer[idx].map_or(0, |prev| prev.passing_count_us);
+        next[idx] = Some(HcnLaneTimer { inclease, since, passing_count_us });
 
         // beatoraja: passing.getPair().getState() > 3 (終端 BAD 以下で判定済み)
         // のときのみキー音音量を制御する。
@@ -518,10 +524,14 @@ pub fn update_hcn_lane_timers(session: &mut GameSession, audio_now: TimeUs) {
     session.lane_hcn_keysound_muted = next_muted;
 }
 
+/// beatoraja `JudgeManager` の `hcnmduration` (200ms)。
+const HCN_UPDATE_US: i64 = 200_000;
+
 /// beatoraja の HCN ゲージ増減判定 (passing ベース)。
 /// `lane_hcn_timer` (HCN 区間内かつ始端判定済みのレーン) を参照し、
-/// inclease なら回復、そうでなければ減衰させる。始端を見逃しても
-/// 途中から押し直せば回復する。
+/// `mpassingcount` 相当の符号付きカウンタにフレーム経過時間を加減算して、
+/// ±200ms を超えるたびに GREAT/BAD × rate 0.5 でゲージを 1 tick 更新する。
+/// 始端を見逃しても途中から押し直せば回復する。
 pub fn apply_hcn_gauge(session: &mut GameSession, audio_now: TimeUs) {
     if session.lane_hcn_timer.iter().all(Option::is_none) {
         session.last_hcn_gauge_at = None;
@@ -534,15 +544,25 @@ pub fn apply_hcn_gauge(session: &mut GameSession, audio_now: TimeUs) {
         return;
     }
 
-    let delta_seconds = (audio_now.0 - previous.0) as f32 / 1_000_000.0;
+    let delta_us = audio_now.0 - previous.0;
     for idx in 0..LANE_COUNT {
-        if let Some(timer) = session.lane_hcn_timer[idx] {
-            if timer.inclease {
-                session.gauge.apply_hcn_hold(delta_seconds);
-            } else {
-                session.gauge.apply_hcn_drain(delta_seconds);
+        let Some(mut timer) = session.lane_hcn_timer[idx] else {
+            continue;
+        };
+        if timer.inclease {
+            timer.passing_count_us += delta_us;
+            while timer.passing_count_us > HCN_UPDATE_US {
+                session.gauge.apply_hcn_hold();
+                timer.passing_count_us -= HCN_UPDATE_US;
+            }
+        } else {
+            timer.passing_count_us -= delta_us;
+            while timer.passing_count_us < -HCN_UPDATE_US {
+                session.gauge.apply_hcn_drain();
+                timer.passing_count_us += HCN_UPDATE_US;
             }
         }
+        session.lane_hcn_timer[idx] = Some(timer);
     }
 }
 
@@ -789,15 +809,18 @@ mod tests {
 
         update_hcn_lane_timers(&mut session, TimeUs(100_000));
         apply_hcn_gauge(&mut session, TimeUs(100_000));
-        update_hcn_lane_timers(&mut session, TimeUs(300_000));
-        apply_hcn_gauge(&mut session, TimeUs(300_000));
+        // 250ms 経過 → mpassingcount が -200ms を下回り減衰 1 tick。
+        update_hcn_lane_timers(&mut session, TimeUs(350_000));
+        apply_hcn_gauge(&mut session, TimeUs(350_000));
         let drained = session.gauge.current().value;
         assert!(drained < 50.0);
 
         // 途中から押し直すと回復に転じる (beatoraja passing ベース)。
-        session.lane_keyon_started_at[Lane::Key1.index()] = Some(TimeUs(300_000));
-        update_hcn_lane_timers(&mut session, TimeUs(500_000));
-        apply_hcn_gauge(&mut session, TimeUs(500_000));
+        // カウンタは反転でリセットされないため、残り -50ms を打ち消して
+        // +200ms を超えるまで押し続けると回復 1 tick が入る。
+        session.lane_keyon_started_at[Lane::Key1.index()] = Some(TimeUs(350_000));
+        update_hcn_lane_timers(&mut session, TimeUs(800_000));
+        apply_hcn_gauge(&mut session, TimeUs(800_000));
 
         assert!(session.gauge.current().value > drained);
     }

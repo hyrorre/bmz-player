@@ -276,16 +276,16 @@ impl GaugeState {
         self.auto_shift_if_needed();
     }
 
-    /// HCN 押下中のゲージ増加。beatoraja `JudgeManager` は 200ms ごとに
-    /// GREAT を rate 0.5 でゲージ更新する。
-    pub fn apply_hcn_hold(&mut self, delta_seconds: f32) {
-        self.apply_judge(Judge::Great, hcn_rate(delta_seconds));
+    /// HCN 押下中のゲージ増加 1 tick。beatoraja `JudgeManager` は
+    /// `mpassingcount` が +200ms を超えるたびに GREAT を rate 0.5 で適用する。
+    pub fn apply_hcn_hold(&mut self) {
+        self.apply_judge(Judge::Great, 0.5);
     }
 
-    /// HCN 早離し後のゲージ減衰。beatoraja `JudgeManager` は 200ms ごとに
-    /// BAD を rate 0.5 でゲージ更新する。
-    pub fn apply_hcn_drain(&mut self, delta_seconds: f32) {
-        self.apply_judge(Judge::Bad, hcn_rate(delta_seconds));
+    /// HCN 早離し中のゲージ減衰 1 tick。beatoraja `JudgeManager` は
+    /// `mpassingcount` が -200ms を下回るたびに BAD を rate 0.5 で適用する。
+    pub fn apply_hcn_drain(&mut self) {
+        self.apply_judge(Judge::Bad, 0.5);
     }
 
     fn best_auto_shift_clear_gauge(&self) -> Option<&SingleGaugeState> {
@@ -323,11 +323,6 @@ impl GaugeState {
     fn gauge(&self, gauge_type: GaugeType) -> Option<&SingleGaugeState> {
         self.gauges.iter().find(|gauge| gauge.definition.gauge_type == gauge_type)
     }
-}
-
-fn hcn_rate(delta_seconds: f32) -> f32 {
-    const HCN_UPDATE_SECONDS: f32 = 0.2;
-    delta_seconds / HCN_UPDATE_SECONDS * 0.5
 }
 
 const AUTO_SHIFT_RESULT_ORDER: &[GaugeType] = &[
@@ -1537,10 +1532,11 @@ mod tests {
         let mut gauge = GaugeState::new(GaugeType::Normal, 160.0, 1000);
         let start = gauge.current().value;
 
-        gauge.apply_hcn_hold(0.2);
+        // 1 tick = GREAT × 0.5 / BAD × 0.5 (beatoraja gauge.update(1|3, 0.5f))
+        gauge.apply_hcn_hold();
         assert!((gauge.current().value - (start + 0.08)).abs() < f32::EPSILON);
 
-        gauge.apply_hcn_drain(0.2);
+        gauge.apply_hcn_drain();
         assert!((gauge.current().value - (start - 1.42)).abs() < 0.000_1);
     }
 
