@@ -1225,10 +1225,47 @@ const RESULT_RENDER_CACHE_MAX_ENTRIES: usize = 64;
 
 #[derive(Debug, Default)]
 struct ResultRenderCache {
+    planning: Option<ResultPlanningCache>,
     rect_batches: HashMap<ResultRectBatchCacheKey, Arc<[RectCommand]>>,
 }
 
 impl ResultRenderCache {
+    fn cached_planning(&mut self, document: &SkinDocument) -> ResultPlanningCache {
+        if let Some(planning) = &self.planning {
+            return planning.clone();
+        }
+        let enabled_options = Arc::<[i32]>::from(document.enabled_options());
+        let mut destinations = Vec::new();
+        for (entry_index, entry) in document.destination.iter().enumerate() {
+            match entry {
+                DestinationListEntry::Single(_) => {
+                    destinations.push(ResultDestinationRef::Single { entry_index });
+                }
+                DestinationListEntry::Conditional { if_ops, destinations: entries } => {
+                    if test_skin_dst_if(if_ops, &enabled_options) {
+                        destinations.extend(entries.iter().enumerate().map(
+                            |(destination_index, _)| ResultDestinationRef::Conditional {
+                                entry_index,
+                                destination_index,
+                            },
+                        ));
+                    }
+                }
+            }
+        }
+        let has_half_grade_f_diff_rank_destination = destinations
+            .iter()
+            .filter_map(|destination| destination.resolve(document))
+            .any(|destination| destination.id == "RANK_s_F");
+        let planning = ResultPlanningCache {
+            enabled_options,
+            destinations: Arc::from(destinations),
+            has_half_grade_f_diff_rank_destination,
+        };
+        self.planning = Some(planning.clone());
+        planning
+    }
+
     fn cached_rect_batch(
         &mut self,
         key: ResultRectBatchCacheKey,
@@ -1243,6 +1280,42 @@ impl ResultRenderCache {
         }
         self.rect_batches.insert(key, Arc::clone(&rects));
         rects
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ResultPlanningCache {
+    enabled_options: Arc<[i32]>,
+    destinations: Arc<[ResultDestinationRef]>,
+    has_half_grade_f_diff_rank_destination: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ResultDestinationRef {
+    Single { entry_index: usize },
+    Conditional { entry_index: usize, destination_index: usize },
+}
+
+impl ResultDestinationRef {
+    fn resolve(self, document: &SkinDocument) -> Option<&SkinDestinationDef> {
+        match (self, document.destination.get(self.entry_index())) {
+            (
+                ResultDestinationRef::Single { .. },
+                Some(DestinationListEntry::Single(destination)),
+            ) => Some(destination),
+            (
+                ResultDestinationRef::Conditional { destination_index, .. },
+                Some(DestinationListEntry::Conditional { destinations, .. }),
+            ) => destinations.get(destination_index),
+            _ => None,
+        }
+    }
+
+    fn entry_index(self) -> usize {
+        match self {
+            ResultDestinationRef::Single { entry_index }
+            | ResultDestinationRef::Conditional { entry_index, .. } => entry_index,
+        }
     }
 }
 
@@ -2631,17 +2704,36 @@ impl SkinDocument {
         let images = self.image_map();
         let values: HashMap<&str, &SkinValueDef> =
             self.value.iter().map(|value| (value.id.as_str(), value)).collect();
-        let enabled_options = self.enabled_options();
+        let planning = cache.as_deref_mut().map(|cache| cache.cached_planning(self));
+        let enabled_options_storage =
+            if planning.is_none() { self.enabled_options() } else { Vec::new() };
+        let enabled_options: &[i32] =
+            planning.as_ref().map_or(enabled_options_storage.as_slice(), |planning| {
+                planning.enabled_options.as_ref()
+            });
         let mut behind = Vec::new();
         let mut front = Vec::new();
         let mut failed_overlay = Vec::new();
         let mut after_notes_marker = false;
-        let destinations = self.all_destinations(&enabled_options);
-        let has_half_grade_f_diff_rank_destination =
-            half_grade_f_diff_rank_destination_available(&destinations);
+        let destinations =
+            if planning.is_none() { self.all_destinations(enabled_options) } else { Vec::new() };
+        let destination_count =
+            planning.as_ref().map_or(destinations.len(), |planning| planning.destinations.len());
+        let has_half_grade_f_diff_rank_destination = planning.as_ref().map_or_else(
+            || half_grade_f_diff_rank_destination_available(&destinations),
+            |planning| planning.has_half_grade_f_diff_rank_destination,
+        );
         let state =
             apply_half_grade_f_diff_rank_fallback(state, has_half_grade_f_diff_rank_destination);
-        for (index, destination) in destinations.iter().enumerate() {
+        for index in 0..destination_count {
+            let Some(destination) = planning
+                .as_ref()
+                .and_then(|planning| planning.destinations.get(index).copied())
+                .and_then(|destination| destination.resolve(self))
+                .or_else(|| destinations.get(index).copied())
+            else {
+                continue;
+            };
             // `{"id":"notes"}` はノーツ描画位置マーカー。以降の destination はノーツ前面に積む。
             if destination.id == "notes" {
                 after_notes_marker = true;
@@ -2650,7 +2742,7 @@ impl SkinDocument {
             if !destination.op.is_empty()
                 && !destination_ops_match(
                     destination,
-                    &enabled_options,
+                    enabled_options,
                     state,
                     has_half_grade_f_diff_rank_destination,
                 )
@@ -2665,7 +2757,7 @@ impl SkinDocument {
             if let Some(item) = self.result_judge_pie_destination_item(
                 destination,
                 &images,
-                &enabled_options,
+                enabled_options,
                 state,
                 sources,
             ) {
@@ -2682,7 +2774,7 @@ impl SkinDocument {
             if self.destination_uses_skin_gauge_bar_render(destination) {
                 if let Some(items) = self.resolve_gauge_destination_items(
                     destination,
-                    &enabled_options,
+                    enabled_options,
                     state,
                     sources,
                 ) {
@@ -2703,7 +2795,7 @@ impl SkinDocument {
                 DestinationResolveContext {
                     images: &images,
                     values: &values,
-                    enabled_options: &enabled_options,
+                    enabled_options,
                     state,
                     text_state,
                     sources,
@@ -2716,9 +2808,13 @@ impl SkinDocument {
                     || self.destination_looks_like_pre_notes_judge_line(
                         destination,
                         &images,
-                        &enabled_options,
+                        enabled_options,
                         state,
-                        destinations.get(index + 1).copied(),
+                        planning
+                            .as_ref()
+                            .and_then(|planning| planning.destinations.get(index + 1).copied())
+                            .and_then(|destination| destination.resolve(self))
+                            .or_else(|| destinations.get(index + 1).copied()),
                     );
                 let target = destination_render_layer(
                     destination.timer,
