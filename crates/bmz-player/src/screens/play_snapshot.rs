@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use bmz_chart::model::LongNoteMode;
 use bmz_chart::model::{BgaAssetId, BgaEventKind, NoteKind, PlayableChart, TimingEventKind};
 use bmz_chart::timing::{TICKS_PER_BEAT, TimingMap};
 use bmz_core::judge::{Judge, TimingSide};
@@ -14,8 +15,9 @@ use bmz_render::chart_graph::{
 use bmz_render::plan::CHART_BGA_TEXTURE_BASE;
 use bmz_render::skin_offset::{SkinOffsetValue, SkinOffsetValues};
 use bmz_render::snapshot::{
-    DisplayBgaFrame, DisplayInput, DisplayJudgeCounts, DisplayJudgement, NoteVisualKind,
-    OverlaySnapshot, RenderSnapshot, VisibleBarLine, VisibleLongNote, VisibleMine, VisibleNote,
+    DisplayBgaFrame, DisplayInput, DisplayJudgeCounts, DisplayJudgement, LongBodyState,
+    NoteVisualKind, OverlaySnapshot, RenderSnapshot, VisibleBarLine, VisibleLongNote, VisibleMine,
+    VisibleNote,
 };
 
 pub const DEFAULT_LOOKAHEAD_US: i64 = 2_000_000;
@@ -227,6 +229,17 @@ pub fn build_render_snapshot_with_target_and_bga_frames(
             })
         }),
         show_ln_tail_cap: session.show_ln_tail_cap,
+        // beatoraja の TIMER_HCN_ACTIVE / TIMER_HCN_DAMAGE: HCN passing 中のみアクティブ。
+        hcn_active_ms: std::array::from_fn(|lane_index| {
+            session.lane_hcn_timer[lane_index].filter(|t| t.inclease).map(|t| {
+                ((render_now.0 - t.since.0) / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32
+            })
+        }),
+        hcn_damage_ms: std::array::from_fn(|lane_index| {
+            session.lane_hcn_timer[lane_index].filter(|t| !t.inclease).map(|t| {
+                ((render_now.0 - t.since.0) / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32
+            })
+        }),
         // beatoraja の TIMER_HOLD: LN ホールド中 (processing != null) のみアクティブ。
         hold_ms: std::array::from_fn(|lane_index| {
             session.judge.lanes[lane_index].active_long.map(|active| {
@@ -296,17 +309,32 @@ pub fn build_render_snapshot_with_target_and_bga_frames(
             if tail < 0.0 || head > 1.0 {
                 continue;
             }
-            // HEAD が判定済みで tail 未処理なら押下中とみなす。
-            // 物理キー状態（lane_keyon_started_at）は問わない。
-            let is_pressing = session.judge.lanes[long.lane.index()]
+            let mode = long.mode.unwrap_or(session.chart.metadata.long_note_mode);
+            // beatoraja drawLongNote の longImage 選択に対応する状態判定:
+            // processing == pair → Processing。HCN は passing 中 (区間内かつ始端判定
+            // 済み) なら押下状態で HcnActive / HcnDamage。それ以外は Inactive。
+            // 物理キー状態は processing 判定には使わない。
+            let lane_index = long.lane.index();
+            let is_processing = session.judge.lanes[lane_index]
                 .active_long
                 .is_some_and(|active| active.pair_index == pair_index);
+            let body_state = if is_processing {
+                LongBodyState::Processing
+            } else if mode == LongNoteMode::Hcn
+                && render_now.0 >= long.start_time.0
+                && render_now.0 < long.end_time.0
+                && let Some(timer) = session.lane_hcn_timer[lane_index]
+            {
+                if timer.inclease { LongBodyState::HcnActive } else { LongBodyState::HcnDamage }
+            } else {
+                LongBodyState::Inactive
+            };
             snapshot.visible_long_notes.push(VisibleLongNote {
                 lane: long.lane,
-                mode: long.mode.unwrap_or(session.chart.metadata.long_note_mode),
+                mode,
                 head_y: head.clamp(0.0, 1.0),
                 tail_y: tail.clamp(0.0, 1.0),
-                is_pressing,
+                body_state,
             });
         }
     }

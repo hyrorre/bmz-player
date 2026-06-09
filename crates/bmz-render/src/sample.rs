@@ -4,8 +4,8 @@ use bmz_core::time::TimeUs;
 
 use crate::scene::{AppSceneSnapshot, ResultSnapshot, SelectRowSnapshot, SelectSnapshot};
 use crate::snapshot::{
-    DisplayJudgeCounts, DisplayJudgement, FastSlowJudgeCounts, NoteVisualKind, OverlaySnapshot,
-    RenderSnapshot, VisibleBarLine, VisibleLongNote, VisibleNote,
+    DisplayJudgeCounts, DisplayJudgement, FastSlowJudgeCounts, LongBodyState, NoteVisualKind,
+    OverlaySnapshot, RenderSnapshot, VisibleBarLine, VisibleLongNote, VisibleNote,
 };
 
 pub fn sample_select_scene() -> AppSceneSnapshot {
@@ -117,14 +117,14 @@ pub fn sample_play_scene() -> AppSceneSnapshot {
         mode: LongNoteMode::Ln,
         head_y: 0.0,
         tail_y: 0.45,
-        is_pressing: true,
+        body_state: LongBodyState::Processing,
     });
     snapshot.visible_long_notes.push(VisibleLongNote {
         lane: Lane::Key6,
         mode: LongNoteMode::Hcn,
         head_y: 0.3,
         tail_y: 0.82,
-        is_pressing: false,
+        body_state: LongBodyState::Inactive,
     });
     snapshot.recent_judgements.push(DisplayJudgement {
         lane: Lane::Key3,

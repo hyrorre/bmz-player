@@ -141,6 +141,9 @@ pub struct GameSession {
     pub bga_stretch: i32,
     /// LN モードでも終端 (tail) キャップを描画するか。既定 OFF (beatoraja 準拠)。
     pub show_ln_tail_cap: bool,
+    /// HCN passing 中のレーン状態。beatoraja の TIMER_HCN_ACTIVE / TIMER_HCN_DAMAGE 相当。
+    /// HCN の区間内 (始端ノート判定済み) のレーンのみ Some。
+    pub lane_hcn_timer: [Option<HcnLaneTimer>; LANE_COUNT],
     /// beatoraja `event_index(BUTTON_HSFIX=55)`。
     pub hsfix_index: i32,
     pub input_timestamp_anchor: Option<InputTimestampAnchor>,
@@ -437,6 +440,41 @@ pub fn process_misses(session: &mut GameSession, audio_now: TimeUs) -> Vec<Judge
     apply_judge_outcome(session, outcome)
 }
 
+/// HCN passing 中レーンの表示タイマー状態。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HcnLaneTimer {
+    /// 押下中 (回復中) なら true、離している (減衰中) なら false。
+    pub inclease: bool,
+    /// 現在の inclease 状態が始まった時刻。タイマー経過時間の起点。
+    pub since: TimeUs,
+}
+
+/// beatoraja の TIMER_HCN_ACTIVE / TIMER_HCN_DAMAGE 切り替えに対応する。
+/// 「HCN の始端〜終端の区間内 (passing) かつ始端ノート判定済み」のレーンで、
+/// キー押下状態 (inclease) に応じて active/damage を切り替える。
+/// 状態が反転したらタイマー起点 (`since`) をリセットする。
+pub fn update_hcn_lane_timers(session: &mut GameSession, audio_now: TimeUs) {
+    let mut next: [Option<HcnLaneTimer>; LANE_COUNT] = [None; LANE_COUNT];
+    for pair in &session.chart.long_notes {
+        let mode = pair.mode.unwrap_or(session.chart.metadata.long_note_mode);
+        if mode != LongNoteMode::Hcn
+            || audio_now.0 < pair.start_time.0
+            || audio_now.0 >= pair.end_time.0
+            || !session.judge.judged_notes.contains_key(&pair.start_note_id)
+        {
+            continue;
+        }
+        let idx = pair.lane.index();
+        let inclease = session.lane_keyon_started_at[idx].is_some();
+        let since = match session.lane_hcn_timer[idx] {
+            Some(prev) if prev.inclease == inclease => prev.since,
+            _ => audio_now,
+        };
+        next[idx] = Some(HcnLaneTimer { inclease, since });
+    }
+    session.lane_hcn_timer = next;
+}
+
 pub fn apply_hcn_gauge(session: &mut GameSession, audio_now: TimeUs) {
     let has_hcn_lane = session.judge.lanes.iter().any(|lane_state| {
         lane_state.active_long.is_some_and(|active| active.mode == LongNoteMode::Hcn)
@@ -524,6 +562,7 @@ pub fn advance_session_frame(
         }
         judgements.extend(process_misses(session, times.audio_now));
         apply_hcn_gauge(session, times.audio_now);
+        update_hcn_lane_timers(session, times.audio_now);
         update_failed_state_from_gauge(session);
         schedule_keysounds(session, &judgements, audio);
         update_recent_judgements(session, &judgements, times.render_now);
@@ -1034,6 +1073,7 @@ mod tests {
             poor_bga_duration_us: 500_000,
             bga_stretch: 1,
             show_ln_tail_cap: false,
+            lane_hcn_timer: [None; LANE_COUNT],
             hsfix_index: 0,
             input_timestamp_anchor: None,
             pending_mine_hits: Vec::new(),

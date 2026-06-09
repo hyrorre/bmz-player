@@ -22,7 +22,8 @@ use crate::scene::{
     CourseConstraintFlags, ResultGradeDiffDisplay, SelectRowKind, SelectRowSnapshot, SelectSnapshot,
 };
 use crate::skin_offset::{SKIN_OFFSET_BAR_LINE, SkinOffsetValues};
-use crate::snapshot::{CourseStageMarker, DisplayJudgeCounts};
+use crate::snapshot::{CourseStageMarker, DisplayJudgeCounts, LongBodyState};
+use bmz_chart::model::LongNoteMode;
 
 const OFFSET_ALL: i32 = 10;
 const OFFSET_NOTES_1P: i32 = 30;
@@ -904,6 +905,9 @@ pub struct SkinNoteSetDef {
     pub lnend: Vec<String>,
     #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
     pub lnbody: Vec<String>,
+    /// 新形式: 押下中の LN 胴体。定義時は lnbody=非押下 / lnbodyActive=押下中。
+    #[serde(default, rename = "lnbodyActive", deserialize_with = "deserialize_skin_id_vec")]
+    pub lnbody_active: Vec<String>,
     #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
     pub lnactive: Vec<String>,
     #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
@@ -912,6 +916,15 @@ pub struct SkinNoteSetDef {
     pub hcnend: Vec<String>,
     #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
     pub hcnbody: Vec<String>,
+    /// 新形式: processing(正しく押下)中の HCN 胴体。
+    #[serde(default, rename = "hcnbodyActive", deserialize_with = "deserialize_skin_id_vec")]
+    pub hcnbody_active: Vec<String>,
+    /// 新形式: passing 中で inclease(回復中)の HCN 胴体。
+    #[serde(default, rename = "hcnbodyReactive", deserialize_with = "deserialize_skin_id_vec")]
+    pub hcnbody_reactive: Vec<String>,
+    /// 新形式: passing 中で離している(減衰中)の HCN 胴体。
+    #[serde(default, rename = "hcnbodyMiss", deserialize_with = "deserialize_skin_id_vec")]
+    pub hcnbody_miss: Vec<String>,
     #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
     pub hcnactive: Vec<String>,
     #[serde(default, deserialize_with = "deserialize_skin_id_vec")]
@@ -1537,9 +1550,10 @@ impl SkinContext {
         lane: Lane,
         key_mode: KeyMode,
         rect: Rect,
+        mode: LongNoteMode,
     ) -> Option<SkinRenderItem> {
         let document = self.document.as_ref()?;
-        document.note_ln_start_render_item(lane, key_mode, rect, &self.document_sources)
+        document.note_ln_start_render_item(lane, key_mode, rect, mode, &self.document_sources)
     }
 
     pub fn document_ln_end_item(
@@ -1547,25 +1561,28 @@ impl SkinContext {
         lane: Lane,
         key_mode: KeyMode,
         rect: Rect,
+        mode: LongNoteMode,
     ) -> Option<SkinRenderItem> {
         let document = self.document.as_ref()?;
-        document.note_ln_end_render_item(lane, key_mode, rect, &self.document_sources)
+        document.note_ln_end_render_item(lane, key_mode, rect, mode, &self.document_sources)
     }
 
-    /// ロングノート胴体（`note.lnbody` / `note.lnactive`）を指定矩形に伸縮描画する。
+    /// ロングノート胴体（`note.lnbody` 系 / `note.hcnbody` 系）を指定矩形に伸縮描画する。
     pub fn document_long_body_item(
         &self,
         lane: Lane,
         key_mode: KeyMode,
         rect: Rect,
-        is_pressing: bool,
+        mode: LongNoteMode,
+        state: LongBodyState,
     ) -> Option<SkinRenderItem> {
         let document = self.document.as_ref()?;
         document.note_long_body_render_item(
             lane,
             key_mode,
             rect,
-            is_pressing,
+            mode,
+            state,
             &self.document_sources,
         )
     }
@@ -1842,6 +1859,12 @@ pub struct SkinDrawState {
     /// 各レーンの LN ホールドタイマー経過ms。ホールド中のみ Some。
     /// beatoraja の TIMER_HOLD_1P (70..=77) / TIMER_HOLD_2P (80..=87) に対応。
     pub hold_ms: [Option<i32>; LANE_COUNT],
+    /// 各レーンの HCN ACTIVE(回復中) タイマー経過ms。
+    /// beatoraja の TIMER_HCN_ACTIVE_1P (250..=257) / 2P (260..=267) に対応。
+    pub hcn_active_ms: [Option<i32>; LANE_COUNT],
+    /// 各レーンの HCN DAMAGE(減衰中) タイマー経過ms。
+    /// beatoraja の TIMER_HCN_DAMAGE_1P (270..=277) / 2P (280..=287) に対応。
+    pub hcn_damage_ms: [Option<i32>; LANE_COUNT],
     /// 各レーンの直近判定の画像インデックス (0=PGREAT,1=GREAT,2=GOOD,3=BAD,4=POOR,5=MISS)。
     /// imageset (ボム・キービーム) の画像選択に使う。Noneなら判定なし。
     pub lane_judge: [Option<usize>; LANE_COUNT],
@@ -2100,6 +2123,8 @@ impl Default for SkinDrawState {
             keyon_ms: [None; LANE_COUNT],
             keyoff_ms: [None; LANE_COUNT],
             hold_ms: [None; LANE_COUNT],
+            hcn_active_ms: [None; LANE_COUNT],
+            hcn_damage_ms: [None; LANE_COUNT],
             lane_judge: [None; LANE_COUNT],
             judge_ms: [None; MAX_JUDGE_REGIONS],
             full_combo_ms: None,
@@ -4471,62 +4496,144 @@ impl SkinDocument {
         self.note_part_render_item(image_id, rect, sources)
     }
 
-    /// LN START（ヘッドキャップ）画像を描画する。未定義なら `note` にフォールバックする。
+    /// LN START（ヘッドキャップ）画像を描画する。
+    /// HCN モードでは `hcnstart`（beatoraja: `longImage[5]`）を優先し、
+    /// `lnstart` → `note` の順にフォールバックする。
     pub fn note_ln_start_render_item(
         &self,
         lane: Lane,
         key_mode: KeyMode,
         rect: Rect,
+        mode: LongNoteMode,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<SkinRenderItem> {
         let note = self.note.as_ref()?;
         let index = beatoraja_note_index(lane, key_mode);
-        let image_id = note.lnstart.get(index).or_else(|| note.note.get(index))?;
+        let hcn = (mode == LongNoteMode::Hcn).then(|| note.hcnstart.get(index)).flatten();
+        let image_id = hcn.or_else(|| note.lnstart.get(index)).or_else(|| note.note.get(index))?;
         self.note_part_render_item(image_id, rect, sources)
     }
 
-    /// LN END（テールキャップ）画像を描画する。未定義なら `note` にフォールバックする。
+    /// LN END（テールキャップ）画像を描画する。
+    /// HCN モードでは `hcnend`（beatoraja: `longImage[4]`）を優先し、
+    /// `lnend` → `note` の順にフォールバックする。
     pub fn note_ln_end_render_item(
         &self,
         lane: Lane,
         key_mode: KeyMode,
         rect: Rect,
+        mode: LongNoteMode,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<SkinRenderItem> {
         let note = self.note.as_ref()?;
         let index = beatoraja_note_index(lane, key_mode);
-        let image_id = note.lnend.get(index).or_else(|| note.note.get(index))?;
+        let hcn = (mode == LongNoteMode::Hcn).then(|| note.hcnend.get(index)).flatten();
+        let image_id = hcn.or_else(|| note.lnend.get(index)).or_else(|| note.note.get(index))?;
         self.note_part_render_item(image_id, rect, sources)
     }
 
-    /// ロングノート胴体画像を描画する。
-    /// `is_pressing` が `true` のとき（LN HEAD 判定済みでキー押下中）は
-    /// `lnbody`（beatoraja: `longImage[2]`）を使い、
-    /// そうでなければ `lnactive`（beatoraja: `longImage[3]`）を使う。
-    /// どちらも未定義なら `note` へフォールバック。
-    /// beatoraja JSON skin の `lnbodyActive` フィールドは未対応のため、
-    /// `lnbody` / `lnactive` の 2 種のみを使う。
+    /// LN/CN 用の胴体画像 id を選択する。
+    /// 新形式 (`lnbodyActive` 定義あり): 押下中=`lnbodyActive`, 非押下=`lnbody`。
+    /// 旧形式: 押下中=`lnbody` (longImage\[2\]), 非押下=`lnactive` (longImage\[3\])。
+    fn ln_body_image_id<'a>(
+        &self,
+        note: &'a SkinNoteSetDef,
+        index: usize,
+        pressing: bool,
+    ) -> Option<&'a String> {
+        if !note.lnbody_active.is_empty() {
+            if pressing {
+                note.lnbody_active.get(index).or_else(|| note.lnbody.get(index))
+            } else {
+                note.lnbody.get(index).or_else(|| note.lnbody_active.get(index))
+            }
+        } else if pressing {
+            note.lnbody.get(index).or_else(|| note.lnactive.get(index))
+        } else {
+            note.lnactive.get(index).or_else(|| note.lnbody.get(index))
+        }
+    }
+
+    /// HCN 用の胴体画像 id を選択する。beatoraja `JsonPlaySkinObjectLoader` の
+    /// longImage 割り当てに準拠:
+    /// 新形式 (`hcnbodyActive` 定義あり): \[6\]=`hcnbodyActive` \[7\]=`hcnbody`
+    /// \[8\]=`hcnbodyReactive` \[9\]=`hcnbodyMiss`。
+    /// 旧形式: \[6\]=`hcnbody` \[7\]=`hcnactive` \[8\]=`hcndamage` \[9\]=`hcnreactive`。
+    fn hcn_body_image_id<'a>(
+        &self,
+        note: &'a SkinNoteSetDef,
+        index: usize,
+        state: LongBodyState,
+    ) -> Option<&'a String> {
+        let new_format = !note.hcnbody_active.is_empty();
+        let primary = match state {
+            LongBodyState::Processing => {
+                if new_format {
+                    note.hcnbody_active.get(index)
+                } else {
+                    note.hcnbody.get(index)
+                }
+            }
+            LongBodyState::Inactive => {
+                if new_format {
+                    note.hcnbody.get(index)
+                } else {
+                    note.hcnactive.get(index)
+                }
+            }
+            LongBodyState::HcnActive => {
+                if new_format {
+                    note.hcnbody_reactive.get(index)
+                } else {
+                    note.hcndamage.get(index)
+                }
+            }
+            LongBodyState::HcnDamage => {
+                if new_format {
+                    note.hcnbody_miss.get(index)
+                } else {
+                    note.hcnreactive.get(index)
+                }
+            }
+        };
+        // 状態別画像が無い場合は HCN の基本 2 状態 → LN 胴体の順にフォールバック。
+        primary
+            .or_else(|| {
+                if new_format {
+                    if state.is_processing() {
+                        note.hcnbody_active.get(index).or_else(|| note.hcnbody.get(index))
+                    } else {
+                        note.hcnbody.get(index)
+                    }
+                } else if state.is_processing() {
+                    note.hcnbody.get(index).or_else(|| note.hcnactive.get(index))
+                } else {
+                    note.hcnactive.get(index).or_else(|| note.hcnbody.get(index))
+                }
+            })
+            .or_else(|| self.ln_body_image_id(note, index, state.is_processing()))
+    }
+
+    /// ロングノート胴体画像を描画する。`mode` と `state` の組み合わせで
+    /// beatoraja `drawLongNote` の longImage 選択を再現する。
+    /// 該当画像が無ければ LN 胴体 → `note` の順にフォールバックする。
     pub fn note_long_body_render_item(
         &self,
         lane: Lane,
         key_mode: KeyMode,
         rect: Rect,
-        is_pressing: bool,
+        mode: LongNoteMode,
+        state: LongBodyState,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<SkinRenderItem> {
         let note = self.note.as_ref()?;
         let index = beatoraja_note_index(lane, key_mode);
-        let image_id = if is_pressing {
-            note.lnbody
-                .get(index)
-                .or_else(|| note.lnactive.get(index))
-                .or_else(|| note.note.get(index))?
+        let image_id = if mode == LongNoteMode::Hcn {
+            self.hcn_body_image_id(note, index, state)
         } else {
-            note.lnactive
-                .get(index)
-                .or_else(|| note.lnbody.get(index))
-                .or_else(|| note.note.get(index))?
-        };
+            self.ln_body_image_id(note, index, state.is_processing())
+        }
+        .or_else(|| note.note.get(index))?;
         self.note_part_render_item(image_id, rect, sources)
     }
 
@@ -8612,6 +8719,20 @@ fn skin_timer_elapsed_ms(timer: Option<i32>, state: SkinDrawState) -> Option<i32
         Some(130) => state.keyoff_ms[Lane::Scratch2.index()],
         Some(131..=137) => state.keyoff_ms[Lane::Key8.index() + (timer.unwrap() - 131) as usize],
         Some(143 | 144) => state.end_of_note_ms,
+        // 1P HCN active: timer 250=Scratch, 251-257=Key1-7
+        Some(250..=257) => state.hcn_active_ms[(timer.unwrap() - 250) as usize],
+        // 2P HCN active: timer 260=Scratch2, 261-267=Key8-14
+        Some(260) => state.hcn_active_ms[Lane::Scratch2.index()],
+        Some(261..=267) => {
+            state.hcn_active_ms[Lane::Key8.index() + (timer.unwrap() - 261) as usize]
+        }
+        // 1P HCN damage: timer 270=Scratch, 271-277=Key1-7
+        Some(270..=277) => state.hcn_damage_ms[(timer.unwrap() - 270) as usize],
+        // 2P HCN damage: timer 280=Scratch2, 281-287=Key8-14
+        Some(280) => state.hcn_damage_ms[Lane::Scratch2.index()],
+        Some(281..=287) => {
+            state.hcn_damage_ms[Lane::Key8.index() + (timer.unwrap() - 281) as usize]
+        }
         Some(id)
             if (SKIN_DYNAMIC_TIMER_BASE
                 ..SKIN_DYNAMIC_TIMER_BASE + SKIN_DYNAMIC_TIMER_COUNT as i32)
@@ -14594,7 +14715,8 @@ mod tests {
                 Lane::Scratch,
                 KeyMode::K7,
                 Rect { x: 0.0, y: 0.0, width: 0.1, height: 0.1 },
-                false,
+                LongNoteMode::Ln,
+                LongBodyState::Inactive,
                 &sources,
             )
             .unwrap();
@@ -14607,6 +14729,129 @@ mod tests {
                 ..
             } if approx_eq(x, 0.5) && approx_eq(width, 0.3)
         ));
+    }
+
+    #[test]
+    fn skin_document_prefers_lnbody_active_for_pressed_long_body_in_new_format() {
+        // 新形式 (lnbodyActive 定義あり): 押下中=lnbodyActive、非押下=lnbody。
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "source": [{ "id": 1, "path": "notes.png" }],
+                "image": [
+                    { "id": "body", "src": 1, "x": 20, "y": 0, "w": 20, "h": 1 },
+                    { "id": "body-a", "src": 1, "x": 50, "y": 0, "w": 30, "h": 1 }
+                ],
+                "note": {
+                    "id": "notes",
+                    "note": ["body", "body", "body", "body", "body", "body", "body", "body"],
+                    "lnbody": ["body", "body", "body", "body", "body", "body", "body", "body"],
+                    "lnbodyActive": ["body-a", "body-a", "body-a", "body-a", "body-a", "body-a", "body-a", "body-a"]
+                }
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "1".to_string(),
+            SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 100.0, height: 50.0 },
+            },
+        )]);
+        let rect = Rect { x: 0.0, y: 0.0, width: 0.1, height: 0.1 };
+
+        let pressed = document
+            .note_long_body_render_item(
+                Lane::Scratch,
+                KeyMode::K7,
+                rect,
+                LongNoteMode::Ln,
+                LongBodyState::Processing,
+                &sources,
+            )
+            .unwrap();
+        let unpressed = document
+            .note_long_body_render_item(
+                Lane::Scratch,
+                KeyMode::K7,
+                rect,
+                LongNoteMode::Ln,
+                LongBodyState::Inactive,
+                &sources,
+            )
+            .unwrap();
+
+        // 押下中 → lnbodyActive (x=50/100)、非押下 → lnbody (x=20/100)
+        assert!(matches!(
+            pressed,
+            SkinRenderItem::Image { uv: TextureRegion { x, .. }, .. } if approx_eq(x, 0.5)
+        ));
+        assert!(matches!(
+            unpressed,
+            SkinRenderItem::Image { uv: TextureRegion { x, .. }, .. } if approx_eq(x, 0.2)
+        ));
+    }
+
+    #[test]
+    fn skin_document_selects_hcn_body_by_state() {
+        // 旧形式 HCN: [6]=hcnbody(processing) [7]=hcnactive(inactive)
+        // [8]=hcndamage(回復中) [9]=hcnreactive(減衰中)
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "source": [{ "id": 1, "path": "notes.png" }],
+                "image": [
+                    { "id": "hb", "src": 1, "x": 10, "y": 0, "w": 10, "h": 1 },
+                    { "id": "ha", "src": 1, "x": 20, "y": 0, "w": 10, "h": 1 },
+                    { "id": "hd", "src": 1, "x": 30, "y": 0, "w": 10, "h": 1 },
+                    { "id": "hr", "src": 1, "x": 40, "y": 0, "w": 10, "h": 1 }
+                ],
+                "note": {
+                    "id": "notes",
+                    "note": ["hb", "hb", "hb", "hb", "hb", "hb", "hb", "hb"],
+                    "hcnbody": ["hb", "hb", "hb", "hb", "hb", "hb", "hb", "hb"],
+                    "hcnactive": ["ha", "ha", "ha", "ha", "ha", "ha", "ha", "ha"],
+                    "hcndamage": ["hd", "hd", "hd", "hd", "hd", "hd", "hd", "hd"],
+                    "hcnreactive": ["hr", "hr", "hr", "hr", "hr", "hr", "hr", "hr"]
+                }
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = HashMap::from([(
+            "1".to_string(),
+            SkinDocumentTexture {
+                source_id: "1".to_string(),
+                texture: SkinTextureId(42),
+                source_size: SkinImageSize { width: 100.0, height: 50.0 },
+            },
+        )]);
+        let rect = Rect { x: 0.0, y: 0.0, width: 0.1, height: 0.1 };
+        let render_x = |state: LongBodyState| {
+            let item = document
+                .note_long_body_render_item(
+                    Lane::Scratch,
+                    KeyMode::K7,
+                    rect,
+                    LongNoteMode::Hcn,
+                    state,
+                    &sources,
+                )
+                .unwrap();
+            match item {
+                SkinRenderItem::Image { uv: TextureRegion { x, .. }, .. } => x,
+                _ => panic!("expected image item"),
+            }
+        };
+
+        assert!(approx_eq(render_x(LongBodyState::Processing), 0.1)); // hcnbody
+        assert!(approx_eq(render_x(LongBodyState::Inactive), 0.2)); // hcnactive
+        assert!(approx_eq(render_x(LongBodyState::HcnActive), 0.3)); // hcndamage
+        assert!(approx_eq(render_x(LongBodyState::HcnDamage), 0.4)); // hcnreactive
     }
 
     #[test]

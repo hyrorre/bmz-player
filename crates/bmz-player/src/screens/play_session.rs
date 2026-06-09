@@ -262,6 +262,7 @@ pub fn build_game_session_with_input_backend(
         poor_bga_duration_us: poor_bga_duration_us_from_profile(profile),
         bga_stretch: bga_stretch_from_profile(profile),
         show_ln_tail_cap: profile.play.show_ln_tail_cap,
+        lane_hcn_timer: [None; bmz_core::lane::LANE_COUNT],
         hsfix_index: 0,
         input_timestamp_anchor: None,
         pending_mine_hits: Vec::new(),

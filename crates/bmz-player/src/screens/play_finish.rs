@@ -716,6 +716,7 @@ mod tests {
             poor_bga_duration_us: 500_000,
             bga_stretch: 1,
             show_ln_tail_cap: false,
+            lane_hcn_timer: [None; bmz_core::lane::LANE_COUNT],
             hsfix_index: 0,
             input_timestamp_anchor: None,
             pending_mine_hits: Vec::new(),

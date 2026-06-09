@@ -257,6 +257,12 @@ pub struct RenderSnapshot {
     pub hold_ms: [Option<i32>; LANE_COUNT],
     /// LN モードでも終端 (tail) キャップを描画するか。既定 OFF (beatoraja 準拠)。
     pub show_ln_tail_cap: bool,
+    /// 各レーンの HCN ACTIVE(回復中) タイマー経過 ms。
+    /// beatoraja の TIMER_HCN_ACTIVE (skin timer 250..=257 / 260..=267) に渡る。
+    pub hcn_active_ms: [Option<i32>; LANE_COUNT],
+    /// 各レーンの HCN DAMAGE(減衰中) タイマー経過 ms。
+    /// beatoraja の TIMER_HCN_DAMAGE (skin timer 270..=277 / 280..=287) に渡る。
+    pub hcn_damage_ms: [Option<i32>; LANE_COUNT],
     /// 右下に常時表示するオーバーレイ文字列。
     pub overlay: OverlaySnapshot,
     /// `#BACKBMP` テクスチャがロード済みなら true (BGA より下に描画)。
@@ -346,6 +352,26 @@ pub struct VisibleMine {
     pub damage: u16,
 }
 
+/// ロングノート胴体の表示状態。beatoraja `drawLongNote` の longImage 選択に対応。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LongBodyState {
+    /// 非アクティブ（接近中など）。longImage\[3\] (LN/CN) / \[7\] (HCN)。
+    Inactive,
+    /// HEAD 判定済みで処理中 (`processing == pair`)。longImage\[2\] / \[6\]。
+    Processing,
+    /// HCN passing 中で inclease（押下していて回復中）。longImage\[8\]。
+    HcnActive,
+    /// HCN passing 中で離している（減衰中）。longImage\[9\]。
+    HcnDamage,
+}
+
+impl LongBodyState {
+    /// LN/CN 用の 2 状態（押下中か否か）に縮退させる。
+    pub fn is_processing(self) -> bool {
+        self == Self::Processing
+    }
+}
+
 /// 画面上に見えているロングノートの胴体。
 /// `head_y` は判定ライン側（手前）、`tail_y` は終端側（奥）。
 /// どちらも `VisibleNote::y` と同じ正規化座標（0.0=判定ライン, 1.0=最奥）で、
@@ -356,8 +382,8 @@ pub struct VisibleLongNote {
     pub mode: LongNoteMode,
     pub head_y: f32,
     pub tail_y: f32,
-    /// LN HEAD を判定済みでキーを押し続けている状態。胴体の画像を切り替えるために使う。
-    pub is_pressing: bool,
+    /// 胴体の表示状態。胴体画像の切り替えに使う。
+    pub body_state: LongBodyState,
 }
 
 #[derive(Debug, Clone, PartialEq)]

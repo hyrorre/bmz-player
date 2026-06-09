@@ -880,6 +880,8 @@ fn plan_play(
         keyon_ms,
         keyoff_ms,
         hold_ms: snapshot.hold_ms,
+        hcn_active_ms: snapshot.hcn_active_ms,
+        hcn_damage_ms: snapshot.hcn_damage_ms,
         lane_judge,
         judge_ms: judge_region_state.judge_ms,
         full_combo_ms: snapshot.full_combo_elapsed_ms,
@@ -1154,8 +1156,13 @@ fn plan_play(
         for body in &snapshot.visible_long_notes {
             if let Some(rect) =
                 skin.note_body_rect(body.lane, key_mode, body.head_y, body.tail_y, skin_state)
-                && let Some(item) =
-                    skin.document_long_body_item(body.lane, key_mode, rect, body.is_pressing)
+                && let Some(item) = skin.document_long_body_item(
+                    body.lane,
+                    key_mode,
+                    rect,
+                    body.mode,
+                    body.body_state,
+                )
             {
                 let item = skin.apply_play_skin_global_offset_to_item(item, skin_state);
                 append_skin_render_items(&mut commands, &[item]);
@@ -1171,7 +1178,8 @@ fn plan_play(
                 body.head_y,
                 note_height,
                 skin_state,
-            ) && let Some(item) = skin.document_ln_start_item(body.lane, key_mode, rect)
+            ) && let Some(item) =
+                skin.document_ln_start_item(body.lane, key_mode, rect, body.mode)
             {
                 let item = skin.apply_play_skin_global_offset_to_item(item, skin_state);
                 append_skin_render_items(&mut commands, &[item]);
@@ -1185,7 +1193,7 @@ fn plan_play(
                     note_height,
                     skin_state,
                 )
-                && let Some(item) = skin.document_ln_end_item(body.lane, key_mode, rect)
+                && let Some(item) = skin.document_ln_end_item(body.lane, key_mode, rect, body.mode)
             {
                 let item = skin.apply_play_skin_global_offset_to_item(item, skin_state);
                 append_skin_render_items(&mut commands, &[item]);
@@ -1200,9 +1208,11 @@ fn plan_play(
                 {
                     let item = match note.kind {
                         NoteVisualKind::LnStart => {
-                            skin.document_ln_start_item(lane, key_mode, rect)
+                            skin.document_ln_start_item(lane, key_mode, rect, LongNoteMode::Ln)
                         }
-                        NoteVisualKind::LnEnd => skin.document_ln_end_item(lane, key_mode, rect),
+                        NoteVisualKind::LnEnd => {
+                            skin.document_ln_end_item(lane, key_mode, rect, LongNoteMode::Ln)
+                        }
                         NoteVisualKind::Tap => skin.document_note_item(lane, key_mode, rect),
                     };
                     if let Some(item) = item {
@@ -2701,8 +2711,8 @@ mod tests {
 
     use crate::skin::{SkinDocument, SkinDocumentTexture, SkinImageSize, SkinTextureId};
     use crate::snapshot::{
-        DisplayInput, DisplayJudgeCounts, DisplayJudgement, NoteVisualKind, RenderSnapshot,
-        VisibleBarLine, VisibleLongNote, VisibleNote,
+        DisplayInput, DisplayJudgeCounts, DisplayJudgement, LongBodyState, NoteVisualKind,
+        RenderSnapshot, VisibleBarLine, VisibleLongNote, VisibleNote,
     };
 
     use super::*;
@@ -2715,7 +2725,7 @@ mod tests {
             mode: bmz_chart::model::LongNoteMode::Ln,
             head_y: 0.1,
             tail_y: 0.7,
-            is_pressing: false,
+            body_state: LongBodyState::Inactive,
         });
 
         let plan = DrawPlan::from_scene(&AppSceneSnapshot::Play(snapshot));
@@ -2740,14 +2750,14 @@ mod tests {
             mode: LongNoteMode::Cn,
             head_y: 0.1,
             tail_y: 0.7,
-            is_pressing: false,
+            body_state: LongBodyState::Inactive,
         });
         snapshot.visible_long_notes.push(VisibleLongNote {
             lane: Lane::Key6,
             mode: LongNoteMode::Hcn,
             head_y: 0.1,
             tail_y: 0.7,
-            is_pressing: false,
+            body_state: LongBodyState::Inactive,
         });
 
         let plan = DrawPlan::from_scene(&AppSceneSnapshot::Play(snapshot));
