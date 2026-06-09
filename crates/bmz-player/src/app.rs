@@ -276,6 +276,8 @@ struct WinitApp {
     select_hold_started_at: Option<Instant>,
     select_hold_last_trigger_at: Option<Instant>,
     select_hold_control: Option<String>,
+    select_analog_scroll_buffer: i32,
+    select_analog_last_tick_at: Option<Instant>,
     smoke_exit_after_frames: Option<u32>,
     smoke_exit_after_result_frames: Option<u32>,
     smoke_exit_on_result: bool,
@@ -755,6 +757,9 @@ const SKIN_RELOAD_DEBOUNCE: Duration = Duration::from_millis(300);
 const SELECT_HOLD_INITIAL_DELAY_MS: u64 = 300;
 /// 選曲画面のキーリピート移動の間隔 (ms)。
 const SELECT_HOLD_REPEAT_INTERVAL_MS: u64 = 50;
+/// アナログスクラッチの tick が途切れたとみなし、端数バッファを捨てるまでの時間 (ms)。
+/// beatoraja の `getAnalogDiffAndReset(i, 200)` の tolerance に相当。
+const SELECT_ANALOG_SCROLL_TOLERANCE_MS: u64 = 200;
 
 struct PendingSkinResult {
     generation: u64,
@@ -1392,6 +1397,8 @@ impl WinitApp {
             select_hold_started_at: None,
             select_hold_last_trigger_at: None,
             select_hold_control: None,
+            select_analog_scroll_buffer: 0,
+            select_analog_last_tick_at: None,
             smoke_exit_after_frames: options.smoke_exit_after_frames,
             smoke_exit_after_result_frames: options.smoke_exit_after_result_frames,
             smoke_exit_on_result: options.smoke_exit_on_result,
@@ -3313,13 +3320,55 @@ impl WinitApp {
 
     fn poll_gamepad_events(&mut self) {
         let Some(gilrs) = &mut self.gilrs else { return };
-        let events = gilrs.poll();
-        for event in &events {
+        let output = gilrs.poll();
+        for event in &output.buttons {
             let device_event = crate::input::gilrs::to_device_input_event(event);
             if let Some(active_play) = &self.active_play {
                 active_play.input.push_shared_event(device_event);
             }
             self.route_gamepad_button(&event.name.clone(), event.pressed);
+        }
+        for tick in &output.axis_ticks {
+            self.accumulate_select_analog_ticks(tick.name, tick.ticks);
+        }
+    }
+
+    /// 選曲画面のアナログスクラッチ tick を蓄積する。回転量比例スクロール用。
+    fn accumulate_select_analog_ticks(&mut self, axis: &str, ticks: i32) {
+        if !matches!(self.view_state(), AppViewState::Select)
+            || self.active_play.is_some()
+            || self.pending_decide.is_some()
+            || self.pending_play_start.is_some()
+            || self.select_option_panel != 0
+        {
+            return;
+        }
+        let Some(delta) = select_analog_scroll_delta(axis, ticks, &self.select_keys) else {
+            return;
+        };
+        let now = Instant::now();
+        // tick が途切れていたら古い端数を捨てる (beatoraja の 200ms tolerance 相当)
+        if self.select_analog_last_tick_at.is_none_or(|t| {
+            now.duration_since(t) > Duration::from_millis(SELECT_ANALOG_SCROLL_TOLERANCE_MS)
+        }) {
+            self.select_analog_scroll_buffer = 0;
+        }
+        self.select_analog_last_tick_at = Some(now);
+        self.select_analog_scroll_buffer += delta;
+    }
+
+    /// 蓄積したアナログ tick を analog_ticks_per_scroll ごとに 1 移動へ変換する。
+    /// beatoraja MusicSelectInputProcessor の analogScrollBuffer と同じ仕組み。
+    fn advance_select_analog_scroll(&mut self) {
+        if !matches!(self.view_state(), AppViewState::Select) {
+            self.select_analog_scroll_buffer = 0;
+            self.select_analog_last_tick_at = None;
+            return;
+        }
+        let ticks_per_scroll = self.boot.profile_config.input.analog_ticks_per_scroll.max(1) as i32;
+        let mov = take_analog_scroll_steps(&mut self.select_analog_scroll_buffer, ticks_per_scroll);
+        for _ in 0..mov.abs() {
+            self.move_selection(if mov > 0 { SelectMove::Next } else { SelectMove::Previous });
         }
     }
 
@@ -3523,6 +3572,14 @@ impl WinitApp {
         }
 
         if matches!(self.view_state(), AppViewState::Select) {
+            // アナログ軸にバインドされたスクラッチは tick 比例スクロール
+            // (advance_select_analog_scroll) で処理する。beatoraja の isNonAnalogPressed 相当。
+            if button.starts_with("Axis")
+                && (self.select_keys.is_scratch_up(button)
+                    || self.select_keys.is_scratch_down(button))
+            {
+                return;
+            }
             if pressed {
                 let action = match button {
                     "DPadUp" => Some(SelectAction::Move(SelectMove::Previous)),
@@ -8294,6 +8351,7 @@ impl ApplicationHandler for WinitApp {
                 self.limit_frame_rate();
                 self.poll_gamepad_events();
                 self.advance_select_hold_move();
+                self.advance_select_analog_scroll();
                 self.drain_pending_skins();
                 self.poll_play_preload();
                 self.poll_pending_table_fetch();
@@ -10687,6 +10745,29 @@ impl SelectKeyBindings {
     }
 }
 
+/// アナログ tick の選曲スクロール寄与を返す。Next 方向を正とする。
+/// scratch up/down にバインドされていない軸は `None`。
+fn select_analog_scroll_delta(axis: &str, ticks: i32, bindings: &SelectKeyBindings) -> Option<i32> {
+    if ticks == 0 {
+        return None;
+    }
+    let control = format!("{}{}", axis, if ticks > 0 { "+" } else { "-" });
+    if bindings.is_scratch_down(&control) {
+        Some(ticks.abs())
+    } else if bindings.is_scratch_up(&control) {
+        Some(-ticks.abs())
+    } else {
+        None
+    }
+}
+
+/// バッファから ticks_per_scroll ごとの移動数を取り出す。端数はバッファに残す。
+fn take_analog_scroll_steps(buffer: &mut i32, ticks_per_scroll: i32) -> i32 {
+    let steps = *buffer / ticks_per_scroll;
+    *buffer %= ticks_per_scroll;
+    steps
+}
+
 fn select_controls_with_lane_fallback(
     configured: Vec<String>,
     lane_fallback: Vec<String>,
@@ -11481,6 +11562,33 @@ mod tests {
         assert_eq!(select_option_panel_for_holds(true, false), 1);
         assert_eq!(select_option_panel_for_holds(false, true), 2);
         assert_eq!(select_option_panel_for_holds(true, true), 3);
+    }
+
+    #[test]
+    fn select_analog_scroll_delta_maps_scratch_bindings() {
+        let gamepad_keys = SelectKeyBindings::from_profile(
+            &ProfileConfig::new_default("default", "Default", 1).input,
+        );
+        // AxisLeftX- = scratch up (Previous = 負), AxisLeftX+ = scratch down (Next = 正)
+        assert_eq!(select_analog_scroll_delta("AxisLeftX", -4, &gamepad_keys), Some(-4));
+        assert_eq!(select_analog_scroll_delta("AxisLeftX", 4, &gamepad_keys), Some(4));
+        assert_eq!(select_analog_scroll_delta("AxisLeftX", 0, &gamepad_keys), None);
+        assert_eq!(select_analog_scroll_delta("AxisRightY", 4, &gamepad_keys), None);
+    }
+
+    #[test]
+    fn take_analog_scroll_steps_keeps_remainder() {
+        let mut buffer = 7;
+        assert_eq!(take_analog_scroll_steps(&mut buffer, 3), 2);
+        assert_eq!(buffer, 1);
+
+        let mut buffer = -7;
+        assert_eq!(take_analog_scroll_steps(&mut buffer, 3), -2);
+        assert_eq!(buffer, -1);
+
+        let mut buffer = 2;
+        assert_eq!(take_analog_scroll_steps(&mut buffer, 3), 0);
+        assert_eq!(buffer, 2);
     }
 
     #[test]

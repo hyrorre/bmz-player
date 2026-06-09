@@ -423,6 +423,7 @@ pub fn default_profile_input() -> ProfileInputConfig {
         legacy_bindings: Vec::new(),
         analog_scratch_sensitivity: 1.0,
         analog_scratch_timeout_ms: 500,
+        analog_ticks_per_scroll: 3,
     }
 }
 
@@ -505,6 +506,7 @@ mod tests {
             legacy_bindings: Vec::new(),
             analog_scratch_sensitivity: 1.0,
             analog_scratch_timeout_ms: 500,
+            analog_ticks_per_scroll: 3,
         }
     }
 
@@ -533,6 +535,7 @@ mod tests {
             legacy_bindings: Vec::new(),
             analog_scratch_sensitivity: 1.0,
             analog_scratch_timeout_ms: 500,
+            analog_ticks_per_scroll: 3,
         };
         let bindings = resolve_play_bindings(&input, KeyMode::K10).unwrap();
         assert!(bindings.iter().any(|e| e.lane == Some(LaneConfig::Key8)));
@@ -627,6 +630,7 @@ mod tests {
             legacy_bindings: Vec::new(),
             analog_scratch_sensitivity: 1.0,
             analog_scratch_timeout_ms: 500,
+            analog_ticks_per_scroll: 3,
         };
         assert_eq!(
             validate_play_inherit_config(&input),

@@ -281,6 +281,9 @@ pub struct ProfileInputConfig {
     pub analog_scratch_sensitivity: f32,
     #[serde(default = "default_analog_scratch_timeout_ms")]
     pub analog_scratch_timeout_ms: u32,
+    /// 選曲画面でアナログスクラッチ何 tick ごとにカーソルを 1 つ動かすか (beatoraja の analogTicksPerScroll)。
+    #[serde(default = "default_analog_ticks_per_scroll")]
+    pub analog_ticks_per_scroll: u32,
 }
 
 fn default_analog_scratch_sensitivity() -> f32 {
@@ -289,6 +292,10 @@ fn default_analog_scratch_sensitivity() -> f32 {
 
 fn default_analog_scratch_timeout_ms() -> u32 {
     500
+}
+
+fn default_analog_ticks_per_scroll() -> u32 {
+    3
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

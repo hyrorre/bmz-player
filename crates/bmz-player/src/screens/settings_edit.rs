@@ -225,6 +225,9 @@ impl SettingsEditSession {
             SettingsEntryId::AnalogScratchTimeoutMs => {
                 SettingsBaseline::U32(profile.input.analog_scratch_timeout_ms)
             }
+            SettingsEntryId::AnalogTicksPerScroll => {
+                SettingsBaseline::U32(profile.input.analog_ticks_per_scroll)
+            }
             SettingsEntryId::ReplayAutoSave => SettingsBaseline::Bool(profile.replay.auto_save),
             SettingsEntryId::ReplaySlot1Rule => {
                 SettingsBaseline::ReplaySlotRule(profile.replay.slot_rules[0])
@@ -339,6 +342,9 @@ impl SettingsEditSession {
             }
             (SettingsEntryId::AnalogScratchTimeoutMs, SettingsBaseline::U32(value)) => {
                 profile.input.analog_scratch_timeout_ms = *value;
+            }
+            (SettingsEntryId::AnalogTicksPerScroll, SettingsBaseline::U32(value)) => {
+                profile.input.analog_ticks_per_scroll = *value;
             }
             (SettingsEntryId::ReplayAutoSave, SettingsBaseline::Bool(value)) => {
                 profile.replay.auto_save = *value;

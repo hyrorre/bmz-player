@@ -15,6 +15,20 @@ pub struct GilrsButtonEvent {
     pub pressed: bool,
 }
 
+/// アナログ軸の生 tick 差分。選曲画面の回転量比例スクロール用。
+/// `name` は符号なしの軸名 (`AxisLeftX` 等)、`ticks` は符号付き tick 数。
+pub struct GilrsAxisTickEvent {
+    pub name: &'static str,
+    pub device_id: DeviceId,
+    pub ticks: i32,
+}
+
+#[derive(Default)]
+pub struct GilrsPollOutput {
+    pub buttons: Vec<GilrsButtonEvent>,
+    pub axis_ticks: Vec<GilrsAxisTickEvent>,
+}
+
 #[derive(Default)]
 struct ScratchState {
     active: bool,
@@ -49,13 +63,13 @@ impl GilrsBackend {
         })
     }
 
-    pub fn poll(&mut self) -> Vec<GilrsButtonEvent> {
-        let mut events = Vec::new();
+    pub fn poll(&mut self) -> GilrsPollOutput {
+        let mut output = GilrsPollOutput::default();
         while let Some(gilrs::Event { id, event, .. }) = self.gilrs.next_event() {
             match event {
                 EventType::ButtonPressed(button, _) => {
                     if let Some(name) = gilrs_button_name(button) {
-                        events.push(GilrsButtonEvent {
+                        output.buttons.push(GilrsButtonEvent {
                             name: name.to_string(),
                             device_id: gilrs_gamepad_device_id(id),
                             pressed: true,
@@ -64,7 +78,7 @@ impl GilrsBackend {
                 }
                 EventType::ButtonReleased(button, _) => {
                     if let Some(name) = gilrs_button_name(button) {
-                        events.push(GilrsButtonEvent {
+                        output.buttons.push(GilrsButtonEvent {
                             name: name.to_string(),
                             device_id: gilrs_gamepad_device_id(id),
                             pressed: false,
@@ -72,7 +86,7 @@ impl GilrsBackend {
                     }
                 }
                 EventType::AxisChanged(axis, value, _) => {
-                    self.process_axis(id, axis, value, &mut events);
+                    self.process_axis(id, axis, value, &mut output);
                 }
                 EventType::Connected => {
                     tracing::info!(gamepad = ?id, "gamepad connected");
@@ -83,8 +97,8 @@ impl GilrsBackend {
                 _ => {}
             }
         }
-        self.check_scratch_timeouts(&mut events);
-        events
+        self.check_scratch_timeouts(&mut output.buttons);
+        output
     }
 
     fn process_axis(
@@ -92,7 +106,7 @@ impl GilrsBackend {
         id: gilrs::GamepadId,
         axis: Axis,
         value: f32,
-        events: &mut Vec<GilrsButtonEvent>,
+        output: &mut GilrsPollOutput,
     ) {
         let Some(axis_name) = gilrs_axis_name(axis) else { return };
         let prev = self.axis_prev.entry((id, axis)).or_insert(value);
@@ -105,19 +119,20 @@ impl GilrsBackend {
 
         let positive = ticks > 0;
         let device_id = gilrs_gamepad_device_id(id);
+        output.axis_ticks.push(GilrsAxisTickEvent { name: axis_name, device_id, ticks });
         let state = self.scratch_state.entry((id, axis)).or_default();
 
         if !state.active {
             let name = format!("{}{}", axis_name, if positive { "+" } else { "-" });
-            events.push(GilrsButtonEvent { name, device_id, pressed: true });
+            output.buttons.push(GilrsButtonEvent { name, device_id, pressed: true });
             state.active = true;
             state.positive_direction = positive;
         } else if state.positive_direction != positive {
             let old_name =
                 format!("{}{}", axis_name, if state.positive_direction { "+" } else { "-" });
-            events.push(GilrsButtonEvent { name: old_name, device_id, pressed: false });
+            output.buttons.push(GilrsButtonEvent { name: old_name, device_id, pressed: false });
             let new_name = format!("{}{}", axis_name, if positive { "+" } else { "-" });
-            events.push(GilrsButtonEvent { name: new_name, device_id, pressed: true });
+            output.buttons.push(GilrsButtonEvent { name: new_name, device_id, pressed: true });
             state.positive_direction = positive;
         }
         state.last_movement = Some(Instant::now());

@@ -43,6 +43,7 @@ pub enum SettingsEntryId {
     ScratchInputMode,
     AnalogScratchSensitivity,
     AnalogScratchTimeoutMs,
+    AnalogTicksPerScroll,
     ReplayAutoSave,
     ReplaySlot1Rule,
     ReplaySlot2Rule,
@@ -89,8 +90,12 @@ impl SettingsEntryId {
         Self::TargetGreenNumber,
     ];
 
-    pub const INPUT_ENTRIES: &'static [Self] =
-        &[Self::ScratchInputMode, Self::AnalogScratchSensitivity, Self::AnalogScratchTimeoutMs];
+    pub const INPUT_ENTRIES: &'static [Self] = &[
+        Self::ScratchInputMode,
+        Self::AnalogScratchSensitivity,
+        Self::AnalogScratchTimeoutMs,
+        Self::AnalogTicksPerScroll,
+    ];
 
     pub const REPLAY_ENTRIES: &'static [Self] = &[
         Self::ReplayAutoSave,
@@ -134,6 +139,7 @@ impl SettingsEntryId {
             Self::ScratchInputMode => "SCRATCH",
             Self::AnalogScratchSensitivity => "ANALOG SENS",
             Self::AnalogScratchTimeoutMs => "ANALOG TIME",
+            Self::AnalogTicksPerScroll => "ANALOG SCROLL",
             Self::ReplayAutoSave => "REPLAY SAVE",
             Self::ReplaySlot1Rule => "REPLAY 1",
             Self::ReplaySlot2Rule => "REPLAY 2",
@@ -199,6 +205,9 @@ pub fn format_settings_value(profile: &ProfileConfig, id: SettingsEntryId) -> St
         }
         SettingsEntryId::AnalogScratchTimeoutMs => {
             format!("{} ms", profile.input.analog_scratch_timeout_ms)
+        }
+        SettingsEntryId::AnalogTicksPerScroll => {
+            format!("{} ticks", profile.input.analog_ticks_per_scroll)
         }
         SettingsEntryId::ReplayAutoSave => format_bool_on_off(profile.replay.auto_save),
         SettingsEntryId::ReplaySlot1Rule => format_replay_slot_rule(profile.replay.slot_rules[0]),
@@ -321,6 +330,9 @@ pub fn adjust_settings_value(profile: &mut ProfileConfig, id: SettingsEntryId, d
         }
         SettingsEntryId::AnalogScratchTimeoutMs => {
             adjust_u32(&mut profile.input.analog_scratch_timeout_ms, delta, 0, 5000)
+        }
+        SettingsEntryId::AnalogTicksPerScroll => {
+            adjust_u32(&mut profile.input.analog_ticks_per_scroll, delta, 1, 100)
         }
         SettingsEntryId::ReplayAutoSave => {
             if delta == 0 {
