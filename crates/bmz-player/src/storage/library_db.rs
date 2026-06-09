@@ -1668,14 +1668,45 @@ fn bpm_at(chart: &PlayableChart, time_us: i64) -> f64 {
 fn chart_speed_changes(chart: &PlayableChart) -> Vec<ChartSpeedChange> {
     let mut out = vec![ChartSpeedChange { speed: chart.metadata.initial_bpm, time_ms: 0 }];
     let mut current = chart.metadata.initial_bpm;
+    // STOP 区間の終了時刻。Some の間は STOP 区間内とみなし、BPM 変化のみ先読みする。
+    let mut stop_end_us: Option<i64> = None;
     for event in &chart.timing_events {
-        let next = match event.kind {
-            TimingEventKind::BpmChange { bpm } => bpm,
-            TimingEventKind::Stop { .. } => 0.0,
-        };
-        if (next - current).abs() > f64::EPSILON {
-            out.push(ChartSpeedChange { speed: next, time_ms: event.time.0 / 1_000 });
-            current = next;
+        let event_us = event.time.0;
+        // STOP 区間を抜けたら resume エントリを出力してペンディングを解除する。
+        if let Some(end_us) = stop_end_us {
+            if event_us >= end_us {
+                if end_us < chart.end_time.0 {
+                    out.push(ChartSpeedChange { speed: current, time_ms: end_us / 1_000 });
+                }
+                stop_end_us = None;
+                // fall through: このイベントを通常通り処理する
+            } else {
+                // STOP 区間内: BPM 変化だけ current に反映して次へ
+                if let TimingEventKind::BpmChange { bpm } = event.kind {
+                    current = bpm;
+                }
+                continue;
+            }
+        }
+        match event.kind {
+            TimingEventKind::Stop { duration_us } => {
+                out.push(ChartSpeedChange { speed: 0.0, time_ms: event_us / 1_000 });
+                // current は STOP 前の BPM のまま保持し、
+                // STOP 区間内の BPM 変化を先読みするため stop_end_us をセットする。
+                stop_end_us = Some(event_us + duration_us);
+            }
+            TimingEventKind::BpmChange { bpm } => {
+                if (bpm - current).abs() > f64::EPSILON {
+                    out.push(ChartSpeedChange { speed: bpm, time_ms: event_us / 1_000 });
+                    current = bpm;
+                }
+            }
+        }
+    }
+    // ループ終了後も STOP がペンディングなら resume エントリを出力する。
+    if let Some(end_us) = stop_end_us {
+        if end_us < chart.end_time.0 {
+            out.push(ChartSpeedChange { speed: current, time_ms: end_us / 1_000 });
         }
     }
     if out.last().is_some_and(|last| last.time_ms != chart.end_time.0 / 1_000) {
@@ -1891,6 +1922,61 @@ mod tests {
             sound: None,
             damage: None,
         }
+    }
+
+    fn timing_event(time_us: i64, kind: bmz_chart::model::TimingEventKind) -> bmz_chart::model::TimingEvent {
+        bmz_chart::model::TimingEvent {
+            tick: ChartTick(0),
+            time: TimeUs(time_us),
+            kind,
+        }
+    }
+
+    /// STOP 後の resume エントリが正しく追加されるか確認。
+    /// 修正前は STOP 後も speed=0 のまま曲末まで続いていた。
+    #[test]
+    fn chart_speed_changes_emits_resume_after_stop() {
+        use bmz_chart::model::TimingEventKind;
+        let mut c = chart("stop_test");
+        // BPM=128 で始まり、2 秒目に 0.5 秒の STOP
+        c.timing_events.push(timing_event(
+            2_000_000,
+            TimingEventKind::Stop { duration_us: 500_000 },
+        ));
+        let changes = chart_speed_changes(&c);
+        // 期待: [{128, 0}, {0, 2000}, {128, 2500}, {128, 10000}]
+        // STOP 直後の resume (speed=128 at 2500ms) が必須
+        let resume = changes.iter().find(|c| c.time_ms == 2_500 && c.speed == 128.0);
+        assert!(resume.is_some(), "resume entry after stop must exist: {changes:?}");
+        // 末尾エントリが speed=0 になってはいけない
+        assert_ne!(
+            changes.last().unwrap().speed, 0.0,
+            "last entry must not be stop speed: {changes:?}"
+        );
+    }
+
+    /// STOP 区間内に BPM 変化がある場合、STOP 終了後に新 BPM で再開すること。
+    #[test]
+    fn chart_speed_changes_resume_bpm_reflects_change_during_stop() {
+        use bmz_chart::model::TimingEventKind;
+        let mut c = chart("stop_bpm_change");
+        // 1 秒目: STOP 2 秒間 (終了 3 秒)
+        c.timing_events.push(timing_event(
+            1_000_000,
+            TimingEventKind::Stop { duration_us: 2_000_000 },
+        ));
+        // 2 秒目 (STOP 中): BPM 200 に変化
+        c.timing_events.push(timing_event(
+            2_000_000,
+            TimingEventKind::BpmChange { bpm: 200.0 },
+        ));
+        let changes = chart_speed_changes(&c);
+        // resume は STOP 終了 (3 秒) に BPM=200 で出るはず
+        let resume = changes.iter().find(|c| c.time_ms == 3_000);
+        assert!(
+            resume.is_some_and(|r| r.speed == 200.0),
+            "resume must use post-stop BPM: {changes:?}"
+        );
     }
 
     #[test]

@@ -37,28 +37,43 @@ pub fn build_bpm_graph_segments(chart: &PlayableChart) -> Vec<BpmGraphSegment> {
     for event in &chart.timing_events {
         let event_us = event.time.0;
         if event_us <= segment_start_us {
+            // セグメント開始以前（または同時刻）のイベントは BPM 更新のみ行い、
+            // STOP 区間内のイベントも BPM を先読みする。
             if let TimingEventKind::BpmChange { bpm } = event.kind {
                 current_bpm = bpm as f32;
             }
             continue;
         }
-        let start_ratio = segment_start_us as f32 / duration_us;
-        let end_ratio = event_us as f32 / duration_us;
-        let is_stop = matches!(event.kind, TimingEventKind::Stop { .. });
-        if is_stop {
-            segments.push(BpmGraphSegment { start_ratio, end_ratio, bpm: 0.0, is_stop: true });
-        } else {
+        if let TimingEventKind::Stop { duration_us: stop_dur } = event.kind {
+            // STOP 直前の区間を現在 BPM のセグメントとして追加。
             segments.push(BpmGraphSegment {
-                start_ratio,
-                end_ratio,
+                start_ratio: segment_start_us as f32 / duration_us,
+                end_ratio: event_us as f32 / duration_us,
                 bpm: current_bpm,
                 is_stop: false,
             });
+            // STOP 区間 [event_us, event_us + stop_dur] を追加。
+            let stop_end_us = event_us + stop_dur;
+            segments.push(BpmGraphSegment {
+                start_ratio: event_us as f32 / duration_us,
+                end_ratio: (stop_end_us as f32 / duration_us).min(1.0),
+                bpm: 0.0,
+                is_stop: true,
+            });
+            // 次のセグメントは STOP 終了時点から。
+            segment_start_us = stop_end_us;
+        } else {
+            segments.push(BpmGraphSegment {
+                start_ratio: segment_start_us as f32 / duration_us,
+                end_ratio: event_us as f32 / duration_us,
+                bpm: current_bpm,
+                is_stop: false,
+            });
+            if let TimingEventKind::BpmChange { bpm } = event.kind {
+                current_bpm = bpm as f32;
+            }
+            segment_start_us = event_us;
         }
-        if let TimingEventKind::BpmChange { bpm } = event.kind {
-            current_bpm = bpm as f32;
-        }
-        segment_start_us = event_us;
     }
     if segment_start_us < chart.end_time.0 {
         segments.push(BpmGraphSegment {
@@ -258,5 +273,35 @@ mod tests {
         });
         let segments = build_bpm_graph_segments(&chart);
         assert!(segments.iter().any(|segment| segment.is_stop));
+    }
+
+    /// STOP セグメントは「STOP 直前」ではなく「STOP 区間 [stop_time, stop_time+dur]」でなければならない。
+    /// 修正前は [0, stop_time] が is_stop=true になるバグがあった。
+    #[test]
+    fn build_bpm_graph_segments_stop_covers_correct_interval() {
+        // end_time = 3s、STOP は 1s から 0.5s 間
+        let mut chart = empty_chart(); // end_time = 3_000_000 us
+        chart.timing_events.push(TimingEvent {
+            tick: ChartTick(192),
+            time: TimeUs(1_000_000),
+            kind: TimingEventKind::Stop { duration_us: 500_000 },
+        });
+        let segments = build_bpm_graph_segments(&chart);
+        // pre-stop: [0, 1s) bpm=120 is_stop=false
+        // stop:     [1s, 1.5s) bpm=0 is_stop=true
+        // post-stop: [1.5s, 3s] bpm=120 is_stop=false
+        let stop_seg = segments.iter().find(|s| s.is_stop).expect("stop segment");
+        let duration_us = 3_000_000_f32;
+        assert!(
+            (stop_seg.start_ratio - 1_000_000.0 / duration_us).abs() < 1e-4,
+            "stop start_ratio should be at stop event time"
+        );
+        assert!(
+            (stop_seg.end_ratio - 1_500_000.0 / duration_us).abs() < 1e-4,
+            "stop end_ratio should be at stop_time + duration"
+        );
+        // STOP 直前のセグメントは is_stop=false でなければならない。
+        let pre_stop = segments.iter().find(|s| !s.is_stop && s.end_ratio <= stop_seg.start_ratio + 1e-4);
+        assert!(pre_stop.is_some_and(|s| !s.is_stop), "pre-stop segment must not be a stop");
     }
 }
