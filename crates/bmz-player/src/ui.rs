@@ -21,10 +21,11 @@ use crate::config::app_config::{
     InputBackendKind, LogLevel, PresentModeConfig, RendererBackend, WindowMode,
 };
 use crate::config::profile_config::{
-    AssistOptionConfig, BgaExpandConfig, BgaModeConfig, GaugeAutoShiftConfig, GaugeTypeConfig,
-    HispeedModeConfig, IrProviderConfig, IrProviderRoleConfig, IrSendPolicyConfig,
-    JudgeAlgorithmConfig, LaneEffectConfig, ProfileConfig, RandomOptionConfig, ReplaySlotRule,
-    ScratchInputMode, SkinConfig, SkinHistoryEntryConfig, SkinOffsetConfig, TargetOptionConfig,
+    AssistOptionConfig, BgaExpandConfig, BgaModeConfig, FastSlowDisplayScope,
+    GaugeAutoShiftConfig, GaugeTypeConfig, HispeedModeConfig, IrProviderConfig,
+    IrProviderRoleConfig, IrSendPolicyConfig, JudgeAlgorithmConfig, LaneEffectConfig,
+    ProfileConfig, RandomOptionConfig, ReplaySlotRule, ScratchInputMode, SkinConfig,
+    SkinHistoryEntryConfig, SkinOffsetConfig, TargetOptionConfig,
 };
 use crate::ln_policy::LnPolicySetting;
 use crate::practice_ui::{PracticePanelContext, build_practice_panel};
@@ -1609,14 +1610,36 @@ fn build_profile_settings_panel(
                                 judge_algorithm_label(JudgeAlgorithmConfig::Lowest),
                             );
                         });
-                    ui.add(
-                        egui::Slider::new(
-                            &mut profile.judge.fast_slow_display_threshold_ms,
-                            0..=50,
-                        )
-                        .text("FAST/SLOW 表示閾値 (ms)"),
-                    );
-                    ui.label("0 = 常時表示。|差分| がこれ未満の判定は FAST/SLOW を表示しません。");
+                    egui::ComboBox::from_label("FAST/SLOW 表示モード")
+                        .selected_text(fast_slow_scope_label(
+                            profile.judge.fast_slow_display_scope,
+                        ))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut profile.judge.fast_slow_display_scope,
+                                FastSlowDisplayScope::Auto,
+                                fast_slow_scope_label(FastSlowDisplayScope::Auto),
+                            );
+                            ui.selectable_value(
+                                &mut profile.judge.fast_slow_display_scope,
+                                FastSlowDisplayScope::ThresholdMs,
+                                fast_slow_scope_label(FastSlowDisplayScope::ThresholdMs),
+                            );
+                        });
+                    if profile.judge.fast_slow_display_scope
+                        == FastSlowDisplayScope::ThresholdMs
+                    {
+                        ui.add(
+                            egui::Slider::new(
+                                &mut profile.judge.fast_slow_display_threshold_ms,
+                                0..=50,
+                            )
+                            .text("FAST/SLOW 表示閾値 (ms)"),
+                        );
+                        ui.label(
+                            "0 = 常時表示。|差分| がこれ未満の判定は FAST/SLOW を表示しません。",
+                        );
+                    }
                 });
 
                 egui::CollapsingHeader::new("プレイ").show(ui, |ui| {
@@ -2005,6 +2028,13 @@ fn judge_algorithm_label(value: JudgeAlgorithmConfig) -> &'static str {
         JudgeAlgorithmConfig::Combo => "COMBO",
         JudgeAlgorithmConfig::Duration => "DURATION",
         JudgeAlgorithmConfig::Lowest => "LOWEST",
+    }
+}
+
+fn fast_slow_scope_label(value: FastSlowDisplayScope) -> &'static str {
+    match value {
+        FastSlowDisplayScope::Auto => "Auto (beatoraja 準拠)",
+        FastSlowDisplayScope::ThresholdMs => "閾値 ms (PGREAT 含む全判定)",
     }
 }
 

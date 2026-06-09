@@ -651,13 +651,25 @@ fn display_judgement(event: &JudgementEvent, combo: u32) -> DisplayJudgement {
     }
 }
 
-/// `threshold_ms > 0` のとき、|delta| < threshold_ms の判定から FAST/SLOW 表示を除去する。
-pub fn apply_fast_slow_display_threshold(snapshot: &mut RenderSnapshot, threshold_ms: u32) {
-    if threshold_ms == 0 {
-        return;
-    }
+/// FAST/SLOW 表示フィルタを適用し、非表示対象の判定の side と text を除去する。
+///
+/// - `Auto`: PGREAT は常に非表示。GREAT 以下は常時表示（beatoraja 準拠）。threshold_ms 無視。
+/// - `ThresholdMs`: 判定種別を問わず |delta| < threshold_ms なら非表示。
+pub fn apply_fast_slow_display_filter(
+    snapshot: &mut RenderSnapshot,
+    threshold_ms: u32,
+    scope: crate::config::profile_config::FastSlowDisplayScope,
+) {
+    use crate::config::profile_config::FastSlowDisplayScope;
     for judgement in &mut snapshot.recent_judgements {
-        if judgement.delta_us.unsigned_abs() / 1_000 < threshold_ms as u64 {
+        let suppress = match scope {
+            FastSlowDisplayScope::Auto => judgement.judge == Judge::PGreat,
+            FastSlowDisplayScope::ThresholdMs => {
+                threshold_ms > 0
+                    && judgement.delta_us.unsigned_abs() / 1_000 < threshold_ms as u64
+            }
+        };
+        if suppress {
             judgement.side = None;
             let base = judgement
                 .text

@@ -75,7 +75,7 @@ use crate::screens::play_loop::{
 use crate::screens::play_session::AppliedArrange;
 use crate::screens::play_session::build_practice_prepared_from_preloaded;
 use crate::screens::play_snapshot::{
-    BgaFrameCatalog, apply_fast_slow_display_threshold, bga_texture_id,
+    BgaFrameCatalog, apply_fast_slow_display_filter, bga_texture_id,
     build_render_snapshot_with_target_and_bga_frames, display_bga_frame,
 };
 use crate::screens::play_start::{
@@ -5211,9 +5211,10 @@ impl WinitApp {
             active_play.running.target_ex_score,
             &active_play.running.bga_frames,
         );
-        apply_fast_slow_display_threshold(
+        apply_fast_slow_display_filter(
             &mut snapshot,
             self.boot.profile_config.judge.fast_slow_display_threshold_ms,
+            self.boot.profile_config.judge.fast_slow_display_scope,
         );
         snapshot.arrange = active_play.running.applied_arrange.arrange.as_str().to_string();
         snapshot.backbmp_background = self.play_backbmp_loaded;

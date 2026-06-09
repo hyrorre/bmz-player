@@ -196,6 +196,22 @@ pub struct JudgeConfig {
     /// FAST/SLOW を表示する最小タイミング差(ms)。|delta| がこれ未満なら FAST/SLOW 表示なし。0=常時表示。
     #[serde(default)]
     pub fast_slow_display_threshold_ms: u32,
+    /// FAST/SLOW を表示する判定範囲。PGREAT を除外するなど。
+    #[serde(default)]
+    pub fast_slow_display_scope: FastSlowDisplayScope,
+}
+
+/// FAST/SLOW 表示モード。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum FastSlowDisplayScope {
+    /// beatoraja 準拠。PGREAT は FAST/SLOW を表示せず、GREAT 以下は常時表示。
+    /// fast_slow_display_threshold_ms は無視される。
+    #[default]
+    Auto,
+    /// 判定種別を問わず、|delta| >= fast_slow_display_threshold_ms のときのみ表示。
+    /// PGREAT も対象になる。threshold_ms = 0 なら全判定で常時表示。
+    ThresholdMs,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -670,6 +686,7 @@ impl ProfileConfig {
                 visual_offset_us: 0,
                 judge_algorithm: JudgeAlgorithmConfig::Combo,
                 fast_slow_display_threshold_ms: 0,
+                fast_slow_display_scope: FastSlowDisplayScope::Auto,
             },
             lane: LaneViewConfig {
                 hispeed: 2.0,
