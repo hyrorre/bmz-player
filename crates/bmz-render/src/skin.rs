@@ -1833,6 +1833,9 @@ pub struct SkinDrawState {
     /// 各レーンのkeyoff(離した直後の演出)タイマー経過ms。Noneなら非アクティブ。
     /// beatoraja の TIMER_KEYOFF_1P_KEY1..7 (121..127) / SCRATCH (120) に対応。
     pub keyoff_ms: [Option<i32>; LANE_COUNT],
+    /// 各レーンの LN ホールドタイマー経過ms。ホールド中のみ Some。
+    /// beatoraja の TIMER_HOLD_1P (70..=77) / TIMER_HOLD_2P (80..=87) に対応。
+    pub hold_ms: [Option<i32>; LANE_COUNT],
     /// 各レーンの直近判定の画像インデックス (0=PGREAT,1=GREAT,2=GOOD,3=BAD,4=POOR,5=MISS)。
     /// imageset (ボム・キービーム) の画像選択に使う。Noneなら判定なし。
     pub lane_judge: [Option<usize>; LANE_COUNT],
@@ -2090,6 +2093,7 @@ impl Default for SkinDrawState {
             bomb_ms: [None; LANE_COUNT],
             keyon_ms: [None; LANE_COUNT],
             keyoff_ms: [None; LANE_COUNT],
+            hold_ms: [None; LANE_COUNT],
             lane_judge: [None; LANE_COUNT],
             judge_ms: [None; MAX_JUDGE_REGIONS],
             full_combo_ms: None,
@@ -8597,6 +8601,11 @@ fn skin_timer_elapsed_ms(timer: Option<i32>, state: SkinDrawState) -> Option<i32
         // 2P bomb: timer 60=Scratch2, 61-67=Key8-14
         Some(60) => state.bomb_ms[Lane::Scratch2.index()],
         Some(61..=67) => state.bomb_ms[Lane::Key8.index() + (timer.unwrap() - 61) as usize],
+        // 1P hold: timer 70=Scratch, 71-77=Key1-7
+        Some(70..=77) => state.hold_ms[(timer.unwrap() - 70) as usize],
+        // 2P hold: timer 80=Scratch2, 81-87=Key8-14
+        Some(80) => state.hold_ms[Lane::Scratch2.index()],
+        Some(81..=87) => state.hold_ms[Lane::Key8.index() + (timer.unwrap() - 81) as usize],
         Some(100..=107) => state.keyon_ms[(timer.unwrap() - 100) as usize],
         // 2P keyon: timer 110=Scratch2, 111-117=Key8-14
         Some(110) => state.keyon_ms[Lane::Scratch2.index()],

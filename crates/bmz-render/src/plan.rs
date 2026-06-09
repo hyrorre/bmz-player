@@ -878,6 +878,7 @@ fn plan_play(
         bomb_ms,
         keyon_ms,
         keyoff_ms,
+        hold_ms: snapshot.hold_ms,
         lane_judge,
         judge_ms: judge_region_state.judge_ms,
         full_combo_ms: snapshot.full_combo_elapsed_ms,
@@ -1024,6 +1025,25 @@ fn plan_play(
                     },
                     color: long_note_body_color(body.mode),
                 });
+                // beatoraja の drawLongNote 同様、キャップは胴体側で描画する。
+                // head キャップは押下中も判定ライン (head_y=0) に留まる。
+                // LN モードは head キャップのみ、CN/HCN は tail キャップも描画する。
+                let head_rect = Rect {
+                    x: x + lane_width * 0.08,
+                    y: note_rect_y(board, snapshot.lift, body.head_y),
+                    width: lane_width * 0.84,
+                    height: NOTE_HEIGHT,
+                };
+                push_ln_start_skin(skin_manifest, &mut commands, lane, head_rect);
+                if body.mode != LongNoteMode::Ln && body.tail_y < 1.0 {
+                    let tail_rect = Rect {
+                        x: x + lane_width * 0.08,
+                        y: note_rect_y(board, snapshot.lift, body.tail_y),
+                        width: lane_width * 0.84,
+                        height: NOTE_HEIGHT,
+                    };
+                    push_ln_end_skin(skin_manifest, &mut commands, lane, tail_rect);
+                }
             }
 
             for note in &snapshot.visible_notes[lane_index] {
@@ -1133,6 +1153,28 @@ fn plan_play(
                 skin.note_body_rect(body.lane, key_mode, body.head_y, body.tail_y, skin_state)
                 && let Some(item) =
                     skin.document_long_body_item(body.lane, key_mode, rect, body.is_pressing)
+            {
+                let item = skin.apply_play_skin_global_offset_to_item(item, skin_state);
+                append_skin_render_items(&mut commands, &[item]);
+            }
+            // beatoraja の drawLongNote 同様、キャップは胴体の上に重ねて描画する。
+            // head キャップは押下中も判定ライン (head_y=0) に留まり描画され続ける。
+            // LN モードは head キャップのみ、CN/HCN は tail キャップも描画する。
+            let note_height =
+                skin.document_note_height(body.lane, key_mode).unwrap_or(NOTE_HEIGHT);
+            if let Some(rect) = skin.note_rect_for_progress(
+                body.lane, key_mode, body.head_y, note_height, skin_state,
+            ) && let Some(item) = skin.document_ln_start_item(body.lane, key_mode, rect)
+            {
+                let item = skin.apply_play_skin_global_offset_to_item(item, skin_state);
+                append_skin_render_items(&mut commands, &[item]);
+            }
+            if body.mode != LongNoteMode::Ln
+                && body.tail_y < 1.0
+                && let Some(rect) = skin.note_rect_for_progress(
+                    body.lane, key_mode, body.tail_y, note_height, skin_state,
+                )
+                && let Some(item) = skin.document_ln_end_item(body.lane, key_mode, rect)
             {
                 let item = skin.apply_play_skin_global_offset_to_item(item, skin_state);
                 append_skin_render_items(&mut commands, &[item]);

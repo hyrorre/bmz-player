@@ -87,6 +87,8 @@ pub struct ActiveLongNote {
     pub mode: LongNoteMode,
     pub start_note_id: NoteId,
     pub end: LongNoteEndRef,
+    /// HEAD が判定されてホールドが始まった時刻。beatoraja の TIMER_HOLD 相当の起点。
+    pub started_at: TimeUs,
 }
 
 #[derive(Debug, Clone, Copy, Default)]

@@ -226,6 +226,13 @@ pub fn build_render_snapshot_with_target_and_bga_frames(
                 ((render_now.0 - t.0) / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32
             })
         }),
+        // beatoraja の TIMER_HOLD: LN ホールド中 (processing != null) のみアクティブ。
+        hold_ms: std::array::from_fn(|lane_index| {
+            session.judge.lanes[lane_index].active_long.map(|active| {
+                ((render_now.0 - active.started_at.0) / 1_000)
+                    .clamp(i32::MIN as i64, i32::MAX as i64) as i32
+            })
+        }),
         overlay: OverlaySnapshot::default(),
         backbmp_background: false,
         chart_text: bmz_chart::text::chart_text_at_time(&session.chart.text_events, render_now)
@@ -256,18 +263,16 @@ pub fn build_render_snapshot_with_target_and_bga_frames(
                             });
                         }
                     }
-                    NoteKind::Tap | NoteKind::LongStart | NoteKind::LongEnd => {
+                    // LN START/END のキャップは beatoraja の drawLongNote 同様、
+                    // visible_long_notes 側でロングノート本体と一緒に描画する。
+                    NoteKind::LongStart | NoteKind::LongEnd => continue,
+                    NoteKind::Tap => {
                         if let Some(y) = scroll.note_y(note.time, cursor_tick) {
-                            let kind = match note.kind {
-                                NoteKind::LongStart => NoteVisualKind::LnStart,
-                                NoteKind::LongEnd => NoteVisualKind::LnEnd,
-                                _ => NoteVisualKind::Tap,
-                            };
                             snapshot.visible_notes[lane.index()].push(VisibleNote {
                                 lane,
                                 time: note.time,
                                 y,
-                                kind,
+                                kind: NoteVisualKind::Tap,
                                 processed_judge: session.judge.judged_notes.get(&note.id).copied(),
                             });
                         }

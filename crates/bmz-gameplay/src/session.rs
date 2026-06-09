@@ -339,10 +339,12 @@ pub fn update_lane_key_states(session: &mut GameSession, inputs: &[InputEvent]) 
 
 /// オートプレイで Press したレーンを `AUTO_KEYBEAM_DURATION_US` 経過後に自動で release する。
 /// beatoraja の `auto_minduration` (80ms) 経過で `auto_presstime` を MIN_VALUE に戻す挙動に対応。
+/// beatoraja 同様、LN ホールド中 (`state.processing != null`) は release しない。
 pub fn apply_auto_key_release(session: &mut GameSession, audio_now: TimeUs) {
     for lane_index in 0..LANE_COUNT {
         if let Some(release_at) = session.lane_auto_release_at[lane_index]
             && audio_now.0 >= release_at.0
+            && session.judge.lanes[lane_index].active_long.is_none()
         {
             session.lane_keyoff_started_at[lane_index] = Some(release_at);
             session.lane_keyon_started_at[lane_index] = None;
@@ -659,6 +661,7 @@ mod tests {
                 end_tick: ChartTick(192),
                 end_time: TimeUs(1_000_000),
             },
+            started_at: TimeUs(0),
         });
         session.lane_keyon_started_at[Lane::Key1.index()] = Some(TimeUs(0));
 

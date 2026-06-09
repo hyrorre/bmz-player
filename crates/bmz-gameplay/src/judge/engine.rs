@@ -145,7 +145,7 @@ impl JudgeEngine {
             self.judged_notes.insert(note.id, judge);
 
             if note.kind == NoteKind::LongStart
-                && let Some(active) = make_active_long(chart, note.id)
+                && let Some(active) = make_active_long(chart, note.id, input.time)
             {
                 lane_state.active_long = Some(active);
                 lane_state.hcn_draining = false;
@@ -310,7 +310,11 @@ fn side_from_delta(delta_us: i64) -> TimingSide {
     if delta_us < 0 { TimingSide::Fast } else { TimingSide::Slow }
 }
 
-fn make_active_long(chart: &PlayableChart, start_note_id: NoteId) -> Option<ActiveLongNote> {
+fn make_active_long(
+    chart: &PlayableChart,
+    start_note_id: NoteId,
+    started_at: TimeUs,
+) -> Option<ActiveLongNote> {
     let (pair_index, pair) = chart
         .long_notes
         .iter()
@@ -326,6 +330,7 @@ fn make_active_long(chart: &PlayableChart, start_note_id: NoteId) -> Option<Acti
             end_tick: pair.end_tick,
             end_time: pair.end_time,
         },
+        started_at,
     })
 }
 
