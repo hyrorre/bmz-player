@@ -160,7 +160,7 @@ impl GaugeState {
 
     pub fn new_auto_shift(total: f64, total_notes: u32) -> Self {
         Self::new_with_auto_shift(
-            GaugeType::ExHard,
+            GaugeType::Hazard,
             GaugeAutoShiftMode::BestClear,
             total,
             total_notes,
@@ -208,7 +208,7 @@ impl GaugeState {
         rule_mode: RuleMode,
     ) -> Self {
         let start = match mode {
-            GaugeAutoShiftMode::BestClear => GaugeType::ExHard,
+            GaugeAutoShiftMode::BestClear => GaugeType::Hazard,
             GaugeAutoShiftMode::Off
             | GaugeAutoShiftMode::Continue
             | GaugeAutoShiftMode::HardToGroove
@@ -331,6 +331,7 @@ fn hcn_rate(delta_seconds: f32) -> f32 {
 }
 
 const AUTO_SHIFT_RESULT_ORDER: &[GaugeType] = &[
+    GaugeType::Hazard,
     GaugeType::ExHard,
     GaugeType::Hard,
     GaugeType::Normal,
@@ -354,6 +355,7 @@ fn auto_shift_result_rank(gauge_type: GaugeType) -> u8 {
 
 fn next_auto_shift_gauge(current: GaugeType) -> Option<GaugeType> {
     match current {
+        GaugeType::Hazard => Some(GaugeType::ExHard),
         GaugeType::ExHard => Some(GaugeType::Hard),
         GaugeType::Hard => Some(GaugeType::Normal),
         _ => None,
@@ -1260,20 +1262,28 @@ mod tests {
     }
 
     #[test]
-    fn auto_shift_starts_from_exhard_and_falls_back_to_hard() {
+    fn auto_shift_starts_from_hazard_and_falls_back_to_exhard() {
         let mut gauge = GaugeState::new_auto_shift(160.0, 1000);
 
-        gauge.apply_judge(Judge::Poor, 7.0);
+        // Poor at rate 1.0 drains Hazard (value -100) in one hit, then
+        // ExHard only loses -16 and stays alive.
+        gauge.apply_judge(Judge::Poor, 1.0);
 
         assert!(gauge.auto_shift);
-        assert_eq!(gauge.original, GaugeType::ExHard);
-        assert_eq!(gauge.selected, GaugeType::Hard);
+        assert_eq!(gauge.original, GaugeType::Hazard);
+        assert_eq!(gauge.selected, GaugeType::ExHard);
     }
 
     #[test]
     fn auto_shift_result_uses_highest_qualified_gauge() {
         let mut gauge = GaugeState::new_auto_shift(160.0, 1000);
 
+        gauge
+            .gauges
+            .iter_mut()
+            .find(|gauge| gauge.definition.gauge_type == GaugeType::Hazard)
+            .unwrap()
+            .value = 0.0;
         gauge
             .gauges
             .iter_mut()

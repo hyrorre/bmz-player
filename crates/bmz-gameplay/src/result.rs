@@ -114,6 +114,12 @@ mod tests {
         gauge
             .gauges
             .iter_mut()
+            .find(|gauge| gauge.definition.gauge_type == GaugeType::Hazard)
+            .unwrap()
+            .value = 0.0;
+        gauge
+            .gauges
+            .iter_mut()
             .find(|gauge| gauge.definition.gauge_type == GaugeType::ExHard)
             .unwrap()
             .value = 0.0;
