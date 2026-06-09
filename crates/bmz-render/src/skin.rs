@@ -1015,7 +1015,7 @@ pub fn build_judge_region_state(
         );
         judge_index[region] = Some(judge_image_index_for_judge(judgement.judge));
         judge_combo[region] = judgement.combo;
-        judge_timing_sign[region] = Some(match judgement.side {
+        judge_timing_sign[region] = judgement.side.map(|side| match side {
             TimingSide::Fast => 1,
             TimingSide::Slow => -1,
         });
@@ -6865,33 +6865,17 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool 
         33 => state.autoplay,
         // OPTION_1P/2P/3P_PERFECT and EARLY/LATE judge-detail conditions.
         // beatoraja maps FAST/EARLY to positive recent judge timing, LATE/SLOW to negative.
+        // judge_timing_sign is None when FAST/SLOW display is suppressed (Auto mode hides PGREAT,
+        // ThresholdMs mode hides below the threshold), so no extra judge_index guard is needed.
         241 => state.judge_index[0] == Some(0),
-        1242 => {
-            state.judge_index[0].is_some_and(|index| index > 0)
-                && state.judge_timing_sign[0] == Some(1)
-        }
-        1243 => {
-            state.judge_index[0].is_some_and(|index| index > 0)
-                && state.judge_timing_sign[0] == Some(-1)
-        }
+        1242 => state.judge_timing_sign[0] == Some(1),
+        1243 => state.judge_timing_sign[0] == Some(-1),
         261 => state.judge_index[1] == Some(0),
-        1262 => {
-            state.judge_index[1].is_some_and(|index| index > 0)
-                && state.judge_timing_sign[1] == Some(1)
-        }
-        1263 => {
-            state.judge_index[1].is_some_and(|index| index > 0)
-                && state.judge_timing_sign[1] == Some(-1)
-        }
+        1262 => state.judge_timing_sign[1] == Some(1),
+        1263 => state.judge_timing_sign[1] == Some(-1),
         361 => state.judge_index[2] == Some(0),
-        1362 => {
-            state.judge_index[2].is_some_and(|index| index > 0)
-                && state.judge_timing_sign[2] == Some(1)
-        }
-        1363 => {
-            state.judge_index[2].is_some_and(|index| index > 0)
-                && state.judge_timing_sign[2] == Some(-1)
-        }
+        1362 => state.judge_timing_sign[2] == Some(1),
+        1363 => state.judge_timing_sign[2] == Some(-1),
         // OPTION_COURSE_STAGE1..4 / OPTION_COURSE_STAGE_FINAL
         280 => state.course_stage == Some(CourseStageMarker::Stage1),
         281 => state.course_stage == Some(CourseStageMarker::Stage2),
@@ -15355,7 +15339,16 @@ mod tests {
             judge_timing_sign: [Some(-1), None, None],
             ..SkinDrawState::default()
         };
-        let perfect = SkinDrawState {
+        // Auto モード: PGREAT は apply_fast_slow_display_filter で side=None にされるため
+        // judge_timing_sign=None となり、op 1242/1243 は false になる。
+        let perfect_auto = SkinDrawState {
+            judge_index: [Some(0), None, None],
+            judge_timing_sign: [None, None, None],
+            ..SkinDrawState::default()
+        };
+        // ThresholdMs モード(threshold=0): PGREAT も side=Some のまま渡るため
+        // judge_timing_sign=Some(1) となり、op 1242 は true になる。
+        let perfect_threshold = SkinDrawState {
             judge_index: [Some(0), None, None],
             judge_timing_sign: [Some(1), None, None],
             ..SkinDrawState::default()
@@ -15365,8 +15358,10 @@ mod tests {
         assert!(!test_skin_op(1243, &[], fast));
         assert!(test_skin_op(1243, &[], slow));
         assert!(!test_skin_op(1242, &[], slow));
-        assert!(test_skin_op(241, &[], perfect));
-        assert!(!test_skin_op(1242, &[], perfect));
+        assert!(test_skin_op(241, &[], perfect_auto));
+        assert!(!test_skin_op(1242, &[], perfect_auto));
+        assert!(test_skin_op(241, &[], perfect_threshold));
+        assert!(test_skin_op(1242, &[], perfect_threshold));
     }
 
     #[test]

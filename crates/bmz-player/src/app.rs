@@ -75,8 +75,8 @@ use crate::screens::play_loop::{
 use crate::screens::play_session::AppliedArrange;
 use crate::screens::play_session::build_practice_prepared_from_preloaded;
 use crate::screens::play_snapshot::{
-    BgaFrameCatalog, bga_texture_id, build_render_snapshot_with_target_and_bga_frames,
-    display_bga_frame,
+    BgaFrameCatalog, apply_fast_slow_display_filter, bga_texture_id,
+    build_render_snapshot_with_target_and_bga_frames, display_bga_frame,
 };
 use crate::screens::play_start::{
     PlayStartOptions, PreloadedWinitPlaySession, PreparedWinitPlaySession, StartedWinitPlaySession,
@@ -731,8 +731,6 @@ enum ResultRetryMode {
 const SELECT_EXIT_HOLD_DURATION: Duration = Duration::from_millis(1_200);
 /// プレイ中の Start ボタンを「2回連続押し」と判定する間隔上限。
 const PLAY_START_DOUBLE_PRESS_WINDOW: Duration = Duration::from_millis(400);
-/// beatoraja 既定の START+SELECT 途中終了長押し時間。
-const PLAY_EXIT_HOLD_DURATION: Duration = Duration::from_millis(1_000);
 /// リザルト退出時にプレイ残響(draining_audio)を絞り切るまでの上限時間。
 /// スキンの終了アニメーション (`fadeout`) が長くても (例: Starseeker は 3000ms)、
 /// 音声はこの時間内でフェードし切る。スキンの fadeout がこれより短ければそちらを優先。
@@ -5213,6 +5211,11 @@ impl WinitApp {
             active_play.running.target_ex_score,
             &active_play.running.bga_frames,
         );
+        apply_fast_slow_display_filter(
+            &mut snapshot,
+            self.boot.profile_config.judge.fast_slow_display_threshold_ms,
+            self.boot.profile_config.judge.fast_slow_display_scope,
+        );
         snapshot.arrange = active_play.running.applied_arrange.arrange.as_str().to_string();
         snapshot.backbmp_background = self.play_backbmp_loaded;
         snapshot.play_elapsed_time = self.play_elapsed_time();
@@ -5712,7 +5715,9 @@ impl WinitApp {
     }
 
     fn cancel_decide_if_exit_hold_elapsed(&mut self) -> bool {
-        if play_exit_hold_elapsed(self.play_exit_hold_started_at, Instant::now()) {
+        let hold_duration =
+            Duration::from_millis(self.boot.profile_config.play.play_exit_hold_ms as u64);
+        if play_exit_hold_elapsed(self.play_exit_hold_started_at, Instant::now(), hold_duration) {
             self.begin_decide_fadeout(true);
             return true;
         }
@@ -6580,7 +6585,9 @@ impl WinitApp {
     }
 
     fn stop_play_if_exit_hold_elapsed(&mut self) -> bool {
-        if play_exit_hold_elapsed(self.play_exit_hold_started_at, Instant::now()) {
+        let hold_duration =
+            Duration::from_millis(self.boot.profile_config.play.play_exit_hold_ms as u64);
+        if play_exit_hold_elapsed(self.play_exit_hold_started_at, Instant::now(), hold_duration) {
             self.play_exit_hold_started_at = None;
             return self.stop_active_play_like_escape("E1+E2 held during play");
         }
@@ -9664,8 +9671,8 @@ fn update_play_exit_hold_started_at(
     }
 }
 
-fn play_exit_hold_elapsed(started_at: Option<Instant>, now: Instant) -> bool {
-    started_at.is_some_and(|started_at| now.duration_since(started_at) >= PLAY_EXIT_HOLD_DURATION)
+fn play_exit_hold_elapsed(started_at: Option<Instant>, now: Instant, duration: Duration) -> bool {
+    started_at.is_some_and(|started_at| now.duration_since(started_at) >= duration)
 }
 
 fn select_click_event_arg(
@@ -11417,6 +11424,7 @@ mod tests {
 
     #[test]
     fn play_exit_hold_timer_uses_beatoraja_default_duration() {
+        let default_hold = Duration::from_millis(1_000);
         let start = Instant::now();
         let mut held_since = None;
 
@@ -11425,14 +11433,14 @@ mod tests {
 
         update_play_exit_hold_started_at(&mut held_since, true, true, start);
         assert_eq!(held_since, Some(start));
-        assert!(!play_exit_hold_elapsed(held_since, start + PLAY_EXIT_HOLD_DURATION / 2));
-        assert!(play_exit_hold_elapsed(held_since, start + PLAY_EXIT_HOLD_DURATION));
+        assert!(!play_exit_hold_elapsed(held_since, start + default_hold / 2, default_hold));
+        assert!(play_exit_hold_elapsed(held_since, start + default_hold, default_hold));
 
         update_play_exit_hold_started_at(
             &mut held_since,
             false,
             true,
-            start + PLAY_EXIT_HOLD_DURATION,
+            start + default_hold,
         );
         assert!(held_since.is_none());
     }

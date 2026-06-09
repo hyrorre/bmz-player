@@ -647,12 +647,42 @@ fn display_judgement(event: &JudgementEvent, combo: u32) -> DisplayJudgement {
     DisplayJudgement {
         lane: event.lane,
         judge: event.judge,
-        side: event.side,
+        side: Some(event.side),
         text: format!("{}{}", judge_text(event.judge), side_suffix(event.side)),
         combo: if event.judge == Judge::EmptyPoor { 0 } else { combo },
         delta_us: event.delta.0,
         time: event.time,
         is_miss: event.judge == Judge::Poor,
+    }
+}
+
+/// FAST/SLOW 表示フィルタを適用し、非表示対象の判定の side と text を除去する。
+///
+/// - `Auto`: PGREAT は常に非表示。GREAT 以下は常時表示（beatoraja 準拠）。threshold_ms 無視。
+/// - `ThresholdMs`: 判定種別を問わず |delta| < threshold_ms なら非表示。
+pub fn apply_fast_slow_display_filter(
+    snapshot: &mut RenderSnapshot,
+    threshold_ms: u32,
+    scope: crate::config::profile_config::FastSlowDisplayScope,
+) {
+    use crate::config::profile_config::FastSlowDisplayScope;
+    for judgement in &mut snapshot.recent_judgements {
+        let suppress = match scope {
+            FastSlowDisplayScope::Auto => judgement.judge == Judge::PGreat,
+            FastSlowDisplayScope::ThresholdMs => {
+                threshold_ms > 0
+                    && judgement.delta_us.unsigned_abs() / 1_000 < threshold_ms as u64
+            }
+        };
+        if suppress {
+            judgement.side = None;
+            let base = judgement
+                .text
+                .strip_suffix(" FAST")
+                .or_else(|| judgement.text.strip_suffix(" SLOW"))
+                .unwrap_or(&judgement.text);
+            judgement.text = base.to_string();
+        }
     }
 }
 

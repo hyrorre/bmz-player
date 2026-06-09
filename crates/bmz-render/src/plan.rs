@@ -4306,7 +4306,7 @@ mod tests {
             recent_judgements: vec![DisplayJudgement {
                 lane: Lane::Key2,
                 judge: Judge::PGreat,
-                side: TimingSide::Fast,
+                side: Some(TimingSide::Fast),
                 text: "PGREAT FAST".to_string(),
                 combo: 1,
                 delta_us: -3_000,
@@ -4358,7 +4358,7 @@ mod tests {
             recent_judgements: vec![DisplayJudgement {
                 lane: Lane::Key2,
                 judge: Judge::PGreat,
-                side: TimingSide::Fast,
+                side: Some(TimingSide::Fast),
                 text: "PGREAT FAST".to_string(),
                 combo: 1,
                 delta_us: -3_000,
@@ -4383,7 +4383,7 @@ mod tests {
             recent_judgements: vec![DisplayJudgement {
                 lane: Lane::Key2,
                 judge: Judge::EmptyPoor,
-                side: TimingSide::Slow,
+                side: Some(TimingSide::Slow),
                 text: "EMPTY POOR SLOW".to_string(),
                 combo: 0,
                 delta_us: 50_000,
@@ -4408,7 +4408,7 @@ mod tests {
             recent_judgements: vec![DisplayJudgement {
                 lane: Lane::Key2,
                 judge: Judge::Bad,
-                side: TimingSide::Slow,
+                side: Some(TimingSide::Slow),
                 text: "BAD SLOW".to_string(),
                 combo: 0,
                 delta_us: 88_000,
@@ -4541,7 +4541,7 @@ mod tests {
         judgement_history_label(&DisplayJudgement {
             lane: Lane::Key1,
             judge: Judge::PGreat,
-            side: TimingSide::Fast,
+            side: Some(TimingSide::Fast),
             text: text.to_string(),
             combo: 0,
             delta_us: 0,
@@ -4628,7 +4628,7 @@ mod tests {
             recent_judgements: vec![DisplayJudgement {
                 lane: Lane::Key3,
                 judge: Judge::Poor,
-                side: TimingSide::Slow,
+                side: Some(TimingSide::Slow),
                 text: "POOR SLOW".to_string(),
                 combo: 0,
                 delta_us: 50_000,
