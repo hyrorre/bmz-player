@@ -278,6 +278,8 @@ struct WinitApp {
     select_hold_control: Option<String>,
     select_analog_scroll_buffer: i32,
     select_analog_last_tick_at: Option<Instant>,
+    /// キーコンフィグ確定/キャンセル直後、スクラッチが止まるまでアナログスクロールを抑止する。
+    select_analog_suppress_until_idle: bool,
     smoke_exit_after_frames: Option<u32>,
     smoke_exit_after_result_frames: Option<u32>,
     smoke_exit_on_result: bool,
@@ -1399,6 +1401,7 @@ impl WinitApp {
             select_hold_control: None,
             select_analog_scroll_buffer: 0,
             select_analog_last_tick_at: None,
+            select_analog_suppress_until_idle: false,
             smoke_exit_after_frames: options.smoke_exit_after_frames,
             smoke_exit_after_result_frames: options.smoke_exit_after_result_frames,
             smoke_exit_on_result: options.smoke_exit_on_result,
@@ -2582,6 +2585,7 @@ impl WinitApp {
         };
         let target = session.target;
         session.cancel(&mut self.boot.profile_config);
+        self.suppress_select_analog_until_idle();
         self.play_system_sound(crate::system_sound::SoundType::FolderClose);
         tracing::info!(?target, "key config cancelled");
     }
@@ -2591,6 +2595,7 @@ impl WinitApp {
             return;
         };
         let target = session.target;
+        self.suppress_select_analog_until_idle();
         self.boot.profile_config.updated_at = now_unix_seconds();
         match save_profile_config(&self.boot.profile_paths.profile_toml, &self.boot.profile_config)
         {
@@ -3329,6 +3334,13 @@ impl WinitApp {
             self.route_gamepad_button(&event.name.clone(), event.pressed);
         }
         for tick in &output.axis_ticks {
+            // キーコンフィグ待ち受け中は合成 Press を待たず、生 tick から直接捕捉する。
+            // 軸が active のままでも (押しっぱなし扱いで Press が出なくても) 確実に拾える。
+            if self.key_config_edit.as_ref().is_some_and(|session| session.listening) {
+                let control = format!("{}{}", tick.name, if tick.ticks > 0 { "+" } else { "-" });
+                self.apply_key_config_gamepad(&control);
+                continue;
+            }
             self.accumulate_select_analog_ticks(tick.name, tick.ticks);
         }
     }
@@ -3340,6 +3352,8 @@ impl WinitApp {
             || self.pending_decide.is_some()
             || self.pending_play_start.is_some()
             || self.select_option_panel != 0
+            || self.key_config_edit.is_some()
+            || self.settings_edit.is_some()
         {
             return;
         }
@@ -3348,13 +3362,24 @@ impl WinitApp {
         };
         let now = Instant::now();
         // tick が途切れていたら古い端数を捨てる (beatoraja の 200ms tolerance 相当)
-        if self.select_analog_last_tick_at.is_none_or(|t| {
+        let idle = self.select_analog_last_tick_at.is_none_or(|t| {
             now.duration_since(t) > Duration::from_millis(SELECT_ANALOG_SCROLL_TOLERANCE_MS)
-        }) {
-            self.select_analog_scroll_buffer = 0;
-        }
+        });
         self.select_analog_last_tick_at = Some(now);
-        self.select_analog_scroll_buffer += delta;
+        update_analog_scroll_buffer(
+            &mut self.select_analog_scroll_buffer,
+            &mut self.select_analog_suppress_until_idle,
+            idle,
+            delta,
+        );
+    }
+
+    /// キーコンフィグ確定/キャンセル後、回転中のスクラッチが止まるまで
+    /// アナログスクロールを無効化する。
+    fn suppress_select_analog_until_idle(&mut self) {
+        self.select_analog_suppress_until_idle = true;
+        self.select_analog_scroll_buffer = 0;
+        self.select_analog_last_tick_at = Some(Instant::now());
     }
 
     /// 蓄積したアナログ tick を analog_ticks_per_scroll ごとに 1 移動へ変換する。
@@ -10761,6 +10786,23 @@ fn select_analog_scroll_delta(axis: &str, ticks: i32, bindings: &SelectKeyBindin
     }
 }
 
+/// アナログスクロールバッファへ delta を蓄積する。
+/// suppress 中は idle (200ms 以上の tick 途切れ) を観測するまで delta を捨てる。
+/// idle 後の最初の delta から通常蓄積に戻る。
+fn update_analog_scroll_buffer(buffer: &mut i32, suppress: &mut bool, idle: bool, delta: i32) {
+    if *suppress {
+        if !idle {
+            *buffer = 0;
+            return;
+        }
+        *suppress = false;
+    }
+    if idle {
+        *buffer = 0;
+    }
+    *buffer += delta;
+}
+
 /// バッファから ticks_per_scroll ごとの移動数を取り出す。端数はバッファに残す。
 fn take_analog_scroll_steps(buffer: &mut i32, ticks_per_scroll: i32) -> i32 {
     let steps = *buffer / ticks_per_scroll;
@@ -11574,6 +11616,25 @@ mod tests {
         assert_eq!(select_analog_scroll_delta("AxisLeftX", 4, &gamepad_keys), Some(4));
         assert_eq!(select_analog_scroll_delta("AxisLeftX", 0, &gamepad_keys), None);
         assert_eq!(select_analog_scroll_delta("AxisRightY", 4, &gamepad_keys), None);
+    }
+
+    #[test]
+    fn update_analog_scroll_buffer_suppresses_until_idle() {
+        let mut buffer = 0;
+        let mut suppress = true;
+        // 回転継続中 (idle=false) は捨て続ける
+        update_analog_scroll_buffer(&mut buffer, &mut suppress, false, 5);
+        assert_eq!(buffer, 0);
+        assert!(suppress);
+        // 一度止まった後の tick から蓄積再開
+        update_analog_scroll_buffer(&mut buffer, &mut suppress, true, 2);
+        assert_eq!(buffer, 2);
+        assert!(!suppress);
+        update_analog_scroll_buffer(&mut buffer, &mut suppress, false, 3);
+        assert_eq!(buffer, 5);
+        // 通常時も idle で端数を破棄
+        update_analog_scroll_buffer(&mut buffer, &mut suppress, true, 1);
+        assert_eq!(buffer, 1);
     }
 
     #[test]
