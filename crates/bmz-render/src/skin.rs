@@ -1702,10 +1702,12 @@ impl SkinContext {
         let note_height = document.note_height_for_lane(lane, key_mode)?;
         let head_bottom = note_progress_to_y(area, head_y, state, canvas_h);
         let tail_bottom = note_progress_to_y(area, tail_y, state, canvas_h);
-        // 胴体は tail キャップの上端から head キャップの下端まで伸ばす。
-        // キャップ自体はこの上に重ねて描画されるため重複は問題ない。
-        let top = head_bottom.min(tail_bottom) - note_height;
-        let bottom = head_bottom.max(tail_bottom);
+        // beatoraja の drawLongNote に合わせる:
+        //   body = [dsty+scale, dsty+dy]  (LibGDX y-up)
+        //       = [tail_bottom, head_bottom - note_height]  (y-down)
+        // 胴体は tail キャップの下端から head キャップの上端まで、キャップと重ならない。
+        let top = head_bottom.min(tail_bottom);
+        let bottom = head_bottom.max(tail_bottom) - note_height;
         Some(document.apply_notes_offset_to_rect(
             Rect { x: area.x, y: top, width: area.width, height: bottom - top },
             state,
@@ -4497,7 +4499,11 @@ impl SkinDocument {
 
     /// ロングノート胴体画像を描画する。
     /// `is_pressing` が `true` のとき（LN HEAD 判定済みでキー押下中）は
-    /// `lnactive` を使い、そうでなければ `lnbody` を使う。どちらも未定義なら `note` へフォールバック。
+    /// `lnbody`（beatoraja: `longImage[2]`）を使い、
+    /// そうでなければ `lnactive`（beatoraja: `longImage[3]`）を使う。
+    /// どちらも未定義なら `note` へフォールバック。
+    /// beatoraja JSON skin の `lnbodyActive` フィールドは未対応のため、
+    /// `lnbody` / `lnactive` の 2 種のみを使う。
     pub fn note_long_body_render_item(
         &self,
         lane: Lane,
@@ -4509,14 +4515,14 @@ impl SkinDocument {
         let note = self.note.as_ref()?;
         let index = beatoraja_note_index(lane, key_mode);
         let image_id = if is_pressing {
-            note.lnactive
-                .get(index)
-                .or_else(|| note.lnbody.get(index))
-                .or_else(|| note.note.get(index))?
-        } else {
             note.lnbody
                 .get(index)
                 .or_else(|| note.lnactive.get(index))
+                .or_else(|| note.note.get(index))?
+        } else {
+            note.lnactive
+                .get(index)
+                .or_else(|| note.lnbody.get(index))
                 .or_else(|| note.note.get(index))?
         };
         self.note_part_render_item(image_id, rect, sources)
@@ -19260,9 +19266,12 @@ mod tests {
         let rect_lifted =
             skin.note_body_rect(Lane::Key1, KeyMode::K7, 0.0, 0.5, state_lifted).unwrap();
 
-        assert!(approx_eq(rect_no_lift.y, (580.0 * 0.5 - 12.0) / 720.0));
-        // 胴体は tail キャップ上端から head キャップ下端まで: height = (head_bottom - top) = (580 - 418 + 140) / 720
-        assert!(approx_eq(rect_no_lift.height, (580.0 * 0.5 + 12.0) / 720.0));
+        // beatoraja 座標系（y-up）での body 位置:
+        //   body.y      = tail_bottom = area.height * (1 - tail_y) = 580/720 * 0.5 = 290/720
+        //   body.height = head_top - tail_bottom = (head_bottom - note_height) - tail_bottom
+        //               = (580/720 - 12/720) - 290/720 = 278/720
+        assert!(approx_eq(rect_no_lift.y, (580.0 * 0.5) / 720.0));
+        assert!(approx_eq(rect_no_lift.height, (580.0 * 0.5 - 12.0) / 720.0));
         assert!(
             rect_lifted.y < rect_no_lift.y,
             "expected lifted long body higher on screen, got no_lift={} lifted={}",

@@ -290,10 +290,11 @@ pub fn build_render_snapshot_with_target_and_bga_frames(
             if tail < 0.0 || head > 1.0 {
                 continue;
             }
+            // HEAD が判定済みで tail 未処理なら押下中とみなす。
+            // 物理キー状態（lane_keyon_started_at）は問わない。
             let is_pressing = session.judge.lanes[long.lane.index()]
                 .active_long
-                .is_some_and(|active| active.pair_index == pair_index)
-                && session.lane_keyon_started_at[long.lane.index()].is_some();
+                .is_some_and(|active| active.pair_index == pair_index);
             snapshot.visible_long_notes.push(VisibleLongNote {
                 lane: long.lane,
                 mode: long.mode.unwrap_or(session.chart.metadata.long_note_mode),
