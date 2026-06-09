@@ -14,6 +14,9 @@ pub fn build_judge_graph_density(chart: &PlayableChart) -> Vec<u8> {
     let mut density = vec![0u8; seconds.max(1)];
     for lane in &chart.lane_notes {
         for note in lane {
+            if note.kind == bmz_chart::model::NoteKind::Invisible {
+                continue;
+            }
             let sec = (note.time.0 / 1_000_000).max(0) as usize;
             if let Some(slot) = density.get_mut(sec) {
                 *slot = slot.saturating_add(1);
@@ -194,6 +197,31 @@ mod tests {
         let density = build_judge_graph_density(&chart);
         assert_eq!(density[0], 1);
         assert_eq!(density[1], 2);
+    }
+
+    #[test]
+    fn build_judge_graph_density_excludes_invisible_notes() {
+        let mut chart = empty_chart();
+        chart.lane_notes[Lane::Key1.index()].push(NoteEvent {
+            id: NoteId(1),
+            lane: Lane::Key1,
+            kind: bmz_chart::model::NoteKind::Tap,
+            tick: ChartTick(0),
+            time: TimeUs(0),
+            sound: None,
+            damage: None,
+        });
+        chart.lane_notes[Lane::Key1.index()].push(NoteEvent {
+            id: NoteId(2),
+            lane: Lane::Key1,
+            kind: bmz_chart::model::NoteKind::Invisible,
+            tick: ChartTick(192),
+            time: TimeUs(0),
+            sound: None,
+            damage: None,
+        });
+        let density = build_judge_graph_density(&chart);
+        assert_eq!(density[0], 1);
     }
 
     #[test]
