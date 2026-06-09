@@ -3299,15 +3299,14 @@ impl WinitApp {
                         }
                     }
                 }
-            } else if event.state == ElementState::Released {
-                if let Some(control_name) = physical_key_name(event.physical_key) {
-                    if self.select_hold_control.as_ref() == Some(&control_name) {
-                        self.select_hold_move = None;
-                        self.select_hold_started_at = None;
-                        self.select_hold_last_trigger_at = None;
-                        self.select_hold_control = None;
-                    }
-                }
+            } else if event.state == ElementState::Released
+                && let Some(control_name) = physical_key_name(event.physical_key)
+                && self.select_hold_control.as_ref() == Some(&control_name)
+            {
+                self.select_hold_move = None;
+                self.select_hold_started_at = None;
+                self.select_hold_last_trigger_at = None;
+                self.select_hold_control = None;
             }
         }
     }
@@ -3571,7 +3570,7 @@ impl WinitApp {
                     }
                 }
             } else {
-                if self.select_hold_control.as_ref().map(|s| s.as_str()) == Some(button) {
+                if self.select_hold_control.as_deref() == Some(button) {
                     self.select_hold_move = None;
                     self.select_hold_started_at = None;
                     self.select_hold_last_trigger_at = None;

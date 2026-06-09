@@ -1704,10 +1704,10 @@ fn chart_speed_changes(chart: &PlayableChart) -> Vec<ChartSpeedChange> {
         }
     }
     // ループ終了後も STOP がペンディングなら resume エントリを出力する。
-    if let Some(end_us) = stop_end_us {
-        if end_us < chart.end_time.0 {
-            out.push(ChartSpeedChange { speed: current, time_ms: end_us / 1_000 });
-        }
+    if let Some(end_us) = stop_end_us
+        && end_us < chart.end_time.0
+    {
+        out.push(ChartSpeedChange { speed: current, time_ms: end_us / 1_000 });
     }
     if out.last().is_some_and(|last| last.time_ms != chart.end_time.0 / 1_000) {
         out.push(ChartSpeedChange { speed: current, time_ms: chart.end_time.0 / 1_000 });
