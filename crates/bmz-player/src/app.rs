@@ -3451,7 +3451,9 @@ impl WinitApp {
             }
             if self.select_keys.is_start(button) {
                 self.set_start_held(false);
-            } else if self.select_keys.is_back(button) || matches!(button, "Select" | "DPadLeft") {
+            } else if self.select_keys.is_e2_action(button)
+                || matches!(button, "Select" | "DPadLeft")
+            {
                 self.set_select_held(false);
             }
             return;
@@ -3555,12 +3557,12 @@ impl WinitApp {
         }
 
         if self.start_held
-            && (self.select_held || self.select_keys.is_back(button))
+            && (self.select_held || self.select_keys.is_e2_action(button))
             && self.select_keys.is_key2(button)
         {
             self.toggle_gauge_auto_shift();
             self.play_system_sound(crate::system_sound::SoundType::OptionChange);
-            if self.select_keys.is_back(button) {
+            if self.select_keys.is_e2_action(button) {
                 self.set_select_held(true);
             }
             return;
@@ -3571,7 +3573,7 @@ impl WinitApp {
             return;
         }
 
-        if self.select_keys.is_back(button) || matches!(button, "Select" | "DPadLeft") {
+        if self.select_keys.is_e2_action(button) || matches!(button, "Select" | "DPadLeft") {
             self.set_select_held(true);
             return;
         }
@@ -9063,7 +9065,7 @@ fn is_select_start_key(physical_key: PhysicalKey, bindings: &SelectKeyBindings) 
 }
 
 fn is_select_modifier_key(physical_key: PhysicalKey, bindings: &SelectKeyBindings) -> bool {
-    physical_key_name(physical_key).is_some_and(|control| bindings.is_back(&control))
+    physical_key_name(physical_key).is_some_and(|control| bindings.is_e2_action(&control))
 }
 
 fn arrange_option_from_profile(random: RandomOptionConfig) -> ArrangeOption {
@@ -10577,14 +10579,12 @@ impl SelectKeyBindings {
                 .iter()
                 .flat_map(|&l| keys_for(l))
                 .collect();
-        let enter = select_controls_with_lane_fallback(
-            actions_for(InputActionConfig::SelectEnter),
-            lane_enter,
-        );
-        let back = select_controls_with_lane_fallback(
-            actions_for(InputActionConfig::E2),
-            keys_for(LaneConfig::Key2),
-        );
+        let lane_back: Vec<String> = [LaneConfig::Key2, LaneConfig::Key4, LaneConfig::Key6]
+            .iter()
+            .flat_map(|&l| keys_for(l))
+            .collect();
+        let enter = merge_select_controls(actions_for(InputActionConfig::SelectEnter), lane_enter);
+        let back = merge_select_controls(actions_for(InputActionConfig::E2), lane_back);
         let e2_action_controls = actions_for(InputActionConfig::E2);
         let e3_action_controls = actions_for(InputActionConfig::E3);
         let key2_controls = keys_for(LaneConfig::Key2);
@@ -10652,21 +10652,24 @@ impl SelectKeyBindings {
                 .iter()
                 .flat_map(|&l| kb_keys_for(l))
                 .collect();
-        let kb_enter = select_controls_with_lane_fallback(
-            kb_actions_for(InputActionConfig::SelectEnter),
-            kb_lane_enter,
-        );
-        let kb_back = select_controls_with_lane_fallback(
-            kb_actions_for(InputActionConfig::E2),
-            kb_keys_for(LaneConfig::Key2),
-        );
+        let kb_lane_back: Vec<String> = [LaneConfig::Key2, LaneConfig::Key4, LaneConfig::Key6]
+            .iter()
+            .flat_map(|&l| kb_keys_for(l))
+            .collect();
+        let kb_enter =
+            merge_select_controls(kb_actions_for(InputActionConfig::SelectEnter), kb_lane_enter);
         let enter_str =
             if kb_enter.is_empty() { String::new() } else { format!("/{}", kb_enter.join("/")) };
-        let back_str = kb_back.first().map(|k| format!("/{k}")).unwrap_or_default();
-        let key2_str = kb_keys_for(LaneConfig::Key2)
-            .into_iter()
-            .next()
-            .unwrap_or_else(|| kb_back.first().cloned().unwrap_or_else(|| "Key2".to_string()));
+        let back_str = if kb_lane_back.is_empty() {
+            kb_actions_for(InputActionConfig::E2)
+                .first()
+                .map(|k| format!("/{k}"))
+                .unwrap_or_default()
+        } else {
+            format!("/{}", kb_lane_back.join("/"))
+        };
+        let key2_str =
+            kb_keys_for(LaneConfig::Key2).into_iter().next().unwrap_or_else(|| "Key2".to_string());
         let start_str = kb_actions_for(InputActionConfig::E1)
             .into_iter()
             .next()
@@ -10817,11 +10820,14 @@ fn take_analog_scroll_steps(buffer: &mut i32, ticks_per_scroll: i32) -> i32 {
     steps
 }
 
-fn select_controls_with_lane_fallback(
-    configured: Vec<String>,
-    lane_fallback: Vec<String>,
-) -> Vec<String> {
-    if configured.is_empty() { lane_fallback } else { configured }
+fn merge_select_controls(configured: Vec<String>, lane_controls: Vec<String>) -> Vec<String> {
+    let mut merged = configured;
+    for control in lane_controls {
+        if !merged.iter().any(|existing| existing == &control) {
+            merged.push(control);
+        }
+    }
+    merged
 }
 
 fn select_control_with_lane_fallback(
@@ -11477,14 +11483,23 @@ mod tests {
             select_action(PhysicalKey::Code(KeyCode::KeyV), ElementState::Pressed, false, &keys),
             Some(SelectAction::EnterOrPlay)
         );
-        // E2(W) → ExitFolder. Key2(S) is used with E1+E2 for GAS, not as Back.
+        // Key2(S), Key4(D), Key6(F) → ExitFolder
         assert_eq!(
-            select_action(PhysicalKey::Code(KeyCode::KeyW), ElementState::Pressed, false, &keys),
+            select_action(PhysicalKey::Code(KeyCode::KeyS), ElementState::Pressed, false, &keys),
             Some(SelectAction::ExitFolder)
         );
         assert_eq!(
-            select_action(PhysicalKey::Code(KeyCode::KeyS), ElementState::Pressed, false, &keys),
-            None
+            select_action(PhysicalKey::Code(KeyCode::KeyD), ElementState::Pressed, false, &keys),
+            Some(SelectAction::ExitFolder)
+        );
+        assert_eq!(
+            select_action(PhysicalKey::Code(KeyCode::KeyF), ElementState::Pressed, false, &keys),
+            Some(SelectAction::ExitFolder)
+        );
+        // E2(W) is also mapped to ExitFolder for direct lookup paths.
+        assert_eq!(
+            select_action(PhysicalKey::Code(KeyCode::KeyW), ElementState::Pressed, false, &keys),
+            Some(SelectAction::ExitFolder)
         );
     }
 
@@ -11593,7 +11608,7 @@ mod tests {
     fn select_key_bindings_builds_correct_hints() {
         let keys = default_select_keys();
         assert!(keys.key_hint.contains("Z/X/C/V"), "enter keys in hint: {}", keys.key_hint);
-        assert!(keys.key_hint.contains("/W:BACK"), "back key in hint: {}", keys.key_hint);
+        assert!(keys.key_hint.contains("/S/D/F:BACK"), "back keys in hint: {}", keys.key_hint);
         assert!(keys.key_hint.contains(" Q"), "start key in hint: {}", keys.key_hint);
         assert!(keys.option_hint.contains("F1 MENU"), "menu in hint: {}", keys.option_hint);
         assert!(keys.option_hint.contains("F5 RELOAD"), "reload in hint: {}", keys.option_hint);
@@ -11704,7 +11719,7 @@ mod tests {
         );
         assert_eq!(
             select_action(PhysicalKey::Code(KeyCode::KeyS), ElementState::Pressed, false, &keys),
-            None
+            Some(SelectAction::ExitFolder)
         );
     }
 
@@ -11738,9 +11753,11 @@ mod tests {
 
         assert!(keys.is_start("Q"));
         assert!(keys.is_back("W"));
-        assert!(!keys.is_back("S"));
+        assert!(keys.is_back("S"));
+        assert!(keys.is_back("D"));
+        assert!(keys.is_back("F"));
         assert!(keys.is_key2("S"));
-        assert!(!keys.back_uses_key2());
+        assert!(keys.back_uses_key2());
     }
 
     #[test]
