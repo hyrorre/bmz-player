@@ -2,8 +2,8 @@ use anyhow::{Context, Result, bail};
 use reqwest::Url;
 
 use super::types::{
-    IrAuthTokens, IrMeResponse, IrRankingResult, IrRankingScope, IrScoreSubmission,
-    IrSubmitOptions, IrSubmitResponse,
+    IrAuthTokens, IrMeResponse, IrRankingResult, IrRankingScope, IrRivalsResponse,
+    IrScoreSubmission, IrSubmitOptions, IrSubmitResponse,
 };
 
 #[derive(Debug, Clone)]
@@ -98,6 +98,33 @@ impl BmzOfficialIrClient {
         }
         let response = builder.send().await.context("failed to send BMZ IR ranking request")?;
         decode_response(response, "BMZ IR ranking fetch").await
+    }
+
+    pub async fn get_rivals(&self) -> Result<IrRivalsResponse> {
+        let url = self.base_url.join("/api/v1/rivals")?;
+        let response = self
+            .http
+            .get(url)
+            .bearer_auth(self.require_token()?)
+            .send()
+            .await
+            .context("failed to send BMZ IR rivals request")?;
+        decode_response(response, "BMZ IR rivals fetch").await
+    }
+
+    pub async fn set_rival(&self, target_player_id: &str, add: bool) -> Result<()> {
+        let url = self.base_url.join("/api/v1/rivals")?;
+        let action = if add { "add" } else { "remove" };
+        let response = self
+            .http
+            .post(url)
+            .bearer_auth(self.require_token()?)
+            .json(&serde_json::json!({ "target_player_id": target_player_id, "action": action }))
+            .send()
+            .await
+            .context("failed to send BMZ IR rival update")?;
+        let _: serde_json::Value = decode_response(response, "BMZ IR rival update").await?;
+        Ok(())
     }
 
     pub async fn submit_score(

@@ -38,6 +38,14 @@ pub enum IrCommand {
     Ranking { sha256: String, gauge: String, ln_policy: String, scope: String, limit: u32 },
     /// `ir sync` — pending のスコアジョブを送信する。
     Sync,
+    /// `ir rivals [add <PLAYER_ID> | remove <PLAYER_ID>]`
+    Rivals { action: Option<RivalAction> },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RivalAction {
+    Add { player_id: String },
+    Remove { player_id: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -234,10 +242,29 @@ fn parse_ir_command(rest: &[String]) -> Result<Command> {
             Ok(Command::Ir(IrCommand::Ranking { sha256, gauge, ln_policy, scope, limit }))
         }
         Some("sync") => Ok(Command::Ir(IrCommand::Sync)),
-        Some(sub) => {
-            bail!("unknown ir subcommand: {sub}. Use: login, logout, status, ranking, sync")
+        Some("rivals") => {
+            let action = match rest.get(1).map(|s| s.as_str()) {
+                Some("add") => Some(RivalAction::Add {
+                    player_id: rest
+                        .get(2)
+                        .cloned()
+                        .ok_or_else(|| anyhow::anyhow!("ir rivals add requires a PLAYER_ID"))?,
+                }),
+                Some("remove") => Some(RivalAction::Remove {
+                    player_id: rest
+                        .get(2)
+                        .cloned()
+                        .ok_or_else(|| anyhow::anyhow!("ir rivals remove requires a PLAYER_ID"))?,
+                }),
+                Some(other) => bail!("unknown ir rivals subcommand: {other}. Use: add, remove"),
+                None => None,
+            };
+            Ok(Command::Ir(IrCommand::Rivals { action }))
         }
-        None => bail!("ir requires a subcommand: login, logout, status, ranking, sync"),
+        Some(sub) => {
+            bail!("unknown ir subcommand: {sub}. Use: login, logout, status, ranking, sync, rivals")
+        }
+        None => bail!("ir requires a subcommand: login, logout, status, ranking, sync, rivals"),
     }
 }
 

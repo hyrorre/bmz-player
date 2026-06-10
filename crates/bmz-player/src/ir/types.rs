@@ -182,6 +182,30 @@ pub struct IrMeResponse {
     pub player: IrPlayerInfo,
 }
 
+/// `/api/v1/rivals` のレスポンス。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrRivalsResponse {
+    #[serde(default)]
+    pub rivals: Vec<IrRivalEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrRivalEntry {
+    pub player_id: String,
+    #[serde(default)]
+    pub relation_type: String,
+    #[serde(default)]
+    pub profile: Option<IrRivalProfile>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrRivalProfile {
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub bio: Option<String>,
+}
+
 /// `/api/v1/charts/{sha256}/ranking` のレスポンス。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IrRankingResult {

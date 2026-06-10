@@ -2,7 +2,7 @@ use std::io::Write as _;
 
 use anyhow::{Context, Result, bail};
 
-use crate::cli::IrCommand;
+use crate::cli::{IrCommand, RivalAction};
 use crate::config::load::{load_app_config, load_profile_config};
 use crate::config::profile_config::{
     IrProviderConfig, IrProviderRoleConfig, IrSendPolicyConfig, ProfileConfig,
@@ -29,7 +29,52 @@ pub async fn run_ir_command(cmd: IrCommand) -> Result<()> {
             ranking(&profile_paths, &profile, &sha256, &gauge, &ln_policy, &scope, limit).await
         }
         IrCommand::Sync => sync(&profile_paths, &profile).await,
+        IrCommand::Rivals { action } => rivals(&profile_paths, &profile, action).await,
     }
+}
+
+async fn rivals(
+    profile_paths: &ProfilePaths,
+    profile: &ProfileConfig,
+    action: Option<RivalAction>,
+) -> Result<()> {
+    let provider = primary_provider(profile)?;
+    let credentials = ensure_fresh_credentials(
+        profile_paths.root_dir.as_path(),
+        &provider.provider,
+        &provider.base_url,
+        now_unix_seconds(),
+    )
+    .await?;
+    let client = BmzOfficialIrClient::new(&provider.base_url, credentials.access_token)?;
+
+    match action {
+        Some(RivalAction::Add { player_id }) => {
+            client.set_rival(&player_id, true).await?;
+            println!("added rival: {player_id}");
+        }
+        Some(RivalAction::Remove { player_id }) => {
+            client.set_rival(&player_id, false).await?;
+            println!("removed rival: {player_id}");
+        }
+        None => {}
+    }
+
+    let response = client.get_rivals().await?;
+    if response.rivals.is_empty() {
+        println!("no rivals registered");
+        return Ok(());
+    }
+    for rival in &response.rivals {
+        let name = rival
+            .profile
+            .as_ref()
+            .map(|profile| profile.display_name.as_str())
+            .filter(|name| !name.is_empty())
+            .unwrap_or("(no name)");
+        println!("- {name} ({})", rival.player_id);
+    }
+    Ok(())
 }
 
 fn load_active_profile() -> Result<(ProfilePaths, ProfileConfig)> {
