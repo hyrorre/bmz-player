@@ -8043,8 +8043,9 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         // beatoraja の Integer.MIN_VALUE と同じく値なしにする。
         179 => state.ir_ranking.rank,
         180 | 200 => state.ir_ranking.total_player,
+        181 => state.ir_ranking.clear_rate,
         182 => state.ir_ranking.previous_rank,
-        181 | 201..=242 => None,
+        201..=242 => None,
         // ベストスコア / ターゲットスコア (DB から供給、未取得時は None)
         150 | 170 => projected_best_score_at_progress(state).map(|s| s as i64),
         121 | 151 => state.target_ex_score.map(|s| projected_score_at_progress(s, state) as i64),
@@ -18748,6 +18749,7 @@ mod tests {
                 state: crate::scene::ResultIrState::Loaded,
                 rank: Some(3),
                 total_player: Some(42),
+                clear_rate: Some(85),
                 previous_rank: None,
             },
             ..SkinDrawState::default()
@@ -18755,6 +18757,7 @@ mod tests {
         assert_eq!(skin_state_number(179, loaded), Some(3));
         assert_eq!(skin_state_number(180, loaded), Some(42));
         assert_eq!(skin_state_number(200, loaded), Some(42));
+        assert_eq!(skin_state_number(181, loaded), Some(85));
         assert_eq!(skin_state_number(182, loaded), None);
         assert!(!test_skin_op(601, &[], loaded));
         assert!(test_skin_op(602, &[], loaded));

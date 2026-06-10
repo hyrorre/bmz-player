@@ -29,6 +29,9 @@ pub struct SelectIrRanking {
     cache: HashMap<[u8; 32], ResultIrSnapshot>,
     in_flight: Option<[u8; 32]>,
     pending: Option<([u8; 32], Instant)>,
+    /// キャッシュが前提とするランキング条件 (gauge / LN ポリシー設定)。
+    /// 変わったらキャッシュごと破棄する。
+    context: String,
     sender: Sender<FetchResult>,
     receiver: Receiver<FetchResult>,
 }
@@ -36,20 +39,35 @@ pub struct SelectIrRanking {
 impl Default for SelectIrRanking {
     fn default() -> Self {
         let (sender, receiver) = channel();
-        Self { cache: HashMap::new(), in_flight: None, pending: None, sender, receiver }
+        Self {
+            cache: HashMap::new(),
+            in_flight: None,
+            pending: None,
+            context: String::new(),
+            sender,
+            receiver,
+        }
     }
 }
 
 impl SelectIrRanking {
     /// 毎フレーム呼ぶ。取得完了の取り込みと、カーソル譜面の取得予約を行う。
+    /// `context` は gauge / LN ポリシー設定など「ランキング条件を決める
+    /// プロファイル設定」を表す文字列。変わったらキャッシュを破棄する。
+    /// (譜面ごとに解決される `ln_policy` 自体は含めないこと)
     pub fn update(
         &mut self,
         ir_config: &IrConfig,
         profile_root: &Path,
+        context: &str,
         gauge: &str,
         ln_policy: LnScorePolicy,
         selected: Option<[u8; 32]>,
     ) {
+        if self.context != context {
+            self.context = context.to_string();
+            self.clear();
+        }
         while let Ok((sha256, result)) = self.receiver.try_recv() {
             if self.in_flight == Some(sha256) {
                 self.in_flight = None;
@@ -194,6 +212,7 @@ mod tests {
                 state: SkinIrState::Loaded,
                 rank: Some(2),
                 total_player: Some(10),
+                clear_rate: None,
                 previous_rank: None,
             },
         );
@@ -215,12 +234,12 @@ mod tests {
         let root = std::env::temp_dir();
 
         // 1回目はデバウンス予約のみで取得を開始しない。
-        select_ir.update(&config, &root, "Normal", LnScorePolicy::ForceLn, Some(sha));
+        select_ir.update(&config, &root, "ctx", "Normal", LnScorePolicy::ForceLn, Some(sha));
         assert!(select_ir.in_flight.is_none());
         assert!(select_ir.pending.is_some());
 
         // 選択が外れたら予約は破棄。
-        select_ir.update(&config, &root, "Normal", LnScorePolicy::ForceLn, None);
+        select_ir.update(&config, &root, "ctx", "Normal", LnScorePolicy::ForceLn, None);
         assert!(select_ir.pending.is_none());
     }
 }

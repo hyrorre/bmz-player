@@ -328,6 +328,8 @@ pub struct ResultIrSnapshot {
     pub rank: Option<i64>,
     /// ランキング対象の総プレイヤー数 (NUMBER_IR_TOTALPLAYER=180/200)。
     pub total_player: Option<i64>,
+    /// 全プレイヤー中のクリア率 % (NUMBER_IR_CLEARRATE=181)。
+    pub clear_rate: Option<i64>,
     /// 更新前の順位 (NUMBER_IR_PREVRANK=182)。未対応なら None。
     pub previous_rank: Option<i64>,
 }

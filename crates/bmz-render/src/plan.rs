@@ -4258,6 +4258,7 @@ mod tests {
                 state: crate::scene::ResultIrState::Loaded,
                 rank: Some(3),
                 total_player: Some(42),
+                clear_rate: None,
                 previous_rank: None,
             },
         });

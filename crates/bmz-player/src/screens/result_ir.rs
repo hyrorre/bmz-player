@@ -142,6 +142,7 @@ pub fn ranking_to_ir_snapshot(ranking: &IrRankingResult) -> bmz_render::scene::R
             .and_then(|pagination| pagination.total)
             .map(i64::from)
             .or(Some(ranking.ranking.entries.len() as i64)),
+        clear_rate: ranking.ranking.clear_rate.map(i64::from),
         previous_rank: None,
     }
 }

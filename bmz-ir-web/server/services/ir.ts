@@ -294,6 +294,11 @@ export async function getRanking(
     ranking: {
       scope: query.scope,
       sort: 'ex_score_desc',
+      // 全プレイヤー中のクリア率 (%)。NoPlay/Failed を除いた割合。
+      clear_rate:
+        bestRows.length > 0
+          ? Math.round((bestRows.filter((row) => row.clear_rank > 1).length / bestRows.length) * 100)
+          : null,
       entries,
       self: selfEntry
         ? {

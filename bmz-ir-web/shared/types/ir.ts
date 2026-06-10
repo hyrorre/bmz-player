@@ -139,6 +139,8 @@ export interface IrRanking {
   ranking: {
     scope: IrRankingScope
     sort: 'ex_score_desc'
+    /** 全プレイヤー中のクリア率 (%)。スコアが無い場合は null。 */
+    clear_rate: number | null
     entries: IrRankingEntry[]
     self?: {
       rank: number

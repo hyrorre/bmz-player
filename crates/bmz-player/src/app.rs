@@ -7092,9 +7092,14 @@ impl WinitApp {
         if matches!(scene_kind, AppSceneKind::Select) {
             // `selected_chart_sha256()` は &self 全体を借りるため、practice ctx の
             // &mut 借用と衝突しないようフィールド単位で参照する。
-            let selected = match self.select_items.get(self.selected_index) {
-                Some(SelectItem::Chart(row)) => row.score_sha256(),
-                _ => None,
+            let (selected, ln_profile) = match self.select_items.get(self.selected_index) {
+                Some(SelectItem::Chart(row)) => (
+                    row.score_sha256(),
+                    // library 登録済みなら譜面の LN プロファイルから実プレイと
+                    // 同じスコア分離キーを解決する。未登録は default 近似。
+                    row.chart.as_ref().map(|chart| chart.ln_profile).unwrap_or_default(),
+                ),
+                _ => (None, crate::ln_policy::ChartLnProfile::default()),
             };
             let gauge =
                 crate::config::play::gauge_type_from_config(self.boot.profile_config.play.gauge)
@@ -7102,12 +7107,14 @@ impl WinitApp {
                     .to_string();
             let ln_policy = crate::ln_policy::score_ln_policy(
                 self.boot.profile_config.play.ln_mode_policy,
-                crate::ln_policy::ChartLnProfile::default(),
+                ln_profile,
             );
+            let context = format!("{gauge}:{:?}", self.boot.profile_config.play.ln_mode_policy);
             let ir_config = self.boot.profile_config.ir.clone();
             self.select_ir.update(
                 &ir_config,
                 &self.boot.profile_paths.root_dir,
+                &context,
                 &gauge,
                 ln_policy,
                 selected,

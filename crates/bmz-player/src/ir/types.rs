@@ -223,6 +223,9 @@ pub struct IrRankingBody {
     pub scope: IrRankingScope,
     #[serde(default)]
     pub entries: Vec<IrRankingEntry>,
+    /// 全プレイヤー中のクリア率 (%)。
+    #[serde(default)]
+    pub clear_rate: Option<u32>,
     #[serde(rename = "self", default)]
     pub self_summary: Option<IrRankingSelfRef>,
     #[serde(default)]
