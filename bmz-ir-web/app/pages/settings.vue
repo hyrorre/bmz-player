@@ -144,6 +144,51 @@ async function updatePassword(event: FormSubmitEvent<PasswordState>) {
 
   passwordSuccessMessage.value = 'パスワードを変更しました。'
 }
+
+type DeviceKey = {
+  id: string
+  public_key: string
+  algorithm: string
+  revoked_at: string | null
+  created_at: string
+}
+
+const deviceKeys = ref<DeviceKey[]>([])
+const deviceKeysLoading = ref(false)
+const deviceKeysError = ref('')
+const revokingKeyId = ref('')
+
+await loadDeviceKeys()
+
+async function loadDeviceKeys() {
+  deviceKeysLoading.value = true
+  deviceKeysError.value = ''
+  try {
+    const response = await $fetch<{ device_keys: DeviceKey[] }>('/api/v1/device-keys')
+    deviceKeys.value = response.device_keys
+  } catch (error) {
+    deviceKeysError.value = error instanceof Error ? error.message : '署名鍵の取得に失敗しました。'
+  } finally {
+    deviceKeysLoading.value = false
+  }
+}
+
+async function revokeDeviceKey(keyId: string) {
+  revokingKeyId.value = keyId
+  deviceKeysError.value = ''
+  try {
+    await $fetch(`/api/v1/device-keys/${keyId}`, { method: 'DELETE' })
+    await loadDeviceKeys()
+  } catch (error) {
+    deviceKeysError.value = error instanceof Error ? error.message : '署名鍵の失効に失敗しました。'
+  } finally {
+    revokingKeyId.value = ''
+  }
+}
+
+function keyFingerprint(publicKey: string) {
+  return `${publicKey.slice(0, 8)}…${publicKey.slice(-8)}`
+}
 </script>
 
 <template>
@@ -221,6 +266,50 @@ async function updatePassword(event: FormSubmitEvent<PasswordState>) {
             </p>
           </template>
         </UAuthForm>
+
+        <section class="space-y-3">
+          <div>
+            <h2 class="text-xl font-semibold">スコア署名鍵 (device key)</h2>
+            <p class="mt-1 text-sm leading-6 text-neutral-300">
+              BMZ Player がスコア送信の改ざん防止署名に使う鍵です。
+              端末を紛失した場合などはここから失効できます。失効後はその端末で
+              <code class="rounded bg-neutral-900 px-1">bmz ir device-key rotate</code>
+              を実行すると新しい鍵が登録されます。
+            </p>
+          </div>
+          <UAlert v-if="deviceKeysError" color="error" :description="deviceKeysError" />
+          <p v-if="deviceKeysLoading" class="text-sm text-neutral-400">読み込み中...</p>
+          <p v-else-if="!deviceKeys.length" class="text-sm text-neutral-400">
+            登録済みの署名鍵はありません。
+          </p>
+          <ul v-else class="divide-y divide-neutral-800 rounded-lg border border-neutral-800">
+            <li
+              v-for="key in deviceKeys"
+              :key="key.id"
+              class="flex items-center justify-between gap-4 px-4 py-3"
+            >
+              <div class="min-w-0">
+                <p class="font-mono text-sm">{{ keyFingerprint(key.public_key) }}</p>
+                <p class="text-xs text-neutral-500">
+                  {{ key.algorithm }} ・ 登録 {{ new Date(key.created_at).toLocaleString() }}
+                  <UBadge v-if="key.revoked_at" color="error" size="sm" variant="subtle">
+                    失効済み
+                  </UBadge>
+                </p>
+              </div>
+              <UButton
+                v-if="!key.revoked_at"
+                color="error"
+                variant="subtle"
+                size="sm"
+                :loading="revokingKeyId === key.id"
+                @click="revokeDeviceKey(key.id)"
+              >
+                失効
+              </UButton>
+            </li>
+          </ul>
+        </section>
 
         <UButton color="neutral" icon="i-lucide-house" size="xl" to="/" variant="subtle">
           トップへ戻る
