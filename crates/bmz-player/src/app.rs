@@ -9363,6 +9363,7 @@ fn select_snapshot_rows(
                     chart_long_notes: 0,
                     chart_scratch_notes: 0,
                     chart_long_scratch_notes: 0,
+                    chart_mine_notes: 0,
                     chart_density: 0.0,
                     chart_peak_density: 0.0,
                     chart_end_density: 0.0,
@@ -9491,9 +9492,9 @@ fn select_snapshot_rows(
                             .map(|analysis| analysis.end_density as f32)
                             .unwrap_or(0.0),
                         chart_total_gauge: row
-                            .chart_analysis
+                            .chart
                             .as_ref()
-                            .map(|analysis| analysis.total_gauge as f32)
+                            .map(|chart| chart.bms_total as f32)
                             .unwrap_or(0.0),
                         chart_main_bpm: row
                             .chart_analysis
@@ -9511,6 +9512,14 @@ fn select_snapshot_rows(
                             .and_then(|chart| chart_distributions.get(&chart.chart_id))
                             .map(|distribution| select_chart_distribution(distribution))
                             .unwrap_or_default(),
+                        chart_mine_notes: row
+                            .chart
+                            .as_ref()
+                            .and_then(|chart| chart_distributions.get(&chart.chart_id))
+                            .map(|distribution| {
+                                distribution.iter().map(|second| u32::from(second.mines)).sum()
+                            })
+                            .unwrap_or(0),
                         chart_bpm_graph_segments: row
                             .chart_analysis
                             .as_ref()
@@ -9577,6 +9586,7 @@ fn select_snapshot_rows(
                     chart_long_notes: 0,
                     chart_scratch_notes: 0,
                     chart_long_scratch_notes: 0,
+                    chart_mine_notes: 0,
                     chart_density: 0.0,
                     chart_peak_density: 0.0,
                     chart_end_density: 0.0,
@@ -9631,6 +9641,7 @@ fn select_snapshot_rows(
                         chart_long_notes: 0,
                         chart_scratch_notes: 0,
                         chart_long_scratch_notes: 0,
+                        chart_mine_notes: 0,
                         chart_density: 0.0,
                         chart_peak_density: 0.0,
                         chart_end_density: 0.0,
@@ -9687,6 +9698,7 @@ fn select_snapshot_rows(
                         chart_long_notes: 0,
                         chart_scratch_notes: 0,
                         chart_long_scratch_notes: 0,
+                        chart_mine_notes: 0,
                         chart_density: 0.0,
                         chart_peak_density: 0.0,
                         chart_end_density: 0.0,
@@ -9736,6 +9748,7 @@ fn select_snapshot_rows(
                     chart_long_notes: 0,
                     chart_scratch_notes: 0,
                     chart_long_scratch_notes: 0,
+                    chart_mine_notes: 0,
                     chart_density: 0.0,
                     chart_peak_density: 0.0,
                     chart_end_density: 0.0,
@@ -9784,6 +9797,7 @@ fn select_snapshot_rows(
                     chart_long_notes: 0,
                     chart_scratch_notes: 0,
                     chart_long_scratch_notes: 0,
+                    chart_mine_notes: 0,
                     chart_density: 0.0,
                     chart_peak_density: 0.0,
                     chart_end_density: 0.0,
@@ -12712,6 +12726,7 @@ mod tests {
                 has_long_notes: false,
                 has_mines: false,
                 judge_rank: Some(1),
+                bms_total: 200.0,
                 ln_profile: Default::default(),
             }),
             chart_analysis: Some(crate::storage::library_db::ChartAnalysisSummary {

@@ -1994,6 +1994,18 @@ fn lua_table_to_json(
                     && let Some(expr) = infer_main_state_number_expr(function, main_state_probe)
                 {
                     object.insert("expr".to_string(), JsonValue::String(expr));
+                } else if is_graph && matches!(object_id.as_deref(), Some("default_chart_gauge")) {
+                    object.insert(
+                        "value_expr".to_string(),
+                        JsonValue::String("bmz:default_chart_gauge".to_string()),
+                    );
+                } else if !is_graph
+                    && matches!(object_id.as_deref(), Some("default_chart_total_count"))
+                {
+                    object.insert(
+                        "value_expr".to_string(),
+                        JsonValue::String("bmz:default_chart_total_count".to_string()),
+                    );
                 } else if let Some(value_expr) = infer_value_float_expr(function, main_state_probe)
                 {
                     object.insert("value_expr".to_string(), JsonValue::String(value_expr));

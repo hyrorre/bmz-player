@@ -64,6 +64,8 @@ pub struct ChartListItem {
     pub has_long_notes: bool,
     pub has_mines: bool,
     pub judge_rank: Option<i32>,
+    /// Raw BMS `#TOTAL` (`model.getTotal()`). Unset charts store `0.0`.
+    pub bms_total: f64,
     pub ln_profile: ChartLnProfile,
 }
 
@@ -993,7 +995,7 @@ impl LibraryDatabase {
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(params![source_url], |row| {
             let chart = chart_list_item_from_row(row)?;
-            let level: String = row.get(28)?;
+            let level: String = row.get(29)?;
             Ok((chart, level))
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
@@ -1008,7 +1010,7 @@ const CHART_LIST_ITEM_LOOKUP_SQL: &str = "
            stage_file, banner_file, backbmp_file, preview_file,
            has_long_notes, has_mines, judge_rank,
            has_undefined_ln, has_defined_ln, has_defined_cn, has_defined_hcn,
-           subartist, genre
+           subartist, genre, COALESCE(bms_total, 0)
     FROM charts
     WHERE {column} = ?1
     ORDER BY id DESC
@@ -1066,7 +1068,8 @@ const CHART_LIST_ITEM_COLUMNS: &str = "
     has_defined_cn,
     has_defined_hcn,
     subartist,
-    genre";
+    genre,
+    COALESCE(bms_total, 0)";
 
 const CHART_LIST_ITEM_COLUMNS_C: &str = "
     c.id,
@@ -1096,7 +1099,8 @@ const CHART_LIST_ITEM_COLUMNS_C: &str = "
     c.has_defined_cn,
     c.has_defined_hcn,
     c.subartist,
-    c.genre";
+    c.genre,
+    COALESCE(c.bms_total, 0)";
 
 fn chart_list_item_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChartListItem> {
     let md5_hex: String = row.get(1)?;
@@ -1135,7 +1139,12 @@ fn chart_list_item_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChartLi
         },
         subartist: row.get(26)?,
         genre: row.get(27)?,
+        bms_total: row.get(28)?,
     })
+}
+
+fn chart_bms_total(metadata_total: Option<f64>) -> f64 {
+    metadata_total.unwrap_or(0.0)
 }
 
 fn upsert_chart_file(conn: &Connection, record: &ChartImportRecord<'_>) -> Result<i64> {
@@ -1184,13 +1193,13 @@ fn insert_chart(conn: &Connection, record: &ChartImportRecord<'_>) -> Result<i64
             difficulty_name, play_level, mode, total_notes, initial_bpm,
             min_bpm, max_bpm, length_ms, ln_type, has_bga, has_long_notes,
             has_mines, folder_path, stage_file, preview_file,
-            banner_file, backbmp_file, judge_rank, gauge_total,
+            banner_file, backbmp_file, judge_rank, gauge_total, bms_total,
             has_undefined_ln, has_defined_ln, has_defined_cn, has_defined_hcn,
             import_version
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
             ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27,
-            ?28, ?29, ?30, ?31
+            ?28, ?29, ?30, ?31, ?32
         )",
     )?
     .execute(params![
@@ -1220,6 +1229,7 @@ fn insert_chart(conn: &Connection, record: &ChartImportRecord<'_>) -> Result<i64
         chart.metadata.backbmp_file.as_str(),
         chart.metadata.judge_rank,
         gauge_total_for_chart(chart.metadata.total, chart.total_notes),
+        chart_bms_total(chart.metadata.total),
         stats.ln_profile.has_undefined_ln,
         stats.ln_profile.has_defined_ln,
         stats.ln_profile.has_defined_cn,
@@ -1240,9 +1250,9 @@ fn update_chart(conn: &Connection, chart_id: i64, record: &ChartImportRecord<'_>
             length_ms = ?15, ln_type = ?16, has_bga = ?17, has_long_notes = ?18,
             has_mines = ?19, folder_path = ?20, stage_file = ?21, preview_file = ?22,
             banner_file = ?23, backbmp_file = ?24, judge_rank = ?25, gauge_total = ?26,
-            has_undefined_ln = ?27, has_defined_ln = ?28, has_defined_cn = ?29,
-            has_defined_hcn = ?30, import_version = ?31
-         WHERE id = ?32",
+            bms_total = ?27, has_undefined_ln = ?28, has_defined_ln = ?29,
+            has_defined_cn = ?30, has_defined_hcn = ?31, import_version = ?32
+         WHERE id = ?33",
     )?
     .execute(params![
         hash_to_hex(&chart.identity.file_sha256),
@@ -1271,6 +1281,7 @@ fn update_chart(conn: &Connection, chart_id: i64, record: &ChartImportRecord<'_>
         chart.metadata.backbmp_file.as_str(),
         chart.metadata.judge_rank,
         gauge_total_for_chart(chart.metadata.total, chart.total_notes),
+        chart_bms_total(chart.metadata.total),
         stats.ln_profile.has_undefined_ln,
         stats.ln_profile.has_defined_ln,
         stats.ln_profile.has_defined_cn,
@@ -2039,6 +2050,37 @@ mod tests {
         let analysis = db.chart_analysis_by_chart_id(chart_id).unwrap().unwrap();
         assert_eq!(analysis.total_gauge, 260.0);
         assert_eq!(analysis.main_bpm, 128.0);
+    }
+
+    #[test]
+    fn upsert_chart_import_persists_bms_total_separately_from_gauge_total() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase { conn };
+        let mut chart = chart("bms total");
+        chart.metadata.total = Some(320.0);
+        chart.total_notes = 500;
+        let record = ChartImportRecord {
+            root_id: None,
+            file_path: Path::new("/songs/total.bms"),
+            file_size: 123,
+            modified_at: 1_700_000_001,
+            scanned_at: 1_700_000_002,
+            chart: &chart,
+        };
+        let chart_id = db.upsert_chart_import(&record).unwrap();
+
+        let stored: f64 = db
+            .conn
+            .query_row("SELECT bms_total FROM charts WHERE id = ?1", params![chart_id], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(stored, 320.0);
+
+        let listed = db.list_charts_by_ids(&[chart_id]).unwrap().pop().unwrap();
+        assert_eq!(listed.bms_total, 320.0);
     }
 
     #[test]

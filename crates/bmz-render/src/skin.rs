@@ -601,6 +601,8 @@ pub const SKIN_EXPR_ADJUSTED_RATE_ADOT: &str = "bmz:adjusted_rate_adot";
 pub const SKIN_EXPR_FS_THRESHOLD: &str = "bmz:fs_threshold";
 pub const SKIN_EXPR_COURSE_TABLE_TEXT: &str = "bmz:course_table_text";
 pub const SKIN_EXPR_FAST_SLOW_BREAKDOWN_HEIGHT: &str = "bmz:fast_slow_breakdown_height";
+pub const SKIN_EXPR_DEFAULT_CHART_TOTAL_COUNT: &str = "bmz:default_chart_total_count";
+pub const SKIN_EXPR_DEFAULT_CHART_GAUGE: &str = "bmz:default_chart_gauge";
 
 /// beatoraja 予約 ID と衝突しない動的タイマー ID 範囲の先頭。
 pub const SKIN_DYNAMIC_TIMER_BASE: i32 = 9000;
@@ -1998,6 +2000,7 @@ pub struct SkinDrawState {
     pub select_chart_long_notes: u32,
     pub select_chart_scratch_notes: u32,
     pub select_chart_long_scratch_notes: u32,
+    pub select_chart_mine_notes: u32,
     pub select_chart_density: f32,
     pub select_chart_peak_density: f32,
     pub select_chart_end_density: f32,
@@ -2198,6 +2201,7 @@ impl Default for SkinDrawState {
             select_chart_long_notes: 0,
             select_chart_scratch_notes: 0,
             select_chart_long_scratch_notes: 0,
+            select_chart_mine_notes: 0,
             select_chart_density: 0.0,
             select_chart_peak_density: 0.0,
             select_chart_end_density: 0.0,
@@ -3798,6 +3802,7 @@ impl SkinDocument {
             select_chart_long_scratch_notes: selected_row
                 .map(|row| row.chart_long_scratch_notes)
                 .unwrap_or(0),
+            select_chart_mine_notes: selected_row.map(|row| row.chart_mine_notes).unwrap_or(0),
             select_chart_density: selected_row.map(|row| row.chart_density).unwrap_or(0.0),
             select_chart_peak_density: selected_row
                 .map(|row| row.chart_peak_density)
@@ -3960,6 +3965,7 @@ impl SkinDocument {
                 select_chart_long_notes: row.chart_long_notes,
                 select_chart_scratch_notes: row.chart_scratch_notes,
                 select_chart_long_scratch_notes: row.chart_long_scratch_notes,
+                select_chart_mine_notes: row.chart_mine_notes,
                 select_chart_density: row.chart_density,
                 select_chart_peak_density: row.chart_peak_density,
                 select_chart_end_density: row.chart_end_density,
@@ -4080,6 +4086,7 @@ impl SkinDocument {
                 select_chart_long_notes: row.chart_long_notes,
                 select_chart_scratch_notes: row.chart_scratch_notes,
                 select_chart_long_scratch_notes: row.chart_long_scratch_notes,
+                select_chart_mine_notes: row.chart_mine_notes,
                 select_chart_density: row.chart_density,
                 select_chart_peak_density: row.chart_peak_density,
                 select_chart_end_density: row.chart_end_density,
@@ -6180,7 +6187,7 @@ impl SkinDocument {
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<SkinRenderItem> {
         let source = sources.get(&graph.src)?;
-        let value = graph_fill_ratio(graph, state).clamp(0.0, 1.0);
+        let (fill_multiplier, uv_ratio) = graph_fill_dimensions(graph, state);
         let source_w = source.source_size.width.max(1.0);
         let source_h = source.source_size.height.max(1.0);
         let base_uv = TextureRegion {
@@ -6192,21 +6199,21 @@ impl SkinDocument {
         let dst = normalize_skin_frame_rect(frame, self.w, self.h);
         let (rect, uv) = if graph.angle == 1 {
             // vertical: fill from bottom up
-            let clipped_h = dst.height * value;
-            let uv_offset = base_uv.height * (1.0 - value);
+            let clipped_h = dst.height * fill_multiplier;
+            let uv_offset = base_uv.height * (1.0 - uv_ratio);
             (
                 Rect { y: dst.y + dst.height - clipped_h, height: clipped_h, ..dst },
                 TextureRegion {
                     y: base_uv.y + uv_offset,
-                    height: base_uv.height * value,
+                    height: base_uv.height * uv_ratio,
                     ..base_uv
                 },
             )
         } else {
             // horizontal: fill from left
             (
-                Rect { width: dst.width * value, ..dst },
-                TextureRegion { width: base_uv.width * value, ..base_uv },
+                Rect { width: dst.width * fill_multiplier, ..dst },
+                TextureRegion { width: base_uv.width * uv_ratio, ..base_uv },
             )
         };
         if rect.width <= 0.0 || rect.height <= 0.0 {
@@ -7695,12 +7702,32 @@ fn parse_skin_timer_operand(operand: &str) -> Option<i32> {
     inner.parse::<i32>().ok()
 }
 
+fn select_chart_notes_total_formula(notes: u32) -> f64 {
+    let notes = f64::from(notes);
+    if notes <= 0.0 {
+        return 0.0;
+    }
+    7.605 * notes / (0.01 * notes + 6.5)
+}
+
+fn default_chart_total_count_value(state: SkinDrawState) -> f32 {
+    let notes = state.select_total_notes.max(state.total_notes);
+    let total = state.select_chart_total_gauge.max(0.0) as f64;
+    (select_chart_notes_total_formula(notes) - total) as f32
+}
+
+fn default_chart_gauge_graph_value(state: SkinDrawState) -> f32 {
+    (default_chart_total_count_value(state) * 0.75).max(0.0)
+}
+
 fn skin_builtin_value_f32(expr: &str, state: SkinDrawState) -> Option<f32> {
     match expr.trim() {
         SKIN_EXPR_ADJUSTED_COVER => state.adjusted_cover_progress,
         SKIN_EXPR_ADJUSTED_RATE => state.adjusted_rate,
         SKIN_EXPR_ADJUSTED_RATE_ADOT => state.adjusted_rate_adot.map(|value| value as f32),
         SKIN_EXPR_FS_THRESHOLD => Some(state.fs_threshold_ms as f32),
+        SKIN_EXPR_DEFAULT_CHART_TOTAL_COUNT => Some(default_chart_total_count_value(state)),
+        SKIN_EXPR_DEFAULT_CHART_GAUGE => Some(default_chart_gauge_graph_value(state)),
         _ => None,
     }
 }
@@ -7713,8 +7740,7 @@ fn skin_value_number(value: &SkinValueDef, state: SkinDrawState) -> Option<i64> 
         if let Some(number) = skin_builtin_value_f32(&value.value_expr, state) {
             return Some(number.round() as i64);
         }
-        return skin_state_digit_float_expr(&value.value_expr, state)
-            .map(|value| value.round() as i64);
+        return skin_state_float_expr(&value.value_expr, state).map(|value| value.round() as i64);
     }
     skin_state_number(value.ref_id, state)
 }
@@ -7740,27 +7766,6 @@ fn skin_value_number_for_destination(
         });
     }
     skin_value_number(value, state)
-}
-
-fn skin_state_digit_float_expr(expr: &str, state: SkinDrawState) -> Option<f32> {
-    let expr = expr.trim();
-    if expr.is_empty() {
-        return None;
-    }
-    if let Some((left, right)) = expr.split_once('*') {
-        let left = skin_state_digit_float_expr(left.trim(), state)?;
-        let right = skin_state_digit_float_expr(right.trim(), state)?;
-        return Some(left * right);
-    }
-    if let Some((numerator, denominator)) = expr.split_once('/') {
-        let numerator = skin_state_additive_float_expr(numerator.trim(), state)?;
-        let denominator = skin_state_additive_float_expr(denominator.trim(), state)?;
-        if denominator.abs() < f32::EPSILON {
-            return Some(0.0);
-        }
-        return Some(numerator / denominator);
-    }
-    skin_state_additive_float_expr(expr, state)
 }
 
 fn skin_state_number_expr(expr: &str, state: SkinDrawState) -> Option<i64> {
@@ -7814,13 +7819,16 @@ fn skin_state_float_expr(expr: &str, state: SkinDrawState) -> Option<f32> {
     if expr.is_empty() {
         return None;
     }
+    if let Some(inner) = expr.strip_prefix("max(0,").and_then(|value| value.strip_suffix(')')) {
+        return skin_state_float_expr(inner.trim(), state).map(|value| value.max(0.0));
+    }
     if let Some((numerator, denominator)) = expr.split_once('/') {
         let numerator = skin_state_additive_float_expr(numerator.trim(), state)?;
         let denominator = skin_state_additive_float_expr(denominator.trim(), state)?;
         if denominator.abs() < f32::EPSILON {
             return Some(0.0);
         }
-        return Some((numerator / denominator).clamp(0.0, 1.0));
+        return Some(numerator / denominator);
     }
     skin_state_additive_float_expr(expr, state)
 }
@@ -7952,12 +7960,14 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         351 if state.select_screen => Some(state.select_chart_long_notes as i64),
         352 if state.select_screen => Some(state.select_chart_scratch_notes as i64),
         353 if state.select_screen => Some(state.select_chart_long_scratch_notes as i64),
+        354 if state.select_screen => Some(state.select_chart_mine_notes as i64),
         360 if state.select_screen => Some(state.select_chart_peak_density.floor() as i64),
         361 if state.select_screen => Some(decimal_afterdot(state.select_chart_peak_density)),
         362 if state.select_screen => Some(state.select_chart_end_density.floor() as i64),
         363 if state.select_screen => Some(decimal_afterdot(state.select_chart_end_density)),
         364 if state.select_screen => Some(state.select_chart_density.floor() as i64),
         365 if state.select_screen => Some(decimal_afterdot(state.select_chart_density)),
+        // beatoraja chart_totalgauge(368): raw BMS #TOTAL from SongInformation.
         368 if state.select_screen || state.result_failed.is_some() => {
             Some(state.select_chart_total_gauge.floor() as i64)
         }
@@ -8283,8 +8293,9 @@ fn score_rate_parts(ex_score: u32, total_notes: u32) -> (u32, u32) {
     if total_notes == 0 {
         return (0, 0);
     }
-    let rate_tenths = ex_score.saturating_mul(1000) / total_notes.saturating_mul(2).max(1);
-    (rate_tenths / 10, rate_tenths % 10)
+    // beatoraja ScoreDataProperty: rateInt=(int)(rate*100), rateAfterDot=((int)(rate*10000))%100
+    let rate_scaled = ex_score.saturating_mul(10000) / total_notes.saturating_mul(2).max(1);
+    (rate_scaled / 100, rate_scaled % 100)
 }
 
 fn skin_image_texture_region(
@@ -8607,11 +8618,31 @@ fn graph_value(graph_type: i32, state: SkinDrawState) -> f32 {
     }
 }
 
-fn graph_fill_ratio(graph: &SkinGraphDef, state: SkinDrawState) -> f32 {
+fn graph_raw_value(graph: &SkinGraphDef, state: SkinDrawState) -> f32 {
     if !graph.value_expr.trim().is_empty() {
-        return skin_state_float_expr(&graph.value_expr, state).unwrap_or(0.0);
+        if let Some(value) = skin_builtin_value_f32(&graph.value_expr, state) {
+            return value;
+        }
+        skin_state_float_expr(&graph.value_expr, state).unwrap_or(0.0)
+    } else {
+        graph_value(graph.graph_type, state)
     }
-    graph_value(graph.graph_type, state)
+}
+
+/// Returns (fill multiplier on dst extent, UV clip ratio 0.0-1.0).
+fn graph_fill_dimensions(graph: &SkinGraphDef, state: SkinDrawState) -> (f32, f32) {
+    let raw = graph_raw_value(graph, state).max(0.0);
+    if !graph.value_expr.trim().is_empty() {
+        // beatoraja Lua graph: rendered size = dst.w * value (value is pixel multiplier).
+        let max = graph.max.max(1) as f32;
+        return (raw, (raw / max).clamp(0.0, 1.0));
+    }
+    if graph.is_ref_num && graph.max > graph.min {
+        let ratio = ((raw - graph.min as f32) / (graph.max - graph.min) as f32).clamp(0.0, 1.0);
+        return (ratio, ratio);
+    }
+    let ratio = raw.clamp(0.0, 1.0);
+    (ratio, ratio)
 }
 
 fn skin_grid_cell_size(size: i32, divisions: i32) -> i32 {
@@ -18574,7 +18605,7 @@ mod tests {
             max_bpm: 180.0,
             main_bpm: 150.0,
             total_duration_ms: 120_000,
-            select_chart_total_gauge: 260.0,
+            select_chart_total_gauge: 200.0,
             judge_rank: Some(2),
             ..SkinDrawState::default()
         };
@@ -18585,8 +18616,28 @@ mod tests {
         assert_eq!(skin_state_number(92, state), Some(150));
         assert_eq!(skin_state_number(312, state), Some(120_000));
         assert_eq!(skin_state_number(313, state), Some(72_000));
-        assert_eq!(skin_state_number(368, state), Some(260));
+        assert_eq!(skin_state_number(368, state), Some(200));
         assert_eq!(skin_state_number(400, state), Some(2));
+    }
+
+    #[test]
+    fn skin_value_evaluates_default_chart_total_count_expr() {
+        let state = SkinDrawState {
+            select_screen: true,
+            select_total_notes: 2_000,
+            select_chart_total_gauge: 500.0,
+            ..SkinDrawState::default()
+        };
+        let value = SkinValueDef {
+            value_expr: SKIN_EXPR_DEFAULT_CHART_TOTAL_COUNT.to_string(),
+            ..SkinValueDef::default()
+        };
+        let expected = 7.605_f32 * 2_000.0 / (0.01 * 2_000.0 + 6.5) - 500.0;
+        assert!(
+            (skin_value_number(&value, state).unwrap() as f32 - expected).abs() < 0.5,
+            "expected ~{expected}, got {:?}",
+            skin_value_number(&value, state)
+        );
     }
 
     #[test]
@@ -18756,7 +18807,7 @@ mod tests {
             select_chart_density: 4.56,
             select_chart_peak_density: 12.34,
             select_chart_end_density: 7.89,
-            select_chart_total_gauge: 260.0,
+            select_chart_total_gauge: 200.0,
             select_chart_main_bpm: 150.0,
             select_min_bpm: 120.0,
             select_max_bpm: 180.0,
@@ -18804,7 +18855,7 @@ mod tests {
         assert_eq!(skin_state_number(363, state), Some(89));
         assert_eq!(skin_state_number(364, state), Some(4));
         assert_eq!(skin_state_number(365, state), Some(56));
-        assert_eq!(skin_state_number(368, state), Some(260));
+        assert_eq!(skin_state_number(368, state), Some(200));
         assert_eq!(skin_state_number(71, state), Some(1234));
         assert_eq!(skin_state_number(1163, state), Some(3));
         assert_eq!(skin_state_number(1164, state), Some(3));
@@ -20247,6 +20298,43 @@ mod tests {
 
         assert!((skin_state_float_expr(expr, very_hard).unwrap() - 10.2).abs() < 0.001);
         assert!((skin_state_float_expr(expr, hard).unwrap() - 9.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn score_rate_parts_matches_beatoraja_score_data_property() {
+        let (integer, afterdot) = score_rate_parts(3948, 2006);
+        assert_eq!(integer, 98);
+        assert_eq!(afterdot, 40);
+    }
+
+    #[test]
+    fn graph_fill_dimensions_scales_lua_chart_graph_by_dst_multiplier() {
+        let graph = SkinGraphDef {
+            id: "default_chart_peak".to_string(),
+            src: "graph".to_string(),
+            value_expr: "4.800000000000001*number(360)".to_string(),
+            min: 0,
+            max: 320,
+            x: 0,
+            y: 0,
+            w: 1,
+            h: 14,
+            divx: 1,
+            divy: 1,
+            timer: None,
+            cycle: 0,
+            angle: 0,
+            graph_type: 0,
+            is_ref_num: false,
+        };
+        let state = SkinDrawState {
+            select_screen: true,
+            select_chart_peak_density: 12.5,
+            ..SkinDrawState::default()
+        };
+        let (fill, uv) = graph_fill_dimensions(&graph, state);
+        assert!((fill - 57.6).abs() < 0.01);
+        assert!((uv - 57.6 / 320.0).abs() < 1e-5);
     }
 
     #[test]

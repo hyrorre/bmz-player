@@ -1541,6 +1541,7 @@ mod tests {
                 has_long_notes: false,
                 has_mines: false,
                 judge_rank: None,
+                bms_total: 0.0,
                 ln_profile: Default::default(),
             }),
             chart_analysis: None,

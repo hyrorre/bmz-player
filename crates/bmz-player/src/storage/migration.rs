@@ -409,6 +409,12 @@ pub const LIBRARY_MIGRATIONS: &[Migration] = &[
             "ALTER TABLE charts ADD COLUMN has_defined_hcn INTEGER NOT NULL DEFAULT 0;",
         ],
     },
+    Migration {
+        version: 16,
+        // Raw BMS #TOTAL for beatoraja skin ref 368 (chart_totalgauge).
+        // Distinct from gauge_total, which applies the gameplay default formula.
+        statements: &["ALTER TABLE charts ADD COLUMN bms_total REAL NOT NULL DEFAULT 0;"],
+    },
 ];
 
 pub const SCORE_MIGRATIONS: &[Migration] = &[
