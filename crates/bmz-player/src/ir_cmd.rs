@@ -29,16 +29,16 @@ pub async fn run_ir_command(cmd: IrCommand) -> Result<()> {
             ranking(&profile_paths, &profile, &sha256, &gauge, &ln_policy, &scope, limit).await
         }
         IrCommand::Sync => sync(&profile_paths, &profile).await,
-        IrCommand::Rivals { action } => rivals(&profile_paths, &profile, action).await,
+        IrCommand::Rivals { action } => rivals(&profile_paths, &mut profile, action).await,
     }
 }
 
 async fn rivals(
     profile_paths: &ProfilePaths,
-    profile: &ProfileConfig,
+    profile: &mut ProfileConfig,
     action: Option<RivalAction>,
 ) -> Result<()> {
-    let provider = primary_provider(profile)?;
+    let provider = primary_provider(profile)?.clone();
     let credentials = ensure_fresh_credentials(
         profile_paths.root_dir.as_path(),
         &provider.provider,
@@ -61,6 +61,11 @@ async fn rivals(
     }
 
     let response = client.get_rivals().await?;
+    if sync_ir_rivals_into_profile(profile, &provider.provider, &response.rivals) {
+        profile.updated_at = now_unix_seconds();
+        save_profile_config(&profile_paths.profile_toml, profile)?;
+    }
+
     if response.rivals.is_empty() {
         println!("no rivals registered");
         return Ok(());
@@ -75,6 +80,63 @@ async fn rivals(
         println!("- {name} ({})", rival.player_id);
     }
     Ok(())
+}
+
+/// IR のライバル一覧をプロファイルの `RivalConfig` に同期する。
+///
+/// `source = Ir` かつ同一 provider のエントリだけを対象とし、サーバーに
+/// 存在しないものは削除、新規は追加、表示名は更新する。手動登録された
+/// LocalProfile / ExternalFile のエントリには触らない。
+/// 変更があった場合に true を返す。
+pub fn sync_ir_rivals_into_profile(
+    profile: &mut ProfileConfig,
+    provider: &str,
+    rivals: &[crate::ir::types::IrRivalEntry],
+) -> bool {
+    use crate::config::profile_config::{RivalEntry, RivalSourceConfig};
+
+    let mut changed = false;
+    // サーバーに存在しない IR エントリを削除する。
+    let server_ids: std::collections::BTreeSet<&str> =
+        rivals.iter().map(|rival| rival.player_id.as_str()).collect();
+    let before = profile.rival.entries.len();
+    profile.rival.entries.retain(|entry| {
+        !(matches!(entry.source, RivalSourceConfig::Ir)
+            && entry.ir_service == provider
+            && !server_ids.contains(entry.ir_user_id.as_str()))
+    });
+    changed |= profile.rival.entries.len() != before;
+
+    for rival in rivals {
+        let display_name = rival
+            .profile
+            .as_ref()
+            .map(|profile| profile.display_name.clone())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| rival.player_id.clone());
+        if let Some(entry) = profile.rival.entries.iter_mut().find(|entry| {
+            matches!(entry.source, RivalSourceConfig::Ir)
+                && entry.ir_service == provider
+                && entry.ir_user_id == rival.player_id
+        }) {
+            if entry.display_name != display_name {
+                entry.display_name = display_name;
+                changed = true;
+            }
+        } else {
+            profile.rival.entries.push(RivalEntry {
+                id: format!("ir-{provider}-{}", rival.player_id),
+                display_name,
+                source: RivalSourceConfig::Ir,
+                profile_id: String::new(),
+                path: String::new(),
+                ir_service: provider.to_string(),
+                ir_user_id: rival.player_id.clone(),
+            });
+            changed = true;
+        }
+    }
+    changed
 }
 
 fn load_active_profile() -> Result<(ProfilePaths, ProfileConfig)> {
@@ -350,4 +412,71 @@ fn now_unix_seconds() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ir::types::{IrRivalEntry, IrRivalProfile};
+
+    fn profile_with_entries() -> ProfileConfig {
+        ProfileConfig::new_default("test", "Test", 0)
+    }
+
+    fn ir_rival(id: &str, name: &str) -> IrRivalEntry {
+        IrRivalEntry {
+            player_id: id.to_string(),
+            relation_type: "rival".to_string(),
+            profile: Some(IrRivalProfile { display_name: name.to_string(), bio: None }),
+        }
+    }
+
+    #[test]
+    fn sync_ir_rivals_adds_updates_and_prunes() {
+        let mut profile = profile_with_entries();
+
+        // 追加。
+        assert!(sync_ir_rivals_into_profile(
+            &mut profile,
+            "bmz-official",
+            &[ir_rival("p1", "Alice"), ir_rival("p2", "Bob")],
+        ));
+        assert_eq!(profile.rival.entries.len(), 2);
+
+        // 変化なしなら false。
+        assert!(!sync_ir_rivals_into_profile(
+            &mut profile,
+            "bmz-official",
+            &[ir_rival("p1", "Alice"), ir_rival("p2", "Bob")],
+        ));
+
+        // 表示名更新 + サーバーから消えたものは削除。
+        assert!(sync_ir_rivals_into_profile(
+            &mut profile,
+            "bmz-official",
+            &[ir_rival("p1", "Alice2")],
+        ));
+        assert_eq!(profile.rival.entries.len(), 1);
+        assert_eq!(profile.rival.entries[0].display_name, "Alice2");
+        assert_eq!(profile.rival.entries[0].ir_user_id, "p1");
+    }
+
+    #[test]
+    fn sync_ir_rivals_keeps_manual_entries() {
+        use crate::config::profile_config::{RivalEntry, RivalSourceConfig};
+        let mut profile = profile_with_entries();
+        profile.rival.entries.push(RivalEntry {
+            id: "local-1".to_string(),
+            display_name: "LocalFriend".to_string(),
+            source: RivalSourceConfig::LocalProfile,
+            profile_id: "other".to_string(),
+            path: String::new(),
+            ir_service: String::new(),
+            ir_user_id: String::new(),
+        });
+
+        assert!(sync_ir_rivals_into_profile(&mut profile, "bmz-official", &[]) == false);
+        assert_eq!(profile.rival.entries.len(), 1);
+        assert_eq!(profile.rival.entries[0].id, "local-1");
+    }
 }
