@@ -40,6 +40,8 @@ pub enum IrCommand {
     Sync,
     /// `ir rivals [add <PLAYER_ID> | remove <PLAYER_ID>]`
     Rivals { action: Option<RivalAction> },
+    /// `ir device-key [rotate]` — 署名鍵の表示 / ローテーション。
+    DeviceKey { rotate: bool },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -261,10 +263,24 @@ fn parse_ir_command(rest: &[String]) -> Result<Command> {
             };
             Ok(Command::Ir(IrCommand::Rivals { action }))
         }
-        Some(sub) => {
-            bail!("unknown ir subcommand: {sub}. Use: login, logout, status, ranking, sync, rivals")
+        Some("device-key") => {
+            let rotate = match rest.get(1).map(|s| s.as_str()) {
+                Some("rotate") => true,
+                Some(other) => bail!("unknown ir device-key subcommand: {other}. Use: rotate"),
+                None => false,
+            };
+            Ok(Command::Ir(IrCommand::DeviceKey { rotate }))
         }
-        None => bail!("ir requires a subcommand: login, logout, status, ranking, sync, rivals"),
+        Some(sub) => {
+            bail!(
+                "unknown ir subcommand: {sub}. Use: login, logout, status, ranking, sync, rivals, device-key"
+            )
+        }
+        None => {
+            bail!(
+                "ir requires a subcommand: login, logout, status, ranking, sync, rivals, device-key"
+            )
+        }
     }
 }
 

@@ -30,7 +30,51 @@ pub async fn run_ir_command(cmd: IrCommand) -> Result<()> {
         }
         IrCommand::Sync => sync(&profile_paths, &profile).await,
         IrCommand::Rivals { action } => rivals(&profile_paths, &mut profile, action).await,
+        IrCommand::DeviceKey { rotate } => device_key(&profile_paths, &profile, rotate).await,
     }
+}
+
+/// `ir device-key` — 署名鍵の表示。`rotate` で旧鍵を失効し新しい鍵を登録する。
+async fn device_key(
+    profile_paths: &ProfilePaths,
+    profile: &ProfileConfig,
+    rotate: bool,
+) -> Result<()> {
+    use crate::ir::device_key::{load_or_create_device_key, save_device_key};
+
+    let provider = primary_provider(profile)?;
+    let root = profile_paths.root_dir.as_path();
+    let key = load_or_create_device_key(root, &provider.provider)?;
+
+    if !rotate {
+        println!("provider: {}", provider.provider);
+        println!("public key: {}", key.public_key);
+        println!("server key id: {}", key.key_id.as_deref().unwrap_or("(not registered)"));
+        return Ok(());
+    }
+
+    let credentials =
+        ensure_fresh_credentials(root, &provider.provider, &provider.base_url, now_unix_seconds())
+            .await?;
+    let client = BmzOfficialIrClient::new(&provider.base_url, credentials.access_token)?;
+
+    // 旧鍵をサーバー側で失効してから、新しい鍵を生成・登録する。
+    if let Some(old_key_id) = &key.key_id {
+        match client.revoke_device_key(old_key_id).await {
+            Ok(()) => println!("revoked old device key: {old_key_id}"),
+            Err(error) => println!("warning: failed to revoke old key ({error:#})"),
+        }
+    }
+    crate::ir::device_key::delete_device_key(root, &provider.provider)?;
+    let mut new_key = load_or_create_device_key(root, &provider.provider)?;
+    let key_id = client.register_device_key(&new_key.public_key).await?;
+    new_key.key_id = Some(key_id.clone());
+    save_device_key(root, &new_key)?;
+
+    println!("rotated device key for {}", provider.provider);
+    println!("public key: {}", new_key.public_key);
+    println!("server key id: {key_id}");
+    Ok(())
 }
 
 async fn rivals(

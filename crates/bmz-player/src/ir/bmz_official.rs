@@ -80,6 +80,21 @@ impl BmzOfficialIrClient {
         decode_response(response, "BMZ IR me").await
     }
 
+    /// 自分の device key を失効させる。
+    pub async fn revoke_device_key(&self, key_id: &str) -> Result<()> {
+        let url = self.base_url.join(&format!("/api/v1/device-keys/{key_id}"))?;
+        let response = self
+            .http
+            .delete(url)
+            .bearer_auth(self.require_token()?)
+            .send()
+            .await
+            .context("failed to send BMZ IR device key revocation")?;
+        let _: serde_json::Value =
+            decode_response(response, "BMZ IR device key revocation").await?;
+        Ok(())
+    }
+
     pub async fn fetch_ranking(
         &self,
         chart_sha256_hex: &str,

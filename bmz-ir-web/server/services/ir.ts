@@ -218,7 +218,21 @@ export async function submitScore(
     min_cb: payload.result.min_cb,
     server_received_at: score.server_received_at,
   }
-  const { bestUpdated, updatedFields } = await upsertBestScore(db, user.id, payload, score.id, verification, candidate)
+  // 署名検証に失敗した投稿は改ざんの積極的な証拠なので、履歴 (scores) には
+  // verification=invalid で残すが best 更新の対象にはしない。
+  const { bestUpdated, updatedFields } =
+    verification === 'invalid'
+      ? {
+          bestUpdated: false,
+          updatedFields: {
+            ex_score: false,
+            clear: false,
+            max_combo: false,
+            min_bp: false,
+            min_cb: false,
+          },
+        }
+      : await upsertBestScore(db, user.id, payload, score.id, verification, candidate)
 
   const rankings: IrSubmitResponse['rankings'] = {}
   for (const scope of rankingScopes) {

@@ -55,6 +55,16 @@ pub fn load_or_create_device_key(profile_root: &Path, provider: &str) -> Result<
     Ok(key)
 }
 
+/// device key ファイルを削除する (ローテーション用)。
+pub fn delete_device_key(profile_root: &Path, provider: &str) -> Result<bool> {
+    let path = device_key_path(profile_root, provider);
+    if !path.exists() {
+        return Ok(false);
+    }
+    std::fs::remove_file(&path)?;
+    Ok(true)
+}
+
 pub fn save_device_key(profile_root: &Path, key: &StoredDeviceKey) -> Result<()> {
     let path = device_key_path(profile_root, &key.provider);
     if let Some(parent) = path.parent() {
