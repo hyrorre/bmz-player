@@ -149,6 +149,7 @@ pub fn finish_session_result(
         played_at,
         score_key,
         &mut summary,
+        previous_best.as_ref(),
     );
 
     Ok(FinishedPlaySession {
@@ -188,11 +189,18 @@ fn enqueue_ir_jobs(
     played_at: i64,
     score_key: ScoreKey,
     summary: &mut ResultSummary,
+    previous_best: Option<&crate::storage::score_db::BestScoreSummary>,
 ) {
     if stored.score_history_id <= 0 {
         return;
     }
-    let enabled: Vec<_> = ir_config.providers.iter().filter(|provider| provider.enabled).collect();
+    let enabled: Vec<_> = ir_config
+        .providers
+        .iter()
+        .filter(|provider| {
+            provider.enabled && should_send_ir_score(provider.send_policy, result, previous_best)
+        })
+        .collect();
     if enabled.is_empty() {
         return;
     }
@@ -227,6 +235,39 @@ fn enqueue_ir_jobs(
                 summary.ir_last_error = Some(error.to_string());
                 tracing::warn!(provider = provider.provider, %error, "failed to enqueue IR score job");
             }
+        }
+    }
+}
+
+/// 送信ポリシーによる IR ジョブ作成可否。
+///
+/// - `Always`: 常に送る
+/// - `CompleteSong`: 最終ゲージが 0 より大きい場合だけ送る
+/// - `UpdateScore`: EX / clear / max combo / BP / CB のいずれかが
+///   ローカルベストから改善した場合 (または初プレイ) だけ送る
+///
+/// サーバー側でも best 更新判定は別途行われるため、これはクライアント側の
+/// 送信量制御にすぎない。
+fn should_send_ir_score(
+    policy: crate::config::profile_config::IrSendPolicyConfig,
+    result: &PlayResult,
+    previous_best: Option<&crate::storage::score_db::BestScoreSummary>,
+) -> bool {
+    use crate::config::profile_config::IrSendPolicyConfig;
+    match policy {
+        IrSendPolicyConfig::Always => true,
+        IrSendPolicyConfig::CompleteSong => result.gauge_value > 0.0,
+        IrSendPolicyConfig::UpdateScore => {
+            let Some(best) = previous_best else {
+                return true;
+            };
+            let best_clear_rank =
+                clear_type_from_name(&best.clear_type).map(|clear| clear as i32).unwrap_or(0);
+            result.score.ex_score() > best.ex_score
+                || (result.clear_type as i32) > best_clear_rank
+                || result.score.max_combo > best.max_combo
+                || result.record_bp() < best.bp
+                || result.record_cb() < best.cb
         }
     }
 }
@@ -314,6 +355,48 @@ mod tests {
     use crate::config::profile_config::{IrConfig, IrProviderConfig, ReplayConfig};
     use crate::storage::common::configure_connection;
     use crate::storage::migration::{SCORE_MIGRATIONS, run_migrations};
+
+    #[test]
+    fn should_send_ir_score_follows_policy() {
+        use crate::config::profile_config::IrSendPolicyConfig;
+        use crate::storage::score_db::BestScoreSummary;
+
+        let mut result = play_result_from_session(&session());
+        result.gauge_value = 0.0;
+        // Failed (ゲージ 0) は CompleteSong では送らない。
+        assert!(should_send_ir_score(IrSendPolicyConfig::Always, &result, None));
+        assert!(!should_send_ir_score(IrSendPolicyConfig::CompleteSong, &result, None));
+        result.gauge_value = 12.0;
+        assert!(should_send_ir_score(IrSendPolicyConfig::CompleteSong, &result, None));
+
+        // UpdateScore: ベストが無ければ送る。
+        assert!(should_send_ir_score(IrSendPolicyConfig::UpdateScore, &result, None));
+
+        let best = BestScoreSummary {
+            chart_sha256: [0; 32],
+            ln_policy: crate::ln_policy::LnScorePolicy::ForceLn,
+            clear_type: "Hard".to_string(),
+            gauge_type: "Normal".to_string(),
+            gauge_value: 100.0,
+            ex_score: 100,
+            bp: 0,
+            cb: 0,
+            max_combo: 100,
+            judge_counts: Default::default(),
+            fast_slow_counts: Default::default(),
+            play_count: 1,
+            clear_count: 1,
+            device_type: InputDeviceKind::Keyboard,
+            played_at: 0,
+            replay_path: String::new(),
+        };
+        // session() の結果は EX 0 / Failed / combo 0 / BP 1 なので全項目で劣る。
+        assert!(!should_send_ir_score(IrSendPolicyConfig::UpdateScore, &result, Some(&best)));
+        // EX が改善すれば送る。
+        let mut improved = result.clone();
+        improved.score.judges.fast_pgreat = 100;
+        assert!(should_send_ir_score(IrSendPolicyConfig::UpdateScore, &improved, Some(&best)));
+    }
 
     #[test]
     fn play_result_from_session_uses_session_state() {
