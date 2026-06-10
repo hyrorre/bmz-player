@@ -1,4 +1,4 @@
-import type { SupabaseClient, User } from '@supabase/supabase-js'
+import type { SupabaseClient } from '@supabase/supabase-js'
 import type {
   IrChartLnProfile,
   IrDeviceType,
@@ -9,7 +9,7 @@ import type {
   IrSubmitResponse,
   LnScorePolicy,
 } from '../../shared/types/ir'
-import type { Database } from '../../shared/types/database.types'
+import type { Database, Json } from '../../shared/types/database.types'
 
 const LN_POLICIES = new Set(['AutoLn', 'AutoCn', 'AutoHcn', 'ForceLn', 'ForceCn', 'ForceHcn'])
 const EFFECTIVE_LN_MODES = new Set(['ln', 'cn', 'hcn'])
@@ -39,6 +39,10 @@ const CLEAR_RANK: Record<string, number> = {
 }
 
 type Db = SupabaseClient<Database>
+
+export interface IrRequestUser {
+  id: string
+}
 
 export interface RankingQuery {
   scope: IrRankingScope
@@ -89,7 +93,7 @@ export function validateScoreSubmission(value: unknown): IrScoreSubmission {
   if (!isRecord(value)) {
     throw new Error('payload must be an object')
   }
-  const payload = value as IrScoreSubmission
+  const payload = value as unknown as IrScoreSubmission
   if (!isRecord(payload.client) || !isRecord(payload.chart) || !isRecord(payload.rule)) {
     throw new Error('client, chart, and rule are required')
   }
@@ -132,7 +136,7 @@ export function validateScoreSubmission(value: unknown): IrScoreSubmission {
 
 export async function submitScore(
   db: Db,
-  user: User,
+  user: IrRequestUser,
   payload: IrScoreSubmission,
   rankingScopes: IrRankingScope[],
   rankingLimit: number,
@@ -160,9 +164,9 @@ export async function submitScore(
     scoring: payload.rule.scoring,
     clear_type: payload.result.clear,
     clear_rank: clearRank,
-    played_at: payload.result.played_at ?? null,
+    played_at: playedAtIso(payload.result.played_at),
     duration_ms: payload.result.duration_ms ?? null,
-    judges: payload.result.judges,
+    judges: payload.result.judges as unknown as Json,
     ex_score: payload.result.ex_score,
     avg_judge_ms: payload.result.avg_judge_ms ?? null,
     max_combo: payload.result.max_combo,
@@ -173,11 +177,11 @@ export async function submitScore(
     min_bp: payload.result.min_bp,
     min_cb: payload.result.min_cb,
     device_type: deviceType,
-    play_options: payload.play_options ?? {},
+    play_options: (payload.play_options ?? {}) as Json,
     replay_hash: payload.replay?.hash ?? null,
     replay_format: payload.replay?.format ?? null,
     replay_upload_intent: payload.replay?.upload_intent ?? null,
-    evidence: payload.evidence ?? {},
+    evidence: (payload.evidence ?? {}) as Json,
     verification,
     idempotency_key: payload.idempotency_key,
   }
@@ -200,6 +204,9 @@ export async function submitScore(
       throw insertError
     }
     score = existing
+  }
+  if (!score) {
+    throw insertError ?? new Error('failed to insert score')
   }
 
   const candidate: BestScoreCandidate = {
@@ -241,7 +248,12 @@ export async function submitScore(
   }
 }
 
-export async function getRanking(db: Db, user: User | null, sha256: string, query: RankingQuery): Promise<IrRanking> {
+export async function getRanking(
+  db: Db,
+  user: IrRequestUser | null,
+  sha256: string,
+  query: RankingQuery,
+): Promise<IrRanking> {
   requireHex(sha256, 64, 'sha256')
   const { data: rows, error } = await db
     .from('best_scores')
@@ -392,7 +404,7 @@ async function upsertBestScore(
       ln_policy: payload.rule.ln_policy,
       effective_ln_mode: payload.rule.effective_ln_mode,
       scoring: payload.rule.scoring,
-      played_at: payload.result.played_at ?? null,
+      played_at: playedAtIso(payload.result.played_at),
       server_received_at: candidate.server_received_at,
       verification,
     },
@@ -503,6 +515,17 @@ async function getPlayerNames(db: Db, playerIds: string[]): Promise<Map<string, 
     throw error
   }
   return new Map((data ?? []).map((row) => [row.id, row.display_name || 'Player']))
+}
+
+/** played_at は ISO 文字列または unix 秒 (BMZ client) を受け付ける。 */
+function playedAtIso(value: unknown): string | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return new Date(value * 1000).toISOString()
+  }
+  if (typeof value === 'string' && value.length > 0) {
+    return value
+  }
+  return null
 }
 
 function judgeTotal(payload: IrScoreSubmission, key: keyof IrScoreSubmission['result']['judges']['fast']): number {

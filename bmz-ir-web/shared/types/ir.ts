@@ -69,7 +69,8 @@ export interface IrScoreSubmission {
   }
   result: {
     clear: string
-    played_at?: string | null
+    /** ISO 文字列、または BMZ client からの unix 秒。 */
+    played_at?: string | number | null
     duration_ms?: number | null
     judges: {
       fast: IrJudgeCounts

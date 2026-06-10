@@ -1,4 +1,5 @@
-import { serverSupabaseServiceRole, serverSupabaseUser } from '#supabase/server'
+import { serverSupabaseServiceRole } from '#supabase/server'
+import { resolveIrUser } from '../../../../utils/auth'
 import type { Database } from '../../../../../shared/types/database.types'
 
 export default defineEventHandler(async (event) => {
@@ -8,7 +9,7 @@ export default defineEventHandler(async (event) => {
   }
 
   const db = serverSupabaseServiceRole<Database>(event)
-  const user = await serverSupabaseUser(event)
+  const user = await resolveIrUser(event)
   const { data: chart, error } = await db.from('charts').select('*').eq('sha256', sha256).maybeSingle()
   if (error) {
     throw createError({ statusCode: 500, statusMessage: error.message })
