@@ -7087,6 +7087,7 @@ impl WinitApp {
             course_preview.as_ref(),
             practice_panel_ctx.as_mut(),
             result_ir_panel,
+            &self.boot.profile_paths.root_dir,
         );
         self.renderer.set_egui_frame(output.frame);
         self.sync_realtime_profile_settings();
