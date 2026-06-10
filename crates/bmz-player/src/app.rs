@@ -5649,6 +5649,11 @@ impl WinitApp {
             arrange: self.arrange_option,
             target: self.target_option,
             arrange_seed,
+            // TARGET: RIVAL 用。選曲時に IR から取得済みのライバルベスト EX。
+            rival_ex_score: self
+                .select_ir
+                .rival_for(&self.boot.profile_config.ir, self.selected_chart_sha256())
+                .map(|rival| rival.ex_score),
             ..Default::default()
         }
     }
@@ -5705,6 +5710,7 @@ impl WinitApp {
             ln_mode_override: None,
             course_gauge_override: None,
             course_gauge_property_override: None,
+            rival_ex_score: None,
         };
         self.start_chart_with_options(chart_id, options);
         true
@@ -9305,6 +9311,7 @@ fn random_config_from_arrange(arrange: ArrangeOption) -> RandomOptionConfig {
 fn target_option_from_profile(target: TargetOptionConfig) -> TargetOption {
     match target {
         TargetOptionConfig::None => TargetOption::None,
+        TargetOptionConfig::Rival => TargetOption::Rival,
         TargetOptionConfig::Max => TargetOption::Max,
         TargetOptionConfig::Aaa => TargetOption::Aaa,
         TargetOptionConfig::Aa => TargetOption::Aa,
@@ -9319,6 +9326,7 @@ fn target_option_from_profile(target: TargetOptionConfig) -> TargetOption {
 fn target_config_from_option(target: TargetOption) -> TargetOptionConfig {
     match target {
         TargetOption::None => TargetOptionConfig::None,
+        TargetOption::Rival => TargetOptionConfig::Rival,
         TargetOption::Max => TargetOptionConfig::Max,
         TargetOption::Aaa => TargetOptionConfig::Aaa,
         TargetOption::Aa => TargetOptionConfig::Aa,

@@ -165,6 +165,8 @@ pub enum RandomOptionConfig {
 pub enum TargetOptionConfig {
     #[default]
     None,
+    /// IR ライバルベストをターゲットにする。
+    Rival,
     Max,
     Aaa,
     Aa,

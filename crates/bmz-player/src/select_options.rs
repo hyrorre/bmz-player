@@ -87,6 +87,8 @@ impl ArrangeOption {
 pub enum TargetOption {
     #[default]
     None,
+    /// IR ライバル (カーソル譜面のライバルベスト) をターゲットにする。
+    Rival,
     Max,
     Aaa,
     Aa,
@@ -100,7 +102,8 @@ pub enum TargetOption {
 impl TargetOption {
     pub fn cycle(self) -> Self {
         match self {
-            Self::None => Self::Max,
+            Self::None => Self::Rival,
+            Self::Rival => Self::Max,
             Self::Max => Self::Aaa,
             Self::Aaa => Self::Aa,
             Self::Aa => Self::A,
@@ -115,7 +118,8 @@ impl TargetOption {
     pub fn cycle_prev(self) -> Self {
         match self {
             Self::None => Self::E,
-            Self::Max => Self::None,
+            Self::Rival => Self::None,
+            Self::Max => Self::Rival,
             Self::Aaa => Self::Max,
             Self::Aa => Self::Aaa,
             Self::A => Self::Aa,
@@ -129,6 +133,7 @@ impl TargetOption {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::None => "NONE",
+            Self::Rival => "RIVAL",
             Self::Max => "MAX",
             Self::Aaa => "AAA",
             Self::Aa => "AA",
@@ -140,10 +145,25 @@ impl TargetOption {
         }
     }
 
+    /// ターゲット EX スコア。`Rival` は IR から取得した `rival_ex_score` を使う。
+    pub fn target_ex_score_with_rival(
+        self,
+        total_notes: u32,
+        rival_ex_score: Option<u32>,
+    ) -> Option<u32> {
+        match self {
+            Self::Rival => rival_ex_score,
+            _ => self.target_ex_score(total_notes),
+        }
+    }
+
     pub fn target_ex_score(self, total_notes: u32) -> Option<u32> {
         let max = total_notes.saturating_mul(2);
         match self {
             Self::None => None,
+            // ライバルターゲットは譜面ごとに動的なので、ここでは解決できない。
+            // `target_ex_score_with_rival` で IR から取得した値を使う。
+            Self::Rival => None,
             Self::Max => Some(max),
             Self::Aaa => Some(rank_threshold(max, 8)),
             Self::Aa => Some(rank_threshold(max, 7)),
@@ -165,6 +185,29 @@ pub enum AssistOption {
     #[default]
     Normal,
     Autoplay,
+}
+
+#[cfg(test)]
+mod rival_target_tests {
+    use super::*;
+
+    #[test]
+    fn rival_target_uses_ir_rival_score() {
+        assert_eq!(TargetOption::Rival.target_ex_score(1000), None);
+        assert_eq!(TargetOption::Rival.target_ex_score_with_rival(1000, Some(1500)), Some(1500));
+        assert_eq!(TargetOption::Rival.target_ex_score_with_rival(1000, None), None);
+        // 他のターゲットは rival 値を無視する。
+        assert_eq!(TargetOption::Max.target_ex_score_with_rival(1000, Some(1)), Some(2000));
+    }
+
+    #[test]
+    fn rival_target_cycles_between_none_and_max() {
+        assert_eq!(TargetOption::None.cycle(), TargetOption::Rival);
+        assert_eq!(TargetOption::Rival.cycle(), TargetOption::Max);
+        assert_eq!(TargetOption::Max.cycle_prev(), TargetOption::Rival);
+        assert_eq!(TargetOption::Rival.cycle_prev(), TargetOption::None);
+        assert_eq!(TargetOption::Rival.as_str(), "RIVAL");
+    }
 }
 
 #[cfg(test)]

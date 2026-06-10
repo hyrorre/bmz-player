@@ -1956,6 +1956,7 @@ fn build_profile_settings_panel(
                         .show_ui(ui, |ui| {
                             for (value, label) in [
                                 (TargetOptionConfig::None, "NONE"),
+                                (TargetOptionConfig::Rival, "RIVAL"),
                                 (TargetOptionConfig::Max, "MAX"),
                                 (TargetOptionConfig::Aaa, "AAA"),
                                 (TargetOptionConfig::Aa, "AA"),
@@ -2368,6 +2369,7 @@ fn random_label(value: RandomOptionConfig) -> &'static str {
 fn target_label(value: TargetOptionConfig) -> &'static str {
     match value {
         TargetOptionConfig::None => "NONE",
+        TargetOptionConfig::Rival => "RIVAL",
         TargetOptionConfig::Max => "MAX",
         TargetOptionConfig::Aaa => "AAA",
         TargetOptionConfig::Aa => "AA",

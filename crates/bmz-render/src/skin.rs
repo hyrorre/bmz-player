@@ -9727,9 +9727,20 @@ fn skin_state_text(text: &SkinTextDef, state: SkinTextState<'_>) -> String {
     }
 }
 
-const SELECT_TARGET_IDS: [&str; 9] = ["NONE", "MAX", "AAA", "AA", "A", "B", "C", "D", "E"];
-const SELECT_TARGET_NAMES: [&str; 9] =
-    ["NO TARGET", "MAX", "RANK AAA", "RANK AA", "RANK A", "RANK B", "RANK C", "RANK D", "RANK E"];
+const SELECT_TARGET_IDS: [&str; 10] =
+    ["NONE", "RIVAL", "MAX", "AAA", "AA", "A", "B", "C", "D", "E"];
+const SELECT_TARGET_NAMES: [&str; 10] = [
+    "NO TARGET",
+    "IR RIVAL",
+    "MAX",
+    "RANK AAA",
+    "RANK AA",
+    "RANK A",
+    "RANK B",
+    "RANK C",
+    "RANK D",
+    "RANK E",
+];
 
 fn select_target_name(target: &str) -> String {
     SELECT_TARGET_IDS
@@ -10526,6 +10537,7 @@ fn select_gauge_auto_shift_index(mode: &str) -> usize {
 
 fn select_target_index(target: &str) -> usize {
     match target {
+        "RIVAL" => 0,
         "MAX" => 1,
         "AAA" => 2,
         "AA" => 3,
