@@ -135,6 +135,7 @@ pub fn sample_play_scene() -> AppSceneSnapshot {
         delta_us: -12_000,
         time: TimeUs(12_300_000),
         is_miss: false,
+        timing_ms_suppressed: false,
     });
 
     AppSceneSnapshot::Play(snapshot)

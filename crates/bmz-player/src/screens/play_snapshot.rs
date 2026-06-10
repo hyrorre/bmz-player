@@ -761,6 +761,7 @@ fn display_judgement(event: &JudgementEvent, combo: u32) -> DisplayJudgement {
         delta_us: event.delta.0,
         time: event.time,
         is_miss: event.judge == Judge::Poor,
+        timing_ms_suppressed: false,
     }
 }
 
@@ -768,6 +769,7 @@ fn display_judgement(event: &JudgementEvent, combo: u32) -> DisplayJudgement {
 ///
 /// - `Auto`: PGREAT は常に非表示。GREAT 以下は常時表示（beatoraja 準拠）。threshold_ms 無視。
 /// - `ThresholdMs`: 判定種別を問わず |delta| < threshold_ms なら非表示。
+///   bmz 独自拡張なので ±ms 数値表示 (ref 525) も合わせて非表示にする。
 pub fn apply_fast_slow_display_filter(
     snapshot: &mut RenderSnapshot,
     threshold_ms: u32,
@@ -783,6 +785,9 @@ pub fn apply_fast_slow_display_filter(
         };
         if suppress {
             judgement.side = None;
+            // ThresholdMs は bmz 独自拡張なので ±ms 数値表示 (ref 525) も隠す。
+            // Auto は beatoraja 準拠のため 525 は隠さない (beatoraja は常に供給する)。
+            judgement.timing_ms_suppressed = scope == FastSlowDisplayScope::ThresholdMs;
             let base = judgement
                 .text
                 .strip_suffix(" FAST")
@@ -862,6 +867,51 @@ mod tests {
     use crate::screens::play_session::{PlaySessionOptions, build_game_session};
 
     use super::*;
+
+    #[test]
+    fn fast_slow_filter_suppresses_timing_ms_only_for_threshold_scope() {
+        use crate::config::profile_config::FastSlowDisplayScope;
+        let judgement = |judge, delta_us| {
+            display_judgement(
+                &JudgementEvent {
+                    note_id: Some(NoteId(1)),
+                    lane: Lane::Key1,
+                    judge,
+                    side: TimingSide::Fast,
+                    delta: TimeUs(delta_us),
+                    time: TimeUs(1_000),
+                },
+                1,
+            )
+        };
+
+        // ThresholdMs: 閾値内 (|delta| < 5ms) は side だけでなく ±ms 表示も隠す。
+        let mut snapshot = RenderSnapshot {
+            recent_judgements: vec![judgement(Judge::Great, -2_000)],
+            ..RenderSnapshot::default()
+        };
+        apply_fast_slow_display_filter(&mut snapshot, 5, FastSlowDisplayScope::ThresholdMs);
+        assert_eq!(snapshot.recent_judgements[0].side, None);
+        assert!(snapshot.recent_judgements[0].timing_ms_suppressed);
+
+        // ThresholdMs: 閾値外は両方表示。
+        let mut snapshot = RenderSnapshot {
+            recent_judgements: vec![judgement(Judge::Great, -8_000)],
+            ..RenderSnapshot::default()
+        };
+        apply_fast_slow_display_filter(&mut snapshot, 5, FastSlowDisplayScope::ThresholdMs);
+        assert_eq!(snapshot.recent_judgements[0].side, Some(TimingSide::Fast));
+        assert!(!snapshot.recent_judgements[0].timing_ms_suppressed);
+
+        // Auto: PGREAT は side を隠すが ±ms 表示は beatoraja 準拠で隠さない。
+        let mut snapshot = RenderSnapshot {
+            recent_judgements: vec![judgement(Judge::PGreat, -2_000)],
+            ..RenderSnapshot::default()
+        };
+        apply_fast_slow_display_filter(&mut snapshot, 5, FastSlowDisplayScope::Auto);
+        assert_eq!(snapshot.recent_judgements[0].side, None);
+        assert!(!snapshot.recent_judgements[0].timing_ms_suppressed);
+    }
 
     #[test]
     fn bga_texture_ids_do_not_overlap_beatoraja_skin_ranges() {

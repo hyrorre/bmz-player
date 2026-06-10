@@ -846,6 +846,7 @@ fn plan_play(
     let judge_timing_ms = snapshot
         .recent_judgements
         .last()
+        .filter(|j| !j.timing_ms_suppressed)
         .map(|j| (j.delta_us / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32);
 
     let play_elapsed_ms =
@@ -4482,6 +4483,7 @@ mod tests {
                 delta_us: -3_000,
                 time: TimeUs(920_000),
                 is_miss: false,
+                timing_ms_suppressed: false,
             }],
             ..Default::default()
         };
@@ -4534,6 +4536,7 @@ mod tests {
                 delta_us: -3_000,
                 time: TimeUs(920_000),
                 is_miss: false,
+                timing_ms_suppressed: false,
             }],
             ..Default::default()
         };
@@ -4559,6 +4562,7 @@ mod tests {
                 delta_us: 50_000,
                 time: TimeUs(980_000),
                 is_miss: false,
+                timing_ms_suppressed: false,
             }],
             ..Default::default()
         };
@@ -4584,6 +4588,7 @@ mod tests {
                 delta_us: 88_000,
                 time: TimeUs(700_000),
                 is_miss: false,
+                timing_ms_suppressed: false,
             }],
             ..Default::default()
         };
@@ -4717,6 +4722,7 @@ mod tests {
             delta_us: 0,
             time: TimeUs(0),
             is_miss: false,
+            timing_ms_suppressed: false,
         })
     }
 
@@ -4804,6 +4810,7 @@ mod tests {
                 delta_us: 50_000,
                 time: TimeUs(950_000),
                 is_miss: true,
+                timing_ms_suppressed: false,
             }],
             ..Default::default()
         };
