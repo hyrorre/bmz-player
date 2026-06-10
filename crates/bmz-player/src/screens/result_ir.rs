@@ -110,17 +110,7 @@ impl ResultIrState {
             RankingLoadState::Failed(_) => {
                 ResultIrSnapshot { state: SkinIrState::Failed, ..Default::default() }
             }
-            RankingLoadState::Loaded(ranking) => ResultIrSnapshot {
-                state: SkinIrState::Loaded,
-                rank: ranking.ranking.self_summary.as_ref().map(|own| i64::from(own.rank)),
-                total_player: ranking
-                    .ranking
-                    .pagination
-                    .and_then(|pagination| pagination.total)
-                    .map(i64::from)
-                    .or(Some(ranking.ranking.entries.len() as i64)),
-                previous_rank: None,
-            },
+            RankingLoadState::Loaded(ranking) => ranking_to_ir_snapshot(ranking),
         }
     }
 
@@ -137,6 +127,22 @@ impl ResultIrState {
             IrRankingScope::SelfAndRivals => Some(&mut self.self_and_rivals),
             _ => None,
         }
+    }
+}
+
+/// 取得済みグローバルランキングをスキン用 snapshot に変換する。
+pub fn ranking_to_ir_snapshot(ranking: &IrRankingResult) -> bmz_render::scene::ResultIrSnapshot {
+    use bmz_render::scene::{ResultIrSnapshot, ResultIrState as SkinIrState};
+    ResultIrSnapshot {
+        state: SkinIrState::Loaded,
+        rank: ranking.ranking.self_summary.as_ref().map(|own| i64::from(own.rank)),
+        total_player: ranking
+            .ranking
+            .pagination
+            .and_then(|pagination| pagination.total)
+            .map(i64::from)
+            .or(Some(ranking.ranking.entries.len() as i64)),
+        previous_rank: None,
     }
 }
 
@@ -252,7 +258,7 @@ async fn fetch_ranking_and_send(
     let _ = sender.send(ResultIrEvent::Ranking { scope, result });
 }
 
-async fn fetch_ranking(
+pub(crate) async fn fetch_ranking(
     query: &ResultIrQuery,
     scope: IrRankingScope,
 ) -> anyhow::Result<IrRankingResult> {

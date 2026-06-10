@@ -1534,7 +1534,7 @@ fn build_result_skin_draw_state(
         best_bp: snapshot.best_bp,
         result_bp: Some(snapshot.bp),
         result_cb: Some(snapshot.cb),
-        result_ir: snapshot.ir,
+        ir_ranking: snapshot.ir,
         previous_best_ex_score: snapshot.previous_best_ex_score,
         previous_best_max_combo: snapshot.previous_best_max_combo,
         previous_best_bp: snapshot.previous_best_bp,
@@ -1704,7 +1704,7 @@ fn plan_result_fallback(summary: ResultFallbackSummary<'_>) -> DrawPlan {
         if replay_saved { "REPLAY SAVED" } else { "REPLAY NONE" },
         BitmapTextStyle { x: 0.68, y: 0.675, cell: 0.005, color: Color::rgb(0.66, 0.78, 0.76) },
     );
-    if let Some(ir_label) = result_ir_label(&ir) {
+    if let Some(ir_label) = ir_ranking_label(&ir) {
         text.push_text(
             &mut commands,
             &ir_label,
@@ -1722,7 +1722,7 @@ fn plan_result_fallback(summary: ResultFallbackSummary<'_>) -> DrawPlan {
 }
 
 /// 組み込みフォールバックリザルトの IR 行。Offline では表示しない。
-fn result_ir_label(ir: &crate::scene::ResultIrSnapshot) -> Option<String> {
+fn ir_ranking_label(ir: &crate::scene::ResultIrSnapshot) -> Option<String> {
     use crate::scene::ResultIrState;
     match ir.state {
         ResultIrState::Offline => None,

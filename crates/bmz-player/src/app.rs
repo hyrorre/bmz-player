@@ -278,6 +278,8 @@ struct WinitApp {
     finished_play: Option<FinishedPlaySession>,
     /// リザルト画面の IR 送信・ランキング表示状態。リザルト以外では None。
     result_ir: Option<crate::screens::result_ir::ResultIrState>,
+    /// 選曲カーソル譜面の IR ランキングキャッシュ。
+    select_ir: crate::screens::select_ir::SelectIrRanking,
     /// 直近のプレイがオートプレイだったか。Result 画面の常時表示に使う。
     last_play_was_autoplay: bool,
     last_play_snapshot: Option<RenderSnapshot>,
@@ -1410,6 +1412,7 @@ impl WinitApp {
             shutdown_requested,
             finished_play: None,
             result_ir: None,
+            select_ir: crate::screens::select_ir::SelectIrRanking::default(),
             last_play_was_autoplay: false,
             last_play_snapshot: None,
             pending_decide: None,
@@ -2046,6 +2049,17 @@ impl WinitApp {
             search_word,
             search_word_alpha,
             mouse_position: self.cursor_position_normalized(),
+            ir: self
+                .select_ir
+                .snapshot_for(&self.boot.profile_config.ir, self.selected_chart_sha256()),
+        }
+    }
+
+    /// 選曲カーソルが曲行のときの chart SHA256。フォルダ / コース行は None。
+    fn selected_chart_sha256(&self) -> Option<[u8; 32]> {
+        match self.select_items.get(self.selected_index)? {
+            SelectItem::Chart(row) => row.score_sha256(),
+            _ => None,
         }
     }
 
@@ -7072,6 +7086,32 @@ impl WinitApp {
             }
         } else {
             self.result_ir = None;
+        }
+        // 選曲画面ではカーソル譜面の IR ランキングをデバウンスつきで取得する
+        // (NUMBER_IR_RANK / NUMBER_IR_TOTALPLAYER / OPTION_IR_* 用)。
+        if matches!(scene_kind, AppSceneKind::Select) {
+            // `selected_chart_sha256()` は &self 全体を借りるため、practice ctx の
+            // &mut 借用と衝突しないようフィールド単位で参照する。
+            let selected = match self.select_items.get(self.selected_index) {
+                Some(SelectItem::Chart(row)) => row.score_sha256(),
+                _ => None,
+            };
+            let gauge =
+                crate::config::play::gauge_type_from_config(self.boot.profile_config.play.gauge)
+                    .as_str()
+                    .to_string();
+            let ln_policy = crate::ln_policy::score_ln_policy(
+                self.boot.profile_config.play.ln_mode_policy,
+                crate::ln_policy::ChartLnProfile::default(),
+            );
+            let ir_config = self.boot.profile_config.ir.clone();
+            self.select_ir.update(
+                &ir_config,
+                &self.boot.profile_paths.root_dir,
+                &gauge,
+                ln_policy,
+                selected,
+            );
         }
         let result_ir_panel = self.result_ir.as_mut();
         let Some(egui) = self.egui.as_mut() else {

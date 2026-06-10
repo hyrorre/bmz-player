@@ -2029,7 +2029,7 @@ pub struct SkinDrawState {
     pub result_bp: Option<u32>,
     pub result_cb: Option<u32>,
     /// Result 画面の IR ランキング状態 (NUMBER_IR_* / OPTION_IR_*)。
-    pub result_ir: crate::scene::ResultIrSnapshot,
+    pub ir_ranking: crate::scene::ResultIrSnapshot,
     /// Result update/draw ops 用の保存前ベスト。
     pub previous_best_ex_score: Option<u32>,
     pub previous_best_max_combo: Option<u32>,
@@ -2219,7 +2219,7 @@ impl Default for SkinDrawState {
             best_bp: None,
             result_bp: None,
             result_cb: None,
-            result_ir: crate::scene::ResultIrSnapshot::default(),
+            ir_ranking: crate::scene::ResultIrSnapshot::default(),
             previous_best_ex_score: None,
             previous_best_max_combo: None,
             previous_best_bp: None,
@@ -3829,6 +3829,7 @@ impl SkinDocument {
             select_chart_key_mode: selected_row.and_then(|row| row.chart_key_mode),
             mouse_x: mouse_position.map(|position| position.0),
             mouse_y: mouse_position.map(|position| position.1),
+            ir_ranking: snapshot.ir,
             ..SkinDrawState::default()
         };
         if let Some(runtime) = dynamic_timers {
@@ -7046,13 +7047,13 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool 
         1046 => matches!(state.gauge_type, 0 | 1 | 4 | 5 | 7 | 8),
         // OPTION_IR_LOADING / LOADED / NOPLAYER / FAILED (601..604)。
         // BANNED / WAITING / ACCESSING / BUSY (605..608) は未対応で false。
-        601 => matches!(state.result_ir.state, crate::scene::ResultIrState::Loading),
-        602 => matches!(state.result_ir.state, crate::scene::ResultIrState::Loaded),
+        601 => matches!(state.ir_ranking.state, crate::scene::ResultIrState::Loading),
+        602 => matches!(state.ir_ranking.state, crate::scene::ResultIrState::Loaded),
         603 => {
-            matches!(state.result_ir.state, crate::scene::ResultIrState::Loaded)
-                && state.result_ir.total_player == Some(0)
+            matches!(state.ir_ranking.state, crate::scene::ResultIrState::Loaded)
+                && state.ir_ranking.total_player == Some(0)
         }
-        604 => matches!(state.result_ir.state, crate::scene::ResultIrState::Failed),
+        604 => matches!(state.ir_ranking.state, crate::scene::ResultIrState::Failed),
         605..=608 => false,
         // OPTION_DIFFICULTY0..5. 0 は UNKNOWN/OTHER、1..5 は BMS #DIFFICULTY。
         150 => state.difficulty <= 0 || state.difficulty > 5,
@@ -8040,9 +8041,9 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         377 => state.stddev_timing_ms.map(|value| ((value.abs() * 100.0) as i64) % 100),
         // IR numbers (beatoraja NUMBER_IR_*)。Offline / 未取得時は
         // beatoraja の Integer.MIN_VALUE と同じく値なしにする。
-        179 => state.result_ir.rank,
-        180 | 200 => state.result_ir.total_player,
-        182 => state.result_ir.previous_rank,
+        179 => state.ir_ranking.rank,
+        180 | 200 => state.ir_ranking.total_player,
+        182 => state.ir_ranking.previous_rank,
         181 | 201..=242 => None,
         // ベストスコア / ターゲットスコア (DB から供給、未取得時は None)
         150 | 170 => projected_best_score_at_progress(state).map(|s| s as i64),
@@ -18743,7 +18744,7 @@ mod tests {
     #[test]
     fn ir_skin_properties_map_loaded_ranking() {
         let loaded = SkinDrawState {
-            result_ir: crate::scene::ResultIrSnapshot {
+            ir_ranking: crate::scene::ResultIrSnapshot {
                 state: crate::scene::ResultIrState::Loaded,
                 rank: Some(3),
                 total_player: Some(42),
@@ -18761,7 +18762,7 @@ mod tests {
         assert!(!test_skin_op(604, &[], loaded));
 
         let loading = SkinDrawState {
-            result_ir: crate::scene::ResultIrSnapshot {
+            ir_ranking: crate::scene::ResultIrSnapshot {
                 state: crate::scene::ResultIrState::Loading,
                 ..Default::default()
             },
@@ -18771,7 +18772,7 @@ mod tests {
         assert!(!test_skin_op(602, &[], loading));
 
         let failed = SkinDrawState {
-            result_ir: crate::scene::ResultIrSnapshot {
+            ir_ranking: crate::scene::ResultIrSnapshot {
                 state: crate::scene::ResultIrState::Failed,
                 ..Default::default()
             },
@@ -18780,7 +18781,7 @@ mod tests {
         assert!(test_skin_op(604, &[], failed));
 
         let no_player = SkinDrawState {
-            result_ir: crate::scene::ResultIrSnapshot {
+            ir_ranking: crate::scene::ResultIrSnapshot {
                 state: crate::scene::ResultIrState::Loaded,
                 total_player: Some(0),
                 ..Default::default()

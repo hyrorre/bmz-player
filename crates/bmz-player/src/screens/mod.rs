@@ -11,6 +11,7 @@ pub mod result;
 pub mod result_ir;
 pub mod result_model;
 pub mod select;
+pub mod select_ir;
 pub mod select_model;
 pub mod settings_edit;
 pub mod settings_model;

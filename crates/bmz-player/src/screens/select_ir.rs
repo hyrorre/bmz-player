@@ -1,0 +1,226 @@
+//! 選曲画面用の IR ランキング遅延取得キャッシュ。
+//!
+//! beatoraja の `MusicSelector` + `RankingData` 相当。カーソルが曲行に
+//! 一定時間とどまったらグローバルランキングを取得し、`NUMBER_IR_RANK` /
+//! `NUMBER_IR_TOTALPLAYER` / `OPTION_IR_*` skin property へ供給する。
+
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::mpsc::{Receiver, Sender, channel};
+use std::time::{Duration, Instant};
+
+use bmz_render::scene::{ResultIrSnapshot, ResultIrState as SkinIrState};
+
+use crate::config::profile_config::IrConfig;
+use crate::ir::types::{IrRankingResult, IrRankingScope};
+use crate::ln_policy::LnScorePolicy;
+use crate::screens::result_ir::{ResultIrQuery, ranking_to_ir_snapshot};
+use crate::storage::common::hash_to_hex;
+
+/// カーソルがとどまってから取得を始めるまでの待ち時間。
+/// 連打スクロールで全行を取得しに行かないためのデバウンス。
+const FETCH_DEBOUNCE: Duration = Duration::from_millis(400);
+/// キャッシュ上限。超えたら全クリアして作り直す (LRU は持たない)。
+const CACHE_CAPACITY: usize = 256;
+
+type FetchResult = ([u8; 32], Result<IrRankingResult, String>);
+
+pub struct SelectIrRanking {
+    cache: HashMap<[u8; 32], ResultIrSnapshot>,
+    in_flight: Option<[u8; 32]>,
+    pending: Option<([u8; 32], Instant)>,
+    sender: Sender<FetchResult>,
+    receiver: Receiver<FetchResult>,
+}
+
+impl Default for SelectIrRanking {
+    fn default() -> Self {
+        let (sender, receiver) = channel();
+        Self { cache: HashMap::new(), in_flight: None, pending: None, sender, receiver }
+    }
+}
+
+impl SelectIrRanking {
+    /// 毎フレーム呼ぶ。取得完了の取り込みと、カーソル譜面の取得予約を行う。
+    pub fn update(
+        &mut self,
+        ir_config: &IrConfig,
+        profile_root: &Path,
+        gauge: &str,
+        ln_policy: LnScorePolicy,
+        selected: Option<[u8; 32]>,
+    ) {
+        while let Ok((sha256, result)) = self.receiver.try_recv() {
+            if self.in_flight == Some(sha256) {
+                self.in_flight = None;
+            }
+            if self.cache.len() >= CACHE_CAPACITY {
+                self.cache.clear();
+            }
+            let snapshot = match result {
+                Ok(ranking) => ranking_to_ir_snapshot(&ranking),
+                Err(error) => {
+                    tracing::debug!(%error, "select IR ranking fetch failed");
+                    ResultIrSnapshot { state: SkinIrState::Failed, ..Default::default() }
+                }
+            };
+            self.cache.insert(sha256, snapshot);
+        }
+
+        let Some(provider) = enabled_provider(ir_config) else {
+            return;
+        };
+        let Some(sha256) = selected else {
+            self.pending = None;
+            return;
+        };
+        if self.cache.contains_key(&sha256) || self.in_flight == Some(sha256) {
+            self.pending = None;
+            return;
+        }
+        match self.pending {
+            Some((pending_sha, since)) if pending_sha == sha256 => {
+                if since.elapsed() >= FETCH_DEBOUNCE && self.in_flight.is_none() {
+                    self.pending = None;
+                    self.in_flight = Some(sha256);
+                    spawn_fetch(
+                        ResultIrQuery {
+                            profile_root: profile_root.to_path_buf(),
+                            provider: provider.0,
+                            base_url: provider.1,
+                            chart_sha256_hex: hash_to_hex(&sha256),
+                            gauge: gauge.to_string(),
+                            ln_policy,
+                        },
+                        sha256,
+                        self.sender.clone(),
+                    );
+                }
+            }
+            _ => self.pending = Some((sha256, Instant::now())),
+        }
+    }
+
+    /// 選択中譜面のスキン用 snapshot。IR 未設定なら Offline。
+    pub fn snapshot_for(
+        &self,
+        ir_config: &IrConfig,
+        selected: Option<[u8; 32]>,
+    ) -> ResultIrSnapshot {
+        if enabled_provider(ir_config).is_none() {
+            return ResultIrSnapshot::default();
+        }
+        let Some(sha256) = selected else {
+            return ResultIrSnapshot::default();
+        };
+        self.cache
+            .get(&sha256)
+            .copied()
+            .unwrap_or(ResultIrSnapshot { state: SkinIrState::Loading, ..Default::default() })
+    }
+
+    /// ログイン状態が変わったとき等にキャッシュを破棄する。
+    pub fn clear(&mut self) {
+        self.cache.clear();
+        self.pending = None;
+    }
+}
+
+fn enabled_provider(ir_config: &IrConfig) -> Option<(String, String)> {
+    ir_config
+        .providers
+        .iter()
+        .find(|provider| provider.enabled && !provider.base_url.is_empty())
+        .map(|provider| (provider.provider.clone(), provider.base_url.clone()))
+}
+
+fn spawn_fetch(query: ResultIrQuery, sha256: [u8; 32], sender: Sender<FetchResult>) {
+    tracing::debug!(chart = %query.chart_sha256_hex, "fetching select IR ranking");
+    tokio::spawn(async move {
+        let result = crate::screens::result_ir::fetch_ranking(&query, IrRankingScope::Global)
+            .await
+            .map_err(|error| format!("{error:#}"));
+        let _ = sender.send((sha256, result));
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::profile_config::{
+        IrProviderConfig, IrProviderRoleConfig, IrSendPolicyConfig,
+    };
+
+    fn ir_config(enabled: bool) -> IrConfig {
+        IrConfig {
+            primary_provider: "bmz-official".to_string(),
+            providers: vec![IrProviderConfig {
+                provider: "bmz-official".to_string(),
+                base_url: "http://localhost:0".to_string(),
+                enabled,
+                account_display_name: String::new(),
+                account_id: String::new(),
+                send_policy: IrSendPolicyConfig::default(),
+                role: IrProviderRoleConfig::default(),
+                last_login_at: None,
+                last_success_at: None,
+            }],
+            ..IrConfig::default()
+        }
+    }
+
+    #[test]
+    fn snapshot_is_offline_without_provider_and_loading_when_uncached() {
+        let select_ir = SelectIrRanking::default();
+        let sha = [7u8; 32];
+
+        let offline = select_ir.snapshot_for(&ir_config(false), Some(sha));
+        assert_eq!(offline.state, SkinIrState::Offline);
+
+        let loading = select_ir.snapshot_for(&ir_config(true), Some(sha));
+        assert_eq!(loading.state, SkinIrState::Loading);
+
+        let none = select_ir.snapshot_for(&ir_config(true), None);
+        assert_eq!(none.state, SkinIrState::Offline);
+    }
+
+    #[test]
+    fn cached_snapshot_is_returned() {
+        let mut select_ir = SelectIrRanking::default();
+        let sha = [7u8; 32];
+        select_ir.cache.insert(
+            sha,
+            ResultIrSnapshot {
+                state: SkinIrState::Loaded,
+                rank: Some(2),
+                total_player: Some(10),
+                previous_rank: None,
+            },
+        );
+
+        let snapshot = select_ir.snapshot_for(&ir_config(true), Some(sha));
+        assert_eq!(snapshot.state, SkinIrState::Loaded);
+        assert_eq!(snapshot.rank, Some(2));
+
+        select_ir.clear();
+        let cleared = select_ir.snapshot_for(&ir_config(true), Some(sha));
+        assert_eq!(cleared.state, SkinIrState::Loading);
+    }
+
+    #[test]
+    fn update_debounces_before_fetching() {
+        let mut select_ir = SelectIrRanking::default();
+        let sha = [7u8; 32];
+        let config = ir_config(true);
+        let root = std::env::temp_dir();
+
+        // 1回目はデバウンス予約のみで取得を開始しない。
+        select_ir.update(&config, &root, "Normal", LnScorePolicy::ForceLn, Some(sha));
+        assert!(select_ir.in_flight.is_none());
+        assert!(select_ir.pending.is_some());
+
+        // 選択が外れたら予約は破棄。
+        select_ir.update(&config, &root, "Normal", LnScorePolicy::ForceLn, None);
+        assert!(select_ir.pending.is_none());
+    }
+}
