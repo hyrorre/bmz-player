@@ -276,6 +276,8 @@ struct WinitApp {
     /// 正常終了させ、cpal/ASIO ストリームの Drop(停止・後処理)を確実に走らせる。
     shutdown_requested: Arc<AtomicBool>,
     finished_play: Option<FinishedPlaySession>,
+    /// リザルト画面の IR 送信・ランキング表示状態。リザルト以外では None。
+    result_ir: Option<crate::screens::result_ir::ResultIrState>,
     /// 直近のプレイがオートプレイだったか。Result 画面の常時表示に使う。
     last_play_was_autoplay: bool,
     last_play_snapshot: Option<RenderSnapshot>,
@@ -1059,6 +1061,7 @@ fn debug_boot_finished_play_session() -> FinishedPlaySession {
         replay_playback: false,
         arrange: ArrangeOption::Normal,
         applied_arrange: AppliedArrange::default(),
+        ln_policy: crate::ln_policy::LnScorePolicy::ForceLn,
     }
 }
 
@@ -1406,6 +1409,7 @@ impl WinitApp {
             audio_runtime,
             shutdown_requested,
             finished_play: None,
+            result_ir: None,
             last_play_was_autoplay: false,
             last_play_snapshot: None,
             pending_decide: None,
@@ -7047,6 +7051,28 @@ impl WinitApp {
                 max_end_time_ms: practice.max_end_time_ms,
             });
         }
+        // リザルト画面に入ったら IR 送信・ランキング取得タスクを起動し、
+        // 離れたら破棄する。コース最終リザルトは対象外 (チャート単位でないため)。
+        if matches!(scene_kind, AppSceneKind::Result) && self.finished_course.is_none() {
+            if self.result_ir.is_none()
+                && let Some(finished) = &self.finished_play
+            {
+                self.result_ir = crate::screens::result_ir::spawn_result_ir_task(
+                    self.boot.profile_paths.root_dir.clone(),
+                    self.boot.profile_paths.score_db.clone(),
+                    &self.boot.profile_config.ir,
+                    crate::storage::common::hash_to_hex(&finished.result.chart_sha256),
+                    finished.result.gauge_type.as_str().to_string(),
+                    finished.ln_policy,
+                );
+            }
+            if let Some(state) = &mut self.result_ir {
+                state.poll();
+            }
+        } else {
+            self.result_ir = None;
+        }
+        let result_ir_panel = self.result_ir.as_mut();
         let Some(egui) = self.egui.as_mut() else {
             return;
         };
@@ -7060,6 +7086,7 @@ impl WinitApp {
             course_result.as_ref(),
             course_preview.as_ref(),
             practice_panel_ctx.as_mut(),
+            result_ir_panel,
         );
         self.renderer.set_egui_frame(output.frame);
         self.sync_realtime_profile_settings();

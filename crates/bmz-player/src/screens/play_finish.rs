@@ -22,6 +22,8 @@ pub struct FinishedPlaySession {
     pub replay_playback: bool,
     pub arrange: crate::select_options::ArrangeOption,
     pub applied_arrange: AppliedArrange,
+    /// IR ランキング照会に使うスコア分離キー。
+    pub ln_policy: crate::ln_policy::LnScorePolicy,
 }
 
 pub fn play_result_from_session(session: &GameSession) -> PlayResult {
@@ -156,6 +158,7 @@ pub fn finish_session_result(
         replay_playback,
         arrange: applied_arrange.arrange,
         applied_arrange: applied_arrange.clone(),
+        ln_policy: score_key.ln_policy,
     })
 }
 

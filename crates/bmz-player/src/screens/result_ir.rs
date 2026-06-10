@@ -1,0 +1,263 @@
+//! リザルト画面用の IR 送信・ランキング表示状態。
+//!
+//! リザルト遷移時に [`spawn_result_ir_task`] でバックグラウンドタスクを起動し、
+//! pending スコアジョブの即時送信と、設定に応じたランキング prefetch を行う。
+//! タブ切り替えで未取得 scope を選んだ場合は [`ResultIrState::request_scope`]
+//! で遅延取得する。スレッド間は mpsc channel で結果だけ受け渡す。
+
+use std::path::PathBuf;
+use std::sync::mpsc::{Receiver, Sender, channel};
+
+use crate::config::profile_config::IrConfig;
+use crate::ir::bmz_official::{BmzOfficialIrClient, IrRankingRequest};
+use crate::ir::sync::{ensure_fresh_credentials, sync_pending_ir_jobs};
+use crate::ir::types::{IrRankingResult, IrRankingScope};
+use crate::ln_policy::LnScorePolicy;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResultRankingTab {
+    Global,
+    SelfAndRivals,
+}
+
+#[derive(Debug, Clone)]
+pub enum RankingLoadState {
+    NotRequested,
+    Loading,
+    Loaded(IrRankingResult),
+    Failed(String),
+}
+
+#[derive(Debug, Clone)]
+pub enum IrSubmitState {
+    Sending,
+    Done { submitted: u32, failed: u32, message: Option<String> },
+}
+
+#[derive(Debug)]
+pub enum ResultIrEvent {
+    Submit { submitted: u32, failed: u32, message: Option<String> },
+    Ranking { scope: IrRankingScope, result: Result<IrRankingResult, String> },
+}
+
+/// ランキング照会に必要なクエリ条件。タブ遅延取得でも使い回す。
+#[derive(Debug, Clone)]
+pub struct ResultIrQuery {
+    pub profile_root: PathBuf,
+    pub provider: String,
+    pub base_url: String,
+    pub chart_sha256_hex: String,
+    pub gauge: String,
+    pub ln_policy: LnScorePolicy,
+}
+
+pub struct ResultIrState {
+    pub submit: IrSubmitState,
+    pub global: RankingLoadState,
+    pub self_and_rivals: RankingLoadState,
+    pub active_tab: ResultRankingTab,
+    query: ResultIrQuery,
+    sender: Sender<ResultIrEvent>,
+    receiver: Receiver<ResultIrEvent>,
+}
+
+impl ResultIrState {
+    /// 受信済みイベントを状態へ反映する。毎フレーム呼ぶ。
+    pub fn poll(&mut self) {
+        while let Ok(event) = self.receiver.try_recv() {
+            match event {
+                ResultIrEvent::Submit { submitted, failed, message } => {
+                    self.submit = IrSubmitState::Done { submitted, failed, message };
+                }
+                ResultIrEvent::Ranking { scope, result } => {
+                    let slot = self.scope_slot(scope);
+                    if let Some(slot) = slot {
+                        *slot = match result {
+                            Ok(ranking) => RankingLoadState::Loaded(ranking),
+                            Err(error) => RankingLoadState::Failed(error),
+                        };
+                    }
+                }
+            }
+        }
+    }
+
+    /// タブ選択を切り替え、未取得ならその scope の取得タスクを起動する。
+    pub fn select_tab(&mut self, tab: ResultRankingTab) {
+        self.active_tab = tab;
+        let scope = scope_for_tab(tab);
+        if matches!(self.scope_slot(scope), Some(RankingLoadState::NotRequested)) {
+            self.request_scope(scope);
+        }
+    }
+
+    pub fn request_scope(&mut self, scope: IrRankingScope) {
+        if let Some(slot) = self.scope_slot(scope) {
+            *slot = RankingLoadState::Loading;
+        }
+        spawn_ranking_fetch(self.query.clone(), scope, self.sender.clone());
+    }
+
+    pub fn active_state(&self) -> &RankingLoadState {
+        match self.active_tab {
+            ResultRankingTab::Global => &self.global,
+            ResultRankingTab::SelfAndRivals => &self.self_and_rivals,
+        }
+    }
+
+    fn scope_slot(&mut self, scope: IrRankingScope) -> Option<&mut RankingLoadState> {
+        match scope {
+            IrRankingScope::Global => Some(&mut self.global),
+            IrRankingScope::SelfAndRivals => Some(&mut self.self_and_rivals),
+            _ => None,
+        }
+    }
+}
+
+fn scope_for_tab(tab: ResultRankingTab) -> IrRankingScope {
+    match tab {
+        ResultRankingTab::Global => IrRankingScope::Global,
+        ResultRankingTab::SelfAndRivals => IrRankingScope::SelfAndRivals,
+    }
+}
+
+/// リザルト遷移時に呼ぶ。IR 未設定なら `None`。
+///
+/// 起動するタスク:
+/// 1. pending スコアジョブの即時送信 (このリザルト分を含む)
+/// 2. prefetch 設定が ON の scope のランキング取得
+///
+/// prefetch が両方 OFF でも、パネル表示時のタブ選択で遅延取得できる。
+pub fn spawn_result_ir_task(
+    profile_root: PathBuf,
+    score_db_path: PathBuf,
+    ir_config: &IrConfig,
+    chart_sha256_hex: String,
+    gauge: String,
+    ln_policy: LnScorePolicy,
+) -> Option<ResultIrState> {
+    let provider = ir_config
+        .providers
+        .iter()
+        .find(|provider| provider.enabled && !provider.base_url.is_empty())?;
+    let query = ResultIrQuery {
+        profile_root,
+        provider: provider.provider.clone(),
+        base_url: provider.base_url.clone(),
+        chart_sha256_hex,
+        gauge,
+        ln_policy,
+    };
+    let (sender, receiver) = channel();
+
+    let mut state = ResultIrState {
+        submit: IrSubmitState::Sending,
+        global: RankingLoadState::NotRequested,
+        self_and_rivals: RankingLoadState::NotRequested,
+        active_tab: ResultRankingTab::Global,
+        query: query.clone(),
+        sender: sender.clone(),
+        receiver,
+    };
+
+    let submit_sender = sender.clone();
+    let ir_config = ir_config.clone();
+    let submit_query = query.clone();
+    let prefetch_global = state_prefetch_global(&ir_config);
+    let prefetch_rivals = state_prefetch_rivals(&ir_config);
+    tokio::spawn(async move {
+        let now = now_unix_seconds();
+        let outcome = async {
+            let mut score_db = crate::storage::score_db::ScoreDatabase::open(&score_db_path)?;
+            sync_pending_ir_jobs(&mut score_db, &submit_query.profile_root, &ir_config, now, 20)
+                .await
+        }
+        .await;
+        let event = match outcome {
+            Ok(report) => ResultIrEvent::Submit {
+                submitted: report.submitted,
+                failed: report.failed,
+                message: report.messages.first().cloned(),
+            },
+            Err(error) => ResultIrEvent::Submit {
+                submitted: 0,
+                failed: 0,
+                message: Some(format!("{error:#}")),
+            },
+        };
+        let _ = submit_sender.send(event);
+        // 送信完了後に prefetch する。best 更新前のランキングを返さないため。
+        if prefetch_global {
+            fetch_ranking_and_send(&submit_query, IrRankingScope::Global, &submit_sender).await;
+        }
+        if prefetch_rivals {
+            fetch_ranking_and_send(&submit_query, IrRankingScope::SelfAndRivals, &submit_sender)
+                .await;
+        }
+    });
+
+    if prefetch_global {
+        state.global = RankingLoadState::Loading;
+    }
+    if prefetch_rivals {
+        state.self_and_rivals = RankingLoadState::Loading;
+    }
+    Some(state)
+}
+
+fn state_prefetch_global(ir_config: &IrConfig) -> bool {
+    ir_config.prefetch_global_ranking_on_score_submit
+}
+
+fn state_prefetch_rivals(ir_config: &IrConfig) -> bool {
+    ir_config.prefetch_rival_ranking_on_score_submit
+}
+
+fn spawn_ranking_fetch(query: ResultIrQuery, scope: IrRankingScope, sender: Sender<ResultIrEvent>) {
+    tokio::spawn(async move {
+        fetch_ranking_and_send(&query, scope, &sender).await;
+    });
+}
+
+async fn fetch_ranking_and_send(
+    query: &ResultIrQuery,
+    scope: IrRankingScope,
+    sender: &Sender<ResultIrEvent>,
+) {
+    let result = fetch_ranking(query, scope).await.map_err(|error| format!("{error:#}"));
+    let _ = sender.send(ResultIrEvent::Ranking { scope, result });
+}
+
+async fn fetch_ranking(
+    query: &ResultIrQuery,
+    scope: IrRankingScope,
+) -> anyhow::Result<IrRankingResult> {
+    let now = now_unix_seconds();
+    let mut client = BmzOfficialIrClient::anonymous(&query.base_url)?;
+    // self / rivals scope は認証必須。global は匿名でも可。
+    match ensure_fresh_credentials(&query.profile_root, &query.provider, &query.base_url, now).await
+    {
+        Ok(credentials) => client.set_access_token(credentials.access_token),
+        Err(error) if scope != IrRankingScope::Global => return Err(error),
+        Err(_) => {}
+    }
+    client
+        .fetch_ranking(
+            &query.chart_sha256_hex,
+            &IrRankingRequest {
+                scope,
+                gauge: query.gauge.clone(),
+                ln_policy: query.ln_policy.as_str().to_string(),
+                limit: 20,
+                offset: 0,
+            },
+        )
+        .await
+}
+
+fn now_unix_seconds() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}

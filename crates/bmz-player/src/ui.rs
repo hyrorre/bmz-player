@@ -329,6 +329,7 @@ impl EguiLayer {
         course_result: Option<&CourseResultSummary>,
         course_preview: Option<&SelectCourseRow>,
         mut practice: Option<&mut PracticePanelContext<'_>>,
+        mut result_ir: Option<&mut crate::screens::result_ir::ResultIrState>,
     ) -> EguiOutput {
         let raw_input = self.state.take_egui_input(window);
         let ctx = self.ctx.clone();
@@ -351,6 +352,11 @@ impl EguiLayer {
                 let panel = build_practice_panel(ui.ctx(), practice_ctx);
                 practice_start |= panel.start_play;
                 practice_leave |= panel.leave;
+            }
+            // IR ランキングはリザルト画面の常設表示なので F1 メニューの
+            // 表示フラグには連動させない。
+            if let Some(state) = result_ir.as_mut() {
+                build_result_ir_panel(ui.ctx(), state);
             }
             if *visible_flag {
                 let ctx = ui.ctx();
@@ -590,6 +596,116 @@ fn sized_panel_window<'open>(
 ///
 /// `finished_course` が `Some` のあいだ表示され続け、リザルト画面を抜けると
 /// `None` になって自動的に消える。最小実装として egui::Window を 1 枚出すだけ。
+/// リザルト画面の IR 送信状況とランキングを表示するオーバーレイ。
+fn build_result_ir_panel(
+    ctx: &egui::Context,
+    state: &mut crate::screens::result_ir::ResultIrState,
+) {
+    use crate::screens::result_ir::{IrSubmitState, RankingLoadState, ResultRankingTab};
+
+    let content_rect = ctx.content_rect();
+    let panel_width = 360.0_f32;
+    let pos = egui::pos2(content_rect.right() - panel_width - 16.0, 16.0);
+
+    egui::Window::new("IR ランキング")
+        .id(egui::Id::new("result_ir_overlay"))
+        .resizable(false)
+        .collapsible(true)
+        .movable(true)
+        .current_pos(pos)
+        .default_width(panel_width)
+        .show(ctx, |ui| {
+            match &state.submit {
+                IrSubmitState::Sending => {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label("スコア送信中...");
+                    });
+                }
+                IrSubmitState::Done { submitted, failed, message } => {
+                    if *failed > 0 {
+                        ui.colored_label(
+                            egui::Color32::LIGHT_RED,
+                            format!("送信失敗 {failed} 件 (成功 {submitted} 件)"),
+                        );
+                        if let Some(message) = message {
+                            ui.small(message.clone());
+                        }
+                    } else if *submitted > 0 {
+                        ui.colored_label(
+                            egui::Color32::LIGHT_GREEN,
+                            format!("スコア送信済み ({submitted} 件)"),
+                        );
+                    } else {
+                        ui.label("送信対象なし");
+                    }
+                }
+            }
+
+            ui.separator();
+            let mut selected_tab = None;
+            ui.horizontal(|ui| {
+                let global = state.active_tab == ResultRankingTab::Global;
+                let rivals = state.active_tab == ResultRankingTab::SelfAndRivals;
+                if ui.selectable_label(global, "全体").clicked() && !global {
+                    selected_tab = Some(ResultRankingTab::Global);
+                }
+                if ui.selectable_label(rivals, "ライバル").clicked() && !rivals {
+                    selected_tab = Some(ResultRankingTab::SelfAndRivals);
+                }
+            });
+            if let Some(tab) = selected_tab {
+                state.select_tab(tab);
+            }
+            // タブ未選択のまま NotRequested の場合 (prefetch OFF) も取得を開始する。
+            if matches!(state.active_state(), RankingLoadState::NotRequested) {
+                state.select_tab(state.active_tab);
+            }
+
+            match state.active_state() {
+                RankingLoadState::NotRequested | RankingLoadState::Loading => {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label("ランキング取得中...");
+                    });
+                }
+                RankingLoadState::Failed(error) => {
+                    ui.colored_label(egui::Color32::LIGHT_RED, "ランキング取得失敗");
+                    ui.small(error.clone());
+                }
+                RankingLoadState::Loaded(ranking) => {
+                    if ranking.ranking.entries.is_empty() {
+                        ui.label("この条件のスコアはまだありません");
+                    } else {
+                        egui::Grid::new("result_ir_ranking_grid")
+                            .num_columns(5)
+                            .striped(true)
+                            .show(ui, |ui| {
+                                ui.strong("#");
+                                ui.strong("プレイヤー");
+                                ui.strong("EX");
+                                ui.strong("クリア");
+                                ui.strong("BP");
+                                ui.end_row();
+                                for entry in &ranking.ranking.entries {
+                                    ui.monospace(entry.rank.to_string());
+                                    ui.label(&entry.player.display_name);
+                                    ui.monospace(entry.score.ex_score.to_string());
+                                    ui.label(&entry.score.clear);
+                                    ui.monospace(entry.score.min_bp.to_string());
+                                    ui.end_row();
+                                }
+                            });
+                        if let Some(own) = &ranking.ranking.self_summary {
+                            ui.separator();
+                            ui.label(format!("自分の順位: {} 位", own.rank));
+                        }
+                    }
+                }
+            }
+        });
+}
+
 fn build_course_result_panel(ctx: &egui::Context, summary: &CourseResultSummary) {
     let content_rect = ctx.content_rect();
     // Panel widened from 360px to 440px so the 6-column per-chart grid
