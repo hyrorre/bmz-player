@@ -20,6 +20,18 @@ Supported Skin
 - beatoraja lua skin
 - beatoraja csv skin
 
+Features
+- ASIO support
+- import LR2/beatoraja scores
+
+**Don't use this application for playing copyrighted contents.**
+
+## System Requirements
+
+- Windows: Windows 10 or higher is natively supported via DirectX 12. Older versions of Windows may require Vulkan drivers.
+- macOS: macOS 10.13 High Sierra or newer is required to utilize Apple's Metal API.
+- Linux: Vulkan support is required. You must ensure you have the correct Vulkan drivers installed (e.g., the proprietary drivers for your dedicated GPU or mesa-vulkan-drivers for Intel/AMD graphics).
+
 ## How to build
 
 Install latest graphics driver.
@@ -84,14 +96,16 @@ cargo run
 
 - [ ] スキンオプションのデフォルト解決をbeatoraja準拠にする
 - [ ] アシストオプション、詳細オプション実装
-- [ ] result 画面終了時に音声のフェードアウト処理を追加
 - [ ] LNノーツの処理方法確認
 - [ ] Mineノーツの処理方法確認
-- [ ] FAST/SLOW 表示条件変更機能 (ms単位)
 - [ ] Fontで `BIZ UDGothic` / `Noto Sans CJK JP` / `Noto Sans JP` を優先表示
 - [ ] Select画面の操作変更とスキン側の不一致について考える
 - [ ] song searchのカーソル移動機能
 - [ ] profile機能拡充
+- [ ] マウスカーソル非表示処理
+- [ ] 各設定項目のデフォルト調整
+- [ ] プレイ画面遷移時のプリロード最適化
+- [ ] play skin READY前に動いていないパーツ (laser/turntable)
 
 ## Roadmap
 
