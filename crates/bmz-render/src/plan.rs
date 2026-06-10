@@ -843,12 +843,6 @@ fn plan_play(
         snapshot.time.0,
         judge_region_count,
     );
-    let judge_timing_ms = snapshot
-        .recent_judgements
-        .last()
-        .filter(|j| !j.timing_ms_suppressed)
-        .map(|j| (j.delta_us / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32);
-
     let play_elapsed_ms =
         (snapshot.play_elapsed_time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32;
     let ready_timer_ms = snapshot
@@ -938,7 +932,7 @@ fn plan_play(
         bga_layer2: snapshot.bga_layer2.map(skin_bga_frame_from_display),
         bga_poor: snapshot.bga_poor.map(skin_bga_frame_from_display),
         bga_stretch: snapshot.bga_stretch,
-        judge_timing_ms,
+        judge_timing_ms: judge_region_state.judge_timing_ms,
         best_ex_score: snapshot.best_ex_score,
         projected_best_ex_score: snapshot.projected_best_ex_score,
         target_ex_score: snapshot.target_ex_score,

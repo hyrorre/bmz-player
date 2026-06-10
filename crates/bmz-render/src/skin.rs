@@ -995,6 +995,9 @@ pub struct JudgeRegionState {
     pub judge_index: [Option<usize>; MAX_JUDGE_REGIONS],
     pub judge_combo: [u32; MAX_JUDGE_REGIONS],
     pub judge_timing_sign: [Option<i8>; MAX_JUDGE_REGIONS],
+    /// 領域別の最新判定タイミングずれ ms (VALUE_JUDGE_1P/2P/3P_DURATION=525/526/527 に使用)。
+    /// 符号は 押下時刻 - note時刻 (FAST=負)。None なら非表示。
+    pub judge_timing_ms: [Option<i32>; MAX_JUDGE_REGIONS],
 }
 
 /// レーン index から判定領域 index へ (beatoraja `JudgeManager.updateMicro` 同式)。
@@ -1016,6 +1019,7 @@ pub fn build_judge_region_state(
     let mut judge_index = [None; MAX_JUDGE_REGIONS];
     let mut judge_combo = [0; MAX_JUDGE_REGIONS];
     let mut judge_timing_sign = [None; MAX_JUDGE_REGIONS];
+    let mut judge_timing_ms = [None; MAX_JUDGE_REGIONS];
     let region_count = region_count.min(MAX_JUDGE_REGIONS);
     for judgement in recent_judgements.iter().rev() {
         let region = lane_judge_region(judgement.lane.index(), LANE_COUNT, region_count);
@@ -1032,8 +1036,12 @@ pub fn build_judge_region_state(
             TimingSide::Fast => 1,
             TimingSide::Slow => -1,
         });
+        if !judgement.timing_ms_suppressed {
+            judge_timing_ms[region] =
+                Some((judgement.delta_us / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32);
+        }
     }
-    JudgeRegionState { judge_ms, judge_index, judge_combo, judge_timing_sign }
+    JudgeRegionState { judge_ms, judge_index, judge_combo, judge_timing_sign, judge_timing_ms }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -1933,9 +1941,9 @@ pub struct SkinDrawState {
     pub bga_poor: Option<SkinBgaFrame>,
     /// BGA destination に stretch 指定が無い場合に使う拡大設定。
     pub bga_stretch: i32,
-    /// 最後の判定のタイミングずれ ms (VALUE_JUDGE_1P_DURATION=525 に使用)。
+    /// 判定領域別の最後の判定タイミングずれ ms (VALUE_JUDGE_1P/2P/3P_DURATION=525/526/527 に使用)。
     /// 符号は 押下時刻 - note時刻 (FAST=負)。Noneなら非表示。
-    pub judge_timing_ms: Option<i32>,
+    pub judge_timing_ms: [Option<i32>; MAX_JUDGE_REGIONS],
     /// DB 上のベスト ex スコア。
     /// Result では保存前ベスト (`previous_best_ex_score`) を MYBEST 表示に優先する。
     pub best_ex_score: Option<u32>,
@@ -2160,7 +2168,7 @@ impl Default for SkinDrawState {
             bga_layer2: None,
             bga_poor: None,
             bga_stretch: 1,
-            judge_timing_ms: None,
+            judge_timing_ms: [None; MAX_JUDGE_REGIONS],
             best_ex_score: None,
             projected_best_ex_score: None,
             best_clear_index: None,
@@ -5062,22 +5070,19 @@ impl SkinDocument {
             if let Some(value) = self.value.iter().find(|value| value.id == number_destination.id) {
                 Self::apply_beatoraja_judge_number_dst_x(&mut number_frame, value.digit);
             }
-            items.extend(
-                self.value_number_render_items(
-                    &number_destination.id,
-                    combo as i64,
-                    image_frame_for_numbers,
-                    number_frame,
-                    elapsed_ms,
-                    sources,
-                    false,
-                    Some(2),
-                    self.value
-                        .iter()
-                        .find(|value| value.id == number_destination.id)
-                        .is_some_and(|value| ref_id_is_signed(value.ref_id)),
+            items.extend(self.value_number_render_items(
+                &number_destination.id,
+                combo as i64,
+                image_frame_for_numbers,
+                number_frame,
+                elapsed_ms,
+                sources,
+                false,
+                Some(2),
+                self.value.iter().find(|value| value.id == number_destination.id).is_some_and(
+                    |value| ref_id_is_signed(value.ref_id) || value_layout_is_signed(value),
                 ),
-            );
+            ));
         }
         Some(items)
     }
@@ -8008,10 +8013,12 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         57 => Some(select_volume_number(state.select_master_volume)),
         58 => Some(select_volume_number(state.select_key_volume)),
         59 => Some(select_volume_number(state.select_bgm_volume)),
-        // 判定タイミングずれ: VALUE_JUDGE_1P_DURATION=525 (ms、符号付き)
+        // 判定タイミングずれ: VALUE_JUDGE_1P/2P/3P_DURATION=525/526/527 (ms、符号付き)
         // beatoraja getRecentJudgeTiming は note時刻 - 押下時刻 (FAST=正)。
         // bmz の judge_timing_ms は 押下時刻 - note時刻 (FAST=負) なので符号を反転する。
-        525 => state.judge_timing_ms.map(|ms| -(ms as i64)),
+        525 => state.judge_timing_ms[0].map(|ms| -(ms as i64)),
+        526 => state.judge_timing_ms[1].map(|ms| -(ms as i64)),
+        527 => state.judge_timing_ms[2].map(|ms| -(ms as i64)),
         // 判定タイミングオフセット設定値 (NUMBER_JUDGETIMING=12)
         12 => Some(state.judge_timing_offset_ms as i64),
         // Result timing distribution stats.
@@ -12011,7 +12018,13 @@ mod tests {
             judge_combo[region] = 42;
             judge_timing_sign[region] = Some(1);
         }
-        JudgeRegionState { judge_ms, judge_index, judge_combo, judge_timing_sign }
+        JudgeRegionState {
+            judge_ms,
+            judge_index,
+            judge_combo,
+            judge_timing_sign,
+            judge_timing_ms: [None; MAX_JUDGE_REGIONS],
+        }
     }
 
     #[test]
@@ -15520,6 +15533,34 @@ mod tests {
                 rect: Rect { x, y, .. },
                 ..
             } if approx_eq(x, 0.23) && approx_eq(y, 0.55)));
+    }
+
+    #[test]
+    fn build_judge_region_state_tracks_signed_timing_per_region() {
+        use crate::snapshot::DisplayJudgement;
+        let judgement = |lane, delta_us, suppressed| DisplayJudgement {
+            lane,
+            judge: bmz_core::judge::Judge::Great,
+            side: Some(bmz_core::judge::TimingSide::Fast),
+            text: String::new(),
+            combo: 1,
+            delta_us,
+            time: TimeUs(1_000),
+            is_miss: false,
+            timing_ms_suppressed: suppressed,
+        };
+        // 1P 側 FAST 3ms、2P 側 SLOW 7ms。
+        let judgements =
+            [judgement(Lane::Key1, -3_000, false), judgement(Lane::Key8, 7_000, false)];
+        let state = build_judge_region_state(&judgements, 2_000, 2);
+        assert_eq!(state.judge_timing_ms[0], Some(-3));
+        assert_eq!(state.judge_timing_ms[1], Some(7));
+        assert_eq!(state.judge_timing_ms[2], None);
+
+        // 閾値フィルタで抑制された判定は ±ms を領域ごと隠す。
+        let suppressed = [judgement(Lane::Key1, -3_000, true)];
+        let state = build_judge_region_state(&suppressed, 2_000, 2);
+        assert_eq!(state.judge_timing_ms[0], None);
     }
 
     #[test]
@@ -20098,7 +20139,7 @@ mod tests {
             max_bpm: 200.3,
             lane_cover: 0.25,
             total_duration_ms: 183_000,
-            judge_timing_ms: Some(-3),
+            judge_timing_ms: [Some(-3), Some(7), None],
             ..SkinDrawState::default()
         };
         // NUMBER_NOWBPM (160) = round(148.7) = 149
@@ -20134,11 +20175,15 @@ mod tests {
         );
         // VALUE_JUDGE_1P_DURATION (525) = -(-3) = 3 (FAST 3ms は beatoraja 規約で正)
         assert_eq!(skin_state_number(525, state), Some(3));
+        // VALUE_JUDGE_2P_DURATION (526): SLOW 7ms (delta=+7) は beatoraja 規約で負
+        assert_eq!(skin_state_number(526, state), Some(-7));
+        // VALUE_JUDGE_3P_DURATION (527): 領域に判定が無ければ None
+        assert_eq!(skin_state_number(527, state), None);
         // SLOW 5ms (delta=+5) は beatoraja 規約で負
-        let slow = SkinDrawState { judge_timing_ms: Some(5), ..state };
+        let slow = SkinDrawState { judge_timing_ms: [Some(5), None, None], ..state };
         assert_eq!(skin_state_number(525, slow), Some(-5));
         // When no recent judgement, 525 returns None
-        let no_judge = SkinDrawState { judge_timing_ms: None, ..state };
+        let no_judge = SkinDrawState { judge_timing_ms: [None; MAX_JUDGE_REGIONS], ..state };
         assert_eq!(skin_state_number(525, no_judge), None);
     }
 
