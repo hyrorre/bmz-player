@@ -1933,7 +1933,8 @@ pub struct SkinDrawState {
     pub bga_poor: Option<SkinBgaFrame>,
     /// BGA destination に stretch 指定が無い場合に使う拡大設定。
     pub bga_stretch: i32,
-    /// 最後の判定のタイミングずれ ms (VALUE_JUDGE_1P_DURATION=525 に使用)。Noneなら非表示。
+    /// 最後の判定のタイミングずれ ms (VALUE_JUDGE_1P_DURATION=525 に使用)。
+    /// 符号は 押下時刻 - note時刻 (FAST=負)。Noneなら非表示。
     pub judge_timing_ms: Option<i32>,
     /// DB 上のベスト ex スコア。
     /// Result では保存前ベスト (`previous_best_ex_score`) を MYBEST 表示に優先する。
@@ -3326,7 +3327,7 @@ impl SkinDocument {
                 state,
                 has_half_grade_f_diff_rank_destination,
             )?;
-            let signed = value_ref_is_signed_for_state(value.ref_id, state);
+            let signed = value_is_signed_for_state(value, state);
             return Some(self.value_number_render_items(
                 &value.id,
                 number,
@@ -3459,7 +3460,7 @@ impl SkinDocument {
                 state,
                 has_half_grade_f_diff_rank_destination,
             )?;
-            let signed = value_ref_is_signed_for_state(value.ref_id, state);
+            let signed = value_is_signed_for_state(value, state);
             return Some(self.value_number_render_items(
                 &value.id,
                 number,
@@ -5096,7 +5097,7 @@ impl SkinDocument {
         };
         let max_digits = value.digit.max(0) as usize;
         let padding = number_padding(value);
-        let digits = if ref_id_is_signed(value.ref_id) {
+        let digits = if ref_id_is_signed(value.ref_id) || value_layout_is_signed(value) {
             display_signed_number_digits(
                 number,
                 max_digits,
@@ -7550,6 +7551,18 @@ fn value_ref_is_signed_for_state(ref_id: i32, state: SkinDrawState) -> bool {
         || (ref_id == 12 && state.select_screen && state.select_option_panel == 3)
 }
 
+/// beatoraja `JsonSkinObjectLoader` は value 画像のセル数 (`divx*divy`) が
+/// 24 の倍数のとき +側/-側の別 image (mimage) を持つ符号付き数値として扱う。
+/// ref に依らず画像レイアウトで決まる (例: Starseeker の ±ms 表示 ref=525, 12x2)。
+fn value_layout_is_signed(value: &SkinValueDef) -> bool {
+    let cells = value.divx.max(1).saturating_mul(value.divy.max(1));
+    cells >= 24 && cells % 24 == 0
+}
+
+fn value_is_signed_for_state(value: &SkinValueDef, state: SkinDrawState) -> bool {
+    value_ref_is_signed_for_state(value.ref_id, state) || value_layout_is_signed(value)
+}
+
 fn lookup_text(values: &[(TextSlot, String)], slot: TextSlot) -> String {
     values
         .iter()
@@ -7995,8 +8008,10 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         57 => Some(select_volume_number(state.select_master_volume)),
         58 => Some(select_volume_number(state.select_key_volume)),
         59 => Some(select_volume_number(state.select_bgm_volume)),
-        // 判定タイミングずれ: VALUE_JUDGE_1P_DURATION=525 (ms、絶対値)
-        525 => state.judge_timing_ms.map(|ms| ms.unsigned_abs() as i64),
+        // 判定タイミングずれ: VALUE_JUDGE_1P_DURATION=525 (ms、符号付き)
+        // beatoraja getRecentJudgeTiming は note時刻 - 押下時刻 (FAST=正)。
+        // bmz の judge_timing_ms は 押下時刻 - note時刻 (FAST=負) なので符号を反転する。
+        525 => state.judge_timing_ms.map(|ms| -(ms as i64)),
         // 判定タイミングオフセット設定値 (NUMBER_JUDGETIMING=12)
         12 => Some(state.judge_timing_offset_ms as i64),
         // Result timing distribution stats.
@@ -20117,8 +20132,11 @@ mod tests {
             skin_state_number(313, SkinDrawState { total_duration_ms: 183_001, ..state }),
             Some(109_801)
         );
-        // VALUE_JUDGE_1P_DURATION (525) = abs(-3) = 3
+        // VALUE_JUDGE_1P_DURATION (525) = -(-3) = 3 (FAST 3ms は beatoraja 規約で正)
         assert_eq!(skin_state_number(525, state), Some(3));
+        // SLOW 5ms (delta=+5) は beatoraja 規約で負
+        let slow = SkinDrawState { judge_timing_ms: Some(5), ..state };
+        assert_eq!(skin_state_number(525, slow), Some(-5));
         // When no recent judgement, 525 returns None
         let no_judge = SkinDrawState { judge_timing_ms: None, ..state };
         assert_eq!(skin_state_number(525, no_judge), None);
