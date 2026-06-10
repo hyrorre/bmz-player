@@ -39,6 +39,8 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 
 md5 = "0.7"
 sha2 = "0.10"
+ed25519-dalek = "2"
+getrandom = "0.2"
 encoding_rs = "0.8"
 
 cpal = "0.15"

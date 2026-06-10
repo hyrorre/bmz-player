@@ -1,3 +1,4 @@
+import { createHash, createPublicKey, verify as cryptoVerify } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type {
   IrChartLnProfile,
@@ -146,7 +147,7 @@ export async function submitScore(
   const bp = judgeTotal(payload, 'bad') + judgeTotal(payload, 'poor') + judgeTotal(payload, 'empty_poor')
   const cb = judgeTotal(payload, 'bad') + judgeTotal(payload, 'poor')
   const clearRank = CLEAR_RANK[payload.result.clear] ?? 0
-  const verification = payload.evidence?.client_signature ? 'signed' : 'unverified'
+  const verification = await resolveVerification(db, user.id, payload)
   const deviceType = payload.play_options.device_type
 
   const scoreInsert = {
@@ -515,6 +516,87 @@ async function getPlayerNames(db: Db, playerIds: string[]): Promise<Map<string, 
     throw error
   }
   return new Map((data ?? []).map((row) => [row.id, row.display_name || 'Player']))
+}
+
+/**
+ * tamper evidence の署名を検証する。
+ *
+ * - evidence なし / 署名なし → unverified
+ * - 署名ありで device key 不明・hash 不一致・署名不正 → invalid
+ * - 検証成功 → signed
+ *
+ * canonical form は「evidence を除いた payload をキー昇順 compact JSON 化」
+ * したもので、BMZ クライアント (serde_json の BTreeMap 出力) と一致させる。
+ */
+async function resolveVerification(
+  db: Db,
+  playerId: string,
+  payload: IrScoreSubmission,
+): Promise<'unverified' | 'signed' | 'invalid'> {
+  const evidence = payload.evidence
+  if (!evidence || typeof evidence !== 'object') {
+    return 'unverified'
+  }
+  const signature = evidence.client_signature
+  const keyId = evidence.public_key_id
+  const claimedHash = evidence.canonical_hash
+  if (!signature) {
+    return 'unverified'
+  }
+  if (typeof signature !== 'string' || typeof keyId !== 'string' || typeof claimedHash !== 'string') {
+    return 'invalid'
+  }
+
+  const { data: key, error } = await db
+    .from('device_keys')
+    .select('public_key')
+    .eq('id', keyId)
+    .eq('player_id', playerId)
+    .is('revoked_at', null)
+    .maybeSingle()
+  if (error || !key) {
+    return 'invalid'
+  }
+
+  const hash = createHash('sha256').update(canonicalSubmissionJson(payload)).digest()
+  if (hash.toString('hex') !== claimedHash.toLowerCase()) {
+    return 'invalid'
+  }
+
+  try {
+    // Ed25519 raw public key (32 bytes) を SPKI DER に包んで検証する。
+    const der = Buffer.concat([
+      Buffer.from('302a300506032b6570032100', 'hex'),
+      Buffer.from(key.public_key, 'hex'),
+    ])
+    const publicKey = createPublicKey({ key: der, format: 'der', type: 'spki' })
+    const signatureBytes = Buffer.from(signature, 'base64url')
+    return cryptoVerify(null, hash, publicKey, signatureBytes) ? 'signed' : 'invalid'
+  } catch {
+    return 'invalid'
+  }
+}
+
+function canonicalSubmissionJson(payload: IrScoreSubmission): string {
+  const clone: Record<string, unknown> = { ...payload }
+  delete clone.evidence
+  return stableStringify(clone)
+}
+
+/** キー昇順・空白なしの決定的 JSON 文字列化。 */
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value)
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringify).join(',')}]`
+  }
+  const record = value as Record<string, unknown>
+  const parts = Object.keys(record)
+    .filter((key) => record[key] !== undefined)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`)
+  return `{${parts.join(',')}}`
 }
 
 /** played_at は ISO 文字列または unix 秒 (BMZ client) を受け付ける。 */

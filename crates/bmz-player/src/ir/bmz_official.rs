@@ -100,6 +100,26 @@ impl BmzOfficialIrClient {
         decode_response(response, "BMZ IR ranking fetch").await
     }
 
+    /// Ed25519 公開鍵をサーバーへ登録し、device key id を返す。
+    pub async fn register_device_key(&self, public_key_hex: &str) -> Result<String> {
+        let url = self.base_url.join("/api/v1/device-keys")?;
+        let response = self
+            .http
+            .post(url)
+            .bearer_auth(self.require_token()?)
+            .json(&serde_json::json!({ "public_key": public_key_hex, "algorithm": "ed25519" }))
+            .send()
+            .await
+            .context("failed to send BMZ IR device key registration")?;
+        let value: serde_json::Value =
+            decode_response(response, "BMZ IR device key registration").await?;
+        value
+            .get("id")
+            .and_then(|id| id.as_str())
+            .map(str::to_string)
+            .context("device key registration response missing id")
+    }
+
     pub async fn get_rivals(&self) -> Result<IrRivalsResponse> {
         let url = self.base_url.join("/api/v1/rivals")?;
         let response = self

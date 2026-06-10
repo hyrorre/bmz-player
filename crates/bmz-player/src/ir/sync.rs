@@ -121,12 +121,42 @@ async fn submit_job_payload(
     payload_json: &str,
     now: i64,
 ) -> Result<String> {
-    let payload: IrScoreSubmission =
+    let mut payload: IrScoreSubmission =
         serde_json::from_str(payload_json).context("failed to parse stored IR payload")?;
     let credentials =
         ensure_fresh_credentials(profile_root, &provider.provider, &provider.base_url, now).await?;
     let client = BmzOfficialIrClient::new(&provider.base_url, credentials.access_token)?;
+    attach_evidence(profile_root, provider, &client, &mut payload).await;
     let options = IrSubmitOptions { ranking_scopes: Vec::new(), ranking_limit: 0 };
     let response = client.submit_score(&payload, &options).await?;
     Ok(serde_json::to_string(&response)?)
+}
+
+/// device key で payload に署名 evidence を付ける。
+///
+/// 公開鍵が未登録なら先にサーバーへ登録して key_id を保存する。
+/// evidence の付与に失敗してもスコア送信自体は止めない (unverified で送る)。
+async fn attach_evidence(
+    profile_root: &Path,
+    provider: &IrProviderConfig,
+    client: &BmzOfficialIrClient,
+    payload: &mut IrScoreSubmission,
+) {
+    let result = async {
+        let mut key =
+            super::device_key::load_or_create_device_key(profile_root, &provider.provider)?;
+        if key.key_id.is_none() {
+            let key_id = client.register_device_key(&key.public_key).await?;
+            key.key_id = Some(key_id);
+            super::device_key::save_device_key(profile_root, &key)?;
+        }
+        super::device_key::build_evidence(&key, payload)
+    }
+    .await;
+    match result {
+        Ok(evidence) => payload.evidence = evidence,
+        Err(error) => {
+            tracing::warn!(provider = provider.provider, %error, "failed to attach IR evidence; sending unsigned");
+        }
+    }
 }
