@@ -581,11 +581,22 @@ impl ScoreDatabase {
         now: i64,
         last_error: &str,
     ) -> Result<()> {
+        // 失敗時は失敗回数に応じた段階的バックオフで次回試行時刻を決める
+        // (docs/ir.md: 1分 → 5分 → 30分 → 2時間 → 24時間)。
+        // attempt_count はこの UPDATE 内でインクリメントする前の値を参照する。
         self.conn.execute(
             "UPDATE ir_score_jobs
              SET status = ?2,
                  attempt_count = attempt_count + CASE WHEN ?2 = 'failed' THEN 1 ELSE 0 END,
-                 next_attempt_at = CASE WHEN ?2 = 'failed' THEN ?3 + 60 ELSE next_attempt_at END,
+                 next_attempt_at = CASE WHEN ?2 = 'failed'
+                     THEN ?3 + CASE
+                         WHEN attempt_count <= 0 THEN 60
+                         WHEN attempt_count = 1 THEN 300
+                         WHEN attempt_count = 2 THEN 1800
+                         WHEN attempt_count = 3 THEN 7200
+                         ELSE 86400
+                     END
+                     ELSE next_attempt_at END,
                  last_error = ?4,
                  updated_at = ?3
              WHERE id = ?1",
@@ -2082,6 +2093,43 @@ mod tests {
             })
             .unwrap();
         assert!(submission_id > 0);
+    }
+
+    #[test]
+    fn ir_score_job_failures_back_off_progressively() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut db = ScoreDatabase::from_connection(conn);
+        let local_score_id = db.insert_score(&record(20, ClearType::Normal)).unwrap();
+        let job_id = db
+            .enqueue_ir_score_job(&NewIrScoreJob {
+                provider: "bmz-official".to_string(),
+                account_id: "account-1".to_string(),
+                local_score_id,
+                chart_sha256: [7; 32],
+                ln_policy: LnScorePolicy::ForceLn,
+                payload_json: "{}".to_string(),
+                now: 0,
+            })
+            .unwrap();
+
+        // docs/ir.md: 1分 → 5分 → 30分 → 2時間 → 24時間 (以降は 24時間維持)。
+        let expected_delays = [60, 300, 1800, 7200, 86_400, 86_400];
+        for (attempt, delay) in expected_delays.into_iter().enumerate() {
+            let now = (attempt as i64 + 1) * 1_000_000;
+            db.mark_ir_score_job_status(job_id, IrScoreJobStatus::Failed, now, "boom").unwrap();
+            let (attempt_count, next_attempt_at): (u32, i64) = db
+                .conn()
+                .query_row(
+                    "SELECT attempt_count, next_attempt_at FROM ir_score_jobs WHERE id = ?1",
+                    params![job_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(attempt_count, attempt as u32 + 1);
+            assert_eq!(next_attempt_at, now + delay, "attempt {attempt}");
+        }
     }
 
     #[test]
