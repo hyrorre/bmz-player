@@ -102,10 +102,7 @@ cargo run
 - [ ] Select画面の操作変更とスキン側の不一致について考える
 - [ ] song searchのカーソル移動機能
 - [ ] profile機能拡充
-- [ ] マウスカーソル非表示処理
 - [ ] 各設定項目のデフォルト調整
-- [ ] プレイ画面遷移時のプリロード最適化
-- [ ] play skin READY前に動いていないパーツ (laser/turntable)
 
 ## Roadmap
 

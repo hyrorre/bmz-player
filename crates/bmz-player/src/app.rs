@@ -5254,14 +5254,21 @@ impl WinitApp {
         }) && let Some(chart) = &row.chart
         {
             snapshot.title = chart.title.clone();
+            snapshot.subtitle = chart.subtitle.clone();
             snapshot.artist = chart.artist.clone();
+            snapshot.subartist = chart.subartist.clone();
+            snapshot.genre = chart.genre.clone();
             snapshot.difficulty_name = chart.difficulty_name.clone();
             snapshot.play_level = chart.play_level.clone();
+            snapshot.judge_rank = chart.judge_rank;
             snapshot.total_notes = chart.total_notes;
             snapshot.duration = TimeUs(chart.length_ms.saturating_mul(1_000));
             snapshot.min_bpm = chart.min_bpm as f32;
             snapshot.max_bpm = chart.max_bpm as f32;
             snapshot.now_bpm = chart.initial_bpm as f32;
+            // PACEMAKER の MyBest 表示。projected (ghost 進行値) は進捗 0 なので 0。
+            snapshot.best_ex_score = row.best_score.as_ref().map(|best| best.ex_score);
+            snapshot.projected_best_ex_score = snapshot.best_ex_score.map(|_| 0);
         }
         snapshot
     }
@@ -5357,6 +5364,14 @@ impl WinitApp {
         snapshot.play_elapsed_time = TimeUs(0);
         snapshot.ready_elapsed_time = None;
         snapshot.time = self.play_skin_playstart_offset();
+        // preload 完了で install_active_play がフル snapshot に置き換えるまでの間、
+        // 初期ゲージや緑数字が空表示にならないようセッション開始時相当の値を埋める。
+        crate::screens::play_session::apply_placeholder_session_visuals(
+            &mut snapshot,
+            &self.boot.profile_config,
+            self.key_mode_for_chart(chart_id),
+            &play_session_options_from_start(&self.play_session_app_config(), options.clone()),
+        );
         self.capture_play_table_text_for_chart(chart_id);
         self.apply_course_skin_context(&mut snapshot);
         self.apply_play_table_text(&mut snapshot);
@@ -5442,13 +5457,19 @@ impl WinitApp {
                                 self.preloaded_play_session = Some(prepared);
                             }
                             Err(error) => {
-                                // preload 失敗時はバッファを空のままにし、
-                                // 後段 `start_chart_with_options` の同期 fallback で再試行する。
+                                // preload 全体の失敗は譜面パース不能など再生不能なケースのみ
+                                // (個別音源の欠落は load_chart_samples が warning で続行する)。
+                                // Play 画面へ入場済みなら選曲へ戻す。course モード等の
+                                // start_chart_with_options 経路は同期 fallback で再試行される。
                                 tracing::error!(
                                     chart_id = result.chart_id,
                                     error,
-                                    "play preload failed (will fallback to sync load)"
+                                    "play preload failed"
                                 );
+                                if self.pending_play_start.is_some() {
+                                    self.abort_pending_play_start();
+                                    return;
+                                }
                             }
                         }
                     }
@@ -5501,6 +5522,11 @@ impl WinitApp {
             Ok(active_play) => {
                 tracing::info!(chart_id, "play preload installed");
                 self.install_active_play(active_play);
+                // スキン宣言のロード演出時間を既に超えていれば、同一フレーム内で
+                // READY を開始して op 80→81 切り替えと timer 40 発火を揃える
+                // (次フレームの advance_active_play まで待つと 1 フレーム
+                // 曲名表示が途切れる)。
+                self.maybe_start_ready_phase();
             }
             Err(error) => {
                 tracing::error!(chart_id, %error, "failed to open preloaded play audio");
@@ -5873,7 +5899,10 @@ impl WinitApp {
     }
 
     fn decide_play_start_ready(&self) -> bool {
-        !self.pending_play_skin && self.pending_play_preload.is_none()
+        // preload (WAV ロード等) の完了は待たない。Play 画面へ先に入場し、
+        // ロード完了後に poll_play_preload が active_play を install して
+        // READY タイマーが始まる。
+        !self.pending_play_skin
     }
 
     fn update_decide_cancel_control_state(&mut self, control: &str, pressed: bool) -> bool {
@@ -12665,6 +12694,8 @@ mod tests {
                 title: format!("Title {index}"),
                 subtitle: String::new(),
                 artist: format!("Artist {index}"),
+                subartist: String::new(),
+                genre: String::new(),
                 difficulty_name: String::new(),
                 play_level: index.to_string(),
                 mode: "7K".to_string(),

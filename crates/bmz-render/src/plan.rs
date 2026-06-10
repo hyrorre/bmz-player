@@ -947,7 +947,10 @@ fn plan_play(
         course_stage: snapshot.course_stage,
         hit_error_ring: snapshot.hit_error_ring.values,
         hit_error_ring_index: snapshot.hit_error_ring.index,
-        skin_loaded: play_elapsed_ms >= skin_load_delay_ms,
+        // op 80/81: 実リソースロード完了かつスキン宣言の最低ロード演出時間の経過。
+        // READY 開始条件 (maybe_start_ready_phase) と揃え、op 80 のロード中表示から
+        // timer 40 のフェードアウト表示へ隙間なく引き継げるようにする。
+        skin_loaded: snapshot.resources_loaded && play_elapsed_ms >= skin_load_delay_ms,
         ..crate::skin::SkinDrawState::default()
     };
     let play_skin = skin.with_play_graphs(
@@ -3728,6 +3731,7 @@ mod tests {
             time: TimeUs(-1_000_000),
             play_elapsed_time: TimeUs(4_000_000),
             ready_elapsed_time: Some(TimeUs(500_000)),
+            resources_loaded: true,
             ..Default::default()
         };
 
@@ -3790,6 +3794,7 @@ mod tests {
             time: TimeUs(-1_000_000),
             play_elapsed_time: TimeUs(3_500_000),
             ready_elapsed_time: None,
+            resources_loaded: true,
             ..Default::default()
         };
 

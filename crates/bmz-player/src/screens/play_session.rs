@@ -118,6 +118,127 @@ impl Default for PlaySessionOptions {
     }
 }
 
+/// Play 入場直後 (preload 完了前) の placeholder snapshot に、
+/// セッション開始時と同じ初期ゲージ・レーン設定を反映する。
+/// `install_active_play` でフルスナップショットに置き換わるまでの間、
+/// グルーブゲージや緑数字が空表示になるのを防ぐ。
+/// ゲージ選択ロジックは `build_game_session_with_input_backend` と揃えること。
+pub fn apply_placeholder_session_visuals(
+    snapshot: &mut bmz_render::snapshot::RenderSnapshot,
+    profile: &ProfileConfig,
+    key_mode: KeyMode,
+    options: &PlaySessionOptions,
+) {
+    let gauge_type =
+        options.gauge_override.unwrap_or_else(|| gauge_type_from_config(profile.play.gauge));
+    let gauge_auto_shift = if options.gauge_auto_shift != GaugeAutoShiftMode::Off {
+        options.gauge_auto_shift
+    } else if options.gauge_override.is_none() {
+        gauge_auto_shift_from_config(profile.play.gauge, profile.play.gauge_auto_shift)
+    } else {
+        GaugeAutoShiftMode::Off
+    };
+    let gauge_property =
+        options.gauge_property.unwrap_or_else(|| GaugeProperty::from_keymode(key_mode));
+    // TOTAL は譜面パース前で不明だが、init/max/border は TOTAL 非依存なので
+    // ノーツ数由来のデフォルト TOTAL で代用して問題ない。
+    let gauge_total = gauge_total_for_chart(None, snapshot.total_notes);
+    let rule_mode = profile.play.rule_mode;
+    let mut gauge = if gauge_auto_shift != GaugeAutoShiftMode::Off {
+        GaugeState::new_with_auto_shift_property_and_rule_mode(
+            gauge_type,
+            gauge_auto_shift,
+            gauge_total,
+            snapshot.total_notes,
+            gauge_property,
+            rule_mode,
+        )
+    } else {
+        GaugeState::new_with_property_and_rule_mode(
+            gauge_type,
+            gauge_total,
+            snapshot.total_notes,
+            gauge_property,
+            rule_mode,
+        )
+    };
+    if let Some(initial) = options.initial_gauge_value {
+        gauge.set_initial_value(initial);
+    }
+    let current = gauge.current();
+    snapshot.gauge = current.value;
+    snapshot.gauge_type = current.definition.gauge_type as i32;
+    snapshot.gauge_auto_shift = gauge.auto_shift;
+    snapshot.gauge_max = current.definition.max;
+    snapshot.gauge_border = current.definition.border;
+
+    snapshot.hispeed = clamp_hispeed(profile.lane.hispeed);
+    snapshot.lift = lane_unit_to_f32(profile.lane.lift);
+    snapshot.lane_cover = lane_unit_to_f32(profile.lane.sudden);
+    snapshot.lanecover_enabled = lanecover_enabled_from_profile(profile);
+    snapshot.lift_enabled = true;
+    snapshot.hidden_enabled = hidden_enabled_from_profile(profile);
+    snapshot.hidden_cover = hidden_cover_from_profile(profile);
+
+    snapshot.key_mode = key_mode;
+    // session 構築時と同じく基準 BPM = initial_bpm (decide snapshot の now_bpm)。
+    snapshot.main_bpm = snapshot.now_bpm;
+    snapshot.fs_threshold_ms =
+        bmz_render::chart_graph::rm_skin_fs_threshold_ms(snapshot.judge_rank, key_mode);
+    snapshot.judge_timing_offset_ms =
+        (play_offsets_from_profile(profile).input_offset_us / 1_000) as i32;
+    snapshot.autoplay = profile.play.auto_play || options.autoplay;
+    snapshot.target_ex_score = options.target.target_ex_score(snapshot.total_notes);
+
+    // 緑数字: READY 前は current_bpm == initial_bpm なので bpm_ratio = 1。
+    let hispeed = snapshot.hispeed.max(0.01);
+    let visible_max = (1.0 - snapshot.lane_cover).clamp(0.0, 1.0);
+    snapshot.note_display_duration_ms =
+        ((crate::screens::play_snapshot::DEFAULT_LOOKAHEAD_US as f32 / hispeed * visible_max)
+            / 1_000.0)
+            .round()
+            .clamp(0.0, i32::MAX as f32) as i32;
+
+    let initial_bpm = snapshot.now_bpm.max(1.0);
+    let max_bpm = snapshot.max_bpm.max(initial_bpm);
+    snapshot.adjusted_cover_progress = bmz_render::chart_graph::compute_adjusted_cover_progress(
+        snapshot.hidden_enabled,
+        snapshot.lane_cover,
+        snapshot.lift,
+        snapshot.hsfix_index,
+        initial_bpm,
+        max_bpm,
+        initial_bpm,
+    );
+    snapshot.adjusted_rate = bmz_render::chart_graph::compute_adjusted_rate(
+        snapshot.hidden_enabled,
+        snapshot.lanecover_enabled,
+        snapshot.hsfix_index,
+        initial_bpm,
+        max_bpm,
+        initial_bpm,
+    );
+    snapshot.adjusted_rate_adot = snapshot.adjusted_rate.map(|rate| (rate * 100.0).floor() as i32);
+
+    // プロファイルのスキンオフセット (位置調整)。スクラッチ回転角は session が
+    // 必要なので install 後の refresh に任せる。
+    let mut offsets = bmz_render::skin_offset::SkinOffsetValues::default();
+    for offset in skin_offsets_from_profile(profile) {
+        offsets.set(
+            offset.id,
+            bmz_render::skin_offset::SkinOffsetValue {
+                x: offset.x,
+                y: offset.y,
+                w: offset.w,
+                h: offset.h,
+                r: offset.r,
+                a: offset.a,
+            },
+        );
+    }
+    snapshot.skin_offsets = offsets;
+}
+
 pub fn build_game_session(
     chart: Arc<PlayableChart>,
     profile: &ProfileConfig,

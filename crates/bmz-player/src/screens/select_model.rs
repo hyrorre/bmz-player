@@ -1523,6 +1523,8 @@ mod tests {
                 title: "Song".to_string(),
                 subtitle: String::new(),
                 artist: String::new(),
+                subartist: String::new(),
+                genre: String::new(),
                 difficulty_name: String::new(),
                 play_level: String::new(),
                 mode: String::new(),
