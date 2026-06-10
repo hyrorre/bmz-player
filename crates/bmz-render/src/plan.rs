@@ -853,6 +853,10 @@ fn plan_play(
     let ready_timer_ms = snapshot
         .ready_elapsed_time
         .map(|time| (time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32);
+    let skin_load_delay_ms = skin
+        .document()
+        .map(|document| document.loadstart.max(0).saturating_add(document.loadend.max(0)))
+        .unwrap_or(0);
 
     let skin_state = crate::skin::SkinDrawState {
         elapsed_ms: play_elapsed_ms,
@@ -948,7 +952,7 @@ fn plan_play(
         course_stage: snapshot.course_stage,
         hit_error_ring: snapshot.hit_error_ring.values,
         hit_error_ring_index: snapshot.hit_error_ring.index,
-        skin_loaded: ready_timer_ms.is_some(),
+        skin_loaded: play_elapsed_ms >= skin_load_delay_ms,
         ..crate::skin::SkinDrawState::default()
     };
     let play_skin = skin.with_play_graphs(
@@ -3758,6 +3762,53 @@ mod tests {
             command,
             DrawCommand::Image { texture, rect, .. }
                 if *texture == TextureId(99) && approx_eq(rect.x, 0.8)
+        )));
+    }
+
+    #[test]
+    fn play_skin_loaded_after_load_delay_without_ready_timer() {
+        let document: crate::skin::SkinDocument = serde_json::from_str(
+            r#"{
+                "type": 7,
+                "w": 100,
+                "h": 100,
+                "loadstart": 500,
+                "loadend": 3000,
+                "source": [{"id": 1, "path": "panel.png"}],
+                "image": [{"id": "panel", "src": 1, "x": 0, "y": 0, "w": 10, "h": 10}],
+                "destination": [
+                    {"id": "panel", "op": [81], "dst": [
+                        {"time": 0, "x": 20, "y": 0, "w": 10, "h": 10}
+                    ]}
+                ]
+            }"#,
+        )
+        .unwrap();
+        let manifest: SkinManifest = toml::from_str("").unwrap();
+        let source_texture = crate::skin::SkinDocumentTexture {
+            source_id: "1".to_string(),
+            texture: SkinTextureId(99),
+            source_size: crate::skin::SkinImageSize { width: 10.0, height: 10.0 },
+        };
+        let skin = SkinContext::from_manifest_and_document(manifest, document, [source_texture]);
+        let loaded_before_ready = RenderSnapshot {
+            time: TimeUs(-1_000_000),
+            play_elapsed_time: TimeUs(3_500_000),
+            ready_elapsed_time: None,
+            ..Default::default()
+        };
+
+        let mut dynamic_timers = crate::skin::DynamicTimerRuntime::default();
+        let plan = DrawPlan::from_scene_with_skin(
+            &AppSceneSnapshot::Play(loaded_before_ready),
+            &skin,
+            &mut dynamic_timers,
+        );
+
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Image { texture, rect, .. }
+                if *texture == TextureId(99) && approx_eq(rect.x, 0.2)
         )));
     }
 

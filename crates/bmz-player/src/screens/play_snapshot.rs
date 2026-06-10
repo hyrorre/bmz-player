@@ -4,7 +4,7 @@ use bmz_chart::model::LongNoteMode;
 use bmz_chart::model::{BgaAssetId, BgaEventKind, NoteKind, PlayableChart, TimingEventKind};
 use bmz_chart::timing::{TICKS_PER_BEAT, TimingMap};
 use bmz_core::judge::{Judge, TimingSide};
-use bmz_core::lane::Lane;
+use bmz_core::lane::{LANE_COUNT, Lane};
 use bmz_core::time::TimeUs;
 use bmz_gameplay::judge::model::JudgementEvent;
 use bmz_gameplay::session::GameSession;
@@ -26,6 +26,70 @@ const SCRATCH_ANGLE_OFFSET_2P: i32 = 2;
 const SCRATCH_ANGLE_PERIOD_MS: i64 = 2_160;
 const SCRATCH_ANGLE_DEGREES_DIVISOR: i64 = 6;
 pub type BgaFrameCatalog = HashMap<BgaAssetId, DisplayBgaFrame>;
+
+/// playstart 中 (chart 時刻 < 0) は skin timer / turntable を壁時計へ寄せる。
+pub fn skin_visual_time(chart_time: TimeUs, play_elapsed: TimeUs) -> TimeUs {
+    if chart_time.0 < 0 { play_elapsed } else { chart_time }
+}
+
+/// chart 時刻と大きく乖離した wall-clock 系 key 時刻を検出する。
+fn is_wall_clock_key_time(started_at: TimeUs, chart_time: TimeUs) -> bool {
+    bmz_gameplay::session::is_wall_clock_lane_key_time(started_at, chart_time)
+}
+
+fn lane_key_timer_now(
+    started_at: TimeUs,
+    chart_time: TimeUs,
+    play_elapsed: TimeUs,
+) -> Option<TimeUs> {
+    if is_wall_clock_key_time(started_at, chart_time) {
+        if chart_time.0 >= 0 { None } else { Some(play_elapsed) }
+    } else {
+        Some(chart_time)
+    }
+}
+
+fn skin_timer_elapsed_ms(now: TimeUs, started_at: TimeUs) -> i32 {
+    ((now.0 - started_at.0) / 1_000).clamp(0, i32::MAX as i64) as i32
+}
+
+fn lane_key_timer_ms(
+    started_at: Option<TimeUs>,
+    chart_time: TimeUs,
+    play_elapsed: TimeUs,
+) -> Option<i32> {
+    let started_at = started_at?;
+    let now = lane_key_timer_now(started_at, chart_time, play_elapsed)?;
+    Some(skin_timer_elapsed_ms(now, started_at))
+}
+
+fn lane_keyon_ms(
+    session: &GameSession,
+    chart_time: TimeUs,
+    play_elapsed: TimeUs,
+) -> [Option<i32>; LANE_COUNT] {
+    std::array::from_fn(|lane_index| {
+        lane_key_timer_ms(session.lane_keyon_started_at[lane_index], chart_time, play_elapsed)
+    })
+}
+
+fn lane_keyoff_ms(
+    session: &GameSession,
+    chart_time: TimeUs,
+    play_elapsed: TimeUs,
+) -> [Option<i32>; LANE_COUNT] {
+    std::array::from_fn(|lane_index| {
+        lane_key_timer_ms(session.lane_keyoff_started_at[lane_index], chart_time, play_elapsed)
+    })
+}
+
+/// `play_elapsed_time` 更新後に keybeam / turntable 向け snapshot フィールドを再計算する。
+pub fn refresh_play_skin_visuals(snapshot: &mut RenderSnapshot, session: &GameSession) {
+    snapshot.skin_offsets =
+        skin_offsets_from_session(session, snapshot.time, snapshot.play_elapsed_time);
+    snapshot.keyon_ms = lane_keyon_ms(session, snapshot.time, snapshot.play_elapsed_time);
+    snapshot.keyoff_ms = lane_keyoff_ms(session, snapshot.time, snapshot.play_elapsed_time);
+}
 
 pub fn build_render_snapshot(
     session: &GameSession,
@@ -71,9 +135,10 @@ pub fn build_render_snapshot_with_target_and_bga_frames(
 ) -> RenderSnapshot {
     let projected_best_ex_score =
         best_ghost.map(|ghost| ghost_ex_score_at_progress(ghost, session.score.past_notes));
+    let play_elapsed_time = if render_now.0 < 0 { TimeUs(0) } else { render_now };
     let mut snapshot = RenderSnapshot {
         time: render_now,
-        play_elapsed_time: render_now,
+        play_elapsed_time,
         ready_elapsed_time: None,
         duration: session.chart.end_time,
         title: session.chart.metadata.title.clone(),
@@ -106,7 +171,7 @@ pub fn build_render_snapshot_with_target_and_bga_frames(
         hidden_enabled: session.hidden_enabled,
         note_display_duration_ms: note_display_duration_ms(session, render_now),
         hidden_cover: session.hidden_cover,
-        skin_offsets: skin_offsets_from_session(session, render_now),
+        skin_offsets: skin_offsets_from_session(session, render_now, play_elapsed_time),
         now_bpm: current_bpm(&session.chart, render_now) as f32,
         min_bpm: chart_min_bpm(&session.chart) as f32,
         max_bpm: chart_max_bpm(&session.chart) as f32,
@@ -218,16 +283,8 @@ pub fn build_render_snapshot_with_target_and_bga_frames(
         music_end_elapsed_ms: None,
         bar_lines: Vec::new(),
         visible_long_notes: Vec::new(),
-        keyon_ms: std::array::from_fn(|lane_index| {
-            session.lane_keyon_started_at[lane_index].map(|t| {
-                ((render_now.0 - t.0) / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32
-            })
-        }),
-        keyoff_ms: std::array::from_fn(|lane_index| {
-            session.lane_keyoff_started_at[lane_index].map(|t| {
-                ((render_now.0 - t.0) / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32
-            })
-        }),
+        keyon_ms: lane_keyon_ms(session, render_now, play_elapsed_time),
+        keyoff_ms: lane_keyoff_ms(session, render_now, play_elapsed_time),
         show_ln_tail_cap: session.show_ln_tail_cap,
         // beatoraja の TIMER_HCN_ACTIVE / TIMER_HCN_DAMAGE: HCN passing 中のみアクティブ。
         hcn_active_ms: std::array::from_fn(|lane_index| {
@@ -452,7 +509,11 @@ pub fn bga_texture_id(id: BgaAssetId) -> u32 {
     CHART_BGA_TEXTURE_BASE + id.0
 }
 
-fn skin_offsets_from_session(session: &GameSession, render_now: TimeUs) -> SkinOffsetValues {
+fn skin_offsets_from_session(
+    session: &GameSession,
+    chart_time: TimeUs,
+    play_elapsed: TimeUs,
+) -> SkinOffsetValues {
     let mut values = SkinOffsetValues::default();
     for offset in &session.skin_offsets {
         values.set(
@@ -467,12 +528,13 @@ fn skin_offsets_from_session(session: &GameSession, render_now: TimeUs) -> SkinO
             },
         );
     }
+    let visual_time = skin_visual_time(chart_time, play_elapsed);
     let active_lanes = session.chart.metadata.key_mode.active_lanes();
     if active_lanes.contains(&Lane::Scratch) {
-        set_scratch_angle_offset(&mut values, SCRATCH_ANGLE_OFFSET_1P, render_now, 0);
+        set_scratch_angle_offset(&mut values, SCRATCH_ANGLE_OFFSET_1P, visual_time, 0);
     }
     if active_lanes.contains(&Lane::Scratch2) {
-        set_scratch_angle_offset(&mut values, SCRATCH_ANGLE_OFFSET_2P, render_now, 1);
+        set_scratch_angle_offset(&mut values, SCRATCH_ANGLE_OFFSET_2P, visual_time, 1);
     }
     values
 }
@@ -480,16 +542,16 @@ fn skin_offsets_from_session(session: &GameSession, render_now: TimeUs) -> SkinO
 fn set_scratch_angle_offset(
     values: &mut SkinOffsetValues,
     offset_id: i32,
-    render_now: TimeUs,
+    visual_time: TimeUs,
     scratch_index: i32,
 ) {
     let mut offset = values.get(offset_id).unwrap_or_default();
-    offset.r = scratch_angle_degrees(render_now, scratch_index);
+    offset.r = scratch_angle_degrees(visual_time, scratch_index);
     values.set(offset_id, offset);
 }
 
-fn scratch_angle_degrees(render_now: TimeUs, scratch_index: i32) -> i32 {
-    let elapsed_ms = (render_now.0.max(0) / 1_000).rem_euclid(SCRATCH_ANGLE_PERIOD_MS);
+fn scratch_angle_degrees(visual_time: TimeUs, scratch_index: i32) -> i32 {
+    let elapsed_ms = (visual_time.0.max(0) / 1_000).rem_euclid(SCRATCH_ANGLE_PERIOD_MS);
     let angle_ms = if scratch_index % 2 == 0 {
         (SCRATCH_ANGLE_PERIOD_MS - elapsed_ms).rem_euclid(SCRATCH_ANGLE_PERIOD_MS)
     } else {
@@ -1389,6 +1451,66 @@ mod tests {
             snapshot.skin_offsets.get(SCRATCH_ANGLE_OFFSET_1P),
             Some(SkinOffsetValue { x: 1, y: 2, w: 3, h: 4, r: 80, a: -6 })
         );
+    }
+
+    #[test]
+    fn refresh_play_skin_visuals_uses_play_elapsed_during_playstart() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let session =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+        let mut snapshot = build_render_snapshot(&session, TimeUs(-1_000_000), &[], None);
+        snapshot.play_elapsed_time = TimeUs(6_000_000);
+
+        refresh_play_skin_visuals(&mut snapshot, &session);
+
+        assert_eq!(
+            snapshot.skin_offsets.get(SCRATCH_ANGLE_OFFSET_1P),
+            Some(SkinOffsetValue { r: 80, ..SkinOffsetValue::default() })
+        );
+    }
+
+    #[test]
+    fn refresh_play_skin_visuals_tracks_pre_ready_keybeam() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+        session.lane_keyon_started_at[Lane::Key1.index()] = Some(TimeUs(1_000_000));
+        let mut snapshot = build_render_snapshot(&session, TimeUs(-1_000_000), &[], None);
+        snapshot.play_elapsed_time = TimeUs(1_050_000);
+
+        refresh_play_skin_visuals(&mut snapshot, &session);
+
+        assert_eq!(snapshot.keyon_ms[Lane::Key1.index()], Some(50));
+    }
+
+    #[test]
+    fn refresh_play_skin_visuals_hides_stale_pre_ready_keybeam_after_chart_start() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+        session.lane_keyon_started_at[Lane::Key1.index()] = Some(TimeUs(3_500_000));
+        session.lane_keyoff_started_at[Lane::Key2.index()] = Some(TimeUs(3_550_000));
+        let mut snapshot = build_render_snapshot(&session, TimeUs(0), &[], None);
+        snapshot.play_elapsed_time = TimeUs(4_000_000);
+
+        refresh_play_skin_visuals(&mut snapshot, &session);
+
+        assert_eq!(snapshot.keyon_ms[Lane::Key1.index()], None);
+        assert_eq!(snapshot.keyoff_ms[Lane::Key2.index()], None);
+    }
+
+    #[test]
+    fn refresh_play_skin_visuals_keeps_playstart_keybeam_after_chart_start() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+        session.lane_keyon_started_at[Lane::Key1.index()] = Some(TimeUs(-500_000));
+        let mut snapshot = build_render_snapshot(&session, TimeUs(250_000), &[], None);
+        snapshot.play_elapsed_time = TimeUs(4_000_000);
+
+        refresh_play_skin_visuals(&mut snapshot, &session);
+
+        assert_eq!(snapshot.keyon_ms[Lane::Key1.index()], Some(750));
     }
 
     #[test]

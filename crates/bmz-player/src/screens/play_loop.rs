@@ -352,6 +352,7 @@ pub fn refresh_play_ending_snapshot_with_session(
     snapshot.failed_elapsed_ms = timers.failed_elapsed_ms;
     snapshot.music_end_elapsed_ms = timers.music_end_elapsed_ms;
     snapshot.fadeout_elapsed_ms = timers.fadeout_elapsed_ms;
+    crate::screens::play_snapshot::refresh_play_skin_visuals(&mut snapshot, session);
     snapshot
 }
 

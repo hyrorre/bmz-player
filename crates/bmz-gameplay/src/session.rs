@@ -30,6 +30,8 @@ pub const INPUT_DISPLAY_US: i64 = 160_000;
 /// オートプレイ時のキー押下を「離す」までの時間。beatoraja の `auto_minduration` (80ms) と揃える。
 /// この時間が経過すると lane_keyon → lane_keyoff へ遷移し、skin の KEYOFF タイマー演出が走る。
 pub const AUTO_KEYBEAM_DURATION_US: i64 = 80_000;
+/// pre-ready の wall-clock key 時刻と chart 時刻を区別する閾値。
+const CHART_KEY_FUTURE_SLACK_US: i64 = 1_000_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayState {
@@ -398,6 +400,54 @@ pub fn drain_human_inputs(session: &mut GameSession) {
     update_lane_key_states(session, &inputs);
 }
 
+/// READY 開始前の play 導入中に、判定へは渡さず keybeam / lazer 用の lane key 状態だけ更新する。
+/// 入力時刻は壁時計ベースの `visual_now` に揃える。
+pub fn drain_pre_ready_visual_inputs(session: &mut GameSession, visual_now: TimeUs) {
+    let ctx = InputTimingContext {
+        audio_clock: &session.audio_clock,
+        offsets: session.offsets,
+        timestamp_anchor: None,
+    };
+    let inputs = session.input_system.collect_game_inputs(&ctx);
+    let visual_inputs: Vec<InputEvent> = inputs
+        .into_iter()
+        .map(|mut input| {
+            input.time = visual_now;
+            input
+        })
+        .collect();
+    update_recent_inputs(session, &visual_inputs, visual_now);
+    update_lane_key_states(session, &visual_inputs);
+}
+
+pub fn is_wall_clock_lane_key_time(started_at: TimeUs, chart_time: TimeUs) -> bool {
+    started_at.0 > chart_time.0 + CHART_KEY_FUTURE_SLACK_US
+}
+
+/// chart 0 以降に残った pre-ready wall-clock key 状態を破棄する。
+pub fn clear_stale_wall_clock_lane_key_states(session: &mut GameSession, chart_time: TimeUs) {
+    if chart_time.0 < 0 {
+        return;
+    }
+    for lane_index in 0..LANE_COUNT {
+        if session.lane_keyon_started_at[lane_index]
+            .is_some_and(|started| is_wall_clock_lane_key_time(started, chart_time))
+        {
+            session.lane_keyon_started_at[lane_index] = None;
+        }
+        if session.lane_keyoff_started_at[lane_index]
+            .is_some_and(|started| is_wall_clock_lane_key_time(started, chart_time))
+        {
+            session.lane_keyoff_started_at[lane_index] = None;
+        }
+        if session.lane_auto_release_at[lane_index]
+            .is_some_and(|release_at| is_wall_clock_lane_key_time(release_at, chart_time))
+        {
+            session.lane_auto_release_at[lane_index] = None;
+        }
+    }
+}
+
 /// 入力バックエンドを drain するだけで、判定にも視覚エフェクト(recent_inputs)にも反映しない。
 /// オートプレイ中はキービームをノーツ処理側で発火させるため、人間入力はここで捨てる。
 pub fn discard_human_inputs(session: &mut GameSession) {
@@ -585,6 +635,7 @@ pub fn advance_session_frame(
     }
 
     let times = compute_frame_times(session);
+    clear_stale_wall_clock_lane_key_states(session, times.render_now);
     let mut judgements = Vec::new();
 
     if session.state == PlayState::Playing {
@@ -1040,6 +1091,55 @@ mod tests {
         assert_eq!(session.lane_keyoff_started_at[Lane::Key1.index()], None);
         // Human source の Press は自動 release を予約しない (押し続け対応)。
         assert_eq!(session.lane_auto_release_at[Lane::Key1.index()], None);
+    }
+
+    #[test]
+    fn clear_stale_wall_clock_lane_key_states_drops_pre_ready_timestamps() {
+        let mut session = session_with_autoplay(chart_with_keysound());
+        session.lane_keyon_started_at[Lane::Key1.index()] = Some(TimeUs(3_500_000));
+        session.lane_keyoff_started_at[Lane::Key2.index()] = Some(TimeUs(3_550_000));
+        session.lane_keyon_started_at[Lane::Key3.index()] = Some(TimeUs(-250_000));
+
+        clear_stale_wall_clock_lane_key_states(&mut session, TimeUs(0));
+
+        assert_eq!(session.lane_keyon_started_at[Lane::Key1.index()], None);
+        assert_eq!(session.lane_keyoff_started_at[Lane::Key2.index()], None);
+        assert_eq!(session.lane_keyon_started_at[Lane::Key3.index()], Some(TimeUs(-250_000)));
+    }
+
+    #[test]
+    fn drain_pre_ready_visual_inputs_updates_lane_key_states_without_judging() {
+        use crate::input::backend::{
+            BufferedInputBackend, DeviceId, DeviceInputEvent, DeviceTimestamp, PhysicalControl,
+        };
+        use crate::input::binding::{BindingEntry, LaneBinding};
+
+        let mut session = session_with_autoplay(chart_with_keysound());
+        let mut backend = BufferedInputBackend::default();
+        backend.push(DeviceInputEvent {
+            device: DeviceId(1),
+            control: PhysicalControl::KeyboardKey("Z".to_string()),
+            kind: InputKind::Press,
+            timestamp: DeviceTimestamp::Unknown,
+        });
+        session.input_system = InputSystem {
+            backend: Box::new(backend),
+            translator: Box::new(DefaultInputTranslator {
+                binding: LaneBinding {
+                    entries: vec![BindingEntry {
+                        device: None,
+                        control: PhysicalControl::KeyboardKey("Z".to_string()),
+                        lane: Lane::Key1,
+                    }],
+                },
+            }),
+        };
+
+        drain_pre_ready_visual_inputs(&mut session, TimeUs(2_000_000));
+
+        assert_eq!(session.lane_keyon_started_at[Lane::Key1.index()], Some(TimeUs(2_000_000)));
+        assert_eq!(session.recent_inputs.len(), 1);
+        assert_eq!(session.score.past_notes, 0);
     }
 
     #[test]

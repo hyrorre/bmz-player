@@ -5410,6 +5410,10 @@ impl WinitApp {
         snapshot.ready_elapsed_time = self.play_ready_sound_started_at.map(elapsed_since);
         self.apply_course_skin_context(&mut snapshot);
         self.apply_play_table_text(&mut snapshot);
+        crate::screens::play_snapshot::refresh_play_skin_visuals(
+            &mut snapshot,
+            &active_play.running.session,
+        );
         self.last_play_snapshot = Some(snapshot);
         self.active_play = Some(active_play);
     }
@@ -6576,11 +6580,15 @@ impl WinitApp {
         }
         self.maybe_start_ready_phase();
         if self.play_ready_sound_started_at.is_none() {
+            self.update_pre_ready_play_state();
             self.update_pending_play_snapshot_timers();
             return;
         }
         let course_titles = self.current_course_titles();
         let course_stage = self.current_course_stage_marker();
+        let play_elapsed_time = self.play_elapsed_time();
+        let ready_elapsed_time = self.play_ready_sound_started_at.map(elapsed_since);
+        let backbmp_background = self.play_backbmp_loaded;
         let Some(active_play) = &mut self.active_play else {
             return;
         };
@@ -6594,24 +6602,31 @@ impl WinitApp {
             video_update_time,
         );
 
-        match advance_running_play_session_until_result(
+        let advance_outcome = advance_running_play_session_until_result(
             &mut active_play.running,
             &mut self.boot.score_db,
             &self.boot.profile_paths,
             &self.boot.profile_config.replay,
             &self.boot.profile_config.ir,
             now_unix_seconds(),
-        ) {
+        );
+        match advance_outcome {
             Ok(PlayAdvanceOutcome::Playing(frame)) => {
                 let mine_hits = frame.mine_hits.len();
                 let mut snapshot = frame.render_snapshot;
                 self.apply_profile_fast_slow_filter(&mut snapshot);
-                snapshot.play_elapsed_time = self.play_elapsed_time();
-                snapshot.ready_elapsed_time = self.play_ready_sound_started_at.map(elapsed_since);
-                snapshot.backbmp_background = self.play_backbmp_loaded;
+                snapshot.play_elapsed_time = play_elapsed_time;
+                snapshot.ready_elapsed_time = ready_elapsed_time;
+                snapshot.backbmp_background = backbmp_background;
                 snapshot.course_stage = course_stage;
                 snapshot.course_titles = course_titles.clone();
                 self.apply_play_table_text(&mut snapshot);
+                if let Some(active_play) = &self.active_play {
+                    crate::screens::play_snapshot::refresh_play_skin_visuals(
+                        &mut snapshot,
+                        &active_play.running.session,
+                    );
+                }
                 self.last_play_snapshot = Some(snapshot);
                 self.play_landmine_se(mine_hits);
             }
@@ -6626,21 +6641,28 @@ impl WinitApp {
                     self.finish_practice_round();
                     return;
                 }
-                let hispeed = active_play.running.session.hispeed;
+                let hispeed =
+                    self.active_play.as_ref().map(|active| active.running.session.hispeed);
                 let mine_hits = frame.mine_hits.len();
                 let mut snapshot = frame.render_snapshot;
                 self.apply_profile_fast_slow_filter(&mut snapshot);
-                snapshot.play_elapsed_time = self.play_elapsed_time();
-                snapshot.ready_elapsed_time = self.play_ready_sound_started_at.map(elapsed_since);
-                snapshot.backbmp_background = self.play_backbmp_loaded;
+                snapshot.play_elapsed_time = play_elapsed_time;
+                snapshot.ready_elapsed_time = ready_elapsed_time;
+                snapshot.backbmp_background = backbmp_background;
                 snapshot.course_stage = course_stage;
                 snapshot.course_titles = course_titles.clone();
                 self.apply_play_table_text(&mut snapshot);
                 let full_combo_elapsed_at_finish_ms = snapshot.full_combo_elapsed_ms;
+                if let Some(active_play) = &self.active_play {
+                    crate::screens::play_snapshot::refresh_play_skin_visuals(
+                        &mut snapshot,
+                        &active_play.running.session,
+                    );
+                }
                 self.last_play_snapshot = Some(snapshot);
                 self.play_landmine_se(mine_hits);
                 // active_play がまだ残っている内に hispeed/lane_cover/lift を profile に保存する。
-                self.save_current_play_options(Some(hispeed), "play finished");
+                self.save_current_play_options(hispeed, "play finished");
                 self.play_ending = Some(PlayEndingTransition {
                     started_at: Instant::now(),
                     fadeout_started_at: None,
@@ -6684,6 +6706,12 @@ impl WinitApp {
         if let Some(snapshot) = &mut self.last_play_snapshot {
             snapshot.ready_elapsed_time = Some(TimeUs(0));
             snapshot.time = chart_zero_time;
+            if let Some(active_play) = &self.active_play {
+                crate::screens::play_snapshot::refresh_play_skin_visuals(
+                    snapshot,
+                    &active_play.running.session,
+                );
+            }
         }
     }
 
@@ -6695,6 +6723,25 @@ impl WinitApp {
         };
         snapshot.play_elapsed_time = play_elapsed_time;
         snapshot.ready_elapsed_time = ready_elapsed_time;
+    }
+
+    fn update_pre_ready_play_state(&mut self) {
+        let play_elapsed_time = self.play_elapsed_time();
+        let Some(active_play) = &mut self.active_play else {
+            return;
+        };
+        bmz_gameplay::session::drain_pre_ready_visual_inputs(
+            &mut active_play.running.session,
+            play_elapsed_time,
+        );
+        let Some(snapshot) = &mut self.last_play_snapshot else {
+            return;
+        };
+        snapshot.play_elapsed_time = play_elapsed_time;
+        crate::screens::play_snapshot::refresh_play_skin_visuals(
+            snapshot,
+            &active_play.running.session,
+        );
     }
 
     fn update_pre_ready_play_snapshot_options(&mut self) {
