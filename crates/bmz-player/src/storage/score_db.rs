@@ -652,6 +652,20 @@ impl ScoreDatabase {
         Ok(total)
     }
 
+    /// IR replay upload 用に、score_history 行の replay_path を引く。
+    /// 行が無い / 空文字なら None。
+    pub fn replay_path_for_history(&self, score_history_id: i64) -> Result<Option<String>> {
+        let path: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT replay_path FROM score_history WHERE id = ?1",
+                params![score_history_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(path.filter(|path| !path.is_empty()))
+    }
+
     pub fn recent_history(&self, limit: u32, offset: u32) -> Result<Vec<ScoreHistoryEntry>> {
         let mut stmt = self.conn.prepare(
             "SELECT

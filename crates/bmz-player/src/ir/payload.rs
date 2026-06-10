@@ -19,6 +19,8 @@ pub struct IrSubmissionContext {
     pub gauge_option: String,
     pub device_type: InputDeviceKind,
     pub idempotency_key: String,
+    /// 保存済みリプレイファイルの SHA256 (hex)。リプレイが無ければ None。
+    pub replay_hash: Option<String>,
 }
 
 pub fn build_score_submission(
@@ -120,7 +122,11 @@ pub fn build_score_submission(
             min_cb: result.record_cb(),
         },
         play_options,
-        replay: None,
+        replay: context.replay_hash.map(|hash| super::types::IrReplayPayload {
+            hash,
+            format: "bmz-replay-v1".to_string(),
+            upload_intent: "later".to_string(),
+        }),
         evidence: Default::default(),
         idempotency_key: context.idempotency_key,
     }
@@ -223,6 +229,7 @@ mod tests {
                 gauge_option: "normal".to_string(),
                 device_type: InputDeviceKind::Controller,
                 idempotency_key: "score_local_1".to_string(),
+                replay_hash: Some("ab".repeat(32)),
             },
         );
 
@@ -234,5 +241,9 @@ mod tests {
             payload.play_options.get("device_type"),
             Some(&serde_json::Value::String("controller".to_string()))
         );
+        let replay = payload.replay.expect("replay payload");
+        assert_eq!(replay.hash, "ab".repeat(32));
+        assert_eq!(replay.format, "bmz-replay-v1");
+        assert_eq!(replay.upload_intent, "later");
     }
 }

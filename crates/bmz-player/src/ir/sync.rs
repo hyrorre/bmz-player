@@ -83,13 +83,25 @@ pub async fn sync_pending_ir_jobs(
                     provider: job.provider.clone(),
                     account_id: job.account_id.clone(),
                     local_score_id: job.local_score_id,
-                    remote_score_id,
+                    remote_score_id: remote_score_id.clone(),
                     status: "succeeded".to_string(),
                     submitted_at: now,
                     response_json,
                     error: String::new(),
                 })?;
                 report.submitted += 1;
+                // replay upload はスコア送信成功の付随処理。失敗しても job は
+                // succeeded のまま (リプレイは best 更新に影響しない)。
+                upload_replay_if_declared(
+                    score_db,
+                    profile_root,
+                    provider,
+                    &job.payload_json,
+                    job.local_score_id,
+                    &remote_score_id,
+                    now,
+                )
+                .await;
             }
             Err(error) => {
                 let message = format!("{error:#}");
@@ -106,6 +118,59 @@ pub async fn sync_pending_ir_jobs(
         }
     }
     Ok(report)
+}
+
+/// payload に replay hash を申告済みなら、保存済みリプレイファイルを
+/// 署名付き URL でアップロードし、サーバー側 hash 検証まで行う。
+async fn upload_replay_if_declared(
+    score_db: &mut ScoreDatabase,
+    profile_root: &Path,
+    provider: &IrProviderConfig,
+    payload_json: &str,
+    local_score_id: i64,
+    remote_score_id: &str,
+    now: i64,
+) {
+    let declared = serde_json::from_str::<IrScoreSubmission>(payload_json)
+        .ok()
+        .and_then(|payload| payload.replay)
+        .is_some();
+    if !declared || remote_score_id.is_empty() {
+        return;
+    }
+    // rusqlite Connection は Sync でないため、DB 参照は await を跨ぐ前に済ませる。
+    let replay_path = match score_db.replay_path_for_history(local_score_id) {
+        Ok(Some(path)) => path,
+        Ok(None) => {
+            tracing::warn!(remote_score_id, "replay declared but local file path is missing");
+            return;
+        }
+        Err(error) => {
+            tracing::warn!(remote_score_id, %error, "failed to look up replay path");
+            return;
+        }
+    };
+    let result = async {
+        let bytes =
+            std::fs::read(profile_root.join(&replay_path)).context("failed to read replay file")?;
+        let credentials =
+            ensure_fresh_credentials(profile_root, &provider.provider, &provider.base_url, now)
+                .await?;
+        let client = BmzOfficialIrClient::new(&provider.base_url, credentials.access_token)?;
+        let target = client.replay_upload_url(remote_score_id).await?;
+        client.upload_replay(&target.upload_url, bytes).await?;
+        let verify = client.verify_replay(remote_score_id).await?;
+        anyhow::Ok(verify.status)
+    }
+    .await;
+    match result {
+        Ok(status) => {
+            tracing::info!(remote_score_id, %status, "IR replay uploaded");
+        }
+        Err(error) => {
+            tracing::warn!(remote_score_id, %error, "IR replay upload failed");
+        }
+    }
 }
 
 fn provider_config<'a>(ir_config: &'a IrConfig, provider: &str) -> Option<&'a IrProviderConfig> {

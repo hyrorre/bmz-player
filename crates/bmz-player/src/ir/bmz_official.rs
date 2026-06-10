@@ -2,8 +2,8 @@ use anyhow::{Context, Result, bail};
 use reqwest::Url;
 
 use super::types::{
-    IrAuthTokens, IrMeResponse, IrRankingResult, IrRankingScope, IrRivalsResponse,
-    IrScoreSubmission, IrSubmitOptions, IrSubmitResponse,
+    IrAuthTokens, IrMeResponse, IrRankingResult, IrRankingScope, IrReplayUploadTarget,
+    IrReplayVerifyResult, IrRivalsResponse, IrScoreSubmission, IrSubmitOptions, IrSubmitResponse,
 };
 
 #[derive(Debug, Clone)]
@@ -78,6 +78,50 @@ impl BmzOfficialIrClient {
             .await
             .context("failed to send BMZ IR me request")?;
         decode_response(response, "BMZ IR me").await
+    }
+
+    /// score の replay アップロード用署名 URL を取得する。
+    pub async fn replay_upload_url(&self, score_id: &str) -> Result<IrReplayUploadTarget> {
+        let url = self.base_url.join(&format!("/api/v1/scores/{score_id}/replay/upload-url"))?;
+        let response = self
+            .http
+            .post(url)
+            .bearer_auth(self.require_token()?)
+            .send()
+            .await
+            .context("failed to request BMZ IR replay upload URL")?;
+        decode_response(response, "BMZ IR replay upload URL").await
+    }
+
+    /// 署名付き URL へ replay 本体を PUT する。
+    pub async fn upload_replay(&self, upload_url: &str, bytes: Vec<u8>) -> Result<()> {
+        let response = self
+            .http
+            .put(upload_url)
+            .header("content-type", "application/octet-stream")
+            .body(bytes)
+            .send()
+            .await
+            .context("failed to upload BMZ IR replay")?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            bail!("BMZ IR replay upload failed: {status} {body}");
+        }
+        Ok(())
+    }
+
+    /// アップロード済み replay の hash 検証をサーバーへ依頼する。
+    pub async fn verify_replay(&self, score_id: &str) -> Result<IrReplayVerifyResult> {
+        let url = self.base_url.join(&format!("/api/v1/scores/{score_id}/replay/verify"))?;
+        let response = self
+            .http
+            .post(url)
+            .bearer_auth(self.require_token()?)
+            .send()
+            .await
+            .context("failed to request BMZ IR replay verification")?;
+        decode_response(response, "BMZ IR replay verification").await
     }
 
     /// 自分の device key を失効させる。

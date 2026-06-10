@@ -182,6 +182,28 @@ pub struct IrMeResponse {
     pub player: IrPlayerInfo,
 }
 
+/// `/api/v1/scores/{id}/replay/upload-url` のレスポンス。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrReplayUploadTarget {
+    pub upload_url: String,
+    #[serde(default)]
+    pub token: Option<String>,
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub required_hash: Option<String>,
+}
+
+/// `/api/v1/scores/{id}/replay/verify` のレスポンス。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrReplayVerifyResult {
+    pub status: String,
+    #[serde(default)]
+    pub size_bytes: Option<u64>,
+    #[serde(default)]
+    pub hash: Option<String>,
+}
+
 /// `/api/v1/rivals` のレスポンス。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IrRivalsResponse {

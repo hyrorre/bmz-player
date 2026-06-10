@@ -142,6 +142,7 @@ pub fn finish_session_result(
     }
     enqueue_ir_jobs(
         score_db,
+        profile_paths,
         ir_config,
         session,
         &result,
@@ -182,6 +183,7 @@ fn clear_type_from_name(name: &str) -> Option<ClearType> {
 
 fn enqueue_ir_jobs(
     score_db: &mut ScoreDatabase,
+    profile_paths: &ProfilePaths,
     ir_config: &IrConfig,
     session: &GameSession,
     result: &PlayResult,
@@ -214,6 +216,7 @@ fn enqueue_ir_jobs(
             gauge_option: result.gauge_type.as_str().to_string(),
             device_type: stored.device_type,
             idempotency_key: format!("bmz-score-{}", stored.score_history_id),
+            replay_hash: replay_file_hash(profile_paths, &stored.replay_path),
         },
     );
     let Ok(payload_json) = serde_json::to_string(&payload) else {
@@ -270,6 +273,16 @@ fn should_send_ir_score(
                 || result.record_cb() < best.cb
         }
     }
+}
+
+/// 保存済みリプレイファイルの SHA256 (hex)。ファイルが無ければ None。
+fn replay_file_hash(profile_paths: &ProfilePaths, replay_path: &str) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    if replay_path.is_empty() {
+        return None;
+    }
+    let bytes = std::fs::read(profile_paths.root_dir.join(replay_path)).ok()?;
+    Some(crate::storage::common::hash_to_hex(&Sha256::digest(&bytes)))
 }
 
 fn effective_ln_mode_from_score_policy(policy: crate::ln_policy::LnScorePolicy) -> LongNoteMode {
