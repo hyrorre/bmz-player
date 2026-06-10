@@ -1814,6 +1814,7 @@ impl WinitApp {
                 play_level: summary.play_level.clone(),
                 graph: summary.graph.clone(),
                 overlay: OverlaySnapshot::default(),
+                ir: self.result_ir.as_ref().map(|state| state.skin_snapshot()).unwrap_or_default(),
             }),
         };
         let overlay = self.build_overlay_snapshot();

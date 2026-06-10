@@ -314,6 +314,34 @@ pub enum SelectRowKind {
     Config,
 }
 
+/// リザルト画面の IR ランキング表示状態。
+///
+/// beatoraja の `NUMBER_IR_*` / `OPTION_IR_*` skin property に対応する。
+/// IR 未設定なら `Offline` (beatoraja の STATE_OFFLINE と同じく値は非表示)。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ResultIrSnapshot {
+    pub state: ResultIrState,
+    /// 全体ランキングでの自分の順位 (NUMBER_IR_RANK=179)。
+    pub rank: Option<i64>,
+    /// ランキング対象の総プレイヤー数 (NUMBER_IR_TOTALPLAYER=180/200)。
+    pub total_player: Option<i64>,
+    /// 更新前の順位 (NUMBER_IR_PREVRANK=182)。未対応なら None。
+    pub previous_rank: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ResultIrState {
+    /// IR 未設定 / 未接続。
+    #[default]
+    Offline,
+    /// 送信・ランキング取得中 (OPTION_IR_LOADING=601)。
+    Loading,
+    /// ランキング取得済み (OPTION_IR_LOADED=602)。
+    Loaded,
+    /// 取得失敗 (OPTION_IR_FAILED=604)。
+    Failed,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResultSnapshot {
     pub clear_type: ClearType,
@@ -373,6 +401,8 @@ pub struct ResultSnapshot {
     pub graph: crate::snapshot::ResultGraphSnapshot,
     /// 右下に常時表示するオーバーレイ文字列。
     pub overlay: OverlaySnapshot,
+    /// IR ランキング表示状態 (NUMBER_IR_* / OPTION_IR_*)。
+    pub ir: ResultIrSnapshot,
 }
 
 impl ResultSnapshot {
@@ -439,6 +469,7 @@ mod tests {
             play_level: String::new(),
             graph: crate::snapshot::ResultGraphSnapshot::default(),
             overlay: OverlaySnapshot::default(),
+            ir: ResultIrSnapshot::default(),
         };
 
         assert!(snapshot.is_full_combo());
@@ -496,6 +527,7 @@ mod tests {
             play_level: String::new(),
             graph: crate::snapshot::ResultGraphSnapshot::default(),
             overlay: OverlaySnapshot::default(),
+            ir: ResultIrSnapshot::default(),
         };
 
         assert!(!snapshot.is_full_combo());

@@ -98,6 +98,32 @@ impl ResultIrState {
         spawn_ranking_fetch(self.query.clone(), scope, self.sender.clone());
     }
 
+    /// Result スキンの `NUMBER_IR_*` / `OPTION_IR_*` に渡す snapshot を作る。
+    ///
+    /// スキン表示は beatoraja 同様グローバルランキングを基準にする。
+    pub fn skin_snapshot(&self) -> bmz_render::scene::ResultIrSnapshot {
+        use bmz_render::scene::{ResultIrSnapshot, ResultIrState as SkinIrState};
+        match &self.global {
+            RankingLoadState::NotRequested | RankingLoadState::Loading => {
+                ResultIrSnapshot { state: SkinIrState::Loading, ..Default::default() }
+            }
+            RankingLoadState::Failed(_) => {
+                ResultIrSnapshot { state: SkinIrState::Failed, ..Default::default() }
+            }
+            RankingLoadState::Loaded(ranking) => ResultIrSnapshot {
+                state: SkinIrState::Loaded,
+                rank: ranking.ranking.self_summary.as_ref().map(|own| i64::from(own.rank)),
+                total_player: ranking
+                    .ranking
+                    .pagination
+                    .and_then(|pagination| pagination.total)
+                    .map(i64::from)
+                    .or(Some(ranking.ranking.entries.len() as i64)),
+                previous_rank: None,
+            },
+        }
+    }
+
     pub fn active_state(&self) -> &RankingLoadState {
         match self.active_tab {
             ResultRankingTab::Global => &self.global,
@@ -163,7 +189,9 @@ pub fn spawn_result_ir_task(
     let submit_sender = sender.clone();
     let ir_config = ir_config.clone();
     let submit_query = query.clone();
-    let prefetch_global = state_prefetch_global(&ir_config);
+    // global は Result スキンの NUMBER_IR_RANK / OPTION_IR_* 表示にも使うため、
+    // prefetch 設定に関わらず常に取得する。rivals scope のみ設定に従う。
+    let prefetch_global = true;
     let prefetch_rivals = state_prefetch_rivals(&ir_config);
     tokio::spawn(async move {
         let now = now_unix_seconds();
@@ -203,10 +231,6 @@ pub fn spawn_result_ir_task(
         state.self_and_rivals = RankingLoadState::Loading;
     }
     Some(state)
-}
-
-fn state_prefetch_global(ir_config: &IrConfig) -> bool {
-    ir_config.prefetch_global_ranking_on_score_submit
 }
 
 fn state_prefetch_rivals(ir_config: &IrConfig) -> bool {

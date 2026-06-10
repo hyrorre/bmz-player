@@ -148,6 +148,8 @@ export interface IrRanking {
     pagination: {
       limit: number
       offset: number
+      /** scope 内の総エントリ数。 */
+      total: number
       has_more: boolean
     }
   }

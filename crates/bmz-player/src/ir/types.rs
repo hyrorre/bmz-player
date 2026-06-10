@@ -225,6 +225,21 @@ pub struct IrRankingBody {
     pub entries: Vec<IrRankingEntry>,
     #[serde(rename = "self", default)]
     pub self_summary: Option<IrRankingSelfRef>,
+    #[serde(default)]
+    pub pagination: Option<IrRankingPagination>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct IrRankingPagination {
+    #[serde(default)]
+    pub limit: u32,
+    #[serde(default)]
+    pub offset: u32,
+    /// scope 内の総エントリ数。
+    #[serde(default)]
+    pub total: Option<u32>,
+    #[serde(default)]
+    pub has_more: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

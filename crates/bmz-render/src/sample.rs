@@ -212,6 +212,7 @@ pub fn sample_result_scene() -> AppSceneSnapshot {
         play_level: "7".to_string(),
         graph: crate::snapshot::ResultGraphSnapshot::default(),
         overlay: OverlaySnapshot::default(),
+        ir: crate::scene::ResultIrSnapshot::default(),
     })
 }
 

@@ -305,6 +305,7 @@ export async function getRanking(
       pagination: {
         limit: query.limit,
         offset: query.offset,
+        total: scoped.length,
         has_more: query.offset + query.limit < scoped.length,
       },
     },
