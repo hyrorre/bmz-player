@@ -161,9 +161,58 @@ pub async fn run_with_options(options: AppOptions) -> Result<()> {
         }
     }
 
+    spawn_ir_sync_worker(&boot);
+
     let mut app = WinitApp::new(boot, options, audio_runtime, system_audio, shutdown_requested)?;
     tracing::info!("starting winit event loop");
     event_loop.run_app(&mut app).context("winit event loop failed")
+}
+
+/// IR スコアジョブをバックグラウンドで定期送信する。
+///
+/// メインスレッドの `ScoreDatabase` とは別 connection を開く (score.db は WAL)。
+/// IR が未設定なら何もしない。
+fn spawn_ir_sync_worker(boot: &bootstrap::BootstrappedApp) {
+    let ir_config = boot.profile_config.ir.clone();
+    if !ir_config.providers.iter().any(|provider| provider.enabled && !provider.base_url.is_empty())
+    {
+        return;
+    }
+    let profile_root = boot.profile_paths.root_dir.clone();
+    let score_db_path = boot.profile_paths.score_db.clone();
+    tokio::spawn(async move {
+        loop {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            match crate::storage::score_db::ScoreDatabase::open(&score_db_path) {
+                Ok(mut score_db) => {
+                    match crate::ir::sync::sync_pending_ir_jobs(
+                        &mut score_db,
+                        &profile_root,
+                        &ir_config,
+                        now,
+                        20,
+                    )
+                    .await
+                    {
+                        Ok(report) if report.submitted > 0 || report.failed > 0 => {
+                            tracing::info!(
+                                submitted = report.submitted,
+                                failed = report.failed,
+                                "IR score sync finished"
+                            );
+                        }
+                        Ok(_) => {}
+                        Err(error) => tracing::warn!(%error, "IR score sync failed"),
+                    }
+                }
+                Err(error) => tracing::warn!(%error, "failed to open score db for IR sync"),
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        }
+    });
 }
 
 async fn fetch_configured_difficulty_tables(boot: &mut bootstrap::BootstrappedApp) {

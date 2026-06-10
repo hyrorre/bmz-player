@@ -157,3 +157,83 @@ pub struct IrSubmitResponse {
 pub fn default_ranking_limit() -> u32 {
     100
 }
+
+/// `/api/v1/auth/login` / `/api/v1/auth/refresh` のレスポンス。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrAuthTokens {
+    pub access_token: String,
+    pub refresh_token: String,
+    #[serde(default)]
+    pub expires_at: Option<i64>,
+    pub player: IrPlayerInfo,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrPlayerInfo {
+    pub id: String,
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default)]
+    pub display_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrMeResponse {
+    pub player: IrPlayerInfo,
+}
+
+/// `/api/v1/charts/{sha256}/ranking` のレスポンス。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrRankingResult {
+    pub chart: IrRankingChartRef,
+    pub ranking: IrRankingBody,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrRankingChartRef {
+    pub sha256: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrRankingBody {
+    pub scope: IrRankingScope,
+    #[serde(default)]
+    pub entries: Vec<IrRankingEntry>,
+    #[serde(rename = "self", default)]
+    pub self_summary: Option<IrRankingSelfRef>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrRankingSelfRef {
+    pub rank: u32,
+    #[serde(default)]
+    pub score_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrRankingEntry {
+    pub rank: u32,
+    #[serde(default)]
+    pub scope_rank: Option<u32>,
+    pub player: IrRankingPlayer,
+    pub score: IrRankingScore,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrRankingPlayer {
+    pub id: String,
+    pub display_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrRankingScore {
+    pub clear: String,
+    pub ex_score: u32,
+    pub max_combo: u32,
+    pub min_bp: u32,
+    pub min_cb: u32,
+    #[serde(default)]
+    pub device_type: Option<String>,
+    #[serde(default)]
+    pub played_at: Option<String>,
+}

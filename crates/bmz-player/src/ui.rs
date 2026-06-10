@@ -1964,6 +1964,7 @@ fn build_profile_settings_panel(
                     if ui.button("provider を追加").clicked() {
                         profile.ir.providers.push(IrProviderConfig {
                             provider: "bmz".to_string(),
+                            base_url: String::new(),
                             enabled: false,
                             account_display_name: String::new(),
                             account_id: String::new(),

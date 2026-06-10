@@ -23,6 +23,21 @@ pub enum Command {
     Table(TableCommand),
     Songs(SongsCommand),
     Course(CourseCommand),
+    Ir(IrCommand),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IrCommand {
+    /// `ir login --email X [--password Y] [--base-url URL] [--provider NAME]`
+    Login { email: String, password: Option<String>, base_url: Option<String>, provider: String },
+    /// `ir logout [--provider NAME]`
+    Logout { provider: String },
+    /// `ir status`
+    Status,
+    /// `ir ranking <SHA256> [--gauge G] [--ln-policy P] [--scope S] [--limit N]`
+    Ranking { sha256: String, gauge: String, ln_policy: String, scope: String, limit: u32 },
+    /// `ir sync` — pending のスコアジョブを送信する。
+    Sync,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -146,7 +161,83 @@ where
                 None => bail!("course requires a subcommand: import, list, history, attempt"),
             }
         }
+        Some("ir") => parse_ir_command(&args[1..]),
         _ => Ok(Command::Run(AppOptions::parse_args(args)?)),
+    }
+}
+
+fn parse_ir_command(rest: &[String]) -> Result<Command> {
+    match rest.first().map(|s| s.as_str()) {
+        Some("login") => {
+            let mut email = None;
+            let mut password = None;
+            let mut base_url = None;
+            let mut provider = "bmz-official".to_string();
+            let mut iter = rest[1..].iter();
+            while let Some(flag) = iter.next() {
+                match flag.as_str() {
+                    "--email" => email = iter.next().cloned(),
+                    "--password" => password = iter.next().cloned(),
+                    "--base-url" => base_url = iter.next().cloned(),
+                    "--provider" => {
+                        provider = iter
+                            .next()
+                            .cloned()
+                            .ok_or_else(|| anyhow::anyhow!("--provider requires a value"))?;
+                    }
+                    other => bail!("unknown flag for ir login: {other}"),
+                }
+            }
+            let email =
+                email.ok_or_else(|| anyhow::anyhow!("ir login requires --email <EMAIL>"))?;
+            Ok(Command::Ir(IrCommand::Login { email, password, base_url, provider }))
+        }
+        Some("logout") => {
+            let provider = match rest.get(1).map(|s| s.as_str()) {
+                Some("--provider") => rest
+                    .get(2)
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("--provider requires a value"))?,
+                Some(other) => bail!("unknown flag for ir logout: {other}"),
+                None => "bmz-official".to_string(),
+            };
+            Ok(Command::Ir(IrCommand::Logout { provider }))
+        }
+        Some("status") => Ok(Command::Ir(IrCommand::Status)),
+        Some("ranking") => {
+            let sha256 = rest
+                .get(1)
+                .filter(|s| !s.starts_with('-'))
+                .ok_or_else(|| anyhow::anyhow!("ir ranking requires a chart SHA256"))?
+                .clone();
+            let mut gauge = "normal".to_string();
+            let mut ln_policy = "ForceLn".to_string();
+            let mut scope = "global".to_string();
+            let mut limit = 20u32;
+            let mut iter = rest[2..].iter();
+            while let Some(flag) = iter.next() {
+                let value = |iter: &mut std::slice::Iter<'_, String>| {
+                    iter.next().cloned().ok_or_else(|| anyhow::anyhow!("{flag} requires a value"))
+                };
+                match flag.as_str() {
+                    "--gauge" => gauge = value(&mut iter)?,
+                    "--ln-policy" => ln_policy = value(&mut iter)?,
+                    "--scope" => scope = value(&mut iter)?,
+                    "--limit" => {
+                        limit = value(&mut iter)?
+                            .parse()
+                            .map_err(|_| anyhow::anyhow!("--limit must be an integer"))?;
+                    }
+                    other => bail!("unknown flag for ir ranking: {other}"),
+                }
+            }
+            Ok(Command::Ir(IrCommand::Ranking { sha256, gauge, ln_policy, scope, limit }))
+        }
+        Some("sync") => Ok(Command::Ir(IrCommand::Sync)),
+        Some(sub) => {
+            bail!("unknown ir subcommand: {sub}. Use: login, logout, status, ranking, sync")
+        }
+        None => bail!("ir requires a subcommand: login, logout, status, ranking, sync"),
     }
 }
 

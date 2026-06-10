@@ -646,6 +646,9 @@ pub struct IrConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IrProviderConfig {
     pub provider: String,
+    /// IR サーバーの base URL (例: `https://ir.example.com`)。
+    #[serde(default)]
+    pub base_url: String,
     #[serde(default)]
     pub enabled: bool,
     #[serde(default)]

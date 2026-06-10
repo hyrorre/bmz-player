@@ -443,6 +443,7 @@ mod tests {
             primary_provider: "bmz-official".to_string(),
             providers: vec![IrProviderConfig {
                 provider: "bmz-official".to_string(),
+                base_url: String::new(),
                 enabled: true,
                 account_display_name: "Player".to_string(),
                 account_id: "account-1".to_string(),

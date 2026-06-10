@@ -18,5 +18,6 @@ async fn main() -> Result<()> {
         Command::Table(cmd) => bmz_player::table_cmd::run_table_command(cmd).await,
         Command::Songs(cmd) => bmz_player::songs_cmd::run_songs_command(cmd),
         Command::Course(cmd) => bmz_player::course_cmd::run_course_command(cmd),
+        Command::Ir(cmd) => bmz_player::ir_cmd::run_ir_command(cmd).await,
     }
 }
