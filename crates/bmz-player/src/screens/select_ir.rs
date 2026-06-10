@@ -9,7 +9,7 @@ use std::path::Path;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
-use bmz_render::scene::{ResultIrSnapshot, ResultIrState as SkinIrState};
+use bmz_render::scene::{ResultIrSnapshot, ResultIrState as SkinIrState, SelectRivalSnapshot};
 
 use crate::config::profile_config::IrConfig;
 use crate::ir::types::{IrRankingResult, IrRankingScope};
@@ -23,10 +23,17 @@ const FETCH_DEBOUNCE: Duration = Duration::from_millis(400);
 /// キャッシュ上限。超えたら全クリアして作り直す (LRU は持たない)。
 const CACHE_CAPACITY: usize = 256;
 
-type FetchResult = ([u8; 32], Result<IrRankingResult, String>);
+type FetchResult = ([u8; 32], Result<(IrRankingResult, Option<IrRankingResult>), String>);
+
+/// カーソル譜面ごとのキャッシュ済み IR 表示データ。
+#[derive(Debug, Clone)]
+struct CachedChartIr {
+    ir: ResultIrSnapshot,
+    rival: Option<SelectRivalSnapshot>,
+}
 
 pub struct SelectIrRanking {
-    cache: HashMap<[u8; 32], ResultIrSnapshot>,
+    cache: HashMap<[u8; 32], CachedChartIr>,
     in_flight: Option<[u8; 32]>,
     pending: Option<([u8; 32], Instant)>,
     /// キャッシュが前提とするランキング条件 (gauge / LN ポリシー設定)。
@@ -75,14 +82,20 @@ impl SelectIrRanking {
             if self.cache.len() >= CACHE_CAPACITY {
                 self.cache.clear();
             }
-            let snapshot = match result {
-                Ok(ranking) => ranking_to_ir_snapshot(&ranking),
+            let entry = match result {
+                Ok((global, rivals)) => CachedChartIr {
+                    ir: ranking_to_ir_snapshot(&global),
+                    rival: rivals.as_ref().and_then(top_rival_snapshot),
+                },
                 Err(error) => {
                     tracing::debug!(%error, "select IR ranking fetch failed");
-                    ResultIrSnapshot { state: SkinIrState::Failed, ..Default::default() }
+                    CachedChartIr {
+                        ir: ResultIrSnapshot { state: SkinIrState::Failed, ..Default::default() },
+                        rival: None,
+                    }
                 }
             };
-            self.cache.insert(sha256, snapshot);
+            self.cache.insert(sha256, entry);
         }
 
         let Some(provider) = enabled_provider(ir_config) else {
@@ -133,8 +146,20 @@ impl SelectIrRanking {
         };
         self.cache
             .get(&sha256)
-            .copied()
+            .map(|entry| entry.ir)
             .unwrap_or(ResultIrSnapshot { state: SkinIrState::Loading, ..Default::default() })
+    }
+
+    /// 選択中譜面のライバルベスト (最上位 1 名)。未取得 / IR 未設定なら None。
+    pub fn rival_for(
+        &self,
+        ir_config: &IrConfig,
+        selected: Option<[u8; 32]>,
+    ) -> Option<SelectRivalSnapshot> {
+        if enabled_provider(ir_config).is_none() {
+            return None;
+        }
+        self.cache.get(&selected?).and_then(|entry| entry.rival.clone())
     }
 
     /// ログイン状態が変わったとき等にキャッシュを破棄する。
@@ -155,11 +180,30 @@ fn enabled_provider(ir_config: &IrConfig) -> Option<(String, String)> {
 fn spawn_fetch(query: ResultIrQuery, sha256: [u8; 32], sender: Sender<FetchResult>) {
     tracing::debug!(chart = %query.chart_sha256_hex, "fetching select IR ranking");
     tokio::spawn(async move {
-        let result = crate::screens::result_ir::fetch_ranking(&query, IrRankingScope::Global)
-            .await
-            .map_err(|error| format!("{error:#}"));
+        let result = async {
+            let global =
+                crate::screens::result_ir::fetch_ranking(&query, IrRankingScope::Global).await?;
+            // rivals scope は要認証。未ログイン等で失敗してもライバル表示を
+            // 諦めるだけで、グローバルランキング表示は維持する。
+            let rivals =
+                crate::screens::result_ir::fetch_ranking(&query, IrRankingScope::Rivals).await.ok();
+            anyhow::Ok((global, rivals))
+        }
+        .await
+        .map_err(|error| format!("{error:#}"));
         let _ = sender.send((sha256, result));
     });
+}
+
+/// rivals scope ランキングの先頭 (ライバル中ベスト) をスキン用に変換する。
+fn top_rival_snapshot(rivals: &IrRankingResult) -> Option<SelectRivalSnapshot> {
+    let entry = rivals.ranking.entries.first()?;
+    Some(SelectRivalSnapshot {
+        display_name: entry.player.display_name.clone(),
+        ex_score: entry.score.ex_score,
+        max_combo: entry.score.max_combo,
+        bp: entry.score.min_bp,
+    })
 }
 
 #[cfg(test)]
@@ -208,18 +252,30 @@ mod tests {
         let sha = [7u8; 32];
         select_ir.cache.insert(
             sha,
-            ResultIrSnapshot {
-                state: SkinIrState::Loaded,
-                rank: Some(2),
-                total_player: Some(10),
-                clear_rate: None,
-                previous_rank: None,
+            CachedChartIr {
+                ir: ResultIrSnapshot {
+                    state: SkinIrState::Loaded,
+                    rank: Some(2),
+                    total_player: Some(10),
+                    clear_rate: None,
+                    previous_rank: None,
+                },
+                rival: Some(SelectRivalSnapshot {
+                    display_name: "RivalOne".to_string(),
+                    ex_score: 1500,
+                    max_combo: 700,
+                    bp: 12,
+                }),
             },
         );
 
         let snapshot = select_ir.snapshot_for(&ir_config(true), Some(sha));
         assert_eq!(snapshot.state, SkinIrState::Loaded);
         assert_eq!(snapshot.rank, Some(2));
+        let rival = select_ir.rival_for(&ir_config(true), Some(sha)).unwrap();
+        assert_eq!(rival.display_name, "RivalOne");
+        assert_eq!(rival.ex_score, 1500);
+        assert!(select_ir.rival_for(&ir_config(false), Some(sha)).is_none());
 
         select_ir.clear();
         let cleared = select_ir.snapshot_for(&ir_config(true), Some(sha));

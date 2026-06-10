@@ -2052,6 +2052,9 @@ impl WinitApp {
             ir: self
                 .select_ir
                 .snapshot_for(&self.boot.profile_config.ir, self.selected_chart_sha256()),
+            rival: self
+                .select_ir
+                .rival_for(&self.boot.profile_config.ir, self.selected_chart_sha256()),
         }
     }
 

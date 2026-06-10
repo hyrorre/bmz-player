@@ -83,6 +83,18 @@ pub struct SelectSnapshot {
     pub mouse_position: Option<(f32, f32)>,
     /// 選曲カーソル譜面の IR ランキング状態 (NUMBER_IR_* / OPTION_IR_*)。
     pub ir: ResultIrSnapshot,
+    /// 選曲カーソル譜面の IR ライバルベスト
+    /// (STRING_RIVAL=1 / NUMBER_RIVAL_*=271,275,276 / OPTION_COMPARE_RIVAL=624,625)。
+    pub rival: Option<SelectRivalSnapshot>,
+}
+
+/// 選曲カーソル譜面に対する IR ライバル (最上位 1 名) のベストスコア。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectRivalSnapshot {
+    pub display_name: String,
+    pub ex_score: u32,
+    pub max_combo: u32,
+    pub bp: u32,
 }
 
 impl Default for SelectSnapshot {
@@ -128,6 +140,7 @@ impl Default for SelectSnapshot {
             search_word_alpha: 1.0,
             mouse_position: None,
             ir: ResultIrSnapshot::default(),
+            rival: None,
         }
     }
 }

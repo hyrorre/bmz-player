@@ -2030,6 +2030,12 @@ pub struct SkinDrawState {
     pub result_cb: Option<u32>,
     /// Result 画面の IR ランキング状態 (NUMBER_IR_* / OPTION_IR_*)。
     pub ir_ranking: crate::scene::ResultIrSnapshot,
+    /// 選曲カーソル譜面の IR ライバルベスト EX (NUMBER_RIVAL_SCORE=271)。
+    pub rival_ex_score: Option<i64>,
+    /// 同 max combo (NUMBER_RIVAL_MAXCOMBO=275)。
+    pub rival_max_combo: Option<i64>,
+    /// 同 BP (NUMBER_RIVAL_MISSCOUNT=276)。
+    pub rival_bp: Option<i64>,
     /// Result update/draw ops 用の保存前ベスト。
     pub previous_best_ex_score: Option<u32>,
     pub previous_best_max_combo: Option<u32>,
@@ -2220,6 +2226,9 @@ impl Default for SkinDrawState {
             result_bp: None,
             result_cb: None,
             ir_ranking: crate::scene::ResultIrSnapshot::default(),
+            rival_ex_score: None,
+            rival_max_combo: None,
+            rival_bp: None,
             previous_best_ex_score: None,
             previous_best_max_combo: None,
             previous_best_bp: None,
@@ -2300,6 +2309,8 @@ impl DynamicTimerRuntime {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SkinTextState<'a> {
     pub title: &'a str,
+    /// IR ライバル名 (STRING_RIVAL=1)。未取得なら空。
+    pub rival: &'a str,
     pub subtitle: &'a str,
     pub artist: &'a str,
     pub subartist: &'a str,
@@ -2346,6 +2357,7 @@ impl<'a> Default for SkinTextState<'a> {
             course_stage: None,
             course_titles: [""; 10],
             search_word: "",
+            rival: "",
             search_word_alpha: 1.0,
         }
     }
@@ -3628,6 +3640,7 @@ impl SkinDocument {
                 .unwrap_or_default(),
             search_word: &snapshot.search_word,
             search_word_alpha: snapshot.search_word_alpha,
+            rival: snapshot.rival.as_ref().map(|rival| rival.display_name.as_str()).unwrap_or(""),
             ..SkinTextState::default()
         };
 
@@ -3830,6 +3843,9 @@ impl SkinDocument {
             mouse_x: mouse_position.map(|position| position.0),
             mouse_y: mouse_position.map(|position| position.1),
             ir_ranking: snapshot.ir,
+            rival_ex_score: snapshot.rival.as_ref().map(|rival| i64::from(rival.ex_score)),
+            rival_max_combo: snapshot.rival.as_ref().map(|rival| i64::from(rival.max_combo)),
+            rival_bp: snapshot.rival.as_ref().map(|rival| i64::from(rival.bp)),
             ..SkinDrawState::default()
         };
         if let Some(runtime) = dynamic_timers {
@@ -7045,6 +7061,9 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool 
         42 => state.gauge_type <= 2,
         43 => state.gauge_type >= 3,
         1046 => matches!(state.gauge_type, 0 | 1 | 4 | 5 | 7 | 8),
+        // OPTION_NOT_COMPARE_RIVAL / OPTION_COMPARE_RIVAL。
+        624 => state.rival_ex_score.is_none(),
+        625 => state.rival_ex_score.is_some(),
         // OPTION_IR_LOADING / LOADED / NOPLAYER / FAILED (601..604)。
         // BANNED / WAITING / ACCESSING / BUSY (605..608) は未対応で false。
         601 => matches!(state.ir_ranking.state, crate::scene::ResultIrState::Loading),
@@ -8046,6 +8065,10 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         181 => state.ir_ranking.clear_rate,
         182 => state.ir_ranking.previous_rank,
         201..=242 => None,
+        // NUMBER_RIVAL_SCORE / MAXCOMBO / MISSCOUNT (IR ライバルベスト)。
+        271 => state.rival_ex_score,
+        275 => state.rival_max_combo,
+        276 => state.rival_bp,
         // ベストスコア / ターゲットスコア (DB から供給、未取得時は None)
         150 | 170 => projected_best_score_at_progress(state).map(|s| s as i64),
         121 | 151 => state.target_ex_score.map(|s| projected_score_at_progress(s, state) as i64),
@@ -9678,6 +9701,7 @@ fn skin_state_text(text: &SkinTextDef, state: SkinTextState<'_>) -> String {
         return state.grade_diff.to_string();
     }
     match text.ref_id {
+        1 => state.rival.to_string(),
         3 => select_target_name(state.target),
         10 => state.title.to_string(),
         11 => state.subtitle.to_string(),
@@ -18792,6 +18816,26 @@ mod tests {
             ..SkinDrawState::default()
         };
         assert!(test_skin_op(603, &[], no_player));
+    }
+
+    #[test]
+    fn rival_skin_properties_map_select_rival_best() {
+        let state = SkinDrawState {
+            rival_ex_score: Some(1500),
+            rival_max_combo: Some(700),
+            rival_bp: Some(12),
+            ..SkinDrawState::default()
+        };
+        assert_eq!(skin_state_number(271, state), Some(1500));
+        assert_eq!(skin_state_number(275, state), Some(700));
+        assert_eq!(skin_state_number(276, state), Some(12));
+        assert!(!test_skin_op(624, &[], state));
+        assert!(test_skin_op(625, &[], state));
+
+        let no_rival = SkinDrawState::default();
+        assert_eq!(skin_state_number(271, no_rival), None);
+        assert!(test_skin_op(624, &[], no_rival));
+        assert!(!test_skin_op(625, &[], no_rival));
     }
 
     #[test]
