@@ -1110,7 +1110,7 @@ fn plan_play(
                 board,
                 snapshot.lift,
                 bar,
-                snapshot.skin_offsets,
+                &snapshot.skin_offsets,
             );
         }
         push_judge_line(skin_manifest, &mut commands, board, snapshot.lift);
@@ -1151,7 +1151,7 @@ fn plan_play(
                 board,
                 snapshot.lift,
                 bar,
-                snapshot.skin_offsets,
+                &snapshot.skin_offsets,
             );
         }
         for body in &snapshot.visible_long_notes {
@@ -2040,7 +2040,7 @@ fn push_play_bar_line(
     board: Rect,
     lift: f32,
     bar: &crate::snapshot::VisibleBarLine,
-    skin_offsets: SkinOffsetValues,
+    skin_offsets: &SkinOffsetValues,
 ) {
     let start = commands.len();
     let items = skin.document_bar_line_items(bar.y, skin_state);
@@ -2054,7 +2054,7 @@ fn push_play_bar_line(
 }
 
 /// beatoraja `SkinObject.prepareColor` 相当。小節線コマンド列に alpha offset を加算する。
-fn apply_bar_line_alpha_offset(commands: &mut [DrawCommand], skin_offsets: SkinOffsetValues) {
+fn apply_bar_line_alpha_offset(commands: &mut [DrawCommand], skin_offsets: &SkinOffsetValues) {
     let offset = skin_offsets.get(SKIN_OFFSET_BAR_LINE).unwrap_or_default();
     if offset.a == 0 {
         return;
@@ -2083,7 +2083,7 @@ fn push_bar_line_rect_geometry(
     board: Rect,
     lift: f32,
     bar_y: f32,
-    skin_offsets: SkinOffsetValues,
+    skin_offsets: &SkinOffsetValues,
 ) {
     let y = play_object_y(board, lift, bar_y);
     let offset = skin_offsets.get(SKIN_OFFSET_BAR_LINE).unwrap_or_default();
@@ -2221,7 +2221,7 @@ fn push_default_play_skin(
             snapshot.combo,
             ((snapshot.time.0 - judgement.time.0) / 1_000).clamp(i32::MIN as i64, i32::MAX as i64)
                 as i32,
-            snapshot.skin_offsets,
+            &snapshot.skin_offsets,
             region,
         )
     });

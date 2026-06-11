@@ -1656,7 +1656,7 @@ impl SkinContext {
         judge: &str,
         combo: u32,
         elapsed_ms: i32,
-        skin_offsets: SkinOffsetValues,
+        skin_offsets: &SkinOffsetValues,
         region: usize,
     ) -> Option<Vec<SkinRenderItem>> {
         let document = self.document.as_ref()?;
@@ -1666,7 +1666,7 @@ impl SkinContext {
             .iter()
             .find(|j| j.index == region as i32)
             .or_else(|| document.judge.first())?;
-        let state = SkinDrawState { skin_offsets, ..SkinDrawState::default() };
+        let state = SkinDrawState { skin_offsets: *skin_offsets, ..SkinDrawState::default() };
         document.judge_render_items_for_def(
             judge_def,
             judge_image_index,
@@ -4965,7 +4965,7 @@ impl SkinDocument {
             judge,
             combo,
             elapsed_ms,
-            SkinOffsetValues::default(),
+            &SkinOffsetValues::default(),
             sources,
         )
     }
@@ -4975,12 +4975,12 @@ impl SkinDocument {
         judge: &str,
         combo: u32,
         elapsed_ms: i32,
-        skin_offsets: SkinOffsetValues,
+        skin_offsets: &SkinOffsetValues,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<Vec<SkinRenderItem>> {
         let judge_image_index = judge_image_index(judge)?;
         let judge_def = self.judge.first()?;
-        let state = SkinDrawState { skin_offsets, ..SkinDrawState::default() };
+        let state = SkinDrawState { skin_offsets: *skin_offsets, ..SkinDrawState::default() };
         self.judge_render_items_for_def(
             judge_def,
             judge_image_index,
@@ -19935,7 +19935,7 @@ mod tests {
                 crate::skin_offset::SkinOffsetValue { x: 0, y: 0, w: 0, h: offset_h, r: 0, a: 0 },
             );
             let items = document
-                .judge_render_items_with_offsets("PGREAT", 42, 0, offsets, sources)
+                .judge_render_items_with_offsets("PGREAT", 42, 0, &offsets, sources)
                 .unwrap();
             // [0] = 判定文字 image, [1..] = combo digit images
             let SkinRenderItem::Image { rect: image_rect, .. } = &items[0] else {
@@ -19998,7 +19998,7 @@ mod tests {
         );
 
         let items =
-            document.judge_render_items_with_offsets("PGREAT", 42, 0, offsets, &sources).unwrap();
+            document.judge_render_items_with_offsets("PGREAT", 42, 0, &offsets, &sources).unwrap();
 
         let SkinRenderItem::Image { tint: judge_tint, .. } = &items[0] else { panic!() };
         let SkinRenderItem::Image { tint: combo_tint, .. } = &items[1] else { panic!() };
@@ -20033,7 +20033,7 @@ mod tests {
         );
 
         let items =
-            document.judge_render_items_with_offsets("PGREAT", 0, 0, offsets, &sources).unwrap();
+            document.judge_render_items_with_offsets("PGREAT", 0, 0, &offsets, &sources).unwrap();
 
         let SkinRenderItem::Image { rect, .. } = &items[0] else { panic!() };
         assert!(approx_eq(rect.x, 0.16));
