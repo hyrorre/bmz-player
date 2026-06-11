@@ -330,6 +330,44 @@ pub enum SelectRowKind {
     Config,
 }
 
+pub const IR_RANKING_ENTRY_SLOTS: usize = 10;
+pub const IR_RANKING_NAME_BYTES: usize = 64;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResultIrRankingName {
+    bytes: [u8; IR_RANKING_NAME_BYTES],
+    len: u8,
+}
+
+impl Default for ResultIrRankingName {
+    fn default() -> Self {
+        Self { bytes: [0; IR_RANKING_NAME_BYTES], len: 0 }
+    }
+}
+
+impl ResultIrRankingName {
+    pub fn from_display_name(name: &str) -> Self {
+        let mut len = name.len().min(IR_RANKING_NAME_BYTES);
+        while !name.is_char_boundary(len) {
+            len -= 1;
+        }
+        let mut bytes = [0; IR_RANKING_NAME_BYTES];
+        bytes[..len].copy_from_slice(&name.as_bytes()[..len]);
+        Self { bytes, len: len as u8 }
+    }
+
+    pub fn as_str(&self) -> &str {
+        std::str::from_utf8(&self.bytes[..self.len as usize]).unwrap_or("")
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ResultIrRankingEntrySnapshot {
+    pub rank: Option<i64>,
+    pub ex_score: Option<i64>,
+    pub player_name: ResultIrRankingName,
+}
+
 /// リザルト画面の IR ランキング表示状態。
 ///
 /// beatoraja の `NUMBER_IR_*` / `OPTION_IR_*` skin property に対応する。
@@ -345,6 +383,8 @@ pub struct ResultIrSnapshot {
     pub clear_rate: Option<i64>,
     /// 更新前の順位 (NUMBER_IR_PREVRANK=182)。未対応なら None。
     pub previous_rank: Option<i64>,
+    /// 上位ランキング行 (STRING_RANKINGNAME1..10 / NUMBER_RANKING*_EXSCORE/INDEX)。
+    pub entries: [ResultIrRankingEntrySnapshot; IR_RANKING_ENTRY_SLOTS],
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

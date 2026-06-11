@@ -132,7 +132,18 @@ impl ResultIrState {
 
 /// 取得済みグローバルランキングをスキン用 snapshot に変換する。
 pub fn ranking_to_ir_snapshot(ranking: &IrRankingResult) -> bmz_render::scene::ResultIrSnapshot {
-    use bmz_render::scene::{ResultIrSnapshot, ResultIrState as SkinIrState};
+    use bmz_render::scene::{
+        IR_RANKING_ENTRY_SLOTS, ResultIrRankingEntrySnapshot, ResultIrRankingName,
+        ResultIrSnapshot, ResultIrState as SkinIrState,
+    };
+    let mut entries = [ResultIrRankingEntrySnapshot::default(); IR_RANKING_ENTRY_SLOTS];
+    for (slot, entry) in entries.iter_mut().zip(ranking.ranking.entries.iter()) {
+        *slot = ResultIrRankingEntrySnapshot {
+            rank: Some(i64::from(entry.rank)),
+            ex_score: Some(i64::from(entry.score.ex_score)),
+            player_name: ResultIrRankingName::from_display_name(&entry.player.display_name),
+        };
+    }
     ResultIrSnapshot {
         state: SkinIrState::Loaded,
         rank: ranking.ranking.self_summary.as_ref().map(|own| i64::from(own.rank)),
@@ -144,6 +155,7 @@ pub fn ranking_to_ir_snapshot(ranking: &IrRankingResult) -> bmz_render::scene::R
             .or(Some(ranking.ranking.entries.len() as i64)),
         clear_rate: ranking.ranking.clear_rate.map(i64::from),
         previous_rank: None,
+        entries,
     }
 }
 
@@ -291,4 +303,57 @@ fn now_unix_seconds() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::ir::types::{
+        IrRankingBody, IrRankingChartRef, IrRankingEntry, IrRankingPagination, IrRankingPlayer,
+        IrRankingResult, IrRankingScope, IrRankingScore, IrRankingSelfRef,
+    };
+
+    use super::ranking_to_ir_snapshot;
+
+    #[test]
+    fn ranking_snapshot_carries_skin_ranking_rows() {
+        let ranking = IrRankingResult {
+            chart: IrRankingChartRef { sha256: "abc".to_string() },
+            ranking: IrRankingBody {
+                scope: IrRankingScope::Global,
+                entries: vec![IrRankingEntry {
+                    rank: 1,
+                    scope_rank: None,
+                    player: IrRankingPlayer {
+                        id: "player-1".to_string(),
+                        display_name: "hyrorre".to_string(),
+                    },
+                    score: IrRankingScore {
+                        clear: "Perfect".to_string(),
+                        ex_score: 46,
+                        max_combo: 28,
+                        min_bp: 0,
+                        min_cb: 0,
+                        device_type: None,
+                        played_at: None,
+                    },
+                }],
+                clear_rate: Some(100),
+                self_summary: Some(IrRankingSelfRef { rank: 1, score_id: None }),
+                pagination: Some(IrRankingPagination {
+                    limit: 20,
+                    offset: 0,
+                    total: Some(1),
+                    has_more: false,
+                }),
+            },
+        };
+
+        let snapshot = ranking_to_ir_snapshot(&ranking);
+        assert_eq!(snapshot.rank, Some(1));
+        assert_eq!(snapshot.total_player, Some(1));
+        assert_eq!(snapshot.clear_rate, Some(100));
+        assert_eq!(snapshot.entries[0].rank, Some(1));
+        assert_eq!(snapshot.entries[0].ex_score, Some(46));
+        assert_eq!(snapshot.entries[0].player_name.as_str(), "hyrorre");
+    }
 }

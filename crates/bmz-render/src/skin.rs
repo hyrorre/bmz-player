@@ -2334,6 +2334,7 @@ pub struct SkinTextState<'a> {
     /// `1.0` keeps the skin-defined alpha unchanged; values < 1.0 are used for
     /// placeholder / inactive states (beatoraja `messageFontColor=GRAY` 相当).
     pub search_word_alpha: f32,
+    pub ir_ranking: crate::scene::ResultIrSnapshot,
 }
 
 impl<'a> Default for SkinTextState<'a> {
@@ -2359,6 +2360,7 @@ impl<'a> Default for SkinTextState<'a> {
             search_word: "",
             rival: "",
             search_word_alpha: 1.0,
+            ir_ranking: crate::scene::ResultIrSnapshot::default(),
         }
     }
 }
@@ -3641,6 +3643,7 @@ impl SkinDocument {
             search_word: &snapshot.search_word,
             search_word_alpha: snapshot.search_word_alpha,
             rival: snapshot.rival.as_ref().map(|rival| rival.display_name.as_str()).unwrap_or(""),
+            ir_ranking: snapshot.ir,
             ..SkinTextState::default()
         };
 
@@ -8064,6 +8067,13 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         180 | 200 => state.ir_ranking.total_player,
         181 => state.ir_ranking.clear_rate,
         182 => state.ir_ranking.previous_rank,
+        226 => ir_total_clear_count(state.ir_ranking),
+        227 => state.ir_ranking.clear_rate,
+        241 => state.ir_ranking.clear_rate.map(|_| 0),
+        380..=389 => {
+            ir_ranking_entry(state.ir_ranking, ref_id - 380).and_then(|entry| entry.ex_score)
+        }
+        390..=399 => ir_ranking_entry(state.ir_ranking, ref_id - 390).and_then(|entry| entry.rank),
         201..=242 => None,
         // NUMBER_RIVAL_SCORE / MAXCOMBO / MISSCOUNT (IR ライバルベスト)。
         271 => state.rival_ex_score,
@@ -8128,6 +8138,21 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         }
         _ => None,
     }
+}
+
+fn ir_ranking_entry(
+    ranking: crate::scene::ResultIrSnapshot,
+    index: i32,
+) -> Option<crate::scene::ResultIrRankingEntrySnapshot> {
+    ranking.entries.get(usize::try_from(index).ok()?).copied().filter(|entry| {
+        entry.rank.is_some() || entry.ex_score.is_some() || !entry.player_name.as_str().is_empty()
+    })
+}
+
+fn ir_total_clear_count(ranking: crate::scene::ResultIrSnapshot) -> Option<i64> {
+    let total = ranking.total_player?;
+    let clear_rate = ranking.clear_rate?;
+    Some((total * clear_rate + 50) / 100)
 }
 
 fn result_grade_diff_number(state: SkinDrawState) -> Option<i64> {
@@ -9712,6 +9737,9 @@ fn skin_state_text(text: &SkinTextDef, state: SkinTextState<'_>) -> String {
         16 => full_label(state.artist, state.subartist),
         17 => state.table_level.to_string(),
         30 => state.search_word.to_string(),
+        120..=129 => ir_ranking_entry(state.ir_ranking, text.ref_id - 120)
+            .map(|entry| entry.player_name.as_str().to_string())
+            .unwrap_or_default(),
         150..=159 => state.course_titles[(text.ref_id - 150) as usize].to_string(),
         // beatoraja StringPropertyFactory: 1001=tablename, 1002=tablelevel,
         // 1003=tablefull.  Rm-skin's combined table label is handled above by
@@ -9719,7 +9747,13 @@ fn skin_state_text(text: &SkinTextDef, state: SkinTextState<'_>) -> String {
         1001 => state.table_text_primary.to_string(),
         1002 => state.table_level.to_string(),
         1003 => state.table_text_fallback.to_string(),
-        1020 | 1021 => String::new(),
+        1020 | 1021 => {
+            if matches!(state.ir_ranking.state, crate::scene::ResultIrState::Offline) {
+                String::new()
+            } else {
+                "BMZ IR".to_string()
+            }
+        }
         200..=209 => select_target_name_by_offset(state.target, text.ref_id - 210),
         210..=219 => select_target_name_by_offset(state.target, text.ref_id - 209),
         1000 => state.current_folder.to_string(),
@@ -18787,6 +18821,26 @@ mod tests {
                 total_player: Some(42),
                 clear_rate: Some(85),
                 previous_rank: None,
+                entries: [
+                    crate::scene::ResultIrRankingEntrySnapshot {
+                        rank: Some(1),
+                        ex_score: Some(2000),
+                        player_name: crate::scene::ResultIrRankingName::from_display_name("Alice"),
+                    },
+                    crate::scene::ResultIrRankingEntrySnapshot {
+                        rank: Some(2),
+                        ex_score: Some(1900),
+                        player_name: crate::scene::ResultIrRankingName::from_display_name("Bob"),
+                    },
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                ],
             },
             ..SkinDrawState::default()
         };
@@ -18795,6 +18849,14 @@ mod tests {
         assert_eq!(skin_state_number(200, loaded), Some(42));
         assert_eq!(skin_state_number(181, loaded), Some(85));
         assert_eq!(skin_state_number(182, loaded), None);
+        assert_eq!(skin_state_number(226, loaded), Some(36));
+        assert_eq!(skin_state_number(227, loaded), Some(85));
+        assert_eq!(skin_state_number(241, loaded), Some(0));
+        assert_eq!(skin_state_number(380, loaded), Some(2000));
+        assert_eq!(skin_state_number(381, loaded), Some(1900));
+        assert_eq!(skin_state_number(390, loaded), Some(1));
+        assert_eq!(skin_state_number(391, loaded), Some(2));
+        assert_eq!(skin_state_number(382, loaded), None);
         assert!(!test_skin_op(601, &[], loaded));
         assert!(test_skin_op(602, &[], loaded));
         assert!(!test_skin_op(603, &[], loaded));
@@ -18860,7 +18922,7 @@ mod tests {
             assert!(!test_skin_op(op, &[], state), "IR option {op} should be false offline");
         }
 
-        for ref_id in [179, 180, 181, 182, 200, 201, 202, 220, 226, 227, 241, 242] {
+        for ref_id in [179, 180, 181, 182, 200, 201, 202, 220, 226, 227, 241, 242, 380, 390] {
             assert_eq!(skin_state_number(ref_id, state), None, "IR number {ref_id}");
         }
     }
@@ -20532,6 +20594,26 @@ mod tests {
             subartist: "Feat. X",
             genre: "TRANCE",
             target: "AAA",
+            ir_ranking: crate::scene::ResultIrSnapshot {
+                state: crate::scene::ResultIrState::Loaded,
+                entries: [
+                    crate::scene::ResultIrRankingEntrySnapshot {
+                        rank: Some(1),
+                        ex_score: Some(2000),
+                        player_name: crate::scene::ResultIrRankingName::from_display_name("Alice"),
+                    },
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                ],
+                ..Default::default()
+            },
             course_titles: [
                 "Stage 1", "Stage 2", "Stage 3", "Stage 4", "Stage 5", "Stage 6", "Stage 7",
                 "Stage 8", "Stage 9", "Stage 10",
@@ -20565,12 +20647,15 @@ mod tests {
         // STRING_TARGETNAME_P1/N1 (209/210)
         assert_eq!(skin_state_text(&make_text(209), state), "MAX");
         assert_eq!(skin_state_text(&make_text(210), state), "RANK AA");
+        // STRING_RANKINGNAME1..10
+        assert_eq!(skin_state_text(&make_text(120), state), "Alice");
+        assert_eq!(skin_state_text(&make_text(121), state), "");
         // STRING_COURSE1_TITLE..10_TITLE (150..159)
         assert_eq!(skin_state_text(&make_text(150), state), "Stage 1");
         assert_eq!(skin_state_text(&make_text(159), state), "Stage 10");
-        // STRING_IR_NAME / STRING_IR_USERNAME: BMZ has no IR backend yet.
-        assert_eq!(skin_state_text(&make_text(1020), state), "");
-        assert_eq!(skin_state_text(&make_text(1021), state), "");
+        // STRING_IR_NAME / STRING_IR_USERNAME
+        assert_eq!(skin_state_text(&make_text(1020), state), "BMZ IR");
+        assert_eq!(skin_state_text(&make_text(1021), state), "BMZ IR");
         // Unknown ref → empty
         assert_eq!(skin_state_text(&make_text(99), state), "");
 

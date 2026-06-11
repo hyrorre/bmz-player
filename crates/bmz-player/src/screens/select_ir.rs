@@ -276,6 +276,7 @@ mod tests {
                     total_player: Some(10),
                     clear_rate: None,
                     previous_rank: None,
+                    ..Default::default()
                 },
                 rival: Some(SelectRivalSnapshot {
                     display_name: "RivalOne".to_string(),

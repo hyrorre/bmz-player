@@ -1387,6 +1387,7 @@ fn plan_result(
             play_level: snapshot.play_level.as_str(),
             grade_diff: grade_diff.as_str(),
             table_level: snapshot.play_level.as_str(),
+            ir_ranking: snapshot.ir,
             ..SkinTextState::default()
         };
         let items =
@@ -4260,6 +4261,7 @@ mod tests {
                 total_player: Some(42),
                 clear_rate: None,
                 previous_rank: None,
+                ..Default::default()
             },
         });
 
