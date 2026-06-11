@@ -2168,10 +2168,7 @@ fn build_profile_settings_panel(
                                     remove_index = Some(index);
                                 }
                             });
-                            ir_provider_text_row(ui, "ID", &mut provider.provider);
                             ir_provider_text_row(ui, "Base URL", &mut provider.base_url);
-                            ir_provider_text_row(ui, "表示名", &mut provider.account_display_name);
-                            ir_provider_text_row(ui, "アカウント ID", &mut provider.account_id);
                             ui.horizontal(|ui| {
                                 ui.label("メール");
                                 ui.text_edit_singleline(&mut ir_login.email);
