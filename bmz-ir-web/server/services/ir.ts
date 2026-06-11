@@ -49,8 +49,8 @@ export interface RankingQuery {
   scope: IrRankingScope
   limit: number
   offset: number
-  gauge: string
-  lnPolicy: LnScorePolicy
+  gauge?: string
+  lnPolicy?: LnScorePolicy
   scoring: 'bms_ex_score_v1'
 }
 
@@ -81,8 +81,10 @@ export function parseRankingQuery(query: Record<string, unknown>): RankingQuery 
   const scope = asScope(String(query.scope ?? 'global'))
   const limit = clampInteger(query.limit, 100, 1, 200)
   const offset = clampInteger(query.offset, 0, 0, 100_000)
-  const gauge = normalizeGaugeName(nonEmptyString(query.gauge, 'Normal'))
-  const lnPolicy = asLnPolicy(String(query.ln_policy ?? 'ForceLn'))
+  const gauge =
+    typeof query.gauge === 'string' && query.gauge ? normalizeGaugeName(query.gauge) : undefined
+  const lnPolicy =
+    typeof query.ln_policy === 'string' && query.ln_policy ? asLnPolicy(query.ln_policy) : undefined
   const scoring = String(query.scoring ?? 'bms_ex_score_v1')
   if (scoring !== 'bms_ex_score_v1') {
     throw new Error('unsupported scoring')
@@ -285,16 +287,21 @@ export async function getRanking(
   query: RankingQuery,
 ): Promise<IrRanking> {
   requireHex(sha256, 64, 'sha256')
-  const { data: rows, error } = await db
+  let rankingQuery = db
     .from('best_scores')
     .select(
       'player_id, chart_sha256, score_id, ex_score, clear_type, clear_rank, max_combo, min_bp, min_cb, device_type, gauge, ln_policy, effective_ln_mode, scoring, played_at, server_received_at, verification',
     )
     .eq('chart_sha256', sha256)
-    .eq('gauge', query.gauge)
-    .eq('ln_policy', query.lnPolicy)
     .eq('scoring', query.scoring)
     .order('ex_score', { ascending: false })
+  if (query.gauge) {
+    rankingQuery = rankingQuery.eq('gauge', query.gauge)
+  }
+  if (query.lnPolicy) {
+    rankingQuery = rankingQuery.eq('ln_policy', query.lnPolicy)
+  }
+  const { data: rows, error } = await rankingQuery
 
   if (error) {
     throw error
@@ -318,8 +325,9 @@ export async function getRanking(
       scoring: query.scoring,
       gauge: query.gauge,
       ln_policy: query.lnPolicy,
-      effective_ln_mode: bestRows.find((row) => row.ln_policy === query.lnPolicy)
-        ?.effective_ln_mode,
+      effective_ln_mode: query.lnPolicy
+        ? bestRows.find((row) => row.ln_policy === query.lnPolicy)?.effective_ln_mode
+        : undefined,
     },
     ranking: {
       scope: query.scope,
@@ -514,6 +522,8 @@ function rankRows(
         max_combo: row.max_combo,
         min_bp: row.min_bp,
         min_cb: row.min_cb,
+        gauge: row.gauge,
+        ln_policy: row.ln_policy,
         device_type: row.device_type,
         played_at: row.played_at,
         verification: row.verification,

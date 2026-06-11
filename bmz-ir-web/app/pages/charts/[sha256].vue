@@ -21,10 +21,11 @@ interface ChartDetail {
 const route = useRoute()
 const sha256 = computed(() => String(route.params.sha256 ?? ''))
 
-const gauge = ref('Normal')
-const lnPolicy = ref<LnScorePolicy>('ForceLn')
-const gauges = ['AssistEasy', 'Easy', 'Normal', 'Hard', 'ExHard', 'Hazard']
-const lnPolicies: LnScorePolicy[] = [
+type LnPolicyFilter = 'ALL' | LnScorePolicy
+
+const lnPolicy = ref<LnPolicyFilter>('ALL')
+const lnPolicies: LnPolicyFilter[] = [
+  'ALL',
   'AutoLn',
   'AutoCn',
   'AutoHcn',
@@ -41,7 +42,10 @@ const {
   pending: rankingPending,
   error: rankingError,
 } = await useFetch<IrRanking>(() => `/api/v1/charts/${sha256.value}/ranking`, {
-  query: computed(() => ({ scope: 'global', gauge: gauge.value, ln_policy: lnPolicy.value })),
+  query: computed(() => ({
+    scope: 'global',
+    ...(lnPolicy.value === 'ALL' ? {} : { ln_policy: lnPolicy.value }),
+  })),
 })
 </script>
 
@@ -73,8 +77,7 @@ const {
           </p>
         </div>
 
-        <div class="mb-4 flex flex-wrap gap-3">
-          <USelect v-model="gauge" :items="gauges" class="w-40" />
+        <div class="mb-4 flex flex-wrap items-center gap-3">
           <USelect v-model="lnPolicy" :items="lnPolicies" class="w-40" />
         </div>
 
@@ -91,6 +94,7 @@ const {
                 <th class="px-3 py-2">プレイヤー</th>
                 <th class="px-3 py-2 text-right">EX</th>
                 <th class="px-3 py-2">クリア</th>
+                <th class="px-3 py-2">条件</th>
                 <th class="px-3 py-2 text-right">COMBO</th>
                 <th class="px-3 py-2 text-right">BP</th>
                 <th class="px-3 py-2">入力</th>
@@ -119,6 +123,9 @@ const {
                   </NuxtLink>
                 </td>
                 <td class="px-3 py-2">{{ entry.score.clear }}</td>
+                <td class="px-3 py-2 text-neutral-400">
+                  {{ entry.score.gauge }} / {{ entry.score.ln_policy }}
+                </td>
                 <td class="px-3 py-2 text-right">{{ entry.score.max_combo }}</td>
                 <td class="px-3 py-2 text-right">{{ entry.score.min_bp }}</td>
                 <td class="px-3 py-2 text-neutral-400">{{ entry.score.device_type }}</td>

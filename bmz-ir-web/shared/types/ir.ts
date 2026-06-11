@@ -1,10 +1,4 @@
-export type LnScorePolicy =
-  | 'AutoLn'
-  | 'AutoCn'
-  | 'AutoHcn'
-  | 'ForceLn'
-  | 'ForceCn'
-  | 'ForceHcn'
+export type LnScorePolicy = 'AutoLn' | 'AutoCn' | 'AutoHcn' | 'ForceLn' | 'ForceCn' | 'ForceHcn'
 
 export type EffectiveLnMode = 'ln' | 'cn' | 'hcn'
 
@@ -132,8 +126,8 @@ export interface IrRanking {
   }
   rule: {
     scoring: string
-    gauge: string
-    ln_policy: LnScorePolicy
+    gauge?: string
+    ln_policy?: LnScorePolicy
     effective_ln_mode?: EffectiveLnMode
   }
   ranking: {
@@ -171,6 +165,8 @@ export interface IrRankingEntry {
     max_combo: number
     min_bp: number
     min_cb: number
+    gauge: string
+    ln_policy: LnScorePolicy
     device_type: IrDeviceType
     played_at: string | null
     verification: IrVerificationStatus

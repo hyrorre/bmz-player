@@ -21,10 +21,6 @@ const { data, pending, error } = await useFetch<{ courses: CourseListItem[] }>('
         </p>
       </div>
 
-      <div class="mb-6">
-        <UButton color="neutral" variant="subtle" to="/">トップへ</UButton>
-      </div>
-
       <UAlert v-if="error" color="error" :description="error.message" class="mb-6" />
       <p v-else-if="pending" class="text-sm text-neutral-400">読み込み中...</p>
       <p v-else-if="!data?.courses.length" class="text-sm text-neutral-400">

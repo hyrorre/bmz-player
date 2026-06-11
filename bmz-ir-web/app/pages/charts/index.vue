@@ -27,7 +27,9 @@ const { data, pending, error, refresh } = await useFetch<{ charts: ChartListItem
       <div class="mb-8">
         <p class="mb-2 text-sm font-medium text-primary-300">BMZ Internet Ranking</p>
         <h1 class="text-3xl font-semibold">譜面一覧</h1>
-        <p class="mt-2 text-sm text-neutral-300">スコアが登録されている譜面のランキングを確認できます。</p>
+        <p class="mt-2 text-sm text-neutral-300">
+          スコアが登録されている譜面のランキングを確認できます。
+        </p>
       </div>
 
       <div class="mb-6 flex gap-3">
@@ -39,7 +41,6 @@ const { data, pending, error, refresh } = await useFetch<{ charts: ChartListItem
           @keydown.enter="refresh()"
         />
         <UButton color="primary" icon="i-lucide-search" @click="refresh()">検索</UButton>
-        <UButton color="neutral" variant="subtle" to="/">トップへ</UButton>
       </div>
 
       <UAlert v-if="error" color="error" :description="error.message" class="mb-6" />
@@ -64,7 +65,9 @@ const { data, pending, error, refresh } = await useFetch<{ charts: ChartListItem
               </p>
             </div>
             <div class="shrink-0 text-right text-sm text-neutral-300">
-              <p>{{ chart.mode }}<span v-if="chart.level != null"> ☆{{ chart.level }}</span></p>
+              <p>
+                {{ chart.mode }}<span v-if="chart.level != null"> ☆{{ chart.level }}</span>
+              </p>
               <p class="text-neutral-500">{{ chart.notes }} notes</p>
             </div>
           </NuxtLink>

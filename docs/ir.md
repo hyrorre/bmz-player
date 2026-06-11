@@ -754,8 +754,6 @@ GET /api/v1/charts/{sha256}/ranking
 scope=global
 limit=100
 offset=0
-gauge=Normal
-ln_policy=ForceLn
 scoring=bms_ex_score_v1
 ```
 
@@ -764,8 +762,8 @@ scoring=bms_ex_score_v1
 | `scope` | string | `global`, `self_and_rivals`, `rivals`, `self`, `around_self` |
 | `limit` | integer | 最大件数 |
 | `offset` | integer | pagination 用 |
-| `gauge` | string | gauge 種別 |
-| `ln_policy` | string | `AutoLn` / `AutoCn` / `AutoHcn` / `ForceLn` / `ForceCn` / `ForceHcn` |
+| `gauge` | string | 任意。指定した場合だけ gauge 種別で絞り込む |
+| `ln_policy` | string | 任意。指定した場合だけ `AutoLn` / `AutoCn` / `AutoHcn` / `ForceLn` / `ForceCn` / `ForceHcn` で絞り込む |
 | `scoring` | string | 初期は `bms_ex_score_v1` |
 
 ### Ranking scope
