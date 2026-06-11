@@ -3960,6 +3960,7 @@ impl SkinDocument {
         let selected_row_position =
             select_snapshot_selected_row_position(&snapshot.rows, snapshot.selected_index) as i32;
         let mut hits = Vec::new();
+        let mut row_state = state.clone();
         for (row_position, row) in snapshot.rows.iter().enumerate() {
             let offset = row_position as i32 - selected_row_position;
             let slot = songlist.center + offset;
@@ -3973,42 +3974,7 @@ impl SkinDocument {
             else {
                 continue;
             };
-            let row_state = SkinDrawState {
-                select_play_level: select_row_level_number(row),
-                play_level: select_row_level_number(row),
-                difficulty: select_row_difficulty_code(row),
-                judge_rank: row.judge_rank,
-                select_ex_score: row.ex_score,
-                select_replay_slots: row.replay_slots,
-                select_replay_index: select_row_replay_index(row),
-                select_clear_index: select_row_clear_index(row) as i64,
-                select_row_kind: row.kind,
-                select_course_constraints: row.course_constraints,
-                select_is_folder: row.is_folder,
-                select_in_library: row.in_library,
-                select_total_notes: row.total_notes,
-                select_chart_normal_notes: row.chart_normal_notes,
-                select_chart_long_notes: row.chart_long_notes,
-                select_chart_scratch_notes: row.chart_scratch_notes,
-                select_chart_long_scratch_notes: row.chart_long_scratch_notes,
-                select_chart_mine_notes: row.chart_mine_notes,
-                select_chart_density: row.chart_density,
-                select_chart_peak_density: row.chart_peak_density,
-                select_chart_end_density: row.chart_end_density,
-                select_chart_total_gauge: row.chart_total_gauge,
-                select_chart_main_bpm: row.chart_main_bpm,
-                select_length_ms: row.length_ms,
-                select_play_count: row.play_count,
-                select_clear_count: row.clear_count,
-                select_bp: row.bp,
-                select_cb: row.cb,
-                max_combo: row.max_combo.unwrap_or(0),
-                total_notes: row.total_notes,
-                gauge: row.gauge_value.unwrap_or(0.0),
-                ex_score: row.ex_score.unwrap_or(0),
-                select_chart_key_mode: row.chart_key_mode,
-                ..(*state).clone()
-            };
+            Self::apply_select_songlist_click_row_state(&mut row_state, row);
             let Some(rect) =
                 self.destination_click_rect(row_destination, enabled_options, &row_state)
             else {
@@ -4020,6 +3986,46 @@ impl SkinDocument {
             });
         }
         hits
+    }
+
+    fn apply_select_songlist_render_row_state(state: &mut SkinDrawState, row: &SelectRowSnapshot) {
+        state.select_play_level = select_row_level_number(row);
+        state.play_level = select_row_level_number(row);
+        state.difficulty = select_row_difficulty_code(row);
+        state.select_ex_score = row.ex_score;
+        state.select_replay_slots = row.replay_slots;
+        state.select_replay_index = select_row_replay_index(row);
+        state.select_clear_index = select_row_clear_index(row) as i64;
+        state.select_row_kind = row.kind;
+        state.select_course_constraints = row.course_constraints;
+        state.select_is_folder = row.is_folder;
+        state.select_in_library = row.in_library;
+        state.select_total_notes = row.total_notes;
+        state.select_chart_normal_notes = row.chart_normal_notes;
+        state.select_chart_long_notes = row.chart_long_notes;
+        state.select_chart_scratch_notes = row.chart_scratch_notes;
+        state.select_chart_long_scratch_notes = row.chart_long_scratch_notes;
+        state.select_chart_mine_notes = row.chart_mine_notes;
+        state.select_chart_density = row.chart_density;
+        state.select_chart_peak_density = row.chart_peak_density;
+        state.select_chart_end_density = row.chart_end_density;
+        state.select_chart_total_gauge = row.chart_total_gauge;
+        state.select_chart_main_bpm = row.chart_main_bpm;
+        state.select_length_ms = row.length_ms;
+        state.select_play_count = row.play_count;
+        state.select_clear_count = row.clear_count;
+        state.select_bp = row.bp;
+        state.select_cb = row.cb;
+        state.max_combo = row.max_combo.unwrap_or(0);
+        state.total_notes = row.total_notes;
+        state.gauge = row.gauge_value.unwrap_or(0.0);
+        state.ex_score = row.ex_score.unwrap_or(0);
+        state.select_chart_key_mode = row.chart_key_mode;
+    }
+
+    fn apply_select_songlist_click_row_state(state: &mut SkinDrawState, row: &SelectRowSnapshot) {
+        Self::apply_select_songlist_render_row_state(state, row);
+        state.judge_rank = row.judge_rank;
     }
 
     fn click_target_for_destination(
@@ -4094,42 +4100,8 @@ impl SkinDocument {
         let mut items = Vec::new();
         let selected_row_position =
             select_snapshot_selected_row_position(&snapshot.rows, snapshot.selected_index) as i32;
+        let mut row_state = state.clone();
         for (row_position, row) in snapshot.rows.iter().enumerate() {
-            let row_state = SkinDrawState {
-                select_play_level: select_row_level_number(row),
-                play_level: select_row_level_number(row),
-                difficulty: select_row_difficulty_code(row),
-                select_ex_score: row.ex_score,
-                select_replay_slots: row.replay_slots,
-                select_replay_index: select_row_replay_index(row),
-                select_clear_index: select_row_clear_index(row) as i64,
-                select_row_kind: row.kind,
-                select_course_constraints: row.course_constraints,
-                select_is_folder: row.is_folder,
-                select_in_library: row.in_library,
-                select_total_notes: row.total_notes,
-                select_chart_normal_notes: row.chart_normal_notes,
-                select_chart_long_notes: row.chart_long_notes,
-                select_chart_scratch_notes: row.chart_scratch_notes,
-                select_chart_long_scratch_notes: row.chart_long_scratch_notes,
-                select_chart_mine_notes: row.chart_mine_notes,
-                select_chart_density: row.chart_density,
-                select_chart_peak_density: row.chart_peak_density,
-                select_chart_end_density: row.chart_end_density,
-                select_chart_total_gauge: row.chart_total_gauge,
-                select_chart_main_bpm: row.chart_main_bpm,
-                select_length_ms: row.length_ms,
-                select_play_count: row.play_count,
-                select_clear_count: row.clear_count,
-                select_bp: row.bp,
-                select_cb: row.cb,
-                max_combo: row.max_combo.unwrap_or(0),
-                total_notes: row.total_notes,
-                gauge: row.gauge_value.unwrap_or(0.0),
-                ex_score: row.ex_score.unwrap_or(0),
-                select_chart_key_mode: row.chart_key_mode,
-                ..(*state).clone()
-            };
             let offset = row_position as i32 - selected_row_position;
             let slot = songlist.center + offset;
             if slot < 0 {
@@ -4142,6 +4114,7 @@ impl SkinDocument {
             else {
                 continue;
             };
+            Self::apply_select_songlist_render_row_state(&mut row_state, row);
             let elapsed = skin_timer_elapsed_ms(row_destination.timer, state).unwrap_or(0);
             let Some(mut row_frame) =
                 resolve_destination_frame(row_destination, elapsed, enabled_options, &row_state)
