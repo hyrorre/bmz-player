@@ -116,7 +116,9 @@ use crate::storage::replay::load_replay_for_chart_and_policy;
 use crate::storage::scan::{ScanProgress, ScanReport};
 use crate::storage::score_db::ScoreDatabase;
 use crate::storage::score_import::{ScoreImportRequest, import_scores};
-use crate::ui::{DebugInfo, EguiLayer, SceneSkinDefs, SkinCandidate, SkinCatalog, SkinConfigMeta};
+use crate::ui::{
+    DebugInfo, EguiLayer, EguiRunContext, SceneSkinDefs, SkinCandidate, SkinCatalog, SkinConfigMeta,
+};
 use bmz_render::skin::{
     DestinationListEntry, SkinAnimationDef, SkinClickHit, SkinClickTarget, SkinDestinationDef,
     SkinDocument, SkinDocumentTexture, SkinDstEntry, SkinManifest, SkinSliderHit,
@@ -7318,16 +7320,18 @@ impl WinitApp {
         };
         let output = egui.run(
             &window,
-            &info,
-            &mut self.boot.app_config,
-            &mut self.boot.profile_config,
-            &skin_meta,
-            &self.skin_catalog,
-            course_result.as_ref(),
-            course_preview.as_ref(),
-            practice_panel_ctx.as_mut(),
-            result_ir_panel,
-            &self.boot.profile_paths.root_dir,
+            EguiRunContext {
+                info: &info,
+                app_config: &mut self.boot.app_config,
+                profile_config: &mut self.boot.profile_config,
+                skin_meta: &skin_meta,
+                skin_catalog: &self.skin_catalog,
+                course_result: course_result.as_ref(),
+                course_preview: course_preview.as_ref(),
+                practice: practice_panel_ctx.as_mut(),
+                result_ir: result_ir_panel,
+                profile_root: &self.boot.profile_paths.root_dir,
+            },
         );
         self.renderer.set_egui_frame(output.frame);
         self.sync_realtime_profile_settings();
