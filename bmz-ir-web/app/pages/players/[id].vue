@@ -6,6 +6,7 @@ interface PlayerDetail {
     bio: string | null
   }
   best_scores: {
+    score_id: string
     chart_sha256: string
     ex_score: number
     clear_type: string
@@ -81,7 +82,11 @@ const { data, pending, error } = await useFetch<PlayerDetail>(
                     {{ score.chart?.title ?? score.chart_sha256.slice(0, 12) }}
                   </NuxtLink>
                 </td>
-                <td class="px-3 py-2 text-right font-medium">{{ score.ex_score }}</td>
+                <td class="px-3 py-2 text-right font-medium">
+                  <NuxtLink :to="`/scores/${score.score_id}`" class="hover:underline">
+                    {{ score.ex_score }}
+                  </NuxtLink>
+                </td>
                 <td class="px-3 py-2">{{ score.clear_type }}</td>
                 <td class="px-3 py-2 text-right">{{ score.max_combo }}</td>
                 <td class="px-3 py-2 text-right">{{ score.min_bp }}</td>

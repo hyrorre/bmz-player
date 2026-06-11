@@ -106,7 +106,11 @@ const {
                     rival
                   </UBadge>
                 </td>
-                <td class="px-3 py-2 text-right font-medium">{{ entry.score.ex_score }}</td>
+                <td class="px-3 py-2 text-right font-medium">
+                  <NuxtLink :to="`/scores/${entry.score.score_id}`" class="hover:underline">
+                    {{ entry.score.ex_score }}
+                  </NuxtLink>
+                </td>
                 <td class="px-3 py-2">{{ entry.score.clear }}</td>
                 <td class="px-3 py-2 text-right">{{ entry.score.max_combo }}</td>
                 <td class="px-3 py-2 text-right">{{ entry.score.min_bp }}</td>

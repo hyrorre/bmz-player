@@ -27,7 +27,7 @@ export default defineEventHandler(async (event) => {
   const { data: bests, error: bestsError } = await db
     .from('best_scores')
     .select(
-      'chart_sha256, ex_score, clear_type, clear_rank, max_combo, min_bp, min_cb, device_type, gauge, ln_policy, scoring, played_at, server_received_at',
+      'score_id, chart_sha256, ex_score, clear_type, clear_rank, max_combo, min_bp, min_cb, device_type, gauge, ln_policy, scoring, played_at, server_received_at',
     )
     .eq('player_id', playerId)
     .order('server_received_at', { ascending: false })
