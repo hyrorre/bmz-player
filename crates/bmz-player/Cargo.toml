@@ -32,6 +32,10 @@ rfd.workspace = true
 rayon.workspace = true
 tokio.workspace = true
 reqwest.workspace = true
+sha2.workspace = true
+ed25519-dalek.workspace = true
+keyring.workspace = true
+getrandom.workspace = true
 
 bmz-core = { path = "../bmz-core" }
 bmz-chart = { path = "../bmz-chart" }

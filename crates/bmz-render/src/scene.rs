@@ -82,6 +82,20 @@ pub struct SelectSnapshot {
     pub search_word_alpha: f32,
     /// Select skin mouse position in normalized screen coordinates.
     pub mouse_position: Option<(f32, f32)>,
+    /// 選曲カーソル譜面の IR ランキング状態 (NUMBER_IR_* / OPTION_IR_*)。
+    pub ir: ResultIrSnapshot,
+    /// 選曲カーソル譜面の IR ライバルベスト
+    /// (STRING_RIVAL=1 / NUMBER_RIVAL_*=271,275,276 / OPTION_COMPARE_RIVAL=624,625)。
+    pub rival: Option<SelectRivalSnapshot>,
+}
+
+/// 選曲カーソル譜面に対する IR ライバル (最上位 1 名) のベストスコア。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectRivalSnapshot {
+    pub display_name: String,
+    pub ex_score: u32,
+    pub max_combo: u32,
+    pub bp: u32,
 }
 
 impl Default for SelectSnapshot {
@@ -126,6 +140,8 @@ impl Default for SelectSnapshot {
             search_word: String::new(),
             search_word_alpha: 1.0,
             mouse_position: None,
+            ir: ResultIrSnapshot::default(),
+            rival: None,
         }
     }
 }
@@ -317,6 +333,76 @@ pub enum SelectRowKind {
     Config,
 }
 
+pub const IR_RANKING_ENTRY_SLOTS: usize = 10;
+pub const IR_RANKING_NAME_BYTES: usize = 64;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResultIrRankingName {
+    bytes: [u8; IR_RANKING_NAME_BYTES],
+    len: u8,
+}
+
+impl Default for ResultIrRankingName {
+    fn default() -> Self {
+        Self { bytes: [0; IR_RANKING_NAME_BYTES], len: 0 }
+    }
+}
+
+impl ResultIrRankingName {
+    pub fn from_display_name(name: &str) -> Self {
+        let mut len = name.len().min(IR_RANKING_NAME_BYTES);
+        while !name.is_char_boundary(len) {
+            len -= 1;
+        }
+        let mut bytes = [0; IR_RANKING_NAME_BYTES];
+        bytes[..len].copy_from_slice(&name.as_bytes()[..len]);
+        Self { bytes, len: len as u8 }
+    }
+
+    pub fn as_str(&self) -> &str {
+        std::str::from_utf8(&self.bytes[..self.len as usize]).unwrap_or("")
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ResultIrRankingEntrySnapshot {
+    pub rank: Option<i64>,
+    pub ex_score: Option<i64>,
+    pub player_name: ResultIrRankingName,
+}
+
+/// リザルト画面の IR ランキング表示状態。
+///
+/// beatoraja の `NUMBER_IR_*` / `OPTION_IR_*` skin property に対応する。
+/// IR 未設定なら `Offline` (beatoraja の STATE_OFFLINE と同じく値は非表示)。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ResultIrSnapshot {
+    pub state: ResultIrState,
+    /// 全体ランキングでの自分の順位 (NUMBER_IR_RANK=179)。
+    pub rank: Option<i64>,
+    /// ランキング対象の総プレイヤー数 (NUMBER_IR_TOTALPLAYER=180/200)。
+    pub total_player: Option<i64>,
+    /// 全プレイヤー中のクリア率 % (NUMBER_IR_CLEARRATE=181)。
+    pub clear_rate: Option<i64>,
+    /// 更新前の順位 (NUMBER_IR_PREVRANK=182)。未対応なら None。
+    pub previous_rank: Option<i64>,
+    /// 上位ランキング行 (STRING_RANKINGNAME1..10 / NUMBER_RANKING*_EXSCORE/INDEX)。
+    pub entries: [ResultIrRankingEntrySnapshot; IR_RANKING_ENTRY_SLOTS],
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ResultIrState {
+    /// IR 未設定 / 未接続。
+    #[default]
+    Offline,
+    /// 送信・ランキング取得中 (OPTION_IR_LOADING=601)。
+    Loading,
+    /// ランキング取得済み (OPTION_IR_LOADED=602)。
+    Loaded,
+    /// 取得失敗 (OPTION_IR_FAILED=604)。
+    Failed,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResultSnapshot {
     pub clear_type: ClearType,
@@ -377,6 +463,8 @@ pub struct ResultSnapshot {
     pub graph: crate::snapshot::ResultGraphSnapshot,
     /// 右下に常時表示するオーバーレイ文字列。
     pub overlay: OverlaySnapshot,
+    /// IR ランキング表示状態 (NUMBER_IR_* / OPTION_IR_*)。
+    pub ir: ResultIrSnapshot,
 }
 
 impl ResultSnapshot {
@@ -444,6 +532,7 @@ mod tests {
             play_level: String::new(),
             graph: crate::snapshot::ResultGraphSnapshot::default(),
             overlay: OverlaySnapshot::default(),
+            ir: ResultIrSnapshot::default(),
         };
 
         assert!(snapshot.is_full_combo());
@@ -502,6 +591,7 @@ mod tests {
             play_level: String::new(),
             graph: crate::snapshot::ResultGraphSnapshot::default(),
             overlay: OverlaySnapshot::default(),
+            ir: ResultIrSnapshot::default(),
         };
 
         assert!(!snapshot.is_full_combo());

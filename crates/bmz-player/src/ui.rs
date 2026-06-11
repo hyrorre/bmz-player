@@ -22,9 +22,10 @@ use crate::config::app_config::{
 };
 use crate::config::profile_config::{
     AssistOptionConfig, BgaExpandConfig, BgaModeConfig, FastSlowDisplayScope, GaugeAutoShiftConfig,
-    GaugeTypeConfig, HispeedModeConfig, IrProviderConfig, IrProviderRoleConfig, IrSendPolicyConfig,
-    JudgeAlgorithmConfig, LaneEffectConfig, ProfileConfig, RandomOptionConfig, ReplaySlotRule,
-    ScratchInputMode, SkinConfig, SkinHistoryEntryConfig, SkinOffsetConfig, TargetOptionConfig,
+    GaugeTypeConfig, HispeedModeConfig, IrCredentialStoreConfig, IrProviderConfig,
+    IrProviderRoleConfig, IrSendPolicyConfig, JudgeAlgorithmConfig, LaneEffectConfig,
+    ProfileConfig, RandomOptionConfig, ReplaySlotRule, ScratchInputMode, SkinConfig,
+    SkinHistoryEntryConfig, SkinOffsetConfig, TargetOptionConfig,
 };
 use crate::ln_policy::LnPolicySetting;
 use crate::practice_ui::{PracticePanelContext, build_practice_panel};
@@ -235,6 +236,114 @@ pub struct EguiLayer {
     score_import_error: String,
     /// 本体設定パネル: 出力デバイス選択用の列挙キャッシュ。
     audio_device_picker: AudioDevicePickerState,
+    /// プロファイル設定パネル: IR ログインフォームの状態。
+    ir_login: IrLoginUiState,
+}
+
+/// プロファイル設定パネルの IR ログインフォーム状態。
+///
+/// ログインはネットワーク I/O なので tokio タスクで実行し、
+/// 結果は channel 経由で次フレーム以降に反映する。
+#[derive(Default)]
+struct IrLoginUiState {
+    email: String,
+    password: String,
+    busy: bool,
+    /// (成功か, 表示メッセージ)
+    message: Option<(bool, String)>,
+    receiver: Option<std::sync::mpsc::Receiver<Result<IrLoginOutcome, String>>>,
+}
+
+/// ログインタスクから UI スレッドへ返す結果。
+struct IrLoginOutcome {
+    provider: String,
+    account_id: String,
+    display_name: String,
+}
+
+impl IrLoginUiState {
+    /// ログインタスクの完了を取り込み、成功時は provider 設定を更新する。
+    /// profile 設定が更新された (保存が必要な) 場合に true を返す。
+    fn poll(&mut self, profile: &mut ProfileConfig) -> bool {
+        let Some(receiver) = &self.receiver else {
+            return false;
+        };
+        let Ok(result) = receiver.try_recv() else {
+            return false;
+        };
+        self.receiver = None;
+        self.busy = false;
+        match result {
+            Ok(outcome) => {
+                self.password.clear();
+                self.message =
+                    Some((true, format!("{} としてログインしました", outcome.display_name)));
+                if let Some(entry) =
+                    profile.ir.providers.iter_mut().find(|entry| entry.provider == outcome.provider)
+                {
+                    entry.enabled = true;
+                    entry.account_id = outcome.account_id;
+                    entry.account_display_name = outcome.display_name;
+                    entry.last_login_at = Some(now_unix_seconds());
+                    if profile.ir.primary_provider.is_empty() {
+                        profile.ir.primary_provider = outcome.provider;
+                        entry.role = IrProviderRoleConfig::Primary;
+                    }
+                    return true;
+                }
+                false
+            }
+            Err(error) => {
+                self.message = Some((false, error));
+                false
+            }
+        }
+    }
+
+    /// ログインタスクを起動する。
+    fn start_login(
+        &mut self,
+        profile_root: std::path::PathBuf,
+        provider: String,
+        base_url: String,
+    ) {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        self.receiver = Some(receiver);
+        self.busy = true;
+        self.message = None;
+        let email = self.email.clone();
+        let password = self.password.clone();
+        tokio::spawn(async move {
+            let outcome = async {
+                let client = crate::ir::bmz_official::BmzOfficialIrClient::anonymous(&base_url)?;
+                let tokens = client.login(&email, &password).await?;
+                let display_name =
+                    tokens.player.display_name.clone().unwrap_or_else(|| email.clone());
+                crate::ir::credentials::save_credentials(
+                    &profile_root,
+                    &crate::ir::credentials::IrStoredCredentials {
+                        provider: provider.clone(),
+                        account_id: tokens.player.id.clone(),
+                        display_name: display_name.clone(),
+                        access_token: tokens.access_token,
+                        refresh_token: tokens.refresh_token,
+                        expires_at: tokens.expires_at,
+                    },
+                )?;
+                anyhow::Ok(IrLoginOutcome { provider, account_id: tokens.player.id, display_name })
+            }
+            .await
+            .map_err(|error| format!("{error:#}"));
+            let _ = sender.send(outcome);
+        });
+    }
+}
+
+fn now_unix_seconds() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 /// 設定パネルの出力デバイス選択 ComboBox 用キャッシュ。
@@ -277,6 +386,7 @@ impl EguiLayer {
             score_import_status: String::new(),
             score_import_error: String::new(),
             audio_device_picker: AudioDevicePickerState::default(),
+            ir_login: IrLoginUiState::default(),
         }
     }
 
@@ -329,6 +439,8 @@ impl EguiLayer {
         course_result: Option<&CourseResultSummary>,
         course_preview: Option<&SelectCourseRow>,
         mut practice: Option<&mut PracticePanelContext<'_>>,
+        mut result_ir: Option<&mut crate::screens::result_ir::ResultIrState>,
+        profile_root: &std::path::Path,
     ) -> EguiOutput {
         let raw_input = self.state.take_egui_input(window);
         let ctx = self.ctx.clone();
@@ -346,6 +458,7 @@ impl EguiLayer {
         let mut practice_start = false;
         let mut practice_leave = false;
         let visible_flag = &mut self.visible;
+        let ir_login = &mut self.ir_login;
         let full_output = ctx.run_ui(raw_input, |ui| {
             if let Some(practice_ctx) = practice.as_mut() {
                 let panel = build_practice_panel(ui.ctx(), practice_ctx);
@@ -354,6 +467,11 @@ impl EguiLayer {
             }
             if *visible_flag {
                 let ctx = ui.ctx();
+                // IR ランキングも egui 補助ウィンドウなので、他の egui
+                // ウィンドウと同じ F1 メニュー表示中だけ出す。
+                if let Some(state) = result_ir.as_mut() {
+                    build_result_ir_panel(ctx, state);
+                }
                 // Course info panels are developer/debug egui overlays, so keep
                 // them behind the same F1 menu visibility gate as the other
                 // egui windows.
@@ -397,6 +515,8 @@ impl EguiLayer {
                     show_profile_settings,
                     profile_config,
                     show_debug,
+                    ir_login,
+                    profile_root,
                 );
                 save_profile_config |= profile_settings_actions.save;
                 let skin_actions = build_skin_panel(
@@ -590,6 +710,116 @@ fn sized_panel_window<'open>(
 ///
 /// `finished_course` が `Some` のあいだ表示され続け、リザルト画面を抜けると
 /// `None` になって自動的に消える。最小実装として egui::Window を 1 枚出すだけ。
+/// リザルト画面の IR 送信状況とランキングを表示するオーバーレイ。
+fn build_result_ir_panel(
+    ctx: &egui::Context,
+    state: &mut crate::screens::result_ir::ResultIrState,
+) {
+    use crate::screens::result_ir::{IrSubmitState, RankingLoadState, ResultRankingTab};
+
+    let content_rect = ctx.content_rect();
+    let panel_width = 360.0_f32;
+    let pos = egui::pos2(content_rect.right() - panel_width - 16.0, 16.0);
+
+    egui::Window::new("IR ランキング")
+        .id(egui::Id::new("result_ir_overlay"))
+        .resizable(false)
+        .collapsible(true)
+        .movable(true)
+        .current_pos(pos)
+        .default_width(panel_width)
+        .show(ctx, |ui| {
+            match &state.submit {
+                IrSubmitState::Sending => {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label("スコア送信中...");
+                    });
+                }
+                IrSubmitState::Done { submitted, failed, message } => {
+                    if *failed > 0 {
+                        ui.colored_label(
+                            egui::Color32::LIGHT_RED,
+                            format!("送信失敗 {failed} 件 (成功 {submitted} 件)"),
+                        );
+                        if let Some(message) = message {
+                            ui.small(message.clone());
+                        }
+                    } else if *submitted > 0 {
+                        ui.colored_label(
+                            egui::Color32::LIGHT_GREEN,
+                            format!("スコア送信済み ({submitted} 件)"),
+                        );
+                    } else {
+                        ui.label("送信対象なし");
+                    }
+                }
+            }
+
+            ui.separator();
+            let mut selected_tab = None;
+            ui.horizontal(|ui| {
+                let global = state.active_tab == ResultRankingTab::Global;
+                let rivals = state.active_tab == ResultRankingTab::SelfAndRivals;
+                if ui.selectable_label(global, "全体").clicked() && !global {
+                    selected_tab = Some(ResultRankingTab::Global);
+                }
+                if ui.selectable_label(rivals, "ライバル").clicked() && !rivals {
+                    selected_tab = Some(ResultRankingTab::SelfAndRivals);
+                }
+            });
+            if let Some(tab) = selected_tab {
+                state.select_tab(tab);
+            }
+            // タブ未選択のまま NotRequested の場合 (prefetch OFF) も取得を開始する。
+            if matches!(state.active_state(), RankingLoadState::NotRequested) {
+                state.select_tab(state.active_tab);
+            }
+
+            match state.active_state() {
+                RankingLoadState::NotRequested | RankingLoadState::Loading => {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label("ランキング取得中...");
+                    });
+                }
+                RankingLoadState::Failed(error) => {
+                    ui.colored_label(egui::Color32::LIGHT_RED, "ランキング取得失敗");
+                    ui.small(error.clone());
+                }
+                RankingLoadState::Loaded(ranking) => {
+                    if ranking.ranking.entries.is_empty() {
+                        ui.label("この条件のスコアはまだありません");
+                    } else {
+                        egui::Grid::new("result_ir_ranking_grid")
+                            .num_columns(5)
+                            .striped(true)
+                            .show(ui, |ui| {
+                                ui.strong("#");
+                                ui.strong("プレイヤー");
+                                ui.strong("EX");
+                                ui.strong("クリア");
+                                ui.strong("BP");
+                                ui.end_row();
+                                for entry in &ranking.ranking.entries {
+                                    ui.monospace(entry.rank.to_string());
+                                    ui.label(&entry.player.display_name);
+                                    ui.monospace(entry.score.ex_score.to_string());
+                                    ui.label(&entry.score.clear);
+                                    ui.monospace(entry.score.min_bp.to_string());
+                                    ui.end_row();
+                                }
+                            });
+                        if let Some(own) = &ranking.ranking.self_summary {
+                            ui.separator();
+                            ui.label(format!("自分の順位: {} 位", own.rank));
+                        }
+                    }
+                }
+            }
+        });
+}
+
 fn build_course_result_panel(ctx: &egui::Context, summary: &CourseResultSummary) {
     let content_rect = ctx.content_rect();
     // Panel widened from 360px to 440px so the 6-column per-chart grid
@@ -1556,8 +1786,12 @@ fn build_profile_settings_panel(
     open: &mut bool,
     profile: &mut ProfileConfig,
     show_debug: &mut bool,
+    ir_login: &mut IrLoginUiState,
+    profile_root: &std::path::Path,
 ) -> ProfileSettingsPanelActions {
     let mut save_clicked = false;
+    // ログインタスクの完了を反映。provider 設定が更新されたら保存する。
+    save_clicked |= ir_login.poll(profile);
     sized_panel_window("プロファイル設定", ctx, open, 460.0, 560.0, egui::pos2(476.0, 320.0)).show(
         ctx,
         |ui| {
@@ -1723,6 +1957,7 @@ fn build_profile_settings_panel(
                         .show_ui(ui, |ui| {
                             for (value, label) in [
                                 (TargetOptionConfig::None, "NONE"),
+                                (TargetOptionConfig::Rival, "RIVAL"),
                                 (TargetOptionConfig::Max, "MAX"),
                                 (TargetOptionConfig::Aaa, "AAA"),
                                 (TargetOptionConfig::Aa, "AA"),
@@ -1901,6 +2136,23 @@ fn build_profile_settings_panel(
                         &mut profile.ir.prefetch_global_ranking_on_score_submit,
                         "スコア送信後に全体順位を取得",
                     );
+                    egui::ComboBox::from_label("秘密情報の保存先 (要再起動)")
+                        .selected_text(match profile.ir.credential_store {
+                            IrCredentialStoreConfig::File => "ファイル (プロファイル内)",
+                            IrCredentialStoreConfig::Os => "OS credential store",
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut profile.ir.credential_store,
+                                IrCredentialStoreConfig::File,
+                                "ファイル (プロファイル内)",
+                            );
+                            ui.selectable_value(
+                                &mut profile.ir.credential_store,
+                                IrCredentialStoreConfig::Os,
+                                "OS credential store",
+                            );
+                        });
                     ui.checkbox(
                         &mut profile.ir.prefetch_rival_ranking_on_score_submit,
                         "スコア送信後にライバル順位を取得",
@@ -1916,9 +2168,61 @@ fn build_profile_settings_panel(
                                     remove_index = Some(index);
                                 }
                             });
-                            ir_provider_text_row(ui, "ID", &mut provider.provider);
-                            ir_provider_text_row(ui, "表示名", &mut provider.account_display_name);
-                            ir_provider_text_row(ui, "アカウント ID", &mut provider.account_id);
+                            ir_provider_text_row(ui, "Base URL", &mut provider.base_url);
+                            ui.horizontal(|ui| {
+                                ui.label("メール");
+                                ui.text_edit_singleline(&mut ir_login.email);
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("パスワード");
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut ir_login.password)
+                                        .password(true),
+                                );
+                            });
+                            ui.horizontal(|ui| {
+                                let can_login = !ir_login.busy
+                                    && !provider.base_url.is_empty()
+                                    && !ir_login.email.is_empty()
+                                    && !ir_login.password.is_empty();
+                                if ui
+                                    .add_enabled(can_login, egui::Button::new("ログイン"))
+                                    .clicked()
+                                {
+                                    ir_login.start_login(
+                                        profile_root.to_path_buf(),
+                                        provider.provider.clone(),
+                                        provider.base_url.clone(),
+                                    );
+                                }
+                                if ir_login.busy {
+                                    ui.spinner();
+                                }
+                                if ui.button("ログアウト").clicked() {
+                                    match crate::ir::credentials::delete_credentials(
+                                        profile_root,
+                                        &provider.provider,
+                                    ) {
+                                        Ok(_) => {
+                                            provider.enabled = false;
+                                            ir_login.message =
+                                                Some((true, "ログアウトしました".to_string()));
+                                            save_clicked = true;
+                                        }
+                                        Err(error) => {
+                                            ir_login.message = Some((false, format!("{error:#}")));
+                                        }
+                                    }
+                                }
+                            });
+                            if let Some((ok, message)) = &ir_login.message {
+                                let color = if *ok {
+                                    egui::Color32::LIGHT_GREEN
+                                } else {
+                                    egui::Color32::LIGHT_RED
+                                };
+                                ui.colored_label(color, message.clone());
+                            }
                             egui::ComboBox::from_label("送信方針")
                                 .selected_text(ir_send_policy_label(provider.send_policy))
                                 .show_ui(ui, |ui| {
@@ -1964,6 +2268,7 @@ fn build_profile_settings_panel(
                     if ui.button("provider を追加").clicked() {
                         profile.ir.providers.push(IrProviderConfig {
                             provider: "bmz".to_string(),
+                            base_url: String::new(),
                             enabled: false,
                             account_display_name: String::new(),
                             account_id: String::new(),
@@ -2079,6 +2384,7 @@ fn random_label(value: RandomOptionConfig) -> &'static str {
 fn target_label(value: TargetOptionConfig) -> &'static str {
     match value {
         TargetOptionConfig::None => "NONE",
+        TargetOptionConfig::Rival => "RIVAL",
         TargetOptionConfig::Max => "MAX",
         TargetOptionConfig::Aaa => "AAA",
         TargetOptionConfig::Aa => "AA",

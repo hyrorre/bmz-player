@@ -1387,6 +1387,7 @@ fn plan_result(
             play_level: snapshot.play_level.as_str(),
             grade_diff: grade_diff.as_str(),
             table_level: snapshot.play_level.as_str(),
+            ir_ranking: snapshot.ir,
             ..SkinTextState::default()
         };
         let items =
@@ -1412,6 +1413,7 @@ fn plan_result(
         score_history_id: snapshot.score_history_id,
         replay_saved: snapshot.replay_saved,
         difficulty_name: &snapshot.difficulty_name,
+        ir: snapshot.ir,
         play_level: &snapshot.play_level,
         grade_diff: crate::skin::result_grade_diff_label(build_result_skin_draw_state(snapshot, 0))
             .unwrap_or_default(),
@@ -1533,6 +1535,7 @@ fn build_result_skin_draw_state(
         best_bp: snapshot.best_bp,
         result_bp: Some(snapshot.bp),
         result_cb: Some(snapshot.cb),
+        ir_ranking: snapshot.ir,
         previous_best_ex_score: snapshot.previous_best_ex_score,
         previous_best_clear_index: snapshot.previous_best_clear_type.map(|c| c as i64),
         previous_best_max_combo: snapshot.previous_best_max_combo,
@@ -1599,6 +1602,7 @@ struct ResultFallbackSummary<'a> {
     difficulty_name: &'a str,
     play_level: &'a str,
     grade_diff: String,
+    ir: crate::scene::ResultIrSnapshot,
 }
 
 fn plan_result_fallback(summary: ResultFallbackSummary<'_>) -> DrawPlan {
@@ -1617,6 +1621,7 @@ fn plan_result_fallback(summary: ResultFallbackSummary<'_>) -> DrawPlan {
         difficulty_name,
         play_level,
         grade_diff,
+        ir,
     } = summary;
     let mut commands = Vec::new();
     let text = TextRenderer;
@@ -1701,6 +1706,13 @@ fn plan_result_fallback(summary: ResultFallbackSummary<'_>) -> DrawPlan {
         if replay_saved { "REPLAY SAVED" } else { "REPLAY NONE" },
         BitmapTextStyle { x: 0.68, y: 0.675, cell: 0.005, color: Color::rgb(0.66, 0.78, 0.76) },
     );
+    if let Some(ir_label) = ir_ranking_label(&ir) {
+        text.push_text(
+            &mut commands,
+            &ir_label,
+            BitmapTextStyle { x: 0.68, y: 0.652, cell: 0.005, color: Color::rgb(0.78, 0.86, 0.7) },
+        );
+    }
     push_result_detail_panels(&text, &mut commands, judge_counts, fast_slow_counts, graph);
     text.push_text(
         &mut commands,
@@ -1709,6 +1721,21 @@ fn plan_result_fallback(summary: ResultFallbackSummary<'_>) -> DrawPlan {
     );
 
     DrawPlan { clear: Color::rgb(0.025, 0.02, 0.018), commands }
+}
+
+/// 組み込みフォールバックリザルトの IR 行。Offline では表示しない。
+fn ir_ranking_label(ir: &crate::scene::ResultIrSnapshot) -> Option<String> {
+    use crate::scene::ResultIrState;
+    match ir.state {
+        ResultIrState::Offline => None,
+        ResultIrState::Loading => Some("IR LOADING...".to_string()),
+        ResultIrState::Failed => Some("IR FAILED".to_string()),
+        ResultIrState::Loaded => match (ir.rank, ir.total_player) {
+            (Some(rank), Some(total)) => Some(format!("IR RANK {rank}/{total}")),
+            (Some(rank), None) => Some(format!("IR RANK {rank}")),
+            _ => Some("IR NO RECORD".to_string()),
+        },
+    }
 }
 
 fn push_result_detail_panels(
@@ -2916,6 +2943,7 @@ mod tests {
                 play_level: String::new(),
                 graph: crate::snapshot::ResultGraphSnapshot::default(),
                 overlay: crate::snapshot::OverlaySnapshot::default(),
+                ir: crate::scene::ResultIrSnapshot::default(),
             };
 
             let plan = DrawPlan::from_scene_with_skin(
@@ -3010,6 +3038,7 @@ mod tests {
                 ..ResultGraphSnapshot::default()
             },
             overlay: crate::snapshot::OverlaySnapshot::default(),
+            ir: crate::scene::ResultIrSnapshot::default(),
         };
 
         let plan = DrawPlan::from_scene_with_skin(
@@ -3189,6 +3218,7 @@ mod tests {
                 ..ResultGraphSnapshot::default()
             },
             overlay: crate::snapshot::OverlaySnapshot::default(),
+            ir: crate::scene::ResultIrSnapshot::default(),
         };
 
         let plan = DrawPlan::from_scene_with_skin(
@@ -3292,6 +3322,7 @@ mod tests {
                 ..ResultGraphSnapshot::default()
             },
             overlay: crate::snapshot::OverlaySnapshot::default(),
+            ir: crate::scene::ResultIrSnapshot::default(),
         };
 
         let plan = DrawPlan::from_scene_with_skin(
@@ -4200,6 +4231,7 @@ mod tests {
             difficulty_name: "",
             play_level: "",
             grade_diff: String::new(),
+            ir: crate::scene::ResultIrSnapshot::default(),
         });
 
         assert!(plan.commands.iter().any(|command| matches!(
@@ -4228,6 +4260,14 @@ mod tests {
             difficulty_name: "HYPER",
             play_level: "10",
             grade_diff: "AA+56".to_string(),
+            ir: crate::scene::ResultIrSnapshot {
+                state: crate::scene::ResultIrState::Loaded,
+                rank: Some(3),
+                total_player: Some(42),
+                clear_rate: None,
+                previous_rank: None,
+                ..Default::default()
+            },
         });
 
         assert!(plan.commands.iter().any(|command| matches!(
@@ -4241,6 +4281,10 @@ mod tests {
         assert!(plan.commands.iter().any(|command| matches!(
             command,
             DrawCommand::Text { text, .. } if text.contains("GRADE AA+56")
+        )));
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Text { text, .. } if text.contains("IR RANK 3/42")
         )));
         assert_eq!(format_percent(0.754), "75%");
     }
@@ -4295,6 +4339,7 @@ mod tests {
             difficulty_name: "HYPER",
             play_level: "10",
             grade_diff: "AA+56".to_string(),
+            ir: crate::scene::ResultIrSnapshot::default(),
         });
 
         for label in ["JUDGE DETAILS", "FAST/SLOW DETAILS", "TIMING DETAILS"] {

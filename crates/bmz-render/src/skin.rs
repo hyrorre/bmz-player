@@ -2031,6 +2031,14 @@ pub struct SkinDrawState {
     /// Result 画面で表示する今回 BP/CB。Failed では未処理ノーツを含む記録用値。
     pub result_bp: Option<u32>,
     pub result_cb: Option<u32>,
+    /// Result 画面の IR ランキング状態 (NUMBER_IR_* / OPTION_IR_*)。
+    pub ir_ranking: crate::scene::ResultIrSnapshot,
+    /// 選曲カーソル譜面の IR ライバルベスト EX (NUMBER_RIVAL_SCORE=271)。
+    pub rival_ex_score: Option<i64>,
+    /// 同 max combo (NUMBER_RIVAL_MAXCOMBO=275)。
+    pub rival_max_combo: Option<i64>,
+    /// 同 BP (NUMBER_RIVAL_MISSCOUNT=276)。
+    pub rival_bp: Option<i64>,
     /// Result update/draw ops 用の保存前ベスト。
     pub previous_best_ex_score: Option<u32>,
     pub previous_best_clear_index: Option<i64>,
@@ -2222,6 +2230,10 @@ impl Default for SkinDrawState {
             best_bp: None,
             result_bp: None,
             result_cb: None,
+            ir_ranking: crate::scene::ResultIrSnapshot::default(),
+            rival_ex_score: None,
+            rival_max_combo: None,
+            rival_bp: None,
             previous_best_ex_score: None,
             previous_best_clear_index: None,
             previous_best_max_combo: None,
@@ -2303,6 +2315,8 @@ impl DynamicTimerRuntime {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SkinTextState<'a> {
     pub title: &'a str,
+    /// IR ライバル名 (STRING_RIVAL=1)。未取得なら空。
+    pub rival: &'a str,
     pub subtitle: &'a str,
     pub artist: &'a str,
     pub subartist: &'a str,
@@ -2326,6 +2340,7 @@ pub struct SkinTextState<'a> {
     /// `1.0` keeps the skin-defined alpha unchanged; values < 1.0 are used for
     /// placeholder / inactive states (beatoraja `messageFontColor=GRAY` 相当).
     pub search_word_alpha: f32,
+    pub ir_ranking: crate::scene::ResultIrSnapshot,
 }
 
 impl<'a> Default for SkinTextState<'a> {
@@ -2349,7 +2364,9 @@ impl<'a> Default for SkinTextState<'a> {
             course_stage: None,
             course_titles: [""; 10],
             search_word: "",
+            rival: "",
             search_word_alpha: 1.0,
+            ir_ranking: crate::scene::ResultIrSnapshot::default(),
         }
     }
 }
@@ -3632,6 +3649,8 @@ impl SkinDocument {
                 .unwrap_or_default(),
             search_word: &snapshot.search_word,
             search_word_alpha: snapshot.search_word_alpha,
+            rival: snapshot.rival.as_ref().map(|rival| rival.display_name.as_str()).unwrap_or(""),
+            ir_ranking: snapshot.ir,
             ..SkinTextState::default()
         };
 
@@ -3834,6 +3853,10 @@ impl SkinDocument {
             select_chart_key_mode: selected_row.and_then(|row| row.chart_key_mode),
             mouse_x: mouse_position.map(|position| position.0),
             mouse_y: mouse_position.map(|position| position.1),
+            ir_ranking: snapshot.ir,
+            rival_ex_score: snapshot.rival.as_ref().map(|rival| i64::from(rival.ex_score)),
+            rival_max_combo: snapshot.rival.as_ref().map(|rival| i64::from(rival.max_combo)),
+            rival_bp: snapshot.rival.as_ref().map(|rival| i64::from(rival.bp)),
             ..SkinDrawState::default()
         };
         if let Some(runtime) = dynamic_timers {
@@ -7051,7 +7074,19 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool 
         42 => state.gauge_type <= 2,
         43 => state.gauge_type >= 3,
         1046 => matches!(state.gauge_type, 0 | 1 | 4 | 5 | 7 | 8),
-        601..=608 => false,
+        // OPTION_NOT_COMPARE_RIVAL / OPTION_COMPARE_RIVAL。
+        624 => state.rival_ex_score.is_none(),
+        625 => state.rival_ex_score.is_some(),
+        // OPTION_IR_LOADING / LOADED / NOPLAYER / FAILED (601..604)。
+        // BANNED / WAITING / ACCESSING / BUSY (605..608) は未対応で false。
+        601 => matches!(state.ir_ranking.state, crate::scene::ResultIrState::Loading),
+        602 => matches!(state.ir_ranking.state, crate::scene::ResultIrState::Loaded),
+        603 => {
+            matches!(state.ir_ranking.state, crate::scene::ResultIrState::Loaded)
+                && state.ir_ranking.total_player == Some(0)
+        }
+        604 => matches!(state.ir_ranking.state, crate::scene::ResultIrState::Failed),
+        605..=608 => false,
         // OPTION_DIFFICULTY0..5. 0 は UNKNOWN/OTHER、1..5 は BMS #DIFFICULTY。
         150 => state.difficulty <= 0 || state.difficulty > 5,
         151..=155 => state.difficulty == i64::from(op - 150),
@@ -8039,9 +8074,24 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         375 => state.average_timing_ms.map(timing_afterdot),
         376 => state.stddev_timing_ms.map(|value| value as i64),
         377 => state.stddev_timing_ms.map(|value| ((value.abs() * 100.0) as i64) % 100),
-        // IR numbers. BMZ does not have an IR backend yet, so mirror beatoraja's
-        // offline/no-ranking state by returning no value (Integer.MIN_VALUE).
-        179..=182 | 200..=242 => None,
+        // IR numbers (beatoraja NUMBER_IR_*)。Offline / 未取得時は
+        // beatoraja の Integer.MIN_VALUE と同じく値なしにする。
+        179 => state.ir_ranking.rank,
+        180 | 200 => state.ir_ranking.total_player,
+        181 => state.ir_ranking.clear_rate,
+        182 => state.ir_ranking.previous_rank,
+        226 => ir_total_clear_count(state.ir_ranking),
+        227 => state.ir_ranking.clear_rate,
+        241 => state.ir_ranking.clear_rate.map(|_| 0),
+        380..=389 => {
+            ir_ranking_entry(state.ir_ranking, ref_id - 380).and_then(|entry| entry.ex_score)
+        }
+        390..=399 => ir_ranking_entry(state.ir_ranking, ref_id - 390).and_then(|entry| entry.rank),
+        201..=242 => None,
+        // NUMBER_RIVAL_SCORE / MAXCOMBO / MISSCOUNT (IR ライバルベスト)。
+        271 => state.rival_ex_score,
+        275 => state.rival_max_combo,
+        276 => state.rival_bp,
         // ベストスコア / ターゲットスコア (DB から供給、未取得時は None)
         150 | 170 => projected_best_score_at_progress(state).map(|s| s as i64),
         121 | 151 => state.target_ex_score.map(|s| projected_score_at_progress(s, state) as i64),
@@ -8101,6 +8151,21 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         }
         _ => None,
     }
+}
+
+fn ir_ranking_entry(
+    ranking: crate::scene::ResultIrSnapshot,
+    index: i32,
+) -> Option<crate::scene::ResultIrRankingEntrySnapshot> {
+    ranking.entries.get(usize::try_from(index).ok()?).copied().filter(|entry| {
+        entry.rank.is_some() || entry.ex_score.is_some() || !entry.player_name.as_str().is_empty()
+    })
+}
+
+fn ir_total_clear_count(ranking: crate::scene::ResultIrSnapshot) -> Option<i64> {
+    let total = ranking.total_player?;
+    let clear_rate = ranking.clear_rate?;
+    Some((total * clear_rate + 50) / 100)
 }
 
 fn result_grade_diff_number(state: SkinDrawState) -> Option<i64> {
@@ -9711,6 +9776,7 @@ fn skin_state_text(text: &SkinTextDef, state: SkinTextState<'_>) -> String {
         return state.grade_diff.to_string();
     }
     match text.ref_id {
+        1 => state.rival.to_string(),
         3 => select_target_name(state.target),
         10 => state.title.to_string(),
         11 => state.subtitle.to_string(),
@@ -9721,6 +9787,9 @@ fn skin_state_text(text: &SkinTextDef, state: SkinTextState<'_>) -> String {
         16 => full_label(state.artist, state.subartist),
         17 => state.table_level.to_string(),
         30 => state.search_word.to_string(),
+        120..=129 => ir_ranking_entry(state.ir_ranking, text.ref_id - 120)
+            .map(|entry| entry.player_name.as_str().to_string())
+            .unwrap_or_default(),
         150..=159 => state.course_titles[(text.ref_id - 150) as usize].to_string(),
         // beatoraja StringPropertyFactory: 1001=tablename, 1002=tablelevel,
         // 1003=tablefull.  Rm-skin's combined table label is handled above by
@@ -9728,7 +9797,13 @@ fn skin_state_text(text: &SkinTextDef, state: SkinTextState<'_>) -> String {
         1001 => state.table_text_primary.to_string(),
         1002 => state.table_level.to_string(),
         1003 => state.table_text_fallback.to_string(),
-        1020 | 1021 => String::new(),
+        1020 | 1021 => {
+            if matches!(state.ir_ranking.state, crate::scene::ResultIrState::Offline) {
+                String::new()
+            } else {
+                "BMZ IR".to_string()
+            }
+        }
         200..=209 => select_target_name_by_offset(state.target, text.ref_id - 210),
         210..=219 => select_target_name_by_offset(state.target, text.ref_id - 209),
         1000 => state.current_folder.to_string(),
@@ -9736,9 +9811,20 @@ fn skin_state_text(text: &SkinTextDef, state: SkinTextState<'_>) -> String {
     }
 }
 
-const SELECT_TARGET_IDS: [&str; 9] = ["NONE", "MAX", "AAA", "AA", "A", "B", "C", "D", "E"];
-const SELECT_TARGET_NAMES: [&str; 9] =
-    ["NO TARGET", "MAX", "RANK AAA", "RANK AA", "RANK A", "RANK B", "RANK C", "RANK D", "RANK E"];
+const SELECT_TARGET_IDS: [&str; 10] =
+    ["NONE", "RIVAL", "MAX", "AAA", "AA", "A", "B", "C", "D", "E"];
+const SELECT_TARGET_NAMES: [&str; 10] = [
+    "NO TARGET",
+    "IR RIVAL",
+    "MAX",
+    "RANK AAA",
+    "RANK AA",
+    "RANK A",
+    "RANK B",
+    "RANK C",
+    "RANK D",
+    "RANK E",
+];
 
 fn select_target_name(target: &str) -> String {
     SELECT_TARGET_IDS
@@ -10535,14 +10621,15 @@ fn select_gauge_auto_shift_index(mode: &str) -> usize {
 
 fn select_target_index(target: &str) -> usize {
     match target {
-        "MAX" => 1,
-        "AAA" => 2,
-        "AA" => 3,
-        "A" => 4,
-        "B" => 5,
-        "C" => 6,
-        "D" => 7,
-        "E" => 8,
+        "RIVAL" => 1,
+        "MAX" => 2,
+        "AAA" => 3,
+        "AA" => 4,
+        "A" => 5,
+        "B" => 6,
+        "C" => 7,
+        "D" => 8,
+        "E" => 9,
         _ => 0,
     }
 }
@@ -18857,6 +18944,106 @@ mod tests {
     }
 
     #[test]
+    fn ir_skin_properties_map_loaded_ranking() {
+        let loaded = SkinDrawState {
+            ir_ranking: crate::scene::ResultIrSnapshot {
+                state: crate::scene::ResultIrState::Loaded,
+                rank: Some(3),
+                total_player: Some(42),
+                clear_rate: Some(85),
+                previous_rank: None,
+                entries: [
+                    crate::scene::ResultIrRankingEntrySnapshot {
+                        rank: Some(1),
+                        ex_score: Some(2000),
+                        player_name: crate::scene::ResultIrRankingName::from_display_name("Alice"),
+                    },
+                    crate::scene::ResultIrRankingEntrySnapshot {
+                        rank: Some(2),
+                        ex_score: Some(1900),
+                        player_name: crate::scene::ResultIrRankingName::from_display_name("Bob"),
+                    },
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                ],
+            },
+            ..SkinDrawState::default()
+        };
+        assert_eq!(skin_state_number(179, loaded), Some(3));
+        assert_eq!(skin_state_number(180, loaded), Some(42));
+        assert_eq!(skin_state_number(200, loaded), Some(42));
+        assert_eq!(skin_state_number(181, loaded), Some(85));
+        assert_eq!(skin_state_number(182, loaded), None);
+        assert_eq!(skin_state_number(226, loaded), Some(36));
+        assert_eq!(skin_state_number(227, loaded), Some(85));
+        assert_eq!(skin_state_number(241, loaded), Some(0));
+        assert_eq!(skin_state_number(380, loaded), Some(2000));
+        assert_eq!(skin_state_number(381, loaded), Some(1900));
+        assert_eq!(skin_state_number(390, loaded), Some(1));
+        assert_eq!(skin_state_number(391, loaded), Some(2));
+        assert_eq!(skin_state_number(382, loaded), None);
+        assert!(!test_skin_op(601, &[], loaded));
+        assert!(test_skin_op(602, &[], loaded));
+        assert!(!test_skin_op(603, &[], loaded));
+        assert!(!test_skin_op(604, &[], loaded));
+
+        let loading = SkinDrawState {
+            ir_ranking: crate::scene::ResultIrSnapshot {
+                state: crate::scene::ResultIrState::Loading,
+                ..Default::default()
+            },
+            ..SkinDrawState::default()
+        };
+        assert!(test_skin_op(601, &[], loading));
+        assert!(!test_skin_op(602, &[], loading));
+
+        let failed = SkinDrawState {
+            ir_ranking: crate::scene::ResultIrSnapshot {
+                state: crate::scene::ResultIrState::Failed,
+                ..Default::default()
+            },
+            ..SkinDrawState::default()
+        };
+        assert!(test_skin_op(604, &[], failed));
+
+        let no_player = SkinDrawState {
+            ir_ranking: crate::scene::ResultIrSnapshot {
+                state: crate::scene::ResultIrState::Loaded,
+                total_player: Some(0),
+                ..Default::default()
+            },
+            ..SkinDrawState::default()
+        };
+        assert!(test_skin_op(603, &[], no_player));
+    }
+
+    #[test]
+    fn rival_skin_properties_map_select_rival_best() {
+        let state = SkinDrawState {
+            rival_ex_score: Some(1500),
+            rival_max_combo: Some(700),
+            rival_bp: Some(12),
+            ..SkinDrawState::default()
+        };
+        assert_eq!(skin_state_number(271, state), Some(1500));
+        assert_eq!(skin_state_number(275, state), Some(700));
+        assert_eq!(skin_state_number(276, state), Some(12));
+        assert!(!test_skin_op(624, &[], state));
+        assert!(test_skin_op(625, &[], state));
+
+        let no_rival = SkinDrawState::default();
+        assert_eq!(skin_state_number(271, no_rival), None);
+        assert!(test_skin_op(624, &[], no_rival));
+        assert!(!test_skin_op(625, &[], no_rival));
+    }
+
+    #[test]
     fn ir_skin_properties_use_offline_defaults() {
         let state = SkinDrawState::default();
 
@@ -18866,7 +19053,7 @@ mod tests {
             assert!(!test_skin_op(op, &[], state), "IR option {op} should be false offline");
         }
 
-        for ref_id in [179, 180, 181, 182, 200, 201, 202, 220, 226, 227, 241, 242] {
+        for ref_id in [179, 180, 181, 182, 200, 201, 202, 220, 226, 227, 241, 242, 380, 390] {
             assert_eq!(skin_state_number(ref_id, state), None, "IR number {ref_id}");
         }
     }
@@ -19112,14 +19299,15 @@ mod tests {
     #[test]
     fn select_target_index_maps_fixed_targets() {
         assert_eq!(select_target_index("NONE"), 0);
-        assert_eq!(select_target_index("MAX"), 1);
-        assert_eq!(select_target_index("AAA"), 2);
-        assert_eq!(select_target_index("AA"), 3);
-        assert_eq!(select_target_index("A"), 4);
-        assert_eq!(select_target_index("B"), 5);
-        assert_eq!(select_target_index("C"), 6);
-        assert_eq!(select_target_index("D"), 7);
-        assert_eq!(select_target_index("E"), 8);
+        assert_eq!(select_target_index("RIVAL"), 1);
+        assert_eq!(select_target_index("MAX"), 2);
+        assert_eq!(select_target_index("AAA"), 3);
+        assert_eq!(select_target_index("AA"), 4);
+        assert_eq!(select_target_index("A"), 5);
+        assert_eq!(select_target_index("B"), 6);
+        assert_eq!(select_target_index("C"), 7);
+        assert_eq!(select_target_index("D"), 8);
+        assert_eq!(select_target_index("E"), 9);
     }
 
     #[test]
@@ -20588,6 +20776,26 @@ mod tests {
             subartist: "Feat. X",
             genre: "TRANCE",
             target: "AAA",
+            ir_ranking: crate::scene::ResultIrSnapshot {
+                state: crate::scene::ResultIrState::Loaded,
+                entries: [
+                    crate::scene::ResultIrRankingEntrySnapshot {
+                        rank: Some(1),
+                        ex_score: Some(2000),
+                        player_name: crate::scene::ResultIrRankingName::from_display_name("Alice"),
+                    },
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                    crate::scene::ResultIrRankingEntrySnapshot::default(),
+                ],
+                ..Default::default()
+            },
             course_titles: [
                 "Stage 1", "Stage 2", "Stage 3", "Stage 4", "Stage 5", "Stage 6", "Stage 7",
                 "Stage 8", "Stage 9", "Stage 10",
@@ -20621,12 +20829,15 @@ mod tests {
         // STRING_TARGETNAME_P1/N1 (209/210)
         assert_eq!(skin_state_text(&make_text(209), state), "MAX");
         assert_eq!(skin_state_text(&make_text(210), state), "RANK AA");
+        // STRING_RANKINGNAME1..10
+        assert_eq!(skin_state_text(&make_text(120), state), "Alice");
+        assert_eq!(skin_state_text(&make_text(121), state), "");
         // STRING_COURSE1_TITLE..10_TITLE (150..159)
         assert_eq!(skin_state_text(&make_text(150), state), "Stage 1");
         assert_eq!(skin_state_text(&make_text(159), state), "Stage 10");
-        // STRING_IR_NAME / STRING_IR_USERNAME: BMZ has no IR backend yet.
-        assert_eq!(skin_state_text(&make_text(1020), state), "");
-        assert_eq!(skin_state_text(&make_text(1021), state), "");
+        // STRING_IR_NAME / STRING_IR_USERNAME
+        assert_eq!(skin_state_text(&make_text(1020), state), "BMZ IR");
+        assert_eq!(skin_state_text(&make_text(1021), state), "BMZ IR");
         // Unknown ref → empty
         assert_eq!(skin_state_text(&make_text(99), state), "");
 

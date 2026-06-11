@@ -1,11 +1,9 @@
-import { serverSupabaseServiceRole, serverSupabaseUser } from '#supabase/server'
+import { serverSupabaseServiceRole } from '#supabase/server'
+import { requireIrUser } from '../../utils/auth'
 import type { Database } from '../../../shared/types/database.types'
 
 export default defineEventHandler(async (event) => {
-  const user = await serverSupabaseUser(event)
-  if (!user) {
-    throw createError({ statusCode: 401, statusMessage: 'Authentication required' })
-  }
+  const user = await requireIrUser(event)
 
   const db = serverSupabaseServiceRole<Database>(event)
   const { data, error } = await db

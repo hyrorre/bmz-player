@@ -56,6 +56,8 @@ pub struct PlayStartOptions {
     /// `CourseGaugeConstraint::Lr2/Keys5/Keys7/Keys9/Keys24` を解釈して設定。
     /// `None` なら `PlaySessionOptions` 側でチャート由来の値が使われる。
     pub course_gauge_property_override: Option<GaugeProperty>,
+    /// `TargetOption::Rival` 用。選曲時に IR から取得したライバルベスト EX。
+    pub rival_ex_score: Option<u32>,
 }
 
 pub struct StartedWinitPlaySession {
@@ -108,6 +110,7 @@ pub fn play_session_options_from_start(
         ln_mode_override: start_options.ln_mode_override,
         ln_policy_setting: Default::default(),
         gauge_property: start_options.course_gauge_property_override,
+        rival_ex_score: start_options.rival_ex_score,
     }
 }
 

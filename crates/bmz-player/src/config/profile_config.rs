@@ -165,6 +165,8 @@ pub enum RandomOptionConfig {
 pub enum TargetOptionConfig {
     #[default]
     None,
+    /// IR ライバルベストをターゲットにする。
+    Rival,
     Max,
     Aaa,
     Aa,
@@ -635,6 +637,10 @@ pub struct SkinOffsetConfig {
 pub struct IrConfig {
     #[serde(default)]
     pub primary_provider: String,
+    /// 秘密情報 (refresh token / device key) の保存先。
+    /// 開発時の Keychain 許可ダイアログを避けるため既定はファイル保存。
+    #[serde(default)]
+    pub credential_store: IrCredentialStoreConfig,
     #[serde(default)]
     pub providers: Vec<IrProviderConfig>,
     #[serde(default)]
@@ -643,9 +649,23 @@ pub struct IrConfig {
     pub prefetch_rival_ranking_on_score_submit: bool,
 }
 
+/// IR 秘密情報の保存先。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "PascalCase")]
+pub enum IrCredentialStoreConfig {
+    /// プロファイル配下の JSON ファイル (unix では 0600)。
+    #[default]
+    File,
+    /// OS credential store (Keychain / Credential Manager / Secret Service)。
+    Os,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IrProviderConfig {
     pub provider: String,
+    /// IR サーバーの base URL (例: `https://ir.example.com`)。
+    #[serde(default)]
+    pub base_url: String,
     #[serde(default)]
     pub enabled: bool,
     #[serde(default)]

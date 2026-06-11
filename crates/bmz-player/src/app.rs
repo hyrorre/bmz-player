@@ -161,9 +161,58 @@ pub async fn run_with_options(options: AppOptions) -> Result<()> {
         }
     }
 
+    spawn_ir_sync_worker(&boot);
+
     let mut app = WinitApp::new(boot, options, audio_runtime, system_audio, shutdown_requested)?;
     tracing::info!("starting winit event loop");
     event_loop.run_app(&mut app).context("winit event loop failed")
+}
+
+/// IR スコアジョブをバックグラウンドで定期送信する。
+///
+/// メインスレッドの `ScoreDatabase` とは別 connection を開く (score.db は WAL)。
+/// IR が未設定なら何もしない。
+fn spawn_ir_sync_worker(boot: &bootstrap::BootstrappedApp) {
+    let ir_config = boot.profile_config.ir.clone();
+    if !ir_config.providers.iter().any(|provider| provider.enabled && !provider.base_url.is_empty())
+    {
+        return;
+    }
+    let profile_root = boot.profile_paths.root_dir.clone();
+    let score_db_path = boot.profile_paths.score_db.clone();
+    tokio::spawn(async move {
+        loop {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            match crate::storage::score_db::ScoreDatabase::open(&score_db_path) {
+                Ok(mut score_db) => {
+                    match crate::ir::sync::sync_pending_ir_jobs(
+                        &mut score_db,
+                        &profile_root,
+                        &ir_config,
+                        now,
+                        20,
+                    )
+                    .await
+                    {
+                        Ok(report) if report.submitted > 0 || report.failed > 0 => {
+                            tracing::info!(
+                                submitted = report.submitted,
+                                failed = report.failed,
+                                "IR score sync finished"
+                            );
+                        }
+                        Ok(_) => {}
+                        Err(error) => tracing::warn!(%error, "IR score sync failed"),
+                    }
+                }
+                Err(error) => tracing::warn!(%error, "failed to open score db for IR sync"),
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        }
+    });
 }
 
 async fn fetch_configured_difficulty_tables(boot: &mut bootstrap::BootstrappedApp) {
@@ -227,6 +276,10 @@ struct WinitApp {
     /// 正常終了させ、cpal/ASIO ストリームの Drop(停止・後処理)を確実に走らせる。
     shutdown_requested: Arc<AtomicBool>,
     finished_play: Option<FinishedPlaySession>,
+    /// リザルト画面の IR 送信・ランキング表示状態。リザルト以外では None。
+    result_ir: Option<crate::screens::result_ir::ResultIrState>,
+    /// 選曲カーソル譜面の IR ランキングキャッシュ。
+    select_ir: crate::screens::select_ir::SelectIrRanking,
     /// 直近のプレイがオートプレイだったか。Result 画面の常時表示に使う。
     last_play_was_autoplay: bool,
     last_play_snapshot: Option<RenderSnapshot>,
@@ -781,9 +834,20 @@ struct PendingUploadResult {
 }
 
 enum DeferredBoot {
-    Chart { chart_id: i64, replay_slot: Option<u8> },
-    CourseReplay { course_id: i64 },
-    Course { course_id: i64 },
+    Chart {
+        chart_id: i64,
+        replay_slot: Option<u8>,
+    },
+    /// `--boot-replay-file <PATH>`: リプレイファイル直接指定の再生。
+    ReplayFile {
+        path: String,
+    },
+    CourseReplay {
+        course_id: i64,
+    },
+    Course {
+        course_id: i64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1011,6 +1075,7 @@ fn debug_boot_finished_play_session() -> FinishedPlaySession {
         replay_playback: false,
         arrange: ArrangeOption::Normal,
         applied_arrange: AppliedArrange::default(),
+        ln_policy: crate::ln_policy::LnScorePolicy::ForceLn,
     }
 }
 
@@ -1359,6 +1424,8 @@ impl WinitApp {
             audio_runtime,
             shutdown_requested,
             finished_play: None,
+            result_ir: None,
+            select_ir: crate::screens::select_ir::SelectIrRanking::default(),
             last_play_was_autoplay: false,
             last_play_snapshot: None,
             pending_decide: None,
@@ -1614,6 +1681,12 @@ impl WinitApp {
                     self.start_chart(chart_id);
                 }
             }
+            DeferredBoot::ReplayFile { path } => {
+                tracing::info!(%path, "booting replay from file");
+                if !self.try_start_replay_from_file(std::path::Path::new(&path)) {
+                    tracing::warn!(%path, "replay file boot failed; staying on select");
+                }
+            }
             DeferredBoot::CourseReplay { course_id } => {
                 match self.boot.library_db.latest_course_score_id(course_id) {
                     Ok(Some(course_score_id)) => {
@@ -1764,6 +1837,7 @@ impl WinitApp {
                 play_level: summary.play_level.clone(),
                 graph: summary.graph.clone(),
                 overlay: OverlaySnapshot::default(),
+                ir: self.result_ir.as_ref().map(|state| state.skin_snapshot()).unwrap_or_default(),
             }),
         };
         let overlay = self.build_overlay_snapshot();
@@ -1995,6 +2069,20 @@ impl WinitApp {
             search_word,
             search_word_alpha,
             mouse_position: self.cursor_position_normalized(),
+            ir: self
+                .select_ir
+                .snapshot_for(&self.boot.profile_config.ir, self.selected_chart_sha256()),
+            rival: self
+                .select_ir
+                .rival_for(&self.boot.profile_config.ir, self.selected_chart_sha256()),
+        }
+    }
+
+    /// 選曲カーソルが曲行のときの chart SHA256。フォルダ / コース行は None。
+    fn selected_chart_sha256(&self) -> Option<[u8; 32]> {
+        match self.select_items.get(self.selected_index)? {
+            SelectItem::Chart(row) => row.score_sha256(),
+            _ => None,
         }
     }
 
@@ -4990,6 +5078,16 @@ impl WinitApp {
                         );
                     }
 
+                    // IR コーススコア送信ジョブを enqueue する (IR 未設定なら no-op)。
+                    self.enqueue_ir_course_job(
+                        course_id,
+                        course_score_id,
+                        &course_result,
+                        last_finished.as_ref().map(|f| f.stored.device_type),
+                        &insert.gauge_type,
+                        played_at,
+                    );
+
                     // Update the four course replay slots that pass their
                     // configured rule.  Reuses the per-chart slot_rule_passes
                     // helper for identical semantics (Always overwrites
@@ -5045,6 +5143,112 @@ impl WinitApp {
             self.result_key7_held = false;
             self.result_scene_started_at = Instant::now();
             self.ensure_skin_ready(SkinKind::Result);
+        }
+    }
+
+    /// コース定義から IR 用の identity (charts sha256 + constraints) を解決する。
+    /// 未解決の譜面 (sha256 不明) があるコースは IR 送信対象外。
+    fn ir_course_definition(
+        &self,
+        course_id: i64,
+    ) -> Option<crate::ir::course_payload::IrCourseDefinition> {
+        let stored = self
+            .boot
+            .library_db
+            .list_courses()
+            .ok()?
+            .into_iter()
+            .find(|course| course.id == course_id)?;
+        let mut charts = Vec::with_capacity(stored.definition.entries.len());
+        for entry in &stored.definition.entries {
+            let sha = entry.sha256.clone().or_else(|| {
+                let md5 = entry.md5.as_ref()?;
+                let md5 = crate::storage::common::hex_to_hash::<16>(md5).ok()?;
+                let sha = self.boot.library_db.chart_sha256_by_md5(md5).ok().flatten()?;
+                Some(crate::storage::common::hash_to_hex(&sha))
+            })?;
+            charts.push(sha);
+        }
+        Some(crate::ir::course_payload::IrCourseDefinition {
+            charts,
+            constraints: serde_json::to_value(&stored.definition.constraints).ok()?,
+            title: stored.definition.title.clone(),
+            kind: match stored.definition.kind {
+                bmz_core::course::CourseKind::Dan => "dan".to_string(),
+                bmz_core::course::CourseKind::Course => "course".to_string(),
+            },
+        })
+    }
+
+    /// コーススコアの IR 送信ジョブを enqueue する。IR 未設定 / 定義未解決なら no-op。
+    #[allow(clippy::too_many_arguments)]
+    fn enqueue_ir_course_job(
+        &mut self,
+        course_id: i64,
+        course_score_id: i64,
+        course_result: &crate::screens::course_session::CourseResultSummary,
+        device_type: Option<bmz_core::input::InputDeviceKind>,
+        gauge: &str,
+        played_at: i64,
+    ) {
+        let enabled: Vec<_> = self
+            .boot
+            .profile_config
+            .ir
+            .providers
+            .iter()
+            .filter(|provider| provider.enabled && !provider.base_url.is_empty())
+            .cloned()
+            .collect();
+        if enabled.is_empty() {
+            return;
+        }
+        let Some(definition) = self.ir_course_definition(course_id) else {
+            tracing::info!(course_id, "course has unresolved charts; skipping IR submission");
+            return;
+        };
+        let ln_setting = serde_json::to_value(self.boot.profile_config.play.ln_mode_policy)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_string))
+            .unwrap_or_else(|| "AutoLn".to_string());
+        let payload = crate::ir::course_payload::build_course_submission(
+            &definition,
+            course_result,
+            &crate::ir::course_payload::IrCourseSubmissionContext {
+                played_at,
+                ln_policy_setting: ln_setting.clone(),
+                gauge: gauge.to_string(),
+                device_type: device_type.unwrap_or(bmz_core::input::InputDeviceKind::Keyboard),
+                idempotency_key: format!("bmz-course-{course_score_id}"),
+            },
+        );
+        let Ok(payload_json) = serde_json::to_string(&payload) else {
+            return;
+        };
+        let first_chart = definition
+            .charts
+            .first()
+            .and_then(|sha| crate::storage::common::hex_to_hash::<32>(sha).ok())
+            .unwrap_or([0; 32]);
+        let ln_policy = crate::ln_policy::score_ln_policy(
+            self.boot.profile_config.play.ln_mode_policy,
+            crate::ln_policy::ChartLnProfile::default(),
+        );
+        for provider in enabled {
+            if let Err(error) =
+                self.boot.score_db.enqueue_ir_score_job(&crate::storage::score_db::NewIrScoreJob {
+                    provider: provider.provider.clone(),
+                    account_id: provider.account_id.clone(),
+                    kind: crate::storage::score_db::IrJobKind::Course,
+                    local_score_id: course_score_id,
+                    chart_sha256: first_chart,
+                    ln_policy,
+                    payload_json: payload_json.clone(),
+                    now: played_at,
+                })
+            {
+                tracing::warn!(provider = provider.provider, %error, "failed to enqueue IR course job");
+            }
         }
     }
 
@@ -5581,8 +5785,60 @@ impl WinitApp {
             arrange: self.arrange_option,
             target: self.target_option,
             arrange_seed,
+            // TARGET: RIVAL 用。選曲時に IR から取得済みのライバルベスト EX。
+            rival_ex_score: self
+                .select_ir
+                .rival_for(&self.boot.profile_config.ir, self.selected_chart_sha256())
+                .map(|rival| rival.ex_score),
             ..Default::default()
         }
+    }
+
+    /// リプレイファイル (例: `bmz ir replay` でダウンロードした IR リプレイ) を
+    /// 直接指定して再生する。譜面はファイル内の chart_sha256 から library を引く。
+    fn try_start_replay_from_file(&mut self, path: &std::path::Path) -> bool {
+        let replay_file = match crate::storage::replay::load_replay(path) {
+            Ok(file) => file,
+            Err(error) => {
+                tracing::warn!(%error, path = %path.display(), "replay file load failed");
+                return false;
+            }
+        };
+        let Ok(sha) = crate::storage::common::hex_to_hash::<32>(&replay_file.chart_sha256) else {
+            tracing::warn!(sha = %replay_file.chart_sha256, "replay file has invalid chart sha256");
+            return false;
+        };
+        let Some(chart_id) = self.boot.library_db.chart_id_by_sha256(sha).ok().flatten() else {
+            tracing::warn!(
+                sha = %replay_file.chart_sha256,
+                "replay chart is not in the library; load the song first"
+            );
+            return false;
+        };
+        let player = bmz_gameplay::replay::ReplayPlayer {
+            events: replay_file.events.clone(),
+            next_index: 0,
+        };
+        let options = PlayStartOptions {
+            autoplay: false,
+            practice_mode: false,
+            replay_player: Some(player),
+            chart_zero_time: TimeUs(0),
+            gauge: Some(self.gauge_option),
+            gauge_auto_shift: self.gauge_auto_shift_option,
+            arrange: replay_file.arrange_option(),
+            target: self.target_option,
+            arrange_seed: replay_file.arrange_seed,
+            arrange_pattern: replay_file.lane_shuffle_pattern.clone(),
+            initial_gauge_value: None,
+            judge_constraint: bmz_core::course::CourseJudgeConstraint::Normal,
+            ln_mode_override: None,
+            course_gauge_override: None,
+            course_gauge_property_override: None,
+            rival_ex_score: None,
+        };
+        self.start_chart_with_options(chart_id, options);
+        true
     }
 
     fn try_start_replay_for_chart(&mut self, chart_id: i64, slot: u8) -> bool {
@@ -5637,6 +5893,7 @@ impl WinitApp {
             ln_mode_override: None,
             course_gauge_override: None,
             course_gauge_property_override: None,
+            rival_ex_score: None,
         };
         self.start_chart_with_options(chart_id, options);
         true
@@ -7001,6 +7258,61 @@ impl WinitApp {
                 max_end_time_ms: practice.max_end_time_ms,
             });
         }
+        // リザルト画面に入ったら IR 送信・ランキング取得タスクを起動し、
+        // 離れたら破棄する。コース最終リザルトは対象外 (チャート単位でないため)。
+        if matches!(scene_kind, AppSceneKind::Result) && self.finished_course.is_none() {
+            if self.result_ir.is_none()
+                && let Some(finished) = &self.finished_play
+            {
+                self.result_ir = crate::screens::result_ir::spawn_result_ir_task(
+                    self.boot.profile_paths.root_dir.clone(),
+                    self.boot.profile_paths.score_db.clone(),
+                    &self.boot.profile_config.ir,
+                    crate::storage::common::hash_to_hex(&finished.result.chart_sha256),
+                    finished.result.gauge_type.as_str().to_string(),
+                    finished.ln_policy,
+                );
+            }
+            if let Some(state) = &mut self.result_ir {
+                state.poll();
+            }
+        } else {
+            self.result_ir = None;
+        }
+        // 選曲画面ではカーソル譜面の IR ランキングをデバウンスつきで取得する
+        // (NUMBER_IR_RANK / NUMBER_IR_TOTALPLAYER / OPTION_IR_* 用)。
+        if matches!(scene_kind, AppSceneKind::Select) {
+            // `selected_chart_sha256()` は &self 全体を借りるため、practice ctx の
+            // &mut 借用と衝突しないようフィールド単位で参照する。
+            let (selected, ln_profile) = match self.select_items.get(self.selected_index) {
+                Some(SelectItem::Chart(row)) => (
+                    row.score_sha256(),
+                    // library 登録済みなら譜面の LN プロファイルから実プレイと
+                    // 同じスコア分離キーを解決する。未登録は default 近似。
+                    row.chart.as_ref().map(|chart| chart.ln_profile).unwrap_or_default(),
+                ),
+                _ => (None, crate::ln_policy::ChartLnProfile::default()),
+            };
+            let gauge =
+                crate::config::play::gauge_type_from_config(self.boot.profile_config.play.gauge)
+                    .as_str()
+                    .to_string();
+            let ln_policy = crate::ln_policy::score_ln_policy(
+                self.boot.profile_config.play.ln_mode_policy,
+                ln_profile,
+            );
+            let context = format!("{gauge}:{:?}", self.boot.profile_config.play.ln_mode_policy);
+            let ir_config = self.boot.profile_config.ir.clone();
+            self.select_ir.update(
+                &ir_config,
+                &self.boot.profile_paths.root_dir,
+                &context,
+                &gauge,
+                ln_policy,
+                selected,
+            );
+        }
+        let result_ir_panel = self.result_ir.as_mut();
         let Some(egui) = self.egui.as_mut() else {
             return;
         };
@@ -7014,6 +7326,8 @@ impl WinitApp {
             course_result.as_ref(),
             course_preview.as_ref(),
             practice_panel_ctx.as_mut(),
+            result_ir_panel,
+            &self.boot.profile_paths.root_dir,
         );
         self.renderer.set_egui_frame(output.frame);
         self.sync_realtime_profile_settings();
@@ -8523,6 +8837,9 @@ fn deferred_boot_action(boot_chart_id: Option<i64>, options: &AppOptions) -> Opt
     if let Some(chart_id) = boot_chart_id {
         return Some(DeferredBoot::Chart { chart_id, replay_slot: options.boot_replay_slot });
     }
+    if let Some(path) = options.boot_replay_file.clone() {
+        return Some(DeferredBoot::ReplayFile { path });
+    }
     if let Some(course_id) = options.boot_course_replay_id {
         return Some(DeferredBoot::CourseReplay { course_id });
     }
@@ -9180,6 +9497,7 @@ fn random_config_from_arrange(arrange: ArrangeOption) -> RandomOptionConfig {
 fn target_option_from_profile(target: TargetOptionConfig) -> TargetOption {
     match target {
         TargetOptionConfig::None => TargetOption::None,
+        TargetOptionConfig::Rival => TargetOption::Rival,
         TargetOptionConfig::Max => TargetOption::Max,
         TargetOptionConfig::Aaa => TargetOption::Aaa,
         TargetOptionConfig::Aa => TargetOption::Aa,
@@ -9194,6 +9512,7 @@ fn target_option_from_profile(target: TargetOptionConfig) -> TargetOption {
 fn target_config_from_option(target: TargetOption) -> TargetOptionConfig {
     match target {
         TargetOption::None => TargetOptionConfig::None,
+        TargetOption::Rival => TargetOptionConfig::Rival,
         TargetOption::Max => TargetOptionConfig::Max,
         TargetOption::Aaa => TargetOptionConfig::Aaa,
         TargetOption::Aa => TargetOptionConfig::Aa,

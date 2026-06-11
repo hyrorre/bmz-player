@@ -520,6 +520,20 @@ cargo run -p bmz-player -- --boot-play-sample --boot-replay 1 --smoke-exit-on-re
 
 bun / Nuxt を使用して、 Internet Ranking 機能の API と Frontend の作成中。
 
+スコア送信・ランキング取得・tamper evidence (Ed25519)・リプレイ
+アップロード/再生・ライバル・device key 管理まで一通り実装済み。
+実装済み API 一覧・設計からの差分・ローカル動作確認手順は
+`docs/ir.md` 冒頭の「実装状況」を参照。
+
+- クライアント側は `crates/bmz-player/src/ir/` (client / credentials /
+  device_key / sync / secret_store) と `ir_cmd.rs` (CLI)。
+  CLI: `bmz ir login|logout|status|ranking|sync|rivals|device-key|replay`。
+- リザルト/選曲のスキン連携は `screens/result_ir.rs` / `screens/select_ir.rs`、
+  beatoraja 互換 ID の解決は `bmz-render/src/skin.rs` (`NUMBER_IR_*` /
+  `OPTION_IR_*` / `NUMBER_RIVAL_*`)。
+- 秘密情報は `profile.toml` の `[ir] credential_store = "File" | "Os"` で
+  保存先を切替 (既定 File。Os は keyring 経由で OS credential store)。
+
 Nuxt 関連のアプリ構造は、bmz-player 本体と混同しないよう `bmz-ir-web/` 配下にまとめます。
 
 - `bmz-ir-web/app/` — Nuxt app root。`app.vue`, `pages`, `components`, `layouts`, `composables`, `plugins`, `assets` など。

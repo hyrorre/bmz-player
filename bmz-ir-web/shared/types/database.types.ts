@@ -34,6 +34,88 @@ export type Database = {
   }
   public: {
     Tables: {
+      best_course_scores: {
+        Row: {
+          bp: number
+          clear_rank: number
+          clear_type: string
+          course_clear: boolean
+          course_hash: string
+          course_score_id: string
+          device_type: string
+          ex_score: number
+          gauge: string
+          id: string
+          ln_policy: string
+          max_combo: number
+          played_at: string | null
+          player_id: string
+          scoring: string
+          server_received_at: string
+          verification: string
+        }
+        Insert: {
+          bp: number
+          clear_rank: number
+          clear_type: string
+          course_clear: boolean
+          course_hash: string
+          course_score_id: string
+          device_type: string
+          ex_score: number
+          gauge: string
+          id?: string
+          ln_policy: string
+          max_combo: number
+          played_at?: string | null
+          player_id: string
+          scoring: string
+          server_received_at: string
+          verification?: string
+        }
+        Update: {
+          bp?: number
+          clear_rank?: number
+          clear_type?: string
+          course_clear?: boolean
+          course_hash?: string
+          course_score_id?: string
+          device_type?: string
+          ex_score?: number
+          gauge?: string
+          id?: string
+          ln_policy?: string
+          max_combo?: number
+          played_at?: string | null
+          player_id?: string
+          scoring?: string
+          server_received_at?: string
+          verification?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "best_course_scores_course_hash_fkey"
+            columns: ["course_hash"]
+            isOneToOne: false
+            referencedRelation: "ir_courses"
+            referencedColumns: ["course_hash"]
+          },
+          {
+            foreignKeyName: "best_course_scores_course_score_id_fkey"
+            columns: ["course_score_id"]
+            isOneToOne: false
+            referencedRelation: "course_scores"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "best_course_scores_player_id_fkey"
+            columns: ["player_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       best_scores: {
         Row: {
           chart_sha256: string
@@ -230,6 +312,117 @@ export type Database = {
         }
         Relationships: []
       }
+      course_scores: {
+        Row: {
+          accepted: boolean
+          bp: number
+          clear_rank: number
+          clear_type: string
+          client_name: string
+          client_version: string
+          course_clear: boolean
+          course_failed: boolean
+          course_hash: string
+          device_type: string
+          entries: Json
+          evidence: Json
+          ex_score: number
+          gauge: string
+          gauge_value: number
+          id: string
+          idempotency_key: string
+          judges: Json
+          ln_policy: string
+          max_combo: number
+          max_ex_score: number
+          platform: string
+          played_at: string | null
+          played_entries: number
+          player_id: string
+          scoring: string
+          server_received_at: string
+          trophies: Json
+          verification: string
+        }
+        Insert: {
+          accepted?: boolean
+          bp: number
+          clear_rank: number
+          clear_type: string
+          client_name: string
+          client_version: string
+          course_clear: boolean
+          course_failed: boolean
+          course_hash: string
+          device_type: string
+          entries: Json
+          evidence?: Json
+          ex_score: number
+          gauge: string
+          gauge_value: number
+          id?: string
+          idempotency_key: string
+          judges: Json
+          ln_policy: string
+          max_combo: number
+          max_ex_score: number
+          platform: string
+          played_at?: string | null
+          played_entries: number
+          player_id: string
+          scoring: string
+          server_received_at?: string
+          trophies?: Json
+          verification?: string
+        }
+        Update: {
+          accepted?: boolean
+          bp?: number
+          clear_rank?: number
+          clear_type?: string
+          client_name?: string
+          client_version?: string
+          course_clear?: boolean
+          course_failed?: boolean
+          course_hash?: string
+          device_type?: string
+          entries?: Json
+          evidence?: Json
+          ex_score?: number
+          gauge?: string
+          gauge_value?: number
+          id?: string
+          idempotency_key?: string
+          judges?: Json
+          ln_policy?: string
+          max_combo?: number
+          max_ex_score?: number
+          platform?: string
+          played_at?: string | null
+          played_entries?: number
+          player_id?: string
+          scoring?: string
+          server_received_at?: string
+          trophies?: Json
+          verification?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "course_scores_course_hash_fkey"
+            columns: ["course_hash"]
+            isOneToOne: false
+            referencedRelation: "ir_courses"
+            referencedColumns: ["course_hash"]
+          },
+          {
+            foreignKeyName: "course_scores_player_id_fkey"
+            columns: ["player_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       device_keys: {
         Row: {
           algorithm: string
@@ -264,6 +457,42 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      ir_courses: {
+        Row: {
+          chart_count: number
+          charts: Json
+          constraints: Json
+          course_hash: string
+          created_at: string
+          kind: string
+          source_url: string | null
+          title: string
+          updated_at: string
+        }
+        Insert: {
+          chart_count: number
+          charts: Json
+          constraints?: Json
+          course_hash: string
+          created_at?: string
+          kind?: string
+          source_url?: string | null
+          title?: string
+          updated_at?: string
+        }
+        Update: {
+          chart_count?: number
+          charts?: Json
+          constraints?: Json
+          course_hash?: string
+          created_at?: string
+          kind?: string
+          source_url?: string | null
+          title?: string
+          updated_at?: string
+        }
+        Relationships: []
       }
       profiles: {
         Row: {
@@ -337,7 +566,7 @@ export type Database = {
           {
             foreignKeyName: "replay_objects_score_id_fkey"
             columns: ["score_id"]
-            isOneToOne: false
+            isOneToOne: true
             referencedRelation: "scores"
             referencedColumns: ["id"]
           },
@@ -661,3 +890,4 @@ export const Constants = {
     Enums: {},
   },
 } as const
+

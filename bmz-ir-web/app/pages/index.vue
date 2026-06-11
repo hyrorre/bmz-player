@@ -59,6 +59,25 @@ const user = useSupabaseUser()
             登録
           </UButton>
         </div>
+
+        <div class="flex flex-col gap-3 sm:flex-row">
+          <UButton color="neutral" icon="i-lucide-list-music" size="xl" to="/charts" variant="subtle">
+            譜面一覧・ランキング
+          </UButton>
+          <UButton color="neutral" icon="i-lucide-medal" size="xl" to="/courses" variant="subtle">
+            コース・段位
+          </UButton>
+          <UButton
+            v-if="user"
+            color="neutral"
+            icon="i-lucide-trophy"
+            size="xl"
+            :to="`/players/${user.sub ?? user.id}`"
+            variant="subtle"
+          >
+            自分のスコア
+          </UButton>
+        </div>
       </div>
     </section>
   </main>

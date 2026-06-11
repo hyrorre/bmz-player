@@ -1,4 +1,5 @@
-import type { SupabaseClient, User } from '@supabase/supabase-js'
+import { createHash, createPublicKey, verify as cryptoVerify } from 'node:crypto'
+import type { SupabaseClient } from '@supabase/supabase-js'
 import type {
   IrChartLnProfile,
   IrDeviceType,
@@ -9,13 +10,13 @@ import type {
   IrSubmitResponse,
   LnScorePolicy,
 } from '../../shared/types/ir'
-import type { Database } from '../../shared/types/database.types'
+import type { Database, Json } from '../../shared/types/database.types'
 
 const LN_POLICIES = new Set(['AutoLn', 'AutoCn', 'AutoHcn', 'ForceLn', 'ForceCn', 'ForceHcn'])
 const EFFECTIVE_LN_MODES = new Set(['ln', 'cn', 'hcn'])
 const DEVICE_TYPES = new Set(['keyboard', 'controller'])
 const RANKING_SCOPES = new Set(['global', 'self_and_rivals', 'rivals', 'self', 'around_self'])
-const CLEAR_RANK: Record<string, number> = {
+export const CLEAR_RANK: Record<string, number> = {
   no_play: 0,
   NoPlay: 0,
   failed: 1,
@@ -40,12 +41,16 @@ const CLEAR_RANK: Record<string, number> = {
 
 type Db = SupabaseClient<Database>
 
+export interface IrRequestUser {
+  id: string
+}
+
 export interface RankingQuery {
   scope: IrRankingScope
   limit: number
   offset: number
-  gauge: string
-  lnPolicy: LnScorePolicy
+  gauge?: string
+  lnPolicy?: LnScorePolicy
   scoring: 'bms_ex_score_v1'
 }
 
@@ -76,8 +81,10 @@ export function parseRankingQuery(query: Record<string, unknown>): RankingQuery 
   const scope = asScope(String(query.scope ?? 'global'))
   const limit = clampInteger(query.limit, 100, 1, 200)
   const offset = clampInteger(query.offset, 0, 0, 100_000)
-  const gauge = nonEmptyString(query.gauge, 'normal')
-  const lnPolicy = asLnPolicy(String(query.ln_policy ?? 'ForceLn'))
+  const gauge =
+    typeof query.gauge === 'string' && query.gauge ? normalizeGaugeName(query.gauge) : undefined
+  const lnPolicy =
+    typeof query.ln_policy === 'string' && query.ln_policy ? asLnPolicy(query.ln_policy) : undefined
   const scoring = String(query.scoring ?? 'bms_ex_score_v1')
   if (scoring !== 'bms_ex_score_v1') {
     throw new Error('unsupported scoring')
@@ -89,7 +96,7 @@ export function validateScoreSubmission(value: unknown): IrScoreSubmission {
   if (!isRecord(value)) {
     throw new Error('payload must be an object')
   }
-  const payload = value as IrScoreSubmission
+  const payload = value as unknown as IrScoreSubmission
   if (!isRecord(payload.client) || !isRecord(payload.chart) || !isRecord(payload.rule)) {
     throw new Error('client, chart, and rule are required')
   }
@@ -107,10 +114,21 @@ export function validateScoreSubmission(value: unknown): IrScoreSubmission {
   if (payload.rule.scoring !== 'bms_ex_score_v1') {
     throw new Error('rule.scoring is unsupported')
   }
-  for (const field of ['ex_score', 'max_combo', 'notes', 'pass_notes', 'min_bp', 'min_cb'] as const) {
+  for (const field of [
+    'ex_score',
+    'max_combo',
+    'notes',
+    'pass_notes',
+    'min_bp',
+    'min_cb',
+  ] as const) {
     requireNonNegativeInteger(payload.result[field], `result.${field}`)
   }
-  if (!payload.result.judges || !isRecord(payload.result.judges.fast) || !isRecord(payload.result.judges.slow)) {
+  if (
+    !payload.result.judges ||
+    !isRecord(payload.result.judges.fast) ||
+    !isRecord(payload.result.judges.slow)
+  ) {
     throw new Error('result.judges.fast and result.judges.slow are required')
   }
   for (const side of ['fast', 'slow'] as const) {
@@ -132,17 +150,18 @@ export function validateScoreSubmission(value: unknown): IrScoreSubmission {
 
 export async function submitScore(
   db: Db,
-  user: User,
+  user: IrRequestUser,
   payload: IrScoreSubmission,
   rankingScopes: IrRankingScope[],
   rankingLimit: number,
 ): Promise<IrSubmitResponse> {
   await upsertChart(db, payload)
 
-  const bp = judgeTotal(payload, 'bad') + judgeTotal(payload, 'poor') + judgeTotal(payload, 'empty_poor')
+  const bp =
+    judgeTotal(payload, 'bad') + judgeTotal(payload, 'poor') + judgeTotal(payload, 'empty_poor')
   const cb = judgeTotal(payload, 'bad') + judgeTotal(payload, 'poor')
   const clearRank = CLEAR_RANK[payload.result.clear] ?? 0
-  const verification = payload.evidence?.client_signature ? 'signed' : 'unverified'
+  const verification = await resolveVerification(db, user.id, payload)
   const deviceType = payload.play_options.device_type
 
   const scoreInsert = {
@@ -160,9 +179,9 @@ export async function submitScore(
     scoring: payload.rule.scoring,
     clear_type: payload.result.clear,
     clear_rank: clearRank,
-    played_at: payload.result.played_at ?? null,
+    played_at: playedAtIso(payload.result.played_at),
     duration_ms: payload.result.duration_ms ?? null,
-    judges: payload.result.judges,
+    judges: payload.result.judges as unknown as Json,
     ex_score: payload.result.ex_score,
     avg_judge_ms: payload.result.avg_judge_ms ?? null,
     max_combo: payload.result.max_combo,
@@ -173,11 +192,11 @@ export async function submitScore(
     min_bp: payload.result.min_bp,
     min_cb: payload.result.min_cb,
     device_type: deviceType,
-    play_options: payload.play_options ?? {},
+    play_options: (payload.play_options ?? {}) as Json,
     replay_hash: payload.replay?.hash ?? null,
     replay_format: payload.replay?.format ?? null,
     replay_upload_intent: payload.replay?.upload_intent ?? null,
-    evidence: payload.evidence ?? {},
+    evidence: (payload.evidence ?? {}) as Json,
     verification,
     idempotency_key: payload.idempotency_key,
   }
@@ -201,6 +220,9 @@ export async function submitScore(
     }
     score = existing
   }
+  if (!score) {
+    throw insertError ?? new Error('failed to insert score')
+  }
 
   const candidate: BestScoreCandidate = {
     ex_score: payload.result.ex_score,
@@ -210,7 +232,21 @@ export async function submitScore(
     min_cb: payload.result.min_cb,
     server_received_at: score.server_received_at,
   }
-  const { bestUpdated, updatedFields } = await upsertBestScore(db, user.id, payload, score.id, verification, candidate)
+  // 署名検証に失敗した投稿は改ざんの積極的な証拠なので、履歴 (scores) には
+  // verification=invalid で残すが best 更新の対象にはしない。
+  const { bestUpdated, updatedFields } =
+    verification === 'invalid'
+      ? {
+          bestUpdated: false,
+          updatedFields: {
+            ex_score: false,
+            clear: false,
+            max_combo: false,
+            min_bp: false,
+            min_cb: false,
+          },
+        }
+      : await upsertBestScore(db, user.id, payload, score.id, verification, candidate)
 
   const rankings: IrSubmitResponse['rankings'] = {}
   for (const scope of rankingScopes) {
@@ -227,7 +263,10 @@ export async function submitScore(
         }),
       }
     } catch (error) {
-      rankings[scope] = { succeeded: false, error: error instanceof Error ? error.message : 'ranking failed' }
+      rankings[scope] = {
+        succeeded: false,
+        error: error instanceof Error ? error.message : 'ranking failed',
+      }
     }
   }
 
@@ -241,18 +280,28 @@ export async function submitScore(
   }
 }
 
-export async function getRanking(db: Db, user: User | null, sha256: string, query: RankingQuery): Promise<IrRanking> {
+export async function getRanking(
+  db: Db,
+  user: IrRequestUser | null,
+  sha256: string,
+  query: RankingQuery,
+): Promise<IrRanking> {
   requireHex(sha256, 64, 'sha256')
-  const { data: rows, error } = await db
+  let rankingQuery = db
     .from('best_scores')
     .select(
       'player_id, chart_sha256, score_id, ex_score, clear_type, clear_rank, max_combo, min_bp, min_cb, device_type, gauge, ln_policy, effective_ln_mode, scoring, played_at, server_received_at, verification',
     )
     .eq('chart_sha256', sha256)
-    .eq('gauge', query.gauge)
-    .eq('ln_policy', query.lnPolicy)
     .eq('scoring', query.scoring)
     .order('ex_score', { ascending: false })
+  if (query.gauge) {
+    rankingQuery = rankingQuery.eq('gauge', query.gauge)
+  }
+  if (query.lnPolicy) {
+    rankingQuery = rankingQuery.eq('ln_policy', query.lnPolicy)
+  }
+  const { data: rows, error } = await rankingQuery
 
   if (error) {
     throw error
@@ -276,22 +325,34 @@ export async function getRanking(db: Db, user: User | null, sha256: string, quer
       scoring: query.scoring,
       gauge: query.gauge,
       ln_policy: query.lnPolicy,
-      effective_ln_mode: bestRows.find((row) => row.ln_policy === query.lnPolicy)?.effective_ln_mode,
+      effective_ln_mode: query.lnPolicy
+        ? bestRows.find((row) => row.ln_policy === query.lnPolicy)?.effective_ln_mode
+        : undefined,
     },
     ranking: {
       scope: query.scope,
       sort: 'ex_score_desc',
+      // 全プレイヤー中のクリア率 (%)。NoPlay/Failed を除いた割合。
+      clear_rate:
+        bestRows.length > 0
+          ? Math.round(
+              (bestRows.filter((row) => row.clear_rank > 1).length / bestRows.length) * 100,
+            )
+          : null,
       entries,
       self: selfEntry
         ? {
             rank: selfEntry.rank,
             score_id: selfEntry.score.score_id,
-            included_in_entries: entries.some((entry) => entry.score.score_id === selfEntry.score.score_id),
+            included_in_entries: entries.some(
+              (entry) => entry.score.score_id === selfEntry.score.score_id,
+            ),
           }
         : undefined,
       pagination: {
         limit: query.limit,
         offset: query.offset,
+        total: scoped.length,
         has_more: query.offset + query.limit < scoped.length,
       },
     },
@@ -392,7 +453,7 @@ async function upsertBestScore(
       ln_policy: payload.rule.ln_policy,
       effective_ln_mode: payload.rule.effective_ln_mode,
       scoring: payload.rule.scoring,
-      played_at: payload.result.played_at ?? null,
+      played_at: playedAtIso(payload.result.played_at),
       server_received_at: candidate.server_received_at,
       verification,
     },
@@ -408,7 +469,9 @@ function bestCandidateWins(next: BestScoreCandidate, current: BestScoreCandidate
   return (
     next.ex_score > current.ex_score ||
     (next.ex_score === current.ex_score && next.clear_rank > current.clear_rank) ||
-    (next.ex_score === current.ex_score && next.clear_rank === current.clear_rank && next.min_bp < current.min_bp) ||
+    (next.ex_score === current.ex_score &&
+      next.clear_rank === current.clear_rank &&
+      next.min_bp < current.min_bp) ||
     (next.ex_score === current.ex_score &&
       next.clear_rank === current.clear_rank &&
       next.min_bp === current.min_bp &&
@@ -434,7 +497,9 @@ function rankRows(
       a.min_bp - b.min_bp ||
       a.min_cb - b.min_cb ||
       b.max_combo - a.max_combo ||
-      String(a.played_at ?? a.server_received_at).localeCompare(String(b.played_at ?? b.server_received_at)),
+      String(a.played_at ?? a.server_received_at).localeCompare(
+        String(b.played_at ?? b.server_received_at),
+      ),
   )
   let previousEx: number | null = null
   let currentRank = 0
@@ -457,6 +522,8 @@ function rankRows(
         max_combo: row.max_combo,
         min_bp: row.min_bp,
         min_cb: row.min_cb,
+        gauge: row.gauge,
+        ln_policy: row.ln_policy,
         device_type: row.device_type,
         played_at: row.played_at,
         verification: row.verification,
@@ -469,9 +536,27 @@ function rankRows(
   })
 }
 
-function applyScope(entries: IrRankingEntry[], scope: IrRankingScope, selfId: string | null, rivalIds: Set<string>) {
-  if (scope === 'global' || scope === 'around_self') {
+/** around_self で自分の前後に表示する人数 (自分を含めて最大 2N+1 件)。 */
+const AROUND_SELF_WINDOW = 5
+
+function applyScope(
+  entries: IrRankingEntry[],
+  scope: IrRankingScope,
+  selfId: string | null,
+  rivalIds: Set<string>,
+) {
+  if (scope === 'global') {
     return entries
+  }
+  if (scope === 'around_self') {
+    // 自分の前後 AROUND_SELF_WINDOW 件ずつを切り出す。未ログイン /
+    // 自己スコアなしのときは global と同じ全件を返す。
+    const selfIndex = selfId ? entries.findIndex((entry) => entry.player.id === selfId) : -1
+    if (selfIndex < 0) {
+      return entries
+    }
+    const start = Math.max(0, selfIndex - AROUND_SELF_WINDOW)
+    return entries.slice(start, selfIndex + AROUND_SELF_WINDOW + 1)
   }
   if (scope === 'self') {
     return entries.filter((entry) => entry.player.id === selfId)
@@ -505,7 +590,106 @@ async function getPlayerNames(db: Db, playerIds: string[]): Promise<Map<string, 
   return new Map((data ?? []).map((row) => [row.id, row.display_name || 'Player']))
 }
 
-function judgeTotal(payload: IrScoreSubmission, key: keyof IrScoreSubmission['result']['judges']['fast']): number {
+/**
+ * tamper evidence の署名を検証する。
+ *
+ * - evidence なし / 署名なし → unverified
+ * - 署名ありで device key 不明・hash 不一致・署名不正 → invalid
+ * - 検証成功 → signed
+ *
+ * canonical form は「evidence を除いた payload をキー昇順 compact JSON 化」
+ * したもので、BMZ クライアント (serde_json の BTreeMap 出力) と一致させる。
+ */
+export async function resolveVerification(
+  db: Db,
+  playerId: string,
+  payload: { evidence?: Record<string, unknown> },
+): Promise<'unverified' | 'signed' | 'invalid'> {
+  const evidence = payload.evidence
+  if (!evidence || typeof evidence !== 'object') {
+    return 'unverified'
+  }
+  const signature = evidence.client_signature
+  const keyId = evidence.public_key_id
+  const claimedHash = evidence.canonical_hash
+  if (!signature) {
+    return 'unverified'
+  }
+  if (
+    typeof signature !== 'string' ||
+    typeof keyId !== 'string' ||
+    typeof claimedHash !== 'string'
+  ) {
+    return 'invalid'
+  }
+
+  const { data: key, error } = await db
+    .from('device_keys')
+    .select('public_key')
+    .eq('id', keyId)
+    .eq('player_id', playerId)
+    .is('revoked_at', null)
+    .maybeSingle()
+  if (error || !key) {
+    return 'invalid'
+  }
+
+  const hash = createHash('sha256').update(canonicalSubmissionJson(payload)).digest()
+  if (hash.toString('hex') !== claimedHash.toLowerCase()) {
+    return 'invalid'
+  }
+
+  try {
+    // Ed25519 raw public key (32 bytes) を SPKI DER に包んで検証する。
+    const der = Buffer.concat([
+      Buffer.from('302a300506032b6570032100', 'hex'),
+      Buffer.from(key.public_key, 'hex'),
+    ])
+    const publicKey = createPublicKey({ key: der, format: 'der', type: 'spki' })
+    const signatureBytes = Buffer.from(signature, 'base64url')
+    return cryptoVerify(null, hash, publicKey, signatureBytes) ? 'signed' : 'invalid'
+  } catch {
+    return 'invalid'
+  }
+}
+
+function canonicalSubmissionJson(payload: { evidence?: Record<string, unknown> }): string {
+  const clone: Record<string, unknown> = { ...payload }
+  delete clone.evidence
+  return stableStringify(clone)
+}
+
+/** キー昇順・空白なしの決定的 JSON 文字列化。 */
+export function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value)
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringify).join(',')}]`
+  }
+  const record = value as Record<string, unknown>
+  const parts = Object.keys(record)
+    .filter((key) => record[key] !== undefined)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`)
+  return `{${parts.join(',')}}`
+}
+
+/** played_at は ISO 文字列または unix 秒 (BMZ client) を受け付ける。 */
+function playedAtIso(value: unknown): string | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return new Date(value * 1000).toISOString()
+  }
+  if (typeof value === 'string' && value.length > 0) {
+    return value
+  }
+  return null
+}
+
+function judgeTotal(
+  payload: IrScoreSubmission,
+  key: keyof IrScoreSubmission['result']['judges']['fast'],
+): number {
   return payload.result.judges.fast[key] + payload.result.judges.slow[key]
 }
 
@@ -535,18 +719,54 @@ function nonEmptyString(value: unknown, fallback: string): string {
   return typeof value === 'string' && value.length > 0 ? value : fallback
 }
 
-function requireHex(value: unknown, length: number, label: string) {
+export function requireHex(value: unknown, length: number, label: string) {
   if (typeof value !== 'string' || !new RegExp(`^[0-9a-f]{${length}}$`).test(value)) {
     throw new Error(`${label} must be lowercase hex length ${length}`)
   }
 }
 
-function requireNonNegativeInteger(value: unknown, label: string) {
+export function requireNonNegativeInteger(value: unknown, label: string) {
   if (!Number.isInteger(value) || Number(value) < 0) {
     throw new Error(`${label} must be a non-negative integer`)
   }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function requireFiniteNumber(value: unknown, label: string) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new Error(`${label} must be a finite number`)
+  }
+}
+
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+export function normalizeGaugeName(value: string): string {
+  const normalized = value.trim().toLowerCase().replaceAll('-', '_')
+  switch (normalized) {
+    case 'assist_easy':
+    case 'a_easy':
+      return 'AssistEasy'
+    case 'easy':
+      return 'Easy'
+    case 'normal':
+      return 'Normal'
+    case 'hard':
+      return 'Hard'
+    case 'ex_hard':
+    case 'exhard':
+      return 'ExHard'
+    case 'hazard':
+      return 'Hazard'
+    case 'class':
+      return 'Class'
+    case 'ex_class':
+    case 'exclass':
+      return 'ExClass'
+    case 'ex_hard_class':
+    case 'exhardclass':
+      return 'ExHardClass'
+    default:
+      return value
+  }
 }

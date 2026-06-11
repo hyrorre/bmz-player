@@ -446,6 +446,7 @@ fn format_random(value: RandomOptionConfig) -> String {
 fn format_target(value: TargetOptionConfig) -> String {
     match value {
         TargetOptionConfig::None => "NONE".to_string(),
+        TargetOptionConfig::Rival => "RIVAL".to_string(),
         TargetOptionConfig::Max => "MAX".to_string(),
         TargetOptionConfig::Aaa => "AAA".to_string(),
         TargetOptionConfig::Aa => "AA".to_string(),
@@ -593,8 +594,9 @@ fn cycle_random(current: RandomOptionConfig, forward: bool) -> RandomOptionConfi
 }
 
 fn cycle_target(current: TargetOptionConfig, forward: bool) -> TargetOptionConfig {
-    const VALUES: [TargetOptionConfig; 9] = [
+    const VALUES: [TargetOptionConfig; 10] = [
         TargetOptionConfig::None,
+        TargetOptionConfig::Rival,
         TargetOptionConfig::Max,
         TargetOptionConfig::Aaa,
         TargetOptionConfig::Aa,

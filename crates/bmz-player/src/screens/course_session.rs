@@ -258,6 +258,7 @@ mod tests {
                         replay_playback: false,
                         arrange: crate::select_options::ArrangeOption::Normal,
                         applied_arrange: crate::screens::play_session::AppliedArrange::default(),
+                        ln_policy: crate::ln_policy::LnScorePolicy::ForceLn,
                     },
                 }
             })
@@ -370,6 +371,7 @@ mod tests {
                         replay_playback: false,
                         arrange: crate::select_options::ArrangeOption::Normal,
                         applied_arrange: crate::screens::play_session::AppliedArrange::default(),
+                        ln_policy: crate::ln_policy::LnScorePolicy::ForceLn,
                     },
                 }
             })

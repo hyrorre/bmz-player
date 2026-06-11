@@ -1,4 +1,9 @@
 pub mod bmz_official;
+pub mod course_payload;
+pub mod credentials;
+pub mod device_key;
 pub mod payload;
 pub mod provider;
+pub mod secret_store;
+pub mod sync;
 pub mod types;

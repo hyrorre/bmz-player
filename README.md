@@ -130,9 +130,3 @@ cargo run
 - [ ] More features like LR2
 - [ ] osu! mania charts
 - [ ] ModernChic skin support (too much code that relies on Java / libGDX)
-
-## IR (Internet Ranking)
-
-bun / Nuxt を使用して、 Internet Ranking 機能の API と Frontend の作成中。
-
-`bun dev` 等でエラーが起きる場合は `export TMPDIR=/tmp` を実行してみる。

@@ -157,3 +157,161 @@ pub struct IrSubmitResponse {
 pub fn default_ranking_limit() -> u32 {
     100
 }
+
+/// `/api/v1/auth/login` / `/api/v1/auth/refresh` のレスポンス。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrAuthTokens {
+    pub access_token: String,
+    pub refresh_token: String,
+    #[serde(default)]
+    pub expires_at: Option<i64>,
+    pub player: IrPlayerInfo,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrPlayerInfo {
+    pub id: String,
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default)]
+    pub display_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrMeResponse {
+    pub player: IrPlayerInfo,
+}
+
+/// `/api/v1/scores/{id}/replay/upload-url` のレスポンス。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrReplayUploadTarget {
+    pub upload_url: String,
+    #[serde(default)]
+    pub token: Option<String>,
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub required_hash: Option<String>,
+}
+
+/// `GET /api/v1/scores/{id}/replay` (ダウンロード URL 発行) のレスポンス。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrReplayDownloadTarget {
+    pub download_url: String,
+    #[serde(default)]
+    pub hash: Option<String>,
+    #[serde(default)]
+    pub format: Option<String>,
+    #[serde(default)]
+    pub size_bytes: Option<u64>,
+    #[serde(default)]
+    pub status: Option<String>,
+}
+
+/// `/api/v1/scores/{id}/replay/verify` のレスポンス。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrReplayVerifyResult {
+    pub status: String,
+    #[serde(default)]
+    pub size_bytes: Option<u64>,
+    #[serde(default)]
+    pub hash: Option<String>,
+}
+
+/// `/api/v1/rivals` のレスポンス。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrRivalsResponse {
+    #[serde(default)]
+    pub rivals: Vec<IrRivalEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrRivalEntry {
+    pub player_id: String,
+    #[serde(default)]
+    pub relation_type: String,
+    #[serde(default)]
+    pub profile: Option<IrRivalProfile>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrRivalProfile {
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub bio: Option<String>,
+}
+
+/// `/api/v1/charts/{sha256}/ranking` のレスポンス。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrRankingResult {
+    pub chart: IrRankingChartRef,
+    pub ranking: IrRankingBody,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrRankingChartRef {
+    pub sha256: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrRankingBody {
+    pub scope: IrRankingScope,
+    #[serde(default)]
+    pub entries: Vec<IrRankingEntry>,
+    /// 全プレイヤー中のクリア率 (%)。
+    #[serde(default)]
+    pub clear_rate: Option<u32>,
+    #[serde(rename = "self", default)]
+    pub self_summary: Option<IrRankingSelfRef>,
+    #[serde(default)]
+    pub pagination: Option<IrRankingPagination>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct IrRankingPagination {
+    #[serde(default)]
+    pub limit: u32,
+    #[serde(default)]
+    pub offset: u32,
+    /// scope 内の総エントリ数。
+    #[serde(default)]
+    pub total: Option<u32>,
+    #[serde(default)]
+    pub has_more: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrRankingSelfRef {
+    pub rank: u32,
+    #[serde(default)]
+    pub score_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrRankingEntry {
+    pub rank: u32,
+    #[serde(default)]
+    pub scope_rank: Option<u32>,
+    pub player: IrRankingPlayer,
+    pub score: IrRankingScore,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrRankingPlayer {
+    pub id: String,
+    pub display_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrRankingScore {
+    pub clear: String,
+    pub ex_score: u32,
+    pub max_combo: u32,
+    pub min_bp: u32,
+    pub min_cb: u32,
+    #[serde(default)]
+    pub device_type: Option<String>,
+    #[serde(default)]
+    pub played_at: Option<String>,
+}

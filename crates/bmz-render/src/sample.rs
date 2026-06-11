@@ -75,6 +75,8 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
         search_word: String::new(),
         search_word_alpha: 1.0,
         mouse_position: None,
+        ir: crate::scene::ResultIrSnapshot::default(),
+        rival: None,
     })
 }
 
@@ -213,6 +215,7 @@ pub fn sample_result_scene() -> AppSceneSnapshot {
         play_level: "7".to_string(),
         graph: crate::snapshot::ResultGraphSnapshot::default(),
         overlay: OverlaySnapshot::default(),
+        ir: crate::scene::ResultIrSnapshot::default(),
     })
 }
 

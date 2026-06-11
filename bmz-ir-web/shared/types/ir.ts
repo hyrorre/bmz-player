@@ -1,10 +1,4 @@
-export type LnScorePolicy =
-  | 'AutoLn'
-  | 'AutoCn'
-  | 'AutoHcn'
-  | 'ForceLn'
-  | 'ForceCn'
-  | 'ForceHcn'
+export type LnScorePolicy = 'AutoLn' | 'AutoCn' | 'AutoHcn' | 'ForceLn' | 'ForceCn' | 'ForceHcn'
 
 export type EffectiveLnMode = 'ln' | 'cn' | 'hcn'
 
@@ -69,7 +63,8 @@ export interface IrScoreSubmission {
   }
   result: {
     clear: string
-    played_at?: string | null
+    /** ISO 文字列、または BMZ client からの unix 秒。 */
+    played_at?: string | number | null
     duration_ms?: number | null
     judges: {
       fast: IrJudgeCounts
@@ -131,13 +126,15 @@ export interface IrRanking {
   }
   rule: {
     scoring: string
-    gauge: string
-    ln_policy: LnScorePolicy
+    gauge?: string
+    ln_policy?: LnScorePolicy
     effective_ln_mode?: EffectiveLnMode
   }
   ranking: {
     scope: IrRankingScope
     sort: 'ex_score_desc'
+    /** 全プレイヤー中のクリア率 (%)。スコアが無い場合は null。 */
+    clear_rate: number | null
     entries: IrRankingEntry[]
     self?: {
       rank: number
@@ -147,6 +144,8 @@ export interface IrRanking {
     pagination: {
       limit: number
       offset: number
+      /** scope 内の総エントリ数。 */
+      total: number
       has_more: boolean
     }
   }
@@ -166,6 +165,8 @@ export interface IrRankingEntry {
     max_combo: number
     min_bp: number
     min_cb: number
+    gauge: string
+    ln_policy: LnScorePolicy
     device_type: IrDeviceType
     played_at: string | null
     verification: IrVerificationStatus
