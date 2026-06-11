@@ -761,4 +761,45 @@ pub const SCORE_MIGRATIONS: &[Migration] = &[
             "ALTER TABLE score_best ADD COLUMN device_type TEXT NOT NULL DEFAULT 'keyboard';",
         ],
     },
+    Migration {
+        version: 11,
+        statements: &[
+            // IR ジョブにコーススコア用の kind ('score' | 'course') を追加する。
+            // 単曲とコースで local_score_id の空間が別 (score_history.id /
+            // course_scores.id) のため、UNIQUE に kind を含める必要があり
+            // テーブルを作り直す。
+            "CREATE TABLE ir_score_jobs_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                provider TEXT NOT NULL,
+                account_id TEXT NOT NULL DEFAULT '',
+                kind TEXT NOT NULL DEFAULT 'score',
+                local_score_id INTEGER NOT NULL,
+                chart_sha256 TEXT NOT NULL,
+                ln_policy TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                next_attempt_at INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                UNIQUE(provider, account_id, kind, local_score_id)
+            );",
+            "INSERT INTO ir_score_jobs_new (
+                id, provider, account_id, kind, local_score_id, chart_sha256,
+                ln_policy, payload_json, status, attempt_count, next_attempt_at,
+                last_error, created_at, updated_at
+            )
+            SELECT id, provider, account_id, 'score', local_score_id, chart_sha256,
+                ln_policy, payload_json, status, attempt_count, next_attempt_at,
+                last_error, created_at, updated_at
+            FROM ir_score_jobs;",
+            "DROP TABLE ir_score_jobs;",
+            "ALTER TABLE ir_score_jobs_new RENAME TO ir_score_jobs;",
+            "CREATE INDEX idx_ir_score_jobs_status_next_attempt
+                ON ir_score_jobs(status, next_attempt_at);",
+            "CREATE INDEX idx_ir_score_jobs_local_score
+                ON ir_score_jobs(local_score_id);",
+        ],
+    },
 ];

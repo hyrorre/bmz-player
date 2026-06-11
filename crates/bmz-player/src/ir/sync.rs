@@ -71,11 +71,25 @@ pub async fn sync_pending_ir_jobs(
             continue;
         };
         score_db.mark_ir_score_job_status(job.id, IrScoreJobStatus::Sending, now, "")?;
-        match submit_job_payload(profile_root, provider, &job.payload_json, now).await {
+        let submit_result = match job.kind {
+            crate::storage::score_db::IrJobKind::Score => {
+                submit_job_payload(profile_root, provider, &job.payload_json, now).await
+            }
+            crate::storage::score_db::IrJobKind::Course => {
+                submit_course_job_payload(profile_root, provider, &job.payload_json, now).await
+            }
+        };
+        match submit_result {
             Ok(response_json) => {
                 let remote_score_id = serde_json::from_str::<serde_json::Value>(&response_json)
                     .ok()
-                    .and_then(|value| value.get("score_id")?.as_str().map(str::to_string))
+                    .and_then(|value| {
+                        value
+                            .get("score_id")
+                            .or_else(|| value.get("course_score_id"))?
+                            .as_str()
+                            .map(str::to_string)
+                    })
                     .unwrap_or_default();
                 score_db.mark_ir_score_job_status(job.id, IrScoreJobStatus::Succeeded, now, "")?;
                 score_db.insert_ir_score_submission(&NewIrScoreSubmission {
@@ -92,6 +106,7 @@ pub async fn sync_pending_ir_jobs(
                 report.submitted += 1;
                 // replay upload はスコア送信成功の付随処理。失敗しても job は
                 // succeeded のまま (リプレイは best 更新に影響しない)。
+                // コースジョブにはリプレイ申告がないため no-op になる。
                 upload_replay_if_declared(
                     score_db,
                     profile_root,
@@ -194,6 +209,44 @@ async fn submit_job_payload(
     attach_evidence(profile_root, provider, &client, &mut payload).await;
     let options = IrSubmitOptions { ranking_scopes: Vec::new(), ranking_limit: 0 };
     let response = client.submit_score(&payload, &options).await?;
+    Ok(serde_json::to_string(&response)?)
+}
+
+/// コーススコアジョブの送信。署名 evidence を付けて
+/// `POST /api/v1/course-scores` へ送る。
+async fn submit_course_job_payload(
+    profile_root: &Path,
+    provider: &IrProviderConfig,
+    payload_json: &str,
+    now: i64,
+) -> Result<String> {
+    let mut payload: serde_json::Value =
+        serde_json::from_str(payload_json).context("failed to parse stored IR course payload")?;
+    let credentials =
+        ensure_fresh_credentials(profile_root, &provider.provider, &provider.base_url, now).await?;
+    let client = BmzOfficialIrClient::new(&provider.base_url, credentials.access_token)?;
+    let evidence = async {
+        let mut key =
+            super::device_key::load_or_create_device_key(profile_root, &provider.provider)?;
+        if key.key_id.is_none() {
+            let key_id = client.register_device_key(&key.public_key).await?;
+            key.key_id = Some(key_id);
+            super::device_key::save_device_key(profile_root, &key)?;
+        }
+        super::device_key::build_evidence_for_value(&key, &payload, "bmz-course-score-evidence-v1")
+    }
+    .await;
+    match evidence {
+        Ok(evidence) => {
+            if let Some(object) = payload.as_object_mut() {
+                object.insert("evidence".to_string(), serde_json::json!(evidence));
+            }
+        }
+        Err(error) => {
+            tracing::warn!(provider = provider.provider, %error, "failed to attach IR course evidence; sending unsigned");
+        }
+    }
+    let response = client.submit_course_score(&payload).await?;
     Ok(serde_json::to_string(&response)?)
 }
 

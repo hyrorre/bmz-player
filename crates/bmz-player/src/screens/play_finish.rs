@@ -227,6 +227,7 @@ fn enqueue_ir_jobs(
         match score_db.enqueue_ir_score_job(&NewIrScoreJob {
             provider: provider.provider.clone(),
             account_id: provider.account_id.clone(),
+            kind: crate::storage::score_db::IrJobKind::Score,
             local_score_id: stored.score_history_id,
             chart_sha256: result.chart_sha256,
             ln_policy: score_key.ln_policy,

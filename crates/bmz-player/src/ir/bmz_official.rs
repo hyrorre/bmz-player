@@ -232,6 +232,23 @@ impl BmzOfficialIrClient {
         Ok(())
     }
 
+    /// コーススコアを送信する (`POST /api/v1/course-scores`)。
+    pub async fn submit_course_score(
+        &self,
+        payload: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let url = self.base_url.join("/api/v1/course-scores")?;
+        let response = self
+            .http
+            .post(url)
+            .bearer_auth(self.require_token()?)
+            .json(payload)
+            .send()
+            .await
+            .context("failed to send BMZ IR course score submission")?;
+        decode_response(response, "BMZ IR course score submission").await
+    }
+
     pub async fn submit_score(
         &self,
         request: &IrScoreSubmission,

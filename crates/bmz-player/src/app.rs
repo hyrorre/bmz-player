@@ -5075,6 +5075,16 @@ impl WinitApp {
                         );
                     }
 
+                    // IR コーススコア送信ジョブを enqueue する (IR 未設定なら no-op)。
+                    self.enqueue_ir_course_job(
+                        course_id,
+                        course_score_id,
+                        &course_result,
+                        last_finished.as_ref().map(|f| f.stored.device_type),
+                        &insert.gauge_type,
+                        played_at,
+                    );
+
                     // Update the four course replay slots that pass their
                     // configured rule.  Reuses the per-chart slot_rule_passes
                     // helper for identical semantics (Always overwrites
@@ -5130,6 +5140,112 @@ impl WinitApp {
             self.result_key7_held = false;
             self.result_scene_started_at = Instant::now();
             self.ensure_skin_ready(SkinKind::Result);
+        }
+    }
+
+    /// コース定義から IR 用の identity (charts sha256 + constraints) を解決する。
+    /// 未解決の譜面 (sha256 不明) があるコースは IR 送信対象外。
+    fn ir_course_definition(
+        &self,
+        course_id: i64,
+    ) -> Option<crate::ir::course_payload::IrCourseDefinition> {
+        let stored = self
+            .boot
+            .library_db
+            .list_courses()
+            .ok()?
+            .into_iter()
+            .find(|course| course.id == course_id)?;
+        let mut charts = Vec::with_capacity(stored.definition.entries.len());
+        for entry in &stored.definition.entries {
+            let sha = entry.sha256.clone().or_else(|| {
+                let md5 = entry.md5.as_ref()?;
+                let md5 = crate::storage::common::hex_to_hash::<16>(md5).ok()?;
+                let sha = self.boot.library_db.chart_sha256_by_md5(md5).ok().flatten()?;
+                Some(crate::storage::common::hash_to_hex(&sha))
+            })?;
+            charts.push(sha);
+        }
+        Some(crate::ir::course_payload::IrCourseDefinition {
+            charts,
+            constraints: serde_json::to_value(&stored.definition.constraints).ok()?,
+            title: stored.definition.title.clone(),
+            kind: match stored.definition.kind {
+                bmz_core::course::CourseKind::Dan => "dan".to_string(),
+                bmz_core::course::CourseKind::Course => "course".to_string(),
+            },
+        })
+    }
+
+    /// コーススコアの IR 送信ジョブを enqueue する。IR 未設定 / 定義未解決なら no-op。
+    #[allow(clippy::too_many_arguments)]
+    fn enqueue_ir_course_job(
+        &mut self,
+        course_id: i64,
+        course_score_id: i64,
+        course_result: &crate::screens::course_session::CourseResultSummary,
+        device_type: Option<bmz_core::input::InputDeviceKind>,
+        gauge: &str,
+        played_at: i64,
+    ) {
+        let enabled: Vec<_> = self
+            .boot
+            .profile_config
+            .ir
+            .providers
+            .iter()
+            .filter(|provider| provider.enabled && !provider.base_url.is_empty())
+            .cloned()
+            .collect();
+        if enabled.is_empty() {
+            return;
+        }
+        let Some(definition) = self.ir_course_definition(course_id) else {
+            tracing::info!(course_id, "course has unresolved charts; skipping IR submission");
+            return;
+        };
+        let ln_setting = serde_json::to_value(self.boot.profile_config.play.ln_mode_policy)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_string))
+            .unwrap_or_else(|| "AutoLn".to_string());
+        let payload = crate::ir::course_payload::build_course_submission(
+            &definition,
+            course_result,
+            &crate::ir::course_payload::IrCourseSubmissionContext {
+                played_at,
+                ln_policy_setting: ln_setting.clone(),
+                gauge: gauge.to_string(),
+                device_type: device_type.unwrap_or(bmz_core::input::InputDeviceKind::Keyboard),
+                idempotency_key: format!("bmz-course-{course_score_id}"),
+            },
+        );
+        let Ok(payload_json) = serde_json::to_string(&payload) else {
+            return;
+        };
+        let first_chart = definition
+            .charts
+            .first()
+            .and_then(|sha| crate::storage::common::hex_to_hash::<32>(sha).ok())
+            .unwrap_or([0; 32]);
+        let ln_policy = crate::ln_policy::score_ln_policy(
+            self.boot.profile_config.play.ln_mode_policy,
+            crate::ln_policy::ChartLnProfile::default(),
+        );
+        for provider in enabled {
+            if let Err(error) =
+                self.boot.score_db.enqueue_ir_score_job(&crate::storage::score_db::NewIrScoreJob {
+                    provider: provider.provider.clone(),
+                    account_id: provider.account_id.clone(),
+                    kind: crate::storage::score_db::IrJobKind::Course,
+                    local_score_id: course_score_id,
+                    chart_sha256: first_chart,
+                    ln_policy,
+                    payload_json: payload_json.clone(),
+                    now: played_at,
+                })
+            {
+                tracing::warn!(provider = provider.provider, %error, "failed to enqueue IR course job");
+            }
         }
     }
 

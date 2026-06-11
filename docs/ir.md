@@ -33,9 +33,14 @@ POST   /api/v1/scores/{id}/replay/verify       # storage 実体の hash 検証
 GET    /api/v1/scores/{id}/replay              # 署名付きダウンロード URL (公開)
 ```
 
+```http
+POST   /api/v1/course-scores                   # コーススコア (kind=dan|course)
+GET    /api/v1/courses/{course_hash}           # registry + play_count
+GET    /api/v1/courses/{course_hash}/ranking   # global のみ
+```
+
 未実装: `PUT /api/v1/charts/{sha256}` (chart upsert は score submit 内で実施)、
-`DELETE /api/v1/rivals/{player_id}` (POST の action=remove で代替)、
-course score 系、tables 系。
+`DELETE /api/v1/rivals/{player_id}` (POST の action=remove で代替)、tables 系。
 
 ### クライアント (bmz-player)
 
@@ -75,12 +80,17 @@ course score 系、tables 系。
 5. **tamper evidence**: canonical form は「evidence を除いた payload を
    キー昇順 compact JSON 化」したもの (serde_json BTreeMap / サーバー側は
    stableStringify)。署名は Ed25519(secret, SHA256(canonical))。
+   署名対象の payload には float を含めない (Rust は `62.0`、JS は `62` と
+   出力して hash が一致しないため)。ゲージ値などは整数に丸めて送る。
 6. **ranking response**: `pagination.total` (scope 内総数) と
    `ranking.clear_rate` (%) を追加。`NUMBER_IR_PREVRANK(182)` は未対応 (None)。
 7. **played_at**: クライアントは unix 秒で送る。サーバーが ISO へ正規化して
    timestamptz に保存する。
-8. **course score / tables / around_self の専用実装**: 未着手。
-   `around_self` は現状 global と同じ扱い。
+8. **course score**: 実装済み (本節の API 一覧と §19 の DDL 参照)。
+   コース終了時に `ir_score_jobs` (kind=course) へ enqueue し、
+   evidence schema は `bmz-course-score-evidence-v1`。
+   **tables / around_self の専用実装**は未着手
+   (`around_self` は現状 global と同じ扱い)。
 
 ### 動作確認の手順 (ローカル)
 

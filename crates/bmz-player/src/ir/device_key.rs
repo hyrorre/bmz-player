@@ -83,14 +83,24 @@ pub fn build_evidence(
     key: &StoredDeviceKey,
     payload: &super::types::IrScoreSubmission,
 ) -> Result<std::collections::BTreeMap<String, serde_json::Value>> {
-    let canonical = canonical_submission_json(payload)?;
+    build_evidence_for_value(key, &serde_json::to_value(payload)?, EVIDENCE_SCHEMA)
+}
+
+/// 任意の payload JSON (コーススコア等) 向けの evidence。`schema` で
+/// `bmz-score-evidence-v1` / `bmz-course-score-evidence-v1` を切り替える。
+pub fn build_evidence_for_value(
+    key: &StoredDeviceKey,
+    payload: &serde_json::Value,
+    schema: &str,
+) -> Result<std::collections::BTreeMap<String, serde_json::Value>> {
+    let canonical = canonical_value_json(payload);
     let canonical_hash = Sha256::digest(canonical.as_bytes());
     let secret: [u8; 32] = decode_hex_32(&key.private_key)?;
     let signing = SigningKey::from_bytes(&secret);
     let signature = signing.sign(&canonical_hash);
 
     let mut evidence = std::collections::BTreeMap::new();
-    evidence.insert("schema".to_string(), serde_json::json!(EVIDENCE_SCHEMA));
+    evidence.insert("schema".to_string(), serde_json::json!(schema));
     evidence.insert("canonical_hash".to_string(), serde_json::json!(hash_to_hex(&canonical_hash)));
     evidence.insert(
         "client_signature".to_string(),
@@ -105,11 +115,15 @@ pub fn build_evidence(
 /// `evidence` を除いた payload の canonical JSON。
 /// serde_json は preserve_order 無効ビルドなので object キーは昇順になる。
 pub fn canonical_submission_json(payload: &super::types::IrScoreSubmission) -> Result<String> {
-    let mut value = serde_json::to_value(payload)?;
+    Ok(canonical_value_json(&serde_json::to_value(payload)?))
+}
+
+fn canonical_value_json(payload: &serde_json::Value) -> String {
+    let mut value = payload.clone();
     if let Some(object) = value.as_object_mut() {
         object.remove("evidence");
     }
-    Ok(serde_json::to_string(&value)?)
+    serde_json::to_string(&value).unwrap_or_default()
 }
 
 fn decode_hex_32(hex: &str) -> Result<[u8; 32]> {

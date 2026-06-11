@@ -16,7 +16,7 @@ const LN_POLICIES = new Set(['AutoLn', 'AutoCn', 'AutoHcn', 'ForceLn', 'ForceCn'
 const EFFECTIVE_LN_MODES = new Set(['ln', 'cn', 'hcn'])
 const DEVICE_TYPES = new Set(['keyboard', 'controller'])
 const RANKING_SCOPES = new Set(['global', 'self_and_rivals', 'rivals', 'self', 'around_self'])
-const CLEAR_RANK: Record<string, number> = {
+export const CLEAR_RANK: Record<string, number> = {
   no_play: 0,
   NoPlay: 0,
   failed: 1,
@@ -548,10 +548,10 @@ async function getPlayerNames(db: Db, playerIds: string[]): Promise<Map<string, 
  * canonical form は「evidence を除いた payload をキー昇順 compact JSON 化」
  * したもので、BMZ クライアント (serde_json の BTreeMap 出力) と一致させる。
  */
-async function resolveVerification(
+export async function resolveVerification(
   db: Db,
   playerId: string,
-  payload: IrScoreSubmission,
+  payload: { evidence?: Record<string, unknown> },
 ): Promise<'unverified' | 'signed' | 'invalid'> {
   const evidence = payload.evidence
   if (!evidence || typeof evidence !== 'object') {
@@ -597,14 +597,14 @@ async function resolveVerification(
   }
 }
 
-function canonicalSubmissionJson(payload: IrScoreSubmission): string {
+function canonicalSubmissionJson(payload: { evidence?: Record<string, unknown> }): string {
   const clone: Record<string, unknown> = { ...payload }
   delete clone.evidence
   return stableStringify(clone)
 }
 
 /** キー昇順・空白なしの決定的 JSON 文字列化。 */
-function stableStringify(value: unknown): string {
+export function stableStringify(value: unknown): string {
   if (value === null || typeof value !== 'object') {
     return JSON.stringify(value)
   }
@@ -660,18 +660,18 @@ function nonEmptyString(value: unknown, fallback: string): string {
   return typeof value === 'string' && value.length > 0 ? value : fallback
 }
 
-function requireHex(value: unknown, length: number, label: string) {
+export function requireHex(value: unknown, length: number, label: string) {
   if (typeof value !== 'string' || !new RegExp(`^[0-9a-f]{${length}}$`).test(value)) {
     throw new Error(`${label} must be lowercase hex length ${length}`)
   }
 }
 
-function requireNonNegativeInteger(value: unknown, label: string) {
+export function requireNonNegativeInteger(value: unknown, label: string) {
   if (!Number.isInteger(value) || Number(value) < 0) {
     throw new Error(`${label} must be a non-negative integer`)
   }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }

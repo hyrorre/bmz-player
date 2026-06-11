@@ -206,6 +206,26 @@ pub enum IrScoreJobStatus {
     Failed,
 }
 
+/// IR ジョブの種別。単曲スコアかコーススコアか。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IrJobKind {
+    Score,
+    Course,
+}
+
+impl IrJobKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Score => "score",
+            Self::Course => "course",
+        }
+    }
+
+    pub fn from_str_or_score(value: &str) -> Self {
+        if value == "course" { Self::Course } else { Self::Score }
+    }
+}
+
 impl IrScoreJobStatus {
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -222,6 +242,7 @@ pub struct IrScoreJobRecord {
     pub id: i64,
     pub provider: String,
     pub account_id: String,
+    pub kind: IrJobKind,
     pub local_score_id: i64,
     pub chart_sha256: [u8; 32],
     pub ln_policy: LnScorePolicy,
@@ -238,6 +259,7 @@ pub struct IrScoreJobRecord {
 pub struct NewIrScoreJob {
     pub provider: String,
     pub account_id: String,
+    pub kind: IrJobKind,
     pub local_score_id: i64,
     pub chart_sha256: [u8; 32],
     pub ln_policy: LnScorePolicy,
@@ -530,11 +552,11 @@ impl ScoreDatabase {
     pub fn enqueue_ir_score_job(&mut self, job: &NewIrScoreJob) -> Result<i64> {
         self.conn.execute(
             "INSERT INTO ir_score_jobs (
-                provider, account_id, local_score_id, chart_sha256, ln_policy,
+                provider, account_id, kind, local_score_id, chart_sha256, ln_policy,
                 payload_json, status, attempt_count, next_attempt_at, last_error,
                 created_at, updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', 0, ?7, '', ?7, ?7)
-            ON CONFLICT(provider, account_id, local_score_id) DO UPDATE SET
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending', 0, ?8, '', ?8, ?8)
+            ON CONFLICT(provider, account_id, kind, local_score_id) DO UPDATE SET
                 payload_json = excluded.payload_json,
                 status = 'pending',
                 next_attempt_at = excluded.next_attempt_at,
@@ -543,6 +565,7 @@ impl ScoreDatabase {
             params![
                 job.provider,
                 job.account_id,
+                job.kind.as_str(),
                 job.local_score_id,
                 hash_to_hex(&job.chart_sha256),
                 job.ln_policy.as_str(),
@@ -552,8 +575,8 @@ impl ScoreDatabase {
         )?;
         let id = self.conn.query_row(
             "SELECT id FROM ir_score_jobs
-             WHERE provider = ?1 AND account_id = ?2 AND local_score_id = ?3",
-            params![job.provider, job.account_id, job.local_score_id],
+             WHERE provider = ?1 AND account_id = ?2 AND kind = ?3 AND local_score_id = ?4",
+            params![job.provider, job.account_id, job.kind.as_str(), job.local_score_id],
             |row| row.get::<_, i64>(0),
         )?;
         Ok(id)
@@ -563,7 +586,7 @@ impl ScoreDatabase {
         let mut stmt = self.conn.prepare(
             "SELECT id, provider, account_id, local_score_id, chart_sha256, ln_policy,
                 payload_json, status, attempt_count, next_attempt_at, last_error,
-                created_at, updated_at
+                created_at, updated_at, kind
              FROM ir_score_jobs
              WHERE status IN ('pending', 'failed') AND next_attempt_at <= ?1
              ORDER BY next_attempt_at ASC, id ASC
@@ -768,10 +791,12 @@ fn replay_slot_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Repl
 
 fn ir_score_job_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<IrScoreJobRecord> {
     let chart_sha256: String = row.get(4)?;
+    let kind: String = row.get(13)?;
     Ok(IrScoreJobRecord {
         id: row.get(0)?,
         provider: row.get(1)?,
         account_id: row.get(2)?,
+        kind: IrJobKind::from_str_or_score(&kind),
         local_score_id: row.get(3)?,
         chart_sha256: hex_to_hash(&chart_sha256)?,
         ln_policy: ln_policy_from_row(row, 5)?,
@@ -2072,6 +2097,7 @@ mod tests {
         let job = NewIrScoreJob {
             provider: "bmz-official".to_string(),
             account_id: "account-1".to_string(),
+            kind: IrJobKind::Score,
             local_score_id,
             chart_sha256: [7; 32],
             ln_policy: LnScorePolicy::ForceLn,
@@ -2120,6 +2146,7 @@ mod tests {
             .enqueue_ir_score_job(&NewIrScoreJob {
                 provider: "bmz-official".to_string(),
                 account_id: "account-1".to_string(),
+                kind: IrJobKind::Score,
                 local_score_id,
                 chart_sha256: [7; 32],
                 ln_policy: LnScorePolicy::ForceLn,
