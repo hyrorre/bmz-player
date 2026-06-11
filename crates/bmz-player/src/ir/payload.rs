@@ -9,9 +9,9 @@ use crate::storage::common::hash_to_hex;
 use crate::storage::score_db::encode_beatoraja_ghost;
 
 use super::types::{
-    IrChartBpm, IrChartFeatures, IrChartLnProfile, IrChartNotes, IrChartPayload, IrClientInfo,
-    IrEffectiveLnMode, IrJudgePayload, IrJudgeSidePayload, IrResultPayload, IrRulePayload,
-    IrScoreSubmission,
+    IrChartBpm, IrChartFeatures, IrChartLnProfile, IrChartNotes, IrChartPayload, IrChartUrls,
+    IrClientInfo, IrEffectiveLnMode, IrJudgePayload, IrJudgeSidePayload, IrResultPayload,
+    IrRulePayload, IrScoreSubmission,
 };
 
 #[derive(Debug, Clone)]
@@ -167,7 +167,19 @@ pub fn build_ir_chart_payload(chart: &PlayableChart) -> IrChartPayload {
             hcn: ln_profile.has_defined_hcn,
             mine: has_mine,
         },
+        urls: chart_registry_urls(chart),
+        headers: chart.metadata.bms_headers.clone(),
     }
+}
+
+fn chart_registry_urls(chart: &PlayableChart) -> Option<IrChartUrls> {
+    let source = non_empty_string(&chart.metadata.source_url);
+    let append = non_empty_string(&chart.metadata.append_url);
+    if source.is_none() && append.is_none() { None } else { Some(IrChartUrls { source, append }) }
+}
+
+fn non_empty_string(value: &str) -> Option<String> {
+    if value.is_empty() { None } else { Some(value.to_string()) }
 }
 
 fn chart_bpm_range(chart: &PlayableChart) -> (f64, f64) {
@@ -235,6 +247,8 @@ fn arrange_option_ir(arrange: ArrangeOption) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use bmz_chart::model::{ChartMetadata, PlayableChart};
     use bmz_core::chart::ChartIdentity;
     use bmz_core::clear::{ClearType, GaugeType};
@@ -342,6 +356,12 @@ mod tests {
                 total: Some(400.0),
                 initial_bpm: 180.0,
                 has_bms_random: true,
+                source_url: "http://example.com/bms".to_string(),
+                append_url: "http://example.com/append".to_string(),
+                bms_headers: BTreeMap::from([
+                    ("TITLE".to_string(), "Song".to_string()),
+                    ("URL".to_string(), "http://example.com/bms".to_string()),
+                ]),
                 key_mode: KeyMode::K7,
                 ..ChartMetadata::default()
             },
@@ -377,5 +397,14 @@ mod tests {
         assert!(payload.features.random);
         assert_eq!(payload.bpm.and_then(|bpm| bpm.min), Some(180.0));
         assert!(!payload.ln_profile.has_defined_ln);
+        assert_eq!(
+            payload.urls.as_ref().and_then(|urls| urls.source.as_deref()),
+            Some("http://example.com/bms")
+        );
+        assert_eq!(
+            payload.urls.as_ref().and_then(|urls| urls.append.as_deref()),
+            Some("http://example.com/append")
+        );
+        assert_eq!(payload.headers.get("TITLE"), Some(&"Song".to_string()));
     }
 }

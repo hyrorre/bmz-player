@@ -71,6 +71,18 @@ pub struct IrChartPayload {
     pub bpm: Option<IrChartBpm>,
     pub notes: IrChartNotes,
     pub features: IrChartFeatures,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub urls: Option<IrChartUrls>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub headers: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct IrChartUrls {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub append: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
