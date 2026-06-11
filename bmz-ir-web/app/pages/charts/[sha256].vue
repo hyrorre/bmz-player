@@ -19,7 +19,26 @@ interface ChartDetail {
 }
 
 const route = useRoute()
-const sha256 = computed(() => String(route.params.sha256 ?? ''))
+const chartParam = computed(() => String(route.params.sha256 ?? '').trim().toLowerCase())
+const paramError = ref<string | null>(null)
+
+if (/^[0-9a-f]{32}$/.test(chartParam.value)) {
+  try {
+    const lookup = await $fetch<{ sha256: string }>('/api/v1/charts/lookup', {
+      query: { md5: chartParam.value },
+    })
+    await navigateTo(`/charts/${lookup.sha256}`, { redirectCode: 301, replace: true })
+  } catch {
+    paramError.value = '指定された MD5 の譜面は見つかりません'
+  }
+} else if (chartParam.value && !/^[0-9a-f]{64}$/.test(chartParam.value)) {
+  paramError.value = '譜面 ID は MD5 (32 hex) または SHA256 (64 hex) である必要があります'
+}
+
+const sha256 = computed(() =>
+  /^[0-9a-f]{64}$/.test(chartParam.value) ? chartParam.value : '',
+)
+const canLoadChart = computed(() => sha256.value.length === 64)
 
 type LnPolicyFilter = 'ALL' | LnScorePolicy
 
@@ -36,12 +55,15 @@ const lnPolicies: LnPolicyFilter[] = [
 
 const { data: detail, error: detailError } = await useFetch<ChartDetail>(
   () => `/api/v1/charts/${sha256.value}`,
+  { immediate: canLoadChart.value, watch: [sha256] },
 )
 const {
   data: ranking,
   pending: rankingPending,
   error: rankingError,
 } = await useFetch<IrRanking>(() => `/api/v1/charts/${sha256.value}/ranking`, {
+  immediate: canLoadChart.value,
+  watch: [sha256, lnPolicy],
   query: computed(() => ({
     scope: 'global',
     ...(lnPolicy.value === 'ALL' ? {} : { ln_policy: lnPolicy.value }),
@@ -52,7 +74,8 @@ const {
 <template>
   <main class="min-h-dvh bg-neutral-950 text-neutral-50">
     <section class="mx-auto w-full max-w-4xl px-5 py-10">
-      <UAlert v-if="detailError" color="error" :description="detailError.message" class="mb-6" />
+      <UAlert v-if="paramError" color="error" :description="paramError" class="mb-6" />
+      <UAlert v-else-if="detailError" color="error" :description="detailError.message" class="mb-6" />
       <template v-else-if="detail">
         <div class="mb-8">
           <p class="mb-2 text-sm font-medium text-primary-300">
