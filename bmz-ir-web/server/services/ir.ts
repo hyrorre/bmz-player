@@ -502,9 +502,22 @@ function rankRows(
   })
 }
 
+/** around_self で自分の前後に表示する人数 (自分を含めて最大 2N+1 件)。 */
+const AROUND_SELF_WINDOW = 5
+
 function applyScope(entries: IrRankingEntry[], scope: IrRankingScope, selfId: string | null, rivalIds: Set<string>) {
-  if (scope === 'global' || scope === 'around_self') {
+  if (scope === 'global') {
     return entries
+  }
+  if (scope === 'around_self') {
+    // 自分の前後 AROUND_SELF_WINDOW 件ずつを切り出す。未ログイン /
+    // 自己スコアなしのときは global と同じ全件を返す。
+    const selfIndex = selfId ? entries.findIndex((entry) => entry.player.id === selfId) : -1
+    if (selfIndex < 0) {
+      return entries
+    }
+    const start = Math.max(0, selfIndex - AROUND_SELF_WINDOW)
+    return entries.slice(start, selfIndex + AROUND_SELF_WINDOW + 1)
   }
   if (scope === 'self') {
     return entries.filter((entry) => entry.player.id === selfId)

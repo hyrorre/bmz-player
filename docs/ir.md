@@ -89,8 +89,9 @@ GET    /api/v1/courses/{course_hash}/ranking   # global のみ
 8. **course score**: 実装済み (本節の API 一覧と §19 の DDL 参照)。
    コース終了時に `ir_score_jobs` (kind=course) へ enqueue し、
    evidence schema は `bmz-course-score-evidence-v1`。
-   **tables / around_self の専用実装**は未着手
-   (`around_self` は現状 global と同じ扱い)。
+   `around_self` は自分の前後 5 件ずつのウィンドウを返す
+   (未ログイン / 自己スコアなしのときは global と同じ)。
+   **tables の専用実装**は未着手。
 
 ### 動作確認の手順 (ローカル)
 
