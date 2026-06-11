@@ -887,6 +887,40 @@ mod tests {
     }
 
     #[test]
+    fn grade_diff_display_uses_next_nearest_keys_with_legacy_aliases() {
+        fn parse_grade_diff_display(value: &str) -> ResultGradeDiffDisplay {
+            let toml = format!(
+                r#"
+                gauge = "Normal"
+                random = "Off"
+                target = "None"
+                grade_diff_display = "{value}"
+                lane_effect = "Off"
+                assist = "None"
+                auto_play = false
+                "#
+            );
+            toml::from_str::<PlayDefaultsConfig>(&toml).unwrap().grade_diff_display
+        }
+
+        assert_eq!(parse_grade_diff_display("Next"), ResultGradeDiffDisplay::Beatoraja);
+        assert_eq!(parse_grade_diff_display("Nearest"), ResultGradeDiffDisplay::HalfGrade);
+        assert_eq!(parse_grade_diff_display("Beatoraja"), ResultGradeDiffDisplay::Beatoraja);
+        assert_eq!(parse_grade_diff_display("HalfGrade"), ResultGradeDiffDisplay::HalfGrade);
+
+        let mut play = PlayDefaultsConfig {
+            grade_diff_display: ResultGradeDiffDisplay::Beatoraja,
+            ..ProfileConfig::new_default("default", "Default", 0).play
+        };
+        let serialized = toml::to_string(&play).unwrap();
+        assert!(serialized.contains(r#"grade_diff_display = "Next""#));
+
+        play.grade_diff_display = ResultGradeDiffDisplay::HalfGrade;
+        let serialized = toml::to_string(&play).unwrap();
+        assert!(serialized.contains(r#"grade_diff_display = "Nearest""#));
+    }
+
+    #[test]
     fn select_state_uses_defaults_for_old_profiles() {
         // `[select]` セクションが無い旧 profile.toml でも既定値になる。
         let select: SelectStateConfig = toml::from_str("").unwrap();

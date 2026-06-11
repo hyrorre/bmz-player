@@ -2092,8 +2092,8 @@ fn target_label(value: TargetOptionConfig) -> &'static str {
 
 fn grade_diff_display_label(value: ResultGradeDiffDisplay) -> &'static str {
     match value {
-        ResultGradeDiffDisplay::Beatoraja => "BEATORAJA",
-        ResultGradeDiffDisplay::HalfGrade => "HALF GRADE",
+        ResultGradeDiffDisplay::Beatoraja => "NEXT",
+        ResultGradeDiffDisplay::HalfGrade => "NEAREST",
     }
 }
 

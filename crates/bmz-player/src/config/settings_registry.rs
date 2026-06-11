@@ -459,8 +459,8 @@ fn format_target(value: TargetOptionConfig) -> String {
 
 fn format_grade_diff_display(value: ResultGradeDiffDisplay) -> String {
     match value {
-        ResultGradeDiffDisplay::Beatoraja => "BEATORAJA".to_string(),
-        ResultGradeDiffDisplay::HalfGrade => "HALF GRADE".to_string(),
+        ResultGradeDiffDisplay::Beatoraja => "NEXT".to_string(),
+        ResultGradeDiffDisplay::HalfGrade => "NEAREST".to_string(),
     }
 }
 
@@ -715,13 +715,10 @@ mod tests {
     fn cycle_grade_diff_display_wraps() {
         let mut profile = ProfileConfig::new_default("default", "Default", 0);
         assert!(SettingsEntryId::PLAY_ENTRIES.contains(&SettingsEntryId::GradeDiffDisplay));
-        assert_eq!(format_settings_value(&profile, SettingsEntryId::GradeDiffDisplay), "BEATORAJA");
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::GradeDiffDisplay), "NEXT");
         assert!(adjust_settings_value(&mut profile, SettingsEntryId::GradeDiffDisplay, 1));
         assert_eq!(profile.play.grade_diff_display, ResultGradeDiffDisplay::HalfGrade);
-        assert_eq!(
-            format_settings_value(&profile, SettingsEntryId::GradeDiffDisplay),
-            "HALF GRADE"
-        );
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::GradeDiffDisplay), "NEAREST");
     }
 
     #[test]

@@ -7,10 +7,11 @@ use crate::skin::SkinImageSize;
 use crate::snapshot::{DisplayJudgeCounts, FastSlowJudgeCounts, OverlaySnapshot, RenderSnapshot};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "PascalCase")]
 pub enum ResultGradeDiffDisplay {
     #[default]
+    #[serde(rename = "Next", alias = "Beatoraja")]
     Beatoraja,
+    #[serde(rename = "Nearest", alias = "HalfGrade")]
     HalfGrade,
 }
 
