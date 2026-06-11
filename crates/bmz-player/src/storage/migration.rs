@@ -420,6 +420,14 @@ pub const LIBRARY_MIGRATIONS: &[Migration] = &[
         // Source BMS defines `#RANDOM` sections (beatoraja `hasRandomSequence`).
         statements: &["ALTER TABLE charts ADD COLUMN has_bms_random INTEGER NOT NULL DEFAULT 0;"],
     },
+    Migration {
+        version: 18,
+        statements: &[
+            "ALTER TABLE charts ADD COLUMN source_url TEXT NOT NULL DEFAULT '';",
+            "ALTER TABLE charts ADD COLUMN append_url TEXT NOT NULL DEFAULT '';",
+            "ALTER TABLE charts ADD COLUMN headers_json TEXT NOT NULL DEFAULT '{}';",
+        ],
+    },
 ];
 
 pub const SCORE_MIGRATIONS: &[Migration] = &[

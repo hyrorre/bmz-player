@@ -21,7 +21,7 @@ pub use super::difficulty_table_db::{
 
 use super::common::{configure_connection, hash_to_hex, hex_to_hash};
 
-pub const CHART_IMPORT_VERSION: i64 = 3;
+pub const CHART_IMPORT_VERSION: i64 = 4;
 const MAX_ANALYSIS_DISTRIBUTION_SECONDS: usize = 10 * 60;
 
 pub struct LibraryDatabase {
@@ -1195,11 +1195,11 @@ fn insert_chart(conn: &Connection, record: &ChartImportRecord<'_>) -> Result<i64
             has_mines, folder_path, stage_file, preview_file,
             banner_file, backbmp_file, judge_rank, gauge_total, bms_total,
             has_undefined_ln, has_defined_ln, has_defined_cn, has_defined_hcn,
-            has_bms_random, import_version
+            has_bms_random, source_url, append_url, headers_json, import_version
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
             ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27,
-            ?28, ?29, ?30, ?31, ?32, ?33
+            ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36
         )",
     )?
     .execute(params![
@@ -1235,9 +1235,16 @@ fn insert_chart(conn: &Connection, record: &ChartImportRecord<'_>) -> Result<i64
         stats.ln_profile.has_defined_cn,
         stats.ln_profile.has_defined_hcn,
         chart.metadata.has_bms_random,
+        chart.metadata.source_url.as_str(),
+        chart.metadata.append_url.as_str(),
+        chart_headers_json(chart),
         CHART_IMPORT_VERSION,
     ])?;
     Ok(conn.last_insert_rowid())
+}
+
+fn chart_headers_json(chart: &PlayableChart) -> String {
+    serde_json::to_string(&chart.metadata.bms_headers).unwrap_or_else(|_| "{}".to_string())
 }
 
 fn update_chart(conn: &Connection, chart_id: i64, record: &ChartImportRecord<'_>) -> Result<()> {
@@ -1253,8 +1260,9 @@ fn update_chart(conn: &Connection, chart_id: i64, record: &ChartImportRecord<'_>
             banner_file = ?23, backbmp_file = ?24, judge_rank = ?25, gauge_total = ?26,
             bms_total = ?27, has_undefined_ln = ?28, has_defined_ln = ?29,
             has_defined_cn = ?30, has_defined_hcn = ?31, has_bms_random = ?32,
-            import_version = ?33
-         WHERE id = ?34",
+            source_url = ?33, append_url = ?34, headers_json = ?35,
+            import_version = ?36
+         WHERE id = ?37",
     )?
     .execute(params![
         hash_to_hex(&chart.identity.file_sha256),
@@ -1289,6 +1297,9 @@ fn update_chart(conn: &Connection, chart_id: i64, record: &ChartImportRecord<'_>
         stats.ln_profile.has_defined_cn,
         stats.ln_profile.has_defined_hcn,
         chart.metadata.has_bms_random,
+        chart.metadata.source_url.as_str(),
+        chart.metadata.append_url.as_str(),
+        chart_headers_json(chart),
         CHART_IMPORT_VERSION,
         chart_id,
     ])?;
@@ -2123,6 +2134,41 @@ mod tests {
         assert_eq!(row.ln_profile.has_defined_ln, false);
         assert_eq!(row.ln_profile.has_defined_cn, true);
         assert_eq!(row.ln_profile.has_defined_hcn, false);
+    }
+
+    #[test]
+    fn upsert_chart_import_persists_source_url_and_headers() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase { conn };
+        let mut chart = chart("url song");
+        chart.metadata.source_url = "http://example.com/bms".to_string();
+        chart.metadata.append_url = "http://example.com/append".to_string();
+        chart.metadata.bms_headers.insert("TITLE".to_string(), "url song".to_string());
+        chart.metadata.bms_headers.insert("URL".to_string(), "http://example.com/bms".to_string());
+        let record = ChartImportRecord {
+            root_id: None,
+            file_path: Path::new("/songs/url.bms"),
+            file_size: 123,
+            modified_at: 1_700_000_001,
+            scanned_at: 1_700_000_002,
+            chart: &chart,
+        };
+
+        let chart_id = db.upsert_chart_import(&record).unwrap();
+        let (source_url, append_url, headers_json): (String, String, String) = db
+            .conn()
+            .query_row(
+                "SELECT source_url, append_url, headers_json FROM charts WHERE id = ?1",
+                params![chart_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+
+        assert_eq!(source_url, "http://example.com/bms");
+        assert_eq!(append_url, "http://example.com/append");
+        assert!(headers_json.contains("\"TITLE\":\"url song\""));
     }
 
     #[test]
