@@ -976,7 +976,7 @@ fn plan_play(
     // `{"id":"notes"}` マーカーと `timer: 3` (FAILED) で3分割。
     // 描画順: 背面skin → ロング/ノーツ → 前面skin → 暗転/閉店オーバーレイ
     let (behind_notes_items, front_notes_items, failed_overlay_items) =
-        play_skin.static_document_items_split_for_state_and_text(&skin_state, skin_text);
+        play_skin.static_document_items_split_for_state_and_text(&skin_state, &skin_text);
     let behind_notes_items = skin.apply_play_skin_global_offset(behind_notes_items, &skin_state);
     append_skin_render_items(&mut commands, &behind_notes_items);
 
@@ -1341,7 +1341,7 @@ fn plan_decide(
             course_titles: string_array_refs(&snapshot.course_titles),
             ..SkinTextState::default()
         };
-        let items = skin.static_document_items_for_state_and_text(&state, text);
+        let items = skin.static_document_items_for_state_and_text(&state, &text);
         if !items.is_empty() {
             let mut commands = Vec::new();
             crate::skin::append_skin_render_items(&mut commands, &items);
@@ -1392,7 +1392,7 @@ fn plan_result(
             ..SkinTextState::default()
         };
         let items =
-            skin.static_document_items_for_result_state_and_text(&snapshot.graph, &state, text);
+            skin.static_document_items_for_result_state_and_text(&snapshot.graph, &state, &text);
         if !items.is_empty() {
             let mut commands = Vec::with_capacity(items.len() + 3);
             crate::skin::append_skin_render_items(&mut commands, &items);

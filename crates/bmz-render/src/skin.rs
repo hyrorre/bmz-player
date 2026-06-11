@@ -202,12 +202,12 @@ impl<'a> SkinRuntimeGraphs<'a> {
     }
 }
 
-struct DestinationResolveContext<'a> {
+struct DestinationResolveContext<'a, 'text> {
     images: &'a HashMap<&'a str, &'a SkinImageDef>,
     values: &'a HashMap<&'a str, &'a SkinValueDef>,
     enabled_options: &'a [i32],
     state: &'a SkinDrawState,
-    text_state: SkinTextState<'a>,
+    text_state: &'a SkinTextState<'text>,
     sources: &'a HashMap<String, SkinDocumentTexture>,
     runtime_graphs: SkinRuntimeGraphs<'a>,
     has_half_grade_f_diff_rank_destination: bool,
@@ -1446,13 +1446,13 @@ impl SkinContext {
     }
 
     pub fn static_document_items_for_state(&self, state: &SkinDrawState) -> Vec<SkinRenderItem> {
-        self.static_document_items_for_state_and_text(state, SkinTextState::default())
+        self.static_document_items_for_state_and_text(state, &SkinTextState::default())
     }
 
     pub fn static_document_items_for_state_and_text(
         &self,
         state: &SkinDrawState,
-        text: SkinTextState<'_>,
+        text: &SkinTextState<'_>,
     ) -> Vec<SkinRenderItem> {
         let Some(document) = &self.document else {
             return Vec::new();
@@ -1464,7 +1464,7 @@ impl SkinContext {
         &self,
         graph: &crate::snapshot::ResultGraphSnapshot,
         state: &SkinDrawState,
-        text: SkinTextState<'_>,
+        text: &SkinTextState<'_>,
     ) -> Vec<SkinRenderItem> {
         let Some(document) = &self.document else {
             return Vec::new();
@@ -1538,7 +1538,7 @@ impl SkinContext {
     pub fn static_document_items_split_for_state_and_text(
         &self,
         state: &SkinDrawState,
-        text: SkinTextState<'_>,
+        text: &SkinTextState<'_>,
     ) -> (Vec<SkinRenderItem>, Vec<SkinRenderItem>, Vec<SkinRenderItem>) {
         let Some(document) = &self.document else {
             return (Vec::new(), Vec::new(), Vec::new());
@@ -2308,7 +2308,7 @@ impl DynamicTimerRuntime {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SkinTextState<'a> {
     pub title: &'a str,
     /// IR ライバル名 (STRING_RIVAL=1)。未取得なら空。
@@ -2716,14 +2716,14 @@ impl SkinDocument {
         sources: &HashMap<String, SkinDocumentTexture>,
         state: &SkinDrawState,
     ) -> Vec<SkinRenderItem> {
-        self.static_render_items(sources, state, SkinTextState::default())
+        self.static_render_items(sources, state, &SkinTextState::default())
     }
 
     pub fn static_render_items(
         &self,
         sources: &HashMap<String, SkinDocumentTexture>,
         state: &SkinDrawState,
-        text_state: SkinTextState<'_>,
+        text_state: &SkinTextState<'_>,
     ) -> Vec<SkinRenderItem> {
         self.static_render_items_with_graphs(
             sources,
@@ -2737,7 +2737,7 @@ impl SkinDocument {
         &self,
         sources: &HashMap<String, SkinDocumentTexture>,
         state: &SkinDrawState,
-        text_state: SkinTextState<'_>,
+        text_state: &SkinTextState<'_>,
         runtime_graphs: SkinRuntimeGraphs<'_>,
     ) -> Vec<SkinRenderItem> {
         self.static_render_items_with_graphs_cached(
@@ -2753,7 +2753,7 @@ impl SkinDocument {
         &self,
         sources: &HashMap<String, SkinDocumentTexture>,
         state: &SkinDrawState,
-        text_state: SkinTextState<'_>,
+        text_state: &SkinTextState<'_>,
         runtime_graphs: SkinRuntimeGraphs<'_>,
         cache: Option<&mut ResultRenderCache>,
     ) -> Vec<SkinRenderItem> {
@@ -2775,7 +2775,7 @@ impl SkinDocument {
         &self,
         sources: &HashMap<String, SkinDocumentTexture>,
         state: &SkinDrawState,
-        text_state: SkinTextState<'_>,
+        text_state: &SkinTextState<'_>,
     ) -> (Vec<SkinRenderItem>, Vec<SkinRenderItem>, Vec<SkinRenderItem>) {
         self.static_render_items_split_with_graphs(
             sources,
@@ -2790,7 +2790,7 @@ impl SkinDocument {
         &self,
         sources: &HashMap<String, SkinDocumentTexture>,
         state: &SkinDrawState,
-        text_state: SkinTextState<'_>,
+        text_state: &SkinTextState<'_>,
         runtime_graphs: SkinRuntimeGraphs<'_>,
         mut cache: Option<&mut ResultRenderCache>,
     ) -> (Vec<SkinRenderItem>, Vec<SkinRenderItem>, Vec<SkinRenderItem>) {
@@ -3061,7 +3061,7 @@ impl SkinDocument {
         &self,
         destination_index: usize,
         destination: &SkinDestinationDef,
-        context: DestinationResolveContext<'_>,
+        context: DestinationResolveContext<'_, '_>,
     ) -> Option<Vec<SkinRenderItem>> {
         let DestinationResolveContext {
             images,
@@ -3412,7 +3412,7 @@ impl SkinDocument {
         images: &HashMap<&str, &SkinImageDef>,
         enabled_options: &[i32],
         state: &SkinDrawState,
-        text_state: SkinTextState<'_>,
+        text_state: &SkinTextState<'_>,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<Vec<SkinRenderItem>> {
         let destinations = self.all_destinations(enabled_options);
@@ -3742,7 +3742,7 @@ impl SkinDocument {
                     values: &values,
                     enabled_options: &enabled_options,
                     state: &state,
-                    text_state: text,
+                    text_state: &text,
                     sources,
                     runtime_graphs: SkinRuntimeGraphs::from_document(self),
                     has_half_grade_f_diff_rank_destination,
@@ -4270,7 +4270,7 @@ impl SkinDocument {
                 images,
                 enabled_options,
                 state,
-                SkinTextState::default(),
+                &SkinTextState::default(),
                 sources,
             ) {
                 items.append(&mut resolved);
@@ -4405,7 +4405,7 @@ impl SkinDocument {
             images,
             enabled_options,
             state,
-            SkinTextState::default(),
+            &SkinTextState::default(),
             sources,
         ) {
             items.append(&mut resolved);
@@ -4449,7 +4449,7 @@ impl SkinDocument {
                 images,
                 enabled_options,
                 state,
-                text_state,
+                &text_state,
                 sources,
             ) {
                 items.append(&mut resolved);
@@ -5294,7 +5294,7 @@ impl SkinDocument {
         &self,
         text: &SkinTextDef,
         frame: ResolvedSkinFrame,
-        state: SkinTextState<'_>,
+        state: &SkinTextState<'_>,
     ) -> Option<SkinRenderItem> {
         let content = skin_state_text(text, state);
         if content.is_empty() {
@@ -9714,7 +9714,7 @@ pub fn format_rm_skin_course_table_text(
     if primary.is_empty() { format!(" > {secondary}") } else { format!("{primary} > {secondary}") }
 }
 
-fn skin_state_text(text: &SkinTextDef, state: SkinTextState<'_>) -> String {
+fn skin_state_text(text: &SkinTextDef, state: &SkinTextState<'_>) -> String {
     if !text.constant_text.is_empty() {
         return text.constant_text.clone();
     }
@@ -12621,12 +12621,12 @@ mod tests {
         let no_bga_items = document.static_render_items(
             &HashMap::new(),
             &SkinDrawState { has_bga: false, ..SkinDrawState::default() },
-            SkinTextState::default(),
+            &SkinTextState::default(),
         );
         let bga_items = document.static_render_items(
             &HashMap::new(),
             &SkinDrawState { has_bga: true, ..SkinDrawState::default() },
-            SkinTextState::default(),
+            &SkinTextState::default(),
         );
 
         assert!(no_bga_items.is_empty());
@@ -12677,7 +12677,7 @@ mod tests {
                 }),
                 ..SkinDrawState::default()
             },
-            SkinTextState::default(),
+            &SkinTextState::default(),
         );
 
         assert!(items.is_empty());
@@ -13173,7 +13173,7 @@ mod tests {
         assert_eq!(
             skin_state_text(
                 &SkinTextDef { id: "t".to_string(), ref_id: 3, ..SkinTextDef::default() },
-                SkinTextState { target: "", ..SkinTextState::default() },
+                &SkinTextState { target: "", ..SkinTextState::default() },
             ),
             ""
         );
@@ -13471,7 +13471,7 @@ mod tests {
             ..SkinDrawState::default()
         };
 
-        let items = document.static_render_items(&sources, &state, SkinTextState::default());
+        let items = document.static_render_items(&sources, &state, &SkinTextState::default());
         let first_digit_uv = items.iter().find_map(|item| match item {
             SkinRenderItem::Image { texture: SkinTextureId(42), uv, .. } => Some(*uv),
             _ => None,
@@ -13833,7 +13833,7 @@ mod tests {
                 }),
                 ..SkinDrawState::default()
             },
-            SkinTextState::default(),
+            &SkinTextState::default(),
         );
 
         assert!(matches!(
@@ -13904,7 +13904,7 @@ mod tests {
                 }),
                 ..SkinDrawState::default()
             },
-            SkinTextState::default(),
+            &SkinTextState::default(),
         );
 
         assert!(matches!(
@@ -13946,7 +13946,7 @@ mod tests {
                 bga_stretch: 1,
                 ..SkinDrawState::default()
             },
-            SkinTextState::default(),
+            &SkinTextState::default(),
         );
 
         assert!(matches!(
@@ -13995,7 +13995,7 @@ mod tests {
                 bga_stretch: 1,
                 ..SkinDrawState::default()
             },
-            SkinTextState::default(),
+            &SkinTextState::default(),
         );
 
         assert!(matches!(
@@ -14195,7 +14195,7 @@ mod tests {
         let (behind, front, failed_overlay) = document.static_render_items_split(
             &sources,
             &SkinDrawState::default(),
-            SkinTextState::default(),
+            &SkinTextState::default(),
         );
 
         // `{"id":"notes"}` マーカーより前の destination は背面、後ろは前面に入る。
@@ -14206,7 +14206,7 @@ mod tests {
         let all = document.static_render_items(
             &sources,
             &SkinDrawState::default(),
-            SkinTextState::default(),
+            &SkinTextState::default(),
         );
         assert_eq!(all.len(), 3);
     }
@@ -14244,7 +14244,7 @@ mod tests {
         let (behind, front, failed_overlay) = document.static_render_items_split(
             &sources,
             &SkinDrawState::default(),
-            SkinTextState::default(),
+            &SkinTextState::default(),
         );
 
         assert_eq!(behind.len(), 1, "ordinary pre-notes items stay behind notes");
@@ -14555,7 +14555,7 @@ mod tests {
         let mut state = SkinDrawState { gauge_type: 4, elapsed_ms: 100, ..Default::default() };
         runtime.advance(&document, &mut state, 100);
         let (behind, front, _) =
-            document.static_render_items_split(&sources, &state, SkinTextState::default());
+            document.static_render_items_split(&sources, &state, &SkinTextState::default());
         let items = behind.into_iter().chain(front).collect::<Vec<_>>();
         assert_eq!(items.len(), 1);
         assert!(matches!(items[0], SkinRenderItem::Image { .. }));
@@ -14604,7 +14604,7 @@ mod tests {
         let (behind, front, _) = document.static_render_items_split(
             &sources,
             &SkinDrawState { gauge_type: 4, elapsed_ms: 1700, skin_offsets, ..Default::default() },
-            SkinTextState::default(),
+            &SkinTextState::default(),
         );
         let items = behind.into_iter().chain(front).collect::<Vec<_>>();
         assert_eq!(items.len(), 2);
@@ -15690,7 +15690,7 @@ mod tests {
                 offset_lift_px: 10,
                 ..SkinDrawState::default()
             },
-            SkinTextState::default(),
+            &SkinTextState::default(),
         );
 
         assert_eq!(items.len(), 4);
@@ -15831,7 +15831,8 @@ mod tests {
             "right region digit x={right_digit} should be right of left x={left_digit}"
         );
 
-        let static_items = document.static_render_items(&sources, &state, SkinTextState::default());
+        let static_items =
+            document.static_render_items(&sources, &state, &SkinTextState::default());
         assert_eq!(static_items.len(), 6);
         let static_left = match &static_items[1] {
             SkinRenderItem::Image { rect, .. } => rect.x,
@@ -15882,7 +15883,7 @@ mod tests {
             ..SkinDrawState::default()
         };
 
-        let items = document.static_render_items(&sources, &state, SkinTextState::default());
+        let items = document.static_render_items(&sources, &state, &SkinTextState::default());
 
         assert_eq!(items.len(), 1);
     }
@@ -15969,7 +15970,7 @@ mod tests {
                 },
                 ..Default::default()
             },
-            SkinTextState::default(),
+            &SkinTextState::default(),
         );
 
         assert_eq!(items.len(), 4);
@@ -16044,7 +16045,7 @@ mod tests {
             ..SkinDrawState::default()
         };
         let pgreat =
-            document.static_render_items(&sources, &pgreat_state, SkinTextState::default());
+            document.static_render_items(&sources, &pgreat_state, &SkinTextState::default());
         // GOOD 判定
         let good_state = SkinDrawState {
             bomb_ms: {
@@ -16059,7 +16060,7 @@ mod tests {
             },
             ..SkinDrawState::default()
         };
-        let good = document.static_render_items(&sources, &good_state, SkinTextState::default());
+        let good = document.static_render_items(&sources, &good_state, &SkinTextState::default());
         // タイマーがアニメーション終端を超過 → loop:-1 で非表示
         let expired_state = SkinDrawState {
             bomb_ms: {
@@ -16075,7 +16076,7 @@ mod tests {
             ..SkinDrawState::default()
         };
         let expired =
-            document.static_render_items(&sources, &expired_state, SkinTextState::default());
+            document.static_render_items(&sources, &expired_state, &SkinTextState::default());
 
         // beam1 と bomb1 のみ描画される (beam2 は timer 52 非アクティブ)
         assert_eq!(pgreat.len(), 2);
@@ -17549,7 +17550,7 @@ mod tests {
         let items = document.static_render_items(
             &HashMap::new(),
             &SkinDrawState::default(),
-            SkinTextState {
+            &SkinTextState {
                 title: "Song",
                 subtitle: "Another",
                 genre: "Techno",
@@ -18103,7 +18104,7 @@ mod tests {
         let (_, _, failed_overlay) = document.static_render_items_split(
             &sources,
             &SkinDrawState { failed_ms: Some(500), ..SkinDrawState::default() },
-            SkinTextState::default(),
+            &SkinTextState::default(),
         );
 
         assert!(inactive.is_empty());
@@ -20789,42 +20790,42 @@ mod tests {
         };
 
         // STRING_TITLE (10)
-        assert_eq!(skin_state_text(&make_text(10), state), "My Title");
+        assert_eq!(skin_state_text(&make_text(10), &state), "My Title");
         // STRING_SUBTITLE (11)
-        assert_eq!(skin_state_text(&make_text(11), state), "Sub");
+        assert_eq!(skin_state_text(&make_text(11), &state), "Sub");
         // STRING_FULLTITLE (12) = title + " " + subtitle
-        assert_eq!(skin_state_text(&make_text(12), state), "My Title Sub");
+        assert_eq!(skin_state_text(&make_text(12), &state), "My Title Sub");
         // STRING_GENRE (13)
-        assert_eq!(skin_state_text(&make_text(13), state), "TRANCE");
+        assert_eq!(skin_state_text(&make_text(13), &state), "TRANCE");
         // STRING_ARTIST (14)
-        assert_eq!(skin_state_text(&make_text(14), state), "Artist Name");
+        assert_eq!(skin_state_text(&make_text(14), &state), "Artist Name");
         // STRING_SUBARTIST (15)
-        assert_eq!(skin_state_text(&make_text(15), state), "Feat. X");
+        assert_eq!(skin_state_text(&make_text(15), &state), "Feat. X");
         // STRING_FULLARTIST (16) = artist + " " + subartist
-        assert_eq!(skin_state_text(&make_text(16), state), "Artist Name Feat. X");
+        assert_eq!(skin_state_text(&make_text(16), &state), "Artist Name Feat. X");
         // STRING_TARGET (3)
-        assert_eq!(skin_state_text(&make_text(3), state), "RANK AAA");
+        assert_eq!(skin_state_text(&make_text(3), &state), "RANK AAA");
         // STRING_TARGETNAME_P1/N1 (209/210)
-        assert_eq!(skin_state_text(&make_text(209), state), "MAX");
-        assert_eq!(skin_state_text(&make_text(210), state), "RANK AA");
+        assert_eq!(skin_state_text(&make_text(209), &state), "MAX");
+        assert_eq!(skin_state_text(&make_text(210), &state), "RANK AA");
         // STRING_RANKINGNAME1..10
-        assert_eq!(skin_state_text(&make_text(120), state), "Alice");
-        assert_eq!(skin_state_text(&make_text(121), state), "");
+        assert_eq!(skin_state_text(&make_text(120), &state), "Alice");
+        assert_eq!(skin_state_text(&make_text(121), &state), "");
         // STRING_COURSE1_TITLE..10_TITLE (150..159)
-        assert_eq!(skin_state_text(&make_text(150), state), "Stage 1");
-        assert_eq!(skin_state_text(&make_text(159), state), "Stage 10");
+        assert_eq!(skin_state_text(&make_text(150), &state), "Stage 1");
+        assert_eq!(skin_state_text(&make_text(159), &state), "Stage 10");
         // STRING_IR_NAME / STRING_IR_USERNAME
-        assert_eq!(skin_state_text(&make_text(1020), state), "BMZ IR");
-        assert_eq!(skin_state_text(&make_text(1021), state), "BMZ IR");
+        assert_eq!(skin_state_text(&make_text(1020), &state), "BMZ IR");
+        assert_eq!(skin_state_text(&make_text(1021), &state), "BMZ IR");
         // Unknown ref → empty
-        assert_eq!(skin_state_text(&make_text(99), state), "");
+        assert_eq!(skin_state_text(&make_text(99), &state), "");
 
         let m_select_bar_text =
             SkinTextDef { id: "default_songlist2_bartext".to_string(), ..SkinTextDef::default() };
         assert_eq!(
             skin_state_text(
                 &m_select_bar_text,
-                SkinTextState { bar_text: "Song Title", ..SkinTextState::default() },
+                &SkinTextState { bar_text: "Song Title", ..SkinTextState::default() },
             ),
             "Song Title"
         );
@@ -20841,7 +20842,7 @@ mod tests {
             search_word_alpha: 0.5,
             ..SkinTextState::default()
         };
-        let item = document.text_render_item(&text, frame, state).unwrap();
+        let item = document.text_render_item(&text, frame, &state).unwrap();
         match item {
             SkinRenderItem::Text { style, .. } => {
                 // frame.a=255 (1.0) * 0.5 = 0.5
@@ -20866,7 +20867,7 @@ mod tests {
             search_word_alpha: 0.1, // should be ignored for non-search refs
             ..SkinTextState::default()
         };
-        let item = document.text_render_item(&text, frame, state).unwrap();
+        let item = document.text_render_item(&text, frame, &state).unwrap();
         match item {
             SkinRenderItem::Text { style, .. } => {
                 assert!((style.color.a - 1.0).abs() < 1e-4, "got alpha {}", style.color.a);
@@ -20903,8 +20904,8 @@ mod tests {
             ..SkinTextDef::default()
         };
 
-        let bitmap_item = document.text_render_item(&bitmap_text, frame, state).unwrap();
-        let vector_item = document.text_render_item(&vector_text, frame, state).unwrap();
+        let bitmap_item = document.text_render_item(&bitmap_text, frame, &state).unwrap();
+        let vector_item = document.text_render_item(&vector_text, frame, &state).unwrap();
 
         match bitmap_item {
             SkinRenderItem::Text { style, .. } => {
@@ -20931,7 +20932,7 @@ mod tests {
             constant_text: "Hardcoded".to_string(),
             ..SkinTextDef::default()
         };
-        assert_eq!(skin_state_text(&text, state), "Hardcoded");
+        assert_eq!(skin_state_text(&text, &state), "Hardcoded");
     }
 
     #[test]
@@ -20980,16 +20981,17 @@ mod tests {
             value_expr: SKIN_EXPR_COURSE_TABLE_TEXT.to_string(),
             ..SkinTextDef::default()
         };
-        assert_eq!(skin_state_text(&by_expr, state), "[★] Insane > ★12");
+        assert_eq!(skin_state_text(&by_expr, &state), "[★] Insane > ★12");
 
         let by_id = SkinTextDef { id: "table".to_string(), ..SkinTextDef::default() };
-        assert_eq!(skin_state_text(&by_id, state), "[★] Insane > ★12");
+        assert_eq!(skin_state_text(&by_id, &state), "[★] Insane > ★12");
 
-        let course_state = SkinTextState { course_stage: Some(CourseStageMarker::Stage1), ..state };
-        assert_eq!(skin_state_text(&by_id, course_state), "COURSE : STAGE 1");
+        let course_state =
+            SkinTextState { course_stage: Some(CourseStageMarker::Stage1), ..state.clone() };
+        assert_eq!(skin_state_text(&by_id, &course_state), "COURSE : STAGE 1");
 
         let by_ref = SkinTextDef { ref_id: 1002, ..SkinTextDef::default() };
-        assert_eq!(skin_state_text(&by_ref, state), "★12");
+        assert_eq!(skin_state_text(&by_ref, &state), "★12");
     }
 
     #[test]
