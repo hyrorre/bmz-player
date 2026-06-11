@@ -465,13 +465,13 @@ impl EguiLayer {
                 practice_start |= panel.start_play;
                 practice_leave |= panel.leave;
             }
-            // IR ランキングはリザルト画面の常設表示なので F1 メニューの
-            // 表示フラグには連動させない。
-            if let Some(state) = result_ir.as_mut() {
-                build_result_ir_panel(ui.ctx(), state);
-            }
             if *visible_flag {
                 let ctx = ui.ctx();
+                // IR ランキングも egui 補助ウィンドウなので、他の egui
+                // ウィンドウと同じ F1 メニュー表示中だけ出す。
+                if let Some(state) = result_ir.as_mut() {
+                    build_result_ir_panel(ctx, state);
+                }
                 // Course info panels are developer/debug egui overlays, so keep
                 // them behind the same F1 menu visibility gate as the other
                 // egui windows.
