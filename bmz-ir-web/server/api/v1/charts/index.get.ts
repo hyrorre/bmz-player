@@ -14,7 +14,7 @@ export default defineEventHandler(async (event) => {
     .order('updated_at', { ascending: false })
     .limit(limit)
   if (search) {
-    request = request.ilike('title', `%${search}%`)
+    request = request.ilike('title', `%${escapeIlikePattern(search)}%`)
   }
   const { data, error } = await request
   if (error) {
@@ -22,3 +22,7 @@ export default defineEventHandler(async (event) => {
   }
   return { charts: data ?? [] }
 })
+
+function escapeIlikePattern(value: string): string {
+  return value.replace(/[\\%_]/g, (match) => `\\${match}`)
+}

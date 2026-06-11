@@ -21,10 +21,17 @@ interface ChartDetail {
 const route = useRoute()
 const sha256 = computed(() => String(route.params.sha256 ?? ''))
 
-const gauge = ref('normal')
+const gauge = ref('Normal')
 const lnPolicy = ref<LnScorePolicy>('ForceLn')
-const gauges = ['normal', 'easy', 'hard', 'ex_hard', 'assist_easy', 'hazard']
-const lnPolicies: LnScorePolicy[] = ['AutoLn', 'AutoCn', 'AutoHcn', 'ForceLn', 'ForceCn', 'ForceHcn']
+const gauges = ['AssistEasy', 'Easy', 'Normal', 'Hard', 'ExHard', 'Hazard']
+const lnPolicies: LnScorePolicy[] = [
+  'AutoLn',
+  'AutoCn',
+  'AutoHcn',
+  'ForceLn',
+  'ForceCn',
+  'ForceHcn',
+]
 
 const { data: detail, error: detailError } = await useFetch<ChartDetail>(
   () => `/api/v1/charts/${sha256.value}`,
@@ -60,8 +67,8 @@ const {
           <p class="mt-1 text-sm text-neutral-400">
             {{ detail.chart.mode }}
             <span v-if="detail.chart.level != null"> ☆{{ detail.chart.level }}</span>
-            ・ {{ detail.chart.notes }} notes
-            ・ プレイ {{ detail.stats.global.play_count }} / クリア
+            ・ {{ detail.chart.notes }} notes ・ プレイ {{ detail.stats.global.play_count }} /
+            クリア
             {{ detail.stats.global.clear_count }}
           </p>
         </div>
@@ -116,7 +123,9 @@ const {
                 <td class="px-3 py-2 text-right">{{ entry.score.min_bp }}</td>
                 <td class="px-3 py-2 text-neutral-400">{{ entry.score.device_type }}</td>
                 <td class="px-3 py-2 text-neutral-400">
-                  {{ entry.score.played_at ? new Date(entry.score.played_at).toLocaleString() : '-' }}
+                  {{
+                    entry.score.played_at ? new Date(entry.score.played_at).toLocaleString() : '-'
+                  }}
                 </td>
               </tr>
             </tbody>

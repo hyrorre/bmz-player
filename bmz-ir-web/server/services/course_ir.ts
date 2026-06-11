@@ -4,7 +4,9 @@ import type { Database, Json } from '../../shared/types/database.types'
 import {
   CLEAR_RANK,
   isRecord,
+  normalizeGaugeName,
   requireHex,
+  requireFiniteNumber,
   requireNonNegativeInteger,
   resolveVerification,
   stableStringify,
@@ -60,10 +62,7 @@ export interface CourseSubmitResponse {
 }
 
 /** course identity: 譜面 sha256 リスト + constraints の canonical JSON の SHA256。 */
-export function computeCourseHash(
-  charts: string[],
-  constraints: Record<string, unknown>,
-): string {
+export function computeCourseHash(charts: string[], constraints: Record<string, unknown>): string {
   const canonical = stableStringify({ charts, constraints })
   return createHash('sha256').update(canonical).digest('hex')
 }
@@ -97,16 +96,29 @@ export function validateCourseScoreSubmission(value: unknown): CourseScoreSubmis
   if (payload.rule.scoring !== 'bms_ex_score_v1') {
     throw new Error('rule.scoring is unsupported')
   }
+  payload.rule.gauge = normalizeGaugeName(payload.rule.gauge)
   for (const field of ['ex_score', 'max_ex_score', 'max_combo', 'bp', 'played_entries'] as const) {
     requireNonNegativeInteger(payload.result[field], `result.${field}`)
+  }
+  requireFiniteNumber(payload.result.gauge_value, 'result.gauge_value')
+  if (!isRecord(payload.result.judges)) {
+    throw new Error('result.judges must be an object')
   }
   if (!Array.isArray(payload.result.entries)) {
     throw new Error('result.entries must be an array')
   }
+  for (const [index, entry] of payload.result.entries.entries()) {
+    if (!isRecord(entry)) {
+      throw new Error(`result.entries[${index}] must be an object`)
+    }
+  }
   if (!payload.idempotency_key || typeof payload.idempotency_key !== 'string') {
     throw new Error('idempotency_key is required')
   }
-  if (!isRecord(payload.play_options) || !DEVICE_TYPES.has(String(payload.play_options.device_type))) {
+  if (
+    !isRecord(payload.play_options) ||
+    !DEVICE_TYPES.has(String(payload.play_options.device_type))
+  ) {
     throw new Error('play_options.device_type is invalid')
   }
   return payload
@@ -156,7 +168,6 @@ export async function submitCourseScore(
     .insert(insert)
     .select('id, server_received_at')
     .single()
-  let score = inserted
   if (insertError) {
     const { data: existing, error: existingError } = await db
       .from('course_scores')
@@ -167,8 +178,14 @@ export async function submitCourseScore(
     if (existingError || !existing) {
       throw insertError
     }
-    score = existing
+    return {
+      accepted: true,
+      course_score_id: existing.id,
+      best_updated: false,
+      server_received_at: existing.server_received_at,
+    }
   }
+  const score = inserted
   if (!score) {
     throw insertError ?? new Error('failed to insert course score')
   }

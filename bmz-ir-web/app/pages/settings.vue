@@ -157,6 +157,7 @@ const deviceKeys = ref<DeviceKey[]>([])
 const deviceKeysLoading = ref(false)
 const deviceKeysError = ref('')
 const revokingKeyId = ref('')
+const requestFetch = useRequestFetch()
 
 await loadDeviceKeys()
 
@@ -164,7 +165,7 @@ async function loadDeviceKeys() {
   deviceKeysLoading.value = true
   deviceKeysError.value = ''
   try {
-    const response = await $fetch<{ device_keys: DeviceKey[] }>('/api/v1/device-keys')
+    const response = await requestFetch<{ device_keys: DeviceKey[] }>('/api/v1/device-keys')
     deviceKeys.value = response.device_keys
   } catch (error) {
     deviceKeysError.value = error instanceof Error ? error.message : '署名鍵の取得に失敗しました。'
@@ -177,7 +178,7 @@ async function revokeDeviceKey(keyId: string) {
   revokingKeyId.value = keyId
   deviceKeysError.value = ''
   try {
-    await $fetch(`/api/v1/device-keys/${keyId}`, { method: 'DELETE' })
+    await requestFetch(`/api/v1/device-keys/${keyId}`, { method: 'DELETE' })
     await loadDeviceKeys()
   } catch (error) {
     deviceKeysError.value = error instanceof Error ? error.message : '署名鍵の失効に失敗しました。'

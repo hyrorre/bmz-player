@@ -81,7 +81,7 @@ export function parseRankingQuery(query: Record<string, unknown>): RankingQuery 
   const scope = asScope(String(query.scope ?? 'global'))
   const limit = clampInteger(query.limit, 100, 1, 200)
   const offset = clampInteger(query.offset, 0, 0, 100_000)
-  const gauge = nonEmptyString(query.gauge, 'normal')
+  const gauge = normalizeGaugeName(nonEmptyString(query.gauge, 'Normal'))
   const lnPolicy = asLnPolicy(String(query.ln_policy ?? 'ForceLn'))
   const scoring = String(query.scoring ?? 'bms_ex_score_v1')
   if (scoring !== 'bms_ex_score_v1') {
@@ -112,10 +112,21 @@ export function validateScoreSubmission(value: unknown): IrScoreSubmission {
   if (payload.rule.scoring !== 'bms_ex_score_v1') {
     throw new Error('rule.scoring is unsupported')
   }
-  for (const field of ['ex_score', 'max_combo', 'notes', 'pass_notes', 'min_bp', 'min_cb'] as const) {
+  for (const field of [
+    'ex_score',
+    'max_combo',
+    'notes',
+    'pass_notes',
+    'min_bp',
+    'min_cb',
+  ] as const) {
     requireNonNegativeInteger(payload.result[field], `result.${field}`)
   }
-  if (!payload.result.judges || !isRecord(payload.result.judges.fast) || !isRecord(payload.result.judges.slow)) {
+  if (
+    !payload.result.judges ||
+    !isRecord(payload.result.judges.fast) ||
+    !isRecord(payload.result.judges.slow)
+  ) {
     throw new Error('result.judges.fast and result.judges.slow are required')
   }
   for (const side of ['fast', 'slow'] as const) {
@@ -144,7 +155,8 @@ export async function submitScore(
 ): Promise<IrSubmitResponse> {
   await upsertChart(db, payload)
 
-  const bp = judgeTotal(payload, 'bad') + judgeTotal(payload, 'poor') + judgeTotal(payload, 'empty_poor')
+  const bp =
+    judgeTotal(payload, 'bad') + judgeTotal(payload, 'poor') + judgeTotal(payload, 'empty_poor')
   const cb = judgeTotal(payload, 'bad') + judgeTotal(payload, 'poor')
   const clearRank = CLEAR_RANK[payload.result.clear] ?? 0
   const verification = await resolveVerification(db, user.id, payload)
@@ -249,7 +261,10 @@ export async function submitScore(
         }),
       }
     } catch (error) {
-      rankings[scope] = { succeeded: false, error: error instanceof Error ? error.message : 'ranking failed' }
+      rankings[scope] = {
+        succeeded: false,
+        error: error instanceof Error ? error.message : 'ranking failed',
+      }
     }
   }
 
@@ -303,7 +318,8 @@ export async function getRanking(
       scoring: query.scoring,
       gauge: query.gauge,
       ln_policy: query.lnPolicy,
-      effective_ln_mode: bestRows.find((row) => row.ln_policy === query.lnPolicy)?.effective_ln_mode,
+      effective_ln_mode: bestRows.find((row) => row.ln_policy === query.lnPolicy)
+        ?.effective_ln_mode,
     },
     ranking: {
       scope: query.scope,
@@ -311,14 +327,18 @@ export async function getRanking(
       // 全プレイヤー中のクリア率 (%)。NoPlay/Failed を除いた割合。
       clear_rate:
         bestRows.length > 0
-          ? Math.round((bestRows.filter((row) => row.clear_rank > 1).length / bestRows.length) * 100)
+          ? Math.round(
+              (bestRows.filter((row) => row.clear_rank > 1).length / bestRows.length) * 100,
+            )
           : null,
       entries,
       self: selfEntry
         ? {
             rank: selfEntry.rank,
             score_id: selfEntry.score.score_id,
-            included_in_entries: entries.some((entry) => entry.score.score_id === selfEntry.score.score_id),
+            included_in_entries: entries.some(
+              (entry) => entry.score.score_id === selfEntry.score.score_id,
+            ),
           }
         : undefined,
       pagination: {
@@ -441,7 +461,9 @@ function bestCandidateWins(next: BestScoreCandidate, current: BestScoreCandidate
   return (
     next.ex_score > current.ex_score ||
     (next.ex_score === current.ex_score && next.clear_rank > current.clear_rank) ||
-    (next.ex_score === current.ex_score && next.clear_rank === current.clear_rank && next.min_bp < current.min_bp) ||
+    (next.ex_score === current.ex_score &&
+      next.clear_rank === current.clear_rank &&
+      next.min_bp < current.min_bp) ||
     (next.ex_score === current.ex_score &&
       next.clear_rank === current.clear_rank &&
       next.min_bp === current.min_bp &&
@@ -467,7 +489,9 @@ function rankRows(
       a.min_bp - b.min_bp ||
       a.min_cb - b.min_cb ||
       b.max_combo - a.max_combo ||
-      String(a.played_at ?? a.server_received_at).localeCompare(String(b.played_at ?? b.server_received_at)),
+      String(a.played_at ?? a.server_received_at).localeCompare(
+        String(b.played_at ?? b.server_received_at),
+      ),
   )
   let previousEx: number | null = null
   let currentRank = 0
@@ -505,7 +529,12 @@ function rankRows(
 /** around_self で自分の前後に表示する人数 (自分を含めて最大 2N+1 件)。 */
 const AROUND_SELF_WINDOW = 5
 
-function applyScope(entries: IrRankingEntry[], scope: IrRankingScope, selfId: string | null, rivalIds: Set<string>) {
+function applyScope(
+  entries: IrRankingEntry[],
+  scope: IrRankingScope,
+  selfId: string | null,
+  rivalIds: Set<string>,
+) {
   if (scope === 'global') {
     return entries
   }
@@ -576,7 +605,11 @@ export async function resolveVerification(
   if (!signature) {
     return 'unverified'
   }
-  if (typeof signature !== 'string' || typeof keyId !== 'string' || typeof claimedHash !== 'string') {
+  if (
+    typeof signature !== 'string' ||
+    typeof keyId !== 'string' ||
+    typeof claimedHash !== 'string'
+  ) {
     return 'invalid'
   }
 
@@ -643,7 +676,10 @@ function playedAtIso(value: unknown): string | null {
   return null
 }
 
-function judgeTotal(payload: IrScoreSubmission, key: keyof IrScoreSubmission['result']['judges']['fast']): number {
+function judgeTotal(
+  payload: IrScoreSubmission,
+  key: keyof IrScoreSubmission['result']['judges']['fast'],
+): number {
   return payload.result.judges.fast[key] + payload.result.judges.slow[key]
 }
 
@@ -685,6 +721,42 @@ export function requireNonNegativeInteger(value: unknown, label: string) {
   }
 }
 
+export function requireFiniteNumber(value: unknown, label: string) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new Error(`${label} must be a finite number`)
+  }
+}
+
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+export function normalizeGaugeName(value: string): string {
+  const normalized = value.trim().toLowerCase().replaceAll('-', '_')
+  switch (normalized) {
+    case 'assist_easy':
+    case 'a_easy':
+      return 'AssistEasy'
+    case 'easy':
+      return 'Easy'
+    case 'normal':
+      return 'Normal'
+    case 'hard':
+      return 'Hard'
+    case 'ex_hard':
+    case 'exhard':
+      return 'ExHard'
+    case 'hazard':
+      return 'Hazard'
+    case 'class':
+      return 'Class'
+    case 'ex_class':
+    case 'exclass':
+      return 'ExClass'
+    case 'ex_hard_class':
+    case 'exhardclass':
+      return 'ExHardClass'
+    default:
+      return value
+  }
 }

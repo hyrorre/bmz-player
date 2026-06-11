@@ -1,6 +1,6 @@
 import { serverSupabaseServiceRole } from '#supabase/server'
 import { getQuery } from 'h3'
-import { requireHex } from '../../../../services/ir'
+import { normalizeGaugeName, requireHex } from '../../../../services/ir'
 import type { Database } from '../../../../../shared/types/database.types'
 
 /** コースランキング (global のみ)。EX score 降順、同点同順位。 */
@@ -12,8 +12,11 @@ export default defineEventHandler(async (event) => {
   requireHex(courseHash, 64, 'course hash')
 
   const query = getQuery(event)
-  const gauge = typeof query.gauge === 'string' && query.gauge ? query.gauge : 'class'
-  const lnPolicy = typeof query.ln_policy === 'string' && query.ln_policy ? query.ln_policy : 'AutoLn'
+  const gauge = normalizeGaugeName(
+    typeof query.gauge === 'string' && query.gauge ? query.gauge : 'Class',
+  )
+  const lnPolicy =
+    typeof query.ln_policy === 'string' && query.ln_policy ? query.ln_policy : 'AutoLn'
   const limit = Math.max(1, Math.min(200, Number(query.limit ?? 100) || 100))
 
   const db = serverSupabaseServiceRole<Database>(event)
