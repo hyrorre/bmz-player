@@ -2367,3 +2367,26 @@ Recommended lazy fetch variants:
 GET /api/v1/charts/{sha256}/ranking?scope=global&limit=100
 GET /api/v1/charts/{sha256}/ranking?scope=self_and_rivals&limit=100
 ```
+
+## note
+
+`bun dev` 等でエラーが起きる場合は `export TMPDIR=/tmp` を実行してみる。
+
+### Setup Local Environment
+
+Install NodeJS / bun
+
+Superbase Docker コンテナを起動
+
+Windowsの場合はWSL2利用推奨
+
+```bash
+# Install dependencies
+bun install
+
+# Start Superbase Docker container
+bunx supabase start
+
+# Check local superbase status
+bunx supabase status
+```
