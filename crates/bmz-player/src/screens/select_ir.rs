@@ -23,7 +23,7 @@ const FETCH_DEBOUNCE: Duration = Duration::from_millis(400);
 /// キャッシュ上限。超えたら全クリアして作り直す (LRU は持たない)。
 const CACHE_CAPACITY: usize = 256;
 
-type FetchResult = ([u8; 32], Result<(IrRankingResult, Option<IrRankingResult>), String>);
+type FetchResult = (String, [u8; 32], Result<(IrRankingResult, Option<IrRankingResult>), String>);
 
 /// カーソル譜面ごとのキャッシュ済み IR 表示データ。
 #[derive(Debug, Clone)]
@@ -34,7 +34,7 @@ struct CachedChartIr {
 
 pub struct SelectIrRanking {
     cache: HashMap<[u8; 32], CachedChartIr>,
-    in_flight: Option<[u8; 32]>,
+    in_flight: Option<(String, [u8; 32])>,
     pending: Option<([u8; 32], Instant)>,
     /// キャッシュが前提とするランキング条件 (gauge / LN ポリシー設定)。
     /// 変わったらキャッシュごと破棄する。
@@ -75,9 +75,19 @@ impl SelectIrRanking {
             self.context = context.to_string();
             self.clear();
         }
-        while let Ok((sha256, result)) = self.receiver.try_recv() {
-            if self.in_flight == Some(sha256) {
+        while let Ok((result_context, sha256, result)) = self.receiver.try_recv() {
+            if self.in_flight.as_ref().is_some_and(|(context, in_flight_sha)| {
+                context == &result_context && *in_flight_sha == sha256
+            }) {
                 self.in_flight = None;
+            }
+            if result_context != self.context {
+                tracing::debug!(
+                    old_context = %result_context,
+                    current_context = %self.context,
+                    "discarding stale select IR ranking fetch"
+                );
+                continue;
             }
             if self.cache.len() >= CACHE_CAPACITY {
                 self.cache.clear();
@@ -105,7 +115,9 @@ impl SelectIrRanking {
             self.pending = None;
             return;
         };
-        if self.cache.contains_key(&sha256) || self.in_flight == Some(sha256) {
+        if self.cache.contains_key(&sha256)
+            || self.in_flight.as_ref().is_some_and(|(_, in_flight_sha)| *in_flight_sha == sha256)
+        {
             self.pending = None;
             return;
         }
@@ -113,7 +125,7 @@ impl SelectIrRanking {
             Some((pending_sha, since)) if pending_sha == sha256 => {
                 if since.elapsed() >= FETCH_DEBOUNCE && self.in_flight.is_none() {
                     self.pending = None;
-                    self.in_flight = Some(sha256);
+                    self.in_flight = Some((self.context.clone(), sha256));
                     spawn_fetch(
                         ResultIrQuery {
                             profile_root: profile_root.to_path_buf(),
@@ -123,6 +135,7 @@ impl SelectIrRanking {
                             gauge: gauge.to_string(),
                             ln_policy,
                         },
+                        self.context.clone(),
                         sha256,
                         self.sender.clone(),
                     );
@@ -156,15 +169,14 @@ impl SelectIrRanking {
         ir_config: &IrConfig,
         selected: Option<[u8; 32]>,
     ) -> Option<SelectRivalSnapshot> {
-        if enabled_provider(ir_config).is_none() {
-            return None;
-        }
+        enabled_provider(ir_config)?;
         self.cache.get(&selected?).and_then(|entry| entry.rival.clone())
     }
 
     /// ログイン状態が変わったとき等にキャッシュを破棄する。
     pub fn clear(&mut self) {
         self.cache.clear();
+        self.in_flight = None;
         self.pending = None;
     }
 }
@@ -177,7 +189,12 @@ fn enabled_provider(ir_config: &IrConfig) -> Option<(String, String)> {
         .map(|provider| (provider.provider.clone(), provider.base_url.clone()))
 }
 
-fn spawn_fetch(query: ResultIrQuery, sha256: [u8; 32], sender: Sender<FetchResult>) {
+fn spawn_fetch(
+    query: ResultIrQuery,
+    context: String,
+    sha256: [u8; 32],
+    sender: Sender<FetchResult>,
+) {
     tracing::debug!(chart = %query.chart_sha256_hex, "fetching select IR ranking");
     tokio::spawn(async move {
         let result = async {
@@ -191,7 +208,7 @@ fn spawn_fetch(query: ResultIrQuery, sha256: [u8; 32], sender: Sender<FetchResul
         }
         .await
         .map_err(|error| format!("{error:#}"));
-        let _ = sender.send((sha256, result));
+        let _ = sender.send((context, sha256, result));
     });
 }
 
@@ -297,5 +314,21 @@ mod tests {
         // 選択が外れたら予約は破棄。
         select_ir.update(&config, &root, "ctx", "Normal", LnScorePolicy::ForceLn, None);
         assert!(select_ir.pending.is_none());
+    }
+
+    #[test]
+    fn stale_fetch_result_is_discarded_after_context_change() {
+        let mut select_ir = SelectIrRanking::default();
+        let sha = [7u8; 32];
+        let config = ir_config(false);
+        let root = std::env::temp_dir();
+
+        select_ir.context = "new".to_string();
+        select_ir.in_flight = Some(("old".to_string(), sha));
+        select_ir.sender.send(("old".to_string(), sha, Err("stale".to_string()))).unwrap();
+
+        select_ir.update(&config, &root, "new", "Normal", LnScorePolicy::ForceLn, Some(sha));
+        assert!(!select_ir.cache.contains_key(&sha));
+        assert!(select_ir.in_flight.is_none());
     }
 }

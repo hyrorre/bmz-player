@@ -10537,15 +10537,15 @@ fn select_gauge_auto_shift_index(mode: &str) -> usize {
 
 fn select_target_index(target: &str) -> usize {
     match target {
-        "RIVAL" => 0,
-        "MAX" => 1,
-        "AAA" => 2,
-        "AA" => 3,
-        "A" => 4,
-        "B" => 5,
-        "C" => 6,
-        "D" => 7,
-        "E" => 8,
+        "RIVAL" => 1,
+        "MAX" => 2,
+        "AAA" => 3,
+        "AA" => 4,
+        "A" => 5,
+        "B" => 6,
+        "C" => 7,
+        "D" => 8,
+        "E" => 9,
         _ => 0,
     }
 }
@@ -19106,14 +19106,15 @@ mod tests {
     #[test]
     fn select_target_index_maps_fixed_targets() {
         assert_eq!(select_target_index("NONE"), 0);
-        assert_eq!(select_target_index("MAX"), 1);
-        assert_eq!(select_target_index("AAA"), 2);
-        assert_eq!(select_target_index("AA"), 3);
-        assert_eq!(select_target_index("A"), 4);
-        assert_eq!(select_target_index("B"), 5);
-        assert_eq!(select_target_index("C"), 6);
-        assert_eq!(select_target_index("D"), 7);
-        assert_eq!(select_target_index("E"), 8);
+        assert_eq!(select_target_index("RIVAL"), 1);
+        assert_eq!(select_target_index("MAX"), 2);
+        assert_eq!(select_target_index("AAA"), 3);
+        assert_eq!(select_target_index("AA"), 4);
+        assert_eq!(select_target_index("A"), 5);
+        assert_eq!(select_target_index("B"), 6);
+        assert_eq!(select_target_index("C"), 7);
+        assert_eq!(select_target_index("D"), 8);
+        assert_eq!(select_target_index("E"), 9);
     }
 
     #[test]
