@@ -31,14 +31,23 @@ pub fn device_key_path(profile_root: &Path, provider: &str) -> PathBuf {
     profile_root.join("ir").join(format!("{provider}.device_key.json"))
 }
 
+fn device_key_slot<'a>(
+    profile_root: &'a Path,
+    provider: &'a str,
+) -> crate::ir::secret_store::SecretSlot<'a> {
+    crate::ir::secret_store::SecretSlot::new(
+        "ir-device-key",
+        provider,
+        profile_root,
+        device_key_path(profile_root, provider),
+        crate::ir::secret_store::store_mode(),
+    )
+}
+
 /// device key を読み込む。無ければ生成して保存する。
 pub fn load_or_create_device_key(profile_root: &Path, provider: &str) -> Result<StoredDeviceKey> {
-    let path = device_key_path(profile_root, provider);
-    if path.exists() {
-        let raw = std::fs::read_to_string(&path)
-            .with_context(|| format!("failed to read IR device key: {}", path.display()))?;
-        return serde_json::from_str(&raw)
-            .with_context(|| format!("failed to parse IR device key: {}", path.display()));
+    if let Some(raw) = device_key_slot(profile_root, provider).load()? {
+        return serde_json::from_str(&raw).context("failed to parse stored IR device key");
     }
 
     let mut secret = [0u8; 32];
@@ -55,29 +64,14 @@ pub fn load_or_create_device_key(profile_root: &Path, provider: &str) -> Result<
     Ok(key)
 }
 
-/// device key ファイルを削除する (ローテーション用)。
+/// device key を削除する (ローテーション用)。
 pub fn delete_device_key(profile_root: &Path, provider: &str) -> Result<bool> {
-    let path = device_key_path(profile_root, provider);
-    if !path.exists() {
-        return Ok(false);
-    }
-    std::fs::remove_file(&path)?;
-    Ok(true)
+    device_key_slot(profile_root, provider).delete()
 }
 
 pub fn save_device_key(profile_root: &Path, key: &StoredDeviceKey) -> Result<()> {
-    let path = device_key_path(profile_root, &key.provider);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(&path, serde_json::to_string_pretty(key)?)
-        .with_context(|| format!("failed to write IR device key: {}", path.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
-    }
-    Ok(())
+    let raw = serde_json::to_string_pretty(key)?;
+    device_key_slot(profile_root, &key.provider).save(&raw)
 }
 
 /// submission payload の canonical hash と署名から evidence map を作る。

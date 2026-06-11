@@ -191,6 +191,7 @@ fn load_active_profile() -> Result<(ProfilePaths, ProfileConfig)> {
     let profile = load_profile_config(&profile_paths.profile_toml).with_context(|| {
         format!("failed to load profile config: {}", profile_paths.profile_toml.display())
     })?;
+    crate::ir::secret_store::set_store_mode(profile.ir.credential_store);
     Ok((profile_paths, profile))
 }
 

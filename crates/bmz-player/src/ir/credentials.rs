@@ -3,11 +3,12 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::ir::secret_store::SecretSlot;
+
 /// IR provider ごとの認証情報。
 ///
-/// docs/ir.md は OS credential store を最終目標としているが、v1 では
-/// プロファイルディレクトリ配下の JSON ファイル (unix では 0600) に保存する。
-/// `data/` は gitignore 管理のためリポジトリには入らない。
+/// 保存先は `secret_store` 経由で、profile.toml の `[ir] credential_store`
+/// により File (既定) / OS credential store を切り替える。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IrStoredCredentials {
     pub provider: String,
@@ -35,44 +36,35 @@ pub fn credentials_path(profile_root: &Path, provider: &str) -> PathBuf {
     profile_root.join("ir").join(format!("{provider}.json"))
 }
 
+fn credentials_slot<'a>(profile_root: &'a Path, provider: &'a str) -> SecretSlot<'a> {
+    SecretSlot::new(
+        "ir",
+        provider,
+        profile_root,
+        credentials_path(profile_root, provider),
+        crate::ir::secret_store::store_mode(),
+    )
+}
+
 pub fn load_credentials(
     profile_root: &Path,
     provider: &str,
 ) -> Result<Option<IrStoredCredentials>> {
-    let path = credentials_path(profile_root, provider);
-    if !path.exists() {
+    let Some(raw) = credentials_slot(profile_root, provider).load()? else {
         return Ok(None);
-    }
-    let raw = std::fs::read_to_string(&path)
-        .with_context(|| format!("failed to read IR credentials: {}", path.display()))?;
-    let credentials = serde_json::from_str(&raw)
-        .with_context(|| format!("failed to parse IR credentials: {}", path.display()))?;
+    };
+    let credentials =
+        serde_json::from_str(&raw).context("failed to parse stored IR credentials")?;
     Ok(Some(credentials))
 }
 
 pub fn save_credentials(profile_root: &Path, credentials: &IrStoredCredentials) -> Result<()> {
-    let path = credentials_path(profile_root, &credentials.provider);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
     let raw = serde_json::to_string_pretty(credentials)?;
-    std::fs::write(&path, raw)
-        .with_context(|| format!("failed to write IR credentials: {}", path.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
-    }
-    Ok(())
+    credentials_slot(profile_root, &credentials.provider).save(&raw)
 }
 
 pub fn delete_credentials(profile_root: &Path, provider: &str) -> Result<bool> {
-    let path = credentials_path(profile_root, provider);
-    if !path.exists() {
-        return Ok(false);
-    }
-    std::fs::remove_file(&path)?;
-    Ok(true)
+    credentials_slot(profile_root, provider).delete()
 }
 
 #[cfg(test)]

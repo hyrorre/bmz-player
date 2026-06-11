@@ -95,6 +95,8 @@ pub fn bootstrap() -> Result<BootstrappedApp> {
     let profile_paths = resolve_profile_paths(&app_paths, &app_config.active_profile)?;
     profile_paths.ensure_dirs()?;
     let profile_config = load_or_create_profile_config(&profile_paths, &app_config.active_profile)?;
+    // IR 秘密情報の保存先 (File / OS credential store) をプロセス全体へ反映する。
+    crate::ir::secret_store::set_store_mode(profile_config.ir.credential_store);
 
     crate::storage::migration::migrate_library_db(&app_paths.library_db)?;
     crate::storage::migration::migrate_score_db(&profile_paths.score_db)?;
