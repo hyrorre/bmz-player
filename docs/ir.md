@@ -1852,6 +1852,175 @@ IR送信:
 
 初期実装では後回しでよいが、設計だけ残す。
 
+### Server DB 設計案 (2026-06-11 追記、未実装)
+
+`scores` / `best_scores` の規約 (clear_rank、verification、idempotency、
+served timestamps) をコースにもそのまま流用する。BMZ local の
+`library.db` 側モデル (`courses` + `course_scores` + `course_score_charts`)
+と対応させる。
+
+#### Course identity
+
+- `course_hash` を主キー相当の identity にする。
+  ローカル `course_key` ではなくサーバー間で再現可能な値として、
+  「譜面 sha256 の順序付きリスト + constraint 群」を canonical JSON 化した
+  ものの SHA256 とする (tamper evidence と同じ正規化規則)。
+
+```txt
+course_hash = SHA256(canonical_json({
+  "charts": ["sha256-1", "sha256-2", ...],   # プレイ順
+  "constraints": {
+    "class": ..., "speed": ..., "judge": ..., "gauge": ..., "ln": ...
+  }
+}))
+```
+
+- タイトルや出典 URL は identity に含めない (表示 metadata)。
+- score identity (best / ranking の分離キー) は
+  `course_hash + gauge + ln_policy_setting + scoring`。
+  - `gauge`: 段位 (class 系 constraint) では constraint で固定されるが、
+    通常コースではユーザー選択なので key に含める。
+  - `ln_policy_setting`: コースは譜面ごとに LN 解決が変わるため、
+    解決後の policy ではなく設定値 (`AutoLn` / `ForceCn` など) を使う。
+
+#### ir_courses (registry)
+
+```sql
+create table public.ir_courses (
+  course_hash text primary key,
+  title text not null default '',
+  kind text not null default 'course',          -- 'dan' | 'course'
+  charts jsonb not null,                        -- ["sha256", ...] プレイ順
+  chart_count integer not null,
+  constraints jsonb not null default '{}'::jsonb,
+  source_url text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint ir_courses_hash_hex check (course_hash ~ '^[0-9a-f]{64}$'),
+  constraint ir_courses_kind_known check (kind in ('dan', 'course')),
+  constraint ir_courses_chart_count_positive check (chart_count > 0)
+);
+```
+
+submit 時に `scores` の chart upsert と同様に upsert する。
+個々の譜面は `charts` registry に既存の仕組みで upsert 済みである前提
+(コース送信時に未登録 chart があれば metadata なしで sha256 だけ登録)。
+
+#### course_scores (投稿履歴)
+
+```sql
+create table public.course_scores (
+  id uuid primary key default gen_random_uuid(),
+  player_id uuid not null references public.profiles(id) on delete cascade,
+  course_hash text not null references public.ir_courses(course_hash),
+
+  client_name text not null,
+  client_version text not null,
+  platform text not null,
+
+  gauge text not null,                          -- class / exclass / normal ...
+  ln_policy text not null,                      -- LnPolicySetting 値
+  scoring text not null,                        -- 'bms_ex_score_v1'
+
+  clear_type text not null,                     -- ClearType::as_str()
+  clear_rank integer not null,
+  course_clear boolean not null,
+  course_failed boolean not null,
+  played_entries integer not null,              -- 実際にプレイした譜面数
+  trophies jsonb not null default '[]'::jsonb,  -- 達成トロフィー名
+
+  ex_score integer not null,
+  max_ex_score integer not null,
+  max_combo integer not null,
+  bp integer not null,
+  judges jsonb not null,                        -- fast/slow 合算 (scores と同形)
+  gauge_value numeric not null,                 -- 最終ゲージ
+
+  -- 譜面ごとの内訳。course_score_charts を別テーブルにせず jsonb で持つ。
+  -- [{ "sha256": ..., "ex_score": ..., "max_combo": ..., "bp": ...,
+  --    "gauge_end": ..., "clear": ... }, ...] プレイ順。
+  entries jsonb not null,
+
+  played_at timestamptz,
+  server_received_at timestamptz not null default now(),
+  device_type text not null,
+  evidence jsonb not null default '{}'::jsonb,  -- bmz-course-score-evidence-v1
+  verification text not null default 'unverified',
+  accepted boolean not null default true,
+  idempotency_key text not null,
+
+  constraint course_scores_verification_known check (
+    verification in ('unverified', 'signed', 'invalid', 'trusted')
+  ),
+  constraint course_scores_device_known check (device_type in ('keyboard', 'controller')),
+  unique (player_id, idempotency_key)
+);
+
+create index idx_course_scores_course
+  on public.course_scores(course_hash, server_received_at desc);
+```
+
+`entries` を jsonb にするのはランキング集計に内訳を使わないため。
+譜面単位の分析が必要になったら正規化テーブルへ移す。
+
+#### best_course_scores (ランキング用 best)
+
+```sql
+create table public.best_course_scores (
+  id uuid primary key default gen_random_uuid(),
+  player_id uuid not null references public.profiles(id) on delete cascade,
+  course_hash text not null references public.ir_courses(course_hash),
+  course_score_id uuid not null references public.course_scores(id),
+
+  ex_score integer not null,
+  clear_type text not null,
+  clear_rank integer not null,
+  course_clear boolean not null,
+  max_combo integer not null,
+  bp integer not null,
+  device_type text not null,
+
+  gauge text not null,
+  ln_policy text not null,
+  scoring text not null,
+
+  played_at timestamptz,
+  server_received_at timestamptz not null,
+  verification text not null default 'unverified',
+
+  unique (player_id, course_hash, gauge, ln_policy, scoring)
+);
+```
+
+best 更新条件は単曲と同じ
+`ex_score > clear_rank > bp(小) > max_combo` の順。
+段位らしさを優先するなら `clear_rank` (合格段位) を第一キーにする案も
+あるが、IR 全体の「EX score 主軸」を崩さない方を既定にする。
+`verification = 'invalid'` は単曲同様 best 更新不可。
+
+#### RLS / API
+
+- RLS は `scores` / `best_scores` と同じ方針:
+  select は公開、書き込みは server route (service role) のみ。
+- API は本節冒頭の `POST /api/v1/course-scores` に加えて:
+
+```http
+GET /api/v1/courses/{course_hash}                # registry + 集計
+GET /api/v1/courses/{course_hash}/ranking        # scope/gauge/ln_policy
+```
+
+- evidence は `bmz-course-score-evidence-v1` schema で、単曲と同じ
+  Ed25519 device key / canonical JSON を使う。
+
+#### クライアント側の対応 (未実装)
+
+- `CourseResultSummary` (course_session.rs) から payload を構築。
+  `course_hash` は course 定義 (charts + constraints) から計算し、
+  ローカル `courses.course_key` とは独立に持つ。
+- `ir_score_jobs` を流用するか course 用 job テーブルを足すかは実装時に
+  判断 (payload_json + chart_sha256 列の扱いが合わないため、
+  `kind` 列を足して共用する案を第一候補とする)。
+
 ```http
 POST /api/v1/course-scores
 ```
