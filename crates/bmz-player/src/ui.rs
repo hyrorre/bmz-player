@@ -22,9 +22,10 @@ use crate::config::app_config::{
 };
 use crate::config::profile_config::{
     AssistOptionConfig, BgaExpandConfig, BgaModeConfig, FastSlowDisplayScope, GaugeAutoShiftConfig,
-    GaugeTypeConfig, HispeedModeConfig, IrProviderConfig, IrProviderRoleConfig, IrSendPolicyConfig,
-    JudgeAlgorithmConfig, LaneEffectConfig, ProfileConfig, RandomOptionConfig, ReplaySlotRule,
-    ScratchInputMode, SkinConfig, SkinHistoryEntryConfig, SkinOffsetConfig, TargetOptionConfig,
+    GaugeTypeConfig, HispeedModeConfig, IrCredentialStoreConfig, IrProviderConfig,
+    IrProviderRoleConfig, IrSendPolicyConfig, JudgeAlgorithmConfig, LaneEffectConfig,
+    ProfileConfig, RandomOptionConfig, ReplaySlotRule, ScratchInputMode, SkinConfig,
+    SkinHistoryEntryConfig, SkinOffsetConfig, TargetOptionConfig,
 };
 use crate::ln_policy::LnPolicySetting;
 use crate::practice_ui::{PracticePanelContext, build_practice_panel};
@@ -2135,6 +2136,23 @@ fn build_profile_settings_panel(
                         &mut profile.ir.prefetch_global_ranking_on_score_submit,
                         "スコア送信後に全体順位を取得",
                     );
+                    egui::ComboBox::from_label("秘密情報の保存先 (要再起動)")
+                        .selected_text(match profile.ir.credential_store {
+                            IrCredentialStoreConfig::File => "ファイル (プロファイル内)",
+                            IrCredentialStoreConfig::Os => "OS credential store",
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut profile.ir.credential_store,
+                                IrCredentialStoreConfig::File,
+                                "ファイル (プロファイル内)",
+                            );
+                            ui.selectable_value(
+                                &mut profile.ir.credential_store,
+                                IrCredentialStoreConfig::Os,
+                                "OS credential store",
+                            );
+                        });
                     ui.checkbox(
                         &mut profile.ir.prefetch_rival_ranking_on_score_submit,
                         "スコア送信後にライバル順位を取得",
