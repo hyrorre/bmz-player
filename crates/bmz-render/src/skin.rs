@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{HashMap, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -205,7 +206,7 @@ struct DestinationResolveContext<'a> {
     images: &'a HashMap<&'a str, &'a SkinImageDef>,
     values: &'a HashMap<&'a str, &'a SkinValueDef>,
     enabled_options: &'a [i32],
-    state: SkinDrawState,
+    state: &'a SkinDrawState,
     text_state: SkinTextState<'a>,
     sources: &'a HashMap<String, SkinDocumentTexture>,
     runtime_graphs: SkinRuntimeGraphs<'a>,
@@ -1441,16 +1442,16 @@ impl SkinContext {
     }
 
     pub fn static_document_items(&self) -> Vec<SkinRenderItem> {
-        self.static_document_items_for_state(SkinDrawState::default())
+        self.static_document_items_for_state(&SkinDrawState::default())
     }
 
-    pub fn static_document_items_for_state(&self, state: SkinDrawState) -> Vec<SkinRenderItem> {
+    pub fn static_document_items_for_state(&self, state: &SkinDrawState) -> Vec<SkinRenderItem> {
         self.static_document_items_for_state_and_text(state, SkinTextState::default())
     }
 
     pub fn static_document_items_for_state_and_text(
         &self,
-        state: SkinDrawState,
+        state: &SkinDrawState,
         text: SkinTextState<'_>,
     ) -> Vec<SkinRenderItem> {
         let Some(document) = &self.document else {
@@ -1462,7 +1463,7 @@ impl SkinContext {
     pub fn static_document_items_for_result_state_and_text(
         &self,
         graph: &crate::snapshot::ResultGraphSnapshot,
-        state: SkinDrawState,
+        state: &SkinDrawState,
         text: SkinTextState<'_>,
     ) -> Vec<SkinRenderItem> {
         let Some(document) = &self.document else {
@@ -1536,7 +1537,7 @@ impl SkinContext {
     /// `.0` はノーツ背面、`.1` はノーツ前面、`.2` は閉店/暗転オーバーレイ（最前面）。
     pub fn static_document_items_split_for_state_and_text(
         &self,
-        state: SkinDrawState,
+        state: &SkinDrawState,
         text: SkinTextState<'_>,
     ) -> (Vec<SkinRenderItem>, Vec<SkinRenderItem>, Vec<SkinRenderItem>) {
         let Some(document) = &self.document else {
@@ -1618,7 +1619,7 @@ impl SkinContext {
     pub fn document_bar_line_items(
         &self,
         note_y: f32,
-        state: SkinDrawState,
+        state: &SkinDrawState,
     ) -> Vec<SkinRenderItem> {
         let Some(document) = self.document.as_ref() else {
             return Vec::new();
@@ -1665,20 +1666,21 @@ impl SkinContext {
             .iter()
             .find(|j| j.index == region as i32)
             .or_else(|| document.judge.first())?;
+        let state = SkinDrawState { skin_offsets, ..SkinDrawState::default() };
         document.judge_render_items_for_def(
             judge_def,
             judge_image_index,
             combo,
             elapsed_ms,
             &self.document_sources,
-            SkinDrawState { skin_offsets, ..SkinDrawState::default() },
+            &state,
         )
     }
 
     pub fn apply_play_skin_global_offset(
         &self,
         items: Vec<SkinRenderItem>,
-        state: SkinDrawState,
+        state: &SkinDrawState,
     ) -> Vec<SkinRenderItem> {
         if self.document.is_none() {
             return items;
@@ -1689,7 +1691,7 @@ impl SkinContext {
     pub fn apply_play_skin_global_offset_to_item(
         &self,
         item: SkinRenderItem,
-        state: SkinDrawState,
+        state: &SkinDrawState,
     ) -> SkinRenderItem {
         if self.document.is_none() {
             return item;
@@ -1706,7 +1708,7 @@ impl SkinContext {
         key_mode: KeyMode,
         note_y: f32,
         note_height: f32,
-        state: SkinDrawState,
+        state: &SkinDrawState,
     ) -> Option<Rect> {
         let document = self.document.as_ref()?;
         let enabled_options = document.enabled_options();
@@ -1726,7 +1728,7 @@ impl SkinContext {
         key_mode: KeyMode,
         head_y: f32,
         tail_y: f32,
-        state: SkinDrawState,
+        state: &SkinDrawState,
     ) -> Option<Rect> {
         let document = self.document.as_ref()?;
         let enabled_options = document.enabled_options();
@@ -1821,7 +1823,7 @@ impl SkinBgaFrame {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SkinDrawState {
     pub elapsed_ms: i32,
     pub ready_timer_ms: Option<i32>,
@@ -2289,12 +2291,7 @@ impl DynamicTimerRuntime {
     }
 
     /// observe 条件を評価し、`state.dynamic_timer_ms` を更新する。
-    pub fn advance(
-        &mut self,
-        document: &SkinDocument,
-        mut state: SkinDrawState,
-        now_ms: i32,
-    ) -> SkinDrawState {
+    pub fn advance(&mut self, document: &SkinDocument, state: &mut SkinDrawState, now_ms: i32) {
         for def in &document.dynamic_timers {
             let idx = def.id.saturating_sub(SKIN_DYNAMIC_TIMER_BASE) as usize;
             if idx >= SKIN_DYNAMIC_TIMER_COUNT {
@@ -2308,7 +2305,6 @@ impl DynamicTimerRuntime {
                 state.dynamic_timer_ms[idx] = None;
             }
         }
-        state
     }
 }
 
@@ -2718,7 +2714,7 @@ impl SkinDocument {
     pub fn static_image_render_items(
         &self,
         sources: &HashMap<String, SkinDocumentTexture>,
-        state: SkinDrawState,
+        state: &SkinDrawState,
     ) -> Vec<SkinRenderItem> {
         self.static_render_items(sources, state, SkinTextState::default())
     }
@@ -2726,7 +2722,7 @@ impl SkinDocument {
     pub fn static_render_items(
         &self,
         sources: &HashMap<String, SkinDocumentTexture>,
-        state: SkinDrawState,
+        state: &SkinDrawState,
         text_state: SkinTextState<'_>,
     ) -> Vec<SkinRenderItem> {
         self.static_render_items_with_graphs(
@@ -2740,7 +2736,7 @@ impl SkinDocument {
     fn static_render_items_with_graphs(
         &self,
         sources: &HashMap<String, SkinDocumentTexture>,
-        state: SkinDrawState,
+        state: &SkinDrawState,
         text_state: SkinTextState<'_>,
         runtime_graphs: SkinRuntimeGraphs<'_>,
     ) -> Vec<SkinRenderItem> {
@@ -2756,7 +2752,7 @@ impl SkinDocument {
     fn static_render_items_with_graphs_cached(
         &self,
         sources: &HashMap<String, SkinDocumentTexture>,
-        state: SkinDrawState,
+        state: &SkinDrawState,
         text_state: SkinTextState<'_>,
         runtime_graphs: SkinRuntimeGraphs<'_>,
         cache: Option<&mut ResultRenderCache>,
@@ -2778,7 +2774,7 @@ impl SkinDocument {
     pub fn static_render_items_split(
         &self,
         sources: &HashMap<String, SkinDocumentTexture>,
-        state: SkinDrawState,
+        state: &SkinDrawState,
         text_state: SkinTextState<'_>,
     ) -> (Vec<SkinRenderItem>, Vec<SkinRenderItem>, Vec<SkinRenderItem>) {
         self.static_render_items_split_with_graphs(
@@ -2793,7 +2789,7 @@ impl SkinDocument {
     fn static_render_items_split_with_graphs(
         &self,
         sources: &HashMap<String, SkinDocumentTexture>,
-        state: SkinDrawState,
+        state: &SkinDrawState,
         text_state: SkinTextState<'_>,
         runtime_graphs: SkinRuntimeGraphs<'_>,
         mut cache: Option<&mut ResultRenderCache>,
@@ -2822,6 +2818,7 @@ impl SkinDocument {
         );
         let state =
             apply_half_grade_f_diff_rank_fallback(state, has_half_grade_f_diff_rank_destination);
+        let state = state.as_ref();
         for index in 0..destination_count {
             let Some(destination) = planning
                 .as_ref()
@@ -2931,7 +2928,7 @@ impl SkinDocument {
         destination: &SkinDestinationDef,
         images: &HashMap<&str, &SkinImageDef>,
         enabled_options: &[i32],
-        state: SkinDrawState,
+        state: &SkinDrawState,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<SkinRenderItem> {
         if state.result_failed.is_none() || destination.id != "judge_graph" {
@@ -2985,7 +2982,7 @@ impl SkinDocument {
         destination: &SkinDestinationDef,
         images: &HashMap<&str, &SkinImageDef>,
         enabled_options: &[i32],
-        state: SkinDrawState,
+        state: &SkinDrawState,
         next_destination: Option<&SkinDestinationDef>,
     ) -> bool {
         if !matches!(next_destination, Some(next) if next.id == "notes")
@@ -3079,6 +3076,7 @@ impl SkinDocument {
         } = context;
         let state =
             apply_half_grade_f_diff_rank_fallback(state, has_half_grade_f_diff_rank_destination);
+        let state = state.as_ref();
         if let Some(judge_def) = self.judge.iter().find(|judge| judge.id == destination.id) {
             let region = judge_def.index.clamp(0, MAX_JUDGE_REGIONS as i32 - 1) as usize;
             let elapsed = state.judge_ms[region]?;
@@ -3413,7 +3411,7 @@ impl SkinDocument {
         offset: (i32, i32),
         images: &HashMap<&str, &SkinImageDef>,
         enabled_options: &[i32],
-        state: SkinDrawState,
+        state: &SkinDrawState,
         text_state: SkinTextState<'_>,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<Vec<SkinRenderItem>> {
@@ -3422,6 +3420,7 @@ impl SkinDocument {
             half_grade_f_diff_rank_destination_available(&destinations);
         let state =
             apply_half_grade_f_diff_rank_fallback(state, has_half_grade_f_diff_rank_destination);
+        let state = state.as_ref();
         if !destination_ops_match(
             destination,
             enabled_options,
@@ -3669,7 +3668,7 @@ impl SkinDocument {
                     snapshot,
                     &images,
                     &enabled_options,
-                    state,
+                    &state,
                 ));
                 continue;
             }
@@ -3677,7 +3676,7 @@ impl SkinDocument {
                 settings_dest_index,
                 destination,
                 &enabled_options,
-                state,
+                &state,
                 snapshot,
                 selected_row,
                 eval_skin_draw_condition,
@@ -3706,7 +3705,7 @@ impl SkinDocument {
                     destination,
                     (0, 0),
                     &enabled_options,
-                    state,
+                    &state,
                 ));
                 continue;
             }
@@ -3714,23 +3713,23 @@ impl SkinDocument {
                 selected_row.filter(|row| select_row_shows_score_decorations(row)),
                 self.bpmgraph.iter().find(|graph| graph.id == destination.id),
             ) {
-                let Some(elapsed) = skin_timer_elapsed_ms(destination.timer, state) else {
+                let Some(elapsed) = skin_timer_elapsed_ms(destination.timer, &state) else {
                     continue;
                 };
                 let Some(mut frame) =
-                    resolve_destination_frame(destination, elapsed, &enabled_options, state)
+                    resolve_destination_frame(destination, elapsed, &enabled_options, &state)
                 else {
                     continue;
                 };
-                apply_skin_offset_to_frame(destination, &mut frame, state, false);
-                if !destination_mouse_rect_contains(destination, frame, state) {
+                apply_skin_offset_to_frame(destination, &mut frame, &state, false);
+                if !destination_mouse_rect_contains(destination, frame, &state) {
                     continue;
                 }
                 items.extend(self.bpmgraph_render_items_with_segments(
                     bpm_graph,
                     destination,
                     frame,
-                    state,
+                    &state,
                     &row.chart_bpm_graph_segments,
                 ));
                 continue;
@@ -3742,7 +3741,7 @@ impl SkinDocument {
                     images: &images,
                     values: &values,
                     enabled_options: &enabled_options,
-                    state,
+                    state: &state,
                     text_state: text,
                     sources,
                     runtime_graphs: SkinRuntimeGraphs::from_document(self),
@@ -3860,7 +3859,8 @@ impl SkinDocument {
             ..SkinDrawState::default()
         };
         if let Some(runtime) = dynamic_timers {
-            state = runtime.advance(self, state, state.elapsed_ms);
+            let now_ms = state.elapsed_ms;
+            runtime.advance(self, &mut state, now_ms);
         }
         (state, selected_row)
     }
@@ -3895,7 +3895,7 @@ impl SkinDocument {
                     settings_dest_index,
                     destination,
                     &enabled_options,
-                    state,
+                    &state,
                     snapshot,
                     selected_row,
                     eval_skin_draw_condition,
@@ -3904,7 +3904,7 @@ impl SkinDocument {
                     return None;
                 }
                 let slider = self.slider.iter().find(|slider| slider.id == destination.id)?;
-                self.destination_slider_hit(slider, destination, &enabled_options, state, x, y)
+                self.destination_slider_hit(slider, destination, &enabled_options, &state, x, y)
             })
             .next_back()
     }
@@ -3921,14 +3921,14 @@ impl SkinDocument {
         let mut hits = Vec::new();
         for destination in self.all_destinations(&enabled_options) {
             if destination.id == self.songlist.as_ref().map(|list| list.id.as_str()).unwrap_or("") {
-                hits.extend(self.select_songlist_click_hits(snapshot, &enabled_options, state));
+                hits.extend(self.select_songlist_click_hits(snapshot, &enabled_options, &state));
                 continue;
             }
             if !crate::select_settings_dest::test_select_destination_visible(
                 settings_dest_index,
                 destination,
                 &enabled_options,
-                state,
+                &state,
                 snapshot,
                 selected_row,
                 eval_skin_draw_condition,
@@ -3939,7 +3939,7 @@ impl SkinDocument {
             let Some(target) = self.click_target_for_destination(destination, &images) else {
                 continue;
             };
-            let Some(rect) = self.destination_click_rect(destination, &enabled_options, state)
+            let Some(rect) = self.destination_click_rect(destination, &enabled_options, &state)
             else {
                 continue;
             };
@@ -3952,7 +3952,7 @@ impl SkinDocument {
         &self,
         snapshot: &SelectSnapshot,
         enabled_options: &[i32],
-        state: SkinDrawState,
+        state: &SkinDrawState,
     ) -> Vec<SkinClickHit> {
         let Some(songlist) = &self.songlist else {
             return Vec::new();
@@ -4007,10 +4007,10 @@ impl SkinDocument {
                 gauge: row.gauge_value.unwrap_or(0.0),
                 ex_score: row.ex_score.unwrap_or(0),
                 select_chart_key_mode: row.chart_key_mode,
-                ..state
+                ..(*state).clone()
             };
             let Some(rect) =
-                self.destination_click_rect(row_destination, enabled_options, row_state)
+                self.destination_click_rect(row_destination, enabled_options, &row_state)
             else {
                 continue;
             };
@@ -4040,7 +4040,7 @@ impl SkinDocument {
         &self,
         destination: &SkinDestinationDef,
         enabled_options: &[i32],
-        state: SkinDrawState,
+        state: &SkinDrawState,
     ) -> Option<Rect> {
         let elapsed = skin_timer_elapsed_ms(destination.timer, state)?;
         let mut frame = resolve_destination_frame(destination, elapsed, enabled_options, state)?;
@@ -4057,7 +4057,7 @@ impl SkinDocument {
         slider: &SkinSliderDef,
         destination: &SkinDestinationDef,
         enabled_options: &[i32],
-        state: SkinDrawState,
+        state: &SkinDrawState,
         x: f32,
         y: f32,
     ) -> Option<SkinSliderHit> {
@@ -4086,7 +4086,7 @@ impl SkinDocument {
         snapshot: &SelectSnapshot,
         images: &HashMap<&str, &SkinImageDef>,
         enabled_options: &[i32],
-        state: SkinDrawState,
+        state: &SkinDrawState,
     ) -> Vec<SkinRenderItem> {
         let Some(songlist) = &self.songlist else {
             return Vec::new();
@@ -4128,7 +4128,7 @@ impl SkinDocument {
                 gauge: row.gauge_value.unwrap_or(0.0),
                 ex_score: row.ex_score.unwrap_or(0),
                 select_chart_key_mode: row.chart_key_mode,
-                ..state
+                ..(*state).clone()
             };
             let offset = row_position as i32 - selected_row_position;
             let slot = songlist.center + offset;
@@ -4144,7 +4144,7 @@ impl SkinDocument {
             };
             let elapsed = skin_timer_elapsed_ms(row_destination.timer, state).unwrap_or(0);
             let Some(mut row_frame) =
-                resolve_destination_frame(row_destination, elapsed, enabled_options, row_state)
+                resolve_destination_frame(row_destination, elapsed, enabled_options, &row_state)
             else {
                 continue;
             };
@@ -4161,7 +4161,7 @@ impl SkinDocument {
                     row_origin,
                     images,
                     enabled_options,
-                    row_state,
+                    &row_state,
                     sources,
                 ));
             }
@@ -4172,7 +4172,7 @@ impl SkinDocument {
                     row_origin,
                     images,
                     enabled_options,
-                    row_state,
+                    &row_state,
                     sources,
                 ));
                 for label_index in select_row_label_indices(row) {
@@ -4182,7 +4182,7 @@ impl SkinDocument {
                         row_origin,
                         images,
                         enabled_options,
-                        row_state,
+                        &row_state,
                         sources,
                     ));
                 }
@@ -4195,7 +4195,7 @@ impl SkinDocument {
                         row_origin,
                         images,
                         enabled_options,
-                        row_state,
+                        &row_state,
                         sources,
                     ));
                 }
@@ -4205,7 +4205,7 @@ impl SkinDocument {
                     row_origin,
                     images,
                     enabled_options,
-                    row_state,
+                    &row_state,
                     sources,
                 ));
                 items.extend(self.select_songlist_all_child_items(
@@ -4214,7 +4214,7 @@ impl SkinDocument {
                     row_origin,
                     images,
                     enabled_options,
-                    row_state,
+                    &row_state,
                     sources,
                 ));
             }
@@ -4225,7 +4225,7 @@ impl SkinDocument {
                     row_origin,
                     images,
                     enabled_options,
-                    row_state,
+                    &row_state,
                     sources,
                 ));
             }
@@ -4234,7 +4234,7 @@ impl SkinDocument {
                 row_origin,
                 images,
                 enabled_options,
-                row_state,
+                &row_state,
                 sources,
             ));
         }
@@ -4248,7 +4248,7 @@ impl SkinDocument {
         row_origin: (i32, i32),
         images: &HashMap<&str, &SkinImageDef>,
         enabled_options: &[i32],
-        state: SkinDrawState,
+        state: &SkinDrawState,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Vec<SkinRenderItem> {
         let mut items = Vec::new();
@@ -4313,7 +4313,7 @@ impl SkinDocument {
         destination: &SkinDestinationDef,
         row_origin: (i32, i32),
         enabled_options: &[i32],
-        state: SkinDrawState,
+        state: &SkinDrawState,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Vec<SkinRenderItem> {
         let Some(source) = sources.get(&graph.src) else {
@@ -4397,7 +4397,7 @@ impl SkinDocument {
         row_origin: (i32, i32),
         images: &HashMap<&str, &SkinImageDef>,
         enabled_options: &[i32],
-        state: SkinDrawState,
+        state: &SkinDrawState,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Vec<SkinRenderItem> {
         let level_index = select_row_difficulty_code(row).clamp(0, i64::MAX) as usize;
@@ -4419,7 +4419,7 @@ impl SkinDocument {
         row_origin: (i32, i32),
         images: &HashMap<&str, &SkinImageDef>,
         enabled_options: &[i32],
-        state: SkinDrawState,
+        state: &SkinDrawState,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Vec<SkinRenderItem> {
         let mut items = Vec::new();
@@ -4446,7 +4446,7 @@ impl SkinDocument {
         row_origin: (i32, i32),
         images: &HashMap<&str, &SkinImageDef>,
         enabled_options: &[i32],
-        state: SkinDrawState,
+        state: &SkinDrawState,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Vec<SkinRenderItem> {
         let Some(songlist) = &self.songlist else {
@@ -4505,7 +4505,7 @@ impl SkinDocument {
         let image = self.image.iter().find(|image| image.id == *image_id)?;
         let source = resolve_document_source(sources, &image.src)?;
         let elapsed =
-            skin_timer_elapsed_ms(destination.timer, SkinDrawState::default()).unwrap_or(0);
+            skin_timer_elapsed_ms(destination.timer, &SkinDrawState::default()).unwrap_or(0);
         let (rect, uv) = stretch_skin_image_geometry(
             destination.stretch,
             normalize_skin_frame_rect(frame, self.w, self.h),
@@ -4730,7 +4730,7 @@ impl SkinDocument {
     pub fn note_group_render_items(
         &self,
         note_y: f32,
-        state: SkinDrawState,
+        state: &SkinDrawState,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Vec<SkinRenderItem> {
         let Some(note) = self.note.as_ref() else {
@@ -4845,7 +4845,7 @@ impl SkinDocument {
         }
     }
 
-    fn apply_notes_offset_to_rect(&self, rect: Rect, state: SkinDrawState) -> Rect {
+    fn apply_notes_offset_to_rect(&self, rect: Rect, state: &SkinDrawState) -> Rect {
         let Some(offset) = state.skin_offsets.get(OFFSET_NOTES_1P) else {
             return rect;
         };
@@ -4873,10 +4873,10 @@ impl SkinDocument {
             self.all_destinations(&enabled_options).into_iter().find(|destination| {
                 self.destination_uses_skin_gauge_bar_render(destination)
                     && destination.timer.is_none()
-                    && test_skin_ops(&destination.op, &enabled_options, state)
-                    && eval_skin_draw_condition(&destination.draw, state)
+                    && test_skin_ops(&destination.op, &enabled_options, &state)
+                    && eval_skin_draw_condition(&destination.draw, &state)
             })?;
-        self.resolve_gauge_destination_items(destination, &enabled_options, state, sources)
+        self.resolve_gauge_destination_items(destination, &enabled_options, &state, sources)
     }
 
     fn destination_uses_skin_gauge_bar_render(&self, destination: &SkinDestinationDef) -> bool {
@@ -4904,7 +4904,7 @@ impl SkinDocument {
         &self,
         destination: &SkinDestinationDef,
         enabled_options: &[i32],
-        state: SkinDrawState,
+        state: &SkinDrawState,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<Vec<SkinRenderItem>> {
         let gauge_def = self.skin_gauge_for_destination(destination)?;
@@ -5007,13 +5007,14 @@ impl SkinDocument {
     ) -> Option<Vec<SkinRenderItem>> {
         let judge_image_index = judge_image_index(judge)?;
         let judge_def = self.judge.first()?;
+        let state = SkinDrawState { skin_offsets, ..SkinDrawState::default() };
         self.judge_render_items_for_def(
             judge_def,
             judge_image_index,
             combo,
             elapsed_ms,
             sources,
-            SkinDrawState { skin_offsets, ..SkinDrawState::default() },
+            &state,
         )
     }
 
@@ -5024,7 +5025,7 @@ impl SkinDocument {
         combo: u32,
         elapsed_ms: i32,
         sources: &HashMap<String, SkinDocumentTexture>,
-        state: SkinDrawState,
+        state: &SkinDrawState,
     ) -> Option<Vec<SkinRenderItem>> {
         let image_destination = judge.images.get(judge_index)?;
         let enabled_options = self.enabled_options();
@@ -5044,7 +5045,7 @@ impl SkinDocument {
         // `offsets` フィールドで宣言されたぶんだけ適用される。ここで重ねて
         // 注入すると、`offsets: [32]` を持つ skin (beatoraja 標準形) で
         // 二重適用になり、判定文字とコンボ数の Y が乖離する原因になる。
-        apply_skin_offset_to_frame(image_destination, &mut image_frame, offset_state, false);
+        apply_skin_offset_to_frame(image_destination, &mut image_frame, &offset_state, false);
         // beatoraja はコンボ数字をシフト前の判定文字 X を基準に配置する。
         let image_frame_for_numbers = image_frame;
         if judge.shift
@@ -5098,7 +5099,7 @@ impl SkinDocument {
             apply_skin_offset_to_frame_relative(
                 number_destination,
                 &mut number_frame,
-                offset_state,
+                &offset_state,
             );
             if let Some(value) = self.value.iter().find(|value| value.id == number_destination.id) {
                 Self::apply_beatoraja_judge_number_dst_x(&mut number_frame, value.digit);
@@ -5373,7 +5374,7 @@ impl SkinDocument {
         visualizer: &SkinHitErrorVisualizerDef,
         destination: &SkinDestinationDef,
         frame: ResolvedSkinFrame,
-        state: SkinDrawState,
+        state: &SkinDrawState,
     ) -> Vec<SkinRenderItem> {
         if visualizer.hiterror_mode == 0 {
             return Vec::new();
@@ -5436,7 +5437,7 @@ impl SkinDocument {
         graph: &SkinGaugeGraphDef,
         destination: &SkinDestinationDef,
         frame: ResolvedSkinFrame,
-        state: SkinDrawState,
+        state: &SkinDrawState,
         points: &[crate::snapshot::ResultGaugeGraphPoint],
     ) -> Vec<SkinRenderItem> {
         if points.is_empty() {
@@ -5559,7 +5560,7 @@ impl SkinDocument {
         visualizer: &SkinTimingVisualizerDef,
         destination: &SkinDestinationDef,
         frame: ResolvedSkinFrame,
-        state: SkinDrawState,
+        state: &SkinDrawState,
         timing_points: &[crate::snapshot::ResultTimingPoint],
     ) -> Vec<SkinRenderItem> {
         if timing_points.is_empty() {
@@ -5617,7 +5618,7 @@ impl SkinDocument {
         graph: &SkinTimingDistributionGraphDef,
         destination: &SkinDestinationDef,
         frame: ResolvedSkinFrame,
-        state: SkinDrawState,
+        state: &SkinDrawState,
         timing_points: &[crate::snapshot::ResultTimingPoint],
         timing_distribution: &crate::snapshot::ResultTimingDistribution,
     ) -> Vec<SkinRenderItem> {
@@ -5710,7 +5711,7 @@ impl SkinDocument {
         destination: &SkinDestinationDef,
         frame: ResolvedSkinFrame,
         elapsed_ms: i32,
-        state: SkinDrawState,
+        state: &SkinDrawState,
         runtime_graphs: SkinRuntimeGraphs<'_>,
         cache: Option<&mut ResultRenderCache>,
     ) -> Vec<SkinRenderItem> {
@@ -5823,7 +5824,7 @@ impl SkinDocument {
         destination: &SkinDestinationDef,
         row_origin: (i32, i32),
         enabled_options: &[i32],
-        state: SkinDrawState,
+        state: &SkinDrawState,
     ) -> Vec<SkinRenderItem> {
         if row.chart_distribution.is_empty()
             || !test_skin_ops(&destination.op, enabled_options, state)
@@ -5924,7 +5925,7 @@ impl SkinDocument {
         destination: &SkinDestinationDef,
         row_origin: (i32, i32),
         enabled_options: &[i32],
-        state: SkinDrawState,
+        state: &SkinDrawState,
     ) -> Vec<SkinRenderItem> {
         if row.chart_bpm_graph_segments.is_empty()
             || !test_skin_ops(&destination.op, enabled_options, state)
@@ -5960,7 +5961,7 @@ impl SkinDocument {
         graph: &SkinBpmGraphDef,
         destination: &SkinDestinationDef,
         frame: ResolvedSkinFrame,
-        state: SkinDrawState,
+        state: &SkinDrawState,
         segments: &[crate::chart_graph::BpmGraphSegment],
     ) -> Vec<SkinRenderItem> {
         if segments.is_empty() {
@@ -6086,7 +6087,7 @@ impl SkinDocument {
         slider: &SkinSliderDef,
         destination: &SkinDestinationDef,
         frame: ResolvedSkinFrame,
-        state: SkinDrawState,
+        state: &SkinDrawState,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<SkinRenderItem> {
         let progress = skin_slider_progress(slider, state)?;
@@ -6153,7 +6154,7 @@ impl SkinDocument {
         cover: &SkinHiddenCoverDef,
         destination: &SkinDestinationDef,
         frame: ResolvedSkinFrame,
-        state: SkinDrawState,
+        state: &SkinDrawState,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<SkinRenderItem> {
         if state.hidden_cover <= 0.0 {
@@ -6209,7 +6210,7 @@ impl SkinDocument {
         &self,
         graph: &SkinGraphDef,
         frame: ResolvedSkinFrame,
-        state: SkinDrawState,
+        state: &SkinDrawState,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Option<SkinRenderItem> {
         let source = sources.get(&graph.src)?;
@@ -6349,7 +6350,7 @@ fn imageset_ref_lane(ref_id: i32) -> Option<Lane> {
     }
 }
 
-fn skin_state_imageset_index(ref_id: i32, state: SkinDrawState) -> Option<usize> {
+fn skin_state_imageset_index(ref_id: i32, state: &SkinDrawState) -> Option<usize> {
     match ref_id {
         40 => Some(state.select_gauge_index),
         SKIN_REF_PLAY_GAUGE_TYPE => Some(state.gauge_type.max(0) as usize),
@@ -6926,14 +6927,14 @@ fn test_json_option_number(option: i32, enabled_options: &[i32]) -> bool {
     }
 }
 
-pub fn test_skin_ops(ops: &[i32], enabled_options: &[i32], state: SkinDrawState) -> bool {
+pub fn test_skin_ops(ops: &[i32], enabled_options: &[i32], state: &SkinDrawState) -> bool {
     ops.iter().all(|op| test_skin_op(*op, enabled_options, state))
 }
 
 fn destination_ops_match(
     destination: &SkinDestinationDef,
     enabled_options: &[i32],
-    state: SkinDrawState,
+    state: &SkinDrawState,
     has_half_grade_f_diff_rank_destination: bool,
 ) -> bool {
     if is_grade_diff_rank_destination(destination, state) {
@@ -6954,7 +6955,7 @@ fn test_grade_diff_rank_op(
     destination: &SkinDestinationDef,
     op: i32,
     enabled_options: &[i32],
-    state: SkinDrawState,
+    state: &SkinDrawState,
     has_half_grade_f_diff_rank_destination: bool,
 ) -> bool {
     if op < 0 {
@@ -6979,7 +6980,7 @@ fn test_grade_diff_rank_op(
     }
 }
 
-fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool {
+fn test_skin_op(op: i32, enabled_options: &[i32], state: &SkinDrawState) -> bool {
     if op < 0 {
         return op
             .checked_neg()
@@ -7131,7 +7132,7 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: SkinDrawState) -> bool 
     }
 }
 
-fn gradebar_constraint_op_matches(op: i32, state: SkinDrawState) -> bool {
+fn gradebar_constraint_op_matches(op: i32, state: &SkinDrawState) -> bool {
     if state.select_row_kind != SelectRowKind::Course {
         return false;
     }
@@ -7596,7 +7597,7 @@ fn ref_id_is_signed(ref_id: i32) -> bool {
     matches!(ref_id, 152 | 153 | 154 | 172 | 175 | 178)
 }
 
-fn value_ref_is_signed_for_state(ref_id: i32, state: SkinDrawState) -> bool {
+fn value_ref_is_signed_for_state(ref_id: i32, state: &SkinDrawState) -> bool {
     ref_id_is_signed(ref_id)
         || (ref_id == 12 && state.select_screen && state.select_option_panel == 3)
 }
@@ -7609,7 +7610,7 @@ fn value_layout_is_signed(value: &SkinValueDef) -> bool {
     cells >= 24 && cells % 24 == 0
 }
 
-fn value_is_signed_for_state(value: &SkinValueDef, state: SkinDrawState) -> bool {
+fn value_is_signed_for_state(value: &SkinValueDef, state: &SkinDrawState) -> bool {
     value_ref_is_signed_for_state(value.ref_id, state) || value_layout_is_signed(value)
 }
 
@@ -7629,7 +7630,7 @@ fn lookup_number(values: &[(NumberSlot, i64)], slot: NumberSlot) -> i64 {
         .unwrap_or_default()
 }
 
-fn eval_skin_draw_condition(condition: &str, state: SkinDrawState) -> bool {
+fn eval_skin_draw_condition(condition: &str, state: &SkinDrawState) -> bool {
     let condition = condition.trim();
     if condition.is_empty() {
         return true;
@@ -7643,7 +7644,7 @@ fn eval_skin_draw_condition(condition: &str, state: SkinDrawState) -> bool {
     })
 }
 
-fn eval_skin_draw_term(term: &str, state: SkinDrawState) -> Option<bool> {
+fn eval_skin_draw_term(term: &str, state: &SkinDrawState) -> Option<bool> {
     if let Some(option_id) = parse_skin_option_operand(term) {
         return Some(test_skin_op(option_id, &[], state));
     }
@@ -7672,7 +7673,7 @@ fn eval_skin_draw_term(term: &str, state: SkinDrawState) -> Option<bool> {
     None
 }
 
-fn eval_skin_draw_operand(operand: &str, state: SkinDrawState) -> Option<f32> {
+fn eval_skin_draw_operand(operand: &str, state: &SkinDrawState) -> Option<f32> {
     if let Some(ref_id) = parse_skin_float_number_operand(operand) {
         return skin_state_float_number(ref_id, state);
     }
@@ -7714,7 +7715,7 @@ fn parse_skin_event_index_operand(operand: &str) -> Option<i32> {
     inner.parse::<i32>().ok()
 }
 
-fn skin_state_event_index(event_id: i32, state: SkinDrawState) -> i32 {
+fn skin_state_event_index(event_id: i32, state: &SkinDrawState) -> i32 {
     match event_id {
         42 | 43 => arrange_ref_index(state) as i32,
         SKIN_EVENT_HSFIX => state.hsfix_index,
@@ -7723,7 +7724,7 @@ fn skin_state_event_index(event_id: i32, state: SkinDrawState) -> i32 {
 }
 
 /// beatoraja `main_state.float_number(ref)`。BARGRAPH / SLIDER 系の比率 0.0-1.0。
-fn skin_state_float_number(ref_id: i32, state: SkinDrawState) -> Option<f32> {
+fn skin_state_float_number(ref_id: i32, state: &SkinDrawState) -> Option<f32> {
     Some(match ref_id {
         14 => state.lane_cover.clamp(0.0, 1.0),
         _ => graph_value(ref_id, state),
@@ -7748,17 +7749,17 @@ fn select_chart_notes_total_formula(notes: u32) -> f64 {
     7.605 * notes / (0.01 * notes + 6.5)
 }
 
-fn default_chart_total_count_value(state: SkinDrawState) -> f32 {
+fn default_chart_total_count_value(state: &SkinDrawState) -> f32 {
     let notes = state.select_total_notes.max(state.total_notes);
     let total = state.select_chart_total_gauge.max(0.0) as f64;
     (select_chart_notes_total_formula(notes) - total) as f32
 }
 
-fn default_chart_gauge_graph_value(state: SkinDrawState) -> f32 {
+fn default_chart_gauge_graph_value(state: &SkinDrawState) -> f32 {
     (default_chart_total_count_value(state) * 0.75).max(0.0)
 }
 
-fn skin_builtin_value_f32(expr: &str, state: SkinDrawState) -> Option<f32> {
+fn skin_builtin_value_f32(expr: &str, state: &SkinDrawState) -> Option<f32> {
     match expr.trim() {
         SKIN_EXPR_ADJUSTED_COVER => state.adjusted_cover_progress,
         SKIN_EXPR_ADJUSTED_RATE => state.adjusted_rate,
@@ -7770,7 +7771,7 @@ fn skin_builtin_value_f32(expr: &str, state: SkinDrawState) -> Option<f32> {
     }
 }
 
-fn skin_value_number(value: &SkinValueDef, state: SkinDrawState) -> Option<i64> {
+fn skin_value_number(value: &SkinValueDef, state: &SkinDrawState) -> Option<i64> {
     if !value.expr.trim().is_empty() {
         return skin_state_number_expr(&value.expr, state);
     }
@@ -7785,7 +7786,7 @@ fn skin_value_number(value: &SkinValueDef, state: SkinDrawState) -> Option<i64> 
 
 fn skin_value_number_for_destination(
     value: &SkinValueDef,
-    state: SkinDrawState,
+    state: &SkinDrawState,
     has_half_grade_f_diff_rank_destination: bool,
 ) -> Option<i64> {
     if value.ref_id == 154
@@ -7806,7 +7807,7 @@ fn skin_value_number_for_destination(
     skin_value_number(value, state)
 }
 
-fn skin_state_number_expr(expr: &str, state: SkinDrawState) -> Option<i64> {
+fn skin_state_number_expr(expr: &str, state: &SkinDrawState) -> Option<i64> {
     let normalized = expr.replace('+', " + ").replace('-', " - ");
     let mut sign = 1_i64;
     let mut total = 0_i64;
@@ -7840,7 +7841,7 @@ fn skin_state_number_expr(expr: &str, state: SkinDrawState) -> Option<i64> {
     Some(total)
 }
 
-fn skin_state_number_expr_term(term: &str, state: SkinDrawState) -> Option<i64> {
+fn skin_state_number_expr_term(term: &str, state: &SkinDrawState) -> Option<i64> {
     if let Some(ref_id) = parse_skin_number_operand(term) {
         return skin_state_number(ref_id, state);
     }
@@ -7852,7 +7853,7 @@ fn skin_state_number_expr_term(term: &str, state: SkinDrawState) -> Option<i64> 
     term.parse::<i64>().ok()
 }
 
-fn skin_state_float_expr(expr: &str, state: SkinDrawState) -> Option<f32> {
+fn skin_state_float_expr(expr: &str, state: &SkinDrawState) -> Option<f32> {
     let expr = expr.trim();
     if expr.is_empty() {
         return None;
@@ -7871,7 +7872,7 @@ fn skin_state_float_expr(expr: &str, state: SkinDrawState) -> Option<f32> {
     skin_state_additive_float_expr(expr, state)
 }
 
-fn skin_state_additive_float_expr(expr: &str, state: SkinDrawState) -> Option<f32> {
+fn skin_state_additive_float_expr(expr: &str, state: &SkinDrawState) -> Option<f32> {
     let normalized = expr.replace('+', " + ").replace('-', " - ");
     let mut sign = 1.0_f32;
     let mut total = 0.0_f32;
@@ -7905,7 +7906,7 @@ fn skin_state_additive_float_expr(expr: &str, state: SkinDrawState) -> Option<f3
     Some(total)
 }
 
-fn skin_state_float_expr_term(term: &str, state: SkinDrawState) -> Option<f32> {
+fn skin_state_float_expr_term(term: &str, state: &SkinDrawState) -> Option<f32> {
     if let Some(ref_id) = parse_skin_float_number_operand(term) {
         return skin_state_float_number(ref_id, state);
     }
@@ -7921,7 +7922,7 @@ fn skin_state_float_expr_term(term: &str, state: SkinDrawState) -> Option<f32> {
     term.parse::<f32>().ok()
 }
 
-fn skin_state_float_product_expr_term(term: &str, state: SkinDrawState) -> Option<f32> {
+fn skin_state_float_product_expr_term(term: &str, state: &SkinDrawState) -> Option<f32> {
     let mut product = 1.0_f32;
     for factor in term.split('*') {
         let factor = factor.trim();
@@ -7950,7 +7951,7 @@ fn select_volume_number(volume: f32) -> i64 {
     (volume.clamp(0.0, 1.0) * 100.0 + 0.0001) as i64
 }
 
-fn select_settings_screen_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
+fn select_settings_screen_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
     match ref_id {
         96 if state.select_row_kind == SelectRowKind::Config => {
             Some(if state.play_level != 0 { state.play_level } else { state.select_play_level })
@@ -7963,7 +7964,7 @@ fn select_settings_screen_number(ref_id: i32, state: SkinDrawState) -> Option<i6
     }
 }
 
-fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
+fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
     if state.select_screen && state.in_settings {
         if let Some(value) = select_settings_screen_number(ref_id, state) {
             return Some(value);
@@ -8168,7 +8169,7 @@ fn ir_total_clear_count(ranking: crate::scene::ResultIrSnapshot) -> Option<i64> 
     Some((total * clear_rate + 50) / 100)
 }
 
-fn result_grade_diff_number(state: SkinDrawState) -> Option<i64> {
+fn result_grade_diff_number(state: &SkinDrawState) -> Option<i64> {
     if !grade_diff_score_available(state) {
         return None;
     }
@@ -8180,7 +8181,7 @@ fn result_grade_diff_number(state: SkinDrawState) -> Option<i64> {
     }
 }
 
-pub(crate) fn result_grade_diff_label(state: SkinDrawState) -> Option<String> {
+pub(crate) fn result_grade_diff_label(state: &SkinDrawState) -> Option<String> {
     if !grade_diff_score_available(state) {
         return None;
     }
@@ -8192,13 +8193,13 @@ pub(crate) fn result_grade_diff_label(state: SkinDrawState) -> Option<String> {
     }
 }
 
-fn grade_diff_score_available(state: SkinDrawState) -> bool {
+fn grade_diff_score_available(state: &SkinDrawState) -> bool {
     !state.select_screen
         || state.select_play_count > 0
         || state.select_ex_score.is_some_and(|score| score > 0)
 }
 
-fn beatoraja_next_rank_diff(state: SkinDrawState) -> Option<i64> {
+fn beatoraja_next_rank_diff(state: &SkinDrawState) -> Option<i64> {
     let ex_score = state.select_ex_score.unwrap_or(state.ex_score) as i64;
     let total_notes = state.select_total_notes.max(state.total_notes) as i64;
     let max_score = total_notes.checked_mul(2)?;
@@ -8215,7 +8216,7 @@ fn beatoraja_next_rank_diff(state: SkinDrawState) -> Option<i64> {
     Some(ex_score - max_score)
 }
 
-fn beatoraja_next_rank_grade(state: SkinDrawState) -> Option<&'static str> {
+fn beatoraja_next_rank_grade(state: &SkinDrawState) -> Option<&'static str> {
     let ex_score = state.select_ex_score.unwrap_or(state.ex_score) as i64;
     let total_notes = state.select_total_notes.max(state.total_notes) as i64;
     let max_score = total_notes.checked_mul(2)?;
@@ -8258,7 +8259,7 @@ impl HalfGradeDiff {
     }
 }
 
-fn half_grade_diff(state: SkinDrawState) -> Option<HalfGradeDiff> {
+fn half_grade_diff(state: &SkinDrawState) -> Option<HalfGradeDiff> {
     let score = state.select_ex_score.unwrap_or(state.ex_score) as i64;
     let total_notes = state.select_total_notes.max(state.total_notes) as i64;
     let max = total_notes.checked_mul(2)?;
@@ -8304,14 +8305,14 @@ fn half_grade_diff(state: SkinDrawState) -> Option<HalfGradeDiff> {
     }
 }
 
-fn half_grade_diff_for_state(state: SkinDrawState) -> Option<HalfGradeDiff> {
+fn half_grade_diff_for_state(state: &SkinDrawState) -> Option<HalfGradeDiff> {
     if state.result_grade_diff_f_fallback_to_e {
         return half_grade_diff_for_destination(state, false);
     }
     half_grade_diff(state)
 }
 
-fn projected_score_at_progress(final_score: u32, state: SkinDrawState) -> u32 {
+fn projected_score_at_progress(final_score: u32, state: &SkinDrawState) -> u32 {
     if state.total_notes == 0 {
         return final_score;
     }
@@ -8319,7 +8320,7 @@ fn projected_score_at_progress(final_score: u32, state: SkinDrawState) -> u32 {
     ((final_score as u64 * past_notes as u64) / state.total_notes as u64) as u32
 }
 
-fn result_or_select_length_ms(state: SkinDrawState) -> i64 {
+fn result_or_select_length_ms(state: &SkinDrawState) -> i64 {
     if state.result_failed.is_some() {
         state.total_duration_ms.max(0) as i64
     } else {
@@ -8327,7 +8328,7 @@ fn result_or_select_length_ms(state: SkinDrawState) -> i64 {
     }
 }
 
-fn projected_best_score_at_progress(state: SkinDrawState) -> Option<u32> {
+fn projected_best_score_at_progress(state: &SkinDrawState) -> Option<u32> {
     state.projected_best_ex_score.or_else(|| {
         result_mybest_ex_score(state).map(|score| projected_score_at_progress(score, state))
     })
@@ -8391,7 +8392,7 @@ fn skin_image_texture_region(
 fn pre_ready_lane_cover_value_destination(
     destination: &SkinDestinationDef,
     value: &SkinValueDef,
-    state: SkinDrawState,
+    state: &SkinDrawState,
 ) -> bool {
     destination.timer == Some(40)
         && state.ready_timer_ms.is_none()
@@ -8434,7 +8435,7 @@ fn skin_image_texture_region_for_state(
     image: &SkinImageDef,
     source_size: SkinImageSize,
     elapsed_ms: i32,
-    state: Option<SkinDrawState>,
+    state: Option<&SkinDrawState>,
     pixel_rect: (i32, i32, i32, i32),
 ) -> TextureRegion {
     let source_width = source_size.width.max(1.0);
@@ -8475,7 +8476,7 @@ fn skin_image_texture_region_for_state(
     }
 }
 
-fn skin_image_ref_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
+fn skin_image_ref_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
     match ref_id {
         42 | 43 => Some(arrange_ref_index(state) as i64),
         ref_id if random_lane_ref_slot(ref_id).is_some() => {
@@ -8485,7 +8486,7 @@ fn skin_image_ref_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
     }
 }
 
-fn arrange_ref_index(state: SkinDrawState) -> usize {
+fn arrange_ref_index(state: &SkinDrawState) -> usize {
     if state.result_failed.is_some() {
         state.result_arrange_index
     } else {
@@ -8498,7 +8499,7 @@ fn random_lane_ref_slot(ref_id: i32) -> Option<usize> {
     (slot < SKIN_RANDOM_LANE_REF_COUNT).then_some(slot)
 }
 
-fn skin_random_lane_ref_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
+fn skin_random_lane_ref_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
     let slot = random_lane_ref_slot(ref_id)?;
     let scratch_ref = matches!(slot, 9 | 19);
     let displayable_arrange = if scratch_ref {
@@ -8539,7 +8540,7 @@ fn decimal_afterdot(value: f32) -> i64 {
     ((value.abs() * 100.0) as i64) % 100
 }
 
-fn select_chart_normal_notes(state: SkinDrawState) -> u32 {
+fn select_chart_normal_notes(state: &SkinDrawState) -> u32 {
     if state.select_chart_normal_notes > 0 {
         state.select_chart_normal_notes
     } else {
@@ -8547,25 +8548,25 @@ fn select_chart_normal_notes(state: SkinDrawState) -> u32 {
     }
 }
 
-fn select_chart_main_bpm(state: SkinDrawState) -> Option<f32> {
+fn select_chart_main_bpm(state: &SkinDrawState) -> Option<f32> {
     (state.select_chart_main_bpm > 0.0).then_some(state.select_chart_main_bpm)
 }
 
-fn current_bp(state: SkinDrawState) -> u32 {
+fn current_bp(state: &SkinDrawState) -> u32 {
     if state.result_failed.is_some() {
         return state.result_bp.unwrap_or(state.judge_counts.bad + state.judge_counts.poor);
     }
     state.judge_counts.bad + state.judge_counts.poor
 }
 
-fn current_cb(state: SkinDrawState) -> u32 {
+fn current_cb(state: &SkinDrawState) -> u32 {
     if state.result_failed.is_some() {
         return state.result_cb.unwrap_or(state.judge_counts.bad + state.judge_counts.poor);
     }
     state.judge_counts.bad + state.judge_counts.poor
 }
 
-fn result_mybest_bp(state: SkinDrawState) -> Option<u32> {
+fn result_mybest_bp(state: &SkinDrawState) -> Option<u32> {
     if state.result_failed.is_some() {
         state.previous_best_bp.or(state.best_bp)
     } else {
@@ -8573,7 +8574,7 @@ fn result_mybest_bp(state: SkinDrawState) -> Option<u32> {
     }
 }
 
-fn result_mybest_ex_score(state: SkinDrawState) -> Option<u32> {
+fn result_mybest_ex_score(state: &SkinDrawState) -> Option<u32> {
     if state.result_failed.is_some() {
         state.previous_best_ex_score.or(state.best_ex_score)
     } else {
@@ -8581,7 +8582,7 @@ fn result_mybest_ex_score(state: SkinDrawState) -> Option<u32> {
     }
 }
 
-fn result_mybest_clear_index(state: SkinDrawState) -> Option<i64> {
+fn result_mybest_clear_index(state: &SkinDrawState) -> Option<i64> {
     if state.result_failed.is_some() {
         state.previous_best_clear_index.or(state.best_clear_index)
     } else {
@@ -8589,7 +8590,7 @@ fn result_mybest_clear_index(state: SkinDrawState) -> Option<i64> {
     }
 }
 
-fn skin_point_score(state: SkinDrawState) -> u32 {
+fn skin_point_score(state: &SkinDrawState) -> u32 {
     let total_notes = state.total_notes;
     if total_notes == 0 {
         return 0;
@@ -8621,7 +8622,7 @@ fn score_rate_cmp_value(ex_score: u32, total_notes: u32) -> u32 {
 }
 
 /// Returns the graph bar fill ratio (0.0-1.0) for a given `BARGRAPH_*` type.
-fn graph_value(graph_type: i32, state: SkinDrawState) -> f32 {
+fn graph_value(graph_type: i32, state: &SkinDrawState) -> f32 {
     match graph_type {
         101 => state.play_progress, // BARGRAPH_MUSIC_PROGRESS: elapsed / total playtime
         102 => 1.0,                 // BARGRAPH_LOAD_PROGRESS: always complete during play
@@ -8702,7 +8703,7 @@ fn graph_value(graph_type: i32, state: SkinDrawState) -> f32 {
     }
 }
 
-fn graph_raw_value(graph: &SkinGraphDef, state: SkinDrawState) -> f32 {
+fn graph_raw_value(graph: &SkinGraphDef, state: &SkinDrawState) -> f32 {
     if !graph.value_expr.trim().is_empty() {
         if let Some(value) = skin_builtin_value_f32(&graph.value_expr, state) {
             return value;
@@ -8714,7 +8715,7 @@ fn graph_raw_value(graph: &SkinGraphDef, state: SkinDrawState) -> f32 {
 }
 
 /// Returns (fill multiplier on dst extent, UV clip ratio 0.0-1.0).
-fn graph_fill_dimensions(graph: &SkinGraphDef, state: SkinDrawState) -> (f32, f32) {
+fn graph_fill_dimensions(graph: &SkinGraphDef, state: &SkinDrawState) -> (f32, f32) {
     let raw = graph_raw_value(graph, state).max(0.0);
     if !graph.value_expr.trim().is_empty() {
         // beatoraja Lua graph: rendered size = dst.w * value (value is pixel multiplier).
@@ -8734,7 +8735,7 @@ fn skin_grid_cell_size(size: i32, divisions: i32) -> i32 {
     size / divisions
 }
 
-fn fast_slow_ratio_fast(state: SkinDrawState) -> f32 {
+fn fast_slow_ratio_fast(state: &SkinDrawState) -> f32 {
     let Some(counts) = state.fast_slow_counts else {
         return 0.0;
     };
@@ -8744,7 +8745,7 @@ fn fast_slow_ratio_fast(state: SkinDrawState) -> f32 {
     if total == 0 { 0.0 } else { fast as f32 / total as f32 }
 }
 
-fn fast_slow_ratio_slow(state: SkinDrawState) -> f32 {
+fn fast_slow_ratio_slow(state: &SkinDrawState) -> f32 {
     let Some(counts) = state.fast_slow_counts else {
         return 0.0;
     };
@@ -8772,13 +8773,13 @@ fn fast_slow_ratio_slow_total(counts: crate::snapshot::FastSlowJudgeCounts) -> u
         + counts.slow_empty_poor
 }
 
-fn skin_frame_expr_value(expr: SkinFrameExpr, state: SkinDrawState) -> Option<i32> {
+fn skin_frame_expr_value(expr: SkinFrameExpr, state: &SkinDrawState) -> Option<i32> {
     match expr {
         SkinFrameExpr::FastSlowBreakdownHeight(ref_id) => fast_slow_breakdown_height(ref_id, state),
     }
 }
 
-fn fast_slow_breakdown_height(ref_id: i32, state: SkinDrawState) -> Option<i32> {
+fn fast_slow_breakdown_height(ref_id: i32, state: &SkinDrawState) -> Option<i32> {
     const REFS: [i32; 12] = [422, 419, 417, 415, 413, 411, 410, 412, 414, 416, 418, 421];
     if !REFS.contains(&ref_id) {
         return None;
@@ -8796,7 +8797,7 @@ fn judge_rate(count: u32, total: u32) -> f32 {
     if total > 0 { count as f32 / total as f32 } else { 0.0 }
 }
 
-fn skin_slider_progress(slider: &SkinSliderDef, state: SkinDrawState) -> Option<f32> {
+fn skin_slider_progress(slider: &SkinSliderDef, state: &SkinDrawState) -> Option<f32> {
     if !slider.value_expr.trim().is_empty()
         && let Some(progress) = skin_builtin_value_f32(&slider.value_expr, state)
     {
@@ -8805,7 +8806,7 @@ fn skin_slider_progress(slider: &SkinSliderDef, state: SkinDrawState) -> Option<
     skin_slider_progress_by_type(slider.slider_type, state)
 }
 
-fn skin_slider_progress_by_type(slider_type: i32, state: SkinDrawState) -> Option<f32> {
+fn skin_slider_progress_by_type(slider_type: i32, state: &SkinDrawState) -> Option<f32> {
     match slider_type {
         1 => Some(state.select_scroll_progress.clamp(0.0, 1.0)),
         4 => (state.lane_cover > 0.0).then_some(state.lane_cover.clamp(0.0, 1.0)),
@@ -8817,7 +8818,7 @@ fn skin_slider_progress_by_type(slider_type: i32, state: SkinDrawState) -> Optio
     }
 }
 
-fn skin_timer_elapsed_ms(timer: Option<i32>, state: SkinDrawState) -> Option<i32> {
+fn skin_timer_elapsed_ms(timer: Option<i32>, state: &SkinDrawState) -> Option<i32> {
     match timer {
         None => Some(state.elapsed_ms),
         Some(2) => state.fadeout_ms,
@@ -8882,7 +8883,7 @@ fn skin_timer_elapsed_ms(timer: Option<i32>, state: SkinDrawState) -> Option<i32
     }
 }
 
-fn skin_gauge_max_timer_elapsed_ms(state: SkinDrawState) -> Option<i32> {
+fn skin_gauge_max_timer_elapsed_ms(state: &SkinDrawState) -> Option<i32> {
     (state.gauge >= state.gauge_max.max(1.0)).then_some(state.elapsed_ms)
 }
 
@@ -9364,7 +9365,7 @@ fn result_note_graph_cache_key<const N: usize, B: ResultNoteGraphBucket<N>>(
     buckets: &[B],
     graph: &SkinJudgeGraphDef,
     frame: ResolvedSkinFrame,
-    state: SkinDrawState,
+    state: &SkinDrawState,
     elapsed_ms: i32,
 ) -> ResultRectBatchCacheKey {
     ResultRectBatchCacheKey {
@@ -9552,7 +9553,7 @@ fn timing_judge_band_items(
     frame_alpha: f32,
     blend: BlendMode,
     colors: [Color; 5],
-    state: SkinDrawState,
+    state: &SkinDrawState,
 ) -> Vec<SkinRenderItem> {
     let areas = beatoraja_timing_judge_areas(state);
     let mut items = Vec::new();
@@ -9615,7 +9616,7 @@ struct TimingJudgeArea {
     early_ms: f32,
 }
 
-fn beatoraja_timing_judge_areas(state: SkinDrawState) -> [TimingJudgeArea; 5] {
+fn beatoraja_timing_judge_areas(state: &SkinDrawState) -> [TimingJudgeArea; 5] {
     let base = bmz_gameplay::judge::window::beatoraja_note_judge_window_for_keymode(state.key_mode);
     let percent = beatoraja_judge_rank_percent_for_mode(state.key_mode, state.judge_rank);
     if state.key_mode == KeyMode::K9 {
@@ -9873,7 +9874,7 @@ fn difficulty_code_from_label(label: &str) -> i64 {
     }
 }
 
-fn score_target_timer_elapsed_ms(timer_id: i32, state: SkinDrawState) -> Option<i32> {
+fn score_target_timer_elapsed_ms(timer_id: i32, state: &SkinDrawState) -> Option<i32> {
     let max = state.total_notes.saturating_mul(2);
     let threshold = match timer_id {
         348 => rank_threshold(max, 18), // RANK A
@@ -9994,7 +9995,7 @@ fn select_row_label_indices(row: &SelectRowSnapshot) -> Vec<usize> {
     indices
 }
 
-fn select_replay_op_matches(op: i32, state: SkinDrawState) -> bool {
+fn select_replay_op_matches(op: i32, state: &SkinDrawState) -> bool {
     if state.in_settings {
         return false;
     }
@@ -10018,7 +10019,7 @@ fn select_replay_op_matches(op: i32, state: SkinDrawState) -> bool {
     }
 }
 
-fn result_replay_op_matches(op: i32, state: SkinDrawState) -> bool {
+fn result_replay_op_matches(op: i32, state: &SkinDrawState) -> bool {
     let slot = match op {
         196..=198 => Some(0),
         1196..=1198 => Some(1),
@@ -10040,7 +10041,7 @@ fn result_replay_op_matches(op: i32, state: SkinDrawState) -> bool {
     }
 }
 
-fn result_arrange_op_matches(op: i32, state: SkinDrawState) -> bool {
+fn result_arrange_op_matches(op: i32, state: &SkinDrawState) -> bool {
     let Some(index) = (match op {
         126 => Some(0),  // OPTION_CLEAR_NORMAL
         127 => Some(1),  // OPTION_CLEAR_MIRROR
@@ -10059,21 +10060,21 @@ fn result_arrange_op_matches(op: i32, state: SkinDrawState) -> bool {
     state.result_arrange_index == index
 }
 
-fn select_song_detail_row(state: SkinDrawState) -> bool {
+fn select_song_detail_row(state: &SkinDrawState) -> bool {
     matches!(
         state.select_row_kind,
         SelectRowKind::Song if !state.select_is_folder && state.select_in_library
     )
 }
 
-fn select_banner_option_matches(want_banner: bool, state: SkinDrawState) -> bool {
+fn select_banner_option_matches(want_banner: bool, state: &SkinDrawState) -> bool {
     if !state.select_screen {
         return false;
     }
     state.select_has_banner == want_banner
 }
 
-fn select_key_mode_option_matches(op: i32, state: SkinDrawState) -> bool {
+fn select_key_mode_option_matches(op: i32, state: &SkinDrawState) -> bool {
     if state.result_failed.is_some() {
         return key_mode_option_matches(op, state.key_mode);
     }
@@ -10148,7 +10149,7 @@ fn select_row_shows_folder_distribution(row: &SelectRowSnapshot) -> bool {
         )
 }
 
-fn select_rank_op_matches(op: i32, state: SkinDrawState) -> bool {
+fn select_rank_op_matches(op: i32, state: &SkinDrawState) -> bool {
     if !select_rank_available(state) {
         return false;
     }
@@ -10158,7 +10159,7 @@ fn select_rank_op_matches(op: i32, state: SkinDrawState) -> bool {
     op == 200 + rank as i32
 }
 
-fn select_small_rank_op_matches(op: i32, state: SkinDrawState) -> bool {
+fn select_small_rank_op_matches(op: i32, state: &SkinDrawState) -> bool {
     if !select_rank_available(state) {
         return false;
     }
@@ -10177,7 +10178,7 @@ fn select_small_rank_op_matches(op: i32, state: SkinDrawState) -> bool {
     rank <= 6 && op == 301 + rank as i32
 }
 
-fn select_rank_available(state: SkinDrawState) -> bool {
+fn select_rank_available(state: &SkinDrawState) -> bool {
     if state.in_settings {
         return false;
     }
@@ -10187,7 +10188,7 @@ fn select_rank_available(state: SkinDrawState) -> bool {
             && state.select_in_library)
 }
 
-fn result_rank_op_matches(op: i32, state: SkinDrawState) -> bool {
+fn result_rank_op_matches(op: i32, state: &SkinDrawState) -> bool {
     if matches!(op, 308 | 318) {
         return state.ex_score == 0 && state.total_notes > 0;
     }
@@ -10201,14 +10202,14 @@ fn result_rank_op_matches(op: i32, state: SkinDrawState) -> bool {
     }
 }
 
-fn is_grade_diff_rank_destination(destination: &SkinDestinationDef, state: SkinDrawState) -> bool {
+fn is_grade_diff_rank_destination(destination: &SkinDestinationDef, state: &SkinDrawState) -> bool {
     (state.result_failed.is_some() || state.select_screen) && destination.id.starts_with("RANK_s_")
 }
 
 fn grade_diff_rank_destination_matches(
     destination: &SkinDestinationDef,
     op: i32,
-    state: SkinDrawState,
+    state: &SkinDrawState,
     has_half_grade_f_diff_rank_destination: bool,
 ) -> bool {
     let Some(grade) = grade_diff_rank_target_grade(state, has_half_grade_f_diff_rank_destination)
@@ -10222,7 +10223,7 @@ fn grade_diff_rank_destination_matches(
 }
 
 fn grade_diff_rank_target_grade(
-    state: SkinDrawState,
+    state: &SkinDrawState,
     has_half_grade_f_diff_rank_destination: bool,
 ) -> Option<&'static str> {
     if !grade_diff_score_available(state) {
@@ -10270,20 +10271,23 @@ fn half_grade_f_diff_rank_destination_available(destinations: &[&SkinDestination
     destinations.iter().any(|destination| destination.id == "RANK_s_F")
 }
 
-fn apply_half_grade_f_diff_rank_fallback(
-    state: SkinDrawState,
+fn apply_half_grade_f_diff_rank_fallback<'a>(
+    state: &'a SkinDrawState,
     has_half_grade_f_diff_rank_destination: bool,
-) -> SkinDrawState {
-    SkinDrawState {
-        result_grade_diff_f_fallback_to_e: state.result_grade_diff_display
-            == ResultGradeDiffDisplay::HalfGrade
-            && !has_half_grade_f_diff_rank_destination,
-        ..state
+) -> Cow<'a, SkinDrawState> {
+    let fallback_to_e = state.result_grade_diff_display == ResultGradeDiffDisplay::HalfGrade
+        && !has_half_grade_f_diff_rank_destination;
+    if state.result_grade_diff_f_fallback_to_e == fallback_to_e {
+        Cow::Borrowed(state)
+    } else {
+        let mut state = state.clone();
+        state.result_grade_diff_f_fallback_to_e = fallback_to_e;
+        Cow::Owned(state)
     }
 }
 
 fn half_grade_diff_for_destination(
-    state: SkinDrawState,
+    state: &SkinDrawState,
     has_half_grade_f_diff_rank_destination: bool,
 ) -> Option<HalfGradeDiff> {
     let diff = half_grade_diff(state)?;
@@ -10293,7 +10297,7 @@ fn half_grade_diff_for_destination(
     Some(diff)
 }
 
-fn half_grade_e_minus_diff(state: SkinDrawState) -> Option<HalfGradeDiff> {
+fn half_grade_e_minus_diff(state: &SkinDrawState) -> Option<HalfGradeDiff> {
     let score = state.select_ex_score.unwrap_or(state.ex_score) as i64;
     let total_notes = state.select_total_notes.max(state.total_notes) as i64;
     let max = total_notes.checked_mul(2)?;
@@ -10404,7 +10408,7 @@ fn civil_from_days(days: i64) -> (i32, u32, u32) {
     (year as i32, month as u32, day as u32)
 }
 
-fn best_rank_op_matches(op: i32, state: SkinDrawState) -> bool {
+fn best_rank_op_matches(op: i32, state: &SkinDrawState) -> bool {
     if state.in_settings {
         return false;
     }
@@ -10416,7 +10420,7 @@ fn best_rank_op_matches(op: i32, state: SkinDrawState) -> bool {
 
 /// 現在のランク判定の基準値 (ex_score, total_notes)。
 /// Result 画面なら結果値、それ以外は select の選択中曲のベスト値を使う。
-fn current_rank_inputs(state: SkinDrawState) -> (Option<u32>, u32) {
+fn current_rank_inputs(state: &SkinDrawState) -> (Option<u32>, u32) {
     if state.result_failed.is_some() {
         (Some(state.ex_score), state.total_notes)
     } else if state.select_screen {
@@ -10426,7 +10430,7 @@ fn current_rank_inputs(state: SkinDrawState) -> (Option<u32>, u32) {
     }
 }
 
-fn current_rank_index(state: SkinDrawState) -> Option<usize> {
+fn current_rank_index(state: &SkinDrawState) -> Option<usize> {
     let (ex_score, total_notes) = current_rank_inputs(state);
     rank_index(ex_score, total_notes)
 }
@@ -10771,7 +10775,7 @@ fn flatten_dst_entries(dst: &[SkinDstEntry], enabled_options: &[i32]) -> Vec<Ski
 fn apply_skin_offset_to_frame(
     destination: &SkinDestinationDef,
     frame: &mut ResolvedSkinFrame,
-    state: SkinDrawState,
+    state: &SkinDrawState,
     include_hidden_cover_offsets: bool,
 ) {
     apply_skin_offset_to_frame_inner(destination, frame, state, include_hidden_cover_offsets, false)
@@ -10782,7 +10786,7 @@ fn apply_skin_offset_to_frame(
 fn apply_skin_offset_to_frame_relative(
     destination: &SkinDestinationDef,
     frame: &mut ResolvedSkinFrame,
-    state: SkinDrawState,
+    state: &SkinDrawState,
 ) {
     apply_skin_offset_to_frame_inner(destination, frame, state, false, true)
 }
@@ -10790,7 +10794,7 @@ fn apply_skin_offset_to_frame_relative(
 fn apply_skin_offset_to_frame_inner(
     destination: &SkinDestinationDef,
     frame: &mut ResolvedSkinFrame,
-    state: SkinDrawState,
+    state: &SkinDrawState,
     include_hidden_cover_offsets: bool,
     relative: bool,
 ) {
@@ -10816,7 +10820,7 @@ fn apply_skin_offset_to_frame_inner(
 fn apply_skin_offset_ids_to_frame(
     ids: &[i32],
     frame: &mut ResolvedSkinFrame,
-    state: SkinDrawState,
+    state: &SkinDrawState,
     relative: bool,
 ) {
     for &offset_id in ids {
@@ -10850,7 +10854,7 @@ fn apply_skin_offset_ids_to_frame(
 
 /// `note_y` progress (0=判定ライン, 1=最奥) を `note.dst` エリア内の正規化 Y に変換する。
 /// LIFT (`offset_lift_px`) により判定ラインを上げ、スクロール範囲を縮める。
-fn note_progress_to_y(area: Rect, progress: f32, state: SkinDrawState, canvas_h: f32) -> f32 {
+fn note_progress_to_y(area: Rect, progress: f32, state: &SkinDrawState, canvas_h: f32) -> f32 {
     let lift_norm = state.offset_lift_px as f32 / canvas_h.max(1.0);
     let scroll_top = area.y;
     let judge_bottom = (area.y + area.height - lift_norm).max(scroll_top);
@@ -10862,7 +10866,7 @@ fn note_progress_to_y(area: Rect, progress: f32, state: SkinDrawState, canvas_h:
 fn apply_bar_line_skin_offsets_to_frame(
     destination: &SkinDestinationDef,
     frame: &mut ResolvedSkinFrame,
-    state: SkinDrawState,
+    state: &SkinDrawState,
 ) {
     let mut ids: Vec<i32> = destination
         .offsets
@@ -10880,7 +10884,7 @@ fn apply_bar_line_skin_offsets_to_frame(
     apply_bar_line_offset_to_frame(frame, state);
 }
 
-fn apply_bar_line_offset_to_frame(frame: &mut ResolvedSkinFrame, state: SkinDrawState) {
+fn apply_bar_line_offset_to_frame(frame: &mut ResolvedSkinFrame, state: &SkinDrawState) {
     if let Some(offset) = state.skin_offsets.get(SKIN_OFFSET_BAR_LINE) {
         frame.h = (frame.h + offset.h).max(0);
     }
@@ -10890,7 +10894,7 @@ fn is_judge_detail_destination_id(id: &str) -> bool {
     matches!(id, "judge-early" | "judge-late") || id.starts_with("judgems")
 }
 
-fn apply_all_offset_to_render_item(item: SkinRenderItem, state: SkinDrawState) -> SkinRenderItem {
+fn apply_all_offset_to_render_item(item: SkinRenderItem, state: &SkinDrawState) -> SkinRenderItem {
     let Some(offset) = state.skin_offsets.get(OFFSET_ALL) else {
         return item;
     };
@@ -11013,7 +11017,7 @@ fn result_judge_pie_segment_color(
     destination: &SkinDestinationDef,
     image: &SkinImageDef,
     frame: ResolvedSkinFrame,
-    state: SkinDrawState,
+    state: &SkinDrawState,
 ) -> Option<(i32, i32, i32)> {
     if state.result_failed.is_none()
         || destination.id != "judge_graph"
@@ -11105,7 +11109,7 @@ fn resolve_destination_frame(
     destination: &SkinDestinationDef,
     elapsed_ms: i32,
     enabled_options: &[i32],
-    state: SkinDrawState,
+    state: &SkinDrawState,
 ) -> Option<ResolvedSkinFrame> {
     if let [SkinDstEntry::Frame(animation)] = destination.dst.as_slice() {
         return resolve_single_destination_frame(destination, *animation, elapsed_ms, state);
@@ -11146,7 +11150,7 @@ fn resolve_single_destination_frame(
     destination: &SkinDestinationDef,
     animation: SkinAnimationDef,
     elapsed_ms: i32,
-    state: SkinDrawState,
+    state: &SkinDrawState,
 ) -> Option<ResolvedSkinFrame> {
     let cycle = animation.time.unwrap_or(0);
     let elapsed_ms = match destination.loop_time {
@@ -11168,7 +11172,7 @@ fn resolve_destination_frame_until_end(
     destination: &SkinDestinationDef,
     elapsed_ms: i32,
     enabled_options: &[i32],
-    state: SkinDrawState,
+    state: &SkinDrawState,
 ) -> Option<ResolvedSkinFrame> {
     if matches!(destination.loop_time, Some(loop_point) if loop_point > 0) {
         return resolve_destination_frame(destination, elapsed_ms, enabled_options, state);
@@ -11229,7 +11233,7 @@ fn interpolate_skin_frame(
 fn destination_interpolation_acc_from_frames(animations: &[SkinAnimationDef]) -> i32 {
     let mut frame = ResolvedSkinFrame::default();
     for animation in animations {
-        apply_skin_animation(&mut frame, animation, SkinDrawState::default());
+        apply_skin_animation(&mut frame, animation, &SkinDrawState::default());
         if frame.acc != 0 {
             return frame.acc;
         }
@@ -11253,7 +11257,7 @@ fn interpolate_i32(start: i32, end: i32, t: f32) -> i32 {
 fn apply_skin_animation(
     frame: &mut ResolvedSkinFrame,
     animation: &SkinAnimationDef,
-    state: SkinDrawState,
+    state: &SkinDrawState,
 ) {
     if let Some(time) = animation.time {
         frame.time = time;
@@ -11335,7 +11339,7 @@ fn clip_skin_cover_to_disappear_line(
     uv: &mut TextureRegion,
     disappear_line: i32,
     link_lift: bool,
-    state: SkinDrawState,
+    state: &SkinDrawState,
 ) {
     if disappear_line <= 0 || frame.h <= 0 {
         return;
@@ -11392,7 +11396,7 @@ fn rect_contains(rect: Rect, x: f32, y: f32) -> bool {
 fn destination_mouse_rect_contains(
     destination: &SkinDestinationDef,
     frame: ResolvedSkinFrame,
-    state: SkinDrawState,
+    state: &SkinDrawState,
 ) -> bool {
     let Some(mouse_rect) = destination.mouse_rect else {
         return true;
@@ -11825,7 +11829,7 @@ fn skin_gauge_destination_blend(destination: &SkinDestinationDef) -> BlendMode {
     if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal }
 }
 
-fn skin_gauge_animation_index(gauge_def: &SkinGaugeDef, state: SkinDrawState) -> i32 {
+fn skin_gauge_animation_index(gauge_def: &SkinGaugeDef, state: &SkinDrawState) -> i32 {
     let cycle = gauge_def.cycle.max(1);
     let range = gauge_def.range.max(0);
     match gauge_def.gauge_type {
@@ -11849,7 +11853,7 @@ fn skin_gauge_animation_index(gauge_def: &SkinGaugeDef, state: SkinDrawState) ->
     }
 }
 
-fn skin_gauge_animation_tick(state: SkinDrawState, cycle: i32) -> i32 {
+fn skin_gauge_animation_tick(state: &SkinDrawState, cycle: i32) -> i32 {
     let time = state.play_timer_ms.unwrap_or(state.elapsed_ms);
     time.div_euclid(cycle.max(1))
 }
@@ -12643,12 +12647,12 @@ mod tests {
 
         let no_bga_items = document.static_render_items(
             &HashMap::new(),
-            SkinDrawState { has_bga: false, ..SkinDrawState::default() },
+            &SkinDrawState { has_bga: false, ..SkinDrawState::default() },
             SkinTextState::default(),
         );
         let bga_items = document.static_render_items(
             &HashMap::new(),
-            SkinDrawState { has_bga: true, ..SkinDrawState::default() },
+            &SkinDrawState { has_bga: true, ..SkinDrawState::default() },
             SkinTextState::default(),
         );
 
@@ -12686,7 +12690,7 @@ mod tests {
 
         let items = document.static_render_items(
             &HashMap::new(),
-            SkinDrawState {
+            &SkinDrawState {
                 has_bga: true,
                 bga_enabled: false,
                 bga_base: Some(SkinBgaFrame {
@@ -12711,12 +12715,12 @@ mod tests {
         assert!(!test_skin_op(
             170,
             &[],
-            SkinDrawState { has_bga: true, bga_enabled: false, ..SkinDrawState::default() }
+            &SkinDrawState { has_bga: true, bga_enabled: false, ..SkinDrawState::default() }
         ));
         assert!(test_skin_op(
             171,
             &[],
-            SkinDrawState { has_bga: true, bga_enabled: false, ..SkinDrawState::default() }
+            &SkinDrawState { has_bga: true, bga_enabled: false, ..SkinDrawState::default() }
         ));
     }
 
@@ -12726,11 +12730,11 @@ mod tests {
         let normal = SkinDrawState { difficulty: 2, ..SkinDrawState::default() };
         let insane = SkinDrawState { difficulty: 5, ..SkinDrawState::default() };
 
-        assert!(test_skin_op(150, &[], unknown));
-        assert!(!test_skin_op(150, &[], normal));
-        assert!(test_skin_op(152, &[], normal));
-        assert!(!test_skin_op(153, &[], normal));
-        assert!(test_skin_op(155, &[], insane));
+        assert!(test_skin_op(150, &[], &unknown));
+        assert!(!test_skin_op(150, &[], &normal));
+        assert!(test_skin_op(152, &[], &normal));
+        assert!(!test_skin_op(153, &[], &normal));
+        assert!(test_skin_op(155, &[], &insane));
     }
 
     #[test]
@@ -12805,16 +12809,16 @@ mod tests {
             ..SkinDrawState::default()
         };
 
-        assert!(test_skin_op(2, &[], song));
-        assert!(!test_skin_op(1, &[], song));
-        assert!(!test_skin_op(3, &[], song));
-        assert!(test_skin_op(1, &[], folder));
-        assert!(test_skin_op(1, &[], table_folder));
-        assert!(test_skin_op(1, &[], search_folder));
-        assert!(test_skin_op(1, &[], settings_folder));
-        assert!(!test_skin_op(2, &[], folder));
-        assert!(test_skin_op(3, &[], course));
-        assert!(!test_skin_op(2, &[], course));
+        assert!(test_skin_op(2, &[], &song));
+        assert!(!test_skin_op(1, &[], &song));
+        assert!(!test_skin_op(3, &[], &song));
+        assert!(test_skin_op(1, &[], &folder));
+        assert!(test_skin_op(1, &[], &table_folder));
+        assert!(test_skin_op(1, &[], &search_folder));
+        assert!(test_skin_op(1, &[], &settings_folder));
+        assert!(!test_skin_op(2, &[], &folder));
+        assert!(test_skin_op(3, &[], &course));
+        assert!(!test_skin_op(2, &[], &course));
     }
 
     #[test]
@@ -12837,15 +12841,15 @@ mod tests {
             ..SkinDrawState::default()
         };
 
-        assert!(test_skin_op(1003, &[], course));
-        assert!(test_skin_op(1005, &[], course));
-        assert!(test_skin_op(1007, &[], course));
-        assert!(test_skin_op(1012, &[], course));
-        assert!(test_skin_op(1017, &[], course));
-        assert!(!test_skin_op(1002, &[], course));
-        assert!(!test_skin_op(1016, &[], course));
-        assert!(!test_skin_op(1003, &[], song));
-        assert!(test_skin_op(-1003, &[], song));
+        assert!(test_skin_op(1003, &[], &course));
+        assert!(test_skin_op(1005, &[], &course));
+        assert!(test_skin_op(1007, &[], &course));
+        assert!(test_skin_op(1012, &[], &course));
+        assert!(test_skin_op(1017, &[], &course));
+        assert!(!test_skin_op(1002, &[], &course));
+        assert!(!test_skin_op(1016, &[], &course));
+        assert!(!test_skin_op(1003, &[], &song));
+        assert!(test_skin_op(-1003, &[], &song));
     }
 
     #[test]
@@ -12885,12 +12889,12 @@ mod tests {
             ..SkinDrawState::default()
         };
 
-        assert!(test_skin_op(5, &[], owned_song));
-        assert!(!test_skin_op(5, &[], unowned_song));
-        assert!(!test_skin_op(5, &[], folder));
-        assert!(!test_skin_op(-5, &[], owned_song));
-        assert!(test_skin_op(-5, &[], unowned_song));
-        assert!(test_skin_op(-5, &[], folder));
+        assert!(test_skin_op(5, &[], &owned_song));
+        assert!(!test_skin_op(5, &[], &unowned_song));
+        assert!(!test_skin_op(5, &[], &folder));
+        assert!(!test_skin_op(-5, &[], &owned_song));
+        assert!(test_skin_op(-5, &[], &unowned_song));
+        assert!(test_skin_op(-5, &[], &folder));
     }
 
     #[test]
@@ -12911,17 +12915,17 @@ mod tests {
             ..SkinDrawState::default()
         };
 
-        assert!(test_skin_op(192, &[], no_banner));
-        assert!(!test_skin_op(193, &[], no_banner));
-        assert!(!test_skin_op(192, &[], with_banner));
-        assert!(test_skin_op(193, &[], with_banner));
-        assert!(!test_skin_op(192, &[], play_screen));
-        assert!(!test_skin_op(193, &[], play_screen));
+        assert!(test_skin_op(192, &[], &no_banner));
+        assert!(!test_skin_op(193, &[], &no_banner));
+        assert!(!test_skin_op(192, &[], &with_banner));
+        assert!(test_skin_op(193, &[], &with_banner));
+        assert!(!test_skin_op(192, &[], &play_screen));
+        assert!(!test_skin_op(193, &[], &play_screen));
 
-        assert!(test_skin_ops(&[2, 192], &[], no_banner));
-        assert!(!test_skin_ops(&[2, 193], &[], no_banner));
-        assert!(!test_skin_ops(&[2, 192], &[], with_banner));
-        assert!(test_skin_ops(&[2, 193], &[], with_banner));
+        assert!(test_skin_ops(&[2, 192], &[], &no_banner));
+        assert!(!test_skin_ops(&[2, 193], &[], &no_banner));
+        assert!(!test_skin_ops(&[2, 192], &[], &with_banner));
+        assert!(test_skin_ops(&[2, 193], &[], &with_banner));
     }
 
     #[test]
@@ -12938,72 +12942,72 @@ mod tests {
         };
 
         // Starseeker freestage: op = {32, -290}
-        assert!(test_skin_op(32, &[], normal_play));
-        assert!(!test_skin_op(290, &[], normal_play));
-        assert!(test_skin_ops(&[32, -290], &[], normal_play));
+        assert!(test_skin_op(32, &[], &normal_play));
+        assert!(!test_skin_op(290, &[], &normal_play));
+        assert!(test_skin_ops(&[32, -290], &[], &normal_play));
 
         // Starseeker auto_play: op = {33}
-        assert!(!test_skin_op(33, &[], normal_play));
-        assert!(test_skin_op(33, &[], autoplay));
+        assert!(!test_skin_op(33, &[], &normal_play));
+        assert!(test_skin_op(33, &[], &autoplay));
 
         // Course stage labels
-        assert!(test_skin_ops(&[32, 290, 280], &[], course_stage1));
-        assert!(!test_skin_ops(&[32, 290, 280], &[], course_final));
-        assert!(test_skin_ops(&[32, 290, 289], &[], course_final));
+        assert!(test_skin_ops(&[32, 290, 280], &[], &course_stage1));
+        assert!(!test_skin_ops(&[32, 290, 280], &[], &course_final));
+        assert!(test_skin_ops(&[32, 290, 289], &[], &course_final));
 
         // beatoraja currently leaves these defined constants without BooleanProperty handlers.
         for op in 291..=293 {
             assert!(
-                !test_skin_op(op, &[op], course_stage1),
+                !test_skin_op(op, &[op], &course_stage1),
                 "{op} must not fall back to property defaults"
             );
-            assert!(test_skin_op(-op, &[op], course_stage1), "negative {op} should invert false");
+            assert!(test_skin_op(-op, &[op], &course_stage1), "negative {op} should invert false");
         }
     }
 
     #[test]
     fn play_asset_and_loading_ops_reflect_skin_state() {
         let unloaded = SkinDrawState { skin_loaded: false, ..SkinDrawState::default() };
-        assert!(test_skin_op(80, &[], unloaded));
-        assert!(!test_skin_op(81, &[], unloaded));
+        assert!(test_skin_op(80, &[], &unloaded));
+        assert!(!test_skin_op(81, &[], &unloaded));
 
         let loaded = SkinDrawState::default();
-        assert!(!test_skin_op(80, &[], loaded));
-        assert!(test_skin_op(81, &[], loaded));
-        assert!(test_skin_op(190, &[], loaded));
-        assert!(!test_skin_op(191, &[], loaded));
-        assert!(test_skin_op(194, &[], loaded));
-        assert!(!test_skin_op(195, &[], loaded));
+        assert!(!test_skin_op(80, &[], &loaded));
+        assert!(test_skin_op(81, &[], &loaded));
+        assert!(test_skin_op(190, &[], &loaded));
+        assert!(!test_skin_op(191, &[], &loaded));
+        assert!(test_skin_op(194, &[], &loaded));
+        assert!(!test_skin_op(195, &[], &loaded));
 
         let with_backbmp = SkinDrawState { has_backbmp: true, ..SkinDrawState::default() };
-        assert!(!test_skin_op(194, &[], with_backbmp));
-        assert!(test_skin_op(195, &[], with_backbmp));
+        assert!(!test_skin_op(194, &[], &with_backbmp));
+        assert!(test_skin_op(195, &[], &with_backbmp));
     }
 
     #[test]
     fn lane_cover_changing_op_is_true_while_lane_cover_is_visible() {
-        assert!(!test_skin_op(270, &[], SkinDrawState::default()));
+        assert!(!test_skin_op(270, &[], &SkinDrawState::default()));
         assert!(!test_skin_op(
             270,
             &[],
-            SkinDrawState { lane_cover: 0.2, ..SkinDrawState::default() }
+            &SkinDrawState { lane_cover: 0.2, ..SkinDrawState::default() }
         ));
         assert!(test_skin_op(
             270,
             &[],
-            SkinDrawState { lane_cover_changing: true, ..SkinDrawState::default() }
+            &SkinDrawState { lane_cover_changing: true, ..SkinDrawState::default() }
         ));
         assert!(test_skin_op(
             271,
             &[],
-            SkinDrawState { lanecover_enabled: true, ..SkinDrawState::default() }
+            &SkinDrawState { lanecover_enabled: true, ..SkinDrawState::default() }
         ));
     }
 
     #[test]
     fn folded_constant_draw_condition_number_zero_is_true() {
-        assert!(eval_skin_draw_condition("number(0) >= 0", SkinDrawState::default()));
-        assert!(!eval_skin_draw_condition("number(0) < 0", SkinDrawState::default()));
+        assert!(eval_skin_draw_condition("number(0) >= 0", &SkinDrawState::default()));
+        assert!(!eval_skin_draw_condition("number(0) < 0", &SkinDrawState::default()));
     }
 
     #[test]
@@ -13033,7 +13037,7 @@ mod tests {
 
         let items = document.static_image_render_items(
             &sources,
-            SkinDrawState { offset_lift_px: 0, ..SkinDrawState::default() },
+            &SkinDrawState { offset_lift_px: 0, ..SkinDrawState::default() },
         );
         assert_eq!(items.len(), 1, "judge_line must not be skipped with liftcover skip logic");
     }
@@ -13065,15 +13069,15 @@ mod tests {
             ..SkinDrawState::default()
         };
 
-        assert!(test_skin_op(201, &[], aa_state));
-        assert!(test_skin_op(302, &[], aa_state));
-        assert!(!test_skin_op(200, &[], aa_state));
-        assert!(test_skin_op(-200, &[], aa_state));
-        assert!(test_skin_op(200, &[], max_state));
-        assert!(test_skin_op(300, &[], max_state));
-        assert!(test_skin_op(207, &[], f_state));
-        assert!(!test_skin_op(307, &[], f_state));
-        assert!(!test_skin_op(200, &[], SkinDrawState::default()));
+        assert!(test_skin_op(201, &[], &aa_state));
+        assert!(test_skin_op(302, &[], &aa_state));
+        assert!(!test_skin_op(200, &[], &aa_state));
+        assert!(test_skin_op(-200, &[], &aa_state));
+        assert!(test_skin_op(200, &[], &max_state));
+        assert!(test_skin_op(300, &[], &max_state));
+        assert!(test_skin_op(207, &[], &f_state));
+        assert!(!test_skin_op(307, &[], &f_state));
+        assert!(!test_skin_op(200, &[], &SkinDrawState::default()));
     }
 
     #[test]
@@ -13088,8 +13092,8 @@ mod tests {
             ..SkinDrawState::default()
         };
 
-        assert!(!test_skin_op(201, &[], state));
-        assert!(!test_skin_op(302, &[], state));
+        assert!(!test_skin_op(201, &[], &state));
+        assert!(!test_skin_op(302, &[], &state));
     }
 
     #[test]
@@ -13100,7 +13104,7 @@ mod tests {
             in_settings: true,
             ..SkinDrawState::default()
         };
-        assert!(!test_skin_op(160, &[], config_row));
+        assert!(!test_skin_op(160, &[], &config_row));
 
         let song_7k = SkinDrawState {
             select_screen: true,
@@ -13109,8 +13113,8 @@ mod tests {
             select_chart_key_mode: Some(KeyMode::K7),
             ..SkinDrawState::default()
         };
-        assert!(test_skin_op(160, &[], song_7k));
-        assert!(!test_skin_op(161, &[], song_7k));
+        assert!(test_skin_op(160, &[], &song_7k));
+        assert!(!test_skin_op(161, &[], &song_7k));
     }
 
     #[test]
@@ -13120,11 +13124,11 @@ mod tests {
             key_mode: KeyMode::K5,
             ..SkinDrawState::default()
         };
-        assert!(test_skin_op(161, &[], result_5k));
-        assert!(!test_skin_op(160, &[], result_5k));
+        assert!(test_skin_op(161, &[], &result_5k));
+        assert!(!test_skin_op(160, &[], &result_5k));
 
         let result_14k = SkinDrawState { key_mode: KeyMode::K14, ..result_5k };
-        assert!(test_skin_op(162, &[], result_14k));
+        assert!(test_skin_op(162, &[], &result_14k));
     }
 
     #[test]
@@ -13136,8 +13140,8 @@ mod tests {
             select_min_bpm: 120.0,
             ..SkinDrawState::default()
         };
-        assert_eq!(skin_state_number(90, state), None);
-        assert_eq!(skin_state_number(91, state), None);
+        assert_eq!(skin_state_number(90, &state), None);
+        assert_eq!(skin_state_number(91, &state), None);
     }
 
     #[test]
@@ -13151,9 +13155,9 @@ mod tests {
             ..SkinDrawState::default()
         };
 
-        assert_eq!(skin_state_number(57, state), Some(42));
-        assert_eq!(skin_state_number(58, state), Some(73));
-        assert_eq!(skin_state_number(59, state), Some(18));
+        assert_eq!(skin_state_number(57, &state), Some(42));
+        assert_eq!(skin_state_number(58, &state), Some(73));
+        assert_eq!(skin_state_number(59, &state), Some(18));
     }
 
     #[test]
@@ -13169,10 +13173,10 @@ mod tests {
             ..SkinDrawState::default()
         };
 
-        assert!(!test_skin_op(200, &[], state));
-        assert!(!test_skin_op(201, &[], state));
-        assert!(!test_skin_op(302, &[], state));
-        assert!(!test_skin_op(180, &[], state));
+        assert!(!test_skin_op(200, &[], &state));
+        assert!(!test_skin_op(201, &[], &state));
+        assert!(!test_skin_op(302, &[], &state));
+        assert!(!test_skin_op(180, &[], &state));
     }
 
     #[test]
@@ -13209,9 +13213,9 @@ mod tests {
         let aaa_state =
             SkinDrawState { ex_score: 1800, total_notes: 1000, ..SkinDrawState::default() };
 
-        assert!(test_skin_op(201, &[], aa_state));
-        assert!(!test_skin_op(200, &[], aa_state));
-        assert!(test_skin_op(200, &[], aaa_state));
+        assert!(test_skin_op(201, &[], &aa_state));
+        assert!(!test_skin_op(200, &[], &aa_state));
+        assert!(test_skin_op(200, &[], &aaa_state));
     }
 
     #[test]
@@ -13232,12 +13236,12 @@ mod tests {
             ..SkinDrawState::default()
         };
 
-        assert_eq!(skin_state_number(154, a_state), Some(-34));
-        assert_eq!(skin_state_number(154, aaa_state), Some(-200));
-        assert_eq!(skin_state_number(154, max_state), Some(0));
-        assert_eq!(skin_state_number(154, SkinDrawState::default()), None);
-        assert_eq!(beatoraja_next_rank_grade(a_state), Some("AA"));
-        assert_eq!(beatoraja_next_rank_grade(aaa_state), Some("MAX"));
+        assert_eq!(skin_state_number(154, &a_state), Some(-34));
+        assert_eq!(skin_state_number(154, &aaa_state), Some(-200));
+        assert_eq!(skin_state_number(154, &max_state), Some(0));
+        assert_eq!(skin_state_number(154, &SkinDrawState::default()), None);
+        assert_eq!(beatoraja_next_rank_grade(&a_state), Some("AA"));
+        assert_eq!(beatoraja_next_rank_grade(&aaa_state), Some("MAX"));
         let near_aaa_state = SkinDrawState {
             select_ex_score: Some(1774),
             select_total_notes: 1000,
@@ -13245,12 +13249,12 @@ mod tests {
             select_screen: true,
             ..SkinDrawState::default()
         };
-        assert_eq!(skin_state_number(154, near_aaa_state), Some(-4));
-        assert_eq!(result_grade_diff_label(near_aaa_state), Some("-4".to_string()));
-        assert_eq!(beatoraja_next_rank_grade(near_aaa_state), Some("AAA"));
-        assert_eq!(grade_diff_rank_target_grade(near_aaa_state, true), Some("AAA"));
+        assert_eq!(skin_state_number(154, &near_aaa_state), Some(-4));
+        assert_eq!(result_grade_diff_label(&near_aaa_state), Some("-4".to_string()));
+        assert_eq!(beatoraja_next_rank_grade(&near_aaa_state), Some("AAA"));
+        assert_eq!(grade_diff_rank_target_grade(&near_aaa_state, true), Some("AAA"));
         assert_eq!(
-            beatoraja_next_rank_grade(SkinDrawState {
+            beatoraja_next_rank_grade(&SkinDrawState {
                 select_ex_score: Some(0),
                 select_total_notes: 2253,
                 ..SkinDrawState::default()
@@ -13264,27 +13268,27 @@ mod tests {
             ..SkinDrawState::default()
         };
         assert_eq!(
-            result_grade_diff_label(SkinDrawState { select_ex_score: Some(100), ..half_grade }),
+            result_grade_diff_label(&SkinDrawState { select_ex_score: Some(100), ..half_grade }),
             Some("F+100".to_string())
         );
         assert_eq!(
-            result_grade_diff_label(SkinDrawState { select_ex_score: Some(300), ..half_grade }),
+            result_grade_diff_label(&SkinDrawState { select_ex_score: Some(300), ..half_grade }),
             Some("E-145".to_string())
         );
         assert_eq!(
-            skin_state_number(154, SkinDrawState { select_ex_score: Some(300), ..half_grade }),
+            skin_state_number(154, &SkinDrawState { select_ex_score: Some(300), ..half_grade }),
             Some(-145)
         );
         assert_eq!(
-            result_grade_diff_label(SkinDrawState { select_ex_score: Some(500), ..half_grade }),
+            result_grade_diff_label(&SkinDrawState { select_ex_score: Some(500), ..half_grade }),
             Some("E+56".to_string())
         );
         assert_eq!(
-            result_grade_diff_label(SkinDrawState { select_ex_score: Some(1900), ..half_grade }),
+            result_grade_diff_label(&SkinDrawState { select_ex_score: Some(1900), ..half_grade }),
             Some("MAX-100".to_string())
         );
         assert_eq!(
-            result_grade_diff_label(SkinDrawState { select_ex_score: Some(2000), ..half_grade }),
+            result_grade_diff_label(&SkinDrawState { select_ex_score: Some(2000), ..half_grade }),
             Some("MAX+0".to_string())
         );
         let screenshot_score = SkinDrawState {
@@ -13294,16 +13298,16 @@ mod tests {
             result_failed: Some(false),
             ..SkinDrawState::default()
         };
-        assert_eq!(result_grade_diff_label(screenshot_score), Some("AAA+44".to_string()));
-        assert_eq!(skin_state_number(154, screenshot_score), Some(44));
-        assert_eq!(grade_diff_rank_target_grade(screenshot_score, true), Some("AAA"));
+        assert_eq!(result_grade_diff_label(&screenshot_score), Some("AAA+44".to_string()));
+        assert_eq!(skin_state_number(154, &screenshot_score), Some(44));
+        assert_eq!(grade_diff_rank_target_grade(&screenshot_score, true), Some("AAA"));
         let beatoraja_screenshot_score = SkinDrawState {
             result_grade_diff_display: ResultGradeDiffDisplay::Beatoraja,
             ..screenshot_score
         };
-        assert_eq!(result_grade_diff_label(beatoraja_screenshot_score), Some("-88".to_string()));
-        assert_eq!(skin_state_number(154, beatoraja_screenshot_score), Some(-88));
-        assert_eq!(grade_diff_rank_target_grade(beatoraja_screenshot_score, true), Some("MAX"));
+        assert_eq!(result_grade_diff_label(&beatoraja_screenshot_score), Some("-88".to_string()));
+        assert_eq!(skin_state_number(154, &beatoraja_screenshot_score), Some(-88));
+        assert_eq!(grade_diff_rank_target_grade(&beatoraja_screenshot_score, true), Some("MAX"));
     }
 
     #[test]
@@ -13356,9 +13360,9 @@ mod tests {
             result_grade_diff_display: ResultGradeDiffDisplay::HalfGrade,
             ..SkinDrawState::default()
         };
-        assert!(destination_ops_match(&destination("RANK_s_MAX", 300), &[], max_minus, false));
-        assert!(!destination_ops_match(&destination("RANK_s_AAA", 301), &[], max_minus, false));
-        assert!(destination_ops_match(&destination("RANK_m_AAA", 300), &[], max_minus, false));
+        assert!(destination_ops_match(&destination("RANK_s_MAX", 300), &[], &max_minus, false));
+        assert!(!destination_ops_match(&destination("RANK_s_AAA", 301), &[], &max_minus, false));
+        assert!(destination_ops_match(&destination("RANK_m_AAA", 300), &[], &max_minus, false));
 
         let aaa_plus = SkinDrawState {
             ex_score: 1100,
@@ -13367,8 +13371,8 @@ mod tests {
             result_grade_diff_display: ResultGradeDiffDisplay::HalfGrade,
             ..SkinDrawState::default()
         };
-        assert!(destination_ops_match(&destination("RANK_s_AAA", 301), &[], aaa_plus, false));
-        assert!(!destination_ops_match(&destination("RANK_s_MAX", 300), &[], aaa_plus, false));
+        assert!(destination_ops_match(&destination("RANK_s_AAA", 301), &[], &aaa_plus, false));
+        assert!(!destination_ops_match(&destination("RANK_s_MAX", 300), &[], &aaa_plus, false));
 
         let beatoraja_e_minus = SkinDrawState {
             select_ex_score: Some(0),
@@ -13380,13 +13384,13 @@ mod tests {
         assert!(destination_ops_match(
             &destination("RANK_s_E", 307),
             &[],
-            beatoraja_e_minus,
+            &beatoraja_e_minus,
             false
         ));
         assert!(!destination_ops_match(
             &destination("RANK_s_D", 306),
             &[],
-            beatoraja_e_minus,
+            &beatoraja_e_minus,
             false
         ));
 
@@ -13400,13 +13404,13 @@ mod tests {
         assert!(destination_ops_match(
             &destination("RANK_s_AAA", 301),
             &[],
-            beatoraja_aaa_minus,
+            &beatoraja_aaa_minus,
             false
         ));
         assert!(!destination_ops_match(
             &destination("RANK_s_MAX", 300),
             &[],
-            beatoraja_aaa_minus,
+            &beatoraja_aaa_minus,
             false
         ));
 
@@ -13417,24 +13421,27 @@ mod tests {
             result_grade_diff_display: ResultGradeDiffDisplay::HalfGrade,
             ..SkinDrawState::default()
         };
-        assert!(destination_ops_match(&destination("RANK_s_E", 307), &[], f_plus, false));
-        assert!(!destination_ops_match(&destination("RANK_s_F", 307), &[], f_plus, false));
+        assert!(destination_ops_match(&destination("RANK_s_E", 307), &[], &f_plus, false));
+        assert!(!destination_ops_match(&destination("RANK_s_F", 307), &[], &f_plus, false));
         assert_eq!(
-            skin_value_number_for_destination(&grade_diff_value(), f_plus, false),
+            skin_value_number_for_destination(&grade_diff_value(), &f_plus, false),
             Some(-345)
         );
         assert_eq!(
             skin_state_number(
                 154,
-                SkinDrawState { result_grade_diff_f_fallback_to_e: true, ..f_plus }
+                &SkinDrawState { result_grade_diff_f_fallback_to_e: true, ..f_plus }
             ),
             Some(-345)
         );
 
-        assert!(destination_ops_match(&destination("RANK_s_F", 307), &[], f_plus, true));
-        assert!(!destination_ops_match(&destination("RANK_s_E", 307), &[], f_plus, true));
-        assert_eq!(skin_value_number_for_destination(&grade_diff_value(), f_plus, true), Some(100));
-        assert!(destination_ops_match(&destination("RANK_m_F", 307), &[], f_plus, false));
+        assert!(destination_ops_match(&destination("RANK_s_F", 307), &[], &f_plus, true));
+        assert!(!destination_ops_match(&destination("RANK_s_E", 307), &[], &f_plus, true));
+        assert_eq!(
+            skin_value_number_for_destination(&grade_diff_value(), &f_plus, true),
+            Some(100)
+        );
+        assert!(destination_ops_match(&destination("RANK_m_F", 307), &[], &f_plus, false));
     }
 
     #[test]
@@ -13491,7 +13498,7 @@ mod tests {
             ..SkinDrawState::default()
         };
 
-        let items = document.static_render_items(&sources, state, SkinTextState::default());
+        let items = document.static_render_items(&sources, &state, SkinTextState::default());
         let first_digit_uv = items.iter().find_map(|item| match item {
             SkinRenderItem::Image { texture: SkinTextureId(42), uv, .. } => Some(*uv),
             _ => None,
@@ -13672,7 +13679,7 @@ mod tests {
         });
 
         let (state, _) = document.select_draw_state(&snapshot, None);
-        assert_eq!(skin_state_number(154, state), Some(-501));
+        assert_eq!(skin_state_number(154, &state), Some(-501));
         assert_eq!(first_digit_uv.map(|uv| uv.y), Some(0.0));
         assert!(
             items.iter().any(|item| matches!(
@@ -13695,7 +13702,7 @@ mod tests {
         };
         let no_play_items = document.select_render_items(&sources, &no_play_snapshot);
         let (no_play_state, _) = document.select_draw_state(&no_play_snapshot, None);
-        assert_eq!(skin_state_number(154, no_play_state), None);
+        assert_eq!(skin_state_number(154, &no_play_state), None);
         assert!(!no_play_items.iter().any(|item| matches!(
             item,
             SkinRenderItem::Image { texture: SkinTextureId(7) | SkinTextureId(42), .. }
@@ -13715,7 +13722,7 @@ mod tests {
         };
         let no_play_zero_items = document.select_render_items(&sources, &no_play_zero_snapshot);
         let (no_play_zero_state, _) = document.select_draw_state(&no_play_zero_snapshot, None);
-        assert_eq!(skin_state_number(154, no_play_zero_state), None);
+        assert_eq!(skin_state_number(154, &no_play_zero_state), None);
         assert!(!no_play_zero_items.iter().any(|item| matches!(
             item,
             SkinRenderItem::Image { texture: SkinTextureId(7) | SkinTextureId(42), .. }
@@ -13736,17 +13743,17 @@ mod tests {
             ..SkinDrawState::default()
         };
 
-        assert!(test_skin_op(196, &[], no_replay));
-        assert!(!test_skin_op(197, &[], no_replay));
-        assert!(!test_skin_op(1205, &[], no_replay));
-        assert!(test_skin_op(197, &[], first_replay));
-        assert!(!test_skin_op(196, &[], first_replay));
-        assert!(test_skin_op(1205, &[], first_replay));
-        assert!(test_skin_op(-1205, &[], no_replay));
-        assert!(test_skin_op(1197, &[], second_replay));
-        assert!(test_skin_op(1206, &[], second_replay));
-        assert!(!test_skin_op(1205, &[], second_replay));
-        assert!(!test_skin_op(198, &[], first_replay));
+        assert!(test_skin_op(196, &[], &no_replay));
+        assert!(!test_skin_op(197, &[], &no_replay));
+        assert!(!test_skin_op(1205, &[], &no_replay));
+        assert!(test_skin_op(197, &[], &first_replay));
+        assert!(!test_skin_op(196, &[], &first_replay));
+        assert!(test_skin_op(1205, &[], &first_replay));
+        assert!(test_skin_op(-1205, &[], &no_replay));
+        assert!(test_skin_op(1197, &[], &second_replay));
+        assert!(test_skin_op(1206, &[], &second_replay));
+        assert!(!test_skin_op(1205, &[], &second_replay));
+        assert!(!test_skin_op(198, &[], &first_replay));
     }
 
     #[test]
@@ -13764,16 +13771,16 @@ mod tests {
             ..SkinDrawState::default()
         };
 
-        assert!(test_skin_op(196, &[], no_replay));
-        assert!(!test_skin_op(197, &[], no_replay));
-        assert!(!test_skin_op(198, &[], no_replay));
-        assert!(test_skin_op(197, &[], existing));
-        assert!(!test_skin_op(196, &[], existing));
-        assert!(!test_skin_op(198, &[], existing));
-        assert!(test_skin_op(198, &[], saved));
-        assert!(!test_skin_op(197, &[], saved));
-        assert!(test_skin_op(1197, &[], saved));
-        assert!(!test_skin_op(1198, &[], saved));
+        assert!(test_skin_op(196, &[], &no_replay));
+        assert!(!test_skin_op(197, &[], &no_replay));
+        assert!(!test_skin_op(198, &[], &no_replay));
+        assert!(test_skin_op(197, &[], &existing));
+        assert!(!test_skin_op(196, &[], &existing));
+        assert!(!test_skin_op(198, &[], &existing));
+        assert!(test_skin_op(198, &[], &saved));
+        assert!(!test_skin_op(197, &[], &saved));
+        assert!(test_skin_op(1197, &[], &saved));
+        assert!(!test_skin_op(1198, &[], &saved));
     }
 
     #[test]
@@ -13831,7 +13838,7 @@ mod tests {
 
         let items = document.static_render_items(
             &HashMap::new(),
-            SkinDrawState {
+            &SkinDrawState {
                 has_bga: true,
                 bga_base: Some(SkinBgaFrame {
                     texture: SkinTextureId(20000),
@@ -13893,7 +13900,7 @@ mod tests {
 
         let items = document.static_render_items(
             &HashMap::new(),
-            SkinDrawState {
+            &SkinDrawState {
                 has_bga: true,
                 bga_base: Some(SkinBgaFrame {
                     texture: SkinTextureId(20000),
@@ -13952,7 +13959,7 @@ mod tests {
 
         let items = document.static_render_items(
             &HashMap::new(),
-            SkinDrawState {
+            &SkinDrawState {
                 has_bga: true,
                 bga_base: Some(SkinBgaFrame {
                     texture: SkinTextureId(20000),
@@ -14001,7 +14008,7 @@ mod tests {
 
         let items = document.static_render_items(
             &HashMap::new(),
-            SkinDrawState {
+            &SkinDrawState {
                 has_bga: true,
                 bga_base: Some(SkinBgaFrame {
                     texture: SkinTextureId(20000),
@@ -14063,11 +14070,11 @@ mod tests {
 
         let no_bga_items = document.static_image_render_items(
             &sources,
-            SkinDrawState { has_bga: false, ..SkinDrawState::default() },
+            &SkinDrawState { has_bga: false, ..SkinDrawState::default() },
         );
         let bga_items = document.static_image_render_items(
             &sources,
-            SkinDrawState { has_bga: true, ..SkinDrawState::default() },
+            &SkinDrawState { has_bga: true, ..SkinDrawState::default() },
         );
 
         assert!(matches!(
@@ -14161,7 +14168,7 @@ mod tests {
             },
         )]);
 
-        let items = document.static_image_render_items(&sources, SkinDrawState::default());
+        let items = document.static_image_render_items(&sources, &SkinDrawState::default());
 
         assert_eq!(items.len(), 1);
         assert!(matches!(
@@ -14214,7 +14221,7 @@ mod tests {
 
         let (behind, front, failed_overlay) = document.static_render_items_split(
             &sources,
-            SkinDrawState::default(),
+            &SkinDrawState::default(),
             SkinTextState::default(),
         );
 
@@ -14225,7 +14232,7 @@ mod tests {
         // 結合版 static_render_items は behind→front→failed の順で全アイテムを返す。
         let all = document.static_render_items(
             &sources,
-            SkinDrawState::default(),
+            &SkinDrawState::default(),
             SkinTextState::default(),
         );
         assert_eq!(all.len(), 3);
@@ -14263,7 +14270,7 @@ mod tests {
 
         let (behind, front, failed_overlay) = document.static_render_items_split(
             &sources,
-            SkinDrawState::default(),
+            &SkinDrawState::default(),
             SkinTextState::default(),
         );
 
@@ -14306,7 +14313,7 @@ mod tests {
             },
         )]);
 
-        let items = document.static_image_render_items(&sources, SkinDrawState::default());
+        let items = document.static_image_render_items(&sources, &SkinDrawState::default());
 
         assert_eq!(items.len(), 3);
         assert!(matches!(
@@ -14378,15 +14385,15 @@ mod tests {
 
         let high = document.static_image_render_items(
             &sources,
-            SkinDrawState { elapsed_ms: 0, gauge: 80.0, ..SkinDrawState::default() },
+            &SkinDrawState { elapsed_ms: 0, gauge: 80.0, ..SkinDrawState::default() },
         );
         let middle = document.static_image_render_items(
             &sources,
-            SkinDrawState { elapsed_ms: 0, gauge: 60.0, ..SkinDrawState::default() },
+            &SkinDrawState { elapsed_ms: 0, gauge: 60.0, ..SkinDrawState::default() },
         );
         let low = document.static_image_render_items(
             &sources,
-            SkinDrawState { elapsed_ms: 0, gauge: 10.0, ..SkinDrawState::default() },
+            &SkinDrawState { elapsed_ms: 0, gauge: 10.0, ..SkinDrawState::default() },
         );
 
         assert_eq!(high.len(), 1);
@@ -14430,10 +14437,10 @@ mod tests {
             },
         )]);
 
-        let no_miss = document.static_image_render_items(&sources, SkinDrawState::default());
+        let no_miss = document.static_image_render_items(&sources, &SkinDrawState::default());
         let miss = document.static_image_render_items(
             &sources,
-            SkinDrawState {
+            &SkinDrawState {
                 judge_counts: DisplayJudgeCounts { bad: 1, poor: 2, ..Default::default() },
                 ..SkinDrawState::default()
             },
@@ -14447,7 +14454,7 @@ mod tests {
         );
         assert!(eval_skin_draw_condition(
             "number(410) == number(411) or number(110) == number(410)",
-            SkinDrawState {
+            &SkinDrawState {
                 judge_counts: DisplayJudgeCounts { pgreat: 300, ..Default::default() },
                 fast_slow_counts: Some(crate::snapshot::FastSlowJudgeCounts {
                     fast_pgreat: 300,
@@ -14459,7 +14466,7 @@ mod tests {
         ));
         assert!(eval_skin_draw_condition(
             "number(410) > number(411) and number(411) >= 1",
-            SkinDrawState {
+            &SkinDrawState {
                 fast_slow_counts: Some(crate::snapshot::FastSlowJudgeCounts {
                     fast_pgreat: 120,
                     slow_pgreat: 20,
@@ -14474,15 +14481,15 @@ mod tests {
     fn skin_document_evaluates_option_draw_conditions() {
         assert!(eval_skin_draw_condition(
             "option(197)",
-            SkinDrawState {
+            &SkinDrawState {
                 select_replay_slots: [true, false, false, false],
                 ..Default::default()
             }
         ));
-        assert!(eval_skin_draw_condition("!option(197)", SkinDrawState::default()));
+        assert!(eval_skin_draw_condition("!option(197)", &SkinDrawState::default()));
         assert!(!eval_skin_draw_condition(
             "!option(197)",
-            SkinDrawState {
+            &SkinDrawState {
                 select_replay_slots: [true, false, false, false],
                 ..Default::default()
             }
@@ -14491,17 +14498,17 @@ mod tests {
 
     #[test]
     fn skin_document_evaluates_timer_draw_conditions() {
-        assert!(eval_skin_draw_condition("timer(46) == timer_off", SkinDrawState::default()));
+        assert!(eval_skin_draw_condition("timer(46) == timer_off", &SkinDrawState::default()));
         assert!(eval_skin_draw_condition(
             "timer(46) != timer_off",
-            SkinDrawState {
+            &SkinDrawState {
                 judge_ms: judge_region_state(0, 120, 0).judge_ms,
                 ..Default::default()
             }
         ));
         assert!(eval_skin_draw_condition(
             "timer(46) > 0 and option(197)",
-            SkinDrawState {
+            &SkinDrawState {
                 judge_ms: judge_region_state(0, 120, 0).judge_ms,
                 select_replay_slots: [true, false, false, false],
                 ..Default::default()
@@ -14513,15 +14520,15 @@ mod tests {
     fn skin_document_evaluates_gauge_type_draw_conditions() {
         assert!(eval_skin_draw_condition(
             "gauge_type() == 4 or gauge_type() == 5",
-            SkinDrawState { gauge_type: 4, ..Default::default() }
+            &SkinDrawState { gauge_type: 4, ..Default::default() }
         ));
         assert!(eval_skin_draw_condition(
             "gauge_type() == 4 or gauge_type() == 5",
-            SkinDrawState { gauge_type: 5, ..Default::default() }
+            &SkinDrawState { gauge_type: 5, ..Default::default() }
         ));
         assert!(!eval_skin_draw_condition(
             "gauge_type() == 4 or gauge_type() == 5",
-            SkinDrawState { gauge_type: 2, ..Default::default() }
+            &SkinDrawState { gauge_type: 2, ..Default::default() }
         ));
     }
 
@@ -14529,17 +14536,17 @@ mod tests {
     fn skin_document_evaluates_gauge_auto_shift_draw_conditions() {
         assert!(eval_skin_draw_condition(
             "gauge_auto_shift() == 1",
-            SkinDrawState { gauge_auto_shift: true, ..Default::default() }
+            &SkinDrawState { gauge_auto_shift: true, ..Default::default() }
         ));
         assert!(!eval_skin_draw_condition(
             "gauge_auto_shift() == 1",
-            SkinDrawState { gauge_auto_shift: false, ..Default::default() }
+            &SkinDrawState { gauge_auto_shift: false, ..Default::default() }
         ));
         assert_eq!(select_gauge_auto_shift_index("BEST CLEAR"), 3);
         assert_eq!(
             skin_state_imageset_index(
                 78,
-                SkinDrawState { select_gauge_auto_shift_index: 3, ..Default::default() }
+                &SkinDrawState { select_gauge_auto_shift_index: 3, ..Default::default() }
             ),
             Some(3)
         );
@@ -14572,13 +14579,10 @@ mod tests {
             },
         )]);
         let mut runtime = DynamicTimerRuntime::default();
-        let state = runtime.advance(
-            &document,
-            SkinDrawState { gauge_type: 4, elapsed_ms: 100, ..Default::default() },
-            100,
-        );
+        let mut state = SkinDrawState { gauge_type: 4, elapsed_ms: 100, ..Default::default() };
+        runtime.advance(&document, &mut state, 100);
         let (behind, front, _) =
-            document.static_render_items_split(&sources, state, SkinTextState::default());
+            document.static_render_items_split(&sources, &state, SkinTextState::default());
         let items = behind.into_iter().chain(front).collect::<Vec<_>>();
         assert_eq!(items.len(), 1);
         assert!(matches!(items[0], SkinRenderItem::Image { .. }));
@@ -14626,7 +14630,7 @@ mod tests {
             .set(11, crate::skin_offset::SkinOffsetValue { x: 10, y: 8, w: 4, h: 6, r: 0, a: 0 });
         let (behind, front, _) = document.static_render_items_split(
             &sources,
-            SkinDrawState { gauge_type: 4, elapsed_ms: 1700, skin_offsets, ..Default::default() },
+            &SkinDrawState { gauge_type: 4, elapsed_ms: 1700, skin_offsets, ..Default::default() },
             SkinTextState::default(),
         );
         let items = behind.into_iter().chain(front).collect::<Vec<_>>();
@@ -14689,7 +14693,7 @@ mod tests {
             },
         )]);
 
-        let items = document.static_image_render_items(&sources, SkinDrawState::default());
+        let items = document.static_image_render_items(&sources, &SkinDrawState::default());
 
         assert_eq!(document.enabled_options(), [920, 901]);
         assert_eq!(items.len(), 1);
@@ -14730,15 +14734,15 @@ mod tests {
 
         let early = document.static_image_render_items(
             &sources,
-            SkinDrawState { elapsed_ms: 50, ..SkinDrawState::default() },
+            &SkinDrawState { elapsed_ms: 50, ..SkinDrawState::default() },
         );
         let middle = document.static_image_render_items(
             &sources,
-            SkinDrawState { elapsed_ms: 150, ..SkinDrawState::default() },
+            &SkinDrawState { elapsed_ms: 150, ..SkinDrawState::default() },
         );
         let late = document.static_image_render_items(
             &sources,
-            SkinDrawState { elapsed_ms: 250, ..SkinDrawState::default() },
+            &SkinDrawState { elapsed_ms: 250, ..SkinDrawState::default() },
         );
 
         assert!(
@@ -14788,7 +14792,7 @@ mod tests {
 
             let items = document.static_image_render_items(
                 &sources,
-                SkinDrawState { elapsed_ms: 50, ..SkinDrawState::default() },
+                &SkinDrawState { elapsed_ms: 50, ..SkinDrawState::default() },
             );
 
             assert!(matches!(items[0], SkinRenderItem::Image { rect: Rect { x, .. }, .. }
@@ -14831,7 +14835,7 @@ mod tests {
         // x = 45 → 正規化 0.45
         let wrapped = document.static_image_render_items(
             &sources,
-            SkinDrawState { elapsed_ms: 350, ..SkinDrawState::default() },
+            &SkinDrawState { elapsed_ms: 350, ..SkinDrawState::default() },
         );
 
         assert!(matches!(wrapped[0], SkinRenderItem::Image { rect: Rect { x, .. }, .. }
@@ -15166,7 +15170,7 @@ mod tests {
         let items = document
             .static_image_render_items(
                 &sources,
-                SkinDrawState {
+                &SkinDrawState {
                     elapsed_ms: 1_000,
                     gauge: 75.0,
                     gauge_max: 100.0,
@@ -15241,7 +15245,7 @@ mod tests {
         let items = document
             .static_image_render_items(
                 &sources,
-                SkinDrawState {
+                &SkinDrawState {
                     elapsed_ms: 8,
                     gauge: 75.0,
                     gauge_max: 100.0,
@@ -15292,11 +15296,11 @@ mod tests {
         };
         let first = skin_gauge_animation_index(
             &gauge,
-            SkinDrawState { elapsed_ms: 33, ..Default::default() },
+            &SkinDrawState { elapsed_ms: 33, ..Default::default() },
         );
         let second = skin_gauge_animation_index(
             &gauge,
-            SkinDrawState { elapsed_ms: 66, ..Default::default() },
+            &SkinDrawState { elapsed_ms: 66, ..Default::default() },
         );
 
         assert_ne!(first, second, "type=0 RANDOM should not stay fixed at frame 0");
@@ -15320,14 +15324,14 @@ mod tests {
         assert_eq!(
             skin_gauge_animation_index(
                 &gauge,
-                SkinDrawState { elapsed_ms: 33, ..Default::default() }
+                &SkinDrawState { elapsed_ms: 33, ..Default::default() }
             ),
             1
         );
         assert_eq!(
             skin_gauge_animation_index(
                 &gauge,
-                SkinDrawState { elapsed_ms: 66, ..Default::default() }
+                &SkinDrawState { elapsed_ms: 66, ..Default::default() }
             ),
             2
         );
@@ -15389,7 +15393,7 @@ mod tests {
         let items = document
             .static_image_render_items(
                 &sources,
-                SkinDrawState {
+                &SkinDrawState {
                     elapsed_ms: 8,
                     gauge: 75.0,
                     gauge_max: 100.0,
@@ -15440,7 +15444,7 @@ mod tests {
 
         let inactive = document.static_image_render_items(
             &sources,
-            SkinDrawState {
+            &SkinDrawState {
                 elapsed_ms: 500,
                 gauge: 50.0,
                 gauge_max: 100.0,
@@ -15450,7 +15454,7 @@ mod tests {
         );
         let active = document.static_image_render_items(
             &sources,
-            SkinDrawState {
+            &SkinDrawState {
                 elapsed_ms: 500,
                 gauge: 50.0,
                 gauge_max: 100.0,
@@ -15702,7 +15706,7 @@ mod tests {
 
         let items = document.static_render_items(
             &sources,
-            SkinDrawState {
+            &SkinDrawState {
                 judge_ms: judge_region_state(0, 100, 0).judge_ms,
                 judge_index: judge_region_state(0, 100, 0).judge_index,
                 judge_combo: {
@@ -15836,10 +15840,10 @@ mod tests {
             ..SkinDrawState::default()
         };
         let left = document
-            .judge_render_items_for_def(&document.judge[0], 0, 42, 100, &sources, state)
+            .judge_render_items_for_def(&document.judge[0], 0, 42, 100, &sources, &state)
             .unwrap();
         let right = document
-            .judge_render_items_for_def(&document.judge[1], 0, 42, 100, &sources, state)
+            .judge_render_items_for_def(&document.judge[1], 0, 42, 100, &sources, &state)
             .unwrap();
         let left_digit = match &left[1] {
             SkinRenderItem::Image { rect, .. } => rect.x,
@@ -15854,7 +15858,7 @@ mod tests {
             "right region digit x={right_digit} should be right of left x={left_digit}"
         );
 
-        let static_items = document.static_render_items(&sources, state, SkinTextState::default());
+        let static_items = document.static_render_items(&sources, &state, SkinTextState::default());
         assert_eq!(static_items.len(), 6);
         let static_left = match &static_items[1] {
             SkinRenderItem::Image { rect, .. } => rect.x,
@@ -15905,7 +15909,7 @@ mod tests {
             ..SkinDrawState::default()
         };
 
-        let items = document.static_render_items(&sources, state, SkinTextState::default());
+        let items = document.static_render_items(&sources, &state, SkinTextState::default());
 
         assert_eq!(items.len(), 1);
     }
@@ -15937,14 +15941,14 @@ mod tests {
             ..SkinDrawState::default()
         };
 
-        assert!(test_skin_op(1242, &[], fast));
-        assert!(!test_skin_op(1243, &[], fast));
-        assert!(test_skin_op(1243, &[], slow));
-        assert!(!test_skin_op(1242, &[], slow));
-        assert!(test_skin_op(241, &[], perfect_auto));
-        assert!(!test_skin_op(1242, &[], perfect_auto));
-        assert!(test_skin_op(241, &[], perfect_threshold));
-        assert!(test_skin_op(1242, &[], perfect_threshold));
+        assert!(test_skin_op(1242, &[], &fast));
+        assert!(!test_skin_op(1243, &[], &fast));
+        assert!(test_skin_op(1243, &[], &slow));
+        assert!(!test_skin_op(1242, &[], &slow));
+        assert!(test_skin_op(241, &[], &perfect_auto));
+        assert!(!test_skin_op(1242, &[], &perfect_auto));
+        assert!(test_skin_op(241, &[], &perfect_threshold));
+        assert!(test_skin_op(1242, &[], &perfect_threshold));
     }
 
     #[test]
@@ -15982,7 +15986,7 @@ mod tests {
         let sources = mock_source("1", 100.0, 100.0);
         let items = document.static_render_items(
             &sources,
-            SkinDrawState {
+            &SkinDrawState {
                 judge_ms: judge_region_state(0, 100, 0).judge_ms,
                 judge_index: judge_region_state(0, 100, 0).judge_index,
                 judge_combo: {
@@ -16066,7 +16070,8 @@ mod tests {
             },
             ..SkinDrawState::default()
         };
-        let pgreat = document.static_render_items(&sources, pgreat_state, SkinTextState::default());
+        let pgreat =
+            document.static_render_items(&sources, &pgreat_state, SkinTextState::default());
         // GOOD 判定
         let good_state = SkinDrawState {
             bomb_ms: {
@@ -16081,7 +16086,7 @@ mod tests {
             },
             ..SkinDrawState::default()
         };
-        let good = document.static_render_items(&sources, good_state, SkinTextState::default());
+        let good = document.static_render_items(&sources, &good_state, SkinTextState::default());
         // タイマーがアニメーション終端を超過 → loop:-1 で非表示
         let expired_state = SkinDrawState {
             bomb_ms: {
@@ -16097,7 +16102,7 @@ mod tests {
             ..SkinDrawState::default()
         };
         let expired =
-            document.static_render_items(&sources, expired_state, SkinTextState::default());
+            document.static_render_items(&sources, &expired_state, SkinTextState::default());
 
         // beam1 と bomb1 のみ描画される (beam2 は timer 52 非アクティブ)
         assert_eq!(pgreat.len(), 2);
@@ -16758,7 +16763,7 @@ mod tests {
 
         let (state, _) = document.select_draw_state(&snapshot, None);
 
-        assert_eq!(skin_state_number(12, state), Some(-12));
+        assert_eq!(skin_state_number(12, &state), Some(-12));
     }
 
     #[test]
@@ -16996,7 +17001,7 @@ mod tests {
                 values: [0, 0, 0, 0, 0, 0, 1, 0, 0, 0],
             }];
 
-        let items = document.static_image_render_items(&HashMap::new(), SkinDrawState::default());
+        let items = document.static_image_render_items(&HashMap::new(), &SkinDrawState::default());
 
         assert!(items.iter().any(|item| {
             skin_render_item_has_rect_color(item, |Color { r, g, b, .. }| {
@@ -17455,7 +17460,7 @@ mod tests {
 
         let items = document.static_image_render_items(
             &sources,
-            SkinDrawState {
+            &SkinDrawState {
                 elapsed_ms: 0,
                 combo: 45,
                 total_notes: 100,
@@ -17525,13 +17530,13 @@ mod tests {
 
         let inactive = document.static_image_render_items(
             &sources,
-            SkinDrawState { ready_timer_ms: None, ..SkinDrawState::default() },
+            &SkinDrawState { ready_timer_ms: None, ..SkinDrawState::default() },
         );
         assert!(inactive.is_empty());
 
         let active = document.static_image_render_items(
             &sources,
-            SkinDrawState {
+            &SkinDrawState {
                 ready_timer_ms: None,
                 lane_cover_changing: true,
                 lane_cover: 0.25,
@@ -17570,7 +17575,7 @@ mod tests {
 
         let items = document.static_render_items(
             &HashMap::new(),
-            SkinDrawState::default(),
+            &SkinDrawState::default(),
             SkinTextState {
                 title: "Song",
                 subtitle: "Another",
@@ -17650,7 +17655,7 @@ mod tests {
 
         let items = document.static_image_render_items(
             &sources,
-            SkinDrawState {
+            &SkinDrawState {
                 play_progress: 0.25,
                 select_scroll_progress: 0.5,
                 select_master_volume: 0.75,
@@ -17686,13 +17691,13 @@ mod tests {
 
         let no_lane_cover = document.static_image_render_items(
             &sources,
-            SkinDrawState { lane_cover: 0.0, ..SkinDrawState::default() },
+            &SkinDrawState { lane_cover: 0.0, ..SkinDrawState::default() },
         );
         assert_eq!(no_lane_cover.len(), 3);
 
         let lane_cover = document.static_image_render_items(
             &sources,
-            SkinDrawState { lane_cover: 0.5, ..SkinDrawState::default() },
+            &SkinDrawState { lane_cover: 0.5, ..SkinDrawState::default() },
         );
         assert_eq!(lane_cover.len(), 4);
         assert!(matches!(
@@ -17738,7 +17743,7 @@ mod tests {
 
         let items = document.static_image_render_items(
             &sources,
-            SkinDrawState { select_master_volume: 0.5, ..SkinDrawState::default() },
+            &SkinDrawState { select_master_volume: 0.5, ..SkinDrawState::default() },
         );
 
         assert_eq!(items.len(), 4);
@@ -17792,11 +17797,11 @@ mod tests {
 
         let hidden = document.static_image_render_items(
             &sources,
-            SkinDrawState { end_of_note: false, ..SkinDrawState::default() },
+            &SkinDrawState { end_of_note: false, ..SkinDrawState::default() },
         );
         let visible = document.static_image_render_items(
             &sources,
-            SkinDrawState {
+            &SkinDrawState {
                 end_of_note: true,
                 end_of_note_ms: Some(0),
                 ..SkinDrawState::default()
@@ -17845,11 +17850,11 @@ mod tests {
 
         let hidden = document.static_image_render_items(
             &sources,
-            SkinDrawState { full_combo_ms: None, ..SkinDrawState::default() },
+            &SkinDrawState { full_combo_ms: None, ..SkinDrawState::default() },
         );
         let visible = document.static_image_render_items(
             &sources,
-            SkinDrawState { full_combo_ms: Some(500), ..SkinDrawState::default() },
+            &SkinDrawState { full_combo_ms: Some(500), ..SkinDrawState::default() },
         );
 
         assert!(hidden.is_empty());
@@ -17922,11 +17927,11 @@ mod tests {
 
         let inactive = document.static_image_render_items(
             &sources,
-            SkinDrawState { fadeout_ms: None, ..SkinDrawState::default() },
+            &SkinDrawState { fadeout_ms: None, ..SkinDrawState::default() },
         );
         let mid = document.static_image_render_items(
             &sources,
-            SkinDrawState { fadeout_ms: Some(100), ..SkinDrawState::default() },
+            &SkinDrawState { fadeout_ms: Some(100), ..SkinDrawState::default() },
         );
 
         assert!(inactive.is_empty(), "fadeout timer is inactive when fadeout_ms is None");
@@ -17958,7 +17963,7 @@ mod tests {
 
         let mid = document.static_image_render_items(
             &HashMap::new(),
-            SkinDrawState { fadeout_ms: Some(100), ..SkinDrawState::default() },
+            &SkinDrawState { fadeout_ms: Some(100), ..SkinDrawState::default() },
         );
 
         assert_eq!(mid.len(), 1);
@@ -17995,11 +18000,11 @@ mod tests {
 
         let inactive = document.static_image_render_items(
             &HashMap::new(),
-            SkinDrawState { failed_ms: None, ..SkinDrawState::default() },
+            &SkinDrawState { failed_ms: None, ..SkinDrawState::default() },
         );
         let active = document.static_image_render_items(
             &HashMap::new(),
-            SkinDrawState { failed_ms: Some(50), ..SkinDrawState::default() },
+            &SkinDrawState { failed_ms: Some(50), ..SkinDrawState::default() },
         );
 
         assert!(inactive.is_empty());
@@ -18116,15 +18121,15 @@ mod tests {
 
         let inactive = document.static_image_render_items(
             &sources,
-            SkinDrawState { failed_ms: None, ..SkinDrawState::default() },
+            &SkinDrawState { failed_ms: None, ..SkinDrawState::default() },
         );
         let mid = document.static_image_render_items(
             &sources,
-            SkinDrawState { failed_ms: Some(500), ..SkinDrawState::default() },
+            &SkinDrawState { failed_ms: Some(500), ..SkinDrawState::default() },
         );
         let (_, _, failed_overlay) = document.static_render_items_split(
             &sources,
-            SkinDrawState { failed_ms: Some(500), ..SkinDrawState::default() },
+            &SkinDrawState { failed_ms: Some(500), ..SkinDrawState::default() },
             SkinTextState::default(),
         );
 
@@ -18168,10 +18173,10 @@ mod tests {
             },
         )]);
 
-        let hidden = document.static_image_render_items(&sources, SkinDrawState::default());
+        let hidden = document.static_image_render_items(&sources, &SkinDrawState::default());
         let items = document.static_image_render_items(
             &sources,
-            SkinDrawState { hidden_cover: 1.0, ..SkinDrawState::default() },
+            &SkinDrawState { hidden_cover: 1.0, ..SkinDrawState::default() },
         );
 
         assert!(hidden.is_empty());
@@ -18226,7 +18231,7 @@ mod tests {
 
         let flush = document.static_image_render_items(
             &sources,
-            SkinDrawState { hidden_cover: 1.0, ..SkinDrawState::default() },
+            &SkinDrawState { hidden_cover: 1.0, ..SkinDrawState::default() },
         );
         let SkinRenderItem::Image { rect: flush_rect, uv: flush_uv, .. } = &flush[0] else {
             panic!("expected image");
@@ -18237,7 +18242,7 @@ mod tests {
 
         let clipped = document.static_image_render_items(
             &sources,
-            SkinDrawState {
+            &SkinDrawState {
                 hidden_cover: 1.0,
                 offset_hidden_cover_px: 300,
                 ..SkinDrawState::default()
@@ -18285,7 +18290,7 @@ mod tests {
 
         let items = document.static_image_render_items(
             &sources,
-            SkinDrawState { offset_lift_px: 0, ..SkinDrawState::default() },
+            &SkinDrawState { offset_lift_px: 0, ..SkinDrawState::default() },
         );
         assert!(items.is_empty());
     }
@@ -18323,7 +18328,7 @@ mod tests {
 
         let items = document.static_image_render_items(
             &sources,
-            SkinDrawState { lane_cover: 1.0, ..SkinDrawState::default() },
+            &SkinDrawState { lane_cover: 1.0, ..SkinDrawState::default() },
         );
         let SkinRenderItem::Image { rect, uv, .. } = &items[0] else {
             panic!("expected sudden+ lane cover image");
@@ -18365,7 +18370,7 @@ mod tests {
 
         let clipped = document.static_image_render_items(
             &sources,
-            SkinDrawState { offset_lift_px: 200, ..SkinDrawState::default() },
+            &SkinDrawState { offset_lift_px: 200, ..SkinDrawState::default() },
         );
         let SkinRenderItem::Image { rect: clipped_rect, uv: clipped_uv, .. } = &clipped[0] else {
             panic!("expected image");
@@ -18406,7 +18411,7 @@ mod tests {
 
         let items = document.static_image_render_items(
             &sources,
-            SkinDrawState {
+            &SkinDrawState {
                 hidden_cover: 0.5,
                 offset_lift_px: 10,
                 offset_hidden_cover_px: 20,
@@ -18459,34 +18464,34 @@ mod tests {
             ..SkinDrawState::default()
         };
 
-        assert_eq!(skin_state_number(71, state), Some(167));
-        assert_eq!(skin_state_number(72, state), Some(200));
-        assert_eq!(skin_state_number(74, state), Some(100));
-        assert_eq!(skin_state_number(75, state), Some(45));
-        assert_eq!(skin_state_number(76, state), Some(7));
-        assert_eq!(skin_state_number(102, state), Some(83));
-        assert_eq!(skin_state_number(103, state), Some(50));
-        assert_eq!(skin_state_number(104, state), Some(12));
-        assert_eq!(skin_state_number(107, state), Some(78));
-        assert_eq!(skin_state_number(407, state), Some(6));
-        assert_eq!(skin_state_number(110, state), Some(30));
-        assert_eq!(skin_state_number(111, state), Some(20));
-        assert_eq!(skin_state_number(112, state), Some(10));
-        assert_eq!(skin_state_number(113, state), Some(4));
-        assert_eq!(skin_state_number(114, state), Some(3));
-        assert_eq!(skin_state_number(122, state), Some(72));
-        assert_eq!(skin_state_number(123, state), Some(50));
-        assert_eq!(skin_state_number(183, state), Some(61));
-        assert_eq!(skin_state_number(184, state), Some(50));
-        assert_eq!(skin_state_number(400, state), Some(1));
-        assert_eq!(skin_state_number(420, state), Some(2));
-        assert_eq!(skin_state_number(423, state), Some(60));
-        assert_eq!(skin_state_number(424, state), Some(64));
-        assert_eq!(skin_state_number(425, state), Some(7));
-        assert_eq!(skin_state_number(426, state), Some(3));
-        assert_eq!(skin_state_number(427, state), Some(7));
-        assert!(test_skin_op(181, &[], state));
-        assert!(!test_skin_op(182, &[], state));
+        assert_eq!(skin_state_number(71, &state), Some(167));
+        assert_eq!(skin_state_number(72, &state), Some(200));
+        assert_eq!(skin_state_number(74, &state), Some(100));
+        assert_eq!(skin_state_number(75, &state), Some(45));
+        assert_eq!(skin_state_number(76, &state), Some(7));
+        assert_eq!(skin_state_number(102, &state), Some(83));
+        assert_eq!(skin_state_number(103, &state), Some(50));
+        assert_eq!(skin_state_number(104, &state), Some(12));
+        assert_eq!(skin_state_number(107, &state), Some(78));
+        assert_eq!(skin_state_number(407, &state), Some(6));
+        assert_eq!(skin_state_number(110, &state), Some(30));
+        assert_eq!(skin_state_number(111, &state), Some(20));
+        assert_eq!(skin_state_number(112, &state), Some(10));
+        assert_eq!(skin_state_number(113, &state), Some(4));
+        assert_eq!(skin_state_number(114, &state), Some(3));
+        assert_eq!(skin_state_number(122, &state), Some(72));
+        assert_eq!(skin_state_number(123, &state), Some(50));
+        assert_eq!(skin_state_number(183, &state), Some(61));
+        assert_eq!(skin_state_number(184, &state), Some(50));
+        assert_eq!(skin_state_number(400, &state), Some(1));
+        assert_eq!(skin_state_number(420, &state), Some(2));
+        assert_eq!(skin_state_number(423, &state), Some(60));
+        assert_eq!(skin_state_number(424, &state), Some(64));
+        assert_eq!(skin_state_number(425, &state), Some(7));
+        assert_eq!(skin_state_number(426, &state), Some(3));
+        assert_eq!(skin_state_number(427, &state), Some(7));
+        assert!(test_skin_op(181, &[], &state));
+        assert!(!test_skin_op(182, &[], &state));
     }
 
     #[test]
@@ -18505,10 +18510,10 @@ mod tests {
             },
             ..SkinDrawState::default()
         };
-        assert_eq!(skin_state_number(100, state), Some(89_500));
+        assert_eq!(skin_state_number(100, &state), Some(89_500));
 
         let five_key = SkinDrawState { key_mode: KeyMode::K5, ..state };
-        assert_eq!(skin_state_number(100, five_key), Some(55_000));
+        assert_eq!(skin_state_number(100, &five_key), Some(55_000));
     }
 
     #[test]
@@ -18568,8 +18573,8 @@ mod tests {
         let select_detail =
             SkinDrawState { select_screen: true, select_option_panel: 3, ..Default::default() };
         let select_normal = SkinDrawState { select_screen: true, ..Default::default() };
-        assert!(value_ref_is_signed_for_state(12, select_detail));
-        assert!(!value_ref_is_signed_for_state(12, select_normal));
+        assert!(value_ref_is_signed_for_state(12, &select_detail));
+        assert!(!value_ref_is_signed_for_state(12, &select_normal));
     }
 
     #[test]
@@ -18627,49 +18632,49 @@ mod tests {
             ..SkinDrawState::default()
         };
 
-        assert_eq!(skin_state_number(42, state), Some(9));
-        assert_eq!(skin_state_number(43, state), Some(9));
+        assert_eq!(skin_state_number(42, &state), Some(9));
+        assert_eq!(skin_state_number(43, &state), Some(9));
         // 符号付き差分
-        assert_eq!(skin_state_number(170, state), Some(1800));
-        assert_eq!(skin_state_number(121, state), Some(1900));
-        assert_eq!(skin_state_number(151, state), Some(1900));
-        assert_eq!(skin_state_number(122, state), Some(95));
-        assert_eq!(skin_state_number(123, state), Some(0));
-        assert_eq!(skin_state_number(135, state), Some(95));
-        assert_eq!(skin_state_number(136, state), Some(0));
-        assert_eq!(skin_state_number(157, state), Some(95));
-        assert_eq!(skin_state_number(158, state), Some(0));
-        assert_eq!(skin_state_number(183, state), Some(90));
-        assert_eq!(skin_state_number(184, state), Some(0));
-        assert_eq!(skin_state_number(152, state), Some(1888 - 1800));
-        assert_eq!(skin_state_number(172, state), Some(1888 - 1800));
-        assert_eq!(skin_state_number(153, state), Some(1888 - 1900));
-        assert_eq!(skin_state_number(173, state), Some(1000));
-        assert_eq!(skin_state_number(175, state), Some(777 - 1000));
-        assert_eq!(skin_state_number(176, state), Some(10));
-        assert_eq!(skin_state_number(177, state), Some(8));
+        assert_eq!(skin_state_number(170, &state), Some(1800));
+        assert_eq!(skin_state_number(121, &state), Some(1900));
+        assert_eq!(skin_state_number(151, &state), Some(1900));
+        assert_eq!(skin_state_number(122, &state), Some(95));
+        assert_eq!(skin_state_number(123, &state), Some(0));
+        assert_eq!(skin_state_number(135, &state), Some(95));
+        assert_eq!(skin_state_number(136, &state), Some(0));
+        assert_eq!(skin_state_number(157, &state), Some(95));
+        assert_eq!(skin_state_number(158, &state), Some(0));
+        assert_eq!(skin_state_number(183, &state), Some(90));
+        assert_eq!(skin_state_number(184, &state), Some(0));
+        assert_eq!(skin_state_number(152, &state), Some(1888 - 1800));
+        assert_eq!(skin_state_number(172, &state), Some(1888 - 1800));
+        assert_eq!(skin_state_number(153, &state), Some(1888 - 1900));
+        assert_eq!(skin_state_number(173, &state), Some(1000));
+        assert_eq!(skin_state_number(175, &state), Some(777 - 1000));
+        assert_eq!(skin_state_number(176, &state), Some(10));
+        assert_eq!(skin_state_number(177, &state), Some(8));
         // 現在 bp = bad+poor = 8、MYBEST = 更新前の 10 → diff = -2
-        assert_eq!(skin_state_number(178, state), Some(-2));
-        assert_eq!(skin_state_number(371, state), Some(4));
-        assert!(test_skin_op(320, &[], state));
-        assert!(!test_skin_op(321, &[], state));
-        assert!(test_skin_op(330, &[], state));
-        assert!(!test_skin_op(1330, &[], state));
-        assert!(test_skin_op(331, &[], state));
-        assert!(!test_skin_op(1331, &[], state));
-        assert!(test_skin_op(332, &[], state));
-        assert!(!test_skin_op(1332, &[], state));
-        assert!(test_skin_op(335, &[], state));
-        assert!(!test_skin_op(1335, &[], state));
-        assert!(test_skin_op(300, &[], state));
-        assert!(test_skin_op(310, &[], state));
-        assert!(!test_skin_op(301, &[], state));
-        assert!(!test_skin_op(308, &[], state));
-        assert!(test_skin_op(350, &[], state));
-        assert!(!test_skin_op(351, &[], state));
-        assert!(!test_skin_op(352, &[], state));
-        assert!(test_skin_op(353, &[], state));
-        assert!(!test_skin_op(354, &[], state));
+        assert_eq!(skin_state_number(178, &state), Some(-2));
+        assert_eq!(skin_state_number(371, &state), Some(4));
+        assert!(test_skin_op(320, &[], &state));
+        assert!(!test_skin_op(321, &[], &state));
+        assert!(test_skin_op(330, &[], &state));
+        assert!(!test_skin_op(1330, &[], &state));
+        assert!(test_skin_op(331, &[], &state));
+        assert!(!test_skin_op(1331, &[], &state));
+        assert!(test_skin_op(332, &[], &state));
+        assert!(!test_skin_op(1332, &[], &state));
+        assert!(test_skin_op(335, &[], &state));
+        assert!(!test_skin_op(1335, &[], &state));
+        assert!(test_skin_op(300, &[], &state));
+        assert!(test_skin_op(310, &[], &state));
+        assert!(!test_skin_op(301, &[], &state));
+        assert!(!test_skin_op(308, &[], &state));
+        assert!(test_skin_op(350, &[], &state));
+        assert!(!test_skin_op(351, &[], &state));
+        assert!(!test_skin_op(352, &[], &state));
+        assert!(test_skin_op(353, &[], &state));
+        assert!(!test_skin_op(354, &[], &state));
 
         let draw_state = SkinDrawState {
             ex_score: 1800,
@@ -18683,11 +18688,11 @@ mod tests {
             result_failed: Some(false),
             ..SkinDrawState::default()
         };
-        assert!(test_skin_op(1330, &[], draw_state));
-        assert!(test_skin_op(1331, &[], draw_state));
-        assert!(test_skin_op(1332, &[], draw_state));
-        assert!(test_skin_op(1335, &[], draw_state));
-        assert!(test_skin_op(354, &[], draw_state));
+        assert!(test_skin_op(1330, &[], &draw_state));
+        assert!(test_skin_op(1331, &[], &draw_state));
+        assert!(test_skin_op(1332, &[], &draw_state));
+        assert!(test_skin_op(1335, &[], &draw_state));
+        assert!(test_skin_op(354, &[], &draw_state));
 
         let failed_record_bp_state = SkinDrawState {
             judge_counts: DisplayJudgeCounts { bad: 1, poor: 2, ..DisplayJudgeCounts::default() },
@@ -18697,13 +18702,13 @@ mod tests {
             result_failed: Some(true),
             ..SkinDrawState::default()
         };
-        assert_eq!(skin_state_number(76, failed_record_bp_state), Some(100));
-        assert_eq!(skin_state_number(177, failed_record_bp_state), Some(100));
-        assert_eq!(skin_state_number(178, failed_record_bp_state), Some(90));
-        assert_eq!(skin_state_number(425, failed_record_bp_state), Some(80));
-        assert_eq!(skin_state_number(427, failed_record_bp_state), Some(80));
-        assert!(!test_skin_op(332, &[], failed_record_bp_state));
-        assert!(!test_skin_op(1332, &[], failed_record_bp_state));
+        assert_eq!(skin_state_number(76, &failed_record_bp_state), Some(100));
+        assert_eq!(skin_state_number(177, &failed_record_bp_state), Some(100));
+        assert_eq!(skin_state_number(178, &failed_record_bp_state), Some(90));
+        assert_eq!(skin_state_number(425, &failed_record_bp_state), Some(80));
+        assert_eq!(skin_state_number(427, &failed_record_bp_state), Some(80));
+        assert!(!test_skin_op(332, &[], &failed_record_bp_state));
+        assert!(!test_skin_op(1332, &[], &failed_record_bp_state));
 
         let updated_result_state = SkinDrawState {
             ex_score: 1900,
@@ -18714,13 +18719,13 @@ mod tests {
             result_failed: Some(false),
             ..SkinDrawState::default()
         };
-        assert_eq!(skin_state_number(150, updated_result_state), Some(1700));
-        assert_eq!(skin_state_number(170, updated_result_state), Some(1700));
-        assert_eq!(skin_state_number(152, updated_result_state), Some(200));
-        assert_eq!(skin_state_number(183, updated_result_state), Some(85));
-        assert!(test_skin_op(321, &[], updated_result_state));
-        assert!(!test_skin_op(320, &[], updated_result_state));
-        assert!((graph_value(113, updated_result_state) - 0.85).abs() < 1e-5);
+        assert_eq!(skin_state_number(150, &updated_result_state), Some(1700));
+        assert_eq!(skin_state_number(170, &updated_result_state), Some(1700));
+        assert_eq!(skin_state_number(152, &updated_result_state), Some(200));
+        assert_eq!(skin_state_number(183, &updated_result_state), Some(85));
+        assert!(test_skin_op(321, &[], &updated_result_state));
+        assert!(!test_skin_op(320, &[], &updated_result_state));
+        assert!((graph_value(113, &updated_result_state) - 0.85).abs() < 1e-5);
 
         let zero_rank_state = SkinDrawState {
             ex_score: 0,
@@ -18728,39 +18733,39 @@ mod tests {
             result_failed: Some(true),
             ..SkinDrawState::default()
         };
-        assert!(test_skin_op(308, &[], zero_rank_state));
-        assert!(test_skin_op(318, &[], zero_rank_state));
+        assert!(test_skin_op(308, &[], &zero_rank_state));
+        assert!(test_skin_op(318, &[], &zero_rank_state));
 
         // Fast/Slow 内訳
-        assert_eq!(skin_state_number(410, state), Some(350));
-        assert_eq!(skin_state_number(411, state), Some(427));
-        assert_eq!(skin_state_number(412, state), Some(180));
-        assert_eq!(skin_state_number(413, state), Some(154));
-        assert_eq!(skin_state_number(414, state), Some(12));
-        assert_eq!(skin_state_number(415, state), Some(10));
-        assert_eq!(skin_state_number(416, state), Some(2));
-        assert_eq!(skin_state_number(417, state), Some(1));
-        assert_eq!(skin_state_number(418, state), Some(3));
-        assert_eq!(skin_state_number(419, state), Some(2));
-        assert_eq!(skin_state_number(421, state), Some(5));
-        assert_eq!(skin_state_number(422, state), Some(4));
+        assert_eq!(skin_state_number(410, &state), Some(350));
+        assert_eq!(skin_state_number(411, &state), Some(427));
+        assert_eq!(skin_state_number(412, &state), Some(180));
+        assert_eq!(skin_state_number(413, &state), Some(154));
+        assert_eq!(skin_state_number(414, &state), Some(12));
+        assert_eq!(skin_state_number(415, &state), Some(10));
+        assert_eq!(skin_state_number(416, &state), Some(2));
+        assert_eq!(skin_state_number(417, &state), Some(1));
+        assert_eq!(skin_state_number(418, &state), Some(3));
+        assert_eq!(skin_state_number(419, &state), Some(2));
+        assert_eq!(skin_state_number(421, &state), Some(5));
+        assert_eq!(skin_state_number(422, &state), Some(4));
         // TOTAL_EARLY = fast 合計 (PGREAT 除外) = 180+12+2+3 = 197
-        assert_eq!(skin_state_number(423, state), Some(197));
+        assert_eq!(skin_state_number(423, &state), Some(197));
         // TOTAL_LATE = slow 合計 (PGREAT 除外) = 154+10+1+2 = 167
-        assert_eq!(skin_state_number(424, state), Some(167));
+        assert_eq!(skin_state_number(424, &state), Some(167));
 
         // Result timing distribution
-        assert_eq!(skin_state_number(374, state), Some(-12));
-        assert_eq!(skin_state_number(375, state), Some(-34));
-        assert_eq!(skin_state_number(376, state), Some(56));
-        assert_eq!(skin_state_number(377, state), Some(78));
+        assert_eq!(skin_state_number(374, &state), Some(-12));
+        assert_eq!(skin_state_number(375, &state), Some(-34));
+        assert_eq!(skin_state_number(376, &state), Some(56));
+        assert_eq!(skin_state_number(377, &state), Some(78));
 
         // best/target が None のとき None を返す
         let bare = SkinDrawState::default();
-        assert_eq!(skin_state_number(152, bare), None);
-        assert_eq!(skin_state_number(173, bare), None);
-        assert_eq!(skin_state_number(410, bare), None);
-        assert_eq!(skin_state_number(374, bare), None);
+        assert_eq!(skin_state_number(152, &bare), None);
+        assert_eq!(skin_state_number(173, &bare), None);
+        assert_eq!(skin_state_number(410, &bare), None);
+        assert_eq!(skin_state_number(374, &bare), None);
     }
 
     #[test]
@@ -18777,14 +18782,14 @@ mod tests {
             ..SkinDrawState::default()
         };
 
-        assert_eq!(skin_state_number(160, state), Some(128));
-        assert_eq!(skin_state_number(91, state), Some(100));
-        assert_eq!(skin_state_number(90, state), Some(180));
-        assert_eq!(skin_state_number(92, state), Some(150));
-        assert_eq!(skin_state_number(312, state), Some(120_000));
-        assert_eq!(skin_state_number(313, state), Some(72_000));
-        assert_eq!(skin_state_number(368, state), Some(200));
-        assert_eq!(skin_state_number(400, state), Some(2));
+        assert_eq!(skin_state_number(160, &state), Some(128));
+        assert_eq!(skin_state_number(91, &state), Some(100));
+        assert_eq!(skin_state_number(90, &state), Some(180));
+        assert_eq!(skin_state_number(92, &state), Some(150));
+        assert_eq!(skin_state_number(312, &state), Some(120_000));
+        assert_eq!(skin_state_number(313, &state), Some(72_000));
+        assert_eq!(skin_state_number(368, &state), Some(200));
+        assert_eq!(skin_state_number(400, &state), Some(2));
     }
 
     #[test]
@@ -18801,9 +18806,9 @@ mod tests {
         };
         let expected = 7.605_f32 * 2_000.0 / (0.01 * 2_000.0 + 6.5) - 500.0;
         assert!(
-            (skin_value_number(&value, state).unwrap() as f32 - expected).abs() < 0.5,
+            (skin_value_number(&value, &state).unwrap() as f32 - expected).abs() < 0.5,
             "expected ~{expected}, got {:?}",
-            skin_value_number(&value, state)
+            skin_value_number(&value, &state)
         );
     }
 
@@ -18827,11 +18832,11 @@ mod tests {
                 result_arrange_index: index,
                 ..SkinDrawState::default()
             };
-            assert!(test_skin_op(op, &[], state), "op {op} should match index {index}");
+            assert!(test_skin_op(op, &[], &state), "op {op} should match index {index}");
             for (_, other_op) in cases {
                 if other_op != op {
                     assert!(
-                        !test_skin_op(other_op, &[], state),
+                        !test_skin_op(other_op, &[], &state),
                         "op {other_op} should not match index {index}"
                     );
                 }
@@ -18841,7 +18846,7 @@ mod tests {
         assert!(!test_skin_op(
             1131,
             &[],
-            SkinDrawState { result_arrange_index: 9, ..SkinDrawState::default() }
+            &SkinDrawState { result_arrange_index: 9, ..SkinDrawState::default() }
         ));
     }
 
@@ -18856,13 +18861,13 @@ mod tests {
             ..SkinDrawState::default()
         };
 
-        assert_eq!(skin_state_number(150, state), Some(450));
-        assert_eq!(skin_state_number(170, state), Some(450));
-        assert_eq!(skin_state_number(121, state), Some(400));
-        assert_eq!(skin_state_number(151, state), Some(400));
-        assert_eq!(skin_state_number(152, state), Some(0));
-        assert_eq!(skin_state_number(172, state), Some(0));
-        assert_eq!(skin_state_number(153, state), Some(50));
+        assert_eq!(skin_state_number(150, &state), Some(450));
+        assert_eq!(skin_state_number(170, &state), Some(450));
+        assert_eq!(skin_state_number(121, &state), Some(400));
+        assert_eq!(skin_state_number(151, &state), Some(400));
+        assert_eq!(skin_state_number(152, &state), Some(0));
+        assert_eq!(skin_state_number(172, &state), Some(0));
+        assert_eq!(skin_state_number(153, &state), Some(50));
     }
 
     #[test]
@@ -18877,22 +18882,22 @@ mod tests {
         let reached = SkinDrawState { ex_score: 1600, ..below };
         let updated = SkinDrawState { ex_score: 1601, ..below };
 
-        assert_eq!(skin_timer_elapsed_ms(Some(352), below), None);
-        assert_eq!(skin_timer_elapsed_ms(Some(352), reached), Some(1234));
-        assert!(test_skin_op(1336, &[], reached));
-        assert!(!test_skin_op(336, &[], reached));
-        assert!(test_skin_op(336, &[], updated));
+        assert_eq!(skin_timer_elapsed_ms(Some(352), &below), None);
+        assert_eq!(skin_timer_elapsed_ms(Some(352), &reached), Some(1234));
+        assert!(test_skin_op(1336, &[], &reached));
+        assert!(!test_skin_op(336, &[], &reached));
+        assert!(test_skin_op(336, &[], &updated));
     }
 
     #[test]
     fn result_timers_follow_result_state() {
         let inactive = SkinDrawState::default();
-        assert_eq!(skin_timer_elapsed_ms(Some(150), inactive), None);
-        assert_eq!(skin_timer_elapsed_ms(Some(151), inactive), None);
-        assert_eq!(skin_timer_elapsed_ms(Some(152), inactive), None);
-        assert_eq!(skin_timer_elapsed_ms(Some(172), inactive), None);
-        assert_eq!(skin_timer_elapsed_ms(Some(173), inactive), None);
-        assert_eq!(skin_timer_elapsed_ms(Some(174), inactive), None);
+        assert_eq!(skin_timer_elapsed_ms(Some(150), &inactive), None);
+        assert_eq!(skin_timer_elapsed_ms(Some(151), &inactive), None);
+        assert_eq!(skin_timer_elapsed_ms(Some(152), &inactive), None);
+        assert_eq!(skin_timer_elapsed_ms(Some(172), &inactive), None);
+        assert_eq!(skin_timer_elapsed_ms(Some(173), &inactive), None);
+        assert_eq!(skin_timer_elapsed_ms(Some(174), &inactive), None);
 
         let active = SkinDrawState {
             result_graph_begin_ms: Some(120),
@@ -18900,17 +18905,17 @@ mod tests {
             result_update_score_ms: Some(40),
             ..SkinDrawState::default()
         };
-        assert_eq!(skin_timer_elapsed_ms(Some(150), active), Some(120));
-        assert_eq!(skin_timer_elapsed_ms(Some(151), active), Some(120));
-        assert_eq!(skin_timer_elapsed_ms(Some(152), active), Some(40));
+        assert_eq!(skin_timer_elapsed_ms(Some(150), &active), Some(120));
+        assert_eq!(skin_timer_elapsed_ms(Some(151), &active), Some(120));
+        assert_eq!(skin_timer_elapsed_ms(Some(152), &active), Some(40));
     }
 
     #[test]
     fn end_of_note_timers_use_elapsed_since_end_of_note() {
         let inactive =
             SkinDrawState { elapsed_ms: 5_000, end_of_note_ms: None, ..SkinDrawState::default() };
-        assert_eq!(skin_timer_elapsed_ms(Some(143), inactive), None);
-        assert_eq!(skin_timer_elapsed_ms(Some(144), inactive), None);
+        assert_eq!(skin_timer_elapsed_ms(Some(143), &inactive), None);
+        assert_eq!(skin_timer_elapsed_ms(Some(144), &inactive), None);
 
         let active = SkinDrawState {
             elapsed_ms: 5_000,
@@ -18918,8 +18923,8 @@ mod tests {
             end_of_note_ms: Some(250),
             ..SkinDrawState::default()
         };
-        assert_eq!(skin_timer_elapsed_ms(Some(143), active), Some(250));
-        assert_eq!(skin_timer_elapsed_ms(Some(144), active), Some(250));
+        assert_eq!(skin_timer_elapsed_ms(Some(143), &active), Some(250));
+        assert_eq!(skin_timer_elapsed_ms(Some(144), &active), Some(250));
     }
 
     #[test]
@@ -18930,8 +18935,8 @@ mod tests {
             gauge_max: 100.0,
             ..SkinDrawState::default()
         };
-        assert_eq!(skin_timer_elapsed_ms(Some(44), below), None);
-        assert_eq!(skin_timer_elapsed_ms(Some(45), below), None);
+        assert_eq!(skin_timer_elapsed_ms(Some(44), &below), None);
+        assert_eq!(skin_timer_elapsed_ms(Some(45), &below), None);
 
         let max = SkinDrawState {
             elapsed_ms: 1_700,
@@ -18939,8 +18944,8 @@ mod tests {
             gauge_max: 100.0,
             ..SkinDrawState::default()
         };
-        assert_eq!(skin_timer_elapsed_ms(Some(44), max), Some(1_700));
-        assert_eq!(skin_timer_elapsed_ms(Some(45), max), Some(1_700));
+        assert_eq!(skin_timer_elapsed_ms(Some(44), &max), Some(1_700));
+        assert_eq!(skin_timer_elapsed_ms(Some(45), &max), Some(1_700));
     }
 
     #[test]
@@ -18975,23 +18980,23 @@ mod tests {
             },
             ..SkinDrawState::default()
         };
-        assert_eq!(skin_state_number(179, loaded), Some(3));
-        assert_eq!(skin_state_number(180, loaded), Some(42));
-        assert_eq!(skin_state_number(200, loaded), Some(42));
-        assert_eq!(skin_state_number(181, loaded), Some(85));
-        assert_eq!(skin_state_number(182, loaded), None);
-        assert_eq!(skin_state_number(226, loaded), Some(36));
-        assert_eq!(skin_state_number(227, loaded), Some(85));
-        assert_eq!(skin_state_number(241, loaded), Some(0));
-        assert_eq!(skin_state_number(380, loaded), Some(2000));
-        assert_eq!(skin_state_number(381, loaded), Some(1900));
-        assert_eq!(skin_state_number(390, loaded), Some(1));
-        assert_eq!(skin_state_number(391, loaded), Some(2));
-        assert_eq!(skin_state_number(382, loaded), None);
-        assert!(!test_skin_op(601, &[], loaded));
-        assert!(test_skin_op(602, &[], loaded));
-        assert!(!test_skin_op(603, &[], loaded));
-        assert!(!test_skin_op(604, &[], loaded));
+        assert_eq!(skin_state_number(179, &loaded), Some(3));
+        assert_eq!(skin_state_number(180, &loaded), Some(42));
+        assert_eq!(skin_state_number(200, &loaded), Some(42));
+        assert_eq!(skin_state_number(181, &loaded), Some(85));
+        assert_eq!(skin_state_number(182, &loaded), None);
+        assert_eq!(skin_state_number(226, &loaded), Some(36));
+        assert_eq!(skin_state_number(227, &loaded), Some(85));
+        assert_eq!(skin_state_number(241, &loaded), Some(0));
+        assert_eq!(skin_state_number(380, &loaded), Some(2000));
+        assert_eq!(skin_state_number(381, &loaded), Some(1900));
+        assert_eq!(skin_state_number(390, &loaded), Some(1));
+        assert_eq!(skin_state_number(391, &loaded), Some(2));
+        assert_eq!(skin_state_number(382, &loaded), None);
+        assert!(!test_skin_op(601, &[], &loaded));
+        assert!(test_skin_op(602, &[], &loaded));
+        assert!(!test_skin_op(603, &[], &loaded));
+        assert!(!test_skin_op(604, &[], &loaded));
 
         let loading = SkinDrawState {
             ir_ranking: crate::scene::ResultIrSnapshot {
@@ -19000,8 +19005,8 @@ mod tests {
             },
             ..SkinDrawState::default()
         };
-        assert!(test_skin_op(601, &[], loading));
-        assert!(!test_skin_op(602, &[], loading));
+        assert!(test_skin_op(601, &[], &loading));
+        assert!(!test_skin_op(602, &[], &loading));
 
         let failed = SkinDrawState {
             ir_ranking: crate::scene::ResultIrSnapshot {
@@ -19010,7 +19015,7 @@ mod tests {
             },
             ..SkinDrawState::default()
         };
-        assert!(test_skin_op(604, &[], failed));
+        assert!(test_skin_op(604, &[], &failed));
 
         let no_player = SkinDrawState {
             ir_ranking: crate::scene::ResultIrSnapshot {
@@ -19020,7 +19025,7 @@ mod tests {
             },
             ..SkinDrawState::default()
         };
-        assert!(test_skin_op(603, &[], no_player));
+        assert!(test_skin_op(603, &[], &no_player));
     }
 
     #[test]
@@ -19031,30 +19036,30 @@ mod tests {
             rival_bp: Some(12),
             ..SkinDrawState::default()
         };
-        assert_eq!(skin_state_number(271, state), Some(1500));
-        assert_eq!(skin_state_number(275, state), Some(700));
-        assert_eq!(skin_state_number(276, state), Some(12));
-        assert!(!test_skin_op(624, &[], state));
-        assert!(test_skin_op(625, &[], state));
+        assert_eq!(skin_state_number(271, &state), Some(1500));
+        assert_eq!(skin_state_number(275, &state), Some(700));
+        assert_eq!(skin_state_number(276, &state), Some(12));
+        assert!(!test_skin_op(624, &[], &state));
+        assert!(test_skin_op(625, &[], &state));
 
         let no_rival = SkinDrawState::default();
-        assert_eq!(skin_state_number(271, no_rival), None);
-        assert!(test_skin_op(624, &[], no_rival));
-        assert!(!test_skin_op(625, &[], no_rival));
+        assert_eq!(skin_state_number(271, &no_rival), None);
+        assert!(test_skin_op(624, &[], &no_rival));
+        assert!(!test_skin_op(625, &[], &no_rival));
     }
 
     #[test]
     fn ir_skin_properties_use_offline_defaults() {
         let state = SkinDrawState::default();
 
-        assert!(test_skin_op(50, &[], state));
-        assert!(!test_skin_op(51, &[], state));
+        assert!(test_skin_op(50, &[], &state));
+        assert!(!test_skin_op(51, &[], &state));
         for op in 601..=608 {
-            assert!(!test_skin_op(op, &[], state), "IR option {op} should be false offline");
+            assert!(!test_skin_op(op, &[], &state), "IR option {op} should be false offline");
         }
 
         for ref_id in [179, 180, 181, 182, 200, 201, 202, 220, 226, 227, 241, 242, 380, 390] {
-            assert_eq!(skin_state_number(ref_id, state), None, "IR number {ref_id}");
+            assert_eq!(skin_state_number(ref_id, &state), None, "IR number {ref_id}");
         }
     }
 
@@ -19092,51 +19097,51 @@ mod tests {
             ..SkinDrawState::default()
         };
 
-        assert_eq!(skin_state_number(11, state), Some(4));
-        assert_eq!(skin_state_number(12, state), Some(6));
-        assert_eq!(skin_state_number(300, state), Some(42));
-        assert_eq!(skin_state_number(96, state), Some(12));
+        assert_eq!(skin_state_number(11, &state), Some(4));
+        assert_eq!(skin_state_number(12, &state), Some(6));
+        assert_eq!(skin_state_number(300, &state), Some(42));
+        assert_eq!(skin_state_number(96, &state), Some(12));
         assert_eq!(
             skin_state_number(
                 96,
-                SkinDrawState { select_play_level: 12, play_level: 9, ..SkinDrawState::default() }
+                &SkinDrawState { select_play_level: 12, play_level: 9, ..SkinDrawState::default() }
             ),
             Some(9)
         );
-        assert_eq!(skin_state_number(370, state), Some(5));
-        assert_eq!(skin_state_number(74, state), Some(1200));
-        assert_eq!(skin_state_number(75, state), Some(345));
-        assert_eq!(skin_state_number(76, state), Some(12));
-        assert_eq!(skin_state_number(425, state), Some(8));
-        assert_eq!(skin_state_number(90, state), Some(180));
-        assert_eq!(skin_state_number(91, state), Some(120));
-        assert_eq!(skin_state_number(92, state), Some(150));
-        assert_eq!(skin_state_number(160, state), Some(148));
-        assert_eq!(skin_state_number(350, state), Some(900));
-        assert_eq!(skin_state_number(351, state), Some(180));
-        assert_eq!(skin_state_number(352, state), Some(100));
-        assert_eq!(skin_state_number(353, state), Some(20));
-        assert_eq!(skin_state_number(360, state), Some(12));
-        assert_eq!(skin_state_number(361, state), Some(34));
-        assert_eq!(skin_state_number(362, state), Some(7));
-        assert_eq!(skin_state_number(363, state), Some(89));
-        assert_eq!(skin_state_number(364, state), Some(4));
-        assert_eq!(skin_state_number(365, state), Some(56));
-        assert_eq!(skin_state_number(368, state), Some(200));
-        assert_eq!(skin_state_number(71, state), Some(1234));
-        assert_eq!(skin_state_number(1163, state), Some(3));
-        assert_eq!(skin_state_number(1164, state), Some(3));
-        assert_eq!(skin_state_number(57, state), Some(57));
-        assert_eq!(skin_state_number(58, state), Some(59));
-        assert_eq!(skin_state_number(59, state), Some(28));
-        assert_eq!(skin_state_number(308, state), Some(2));
+        assert_eq!(skin_state_number(370, &state), Some(5));
+        assert_eq!(skin_state_number(74, &state), Some(1200));
+        assert_eq!(skin_state_number(75, &state), Some(345));
+        assert_eq!(skin_state_number(76, &state), Some(12));
+        assert_eq!(skin_state_number(425, &state), Some(8));
+        assert_eq!(skin_state_number(90, &state), Some(180));
+        assert_eq!(skin_state_number(91, &state), Some(120));
+        assert_eq!(skin_state_number(92, &state), Some(150));
+        assert_eq!(skin_state_number(160, &state), Some(148));
+        assert_eq!(skin_state_number(350, &state), Some(900));
+        assert_eq!(skin_state_number(351, &state), Some(180));
+        assert_eq!(skin_state_number(352, &state), Some(100));
+        assert_eq!(skin_state_number(353, &state), Some(20));
+        assert_eq!(skin_state_number(360, &state), Some(12));
+        assert_eq!(skin_state_number(361, &state), Some(34));
+        assert_eq!(skin_state_number(362, &state), Some(7));
+        assert_eq!(skin_state_number(363, &state), Some(89));
+        assert_eq!(skin_state_number(364, &state), Some(4));
+        assert_eq!(skin_state_number(365, &state), Some(56));
+        assert_eq!(skin_state_number(368, &state), Some(200));
+        assert_eq!(skin_state_number(71, &state), Some(1234));
+        assert_eq!(skin_state_number(1163, &state), Some(3));
+        assert_eq!(skin_state_number(1164, &state), Some(3));
+        assert_eq!(skin_state_number(57, &state), Some(57));
+        assert_eq!(skin_state_number(58, &state), Some(59));
+        assert_eq!(skin_state_number(59, &state), Some(28));
+        assert_eq!(skin_state_number(308, &state), Some(2));
 
-        assert!(skin_state_number(21, state).is_some_and(|value| value >= 2026));
-        assert!(skin_state_number(22, state).is_some_and(|value| (1..=12).contains(&value)));
-        assert!(skin_state_number(23, state).is_some_and(|value| (1..=31).contains(&value)));
-        assert!(skin_state_number(24, state).is_some_and(|value| (0..=23).contains(&value)));
-        assert!(skin_state_number(25, state).is_some_and(|value| (0..=59).contains(&value)));
-        assert!(skin_state_number(26, state).is_some_and(|value| (0..=59).contains(&value)));
+        assert!(skin_state_number(21, &state).is_some_and(|value| value >= 2026));
+        assert!(skin_state_number(22, &state).is_some_and(|value| (1..=12).contains(&value)));
+        assert!(skin_state_number(23, &state).is_some_and(|value| (1..=31).contains(&value)));
+        assert!(skin_state_number(24, &state).is_some_and(|value| (0..=23).contains(&value)));
+        assert!(skin_state_number(25, &state).is_some_and(|value| (0..=59).contains(&value)));
+        assert!(skin_state_number(26, &state).is_some_and(|value| (0..=59).contains(&value)));
     }
 
     #[test]
@@ -19149,13 +19154,13 @@ mod tests {
             ..SkinDrawState::default()
         };
 
-        assert_eq!(skin_state_imageset_index(42, state), Some(2));
-        assert_eq!(skin_state_imageset_index(43, state), Some(2));
-        assert_eq!(skin_state_imageset_index(40, state), Some(4));
-        assert_eq!(skin_state_imageset_index(41, state), Some(3));
-        assert_eq!(skin_state_imageset_index(72, state), Some(1));
-        assert_eq!(skin_state_imageset_index(301, state), Some(0));
-        assert_eq!(skin_state_imageset_index(500, state), None);
+        assert_eq!(skin_state_imageset_index(42, &state), Some(2));
+        assert_eq!(skin_state_imageset_index(43, &state), Some(2));
+        assert_eq!(skin_state_imageset_index(40, &state), Some(4));
+        assert_eq!(skin_state_imageset_index(41, &state), Some(3));
+        assert_eq!(skin_state_imageset_index(72, &state), Some(1));
+        assert_eq!(skin_state_imageset_index(301, &state), Some(0));
+        assert_eq!(skin_state_imageset_index(500, &state), None);
     }
 
     #[test]
@@ -19177,8 +19182,8 @@ mod tests {
     fn skin_image_ref_number_maps_extended_select_arrange() {
         let state = SkinDrawState { select_arrange_index: 9, ..SkinDrawState::default() };
 
-        assert_eq!(skin_image_ref_number(42, state), Some(9));
-        assert_eq!(skin_image_ref_number(43, state), Some(9));
+        assert_eq!(skin_image_ref_number(42, &state), Some(9));
+        assert_eq!(skin_image_ref_number(43, &state), Some(9));
     }
 
     #[test]
@@ -19190,10 +19195,10 @@ mod tests {
             ..SkinDrawState::default()
         };
 
-        assert_eq!(skin_state_imageset_index(42, state), Some(8));
-        assert_eq!(skin_state_imageset_index(43, state), Some(8));
-        assert_eq!(skin_image_ref_number(42, state), Some(8));
-        assert_eq!(skin_image_ref_number(43, state), Some(8));
+        assert_eq!(skin_state_imageset_index(42, &state), Some(8));
+        assert_eq!(skin_state_imageset_index(43, &state), Some(8));
+        assert_eq!(skin_image_ref_number(42, &state), Some(8));
+        assert_eq!(skin_image_ref_number(43, &state), Some(8));
     }
 
     #[test]
@@ -19211,12 +19216,12 @@ mod tests {
             ..SkinDrawState::default()
         };
 
-        assert_eq!(skin_state_event_index(42, state), 2);
-        assert_eq!(skin_state_imageset_index(450, state), Some(7));
-        assert_eq!(skin_state_imageset_index(451, state), Some(3));
-        assert_eq!(skin_state_imageset_index(452, state), Some(1));
-        assert_eq!(skin_state_imageset_index(457, state), Some(0));
-        assert_eq!(skin_state_imageset_index(459, state), Some(0));
+        assert_eq!(skin_state_event_index(42, &state), 2);
+        assert_eq!(skin_state_imageset_index(450, &state), Some(7));
+        assert_eq!(skin_state_imageset_index(451, &state), Some(3));
+        assert_eq!(skin_state_imageset_index(452, &state), Some(1));
+        assert_eq!(skin_state_imageset_index(457, &state), Some(0));
+        assert_eq!(skin_state_imageset_index(459, &state), Some(0));
     }
 
     #[test]
@@ -19229,8 +19234,8 @@ mod tests {
             ..SkinDrawState::default()
         };
 
-        assert_eq!(skin_state_event_index(42, state), 4);
-        assert_eq!(skin_state_imageset_index(450, state), Some(0));
+        assert_eq!(skin_state_event_index(42, &state), 4);
+        assert_eq!(skin_state_imageset_index(450, &state), Some(0));
     }
 
     #[test]
@@ -19454,7 +19459,7 @@ mod tests {
             },
         )]);
 
-        let items = document.static_image_render_items(&sources, SkinDrawState::default());
+        let items = document.static_image_render_items(&sources, &SkinDrawState::default());
 
         assert_eq!(items.len(), 1);
         assert!(matches!(items[0], SkinRenderItem::Image { linear_filter: true, .. }));
@@ -19491,7 +19496,7 @@ mod tests {
 
         // All lanes inactive → no items
         let inactive_state = SkinDrawState::default();
-        let items_inactive = document.static_image_render_items(&sources, inactive_state);
+        let items_inactive = document.static_image_render_items(&sources, &inactive_state);
         assert_eq!(items_inactive.len(), 0, "should be empty when all bomb timers are None");
 
         // Key1 (index=1) active → items returned
@@ -19503,7 +19508,7 @@ mod tests {
             },
             ..SkinDrawState::default()
         };
-        let items_active = document.static_image_render_items(&sources, active_state);
+        let items_active = document.static_image_render_items(&sources, &active_state);
         assert_eq!(items_active.len(), 1, "should have one item when Key1 bomb timer is active");
     }
 
@@ -19542,7 +19547,7 @@ mod tests {
             judge_ms: judge_region_state(0, 100, 0).judge_ms,
             ..SkinDrawState::default()
         };
-        let items_early = document.static_image_render_items(&sources, state_early);
+        let items_early = document.static_image_render_items(&sources, &state_early);
         assert_eq!(items_early.len(), 1);
         assert!(
             matches!(items_early[0], SkinRenderItem::Image { rect: Rect { x, .. }, .. }
@@ -19555,7 +19560,7 @@ mod tests {
             judge_ms: judge_region_state(0, 300, 0).judge_ms,
             ..SkinDrawState::default()
         };
-        let items_late = document.static_image_render_items(&sources, state_late);
+        let items_late = document.static_image_render_items(&sources, &state_late);
         assert_eq!(items_late.len(), 1);
         assert!(
             matches!(items_late[0], SkinRenderItem::Image { rect: Rect { x, .. }, .. }
@@ -19566,7 +19571,7 @@ mod tests {
         // judge_ms=None → no items (timer inactive)
         let state_inactive =
             SkinDrawState { judge_ms: [None; MAX_JUDGE_REGIONS], ..SkinDrawState::default() };
-        let items_inactive = document.static_image_render_items(&sources, state_inactive);
+        let items_inactive = document.static_image_render_items(&sources, &state_inactive);
         assert_eq!(items_inactive.len(), 0, "judge_ms=None should produce no items");
     }
 
@@ -19600,7 +19605,7 @@ mod tests {
 
         let sources = mock_source("src", 10.0, 10.0);
         let state = SkinDrawState::default();
-        let items = document.static_image_render_items(&sources, state);
+        let items = document.static_image_render_items(&sources, &state);
 
         // With option 920 (1P) enabled, x should be 100/1280
         assert_eq!(items.len(), 1);
@@ -19634,14 +19639,14 @@ mod tests {
         // elapsed=0: 最初のキーフレーム時刻 (500) より前なので描画しない。
         let before = document.static_image_render_items(
             &sources,
-            SkinDrawState { elapsed_ms: 0, ..SkinDrawState::default() },
+            &SkinDrawState { elapsed_ms: 0, ..SkinDrawState::default() },
         );
         assert!(before.is_empty(), "destination is not drawn before its first keyframe time");
 
         // elapsed=500: 条件フレームが skip され、{time:500} の既定位置 (0,0) で描画される。
         let items = document.static_image_render_items(
             &sources,
-            SkinDrawState { elapsed_ms: 500, ..SkinDrawState::default() },
+            &SkinDrawState { elapsed_ms: 500, ..SkinDrawState::default() },
         );
         assert_eq!(items.len(), 1);
         let SkinRenderItem::Image { rect, .. } = &items[0] else { panic!() };
@@ -19671,8 +19676,8 @@ mod tests {
         let state_no_lift = SkinDrawState { offset_lift_px: 0, ..SkinDrawState::default() };
         let state_lifted = SkinDrawState { offset_lift_px: 72, ..SkinDrawState::default() };
 
-        let items_no_lift = document.static_image_render_items(&sources, state_no_lift);
-        let items_lifted = document.static_image_render_items(&sources, state_lifted);
+        let items_no_lift = document.static_image_render_items(&sources, &state_no_lift);
+        let items_lifted = document.static_image_render_items(&sources, &state_lifted);
 
         assert_eq!(items_no_lift.len(), 1);
         assert_eq!(items_lifted.len(), 1);
@@ -19710,7 +19715,7 @@ mod tests {
         let sources = mock_source("src", 10.0, 10.0);
         // lanecover=0.5, lift=0 → offset_lanecover_px = (0-1)*720*0.5 = -360
         let state = SkinDrawState { offset_lanecover_px: -360, ..SkinDrawState::default() };
-        let items = document.static_image_render_items(&sources, state);
+        let items = document.static_image_render_items(&sources, &state);
 
         assert_eq!(items.len(), 1);
         let SkinRenderItem::Image { rect, .. } = &items[0] else { panic!() };
@@ -19748,7 +19753,7 @@ mod tests {
         );
         let items = document.static_image_render_items(
             &sources,
-            SkinDrawState { skin_offsets: offsets, ..SkinDrawState::default() },
+            &SkinDrawState { skin_offsets: offsets, ..SkinDrawState::default() },
         );
 
         assert_eq!(items.len(), 1);
@@ -19781,7 +19786,7 @@ mod tests {
 
         let item = apply_all_offset_to_render_item(
             item,
-            SkinDrawState { skin_offsets: offsets, ..SkinDrawState::default() },
+            &SkinDrawState { skin_offsets: offsets, ..SkinDrawState::default() },
         );
 
         let SkinRenderItem::Image { rect, .. } = item else { panic!() };
@@ -19816,7 +19821,7 @@ mod tests {
         let center_y = area.y + area.height * 0.5;
         let rect = document.apply_notes_offset_to_rect(
             Rect { x: area.x, y: center_y - 0.05, width: area.width, height: 0.1 },
-            SkinDrawState { skin_offsets: offsets, ..SkinDrawState::default() },
+            &SkinDrawState { skin_offsets: offsets, ..SkinDrawState::default() },
         );
 
         assert!(approx_eq(rect.y, 0.45));
@@ -19847,10 +19852,10 @@ mod tests {
         let state_lifted = SkinDrawState { offset_lift_px: 72, ..SkinDrawState::default() };
 
         let rect_no_lift = skin
-            .note_rect_for_progress(Lane::Key1, KeyMode::K7, 0.0, note_height, state_no_lift)
+            .note_rect_for_progress(Lane::Key1, KeyMode::K7, 0.0, note_height, &state_no_lift)
             .unwrap();
         let rect_lifted = skin
-            .note_rect_for_progress(Lane::Key1, KeyMode::K7, 0.0, note_height, state_lifted)
+            .note_rect_for_progress(Lane::Key1, KeyMode::K7, 0.0, note_height, &state_lifted)
             .unwrap();
 
         let judge_no_lift = 580.0 / 720.0;
@@ -19888,9 +19893,9 @@ mod tests {
         let state_lifted = SkinDrawState { offset_lift_px: 72, ..SkinDrawState::default() };
 
         let rect_no_lift =
-            skin.note_body_rect(Lane::Key1, KeyMode::K7, 0.0, 0.5, state_no_lift).unwrap();
+            skin.note_body_rect(Lane::Key1, KeyMode::K7, 0.0, 0.5, &state_no_lift).unwrap();
         let rect_lifted =
-            skin.note_body_rect(Lane::Key1, KeyMode::K7, 0.0, 0.5, state_lifted).unwrap();
+            skin.note_body_rect(Lane::Key1, KeyMode::K7, 0.0, 0.5, &state_lifted).unwrap();
 
         // beatoraja 座標系（y-up）での body 位置:
         //   body.y      = tail_bottom = area.height * (1 - tail_y) = 580/720 * 0.5 = 290/720
@@ -20080,7 +20085,7 @@ mod tests {
         .unwrap();
 
         let sources = mock_source("src", 10.0, 10.0);
-        let items = document.static_image_render_items(&sources, SkinDrawState::default());
+        let items = document.static_image_render_items(&sources, &SkinDrawState::default());
 
         assert_eq!(items.len(), 1);
         assert!(matches!(
@@ -20125,7 +20130,7 @@ mod tests {
             },
             ..SkinDrawState::default()
         };
-        let items = document.static_image_render_items(&sources, state);
+        let items = document.static_image_render_items(&sources, &state);
 
         let segments = items
             .iter()
@@ -20170,7 +20175,7 @@ mod tests {
 
         let sources = mock_source("bar-src", 100.0, 200.0);
         let state = SkinDrawState { ex_score: 100, total_notes: 100, ..SkinDrawState::default() };
-        let items = document.static_image_render_items(&sources, state);
+        let items = document.static_image_render_items(&sources, &state);
 
         assert_eq!(items.len(), 1, "expected one graph bar");
         let SkinRenderItem::Image { rect, uv, .. } = &items[0] else { panic!() };
@@ -20210,7 +20215,7 @@ mod tests {
 
         let sources = mock_source("bar-src", 100.0, 8.0);
         let state = SkinDrawState::default();
-        let items = document.static_image_render_items(&sources, state);
+        let items = document.static_image_render_items(&sources, &state);
 
         assert_eq!(items.len(), 1, "expected one load bar");
         let SkinRenderItem::Image { rect, .. } = &items[0] else { panic!() };
@@ -20237,7 +20242,7 @@ mod tests {
 
         let sources = mock_source("bar-src", 100.0, 8.0);
         let state = SkinDrawState { play_progress: 0.75, ..SkinDrawState::default() };
-        let items = document.static_image_render_items(&sources, state);
+        let items = document.static_image_render_items(&sources, &state);
 
         assert_eq!(items.len(), 1, "expected one music bar");
         let SkinRenderItem::Image { rect, uv, .. } = &items[0] else { panic!() };
@@ -20271,7 +20276,7 @@ mod tests {
             total_notes: 200,
             ..SkinDrawState::default()
         };
-        let items = document.static_image_render_items(&sources, state);
+        let items = document.static_image_render_items(&sources, &state);
 
         assert_eq!(items.len(), 1);
         let SkinRenderItem::Image { rect, .. } = &items[0] else { panic!() };
@@ -20305,7 +20310,7 @@ mod tests {
             total_notes: 100,
             ..SkinDrawState::default()
         };
-        let items = document.static_image_render_items(&sources, state);
+        let items = document.static_image_render_items(&sources, &state);
 
         // 2 digits in a 5-digit space, right-aligned: shiftbase=3
         // digit_width = 20/1280, digit_step = digit_width (space=0)
@@ -20348,7 +20353,7 @@ mod tests {
         let sources = mock_source("src", 3200.0, 3200.0);
         let items = document.static_image_render_items(
             &sources,
-            SkinDrawState { select_master_volume: 0.37, ..SkinDrawState::default() },
+            &SkinDrawState { select_master_volume: 0.37, ..SkinDrawState::default() },
         );
 
         assert_eq!(items.len(), 3);
@@ -20394,7 +20399,7 @@ mod tests {
         let sources = mock_source("src", source_width, 1024.0);
         let items = document.static_image_render_items(
             &sources,
-            SkinDrawState { select_master_volume: 0.37, ..SkinDrawState::default() },
+            &SkinDrawState { select_master_volume: 0.37, ..SkinDrawState::default() },
         );
 
         assert_eq!(items.len(), 2);
@@ -20432,7 +20437,7 @@ mod tests {
             total_notes: 100,
             ..SkinDrawState::default()
         };
-        let items = document.static_image_render_items(&sources, state);
+        let items = document.static_image_render_items(&sources, &state);
 
         // left-aligned: shift = 3 * step, digit 0 at 0, digit 1 at step
         assert_eq!(items.len(), 2);
@@ -20447,21 +20452,21 @@ mod tests {
     fn skin_state_number_hispeed_and_timeleft() {
         let state = SkinDrawState { hispeed: 1.5, timeleft_ms: 90_500, ..SkinDrawState::default() };
         // NUMBER_HISPEED (310) = integer part = 1
-        assert_eq!(skin_state_number(310, state), Some(1));
+        assert_eq!(skin_state_number(310, &state), Some(1));
         // NUMBER_HISPEED_AFTERDOT (311) = decimal part × 100 = 50
-        assert_eq!(skin_state_number(311, state), Some(50));
+        assert_eq!(skin_state_number(311, &state), Some(50));
         // NUMBER_TIMELEFT_MINUTE (163) = 90500 / 60000 = 1
-        assert_eq!(skin_state_number(163, state), Some(1));
+        assert_eq!(skin_state_number(163, &state), Some(1));
         // NUMBER_TIMELEFT_SECOND (164) = (90500 / 1000) % 60 = 90 % 60 = 30
-        assert_eq!(skin_state_number(164, state), Some(30));
+        assert_eq!(skin_state_number(164, &state), Some(30));
         let result_state = SkinDrawState {
             result_failed: Some(false),
             total_duration_ms: 183_000,
             ..SkinDrawState::default()
         };
         // Starseeker 系の Result BMS DATA は選曲詳細の曲長 ref を流用する。
-        assert_eq!(skin_state_number(1163, result_state), Some(3));
-        assert_eq!(skin_state_number(1164, result_state), Some(3));
+        assert_eq!(skin_state_number(1163, &result_state), Some(3));
+        assert_eq!(skin_state_number(1164, &result_state), Some(3));
     }
 
     #[test]
@@ -20476,53 +20481,53 @@ mod tests {
             ..SkinDrawState::default()
         };
         // NUMBER_NOWBPM (160) = round(148.7) = 149
-        assert_eq!(skin_state_number(160, state), Some(149));
+        assert_eq!(skin_state_number(160, &state), Some(149));
         // NUMBER_MINBPM (91) = round(80.0) = 80
-        assert_eq!(skin_state_number(91, state), Some(80));
+        assert_eq!(skin_state_number(91, &state), Some(80));
         // NUMBER_MAXBPM (90) = round(200.3) = 200
-        assert_eq!(skin_state_number(90, state), Some(200));
+        assert_eq!(skin_state_number(90, &state), Some(200));
         // NUMBER_LANECOVER1 (14) = round(0.25 * 1000) = 250
-        assert_eq!(skin_state_number(14, state), Some(250));
+        assert_eq!(skin_state_number(14, &state), Some(250));
         // NUMBER_LIFT1 (314) = round(0.42 * 1000) = 420
         let lifted = SkinDrawState { lift: 0.42, ..state };
-        assert_eq!(skin_state_number(314, lifted), Some(420));
+        assert_eq!(skin_state_number(314, &lifted), Some(420));
         // float_number(113) tracks BARGRAPH_BESTSCORERATE
         let best_rate = SkinDrawState {
             total_notes: 100,
             best_ex_score: Some(150),
             ..SkinDrawState::default()
         };
-        assert!((skin_state_float_number(113, best_rate).unwrap() - 0.75).abs() < 0.001);
-        assert!(!eval_skin_draw_condition("float_number(113) == 0", best_rate));
+        assert!((skin_state_float_number(113, &best_rate).unwrap() - 0.75).abs() < 0.001);
+        assert!(!eval_skin_draw_condition("float_number(113) == 0", &best_rate));
         assert!(eval_skin_draw_condition(
             "float_number(113) == 0",
-            SkinDrawState { total_notes: 100, best_ex_score: Some(0), ..SkinDrawState::default() }
+            &SkinDrawState { total_notes: 100, best_ex_score: Some(0), ..SkinDrawState::default() }
         ));
         // NUMBER_DURATION (312) = current note display duration in ms.
-        assert_eq!(skin_state_number(312, state), Some(183_000));
+        assert_eq!(skin_state_number(312, &state), Some(183_000));
         // NUMBER_DURATION_GREEN (313) = duration * 3 / 5.
-        assert_eq!(skin_state_number(313, state), Some(109_800));
+        assert_eq!(skin_state_number(313, &state), Some(109_800));
         assert_eq!(
-            skin_state_number(313, SkinDrawState { total_duration_ms: 183_001, ..state }),
+            skin_state_number(313, &SkinDrawState { total_duration_ms: 183_001, ..state }),
             Some(109_801)
         );
         // VALUE_JUDGE_1P_DURATION (525) = -(-3) = 3 (FAST 3ms は beatoraja 規約で正)
-        assert_eq!(skin_state_number(525, state), Some(3));
+        assert_eq!(skin_state_number(525, &state), Some(3));
         // VALUE_JUDGE_2P_DURATION (526): SLOW 7ms (delta=+7) は beatoraja 規約で負
-        assert_eq!(skin_state_number(526, state), Some(-7));
+        assert_eq!(skin_state_number(526, &state), Some(-7));
         // VALUE_JUDGE_3P_DURATION (527): 領域に判定が無ければ None
-        assert_eq!(skin_state_number(527, state), None);
+        assert_eq!(skin_state_number(527, &state), None);
         // SLOW 5ms (delta=+5) は beatoraja 規約で負
         let slow = SkinDrawState { judge_timing_ms: [Some(5), None, None], ..state };
-        assert_eq!(skin_state_number(525, slow), Some(-5));
+        assert_eq!(skin_state_number(525, &slow), Some(-5));
         // When no recent judgement, 525 returns None
         let no_judge = SkinDrawState { judge_timing_ms: [None; MAX_JUDGE_REGIONS], ..state };
-        assert_eq!(skin_state_number(525, no_judge), None);
+        assert_eq!(skin_state_number(525, &no_judge), None);
     }
 
     #[test]
     fn timing_judge_areas_follow_beatoraja_mode_windows() {
-        let areas = beatoraja_timing_judge_areas(SkinDrawState {
+        let areas = beatoraja_timing_judge_areas(&SkinDrawState {
             key_mode: KeyMode::K7,
             judge_rank: None,
             ..SkinDrawState::default()
@@ -20537,7 +20542,7 @@ mod tests {
 
     #[test]
     fn timing_judge_areas_apply_pms_rank_rule() {
-        let areas = beatoraja_timing_judge_areas(SkinDrawState {
+        let areas = beatoraja_timing_judge_areas(&SkinDrawState {
             key_mode: KeyMode::K9,
             judge_rank: Some(0),
             ..SkinDrawState::default()
@@ -20559,7 +20564,7 @@ mod tests {
             value_expr: "0.6*number(312)".to_string(),
             ..Default::default()
         };
-        assert_eq!(skin_value_number(&value, state), Some(109_800));
+        assert_eq!(skin_value_number(&value, &state), Some(109_800));
     }
 
     #[test]
@@ -20578,8 +20583,8 @@ mod tests {
             ..SkinDrawState::default()
         };
 
-        assert!((skin_state_float_expr(expr, very_hard).unwrap() - 10.2).abs() < 0.001);
-        assert!((skin_state_float_expr(expr, hard).unwrap() - 9.0).abs() < 0.001);
+        assert!((skin_state_float_expr(expr, &very_hard).unwrap() - 10.2).abs() < 0.001);
+        assert!((skin_state_float_expr(expr, &hard).unwrap() - 9.0).abs() < 0.001);
     }
 
     #[test]
@@ -20614,7 +20619,7 @@ mod tests {
             select_chart_peak_density: 12.5,
             ..SkinDrawState::default()
         };
-        let (fill, uv) = graph_fill_dimensions(&graph, state);
+        let (fill, uv) = graph_fill_dimensions(&graph, &state);
         assert!((fill - 57.6).abs() < 0.01);
         assert!((uv - 57.6 / 320.0).abs() < 1e-5);
     }
@@ -20627,21 +20632,21 @@ mod tests {
             ..SkinDrawState::default()
         };
         // NUMBER_HIGHSCORE (150)
-        assert_eq!(skin_state_number(150, state), Some(1500));
+        assert_eq!(skin_state_number(150, &state), Some(1500));
         // NUMBER_TARGET_SCORE (121)
-        assert_eq!(skin_state_number(121, state), Some(800));
+        assert_eq!(skin_state_number(121, &state), Some(800));
         let ghost_projected = SkinDrawState {
             best_ex_score: Some(1500),
             projected_best_ex_score: Some(321),
             ex_score: 400,
             ..SkinDrawState::default()
         };
-        assert_eq!(skin_state_number(150, ghost_projected), Some(321));
-        assert_eq!(skin_state_number(152, ghost_projected), Some(79));
+        assert_eq!(skin_state_number(150, &ghost_projected), Some(321));
+        assert_eq!(skin_state_number(152, &ghost_projected), Some(79));
         // When None → None
         let no_scores = SkinDrawState::default();
-        assert_eq!(skin_state_number(150, no_scores), None);
-        assert_eq!(skin_state_number(121, no_scores), None);
+        assert_eq!(skin_state_number(150, &no_scores), None);
+        assert_eq!(skin_state_number(121, &no_scores), None);
     }
 
     #[test]
@@ -20653,7 +20658,7 @@ mod tests {
             total_notes: 500,
             ..SkinDrawState::default()
         };
-        let v = graph_value(113, state);
+        let v = graph_value(113, &state);
         assert!((v - 0.8).abs() < 1e-5, "best score rate: expected 0.8, got {v}");
     }
 
@@ -20666,7 +20671,7 @@ mod tests {
             total_notes: 600,
             ..SkinDrawState::default()
         };
-        let v = graph_value(115, state);
+        let v = graph_value(115, &state);
         assert!((v - 0.5).abs() < 1e-5, "target score rate: expected 0.5, got {v}");
     }
 
@@ -20682,7 +20687,7 @@ mod tests {
             past_notes: 0,
             ..SkinDrawState::default()
         };
-        let v = graph_value(147, state);
+        let v = graph_value(147, &state);
         assert!((v - (418.0 / 1188.0)).abs() < 1e-5, "select ex rate: got {v}");
     }
 
@@ -20716,17 +20721,17 @@ mod tests {
 
         let (state, _) = document.select_draw_state(&snapshot, None);
 
-        assert_eq!(skin_state_number(110, state), Some(20));
-        assert_eq!(skin_state_number(111, state), Some(30));
-        assert_eq!(skin_state_number(112, state), Some(10));
-        assert_eq!(skin_state_number(113, state), Some(5));
-        assert_eq!(skin_state_number(426, state), Some(2));
-        assert_eq!(skin_state_number(412, state), Some(7));
-        assert_eq!(skin_state_number(422, state), Some(2));
-        assert!((graph_value(140, state) - 0.2).abs() < 1e-5);
-        assert!((graph_value(141, state) - 0.3).abs() < 1e-5);
-        assert!((graph_value(148, state) - (12.0 / 21.0)).abs() < 1e-5);
-        assert!((graph_value(149, state) - (9.0 / 21.0)).abs() < 1e-5);
+        assert_eq!(skin_state_number(110, &state), Some(20));
+        assert_eq!(skin_state_number(111, &state), Some(30));
+        assert_eq!(skin_state_number(112, &state), Some(10));
+        assert_eq!(skin_state_number(113, &state), Some(5));
+        assert_eq!(skin_state_number(426, &state), Some(2));
+        assert_eq!(skin_state_number(412, &state), Some(7));
+        assert_eq!(skin_state_number(422, &state), Some(2));
+        assert!((graph_value(140, &state) - 0.2).abs() < 1e-5);
+        assert!((graph_value(141, &state) - 0.3).abs() < 1e-5);
+        assert!((graph_value(148, &state) - (12.0 / 21.0)).abs() < 1e-5);
+        assert!((graph_value(149, &state) - (9.0 / 21.0)).abs() < 1e-5);
     }
 
     #[test]
@@ -20741,7 +20746,7 @@ mod tests {
             total_notes: 100,
             ..SkinDrawState::default()
         };
-        let v = graph_value(112, state);
+        let v = graph_value(112, &state);
         assert!((v - 0.4).abs() < 1e-4, "best now rate: expected 0.4, got {v}");
     }
 
@@ -20755,7 +20760,7 @@ mod tests {
             ..SkinDrawState::default()
         };
 
-        let v = graph_value(112, state);
+        let v = graph_value(112, &state);
 
         assert!((v - 0.5).abs() < 1e-4, "best ghost now rate: expected 0.5, got {v}");
     }
@@ -20763,8 +20768,8 @@ mod tests {
     #[test]
     fn graph_value_returns_zero_when_no_best_score() {
         let state = SkinDrawState { total_notes: 100, ..SkinDrawState::default() };
-        assert_eq!(graph_value(113, state), 0.0);
-        assert_eq!(graph_value(115, state), 0.0);
+        assert_eq!(graph_value(113, &state), 0.0);
+        assert_eq!(graph_value(115, &state), 0.0);
     }
 
     #[test]
@@ -21111,13 +21116,13 @@ mod tests {
         )
         .unwrap();
         assert!(
-            resolve_destination_frame(&destination, 500, &[], SkinDrawState::default()).is_some()
+            resolve_destination_frame(&destination, 500, &[], &SkinDrawState::default()).is_some()
         );
         assert!(
-            resolve_destination_frame(&destination, 1000, &[], SkinDrawState::default()).is_some()
+            resolve_destination_frame(&destination, 1000, &[], &SkinDrawState::default()).is_some()
         );
         assert!(
-            resolve_destination_frame(&destination, 1001, &[], SkinDrawState::default()).is_none()
+            resolve_destination_frame(&destination, 1001, &[], &SkinDrawState::default()).is_none()
         );
     }
 
@@ -21129,9 +21134,9 @@ mod tests {
         .unwrap();
 
         assert!(
-            resolve_destination_frame(&destination, 999, &[], SkinDrawState::default()).is_none()
+            resolve_destination_frame(&destination, 999, &[], &SkinDrawState::default()).is_none()
         );
-        let frame = resolve_destination_frame(&destination, 1000, &[], SkinDrawState::default())
+        let frame = resolve_destination_frame(&destination, 1000, &[], &SkinDrawState::default())
             .expect("single frame starts at its keyframe time");
         assert_eq!((frame.x, frame.y, frame.w, frame.h), (2, 3, 10, 20));
 
@@ -21140,7 +21145,8 @@ mod tests {
         )
         .unwrap();
         assert!(
-            resolve_destination_frame(&disappearing, 1001, &[], SkinDrawState::default()).is_none()
+            resolve_destination_frame(&disappearing, 1001, &[], &SkinDrawState::default())
+                .is_none()
         );
     }
 
@@ -21166,7 +21172,7 @@ mod tests {
             ..SkinDrawState::default()
         };
 
-        let frame = resolve_destination_frame(&destination, 1000, &[], state).unwrap();
+        let frame = resolve_destination_frame(&destination, 1000, &[], &state).unwrap();
 
         assert_eq!(frame.h, 50);
     }

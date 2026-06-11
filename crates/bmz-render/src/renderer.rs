@@ -3511,17 +3511,17 @@ mod tests {
             SkinContext::from_manifest_and_document(manifest, document.clone(), Vec::new());
         renderer.set_play_skin_context(context, false);
 
-        let state = SkinDrawState::default();
-        let seeded = renderer.play_dynamic_timer_runtime.advance(&document, state, 5_000);
-        assert_eq!(seeded.dynamic_timer_ms[0], Some(0));
+        let mut state = SkinDrawState::default();
+        renderer.play_dynamic_timer_runtime.advance(&document, &mut state, 5_000);
+        assert_eq!(state.dynamic_timer_ms[0], Some(0));
 
-        let progressed = renderer.play_dynamic_timer_runtime.advance(&document, state, 8_000);
-        assert_eq!(progressed.dynamic_timer_ms[0], Some(3_000));
+        renderer.play_dynamic_timer_runtime.advance(&document, &mut state, 8_000);
+        assert_eq!(state.dynamic_timer_ms[0], Some(3_000));
 
         renderer.set_select_skin_context(SkinContext::default());
 
-        let continued = renderer.play_dynamic_timer_runtime.advance(&document, state, 9_000);
-        assert_eq!(continued.dynamic_timer_ms[0], Some(4_000));
+        renderer.play_dynamic_timer_runtime.advance(&document, &mut state, 9_000);
+        assert_eq!(state.dynamic_timer_ms[0], Some(4_000));
     }
 
     #[test]

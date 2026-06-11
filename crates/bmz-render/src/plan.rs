@@ -258,13 +258,12 @@ fn push_exit_hold_indicator(commands: &mut Vec<DrawCommand>, progress: f32) {
 fn advance_skin_dynamic_timers(
     skin: &SkinContext,
     runtime: &mut crate::skin::DynamicTimerRuntime,
-    state: crate::skin::SkinDrawState,
+    state: &mut crate::skin::SkinDrawState,
     now_ms: i32,
-) -> crate::skin::SkinDrawState {
-    skin.document()
-        .filter(|document| !document.dynamic_timers.is_empty())
-        .map(|document| runtime.advance(document, state, now_ms))
-        .unwrap_or(state)
+) {
+    if let Some(document) = skin.document().filter(|document| !document.dynamic_timers.is_empty()) {
+        runtime.advance(document, state, now_ms);
+    }
 }
 
 fn push_fullscreen_image(commands: &mut Vec<DrawCommand>, texture: TextureId) {
@@ -853,7 +852,7 @@ fn plan_play(
         .map(|document| document.loadstart.max(0).saturating_add(document.loadend.max(0)))
         .unwrap_or(0);
 
-    let skin_state = crate::skin::SkinDrawState {
+    let mut skin_state = crate::skin::SkinDrawState {
         elapsed_ms: play_elapsed_ms,
         ready_timer_ms,
         play_timer_ms: (snapshot.time.0 >= 0)
@@ -957,7 +956,7 @@ fn plan_play(
         snapshot.judge_graph_density.clone(),
         snapshot.bpm_graph_segments.clone(),
     );
-    let skin_state = advance_skin_dynamic_timers(skin, dynamic_timers, skin_state, play_elapsed_ms);
+    advance_skin_dynamic_timers(skin, dynamic_timers, &mut skin_state, play_elapsed_ms);
     let skin_text = SkinTextState {
         title: &snapshot.title,
         subtitle: &snapshot.subtitle,
@@ -977,8 +976,8 @@ fn plan_play(
     // `{"id":"notes"}` マーカーと `timer: 3` (FAILED) で3分割。
     // 描画順: 背面skin → ロング/ノーツ → 前面skin → 暗転/閉店オーバーレイ
     let (behind_notes_items, front_notes_items, failed_overlay_items) =
-        play_skin.static_document_items_split_for_state_and_text(skin_state, skin_text);
-    let behind_notes_items = skin.apply_play_skin_global_offset(behind_notes_items, skin_state);
+        play_skin.static_document_items_split_for_state_and_text(&skin_state, skin_text);
+    let behind_notes_items = skin.apply_play_skin_global_offset(behind_notes_items, &skin_state);
     append_skin_render_items(&mut commands, &behind_notes_items);
 
     if !has_document {
@@ -1107,7 +1106,7 @@ fn plan_play(
             push_play_bar_line(
                 &mut commands,
                 skin,
-                skin_state,
+                &skin_state,
                 board,
                 snapshot.lift,
                 bar,
@@ -1148,7 +1147,7 @@ fn plan_play(
             push_play_bar_line(
                 &mut commands,
                 skin,
-                skin_state,
+                &skin_state,
                 board,
                 snapshot.lift,
                 bar,
@@ -1157,7 +1156,7 @@ fn plan_play(
         }
         for body in &snapshot.visible_long_notes {
             if let Some(rect) =
-                skin.note_body_rect(body.lane, key_mode, body.head_y, body.tail_y, skin_state)
+                skin.note_body_rect(body.lane, key_mode, body.head_y, body.tail_y, &skin_state)
                 && let Some(item) = skin.document_long_body_item(
                     body.lane,
                     key_mode,
@@ -1166,7 +1165,7 @@ fn plan_play(
                     body.body_state,
                 )
             {
-                let item = skin.apply_play_skin_global_offset_to_item(item, skin_state);
+                let item = skin.apply_play_skin_global_offset_to_item(item, &skin_state);
                 append_skin_render_items(&mut commands, &[item]);
             }
             // beatoraja の drawLongNote 同様、キャップは胴体の上に重ねて描画する。
@@ -1179,11 +1178,11 @@ fn plan_play(
                 key_mode,
                 body.head_y,
                 note_height,
-                skin_state,
+                &skin_state,
             ) && let Some(item) =
                 skin.document_ln_start_item(body.lane, key_mode, rect, body.mode)
             {
-                let item = skin.apply_play_skin_global_offset_to_item(item, skin_state);
+                let item = skin.apply_play_skin_global_offset_to_item(item, &skin_state);
                 append_skin_render_items(&mut commands, &[item]);
             }
             if (body.mode != LongNoteMode::Ln || snapshot.show_ln_tail_cap)
@@ -1193,11 +1192,11 @@ fn plan_play(
                     key_mode,
                     body.tail_y,
                     note_height,
-                    skin_state,
+                    &skin_state,
                 )
                 && let Some(item) = skin.document_ln_end_item(body.lane, key_mode, rect, body.mode)
             {
-                let item = skin.apply_play_skin_global_offset_to_item(item, skin_state);
+                let item = skin.apply_play_skin_global_offset_to_item(item, &skin_state);
                 append_skin_render_items(&mut commands, &[item]);
             }
         }
@@ -1206,7 +1205,7 @@ fn plan_play(
             let note_height = skin.document_note_height(lane, key_mode).unwrap_or(NOTE_HEIGHT);
             for note in &snapshot.visible_notes[lane_index] {
                 if let Some(rect) =
-                    skin.note_rect_for_progress(lane, key_mode, note.y, note_height, skin_state)
+                    skin.note_rect_for_progress(lane, key_mode, note.y, note_height, &skin_state)
                 {
                     let item = match note.kind {
                         NoteVisualKind::LnStart => {
@@ -1218,7 +1217,7 @@ fn plan_play(
                         NoteVisualKind::Tap => skin.document_note_item(lane, key_mode, rect),
                     };
                     if let Some(item) = item {
-                        let item = skin.apply_play_skin_global_offset_to_item(item, skin_state);
+                        let item = skin.apply_play_skin_global_offset_to_item(item, &skin_state);
                         append_skin_render_items(&mut commands, &[item]);
                     }
                 }
@@ -1227,10 +1226,10 @@ fn plan_play(
             // 無ければ DEFAULT_MINE_NOTE_TEXTURE をフォールバックとして重ねる。
             for mine in &snapshot.visible_mines[lane_index] {
                 if let Some(rect) =
-                    skin.note_rect_for_progress(lane, key_mode, mine.y, note_height, skin_state)
+                    skin.note_rect_for_progress(lane, key_mode, mine.y, note_height, &skin_state)
                 {
                     if let Some(item) = skin.document_mine_item(lane, key_mode, rect) {
-                        let item = skin.apply_play_skin_global_offset_to_item(item, skin_state);
+                        let item = skin.apply_play_skin_global_offset_to_item(item, &skin_state);
                         append_skin_render_items(&mut commands, &[item]);
                     } else {
                         commands.push(DrawCommand::Image {
@@ -1248,11 +1247,12 @@ fn plan_play(
     }
 
     // ノーツより前面の skin 要素（レーンカバー・枠・スコア等）をノーツの上に重ねる
-    let front_notes_items = skin.apply_play_skin_global_offset(front_notes_items, skin_state);
+    let front_notes_items = skin.apply_play_skin_global_offset(front_notes_items, &skin_state);
     append_skin_render_items(&mut commands, &front_notes_items);
 
     // 閉店の暗転 (`black` の a:0→255) 等、timer:3 を最前面に描画
-    let failed_overlay_items = skin.apply_play_skin_global_offset(failed_overlay_items, skin_state);
+    let failed_overlay_items =
+        skin.apply_play_skin_global_offset(failed_overlay_items, &skin_state);
     append_skin_render_items(&mut commands, &failed_overlay_items);
 
     if !has_document {
@@ -1299,7 +1299,7 @@ fn plan_decide(
     if skin.document().is_some_and(|document| document.skin_type == 6) {
         let play_elapsed_ms =
             (snapshot.play_elapsed_time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32;
-        let state = crate::skin::SkinDrawState {
+        let mut state = crate::skin::SkinDrawState {
             elapsed_ms: play_elapsed_ms,
             ready_timer_ms: Some(play_elapsed_ms),
             total_notes: snapshot.total_notes,
@@ -1329,7 +1329,7 @@ fn plan_decide(
             fadeout_ms: snapshot.fadeout_elapsed_ms,
             ..crate::skin::SkinDrawState::default()
         };
-        let state = advance_skin_dynamic_timers(skin, dynamic_timers, state, play_elapsed_ms);
+        advance_skin_dynamic_timers(skin, dynamic_timers, &mut state, play_elapsed_ms);
         let text = SkinTextState {
             title: &snapshot.title,
             subtitle: &snapshot.subtitle,
@@ -1341,7 +1341,7 @@ fn plan_decide(
             course_titles: string_array_refs(&snapshot.course_titles),
             ..SkinTextState::default()
         };
-        let items = skin.static_document_items_for_state_and_text(state, text);
+        let items = skin.static_document_items_for_state_and_text(&state, text);
         if !items.is_empty() {
             let mut commands = Vec::new();
             crate::skin::append_skin_render_items(&mut commands, &items);
@@ -1370,13 +1370,14 @@ fn plan_result(
 ) -> DrawPlan {
     if let Some(document) = skin.document().filter(|document| matches!(document.skin_type, 7 | 15))
     {
-        let state = advance_skin_dynamic_timers(
+        let mut state = build_result_skin_draw_state(snapshot, document.ranktime);
+        advance_skin_dynamic_timers(
             skin,
             dynamic_timers,
-            build_result_skin_draw_state(snapshot, document.ranktime),
+            &mut state,
             (snapshot.elapsed_time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32,
         );
-        let grade_diff = crate::skin::result_grade_diff_label(state).unwrap_or_default();
+        let grade_diff = crate::skin::result_grade_diff_label(&state).unwrap_or_default();
         let text = SkinTextState {
             title: snapshot.title.as_str(),
             subtitle: snapshot.subtitle.as_str(),
@@ -1391,7 +1392,7 @@ fn plan_result(
             ..SkinTextState::default()
         };
         let items =
-            skin.static_document_items_for_result_state_and_text(&snapshot.graph, state, text);
+            skin.static_document_items_for_result_state_and_text(&snapshot.graph, &state, text);
         if !items.is_empty() {
             let mut commands = Vec::with_capacity(items.len() + 3);
             crate::skin::append_skin_render_items(&mut commands, &items);
@@ -1415,8 +1416,10 @@ fn plan_result(
         difficulty_name: &snapshot.difficulty_name,
         ir: snapshot.ir,
         play_level: &snapshot.play_level,
-        grade_diff: crate::skin::result_grade_diff_label(build_result_skin_draw_state(snapshot, 0))
-            .unwrap_or_default(),
+        grade_diff: crate::skin::result_grade_diff_label(&build_result_skin_draw_state(
+            snapshot, 0,
+        ))
+        .unwrap_or_default(),
     });
     push_scene_overlays(&mut plan.commands, &snapshot.overlay);
     plan
@@ -2033,7 +2036,7 @@ fn play_object_y(board: Rect, lift: f32, progress_to_hit: f32) -> f32 {
 fn push_play_bar_line(
     commands: &mut Vec<DrawCommand>,
     skin: &SkinContext,
-    skin_state: crate::skin::SkinDrawState,
+    skin_state: &crate::skin::SkinDrawState,
     board: Rect,
     lift: f32,
     bar: &crate::snapshot::VisibleBarLine,

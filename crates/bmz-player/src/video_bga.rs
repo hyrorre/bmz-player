@@ -127,8 +127,7 @@ fn update_single_video(
         let texture_id = TextureId(bga_texture_id(asset_id));
         let width = frame.width;
         let height = frame.height;
-        let rgba = frame.rgba.clone();
-        match renderer.upsert_rgba_texture(texture_id, width, height, rgba) {
+        match renderer.upsert_rgba_texture_ref(texture_id, width, height, &frame.rgba) {
             Ok(()) => {
                 active.last_pts = Some(pts);
                 running

@@ -7580,7 +7580,7 @@ impl WinitApp {
             if source.failed || !source.active {
                 continue;
             }
-            if let Some(state) = runtime_state
+            if let Some(state) = runtime_state.as_ref()
                 && !skin_video_source_runtime_visible(source, state)
             {
                 // 現在のシーン状態では非表示。デコード中なら止めて開放する。
@@ -8311,7 +8311,7 @@ fn skin_video_source_gating(document: &SkinDocument, source_id: &str) -> SkinVid
 /// `op_sets` が空 (= destination から参照されていない) 場合は常時可視。
 fn skin_video_source_runtime_visible(
     source: &ActiveSkinVideoSource,
-    state: bmz_render::skin::SkinDrawState,
+    state: &bmz_render::skin::SkinDrawState,
 ) -> bool {
     if source.gating_op_sets.is_empty() {
         return true;
@@ -11770,8 +11770,8 @@ mod tests {
             total_notes: 9,
             ..SkinDrawState::default()
         };
-        assert!(skin_video_source_runtime_visible(&bg_aaa, aaa_state));
-        assert!(!skin_video_source_runtime_visible(&bg_a, aaa_state));
+        assert!(skin_video_source_runtime_visible(&bg_aaa, &aaa_state));
+        assert!(!skin_video_source_runtime_visible(&bg_a, &aaa_state));
 
         // 13/18 = 72.2% は rank index 2 (= A), op 302 に対応する。
         let a_state = SkinDrawState {
@@ -11780,8 +11780,8 @@ mod tests {
             total_notes: 9,
             ..SkinDrawState::default()
         };
-        assert!(skin_video_source_runtime_visible(&bg_a, a_state));
-        assert!(!skin_video_source_runtime_visible(&bg_aaa, a_state));
+        assert!(skin_video_source_runtime_visible(&bg_a, &a_state));
+        assert!(!skin_video_source_runtime_visible(&bg_aaa, &a_state));
     }
 
     #[test]
@@ -11838,7 +11838,7 @@ mod tests {
             result_ranktime_ms: document.ranktime,
             failed: false,
         };
-        assert!(skin_video_source_runtime_visible(&source, aaa_state));
+        assert!(skin_video_source_runtime_visible(&source, &aaa_state));
 
         document.user_selected_options = Some(vec![921]);
         let gating = skin_video_source_gating(&document, "BG_AAA");
@@ -11855,7 +11855,7 @@ mod tests {
             result_ranktime_ms: document.ranktime,
             failed: false,
         };
-        assert!(!skin_video_source_runtime_visible(&disabled_source, aaa_state));
+        assert!(!skin_video_source_runtime_visible(&disabled_source, &aaa_state));
     }
 
     #[test]
