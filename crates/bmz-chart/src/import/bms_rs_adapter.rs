@@ -28,6 +28,7 @@
 //! - foot pedal / free zone
 //! - PMS 18K (2P 側ノート)
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use bms_rs::bms::command::channel::mapper::{
@@ -153,7 +154,17 @@ fn import_with_layout<T: KeyLayoutMapper>(
     inject_sparse_bms_messages::<T>(&mut bms, &sparse_messages, warnings);
 
     let mut intermediate = build_intermediate_from_bms::<T>(&bms, layout, warnings)?;
+    let bms_headers = extract_bms_headers_from_text(&raw_text);
     intermediate.metadata.has_bms_random = has_bms_random;
+    intermediate.metadata.bms_headers = bms_headers.clone();
+    intermediate.metadata.source_url = bms
+        .metadata
+        .url
+        .clone()
+        .filter(|url| !url.is_empty())
+        .or_else(|| bms_headers.get("URL").cloned())
+        .unwrap_or_default();
+    intermediate.metadata.append_url = append_url_from_headers(&bms_headers);
     intermediate.identity = identity;
     Ok(intermediate)
 }
@@ -791,10 +802,59 @@ fn build_metadata(bms: &Bms) -> IntermediateMetadata {
         long_note_mode_defined: bms_has_explicit_ln_mode(bms),
         has_bga: false,
         has_bms_random: false,
+        source_url: String::new(),
+        append_url: String::new(),
+        bms_headers: BTreeMap::new(),
         key_mode: KeyMode::default(),
         base62_obj_ids: bms_uses_base62_obj_ids(bms),
         suppress_bar_lines: false,
     }
+}
+
+fn extract_bms_headers_from_text(text: &str) -> BTreeMap<String, String> {
+    let mut headers = BTreeMap::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with('#') {
+            continue;
+        }
+        let body = trimmed.strip_prefix('#').unwrap_or(trimmed).trim_start();
+        if body.is_empty() || is_bms_channel_command(body) {
+            continue;
+        }
+        let (name, value) = split_bms_header_command(body);
+        if name.is_empty() {
+            continue;
+        }
+        headers.insert(name.to_ascii_uppercase(), value);
+    }
+    headers
+}
+
+fn split_bms_header_command(body: &str) -> (String, String) {
+    if let Some((name, value)) = body.split_once(char::is_whitespace) {
+        (name.to_string(), value.trim().to_string())
+    } else {
+        (body.to_string(), String::new())
+    }
+}
+
+fn is_bms_channel_command(body: &str) -> bool {
+    let Some((head, tail)) = body.split_once(':') else {
+        return false;
+    };
+    head.len() >= 5 && head.chars().all(|c| c.is_ascii_digit()) && !tail.is_empty()
+}
+
+fn append_url_from_headers(headers: &BTreeMap<String, String>) -> String {
+    for key in ["URL-WAV", "URLWAV", "URL_WAV"] {
+        if let Some(url) = headers.get(key)
+            && !url.is_empty()
+        {
+            return url.clone();
+        }
+    }
+    String::new()
 }
 
 fn source_text_has_bms_random(text: &str) -> bool {
@@ -1598,6 +1658,34 @@ mod tests {
 
         assert!(with_random.metadata.has_bms_random);
         assert!(!without_random.metadata.has_bms_random);
+    }
+
+    #[test]
+    fn bms_headers_capture_url_and_metadata_commands() {
+        let (chart, _) = import_bms_text_with_warnings(
+            "\
+#TITLE Example Song
+#ARTIST Alice
+#URL http://example.com/bms
+#URL-WAV http://example.com/append
+#BPM 120
+#WAV01 key.wav
+#00111:01
+",
+        );
+
+        assert_eq!(chart.metadata.source_url, "http://example.com/bms");
+        assert_eq!(chart.metadata.append_url, "http://example.com/append");
+        assert_eq!(chart.metadata.bms_headers.get("TITLE"), Some(&"Example Song".to_string()));
+        assert_eq!(
+            chart.metadata.bms_headers.get("URL"),
+            Some(&"http://example.com/bms".to_string())
+        );
+        assert_eq!(
+            chart.metadata.bms_headers.get("URL-WAV"),
+            Some(&"http://example.com/append".to_string())
+        );
+        assert!(!chart.metadata.bms_headers.contains_key("00111"));
     }
 
     #[test]

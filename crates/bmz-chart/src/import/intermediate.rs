@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use bmz_core::chart::ChartIdentity;
@@ -38,6 +39,12 @@ pub struct IntermediateMetadata {
     pub has_bga: bool,
     /// Source BMS contains `#RANDOM` sections (beatoraja `hasRandomSequence`).
     pub has_bms_random: bool,
+    /// `#URL` / `%URL` distribution URL.
+    pub source_url: String,
+    /// `#URL-WAV` and similar append URLs.
+    pub append_url: String,
+    /// Raw BMS header commands keyed by uppercased command name.
+    pub bms_headers: BTreeMap<String, String>,
     pub key_mode: KeyMode,
     /// `#BASE 62` 相当。`true` のときオブジェクト ID は base62 換算する。
     pub base62_obj_ids: bool,

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
 use bmz_core::chart::ChartIdentity;
@@ -57,6 +57,12 @@ pub struct ChartMetadata {
     pub has_bga: bool,
     /// Source chart defines BMS `#RANDOM` sections. Distinct from player arrange options.
     pub has_bms_random: bool,
+    /// `#URL` / `%URL` distribution URL.
+    pub source_url: String,
+    /// `#URL-WAV` and similar append URLs.
+    pub append_url: String,
+    /// Raw BMS header commands keyed by uppercased command name.
+    pub bms_headers: BTreeMap<String, String>,
     pub key_mode: KeyMode,
     /// `#LNMODE` / BMSON `ln_type`。未指定時は LR2 互換の LN (終点判定なし)。
     pub long_note_mode: LongNoteMode,
@@ -97,6 +103,9 @@ impl Default for ChartMetadata {
             volwav_percent: 100,
             has_bga: false,
             has_bms_random: false,
+            source_url: String::new(),
+            append_url: String::new(),
+            bms_headers: BTreeMap::new(),
             key_mode: KeyMode::default(),
             long_note_mode: LongNoteMode::default(),
             long_note_mode_defined: false,
