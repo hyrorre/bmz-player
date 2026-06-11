@@ -2308,6 +2308,9 @@ impl DynamicTimerRuntime {
     }
 }
 
+static DEFAULT_RESULT_IR_SNAPSHOT: crate::scene::ResultIrSnapshot =
+    crate::scene::ResultIrSnapshot::EMPTY;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkinTextState<'a> {
     pub title: &'a str,
@@ -2336,7 +2339,7 @@ pub struct SkinTextState<'a> {
     /// `1.0` keeps the skin-defined alpha unchanged; values < 1.0 are used for
     /// placeholder / inactive states (beatoraja `messageFontColor=GRAY` 相当).
     pub search_word_alpha: f32,
-    pub ir_ranking: crate::scene::ResultIrSnapshot,
+    pub ir_ranking: &'a crate::scene::ResultIrSnapshot,
 }
 
 impl<'a> Default for SkinTextState<'a> {
@@ -2362,7 +2365,7 @@ impl<'a> Default for SkinTextState<'a> {
             search_word: "",
             rival: "",
             search_word_alpha: 1.0,
-            ir_ranking: crate::scene::ResultIrSnapshot::default(),
+            ir_ranking: &DEFAULT_RESULT_IR_SNAPSHOT,
         }
     }
 }
@@ -3649,7 +3652,7 @@ impl SkinDocument {
             search_word: &snapshot.search_word,
             search_word_alpha: snapshot.search_word_alpha,
             rival: snapshot.rival.as_ref().map(|rival| rival.display_name.as_str()).unwrap_or(""),
-            ir_ranking: snapshot.ir,
+            ir_ranking: &snapshot.ir,
             ..SkinTextState::default()
         };
 
@@ -3852,7 +3855,7 @@ impl SkinDocument {
             select_chart_key_mode: selected_row.and_then(|row| row.chart_key_mode),
             mouse_x: mouse_position.map(|position| position.0),
             mouse_y: mouse_position.map(|position| position.1),
-            ir_ranking: snapshot.ir,
+            ir_ranking: snapshot.ir.clone(),
             rival_ex_score: snapshot.rival.as_ref().map(|rival| i64::from(rival.ex_score)),
             rival_max_combo: snapshot.rival.as_ref().map(|rival| i64::from(rival.max_combo)),
             rival_bp: snapshot.rival.as_ref().map(|rival| i64::from(rival.bp)),
@@ -8054,13 +8057,13 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         180 | 200 => state.ir_ranking.total_player,
         181 => state.ir_ranking.clear_rate,
         182 => state.ir_ranking.previous_rank,
-        226 => ir_total_clear_count(state.ir_ranking),
+        226 => ir_total_clear_count(&state.ir_ranking),
         227 => state.ir_ranking.clear_rate,
         241 => state.ir_ranking.clear_rate.map(|_| 0),
         380..=389 => {
-            ir_ranking_entry(state.ir_ranking, ref_id - 380).and_then(|entry| entry.ex_score)
+            ir_ranking_entry(&state.ir_ranking, ref_id - 380).and_then(|entry| entry.ex_score)
         }
-        390..=399 => ir_ranking_entry(state.ir_ranking, ref_id - 390).and_then(|entry| entry.rank),
+        390..=399 => ir_ranking_entry(&state.ir_ranking, ref_id - 390).and_then(|entry| entry.rank),
         201..=242 => None,
         // NUMBER_RIVAL_SCORE / MAXCOMBO / MISSCOUNT (IR ライバルベスト)。
         271 => state.rival_ex_score,
@@ -8128,7 +8131,7 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
 }
 
 fn ir_ranking_entry(
-    ranking: crate::scene::ResultIrSnapshot,
+    ranking: &crate::scene::ResultIrSnapshot,
     index: i32,
 ) -> Option<crate::scene::ResultIrRankingEntrySnapshot> {
     ranking.entries.get(usize::try_from(index).ok()?).copied().filter(|entry| {
@@ -8136,7 +8139,7 @@ fn ir_ranking_entry(
     })
 }
 
-fn ir_total_clear_count(ranking: crate::scene::ResultIrSnapshot) -> Option<i64> {
+fn ir_total_clear_count(ranking: &crate::scene::ResultIrSnapshot) -> Option<i64> {
     let total = ranking.total_player?;
     let clear_rate = ranking.clear_rate?;
     Some((total * clear_rate + 50) / 100)
@@ -13241,27 +13244,45 @@ mod tests {
             ..SkinDrawState::default()
         };
         assert_eq!(
-            result_grade_diff_label(&SkinDrawState { select_ex_score: Some(100), ..half_grade }),
+            result_grade_diff_label(&SkinDrawState {
+                select_ex_score: Some(100),
+                ..half_grade.clone()
+            }),
             Some("F+100".to_string())
         );
         assert_eq!(
-            result_grade_diff_label(&SkinDrawState { select_ex_score: Some(300), ..half_grade }),
+            result_grade_diff_label(&SkinDrawState {
+                select_ex_score: Some(300),
+                ..half_grade.clone()
+            }),
             Some("E-145".to_string())
         );
         assert_eq!(
-            skin_state_number(154, &SkinDrawState { select_ex_score: Some(300), ..half_grade }),
+            skin_state_number(
+                154,
+                &SkinDrawState { select_ex_score: Some(300), ..half_grade.clone() }
+            ),
             Some(-145)
         );
         assert_eq!(
-            result_grade_diff_label(&SkinDrawState { select_ex_score: Some(500), ..half_grade }),
+            result_grade_diff_label(&SkinDrawState {
+                select_ex_score: Some(500),
+                ..half_grade.clone()
+            }),
             Some("E+56".to_string())
         );
         assert_eq!(
-            result_grade_diff_label(&SkinDrawState { select_ex_score: Some(1900), ..half_grade }),
+            result_grade_diff_label(&SkinDrawState {
+                select_ex_score: Some(1900),
+                ..half_grade.clone()
+            }),
             Some("MAX-100".to_string())
         );
         assert_eq!(
-            result_grade_diff_label(&SkinDrawState { select_ex_score: Some(2000), ..half_grade }),
+            result_grade_diff_label(&SkinDrawState {
+                select_ex_score: Some(2000),
+                ..half_grade.clone()
+            }),
             Some("MAX+0".to_string())
         );
         let screenshot_score = SkinDrawState {
@@ -13403,7 +13424,7 @@ mod tests {
         assert_eq!(
             skin_state_number(
                 154,
-                &SkinDrawState { result_grade_diff_f_fallback_to_e: true, ..f_plus }
+                &SkinDrawState { result_grade_diff_f_fallback_to_e: true, ..f_plus.clone() }
             ),
             Some(-345)
         );
@@ -18853,8 +18874,8 @@ mod tests {
             target_ex_score: Some(1600),
             ..SkinDrawState::default()
         };
-        let reached = SkinDrawState { ex_score: 1600, ..below };
-        let updated = SkinDrawState { ex_score: 1601, ..below };
+        let reached = SkinDrawState { ex_score: 1600, ..below.clone() };
+        let updated = SkinDrawState { ex_score: 1601, ..below.clone() };
 
         assert_eq!(skin_timer_elapsed_ms(Some(352), &below), None);
         assert_eq!(skin_timer_elapsed_ms(Some(352), &reached), Some(1234));
@@ -20463,7 +20484,7 @@ mod tests {
         // NUMBER_LANECOVER1 (14) = round(0.25 * 1000) = 250
         assert_eq!(skin_state_number(14, &state), Some(250));
         // NUMBER_LIFT1 (314) = round(0.42 * 1000) = 420
-        let lifted = SkinDrawState { lift: 0.42, ..state };
+        let lifted = SkinDrawState { lift: 0.42, ..state.clone() };
         assert_eq!(skin_state_number(314, &lifted), Some(420));
         // float_number(113) tracks BARGRAPH_BESTSCORERATE
         let best_rate = SkinDrawState {
@@ -20482,7 +20503,7 @@ mod tests {
         // NUMBER_DURATION_GREEN (313) = duration * 3 / 5.
         assert_eq!(skin_state_number(313, &state), Some(109_800));
         assert_eq!(
-            skin_state_number(313, &SkinDrawState { total_duration_ms: 183_001, ..state }),
+            skin_state_number(313, &SkinDrawState { total_duration_ms: 183_001, ..state.clone() }),
             Some(109_801)
         );
         // VALUE_JUDGE_1P_DURATION (525) = -(-3) = 3 (FAST 3ms は beatoraja 規約で正)
@@ -20492,10 +20513,11 @@ mod tests {
         // VALUE_JUDGE_3P_DURATION (527): 領域に判定が無ければ None
         assert_eq!(skin_state_number(527, &state), None);
         // SLOW 5ms (delta=+5) は beatoraja 規約で負
-        let slow = SkinDrawState { judge_timing_ms: [Some(5), None, None], ..state };
+        let slow = SkinDrawState { judge_timing_ms: [Some(5), None, None], ..state.clone() };
         assert_eq!(skin_state_number(525, &slow), Some(-5));
         // When no recent judgement, 525 returns None
-        let no_judge = SkinDrawState { judge_timing_ms: [None; MAX_JUDGE_REGIONS], ..state };
+        let no_judge =
+            SkinDrawState { judge_timing_ms: [None; MAX_JUDGE_REGIONS], ..state.clone() };
         assert_eq!(skin_state_number(525, &no_judge), None);
     }
 
@@ -20748,6 +20770,26 @@ mod tests {
 
     #[test]
     fn skin_state_text_maps_string_refs() {
+        let ir_ranking = crate::scene::ResultIrSnapshot {
+            state: crate::scene::ResultIrState::Loaded,
+            entries: [
+                crate::scene::ResultIrRankingEntrySnapshot {
+                    rank: Some(1),
+                    ex_score: Some(2000),
+                    player_name: crate::scene::ResultIrRankingName::from_display_name("Alice"),
+                },
+                crate::scene::ResultIrRankingEntrySnapshot::default(),
+                crate::scene::ResultIrRankingEntrySnapshot::default(),
+                crate::scene::ResultIrRankingEntrySnapshot::default(),
+                crate::scene::ResultIrRankingEntrySnapshot::default(),
+                crate::scene::ResultIrRankingEntrySnapshot::default(),
+                crate::scene::ResultIrRankingEntrySnapshot::default(),
+                crate::scene::ResultIrRankingEntrySnapshot::default(),
+                crate::scene::ResultIrRankingEntrySnapshot::default(),
+                crate::scene::ResultIrRankingEntrySnapshot::default(),
+            ],
+            ..Default::default()
+        };
         let state = SkinTextState {
             title: "My Title",
             subtitle: "Sub",
@@ -20755,26 +20797,7 @@ mod tests {
             subartist: "Feat. X",
             genre: "TRANCE",
             target: "AAA",
-            ir_ranking: crate::scene::ResultIrSnapshot {
-                state: crate::scene::ResultIrState::Loaded,
-                entries: [
-                    crate::scene::ResultIrRankingEntrySnapshot {
-                        rank: Some(1),
-                        ex_score: Some(2000),
-                        player_name: crate::scene::ResultIrRankingName::from_display_name("Alice"),
-                    },
-                    crate::scene::ResultIrRankingEntrySnapshot::default(),
-                    crate::scene::ResultIrRankingEntrySnapshot::default(),
-                    crate::scene::ResultIrRankingEntrySnapshot::default(),
-                    crate::scene::ResultIrRankingEntrySnapshot::default(),
-                    crate::scene::ResultIrRankingEntrySnapshot::default(),
-                    crate::scene::ResultIrRankingEntrySnapshot::default(),
-                    crate::scene::ResultIrRankingEntrySnapshot::default(),
-                    crate::scene::ResultIrRankingEntrySnapshot::default(),
-                    crate::scene::ResultIrRankingEntrySnapshot::default(),
-                ],
-                ..Default::default()
-            },
+            ir_ranking: &ir_ranking,
             course_titles: [
                 "Stage 1", "Stage 2", "Stage 3", "Stage 4", "Stage 5", "Stage 6", "Stage 7",
                 "Stage 8", "Stage 9", "Stage 10",

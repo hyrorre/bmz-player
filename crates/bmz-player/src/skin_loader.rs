@@ -1570,7 +1570,7 @@ mod tests {
         let (behind, front, _) = decoded.document.static_render_items_split(
             &sources,
             &SkinDrawState::default(),
-            SkinTextState::default(),
+            &SkinTextState::default(),
         );
 
         assert!(
@@ -2024,7 +2024,7 @@ mod tests {
         let items = decoded.document.static_render_items(
             &sources,
             &state,
-            bmz_render::skin::SkinTextState::default(),
+            &bmz_render::skin::SkinTextState::default(),
         );
         assert!(!items.is_empty());
     }
@@ -2098,7 +2098,7 @@ mod tests {
         let items = decoded.document.static_render_items(
             &sources,
             &state,
-            bmz_render::skin::SkinTextState::default(),
+            &bmz_render::skin::SkinTextState::default(),
         );
         assert!(
             items.iter().any(|item| matches!(
@@ -2228,7 +2228,7 @@ mod tests {
             let items = decoded.document.static_render_items(
                 &sources,
                 &state,
-                bmz_render::skin::SkinTextState::default(),
+                &bmz_render::skin::SkinTextState::default(),
             );
             assert!(
                 items.iter().any(|item| matches!(
@@ -2294,7 +2294,7 @@ mod tests {
         let items = decoded.document.static_render_items(
             &sources,
             &state,
-            bmz_render::skin::SkinTextState::default(),
+            &bmz_render::skin::SkinTextState::default(),
         );
         let judge_items = items
             .iter()
@@ -2343,7 +2343,7 @@ mod tests {
             let items = decoded.document.static_render_items(
                 &sources,
                 &state,
-                bmz_render::skin::SkinTextState::default(),
+                &bmz_render::skin::SkinTextState::default(),
             );
             assert!(
                 items.iter().any(|item| matches!(

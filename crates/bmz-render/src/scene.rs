@@ -344,11 +344,13 @@ pub struct ResultIrRankingName {
 
 impl Default for ResultIrRankingName {
     fn default() -> Self {
-        Self { bytes: [0; IR_RANKING_NAME_BYTES], len: 0 }
+        Self::EMPTY
     }
 }
 
 impl ResultIrRankingName {
+    pub const EMPTY: Self = Self { bytes: [0; IR_RANKING_NAME_BYTES], len: 0 };
+
     pub fn from_display_name(name: &str) -> Self {
         let mut len = name.len().min(IR_RANKING_NAME_BYTES);
         while !name.is_char_boundary(len) {
@@ -371,11 +373,16 @@ pub struct ResultIrRankingEntrySnapshot {
     pub player_name: ResultIrRankingName,
 }
 
+impl ResultIrRankingEntrySnapshot {
+    pub const EMPTY: Self =
+        Self { rank: None, ex_score: None, player_name: ResultIrRankingName::EMPTY };
+}
+
 /// リザルト画面の IR ランキング表示状態。
 ///
 /// beatoraja の `NUMBER_IR_*` / `OPTION_IR_*` skin property に対応する。
 /// IR 未設定なら `Offline` (beatoraja の STATE_OFFLINE と同じく値は非表示)。
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ResultIrSnapshot {
     pub state: ResultIrState,
     /// 全体ランキングでの自分の順位 (NUMBER_IR_RANK=179)。
@@ -388,6 +395,17 @@ pub struct ResultIrSnapshot {
     pub previous_rank: Option<i64>,
     /// 上位ランキング行 (STRING_RANKINGNAME1..10 / NUMBER_RANKING*_EXSCORE/INDEX)。
     pub entries: [ResultIrRankingEntrySnapshot; IR_RANKING_ENTRY_SLOTS],
+}
+
+impl ResultIrSnapshot {
+    pub const EMPTY: Self = Self {
+        state: ResultIrState::Offline,
+        rank: None,
+        total_player: None,
+        clear_rate: None,
+        previous_rank: None,
+        entries: [ResultIrRankingEntrySnapshot::EMPTY; IR_RANKING_ENTRY_SLOTS],
+    };
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

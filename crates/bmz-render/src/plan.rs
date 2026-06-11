@@ -1388,7 +1388,7 @@ fn plan_result(
             play_level: snapshot.play_level.as_str(),
             grade_diff: grade_diff.as_str(),
             table_level: snapshot.play_level.as_str(),
-            ir_ranking: snapshot.ir,
+            ir_ranking: &snapshot.ir,
             ..SkinTextState::default()
         };
         let items =
@@ -1414,7 +1414,7 @@ fn plan_result(
         score_history_id: snapshot.score_history_id,
         replay_saved: snapshot.replay_saved,
         difficulty_name: &snapshot.difficulty_name,
-        ir: snapshot.ir,
+        ir: &snapshot.ir,
         play_level: &snapshot.play_level,
         grade_diff: crate::skin::result_grade_diff_label(&build_result_skin_draw_state(
             snapshot, 0,
@@ -1538,7 +1538,7 @@ fn build_result_skin_draw_state(
         best_bp: snapshot.best_bp,
         result_bp: Some(snapshot.bp),
         result_cb: Some(snapshot.cb),
-        ir_ranking: snapshot.ir,
+        ir_ranking: snapshot.ir.clone(),
         previous_best_ex_score: snapshot.previous_best_ex_score,
         previous_best_clear_index: snapshot.previous_best_clear_type.map(|c| c as i64),
         previous_best_max_combo: snapshot.previous_best_max_combo,
@@ -1605,7 +1605,7 @@ struct ResultFallbackSummary<'a> {
     difficulty_name: &'a str,
     play_level: &'a str,
     grade_diff: String,
-    ir: crate::scene::ResultIrSnapshot,
+    ir: &'a crate::scene::ResultIrSnapshot,
 }
 
 fn plan_result_fallback(summary: ResultFallbackSummary<'_>) -> DrawPlan {
@@ -1709,7 +1709,7 @@ fn plan_result_fallback(summary: ResultFallbackSummary<'_>) -> DrawPlan {
         if replay_saved { "REPLAY SAVED" } else { "REPLAY NONE" },
         BitmapTextStyle { x: 0.68, y: 0.675, cell: 0.005, color: Color::rgb(0.66, 0.78, 0.76) },
     );
-    if let Some(ir_label) = ir_ranking_label(&ir) {
+    if let Some(ir_label) = ir_ranking_label(ir) {
         text.push_text(
             &mut commands,
             &ir_label,
@@ -4234,7 +4234,7 @@ mod tests {
             difficulty_name: "",
             play_level: "",
             grade_diff: String::new(),
-            ir: crate::scene::ResultIrSnapshot::default(),
+            ir: &crate::scene::ResultIrSnapshot::default(),
         });
 
         assert!(plan.commands.iter().any(|command| matches!(
@@ -4263,7 +4263,7 @@ mod tests {
             difficulty_name: "HYPER",
             play_level: "10",
             grade_diff: "AA+56".to_string(),
-            ir: crate::scene::ResultIrSnapshot {
+            ir: &crate::scene::ResultIrSnapshot {
                 state: crate::scene::ResultIrState::Loaded,
                 rank: Some(3),
                 total_player: Some(42),
@@ -4342,7 +4342,7 @@ mod tests {
             difficulty_name: "HYPER",
             play_level: "10",
             grade_diff: "AA+56".to_string(),
-            ir: crate::scene::ResultIrSnapshot::default(),
+            ir: &crate::scene::ResultIrSnapshot::default(),
         });
 
         for label in ["JUDGE DETAILS", "FAST/SLOW DETAILS", "TIMING DETAILS"] {
