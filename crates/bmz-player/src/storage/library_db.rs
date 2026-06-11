@@ -1195,11 +1195,11 @@ fn insert_chart(conn: &Connection, record: &ChartImportRecord<'_>) -> Result<i64
             has_mines, folder_path, stage_file, preview_file,
             banner_file, backbmp_file, judge_rank, gauge_total, bms_total,
             has_undefined_ln, has_defined_ln, has_defined_cn, has_defined_hcn,
-            import_version
+            has_bms_random, import_version
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
             ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27,
-            ?28, ?29, ?30, ?31, ?32
+            ?28, ?29, ?30, ?31, ?32, ?33
         )",
     )?
     .execute(params![
@@ -1234,6 +1234,7 @@ fn insert_chart(conn: &Connection, record: &ChartImportRecord<'_>) -> Result<i64
         stats.ln_profile.has_defined_ln,
         stats.ln_profile.has_defined_cn,
         stats.ln_profile.has_defined_hcn,
+        chart.metadata.has_bms_random,
         CHART_IMPORT_VERSION,
     ])?;
     Ok(conn.last_insert_rowid())
@@ -1251,8 +1252,9 @@ fn update_chart(conn: &Connection, chart_id: i64, record: &ChartImportRecord<'_>
             has_mines = ?19, folder_path = ?20, stage_file = ?21, preview_file = ?22,
             banner_file = ?23, backbmp_file = ?24, judge_rank = ?25, gauge_total = ?26,
             bms_total = ?27, has_undefined_ln = ?28, has_defined_ln = ?29,
-            has_defined_cn = ?30, has_defined_hcn = ?31, import_version = ?32
-         WHERE id = ?33",
+            has_defined_cn = ?30, has_defined_hcn = ?31, has_bms_random = ?32,
+            import_version = ?33
+         WHERE id = ?34",
     )?
     .execute(params![
         hash_to_hex(&chart.identity.file_sha256),
@@ -1286,6 +1288,7 @@ fn update_chart(conn: &Connection, chart_id: i64, record: &ChartImportRecord<'_>
         stats.ln_profile.has_defined_ln,
         stats.ln_profile.has_defined_cn,
         stats.ln_profile.has_defined_hcn,
+        chart.metadata.has_bms_random,
         CHART_IMPORT_VERSION,
         chart_id,
     ])?;

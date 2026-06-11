@@ -132,8 +132,9 @@ fn import_with_layout<T: KeyLayoutMapper>(
     let bytes = std::fs::read(source_path)
         .map_err(|source| ImportError::Io { path: source_path.to_path_buf(), source })?;
     let identity = compute_chart_identity(&bytes);
-    let text = decode_bms_text(&bytes, warnings);
-    let text = apply_beatoraja_random_control(&text, random_seed, warnings);
+    let raw_text = decode_bms_text(&bytes, warnings);
+    let has_bms_random = source_text_has_bms_random(&raw_text);
+    let text = apply_beatoraja_random_control(&raw_text, random_seed, warnings);
     let (parse_text, sparse_messages) = extract_sparse_bms_message_lines(&text, warnings);
 
     let BmsOutput { bms, warnings: bms_warnings } = parse_bms::<T, _, _, _>(
@@ -152,6 +153,7 @@ fn import_with_layout<T: KeyLayoutMapper>(
     inject_sparse_bms_messages::<T>(&mut bms, &sparse_messages, warnings);
 
     let mut intermediate = build_intermediate_from_bms::<T>(&bms, layout, warnings)?;
+    intermediate.metadata.has_bms_random = has_bms_random;
     intermediate.identity = identity;
     Ok(intermediate)
 }
@@ -788,10 +790,23 @@ fn build_metadata(bms: &Bms) -> IntermediateMetadata {
         long_note_mode: map_ln_mode(bms.repr.ln_mode),
         long_note_mode_defined: bms_has_explicit_ln_mode(bms),
         has_bga: false,
+        has_bms_random: false,
         key_mode: KeyMode::default(),
         base62_obj_ids: bms_uses_base62_obj_ids(bms),
         suppress_bar_lines: false,
     }
+}
+
+fn source_text_has_bms_random(text: &str) -> bool {
+    text.lines().any(|line| {
+        let trimmed = line.trim_start();
+        if !trimmed.starts_with('#') {
+            return false;
+        }
+        let body = trimmed.strip_prefix('#').unwrap_or(trimmed).trim_start();
+        let head = body.split_whitespace().next().unwrap_or("");
+        head.eq_ignore_ascii_case("RANDOM") || head.eq_ignore_ascii_case("SETRANDOM")
+    })
 }
 
 fn bms_uses_base62_obj_ids(bms: &Bms) -> bool {
@@ -1557,6 +1572,32 @@ mod tests {
         );
 
         assert_eq!(note_lanes(&chart), vec![Lane::Key2]);
+    }
+
+    #[test]
+    fn bms_random_sections_set_has_bms_random_metadata() {
+        let (with_random, _) = import_bms_text_with_warnings(
+            "\
+#TITLE Random Song
+#BPM 120
+#WAV01 key.wav
+#RANDOM 1
+#IF 1
+#00111:01
+#ENDIF
+",
+        );
+        let (without_random, _) = import_bms_text_with_warnings(
+            "\
+#TITLE Plain Song
+#BPM 120
+#WAV01 key.wav
+#00111:01
+",
+        );
+
+        assert!(with_random.metadata.has_bms_random);
+        assert!(!without_random.metadata.has_bms_random);
     }
 
     #[test]

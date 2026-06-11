@@ -114,15 +114,11 @@ export function validateScoreSubmission(value: unknown): IrScoreSubmission {
   if (payload.rule.scoring !== 'bms_ex_score_v1') {
     throw new Error('rule.scoring is unsupported')
   }
-  for (const field of [
-    'ex_score',
-    'max_combo',
-    'notes',
-    'pass_notes',
-    'min_bp',
-    'min_cb',
-  ] as const) {
+  for (const field of ['ex_score', 'max_combo', 'notes', 'min_bp', 'min_cb'] as const) {
     requireNonNegativeInteger(payload.result[field], `result.${field}`)
+  }
+  if (payload.result.pass_notes != null) {
+    requireNonNegativeInteger(payload.result.pass_notes, 'result.pass_notes')
   }
   if (
     !payload.result.judges ||
@@ -186,7 +182,7 @@ export async function submitScore(
     avg_judge_ms: payload.result.avg_judge_ms ?? null,
     max_combo: payload.result.max_combo,
     notes: payload.result.notes,
-    pass_notes: payload.result.pass_notes,
+    pass_notes: payload.result.pass_notes ?? payload.result.notes,
     bp,
     cb,
     min_bp: payload.result.min_bp,
@@ -232,6 +228,7 @@ export async function submitScore(
     min_cb: payload.result.min_cb,
     server_received_at: score.server_received_at,
   }
+  const previousBest = await fetchPreviousBest(db, user.id, payload)
   // 署名検証に失敗した投稿は改ざんの積極的な証拠なので、履歴 (scores) には
   // verification=invalid で残すが best 更新の対象にはしない。
   const { bestUpdated, updatedFields } =
@@ -276,6 +273,7 @@ export async function submitScore(
     best_updated: bestUpdated,
     updated_fields: updatedFields,
     server_received_at: score.server_received_at,
+    previous_best: previousBest,
     rankings: Object.keys(rankings).length > 0 ? rankings : undefined,
   }
 }
@@ -401,6 +399,35 @@ async function upsertChart(db: Db, payload: IrScoreSubmission) {
   )
   if (error) {
     throw error
+  }
+}
+
+async function fetchPreviousBest(
+  db: Db,
+  playerId: string,
+  payload: IrScoreSubmission,
+): Promise<IrSubmitResponse['previous_best']> {
+  const { data: current, error } = await db
+    .from('best_scores')
+    .select('ex_score, clear_type, max_combo, min_bp, min_cb')
+    .eq('player_id', playerId)
+    .eq('chart_sha256', payload.chart.sha256)
+    .eq('gauge', payload.rule.gauge)
+    .eq('ln_policy', payload.rule.ln_policy)
+    .eq('scoring', payload.rule.scoring)
+    .maybeSingle()
+  if (error) {
+    throw error
+  }
+  if (!current) {
+    return null
+  }
+  return {
+    clear_type: current.clear_type,
+    ex_score: current.ex_score,
+    max_combo: current.max_combo,
+    min_bp: current.min_bp,
+    min_cb: current.min_cb,
   }
 }
 

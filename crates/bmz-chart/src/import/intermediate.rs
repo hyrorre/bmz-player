@@ -36,6 +36,8 @@ pub struct IntermediateMetadata {
     pub long_note_mode: LongNoteMode,
     pub long_note_mode_defined: bool,
     pub has_bga: bool,
+    /// Source BMS contains `#RANDOM` sections (beatoraja `hasRandomSequence`).
+    pub has_bms_random: bool,
     pub key_mode: KeyMode,
     /// `#BASE 62` 相当。`true` のときオブジェクト ID は base62 換算する。
     pub base62_obj_ids: bool,

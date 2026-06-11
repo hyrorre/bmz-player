@@ -415,6 +415,11 @@ pub const LIBRARY_MIGRATIONS: &[Migration] = &[
         // Distinct from gauge_total, which applies the gameplay default formula.
         statements: &["ALTER TABLE charts ADD COLUMN bms_total REAL NOT NULL DEFAULT 0;"],
     },
+    Migration {
+        version: 17,
+        // Source BMS defines `#RANDOM` sections (beatoraja `hasRandomSequence`).
+        statements: &["ALTER TABLE charts ADD COLUMN has_bms_random INTEGER NOT NULL DEFAULT 0;"],
+    },
 ];
 
 pub const SCORE_MIGRATIONS: &[Migration] = &[
@@ -806,6 +811,12 @@ pub const SCORE_MIGRATIONS: &[Migration] = &[
                 ON ir_score_jobs(status, next_attempt_at);",
             "CREATE INDEX idx_ir_score_jobs_local_score
                 ON ir_score_jobs(local_score_id);",
+        ],
+    },
+    Migration {
+        version: 12,
+        statements: &[
+            "ALTER TABLE score_history ADD COLUMN arrange TEXT NOT NULL DEFAULT 'Normal';",
         ],
     },
 ];

@@ -61,8 +61,24 @@ pub struct IrChartPayload {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub subartists: Vec<String>,
     pub mode: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub level: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub judge: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bpm: Option<IrChartBpm>,
     pub notes: IrChartNotes,
     pub features: IrChartFeatures,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct IrChartBpm {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
@@ -101,6 +117,8 @@ pub struct IrRulePayload {
     pub effective_ln_mode: IrEffectiveLnMode,
     pub judge_algorithm: String,
     pub scoring: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub rule_mode: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -111,9 +129,12 @@ pub struct IrResultPayload {
     pub ex_score: u32,
     pub max_combo: u32,
     pub notes: u32,
-    pub pass_notes: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pass_notes: Option<u32>,
     pub min_bp: u32,
     pub min_cb: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ghost: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -152,6 +173,17 @@ pub struct IrSubmitResponse {
     pub accepted: bool,
     pub score_id: Option<String>,
     pub best_updated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_best: Option<IrPreviousBest>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrPreviousBest {
+    pub clear_type: String,
+    pub ex_score: u32,
+    pub max_combo: u32,
+    pub min_bp: u32,
+    pub min_cb: u32,
 }
 
 pub fn default_ranking_limit() -> u32 {

@@ -5086,6 +5086,8 @@ impl WinitApp {
                         last_finished.as_ref().map(|f| f.stored.device_type),
                         &insert.gauge_type,
                         played_at,
+                        &insert.arrange,
+                        course_result.entry_arranges.first().and_then(|arrange| arrange.seed),
                     );
 
                     // Update the four course replay slots that pass their
@@ -5190,6 +5192,8 @@ impl WinitApp {
         device_type: Option<bmz_core::input::InputDeviceKind>,
         gauge: &str,
         played_at: i64,
+        arrange: &str,
+        random_seed: Option<i64>,
     ) {
         let enabled: Vec<_> = self
             .boot
@@ -5219,6 +5223,8 @@ impl WinitApp {
                 ln_policy_setting: ln_setting.clone(),
                 gauge: gauge.to_string(),
                 device_type: device_type.unwrap_or(bmz_core::input::InputDeviceKind::Keyboard),
+                arrange: arrange.to_string(),
+                random_seed,
                 idempotency_key: format!("bmz-course-{course_score_id}"),
             },
         );

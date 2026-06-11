@@ -55,6 +55,8 @@ pub struct ChartMetadata {
     /// `#VOLWAV` ヘッダ (百分率、100 = 原音)。
     pub volwav_percent: u8,
     pub has_bga: bool,
+    /// Source chart defines BMS `#RANDOM` sections. Distinct from player arrange options.
+    pub has_bms_random: bool,
     pub key_mode: KeyMode,
     /// `#LNMODE` / BMSON `ln_type`。未指定時は LR2 互換の LN (終点判定なし)。
     pub long_note_mode: LongNoteMode,
@@ -94,6 +96,7 @@ impl Default for ChartMetadata {
             preview_file: String::new(),
             volwav_percent: 100,
             has_bga: false,
+            has_bms_random: false,
             key_mode: KeyMode::default(),
             long_note_mode: LongNoteMode::default(),
             long_note_mode_defined: false,

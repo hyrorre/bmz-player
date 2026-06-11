@@ -257,6 +257,7 @@ fn imported_score_record(
         total_notes,
         score,
         random_seed,
+        arrange: "Normal".to_string(),
         gauge_option: String::new(),
         rule_mode: rule_mode.to_string(),
         assist_mask: 0,

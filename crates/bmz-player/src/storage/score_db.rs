@@ -73,6 +73,7 @@ pub struct ScoreRecord {
     pub total_notes: u32,
     pub score: ScoreState,
     pub random_seed: Option<i64>,
+    pub arrange: String,
     pub gauge_option: String,
     pub rule_mode: String,
     pub assist_mask: u32,
@@ -87,6 +88,7 @@ impl ScoreRecord {
         ln_policy: LnScorePolicy,
         played_at: i64,
         random_seed: Option<i64>,
+        arrange: impl Into<String>,
         gauge_option: impl Into<String>,
         rule_mode: impl Into<String>,
         assist_mask: u32,
@@ -103,6 +105,7 @@ impl ScoreRecord {
             total_notes: result.total_notes,
             score: result.score.clone(),
             random_seed,
+            arrange: arrange.into(),
             gauge_option: gauge_option.into(),
             rule_mode: rule_mode.into(),
             assist_mask,
@@ -955,6 +958,7 @@ fn insert_score_history(
             fast_empty_poor,
             slow_empty_poor,
             random_seed,
+            arrange,
             gauge_option,
             rule_mode,
             assist_mask,
@@ -970,7 +974,7 @@ fn insert_score_history(
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
             ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30,
-            ?31, ?32, ?33, ?34, ?35, ?36
+            ?31, ?32, ?33, ?34, ?35, ?36, ?37
         )",
         params![
             hash_to_hex(&record.chart_sha256),
@@ -997,6 +1001,7 @@ fn insert_score_history(
             judges.fast_empty_poor,
             judges.slow_empty_poor,
             record.random_seed,
+            record.arrange.as_str(),
             record.gauge_option.as_str(),
             record.rule_mode.as_str(),
             record.assist_mask,
@@ -1384,6 +1389,7 @@ mod tests {
             total_notes: ex_score / 2,
             score: score_with_ex_score(ex_score),
             random_seed: None,
+            arrange: "Normal".to_string(),
             gauge_option: String::new(),
             rule_mode: String::new(),
             assist_mask: 0,
@@ -1407,10 +1413,12 @@ mod tests {
         let mut record = record(20, ClearType::Normal);
         record.gauge_type = None;
         record.rule_mode = "Dx".to_string();
+        record.arrange = "Random".to_string();
         record.device_type = InputDeviceKind::Controller;
         db.insert_score(&record).unwrap();
 
-        let (clear_type, gauge_type, gauge_option, rule_mode, device_type, replay_path): (
+        let (clear_type, gauge_type, gauge_option, rule_mode, arrange, device_type, replay_path): (
+            String,
             String,
             String,
             String,
@@ -1420,10 +1428,10 @@ mod tests {
         ) = db
             .conn()
             .query_row(
-                "SELECT clear_type, gauge_type, gauge_option, rule_mode, device_type, replay_path FROM score_history",
+                "SELECT clear_type, gauge_type, gauge_option, rule_mode, arrange, device_type, replay_path FROM score_history",
                 [],
                 |row| {
-                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?))
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?))
                 },
             )
             .unwrap();
@@ -1432,6 +1440,7 @@ mod tests {
         assert_eq!(gauge_type, "");
         assert_eq!(gauge_option, "");
         assert_eq!(rule_mode, "Dx");
+        assert_eq!(arrange, "Random");
         assert_eq!(device_type, "controller");
         assert_eq!(replay_path, "");
     }
@@ -1975,6 +1984,7 @@ mod tests {
             LnScorePolicy::ForceCn,
             1_700_000_040,
             Some(123),
+            "Normal",
             "Hard",
             "Lr2Oraja",
             0,

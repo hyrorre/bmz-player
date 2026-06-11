@@ -79,6 +79,7 @@ pub fn store_play_result(
         request.ln_policy,
         request.played_at,
         request.random_seed,
+        arrange.to_persistent_str(),
         request.gauge_option,
         request.rule_mode,
         request.assist_mask,

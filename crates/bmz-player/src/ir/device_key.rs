@@ -225,7 +225,6 @@ mod tests {
                 "ex_score": 2,
                 "max_combo": 1,
                 "notes": 1,
-                "pass_notes": 1,
                 "min_bp": 0,
                 "min_cb": 0
             },

@@ -74,7 +74,7 @@ export interface IrScoreSubmission {
     avg_judge_ms?: number | null
     max_combo: number
     notes: number
-    pass_notes: number
+    pass_notes?: number
     min_bp: number
     min_cb: number
   }
@@ -99,6 +99,14 @@ export interface IrJudgeCounts {
   empty_poor: number
 }
 
+export interface IrPreviousBest {
+  clear_type: string
+  ex_score: number
+  max_combo: number
+  min_bp: number
+  min_cb: number
+}
+
 export interface IrSubmitResponse {
   accepted: boolean
   score_id: string
@@ -111,6 +119,7 @@ export interface IrSubmitResponse {
     min_cb: boolean
   }
   server_received_at: string
+  previous_best?: IrPreviousBest | null
   rankings?: Partial<Record<IrRankingScope, IrScopedRankingResponse>>
 }
 

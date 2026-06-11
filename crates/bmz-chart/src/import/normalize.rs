@@ -164,6 +164,7 @@ fn normalize_metadata(input: &IntermediateMetadata) -> ChartMetadata {
         long_note_mode: input.long_note_mode,
         long_note_mode_defined: input.long_note_mode_defined,
         has_bga: input.has_bga,
+        has_bms_random: input.has_bms_random,
         key_mode: input.key_mode,
     }
 }

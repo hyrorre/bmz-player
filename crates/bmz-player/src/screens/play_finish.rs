@@ -150,6 +150,7 @@ pub fn finish_session_result(
         &stored,
         played_at,
         score_key,
+        applied_arrange,
         &mut summary,
         previous_best.as_ref(),
     );
@@ -182,6 +183,7 @@ fn clear_type_from_name(name: &str) -> Option<ClearType> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn enqueue_ir_jobs(
     score_db: &mut ScoreDatabase,
     profile_paths: &ProfilePaths,
@@ -191,6 +193,7 @@ fn enqueue_ir_jobs(
     stored: &StoredPlayResult,
     played_at: i64,
     score_key: ScoreKey,
+    applied_arrange: &AppliedArrange,
     summary: &mut ResultSummary,
     previous_best: Option<&crate::storage::score_db::BestScoreSummary>,
 ) {
@@ -217,6 +220,10 @@ fn enqueue_ir_jobs(
             gauge_option: result.gauge_type.as_str().to_string(),
             device_type: stored.device_type,
             idempotency_key: format!("bmz-score-{}", stored.score_history_id),
+            arrange: applied_arrange.arrange,
+            arrange_seed: applied_arrange.seed,
+            random_seed: applied_arrange.seed,
+            rule_mode: session.rule_mode.as_str().to_string(),
             replay_hash: replay_file_hash(profile_paths, &stored.replay_path),
         },
     );

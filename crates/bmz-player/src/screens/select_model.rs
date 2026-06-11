@@ -1922,6 +1922,7 @@ mod tests {
             total_notes: 1,
             score,
             random_seed: None,
+            arrange: "Normal".to_string(),
             gauge_option: String::new(),
             rule_mode: String::new(),
             assist_mask: 0,

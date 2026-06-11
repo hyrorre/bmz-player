@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::screens::course_session::CourseResultSummary;
+use crate::select_options::ArrangeOption;
 use crate::storage::common::hash_to_hex;
 
 /// コース定義のうち identity / registry に必要な部分。
@@ -30,6 +31,8 @@ pub struct IrCourseSubmissionContext {
     pub ln_policy_setting: String,
     pub gauge: String,
     pub device_type: InputDeviceKind,
+    pub arrange: String,
+    pub random_seed: Option<i64>,
     pub idempotency_key: String,
 }
 
@@ -78,6 +81,14 @@ pub fn build_course_submission(
     let clear = if result.course_failed { "Failed" } else { final_clear };
     let gauge_value =
         result.entry_summaries.last().map(|entry| entry.gauge_value.round() as i64).unwrap_or(0);
+    let mut play_options = json!({
+        "device_type": context.device_type.as_str(),
+        "option": arrange_option_ir_from_persistent(&context.arrange),
+    });
+    if let Some(seed) = context.random_seed {
+        play_options["random_seed"] = json!(seed);
+        play_options["seed"] = json!(seed);
+    }
 
     json!({
         "client": {
@@ -119,11 +130,13 @@ pub fn build_course_submission(
             "entries": entries,
             "played_at": context.played_at,
         },
-        "play_options": {
-            "device_type": context.device_type.as_str(),
-        },
+        "play_options": play_options,
         "idempotency_key": context.idempotency_key,
     })
+}
+
+fn arrange_option_ir_from_persistent(value: &str) -> String {
+    ArrangeOption::from_persistent_str(value).as_str().to_ascii_lowercase()
 }
 
 #[cfg(test)]
