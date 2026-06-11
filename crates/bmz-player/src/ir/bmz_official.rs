@@ -2,8 +2,9 @@ use anyhow::{Context, Result, bail};
 use reqwest::Url;
 
 use super::types::{
-    IrAuthTokens, IrMeResponse, IrRankingResult, IrRankingScope, IrReplayUploadTarget,
-    IrReplayVerifyResult, IrRivalsResponse, IrScoreSubmission, IrSubmitOptions, IrSubmitResponse,
+    IrAuthTokens, IrMeResponse, IrRankingResult, IrRankingScope, IrReplayDownloadTarget,
+    IrReplayUploadTarget, IrReplayVerifyResult, IrRivalsResponse, IrScoreSubmission,
+    IrSubmitOptions, IrSubmitResponse,
 };
 
 #[derive(Debug, Clone)]
@@ -109,6 +110,31 @@ impl BmzOfficialIrClient {
             bail!("BMZ IR replay upload failed: {status} {body}");
         }
         Ok(())
+    }
+
+    /// 公開リプレイをダウンロードする。戻り値は (bytes, 申告 hash)。
+    pub async fn download_replay(&self, score_id: &str) -> Result<(Vec<u8>, String)> {
+        let url = self.base_url.join(&format!("/api/v1/scores/{score_id}/replay"))?;
+        let response = self
+            .http
+            .get(url)
+            .send()
+            .await
+            .context("failed to request BMZ IR replay download URL")?;
+        let target: IrReplayDownloadTarget =
+            decode_response(response, "BMZ IR replay download URL").await?;
+        let body = self
+            .http
+            .get(&target.download_url)
+            .send()
+            .await
+            .context("failed to download BMZ IR replay")?;
+        let status = body.status();
+        if !status.is_success() {
+            bail!("BMZ IR replay download failed: {status}");
+        }
+        let bytes = body.bytes().await.context("failed to read BMZ IR replay body")?.to_vec();
+        Ok((bytes, target.hash.unwrap_or_default()))
     }
 
     /// アップロード済み replay の hash 検証をサーバーへ依頼する。

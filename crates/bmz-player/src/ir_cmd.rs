@@ -31,7 +31,36 @@ pub async fn run_ir_command(cmd: IrCommand) -> Result<()> {
         IrCommand::Sync => sync(&profile_paths, &profile).await,
         IrCommand::Rivals { action } => rivals(&profile_paths, &mut profile, action).await,
         IrCommand::DeviceKey { rotate } => device_key(&profile_paths, &profile, rotate).await,
+        IrCommand::Replay { score_id } => replay(&profile_paths, &profile, &score_id).await,
     }
+}
+
+/// `ir replay <SCORE_ID>` — IR リプレイをダウンロードし、hash を検証して
+/// プロファイル配下に保存する。`--boot-replay-file` でそのまま再生できる。
+async fn replay(
+    profile_paths: &ProfilePaths,
+    profile: &ProfileConfig,
+    score_id: &str,
+) -> Result<()> {
+    use sha2::{Digest, Sha256};
+
+    let provider = primary_provider(profile)?;
+    let client = BmzOfficialIrClient::anonymous(&provider.base_url)?;
+    let (bytes, declared_hash) = client.download_replay(score_id).await?;
+
+    let actual_hash = crate::storage::common::hash_to_hex(&Sha256::digest(&bytes));
+    if !declared_hash.is_empty() && actual_hash != declared_hash {
+        bail!("downloaded replay hash mismatch: expected {declared_hash}, got {actual_hash}");
+    }
+
+    let dir = profile_paths.replay_dir.join("ir");
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(format!("{score_id}.toml"));
+    std::fs::write(&path, &bytes)?;
+
+    println!("saved replay: {} ({} bytes, sha256 {actual_hash})", path.display(), bytes.len());
+    println!("play it with: bmz --boot-replay-file {}", path.display());
+    Ok(())
 }
 
 /// `ir device-key` — 署名鍵の表示。`rotate` で旧鍵を失効し新しい鍵を登録する。

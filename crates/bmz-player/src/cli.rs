@@ -10,6 +10,7 @@ pub const SMOKE_EXIT_AFTER_RESULT_FRAMES_ARG: &str = "--smoke-exit-after-result-
 pub const SMOKE_EXIT_ON_RESULT_ARG: &str = "--smoke-exit-on-result";
 pub const SMOKE_SCREENSHOT_ARG: &str = "--smoke-screenshot";
 pub const BOOT_REPLAY_ARG: &str = "--boot-replay";
+pub const BOOT_REPLAY_FILE_ARG: &str = "--boot-replay-file";
 pub const BOOT_COURSE_REPLAY_ARG: &str = "--boot-course-replay";
 pub const BOOT_COURSE_ARG: &str = "--boot-course";
 pub const PRACTICE_SHORT_ARG: &str = "-p";
@@ -42,6 +43,8 @@ pub enum IrCommand {
     Rivals { action: Option<RivalAction> },
     /// `ir device-key [rotate]` — 署名鍵の表示 / ローテーション。
     DeviceKey { rotate: bool },
+    /// `ir replay <SCORE_ID>` — IR リプレイをダウンロードする。
+    Replay { score_id: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -263,6 +266,14 @@ fn parse_ir_command(rest: &[String]) -> Result<Command> {
             };
             Ok(Command::Ir(IrCommand::Rivals { action }))
         }
+        Some("replay") => {
+            let score_id = rest
+                .get(1)
+                .filter(|value| !value.starts_with('-'))
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("ir replay requires a SCORE_ID"))?;
+            Ok(Command::Ir(IrCommand::Replay { score_id }))
+        }
         Some("device-key") => {
             let rotate = match rest.get(1).map(|s| s.as_str()) {
                 Some("rotate") => true,
@@ -273,7 +284,7 @@ fn parse_ir_command(rest: &[String]) -> Result<Command> {
         }
         Some(sub) => {
             bail!(
-                "unknown ir subcommand: {sub}. Use: login, logout, status, ranking, sync, rivals, device-key"
+                "unknown ir subcommand: {sub}. Use: login, logout, status, ranking, sync, rivals, device-key, replay"
             )
         }
         None => {
@@ -298,6 +309,9 @@ pub struct AppOptions {
     pub smoke_screenshot_path: Option<String>,
     /// `--boot-replay <SLOT>` / `-r1..4` で指定された 0-based のスロット index。
     pub boot_replay_slot: Option<u8>,
+    /// `--boot-replay-file <PATH>`: リプレイファイルを直接指定して再生する。
+    /// `bmz ir replay` でダウンロードした IR リプレイの再生に使う。
+    pub boot_replay_file: Option<String>,
     /// `--boot-course-replay <COURSE_ID>` で指定されたコース id。
     /// 指定された場合、そのコースの最新 attempt を replay 再生する。
     pub boot_course_replay_id: Option<i64>,
@@ -335,6 +349,10 @@ impl AppOptions {
             if let Some(value) = arg.strip_prefix("--smoke-screenshot=") {
                 options.smoke_screenshot_path = Some(parse_smoke_screenshot_path(value)?);
                 options.smoke_exit_after_frames.get_or_insert(3);
+                continue;
+            }
+            if let Some(value) = arg.strip_prefix("--boot-replay-file=") {
+                options.boot_replay_file = Some(value.to_string());
                 continue;
             }
             if let Some(value) = arg.strip_prefix("--boot-replay=") {
@@ -389,6 +407,12 @@ impl AppOptions {
                     };
                     options.smoke_exit_after_result_frames =
                         Some(parse_smoke_exit_after_result_frames_value(value.as_ref())?);
+                }
+                BOOT_REPLAY_FILE_ARG => {
+                    let Some(value) = args.next() else {
+                        bail!("{BOOT_REPLAY_FILE_ARG} requires a replay file path");
+                    };
+                    options.boot_replay_file = Some(value.as_ref().to_string());
                 }
                 BOOT_REPLAY_ARG => {
                     let Some(value) = args.next() else {

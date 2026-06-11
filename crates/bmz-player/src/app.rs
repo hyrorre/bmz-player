@@ -834,9 +834,20 @@ struct PendingUploadResult {
 }
 
 enum DeferredBoot {
-    Chart { chart_id: i64, replay_slot: Option<u8> },
-    CourseReplay { course_id: i64 },
-    Course { course_id: i64 },
+    Chart {
+        chart_id: i64,
+        replay_slot: Option<u8>,
+    },
+    /// `--boot-replay-file <PATH>`: リプレイファイル直接指定の再生。
+    ReplayFile {
+        path: String,
+    },
+    CourseReplay {
+        course_id: i64,
+    },
+    Course {
+        course_id: i64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1666,6 +1677,12 @@ impl WinitApp {
                     }
                 } else {
                     self.start_chart(chart_id);
+                }
+            }
+            DeferredBoot::ReplayFile { path } => {
+                tracing::info!(%path, "booting replay from file");
+                if !self.try_start_replay_from_file(std::path::Path::new(&path)) {
+                    tracing::warn!(%path, "replay file boot failed; staying on select");
                 }
             }
             DeferredBoot::CourseReplay { course_id } => {
@@ -5658,6 +5675,53 @@ impl WinitApp {
         }
     }
 
+    /// リプレイファイル (例: `bmz ir replay` でダウンロードした IR リプレイ) を
+    /// 直接指定して再生する。譜面はファイル内の chart_sha256 から library を引く。
+    fn try_start_replay_from_file(&mut self, path: &std::path::Path) -> bool {
+        let replay_file = match crate::storage::replay::load_replay(path) {
+            Ok(file) => file,
+            Err(error) => {
+                tracing::warn!(%error, path = %path.display(), "replay file load failed");
+                return false;
+            }
+        };
+        let Ok(sha) = crate::storage::common::hex_to_hash::<32>(&replay_file.chart_sha256) else {
+            tracing::warn!(sha = %replay_file.chart_sha256, "replay file has invalid chart sha256");
+            return false;
+        };
+        let Some(chart_id) = self.boot.library_db.chart_id_by_sha256(sha).ok().flatten() else {
+            tracing::warn!(
+                sha = %replay_file.chart_sha256,
+                "replay chart is not in the library; load the song first"
+            );
+            return false;
+        };
+        let player = bmz_gameplay::replay::ReplayPlayer {
+            events: replay_file.events.clone(),
+            next_index: 0,
+        };
+        let options = PlayStartOptions {
+            autoplay: false,
+            practice_mode: false,
+            replay_player: Some(player),
+            chart_zero_time: TimeUs(0),
+            gauge: Some(self.gauge_option),
+            gauge_auto_shift: self.gauge_auto_shift_option,
+            arrange: replay_file.arrange_option(),
+            target: self.target_option,
+            arrange_seed: replay_file.arrange_seed,
+            arrange_pattern: replay_file.lane_shuffle_pattern.clone(),
+            initial_gauge_value: None,
+            judge_constraint: bmz_core::course::CourseJudgeConstraint::Normal,
+            ln_mode_override: None,
+            course_gauge_override: None,
+            course_gauge_property_override: None,
+            rival_ex_score: None,
+        };
+        self.start_chart_with_options(chart_id, options);
+        true
+    }
+
     fn try_start_replay_for_chart(&mut self, chart_id: i64, slot: u8) -> bool {
         let Some(chart) = self
             .boot
@@ -8653,6 +8717,9 @@ fn now_unix_seconds() -> i64 {
 fn deferred_boot_action(boot_chart_id: Option<i64>, options: &AppOptions) -> Option<DeferredBoot> {
     if let Some(chart_id) = boot_chart_id {
         return Some(DeferredBoot::Chart { chart_id, replay_slot: options.boot_replay_slot });
+    }
+    if let Some(path) = options.boot_replay_file.clone() {
+        return Some(DeferredBoot::ReplayFile { path });
     }
     if let Some(course_id) = options.boot_course_replay_id {
         return Some(DeferredBoot::CourseReplay { course_id });

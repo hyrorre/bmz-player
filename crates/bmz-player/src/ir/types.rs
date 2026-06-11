@@ -194,6 +194,20 @@ pub struct IrReplayUploadTarget {
     pub required_hash: Option<String>,
 }
 
+/// `GET /api/v1/scores/{id}/replay` (ダウンロード URL 発行) のレスポンス。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrReplayDownloadTarget {
+    pub download_url: String,
+    #[serde(default)]
+    pub hash: Option<String>,
+    #[serde(default)]
+    pub format: Option<String>,
+    #[serde(default)]
+    pub size_bytes: Option<u64>,
+    #[serde(default)]
+    pub status: Option<String>,
+}
+
 /// `/api/v1/scores/{id}/replay/verify` のレスポンス。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IrReplayVerifyResult {
