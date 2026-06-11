@@ -1328,8 +1328,6 @@ impl WinitApp {
         let arrange_option = arrange_option_from_profile(boot.profile_config.play.random);
         let target_option = target_option_from_profile(boot.profile_config.play.target);
         let select_keys = SelectKeyBindings::from_profile(&boot.profile_config.input);
-        let now = Instant::now();
-
         let mut renderer = Renderer::default();
         let skin_catalog = scan_skin_catalog();
         let (skin_decode_tx, skin_decode_rx) = mpsc::channel::<PendingSkinResult>();
@@ -1358,6 +1356,7 @@ impl WinitApp {
             &boot.profile_config.skin.decide_files,
             &boot.profile_config.skin.result_files,
         );
+        let now = Instant::now();
         let pending_play_skin = false;
 
         let gilrs = if boot.app_config.input.gamepad_enabled {
@@ -6853,6 +6852,16 @@ impl WinitApp {
             document_textures,
             preserve_play_dynamic_timers,
         );
+        if kind == SkinKind::Select && matches!(self.view_state(), AppViewState::Select) {
+            self.restart_select_scene_timers();
+        }
+    }
+
+    fn restart_select_scene_timers(&mut self) {
+        let now = Instant::now();
+        self.select_scene_started_at = now;
+        self.select_bar_started_at = now;
+        self.option_panel_started_at = now;
     }
 
     fn advance_active_play(&mut self) {
@@ -7706,6 +7715,7 @@ impl WinitApp {
             self.sync_select_preview_audio();
             self.update_select_preview_fade();
         }
+        self.start_scene_timers_before_snapshot(select_view, result_view);
         let video_start = Instant::now();
         self.update_current_skin_video_sources();
         let video_us = video_start.elapsed().as_micros();
@@ -7802,6 +7812,18 @@ impl WinitApp {
         self.active_play.as_ref().map(|active| active.running.session.hispeed)
     }
 
+    fn start_scene_timers_before_snapshot(&mut self, select_view: bool, result_view: bool) {
+        match self.last_scene_kind {
+            Some(AppSceneKind::Select) if select_view => {}
+            _ if select_view => self.restart_select_scene_timers(),
+            Some(AppSceneKind::Result) if result_view => {}
+            _ if result_view => {
+                self.result_scene_started_at = Instant::now();
+            }
+            _ => {}
+        }
+    }
+
     fn active_lane_state(&self) -> Option<ActiveLaneState> {
         self.active_play.as_ref().map(|active| {
             let session = &active.running.session;
@@ -7847,14 +7869,6 @@ impl WinitApp {
             self.stop_select_preview();
         }
         self.fire_scene_transition_sounds(scene_kind);
-        if scene_kind == AppSceneKind::Select {
-            let now = Instant::now();
-            self.select_scene_started_at = now;
-            self.select_bar_started_at = now;
-        }
-        if scene_kind == AppSceneKind::Result {
-            self.result_scene_started_at = Instant::now();
-        }
         if let Some(window) = &self.window {
             window.set_title(window_title_for_scene(scene_kind));
         }
