@@ -2033,6 +2033,7 @@ pub struct SkinDrawState {
     pub result_cb: Option<u32>,
     /// Result update/draw ops 用の保存前ベスト。
     pub previous_best_ex_score: Option<u32>,
+    pub previous_best_clear_index: Option<i64>,
     pub previous_best_max_combo: Option<u32>,
     pub previous_best_bp: Option<u32>,
     /// ターゲット bp (ref 176, 178 で使用)。
@@ -2222,6 +2223,7 @@ impl Default for SkinDrawState {
             result_bp: None,
             result_cb: None,
             previous_best_ex_score: None,
+            previous_best_clear_index: None,
             previous_best_max_combo: None,
             previous_best_bp: None,
             target_bp: None,
@@ -2931,6 +2933,7 @@ impl SkinDocument {
         frame.r = r;
         frame.g = g;
         frame.b = b;
+        frame.angle = -frame.angle;
         let source = resolve_document_source(sources, &image.src)?;
         let pixel_rect = skin_image_pixel_rect(image, images);
         let uv = skin_image_texture_region_for_state(
@@ -7996,8 +7999,8 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         407 => Some(gauge_after_dot(state.gauge) as i64),
         163 => Some((state.timeleft_ms / 60_000) as i64),
         164 => Some(((state.timeleft_ms / 1_000) % 60) as i64),
-        1163 => Some(state.select_length_ms.max(0) / 60_000),
-        1164 => Some((state.select_length_ms.max(0) / 1_000) % 60),
+        1163 => Some(result_or_select_length_ms(state) / 60_000),
+        1164 => Some((result_or_select_length_ms(state) / 1_000) % 60),
         310 => Some(state.hispeed.floor() as i64),
         311 => Some(((state.hispeed * 100.0) as i64) % 100),
         312 => Some(state.total_duration_ms as i64),
@@ -8071,7 +8074,7 @@ fn skin_state_number(ref_id: i32, state: SkinDrawState) -> Option<i64> {
         // NUMBER_DIFF_BPCOUNT=178 (符号付き、現在 bp - old/mybest BP)
         178 => result_mybest_bp(state).map(|best| current_bp(state) as i64 - best as i64),
         // NUMBER_TARGET_CLEAR=371
-        371 => state.best_clear_index.or(state.target_clear_index),
+        371 => result_mybest_clear_index(state).or(state.target_clear_index),
         // Fast/Slow split (PGREAT/GREAT/GOOD/BAD/POOR)
         410 => state.fast_slow_counts.map(|c| c.fast_pgreat as i64),
         411 => state.fast_slow_counts.map(|c| c.slow_pgreat as i64),
@@ -8173,7 +8176,7 @@ fn beatoraja_next_rank_grade_for_step(rank_step: i32) -> Option<&'static str> {
         15 => Some("A"),
         18 => Some("AA"),
         21 => Some("AAA"),
-        24 => Some("MAX"),
+        24 => Some("AAA"),
         _ => None,
     }
 }
@@ -8249,6 +8252,14 @@ fn projected_score_at_progress(final_score: u32, state: SkinDrawState) -> u32 {
     }
     let past_notes = state.past_notes.min(state.total_notes);
     ((final_score as u64 * past_notes as u64) / state.total_notes as u64) as u32
+}
+
+fn result_or_select_length_ms(state: SkinDrawState) -> i64 {
+    if state.result_failed.is_some() {
+        state.total_duration_ms.max(0) as i64
+    } else {
+        state.select_length_ms.max(0)
+    }
 }
 
 fn projected_best_score_at_progress(state: SkinDrawState) -> Option<u32> {
@@ -8502,6 +8513,14 @@ fn result_mybest_ex_score(state: SkinDrawState) -> Option<u32> {
         state.previous_best_ex_score.or(state.best_ex_score)
     } else {
         state.best_ex_score
+    }
+}
+
+fn result_mybest_clear_index(state: SkinDrawState) -> Option<i64> {
+    if state.result_failed.is_some() {
+        state.previous_best_clear_index.or(state.best_clear_index)
+    } else {
+        state.best_clear_index
     }
 }
 
@@ -10303,7 +10322,7 @@ fn best_rank_op_matches(op: i32, state: SkinDrawState) -> bool {
     if state.in_settings {
         return false;
     }
-    let Some(rank) = rank_index(state.best_ex_score, state.total_notes) else {
+    let Some(rank) = rank_index(result_mybest_ex_score(state), state.total_notes) else {
         return false;
     };
     op == 320 + rank as i32
@@ -13132,6 +13151,17 @@ mod tests {
         assert_eq!(skin_state_number(154, SkinDrawState::default()), None);
         assert_eq!(beatoraja_next_rank_grade(a_state), Some("AA"));
         assert_eq!(beatoraja_next_rank_grade(aaa_state), Some("MAX"));
+        let near_aaa_state = SkinDrawState {
+            select_ex_score: Some(1774),
+            select_total_notes: 1000,
+            select_play_count: 1,
+            select_screen: true,
+            ..SkinDrawState::default()
+        };
+        assert_eq!(skin_state_number(154, near_aaa_state), Some(-4));
+        assert_eq!(result_grade_diff_label(near_aaa_state), Some("-4".to_string()));
+        assert_eq!(beatoraja_next_rank_grade(near_aaa_state), Some("AAA"));
+        assert_eq!(grade_diff_rank_target_grade(near_aaa_state, true), Some("AAA"));
         assert_eq!(
             beatoraja_next_rank_grade(SkinDrawState {
                 select_ex_score: Some(0),
@@ -13170,6 +13200,23 @@ mod tests {
             result_grade_diff_label(SkinDrawState { select_ex_score: Some(2000), ..half_grade }),
             Some("MAX+0".to_string())
         );
+        let screenshot_score = SkinDrawState {
+            result_grade_diff_display: ResultGradeDiffDisplay::HalfGrade,
+            ex_score: 1100,
+            total_notes: 594,
+            result_failed: Some(false),
+            ..SkinDrawState::default()
+        };
+        assert_eq!(result_grade_diff_label(screenshot_score), Some("AAA+44".to_string()));
+        assert_eq!(skin_state_number(154, screenshot_score), Some(44));
+        assert_eq!(grade_diff_rank_target_grade(screenshot_score, true), Some("AAA"));
+        let beatoraja_screenshot_score = SkinDrawState {
+            result_grade_diff_display: ResultGradeDiffDisplay::Beatoraja,
+            ..screenshot_score
+        };
+        assert_eq!(result_grade_diff_label(beatoraja_screenshot_score), Some("-88".to_string()));
+        assert_eq!(skin_state_number(154, beatoraja_screenshot_score), Some(-88));
+        assert_eq!(grade_diff_rank_target_grade(beatoraja_screenshot_score, true), Some("MAX"));
     }
 
     #[test]
@@ -13226,6 +13273,16 @@ mod tests {
         assert!(!destination_ops_match(&destination("RANK_s_AAA", 301), &[], max_minus, false));
         assert!(destination_ops_match(&destination("RANK_m_AAA", 300), &[], max_minus, false));
 
+        let aaa_plus = SkinDrawState {
+            ex_score: 1100,
+            total_notes: 594,
+            result_failed: Some(false),
+            result_grade_diff_display: ResultGradeDiffDisplay::HalfGrade,
+            ..SkinDrawState::default()
+        };
+        assert!(destination_ops_match(&destination("RANK_s_AAA", 301), &[], aaa_plus, false));
+        assert!(!destination_ops_match(&destination("RANK_s_MAX", 300), &[], aaa_plus, false));
+
         let beatoraja_e_minus = SkinDrawState {
             select_ex_score: Some(0),
             select_total_notes: 2253,
@@ -13243,6 +13300,26 @@ mod tests {
             &destination("RANK_s_D", 306),
             &[],
             beatoraja_e_minus,
+            false
+        ));
+
+        let beatoraja_aaa_minus = SkinDrawState {
+            select_ex_score: Some(1774),
+            select_total_notes: 1000,
+            select_play_count: 1,
+            select_screen: true,
+            ..SkinDrawState::default()
+        };
+        assert!(destination_ops_match(
+            &destination("RANK_s_AAA", 301),
+            &[],
+            beatoraja_aaa_minus,
+            false
+        ));
+        assert!(!destination_ops_match(
+            &destination("RANK_s_MAX", 300),
+            &[],
+            beatoraja_aaa_minus,
             false
         ));
 
@@ -18301,7 +18378,7 @@ mod tests {
         assert_eq!(skin_state_number(75, state), Some(45));
         assert_eq!(skin_state_number(76, state), Some(7));
         assert_eq!(skin_state_number(102, state), Some(83));
-        assert_eq!(skin_state_number(103, state), Some(5));
+        assert_eq!(skin_state_number(103, state), Some(50));
         assert_eq!(skin_state_number(104, state), Some(12));
         assert_eq!(skin_state_number(107, state), Some(78));
         assert_eq!(skin_state_number(407, state), Some(6));
@@ -18311,9 +18388,9 @@ mod tests {
         assert_eq!(skin_state_number(113, state), Some(4));
         assert_eq!(skin_state_number(114, state), Some(3));
         assert_eq!(skin_state_number(122, state), Some(72));
-        assert_eq!(skin_state_number(123, state), Some(5));
+        assert_eq!(skin_state_number(123, state), Some(50));
         assert_eq!(skin_state_number(183, state), Some(61));
-        assert_eq!(skin_state_number(184, state), Some(5));
+        assert_eq!(skin_state_number(184, state), Some(50));
         assert_eq!(skin_state_number(400, state), Some(1));
         assert_eq!(skin_state_number(420, state), Some(2));
         assert_eq!(skin_state_number(423, state), Some(60));
@@ -18451,6 +18528,7 @@ mod tests {
             target_max_combo: Some(1000),
             best_bp: Some(20),
             previous_best_ex_score: Some(1800),
+            previous_best_clear_index: Some(4),
             previous_best_max_combo: Some(700),
             previous_best_bp: Some(10),
             target_bp: Some(0),
@@ -18485,9 +18563,9 @@ mod tests {
         assert_eq!(skin_state_number(177, state), Some(8));
         // 現在 bp = bad+poor = 8、MYBEST = 更新前の 10 → diff = -2
         assert_eq!(skin_state_number(178, state), Some(-2));
-        assert_eq!(skin_state_number(371, state), Some(6));
-        assert!(test_skin_op(321, &[], state));
-        assert!(!test_skin_op(320, &[], state));
+        assert_eq!(skin_state_number(371, state), Some(4));
+        assert!(test_skin_op(320, &[], state));
+        assert!(!test_skin_op(321, &[], state));
         assert!(test_skin_op(330, &[], state));
         assert!(!test_skin_op(1330, &[], state));
         assert!(test_skin_op(331, &[], state));
@@ -18553,6 +18631,8 @@ mod tests {
         assert_eq!(skin_state_number(170, updated_result_state), Some(1700));
         assert_eq!(skin_state_number(152, updated_result_state), Some(200));
         assert_eq!(skin_state_number(183, updated_result_state), Some(85));
+        assert!(test_skin_op(321, &[], updated_result_state));
+        assert!(!test_skin_op(320, &[], updated_result_state));
         assert!((graph_value(113, updated_result_state) - 0.85).abs() < 1e-5);
 
         let zero_rank_state = SkinDrawState {
@@ -19859,21 +19939,27 @@ mod tests {
         };
         let items = document.static_image_render_items(&sources, state);
 
-        let colors = items
+        let segments = items
             .iter()
             .map(|item| match item {
-                SkinRenderItem::RotatedImage { tint, .. } => (
-                    (tint.r * 255.0).round() as i32,
-                    (tint.g * 255.0).round() as i32,
-                    (tint.b * 255.0).round() as i32,
+                SkinRenderItem::RotatedImage { tint, angle_deg, .. } => (
+                    (
+                        (tint.r * 255.0).round() as i32,
+                        (tint.g * 255.0).round() as i32,
+                        (tint.b * 255.0).round() as i32,
+                    ),
+                    *angle_deg as i32,
                 ),
                 _ => panic!("expected rotated judge pie segment"),
             })
             .collect::<Vec<_>>();
+        let colors = segments.iter().map(|(color, _)| *color).collect::<Vec<_>>();
         assert_eq!(
             colors,
             vec![(217, 68, 35), (226, 135, 42), (240, 190, 15), (240, 239, 10), (8, 179, 239),]
         );
+        let angles = segments.iter().map(|(_, angle)| *angle).collect::<Vec<_>>();
+        assert_eq!(angles, vec![-91, -100, -120, -150, -290]);
     }
 
     #[test]
@@ -20180,6 +20266,14 @@ mod tests {
         assert_eq!(skin_state_number(163, state), Some(1));
         // NUMBER_TIMELEFT_SECOND (164) = (90500 / 1000) % 60 = 90 % 60 = 30
         assert_eq!(skin_state_number(164, state), Some(30));
+        let result_state = SkinDrawState {
+            result_failed: Some(false),
+            total_duration_ms: 183_000,
+            ..SkinDrawState::default()
+        };
+        // Starseeker 系の Result BMS DATA は選曲詳細の曲長 ref を流用する。
+        assert_eq!(skin_state_number(1163, result_state), Some(3));
+        assert_eq!(skin_state_number(1164, result_state), Some(3));
     }
 
     #[test]

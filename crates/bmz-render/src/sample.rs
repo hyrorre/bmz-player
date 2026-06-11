@@ -198,6 +198,7 @@ pub fn sample_result_scene() -> AppSceneSnapshot {
         best_bp: Some(15),
         target_bp: Some(0),
         previous_best_ex_score: Some(1600),
+        previous_best_clear_type: Some(bmz_core::clear::ClearType::Easy),
         previous_best_max_combo: Some(800),
         previous_best_bp: Some(20),
         target_clear_type: Some(bmz_core::clear::ClearType::FullCombo),

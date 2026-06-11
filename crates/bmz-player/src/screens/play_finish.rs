@@ -116,6 +116,7 @@ pub fn finish_session_result(
     summary.saved_replay_slots = stored.slot_paths.each_ref().map(Option::is_some);
     if let Some(best) = &previous_best {
         summary.previous_best_ex_score = Some(best.ex_score);
+        summary.previous_best_clear_type = clear_type_from_name(&best.clear_type);
         summary.previous_best_max_combo = Some(best.max_combo);
         summary.previous_best_bp = Some(best.bp);
     }
