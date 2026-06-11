@@ -69,7 +69,7 @@ pub fn build_score_submission(
         chart: build_ir_chart_payload(chart),
         rule: IrRulePayload {
             play_mode: play_mode_payload(chart.metadata.key_mode.as_str()),
-            key_mode: key_mode_payload(chart.metadata.key_mode.as_str()),
+            key_mode: chart.metadata.key_mode.as_str().to_string(),
             gauge: context.gauge_option,
             ln_policy: context.ln_policy,
             effective_ln_mode: effective_ln_mode_payload(context.effective_ln_mode),
@@ -144,7 +144,7 @@ pub fn build_ir_chart_payload(chart: &PlayableChart) -> IrChartPayload {
         genre: chart.metadata.genre.clone(),
         artist: chart.metadata.artist.clone(),
         subartists: subartists(&chart.metadata.subartist),
-        mode: key_mode_payload(chart.metadata.key_mode.as_str()),
+        mode: chart.metadata.key_mode.as_str().to_string(),
         level: parse_play_level(&chart.metadata.play_level),
         total: Some(gauge_total),
         judge: chart.metadata.judge_rank,
@@ -205,17 +205,6 @@ fn effective_ln_mode_payload(mode: LongNoteMode) -> IrEffectiveLnMode {
         LongNoteMode::Cn => IrEffectiveLnMode::Cn,
         LongNoteMode::Hcn => IrEffectiveLnMode::Hcn,
     }
-}
-
-fn key_mode_payload(value: &str) -> String {
-    match value {
-        "5K" => "keys_5",
-        "7K" => "keys_7",
-        "10K" => "keys_10",
-        "14K" => "keys_14",
-        _ => "unknown",
-    }
-    .to_string()
 }
 
 fn play_mode_payload(value: &str) -> String {
@@ -328,7 +317,7 @@ mod tests {
         assert_eq!(payload.result.pass_notes, None);
         assert_eq!(payload.rule.ln_policy, LnScorePolicy::ForceLn);
         assert_eq!(payload.rule.rule_mode, "Beatoraja");
-        assert_eq!(payload.rule.key_mode, "keys_7");
+        assert_eq!(payload.rule.key_mode, "7K");
         assert_eq!(
             payload.play_options.get("device_type"),
             Some(&serde_json::Value::String("controller".to_string()))
@@ -390,6 +379,7 @@ mod tests {
 
         let payload = build_ir_chart_payload(&chart);
 
+        assert_eq!(payload.mode, "7K");
         assert_eq!(payload.md5.as_deref(), Some("abababababababababababababababab"));
         assert_eq!(payload.level, Some(12));
         assert_eq!(payload.judge, Some(3));

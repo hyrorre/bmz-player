@@ -199,7 +199,7 @@ mod tests {
                     "has_defined_cn": false,
                     "has_defined_hcn": false
                 },
-                "mode": "keys_7",
+                "mode": "7K",
                 "notes": {"total": 1, "ln": 0, "cn": 0, "hcn": 0, "mine": 0},
                 "features": {
                     "random": false, "stop": false, "ln": false,
@@ -208,7 +208,7 @@ mod tests {
             },
             "rule": {
                 "play_mode": "single",
-                "key_mode": "keys_7",
+                "key_mode": "7K",
                 "gauge": "Normal",
                 "ln_policy": "ForceLn",
                 "effective_ln_mode": "ln",
