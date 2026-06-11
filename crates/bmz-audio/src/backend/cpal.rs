@@ -104,7 +104,7 @@ pub enum CpalBackendError {
 
 impl CpalBackend {
     pub fn open_default(engine: SharedAudioEngine) -> Result<CpalOutput, CpalBackendError> {
-        let mut shared = Self::open_shared_default()?;
+        let shared = Self::open_shared_default()?;
         shared.play()?;
         let source = shared.add_source(engine);
         Ok(CpalOutput { _shared: shared, source })
@@ -370,7 +370,7 @@ impl CpalOutput {
 }
 
 impl CpalSharedOutput {
-    pub fn play(&mut self) -> Result<(), CpalBackendError> {
+    pub fn play(&self) -> Result<(), CpalBackendError> {
         self.inner.stream.play()?;
         Ok(())
     }
