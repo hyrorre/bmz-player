@@ -64,6 +64,9 @@ const user = useSupabaseUser()
           <UButton color="neutral" icon="i-lucide-list-music" size="xl" to="/charts" variant="subtle">
             譜面一覧・ランキング
           </UButton>
+          <UButton color="neutral" icon="i-lucide-medal" size="xl" to="/courses" variant="subtle">
+            コース・段位
+          </UButton>
           <UButton
             v-if="user"
             color="neutral"
