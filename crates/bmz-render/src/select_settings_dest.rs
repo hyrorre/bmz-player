@@ -585,7 +585,7 @@ mod tests {
         ));
     }
 
-    fn destination_at<'a>(document: &'a SkinDocument, index: usize) -> &'a SkinDestinationDef {
+    fn destination_at(document: &SkinDocument, index: usize) -> &SkinDestinationDef {
         match &document.destination[index] {
             DestinationListEntry::Single(destination) => destination,
             DestinationListEntry::Conditional { .. } => panic!("unexpected conditional"),

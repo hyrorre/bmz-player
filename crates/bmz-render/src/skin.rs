@@ -13802,12 +13802,16 @@ mod tests {
         // `row.replay_slots`, so swapping row.kind must not change the
         // result.  This locks the invariant for future refactors.
         use crate::scene::{SelectRowKind, SelectRowSnapshot};
-        let mut song = SelectRowSnapshot::default();
-        song.kind = SelectRowKind::Song;
-        song.replay_slots = [false, true, false, true];
-        let mut course = SelectRowSnapshot::default();
-        course.kind = SelectRowKind::Course;
-        course.replay_slots = [false, true, false, true];
+        let song = SelectRowSnapshot {
+            kind: SelectRowKind::Song,
+            replay_slots: [false, true, false, true],
+            ..SelectRowSnapshot::default()
+        };
+        let course = SelectRowSnapshot {
+            kind: SelectRowKind::Course,
+            replay_slots: [false, true, false, true],
+            ..SelectRowSnapshot::default()
+        };
 
         assert_eq!(select_row_replay_index(&song), Some(1));
         assert_eq!(select_row_replay_index(&course), Some(1));
@@ -15139,7 +15143,7 @@ mod tests {
             .map(|index| SkinImageDef {
                 id: format!("node-{index}"),
                 src: "1".to_string(),
-                x: index as i32,
+                x: index,
                 y: 0,
                 w: 1,
                 h: 1,
@@ -15214,7 +15218,7 @@ mod tests {
             .map(|index| SkinImageDef {
                 id: format!("node-{index}"),
                 src: "1".to_string(),
-                x: index as i32,
+                x: index,
                 y: 0,
                 w: 1,
                 h: 1,
@@ -15362,7 +15366,7 @@ mod tests {
             .map(|index| SkinImageDef {
                 id: format!("node-{index}"),
                 src: "1".to_string(),
-                x: index as i32,
+                x: index,
                 y: 0,
                 w: 1,
                 h: 1,
