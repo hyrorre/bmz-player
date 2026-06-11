@@ -5,6 +5,96 @@ Codex に最終レビューと実装を引き継ぐための設計まとめ。
 
 ---
 
+## 実装状況 (2026-06-11)
+
+以下は本メモを元に実装済みの範囲と、設計からの主な差分。
+ソースの所在: クライアントは `crates/bmz-player/src/ir/`、サーバーは
+`bmz-ir-web/server/`、DB は `supabase/migrations/`。
+
+### 実装済み API
+
+```http
+POST   /api/v1/auth/login                      # email+password → access/refresh token
+POST   /api/v1/auth/refresh
+GET    /api/v1/me
+POST   /api/v1/scores                          # include=rankings&ranking_scopes=... 対応
+GET    /api/v1/scores/{id}                     # スコア詳細 (公開)
+GET    /api/v1/charts                          # 譜面一覧 (?q= タイトル検索)
+GET    /api/v1/charts/{sha256}                 # 詳細 + play_count/clear_count 集計
+GET    /api/v1/charts/{sha256}/ranking         # scope/gauge/ln_policy/limit/offset
+GET    /api/v1/rivals
+POST   /api/v1/rivals                          # { target_player_id, action: add|remove }
+GET    /api/v1/players/{id}                    # プロフィール + best scores
+GET    /api/v1/device-keys                     # 自分の署名鍵一覧
+POST   /api/v1/device-keys                     # 公開鍵登録 (同一鍵は再利用)
+DELETE /api/v1/device-keys/{id}                # 失効 (revoked_at)
+POST   /api/v1/scores/{id}/replay/upload-url   # 署名付きアップロード URL
+POST   /api/v1/scores/{id}/replay/verify       # storage 実体の hash 検証
+GET    /api/v1/scores/{id}/replay              # 署名付きダウンロード URL (公開)
+```
+
+未実装: `PUT /api/v1/charts/{sha256}` (chart upsert は score submit 内で実施)、
+`DELETE /api/v1/rivals/{player_id}` (POST の action=remove で代替)、
+course score 系、tables 系。
+
+### クライアント (bmz-player)
+
+- CLI: `bmz ir login|logout|status|ranking|sync|rivals|device-key|replay`。
+  egui プロファイル設定からもログイン可能。
+- 送信: リザルト確定時に `ir_score_jobs` へ enqueue (send_policy 判定込み) →
+  リザルト画面で即時送信 + アプリ常駐ワーカー (30 秒間隔) が残りを処理。
+  リトライは 1分 → 5分 → 30分 → 2時間 → 以降24時間。
+- ランキング表示: Result / Select スキンの `NUMBER_IR_RANK(179)` /
+  `NUMBER_IR_TOTALPLAYER(180/200)` / `NUMBER_IR_CLEARRATE(181)` /
+  `OPTION_IR_LOADING/LOADED/NOPLAYER/FAILED(601..604)`、
+  Select の `STRING_RIVAL(1)` / `NUMBER_RIVAL_SCORE(271)` /
+  `NUMBER_RIVAL_MAXCOMBO(275)` / `NUMBER_RIVAL_MISSCOUNT(276)` /
+  `OPTION_(NOT_)COMPARE_RIVAL(624/625)`。egui のリザルトオーバーレイもあり。
+- ターゲット: `TARGET: RIVAL` (TargetOption::Rival) が選曲時の IR ライバル
+  ベスト EX をプレイ中ゴースト / リザルト差分に使う。
+- ライバル: `ir rivals` 実行時に `profile.rival.entries` (source=Ir) へ同期。
+- リプレイ: 送信 payload に hash 申告 → 送信成功後に自動アップロード + 検証。
+  `bmz ir replay <SCORE_ID>` でダウンロードし
+  `bmz --boot-replay-file <PATH>` で再生。
+
+### 設計からの主な差分
+
+1. **認証**: OAuth/OIDC device flow ではなく email+password
+   (`/api/v1/auth/login`, Supabase password grant) を採用。device flow は将来課題。
+2. **秘密情報の保存先**: `profile.toml` の `[ir] credential_store = "File" | "Os"`。
+   既定は File (プロファイル配下 0600 JSON)。開発時の Keychain 許可ダイアログを
+   避けるためで、`"Os"` にすると keyring 経由で OS credential store に保存し、
+   既存ファイルは初回アクセスで自動移行する。
+   Linux ビルドは Secret Service 用に libdbus が必要。
+3. **provider 設定**: `IrProviderConfig` に `base_url` を追加。
+4. **verification**: DB は `unverified / signed / invalid / trusted` の 4 値。
+   `replay_uploaded / verified` はスコアの verification ではなく
+   `replay_objects.status` (`metadata_only / pending_upload / uploaded /
+   verified / rejected`) で管理する。署名不正 (`invalid`) のスコアは履歴には
+   残るが best_scores を更新しない。
+5. **tamper evidence**: canonical form は「evidence を除いた payload を
+   キー昇順 compact JSON 化」したもの (serde_json BTreeMap / サーバー側は
+   stableStringify)。署名は Ed25519(secret, SHA256(canonical))。
+6. **ranking response**: `pagination.total` (scope 内総数) と
+   `ranking.clear_rate` (%) を追加。`NUMBER_IR_PREVRANK(182)` は未対応 (None)。
+7. **played_at**: クライアントは unix 秒で送る。サーバーが ISO へ正規化して
+   timestamptz に保存する。
+8. **course score / tables / around_self の専用実装**: 未着手。
+   `around_self` は現状 global と同じ扱い。
+
+### 動作確認の手順 (ローカル)
+
+```bash
+bun run db:start && bun run db:reset   # local Supabase
+bun run dev                            # http://localhost:3000
+bmz ir login --email <EMAIL> --base-url http://localhost:3000
+bmz ir status                          # connection: OK を確認
+# 1 曲プレイするとリザルトで送信 + リプレイ自動アップロード
+bmz ir ranking <SHA256> --gauge Normal --ln-policy ForceLn
+```
+
+---
+
 ## 0. 前提・設計ゴール
 
 ### 前提
