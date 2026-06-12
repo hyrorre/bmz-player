@@ -24,11 +24,15 @@ export default defineNuxtConfig({
       ? {
           dialect: 'sqlite',
           driver: 'd1',
+          migrationsDirs: ['server/db/migrations'],
           connection: {
             databaseId: cloudflareD1DatabaseId,
           },
         }
-      : 'sqlite',
+      : {
+          dialect: 'sqlite',
+          migrationsDirs: ['server/db/migrations'],
+        },
     blob: isCloudflareBuild
       ? {
           driver: 'cloudflare-r2',

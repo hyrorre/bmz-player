@@ -9,8 +9,8 @@ Codex に最終レビューと実装を引き継ぐための設計まとめ。
 
 以下は本メモを元に実装済みの範囲と、設計からの主な差分。
 ソースの所在: クライアントは `crates/bmz-player/src/ir/`、サーバーは
-`bmz-ir-web/server/`、DB schema は `bmz-ir-web/server/db/schema.ts` と
-`bmz-ir-web/server/db/migrations/sqlite/`。
+`bmz-ir-web/server/`、DB schema は `bmz-ir-web/server/db/schema.ts`、
+DB migration は `server/db/migrations/sqlite/`。
 
 ### 実装済み API
 
@@ -2198,7 +2198,8 @@ GET  /api/v1/courses/{course_id}/ranking
 ### NuxtHub DB
 
 - Schema は `bmz-ir-web/server/db/schema.ts` の Drizzle schema を正とする。
-- Migration は `bmz-ir-web/server/db/migrations/sqlite/` に生成する。
+- Migration は NuxtHub CLI / drizzle-kit の既定に合わせて
+  `server/db/migrations/sqlite/` に生成する。
 - server route は `hub:db` の Drizzle client 経由で DB を読む。
 
 ### Transaction

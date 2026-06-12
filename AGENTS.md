@@ -550,9 +550,9 @@ Nuxt 関連のアプリ構造は、bmz-player 本体と混同しないよう `bm
 IR Website の DB は NuxtHub DB + Drizzle ORM の schema / migration を正とします。
 
 - DB schema は `bmz-ir-web/server/db/schema.ts` を source of truth とします。
-- migration は `bmz-ir-web/server/db/migrations/sqlite/` に置きます。
+- migration は NuxtHub CLI / drizzle-kit の既定に合わせて `server/db/migrations/sqlite/` に置きます。
 - migration 生成は `bun run db:generate`、ローカル適用は `bun run db:migrate` を使います。
-- NuxtHub v0.10 系では custom `serverDir` でも生成先が root `server/db/migrations` になるため、現状は `server/db/migrations` symlink 経由で `bmz-ir-web/server/db/migrations` を参照します。
+- `bmz-ir-web/server/db/` には schema など server 実装側の DB code を置き、migration file は root `server/db/migrations` に集約します。
 - Cloudflare deploy は NuxtHub が生成する `.output/server/wrangler.json` を使います。D1 binding は `DB`、R2 binding は `BLOB`。
 - リプレイ blob は `hub:blob` 経由で保存します。ローカルは `.data/blob`、Cloudflare build は R2 bucket (`NUXT_HUB_BLOB_BUCKET`) を使います。
 - `NUXT_HUB_CLOUDFLARE_DATABASE_ID` の未設定時は型生成/ローカル build 用の dummy ID になります。production deploy 前に必ず実 D1 database id を `.env` または secrets/CI env に設定します。
