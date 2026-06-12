@@ -109,13 +109,13 @@ pub fn lane_label(lane: LaneConfig) -> &'static str {
         LaneConfig::Key5 => "KEY 5",
         LaneConfig::Key6 => "KEY 6",
         LaneConfig::Key7 => "KEY 7",
-        LaneConfig::Key8 => "KEY 8",
-        LaneConfig::Key9 => "KEY 9",
-        LaneConfig::Key10 => "KEY 10",
-        LaneConfig::Key11 => "KEY 11",
-        LaneConfig::Key12 => "KEY 12",
-        LaneConfig::Key13 => "KEY 13",
-        LaneConfig::Key14 => "KEY 14",
+        LaneConfig::Key8 => "2P KEY 1",
+        LaneConfig::Key9 => "2P KEY 2",
+        LaneConfig::Key10 => "2P KEY 3",
+        LaneConfig::Key11 => "2P KEY 4",
+        LaneConfig::Key12 => "2P KEY 5",
+        LaneConfig::Key13 => "2P KEY 6",
+        LaneConfig::Key14 => "2P KEY 7",
     }
 }
 
@@ -801,6 +801,14 @@ mod tests {
 
     fn action_target(action: InputActionConfig, slot: KeyBindingSlot) -> KeyBindingTarget {
         KeyBindingTarget::Action { action, slot }
+    }
+
+    #[test]
+    fn lane_label_names_double_play_keys_by_side() {
+        assert_eq!(lane_label(LaneConfig::Key1), "KEY 1");
+        assert_eq!(lane_label(LaneConfig::Key7), "KEY 7");
+        assert_eq!(lane_label(LaneConfig::Key8), "2P KEY 1");
+        assert_eq!(lane_label(LaneConfig::Key14), "2P KEY 7");
     }
 
     #[test]

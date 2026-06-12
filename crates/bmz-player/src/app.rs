@@ -2894,23 +2894,23 @@ impl WinitApp {
             self.arrange_option_2p = self.arrange_option_2p.cycle_prev();
             tracing::info!(arrange_2p = self.arrange_option_2p.as_str(), "2P arrange changed");
             true
-        } else if self.select_keys.is_key3(control) {
+        } else if self.select_keys.is_ui_key3(control) {
             self.gauge_option = cycle_gauge_option(self.gauge_option);
             tracing::info!(gauge = ?self.gauge_option, "gauge option changed");
             true
-        } else if self.select_keys.is_key4(control) {
+        } else if self.select_keys.is_ui_key4(control) {
             self.gauge_option = cycle_gauge_option_prev(self.gauge_option);
             tracing::info!(gauge = ?self.gauge_option, "gauge option changed");
             true
-        } else if self.select_keys.is_key5(control) {
+        } else if self.select_keys.is_ui_key5(control) {
             self.hs_fix_option = self.hs_fix_option.cycle();
             tracing::info!(hs_fix = self.hs_fix_option.as_str(), "HS-FIX option changed");
             true
-        } else if self.select_keys.is_key6(control) {
+        } else if self.select_keys.is_ui_key6(control) {
             self.double_option = self.double_option.cycle();
             tracing::info!(double_option = self.double_option.as_str(), "double option changed");
             true
-        } else if self.select_keys.is_key7(control) {
+        } else if self.select_keys.is_ui_key7(control) {
             self.set_assist_option(self.assist_option.cycle());
             tracing::info!(assist = self.assist_option.as_str(), "assist option changed");
             true
@@ -2943,7 +2943,9 @@ impl WinitApp {
     }
 
     fn apply_detail_option_control(&mut self, control: &str) -> bool {
-        if self.select_keys.cycle_bga.as_deref() == Some(control) {
+        if self.select_keys.cycle_bga.as_deref() == Some(control)
+            || self.select_keys.is_ui_key1(control)
+        {
             self.cycle_bga_option();
             true
         } else if let Some(delta_ms) = visual_offset_delta_control(control, &self.select_keys) {
@@ -3126,6 +3128,14 @@ impl WinitApp {
                 return;
             }
             if let Some(action) = decide_action(event.physical_key, event.state, event.repeat) {
+                self.begin_decide_fadeout(matches!(action, DecideAction::Cancel));
+                return;
+            }
+            if event.state == ElementState::Pressed
+                && !event.repeat
+                && let Some(control) = physical_key_name(event.physical_key)
+                && let Some(action) = decide_control_action(&control, &self.select_keys)
+            {
                 self.begin_decide_fadeout(matches!(action, DecideAction::Cancel));
             }
             return;
@@ -3699,8 +3709,8 @@ impl WinitApp {
             // アナログ軸にバインドされたスクラッチは tick 比例スクロール
             // (advance_select_analog_scroll) で処理する。beatoraja の isNonAnalogPressed 相当。
             if button.starts_with("Axis")
-                && (self.select_keys.is_scratch_up(button)
-                    || self.select_keys.is_scratch_down(button))
+                && (self.select_keys.is_select_scratch_up(button)
+                    || self.select_keys.is_select_scratch_down(button))
             {
                 return;
             }
@@ -3711,13 +3721,13 @@ impl WinitApp {
                     "DPadLeft" | "Select" => Some(SelectAction::ExitFolder),
                     "DPadRight" | "Button1" => Some(SelectAction::EnterOrPlay),
                     _ => {
-                        if self.select_keys.is_scratch_up(button) {
-                            if self.select_keys.is_scratch_down(button) {
+                        if self.select_keys.is_select_scratch_up(button) {
+                            if self.select_keys.is_select_scratch_down(button) {
                                 Some(SelectAction::Move(SelectMove::Next))
                             } else {
                                 Some(SelectAction::Move(SelectMove::Previous))
                             }
-                        } else if self.select_keys.is_scratch_down(button) {
+                        } else if self.select_keys.is_select_scratch_down(button) {
                             Some(SelectAction::Move(SelectMove::Next))
                         } else if self.select_keys.is_enter(button) {
                             Some(SelectAction::EnterOrPlay)
@@ -6194,6 +6204,11 @@ impl WinitApp {
     }
 
     fn result_lane_for_control(&self, control: &PhysicalControl) -> Option<Lane> {
+        if let Some(control_name) = physical_control_name(control)
+            && let Some(lane) = self.select_keys.ui_lane_for_control(control_name)
+        {
+            return Some(lane);
+        }
         let key_mode = self.finished_play.as_ref()?.summary.key_mode;
         crate::config::play::lane_binding_for_chart(&self.boot.profile_config.input, key_mode)
             .resolve(DeviceId(0), control)
@@ -9738,7 +9753,7 @@ fn should_toggle_select_gauge_auto_shift(
     select_held: bool,
     bindings: &SelectKeyBindings,
 ) -> bool {
-    start_held && (select_held || bindings.is_e2_action(control)) && bindings.is_key2(control)
+    start_held && (select_held || bindings.is_e2_action(control)) && bindings.is_ui_key2(control)
 }
 
 fn arrange_option_from_profile(random: RandomOptionConfig) -> ArrangeOption {
@@ -10597,13 +10612,13 @@ fn select_action(
         Some(SelectAction::EnterOrPlay)
     } else if bindings.is_back(&control) {
         Some(SelectAction::ExitFolder)
-    } else if bindings.is_scratch_up(&control) {
-        if bindings.is_scratch_down(&control) {
+    } else if bindings.is_select_scratch_up(&control) {
+        if bindings.is_select_scratch_down(&control) {
             Some(SelectAction::Move(SelectMove::Next))
         } else {
             Some(SelectAction::Move(SelectMove::Previous))
         }
-    } else if bindings.is_scratch_down(&control) {
+    } else if bindings.is_select_scratch_down(&control) {
         Some(SelectAction::Move(SelectMove::Next))
     } else {
         None
@@ -10829,9 +10844,9 @@ fn play_option_control(control: &str, bindings: &SelectKeyBindings) -> Option<Pl
 }
 
 fn visual_offset_delta_control(control: &str, bindings: &SelectKeyBindings) -> Option<i32> {
-    if bindings.is_key5(control) {
+    if bindings.is_ui_key5(control) {
         Some(-1)
-    } else if bindings.is_key7(control) {
+    } else if bindings.is_ui_key7(control) {
         Some(1)
     } else {
         None
@@ -11010,6 +11025,10 @@ fn decide_action(
         PhysicalKey::Code(KeyCode::Escape) => Some(DecideAction::Cancel),
         _ => None,
     }
+}
+
+fn decide_control_action(control: &str, bindings: &SelectKeyBindings) -> Option<DecideAction> {
+    bindings.is_enter(control).then_some(DecideAction::Confirm)
 }
 
 fn elapsed_since(started_at: Instant) -> TimeUs {
@@ -11261,6 +11280,15 @@ fn physical_key_name(physical_key: PhysicalKey) -> Option<String> {
     }
 }
 
+fn physical_control_name(control: &PhysicalControl) -> Option<&str> {
+    match control {
+        PhysicalControl::KeyboardKey(name) | PhysicalControl::GamepadButton(name) => {
+            Some(name.as_str())
+        }
+        PhysicalControl::HidButton(_) => None,
+    }
+}
+
 fn digit_to_replay_slot(physical_key: PhysicalKey) -> Option<u8> {
     match physical_key {
         PhysicalKey::Code(KeyCode::Digit1) => Some(0),
@@ -11291,9 +11319,9 @@ fn target_cycle_from_control(control: &str, bindings: &SelectKeyBindings) -> Opt
         "ScratchDown" => return Some(TargetCycle::Next),
         _ => {}
     }
-    if bindings.is_scratch_up(control) {
+    if bindings.is_select_scratch_up(control) {
         Some(TargetCycle::Previous)
-    } else if bindings.is_scratch_down(control) {
+    } else if bindings.is_select_scratch_down(control) {
         Some(TargetCycle::Next)
     } else {
         None
@@ -11315,10 +11343,17 @@ struct SelectKeyBindings {
     key7_controls: Vec<String>,
     key8_controls: Vec<String>,
     key9_controls: Vec<String>,
+    key10_controls: Vec<String>,
+    key11_controls: Vec<String>,
+    key12_controls: Vec<String>,
+    key13_controls: Vec<String>,
+    key14_controls: Vec<String>,
     hispeed_down_controls: Vec<String>,
     hispeed_up_controls: Vec<String>,
     scratch_up_controls: Vec<String>,
     scratch_down_controls: Vec<String>,
+    select_scratch_up_controls: Vec<String>,
+    select_scratch_down_controls: Vec<String>,
     cycle_assist: Option<String>,
     cycle_bga: Option<String>,
     key_hint: String,
@@ -11329,7 +11364,8 @@ impl SelectKeyBindings {
     fn from_profile(input: &ProfileInputConfig) -> Self {
         use crate::config::play_input::resolve_play_bindings;
 
-        let play_7k = resolve_play_bindings(input, bmz_core::lane::KeyMode::K7).unwrap_or_default();
+        let play_7k = resolve_play_bindings(input, KeyMode::K7).unwrap_or_default();
+        let play_14k = resolve_play_bindings(input, KeyMode::K14).unwrap_or_default();
         let kb: Vec<_> = input.ui.bindings.iter().filter(|e| e.device == "keyboard").collect();
         let play_kb: Vec<_> = play_7k.iter().filter(|e| e.device == "keyboard").collect();
         let all_input: Vec<_> = input
@@ -11340,6 +11376,8 @@ impl SelectKeyBindings {
             .collect();
         let play_all: Vec<_> =
             play_7k.iter().filter(|e| e.device == "keyboard" || e.device == "gamepad").collect();
+        let play_14k_all: Vec<_> =
+            play_14k.iter().filter(|e| e.device == "keyboard" || e.device == "gamepad").collect();
 
         // キーボード専用（ヒント文字列表示用）
         let kb_keys_for = |lane: LaneConfig| -> Vec<String> {
@@ -11349,6 +11387,13 @@ impl SelectKeyBindings {
         // キーボード + ゲームパッド（is_enter / is_back ルックアップ用）
         let keys_for = |lane: LaneConfig| -> Vec<String> {
             play_all.iter().filter(|e| e.lane == Some(lane)).map(|e| e.control.clone()).collect()
+        };
+        let keys_for_2p = |lane: LaneConfig| -> Vec<String> {
+            play_14k_all
+                .iter()
+                .filter(|e| e.lane == Some(lane))
+                .map(|e| e.control.clone())
+                .collect()
         };
         let kb_actions_for = |action: InputActionConfig| -> Vec<String> {
             kb.iter().filter(|e| e.action == Some(action)).map(|e| e.control.clone()).collect()
@@ -11361,19 +11406,6 @@ impl SelectKeyBindings {
                 .collect()
         };
 
-        let lane_enter: Vec<String> =
-            [LaneConfig::Key1, LaneConfig::Key3, LaneConfig::Key5, LaneConfig::Key7]
-                .iter()
-                .flat_map(|&l| keys_for(l))
-                .collect();
-        let lane_back: Vec<String> = [LaneConfig::Key2, LaneConfig::Key4, LaneConfig::Key6]
-            .iter()
-            .flat_map(|&l| keys_for(l))
-            .collect();
-        let enter = merge_select_controls(actions_for(InputActionConfig::SelectEnter), lane_enter);
-        let back = merge_select_controls(actions_for(InputActionConfig::E2), lane_back);
-        let e2_action_controls = actions_for(InputActionConfig::E2);
-        let e3_action_controls = actions_for(InputActionConfig::E3);
         let key1_controls = keys_for(LaneConfig::Key1);
         let key2_controls = keys_for(LaneConfig::Key2);
         let key3_controls = keys_for(LaneConfig::Key3);
@@ -11381,8 +11413,38 @@ impl SelectKeyBindings {
         let key5_controls = keys_for(LaneConfig::Key5);
         let key6_controls = keys_for(LaneConfig::Key6);
         let key7_controls = keys_for(LaneConfig::Key7);
-        let key8_controls = keys_for(LaneConfig::Key8);
-        let key9_controls = keys_for(LaneConfig::Key9);
+        let key8_controls = keys_for_2p(LaneConfig::Key8);
+        let key9_controls = keys_for_2p(LaneConfig::Key9);
+        let key10_controls = keys_for_2p(LaneConfig::Key10);
+        let key11_controls = keys_for_2p(LaneConfig::Key11);
+        let key12_controls = keys_for_2p(LaneConfig::Key12);
+        let key13_controls = keys_for_2p(LaneConfig::Key13);
+        let key14_controls = keys_for_2p(LaneConfig::Key14);
+
+        let lane_enter_1p: Vec<String> =
+            [LaneConfig::Key1, LaneConfig::Key3, LaneConfig::Key5, LaneConfig::Key7]
+                .iter()
+                .flat_map(|&l| keys_for(l))
+                .collect();
+        let lane_enter_2p: Vec<String> =
+            [LaneConfig::Key8, LaneConfig::Key10, LaneConfig::Key12, LaneConfig::Key14]
+                .iter()
+                .flat_map(|&l| keys_for_2p(l))
+                .collect();
+        let lane_enter = merge_select_controls(lane_enter_1p, lane_enter_2p);
+        let lane_back_1p: Vec<String> = [LaneConfig::Key2, LaneConfig::Key4, LaneConfig::Key6]
+            .iter()
+            .flat_map(|&l| keys_for(l))
+            .collect();
+        let lane_back_2p: Vec<String> = [LaneConfig::Key9, LaneConfig::Key11, LaneConfig::Key13]
+            .iter()
+            .flat_map(|&l| keys_for_2p(l))
+            .collect();
+        let lane_back = merge_select_controls(lane_back_1p, lane_back_2p);
+        let enter = merge_select_controls(actions_for(InputActionConfig::SelectEnter), lane_enter);
+        let back = merge_select_controls(actions_for(InputActionConfig::E2), lane_back);
+        let e2_action_controls = actions_for(InputActionConfig::E2);
+        let e3_action_controls = actions_for(InputActionConfig::E3);
         let hispeed_down_controls: Vec<String> =
             [LaneConfig::Key1, LaneConfig::Key3, LaneConfig::Key5, LaneConfig::Key7]
                 .iter()
@@ -11395,23 +11457,23 @@ impl SelectKeyBindings {
                 .collect();
         let mut scratch_up_controls = Vec::new();
         let mut scratch_down_controls = Vec::new();
+        let mut select_scratch_up_controls = Vec::new();
+        let mut select_scratch_down_controls = Vec::new();
         for entry in play_all.iter().filter(|e| e.lane == Some(LaneConfig::Scratch)) {
-            let control = entry.control.clone();
-            // 明示の direction タグを最優先し、無ければコントロール名から推測する。
-            match entry.scratch {
-                Some(ScratchDirectionConfig::Up) => scratch_up_controls.push(control),
-                Some(ScratchDirectionConfig::Down) => scratch_down_controls.push(control),
-                None => {
-                    if is_scratch_up_control(&control) {
-                        scratch_up_controls.push(control);
-                    } else if is_scratch_down_control(&control) {
-                        scratch_down_controls.push(control);
-                    } else {
-                        scratch_up_controls.push(control.clone());
-                        scratch_down_controls.push(control);
-                    }
-                }
-            }
+            push_scratch_controls(entry, &mut scratch_up_controls, &mut scratch_down_controls);
+            push_scratch_controls(
+                entry,
+                &mut select_scratch_up_controls,
+                &mut select_scratch_down_controls,
+            );
+        }
+        for entry in play_14k_all.iter().filter(|e| e.lane == Some(LaneConfig::Scratch2)) {
+            push_scratch_controls(entry, &mut scratch_up_controls, &mut scratch_down_controls);
+            push_scratch_controls(
+                entry,
+                &mut select_scratch_up_controls,
+                &mut select_scratch_down_controls,
+            );
         }
         let cycle_assist = select_control_with_lane_fallback(
             actions_for(InputActionConfig::SelectOptionAssist),
@@ -11496,10 +11558,17 @@ impl SelectKeyBindings {
             key7_controls,
             key8_controls,
             key9_controls,
+            key10_controls,
+            key11_controls,
+            key12_controls,
+            key13_controls,
+            key14_controls,
             hispeed_down_controls,
             hispeed_up_controls,
             scratch_up_controls,
             scratch_down_controls,
+            select_scratch_up_controls,
+            select_scratch_down_controls,
             cycle_assist,
             cycle_bga,
             key_hint,
@@ -11555,6 +11624,74 @@ impl SelectKeyBindings {
         self.key9_controls.iter().any(|k| k == control)
     }
 
+    fn is_key10(&self, control: &str) -> bool {
+        self.key10_controls.iter().any(|k| k == control)
+    }
+
+    fn is_key11(&self, control: &str) -> bool {
+        self.key11_controls.iter().any(|k| k == control)
+    }
+
+    fn is_key12(&self, control: &str) -> bool {
+        self.key12_controls.iter().any(|k| k == control)
+    }
+
+    fn is_key13(&self, control: &str) -> bool {
+        self.key13_controls.iter().any(|k| k == control)
+    }
+
+    fn is_key14(&self, control: &str) -> bool {
+        self.key14_controls.iter().any(|k| k == control)
+    }
+
+    fn is_ui_key1(&self, control: &str) -> bool {
+        self.is_key1(control) || self.is_key8(control)
+    }
+
+    fn is_ui_key2(&self, control: &str) -> bool {
+        self.is_key2(control) || self.is_key9(control)
+    }
+
+    fn is_ui_key3(&self, control: &str) -> bool {
+        self.is_key3(control) || self.is_key10(control)
+    }
+
+    fn is_ui_key4(&self, control: &str) -> bool {
+        self.is_key4(control) || self.is_key11(control)
+    }
+
+    fn is_ui_key5(&self, control: &str) -> bool {
+        self.is_key5(control) || self.is_key12(control)
+    }
+
+    fn is_ui_key6(&self, control: &str) -> bool {
+        self.is_key6(control) || self.is_key13(control)
+    }
+
+    fn is_ui_key7(&self, control: &str) -> bool {
+        self.is_key7(control) || self.is_key14(control)
+    }
+
+    fn ui_lane_for_control(&self, control: &str) -> Option<Lane> {
+        if self.is_ui_key1(control) {
+            Some(Lane::Key1)
+        } else if self.is_ui_key2(control) {
+            Some(Lane::Key2)
+        } else if self.is_ui_key3(control) {
+            Some(Lane::Key3)
+        } else if self.is_ui_key4(control) {
+            Some(Lane::Key4)
+        } else if self.is_ui_key5(control) {
+            Some(Lane::Key5)
+        } else if self.is_ui_key6(control) {
+            Some(Lane::Key6)
+        } else if self.is_ui_key7(control) {
+            Some(Lane::Key7)
+        } else {
+            None
+        }
+    }
+
     fn is_e2_action(&self, control: &str) -> bool {
         self.e2_action_controls.iter().any(|k| k == control)
     }
@@ -11578,6 +11715,14 @@ impl SelectKeyBindings {
     fn is_scratch_down(&self, control: &str) -> bool {
         self.scratch_down_controls.iter().any(|k| k == control)
     }
+
+    fn is_select_scratch_up(&self, control: &str) -> bool {
+        self.select_scratch_up_controls.iter().any(|k| k == control)
+    }
+
+    fn is_select_scratch_down(&self, control: &str) -> bool {
+        self.select_scratch_down_controls.iter().any(|k| k == control)
+    }
 }
 
 /// アナログ tick の選曲スクロール寄与を返す。Next 方向を正とする。
@@ -11587,9 +11732,9 @@ fn select_analog_scroll_delta(axis: &str, ticks: i32, bindings: &SelectKeyBindin
         return None;
     }
     let control = format!("{}{}", axis, if ticks > 0 { "+" } else { "-" });
-    if bindings.is_scratch_down(&control) {
+    if bindings.is_select_scratch_down(&control) {
         Some(ticks.abs())
-    } else if bindings.is_scratch_up(&control) {
+    } else if bindings.is_select_scratch_up(&control) {
         Some(-ticks.abs())
     } else {
         None
@@ -11618,6 +11763,29 @@ fn take_analog_scroll_steps(buffer: &mut i32, ticks_per_scroll: i32) -> i32 {
     let steps = *buffer / ticks_per_scroll;
     *buffer %= ticks_per_scroll;
     steps
+}
+
+fn push_scratch_controls(
+    entry: &crate::config::profile_config::BindingConfigEntry,
+    up_controls: &mut Vec<String>,
+    down_controls: &mut Vec<String>,
+) {
+    let control = entry.control.clone();
+    // 明示の direction タグを最優先し、無ければコントロール名から推測する。
+    match entry.scratch {
+        Some(ScratchDirectionConfig::Up) => up_controls.push(control),
+        Some(ScratchDirectionConfig::Down) => down_controls.push(control),
+        None => {
+            if is_scratch_up_control(&control) {
+                up_controls.push(control);
+            } else if is_scratch_down_control(&control) {
+                down_controls.push(control);
+            } else {
+                up_controls.push(control.clone());
+                down_controls.push(control);
+            }
+        }
+    }
 }
 
 fn merge_select_controls(configured: Vec<String>, lane_controls: Vec<String>) -> Vec<String> {
@@ -12024,6 +12192,28 @@ mod tests {
         SelectKeyBindings::from_profile(&crate::config::play_input::default_profile_input())
     }
 
+    fn select_keys_with_full_2p_bindings() -> SelectKeyBindings {
+        let mut input = crate::config::play_input::default_profile_input();
+        let key = KeyMode::K14.play_map_key().to_string();
+        input.play.insert(
+            key.clone(),
+            crate::config::profile_config::PlayModeInputConfig {
+                inherit: None,
+                bindings: crate::config::play_input::default_play_14k_bindings(),
+            },
+        );
+        let play14 = input.play.get_mut(&key).expect("14K bindings");
+        play14.bindings.push(crate::config::play_input::play_binding("P2K6", LaneConfig::Key13));
+        play14.bindings.push(crate::config::play_input::play_binding("P2K7", LaneConfig::Key14));
+        play14
+            .bindings
+            .push(crate::config::play_input::gamepad_play_binding("Button13", LaneConfig::Key13));
+        play14
+            .bindings
+            .push(crate::config::play_input::gamepad_play_binding("Button14", LaneConfig::Key14));
+        SelectKeyBindings::from_profile(&input)
+    }
+
     #[test]
     fn select_action_maps_start_and_vertical_movement() {
         let keys = default_select_keys();
@@ -12038,6 +12228,24 @@ mod tests {
         assert_eq!(
             select_action(
                 PhysicalKey::Code(KeyCode::ArrowDown),
+                ElementState::Pressed,
+                false,
+                &keys
+            ),
+            Some(SelectAction::Move(SelectMove::Next))
+        );
+        assert_eq!(
+            select_action(
+                PhysicalKey::Code(KeyCode::ShiftLeft),
+                ElementState::Pressed,
+                false,
+                &keys
+            ),
+            Some(SelectAction::Move(SelectMove::Next))
+        );
+        assert_eq!(
+            select_action(
+                PhysicalKey::Code(KeyCode::ShiftRight),
                 ElementState::Pressed,
                 false,
                 &keys
@@ -12452,6 +12660,8 @@ mod tests {
         // AxisLeftX- = scratch up (Previous = 負), AxisLeftX+ = scratch down (Next = 正)
         assert_eq!(select_analog_scroll_delta("AxisLeftX", -4, &gamepad_keys), Some(-4));
         assert_eq!(select_analog_scroll_delta("AxisLeftX", 4, &gamepad_keys), Some(4));
+        assert_eq!(select_analog_scroll_delta("AxisRightX", -4, &gamepad_keys), Some(-4));
+        assert_eq!(select_analog_scroll_delta("AxisRightX", 4, &gamepad_keys), Some(4));
         assert_eq!(select_analog_scroll_delta("AxisLeftX", 0, &gamepad_keys), None);
         assert_eq!(select_analog_scroll_delta("AxisRightY", 4, &gamepad_keys), None);
     }
@@ -12512,6 +12722,14 @@ mod tests {
             Some(TargetCycle::Previous)
         );
         assert_eq!(target_cycle_from_control("AxisLeftX+", &gamepad_keys), Some(TargetCycle::Next));
+        assert_eq!(
+            target_cycle_from_control("AxisRightX-", &gamepad_keys),
+            Some(TargetCycle::Previous)
+        );
+        assert_eq!(
+            target_cycle_from_control("AxisRightX+", &gamepad_keys),
+            Some(TargetCycle::Next)
+        );
     }
 
     #[test]
@@ -12576,10 +12794,46 @@ mod tests {
     }
 
     #[test]
+    fn select_key_bindings_expose_2p_keys_for_random2() {
+        let keys = default_select_keys();
+
+        assert!(keys.is_key8(","));
+        assert!(keys.is_key9("l"));
+        assert!(keys.is_key10("."));
+        assert!(keys.is_key11(";"));
+        assert!(keys.is_key12("/"));
+        assert!(keys.is_key8("Button8"));
+        assert!(keys.is_key9("Button9"));
+        assert!(keys.is_key10("Button10"));
+        assert!(keys.is_key11("Button11"));
+        assert!(keys.is_key12("Button12"));
+    }
+
+    #[test]
+    fn select_key_bindings_treat_2p_keys_as_ui_equivalents() {
+        let keys = select_keys_with_full_2p_bindings();
+
+        for control in [",", ".", "/", "P2K7", "Button8", "Button10", "Button12", "Button14"] {
+            assert!(keys.is_enter(control), "{control} should decide like odd 1P keys");
+        }
+        for control in ["l", ";", "P2K6", "Button9", "Button11", "Button13"] {
+            assert!(keys.is_back(control), "{control} should go back like even 1P keys");
+        }
+        assert_eq!(keys.ui_lane_for_control(","), Some(Lane::Key1));
+        assert_eq!(keys.ui_lane_for_control("l"), Some(Lane::Key2));
+        assert_eq!(keys.ui_lane_for_control("."), Some(Lane::Key3));
+        assert_eq!(keys.ui_lane_for_control(";"), Some(Lane::Key4));
+        assert_eq!(keys.ui_lane_for_control("/"), Some(Lane::Key5));
+        assert_eq!(keys.ui_lane_for_control("P2K6"), Some(Lane::Key6));
+        assert_eq!(keys.ui_lane_for_control("P2K7"), Some(Lane::Key7));
+    }
+
+    #[test]
     fn select_gauge_auto_shift_toggle_requires_start_then_key2() {
         let keys = default_select_keys();
 
         assert!(should_toggle_select_gauge_auto_shift("S", true, true, &keys));
+        assert!(should_toggle_select_gauge_auto_shift("l", true, true, &keys));
         assert!(!should_toggle_select_gauge_auto_shift("Q", false, true, &keys));
         assert!(!should_toggle_select_gauge_auto_shift("Q", true, true, &keys));
         assert!(!should_toggle_select_gauge_auto_shift("W", true, false, &keys));
@@ -12601,6 +12855,17 @@ mod tests {
 
         update_play_exit_hold_started_at(&mut held_since, false, true, start + default_hold);
         assert!(held_since.is_none());
+    }
+
+    #[test]
+    fn decide_control_action_skips_with_1p_and_2p_decide_keys() {
+        let keys = select_keys_with_full_2p_bindings();
+
+        assert_eq!(decide_control_action("Z", &keys), Some(DecideAction::Confirm));
+        assert_eq!(decide_control_action(",", &keys), Some(DecideAction::Confirm));
+        assert_eq!(decide_control_action("P2K7", &keys), Some(DecideAction::Confirm));
+        assert_eq!(decide_control_action("S", &keys), None);
+        assert_eq!(decide_control_action("P2K6", &keys), None);
     }
 
     #[test]
@@ -12883,14 +13148,24 @@ mod tests {
             play_option_control("AxisLeftX+", &keys),
             Some(PlayOptionControl::LaneCover(LaneCoverChange::Down))
         );
+        assert_eq!(
+            play_option_control("AxisRightX-", &keys),
+            Some(PlayOptionControl::LaneCover(LaneCoverChange::Up))
+        );
+        assert_eq!(
+            play_option_control("AxisRightX+", &keys),
+            Some(PlayOptionControl::LaneCover(LaneCoverChange::Down))
+        );
     }
 
     #[test]
     fn detail_option_control_maps_key5_and_key7_to_visual_offset() {
-        let keys = default_select_keys();
+        let keys = select_keys_with_full_2p_bindings();
 
         assert_eq!(visual_offset_delta_control("C", &keys), Some(-1));
         assert_eq!(visual_offset_delta_control("V", &keys), Some(1));
+        assert_eq!(visual_offset_delta_control("/", &keys), Some(-1));
+        assert_eq!(visual_offset_delta_control("P2K7", &keys), Some(1));
         assert_eq!(visual_offset_delta_control("Z", &keys), None);
     }
 
