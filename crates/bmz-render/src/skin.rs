@@ -8130,17 +8130,13 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         310 => Some(state.hispeed.floor() as i64),
         311 => Some(((state.hispeed * 100.0) as i64) % 100),
         312 => {
-            if state.select_screen
-                && (!select_chart_metadata_available(state) || state.total_duration_ms <= 0)
-            {
+            if state.select_screen && state.total_duration_ms <= 0 {
                 return None;
             }
             Some(state.total_duration_ms as i64)
         }
         313 => {
-            if state.select_screen
-                && (!select_chart_metadata_available(state) || state.total_duration_ms <= 0)
-            {
+            if state.select_screen && state.total_duration_ms <= 0 {
                 return None;
             }
             Some(((state.total_duration_ms as i64) * 3 + 2) / 5)
@@ -19492,6 +19488,7 @@ mod tests {
             select_min_bpm: 0.0,
             select_max_bpm: 0.0,
             judge_rank: None,
+            total_duration_ms: 500,
             ..SkinDrawState::default()
         };
 
@@ -19499,8 +19496,8 @@ mod tests {
         assert_eq!(skin_state_number(91, &state), None);
         assert_eq!(skin_state_number(92, &state), None);
         assert_eq!(skin_state_number(160, &state), None);
-        assert_eq!(skin_state_number(312, &state), None);
-        assert_eq!(skin_state_number(313, &state), None);
+        assert_eq!(skin_state_number(312, &state), Some(500));
+        assert_eq!(skin_state_number(313, &state), Some(300));
         for op in 180..=184 {
             assert!(!test_skin_op(op, &[], &state), "judge rank option {op}");
         }

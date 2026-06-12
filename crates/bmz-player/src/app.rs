@@ -59,8 +59,8 @@ use crate::config::load::load_profile_config;
 use crate::config::profile_config::{
     AssistOptionConfig, BgaExpandConfig, BgaModeConfig, BottomShiftableGaugeConfig,
     DoubleOptionConfig, GaugeAutoShiftConfig, GaugeTypeConfig, HispeedModeConfig, HsFixConfig,
-    InputActionConfig, LaneConfig, LaneEffectConfig, ProfileConfig, ProfileInputConfig,
-    RandomOptionConfig, ScratchDirectionConfig, TargetOptionConfig,
+    InputActionConfig, LaneConfig, ProfileConfig, ProfileInputConfig, RandomOptionConfig,
+    ScratchDirectionConfig, TargetOptionConfig,
 };
 use crate::config::save::{save_app_config, save_profile_config};
 use crate::config::settings_registry::SettingsEntryId;
@@ -1951,7 +1951,7 @@ impl WinitApp {
         self.ensure_visible_select_chart_distributions(25);
         let chart_distributions = self.select_distribution_cache.borrow();
         let note_display_duration_ms =
-            Self::select_note_display_duration_ms_for_skin(selected, &self.boot.profile_config);
+            Some(Self::select_note_display_duration_ms_for_skin(&self.boot.profile_config));
         SelectSnapshot {
             time: self.select_time(),
             selection_time: self.select_bar_time(),
@@ -2043,46 +2043,9 @@ impl WinitApp {
         }
     }
 
-    fn select_note_display_duration_ms_for_skin(
-        selected: Option<&SelectItem>,
-        profile: &ProfileConfig,
-    ) -> Option<i32> {
-        let SelectItem::Chart(row) = selected? else {
-            return None;
-        };
-        let chart = row.chart.as_ref()?;
-        if profile.lane.hispeed_mode == HispeedModeConfig::Floating {
-            let green = profile.lane.target_green_number.max(1);
-            return Some(
-                ((green.saturating_mul(5)).saturating_add(2) / 3).min(i32::MAX as u32) as i32
-            );
-        }
-
-        let hispeed = profile.lane.hispeed.clamp(0.5, 10.0).max(0.01);
-        let lane_cover = match profile.play.lane_effect {
-            LaneEffectConfig::Sudden | LaneEffectConfig::HiddenSudden => {
-                crate::config::play::lane_unit_to_f32(profile.lane.sudden)
-            }
-            LaneEffectConfig::Off | LaneEffectConfig::Hidden => 0.0,
-        };
-        let visible_max = (1.0 - lane_cover).clamp(0.0, 1.0);
-        let initial_bpm = chart.initial_bpm.max(1.0);
-        let now_bpm = row
-            .chart_analysis
-            .as_ref()
-            .map(|analysis| analysis.main_bpm)
-            .filter(|bpm| *bpm > 0.0)
-            .unwrap_or(initial_bpm)
-            .max(1.0);
-        let bpm_ratio = (initial_bpm / now_bpm) as f32;
-        Some(
-            (crate::screens::play_snapshot::DEFAULT_LOOKAHEAD_US as f32 / hispeed
-                * visible_max
-                * bpm_ratio
-                / 1_000.0)
-                .round()
-                .clamp(0.0, i32::MAX as f32) as i32,
-        )
+    fn select_note_display_duration_ms_for_skin(profile: &ProfileConfig) -> i32 {
+        let green = profile.lane.target_green_number.max(1);
+        ((green.saturating_mul(5)).saturating_add(2) / 3).min(i32::MAX as u32) as i32
     }
 
     fn ensure_visible_select_chart_distributions(&self, visible_limit: usize) {
@@ -8047,11 +8010,15 @@ impl WinitApp {
     fn active_lane_state(&self) -> Option<ActiveLaneState> {
         self.active_play.as_ref().map(|active| {
             let session = &active.running.session;
+            let target_green_number = match session.hispeed_mode {
+                HispeedMode::Normal => current_green_number(session, session.audio_clock.now()),
+                HispeedMode::Floating => session.target_green_number,
+            };
             ActiveLaneState {
                 lane_cover: session.lane_cover,
                 lift: session.lift,
                 hispeed_mode: session.hispeed_mode,
-                target_green_number: session.target_green_number,
+                target_green_number,
             }
         })
     }
@@ -13281,32 +13248,13 @@ mod tests {
     }
 
     #[test]
-    fn select_skin_green_number_uses_normal_hispeed_for_nhs() {
+    fn select_skin_green_number_uses_profile_target_green_for_nhs() {
         let mut profile = ProfileConfig::new_default("default", "Default", 1);
         profile.lane.hispeed = 2.0;
         profile.lane.hispeed_mode = HispeedModeConfig::Normal;
-        profile.lane.sudden = 0;
+        profile.lane.target_green_number = 300;
 
-        let mut row = select_chart_row(0);
-        row.chart.as_mut().unwrap().initial_bpm = 120.0;
-        row.chart_analysis = Some(crate::storage::library_db::ChartAnalysisSummary {
-            normal_notes: 0,
-            long_notes: 0,
-            scratch_notes: 0,
-            long_scratch_notes: 0,
-            density: 0.0,
-            peak_density: 0.0,
-            end_density: 0.0,
-            total_gauge: 0.0,
-            main_bpm: 240.0,
-            speed_changes: Vec::new(),
-        });
-        let selected = SelectItem::Chart(row);
-
-        let duration =
-            WinitApp::select_note_display_duration_ms_for_skin(Some(&selected), &profile);
-
-        assert_eq!(duration, Some(500));
+        assert_eq!(WinitApp::select_note_display_duration_ms_for_skin(&profile), 500);
     }
 
     #[test]
@@ -13315,28 +13263,38 @@ mod tests {
         profile.lane.hispeed_mode = HispeedModeConfig::Floating;
         profile.lane.target_green_number = 280;
 
-        let selected = SelectItem::Chart(select_chart_row(0));
-
-        let duration =
-            WinitApp::select_note_display_duration_ms_for_skin(Some(&selected), &profile);
-
-        assert_eq!(duration, Some(467));
+        assert_eq!(WinitApp::select_note_display_duration_ms_for_skin(&profile), 467);
     }
 
     #[test]
-    fn select_skin_green_number_is_hidden_for_folders() {
-        let profile = ProfileConfig::new_default("default", "Default", 1);
-        let selected = SelectItem::Folder {
-            name: "folder".to_string(),
-            path: "folder".to_string(),
-            kind: bmz_render::scene::SelectRowKind::Folder,
-            summary: None,
-        };
+    fn active_lane_state_saves_current_green_number_for_nhs() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
 
-        let duration =
-            WinitApp::select_note_display_duration_ms_for_skin(Some(&selected), &profile);
+        apply_current_play_options_to_profile(
+            &mut profile,
+            Some(2.0),
+            Some(ActiveLaneState {
+                lane_cover: 0.0,
+                lift: 0.0,
+                hispeed_mode: HispeedMode::Normal,
+                target_green_number: 600,
+            }),
+            CurrentPlayOptions {
+                arrange: ArrangeOption::Normal,
+                arrange_2p: ArrangeOption::Normal,
+                target: TargetOption::None,
+                gauge: GaugeTypeConfig::Normal,
+                gauge_auto_shift: GaugeAutoShiftConfig::Off,
+                bottom_shiftable_gauge: BottomShiftableGaugeConfig::Easy,
+                double_option: DoubleOption::Off,
+                hs_fix: HsFixOption::Off,
+                assist: AssistOption::Normal,
+            },
+            42,
+        );
 
-        assert_eq!(duration, None);
+        assert_eq!(profile.lane.hispeed_mode, HispeedModeConfig::Normal);
+        assert_eq!(profile.lane.target_green_number, 600);
     }
 
     #[test]
