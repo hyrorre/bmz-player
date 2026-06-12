@@ -3261,18 +3261,6 @@ impl WinitApp {
             return;
         }
 
-        if event.state == ElementState::Pressed
-            && !event.repeat
-            && self.select_held
-            && self.select_keys.back_uses_key2()
-            && is_select_start_key(event.physical_key, &self.select_keys)
-        {
-            self.set_start_held(true);
-            self.toggle_gauge_auto_shift();
-            self.play_system_sound(crate::system_sound::SoundType::OptionChange);
-            return;
-        }
-
         if is_select_start_key(event.physical_key, &self.select_keys) {
             self.set_start_held(event.state == ElementState::Pressed);
             return;
@@ -3280,10 +3268,13 @@ impl WinitApp {
 
         if event.state == ElementState::Pressed
             && !event.repeat
-            && self.start_held
-            && (self.select_held || is_select_modifier_key(event.physical_key, &self.select_keys))
             && let Some(control) = physical_key_name(event.physical_key)
-            && self.select_keys.is_key2(&control)
+            && should_toggle_select_gauge_auto_shift(
+                &control,
+                self.start_held,
+                self.select_held,
+                &self.select_keys,
+            )
         {
             self.toggle_gauge_auto_shift();
             self.play_system_sound(crate::system_sound::SoundType::OptionChange);
@@ -3613,10 +3604,12 @@ impl WinitApp {
             return;
         }
 
-        if self.start_held
-            && (self.select_held || self.select_keys.is_e2_action(button))
-            && self.select_keys.is_key2(button)
-        {
+        if should_toggle_select_gauge_auto_shift(
+            button,
+            self.start_held,
+            self.select_held,
+            &self.select_keys,
+        ) {
             self.toggle_gauge_auto_shift();
             self.play_system_sound(crate::system_sound::SoundType::OptionChange);
             if self.select_keys.is_e2_action(button) {
@@ -9589,6 +9582,15 @@ fn is_select_modifier_key(physical_key: PhysicalKey, bindings: &SelectKeyBinding
     physical_key_name(physical_key).is_some_and(|control| bindings.is_e2_action(&control))
 }
 
+fn should_toggle_select_gauge_auto_shift(
+    control: &str,
+    start_held: bool,
+    select_held: bool,
+    bindings: &SelectKeyBindings,
+) -> bool {
+    start_held && (select_held || bindings.is_e2_action(control)) && bindings.is_key2(control)
+}
+
 fn arrange_option_from_profile(random: RandomOptionConfig) -> ArrangeOption {
     match random {
         RandomOptionConfig::Mirror => ArrangeOption::Mirror,
@@ -11334,10 +11336,6 @@ impl SelectKeyBindings {
     fn is_scratch_down(&self, control: &str) -> bool {
         self.scratch_down_controls.iter().any(|k| k == control)
     }
-
-    fn back_uses_key2(&self) -> bool {
-        self.back.iter().any(|control| self.is_key2(control))
-    }
 }
 
 /// アナログ tick の選曲スクロール寄与を返す。Next 方向を正とする。
@@ -12318,7 +12316,16 @@ mod tests {
         assert!(keys.is_back("D"));
         assert!(keys.is_back("F"));
         assert!(keys.is_key2("S"));
-        assert!(keys.back_uses_key2());
+    }
+
+    #[test]
+    fn select_gauge_auto_shift_toggle_requires_start_then_key2() {
+        let keys = default_select_keys();
+
+        assert!(should_toggle_select_gauge_auto_shift("S", true, true, &keys));
+        assert!(!should_toggle_select_gauge_auto_shift("Q", false, true, &keys));
+        assert!(!should_toggle_select_gauge_auto_shift("Q", true, true, &keys));
+        assert!(!should_toggle_select_gauge_auto_shift("W", true, false, &keys));
     }
 
     #[test]
