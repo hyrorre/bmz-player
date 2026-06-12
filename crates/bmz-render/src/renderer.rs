@@ -66,6 +66,7 @@ pub struct Renderer {
     select_skin_context: SkinContext,
     decide_skin_context: SkinContext,
     result_skin_context: SkinContext,
+    last_plan_canvas_policy: CanvasRenderPolicy,
     pending_textures: Vec<PendingTexture>,
     fonts: HashMap<String, FontArc>,
     bitmap_fonts: HashMap<String, BitmapFont>,
@@ -132,6 +133,31 @@ pub struct SurfaceSize {
     pub height: u32,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum CanvasFitMode {
+    #[default]
+    Expand,
+    Contain,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CanvasSize {
+    width: u32,
+    height: u32,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct CanvasRenderPolicy {
+    fit_mode: CanvasFitMode,
+    canvas_size: Option<CanvasSize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct CanvasViewport {
+    rect: Rect,
+    content_size: SurfaceSize,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenderSurfaceStatus {
     Rendered,
@@ -144,6 +170,98 @@ pub enum RenderSurfaceStatus {
 impl SurfaceSize {
     pub fn is_drawable(self) -> bool {
         self.width > 0 && self.height > 0
+    }
+}
+
+impl CanvasRenderPolicy {
+    fn skin_document(document: &SkinDocument) -> Self {
+        Self {
+            fit_mode: CanvasFitMode::Contain,
+            canvas_size: Some(CanvasSize { width: document.w.max(1), height: document.h.max(1) }),
+        }
+    }
+}
+
+impl CanvasViewport {
+    fn from_policy(surface: SurfaceSize, policy: CanvasRenderPolicy) -> Self {
+        let full =
+            Self { rect: Rect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 }, content_size: surface };
+        if !surface.is_drawable() || policy.fit_mode == CanvasFitMode::Expand {
+            return full;
+        }
+
+        let Some(canvas) = policy.canvas_size else {
+            return full;
+        };
+        if canvas.width == 0 || canvas.height == 0 {
+            return full;
+        }
+
+        let surface_aspect = surface.width as f32 / surface.height as f32;
+        let canvas_aspect = canvas.width as f32 / canvas.height as f32;
+        if !surface_aspect.is_finite() || !canvas_aspect.is_finite() {
+            return full;
+        }
+
+        let rect = if surface_aspect > canvas_aspect {
+            let width = canvas_aspect / surface_aspect;
+            Rect { x: (1.0 - width) * 0.5, y: 0.0, width, height: 1.0 }
+        } else {
+            let height = surface_aspect / canvas_aspect;
+            Rect { x: 0.0, y: (1.0 - height) * 0.5, width: 1.0, height }
+        };
+        Self { rect, content_size: Self::content_size_for_rect(surface, rect) }
+    }
+
+    fn content_size(self) -> SurfaceSize {
+        self.content_size
+    }
+
+    fn transform_rect(self, rect: Rect) -> Rect {
+        Rect {
+            x: self.rect.x + rect.x * self.rect.width,
+            y: self.rect.y + rect.y * self.rect.height,
+            width: rect.width * self.rect.width,
+            height: rect.height * self.rect.height,
+        }
+    }
+
+    fn surface_to_canvas_point(self, x: f32, y: f32) -> Option<(f32, f32)> {
+        let right = self.rect.x + self.rect.width;
+        let bottom = self.rect.y + self.rect.height;
+        if x < self.rect.x || x > right || y < self.rect.y || y > bottom {
+            return None;
+        }
+        Some(((x - self.rect.x) / self.rect.width, (y - self.rect.y) / self.rect.height))
+    }
+
+    fn transform_rect_command(self, command: RectCommand) -> RectCommand {
+        RectCommand { rect: self.transform_rect(command.rect), color: command.color }
+    }
+
+    fn transform_rect_batch_cache(self, cache: RectBatchCache) -> RectBatchCache {
+        RectBatchCache { bounds: self.transform_rect(cache.bounds), ..cache }
+    }
+
+    fn transform_text_instances(self, instances: &mut [u8]) {
+        for instance in instances.chunks_exact_mut(TEXT_INSTANCE_BYTES) {
+            let x = f32::from_le_bytes(instance[0..4].try_into().unwrap());
+            let y = f32::from_le_bytes(instance[4..8].try_into().unwrap());
+            let width = f32::from_le_bytes(instance[8..12].try_into().unwrap());
+            let height = f32::from_le_bytes(instance[12..16].try_into().unwrap());
+            let rect = self.transform_rect(Rect { x, y, width, height });
+            instance[0..4].copy_from_slice(&rect.x.to_le_bytes());
+            instance[4..8].copy_from_slice(&rect.y.to_le_bytes());
+            instance[8..12].copy_from_slice(&rect.width.to_le_bytes());
+            instance[12..16].copy_from_slice(&rect.height.to_le_bytes());
+        }
+    }
+
+    fn content_size_for_rect(surface: SurfaceSize, rect: Rect) -> SurfaceSize {
+        SurfaceSize {
+            width: normalized_extent_to_pixels(rect.width, surface.width),
+            height: normalized_extent_to_pixels(rect.height, surface.height),
+        }
     }
 }
 
@@ -494,6 +612,7 @@ impl Renderer {
         x: f32,
         y: f32,
     ) -> Option<SkinClickHit> {
+        let (x, y) = self.select_skin_canvas_point(x, y)?;
         self.select_skin_context.select_click_hit(snapshot, x, y)
     }
 
@@ -503,6 +622,7 @@ impl Renderer {
         x: f32,
         y: f32,
     ) -> Option<SkinSliderHit> {
+        let (x, y) = self.select_skin_canvas_point(x, y)?;
         self.select_skin_context.select_slider_hit(snapshot, x, y)
     }
 
@@ -566,6 +686,7 @@ impl Renderer {
         };
         let plan_us = plan_start.elapsed().as_micros();
         let commands = plan.commands.len();
+        self.last_plan_canvas_policy = self.canvas_policy_for_scene(&scene);
         self.last_scene = Some(scene);
         self.last_plan = Some(plan);
 
@@ -624,6 +745,7 @@ impl Renderer {
 
         let (status, gpu_timings) = gpu.render_plan(
             plan,
+            self.last_plan_canvas_policy,
             &self.fonts,
             &self.bitmap_fonts,
             egui.as_ref(),
@@ -666,6 +788,52 @@ impl Renderer {
 
     pub fn last_frame_timings(&self) -> Option<RenderFrameTimings> {
         self.last_frame_timings
+    }
+
+    fn select_skin_canvas_point(&self, x: f32, y: f32) -> Option<(f32, f32)> {
+        let Some(surface) = self.gpu.as_ref().map(WgpuRenderer::surface_size) else {
+            return Some((x, y));
+        };
+        let viewport =
+            CanvasViewport::from_policy(surface, self.select_skin_canvas_render_policy());
+        viewport.surface_to_canvas_point(x, y)
+    }
+
+    fn canvas_policy_for_scene(&self, scene: &AppSceneSnapshot) -> CanvasRenderPolicy {
+        match scene {
+            AppSceneSnapshot::Select(_) => self.select_skin_canvas_render_policy(),
+            AppSceneSnapshot::Decide(_) => self.decide_skin_canvas_render_policy(),
+            AppSceneSnapshot::Play(_) => self.play_skin_canvas_render_policy(),
+            AppSceneSnapshot::Result(_) => self.result_skin_canvas_render_policy(),
+        }
+    }
+
+    fn select_skin_canvas_render_policy(&self) -> CanvasRenderPolicy {
+        self.select_skin_context
+            .document()
+            .filter(|document| document.skin_type == 5)
+            .map(CanvasRenderPolicy::skin_document)
+            .unwrap_or_default()
+    }
+
+    fn decide_skin_canvas_render_policy(&self) -> CanvasRenderPolicy {
+        self.decide_skin_context
+            .document()
+            .filter(|document| document.skin_type == 6)
+            .map(CanvasRenderPolicy::skin_document)
+            .unwrap_or_default()
+    }
+
+    fn play_skin_canvas_render_policy(&self) -> CanvasRenderPolicy {
+        self.play_skin_context.document().map(CanvasRenderPolicy::skin_document).unwrap_or_default()
+    }
+
+    fn result_skin_canvas_render_policy(&self) -> CanvasRenderPolicy {
+        self.result_skin_context
+            .document()
+            .filter(|document| matches!(document.skin_type, 7 | 15))
+            .map(CanvasRenderPolicy::skin_document)
+            .unwrap_or_default()
     }
 }
 
@@ -807,9 +975,14 @@ impl WgpuRenderer {
         self.configure_surface();
     }
 
+    fn surface_size(&self) -> SurfaceSize {
+        SurfaceSize { width: self.config.width, height: self.config.height }
+    }
+
     fn render_plan(
         &mut self,
         plan: &DrawPlan,
+        canvas_policy: CanvasRenderPolicy,
         fonts: &HashMap<String, FontArc>,
         bitmap_fonts: &HashMap<String, BitmapFont>,
         egui: Option<&EguiFrame>,
@@ -829,15 +1002,19 @@ impl WgpuRenderer {
             timings.draw_us = draw_start.elapsed().as_micros();
             return Ok((RenderSurfaceStatus::SkippedZeroSize, timings));
         }
+        let canvas_viewport = CanvasViewport::from_policy(surface_size, canvas_policy);
 
         let text_start = Instant::now();
-        let text_frame = self.build_text_frame(plan, fonts, bitmap_fonts);
+        let mut text_frame =
+            self.build_text_frame(plan, fonts, bitmap_fonts, canvas_viewport.content_size());
+        canvas_viewport.transform_text_instances(&mut text_frame.instances);
         timings.text_us = text_start.elapsed().as_micros();
         let geometry_start = Instant::now();
         let geometry = encode_plan_geometry_with_rect_batch_resolver(
             plan,
             &text_frame,
             surface_size,
+            canvas_viewport,
             &mut |rects, cache| self.offscreen_rect_batch_texture(rects, cache, surface_size),
         );
         let geometry_stats = geometry.stats();
@@ -1190,7 +1367,11 @@ impl WgpuRenderer {
         plan: &DrawPlan,
         fonts: &HashMap<String, FontArc>,
         bitmap_fonts: &HashMap<String, BitmapFont>,
+        surface: SurfaceSize,
     ) -> TextFrame {
+        if !surface.is_drawable() {
+            return TextFrame::default();
+        }
         let Some(default_font) = self.font.clone() else {
             return TextFrame::default();
         };
@@ -1199,7 +1380,7 @@ impl WgpuRenderer {
             &default_font,
             fonts,
             bitmap_fonts,
-            SurfaceSize { width: self.config.width, height: self.config.height },
+            surface,
             &mut self.text_atlas,
         )
     }
@@ -1511,13 +1692,21 @@ fn encode_plan_geometry(
     text_frame: &TextFrame,
     surface_size: SurfaceSize,
 ) -> PlanGeometry {
-    encode_plan_geometry_with_rect_batch_resolver(plan, text_frame, surface_size, &mut |_, _| None)
+    let viewport = CanvasViewport::from_policy(surface_size, CanvasRenderPolicy::default());
+    encode_plan_geometry_with_rect_batch_resolver(
+        plan,
+        text_frame,
+        surface_size,
+        viewport,
+        &mut |_, _| None,
+    )
 }
 
 fn encode_plan_geometry_with_rect_batch_resolver(
     plan: &DrawPlan,
     text_frame: &TextFrame,
     surface_size: SurfaceSize,
+    canvas_viewport: CanvasViewport,
     resolve_rect_batch_texture: &mut impl FnMut(&[RectCommand], RectBatchCache) -> Option<TextureId>,
 ) -> PlanGeometry {
     let command_count = plan.commands.len();
@@ -1537,6 +1726,7 @@ fn encode_plan_geometry_with_rect_batch_resolver(
         match command {
             DrawCommand::Rect { rect, color } => {
                 let start = rects.len();
+                let rect = canvas_viewport.transform_rect(*rect);
                 rects.extend_from_slice(bytemuck::bytes_of(&[
                     rect.x,
                     rect.y,
@@ -1550,13 +1740,21 @@ fn encode_plan_geometry_with_rect_batch_resolver(
                 push_or_extend_rects(&mut steps, start..rects.len());
             }
             DrawCommand::RectBatch { rects: batch, cache } => {
+                let transformed_batch: Vec<_> = batch
+                    .iter()
+                    .map(|command| canvas_viewport.transform_rect_command(*command))
+                    .collect();
                 if let Some(cache) = *cache
-                    && let Some(texture) = resolve_rect_batch_texture(batch, cache)
+                    && let Some(texture) = resolve_rect_batch_texture(
+                        &transformed_batch,
+                        canvas_viewport.transform_rect_batch_cache(cache),
+                    )
                 {
                     let start = images.len();
+                    let bounds = canvas_viewport.transform_rect(cache.bounds);
                     encode_image_instance(
                         &mut images,
-                        &cache.bounds,
+                        &bounds,
                         &UvRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
                         &Color::rgb(1.0, 1.0, 1.0),
                         0.0,
@@ -1572,7 +1770,7 @@ fn encode_plan_geometry_with_rect_batch_resolver(
                     );
                 } else {
                     let start = rects.len();
-                    for command in batch.iter() {
+                    for command in transformed_batch.iter() {
                         let rect = command.rect;
                         let color = command.color;
                         rects.extend_from_slice(bytemuck::bytes_of(&[
@@ -1593,9 +1791,10 @@ fn encode_plan_geometry_with_rect_batch_resolver(
             }
             DrawCommand::Image { rect, uv, texture, tint, blend, linear_filter } => {
                 let start = images.len();
+                let rect = canvas_viewport.transform_rect(*rect);
                 encode_image_instance(
                     &mut images,
-                    rect,
+                    &rect,
                     uv,
                     tint,
                     0.0,
@@ -1621,9 +1820,10 @@ fn encode_plan_geometry_with_rect_batch_resolver(
                 center,
             } => {
                 let start = images.len();
+                let rect = canvas_viewport.transform_rect(*rect);
                 encode_image_instance(
                     &mut images,
-                    rect,
+                    &rect,
                     uv,
                     tint,
                     *angle_rad,
@@ -3471,6 +3671,10 @@ mod tests {
         SurfaceSize { width: 16, height: 9 }
     }
 
+    fn assert_approx(actual: f32, expected: f32) {
+        assert!((actual - expected).abs() < 0.0001, "expected {expected}, got {actual}");
+    }
+
     fn font_supports_japanese<F: Font>(font: &F) -> bool {
         font.glyph_id('あ').0 != 0 && font.glyph_id('日').0 != 0
     }
@@ -3549,6 +3753,119 @@ mod tests {
         assert!(SurfaceSize { width: 1, height: 1 }.is_drawable());
         assert!(!SurfaceSize { width: 0, height: 1 }.is_drawable());
         assert!(!SurfaceSize { width: 1, height: 0 }.is_drawable());
+    }
+
+    #[test]
+    fn canvas_viewport_expand_uses_full_surface() {
+        let viewport = CanvasViewport::from_policy(
+            SurfaceSize { width: 320, height: 240 },
+            CanvasRenderPolicy::default(),
+        );
+
+        assert_eq!(viewport.rect, Rect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 });
+        assert_eq!(viewport.content_size(), SurfaceSize { width: 320, height: 240 });
+    }
+
+    #[test]
+    fn canvas_viewport_contain_letterboxes_tall_surface() {
+        let viewport = CanvasViewport::from_policy(
+            SurfaceSize { width: 1000, height: 1000 },
+            CanvasRenderPolicy {
+                fit_mode: CanvasFitMode::Contain,
+                canvas_size: Some(CanvasSize { width: 16, height: 9 }),
+            },
+        );
+
+        assert_approx(viewport.rect.x, 0.0);
+        assert_approx(viewport.rect.y, 0.21875);
+        assert_approx(viewport.rect.width, 1.0);
+        assert_approx(viewport.rect.height, 0.5625);
+        assert_eq!(viewport.content_size(), SurfaceSize { width: 1000, height: 563 });
+    }
+
+    #[test]
+    fn canvas_viewport_maps_surface_points_back_to_canvas() {
+        let viewport = CanvasViewport::from_policy(
+            SurfaceSize { width: 1000, height: 1000 },
+            CanvasRenderPolicy {
+                fit_mode: CanvasFitMode::Contain,
+                canvas_size: Some(CanvasSize { width: 16, height: 9 }),
+            },
+        );
+
+        let (x, y) = viewport.surface_to_canvas_point(0.5, 0.5).unwrap();
+        assert_approx(x, 0.5);
+        assert_approx(y, 0.5);
+        assert!(viewport.surface_to_canvas_point(0.5, 0.1).is_none());
+    }
+
+    #[test]
+    fn plan_geometry_applies_canvas_viewport_to_images() {
+        let surface = SurfaceSize { width: 1000, height: 1000 };
+        let viewport = CanvasViewport::from_policy(
+            surface,
+            CanvasRenderPolicy {
+                fit_mode: CanvasFitMode::Contain,
+                canvas_size: Some(CanvasSize { width: 16, height: 9 }),
+            },
+        );
+        let plan = DrawPlan {
+            clear: Color::rgb(0.0, 0.0, 0.0),
+            commands: vec![DrawCommand::Image {
+                rect: Rect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+                uv: UvRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+                texture: TextureId(0),
+                tint: Color::rgb(1.0, 1.0, 1.0),
+                blend: BlendMode::Normal,
+                linear_filter: false,
+            }],
+        };
+
+        let geometry = encode_plan_geometry_with_rect_batch_resolver(
+            &plan,
+            &TextFrame::default(),
+            surface,
+            viewport,
+            &mut |_, _| None,
+        );
+        let floats: Vec<f32> = geometry
+            .images
+            .chunks_exact(std::mem::size_of::<f32>())
+            .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()))
+            .collect();
+
+        assert_approx(floats[0], 0.0);
+        assert_approx(floats[1], 0.21875);
+        assert_approx(floats[2], 1.0);
+        assert_approx(floats[3], 0.5625);
+    }
+
+    #[test]
+    fn text_instances_are_transformed_into_canvas_viewport() {
+        let viewport = CanvasViewport::from_policy(
+            SurfaceSize { width: 1000, height: 1000 },
+            CanvasRenderPolicy {
+                fit_mode: CanvasFitMode::Contain,
+                canvas_size: Some(CanvasSize { width: 16, height: 9 }),
+            },
+        );
+        let mut instances = Vec::new();
+        for value in [0.1_f32, 0.2, 0.3, 0.4, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0] {
+            instances.extend_from_slice(&value.to_le_bytes());
+        }
+
+        viewport.transform_text_instances(&mut instances);
+        let floats: Vec<f32> = instances
+            .chunks_exact(std::mem::size_of::<f32>())
+            .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()))
+            .collect();
+
+        assert_approx(floats[0], 0.1);
+        assert_approx(floats[1], 0.33125);
+        assert_approx(floats[2], 0.3);
+        assert_approx(floats[3], 0.225);
+        assert_approx(floats[4], 0.0);
+        assert_approx(floats[8], 1.0);
     }
 
     #[test]
@@ -4148,6 +4465,7 @@ mod tests {
             &plan,
             &TextFrame::default(),
             test_surface_size(),
+            CanvasViewport::from_policy(test_surface_size(), CanvasRenderPolicy::default()),
             &mut |_, _| Some(texture),
         );
 
