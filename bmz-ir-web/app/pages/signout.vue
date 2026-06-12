@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import type { Database } from '~~/bmz-ir-web/shared/types/database.types'
+type SessionUser = {
+  email?: string
+}
 
-const supabase = useSupabaseClient<Database>()
-const user = useSupabaseUser()
+const { user, clear } = useUserSession()
 
 const loading = ref(false)
 const errorMessage = ref('')
@@ -11,15 +12,16 @@ async function signOut() {
   errorMessage.value = ''
   loading.value = true
 
-  const { error } = await supabase.auth.signOut()
-
-  loading.value = false
-
-  if (error) {
-    errorMessage.value = error.message
+  try {
+    await clear()
+  } catch (error) {
+    errorMessage.value =
+      error instanceof Error && error.message ? error.message : 'ログアウトに失敗しました。'
+    loading.value = false
     return
   }
 
+  loading.value = false
   await navigateTo('/signin')
 }
 </script>
@@ -34,7 +36,7 @@ async function signOut() {
           <p class="mt-3 text-sm leading-6 text-neutral-300">
             {{
               user
-                ? `${user.email ?? 'ログイン中のユーザー'} からログアウトします。`
+                ? `${(user as SessionUser).email ?? 'ログイン中のユーザー'} からログアウトします。`
                 : '現在ログインしていません。'
             }}
           </p>
