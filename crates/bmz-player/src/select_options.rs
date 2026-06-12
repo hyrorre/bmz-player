@@ -1,3 +1,5 @@
+use bmz_core::lane::KeyMode;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum ArrangeOption {
@@ -249,7 +251,7 @@ pub enum DoubleOption {
     Off,
     Flip,
     Battle,
-    BattleAssist,
+    BattleAutoScratch,
 }
 
 impl DoubleOption {
@@ -257,8 +259,8 @@ impl DoubleOption {
         match self {
             Self::Off => Self::Flip,
             Self::Flip => Self::Battle,
-            Self::Battle => Self::BattleAssist,
-            Self::BattleAssist => Self::Off,
+            Self::Battle => Self::BattleAutoScratch,
+            Self::BattleAutoScratch => Self::Off,
         }
     }
 
@@ -267,7 +269,79 @@ impl DoubleOption {
             Self::Off => "OFF",
             Self::Flip => "FLIP",
             Self::Battle => "BATTLE",
-            Self::BattleAssist => "BATTLE AS",
+            Self::BattleAutoScratch => "BATTLE AS",
+        }
+    }
+
+    pub fn normalize_for_key_mode(self, key_mode: KeyMode) -> Self {
+        match self {
+            Self::Off => Self::Off,
+            Self::Flip if matches!(key_mode, KeyMode::K10 | KeyMode::K14) => Self::Flip,
+            Self::Flip => Self::Off,
+            Self::Battle | Self::BattleAutoScratch
+                if matches!(key_mode, KeyMode::K5 | KeyMode::K7) =>
+            {
+                self
+            }
+            Self::Battle | Self::BattleAutoScratch => Self::Off,
+        }
+    }
+
+    pub fn score_bucket(self) -> DoubleOptionScoreBucket {
+        match self {
+            Self::Off | Self::Flip => DoubleOptionScoreBucket::Off,
+            Self::Battle => DoubleOptionScoreBucket::Battle,
+            Self::BattleAutoScratch => DoubleOptionScoreBucket::BattleAutoScratch,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum DoubleOptionScoreBucket {
+    #[default]
+    Off,
+    Battle,
+    BattleAutoScratch,
+}
+
+impl DoubleOptionScoreBucket {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "Off",
+            Self::Battle => "Battle",
+            Self::BattleAutoScratch => "BattleAutoScratch",
+        }
+    }
+
+    pub fn from_str_or_off(value: &str) -> Self {
+        match value {
+            "Battle" => Self::Battle,
+            "BattleAutoScratch" | "BattleAssist" => Self::BattleAutoScratch,
+            _ => Self::Off,
+        }
+    }
+
+    pub fn ir_query_value(self) -> Option<&'static str> {
+        match self {
+            Self::Off => None,
+            Self::Battle => Some("battle"),
+            Self::BattleAutoScratch => Some("battle_auto_scratch"),
+        }
+    }
+
+    pub fn ir_value(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Battle => "battle",
+            Self::BattleAutoScratch => "battle_auto_scratch",
+        }
+    }
+
+    pub fn from_ir_query_or_off(value: Option<&str>) -> Self {
+        match value {
+            Some("battle") => Self::Battle,
+            Some("battle_auto_scratch") | Some("battle_assist") => Self::BattleAutoScratch,
+            _ => Self::Off,
         }
     }
 }
@@ -358,6 +432,29 @@ mod tests {
         assert_eq!(TargetOption::rank_next_ex_score(900, 1199), 1200);
         assert_eq!(TargetOption::rank_next_ex_score(900, 1200), 1300);
         assert_eq!(TargetOption::rank_next_ex_score(900, 1700), 1800);
+    }
+
+    #[test]
+    fn double_option_normalizes_for_supported_key_modes() {
+        assert_eq!(DoubleOption::Flip.normalize_for_key_mode(KeyMode::K7), DoubleOption::Off);
+        assert_eq!(DoubleOption::Flip.normalize_for_key_mode(KeyMode::K14), DoubleOption::Flip);
+        assert_eq!(DoubleOption::Battle.normalize_for_key_mode(KeyMode::K7), DoubleOption::Battle);
+        assert_eq!(
+            DoubleOption::BattleAutoScratch.normalize_for_key_mode(KeyMode::K5),
+            DoubleOption::BattleAutoScratch
+        );
+        assert_eq!(DoubleOption::Battle.normalize_for_key_mode(KeyMode::K14), DoubleOption::Off);
+    }
+
+    #[test]
+    fn double_option_score_bucket_groups_off_and_flip() {
+        assert_eq!(DoubleOption::Off.score_bucket(), DoubleOptionScoreBucket::Off);
+        assert_eq!(DoubleOption::Flip.score_bucket(), DoubleOptionScoreBucket::Off);
+        assert_eq!(DoubleOption::Battle.score_bucket(), DoubleOptionScoreBucket::Battle);
+        assert_eq!(
+            DoubleOption::BattleAutoScratch.score_bucket(),
+            DoubleOptionScoreBucket::BattleAutoScratch
+        );
     }
 }
 

@@ -7,9 +7,9 @@ use bmz_gameplay::replay::ReplayPlayer;
 use serde::{Deserialize, Serialize};
 
 use crate::ln_policy::LnScorePolicy;
-use crate::select_options::ArrangeOption;
+use crate::select_options::{ArrangeOption, DoubleOption, DoubleOptionScoreBucket};
 
-pub const REPLAY_FILE_VERSION: u32 = 2;
+pub const REPLAY_FILE_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReplayFile {
@@ -22,6 +22,10 @@ pub struct ReplayFile {
     pub random_seed: Option<i64>,
     #[serde(default = "default_arrange")]
     pub arrange: String,
+    #[serde(default = "default_arrange")]
+    pub arrange_2p: String,
+    #[serde(default = "default_double_option")]
+    pub double_option: String,
     #[serde(default)]
     pub arrange_seed: Option<i64>,
     #[serde(default)]
@@ -31,6 +35,10 @@ pub struct ReplayFile {
 
 fn default_arrange() -> String {
     "Normal".to_string()
+}
+
+fn default_double_option() -> String {
+    "Off".to_string()
 }
 
 impl ReplayFile {
@@ -46,9 +54,11 @@ impl ReplayFile {
         Self::new_with_policy(
             chart_sha256,
             LnScorePolicy::ForceLn,
+            DoubleOptionScoreBucket::Off,
             played_at,
             random_seed,
             arrange,
+            ArrangeOption::Normal,
             arrange_seed,
             lane_shuffle_pattern,
             events,
@@ -58,9 +68,11 @@ impl ReplayFile {
     pub fn new_with_policy(
         chart_sha256: [u8; 32],
         ln_policy: LnScorePolicy,
+        double_option: DoubleOptionScoreBucket,
         played_at: i64,
         random_seed: Option<i64>,
         arrange: ArrangeOption,
+        arrange_2p: ArrangeOption,
         arrange_seed: Option<i64>,
         lane_shuffle_pattern: Option<Vec<u8>>,
         events: Vec<ReplayEvent>,
@@ -72,6 +84,8 @@ impl ReplayFile {
             played_at,
             random_seed,
             arrange: arrange.to_persistent_str().to_string(),
+            arrange_2p: arrange_2p.to_persistent_str().to_string(),
+            double_option: double_option.as_str().to_string(),
             arrange_seed,
             lane_shuffle_pattern,
             events,
@@ -80,6 +94,22 @@ impl ReplayFile {
 
     pub fn arrange_option(&self) -> ArrangeOption {
         ArrangeOption::from_persistent_str(&self.arrange)
+    }
+
+    pub fn arrange_2p_option(&self) -> ArrangeOption {
+        ArrangeOption::from_persistent_str(&self.arrange_2p)
+    }
+
+    pub fn double_option(&self) -> DoubleOption {
+        match DoubleOptionScoreBucket::from_str_or_off(&self.double_option) {
+            DoubleOptionScoreBucket::Off => DoubleOption::Off,
+            DoubleOptionScoreBucket::Battle => DoubleOption::Battle,
+            DoubleOptionScoreBucket::BattleAutoScratch => DoubleOption::BattleAutoScratch,
+        }
+    }
+
+    pub fn double_option_bucket(&self) -> DoubleOptionScoreBucket {
+        DoubleOptionScoreBucket::from_str_or_off(&self.double_option)
     }
 }
 
@@ -135,6 +165,19 @@ pub fn load_replay_for_chart_and_policy(
     Ok(replay)
 }
 
+pub fn load_replay_for_chart_policy_and_double_option(
+    path: &Path,
+    chart_sha256: [u8; 32],
+    ln_policy: LnScorePolicy,
+    double_option: DoubleOptionScoreBucket,
+) -> Result<ReplayFile> {
+    let replay = load_replay_for_chart_and_policy(path, chart_sha256, ln_policy)?;
+    if replay.double_option_bucket() != double_option {
+        bail!("replay double option does not match selected score bucket");
+    }
+    Ok(replay)
+}
+
 pub fn replay_file_name(chart_sha256: [u8; 32], played_at: i64) -> String {
     format!("{}-{played_at}.toml", hex_encode(&chart_sha256))
 }
@@ -183,8 +226,17 @@ pub fn load_course_replays(
     Ok(out)
 }
 
-pub fn replay_slot_file_name(chart_sha256: [u8; 32], ln_policy: LnScorePolicy, slot: u8) -> String {
-    format!("{}-{}-slot{slot}.toml", hex_encode(&chart_sha256), ln_policy.as_str())
+pub fn replay_slot_file_name(
+    chart_sha256: [u8; 32],
+    ln_policy: LnScorePolicy,
+    double_option: DoubleOptionScoreBucket,
+    slot: u8,
+) -> String {
+    let double_suffix = match double_option {
+        DoubleOptionScoreBucket::Off => String::new(),
+        other => format!("-{}", other.as_str()),
+    };
+    format!("{}-{}{}-slot{slot}.toml", hex_encode(&chart_sha256), ln_policy.as_str(), double_suffix)
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
@@ -279,8 +331,22 @@ mod tests {
     #[test]
     fn replay_slot_file_name_uses_hash_policy_and_slot_index() {
         assert_eq!(
-            replay_slot_file_name([0xab; 32], LnScorePolicy::ForceCn, 2),
+            replay_slot_file_name(
+                [0xab; 32],
+                LnScorePolicy::ForceCn,
+                DoubleOptionScoreBucket::Off,
+                2
+            ),
             "abababababababababababababababababababababababababababababababab-ForceCn-slot2.toml"
+        );
+        assert_eq!(
+            replay_slot_file_name(
+                [0xab; 32],
+                LnScorePolicy::ForceCn,
+                DoubleOptionScoreBucket::Battle,
+                2
+            ),
+            "abababababababababababababababababababababababababababababababab-ForceCn-Battle-slot2.toml"
         );
     }
 
@@ -349,8 +415,10 @@ mod tests {
         let replay = ReplayFile::new_with_policy(
             [4; 32],
             LnScorePolicy::ForceCn,
+            DoubleOptionScoreBucket::Off,
             1_700_000_052,
             None,
+            ArrangeOption::Normal,
             ArrangeOption::Normal,
             None,
             None,

@@ -970,7 +970,16 @@ fn folder_summary_for_charts(
     let score_map: HashMap<ScoreKey, BestScoreSummary> = score_db
         .best_scores_for_charts(&keys)?
         .into_iter()
-        .map(|score| (ScoreKey::new(score.chart_sha256, score.ln_policy), score))
+        .map(|score| {
+            (
+                ScoreKey::with_double_option(
+                    score.chart_sha256,
+                    score.ln_policy,
+                    score.double_option,
+                ),
+                score,
+            )
+        })
         .collect();
 
     let mut lamp_counts = [0; 11];
@@ -991,8 +1000,8 @@ fn replay_slot_map(
     Ok(score_db
         .replay_slots_for_charts(keys)?
         .into_iter()
-        .map(|ReplaySlotSummary { chart_sha256, ln_policy, replay_slots }| {
-            (ScoreKey::new(chart_sha256, ln_policy), replay_slots)
+        .map(|ReplaySlotSummary { chart_sha256, ln_policy, double_option, replay_slots }| {
+            (ScoreKey::with_double_option(chart_sha256, ln_policy, double_option), replay_slots)
         })
         .collect())
 }
@@ -1056,6 +1065,7 @@ mod tests {
                 .upsert_replay_slot(&crate::storage::score_db::ReplaySlotRecord {
                     chart_sha256: alpha.identity.file_sha256,
                     ln_policy: LnScorePolicy::ForceLn,
+                    double_option: crate::select_options::DoubleOptionScoreBucket::Off,
                     slot,
                     rule: crate::config::profile_config::ReplaySlotRule::Always,
                     replay_path: format!("replay/{slot}.toml"),
@@ -1915,6 +1925,7 @@ mod tests {
         ScoreRecord {
             chart_sha256,
             ln_policy: LnScorePolicy::ForceLn,
+            double_option: crate::select_options::DoubleOptionScoreBucket::Off,
             played_at: 1_700_000_030,
             clear_type: ClearType::Normal,
             gauge_type: Some(GaugeType::Normal),

@@ -15,6 +15,7 @@ use crate::config::profile_config::IrConfig;
 use crate::ir::types::{IrRankingResult, IrRankingScope};
 use crate::ln_policy::LnScorePolicy;
 use crate::screens::result_ir::{ResultIrQuery, ranking_to_ir_snapshot};
+use crate::select_options::DoubleOptionScoreBucket;
 use crate::select_options::TargetOption;
 use crate::storage::common::hash_to_hex;
 
@@ -72,6 +73,7 @@ impl SelectIrRanking {
         context: &str,
         gauge: &str,
         ln_policy: LnScorePolicy,
+        double_option: DoubleOptionScoreBucket,
         selected: Option<[u8; 32]>,
     ) {
         if self.context != context {
@@ -141,6 +143,7 @@ impl SelectIrRanking {
                             chart_sha256_hex: hash_to_hex(&sha256),
                             gauge: gauge.to_string(),
                             ln_policy,
+                            double_option,
                         },
                         self.context.clone(),
                         sha256,
@@ -380,12 +383,28 @@ mod tests {
         let root = std::env::temp_dir();
 
         // 1回目はデバウンス予約のみで取得を開始しない。
-        select_ir.update(&config, &root, "ctx", "Normal", LnScorePolicy::ForceLn, Some(sha));
+        select_ir.update(
+            &config,
+            &root,
+            "ctx",
+            "Normal",
+            LnScorePolicy::ForceLn,
+            DoubleOptionScoreBucket::Off,
+            Some(sha),
+        );
         assert!(select_ir.in_flight.is_none());
         assert!(select_ir.pending.is_some());
 
         // 選択が外れたら予約は破棄。
-        select_ir.update(&config, &root, "ctx", "Normal", LnScorePolicy::ForceLn, None);
+        select_ir.update(
+            &config,
+            &root,
+            "ctx",
+            "Normal",
+            LnScorePolicy::ForceLn,
+            DoubleOptionScoreBucket::Off,
+            None,
+        );
         assert!(select_ir.pending.is_none());
     }
 
@@ -400,7 +419,15 @@ mod tests {
         select_ir.in_flight = Some(("old".to_string(), sha));
         select_ir.sender.send(("old".to_string(), sha, Err("stale".to_string()))).unwrap();
 
-        select_ir.update(&config, &root, "new", "Normal", LnScorePolicy::ForceLn, Some(sha));
+        select_ir.update(
+            &config,
+            &root,
+            "new",
+            "Normal",
+            LnScorePolicy::ForceLn,
+            DoubleOptionScoreBucket::Off,
+            Some(sha),
+        );
         assert!(!select_ir.cache.contains_key(&sha));
         assert!(select_ir.in_flight.is_none());
     }

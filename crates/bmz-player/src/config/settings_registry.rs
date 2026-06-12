@@ -491,7 +491,7 @@ fn format_double_option(value: DoubleOptionConfig) -> String {
         DoubleOptionConfig::Off => "OFF".to_string(),
         DoubleOptionConfig::Flip => "FLIP".to_string(),
         DoubleOptionConfig::Battle => "BATTLE".to_string(),
-        DoubleOptionConfig::BattleAssist => "BATTLE AS".to_string(),
+        DoubleOptionConfig::BattleAutoScratch => "BATTLE AS".to_string(),
     }
 }
 
@@ -676,7 +676,7 @@ fn cycle_double_option(current: DoubleOptionConfig, forward: bool) -> DoubleOpti
         DoubleOptionConfig::Off,
         DoubleOptionConfig::Flip,
         DoubleOptionConfig::Battle,
-        DoubleOptionConfig::BattleAssist,
+        DoubleOptionConfig::BattleAutoScratch,
     ];
     cycle_in_slice(&VALUES, current, forward)
 }

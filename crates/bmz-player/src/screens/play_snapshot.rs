@@ -253,7 +253,7 @@ pub fn build_render_snapshot_with_target_and_bga_frames(
         .map(|rate| (rate * 100.0).floor() as i32),
         judge_graph_density: build_judge_graph_density(&session.chart),
         bpm_graph_segments: build_bpm_graph_segments(&session.chart),
-        autoplay: session.autoplay.is_some(),
+        autoplay: session.autoplay.as_ref().is_some_and(|autoplay| autoplay.is_full()),
         course_stage: None,
         course_titles: Default::default(),
         table_text_primary: String::new(),

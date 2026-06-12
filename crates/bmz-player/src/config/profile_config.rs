@@ -185,7 +185,8 @@ pub enum DoubleOptionConfig {
     Off,
     Flip,
     Battle,
-    BattleAssist,
+    #[serde(alias = "BattleAssist")]
+    BattleAutoScratch,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

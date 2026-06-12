@@ -2004,7 +2004,7 @@ fn build_profile_settings_panel(
                                 (DoubleOptionConfig::Off, "OFF"),
                                 (DoubleOptionConfig::Flip, "FLIP"),
                                 (DoubleOptionConfig::Battle, "BATTLE"),
-                                (DoubleOptionConfig::BattleAssist, "BATTLE AS"),
+                                (DoubleOptionConfig::BattleAutoScratch, "BATTLE AS"),
                             ] {
                                 ui.selectable_value(&mut profile.play.double_option, value, label);
                             }
@@ -2482,7 +2482,7 @@ fn double_option_label(value: DoubleOptionConfig) -> &'static str {
         DoubleOptionConfig::Off => "OFF",
         DoubleOptionConfig::Flip => "FLIP",
         DoubleOptionConfig::Battle => "BATTLE",
-        DoubleOptionConfig::BattleAssist => "BATTLE AS",
+        DoubleOptionConfig::BattleAutoScratch => "BATTLE AS",
     }
 }
 

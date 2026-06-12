@@ -3,6 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type {
   IrChartLnProfile,
   IrDeviceType,
+  IrDoubleOption,
   IrRanking,
   IrRankingEntry,
   IrRankingScope,
@@ -51,6 +52,7 @@ export interface RankingQuery {
   offset: number
   gauge?: string
   lnPolicy?: LnScorePolicy
+  doubleOption: IrDoubleOption
   scoring: 'bms_ex_score_v1'
 }
 
@@ -71,6 +73,7 @@ interface BestScoreRow extends BestScoreCandidate {
   gauge: string
   ln_policy: LnScorePolicy
   effective_ln_mode: 'ln' | 'cn' | 'hcn'
+  double_option: IrDoubleOption
   scoring: 'bms_ex_score_v1'
   device_type: IrDeviceType
   played_at: string | null
@@ -85,11 +88,12 @@ export function parseRankingQuery(query: Record<string, unknown>): RankingQuery 
     typeof query.gauge === 'string' && query.gauge ? normalizeGaugeName(query.gauge) : undefined
   const lnPolicy =
     typeof query.ln_policy === 'string' && query.ln_policy ? asLnPolicy(query.ln_policy) : undefined
+  const doubleOption = normalizeDoubleOption(query.double_option)
   const scoring = String(query.scoring ?? 'bms_ex_score_v1')
   if (scoring !== 'bms_ex_score_v1') {
     throw new Error('unsupported scoring')
   }
-  return { scope, limit, offset, gauge, lnPolicy, scoring }
+  return { scope, limit, offset, gauge, lnPolicy, doubleOption, scoring }
 }
 
 export function validateScoreSubmission(value: unknown): IrScoreSubmission {
@@ -141,6 +145,7 @@ export function validateScoreSubmission(value: unknown): IrScoreSubmission {
   if (!DEVICE_TYPES.has(String(payload.play_options.device_type))) {
     throw new Error('play_options.device_type is invalid')
   }
+  normalizeDoubleOption(payload.play_options.double_option)
   return payload
 }
 
@@ -151,7 +156,8 @@ export async function submitScore(
   rankingScopes: IrRankingScope[],
   rankingLimit: number,
 ): Promise<IrSubmitResponse> {
-  await upsertChart(db, payload)
+  const doubleOption = normalizeDoubleOption(payload.play_options.double_option)
+  await upsertChart(db, payload, doubleOption === 'off')
 
   const bp =
     judgeTotal(payload, 'bad') + judgeTotal(payload, 'poor') + judgeTotal(payload, 'empty_poor')
@@ -188,7 +194,8 @@ export async function submitScore(
     min_bp: payload.result.min_bp,
     min_cb: payload.result.min_cb,
     device_type: deviceType,
-    play_options: (payload.play_options ?? {}) as Json,
+    double_option: doubleOption,
+    play_options: { ...payload.play_options, double_option: doubleOption } as Json,
     replay_hash: payload.replay?.hash ?? null,
     replay_format: payload.replay?.format ?? null,
     replay_upload_intent: payload.replay?.upload_intent ?? null,
@@ -256,6 +263,7 @@ export async function submitScore(
           offset: 0,
           gauge: payload.rule.gauge,
           lnPolicy: payload.rule.ln_policy,
+          doubleOption,
           scoring: payload.rule.scoring,
         }),
       }
@@ -288,10 +296,11 @@ export async function getRanking(
   let rankingQuery = db
     .from('best_scores')
     .select(
-      'player_id, chart_sha256, score_id, ex_score, clear_type, clear_rank, max_combo, min_bp, min_cb, device_type, gauge, ln_policy, effective_ln_mode, scoring, played_at, server_received_at, verification',
+      'player_id, chart_sha256, score_id, ex_score, clear_type, clear_rank, max_combo, min_bp, min_cb, device_type, gauge, ln_policy, effective_ln_mode, double_option, scoring, played_at, server_received_at, verification',
     )
     .eq('chart_sha256', sha256)
     .eq('scoring', query.scoring)
+    .eq('double_option', query.doubleOption)
     .order('ex_score', { ascending: false })
   if (query.gauge) {
     rankingQuery = rankingQuery.eq('gauge', query.gauge)
@@ -326,6 +335,7 @@ export async function getRanking(
       effective_ln_mode: query.lnPolicy
         ? bestRows.find((row) => row.ln_policy === query.lnPolicy)?.effective_ln_mode
         : undefined,
+      double_option: query.doubleOption,
     },
     ranking: {
       scope: query.scope,
@@ -357,7 +367,7 @@ export async function getRanking(
   }
 }
 
-async function upsertChart(db: Db, payload: IrScoreSubmission) {
+async function upsertChart(db: Db, payload: IrScoreSubmission, allowUpdate: boolean) {
   const profile: Partial<IrChartLnProfile> = payload.chart.ln_profile ?? {}
   const notes = payload.chart.notes ?? {}
   const features = payload.chart.features ?? {}
@@ -395,7 +405,12 @@ async function upsertChart(db: Db, payload: IrScoreSubmission) {
       append_url: payload.chart.urls?.append ?? null,
       headers: payload.chart.headers ?? {},
     },
-    { onConflict: 'sha256' },
+    {
+      onConflict: 'sha256',
+      // Battle系は result.notes が2倍になり、key_mode もDP化されるため、
+      // 既存の元譜面 chart metadata を上書きしない。
+      ignoreDuplicates: !allowUpdate,
+    },
   )
   if (error) {
     throw error
@@ -415,6 +430,7 @@ async function fetchPreviousBest(
     .eq('gauge', payload.rule.gauge)
     .eq('ln_policy', payload.rule.ln_policy)
     .eq('scoring', payload.rule.scoring)
+    .eq('double_option', normalizeDoubleOption(payload.play_options.double_option))
     .maybeSingle()
   if (error) {
     throw error
@@ -447,6 +463,7 @@ async function upsertBestScore(
     .eq('gauge', payload.rule.gauge)
     .eq('ln_policy', payload.rule.ln_policy)
     .eq('scoring', payload.rule.scoring)
+    .eq('double_option', normalizeDoubleOption(payload.play_options.double_option))
     .maybeSingle()
   if (currentError) {
     throw currentError
@@ -476,6 +493,7 @@ async function upsertBestScore(
       min_bp: candidate.min_bp,
       min_cb: candidate.min_cb,
       device_type: payload.play_options.device_type,
+      double_option: normalizeDoubleOption(payload.play_options.double_option),
       gauge: payload.rule.gauge,
       ln_policy: payload.rule.ln_policy,
       effective_ln_mode: payload.rule.effective_ln_mode,
@@ -484,7 +502,7 @@ async function upsertBestScore(
       server_received_at: candidate.server_received_at,
       verification,
     },
-    { onConflict: 'player_id,chart_sha256,gauge,ln_policy,scoring' },
+    { onConflict: 'player_id,chart_sha256,gauge,ln_policy,scoring,double_option' },
   )
   if (error) {
     throw error
@@ -551,6 +569,7 @@ function rankRows(
         min_cb: row.min_cb,
         gauge: row.gauge,
         ln_policy: row.ln_policy,
+        double_option: row.double_option,
         device_type: row.device_type,
         played_at: row.played_at,
         verification: row.verification,
@@ -732,6 +751,27 @@ function asScope(value: string): IrRankingScope {
     throw new Error('scope is invalid')
   }
   return value as IrRankingScope
+}
+
+function normalizeDoubleOption(value: unknown): IrDoubleOption {
+  const normalized = String(value ?? 'off')
+    .trim()
+    .toLowerCase()
+    .replaceAll('-', '_')
+
+  switch (normalized) {
+    case '':
+    case 'off':
+    case 'flip':
+      return 'off'
+    case 'battle':
+      return 'battle'
+    case 'battle_auto_scratch':
+    case 'battle_assist':
+      return 'battle_auto_scratch'
+    default:
+      throw new Error('double_option is invalid')
+  }
 }
 
 function clampInteger(value: unknown, fallback: number, min: number, max: number): number {

@@ -6,18 +6,38 @@ use bmz_core::time::TimeUs;
 #[derive(Debug, Clone)]
 pub struct AutoplayController {
     next_note_index: [usize; LANE_COUNT],
+    lanes: [bool; LANE_COUNT],
 }
 
 impl Default for AutoplayController {
     fn default() -> Self {
-        Self { next_note_index: [0; LANE_COUNT] }
+        Self { next_note_index: [0; LANE_COUNT], lanes: [true; LANE_COUNT] }
     }
 }
 
 impl AutoplayController {
+    pub fn for_lanes(lanes: &[Lane]) -> Self {
+        let mut enabled = [false; LANE_COUNT];
+        for lane in lanes {
+            enabled[lane.index()] = true;
+        }
+        Self { next_note_index: [0; LANE_COUNT], lanes: enabled }
+    }
+
+    pub fn is_full(&self) -> bool {
+        self.lanes.iter().all(|enabled| *enabled)
+    }
+
+    pub fn is_lane_enabled(&self, lane: Lane) -> bool {
+        self.lanes[lane.index()]
+    }
+
     pub fn poll_until(&mut self, chart: &PlayableChart, now: TimeUs) -> Vec<InputEvent> {
         let mut out = Vec::new();
         for lane in Lane::ALL {
+            if !self.is_lane_enabled(lane) {
+                continue;
+            }
             let notes = chart.notes_for_lane(lane);
             let index = &mut self.next_note_index[lane.index()];
             while let Some(note) = notes.get(*index) {

@@ -361,6 +361,8 @@ pub fn apply_arrange_override(
     arrange: &crate::screens::play_session::AppliedArrange,
 ) {
     options.arrange = arrange.arrange;
+    options.arrange_2p = arrange.arrange_2p;
+    options.double_option = arrange.double_option;
     options.arrange_seed = arrange.seed;
     options.arrange_pattern = arrange.pattern.clone();
 }
@@ -373,6 +375,8 @@ pub fn apply_queued_replay(
         bmz_gameplay::replay::ReplayPlayer { events: replay.replay.events.clone(), next_index: 0 };
     options.replay_player = Some(player);
     options.arrange = replay.replay.arrange_option();
+    options.arrange_2p = replay.replay.arrange_2p_option();
+    options.double_option = replay.replay.double_option();
     options.arrange_seed = replay.replay.arrange_seed;
     options.arrange_pattern = replay.replay.lane_shuffle_pattern.clone();
     // Replays of past plays were recorded by a human; never autoplay them.
@@ -395,12 +399,16 @@ mod tests {
         let mut options = PlayStartOptions::default();
         let arrange = AppliedArrange {
             arrange: ArrangeOption::Random,
+            arrange_2p: ArrangeOption::Mirror,
+            double_option: crate::select_options::DoubleOption::Flip,
             seed: Some(42),
             pattern: Some(vec![3, 1, 2, 0]),
         };
         apply_arrange_override(&mut options, &arrange);
 
         assert_eq!(options.arrange, ArrangeOption::Random);
+        assert_eq!(options.arrange_2p, ArrangeOption::Mirror);
+        assert_eq!(options.double_option, crate::select_options::DoubleOption::Flip);
         assert_eq!(options.arrange_seed, Some(42));
         assert_eq!(options.arrange_pattern, Some(vec![3, 1, 2, 0]));
         // Unlike a replay, no playback player is attached: the chart is played.

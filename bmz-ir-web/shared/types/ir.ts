@@ -8,6 +8,8 @@ export type IrVerificationStatus = 'unverified' | 'signed' | 'invalid' | 'truste
 
 export type IrDeviceType = 'keyboard' | 'controller'
 
+export type IrDoubleOption = 'off' | 'battle' | 'battle_auto_scratch'
+
 export interface IrChartLnProfile {
   has_undefined_ln: boolean
   has_defined_ln: boolean
@@ -80,6 +82,7 @@ export interface IrScoreSubmission {
   }
   play_options: {
     device_type: IrDeviceType
+    double_option?: IrDoubleOption
   } & Record<string, unknown>
   replay?: {
     hash?: string | null
@@ -138,6 +141,7 @@ export interface IrRanking {
     gauge?: string
     ln_policy?: LnScorePolicy
     effective_ln_mode?: EffectiveLnMode
+    double_option?: IrDoubleOption
   }
   ranking: {
     scope: IrRankingScope
@@ -176,6 +180,7 @@ export interface IrRankingEntry {
     min_cb: number
     gauge: string
     ln_policy: LnScorePolicy
+    double_option: IrDoubleOption
     device_type: IrDeviceType
     played_at: string | null
     verification: IrVerificationStatus

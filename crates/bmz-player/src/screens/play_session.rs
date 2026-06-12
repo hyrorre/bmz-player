@@ -6,6 +6,7 @@ use bmz_audio::loader::{LoadedSampleReport, SampleLoader, load_chart_samples};
 use bmz_chart::import::import_bms_chart;
 use bmz_chart::model::{NoteEvent, NoteKind, PlayableChart};
 use bmz_core::clear::GaugeType;
+use bmz_core::ids::NoteId;
 use bmz_core::lane::{KeyMode, LANE_COUNT, Lane};
 use bmz_core::time::TimeUs;
 use bmz_gameplay::autoplay::AutoplayController;
@@ -79,6 +80,8 @@ pub struct PlaySessionOptions {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AppliedArrange {
     pub arrange: ArrangeOption,
+    pub arrange_2p: ArrangeOption,
+    pub double_option: DoubleOption,
     pub seed: Option<i64>,
     pub pattern: Option<Vec<u8>>,
 }
@@ -289,7 +292,13 @@ pub fn build_game_session_with_input_backend(
     let autoplay_enabled = profile.play.auto_play || options.autoplay;
     let replay_player = options.replay_player;
     let is_replay = replay_player.is_some();
-    let autoplay = autoplay_enabled.then(AutoplayController::default);
+    let autoplay = if autoplay_enabled {
+        Some(AutoplayController::default())
+    } else if options.double_option == DoubleOption::BattleAutoScratch {
+        Some(AutoplayController::for_lanes(&[Lane::Scratch, Lane::Scratch2]))
+    } else {
+        None
+    };
     let key_mode = chart.metadata.key_mode;
     let rule_mode = profile.play.rule_mode;
     let input_system = InputSystem {
@@ -576,9 +585,12 @@ pub fn preload_play_session_for_chart(
         import_bms_chart(std::path::Path::new(&path), random_seed_for_chart(&options), true)
             .with_context(|| format!("failed to import chart file: {path}"))?;
     let mut chart = import.chart;
-    let score_key = ScoreKey::new(
+    let applied_double_option =
+        options.double_option.normalize_for_key_mode(chart.metadata.key_mode);
+    let score_key = ScoreKey::with_double_option(
         chart.identity.file_sha256,
         score_ln_policy_for_chart(options.ln_policy_setting, &chart),
+        applied_double_option.score_bucket(),
     );
     apply_ln_policy_to_chart(options.ln_policy_setting, &mut chart);
     // Course constraint may force a specific LN mode (Ln/Cn/Hcn) regardless of
@@ -586,14 +598,15 @@ pub fn preload_play_session_for_chart(
     if let Some(ln_mode) = options.ln_mode_override {
         force_ln_mode_for_chart(ln_mode, &mut chart);
     }
-    apply_double_option(&mut chart, options.double_option);
-    let applied_arrange = apply_arrange_pair(
+    apply_double_option(&mut chart, applied_double_option);
+    let mut applied_arrange = apply_arrange_pair(
         &mut chart,
         options.arrange,
         options.arrange_2p,
         options.arrange_seed,
         options.arrange_pattern.as_deref(),
     );
+    applied_arrange.double_option = applied_double_option;
     let chart = Arc::new(chart);
     let mut loader = FfmpegSampleLoader;
     let (audio, sample_report) =
@@ -636,9 +649,10 @@ pub fn build_practice_prepared_from_preloaded(
 pub fn build_prepared_play_session_from_preloaded(
     preloaded: PreloadedPlaySession,
     profile: &ProfileConfig,
-    options: PlaySessionOptions,
+    mut options: PlaySessionOptions,
     input_backend: Box<dyn InputBackend>,
 ) -> PreparedPlaySession {
+    options.double_option = preloaded.applied_arrange.double_option;
     let target_ex_score = options.target.target_ex_score_with_override(
         preloaded.chart.total_notes,
         options.target_ex_score_override,
@@ -670,19 +684,31 @@ pub fn apply_arrange(
     if let Some(perm) = pattern {
         let perm_usize: Vec<usize> = perm.iter().map(|&i| i as usize).collect();
         apply_lane_permutation(chart, &perm_usize);
-        return AppliedArrange { arrange, seed, pattern: Some(perm.to_vec()) };
+        return AppliedArrange {
+            arrange,
+            arrange_2p: ArrangeOption::Normal,
+            double_option: DoubleOption::Off,
+            seed,
+            pattern: Some(perm.to_vec()),
+        };
     }
 
     let key_mode = chart.metadata.key_mode;
     match arrange {
-        ArrangeOption::Normal => {
-            AppliedArrange { arrange: ArrangeOption::Normal, seed: None, pattern: None }
-        }
+        ArrangeOption::Normal => AppliedArrange {
+            arrange: ArrangeOption::Normal,
+            arrange_2p: ArrangeOption::Normal,
+            double_option: DoubleOption::Off,
+            seed: None,
+            pattern: None,
+        },
         ArrangeOption::Mirror => {
             let perm = mirror_permutation(key_mode);
             apply_lane_permutation(chart, &perm);
             AppliedArrange {
                 arrange: ArrangeOption::Mirror,
+                arrange_2p: ArrangeOption::Normal,
+                double_option: DoubleOption::Off,
                 seed: None,
                 pattern: Some(perm.iter().map(|&i| i as u8).collect()),
             }
@@ -693,6 +719,8 @@ pub fn apply_arrange(
             apply_lane_permutation(chart, &perm);
             AppliedArrange {
                 arrange: ArrangeOption::Random,
+                arrange_2p: ArrangeOption::Normal,
+                double_option: DoubleOption::Off,
                 seed: Some(used_seed),
                 pattern: Some(perm.iter().map(|&i| i as u8).collect()),
             }
@@ -703,6 +731,8 @@ pub fn apply_arrange(
             apply_lane_permutation(chart, &perm);
             AppliedArrange {
                 arrange: ArrangeOption::RRandom,
+                arrange_2p: ArrangeOption::Normal,
+                double_option: DoubleOption::Off,
                 seed: Some(used_seed),
                 pattern: Some(perm.iter().map(|&i| i as u8).collect()),
             }
@@ -713,6 +743,8 @@ pub fn apply_arrange(
             apply_lane_permutation(chart, &perm);
             AppliedArrange {
                 arrange: ArrangeOption::RandomEx,
+                arrange_2p: ArrangeOption::Normal,
+                double_option: DoubleOption::Off,
                 seed: Some(used_seed),
                 pattern: Some(perm.iter().map(|&i| i as u8).collect()),
             }
@@ -724,7 +756,13 @@ pub fn apply_arrange(
         | ArrangeOption::SRandomEx => {
             let used_seed = seed.unwrap_or_else(generate_arrange_seed);
             apply_note_arrange(chart, arrange, used_seed);
-            AppliedArrange { arrange, seed: Some(used_seed), pattern: None }
+            AppliedArrange {
+                arrange,
+                arrange_2p: ArrangeOption::Normal,
+                double_option: DoubleOption::Off,
+                seed: Some(used_seed),
+                pattern: None,
+            }
         }
     }
 }
@@ -739,7 +777,13 @@ pub fn apply_arrange_pair(
     if let Some(perm) = pattern {
         let perm_usize: Vec<usize> = perm.iter().map(|&i| i as usize).collect();
         apply_lane_permutation(chart, &perm_usize);
-        return AppliedArrange { arrange: arrange_1p, seed, pattern: Some(perm.to_vec()) };
+        return AppliedArrange {
+            arrange: arrange_1p,
+            arrange_2p,
+            double_option: DoubleOption::Off,
+            seed,
+            pattern: Some(perm.to_vec()),
+        };
     }
 
     let key_mode = chart.metadata.key_mode;
@@ -768,16 +812,25 @@ pub fn apply_arrange_pair(
 
     AppliedArrange {
         arrange: arrange_1p,
+        arrange_2p,
+        double_option: DoubleOption::Off,
         seed: used_seed,
         pattern: has_perm.then(|| combined_perm.iter().map(|&i| i as u8).collect()),
     }
 }
 
 fn apply_double_option(chart: &mut PlayableChart, double_option: DoubleOption) {
-    if double_option != DoubleOption::Flip
-        || !matches!(chart.metadata.key_mode, KeyMode::K10 | KeyMode::K14)
-    {
-        return;
+    match double_option {
+        DoubleOption::Off => return,
+        DoubleOption::Flip => {
+            if !matches!(chart.metadata.key_mode, KeyMode::K10 | KeyMode::K14) {
+                return;
+            }
+        }
+        DoubleOption::Battle | DoubleOption::BattleAutoScratch => {
+            apply_battle_double_option(chart);
+            return;
+        }
     }
 
     let mut perm: Vec<usize> = (0..LANE_COUNT).collect();
@@ -797,6 +850,88 @@ fn apply_double_option(chart: &mut PlayableChart, double_option: DoubleOption) {
         perm[right] = left;
     }
     apply_lane_permutation(chart, &perm);
+}
+
+fn apply_battle_double_option(chart: &mut PlayableChart) {
+    let (next_mode, pairs): (KeyMode, &[(Lane, Lane)]) = match chart.metadata.key_mode {
+        KeyMode::K5 => (
+            KeyMode::K10,
+            &[
+                (Lane::Scratch, Lane::Scratch2),
+                (Lane::Key1, Lane::Key8),
+                (Lane::Key2, Lane::Key9),
+                (Lane::Key3, Lane::Key10),
+                (Lane::Key4, Lane::Key11),
+                (Lane::Key5, Lane::Key12),
+            ],
+        ),
+        KeyMode::K7 => (
+            KeyMode::K14,
+            &[
+                (Lane::Scratch, Lane::Scratch2),
+                (Lane::Key1, Lane::Key8),
+                (Lane::Key2, Lane::Key9),
+                (Lane::Key3, Lane::Key10),
+                (Lane::Key4, Lane::Key11),
+                (Lane::Key5, Lane::Key12),
+                (Lane::Key6, Lane::Key13),
+                (Lane::Key7, Lane::Key14),
+            ],
+        ),
+        _ => return,
+    };
+
+    let mut next_note_id = next_note_id(chart);
+    let mut cloned_ids = std::collections::HashMap::new();
+    for &(source, dest) in pairs {
+        let source_index = source.index();
+        let dest_index = dest.index();
+        let clones: Vec<NoteEvent> = chart.lane_notes[source_index]
+            .iter()
+            .cloned()
+            .map(|mut note| {
+                let new_id = next_note_id;
+                next_note_id.0 = next_note_id.0.saturating_add(1);
+                cloned_ids.insert(note.id, new_id);
+                note.id = new_id;
+                note.lane = dest;
+                note
+            })
+            .collect();
+        chart.lane_notes[dest_index].extend(clones);
+    }
+
+    let source_to_dest: std::collections::HashMap<_, _> = pairs.iter().copied().collect();
+    let mut cloned_long_notes = Vec::new();
+    for pair in &chart.long_notes {
+        let Some(&dest) = source_to_dest.get(&pair.lane) else {
+            continue;
+        };
+        let (Some(&start_note_id), Some(&end_note_id)) =
+            (cloned_ids.get(&pair.start_note_id), cloned_ids.get(&pair.end_note_id))
+        else {
+            continue;
+        };
+        let mut cloned = pair.clone();
+        cloned.lane = dest;
+        cloned.start_note_id = start_note_id;
+        cloned.end_note_id = end_note_id;
+        cloned_long_notes.push(cloned);
+    }
+    chart.long_notes.extend(cloned_long_notes);
+    chart.total_notes = chart.total_notes.saturating_mul(2);
+    chart.metadata.key_mode = next_mode;
+}
+
+fn next_note_id(chart: &PlayableChart) -> NoteId {
+    let lane_max = chart.lane_notes.iter().flatten().map(|note| note.id.0).max().unwrap_or(0);
+    let long_max = chart
+        .long_notes
+        .iter()
+        .flat_map(|pair| [pair.start_note_id.0, pair.end_note_id.0])
+        .max()
+        .unwrap_or(0);
+    NoteId(lane_max.max(long_max).saturating_add(1))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1635,6 +1770,40 @@ mod tests {
             chart.lane_notes[Lane::Key1.index()]
                 .iter()
                 .any(|note| note.id == NoteId(4) && note.lane == Lane::Key1)
+        );
+    }
+
+    #[test]
+    fn double_option_battle_duplicates_sp_lanes_as_dp() {
+        let mut chart = chart();
+        chart.metadata.key_mode = KeyMode::K7;
+        chart.total_notes = 2;
+        chart.lane_notes[Lane::Scratch.index()].push(note(1, Lane::Scratch, 1_000_000));
+        chart.lane_notes[Lane::Key1.index()].push(note(2, Lane::Key1, 1_010_000));
+
+        apply_double_option(&mut chart, DoubleOption::Battle);
+
+        assert_eq!(chart.metadata.key_mode, KeyMode::K14);
+        assert_eq!(chart.total_notes, 4);
+        assert!(
+            chart.lane_notes[Lane::Scratch.index()]
+                .iter()
+                .any(|note| note.id == NoteId(1) && note.lane == Lane::Scratch)
+        );
+        assert!(
+            chart.lane_notes[Lane::Scratch2.index()]
+                .iter()
+                .any(|note| note.id != NoteId(1) && note.lane == Lane::Scratch2)
+        );
+        assert!(
+            chart.lane_notes[Lane::Key1.index()]
+                .iter()
+                .any(|note| note.id == NoteId(2) && note.lane == Lane::Key1)
+        );
+        assert!(
+            chart.lane_notes[Lane::Key8.index()]
+                .iter()
+                .any(|note| note.id != NoteId(2) && note.lane == Lane::Key8)
         );
     }
 

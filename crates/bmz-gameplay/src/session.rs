@@ -376,7 +376,10 @@ pub fn process_human_inputs(session: &mut GameSession) -> Vec<JudgementEvent> {
         offsets: session.offsets,
         timestamp_anchor: session.input_timestamp_anchor,
     };
-    let inputs = session.input_system.collect_game_inputs(&ctx);
+    let mut inputs = session.input_system.collect_game_inputs(&ctx);
+    if let Some(autoplay) = &session.autoplay {
+        inputs.retain(|input| !autoplay.is_lane_enabled(input.lane));
+    }
     update_recent_inputs(session, &inputs, session.audio_clock.now());
     update_lane_key_states(session, &inputs);
     let mut judgements = Vec::new();
@@ -652,15 +655,19 @@ pub fn advance_session_frame(
         if session.replay_player.is_some() {
             drain_human_inputs(session);
             judgements.extend(process_replay_inputs(session, times.audio_now));
-        } else if session.autoplay.is_some() {
-            // オートプレイ中は人間のキー入力を判定にも視覚エフェクトにも渡さない。
-            // キービームは process_autoplay_inputs 側(ノーツ処理時)で発火する。
-            // (ハイスピード等のオプション操作は app 側で別途処理される)
-            discard_human_inputs(session);
-            judgements.extend(process_autoplay_inputs(session, times.audio_now));
-            apply_auto_key_release(session, times.audio_now);
         } else {
-            judgements.extend(process_human_inputs(session));
+            if session.autoplay.as_ref().is_some_and(AutoplayController::is_full) {
+                // フルオート中は人間のキー入力を判定にも視覚エフェクトにも渡さない。
+                // キービームは process_autoplay_inputs 側(ノーツ処理時)で発火する。
+                // (ハイスピード等のオプション操作は app 側で別途処理される)
+                discard_human_inputs(session);
+            } else {
+                judgements.extend(process_human_inputs(session));
+            }
+            judgements.extend(process_autoplay_inputs(session, times.audio_now));
+            if session.autoplay.is_some() {
+                apply_auto_key_release(session, times.audio_now);
+            }
         }
         judgements.extend(process_misses(session, times.audio_now));
         update_hcn_lane_timers(session, times.audio_now);

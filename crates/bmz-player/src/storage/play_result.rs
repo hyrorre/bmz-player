@@ -6,10 +6,10 @@ use bmz_gameplay::result::PlayResult;
 use crate::config::profile_config::{ReplayConfig, ReplaySlotRule};
 use crate::ln_policy::LnScorePolicy;
 use crate::paths::ProfilePaths;
-use crate::select_options::ArrangeOption;
+use crate::select_options::{ArrangeOption, DoubleOptionScoreBucket};
 
 use super::replay::{ReplayFile, replay_file_name, replay_slot_file_name, save_replay};
-use super::score_db::{ReplaySlotRecord, ScoreDatabase, ScoreRecord};
+use super::score_db::{ReplaySlotRecord, ScoreDatabase, ScoreRecord, ScoreRecordMetadata};
 
 #[derive(Debug, Clone)]
 pub struct StoredPlayResult {
@@ -23,12 +23,14 @@ pub struct StoredPlayResult {
 pub struct StorePlayResultRequest {
     pub played_at: i64,
     pub ln_policy: LnScorePolicy,
+    pub double_option: DoubleOptionScoreBucket,
     pub random_seed: Option<i64>,
     pub gauge_option: String,
     pub rule_mode: String,
     pub assist_mask: u32,
     pub replay_events: Vec<ReplayEvent>,
     pub arrange: ArrangeOption,
+    pub arrange_2p: ArrangeOption,
     pub arrange_seed: Option<i64>,
     pub arrange_pattern: Option<Vec<u8>>,
 }
@@ -50,6 +52,7 @@ pub fn store_play_result(
     request: StorePlayResultRequest,
 ) -> Result<StoredPlayResult> {
     let arrange = request.arrange;
+    let arrange_2p = request.arrange_2p;
     let arrange_seed = request.arrange_seed;
     let arrange_pattern = request.arrange_pattern.clone();
     let replay_events = request.replay_events.clone();
@@ -61,9 +64,11 @@ pub fn store_play_result(
         let replay = ReplayFile::new_with_policy(
             result.chart_sha256,
             request.ln_policy,
+            request.double_option,
             request.played_at,
             request.random_seed,
             arrange,
+            arrange_2p,
             arrange_seed,
             arrange_pattern.clone(),
             replay_events.clone(),
@@ -76,15 +81,18 @@ pub fn store_play_result(
 
     let record = ScoreRecord::from_play_result(
         result,
-        request.ln_policy,
-        request.played_at,
-        request.random_seed,
-        arrange.to_persistent_str(),
-        request.gauge_option,
-        request.rule_mode,
-        request.assist_mask,
-        device_type,
-        replay_path.clone(),
+        ScoreRecordMetadata::new(
+            request.ln_policy,
+            request.double_option,
+            request.played_at,
+            request.random_seed,
+            arrange.to_persistent_str(),
+            request.gauge_option,
+            request.rule_mode,
+            request.assist_mask,
+            device_type,
+            replay_path.clone(),
+        ),
     );
     let score_history_id = score_db.insert_score(&record)?;
 
@@ -93,19 +101,30 @@ pub fn store_play_result(
         let candidate = candidate_metrics(result);
         for (slot_index, &rule) in replay_config.slot_rules.iter().enumerate() {
             let slot = slot_index as u8;
-            let key = super::score_db::ScoreKey::new(result.chart_sha256, request.ln_policy);
+            let key = super::score_db::ScoreKey::with_double_option(
+                result.chart_sha256,
+                request.ln_policy,
+                request.double_option,
+            );
             let prev = score_db.replay_slot(key, slot)?;
             if !evaluate_slot_update(rule, prev.as_ref(), &candidate) {
                 continue;
             }
-            let file_name = replay_slot_file_name(result.chart_sha256, request.ln_policy, slot);
+            let file_name = replay_slot_file_name(
+                result.chart_sha256,
+                request.ln_policy,
+                request.double_option,
+                slot,
+            );
             let path = profile_paths.replay_dir.join(&file_name);
             let replay = ReplayFile::new_with_policy(
                 result.chart_sha256,
                 request.ln_policy,
+                request.double_option,
                 request.played_at,
                 request.random_seed,
                 arrange,
+                arrange_2p,
                 arrange_seed,
                 arrange_pattern.clone(),
                 replay_events.clone(),
@@ -115,6 +134,7 @@ pub fn store_play_result(
             score_db.upsert_replay_slot(&ReplaySlotRecord {
                 chart_sha256: result.chart_sha256,
                 ln_policy: request.ln_policy,
+                double_option: request.double_option,
                 slot,
                 rule,
                 replay_path: rel_path.clone(),
@@ -234,6 +254,7 @@ mod tests {
             &result,
             StorePlayResultRequest {
                 ln_policy: LnScorePolicy::ForceLn,
+                double_option: DoubleOptionScoreBucket::Off,
                 played_at: 1_700_000_060,
                 random_seed: Some(77),
                 gauge_option: String::new(),
@@ -246,6 +267,7 @@ mod tests {
                     device_kind: InputDeviceKind::Keyboard,
                 }],
                 arrange: ArrangeOption::Normal,
+                arrange_2p: ArrangeOption::Normal,
                 arrange_seed: None,
                 arrange_pattern: None,
             },
@@ -295,6 +317,7 @@ mod tests {
             &result,
             StorePlayResultRequest {
                 ln_policy: LnScorePolicy::ForceLn,
+                double_option: DoubleOptionScoreBucket::Off,
                 played_at: 1_700_000_061,
                 random_seed: None,
                 gauge_option: String::new(),
@@ -302,6 +325,7 @@ mod tests {
                 assist_mask: 0,
                 replay_events: Vec::new(),
                 arrange: ArrangeOption::Normal,
+                arrange_2p: ArrangeOption::Normal,
                 arrange_seed: None,
                 arrange_pattern: None,
             },
@@ -343,6 +367,7 @@ mod tests {
             &result,
             StorePlayResultRequest {
                 ln_policy: LnScorePolicy::ForceLn,
+                double_option: DoubleOptionScoreBucket::Off,
                 played_at: 1_700_000_062,
                 random_seed: None,
                 gauge_option: String::new(),
@@ -350,6 +375,7 @@ mod tests {
                 assist_mask: 0,
                 replay_events: Vec::new(),
                 arrange: ArrangeOption::Normal,
+                arrange_2p: ArrangeOption::Normal,
                 arrange_seed: None,
                 arrange_pattern: None,
             },
@@ -389,6 +415,7 @@ mod tests {
             &result,
             StorePlayResultRequest {
                 ln_policy: LnScorePolicy::ForceLn,
+                double_option: DoubleOptionScoreBucket::Off,
                 played_at: 1_700_000_100,
                 random_seed: None,
                 gauge_option: String::new(),
@@ -396,6 +423,7 @@ mod tests {
                 assist_mask: 0,
                 replay_events: Vec::new(),
                 arrange: ArrangeOption::Normal,
+                arrange_2p: ArrangeOption::Normal,
                 arrange_seed: None,
                 arrange_pattern: None,
             },
@@ -416,6 +444,7 @@ mod tests {
             &result,
             StorePlayResultRequest {
                 ln_policy: LnScorePolicy::ForceLn,
+                double_option: DoubleOptionScoreBucket::Off,
                 played_at: 1_700_000_101,
                 random_seed: None,
                 gauge_option: String::new(),
@@ -423,6 +452,7 @@ mod tests {
                 assist_mask: 0,
                 replay_events: Vec::new(),
                 arrange: ArrangeOption::Normal,
+                arrange_2p: ArrangeOption::Normal,
                 arrange_seed: None,
                 arrange_pattern: None,
             },
@@ -466,6 +496,7 @@ mod tests {
             &result,
             StorePlayResultRequest {
                 ln_policy: LnScorePolicy::ForceLn,
+                double_option: DoubleOptionScoreBucket::Off,
                 played_at: 1_700_000_110,
                 random_seed: None,
                 gauge_option: String::new(),
@@ -473,6 +504,7 @@ mod tests {
                 assist_mask: 0,
                 replay_events: Vec::new(),
                 arrange: ArrangeOption::Normal,
+                arrange_2p: ArrangeOption::Normal,
                 arrange_seed: None,
                 arrange_pattern: None,
             },
@@ -493,6 +525,7 @@ mod tests {
             rule: ReplaySlotRule::ScoreUpdate,
             replay_path: String::new(),
             ln_policy: LnScorePolicy::ForceLn,
+            double_option: DoubleOptionScoreBucket::Off,
             played_at: 0,
             ex_score: 100,
             bp: 10,
@@ -551,6 +584,7 @@ mod tests {
             rule: ReplaySlotRule::BpUpdate,
             replay_path: String::new(),
             ln_policy: LnScorePolicy::ForceLn,
+            double_option: DoubleOptionScoreBucket::Off,
             played_at: 0,
             ex_score: 100,
             bp: 10,
@@ -579,6 +613,7 @@ mod tests {
             rule: ReplaySlotRule::ClearUpdate,
             replay_path: String::new(),
             ln_policy: LnScorePolicy::ForceLn,
+            double_option: DoubleOptionScoreBucket::Off,
             played_at: 0,
             ex_score: 100,
             bp: 10,
@@ -619,6 +654,7 @@ mod tests {
             rule: ReplaySlotRule::Always,
             replay_path: String::new(),
             ln_policy: LnScorePolicy::ForceLn,
+            double_option: DoubleOptionScoreBucket::Off,
             played_at: 0,
             ex_score: 10_000,
             bp: 0,

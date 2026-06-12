@@ -259,6 +259,7 @@ mod tests {
                         arrange: crate::select_options::ArrangeOption::Normal,
                         applied_arrange: crate::screens::play_session::AppliedArrange::default(),
                         ln_policy: crate::ln_policy::LnScorePolicy::ForceLn,
+                        double_option: crate::select_options::DoubleOptionScoreBucket::Off,
                     },
                 }
             })
@@ -372,6 +373,7 @@ mod tests {
                         arrange: crate::select_options::ArrangeOption::Normal,
                         applied_arrange: crate::screens::play_session::AppliedArrange::default(),
                         ln_policy: crate::ln_policy::LnScorePolicy::ForceLn,
+                        double_option: crate::select_options::DoubleOptionScoreBucket::Off,
                     },
                 }
             })

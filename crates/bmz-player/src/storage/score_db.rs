@@ -17,6 +17,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use super::common::{configure_connection, hash_to_hex, hex_to_hash};
 use crate::config::profile_config::ReplaySlotRule;
 use crate::ln_policy::LnScorePolicy;
+use crate::select_options::DoubleOptionScoreBucket;
 
 pub struct ScoreDatabase {
     conn: Connection,
@@ -54,11 +55,20 @@ pub struct PlayerStats {
 pub struct ScoreKey {
     pub chart_sha256: [u8; 32],
     pub ln_policy: LnScorePolicy,
+    pub double_option: DoubleOptionScoreBucket,
 }
 
 impl ScoreKey {
     pub const fn new(chart_sha256: [u8; 32], ln_policy: LnScorePolicy) -> Self {
-        Self { chart_sha256, ln_policy }
+        Self { chart_sha256, ln_policy, double_option: DoubleOptionScoreBucket::Off }
+    }
+
+    pub const fn with_double_option(
+        chart_sha256: [u8; 32],
+        ln_policy: LnScorePolicy,
+        double_option: DoubleOptionScoreBucket,
+    ) -> Self {
+        Self { chart_sha256, ln_policy, double_option }
     }
 }
 
@@ -66,6 +76,7 @@ impl ScoreKey {
 pub struct ScoreRecord {
     pub chart_sha256: [u8; 32],
     pub ln_policy: LnScorePolicy,
+    pub double_option: DoubleOptionScoreBucket,
     pub played_at: i64,
     pub clear_type: ClearType,
     pub gauge_type: Option<GaugeType>,
@@ -82,10 +93,61 @@ pub struct ScoreRecord {
     pub replay_path: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct ScoreRecordMetadata {
+    pub ln_policy: LnScorePolicy,
+    pub double_option: DoubleOptionScoreBucket,
+    pub played_at: i64,
+    pub random_seed: Option<i64>,
+    pub arrange: String,
+    pub gauge_option: String,
+    pub rule_mode: String,
+    pub assist_mask: u32,
+    pub device_type: InputDeviceKind,
+    pub replay_path: String,
+}
+
 impl ScoreRecord {
-    pub fn from_play_result(
-        result: &PlayResult,
+    pub fn from_play_result(result: &PlayResult, metadata: ScoreRecordMetadata) -> Self {
+        let ScoreRecordMetadata {
+            ln_policy,
+            double_option,
+            played_at,
+            random_seed,
+            arrange,
+            gauge_option,
+            rule_mode,
+            assist_mask,
+            device_type,
+            replay_path,
+        } = metadata;
+
+        Self {
+            chart_sha256: result.chart_sha256,
+            ln_policy,
+            double_option,
+            played_at,
+            clear_type: result.clear_type,
+            gauge_type: Some(result.gauge_type),
+            gauge_value: result.gauge_value,
+            total_notes: result.total_notes,
+            score: result.score.clone(),
+            random_seed,
+            arrange,
+            gauge_option,
+            rule_mode,
+            assist_mask,
+            autoplay: result.autoplay,
+            device_type,
+            replay_path,
+        }
+    }
+}
+
+impl ScoreRecordMetadata {
+    pub fn new(
         ln_policy: LnScorePolicy,
+        double_option: DoubleOptionScoreBucket,
         played_at: i64,
         random_seed: Option<i64>,
         arrange: impl Into<String>,
@@ -96,20 +158,14 @@ impl ScoreRecord {
         replay_path: impl Into<String>,
     ) -> Self {
         Self {
-            chart_sha256: result.chart_sha256,
             ln_policy,
+            double_option,
             played_at,
-            clear_type: result.clear_type,
-            gauge_type: Some(result.gauge_type),
-            gauge_value: result.gauge_value,
-            total_notes: result.total_notes,
-            score: result.score.clone(),
             random_seed,
             arrange: arrange.into(),
             gauge_option: gauge_option.into(),
             rule_mode: rule_mode.into(),
             assist_mask,
-            autoplay: result.autoplay,
             device_type,
             replay_path: replay_path.into(),
         }
@@ -120,6 +176,7 @@ impl ScoreRecord {
 pub struct BestScoreSummary {
     pub chart_sha256: [u8; 32],
     pub ln_policy: LnScorePolicy,
+    pub double_option: DoubleOptionScoreBucket,
     pub clear_type: String,
     pub gauge_type: String,
     pub gauge_value: f32,
@@ -158,6 +215,7 @@ pub struct PreviousBestSnapshot {
 pub struct ReplaySlotSummary {
     pub chart_sha256: [u8; 32],
     pub ln_policy: LnScorePolicy,
+    pub double_option: DoubleOptionScoreBucket,
     pub replay_slots: [bool; 4],
 }
 
@@ -165,6 +223,7 @@ pub struct ReplaySlotSummary {
 pub struct ReplaySlotRecord {
     pub chart_sha256: [u8; 32],
     pub ln_policy: LnScorePolicy,
+    pub double_option: DoubleOptionScoreBucket,
     pub slot: u8,
     pub rule: ReplaySlotRule,
     pub replay_path: String,
@@ -305,8 +364,14 @@ impl ScoreDatabase {
 
     pub fn insert_score(&mut self, record: &ScoreRecord) -> Result<i64> {
         let tx = self.conn.transaction()?;
-        let previous_best =
-            previous_best_snapshot(&tx, ScoreKey::new(record.chart_sha256, record.ln_policy))?;
+        let previous_best = previous_best_snapshot(
+            &tx,
+            ScoreKey::with_double_option(
+                record.chart_sha256,
+                record.ln_policy,
+                record.double_option,
+            ),
+        )?;
         insert_score_history(&tx, record, previous_best.as_ref())?;
         let history_id = tx.last_insert_rowid();
         upsert_score_best(&tx, record)?;
@@ -375,8 +440,13 @@ impl ScoreDatabase {
     pub fn best_ex_score(&self, key: ScoreKey) -> Result<Option<u32>> {
         self.conn
             .query_row(
-                "SELECT ex_score FROM score_best WHERE chart_sha256 = ?1 AND ln_policy = ?2",
-                params![hash_to_hex(&key.chart_sha256), key.ln_policy.as_str()],
+                "SELECT ex_score FROM score_best
+                 WHERE chart_sha256 = ?1 AND ln_policy = ?2 AND double_option = ?3",
+                params![
+                    hash_to_hex(&key.chart_sha256),
+                    key.ln_policy.as_str(),
+                    key.double_option.as_str(),
+                ],
                 |row| row.get::<_, u32>(0),
             )
             .optional()
@@ -387,8 +457,13 @@ impl ScoreDatabase {
         let Some(ghost) = self
             .conn
             .query_row(
-                "SELECT ghost FROM score_best WHERE chart_sha256 = ?1 AND ln_policy = ?2",
-                params![hash_to_hex(&key.chart_sha256), key.ln_policy.as_str()],
+                "SELECT ghost FROM score_best
+                 WHERE chart_sha256 = ?1 AND ln_policy = ?2 AND double_option = ?3",
+                params![
+                    hash_to_hex(&key.chart_sha256),
+                    key.ln_policy.as_str(),
+                    key.double_option.as_str(),
+                ],
                 |row| row.get::<_, String>(0),
             )
             .optional()?
@@ -407,6 +482,7 @@ impl ScoreDatabase {
             "SELECT
                 chart_sha256,
                 ln_policy,
+                double_option,
                 clear_type,
                 gauge_type,
                 gauge_value,
@@ -432,13 +508,17 @@ impl ScoreDatabase {
                 played_at,
                 replay_path
             FROM score_best
-            WHERE chart_sha256 = ?1 AND ln_policy = ?2",
+            WHERE chart_sha256 = ?1 AND ln_policy = ?2 AND double_option = ?3",
         )?;
 
         for key in keys {
             if let Some(summary) = stmt
                 .query_row(
-                    params![hash_to_hex(&key.chart_sha256), key.ln_policy.as_str()],
+                    params![
+                        hash_to_hex(&key.chart_sha256),
+                        key.ln_policy.as_str(),
+                        key.double_option.as_str(),
+                    ],
                     best_score_summary_from_row,
                 )
                 .optional()?
@@ -452,14 +532,19 @@ impl ScoreDatabase {
 
     pub fn replay_slots_for_charts(&self, keys: &[ScoreKey]) -> Result<Vec<ReplaySlotSummary>> {
         let mut out = Vec::new();
-        let mut stmt = self
-            .conn
-            .prepare("SELECT slot FROM replay_slots WHERE chart_sha256 = ?1 AND ln_policy = ?2")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT slot FROM replay_slots
+                 WHERE chart_sha256 = ?1 AND ln_policy = ?2 AND double_option = ?3",
+        )?;
 
         for key in keys {
             let slots: Vec<u8> = stmt
                 .query_map(
-                    params![hash_to_hex(&key.chart_sha256), key.ln_policy.as_str()],
+                    params![
+                        hash_to_hex(&key.chart_sha256),
+                        key.ln_policy.as_str(),
+                        key.double_option.as_str(),
+                    ],
                     |row| row.get::<_, u8>(0),
                 )?
                 .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -475,6 +560,7 @@ impl ScoreDatabase {
             out.push(ReplaySlotSummary {
                 chart_sha256: key.chart_sha256,
                 ln_policy: key.ln_policy,
+                double_option: key.double_option,
                 replay_slots,
             });
         }
@@ -485,10 +571,15 @@ impl ScoreDatabase {
     pub fn replay_slot(&self, key: ScoreKey, slot: u8) -> Result<Option<ReplaySlotRecord>> {
         self.conn
             .query_row(
-                "SELECT chart_sha256, ln_policy, slot, rule, replay_path, played_at, ex_score, bp, cb, max_combo, clear_rank
+                "SELECT chart_sha256, ln_policy, double_option, slot, rule, replay_path, played_at, ex_score, bp, cb, max_combo, clear_rank
                  FROM replay_slots
-                 WHERE chart_sha256 = ?1 AND ln_policy = ?2 AND slot = ?3",
-                params![hash_to_hex(&key.chart_sha256), key.ln_policy.as_str(), slot],
+                 WHERE chart_sha256 = ?1 AND ln_policy = ?2 AND double_option = ?3 AND slot = ?4",
+                params![
+                    hash_to_hex(&key.chart_sha256),
+                    key.ln_policy.as_str(),
+                    key.double_option.as_str(),
+                    slot,
+                ],
                 replay_slot_record_from_row,
             )
             .optional()
@@ -497,13 +588,17 @@ impl ScoreDatabase {
 
     pub fn replay_slots_for_chart(&self, key: ScoreKey) -> Result<[Option<ReplaySlotRecord>; 4]> {
         let mut stmt = self.conn.prepare(
-            "SELECT chart_sha256, ln_policy, slot, rule, replay_path, played_at, ex_score, bp, cb, max_combo, clear_rank
+            "SELECT chart_sha256, ln_policy, double_option, slot, rule, replay_path, played_at, ex_score, bp, cb, max_combo, clear_rank
              FROM replay_slots
-             WHERE chart_sha256 = ?1 AND ln_policy = ?2",
+             WHERE chart_sha256 = ?1 AND ln_policy = ?2 AND double_option = ?3",
         )?;
         let rows = stmt
             .query_map(
-                params![hash_to_hex(&key.chart_sha256), key.ln_policy.as_str()],
+                params![
+                    hash_to_hex(&key.chart_sha256),
+                    key.ln_policy.as_str(),
+                    key.double_option.as_str(),
+                ],
                 replay_slot_record_from_row,
             )?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -523,10 +618,10 @@ impl ScoreDatabase {
         }
         self.conn.execute(
             "INSERT INTO replay_slots (
-                chart_sha256, ln_policy, slot, rule, replay_path, played_at,
+                chart_sha256, ln_policy, double_option, slot, rule, replay_path, played_at,
                 ex_score, bp, cb, max_combo, clear_rank
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
-            ON CONFLICT(chart_sha256, ln_policy, slot) DO UPDATE SET
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+            ON CONFLICT(chart_sha256, ln_policy, double_option, slot) DO UPDATE SET
                 rule = excluded.rule,
                 replay_path = excluded.replay_path,
                 played_at = excluded.played_at,
@@ -538,6 +633,7 @@ impl ScoreDatabase {
             params![
                 hash_to_hex(&record.chart_sha256),
                 record.ln_policy.as_str(),
+                record.double_option.as_str(),
                 record.slot,
                 record.rule.as_str(),
                 record.replay_path,
@@ -731,44 +827,46 @@ fn best_score_summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Best
     let sha256_hex: String = row.get(0)?;
     let chart_sha256 = hex_to_hash::<32>(&sha256_hex)?;
     let ln_policy = ln_policy_from_row(row, 1)?;
+    let double_option = double_option_from_row(row, 2)?;
 
     Ok(BestScoreSummary {
         chart_sha256,
         ln_policy,
-        clear_type: row.get(2)?,
-        gauge_type: row.get(3)?,
-        gauge_value: row.get(4)?,
-        ex_score: row.get(5)?,
-        bp: row.get(6)?,
-        cb: row.get(7)?,
-        max_combo: row.get(8)?,
+        double_option,
+        clear_type: row.get(3)?,
+        gauge_type: row.get(4)?,
+        gauge_value: row.get(5)?,
+        ex_score: row.get(6)?,
+        bp: row.get(7)?,
+        cb: row.get(8)?,
+        max_combo: row.get(9)?,
         judge_counts: DisplayJudgeCounts {
-            pgreat: row.get::<_, u32>(9)? + row.get::<_, u32>(10)?,
-            great: row.get::<_, u32>(11)? + row.get::<_, u32>(12)?,
-            good: row.get::<_, u32>(13)? + row.get::<_, u32>(14)?,
-            bad: row.get::<_, u32>(15)? + row.get::<_, u32>(16)?,
-            poor: row.get::<_, u32>(17)? + row.get::<_, u32>(18)?,
-            empty_poor: row.get::<_, u32>(19)? + row.get::<_, u32>(20)?,
+            pgreat: row.get::<_, u32>(10)? + row.get::<_, u32>(11)?,
+            great: row.get::<_, u32>(12)? + row.get::<_, u32>(13)?,
+            good: row.get::<_, u32>(14)? + row.get::<_, u32>(15)?,
+            bad: row.get::<_, u32>(16)? + row.get::<_, u32>(17)?,
+            poor: row.get::<_, u32>(18)? + row.get::<_, u32>(19)?,
+            empty_poor: row.get::<_, u32>(20)? + row.get::<_, u32>(21)?,
         },
         fast_slow_counts: FastSlowJudgeCounts {
-            fast_pgreat: row.get(9)?,
-            slow_pgreat: row.get(10)?,
-            fast_great: row.get(11)?,
-            slow_great: row.get(12)?,
-            fast_good: row.get(13)?,
-            slow_good: row.get(14)?,
-            fast_bad: row.get(15)?,
-            slow_bad: row.get(16)?,
-            fast_poor: row.get(17)?,
-            slow_poor: row.get(18)?,
-            fast_empty_poor: row.get(19)?,
-            slow_empty_poor: row.get(20)?,
+            fast_pgreat: row.get(10)?,
+            slow_pgreat: row.get(11)?,
+            fast_great: row.get(12)?,
+            slow_great: row.get(13)?,
+            fast_good: row.get(14)?,
+            slow_good: row.get(15)?,
+            fast_bad: row.get(16)?,
+            slow_bad: row.get(17)?,
+            fast_poor: row.get(18)?,
+            slow_poor: row.get(19)?,
+            fast_empty_poor: row.get(20)?,
+            slow_empty_poor: row.get(21)?,
         },
-        play_count: row.get(21)?,
-        clear_count: row.get(22)?,
-        device_type: device_type_from_row(row, 23)?,
-        played_at: row.get(24)?,
-        replay_path: row.get(25)?,
+        play_count: row.get(22)?,
+        clear_count: row.get(23)?,
+        device_type: device_type_from_row(row, 24)?,
+        played_at: row.get(25)?,
+        replay_path: row.get(26)?,
     })
 }
 
@@ -776,21 +874,23 @@ fn replay_slot_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Repl
     let sha256_hex: String = row.get(0)?;
     let chart_sha256 = hex_to_hash::<32>(&sha256_hex)?;
     let ln_policy = ln_policy_from_row(row, 1)?;
-    let rule_str: String = row.get(3)?;
+    let double_option = double_option_from_row(row, 2)?;
+    let rule_str: String = row.get(4)?;
     let rule = ReplaySlotRule::from_str_opt(&rule_str).unwrap_or(ReplaySlotRule::Always);
 
     Ok(ReplaySlotRecord {
         chart_sha256,
         ln_policy,
-        slot: row.get(2)?,
+        double_option,
+        slot: row.get(3)?,
         rule,
-        replay_path: row.get(4)?,
-        played_at: row.get(5)?,
-        ex_score: row.get(6)?,
-        bp: row.get(7)?,
-        cb: row.get(8)?,
-        max_combo: row.get(9)?,
-        clear_rank: row.get(10)?,
+        replay_path: row.get(5)?,
+        played_at: row.get(6)?,
+        ex_score: row.get(7)?,
+        bp: row.get(8)?,
+        cb: row.get(9)?,
+        max_combo: row.get(10)?,
+        clear_rank: row.get(11)?,
     })
 }
 
@@ -900,6 +1000,14 @@ fn ln_policy_from_row(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result
     })
 }
 
+fn double_option_from_row(
+    row: &rusqlite::Row<'_>,
+    index: usize,
+) -> rusqlite::Result<DoubleOptionScoreBucket> {
+    let value: String = row.get(index)?;
+    Ok(DoubleOptionScoreBucket::from_str_or_off(&value))
+}
+
 fn previous_best_snapshot(
     conn: &Connection,
     key: ScoreKey,
@@ -907,8 +1015,12 @@ fn previous_best_snapshot(
     conn.query_row(
         "SELECT clear_type, ex_score, max_combo, bp, cb
          FROM score_best
-         WHERE chart_sha256 = ?1 AND ln_policy = ?2",
-        params![hash_to_hex(&key.chart_sha256), key.ln_policy.as_str()],
+         WHERE chart_sha256 = ?1 AND ln_policy = ?2 AND double_option = ?3",
+        params![
+            hash_to_hex(&key.chart_sha256),
+            key.ln_policy.as_str(),
+            key.double_option.as_str(),
+        ],
         |row| {
             Ok(PreviousBestSnapshot {
                 clear_type: row.get(0)?,
@@ -936,6 +1048,7 @@ fn insert_score_history(
         "INSERT INTO score_history (
             chart_sha256,
             ln_policy,
+            double_option,
             played_at,
             clear_type,
             gauge_type,
@@ -974,11 +1087,12 @@ fn insert_score_history(
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
             ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30,
-            ?31, ?32, ?33, ?34, ?35, ?36, ?37
+            ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38
         )",
         params![
             hash_to_hex(&record.chart_sha256),
             record.ln_policy.as_str(),
+            record.double_option.as_str(),
             record.played_at,
             record.clear_type.as_str(),
             gauge_type_str(record.gauge_type),
@@ -1092,6 +1206,7 @@ fn upsert_score_best(conn: &Connection, record: &ScoreRecord) -> Result<()> {
         "INSERT INTO score_best (
             chart_sha256,
             ln_policy,
+            double_option,
             clear_type,
             gauge_type,
             gauge_value,
@@ -1119,12 +1234,13 @@ fn upsert_score_best(conn: &Connection, record: &ScoreRecord) -> Result<()> {
             clear_count
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-            ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27
+            ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28
         )
-        ON CONFLICT(chart_sha256, ln_policy) DO NOTHING",
+        ON CONFLICT(chart_sha256, ln_policy, double_option) DO NOTHING",
         params![
             hash_to_hex(&record.chart_sha256),
             record.ln_policy.as_str(),
+            record.double_option.as_str(),
             record.clear_type.as_str(),
             gauge_type_str(record.gauge_type),
             record.gauge_value,
@@ -1161,15 +1277,24 @@ fn upsert_score_best(conn: &Connection, record: &ScoreRecord) -> Result<()> {
         "UPDATE score_best
          SET play_count = play_count + 1,
              clear_count = clear_count + ?2
-         WHERE chart_sha256 = ?1 AND ln_policy = ?3",
-        params![chart_sha256, clear_increment, record.ln_policy.as_str()],
+         WHERE chart_sha256 = ?1 AND ln_policy = ?3 AND double_option = ?4",
+        params![
+            chart_sha256,
+            clear_increment,
+            record.ln_policy.as_str(),
+            record.double_option.as_str(),
+        ],
     )?;
 
     let current = conn.query_row(
         "SELECT ex_score, clear_type, bp, cb, max_combo
          FROM score_best
-         WHERE chart_sha256 = ?1 AND ln_policy = ?2",
-        params![hash_to_hex(&record.chart_sha256), record.ln_policy.as_str()],
+         WHERE chart_sha256 = ?1 AND ln_policy = ?2 AND double_option = ?3",
+        params![
+            hash_to_hex(&record.chart_sha256),
+            record.ln_policy.as_str(),
+            record.double_option.as_str(),
+        ],
         |row| {
             let clear_type: String = row.get(1)?;
             Ok(ScoreBestRank {
@@ -1187,13 +1312,14 @@ fn upsert_score_best(conn: &Connection, record: &ScoreRecord) -> Result<()> {
                 bp = min(bp, ?2),
                 cb = min(cb, ?3),
                 max_combo = max(max_combo, ?4)
-             WHERE chart_sha256 = ?1 AND ln_policy = ?5",
+             WHERE chart_sha256 = ?1 AND ln_policy = ?5 AND double_option = ?6",
             params![
                 hash_to_hex(&record.chart_sha256),
                 bp,
                 cb,
                 record.score.max_combo,
                 record.ln_policy.as_str(),
+                record.double_option.as_str(),
             ],
         )?;
         return Ok(());
@@ -1224,7 +1350,7 @@ fn upsert_score_best(conn: &Connection, record: &ScoreRecord) -> Result<()> {
             replay_path = ?22,
             ghost = ?23,
             device_type = ?24
-         WHERE chart_sha256 = ?1 AND ln_policy = ?25",
+         WHERE chart_sha256 = ?1 AND ln_policy = ?25 AND double_option = ?26",
         params![
             hash_to_hex(&record.chart_sha256),
             record.clear_type.as_str(),
@@ -1251,6 +1377,7 @@ fn upsert_score_best(conn: &Connection, record: &ScoreRecord) -> Result<()> {
             ghost,
             record.device_type.as_str(),
             record.ln_policy.as_str(),
+            record.double_option.as_str(),
         ],
     )?;
     Ok(())
@@ -1382,6 +1509,7 @@ mod tests {
         ScoreRecord {
             chart_sha256: [7; 32],
             ln_policy: LnScorePolicy::ForceLn,
+            double_option: DoubleOptionScoreBucket::Off,
             played_at: 1_700_000_000,
             clear_type,
             gauge_type: Some(GaugeType::Normal),
@@ -1457,6 +1585,36 @@ mod tests {
         db.insert_score(&record(30, ClearType::Easy)).unwrap();
 
         assert_eq!(db.best_ex_score(key([7; 32])).unwrap(), Some(30));
+    }
+
+    #[test]
+    fn score_best_is_separate_per_double_option() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut db = ScoreDatabase { conn };
+
+        db.insert_score(&record(20, ClearType::Normal)).unwrap();
+        let mut battle = record(60, ClearType::Hard);
+        battle.double_option = DoubleOptionScoreBucket::Battle;
+        db.insert_score(&battle).unwrap();
+
+        let off_key = key([7; 32]);
+        let battle_key = ScoreKey::with_double_option(
+            [7; 32],
+            LnScorePolicy::ForceLn,
+            DoubleOptionScoreBucket::Battle,
+        );
+
+        assert_eq!(db.best_ex_score(off_key).unwrap(), Some(20));
+        assert_eq!(db.best_ex_score(battle_key).unwrap(), Some(60));
+
+        let summaries = db.best_scores_for_charts(&[off_key, battle_key]).unwrap();
+        assert_eq!(summaries.len(), 2);
+        assert_eq!(summaries[0].double_option, DoubleOptionScoreBucket::Off);
+        assert_eq!(summaries[0].ex_score, 20);
+        assert_eq!(summaries[1].double_option, DoubleOptionScoreBucket::Battle);
+        assert_eq!(summaries[1].ex_score, 60);
     }
 
     #[test]
@@ -1885,6 +2043,7 @@ mod tests {
         ReplaySlotRecord {
             chart_sha256: [1; 32],
             ln_policy: LnScorePolicy::ForceLn,
+            double_option: DoubleOptionScoreBucket::Off,
             slot,
             rule: ReplaySlotRule::Always,
             replay_path: format!("replay/{slot}.toml"),
@@ -1981,19 +2140,23 @@ mod tests {
 
         let record = ScoreRecord::from_play_result(
             &result,
-            LnScorePolicy::ForceCn,
-            1_700_000_040,
-            Some(123),
-            "Normal",
-            "Hard",
-            "Lr2Oraja",
-            0,
-            InputDeviceKind::Controller,
-            "",
+            ScoreRecordMetadata::new(
+                LnScorePolicy::ForceCn,
+                DoubleOptionScoreBucket::Battle,
+                1_700_000_040,
+                Some(123),
+                "Normal",
+                "Hard",
+                "Lr2Oraja",
+                0,
+                InputDeviceKind::Controller,
+                "",
+            ),
         );
 
         assert_eq!(record.chart_sha256, [9; 32]);
         assert_eq!(record.ln_policy, LnScorePolicy::ForceCn);
+        assert_eq!(record.double_option, DoubleOptionScoreBucket::Battle);
         assert_eq!(record.played_at, 1_700_000_040);
         assert_eq!(record.clear_type, ClearType::Normal);
         assert_eq!(record.gauge_type, Some(GaugeType::Hard));

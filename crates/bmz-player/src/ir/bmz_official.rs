@@ -1,6 +1,8 @@
 use anyhow::{Context, Result, bail};
 use reqwest::Url;
 
+use crate::select_options::DoubleOptionScoreBucket;
+
 use super::types::{
     IrAuthTokens, IrMeResponse, IrRankingResult, IrRankingScope, IrReplayDownloadTarget,
     IrReplayUploadTarget, IrReplayVerifyResult, IrRivalsResponse, IrScoreSubmission,
@@ -19,6 +21,7 @@ pub struct IrRankingRequest {
     pub scope: IrRankingScope,
     pub gauge: String,
     pub ln_policy: String,
+    pub double_option: DoubleOptionScoreBucket,
     pub limit: u32,
     pub offset: u32,
 }
@@ -177,6 +180,9 @@ impl BmzOfficialIrClient {
             .append_pair("ln_policy", &request.ln_policy)
             .append_pair("limit", &request.limit.to_string())
             .append_pair("offset", &request.offset.to_string());
+        if let Some(double_option) = request.double_option.ir_query_value() {
+            url.query_pairs_mut().append_pair("double_option", double_option);
+        }
         let mut builder = self.http.get(url);
         if let Some(token) = &self.access_token {
             builder = builder.bearer_auth(token);

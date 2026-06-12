@@ -13,6 +13,7 @@ use crate::ir::bmz_official::{BmzOfficialIrClient, IrRankingRequest};
 use crate::ir::sync::{ensure_fresh_credentials, sync_pending_ir_jobs};
 use crate::ir::types::{IrRankingResult, IrRankingScope};
 use crate::ln_policy::LnScorePolicy;
+use crate::select_options::DoubleOptionScoreBucket;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResultRankingTab {
@@ -49,6 +50,7 @@ pub struct ResultIrQuery {
     pub chart_sha256_hex: String,
     pub gauge: String,
     pub ln_policy: LnScorePolicy,
+    pub double_option: DoubleOptionScoreBucket,
 }
 
 pub struct ResultIrState {
@@ -180,6 +182,7 @@ pub fn spawn_result_ir_task(
     chart_sha256_hex: String,
     gauge: String,
     ln_policy: LnScorePolicy,
+    double_option: DoubleOptionScoreBucket,
 ) -> Option<ResultIrState> {
     let provider = ir_config
         .providers
@@ -192,6 +195,7 @@ pub fn spawn_result_ir_task(
         chart_sha256_hex,
         gauge,
         ln_policy,
+        double_option,
     };
     let (sender, receiver) = channel();
 
@@ -291,6 +295,7 @@ pub(crate) async fn fetch_ranking(
                 scope,
                 gauge: query.gauge.clone(),
                 ln_policy: query.ln_policy.as_str().to_string(),
+                double_option: query.double_option,
                 limit: 20,
                 offset: 0,
             },

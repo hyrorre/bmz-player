@@ -391,6 +391,7 @@ async fn ranking(
                 scope,
                 gauge: gauge.to_string(),
                 ln_policy: ln_policy.to_string(),
+                double_option: crate::select_options::DoubleOptionScoreBucket::Off,
                 limit,
                 offset: 0,
             },

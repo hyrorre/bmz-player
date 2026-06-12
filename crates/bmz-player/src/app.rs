@@ -113,7 +113,7 @@ use crate::songs_cmd::scan_songs_with_progress;
 use crate::storage::library_db::{ChartDistributionSecond, LibraryDatabase};
 use crate::storage::migration::{migrate_library_db, migrate_score_db};
 use crate::storage::play_result::StoredPlayResult;
-use crate::storage::replay::load_replay_for_chart_and_policy;
+use crate::storage::replay::load_replay_for_chart_policy_and_double_option;
 use crate::storage::scan::{ScanProgress, ScanReport};
 use crate::storage::score_db::ScoreDatabase;
 use crate::storage::score_import::{ScoreImportRequest, import_scores};
@@ -1078,6 +1078,7 @@ fn debug_boot_finished_play_session() -> FinishedPlaySession {
         arrange: ArrangeOption::Normal,
         applied_arrange: AppliedArrange::default(),
         ln_policy: crate::ln_policy::LnScorePolicy::ForceLn,
+        double_option: crate::select_options::DoubleOptionScoreBucket::Off,
     }
 }
 
@@ -1818,7 +1819,14 @@ impl WinitApp {
             AppViewState::Play => self
                 .active_play
                 .as_ref()
-                .map(|active| active.running.session.autoplay.is_some())
+                .map(|active| {
+                    active
+                        .running
+                        .session
+                        .autoplay
+                        .as_ref()
+                        .is_some_and(|autoplay| autoplay.is_full())
+                })
                 .or_else(|| {
                     self.pending_play_start
                         .as_ref()
@@ -5362,7 +5370,7 @@ impl WinitApp {
         self.ensure_skin_ready(SkinKind::Decide);
         // Play スキンは裏で decode+upload を進めるが、Decide 入場では待たない。
         // 実際の Play 入場 (`start_chart_with_options`) で `ensure_skin_ready` が保険として残る。
-        self.spawn_play_skin_decode_for(self.key_mode_for_chart(chart_id));
+        self.spawn_play_skin_decode_for(self.play_skin_key_mode_for_chart(chart_id, &options));
         self.start_play_preload(chart_id, options.clone());
         let now = Instant::now();
         self.pending_decide = Some(DecideTransition {
@@ -5431,6 +5439,10 @@ impl WinitApp {
             })
             .flatten()
             .unwrap_or_default()
+    }
+
+    fn play_skin_key_mode_for_chart(&self, chart_id: i64, options: &PlayStartOptions) -> KeyMode {
+        play_skin_key_mode_for_options(self.key_mode_for_chart(chart_id), options.double_option)
     }
 
     fn open_prepared_winit_play_session(
@@ -5563,7 +5575,7 @@ impl WinitApp {
     fn start_chart_with_options(&mut self, chart_id: i64, mut options: PlayStartOptions) {
         self.last_play_was_autoplay = options.autoplay;
         self.ensure_skin_ready(SkinKind::Decide);
-        self.spawn_play_skin_decode_for(self.key_mode_for_chart(chart_id));
+        self.spawn_play_skin_decode_for(self.play_skin_key_mode_for_chart(chart_id, &options));
         self.ensure_skin_ready(SkinKind::Play);
         self.invalidate_play_preload();
         self.play_ending = None;
@@ -5656,7 +5668,7 @@ impl WinitApp {
         crate::screens::play_session::apply_placeholder_session_visuals(
             &mut snapshot,
             &self.boot.profile_config,
-            self.key_mode_for_chart(chart_id),
+            self.play_skin_key_mode_for_chart(chart_id, &options),
             &play_session_options_from_start(&self.play_session_app_config(), options.clone()),
         );
         self.capture_play_table_text_for_chart(chart_id);
@@ -5678,7 +5690,12 @@ impl WinitApp {
     }
 
     fn install_active_play(&mut self, mut active_play: StartedWinitPlaySession) {
-        self.last_play_was_autoplay = active_play.running.session.autoplay.is_some();
+        self.last_play_was_autoplay = active_play
+            .running
+            .session
+            .autoplay
+            .as_ref()
+            .is_some_and(|autoplay| autoplay.is_full());
         active_play.running.bga_frames =
             load_chart_bga_textures(&mut self.renderer, &active_play.running.session.chart);
         let chart = &active_play.running.session.chart;
@@ -5928,8 +5945,8 @@ impl WinitApp {
             gauge_auto_shift: self.gauge_auto_shift_option,
             bottom_shiftable_gauge: self.bottom_shiftable_gauge_option,
             arrange: replay_file.arrange_option(),
-            arrange_2p: ArrangeOption::Normal,
-            double_option: DoubleOption::Off,
+            arrange_2p: replay_file.arrange_2p_option(),
+            double_option: replay_file.double_option(),
             hs_fix: HsFixOption::Off,
             target: self.target_option,
             arrange_seed: replay_file.arrange_seed,
@@ -5957,26 +5974,32 @@ impl WinitApp {
             return false;
         };
         let sha = chart.sha256;
-        let key = crate::storage::score_db::ScoreKey::new(
+        let key_mode = KeyMode::from_str_opt(&chart.mode).unwrap_or_default();
+        let key = crate::storage::score_db::ScoreKey::with_double_option(
             sha,
             crate::ln_policy::score_ln_policy(
                 self.boot.profile_config.play.ln_mode_policy,
                 chart.ln_profile,
             ),
+            self.double_option.normalize_for_key_mode(key_mode).score_bucket(),
         );
         let Some(slot_record) = self.boot.score_db.replay_slot(key, slot).ok().flatten() else {
             tracing::info!(slot, "no replay saved for slot");
             return false;
         };
         let abs_path = self.boot.profile_paths.root_dir.join(&slot_record.replay_path);
-        let replay_file =
-            match load_replay_for_chart_and_policy(&abs_path, sha, slot_record.ln_policy) {
-                Ok(file) => file,
-                Err(error) => {
-                    tracing::warn!(%error, path = %abs_path.display(), "replay load failed");
-                    return false;
-                }
-            };
+        let replay_file = match load_replay_for_chart_policy_and_double_option(
+            &abs_path,
+            sha,
+            slot_record.ln_policy,
+            slot_record.double_option,
+        ) {
+            Ok(file) => file,
+            Err(error) => {
+                tracing::warn!(%error, path = %abs_path.display(), "replay load failed");
+                return false;
+            }
+        };
         let player = bmz_gameplay::replay::ReplayPlayer {
             events: replay_file.events.clone(),
             next_index: 0,
@@ -5990,8 +6013,8 @@ impl WinitApp {
             gauge_auto_shift: self.gauge_auto_shift_option,
             bottom_shiftable_gauge: self.bottom_shiftable_gauge_option,
             arrange: replay_file.arrange_option(),
-            arrange_2p: ArrangeOption::Normal,
-            double_option: DoubleOption::Off,
+            arrange_2p: replay_file.arrange_2p_option(),
+            double_option: replay_file.double_option(),
             hs_fix: HsFixOption::Off,
             target: self.target_option,
             arrange_seed: replay_file.arrange_seed,
@@ -7389,6 +7412,7 @@ impl WinitApp {
                     crate::storage::common::hash_to_hex(&finished.result.chart_sha256),
                     finished.result.gauge_type.as_str().to_string(),
                     finished.ln_policy,
+                    finished.double_option,
                 );
             }
             if let Some(state) = &mut self.result_ir {
@@ -7402,14 +7426,19 @@ impl WinitApp {
         if matches!(scene_kind, AppSceneKind::Select) {
             // `selected_chart_sha256()` は &self 全体を借りるため、practice ctx の
             // &mut 借用と衝突しないようフィールド単位で参照する。
-            let (selected, ln_profile) = match self.select_items.get(self.selected_index) {
+            let (selected, ln_profile, key_mode) = match self.select_items.get(self.selected_index)
+            {
                 Some(SelectItem::Chart(row)) => (
                     row.score_sha256(),
                     // library 登録済みなら譜面の LN プロファイルから実プレイと
                     // 同じスコア分離キーを解決する。未登録は default 近似。
                     row.chart.as_ref().map(|chart| chart.ln_profile).unwrap_or_default(),
+                    row.chart
+                        .as_ref()
+                        .and_then(|chart| KeyMode::from_str_opt(&chart.mode))
+                        .unwrap_or_default(),
                 ),
-                _ => (None, crate::ln_policy::ChartLnProfile::default()),
+                _ => (None, crate::ln_policy::ChartLnProfile::default(), KeyMode::default()),
             };
             let gauge =
                 crate::config::play::gauge_type_from_config(self.boot.profile_config.play.gauge)
@@ -7419,7 +7448,12 @@ impl WinitApp {
                 self.boot.profile_config.play.ln_mode_policy,
                 ln_profile,
             );
-            let context = format!("{gauge}:{:?}", self.boot.profile_config.play.ln_mode_policy);
+            let double_option = self.double_option.normalize_for_key_mode(key_mode).score_bucket();
+            let context = format!(
+                "{gauge}:{:?}:{}",
+                self.boot.profile_config.play.ln_mode_policy,
+                double_option.as_str()
+            );
             let ir_config = self.boot.profile_config.ir.clone();
             self.select_ir.update(
                 &ir_config,
@@ -7427,6 +7461,7 @@ impl WinitApp {
                 &context,
                 &gauge,
                 ln_policy,
+                double_option,
                 selected,
             );
         }
@@ -9599,8 +9634,12 @@ fn cycle_arrange_option_with_direction(current: ArrangeOption, direction: i32) -
 }
 
 fn cycle_double_option_with_direction(current: DoubleOption, direction: i32) -> DoubleOption {
-    const VALUES: [DoubleOption; 4] =
-        [DoubleOption::Off, DoubleOption::Flip, DoubleOption::Battle, DoubleOption::BattleAssist];
+    const VALUES: [DoubleOption; 4] = [
+        DoubleOption::Off,
+        DoubleOption::Flip,
+        DoubleOption::Battle,
+        DoubleOption::BattleAutoScratch,
+    ];
     cycle_enum(VALUES, current, direction)
 }
 
@@ -9737,7 +9776,7 @@ fn double_option_from_profile(double_option: DoubleOptionConfig) -> DoubleOption
         DoubleOptionConfig::Off => DoubleOption::Off,
         DoubleOptionConfig::Flip => DoubleOption::Flip,
         DoubleOptionConfig::Battle => DoubleOption::Battle,
-        DoubleOptionConfig::BattleAssist => DoubleOption::BattleAssist,
+        DoubleOptionConfig::BattleAutoScratch => DoubleOption::BattleAutoScratch,
     }
 }
 
@@ -9746,7 +9785,18 @@ fn double_config_from_option(double_option: DoubleOption) -> DoubleOptionConfig 
         DoubleOption::Off => DoubleOptionConfig::Off,
         DoubleOption::Flip => DoubleOptionConfig::Flip,
         DoubleOption::Battle => DoubleOptionConfig::Battle,
-        DoubleOption::BattleAssist => DoubleOptionConfig::BattleAssist,
+        DoubleOption::BattleAutoScratch => DoubleOptionConfig::BattleAutoScratch,
+    }
+}
+
+fn play_skin_key_mode_for_options(chart_key_mode: KeyMode, double_option: DoubleOption) -> KeyMode {
+    match double_option.normalize_for_key_mode(chart_key_mode) {
+        DoubleOption::Battle | DoubleOption::BattleAutoScratch => match chart_key_mode {
+            KeyMode::K5 => KeyMode::K10,
+            KeyMode::K7 => KeyMode::K14,
+            _ => chart_key_mode,
+        },
+        DoubleOption::Off | DoubleOption::Flip => chart_key_mode,
     }
 }
 
@@ -10980,6 +11030,8 @@ fn preloaded_matches_start(
         && preloaded.session_options.practice_mode == options.practice_mode
         && preloaded.session_options.arrange == options.arrange
         && preloaded.session_options.arrange_2p == options.arrange_2p
+        && preloaded.session_options.double_option == options.double_option
+        && preloaded.session_options.hs_fix == options.hs_fix
         && preloaded.session_options.arrange_seed == options.arrange_seed
         && preloaded.session_options.arrange_pattern == options.arrange_pattern
 }
@@ -13300,7 +13352,7 @@ mod tests {
         );
         assert_eq!(
             cycle_double_option_with_direction(DoubleOption::Off, -1),
-            DoubleOption::BattleAssist
+            DoubleOption::BattleAutoScratch
         );
         assert_eq!(cycle_hs_fix_option_with_direction(HsFixOption::Off, 1), HsFixOption::StartBpm);
         assert_eq!(cycle_hs_fix_option_with_direction(HsFixOption::Off, -1), HsFixOption::MainBpm);
@@ -13312,6 +13364,21 @@ mod tests {
         assert_eq!(
             cycle_gauge_auto_shift_option_with_direction(GaugeAutoShiftConfig::Off, -1),
             GaugeAutoShiftConfig::SelectToUnder
+        );
+    }
+
+    #[test]
+    fn play_skin_key_mode_uses_battle_double_mode() {
+        assert_eq!(play_skin_key_mode_for_options(KeyMode::K7, DoubleOption::Battle), KeyMode::K14);
+        assert_eq!(
+            play_skin_key_mode_for_options(KeyMode::K7, DoubleOption::BattleAutoScratch),
+            KeyMode::K14
+        );
+        assert_eq!(play_skin_key_mode_for_options(KeyMode::K5, DoubleOption::Battle), KeyMode::K10);
+        assert_eq!(play_skin_key_mode_for_options(KeyMode::K7, DoubleOption::Flip), KeyMode::K7);
+        assert_eq!(
+            play_skin_key_mode_for_options(KeyMode::K14, DoubleOption::Battle),
+            KeyMode::K14
         );
     }
 
@@ -13538,6 +13605,7 @@ mod tests {
         BestScoreSummary {
             chart_sha256: [0; 32],
             ln_policy: crate::ln_policy::LnScorePolicy::ForceLn,
+            double_option: crate::select_options::DoubleOptionScoreBucket::Off,
             clear_type: "Normal".to_string(),
             gauge_type: "Normal".to_string(),
             gauge_value: 80.0,

@@ -250,6 +250,7 @@ fn imported_score_record(
     ScoreRecord {
         chart_sha256,
         ln_policy: LnScorePolicy::ForceLn,
+        double_option: crate::select_options::DoubleOptionScoreBucket::Off,
         played_at,
         clear_type,
         gauge_type: gauge_type_for_clear(clear_type),

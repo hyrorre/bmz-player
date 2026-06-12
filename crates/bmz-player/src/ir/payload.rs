@@ -4,7 +4,7 @@ use bmz_gameplay::gauge::gauge_total_for_chart;
 use bmz_gameplay::result::PlayResult;
 
 use crate::ln_policy::{ChartLnProfile, LnScorePolicy};
-use crate::select_options::ArrangeOption;
+use crate::select_options::{ArrangeOption, DoubleOptionScoreBucket};
 use crate::storage::common::hash_to_hex;
 use crate::storage::score_db::encode_beatoraja_ghost;
 
@@ -23,6 +23,7 @@ pub struct IrSubmissionContext {
     pub device_type: InputDeviceKind,
     pub idempotency_key: String,
     pub arrange: ArrangeOption,
+    pub double_option: DoubleOptionScoreBucket,
     pub arrange_seed: Option<i64>,
     pub random_seed: Option<i64>,
     pub rule_mode: String,
@@ -44,6 +45,10 @@ pub fn build_score_submission(
     play_options.insert(
         "option".to_string(),
         serde_json::Value::String(arrange_option_ir(context.arrange).to_string()),
+    );
+    play_options.insert(
+        "double_option".to_string(),
+        serde_json::Value::String(context.double_option.ir_value().to_string()),
     );
     if context.arrange.uses_seed()
         && let Some(seed) = context.arrange_seed
@@ -305,6 +310,7 @@ mod tests {
                 device_type: InputDeviceKind::Controller,
                 idempotency_key: "score_local_1".to_string(),
                 arrange: ArrangeOption::Random,
+                double_option: DoubleOptionScoreBucket::Battle,
                 arrange_seed: Some(42),
                 random_seed: Some(42),
                 rule_mode: "Beatoraja".to_string(),
@@ -325,6 +331,10 @@ mod tests {
         assert_eq!(
             payload.play_options.get("option"),
             Some(&serde_json::Value::String("random".to_string()))
+        );
+        assert_eq!(
+            payload.play_options.get("double_option"),
+            Some(&serde_json::Value::String("battle".to_string()))
         );
         assert_eq!(payload.play_options.get("seed"), Some(&serde_json::json!(42)));
         assert_eq!(payload.play_options.get("random_seed"), Some(&serde_json::json!(42)));

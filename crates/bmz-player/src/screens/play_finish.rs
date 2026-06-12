@@ -24,6 +24,7 @@ pub struct FinishedPlaySession {
     pub applied_arrange: AppliedArrange,
     /// IR ランキング照会に使うスコア分離キー。
     pub ln_policy: crate::ln_policy::LnScorePolicy,
+    pub double_option: crate::select_options::DoubleOptionScoreBucket,
 }
 
 pub fn play_result_from_session(session: &GameSession) -> PlayResult {
@@ -32,7 +33,7 @@ pub fn play_result_from_session(session: &GameSession) -> PlayResult {
         &session.score,
         &session.gauge,
         session.state,
-        session.autoplay.is_some(),
+        session.autoplay.as_ref().is_some_and(|autoplay| autoplay.is_full()),
     )
 }
 
@@ -81,7 +82,8 @@ pub fn finish_session_result(
         score_db.best_scores_for_charts(&[score_key]).ok().and_then(|mut bests| bests.pop());
     // オートプレイ / リプレイ再生 / プラクティス時はスコア・リプレイをDBに保存しない
     // （リザルト画面の表示のみ行う）。
-    let stored = if session.autoplay.is_some() || replay_playback || practice_mode {
+    let full_autoplay = session.autoplay.as_ref().is_some_and(|autoplay| autoplay.is_full());
+    let stored = if full_autoplay || replay_playback || practice_mode {
         StoredPlayResult {
             score_history_id: 0,
             replay_path: String::new(),
@@ -100,12 +102,14 @@ pub fn finish_session_result(
             StorePlayResultRequest {
                 played_at,
                 ln_policy: score_key.ln_policy,
+                double_option: score_key.double_option,
                 random_seed: arrange_seed,
                 gauge_option: String::new(),
                 rule_mode: session.rule_mode.as_str().to_string(),
                 assist_mask: 0,
                 replay_events: session.replay_recorder.events.clone(),
                 arrange,
+                arrange_2p: applied_arrange.arrange_2p,
                 arrange_seed,
                 arrange_pattern,
             },
@@ -163,6 +167,7 @@ pub fn finish_session_result(
         arrange: applied_arrange.arrange,
         applied_arrange: applied_arrange.clone(),
         ln_policy: score_key.ln_policy,
+        double_option: score_key.double_option,
     })
 }
 
@@ -221,6 +226,7 @@ fn enqueue_ir_jobs(
             device_type: stored.device_type,
             idempotency_key: format!("bmz-score-{}", stored.score_history_id),
             arrange: applied_arrange.arrange,
+            double_option: score_key.double_option,
             arrange_seed: applied_arrange.seed,
             random_seed: applied_arrange.seed,
             rule_mode: session.rule_mode.as_str().to_string(),
@@ -397,6 +403,7 @@ mod tests {
         let best = BestScoreSummary {
             chart_sha256: [0; 32],
             ln_policy: crate::ln_policy::LnScorePolicy::ForceLn,
+            double_option: crate::select_options::DoubleOptionScoreBucket::Off,
             clear_type: "Hard".to_string(),
             gauge_type: "Normal".to_string(),
             gauge_value: 100.0,
@@ -500,6 +507,8 @@ mod tests {
         let lane_shuffle_pattern = (0..bmz_core::lane::LANE_COUNT as u8).rev().collect::<Vec<_>>();
         let applied_arrange = AppliedArrange {
             arrange: crate::select_options::ArrangeOption::Random,
+            arrange_2p: crate::select_options::ArrangeOption::Normal,
+            double_option: crate::select_options::DoubleOption::Off,
             seed: Some(42),
             pattern: Some(lane_shuffle_pattern.clone()),
         };
