@@ -1,8 +1,8 @@
 use super::profile_config::{
     AssistOptionConfig, BgaExpandConfig, BgaModeConfig, BottomShiftableGaugeConfig,
-    GaugeAutoShiftConfig, GaugeTypeConfig, HispeedModeConfig, JudgeAlgorithmConfig,
-    LaneEffectConfig, ProfileConfig, RandomOptionConfig, ReplaySlotRule, ScratchInputMode,
-    TargetOptionConfig,
+    DoubleOptionConfig, GaugeAutoShiftConfig, GaugeTypeConfig, HispeedModeConfig, HsFixConfig,
+    JudgeAlgorithmConfig, LaneEffectConfig, ProfileConfig, RandomOptionConfig, ReplaySlotRule,
+    ScratchInputMode, TargetOptionConfig,
 };
 use bmz_gameplay::rule::RuleMode;
 use bmz_render::scene::ResultGradeDiffDisplay;
@@ -27,6 +27,9 @@ pub enum SettingsEntryId {
     GaugeAutoShift,
     BottomShiftableGauge,
     Random,
+    Random2,
+    DoubleOption,
+    HsFix,
     Target,
     GradeDiffDisplay,
     LaneEffect,
@@ -73,6 +76,9 @@ impl SettingsEntryId {
         Self::GaugeAutoShift,
         Self::BottomShiftableGauge,
         Self::Random,
+        Self::Random2,
+        Self::DoubleOption,
+        Self::HsFix,
         Self::Target,
         Self::GradeDiffDisplay,
         Self::LaneEffect,
@@ -125,6 +131,9 @@ impl SettingsEntryId {
             Self::GaugeAutoShift => "GAUGE SHIFT",
             Self::BottomShiftableGauge => "GAS BOTTOM",
             Self::Random => "RANDOM",
+            Self::Random2 => "RANDOM 2P",
+            Self::DoubleOption => "DP OPTION",
+            Self::HsFix => "HS-FIX",
             Self::Target => "TARGET",
             Self::GradeDiffDisplay => "GRADE DIFF",
             Self::LaneEffect => "LANE FX",
@@ -187,6 +196,9 @@ pub fn format_settings_value(profile: &ProfileConfig, id: SettingsEntryId) -> St
             format_bottom_shiftable_gauge(profile.play.bottom_shiftable_gauge)
         }
         SettingsEntryId::Random => format_random(profile.play.random),
+        SettingsEntryId::Random2 => format_random(profile.play.random2),
+        SettingsEntryId::DoubleOption => format_double_option(profile.play.double_option),
+        SettingsEntryId::HsFix => format_hs_fix(profile.play.hs_fix),
         SettingsEntryId::Target => format_target(profile.play.target),
         SettingsEntryId::GradeDiffDisplay => {
             format_grade_diff_display(profile.play.grade_diff_display)
@@ -278,6 +290,17 @@ pub fn adjust_settings_value(profile: &mut ProfileConfig, id: SettingsEntryId, d
         }
         SettingsEntryId::Random => cycle_enum(delta, profile.play.random, cycle_random)
             .map(|next| profile.play.random = next)
+            .is_some(),
+        SettingsEntryId::Random2 => cycle_enum(delta, profile.play.random2, cycle_random)
+            .map(|next| profile.play.random2 = next)
+            .is_some(),
+        SettingsEntryId::DoubleOption => {
+            cycle_enum(delta, profile.play.double_option, cycle_double_option)
+                .map(|next| profile.play.double_option = next)
+                .is_some()
+        }
+        SettingsEntryId::HsFix => cycle_enum(delta, profile.play.hs_fix, cycle_hs_fix)
+            .map(|next| profile.play.hs_fix = next)
             .is_some(),
         SettingsEntryId::Target => cycle_enum(delta, profile.play.target, cycle_target)
             .map(|next| profile.play.target = next)
@@ -463,6 +486,25 @@ fn format_random(value: RandomOptionConfig) -> String {
     }
 }
 
+fn format_double_option(value: DoubleOptionConfig) -> String {
+    match value {
+        DoubleOptionConfig::Off => "OFF".to_string(),
+        DoubleOptionConfig::Flip => "FLIP".to_string(),
+        DoubleOptionConfig::Battle => "BATTLE".to_string(),
+        DoubleOptionConfig::BattleAssist => "BATTLE AS".to_string(),
+    }
+}
+
+fn format_hs_fix(value: HsFixConfig) -> String {
+    match value {
+        HsFixConfig::Off => "OFF".to_string(),
+        HsFixConfig::StartBpm => "START BPM".to_string(),
+        HsFixConfig::MinBpm => "MIN BPM".to_string(),
+        HsFixConfig::MaxBpm => "MAX BPM".to_string(),
+        HsFixConfig::MainBpm => "MAIN BPM".to_string(),
+    }
+}
+
 fn format_target(value: TargetOptionConfig) -> String {
     match value {
         TargetOptionConfig::None => "NONE".to_string(),
@@ -625,6 +667,27 @@ fn cycle_random(current: RandomOptionConfig, forward: bool) -> RandomOptionConfi
         RandomOptionConfig::AllScratch,
         RandomOptionConfig::RandomEx,
         RandomOptionConfig::SRandomEx,
+    ];
+    cycle_in_slice(&VALUES, current, forward)
+}
+
+fn cycle_double_option(current: DoubleOptionConfig, forward: bool) -> DoubleOptionConfig {
+    const VALUES: [DoubleOptionConfig; 4] = [
+        DoubleOptionConfig::Off,
+        DoubleOptionConfig::Flip,
+        DoubleOptionConfig::Battle,
+        DoubleOptionConfig::BattleAssist,
+    ];
+    cycle_in_slice(&VALUES, current, forward)
+}
+
+fn cycle_hs_fix(current: HsFixConfig, forward: bool) -> HsFixConfig {
+    const VALUES: [HsFixConfig; 5] = [
+        HsFixConfig::Off,
+        HsFixConfig::StartBpm,
+        HsFixConfig::MinBpm,
+        HsFixConfig::MaxBpm,
+        HsFixConfig::MainBpm,
     ];
     cycle_in_slice(&VALUES, current, forward)
 }

@@ -70,6 +70,12 @@ pub struct PlayDefaultsConfig {
     pub bottom_shiftable_gauge: BottomShiftableGaugeConfig,
     pub random: RandomOptionConfig,
     #[serde(default)]
+    pub random2: RandomOptionConfig,
+    #[serde(default)]
+    pub double_option: DoubleOptionConfig,
+    #[serde(default)]
+    pub hs_fix: HsFixConfig,
+    #[serde(default)]
     pub target: TargetOptionConfig,
     #[serde(default)]
     pub grade_diff_display: ResultGradeDiffDisplay,
@@ -156,9 +162,10 @@ pub enum BottomShiftableGaugeConfig {
     Normal,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum RandomOptionConfig {
+    #[default]
     Off,
     Mirror,
     Random,
@@ -169,6 +176,27 @@ pub enum RandomOptionConfig {
     AllScratch,
     RandomEx,
     SRandomEx,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum DoubleOptionConfig {
+    #[default]
+    Off,
+    Flip,
+    Battle,
+    BattleAssist,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum HsFixConfig {
+    #[default]
+    Off,
+    StartBpm,
+    MinBpm,
+    MaxBpm,
+    MainBpm,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -793,6 +821,9 @@ impl ProfileConfig {
                 gauge_auto_shift: GaugeAutoShiftConfig::Off,
                 bottom_shiftable_gauge: BottomShiftableGaugeConfig::AssistEasy,
                 random: RandomOptionConfig::Off,
+                random2: RandomOptionConfig::Off,
+                double_option: DoubleOptionConfig::Off,
+                hs_fix: HsFixConfig::Off,
                 target: TargetOptionConfig::None,
                 grade_diff_display: ResultGradeDiffDisplay::default(),
                 lane_effect: LaneEffectConfig::Off,

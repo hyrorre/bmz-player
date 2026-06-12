@@ -33,6 +33,11 @@ impl ArrangeOption {
         Self::VALUES[(index + 1) % Self::VALUES.len()]
     }
 
+    pub fn cycle_prev(self) -> Self {
+        let index = Self::VALUES.iter().position(|&value| value == self).unwrap_or(0);
+        Self::VALUES[(index + Self::VALUES.len() - 1) % Self::VALUES.len()]
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Normal => "NORMAL",
@@ -236,6 +241,67 @@ pub enum AssistOption {
     #[default]
     Normal,
     Autoplay,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DoubleOption {
+    #[default]
+    Off,
+    Flip,
+    Battle,
+    BattleAssist,
+}
+
+impl DoubleOption {
+    pub fn cycle(self) -> Self {
+        match self {
+            Self::Off => Self::Flip,
+            Self::Flip => Self::Battle,
+            Self::Battle => Self::BattleAssist,
+            Self::BattleAssist => Self::Off,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "OFF",
+            Self::Flip => "FLIP",
+            Self::Battle => "BATTLE",
+            Self::BattleAssist => "BATTLE AS",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HsFixOption {
+    #[default]
+    Off,
+    StartBpm,
+    MinBpm,
+    MaxBpm,
+    MainBpm,
+}
+
+impl HsFixOption {
+    pub fn cycle(self) -> Self {
+        match self {
+            Self::Off => Self::StartBpm,
+            Self::StartBpm => Self::MinBpm,
+            Self::MinBpm => Self::MaxBpm,
+            Self::MaxBpm => Self::MainBpm,
+            Self::MainBpm => Self::Off,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "OFF",
+            Self::StartBpm => "START BPM",
+            Self::MinBpm => "MIN BPM",
+            Self::MaxBpm => "MAX BPM",
+            Self::MainBpm => "MAIN BPM",
+        }
+    }
 }
 
 #[cfg(test)]

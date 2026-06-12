@@ -58,9 +58,9 @@ use crate::config::key_config::{
 use crate::config::load::load_profile_config;
 use crate::config::profile_config::{
     AssistOptionConfig, BgaExpandConfig, BgaModeConfig, BottomShiftableGaugeConfig,
-    GaugeAutoShiftConfig, GaugeTypeConfig, HispeedModeConfig, InputActionConfig, LaneConfig,
-    ProfileConfig, ProfileInputConfig, RandomOptionConfig, ScratchDirectionConfig,
-    TargetOptionConfig,
+    DoubleOptionConfig, GaugeAutoShiftConfig, GaugeTypeConfig, HispeedModeConfig, HsFixConfig,
+    InputActionConfig, LaneConfig, ProfileConfig, ProfileInputConfig, RandomOptionConfig,
+    ScratchDirectionConfig, TargetOptionConfig,
 };
 use crate::config::save::{save_app_config, save_profile_config};
 use crate::config::settings_registry::SettingsEntryId;
@@ -102,7 +102,7 @@ use crate::screens::settings_edit::{SettingsBindings, SettingsEditSession, adjus
 use crate::screens::settings_model::{
     in_settings_stack, load_settings_items, settings_breadcrumb, settings_root_item,
 };
-use crate::select_options::{ArrangeOption, AssistOption, TargetOption};
+use crate::select_options::{ArrangeOption, AssistOption, DoubleOption, HsFixOption, TargetOption};
 use crate::skin_loader::{
     DecodedSkin, PreparedSource, SkinKind, UploadedSkin, apply_skin_from_config,
     decode_beatoraja_skin_with_options, install_decoded_font, install_decoded_skin,
@@ -312,10 +312,13 @@ struct WinitApp {
     start_held: bool,
     select_held: bool,
     arrange_option: ArrangeOption,
+    arrange_option_2p: ArrangeOption,
     target_option: TargetOption,
     gauge_option: GaugeTypeConfig,
     gauge_auto_shift_option: GaugeAutoShiftConfig,
     bottom_shiftable_gauge_option: BottomShiftableGaugeConfig,
+    double_option: DoubleOption,
+    hs_fix_option: HsFixOption,
     assist_option: AssistOption,
     select_mode_filter: SelectModeFilter,
     select_sort: SelectSort,
@@ -1324,6 +1327,9 @@ impl WinitApp {
             };
         let bottom_shiftable_gauge_option = boot.profile_config.play.bottom_shiftable_gauge;
         let arrange_option = arrange_option_from_profile(boot.profile_config.play.random);
+        let arrange_option_2p = arrange_option_from_profile(boot.profile_config.play.random2);
+        let double_option = double_option_from_profile(boot.profile_config.play.double_option);
+        let hs_fix_option = hs_fix_option_from_profile(boot.profile_config.play.hs_fix);
         let target_option = target_option_from_profile(boot.profile_config.play.target);
         let select_keys = SelectKeyBindings::from_profile(&boot.profile_config.input);
         let mut renderer = Renderer::default();
@@ -1431,10 +1437,13 @@ impl WinitApp {
             start_held: false,
             select_held: false,
             arrange_option,
+            arrange_option_2p,
             target_option,
             gauge_option,
             gauge_auto_shift_option,
             bottom_shiftable_gauge_option,
+            double_option,
+            hs_fix_option,
             assist_option,
             select_mode_filter,
             select_sort,
@@ -1956,6 +1965,7 @@ impl WinitApp {
                 &chart_distributions,
             ),
             arrange: self.arrange_option.as_str().to_string(),
+            arrange_2p: self.arrange_option_2p.as_str().to_string(),
             target: self.target_option.as_string(),
             gauge: gauge_option_as_str(self.gauge_option).to_string(),
             gauge_auto_shift: gauge_auto_shift_as_str(self.gauge_auto_shift_option).to_string(),
@@ -1963,6 +1973,8 @@ impl WinitApp {
                 self.bottom_shiftable_gauge_option,
             )
             .to_string(),
+            double_option: self.double_option.as_str().to_string(),
+            hs_fix: self.hs_fix_option.as_str().to_string(),
             assist: self.assist_option.as_str().to_string(),
             select_mode: self.select_mode_filter.as_str().to_string(),
             select_sort: self.select_sort.as_str().to_string(),
@@ -2767,6 +2779,9 @@ impl WinitApp {
         };
         self.bottom_shiftable_gauge_option = play.bottom_shiftable_gauge;
         self.arrange_option = arrange_option_from_profile(play.random);
+        self.arrange_option_2p = arrange_option_from_profile(play.random2);
+        self.double_option = double_option_from_profile(play.double_option);
+        self.hs_fix_option = hs_fix_option_from_profile(play.hs_fix);
         self.target_option = target_option_from_profile(play.target);
         self.assist_option =
             if play.auto_play { AssistOption::Autoplay } else { AssistOption::Normal };
@@ -2855,15 +2870,39 @@ impl WinitApp {
     }
 
     fn apply_play_option_control(&mut self, control: &str) -> bool {
-        if self.select_keys.cycle_arrange.as_deref() == Some(control) {
+        if self.select_keys.is_key1(control) {
             self.arrange_option = self.arrange_option.cycle();
             tracing::info!(arrange = self.arrange_option.as_str(), "arrange option changed");
             true
-        } else if self.select_keys.cycle_gauge.as_deref() == Some(control) {
+        } else if self.select_keys.is_key2(control) {
+            self.arrange_option = self.arrange_option.cycle_prev();
+            tracing::info!(arrange = self.arrange_option.as_str(), "arrange option changed");
+            true
+        } else if self.select_keys.is_key8(control) {
+            self.arrange_option_2p = self.arrange_option_2p.cycle();
+            tracing::info!(arrange_2p = self.arrange_option_2p.as_str(), "2P arrange changed");
+            true
+        } else if self.select_keys.is_key9(control) {
+            self.arrange_option_2p = self.arrange_option_2p.cycle_prev();
+            tracing::info!(arrange_2p = self.arrange_option_2p.as_str(), "2P arrange changed");
+            true
+        } else if self.select_keys.is_key3(control) {
             self.gauge_option = cycle_gauge_option(self.gauge_option);
             tracing::info!(gauge = ?self.gauge_option, "gauge option changed");
             true
-        } else if self.select_keys.cycle_assist.as_deref() == Some(control) {
+        } else if self.select_keys.is_key4(control) {
+            self.gauge_option = cycle_gauge_option_prev(self.gauge_option);
+            tracing::info!(gauge = ?self.gauge_option, "gauge option changed");
+            true
+        } else if self.select_keys.is_key5(control) {
+            self.hs_fix_option = self.hs_fix_option.cycle();
+            tracing::info!(hs_fix = self.hs_fix_option.as_str(), "HS-FIX option changed");
+            true
+        } else if self.select_keys.is_key6(control) {
+            self.double_option = self.double_option.cycle();
+            tracing::info!(double_option = self.double_option.as_str(), "double option changed");
+            true
+        } else if self.select_keys.is_key7(control) {
             self.set_assist_option(self.assist_option.cycle());
             tracing::info!(assist = self.assist_option.as_str(), "assist option changed");
             true
@@ -3902,7 +3941,10 @@ impl WinitApp {
             11 => self.cycle_select_mode_filter(arg),
             12 => self.cycle_select_sort(arg),
             40 => self.cycle_select_gauge(arg),
-            42 | 43 | 54 => self.cycle_select_arrange(arg),
+            42 => self.cycle_select_arrange(arg),
+            43 => self.cycle_select_arrange_2p(arg),
+            54 => self.cycle_select_double_option(arg),
+            55 => self.cycle_select_hs_fix(arg),
             72 => self.cycle_select_bga(arg),
             73 => self.cycle_select_bga_expand(arg),
             77 => self.cycle_select_target(arg),
@@ -3947,6 +3989,24 @@ impl WinitApp {
     fn cycle_select_arrange(&mut self, arg: i32) {
         self.arrange_option = cycle_arrange_option_with_direction(self.arrange_option, arg);
         tracing::info!(arrange = self.arrange_option.as_str(), "arrange option changed");
+        self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+    }
+
+    fn cycle_select_arrange_2p(&mut self, arg: i32) {
+        self.arrange_option_2p = cycle_arrange_option_with_direction(self.arrange_option_2p, arg);
+        tracing::info!(arrange_2p = self.arrange_option_2p.as_str(), "2P arrange changed");
+        self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+    }
+
+    fn cycle_select_double_option(&mut self, arg: i32) {
+        self.double_option = cycle_double_option_with_direction(self.double_option, arg);
+        tracing::info!(double_option = self.double_option.as_str(), "double option changed");
+        self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+    }
+
+    fn cycle_select_hs_fix(&mut self, arg: i32) {
+        self.hs_fix_option = cycle_hs_fix_option_with_direction(self.hs_fix_option, arg);
+        tracing::info!(hs_fix = self.hs_fix_option.as_str(), "HS-FIX option changed");
         self.play_system_sound(crate::system_sound::SoundType::OptionChange);
     }
 
@@ -5794,9 +5854,7 @@ impl WinitApp {
     }
 
     fn play_start_options(&self) -> PlayStartOptions {
-        let arrange_seed = self
-            .arrange_option
-            .uses_seed()
+        let arrange_seed = (self.arrange_option.uses_seed() || self.arrange_option_2p.uses_seed())
             .then(crate::screens::play_session::generate_arrange_seed);
         PlayStartOptions {
             autoplay: self.assist_option == AssistOption::Autoplay,
@@ -5804,6 +5862,9 @@ impl WinitApp {
             gauge_auto_shift: self.gauge_auto_shift_option,
             bottom_shiftable_gauge: self.bottom_shiftable_gauge_option,
             arrange: self.arrange_option,
+            arrange_2p: self.arrange_option_2p,
+            double_option: self.double_option,
+            hs_fix: self.hs_fix_option,
             target: self.target_option,
             target_ex_score_override: self.select_target_ex_score_override(),
             arrange_seed,
@@ -5867,6 +5928,9 @@ impl WinitApp {
             gauge_auto_shift: self.gauge_auto_shift_option,
             bottom_shiftable_gauge: self.bottom_shiftable_gauge_option,
             arrange: replay_file.arrange_option(),
+            arrange_2p: ArrangeOption::Normal,
+            double_option: DoubleOption::Off,
+            hs_fix: HsFixOption::Off,
             target: self.target_option,
             arrange_seed: replay_file.arrange_seed,
             arrange_pattern: replay_file.lane_shuffle_pattern.clone(),
@@ -5926,6 +5990,9 @@ impl WinitApp {
             gauge_auto_shift: self.gauge_auto_shift_option,
             bottom_shiftable_gauge: self.bottom_shiftable_gauge_option,
             arrange: replay_file.arrange_option(),
+            arrange_2p: ArrangeOption::Normal,
+            double_option: DoubleOption::Off,
+            hs_fix: HsFixOption::Off,
             target: self.target_option,
             arrange_seed: replay_file.arrange_seed,
             arrange_pattern: replay_file.lane_shuffle_pattern.clone(),
@@ -7882,12 +7949,17 @@ impl WinitApp {
             &mut self.boot.profile_config,
             hispeed,
             lane_state,
-            self.arrange_option,
-            self.target_option,
-            self.gauge_option,
-            self.gauge_auto_shift_option,
-            self.bottom_shiftable_gauge_option,
-            self.assist_option,
+            CurrentPlayOptions {
+                arrange: self.arrange_option,
+                arrange_2p: self.arrange_option_2p,
+                target: self.target_option,
+                gauge: self.gauge_option,
+                gauge_auto_shift: self.gauge_auto_shift_option,
+                bottom_shiftable_gauge: self.bottom_shiftable_gauge_option,
+                double_option: self.double_option,
+                hs_fix: self.hs_fix_option,
+                assist: self.assist_option,
+            },
             now_unix_seconds(),
         );
         if let Err(error) =
@@ -9421,6 +9493,10 @@ fn cycle_gauge_option(current: GaugeTypeConfig) -> GaugeTypeConfig {
     }
 }
 
+fn cycle_gauge_option_prev(current: GaugeTypeConfig) -> GaugeTypeConfig {
+    cycle_gauge_option_with_direction(current, -1)
+}
+
 fn cycle_gauge_option_with_direction(current: GaugeTypeConfig, direction: i32) -> GaugeTypeConfig {
     const VALUES: [GaugeTypeConfig; 6] = [
         GaugeTypeConfig::AssistEasy,
@@ -9520,6 +9596,23 @@ fn volume_f32_to_unit(value: f32) -> u32 {
 
 fn cycle_arrange_option_with_direction(current: ArrangeOption, direction: i32) -> ArrangeOption {
     cycle_enum(ArrangeOption::VALUES, current, direction)
+}
+
+fn cycle_double_option_with_direction(current: DoubleOption, direction: i32) -> DoubleOption {
+    const VALUES: [DoubleOption; 4] =
+        [DoubleOption::Off, DoubleOption::Flip, DoubleOption::Battle, DoubleOption::BattleAssist];
+    cycle_enum(VALUES, current, direction)
+}
+
+fn cycle_hs_fix_option_with_direction(current: HsFixOption, direction: i32) -> HsFixOption {
+    const VALUES: [HsFixOption; 5] = [
+        HsFixOption::Off,
+        HsFixOption::StartBpm,
+        HsFixOption::MinBpm,
+        HsFixOption::MaxBpm,
+        HsFixOption::MainBpm,
+    ];
+    cycle_enum(VALUES, current, direction)
 }
 
 fn cycle_bga_option(current: BgaModeConfig) -> BgaModeConfig {
@@ -9639,6 +9732,44 @@ fn random_config_from_arrange(arrange: ArrangeOption) -> RandomOptionConfig {
     }
 }
 
+fn double_option_from_profile(double_option: DoubleOptionConfig) -> DoubleOption {
+    match double_option {
+        DoubleOptionConfig::Off => DoubleOption::Off,
+        DoubleOptionConfig::Flip => DoubleOption::Flip,
+        DoubleOptionConfig::Battle => DoubleOption::Battle,
+        DoubleOptionConfig::BattleAssist => DoubleOption::BattleAssist,
+    }
+}
+
+fn double_config_from_option(double_option: DoubleOption) -> DoubleOptionConfig {
+    match double_option {
+        DoubleOption::Off => DoubleOptionConfig::Off,
+        DoubleOption::Flip => DoubleOptionConfig::Flip,
+        DoubleOption::Battle => DoubleOptionConfig::Battle,
+        DoubleOption::BattleAssist => DoubleOptionConfig::BattleAssist,
+    }
+}
+
+fn hs_fix_option_from_profile(hs_fix: HsFixConfig) -> HsFixOption {
+    match hs_fix {
+        HsFixConfig::Off => HsFixOption::Off,
+        HsFixConfig::StartBpm => HsFixOption::StartBpm,
+        HsFixConfig::MinBpm => HsFixOption::MinBpm,
+        HsFixConfig::MaxBpm => HsFixOption::MaxBpm,
+        HsFixConfig::MainBpm => HsFixOption::MainBpm,
+    }
+}
+
+fn hs_fix_config_from_option(hs_fix: HsFixOption) -> HsFixConfig {
+    match hs_fix {
+        HsFixOption::Off => HsFixConfig::Off,
+        HsFixOption::StartBpm => HsFixConfig::StartBpm,
+        HsFixOption::MinBpm => HsFixConfig::MinBpm,
+        HsFixOption::MaxBpm => HsFixConfig::MaxBpm,
+        HsFixOption::MainBpm => HsFixConfig::MainBpm,
+    }
+}
+
 fn target_option_from_profile(target: TargetOptionConfig) -> TargetOption {
     match target {
         TargetOptionConfig::None => TargetOption::None,
@@ -9685,16 +9816,24 @@ struct ActiveLaneState {
     target_green_number: u32,
 }
 
-fn apply_current_play_options_to_profile(
-    profile: &mut ProfileConfig,
-    hispeed: Option<f32>,
-    lane_state: Option<ActiveLaneState>,
+#[derive(Debug, Clone, Copy)]
+struct CurrentPlayOptions {
     arrange: ArrangeOption,
+    arrange_2p: ArrangeOption,
     target: TargetOption,
     gauge: GaugeTypeConfig,
     gauge_auto_shift: GaugeAutoShiftConfig,
     bottom_shiftable_gauge: BottomShiftableGaugeConfig,
+    double_option: DoubleOption,
+    hs_fix: HsFixOption,
     assist: AssistOption,
+}
+
+fn apply_current_play_options_to_profile(
+    profile: &mut ProfileConfig,
+    hispeed: Option<f32>,
+    lane_state: Option<ActiveLaneState>,
+    options: CurrentPlayOptions,
     updated_at: i64,
 ) {
     if let Some(hispeed) = hispeed {
@@ -9706,12 +9845,15 @@ fn apply_current_play_options_to_profile(
         profile.lane.hispeed_mode = hispeed_mode_to_config(state.hispeed_mode);
         profile.lane.target_green_number = state.target_green_number.max(1);
     }
-    profile.play.random = random_config_from_arrange(arrange);
-    profile.play.target = target_config_from_option(target);
-    profile.play.gauge = gauge;
-    profile.play.gauge_auto_shift = gauge_auto_shift;
-    profile.play.bottom_shiftable_gauge = bottom_shiftable_gauge;
-    profile.play.auto_play = assist == AssistOption::Autoplay;
+    profile.play.random = random_config_from_arrange(options.arrange);
+    profile.play.random2 = random_config_from_arrange(options.arrange_2p);
+    profile.play.target = target_config_from_option(options.target);
+    profile.play.gauge = options.gauge;
+    profile.play.gauge_auto_shift = options.gauge_auto_shift;
+    profile.play.bottom_shiftable_gauge = options.bottom_shiftable_gauge;
+    profile.play.double_option = double_config_from_option(options.double_option);
+    profile.play.hs_fix = hs_fix_config_from_option(options.hs_fix);
+    profile.play.auto_play = options.assist == AssistOption::Autoplay;
     profile.play.assist = AssistOptionConfig::None;
     profile.updated_at = updated_at;
 }
@@ -10837,6 +10979,7 @@ fn preloaded_matches_start(
         && preloaded.session_options.autoplay == options.autoplay
         && preloaded.session_options.practice_mode == options.practice_mode
         && preloaded.session_options.arrange == options.arrange
+        && preloaded.session_options.arrange_2p == options.arrange_2p
         && preloaded.session_options.arrange_seed == options.arrange_seed
         && preloaded.session_options.arrange_pattern == options.arrange_pattern
 }
@@ -11111,15 +11254,19 @@ struct SelectKeyBindings {
     e3_action_controls: Vec<String>,
     enter: Vec<String>,
     back: Vec<String>,
+    key1_controls: Vec<String>,
     key2_controls: Vec<String>,
+    key3_controls: Vec<String>,
+    key4_controls: Vec<String>,
     key5_controls: Vec<String>,
+    key6_controls: Vec<String>,
     key7_controls: Vec<String>,
+    key8_controls: Vec<String>,
+    key9_controls: Vec<String>,
     hispeed_down_controls: Vec<String>,
     hispeed_up_controls: Vec<String>,
     scratch_up_controls: Vec<String>,
     scratch_down_controls: Vec<String>,
-    cycle_arrange: Option<String>,
-    cycle_gauge: Option<String>,
     cycle_assist: Option<String>,
     cycle_bga: Option<String>,
     key_hint: String,
@@ -11175,9 +11322,15 @@ impl SelectKeyBindings {
         let back = merge_select_controls(actions_for(InputActionConfig::E2), lane_back);
         let e2_action_controls = actions_for(InputActionConfig::E2);
         let e3_action_controls = actions_for(InputActionConfig::E3);
+        let key1_controls = keys_for(LaneConfig::Key1);
         let key2_controls = keys_for(LaneConfig::Key2);
+        let key3_controls = keys_for(LaneConfig::Key3);
+        let key4_controls = keys_for(LaneConfig::Key4);
         let key5_controls = keys_for(LaneConfig::Key5);
+        let key6_controls = keys_for(LaneConfig::Key6);
         let key7_controls = keys_for(LaneConfig::Key7);
+        let key8_controls = keys_for(LaneConfig::Key8);
+        let key9_controls = keys_for(LaneConfig::Key9);
         let hispeed_down_controls: Vec<String> =
             [LaneConfig::Key1, LaneConfig::Key3, LaneConfig::Key5, LaneConfig::Key7]
                 .iter()
@@ -11208,14 +11361,6 @@ impl SelectKeyBindings {
                 }
             }
         }
-        let cycle_arrange = select_control_with_lane_fallback(
-            actions_for(InputActionConfig::SelectOptionArrange),
-            keys_for(LaneConfig::Key1),
-        );
-        let cycle_gauge = select_control_with_lane_fallback(
-            actions_for(InputActionConfig::SelectOptionGauge),
-            keys_for(LaneConfig::Key3),
-        );
         let cycle_assist = select_control_with_lane_fallback(
             actions_for(InputActionConfig::SelectOptionAssist),
             keys_for(LaneConfig::Key5),
@@ -11266,14 +11411,6 @@ impl SelectKeyBindings {
         let key_hint =
             format!("UP DOWN  RIGHT{enter_str}:ENTER  LEFT{back_str}:BACK  ENTER {start_str}");
 
-        let kb_arrange_str = select_control_with_lane_fallback(
-            kb_actions_for(InputActionConfig::SelectOptionArrange),
-            kb_keys_for(LaneConfig::Key1),
-        );
-        let kb_gauge_str = select_control_with_lane_fallback(
-            kb_actions_for(InputActionConfig::SelectOptionGauge),
-            kb_keys_for(LaneConfig::Key3),
-        );
         let kb_assist_str = select_control_with_lane_fallback(
             kb_actions_for(InputActionConfig::SelectOptionAssist),
             kb_keys_for(LaneConfig::Key5),
@@ -11282,14 +11419,13 @@ impl SelectKeyBindings {
             kb_actions_for(InputActionConfig::SelectOptionBga),
             kb_keys_for(LaneConfig::Key1),
         );
-        let arrange_str = kb_arrange_str.as_deref().unwrap_or("?");
-        let gauge_str = kb_gauge_str.as_deref().unwrap_or("?");
         let assist_str = kb_assist_str.as_deref().unwrap_or("?");
         let bga_str = kb_bga_str.as_deref().unwrap_or("?");
         let option_hint = format!(
             "F1 MENU  F5 RELOAD   \
              {start_str}:PLAY OPT  BACK:ASSIST OPT  {start_str}+BACK:DETAIL OPT  \
-             {start_str}+{arrange_str}:ARRANGE  {start_str}+{gauge_str}:GAUGE  {start_str}+{assist_str}:ASSIST  \
+             {start_str}+K1/K2:1P ARR  {start_str}+2P K1/K2:2P ARR  {start_str}+K3/K4:GAUGE  \
+             {start_str}+K5:HS-FIX  {start_str}+K6:DP OPT  {start_str}+K7:AUTOPLAY  {start_str}+{assist_str}:ASSIST  \
              {start_str}+BACK+{key2_str}:GAS  {start_str}+UP/DOWN:TARGET  {start_str}+{bga_str}:BGA  {start_str}+1..4:REPLAY"
         );
 
@@ -11299,15 +11435,19 @@ impl SelectKeyBindings {
             e3_action_controls,
             enter,
             back,
+            key1_controls,
             key2_controls,
+            key3_controls,
+            key4_controls,
             key5_controls,
+            key6_controls,
             key7_controls,
+            key8_controls,
+            key9_controls,
             hispeed_down_controls,
             hispeed_up_controls,
             scratch_up_controls,
             scratch_down_controls,
-            cycle_arrange,
-            cycle_gauge,
             cycle_assist,
             cycle_bga,
             key_hint,
@@ -11331,12 +11471,36 @@ impl SelectKeyBindings {
         self.key2_controls.iter().any(|k| k == control)
     }
 
+    fn is_key1(&self, control: &str) -> bool {
+        self.key1_controls.iter().any(|k| k == control)
+    }
+
+    fn is_key3(&self, control: &str) -> bool {
+        self.key3_controls.iter().any(|k| k == control)
+    }
+
+    fn is_key4(&self, control: &str) -> bool {
+        self.key4_controls.iter().any(|k| k == control)
+    }
+
     fn is_key5(&self, control: &str) -> bool {
         self.key5_controls.iter().any(|k| k == control)
     }
 
+    fn is_key6(&self, control: &str) -> bool {
+        self.key6_controls.iter().any(|k| k == control)
+    }
+
     fn is_key7(&self, control: &str) -> bool {
         self.key7_controls.iter().any(|k| k == control)
+    }
+
+    fn is_key8(&self, control: &str) -> bool {
+        self.key8_controls.iter().any(|k| k == control)
+    }
+
+    fn is_key9(&self, control: &str) -> bool {
+        self.key9_controls.iter().any(|k| k == control)
     }
 
     fn is_e2_action(&self, control: &str) -> bool {
@@ -12197,7 +12361,22 @@ mod tests {
         assert!(keys.key_hint.contains(" Q"), "start key in hint: {}", keys.key_hint);
         assert!(keys.option_hint.contains("F1 MENU"), "menu in hint: {}", keys.option_hint);
         assert!(keys.option_hint.contains("F5 RELOAD"), "reload in hint: {}", keys.option_hint);
-        assert!(keys.option_hint.contains("Q+Z:ARRANGE"), "arrange in hint: {}", keys.option_hint);
+        assert!(
+            keys.option_hint.contains("Q+K1/K2:1P ARR"),
+            "1P arrange in hint: {}",
+            keys.option_hint
+        );
+        assert!(
+            keys.option_hint.contains("Q+2P K1/K2:2P ARR"),
+            "2P arrange in hint: {}",
+            keys.option_hint
+        );
+        assert!(keys.option_hint.contains("Q+K5:HS-FIX"), "HS-FIX in hint: {}", keys.option_hint);
+        assert!(
+            keys.option_hint.contains("Q+K6:DP OPT"),
+            "DP option in hint: {}",
+            keys.option_hint
+        );
         assert!(
             keys.option_hint.contains("Q+UP/DOWN:TARGET"),
             "target in hint: {}",
@@ -12708,12 +12887,17 @@ mod tests {
                 hispeed_mode: HispeedMode::Floating,
                 target_green_number: 280,
             }),
-            ArrangeOption::Mirror,
-            TargetOption::RankAaa,
-            GaugeTypeConfig::Hard,
-            GaugeAutoShiftConfig::BestClear,
-            BottomShiftableGaugeConfig::Normal,
-            AssistOption::Autoplay,
+            CurrentPlayOptions {
+                arrange: ArrangeOption::Mirror,
+                arrange_2p: ArrangeOption::Random,
+                target: TargetOption::RankAaa,
+                gauge: GaugeTypeConfig::Hard,
+                gauge_auto_shift: GaugeAutoShiftConfig::BestClear,
+                bottom_shiftable_gauge: BottomShiftableGaugeConfig::Normal,
+                double_option: DoubleOption::Flip,
+                hs_fix: HsFixOption::MainBpm,
+                assist: AssistOption::Autoplay,
+            },
             42,
         );
 
@@ -12723,10 +12907,13 @@ mod tests {
         assert_eq!(profile.lane.hispeed_mode, HispeedModeConfig::Floating);
         assert_eq!(profile.lane.target_green_number, 280);
         assert!(matches!(profile.play.random, RandomOptionConfig::Mirror));
+        assert!(matches!(profile.play.random2, RandomOptionConfig::Random));
         assert!(matches!(profile.play.target, TargetOptionConfig::RankAaa));
         assert!(matches!(profile.play.gauge, GaugeTypeConfig::Hard));
         assert!(matches!(profile.play.gauge_auto_shift, GaugeAutoShiftConfig::BestClear));
         assert!(matches!(profile.play.bottom_shiftable_gauge, BottomShiftableGaugeConfig::Normal));
+        assert!(matches!(profile.play.double_option, DoubleOptionConfig::Flip));
+        assert!(matches!(profile.play.hs_fix, HsFixConfig::MainBpm));
         assert!(profile.play.auto_play);
         assert!(matches!(profile.play.assist, AssistOptionConfig::None));
         assert_eq!(profile.updated_at, 42);
@@ -13111,6 +13298,12 @@ mod tests {
             cycle_arrange_option_with_direction(ArrangeOption::Normal, -1),
             ArrangeOption::SRandomEx
         );
+        assert_eq!(
+            cycle_double_option_with_direction(DoubleOption::Off, -1),
+            DoubleOption::BattleAssist
+        );
+        assert_eq!(cycle_hs_fix_option_with_direction(HsFixOption::Off, 1), HsFixOption::StartBpm);
+        assert_eq!(cycle_hs_fix_option_with_direction(HsFixOption::Off, -1), HsFixOption::MainBpm);
         assert_eq!(cycle_bga_option_with_direction(BgaModeConfig::On, -1), BgaModeConfig::Off);
         assert_eq!(
             cycle_bga_expand_with_direction(BgaExpandConfig::KeepAspect, 1),

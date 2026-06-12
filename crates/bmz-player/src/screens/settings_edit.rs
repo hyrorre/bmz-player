@@ -6,10 +6,10 @@ use bmz_gameplay::rule::RuleMode;
 use crate::config::play_input::resolve_play_bindings;
 use crate::config::profile_config::{
     AssistOptionConfig, BgaExpandConfig, BgaModeConfig, BottomShiftableGaugeConfig,
-    GaugeAutoShiftConfig, GaugeTypeConfig, HispeedModeConfig, InputActionConfig,
-    JudgeAlgorithmConfig, LaneConfig, LaneEffectConfig, ProfileConfig, ProfileInputConfig,
-    RandomOptionConfig, ReplaySlotRule, ScratchDirectionConfig, ScratchInputMode,
-    TargetOptionConfig,
+    DoubleOptionConfig, GaugeAutoShiftConfig, GaugeTypeConfig, HispeedModeConfig, HsFixConfig,
+    InputActionConfig, JudgeAlgorithmConfig, LaneConfig, LaneEffectConfig, ProfileConfig,
+    ProfileInputConfig, RandomOptionConfig, ReplaySlotRule, ScratchDirectionConfig,
+    ScratchInputMode, TargetOptionConfig,
 };
 use crate::config::settings_registry::{
     SettingsEntryId, adjust_settings_value, format_settings_value,
@@ -150,6 +150,8 @@ enum SettingsBaseline {
     GaugeAutoShift(GaugeAutoShiftConfig),
     BottomShiftableGauge(BottomShiftableGaugeConfig),
     Random(RandomOptionConfig),
+    DoubleOption(DoubleOptionConfig),
+    HsFix(HsFixConfig),
     Target(TargetOptionConfig),
     GradeDiffDisplay(ResultGradeDiffDisplay),
     LaneEffect(LaneEffectConfig),
@@ -206,6 +208,11 @@ impl SettingsEditSession {
                 SettingsBaseline::BottomShiftableGauge(profile.play.bottom_shiftable_gauge)
             }
             SettingsEntryId::Random => SettingsBaseline::Random(profile.play.random),
+            SettingsEntryId::Random2 => SettingsBaseline::Random(profile.play.random2),
+            SettingsEntryId::DoubleOption => {
+                SettingsBaseline::DoubleOption(profile.play.double_option)
+            }
+            SettingsEntryId::HsFix => SettingsBaseline::HsFix(profile.play.hs_fix),
             SettingsEntryId::Target => SettingsBaseline::Target(profile.play.target),
             SettingsEntryId::GradeDiffDisplay => {
                 SettingsBaseline::GradeDiffDisplay(profile.play.grade_diff_display)
@@ -307,6 +314,15 @@ impl SettingsEditSession {
             }
             (SettingsEntryId::Random, SettingsBaseline::Random(value)) => {
                 profile.play.random = *value;
+            }
+            (SettingsEntryId::Random2, SettingsBaseline::Random(value)) => {
+                profile.play.random2 = *value;
+            }
+            (SettingsEntryId::DoubleOption, SettingsBaseline::DoubleOption(value)) => {
+                profile.play.double_option = *value;
+            }
+            (SettingsEntryId::HsFix, SettingsBaseline::HsFix(value)) => {
+                profile.play.hs_fix = *value;
             }
             (SettingsEntryId::Target, SettingsBaseline::Target(value)) => {
                 profile.play.target = *value;

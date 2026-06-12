@@ -22,7 +22,7 @@ use crate::screens::play_session::{
     build_prepared_play_session_from_preloaded,
     load_prepared_play_session_for_chart_with_input_backend,
 };
-use crate::select_options::{ArrangeOption, TargetOption};
+use crate::select_options::{ArrangeOption, DoubleOption, HsFixOption, TargetOption};
 use crate::storage::library_db::LibraryDatabase;
 use crate::storage::score_db::ScoreDatabase;
 
@@ -38,6 +38,9 @@ pub struct PlayStartOptions {
     pub gauge_auto_shift: GaugeAutoShiftConfig,
     pub bottom_shiftable_gauge: crate::config::profile_config::BottomShiftableGaugeConfig,
     pub arrange: ArrangeOption,
+    pub arrange_2p: ArrangeOption,
+    pub double_option: DoubleOption,
+    pub hs_fix: HsFixOption,
     pub target: TargetOption,
     pub target_ex_score_override: Option<u32>,
     pub arrange_seed: Option<i64>,
@@ -107,6 +110,9 @@ pub fn play_session_options_from_start(
             start_options.bottom_shiftable_gauge,
         ),
         arrange: start_options.arrange,
+        arrange_2p: start_options.arrange_2p,
+        double_option: start_options.double_option,
+        hs_fix: start_options.hs_fix,
         target: start_options.target,
         target_ex_score_override: start_options.target_ex_score_override,
         arrange_seed: start_options.arrange_seed,

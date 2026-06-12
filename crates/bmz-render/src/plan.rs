@@ -536,9 +536,12 @@ fn push_select_option_panel(
         1 => (
             "PLAY OPTIONS",
             vec![
-                format!("ARRANGE  {}", snapshot.arrange),
-                format!("TARGET   {}", snapshot.target),
-                format!("GAUGE    {}", snapshot.gauge),
+                format!("ARRANGE 1P {}", snapshot.arrange),
+                format!("ARRANGE 2P {}", snapshot.arrange_2p),
+                format!("GAUGE      {}", snapshot.gauge),
+                format!("HS-FIX     {}", snapshot.hs_fix),
+                format!("DP OPT     {}", snapshot.double_option),
+                format!("AUTOPLAY   {}", snapshot.assist),
                 "REPLAY   1 / 2 / 3 / 4".to_string(),
             ],
         ),

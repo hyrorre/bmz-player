@@ -22,10 +22,11 @@ use crate::config::app_config::{
 };
 use crate::config::profile_config::{
     AssistOptionConfig, BgaExpandConfig, BgaModeConfig, BottomShiftableGaugeConfig,
-    FastSlowDisplayScope, GaugeAutoShiftConfig, GaugeTypeConfig, HispeedModeConfig,
-    IrCredentialStoreConfig, IrProviderConfig, IrProviderRoleConfig, IrSendPolicyConfig,
-    JudgeAlgorithmConfig, LaneEffectConfig, ProfileConfig, RandomOptionConfig, ReplaySlotRule,
-    ScratchInputMode, SkinConfig, SkinHistoryEntryConfig, SkinOffsetConfig, TargetOptionConfig,
+    DoubleOptionConfig, FastSlowDisplayScope, GaugeAutoShiftConfig, GaugeTypeConfig,
+    HispeedModeConfig, HsFixConfig, IrCredentialStoreConfig, IrProviderConfig,
+    IrProviderRoleConfig, IrSendPolicyConfig, JudgeAlgorithmConfig, LaneEffectConfig,
+    ProfileConfig, RandomOptionConfig, ReplaySlotRule, ScratchInputMode, SkinConfig,
+    SkinHistoryEntryConfig, SkinOffsetConfig, TargetOptionConfig,
 };
 use crate::ln_policy::LnPolicySetting;
 use crate::practice_ui::{PracticePanelContext, build_practice_panel};
@@ -1985,19 +1986,40 @@ fn build_profile_settings_panel(
                     egui::ComboBox::from_label("ランダム")
                         .selected_text(random_label(profile.play.random))
                         .show_ui(ui, |ui| {
-                            for (value, label) in [
-                                (RandomOptionConfig::Off, "OFF"),
-                                (RandomOptionConfig::Mirror, "MIRROR"),
-                                (RandomOptionConfig::Random, "RANDOM"),
-                                (RandomOptionConfig::RRandom, "R-RANDOM"),
-                                (RandomOptionConfig::SRandom, "S-RANDOM"),
-                                (RandomOptionConfig::Spiral, "SPIRAL"),
-                                (RandomOptionConfig::HRandom, "H-RANDOM"),
-                                (RandomOptionConfig::AllScratch, "ALL-SCR"),
-                                (RandomOptionConfig::RandomEx, "RANDOM-EX"),
-                                (RandomOptionConfig::SRandomEx, "S-RANDOM-EX"),
-                            ] {
+                            for (value, label) in random_options() {
                                 ui.selectable_value(&mut profile.play.random, value, label);
+                            }
+                        });
+                    egui::ComboBox::from_label("ランダム 2P")
+                        .selected_text(random_label(profile.play.random2))
+                        .show_ui(ui, |ui| {
+                            for (value, label) in random_options() {
+                                ui.selectable_value(&mut profile.play.random2, value, label);
+                            }
+                        });
+                    egui::ComboBox::from_label("DP オプション")
+                        .selected_text(double_option_label(profile.play.double_option))
+                        .show_ui(ui, |ui| {
+                            for (value, label) in [
+                                (DoubleOptionConfig::Off, "OFF"),
+                                (DoubleOptionConfig::Flip, "FLIP"),
+                                (DoubleOptionConfig::Battle, "BATTLE"),
+                                (DoubleOptionConfig::BattleAssist, "BATTLE AS"),
+                            ] {
+                                ui.selectable_value(&mut profile.play.double_option, value, label);
+                            }
+                        });
+                    egui::ComboBox::from_label("HS-FIX")
+                        .selected_text(hs_fix_label(profile.play.hs_fix))
+                        .show_ui(ui, |ui| {
+                            for (value, label) in [
+                                (HsFixConfig::Off, "OFF"),
+                                (HsFixConfig::StartBpm, "START BPM"),
+                                (HsFixConfig::MinBpm, "MIN BPM"),
+                                (HsFixConfig::MaxBpm, "MAX BPM"),
+                                (HsFixConfig::MainBpm, "MAIN BPM"),
+                            ] {
+                                ui.selectable_value(&mut profile.play.hs_fix, value, label);
                             }
                         });
                     egui::ComboBox::from_label("ターゲット")
@@ -2437,6 +2459,40 @@ fn random_label(value: RandomOptionConfig) -> &'static str {
         RandomOptionConfig::AllScratch => "ALL-SCR",
         RandomOptionConfig::RandomEx => "RANDOM-EX",
         RandomOptionConfig::SRandomEx => "S-RANDOM-EX",
+    }
+}
+
+fn random_options() -> [(RandomOptionConfig, &'static str); 10] {
+    [
+        (RandomOptionConfig::Off, "OFF"),
+        (RandomOptionConfig::Mirror, "MIRROR"),
+        (RandomOptionConfig::Random, "RANDOM"),
+        (RandomOptionConfig::RRandom, "R-RANDOM"),
+        (RandomOptionConfig::SRandom, "S-RANDOM"),
+        (RandomOptionConfig::Spiral, "SPIRAL"),
+        (RandomOptionConfig::HRandom, "H-RANDOM"),
+        (RandomOptionConfig::AllScratch, "ALL-SCR"),
+        (RandomOptionConfig::RandomEx, "RANDOM-EX"),
+        (RandomOptionConfig::SRandomEx, "S-RANDOM-EX"),
+    ]
+}
+
+fn double_option_label(value: DoubleOptionConfig) -> &'static str {
+    match value {
+        DoubleOptionConfig::Off => "OFF",
+        DoubleOptionConfig::Flip => "FLIP",
+        DoubleOptionConfig::Battle => "BATTLE",
+        DoubleOptionConfig::BattleAssist => "BATTLE AS",
+    }
+}
+
+fn hs_fix_label(value: HsFixConfig) -> &'static str {
+    match value {
+        HsFixConfig::Off => "OFF",
+        HsFixConfig::StartBpm => "START BPM",
+        HsFixConfig::MinBpm => "MIN BPM",
+        HsFixConfig::MaxBpm => "MAX BPM",
+        HsFixConfig::MainBpm => "MAIN BPM",
     }
 }
 

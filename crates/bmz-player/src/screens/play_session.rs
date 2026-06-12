@@ -37,7 +37,7 @@ use crate::ln_policy::{
 use crate::screens::practice::{
     PracticeProperty, apply_practice_property, apply_practice_start_gauge,
 };
-use crate::select_options::{ArrangeOption, TargetOption};
+use crate::select_options::{ArrangeOption, DoubleOption, HsFixOption, TargetOption};
 use crate::storage::library_db::LibraryDatabase;
 use crate::storage::score_db::ScoreKey;
 
@@ -52,6 +52,9 @@ pub struct PlaySessionOptions {
     pub gauge_auto_shift: GaugeAutoShiftMode,
     pub bottom_shiftable_gauge: GaugeType,
     pub arrange: ArrangeOption,
+    pub arrange_2p: ArrangeOption,
+    pub double_option: DoubleOption,
+    pub hs_fix: HsFixOption,
     pub target: TargetOption,
     pub target_ex_score_override: Option<u32>,
     pub arrange_seed: Option<i64>,
@@ -109,6 +112,9 @@ impl Default for PlaySessionOptions {
             gauge_auto_shift: GaugeAutoShiftMode::Off,
             bottom_shiftable_gauge: GaugeType::AssistEasy,
             arrange: ArrangeOption::Normal,
+            arrange_2p: ArrangeOption::Normal,
+            double_option: DoubleOption::Off,
+            hs_fix: HsFixOption::Off,
             target: TargetOption::None,
             target_ex_score_override: None,
             arrange_seed: None,
@@ -580,9 +586,11 @@ pub fn preload_play_session_for_chart(
     if let Some(ln_mode) = options.ln_mode_override {
         force_ln_mode_for_chart(ln_mode, &mut chart);
     }
-    let applied_arrange = apply_arrange(
+    apply_double_option(&mut chart, options.double_option);
+    let applied_arrange = apply_arrange_pair(
         &mut chart,
         options.arrange,
+        options.arrange_2p,
         options.arrange_seed,
         options.arrange_pattern.as_deref(),
     );
@@ -721,6 +729,162 @@ pub fn apply_arrange(
     }
 }
 
+pub fn apply_arrange_pair(
+    chart: &mut PlayableChart,
+    arrange_1p: ArrangeOption,
+    arrange_2p: ArrangeOption,
+    seed: Option<i64>,
+    pattern: Option<&[u8]>,
+) -> AppliedArrange {
+    if let Some(perm) = pattern {
+        let perm_usize: Vec<usize> = perm.iter().map(|&i| i as usize).collect();
+        apply_lane_permutation(chart, &perm_usize);
+        return AppliedArrange { arrange: arrange_1p, seed, pattern: Some(perm.to_vec()) };
+    }
+
+    let key_mode = chart.metadata.key_mode;
+    if !matches!(key_mode, KeyMode::K10 | KeyMode::K14) {
+        return apply_arrange(chart, arrange_1p, seed, None);
+    }
+
+    let used_seed = (arrange_1p.uses_seed() || arrange_2p.uses_seed())
+        .then(|| seed.unwrap_or_else(generate_arrange_seed));
+    let mut combined_perm: Vec<usize> = (0..LANE_COUNT).collect();
+    let mut has_perm = false;
+
+    if let Some(perm) = apply_arrange_side(chart, arrange_1p, used_seed, ArrangeSide::P1) {
+        merge_lane_permutation(&mut combined_perm, &perm);
+        has_perm = true;
+    }
+    if let Some(perm) = apply_arrange_side(
+        chart,
+        arrange_2p,
+        used_seed.map(|seed| seed.wrapping_add(0x9e37_79b9)),
+        ArrangeSide::P2,
+    ) {
+        merge_lane_permutation(&mut combined_perm, &perm);
+        has_perm = true;
+    }
+
+    AppliedArrange {
+        arrange: arrange_1p,
+        seed: used_seed,
+        pattern: has_perm.then(|| combined_perm.iter().map(|&i| i as u8).collect()),
+    }
+}
+
+fn apply_double_option(chart: &mut PlayableChart, double_option: DoubleOption) {
+    if double_option != DoubleOption::Flip
+        || !matches!(chart.metadata.key_mode, KeyMode::K10 | KeyMode::K14)
+    {
+        return;
+    }
+
+    let mut perm: Vec<usize> = (0..LANE_COUNT).collect();
+    for (left, right) in [
+        (Lane::Scratch, Lane::Scratch2),
+        (Lane::Key1, Lane::Key8),
+        (Lane::Key2, Lane::Key9),
+        (Lane::Key3, Lane::Key10),
+        (Lane::Key4, Lane::Key11),
+        (Lane::Key5, Lane::Key12),
+        (Lane::Key6, Lane::Key13),
+        (Lane::Key7, Lane::Key14),
+    ] {
+        let left = left.index();
+        let right = right.index();
+        perm[left] = right;
+        perm[right] = left;
+    }
+    apply_lane_permutation(chart, &perm);
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArrangeSide {
+    P1,
+    P2,
+}
+
+fn apply_arrange_side(
+    chart: &mut PlayableChart,
+    arrange: ArrangeOption,
+    seed: Option<i64>,
+    side: ArrangeSide,
+) -> Option<Vec<usize>> {
+    if arrange == ArrangeOption::Normal {
+        return None;
+    }
+
+    let include_scratch = matches!(
+        arrange,
+        ArrangeOption::AllScratch | ArrangeOption::RandomEx | ArrangeOption::SRandomEx
+    );
+    let groups = arrange_lane_groups_for_side(chart.metadata.key_mode, include_scratch, side);
+    if groups.is_empty() {
+        return None;
+    }
+
+    match arrange {
+        ArrangeOption::Normal => None,
+        ArrangeOption::Mirror => {
+            let mut perm: Vec<usize> = (0..LANE_COUNT).collect();
+            for group in groups {
+                reverse_lane_group(&mut perm, &group);
+            }
+            apply_lane_permutation(chart, &perm);
+            Some(perm)
+        }
+        ArrangeOption::Random => {
+            let mut perm: Vec<usize> = (0..LANE_COUNT).collect();
+            let mut rng = SplitMix64::new(seed.unwrap_or_else(generate_arrange_seed));
+            for group in groups {
+                fisher_yates_shuffle(&mut rng, &group, &mut perm);
+            }
+            apply_lane_permutation(chart, &perm);
+            Some(perm)
+        }
+        ArrangeOption::RRandom => {
+            let mut perm: Vec<usize> = (0..LANE_COUNT).collect();
+            let mut rng = SplitMix64::new(seed.unwrap_or_else(generate_arrange_seed));
+            for group in groups {
+                rotate_lane_group(&mut rng, &group, &mut perm);
+            }
+            apply_lane_permutation(chart, &perm);
+            Some(perm)
+        }
+        ArrangeOption::RandomEx => {
+            let mut perm: Vec<usize> = (0..LANE_COUNT).collect();
+            let mut rng = SplitMix64::new(seed.unwrap_or_else(generate_arrange_seed));
+            for group in groups {
+                fisher_yates_shuffle(&mut rng, &group, &mut perm);
+            }
+            apply_lane_permutation(chart, &perm);
+            Some(perm)
+        }
+        ArrangeOption::SRandom
+        | ArrangeOption::Spiral
+        | ArrangeOption::HRandom
+        | ArrangeOption::AllScratch
+        | ArrangeOption::SRandomEx => {
+            apply_note_arrange_for_groups(
+                chart,
+                arrange,
+                seed.unwrap_or_else(generate_arrange_seed),
+                &groups,
+            );
+            None
+        }
+    }
+}
+
+fn merge_lane_permutation(target: &mut [usize], source: &[usize]) {
+    for (index, &source_lane) in source.iter().enumerate() {
+        if source_lane != index {
+            target[index] = source_lane;
+        }
+    }
+}
+
 fn mirror_permutation(key_mode: KeyMode) -> Vec<usize> {
     let mut perm: Vec<usize> = (0..LANE_COUNT).collect();
     for group in arrange_lane_groups(key_mode, false) {
@@ -742,24 +906,41 @@ fn rotate_lane_permutation(seed: i64, key_mode: KeyMode, include_scratch: bool) 
     let mut perm: Vec<usize> = (0..LANE_COUNT).collect();
     let mut rng = SplitMix64::new(seed);
     for group in arrange_lane_groups(key_mode, include_scratch) {
-        if group.len() < 2 {
-            continue;
-        }
-        let inc = rng.next_bool();
-        let mut index = rng.next_usize(group.len() - 1);
-        if inc {
-            index += 1;
-        }
-        for &lane in &group {
-            perm[lane] = group[index];
-            index = if inc {
-                (index + 1) % group.len()
-            } else {
-                (index + group.len() - 1) % group.len()
-            };
-        }
+        rotate_lane_group(&mut rng, &group, &mut perm);
     }
     perm
+}
+
+fn rotate_lane_group(rng: &mut SplitMix64, group: &[usize], perm: &mut [usize]) {
+    if group.len() < 2 {
+        return;
+    }
+    let inc = rng.next_bool();
+    let mut index = rng.next_usize(group.len() - 1);
+    if inc {
+        index += 1;
+    }
+    for &lane in group {
+        perm[lane] = group[index];
+        index =
+            if inc { (index + 1) % group.len() } else { (index + group.len() - 1) % group.len() };
+    }
+}
+
+fn arrange_lane_groups_for_side(
+    key_mode: KeyMode,
+    include_scratch: bool,
+    side: ArrangeSide,
+) -> Vec<Vec<usize>> {
+    let groups = arrange_lane_groups(key_mode, include_scratch);
+    match (key_mode, side) {
+        (KeyMode::K10 | KeyMode::K14, ArrangeSide::P1) => groups.into_iter().take(1).collect(),
+        (KeyMode::K10 | KeyMode::K14, ArrangeSide::P2) => {
+            groups.into_iter().skip(1).take(1).collect()
+        }
+        (_, ArrangeSide::P1) => groups,
+        (_, ArrangeSide::P2) => Vec::new(),
+    }
 }
 
 fn arrange_lane_groups(key_mode: KeyMode, include_scratch: bool) -> Vec<Vec<usize>> {
@@ -854,7 +1035,16 @@ fn apply_lane_permutation(chart: &mut PlayableChart, perm: &[usize]) {
 fn apply_note_arrange(chart: &mut PlayableChart, arrange: ArrangeOption, seed: i64) {
     let include_scratch = matches!(arrange, ArrangeOption::AllScratch | ArrangeOption::SRandomEx);
     let groups = arrange_lane_groups(chart.metadata.key_mode, include_scratch);
-    let mut engine = NoteArrangeEngine::new(arrange, seed, &groups);
+    apply_note_arrange_for_groups(chart, arrange, seed, &groups);
+}
+
+fn apply_note_arrange_for_groups(
+    chart: &mut PlayableChart,
+    arrange: ArrangeOption,
+    seed: i64,
+    groups: &[Vec<usize>],
+) {
+    let mut engine = NoteArrangeEngine::new(arrange, seed, groups);
     let mut notes: Vec<NoteEvent> = chart.lane_notes.iter_mut().flat_map(std::mem::take).collect();
     notes.sort_by_key(|note| (note.tick, note.time, note.lane as u8, note.id));
 
@@ -1388,6 +1578,64 @@ mod tests {
         assert!(chart.lane_notes.iter().enumerate().any(|(lane_index, notes)| lane_index
             != Lane::Scratch.index()
             && notes.iter().any(|note| note.id == NoteId(1) && note.lane.index() == lane_index)));
+    }
+
+    #[test]
+    fn random2_arranges_only_dp_second_player_lanes() {
+        let mut chart = chart();
+        chart.metadata.key_mode = KeyMode::K14;
+        chart.lane_notes[Lane::Key1.index()].push(note(1, Lane::Key1, 1_000_000));
+        chart.lane_notes[Lane::Key8.index()].push(note(2, Lane::Key8, 1_000_000));
+
+        let applied = apply_arrange_pair(
+            &mut chart,
+            ArrangeOption::Normal,
+            ArrangeOption::Mirror,
+            None,
+            None,
+        );
+
+        assert_eq!(applied.arrange, ArrangeOption::Normal);
+        assert_eq!(chart.lane_notes[Lane::Key1.index()][0].id, NoteId(1));
+        assert!(chart.lane_notes[Lane::Key8.index()].is_empty());
+        assert!(
+            chart.lane_notes[Lane::Key14.index()]
+                .iter()
+                .any(|note| note.id == NoteId(2) && note.lane == Lane::Key14)
+        );
+    }
+
+    #[test]
+    fn double_option_flip_swaps_dp_player_lanes() {
+        let mut chart = chart();
+        chart.metadata.key_mode = KeyMode::K14;
+        chart.lane_notes[Lane::Scratch.index()].push(note(1, Lane::Scratch, 1_000_000));
+        chart.lane_notes[Lane::Key1.index()].push(note(2, Lane::Key1, 1_000_000));
+        chart.lane_notes[Lane::Scratch2.index()].push(note(3, Lane::Scratch2, 1_000_000));
+        chart.lane_notes[Lane::Key8.index()].push(note(4, Lane::Key8, 1_000_000));
+
+        apply_double_option(&mut chart, DoubleOption::Flip);
+
+        assert!(
+            chart.lane_notes[Lane::Scratch2.index()]
+                .iter()
+                .any(|note| note.id == NoteId(1) && note.lane == Lane::Scratch2)
+        );
+        assert!(
+            chart.lane_notes[Lane::Key8.index()]
+                .iter()
+                .any(|note| note.id == NoteId(2) && note.lane == Lane::Key8)
+        );
+        assert!(
+            chart.lane_notes[Lane::Scratch.index()]
+                .iter()
+                .any(|note| note.id == NoteId(3) && note.lane == Lane::Scratch)
+        );
+        assert!(
+            chart.lane_notes[Lane::Key1.index()]
+                .iter()
+                .any(|note| note.id == NoteId(4) && note.lane == Lane::Key1)
+        );
     }
 
     #[test]

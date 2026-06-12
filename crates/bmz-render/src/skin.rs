@@ -1833,6 +1833,9 @@ pub struct SkinDrawState {
     pub select_option_panel_elapsed_ms: i32,
     pub select_option_panel: u8,
     pub select_arrange_index: usize,
+    pub select_arrange_2p_index: usize,
+    pub select_double_option_index: usize,
+    pub select_hs_fix_index: usize,
     pub result_arrange_index: usize,
     pub result_random_lane_refs: [u8; SKIN_RANDOM_LANE_REF_COUNT],
     pub select_gauge_index: usize,
@@ -2115,6 +2118,9 @@ impl Default for SkinDrawState {
             select_option_panel_elapsed_ms: 0,
             select_option_panel: 0,
             select_arrange_index: 0,
+            select_arrange_2p_index: 0,
+            select_double_option_index: 0,
+            select_hs_fix_index: 0,
             result_arrange_index: 0,
             result_random_lane_refs: [0; SKIN_RANDOM_LANE_REF_COUNT],
             select_gauge_index: 2,
@@ -3778,6 +3784,9 @@ impl SkinDocument {
                 as i32,
             select_option_panel: snapshot.option_panel,
             select_arrange_index: select_arrange_index(&snapshot.arrange),
+            select_arrange_2p_index: select_arrange_index(&snapshot.arrange_2p),
+            select_double_option_index: select_double_option_index(&snapshot.double_option),
+            select_hs_fix_index: select_hs_fix_index(&snapshot.hs_fix),
             select_gauge_index: select_gauge_index(&snapshot.gauge),
             select_gauge_auto_shift_index: select_gauge_auto_shift_index(
                 &snapshot.gauge_auto_shift,
@@ -6399,11 +6408,13 @@ fn skin_state_imageset_index(ref_id: i32, state: &SkinDrawState) -> Option<usize
         40 => Some(state.select_gauge_index),
         SKIN_REF_PLAY_GAUGE_TYPE => Some(state.gauge_type.max(0) as usize),
         41 => Some(state.select_target_index),
-        42 | 43 => Some(arrange_ref_index(state)),
+        42 => Some(arrange_ref_index(state)),
+        43 => Some(arrange_2p_ref_index(state)),
         ref_id if random_lane_ref_slot(ref_id).is_some() => {
             skin_random_lane_ref_number(ref_id, state).map(|value| value.max(0) as usize)
         }
-        54 | 55 => Some(0),
+        54 => Some(state.select_double_option_index),
+        55 => Some(state.select_hs_fix_index),
         72 => Some(state.select_bga_index),
         78 => Some(state.select_gauge_auto_shift_index),
         341 => Some(state.select_bottom_shiftable_gauge_index),
@@ -7762,7 +7773,10 @@ fn parse_skin_event_index_operand(operand: &str) -> Option<i32> {
 
 fn skin_state_event_index(event_id: i32, state: &SkinDrawState) -> i32 {
     match event_id {
-        42 | 43 => arrange_ref_index(state) as i32,
+        42 => arrange_ref_index(state) as i32,
+        43 => arrange_2p_ref_index(state) as i32,
+        54 => state.select_double_option_index as i32,
+        55 if state.select_screen => state.select_hs_fix_index as i32,
         SKIN_EVENT_HSFIX => state.hsfix_index,
         _ => 0,
     }
@@ -8023,6 +8037,10 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         0 => Some(0),
         21..=26 => current_datetime_number(ref_id),
         42 | 43 if state.result_failed.is_some() => Some(state.result_arrange_index as i64),
+        42 if state.select_screen => Some(state.select_arrange_index as i64),
+        43 if state.select_screen => Some(state.select_arrange_2p_index as i64),
+        54 if state.select_screen => Some(state.select_double_option_index as i64),
+        55 if state.select_screen => Some(state.select_hs_fix_index as i64),
         11 if state.select_screen => Some(state.select_mode_index as i64),
         12 if state.select_screen && state.select_option_panel == 3 => {
             Some(state.judge_timing_offset_ms as i64)
@@ -8524,7 +8542,10 @@ fn skin_image_texture_region_for_state(
 
 fn skin_image_ref_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
     match ref_id {
-        42 | 43 => Some(arrange_ref_index(state) as i64),
+        42 => Some(arrange_ref_index(state) as i64),
+        43 => Some(arrange_2p_ref_index(state) as i64),
+        54 => Some(state.select_double_option_index as i64),
+        55 => Some(state.select_hs_fix_index as i64),
         ref_id if random_lane_ref_slot(ref_id).is_some() => {
             skin_random_lane_ref_number(ref_id, state)
         }
@@ -8537,6 +8558,14 @@ fn arrange_ref_index(state: &SkinDrawState) -> usize {
         state.result_arrange_index
     } else {
         state.select_arrange_index
+    }
+}
+
+fn arrange_2p_ref_index(state: &SkinDrawState) -> usize {
+    if state.result_failed.is_some() {
+        state.result_arrange_index
+    } else {
+        state.select_arrange_2p_index
     }
 }
 
@@ -9909,7 +9938,7 @@ fn select_target_name_by_offset(target: &str, offset: i32) -> String {
 }
 
 fn select_target_index_for_name(target: &str) -> Option<usize> {
-    SELECT_TARGET_IDS.iter().position(|id| *id == target).or_else(|| match target {
+    SELECT_TARGET_IDS.iter().position(|id| *id == target).or(match target {
         "RIVAL" => Some(11),
         "AAA" => Some(5),
         "AA" => Some(3),
@@ -10553,6 +10582,25 @@ pub(crate) fn select_arrange_index(arrange: &str) -> usize {
         "ALL-SCR" => 7,
         "RANDOM-EX" => 8,
         "S-RANDOM-EX" => 9,
+        _ => 0,
+    }
+}
+
+fn select_double_option_index(double_option: &str) -> usize {
+    match double_option {
+        "FLIP" => 1,
+        "BATTLE" => 2,
+        "BATTLE AS" => 3,
+        _ => 0,
+    }
+}
+
+fn select_hs_fix_index(hs_fix: &str) -> usize {
+    match hs_fix {
+        "START BPM" => 1,
+        "MIN BPM" => 2,
+        "MAX BPM" => 3,
+        "MAIN BPM" => 4,
         _ => 0,
     }
 }
@@ -16891,6 +16939,25 @@ mod tests {
     }
 
     #[test]
+    fn select_draw_state_maps_extended_option_refs() {
+        let document: SkinDocument = serde_json::from_str(r#"{ "type": 5 }"#).unwrap();
+        let snapshot = SelectSnapshot {
+            arrange: "RANDOM".to_string(),
+            arrange_2p: "SPIRAL".to_string(),
+            double_option: "BATTLE AS".to_string(),
+            hs_fix: "MAIN BPM".to_string(),
+            ..SelectSnapshot::default()
+        };
+
+        let (state, _) = document.select_draw_state(&snapshot, None);
+
+        assert_eq!(skin_state_number(42, &state), Some(2));
+        assert_eq!(skin_state_number(43, &state), Some(5));
+        assert_eq!(skin_state_number(54, &state), Some(3));
+        assert_eq!(skin_state_number(55, &state), Some(4));
+    }
+
+    #[test]
     fn select_songlist_judgegraph_honors_delay_backtexoff_and_type() {
         let document: SkinDocument = serde_json::from_str(
             r#"
@@ -19272,6 +19339,9 @@ mod tests {
     fn skin_state_imageset_index_maps_select_options() {
         let state = SkinDrawState {
             select_arrange_index: 2,
+            select_arrange_2p_index: 5,
+            select_double_option_index: 3,
+            select_hs_fix_index: 4,
             select_gauge_index: 4,
             select_target_index: 3,
             select_bga_index: 1,
@@ -19279,7 +19349,9 @@ mod tests {
         };
 
         assert_eq!(skin_state_imageset_index(42, &state), Some(2));
-        assert_eq!(skin_state_imageset_index(43, &state), Some(2));
+        assert_eq!(skin_state_imageset_index(43, &state), Some(5));
+        assert_eq!(skin_state_imageset_index(54, &state), Some(3));
+        assert_eq!(skin_state_imageset_index(55, &state), Some(4));
         assert_eq!(skin_state_imageset_index(40, &state), Some(4));
         assert_eq!(skin_state_imageset_index(41, &state), Some(3));
         assert_eq!(skin_state_imageset_index(72, &state), Some(1));
@@ -19304,10 +19376,27 @@ mod tests {
 
     #[test]
     fn skin_image_ref_number_maps_extended_select_arrange() {
-        let state = SkinDrawState { select_arrange_index: 9, ..SkinDrawState::default() };
+        let state = SkinDrawState {
+            select_screen: true,
+            select_arrange_index: 9,
+            select_arrange_2p_index: 6,
+            select_double_option_index: 2,
+            select_hs_fix_index: 3,
+            ..SkinDrawState::default()
+        };
 
         assert_eq!(skin_image_ref_number(42, &state), Some(9));
-        assert_eq!(skin_image_ref_number(43, &state), Some(9));
+        assert_eq!(skin_image_ref_number(43, &state), Some(6));
+        assert_eq!(skin_image_ref_number(54, &state), Some(2));
+        assert_eq!(skin_image_ref_number(55, &state), Some(3));
+        assert_eq!(skin_state_number(42, &state), Some(9));
+        assert_eq!(skin_state_number(43, &state), Some(6));
+        assert_eq!(skin_state_number(54, &state), Some(2));
+        assert_eq!(skin_state_number(55, &state), Some(3));
+        assert_eq!(skin_state_event_index(42, &state), 9);
+        assert_eq!(skin_state_event_index(43, &state), 6);
+        assert_eq!(skin_state_event_index(54, &state), 2);
+        assert_eq!(skin_state_event_index(55, &state), 3);
     }
 
     #[test]
@@ -19428,15 +19517,23 @@ mod tests {
     #[test]
     fn select_target_index_maps_fixed_targets() {
         assert_eq!(select_target_index("NONE"), 0);
-        assert_eq!(select_target_index("RIVAL"), 1);
-        assert_eq!(select_target_index("MAX"), 2);
-        assert_eq!(select_target_index("AAA"), 3);
-        assert_eq!(select_target_index("AA"), 4);
-        assert_eq!(select_target_index("A"), 5);
-        assert_eq!(select_target_index("B"), 6);
-        assert_eq!(select_target_index("C"), 7);
-        assert_eq!(select_target_index("D"), 8);
-        assert_eq!(select_target_index("E"), 9);
+        assert_eq!(select_target_index("RANK_A"), 1);
+        assert_eq!(select_target_index("RANK_AA-"), 2);
+        assert_eq!(select_target_index("RANK_AA"), 3);
+        assert_eq!(select_target_index("RANK_AAA-"), 4);
+        assert_eq!(select_target_index("RANK_AAA"), 5);
+        assert_eq!(select_target_index("RANK_MAX-"), 6);
+        assert_eq!(select_target_index("MAX"), 7);
+        assert_eq!(select_target_index("RANK_NEXT"), 8);
+        assert_eq!(select_target_index("IR_TOP"), 9);
+        assert_eq!(select_target_index("IR_NEXT"), 10);
+        assert_eq!(select_target_index("RIVAL TOP"), 11);
+        assert_eq!(select_target_index("RIVAL NEXT"), 12);
+        assert_eq!(select_target_index("RIVAL"), 11);
+        assert_eq!(select_target_index("AAA"), 5);
+        assert_eq!(select_target_index("AA"), 3);
+        assert_eq!(select_target_index("A"), 1);
+        assert_eq!(select_target_index("B"), 1);
     }
 
     #[test]
