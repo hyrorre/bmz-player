@@ -1,9 +1,7 @@
 import { createHash } from 'node:crypto'
-import { serverSupabaseServiceRole } from '#supabase/server'
+import { and, eq } from 'drizzle-orm'
+import { db, schema } from 'hub:db'
 import { requireIrUser } from '../../../../../utils/auth'
-import type { Database } from '../../../../../../shared/types/database.types'
-
-const REPLAY_BUCKET = 'replays'
 
 /**
  * アップロード済みリプレイの hash を検証する。
@@ -18,42 +16,34 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, statusMessage: 'score id is required' })
   }
 
-  const db = serverSupabaseServiceRole<Database>(event)
-  const { data: replay, error } = await db
-    .from('replay_objects')
-    .select('id, object_path, hash, status')
-    .eq('score_id', scoreId)
-    .eq('player_id', user.id)
-    .maybeSingle()
-  if (error) {
-    throw createError({ statusCode: 500, statusMessage: error.message })
-  }
-  if (!replay || !replay.object_path) {
+  const replay = await db.query.replayObjects.findFirst({
+    columns: { id: true, objectPath: true, hash: true, status: true },
+    where: and(
+      eq(schema.replayObjects.scoreId, scoreId),
+      eq(schema.replayObjects.playerId, user.id),
+    ),
+  })
+  if (!replay || !replay.objectPath) {
     throw createError({ statusCode: 404, statusMessage: 'Replay upload not found' })
   }
 
-  const { data: file, error: downloadError } = await db.storage
-    .from(REPLAY_BUCKET)
-    .download(replay.object_path)
-  if (downloadError || !file) {
+  const stored = await useStorage('replays').getItemRaw<ArrayBuffer | Uint8Array>(replay.objectPath)
+  if (!stored) {
     throw createError({
       statusCode: 409,
-      statusMessage: downloadError?.message ?? 'Replay object is not uploaded yet',
+      statusMessage: 'Replay object is not uploaded yet',
     })
   }
 
-  const bytes = Buffer.from(await file.arrayBuffer())
+  const bytes = Buffer.from(stored as ArrayBuffer)
   const actualHash = createHash('sha256').update(bytes).digest('hex')
   const verified = actualHash === replay.hash
   const status = verified ? 'verified' : 'rejected'
 
-  const { error: updateError } = await db
-    .from('replay_objects')
-    .update({ status, size_bytes: bytes.length, updated_at: new Date().toISOString() })
-    .eq('id', replay.id)
-  if (updateError) {
-    throw createError({ statusCode: 500, statusMessage: updateError.message })
-  }
+  await db
+    .update(schema.replayObjects)
+    .set({ status, sizeBytes: bytes.length, updatedAt: new Date() })
+    .where(eq(schema.replayObjects.id, replay.id))
 
   return { status, size_bytes: bytes.length, hash: actualHash }
 })

@@ -1,0 +1,29 @@
+import { eq } from 'drizzle-orm'
+import { db, schema } from 'hub:db'
+
+export default defineEventHandler(async (event) => {
+  const scoreId = getRouterParam(event, 'id')
+  if (!scoreId) {
+    throw createError({ statusCode: 400, statusMessage: 'score id is required' })
+  }
+
+  const replay = await db.query.replayObjects.findFirst({
+    columns: { objectPath: true, status: true, format: true },
+    where: eq(schema.replayObjects.scoreId, scoreId),
+  })
+  if (!replay?.objectPath || !['uploaded', 'verified'].includes(replay.status)) {
+    throw createError({ statusCode: 404, statusMessage: 'Replay is not available' })
+  }
+
+  const stored = await useStorage('replays').getItemRaw<ArrayBuffer | Uint8Array>(replay.objectPath)
+  if (!stored) {
+    throw createError({ statusCode: 404, statusMessage: 'Replay object is not available' })
+  }
+
+  return new Response(Buffer.from(stored as ArrayBuffer), {
+    headers: {
+      'content-type': 'application/octet-stream',
+      'x-bmz-replay-format': replay.format,
+    },
+  })
+})
