@@ -39,6 +39,10 @@ pub struct SelectSnapshot {
     pub bar_scroll_progress: f32,
     pub selected_chart_id: Option<i64>,
     pub selected_title: String,
+    /// Current profile hispeed shown to select skins (NUMBER_HISPEED=310/311).
+    pub hispeed: f32,
+    /// Effective note display duration for the selected chart. `None` for folders/settings.
+    pub note_display_duration_ms: Option<i32>,
     pub rows: Vec<SelectRowSnapshot>,
     pub arrange: String,
     pub arrange_2p: String,
@@ -120,6 +124,8 @@ impl Default for SelectSnapshot {
             bar_scroll_progress: 0.0,
             selected_chart_id: None,
             selected_title: String::new(),
+            hispeed: 0.0,
+            note_display_duration_ms: None,
             rows: Vec::new(),
             arrange: String::new(),
             arrange_2p: String::new(),

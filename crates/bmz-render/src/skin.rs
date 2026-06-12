@@ -3801,6 +3801,8 @@ impl SkinDocument {
             select_mode_index: select_mode_index(&snapshot.select_mode),
             select_sort_index: select_sort_index(&snapshot.select_sort),
             select_ln_mode_index: select_ln_mode_index(&snapshot.select_ln_mode),
+            hispeed: snapshot.hispeed,
+            total_duration_ms: snapshot.note_display_duration_ms.unwrap_or(0),
             result_grade_diff_display: snapshot.grade_diff_display,
             select_scroll_progress: select_scroll_progress(snapshot),
             select_master_volume: snapshot.master_volume,
@@ -8127,8 +8129,22 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         1164 => Some((result_or_select_length_ms(state) / 1_000) % 60),
         310 => Some(state.hispeed.floor() as i64),
         311 => Some(((state.hispeed * 100.0) as i64) % 100),
-        312 => Some(state.total_duration_ms as i64),
-        313 => Some(((state.total_duration_ms as i64) * 3 + 2) / 5),
+        312 => {
+            if state.select_screen
+                && (!select_chart_metadata_available(state) || state.total_duration_ms <= 0)
+            {
+                return None;
+            }
+            Some(state.total_duration_ms as i64)
+        }
+        313 => {
+            if state.select_screen
+                && (!select_chart_metadata_available(state) || state.total_duration_ms <= 0)
+            {
+                return None;
+            }
+            Some(((state.total_duration_ms as i64) * 3 + 2) / 5)
+        }
         308 if state.select_screen => Some(state.select_ln_mode_index as i64),
         // BPM 系: NUMBER_MAXBPM=90, NUMBER_MINBPM=91, NUMBER_NOWBPM=160
         90 => {
@@ -17039,6 +17055,30 @@ mod tests {
     }
 
     #[test]
+    fn select_draw_state_maps_hispeed_and_green_number() {
+        let document: SkinDocument = serde_json::from_str(r#"{ "type": 5 }"#).unwrap();
+        let snapshot = SelectSnapshot {
+            hispeed: 3.25,
+            note_display_duration_ms: Some(467),
+            selected_index: 0,
+            rows: vec![SelectRowSnapshot {
+                index: 0,
+                kind: SelectRowKind::Song,
+                in_library: true,
+                ..SelectRowSnapshot::default()
+            }],
+            ..SelectSnapshot::default()
+        };
+
+        let (state, _) = document.select_draw_state(&snapshot, None);
+
+        assert_eq!(skin_state_number(310, &state), Some(3));
+        assert_eq!(skin_state_number(311, &state), Some(25));
+        assert_eq!(skin_state_number(312, &state), Some(467));
+        assert_eq!(skin_state_number(313, &state), Some(280));
+    }
+
+    #[test]
     fn select_draw_state_maps_extended_option_refs() {
         let document: SkinDocument = serde_json::from_str(r#"{ "type": 5 }"#).unwrap();
         let snapshot = SelectSnapshot {
@@ -19375,6 +19415,8 @@ mod tests {
             select_min_bpm: 120.0,
             select_max_bpm: 180.0,
             select_length_ms: 183_000,
+            hispeed: 2.75,
+            total_duration_ms: 500,
             select_master_volume: 0.575,
             select_key_volume: 0.59,
             select_bgm_volume: 0.28,
@@ -19422,6 +19464,10 @@ mod tests {
         assert_eq!(skin_state_number(71, &state), Some(1234));
         assert_eq!(skin_state_number(1163, &state), Some(3));
         assert_eq!(skin_state_number(1164, &state), Some(3));
+        assert_eq!(skin_state_number(310, &state), Some(2));
+        assert_eq!(skin_state_number(311, &state), Some(75));
+        assert_eq!(skin_state_number(312, &state), Some(500));
+        assert_eq!(skin_state_number(313, &state), Some(300));
         assert_eq!(skin_state_number(57, &state), Some(57));
         assert_eq!(skin_state_number(58, &state), Some(59));
         assert_eq!(skin_state_number(59, &state), Some(28));
@@ -19453,6 +19499,8 @@ mod tests {
         assert_eq!(skin_state_number(91, &state), None);
         assert_eq!(skin_state_number(92, &state), None);
         assert_eq!(skin_state_number(160, &state), None);
+        assert_eq!(skin_state_number(312, &state), None);
+        assert_eq!(skin_state_number(313, &state), None);
         for op in 180..=184 {
             assert!(!test_skin_op(op, &[], &state), "judge rank option {op}");
         }
