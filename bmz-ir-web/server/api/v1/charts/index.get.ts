@@ -1,28 +1,36 @@
-import { serverSupabaseServiceRole } from '#supabase/server'
+import { desc, like } from 'drizzle-orm'
 import { getQuery } from 'h3'
-import type { Database } from '../../../../shared/types/database.types'
+import { db, schema } from 'hub:db'
 
 export default defineEventHandler(async (event) => {
   const query = getQuery(event)
   const limit = Math.max(1, Math.min(100, Number(query.limit ?? 50) || 50))
   const search = typeof query.q === 'string' ? query.q.trim() : ''
 
-  const db = serverSupabaseServiceRole<Database>(event)
   let request = db
-    .from('charts')
-    .select('sha256, title, subtitle, genre, artist, mode, level, notes, updated_at')
-    .order('updated_at', { ascending: false })
+    .select({
+      sha256: schema.charts.sha256,
+      title: schema.charts.title,
+      subtitle: schema.charts.subtitle,
+      genre: schema.charts.genre,
+      artist: schema.charts.artist,
+      mode: schema.charts.mode,
+      level: schema.charts.level,
+      notes: schema.charts.notes,
+      updated_at: schema.charts.updatedAt,
+    })
+    .from(schema.charts)
+    .orderBy(desc(schema.charts.updatedAt))
     .limit(limit)
+    .$dynamic()
+
   if (search) {
-    request = request.ilike('title', `%${escapeIlikePattern(search)}%`)
+    request = request.where(like(schema.charts.title, `%${escapeLikePattern(search)}%`))
   }
-  const { data, error } = await request
-  if (error) {
-    throw createError({ statusCode: 500, statusMessage: error.message })
-  }
-  return { charts: data ?? [] }
+
+  return { charts: await request }
 })
 
-function escapeIlikePattern(value: string): string {
+function escapeLikePattern(value: string): string {
   return value.replace(/[\\%_]/g, (match) => `\\${match}`)
 }

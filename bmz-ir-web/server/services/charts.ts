@@ -1,14 +1,11 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
+import { eq } from 'drizzle-orm'
+import { db, schema } from 'hub:db'
 
-import type { Database } from '../../shared/types/database.types'
-
-export async function lookupChartSha256ByMd5(
-  db: SupabaseClient<Database>,
-  md5: string,
-): Promise<string | null> {
-  const { data, error } = await db.from('charts').select('sha256').eq('md5', md5).maybeSingle()
-  if (error) {
-    throw createError({ statusCode: 500, statusMessage: error.message })
-  }
-  return data?.sha256 ?? null
+export async function lookupChartSha256ByMd5(md5: string): Promise<string | null> {
+  const rows = await db
+    .select({ sha256: schema.charts.sha256 })
+    .from(schema.charts)
+    .where(eq(schema.charts.md5, md5))
+    .limit(1)
+  return rows[0]?.sha256 ?? null
 }

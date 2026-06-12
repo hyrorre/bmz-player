@@ -1,19 +1,22 @@
-import { serverSupabaseServiceRole } from '#supabase/server'
+import { desc } from 'drizzle-orm'
 import { getQuery } from 'h3'
-import type { Database } from '../../../../shared/types/database.types'
+import { db, schema } from 'hub:db'
 
 export default defineEventHandler(async (event) => {
   const query = getQuery(event)
   const limit = Math.max(1, Math.min(100, Number(query.limit ?? 50) || 50))
 
-  const db = serverSupabaseServiceRole<Database>(event)
-  const { data, error } = await db
-    .from('ir_courses')
-    .select('course_hash, title, kind, chart_count, updated_at')
-    .order('updated_at', { ascending: false })
+  const courses = await db
+    .select({
+      course_hash: schema.irCourses.courseHash,
+      title: schema.irCourses.title,
+      kind: schema.irCourses.kind,
+      chart_count: schema.irCourses.chartCount,
+      updated_at: schema.irCourses.updatedAt,
+    })
+    .from(schema.irCourses)
+    .orderBy(desc(schema.irCourses.updatedAt))
     .limit(limit)
-  if (error) {
-    throw createError({ statusCode: 500, statusMessage: error.message })
-  }
-  return { courses: data ?? [] }
+
+  return { courses }
 })

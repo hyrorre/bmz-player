@@ -1,6 +1,6 @@
-import { serverSupabaseServiceRole } from '#supabase/server'
+import { and, eq, sql } from 'drizzle-orm'
+import { db, schema } from 'hub:db'
 import { requireHex } from '../../../../services/ir'
-import type { Database } from '../../../../../shared/types/database.types'
 
 export default defineEventHandler(async (event) => {
   const courseHash = getRouterParam(event, 'hash')
@@ -9,24 +9,39 @@ export default defineEventHandler(async (event) => {
   }
   requireHex(courseHash, 64, 'course hash')
 
-  const db = serverSupabaseServiceRole<Database>(event)
-  const { data: course, error } = await db
-    .from('ir_courses')
-    .select('*')
-    .eq('course_hash', courseHash)
-    .maybeSingle()
-  if (error) {
-    throw createError({ statusCode: 500, statusMessage: error.message })
-  }
+  const courses = await db
+    .select()
+    .from(schema.irCourses)
+    .where(eq(schema.irCourses.courseHash, courseHash))
+    .limit(1)
+  const course = courses[0]
   if (!course) {
     throw createError({ statusCode: 404, statusMessage: 'Course not found' })
   }
 
-  const { count } = await db
-    .from('course_scores')
-    .select('id', { count: 'exact', head: true })
-    .eq('course_hash', courseHash)
-    .eq('accepted', true)
+  const stats = await db
+    .select({ play_count: sql<number>`count(*)` })
+    .from(schema.courseScores)
+    .where(
+      and(eq(schema.courseScores.courseHash, courseHash), eq(schema.courseScores.accepted, true)),
+    )
 
-  return { course, stats: { play_count: count ?? 0 } }
+  return {
+    course: courseToResponse(course),
+    stats: { play_count: Number(stats[0]?.play_count ?? 0) },
+  }
 })
+
+function courseToResponse(course: typeof schema.irCourses.$inferSelect) {
+  return {
+    course_hash: course.courseHash,
+    title: course.title,
+    kind: course.kind,
+    charts: course.charts,
+    chart_count: course.chartCount,
+    constraints: course.constraints,
+    source_url: course.sourceUrl,
+    created_at: course.createdAt,
+    updated_at: course.updatedAt,
+  }
+}
