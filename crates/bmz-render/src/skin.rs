@@ -4027,6 +4027,7 @@ impl SkinDocument {
         state.select_play_level = select_row_level_number(row);
         state.play_level = select_row_level_number(row);
         state.difficulty = select_row_difficulty_code(row);
+        state.judge_rank = row.judge_rank;
         state.select_ex_score = row.ex_score;
         state.select_replay_slots = row.replay_slots;
         state.select_replay_index = select_row_replay_index(row);
@@ -4046,6 +4047,12 @@ impl SkinDocument {
         state.select_chart_end_density = row.chart_end_density;
         state.select_chart_total_gauge = row.chart_total_gauge;
         state.select_chart_main_bpm = row.chart_main_bpm;
+        state.select_bpm = row.initial_bpm;
+        state.select_min_bpm = row.min_bpm;
+        state.select_max_bpm = row.max_bpm;
+        state.min_bpm = row.min_bpm;
+        state.max_bpm = row.max_bpm;
+        state.main_bpm = row.chart_main_bpm;
         state.select_length_ms = row.length_ms;
         state.select_play_count = row.play_count;
         state.select_clear_count = row.clear_count;
@@ -4060,7 +4067,6 @@ impl SkinDocument {
 
     fn apply_select_songlist_click_row_state(state: &mut SkinDrawState, row: &SelectRowSnapshot) {
         Self::apply_select_songlist_render_row_state(state, row);
-        state.judge_rank = row.judge_rank;
     }
 
     fn click_target_for_destination(
@@ -7150,6 +7156,7 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: &SkinDrawState) -> bool
         // OPTION_JUDGE_VERYHARD..VERYEASY (180..184)
         180..=184 => {
             !(state.select_screen && state.in_settings)
+                && select_chart_metadata_available(state)
                 && judge_rank_option_matches(op, state.judge_rank)
         }
         // OPTION_RESULT_CLEAR=90, OPTION_RESULT_FAIL=91
@@ -8023,6 +8030,13 @@ fn select_settings_screen_number(ref_id: i32, state: &SkinDrawState) -> Option<i
     }
 }
 
+fn select_chart_metadata_available(state: &SkinDrawState) -> bool {
+    !state.select_screen
+        || (state.select_row_kind == SelectRowKind::Song
+            && !state.select_is_folder
+            && state.select_in_library)
+}
+
 fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
     if state.select_screen && state.in_settings {
         if let Some(value) = select_settings_screen_number(ref_id, state) {
@@ -8051,6 +8065,9 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         96 => Some(if state.play_level != 0 { state.play_level } else { state.select_play_level }),
         370 => Some(state.select_clear_index),
         92 if state.select_screen => {
+            if !select_chart_metadata_available(state) {
+                return None;
+            }
             Some(select_chart_main_bpm(state).unwrap_or(state.select_bpm).round() as i64)
         }
         92 => Some(state.main_bpm.round() as i64),
@@ -8108,14 +8125,23 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         308 if state.select_screen => Some(state.select_ln_mode_index as i64),
         // BPM 系: NUMBER_MAXBPM=90, NUMBER_MINBPM=91, NUMBER_NOWBPM=160
         90 => {
+            if !select_chart_metadata_available(state) {
+                return None;
+            }
             Some(if state.max_bpm > 0.0 { state.max_bpm } else { state.select_max_bpm }.round()
                 as i64)
         }
         91 => {
+            if !select_chart_metadata_available(state) {
+                return None;
+            }
             Some(if state.min_bpm > 0.0 { state.min_bpm } else { state.select_min_bpm }.round()
                 as i64)
         }
         160 => {
+            if !select_chart_metadata_available(state) {
+                return None;
+            }
             Some(if state.now_bpm > 0.0 { state.now_bpm } else { state.select_bpm }.round() as i64)
         }
         // レーンカバー: NUMBER_LANECOVER1=14 (0-1000)
@@ -19333,6 +19359,29 @@ mod tests {
         assert!(skin_state_number(24, &state).is_some_and(|value| (0..=23).contains(&value)));
         assert!(skin_state_number(25, &state).is_some_and(|value| (0..=59).contains(&value)));
         assert!(skin_state_number(26, &state).is_some_and(|value| (0..=59).contains(&value)));
+    }
+
+    #[test]
+    fn select_folder_hides_chart_bpm_and_judge_rank() {
+        let state = SkinDrawState {
+            select_screen: true,
+            select_row_kind: SelectRowKind::Folder,
+            select_is_folder: true,
+            select_in_library: true,
+            select_bpm: 0.0,
+            select_min_bpm: 0.0,
+            select_max_bpm: 0.0,
+            judge_rank: None,
+            ..SkinDrawState::default()
+        };
+
+        assert_eq!(skin_state_number(90, &state), None);
+        assert_eq!(skin_state_number(91, &state), None);
+        assert_eq!(skin_state_number(92, &state), None);
+        assert_eq!(skin_state_number(160, &state), None);
+        for op in 180..=184 {
+            assert!(!test_skin_op(op, &[], &state), "judge rank option {op}");
+        }
     }
 
     #[test]
