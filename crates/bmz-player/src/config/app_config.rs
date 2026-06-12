@@ -8,6 +8,8 @@ pub struct AppConfig {
     pub scan: ScanConfig,
     pub audio: AudioConfig,
     pub video: VideoConfig,
+    #[serde(default)]
+    pub select: MusicSelectConfig,
     pub input: GlobalInputConfig,
     pub logging: LoggingConfig,
     #[serde(default)]
@@ -94,6 +96,31 @@ pub struct VideoConfig {
     pub target_fps: u32,
     pub frame_limit_in_background: u32,
     pub renderer: RendererBackend,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MusicSelectConfig {
+    #[serde(default = "default_scroll_duration_low_ms")]
+    pub scroll_duration_low_ms: u32,
+    #[serde(default = "default_scroll_duration_high_ms")]
+    pub scroll_duration_high_ms: u32,
+}
+
+impl Default for MusicSelectConfig {
+    fn default() -> Self {
+        Self {
+            scroll_duration_low_ms: default_scroll_duration_low_ms(),
+            scroll_duration_high_ms: default_scroll_duration_high_ms(),
+        }
+    }
+}
+
+pub fn default_scroll_duration_low_ms() -> u32 {
+    300
+}
+
+pub fn default_scroll_duration_high_ms() -> u32 {
+    50
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -214,6 +241,7 @@ impl Default for AppConfig {
                 frame_limit_in_background: 30,
                 renderer: RendererBackend::Auto,
             },
+            select: MusicSelectConfig::default(),
             input: GlobalInputConfig {
                 backend: InputBackendKind::Auto,
                 keyboard_enabled: true,

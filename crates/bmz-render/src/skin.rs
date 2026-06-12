@@ -3978,11 +3978,29 @@ impl SkinDocument {
                 continue;
             };
             Self::apply_select_songlist_click_row_state(&mut row_state, row);
-            let Some(rect) =
-                self.destination_click_rect(row_destination, enabled_options, &row_state)
+            let elapsed = skin_timer_elapsed_ms(row_destination.timer, state).unwrap_or(0);
+            let Some(mut frame) =
+                resolve_destination_frame(row_destination, elapsed, enabled_options, &row_state)
             else {
                 continue;
             };
+            self.apply_select_songlist_scroll_to_frame(
+                &mut frame,
+                songlist,
+                slot,
+                enabled_options,
+                &row_state,
+                snapshot.bar_scroll_direction,
+                snapshot.bar_scroll_progress,
+            );
+            apply_skin_offset_to_frame(row_destination, &mut frame, &row_state, false);
+            if !destination_mouse_rect_contains(row_destination, frame, &row_state) {
+                continue;
+            }
+            let rect = normalize_skin_frame_rect(frame, self.w, self.h);
+            if rect.width <= 0.0 || rect.height <= 0.0 {
+                continue;
+            }
             hits.push(SkinClickHit {
                 target: SkinClickTarget::SelectRow { row_index: row.index },
                 rect,
@@ -4124,6 +4142,15 @@ impl SkinDocument {
             else {
                 continue;
             };
+            self.apply_select_songlist_scroll_to_frame(
+                &mut row_frame,
+                songlist,
+                slot,
+                enabled_options,
+                &row_state,
+                snapshot.bar_scroll_direction,
+                snapshot.bar_scroll_progress,
+            );
             let row_origin = (row_frame.x, row_frame.y);
             apply_skin_offset_to_frame(row_destination, &mut row_frame, state, false);
             if let Some(item) = self.select_bar_item(row, row_destination, row_frame, sources) {
@@ -4215,6 +4242,42 @@ impl SkinDocument {
             ));
         }
         items
+    }
+
+    fn apply_select_songlist_scroll_to_frame(
+        &self,
+        frame: &mut ResolvedSkinFrame,
+        songlist: &SkinSongListDef,
+        slot: i32,
+        enabled_options: &[i32],
+        state: &SkinDrawState,
+        direction: i32,
+        progress: f32,
+    ) {
+        let direction = direction.signum();
+        let progress = progress.clamp(0.0, 1.0);
+        if direction == 0 || progress <= 0.0 {
+            return;
+        }
+        let next_slot = slot + direction;
+        if next_slot < 0 {
+            return;
+        }
+        let next_selected = next_slot == songlist.center;
+        let next_destinations = if next_selected { &songlist.liston } else { &songlist.listoff };
+        let Some(next_destination) =
+            destination_entry_at(next_destinations, next_slot as usize, enabled_options)
+        else {
+            return;
+        };
+        let elapsed = skin_timer_elapsed_ms(next_destination.timer, state).unwrap_or(0);
+        let Some(next_frame) =
+            resolve_destination_frame(next_destination, elapsed, enabled_options, state)
+        else {
+            return;
+        };
+        frame.x += ((next_frame.x - frame.x) as f32 * progress).round() as i32;
+        frame.y += ((next_frame.y - frame.y) as f32 * progress).round() as i32;
     }
 
     fn select_songlist_all_child_items(
@@ -16439,6 +16502,23 @@ mod tests {
                 && approx_eq(*y, 0.45)
                 && approx_eq(*u, 8.0 / 100.0)
                 && approx_eq(*v, 40.0 / 100.0))));
+        let scrolling_snapshot = SelectSnapshot {
+            bar_scroll_direction: 1,
+            bar_scroll_progress: 0.5,
+            ..snapshot.clone()
+        };
+        let scrolling_items = document.select_render_items(&sources, &scrolling_snapshot);
+        assert!(scrolling_items.iter().any(|item| matches!(item, SkinRenderItem::Image {
+                texture: SkinTextureId(9999),
+                rect: Rect { x, y, width, height },
+                uv: TextureRegion { x: u, y: v, .. },
+                ..
+            } if approx_eq(*x, 0.11)
+                && approx_eq(*y, 0.5)
+                && approx_eq(*width, 0.4)
+                && approx_eq(*height, 0.1)
+                && approx_eq(*u, 0.0)
+                && approx_eq(*v, 0.0))));
         assert!(!items.iter().any(|item| matches!(item, SkinRenderItem::Image {
                 texture: SkinTextureId(9999),
                 rect: Rect { x, y, .. },

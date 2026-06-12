@@ -32,6 +32,11 @@ pub struct SelectSnapshot {
     pub option_panel: u8,
     pub chart_count: u32,
     pub selected_index: u32,
+    /// beatoraja-style song bar movement direction. `1` means the new bars start
+    /// from the next slot, `-1` from the previous slot, `0` disables movement.
+    pub bar_scroll_direction: i32,
+    /// Remaining song bar movement progress (1.0 at movement start, 0.0 at rest).
+    pub bar_scroll_progress: f32,
     pub selected_chart_id: Option<i64>,
     pub selected_title: String,
     pub rows: Vec<SelectRowSnapshot>,
@@ -107,6 +112,8 @@ impl Default for SelectSnapshot {
             option_panel: 0,
             chart_count: 0,
             selected_index: 0,
+            bar_scroll_direction: 0,
+            bar_scroll_progress: 0.0,
             selected_chart_id: None,
             selected_title: String::new(),
             rows: Vec::new(),

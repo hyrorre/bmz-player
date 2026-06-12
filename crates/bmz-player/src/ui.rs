@@ -1203,6 +1203,24 @@ fn build_settings_panel(
                     );
                 });
 
+                egui::CollapsingHeader::new("選曲").show(ui, |ui| {
+                    ui.add(
+                        egui::Slider::new(
+                            &mut config.select.scroll_duration_low_ms,
+                            2..=1000,
+                        )
+                        .text("スクロール初回 (ms)"),
+                    );
+                    ui.add(
+                        egui::Slider::new(
+                            &mut config.select.scroll_duration_high_ms,
+                            1..=1000,
+                        )
+                        .text("スクロール連続 (ms)"),
+                    );
+                    ui.label("選曲バー移動とキー長押しリピートに即時反映されます。");
+                });
+
                 egui::CollapsingHeader::new("難易度表").show(ui, |ui| {
                     ui.checkbox(&mut config.tables.auto_fetch_on_startup, "起動時に自動取得");
                     let mut remove_index = None;

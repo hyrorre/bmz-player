@@ -318,6 +318,8 @@ struct WinitApp {
     select_mode_filter: SelectModeFilter,
     select_sort: SelectSort,
     select_keys: SelectKeyBindings,
+    select_bar_scroll_direction: i32,
+    select_bar_scroll_duration: Duration,
     select_hold_move: Option<SelectMove>,
     select_hold_started_at: Option<Instant>,
     select_hold_last_trigger_at: Option<Instant>,
@@ -801,10 +803,6 @@ const SELECT_PREVIEW_START_DELAY: Duration = Duration::from_millis(400);
 const LANE_COVER_STEP: f32 = 0.001;
 const LANE_COVER_REPEAT_STEP: f32 = 0.01;
 const SKIN_RELOAD_DEBOUNCE: Duration = Duration::from_millis(300);
-/// 選曲画面でキー長押しを始めてからリピート移動を開始するまでの遅延 (ms)。
-const SELECT_HOLD_INITIAL_DELAY_MS: u64 = 300;
-/// 選曲画面のキーリピート移動の間隔 (ms)。
-const SELECT_HOLD_REPEAT_INTERVAL_MS: u64 = 50;
 /// アナログスクラッチの tick が途切れたとみなし、端数バッファを捨てるまでの時間 (ms)。
 /// beatoraja の `getAnalogDiffAndReset(i, 200)` の tolerance に相当。
 const SELECT_ANALOG_SCROLL_TOLERANCE_MS: u64 = 200;
@@ -1437,6 +1435,8 @@ impl WinitApp {
             select_mode_filter,
             select_sort,
             select_keys,
+            select_bar_scroll_direction: 0,
+            select_bar_scroll_duration: Duration::ZERO,
             select_hold_move: None,
             select_hold_started_at: None,
             select_hold_last_trigger_at: None,
@@ -1936,6 +1936,8 @@ impl WinitApp {
             option_panel: self.select_option_panel,
             chart_count: self.select_items.len() as u32,
             selected_index: self.selected_index as u32,
+            bar_scroll_direction: self.select_bar_scroll_direction,
+            bar_scroll_progress: self.select_bar_scroll_progress(),
             selected_chart_id: match selected {
                 Some(SelectItem::Chart(row)) => row.chart.as_ref().map(|chart| chart.chart_id),
                 _ => None,
@@ -2481,6 +2483,31 @@ impl WinitApp {
     fn select_bar_time(&self) -> TimeUs {
         let micros = self.select_bar_started_at.elapsed().as_micros().min(i64::MAX as u128) as i64;
         TimeUs(micros)
+    }
+
+    fn restart_select_bar_timer_without_scroll(&mut self, now: Instant) {
+        self.select_bar_started_at = now;
+        self.select_bar_scroll_direction = 0;
+        self.select_bar_scroll_duration = Duration::ZERO;
+    }
+
+    fn select_bar_scroll_progress(&self) -> f32 {
+        if self.select_bar_scroll_direction == 0 || self.select_bar_scroll_duration.is_zero() {
+            return 0.0;
+        }
+        let elapsed = self.select_bar_started_at.elapsed();
+        if elapsed >= self.select_bar_scroll_duration {
+            return 0.0;
+        }
+        1.0 - elapsed.as_secs_f32() / self.select_bar_scroll_duration.as_secs_f32()
+    }
+
+    fn select_scroll_duration_low(&self) -> Duration {
+        Duration::from_millis(u64::from(select_scroll_duration_low_ms(&self.boot.app_config)))
+    }
+
+    fn select_scroll_duration_high(&self) -> Duration {
+        Duration::from_millis(u64::from(select_scroll_duration_high_ms(&self.boot.app_config)))
     }
 
     fn play_elapsed_time(&self) -> TimeUs {
@@ -3411,7 +3438,10 @@ impl WinitApp {
         let ticks_per_scroll = self.boot.profile_config.input.analog_ticks_per_scroll.max(1) as i32;
         let mov = take_analog_scroll_steps(&mut self.select_analog_scroll_buffer, ticks_per_scroll);
         for _ in 0..mov.abs() {
-            self.move_selection(if mov > 0 { SelectMove::Next } else { SelectMove::Previous });
+            self.move_selection_with_duration(
+                if mov > 0 { SelectMove::Next } else { SelectMove::Previous },
+                select_analog_scroll_duration(mov),
+            );
         }
     }
 
@@ -3802,7 +3832,7 @@ impl WinitApp {
         };
         if self.selected_index != next {
             self.selected_index = next;
-            self.select_bar_started_at = Instant::now();
+            self.restart_select_bar_timer_without_scroll(Instant::now());
             self.play_system_sound(crate::system_sound::SoundType::Scratch);
         }
     }
@@ -3830,7 +3860,7 @@ impl WinitApp {
         ) {
             Some(SelectRowClickAction::Select(next)) => {
                 self.selected_index = next;
-                self.select_bar_started_at = Instant::now();
+                self.restart_select_bar_timer_without_scroll(Instant::now());
                 self.play_system_sound(crate::system_sound::SoundType::Scratch);
             }
             Some(SelectRowClickAction::EnterOrPlay) => self.enter_or_play_selected(),
@@ -3980,6 +4010,10 @@ impl WinitApp {
     }
 
     fn move_selection(&mut self, select_move: SelectMove) {
+        self.move_selection_with_duration(select_move, self.select_scroll_duration_low());
+    }
+
+    fn move_selection_with_duration(&mut self, select_move: SelectMove, duration: Duration) {
         if self.select_items.is_empty() {
             self.reload_select_items();
         }
@@ -3991,6 +4025,8 @@ impl WinitApp {
             moved_select_index(self.selected_index, self.select_items.len(), select_move);
         if self.selected_index != previous_index {
             self.select_bar_started_at = Instant::now();
+            self.select_bar_scroll_direction = select_move_scroll_direction(select_move);
+            self.select_bar_scroll_duration = duration;
             self.play_system_sound(crate::system_sound::SoundType::Scratch);
         }
     }
@@ -4010,13 +4046,13 @@ impl WinitApp {
         };
         let now = Instant::now();
         let elapsed = now.duration_since(started_at);
-        if elapsed < Duration::from_millis(SELECT_HOLD_INITIAL_DELAY_MS) {
+        if elapsed < self.select_scroll_duration_low() {
             return;
         }
         let since_last = now.duration_since(last_trigger_at);
-        if since_last >= Duration::from_millis(SELECT_HOLD_REPEAT_INTERVAL_MS) {
+        if since_last >= self.select_scroll_duration_high() {
             self.select_hold_last_trigger_at = Some(now);
-            self.move_selection(select_move);
+            self.move_selection_with_duration(select_move, self.select_scroll_duration_high());
         }
     }
 
@@ -4039,7 +4075,7 @@ impl WinitApp {
                 self.folder_stack.push(path);
                 self.reload_select_items();
                 self.selected_index = 0;
-                self.select_bar_started_at = Instant::now();
+                self.restart_select_bar_timer_without_scroll(Instant::now());
                 self.play_system_sound(crate::system_sound::SoundType::FolderOpen);
                 tracing::info!(folder = ?self.folder_stack.last(), "entered folder");
             }
@@ -4268,7 +4304,7 @@ impl WinitApp {
         self.folder_stack.push(format!("{SEARCH_PATH_PREFIX}{query}"));
         self.reload_select_items();
         self.selected_index = 0;
-        self.select_bar_started_at = Instant::now();
+        self.restart_select_bar_timer_without_scroll(Instant::now());
         self.play_system_sound(crate::system_sound::SoundType::FolderOpen);
         tracing::info!(%query, hit_count, "entered search result folder");
     }
@@ -4285,7 +4321,7 @@ impl WinitApp {
             self.reload_select_items();
             // 復元先がリスト範囲外なら末尾にクランプする。
             self.selected_index = restored.min(self.select_items.len().saturating_sub(1));
-            self.select_bar_started_at = Instant::now();
+            self.restart_select_bar_timer_without_scroll(Instant::now());
             self.play_system_sound(crate::system_sound::SoundType::FolderClose);
             tracing::info!(depth = self.folder_stack.len(), "exited folder");
         }
@@ -4427,7 +4463,7 @@ impl WinitApp {
         self.reload_select_items();
         let now = Instant::now();
         self.select_scene_started_at = now;
-        self.select_bar_started_at = now;
+        self.restart_select_bar_timer_without_scroll(now);
         tracing::info!("left practice mode");
     }
 
@@ -5725,7 +5761,7 @@ impl WinitApp {
         self.clear_active_course_state();
         let now = Instant::now();
         self.select_scene_started_at = now;
-        self.select_bar_started_at = now;
+        self.restart_select_bar_timer_without_scroll(now);
     }
 
     /// Clears any active course session and the cached finished-course
@@ -6122,7 +6158,7 @@ impl WinitApp {
             self.clear_active_course_state();
             let now = Instant::now();
             self.select_scene_started_at = now;
-            self.select_bar_started_at = now;
+            self.restart_select_bar_timer_without_scroll(now);
         } else {
             self.enter_play_scene(decide.chart_id, decide.options, decide.snapshot);
         }
@@ -6310,7 +6346,7 @@ impl WinitApp {
         self.reload_select_items();
         let now = Instant::now();
         self.select_scene_started_at = now;
-        self.select_bar_started_at = now;
+        self.restart_select_bar_timer_without_scroll(now);
     }
 
     fn decide_scene_duration(&self) -> Duration {
@@ -6829,7 +6865,7 @@ impl WinitApp {
     fn restart_select_scene_timers(&mut self) {
         let now = Instant::now();
         self.select_scene_started_at = now;
-        self.select_bar_started_at = now;
+        self.restart_select_bar_timer_without_scroll(now);
         self.option_panel_started_at = now;
     }
 
@@ -10242,6 +10278,19 @@ fn select_scroll_slider_index(value: f32, item_len: usize) -> Option<usize> {
     Some((value.clamp(0.0, 1.0) * max_index as f32).round() as usize)
 }
 
+fn select_scroll_duration_low_ms(config: &crate::config::app_config::AppConfig) -> u32 {
+    config.select.scroll_duration_low_ms.clamp(2, 1000)
+}
+
+fn select_scroll_duration_high_ms(config: &crate::config::app_config::AppConfig) -> u32 {
+    config.select.scroll_duration_high_ms.clamp(1, 1000)
+}
+
+fn select_analog_scroll_duration(mov: i32) -> Duration {
+    let remaining = mov.abs().clamp(1, 2);
+    Duration::from_millis((120 / remaining / remaining) as u64)
+}
+
 fn select_action(
     physical_key: PhysicalKey,
     state: ElementState,
@@ -10435,6 +10484,14 @@ fn moved_select_index(current_index: usize, row_count: usize, select_move: Selec
         SelectMove::PageNext => (current_index + 7) % row_count,
         SelectMove::First => 0,
         SelectMove::Last => row_count - 1,
+    }
+}
+
+fn select_move_scroll_direction(select_move: SelectMove) -> i32 {
+    match select_move {
+        SelectMove::Previous | SelectMove::PagePrevious => -1,
+        SelectMove::Next | SelectMove::PageNext => 1,
+        SelectMove::First | SelectMove::Last => 0,
     }
 }
 
@@ -12914,6 +12971,30 @@ mod tests {
     #[test]
     fn moved_select_index_handles_empty_rows() {
         assert_eq!(moved_select_index(9, 0, SelectMove::Last), 0);
+    }
+
+    #[test]
+    fn select_scroll_duration_config_uses_beatoraja_bounds() {
+        let mut config = AppConfig::default();
+        config.select.scroll_duration_low_ms = 0;
+        config.select.scroll_duration_high_ms = 0;
+        assert_eq!(select_scroll_duration_low_ms(&config), 2);
+        assert_eq!(select_scroll_duration_high_ms(&config), 1);
+
+        config.select.scroll_duration_low_ms = 5_000;
+        config.select.scroll_duration_high_ms = 5_000;
+        assert_eq!(select_scroll_duration_low_ms(&config), 1000);
+        assert_eq!(select_scroll_duration_high_ms(&config), 1000);
+    }
+
+    #[test]
+    fn select_move_scroll_direction_matches_row_movement() {
+        assert_eq!(select_move_scroll_direction(SelectMove::Previous), -1);
+        assert_eq!(select_move_scroll_direction(SelectMove::Next), 1);
+        assert_eq!(select_move_scroll_direction(SelectMove::PagePrevious), -1);
+        assert_eq!(select_move_scroll_direction(SelectMove::PageNext), 1);
+        assert_eq!(select_move_scroll_direction(SelectMove::First), 0);
+        assert_eq!(select_move_scroll_direction(SelectMove::Last), 0);
     }
 
     #[test]

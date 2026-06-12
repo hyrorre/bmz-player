@@ -40,6 +40,8 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
         option_panel: 0,
         chart_count: 7,
         selected_index: 0,
+        bar_scroll_direction: 0,
+        bar_scroll_progress: 0.0,
         selected_chart_id: Some(1),
         selected_title: "Sample BMS".to_string(),
         rows,
