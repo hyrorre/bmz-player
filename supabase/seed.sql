@@ -1,2 +1,0 @@
--- Local development seed data for BMZ IR.
--- Keep production data and secrets out of this file.

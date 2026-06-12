@@ -545,30 +545,20 @@ Nuxt 関連のアプリ構造は、bmz-player 本体と混同しないよう `bm
 
 `bun dev` 等でエラーが起きる場合は `export TMPDIR=/tmp` を実行してみる。
 
-### Supabase / DB
+### NuxtHub / DB
 
-IR Website の DB は Supabase CLI と migration を正とします。MCP / Hooks は現時点では使いません。
+IR Website の DB は NuxtHub DB + Drizzle ORM の schema / migration を正とします。
 
-- DB schema は `supabase/migrations/*.sql` を source of truth とし、Dashboard 変更や ad hoc SQL をそのまま本番反映しません。
-- remote 側で先に変更した場合は `supabase db pull` で migration 化し、SQL を確認してから commit します。
-- migration 追加は `bun run db:new <name>`、local reset は `bun run db:reset`、型生成は `bun run db:types` を使います。
-- 生成型は `bmz-ir-web/shared/types/database.types.ts` に置きます。
-- local Supabase は `bun run db:start` / `bun run db:stop` で操作します。
-- `bun run db:reset` はローカル環境の DB を消すため、ユーザーの明示許可なしに実行しません。
-- production / remote への `bun run db:push`、destructive SQL、remote write は必ずユーザー確認を取ります。
-- RLS policy、grant、index、constraint、SQL function は migration に含めます。
-- `.env`, `sb_secret_...`, legacy service role key, DB password, refresh token, production data は commit しません。必要な環境変数名だけ `.env.example` に書きます。
-- ブラウザ / desktop / public client へ渡す Supabase key は `sb_publishable_...` を基本にし、`NUXT_PUBLIC_SUPABASE_KEY` / `SUPABASE_PUBLISHABLE_KEY` に入れます。legacy `anon` key は local CLI などで必要な場合だけ互換用として扱います。
-- server-only の elevated key は `sb_secret_...` を基本にし、`NUXT_SUPABASE_SECRET_KEY` / `SUPABASE_SECRET_KEY` に入れます。legacy `service_role` key は互換用として扱い、絶対に public env に入れません。
-- Supabase DB / migration / RLS / generated types / server-side Supabase 接続処理を触るときは repo skill `supabase-ir-db` を使います。
+- DB schema は `bmz-ir-web/server/db/schema.ts` を source of truth とします。
+- migration は `bmz-ir-web/server/db/migrations/sqlite/` に置きます。
+- migration 生成は `bun run db:generate`、ローカル適用は `bun run db:migrate` を使います。
+- NuxtHub v0.10 系では custom `serverDir` でも生成先が root `server/db/migrations` になるため、現状は `server/db/migrations` symlink 経由で `bmz-ir-web/server/db/migrations` を参照します。
+- production / remote への destructive write は必ずユーザー確認を取ります。
+- `.env`, DB password, refresh token, production data は commit しません。必要な環境変数名だけ `.env.example` に書きます。
 
-Supabase 関連の主なコマンド:
+DB 関連の主なコマンド:
 
 ```bash
-bun run db:start
-bun run db:new <name>
-bun run db:reset
-bun run db:types
-bun run db:push
-bun run db:stop
+bun run db:generate
+bun run db:migrate
 ```

@@ -4,7 +4,7 @@ import { db, schema } from 'hub:db'
 const DOWNLOAD_URL_TTL_SECONDS = 300
 
 /**
- * 検証済みリプレイの署名付きダウンロード URL を返す。
+ * 検証済みリプレイのダウンロード URL を返す。
  * リプレイはランキングと同様に公開情報として扱う。
  */
 export default defineEventHandler(async (event) => {

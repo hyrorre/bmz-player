@@ -4,7 +4,7 @@ import { db, schema } from 'hub:db'
 import { requireIrUser } from '../../../../../utils/auth'
 
 /**
- * リプレイアップロード用の署名付き URL を発行する。
+ * リプレイアップロード用の PUT endpoint URL を発行する。
  *
  * - score は自分のもので、submit 時に replay hash を申告していること。
  * - replay_objects を pending_upload で upsert し、アップロード完了後は
