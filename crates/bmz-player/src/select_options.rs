@@ -87,73 +87,95 @@ impl ArrangeOption {
 pub enum TargetOption {
     #[default]
     None,
-    /// IR ライバル (カーソル譜面のライバルベスト) をターゲットにする。
-    Rival,
+    RankA,
+    RankAaMinus,
+    RankAa,
+    RankAaaMinus,
+    RankAaa,
+    RankMaxMinus,
     Max,
-    Aaa,
-    Aa,
-    A,
-    B,
-    C,
-    D,
-    E,
+    RankNext,
+    IrTop,
+    IrNext,
+    RivalTop,
+    RivalNext,
+    RivalIndex(u8),
 }
 
 impl TargetOption {
     pub fn cycle(self) -> Self {
         match self {
-            Self::None => Self::Rival,
-            Self::Rival => Self::Max,
-            Self::Max => Self::Aaa,
-            Self::Aaa => Self::Aa,
-            Self::Aa => Self::A,
-            Self::A => Self::B,
-            Self::B => Self::C,
-            Self::C => Self::D,
-            Self::D => Self::E,
-            Self::E => Self::None,
+            Self::None => Self::RankA,
+            Self::RankA => Self::RankAaMinus,
+            Self::RankAaMinus => Self::RankAa,
+            Self::RankAa => Self::RankAaaMinus,
+            Self::RankAaaMinus => Self::RankAaa,
+            Self::RankAaa => Self::RankMaxMinus,
+            Self::RankMaxMinus => Self::Max,
+            Self::Max => Self::RankNext,
+            Self::RankNext => Self::IrTop,
+            Self::IrTop => Self::IrNext,
+            Self::IrNext => Self::RivalTop,
+            Self::RivalTop => Self::RivalNext,
+            Self::RivalNext => Self::None,
+            Self::RivalIndex(_) => Self::None,
         }
     }
 
     pub fn cycle_prev(self) -> Self {
         match self {
-            Self::None => Self::E,
-            Self::Rival => Self::None,
-            Self::Max => Self::Rival,
-            Self::Aaa => Self::Max,
-            Self::Aa => Self::Aaa,
-            Self::A => Self::Aa,
-            Self::B => Self::A,
-            Self::C => Self::B,
-            Self::D => Self::C,
-            Self::E => Self::D,
+            Self::None => Self::RivalNext,
+            Self::RankA => Self::None,
+            Self::RankAaMinus => Self::RankA,
+            Self::RankAa => Self::RankAaMinus,
+            Self::RankAaaMinus => Self::RankAa,
+            Self::RankAaa => Self::RankAaaMinus,
+            Self::RankMaxMinus => Self::RankAaa,
+            Self::Max => Self::RankMaxMinus,
+            Self::RankNext => Self::Max,
+            Self::IrTop => Self::RankNext,
+            Self::IrNext => Self::IrTop,
+            Self::RivalTop => Self::IrNext,
+            Self::RivalNext => Self::RivalTop,
+            Self::RivalIndex(_) => Self::RivalNext,
+        }
+    }
+
+    pub fn as_string(self) -> String {
+        match self {
+            Self::None => "NONE".to_string(),
+            Self::RankA => "RANK_A".to_string(),
+            Self::RankAaMinus => "RANK_AA-".to_string(),
+            Self::RankAa => "RANK_AA".to_string(),
+            Self::RankAaaMinus => "RANK_AAA-".to_string(),
+            Self::RankAaa => "RANK_AAA".to_string(),
+            Self::RankMaxMinus => "RANK_MAX-".to_string(),
+            Self::Max => "MAX".to_string(),
+            Self::RankNext => "RANK_NEXT".to_string(),
+            Self::IrTop => "IR_TOP".to_string(),
+            Self::IrNext => "IR_NEXT".to_string(),
+            Self::RivalTop => "RIVAL TOP".to_string(),
+            Self::RivalNext => "RIVAL NEXT".to_string(),
+            Self::RivalIndex(index) => format!("RIVAL_{index}"),
         }
     }
 
     pub fn as_str(self) -> &'static str {
         match self {
             Self::None => "NONE",
-            Self::Rival => "RIVAL",
+            Self::RankA => "RANK_A",
+            Self::RankAaMinus => "RANK_AA-",
+            Self::RankAa => "RANK_AA",
+            Self::RankAaaMinus => "RANK_AAA-",
+            Self::RankAaa => "RANK_AAA",
+            Self::RankMaxMinus => "RANK_MAX-",
             Self::Max => "MAX",
-            Self::Aaa => "AAA",
-            Self::Aa => "AA",
-            Self::A => "A",
-            Self::B => "B",
-            Self::C => "C",
-            Self::D => "D",
-            Self::E => "E",
-        }
-    }
-
-    /// ターゲット EX スコア。`Rival` は IR から取得した `rival_ex_score` を使う。
-    pub fn target_ex_score_with_rival(
-        self,
-        total_notes: u32,
-        rival_ex_score: Option<u32>,
-    ) -> Option<u32> {
-        match self {
-            Self::Rival => rival_ex_score,
-            _ => self.target_ex_score(total_notes),
+            Self::RankNext => "RANK_NEXT",
+            Self::IrTop => "IR_TOP",
+            Self::IrNext => "IR_NEXT",
+            Self::RivalTop => "RIVAL TOP",
+            Self::RivalNext => "RIVAL NEXT",
+            Self::RivalIndex(_) => "RIVAL",
         }
     }
 
@@ -161,23 +183,52 @@ impl TargetOption {
         let max = total_notes.saturating_mul(2);
         match self {
             Self::None => None,
-            // ライバルターゲットは譜面ごとに動的なので、ここでは解決できない。
-            // `target_ex_score_with_rival` で IR から取得した値を使う。
-            Self::Rival => None,
+            Self::RankA => Some(rank_threshold(max, 12)),
+            Self::RankAaMinus => Some(rank_threshold(max, 13)),
+            Self::RankAa => Some(rank_threshold(max, 14)),
+            Self::RankAaaMinus => Some(rank_threshold(max, 15)),
+            Self::RankAaa => Some(rank_threshold(max, 16)),
+            Self::RankMaxMinus => Some(rank_threshold(max, 17)),
             Self::Max => Some(max),
-            Self::Aaa => Some(rank_threshold(max, 8)),
-            Self::Aa => Some(rank_threshold(max, 7)),
-            Self::A => Some(rank_threshold(max, 6)),
-            Self::B => Some(rank_threshold(max, 5)),
-            Self::C => Some(rank_threshold(max, 4)),
-            Self::D => Some(rank_threshold(max, 3)),
-            Self::E => Some(rank_threshold(max, 2)),
+            Self::RankNext
+            | Self::IrTop
+            | Self::IrNext
+            | Self::RivalTop
+            | Self::RivalNext
+            | Self::RivalIndex(_) => None,
+        }
+    }
+
+    pub fn rank_next_ex_score(total_notes: u32, current_ex_score: u32) -> u32 {
+        let max = total_notes.saturating_mul(2);
+        for eighteenths in 12..=17 {
+            let target = rank_threshold(max, eighteenths);
+            if current_ex_score < target {
+                return target;
+            }
+        }
+        max
+    }
+
+    pub fn target_ex_score_with_override(
+        self,
+        total_notes: u32,
+        dynamic_target_ex_score: Option<u32>,
+    ) -> Option<u32> {
+        match self {
+            Self::RankNext
+            | Self::IrTop
+            | Self::IrNext
+            | Self::RivalTop
+            | Self::RivalNext
+            | Self::RivalIndex(_) => dynamic_target_ex_score,
+            _ => self.target_ex_score(total_notes),
         }
     }
 }
 
-fn rank_threshold(max_ex_score: u32, ninths: u32) -> u32 {
-    max_ex_score.saturating_mul(ninths).div_ceil(9)
+fn rank_threshold(max_ex_score: u32, eighteenths: u32) -> u32 {
+    max_ex_score.saturating_mul(eighteenths).div_ceil(18)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -192,21 +243,24 @@ mod rival_target_tests {
     use super::*;
 
     #[test]
-    fn rival_target_uses_ir_rival_score() {
-        assert_eq!(TargetOption::Rival.target_ex_score(1000), None);
-        assert_eq!(TargetOption::Rival.target_ex_score_with_rival(1000, Some(1500)), Some(1500));
-        assert_eq!(TargetOption::Rival.target_ex_score_with_rival(1000, None), None);
-        // 他のターゲットは rival 値を無視する。
-        assert_eq!(TargetOption::Max.target_ex_score_with_rival(1000, Some(1)), Some(2000));
+    fn dynamic_target_uses_resolved_score() {
+        assert_eq!(TargetOption::RivalTop.target_ex_score(1000), None);
+        assert_eq!(
+            TargetOption::RivalTop.target_ex_score_with_override(1000, Some(1500)),
+            Some(1500)
+        );
+        assert_eq!(TargetOption::RivalTop.target_ex_score_with_override(1000, None), None);
+        assert_eq!(TargetOption::Max.target_ex_score_with_override(1000, Some(1)), Some(2000));
     }
 
     #[test]
-    fn rival_target_cycles_between_none_and_max() {
-        assert_eq!(TargetOption::None.cycle(), TargetOption::Rival);
-        assert_eq!(TargetOption::Rival.cycle(), TargetOption::Max);
-        assert_eq!(TargetOption::Max.cycle_prev(), TargetOption::Rival);
-        assert_eq!(TargetOption::Rival.cycle_prev(), TargetOption::None);
-        assert_eq!(TargetOption::Rival.as_str(), "RIVAL");
+    fn rival_targets_cycle_after_ir_targets() {
+        assert_eq!(TargetOption::IrNext.cycle(), TargetOption::RivalTop);
+        assert_eq!(TargetOption::RivalTop.cycle(), TargetOption::RivalNext);
+        assert_eq!(TargetOption::RivalNext.cycle(), TargetOption::None);
+        assert_eq!(TargetOption::None.cycle_prev(), TargetOption::RivalNext);
+        assert_eq!(TargetOption::RivalIndex(1).cycle(), TargetOption::None);
+        assert_eq!(TargetOption::RivalIndex(2).as_string(), "RIVAL_2");
     }
 }
 
@@ -218,19 +272,26 @@ mod tests {
     fn fixed_targets_resolve_from_total_notes() {
         assert_eq!(TargetOption::None.target_ex_score(900), None);
         assert_eq!(TargetOption::Max.target_ex_score(900), Some(1800));
-        assert_eq!(TargetOption::Aaa.target_ex_score(900), Some(1600));
-        assert_eq!(TargetOption::Aa.target_ex_score(900), Some(1400));
-        assert_eq!(TargetOption::A.target_ex_score(900), Some(1200));
-        assert_eq!(TargetOption::E.target_ex_score(900), Some(400));
+        assert_eq!(TargetOption::RankA.target_ex_score(900), Some(1200));
+        assert_eq!(TargetOption::RankAaMinus.target_ex_score(900), Some(1300));
+        assert_eq!(TargetOption::RankAa.target_ex_score(900), Some(1400));
+        assert_eq!(TargetOption::RankAaaMinus.target_ex_score(900), Some(1500));
+        assert_eq!(TargetOption::RankAaa.target_ex_score(900), Some(1600));
+        assert_eq!(TargetOption::RankMaxMinus.target_ex_score(900), Some(1700));
     }
 
     #[test]
     fn fixed_targets_round_up_to_rank_threshold() {
-        assert_eq!(TargetOption::Aaa.target_ex_score(1), Some(2));
-        assert_eq!(TargetOption::Aa.target_ex_score(1), Some(2));
-        assert_eq!(TargetOption::A.target_ex_score(1), Some(2));
-        assert_eq!(TargetOption::B.target_ex_score(1), Some(2));
-        assert_eq!(TargetOption::C.target_ex_score(1), Some(1));
+        assert_eq!(TargetOption::RankA.target_ex_score(1), Some(2));
+        assert_eq!(TargetOption::RankAa.target_ex_score(1), Some(2));
+        assert_eq!(TargetOption::RankAaa.target_ex_score(1), Some(2));
+    }
+
+    #[test]
+    fn rank_next_uses_same_thresholds_as_fixed_rank_targets() {
+        assert_eq!(TargetOption::rank_next_ex_score(900, 1199), 1200);
+        assert_eq!(TargetOption::rank_next_ex_score(900, 1200), 1300);
+        assert_eq!(TargetOption::rank_next_ex_score(900, 1700), 1800);
     }
 }
 

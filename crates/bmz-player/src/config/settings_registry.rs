@@ -466,15 +466,19 @@ fn format_random(value: RandomOptionConfig) -> String {
 fn format_target(value: TargetOptionConfig) -> String {
     match value {
         TargetOptionConfig::None => "NONE".to_string(),
-        TargetOptionConfig::Rival => "RIVAL".to_string(),
+        TargetOptionConfig::RankA => "RANK_A".to_string(),
+        TargetOptionConfig::RankAaMinus => "RANK_AA-".to_string(),
+        TargetOptionConfig::RankAa => "RANK_AA".to_string(),
+        TargetOptionConfig::RankAaaMinus => "RANK_AAA-".to_string(),
+        TargetOptionConfig::RankAaa => "RANK_AAA".to_string(),
+        TargetOptionConfig::RankMaxMinus => "RANK_MAX-".to_string(),
         TargetOptionConfig::Max => "MAX".to_string(),
-        TargetOptionConfig::Aaa => "AAA".to_string(),
-        TargetOptionConfig::Aa => "AA".to_string(),
-        TargetOptionConfig::A => "A".to_string(),
-        TargetOptionConfig::B => "B".to_string(),
-        TargetOptionConfig::C => "C".to_string(),
-        TargetOptionConfig::D => "D".to_string(),
-        TargetOptionConfig::E => "E".to_string(),
+        TargetOptionConfig::RankNext => "RANK_NEXT".to_string(),
+        TargetOptionConfig::IrTop => "IR_TOP".to_string(),
+        TargetOptionConfig::IrNext => "IR_NEXT".to_string(),
+        TargetOptionConfig::RivalTop => "RIVAL TOP".to_string(),
+        TargetOptionConfig::RivalNext => "RIVAL NEXT".to_string(),
+        TargetOptionConfig::RivalIndex(index) => format!("RIVAL_{index}"),
     }
 }
 
@@ -626,18 +630,26 @@ fn cycle_random(current: RandomOptionConfig, forward: bool) -> RandomOptionConfi
 }
 
 fn cycle_target(current: TargetOptionConfig, forward: bool) -> TargetOptionConfig {
-    const VALUES: [TargetOptionConfig; 10] = [
+    const VALUES: [TargetOptionConfig; 13] = [
         TargetOptionConfig::None,
-        TargetOptionConfig::Rival,
+        TargetOptionConfig::RankA,
+        TargetOptionConfig::RankAaMinus,
+        TargetOptionConfig::RankAa,
+        TargetOptionConfig::RankAaaMinus,
+        TargetOptionConfig::RankAaa,
+        TargetOptionConfig::RankMaxMinus,
         TargetOptionConfig::Max,
-        TargetOptionConfig::Aaa,
-        TargetOptionConfig::Aa,
-        TargetOptionConfig::A,
-        TargetOptionConfig::B,
-        TargetOptionConfig::C,
-        TargetOptionConfig::D,
-        TargetOptionConfig::E,
+        TargetOptionConfig::RankNext,
+        TargetOptionConfig::IrTop,
+        TargetOptionConfig::IrNext,
+        TargetOptionConfig::RivalTop,
+        TargetOptionConfig::RivalNext,
     ];
+    let current = if matches!(current, TargetOptionConfig::RivalIndex(_)) {
+        TargetOptionConfig::None
+    } else {
+        current
+    };
     cycle_in_slice(&VALUES, current, forward)
 }
 

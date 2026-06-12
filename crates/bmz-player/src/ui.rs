@@ -2005,15 +2005,18 @@ fn build_profile_settings_panel(
                         .show_ui(ui, |ui| {
                             for (value, label) in [
                                 (TargetOptionConfig::None, "NONE"),
-                                (TargetOptionConfig::Rival, "RIVAL"),
+                                (TargetOptionConfig::RankA, "RANK_A"),
+                                (TargetOptionConfig::RankAaMinus, "RANK_AA-"),
+                                (TargetOptionConfig::RankAa, "RANK_AA"),
+                                (TargetOptionConfig::RankAaaMinus, "RANK_AAA-"),
+                                (TargetOptionConfig::RankAaa, "RANK_AAA"),
+                                (TargetOptionConfig::RankMaxMinus, "RANK_MAX-"),
                                 (TargetOptionConfig::Max, "MAX"),
-                                (TargetOptionConfig::Aaa, "AAA"),
-                                (TargetOptionConfig::Aa, "AA"),
-                                (TargetOptionConfig::A, "A"),
-                                (TargetOptionConfig::B, "B"),
-                                (TargetOptionConfig::C, "C"),
-                                (TargetOptionConfig::D, "D"),
-                                (TargetOptionConfig::E, "E"),
+                                (TargetOptionConfig::RankNext, "RANK_NEXT"),
+                                (TargetOptionConfig::IrTop, "IR_TOP"),
+                                (TargetOptionConfig::IrNext, "IR_NEXT"),
+                                (TargetOptionConfig::RivalTop, "RIVAL TOP"),
+                                (TargetOptionConfig::RivalNext, "RIVAL NEXT"),
                             ] {
                                 ui.selectable_value(&mut profile.play.target, value, label);
                             }
@@ -2437,18 +2440,22 @@ fn random_label(value: RandomOptionConfig) -> &'static str {
     }
 }
 
-fn target_label(value: TargetOptionConfig) -> &'static str {
+fn target_label(value: TargetOptionConfig) -> String {
     match value {
-        TargetOptionConfig::None => "NONE",
-        TargetOptionConfig::Rival => "RIVAL",
-        TargetOptionConfig::Max => "MAX",
-        TargetOptionConfig::Aaa => "AAA",
-        TargetOptionConfig::Aa => "AA",
-        TargetOptionConfig::A => "A",
-        TargetOptionConfig::B => "B",
-        TargetOptionConfig::C => "C",
-        TargetOptionConfig::D => "D",
-        TargetOptionConfig::E => "E",
+        TargetOptionConfig::None => "NONE".to_string(),
+        TargetOptionConfig::RankA => "RANK_A".to_string(),
+        TargetOptionConfig::RankAaMinus => "RANK_AA-".to_string(),
+        TargetOptionConfig::RankAa => "RANK_AA".to_string(),
+        TargetOptionConfig::RankAaaMinus => "RANK_AAA-".to_string(),
+        TargetOptionConfig::RankAaa => "RANK_AAA".to_string(),
+        TargetOptionConfig::RankMaxMinus => "RANK_MAX-".to_string(),
+        TargetOptionConfig::Max => "MAX".to_string(),
+        TargetOptionConfig::RankNext => "RANK_NEXT".to_string(),
+        TargetOptionConfig::IrTop => "IR_TOP".to_string(),
+        TargetOptionConfig::IrNext => "IR_NEXT".to_string(),
+        TargetOptionConfig::RivalTop => "RIVAL TOP".to_string(),
+        TargetOptionConfig::RivalNext => "RIVAL NEXT".to_string(),
+        TargetOptionConfig::RivalIndex(index) => format!("RIVAL_{index}"),
     }
 }
 

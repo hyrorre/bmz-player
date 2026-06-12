@@ -39,6 +39,7 @@ pub struct PlayStartOptions {
     pub bottom_shiftable_gauge: crate::config::profile_config::BottomShiftableGaugeConfig,
     pub arrange: ArrangeOption,
     pub target: TargetOption,
+    pub target_ex_score_override: Option<u32>,
     pub arrange_seed: Option<i64>,
     pub arrange_pattern: Option<Vec<u8>>,
     /// Override the starting gauge value (used to carry the gauge between
@@ -59,8 +60,6 @@ pub struct PlayStartOptions {
     /// `CourseGaugeConstraint::Lr2/Keys5/Keys7/Keys9/Keys24` を解釈して設定。
     /// `None` なら `PlaySessionOptions` 側でチャート由来の値が使われる。
     pub course_gauge_property_override: Option<GaugeProperty>,
-    /// `TargetOption::Rival` 用。選曲時に IR から取得したライバルベスト EX。
-    pub rival_ex_score: Option<u32>,
 }
 
 pub struct StartedWinitPlaySession {
@@ -109,6 +108,7 @@ pub fn play_session_options_from_start(
         ),
         arrange: start_options.arrange,
         target: start_options.target,
+        target_ex_score_override: start_options.target_ex_score_override,
         arrange_seed: start_options.arrange_seed,
         arrange_pattern: start_options.arrange_pattern,
         initial_gauge_value: start_options.initial_gauge_value,
@@ -116,7 +116,6 @@ pub fn play_session_options_from_start(
         ln_mode_override: start_options.ln_mode_override,
         ln_policy_setting: Default::default(),
         gauge_property: start_options.course_gauge_property_override,
-        rival_ex_score: start_options.rival_ex_score,
     }
 }
 

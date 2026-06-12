@@ -1956,7 +1956,7 @@ impl WinitApp {
                 &chart_distributions,
             ),
             arrange: self.arrange_option.as_str().to_string(),
-            target: self.target_option.as_str().to_string(),
+            target: self.target_option.as_string(),
             gauge: gauge_option_as_str(self.gauge_option).to_string(),
             gauge_auto_shift: gauge_auto_shift_as_str(self.gauge_auto_shift_option).to_string(),
             bottom_shiftable_gauge: bottom_shiftable_gauge_as_str(
@@ -5805,14 +5805,32 @@ impl WinitApp {
             bottom_shiftable_gauge: self.bottom_shiftable_gauge_option,
             arrange: self.arrange_option,
             target: self.target_option,
+            target_ex_score_override: self.select_target_ex_score_override(),
             arrange_seed,
-            // TARGET: RIVAL 用。選曲時に IR から取得済みのライバルベスト EX。
-            rival_ex_score: self
-                .select_ir
-                .rival_for(&self.boot.profile_config.ir, self.selected_chart_sha256())
-                .map(|rival| rival.ex_score),
             ..Default::default()
         }
+    }
+
+    fn select_target_ex_score_override(&self) -> Option<u32> {
+        let selected = self.select_items.get(self.selected_index);
+        let (local_best_ex_score, total_notes) = match selected {
+            Some(SelectItem::Chart(row)) => (
+                row.best_score.as_ref().map(|best| best.ex_score),
+                row.chart.as_ref().map(|chart| chart.total_notes),
+            ),
+            _ => (None, None),
+        };
+        if self.target_option == TargetOption::RankNext {
+            return total_notes.map(|total_notes| {
+                TargetOption::rank_next_ex_score(total_notes, local_best_ex_score.unwrap_or(0))
+            });
+        }
+        self.select_ir.target_ex_score_for(
+            &self.boot.profile_config.ir,
+            self.selected_chart_sha256(),
+            self.target_option,
+            local_best_ex_score,
+        )
     }
 
     /// リプレイファイル (例: `bmz ir replay` でダウンロードした IR リプレイ) を
@@ -5857,7 +5875,7 @@ impl WinitApp {
             ln_mode_override: None,
             course_gauge_override: None,
             course_gauge_property_override: None,
-            rival_ex_score: None,
+            target_ex_score_override: None,
         };
         self.start_chart_with_options(chart_id, options);
         true
@@ -5916,7 +5934,7 @@ impl WinitApp {
             ln_mode_override: None,
             course_gauge_override: None,
             course_gauge_property_override: None,
-            rival_ex_score: None,
+            target_ex_score_override: None,
         };
         self.start_chart_with_options(chart_id, options);
         true
@@ -9624,30 +9642,38 @@ fn random_config_from_arrange(arrange: ArrangeOption) -> RandomOptionConfig {
 fn target_option_from_profile(target: TargetOptionConfig) -> TargetOption {
     match target {
         TargetOptionConfig::None => TargetOption::None,
-        TargetOptionConfig::Rival => TargetOption::Rival,
+        TargetOptionConfig::RankA => TargetOption::RankA,
+        TargetOptionConfig::RankAaMinus => TargetOption::RankAaMinus,
+        TargetOptionConfig::RankAa => TargetOption::RankAa,
+        TargetOptionConfig::RankAaaMinus => TargetOption::RankAaaMinus,
+        TargetOptionConfig::RankAaa => TargetOption::RankAaa,
+        TargetOptionConfig::RankMaxMinus => TargetOption::RankMaxMinus,
         TargetOptionConfig::Max => TargetOption::Max,
-        TargetOptionConfig::Aaa => TargetOption::Aaa,
-        TargetOptionConfig::Aa => TargetOption::Aa,
-        TargetOptionConfig::A => TargetOption::A,
-        TargetOptionConfig::B => TargetOption::B,
-        TargetOptionConfig::C => TargetOption::C,
-        TargetOptionConfig::D => TargetOption::D,
-        TargetOptionConfig::E => TargetOption::E,
+        TargetOptionConfig::RankNext => TargetOption::RankNext,
+        TargetOptionConfig::IrTop => TargetOption::IrTop,
+        TargetOptionConfig::IrNext => TargetOption::IrNext,
+        TargetOptionConfig::RivalTop => TargetOption::RivalTop,
+        TargetOptionConfig::RivalNext => TargetOption::RivalNext,
+        TargetOptionConfig::RivalIndex(index) => TargetOption::RivalIndex(index),
     }
 }
 
 fn target_config_from_option(target: TargetOption) -> TargetOptionConfig {
     match target {
         TargetOption::None => TargetOptionConfig::None,
-        TargetOption::Rival => TargetOptionConfig::Rival,
+        TargetOption::RankA => TargetOptionConfig::RankA,
+        TargetOption::RankAaMinus => TargetOptionConfig::RankAaMinus,
+        TargetOption::RankAa => TargetOptionConfig::RankAa,
+        TargetOption::RankAaaMinus => TargetOptionConfig::RankAaaMinus,
+        TargetOption::RankAaa => TargetOptionConfig::RankAaa,
+        TargetOption::RankMaxMinus => TargetOptionConfig::RankMaxMinus,
         TargetOption::Max => TargetOptionConfig::Max,
-        TargetOption::Aaa => TargetOptionConfig::Aaa,
-        TargetOption::Aa => TargetOptionConfig::Aa,
-        TargetOption::A => TargetOptionConfig::A,
-        TargetOption::B => TargetOptionConfig::B,
-        TargetOption::C => TargetOptionConfig::C,
-        TargetOption::D => TargetOptionConfig::D,
-        TargetOption::E => TargetOptionConfig::E,
+        TargetOption::RankNext => TargetOptionConfig::RankNext,
+        TargetOption::IrTop => TargetOptionConfig::IrTop,
+        TargetOption::IrNext => TargetOptionConfig::IrNext,
+        TargetOption::RivalTop => TargetOptionConfig::RivalTop,
+        TargetOption::RivalNext => TargetOptionConfig::RivalNext,
+        TargetOption::RivalIndex(index) => TargetOptionConfig::RivalIndex(index),
     }
 }
 
@@ -12683,7 +12709,7 @@ mod tests {
                 target_green_number: 280,
             }),
             ArrangeOption::Mirror,
-            TargetOption::Aaa,
+            TargetOption::RankAaa,
             GaugeTypeConfig::Hard,
             GaugeAutoShiftConfig::BestClear,
             BottomShiftableGaugeConfig::Normal,
@@ -12697,7 +12723,7 @@ mod tests {
         assert_eq!(profile.lane.hispeed_mode, HispeedModeConfig::Floating);
         assert_eq!(profile.lane.target_green_number, 280);
         assert!(matches!(profile.play.random, RandomOptionConfig::Mirror));
-        assert!(matches!(profile.play.target, TargetOptionConfig::Aaa));
+        assert!(matches!(profile.play.target, TargetOptionConfig::RankAaa));
         assert!(matches!(profile.play.gauge, GaugeTypeConfig::Hard));
         assert!(matches!(profile.play.gauge_auto_shift, GaugeAutoShiftConfig::BestClear));
         assert!(matches!(profile.play.bottom_shiftable_gauge, BottomShiftableGaugeConfig::Normal));

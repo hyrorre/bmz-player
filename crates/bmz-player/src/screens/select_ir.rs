@@ -15,6 +15,7 @@ use crate::config::profile_config::IrConfig;
 use crate::ir::types::{IrRankingResult, IrRankingScope};
 use crate::ln_policy::LnScorePolicy;
 use crate::screens::result_ir::{ResultIrQuery, ranking_to_ir_snapshot};
+use crate::select_options::TargetOption;
 use crate::storage::common::hash_to_hex;
 
 /// カーソルがとどまってから取得を始めるまでの待ち時間。
@@ -30,6 +31,8 @@ type FetchResult = (String, [u8; 32], Result<(IrRankingResult, Option<IrRankingR
 struct CachedChartIr {
     ir: ResultIrSnapshot,
     rival: Option<SelectRivalSnapshot>,
+    global_ex_scores: Vec<u32>,
+    rival_ex_scores: Vec<u32>,
 }
 
 pub struct SelectIrRanking {
@@ -96,12 +99,16 @@ impl SelectIrRanking {
                 Ok((global, rivals)) => CachedChartIr {
                     ir: ranking_to_ir_snapshot(&global),
                     rival: rivals.as_ref().and_then(top_rival_snapshot),
+                    global_ex_scores: ranking_ex_scores(&global),
+                    rival_ex_scores: rivals.as_ref().map(ranking_ex_scores).unwrap_or_default(),
                 },
                 Err(error) => {
                     tracing::debug!(%error, "select IR ranking fetch failed");
                     CachedChartIr {
                         ir: ResultIrSnapshot { state: SkinIrState::Failed, ..Default::default() },
                         rival: None,
+                        global_ex_scores: Vec::new(),
+                        rival_ex_scores: Vec::new(),
                     }
                 }
             };
@@ -173,6 +180,31 @@ impl SelectIrRanking {
         self.cache.get(&selected?).and_then(|entry| entry.rival.clone())
     }
 
+    pub fn target_ex_score_for(
+        &self,
+        ir_config: &IrConfig,
+        selected: Option<[u8; 32]>,
+        target: TargetOption,
+        local_best_ex_score: Option<u32>,
+    ) -> Option<u32> {
+        enabled_provider(ir_config)?;
+        let entry = self.cache.get(&selected?)?;
+        match target {
+            TargetOption::IrTop => entry.global_ex_scores.first().copied(),
+            TargetOption::IrNext => {
+                next_ex_score_above(&entry.global_ex_scores, local_best_ex_score.unwrap_or(0))
+            }
+            TargetOption::RivalTop => entry.rival_ex_scores.first().copied(),
+            TargetOption::RivalNext => {
+                next_ex_score_above(&entry.rival_ex_scores, local_best_ex_score.unwrap_or(0))
+            }
+            TargetOption::RivalIndex(index) => {
+                entry.rival_ex_scores.get(index.saturating_sub(1) as usize).copied()
+            }
+            _ => None,
+        }
+    }
+
     /// ログイン状態が変わったとき等にキャッシュを破棄する。
     pub fn clear(&mut self) {
         self.cache.clear();
@@ -221,6 +253,22 @@ fn top_rival_snapshot(rivals: &IrRankingResult) -> Option<SelectRivalSnapshot> {
         max_combo: entry.score.max_combo,
         bp: entry.score.min_bp,
     })
+}
+
+fn ranking_ex_scores(ranking: &IrRankingResult) -> Vec<u32> {
+    ranking.ranking.entries.iter().map(|entry| entry.score.ex_score).collect()
+}
+
+fn next_ex_score_above(scores_desc: &[u32], current_ex_score: u32) -> Option<u32> {
+    if scores_desc.is_empty() {
+        return None;
+    }
+    for (index, &score) in scores_desc.iter().enumerate() {
+        if score <= current_ex_score {
+            return Some(scores_desc[index.saturating_sub(1)]);
+        }
+    }
+    scores_desc.first().copied()
 }
 
 #[cfg(test)]
@@ -284,6 +332,8 @@ mod tests {
                     max_combo: 700,
                     bp: 12,
                 }),
+                global_ex_scores: vec![1800, 1600, 1400],
+                rival_ex_scores: vec![1500, 1200],
             },
         );
 
@@ -293,6 +343,28 @@ mod tests {
         let rival = select_ir.rival_for(&ir_config(true), Some(sha)).unwrap();
         assert_eq!(rival.display_name, "RivalOne");
         assert_eq!(rival.ex_score, 1500);
+        assert_eq!(
+            select_ir.target_ex_score_for(&ir_config(true), Some(sha), TargetOption::IrTop, None),
+            Some(1800)
+        );
+        assert_eq!(
+            select_ir.target_ex_score_for(
+                &ir_config(true),
+                Some(sha),
+                TargetOption::IrNext,
+                Some(1500)
+            ),
+            Some(1600)
+        );
+        assert_eq!(
+            select_ir.target_ex_score_for(
+                &ir_config(true),
+                Some(sha),
+                TargetOption::RivalIndex(2),
+                Some(1500)
+            ),
+            Some(1200)
+        );
         assert!(select_ir.rival_for(&ir_config(false), Some(sha)).is_none());
 
         select_ir.clear();

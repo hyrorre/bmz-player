@@ -9858,36 +9858,69 @@ fn skin_state_text(text: &SkinTextDef, state: &SkinTextState<'_>) -> String {
     }
 }
 
-const SELECT_TARGET_IDS: [&str; 10] =
-    ["NONE", "RIVAL", "MAX", "AAA", "AA", "A", "B", "C", "D", "E"];
-const SELECT_TARGET_NAMES: [&str; 10] = [
-    "NO TARGET",
-    "IR RIVAL",
+const SELECT_TARGET_IDS: [&str; 13] = [
+    "NONE",
+    "RANK_A",
+    "RANK_AA-",
+    "RANK_AA",
+    "RANK_AAA-",
+    "RANK_AAA",
+    "RANK_MAX-",
     "MAX",
-    "RANK AAA",
-    "RANK AA",
+    "RANK_NEXT",
+    "IR_TOP",
+    "IR_NEXT",
+    "RIVAL TOP",
+    "RIVAL NEXT",
+];
+const SELECT_TARGET_NAMES: [&str; 13] = [
+    "NO TARGET",
     "RANK A",
-    "RANK B",
-    "RANK C",
-    "RANK D",
-    "RANK E",
+    "RANK AA-",
+    "RANK AA",
+    "RANK AAA-",
+    "RANK AAA",
+    "RANK MAX-",
+    "MAX",
+    "NEXT RANK",
+    "IR TOP",
+    "IR NEXT",
+    "RIVAL TOP",
+    "RIVAL NEXT",
 ];
 
 fn select_target_name(target: &str) -> String {
-    SELECT_TARGET_IDS
-        .iter()
-        .position(|id| *id == target)
-        .map(|index| SELECT_TARGET_NAMES[index].to_string())
-        .unwrap_or_default()
+    if let Some(rival_index) = select_rival_index(target) {
+        return format!("RIVAL {rival_index}");
+    }
+    if let Some(index) = select_target_index_for_name(target) {
+        return SELECT_TARGET_NAMES[index].to_string();
+    }
+    String::new()
 }
 
 fn select_target_name_by_offset(target: &str, offset: i32) -> String {
-    let Some(index) = SELECT_TARGET_IDS.iter().position(|id| *id == target) else {
+    let Some(index) = select_target_index_for_name(target) else {
         return String::new();
     };
     let len = SELECT_TARGET_NAMES.len() as i32;
     let shifted = (index as i32 + offset).rem_euclid(len) as usize;
     SELECT_TARGET_NAMES[shifted].to_string()
+}
+
+fn select_target_index_for_name(target: &str) -> Option<usize> {
+    SELECT_TARGET_IDS.iter().position(|id| *id == target).or_else(|| match target {
+        "RIVAL" => Some(11),
+        "AAA" => Some(5),
+        "AA" => Some(3),
+        "A" => Some(1),
+        "B" | "C" | "D" | "E" => Some(1),
+        _ => None,
+    })
+}
+
+fn select_rival_index(target: &str) -> Option<u8> {
+    target.strip_prefix("RIVAL_")?.parse::<u8>().ok().filter(|&index| index > 0)
 }
 
 fn full_label(primary: &str, secondary: &str) -> String {
@@ -10678,18 +10711,7 @@ fn select_bottom_shiftable_gauge_index(mode: &str) -> usize {
 }
 
 fn select_target_index(target: &str) -> usize {
-    match target {
-        "RIVAL" => 1,
-        "MAX" => 2,
-        "AAA" => 3,
-        "AA" => 4,
-        "A" => 5,
-        "B" => 6,
-        "C" => 7,
-        "D" => 8,
-        "E" => 9,
-        _ => 0,
-    }
+    select_target_index_for_name(target).unwrap_or(0)
 }
 
 fn select_bga_index(bga: &str) -> usize {
@@ -20903,7 +20925,7 @@ mod tests {
             artist: "Artist Name",
             subartist: "Feat. X",
             genre: "TRANCE",
-            target: "AAA",
+            target: "RANK_AAA",
             ir_ranking: &ir_ranking,
             course_titles: [
                 "Stage 1", "Stage 2", "Stage 3", "Stage 4", "Stage 5", "Stage 6", "Stage 7",
@@ -20936,8 +20958,10 @@ mod tests {
         // STRING_TARGET (3)
         assert_eq!(skin_state_text(&make_text(3), &state), "RANK AAA");
         // STRING_TARGETNAME_P1/N1 (209/210)
-        assert_eq!(skin_state_text(&make_text(209), &state), "MAX");
-        assert_eq!(skin_state_text(&make_text(210), &state), "RANK AA");
+        assert_eq!(skin_state_text(&make_text(209), &state), "RANK AAA-");
+        assert_eq!(skin_state_text(&make_text(210), &state), "RANK MAX-");
+        assert_eq!(select_target_name("RIVAL_2"), "RIVAL 2");
+        assert_eq!(select_target_name("AAA"), "RANK AAA");
         // STRING_RANKINGNAME1..10
         assert_eq!(skin_state_text(&make_text(120), &state), "Alice");
         assert_eq!(skin_state_text(&make_text(121), &state), "");

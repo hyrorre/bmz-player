@@ -171,21 +171,88 @@ pub enum RandomOptionConfig {
     SRandomEx,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "PascalCase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TargetOptionConfig {
     #[default]
     None,
-    /// IR ライバルベストをターゲットにする。
-    Rival,
+    RankA,
+    RankAaMinus,
+    RankAa,
+    RankAaaMinus,
+    RankAaa,
+    RankMaxMinus,
     Max,
-    Aaa,
-    Aa,
-    A,
-    B,
-    C,
-    D,
-    E,
+    RankNext,
+    IrTop,
+    IrNext,
+    RivalTop,
+    RivalNext,
+    RivalIndex(u8),
+}
+
+impl TargetOptionConfig {
+    pub fn as_persistent_str(self) -> String {
+        match self {
+            Self::None => "None".to_string(),
+            Self::RankA => "RANK_A".to_string(),
+            Self::RankAaMinus => "RANK_AA-".to_string(),
+            Self::RankAa => "RANK_AA".to_string(),
+            Self::RankAaaMinus => "RANK_AAA-".to_string(),
+            Self::RankAaa => "RANK_AAA".to_string(),
+            Self::RankMaxMinus => "RANK_MAX-".to_string(),
+            Self::Max => "MAX".to_string(),
+            Self::RankNext => "RANK_NEXT".to_string(),
+            Self::IrTop => "IR_TOP".to_string(),
+            Self::IrNext => "IR_NEXT".to_string(),
+            Self::RivalTop => "RIVAL_TOP".to_string(),
+            Self::RivalNext => "RIVAL_NEXT".to_string(),
+            Self::RivalIndex(index) => format!("RIVAL_{index}"),
+        }
+    }
+
+    fn from_persistent_str(value: &str) -> Self {
+        match value {
+            "None" | "NONE" | "Off" | "OFF" => Self::None,
+            "RANK_A" | "A" => Self::RankA,
+            "RANK_AA-" | "AA-" => Self::RankAaMinus,
+            "RANK_AA" | "AA" | "Aa" => Self::RankAa,
+            "RANK_AAA-" | "AAA-" => Self::RankAaaMinus,
+            "RANK_AAA" | "AAA" | "Aaa" => Self::RankAaa,
+            "RANK_MAX-" | "MAX-" => Self::RankMaxMinus,
+            "MAX" | "Max" => Self::Max,
+            "RANK_NEXT" | "RankNext" => Self::RankNext,
+            "IR_TOP" | "IrTop" => Self::IrTop,
+            "IR_NEXT" | "IrNext" => Self::IrNext,
+            "RIVAL_TOP" | "RIVAL TOP" | "Rival" | "RivalTop" => Self::RivalTop,
+            "RIVAL_NEXT" | "RIVAL NEXT" | "RivalNext" => Self::RivalNext,
+            "B" | "C" | "D" | "E" => Self::RankA,
+            other => other
+                .strip_prefix("RIVAL_")
+                .and_then(|index| index.parse::<u8>().ok())
+                .filter(|&index| index > 0)
+                .map(Self::RivalIndex)
+                .unwrap_or_default(),
+        }
+    }
+}
+
+impl Serialize for TargetOptionConfig {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.as_persistent_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for TargetOptionConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Ok(Self::from_persistent_str(&value))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -951,6 +1018,41 @@ mod tests {
         play.grade_diff_display = ResultGradeDiffDisplay::HalfGrade;
         let serialized = toml::to_string(&play).unwrap();
         assert!(serialized.contains(r#"grade_diff_display = "Nearest""#));
+    }
+
+    #[test]
+    fn target_option_uses_beatoraja_ids_with_legacy_aliases() {
+        fn parse_target(value: &str) -> TargetOptionConfig {
+            let toml = format!(
+                r#"
+                gauge = "Normal"
+                random = "Off"
+                target = "{value}"
+                grade_diff_display = "Next"
+                lane_effect = "Off"
+                assist = "None"
+                auto_play = false
+                "#
+            );
+            toml::from_str::<PlayDefaultsConfig>(&toml).unwrap().target
+        }
+
+        assert_eq!(parse_target("RANK_AAA"), TargetOptionConfig::RankAaa);
+        assert_eq!(parse_target("AAA"), TargetOptionConfig::RankAaa);
+        assert_eq!(parse_target("RIVAL_TOP"), TargetOptionConfig::RivalTop);
+        assert_eq!(parse_target("Rival"), TargetOptionConfig::RivalTop);
+        assert_eq!(parse_target("RIVAL_3"), TargetOptionConfig::RivalIndex(3));
+
+        let mut play = PlayDefaultsConfig {
+            target: TargetOptionConfig::RivalIndex(2),
+            ..ProfileConfig::new_default("default", "Default", 0).play
+        };
+        let serialized = toml::to_string(&play).unwrap();
+        assert!(serialized.contains(r#"target = "RIVAL_2""#));
+
+        play.target = TargetOptionConfig::RankAaMinus;
+        let serialized = toml::to_string(&play).unwrap();
+        assert!(serialized.contains(r#"target = "RANK_AA-""#));
     }
 
     #[test]

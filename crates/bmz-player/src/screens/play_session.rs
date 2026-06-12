@@ -53,6 +53,7 @@ pub struct PlaySessionOptions {
     pub bottom_shiftable_gauge: GaugeType,
     pub arrange: ArrangeOption,
     pub target: TargetOption,
+    pub target_ex_score_override: Option<u32>,
     pub arrange_seed: Option<i64>,
     pub arrange_pattern: Option<Vec<u8>>,
     /// When set, overrides the gauge's starting value.  Used to carry the
@@ -70,8 +71,6 @@ pub struct PlaySessionOptions {
     /// `apply_course_constraints` が `CourseGaugeConstraint::Lr2/Keys5/...` を
     /// 解釈して設定する。`None` の場合はチャートの `KeyMode` から自動推定する。
     pub gauge_property: Option<GaugeProperty>,
-    /// `TargetOption::Rival` のターゲット EX (IR ライバルベスト)。
-    pub rival_ex_score: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -111,6 +110,7 @@ impl Default for PlaySessionOptions {
             bottom_shiftable_gauge: GaugeType::AssistEasy,
             arrange: ArrangeOption::Normal,
             target: TargetOption::None,
+            target_ex_score_override: None,
             arrange_seed: None,
             arrange_pattern: None,
             initial_gauge_value: None,
@@ -118,7 +118,6 @@ impl Default for PlaySessionOptions {
             ln_mode_override: None,
             ln_policy_setting: LnPolicySetting::AutoLn,
             gauge_property: None,
-            rival_ex_score: None,
         }
     }
 }
@@ -199,8 +198,9 @@ pub fn apply_placeholder_session_visuals(
     snapshot.judge_timing_offset_ms =
         (play_offsets_from_profile(profile).input_offset_us / 1_000) as i32;
     snapshot.autoplay = profile.play.auto_play || options.autoplay;
-    snapshot.target_ex_score =
-        options.target.target_ex_score_with_rival(snapshot.total_notes, options.rival_ex_score);
+    snapshot.target_ex_score = options
+        .target
+        .target_ex_score_with_override(snapshot.total_notes, options.target_ex_score_override);
 
     // 緑数字: READY 前は current_bpm == initial_bpm なので bpm_ratio = 1。
     let hispeed = snapshot.hispeed.max(0.01);
@@ -631,9 +631,10 @@ pub fn build_prepared_play_session_from_preloaded(
     options: PlaySessionOptions,
     input_backend: Box<dyn InputBackend>,
 ) -> PreparedPlaySession {
-    let target_ex_score = options
-        .target
-        .target_ex_score_with_rival(preloaded.chart.total_notes, options.rival_ex_score);
+    let target_ex_score = options.target.target_ex_score_with_override(
+        preloaded.chart.total_notes,
+        options.target_ex_score_override,
+    );
     let practice_mode = options.practice_mode;
     let session =
         build_game_session_with_input_backend(preloaded.chart, profile, options, input_backend);
