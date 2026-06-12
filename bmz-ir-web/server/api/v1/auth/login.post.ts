@@ -1,7 +1,7 @@
 import { readBody, createError } from 'h3'
-import { createClient } from '@supabase/supabase-js'
-import { serverSupabaseServiceRole } from '#supabase/server'
-import type { Database } from '../../../../shared/types/database.types'
+import { eq } from 'drizzle-orm'
+import { db, schema } from 'hub:db'
+import { createAuthTokens } from '../../../utils/auth_tokens'
 
 interface LoginBody {
   email?: string
@@ -14,33 +14,40 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, statusMessage: 'email and password are required' })
   }
 
-  const { url, key } = useRuntimeConfig(event).public.supabase
-  const auth = createClient<Database>(url, key, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  })
-  const { data, error } = await auth.auth.signInWithPassword({
-    email: body.email,
-    password: body.password,
-  })
-  if (error || !data.session || !data.user) {
-    throw createError({ statusCode: 401, statusMessage: error?.message ?? 'Invalid credentials' })
+  const email = body.email.trim().toLowerCase()
+  const rows = await db
+    .select({
+      id: schema.users.id,
+      email: schema.users.email,
+      passwordHash: schema.users.passwordHash,
+      displayName: schema.profiles.displayName,
+    })
+    .from(schema.users)
+    .leftJoin(schema.profiles, eq(schema.profiles.id, schema.users.id))
+    .where(eq(schema.users.email, email))
+    .limit(1)
+  const user = rows[0]
+  if (!user || !(await verifyPassword(user.passwordHash, body.password))) {
+    throw createError({ statusCode: 401, statusMessage: 'Invalid credentials' })
   }
 
-  const db = serverSupabaseServiceRole<Database>(event)
-  const { data: profile } = await db
-    .from('profiles')
-    .select('display_name')
-    .eq('id', data.user.id)
-    .maybeSingle()
+  const tokens = await createAuthTokens(user.id)
+  await setUserSession(event, {
+    user: {
+      id: user.id,
+      email: user.email,
+      displayName: user.displayName ?? '',
+    },
+  })
 
   return {
-    access_token: data.session.access_token,
-    refresh_token: data.session.refresh_token,
-    expires_at: data.session.expires_at ?? null,
+    access_token: tokens.accessToken,
+    refresh_token: tokens.refreshToken,
+    expires_at: tokens.accessExpiresAt,
     player: {
-      id: data.user.id,
-      email: data.user.email ?? null,
-      display_name: profile?.display_name ?? null,
+      id: user.id,
+      email: user.email,
+      display_name: user.displayName ?? null,
     },
   }
 })
