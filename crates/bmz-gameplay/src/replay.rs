@@ -38,6 +38,7 @@ impl ReplayPlayer {
                 time: event.time,
                 source: bmz_core::input::InputSource::Replay,
                 device_kind: event.device_kind,
+                scratch_direction: None,
             });
         }
         out

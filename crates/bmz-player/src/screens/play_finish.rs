@@ -456,6 +456,7 @@ mod tests {
             time: TimeUs(10),
             source: InputSource::Human,
             device_kind: InputDeviceKind::Keyboard,
+            scratch_direction: None,
         });
 
         let stored = store_session_result(
@@ -801,6 +802,9 @@ mod tests {
             recent_inputs: Vec::new(),
             lane_keyon_started_at: Default::default(),
             lane_keyoff_started_at: Default::default(),
+            lane_scratch_direction: Default::default(),
+            lane_scratch_angle_delta_ms: Default::default(),
+            scratch_angle_last_render_at: None,
             lane_auto_release_at: Default::default(),
             recent_judgements: Vec::new(),
             result_judgements: Default::default(),

@@ -454,6 +454,7 @@ mod tests {
             kind: InputKind::Press,
             time,
             device_kind: bmz_core::input::InputDeviceKind::Keyboard,
+            scratch_direction: None,
         }
     }
 
@@ -464,6 +465,7 @@ mod tests {
             kind: InputKind::Release,
             time,
             device_kind: bmz_core::input::InputDeviceKind::Keyboard,
+            scratch_direction: None,
         }
     }
 

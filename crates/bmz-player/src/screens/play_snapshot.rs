@@ -533,10 +533,22 @@ fn skin_offsets_from_session(
     let visual_time = skin_visual_time(chart_time, play_elapsed);
     let active_lanes = session.chart.metadata.key_mode.active_lanes();
     if active_lanes.contains(&Lane::Scratch) {
-        set_scratch_angle_offset(&mut values, SCRATCH_ANGLE_OFFSET_1P, visual_time, 0);
+        set_scratch_angle_offset(
+            &mut values,
+            SCRATCH_ANGLE_OFFSET_1P,
+            visual_time,
+            0,
+            session.lane_scratch_angle_delta_ms[Lane::Scratch.index()],
+        );
     }
     if active_lanes.contains(&Lane::Scratch2) {
-        set_scratch_angle_offset(&mut values, SCRATCH_ANGLE_OFFSET_2P, visual_time, 1);
+        set_scratch_angle_offset(
+            &mut values,
+            SCRATCH_ANGLE_OFFSET_2P,
+            visual_time,
+            1,
+            session.lane_scratch_angle_delta_ms[Lane::Scratch2.index()],
+        );
     }
     values
 }
@@ -546,19 +558,21 @@ fn set_scratch_angle_offset(
     offset_id: i32,
     visual_time: TimeUs,
     scratch_index: i32,
+    input_delta_ms: i64,
 ) {
     let mut offset = values.get(offset_id).unwrap_or_default();
-    offset.r = scratch_angle_degrees(visual_time, scratch_index);
+    offset.r = scratch_angle_degrees(visual_time, scratch_index, input_delta_ms);
     values.set(offset_id, offset);
 }
 
-fn scratch_angle_degrees(visual_time: TimeUs, scratch_index: i32) -> i32 {
+fn scratch_angle_degrees(visual_time: TimeUs, scratch_index: i32, input_delta_ms: i64) -> i32 {
     let elapsed_ms = (visual_time.0.max(0) / 1_000).rem_euclid(SCRATCH_ANGLE_PERIOD_MS);
-    let angle_ms = if scratch_index % 2 == 0 {
+    let base_ms = if scratch_index % 2 == 0 {
         (SCRATCH_ANGLE_PERIOD_MS - elapsed_ms).rem_euclid(SCRATCH_ANGLE_PERIOD_MS)
     } else {
         elapsed_ms
     };
+    let angle_ms = (base_ms + input_delta_ms).rem_euclid(SCRATCH_ANGLE_PERIOD_MS);
     (angle_ms / SCRATCH_ANGLE_DEGREES_DIVISOR) as i32
 }
 
@@ -973,6 +987,7 @@ mod tests {
                 time: TimeUs(990_000),
                 source: InputSource::Human,
                 device_kind: InputDeviceKind::Keyboard,
+                scratch_direction: None,
             },
         );
         assert_eq!(outcome.events.len(), 1);
@@ -1342,6 +1357,7 @@ mod tests {
             time: TimeUs(42_000),
             source: InputSource::Human,
             device_kind: InputDeviceKind::Keyboard,
+            scratch_direction: None,
         });
 
         let snapshot = build_render_snapshot(&session, TimeUs(50_000), &[], None);
@@ -1534,6 +1550,40 @@ mod tests {
         assert_eq!(
             snapshot.skin_offsets.get(SCRATCH_ANGLE_OFFSET_1P),
             Some(SkinOffsetValue { r: 80, ..SkinOffsetValue::default() })
+        );
+    }
+
+    #[test]
+    fn refresh_play_skin_visuals_applies_accumulated_scratch_turntable_phase() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+        session.lane_scratch_angle_delta_ms[Lane::Scratch.index()] = 2_000;
+        let mut snapshot = build_render_snapshot(&session, TimeUs(1_000_000), &[], None);
+        snapshot.play_elapsed_time = TimeUs(6_000_000);
+
+        refresh_play_skin_visuals(&mut snapshot, &session);
+
+        assert_eq!(
+            snapshot.skin_offsets.get(SCRATCH_ANGLE_OFFSET_1P),
+            Some(SkinOffsetValue { r: 53, ..SkinOffsetValue::default() })
+        );
+    }
+
+    #[test]
+    fn refresh_play_skin_visuals_keeps_accumulated_scratch_phase_after_release() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut session =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+        session.lane_scratch_angle_delta_ms[Lane::Scratch.index()] = -2_000;
+        let mut snapshot = build_render_snapshot(&session, TimeUs(1_000_000), &[], None);
+        snapshot.play_elapsed_time = TimeUs(6_000_000);
+
+        refresh_play_skin_visuals(&mut snapshot, &session);
+
+        assert_eq!(
+            snapshot.skin_offsets.get(SCRATCH_ANGLE_OFFSET_1P),
+            Some(SkinOffsetValue { r: 106, ..SkinOffsetValue::default() })
         );
     }
 

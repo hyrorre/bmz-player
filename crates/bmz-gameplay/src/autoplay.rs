@@ -32,6 +32,7 @@ impl AutoplayController {
                         time: note.time,
                         source: InputSource::Auto,
                         device_kind: InputDeviceKind::Keyboard,
+                        scratch_direction: None,
                     }),
                     NoteKind::LongEnd => out.push(InputEvent {
                         lane,
@@ -39,6 +40,7 @@ impl AutoplayController {
                         time: note.time,
                         source: InputSource::Auto,
                         device_kind: InputDeviceKind::Keyboard,
+                        scratch_direction: None,
                     }),
                     NoteKind::Invisible | NoteKind::Mine => {}
                 }
