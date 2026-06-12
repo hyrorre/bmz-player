@@ -75,13 +75,13 @@ GET    /api/v1/courses/{course_hash}/ranking   # global のみ
 4. **verification**: DB は `unverified / signed / invalid / trusted` の 4 値。
    `replay_uploaded / verified` はスコアの verification ではなく
    `replay_objects.status` (`metadata_only / pending_upload / uploaded /
-   verified / rejected`) で管理する。署名不正 (`invalid`) のスコアは履歴には
-   残るが best_scores を更新しない。
-5. **tamper evidence**: canonical form は「evidence を除いた payload を
-   キー昇順 compact JSON 化」したもの (serde_json BTreeMap / サーバー側は
-   stableStringify)。署名は Ed25519(secret, SHA256(canonical))。
-   署名対象の payload には float を含めない (Rust は `62.0`、JS は `62` と
-   出力して hash が一致しないため)。ゲージ値などは整数に丸めて送る。
+   verified / rejected`) で管理する。署名不正 (`invalid`) のスコアも履歴と
+   best_scores の対象にし、ランキング返却時に `verification` として明示する。
+5. **tamper evidence**: canonical form は「top-level `evidence` を除いた
+   payload を RFC 8785 JSON Canonicalization Scheme (JCS) で compact JSON 化」
+   したもの。署名は Ed25519(secret, SHA256(canonical))。
+   JSON number は ECMAScript `JSON.stringify()` 相当の表現に正規化するため、
+   `160.0` と `160` は同じ canonical bytes になる。
 6. **ranking response**: `pagination.total` (scope 内総数) と
    `ranking.clear_rate` (%) を追加。`NUMBER_IR_PREVRANK(182)` は未対応 (None)。
 7. **played_at**: クライアントは unix 秒で送る。サーバーが ISO へ正規化して
@@ -1228,6 +1228,7 @@ public key: serverに登録
 署名:
 
 ```txt
+canonical_payload = RFC 8785 JCS(payload without top-level evidence)
 canonical_submission_hash = SHA256(canonical_payload)
 signature = Ed25519(private_key, canonical_submission_hash)
 ```
@@ -2001,7 +2002,7 @@ best 更新条件は単曲と同じ
 `ex_score > clear_rank > bp(小) > max_combo` の順。
 段位らしさを優先するなら `clear_rank` (合格段位) を第一キーにする案も
 あるが、IR 全体の「EX score 主軸」を崩さない方を既定にする。
-`verification = 'invalid'` は単曲同様 best 更新不可。
+`verification = 'invalid'` も単曲同様 best 更新対象。
 同じ player / `idempotency_key` の重複投稿は既存の `course_score_id` を返し、
 best は再計算せず `best_updated=false` とする。
 

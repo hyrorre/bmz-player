@@ -80,6 +80,10 @@ interface BestScoreRow extends BestScoreCandidate {
   verification: 'unverified' | 'signed' | 'invalid' | 'trusted'
 }
 
+interface ScoreHistoryRankingRow extends Omit<BestScoreRow, 'score_id'> {
+  id: string
+}
+
 export function parseRankingQuery(query: Record<string, unknown>): RankingQuery {
   const scope = asScope(String(query.scope ?? 'global'))
   const limit = clampInteger(query.limit, 100, 1, 200)
@@ -236,21 +240,14 @@ export async function submitScore(
     server_received_at: score.server_received_at,
   }
   const previousBest = await fetchPreviousBest(db, user.id, payload)
-  // 署名検証に失敗した投稿は改ざんの積極的な証拠なので、履歴 (scores) には
-  // verification=invalid で残すが best 更新の対象にはしない。
-  const { bestUpdated, updatedFields } =
-    verification === 'invalid'
-      ? {
-          bestUpdated: false,
-          updatedFields: {
-            ex_score: false,
-            clear: false,
-            max_combo: false,
-            min_bp: false,
-            min_cb: false,
-          },
-        }
-      : await upsertBestScore(db, user.id, payload, score.id, verification, candidate)
+  const { bestUpdated, updatedFields } = await upsertBestScore(
+    db,
+    user.id,
+    payload,
+    score.id,
+    verification,
+    candidate,
+  )
 
   const rankings: IrSubmitResponse['rankings'] = {}
   for (const scope of rankingScopes) {
@@ -293,28 +290,7 @@ export async function getRanking(
   query: RankingQuery,
 ): Promise<IrRanking> {
   requireHex(sha256, 64, 'sha256')
-  let rankingQuery = db
-    .from('best_scores')
-    .select(
-      'player_id, chart_sha256, score_id, ex_score, clear_type, clear_rank, max_combo, min_bp, min_cb, device_type, gauge, ln_policy, effective_ln_mode, double_option, scoring, played_at, server_received_at, verification',
-    )
-    .eq('chart_sha256', sha256)
-    .eq('scoring', query.scoring)
-    .eq('double_option', query.doubleOption)
-    .order('ex_score', { ascending: false })
-  if (query.gauge) {
-    rankingQuery = rankingQuery.eq('gauge', query.gauge)
-  }
-  if (query.lnPolicy) {
-    rankingQuery = rankingQuery.eq('ln_policy', query.lnPolicy)
-  }
-  const { data: rows, error } = await rankingQuery
-
-  if (error) {
-    throw error
-  }
-
-  const bestRows = (rows ?? []) as BestScoreRow[]
+  const bestRows = await fetchRankingBestRows(db, sha256, query)
   const rivalIds = user ? await getRivalIds(db, user.id) : new Set<string>()
   const playerIds = [...new Set(bestRows.map((row) => row.player_id))]
   const names = await getPlayerNames(db, playerIds)
@@ -365,6 +341,111 @@ export async function getRanking(
       },
     },
   }
+}
+
+async function fetchRankingBestRows(
+  db: Db,
+  sha256: string,
+  query: RankingQuery,
+): Promise<BestScoreRow[]> {
+  let rankingQuery = db
+    .from('best_scores')
+    .select(
+      'player_id, chart_sha256, score_id, ex_score, clear_type, clear_rank, max_combo, min_bp, min_cb, device_type, gauge, ln_policy, effective_ln_mode, double_option, scoring, played_at, server_received_at, verification',
+    )
+    .eq('chart_sha256', sha256)
+    .eq('scoring', query.scoring)
+    .eq('double_option', query.doubleOption)
+    .order('ex_score', { ascending: false })
+  if (query.gauge) {
+    rankingQuery = rankingQuery.eq('gauge', query.gauge)
+  }
+  if (query.lnPolicy) {
+    rankingQuery = rankingQuery.eq('ln_policy', query.lnPolicy)
+  }
+  const { data: rows, error } = await rankingQuery
+
+  if (error) {
+    throw error
+  }
+
+  const cachedRows = (rows ?? []) as BestScoreRow[]
+  if (cachedRows.length > 0) {
+    return cachedRows
+  }
+  return fetchRankingBestRowsFromHistory(db, sha256, query)
+}
+
+async function fetchRankingBestRowsFromHistory(
+  db: Db,
+  sha256: string,
+  query: RankingQuery,
+): Promise<BestScoreRow[]> {
+  let scoreQuery = db
+    .from('scores')
+    .select(
+      'id, player_id, chart_sha256, ex_score, clear_type, clear_rank, max_combo, min_bp, min_cb, device_type, gauge, ln_policy, effective_ln_mode, double_option, scoring, played_at, server_received_at, verification',
+    )
+    .eq('chart_sha256', sha256)
+    .eq('scoring', query.scoring)
+    .eq('double_option', query.doubleOption)
+    .eq('accepted', true)
+    .order('ex_score', { ascending: false })
+  if (query.gauge) {
+    scoreQuery = scoreQuery.eq('gauge', query.gauge)
+  }
+  if (query.lnPolicy) {
+    scoreQuery = scoreQuery.eq('ln_policy', query.lnPolicy)
+  }
+  const { data: rows, error } = await scoreQuery
+
+  if (error) {
+    throw error
+  }
+  return bestRowsFromHistory((rows ?? []) as ScoreHistoryRankingRow[])
+}
+
+function bestRowsFromHistory(rows: ScoreHistoryRankingRow[]): BestScoreRow[] {
+  const bestByRule = new Map<string, BestScoreRow>()
+  for (const row of rows) {
+    const candidate = historyRowToBestRow(row)
+    const key = bestRowKey(candidate)
+    const current = bestByRule.get(key)
+    if (!current || bestRowWins(candidate, current)) {
+      bestByRule.set(key, candidate)
+    }
+  }
+  return [...bestByRule.values()]
+}
+
+function historyRowToBestRow(row: ScoreHistoryRankingRow): BestScoreRow {
+  const { id, ...score } = row
+  return { ...score, score_id: id }
+}
+
+function bestRowKey(row: BestScoreRow): string {
+  return [
+    row.player_id,
+    row.chart_sha256,
+    row.gauge,
+    row.ln_policy,
+    row.scoring,
+    row.double_option,
+  ].join('\0')
+}
+
+function bestRowWins(next: BestScoreRow, current: BestScoreRow): boolean {
+  if (bestCandidateWins(next, current)) {
+    return true
+  }
+  if (bestCandidateWins(current, next)) {
+    return false
+  }
+  return (
+    String(next.played_at ?? next.server_received_at).localeCompare(
+      String(current.played_at ?? current.server_received_at),
+    ) < 0
+  )
 }
 
 async function upsertChart(db: Db, payload: IrScoreSubmission, allowUpdate: boolean) {
@@ -707,8 +788,18 @@ function canonicalSubmissionJson(payload: { evidence?: Record<string, unknown> }
 
 /** キー昇順・空白なしの決定的 JSON 文字列化。 */
 export function stableStringify(value: unknown): string {
+  if (value === undefined) {
+    throw new Error('canonical JSON does not support undefined')
+  }
+  if (typeof value === 'number' && !Number.isFinite(value)) {
+    throw new Error('canonical JSON number must be finite')
+  }
   if (value === null || typeof value !== 'object') {
-    return JSON.stringify(value)
+    const serialized = JSON.stringify(value)
+    if (serialized === undefined) {
+      throw new Error('canonical JSON value is not serializable')
+    }
+    return serialized
   }
   if (Array.isArray(value)) {
     return `[${value.map(stableStringify).join(',')}]`

@@ -14,6 +14,7 @@
     "db:types:remote": "supabase gen types typescript --project-id \"$SUPABASE_PROJECT_REF\" --schema public > bmz-ir-web/shared/types/database.types.ts",
     "generate": "nuxt generate",
     "preview": "nuxt preview",
+    "test:ir": "bun test bmz-ir-web/server/services/ir.test.ts",
     "postinstall": "nuxt prepare"
   },
   "dependencies": {

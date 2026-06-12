@@ -554,6 +554,7 @@ IR Website の DB は Supabase CLI と migration を正とします。MCP / Hook
 - migration 追加は `bun run db:new <name>`、local reset は `bun run db:reset`、型生成は `bun run db:types` を使います。
 - 生成型は `bmz-ir-web/shared/types/database.types.ts` に置きます。
 - local Supabase は `bun run db:start` / `bun run db:stop` で操作します。
+- `bun run db:reset` はローカル環境の DB を消すため、ユーザーの明示許可なしに実行しません。
 - production / remote への `bun run db:push`、destructive SQL、remote write は必ずユーザー確認を取ります。
 - RLS policy、grant、index、constraint、SQL function は migration に含めます。
 - `.env`, `sb_secret_...`, legacy service role key, DB password, refresh token, production data は commit しません。必要な環境変数名だけ `.env.example` に書きます。
