@@ -1,6 +1,6 @@
-import { createHash } from 'node:crypto'
-import type { SupabaseClient } from '@supabase/supabase-js'
-import type { Database, Json } from '../../shared/types/database.types'
+import { createHash, randomUUID } from 'node:crypto'
+import { and, eq } from 'drizzle-orm'
+import { db, schema } from 'hub:db'
 import {
   CLEAR_RANK,
   isRecord,
@@ -13,10 +13,9 @@ import {
   type IrRequestUser,
 } from './ir'
 
-type Db = SupabaseClient<Database>
-
 const LN_POLICIES = new Set(['AutoLn', 'AutoCn', 'AutoHcn', 'ForceLn', 'ForceCn', 'ForceHcn'])
 const DEVICE_TYPES = new Set(['keyboard', 'controller'])
+type CourseDeviceType = 'keyboard' | 'controller'
 
 export interface CourseScoreSubmission {
   client: { name: string; version: string; platform: string }
@@ -125,178 +124,210 @@ export function validateCourseScoreSubmission(value: unknown): CourseScoreSubmis
 }
 
 export async function submitCourseScore(
-  db: Db,
   user: IrRequestUser,
   payload: CourseScoreSubmission,
 ): Promise<CourseSubmitResponse> {
-  await upsertCourse(db, payload)
+  await upsertCourse(payload)
 
   const clearRank = CLEAR_RANK[payload.result.clear] ?? 0
-  const verification = await resolveVerification(db, user.id, payload)
+  const verification = await resolveVerification(user.id, payload)
 
+  const deviceType = payload.play_options.device_type as CourseDeviceType
   const insert = {
-    player_id: user.id,
-    course_hash: payload.course.course_hash,
-    client_name: payload.client.name,
-    client_version: payload.client.version,
+    id: randomUUID(),
+    playerId: user.id,
+    courseHash: payload.course.course_hash,
+    clientName: payload.client.name,
+    clientVersion: payload.client.version,
     platform: payload.client.platform,
     gauge: payload.rule.gauge,
-    ln_policy: payload.rule.ln_policy,
+    lnPolicy: payload.rule.ln_policy,
     scoring: payload.rule.scoring,
-    clear_type: payload.result.clear,
-    clear_rank: clearRank,
-    course_clear: payload.result.course_clear,
-    course_failed: payload.result.course_failed,
-    played_entries: payload.result.played_entries,
-    trophies: (payload.result.trophies ?? []) as Json,
-    ex_score: payload.result.ex_score,
-    max_ex_score: payload.result.max_ex_score,
-    max_combo: payload.result.max_combo,
+    clearType: payload.result.clear,
+    clearRank,
+    courseClear: payload.result.course_clear,
+    courseFailed: payload.result.course_failed,
+    playedEntries: payload.result.played_entries,
+    trophies: payload.result.trophies ?? [],
+    exScore: payload.result.ex_score,
+    maxExScore: payload.result.max_ex_score,
+    maxCombo: payload.result.max_combo,
     bp: payload.result.bp,
-    judges: payload.result.judges as Json,
-    gauge_value: payload.result.gauge_value,
-    entries: payload.result.entries as Json,
-    played_at: playedAtIso(payload.result.played_at),
-    device_type: payload.play_options.device_type,
-    evidence: (payload.evidence ?? {}) as Json,
+    judges: payload.result.judges,
+    gaugeValue: payload.result.gauge_value,
+    entries: payload.result.entries,
+    playedAt: playedAtDate(payload.result.played_at),
+    deviceType,
+    evidence: payload.evidence ?? {},
     verification,
-    idempotency_key: payload.idempotency_key,
+    idempotencyKey: payload.idempotency_key,
   }
 
-  const { data: inserted, error: insertError } = await db
-    .from('course_scores')
-    .insert(insert)
-    .select('id, server_received_at')
-    .single()
-  if (insertError) {
-    const { data: existing, error: existingError } = await db
-      .from('course_scores')
-      .select('id, server_received_at')
-      .eq('player_id', user.id)
-      .eq('idempotency_key', payload.idempotency_key)
-      .maybeSingle()
-    if (existingError || !existing) {
-      throw insertError
+  const inserted = await insertCourseScore(insert)
+  if (!inserted) {
+    const existing = await db.query.courseScores.findFirst({
+      columns: { id: true, serverReceivedAt: true },
+      where: and(
+        eq(schema.courseScores.playerId, user.id),
+        eq(schema.courseScores.idempotencyKey, payload.idempotency_key),
+      ),
+    })
+    if (!existing) {
+      throw new Error('failed to insert course score')
     }
     return {
       accepted: true,
       course_score_id: existing.id,
       best_updated: false,
-      server_received_at: existing.server_received_at,
+      server_received_at: existing.serverReceivedAt.toISOString(),
     }
-  }
-  const score = inserted
-  if (!score) {
-    throw insertError ?? new Error('failed to insert course score')
   }
 
   // invalid (署名不正) は単曲と同じく best 更新の対象外。
   let bestUpdated = false
   if (verification !== 'invalid') {
-    bestUpdated = await upsertBestCourseScore(db, user.id, payload, score, clearRank, verification)
+    bestUpdated = await upsertBestCourseScore(user.id, payload, inserted, clearRank, verification)
   }
 
   return {
     accepted: true,
-    course_score_id: score.id,
+    course_score_id: inserted.id,
     best_updated: bestUpdated,
-    server_received_at: score.server_received_at,
+    server_received_at: inserted.serverReceivedAt.toISOString(),
   }
 }
 
-async function upsertCourse(db: Db, payload: CourseScoreSubmission) {
-  const { error } = await db.from('ir_courses').upsert(
-    {
-      course_hash: payload.course.course_hash,
-      title: payload.course.title ?? '',
-      kind: payload.course.kind ?? 'course',
-      charts: payload.course.charts as unknown as Json,
-      chart_count: payload.course.charts.length,
-      constraints: (payload.course.constraints ?? {}) as Json,
-      source_url: payload.course.source_url ?? null,
-    },
-    { onConflict: 'course_hash' },
-  )
-  if (error) {
-    throw error
+async function upsertCourse(payload: CourseScoreSubmission) {
+  const values = {
+    courseHash: payload.course.course_hash,
+    title: payload.course.title ?? '',
+    kind: payload.course.kind ?? 'course',
+    charts: payload.course.charts,
+    chartCount: payload.course.charts.length,
+    constraints: payload.course.constraints ?? {},
+    sourceUrl: payload.course.source_url ?? null,
+    updatedAt: new Date(),
   }
+  await db
+    .insert(schema.irCourses)
+    .values(values)
+    .onConflictDoUpdate({ target: schema.irCourses.courseHash, set: values })
 }
 
 async function upsertBestCourseScore(
-  db: Db,
   playerId: string,
   payload: CourseScoreSubmission,
-  score: { id: string; server_received_at: string },
+  score: { id: string; serverReceivedAt: Date },
   clearRank: number,
   verification: string,
 ): Promise<boolean> {
-  const { data: current, error: currentError } = await db
-    .from('best_course_scores')
-    .select('ex_score, clear_rank, bp, max_combo')
-    .eq('player_id', playerId)
-    .eq('course_hash', payload.course.course_hash)
-    .eq('gauge', payload.rule.gauge)
-    .eq('ln_policy', payload.rule.ln_policy)
-    .eq('scoring', payload.rule.scoring)
-    .maybeSingle()
-  if (currentError) {
-    throw currentError
-  }
+  const current = await db.query.bestCourseScores.findFirst({
+    columns: { exScore: true, clearRank: true, bp: true, maxCombo: true },
+    where: and(
+      eq(schema.bestCourseScores.playerId, playerId),
+      eq(schema.bestCourseScores.courseHash, payload.course.course_hash),
+      eq(schema.bestCourseScores.gauge, payload.rule.gauge),
+      eq(schema.bestCourseScores.lnPolicy, payload.rule.ln_policy),
+      eq(schema.bestCourseScores.scoring, payload.rule.scoring),
+    ),
+  })
 
   const next = {
-    ex_score: payload.result.ex_score,
-    clear_rank: clearRank,
+    exScore: payload.result.ex_score,
+    clearRank,
     bp: payload.result.bp,
-    max_combo: payload.result.max_combo,
+    maxCombo: payload.result.max_combo,
   }
   const wins =
     !current ||
-    next.ex_score > current.ex_score ||
-    (next.ex_score === current.ex_score && next.clear_rank > current.clear_rank) ||
-    (next.ex_score === current.ex_score &&
-      next.clear_rank === current.clear_rank &&
+    next.exScore > current.exScore ||
+    (next.exScore === current.exScore && next.clearRank > current.clearRank) ||
+    (next.exScore === current.exScore &&
+      next.clearRank === current.clearRank &&
       next.bp < current.bp) ||
-    (next.ex_score === current.ex_score &&
-      next.clear_rank === current.clear_rank &&
+    (next.exScore === current.exScore &&
+      next.clearRank === current.clearRank &&
       next.bp === current.bp &&
-      next.max_combo > current.max_combo)
+      next.maxCombo > current.maxCombo)
   if (!wins) {
     return false
   }
 
-  const { error } = await db.from('best_course_scores').upsert(
-    {
-      player_id: playerId,
-      course_hash: payload.course.course_hash,
-      course_score_id: score.id,
-      ex_score: payload.result.ex_score,
-      clear_type: payload.result.clear,
-      clear_rank: clearRank,
-      course_clear: payload.result.course_clear,
-      max_combo: payload.result.max_combo,
-      bp: payload.result.bp,
-      device_type: payload.play_options.device_type,
-      gauge: payload.rule.gauge,
-      ln_policy: payload.rule.ln_policy,
-      scoring: payload.rule.scoring,
-      played_at: playedAtIso(payload.result.played_at),
-      server_received_at: score.server_received_at,
-      verification,
-    },
-    { onConflict: 'player_id,course_hash,gauge,ln_policy,scoring' },
-  )
-  if (error) {
-    throw error
+  const values = {
+    id: randomUUID(),
+    playerId,
+    courseHash: payload.course.course_hash,
+    courseScoreId: score.id,
+    exScore: payload.result.ex_score,
+    clearType: payload.result.clear,
+    clearRank,
+    courseClear: payload.result.course_clear,
+    maxCombo: payload.result.max_combo,
+    bp: payload.result.bp,
+    deviceType: payload.play_options.device_type as CourseDeviceType,
+    gauge: payload.rule.gauge,
+    lnPolicy: payload.rule.ln_policy,
+    scoring: payload.rule.scoring,
+    playedAt: playedAtDate(payload.result.played_at),
+    serverReceivedAt: score.serverReceivedAt,
+    verification: verification as 'unverified' | 'signed' | 'invalid' | 'trusted',
   }
+  await db
+    .insert(schema.bestCourseScores)
+    .values(values)
+    .onConflictDoUpdate({
+      target: [
+        schema.bestCourseScores.playerId,
+        schema.bestCourseScores.courseHash,
+        schema.bestCourseScores.gauge,
+        schema.bestCourseScores.lnPolicy,
+        schema.bestCourseScores.scoring,
+      ],
+      set: {
+        courseScoreId: values.courseScoreId,
+        exScore: values.exScore,
+        clearType: values.clearType,
+        clearRank: values.clearRank,
+        courseClear: values.courseClear,
+        maxCombo: values.maxCombo,
+        bp: values.bp,
+        deviceType: values.deviceType,
+        playedAt: values.playedAt,
+        serverReceivedAt: values.serverReceivedAt,
+        verification: values.verification,
+      },
+    })
   return true
 }
 
-function playedAtIso(value: unknown): string | null {
+async function insertCourseScore(values: typeof schema.courseScores.$inferInsert) {
+  try {
+    const [inserted] = await db.insert(schema.courseScores).values(values).returning({
+      id: schema.courseScores.id,
+      serverReceivedAt: schema.courseScores.serverReceivedAt,
+    })
+    return inserted ?? null
+  } catch (error) {
+    if (isUniqueConstraintError(error)) {
+      return null
+    }
+    throw error
+  }
+}
+
+function isUniqueConstraintError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /unique constraint|constraint failed|SQLITE_CONSTRAINT/i.test(error.message)
+  )
+}
+
+function playedAtDate(value: unknown): Date | null {
   if (typeof value === 'number' && Number.isFinite(value)) {
-    return new Date(value * 1000).toISOString()
+    return new Date(value * 1000)
   }
   if (typeof value === 'string' && value.length > 0) {
-    return value
+    return new Date(value)
   }
   return null
 }
