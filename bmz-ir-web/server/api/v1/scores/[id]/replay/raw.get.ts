@@ -1,4 +1,5 @@
 import { eq } from 'drizzle-orm'
+import { blob } from 'hub:blob'
 import { db, schema } from 'hub:db'
 
 export default defineEventHandler(async (event) => {
@@ -15,12 +16,12 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 404, statusMessage: 'Replay is not available' })
   }
 
-  const stored = await useStorage('replays').getItemRaw<ArrayBuffer | Uint8Array>(replay.objectPath)
+  const stored = await blob.get(replay.objectPath)
   if (!stored) {
     throw createError({ statusCode: 404, statusMessage: 'Replay object is not available' })
   }
 
-  return new Response(Buffer.from(stored as ArrayBuffer), {
+  return new Response(stored, {
     headers: {
       'content-type': 'application/octet-stream',
       'x-bmz-replay-format': replay.format,

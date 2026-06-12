@@ -109,6 +109,8 @@ GET    /api/v1/courses/{course_hash}/ranking   # global のみ
 ```bash
 bun install
 bun run db:migrate
+bun run cf:build
+bun run cf:types
 bun run dev                            # http://localhost:3000
 bmz ir login --email <EMAIL> --base-url http://localhost:3000
 bmz ir status                          # connection: OK を確認
@@ -128,6 +130,10 @@ bmz ir ranking <SHA256> --gauge Normal --ln-policy ForceLn
 - 将来 Mocha / MinIR 互換 Provider を追加する可能性がある。
 - BMZ 公式 IR サーバーも作成中だが、現時点では動作確認・reference implementation 寄り。
 - 公式 IR サーバーは Nuxt + NuxtHub DB / Drizzle ORM で実装中。
+- Cloudflare deploy は NuxtHub が生成する wrangler config を使い、D1 binding は
+  `DB`、R2 replay blob binding は `BLOB` とする。
+- リプレイ blob は `hub:blob` 経由で保存し、ローカルは `.data/blob`、Cloudflare
+  build は `NUXT_HUB_BLOB_BUCKET` の R2 bucket を使う。
 - 長期的に BMZ 公式 IR をサポートし続けるかは未確定。
 - BMZ 本体は公式 IR API に密結合しない。
 - 譜面 hash は SHA256 を主キーにする。
@@ -2387,4 +2393,8 @@ bun install
 
 # Apply local SQLite migrations
 bun run db:migrate
+
+# Generate Cloudflare Worker bindings/types
+bun run cf:build
+bun run cf:types
 ```

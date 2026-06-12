@@ -1,4 +1,5 @@
 import { and, eq } from 'drizzle-orm'
+import { blob } from 'hub:blob'
 import { db, schema } from 'hub:db'
 
 export default defineEventHandler(async (event) => {
@@ -23,7 +24,9 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, statusMessage: 'Replay body is required' })
   }
 
-  await useStorage('replays').setItemRaw(replay.objectPath, body)
+  await blob.put(replay.objectPath, body, {
+    contentType: 'application/octet-stream',
+  })
   await db
     .update(schema.replayObjects)
     .set({ status: 'uploaded', sizeBytes: body.length, updatedAt: new Date() })

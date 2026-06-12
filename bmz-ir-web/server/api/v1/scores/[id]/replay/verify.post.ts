@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { and, eq } from 'drizzle-orm'
+import { blob } from 'hub:blob'
 import { db, schema } from 'hub:db'
 import { requireIrUser } from '../../../../../utils/auth'
 
@@ -27,7 +28,7 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 404, statusMessage: 'Replay upload not found' })
   }
 
-  const stored = await useStorage('replays').getItemRaw<ArrayBuffer | Uint8Array>(replay.objectPath)
+  const stored = await blob.get(replay.objectPath)
   if (!stored) {
     throw createError({
       statusCode: 409,
@@ -35,7 +36,7 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  const bytes = Buffer.from(stored as ArrayBuffer)
+  const bytes = Buffer.from(await stored.arrayBuffer())
   const actualHash = createHash('sha256').update(bytes).digest('hex')
   const verified = actualHash === replay.hash
   const status = verified ? 'verified' : 'rejected'
