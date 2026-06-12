@@ -1,11 +1,10 @@
-import { serverSupabaseServiceRole } from '#supabase/server'
-import type { Database } from '../../../../../../shared/types/database.types'
+import { eq } from 'drizzle-orm'
+import { db, schema } from 'hub:db'
 
-const REPLAY_BUCKET = 'replays'
 const DOWNLOAD_URL_TTL_SECONDS = 300
 
 /**
- * 検証済みリプレイの署名付きダウンロード URL を返す。
+ * 検証済みリプレイのダウンロード URL を返す。
  * リプレイはランキングと同様に公開情報として扱う。
  */
 export default defineEventHandler(async (event) => {
@@ -14,32 +13,22 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, statusMessage: 'score id is required' })
   }
 
-  const db = serverSupabaseServiceRole<Database>(event)
-  const { data: replay, error } = await db
-    .from('replay_objects')
-    .select('object_path, status, hash, format, size_bytes')
-    .eq('score_id', scoreId)
-    .maybeSingle()
-  if (error) {
-    throw createError({ statusCode: 500, statusMessage: error.message })
-  }
-  if (!replay || !replay.object_path || !['uploaded', 'verified'].includes(replay.status)) {
+  const replay = await db.query.replayObjects.findFirst({
+    columns: { objectPath: true, status: true, hash: true, format: true, sizeBytes: true },
+    where: eq(schema.replayObjects.scoreId, scoreId),
+  })
+  if (!replay || !replay.objectPath || !['uploaded', 'verified'].includes(replay.status)) {
     throw createError({ statusCode: 404, statusMessage: 'Replay is not available' })
   }
 
-  const { data: signed, error: signError } = await db.storage
-    .from(REPLAY_BUCKET)
-    .createSignedUrl(replay.object_path, DOWNLOAD_URL_TTL_SECONDS)
-  if (signError || !signed) {
-    throw createError({ statusCode: 500, statusMessage: signError?.message ?? 'sign failed' })
-  }
+  const downloadUrl = new URL(`/api/v1/scores/${scoreId}/replay/raw`, getRequestURL(event))
 
   return {
-    download_url: signed.signedUrl,
+    download_url: downloadUrl.toString(),
     expires_in: DOWNLOAD_URL_TTL_SECONDS,
     hash: replay.hash,
     format: replay.format,
-    size_bytes: replay.size_bytes,
+    size_bytes: replay.sizeBytes,
     status: replay.status,
   }
 })

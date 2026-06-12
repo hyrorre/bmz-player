@@ -1,7 +1,7 @@
-import { serverSupabaseServiceRole } from '#supabase/server'
+import { and, desc, eq, inArray } from 'drizzle-orm'
 import { getQuery } from 'h3'
+import { db, schema } from 'hub:db'
 import { normalizeGaugeName, requireHex } from '../../../../services/ir'
-import type { Database } from '../../../../../shared/types/database.types'
 
 /** コースランキング (global のみ)。EX score 降順、同点同順位。 */
 export default defineEventHandler(async (event) => {
@@ -19,32 +19,46 @@ export default defineEventHandler(async (event) => {
     typeof query.ln_policy === 'string' && query.ln_policy ? query.ln_policy : 'AutoLn'
   const limit = Math.max(1, Math.min(200, Number(query.limit ?? 100) || 100))
 
-  const db = serverSupabaseServiceRole<Database>(event)
-  const { data: rows, error } = await db
-    .from('best_course_scores')
-    .select(
-      'player_id, course_score_id, ex_score, clear_type, clear_rank, course_clear, max_combo, bp, device_type, played_at, server_received_at, verification',
+  const rows = await db
+    .select({
+      player_id: schema.bestCourseScores.playerId,
+      course_score_id: schema.bestCourseScores.courseScoreId,
+      ex_score: schema.bestCourseScores.exScore,
+      clear_type: schema.bestCourseScores.clearType,
+      clear_rank: schema.bestCourseScores.clearRank,
+      course_clear: schema.bestCourseScores.courseClear,
+      max_combo: schema.bestCourseScores.maxCombo,
+      bp: schema.bestCourseScores.bp,
+      device_type: schema.bestCourseScores.deviceType,
+      played_at: schema.bestCourseScores.playedAt,
+      server_received_at: schema.bestCourseScores.serverReceivedAt,
+      verification: schema.bestCourseScores.verification,
+    })
+    .from(schema.bestCourseScores)
+    .where(
+      and(
+        eq(schema.bestCourseScores.courseHash, courseHash),
+        eq(schema.bestCourseScores.gauge, gauge),
+        eq(schema.bestCourseScores.lnPolicy, lnPolicy),
+        eq(schema.bestCourseScores.scoring, 'bms_ex_score_v1'),
+      ),
     )
-    .eq('course_hash', courseHash)
-    .eq('gauge', gauge)
-    .eq('ln_policy', lnPolicy)
-    .eq('scoring', 'bms_ex_score_v1')
-    .order('ex_score', { ascending: false })
+    .orderBy(desc(schema.bestCourseScores.exScore))
     .limit(limit)
-  if (error) {
-    throw createError({ statusCode: 500, statusMessage: error.message })
-  }
 
-  const playerIds = [...new Set((rows ?? []).map((row) => row.player_id))]
-  const { data: profiles } =
+  const playerIds = [...new Set(rows.map((row) => row.player_id))]
+  const profiles =
     playerIds.length > 0
-      ? await db.from('profiles').select('id, display_name').in('id', playerIds)
-      : { data: [] }
-  const names = new Map((profiles ?? []).map((profile) => [profile.id, profile.display_name]))
+      ? await db
+          .select({ id: schema.profiles.id, display_name: schema.profiles.displayName })
+          .from(schema.profiles)
+          .where(inArray(schema.profiles.id, playerIds))
+      : []
+  const names = new Map(profiles.map((profile) => [profile.id, profile.display_name]))
 
   let previousEx: number | null = null
   let rank = 0
-  const entries = (rows ?? []).map((row, index) => {
+  const entries = rows.map((row, index) => {
     if (previousEx !== row.ex_score) {
       rank = index + 1
       previousEx = row.ex_score

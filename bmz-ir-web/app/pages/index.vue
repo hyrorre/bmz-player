@@ -1,5 +1,11 @@
 <script setup lang="ts">
-const user = useSupabaseUser()
+type SessionUser = {
+  id?: string
+  sub?: string
+  email?: string
+}
+
+const { user } = useUserSession()
 </script>
 
 <template>
@@ -18,7 +24,7 @@ const user = useSupabaseUser()
           <UAlert
             color="success"
             icon="i-lucide-circle-check"
-            :description="`${user.email ?? 'ログイン中のユーザー'} としてログインしています。`"
+            :description="`${(user as SessionUser).email ?? 'ログイン中のユーザー'} としてログインしています。`"
           />
           <div class="flex flex-col gap-3 sm:flex-row">
             <UButton color="primary" icon="i-lucide-user-pen" size="xl" to="/profile">
@@ -61,7 +67,13 @@ const user = useSupabaseUser()
         </div>
 
         <div class="flex flex-col gap-3 sm:flex-row">
-          <UButton color="neutral" icon="i-lucide-list-music" size="xl" to="/charts" variant="subtle">
+          <UButton
+            color="neutral"
+            icon="i-lucide-list-music"
+            size="xl"
+            to="/charts"
+            variant="subtle"
+          >
             譜面一覧・ランキング
           </UButton>
           <UButton color="neutral" icon="i-lucide-medal" size="xl" to="/courses" variant="subtle">
@@ -72,7 +84,7 @@ const user = useSupabaseUser()
             color="neutral"
             icon="i-lucide-trophy"
             size="xl"
-            :to="`/players/${user.sub ?? user.id}`"
+            :to="`/players/${(user as SessionUser).sub ?? (user as SessionUser).id}`"
             variant="subtle"
           >
             自分のスコア

@@ -1,7 +1,7 @@
-import { serverSupabaseServiceRole } from '#supabase/server'
+import { and, eq } from 'drizzle-orm'
 import { readBody } from 'h3'
+import { db, schema } from 'hub:db'
 import { requireIrUser } from '../../utils/auth'
-import type { Database } from '../../../shared/types/database.types'
 
 interface RivalRequestBody {
   target_player_id?: string
@@ -17,30 +17,26 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, statusMessage: 'valid target_player_id is required' })
   }
 
-  const db = serverSupabaseServiceRole<Database>(event)
   if (body.action === 'remove') {
-    const { error } = await db
-      .from('rival_relationships')
-      .delete()
-      .eq('owner_player_id', user.id)
-      .eq('target_player_id', targetPlayerId)
-      .eq('relation_type', 'rival')
-    if (error) {
-      throw createError({ statusCode: 500, statusMessage: error.message })
-    }
+    await db
+      .delete(schema.rivalRelationships)
+      .where(
+        and(
+          eq(schema.rivalRelationships.ownerPlayerId, user.id),
+          eq(schema.rivalRelationships.targetPlayerId, targetPlayerId),
+          eq(schema.rivalRelationships.relationType, 'rival'),
+        ),
+      )
     return { removed: true }
   }
 
-  const { error } = await db.from('rival_relationships').upsert(
-    {
-      owner_player_id: user.id,
-      target_player_id: targetPlayerId,
-      relation_type: 'rival',
-    },
-    { onConflict: 'owner_player_id,target_player_id,relation_type' },
-  )
-  if (error) {
-    throw createError({ statusCode: 500, statusMessage: error.message })
-  }
+  await db
+    .insert(schema.rivalRelationships)
+    .values({
+      ownerPlayerId: user.id,
+      targetPlayerId,
+      relationType: 'rival',
+    })
+    .onConflictDoNothing()
   return { added: true }
 })

@@ -1,7 +1,5 @@
-import { serverSupabaseServiceRole } from '#supabase/server'
 import { getQuery } from 'h3'
 
-import type { Database } from '../../../../shared/types/database.types'
 import { lookupChartSha256ByMd5 } from '../../../services/charts'
 import { requireHex } from '../../../services/ir'
 
@@ -17,8 +15,7 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, statusMessage: 'md5 must be lowercase hex length 32' })
   }
 
-  const db = serverSupabaseServiceRole<Database>(event)
-  const sha256 = await lookupChartSha256ByMd5(db, md5)
+  const sha256 = await lookupChartSha256ByMd5(md5)
   if (!sha256) {
     throw createError({ statusCode: 404, statusMessage: 'Chart not found' })
   }

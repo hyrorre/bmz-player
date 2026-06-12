@@ -1,35 +1,41 @@
-import { serverSupabaseServiceRole } from '#supabase/server'
+import { desc, and, eq, inArray } from 'drizzle-orm'
+import { db, schema } from 'hub:db'
 import { requireIrUser } from '../../utils/auth'
-import type { Database } from '../../../shared/types/database.types'
 
 export default defineEventHandler(async (event) => {
   const user = await requireIrUser(event)
 
-  const db = serverSupabaseServiceRole<Database>(event)
-  const { data, error } = await db
-    .from('rival_relationships')
-    .select('target_player_id, relation_type, created_at')
-    .eq('owner_player_id', user.id)
-    .eq('relation_type', 'rival')
-    .order('created_at', { ascending: false })
+  const data = await db
+    .select({
+      target_player_id: schema.rivalRelationships.targetPlayerId,
+      relation_type: schema.rivalRelationships.relationType,
+      created_at: schema.rivalRelationships.createdAt,
+    })
+    .from(schema.rivalRelationships)
+    .where(
+      and(
+        eq(schema.rivalRelationships.ownerPlayerId, user.id),
+        eq(schema.rivalRelationships.relationType, 'rival'),
+      ),
+    )
+    .orderBy(desc(schema.rivalRelationships.createdAt))
 
-  if (error) {
-    throw createError({ statusCode: 500, statusMessage: error.message })
-  }
-
-  const targetIds = (data ?? []).map((row) => row.target_player_id)
-  const { data: profiles, error: profilesError } =
+  const targetIds = data.map((row) => row.target_player_id)
+  const profiles =
     targetIds.length > 0
-      ? await db.from('profiles').select('id, display_name, bio').in('id', targetIds)
-      : { data: [], error: null }
+      ? await db
+          .select({
+            id: schema.profiles.id,
+            display_name: schema.profiles.displayName,
+            bio: schema.profiles.bio,
+          })
+          .from(schema.profiles)
+          .where(inArray(schema.profiles.id, targetIds))
+      : []
 
-  if (profilesError) {
-    throw createError({ statusCode: 500, statusMessage: profilesError.message })
-  }
-
-  const profileMap = new Map((profiles ?? []).map((profile) => [profile.id, profile]))
+  const profileMap = new Map(profiles.map((profile) => [profile.id, profile]))
   return {
-    rivals: (data ?? []).map((row) => ({
+    rivals: data.map((row) => ({
       player_id: row.target_player_id,
       relation_type: row.relation_type,
       created_at: row.created_at,

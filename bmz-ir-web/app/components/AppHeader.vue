@@ -1,5 +1,5 @@
 <script setup lang="ts">
-const user = useSupabaseUser()
+const { user } = useUserSession()
 
 const navigationItems = [
   { label: '譜面', icon: 'i-lucide-list-music', to: '/charts' },

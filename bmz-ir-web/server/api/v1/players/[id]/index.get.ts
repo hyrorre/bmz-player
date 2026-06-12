@@ -1,6 +1,6 @@
-import { serverSupabaseServiceRole } from '#supabase/server'
+import { desc, eq, inArray } from 'drizzle-orm'
 import { getQuery } from 'h3'
-import type { Database } from '../../../../../shared/types/database.types'
+import { db, schema } from 'hub:db'
 
 export default defineEventHandler(async (event) => {
   const playerId = getRouterParam(event, 'id')
@@ -11,44 +11,61 @@ export default defineEventHandler(async (event) => {
   const query = getQuery(event)
   const limit = Math.max(1, Math.min(200, Number(query.limit ?? 50) || 50))
 
-  const db = serverSupabaseServiceRole<Database>(event)
-  const { data: profile, error: profileError } = await db
-    .from('profiles')
-    .select('id, display_name, bio')
-    .eq('id', playerId)
-    .maybeSingle()
-  if (profileError) {
-    throw createError({ statusCode: 500, statusMessage: profileError.message })
-  }
+  const profiles = await db
+    .select({
+      id: schema.profiles.id,
+      display_name: schema.profiles.displayName,
+      bio: schema.profiles.bio,
+    })
+    .from(schema.profiles)
+    .where(eq(schema.profiles.id, playerId))
+    .limit(1)
+  const profile = profiles[0]
   if (!profile) {
     throw createError({ statusCode: 404, statusMessage: 'Player not found' })
   }
 
-  const { data: bests, error: bestsError } = await db
-    .from('best_scores')
-    .select(
-      'score_id, chart_sha256, ex_score, clear_type, clear_rank, max_combo, min_bp, min_cb, device_type, gauge, ln_policy, scoring, played_at, server_received_at',
-    )
-    .eq('player_id', playerId)
-    .order('server_received_at', { ascending: false })
+  const bests = await db
+    .select({
+      score_id: schema.bestScores.scoreId,
+      chart_sha256: schema.bestScores.chartSha256,
+      ex_score: schema.bestScores.exScore,
+      clear_type: schema.bestScores.clearType,
+      clear_rank: schema.bestScores.clearRank,
+      max_combo: schema.bestScores.maxCombo,
+      min_bp: schema.bestScores.minBp,
+      min_cb: schema.bestScores.minCb,
+      device_type: schema.bestScores.deviceType,
+      gauge: schema.bestScores.gauge,
+      ln_policy: schema.bestScores.lnPolicy,
+      scoring: schema.bestScores.scoring,
+      played_at: schema.bestScores.playedAt,
+      server_received_at: schema.bestScores.serverReceivedAt,
+    })
+    .from(schema.bestScores)
+    .where(eq(schema.bestScores.playerId, playerId))
+    .orderBy(desc(schema.bestScores.serverReceivedAt))
     .limit(limit)
-  if (bestsError) {
-    throw createError({ statusCode: 500, statusMessage: bestsError.message })
-  }
 
-  const shaList = [...new Set((bests ?? []).map((row) => row.chart_sha256))]
-  const { data: charts, error: chartsError } =
+  const shaList = [...new Set(bests.map((row) => row.chart_sha256))]
+  const charts =
     shaList.length > 0
-      ? await db.from('charts').select('sha256, title, artist, mode, level').in('sha256', shaList)
-      : { data: [], error: null }
-  if (chartsError) {
-    throw createError({ statusCode: 500, statusMessage: chartsError.message })
-  }
-  const chartMap = new Map((charts ?? []).map((chart) => [chart.sha256, chart]))
+      ? await db
+          .select({
+            sha256: schema.charts.sha256,
+            title: schema.charts.title,
+            artist: schema.charts.artist,
+            mode: schema.charts.mode,
+            level: schema.charts.level,
+          })
+          .from(schema.charts)
+          .where(inArray(schema.charts.sha256, shaList))
+      : []
+  const chartMap = new Map(charts.map((chart) => [chart.sha256, chart]))
 
   return {
     player: profile,
-    best_scores: (bests ?? []).map((row) => ({
+    best_scores: bests.map((row) => ({
       ...row,
       chart: chartMap.get(row.chart_sha256) ?? null,
     })),

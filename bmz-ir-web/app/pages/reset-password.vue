@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import type { AuthFormField, FormSubmitEvent } from '@nuxt/ui'
-import type { Database } from '~~/bmz-ir-web/shared/types/database.types'
 
 type RequestResetState = {
   email: string
@@ -11,8 +10,8 @@ type ResetPasswordState = {
   confirmPassword: string
 }
 
-const supabase = useSupabaseClient<Database>()
-const user = useSupabaseUser()
+const { user } = useUserSession()
+const requestFetch = useRequestFetch()
 
 const requestFields: AuthFormField[] = [
   {
@@ -79,23 +78,14 @@ function validateReset(state: Partial<ResetPasswordState>) {
 }
 
 async function requestReset(event: FormSubmitEvent<RequestResetState>) {
+  void event
   requestErrorMessage.value = ''
   requestSuccessMessage.value = ''
   requestLoading.value = true
 
-  const redirectTo = import.meta.client ? `${window.location.origin}/reset-password` : undefined
-  const { error } = await supabase.auth.resetPasswordForEmail(event.data.email.trim(), {
-    redirectTo,
-  })
-
   requestLoading.value = false
-
-  if (error) {
-    requestErrorMessage.value = error.message
-    return
-  }
-
-  requestSuccessMessage.value = 'パスワード再設定メールを送信しました。'
+  requestErrorMessage.value =
+    'メール送信による再設定は現在未対応です。ログイン中のアカウント設定から変更してください。'
 }
 
 async function resetPassword(event: FormSubmitEvent<ResetPasswordState>) {
@@ -103,18 +93,18 @@ async function resetPassword(event: FormSubmitEvent<ResetPasswordState>) {
   resetSuccessMessage.value = ''
   resetLoading.value = true
 
-  const { error } = await supabase.auth.updateUser({
-    password: event.data.password,
-  })
-
-  resetLoading.value = false
-
-  if (error) {
-    resetErrorMessage.value = error.message
-    return
+  try {
+    await requestFetch('/api/v1/account/password', {
+      method: 'PUT',
+      body: { password: event.data.password },
+    })
+    resetSuccessMessage.value = 'パスワードを再設定しました。'
+  } catch (error) {
+    resetErrorMessage.value =
+      error instanceof Error ? error.message : 'パスワードの再設定に失敗しました。'
+  } finally {
+    resetLoading.value = false
   }
-
-  resetSuccessMessage.value = 'パスワードを再設定しました。'
 }
 </script>
 

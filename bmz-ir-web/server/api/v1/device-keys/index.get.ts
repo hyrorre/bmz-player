@@ -1,17 +1,19 @@
-import { serverSupabaseServiceRole } from '#supabase/server'
+import { desc, eq } from 'drizzle-orm'
+import { db, schema } from 'hub:db'
 import { requireIrUser } from '../../../utils/auth'
-import type { Database } from '../../../../shared/types/database.types'
 
 export default defineEventHandler(async (event) => {
   const user = await requireIrUser(event)
-  const db = serverSupabaseServiceRole<Database>(event)
-  const { data, error } = await db
-    .from('device_keys')
-    .select('id, public_key, algorithm, revoked_at, created_at')
-    .eq('player_id', user.id)
-    .order('created_at', { ascending: false })
-  if (error) {
-    throw createError({ statusCode: 500, statusMessage: error.message })
-  }
-  return { device_keys: data ?? [] }
+  const data = await db
+    .select({
+      id: schema.deviceKeys.id,
+      public_key: schema.deviceKeys.publicKey,
+      algorithm: schema.deviceKeys.algorithm,
+      revoked_at: schema.deviceKeys.revokedAt,
+      created_at: schema.deviceKeys.createdAt,
+    })
+    .from(schema.deviceKeys)
+    .where(eq(schema.deviceKeys.playerId, user.id))
+    .orderBy(desc(schema.deviceKeys.createdAt))
+  return { device_keys: data }
 })

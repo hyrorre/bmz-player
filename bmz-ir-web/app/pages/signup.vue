@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import type { AuthFormField, FormSubmitEvent } from '@nuxt/ui'
-import type { Database } from '~~/bmz-ir-web/shared/types/database.types'
 
 type SignupState = {
   displayName: string
@@ -9,8 +8,7 @@ type SignupState = {
   confirmPassword: string
 }
 
-const supabase = useSupabaseClient<Database>()
-const user = useSupabaseUser()
+const { loggedIn, fetch: refreshSession } = useUserSession()
 
 const fields: AuthFormField[] = [
   {
@@ -55,7 +53,7 @@ const loading = ref(false)
 const errorMessage = ref('')
 const successMessage = ref('')
 
-if (user.value) {
+if (loggedIn.value) {
   await navigateTo('/')
 }
 
@@ -86,31 +84,26 @@ async function submit(event: FormSubmitEvent<SignupState>) {
   successMessage.value = ''
   loading.value = true
 
-  const { data, error } = await supabase.auth.signUp({
-    email: event.data.email.trim(),
-    password: event.data.password,
-    options: {
-      data: {
+  try {
+    await $fetch('/api/v1/auth/signup', {
+      method: 'POST',
+      body: {
+        email: event.data.email.trim(),
+        password: event.data.password,
         display_name: event.data.displayName.trim(),
       },
-    },
-  })
+    })
+    await refreshSession()
+  } catch (error) {
+    errorMessage.value =
+      error instanceof Error && error.message ? error.message : 'アカウント登録に失敗しました。'
+    loading.value = false
+    return
+  }
 
   loading.value = false
-
-  if (error) {
-    errorMessage.value = error.message
-    return
-  }
-
-  if (data.session) {
-    await navigateTo('/')
-    return
-  }
-
-  successMessage.value = data.user?.identities?.length
-    ? '確認メールを送信しました。メール内のリンクから登録を完了してください。'
-    : '登録済みのメールアドレスです。メールを確認するか、ログインしてください。'
+  successMessage.value = ''
+  await navigateTo('/')
 }
 </script>
 

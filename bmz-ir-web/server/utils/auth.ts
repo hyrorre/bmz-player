@@ -1,7 +1,6 @@
 import type { H3Event } from 'h3'
 import { getHeader, createError } from 'h3'
-import { serverSupabaseClient, serverSupabaseServiceRole } from '#supabase/server'
-import type { Database } from '../../shared/types/database.types'
+import { findUserByAccessToken } from './auth_tokens'
 
 export interface IrUser {
   id: string
@@ -10,7 +9,7 @@ export interface IrUser {
 
 /**
  * BMZ デスクトップクライアントは Authorization: Bearer <access_token> を送る。
- * ブラウザは Supabase の cookie セッションを使う。両方を解決する。
+ * ブラウザは nuxt-auth-utils の cookie セッションを使う。両方を解決する。
  */
 export async function resolveIrUser(event: H3Event): Promise<IrUser | null> {
   const header = getHeader(event, 'authorization')
@@ -19,20 +18,19 @@ export async function resolveIrUser(event: H3Event): Promise<IrUser | null> {
     if (!token) {
       return null
     }
-    const db = serverSupabaseServiceRole<Database>(event)
-    const { data, error } = await db.auth.getUser(token)
-    if (error || !data.user) {
+    const user = await findUserByAccessToken(token)
+    if (!user) {
       return null
     }
-    return { id: data.user.id, email: data.user.email ?? undefined }
+    return { id: user.id, email: user.email }
   }
 
-  const client = await serverSupabaseClient<Database>(event)
-  const { data, error } = await client.auth.getUser()
-  if (error || !data.user) {
+  const session = await getUserSession(event)
+  const user = session.user as { id?: string; email?: string } | undefined
+  if (!user?.id) {
     return null
   }
-  return { id: data.user.id, email: data.user.email ?? undefined }
+  return { id: user.id, email: user.email }
 }
 
 export async function requireIrUser(event: H3Event): Promise<IrUser> {

@@ -1,14 +1,12 @@
 <script setup lang="ts">
 import type { AuthFormField, FormSubmitEvent } from '@nuxt/ui'
-import type { Database } from '~~/bmz-ir-web/shared/types/database.types'
 
 type SigninState = {
   email: string
   password: string
 }
 
-const supabase = useSupabaseClient<Database>()
-const user = useSupabaseUser()
+const { loggedIn, fetch: refreshSession } = useUserSession()
 
 const fields: AuthFormField[] = [
   {
@@ -34,7 +32,7 @@ const fields: AuthFormField[] = [
 const loading = ref(false)
 const errorMessage = ref('')
 
-if (user.value) {
+if (loggedIn.value) {
   await navigateTo('/')
 }
 
@@ -56,18 +54,23 @@ async function submit(event: FormSubmitEvent<SigninState>) {
   errorMessage.value = ''
   loading.value = true
 
-  const { error } = await supabase.auth.signInWithPassword({
-    email: event.data.email.trim(),
-    password: event.data.password,
-  })
-
-  loading.value = false
-
-  if (error) {
-    errorMessage.value = error.message
+  try {
+    await $fetch('/api/v1/auth/login', {
+      method: 'POST',
+      body: {
+        email: event.data.email.trim(),
+        password: event.data.password,
+      },
+    })
+    await refreshSession()
+  } catch (error) {
+    errorMessage.value =
+      error instanceof Error && error.message ? error.message : 'ログインに失敗しました。'
+    loading.value = false
     return
   }
 
+  loading.value = false
   await navigateTo('/')
 }
 </script>
