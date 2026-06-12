@@ -568,9 +568,9 @@ fn set_scratch_angle_offset(
 fn scratch_angle_degrees(visual_time: TimeUs, scratch_index: i32, input_delta_ms: i64) -> i32 {
     let elapsed_ms = (visual_time.0.max(0) / 1_000).rem_euclid(SCRATCH_ANGLE_PERIOD_MS);
     let base_ms = if scratch_index % 2 == 0 {
-        (SCRATCH_ANGLE_PERIOD_MS - elapsed_ms).rem_euclid(SCRATCH_ANGLE_PERIOD_MS)
-    } else {
         elapsed_ms
+    } else {
+        (SCRATCH_ANGLE_PERIOD_MS - elapsed_ms).rem_euclid(SCRATCH_ANGLE_PERIOD_MS)
     };
     let angle_ms = (base_ms + input_delta_ms).rem_euclid(SCRATCH_ANGLE_PERIOD_MS);
     (angle_ms / SCRATCH_ANGLE_DEGREES_DIVISOR) as i32
@@ -1517,7 +1517,7 @@ mod tests {
 
         assert_eq!(
             snapshot.skin_offsets.get(SCRATCH_ANGLE_OFFSET_1P),
-            Some(SkinOffsetValue { x: 1, y: 2, w: 3, h: 4, r: 80, a: -6 })
+            Some(SkinOffsetValue { x: 1, y: 2, w: 3, h: 4, r: 280, a: -6 })
         );
     }
 
@@ -1533,7 +1533,7 @@ mod tests {
 
         assert_eq!(
             snapshot.skin_offsets.get(SCRATCH_ANGLE_OFFSET_1P),
-            Some(SkinOffsetValue { r: 80, ..SkinOffsetValue::default() })
+            Some(SkinOffsetValue { r: 280, ..SkinOffsetValue::default() })
         );
     }
 
@@ -1549,7 +1549,7 @@ mod tests {
 
         assert_eq!(
             snapshot.skin_offsets.get(SCRATCH_ANGLE_OFFSET_1P),
-            Some(SkinOffsetValue { r: 80, ..SkinOffsetValue::default() })
+            Some(SkinOffsetValue { r: 280, ..SkinOffsetValue::default() })
         );
     }
 
@@ -1566,7 +1566,7 @@ mod tests {
 
         assert_eq!(
             snapshot.skin_offsets.get(SCRATCH_ANGLE_OFFSET_1P),
-            Some(SkinOffsetValue { r: 53, ..SkinOffsetValue::default() })
+            Some(SkinOffsetValue { r: 253, ..SkinOffsetValue::default() })
         );
     }
 
@@ -1583,7 +1583,7 @@ mod tests {
 
         assert_eq!(
             snapshot.skin_offsets.get(SCRATCH_ANGLE_OFFSET_1P),
-            Some(SkinOffsetValue { r: 106, ..SkinOffsetValue::default() })
+            Some(SkinOffsetValue { r: 306, ..SkinOffsetValue::default() })
         );
     }
 
