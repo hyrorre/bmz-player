@@ -4,13 +4,14 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use std::fmt;
 
+use bmz_core::input::ScratchDirection;
 use bmz_core::lane::{KeyMode, Lane};
 use bmz_gameplay::input::backend::PhysicalControl;
 use bmz_gameplay::input::binding::{BindingEntry, LaneBinding};
 
 use super::play::lane_from_config;
 use super::profile_config::{
-    BindingConfigEntry, LaneConfig, PlayModeInputConfig, ProfileInputConfig,
+    BindingConfigEntry, LaneConfig, PlayModeInputConfig, ProfileInputConfig, ScratchDirectionConfig,
 };
 
 #[derive(Debug, PartialEq, Eq)]
@@ -117,10 +118,35 @@ pub fn lane_binding_for_key_mode(
                     device: None,
                     control: control_from_config(&entry.device, &entry.control),
                     lane: lane_from_config(lane),
+                    scratch_direction: scratch_direction_from_binding(lane, &entry),
                 })
             })
             .collect(),
     })
+}
+
+fn scratch_direction_from_binding(
+    lane: LaneConfig,
+    entry: &BindingConfigEntry,
+) -> Option<ScratchDirection> {
+    if !matches!(lane, LaneConfig::Scratch | LaneConfig::Scratch2) {
+        return None;
+    }
+    match entry.scratch {
+        Some(ScratchDirectionConfig::Up) => Some(ScratchDirection::Up),
+        Some(ScratchDirectionConfig::Down) => Some(ScratchDirection::Down),
+        None => infer_scratch_direction_from_control(&entry.control),
+    }
+}
+
+fn infer_scratch_direction_from_control(control: &str) -> Option<ScratchDirection> {
+    if control.contains("ScratchUp") || control.ends_with('-') || control == "Button9" {
+        Some(ScratchDirection::Up)
+    } else if control.contains("ScratchDown") || control.ends_with('+') || control == "Button8" {
+        Some(ScratchDirection::Down)
+    } else {
+        None
+    }
 }
 
 pub fn resolve_play_bindings(

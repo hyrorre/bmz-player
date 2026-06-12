@@ -16,6 +16,13 @@ pub enum InputSource {
     Replay,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ScratchDirection {
+    Up,
+    Down,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum InputDeviceKind {
@@ -41,4 +48,6 @@ pub struct InputEvent {
     pub source: InputSource,
     #[serde(default)]
     pub device_kind: InputDeviceKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scratch_direction: Option<ScratchDirection>,
 }

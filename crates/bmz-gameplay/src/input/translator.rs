@@ -38,10 +38,17 @@ impl InputTranslator for DefaultInputTranslator {
         event: DeviceInputEvent,
         ctx: &InputTimingContext<'_>,
     ) -> Option<InputEvent> {
-        let lane = self.binding.resolve(event.device, &event.control)?;
+        let binding = self.binding.resolve_entry(event.device, &event.control)?;
         let time = estimate_audio_time(&event.timestamp, ctx);
         let device_kind = device_kind_for_control(&event.control);
-        Some(InputEvent { lane, kind: event.kind, time, source: InputSource::Human, device_kind })
+        Some(InputEvent {
+            lane: binding.lane,
+            kind: event.kind,
+            time,
+            source: InputSource::Human,
+            device_kind,
+            scratch_direction: binding.scratch_direction,
+        })
     }
 }
 
@@ -109,6 +116,7 @@ mod tests {
                     device: None,
                     control: keyboard_control("Z"),
                     lane: Lane::Key1,
+                    scratch_direction: None,
                 }],
             },
         };
@@ -149,6 +157,7 @@ mod tests {
                     device: None,
                     control: PhysicalControl::GamepadButton("South".to_string()),
                     lane: Lane::Key1,
+                    scratch_direction: None,
                 }],
             },
         };

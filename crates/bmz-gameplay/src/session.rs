@@ -6,7 +6,7 @@ use bmz_audio::queue::{AudioScheduler, ScheduledSound};
 use bmz_chart::model::{LongNoteMode, PlayableChart};
 use bmz_chart::timing::TimingMap;
 use bmz_core::ids::{NoteId, SoundId};
-use bmz_core::input::{InputEvent, InputKind, InputSource};
+use bmz_core::input::{InputEvent, InputKind, InputSource, ScratchDirection};
 use bmz_core::judge::{Judge, TimingSide};
 use bmz_core::lane::LANE_COUNT;
 use bmz_core::time::TimeUs;
@@ -30,6 +30,7 @@ pub const INPUT_DISPLAY_US: i64 = 160_000;
 /// オートプレイ時のキー押下を「離す」までの時間。beatoraja の `auto_minduration` (80ms) と揃える。
 /// この時間が経過すると lane_keyon → lane_keyoff へ遷移し、skin の KEYOFF タイマー演出が走る。
 pub const AUTO_KEYBEAM_DURATION_US: i64 = 80_000;
+const SCRATCH_ANGLE_PERIOD_MS: i64 = 2_160;
 /// pre-ready の wall-clock key 時刻と chart 時刻を区別する閾値。
 const CHART_KEY_FUTURE_SLACK_US: i64 = 1_000_000;
 
@@ -104,6 +105,11 @@ pub struct GameSession {
     pub lane_keyon_started_at: [Option<TimeUs>; LANE_COUNT],
     /// 各レーンのキー解放時刻。離した直後のみ Some(次の Press でクリア)。skin の keyoff タイマー(120..=127)。
     pub lane_keyoff_started_at: [Option<TimeUs>; LANE_COUNT],
+    /// Scratch lane rotation direction while the scratch input is held.
+    pub lane_scratch_direction: [Option<ScratchDirection>; LANE_COUNT],
+    /// Extra turntable phase accumulated by scratch input, in beatoraja scratch-angle ms.
+    pub lane_scratch_angle_delta_ms: [i64; LANE_COUNT],
+    pub scratch_angle_last_render_at: Option<TimeUs>,
     /// オートプレイで Press したレーンの自動 Release 予定時刻。
     /// `audio_now` がこの時刻を超えたら keyon → keyoff へ遷移する。
     pub lane_auto_release_at: [Option<TimeUs>; LANE_COUNT],
@@ -338,6 +344,7 @@ pub fn update_lane_key_states(session: &mut GameSession, inputs: &[InputEvent]) 
             InputKind::Press => {
                 session.lane_keyon_started_at[lane_index] = Some(input.time);
                 session.lane_keyoff_started_at[lane_index] = None;
+                session.lane_scratch_direction[lane_index] = input.scratch_direction;
                 session.lane_auto_release_at[lane_index] = match input.source {
                     InputSource::Auto => Some(TimeUs(input.time.0 + AUTO_KEYBEAM_DURATION_US)),
                     _ => None,
@@ -347,6 +354,11 @@ pub fn update_lane_key_states(session: &mut GameSession, inputs: &[InputEvent]) 
                 if session.lane_keyon_started_at[lane_index].is_some() {
                     session.lane_keyoff_started_at[lane_index] = Some(input.time);
                     session.lane_keyon_started_at[lane_index] = None;
+                }
+                if input.scratch_direction.is_none()
+                    || session.lane_scratch_direction[lane_index] == input.scratch_direction
+                {
+                    session.lane_scratch_direction[lane_index] = None;
                 }
                 session.lane_auto_release_at[lane_index] = None;
             }
@@ -365,6 +377,7 @@ pub fn apply_auto_key_release(session: &mut GameSession, audio_now: TimeUs) {
         {
             session.lane_keyoff_started_at[lane_index] = Some(release_at);
             session.lane_keyon_started_at[lane_index] = None;
+            session.lane_scratch_direction[lane_index] = None;
             session.lane_auto_release_at[lane_index] = None;
         }
     }
@@ -437,6 +450,7 @@ pub fn clear_stale_wall_clock_lane_key_states(session: &mut GameSession, chart_t
             .is_some_and(|started| is_wall_clock_lane_key_time(started, chart_time))
         {
             session.lane_keyon_started_at[lane_index] = None;
+            session.lane_scratch_direction[lane_index] = None;
         }
         if session.lane_keyoff_started_at[lane_index]
             .is_some_and(|started| is_wall_clock_lane_key_time(started, chart_time))
@@ -448,6 +462,32 @@ pub fn clear_stale_wall_clock_lane_key_states(session: &mut GameSession, chart_t
         {
             session.lane_auto_release_at[lane_index] = None;
         }
+    }
+}
+
+pub fn update_scratch_angle_phase(session: &mut GameSession, render_now: TimeUs) {
+    let Some(last_render_at) = session.scratch_angle_last_render_at else {
+        session.scratch_angle_last_render_at = Some(render_now);
+        return;
+    };
+    session.scratch_angle_last_render_at = Some(render_now);
+    let delta_ms = ((render_now.0 - last_render_at.0) / 1_000).max(0);
+    if delta_ms == 0 {
+        return;
+    }
+
+    for lane_index in 0..LANE_COUNT {
+        if session.lane_keyon_started_at[lane_index].is_none() {
+            continue;
+        }
+        let sign =
+            match session.lane_scratch_direction[lane_index].unwrap_or(ScratchDirection::Down) {
+                ScratchDirection::Up => 1,
+                ScratchDirection::Down => -1,
+            };
+        session.lane_scratch_angle_delta_ms[lane_index] =
+            (session.lane_scratch_angle_delta_ms[lane_index] + sign * delta_ms.saturating_mul(2))
+                .rem_euclid(SCRATCH_ANGLE_PERIOD_MS);
     }
 }
 
@@ -639,6 +679,7 @@ pub fn advance_session_frame(
 
     let times = compute_frame_times(session);
     clear_stale_wall_clock_lane_key_states(session, times.render_now);
+    update_scratch_angle_phase(session, times.render_now);
     let mut judgements = Vec::new();
 
     if session.state == PlayState::Playing {
@@ -1005,6 +1046,7 @@ mod tests {
                         device: None,
                         control: PhysicalControl::KeyboardKey("Z".to_string()),
                         lane: Lane::Key1,
+                        scratch_direction: None,
                     }],
                 },
             }),
@@ -1047,6 +1089,7 @@ mod tests {
                         device: None,
                         control: PhysicalControl::KeyboardKey("Z".to_string()),
                         lane: Lane::Key1,
+                        scratch_direction: None,
                     }],
                 },
             }),
@@ -1091,6 +1134,7 @@ mod tests {
             time: TimeUs(5_000),
             source: InputSource::Human,
             device_kind: InputDeviceKind::Keyboard,
+            scratch_direction: None,
         }];
         update_lane_key_states(&mut session, &inputs);
 
@@ -1098,6 +1142,64 @@ mod tests {
         assert_eq!(session.lane_keyoff_started_at[Lane::Key1.index()], None);
         // Human source の Press は自動 release を予約しない (押し続け対応)。
         assert_eq!(session.lane_auto_release_at[Lane::Key1.index()], None);
+    }
+
+    #[test]
+    fn update_lane_key_states_tracks_scratch_direction_until_release() {
+        let mut session = session_with_autoplay(chart_with_keysound());
+        let press = [InputEvent {
+            lane: Lane::Scratch,
+            kind: InputKind::Press,
+            time: TimeUs(5_000),
+            source: InputSource::Human,
+            device_kind: InputDeviceKind::Controller,
+            scratch_direction: Some(ScratchDirection::Up),
+        }];
+
+        update_lane_key_states(&mut session, &press);
+
+        assert_eq!(
+            session.lane_scratch_direction[Lane::Scratch.index()],
+            Some(ScratchDirection::Up)
+        );
+
+        let release = [InputEvent {
+            lane: Lane::Scratch,
+            kind: InputKind::Release,
+            time: TimeUs(10_000),
+            source: InputSource::Human,
+            device_kind: InputDeviceKind::Controller,
+            scratch_direction: Some(ScratchDirection::Up),
+        }];
+        update_lane_key_states(&mut session, &release);
+
+        assert_eq!(session.lane_scratch_direction[Lane::Scratch.index()], None);
+    }
+
+    #[test]
+    fn update_scratch_angle_phase_accumulates_directionless_scratch_until_release() {
+        let mut session = session_with_autoplay(chart_with_keysound());
+        session.scratch_angle_last_render_at = Some(TimeUs(0));
+        session.lane_keyon_started_at[Lane::Scratch.index()] = Some(TimeUs(0));
+
+        update_scratch_angle_phase(&mut session, TimeUs(1_000_000));
+
+        assert_eq!(session.lane_scratch_angle_delta_ms[Lane::Scratch.index()], 160);
+
+        update_lane_key_states(
+            &mut session,
+            &[InputEvent {
+                lane: Lane::Scratch,
+                kind: InputKind::Release,
+                time: TimeUs(1_000_000),
+                source: InputSource::Human,
+                device_kind: InputDeviceKind::Keyboard,
+                scratch_direction: None,
+            }],
+        );
+        update_scratch_angle_phase(&mut session, TimeUs(1_500_000));
+
+        assert_eq!(session.lane_scratch_angle_delta_ms[Lane::Scratch.index()], 160);
     }
 
     #[test]
@@ -1137,6 +1239,7 @@ mod tests {
                         device: None,
                         control: PhysicalControl::KeyboardKey("Z".to_string()),
                         lane: Lane::Key1,
+                        scratch_direction: None,
                     }],
                 },
             }),
@@ -1160,6 +1263,7 @@ mod tests {
             time: TimeUs(10_000),
             source: InputSource::Human,
             device_kind: InputDeviceKind::Keyboard,
+            scratch_direction: None,
         }];
         update_lane_key_states(&mut session, &inputs);
 
@@ -1177,6 +1281,7 @@ mod tests {
             time: TimeUs(5_000),
             source: InputSource::Auto,
             device_kind: InputDeviceKind::Keyboard,
+            scratch_direction: None,
         }];
         update_lane_key_states(&mut session, &inputs);
 
@@ -1196,6 +1301,7 @@ mod tests {
             time: TimeUs(0),
             source: InputSource::Auto,
             device_kind: InputDeviceKind::Keyboard,
+            scratch_direction: None,
         }];
         update_lane_key_states(&mut session, &inputs);
 
@@ -1224,6 +1330,7 @@ mod tests {
                 time: TimeUs(10_000),
                 source: InputSource::Human,
                 device_kind: InputDeviceKind::Keyboard,
+                scratch_direction: None,
             },
             InputEvent {
                 lane: Lane::Key2,
@@ -1231,6 +1338,7 @@ mod tests {
                 time: TimeUs(20_000),
                 source: InputSource::Human,
                 device_kind: InputDeviceKind::Keyboard,
+                scratch_direction: None,
             },
         ];
 
@@ -1277,6 +1385,9 @@ mod tests {
             recent_inputs: Vec::new(),
             lane_keyon_started_at: Default::default(),
             lane_keyoff_started_at: Default::default(),
+            lane_scratch_direction: Default::default(),
+            lane_scratch_angle_delta_ms: Default::default(),
+            scratch_angle_last_render_at: None,
             lane_auto_release_at: Default::default(),
             recent_judgements: Vec::new(),
             result_judgements: Default::default(),
