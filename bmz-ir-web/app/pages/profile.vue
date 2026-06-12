@@ -1,15 +1,19 @@
 <script setup lang="ts">
 import type { FormSubmitEvent } from '@nuxt/ui'
-import type { User } from '@supabase/supabase-js'
-import type { Database } from '~~/bmz-ir-web/shared/types/database.types'
 
 type ProfileState = {
   displayName: string
   bio: string
 }
 
-const supabase = useSupabaseClient<Database>()
-const currentUser = ref<User | null>(null)
+type ProfileResponse = {
+  player: {
+    id: string
+    email: string
+    display_name: string
+    bio: string
+  }
+}
 
 const state = reactive<ProfileState>({
   displayName: '',
@@ -20,12 +24,10 @@ const loading = ref(false)
 const saving = ref(false)
 const errorMessage = ref('')
 const successMessage = ref('')
+const requestFetch = useRequestFetch()
+const { user, fetch: refreshSession } = useUserSession()
 
-const initialUser = await getAuthenticatedUser()
-
-if (initialUser) {
-  await loadProfile(initialUser)
-}
+await loadProfile()
 
 function validate(profile: Partial<ProfileState>) {
   const errors: { name: keyof ProfileState; message: string }[] = []
@@ -45,56 +47,29 @@ function validate(profile: Partial<ProfileState>) {
   return errors
 }
 
-async function getAuthenticatedUser() {
-  const { data, error } = await supabase.auth.getUser()
-
-  if (error || !data.user?.id) {
-    currentUser.value = null
+async function loadProfile() {
+  if (!user.value) {
     await navigateTo('/signin')
-    return null
+    return
   }
-
-  currentUser.value = data.user
-  return data.user
-}
-
-async function loadProfile(profileUser: User) {
   loading.value = true
   errorMessage.value = ''
 
-  const { data, error } = await supabase
-    .from('profiles')
-    .select('display_name, bio')
-    .eq('id', profileUser.id)
-    .maybeSingle()
-
-  loading.value = false
-
-  if (error) {
-    errorMessage.value = error.message
-    return
-  }
-
-  state.displayName = data?.display_name || profileUser.user_metadata?.display_name || ''
-  state.bio = data?.bio || ''
-
-  if (!data) {
-    const { error: insertError } = await supabase.from('profiles').upsert({
-      id: profileUser.id,
-      display_name: state.displayName,
-      bio: state.bio,
-    })
-
-    if (insertError) {
-      errorMessage.value = insertError.message
-    }
+  try {
+    const response = await requestFetch<ProfileResponse>('/api/v1/profile')
+    state.displayName = response.player.display_name || ''
+    state.bio = response.player.bio || ''
+  } catch (error) {
+    errorMessage.value =
+      error instanceof Error ? error.message : 'プロフィールの取得に失敗しました。'
+  } finally {
+    loading.value = false
   }
 }
 
 async function submit(event: FormSubmitEvent<ProfileState>) {
-  const profileUser = await getAuthenticatedUser()
-
-  if (!profileUser) {
+  if (!user.value) {
+    await navigateTo('/signin')
     return
   }
 
@@ -105,36 +80,22 @@ async function submit(event: FormSubmitEvent<ProfileState>) {
   const displayName = event.data.displayName.trim()
   const bio = event.data.bio.trim()
 
-  const { error: profileError } = await supabase.from('profiles').upsert({
-    id: profileUser.id,
-    display_name: displayName,
-    bio,
-  })
-
-  if (!profileError) {
-    const { error: metadataError } = await supabase.auth.updateUser({
-      data: {
-        display_name: displayName,
-      },
+  try {
+    await requestFetch('/api/v1/profile', {
+      method: 'PUT',
+      body: { display_name: displayName, bio },
     })
-
-    if (metadataError) {
-      errorMessage.value = metadataError.message
-      saving.value = false
-      return
-    }
-  }
-
-  saving.value = false
-
-  if (profileError) {
-    errorMessage.value = profileError.message
+    await refreshSession()
+    state.displayName = displayName
+    state.bio = bio
+    successMessage.value = 'プロフィールを保存しました。'
+  } catch (error) {
+    errorMessage.value =
+      error instanceof Error ? error.message : 'プロフィールの保存に失敗しました。'
+  } finally {
+    saving.value = false
     return
   }
-
-  state.displayName = displayName
-  state.bio = bio
-  successMessage.value = 'プロフィールを保存しました。'
 }
 </script>
 

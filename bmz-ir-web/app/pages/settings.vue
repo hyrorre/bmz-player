@@ -1,7 +1,5 @@
 <script setup lang="ts">
 import type { AuthFormField, FormSubmitEvent } from '@nuxt/ui'
-import type { User } from '@supabase/supabase-js'
-import type { Database } from '~~/bmz-ir-web/shared/types/database.types'
 
 type EmailState = {
   email: string
@@ -12,8 +10,8 @@ type PasswordState = {
   confirmPassword: string
 }
 
-const supabase = useSupabaseClient<Database>()
-const currentUser = ref<User | null>(null)
+const { user, fetch: refreshSession } = useUserSession()
+const requestFetch = useRequestFetch()
 
 const emailFields = computed<AuthFormField[]>(() => [
   {
@@ -23,7 +21,7 @@ const emailFields = computed<AuthFormField[]>(() => [
     placeholder: 'name@example.com',
     autocomplete: 'email',
     required: true,
-    defaultValue: currentUser.value?.email ?? '',
+    defaultValue: (user.value as { email?: string } | null)?.email ?? '',
   },
 ])
 
@@ -55,19 +53,8 @@ const emailSuccessMessage = ref('')
 const passwordErrorMessage = ref('')
 const passwordSuccessMessage = ref('')
 
-await requireAuthenticatedUser()
-
-async function requireAuthenticatedUser() {
-  const { data, error } = await supabase.auth.getUser()
-
-  if (error || !data.user?.id) {
-    currentUser.value = null
-    await navigateTo('/signin')
-    return null
-  }
-
-  currentUser.value = data.user
-  return data.user
+if (!user.value) {
+  await navigateTo('/signin')
 }
 
 function validateEmail(state: Partial<EmailState>) {
@@ -95,9 +82,8 @@ function validatePassword(state: Partial<PasswordState>) {
 }
 
 async function updateEmail(event: FormSubmitEvent<EmailState>) {
-  const settingsUser = await requireAuthenticatedUser()
-
-  if (!settingsUser) {
+  if (!user.value) {
+    await navigateTo('/signin')
     return
   }
 
@@ -105,25 +91,24 @@ async function updateEmail(event: FormSubmitEvent<EmailState>) {
   emailSuccessMessage.value = ''
   emailLoading.value = true
 
-  const { error } = await supabase.auth.updateUser({
-    email: event.data.email.trim(),
-  })
-
-  emailLoading.value = false
-
-  if (error) {
-    emailErrorMessage.value = error.message
-    return
+  try {
+    await requestFetch('/api/v1/account/email', {
+      method: 'PUT',
+      body: { email: event.data.email.trim() },
+    })
+    await refreshSession()
+    emailSuccessMessage.value = 'メールアドレスを変更しました。'
+  } catch (error) {
+    emailErrorMessage.value =
+      error instanceof Error ? error.message : 'メールアドレスの変更に失敗しました。'
+  } finally {
+    emailLoading.value = false
   }
-
-  emailSuccessMessage.value =
-    '確認メールを送信しました。メール内のリンクから変更を完了してください。'
 }
 
 async function updatePassword(event: FormSubmitEvent<PasswordState>) {
-  const settingsUser = await requireAuthenticatedUser()
-
-  if (!settingsUser) {
+  if (!user.value) {
+    await navigateTo('/signin')
     return
   }
 
@@ -131,18 +116,18 @@ async function updatePassword(event: FormSubmitEvent<PasswordState>) {
   passwordSuccessMessage.value = ''
   passwordLoading.value = true
 
-  const { error } = await supabase.auth.updateUser({
-    password: event.data.password,
-  })
-
-  passwordLoading.value = false
-
-  if (error) {
-    passwordErrorMessage.value = error.message
-    return
+  try {
+    await requestFetch('/api/v1/account/password', {
+      method: 'PUT',
+      body: { password: event.data.password },
+    })
+    passwordSuccessMessage.value = 'パスワードを変更しました。'
+  } catch (error) {
+    passwordErrorMessage.value =
+      error instanceof Error ? error.message : 'パスワードの変更に失敗しました。'
+  } finally {
+    passwordLoading.value = false
   }
-
-  passwordSuccessMessage.value = 'パスワードを変更しました。'
 }
 
 type DeviceKey = {
@@ -157,8 +142,6 @@ const deviceKeys = ref<DeviceKey[]>([])
 const deviceKeysLoading = ref(false)
 const deviceKeysError = ref('')
 const revokingKeyId = ref('')
-const requestFetch = useRequestFetch()
-
 await loadDeviceKeys()
 
 async function loadDeviceKeys() {
