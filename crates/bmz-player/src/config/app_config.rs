@@ -9,6 +9,8 @@ pub struct AppConfig {
     pub audio: AudioConfig,
     pub video: VideoConfig,
     #[serde(default)]
+    pub screenshot: ScreenshotConfig,
+    #[serde(default)]
     pub select: MusicSelectConfig,
     pub input: GlobalInputConfig,
     pub logging: LoggingConfig,
@@ -104,6 +106,24 @@ pub struct MusicSelectConfig {
     pub scroll_duration_low_ms: u32,
     #[serde(default = "default_scroll_duration_high_ms")]
     pub scroll_duration_high_ms: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScreenshotConfig {
+    #[serde(default = "default_screenshot_dir")]
+    pub dir: String,
+    #[serde(default = "default_true")]
+    pub copy_to_clipboard: bool,
+}
+
+impl Default for ScreenshotConfig {
+    fn default() -> Self {
+        Self { dir: default_screenshot_dir(), copy_to_clipboard: true }
+    }
+}
+
+pub fn default_screenshot_dir() -> String {
+    "data/screenshots".to_string()
 }
 
 impl Default for MusicSelectConfig {
@@ -241,6 +261,7 @@ impl Default for AppConfig {
                 frame_limit_in_background: 30,
                 renderer: RendererBackend::Auto,
             },
+            screenshot: ScreenshotConfig::default(),
             select: MusicSelectConfig::default(),
             input: GlobalInputConfig {
                 backend: InputBackendKind::Auto,
@@ -251,5 +272,32 @@ impl Default for AppConfig {
             logging: LoggingConfig { level: LogLevel::Info, file_logging: true },
             tables: DifficultyTablesConfig::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn app_config_defaults_screenshot_settings() {
+        let config = AppConfig::default();
+
+        assert_eq!(config.screenshot.dir, "data/screenshots");
+        assert!(config.screenshot.copy_to_clipboard);
+    }
+
+    #[test]
+    fn app_config_loads_missing_screenshot_section() {
+        let mut toml = toml::to_string(&AppConfig::default()).unwrap();
+        let start = toml.find("[screenshot]").unwrap();
+        let end =
+            toml[start + 1..].find("\n[").map(|offset| start + 1 + offset).unwrap_or(toml.len());
+        toml.replace_range(start..end, "");
+
+        let config: AppConfig = toml::from_str(&toml).unwrap();
+
+        assert_eq!(config.screenshot.dir, "data/screenshots");
+        assert!(config.screenshot.copy_to_clipboard);
     }
 }

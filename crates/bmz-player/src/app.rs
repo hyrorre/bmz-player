@@ -7924,6 +7924,23 @@ impl WinitApp {
         }
     }
 
+    fn request_manual_screenshot(&mut self) {
+        let path = next_screenshot_path(&self.boot.app_config.screenshot.dir);
+        if self.boot.app_config.screenshot.copy_to_clipboard {
+            self.renderer.request_screenshot_with_clipboard(path.clone());
+            tracing::info!(
+                path = %path.display(),
+                "manual screenshot requested with clipboard copy"
+            );
+        } else {
+            self.renderer.request_screenshot(path.clone());
+            tracing::info!(path = %path.display(), "manual screenshot requested");
+        }
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+    }
+
     fn handle_smoke_exit_after_redraw(&mut self, event_loop: &ActiveEventLoop) {
         if self.smoke_exit_on_result && self.finished_play.is_some() {
             self.smoke_exit_on_result = false;
@@ -8921,6 +8938,13 @@ impl ApplicationHandler for WinitApp {
                     }
                     return;
                 }
+                if event.physical_key == PhysicalKey::Code(KeyCode::F12)
+                    && event.state == ElementState::Pressed
+                    && !event.repeat
+                {
+                    self.request_manual_screenshot();
+                    return;
+                }
                 // egui がフォーカスを持つ間はゲーム入力へ伝播させない。
                 if egui_consumed {
                     return;
@@ -9062,6 +9086,36 @@ fn now_unix_seconds() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs() as i64)
         .unwrap_or(0)
+}
+
+fn now_unix_millis() -> u128 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|duration| duration.as_millis()).unwrap_or(0)
+}
+
+fn next_screenshot_path(config_dir: &str) -> PathBuf {
+    let dir = screenshot_dir(config_dir);
+    let stamp = now_unix_millis();
+    for index in 0..1000 {
+        let file_name = if index == 0 {
+            format!("bmz-screenshot-{stamp}.png")
+        } else {
+            format!("bmz-screenshot-{stamp}-{index}.png")
+        };
+        let path = dir.join(file_name);
+        if !path.exists() {
+            return path;
+        }
+    }
+    dir.join(format!("bmz-screenshot-{stamp}-overflow.png"))
+}
+
+fn screenshot_dir(config_dir: &str) -> PathBuf {
+    let trimmed = config_dir.trim();
+    if trimmed.is_empty() {
+        PathBuf::from(crate::config::app_config::default_screenshot_dir())
+    } else {
+        PathBuf::from(trimmed)
+    }
 }
 
 fn deferred_boot_action(boot_chart_id: Option<i64>, options: &AppOptions) -> Option<DeferredBoot> {
@@ -13417,6 +13471,17 @@ mod tests {
         let attributes = window_attributes_from_config(&config);
 
         assert_eq!(attributes.inner_size, Some(PhysicalSize::new(1920, 1080).into()));
+    }
+
+    #[test]
+    fn screenshot_dir_defaults_when_empty() {
+        assert_eq!(screenshot_dir(""), PathBuf::from("data/screenshots"));
+        assert_eq!(screenshot_dir("   "), PathBuf::from("data/screenshots"));
+    }
+
+    #[test]
+    fn screenshot_dir_uses_configured_path() {
+        assert_eq!(screenshot_dir("captures"), PathBuf::from("captures"));
     }
 
     #[test]

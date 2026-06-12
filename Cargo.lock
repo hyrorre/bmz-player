@@ -614,6 +614,7 @@ version = "0.1.0"
 dependencies = [
  "ab_glyph",
  "anyhow",
+ "arboard",
  "bmz-chart",
  "bmz-core",
  "bmz-font",

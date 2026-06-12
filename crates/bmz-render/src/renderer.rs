@@ -72,7 +72,7 @@ pub struct Renderer {
     bitmap_fonts: HashMap<String, BitmapFont>,
     gpu: Option<WgpuRenderer>,
     pending_egui: Option<EguiFrame>,
-    pending_screenshot_path: Option<PathBuf>,
+    pending_screenshot: Option<ScreenshotRequest>,
     play_dynamic_timer_runtime: DynamicTimerRuntime,
     select_dynamic_timer_runtime: DynamicTimerRuntime,
     decide_dynamic_timer_runtime: DynamicTimerRuntime,
@@ -331,6 +331,12 @@ struct ScreenshotCapture {
     format: wgpu::TextureFormat,
 }
 
+#[derive(Debug, Clone)]
+struct ScreenshotRequest {
+    path: PathBuf,
+    copy_to_clipboard: bool,
+}
+
 impl ScreenshotCapture {
     fn new(device: &wgpu::Device, width: u32, height: u32, format: wgpu::TextureFormat) -> Self {
         let bytes_per_pixel = 4;
@@ -367,7 +373,7 @@ impl ScreenshotCapture {
         );
     }
 
-    fn save_png(&self, device: &wgpu::Device, path: &Path) -> Result<()> {
+    fn read_rgba(&self, device: &wgpu::Device) -> Result<Vec<u8>> {
         let slice = self.buffer.slice(..);
         let (tx, rx) = mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |result| {
@@ -400,6 +406,10 @@ impl ScreenshotCapture {
             }
         }
 
+        Ok(rgba)
+    }
+
+    fn save_png(&self, path: &Path, rgba: &[u8]) -> Result<()> {
         if let Some(parent) = path.parent()
             && !parent.as_os_str().is_empty()
         {
@@ -408,13 +418,24 @@ impl ScreenshotCapture {
         }
         image::save_buffer_with_format(
             path,
-            &rgba,
+            rgba,
             self.width,
             self.height,
             image::ColorType::Rgba8,
             image::ImageFormat::Png,
         )
         .with_context(|| format!("failed to save screenshot {}", path.display()))
+    }
+
+    fn copy_to_clipboard(&self, rgba: &[u8]) -> Result<()> {
+        let mut clipboard = arboard::Clipboard::new().context("failed to open clipboard")?;
+        clipboard
+            .set_image(arboard::ImageData {
+                width: self.width as usize,
+                height: self.height as usize,
+                bytes: Cow::Borrowed(rgba),
+            })
+            .context("failed to copy screenshot to clipboard")
     }
 }
 
@@ -735,7 +756,7 @@ impl Renderer {
 
     pub fn render_last_plan(&mut self) -> Result<RenderSurfaceStatus> {
         let egui = self.pending_egui.take();
-        let screenshot_path = self.pending_screenshot_path.take();
+        let screenshot = self.pending_screenshot.take();
         let Some(gpu) = &mut self.gpu else {
             return Ok(RenderSurfaceStatus::SkippedNoSurface);
         };
@@ -749,7 +770,7 @@ impl Renderer {
             &self.fonts,
             &self.bitmap_fonts,
             egui.as_ref(),
-            screenshot_path.as_deref(),
+            screenshot.as_ref(),
         )?;
         self.last_frame_timings = Some(RenderFrameTimings {
             draw_us: gpu_timings.draw_us,
@@ -775,7 +796,13 @@ impl Renderer {
     }
 
     pub fn request_screenshot(&mut self, path: impl Into<PathBuf>) {
-        self.pending_screenshot_path = Some(path.into());
+        self.pending_screenshot =
+            Some(ScreenshotRequest { path: path.into(), copy_to_clipboard: false });
+    }
+
+    pub fn request_screenshot_with_clipboard(&mut self, path: impl Into<PathBuf>) {
+        self.pending_screenshot =
+            Some(ScreenshotRequest { path: path.into(), copy_to_clipboard: true });
     }
 
     pub fn last_scene(&self) -> Option<&AppSceneSnapshot> {
@@ -986,7 +1013,7 @@ impl WgpuRenderer {
         fonts: &HashMap<String, FontArc>,
         bitmap_fonts: &HashMap<String, BitmapFont>,
         egui: Option<&EguiFrame>,
-        screenshot_path: Option<&Path>,
+        screenshot_request: Option<&ScreenshotRequest>,
     ) -> Result<(RenderSurfaceStatus, GpuRenderTimings)> {
         let draw_start = Instant::now();
         let mut timings = GpuRenderTimings::default();
@@ -1183,7 +1210,7 @@ impl WgpuRenderer {
             None => Vec::new(),
         };
 
-        let screenshot = screenshot_path.map(|path| {
+        let screenshot = screenshot_request.map(|request| {
             let capture = ScreenshotCapture::new(
                 &self.device,
                 self.config.width,
@@ -1191,16 +1218,31 @@ impl WgpuRenderer {
                 self.config.format,
             );
             capture.copy_from_surface(&mut encoder, &output.texture);
-            (path.to_path_buf(), capture)
+            (request.clone(), capture)
         });
         let command_buffer = encoder.finish();
         timings.encode_us = encode_start.elapsed().as_micros();
         let queue_start = Instant::now();
         self.queue.submit(egui_staging.into_iter().chain(std::iter::once(command_buffer)));
         timings.queue_us = queue_start.elapsed().as_micros();
-        if let Some((path, capture)) = screenshot {
-            capture.save_png(&self.device, &path)?;
-            tracing::info!(path = %path.display(), "smoke screenshot saved");
+        if let Some((request, capture)) = screenshot {
+            let rgba = capture.read_rgba(&self.device)?;
+            capture.save_png(&request.path, &rgba)?;
+            if request.copy_to_clipboard {
+                match capture.copy_to_clipboard(&rgba) {
+                    Ok(()) => tracing::info!(
+                        path = %request.path.display(),
+                        "screenshot saved and copied to clipboard"
+                    ),
+                    Err(error) => tracing::warn!(
+                        %error,
+                        path = %request.path.display(),
+                        "screenshot saved but clipboard copy failed"
+                    ),
+                }
+            } else {
+                tracing::info!(path = %request.path.display(), "screenshot saved");
+            }
         }
         if let Some(frame) = egui {
             self.egui.free_textures(frame);

@@ -1563,6 +1563,28 @@ fn build_settings_panel(
                     );
                 });
 
+                egui::CollapsingHeader::new("スクリーンショット").show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("保存先");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut config.screenshot.dir)
+                                .desired_width(300.0)
+                                .hint_text("data/screenshots"),
+                        );
+                    });
+                    ui.horizontal(|ui| {
+                        if ui.button("フォルダを選択...").clicked()
+                            && let Some(dir) = rfd::FileDialog::new().pick_folder()
+                        {
+                            config.screenshot.dir = dir.to_string_lossy().into_owned();
+                        }
+                        ui.checkbox(
+                            &mut config.screenshot.copy_to_clipboard,
+                            "クリップボードにもコピー",
+                        );
+                    });
+                });
+
                 egui::CollapsingHeader::new("入力デバイス").show(ui, |ui| {
                     egui::ComboBox::from_label("バックエンド")
                         .selected_text(input_backend_label(&config.input.backend))
