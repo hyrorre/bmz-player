@@ -4408,6 +4408,12 @@ impl SkinDocument {
         if cell_w <= 0 || cell_h <= 0 {
             return Vec::new();
         }
+        let animation_rows = graph.divy.max(1);
+        let animation_row = if graph.cycle > 0 && animation_rows > 1 {
+            (elapsed.rem_euclid(graph.cycle) * animation_rows / graph.cycle).min(animation_rows - 1)
+        } else {
+            0
+        };
 
         let mut items = Vec::new();
         let mut filled = 0.0;
@@ -4422,9 +4428,10 @@ impl SkinDocument {
             }
             let rect = Rect { x: dst.x + filled, width, ..dst };
             let source_x = graph.x + cell_w * lamp_index as i32;
+            let source_y = graph.y + cell_h * animation_row;
             let uv = TextureRegion {
                 x: source_x as f32 / source_w,
-                y: graph.y as f32 / source_h,
+                y: source_y as f32 / source_h,
                 width: cell_w as f32 / source_w,
                 height: cell_h as f32 / source_h,
             };
@@ -16709,6 +16716,73 @@ mod tests {
                 .iter()
                 .any(|item| matches!(item, SkinRenderItem::Text { text, .. } if text == "Second"))
         );
+    }
+
+    #[test]
+    fn select_folder_distribution_graph_uses_cycle_animation_row() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 5,
+                "w": 100,
+                "h": 100,
+                "source": [{ "id": 1, "path": "graph.png" }],
+                "graph": [
+                    { "id": "graph-lamp", "src": 1, "x": 0, "y": 0, "w": 44, "h": 8, "divx": 11, "divy": 2, "cycle": 100, "type": -1 }
+                ],
+                "songlist": {
+                    "id": "songlist",
+                    "center": 0,
+                    "liston": [{ "id": "row", "dst": [{ "x": 10, "y": 40, "w": 80, "h": 20 }] }],
+                    "graph": { "id": "graph-lamp", "dst": [{ "x": 0, "y": 0, "w": 44, "h": 4 }] }
+                },
+                "destination": [{ "id": "songlist" }]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = mock_source("1", 44.0, 8.0);
+        let snapshot = SelectSnapshot {
+            time: TimeUs(50_000),
+            selected_index: 0,
+            rows: vec![SelectRowSnapshot {
+                index: 0,
+                is_folder: true,
+                kind: SelectRowKind::Folder,
+                folder_lamp_counts: {
+                    let mut counts = [0; 11];
+                    counts[5] = 1;
+                    counts[6] = 1;
+                    counts
+                },
+                ..SelectRowSnapshot::default()
+            }],
+            ..SelectSnapshot::default()
+        };
+
+        let items = document.select_render_items(&sources, &snapshot);
+        let graph_items: Vec<&SkinRenderItem> = items
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item,
+                    SkinRenderItem::Image {
+                        texture: SkinTextureId(9999),
+                        rect: Rect { y, height, .. },
+                        ..
+                    } if approx_eq(*y, 0.56) && approx_eq(*height, 0.04)
+                )
+            })
+            .collect();
+
+        assert_eq!(graph_items.len(), 2);
+        assert!(graph_items.iter().all(|item| matches!(
+            item,
+            SkinRenderItem::Image {
+                uv: TextureRegion { y, height, .. },
+                ..
+            } if approx_eq(*y, 0.5) && approx_eq(*height, 0.5)
+        )));
     }
 
     #[test]
