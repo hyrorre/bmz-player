@@ -159,7 +159,7 @@ impl SelectIrRanking {
         };
         self.cache
             .get(&sha256)
-            .map(|entry| entry.ir)
+            .map(|entry| entry.ir.clone())
             .unwrap_or(ResultIrSnapshot { state: SkinIrState::Loading, ..Default::default() })
     }
 

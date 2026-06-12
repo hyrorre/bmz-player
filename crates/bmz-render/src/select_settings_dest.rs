@@ -50,11 +50,11 @@ pub fn test_select_destination_visible(
     index: &SelectSettingsDestIndex,
     destination: &SkinDestinationDef,
     enabled_options: &[i32],
-    state: SkinDrawState,
+    state: &SkinDrawState,
     snapshot: &SelectSnapshot,
     selected_row: Option<&SelectRowSnapshot>,
-    eval_draw: impl FnOnce(&str, SkinDrawState) -> bool,
-    test_ops: impl Fn(&[i32], &[i32], SkinDrawState) -> bool,
+    eval_draw: impl FnOnce(&str, &SkinDrawState) -> bool,
+    test_ops: impl Fn(&[i32], &[i32], &SkinDrawState) -> bool,
 ) -> bool {
     if !eval_draw(&destination.draw, state) {
         return false;
@@ -77,8 +77,8 @@ pub fn test_select_destination_visible(
 fn config_allow_destination(
     destination: &SkinDestinationDef,
     enabled_options: &[i32],
-    state: SkinDrawState,
-    test_ops: &impl Fn(&[i32], &[i32], SkinDrawState) -> bool,
+    state: &SkinDrawState,
+    test_ops: &impl Fn(&[i32], &[i32], &SkinDrawState) -> bool,
 ) -> bool {
     let filter_ops: Vec<i32> =
         destination.op.iter().copied().filter(|op| !(1..=3).contains(op)).collect();
@@ -274,11 +274,11 @@ mod tests {
     use super::*;
     use crate::skin::{DestinationListEntry, SkinDrawState};
 
-    fn eval_draw(_: &str, _: SkinDrawState) -> bool {
+    fn eval_draw(_: &str, _: &SkinDrawState) -> bool {
         true
     }
 
-    fn test_ops(ops: &[i32], enabled_options: &[i32], state: SkinDrawState) -> bool {
+    fn test_ops(ops: &[i32], enabled_options: &[i32], state: &SkinDrawState) -> bool {
         crate::skin::test_skin_ops(ops, enabled_options, state)
     }
 
@@ -340,7 +340,7 @@ mod tests {
             &index,
             destination_at(&document, 0),
             &[],
-            state,
+            &state,
             &snapshot,
             Some(row),
             eval_draw,
@@ -350,7 +350,7 @@ mod tests {
             &index,
             destination_at(&document, 1),
             &[],
-            state,
+            &state,
             &snapshot,
             Some(row),
             eval_draw,
@@ -360,7 +360,7 @@ mod tests {
             &index,
             destination_at(&document, 2),
             &[],
-            state,
+            &state,
             &snapshot,
             Some(row),
             eval_draw,
@@ -372,7 +372,7 @@ mod tests {
             &index,
             destination_at(&document, 1),
             &[],
-            banner_state,
+            &banner_state,
             &snapshot,
             Some(row),
             eval_draw,
@@ -382,7 +382,7 @@ mod tests {
             &index,
             destination_at(&document, 2),
             &[],
-            banner_state,
+            &banner_state,
             &snapshot,
             Some(row),
             eval_draw,
@@ -477,7 +477,7 @@ mod tests {
             &index,
             bg,
             &[],
-            state,
+            &state,
             &snapshot,
             Some(&snapshot.rows[0]),
             eval_draw,
@@ -487,7 +487,7 @@ mod tests {
             &index,
             bpm_banner,
             &[],
-            state,
+            &state,
             &snapshot,
             Some(&snapshot.rows[0]),
             eval_draw,
@@ -547,7 +547,7 @@ mod tests {
             &index,
             title_op2,
             &[],
-            state,
+            &state,
             &snapshot,
             Some(row),
             eval_draw,
@@ -557,7 +557,7 @@ mod tests {
             &index,
             artist,
             &[],
-            state,
+            &state,
             &snapshot,
             Some(row),
             eval_draw,
@@ -567,7 +567,7 @@ mod tests {
             &index,
             dir,
             &[],
-            state,
+            &state,
             &snapshot,
             Some(row),
             eval_draw,
@@ -577,7 +577,7 @@ mod tests {
             &index,
             bpm_label,
             &[],
-            state,
+            &state,
             &snapshot,
             Some(row),
             eval_draw,
@@ -585,7 +585,7 @@ mod tests {
         ));
     }
 
-    fn destination_at<'a>(document: &'a SkinDocument, index: usize) -> &'a SkinDestinationDef {
+    fn destination_at(document: &SkinDocument, index: usize) -> &SkinDestinationDef {
         match &document.destination[index] {
             DestinationListEntry::Single(destination) => destination,
             DestinationListEntry::Conditional { .. } => panic!("unexpected conditional"),

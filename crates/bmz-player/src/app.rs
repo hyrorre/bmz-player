@@ -116,7 +116,9 @@ use crate::storage::replay::load_replay_for_chart_and_policy;
 use crate::storage::scan::{ScanProgress, ScanReport};
 use crate::storage::score_db::ScoreDatabase;
 use crate::storage::score_import::{ScoreImportRequest, import_scores};
-use crate::ui::{DebugInfo, EguiLayer, SceneSkinDefs, SkinCandidate, SkinCatalog, SkinConfigMeta};
+use crate::ui::{
+    DebugInfo, EguiLayer, EguiRunContext, SceneSkinDefs, SkinCandidate, SkinCatalog, SkinConfigMeta,
+};
 use bmz_render::skin::{
     DestinationListEntry, SkinAnimationDef, SkinClickHit, SkinClickTarget, SkinDestinationDef,
     SkinDocument, SkinDocumentTexture, SkinDstEntry, SkinManifest, SkinSliderHit,
@@ -133,17 +135,6 @@ pub async fn run_with_options(options: AppOptions) -> Result<()> {
     if boot.app_config.tables.auto_fetch_on_startup {
         fetch_configured_difficulty_tables(&mut boot).await;
     }
-
-    // システム SE / BGM 用の cpal ストリームを起動する。
-    // 開けない環境(ヘッドレス CI 等)はサイレントモードでアプリ起動を継続する。
-    let audio_runtime = match AudioRuntime::open(&boot.app_config.audio) {
-        Ok(runtime) => Some(runtime),
-        Err(error) => {
-            tracing::warn!(%error, "failed to open shared audio output; running without audio");
-            None
-        }
-    };
-    let system_audio = audio_runtime.as_ref().map(crate::audio::SystemAudio::open);
 
     let event_loop = EventLoop::new().context("failed to create event loop")?;
     event_loop.set_control_flow(ControlFlow::Poll);
@@ -163,7 +154,7 @@ pub async fn run_with_options(options: AppOptions) -> Result<()> {
 
     spawn_ir_sync_worker(&boot);
 
-    let mut app = WinitApp::new(boot, options, audio_runtime, system_audio, shutdown_requested)?;
+    let mut app = WinitApp::new(boot, options, None, None, shutdown_requested)?;
     tracing::info!("starting winit event loop");
     event_loop.run_app(&mut app).context("winit event loop failed")
 }
@@ -272,6 +263,8 @@ struct WinitApp {
     /// ドレインが完了するか、選曲復帰・次プレイ開始で解放される。
     draining_audio: Option<AppAudioOutput>,
     audio_runtime: Option<AudioRuntime>,
+    audio_output_open_attempted: bool,
+    first_frame_startup_completed: bool,
     /// Ctrl-C(SIGINT)受信フラグ。セットされたら `about_to_wait` で event loop を
     /// 正常終了させ、cpal/ASIO ストリームの Drop(停止・後処理)を確実に走らせる。
     shutdown_requested: Arc<AtomicBool>,
@@ -833,10 +826,16 @@ struct PendingUploadResult {
     uploaded: Result<UploadedSkin>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum DeferredBoot {
     Chart {
         chart_id: i64,
         replay_slot: Option<u8>,
+    },
+    Practice {
+        chart_id: i64,
+        start_time_ms: Option<u32>,
+        end_time_ms: Option<u32>,
     },
     /// `--boot-replay-file <PATH>`: リプレイファイル直接指定の再生。
     ReplayFile {
@@ -1326,8 +1325,6 @@ impl WinitApp {
         let arrange_option = arrange_option_from_profile(boot.profile_config.play.random);
         let target_option = target_option_from_profile(boot.profile_config.play.target);
         let select_keys = SelectKeyBindings::from_profile(&boot.profile_config.input);
-        let now = Instant::now();
-
         let mut renderer = Renderer::default();
         let skin_catalog = scan_skin_catalog();
         let (skin_decode_tx, skin_decode_rx) = mpsc::channel::<PendingSkinResult>();
@@ -1356,6 +1353,7 @@ impl WinitApp {
             &boot.profile_config.skin.decide_files,
             &boot.profile_config.skin.result_files,
         );
+        let now = Instant::now();
         let pending_play_skin = false;
 
         let gilrs = if boot.app_config.input.gamepad_enabled {
@@ -1381,38 +1379,11 @@ impl WinitApp {
         // - `profile.[system_sound].bgm_dir` / `se_dir` が指定されていれば再帰スキャンして
         //   セットを集め、その中からランダム選択する(beatoraja 互換)。
         // - 空なら scan を省略し、`default_sound_dir` だけにフォールバックする。
-        let system_sound = system_audio.as_ref().map(|audio| {
-            let cfg = &boot.profile_config.system_sound;
-            let bgm_candidates = if cfg.bgm_dir.is_empty() {
-                Vec::new()
-            } else {
-                crate::system_sound::scan_sound_sets(
-                    Path::new(&cfg.bgm_dir),
-                    crate::system_sound::SoundType::Select.file_name(),
-                )
-            };
-            let se_candidates = if cfg.se_dir.is_empty() {
-                Vec::new()
-            } else {
-                crate::system_sound::scan_sound_sets(
-                    Path::new(&cfg.se_dir),
-                    crate::system_sound::SoundType::ResultClear.file_name(),
-                )
-            };
-            let default_dir = if cfg.default_sound_dir.is_empty() {
-                None
-            } else {
-                Some(PathBuf::from(&cfg.default_sound_dir))
-            };
-            let selection = crate::system_sound::select_random_sound_set(
-                &bgm_candidates,
-                &se_candidates,
-                default_dir,
-            );
-            crate::system_sound_manager::SystemSoundManager::new(audio.engine(), &selection)
-        });
+        let system_sound =
+            system_audio.as_ref().map(|audio| system_sound_manager_from_boot(&boot, audio));
         let select_preview =
             system_audio.as_ref().map(|audio| SelectChartPreview::new(audio.engine()));
+        let audio_output_open_attempted = audio_runtime.is_some();
 
         let mut app = Self {
             boot,
@@ -1422,6 +1393,8 @@ impl WinitApp {
             finished_course: None,
             draining_audio: None,
             audio_runtime,
+            audio_output_open_attempted,
+            first_frame_startup_completed: false,
             shutdown_requested,
             finished_play: None,
             result_ir: None,
@@ -1565,56 +1538,6 @@ impl WinitApp {
             app.result_key5_held = false;
             app.result_key7_held = false;
             app.result_scene_started_at = Instant::now();
-        } else if let Some(chart_id) = boot_chart_id {
-            if options.boot_practice {
-                tracing::info!(chart_id, "booting into practice mode");
-                app.enter_practice(
-                    chart_id,
-                    PracticeCliOverrides {
-                        start_time_ms: options.practice_start_ms,
-                        end_time_ms: options.practice_end_ms,
-                    },
-                );
-            } else {
-                tracing::info!(chart_id, "booting directly into chart");
-                if let Some(slot) = options.boot_replay_slot {
-                    if !app.try_start_replay_for_chart(chart_id, slot) {
-                        tracing::warn!(slot, "boot replay slot empty; falling back to normal play");
-                        app.start_chart(chart_id);
-                    }
-                } else {
-                    app.start_chart(chart_id);
-                }
-            }
-        } else if let Some(course_id) = options.boot_course_replay_id {
-            // `--boot-course-replay <COURSE_ID>` replays the most recent
-            // attempt of the given course on boot.
-            match app.boot.library_db.latest_course_score_id(course_id) {
-                Ok(Some(course_score_id)) => {
-                    tracing::info!(course_id, course_score_id, "booting into course replay");
-                    app.start_course_replay(course_id, course_score_id);
-                }
-                Ok(None) => {
-                    tracing::warn!(
-                        course_id,
-                        "no saved course attempt; --boot-course-replay has nothing to replay"
-                    );
-                }
-                Err(error) => {
-                    tracing::error!(
-                        %error,
-                        course_id,
-                        "failed to look up latest course score for replay boot"
-                    );
-                }
-            }
-        } else if let Some(course_id) = options.boot_course_id {
-            // `--boot-course <COURSE_ID>` starts the given course fresh on
-            // boot.  Symmetric to --boot-course-replay but no saved-attempt
-            // lookup; useful for smoke-testing the course play flow without
-            // a prior recording.
-            tracing::info!(course_id, "booting into fresh course");
-            app.start_course(course_id);
         }
 
         Ok(app)
@@ -1650,10 +1573,6 @@ impl WinitApp {
                 // surface 接続後 (= GPU device/queue 利用可能) に upload worker を起動する。
                 // decode 結果はそれまで skin_decode_rx にバッファされ、起動後にドレインされる。
                 self.start_skin_upload_worker();
-                self.start_deferred_boot();
-                if self.current_scene_kind() == AppSceneKind::Result {
-                    self.ensure_skin_ready(SkinKind::Result);
-                }
                 window.request_redraw();
                 self.egui = Some(EguiLayer::new(&window, self.boot.profile_config.ui.show_fps));
                 self.window = Some(window);
@@ -1680,6 +1599,10 @@ impl WinitApp {
                 } else {
                     self.start_chart(chart_id);
                 }
+            }
+            DeferredBoot::Practice { chart_id, start_time_ms, end_time_ms } => {
+                tracing::info!(chart_id, "booting into practice mode");
+                self.enter_practice(chart_id, PracticeCliOverrides { start_time_ms, end_time_ms });
             }
             DeferredBoot::ReplayFile { path } => {
                 tracing::info!(%path, "booting replay from file");
@@ -2451,10 +2374,14 @@ impl WinitApp {
     }
 
     fn play_select_preview_sample(&self, sample: DecodedSample, volume_factor: f32) -> bool {
-        self.select_preview.as_ref().is_some_and(|preview| {
+        let loaded = self.select_preview.as_ref().is_some_and(|preview| {
             preview
                 .play_sample(sample, self.select_preview_volume() * volume_factor.clamp(0.0, 1.0))
-        })
+        });
+        if loaded {
+            self.start_audio_output_stream();
+        }
+        loaded
     }
 
     fn begin_select_preview_fade_in(&mut self) {
@@ -5417,6 +5344,45 @@ impl WinitApp {
         app_config
     }
 
+    /// ウィンドウと renderer surface の準備後に、初めて共有 cpal ストリームを開く。
+    /// 起動ロード中に音声デバイスを start して、デバイス側の初期化音が先に鳴るのを避ける。
+    fn ensure_audio_output(&mut self) {
+        if self.audio_runtime.is_some() || self.audio_output_open_attempted {
+            return;
+        }
+        self.audio_output_open_attempted = true;
+
+        match AudioRuntime::open(&self.boot.app_config.audio) {
+            Ok(runtime) => {
+                self.install_system_audio(&runtime, None);
+                self.audio_runtime = Some(runtime);
+                tracing::info!("audio output opened after window initialization");
+            }
+            Err(error) => {
+                tracing::warn!(%error, "failed to open shared audio output; running without audio");
+            }
+        }
+    }
+
+    fn install_system_audio(
+        &mut self,
+        runtime: &AudioRuntime,
+        system_engine: Option<bmz_audio::backend::cpal::SharedAudioEngine>,
+    ) {
+        let system_audio = match system_engine {
+            Some(engine) => crate::audio::SystemAudio::reattach(runtime, engine),
+            None => crate::audio::SystemAudio::open(runtime),
+        };
+
+        if self.system_sound.is_none() {
+            self.system_sound = Some(system_sound_manager_from_boot(&self.boot, &system_audio));
+        }
+        if self.select_preview.is_none() {
+            self.select_preview = Some(SelectChartPreview::new(system_audio.engine()));
+        }
+        self.system_audio = Some(system_audio);
+    }
+
     /// 設定パネルの「適用」で、現在の `AppConfig` の音声設定を使って共有 cpal
     /// ストリームを開き直す。ASIO は排他なので新ストリームを開く前に旧ストリームを
     /// 完全に閉じる。プレイ中・プレイ開始待ち中はストリーム差し替えが危険なため何もしない。
@@ -5437,9 +5403,7 @@ impl WinitApp {
 
         match AudioRuntime::open(&self.boot.app_config.audio) {
             Ok(runtime) => {
-                if let Some(engine) = system_engine {
-                    self.system_audio = Some(crate::audio::SystemAudio::reattach(&runtime, engine));
-                }
+                self.install_system_audio(&runtime, system_engine);
                 self.audio_runtime = Some(runtime);
                 tracing::info!("audio output reopened with current settings");
             }
@@ -6857,6 +6821,16 @@ impl WinitApp {
             document_textures,
             preserve_play_dynamic_timers,
         );
+        if kind == SkinKind::Select && matches!(self.view_state(), AppViewState::Select) {
+            self.restart_select_scene_timers();
+        }
+    }
+
+    fn restart_select_scene_timers(&mut self) {
+        let now = Instant::now();
+        self.select_scene_started_at = now;
+        self.select_bar_started_at = now;
+        self.option_panel_started_at = now;
     }
 
     fn advance_active_play(&mut self) {
@@ -7324,16 +7298,18 @@ impl WinitApp {
         };
         let output = egui.run(
             &window,
-            &info,
-            &mut self.boot.app_config,
-            &mut self.boot.profile_config,
-            &skin_meta,
-            &self.skin_catalog,
-            course_result.as_ref(),
-            course_preview.as_ref(),
-            practice_panel_ctx.as_mut(),
-            result_ir_panel,
-            &self.boot.profile_paths.root_dir,
+            EguiRunContext {
+                info: &info,
+                app_config: &mut self.boot.app_config,
+                profile_config: &mut self.boot.profile_config,
+                skin_meta: &skin_meta,
+                skin_catalog: &self.skin_catalog,
+                course_result: course_result.as_ref(),
+                course_preview: course_preview.as_ref(),
+                practice: practice_panel_ctx.as_mut(),
+                result_ir: result_ir_panel,
+                profile_root: &self.boot.profile_paths.root_dir,
+            },
         );
         self.renderer.set_egui_frame(output.frame);
         self.sync_realtime_profile_settings();
@@ -7586,7 +7562,7 @@ impl WinitApp {
             if source.failed || !source.active {
                 continue;
             }
-            if let Some(state) = runtime_state
+            if let Some(state) = runtime_state.as_ref()
                 && !skin_video_source_runtime_visible(source, state)
             {
                 // 現在のシーン状態では非表示。デコード中なら止めて開放する。
@@ -7708,6 +7684,7 @@ impl WinitApp {
             self.sync_select_preview_audio();
             self.update_select_preview_fade();
         }
+        self.start_scene_timers_before_snapshot(select_view, result_view);
         let video_start = Instant::now();
         self.update_current_skin_video_sources();
         let video_us = video_start.elapsed().as_micros();
@@ -7804,6 +7781,18 @@ impl WinitApp {
         self.active_play.as_ref().map(|active| active.running.session.hispeed)
     }
 
+    fn start_scene_timers_before_snapshot(&mut self, select_view: bool, result_view: bool) {
+        match self.last_scene_kind {
+            Some(AppSceneKind::Select) if select_view => {}
+            _ if select_view => self.restart_select_scene_timers(),
+            Some(AppSceneKind::Result) if result_view => {}
+            _ if result_view => {
+                self.result_scene_started_at = Instant::now();
+            }
+            _ => {}
+        }
+    }
+
     fn active_lane_state(&self) -> Option<ActiveLaneState> {
         self.active_play.as_ref().map(|active| {
             let session = &active.running.session;
@@ -7849,14 +7838,6 @@ impl WinitApp {
             self.stop_select_preview();
         }
         self.fire_scene_transition_sounds(scene_kind);
-        if scene_kind == AppSceneKind::Select {
-            let now = Instant::now();
-            self.select_scene_started_at = now;
-            self.select_bar_started_at = now;
-        }
-        if scene_kind == AppSceneKind::Result {
-            self.result_scene_started_at = Instant::now();
-        }
         if let Some(window) = &self.window {
             window.set_title(window_title_for_scene(scene_kind));
         }
@@ -7902,6 +7883,16 @@ impl WinitApp {
                 sound_type,
                 system_sound_volume_from_mix(&self.boot.profile_config.audio_mix, sound_type),
             );
+            self.start_audio_output_stream();
+        }
+    }
+
+    fn start_audio_output_stream(&self) {
+        let Some(runtime) = &self.audio_runtime else {
+            return;
+        };
+        if let Err(error) = runtime.play() {
+            tracing::warn!(%error, "failed to start shared audio output stream");
         }
     }
 
@@ -7977,6 +7968,37 @@ fn settings_browse_move_control(control: &str, bindings: &SettingsBindings) -> O
         _ if bindings.is_decrease(control) => Some(SelectMove::Previous),
         _ => None,
     }
+}
+
+fn system_sound_manager_from_boot(
+    boot: &BootstrappedApp,
+    audio: &crate::audio::SystemAudio,
+) -> crate::system_sound_manager::SystemSoundManager {
+    let cfg = &boot.profile_config.system_sound;
+    let bgm_candidates = if cfg.bgm_dir.is_empty() {
+        Vec::new()
+    } else {
+        crate::system_sound::scan_sound_sets(
+            Path::new(&cfg.bgm_dir),
+            crate::system_sound::SoundType::Select.file_name(),
+        )
+    };
+    let se_candidates = if cfg.se_dir.is_empty() {
+        Vec::new()
+    } else {
+        crate::system_sound::scan_sound_sets(
+            Path::new(&cfg.se_dir),
+            crate::system_sound::SoundType::ResultClear.file_name(),
+        )
+    };
+    let default_dir = if cfg.default_sound_dir.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(&cfg.default_sound_dir))
+    };
+    let selection =
+        crate::system_sound::select_random_sound_set(&bgm_candidates, &se_candidates, default_dir);
+    crate::system_sound_manager::SystemSoundManager::new(audio.engine(), &selection)
 }
 
 fn system_sound_volume_from_mix(
@@ -8317,7 +8339,7 @@ fn skin_video_source_gating(document: &SkinDocument, source_id: &str) -> SkinVid
 /// `op_sets` が空 (= destination から参照されていない) 場合は常時可視。
 fn skin_video_source_runtime_visible(
     source: &ActiveSkinVideoSource,
-    state: bmz_render::skin::SkinDrawState,
+    state: &bmz_render::skin::SkinDrawState,
 ) -> bool {
     if source.gating_op_sets.is_empty() {
         return true;
@@ -8787,6 +8809,15 @@ impl ApplicationHandler for WinitApp {
                 self.advance_result_exit();
                 self.run_egui_frame();
                 self.render_current_scene();
+                if !self.first_frame_startup_completed {
+                    self.first_frame_startup_completed = true;
+                    self.ensure_audio_output();
+                    self.start_deferred_boot();
+                    if self.current_scene_kind() == AppSceneKind::Result {
+                        self.ensure_skin_ready(SkinKind::Result);
+                    }
+                    self.last_scene_kind = None;
+                }
                 self.advance_active_play();
                 self.advance_draining_audio();
                 // 次フレームの再描画をここで要求して描画ループを自走させる。
@@ -8841,6 +8872,13 @@ fn now_unix_seconds() -> i64 {
 
 fn deferred_boot_action(boot_chart_id: Option<i64>, options: &AppOptions) -> Option<DeferredBoot> {
     if let Some(chart_id) = boot_chart_id {
+        if options.boot_practice {
+            return Some(DeferredBoot::Practice {
+                chart_id,
+                start_time_ms: options.practice_start_ms,
+                end_time_ms: options.practice_end_ms,
+            });
+        }
         return Some(DeferredBoot::Chart { chart_id, replay_slot: options.boot_replay_slot });
     }
     if let Some(path) = options.boot_replay_file.clone() {
@@ -11776,8 +11814,8 @@ mod tests {
             total_notes: 9,
             ..SkinDrawState::default()
         };
-        assert!(skin_video_source_runtime_visible(&bg_aaa, aaa_state));
-        assert!(!skin_video_source_runtime_visible(&bg_a, aaa_state));
+        assert!(skin_video_source_runtime_visible(&bg_aaa, &aaa_state));
+        assert!(!skin_video_source_runtime_visible(&bg_a, &aaa_state));
 
         // 13/18 = 72.2% は rank index 2 (= A), op 302 に対応する。
         let a_state = SkinDrawState {
@@ -11786,8 +11824,8 @@ mod tests {
             total_notes: 9,
             ..SkinDrawState::default()
         };
-        assert!(skin_video_source_runtime_visible(&bg_a, a_state));
-        assert!(!skin_video_source_runtime_visible(&bg_aaa, a_state));
+        assert!(skin_video_source_runtime_visible(&bg_a, &a_state));
+        assert!(!skin_video_source_runtime_visible(&bg_aaa, &a_state));
     }
 
     #[test]
@@ -11844,7 +11882,7 @@ mod tests {
             result_ranktime_ms: document.ranktime,
             failed: false,
         };
-        assert!(skin_video_source_runtime_visible(&source, aaa_state));
+        assert!(skin_video_source_runtime_visible(&source, &aaa_state));
 
         document.user_selected_options = Some(vec![921]);
         let gating = skin_video_source_gating(&document, "BG_AAA");
@@ -11861,7 +11899,7 @@ mod tests {
             result_ranktime_ms: document.ranktime,
             failed: false,
         };
-        assert!(!skin_video_source_runtime_visible(&disabled_source, aaa_state));
+        assert!(!skin_video_source_runtime_visible(&disabled_source, &aaa_state));
     }
 
     #[test]
@@ -12627,6 +12665,31 @@ mod tests {
         assert_eq!(window_title_for_scene(AppSceneKind::Select), "bmz-player - Select");
         assert_eq!(window_title_for_scene(AppSceneKind::Play), "bmz-player - Play");
         assert_eq!(window_title_for_scene(AppSceneKind::Result), "bmz-player - Result");
+    }
+
+    #[test]
+    fn deferred_boot_action_keeps_practice_boot_after_window_init() {
+        let mut options = AppOptions {
+            boot_practice: true,
+            practice_start_ms: Some(5_000),
+            practice_end_ms: Some(120_000),
+            ..AppOptions::default()
+        };
+
+        assert_eq!(
+            deferred_boot_action(Some(42), &options),
+            Some(DeferredBoot::Practice {
+                chart_id: 42,
+                start_time_ms: Some(5_000),
+                end_time_ms: Some(120_000),
+            })
+        );
+
+        options.boot_practice = false;
+        assert_eq!(
+            deferred_boot_action(Some(42), &options),
+            Some(DeferredBoot::Chart { chart_id: 42, replay_slot: None })
+        );
     }
 
     #[test]

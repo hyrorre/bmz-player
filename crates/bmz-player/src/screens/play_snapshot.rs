@@ -27,9 +27,9 @@ const SCRATCH_ANGLE_PERIOD_MS: i64 = 2_160;
 const SCRATCH_ANGLE_DEGREES_DIVISOR: i64 = 6;
 pub type BgaFrameCatalog = HashMap<BgaAssetId, DisplayBgaFrame>;
 
-/// playstart 中 (chart 時刻 < 0) は skin timer / turntable を壁時計へ寄せる。
-pub fn skin_visual_time(chart_time: TimeUs, play_elapsed: TimeUs) -> TimeUs {
-    if chart_time.0 < 0 { play_elapsed } else { chart_time }
+/// Turntable offset is driven by scene elapsed time, like beatoraja's scratch angle offset.
+pub fn skin_visual_time(_chart_time: TimeUs, play_elapsed: TimeUs) -> TimeUs {
+    play_elapsed
 }
 
 /// chart 時刻と大きく乖離した wall-clock 系 key 時刻を検出する。
@@ -1511,6 +1511,22 @@ mod tests {
         let session =
             build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
         let mut snapshot = build_render_snapshot(&session, TimeUs(-1_000_000), &[], None);
+        snapshot.play_elapsed_time = TimeUs(6_000_000);
+
+        refresh_play_skin_visuals(&mut snapshot, &session);
+
+        assert_eq!(
+            snapshot.skin_offsets.get(SCRATCH_ANGLE_OFFSET_1P),
+            Some(SkinOffsetValue { r: 80, ..SkinOffsetValue::default() })
+        );
+    }
+
+    #[test]
+    fn refresh_play_skin_visuals_keeps_turntable_angle_after_chart_start() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let session =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+        let mut snapshot = build_render_snapshot(&session, TimeUs(0), &[], None);
         snapshot.play_elapsed_time = TimeUs(6_000_000);
 
         refresh_play_skin_visuals(&mut snapshot, &session);

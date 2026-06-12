@@ -186,6 +186,20 @@ pub struct DebugInfo {
     pub height: u32,
 }
 
+/// `EguiLayer::run` の 1 フレーム入力。
+pub struct EguiRunContext<'a, 'practice> {
+    pub info: &'a DebugInfo,
+    pub app_config: &'a mut AppConfig,
+    pub profile_config: &'a mut ProfileConfig,
+    pub skin_meta: &'a SkinConfigMeta,
+    pub skin_catalog: &'a SkinCatalog,
+    pub course_result: Option<&'a CourseResultSummary>,
+    pub course_preview: Option<&'a SelectCourseRow>,
+    pub practice: Option<&'a mut PracticePanelContext<'practice>>,
+    pub result_ir: Option<&'a mut crate::screens::result_ir::ResultIrState>,
+    pub profile_root: &'a Path,
+}
+
 /// `EguiLayer::run` の 1 フレーム出力。
 pub struct EguiOutput {
     /// renderer へ渡す描画データ。
@@ -428,20 +442,19 @@ impl EguiLayer {
     }
 
     /// 1 フレーム分の UI を構築し、描画データと要求されたアクションを返す。
-    pub fn run(
-        &mut self,
-        window: &Window,
-        info: &DebugInfo,
-        app_config: &mut AppConfig,
-        profile_config: &mut ProfileConfig,
-        skin_meta: &SkinConfigMeta,
-        skin_catalog: &SkinCatalog,
-        course_result: Option<&CourseResultSummary>,
-        course_preview: Option<&SelectCourseRow>,
-        mut practice: Option<&mut PracticePanelContext<'_>>,
-        mut result_ir: Option<&mut crate::screens::result_ir::ResultIrState>,
-        profile_root: &std::path::Path,
-    ) -> EguiOutput {
+    pub fn run(&mut self, window: &Window, context: EguiRunContext<'_, '_>) -> EguiOutput {
+        let EguiRunContext {
+            info,
+            app_config,
+            profile_config,
+            skin_meta,
+            skin_catalog,
+            course_result,
+            course_preview,
+            mut practice,
+            mut result_ir,
+            profile_root,
+        } = context;
         let raw_input = self.state.take_egui_input(window);
         let ctx = self.ctx.clone();
         let show_debug = &mut self.show_debug;

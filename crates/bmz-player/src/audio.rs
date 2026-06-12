@@ -26,7 +26,7 @@ use crate::video_bga::ActiveVideoBgaDecoder;
 
 pub struct AppAudioOutput {
     pub engine: SharedAudioEngine,
-    _runtime: AudioRuntime,
+    runtime: AudioRuntime,
     source: CpalOutputSource,
 }
 
@@ -68,6 +68,7 @@ impl AppAudioOutput {
 
     pub fn play(&mut self, chart_zero_time: TimeUs) -> Result<()> {
         self.source.play(chart_zero_time);
+        self.runtime.play().context("failed to start shared audio output stream")?;
         Ok(())
     }
 }
@@ -89,10 +90,13 @@ impl RunningPlaySession {
 impl AudioRuntime {
     pub fn open(config: &AudioConfig) -> Result<Self> {
         let output_config = cpal_output_config(config)?;
-        let mut output = CpalBackend::open_shared(output_config)
+        let output = CpalBackend::open_shared(output_config)
             .context("failed to open shared audio output stream")?;
-        output.play().context("failed to start shared audio output stream")?;
         Ok(Self { output })
+    }
+
+    pub fn play(&self) -> Result<()> {
+        self.output.play().context("failed to start shared audio output stream")
     }
 
     pub fn sample_rate(&self) -> u32 {
@@ -107,7 +111,7 @@ impl AudioRuntime {
 pub fn open_app_audio_output(runtime: &AudioRuntime, engine: AudioEngine) -> AppAudioOutput {
     let engine = Arc::new(Mutex::new(engine));
     let source = runtime.add_source(Arc::clone(&engine));
-    AppAudioOutput { engine, _runtime: runtime.clone(), source }
+    AppAudioOutput { engine, runtime: runtime.clone(), source }
 }
 
 /// アプリ全体で常時 ON のシステム SE / BGM 出力。
