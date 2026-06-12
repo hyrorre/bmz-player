@@ -7,7 +7,8 @@ use bmz_gameplay::session::{PlayAudioMix, PlayOffsets};
 
 use super::play_input::lane_binding_for_key_mode;
 use super::profile_config::{
-    GaugeAutoShiftConfig, GaugeTypeConfig, LaneConfig, ProfileConfig, ProfileInputConfig,
+    BottomShiftableGaugeConfig, GaugeAutoShiftConfig, GaugeTypeConfig, LaneConfig, ProfileConfig,
+    ProfileInputConfig,
 };
 
 pub const DEFAULT_JUDGE_WINDOW: JudgeWindow = JudgeWindow {
@@ -76,6 +77,14 @@ pub fn gauge_auto_shift_from_config(
             GaugeAutoShiftConfig::BestClear => GaugeAutoShiftMode::BestClear,
             GaugeAutoShiftConfig::SelectToUnder => GaugeAutoShiftMode::SelectToUnder,
         }
+    }
+}
+
+pub fn bottom_shiftable_gauge_from_config(config: BottomShiftableGaugeConfig) -> GaugeType {
+    match config {
+        BottomShiftableGaugeConfig::AssistEasy => GaugeType::AssistEasy,
+        BottomShiftableGaugeConfig::Easy => GaugeType::Easy,
+        BottomShiftableGaugeConfig::Normal => GaugeType::Normal,
     }
 }
 

@@ -187,6 +187,7 @@ mod tests {
             original: GaugeType::Normal,
             auto_shift: false,
             auto_shift_mode: crate::gauge::GaugeAutoShiftMode::Off,
+            bottom_shiftable_gauge: GaugeType::AssistEasy,
             gauges: vec![SingleGaugeState {
                 definition: GaugeRuntimeDefinition {
                     gauge_type: GaugeType::Normal,

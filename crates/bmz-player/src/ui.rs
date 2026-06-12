@@ -21,11 +21,11 @@ use crate::config::app_config::{
     InputBackendKind, LogLevel, PresentModeConfig, RendererBackend, WindowMode,
 };
 use crate::config::profile_config::{
-    AssistOptionConfig, BgaExpandConfig, BgaModeConfig, FastSlowDisplayScope, GaugeAutoShiftConfig,
-    GaugeTypeConfig, HispeedModeConfig, IrCredentialStoreConfig, IrProviderConfig,
-    IrProviderRoleConfig, IrSendPolicyConfig, JudgeAlgorithmConfig, LaneEffectConfig,
-    ProfileConfig, RandomOptionConfig, ReplaySlotRule, ScratchInputMode, SkinConfig,
-    SkinHistoryEntryConfig, SkinOffsetConfig, TargetOptionConfig,
+    AssistOptionConfig, BgaExpandConfig, BgaModeConfig, BottomShiftableGaugeConfig,
+    FastSlowDisplayScope, GaugeAutoShiftConfig, GaugeTypeConfig, HispeedModeConfig,
+    IrCredentialStoreConfig, IrProviderConfig, IrProviderRoleConfig, IrSendPolicyConfig,
+    JudgeAlgorithmConfig, LaneEffectConfig, ProfileConfig, RandomOptionConfig, ReplaySlotRule,
+    ScratchInputMode, SkinConfig, SkinHistoryEntryConfig, SkinOffsetConfig, TargetOptionConfig,
 };
 use crate::ln_policy::LnPolicySetting;
 use crate::practice_ui::{PracticePanelContext, build_practice_panel};
@@ -1965,6 +1965,23 @@ fn build_profile_settings_panel(
                                 );
                             }
                         });
+                    egui::ComboBox::from_label("GAS 下限ゲージ")
+                        .selected_text(bottom_shiftable_gauge_label(
+                            profile.play.bottom_shiftable_gauge,
+                        ))
+                        .show_ui(ui, |ui| {
+                            for (value, label) in [
+                                (BottomShiftableGaugeConfig::AssistEasy, "ASSIST EASY"),
+                                (BottomShiftableGaugeConfig::Easy, "EASY"),
+                                (BottomShiftableGaugeConfig::Normal, "NORMAL"),
+                            ] {
+                                ui.selectable_value(
+                                    &mut profile.play.bottom_shiftable_gauge,
+                                    value,
+                                    label,
+                                );
+                            }
+                        });
                     egui::ComboBox::from_label("ランダム")
                         .selected_text(random_label(profile.play.random))
                         .show_ui(ui, |ui| {
@@ -2394,6 +2411,14 @@ fn gauge_auto_shift_label(value: GaugeAutoShiftConfig) -> &'static str {
         GaugeAutoShiftConfig::HardToGroove => "HARD->GROOVE",
         GaugeAutoShiftConfig::BestClear => "BEST CLEAR",
         GaugeAutoShiftConfig::SelectToUnder => "SELECT UNDER",
+    }
+}
+
+fn bottom_shiftable_gauge_label(value: BottomShiftableGaugeConfig) -> &'static str {
+    match value {
+        BottomShiftableGaugeConfig::AssistEasy => "ASSIST EASY",
+        BottomShiftableGaugeConfig::Easy => "EASY",
+        BottomShiftableGaugeConfig::Normal => "NORMAL",
     }
 }
 

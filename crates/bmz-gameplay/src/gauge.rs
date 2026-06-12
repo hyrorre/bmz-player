@@ -109,6 +109,7 @@ pub struct GaugeState {
     pub original: GaugeType,
     pub auto_shift: bool,
     pub auto_shift_mode: GaugeAutoShiftMode,
+    pub bottom_shiftable_gauge: GaugeType,
     pub gauges: Vec<SingleGaugeState>,
 }
 
@@ -154,6 +155,7 @@ impl GaugeState {
             original: selected,
             auto_shift: false,
             auto_shift_mode: GaugeAutoShiftMode::Off,
+            bottom_shiftable_gauge: GaugeType::AssistEasy,
             gauges,
         }
     }
@@ -220,6 +222,10 @@ impl GaugeState {
         state.auto_shift = mode != GaugeAutoShiftMode::Off;
         state.auto_shift_mode = mode;
         state
+    }
+
+    pub fn set_bottom_shiftable_gauge(&mut self, gauge_type: GaugeType) {
+        self.bottom_shiftable_gauge = normalize_bottom_shiftable_gauge(gauge_type);
     }
 
     /// Overrides every gauge's starting value with `value`, clamped to
@@ -310,14 +316,35 @@ impl GaugeState {
                 }
             }
             GaugeAutoShiftMode::BestClear | GaugeAutoShiftMode::SelectToUnder => {
-                while self.current().value <= self.current().definition.min {
-                    let Some(next) = next_auto_shift_gauge(self.selected) else {
-                        break;
-                    };
-                    self.selected = next;
-                }
+                self.selected = self.best_current_auto_shift_gauge();
             }
         }
+    }
+
+    fn best_current_auto_shift_gauge(&self) -> GaugeType {
+        let top_rank = match self.auto_shift_mode {
+            GaugeAutoShiftMode::BestClear => auto_shift_result_rank(GaugeType::Hazard),
+            GaugeAutoShiftMode::SelectToUnder => auto_shift_result_rank(self.original),
+            GaugeAutoShiftMode::Off
+            | GaugeAutoShiftMode::Continue
+            | GaugeAutoShiftMode::HardToGroove => auto_shift_result_rank(self.selected),
+        };
+        let current_rank = auto_shift_result_rank(self.selected);
+        let bottom_rank = auto_shift_result_rank(self.bottom_shiftable_gauge);
+        let start_rank = current_rank.min(bottom_rank);
+
+        AUTO_SHIFT_RESULT_ORDER
+            .iter()
+            .copied()
+            .filter(|gauge_type| {
+                let rank = auto_shift_result_rank(*gauge_type);
+                rank >= start_rank && rank <= top_rank
+            })
+            .find(|gauge_type| {
+                self.gauge(*gauge_type)
+                    .is_some_and(|gauge| gauge.value > gauge.definition.min && gauge.is_qualified())
+            })
+            .unwrap_or_else(|| auto_shift_gauge_for_rank(start_rank))
     }
 
     fn gauge(&self, gauge_type: GaugeType) -> Option<&SingleGaugeState> {
@@ -348,12 +375,18 @@ fn auto_shift_result_rank(gauge_type: GaugeType) -> u8 {
     }
 }
 
-fn next_auto_shift_gauge(current: GaugeType) -> Option<GaugeType> {
-    match current {
-        GaugeType::Hazard => Some(GaugeType::ExHard),
-        GaugeType::ExHard => Some(GaugeType::Hard),
-        GaugeType::Hard => Some(GaugeType::Normal),
-        _ => None,
+fn normalize_bottom_shiftable_gauge(gauge_type: GaugeType) -> GaugeType {
+    match gauge_type {
+        GaugeType::AssistEasy | GaugeType::Easy | GaugeType::Normal => gauge_type,
+        _ => GaugeType::AssistEasy,
+    }
+}
+
+fn auto_shift_gauge_for_rank(rank: u8) -> GaugeType {
+    match rank {
+        0 => GaugeType::AssistEasy,
+        1 => GaugeType::Easy,
+        _ => GaugeType::Normal,
     }
 }
 
@@ -1572,5 +1605,29 @@ mod tests {
         let result_gauge = gauge.result_gauge();
 
         assert_eq!(result_gauge.definition.gauge_type, GaugeType::Hard);
+    }
+
+    #[test]
+    fn auto_shift_respects_bottom_shiftable_gauge() {
+        let mut gauge = GaugeState::new_with_auto_shift(
+            GaugeType::ExHard,
+            GaugeAutoShiftMode::BestClear,
+            160.0,
+            1000,
+        );
+        gauge.set_bottom_shiftable_gauge(GaugeType::Normal);
+        for gauge in &mut gauge.gauges {
+            gauge.value = 0.0;
+        }
+        gauge
+            .gauges
+            .iter_mut()
+            .find(|gauge| gauge.definition.gauge_type == GaugeType::Easy)
+            .unwrap()
+            .value = 100.0;
+
+        gauge.apply_judge(Judge::Poor, 1.0);
+
+        assert_eq!(gauge.selected, GaugeType::Normal);
     }
 }

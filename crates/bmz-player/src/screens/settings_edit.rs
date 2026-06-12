@@ -5,10 +5,11 @@ use bmz_gameplay::rule::RuleMode;
 
 use crate::config::play_input::resolve_play_bindings;
 use crate::config::profile_config::{
-    AssistOptionConfig, BgaExpandConfig, BgaModeConfig, GaugeAutoShiftConfig, GaugeTypeConfig,
-    HispeedModeConfig, InputActionConfig, JudgeAlgorithmConfig, LaneConfig, LaneEffectConfig,
-    ProfileConfig, ProfileInputConfig, RandomOptionConfig, ReplaySlotRule, ScratchDirectionConfig,
-    ScratchInputMode, TargetOptionConfig,
+    AssistOptionConfig, BgaExpandConfig, BgaModeConfig, BottomShiftableGaugeConfig,
+    GaugeAutoShiftConfig, GaugeTypeConfig, HispeedModeConfig, InputActionConfig,
+    JudgeAlgorithmConfig, LaneConfig, LaneEffectConfig, ProfileConfig, ProfileInputConfig,
+    RandomOptionConfig, ReplaySlotRule, ScratchDirectionConfig, ScratchInputMode,
+    TargetOptionConfig,
 };
 use crate::config::settings_registry::{
     SettingsEntryId, adjust_settings_value, format_settings_value,
@@ -147,6 +148,7 @@ enum SettingsBaseline {
     LnModePolicy(LnPolicySetting),
     Gauge(GaugeTypeConfig),
     GaugeAutoShift(GaugeAutoShiftConfig),
+    BottomShiftableGauge(BottomShiftableGaugeConfig),
     Random(RandomOptionConfig),
     Target(TargetOptionConfig),
     GradeDiffDisplay(ResultGradeDiffDisplay),
@@ -199,6 +201,9 @@ impl SettingsEditSession {
             SettingsEntryId::Gauge => SettingsBaseline::Gauge(profile.play.gauge),
             SettingsEntryId::GaugeAutoShift => {
                 SettingsBaseline::GaugeAutoShift(profile.play.gauge_auto_shift)
+            }
+            SettingsEntryId::BottomShiftableGauge => {
+                SettingsBaseline::BottomShiftableGauge(profile.play.bottom_shiftable_gauge)
             }
             SettingsEntryId::Random => SettingsBaseline::Random(profile.play.random),
             SettingsEntryId::Target => SettingsBaseline::Target(profile.play.target),
@@ -293,6 +298,12 @@ impl SettingsEditSession {
             }
             (SettingsEntryId::GaugeAutoShift, SettingsBaseline::GaugeAutoShift(value)) => {
                 profile.play.gauge_auto_shift = *value;
+            }
+            (
+                SettingsEntryId::BottomShiftableGauge,
+                SettingsBaseline::BottomShiftableGauge(value),
+            ) => {
+                profile.play.bottom_shiftable_gauge = *value;
             }
             (SettingsEntryId::Random, SettingsBaseline::Random(value)) => {
                 profile.play.random = *value;

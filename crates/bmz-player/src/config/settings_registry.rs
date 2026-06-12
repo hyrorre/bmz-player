@@ -1,7 +1,8 @@
 use super::profile_config::{
-    AssistOptionConfig, BgaExpandConfig, BgaModeConfig, GaugeAutoShiftConfig, GaugeTypeConfig,
-    HispeedModeConfig, JudgeAlgorithmConfig, LaneEffectConfig, ProfileConfig, RandomOptionConfig,
-    ReplaySlotRule, ScratchInputMode, TargetOptionConfig,
+    AssistOptionConfig, BgaExpandConfig, BgaModeConfig, BottomShiftableGaugeConfig,
+    GaugeAutoShiftConfig, GaugeTypeConfig, HispeedModeConfig, JudgeAlgorithmConfig,
+    LaneEffectConfig, ProfileConfig, RandomOptionConfig, ReplaySlotRule, ScratchInputMode,
+    TargetOptionConfig,
 };
 use bmz_gameplay::rule::RuleMode;
 use bmz_render::scene::ResultGradeDiffDisplay;
@@ -24,6 +25,7 @@ pub enum SettingsEntryId {
     LnModePolicy,
     Gauge,
     GaugeAutoShift,
+    BottomShiftableGauge,
     Random,
     Target,
     GradeDiffDisplay,
@@ -69,6 +71,7 @@ impl SettingsEntryId {
         Self::RuleMode,
         Self::LnModePolicy,
         Self::GaugeAutoShift,
+        Self::BottomShiftableGauge,
         Self::Random,
         Self::Target,
         Self::GradeDiffDisplay,
@@ -120,6 +123,7 @@ impl SettingsEntryId {
             Self::LnModePolicy => "LN MODE",
             Self::Gauge => "GAUGE",
             Self::GaugeAutoShift => "GAUGE SHIFT",
+            Self::BottomShiftableGauge => "GAS BOTTOM",
             Self::Random => "RANDOM",
             Self::Target => "TARGET",
             Self::GradeDiffDisplay => "GRADE DIFF",
@@ -179,6 +183,9 @@ pub fn format_settings_value(profile: &ProfileConfig, id: SettingsEntryId) -> St
         SettingsEntryId::LnModePolicy => profile.play.ln_mode_policy.display_label().to_string(),
         SettingsEntryId::Gauge => format_gauge(profile.play.gauge),
         SettingsEntryId::GaugeAutoShift => format_gauge_auto_shift(profile.play.gauge_auto_shift),
+        SettingsEntryId::BottomShiftableGauge => {
+            format_bottom_shiftable_gauge(profile.play.bottom_shiftable_gauge)
+        }
         SettingsEntryId::Random => format_random(profile.play.random),
         SettingsEntryId::Target => format_target(profile.play.target),
         SettingsEntryId::GradeDiffDisplay => {
@@ -262,6 +269,11 @@ pub fn adjust_settings_value(profile: &mut ProfileConfig, id: SettingsEntryId, d
         SettingsEntryId::GaugeAutoShift => {
             cycle_enum(delta, profile.play.gauge_auto_shift, cycle_gauge_auto_shift)
                 .map(|next| profile.play.gauge_auto_shift = next)
+                .is_some()
+        }
+        SettingsEntryId::BottomShiftableGauge => {
+            cycle_enum(delta, profile.play.bottom_shiftable_gauge, cycle_bottom_shiftable_gauge)
+                .map(|next| profile.play.bottom_shiftable_gauge = next)
                 .is_some()
         }
         SettingsEntryId::Random => cycle_enum(delta, profile.play.random, cycle_random)
@@ -428,6 +440,14 @@ fn format_gauge_auto_shift(value: GaugeAutoShiftConfig) -> String {
     }
 }
 
+fn format_bottom_shiftable_gauge(value: BottomShiftableGaugeConfig) -> String {
+    match value {
+        BottomShiftableGaugeConfig::AssistEasy => "ASSIST EASY".to_string(),
+        BottomShiftableGaugeConfig::Easy => "EASY".to_string(),
+        BottomShiftableGaugeConfig::Normal => "NORMAL".to_string(),
+    }
+}
+
 fn format_random(value: RandomOptionConfig) -> String {
     match value {
         RandomOptionConfig::Off => "OFF".to_string(),
@@ -573,6 +593,18 @@ fn cycle_gauge_auto_shift(current: GaugeAutoShiftConfig, forward: bool) -> Gauge
         GaugeAutoShiftConfig::HardToGroove,
         GaugeAutoShiftConfig::BestClear,
         GaugeAutoShiftConfig::SelectToUnder,
+    ];
+    cycle_in_slice(&VALUES, current, forward)
+}
+
+fn cycle_bottom_shiftable_gauge(
+    current: BottomShiftableGaugeConfig,
+    forward: bool,
+) -> BottomShiftableGaugeConfig {
+    const VALUES: [BottomShiftableGaugeConfig; 3] = [
+        BottomShiftableGaugeConfig::AssistEasy,
+        BottomShiftableGaugeConfig::Easy,
+        BottomShiftableGaugeConfig::Normal,
     ];
     cycle_in_slice(&VALUES, current, forward)
 }

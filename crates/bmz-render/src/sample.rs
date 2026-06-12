@@ -49,6 +49,7 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
         target: "NONE".to_string(),
         gauge: "NORMAL".to_string(),
         gauge_auto_shift: "OFF".to_string(),
+        bottom_shiftable_gauge: "A-EASY".to_string(),
         assist: "NORMAL".to_string(),
         select_mode: "ALL".to_string(),
         select_sort: "TITLE".to_string(),

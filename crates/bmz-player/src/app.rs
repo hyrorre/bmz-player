@@ -57,9 +57,10 @@ use crate::config::key_config::{
 };
 use crate::config::load::load_profile_config;
 use crate::config::profile_config::{
-    AssistOptionConfig, BgaExpandConfig, BgaModeConfig, GaugeAutoShiftConfig, GaugeTypeConfig,
-    HispeedModeConfig, InputActionConfig, LaneConfig, ProfileConfig, ProfileInputConfig,
-    RandomOptionConfig, ScratchDirectionConfig, TargetOptionConfig,
+    AssistOptionConfig, BgaExpandConfig, BgaModeConfig, BottomShiftableGaugeConfig,
+    GaugeAutoShiftConfig, GaugeTypeConfig, HispeedModeConfig, InputActionConfig, LaneConfig,
+    ProfileConfig, ProfileInputConfig, RandomOptionConfig, ScratchDirectionConfig,
+    TargetOptionConfig,
 };
 use crate::config::save::{save_app_config, save_profile_config};
 use crate::config::settings_registry::SettingsEntryId;
@@ -314,6 +315,7 @@ struct WinitApp {
     target_option: TargetOption,
     gauge_option: GaugeTypeConfig,
     gauge_auto_shift_option: GaugeAutoShiftConfig,
+    bottom_shiftable_gauge_option: BottomShiftableGaugeConfig,
     assist_option: AssistOption,
     select_mode_filter: SelectModeFilter,
     select_sort: SelectSort,
@@ -1320,6 +1322,7 @@ impl WinitApp {
             } else {
                 boot.profile_config.play.gauge_auto_shift
             };
+        let bottom_shiftable_gauge_option = boot.profile_config.play.bottom_shiftable_gauge;
         let arrange_option = arrange_option_from_profile(boot.profile_config.play.random);
         let target_option = target_option_from_profile(boot.profile_config.play.target);
         let select_keys = SelectKeyBindings::from_profile(&boot.profile_config.input);
@@ -1431,6 +1434,7 @@ impl WinitApp {
             target_option,
             gauge_option,
             gauge_auto_shift_option,
+            bottom_shiftable_gauge_option,
             assist_option,
             select_mode_filter,
             select_sort,
@@ -1955,6 +1959,10 @@ impl WinitApp {
             target: self.target_option.as_str().to_string(),
             gauge: gauge_option_as_str(self.gauge_option).to_string(),
             gauge_auto_shift: gauge_auto_shift_as_str(self.gauge_auto_shift_option).to_string(),
+            bottom_shiftable_gauge: bottom_shiftable_gauge_as_str(
+                self.bottom_shiftable_gauge_option,
+            )
+            .to_string(),
             assist: self.assist_option.as_str().to_string(),
             select_mode: self.select_mode_filter.as_str().to_string(),
             select_sort: self.select_sort.as_str().to_string(),
@@ -2757,6 +2765,7 @@ impl WinitApp {
         } else {
             play.gauge_auto_shift
         };
+        self.bottom_shiftable_gauge_option = play.bottom_shiftable_gauge;
         self.arrange_option = arrange_option_from_profile(play.random);
         self.target_option = target_option_from_profile(play.target);
         self.assist_option =
@@ -3905,6 +3914,7 @@ impl WinitApp {
             73 => self.cycle_select_bga_expand(arg),
             77 => self.cycle_select_target(arg),
             78 => self.cycle_select_gauge_auto_shift(arg),
+            341 => self.cycle_select_bottom_shiftable_gauge(arg),
             308 => self.cycle_select_ln_mode(arg),
             312 => {
                 // BMZ only exposes beatoraja's default sorter set for now.
@@ -3979,6 +3989,17 @@ impl WinitApp {
         tracing::info!(
             gauge_auto_shift = gauge_auto_shift_as_str(self.gauge_auto_shift_option),
             "gauge auto shift changed"
+        );
+        self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+    }
+
+    fn cycle_select_bottom_shiftable_gauge(&mut self, arg: i32) {
+        self.bottom_shiftable_gauge_option =
+            cycle_bottom_shiftable_gauge_with_direction(self.bottom_shiftable_gauge_option, arg);
+        tracing::info!(
+            bottom_shiftable_gauge =
+                bottom_shiftable_gauge_as_str(self.bottom_shiftable_gauge_option),
+            "bottom shiftable gauge changed"
         );
         self.play_system_sound(crate::system_sound::SoundType::OptionChange);
     }
@@ -5788,6 +5809,7 @@ impl WinitApp {
             autoplay: self.assist_option == AssistOption::Autoplay,
             gauge: Some(self.gauge_option),
             gauge_auto_shift: self.gauge_auto_shift_option,
+            bottom_shiftable_gauge: self.bottom_shiftable_gauge_option,
             arrange: self.arrange_option,
             target: self.target_option,
             arrange_seed,
@@ -5832,6 +5854,7 @@ impl WinitApp {
             chart_zero_time: TimeUs(0),
             gauge: Some(self.gauge_option),
             gauge_auto_shift: self.gauge_auto_shift_option,
+            bottom_shiftable_gauge: self.bottom_shiftable_gauge_option,
             arrange: replay_file.arrange_option(),
             target: self.target_option,
             arrange_seed: replay_file.arrange_seed,
@@ -5890,6 +5913,7 @@ impl WinitApp {
             chart_zero_time: TimeUs(0),
             gauge: Some(self.gauge_option),
             gauge_auto_shift: self.gauge_auto_shift_option,
+            bottom_shiftable_gauge: self.bottom_shiftable_gauge_option,
             arrange: replay_file.arrange_option(),
             target: self.target_option,
             arrange_seed: replay_file.arrange_seed,
@@ -7851,6 +7875,7 @@ impl WinitApp {
             self.target_option,
             self.gauge_option,
             self.gauge_auto_shift_option,
+            self.bottom_shiftable_gauge_option,
             self.assist_option,
             now_unix_seconds(),
         );
@@ -9450,6 +9475,26 @@ fn gauge_auto_shift_as_str(mode: GaugeAutoShiftConfig) -> &'static str {
     }
 }
 
+fn cycle_bottom_shiftable_gauge_with_direction(
+    current: BottomShiftableGaugeConfig,
+    direction: i32,
+) -> BottomShiftableGaugeConfig {
+    const VALUES: [BottomShiftableGaugeConfig; 3] = [
+        BottomShiftableGaugeConfig::AssistEasy,
+        BottomShiftableGaugeConfig::Easy,
+        BottomShiftableGaugeConfig::Normal,
+    ];
+    cycle_enum(VALUES, current, direction)
+}
+
+fn bottom_shiftable_gauge_as_str(gauge: BottomShiftableGaugeConfig) -> &'static str {
+    match gauge {
+        BottomShiftableGaugeConfig::AssistEasy => "A-EASY",
+        BottomShiftableGaugeConfig::Easy => "EASY",
+        BottomShiftableGaugeConfig::Normal => "NORMAL",
+    }
+}
+
 fn bga_mode_as_str(bga: BgaModeConfig) -> &'static str {
     match bga {
         BgaModeConfig::On => "ON",
@@ -9620,6 +9665,7 @@ fn apply_current_play_options_to_profile(
     target: TargetOption,
     gauge: GaugeTypeConfig,
     gauge_auto_shift: GaugeAutoShiftConfig,
+    bottom_shiftable_gauge: BottomShiftableGaugeConfig,
     assist: AssistOption,
     updated_at: i64,
 ) {
@@ -9636,6 +9682,7 @@ fn apply_current_play_options_to_profile(
     profile.play.target = target_config_from_option(target);
     profile.play.gauge = gauge;
     profile.play.gauge_auto_shift = gauge_auto_shift;
+    profile.play.bottom_shiftable_gauge = bottom_shiftable_gauge;
     profile.play.auto_play = assist == AssistOption::Autoplay;
     profile.play.assist = AssistOptionConfig::None;
     profile.updated_at = updated_at;
@@ -12607,6 +12654,11 @@ mod tests {
             GaugeAutoShiftConfig::Continue
         );
         assert_eq!(gauge_auto_shift_as_str(GaugeAutoShiftConfig::BestClear), "BEST CLEAR");
+        assert_eq!(
+            cycle_bottom_shiftable_gauge_with_direction(BottomShiftableGaugeConfig::Normal, 1),
+            BottomShiftableGaugeConfig::AssistEasy
+        );
+        assert_eq!(bottom_shiftable_gauge_as_str(BottomShiftableGaugeConfig::Easy), "EASY");
         assert_eq!(cycle_gauge_option(GaugeTypeConfig::AutoShift), GaugeTypeConfig::Hazard);
     }
 
@@ -12627,6 +12679,7 @@ mod tests {
             TargetOption::Aaa,
             GaugeTypeConfig::Hard,
             GaugeAutoShiftConfig::BestClear,
+            BottomShiftableGaugeConfig::Normal,
             AssistOption::Autoplay,
             42,
         );
@@ -12640,6 +12693,7 @@ mod tests {
         assert!(matches!(profile.play.target, TargetOptionConfig::Aaa));
         assert!(matches!(profile.play.gauge, GaugeTypeConfig::Hard));
         assert!(matches!(profile.play.gauge_auto_shift, GaugeAutoShiftConfig::BestClear));
+        assert!(matches!(profile.play.bottom_shiftable_gauge, BottomShiftableGaugeConfig::Normal));
         assert!(profile.play.auto_play);
         assert!(matches!(profile.play.assist, AssistOptionConfig::None));
         assert_eq!(profile.updated_at, 42);

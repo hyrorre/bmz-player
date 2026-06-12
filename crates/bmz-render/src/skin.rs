@@ -1837,6 +1837,7 @@ pub struct SkinDrawState {
     pub result_random_lane_refs: [u8; SKIN_RANDOM_LANE_REF_COUNT],
     pub select_gauge_index: usize,
     pub select_gauge_auto_shift_index: usize,
+    pub select_bottom_shiftable_gauge_index: usize,
     pub select_target_index: usize,
     pub select_bga_index: usize,
     pub select_assist_index: usize,
@@ -2118,6 +2119,7 @@ impl Default for SkinDrawState {
             result_random_lane_refs: [0; SKIN_RANDOM_LANE_REF_COUNT],
             select_gauge_index: 2,
             select_gauge_auto_shift_index: 0,
+            select_bottom_shiftable_gauge_index: 0,
             select_target_index: 0,
             select_bga_index: 0,
             select_assist_index: 0,
@@ -3779,6 +3781,9 @@ impl SkinDocument {
             select_gauge_index: select_gauge_index(&snapshot.gauge),
             select_gauge_auto_shift_index: select_gauge_auto_shift_index(
                 &snapshot.gauge_auto_shift,
+            ),
+            select_bottom_shiftable_gauge_index: select_bottom_shiftable_gauge_index(
+                &snapshot.bottom_shiftable_gauge,
             ),
             select_target_index: select_target_index(&snapshot.target),
             select_bga_index: select_bga_index(&snapshot.bga),
@@ -6401,6 +6406,7 @@ fn skin_state_imageset_index(ref_id: i32, state: &SkinDrawState) -> Option<usize
         54 | 55 => Some(0),
         72 => Some(state.select_bga_index),
         78 => Some(state.select_gauge_auto_shift_index),
+        341 => Some(state.select_bottom_shiftable_gauge_index),
         11 => Some(state.select_mode_index),
         12 => Some(state.select_sort_index),
         301..=307 => Some(0),
@@ -8057,6 +8063,7 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         77 => Some(state.select_target_index as i64),
         78 if state.select_screen => Some(state.select_clear_count as i64),
         78 => Some(state.select_gauge_auto_shift_index as i64),
+        341 => Some(state.select_bottom_shiftable_gauge_index as i64),
         80 | 110 => Some(state.judge_counts.pgreat as i64),
         81 | 111 => Some(state.judge_counts.great as i64),
         82 | 112 => Some(state.judge_counts.good as i64),
@@ -10658,6 +10665,14 @@ fn select_gauge_auto_shift_index(mode: &str) -> usize {
         "HARD TO GROOVE" => 2,
         "BEST CLEAR" => 3,
         "SELECT TO UNDER" => 4,
+        _ => 0,
+    }
+}
+
+fn select_bottom_shiftable_gauge_index(mode: &str) -> usize {
+    match mode {
+        "EASY" => 1,
+        "NORMAL" => 2,
         _ => 0,
     }
 }
@@ -14604,12 +14619,20 @@ mod tests {
             &SkinDrawState { gauge_auto_shift: false, ..Default::default() }
         ));
         assert_eq!(select_gauge_auto_shift_index("BEST CLEAR"), 3);
+        assert_eq!(select_bottom_shiftable_gauge_index("NORMAL"), 2);
         assert_eq!(
             skin_state_imageset_index(
                 78,
                 &SkinDrawState { select_gauge_auto_shift_index: 3, ..Default::default() }
             ),
             Some(3)
+        );
+        assert_eq!(
+            skin_state_imageset_index(
+                341,
+                &SkinDrawState { select_bottom_shiftable_gauge_index: 2, ..Default::default() }
+            ),
+            Some(2)
         );
     }
 

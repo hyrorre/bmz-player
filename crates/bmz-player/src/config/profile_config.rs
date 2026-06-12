@@ -66,6 +66,8 @@ pub struct PlayDefaultsConfig {
     pub gauge: GaugeTypeConfig,
     #[serde(default)]
     pub gauge_auto_shift: GaugeAutoShiftConfig,
+    #[serde(default)]
+    pub bottom_shiftable_gauge: BottomShiftableGaugeConfig,
     pub random: RandomOptionConfig,
     #[serde(default)]
     pub target: TargetOptionConfig,
@@ -143,6 +145,15 @@ pub enum GaugeAutoShiftConfig {
     HardToGroove,
     BestClear,
     SelectToUnder,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum BottomShiftableGaugeConfig {
+    #[default]
+    AssistEasy,
+    Easy,
+    Normal,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -713,6 +724,7 @@ impl ProfileConfig {
                 ln_mode_policy: LnPolicySetting::AutoLn,
                 gauge: GaugeTypeConfig::Normal,
                 gauge_auto_shift: GaugeAutoShiftConfig::Off,
+                bottom_shiftable_gauge: BottomShiftableGaugeConfig::AssistEasy,
                 random: RandomOptionConfig::Off,
                 target: TargetOptionConfig::None,
                 grade_diff_display: ResultGradeDiffDisplay::default(),
@@ -904,6 +916,7 @@ mod tests {
         assert_eq!(play.bga_expand, BgaExpandConfig::KeepAspect);
         assert_eq!(play.misslayer_duration_ms, 500);
         assert_eq!(play.play_exit_hold_ms, 1000);
+        assert_eq!(play.bottom_shiftable_gauge, BottomShiftableGaugeConfig::AssistEasy);
     }
 
     #[test]

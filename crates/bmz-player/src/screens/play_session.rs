@@ -25,8 +25,8 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::play::{
-    audio_mix_from_profile, gauge_auto_shift_from_config, gauge_type_from_config,
-    lane_binding_for_chart, lane_unit_to_f32, play_offsets_from_profile,
+    audio_mix_from_profile, bottom_shiftable_gauge_from_config, gauge_auto_shift_from_config,
+    gauge_type_from_config, lane_binding_for_chart, lane_unit_to_f32, play_offsets_from_profile,
 };
 use crate::config::profile_config::{
     BgaExpandConfig, BgaModeConfig, HispeedModeConfig, LaneEffectConfig, ProfileConfig,
@@ -50,6 +50,7 @@ pub struct PlaySessionOptions {
     pub sample_rate: u32,
     pub gauge_override: Option<GaugeType>,
     pub gauge_auto_shift: GaugeAutoShiftMode,
+    pub bottom_shiftable_gauge: GaugeType,
     pub arrange: ArrangeOption,
     pub target: TargetOption,
     pub arrange_seed: Option<i64>,
@@ -107,6 +108,7 @@ impl Default for PlaySessionOptions {
             sample_rate: 48_000,
             gauge_override: None,
             gauge_auto_shift: GaugeAutoShiftMode::Off,
+            bottom_shiftable_gauge: GaugeType::AssistEasy,
             arrange: ArrangeOption::Normal,
             target: TargetOption::None,
             arrange_seed: None,
@@ -141,6 +143,11 @@ pub fn apply_placeholder_session_visuals(
     } else {
         GaugeAutoShiftMode::Off
     };
+    let bottom_shiftable_gauge = if options.gauge_auto_shift != GaugeAutoShiftMode::Off {
+        options.bottom_shiftable_gauge
+    } else {
+        bottom_shiftable_gauge_from_config(profile.play.bottom_shiftable_gauge)
+    };
     let gauge_property =
         options.gauge_property.unwrap_or_else(|| GaugeProperty::from_keymode(key_mode));
     // TOTAL は譜面パース前で不明だが、init/max/border は TOTAL 非依存なので
@@ -165,6 +172,7 @@ pub fn apply_placeholder_session_visuals(
             rule_mode,
         )
     };
+    gauge.set_bottom_shiftable_gauge(bottom_shiftable_gauge);
     if let Some(initial) = options.initial_gauge_value {
         gauge.set_initial_value(initial);
     }
@@ -266,6 +274,11 @@ pub fn build_game_session_with_input_backend(
     } else {
         GaugeAutoShiftMode::Off
     };
+    let bottom_shiftable_gauge = if options.gauge_auto_shift != GaugeAutoShiftMode::Off {
+        options.bottom_shiftable_gauge
+    } else {
+        bottom_shiftable_gauge_from_config(profile.play.bottom_shiftable_gauge)
+    };
     let initial_gauge_value = options.initial_gauge_value;
     let autoplay_enabled = profile.play.auto_play || options.autoplay;
     let replay_player = options.replay_player;
@@ -312,14 +325,16 @@ pub fn build_game_session_with_input_backend(
             .gauge_property
             .unwrap_or_else(|| GaugeProperty::from_keymode(chart.metadata.key_mode));
         if gauge_auto_shift != GaugeAutoShiftMode::Off {
-            GaugeState::new_with_auto_shift_property_and_rule_mode(
+            let mut gauge = GaugeState::new_with_auto_shift_property_and_rule_mode(
                 gauge_type,
                 gauge_auto_shift,
                 gauge_total,
                 chart.total_notes,
                 gauge_property,
                 rule_mode,
-            )
+            );
+            gauge.set_bottom_shiftable_gauge(bottom_shiftable_gauge);
+            gauge
         } else {
             GaugeState::new_with_property_and_rule_mode(
                 gauge_type,
