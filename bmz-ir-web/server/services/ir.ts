@@ -1,5 +1,6 @@
-import { createHash, createPublicKey, verify as cryptoVerify } from 'node:crypto'
-import type { SupabaseClient } from '@supabase/supabase-js'
+import { createHash, createPublicKey, randomUUID, verify as cryptoVerify } from 'node:crypto'
+import { and, desc, eq, inArray, isNull } from 'drizzle-orm'
+import { db, schema } from 'hub:db'
 import type {
   IrChartLnProfile,
   IrDeviceType,
@@ -11,7 +12,6 @@ import type {
   IrSubmitResponse,
   LnScorePolicy,
 } from '../../shared/types/ir'
-import type { Database, Json } from '../../shared/types/database.types'
 
 const LN_POLICIES = new Set(['AutoLn', 'AutoCn', 'AutoHcn', 'ForceLn', 'ForceCn', 'ForceHcn'])
 const EFFECTIVE_LN_MODES = new Set(['ln', 'cn', 'hcn'])
@@ -40,8 +40,6 @@ export const CLEAR_RANK: Record<string, number> = {
   Max: 9,
 }
 
-type Db = SupabaseClient<Database>
-
 export interface IrRequestUser {
   id: string
 }
@@ -62,7 +60,7 @@ interface BestScoreCandidate {
   max_combo: number
   min_bp: number
   min_cb: number
-  server_received_at: string
+  server_received_at: Date
 }
 
 interface BestScoreRow extends BestScoreCandidate {
@@ -154,81 +152,77 @@ export function validateScoreSubmission(value: unknown): IrScoreSubmission {
 }
 
 export async function submitScore(
-  db: Db,
   user: IrRequestUser,
   payload: IrScoreSubmission,
   rankingScopes: IrRankingScope[],
   rankingLimit: number,
 ): Promise<IrSubmitResponse> {
   const doubleOption = normalizeDoubleOption(payload.play_options.double_option)
-  await upsertChart(db, payload, doubleOption === 'off')
+  await upsertChart(payload, doubleOption === 'off')
 
   const bp =
     judgeTotal(payload, 'bad') + judgeTotal(payload, 'poor') + judgeTotal(payload, 'empty_poor')
   const cb = judgeTotal(payload, 'bad') + judgeTotal(payload, 'poor')
   const clearRank = CLEAR_RANK[payload.result.clear] ?? 0
-  const verification = await resolveVerification(db, user.id, payload)
+  const verification = await resolveVerification(user.id, payload)
   const deviceType = payload.play_options.device_type
 
+  const scoreId = randomUUID()
   const scoreInsert = {
-    player_id: user.id,
-    chart_sha256: payload.chart.sha256,
-    client_name: payload.client.name,
-    client_version: payload.client.version,
+    id: scoreId,
+    playerId: user.id,
+    chartSha256: payload.chart.sha256,
+    clientName: payload.client.name,
+    clientVersion: payload.client.version,
     platform: payload.client.platform,
-    play_mode: payload.rule.play_mode,
-    key_mode: payload.rule.key_mode,
+    playMode: payload.rule.play_mode,
+    keyMode: payload.rule.key_mode,
     gauge: payload.rule.gauge,
-    ln_policy: payload.rule.ln_policy,
-    effective_ln_mode: payload.rule.effective_ln_mode,
-    judge_algorithm: payload.rule.judge_algorithm,
+    lnPolicy: payload.rule.ln_policy,
+    effectiveLnMode: payload.rule.effective_ln_mode,
+    judgeAlgorithm: payload.rule.judge_algorithm,
     scoring: payload.rule.scoring,
-    clear_type: payload.result.clear,
-    clear_rank: clearRank,
-    played_at: playedAtIso(payload.result.played_at),
-    duration_ms: payload.result.duration_ms ?? null,
-    judges: payload.result.judges as unknown as Json,
-    ex_score: payload.result.ex_score,
-    avg_judge_ms: payload.result.avg_judge_ms ?? null,
-    max_combo: payload.result.max_combo,
+    clearType: payload.result.clear,
+    clearRank,
+    playedAt: playedAtDate(payload.result.played_at),
+    durationMs: payload.result.duration_ms ?? null,
+    judges: payload.result.judges,
+    exScore: payload.result.ex_score,
+    avgJudgeMs: payload.result.avg_judge_ms ?? null,
+    maxCombo: payload.result.max_combo,
     notes: payload.result.notes,
-    pass_notes: payload.result.pass_notes ?? payload.result.notes,
+    passNotes: payload.result.pass_notes ?? payload.result.notes,
     bp,
     cb,
-    min_bp: payload.result.min_bp,
-    min_cb: payload.result.min_cb,
-    device_type: deviceType,
-    double_option: doubleOption,
-    play_options: { ...payload.play_options, double_option: doubleOption } as Json,
-    replay_hash: payload.replay?.hash ?? null,
-    replay_format: payload.replay?.format ?? null,
-    replay_upload_intent: payload.replay?.upload_intent ?? null,
-    evidence: (payload.evidence ?? {}) as Json,
+    minBp: payload.result.min_bp,
+    minCb: payload.result.min_cb,
+    deviceType,
+    doubleOption,
+    playOptions: { ...payload.play_options, double_option: doubleOption } as Record<
+      string,
+      unknown
+    >,
+    replayHash: payload.replay?.hash ?? null,
+    replayFormat: payload.replay?.format ?? null,
+    replayUploadIntent: payload.replay?.upload_intent ?? null,
+    evidence: payload.evidence ?? {},
     verification,
-    idempotency_key: payload.idempotency_key,
+    idempotencyKey: payload.idempotency_key,
   }
 
-  const { data: insertedScore, error: insertError } = await db
-    .from('scores')
-    .insert(scoreInsert)
-    .select('id, server_received_at')
-    .single()
-
-  let score = insertedScore
-  if (insertError) {
-    const { data: existing, error: existingError } = await db
-      .from('scores')
-      .select('id, server_received_at')
-      .eq('player_id', user.id)
-      .eq('idempotency_key', payload.idempotency_key)
-      .maybeSingle()
-    if (existingError || !existing) {
-      throw insertError
-    }
-    score = existing
+  let score = await insertScore(scoreInsert)
+  if (!score) {
+    score =
+      (await db.query.scores.findFirst({
+        columns: { id: true, serverReceivedAt: true },
+        where: and(
+          eq(schema.scores.playerId, user.id),
+          eq(schema.scores.idempotencyKey, payload.idempotency_key),
+        ),
+      })) ?? null
   }
   if (!score) {
-    throw insertError ?? new Error('failed to insert score')
+    throw new Error('failed to insert score')
   }
 
   const candidate: BestScoreCandidate = {
@@ -237,11 +231,10 @@ export async function submitScore(
     max_combo: payload.result.max_combo,
     min_bp: payload.result.min_bp,
     min_cb: payload.result.min_cb,
-    server_received_at: score.server_received_at,
+    server_received_at: score.serverReceivedAt,
   }
-  const previousBest = await fetchPreviousBest(db, user.id, payload)
+  const previousBest = await fetchPreviousBest(user.id, payload)
   const { bestUpdated, updatedFields } = await upsertBestScore(
-    db,
     user.id,
     payload,
     score.id,
@@ -254,7 +247,7 @@ export async function submitScore(
     try {
       rankings[scope] = {
         succeeded: true,
-        data: await getRanking(db, user, payload.chart.sha256, {
+        data: await getRanking(user, payload.chart.sha256, {
           scope,
           limit: rankingLimit,
           offset: 0,
@@ -277,23 +270,22 @@ export async function submitScore(
     score_id: score.id,
     best_updated: bestUpdated,
     updated_fields: updatedFields,
-    server_received_at: score.server_received_at,
+    server_received_at: score.serverReceivedAt.toISOString(),
     previous_best: previousBest,
     rankings: Object.keys(rankings).length > 0 ? rankings : undefined,
   }
 }
 
 export async function getRanking(
-  db: Db,
   user: IrRequestUser | null,
   sha256: string,
   query: RankingQuery,
 ): Promise<IrRanking> {
   requireHex(sha256, 64, 'sha256')
-  const bestRows = await fetchRankingBestRows(db, sha256, query)
-  const rivalIds = user ? await getRivalIds(db, user.id) : new Set<string>()
+  const bestRows = await fetchRankingBestRows(sha256, query)
+  const rivalIds = user ? await getRivalIds(user.id) : new Set<string>()
   const playerIds = [...new Set(bestRows.map((row) => row.player_id))]
-  const names = await getPlayerNames(db, playerIds)
+  const names = await getPlayerNames(playerIds)
   const ranked = rankRows(bestRows, user?.id ?? null, rivalIds, names)
   const scoped = applyScope(ranked, query.scope, user?.id ?? null, rivalIds)
   const entries = scoped.slice(query.offset, query.offset + query.limit).map((entry, index) => ({
@@ -343,66 +335,126 @@ export async function getRanking(
   }
 }
 
-async function fetchRankingBestRows(
-  db: Db,
-  sha256: string,
-  query: RankingQuery,
-): Promise<BestScoreRow[]> {
-  let rankingQuery = db
-    .from('best_scores')
-    .select(
-      'player_id, chart_sha256, score_id, ex_score, clear_type, clear_rank, max_combo, min_bp, min_cb, device_type, gauge, ln_policy, effective_ln_mode, double_option, scoring, played_at, server_received_at, verification',
-    )
-    .eq('chart_sha256', sha256)
-    .eq('scoring', query.scoring)
-    .eq('double_option', query.doubleOption)
-    .order('ex_score', { ascending: false })
+async function fetchRankingBestRows(sha256: string, query: RankingQuery): Promise<BestScoreRow[]> {
+  const conditions = [
+    eq(schema.bestScores.chartSha256, sha256),
+    eq(schema.bestScores.scoring, query.scoring),
+    eq(schema.bestScores.doubleOption, query.doubleOption),
+  ]
   if (query.gauge) {
-    rankingQuery = rankingQuery.eq('gauge', query.gauge)
+    conditions.push(eq(schema.bestScores.gauge, query.gauge))
   }
   if (query.lnPolicy) {
-    rankingQuery = rankingQuery.eq('ln_policy', query.lnPolicy)
-  }
-  const { data: rows, error } = await rankingQuery
-
-  if (error) {
-    throw error
+    conditions.push(eq(schema.bestScores.lnPolicy, query.lnPolicy))
   }
 
-  const cachedRows = (rows ?? []) as BestScoreRow[]
+  const rows = await db
+    .select({
+      player_id: schema.bestScores.playerId,
+      chart_sha256: schema.bestScores.chartSha256,
+      score_id: schema.bestScores.scoreId,
+      ex_score: schema.bestScores.exScore,
+      clear_type: schema.bestScores.clearType,
+      clear_rank: schema.bestScores.clearRank,
+      max_combo: schema.bestScores.maxCombo,
+      min_bp: schema.bestScores.minBp,
+      min_cb: schema.bestScores.minCb,
+      device_type: schema.bestScores.deviceType,
+      gauge: schema.bestScores.gauge,
+      ln_policy: schema.bestScores.lnPolicy,
+      effective_ln_mode: schema.bestScores.effectiveLnMode,
+      double_option: schema.bestScores.doubleOption,
+      scoring: schema.bestScores.scoring,
+      played_at: schema.bestScores.playedAt,
+      server_received_at: schema.bestScores.serverReceivedAt,
+      verification: schema.bestScores.verification,
+    })
+    .from(schema.bestScores)
+    .where(and(...conditions))
+    .orderBy(desc(schema.bestScores.exScore))
+
+  const cachedRows = rows.map(rowToBestScoreRow)
   if (cachedRows.length > 0) {
     return cachedRows
   }
-  return fetchRankingBestRowsFromHistory(db, sha256, query)
+  return fetchRankingBestRowsFromHistory(sha256, query)
 }
 
 async function fetchRankingBestRowsFromHistory(
-  db: Db,
   sha256: string,
   query: RankingQuery,
 ): Promise<BestScoreRow[]> {
-  let scoreQuery = db
-    .from('scores')
-    .select(
-      'id, player_id, chart_sha256, ex_score, clear_type, clear_rank, max_combo, min_bp, min_cb, device_type, gauge, ln_policy, effective_ln_mode, double_option, scoring, played_at, server_received_at, verification',
-    )
-    .eq('chart_sha256', sha256)
-    .eq('scoring', query.scoring)
-    .eq('double_option', query.doubleOption)
-    .eq('accepted', true)
-    .order('ex_score', { ascending: false })
+  const conditions = [
+    eq(schema.scores.chartSha256, sha256),
+    eq(schema.scores.scoring, query.scoring),
+    eq(schema.scores.doubleOption, query.doubleOption),
+    eq(schema.scores.accepted, true),
+  ]
   if (query.gauge) {
-    scoreQuery = scoreQuery.eq('gauge', query.gauge)
+    conditions.push(eq(schema.scores.gauge, query.gauge))
   }
   if (query.lnPolicy) {
-    scoreQuery = scoreQuery.eq('ln_policy', query.lnPolicy)
+    conditions.push(eq(schema.scores.lnPolicy, query.lnPolicy))
   }
-  const { data: rows, error } = await scoreQuery
 
-  if (error) {
-    throw error
+  const rows = await db
+    .select({
+      id: schema.scores.id,
+      player_id: schema.scores.playerId,
+      chart_sha256: schema.scores.chartSha256,
+      ex_score: schema.scores.exScore,
+      clear_type: schema.scores.clearType,
+      clear_rank: schema.scores.clearRank,
+      max_combo: schema.scores.maxCombo,
+      min_bp: schema.scores.minBp,
+      min_cb: schema.scores.minCb,
+      device_type: schema.scores.deviceType,
+      gauge: schema.scores.gauge,
+      ln_policy: schema.scores.lnPolicy,
+      effective_ln_mode: schema.scores.effectiveLnMode,
+      double_option: schema.scores.doubleOption,
+      scoring: schema.scores.scoring,
+      played_at: schema.scores.playedAt,
+      server_received_at: schema.scores.serverReceivedAt,
+      verification: schema.scores.verification,
+    })
+    .from(schema.scores)
+    .where(and(...conditions))
+    .orderBy(desc(schema.scores.exScore))
+
+  return bestRowsFromHistory(
+    rows.map((row) => ({ ...rowToBestScoreRow({ ...row, score_id: row.id }), id: row.id })),
+  )
+}
+
+function rowToBestScoreRow(row: {
+  player_id: string
+  chart_sha256: string
+  score_id: string
+  ex_score: number
+  clear_type: string
+  clear_rank: number
+  max_combo: number
+  min_bp: number
+  min_cb: number
+  device_type: string
+  gauge: string
+  ln_policy: string
+  effective_ln_mode: string
+  double_option: string
+  played_at: Date | null
+  server_received_at: Date
+  verification: BestScoreRow['verification']
+}): BestScoreRow {
+  return {
+    ...row,
+    scoring: 'bms_ex_score_v1',
+    ln_policy: row.ln_policy as LnScorePolicy,
+    effective_ln_mode: row.effective_ln_mode as 'ln' | 'cn' | 'hcn',
+    double_option: row.double_option as IrDoubleOption,
+    device_type: row.device_type as IrDeviceType,
+    played_at: row.played_at?.toISOString() ?? null,
   }
-  return bestRowsFromHistory((rows ?? []) as ScoreHistoryRankingRow[])
 }
 
 function bestRowsFromHistory(rows: ScoreHistoryRankingRow[]): BestScoreRow[] {
@@ -448,147 +500,203 @@ function bestRowWins(next: BestScoreRow, current: BestScoreRow): boolean {
   )
 }
 
-async function upsertChart(db: Db, payload: IrScoreSubmission, allowUpdate: boolean) {
+async function upsertChart(payload: IrScoreSubmission, allowUpdate: boolean) {
   const profile: Partial<IrChartLnProfile> = payload.chart.ln_profile ?? {}
   const notes = payload.chart.notes ?? {}
   const features = payload.chart.features ?? {}
-  const { error } = await db.from('charts').upsert(
-    {
-      sha256: payload.chart.sha256,
-      md5: payload.chart.md5 ?? null,
-      title: payload.chart.title ?? '',
-      subtitle: payload.chart.subtitle ?? null,
-      genre: payload.chart.genre ?? null,
-      artist: payload.chart.artist ?? null,
-      subartists: payload.chart.subartists ?? [],
-      mode: payload.chart.mode ?? payload.rule.key_mode ?? 'unknown',
-      level: payload.chart.level ?? null,
-      total: payload.chart.total ?? null,
-      judge_rank: payload.chart.judge ?? null,
-      min_bpm: payload.chart.bpm?.min ?? null,
-      max_bpm: payload.chart.bpm?.max ?? null,
-      notes: notes.total ?? payload.result.notes,
-      ln_notes: notes.ln ?? 0,
-      cn_notes: notes.cn ?? 0,
-      hcn_notes: notes.hcn ?? 0,
-      mine_notes: notes.mine ?? 0,
-      has_random: features.random ?? false,
-      has_stop: features.stop ?? false,
-      has_undefined_ln: profile.has_undefined_ln ?? false,
-      has_defined_ln: profile.has_defined_ln ?? false,
-      has_defined_cn: profile.has_defined_cn ?? false,
-      has_defined_hcn: profile.has_defined_hcn ?? false,
-      has_ln: features.ln ?? profile.has_defined_ln ?? profile.has_undefined_ln ?? false,
-      has_cn: features.cn ?? profile.has_defined_cn ?? false,
-      has_hcn: features.hcn ?? profile.has_defined_hcn ?? false,
-      has_mine: features.mine ?? false,
-      source_url: payload.chart.urls?.source ?? null,
-      append_url: payload.chart.urls?.append ?? null,
-      headers: payload.chart.headers ?? {},
-    },
-    {
-      onConflict: 'sha256',
-      // Battle系は result.notes が2倍になり、key_mode もDP化されるため、
-      // 既存の元譜面 chart metadata を上書きしない。
-      ignoreDuplicates: !allowUpdate,
-    },
-  )
-  if (error) {
-    throw error
+  const values = {
+    sha256: payload.chart.sha256,
+    md5: payload.chart.md5 ?? null,
+    title: payload.chart.title ?? '',
+    subtitle: payload.chart.subtitle ?? null,
+    genre: payload.chart.genre ?? null,
+    artist: payload.chart.artist ?? null,
+    subartists: payload.chart.subartists ?? [],
+    mode: payload.chart.mode ?? payload.rule.key_mode ?? 'unknown',
+    level: payload.chart.level ?? null,
+    total: payload.chart.total ?? null,
+    judgeRank: payload.chart.judge ?? null,
+    minBpm: payload.chart.bpm?.min ?? null,
+    maxBpm: payload.chart.bpm?.max ?? null,
+    notes: notes.total ?? payload.result.notes,
+    lnNotes: notes.ln ?? 0,
+    cnNotes: notes.cn ?? 0,
+    hcnNotes: notes.hcn ?? 0,
+    mineNotes: notes.mine ?? 0,
+    hasRandom: features.random ?? false,
+    hasStop: features.stop ?? false,
+    hasUndefinedLn: profile.has_undefined_ln ?? false,
+    hasDefinedLn: profile.has_defined_ln ?? false,
+    hasDefinedCn: profile.has_defined_cn ?? false,
+    hasDefinedHcn: profile.has_defined_hcn ?? false,
+    hasLn: features.ln ?? profile.has_defined_ln ?? profile.has_undefined_ln ?? false,
+    hasCn: features.cn ?? profile.has_defined_cn ?? false,
+    hasHcn: features.hcn ?? profile.has_defined_hcn ?? false,
+    hasMine: features.mine ?? false,
+    sourceUrl: payload.chart.urls?.source ?? null,
+    appendUrl: payload.chart.urls?.append ?? null,
+    headers: payload.chart.headers ?? {},
+    updatedAt: new Date(),
   }
+
+  if (!allowUpdate) {
+    await db.insert(schema.charts).values(values).onConflictDoNothing()
+    return
+  }
+  await db
+    .insert(schema.charts)
+    .values(values)
+    .onConflictDoUpdate({ target: schema.charts.sha256, set: values })
 }
 
 async function fetchPreviousBest(
-  db: Db,
   playerId: string,
   payload: IrScoreSubmission,
 ): Promise<IrSubmitResponse['previous_best']> {
-  const { data: current, error } = await db
-    .from('best_scores')
-    .select('ex_score, clear_type, max_combo, min_bp, min_cb')
-    .eq('player_id', playerId)
-    .eq('chart_sha256', payload.chart.sha256)
-    .eq('gauge', payload.rule.gauge)
-    .eq('ln_policy', payload.rule.ln_policy)
-    .eq('scoring', payload.rule.scoring)
-    .eq('double_option', normalizeDoubleOption(payload.play_options.double_option))
-    .maybeSingle()
-  if (error) {
-    throw error
-  }
+  const current = await db.query.bestScores.findFirst({
+    columns: { exScore: true, clearType: true, maxCombo: true, minBp: true, minCb: true },
+    where: and(
+      eq(schema.bestScores.playerId, playerId),
+      eq(schema.bestScores.chartSha256, payload.chart.sha256),
+      eq(schema.bestScores.gauge, payload.rule.gauge),
+      eq(schema.bestScores.lnPolicy, payload.rule.ln_policy),
+      eq(schema.bestScores.scoring, payload.rule.scoring),
+      eq(schema.bestScores.doubleOption, normalizeDoubleOption(payload.play_options.double_option)),
+    ),
+  })
   if (!current) {
     return null
   }
   return {
-    clear_type: current.clear_type,
-    ex_score: current.ex_score,
-    max_combo: current.max_combo,
-    min_bp: current.min_bp,
-    min_cb: current.min_cb,
+    clear_type: current.clearType,
+    ex_score: current.exScore,
+    max_combo: current.maxCombo,
+    min_bp: current.minBp,
+    min_cb: current.minCb,
   }
 }
 
 async function upsertBestScore(
-  db: Db,
   playerId: string,
   payload: IrScoreSubmission,
   scoreId: string,
   verification: string,
   candidate: BestScoreCandidate,
 ) {
-  const { data: current, error: currentError } = await db
-    .from('best_scores')
-    .select('ex_score, clear_rank, max_combo, min_bp, min_cb, server_received_at')
-    .eq('player_id', playerId)
-    .eq('chart_sha256', payload.chart.sha256)
-    .eq('gauge', payload.rule.gauge)
-    .eq('ln_policy', payload.rule.ln_policy)
-    .eq('scoring', payload.rule.scoring)
-    .eq('double_option', normalizeDoubleOption(payload.play_options.double_option))
-    .maybeSingle()
-  if (currentError) {
-    throw currentError
-  }
+  const current = await db.query.bestScores.findFirst({
+    columns: {
+      exScore: true,
+      clearRank: true,
+      maxCombo: true,
+      minBp: true,
+      minCb: true,
+      serverReceivedAt: true,
+    },
+    where: and(
+      eq(schema.bestScores.playerId, playerId),
+      eq(schema.bestScores.chartSha256, payload.chart.sha256),
+      eq(schema.bestScores.gauge, payload.rule.gauge),
+      eq(schema.bestScores.lnPolicy, payload.rule.ln_policy),
+      eq(schema.bestScores.scoring, payload.rule.scoring),
+      eq(schema.bestScores.doubleOption, normalizeDoubleOption(payload.play_options.double_option)),
+    ),
+  })
+  const currentCandidate = current
+    ? {
+        ex_score: current.exScore,
+        clear_rank: current.clearRank,
+        max_combo: current.maxCombo,
+        min_bp: current.minBp,
+        min_cb: current.minCb,
+        server_received_at: current.serverReceivedAt,
+      }
+    : null
 
   const updatedFields = {
-    ex_score: !current || candidate.ex_score > current.ex_score,
-    clear: !current || candidate.clear_rank > current.clear_rank,
-    max_combo: !current || candidate.max_combo > current.max_combo,
-    min_bp: !current || candidate.min_bp < current.min_bp,
-    min_cb: !current || candidate.min_cb < current.min_cb,
+    ex_score: !currentCandidate || candidate.ex_score > currentCandidate.ex_score,
+    clear: !currentCandidate || candidate.clear_rank > currentCandidate.clear_rank,
+    max_combo: !currentCandidate || candidate.max_combo > currentCandidate.max_combo,
+    min_bp: !currentCandidate || candidate.min_bp < currentCandidate.min_bp,
+    min_cb: !currentCandidate || candidate.min_cb < currentCandidate.min_cb,
   }
-  const shouldUpdate = !current || bestCandidateWins(candidate, current as BestScoreCandidate)
+  const shouldUpdate = !currentCandidate || bestCandidateWins(candidate, currentCandidate)
   if (!shouldUpdate) {
     return { bestUpdated: false, updatedFields }
   }
 
-  const { error } = await db.from('best_scores').upsert(
-    {
-      player_id: playerId,
-      chart_sha256: payload.chart.sha256,
-      score_id: scoreId,
-      ex_score: candidate.ex_score,
-      clear_type: payload.result.clear,
-      clear_rank: candidate.clear_rank,
-      max_combo: candidate.max_combo,
-      min_bp: candidate.min_bp,
-      min_cb: candidate.min_cb,
-      device_type: payload.play_options.device_type,
-      double_option: normalizeDoubleOption(payload.play_options.double_option),
-      gauge: payload.rule.gauge,
-      ln_policy: payload.rule.ln_policy,
-      effective_ln_mode: payload.rule.effective_ln_mode,
-      scoring: payload.rule.scoring,
-      played_at: playedAtIso(payload.result.played_at),
-      server_received_at: candidate.server_received_at,
-      verification,
-    },
-    { onConflict: 'player_id,chart_sha256,gauge,ln_policy,scoring,double_option' },
-  )
-  if (error) {
+  const verificationStatus = verification as 'unverified' | 'signed' | 'invalid' | 'trusted'
+  const values = {
+    id: randomUUID(),
+    playerId,
+    chartSha256: payload.chart.sha256,
+    scoreId,
+    exScore: candidate.ex_score,
+    clearType: payload.result.clear,
+    clearRank: candidate.clear_rank,
+    maxCombo: candidate.max_combo,
+    minBp: candidate.min_bp,
+    minCb: candidate.min_cb,
+    deviceType: payload.play_options.device_type,
+    doubleOption: normalizeDoubleOption(payload.play_options.double_option),
+    gauge: payload.rule.gauge,
+    lnPolicy: payload.rule.ln_policy,
+    effectiveLnMode: payload.rule.effective_ln_mode,
+    scoring: payload.rule.scoring,
+    playedAt: playedAtDate(payload.result.played_at),
+    serverReceivedAt: candidate.server_received_at,
+    verification: verificationStatus,
+  }
+  await db
+    .insert(schema.bestScores)
+    .values(values)
+    .onConflictDoUpdate({
+      target: [
+        schema.bestScores.playerId,
+        schema.bestScores.chartSha256,
+        schema.bestScores.gauge,
+        schema.bestScores.lnPolicy,
+        schema.bestScores.scoring,
+        schema.bestScores.doubleOption,
+      ],
+      set: {
+        scoreId: values.scoreId,
+        exScore: values.exScore,
+        clearType: values.clearType,
+        clearRank: values.clearRank,
+        maxCombo: values.maxCombo,
+        minBp: values.minBp,
+        minCb: values.minCb,
+        deviceType: values.deviceType,
+        effectiveLnMode: values.effectiveLnMode,
+        playedAt: values.playedAt,
+        serverReceivedAt: values.serverReceivedAt,
+        verification: values.verification,
+        updatedAt: new Date(),
+      },
+    })
+  return { bestUpdated: true, updatedFields }
+}
+
+async function insertScore(values: typeof schema.scores.$inferInsert) {
+  try {
+    const [inserted] = await db
+      .insert(schema.scores)
+      .values(values)
+      .returning({ id: schema.scores.id, serverReceivedAt: schema.scores.serverReceivedAt })
+    return inserted ?? null
+  } catch (error) {
+    if (isUniqueConstraintError(error)) {
+      return null
+    }
     throw error
   }
-  return { bestUpdated: true, updatedFields }
+}
+
+function isUniqueConstraintError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /unique constraint|constraint failed|SQLITE_CONSTRAINT/i.test(error.message)
+  )
 }
 
 function bestCandidateWins(next: BestScoreCandidate, current: BestScoreCandidate): boolean {
@@ -694,27 +802,28 @@ function applyScope(
   return entries.filter((entry) => entry.player.id === selfId || rivalIds.has(entry.player.id))
 }
 
-async function getRivalIds(db: Db, playerId: string): Promise<Set<string>> {
-  const { data, error } = await db
-    .from('rival_relationships')
-    .select('target_player_id')
-    .eq('owner_player_id', playerId)
-    .eq('relation_type', 'rival')
-  if (error) {
-    throw error
-  }
-  return new Set((data ?? []).map((row) => row.target_player_id))
+async function getRivalIds(playerId: string): Promise<Set<string>> {
+  const rows = await db
+    .select({ target_player_id: schema.rivalRelationships.targetPlayerId })
+    .from(schema.rivalRelationships)
+    .where(
+      and(
+        eq(schema.rivalRelationships.ownerPlayerId, playerId),
+        eq(schema.rivalRelationships.relationType, 'rival'),
+      ),
+    )
+  return new Set(rows.map((row) => row.target_player_id))
 }
 
-async function getPlayerNames(db: Db, playerIds: string[]): Promise<Map<string, string>> {
+async function getPlayerNames(playerIds: string[]): Promise<Map<string, string>> {
   if (playerIds.length === 0) {
     return new Map()
   }
-  const { data, error } = await db.from('profiles').select('id, display_name').in('id', playerIds)
-  if (error) {
-    throw error
-  }
-  return new Map((data ?? []).map((row) => [row.id, row.display_name || 'Player']))
+  const rows = await db
+    .select({ id: schema.profiles.id, display_name: schema.profiles.displayName })
+    .from(schema.profiles)
+    .where(inArray(schema.profiles.id, playerIds))
+  return new Map(rows.map((row) => [row.id, row.display_name || 'Player']))
 }
 
 /**
@@ -728,10 +837,15 @@ async function getPlayerNames(db: Db, playerIds: string[]): Promise<Map<string, 
  * したもので、BMZ クライアント (serde_json の BTreeMap 出力) と一致させる。
  */
 export async function resolveVerification(
-  db: Db,
-  playerId: string,
-  payload: { evidence?: Record<string, unknown> },
+  playerIdOrDb: string | unknown,
+  payloadOrPlayerId: { evidence?: Record<string, unknown> } | string,
+  maybePayload?: { evidence?: Record<string, unknown> },
 ): Promise<'unverified' | 'signed' | 'invalid'> {
+  const playerId = typeof playerIdOrDb === 'string' ? playerIdOrDb : String(payloadOrPlayerId)
+  const payload =
+    typeof playerIdOrDb === 'string'
+      ? (payloadOrPlayerId as { evidence?: Record<string, unknown> })
+      : (maybePayload ?? {})
   const evidence = payload.evidence
   if (!evidence || typeof evidence !== 'object') {
     return 'unverified'
@@ -750,14 +864,15 @@ export async function resolveVerification(
     return 'invalid'
   }
 
-  const { data: key, error } = await db
-    .from('device_keys')
-    .select('public_key')
-    .eq('id', keyId)
-    .eq('player_id', playerId)
-    .is('revoked_at', null)
-    .maybeSingle()
-  if (error || !key) {
+  const key = await db.query.deviceKeys.findFirst({
+    columns: { publicKey: true },
+    where: and(
+      eq(schema.deviceKeys.id, keyId),
+      eq(schema.deviceKeys.playerId, playerId),
+      isNull(schema.deviceKeys.revokedAt),
+    ),
+  })
+  if (!key) {
     return 'invalid'
   }
 
@@ -770,7 +885,7 @@ export async function resolveVerification(
     // Ed25519 raw public key (32 bytes) を SPKI DER に包んで検証する。
     const der = Buffer.concat([
       Buffer.from('302a300506032b6570032100', 'hex'),
-      Buffer.from(key.public_key, 'hex'),
+      Buffer.from(key.publicKey, 'hex'),
     ])
     const publicKey = createPublicKey({ key: der, format: 'der', type: 'spki' })
     const signatureBytes = Buffer.from(signature, 'base64url')
@@ -813,12 +928,12 @@ export function stableStringify(value: unknown): string {
 }
 
 /** played_at は ISO 文字列または unix 秒 (BMZ client) を受け付ける。 */
-function playedAtIso(value: unknown): string | null {
+function playedAtDate(value: unknown): Date | null {
   if (typeof value === 'number' && Number.isFinite(value)) {
-    return new Date(value * 1000).toISOString()
+    return new Date(value * 1000)
   }
   if (typeof value === 'string' && value.length > 0) {
-    return value
+    return new Date(value)
   }
   return null
 }
