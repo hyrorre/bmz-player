@@ -31,7 +31,9 @@ export const sessions = sqliteTable(
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
     kind: text('kind', { enum: ['access', 'refresh'] }).notNull(),
-    clientType: text('client_type', { enum: ['web', 'desktop'] }).notNull().default('web'),
+    clientType: text('client_type', { enum: ['web', 'desktop'] })
+      .notNull()
+      .default('web'),
     expiresAt: integer('expires_at', { mode: 'timestamp_ms' }).notNull(),
     lastUsedAt: integer('last_used_at', { mode: 'timestamp_ms' }),
     revokedAt: integer('revoked_at', { mode: 'timestamp_ms' }),

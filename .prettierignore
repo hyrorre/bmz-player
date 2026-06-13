@@ -29,6 +29,7 @@ bun.lock
 
 # generated files
 server/db/migrations/
+bmz-ir-web/shared/types/worker-configuration.d.ts
 
 # Markdown files
 *.md

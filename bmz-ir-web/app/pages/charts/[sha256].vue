@@ -19,7 +19,11 @@ interface ChartDetail {
 }
 
 const route = useRoute()
-const chartParam = computed(() => String(route.params.sha256 ?? '').trim().toLowerCase())
+const chartParam = computed(() =>
+  String(route.params.sha256 ?? '')
+    .trim()
+    .toLowerCase(),
+)
 const paramError = ref<string | null>(null)
 
 if (/^[0-9a-f]{32}$/.test(chartParam.value)) {
@@ -35,9 +39,7 @@ if (/^[0-9a-f]{32}$/.test(chartParam.value)) {
   paramError.value = '譜面 ID は MD5 (32 hex) または SHA256 (64 hex) である必要があります'
 }
 
-const sha256 = computed(() =>
-  /^[0-9a-f]{64}$/.test(chartParam.value) ? chartParam.value : '',
-)
+const sha256 = computed(() => (/^[0-9a-f]{64}$/.test(chartParam.value) ? chartParam.value : ''))
 const canLoadChart = computed(() => sha256.value.length === 64)
 
 type LnPolicyFilter = 'ALL' | LnScorePolicy
@@ -75,7 +77,12 @@ const {
   <main class="min-h-dvh bg-neutral-950 text-neutral-50">
     <section class="mx-auto w-full max-w-4xl px-5 py-10">
       <UAlert v-if="paramError" color="error" :description="paramError" class="mb-6" />
-      <UAlert v-else-if="detailError" color="error" :description="detailError.message" class="mb-6" />
+      <UAlert
+        v-else-if="detailError"
+        color="error"
+        :description="detailError.message"
+        class="mb-6"
+      />
       <template v-else-if="detail">
         <div class="mb-8">
           <p class="mb-2 text-sm font-medium text-primary-300">

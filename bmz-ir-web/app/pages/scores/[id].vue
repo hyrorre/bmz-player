@@ -46,7 +46,9 @@ interface ScoreDetail {
 
 const route = useRoute()
 const scoreId = computed(() => String(route.params.id ?? ''))
-const { data, pending, error } = await useFetch<ScoreDetail>(() => `/api/v1/scores/${scoreId.value}`)
+const { data, pending, error } = await useFetch<ScoreDetail>(
+  () => `/api/v1/scores/${scoreId.value}`,
+)
 
 const replayAvailable = computed(() =>
   ['uploaded', 'verified'].includes(data.value?.replay?.status ?? ''),
@@ -56,13 +58,10 @@ const replayError = ref('')
 async function downloadReplay() {
   replayError.value = ''
   try {
-    const target = await $fetch<{ download_url: string }>(
-      `/api/v1/scores/${scoreId.value}/replay`,
-    )
+    const target = await $fetch<{ download_url: string }>(`/api/v1/scores/${scoreId.value}/replay`)
     window.location.href = target.download_url
   } catch (error) {
-    replayError.value =
-      error instanceof Error ? error.message : 'リプレイの取得に失敗しました。'
+    replayError.value = error instanceof Error ? error.message : 'リプレイの取得に失敗しました。'
   }
 }
 
@@ -121,9 +120,7 @@ const verificationBadge = computed(() => {
           </h1>
           <p class="mt-2 text-sm text-neutral-400">
             {{ data.score.gauge }} / {{ data.score.ln_policy }} ・ {{ data.score.device_type }} ・
-            {{
-              new Date(data.score.played_at ?? data.score.server_received_at).toLocaleString()
-            }}
+            {{ new Date(data.score.played_at ?? data.score.server_received_at).toLocaleString() }}
             <UBadge :color="verificationBadge.color" size="sm" variant="subtle">
               {{ verificationBadge.label }}
             </UBadge>

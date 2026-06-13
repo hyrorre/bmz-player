@@ -111,6 +111,7 @@ GET    /api/v1/courses/{course_hash}/ranking   # global のみ
 ```bash
 bun install
 bun run db:migrate
+bunx prettier . --check
 bun run cf:build
 bun run cf:types
 bun run dev                            # http://localhost:3000

@@ -455,6 +455,14 @@ cargo clippy
 cargo test
 ```
 
+IR website:
+
+```bash
+bunx prettier . --check
+bunx vue-tsc --noEmit
+bun run test:ir
+```
+
 render/skin:
 
 ```bash

@@ -18,7 +18,10 @@ export function requirePassword(value: unknown, fieldName = 'password'): string 
     throw createError({ statusCode: 400, statusMessage: `${fieldName} is required` })
   }
   if (password.length < 8) {
-    throw createError({ statusCode: 400, statusMessage: `${fieldName} must be at least 8 characters` })
+    throw createError({
+      statusCode: 400,
+      statusMessage: `${fieldName} must be at least 8 characters`,
+    })
   }
   return password
 }

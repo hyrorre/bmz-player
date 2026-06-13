@@ -90,7 +90,9 @@ const { data, pending, error } = await useFetch<PlayerDetail>(
                 <td class="px-3 py-2">{{ score.clear_type }}</td>
                 <td class="px-3 py-2 text-right">{{ score.max_combo }}</td>
                 <td class="px-3 py-2 text-right">{{ score.min_bp }}</td>
-                <td class="px-3 py-2 text-neutral-400">{{ score.gauge }} / {{ score.ln_policy }}</td>
+                <td class="px-3 py-2 text-neutral-400">
+                  {{ score.gauge }} / {{ score.ln_policy }}
+                </td>
                 <td class="px-3 py-2 text-neutral-400">
                   {{ new Date(score.played_at ?? score.server_received_at).toLocaleString() }}
                 </td>
