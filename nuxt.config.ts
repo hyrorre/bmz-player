@@ -14,18 +14,8 @@ export default defineNuxtConfig({
     db: {
       dialect: 'sqlite',
       casing: 'snake_case',
-      driver: 'd1',
-      migrationsDirs: ['server/db/migrations'],
-      connection: {
-        databaseId:
-          process.env.NUXT_HUB_CLOUDFLARE_DATABASE_ID || '1b7a8d66-98a4-4641-82ee-32eebe0b89e2',
-      },
     },
-    blob: {
-      driver: 'cloudflare-r2',
-      binding: 'BLOB',
-      bucketName: process.env.NUXT_HUB_BLOB_BUCKET || 'bmz-ir-blob',
-    },
+    blob: true,
   },
   runtimeConfig: {
     session: {

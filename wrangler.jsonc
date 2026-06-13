@@ -18,4 +18,10 @@
       "migrations_dir": "server/db/migrations/sqlite",
     },
   ],
+  "r2_buckets": [
+    {
+      "binding": "BLOB",
+      "bucket_name": "bmz-ir-blob",
+    },
+  ],
 }
