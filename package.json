@@ -12,7 +12,7 @@
     "db:migrate": "nuxt db migrate",
     "generate": "nuxt generate",
     "preview": "nuxt preview",
-    "test:ir": "bun test bmz-ir-web/server/services/ir.test.ts",
+    "test:ir": "bun test bmz-ir-web/server/services/ir.test.ts bmz-ir-web/server/utils/auth_input.test.ts",
     "postinstall": "nuxt prepare"
   },
   "dependencies": {
