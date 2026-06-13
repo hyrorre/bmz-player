@@ -23,7 +23,7 @@ pub async fn run_ir_command(cmd: IrCommand) -> Result<()> {
         IrCommand::Login { email, password, base_url, provider } => {
             login(&profile_paths, &mut profile, &provider, &email, password, base_url).await
         }
-        IrCommand::Logout { provider } => logout(&profile_paths, &mut profile, &provider),
+        IrCommand::Logout { provider } => logout(&profile_paths, &mut profile, &provider).await,
         IrCommand::Status => status(&profile_paths, &profile).await,
         IrCommand::Ranking { sha256, gauge, ln_policy, scope, limit } => {
             ranking(&profile_paths, &profile, &sha256, &gauge, &ln_policy, &scope, limit).await
@@ -301,7 +301,21 @@ async fn login(
     Ok(())
 }
 
-fn logout(profile_paths: &ProfilePaths, profile: &mut ProfileConfig, provider: &str) -> Result<()> {
+async fn logout(
+    profile_paths: &ProfilePaths,
+    profile: &mut ProfileConfig,
+    provider: &str,
+) -> Result<()> {
+    let credentials = load_credentials(profile_paths.root_dir.as_path(), provider)?;
+    if let Some(credentials) = &credentials
+        && let Some(entry) = profile.ir.providers.iter().find(|entry| entry.provider == provider)
+    {
+        let client = BmzOfficialIrClient::new(&entry.base_url, credentials.access_token.clone())?;
+        if let Err(error) = client.logout(&credentials.refresh_token).await {
+            eprintln!("warning: failed to revoke remote IR session for {provider}: {error:#}");
+        }
+    }
+
     let removed = delete_credentials(profile_paths.root_dir.as_path(), provider)?;
     if let Some(entry) = profile.ir.providers.iter_mut().find(|entry| entry.provider == provider) {
         entry.enabled = false;

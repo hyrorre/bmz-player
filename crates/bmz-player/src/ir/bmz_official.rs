@@ -72,6 +72,20 @@ impl BmzOfficialIrClient {
         decode_response(response, "BMZ IR token refresh").await
     }
 
+    pub async fn logout(&self, refresh_token: &str) -> Result<()> {
+        let url = self.base_url.join("/api/v1/auth/logout")?;
+        let response = self
+            .http
+            .post(url)
+            .bearer_auth(self.require_token()?)
+            .json(&serde_json::json!({ "refresh_token": refresh_token }))
+            .send()
+            .await
+            .context("failed to send BMZ IR logout request")?;
+        let _: serde_json::Value = decode_response(response, "BMZ IR logout").await?;
+        Ok(())
+    }
+
     pub async fn me(&self) -> Result<IrMeResponse> {
         let url = self.base_url.join("/api/v1/me")?;
         let response = self
