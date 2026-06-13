@@ -13,8 +13,8 @@ const accountItems = computed(() =>
         { label: '設定', icon: 'i-lucide-settings', to: '/settings' },
       ]
     : [
-        { label: 'ログイン', icon: 'i-lucide-log-in', to: '/signin' },
-        { label: '登録', icon: 'i-lucide-user-plus', to: '/signup' },
+        { label: 'ログイン', icon: 'i-lucide-log-in', to: '/login' },
+        { label: '登録', icon: 'i-lucide-user-plus', to: '/register' },
       ],
 )
 </script>
@@ -30,7 +30,7 @@ const accountItems = computed(() =>
 
     <template #right>
       <UNavigationMenu :items="accountItems" class="hidden sm:flex" />
-      <UButton v-if="user" color="neutral" icon="i-lucide-log-out" to="/signout" variant="ghost" />
+      <UButton v-if="user" color="neutral" icon="i-lucide-log-out" to="/logout" variant="ghost" />
     </template>
 
     <template #body>
@@ -44,7 +44,7 @@ const accountItems = computed(() =>
         class="mt-4"
         color="neutral"
         icon="i-lucide-log-out"
-        to="/signout"
+        to="/logout"
         variant="subtle"
       >
         ログアウト

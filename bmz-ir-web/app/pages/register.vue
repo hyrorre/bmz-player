@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { AuthFormField, FormSubmitEvent } from '@nuxt/ui'
 
-type SignupState = {
+type RegisterState = {
   displayName: string
   email: string
   password: string
@@ -57,8 +57,8 @@ if (loggedIn.value) {
   await navigateTo('/')
 }
 
-function validate(state: Partial<SignupState>) {
-  const errors: { name: keyof SignupState; message: string }[] = []
+function validate(state: Partial<RegisterState>) {
+  const errors: { name: keyof RegisterState; message: string }[] = []
 
   if (!state.displayName?.trim()) {
     errors.push({ name: 'displayName', message: '表示名を入力してください。' })
@@ -79,13 +79,13 @@ function validate(state: Partial<SignupState>) {
   return errors
 }
 
-async function submit(event: FormSubmitEvent<SignupState>) {
+async function submit(event: FormSubmitEvent<RegisterState>) {
   errorMessage.value = ''
   successMessage.value = ''
   loading.value = true
 
   try {
-    await $fetch('/api/v1/auth/signup', {
+    await $fetch('/api/v1/auth/register', {
       method: 'POST',
       body: {
         email: event.data.email.trim(),
@@ -139,7 +139,7 @@ async function submit(event: FormSubmitEvent<SignupState>) {
         <template #footer>
           <p class="text-center text-sm text-neutral-300">
             アカウントをお持ちの場合は
-            <NuxtLink class="font-medium text-primary-300 hover:text-primary-200" to="/signin">
+            <NuxtLink class="font-medium text-primary-300 hover:text-primary-200" to="/login">
               ログイン
             </NuxtLink>
           </p>

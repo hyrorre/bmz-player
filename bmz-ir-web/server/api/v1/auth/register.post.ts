@@ -3,14 +3,14 @@ import { createError, readBody } from 'h3'
 import { db, schema } from 'hub:db'
 import { createAuthTokens } from '../../../utils/auth_tokens'
 
-interface SignupBody {
+interface RegisterBody {
   email?: string
   password?: string
   display_name?: string
 }
 
 export default defineEventHandler(async (event) => {
-  const body = (await readBody(event)) as SignupBody
+  const body = (await readBody(event)) as RegisterBody
   const email = body.email?.trim().toLowerCase()
   const password = body.password ?? ''
   const displayName = body.display_name?.trim() ?? ''

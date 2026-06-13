@@ -141,7 +141,7 @@ async function resetPassword(event: FormSubmitEvent<ResetPasswordState>) {
         <template #footer>
           <p class="text-center text-sm text-neutral-300">
             変更後は
-            <NuxtLink class="font-medium text-primary-300 hover:text-primary-200" to="/signin">
+            <NuxtLink class="font-medium text-primary-300 hover:text-primary-200" to="/login">
               ログイン
             </NuxtLink>
             から再度確認できます
@@ -179,7 +179,7 @@ async function resetPassword(event: FormSubmitEvent<ResetPasswordState>) {
         <template #footer>
           <p class="text-center text-sm text-neutral-300">
             パスワードを思い出した場合は
-            <NuxtLink class="font-medium text-primary-300 hover:text-primary-200" to="/signin">
+            <NuxtLink class="font-medium text-primary-300 hover:text-primary-200" to="/login">
               ログイン
             </NuxtLink>
           </p>

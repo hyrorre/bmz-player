@@ -54,7 +54,7 @@ const passwordErrorMessage = ref('')
 const passwordSuccessMessage = ref('')
 
 if (!user.value) {
-  await navigateTo('/signin')
+  await navigateTo('/login')
 }
 
 function validateEmail(state: Partial<EmailState>) {
@@ -83,7 +83,7 @@ function validatePassword(state: Partial<PasswordState>) {
 
 async function updateEmail(event: FormSubmitEvent<EmailState>) {
   if (!user.value) {
-    await navigateTo('/signin')
+    await navigateTo('/login')
     return
   }
 
@@ -108,7 +108,7 @@ async function updateEmail(event: FormSubmitEvent<EmailState>) {
 
 async function updatePassword(event: FormSubmitEvent<PasswordState>) {
   if (!user.value) {
-    await navigateTo('/signin')
+    await navigateTo('/login')
     return
   }
 

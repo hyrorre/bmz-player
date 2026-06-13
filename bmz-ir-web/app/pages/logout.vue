@@ -8,11 +8,12 @@ const { user, clear } = useUserSession()
 const loading = ref(false)
 const errorMessage = ref('')
 
-async function signOut() {
+async function logout() {
   errorMessage.value = ''
   loading.value = true
 
   try {
+    await $fetch('/api/v1/auth/logout', { method: 'POST' })
     await clear()
   } catch (error) {
     errorMessage.value =
@@ -22,7 +23,7 @@ async function signOut() {
   }
 
   loading.value = false
-  await navigateTo('/signin')
+  await navigateTo('/login')
 }
 </script>
 
@@ -57,7 +58,7 @@ async function signOut() {
             :loading="loading"
             size="xl"
             type="button"
-            @click="signOut"
+            @click="logout"
           >
             ログアウト
           </UButton>

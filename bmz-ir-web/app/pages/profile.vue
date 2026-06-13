@@ -49,7 +49,7 @@ function validate(profile: Partial<ProfileState>) {
 
 async function loadProfile() {
   if (!user.value) {
-    await navigateTo('/signin')
+    await navigateTo('/login')
     return
   }
   loading.value = true
@@ -69,7 +69,7 @@ async function loadProfile() {
 
 async function submit(event: FormSubmitEvent<ProfileState>) {
   if (!user.value) {
-    await navigateTo('/signin')
+    await navigateTo('/login')
     return
   }
 

@@ -43,7 +43,7 @@ const { user } = useUserSession()
               color="neutral"
               icon="i-lucide-log-out"
               size="xl"
-              to="/signout"
+              to="/logout"
               variant="subtle"
             >
               ログアウト
@@ -52,14 +52,12 @@ const { user } = useUserSession()
         </div>
 
         <div v-else class="flex flex-col gap-3 sm:flex-row">
-          <UButton color="primary" icon="i-lucide-log-in" size="xl" to="/signin">
-            ログイン
-          </UButton>
+          <UButton color="primary" icon="i-lucide-log-in" size="xl" to="/login"> ログイン </UButton>
           <UButton
             color="neutral"
             icon="i-lucide-user-plus"
             size="xl"
-            to="/signup"
+            to="/register"
             variant="subtle"
           >
             登録

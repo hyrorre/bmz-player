@@ -16,6 +16,8 @@ DB migration は `server/db/migrations/sqlite/`。
 
 ```http
 POST   /api/v1/auth/login                      # email+password → access/refresh token
+POST   /api/v1/auth/register
+POST   /api/v1/auth/logout
 POST   /api/v1/auth/refresh
 GET    /api/v1/me
 POST   /api/v1/scores                          # include=rankings&ranking_scopes=... 対応
