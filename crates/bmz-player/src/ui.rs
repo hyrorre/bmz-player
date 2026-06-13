@@ -253,6 +253,8 @@ pub struct EguiLayer {
     audio_device_picker: AudioDevicePickerState,
     /// プロファイル設定パネル: IR ログインフォームの状態。
     ir_login: IrLoginUiState,
+    /// プロファイル設定パネル: IR device key 操作用の状態。
+    ir_device_key: IrDeviceKeyUiState,
 }
 
 /// プロファイル設定パネルの IR ログインフォーム状態。
@@ -274,6 +276,87 @@ struct IrLoginOutcome {
     provider: String,
     account_id: String,
     display_name: String,
+}
+
+/// プロファイル設定パネルの IR device key 操作状態。
+#[derive(Default)]
+struct IrDeviceKeyUiState {
+    busy_provider: Option<String>,
+    /// (成功か, 表示メッセージ)
+    message: Option<(bool, String)>,
+    receiver: Option<std::sync::mpsc::Receiver<Result<IrDeviceKeyOutcome, String>>>,
+}
+
+struct IrDeviceKeyOutcome {
+    provider: String,
+    public_key: String,
+    key_id: String,
+}
+
+impl IrDeviceKeyUiState {
+    fn poll(&mut self) {
+        let Some(receiver) = &self.receiver else {
+            return;
+        };
+        let Ok(result) = receiver.try_recv() else {
+            return;
+        };
+        self.receiver = None;
+        self.busy_provider = None;
+        self.message = Some(match result {
+            Ok(outcome) => (
+                true,
+                format!(
+                    "{} の署名鍵を再生成しました: {} ({})",
+                    outcome.provider,
+                    short_public_key(&outcome.public_key),
+                    outcome.key_id
+                ),
+            ),
+            Err(error) => (false, error),
+        });
+    }
+
+    fn start_rotate(
+        &mut self,
+        profile_root: std::path::PathBuf,
+        provider: String,
+        base_url: String,
+    ) {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        self.receiver = Some(receiver);
+        self.busy_provider = Some(provider.clone());
+        self.message = None;
+        tokio::spawn(async move {
+            let outcome = async {
+                let credentials = crate::ir::sync::ensure_fresh_credentials(
+                    &profile_root,
+                    &provider,
+                    &base_url,
+                    now_unix_seconds(),
+                )
+                .await?;
+                let client = crate::ir::bmz_official::BmzOfficialIrClient::new(
+                    &base_url,
+                    credentials.access_token,
+                )?;
+                let key = crate::ir::device_key::rotate_registered_device_key(
+                    &profile_root,
+                    &provider,
+                    &client,
+                )
+                .await?;
+                anyhow::Ok(IrDeviceKeyOutcome {
+                    provider,
+                    public_key: key.public_key,
+                    key_id: key.key_id.unwrap_or_default(),
+                })
+            }
+            .await
+            .map_err(|error| format!("{error:#}"));
+            let _ = sender.send(outcome);
+        });
+    }
 }
 
 impl IrLoginUiState {
@@ -361,6 +444,13 @@ fn now_unix_seconds() -> i64 {
         .unwrap_or(0)
 }
 
+fn short_public_key(public_key: &str) -> String {
+    if public_key.len() <= 16 {
+        return public_key.to_string();
+    }
+    format!("{}…{}", &public_key[..8], &public_key[public_key.len() - 8..])
+}
+
 /// 設定パネルの出力デバイス選択 ComboBox 用キャッシュ。
 #[derive(Default)]
 struct AudioDevicePickerState {
@@ -402,6 +492,7 @@ impl EguiLayer {
             score_import_error: String::new(),
             audio_device_picker: AudioDevicePickerState::default(),
             ir_login: IrLoginUiState::default(),
+            ir_device_key: IrDeviceKeyUiState::default(),
         }
     }
 
@@ -530,6 +621,7 @@ impl EguiLayer {
                     profile_config,
                     show_debug,
                     ir_login,
+                    &mut self.ir_device_key,
                     profile_root,
                 );
                 save_profile_config |= profile_settings_actions.save;
@@ -1841,11 +1933,13 @@ fn build_profile_settings_panel(
     profile: &mut ProfileConfig,
     show_debug: &mut bool,
     ir_login: &mut IrLoginUiState,
+    ir_device_key: &mut IrDeviceKeyUiState,
     profile_root: &std::path::Path,
 ) -> ProfileSettingsPanelActions {
     let mut save_clicked = false;
     // ログインタスクの完了を反映。provider 設定が更新されたら保存する。
     save_clicked |= ir_login.poll(profile);
+    ir_device_key.poll();
     sized_panel_window("プロファイル設定", ctx, open, 460.0, 560.0, egui::pos2(476.0, 320.0)).show(
         ctx,
         |ui| {
@@ -2310,7 +2404,33 @@ fn build_profile_settings_panel(
                                     }
                                 }
                             });
+                            ui.horizontal(|ui| {
+                                let busy = ir_device_key.busy_provider.as_deref()
+                                    == Some(provider.provider.as_str());
+                                let can_rotate = !busy && !provider.base_url.is_empty();
+                                if ui
+                                    .add_enabled(can_rotate, egui::Button::new("署名鍵を再生成"))
+                                    .clicked()
+                                {
+                                    ir_device_key.start_rotate(
+                                        profile_root.to_path_buf(),
+                                        provider.provider.clone(),
+                                        provider.base_url.clone(),
+                                    );
+                                }
+                                if busy {
+                                    ui.spinner();
+                                }
+                            });
                             if let Some((ok, message)) = &ir_login.message {
+                                let color = if *ok {
+                                    egui::Color32::LIGHT_GREEN
+                                } else {
+                                    egui::Color32::LIGHT_RED
+                                };
+                                ui.colored_label(color, message.clone());
+                            }
+                            if let Some((ok, message)) = &ir_device_key.message {
                                 let color = if *ok {
                                     egui::Color32::LIGHT_GREEN
                                 } else {

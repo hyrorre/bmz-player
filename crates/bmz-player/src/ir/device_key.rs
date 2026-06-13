@@ -76,6 +76,61 @@ pub fn save_device_key(profile_root: &Path, key: &StoredDeviceKey) -> Result<()>
     device_key_slot(profile_root, &key.provider).save(&raw)
 }
 
+/// ローカル device key をサーバーで使える状態にする。
+///
+/// - 未生成なら生成する。
+/// - 未登録なら公開鍵を登録する。
+/// - 登録済み key がサーバー側で失効済みなら、新しい key pair に rotate する。
+/// - 登録済み key がサーバー側に見つからないだけなら、同じ公開鍵を再登録する。
+pub async fn ensure_registered_device_key(
+    profile_root: &Path,
+    provider: &str,
+    client: &super::bmz_official::BmzOfficialIrClient,
+) -> Result<StoredDeviceKey> {
+    let mut key = load_or_create_device_key(profile_root, provider)?;
+    let Some(key_id) = key.key_id.clone() else {
+        let key_id = client.register_device_key(&key.public_key).await?;
+        key.key_id = Some(key_id);
+        save_device_key(profile_root, &key)?;
+        return Ok(key);
+    };
+
+    let keys = client.list_device_keys().await?;
+    match keys.device_keys.into_iter().find(|entry| entry.id == key_id) {
+        Some(entry) if entry.revoked_at.is_none() && entry.public_key == key.public_key => Ok(key),
+        Some(entry) if entry.revoked_at.is_some() => {
+            rotate_registered_device_key(profile_root, provider, client).await
+        }
+        Some(_) | None => {
+            let key_id = client.register_device_key(&key.public_key).await?;
+            key.key_id = Some(key_id);
+            save_device_key(profile_root, &key)?;
+            Ok(key)
+        }
+    }
+}
+
+/// 旧 device key を可能ならサーバーで失効し、新しい key pair を生成・登録する。
+pub async fn rotate_registered_device_key(
+    profile_root: &Path,
+    provider: &str,
+    client: &super::bmz_official::BmzOfficialIrClient,
+) -> Result<StoredDeviceKey> {
+    let old_key = load_or_create_device_key(profile_root, provider)?;
+    if let Some(old_key_id) = old_key.key_id.as_deref() {
+        if let Err(error) = client.revoke_device_key(old_key_id).await {
+            tracing::warn!(provider, key_id = old_key_id, %error, "failed to revoke old IR device key");
+        }
+    }
+
+    delete_device_key(profile_root, provider)?;
+    let mut new_key = load_or_create_device_key(profile_root, provider)?;
+    let key_id = client.register_device_key(&new_key.public_key).await?;
+    new_key.key_id = Some(key_id);
+    save_device_key(profile_root, &new_key)?;
+    Ok(new_key)
+}
+
 /// submission payload の canonical hash と署名から evidence map を作る。
 ///
 /// canonical form は「`evidence` を除いた payload を serde_json の

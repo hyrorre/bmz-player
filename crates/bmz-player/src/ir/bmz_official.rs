@@ -4,9 +4,9 @@ use reqwest::Url;
 use crate::select_options::DoubleOptionScoreBucket;
 
 use super::types::{
-    IrAuthTokens, IrMeResponse, IrRankingResult, IrRankingScope, IrReplayDownloadTarget,
-    IrReplayUploadTarget, IrReplayVerifyResult, IrRivalsResponse, IrScoreSubmission,
-    IrSubmitOptions, IrSubmitResponse,
+    IrAuthTokens, IrDeviceKeysResponse, IrMeResponse, IrRankingResult, IrRankingScope,
+    IrReplayDownloadTarget, IrReplayUploadTarget, IrReplayVerifyResult, IrRivalsResponse,
+    IrScoreSubmission, IrSubmitOptions, IrSubmitResponse,
 };
 
 #[derive(Debug, Clone)]
@@ -187,6 +187,19 @@ impl BmzOfficialIrClient {
         let _: serde_json::Value =
             decode_response(response, "BMZ IR device key revocation").await?;
         Ok(())
+    }
+
+    /// 自分の device key 一覧を取得する。
+    pub async fn list_device_keys(&self) -> Result<IrDeviceKeysResponse> {
+        let url = self.base_url.join("/api/v1/device-keys")?;
+        let response = self
+            .http
+            .get(url)
+            .bearer_auth(self.require_token()?)
+            .send()
+            .await
+            .context("failed to send BMZ IR device key list request")?;
+        decode_response(response, "BMZ IR device key list").await
     }
 
     pub async fn fetch_ranking(

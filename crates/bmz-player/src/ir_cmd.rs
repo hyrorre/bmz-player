@@ -69,7 +69,7 @@ async fn device_key(
     profile: &ProfileConfig,
     rotate: bool,
 ) -> Result<()> {
-    use crate::ir::device_key::{load_or_create_device_key, save_device_key};
+    use crate::ir::device_key::{load_or_create_device_key, rotate_registered_device_key};
 
     let provider = primary_provider(profile)?;
     let root = profile_paths.root_dir.as_path();
@@ -87,18 +87,8 @@ async fn device_key(
             .await?;
     let client = BmzOfficialIrClient::new(&provider.base_url, credentials.access_token)?;
 
-    // 旧鍵をサーバー側で失効してから、新しい鍵を生成・登録する。
-    if let Some(old_key_id) = &key.key_id {
-        match client.revoke_device_key(old_key_id).await {
-            Ok(()) => println!("revoked old device key: {old_key_id}"),
-            Err(error) => println!("warning: failed to revoke old key ({error:#})"),
-        }
-    }
-    crate::ir::device_key::delete_device_key(root, &provider.provider)?;
-    let mut new_key = load_or_create_device_key(root, &provider.provider)?;
-    let key_id = client.register_device_key(&new_key.public_key).await?;
-    new_key.key_id = Some(key_id.clone());
-    save_device_key(root, &new_key)?;
+    let new_key = rotate_registered_device_key(root, &provider.provider, &client).await?;
+    let key_id = new_key.key_id.as_deref().unwrap_or("(not registered)");
 
     println!("rotated device key for {}", provider.provider);
     println!("public key: {}", new_key.public_key);

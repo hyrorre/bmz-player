@@ -269,6 +269,23 @@ pub struct IrRivalsResponse {
     pub rivals: Vec<IrRivalEntry>,
 }
 
+/// `/api/v1/device-keys` のレスポンス。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrDeviceKeysResponse {
+    #[serde(default)]
+    pub device_keys: Vec<IrDeviceKeyEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IrDeviceKeyEntry {
+    pub id: String,
+    pub public_key: String,
+    pub algorithm: String,
+    #[serde(default)]
+    pub revoked_at: Option<String>,
+    pub created_at: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IrRivalEntry {
     pub player_id: String,

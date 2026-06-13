@@ -226,13 +226,12 @@ async fn submit_course_job_payload(
         ensure_fresh_credentials(profile_root, &provider.provider, &provider.base_url, now).await?;
     let client = BmzOfficialIrClient::new(&provider.base_url, credentials.access_token)?;
     let evidence = async {
-        let mut key =
-            super::device_key::load_or_create_device_key(profile_root, &provider.provider)?;
-        if key.key_id.is_none() {
-            let key_id = client.register_device_key(&key.public_key).await?;
-            key.key_id = Some(key_id);
-            super::device_key::save_device_key(profile_root, &key)?;
-        }
+        let key = super::device_key::ensure_registered_device_key(
+            profile_root,
+            &provider.provider,
+            &client,
+        )
+        .await?;
         super::device_key::build_evidence_for_value(&key, &payload, "bmz-course-score-evidence-v1")
     }
     .await;
@@ -261,13 +260,12 @@ async fn attach_evidence(
     payload: &mut IrScoreSubmission,
 ) {
     let result = async {
-        let mut key =
-            super::device_key::load_or_create_device_key(profile_root, &provider.provider)?;
-        if key.key_id.is_none() {
-            let key_id = client.register_device_key(&key.public_key).await?;
-            key.key_id = Some(key_id);
-            super::device_key::save_device_key(profile_root, &key)?;
-        }
+        let key = super::device_key::ensure_registered_device_key(
+            profile_root,
+            &provider.provider,
+            client,
+        )
+        .await?;
         super::device_key::build_evidence(&key, payload)
     }
     .await;
