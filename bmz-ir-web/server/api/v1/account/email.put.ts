@@ -1,19 +1,32 @@
 import { eq } from 'drizzle-orm'
 import { db, schema } from 'hub:db'
 import { requireIrUser } from '../../../utils/auth'
-import { normalizeEmail } from '../../../utils/auth_input'
+import { normalizeEmail, readPassword } from '../../../utils/auth_input'
 
 interface EmailBody {
+  current_password?: string
   email?: string
 }
 
 export default defineEventHandler(async (event) => {
   const user = await requireIrUser(event)
   const body = (await readBody(event)) as EmailBody
+  const currentPassword = readPassword(body.current_password)
   const email = normalizeEmail(body.email)
 
+  if (!currentPassword) {
+    throw createError({ statusCode: 400, statusMessage: 'current_password is required' })
+  }
   if (!email) {
     throw createError({ statusCode: 400, statusMessage: 'email is required' })
+  }
+
+  const account = await db.query.users.findFirst({
+    columns: { passwordHash: true },
+    where: eq(schema.users.id, user.id),
+  })
+  if (!account || !(await verifyPassword(account.passwordHash, currentPassword))) {
+    throw createError({ statusCode: 401, statusMessage: 'Invalid current password' })
   }
 
   const existing = await db.query.users.findFirst({

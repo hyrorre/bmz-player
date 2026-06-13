@@ -2,6 +2,7 @@
 import type { AuthFormField, FormSubmitEvent } from '@nuxt/ui'
 
 type EmailState = {
+  currentPassword: string
   email: string
 }
 
@@ -15,6 +16,15 @@ const { user, fetch: refreshSession, clear } = useUserSession()
 const requestFetch = useRequestFetch()
 
 const emailFields = computed<AuthFormField[]>(() => [
+  {
+    name: 'currentPassword',
+    type: 'password',
+    label: '現在のパスワード',
+    placeholder: '現在のパスワード',
+    autocomplete: 'current-password',
+    required: true,
+    defaultValue: '',
+  },
   {
     name: 'email',
     type: 'email',
@@ -70,6 +80,10 @@ if (!user.value) {
 function validateEmail(state: Partial<EmailState>) {
   const errors: { name: keyof EmailState; message: string }[] = []
 
+  if (!state.currentPassword) {
+    errors.push({ name: 'currentPassword', message: '現在のパスワードを入力してください。' })
+  }
+
   if (!state.email?.trim()) {
     errors.push({ name: 'email', message: 'メールアドレスを入力してください。' })
   }
@@ -108,7 +122,10 @@ async function updateEmail(event: FormSubmitEvent<EmailState>) {
   try {
     await requestFetch('/api/v1/account/email', {
       method: 'PUT',
-      body: { email: event.data.email.trim() },
+      body: {
+        current_password: event.data.currentPassword,
+        email: event.data.email.trim(),
+      },
     })
     await refreshSession()
     emailSuccessMessage.value = 'メールアドレスを変更しました。'
@@ -206,7 +223,7 @@ function keyFingerprint(publicKey: string) {
         </div>
 
         <UAuthForm
-          description="現在のメールアドレスに確認が必要な場合があります。"
+          description="変更には現在のパスワードが必要です。"
           :fields="emailFields"
           icon="i-lucide-mail"
           :loading="emailLoading"
