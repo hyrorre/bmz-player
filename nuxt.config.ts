@@ -27,6 +27,13 @@ export default defineNuxtConfig({
       bucketName: process.env.NUXT_HUB_BLOB_BUCKET || 'bmz-ir-blob',
     },
   },
+  runtimeConfig: {
+    session: {
+      name: 'bmz-session',
+      password: process.env.NUXT_SESSION_PASSWORD || '',
+      maxAge: 60 * 60 * 24 * 180, // 180 days
+    },
+  },
   nitro: {
     compatibilityDate: '2026-03-29',
     preset: 'cloudflare_module',
