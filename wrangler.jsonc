@@ -10,4 +10,12 @@
       "enabled": true,
     },
   },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "bmz-ir-db",
+      "database_id": "1b7a8d66-98a4-4641-82ee-32eebe0b89e2",
+      "migrations_dir": "server/db/migrations/sqlite",
+    },
+  ],
 }
