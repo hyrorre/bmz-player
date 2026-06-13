@@ -159,11 +159,54 @@ type DeviceKey = {
   created_at: string
 }
 
+type SessionSummary = {
+  id: string
+  clientType: 'web' | 'desktop'
+  createdAt: string
+  expiresAt: string
+  lastUsedAt: string | null
+  hasAccessToken: boolean
+  hasRefreshToken: boolean
+}
+
+const sessions = ref<SessionSummary[]>([])
+const sessionsLoading = ref(false)
+const sessionsError = ref('')
+const revokingSessionId = ref('')
 const deviceKeys = ref<DeviceKey[]>([])
 const deviceKeysLoading = ref(false)
 const deviceKeysError = ref('')
 const revokingKeyId = ref('')
+await loadSessions()
 await loadDeviceKeys()
+
+async function loadSessions() {
+  sessionsLoading.value = true
+  sessionsError.value = ''
+  try {
+    const response = await requestFetch<{ sessions: SessionSummary[] }>('/api/v1/sessions')
+    sessions.value = response.sessions
+  } catch (error) {
+    sessionsError.value =
+      error instanceof Error ? error.message : 'セッションの取得に失敗しました。'
+  } finally {
+    sessionsLoading.value = false
+  }
+}
+
+async function revokeSession(sessionId: string) {
+  revokingSessionId.value = sessionId
+  sessionsError.value = ''
+  try {
+    await requestFetch(`/api/v1/sessions/${sessionId}`, { method: 'DELETE' })
+    await loadSessions()
+  } catch (error) {
+    sessionsError.value =
+      error instanceof Error ? error.message : 'セッションの失効に失敗しました。'
+  } finally {
+    revokingSessionId.value = ''
+  }
+}
 
 async function loadDeviceKeys() {
   deviceKeysLoading.value = true
@@ -193,6 +236,20 @@ async function revokeDeviceKey(keyId: string) {
 
 function keyFingerprint(publicKey: string) {
   return `${publicKey.slice(0, 8)}…${publicKey.slice(-8)}`
+}
+
+function sessionLabel(session: SessionSummary) {
+  return session.clientType === 'desktop' ? 'BMZ Player' : 'Web'
+}
+
+function sessionTokenLabel(session: SessionSummary) {
+  if (session.hasAccessToken && session.hasRefreshToken) {
+    return 'access + refresh'
+  }
+  if (session.hasRefreshToken) {
+    return 'refresh'
+  }
+  return 'access'
 }
 </script>
 
@@ -271,6 +328,48 @@ function keyFingerprint(publicKey: string) {
             </p>
           </template>
         </UAuthForm>
+
+        <section class="space-y-3">
+          <div>
+            <h2 class="text-xl font-semibold">ログイン中のセッション</h2>
+            <p class="mt-1 text-sm leading-6 text-neutral-300">
+              Web と BMZ Player のログイン状態を確認し、不要なセッションを失効できます。
+            </p>
+          </div>
+          <UAlert v-if="sessionsError" color="error" :description="sessionsError" />
+          <p v-if="sessionsLoading" class="text-sm text-neutral-400">読み込み中...</p>
+          <p v-else-if="!sessions.length" class="text-sm text-neutral-400">
+            有効なセッションはありません。
+          </p>
+          <ul v-else class="divide-y divide-neutral-800 rounded-lg border border-neutral-800">
+            <li
+              v-for="session in sessions"
+              :key="session.id"
+              class="flex items-center justify-between gap-4 px-4 py-3"
+            >
+              <div class="min-w-0">
+                <p class="text-sm font-medium">{{ sessionLabel(session) }}</p>
+                <p class="text-xs text-neutral-500">
+                  {{ sessionTokenLabel(session) }} ・ 作成
+                  {{ new Date(session.createdAt).toLocaleString() }} ・ 最終利用
+                  {{
+                    session.lastUsedAt ? new Date(session.lastUsedAt).toLocaleString() : '未記録'
+                  }}
+                  ・ 期限 {{ new Date(session.expiresAt).toLocaleString() }}
+                </p>
+              </div>
+              <UButton
+                color="error"
+                variant="subtle"
+                size="sm"
+                :loading="revokingSessionId === session.id"
+                @click="revokeSession(session.id)"
+              >
+                失効
+              </UButton>
+            </li>
+          </ul>
+        </section>
 
         <section class="space-y-3">
           <div>
