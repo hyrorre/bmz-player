@@ -6,11 +6,12 @@ type EmailState = {
 }
 
 type PasswordState = {
+  currentPassword: string
   password: string
   confirmPassword: string
 }
 
-const { user, fetch: refreshSession } = useUserSession()
+const { user, fetch: refreshSession, clear } = useUserSession()
 const requestFetch = useRequestFetch()
 
 const emailFields = computed<AuthFormField[]>(() => [
@@ -26,6 +27,15 @@ const emailFields = computed<AuthFormField[]>(() => [
 ])
 
 const passwordFields: AuthFormField[] = [
+  {
+    name: 'currentPassword',
+    type: 'password',
+    label: '現在のパスワード',
+    placeholder: '現在のパスワード',
+    autocomplete: 'current-password',
+    required: true,
+    defaultValue: '',
+  },
   {
     name: 'password',
     type: 'password',
@@ -69,6 +79,10 @@ function validateEmail(state: Partial<EmailState>) {
 
 function validatePassword(state: Partial<PasswordState>) {
   const errors: { name: keyof PasswordState; message: string }[] = []
+
+  if (!state.currentPassword) {
+    errors.push({ name: 'currentPassword', message: '現在のパスワードを入力してください。' })
+  }
 
   if (!state.password || state.password.length < 8) {
     errors.push({ name: 'password', message: 'パスワードは8文字以上にしてください。' })
@@ -119,9 +133,13 @@ async function updatePassword(event: FormSubmitEvent<PasswordState>) {
   try {
     await requestFetch('/api/v1/account/password', {
       method: 'PUT',
-      body: { password: event.data.password },
+      body: {
+        current_password: event.data.currentPassword,
+        password: event.data.password,
+      },
     })
-    passwordSuccessMessage.value = 'パスワードを変更しました。'
+    await clear()
+    await navigateTo('/login')
   } catch (error) {
     passwordErrorMessage.value =
       error instanceof Error ? error.message : 'パスワードの変更に失敗しました。'
@@ -214,7 +232,7 @@ function keyFingerprint(publicKey: string) {
         </UAuthForm>
 
         <UAuthForm
-          description="ログイン中のアカウントのパスワードを変更します。"
+          description="変更後はすべてのセッションからログアウトします。"
           :fields="passwordFields"
           icon="i-lucide-key-round"
           :loading="passwordLoading"
