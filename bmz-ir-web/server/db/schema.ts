@@ -46,6 +46,24 @@ export const sessions = sqliteTable(
   ],
 )
 
+export const authRateLimits = sqliteTable(
+  'auth_rate_limits',
+  {
+    action: text('action', { enum: ['login', 'register'] }).notNull(),
+    scope: text('scope', { enum: ['email', 'ip'] }).notNull(),
+    scopeHash: text('scope_hash').notNull(),
+    windowStart: integer('window_start', { mode: 'timestamp_ms' }).notNull(),
+    attempts: integer('attempts').notNull().default(0),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' })
+      .notNull()
+      .default(sql`(unixepoch('subsec') * 1000)`),
+  },
+  (table) => [
+    primaryKey({ columns: [table.action, table.scope, table.scopeHash, table.windowStart] }),
+    index('idx_auth_rate_limits_updated_at').on(table.updatedAt),
+  ],
+)
+
 export const profiles = sqliteTable('profiles', {
   id: text('id')
     .primaryKey()

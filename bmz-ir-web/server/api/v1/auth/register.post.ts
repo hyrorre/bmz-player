@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { createError, readBody } from 'h3'
 import { db, schema } from 'hub:db'
 import { normalizeDisplayName, normalizeEmail, requirePassword } from '../../../utils/auth_input'
+import { checkAuthRateLimit } from '../../../utils/auth_rate_limit'
 import { createAuthTokens } from '../../../utils/auth_tokens'
 
 interface RegisterBody {
@@ -22,6 +23,7 @@ export default defineEventHandler(async (event) => {
     })
   }
   const password = requirePassword(body.password)
+  await checkAuthRateLimit(event, 'register', email)
 
   const userId = randomUUID()
   try {

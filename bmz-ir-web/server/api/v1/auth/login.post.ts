@@ -2,6 +2,7 @@ import { readBody, createError } from 'h3'
 import { eq } from 'drizzle-orm'
 import { db, schema } from 'hub:db'
 import { normalizeEmail, readPassword } from '../../../utils/auth_input'
+import { checkAuthRateLimit } from '../../../utils/auth_rate_limit'
 import { createAuthTokens } from '../../../utils/auth_tokens'
 
 interface LoginBody {
@@ -16,6 +17,7 @@ export default defineEventHandler(async (event) => {
   if (!email || !password) {
     throw createError({ statusCode: 400, statusMessage: 'email and password are required' })
   }
+  await checkAuthRateLimit(event, 'login', email)
 
   const rows = await db
     .select({

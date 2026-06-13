@@ -15,6 +15,13 @@
       "when": 1781352578908,
       "tag": "0001_secret_shadowcat",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1781352966727,
+      "tag": "0002_sour_whiplash",
+      "breakpoints": true
     }
   ]
 }
