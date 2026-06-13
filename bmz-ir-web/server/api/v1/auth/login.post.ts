@@ -6,6 +6,7 @@ import { checkAuthRateLimit } from '../../../utils/auth_rate_limit'
 import { createAuthTokens } from '../../../utils/auth_tokens'
 
 interface LoginBody {
+  client_type?: 'web' | 'desktop'
   email?: string
   password?: string
 }
@@ -35,7 +36,7 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 401, statusMessage: 'Invalid credentials' })
   }
 
-  const tokens = await createAuthTokens(user.id)
+  const tokens = await createAuthTokens(user.id, { clientType: body.client_type ?? 'web' })
   await setUserSession(event, {
     user: {
       id: user.id,

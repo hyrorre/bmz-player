@@ -53,7 +53,11 @@ impl BmzOfficialIrClient {
         let response = self
             .http
             .post(url)
-            .json(&serde_json::json!({ "email": email, "password": password }))
+            .json(&serde_json::json!({
+                "email": email,
+                "password": password,
+                "client_type": "desktop",
+            }))
             .send()
             .await
             .context("failed to send BMZ IR login request")?;
@@ -65,7 +69,10 @@ impl BmzOfficialIrClient {
         let response = self
             .http
             .post(url)
-            .json(&serde_json::json!({ "refresh_token": refresh_token }))
+            .json(&serde_json::json!({
+                "refresh_token": refresh_token,
+                "client_type": "desktop",
+            }))
             .send()
             .await
             .context("failed to send BMZ IR refresh request")?;

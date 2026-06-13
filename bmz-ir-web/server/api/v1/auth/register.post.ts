@@ -6,6 +6,7 @@ import { checkAuthRateLimit } from '../../../utils/auth_rate_limit'
 import { createAuthTokens } from '../../../utils/auth_tokens'
 
 interface RegisterBody {
+  client_type?: 'web' | 'desktop'
   email?: string
   password?: string
   display_name?: string
@@ -44,7 +45,7 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  const tokens = await createAuthTokens(userId)
+  const tokens = await createAuthTokens(userId, { clientType: body.client_type ?? 'web' })
   await setUserSession(event, {
     user: {
       id: userId,

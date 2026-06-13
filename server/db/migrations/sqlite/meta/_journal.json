@@ -22,6 +22,13 @@
       "when": 1781352966727,
       "tag": "0002_sour_whiplash",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1781353074810,
+      "tag": "0003_nasty_maestro",
+      "breakpoints": true
     }
   ]
 }

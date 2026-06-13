@@ -5,6 +5,7 @@ import { db, schema } from 'hub:db'
 const ACCESS_TOKEN_TTL_SECONDS = 60 * 60
 const REFRESH_TOKEN_TTL_SECONDS = 60 * 60 * 24 * 30
 type SessionKind = 'access' | 'refresh'
+type ClientType = 'web' | 'desktop'
 type RevocationReason = 'logout' | 'rotated' | 'password_changed' | 'reuse_detected' | 'admin'
 
 export interface AuthTokenPair {
@@ -13,11 +14,21 @@ export interface AuthTokenPair {
   accessExpiresAt: number
 }
 
+interface CreateAuthTokensOptions {
+  clientType?: ClientType
+  now?: number
+}
+
 export function hashToken(token: string) {
   return createHash('sha256').update(token).digest('hex')
 }
 
-export async function createAuthTokens(userId: string, now = Date.now()): Promise<AuthTokenPair> {
+export async function createAuthTokens(
+  userId: string,
+  options: CreateAuthTokensOptions = {},
+): Promise<AuthTokenPair> {
+  const now = options.now ?? Date.now()
+  const clientType = options.clientType ?? 'web'
   const accessToken = randomToken()
   const refreshToken = randomToken()
   const accessExpiresAt = Math.floor(now / 1000) + ACCESS_TOKEN_TTL_SECONDS
@@ -28,12 +39,14 @@ export async function createAuthTokens(userId: string, now = Date.now()): Promis
       tokenHash: hashToken(accessToken),
       userId,
       kind: 'access',
+      clientType,
       expiresAt: new Date(accessExpiresAt * 1000),
     },
     {
       tokenHash: hashToken(refreshToken),
       userId,
       kind: 'refresh',
+      clientType,
       expiresAt: new Date(refreshExpiresAt),
     },
   ])
@@ -61,7 +74,15 @@ export async function findUserByAccessToken(token: string, now = Date.now()) {
     )
     .limit(1)
 
-  return rows[0] ?? null
+  const user = rows[0] ?? null
+  if (user) {
+    await db
+      .update(schema.sessions)
+      .set({ lastUsedAt: new Date(now) })
+      .where(eq(schema.sessions.tokenHash, hashToken(token)))
+  }
+
+  return user
 }
 
 export async function rotateRefreshToken(token: string, now = Date.now()) {
@@ -69,6 +90,7 @@ export async function rotateRefreshToken(token: string, now = Date.now()) {
     columns: {
       tokenHash: true,
       userId: true,
+      clientType: true,
       expiresAt: true,
       revokedAt: true,
     },
@@ -112,7 +134,7 @@ export async function rotateRefreshToken(token: string, now = Date.now()) {
     .where(eq(schema.sessions.tokenHash, session.tokenHash))
 
   return {
-    tokens: await createAuthTokens(session.userId, now),
+    tokens: await createAuthTokens(session.userId, { clientType: session.clientType, now }),
     user: {
       id: session.userId,
       email: user.email,
