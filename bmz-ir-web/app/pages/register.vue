@@ -5,7 +5,6 @@ type RegisterState = {
   displayName: string
   email: string
   password: string
-  confirmPassword: string
 }
 
 const { loggedIn, fetch: refreshSession } = useUserSession()
@@ -38,15 +37,6 @@ const fields: AuthFormField[] = [
     required: true,
     defaultValue: '',
   },
-  {
-    name: 'confirmPassword',
-    type: 'password',
-    label: 'パスワード確認',
-    placeholder: 'もう一度入力',
-    autocomplete: 'new-password',
-    required: true,
-    defaultValue: '',
-  },
 ]
 
 const loading = ref(false)
@@ -70,10 +60,6 @@ function validate(state: Partial<RegisterState>) {
 
   if (!state.password || state.password.length < 8) {
     errors.push({ name: 'password', message: 'パスワードは8文字以上にしてください。' })
-  }
-
-  if (state.password !== state.confirmPassword) {
-    errors.push({ name: 'confirmPassword', message: 'パスワードが一致していません。' })
   }
 
   return errors
