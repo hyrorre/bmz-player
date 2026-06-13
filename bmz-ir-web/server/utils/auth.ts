@@ -12,12 +12,8 @@ export interface IrUser {
  * ブラウザは nuxt-auth-utils の cookie セッションを使う。両方を解決する。
  */
 export async function resolveIrUser(event: H3Event): Promise<IrUser | null> {
-  const header = getHeader(event, 'authorization')
-  if (header && header.toLowerCase().startsWith('bearer ')) {
-    const token = header.slice('bearer '.length).trim()
-    if (!token) {
-      return null
-    }
+  const token = getBearerToken(event)
+  if (token) {
     const user = await findUserByAccessToken(token)
     if (!user) {
       return null
@@ -31,6 +27,15 @@ export async function resolveIrUser(event: H3Event): Promise<IrUser | null> {
     return null
   }
   return { id: user.id, email: user.email }
+}
+
+export function getBearerToken(event: H3Event): string | null {
+  const header = getHeader(event, 'authorization')
+  if (!header?.toLowerCase().startsWith('bearer ')) {
+    return null
+  }
+
+  return header.slice('bearer '.length).trim() || null
 }
 
 export async function requireIrUser(event: H3Event): Promise<IrUser> {

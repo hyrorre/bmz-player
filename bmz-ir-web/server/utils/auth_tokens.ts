@@ -4,6 +4,7 @@ import { db, schema } from 'hub:db'
 
 const ACCESS_TOKEN_TTL_SECONDS = 60 * 60
 const REFRESH_TOKEN_TTL_SECONDS = 60 * 60 * 24 * 30
+type SessionKind = 'access' | 'refresh'
 
 export interface AuthTokenPair {
   accessToken: string
@@ -101,6 +102,28 @@ export async function rotateRefreshToken(token: string, now = Date.now()) {
       displayName: session.displayName ?? '',
     },
   }
+}
+
+export async function revokeToken(token: string, kind?: SessionKind, now = Date.now()) {
+  const filters = [
+    eq(schema.sessions.tokenHash, hashToken(token)),
+    isNull(schema.sessions.revokedAt),
+  ]
+  if (kind) {
+    filters.push(eq(schema.sessions.kind, kind))
+  }
+
+  await db
+    .update(schema.sessions)
+    .set({ revokedAt: new Date(now) })
+    .where(and(...filters))
+}
+
+export async function revokeUserSessions(userId: string, now = Date.now()) {
+  await db
+    .update(schema.sessions)
+    .set({ revokedAt: new Date(now) })
+    .where(and(eq(schema.sessions.userId, userId), isNull(schema.sessions.revokedAt)))
 }
 
 function randomToken() {
