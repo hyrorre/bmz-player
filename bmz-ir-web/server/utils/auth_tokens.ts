@@ -5,6 +5,7 @@ import { db, schema } from 'hub:db'
 const ACCESS_TOKEN_TTL_SECONDS = 60 * 60
 const REFRESH_TOKEN_TTL_SECONDS = 60 * 60 * 24 * 30
 type SessionKind = 'access' | 'refresh'
+type RevocationReason = 'logout' | 'rotated' | 'password_changed' | 'reuse_detected' | 'admin'
 
 export interface AuthTokenPair {
   accessToken: string
@@ -64,47 +65,68 @@ export async function findUserByAccessToken(token: string, now = Date.now()) {
 }
 
 export async function rotateRefreshToken(token: string, now = Date.now()) {
+  const session = await db.query.sessions.findFirst({
+    columns: {
+      tokenHash: true,
+      userId: true,
+      expiresAt: true,
+      revokedAt: true,
+    },
+    where: and(
+      eq(schema.sessions.tokenHash, hashToken(token)),
+      eq(schema.sessions.kind, 'refresh'),
+    ),
+  })
+
+  if (!session) {
+    return null
+  }
+
+  if (session.revokedAt) {
+    await revokeUserSessions(session.userId, 'reuse_detected', now)
+    return { reuseDetected: true as const }
+  }
+
+  if (session.expiresAt <= new Date(now)) {
+    return null
+  }
+
   const rows = await db
     .select({
-      tokenHash: schema.sessions.tokenHash,
-      userId: schema.sessions.userId,
       email: schema.users.email,
       displayName: schema.profiles.displayName,
     })
-    .from(schema.sessions)
-    .innerJoin(schema.users, eq(schema.sessions.userId, schema.users.id))
+    .from(schema.users)
     .leftJoin(schema.profiles, eq(schema.profiles.id, schema.users.id))
-    .where(
-      and(
-        eq(schema.sessions.tokenHash, hashToken(token)),
-        eq(schema.sessions.kind, 'refresh'),
-        isNull(schema.sessions.revokedAt),
-        gt(schema.sessions.expiresAt, new Date(now)),
-      ),
-    )
+    .where(eq(schema.users.id, session.userId))
     .limit(1)
 
-  const session = rows[0]
-  if (!session) {
+  const user = rows[0]
+  if (!user) {
     return null
   }
 
   await db
     .update(schema.sessions)
-    .set({ revokedAt: new Date(now) })
+    .set({ revokedAt: new Date(now), revokedReason: 'rotated' })
     .where(eq(schema.sessions.tokenHash, session.tokenHash))
 
   return {
     tokens: await createAuthTokens(session.userId, now),
     user: {
       id: session.userId,
-      email: session.email,
-      displayName: session.displayName ?? '',
+      email: user.email,
+      displayName: user.displayName ?? '',
     },
   }
 }
 
-export async function revokeToken(token: string, kind?: SessionKind, now = Date.now()) {
+export async function revokeToken(
+  token: string,
+  kind?: SessionKind,
+  reason: RevocationReason = 'logout',
+  now = Date.now(),
+) {
   const filters = [
     eq(schema.sessions.tokenHash, hashToken(token)),
     isNull(schema.sessions.revokedAt),
@@ -115,14 +137,18 @@ export async function revokeToken(token: string, kind?: SessionKind, now = Date.
 
   await db
     .update(schema.sessions)
-    .set({ revokedAt: new Date(now) })
+    .set({ revokedAt: new Date(now), revokedReason: reason })
     .where(and(...filters))
 }
 
-export async function revokeUserSessions(userId: string, now = Date.now()) {
+export async function revokeUserSessions(
+  userId: string,
+  reason: RevocationReason = 'logout',
+  now = Date.now(),
+) {
   await db
     .update(schema.sessions)
-    .set({ revokedAt: new Date(now) })
+    .set({ revokedAt: new Date(now), revokedReason: reason })
     .where(and(eq(schema.sessions.userId, userId), isNull(schema.sessions.revokedAt)))
 }
 

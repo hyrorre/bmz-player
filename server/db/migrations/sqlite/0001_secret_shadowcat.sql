@@ -1,0 +1,1 @@
+ALTER TABLE `sessions` ADD `revoked_reason` text;

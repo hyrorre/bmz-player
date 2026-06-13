@@ -33,6 +33,9 @@ export const sessions = sqliteTable(
     kind: text('kind', { enum: ['access', 'refresh'] }).notNull(),
     expiresAt: integer('expires_at', { mode: 'timestamp_ms' }).notNull(),
     revokedAt: integer('revoked_at', { mode: 'timestamp_ms' }),
+    revokedReason: text('revoked_reason', {
+      enum: ['logout', 'rotated', 'password_changed', 'reuse_detected', 'admin'],
+    }),
     createdAt: integer('created_at', { mode: 'timestamp_ms' })
       .notNull()
       .default(sql`(unixepoch('subsec') * 1000)`),

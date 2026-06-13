@@ -34,7 +34,7 @@ export default defineEventHandler(async (event) => {
     .set({ passwordHash: await hashPassword(password), updatedAt: new Date() })
     .where(eq(schema.users.id, user.id))
 
-  await revokeUserSessions(user.id)
+  await revokeUserSessions(user.id, 'password_changed')
   await clearUserSession(event)
 
   return { updated: true, logged_out: true }

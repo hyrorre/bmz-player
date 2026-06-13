@@ -15,6 +15,9 @@ export default defineEventHandler(async (event) => {
   if (!refreshed) {
     throw createError({ statusCode: 401, statusMessage: 'Invalid refresh token' })
   }
+  if ('reuseDetected' in refreshed) {
+    throw createError({ statusCode: 401, statusMessage: 'Invalid refresh token' })
+  }
 
   return {
     access_token: refreshed.tokens.accessToken,
