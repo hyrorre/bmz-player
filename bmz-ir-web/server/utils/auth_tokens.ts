@@ -1,5 +1,5 @@
-import { createHash, randomBytes } from 'node:crypto'
-import { and, eq, gt, isNull } from 'drizzle-orm'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
+import { and, eq, gt, isNull, or } from 'drizzle-orm'
 import { db, schema } from 'hub:db'
 
 const ACCESS_TOKEN_TTL_SECONDS = 60 * 60
@@ -14,9 +14,20 @@ export interface AuthTokenPair {
   accessExpiresAt: number
 }
 
+export interface UserSessionSummary {
+  id: string
+  clientType: ClientType
+  createdAt: string
+  expiresAt: string
+  lastUsedAt: string | null
+  hasAccessToken: boolean
+  hasRefreshToken: boolean
+}
+
 interface CreateAuthTokensOptions {
   clientType?: ClientType
   now?: number
+  sessionGroupId?: string
 }
 
 export function hashToken(token: string) {
@@ -29,6 +40,7 @@ export async function createAuthTokens(
 ): Promise<AuthTokenPair> {
   const now = options.now ?? Date.now()
   const clientType = options.clientType ?? 'web'
+  const sessionGroupId = options.sessionGroupId ?? randomUUID()
   const accessToken = randomToken()
   const refreshToken = randomToken()
   const accessExpiresAt = Math.floor(now / 1000) + ACCESS_TOKEN_TTL_SECONDS
@@ -37,6 +49,7 @@ export async function createAuthTokens(
   await db.insert(schema.sessions).values([
     {
       tokenHash: hashToken(accessToken),
+      sessionGroupId,
       userId,
       kind: 'access',
       clientType,
@@ -44,6 +57,7 @@ export async function createAuthTokens(
     },
     {
       tokenHash: hashToken(refreshToken),
+      sessionGroupId,
       userId,
       kind: 'refresh',
       clientType,
@@ -89,6 +103,7 @@ export async function rotateRefreshToken(token: string, now = Date.now()) {
   const session = await db.query.sessions.findFirst({
     columns: {
       tokenHash: true,
+      sessionGroupId: true,
       userId: true,
       clientType: true,
       expiresAt: true,
@@ -134,13 +149,125 @@ export async function rotateRefreshToken(token: string, now = Date.now()) {
     .where(eq(schema.sessions.tokenHash, session.tokenHash))
 
   return {
-    tokens: await createAuthTokens(session.userId, { clientType: session.clientType, now }),
+    tokens: await createAuthTokens(session.userId, {
+      clientType: session.clientType,
+      now,
+      sessionGroupId: session.sessionGroupId ?? randomUUID(),
+    }),
     user: {
       id: session.userId,
       email: user.email,
       displayName: user.displayName ?? '',
     },
   }
+}
+
+export async function listUserSessions(
+  userId: string,
+  now = Date.now(),
+): Promise<UserSessionSummary[]> {
+  const rows = await db.query.sessions.findMany({
+    columns: {
+      tokenHash: true,
+      sessionGroupId: true,
+      kind: true,
+      clientType: true,
+      expiresAt: true,
+      lastUsedAt: true,
+      createdAt: true,
+    },
+    where: and(
+      eq(schema.sessions.userId, userId),
+      isNull(schema.sessions.revokedAt),
+      gt(schema.sessions.expiresAt, new Date(now)),
+    ),
+  })
+
+  const groups = new Map<
+    string,
+    {
+      clientType: ClientType
+      createdAt: Date
+      expiresAt: Date
+      lastUsedAt: Date | null
+      hasAccessToken: boolean
+      hasRefreshToken: boolean
+    }
+  >()
+
+  for (const row of rows) {
+    const groupKey = row.sessionGroupId ?? row.tokenHash
+    const existing = groups.get(groupKey)
+    if (!existing) {
+      groups.set(groupKey, {
+        clientType: row.clientType,
+        createdAt: row.createdAt,
+        expiresAt: row.expiresAt,
+        lastUsedAt: row.lastUsedAt,
+        hasAccessToken: row.kind === 'access',
+        hasRefreshToken: row.kind === 'refresh',
+      })
+      continue
+    }
+
+    if (row.createdAt < existing.createdAt) {
+      existing.createdAt = row.createdAt
+    }
+    if (row.expiresAt > existing.expiresAt) {
+      existing.expiresAt = row.expiresAt
+    }
+    if (row.lastUsedAt && (!existing.lastUsedAt || row.lastUsedAt > existing.lastUsedAt)) {
+      existing.lastUsedAt = row.lastUsedAt
+    }
+    existing.hasAccessToken ||= row.kind === 'access'
+    existing.hasRefreshToken ||= row.kind === 'refresh'
+  }
+
+  return [...groups.entries()]
+    .map(([groupKey, session]) => ({
+      id: publicSessionId(userId, groupKey),
+      clientType: session.clientType,
+      createdAt: session.createdAt.toISOString(),
+      expiresAt: session.expiresAt.toISOString(),
+      lastUsedAt: session.lastUsedAt?.toISOString() ?? null,
+      hasAccessToken: session.hasAccessToken,
+      hasRefreshToken: session.hasRefreshToken,
+    }))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+}
+
+export async function revokeUserSessionById(
+  userId: string,
+  sessionId: string,
+  reason: RevocationReason = 'logout',
+  now = Date.now(),
+) {
+  const rows = await db.query.sessions.findMany({
+    columns: { tokenHash: true, sessionGroupId: true },
+    where: and(
+      eq(schema.sessions.userId, userId),
+      isNull(schema.sessions.revokedAt),
+      gt(schema.sessions.expiresAt, new Date(now)),
+    ),
+  })
+  const groupKey = rows
+    .map((row) => row.sessionGroupId ?? row.tokenHash)
+    .find((groupKey) => publicSessionId(userId, groupKey) === sessionId)
+  if (!groupKey) {
+    return false
+  }
+
+  await db
+    .update(schema.sessions)
+    .set({ revokedAt: new Date(now), revokedReason: reason })
+    .where(
+      and(
+        eq(schema.sessions.userId, userId),
+        isNull(schema.sessions.revokedAt),
+        or(eq(schema.sessions.sessionGroupId, groupKey), eq(schema.sessions.tokenHash, groupKey)),
+      ),
+    )
+  return true
 }
 
 export async function revokeToken(
@@ -176,4 +303,8 @@ export async function revokeUserSessions(
 
 function randomToken() {
   return randomBytes(32).toString('base64url')
+}
+
+function publicSessionId(userId: string, groupKey: string) {
+  return createHash('sha256').update(`${userId}:${groupKey}`).digest('base64url')
 }

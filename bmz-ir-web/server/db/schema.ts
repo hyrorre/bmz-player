@@ -27,6 +27,7 @@ export const sessions = sqliteTable(
   'sessions',
   {
     tokenHash: text('token_hash').primaryKey(),
+    sessionGroupId: text('session_group_id'),
     userId: text('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
@@ -46,6 +47,7 @@ export const sessions = sqliteTable(
   },
   (table) => [
     index('idx_sessions_user').on(table.userId),
+    index('idx_sessions_group').on(table.userId, table.sessionGroupId),
     index('idx_sessions_kind_expiry').on(table.kind, table.expiresAt),
   ],
 )
