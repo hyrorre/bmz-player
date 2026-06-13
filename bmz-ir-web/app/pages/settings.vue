@@ -11,6 +11,10 @@ type PasswordState = {
   password: string
 }
 
+type DeleteAccountState = {
+  currentPassword: string
+}
+
 const { user, fetch: refreshSession, clear } = useUserSession()
 const requestFetch = useRequestFetch()
 
@@ -56,12 +60,26 @@ const passwordFields: AuthFormField[] = [
   },
 ]
 
+const deleteAccountFields: AuthFormField[] = [
+  {
+    name: 'currentPassword',
+    type: 'password',
+    label: '現在のパスワード',
+    placeholder: '現在のパスワード',
+    autocomplete: 'current-password',
+    required: true,
+    defaultValue: '',
+  },
+]
+
 const emailLoading = ref(false)
 const passwordLoading = ref(false)
+const deleteAccountLoading = ref(false)
 const emailErrorMessage = ref('')
 const emailSuccessMessage = ref('')
 const passwordErrorMessage = ref('')
 const passwordSuccessMessage = ref('')
+const deleteAccountErrorMessage = ref('')
 
 if (!user.value) {
   await navigateTo('/login')
@@ -90,6 +108,16 @@ function validatePassword(state: Partial<PasswordState>) {
 
   if (!state.password || state.password.length < 8) {
     errors.push({ name: 'password', message: 'パスワードは8文字以上にしてください。' })
+  }
+
+  return errors
+}
+
+function validateDeleteAccount(state: Partial<DeleteAccountState>) {
+  const errors: { name: keyof DeleteAccountState; message: string }[] = []
+
+  if (!state.currentPassword) {
+    errors.push({ name: 'currentPassword', message: '現在のパスワードを入力してください。' })
   }
 
   return errors
@@ -148,6 +176,32 @@ async function updatePassword(event: FormSubmitEvent<PasswordState>) {
       error instanceof Error ? error.message : 'パスワードの変更に失敗しました。'
   } finally {
     passwordLoading.value = false
+  }
+}
+
+async function deleteAccount(event: FormSubmitEvent<DeleteAccountState>) {
+  if (!user.value) {
+    await navigateTo('/login')
+    return
+  }
+
+  deleteAccountErrorMessage.value = ''
+  deleteAccountLoading.value = true
+
+  try {
+    await requestFetch('/api/v1/account', {
+      method: 'DELETE',
+      body: {
+        current_password: event.data.currentPassword,
+      },
+    })
+    await clear()
+    await navigateTo('/')
+  } catch (error) {
+    deleteAccountErrorMessage.value =
+      error instanceof Error ? error.message : 'アカウントの削除に失敗しました。'
+  } finally {
+    deleteAccountLoading.value = false
   }
 }
 
@@ -414,6 +468,26 @@ function sessionTokenLabel(session: SessionSummary) {
             </li>
           </ul>
         </section>
+
+        <UAuthForm
+          description="アカウント、スコア、リプレイ、署名鍵、セッションを削除します。"
+          :fields="deleteAccountFields"
+          icon="i-lucide-trash-2"
+          :loading="deleteAccountLoading"
+          :submit="{ label: 'アカウントを削除', color: 'error', block: true }"
+          title="アカウント削除"
+          :validate="validateDeleteAccount"
+          @submit="deleteAccount"
+        >
+          <template #validation>
+            <UAlert
+              v-if="deleteAccountErrorMessage"
+              color="error"
+              icon="i-lucide-circle-alert"
+              :description="deleteAccountErrorMessage"
+            />
+          </template>
+        </UAuthForm>
 
         <UButton color="neutral" icon="i-lucide-house" size="xl" to="/" variant="subtle">
           トップへ戻る
