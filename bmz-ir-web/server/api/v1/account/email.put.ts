@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm'
 import { db, schema } from 'hub:db'
 import { requireIrUser } from '../../../utils/auth'
+import { normalizeEmail } from '../../../utils/auth_input'
 
 interface EmailBody {
   email?: string
@@ -9,7 +10,7 @@ interface EmailBody {
 export default defineEventHandler(async (event) => {
   const user = await requireIrUser(event)
   const body = (await readBody(event)) as EmailBody
-  const email = body.email?.trim().toLowerCase() ?? ''
+  const email = normalizeEmail(body.email)
 
   if (!email) {
     throw createError({ statusCode: 400, statusMessage: 'email is required' })

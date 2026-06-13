@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { createError, readBody } from 'h3'
 import { db, schema } from 'hub:db'
+import { normalizeDisplayName, normalizeEmail, requirePassword } from '../../../utils/auth_input'
 import { createAuthTokens } from '../../../utils/auth_tokens'
 
 interface RegisterBody {
@@ -11,19 +12,16 @@ interface RegisterBody {
 
 export default defineEventHandler(async (event) => {
   const body = (await readBody(event)) as RegisterBody
-  const email = body.email?.trim().toLowerCase()
-  const password = body.password ?? ''
-  const displayName = body.display_name?.trim() ?? ''
+  const email = normalizeEmail(body.email)
+  const displayName = normalizeDisplayName(body.display_name)
 
-  if (!email || !password || !displayName) {
+  if (!email || !displayName) {
     throw createError({
       statusCode: 400,
       statusMessage: 'email, password, and display_name are required',
     })
   }
-  if (password.length < 8) {
-    throw createError({ statusCode: 400, statusMessage: 'password must be at least 8 characters' })
-  }
+  const password = requirePassword(body.password)
 
   const userId = randomUUID()
   try {

@@ -1,6 +1,7 @@
 import { readBody, createError } from 'h3'
 import { eq } from 'drizzle-orm'
 import { db, schema } from 'hub:db'
+import { normalizeEmail, readPassword } from '../../../utils/auth_input'
 import { createAuthTokens } from '../../../utils/auth_tokens'
 
 interface LoginBody {
@@ -10,11 +11,12 @@ interface LoginBody {
 
 export default defineEventHandler(async (event) => {
   const body = (await readBody(event)) as LoginBody
-  if (!body?.email || !body?.password) {
+  const email = normalizeEmail(body?.email)
+  const password = readPassword(body?.password)
+  if (!email || !password) {
     throw createError({ statusCode: 400, statusMessage: 'email and password are required' })
   }
 
-  const email = body.email.trim().toLowerCase()
   const rows = await db
     .select({
       id: schema.users.id,
@@ -27,7 +29,7 @@ export default defineEventHandler(async (event) => {
     .where(eq(schema.users.email, email))
     .limit(1)
   const user = rows[0]
-  if (!user || !(await verifyPassword(user.passwordHash, body.password))) {
+  if (!user || !(await verifyPassword(user.passwordHash, password))) {
     throw createError({ statusCode: 401, statusMessage: 'Invalid credentials' })
   }
 
