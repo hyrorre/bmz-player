@@ -11843,18 +11843,39 @@ fn push_scratch_controls(
     let control = entry.control.clone();
     // 明示の direction タグを最優先し、無ければコントロール名から推測する。
     match entry.scratch {
-        Some(ScratchDirectionConfig::Up) => up_controls.push(control),
-        Some(ScratchDirectionConfig::Down) => down_controls.push(control),
+        Some(ScratchDirectionConfig::Up) => {
+            push_scratch_control(up_controls, down_controls, control)
+        }
+        Some(ScratchDirectionConfig::Down) => {
+            push_scratch_control(down_controls, up_controls, control);
+        }
         None => {
             if is_scratch_up_control(&control) {
-                up_controls.push(control);
+                push_scratch_control(up_controls, down_controls, control);
             } else if is_scratch_down_control(&control) {
-                down_controls.push(control);
+                push_scratch_control(down_controls, up_controls, control);
             } else {
-                up_controls.push(control.clone());
-                down_controls.push(control);
+                push_unique_control(up_controls, control.clone());
+                push_unique_control(down_controls, control);
             }
         }
+    }
+}
+
+fn push_scratch_control(
+    target_controls: &mut Vec<String>,
+    opposite_controls: &[String],
+    control: String,
+) {
+    if opposite_controls.iter().any(|existing| existing == &control) {
+        return;
+    }
+    push_unique_control(target_controls, control);
+}
+
+fn push_unique_control(controls: &mut Vec<String>, control: String) {
+    if !controls.iter().any(|existing| existing == &control) {
+        controls.push(control);
     }
 }
 

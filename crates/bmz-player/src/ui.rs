@@ -3325,6 +3325,7 @@ fn glob_candidates(root: &Path, pattern: &str) -> Vec<String> {
             }
         }
     }
+    candidates.sort();
     candidates
 }
 
@@ -3375,10 +3376,26 @@ fn filename_matches_def(candidate: &str, def: &str) -> bool {
     if file_name.eq_ignore_ascii_case(def) {
         return true;
     }
-    Path::new(file_name)
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .is_some_and(|stem| stem.eq_ignore_ascii_case(def))
+    let stem = Path::new(file_name).file_stem().and_then(|stem| stem.to_str()).unwrap_or(file_name);
+    if stem.eq_ignore_ascii_case(def) {
+        return true;
+    }
+    filepath_def_acronym(def).is_some_and(|acronym| {
+        let stem_lower = stem.to_ascii_lowercase();
+        let acronym_lower = acronym.to_ascii_lowercase();
+        stem_lower == acronym_lower || stem_lower.starts_with(&acronym_lower)
+    })
+}
+
+fn filepath_def_acronym(def: &str) -> Option<String> {
+    if !def.contains('-') {
+        return None;
+    }
+    let acronym = def
+        .split('-')
+        .filter_map(|part| part.chars().find(|ch| ch.is_ascii_alphanumeric()))
+        .collect::<String>();
+    (!acronym.is_empty()).then_some(acronym)
 }
 
 #[cfg(test)]

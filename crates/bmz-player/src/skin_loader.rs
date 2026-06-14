@@ -1075,7 +1075,7 @@ fn resolve_wildcard_directory_path(
     suffix: &str,
     preferred: Option<&str>,
 ) -> Option<PathBuf> {
-    let candidates = std::fs::read_dir(directory)
+    let mut candidates = std::fs::read_dir(directory)
         .ok()?
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))
         .filter(|path| path.is_dir())
@@ -1087,6 +1087,7 @@ fn resolve_wildcard_directory_path(
         .map(|path| path.join(suffix))
         .filter(|path| path.is_file())
         .collect::<Vec<_>>();
+    candidates.sort();
     if let Some(preferred) = preferred
         && let Some(candidate) = candidates.iter().find(|path| {
             path.parent()

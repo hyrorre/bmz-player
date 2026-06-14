@@ -1559,6 +1559,7 @@ fn skin_file_candidates(root: &Path, normalized_path: &str) -> Vec<String> {
             candidates.push(format!("{directory_prefix}{name}"));
         }
     }
+    candidates.sort();
     candidates
 }
 
@@ -1567,10 +1568,26 @@ fn filename_matches_def(candidate: &str, default_name: &str) -> bool {
     if file_name.eq_ignore_ascii_case(default_name) {
         return true;
     }
-    Path::new(file_name)
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .is_some_and(|stem| stem.eq_ignore_ascii_case(default_name))
+    let stem = Path::new(file_name).file_stem().and_then(|stem| stem.to_str()).unwrap_or(file_name);
+    if stem.eq_ignore_ascii_case(default_name) {
+        return true;
+    }
+    filepath_def_acronym(default_name).is_some_and(|acronym| {
+        let stem_lower = stem.to_ascii_lowercase();
+        let acronym_lower = acronym.to_ascii_lowercase();
+        stem_lower == acronym_lower || stem_lower.starts_with(&acronym_lower)
+    })
+}
+
+fn filepath_def_acronym(default_name: &str) -> Option<String> {
+    if !default_name.contains('-') {
+        return None;
+    }
+    let acronym = default_name
+        .split('-')
+        .filter_map(|part| part.chars().find(|ch| ch.is_ascii_alphanumeric()))
+        .collect::<String>();
+    (!acronym.is_empty()).then_some(acronym)
 }
 
 fn candidate_file_name(candidate: &str) -> String {
