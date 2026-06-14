@@ -188,6 +188,12 @@ fn load_songs(target: Option<&str>, force: bool) -> Result<()> {
         s.imported, s.skipped, s.failed, s.warnings, s.files_seen, s.roots_seen
     );
 
+    let t = &report.timing;
+    println!(
+        "Timing: total={}ms discovery={}ms fingerprint={}ms skip={}ms parse={}ms write={}ms",
+        t.total_ms, t.discovery_ms, t.fingerprint_ms, t.skip_check_ms, t.parse_ms, t.write_ms
+    );
+
     for failure in &report.failures {
         println!("  FAIL: {} — {}", failure.path.display(), failure.message);
     }

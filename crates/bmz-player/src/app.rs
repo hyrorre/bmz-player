@@ -6678,6 +6678,12 @@ impl WinitApp {
                         imported = report.summary.imported,
                         skipped = report.summary.skipped,
                         failed = report.summary.failed,
+                        total_ms = report.timing.total_ms,
+                        discovery_ms = report.timing.discovery_ms,
+                        fingerprint_ms = report.timing.fingerprint_ms,
+                        skip_check_ms = report.timing.skip_check_ms,
+                        parse_ms = report.timing.parse_ms,
+                        write_ms = report.timing.write_ms,
                         "song scan complete"
                     );
                     self.song_scan_progress = None;

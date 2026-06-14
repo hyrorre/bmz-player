@@ -1,6 +1,6 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
+use std::time::{Instant, UNIX_EPOCH};
 
 use anyhow::Result;
 use bmz_chart::import::ImportResult;
@@ -31,7 +31,18 @@ pub struct ScanFailure {
 #[derive(Debug, Clone, Default)]
 pub struct ScanReport {
     pub summary: ScanSummary,
+    pub timing: ScanTiming,
     pub failures: Vec<ScanFailure>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ScanTiming {
+    pub total_ms: u128,
+    pub discovery_ms: u128,
+    pub fingerprint_ms: u128,
+    pub skip_check_ms: u128,
+    pub parse_ms: u128,
+    pub write_ms: u128,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -61,6 +72,7 @@ pub fn scan_song_roots_with_progress(
     force: bool,
     mut on_progress: impl FnMut(ScanProgress),
 ) -> Result<ScanReport> {
+    let total_start = Instant::now();
     let mut report = ScanReport::default();
     let enabled_roots: Vec<&PathEntry> = roots.iter().filter(|r| r.enabled).collect();
     let root_count = enabled_roots.len();
@@ -69,7 +81,10 @@ pub fn scan_song_roots_with_progress(
         report.summary.roots_seen += 1;
         let root_path = Path::new(&root.path);
         let root_id = db.upsert_root(root_path, root.enabled, root.recursive)?;
+        let discovery_start = Instant::now();
         let entries = discover_chart_files(root_path, root.recursive, scan)?;
+        let discovery_ms = discovery_start.elapsed().as_millis();
+        report.timing.discovery_ms += discovery_ms;
         let files_total = entries.len();
         let root_skipped_start = report.summary.skipped;
         let root_imported_start = report.summary.imported;
@@ -80,6 +95,7 @@ pub fn scan_song_roots_with_progress(
             root_num = root_index + 1,
             root_count,
             files = files_total,
+            discovery_ms,
             "scanning root"
         );
 
@@ -90,7 +106,11 @@ pub fn scan_song_roots_with_progress(
             modified_at: i64,
         }
         on_progress(ScanProgress { done: 0, total: files_total as u32 });
+        let fingerprint_start = Instant::now();
         let fingerprints = db.load_fingerprints_for_root(root_id)?;
+        let fingerprint_ms = fingerprint_start.elapsed().as_millis();
+        report.timing.fingerprint_ms += fingerprint_ms;
+        let skip_start = Instant::now();
         let mut to_import: Vec<FileTodo> = Vec::new();
         for entry in &entries {
             report.summary.files_seen += 1;
@@ -111,6 +131,8 @@ pub fn scan_song_roots_with_progress(
                 });
             }
         }
+        let skip_check_ms = skip_start.elapsed().as_millis();
+        report.timing.skip_check_ms += skip_check_ms;
         on_progress(ScanProgress {
             done: report.summary.skipped.saturating_sub(root_skipped_start).min(files_total as u32),
             total: files_total as u32,
@@ -120,6 +142,8 @@ pub fn scan_song_roots_with_progress(
         tracing::info!(
             new_files = new_total,
             skipped = report.summary.skipped,
+            fingerprint_ms,
+            skip_check_ms,
             root = %root_path.display(),
             "skip check complete"
         );
@@ -162,6 +186,7 @@ pub fn scan_song_roots_with_progress(
                 })
                 .collect();
             let parse_ms = parse_start.elapsed().as_millis();
+            report.timing.parse_ms += parse_ms;
 
             // 1トランザクションでバッチ書き込み
             let write_start = std::time::Instant::now();
@@ -208,6 +233,7 @@ pub fn scan_song_roots_with_progress(
                 tx.commit()?;
             }
             let write_ms = write_start.elapsed().as_millis();
+            report.timing.write_ms += write_ms;
 
             tracing::info!(
                 batch = batch_idx,
@@ -237,6 +263,7 @@ pub fn scan_song_roots_with_progress(
         db.update_root_scanned_at(root_id, scanned_at)?;
     }
 
+    report.timing.total_ms = total_start.elapsed().as_millis();
     Ok(report)
 }
 
@@ -277,8 +304,6 @@ pub fn discover_chart_files(
 ) -> Result<Vec<ChartFileEntry>> {
     let mut out = Vec::new();
     discover_into(root, recursive, scan, &mut out)?;
-    out.sort_by(|a, b| a.path.cmp(&b.path));
-    out.dedup_by(|a, b| a.path == b.path);
     Ok(out)
 }
 
@@ -288,48 +313,53 @@ fn discover_into(
     scan: &ScanConfig,
     out: &mut Vec<ChartFileEntry>,
 ) -> Result<()> {
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
+    let mut dirs = vec![dir.to_path_buf()];
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(&dir)? {
+            let entry = entry?;
+            let file_name = entry.file_name();
 
-        if scan.skip_hidden && is_hidden(&path) {
-            continue;
-        }
-
-        let (file_type, meta_opt) = if scan.follow_symlinks {
-            let meta = entry.metadata()?;
-            let ft = meta.file_type();
-            (ft, Some(meta))
-        } else {
-            (entry.file_type()?, None)
-        };
-
-        if file_type.is_dir() {
-            if recursive {
-                discover_into(&path, recursive, scan, out)?;
+            if scan.skip_hidden && is_hidden_name(&file_name) {
+                continue;
             }
-        } else if file_type.is_file() && is_chart_file(&path) {
-            let (file_size, modified_at) = meta_opt
-                .or_else(|| entry.metadata().ok())
-                .map(|m| {
-                    let mtime = m
-                        .modified()
-                        .ok()
-                        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                        .map(|d| d.as_secs() as i64)
-                        .unwrap_or(0);
-                    (m.len(), mtime)
-                })
-                .unwrap_or((0, 0));
-            out.push(ChartFileEntry { path, file_size, modified_at });
+
+            let (file_type, meta_opt) = if scan.follow_symlinks {
+                let meta = entry.metadata()?;
+                let ft = meta.file_type();
+                (ft, Some(meta))
+            } else {
+                (entry.file_type()?, None)
+            };
+
+            if file_type.is_dir() {
+                if recursive {
+                    dirs.push(entry.path());
+                }
+            } else if file_type.is_file() && is_chart_file_name(&file_name) {
+                let path = entry.path();
+                let (file_size, modified_at) = meta_opt
+                    .or_else(|| entry.metadata().ok())
+                    .map(|m| {
+                        let mtime = m
+                            .modified()
+                            .ok()
+                            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                            .map(|d| d.as_secs() as i64)
+                            .unwrap_or(0);
+                        (m.len(), mtime)
+                    })
+                    .unwrap_or((0, 0));
+                out.push(ChartFileEntry { path, file_size, modified_at });
+            }
         }
     }
 
     Ok(())
 }
 
-fn is_chart_file(path: &Path) -> bool {
-    path.extension()
+fn is_chart_file_name(name: &std::ffi::OsStr) -> bool {
+    Path::new(name)
+        .extension()
         .and_then(|extension| extension.to_str())
         .map(|extension| {
             matches!(
@@ -340,11 +370,8 @@ fn is_chart_file(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn is_hidden(path: &Path) -> bool {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .map(|name| name.starts_with('.'))
-        .unwrap_or(false)
+fn is_hidden_name(name: &std::ffi::OsStr) -> bool {
+    name.to_str().map(|name| name.starts_with('.')).unwrap_or(false)
 }
 
 #[cfg(test)]
