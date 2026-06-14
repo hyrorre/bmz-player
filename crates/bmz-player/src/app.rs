@@ -9228,13 +9228,10 @@ enum SelectModeFilter {
     K9,
     K5,
     K10,
-    K24,
-    K24Double,
 }
 
 impl SelectModeFilter {
-    const ORDER: [Self; 8] =
-        [Self::All, Self::K7, Self::K14, Self::K9, Self::K5, Self::K10, Self::K24, Self::K24Double];
+    const ORDER: [Self; 6] = [Self::All, Self::K7, Self::K14, Self::K9, Self::K5, Self::K10];
 
     fn next(self) -> Self {
         cycle_enum(Self::ORDER, self, 1)
@@ -9252,14 +9249,12 @@ impl SelectModeFilter {
             Self::K9 => "9K",
             Self::K5 => "5K",
             Self::K10 => "10K",
-            Self::K24 => "24K",
-            Self::K24Double => "24K_DOUBLE",
         }
     }
 
     fn key_mode(self) -> Option<KeyMode> {
         match self {
-            Self::All | Self::K24 | Self::K24Double => None,
+            Self::All => None,
             Self::K7 => Some(KeyMode::K7),
             Self::K14 => Some(KeyMode::K14),
             Self::K9 => Some(KeyMode::K9),
@@ -9475,7 +9470,7 @@ fn build_select_items_for_stack(
 ///
 /// 指定モードがこの一覧の全 bar を消す（= 残るのが mismatch のチャート行だけ）
 /// 場合のみ、チャートが残るモードへ前方向に送る。フォルダ等チャート以外の行が
-/// 1 つでも残る、または ALL/24K のように絞り込まないモードの場合は据え置く。
+/// 1 つでも残る、または ALL のように絞り込まないモードの場合は据え置く。
 fn resolve_non_empty_mode_filter(
     items: &[SelectItem],
     start: SelectModeFilter,
@@ -9496,7 +9491,7 @@ fn mode_filter_removes_everything(items: &[SelectItem], filter: SelectModeFilter
         return false;
     }
     let Some(key_mode) = filter.key_mode() else {
-        // ALL / 24K 系は絞り込まないので空にはならない。
+        // ALL は絞り込まないので空にはならない。
         return false;
     };
     items.iter().all(|item| match item {
@@ -13751,9 +13746,9 @@ mod tests {
     }
 
     #[test]
-    fn select_skin_event_state_cycles_like_beatoraja_defaults() {
+    fn select_skin_event_state_cycles_supported_mode_filters() {
         assert_eq!(SelectModeFilter::All.next(), SelectModeFilter::K7);
-        assert_eq!(SelectModeFilter::All.previous(), SelectModeFilter::K24Double);
+        assert_eq!(SelectModeFilter::All.previous(), SelectModeFilter::K10);
         assert_eq!(SelectSort::Title.next(), SelectSort::Artist);
         assert_eq!(SelectSort::Title.previous(), SelectSort::Bp);
         assert_eq!(
@@ -13909,6 +13904,8 @@ mod tests {
         for mode in SelectModeFilter::ORDER {
             assert_eq!(SelectModeFilter::from_str_or_default(mode.as_str()), mode);
         }
+        assert_eq!(SelectModeFilter::from_str_or_default("24K"), SelectModeFilter::All);
+        assert_eq!(SelectModeFilter::from_str_or_default("24K_DOUBLE"), SelectModeFilter::All);
         assert_eq!(SelectModeFilter::from_str_or_default("unknown"), SelectModeFilter::All);
     }
 

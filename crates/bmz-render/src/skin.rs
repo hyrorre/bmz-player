@@ -10824,11 +10824,11 @@ fn select_assist_index(assist: &str) -> usize {
 
 fn select_mode_index(mode: &str) -> usize {
     match mode {
-        "7K" => 1,
-        "14K" => 2,
-        "9K" => 3,
-        "5K" => 4,
-        "10K" => 5,
+        "5K" => 1,
+        "7K" => 2,
+        "10K" => 3,
+        "14K" => 4,
+        "9K" => 5,
         "24K" => 6,
         "24K_DOUBLE" => 7,
         _ => 0,
@@ -19475,6 +19475,25 @@ mod tests {
         assert!(skin_state_number(24, &state).is_some_and(|value| (0..=23).contains(&value)));
         assert!(skin_state_number(25, &state).is_some_and(|value| (0..=59).contains(&value)));
         assert!(skin_state_number(26, &state).is_some_and(|value| (0..=59).contains(&value)));
+    }
+
+    #[test]
+    fn select_mode_index_matches_beatoraja_skin_ref_order() {
+        let cases = [
+            ("ALL", 0),
+            ("5K", 1),
+            ("7K", 2),
+            ("10K", 3),
+            ("14K", 4),
+            ("9K", 5),
+            ("24K", 6),
+            ("24K_DOUBLE", 7),
+            ("unknown", 0),
+        ];
+
+        for (mode, expected) in cases {
+            assert_eq!(select_mode_index(mode), expected, "select mode {mode}");
+        }
     }
 
     #[test]
