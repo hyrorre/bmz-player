@@ -57,6 +57,7 @@ pub struct PlayOffsets {
 #[derive(Debug, Clone, Copy)]
 pub struct PlayAudioMix {
     pub master_volume: f32,
+    pub normalization_gain: f32,
     pub key_volume: f32,
     pub bgm_volume: f32,
 }
@@ -305,7 +306,10 @@ pub fn schedule_keysounds(
         audio.schedule(ScheduledSound {
             start_frame: session.audio_clock.time_to_output_frame(event.time),
             sound_id,
-            volume: (session.audio_mix.master_volume * session.audio_mix.key_volume * chart_volume)
+            volume: (session.audio_mix.master_volume
+                * session.audio_mix.normalization_gain
+                * session.audio_mix.key_volume
+                * chart_volume)
                 .clamp(0.0, 1.0),
             pan: 0.0,
             loop_playback: false,
@@ -605,7 +609,10 @@ pub fn update_hcn_lane_timers(session: &mut GameSession, audio_now: TimeUs) {
                             pair.start_time,
                         ),
                     );
-                    (session.audio_mix.master_volume * session.audio_mix.key_volume * chart_volume)
+                    (session.audio_mix.master_volume
+                        * session.audio_mix.normalization_gain
+                        * session.audio_mix.key_volume
+                        * chart_volume)
                         .clamp(0.0, 1.0)
                 };
                 session.pending_keysound_volumes.push((sound_id, volume));
@@ -689,7 +696,9 @@ pub fn advance_session_frame(
             &session.chart,
             &session.audio_clock,
             times.audio_schedule_until,
-            session.audio_mix.master_volume * session.audio_mix.bgm_volume,
+            session.audio_mix.master_volume
+                * session.audio_mix.normalization_gain
+                * session.audio_mix.bgm_volume,
             audio,
         );
 
@@ -787,6 +796,7 @@ mod tests {
         let mut session = session_with_autoplay(chart_with_keysound());
         session.audio_mix.master_volume = 0.5;
         session.audio_mix.key_volume = 0.25;
+        session.audio_mix.normalization_gain = 0.5;
         let mut audio = TestAudio::default();
 
         let frame = advance_session_frame(&mut session, &mut audio);
@@ -795,7 +805,7 @@ mod tests {
         assert_eq!(audio.scheduled.len(), 1);
         assert_eq!(audio.scheduled[0].sound_id, SoundId(7));
         assert_eq!(audio.scheduled[0].start_frame, 0);
-        assert_eq!(audio.scheduled[0].volume, 0.125);
+        assert_eq!(audio.scheduled[0].volume, 0.0625);
         assert_eq!(session.recent_judgements.len(), 1);
     }
 
@@ -959,13 +969,14 @@ mod tests {
         let mut session = session_with_autoplay(chart_with_bgm());
         session.audio_mix.master_volume = 0.5;
         session.audio_mix.bgm_volume = 0.75;
+        session.audio_mix.normalization_gain = 0.5;
         let mut audio = TestAudio::default();
 
         advance_session_frame(&mut session, &mut audio);
 
         assert_eq!(audio.scheduled.len(), 1);
         assert_eq!(audio.scheduled[0].sound_id, SoundId(3));
-        assert_eq!(audio.scheduled[0].volume, 0.375);
+        assert_eq!(audio.scheduled[0].volume, 0.1875);
     }
 
     #[test]
@@ -1395,7 +1406,12 @@ mod tests {
             full_combo_started_at: None,
             bgm_scheduler: BgmScheduler::default(),
             offsets: PlayOffsets { input_offset_us: 0, visual_offset_us: 0 },
-            audio_mix: PlayAudioMix { master_volume: 1.0, key_volume: 1.0, bgm_volume: 1.0 },
+            audio_mix: PlayAudioMix {
+                master_volume: 1.0,
+                normalization_gain: 1.0,
+                key_volume: 1.0,
+                bgm_volume: 1.0,
+            },
             hispeed: 2.0,
             hispeed_mode: HispeedMode::Normal,
             target_green_number: 300,

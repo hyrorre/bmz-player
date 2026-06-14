@@ -32,6 +32,7 @@ pub fn play_offsets_from_profile(profile: &ProfileConfig) -> PlayOffsets {
 pub fn audio_mix_from_profile(profile: &ProfileConfig) -> PlayAudioMix {
     PlayAudioMix {
         master_volume: volume_unit_to_f32(profile.audio_mix.master_volume),
+        normalization_gain: 1.0,
         key_volume: volume_unit_to_f32(profile.audio_mix.key_volume),
         bgm_volume: volume_unit_to_f32(profile.audio_mix.bgm_volume),
     }
@@ -169,6 +170,7 @@ mod tests {
         let mix = audio_mix_from_profile(&profile);
 
         assert!((mix.master_volume - 0.8).abs() < 1e-6);
+        assert!((mix.normalization_gain - 1.0).abs() < 1e-6);
         assert!((mix.key_volume - 0.7).abs() < 1e-6);
         assert!((mix.bgm_volume - 0.6).abs() < 1e-6);
     }

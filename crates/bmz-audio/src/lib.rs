@@ -3,6 +3,7 @@ pub mod clock;
 pub mod engine;
 pub mod ffmpeg_loader;
 pub mod loader;
+pub mod loudness;
 pub mod mixer;
 pub mod queue;
 pub mod sample;

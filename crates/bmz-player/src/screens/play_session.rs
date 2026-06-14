@@ -3,6 +3,7 @@ use bmz_audio::clock::AudioClock;
 use bmz_audio::engine::AudioEngine;
 use bmz_audio::ffmpeg_loader::FfmpegSampleLoader;
 use bmz_audio::loader::{LoadedSampleReport, SampleLoader, load_chart_samples};
+use bmz_audio::loudness::analyze_chart_loudness;
 use bmz_chart::import::import_bms_chart;
 use bmz_chart::model::{NoteEvent, NoteKind, PlayableChart};
 use bmz_core::clear::GaugeType;
@@ -39,6 +40,7 @@ use crate::screens::practice::{
     PracticeProperty, apply_practice_property, apply_practice_start_gauge,
 };
 use crate::select_options::{ArrangeOption, DoubleOption, HsFixOption, TargetOption};
+use crate::storage::library_db::ChartNormalizationAnalysis;
 use crate::storage::library_db::LibraryDatabase;
 use crate::storage::score_db::ScoreKey;
 
@@ -100,6 +102,7 @@ pub struct PreloadedPlaySession {
     pub chart: Arc<PlayableChart>,
     pub audio: AudioEngine,
     pub sample_report: Vec<LoadedSampleReport>,
+    pub normalization_gain: f32,
     pub applied_arrange: AppliedArrange,
     pub score_key: ScoreKey,
 }
@@ -572,7 +575,12 @@ pub fn load_prepared_play_session_for_chart_with_input_backend(
     options: PlaySessionOptions,
     input_backend: Box<dyn InputBackend>,
 ) -> Result<PreparedPlaySession> {
-    let preloaded = preload_play_session_for_chart(library_db, chart_id, options.clone())?;
+    let preloaded = preload_play_session_for_chart(
+        library_db,
+        chart_id,
+        options.clone(),
+        profile.audio_mix.normalize_chart_volume,
+    )?;
     Ok(build_prepared_play_session_from_preloaded(preloaded, profile, options, input_backend))
 }
 
@@ -580,6 +588,7 @@ pub fn preload_play_session_for_chart(
     library_db: &LibraryDatabase,
     chart_id: i64,
     options: PlaySessionOptions,
+    normalize_chart_volume: bool,
 ) -> Result<PreloadedPlaySession> {
     let Some(path) = library_db.primary_chart_file_path(chart_id)? else {
         bail!("chart file not found for chart id {chart_id}");
@@ -614,8 +623,22 @@ pub fn preload_play_session_for_chart(
     let mut loader = FfmpegSampleLoader;
     let (audio, sample_report) =
         build_audio_engine_for_chart(&chart, options.sample_rate, &mut loader);
+    let normalization_gain = load_or_compute_normalization_gain(
+        library_db,
+        chart_id,
+        normalize_chart_volume,
+        &chart,
+        &audio,
+    )?;
 
-    Ok(PreloadedPlaySession { chart, audio, sample_report, applied_arrange, score_key })
+    Ok(PreloadedPlaySession {
+        chart,
+        audio,
+        sample_report,
+        normalization_gain,
+        applied_arrange,
+        score_key,
+    })
 }
 
 pub fn build_practice_prepared_from_preloaded(
@@ -637,6 +660,7 @@ pub fn build_practice_prepared_from_preloaded(
     let practice_mode = options.practice_mode;
     let mut session =
         build_game_session_with_input_backend(Arc::new(chart), profile, options, input_backend);
+    session.audio_mix.normalization_gain = preloaded.normalization_gain;
     apply_practice_start_gauge(&mut session.gauge, property.start_gauge);
     PreparedPlaySession {
         session,
@@ -663,6 +687,8 @@ pub fn build_prepared_play_session_from_preloaded(
     let practice_mode = options.practice_mode;
     let session =
         build_game_session_with_input_backend(preloaded.chart, profile, options, input_backend);
+    let mut session = session;
+    session.audio_mix.normalization_gain = preloaded.normalization_gain;
     PreparedPlaySession {
         session,
         audio: preloaded.audio,
@@ -672,6 +698,39 @@ pub fn build_prepared_play_session_from_preloaded(
         target_ex_score,
         practice_mode,
     }
+}
+
+fn load_or_compute_normalization_gain(
+    library_db: &LibraryDatabase,
+    chart_id: i64,
+    normalize_chart_volume: bool,
+    chart: &PlayableChart,
+    audio: &AudioEngine,
+) -> Result<f32> {
+    if !normalize_chart_volume {
+        return Ok(1.0);
+    }
+    if let Some(analysis) = library_db.chart_normalization_analysis_by_chart_id(chart_id)? {
+        return Ok(analysis.normalization_gain.clamp(0.0, 1.0));
+    }
+
+    let Some(analysis) = analyze_chart_loudness(chart, &audio.samples, audio.output_sample_rate())
+    else {
+        tracing::warn!(chart_id, "failed to analyze chart loudness; using unity gain");
+        return Ok(1.0);
+    };
+    let stored = ChartNormalizationAnalysis {
+        loudness_lufs: analysis.loudness_lufs,
+        normalization_gain: analysis.normalization_gain,
+    };
+    library_db.write_chart_normalization_analysis(chart_id, stored)?;
+    tracing::info!(
+        chart_id,
+        loudness_lufs = stored.loudness_lufs,
+        normalization_gain = stored.normalization_gain,
+        "stored chart volume normalization analysis"
+    );
+    Ok(stored.normalization_gain.clamp(0.0, 1.0))
 }
 
 pub fn generate_arrange_seed() -> i64 {

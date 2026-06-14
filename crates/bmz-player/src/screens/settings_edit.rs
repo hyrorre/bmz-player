@@ -169,6 +169,9 @@ pub struct SettingsEditSession {
 impl SettingsEditSession {
     pub fn capture(profile: &ProfileConfig, entry_id: SettingsEntryId) -> Self {
         let baseline = match entry_id {
+            SettingsEntryId::NormalizeChartVolume => {
+                SettingsBaseline::Bool(profile.audio_mix.normalize_chart_volume)
+            }
             SettingsEntryId::MasterVolume => {
                 SettingsBaseline::Volume(profile.audio_mix.master_volume)
             }
@@ -263,6 +266,9 @@ impl SettingsEditSession {
 
     pub fn restore(&self, profile: &mut ProfileConfig) {
         match (&self.entry_id, &self.baseline) {
+            (SettingsEntryId::NormalizeChartVolume, SettingsBaseline::Bool(value)) => {
+                profile.audio_mix.normalize_chart_volume = *value;
+            }
             (SettingsEntryId::MasterVolume, SettingsBaseline::Volume(value)) => {
                 profile.audio_mix.master_volume = *value;
             }
@@ -444,6 +450,12 @@ mod tests {
         profile.audio_mix.master_volume = 20;
         session.restore(&mut profile);
         assert_eq!(profile.audio_mix.master_volume, 50);
+
+        let normalize_session =
+            SettingsEditSession::capture(&profile, SettingsEntryId::NormalizeChartVolume);
+        profile.audio_mix.normalize_chart_volume = true;
+        normalize_session.restore(&mut profile);
+        assert!(!profile.audio_mix.normalize_chart_volume);
     }
 
     #[test]

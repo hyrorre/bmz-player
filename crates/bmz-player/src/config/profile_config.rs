@@ -566,6 +566,8 @@ pub struct UiConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioMixConfig {
+    #[serde(default)]
+    pub normalize_chart_volume: bool,
     /// マスターボリューム。0..=100 の整数で持ち、ランタイムでは /100 して扱う。
     pub master_volume: u32,
     /// キーボリューム。0..=100 の整数で持ち、ランタイムでは /100 して扱う。
@@ -886,6 +888,7 @@ impl ProfileConfig {
                 confirm_on_exit: true,
             },
             audio_mix: AudioMixConfig {
+                normalize_chart_volume: false,
                 master_volume: 50,
                 key_volume: 50,
                 bgm_volume: 50,
@@ -1156,6 +1159,7 @@ mod tests {
         let profile = ProfileConfig::new_default("default", "Default", 1);
 
         assert_eq!(profile.audio_mix.master_volume, 50);
+        assert!(!profile.audio_mix.normalize_chart_volume);
         assert_eq!(profile.audio_mix.key_volume, 50);
         assert_eq!(profile.audio_mix.bgm_volume, 50);
         assert_eq!(profile.audio_mix.preview_volume, 50);
@@ -1223,6 +1227,7 @@ mod tests {
             confirm_on_exit = true
 
             [audio_mix]
+            normalize_chart_volume = false
             master_volume = 50
             key_volume = 50
             bgm_volume = 50

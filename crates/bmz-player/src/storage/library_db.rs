@@ -22,6 +22,7 @@ pub use super::difficulty_table_db::{
 use super::common::{configure_connection, hash_to_hex, hex_to_hash};
 
 pub const CHART_IMPORT_VERSION: i64 = 4;
+pub const CHART_LOUDNESS_ANALYSIS_VERSION: i64 = 1;
 const MAX_ANALYSIS_DISTRIBUTION_SECONDS: usize = 10 * 60;
 
 pub struct LibraryDatabase {
@@ -97,6 +98,12 @@ pub struct ChartAnalysisSummary {
     pub total_gauge: f64,
     pub main_bpm: f64,
     pub speed_changes: Vec<ChartSpeedChange>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ChartNormalizationAnalysis {
+    pub loudness_lufs: f32,
+    pub normalization_gain: f32,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -565,6 +572,58 @@ impl LibraryDatabase {
             )
             .optional()
             .map_err(Into::into)
+    }
+
+    pub fn chart_normalization_analysis_by_chart_id(
+        &self,
+        chart_id: i64,
+    ) -> Result<Option<ChartNormalizationAnalysis>> {
+        self.conn
+            .query_row(
+                "SELECT loudness_lufs, normalization_gain
+                 FROM chart_analysis
+                 WHERE chart_id = ?1
+                    AND loudness_analysis_version = ?2
+                    AND loudness_lufs IS NOT NULL
+                    AND normalization_gain IS NOT NULL",
+                params![chart_id, CHART_LOUDNESS_ANALYSIS_VERSION],
+                |row| {
+                    let loudness_lufs: f32 = row.get(0)?;
+                    let normalization_gain: f32 = row.get(1)?;
+                    Ok(ChartNormalizationAnalysis { loudness_lufs, normalization_gain })
+                },
+            )
+            .optional()
+            .map(|value| {
+                value.filter(|analysis| {
+                    analysis.loudness_lufs.is_finite()
+                        && analysis.normalization_gain.is_finite()
+                        && analysis.normalization_gain > 0.0
+                })
+            })
+            .map_err(Into::into)
+    }
+
+    pub fn write_chart_normalization_analysis(
+        &self,
+        chart_id: i64,
+        analysis: ChartNormalizationAnalysis,
+    ) -> Result<()> {
+        self.conn
+            .prepare_cached(
+                "UPDATE chart_analysis
+             SET loudness_lufs = ?2,
+                 normalization_gain = ?3,
+                 loudness_analysis_version = ?4
+             WHERE chart_id = ?1",
+            )?
+            .execute(params![
+                chart_id,
+                analysis.loudness_lufs,
+                analysis.normalization_gain,
+                CHART_LOUDNESS_ANALYSIS_VERSION,
+            ])?;
+        Ok(())
     }
 
     pub fn chart_analyses_by_chart_ids(&self, ids: &[i64]) -> Result<HashMap<i64, ChartAnalysis>> {
@@ -1329,6 +1388,9 @@ fn write_chart_analysis(conn: &Connection, chart_id: i64, chart: &PlayableChart)
             distribution_json = excluded.distribution_json,
             speed_changes_json = excluded.speed_changes_json,
             lane_notes_json = excluded.lane_notes_json,
+            loudness_lufs = NULL,
+            normalization_gain = NULL,
+            loudness_analysis_version = 0,
             analysis_version = excluded.analysis_version",
     )?
     .execute(params![
@@ -2234,6 +2296,31 @@ mod tests {
             .unwrap();
         assert!(stored_distribution.starts_with('#'));
         assert_eq!(stored_distribution.len(), 1 + analysis.distribution.len() * 14);
+    }
+
+    #[test]
+    fn chart_normalization_analysis_roundtrips_and_rescan_clears_it() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, LIBRARY_MIGRATIONS).unwrap();
+        let mut db = LibraryDatabase { conn };
+        let chart = chart("normalization");
+
+        let chart_id =
+            db.upsert_chart_import(&record_for_chart("/songs/normalization.bms", &chart)).unwrap();
+        assert!(db.chart_normalization_analysis_by_chart_id(chart_id).unwrap().is_none());
+
+        db.write_chart_normalization_analysis(
+            chart_id,
+            ChartNormalizationAnalysis { loudness_lufs: -10.5, normalization_gain: 0.75 },
+        )
+        .unwrap();
+        let stored = db.chart_normalization_analysis_by_chart_id(chart_id).unwrap().unwrap();
+        assert_eq!(stored.loudness_lufs, -10.5);
+        assert_eq!(stored.normalization_gain, 0.75);
+
+        db.upsert_chart_import(&record_for_chart("/songs/normalization.bms", &chart)).unwrap();
+        assert!(db.chart_normalization_analysis_by_chart_id(chart_id).unwrap().is_none());
     }
 
     #[test]

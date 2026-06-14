@@ -12,6 +12,7 @@ use crate::ln_policy::LnPolicySetting;
 /// ゲーム内設定で編集可能な profile.toml 項目。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SettingsEntryId {
+    NormalizeChartVolume,
     MasterVolume,
     KeyVolume,
     BgmVolume,
@@ -58,6 +59,7 @@ pub enum SettingsEntryId {
 
 impl SettingsEntryId {
     pub const VOLUME_ENTRIES: &'static [Self] = &[
+        Self::NormalizeChartVolume,
         Self::MasterVolume,
         Self::KeyVolume,
         Self::BgmVolume,
@@ -116,6 +118,7 @@ impl SettingsEntryId {
 
     pub fn label(self) -> &'static str {
         match self {
+            Self::NormalizeChartVolume => "NORMALIZE",
             Self::MasterVolume => "MASTER",
             Self::KeyVolume => "KEY",
             Self::BgmVolume => "BGM",
@@ -175,6 +178,9 @@ pub fn settings_adjust_step(id: SettingsEntryId) -> i32 {
 
 pub fn format_settings_value(profile: &ProfileConfig, id: SettingsEntryId) -> String {
     match id {
+        SettingsEntryId::NormalizeChartVolume => {
+            format_bool_on_off(profile.audio_mix.normalize_chart_volume)
+        }
         SettingsEntryId::MasterVolume => format!("{}", profile.audio_mix.master_volume),
         SettingsEntryId::KeyVolume => format!("{}", profile.audio_mix.key_volume),
         SettingsEntryId::BgmVolume => format!("{}", profile.audio_mix.bgm_volume),
@@ -242,6 +248,10 @@ pub fn adjust_settings_value(profile: &mut ProfileConfig, id: SettingsEntryId, d
         return false;
     }
     match id {
+        SettingsEntryId::NormalizeChartVolume => {
+            profile.audio_mix.normalize_chart_volume = !profile.audio_mix.normalize_chart_volume;
+            true
+        }
         SettingsEntryId::MasterVolume => {
             adjust_u32(&mut profile.audio_mix.master_volume, delta, 0, 100)
         }
@@ -793,6 +803,9 @@ mod tests {
     #[test]
     fn adjust_volume_clamps_to_range() {
         let mut profile = ProfileConfig::new_default("default", "Default", 0);
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::NormalizeChartVolume, 1));
+        assert!(profile.audio_mix.normalize_chart_volume);
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::NormalizeChartVolume), "ON");
         profile.audio_mix.master_volume = 98;
         assert!(adjust_settings_value(&mut profile, SettingsEntryId::MasterVolume, 5));
         assert_eq!(profile.audio_mix.master_volume, 100);

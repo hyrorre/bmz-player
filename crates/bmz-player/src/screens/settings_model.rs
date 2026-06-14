@@ -284,10 +284,13 @@ mod tests {
     #[test]
     fn settings_volume_lists_entries() {
         let items = load_settings_items(CONFIG_VOLUME_PATH);
-        assert_eq!(items.len(), 7);
+        assert_eq!(items.len(), 8);
         assert!(matches!(items.first(), Some(SelectItem::Back)));
         assert!(
-            matches!(&items[1], SelectItem::Config(row) if row.entry_id == SettingsEntryId::MasterVolume)
+            matches!(&items[1], SelectItem::Config(row) if row.entry_id == SettingsEntryId::NormalizeChartVolume)
+        );
+        assert!(
+            matches!(&items[2], SelectItem::Config(row) if row.entry_id == SettingsEntryId::MasterVolume)
         );
     }
 

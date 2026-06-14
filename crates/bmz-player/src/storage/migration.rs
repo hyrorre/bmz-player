@@ -428,6 +428,15 @@ pub const LIBRARY_MIGRATIONS: &[Migration] = &[
             "ALTER TABLE charts ADD COLUMN headers_json TEXT NOT NULL DEFAULT '{}';",
         ],
     },
+    Migration {
+        version: 19,
+        statements: &[
+            "ALTER TABLE chart_analysis ADD COLUMN loudness_lufs REAL;",
+            "ALTER TABLE chart_analysis ADD COLUMN normalization_gain REAL;",
+            "ALTER TABLE chart_analysis
+                ADD COLUMN loudness_analysis_version INTEGER NOT NULL DEFAULT 0;",
+        ],
+    },
 ];
 
 pub const SCORE_MIGRATIONS: &[Migration] = &[

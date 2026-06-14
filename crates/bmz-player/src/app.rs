@@ -5408,6 +5408,7 @@ impl WinitApp {
         let library_db_path = self.boot.app_paths.library_db.clone();
         let app_config = self.play_session_app_config();
         let ln_policy_setting = self.boot.profile_config.play.ln_mode_policy;
+        let normalize_chart_volume = self.boot.profile_config.audio_mix.normalize_chart_volume;
         thread::Builder::new()
             .name(format!("play-preload-{chart_id}"))
             .spawn(move || {
@@ -5425,6 +5426,7 @@ impl WinitApp {
                         &library_db,
                         chart_id,
                         session_options.clone(),
+                        normalize_chart_volume,
                     )?;
                     Ok(PreloadedWinitPlaySession { chart_id, preloaded, input, session_options })
                 })()
@@ -7584,8 +7586,14 @@ impl WinitApp {
     fn sync_active_play_realtime_profile_settings(&mut self) {
         if let Some(active_play) = &mut self.active_play {
             let session = &mut active_play.running.session;
+            let normalization_gain = if self.boot.profile_config.audio_mix.normalize_chart_volume {
+                session.audio_mix.normalization_gain
+            } else {
+                1.0
+            };
             session.audio_mix =
                 crate::config::play::audio_mix_from_profile(&self.boot.profile_config);
+            session.audio_mix.normalization_gain = normalization_gain;
             session.offsets =
                 crate::config::play::play_offsets_from_profile(&self.boot.profile_config);
         }
