@@ -5,7 +5,7 @@ use bmz_core::input::InputKind;
 use bmz_gameplay::input::backend::{DeviceId, DeviceInputEvent, DeviceTimestamp, PhysicalControl};
 use gilrs::{Axis, Button, EventType};
 
-const GILRS_DEVICE_ID_BASE: u32 = 16;
+pub const GILRS_DEVICE_ID_BASE: u32 = 16;
 // beatoraja 実機値 (INFINITAS / DAO / YuanCon / arcin board の実測値)
 const BASE_TICK_MAX_SIZE: f32 = 0.009;
 
@@ -191,6 +191,10 @@ fn gilrs_gamepad_device_id(id: gilrs::GamepadId) -> DeviceId {
     DeviceId(GILRS_DEVICE_ID_BASE + usize::from(id) as u32)
 }
 
+pub fn gilrs_gamepad_device_id_from_player_index(index: u32) -> Option<DeviceId> {
+    index.checked_sub(1).map(|offset| DeviceId(GILRS_DEVICE_ID_BASE + offset))
+}
+
 fn gilrs_button_name(button: Button) -> Option<&'static str> {
     match button {
         Button::South => Some("Button1"),
@@ -261,5 +265,12 @@ mod tests {
         assert_eq!(gilrs_button_name(Button::LeftTrigger2), Some("Button7"));
         assert_eq!(gilrs_button_name(Button::Start), Some("Start"));
         assert_eq!(gilrs_button_name(Button::Unknown), None);
+    }
+
+    #[test]
+    fn player_index_maps_to_gilrs_device_id() {
+        assert_eq!(gilrs_gamepad_device_id_from_player_index(0), None);
+        assert_eq!(gilrs_gamepad_device_id_from_player_index(1), Some(DeviceId(16)));
+        assert_eq!(gilrs_gamepad_device_id_from_player_index(2), Some(DeviceId(17)));
     }
 }

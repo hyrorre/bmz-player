@@ -6,13 +6,14 @@ use std::fmt;
 
 use bmz_core::input::ScratchDirection;
 use bmz_core::lane::{KeyMode, Lane};
-use bmz_gameplay::input::backend::PhysicalControl;
+use bmz_gameplay::input::backend::{DeviceId, PhysicalControl};
 use bmz_gameplay::input::binding::{BindingEntry, LaneBinding};
 
 use super::play::lane_from_config;
 use super::profile_config::{
     BindingConfigEntry, LaneConfig, PlayModeInputConfig, ProfileInputConfig, ScratchDirectionConfig,
 };
+use crate::input::gilrs::gilrs_gamepad_device_id_from_player_index;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum InheritError {
@@ -115,7 +116,7 @@ pub fn lane_binding_for_key_mode(
             .filter_map(|entry| {
                 let lane = entry.lane?;
                 Some(BindingEntry {
-                    device: None,
+                    device: binding_device_from_config(&entry.device),
                     control: control_from_config(&entry.device, &entry.control),
                     lane: lane_from_config(lane),
                     scratch_direction: scratch_direction_from_binding(lane, &entry),
@@ -309,9 +310,26 @@ fn lane_to_config(lane: Lane) -> LaneConfig {
     parent_lane_to_config(lane)
 }
 
+pub fn is_gamepad_device(device: &str) -> bool {
+    gamepad_player_index(device).is_some() || device.trim().eq_ignore_ascii_case("gamepad")
+}
+
+fn binding_device_from_config(device: &str) -> Option<DeviceId> {
+    gamepad_player_index(device).and_then(gilrs_gamepad_device_id_from_player_index)
+}
+
+fn gamepad_player_index(device: &str) -> Option<u32> {
+    let lower = device.trim().to_ascii_lowercase();
+    let suffix = lower.strip_prefix("gamepad")?;
+    if suffix.is_empty() {
+        return None;
+    }
+    suffix.parse::<u32>().ok().filter(|index| *index > 0)
+}
+
 fn control_from_config(device: &str, control: &str) -> PhysicalControl {
     match device.to_ascii_lowercase().as_str() {
-        "gamepad" => PhysicalControl::GamepadButton(control.to_string()),
+        device if is_gamepad_device(device) => PhysicalControl::GamepadButton(control.to_string()),
         "hid" => control
             .parse::<u32>()
             .map(PhysicalControl::HidButton)
@@ -384,17 +402,47 @@ pub fn default_play_14k_bindings() -> Vec<BindingConfigEntry> {
         play_binding("Semicolon", LaneConfig::Key13),
         play_binding("Slash", LaneConfig::Key14),
     ];
-    bindings.extend(default_play_7k_gamepad_bindings());
     bindings.extend([
-        gamepad_play_binding("Button8", LaneConfig::Key8),
-        gamepad_play_binding("Button9", LaneConfig::Key9),
-        gamepad_play_binding("Button10", LaneConfig::Key10),
-        gamepad_play_binding("Button11", LaneConfig::Key11),
-        gamepad_play_binding("Button12", LaneConfig::Key12),
-        gamepad_play_binding("Button13", LaneConfig::Key13),
-        gamepad_play_binding("Button14", LaneConfig::Key14),
-        gamepad_play_binding("AxisRightX+", LaneConfig::Scratch2),
-        gamepad_play_binding("AxisRightX-", LaneConfig::Scratch2),
+        gamepad_scratch_play_binding_for_device(
+            "gamepad1",
+            "AxisLeftX-",
+            LaneConfig::Scratch,
+            ScratchDirectionConfig::Up,
+        ),
+        gamepad_scratch_play_binding_for_device(
+            "gamepad1",
+            "AxisLeftX+",
+            LaneConfig::Scratch,
+            ScratchDirectionConfig::Down,
+        ),
+        gamepad_play_binding_for_device("gamepad1", "Button1", LaneConfig::Key1),
+        gamepad_play_binding_for_device("gamepad1", "Button2", LaneConfig::Key2),
+        gamepad_play_binding_for_device("gamepad1", "Button3", LaneConfig::Key3),
+        gamepad_play_binding_for_device("gamepad1", "Button4", LaneConfig::Key4),
+        gamepad_play_binding_for_device("gamepad1", "Button5", LaneConfig::Key5),
+        gamepad_play_binding_for_device("gamepad1", "Button6", LaneConfig::Key6),
+        gamepad_play_binding_for_device("gamepad1", "Button7", LaneConfig::Key7),
+    ]);
+    bindings.extend([
+        gamepad_scratch_play_binding_for_device(
+            "gamepad2",
+            "AxisLeftX-",
+            LaneConfig::Scratch2,
+            ScratchDirectionConfig::Down,
+        ),
+        gamepad_scratch_play_binding_for_device(
+            "gamepad2",
+            "AxisLeftX+",
+            LaneConfig::Scratch2,
+            ScratchDirectionConfig::Up,
+        ),
+        gamepad_play_binding_for_device("gamepad2", "Button1", LaneConfig::Key8),
+        gamepad_play_binding_for_device("gamepad2", "Button2", LaneConfig::Key9),
+        gamepad_play_binding_for_device("gamepad2", "Button3", LaneConfig::Key10),
+        gamepad_play_binding_for_device("gamepad2", "Button4", LaneConfig::Key11),
+        gamepad_play_binding_for_device("gamepad2", "Button5", LaneConfig::Key12),
+        gamepad_play_binding_for_device("gamepad2", "Button6", LaneConfig::Key13),
+        gamepad_play_binding_for_device("gamepad2", "Button7", LaneConfig::Key14),
     ]);
     bindings
 }
@@ -434,13 +482,32 @@ pub fn scratch_play_binding(
 }
 
 pub fn gamepad_play_binding(control: &str, lane: LaneConfig) -> BindingConfigEntry {
+    gamepad_play_binding_for_device("gamepad", control, lane)
+}
+
+pub fn gamepad_play_binding_for_device(
+    device: &str,
+    control: &str,
+    lane: LaneConfig,
+) -> BindingConfigEntry {
     BindingConfigEntry {
-        device: "gamepad".to_string(),
+        device: device.to_string(),
         control: control.to_string(),
         lane: Some(lane),
         action: None,
         scratch: None,
     }
+}
+
+pub fn gamepad_scratch_play_binding_for_device(
+    device: &str,
+    control: &str,
+    lane: LaneConfig,
+    scratch: ScratchDirectionConfig,
+) -> BindingConfigEntry {
+    let mut entry = gamepad_play_binding_for_device(device, control, lane);
+    entry.scratch = Some(scratch);
+    entry
 }
 
 pub fn normalize_profile_input(input: &mut ProfileInputConfig) {
@@ -697,5 +764,95 @@ mod tests {
         let (ui, play) = migrate_legacy_bindings(&legacy);
         assert!(ui.iter().any(|e| e.action.is_some()));
         assert!(play.contains_key("7k"));
+    }
+
+    #[test]
+    fn gamepad_numbered_devices_resolve_to_specific_device_ids() {
+        let mut input = sample_7k_input();
+        input.play.insert(
+            "14k".to_string(),
+            PlayModeInputConfig {
+                inherit: None,
+                bindings: vec![
+                    gamepad_play_binding_for_device("gamepad1", "Button1", LaneConfig::Key1),
+                    gamepad_play_binding_for_device("gamepad2", "Button1", LaneConfig::Key8),
+                ],
+            },
+        );
+
+        let binding = lane_binding_for_key_mode(&input, KeyMode::K14).unwrap();
+
+        assert_eq!(
+            binding.resolve(DeviceId(16), &PhysicalControl::GamepadButton("Button1".into())),
+            Some(Lane::Key1)
+        );
+        assert_eq!(
+            binding.resolve(DeviceId(17), &PhysicalControl::GamepadButton("Button1".into())),
+            Some(Lane::Key8)
+        );
+        assert_eq!(
+            binding.resolve(DeviceId(18), &PhysicalControl::GamepadButton("Button1".into())),
+            None
+        );
+    }
+
+    #[test]
+    fn gamepad_wildcard_still_matches_any_gamepad_device() {
+        let input = sample_7k_input();
+        let binding = lane_binding_for_key_mode(&input, KeyMode::K7).unwrap();
+
+        assert_eq!(
+            binding.resolve(DeviceId(16), &PhysicalControl::GamepadButton("Button1".into())),
+            Some(Lane::Key1)
+        );
+        assert_eq!(
+            binding.resolve(DeviceId(17), &PhysicalControl::GamepadButton("Button1".into())),
+            Some(Lane::Key1)
+        );
+    }
+
+    #[test]
+    fn default_fourteen_k_gamepad_uses_two_numbered_devices() {
+        let bindings = default_play_14k_bindings();
+
+        assert!(bindings.iter().any(|entry| {
+            entry.device == "gamepad1"
+                && entry.control == "Button1"
+                && entry.lane == Some(LaneConfig::Key1)
+        }));
+        assert!(bindings.iter().any(|entry| {
+            entry.device == "gamepad1"
+                && entry.control == "AxisLeftX-"
+                && entry.lane == Some(LaneConfig::Scratch)
+                && entry.scratch == Some(ScratchDirectionConfig::Up)
+        }));
+        assert!(bindings.iter().any(|entry| {
+            entry.device == "gamepad1"
+                && entry.control == "AxisLeftX+"
+                && entry.lane == Some(LaneConfig::Scratch)
+                && entry.scratch == Some(ScratchDirectionConfig::Down)
+        }));
+        assert!(bindings.iter().any(|entry| {
+            entry.device == "gamepad2"
+                && entry.control == "Button1"
+                && entry.lane == Some(LaneConfig::Key8)
+        }));
+        assert!(bindings.iter().any(|entry| {
+            entry.device == "gamepad2"
+                && entry.control == "AxisLeftX-"
+                && entry.lane == Some(LaneConfig::Scratch2)
+                && entry.scratch == Some(ScratchDirectionConfig::Down)
+        }));
+        assert!(bindings.iter().any(|entry| {
+            entry.device == "gamepad2"
+                && entry.control == "AxisLeftX+"
+                && entry.lane == Some(LaneConfig::Scratch2)
+                && entry.scratch == Some(ScratchDirectionConfig::Up)
+        }));
+        assert!(
+            !bindings
+                .iter()
+                .any(|entry| { entry.device == "gamepad" && entry.control == "Button14" })
+        );
     }
 }

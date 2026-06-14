@@ -2,7 +2,8 @@ use bmz_core::lane::KeyMode;
 
 use super::play::{lane_from_config, lane_to_config};
 use super::play_input::{
-    default_play_bindings, gamepad_play_binding, play_binding, resolve_play_bindings,
+    default_play_bindings, gamepad_play_binding, is_gamepad_device, play_binding,
+    resolve_play_bindings,
 };
 use super::profile_config::{
     BindingConfigEntry, InputActionConfig, LaneConfig, PlayModeInputConfig, ProfileConfig,
@@ -326,7 +327,7 @@ fn read_scratch_gamepad_slots(
 
     // 明示の direction タグを最優先する。コントロール名 (+/-) からの推測は
     // 旧 entry 向けのフォールバックで、軸極性が逆のデバイスでは当てにならない。
-    for entry in bindings.iter().filter(|e| e.device == "gamepad" && e.lane == Some(lane)) {
+    for entry in bindings.iter().filter(|e| is_gamepad_device(&e.device) && e.lane == Some(lane)) {
         let control = entry.control.clone();
         match entry.scratch {
             Some(ScratchDirectionConfig::Up) => slots.up = Some(control),
@@ -366,7 +367,7 @@ fn keyboard_controls_for_lane(bindings: &[BindingConfigEntry], lane: LaneConfig)
 fn gamepad_controls_for_lane(bindings: &[BindingConfigEntry], lane: LaneConfig) -> Vec<String> {
     bindings
         .iter()
-        .filter(|entry| entry.device == "gamepad" && entry.lane == Some(lane))
+        .filter(|entry| is_gamepad_device(&entry.device) && entry.lane == Some(lane))
         .map(|entry| entry.control.clone())
         .collect()
 }
@@ -376,15 +377,18 @@ fn remove_lane_device_bindings(
     lane: LaneConfig,
     device: &str,
 ) {
-    bindings.retain(|entry| !(entry.device == device && entry.lane == Some(lane)));
+    bindings.retain(|entry| !(device_matches(&entry.device, device) && entry.lane == Some(lane)));
 }
 
 fn remove_control_from_device(bindings: &mut Vec<BindingConfigEntry>, device: &str, control: &str) {
-    bindings.retain(|entry| !(entry.device == device && entry.control == control));
+    bindings.retain(|entry| !(device_matches(&entry.device, device) && entry.control == control));
 }
 
 fn remove_ui_control_from_device(input: &mut ProfileInputConfig, device: &str, control: &str) {
-    input.ui.bindings.retain(|entry| !(entry.device == device && entry.control == control));
+    input
+        .ui
+        .bindings
+        .retain(|entry| !(device_matches(&entry.device, device) && entry.control == control));
 }
 
 fn action_controls_for_slot(
@@ -396,7 +400,9 @@ fn action_controls_for_slot(
         .ui
         .bindings
         .iter()
-        .filter(|entry| entry.device == slot.device() && entry.action == Some(action))
+        .filter(|entry| {
+            device_matches(&entry.device, slot.device()) && entry.action == Some(action)
+        })
         .map(|entry| entry.control.clone())
         .collect()
 }
@@ -406,7 +412,18 @@ fn remove_action_device_bindings(
     action: InputActionConfig,
     device: &str,
 ) {
-    input.ui.bindings.retain(|entry| !(entry.device == device && entry.action == Some(action)));
+    input
+        .ui
+        .bindings
+        .retain(|entry| !(device_matches(&entry.device, device) && entry.action == Some(action)));
+}
+
+fn device_matches(entry_device: &str, requested_device: &str) -> bool {
+    if requested_device == "gamepad" {
+        is_gamepad_device(entry_device)
+    } else {
+        entry_device == requested_device
+    }
 }
 
 fn write_action_keyboard_bindings(

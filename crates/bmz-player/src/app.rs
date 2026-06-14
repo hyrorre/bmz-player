@@ -11422,7 +11422,7 @@ struct SelectKeyBindings {
 
 impl SelectKeyBindings {
     fn from_profile(input: &ProfileInputConfig) -> Self {
-        use crate::config::play_input::resolve_play_bindings;
+        use crate::config::play_input::{is_gamepad_device, resolve_play_bindings};
 
         let play_7k = resolve_play_bindings(input, KeyMode::K7).unwrap_or_default();
         let play_14k = resolve_play_bindings(input, KeyMode::K14).unwrap_or_default();
@@ -11432,12 +11432,16 @@ impl SelectKeyBindings {
             .ui
             .bindings
             .iter()
-            .filter(|e| e.device == "keyboard" || e.device == "gamepad")
+            .filter(|e| e.device == "keyboard" || is_gamepad_device(&e.device))
             .collect();
-        let play_all: Vec<_> =
-            play_7k.iter().filter(|e| e.device == "keyboard" || e.device == "gamepad").collect();
-        let play_14k_all: Vec<_> =
-            play_14k.iter().filter(|e| e.device == "keyboard" || e.device == "gamepad").collect();
+        let play_all: Vec<_> = play_7k
+            .iter()
+            .filter(|e| e.device == "keyboard" || is_gamepad_device(&e.device))
+            .collect();
+        let play_14k_all: Vec<_> = play_14k
+            .iter()
+            .filter(|e| e.device == "keyboard" || is_gamepad_device(&e.device))
+            .collect();
 
         // キーボード専用（ヒント文字列表示用）
         let kb_keys_for = |lane: LaneConfig| -> Vec<String> {
@@ -12265,12 +12269,6 @@ mod tests {
         let play14 = input.play.get_mut(&key).expect("14K bindings");
         play14.bindings.push(crate::config::play_input::play_binding("P2K6", LaneConfig::Key13));
         play14.bindings.push(crate::config::play_input::play_binding("P2K7", LaneConfig::Key14));
-        play14
-            .bindings
-            .push(crate::config::play_input::gamepad_play_binding("Button13", LaneConfig::Key13));
-        play14
-            .bindings
-            .push(crate::config::play_input::gamepad_play_binding("Button14", LaneConfig::Key14));
         SelectKeyBindings::from_profile(&input)
     }
 
@@ -12738,8 +12736,7 @@ mod tests {
         // AxisLeftX- = scratch up (Previous = 負), AxisLeftX+ = scratch down (Next = 正)
         assert_eq!(select_analog_scroll_delta("AxisLeftX", -4, &gamepad_keys), Some(-4));
         assert_eq!(select_analog_scroll_delta("AxisLeftX", 4, &gamepad_keys), Some(4));
-        assert_eq!(select_analog_scroll_delta("AxisRightX", -4, &gamepad_keys), Some(-4));
-        assert_eq!(select_analog_scroll_delta("AxisRightX", 4, &gamepad_keys), Some(4));
+        assert_eq!(select_analog_scroll_delta("AxisRightX", -4, &gamepad_keys), None);
         assert_eq!(select_analog_scroll_delta("AxisLeftX", 0, &gamepad_keys), None);
         assert_eq!(select_analog_scroll_delta("AxisRightY", 4, &gamepad_keys), None);
     }
@@ -12800,14 +12797,8 @@ mod tests {
             Some(TargetCycle::Previous)
         );
         assert_eq!(target_cycle_from_control("AxisLeftX+", &gamepad_keys), Some(TargetCycle::Next));
-        assert_eq!(
-            target_cycle_from_control("AxisRightX-", &gamepad_keys),
-            Some(TargetCycle::Previous)
-        );
-        assert_eq!(
-            target_cycle_from_control("AxisRightX+", &gamepad_keys),
-            Some(TargetCycle::Next)
-        );
+        assert_eq!(target_cycle_from_control("AxisRightX-", &gamepad_keys), None);
+        assert_eq!(target_cycle_from_control("AxisRightX+", &gamepad_keys), None);
     }
 
     #[test]
@@ -12882,25 +12873,16 @@ mod tests {
         assert!(keys.is_key12("Period"));
         assert!(keys.is_key13("Semicolon"));
         assert!(keys.is_key14("Slash"));
-        assert!(keys.is_key8("Button8"));
-        assert!(keys.is_key9("Button9"));
-        assert!(keys.is_key10("Button10"));
-        assert!(keys.is_key11("Button11"));
-        assert!(keys.is_key12("Button12"));
-        assert!(keys.is_key13("Button13"));
-        assert!(keys.is_key14("Button14"));
     }
 
     #[test]
     fn select_key_bindings_treat_2p_keys_as_ui_equivalents() {
         let keys = select_keys_with_full_2p_bindings();
 
-        for control in
-            ["M", "Comma", "Period", "Slash", "P2K7", "Button8", "Button10", "Button12", "Button14"]
-        {
+        for control in ["M", "Comma", "Period", "Slash", "P2K7"] {
             assert!(keys.is_enter(control), "{control} should decide like odd 1P keys");
         }
-        for control in ["K", "L", "Semicolon", "P2K6", "Button9", "Button11", "Button13"] {
+        for control in ["K", "L", "Semicolon", "P2K6"] {
             assert!(keys.is_back(control), "{control} should go back like even 1P keys");
         }
         assert_eq!(keys.ui_lane_for_control("M"), Some(Lane::Key1));
@@ -13234,14 +13216,8 @@ mod tests {
             play_option_control("AxisLeftX+", &keys),
             Some(PlayOptionControl::LaneCover(LaneCoverChange::Down))
         );
-        assert_eq!(
-            play_option_control("AxisRightX-", &keys),
-            Some(PlayOptionControl::LaneCover(LaneCoverChange::Up))
-        );
-        assert_eq!(
-            play_option_control("AxisRightX+", &keys),
-            Some(PlayOptionControl::LaneCover(LaneCoverChange::Down))
-        );
+        assert_eq!(play_option_control("AxisRightX-", &keys), None);
+        assert_eq!(play_option_control("AxisRightX+", &keys), None);
     }
 
     #[test]
