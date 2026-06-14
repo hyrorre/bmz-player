@@ -26,12 +26,14 @@ pub struct SkinLoadWarning {
 pub struct LoadedSkinDocument {
     pub document: SkinDocument,
     pub warnings: Vec<SkinLoadWarning>,
+    pub files: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct LoadedLuaSkinValue {
     pub value: JsonValue,
     pub warnings: Vec<SkinLoadWarning>,
+    pub files: BTreeMap<String, String>,
 }
 
 pub fn load_beatoraja_json_skin(path: &Path, enabled_options: &[i32]) -> Result<SkinDocument> {
@@ -52,7 +54,7 @@ pub fn load_lua_skin(
     let value = normalize_lua_skin_document(loaded.value);
     let document = serde_path_to_error::deserialize(value)
         .with_context(|| format!("failed to parse lua skin as document: {}", path.display()))?;
-    Ok(LoadedSkinDocument { document, warnings: loaded.warnings })
+    Ok(LoadedSkinDocument { document, warnings: loaded.warnings, files: loaded.files })
 }
 
 pub fn load_lr2_csv_skin(
@@ -65,7 +67,7 @@ pub fn load_lr2_csv_skin(
     let value = normalize_json_skin_integer_numbers(loaded.value);
     let document = serde_path_to_error::deserialize(value)
         .with_context(|| format!("failed to parse lr2 csv skin as document: {}", path.display()))?;
-    Ok(LoadedSkinDocument { document, warnings: loaded.warnings })
+    Ok(LoadedSkinDocument { document, warnings: loaded.warnings, files: BTreeMap::new() })
 }
 
 pub fn load_lua_skin_value(
@@ -1042,17 +1044,15 @@ mod tests {
         )
         .unwrap();
 
-        // 存在しないファイルを選択 → 従来通りソート先頭候補へフォールバック。
+        // 存在しないファイルを選択 → beatoraja と同じく列挙候補へフォールバック。
         let files = BTreeMap::from([("Cover".to_string(), "parts/missing.png".to_string())]);
         let loaded =
             load_lua_skin_value(&root.join("play7.luaskin"), &BTreeMap::new(), &files).unwrap();
 
-        assert_eq!(
-            loaded.value["source"][0]["path"].as_str().and_then(|path| {
-                std::path::Path::new(path).file_name().and_then(|name| name.to_str())
-            }),
-            Some("a.png")
-        );
+        let filename = loaded.value["source"][0]["path"]
+            .as_str()
+            .and_then(|path| std::path::Path::new(path).file_name().and_then(|name| name.to_str()));
+        assert!(matches!(filename, Some("a.png" | "z.png")));
     }
 
     #[test]

@@ -38,10 +38,11 @@ pub fn load_lua_skin_value(
     options: &BTreeMap<String, String>,
     files: &BTreeMap<String, String>,
 ) -> Result<LoadedLuaSkinValue> {
-    let (value, warnings) = execute_lua_skin(input, options, files)?;
+    let (value, warnings, files) = execute_lua_skin(input, options, files)?;
     Ok(LoadedLuaSkinValue {
         value,
         warnings: warnings.into_iter().map(|message| SkinLoadWarning { message }).collect(),
+        files,
     })
 }
 
@@ -50,6 +51,7 @@ pub fn load_lua_skin_header_value(input: &Path) -> Result<LoadedLuaSkinValue> {
     Ok(LoadedLuaSkinValue {
         value,
         warnings: warnings.into_iter().map(|message| SkinLoadWarning { message }).collect(),
+        files: BTreeMap::new(),
     })
 }
 
@@ -59,7 +61,7 @@ pub fn convert_lua_skin_to_json(
     options: &BTreeMap<String, String>,
     files: &BTreeMap<String, String>,
 ) -> Result<ConvertReport> {
-    let (json, warnings) = execute_lua_skin(input, options, files)?;
+    let (json, warnings, _) = execute_lua_skin(input, options, files)?;
     if let Some(parent) = output.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create output dir: {}", parent.display()))?;
@@ -102,7 +104,7 @@ fn execute_lua_skin(
     input: &Path,
     options: &BTreeMap<String, String>,
     files: &BTreeMap<String, String>,
-) -> Result<(JsonValue, Vec<String>)> {
+) -> Result<(JsonValue, Vec<String>, BTreeMap<String, String>)> {
     let input = canonicalize_skin_path(input)
         .with_context(|| format!("failed to canonicalize input: {}", input.display()))?;
     let parent =
@@ -135,6 +137,7 @@ fn execute_lua_skin(
     )?;
     let skin_options = skin_config_options_from_header(&header_json, options, &mut warnings);
     let skin_files = skin_files_from_header(&root, &header_json, files);
+    let skin_named_files = skin_named_files_from_header(&root, &header_json, files);
     let skin_offsets = skin_config_offsets_from_header(&header_json);
     // ヘッダ pass では skin_config / 全 option が未注入のため draw/value 推論が失敗しうる。
     // 本 pass の警告だけ残す。
@@ -180,7 +183,7 @@ fn execute_lua_skin(
         }
     }
 
-    Ok((json, warnings))
+    Ok((json, warnings, skin_named_files))
 }
 
 fn install_instruction_limit(lua: &Lua) {
@@ -1368,7 +1371,9 @@ fn skin_config_options_from_header(
 
 fn option_value_to_op(items: &[JsonValue], value: &str) -> Option<i64> {
     if let Ok(op) = value.parse::<i64>() {
-        return Some(op);
+        return items.iter().find_map(|item| {
+            (item.get("op").and_then(JsonValue::as_i64) == Some(op)).then_some(op)
+        });
     }
     items.iter().find_map(|item| {
         (item.get("name").and_then(JsonValue::as_str) == Some(value))
@@ -1379,11 +1384,19 @@ fn option_value_to_op(items: &[JsonValue], value: &str) -> Option<i64> {
 
 fn default_property_op(property: &JsonValue, items: &[JsonValue]) -> Option<i64> {
     if let Some(default_name) = property.get("def").and_then(JsonValue::as_str)
-        && let Some(op) = option_value_to_op(items, default_name)
+        && let Some(op) = option_name_to_op(items, default_name)
     {
         return Some(op);
     }
     items.first().and_then(|item| item.get("op")).and_then(JsonValue::as_i64)
+}
+
+fn option_name_to_op(items: &[JsonValue], value: &str) -> Option<i64> {
+    items.iter().find_map(|item| {
+        (item.get("name").and_then(JsonValue::as_str) == Some(value))
+            .then(|| item.get("op").and_then(JsonValue::as_i64))
+            .flatten()
+    })
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -1444,6 +1457,35 @@ fn skin_files_from_header(
     result
 }
 
+fn skin_named_files_from_header(
+    root: &Path,
+    header: &JsonValue,
+    selected: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    let mut result = BTreeMap::new();
+    let Some(filepaths) = header.get("filepath").and_then(JsonValue::as_array) else {
+        return result;
+    };
+    for filepath in filepaths {
+        let Some(name) = filepath.get("name").and_then(JsonValue::as_str) else {
+            continue;
+        };
+        let Some(path) = filepath.get("path").and_then(JsonValue::as_str) else {
+            continue;
+        };
+        let normalized_path = path.replace('\\', "/");
+        let choice = selected
+            .get(name)
+            .filter(|choice| !choice.is_empty())
+            .cloned()
+            .or_else(|| default_skin_file_from_filepath(root, &normalized_path, filepath));
+        if let Some(choice) = choice {
+            result.insert(name.to_string(), choice);
+        }
+    }
+    result
+}
+
 /// beatoraja のファイル選択カスタマイズで「ランダム」を表す番兵値。
 /// `skin_files` の値がこれのとき、`skin_config.get_path` はロードごとに候補から
 /// ランダムに選ぶ。
@@ -1469,9 +1511,8 @@ fn default_skin_file_from_filepath(
     if candidates.is_empty() {
         return None;
     }
-    if let Some(default_name) = filepath.get("def").and_then(JsonValue::as_str)
-        && !default_name.is_empty()
-    {
+    let default_name = filepath.get("def").and_then(JsonValue::as_str).unwrap_or_default();
+    if !default_name.is_empty() {
         // def="Random" は具体ファイルへ固定せず、ランダム番兵を既定にする。
         if default_name.eq_ignore_ascii_case(RANDOM_FILE_SELECTION) {
             return Some(RANDOM_FILE_SELECTION.to_string());
@@ -1479,10 +1520,14 @@ fn default_skin_file_from_filepath(
         if let Some(candidate) =
             candidates.iter().find(|candidate| filename_matches_def(candidate, default_name))
         {
-            return Some(candidate.clone());
+            return Some(candidate_file_name(candidate));
         }
+    } else if let Some(candidate) =
+        candidates.iter().find(|candidate| filename_matches_def(candidate, "default"))
+    {
+        return Some(candidate_file_name(candidate));
     }
-    candidates.into_iter().next()
+    candidates.into_iter().next().map(|candidate| candidate_file_name(&candidate))
 }
 
 fn skin_file_candidates(root: &Path, normalized_path: &str) -> Vec<String> {
@@ -1514,7 +1559,6 @@ fn skin_file_candidates(root: &Path, normalized_path: &str) -> Vec<String> {
             candidates.push(format!("{directory_prefix}{name}"));
         }
     }
-    candidates.sort();
     candidates
 }
 
@@ -1527,6 +1571,10 @@ fn filename_matches_def(candidate: &str, default_name: &str) -> bool {
         .file_stem()
         .and_then(|stem| stem.to_str())
         .is_some_and(|stem| stem.eq_ignore_ascii_case(default_name))
+}
+
+fn candidate_file_name(candidate: &str) -> String {
+    Path::new(candidate).file_name().and_then(|name| name.to_str()).unwrap_or(candidate).to_string()
 }
 
 /// ユーザ選択のスキンルート相対パスを解決する。
@@ -1574,7 +1622,8 @@ fn skin_config_get_path(
     // 選択が存在しない / ファイルが消えている場合は従来通り候補解決へ委ねる。
     if !want_random {
         if let Some(selected) = skin_files.get(&requested.replace('\\', "/"))
-            && let Some(path) = resolve_selected_skin_path(root, selected)
+            && let Some(path) =
+                resolve_selected_skin_path_for_pattern(root, requested_path, selected)
         {
             return Ok(path);
         }
@@ -1618,7 +1667,6 @@ fn skin_config_get_path(
             candidates.push(candidate);
         }
     }
-    candidates.sort();
     if candidates.is_empty() {
         bail!("skin_config path not found: {requested}");
     }
@@ -1637,15 +1685,45 @@ fn resolve_selected_skin_path_for_wildcard_child(
         if requested_prefix != configured_prefix {
             continue;
         }
-        let wildcard = selected
-            .strip_prefix(configured_prefix)
-            .and_then(|rest| rest.strip_suffix(configured_suffix))?;
+        let wildcard = wildcard_from_selection(configured_prefix, configured_suffix, selected)?;
         let candidate = format!("{requested_prefix}{wildcard}{requested_suffix}");
         if let Some(path) = resolve_selected_skin_path(root, &candidate) {
             return Some(path);
         }
     }
     None
+}
+
+fn resolve_selected_skin_path_for_pattern(
+    root: &Path,
+    pattern: &str,
+    selected: &str,
+) -> Option<PathBuf> {
+    if let Some(path) = resolve_selected_skin_path(root, selected) {
+        return Some(path);
+    }
+    let pattern = strip_beatoraja_asset_filter(pattern).replace('\\', "/");
+    let star = pattern.find('*')?;
+    let prefix = &pattern[..star];
+    let slash = prefix.rfind(['/', '\\']).map(|index| index + 1).unwrap_or(0);
+    let directory_prefix = &prefix[..slash];
+    resolve_selected_skin_path(root, &format!("{directory_prefix}{}", selected.replace('\\', "/")))
+}
+
+fn wildcard_from_selection<'a>(
+    configured_prefix: &str,
+    configured_suffix: &str,
+    selected: &'a str,
+) -> Option<&'a str> {
+    selected
+        .strip_prefix(configured_prefix)
+        .and_then(|rest| rest.strip_suffix(configured_suffix).or(Some(rest)))
+        .or_else(|| {
+            let name_prefix = configured_prefix.rsplit(['/', '\\']).next().unwrap_or_default();
+            selected
+                .strip_prefix(name_prefix)
+                .and_then(|rest| rest.strip_suffix(configured_suffix).or(Some(rest)))
+        })
 }
 
 fn strip_beatoraja_asset_filter(path: &str) -> &str {
@@ -3652,6 +3730,84 @@ mod tests {
             default_skin_file_from_filepath(&root, "bg/*.mp4", &filepath).as_deref(),
             Some(RANDOM_FILE_SELECTION)
         );
+    }
+
+    #[test]
+    fn default_skin_file_returns_beatoraja_filename_selection() {
+        let root = unique_skin_test_dir("filename-default");
+        fs::create_dir_all(root.join("bg")).unwrap();
+        fs::write(root.join("bg/one.mp4"), []).unwrap();
+        fs::write(root.join("bg/two.mp4"), []).unwrap();
+        let filepath: JsonValue =
+            serde_json::from_str(r#"{ "name": "BG", "path": "bg/*.mp4", "def": "two" }"#).unwrap();
+
+        assert_eq!(
+            default_skin_file_from_filepath(&root, "bg/*.mp4", &filepath).as_deref(),
+            Some("two.mp4")
+        );
+    }
+
+    #[test]
+    fn default_skin_file_prefers_default_stem_when_def_missing() {
+        let root = unique_skin_test_dir("default-stem");
+        fs::create_dir_all(root.join("notes")).unwrap();
+        fs::write(root.join("notes/pastel.png"), []).unwrap();
+        fs::write(root.join("notes/default.png"), []).unwrap();
+        let filepath: JsonValue =
+            serde_json::from_str(r#"{ "name": "Note", "path": "notes/*.png" }"#).unwrap();
+
+        assert_eq!(
+            default_skin_file_from_filepath(&root, "notes/*.png", &filepath).as_deref(),
+            Some("default.png")
+        );
+    }
+
+    #[test]
+    fn property_default_matches_item_name_not_numeric_op_string() {
+        let property: JsonValue = serde_json::from_str(
+            r#"
+            {
+                "name": "Graph",
+                "def": "923",
+                "item": [
+                    { "name": "AC", "op": 922 },
+                    { "name": "TYPE-M", "op": 923 }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let items = property.get("item").and_then(JsonValue::as_array).unwrap();
+
+        assert_eq!(default_property_op(&property, items), Some(922));
+    }
+
+    #[test]
+    fn selected_numeric_option_must_exist_in_items() {
+        let items: Vec<JsonValue> = serde_json::from_str(
+            r#"
+            [
+                { "name": "AC", "op": 922 },
+                { "name": "TYPE-M", "op": 923 }
+            ]
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(option_value_to_op(&items, "923"), Some(923));
+        assert_eq!(option_value_to_op(&items, "999"), None);
+    }
+
+    #[test]
+    fn get_path_accepts_beatoraja_filename_selection() {
+        let root = unique_skin_test_dir("filename-getpath");
+        fs::create_dir_all(root.join("bg")).unwrap();
+        fs::write(root.join("bg/one.mp4"), []).unwrap();
+        let skin_files = BTreeMap::from([("bg/*.mp4".to_string(), "one.mp4".to_string())]);
+
+        let resolved = skin_config_get_path(&root, "bg/*.mp4", &skin_files).unwrap();
+
+        assert_eq!(resolved.file_name().and_then(|name| name.to_str()), Some("one.mp4"));
     }
 
     #[test]

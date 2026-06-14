@@ -169,7 +169,7 @@ pub fn load_lr2_csv_skin_value(
     let mut processor = Processor::new(builder.header.selected_ops.clone());
     processor.process_lines(&lines, path, &mut builder)?;
     let warnings = builder.warnings.clone();
-    Ok(LoadedLuaSkinValue { value: builder.finish(), warnings })
+    Ok(LoadedLuaSkinValue { value: builder.finish(), warnings, files: BTreeMap::new() })
 }
 
 fn load_header(path: &Path, options: &BTreeMap<String, String>) -> Result<Header> {

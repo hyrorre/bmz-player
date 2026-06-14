@@ -289,7 +289,8 @@ pub fn decode_beatoraja_skin_with_options(
     options: &BTreeMap<String, String>,
     files: &BTreeMap<String, String>,
 ) -> Result<DecodedSkin> {
-    let mut document = load_skin_document(skin_path, kind, options, files)?;
+    let LoadedSkinDocumentForDecode { mut document, files: resolved_files } =
+        load_skin_document(skin_path, kind, options, files)?;
     // フォント ID は scene 横断的に Renderer のグローバルマップに登録されるので、
     // play / select / result で同じ "0" 等が衝突する。namespace を付与して隔離する。
     // text 定義の font 参照側も同じ namespace を付ける。
@@ -312,7 +313,8 @@ pub fn decode_beatoraja_skin_with_options(
             if font.id.is_empty() || font.path.is_empty() {
                 return None;
             }
-            let font_path = resolve_json_skin_asset_path(&skin_root, &font.path, &document, files)?;
+            let font_path =
+                resolve_json_skin_asset_path(&skin_root, &font.path, &document, &resolved_files)?;
             if !is_supported_font_path(&font_path) {
                 tracing::debug!(
                     font_id = %font.id,
@@ -357,8 +359,12 @@ pub fn decode_beatoraja_skin_with_options(
                     asset,
                 });
             }
-            let source_path =
-                resolve_json_skin_source_path(&skin_root, &source.path, &document, files)?;
+            let source_path = resolve_json_skin_source_path(
+                &skin_root,
+                &source.path,
+                &document,
+                &resolved_files,
+            )?;
             let extension = source_path
                 .extension()
                 .and_then(|extension| extension.to_str())
@@ -476,13 +482,18 @@ fn load_skin_video_first_frame_rgba(path: &Path) -> Result<RgbaImageAsset> {
     Ok(RgbaImageAsset { width: frame.width, height: frame.height, pixels: frame.rgba })
 }
 
+struct LoadedSkinDocumentForDecode {
+    document: SkinDocument,
+    files: BTreeMap<String, String>,
+}
+
 fn load_skin_document(
     skin_path: &Path,
     kind: SkinKind,
     options: &BTreeMap<String, String>,
     files: &BTreeMap<String, String>,
-) -> Result<SkinDocument> {
-    let mut document = if is_lua_skin_path(skin_path) {
+) -> Result<LoadedSkinDocumentForDecode> {
+    let (mut document, mut resolved_files) = if is_lua_skin_path(skin_path) {
         // Lua スキンはオプション選択 (名前 -> 選択肢名) とファイル選択
         // (filepath 定義名 -> 相対パス) をそのまま渡す。
         let loaded = bmz_skin::load_lua_skin(skin_path, decode_skin_kind(kind), options, files)
@@ -495,7 +506,7 @@ fn load_skin_document(
                 "lua skin load warning"
             );
         }
-        loaded.document
+        (loaded.document, loaded.files)
     } else if is_lr2_skin_path(skin_path) {
         let loaded = bmz_skin::load_lr2_csv_skin(skin_path, decode_skin_kind(kind), options, files)
             .with_context(|| format!("failed to load lr2 csv skin: {}", skin_path.display()))?;
@@ -507,28 +518,36 @@ fn load_skin_document(
                 "lr2 csv skin load warning"
             );
         }
-        loaded.document
+        (loaded.document, BTreeMap::new())
     } else {
         let document =
             bmz_skin::load_beatoraja_json_skin_with_defaults(skin_path).with_context(|| {
                 format!("failed to load beatoraja json skin: {}", skin_path.display())
             })?;
         if options.is_empty() {
-            document
+            (document, BTreeMap::new())
         } else {
             // JSON スキンは property 定義から選択肢の op コード列を組み立て、
             // それを有効オプションとして再デコードする。
             let enabled = enabled_options_from_selections(&document, options);
-            bmz_skin::load_beatoraja_json_skin(skin_path, &enabled).with_context(|| {
-                format!("failed to load beatoraja json skin with options: {}", skin_path.display())
-            })?
+            let document =
+                bmz_skin::load_beatoraja_json_skin(skin_path, &enabled).with_context(|| {
+                    format!(
+                        "failed to load beatoraja json skin with options: {}",
+                        skin_path.display()
+                    )
+                })?;
+            (document, BTreeMap::new())
         }
     };
+    for (name, selected) in files {
+        resolved_files.insert(name.clone(), selected.clone());
+    }
     // レンダー時の `enabled_options()` がユーザ選択を反映するように、
     // 選択値から算出した op コード列を document に格納する。
     // (選択が空でもデフォルト計算結果と同じになるため、常に設定して問題ない)
     document.user_selected_options = Some(enabled_options_from_selections(&document, options));
-    Ok(document)
+    Ok(LoadedSkinDocumentForDecode { document, files: resolved_files })
 }
 
 /// property 定義とユーザ選択 (オプション名 -> 選択肢名) から、JSON スキンの
@@ -543,19 +562,32 @@ fn enabled_options_from_selections(
         .property
         .iter()
         .filter_map(|property| {
-            let chosen = selections
-                .get(&property.name)
-                .and_then(|name| property.item.iter().find(|item| &item.name == name));
-            let selected = chosen.or_else(|| {
-                if property.def.is_empty() {
-                    property.item.first()
-                } else {
-                    property.item.iter().find(|item| item.name == property.def)
-                }
-            });
+            let selected = selected_property_item(property, selections)
+                .or_else(|| default_property_item(property));
             selected.map(|item| item.op)
         })
         .collect()
+}
+
+fn selected_property_item<'a>(
+    property: &'a bmz_render::skin::SkinPropertyDef,
+    selections: &BTreeMap<String, String>,
+) -> Option<&'a bmz_render::skin::SkinPropertyItemDef> {
+    let value = selections.get(&property.name)?;
+    if let Ok(op) = value.parse::<i32>() {
+        return property.item.iter().find(|item| item.op == op);
+    }
+    property.item.iter().find(|item| &item.name == value)
+}
+
+fn default_property_item(
+    property: &bmz_render::skin::SkinPropertyDef,
+) -> Option<&bmz_render::skin::SkinPropertyItemDef> {
+    property
+        .item
+        .iter()
+        .find(|item| !property.def.is_empty() && item.name == property.def)
+        .or_else(|| property.item.first())
 }
 
 fn decode_skin_kind(kind: SkinKind) -> DecodeSkinKind {
@@ -751,7 +783,8 @@ fn resolve_json_skin_asset_path(
     // 1. パスが filepath 定義と完全一致するときは、選択ファイルをそのまま使う。
     if let Some(filepath) = filepath
         && let Some(selected) = files.get(&filepath.name).filter(|selected| !selected.is_empty())
-        && let Some(path) = resolve_selected_skin_file(skin_root, selected)
+        && let Some(path) =
+            resolve_selected_skin_file_for_pattern(skin_root, &filepath.path, selected)
     {
         return Some(path);
     }
@@ -800,10 +833,14 @@ fn substitute_filepath_choice(
             continue;
         };
         let selected = selected.replace('\\', "/");
-        let Some(stripped) = selected.strip_prefix(def_prefix) else {
-            continue;
-        };
-        let wildcard_value = stripped.strip_suffix(def_suffix).unwrap_or(stripped);
+        let wildcard_value = selected
+            .strip_prefix(def_prefix)
+            .and_then(|stripped| stripped.strip_suffix(def_suffix).or(Some(stripped)))
+            .or_else(|| {
+                selected
+                    .strip_prefix(def_prefix.rsplit('/').next().unwrap_or_default())
+                    .and_then(|stripped| stripped.strip_suffix(def_suffix).or(Some(stripped)))
+            })?;
         return Some(format!("{asset_before}{wildcard_value}{asset_after}"));
     }
     None
@@ -827,6 +864,22 @@ fn resolve_selected_skin_file(skin_root: &Path, selected: &str) -> Option<PathBu
     candidate.is_file().then_some(candidate)
 }
 
+fn resolve_selected_skin_file_for_pattern(
+    skin_root: &Path,
+    pattern: &str,
+    selected: &str,
+) -> Option<PathBuf> {
+    if let Some(path) = resolve_selected_skin_file(skin_root, selected) {
+        return Some(path);
+    }
+    let pattern = strip_beatoraja_asset_filter(pattern).replace('\\', "/");
+    let star = pattern.find('*')?;
+    let prefix = &pattern[..star];
+    let slash = prefix.rfind('/').map(|index| index + 1).unwrap_or(0);
+    let directory = &prefix[..slash];
+    resolve_selected_skin_file(skin_root, &format!("{directory}{}", selected.replace('\\', "/")))
+}
+
 fn resolve_wildcard_path(
     skin_root: &Path,
     pattern: &str,
@@ -844,7 +897,7 @@ fn resolve_wildcard_path(
         return resolve_wildcard_directory_path(&directory, filename_prefix, suffix, preferred);
     }
 
-    let mut candidates = std::fs::read_dir(directory)
+    let candidates = std::fs::read_dir(directory)
         .ok()?
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))
         .filter(|path| path.is_file())
@@ -855,8 +908,6 @@ fn resolve_wildcard_path(
             file_name.starts_with(filename_prefix) && file_name.ends_with(suffix)
         })
         .collect::<Vec<_>>();
-    candidates.sort();
-
     if let Some(preferred) = preferred
         && let Some(candidate) = candidates.iter().find(|path| {
             let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
@@ -1024,7 +1075,7 @@ fn resolve_wildcard_directory_path(
     suffix: &str,
     preferred: Option<&str>,
 ) -> Option<PathBuf> {
-    let mut candidates = std::fs::read_dir(directory)
+    let candidates = std::fs::read_dir(directory)
         .ok()?
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))
         .filter(|path| path.is_dir())
@@ -1036,8 +1087,6 @@ fn resolve_wildcard_directory_path(
         .map(|path| path.join(suffix))
         .filter(|path| path.is_file())
         .collect::<Vec<_>>();
-    candidates.sort();
-
     if let Some(preferred) = preferred
         && let Some(candidate) = candidates.iter().find(|path| {
             path.parent()
@@ -1082,7 +1131,7 @@ mod tests {
     fn substitute_filepath_choice_replaces_wildcard_in_asset_path() {
         let filepaths = vec![filepath_def("レーザー", "custom/laser/*", "default")];
         let mut files = BTreeMap::new();
-        files.insert("レーザー".to_string(), "custom/laser/veryshort".to_string());
+        files.insert("レーザー".to_string(), "veryshort".to_string());
 
         let result = substitute_filepath_choice("custom/laser/*/main.png", &filepaths, &files);
         assert_eq!(result.as_deref(), Some("custom/laser/veryshort/main.png"));
@@ -1096,6 +1145,53 @@ mod tests {
 
         let result = substitute_filepath_choice("icon-*.png", &filepaths, &files);
         assert_eq!(result.as_deref(), Some("icon-blue.png"));
+    }
+
+    #[test]
+    fn resolve_skin_source_accepts_beatoraja_filename_selection() {
+        let root = unique_test_dir("bmz-json-source-filename");
+        std::fs::create_dir_all(root.join("parts")).unwrap();
+        std::fs::write(root.join("parts/default.png"), []).unwrap();
+        std::fs::write(root.join("parts/blue.png"), []).unwrap();
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "filepath": [
+                    { "name": "Parts", "path": "parts/*.png", "def": "blue" }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let files = BTreeMap::from([("Parts".to_string(), "default.png".to_string())]);
+
+        let resolved =
+            resolve_json_skin_source_path(&root, "parts/*.png", &document, &files).unwrap();
+
+        assert_eq!(resolved.file_name().and_then(|name| name.to_str()), Some("default.png"));
+    }
+
+    #[test]
+    fn resolve_skin_source_still_accepts_legacy_relative_selection() {
+        let root = unique_test_dir("bmz-json-source-relative");
+        std::fs::create_dir_all(root.join("parts")).unwrap();
+        std::fs::write(root.join("parts/default.png"), []).unwrap();
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "filepath": [
+                    { "name": "Parts", "path": "parts/*.png" }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let files = BTreeMap::from([("Parts".to_string(), "parts/default.png".to_string())]);
+
+        let resolved =
+            resolve_json_skin_source_path(&root, "parts/*.png", &document, &files).unwrap();
+
+        assert_eq!(resolved.file_name().and_then(|name| name.to_str()), Some("default.png"));
     }
 
     #[test]
@@ -1123,12 +1219,35 @@ mod tests {
         let mut selections = BTreeMap::new();
         selections.insert("スコアグラフ".to_string(), "On".to_string());
 
-        let document =
-            load_skin_document(&skin_path, SkinKind::Play, &selections, &BTreeMap::new())
-                .expect("load skin document");
-        let ops = enabled_options_from_selections(&document, &selections);
+        let loaded = load_skin_document(&skin_path, SkinKind::Play, &selections, &BTreeMap::new())
+            .expect("load skin document");
+        let ops = enabled_options_from_selections(&loaded.document, &selections);
         assert!(ops.contains(&901), "expected 901 in ops, got {ops:?}");
         assert!(ops.contains(&920), "expected 920 (1P default) in ops, got {ops:?}");
+    }
+
+    #[test]
+    fn enabled_options_rejects_stale_numeric_selection() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "property": [
+                    {
+                        "name": "Graph",
+                        "def": "AC",
+                        "item": [
+                            { "name": "AC", "op": 922 },
+                            { "name": "TYPE-M", "op": 923 }
+                        ]
+                    }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+        let selections = BTreeMap::from([("Graph".to_string(), "999".to_string())]);
+
+        assert_eq!(enabled_options_from_selections(&document, &selections), vec![922]);
     }
 
     #[test]
@@ -1449,6 +1568,33 @@ mod tests {
     }
 
     #[test]
+    fn ecfn_play7_uses_default_filepaths_when_defs_are_missing() {
+        let skin_path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/skins/ECFN/play/play7.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+        let decoded = decode_beatoraja_skin(&skin_path, SkinKind::Play).unwrap();
+
+        for (source_id, suffix) in [
+            ("6", "laser/default.png"),
+            ("7", "notes/default.png"),
+            ("12", "lanecover/default.png"),
+        ] {
+            let source = decoded
+                .sources
+                .iter()
+                .find(|source| source.source_id == source_id)
+                .unwrap_or_else(|| panic!("ECFN source {source_id} should decode"));
+            let path = source.path.to_string_lossy().replace('\\', "/");
+            assert!(
+                path.ends_with(suffix),
+                "ECFN source {source_id} should resolve to {suffix}, got {path}"
+            );
+        }
+    }
+
+    #[test]
     fn ecfn_play7_judge_combo_x_matches_beatoraja_layout_when_available() {
         use std::collections::HashMap;
 
@@ -1744,6 +1890,29 @@ mod tests {
                 .iter()
                 .any(|destination| destination.id == "base_L" || destination.id == "base_R"),
             "expected frame panel destinations from starseeker frameL.lua"
+        );
+    }
+
+    #[test]
+    fn starseeker_default_frame_uses_same_directory_for_lua_parts_and_sources_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/Starseeker/play/play7.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let decoded = decode_beatoraja_skin(&skin_path, SkinKind::Play)
+            .expect("decode starseeker default frame skin");
+        let main_frame = decoded
+            .sources
+            .iter()
+            .find(|source| source.source_id == "main_frame")
+            .expect("main_frame source should be decoded from selected frame");
+
+        assert!(
+            main_frame.path.components().any(|component| component.as_os_str() == "TM_default"),
+            "expected default frame source under TM_default, got {}",
+            main_frame.path.display()
         );
     }
 

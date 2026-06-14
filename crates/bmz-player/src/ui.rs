@@ -3217,9 +3217,13 @@ fn fill_missing_skin_defaults(
 ) -> bool {
     let mut changed = false;
     for prop in &defs.property {
-        if !options.contains_key(&prop.name) {
-            options.insert(prop.name.clone(), property_default(prop));
-            changed = true;
+        let current = options.get(&prop.name).map(String::as_str);
+        if current.is_none() || !property_selection_is_valid(prop, current.unwrap_or_default()) {
+            let default = property_default(prop);
+            if current != Some(default.as_str()) {
+                options.insert(prop.name.clone(), default);
+                changed = true;
+            }
         }
     }
     let Some(skin_root) = skin_root else {
@@ -3228,10 +3232,9 @@ fn fill_missing_skin_defaults(
     for filepath in &defs.filepath {
         let candidates = glob_candidates(skin_root, &filepath.path);
         let current = files.get(&filepath.name).map(|value| value.replace('\\', "/"));
-        // 既存の選択 (具体ファイル or ランダム番兵) はそのまま尊重する。
-        if current.as_ref().is_some_and(|selected| {
-            selected == RANDOM_FILE_SELECTION || candidates.contains(selected)
-        }) {
+        // beatoraja は保存済み filepath を候補内に存在するか検証せず尊重する。
+        // BMZ 旧版の相対パス保存も含め、空でなければここでは置き換えない。
+        if current.as_ref().is_some_and(|selected| !selected.is_empty()) {
             continue;
         }
         if let Some(default) = filepath_default(filepath, &candidates) {
@@ -3318,11 +3321,10 @@ fn glob_candidates(root: &Path, pattern: &str) -> Vec<String> {
                 && name.starts_with(prefix)
                 && name.ends_with(suffix)
             {
-                candidates.push(format!("{dir_part}{name}"));
+                candidates.push(name);
             }
         }
     }
-    candidates.sort();
     candidates
 }
 
@@ -3337,6 +3339,13 @@ fn property_default(prop: &SkinPropertyDef) -> String {
         .unwrap_or_default()
 }
 
+fn property_selection_is_valid(prop: &SkinPropertyDef, selected: &str) -> bool {
+    if let Ok(op) = selected.parse::<i32>() {
+        return prop.item.iter().any(|item| item.op == op);
+    }
+    prop.item.iter().any(|item| item.name == selected)
+}
+
 fn filepath_default(filepath: &SkinFilepathDef, candidates: &[String]) -> Option<String> {
     if candidates.is_empty() {
         return None;
@@ -3349,6 +3358,12 @@ fn filepath_default(filepath: &SkinFilepathDef, candidates: &[String]) -> Option
     if !filepath.def.is_empty()
         && let Some(candidate) =
             candidates.iter().find(|candidate| filename_matches_def(candidate, &filepath.def))
+    {
+        return Some(candidate.clone());
+    }
+    if filepath.def.is_empty()
+        && let Some(candidate) =
+            candidates.iter().find(|candidate| filename_matches_def(candidate, "default"))
     {
         return Some(candidate.clone());
     }
@@ -3424,7 +3439,9 @@ mod tests {
 
         let candidates = glob_candidates(&root, "parts/*.png");
 
-        assert_eq!(candidates, vec!["parts/a.png".to_string(), "parts/b.png".to_string()]);
+        assert_eq!(candidates.len(), 2);
+        assert!(candidates.contains(&"a.png".to_string()));
+        assert!(candidates.contains(&"b.png".to_string()));
     }
 
     #[test]
@@ -3436,13 +3453,9 @@ mod tests {
 
         let candidates = glob_candidates(&root, "parts/lanecover_lift/*.png|lanecover|");
 
-        assert_eq!(
-            candidates,
-            vec![
-                "parts/lanecover_lift/TYPE-M.png".to_string(),
-                "parts/lanecover_lift/default.png".to_string(),
-            ]
-        );
+        assert_eq!(candidates.len(), 2);
+        assert!(candidates.contains(&"TYPE-M.png".to_string()));
+        assert!(candidates.contains(&"default.png".to_string()));
     }
 
     #[test]
@@ -3470,12 +3483,12 @@ mod tests {
             path: "notes/*.png".to_string(),
             def: "default".to_string(),
         };
-        let candidates = vec!["notes/aaa.png".to_string(), "notes/Default.PNG".to_string()];
+        let candidates = vec!["aaa.png".to_string(), "Default.PNG".to_string()];
 
-        assert_eq!(filepath_default(&filepath, &candidates).as_deref(), Some("notes/Default.PNG"));
+        assert_eq!(filepath_default(&filepath, &candidates).as_deref(), Some("Default.PNG"));
 
         let filepath = SkinFilepathDef { def: "missing".to_string(), ..filepath };
-        assert_eq!(filepath_default(&filepath, &candidates).as_deref(), Some("notes/aaa.png"));
+        assert_eq!(filepath_default(&filepath, &candidates).as_deref(), Some("aaa.png"));
     }
 
     #[test]
@@ -3492,6 +3505,19 @@ mod tests {
             filepath_default(&filepath, &candidates).as_deref(),
             Some(RANDOM_FILE_SELECTION)
         );
+    }
+
+    #[test]
+    fn filepath_default_prefers_default_stem_when_def_missing() {
+        let filepath = SkinFilepathDef {
+            category: String::new(),
+            name: "Note".to_string(),
+            path: "notes/*.png".to_string(),
+            def: String::new(),
+        };
+        let candidates = vec!["pastel.png".to_string(), "default.png".to_string()];
+
+        assert_eq!(filepath_default(&filepath, &candidates).as_deref(), Some("default.png"));
     }
 
     #[test]
@@ -3536,11 +3562,34 @@ mod tests {
 
         assert_eq!(options.get("Lane").map(String::as_str), Some("On"));
         assert_eq!(options.get("Saved").map(String::as_str), Some("B"));
-        assert_eq!(files.get("Notes").map(String::as_str), Some("notes/default.png"));
+        assert_eq!(files.get("Notes").map(String::as_str), Some("default.png"));
     }
 
     #[test]
-    fn fill_missing_skin_defaults_replaces_stale_file_selection() {
+    fn fill_missing_skin_defaults_replaces_stale_option_selection() {
+        let defs = SceneSkinDefs {
+            property: vec![SkinPropertyDef {
+                category: String::new(),
+                name: "Graph".to_string(),
+                item: vec![
+                    bmz_render::skin::SkinPropertyItemDef { name: "AC".to_string(), op: 922 },
+                    bmz_render::skin::SkinPropertyItemDef { name: "TYPE-M".to_string(), op: 923 },
+                ],
+                def: "AC".to_string(),
+            }],
+            filepath: Vec::new(),
+            offset: Vec::new(),
+        };
+        let mut options = BTreeMap::from([("Graph".to_string(), "999".to_string())]);
+        let mut files = BTreeMap::new();
+
+        assert!(fill_missing_skin_defaults(&defs, None, &mut options, &mut files));
+
+        assert_eq!(options.get("Graph").map(String::as_str), Some("AC"));
+    }
+
+    #[test]
+    fn fill_missing_skin_defaults_keeps_stale_file_selection_like_beatoraja() {
         let root = unique_test_dir("bmz-ui-defaults-stale");
         fs::create_dir_all(root.join("notes")).unwrap();
         fs::write(root.join("notes/aaa.png"), []).unwrap();
@@ -3558,9 +3607,9 @@ mod tests {
         let mut options = BTreeMap::new();
         let mut files = BTreeMap::from([("Notes".to_string(), "../old/default.png".to_string())]);
 
-        assert!(fill_missing_skin_defaults(&defs, Some(&root), &mut options, &mut files));
+        assert!(!fill_missing_skin_defaults(&defs, Some(&root), &mut options, &mut files));
 
-        assert_eq!(files.get("Notes").map(String::as_str), Some("notes/default.png"));
+        assert_eq!(files.get("Notes").map(String::as_str), Some("../old/default.png"));
     }
 
     #[test]
@@ -3657,7 +3706,7 @@ mod tests {
             }],
         };
         let mut options = BTreeMap::from([("Lane".to_string(), "Off".to_string())]);
-        let mut files = BTreeMap::from([("Notes".to_string(), "notes/aaa.png".to_string())]);
+        let mut files = BTreeMap::from([("Notes".to_string(), "aaa.png".to_string())]);
         let mut offsets = vec![SkinOffsetConfig { id: 32, x: 99, ..Default::default() }];
 
         assert!(reset_scene_skin_to_defaults(
@@ -3669,7 +3718,7 @@ mod tests {
         ));
 
         assert_eq!(options.get("Lane").map(String::as_str), Some("On"));
-        assert_eq!(files.get("Notes").map(String::as_str), Some("notes/default.png"));
+        assert_eq!(files.get("Notes").map(String::as_str), Some("default.png"));
         assert!(offsets.is_empty());
     }
 
@@ -3681,12 +3730,12 @@ mod tests {
             ..SkinConfig::default()
         };
         skin.play7_options.insert("Judge".to_string(), "On".to_string());
-        skin.play7_files.insert("Notes".to_string(), "notes/default.png".to_string());
+        skin.play7_files.insert("Notes".to_string(), "default.png".to_string());
 
         save_skin_slot_history(&mut skin, SkinSlot::Play7);
         skin.play7 = "data/skins/Starseeker/play/play7.luaskin".to_string();
         skin.play7_options.insert("Judge".to_string(), "Off".to_string());
-        skin.play7_files.insert("Notes".to_string(), "notes/other.png".to_string());
+        skin.play7_files.insert("Notes".to_string(), "other.png".to_string());
         skin.offsets = vec![SkinOffsetConfig { id: 32, x: -4, ..Default::default() }];
         save_skin_slot_history(&mut skin, SkinSlot::Play7);
 
@@ -3694,7 +3743,7 @@ mod tests {
         restore_skin_slot_history(&mut skin, SkinSlot::Play7);
 
         assert_eq!(skin.play7_options.get("Judge").map(String::as_str), Some("On"));
-        assert_eq!(skin.play7_files.get("Notes").map(String::as_str), Some("notes/default.png"));
+        assert_eq!(skin.play7_files.get("Notes").map(String::as_str), Some("default.png"));
         assert_eq!(skin.offsets, vec![SkinOffsetConfig { id: 32, x: 12, ..Default::default() }]);
     }
 }
