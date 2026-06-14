@@ -117,10 +117,10 @@ pub async fn rotate_registered_device_key(
     client: &super::bmz_official::BmzOfficialIrClient,
 ) -> Result<StoredDeviceKey> {
     let old_key = load_or_create_device_key(profile_root, provider)?;
-    if let Some(old_key_id) = old_key.key_id.as_deref() {
-        if let Err(error) = client.revoke_device_key(old_key_id).await {
-            tracing::warn!(provider, key_id = old_key_id, %error, "failed to revoke old IR device key");
-        }
+    if let Some(old_key_id) = old_key.key_id.as_deref()
+        && let Err(error) = client.revoke_device_key(old_key_id).await
+    {
+        tracing::warn!(provider, key_id = old_key_id, %error, "failed to revoke old IR device key");
     }
 
     delete_device_key(profile_root, provider)?;
