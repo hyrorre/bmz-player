@@ -84,12 +84,8 @@ impl SettingsBindings {
         for key in ["ArrowDown", "DPadUp", "ScratchUp"] {
             decrease.insert(key.to_string());
         }
-        for key in ["DPadRight", "Button1"] {
-            confirm.insert(key.to_string());
-        }
-        for key in ["DPadLeft", "Select"] {
-            back.insert(key.to_string());
-        }
+        confirm.insert("Button1".to_string());
+        back.insert("Select".to_string());
 
         Self { confirm, back, increase, decrease }
     }
@@ -445,9 +441,9 @@ mod tests {
     fn edit_session_restore_reverts_volume() {
         let mut profile = ProfileConfig::new_default("default", "Default", 0);
         let session = SettingsEditSession::capture(&profile, SettingsEntryId::MasterVolume);
-        profile.audio_mix.master_volume = 50;
+        profile.audio_mix.master_volume = 20;
         session.restore(&mut profile);
-        assert_eq!(profile.audio_mix.master_volume, 20);
+        assert_eq!(profile.audio_mix.master_volume, 50);
     }
 
     #[test]

@@ -1546,7 +1546,7 @@ mod tests {
         assert_eq!(session.gauge.selected, GaugeType::Normal);
         assert!(session.autoplay.is_some());
         assert_eq!(session.offsets.input_offset_us, 123);
-        assert!((session.audio_mix.master_volume - 0.2).abs() < 1e-6);
+        assert!((session.audio_mix.master_volume - 0.5).abs() < 1e-6);
         assert_eq!(session.audio_clock.sample_rate, 48_000);
         assert_eq!(session.hispeed, 2.0);
         assert_eq!(session.hidden_cover, 0.0);

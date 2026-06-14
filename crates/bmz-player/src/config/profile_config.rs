@@ -505,6 +505,8 @@ pub enum RivalSourceConfig {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ReplaySlotRule {
+    #[serde(rename = "")]
+    Disabled,
     Always,
     ScoreUpdate,
     BpUpdate,
@@ -515,6 +517,7 @@ pub enum ReplaySlotRule {
 impl ReplaySlotRule {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Disabled => "",
             Self::Always => "Always",
             Self::ScoreUpdate => "ScoreUpdate",
             Self::BpUpdate => "BpUpdate",
@@ -525,6 +528,7 @@ impl ReplaySlotRule {
 
     pub fn from_str_opt(value: &str) -> Option<Self> {
         match value {
+            "" => Some(Self::Disabled),
             "Always" => Some(Self::Always),
             "ScoreUpdate" => Some(Self::ScoreUpdate),
             "BpUpdate" => Some(Self::BpUpdate),
@@ -540,7 +544,7 @@ pub fn default_slot_rules() -> [ReplaySlotRule; 4] {
         ReplaySlotRule::Always,
         ReplaySlotRule::ScoreUpdate,
         ReplaySlotRule::BpUpdate,
-        ReplaySlotRule::MaxComboUpdate,
+        ReplaySlotRule::Disabled,
     ]
 }
 
@@ -579,11 +583,11 @@ pub struct AudioMixConfig {
 }
 
 pub fn default_system_bgm_volume() -> u32 {
-    100
+    50
 }
 
 pub fn default_system_se_volume() -> u32 {
-    100
+    50
 }
 
 /// beatoraja 互換のシステム SE / BGM (選曲 BGM、フォルダ SE 等) の設定。
@@ -605,14 +609,14 @@ pub struct SystemSoundConfig {
 }
 
 pub fn default_system_sound_default_dir() -> String {
-    "defaultsound".to_string()
+    "data/defaultsound".to_string()
 }
 
 impl Default for SystemSoundConfig {
     fn default() -> Self {
         Self {
-            bgm_dir: String::new(),
-            se_dir: String::new(),
+            bgm_dir: "data/bgm".to_string(),
+            se_dir: "data/se".to_string(),
             default_sound_dir: default_system_sound_default_dir(),
         }
     }
@@ -740,7 +744,7 @@ pub struct SkinOffsetConfig {
     pub a: i32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IrConfig {
     #[serde(default)]
     pub primary_provider: String,
@@ -750,10 +754,26 @@ pub struct IrConfig {
     pub credential_store: IrCredentialStoreConfig,
     #[serde(default)]
     pub providers: Vec<IrProviderConfig>,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub prefetch_global_ranking_on_score_submit: bool,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub prefetch_rival_ranking_on_score_submit: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for IrConfig {
+    fn default() -> Self {
+        Self {
+            primary_provider: String::new(),
+            credential_store: IrCredentialStoreConfig::default(),
+            providers: Vec::new(),
+            prefetch_global_ranking_on_score_submit: true,
+            prefetch_rival_ranking_on_score_submit: true,
+        }
+    }
 }
 
 /// IR 秘密情報の保存先。
@@ -866,10 +886,10 @@ impl ProfileConfig {
                 confirm_on_exit: true,
             },
             audio_mix: AudioMixConfig {
-                master_volume: 20,
-                key_volume: 100,
-                bgm_volume: 100,
-                preview_volume: 100,
+                master_volume: 50,
+                key_volume: 50,
+                bgm_volume: 50,
+                preview_volume: 50,
                 system_bgm_volume: default_system_bgm_volume(),
                 system_se_volume: default_system_se_volume(),
             },
@@ -904,7 +924,8 @@ fn default_play_lane_bindings() -> Vec<BindingConfigEntry> {
 
 pub fn default_keyboard_bindings() -> Vec<BindingConfigEntry> {
     vec![
-        binding("LShift", LaneConfig::Scratch),
+        scratch_binding("LShift", LaneConfig::Scratch, ScratchDirectionConfig::Up),
+        scratch_binding("LControl", LaneConfig::Scratch, ScratchDirectionConfig::Down),
         binding("Z", LaneConfig::Key1),
         binding("S", LaneConfig::Key2),
         binding("X", LaneConfig::Key3),
@@ -938,11 +959,11 @@ pub fn default_gamepad_bindings() -> Vec<BindingConfigEntry> {
         gamepad_binding("Button5", LaneConfig::Key5),
         gamepad_binding("Button6", LaneConfig::Key6),
         gamepad_binding("Button7", LaneConfig::Key7),
-        gamepad_action_binding("Start", InputActionConfig::E1),
+        gamepad_action_binding("Button9", InputActionConfig::E1),
         gamepad_action_binding("Button1", InputActionConfig::SelectEnter),
-        gamepad_action_binding("DPadRight", InputActionConfig::SelectEnter),
-        gamepad_action_binding("Select", InputActionConfig::E2),
-        gamepad_action_binding("DPadLeft", InputActionConfig::E2),
+        gamepad_action_binding("Button10", InputActionConfig::E2),
+        gamepad_action_binding("Button11", InputActionConfig::E3),
+        gamepad_action_binding("Button12", InputActionConfig::E4),
         gamepad_action_binding("Button1", InputActionConfig::SelectOptionArrange),
         gamepad_action_binding("Button3", InputActionConfig::SelectOptionGauge),
         gamepad_action_binding("Button5", InputActionConfig::SelectOptionAssist),
@@ -958,6 +979,16 @@ fn binding(control: &str, lane: LaneConfig) -> BindingConfigEntry {
         action: None,
         scratch: None,
     }
+}
+
+fn scratch_binding(
+    control: &str,
+    lane: LaneConfig,
+    scratch: ScratchDirectionConfig,
+) -> BindingConfigEntry {
+    let mut entry = binding(control, lane);
+    entry.scratch = Some(scratch);
+    entry
 }
 
 fn gamepad_binding(control: &str, lane: LaneConfig) -> BindingConfigEntry {
@@ -1117,6 +1148,122 @@ mod tests {
             entry.device == "keyboard"
                 && entry.control == "Q"
                 && entry.action == Some(InputActionConfig::E1)
+        }));
+    }
+
+    #[test]
+    fn default_profile_uses_quieter_audio_and_prefetches_ir_rankings() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+
+        assert_eq!(profile.audio_mix.master_volume, 50);
+        assert_eq!(profile.audio_mix.key_volume, 50);
+        assert_eq!(profile.audio_mix.bgm_volume, 50);
+        assert_eq!(profile.audio_mix.preview_volume, 50);
+        assert_eq!(profile.audio_mix.system_bgm_volume, 50);
+        assert_eq!(profile.audio_mix.system_se_volume, 50);
+        assert!(profile.ir.prefetch_global_ranking_on_score_submit);
+        assert!(profile.ir.prefetch_rival_ranking_on_score_submit);
+    }
+
+    #[test]
+    fn replay_slot_rule_empty_string_disables_slot() {
+        let profile: ProfileConfig = toml::from_str(
+            r#"
+            version = 1
+            id = "default"
+            display_name = "Default"
+            player_name = "NONAME"
+            created_at = 1
+            updated_at = 1
+
+            [play]
+            gauge = "Normal"
+            random = "Off"
+            lane_effect = "Off"
+            assist = "None"
+            auto_play = false
+
+            [judge]
+            input_offset_us = 0
+            visual_offset_us = 0
+            judge_algorithm = "Combo"
+            fast_slow_display_threshold_ms = 0
+            fast_slow_display_scope = "Auto"
+
+            [lane]
+            hispeed = 2.0
+            hispeed_mode = "Normal"
+            sudden = 0
+            lift = 0
+            hidden = 0
+            target_green_number = 300
+
+            [input]
+            scratch_mode = "Normal"
+            analog_scratch_sensitivity = 1.0
+            analog_scratch_timeout_ms = 500
+
+            [rival]
+            active_rival = ""
+            entries = []
+
+            [replay]
+            auto_save = true
+            compress = false
+            slot_rules = ["Always", "ScoreUpdate", "BpUpdate", ""]
+
+            [ir]
+            primary_provider = ""
+            providers = []
+
+            [ui]
+            language = "ja"
+            theme = "default"
+            show_fps = false
+            confirm_on_exit = true
+
+            [audio_mix]
+            master_volume = 50
+            key_volume = 50
+            bgm_volume = 50
+            preview_volume = 50
+            system_bgm_volume = 50
+            system_se_volume = 50
+
+            [system_sound]
+            bgm_dir = "data/bgm"
+            se_dir = "data/se"
+            default_sound_dir = "data/defaultsound"
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(profile.replay.slot_rules[3], ReplaySlotRule::Disabled);
+        assert!(profile.ir.prefetch_global_ranking_on_score_submit);
+        assert!(profile.ir.prefetch_rival_ranking_on_score_submit);
+    }
+
+    #[test]
+    fn default_gamepad_ui_bindings_use_thumb_buttons_without_dpad_enter_back() {
+        let bindings = default_ui_bindings();
+
+        assert!(bindings.iter().any(|entry| {
+            entry.device == "gamepad"
+                && entry.control == "Button9"
+                && entry.action == Some(InputActionConfig::E1)
+        }));
+        assert!(bindings.iter().any(|entry| {
+            entry.device == "gamepad"
+                && entry.control == "Button12"
+                && entry.action == Some(InputActionConfig::E4)
+        }));
+        assert!(!bindings.iter().any(|entry| {
+            entry.device == "gamepad"
+                && matches!(entry.control.as_str(), "DPadLeft" | "DPadRight")
+                && matches!(
+                    entry.action,
+                    Some(InputActionConfig::E2 | InputActionConfig::SelectEnter)
+                )
         }));
     }
 

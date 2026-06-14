@@ -533,8 +533,8 @@ mod tests {
         assert_eq!(finished.summary.arrange, "RANDOM");
         assert_eq!(finished.summary.lane_shuffle_pattern, lane_shuffle_pattern);
         assert_eq!(finished.summary.target_ex_score, Some(1600));
-        assert_eq!(finished.summary.saved_replay_slots, [true; 4]);
-        assert_eq!(finished.summary.replay_slots, [true; 4]);
+        assert_eq!(finished.summary.saved_replay_slots, [true, true, true, false]);
+        assert_eq!(finished.summary.replay_slots, [true, true, true, false]);
 
         std::fs::remove_dir_all(root).unwrap();
     }

@@ -3565,9 +3565,7 @@ impl WinitApp {
             }
             if self.select_keys.is_start(button) {
                 self.set_start_held(false);
-            } else if self.select_keys.is_e2_action(button)
-                || matches!(button, "Select" | "DPadLeft")
-            {
+            } else if self.select_keys.is_e2_action(button) || matches!(button, "Select") {
                 self.set_select_held(false);
             }
             return;
@@ -3689,7 +3687,7 @@ impl WinitApp {
             return;
         }
 
-        if self.select_keys.is_e2_action(button) || matches!(button, "Select" | "DPadLeft") {
+        if self.select_keys.is_e2_action(button) || matches!(button, "Select") {
             self.set_select_held(true);
             return;
         }
@@ -3727,8 +3725,8 @@ impl WinitApp {
                 let action = match button {
                     "DPadUp" => Some(SelectAction::Move(SelectMove::Previous)),
                     "DPadDown" => Some(SelectAction::Move(SelectMove::Next)),
-                    "DPadLeft" | "Select" => Some(SelectAction::ExitFolder),
-                    "DPadRight" | "Button1" => Some(SelectAction::EnterOrPlay),
+                    "Select" => Some(SelectAction::ExitFolder),
+                    "Button1" => Some(SelectAction::EnterOrPlay),
                     _ => {
                         if self.select_keys.is_select_scratch_up(button) {
                             if self.select_keys.is_select_scratch_down(button) {
@@ -12308,6 +12306,24 @@ mod tests {
                 false,
                 &keys
             ),
+            Some(SelectAction::Move(SelectMove::Previous))
+        );
+        assert_eq!(
+            select_action(
+                PhysicalKey::Code(KeyCode::ControlLeft),
+                ElementState::Pressed,
+                false,
+                &keys
+            ),
+            Some(SelectAction::Move(SelectMove::Next))
+        );
+        assert_eq!(
+            select_action(
+                PhysicalKey::Code(KeyCode::ControlRight),
+                ElementState::Pressed,
+                false,
+                &keys
+            ),
             Some(SelectAction::Move(SelectMove::Next))
         );
         assert_eq!(
@@ -12317,7 +12333,7 @@ mod tests {
                 false,
                 &keys
             ),
-            Some(SelectAction::Move(SelectMove::Next))
+            Some(SelectAction::Move(SelectMove::Previous))
         );
     }
 
@@ -12864,33 +12880,41 @@ mod tests {
     fn select_key_bindings_expose_2p_keys_for_random2() {
         let keys = default_select_keys();
 
-        assert!(keys.is_key8(","));
-        assert!(keys.is_key9("l"));
-        assert!(keys.is_key10("."));
-        assert!(keys.is_key11(";"));
-        assert!(keys.is_key12("/"));
+        assert!(keys.is_key8("M"));
+        assert!(keys.is_key9("K"));
+        assert!(keys.is_key10("Comma"));
+        assert!(keys.is_key11("L"));
+        assert!(keys.is_key12("Period"));
+        assert!(keys.is_key13("Semicolon"));
+        assert!(keys.is_key14("Slash"));
         assert!(keys.is_key8("Button8"));
         assert!(keys.is_key9("Button9"));
         assert!(keys.is_key10("Button10"));
         assert!(keys.is_key11("Button11"));
         assert!(keys.is_key12("Button12"));
+        assert!(keys.is_key13("Button13"));
+        assert!(keys.is_key14("Button14"));
     }
 
     #[test]
     fn select_key_bindings_treat_2p_keys_as_ui_equivalents() {
         let keys = select_keys_with_full_2p_bindings();
 
-        for control in [",", ".", "/", "P2K7", "Button8", "Button10", "Button12", "Button14"] {
+        for control in
+            ["M", "Comma", "Period", "Slash", "P2K7", "Button8", "Button10", "Button12", "Button14"]
+        {
             assert!(keys.is_enter(control), "{control} should decide like odd 1P keys");
         }
-        for control in ["l", ";", "P2K6", "Button9", "Button11", "Button13"] {
+        for control in ["K", "L", "Semicolon", "P2K6", "Button9", "Button11", "Button13"] {
             assert!(keys.is_back(control), "{control} should go back like even 1P keys");
         }
-        assert_eq!(keys.ui_lane_for_control(","), Some(Lane::Key1));
-        assert_eq!(keys.ui_lane_for_control("l"), Some(Lane::Key2));
-        assert_eq!(keys.ui_lane_for_control("."), Some(Lane::Key3));
-        assert_eq!(keys.ui_lane_for_control(";"), Some(Lane::Key4));
-        assert_eq!(keys.ui_lane_for_control("/"), Some(Lane::Key5));
+        assert_eq!(keys.ui_lane_for_control("M"), Some(Lane::Key1));
+        assert_eq!(keys.ui_lane_for_control("K"), Some(Lane::Key2));
+        assert_eq!(keys.ui_lane_for_control("Comma"), Some(Lane::Key3));
+        assert_eq!(keys.ui_lane_for_control("L"), Some(Lane::Key4));
+        assert_eq!(keys.ui_lane_for_control("Period"), Some(Lane::Key5));
+        assert_eq!(keys.ui_lane_for_control("Semicolon"), Some(Lane::Key6));
+        assert_eq!(keys.ui_lane_for_control("Slash"), Some(Lane::Key7));
         assert_eq!(keys.ui_lane_for_control("P2K6"), Some(Lane::Key6));
         assert_eq!(keys.ui_lane_for_control("P2K7"), Some(Lane::Key7));
     }
@@ -12900,7 +12924,7 @@ mod tests {
         let keys = default_select_keys();
 
         assert!(should_toggle_select_gauge_auto_shift("S", true, true, &keys));
-        assert!(should_toggle_select_gauge_auto_shift("l", true, true, &keys));
+        assert!(should_toggle_select_gauge_auto_shift("K", true, true, &keys));
         assert!(!should_toggle_select_gauge_auto_shift("Q", false, true, &keys));
         assert!(!should_toggle_select_gauge_auto_shift("Q", true, true, &keys));
         assert!(!should_toggle_select_gauge_auto_shift("W", true, false, &keys));
@@ -12929,7 +12953,7 @@ mod tests {
         let keys = select_keys_with_full_2p_bindings();
 
         assert_eq!(decide_control_action("Z", &keys), Some(DecideAction::Confirm));
-        assert_eq!(decide_control_action(",", &keys), Some(DecideAction::Confirm));
+        assert_eq!(decide_control_action("M", &keys), Some(DecideAction::Confirm));
         assert_eq!(decide_control_action("P2K7", &keys), Some(DecideAction::Confirm));
         assert_eq!(decide_control_action("S", &keys), None);
         assert_eq!(decide_control_action("P2K6", &keys), None);
@@ -13231,7 +13255,7 @@ mod tests {
 
         assert_eq!(visual_offset_delta_control("C", &keys), Some(-1));
         assert_eq!(visual_offset_delta_control("V", &keys), Some(1));
-        assert_eq!(visual_offset_delta_control("/", &keys), Some(-1));
+        assert_eq!(visual_offset_delta_control("Period", &keys), Some(-1));
         assert_eq!(visual_offset_delta_control("P2K7", &keys), Some(1));
         assert_eq!(visual_offset_delta_control("Z", &keys), None);
     }

@@ -588,6 +588,7 @@ fn format_scratch_input_mode(value: ScratchInputMode) -> String {
 
 fn format_replay_slot_rule(value: ReplaySlotRule) -> String {
     match value {
+        ReplaySlotRule::Disabled => "DISABLED".to_string(),
         ReplaySlotRule::Always => "ALWAYS".to_string(),
         ReplaySlotRule::ScoreUpdate => "SCORE UPDATE".to_string(),
         ReplaySlotRule::BpUpdate => "BP UPDATE".to_string(),
@@ -764,7 +765,8 @@ fn cycle_scratch_input_mode(current: ScratchInputMode, forward: bool) -> Scratch
 }
 
 fn cycle_replay_slot_rule(current: ReplaySlotRule, forward: bool) -> ReplaySlotRule {
-    const VALUES: [ReplaySlotRule; 5] = [
+    const VALUES: [ReplaySlotRule; 6] = [
+        ReplaySlotRule::Disabled,
         ReplaySlotRule::Always,
         ReplaySlotRule::ScoreUpdate,
         ReplaySlotRule::BpUpdate,

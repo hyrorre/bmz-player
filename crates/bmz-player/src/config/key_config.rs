@@ -1193,7 +1193,7 @@ mod tests {
     }
 
     #[test]
-    fn default_scratch_keyboard_shows_same_key_for_up_and_down() {
+    fn default_scratch_keyboard_shows_separate_keys_for_up_and_down() {
         let profile = ProfileConfig::new_default("default", "Default", 0);
         assert_eq!(
             format_play_binding(
@@ -1217,7 +1217,7 @@ mod tests {
                     KeyBindingSlot::KeyboardPrimary,
                 ),
             ),
-            "LShift"
+            "LControl"
         );
     }
 }

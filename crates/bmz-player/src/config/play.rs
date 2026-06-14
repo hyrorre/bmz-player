@@ -194,11 +194,17 @@ mod tests {
 
         let binding = lane_binding_from_profile_input(&profile.input);
 
-        // キーボード 8 + ゲームパッド 9 (スクラッチ ×2 + 鍵盤 ×7) = 17
-        assert_eq!(binding.entries.len(), 17);
+        // キーボード 9 (スクラッチ Up/Down + 鍵盤 ×7) + ゲームパッド 9 = 18
+        assert_eq!(binding.entries.len(), 18);
         assert!(binding.entries.iter().any(|entry| {
             entry.lane == Lane::Scratch
                 && entry.control == PhysicalControl::KeyboardKey("LShift".to_string())
+                && entry.scratch_direction == Some(bmz_core::input::ScratchDirection::Up)
+        }));
+        assert!(binding.entries.iter().any(|entry| {
+            entry.lane == Lane::Scratch
+                && entry.control == PhysicalControl::KeyboardKey("LControl".to_string())
+                && entry.scratch_direction == Some(bmz_core::input::ScratchDirection::Down)
         }));
         assert!(binding.entries.iter().any(|entry| {
             entry.lane == Lane::Scratch

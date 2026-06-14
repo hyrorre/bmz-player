@@ -337,7 +337,8 @@ pub fn default_play_7k_bindings() -> Vec<BindingConfigEntry> {
 
 pub fn default_play_7k_keyboard_bindings() -> Vec<BindingConfigEntry> {
     vec![
-        play_binding("LShift", LaneConfig::Scratch),
+        scratch_play_binding("LShift", LaneConfig::Scratch, ScratchDirectionConfig::Up),
+        scratch_play_binding("LControl", LaneConfig::Scratch, ScratchDirectionConfig::Down),
         play_binding("Z", LaneConfig::Key1),
         play_binding("S", LaneConfig::Key2),
         play_binding("X", LaneConfig::Key3),
@@ -363,15 +364,26 @@ pub fn default_play_7k_gamepad_bindings() -> Vec<BindingConfigEntry> {
 }
 
 pub fn default_play_14k_bindings() -> Vec<BindingConfigEntry> {
-    let mut bindings = default_play_7k_keyboard_bindings();
-    bindings.extend([
-        play_binding(",", LaneConfig::Key8),
-        play_binding("l", LaneConfig::Key9),
-        play_binding(".", LaneConfig::Key10),
-        play_binding(";", LaneConfig::Key11),
-        play_binding("/", LaneConfig::Key12),
-        play_binding("RShift", LaneConfig::Scratch2),
-    ]);
+    let mut bindings = vec![
+        scratch_play_binding("LShift", LaneConfig::Scratch, ScratchDirectionConfig::Up),
+        scratch_play_binding("LControl", LaneConfig::Scratch, ScratchDirectionConfig::Down),
+        play_binding("Z", LaneConfig::Key1),
+        play_binding("S", LaneConfig::Key2),
+        play_binding("X", LaneConfig::Key3),
+        play_binding("D", LaneConfig::Key4),
+        play_binding("C", LaneConfig::Key5),
+        play_binding("F", LaneConfig::Key6),
+        play_binding("V", LaneConfig::Key7),
+        scratch_play_binding("RShift", LaneConfig::Scratch2, ScratchDirectionConfig::Up),
+        scratch_play_binding("RControl", LaneConfig::Scratch2, ScratchDirectionConfig::Down),
+        play_binding("M", LaneConfig::Key8),
+        play_binding("K", LaneConfig::Key9),
+        play_binding("Comma", LaneConfig::Key10),
+        play_binding("L", LaneConfig::Key11),
+        play_binding("Period", LaneConfig::Key12),
+        play_binding("Semicolon", LaneConfig::Key13),
+        play_binding("Slash", LaneConfig::Key14),
+    ];
     bindings.extend(default_play_7k_gamepad_bindings());
     bindings.extend([
         gamepad_play_binding("Button8", LaneConfig::Key8),
@@ -379,6 +391,8 @@ pub fn default_play_14k_bindings() -> Vec<BindingConfigEntry> {
         gamepad_play_binding("Button10", LaneConfig::Key10),
         gamepad_play_binding("Button11", LaneConfig::Key11),
         gamepad_play_binding("Button12", LaneConfig::Key12),
+        gamepad_play_binding("Button13", LaneConfig::Key13),
+        gamepad_play_binding("Button14", LaneConfig::Key14),
         gamepad_play_binding("AxisRightX+", LaneConfig::Scratch2),
         gamepad_play_binding("AxisRightX-", LaneConfig::Scratch2),
     ]);
@@ -407,6 +421,16 @@ pub fn play_binding(control: &str, lane: LaneConfig) -> BindingConfigEntry {
         action: None,
         scratch: None,
     }
+}
+
+pub fn scratch_play_binding(
+    control: &str,
+    lane: LaneConfig,
+    scratch: ScratchDirectionConfig,
+) -> BindingConfigEntry {
+    let mut entry = play_binding(control, lane);
+    entry.scratch = Some(scratch);
+    entry
 }
 
 pub fn gamepad_play_binding(control: &str, lane: LaneConfig) -> BindingConfigEntry {

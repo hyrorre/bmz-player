@@ -235,7 +235,7 @@ impl Default for AppConfig {
             active_profile: "default".to_string(),
             songs: SongPathsConfig { roots: Vec::new() },
             scan: ScanConfig {
-                follow_symlinks: false,
+                follow_symlinks: true,
                 skip_hidden: true,
                 auto_rescan_on_startup: false,
                 rescan_missing_files: true,
@@ -258,7 +258,7 @@ impl Default for AppConfig {
                 vsync: true,
                 present_mode: PresentModeConfig::Auto,
                 target_fps: 240,
-                frame_limit_in_background: 30,
+                frame_limit_in_background: 60,
                 renderer: RendererBackend::Auto,
             },
             screenshot: ScreenshotConfig::default(),
@@ -285,6 +285,15 @@ mod tests {
 
         assert_eq!(config.screenshot.dir, "data/screenshots");
         assert!(config.screenshot.copy_to_clipboard);
+    }
+
+    #[test]
+    fn app_config_defaults_scan_symlinks_and_background_frame_limit() {
+        let config = AppConfig::default();
+
+        assert!(config.scan.follow_symlinks);
+        assert!(!config.scan.auto_rescan_on_startup);
+        assert_eq!(config.video.frame_limit_in_background, 60);
     }
 
     #[test]

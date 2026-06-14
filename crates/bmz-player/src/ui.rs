@@ -2293,6 +2293,7 @@ fn build_profile_settings_panel(
                             .selected_text(replay_slot_rule_label(*rule))
                             .show_ui(ui, |ui| {
                                 for value in [
+                                    ReplaySlotRule::Disabled,
                                     ReplaySlotRule::Always,
                                     ReplaySlotRule::ScoreUpdate,
                                     ReplaySlotRule::BpUpdate,
@@ -2713,6 +2714,7 @@ fn scratch_input_mode_label(value: ScratchInputMode) -> &'static str {
 
 fn replay_slot_rule_label(value: ReplaySlotRule) -> &'static str {
     match value {
+        ReplaySlotRule::Disabled => "DISABLED",
         ReplaySlotRule::Always => "ALWAYS",
         ReplaySlotRule::ScoreUpdate => "SCORE UPDATE",
         ReplaySlotRule::BpUpdate => "BP UPDATE",

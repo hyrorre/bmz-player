@@ -185,12 +185,15 @@ fn evaluate_slot_update(
 /// Rule-only comparison shared by per-chart `replay_slots` and per-course
 /// `course_replay_slots`.  `prev` is `(ex_score, bp, max_combo,
 /// clear_rank)` of the row currently in the slot, or `None` if the slot is
-/// empty (in which case any rule passes — the first record always wins).
+/// empty (in which case any enabled rule passes — the first record always wins).
 pub fn slot_rule_passes(
     rule: ReplaySlotRule,
     prev: Option<(u32, u32, u32, u8)>,
     next: &CandidateMetrics,
 ) -> bool {
+    if matches!(rule, ReplaySlotRule::Disabled) {
+        return false;
+    }
     if matches!(rule, ReplaySlotRule::Always) {
         return true;
     }
@@ -198,6 +201,7 @@ pub fn slot_rule_passes(
         return true;
     };
     match rule {
+        ReplaySlotRule::Disabled => false,
         ReplaySlotRule::Always => true,
         ReplaySlotRule::ScoreUpdate => next.ex_score > prev_ex,
         ReplaySlotRule::BpUpdate => next.bp < prev_bp,
@@ -430,8 +434,9 @@ mod tests {
         )
         .unwrap();
 
-        // First play with empty slot table -> all four slots are populated
-        assert!(stored.slot_paths.iter().all(|p| p.is_some()));
+        // First play with empty slot table -> enabled default slots are populated.
+        assert!(stored.slot_paths[..3].iter().all(|p| p.is_some()));
+        assert!(stored.slot_paths[3].is_none());
         for path in stored.slot_paths.iter().flatten() {
             assert!(root.join(path).exists());
         }
@@ -461,7 +466,7 @@ mod tests {
 
         // Default slot 0 = Always (always overwrites)
         assert!(stored2.slot_paths[0].is_some());
-        // Slot 1..3 use Score/Bp/MaxCombo which require strict improvement
+        // Slot 1..2 use Score/Bp which require strict improvement; slot 3 is disabled.
         assert!(stored2.slot_paths[1].is_none());
         assert!(stored2.slot_paths[2].is_none());
         assert!(stored2.slot_paths[3].is_none());
@@ -674,6 +679,20 @@ mod tests {
                 clear_rank: ClearType::Failed as u8,
             }
         ));
+    }
+
+    #[test]
+    fn slot_rule_disabled_never_writes() {
+        let candidate = CandidateMetrics {
+            ex_score: 10,
+            bp: 1,
+            cb: 1,
+            max_combo: 10,
+            clear_rank: ClearType::AssistEasy as u8,
+        };
+
+        assert!(!evaluate_slot_update(ReplaySlotRule::Disabled, None, &candidate));
+        assert!(!slot_rule_passes(ReplaySlotRule::Disabled, Some((0, 999, 0, 0)), &candidate));
     }
 
     #[test]
