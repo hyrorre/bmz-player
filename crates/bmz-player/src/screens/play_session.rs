@@ -22,7 +22,9 @@ use bmz_gameplay::judge::window::{
 };
 use bmz_gameplay::replay::{ReplayPlayer, ReplayRecorder};
 use bmz_gameplay::score::ScoreState;
-use bmz_gameplay::session::{BgmScheduler, GameSession, HispeedMode, PlaySkinOffset, PlayState};
+use bmz_gameplay::session::{
+    BgmScheduler, GameSession, HispeedMode, InputOffsetAutoAdjustState, PlaySkinOffset, PlayState,
+};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -208,7 +210,8 @@ pub fn apply_placeholder_session_visuals(
     snapshot.fs_threshold_ms =
         bmz_render::chart_graph::rm_skin_fs_threshold_ms(snapshot.judge_rank, key_mode);
     snapshot.judge_timing_offset_ms =
-        (play_offsets_from_profile(profile).input_offset_us / 1_000) as i32;
+        (play_offsets_from_profile(profile).visual_offset_us / 1_000) as i32;
+    snapshot.judge_timing_auto_adjust = profile.judge.visual_offset_auto_adjust;
     snapshot.autoplay = profile.play.auto_play || options.autoplay;
     snapshot.target_ex_score = options
         .target
@@ -302,6 +305,13 @@ pub fn build_game_session_with_input_backend(
     } else {
         None
     };
+    let input_offset_auto_adjust_enabled = profile.judge.visual_offset_auto_adjust;
+    let input_offset_auto_adjust =
+        if input_offset_auto_adjust_enabled && !autoplay_enabled && !is_replay {
+            Some(InputOffsetAutoAdjustState::default())
+        } else {
+            None
+        };
     let key_mode = chart.metadata.key_mode;
     let rule_mode = profile.play.rule_mode;
     let input_system = InputSystem {
@@ -403,6 +413,8 @@ pub fn build_game_session_with_input_backend(
         recent_judgements: Vec::new(),
         result_judgements: Default::default(),
         hit_error_ring: HitErrorRing::default(),
+        input_offset_auto_adjust_enabled,
+        input_offset_auto_adjust,
         full_combo_started_at: None,
         bgm_scheduler: BgmScheduler::default(),
         offsets: play_offsets_from_profile(profile),
@@ -1612,6 +1624,32 @@ mod tests {
         assert!(session.bga_enabled);
         assert_eq!(session.poor_bga_duration_us, 500_000);
         assert_eq!(session.bga_stretch, 1);
+    }
+
+    #[test]
+    fn build_game_session_uses_visual_offset_auto_adjust_from_profile() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.judge.visual_offset_auto_adjust = true;
+        let session =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+
+        assert!(session.input_offset_auto_adjust_enabled);
+        assert!(session.input_offset_auto_adjust.is_some());
+    }
+
+    #[test]
+    fn placeholder_session_visuals_use_visual_offset_for_skin_judge_timing() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.judge.input_offset_us = 3_000;
+        profile.judge.visual_offset_us = 4_000;
+        profile.judge.visual_offset_auto_adjust = true;
+        let options = PlaySessionOptions::default();
+        let mut snapshot = bmz_render::snapshot::RenderSnapshot::default();
+
+        apply_placeholder_session_visuals(&mut snapshot, &profile, KeyMode::K7, &options);
+
+        assert_eq!(snapshot.judge_timing_offset_ms, 4);
+        assert!(snapshot.judge_timing_auto_adjust);
     }
 
     fn class_gauge_values(session: &GameSession) -> [f32; 6] {

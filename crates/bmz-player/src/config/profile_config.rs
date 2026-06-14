@@ -304,7 +304,10 @@ pub enum AssistOptionConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JudgeConfig {
     pub input_offset_us: i64,
+    #[serde(default)]
     pub visual_offset_us: i64,
+    #[serde(default)]
+    pub visual_offset_auto_adjust: bool,
     pub judge_algorithm: JudgeAlgorithmConfig,
     /// FAST/SLOW を表示する最小タイミング差(ms)。|delta| がこれ未満なら FAST/SLOW 表示なし。0=常時表示。
     #[serde(default)]
@@ -861,6 +864,7 @@ impl ProfileConfig {
             judge: JudgeConfig {
                 input_offset_us: 0,
                 visual_offset_us: 0,
+                visual_offset_auto_adjust: false,
                 judge_algorithm: JudgeAlgorithmConfig::Combo,
                 fast_slow_display_threshold_ms: 0,
                 fast_slow_display_scope: FastSlowDisplayScope::Auto,
@@ -1167,6 +1171,17 @@ mod tests {
         assert_eq!(profile.audio_mix.system_se_volume, 50);
         assert!(profile.ir.prefetch_global_ranking_on_score_submit);
         assert!(profile.ir.prefetch_rival_ranking_on_score_submit);
+    }
+
+    #[test]
+    fn judge_config_serializes_visual_offset_auto_adjust_key() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.judge.visual_offset_auto_adjust = true;
+
+        let toml = toml::to_string(&profile).unwrap();
+
+        assert!(toml.contains("visual_offset_auto_adjust = true"));
+        assert!(!toml.contains("input_offset_auto_adjust"));
     }
 
     #[test]

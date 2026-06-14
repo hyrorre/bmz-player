@@ -2001,6 +2001,7 @@ impl WinitApp {
             grade_diff_display: self.boot.profile_config.play.grade_diff_display,
             judge_timing_offset_ms: (self.boot.profile_config.judge.visual_offset_us / 1_000)
                 .clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+            judge_timing_auto_adjust: self.boot.profile_config.judge.visual_offset_auto_adjust,
             master_volume: crate::config::play::volume_unit_to_f32(
                 self.boot.profile_config.audio_mix.master_volume,
             ),
@@ -2886,6 +2887,17 @@ impl WinitApp {
         );
     }
 
+    fn toggle_visual_offset_auto_adjust(&mut self) {
+        self.boot.profile_config.judge.visual_offset_auto_adjust =
+            !self.boot.profile_config.judge.visual_offset_auto_adjust;
+        self.boot.profile_config.updated_at = now_unix_seconds();
+        self.sync_realtime_profile_settings();
+        tracing::info!(
+            visual_offset_auto_adjust = self.boot.profile_config.judge.visual_offset_auto_adjust,
+            "visual offset auto adjust changed"
+        );
+    }
+
     fn apply_play_option_control(&mut self, control: &str) -> bool {
         if self.select_keys.is_key1(control) {
             self.arrange_option = self.arrange_option.cycle();
@@ -3335,6 +3347,24 @@ impl WinitApp {
         if event.state == ElementState::Pressed
             && !event.repeat
             && let Some(control) = physical_key_name(event.physical_key)
+            && should_toggle_select_judge_auto_adjust(
+                &control,
+                self.start_held,
+                self.select_held,
+                &self.select_keys,
+            )
+        {
+            self.toggle_visual_offset_auto_adjust();
+            self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+            if is_select_modifier_key(event.physical_key, &self.select_keys) {
+                self.set_select_held(true);
+            }
+            return;
+        }
+
+        if event.state == ElementState::Pressed
+            && !event.repeat
+            && let Some(control) = physical_key_name(event.physical_key)
             && should_toggle_select_gauge_auto_shift(
                 &control,
                 self.start_held,
@@ -3682,6 +3712,20 @@ impl WinitApp {
             return;
         }
 
+        if should_toggle_select_judge_auto_adjust(
+            button,
+            self.start_held,
+            self.select_held,
+            &self.select_keys,
+        ) {
+            self.toggle_visual_offset_auto_adjust();
+            self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+            if self.select_keys.is_e2_action(button) {
+                self.set_select_held(true);
+            }
+            return;
+        }
+
         if self.select_keys.is_start(button) {
             self.set_start_held(true);
             return;
@@ -3972,6 +4016,10 @@ impl WinitApp {
             55 => self.cycle_select_hs_fix(arg),
             72 => self.cycle_select_bga(arg),
             73 => self.cycle_select_bga_expand(arg),
+            75 => {
+                self.toggle_visual_offset_auto_adjust();
+                self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+            }
             77 => self.cycle_select_target(arg),
             78 => self.cycle_select_gauge_auto_shift(arg),
             341 => self.cycle_select_bottom_shiftable_gauge(arg),
@@ -7596,6 +7644,24 @@ impl WinitApp {
             session.audio_mix.normalization_gain = normalization_gain;
             session.offsets =
                 crate::config::play::play_offsets_from_profile(&self.boot.profile_config);
+            session.input_offset_auto_adjust_enabled =
+                self.boot.profile_config.judge.visual_offset_auto_adjust;
+            let auto_adjust_available = session.replay_player.is_none()
+                && !session.autoplay.as_ref().is_some_and(|autoplay| autoplay.is_full());
+            if session.input_offset_auto_adjust_enabled && auto_adjust_available {
+                session.input_offset_auto_adjust.get_or_insert_with(Default::default);
+            } else {
+                session.input_offset_auto_adjust = None;
+            }
+        }
+    }
+
+    fn sync_profile_visual_offset_from_active_play(&mut self) {
+        if let Some(active_play) = &self.active_play {
+            let session = &active_play.running.session;
+            if session.input_offset_auto_adjust.is_some() {
+                self.boot.profile_config.judge.visual_offset_us = session.offsets.visual_offset_us;
+            }
         }
     }
 
@@ -8037,6 +8103,7 @@ impl WinitApp {
 
     fn save_current_play_options(&mut self, hispeed: Option<f32>, reason: &'static str) {
         let lane_state = self.active_lane_state();
+        self.sync_profile_visual_offset_from_active_play();
         apply_current_play_options_to_profile(
             &mut self.boot.profile_config,
             hispeed,
@@ -9828,6 +9895,15 @@ fn should_toggle_select_gauge_auto_shift(
     bindings: &SelectKeyBindings,
 ) -> bool {
     start_held && (select_held || bindings.is_e2_action(control)) && bindings.is_ui_key2(control)
+}
+
+fn should_toggle_select_judge_auto_adjust(
+    control: &str,
+    start_held: bool,
+    select_held: bool,
+    bindings: &SelectKeyBindings,
+) -> bool {
+    start_held && (select_held || bindings.is_e2_action(control)) && bindings.is_ui_key3(control)
 }
 
 fn arrange_option_from_profile(random: RandomOptionConfig) -> ArrangeOption {
@@ -12940,6 +13016,17 @@ mod tests {
         assert!(!should_toggle_select_gauge_auto_shift("Q", false, true, &keys));
         assert!(!should_toggle_select_gauge_auto_shift("Q", true, true, &keys));
         assert!(!should_toggle_select_gauge_auto_shift("W", true, false, &keys));
+    }
+
+    #[test]
+    fn select_judge_auto_adjust_toggle_requires_start_then_key3() {
+        let keys = default_select_keys();
+
+        assert!(should_toggle_select_judge_auto_adjust("X", true, true, &keys));
+        assert!(should_toggle_select_judge_auto_adjust("Comma", true, true, &keys));
+        assert!(!should_toggle_select_judge_auto_adjust("X", false, true, &keys));
+        assert!(!should_toggle_select_judge_auto_adjust("S", true, true, &keys));
+        assert!(!should_toggle_select_judge_auto_adjust("W", true, false, &keys));
     }
 
     #[test]

@@ -2200,6 +2200,55 @@ mod tests {
     }
 
     #[test]
+    fn wmii_fhd_lr2skin_decodes_auto_judge_button_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/WMII_FHD/play/FHDPLAY_AC.lr2skin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let options = BTreeMap::from([("Displayjudge".to_string(), "ON".to_string())]);
+        let decoded = load_skin_document(&skin_path, SkinKind::Play, &options, &BTreeMap::new())
+            .unwrap()
+            .document;
+        let candidates = decoded
+            .image
+            .iter()
+            .filter(|image| image.divx == 1 && image.divy >= 2 && image.h > 0)
+            .map(|image| {
+                format!(
+                    "src={} x={} y={} w={} h={} divy={} ref={} act={:?}",
+                    image.src,
+                    image.x,
+                    image.y,
+                    image.w,
+                    image.h,
+                    image.divy,
+                    image.ref_id,
+                    image.act
+                )
+            })
+            .collect::<Vec<_>>();
+        let auto_judge = decoded
+            .image
+            .iter()
+            .find(|image| image.act == Some(75) && image.divx == 1 && image.divy >= 2)
+            .unwrap_or_else(|| {
+                panic!(
+                    "WMII auto judge button should decode; candidates: {}",
+                    candidates.join(" | ")
+                )
+            });
+
+        assert_eq!(auto_judge.ref_id, 0);
+        assert_eq!(auto_judge.click, 0);
+        assert!(
+            auto_judge.h > 0,
+            "WMII auto judge button should keep a positive source height: {auto_judge:?}"
+        );
+    }
+
+    #[test]
     fn wmii_fhd_lr2skin_renders_ac_bga_frame_when_available() {
         let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../data/skins/WMII_FHD/play/FHDPLAY_AC.lr2skin");

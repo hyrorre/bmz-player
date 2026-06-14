@@ -54,6 +54,17 @@ pub struct PlayOffsets {
     pub visual_offset_us: i64,
 }
 
+pub const INPUT_OFFSET_AUTO_ADJUST_MIN_US: i64 = -500_000;
+pub const INPUT_OFFSET_AUTO_ADJUST_MAX_US: i64 = 500_000;
+const INPUT_OFFSET_AUTO_ADJUST_STEP_US: i64 = 1_000;
+const INPUT_OFFSET_AUTO_ADJUST_BATCH: u32 = 10;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct InputOffsetAutoAdjustState {
+    pub sum_delta_us: i64,
+    pub count: u32,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct PlayAudioMix {
     pub master_volume: f32,
@@ -126,6 +137,8 @@ pub struct GameSession {
     pub full_combo_started_at: Option<TimeUs>,
     pub bgm_scheduler: BgmScheduler,
     pub offsets: PlayOffsets,
+    pub input_offset_auto_adjust_enabled: bool,
+    pub input_offset_auto_adjust: Option<InputOffsetAutoAdjustState>,
     pub audio_mix: PlayAudioMix,
     pub hispeed: f32,
     pub hispeed_mode: HispeedMode,
@@ -323,6 +336,42 @@ fn plays_keysound(judge: Judge) -> bool {
     matches!(judge, Judge::PGreat | Judge::Great | Judge::Good | Judge::Bad)
 }
 
+fn counts_for_input_offset_auto_adjust(judge: Judge) -> bool {
+    plays_keysound(judge)
+}
+
+pub fn apply_input_offset_auto_adjust(session: &mut GameSession, events: &[JudgementEvent]) {
+    let Some(state) = &mut session.input_offset_auto_adjust else {
+        return;
+    };
+    // beatoraja/LR2-style judge timing adjustment shifts the note display timing.
+    // The low-level input offset remains a separate BMZ-only calibration knob.
+    for event in events {
+        if event.note_id.is_none() || !counts_for_input_offset_auto_adjust(event.judge) {
+            continue;
+        }
+        state.sum_delta_us = state.sum_delta_us.saturating_add(event.delta.0);
+        state.count = state.count.saturating_add(1);
+        if state.count < INPUT_OFFSET_AUTO_ADJUST_BATCH {
+            continue;
+        }
+
+        let offset_delta = match state.sum_delta_us.cmp(&0) {
+            std::cmp::Ordering::Greater => INPUT_OFFSET_AUTO_ADJUST_STEP_US,
+            std::cmp::Ordering::Less => -INPUT_OFFSET_AUTO_ADJUST_STEP_US,
+            std::cmp::Ordering::Equal => 0,
+        };
+        if offset_delta != 0 {
+            session.offsets.visual_offset_us = session
+                .offsets
+                .visual_offset_us
+                .saturating_add(offset_delta)
+                .clamp(INPUT_OFFSET_AUTO_ADJUST_MIN_US, INPUT_OFFSET_AUTO_ADJUST_MAX_US);
+        }
+        *state = InputOffsetAutoAdjustState::default();
+    }
+}
+
 pub fn update_recent_judgements(session: &mut GameSession, events: &[JudgementEvent], now: TimeUs) {
     for event in events {
         session.hit_error_ring.push_judgement(event.judge, event.delta.0);
@@ -403,7 +452,9 @@ pub fn process_human_inputs(session: &mut GameSession) -> Vec<JudgementEvent> {
     for input in inputs {
         session.replay_recorder.record(input);
         let outcome = session.judge.process_input(&session.chart, input);
-        judgements.extend(apply_judge_outcome(session, outcome));
+        let events = apply_judge_outcome(session, outcome);
+        apply_input_offset_auto_adjust(session, &events);
+        judgements.extend(events);
     }
     judgements
 }
@@ -807,6 +858,45 @@ mod tests {
         assert_eq!(audio.scheduled[0].start_frame, 0);
         assert_eq!(audio.scheduled[0].volume, 0.0625);
         assert_eq!(session.recent_judgements.len(), 1);
+    }
+
+    #[test]
+    fn input_offset_auto_adjust_increases_after_ten_late_judgements() {
+        let mut session = session_with_autoplay(chart_with_keysound());
+        session.input_offset_auto_adjust = Some(InputOffsetAutoAdjustState::default());
+
+        let events = vec![judgement_event(Judge::Great, 2_000); 10];
+        apply_input_offset_auto_adjust(&mut session, &events);
+
+        assert_eq!(session.offsets.visual_offset_us, 1_000);
+        assert_eq!(session.offsets.input_offset_us, 0);
+        assert_eq!(session.input_offset_auto_adjust, Some(InputOffsetAutoAdjustState::default()));
+    }
+
+    #[test]
+    fn input_offset_auto_adjust_decreases_after_ten_early_judgements() {
+        let mut session = session_with_autoplay(chart_with_keysound());
+        session.input_offset_auto_adjust = Some(InputOffsetAutoAdjustState::default());
+
+        let events = vec![judgement_event(Judge::Good, -2_000); 10];
+        apply_input_offset_auto_adjust(&mut session, &events);
+
+        assert_eq!(session.offsets.visual_offset_us, -1_000);
+        assert_eq!(session.offsets.input_offset_us, 0);
+    }
+
+    #[test]
+    fn input_offset_auto_adjust_ignores_poor_and_empty_poor() {
+        let mut session = session_with_autoplay(chart_with_keysound());
+        session.input_offset_auto_adjust = Some(InputOffsetAutoAdjustState::default());
+
+        let mut events = vec![judgement_event(Judge::Poor, 30_000); 10];
+        events.extend(vec![judgement_event(Judge::EmptyPoor, 30_000); 10]);
+        apply_input_offset_auto_adjust(&mut session, &events);
+
+        assert_eq!(session.offsets.visual_offset_us, 0);
+        assert_eq!(session.offsets.input_offset_us, 0);
+        assert_eq!(session.input_offset_auto_adjust.unwrap().count, 0);
     }
 
     #[test]
@@ -1406,6 +1496,8 @@ mod tests {
             full_combo_started_at: None,
             bgm_scheduler: BgmScheduler::default(),
             offsets: PlayOffsets { input_offset_us: 0, visual_offset_us: 0 },
+            input_offset_auto_adjust_enabled: false,
+            input_offset_auto_adjust: None,
             audio_mix: PlayAudioMix {
                 master_volume: 1.0,
                 normalization_gain: 1.0,
@@ -1504,6 +1596,17 @@ mod tests {
             bga_assets: Vec::new(),
             total_notes: 0,
             end_time: TimeUs(0),
+        }
+    }
+
+    fn judgement_event(judge: Judge, delta_us: i64) -> JudgementEvent {
+        JudgementEvent {
+            note_id: Some(NoteId(1)),
+            lane: Lane::Key1,
+            judge,
+            side: if delta_us < 0 { TimingSide::Fast } else { TimingSide::Slow },
+            delta: TimeUs(delta_us),
+            time: TimeUs(0),
         }
     }
 }

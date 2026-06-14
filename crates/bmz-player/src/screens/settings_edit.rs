@@ -192,6 +192,9 @@ impl SettingsEditSession {
             SettingsEntryId::VisualOffsetMs => {
                 SettingsBaseline::OffsetUs(profile.judge.visual_offset_us)
             }
+            SettingsEntryId::VisualOffsetAutoAdjust => {
+                SettingsBaseline::Bool(profile.judge.visual_offset_auto_adjust)
+            }
             SettingsEntryId::JudgeAlgorithm => {
                 SettingsBaseline::JudgeAlgorithm(profile.judge.judge_algorithm)
             }
@@ -292,6 +295,9 @@ impl SettingsEditSession {
             }
             (SettingsEntryId::VisualOffsetMs, SettingsBaseline::OffsetUs(value)) => {
                 profile.judge.visual_offset_us = *value;
+            }
+            (SettingsEntryId::VisualOffsetAutoAdjust, SettingsBaseline::Bool(value)) => {
+                profile.judge.visual_offset_auto_adjust = *value;
             }
             (SettingsEntryId::JudgeAlgorithm, SettingsBaseline::JudgeAlgorithm(value)) => {
                 profile.judge.judge_algorithm = *value;

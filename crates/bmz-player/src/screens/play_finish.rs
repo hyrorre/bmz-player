@@ -821,6 +821,8 @@ mod tests {
             full_combo_started_at: None,
             bgm_scheduler: BgmScheduler::default(),
             offsets: PlayOffsets { input_offset_us: 0, visual_offset_us: 0 },
+            input_offset_auto_adjust_enabled: false,
+            input_offset_auto_adjust: None,
             audio_mix: PlayAudioMix {
                 master_volume: 1.0,
                 normalization_gain: 1.0,

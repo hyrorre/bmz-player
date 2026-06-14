@@ -21,6 +21,7 @@ pub enum SettingsEntryId {
     SystemSeVolume,
     InputOffsetMs,
     VisualOffsetMs,
+    VisualOffsetAutoAdjust,
     JudgeAlgorithm,
     RuleMode,
     LnModePolicy,
@@ -68,8 +69,12 @@ impl SettingsEntryId {
         Self::SystemSeVolume,
     ];
 
-    pub const JUDGE_ENTRIES: &'static [Self] =
-        &[Self::InputOffsetMs, Self::VisualOffsetMs, Self::JudgeAlgorithm];
+    pub const JUDGE_ENTRIES: &'static [Self] = &[
+        Self::InputOffsetMs,
+        Self::VisualOffsetMs,
+        Self::VisualOffsetAutoAdjust,
+        Self::JudgeAlgorithm,
+    ];
 
     pub const PLAY_ENTRIES: &'static [Self] = &[
         Self::Gauge,
@@ -127,6 +132,7 @@ impl SettingsEntryId {
             Self::SystemSeVolume => "SYS SE",
             Self::InputOffsetMs => "INPUT OFFSET",
             Self::VisualOffsetMs => "VISUAL OFFSET",
+            Self::VisualOffsetAutoAdjust => "AUTO ADJUST",
             Self::JudgeAlgorithm => "JUDGE ALGO",
             Self::RuleMode => "RULE MODE",
             Self::LnModePolicy => "LN MODE",
@@ -192,6 +198,9 @@ pub fn format_settings_value(profile: &ProfileConfig, id: SettingsEntryId) -> St
         }
         SettingsEntryId::VisualOffsetMs => {
             format!("{} ms", profile.judge.visual_offset_us / 1_000)
+        }
+        SettingsEntryId::VisualOffsetAutoAdjust => {
+            format_bool_on_off(profile.judge.visual_offset_auto_adjust)
         }
         SettingsEntryId::JudgeAlgorithm => format_judge_algorithm(profile.judge.judge_algorithm),
         SettingsEntryId::RuleMode => format_rule_mode(profile.play.rule_mode),
@@ -271,6 +280,10 @@ pub fn adjust_settings_value(profile: &mut ProfileConfig, id: SettingsEntryId, d
         }
         SettingsEntryId::VisualOffsetMs => {
             adjust_offset_ms(&mut profile.judge.visual_offset_us, delta)
+        }
+        SettingsEntryId::VisualOffsetAutoAdjust => {
+            profile.judge.visual_offset_auto_adjust = !profile.judge.visual_offset_auto_adjust;
+            true
         }
         SettingsEntryId::JudgeAlgorithm => {
             cycle_enum(delta, profile.judge.judge_algorithm, cycle_judge_algorithm)
@@ -818,6 +831,16 @@ mod tests {
         let mut profile = ProfileConfig::new_default("default", "Default", 0);
         assert!(adjust_settings_value(&mut profile, SettingsEntryId::InputOffsetMs, 3));
         assert_eq!(profile.judge.input_offset_us, 3_000);
+    }
+
+    #[test]
+    fn visual_offset_auto_adjust_toggles() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 0);
+        assert!(SettingsEntryId::JUDGE_ENTRIES.contains(&SettingsEntryId::VisualOffsetAutoAdjust));
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::VisualOffsetAutoAdjust), "OFF");
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::VisualOffsetAutoAdjust, 1));
+        assert!(profile.judge.visual_offset_auto_adjust);
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::VisualOffsetAutoAdjust), "ON");
     }
 
     #[test]

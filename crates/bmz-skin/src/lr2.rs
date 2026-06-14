@@ -451,7 +451,7 @@ impl<'a> CsvBuilder<'a> {
             return;
         };
         let id = self.alloc_id("lr2-image");
-        self.images.push(json!({
+        let mut image = json!({
             "id": id,
             "src": region.src,
             "x": region.x,
@@ -462,7 +462,12 @@ impl<'a> CsvBuilder<'a> {
             "divy": region.divy,
             "cycle": region.cycle,
             "timer": region.timer,
-        }));
+        });
+        if line.command == "SRC_BUTTON" {
+            image["act"] = json!(values[11]);
+            image["click"] = json!(values[12]);
+        }
+        self.images.push(image);
         self.current = Some(CurrentObject { id });
     }
 

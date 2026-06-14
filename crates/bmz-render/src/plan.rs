@@ -939,6 +939,7 @@ fn plan_play(
         projected_best_ex_score: snapshot.projected_best_ex_score,
         target_ex_score: snapshot.target_ex_score,
         judge_timing_offset_ms: snapshot.judge_timing_offset_ms,
+        judge_timing_auto_adjust: snapshot.judge_timing_auto_adjust,
         main_bpm: snapshot.main_bpm,
         hsfix_index: snapshot.hsfix_index,
         fs_threshold_ms: snapshot.fs_threshold_ms,

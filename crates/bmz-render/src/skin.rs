@@ -1963,6 +1963,8 @@ pub struct SkinDrawState {
     pub target_ex_score: Option<u32>,
     /// 判定タイミングオフセット設定値 ms (NUMBER_JUDGETIMING=12 に使用、beatoraja の judgetiming 設定)。
     pub judge_timing_offset_ms: i32,
+    /// beatoraja IndexType.notesdisplaytimingautoadjust (number/event id 75).
+    pub judge_timing_auto_adjust: bool,
     /// 選曲画面の表示曲数 (NUMBER_SELECT_BAR_COUNT=300 相当)。
     pub select_chart_count: u32,
     /// 現在の描画状態が選曲画面かどうか。番号 ref の一部は scene ごとに意味が違う。
@@ -2196,6 +2198,7 @@ impl Default for SkinDrawState {
             best_clear_index: None,
             target_ex_score: None,
             judge_timing_offset_ms: 0,
+            judge_timing_auto_adjust: false,
             select_chart_count: 0,
             select_screen: false,
             select_scroll_progress: 0.0,
@@ -3797,6 +3800,7 @@ impl SkinDocument {
             select_target_index: select_target_index(&snapshot.target),
             select_bga_index: select_bga_index(&snapshot.bga),
             judge_timing_offset_ms: snapshot.judge_timing_offset_ms,
+            judge_timing_auto_adjust: snapshot.judge_timing_auto_adjust,
             select_assist_index: select_assist_index(&snapshot.assist),
             select_mode_index: select_mode_index(&snapshot.select_mode),
             select_sort_index: select_sort_index(&snapshot.select_sort),
@@ -6425,6 +6429,7 @@ fn skin_state_imageset_index(ref_id: i32, state: &SkinDrawState) -> Option<usize
         41 => Some(state.select_target_index),
         42 => Some(arrange_ref_index(state)),
         43 => Some(arrange_2p_ref_index(state)),
+        75 => Some(usize::from(state.judge_timing_auto_adjust)),
         ref_id if random_lane_ref_slot(ref_id).is_some() => {
             skin_random_lane_ref_number(ref_id, state).map(|value| value.max(0) as usize)
         }
@@ -7636,7 +7641,7 @@ fn display_signed_number_digits_with_row_order(
     let negative_row = if negative_first { 0 } else { divx as u8 };
     let positive_row = if negative_first { divx as u8 } else { 0 };
     let row_offset = if value < 0 { negative_row } else { positive_row };
-    let inner_width = max_digits.saturating_sub(1);
+    let inner_width = max_digits;
     let abs = value.unsigned_abs();
     let abs_text = if zero_pad && inner_width > 0 {
         format!("{:0width$}", abs, width = inner_width)
@@ -7666,7 +7671,7 @@ fn value_uses_negative_first_signed_rows(value: &SkinValueDef) -> bool {
 /// `ref_id` が符号付き表示を要求する Result 系 ref か。
 /// beatoraja の `NUMBER_DIFF_*` 系と次 DJ LEVEL までの差分を対象とする。
 fn ref_id_is_signed(ref_id: i32) -> bool {
-    matches!(ref_id, 152 | 153 | 154 | 172 | 175 | 178)
+    matches!(ref_id, 12 | 152 | 153 | 154 | 172 | 175 | 178)
 }
 
 fn value_ref_is_signed_for_state(ref_id: i32, state: &SkinDrawState) -> bool {
@@ -7793,6 +7798,7 @@ fn skin_state_event_index(event_id: i32, state: &SkinDrawState) -> i32 {
         43 => arrange_2p_ref_index(state) as i32,
         54 => state.select_double_option_index as i32,
         55 if state.select_screen => state.select_hs_fix_index as i32,
+        75 => i32::from(state.judge_timing_auto_adjust),
         SKIN_EVENT_HSFIX => state.hsfix_index,
         _ => 0,
     }
@@ -8554,11 +8560,19 @@ fn skin_image_texture_region_for_state(
     let divy = image.divy.max(1);
     let frame_count = divx * divy;
 
-    // ref_id が指定されている画像は「ref 値 = 行」「cycle = 列のサブアニメ」と解釈する。
-    // ref 値が解決できない場合 (state 未提供 or 値 None) は行 0 にフォールバックし、
+    // ref_id / act が指定されている画像は「状態値 = 行」「cycle = 列のサブアニメ」と解釈する。
+    // 値が解決できない場合 (state 未提供 or 値 None) は行 0 にフォールバックし、
     // 全フレームを順次再生する cycle モードへは落とさない（高速点滅を防ぐため）。
-    let frame_index = if image.ref_id != 0 {
-        let row = state.and_then(|s| skin_image_ref_number(image.ref_id, s)).unwrap_or(0);
+    let frame_index = if image.ref_id != 0 || image.act.is_some() {
+        let row = state
+            .and_then(|s| {
+                if image.ref_id != 0 {
+                    skin_image_ref_number(image.ref_id, s)
+                } else {
+                    image.act.map(|event_id| skin_state_event_index(event_id, s) as i64)
+                }
+            })
+            .unwrap_or(0);
         let max_row = if image.len > 0 { image.len.min(divy) } else { divy };
         let row = row.clamp(0, (max_row - 1).max(0) as i64) as i32;
         let col = if image.cycle > 0 && divx > 1 {
@@ -8591,6 +8605,7 @@ fn skin_image_ref_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         43 => Some(arrange_2p_ref_index(state) as i64),
         54 => Some(state.select_double_option_index as i64),
         55 => Some(state.select_hs_fix_index as i64),
+        75 => Some(i64::from(state.judge_timing_auto_adjust)),
         ref_id if random_lane_ref_slot(ref_id).is_some() => {
             skin_random_lane_ref_number(ref_id, state)
         }
@@ -17037,6 +17052,38 @@ mod tests {
     }
 
     #[test]
+    fn judge_timing_value_digit_counts_numeric_digits_after_sign() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "value": [{ "id": "judgetiming", "src": 1, "x": 0, "y": 0, "w": 120, "h": 20, "divx": 12, "divy": 2, "digit": 2, "ref": 12 }],
+                "destination": [{ "id": "judgetiming", "dst": [{ "x": 0, "y": 0, "w": 10, "h": 10 }] }]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = mock_source("1", 120.0, 40.0);
+        let state = SkinDrawState { judge_timing_offset_ms: 12, ..SkinDrawState::default() };
+
+        let items = document.static_image_render_items(&sources, &state);
+        let digit_uvs: Vec<f32> = items
+            .iter()
+            .filter_map(|item| match item {
+                SkinRenderItem::Image { uv, .. } => Some(uv.x),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(digit_uvs.len(), 3);
+        assert!(approx_eq(digit_uvs[0], 11.0 / 12.0), "first cell should be plus sign");
+        assert!(approx_eq(digit_uvs[1], 1.0 / 12.0), "second cell should be tens digit");
+        assert!(approx_eq(digit_uvs[2], 2.0 / 12.0), "third cell should be ones digit");
+    }
+
+    #[test]
     fn select_draw_state_uses_select_judge_timing_offset() {
         let document: SkinDocument = serde_json::from_str(r#"{ "type": 5 }"#).unwrap();
         let snapshot = SelectSnapshot {
@@ -18795,6 +18842,7 @@ mod tests {
         assert_eq!(skin_state_number(72, &state), Some(200));
         assert_eq!(skin_state_number(74, &state), Some(100));
         assert_eq!(skin_state_number(75, &state), Some(45));
+        assert_eq!(skin_state_number(105, &state), Some(45));
         assert_eq!(skin_state_number(76, &state), Some(7));
         assert_eq!(skin_state_number(102, &state), Some(83));
         assert_eq!(skin_state_number(103, &state), Some(50));
@@ -19440,6 +19488,7 @@ mod tests {
         assert_eq!(skin_state_number(370, &state), Some(5));
         assert_eq!(skin_state_number(74, &state), Some(1200));
         assert_eq!(skin_state_number(75, &state), Some(345));
+        assert_eq!(skin_state_number(105, &state), Some(345));
         assert_eq!(skin_state_number(76, &state), Some(12));
         assert_eq!(skin_state_number(425, &state), Some(8));
         assert_eq!(skin_state_number(90, &state), Some(180));
@@ -19532,6 +19581,7 @@ mod tests {
             select_gauge_index: 4,
             select_target_index: 3,
             select_bga_index: 1,
+            judge_timing_auto_adjust: true,
             ..SkinDrawState::default()
         };
 
@@ -19541,6 +19591,7 @@ mod tests {
         assert_eq!(skin_state_imageset_index(55, &state), Some(4));
         assert_eq!(skin_state_imageset_index(40, &state), Some(4));
         assert_eq!(skin_state_imageset_index(41, &state), Some(3));
+        assert_eq!(skin_state_imageset_index(75, &state), Some(1));
         assert_eq!(skin_state_imageset_index(72, &state), Some(1));
         assert_eq!(skin_state_imageset_index(301, &state), Some(0));
         assert_eq!(skin_state_imageset_index(500, &state), None);
@@ -19569,6 +19620,7 @@ mod tests {
             select_arrange_2p_index: 6,
             select_double_option_index: 2,
             select_hs_fix_index: 3,
+            judge_timing_auto_adjust: true,
             ..SkinDrawState::default()
         };
 
@@ -19576,6 +19628,7 @@ mod tests {
         assert_eq!(skin_image_ref_number(43, &state), Some(6));
         assert_eq!(skin_image_ref_number(54, &state), Some(2));
         assert_eq!(skin_image_ref_number(55, &state), Some(3));
+        assert_eq!(skin_image_ref_number(75, &state), Some(1));
         assert_eq!(skin_state_number(42, &state), Some(9));
         assert_eq!(skin_state_number(43, &state), Some(6));
         assert_eq!(skin_state_number(54, &state), Some(2));
@@ -19584,6 +19637,46 @@ mod tests {
         assert_eq!(skin_state_event_index(43, &state), 6);
         assert_eq!(skin_state_event_index(54, &state), 2);
         assert_eq!(skin_state_event_index(55, &state), 3);
+        assert_eq!(skin_state_event_index(75, &state), 1);
+    }
+
+    #[test]
+    fn skin_image_act_uses_event_index_for_button_frame_row() {
+        let image = SkinImageDef {
+            id: "auto-judge".to_string(),
+            src: "1".to_string(),
+            x: 0,
+            y: 0,
+            w: 68,
+            h: 99,
+            divx: 1,
+            divy: 3,
+            timer: None,
+            cycle: 0,
+            len: 0,
+            ref_id: 0,
+            click: 0,
+            act: Some(75),
+        };
+        let source_size = SkinImageSize { width: 68.0, height: 99.0 };
+        let off = skin_image_texture_region_for_state(
+            &image,
+            source_size,
+            0,
+            Some(&SkinDrawState::default()),
+            (0, 0, 68, 99),
+        );
+        let on = skin_image_texture_region_for_state(
+            &image,
+            source_size,
+            0,
+            Some(&SkinDrawState { judge_timing_auto_adjust: true, ..SkinDrawState::default() }),
+            (0, 0, 68, 99),
+        );
+
+        assert!(approx_eq(off.y, 0.0));
+        assert!(approx_eq(on.y, 1.0 / 3.0));
+        assert!(approx_eq(on.height, 1.0 / 3.0));
     }
 
     #[test]

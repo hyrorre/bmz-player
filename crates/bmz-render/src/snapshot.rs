@@ -204,6 +204,7 @@ pub struct RenderSnapshot {
     pub projected_best_ex_score: Option<u32>,
     pub target_ex_score: Option<u32>,
     pub judge_timing_offset_ms: i32,
+    pub judge_timing_auto_adjust: bool,
     /// beatoraja `NUMBER_MAINBPM` (92) 用の代表 BPM。
     pub main_bpm: f32,
     /// beatoraja `event_index(BUTTON_HSFIX=55)`。

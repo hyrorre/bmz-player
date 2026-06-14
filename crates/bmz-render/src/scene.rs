@@ -60,6 +60,7 @@ pub struct SelectSnapshot {
     pub grade_diff_display: ResultGradeDiffDisplay,
     /// Select detail option panelで表示する判定表示オフセット(ms)。
     pub judge_timing_offset_ms: i32,
+    pub judge_timing_auto_adjust: bool,
     pub master_volume: f32,
     pub key_volume: f32,
     pub bgm_volume: f32,
@@ -142,6 +143,7 @@ impl Default for SelectSnapshot {
             bga: String::new(),
             grade_diff_display: ResultGradeDiffDisplay::default(),
             judge_timing_offset_ms: 0,
+            judge_timing_auto_adjust: false,
             master_volume: 0.0,
             key_volume: 0.0,
             bgm_volume: 0.0,

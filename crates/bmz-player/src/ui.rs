@@ -1973,6 +1973,7 @@ fn build_profile_settings_panel(
                 egui::CollapsingHeader::new("判定").show(ui, |ui| {
                     offset_ms_slider(ui, &mut profile.judge.input_offset_us, "入力オフセット");
                     offset_ms_slider(ui, &mut profile.judge.visual_offset_us, "表示オフセット");
+                    ui.checkbox(&mut profile.judge.visual_offset_auto_adjust, "自動判定調整");
                     egui::ComboBox::from_label("判定アルゴリズム")
                         .selected_text(judge_algorithm_label(profile.judge.judge_algorithm))
                         .show_ui(ui, |ui| {

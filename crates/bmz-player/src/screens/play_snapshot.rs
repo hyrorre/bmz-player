@@ -218,7 +218,8 @@ pub fn build_render_snapshot_with_target_and_bga_frames(
         best_ex_score,
         projected_best_ex_score,
         target_ex_score,
-        judge_timing_offset_ms: (session.offsets.input_offset_us / 1_000) as i32,
+        judge_timing_offset_ms: (session.offsets.visual_offset_us / 1_000) as i32,
+        judge_timing_auto_adjust: session.input_offset_auto_adjust_enabled,
         main_bpm: session.chart.metadata.initial_bpm as f32,
         hsfix_index: session.hsfix_index,
         fs_threshold_ms: rm_skin_fs_threshold_ms(
@@ -1462,17 +1463,17 @@ mod tests {
     }
 
     #[test]
-    fn build_render_snapshot_derives_judge_timing_offset_from_session() {
+    fn build_render_snapshot_derives_judge_timing_offset_from_visual_offset() {
         use bmz_gameplay::session::PlayOffsets;
 
         let profile = ProfileConfig::new_default("default", "Default", 1);
         let mut session =
             build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
-        session.offsets = PlayOffsets { input_offset_us: 3_000, visual_offset_us: 0 };
+        session.offsets = PlayOffsets { input_offset_us: 3_000, visual_offset_us: 4_000 };
 
         let snapshot = build_render_snapshot(&session, TimeUs(0), &[], None);
 
-        assert_eq!(snapshot.judge_timing_offset_ms, 3);
+        assert_eq!(snapshot.judge_timing_offset_ms, 4);
     }
 
     #[test]
