@@ -1247,6 +1247,9 @@ enum SettingsListAction {
     Remove(usize),
 }
 
+const SETTINGS_LIST_BUTTONS_WIDTH: f32 = 176.0;
+const SETTINGS_LIST_MIN_LABEL_WIDTH: f32 = 96.0;
+
 fn apply_settings_list_action<T>(items: &mut Vec<T>, action: SettingsListAction) {
     match action {
         SettingsListAction::MoveUp(index) if index > 0 && index < items.len() => {
@@ -1260,6 +1263,15 @@ fn apply_settings_list_action<T>(items: &mut Vec<T>, action: SettingsListAction)
         }
         _ => {}
     }
+}
+
+fn settings_list_label_width(ui: &egui::Ui) -> f32 {
+    (ui.available_width() - SETTINGS_LIST_BUTTONS_WIDTH).max(SETTINGS_LIST_MIN_LABEL_WIDTH)
+}
+
+fn settings_list_label(ui: &mut egui::Ui, text: &str, width: f32) {
+    ui.add_sized([width, ui.spacing().interact_size.y], egui::Label::new(text).truncate())
+        .on_hover_text(text);
 }
 
 /// `AppConfig` を編集する本体設定パネル。
@@ -1284,26 +1296,35 @@ fn build_settings_panel(
                         let root_len = config.songs.roots.len();
                         for (index, root) in config.songs.roots.iter_mut().enumerate() {
                             ui.push_id(index, |ui| {
+                                let label_width = settings_list_label_width(ui);
                                 ui.horizontal(|ui| {
-                                    ui.label(&root.path);
-                                    if ui
-                                        .add_enabled(index > 0, egui::Button::new("上へ"))
-                                        .clicked()
-                                    {
-                                        root_action = Some(SettingsListAction::MoveUp(index));
-                                    }
-                                    if ui
-                                        .add_enabled(
-                                            index + 1 < root_len,
-                                            egui::Button::new("下へ"),
-                                        )
-                                        .clicked()
-                                    {
-                                        root_action = Some(SettingsListAction::MoveDown(index));
-                                    }
-                                    if ui.button("削除").clicked() {
-                                        root_action = Some(SettingsListAction::Remove(index));
-                                    }
+                                    settings_list_label(ui, &root.path, label_width);
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            if ui.button("削除").clicked() {
+                                                root_action =
+                                                    Some(SettingsListAction::Remove(index));
+                                            }
+                                            if ui
+                                                .add_enabled(
+                                                    index + 1 < root_len,
+                                                    egui::Button::new("下へ"),
+                                                )
+                                                .clicked()
+                                            {
+                                                root_action =
+                                                    Some(SettingsListAction::MoveDown(index));
+                                            }
+                                            if ui
+                                                .add_enabled(index > 0, egui::Button::new("上へ"))
+                                                .clicked()
+                                            {
+                                                root_action =
+                                                    Some(SettingsListAction::MoveUp(index));
+                                            }
+                                        },
+                                    );
                                 });
                                 ui.horizontal(|ui| {
                                     ui.checkbox(&mut root.enabled, "有効");
@@ -1400,24 +1421,36 @@ fn build_settings_panel(
                     let table_len = config.tables.sources.len();
                     for (index, source) in config.tables.sources.iter_mut().enumerate() {
                         ui.push_id(("table_source", index), |ui| {
+                            let label_width = settings_list_label_width(ui);
                             ui.horizontal(|ui| {
                                 ui.checkbox(&mut source.enabled, "");
-                                ui.label(&source.url);
-                                if ui
-                                    .add_enabled(index > 0, egui::Button::new("上へ"))
-                                    .clicked()
-                                {
-                                    table_action = Some(SettingsListAction::MoveUp(index));
-                                }
-                                if ui
-                                    .add_enabled(index + 1 < table_len, egui::Button::new("下へ"))
-                                    .clicked()
-                                {
-                                    table_action = Some(SettingsListAction::MoveDown(index));
-                                }
-                                if ui.button("削除").clicked() {
-                                    table_action = Some(SettingsListAction::Remove(index));
-                                }
+                                let label_width =
+                                    (label_width - ui.spacing().interact_size.x).max(64.0);
+                                settings_list_label(ui, &source.url, label_width);
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        if ui.button("削除").clicked() {
+                                            table_action = Some(SettingsListAction::Remove(index));
+                                        }
+                                        if ui
+                                            .add_enabled(
+                                                index + 1 < table_len,
+                                                egui::Button::new("下へ"),
+                                            )
+                                            .clicked()
+                                        {
+                                            table_action =
+                                                Some(SettingsListAction::MoveDown(index));
+                                        }
+                                        if ui
+                                            .add_enabled(index > 0, egui::Button::new("上へ"))
+                                            .clicked()
+                                        {
+                                            table_action = Some(SettingsListAction::MoveUp(index));
+                                        }
+                                    },
+                                );
                             });
                         });
                     }
