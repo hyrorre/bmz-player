@@ -3226,12 +3226,14 @@ mod tests {
                     ResultGaugeGraphPoint {
                         time_ms: 0,
                         value: 20.0,
+                        max: 100.0,
                         border: 80.0,
                         gauge_type: bmz_core::clear::GaugeType::Normal as i32,
                     },
                     ResultGaugeGraphPoint {
                         time_ms: 1_000,
                         value: 90.0,
+                        max: 100.0,
                         border: 80.0,
                         gauge_type: bmz_core::clear::GaugeType::Normal as i32,
                     },

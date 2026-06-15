@@ -295,7 +295,12 @@ impl GaugeState {
     }
 
     fn best_auto_shift_clear_gauge(&self) -> Option<&SingleGaugeState> {
+        let bottom_rank = auto_shift_result_rank(self.original)
+            .min(auto_shift_result_rank(self.bottom_shiftable_gauge));
         AUTO_SHIFT_RESULT_ORDER.iter().find_map(|gauge_type| {
+            if auto_shift_result_rank(*gauge_type) < bottom_rank {
+                return None;
+            }
             if self.auto_shift_mode == GaugeAutoShiftMode::SelectToUnder
                 && auto_shift_result_rank(*gauge_type) > auto_shift_result_rank(self.original)
             {
@@ -1629,5 +1634,31 @@ mod tests {
         gauge.apply_judge(Judge::Poor, 1.0);
 
         assert_eq!(gauge.selected, GaugeType::Normal);
+    }
+
+    #[test]
+    fn auto_shift_result_respects_bottom_shiftable_gauge() {
+        let mut gauge = GaugeState::new_with_auto_shift(
+            GaugeType::ExHard,
+            GaugeAutoShiftMode::BestClear,
+            160.0,
+            1000,
+        );
+        gauge.set_bottom_shiftable_gauge(GaugeType::Normal);
+        for gauge in &mut gauge.gauges {
+            gauge.value = 0.0;
+        }
+        gauge
+            .gauges
+            .iter_mut()
+            .find(|gauge| gauge.definition.gauge_type == GaugeType::AssistEasy)
+            .unwrap()
+            .value = 100.0;
+        gauge.selected = GaugeType::Normal;
+
+        let result_gauge = gauge.result_gauge();
+
+        assert_eq!(result_gauge.definition.gauge_type, GaugeType::Normal);
+        assert!(!result_gauge.is_qualified());
     }
 }

@@ -10,6 +10,7 @@ use crate::skin_offset::SkinOffsetValues;
 pub struct ResultGaugeGraphPoint {
     pub time_ms: i32,
     pub value: f32,
+    pub max: f32,
     pub border: f32,
     pub gauge_type: i32,
 }
@@ -170,6 +171,8 @@ pub struct RenderSnapshot {
     pub fast_slow_counts: FastSlowJudgeCounts,
     pub gauge: f32,
     pub gauge_type: i32,
+    /// Per-gauge values captured from the running play state for result gaugegraph switching.
+    pub gauge_graph_points: Vec<ResultGaugeGraphPoint>,
     /// Gauge Auto Shift が有効なプレイかどうか。
     pub gauge_auto_shift: bool,
     /// 現在ゲージの上限 (beatoraja `GaugeElementProperty.max`)。

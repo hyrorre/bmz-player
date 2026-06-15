@@ -5512,13 +5512,28 @@ impl SkinDocument {
         state: &SkinDrawState,
         points: &[crate::snapshot::ResultGaugeGraphPoint],
     ) -> Vec<SkinRenderItem> {
+        let filtered_points;
+        let points = if let Some(gauge_type) = state.result_gauge_graph_type {
+            filtered_points = points
+                .iter()
+                .copied()
+                .filter(|point| point.gauge_type == gauge_type)
+                .collect::<Vec<_>>();
+            if filtered_points.is_empty() { points } else { filtered_points.as_slice() }
+        } else {
+            points
+        };
         if points.is_empty() {
             return Vec::new();
         }
         let rect = normalize_skin_frame_rect(frame, self.w, self.h);
         let frame_alpha = frame.a as f32 / 255.0;
         let blend = if destination.blend == 2 { BlendMode::Add } else { BlendMode::Normal };
-        let max = state.gauge_max.max(1.0);
+        let max = points
+            .iter()
+            .find_map(|point| (point.max > 0.0).then_some(point.max))
+            .unwrap_or(state.gauge_max)
+            .max(1.0);
         let display_gauge_type = state.result_gauge_graph_type.unwrap_or_else(|| {
             points.last().map(|point| point.gauge_type).unwrap_or(state.gauge_type)
         });

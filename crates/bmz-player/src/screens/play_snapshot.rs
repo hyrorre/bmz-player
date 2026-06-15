@@ -16,8 +16,8 @@ use bmz_render::plan::CHART_BGA_TEXTURE_BASE;
 use bmz_render::skin_offset::{SkinOffsetValue, SkinOffsetValues};
 use bmz_render::snapshot::{
     DisplayBgaFrame, DisplayInput, DisplayJudgeCounts, DisplayJudgement, LongBodyState,
-    NoteVisualKind, OverlaySnapshot, RenderSnapshot, VisibleBarLine, VisibleLongNote, VisibleMine,
-    VisibleNote,
+    NoteVisualKind, OverlaySnapshot, RenderSnapshot, ResultGaugeGraphPoint, VisibleBarLine,
+    VisibleLongNote, VisibleMine, VisibleNote,
 };
 
 pub const DEFAULT_LOOKAHEAD_US: i64 = 2_000_000;
@@ -136,6 +136,19 @@ pub fn build_render_snapshot_with_target_and_bga_frames(
     let projected_best_ex_score =
         best_ghost.map(|ghost| ghost_ex_score_at_progress(ghost, session.score.past_notes));
     let play_elapsed_time = if render_now.0 < 0 { TimeUs(0) } else { render_now };
+    let gauge_graph_time_ms = (render_now.0.max(0) / 1_000).clamp(0, i32::MAX as i64) as i32;
+    let gauge_graph_points = session
+        .gauge
+        .gauges
+        .iter()
+        .map(|gauge| ResultGaugeGraphPoint {
+            time_ms: gauge_graph_time_ms,
+            value: gauge.value,
+            max: gauge.definition.max,
+            border: gauge.definition.border,
+            gauge_type: gauge.definition.gauge_type as i32,
+        })
+        .collect();
     let mut snapshot = RenderSnapshot {
         time: render_now,
         play_elapsed_time,
@@ -161,6 +174,7 @@ pub fn build_render_snapshot_with_target_and_bga_frames(
         fast_slow_counts: display_fast_slow_counts(session),
         gauge: session.gauge.current().value,
         gauge_type: session.gauge.current().definition.gauge_type as i32,
+        gauge_graph_points,
         gauge_auto_shift: session.gauge.auto_shift,
         gauge_max: session.gauge.current().definition.max,
         gauge_border: session.gauge.current().definition.border,

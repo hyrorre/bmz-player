@@ -1197,6 +1197,7 @@ fn debug_boot_result_graph(duration_ms: i32) -> bmz_render::snapshot::ResultGrap
             .map(|index| bmz_render::snapshot::ResultGaugeGraphPoint {
                 time_ms: index * 10_000,
                 value: (100.0 - index as f32 * 3.2).max(12.0),
+                max: 100.0,
                 border: 20.0,
                 gauge_type: GaugeType::Normal as i32,
             })
@@ -12395,6 +12396,7 @@ mod tests {
                     gauge_points: vec![bmz_render::snapshot::ResultGaugeGraphPoint {
                         time_ms: duration_ms,
                         value: 80.0,
+                        max: 100.0,
                         border: 20.0,
                         gauge_type: GaugeType::Normal as i32,
                     }],
