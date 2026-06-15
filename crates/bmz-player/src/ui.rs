@@ -39,6 +39,48 @@ use crate::storage::score_import::{ScoreImportKind, ScoreImportRequest};
 /// スキンが宣言する設定可能項目の定義 (1 シーン分)。
 ///
 /// renderer が保持する `SkinDocument` から複製して egui パネルへ渡す。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SkinReloadRequest {
+    pub select: bool,
+    pub decide: bool,
+    pub result: bool,
+    pub play5: bool,
+    pub play7: bool,
+    pub play9: bool,
+    pub play10: bool,
+    pub play14: bool,
+    pub offsets: bool,
+}
+
+impl SkinReloadRequest {
+    pub fn any_reload(self) -> bool {
+        self.select
+            || self.decide
+            || self.result
+            || self.play5
+            || self.play7
+            || self.play9
+            || self.play10
+            || self.play14
+    }
+
+    pub fn any(self) -> bool {
+        self.any_reload() || self.offsets
+    }
+
+    pub fn union(&mut self, other: Self) {
+        self.select |= other.select;
+        self.decide |= other.decide;
+        self.result |= other.result;
+        self.play5 |= other.play5;
+        self.play7 |= other.play7;
+        self.play9 |= other.play9;
+        self.play10 |= other.play10;
+        self.play14 |= other.play14;
+        self.offsets |= other.offsets;
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct SceneSkinDefs {
     pub property: Vec<SkinPropertyDef>,
@@ -211,8 +253,8 @@ pub struct EguiOutput {
     pub save_profile_config: bool,
     /// profile.toml からスキン設定を再読込して未保存変更を戻す要求。
     pub reset_skin_config: bool,
-    /// スキン設定値が変更されたか。app 側でデバウンスして再読込へつなぐ。
-    pub skin_config_changed: bool,
+    /// スキン設定値のうち、再読込や即時反映が必要な対象。
+    pub skin_reload_request: SkinReloadRequest,
     /// デバッグ表示パネルの現在の開閉状態。
     /// profile config の `ui.show_fps` へ同期し、終了時に永続化される。
     pub debug_panel_visible: bool,
@@ -556,7 +598,7 @@ impl EguiLayer {
         let mut save_app_config = false;
         let mut save_profile_config = false;
         let mut reset_skin_config = false;
-        let mut skin_config_changed = false;
+        let mut skin_reload_request = SkinReloadRequest::default();
         let mut trigger_song_rescan = false;
         let mut score_import_request = None;
         let mut apply_audio_output = false;
@@ -634,7 +676,7 @@ impl EguiLayer {
                 );
                 save_profile_config |= skin_actions.save;
                 reset_skin_config |= skin_actions.reset;
-                skin_config_changed |= skin_actions.changed;
+                skin_reload_request.union(skin_actions.reload);
             }
         });
         self.state.handle_platform_output(window, full_output.platform_output);
@@ -648,7 +690,7 @@ impl EguiLayer {
             save_app_config,
             save_profile_config,
             reset_skin_config,
-            skin_config_changed,
+            skin_reload_request,
             debug_panel_visible: *show_debug,
             trigger_song_rescan,
             score_import_request,
@@ -2769,8 +2811,8 @@ struct SkinPanelActions {
     save: bool,
     /// 「リセット」ボタンが押された (profile.toml の値へ戻す)。
     reset: bool,
-    /// パネル内のスキン設定が変更された。
-    changed: bool,
+    /// パネル内のスキン設定変更に対して必要な反映対象。
+    reload: SkinReloadRequest,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2783,6 +2825,60 @@ enum SkinSlot {
     Play10,
     Play14,
     Result,
+}
+
+fn skin_reload_request_from_diff(before: &SkinConfig, after: &SkinConfig) -> SkinReloadRequest {
+    let mut request = SkinReloadRequest::default();
+    if before.select != after.select
+        || before.select_options != after.select_options
+        || before.select_files != after.select_files
+    {
+        request.select = true;
+    }
+    if before.decide != after.decide
+        || before.decide_options != after.decide_options
+        || before.decide_files != after.decide_files
+    {
+        request.decide = true;
+    }
+    if before.play5 != after.play5
+        || before.play5_options != after.play5_options
+        || before.play5_files != after.play5_files
+    {
+        request.play5 = true;
+    }
+    if before.play7 != after.play7
+        || before.play7_options != after.play7_options
+        || before.play7_files != after.play7_files
+    {
+        request.play7 = true;
+    }
+    if before.play9 != after.play9
+        || before.play9_options != after.play9_options
+        || before.play9_files != after.play9_files
+    {
+        request.play9 = true;
+    }
+    if before.play10 != after.play10
+        || before.play10_options != after.play10_options
+        || before.play10_files != after.play10_files
+    {
+        request.play10 = true;
+    }
+    if before.play14 != after.play14
+        || before.play14_options != after.play14_options
+        || before.play14_files != after.play14_files
+    {
+        request.play14 = true;
+    }
+    if before.result != after.result
+        || before.result_options != after.result_options
+        || before.result_files != after.result_files
+    {
+        request.result = true;
+    }
+    request.offsets = before.offsets != after.offsets;
+    request
 }
 
 fn skin_path_combo(
@@ -2931,6 +3027,7 @@ fn build_skin_panel(
     let mut save_clicked = false;
     let mut reset_clicked = false;
     let mut changed = false;
+    let before_skin = skin.clone();
     sized_panel_window("スキン設定", ctx, open, 440.0, 560.0, egui::pos2(16.0, 480.0)).show(
         ctx,
         |ui| {
@@ -3069,7 +3166,12 @@ fn build_skin_panel(
             });
         },
     );
-    SkinPanelActions { save: save_clicked, reset: reset_clicked, changed }
+    let reload = if changed {
+        skin_reload_request_from_diff(&before_skin, skin)
+    } else {
+        Default::default()
+    };
+    SkinPanelActions { save: save_clicked, reset: reset_clicked, reload }
 }
 
 /// 1 シーン分のスキン設定可能項目を折りたたみ表示・編集する。
@@ -3092,7 +3194,7 @@ fn build_scene_skin_defs(
             ui.label("設定可能項目はありません (スキン未読込、または定義なし)。");
             return;
         }
-        changed |= fill_missing_skin_defaults(defs, skin_root, options, files);
+        let _ = fill_missing_skin_defaults(defs, skin_root, options, files);
         if !defs.property.is_empty() {
             ui.strong("オプション");
             // property / filepath は同名 (例: "シャッター") を持ちうるので、egui の
@@ -3764,5 +3866,33 @@ mod tests {
         assert_eq!(skin.play7_options.get("Judge").map(String::as_str), Some("On"));
         assert_eq!(skin.play7_files.get("Notes").map(String::as_str), Some("default.png"));
         assert_eq!(skin.offsets, vec![SkinOffsetConfig { id: 32, x: 12, ..Default::default() }]);
+    }
+
+    #[test]
+    fn skin_reload_diff_scopes_play_slot_without_select_reload() {
+        let before = SkinConfig::default();
+        let mut after = before.clone();
+        after.play7_files.insert("Notes".to_string(), "blue.png".to_string());
+
+        let request = skin_reload_request_from_diff(&before, &after);
+
+        assert!(request.play7);
+        assert!(!request.select);
+        assert!(!request.play5);
+        assert!(!request.result);
+        assert!(request.any_reload());
+    }
+
+    #[test]
+    fn skin_reload_diff_marks_offsets_without_texture_reload() {
+        let before = SkinConfig::default();
+        let mut after = before.clone();
+        after.offsets.push(SkinOffsetConfig { id: 32, x: 1, ..Default::default() });
+
+        let request = skin_reload_request_from_diff(&before, &after);
+
+        assert!(request.offsets);
+        assert!(!request.any_reload());
+        assert!(request.any());
     }
 }

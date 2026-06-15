@@ -118,7 +118,8 @@ use crate::storage::scan::{ScanProgress, ScanReport};
 use crate::storage::score_db::ScoreDatabase;
 use crate::storage::score_import::{ScoreImportRequest, import_scores};
 use crate::ui::{
-    DebugInfo, EguiLayer, EguiRunContext, SceneSkinDefs, SkinCandidate, SkinCatalog, SkinConfigMeta,
+    DebugInfo, EguiLayer, EguiRunContext, SceneSkinDefs, SkinCandidate, SkinCatalog,
+    SkinConfigMeta, SkinReloadRequest,
 };
 use bmz_render::skin::{
     DestinationListEntry, SkinAnimationDef, SkinClickHit, SkinClickTarget, SkinDestinationDef,
@@ -364,8 +365,9 @@ struct WinitApp {
     pending_decide_skin: bool,
     pending_play_skin: bool,
     pending_result_skin: bool,
-    skin_reload_generation: u64,
+    skin_reload_generations: SkinReloadGenerations,
     pending_skin_reload_at: Option<Instant>,
+    pending_skin_reload_request: SkinReloadRequest,
     /// 直近 install をリクエストしたプレイスキンの key_mode と設定 fingerprint。
     /// 同じ mode かつ同じ path/options/files なら再 decode をスキップする。
     last_play_skin_signature: Option<PlaySkinSignature>,
@@ -654,6 +656,36 @@ fn fmt_profile_ms(total_us: u128, frames: u128) -> String {
 }
 
 type PlaySkinSignature = (KeyMode, String, BTreeMap<String, String>, BTreeMap<String, String>);
+
+#[derive(Debug, Clone, Copy, Default)]
+struct SkinReloadGenerations {
+    select: u64,
+    decide: u64,
+    play: u64,
+    result: u64,
+}
+
+impl SkinReloadGenerations {
+    fn current(self, kind: SkinKind) -> u64 {
+        match kind {
+            SkinKind::Select => self.select,
+            SkinKind::Decide => self.decide,
+            SkinKind::Play => self.play,
+            SkinKind::Result => self.result,
+        }
+    }
+
+    fn bump(&mut self, kind: SkinKind) -> u64 {
+        let generation = match kind {
+            SkinKind::Select => &mut self.select,
+            SkinKind::Decide => &mut self.decide,
+            SkinKind::Play => &mut self.play,
+            SkinKind::Result => &mut self.result,
+        };
+        *generation = generation.wrapping_add(1);
+        *generation
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SelectMetaImageSlot {
@@ -1484,8 +1516,9 @@ impl WinitApp {
             pending_play_skin,
             pending_result_skin,
             last_play_skin_signature: None,
-            skin_reload_generation: 0,
+            skin_reload_generations: SkinReloadGenerations::default(),
             pending_skin_reload_at: None,
+            pending_skin_reload_request: SkinReloadRequest::default(),
             system_audio,
             system_sound,
             select_exit_hold_started_at: None,
@@ -6976,12 +7009,13 @@ impl WinitApp {
     /// ここではハンドル挿入・フォント登録・SkinContext 構築のみ (軽量)。
     fn apply_uploaded_skin(&mut self, pending: PendingUploadResult) {
         let PendingUploadResult { generation, path, kind, uploaded } = pending;
-        if generation != self.skin_reload_generation {
+        let current_generation = self.skin_reload_generations.current(kind);
+        if generation != current_generation {
             tracing::debug!(
                 path = %path.display(),
                 kind = ?kind,
                 generation,
-                current = self.skin_reload_generation,
+                current = current_generation,
                 "discarding stale uploaded skin"
             );
             return;
@@ -7609,16 +7643,23 @@ impl WinitApp {
         }
         if output.reset_skin_config {
             self.pending_skin_reload_at = None;
+            self.pending_skin_reload_request = SkinReloadRequest::default();
             self.reset_profile_config_from_disk();
-        } else if output.skin_config_changed {
-            self.apply_profile_skin_offsets_to_active_play();
-            self.pending_skin_reload_at = Some(Instant::now() + SKIN_RELOAD_DEBOUNCE);
+        } else if output.skin_reload_request.any() {
+            if output.skin_reload_request.offsets {
+                self.apply_profile_skin_offsets_to_active_play();
+            }
+            if output.skin_reload_request.any_reload() {
+                self.pending_skin_reload_request.union(output.skin_reload_request);
+                self.pending_skin_reload_at = Some(Instant::now() + SKIN_RELOAD_DEBOUNCE);
+            }
         }
         if let Some(reload_at) = self.pending_skin_reload_at
             && Instant::now() >= reload_at
         {
             self.pending_skin_reload_at = None;
-            self.reload_skins();
+            let request = std::mem::take(&mut self.pending_skin_reload_request);
+            self.reload_skins(request);
         }
     }
 
@@ -7680,8 +7721,19 @@ impl WinitApp {
             Ok(profile) => {
                 self.boot.profile_config = profile;
                 self.pending_skin_reload_at = None;
+                self.pending_skin_reload_request = SkinReloadRequest::default();
                 self.apply_profile_skin_offsets_to_active_play();
-                self.reload_skins();
+                self.reload_skins(SkinReloadRequest {
+                    select: true,
+                    decide: true,
+                    result: true,
+                    play5: true,
+                    play7: true,
+                    play9: true,
+                    play10: true,
+                    play14: true,
+                    offsets: true,
+                });
                 tracing::info!("profile config reset from profile.toml");
             }
             Err(error) => {
@@ -7720,14 +7772,13 @@ impl WinitApp {
     ///
     /// 起動時と同じ `load_skin_textures` 経路を使い、JSON スキンは
     /// バックグラウンド decode + 段階 install パイプラインへ流す。
-    fn reload_skins(&mut self) {
+    fn reload_skins(&mut self, request: SkinReloadRequest) {
         let skin = self.boot.profile_config.skin.clone();
-        self.skin_reload_generation = self.skin_reload_generation.wrapping_add(1);
-        let generation = self.skin_reload_generation;
         let (pending_select, pending_decide, pending_result) = reload_skin_textures(
             &mut self.renderer,
             &self.skin_decode_tx,
-            generation,
+            &mut self.skin_reload_generations,
+            request,
             &skin.select,
             &skin.decide,
             &skin.result,
@@ -7738,22 +7789,25 @@ impl WinitApp {
             &skin.decide_files,
             &skin.result_files,
         );
-        self.pending_select_skin = pending_select;
-        self.pending_decide_skin = pending_decide;
-        self.pending_play_skin = false;
-        self.pending_result_skin = pending_result;
-        self.skin_defs_cache.clear();
+        if request.select {
+            self.pending_select_skin = pending_select;
+        }
+        if request.decide {
+            self.pending_decide_skin = pending_decide;
+        }
+        if request.result {
+            self.pending_result_skin = pending_result;
+        }
+        self.invalidate_skin_defs_cache_for_request(request);
         // 旧 generation 分の upload 結果は apply_uploaded_skin の generation
         // チェックで破棄されるため、ここでの明示的なキュー破棄は不要。
-        // プレイスキンも egui 設定パネルからライブ反映する。直近 load 済みの
-        // key_mode があれば、その mode で強制再 decode を投入する。
-        // `spawn_play_skin_decode_for` は signature 一致時に skip するので、
-        // 署名を無効化してから呼び、設定変更を確実に反映させる。
-        if let Some(key_mode) = self.last_play_skin_signature.as_ref().map(|sig| sig.0) {
+        if let Some(key_mode) = self.last_play_skin_signature.as_ref().map(|sig| sig.0)
+            && skin_reload_request_includes_key_mode(request, key_mode)
+        {
             self.last_play_skin_signature = None;
             self.spawn_play_skin_decode_for(key_mode);
         }
-        tracing::info!(generation, "skins reload queued from egui skin panel");
+        tracing::info!(?request, "skin reload queued from egui skin panel");
     }
 
     /// 決定対象チャートの key_mode に対応するプレイスキンを background decode に投入する。
@@ -7770,6 +7824,7 @@ impl WinitApp {
         }
         self.last_play_skin_signature = Some(signature);
         self.pending_play_skin = false;
+        let generation = self.skin_reload_generations.bump(SkinKind::Play);
 
         if trimmed.is_empty() {
             tracing::debug!(?key_mode, "play skin path empty; using default skin only");
@@ -7791,19 +7846,24 @@ impl WinitApp {
 
         spawn_skin_decode(
             self.skin_decode_tx.clone(),
-            self.skin_reload_generation,
+            generation,
             path.to_path_buf(),
             SkinKind::Play,
             selection.options.clone(),
             selection.files.clone(),
         );
         self.pending_play_skin = true;
-        tracing::info!(
-            ?key_mode,
-            path = trimmed,
-            generation = self.skin_reload_generation,
-            "play skin decode queued"
-        );
+        tracing::info!(?key_mode, path = trimmed, generation, "play skin decode queued");
+    }
+
+    fn invalidate_skin_defs_cache_for_request(&mut self, request: SkinReloadRequest) {
+        if request.select || request.decide || request.result {
+            self.skin_defs_cache.clear();
+            return;
+        }
+        for key_mode in skin_reload_request_key_modes(request) {
+            self.skin_defs_cache.remove(key_mode.play_map_key());
+        }
     }
 
     /// リザルト遷移後も鳴らし続けている音声出力を監視し、スケジュール済みの
@@ -8469,7 +8529,8 @@ fn load_initial_skin_textures(
 fn reload_skin_textures(
     _renderer: &mut Renderer,
     skin_decode_tx: &mpsc::Sender<PendingSkinResult>,
-    generation: u64,
+    generations: &mut SkinReloadGenerations,
+    request: SkinReloadRequest,
     select_skin_path: &str,
     decide_skin_path: &str,
     result_skin_path: &str,
@@ -8484,11 +8545,15 @@ fn reload_skin_textures(
     let mut pending_decide = false;
     let mut pending_result = false;
 
-    for (path_text, kind, options, files) in [
-        (select_skin_path, SkinKind::Select, select_options, select_files),
-        (decide_skin_path, SkinKind::Decide, decide_options, decide_files),
-        (result_skin_path, SkinKind::Result, result_options, result_files),
+    for (enabled, path_text, kind, options, files) in [
+        (request.select, select_skin_path, SkinKind::Select, select_options, select_files),
+        (request.decide, decide_skin_path, SkinKind::Decide, decide_options, decide_files),
+        (request.result, result_skin_path, SkinKind::Result, result_options, result_files),
     ] {
+        if !enabled {
+            continue;
+        }
+        let generation = generations.bump(kind);
         let trimmed = path_text.trim();
         if trimmed.is_empty() {
             continue;
@@ -9962,6 +10027,29 @@ fn play_skin_key_mode_for_options(chart_key_mode: KeyMode, double_option: Double
             _ => chart_key_mode,
         },
         DoubleOption::Off | DoubleOption::Flip => chart_key_mode,
+    }
+}
+
+fn skin_reload_request_key_modes(request: SkinReloadRequest) -> impl Iterator<Item = KeyMode> {
+    [
+        (request.play5, KeyMode::K5),
+        (request.play7, KeyMode::K7),
+        (request.play9, KeyMode::K9),
+        (request.play10, KeyMode::K10),
+        (request.play14, KeyMode::K14),
+    ]
+    .into_iter()
+    .filter_map(|(enabled, key_mode)| enabled.then_some(key_mode))
+}
+
+fn skin_reload_request_includes_key_mode(request: SkinReloadRequest, key_mode: KeyMode) -> bool {
+    match key_mode {
+        KeyMode::K5 => request.play5,
+        KeyMode::K7 => request.play7,
+        KeyMode::K9 => request.play9,
+        KeyMode::K10 => request.play10,
+        KeyMode::K14 => request.play14,
+        KeyMode::K4 | KeyMode::K6 | KeyMode::K8 => request.play7,
     }
 }
 
