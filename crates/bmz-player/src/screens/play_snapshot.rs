@@ -21,6 +21,7 @@ use bmz_render::snapshot::{
 };
 
 pub const DEFAULT_LOOKAHEAD_US: i64 = 2_000_000;
+const NOTE_PAST_JUDGE_LINE_MARGIN: f32 = 0.018;
 const SCRATCH_ANGLE_OFFSET_1P: i32 = 1;
 const SCRATCH_ANGLE_OFFSET_2P: i32 = 2;
 const SCRATCH_ANGLE_PERIOD_MS: i64 = 2_160;
@@ -605,6 +606,7 @@ struct ScrollContext<'a> {
     /// SPEED イベント (tick 昇順)。beatoraja は線形補間だが、まずは SCROLL と同じ
     /// 階段関数で扱い、note 位置時点での値を倍率として掛ける。
     speed_segments: Vec<(f64, f64)>,
+    past_judge_line_margin: f32,
 }
 
 impl<'a> ScrollContext<'a> {
@@ -622,6 +624,7 @@ impl<'a> ScrollContext<'a> {
             lookahead_ticks,
             scroll_segments,
             speed_segments,
+            past_judge_line_margin: NOTE_PAST_JUDGE_LINE_MARGIN,
         }
     }
 
@@ -634,11 +637,8 @@ impl<'a> ScrollContext<'a> {
     fn note_y(&self, note_time: TimeUs, cursor_tick: f64) -> Option<f32> {
         let note_tick = self.timing_map.time_to_tick_f64(note_time);
         let delta = self.scroll_delta(cursor_tick, note_tick);
-        if delta < 0.0 {
-            return None;
-        }
         let progress = (delta / self.lookahead_ticks) as f32 * self.hispeed;
-        (progress <= 1.0).then_some(progress)
+        ((-self.past_judge_line_margin)..=1.0).contains(&progress).then_some(progress)
     }
 
     /// `note_y` と同じ進捗のクランプしない生値。ロングノートの始端/終端で使う。
@@ -974,7 +974,7 @@ mod tests {
     }
 
     #[test]
-    fn judged_notes_remain_visible_until_their_scheduled_time() {
+    fn judged_notes_remain_visible_until_they_pass_the_judge_line() {
         let profile = ProfileConfig::new_default("default", "Default", 1);
         let mut session =
             build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
@@ -1001,8 +1001,13 @@ mod tests {
             Some(outcome.events[0].judge)
         );
 
-        let after_scheduled_time = build_render_snapshot(&session, TimeUs(1_000_001), &[], None);
-        assert!(after_scheduled_time.visible_notes[Lane::Key1.index()].is_empty());
+        let just_after_scheduled_time =
+            build_render_snapshot(&session, TimeUs(1_000_001), &[], None);
+        assert_eq!(just_after_scheduled_time.visible_notes[Lane::Key1.index()].len(), 1);
+        assert!(just_after_scheduled_time.visible_notes[Lane::Key1.index()][0].y < 0.0);
+
+        let after_note_passed = build_render_snapshot(&session, TimeUs(1_036_001), &[], None);
+        assert!(after_note_passed.visible_notes[Lane::Key1.index()].is_empty());
     }
 
     #[test]

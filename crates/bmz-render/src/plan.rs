@@ -2034,7 +2034,7 @@ fn note_rect_y(board: Rect, lift: f32, progress_to_hit: f32) -> f32 {
 
 fn play_object_y(board: Rect, lift: f32, progress_to_hit: f32) -> f32 {
     let judge_y = judge_line_y(board, lift);
-    judge_y - progress_to_hit.clamp(0.0, 1.0) * (judge_y - board.y)
+    judge_y - progress_to_hit.min(1.0) * (judge_y - board.y)
 }
 
 fn push_play_bar_line(
@@ -4007,6 +4007,13 @@ mod tests {
         let board = Rect { x: 0.18, y: 0.05, width: 0.64, height: 0.9 };
 
         assert!(approx_eq(note_rect_y(board, 0.0, 0.0) + NOTE_HEIGHT, judge_line_y(board, 0.0)));
+    }
+
+    #[test]
+    fn play_plan_allows_note_to_pass_below_judge_line() {
+        let board = Rect { x: 0.18, y: 0.05, width: 0.64, height: 0.9 };
+
+        assert!(note_rect_y(board, 0.0, -0.1) > note_rect_y(board, 0.0, 0.0));
     }
 
     #[test]
