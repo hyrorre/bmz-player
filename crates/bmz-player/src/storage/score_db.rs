@@ -35,6 +35,7 @@ pub struct PlayerInfo {
 pub struct PlayerStats {
     pub play_count: u64,
     pub clear_count: u64,
+    pub playtime_seconds: u64,
     pub max_combo: u32,
     pub fast_pgreat: u64,
     pub slow_pgreat: u64,
@@ -82,6 +83,7 @@ pub struct ScoreRecord {
     pub gauge_type: Option<GaugeType>,
     pub gauge_value: f32,
     pub total_notes: u32,
+    pub playtime_seconds: u32,
     pub score: ScoreState,
     pub random_seed: Option<i64>,
     pub arrange: String,
@@ -98,6 +100,7 @@ pub struct ScoreRecordMetadata {
     pub ln_policy: LnScorePolicy,
     pub double_option: DoubleOptionScoreBucket,
     pub played_at: i64,
+    pub playtime_seconds: u32,
     pub random_seed: Option<i64>,
     pub arrange: String,
     pub gauge_option: String,
@@ -113,6 +116,7 @@ impl ScoreRecord {
             ln_policy,
             double_option,
             played_at,
+            playtime_seconds,
             random_seed,
             arrange,
             gauge_option,
@@ -131,6 +135,7 @@ impl ScoreRecord {
             gauge_type: Some(result.gauge_type),
             gauge_value: result.gauge_value,
             total_notes: result.total_notes,
+            playtime_seconds,
             score: result.score.clone(),
             random_seed,
             arrange,
@@ -161,6 +166,7 @@ impl ScoreRecordMetadata {
             ln_policy,
             double_option,
             played_at,
+            playtime_seconds: 0,
             random_seed,
             arrange: arrange.into(),
             gauge_option: gauge_option.into(),
@@ -169,6 +175,11 @@ impl ScoreRecordMetadata {
             device_type,
             replay_path: replay_path.into(),
         }
+    }
+
+    pub fn with_playtime_seconds(mut self, playtime_seconds: u32) -> Self {
+        self.playtime_seconds = playtime_seconds;
+        self
     }
 }
 
@@ -415,6 +426,7 @@ impl ScoreDatabase {
                 "SELECT
                     play_count,
                     clear_count,
+                    playtime_seconds,
                     max_combo,
                     fast_pgreat,
                     slow_pgreat,
@@ -956,20 +968,21 @@ fn player_stats_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PlayerStat
     Ok(PlayerStats {
         play_count: row.get(0)?,
         clear_count: row.get(1)?,
-        max_combo: row.get(2)?,
-        fast_pgreat: row.get(3)?,
-        slow_pgreat: row.get(4)?,
-        fast_great: row.get(5)?,
-        slow_great: row.get(6)?,
-        fast_good: row.get(7)?,
-        slow_good: row.get(8)?,
-        fast_bad: row.get(9)?,
-        slow_bad: row.get(10)?,
-        fast_poor: row.get(11)?,
-        slow_poor: row.get(12)?,
-        fast_empty_poor: row.get(13)?,
-        slow_empty_poor: row.get(14)?,
-        updated_at: row.get(15)?,
+        playtime_seconds: row.get(2)?,
+        max_combo: row.get(3)?,
+        fast_pgreat: row.get(4)?,
+        slow_pgreat: row.get(5)?,
+        fast_great: row.get(6)?,
+        slow_great: row.get(7)?,
+        fast_good: row.get(8)?,
+        slow_good: row.get(9)?,
+        fast_bad: row.get(10)?,
+        slow_bad: row.get(11)?,
+        fast_poor: row.get(12)?,
+        slow_poor: row.get(13)?,
+        fast_empty_poor: row.get(14)?,
+        slow_empty_poor: row.get(15)?,
+        updated_at: row.get(16)?,
     })
 }
 
@@ -1141,6 +1154,7 @@ fn update_player_stats(conn: &Connection, record: &ScoreRecord) -> Result<()> {
             id,
             play_count,
             clear_count,
+            playtime_seconds,
             max_combo,
             fast_pgreat,
             slow_pgreat,
@@ -1156,11 +1170,12 @@ fn update_player_stats(conn: &Connection, record: &ScoreRecord) -> Result<()> {
             slow_empty_poor,
             updated_at
         ) VALUES (
-            1, 1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15
+            1, 1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16
         )
         ON CONFLICT(id) DO UPDATE SET
             play_count = play_count + 1,
             clear_count = clear_count + excluded.clear_count,
+            playtime_seconds = playtime_seconds + excluded.playtime_seconds,
             max_combo = max(max_combo, excluded.max_combo),
             fast_pgreat = fast_pgreat + excluded.fast_pgreat,
             slow_pgreat = slow_pgreat + excluded.slow_pgreat,
@@ -1177,6 +1192,7 @@ fn update_player_stats(conn: &Connection, record: &ScoreRecord) -> Result<()> {
             updated_at = max(updated_at, excluded.updated_at)",
         params![
             clear_increment,
+            record.playtime_seconds,
             record.score.max_combo,
             judges.fast_pgreat,
             judges.slow_pgreat,
@@ -1515,6 +1531,7 @@ mod tests {
             gauge_type: Some(GaugeType::Normal),
             gauge_value: 82.0,
             total_notes: ex_score / 2,
+            playtime_seconds: 0,
             score: score_with_ex_score(ex_score),
             random_seed: None,
             arrange: "Normal".to_string(),
@@ -1790,10 +1807,12 @@ mod tests {
 
         let mut first = record(20, ClearType::Normal);
         first.played_at = 10;
+        first.playtime_seconds = 120;
         first.score.judges.fast_great = 3;
         first.score.judges.slow_bad = 2;
         let mut failed = record(10, ClearType::Failed);
         failed.played_at = 20;
+        failed.playtime_seconds = 30;
         failed.score.max_combo = 99;
         failed.score.judges.fast_empty_poor = 4;
 
@@ -1803,6 +1822,7 @@ mod tests {
         let stats = db.player_stats().unwrap();
         assert_eq!(stats.play_count, 2);
         assert_eq!(stats.clear_count, 1);
+        assert_eq!(stats.playtime_seconds, 150);
         assert_eq!(stats.max_combo, 99);
         assert_eq!(stats.fast_pgreat, 0);
         assert_eq!(stats.slow_pgreat, 15);
@@ -1866,6 +1886,7 @@ mod tests {
         let stats = db.player_stats().unwrap();
         assert_eq!(stats.play_count, 2);
         assert_eq!(stats.clear_count, 1);
+        assert_eq!(stats.playtime_seconds, 0);
         assert_eq!(stats.max_combo, 12);
         assert_eq!(stats.fast_pgreat, 3);
         assert_eq!(stats.slow_empty_poor, 25);

@@ -22,6 +22,7 @@ pub struct StoredPlayResult {
 #[derive(Debug, Clone)]
 pub struct StorePlayResultRequest {
     pub played_at: i64,
+    pub playtime_seconds: u32,
     pub ln_policy: LnScorePolicy,
     pub double_option: DoubleOptionScoreBucket,
     pub random_seed: Option<i64>,
@@ -92,7 +93,8 @@ pub fn store_play_result(
             request.assist_mask,
             device_type,
             replay_path.clone(),
-        ),
+        )
+        .with_playtime_seconds(request.playtime_seconds),
     );
     let score_history_id = score_db.insert_score(&record)?;
 
@@ -260,6 +262,7 @@ mod tests {
                 ln_policy: LnScorePolicy::ForceLn,
                 double_option: DoubleOptionScoreBucket::Off,
                 played_at: 1_700_000_060,
+                playtime_seconds: 0,
                 random_seed: Some(77),
                 gauge_option: String::new(),
                 rule_mode: String::new(),
@@ -323,6 +326,7 @@ mod tests {
                 ln_policy: LnScorePolicy::ForceLn,
                 double_option: DoubleOptionScoreBucket::Off,
                 played_at: 1_700_000_061,
+                playtime_seconds: 0,
                 random_seed: None,
                 gauge_option: String::new(),
                 rule_mode: String::new(),
@@ -373,6 +377,7 @@ mod tests {
                 ln_policy: LnScorePolicy::ForceLn,
                 double_option: DoubleOptionScoreBucket::Off,
                 played_at: 1_700_000_062,
+                playtime_seconds: 0,
                 random_seed: None,
                 gauge_option: String::new(),
                 rule_mode: String::new(),
@@ -421,6 +426,7 @@ mod tests {
                 ln_policy: LnScorePolicy::ForceLn,
                 double_option: DoubleOptionScoreBucket::Off,
                 played_at: 1_700_000_100,
+                playtime_seconds: 0,
                 random_seed: None,
                 gauge_option: String::new(),
                 rule_mode: String::new(),
@@ -451,6 +457,7 @@ mod tests {
                 ln_policy: LnScorePolicy::ForceLn,
                 double_option: DoubleOptionScoreBucket::Off,
                 played_at: 1_700_000_101,
+                playtime_seconds: 0,
                 random_seed: None,
                 gauge_option: String::new(),
                 rule_mode: String::new(),
@@ -503,6 +510,7 @@ mod tests {
                 ln_policy: LnScorePolicy::ForceLn,
                 double_option: DoubleOptionScoreBucket::Off,
                 played_at: 1_700_000_110,
+                playtime_seconds: 0,
                 random_seed: None,
                 gauge_option: String::new(),
                 rule_mode: String::new(),

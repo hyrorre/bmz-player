@@ -1931,6 +1931,7 @@ mod tests {
             gauge_type: Some(GaugeType::Normal),
             gauge_value: 80.0,
             total_notes: 1,
+            playtime_seconds: 0,
             score,
             random_seed: None,
             arrange: "Normal".to_string(),
