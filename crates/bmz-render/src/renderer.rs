@@ -21,7 +21,8 @@ use crate::plan::{
 };
 use crate::scene::AppSceneSnapshot;
 use crate::skin::{
-    BlendMode, DynamicTimerRuntime, SkinClickHit, SkinContext, SkinDocument, SkinSliderHit,
+    BlendMode, DynamicTimerRuntime, SkinClickHit, SkinContext, SkinDocument, SkinImageSize,
+    SkinSliderHit,
 };
 use crate::ui::{EguiFrame, EguiPainter};
 
@@ -1831,13 +1832,14 @@ fn encode_plan_geometry_with_rect_batch_resolver(
                     }
                 }
             }
-            DrawCommand::Image { rect, uv, texture, tint, blend, linear_filter } => {
+            DrawCommand::Image { rect, uv, source_size, texture, tint, blend, linear_filter } => {
                 let start = images.len();
                 let rect = canvas_viewport.transform_rect(*rect);
+                let sampling_uv = sampling_uv_with_half_texel_inset(*uv, *source_size);
                 encode_image_instance(
                     &mut images,
                     &rect,
-                    uv,
+                    &sampling_uv,
                     tint,
                     0.0,
                     Point { x: 0.5, y: 0.5 },
@@ -1854,6 +1856,7 @@ fn encode_plan_geometry_with_rect_batch_resolver(
             DrawCommand::RotatedImage {
                 rect,
                 uv,
+                source_size,
                 texture,
                 tint,
                 blend,
@@ -1863,10 +1866,11 @@ fn encode_plan_geometry_with_rect_batch_resolver(
             } => {
                 let start = images.len();
                 let rect = canvas_viewport.transform_rect(*rect);
+                let sampling_uv = sampling_uv_with_half_texel_inset(*uv, *source_size);
                 encode_image_instance(
                     &mut images,
                     &rect,
-                    uv,
+                    &sampling_uv,
                     tint,
                     *angle_rad,
                     *center,
@@ -1895,6 +1899,57 @@ fn encode_plan_geometry_with_rect_batch_resolver(
     }
 
     PlanGeometry { rects, images, steps }
+}
+
+fn sampling_uv_with_half_texel_inset(uv: UvRect, source_size: Option<SkinImageSize>) -> UvRect {
+    let Some(source_size) = source_size else {
+        return uv;
+    };
+    if !source_size.width.is_finite()
+        || !source_size.height.is_finite()
+        || source_size.width <= 0.0
+        || source_size.height <= 0.0
+    {
+        return uv;
+    }
+
+    let (x, width) = if uv_axis_covers_full_texture(uv.x, uv.width) {
+        (uv.x, uv.width)
+    } else {
+        inset_uv_axis_by_half_texel(uv.x, uv.width, source_size.width)
+    };
+    let (y, height) = if uv_axis_covers_full_texture(uv.y, uv.height) {
+        (uv.y, uv.height)
+    } else {
+        inset_uv_axis_by_half_texel(uv.y, uv.height, source_size.height)
+    };
+
+    UvRect { x, y, width, height }
+}
+
+fn uv_axis_covers_full_texture(origin: f32, extent: f32) -> bool {
+    const EPSILON: f32 = 1.0e-6;
+    origin.abs() <= EPSILON && (extent - 1.0).abs() <= EPSILON
+}
+
+fn inset_uv_axis_by_half_texel(origin: f32, extent: f32, source_extent: f32) -> (f32, f32) {
+    if !origin.is_finite()
+        || !extent.is_finite()
+        || !source_extent.is_finite()
+        || source_extent <= 1.0
+    {
+        return (origin, extent);
+    }
+
+    let texel = 1.0 / source_extent;
+    let half_texel = texel * 0.5;
+    if extent > texel {
+        (origin + half_texel, extent - texel)
+    } else if extent < -texel {
+        (origin - half_texel, extent + texel)
+    } else {
+        (origin, extent)
+    }
 }
 
 /// image インスタンス 1 件 (16 float) をバッファ末尾へ書き込む。
@@ -3856,6 +3911,7 @@ mod tests {
             commands: vec![DrawCommand::Image {
                 rect: Rect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
                 uv: UvRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+                source_size: None,
                 texture: TextureId(0),
                 tint: Color::rgb(1.0, 1.0, 1.0),
                 blend: BlendMode::Normal,
@@ -3880,6 +3936,45 @@ mod tests {
         assert_approx(floats[1], 0.21875);
         assert_approx(floats[2], 1.0);
         assert_approx(floats[3], 0.5625);
+    }
+
+    #[test]
+    fn sampling_uv_insets_subregions_by_half_texel() {
+        let uv = sampling_uv_with_half_texel_inset(
+            UvRect { x: 0.25, y: 0.5, width: 0.125, height: 0.25 },
+            Some(SkinImageSize { width: 256.0, height: 128.0 }),
+        );
+
+        assert_approx(uv.x, 0.25 + 0.5 / 256.0);
+        assert_approx(uv.y, 0.5 + 0.5 / 128.0);
+        assert_approx(uv.width, 0.125 - 1.0 / 256.0);
+        assert_approx(uv.height, 0.25 - 1.0 / 128.0);
+    }
+
+    #[test]
+    fn sampling_uv_keeps_full_texture_axes_unchanged() {
+        let uv = sampling_uv_with_half_texel_inset(
+            UvRect { x: 0.0, y: 0.25, width: 1.0, height: 0.5 },
+            Some(SkinImageSize { width: 256.0, height: 128.0 }),
+        );
+
+        assert_approx(uv.x, 0.0);
+        assert_approx(uv.width, 1.0);
+        assert_approx(uv.y, 0.25 + 0.5 / 128.0);
+        assert_approx(uv.height, 0.5 - 1.0 / 128.0);
+    }
+
+    #[test]
+    fn sampling_uv_does_not_collapse_single_texel_regions() {
+        let uv = sampling_uv_with_half_texel_inset(
+            UvRect { x: 0.25, y: 0.5, width: 1.0 / 256.0, height: 1.0 / 128.0 },
+            Some(SkinImageSize { width: 256.0, height: 128.0 }),
+        );
+
+        assert_approx(uv.x, 0.25);
+        assert_approx(uv.y, 0.5);
+        assert_approx(uv.width, 1.0 / 256.0);
+        assert_approx(uv.height, 1.0 / 128.0);
     }
 
     #[test]
@@ -4412,6 +4507,7 @@ mod tests {
         DrawCommand::Image {
             rect: crate::plan::Rect { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
             uv: crate::plan::UvRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+            source_size: None,
             texture: crate::plan::TextureId(texture),
             tint: Color::rgb(1.0, 1.0, 1.0),
             blend,
@@ -4641,6 +4737,7 @@ mod tests {
             commands: vec![DrawCommand::RotatedImage {
                 rect: crate::plan::Rect { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
                 uv: crate::plan::UvRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+                source_size: None,
                 texture: crate::plan::TextureId(0),
                 tint: Color::rgb(1.0, 1.0, 1.0),
                 blend: BlendMode::Normal,

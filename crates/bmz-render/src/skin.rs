@@ -7339,7 +7339,7 @@ pub fn append_skin_render_items(commands: &mut Vec<DrawCommand>, items: &[SkinRe
                 uv,
                 tint,
                 blend,
-                source_size: _,
+                source_size,
                 linear_filter,
                 angle_deg,
                 center,
@@ -7347,6 +7347,7 @@ pub fn append_skin_render_items(commands: &mut Vec<DrawCommand>, items: &[SkinRe
                 commands.push(DrawCommand::RotatedImage {
                     rect: *rect,
                     uv: UvRect { x: uv.x, y: uv.y, width: uv.width, height: uv.height },
+                    source_size: *source_size,
                     texture: TextureId(texture.0),
                     tint: *tint,
                     blend: *blend,
@@ -7388,6 +7389,7 @@ fn append_skin_image_command(
         _ => commands.push(DrawCommand::Image {
             rect,
             uv: UvRect { x: uv.x, y: uv.y, width: uv.width, height: uv.height },
+            source_size,
             texture: TextureId(texture.0),
             tint,
             blend,
@@ -7415,6 +7417,7 @@ fn append_nine_slice_image_commands(
         commands.push(DrawCommand::Image {
             rect,
             uv: UvRect { x: uv.x, y: uv.y, width: uv.width, height: uv.height },
+            source_size,
             texture: TextureId(texture.0),
             tint,
             blend,
@@ -7430,6 +7433,7 @@ fn append_nine_slice_image_commands(
         commands.push(DrawCommand::Image {
             rect,
             uv: UvRect { x: uv.x, y: uv.y, width: uv.width, height: uv.height },
+            source_size,
             texture: TextureId(texture.0),
             tint,
             blend,
@@ -7475,6 +7479,7 @@ fn append_nine_slice_image_commands(
                 commands.push(DrawCommand::Image {
                     rect: piece,
                     uv: piece_uv,
+                    source_size,
                     texture: TextureId(texture.0),
                     tint,
                     blend,

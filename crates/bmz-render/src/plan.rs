@@ -6,10 +6,10 @@ use bmz_core::time::TimeUs;
 
 use crate::scene::{AppSceneSnapshot, SelectRowKind, SelectRowSnapshot, SelectSnapshot};
 use crate::skin::{
-    Animation, BlendMode, NumberSlot, SkinContext, SkinDefinition, SkinImageManifest, SkinManifest,
-    SkinObject, SkinObjectId, SkinPhase, SkinPlacement, SkinRenderContext, SkinRenderItem,
-    SkinSource, SkinTextState, SkinTextureId, TextSlot, append_skin_render_items,
-    judge_image_index,
+    Animation, BlendMode, NumberSlot, SkinContext, SkinDefinition, SkinImageManifest,
+    SkinImageSize, SkinManifest, SkinObject, SkinObjectId, SkinPhase, SkinPlacement,
+    SkinRenderContext, SkinRenderItem, SkinSource, SkinTextState, SkinTextureId, TextSlot,
+    append_skin_render_items, judge_image_index,
 };
 use crate::skin_offset::{SKIN_OFFSET_BAR_LINE, SkinOffsetValues};
 use crate::snapshot::{
@@ -70,6 +70,7 @@ pub enum DrawCommand {
     Image {
         rect: Rect,
         uv: UvRect,
+        source_size: Option<SkinImageSize>,
         texture: TextureId,
         tint: Color,
         blend: BlendMode,
@@ -78,6 +79,7 @@ pub enum DrawCommand {
     RotatedImage {
         rect: Rect,
         uv: UvRect,
+        source_size: Option<SkinImageSize>,
         texture: TextureId,
         tint: Color,
         blend: BlendMode,
@@ -270,6 +272,7 @@ fn push_fullscreen_image(commands: &mut Vec<DrawCommand>, texture: TextureId) {
     commands.push(DrawCommand::Image {
         rect: Rect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
         uv: UvRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+        source_size: None,
         texture,
         tint: Color::rgb(1.0, 1.0, 1.0),
         blend: BlendMode::Normal,
@@ -326,6 +329,7 @@ fn push_bga_fullscreen(
     commands.push(DrawCommand::Image {
         rect,
         uv,
+        source_size: Some(SkinImageSize { width: frame.width, height: frame.height }),
         texture: TextureId(frame.texture_id),
         tint: Color::rgba(frame.tint_r, frame.tint_g, frame.tint_b, frame.tint_a),
         blend,
@@ -374,6 +378,7 @@ fn push_select_banner_image(commands: &mut Vec<DrawCommand>) {
     commands.push(DrawCommand::Image {
         rect: Rect { x: 0.72, y: 0.16, width: 0.26, height: 0.065 },
         uv: UvRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+        source_size: None,
         texture: SELECT_BANNER_TEXTURE,
         tint: Color::rgb(1.0, 1.0, 1.0),
         blend: BlendMode::Normal,
@@ -1090,6 +1095,7 @@ fn plan_play(
                 commands.push(DrawCommand::Image {
                     rect,
                     uv: UvRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+                    source_size: None,
                     texture: DEFAULT_MINE_NOTE_TEXTURE,
                     tint: Color::rgba(1.0, 1.0, 1.0, 1.0),
                     blend: BlendMode::Normal,
@@ -1239,6 +1245,7 @@ fn plan_play(
                         commands.push(DrawCommand::Image {
                             rect,
                             uv: UvRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+                            source_size: None,
                             texture: DEFAULT_MINE_NOTE_TEXTURE,
                             tint: Color::rgba(1.0, 1.0, 1.0, 1.0),
                             blend: BlendMode::Normal,
