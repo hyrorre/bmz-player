@@ -411,6 +411,8 @@ struct WinitApp {
     last_play_start_press_at: Option<Instant>,
     /// Decide 中の E1 押下状態。E1+E2 長押しキャンセルに使う。
     decide_e1_held: bool,
+    /// プレイ開始待ち/プレイ中の E1 押下状態。READY 前の緑数字表示にも使う。
+    play_e1_held: bool,
     /// プレイ中の E2 押下状態。E2+E3 即終了 / E1+E2 長押し終了に使う。
     play_e2_held: bool,
     /// プレイ中の E3 押下状態。E2+E3 即終了に使う。
@@ -1545,6 +1547,7 @@ impl WinitApp {
             play_backbmp_loaded: false,
             last_play_start_press_at: None,
             decide_e1_held: false,
+            play_e1_held: false,
             play_e2_held: false,
             play_e3_held: false,
             play_exit_hold_started_at: None,
@@ -3027,33 +3030,19 @@ impl WinitApp {
     }
 
     fn route_keyboard_input(&mut self, event: &winit::event::KeyEvent) {
-        if self.active_play.is_some()
-            && let Some(control) = physical_key_name(event.physical_key)
-            && !event.repeat
-            && self.update_play_exit_control_state(&control, event.state == ElementState::Pressed)
+        let play_control = (!event.repeat).then(|| physical_key_name(event.physical_key)).flatten();
+        let has_play_control_context =
+            self.active_play.is_some() || self.pending_play_start.is_some();
+        if has_play_control_context && let Some(control) = play_control.as_deref() {
+            self.update_play_e1_control_state(control, event.state == ElementState::Pressed);
+        }
+        if has_play_control_context
+            && let Some(control) = play_control.as_deref()
+            && self.update_play_exit_control_state(control, event.state == ElementState::Pressed)
         {
             return;
         }
         if let Some(active_play) = &mut self.active_play {
-            if let Some(control) = physical_key_name(event.physical_key)
-                && self.select_keys.is_start(&control)
-                && !event.repeat
-            {
-                active_play.running.session.lane_cover_changing =
-                    event.state == ElementState::Pressed;
-                update_pre_ready_play_snapshot_options_for_session(
-                    self.play_ready_sound_started_at,
-                    &mut self.last_play_snapshot,
-                    &active_play.running.session,
-                    active_play.running.applied_arrange.arrange,
-                );
-                update_play_exit_hold_started_at(
-                    &mut self.play_exit_hold_started_at,
-                    active_play.running.session.lane_cover_changing,
-                    self.play_e2_held,
-                    Instant::now(),
-                );
-            }
             if event.state == ElementState::Pressed
                 && !event.repeat
                 && active_play.running.session.lane_cover_changing
@@ -3079,8 +3068,14 @@ impl WinitApp {
                 } else {
                     tracing::debug!("play option change ignored: course NoSpeed constraint");
                 }
-                self.update_pre_ready_play_snapshot_options();
-                return;
+                update_pre_ready_play_snapshot_options_for_session(
+                    self.play_ready_sound_started_at,
+                    &mut self.last_play_snapshot,
+                    &active_play.running.session,
+                    active_play.running.applied_arrange.arrange,
+                );
+                // E1+lane keys should still reach gameplay input so notes are judged
+                // and key beams render while changing play options.
             }
             if let Some(change) = hispeed_action(event.physical_key, event.state, event.repeat) {
                 // Beatoraja: NoSpeed constraint locks the hispeed during course play.
@@ -3095,7 +3090,12 @@ impl WinitApp {
                 active_play.running.session.hispeed =
                     adjusted_hispeed(active_play.running.session.hispeed, change);
                 tracing::info!(hispeed = active_play.running.session.hispeed, "adjusted hispeed");
-                self.update_pre_ready_play_snapshot_options();
+                update_pre_ready_play_snapshot_options_for_session(
+                    self.play_ready_sound_started_at,
+                    &mut self.last_play_snapshot,
+                    &active_play.running.session,
+                    active_play.running.applied_arrange.arrange,
+                );
                 return;
             }
             if event.physical_key == PhysicalKey::Code(KeyCode::Escape)
@@ -3575,25 +3575,13 @@ impl WinitApp {
     }
 
     fn route_gamepad_button(&mut self, button: &str, pressed: bool) {
-        if self.active_play.is_some() && self.update_play_exit_control_state(button, pressed) {
-            return;
+        let has_play_control_context =
+            self.active_play.is_some() || self.pending_play_start.is_some();
+        if has_play_control_context {
+            self.update_play_e1_control_state(button, pressed);
         }
-        if let Some(active_play) = &mut self.active_play
-            && self.select_keys.is_start(button)
-        {
-            active_play.running.session.lane_cover_changing = pressed;
-            update_pre_ready_play_snapshot_options_for_session(
-                self.play_ready_sound_started_at,
-                &mut self.last_play_snapshot,
-                &active_play.running.session,
-                active_play.running.applied_arrange.arrange,
-            );
-            update_play_exit_hold_started_at(
-                &mut self.play_exit_hold_started_at,
-                active_play.running.session.lane_cover_changing,
-                self.play_e2_held,
-                Instant::now(),
-            );
+        if has_play_control_context && self.update_play_exit_control_state(button, pressed) {
+            return;
         }
         if pressed {
             let speed_locked = self.active_course.as_ref().is_some_and(|c| {
@@ -3619,7 +3607,7 @@ impl WinitApp {
                     tracing::debug!("play option change ignored: course NoSpeed constraint");
                 }
                 self.update_pre_ready_play_snapshot_options();
-                return;
+                // Gamepad play input was already queued in poll_gamepad_events.
             }
         }
         if !pressed {
@@ -5796,6 +5784,7 @@ impl WinitApp {
             .autoplay
             .as_ref()
             .is_some_and(|autoplay| autoplay.is_full());
+        active_play.running.session.lane_cover_changing = self.play_e1_held;
         active_play.running.bga_frames =
             load_chart_bga_textures(&mut self.renderer, &active_play.running.session.chart);
         let chart = &active_play.running.session.chart;
@@ -5835,6 +5824,7 @@ impl WinitApp {
         );
         self.last_play_snapshot = Some(snapshot);
         self.active_play = Some(active_play);
+        self.update_play_exit_hold_timer();
     }
 
     fn poll_play_preload(&mut self) {
@@ -7323,13 +7313,9 @@ impl WinitApp {
     }
 
     fn update_play_exit_hold_timer(&mut self) {
-        let e1_held = self
-            .active_play
-            .as_ref()
-            .is_some_and(|active| active.running.session.lane_cover_changing);
         update_play_exit_hold_started_at(
             &mut self.play_exit_hold_started_at,
-            e1_held,
+            self.play_e1_held,
             self.play_e2_held,
             Instant::now(),
         );
@@ -7338,9 +7324,33 @@ impl WinitApp {
     fn clear_play_control_holds(&mut self) {
         self.last_play_start_press_at = None;
         self.decide_e1_held = false;
+        self.play_e1_held = false;
         self.play_e2_held = false;
         self.play_e3_held = false;
         self.play_exit_hold_started_at = None;
+    }
+
+    fn update_play_e1_control_state(&mut self, control: &str, pressed: bool) -> bool {
+        if !self.select_keys.is_start(control) {
+            return false;
+        }
+        self.play_e1_held = pressed;
+        if let Some(active_play) = &mut self.active_play {
+            active_play.running.session.lane_cover_changing = pressed;
+            update_pre_ready_play_snapshot_options_for_session(
+                self.play_ready_sound_started_at,
+                &mut self.last_play_snapshot,
+                &active_play.running.session,
+                active_play.running.applied_arrange.arrange,
+            );
+        } else if self.pending_play_start.is_some()
+            && self.play_ready_sound_started_at.is_none()
+            && let Some(snapshot) = &mut self.last_play_snapshot
+        {
+            snapshot.lane_cover_changing = pressed;
+        }
+        self.update_play_exit_hold_timer();
+        true
     }
 
     fn update_play_exit_control_state(&mut self, control: &str, pressed: bool) -> bool {
