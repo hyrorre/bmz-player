@@ -1261,7 +1261,7 @@ struct SettingsDragPayload {
 }
 
 const SETTINGS_LIST_BUTTONS_WIDTH: f32 = 176.0;
-const SETTINGS_LIST_DRAG_HANDLE_WIDTH: f32 = 20.0;
+const SETTINGS_LIST_DRAG_HANDLE_WIDTH: f32 = 28.0;
 const SETTINGS_LIST_MIN_LABEL_WIDTH: f32 = 96.0;
 
 fn apply_settings_list_action<T>(items: &mut Vec<T>, action: SettingsListAction) {
@@ -1298,10 +1298,16 @@ fn settings_drag_handle(ui: &mut egui::Ui, id: egui::Id, payload: SettingsDragPa
     ui.dnd_drag_source(id, payload, |ui| {
         ui.add_sized(
             [SETTINGS_LIST_DRAG_HANDLE_WIDTH, ui.spacing().interact_size.y],
-            egui::Label::new("≡"),
+            egui::Button::new("⠿"),
         )
+        .on_hover_cursor(egui::CursorIcon::Grab)
         .on_hover_text("ドラッグして並び替え");
     });
+}
+
+fn settings_dragged_row(ui: &egui::Ui, list: SettingsDragList, index: usize) -> bool {
+    egui::DragAndDrop::payload::<SettingsDragPayload>(ui.ctx())
+        .is_some_and(|payload| payload.list == list && payload.index == index)
 }
 
 /// `AppConfig` を編集する本体設定パネル。
@@ -1329,49 +1335,62 @@ fn build_settings_panel(
                                 let label_width = (settings_list_label_width(ui)
                                     - SETTINGS_LIST_DRAG_HANDLE_WIDTH)
                                     .max(SETTINGS_LIST_MIN_LABEL_WIDTH);
+                                let dragging_this_row =
+                                    settings_dragged_row(ui, SettingsDragList::SongRoots, index);
                                 let (_, dropped) = ui.dnd_drop_zone::<SettingsDragPayload, _>(
                                     egui::Frame::NONE,
                                     |ui| {
-                                        ui.horizontal(|ui| {
-                                            settings_drag_handle(
-                                                ui,
-                                                egui::Id::new(("settings_song_root_drag", index)),
-                                                SettingsDragPayload {
-                                                    list: SettingsDragList::SongRoots,
-                                                    index,
-                                                },
-                                            );
-                                            settings_list_label(ui, &root.path, label_width);
-                                            ui.with_layout(
-                                                egui::Layout::right_to_left(egui::Align::Center),
-                                                |ui| {
-                                                    if ui.button("削除").clicked() {
-                                                        root_action =
-                                                            Some(SettingsListAction::Remove(index));
-                                                    }
-                                                    if ui
-                                                        .add_enabled(
-                                                            index + 1 < root_len,
-                                                            egui::Button::new("下へ"),
-                                                        )
-                                                        .clicked()
-                                                    {
-                                                        root_action = Some(
-                                                            SettingsListAction::MoveDown(index),
-                                                        );
-                                                    }
-                                                    if ui
-                                                        .add_enabled(
-                                                            index > 0,
-                                                            egui::Button::new("上へ"),
-                                                        )
-                                                        .clicked()
-                                                    {
-                                                        root_action =
-                                                            Some(SettingsListAction::MoveUp(index));
-                                                    }
-                                                },
-                                            );
+                                        ui.add_enabled_ui(!dragging_this_row, |ui| {
+                                            ui.horizontal(|ui| {
+                                                settings_drag_handle(
+                                                    ui,
+                                                    egui::Id::new((
+                                                        "settings_song_root_drag",
+                                                        index,
+                                                    )),
+                                                    SettingsDragPayload {
+                                                        list: SettingsDragList::SongRoots,
+                                                        index,
+                                                    },
+                                                );
+                                                settings_list_label(ui, &root.path, label_width);
+                                                ui.with_layout(
+                                                    egui::Layout::right_to_left(
+                                                        egui::Align::Center,
+                                                    ),
+                                                    |ui| {
+                                                        if ui.button("削除").clicked() {
+                                                            root_action = Some(
+                                                                SettingsListAction::Remove(index),
+                                                            );
+                                                        }
+                                                        if ui
+                                                            .add_enabled(
+                                                                index + 1 < root_len,
+                                                                egui::Button::new("下へ"),
+                                                            )
+                                                            .clicked()
+                                                        {
+                                                            root_action = Some(
+                                                                SettingsListAction::MoveDown(
+                                                                    index,
+                                                                ),
+                                                            );
+                                                        }
+                                                        if ui
+                                                            .add_enabled(
+                                                                index > 0,
+                                                                egui::Button::new("上へ"),
+                                                            )
+                                                            .clicked()
+                                                        {
+                                                            root_action = Some(
+                                                                SettingsListAction::MoveUp(index),
+                                                            );
+                                                        }
+                                                    },
+                                                );
+                                            });
                                         });
                                     },
                                 );
@@ -1482,49 +1501,58 @@ fn build_settings_panel(
                                 - ui.spacing().interact_size.x
                                 - SETTINGS_LIST_DRAG_HANDLE_WIDTH)
                                 .max(64.0);
+                            let dragging_this_row =
+                                settings_dragged_row(ui, SettingsDragList::TableSources, index);
                             let (_, dropped) = ui.dnd_drop_zone::<SettingsDragPayload, _>(
                                 egui::Frame::NONE,
                                 |ui| {
-                                    ui.horizontal(|ui| {
-                                        ui.checkbox(&mut source.enabled, "");
-                                        settings_drag_handle(
-                                            ui,
-                                            egui::Id::new(("settings_table_source_drag", index)),
-                                            SettingsDragPayload {
-                                                list: SettingsDragList::TableSources,
-                                                index,
-                                            },
-                                        );
-                                        settings_list_label(ui, &source.url, label_width);
-                                        ui.with_layout(
-                                            egui::Layout::right_to_left(egui::Align::Center),
-                                            |ui| {
-                                                if ui.button("削除").clicked() {
-                                                    table_action =
-                                                        Some(SettingsListAction::Remove(index));
-                                                }
-                                                if ui
-                                                    .add_enabled(
-                                                        index + 1 < table_len,
-                                                        egui::Button::new("下へ"),
-                                                    )
-                                                    .clicked()
-                                                {
-                                                    table_action =
-                                                        Some(SettingsListAction::MoveDown(index));
-                                                }
-                                                if ui
-                                                    .add_enabled(
-                                                        index > 0,
-                                                        egui::Button::new("上へ"),
-                                                    )
-                                                    .clicked()
-                                                {
-                                                    table_action =
-                                                        Some(SettingsListAction::MoveUp(index));
-                                                }
-                                            },
-                                        );
+                                    ui.add_enabled_ui(!dragging_this_row, |ui| {
+                                        ui.horizontal(|ui| {
+                                            ui.checkbox(&mut source.enabled, "");
+                                            settings_drag_handle(
+                                                ui,
+                                                egui::Id::new((
+                                                    "settings_table_source_drag",
+                                                    index,
+                                                )),
+                                                SettingsDragPayload {
+                                                    list: SettingsDragList::TableSources,
+                                                    index,
+                                                },
+                                            );
+                                            settings_list_label(ui, &source.url, label_width);
+                                            ui.with_layout(
+                                                egui::Layout::right_to_left(egui::Align::Center),
+                                                |ui| {
+                                                    if ui.button("削除").clicked() {
+                                                        table_action = Some(
+                                                            SettingsListAction::Remove(index),
+                                                        );
+                                                    }
+                                                    if ui
+                                                        .add_enabled(
+                                                            index + 1 < table_len,
+                                                            egui::Button::new("下へ"),
+                                                        )
+                                                        .clicked()
+                                                    {
+                                                        table_action = Some(
+                                                            SettingsListAction::MoveDown(index),
+                                                        );
+                                                    }
+                                                    if ui
+                                                        .add_enabled(
+                                                            index > 0,
+                                                            egui::Button::new("上へ"),
+                                                        )
+                                                        .clicked()
+                                                    {
+                                                        table_action =
+                                                            Some(SettingsListAction::MoveUp(index));
+                                                    }
+                                                },
+                                            );
+                                        });
                                     });
                                 },
                             );
