@@ -1294,15 +1294,13 @@ fn settings_list_label(ui: &mut egui::Ui, text: &str, width: f32) {
         .on_hover_text(text);
 }
 
-fn settings_drag_handle(ui: &mut egui::Ui, id: egui::Id, payload: SettingsDragPayload) {
-    ui.dnd_drag_source(id, payload, |ui| {
-        ui.add_sized(
-            [SETTINGS_LIST_DRAG_HANDLE_WIDTH, ui.spacing().interact_size.y],
-            egui::Button::new("⠿"),
-        )
-        .on_hover_cursor(egui::CursorIcon::Grab)
-        .on_hover_text("ドラッグして並び替え");
-    });
+fn settings_drag_handle_visual(ui: &mut egui::Ui) {
+    ui.add_sized(
+        [SETTINGS_LIST_DRAG_HANDLE_WIDTH, ui.spacing().interact_size.y],
+        egui::Button::new(egui::RichText::new("≡").size(18.0)),
+    )
+    .on_hover_cursor(egui::CursorIcon::Grab)
+    .on_hover_text("ドラッグして並び替え");
 }
 
 fn settings_dragged_row(ui: &egui::Ui, list: SettingsDragList, index: usize) -> bool {
@@ -1340,19 +1338,15 @@ fn build_settings_panel(
                                 let (_, dropped) = ui.dnd_drop_zone::<SettingsDragPayload, _>(
                                     egui::Frame::NONE,
                                     |ui| {
-                                        ui.add_enabled_ui(!dragging_this_row, |ui| {
+                                        let drag_id =
+                                            egui::Id::new(("settings_song_root_drag", index));
+                                        let payload = SettingsDragPayload {
+                                            list: SettingsDragList::SongRoots,
+                                            index,
+                                        };
+                                        let mut add_row_contents = |ui: &mut egui::Ui| {
                                             ui.horizontal(|ui| {
-                                                settings_drag_handle(
-                                                    ui,
-                                                    egui::Id::new((
-                                                        "settings_song_root_drag",
-                                                        index,
-                                                    )),
-                                                    SettingsDragPayload {
-                                                        list: SettingsDragList::SongRoots,
-                                                        index,
-                                                    },
-                                                );
+                                                settings_drag_handle_visual(ui);
                                                 settings_list_label(ui, &root.path, label_width);
                                                 ui.with_layout(
                                                     egui::Layout::right_to_left(
@@ -1391,7 +1385,14 @@ fn build_settings_panel(
                                                     },
                                                 );
                                             });
-                                        });
+                                        };
+                                        if dragging_this_row {
+                                            ui.add_enabled_ui(false, |ui| add_row_contents(ui));
+                                        } else {
+                                            ui.dnd_drag_source(drag_id, payload, |ui| {
+                                                add_row_contents(ui);
+                                            });
+                                        }
                                     },
                                 );
                                 if let Some(payload) = dropped
@@ -1506,20 +1507,16 @@ fn build_settings_panel(
                             let (_, dropped) = ui.dnd_drop_zone::<SettingsDragPayload, _>(
                                 egui::Frame::NONE,
                                 |ui| {
-                                    ui.add_enabled_ui(!dragging_this_row, |ui| {
+                                    let drag_id =
+                                        egui::Id::new(("settings_table_source_drag", index));
+                                    let payload = SettingsDragPayload {
+                                        list: SettingsDragList::TableSources,
+                                        index,
+                                    };
+                                    let mut add_row_contents = |ui: &mut egui::Ui| {
                                         ui.horizontal(|ui| {
                                             ui.checkbox(&mut source.enabled, "");
-                                            settings_drag_handle(
-                                                ui,
-                                                egui::Id::new((
-                                                    "settings_table_source_drag",
-                                                    index,
-                                                )),
-                                                SettingsDragPayload {
-                                                    list: SettingsDragList::TableSources,
-                                                    index,
-                                                },
-                                            );
+                                            settings_drag_handle_visual(ui);
                                             settings_list_label(ui, &source.url, label_width);
                                             ui.with_layout(
                                                 egui::Layout::right_to_left(egui::Align::Center),
@@ -1553,7 +1550,14 @@ fn build_settings_panel(
                                                 },
                                             );
                                         });
-                                    });
+                                    };
+                                    if dragging_this_row {
+                                        ui.add_enabled_ui(false, |ui| add_row_contents(ui));
+                                    } else {
+                                        ui.dnd_drag_source(drag_id, payload, |ui| {
+                                            add_row_contents(ui);
+                                        });
+                                    }
                                 },
                             );
                             if let Some(payload) = dropped
