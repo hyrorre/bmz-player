@@ -33,7 +33,7 @@ use crate::practice_ui::{PracticePanelContext, build_practice_panel};
 use crate::screens::course_session::CourseResultSummary;
 use crate::screens::select_model::SelectCourseRow;
 use crate::skin_loader::RANDOM_FILE_SELECTION;
-use crate::songs_cmd::{add_song_root_entry, remove_song_root_entry};
+use crate::songs_cmd::add_song_root_entry;
 use crate::storage::score_import::{ScoreImportKind, ScoreImportRequest};
 
 /// スキンが宣言する設定可能項目の定義 (1 シーン分)。
@@ -1240,6 +1240,104 @@ struct SettingsPanelState<'a> {
     audio_device_picker: &'a mut AudioDevicePickerState,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SettingsListAction {
+    MoveUp(usize),
+    MoveDown(usize),
+    MoveTo { from: usize, to: usize },
+    Remove(usize),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SettingsDragList {
+    SongRoots,
+    TableSources,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SettingsDragPayload {
+    list: SettingsDragList,
+    index: usize,
+}
+
+const SETTINGS_LIST_BUTTONS_WIDTH: f32 = 176.0;
+const SETTINGS_LIST_DRAG_HANDLE_WIDTH: f32 = 28.0;
+const SETTINGS_LIST_MIN_LABEL_WIDTH: f32 = 96.0;
+
+fn apply_settings_list_action<T>(items: &mut Vec<T>, action: SettingsListAction) {
+    match action {
+        SettingsListAction::MoveUp(index) if index > 0 && index < items.len() => {
+            items.swap(index - 1, index);
+        }
+        SettingsListAction::MoveDown(index) if index + 1 < items.len() => {
+            items.swap(index, index + 1);
+        }
+        SettingsListAction::MoveTo { from, to }
+            if from < items.len() && to < items.len() && from != to =>
+        {
+            let item = items.remove(from);
+            items.insert(to.min(items.len()), item);
+        }
+        SettingsListAction::Remove(index) if index < items.len() => {
+            items.remove(index);
+        }
+        _ => {}
+    }
+}
+
+fn settings_list_label_width(ui: &egui::Ui) -> f32 {
+    (ui.available_width() - SETTINGS_LIST_BUTTONS_WIDTH).max(SETTINGS_LIST_MIN_LABEL_WIDTH)
+}
+
+fn settings_list_label(ui: &mut egui::Ui, text: &str, width: f32) {
+    ui.add_sized([width, ui.spacing().interact_size.y], egui::Label::new(text).truncate())
+        .on_hover_text(text);
+}
+
+fn settings_drag_handle(ui: &mut egui::Ui, payload: SettingsDragPayload) {
+    let response = ui.add_sized(
+        [SETTINGS_LIST_DRAG_HANDLE_WIDTH, ui.spacing().interact_size.y],
+        egui::Button::new(egui::RichText::new("≡").size(18.0)).sense(egui::Sense::drag()),
+    );
+    response.dnd_set_drag_payload(payload);
+    response.on_hover_cursor(egui::CursorIcon::Grab).on_hover_text("ドラッグして並び替え");
+}
+
+fn settings_drag_ghost(
+    ctx: &egui::Context,
+    id: egui::Id,
+    text: &str,
+    label_width: f32,
+    show_song_options: bool,
+) {
+    let Some(pointer_pos) = ctx.pointer_interact_pos() else {
+        return;
+    };
+    egui::Area::new(id)
+        .order(egui::Order::Tooltip)
+        .interactable(false)
+        .fixed_pos(pointer_pos + egui::vec2(10.0, 8.0))
+        .show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.add_sized(
+                        [SETTINGS_LIST_DRAG_HANDLE_WIDTH, ui.spacing().interact_size.y],
+                        egui::Label::new(egui::RichText::new("≡").size(18.0)),
+                    );
+                    settings_list_label(ui, text, label_width);
+                });
+                if show_song_options {
+                    let mut enabled = true;
+                    let mut recursive = true;
+                    ui.horizontal(|ui| {
+                        ui.add_enabled(false, egui::Checkbox::new(&mut enabled, "有効"));
+                        ui.add_enabled(false, egui::Checkbox::new(&mut recursive, "再帰スキャン"));
+                    });
+                }
+            });
+        });
+}
+
 /// `AppConfig` を編集する本体設定パネル。
 fn build_settings_panel(
     ctx: &egui::Context,
@@ -1258,24 +1356,87 @@ fn build_settings_panel(
                 egui::CollapsingHeader::new("曲フォルダ (BMS)")
                     .default_open(true)
                     .show(ui, |ui| {
-                        let mut remove_index = None;
+                        let mut root_action = None;
+                        let root_len = config.songs.roots.len();
                         for (index, root) in config.songs.roots.iter_mut().enumerate() {
                             ui.push_id(index, |ui| {
-                                ui.horizontal(|ui| {
-                                    ui.label(&root.path);
-                                    if ui.button("削除").clicked() {
-                                        remove_index = Some(index);
-                                    }
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.checkbox(&mut root.enabled, "有効");
-                                    ui.checkbox(&mut root.recursive, "再帰スキャン");
-                                });
+                                let label_width = (settings_list_label_width(ui)
+                                    - SETTINGS_LIST_DRAG_HANDLE_WIDTH)
+                                    .max(SETTINGS_LIST_MIN_LABEL_WIDTH);
+                                let (_, dropped) = ui.dnd_drop_zone::<SettingsDragPayload, _>(
+                                    egui::Frame::NONE,
+                                    |ui| {
+                                        let payload = SettingsDragPayload {
+                                            list: SettingsDragList::SongRoots,
+                                            index,
+                                        };
+                                        ui.horizontal(|ui| {
+                                            settings_drag_handle(ui, payload);
+                                            settings_list_label(ui, &root.path, label_width);
+                                            ui.with_layout(
+                                                egui::Layout::right_to_left(egui::Align::Center),
+                                                |ui| {
+                                                    if ui.button("削除").clicked() {
+                                                        root_action =
+                                                            Some(SettingsListAction::Remove(index));
+                                                    }
+                                                    if ui
+                                                        .add_enabled(
+                                                            index + 1 < root_len,
+                                                            egui::Button::new("下へ"),
+                                                        )
+                                                        .clicked()
+                                                    {
+                                                        root_action = Some(
+                                                            SettingsListAction::MoveDown(index),
+                                                        );
+                                                    }
+                                                    if ui
+                                                        .add_enabled(
+                                                            index > 0,
+                                                            egui::Button::new("上へ"),
+                                                        )
+                                                        .clicked()
+                                                    {
+                                                        root_action =
+                                                            Some(SettingsListAction::MoveUp(index));
+                                                    }
+                                                },
+                                            );
+                                        });
+                                        ui.horizontal(|ui| {
+                                            ui.checkbox(&mut root.enabled, "有効");
+                                            ui.checkbox(&mut root.recursive, "再帰スキャン");
+                                        });
+                                    },
+                                );
+                                if egui::DragAndDrop::payload::<SettingsDragPayload>(ui.ctx())
+                                    .is_some_and(|payload| {
+                                        payload.list == SettingsDragList::SongRoots
+                                            && payload.index == index
+                                    })
+                                {
+                                    settings_drag_ghost(
+                                        ui.ctx(),
+                                        egui::Id::new(("settings_song_root_ghost", index)),
+                                        &root.path,
+                                        label_width,
+                                        true,
+                                    );
+                                }
+                                if let Some(payload) = dropped
+                                    && payload.list == SettingsDragList::SongRoots
+                                {
+                                    root_action = Some(SettingsListAction::MoveTo {
+                                        from: payload.index,
+                                        to: index,
+                                    });
+                                }
                                 ui.separator();
                             });
                         }
-                        if let Some(index) = remove_index {
-                            remove_song_root_entry(&mut config.songs.roots, index);
+                        if let Some(action) = root_action {
+                            apply_settings_list_action(&mut config.songs.roots, action);
                         }
                         if config.songs.roots.is_empty() {
                             ui.label("登録された曲フォルダはありません。");
@@ -1358,20 +1519,83 @@ fn build_settings_panel(
 
                 egui::CollapsingHeader::new("難易度表").show(ui, |ui| {
                     ui.checkbox(&mut config.tables.auto_fetch_on_startup, "起動時に自動取得");
-                    let mut remove_index = None;
+                    let mut table_action = None;
+                    let table_len = config.tables.sources.len();
                     for (index, source) in config.tables.sources.iter_mut().enumerate() {
                         ui.push_id(("table_source", index), |ui| {
-                            ui.horizontal(|ui| {
-                                ui.checkbox(&mut source.enabled, "");
-                                ui.label(&source.url);
-                                if ui.button("削除").clicked() {
-                                    remove_index = Some(index);
-                                }
-                            });
+                            let label_width = (settings_list_label_width(ui)
+                                - ui.spacing().interact_size.x
+                                - SETTINGS_LIST_DRAG_HANDLE_WIDTH)
+                                .max(64.0);
+                            let (_, dropped) = ui.dnd_drop_zone::<SettingsDragPayload, _>(
+                                egui::Frame::NONE,
+                                |ui| {
+                                    let payload = SettingsDragPayload {
+                                        list: SettingsDragList::TableSources,
+                                        index,
+                                    };
+                                    ui.horizontal(|ui| {
+                                        ui.checkbox(&mut source.enabled, "");
+                                        settings_drag_handle(ui, payload);
+                                        settings_list_label(ui, &source.url, label_width);
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                if ui.button("削除").clicked() {
+                                                    table_action =
+                                                        Some(SettingsListAction::Remove(index));
+                                                }
+                                                if ui
+                                                    .add_enabled(
+                                                        index + 1 < table_len,
+                                                        egui::Button::new("下へ"),
+                                                    )
+                                                    .clicked()
+                                                {
+                                                    table_action =
+                                                        Some(SettingsListAction::MoveDown(index));
+                                                }
+                                                if ui
+                                                    .add_enabled(
+                                                        index > 0,
+                                                        egui::Button::new("上へ"),
+                                                    )
+                                                    .clicked()
+                                                {
+                                                    table_action =
+                                                        Some(SettingsListAction::MoveUp(index));
+                                                }
+                                            },
+                                        );
+                                    });
+                                },
+                            );
+                            if egui::DragAndDrop::payload::<SettingsDragPayload>(ui.ctx())
+                                .is_some_and(|payload| {
+                                    payload.list == SettingsDragList::TableSources
+                                        && payload.index == index
+                                })
+                            {
+                                settings_drag_ghost(
+                                    ui.ctx(),
+                                    egui::Id::new(("settings_table_source_ghost", index)),
+                                    &source.url,
+                                    label_width,
+                                    false,
+                                );
+                            }
+                            if let Some(payload) = dropped
+                                && payload.list == SettingsDragList::TableSources
+                            {
+                                table_action = Some(SettingsListAction::MoveTo {
+                                    from: payload.index,
+                                    to: index,
+                                });
+                            }
                         });
                     }
-                    if let Some(index) = remove_index {
-                        config.tables.sources.remove(index);
+                    if let Some(action) = table_action {
+                        apply_settings_list_action(&mut config.tables.sources, action);
                     }
                     if config.tables.sources.is_empty() {
                         ui.label("登録された難易度表はありません。");
@@ -3548,6 +3772,44 @@ mod tests {
         assert_eq!(max_inner, egui::vec2(1876.0, 990.0));
         // outer 高さ 618 のため y=480 では下端がはみ出す → 446 へクランプ。
         assert_eq!(pos, egui::pos2(16.0, 446.0));
+    }
+
+    #[test]
+    fn apply_settings_list_action_moves_and_removes_entries() {
+        let mut items = vec!["a", "b", "c"];
+
+        apply_settings_list_action(&mut items, SettingsListAction::MoveDown(0));
+        assert_eq!(items, vec!["b", "a", "c"]);
+
+        apply_settings_list_action(&mut items, SettingsListAction::MoveUp(2));
+        assert_eq!(items, vec!["b", "c", "a"]);
+
+        apply_settings_list_action(&mut items, SettingsListAction::Remove(1));
+        assert_eq!(items, vec!["b", "a"]);
+    }
+
+    #[test]
+    fn apply_settings_list_action_moves_entry_to_index() {
+        let mut items = vec!["a", "b", "c", "d"];
+
+        apply_settings_list_action(&mut items, SettingsListAction::MoveTo { from: 0, to: 2 });
+        assert_eq!(items, vec!["b", "c", "a", "d"]);
+
+        apply_settings_list_action(&mut items, SettingsListAction::MoveTo { from: 3, to: 1 });
+        assert_eq!(items, vec!["b", "d", "c", "a"]);
+    }
+
+    #[test]
+    fn apply_settings_list_action_ignores_invalid_moves() {
+        let mut items = vec!["a", "b"];
+
+        apply_settings_list_action(&mut items, SettingsListAction::MoveUp(0));
+        apply_settings_list_action(&mut items, SettingsListAction::MoveDown(1));
+        apply_settings_list_action(&mut items, SettingsListAction::MoveTo { from: 0, to: 2 });
+        apply_settings_list_action(&mut items, SettingsListAction::MoveTo { from: 2, to: 0 });
+        apply_settings_list_action(&mut items, SettingsListAction::Remove(2));
+
+        assert_eq!(items, vec!["a", "b"]);
     }
 
     #[test]

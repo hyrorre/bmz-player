@@ -9494,6 +9494,10 @@ fn enabled_root_paths(app_config: &crate::config::app_config::AppConfig) -> Vec<
     app_config.songs.roots.iter().filter(|p| p.enabled).map(|p| p.path.clone()).collect()
 }
 
+fn table_source_order(app_config: &crate::config::app_config::AppConfig) -> Vec<String> {
+    app_config.tables.sources.iter().map(|source| source.url.clone()).collect()
+}
+
 /// 選曲リストを構築し、mode filter / sort を適用して返す。
 ///
 /// mode filter は beatoraja `BarManager` 準拠で、指定モードがこの一覧の
@@ -9550,13 +9554,15 @@ fn build_select_items_for_stack(
             None => Vec::new(),
         },
         Some(path) if path.starts_with(TABLE_ROOT_PATH) => match parse_table_path(path) {
-            Some(TablePath::Root) => match table_folder_items(&boot.library_db) {
-                Ok(items) => items,
-                Err(error) => {
-                    tracing::error!(%error, "failed to load difficulty table list");
-                    Vec::new()
+            Some(TablePath::Root) => {
+                match table_folder_items(&boot.library_db, &table_source_order(&boot.app_config)) {
+                    Ok(items) => items,
+                    Err(error) => {
+                        tracing::error!(%error, "failed to load difficulty table list");
+                        Vec::new()
+                    }
                 }
-            },
+            }
             Some(TablePath::Table { source_url }) => {
                 match table_level_folder_items(&boot.library_db, source_url) {
                     Ok(items) => items,
@@ -9611,7 +9617,7 @@ fn build_select_items_for_stack(
                     tracing::error!(%error, "failed to check course list for root");
                 }
             }
-            match table_folder_items(&boot.library_db) {
+            match table_folder_items(&boot.library_db, &table_source_order(&boot.app_config)) {
                 Ok(tables) => items.extend(tables),
                 Err(error) => {
                     tracing::error!(%error, "failed to load difficulty table folders");
