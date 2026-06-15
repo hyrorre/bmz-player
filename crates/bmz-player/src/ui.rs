@@ -33,7 +33,7 @@ use crate::practice_ui::{PracticePanelContext, build_practice_panel};
 use crate::screens::course_session::CourseResultSummary;
 use crate::screens::select_model::SelectCourseRow;
 use crate::skin_loader::RANDOM_FILE_SELECTION;
-use crate::songs_cmd::{add_song_root_entry, remove_song_root_entry};
+use crate::songs_cmd::add_song_root_entry;
 use crate::storage::score_import::{ScoreImportKind, ScoreImportRequest};
 
 /// スキンが宣言する設定可能項目の定義 (1 シーン分)。
@@ -1240,6 +1240,28 @@ struct SettingsPanelState<'a> {
     audio_device_picker: &'a mut AudioDevicePickerState,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SettingsListAction {
+    MoveUp(usize),
+    MoveDown(usize),
+    Remove(usize),
+}
+
+fn apply_settings_list_action<T>(items: &mut Vec<T>, action: SettingsListAction) {
+    match action {
+        SettingsListAction::MoveUp(index) if index > 0 && index < items.len() => {
+            items.swap(index - 1, index);
+        }
+        SettingsListAction::MoveDown(index) if index + 1 < items.len() => {
+            items.swap(index, index + 1);
+        }
+        SettingsListAction::Remove(index) if index < items.len() => {
+            items.remove(index);
+        }
+        _ => {}
+    }
+}
+
 /// `AppConfig` を編集する本体設定パネル。
 fn build_settings_panel(
     ctx: &egui::Context,
@@ -1258,13 +1280,29 @@ fn build_settings_panel(
                 egui::CollapsingHeader::new("曲フォルダ (BMS)")
                     .default_open(true)
                     .show(ui, |ui| {
-                        let mut remove_index = None;
+                        let mut root_action = None;
+                        let root_len = config.songs.roots.len();
                         for (index, root) in config.songs.roots.iter_mut().enumerate() {
                             ui.push_id(index, |ui| {
                                 ui.horizontal(|ui| {
                                     ui.label(&root.path);
+                                    if ui
+                                        .add_enabled(index > 0, egui::Button::new("上へ"))
+                                        .clicked()
+                                    {
+                                        root_action = Some(SettingsListAction::MoveUp(index));
+                                    }
+                                    if ui
+                                        .add_enabled(
+                                            index + 1 < root_len,
+                                            egui::Button::new("下へ"),
+                                        )
+                                        .clicked()
+                                    {
+                                        root_action = Some(SettingsListAction::MoveDown(index));
+                                    }
                                     if ui.button("削除").clicked() {
-                                        remove_index = Some(index);
+                                        root_action = Some(SettingsListAction::Remove(index));
                                     }
                                 });
                                 ui.horizontal(|ui| {
@@ -1274,8 +1312,8 @@ fn build_settings_panel(
                                 ui.separator();
                             });
                         }
-                        if let Some(index) = remove_index {
-                            remove_song_root_entry(&mut config.songs.roots, index);
+                        if let Some(action) = root_action {
+                            apply_settings_list_action(&mut config.songs.roots, action);
                         }
                         if config.songs.roots.is_empty() {
                             ui.label("登録された曲フォルダはありません。");
@@ -1358,20 +1396,33 @@ fn build_settings_panel(
 
                 egui::CollapsingHeader::new("難易度表").show(ui, |ui| {
                     ui.checkbox(&mut config.tables.auto_fetch_on_startup, "起動時に自動取得");
-                    let mut remove_index = None;
+                    let mut table_action = None;
+                    let table_len = config.tables.sources.len();
                     for (index, source) in config.tables.sources.iter_mut().enumerate() {
                         ui.push_id(("table_source", index), |ui| {
                             ui.horizontal(|ui| {
                                 ui.checkbox(&mut source.enabled, "");
                                 ui.label(&source.url);
+                                if ui
+                                    .add_enabled(index > 0, egui::Button::new("上へ"))
+                                    .clicked()
+                                {
+                                    table_action = Some(SettingsListAction::MoveUp(index));
+                                }
+                                if ui
+                                    .add_enabled(index + 1 < table_len, egui::Button::new("下へ"))
+                                    .clicked()
+                                {
+                                    table_action = Some(SettingsListAction::MoveDown(index));
+                                }
                                 if ui.button("削除").clicked() {
-                                    remove_index = Some(index);
+                                    table_action = Some(SettingsListAction::Remove(index));
                                 }
                             });
                         });
                     }
-                    if let Some(index) = remove_index {
-                        config.tables.sources.remove(index);
+                    if let Some(action) = table_action {
+                        apply_settings_list_action(&mut config.tables.sources, action);
                     }
                     if config.tables.sources.is_empty() {
                         ui.label("登録された難易度表はありません。");
@@ -3548,6 +3599,31 @@ mod tests {
         assert_eq!(max_inner, egui::vec2(1876.0, 990.0));
         // outer 高さ 618 のため y=480 では下端がはみ出す → 446 へクランプ。
         assert_eq!(pos, egui::pos2(16.0, 446.0));
+    }
+
+    #[test]
+    fn apply_settings_list_action_moves_and_removes_entries() {
+        let mut items = vec!["a", "b", "c"];
+
+        apply_settings_list_action(&mut items, SettingsListAction::MoveDown(0));
+        assert_eq!(items, vec!["b", "a", "c"]);
+
+        apply_settings_list_action(&mut items, SettingsListAction::MoveUp(2));
+        assert_eq!(items, vec!["b", "c", "a"]);
+
+        apply_settings_list_action(&mut items, SettingsListAction::Remove(1));
+        assert_eq!(items, vec!["b", "a"]);
+    }
+
+    #[test]
+    fn apply_settings_list_action_ignores_invalid_moves() {
+        let mut items = vec!["a", "b"];
+
+        apply_settings_list_action(&mut items, SettingsListAction::MoveUp(0));
+        apply_settings_list_action(&mut items, SettingsListAction::MoveDown(1));
+        apply_settings_list_action(&mut items, SettingsListAction::Remove(2));
+
+        assert_eq!(items, vec!["a", "b"]);
     }
 
     #[test]

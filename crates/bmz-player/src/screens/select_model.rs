@@ -333,8 +333,21 @@ pub fn root_folder_items(root_paths: &[String]) -> Vec<SelectItem> {
 }
 
 /// Returns one folder item per registered difficulty table.
-pub fn table_folder_items(library_db: &LibraryDatabase) -> Result<Vec<SelectItem>> {
-    let tables = library_db.list_difficulty_tables()?;
+pub fn table_folder_items(
+    library_db: &LibraryDatabase,
+    source_order: &[String],
+) -> Result<Vec<SelectItem>> {
+    let mut tables = library_db.list_difficulty_tables()?;
+    if !source_order.is_empty() {
+        let order: HashMap<&str, usize> = source_order
+            .iter()
+            .enumerate()
+            .map(|(index, source_url)| (source_url.as_str(), index))
+            .collect();
+        tables.sort_by_key(|table| {
+            order.get(table.source_url.as_str()).copied().unwrap_or(usize::MAX)
+        });
+    }
     Ok(tables
         .into_iter()
         .map(|t| SelectItem::Folder {
@@ -1413,7 +1426,7 @@ mod tests {
         let table = difficulty_table_for_md5(&alpha.identity.file_md5, "★", "1");
         library_db.upsert_difficulty_table(&table).unwrap();
 
-        let items = table_folder_items(&library_db).unwrap();
+        let items = table_folder_items(&library_db, &[]).unwrap();
 
         assert_eq!(items.len(), 1);
         assert!(matches!(
@@ -1421,6 +1434,30 @@ mod tests {
             SelectItem::Folder { path, name, kind, .. }
             if path.starts_with(TABLE_ROOT_PATH) && name.contains("★") && *kind == SelectRowKind::TableFolder
         ));
+    }
+
+    #[test]
+    fn table_folder_items_follow_config_source_order() {
+        let (mut library_db, _) = open_in_memory_dbs();
+        let chart = chart("Table Song");
+        let table_a = difficulty_table_for_md5(&chart.identity.file_md5, "A", "1");
+        let table_b = difficulty_table_for_md5(&chart.identity.file_md5, "B", "1");
+        library_db.upsert_difficulty_table(&table_a).unwrap();
+        library_db.upsert_difficulty_table(&table_b).unwrap();
+
+        let items = table_folder_items(
+            &library_db,
+            &["https://example.com/B/".to_string(), "https://example.com/A/".to_string()],
+        )
+        .unwrap();
+
+        let names: Vec<_> = items
+            .iter()
+            .filter_map(|item| {
+                if let SelectItem::Folder { name, .. } = item { Some(name.as_str()) } else { None }
+            })
+            .collect();
+        assert_eq!(names, vec!["[B] Table B", "[A] Table A"]);
     }
 
     #[test]
