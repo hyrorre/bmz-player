@@ -1303,11 +1303,6 @@ fn settings_drag_handle_visual(ui: &mut egui::Ui) {
     .on_hover_text("ドラッグして並び替え");
 }
 
-fn settings_dragged_row(ui: &egui::Ui, list: SettingsDragList, index: usize) -> bool {
-    egui::DragAndDrop::payload::<SettingsDragPayload>(ui.ctx())
-        .is_some_and(|payload| payload.list == list && payload.index == index)
-}
-
 /// `AppConfig` を編集する本体設定パネル。
 fn build_settings_panel(
     ctx: &egui::Context,
@@ -1333,8 +1328,6 @@ fn build_settings_panel(
                                 let label_width = (settings_list_label_width(ui)
                                     - SETTINGS_LIST_DRAG_HANDLE_WIDTH)
                                     .max(SETTINGS_LIST_MIN_LABEL_WIDTH);
-                                let dragging_this_row =
-                                    settings_dragged_row(ui, SettingsDragList::SongRoots, index);
                                 let (_, dropped) = ui.dnd_drop_zone::<SettingsDragPayload, _>(
                                     egui::Frame::NONE,
                                     |ui| {
@@ -1386,13 +1379,9 @@ fn build_settings_panel(
                                                 );
                                             });
                                         };
-                                        if dragging_this_row {
-                                            ui.add_enabled_ui(false, |ui| add_row_contents(ui));
-                                        } else {
-                                            ui.dnd_drag_source(drag_id, payload, |ui| {
-                                                add_row_contents(ui);
-                                            });
-                                        }
+                                        ui.dnd_drag_source(drag_id, payload, |ui| {
+                                            add_row_contents(ui);
+                                        });
                                     },
                                 );
                                 if let Some(payload) = dropped
@@ -1502,8 +1491,6 @@ fn build_settings_panel(
                                 - ui.spacing().interact_size.x
                                 - SETTINGS_LIST_DRAG_HANDLE_WIDTH)
                                 .max(64.0);
-                            let dragging_this_row =
-                                settings_dragged_row(ui, SettingsDragList::TableSources, index);
                             let (_, dropped) = ui.dnd_drop_zone::<SettingsDragPayload, _>(
                                 egui::Frame::NONE,
                                 |ui| {
@@ -1551,13 +1538,9 @@ fn build_settings_panel(
                                             );
                                         });
                                     };
-                                    if dragging_this_row {
-                                        ui.add_enabled_ui(false, |ui| add_row_contents(ui));
-                                    } else {
-                                        ui.dnd_drag_source(drag_id, payload, |ui| {
-                                            add_row_contents(ui);
-                                        });
-                                    }
+                                    ui.dnd_drag_source(drag_id, payload, |ui| {
+                                        add_row_contents(ui);
+                                    });
                                 },
                             );
                             if let Some(payload) = dropped
