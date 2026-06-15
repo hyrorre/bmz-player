@@ -1244,10 +1244,24 @@ struct SettingsPanelState<'a> {
 enum SettingsListAction {
     MoveUp(usize),
     MoveDown(usize),
+    MoveTo { from: usize, to: usize },
     Remove(usize),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SettingsDragList {
+    SongRoots,
+    TableSources,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SettingsDragPayload {
+    list: SettingsDragList,
+    index: usize,
+}
+
 const SETTINGS_LIST_BUTTONS_WIDTH: f32 = 176.0;
+const SETTINGS_LIST_DRAG_HANDLE_WIDTH: f32 = 20.0;
 const SETTINGS_LIST_MIN_LABEL_WIDTH: f32 = 96.0;
 
 fn apply_settings_list_action<T>(items: &mut Vec<T>, action: SettingsListAction) {
@@ -1257,6 +1271,12 @@ fn apply_settings_list_action<T>(items: &mut Vec<T>, action: SettingsListAction)
         }
         SettingsListAction::MoveDown(index) if index + 1 < items.len() => {
             items.swap(index, index + 1);
+        }
+        SettingsListAction::MoveTo { from, to }
+            if from < items.len() && to < items.len() && from != to =>
+        {
+            let item = items.remove(from);
+            items.insert(to.min(items.len()), item);
         }
         SettingsListAction::Remove(index) if index < items.len() => {
             items.remove(index);
@@ -1272,6 +1292,16 @@ fn settings_list_label_width(ui: &egui::Ui) -> f32 {
 fn settings_list_label(ui: &mut egui::Ui, text: &str, width: f32) {
     ui.add_sized([width, ui.spacing().interact_size.y], egui::Label::new(text).truncate())
         .on_hover_text(text);
+}
+
+fn settings_drag_handle(ui: &mut egui::Ui, id: egui::Id, payload: SettingsDragPayload) {
+    ui.dnd_drag_source(id, payload, |ui| {
+        ui.add_sized(
+            [SETTINGS_LIST_DRAG_HANDLE_WIDTH, ui.spacing().interact_size.y],
+            egui::Label::new("≡"),
+        )
+        .on_hover_text("ドラッグして並び替え");
+    });
 }
 
 /// `AppConfig` を編集する本体設定パネル。
@@ -1296,36 +1326,63 @@ fn build_settings_panel(
                         let root_len = config.songs.roots.len();
                         for (index, root) in config.songs.roots.iter_mut().enumerate() {
                             ui.push_id(index, |ui| {
-                                let label_width = settings_list_label_width(ui);
-                                ui.horizontal(|ui| {
-                                    settings_list_label(ui, &root.path, label_width);
-                                    ui.with_layout(
-                                        egui::Layout::right_to_left(egui::Align::Center),
-                                        |ui| {
-                                            if ui.button("削除").clicked() {
-                                                root_action =
-                                                    Some(SettingsListAction::Remove(index));
-                                            }
-                                            if ui
-                                                .add_enabled(
-                                                    index + 1 < root_len,
-                                                    egui::Button::new("下へ"),
-                                                )
-                                                .clicked()
-                                            {
-                                                root_action =
-                                                    Some(SettingsListAction::MoveDown(index));
-                                            }
-                                            if ui
-                                                .add_enabled(index > 0, egui::Button::new("上へ"))
-                                                .clicked()
-                                            {
-                                                root_action =
-                                                    Some(SettingsListAction::MoveUp(index));
-                                            }
-                                        },
-                                    );
-                                });
+                                let label_width = (settings_list_label_width(ui)
+                                    - SETTINGS_LIST_DRAG_HANDLE_WIDTH)
+                                    .max(SETTINGS_LIST_MIN_LABEL_WIDTH);
+                                let (_, dropped) = ui.dnd_drop_zone::<SettingsDragPayload, _>(
+                                    egui::Frame::NONE,
+                                    |ui| {
+                                        ui.horizontal(|ui| {
+                                            settings_drag_handle(
+                                                ui,
+                                                egui::Id::new(("settings_song_root_drag", index)),
+                                                SettingsDragPayload {
+                                                    list: SettingsDragList::SongRoots,
+                                                    index,
+                                                },
+                                            );
+                                            settings_list_label(ui, &root.path, label_width);
+                                            ui.with_layout(
+                                                egui::Layout::right_to_left(egui::Align::Center),
+                                                |ui| {
+                                                    if ui.button("削除").clicked() {
+                                                        root_action =
+                                                            Some(SettingsListAction::Remove(index));
+                                                    }
+                                                    if ui
+                                                        .add_enabled(
+                                                            index + 1 < root_len,
+                                                            egui::Button::new("下へ"),
+                                                        )
+                                                        .clicked()
+                                                    {
+                                                        root_action = Some(
+                                                            SettingsListAction::MoveDown(index),
+                                                        );
+                                                    }
+                                                    if ui
+                                                        .add_enabled(
+                                                            index > 0,
+                                                            egui::Button::new("上へ"),
+                                                        )
+                                                        .clicked()
+                                                    {
+                                                        root_action =
+                                                            Some(SettingsListAction::MoveUp(index));
+                                                    }
+                                                },
+                                            );
+                                        });
+                                    },
+                                );
+                                if let Some(payload) = dropped
+                                    && payload.list == SettingsDragList::SongRoots
+                                {
+                                    root_action = Some(SettingsListAction::MoveTo {
+                                        from: payload.index,
+                                        to: index,
+                                    });
+                                }
                                 ui.horizontal(|ui| {
                                     ui.checkbox(&mut root.enabled, "有効");
                                     ui.checkbox(&mut root.recursive, "再帰スキャン");
@@ -1421,37 +1478,64 @@ fn build_settings_panel(
                     let table_len = config.tables.sources.len();
                     for (index, source) in config.tables.sources.iter_mut().enumerate() {
                         ui.push_id(("table_source", index), |ui| {
-                            let label_width = settings_list_label_width(ui);
-                            ui.horizontal(|ui| {
-                                ui.checkbox(&mut source.enabled, "");
-                                let label_width =
-                                    (label_width - ui.spacing().interact_size.x).max(64.0);
-                                settings_list_label(ui, &source.url, label_width);
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        if ui.button("削除").clicked() {
-                                            table_action = Some(SettingsListAction::Remove(index));
-                                        }
-                                        if ui
-                                            .add_enabled(
-                                                index + 1 < table_len,
-                                                egui::Button::new("下へ"),
-                                            )
-                                            .clicked()
-                                        {
-                                            table_action =
-                                                Some(SettingsListAction::MoveDown(index));
-                                        }
-                                        if ui
-                                            .add_enabled(index > 0, egui::Button::new("上へ"))
-                                            .clicked()
-                                        {
-                                            table_action = Some(SettingsListAction::MoveUp(index));
-                                        }
-                                    },
-                                );
-                            });
+                            let label_width = (settings_list_label_width(ui)
+                                - ui.spacing().interact_size.x
+                                - SETTINGS_LIST_DRAG_HANDLE_WIDTH)
+                                .max(64.0);
+                            let (_, dropped) = ui.dnd_drop_zone::<SettingsDragPayload, _>(
+                                egui::Frame::NONE,
+                                |ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.checkbox(&mut source.enabled, "");
+                                        settings_drag_handle(
+                                            ui,
+                                            egui::Id::new(("settings_table_source_drag", index)),
+                                            SettingsDragPayload {
+                                                list: SettingsDragList::TableSources,
+                                                index,
+                                            },
+                                        );
+                                        settings_list_label(ui, &source.url, label_width);
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                if ui.button("削除").clicked() {
+                                                    table_action =
+                                                        Some(SettingsListAction::Remove(index));
+                                                }
+                                                if ui
+                                                    .add_enabled(
+                                                        index + 1 < table_len,
+                                                        egui::Button::new("下へ"),
+                                                    )
+                                                    .clicked()
+                                                {
+                                                    table_action =
+                                                        Some(SettingsListAction::MoveDown(index));
+                                                }
+                                                if ui
+                                                    .add_enabled(
+                                                        index > 0,
+                                                        egui::Button::new("上へ"),
+                                                    )
+                                                    .clicked()
+                                                {
+                                                    table_action =
+                                                        Some(SettingsListAction::MoveUp(index));
+                                                }
+                                            },
+                                        );
+                                    });
+                                },
+                            );
+                            if let Some(payload) = dropped
+                                && payload.list == SettingsDragList::TableSources
+                            {
+                                table_action = Some(SettingsListAction::MoveTo {
+                                    from: payload.index,
+                                    to: index,
+                                });
+                            }
                         });
                     }
                     if let Some(action) = table_action {
@@ -3649,11 +3733,24 @@ mod tests {
     }
 
     #[test]
+    fn apply_settings_list_action_moves_entry_to_index() {
+        let mut items = vec!["a", "b", "c", "d"];
+
+        apply_settings_list_action(&mut items, SettingsListAction::MoveTo { from: 0, to: 2 });
+        assert_eq!(items, vec!["b", "c", "a", "d"]);
+
+        apply_settings_list_action(&mut items, SettingsListAction::MoveTo { from: 3, to: 1 });
+        assert_eq!(items, vec!["b", "d", "c", "a"]);
+    }
+
+    #[test]
     fn apply_settings_list_action_ignores_invalid_moves() {
         let mut items = vec!["a", "b"];
 
         apply_settings_list_action(&mut items, SettingsListAction::MoveUp(0));
         apply_settings_list_action(&mut items, SettingsListAction::MoveDown(1));
+        apply_settings_list_action(&mut items, SettingsListAction::MoveTo { from: 0, to: 2 });
+        apply_settings_list_action(&mut items, SettingsListAction::MoveTo { from: 2, to: 0 });
         apply_settings_list_action(&mut items, SettingsListAction::Remove(2));
 
         assert_eq!(items, vec!["a", "b"]);
