@@ -87,6 +87,7 @@ pub fn load_lua_skin_header_value(path: &Path) -> Result<LoadedLuaSkinValue> {
 fn normalize_lua_skin_document(value: JsonValue) -> JsonValue {
     let value = normalize_json_skin_integer_numbers(value);
     let value = normalize_lua_skin_category_map(value);
+    let value = normalize_lua_end_of_note_shadow_destinations(value);
     normalize_lua_skin_offset_map(value)
 }
 
@@ -110,6 +111,95 @@ fn normalize_lua_skin_category_map(value: JsonValue) -> JsonValue {
 /// array of offset definitions.
 fn normalize_lua_skin_offset_map(value: JsonValue) -> JsonValue {
     normalize_lua_skin_offset_map_for_key(None, value)
+}
+
+fn normalize_lua_end_of_note_shadow_destinations(value: JsonValue) -> JsonValue {
+    let JsonValue::Object(mut map) = value else {
+        return value;
+    };
+    let Some(JsonValue::Array(mut destinations)) = map.remove("destination") else {
+        return JsonValue::Object(map);
+    };
+
+    let end_of_note_destinations = destinations
+        .iter()
+        .filter_map(|destination| {
+            let JsonValue::Object(destination) = destination else {
+                return None;
+            };
+            let timer = destination.get("timer").and_then(JsonValue::as_i64)?;
+            if !matches!(timer, 143 | 144) {
+                return None;
+            }
+            Some((
+                destination.get("id").and_then(JsonValue::as_str)?.to_string(),
+                single_dst_geometry(destination)?,
+                timer,
+            ))
+        })
+        .collect::<Vec<_>>();
+
+    if end_of_note_destinations.is_empty() {
+        map.insert("destination".to_string(), JsonValue::Array(destinations));
+        return JsonValue::Object(map);
+    }
+
+    for destination in &mut destinations {
+        let JsonValue::Object(destination) = destination else {
+            continue;
+        };
+        if destination.contains_key("timer")
+            || destination
+                .get("draw")
+                .and_then(JsonValue::as_str)
+                .is_some_and(json_draw_is_restrictive)
+            || destination.get("op").is_some_and(json_array_has_entries)
+        {
+            continue;
+        }
+        let Some(id) = destination.get("id").and_then(JsonValue::as_str) else {
+            continue;
+        };
+        let Some(geometry) = single_dst_geometry(destination) else {
+            continue;
+        };
+        let Some((_, _, timer)) = end_of_note_destinations
+            .iter()
+            .find(|(end_id, end_geometry, _)| end_id == id && *end_geometry == geometry)
+        else {
+            continue;
+        };
+        destination
+            .insert("timer".to_string(), JsonValue::Number(serde_json::Number::from(*timer)));
+    }
+
+    map.insert("destination".to_string(), JsonValue::Array(destinations));
+    JsonValue::Object(map)
+}
+
+fn single_dst_geometry(destination: &JsonMap<String, JsonValue>) -> Option<(i64, i64, i64, i64)> {
+    let dst = destination.get("dst")?.as_array()?;
+    if dst.len() != 1 {
+        return None;
+    }
+    let JsonValue::Object(frame) = &dst[0] else {
+        return None;
+    };
+    Some((
+        frame.get("x").and_then(JsonValue::as_i64).unwrap_or(0),
+        frame.get("y").and_then(JsonValue::as_i64).unwrap_or(0),
+        frame.get("w").and_then(JsonValue::as_i64).unwrap_or(0),
+        frame.get("h").and_then(JsonValue::as_i64).unwrap_or(0),
+    ))
+}
+
+fn json_array_has_entries(value: &JsonValue) -> bool {
+    value.as_array().is_some_and(|entries| !entries.is_empty())
+}
+
+fn json_draw_is_restrictive(draw: &str) -> bool {
+    let draw = draw.trim();
+    !draw.is_empty() && draw != "number(0) >= 0"
 }
 
 fn normalize_lua_skin_offset_map_for_key(key: Option<&str>, value: JsonValue) -> JsonValue {
@@ -1873,6 +1963,58 @@ mod tests {
         assert!(draws.contains(&"number(153) == 0"));
     }
 
+    #[test]
+    fn lua_skin_inherits_end_of_note_timer_for_duplicate_shadow_layer() {
+        let root = unique_test_dir("bmz-skin-eon-shadow");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("play7.luaskin"),
+            r#"
+            return {
+                type = 0,
+                source = {
+                    { id = "system", path = "system.png" },
+                },
+                image = {
+                    { id = "eon", src = "system", x = 0, y = 0, w = 390, h = 35 },
+                },
+                destination = {
+                    {
+                        id = "eon",
+                        draw = function() return true end,
+                        dst = {{ x = 693, y = 522, w = 390, h = 35, r = 64, g = 64, b = 64 }},
+                    },
+                    {
+                        id = "eon",
+                        timer = 143,
+                        dst = {{ x = 693, y = 522, w = 390, h = 35 }},
+                    },
+                },
+            }
+            "#,
+        )
+        .unwrap();
+
+        let loaded = load_lua_skin(
+            &root.join("play7.luaskin"),
+            SkinKind::Play,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        let timers: Vec<_> = loaded
+            .document
+            .destination
+            .iter()
+            .filter_map(|entry| match entry {
+                bmz_render::skin::DestinationListEntry::Single(destination) => destination.timer,
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(timers, vec![143, 143]);
+    }
+
     /// Rm-skin 互換作業のベースライン。`data/skins/Rm-skin` が無い環境では skip する。
     #[test]
     fn rm_skin_play7_convert_warnings_baseline() {
@@ -1933,5 +2075,22 @@ mod tests {
             .expect("Rm-skin play7 should decode");
         assert!(!loaded.document.destination.is_empty());
         assert_eq!(loaded.document.skin_type, 0);
+        let eon_timers: Vec<_> = loaded
+            .document
+            .destination
+            .iter()
+            .filter_map(|entry| match entry {
+                bmz_render::skin::DestinationListEntry::Single(destination)
+                    if destination.id == "eon" =>
+                {
+                    Some(destination.timer)
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(
+            !eon_timers.is_empty() && eon_timers.iter().all(|timer| *timer == Some(143)),
+            "Rm-skin end-of-note layers should all use timer 143: {eon_timers:?}"
+        );
     }
 }
