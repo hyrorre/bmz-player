@@ -11009,10 +11009,20 @@ fn apply_skin_offset_ids_to_frame(
 ) {
     for &offset_id in ids {
         match offset_id {
-            3 => frame.y += state.offset_lift_px,
-            4 => frame.y += state.offset_lanecover_px,
+            3 => {
+                if !relative {
+                    frame.y += state.offset_lift_px;
+                }
+            }
+            4 => {
+                if !relative {
+                    frame.y += state.offset_lanecover_px;
+                }
+            }
             5 => {
-                frame.y += state.offset_hidden_cover_px;
+                if !relative {
+                    frame.y += state.offset_hidden_cover_px;
+                }
                 if state.hidden_cover <= 0.0 {
                     frame.a = (frame.a - 255).clamp(0, 255);
                 }
@@ -20480,6 +20490,72 @@ mod tests {
 
         let image_shift = image_center_y_h - image_center_y_0;
         let combo_shift = combo_center_y_h - combo_center_y_0;
+        assert!(
+            approx_eq(image_shift, combo_shift),
+            "image Y shift {image_shift} should match combo Y shift {combo_shift}"
+        );
+    }
+
+    #[test]
+    fn judge_lift_offset_keeps_image_and_combo_y_aligned() {
+        // SkinNumber は relative offset のため、判定文字の destination と同じ
+        // LIFT offset を持っていても combo 数字側で y を二重に動かさない。
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "w": 100, "h": 100,
+                "source": [{ "id": "src", "path": "judge.png" }],
+                "image": [{ "id": "judgef-pg", "src": "src", "x": 0, "y": 0, "w": 10, "h": 10 }],
+                "value": [{
+                    "id": "combo-num", "src": "src",
+                    "x": 0, "y": 10, "w": 10, "h": 20,
+                    "divx": 10, "divy": 1, "digit": 4, "ref": 102
+                }],
+                "judge": [{
+                    "id": "judge",
+                    "images": [
+                        { "id": "judgef-pg", "offset": 3, "dst": [
+                            { "time": 0, "x": 10, "y": 20, "w": 30, "h": 10 },
+                            { "time": 500 }
+                        ]}
+                    ],
+                    "numbers": [
+                        { "id": "combo-num", "offset": 3, "dst": [
+                            { "time": 0, "x": 0, "y": 30, "w": 10, "h": 20 },
+                            { "time": 500 }
+                        ]}
+                    ]
+                }]
+            }
+            "#,
+        )
+        .unwrap();
+        let sources = mock_source("src", 10.0, 10.0);
+
+        fn render_y_positions(
+            document: &SkinDocument,
+            sources: &HashMap<String, SkinDocumentTexture>,
+            lift_px: i32,
+        ) -> (f32, f32) {
+            let state = SkinDrawState { offset_lift_px: lift_px, ..SkinDrawState::default() };
+            let items = document
+                .judge_render_items_for_def(&document.judge[0], 0, 42, 0, sources, &state)
+                .unwrap();
+            let SkinRenderItem::Image { rect: image_rect, .. } = &items[0] else {
+                panic!("first item should be image")
+            };
+            let SkinRenderItem::Image { rect: combo_rect, .. } = &items[1] else {
+                panic!("second item should be first combo digit")
+            };
+            (image_rect.y + image_rect.height / 2.0, combo_rect.y + combo_rect.height / 2.0)
+        }
+
+        let (image_center_y_0, combo_center_y_0) = render_y_positions(&document, &sources, 0);
+        let (image_center_y_lift, combo_center_y_lift) =
+            render_y_positions(&document, &sources, 10);
+
+        let image_shift = image_center_y_lift - image_center_y_0;
+        let combo_shift = combo_center_y_lift - combo_center_y_0;
         assert!(
             approx_eq(image_shift, combo_shift),
             "image Y shift {image_shift} should match combo Y shift {combo_shift}"
