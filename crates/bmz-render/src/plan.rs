@@ -1540,6 +1540,7 @@ fn build_result_skin_draw_state(
         total_duration_ms: snapshot.duration_ms,
         max_combo: snapshot.max_combo,
         judge_counts: snapshot.judge_counts,
+        player_stats: snapshot.player_stats,
         fast_slow_counts: Some(snapshot.fast_slow_counts),
         gauge: snapshot.gauge_value,
         gauge_type: snapshot.gauge_type,
@@ -2965,6 +2966,7 @@ mod tests {
                 graph: crate::snapshot::ResultGraphSnapshot::default(),
                 overlay: crate::snapshot::OverlaySnapshot::default(),
                 ir: crate::scene::ResultIrSnapshot::default(),
+                player_stats: crate::scene::PlayerStatsSnapshot::default(),
             };
 
             let plan = DrawPlan::from_scene_with_skin(
@@ -3060,6 +3062,7 @@ mod tests {
             },
             overlay: crate::snapshot::OverlaySnapshot::default(),
             ir: crate::scene::ResultIrSnapshot::default(),
+            player_stats: crate::scene::PlayerStatsSnapshot::default(),
         };
 
         let plan = DrawPlan::from_scene_with_skin(
@@ -3252,6 +3255,7 @@ mod tests {
             },
             overlay: crate::snapshot::OverlaySnapshot::default(),
             ir: crate::scene::ResultIrSnapshot::default(),
+            player_stats: crate::scene::PlayerStatsSnapshot::default(),
         };
 
         let plan = DrawPlan::from_scene_with_skin(
@@ -3364,6 +3368,7 @@ mod tests {
             },
             overlay: crate::snapshot::OverlaySnapshot::default(),
             ir: crate::scene::ResultIrSnapshot::default(),
+            player_stats: crate::scene::PlayerStatsSnapshot::default(),
         };
 
         let plan = DrawPlan::from_scene_with_skin(

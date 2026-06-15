@@ -24,6 +24,26 @@ pub enum AppSceneSnapshot {
     Result(ResultSnapshot),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PlayerStatsSnapshot {
+    pub play_count: u64,
+    pub clear_count: u64,
+    pub playtime_seconds: u64,
+    pub max_combo: u32,
+    pub fast_pgreat: u64,
+    pub slow_pgreat: u64,
+    pub fast_great: u64,
+    pub slow_great: u64,
+    pub fast_good: u64,
+    pub slow_good: u64,
+    pub fast_bad: u64,
+    pub slow_bad: u64,
+    pub fast_poor: u64,
+    pub slow_poor: u64,
+    pub fast_empty_poor: u64,
+    pub slow_empty_poor: u64,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelectSnapshot {
     pub time: TimeUs,
@@ -101,6 +121,7 @@ pub struct SelectSnapshot {
     /// 選曲カーソル譜面の IR ライバルベスト
     /// (STRING_RIVAL=1 / NUMBER_RIVAL_*=271,275,276 / OPTION_COMPARE_RIVAL=624,625)。
     pub rival: Option<SelectRivalSnapshot>,
+    pub player_stats: PlayerStatsSnapshot,
 }
 
 /// 選曲カーソル譜面に対する IR ライバル (最上位 1 名) のベストスコア。
@@ -165,6 +186,7 @@ impl Default for SelectSnapshot {
             mouse_position: None,
             ir: ResultIrSnapshot::default(),
             rival: None,
+            player_stats: PlayerStatsSnapshot::default(),
         }
     }
 }
@@ -506,6 +528,7 @@ pub struct ResultSnapshot {
     pub overlay: OverlaySnapshot,
     /// IR ランキング表示状態 (NUMBER_IR_* / OPTION_IR_*)。
     pub ir: ResultIrSnapshot,
+    pub player_stats: PlayerStatsSnapshot,
 }
 
 impl ResultSnapshot {
@@ -574,6 +597,7 @@ mod tests {
             graph: crate::snapshot::ResultGraphSnapshot::default(),
             overlay: OverlaySnapshot::default(),
             ir: ResultIrSnapshot::default(),
+            player_stats: PlayerStatsSnapshot::default(),
         };
 
         assert!(snapshot.is_full_combo());
@@ -633,6 +657,7 @@ mod tests {
             graph: crate::snapshot::ResultGraphSnapshot::default(),
             overlay: OverlaySnapshot::default(),
             ir: ResultIrSnapshot::default(),
+            player_stats: PlayerStatsSnapshot::default(),
         };
 
         assert!(!snapshot.is_full_combo());

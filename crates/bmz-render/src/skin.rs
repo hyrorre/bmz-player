@@ -20,7 +20,8 @@ use crate::plan::{
     TextOverflow, TextShadow, TextStyle, TextureId, UvRect,
 };
 use crate::scene::{
-    CourseConstraintFlags, ResultGradeDiffDisplay, SelectRowKind, SelectRowSnapshot, SelectSnapshot,
+    CourseConstraintFlags, PlayerStatsSnapshot, ResultGradeDiffDisplay, SelectRowKind,
+    SelectRowSnapshot, SelectSnapshot,
 };
 use crate::skin_offset::{SKIN_OFFSET_BAR_LINE, SkinOffsetValues};
 use crate::snapshot::{CourseStageMarker, DisplayJudgeCounts, LongBodyState};
@@ -1857,6 +1858,7 @@ pub struct SkinDrawState {
     pub result_grade_diff_display: ResultGradeDiffDisplay,
     pub result_grade_diff_f_fallback_to_e: bool,
     pub judge_counts: DisplayJudgeCounts,
+    pub player_stats: PlayerStatsSnapshot,
     pub gauge: f32,
     pub gauge_type: i32,
     pub gauge_auto_shift: bool,
@@ -2144,6 +2146,7 @@ impl Default for SkinDrawState {
             result_grade_diff_display: ResultGradeDiffDisplay::default(),
             result_grade_diff_f_fallback_to_e: false,
             judge_counts: DisplayJudgeCounts::default(),
+            player_stats: PlayerStatsSnapshot::default(),
             gauge: 0.0,
             gauge_type: 2,
             gauge_auto_shift: false,
@@ -3801,6 +3804,7 @@ impl SkinDocument {
             select_bga_index: select_bga_index(&snapshot.bga),
             judge_timing_offset_ms: snapshot.judge_timing_offset_ms,
             judge_timing_auto_adjust: snapshot.judge_timing_auto_adjust,
+            player_stats: snapshot.player_stats,
             select_assist_index: select_assist_index(&snapshot.assist),
             select_mode_index: select_mode_index(&snapshot.select_mode),
             select_sort_index: select_sort_index(&snapshot.select_sort),
@@ -8048,7 +8052,7 @@ fn skin_state_float_product_expr_term(term: &str, state: &SkinDrawState) -> Opti
 fn select_settings_screen_number_hidden(ref_id: i32) -> bool {
     matches!(
         ref_id,
-        30 | 71 | 72 | 74 | 77 | 78 | 90 | 91 | 92 | 1163 | 1164 | 121 | 150 | 170 | 350 | 370
+        71 | 72 | 74 | 77 | 78 | 90 | 91 | 92 | 1163 | 1164 | 121 | 150 | 170 | 350 | 370
     )
 }
 
@@ -8076,6 +8080,37 @@ fn select_chart_metadata_available(state: &SkinDrawState) -> bool {
             && state.select_in_library)
 }
 
+fn player_stat_u64(value: u64) -> i64 {
+    value.min(i64::MAX as u64) as i64
+}
+
+fn player_total_pgreat(stats: &PlayerStatsSnapshot) -> u64 {
+    stats.fast_pgreat.saturating_add(stats.slow_pgreat)
+}
+
+fn player_total_great(stats: &PlayerStatsSnapshot) -> u64 {
+    stats.fast_great.saturating_add(stats.slow_great)
+}
+
+fn player_total_good(stats: &PlayerStatsSnapshot) -> u64 {
+    stats.fast_good.saturating_add(stats.slow_good)
+}
+
+fn player_total_bad(stats: &PlayerStatsSnapshot) -> u64 {
+    stats.fast_bad.saturating_add(stats.slow_bad)
+}
+
+fn player_total_poor(stats: &PlayerStatsSnapshot) -> u64 {
+    stats.fast_poor.saturating_add(stats.slow_poor)
+}
+
+fn player_total_play_notes(stats: &PlayerStatsSnapshot) -> u64 {
+    player_total_pgreat(stats)
+        .saturating_add(player_total_great(stats))
+        .saturating_add(player_total_good(stats))
+        .saturating_add(player_total_bad(stats))
+}
+
 fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
     if state.select_screen && state.in_settings {
         if let Some(value) = select_settings_screen_number(ref_id, state) {
@@ -8088,6 +8123,9 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
     match ref_id {
         // Lua draw 畳み込みのプレースホルダ (`number(0) >= 0` 等)
         0 => Some(0),
+        17 => Some(player_stat_u64(state.player_stats.playtime_seconds / 3600)),
+        18 => Some(player_stat_u64((state.player_stats.playtime_seconds / 60) % 60)),
+        19 => Some(player_stat_u64(state.player_stats.playtime_seconds % 60)),
         21..=26 => current_datetime_number(ref_id),
         42 | 43 if state.result_failed.is_some() => Some(state.result_arrange_index as i64),
         42 if state.select_screen => Some(state.select_arrange_index as i64),
@@ -8100,7 +8138,16 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         }
         12 if state.select_screen => Some(state.select_sort_index as i64),
         300 => Some(state.select_chart_count as i64),
-        30 if state.select_screen => Some(state.select_play_count as i64),
+        30 => Some(player_stat_u64(state.player_stats.play_count)),
+        31 => Some(player_stat_u64(state.player_stats.clear_count)),
+        32 => Some(player_stat_u64(
+            state.player_stats.play_count.saturating_sub(state.player_stats.clear_count),
+        )),
+        33 => Some(player_stat_u64(player_total_pgreat(&state.player_stats))),
+        34 => Some(player_stat_u64(player_total_great(&state.player_stats))),
+        35 => Some(player_stat_u64(player_total_good(&state.player_stats))),
+        36 => Some(player_stat_u64(player_total_bad(&state.player_stats))),
+        37 => Some(player_stat_u64(player_total_poor(&state.player_stats))),
         96 => Some(if state.play_level != 0 { state.play_level } else { state.select_play_level }),
         370 => Some(state.select_clear_index),
         92 if state.select_screen => {
@@ -8113,7 +8160,8 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         100 => Some(skin_point_score(state) as i64),
         71 | 101 | 171 => Some(state.ex_score as i64),
         72 => Some(state.total_notes as i64 * 2),
-        74 | 106 | 333 => Some(state.total_notes.max(state.select_total_notes) as i64),
+        74 | 106 => Some(state.total_notes.max(state.select_total_notes) as i64),
+        333 => Some(player_stat_u64(player_total_play_notes(&state.player_stats))),
         350 if state.select_screen => Some(select_chart_normal_notes(state) as i64),
         351 if state.select_screen => Some(state.select_chart_long_notes as i64),
         352 if state.select_screen => Some(state.select_chart_scratch_notes as i64),
@@ -18898,6 +18946,51 @@ mod tests {
         assert_eq!(skin_state_number(427, &state), Some(7));
         assert!(test_skin_op(181, &[], &state));
         assert!(!test_skin_op(182, &[], &state));
+    }
+
+    #[test]
+    fn skin_state_number_maps_player_statistics_refs() {
+        let state = SkinDrawState {
+            total_notes: 99,
+            select_total_notes: 100,
+            select_screen: true,
+            select_play_count: 42,
+            select_clear_count: 31,
+            player_stats: PlayerStatsSnapshot {
+                play_count: 10,
+                clear_count: 7,
+                playtime_seconds: 3_661,
+                max_combo: 999,
+                fast_pgreat: 2,
+                slow_pgreat: 3,
+                fast_great: 4,
+                slow_great: 5,
+                fast_good: 6,
+                slow_good: 7,
+                fast_bad: 8,
+                slow_bad: 9,
+                fast_poor: 10,
+                slow_poor: 11,
+                fast_empty_poor: 12,
+                slow_empty_poor: 13,
+            },
+            ..SkinDrawState::default()
+        };
+
+        assert_eq!(skin_state_number(17, &state), Some(1));
+        assert_eq!(skin_state_number(18, &state), Some(1));
+        assert_eq!(skin_state_number(19, &state), Some(1));
+        assert_eq!(skin_state_number(30, &state), Some(10));
+        assert_eq!(skin_state_number(31, &state), Some(7));
+        assert_eq!(skin_state_number(32, &state), Some(3));
+        assert_eq!(skin_state_number(33, &state), Some(5));
+        assert_eq!(skin_state_number(34, &state), Some(9));
+        assert_eq!(skin_state_number(35, &state), Some(13));
+        assert_eq!(skin_state_number(36, &state), Some(17));
+        assert_eq!(skin_state_number(37, &state), Some(21));
+        assert_eq!(skin_state_number(333, &state), Some(44));
+        assert_eq!(skin_state_number(77, &state), Some(42));
+        assert_eq!(skin_state_number(78, &state), Some(31));
     }
 
     #[test]
