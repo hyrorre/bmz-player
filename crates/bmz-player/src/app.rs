@@ -12147,6 +12147,27 @@ mod tests {
     }
 
     #[test]
+    fn skin_catalog_loads_rm_skin_lua_headers_when_available() {
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let root = repo_root.join("data/skins/Rm-skin");
+        let cases = [("play5main.luaskin", 1), ("play7main.luaskin", 0), ("play9main.luaskin", 4)];
+
+        for (file_name, expected_type) in cases {
+            let path = root.join(file_name);
+            if !path.is_file() {
+                continue;
+            }
+
+            let (skin_type, candidate) =
+                load_skin_candidate(&repo_root, &path).expect("load Rm-skin catalog candidate");
+
+            assert_eq!(skin_type, expected_type, "{}", path.display());
+            assert_eq!(candidate.path, format!("data/skins/Rm-skin/{file_name}"));
+            assert!(candidate.name.contains("Rm-skin"), "candidate name: {}", candidate.name);
+        }
+    }
+
+    #[test]
     fn skin_catalog_maps_play_key_modes_by_exact_skin_type() {
         let mut catalog = SkinCatalog::default();
         push_skin_candidate(

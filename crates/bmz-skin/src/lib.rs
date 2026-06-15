@@ -79,7 +79,9 @@ pub fn load_lua_skin_value(
 }
 
 pub fn load_lua_skin_header_value(path: &Path) -> Result<LoadedLuaSkinValue> {
-    lua::load_lua_skin_header_value(path)
+    let mut loaded = lua::load_lua_skin_header_value(path)?;
+    loaded.value = normalize_lua_skin_document(loaded.value);
+    Ok(loaded)
 }
 
 fn normalize_lua_skin_document(value: JsonValue) -> JsonValue {
