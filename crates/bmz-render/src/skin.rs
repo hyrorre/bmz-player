@@ -5537,10 +5537,7 @@ impl SkinDocument {
         let display_gauge_type = state.result_gauge_graph_type.unwrap_or_else(|| {
             points.last().map(|point| point.gauge_type).unwrap_or(state.gauge_type)
         });
-        let border =
-            state.result_gauge_graph_type.map(gaugegraph_border_for_type).unwrap_or_else(|| {
-                points.first().map(|point| point.border).unwrap_or(state.gauge_border)
-            });
+        let border = points.first().map(|point| point.border).unwrap_or(state.gauge_border);
         let color_index = gaugegraph_color_index(display_gauge_type);
         let colors = gaugegraph_colors(graph, color_index, frame_alpha);
         let border_y = rect.y + rect.height * (1.0 - (border / max).clamp(0.0, 1.0));
@@ -9129,10 +9126,6 @@ struct GaugeGraphColors {
 fn gaugegraph_color_index(gauge_type: i32) -> usize {
     const TYPE_TABLE: [usize; 10] = [0, 1, 2, 3, 4, 5, 3, 4, 5, 3];
     TYPE_TABLE.get(gauge_type.max(0) as usize).copied().unwrap_or(3)
-}
-
-fn gaugegraph_border_for_type(gauge_type: i32) -> f32 {
-    if matches!(gauge_type, 0..=2) { 80.0 } else { 0.0 }
 }
 
 fn gaugegraph_colors(

@@ -13351,6 +13351,24 @@ mod tests {
     }
 
     #[test]
+    fn result_gauge_graph_cycle_matches_beatoraja_order() {
+        assert_eq!(cycle_result_gauge_graph_type(GaugeType::Normal as i32), GaugeType::Hard as i32);
+        assert_eq!(cycle_result_gauge_graph_type(GaugeType::Hard as i32), GaugeType::ExHard as i32);
+        assert_eq!(
+            cycle_result_gauge_graph_type(GaugeType::Hazard as i32),
+            GaugeType::AssistEasy as i32
+        );
+        assert_eq!(
+            cycle_result_gauge_graph_type(GaugeType::Class as i32),
+            GaugeType::ExClass as i32
+        );
+        assert_eq!(
+            cycle_result_gauge_graph_type(GaugeType::ExHardClass as i32),
+            GaugeType::Class as i32
+        );
+    }
+
+    #[test]
     fn course_intermediate_result_only_with_active_course_and_no_course_result() {
         // active_course 保持 + finished_play あり + finished_course 無し → 中間リザルト。
         assert!(is_course_intermediate_result(true, false, true));

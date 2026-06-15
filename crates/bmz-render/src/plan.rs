@@ -3160,9 +3160,19 @@ mod tests {
                 "name": "test",
                 "w": 100,
                 "h": 100,
-                "gaugegraph": [{"id": "gg"}],
+                "gaugegraph": [{
+                    "id": "gg",
+                    "color": [
+                        "010101", "ff0000", "00ff00", "0000ff",
+                        "010101", "010101", "010101", "010101",
+                        "010101", "010101", "010101", "010101",
+                        "010101", "010101", "010101", "010101",
+                        "010101", "010101", "010101", "010101",
+                        "010101", "010101", "010101", "010101"
+                    ]
+                }],
                 "destination": [
-                    {"id": "gg", "dst": [{"x": 0, "y": 0, "w": 100, "h": 50}]}
+                    {"id": "gg", "dst": [{"x": 0, "y": 0, "w": 100, "h": 100}]}
                 ]
             }"#,
         )
@@ -3182,7 +3192,7 @@ mod tests {
             bp: 0,
             cb: 0,
             gauge_value: 80.0,
-            gauge_type: bmz_core::clear::GaugeType::Normal as i32,
+            gauge_type: bmz_core::clear::GaugeType::AssistEasy as i32,
             total_notes: 100,
             grade_diff_display: crate::scene::ResultGradeDiffDisplay::default(),
             duration_ms: 0,
@@ -3193,7 +3203,7 @@ mod tests {
             total_gauge: 0.0,
             judge_rank: None,
             key_mode: bmz_core::lane::KeyMode::default(),
-            result_gauge_graph_type: bmz_core::clear::GaugeType::Normal as i32,
+            result_gauge_graph_type: bmz_core::clear::GaugeType::AssistEasy as i32,
             judge_counts: DisplayJudgeCounts::default(),
             fast_slow_counts: FastSlowJudgeCounts::default(),
             score_history_id: 0,
@@ -3227,15 +3237,15 @@ mod tests {
                         time_ms: 0,
                         value: 20.0,
                         max: 100.0,
-                        border: 80.0,
-                        gauge_type: bmz_core::clear::GaugeType::Normal as i32,
+                        border: 60.0,
+                        gauge_type: bmz_core::clear::GaugeType::AssistEasy as i32,
                     },
                     ResultGaugeGraphPoint {
                         time_ms: 1_000,
                         value: 90.0,
                         max: 100.0,
-                        border: 80.0,
-                        gauge_type: bmz_core::clear::GaugeType::Normal as i32,
+                        border: 60.0,
+                        gauge_type: bmz_core::clear::GaugeType::AssistEasy as i32,
                     },
                 ],
                 ..ResultGraphSnapshot::default()
@@ -3254,6 +3264,14 @@ mod tests {
             command,
             DrawCommand::Rect { color: Color { r, g, b, .. }, .. }
                 if (*r - 0.0).abs() < 0.01 && (*g - 1.0).abs() < 0.01 && (*b - 0.0).abs() < 0.01
+        )));
+        assert!(plan.commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Rect { rect, color: Color { r, g, b, .. } }
+                if (*r - 1.0).abs() < 0.01
+                    && *g < 0.01
+                    && *b < 0.01
+                    && (rect.height - 0.4).abs() < 0.01
         )));
     }
 
