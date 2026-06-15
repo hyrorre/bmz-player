@@ -11065,7 +11065,7 @@ fn note_progress_to_y(area: Rect, progress: f32, state: &SkinDrawState, canvas_h
     let lift_norm = state.offset_lift_px as f32 / canvas_h.max(1.0);
     let scroll_top = area.y;
     let judge_bottom = (area.y + area.height - lift_norm).max(scroll_top);
-    let progress = progress.min(1.0);
+    let progress = progress.clamp(0.0, 1.0);
     judge_bottom - progress * (judge_bottom - scroll_top)
 }
 
@@ -21869,16 +21869,6 @@ mod tests {
 
         // Without the required option, returns None
         assert!(document.note_lane_area(Lane::Key1, KeyMode::K7, &[]).is_none());
-    }
-
-    #[test]
-    fn note_progress_to_y_allows_positions_below_judge_line() {
-        let area = Rect { x: 0.0, y: 0.1, width: 0.2, height: 0.8 };
-        let state = SkinDrawState::default();
-        let judge_line = note_progress_to_y(area, 0.0, &state, 720.0);
-        let below_line = note_progress_to_y(area, -0.1, &state, 720.0);
-
-        assert!(below_line > judge_line);
     }
 
     fn approx_eq(actual: f32, expected: f32) -> bool {
