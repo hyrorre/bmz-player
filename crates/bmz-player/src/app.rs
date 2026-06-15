@@ -6620,6 +6620,7 @@ impl WinitApp {
     }
 
     fn reload_select_items(&mut self) {
+        let previous_selected_key = self.select_items.get(self.selected_index).map(select_item_key);
         let history: Vec<String> = self.search_history.iter().cloned().collect();
         let (items, resolved_mode_filter) = load_items_for_stack(
             &self.boot,
@@ -6635,9 +6636,11 @@ impl WinitApp {
         self.select_items = items;
         self.select_distribution_cache.borrow_mut().clear();
         self.select_folder_summary_cache.clear();
-        if self.selected_index >= self.select_items.len() {
-            self.selected_index = self.select_items.len().saturating_sub(1);
-        }
+        self.selected_index = restored_select_index(
+            &self.select_items,
+            previous_selected_key.as_ref(),
+            self.selected_index,
+        );
     }
 
     fn load_songs_and_reload(&mut self) {
@@ -9685,6 +9688,45 @@ fn apply_select_sort(items: &mut [SelectItem], sort: SelectSort) {
         (SelectItem::Chart(a), SelectItem::Chart(b)) => compare_select_chart_rows(a, b, sort),
         _ => std::cmp::Ordering::Equal,
     });
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SelectItemKey {
+    Folder(String),
+    ChartId(i64),
+    ChartSha256([u8; 32]),
+    Course(i64),
+    Config(String),
+    KeyBinding(String),
+    Back,
+    AdvancedSettings,
+}
+
+fn select_item_key(item: &SelectItem) -> SelectItemKey {
+    match item {
+        SelectItem::Folder { path, .. } => SelectItemKey::Folder(path.clone()),
+        SelectItem::Chart(row) => row
+            .chart
+            .as_ref()
+            .map(|chart| SelectItemKey::ChartId(chart.chart_id))
+            .or_else(|| row.score_sha256().map(SelectItemKey::ChartSha256))
+            .unwrap_or_else(|| SelectItemKey::Config(row.display_title().to_string())),
+        SelectItem::Course(row) => SelectItemKey::Course(row.course_id),
+        SelectItem::Config(row) => SelectItemKey::Config(row.label().to_string()),
+        SelectItem::KeyBinding(row) => SelectItemKey::KeyBinding(row.label()),
+        SelectItem::Back => SelectItemKey::Back,
+        SelectItem::AdvancedSettings => SelectItemKey::AdvancedSettings,
+    }
+}
+
+fn restored_select_index(
+    items: &[SelectItem],
+    previous_selected_key: Option<&SelectItemKey>,
+    previous_index: usize,
+) -> usize {
+    previous_selected_key
+        .and_then(|key| items.iter().position(|item| select_item_key(item) == *key))
+        .unwrap_or_else(|| previous_index.min(items.len().saturating_sub(1)))
 }
 
 fn compare_select_chart_rows(
@@ -14178,6 +14220,26 @@ mod tests {
         assert!(matches!(items[0], SelectItem::Folder { .. }));
         assert_eq!(items[1].display_name(), "Slow");
         assert_eq!(items[2].display_name(), "Fast");
+    }
+
+    #[test]
+    fn restored_select_index_keeps_chart_when_clear_sort_moves_after_score_update() {
+        let mut played = select_chart_row(1);
+        played.chart.as_mut().unwrap().title = "Played".to_string();
+        let mut other = select_chart_row(2);
+        other.chart.as_mut().unwrap().title = "Other".to_string();
+        let old_items = vec![SelectItem::Chart(played.clone()), SelectItem::Chart(other.clone())];
+        let selected_key = select_item_key(&old_items[0]);
+
+        played.best_score = Some(BestScoreSummary {
+            clear_type: "Hard".to_string(),
+            ..best_score_with_replay(100, "played.json")
+        });
+        let mut new_items = vec![SelectItem::Chart(played), SelectItem::Chart(other)];
+        apply_select_sort(&mut new_items, SelectSort::Clear);
+
+        assert_eq!(restored_select_index(&new_items, Some(&selected_key), 0), 1);
+        assert_eq!(new_items[1].display_name(), "Played");
     }
 
     fn select_chart_row(index: usize) -> SelectChartRow {
