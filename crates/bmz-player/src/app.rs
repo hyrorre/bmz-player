@@ -27,8 +27,8 @@ use bmz_render::plan::{
 };
 use bmz_render::renderer::{RenderFrameTimings, RenderSurfaceStatus, Renderer, SurfaceSize};
 use bmz_render::scene::{
-    AppSceneSnapshot, ResultSnapshot, SelectChartDistributionSecond, SelectRowSnapshot,
-    SelectSnapshot,
+    AppSceneSnapshot, PlayerStatsSnapshot, ResultSnapshot, SelectChartDistributionSecond,
+    SelectRowSnapshot, SelectSnapshot,
 };
 use bmz_render::skin::{SkinImageSize, SkinTextureId};
 use bmz_render::snapshot::{
@@ -115,7 +115,7 @@ use crate::storage::migration::{migrate_library_db, migrate_score_db};
 use crate::storage::play_result::StoredPlayResult;
 use crate::storage::replay::load_replay_for_chart_policy_and_double_option;
 use crate::storage::scan::{ScanProgress, ScanReport};
-use crate::storage::score_db::ScoreDatabase;
+use crate::storage::score_db::{PlayerStats, ScoreDatabase};
 use crate::storage::score_import::{ScoreImportRequest, import_scores};
 use crate::ui::{
     DebugInfo, EguiLayer, EguiRunContext, SceneSkinDefs, SkinCandidate, SkinCatalog,
@@ -275,6 +275,8 @@ struct WinitApp {
     result_ir: Option<crate::screens::result_ir::ResultIrState>,
     /// 選曲カーソル譜面の IR ランキングキャッシュ。
     select_ir: crate::screens::select_ir::SelectIrRanking,
+    /// profile 全体の player statistics。Select / Result skin の NUMBER_TOTAL* 系に渡す。
+    player_stats: PlayerStatsSnapshot,
     /// 直近のプレイがオートプレイだったか。Result 画面の常時表示に使う。
     last_play_was_autoplay: bool,
     last_play_snapshot: Option<RenderSnapshot>,
@@ -1321,6 +1323,37 @@ fn result_main_bpm(summary: &ResultSummary) -> f32 {
         .unwrap_or(summary.main_bpm)
 }
 
+fn player_stats_snapshot(score_db: &ScoreDatabase) -> PlayerStatsSnapshot {
+    match score_db.player_stats() {
+        Ok(stats) => player_stats_snapshot_from_stats(&stats),
+        Err(error) => {
+            tracing::warn!(%error, "failed to load player statistics");
+            PlayerStatsSnapshot::default()
+        }
+    }
+}
+
+fn player_stats_snapshot_from_stats(stats: &PlayerStats) -> PlayerStatsSnapshot {
+    PlayerStatsSnapshot {
+        play_count: stats.play_count,
+        clear_count: stats.clear_count,
+        playtime_seconds: stats.playtime_seconds,
+        max_combo: stats.max_combo,
+        fast_pgreat: stats.fast_pgreat,
+        slow_pgreat: stats.slow_pgreat,
+        fast_great: stats.fast_great,
+        slow_great: stats.slow_great,
+        fast_good: stats.fast_good,
+        slow_good: stats.slow_good,
+        fast_bad: stats.fast_bad,
+        slow_bad: stats.slow_bad,
+        fast_poor: stats.fast_poor,
+        slow_poor: stats.slow_poor,
+        fast_empty_poor: stats.fast_empty_poor,
+        slow_empty_poor: stats.slow_empty_poor,
+    }
+}
+
 impl WinitApp {
     fn new(
         boot: BootstrappedApp,
@@ -1427,6 +1460,7 @@ impl WinitApp {
         let select_preview =
             system_audio.as_ref().map(|audio| SelectChartPreview::new(audio.engine()));
         let audio_output_open_attempted = audio_runtime.is_some();
+        let player_stats = player_stats_snapshot(&boot.score_db);
 
         let mut app = Self {
             boot,
@@ -1442,6 +1476,7 @@ impl WinitApp {
             finished_play: None,
             result_ir: None,
             select_ir: crate::screens::select_ir::SelectIrRanking::default(),
+            player_stats,
             last_play_was_autoplay: false,
             last_play_snapshot: None,
             pending_decide: None,
@@ -1592,6 +1627,10 @@ impl WinitApp {
         }
 
         Ok(app)
+    }
+
+    fn refresh_player_stats_snapshot(&mut self) {
+        self.player_stats = player_stats_snapshot(&self.boot.score_db);
     }
 
     fn ensure_window(&mut self, event_loop: &ActiveEventLoop) {
@@ -1812,6 +1851,7 @@ impl WinitApp {
                 graph: summary.graph.clone(),
                 overlay: OverlaySnapshot::default(),
                 ir: self.result_ir.as_ref().map(|state| state.skin_snapshot()).unwrap_or_default(),
+                player_stats: self.player_stats,
             }),
         };
         let overlay = self.build_overlay_snapshot();
@@ -2070,6 +2110,7 @@ impl WinitApp {
             rival: self
                 .select_ir
                 .rival_for(&self.boot.profile_config.ir, self.selected_chart_sha256()),
+            player_stats: self.player_stats,
         }
     }
 
@@ -6468,6 +6509,7 @@ impl WinitApp {
         if let Some(started) = self.active_play.take() {
             self.draining_audio = Some(started.running.audio);
         }
+        self.refresh_player_stats_snapshot();
         if self.active_course.is_some() {
             self.advance_course_after_finish(ending.finished);
             return;
@@ -6663,6 +6705,7 @@ impl WinitApp {
             Ok(report) => {
                 let summary = report.summary();
                 tracing::info!(kind = label, path, summary, "external scores imported");
+                self.refresh_player_stats_snapshot();
                 self.reload_select_items();
                 if let Some(egui) = self.egui.as_mut() {
                     egui.set_score_import_status(

@@ -925,4 +925,8 @@ pub const SCORE_MIGRATIONS: &[Migration] = &[
                 ON replay_slots(chart_sha256, ln_policy, double_option);",
         ],
     },
+    Migration {
+        version: 14,
+        statements: &["ALTER TABLE player_stats ADD COLUMN playtime_seconds INTEGER NOT NULL DEFAULT 0;"],
+    },
 ];

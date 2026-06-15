@@ -101,6 +101,7 @@ pub fn finish_session_result(
             &result,
             StorePlayResultRequest {
                 played_at,
+                playtime_seconds: chart_playtime_seconds(&session.chart),
                 ln_policy: score_key.ln_policy,
                 double_option: score_key.double_option,
                 random_seed: arrange_seed,
@@ -169,6 +170,10 @@ pub fn finish_session_result(
         ln_policy: score_key.ln_policy,
         double_option: score_key.double_option,
     })
+}
+
+fn chart_playtime_seconds(chart: &bmz_chart::model::PlayableChart) -> u32 {
+    (chart.end_time.0.max(0) / 1_000_000).min(i64::from(u32::MAX)) as u32
 }
 
 fn clear_type_from_name(name: &str) -> Option<ClearType> {

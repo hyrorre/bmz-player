@@ -2,7 +2,9 @@ use bmz_chart::model::LongNoteMode;
 use bmz_core::lane::Lane;
 use bmz_core::time::TimeUs;
 
-use crate::scene::{AppSceneSnapshot, ResultSnapshot, SelectRowSnapshot, SelectSnapshot};
+use crate::scene::{
+    AppSceneSnapshot, PlayerStatsSnapshot, ResultSnapshot, SelectRowSnapshot, SelectSnapshot,
+};
 use crate::snapshot::{
     DisplayJudgeCounts, DisplayJudgement, FastSlowJudgeCounts, LongBodyState, NoteVisualKind,
     OverlaySnapshot, RenderSnapshot, VisibleBarLine, VisibleLongNote, VisibleNote,
@@ -86,6 +88,7 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
         mouse_position: None,
         ir: crate::scene::ResultIrSnapshot::default(),
         rival: None,
+        player_stats: PlayerStatsSnapshot::default(),
     })
 }
 
@@ -225,6 +228,7 @@ pub fn sample_result_scene() -> AppSceneSnapshot {
         graph: crate::snapshot::ResultGraphSnapshot::default(),
         overlay: OverlaySnapshot::default(),
         ir: crate::scene::ResultIrSnapshot::default(),
+        player_stats: PlayerStatsSnapshot::default(),
     })
 }
 
