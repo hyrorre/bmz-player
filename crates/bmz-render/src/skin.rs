@@ -8080,6 +8080,21 @@ fn select_chart_metadata_available(state: &SkinDrawState) -> bool {
             && state.select_in_library)
 }
 
+fn select_chart_score_number_requires_song(ref_id: i32) -> bool {
+    matches!(
+        ref_id,
+        71 | 72
+            | 74..=89
+            | 100..=116
+            | 150..=158
+            | 170..=178
+            | 183
+            | 184
+            | 400
+            | 410..=427
+    )
+}
+
 fn player_stat_u64(value: u64) -> i64 {
     value.min(i64::MAX as u64) as i64
 }
@@ -8112,6 +8127,13 @@ fn player_total_play_notes(stats: &PlayerStatsSnapshot) -> u64 {
 }
 
 fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
+    if state.select_screen
+        && select_chart_score_number_requires_song(ref_id)
+        && !select_chart_metadata_available(state)
+    {
+        return None;
+    }
+
     if state.select_screen && state.in_settings {
         if let Some(value) = select_settings_screen_number(ref_id, state) {
             return Some(value);
@@ -18991,6 +19013,43 @@ mod tests {
         assert_eq!(skin_state_number(333, &state), Some(44));
         assert_eq!(skin_state_number(77, &state), Some(42));
         assert_eq!(skin_state_number(78, &state), Some(31));
+    }
+
+    #[test]
+    fn select_folder_hides_song_score_numbers() {
+        let state = SkinDrawState {
+            select_screen: true,
+            select_row_kind: SelectRowKind::Folder,
+            select_is_folder: true,
+            select_in_library: true,
+            ex_score: 1234,
+            total_notes: 1000,
+            select_total_notes: 1000,
+            select_play_count: 7,
+            select_clear_count: 3,
+            select_bp: Some(12),
+            select_cb: Some(8),
+            judge_counts: DisplayJudgeCounts {
+                pgreat: 20,
+                great: 30,
+                good: 10,
+                bad: 5,
+                poor: 2,
+                empty_poor: 1,
+            },
+            fast_slow_counts: Some(crate::snapshot::FastSlowJudgeCounts {
+                fast_pgreat: 7,
+                slow_empty_poor: 2,
+                ..Default::default()
+            }),
+            ..SkinDrawState::default()
+        };
+
+        for ref_id in [71, 74, 76, 77, 78, 80, 85, 102, 110, 154, 410, 420, 426] {
+            assert_eq!(skin_state_number(ref_id, &state), None, "ref {ref_id}");
+        }
+        assert_eq!(skin_state_number(30, &state), Some(0));
+        assert_eq!(skin_state_number(33, &state), Some(0));
     }
 
     #[test]
