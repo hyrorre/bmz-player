@@ -5212,7 +5212,7 @@ impl SkinDocument {
             display_signed_number_digits(
                 number,
                 max_digits,
-                padding.is_zero_padding(),
+                signed_value_zero_pad(value, padding),
                 value.divx.max(1) as u32,
             )
         } else {
@@ -5266,7 +5266,7 @@ impl SkinDocument {
                 value,
                 number,
                 max_digits,
-                padding.is_zero_padding(),
+                signed_value_zero_pad(value, padding),
                 divx as u32,
             )
         } else {
@@ -7579,6 +7579,13 @@ fn number_padding(value: &SkinValueDef) -> NumberPadding {
     NumberPadding::None
 }
 
+fn signed_value_zero_pad(value: &SkinValueDef, padding: NumberPadding) -> bool {
+    if matches!(value.ref_id, 152 | 153 | 172 | 175 | 178) {
+        return false;
+    }
+    padding.is_zero_padding()
+}
+
 fn display_number_digits(value: i64, max_digits: usize, padding: NumberPadding) -> Vec<u8> {
     let value = value.saturating_abs();
     let mut text = if padding.is_zero_padding() && max_digits > 0 {
@@ -7676,7 +7683,7 @@ fn value_uses_negative_first_signed_rows(value: &SkinValueDef) -> bool {
 /// `ref_id` が符号付き表示を要求する Result 系 ref か。
 /// beatoraja の `NUMBER_DIFF_*` 系と次 DJ LEVEL までの差分を対象とする。
 fn ref_id_is_signed(ref_id: i32) -> bool {
-    matches!(ref_id, 12 | 152 | 153 | 154 | 172 | 175 | 178)
+    matches!(ref_id, 152 | 153 | 154 | 172 | 175 | 178)
 }
 
 fn value_ref_is_signed_for_state(ref_id: i32, state: &SkinDrawState) -> bool {
@@ -8247,6 +8254,7 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         // NUMBER_TARGET_CLEAR=371
         371 => result_mybest_clear_index(state).or(state.target_clear_index),
         // Fast/Slow split (PGREAT/GREAT/GOOD/BAD/POOR)
+        410 | 411 if state.autoplay => Some(0),
         410 => state.fast_slow_counts.map(|c| c.fast_pgreat as i64),
         411 => state.fast_slow_counts.map(|c| c.slow_pgreat as i64),
         412 => state.fast_slow_counts.map(|c| c.fast_great as i64),
@@ -18885,6 +18893,31 @@ mod tests {
     }
 
     #[test]
+    fn autoplay_pgreat_fast_slow_refs_are_neutral() {
+        let state = SkinDrawState {
+            autoplay: true,
+            judge_counts: DisplayJudgeCounts { pgreat: 30, ..DisplayJudgeCounts::default() },
+            fast_slow_counts: Some(crate::snapshot::FastSlowJudgeCounts {
+                fast_pgreat: 10,
+                slow_pgreat: 11,
+                fast_great: 12,
+                slow_great: 13,
+                ..crate::snapshot::FastSlowJudgeCounts::default()
+            }),
+            ..SkinDrawState::default()
+        };
+
+        assert_eq!(skin_state_number(410, &state), Some(0));
+        assert_eq!(skin_state_number(411, &state), Some(0));
+        assert_eq!(skin_state_number(412, &state), Some(12));
+        assert_eq!(skin_state_number(413, &state), Some(13));
+        assert!(eval_skin_draw_condition(
+            "number(110) > number(410) and number(110) > number(411)",
+            &state
+        ));
+    }
+
+    #[test]
     fn skin_state_number_maps_beatoraja_point_score() {
         let state = SkinDrawState {
             key_mode: KeyMode::K7,
@@ -18958,6 +18991,35 @@ mod tests {
         assert_eq!(
             display_signed_number_digits_for_value(&rank_diff_value, 34, 4, false, 12),
             vec![23, 15, 16]
+        );
+
+        let score_diff_value = SkinValueDef {
+            id: "score_diff_mybest".to_string(),
+            src: "num".to_string(),
+            x: 0,
+            y: 0,
+            w: 0,
+            h: 0,
+            divx: 12,
+            divy: 2,
+            timer: None,
+            cycle: 0,
+            align: 0,
+            digit: 5,
+            padding: 0,
+            zeropadding: 1,
+            space: 0,
+            ref_id: 152,
+            expr: String::new(),
+            value_expr: String::new(),
+            offset: Vec::new(),
+        };
+        let score_diff_padding = number_padding(&score_diff_value);
+        assert!(score_diff_padding.is_zero_padding());
+        assert!(!signed_value_zero_pad(&score_diff_value, score_diff_padding));
+        assert_eq!(
+            display_signed_number_digits_for_value(&score_diff_value, 16, 5, false, 12),
+            vec![11, 1, 6]
         );
 
         let select_detail =

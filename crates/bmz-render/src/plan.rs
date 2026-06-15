@@ -859,6 +859,8 @@ fn plan_play(
         .document()
         .map(|document| document.loadstart.max(0).saturating_add(document.loadend.max(0)))
         .unwrap_or(0);
+    let skin_canvas_h = skin.document().map_or(720, |d| d.h) as f32;
+    let skin_lane_h = skin_lane_height_px(skin, skin_canvas_h);
 
     let mut skin_state = crate::skin::SkinDrawState {
         elapsed_ms: play_elapsed_ms,
@@ -897,20 +899,13 @@ fn plan_play(
         judge_index: judge_region_state.judge_index,
         judge_combo: judge_region_state.judge_combo,
         judge_timing_sign: judge_region_state.judge_timing_sign,
-        offset_lift_px: {
-            let canvas_h = skin.document().map_or(720, |d| d.h) as f32;
-            (snapshot.lift * canvas_h).round() as i32
-        },
-        offset_lanecover_px: {
-            let canvas_h = skin.document().map_or(720, |d| d.h) as f32;
-            let lane_h = skin_lane_height_px(skin, canvas_h);
-            ((snapshot.lift - 1.0) * lane_h * snapshot.lane_cover).round() as i32
-        },
-        offset_hidden_cover_px: {
-            let canvas_h = skin.document().map_or(720, |d| d.h) as f32;
-            let lane_h = skin_lane_height_px(skin, canvas_h);
-            ((1.0 - snapshot.lift) * snapshot.hidden_cover * lane_h).round() as i32
-        },
+        offset_lift_px: skin_lift_offset_px(snapshot.lift, skin_lane_h),
+        offset_lanecover_px: skin_lanecover_offset_px(snapshot.lane_cover, skin_lane_h),
+        offset_hidden_cover_px: skin_hidden_cover_offset_px(
+            snapshot.lift,
+            snapshot.hidden_cover,
+            skin_lane_h,
+        ),
         skin_offsets: snapshot.skin_offsets,
         hispeed: snapshot.hispeed,
         timeleft_ms: (snapshot.duration.0.saturating_sub(snapshot.time.0) / 1_000)
@@ -1372,6 +1367,18 @@ fn skin_lane_height_px(skin: &SkinContext, fallback_canvas_h: f32) -> f32 {
             document.note_lane_area(Lane::Key1, bmz_core::lane::KeyMode::K7, &enabled_options)
         })
         .map_or(fallback_canvas_h, |rect| rect.height * fallback_canvas_h)
+}
+
+fn skin_lift_offset_px(lift: f32, lane_h: f32) -> i32 {
+    (lift * lane_h).round() as i32
+}
+
+fn skin_lanecover_offset_px(lane_cover: f32, lane_h: f32) -> i32 {
+    (-lane_h * lane_cover).round() as i32
+}
+
+fn skin_hidden_cover_offset_px(lift: f32, hidden_cover: f32, lane_h: f32) -> i32 {
+    ((1.0 - lift) * hidden_cover * lane_h).round() as i32
 }
 
 fn plan_result(
@@ -3739,6 +3746,15 @@ mod tests {
         let skin = SkinContext::from_manifest_and_document(manifest, document, []);
 
         assert!(approx_eq(skin_lane_height_px(&skin, 1080.0), 723.0));
+    }
+
+    #[test]
+    fn play_skin_lift_offsets_use_lane_height() {
+        let lane_h = 723.0;
+
+        assert_eq!(skin_lift_offset_px(0.3, lane_h), 217);
+        assert_eq!(skin_lanecover_offset_px(0.5, lane_h), -362);
+        assert_eq!(skin_hidden_cover_offset_px(0.3, 0.25, lane_h), 127);
     }
 
     #[test]
