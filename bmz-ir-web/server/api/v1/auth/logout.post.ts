@@ -6,7 +6,7 @@ interface LogoutBody {
 }
 
 export default defineEventHandler(async (event) => {
-  const body = (await readBody(event).catch(() => ({}))) as LogoutBody
+  const body = ((await readBody(event).catch(() => undefined)) ?? {}) as LogoutBody
   const accessToken = getBearerToken(event)
   if (accessToken) {
     await revokeToken(accessToken, 'access')
