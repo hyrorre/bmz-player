@@ -13,6 +13,7 @@ export default defineNuxtConfig({
   hub: {
     db: {
       dialect: 'sqlite',
+      driver: 'd1',
       casing: 'snake_case',
     },
     blob: true,
