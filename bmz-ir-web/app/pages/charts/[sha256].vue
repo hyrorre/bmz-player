@@ -74,7 +74,7 @@ const {
 </script>
 
 <template>
-  <main class="min-h-dvh bg-neutral-950 text-neutral-50">
+  <main>
     <section class="mx-auto w-full max-w-4xl px-5 py-10">
       <UAlert v-if="paramError" color="error" :description="paramError" class="mb-6" />
       <UAlert

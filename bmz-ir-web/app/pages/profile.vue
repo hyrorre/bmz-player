@@ -94,14 +94,13 @@ async function submit(event: FormSubmitEvent<ProfileState>) {
       error instanceof Error ? error.message : 'プロフィールの保存に失敗しました。'
   } finally {
     saving.value = false
-    return
   }
 }
 </script>
 
 <template>
-  <main class="min-h-dvh bg-neutral-950 text-neutral-50">
-    <section class="mx-auto flex min-h-dvh w-full max-w-2xl flex-col justify-center px-5 py-10">
+  <main>
+    <section class="mx-auto flex w-full max-w-2xl flex-col justify-center px-5 py-10">
       <div class="space-y-6">
         <div>
           <p class="mb-2 text-sm font-medium text-primary-300">BMZ Internet Ranking</p>
@@ -116,6 +115,7 @@ async function submit(event: FormSubmitEvent<ProfileState>) {
             <UInput
               v-model="state.displayName"
               autocomplete="nickname"
+              class="w-full"
               :disabled="loading"
               maxlength="64"
               placeholder="name"
@@ -126,6 +126,7 @@ async function submit(event: FormSubmitEvent<ProfileState>) {
           <UFormField label="自己紹介" name="bio">
             <UTextarea
               v-model="state.bio"
+              class="w-full"
               :disabled="loading"
               maxlength="1000"
               placeholder="好きな譜面、プレイスタイルなど"

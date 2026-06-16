@@ -2,6 +2,9 @@
   <UApp>
     <NuxtRouteAnnouncer />
     <AppHeader />
-    <NuxtPage />
+    <UContainer class="flex">
+      <AppSidebar />
+      <NuxtPage />
+    </UContainer>
   </UApp>
 </template>

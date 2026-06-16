@@ -94,8 +94,8 @@ async function submit(event: FormSubmitEvent<RegisterState>) {
 </script>
 
 <template>
-  <main class="min-h-dvh bg-neutral-950 text-neutral-50">
-    <section class="mx-auto flex min-h-dvh w-full max-w-md flex-col justify-center px-5 py-10">
+  <main>
+    <section class="mx-auto flex w-full max-w-md flex-col justify-center px-5 py-10">
       <UAuthForm
         class="w-full"
         description="BMZ IR にスコアを送信するためのアカウントを作成します。"

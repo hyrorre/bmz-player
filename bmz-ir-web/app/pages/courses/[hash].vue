@@ -52,7 +52,7 @@ const {
 </script>
 
 <template>
-  <main class="min-h-dvh bg-neutral-950 text-neutral-50">
+  <main>
     <section class="mx-auto w-full max-w-4xl px-5 py-10">
       <UAlert v-if="detailError" color="error" :description="detailError.message" class="mb-6" />
       <template v-else-if="detail">

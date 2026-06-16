@@ -28,8 +28,8 @@ async function logout() {
 </script>
 
 <template>
-  <main class="min-h-dvh bg-neutral-950 text-neutral-50">
-    <section class="mx-auto flex min-h-dvh w-full max-w-md flex-col justify-center px-5 py-10">
+  <main>
+    <section class="mx-auto flex w-full max-w-md flex-col justify-center px-5 py-10">
       <div class="space-y-6">
         <div>
           <p class="mb-2 text-sm font-medium text-primary-300">BMZ Internet Ranking</p>

@@ -36,7 +36,7 @@ const { data, pending, error } = await useFetch<PlayerDetail>(
 </script>
 
 <template>
-  <main class="min-h-dvh bg-neutral-950 text-neutral-50">
+  <main>
     <section class="mx-auto w-full max-w-4xl px-5 py-10">
       <UAlert v-if="error" color="error" :description="error.message" />
       <p v-else-if="pending" class="text-sm text-neutral-400">読み込み中...</p>

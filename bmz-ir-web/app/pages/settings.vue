@@ -308,8 +308,8 @@ function sessionTokenLabel(session: SessionSummary) {
 </script>
 
 <template>
-  <main class="min-h-dvh bg-neutral-950 text-neutral-50">
-    <section class="mx-auto flex min-h-dvh w-full max-w-2xl flex-col justify-center px-5 py-10">
+  <main>
+    <section class="mx-auto flex w-full max-w-2xl flex-col justify-center px-5 py-10">
       <div class="space-y-8">
         <div>
           <p class="mb-2 text-sm font-medium text-primary-300">BMZ Internet Ranking</p>
@@ -319,179 +319,188 @@ function sessionTokenLabel(session: SessionSummary) {
           </p>
         </div>
 
-        <UAuthForm
-          description="変更には現在のパスワードが必要です。"
-          :fields="emailFields"
-          icon="i-lucide-mail"
-          :loading="emailLoading"
-          :submit="{ label: 'メールアドレスを変更', color: 'primary', block: true }"
-          title="メールアドレス変更"
-          :validate="validateEmail"
-          @submit="updateEmail"
-        >
-          <template #validation>
-            <UAlert
-              v-if="emailErrorMessage"
-              color="error"
-              icon="i-lucide-circle-alert"
-              :description="emailErrorMessage"
-            />
-            <UAlert
-              v-if="emailSuccessMessage"
-              color="success"
-              icon="i-lucide-circle-check"
-              :description="emailSuccessMessage"
-            />
-          </template>
-        </UAuthForm>
-
-        <UAuthForm
-          description="変更後はすべてのセッションからログアウトします。"
-          :fields="passwordFields"
-          icon="i-lucide-key-round"
-          :loading="passwordLoading"
-          :submit="{ label: 'パスワードを変更', color: 'primary', block: true }"
-          title="パスワード変更"
-          :validate="validatePassword"
-          @submit="updatePassword"
-        >
-          <template #validation>
-            <UAlert
-              v-if="passwordErrorMessage"
-              color="error"
-              icon="i-lucide-circle-alert"
-              :description="passwordErrorMessage"
-            />
-            <UAlert
-              v-if="passwordSuccessMessage"
-              color="success"
-              icon="i-lucide-circle-check"
-              :description="passwordSuccessMessage"
-            />
-          </template>
-
-          <template #footer>
-            <p class="text-center text-sm text-neutral-300">
-              現在のパスワードがわからない場合は
-              <NuxtLink
-                class="font-medium text-primary-300 hover:text-primary-200"
-                to="/reset-password"
-              >
-                再設定
-              </NuxtLink>
-            </p>
-          </template>
-        </UAuthForm>
-
-        <section class="space-y-3">
-          <div>
-            <h2 class="text-xl font-semibold">ログイン中のセッション</h2>
-            <p class="mt-1 text-sm leading-6 text-neutral-300">
-              Web と BMZ Player のログイン状態を確認し、不要なセッションを失効できます。
-            </p>
-          </div>
-          <UAlert v-if="sessionsError" color="error" :description="sessionsError" />
-          <p v-if="sessionsLoading" class="text-sm text-neutral-400">読み込み中...</p>
-          <p v-else-if="!sessions.length" class="text-sm text-neutral-400">
-            有効なセッションはありません。
-          </p>
-          <ul v-else class="divide-y divide-neutral-800 rounded-lg border border-neutral-800">
-            <li
-              v-for="session in sessions"
-              :key="session.id"
-              class="flex items-center justify-between gap-4 px-4 py-3"
-            >
-              <div class="min-w-0">
-                <p class="text-sm font-medium">{{ sessionLabel(session) }}</p>
-                <p class="text-xs text-neutral-500">
-                  {{ sessionTokenLabel(session) }} ・ 作成
-                  {{ new Date(session.createdAt).toLocaleString() }} ・ 最終利用
-                  {{
-                    session.lastUsedAt ? new Date(session.lastUsedAt).toLocaleString() : '未記録'
-                  }}
-                  ・ 期限 {{ new Date(session.expiresAt).toLocaleString() }}
-                </p>
-              </div>
-              <UButton
+        <UCard>
+          <UAuthForm
+            class="w-full"
+            description="変更には現在のパスワードが必要です。"
+            :fields="emailFields"
+            icon="i-lucide-mail"
+            :loading="emailLoading"
+            :submit="{ label: 'メールアドレスを変更', color: 'primary', block: true }"
+            title="メールアドレス変更"
+            :validate="validateEmail"
+            @submit="updateEmail"
+          >
+            <template #validation>
+              <UAlert
+                v-if="emailErrorMessage"
                 color="error"
-                variant="subtle"
-                size="sm"
-                :loading="revokingSessionId === session.id"
-                @click="revokeSession(session.id)"
-              >
-                失効
-              </UButton>
-            </li>
-          </ul>
-        </section>
+                icon="i-lucide-circle-alert"
+                :description="emailErrorMessage"
+              />
+              <UAlert
+                v-if="emailSuccessMessage"
+                color="success"
+                icon="i-lucide-circle-check"
+                :description="emailSuccessMessage"
+              />
+            </template>
+          </UAuthForm>
+        </UCard>
 
-        <section class="space-y-3">
-          <div>
-            <h2 class="text-xl font-semibold">スコア署名鍵 (device key)</h2>
-            <p class="mt-1 text-sm leading-6 text-neutral-300">
-              BMZ Player がスコア送信の改ざん防止署名に使う鍵です。
-              端末を紛失した場合などはここから失効できます。失効後はその端末で
-              <code class="rounded bg-neutral-900 px-1">bmz ir device-key rotate</code>
-              を実行すると新しい鍵が登録されます。
-            </p>
-          </div>
-          <UAlert v-if="deviceKeysError" color="error" :description="deviceKeysError" />
-          <p v-if="deviceKeysLoading" class="text-sm text-neutral-400">読み込み中...</p>
-          <p v-else-if="!deviceKeys.length" class="text-sm text-neutral-400">
-            登録済みの署名鍵はありません。
-          </p>
-          <ul v-else class="divide-y divide-neutral-800 rounded-lg border border-neutral-800">
-            <li
-              v-for="key in deviceKeys"
-              :key="key.id"
-              class="flex items-center justify-between gap-4 px-4 py-3"
-            >
-              <div class="min-w-0">
-                <p class="font-mono text-sm">{{ keyFingerprint(key.public_key) }}</p>
-                <p class="text-xs text-neutral-500">
-                  {{ key.algorithm }} ・ 登録 {{ new Date(key.created_at).toLocaleString() }}
-                  <UBadge v-if="key.revoked_at" color="error" size="sm" variant="subtle">
-                    失効済み
-                  </UBadge>
-                </p>
-              </div>
-              <UButton
-                v-if="!key.revoked_at"
+        <UCard>
+          <UAuthForm
+            class="w-full"
+            description="変更後はすべてのセッションからログアウトします。"
+            :fields="passwordFields"
+            icon="i-lucide-key-round"
+            :loading="passwordLoading"
+            :submit="{ label: 'パスワードを変更', color: 'primary', block: true }"
+            title="パスワード変更"
+            :validate="validatePassword"
+            @submit="updatePassword"
+          >
+            <template #validation>
+              <UAlert
+                v-if="passwordErrorMessage"
                 color="error"
-                variant="subtle"
-                size="sm"
-                :loading="revokingKeyId === key.id"
-                @click="revokeDeviceKey(key.id)"
+                icon="i-lucide-circle-alert"
+                :description="passwordErrorMessage"
+              />
+              <UAlert
+                v-if="passwordSuccessMessage"
+                color="success"
+                icon="i-lucide-circle-check"
+                :description="passwordSuccessMessage"
+              />
+            </template>
+
+            <template #footer>
+              <p class="text-center text-sm text-neutral-300">
+                現在のパスワードがわからない場合は
+                <NuxtLink
+                  class="font-medium text-primary-300 hover:text-primary-200"
+                  to="/reset-password"
+                >
+                  再設定
+                </NuxtLink>
+              </p>
+            </template>
+          </UAuthForm>
+        </UCard>
+
+        <UCard>
+          <section class="space-y-3">
+            <div>
+              <h2 class="text-xl font-semibold">ログイン中のセッション</h2>
+              <p class="mt-1 text-sm leading-6 text-neutral-300">
+                Web と BMZ Player のログイン状態を確認し、不要なセッションを失効できます。
+              </p>
+            </div>
+            <UAlert v-if="sessionsError" color="error" :description="sessionsError" />
+            <p v-if="sessionsLoading" class="text-sm text-neutral-400">読み込み中...</p>
+            <p v-else-if="!sessions.length" class="text-sm text-neutral-400">
+              有効なセッションはありません。
+            </p>
+            <ul v-else class="divide-y divide-neutral-800 rounded-lg border border-neutral-800">
+              <li
+                v-for="session in sessions"
+                :key="session.id"
+                class="flex items-center justify-between gap-4 px-4 py-3"
               >
-                失効
-              </UButton>
-            </li>
-          </ul>
-        </section>
+                <div class="min-w-0">
+                  <p class="text-sm font-medium">{{ sessionLabel(session) }}</p>
+                  <p class="text-xs text-neutral-500">
+                    {{ sessionTokenLabel(session) }} ・ 作成
+                    {{ new Date(session.createdAt).toLocaleString() }} ・ 最終利用
+                    {{
+                      session.lastUsedAt ? new Date(session.lastUsedAt).toLocaleString() : '未記録'
+                    }}
+                    ・ 期限 {{ new Date(session.expiresAt).toLocaleString() }}
+                  </p>
+                </div>
+                <UButton
+                  color="error"
+                  variant="subtle"
+                  size="sm"
+                  :loading="revokingSessionId === session.id"
+                  @click="revokeSession(session.id)"
+                >
+                  失効
+                </UButton>
+              </li>
+            </ul>
+          </section>
+        </UCard>
 
-        <UAuthForm
-          description="アカウント、スコア、リプレイ、署名鍵、セッションを削除します。"
-          :fields="deleteAccountFields"
-          icon="i-lucide-trash-2"
-          :loading="deleteAccountLoading"
-          :submit="{ label: 'アカウントを削除', color: 'error', block: true }"
-          title="アカウント削除"
-          :validate="validateDeleteAccount"
-          @submit="deleteAccount"
-        >
-          <template #validation>
-            <UAlert
-              v-if="deleteAccountErrorMessage"
-              color="error"
-              icon="i-lucide-circle-alert"
-              :description="deleteAccountErrorMessage"
-            />
-          </template>
-        </UAuthForm>
+        <UCard>
+          <section class="space-y-3">
+            <div>
+              <h2 class="text-xl font-semibold">スコア署名鍵 (device key)</h2>
+              <p class="mt-1 text-sm leading-6 text-neutral-300">
+                BMZ Player がスコア送信の改ざん防止署名に使う鍵です。
+                端末を紛失した場合などはここから失効できます。失効後はその端末で
+                <code class="rounded bg-neutral-900 px-1">bmz ir device-key rotate</code>
+                を実行すると新しい鍵が登録されます。
+              </p>
+            </div>
+            <UAlert v-if="deviceKeysError" color="error" :description="deviceKeysError" />
+            <p v-if="deviceKeysLoading" class="text-sm text-neutral-400">読み込み中...</p>
+            <p v-else-if="!deviceKeys.length" class="text-sm text-neutral-400">
+              登録済みの署名鍵はありません。
+            </p>
+            <ul v-else class="divide-y divide-neutral-800 rounded-lg border border-neutral-800">
+              <li
+                v-for="key in deviceKeys"
+                :key="key.id"
+                class="flex items-center justify-between gap-4 px-4 py-3"
+              >
+                <div class="min-w-0">
+                  <p class="font-mono text-sm">{{ keyFingerprint(key.public_key) }}</p>
+                  <p class="text-xs text-neutral-500">
+                    {{ key.algorithm }} ・ 登録 {{ new Date(key.created_at).toLocaleString() }}
+                    <UBadge v-if="key.revoked_at" color="error" size="sm" variant="subtle">
+                      失効済み
+                    </UBadge>
+                  </p>
+                </div>
+                <UButton
+                  v-if="!key.revoked_at"
+                  color="error"
+                  variant="subtle"
+                  size="sm"
+                  :loading="revokingKeyId === key.id"
+                  @click="revokeDeviceKey(key.id)"
+                >
+                  失効
+                </UButton>
+              </li>
+            </ul>
+          </section>
+        </UCard>
 
-        <UButton color="neutral" icon="i-lucide-house" size="xl" to="/" variant="subtle">
-          トップへ戻る
-        </UButton>
+        <UCard>
+          <UAuthForm
+            class="w-full"
+            description="アカウント、スコア、リプレイ、署名鍵、セッションを削除します。"
+            :fields="deleteAccountFields"
+            icon="i-lucide-trash-2"
+            :loading="deleteAccountLoading"
+            :submit="{ label: 'アカウントを削除', color: 'error', block: true }"
+            title="アカウント削除"
+            :validate="validateDeleteAccount"
+            @submit="deleteAccount"
+          >
+            <template #validation>
+              <UAlert
+                v-if="deleteAccountErrorMessage"
+                color="error"
+                icon="i-lucide-circle-alert"
+                :description="deleteAccountErrorMessage"
+              />
+            </template>
+          </UAuthForm>
+        </UCard>
       </div>
     </section>
   </main>

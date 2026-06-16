@@ -9,8 +9,8 @@ const { user } = useUserSession()
 </script>
 
 <template>
-  <main class="min-h-dvh bg-neutral-950 text-neutral-50">
-    <section class="mx-auto flex min-h-dvh w-full max-w-2xl flex-col justify-center px-5 py-10">
+  <main>
+    <section class="mx-auto flex w-full max-w-2xl flex-col justify-center px-5 py-10">
       <div class="space-y-8">
         <div>
           <p class="mb-2 text-sm font-medium text-primary-300">BMZ Internet Ranking</p>
@@ -23,11 +23,18 @@ const { user } = useUserSession()
         <div v-if="user" class="space-y-4">
           <UAlert
             color="success"
+            variant="subtle"
             icon="i-lucide-circle-check"
-            :description="`${(user as SessionUser).email ?? 'ログイン中のユーザー'} としてログインしています。`"
+            :description="`${user.displayName} としてログインしています。`"
           />
           <div class="flex flex-col gap-3 sm:flex-row">
-            <UButton color="primary" icon="i-lucide-user-pen" size="xl" to="/profile">
+            <UButton
+              color="neutral"
+              icon="i-lucide-user-pen"
+              size="xl"
+              to="/profile"
+              variant="subtle"
+            >
               プロフィール編集
             </UButton>
             <UButton

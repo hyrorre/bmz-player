@@ -22,7 +22,7 @@ const { data, pending, error, refresh } = await useFetch<{ charts: ChartListItem
 </script>
 
 <template>
-  <main class="min-h-dvh bg-neutral-950 text-neutral-50">
+  <main>
     <section class="mx-auto w-full max-w-4xl px-5 py-10">
       <div class="mb-8">
         <p class="mb-2 text-sm font-medium text-primary-300">BMZ Internet Ranking</p>
@@ -40,7 +40,7 @@ const { data, pending, error, refresh } = await useFetch<{ charts: ChartListItem
           placeholder="タイトルで検索"
           @keydown.enter="refresh()"
         />
-        <UButton color="primary" icon="i-lucide-search" @click="refresh()">検索</UButton>
+        <UButton color="primary" variant="subtle" @click="refresh()">検索</UButton>
       </div>
 
       <UAlert v-if="error" color="error" :description="error.message" class="mb-6" />
