@@ -98,11 +98,24 @@ cargo run
 - [ ] アシストオプション、詳細オプション実装
 - [ ] LNノーツの処理方法確認
 - [ ] Mineノーツの処理方法確認
-- [ ] Fontで `BIZ UDGothic` / `Noto Sans CJK JP` / `Noto Sans JP` を優先表示
 - [ ] Select画面の操作変更とスキン側の不一致について考える
+- [ ] Select画面の操作が一部profile.tomlに設定されており複雑なので整理
 - [ ] song searchのカーソル移動機能
 - [ ] profile機能拡充
 - [ ] 各設定項目のデフォルト調整
+- [ ] rule modeごとにランプをまとめるor区別するかの設定項目追加
+- [ ] `Noto Sans CJK JP` or `Noto Sans JP` 同梱
+- [ ] 同梱スキン準備作業 (git submodule化)
+- [ ] 同梱スキンに4K / 6K / 8Kを追加
+- [ ] songs.rootとtablesの並び替え機能
+- [ ] player statistics
+- [ ] ランプソートで曲プレイ後カーソルがズレる
+- [ ] リザルト画面のSEフェードアウト
+- [ ] m-selectとWMIIの互換強化
+- [ ] 選曲画面でプレイスキンを変えると選曲スキンも再読込される
+- [ ] リザルトスキンとコースリザルトスキンが分かれていない
+- [ ] WAV定義などもIRに送信されている
+- [ ] ランキングのユーザー重複を排除
 
 ## Roadmap
 
@@ -112,15 +125,21 @@ cargo run
 - [x] PMS (9K)
 - [x] csv skin (beatoraja compliant)
 - [x] score database migration from LR2 / beatoraja
+- [x] auto-adjust (自動判定調整)
+- [x] normalizing volume per-chart
+- [ ] random select
+- [ ] battle mode
 - [ ] UE-style BMS (4K / 6K / 8K)
 - [ ] practice mode
 - [ ] new IR (bmz-ir)
 - [ ] read-only IR (LR2IR, Mocha, MinIR)
-- [ ] normalizing volume per-chart
 - [ ] OBS WebSocket control integration
 - [ ] Discord Rich Presence
 - [ ] Arena Mode
 - [ ] i18n
+- [ ] RawInput / GameInput / 8000Hz Input
+- [ ] WASAPI exclusive
+- [ ] ギミック系BMSへの対応
 
 ## Out of Scope (but welcome your contributions)
 
