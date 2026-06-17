@@ -4,7 +4,7 @@
     <AppHeader />
     <UContainer class="flex">
       <AppSidebar />
-      <NuxtPage />
+      <NuxtPage class="grow"/>
     </UContainer>
   </UApp>
 </template>

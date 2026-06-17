@@ -4,13 +4,38 @@ import type { IrRanking, LnScorePolicy } from '~~/bmz-ir-web/shared/types/ir'
 interface ChartDetail {
   chart: {
     sha256: string
+    md5: string
     title: string
     subtitle: string | null
     genre: string | null
     artist: string | null
+    subartists: string[]
     mode: string
     level: number | null
+    total: number | null
+    judge_rank: number | null
+    min_bpm: number | null
+    max_bpm: number | null
     notes: number
+    ln_notes: number
+    cn_notes: number
+    hcn_notes: number
+    mine_notes: number
+    has_random: boolean
+    has_stop: boolean
+    has_undefined_ln: boolean
+    has_defined_ln: boolean
+    has_defined_cn: boolean
+    has_defined_hcn: boolean
+    has_ln: boolean
+    has_cn: boolean
+    has_hcn: boolean
+    has_mine: boolean
+    source_url: string | null
+    append_url: string | null
+    headers: Record<string, string>
+    created_at: number
+    updated_at: number
   }
   stats: {
     global: { play_count: number; clear_count: number }
@@ -71,6 +96,18 @@ const {
     ...(lnPolicy.value === 'ALL' ? {} : { ln_policy: lnPolicy.value }),
   })),
 })
+
+const copyMd5 = async () => {
+  if (detail.value) {
+    await navigator.clipboard.writeText(detail.value.chart.md5)
+  }
+}
+
+const copySha256 = async () => {
+  if (detail.value) {
+    await navigator.clipboard.writeText(detail.value.chart.sha256)
+  }
+}
 </script>
 
 <template>
@@ -88,6 +125,7 @@ const {
           <p class="mb-2 text-sm font-medium text-primary-300">
             <NuxtLink to="/charts" class="hover:underline">譜面一覧</NuxtLink>
           </p>
+          <p>{{ detail.chart.genre }}</p>
           <h1 class="text-3xl font-semibold">
             {{ detail.chart.title }}
             <span v-if="detail.chart.subtitle" class="text-xl text-neutral-400">
@@ -96,7 +134,9 @@ const {
           </h1>
           <p class="mt-2 text-sm text-neutral-300">
             {{ detail.chart.artist ?? '' }}
-            <span v-if="detail.chart.genre"> / {{ detail.chart.genre }}</span>
+            <span v-if="detail.chart.subartists.length">
+              {{ ` / ${detail.chart.subartists.join(' / ')}` }}
+            </span>
           </p>
           <p class="mt-1 text-sm text-neutral-400">
             {{ detail.chart.mode }}
@@ -105,10 +145,18 @@ const {
             クリア
             {{ detail.stats.global.clear_count }}
           </p>
+          <p class="mt-3 text-sm text-neutral-400">
+            md5 {{ detail.chart.md5 }}
+            <UButton size="xs" variant="subtle" color="neutral" @click="copyMd5">コピー</UButton>
+          </p>
+          <p class="mt-1 text-sm text-neutral-400">
+            sha256 {{ detail.chart.sha256 }}
+            <UButton size="xs" variant="subtle" color="neutral" @click="copySha256">コピー</UButton>
+          </p>
         </div>
 
         <div class="mb-4 flex flex-wrap items-center gap-3">
-          <USelect v-model="lnPolicy" :items="lnPolicies" class="w-40" />
+          LN <USelect v-model="lnPolicy" :items="lnPolicies" class="w-40" />
         </div>
 
         <UAlert v-if="rankingError" color="error" :description="rankingError.message" />
@@ -136,7 +184,6 @@ const {
                 v-for="entry in ranking.ranking.entries"
                 :key="entry.score.score_id"
                 class="border-t border-neutral-800"
-                :class="{ 'bg-primary-950/40': entry.relation.is_self }"
               >
                 <td class="px-3 py-2 text-neutral-300">{{ entry.rank }}</td>
                 <td class="px-3 py-2">
