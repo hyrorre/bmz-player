@@ -17,7 +17,7 @@ use crate::assets::{RgbaImageAsset, load_png_rgba};
 use crate::bitmap_font::{BitmapFont, load_bitmap_font};
 use crate::plan::{
     Color, DrawCommand, DrawPlan, Point, Rect, RectBatchCache, RectBatchCacheKey, RectCommand,
-    TextAlign, TextOverflow, TextStyle, TextureId, UvRect,
+    TextAlign, TextCaret, TextOverflow, TextStyle, TextureId, UvRect,
 };
 use crate::scene::AppSceneSnapshot;
 use crate::skin::{
@@ -255,6 +255,12 @@ impl CanvasViewport {
             instance[4..8].copy_from_slice(&rect.y.to_le_bytes());
             instance[8..12].copy_from_slice(&rect.width.to_le_bytes());
             instance[12..16].copy_from_slice(&rect.height.to_le_bytes());
+        }
+    }
+
+    fn transform_text_caret_rects(self, rects: &mut [Option<RectCommand>]) {
+        for rect in rects.iter_mut().flatten() {
+            *rect = self.transform_rect_command(*rect);
         }
     }
 
@@ -1036,6 +1042,7 @@ impl WgpuRenderer {
         let mut text_frame =
             self.build_text_frame(plan, fonts, bitmap_fonts, canvas_viewport.content_size());
         canvas_viewport.transform_text_instances(&mut text_frame.instances);
+        canvas_viewport.transform_text_caret_rects(&mut text_frame.command_caret_rects);
         timings.text_us = text_start.elapsed().as_micros();
         let geometry_start = Instant::now();
         let geometry = encode_plan_geometry_with_rect_batch_resolver(
@@ -1660,6 +1667,8 @@ struct TextFrame {
     /// `DrawCommand::Text` ごとに生成された quad 数を、commands 内の出現順で持つ。
     /// 描画ステップ単位で text instance buffer をスライスするのに使う。
     command_quad_counts: Vec<usize>,
+    /// `DrawCommand::Text` ごとに生成された caret 矩形。
+    command_caret_rects: Vec<Option<RectCommand>>,
 }
 
 #[derive(Debug, Clone)]
@@ -1887,12 +1896,30 @@ fn encode_plan_geometry_with_rect_batch_resolver(
             DrawCommand::Text { .. } => {
                 let quad_count =
                     text_frame.command_quad_counts.get(text_command_index).copied().unwrap_or(0);
+                let caret_rect =
+                    text_frame.command_caret_rects.get(text_command_index).copied().flatten();
                 text_command_index += 1;
                 let start = text_quad_cursor * TEXT_INSTANCE_BYTES;
                 text_quad_cursor += quad_count;
                 let end = text_quad_cursor * TEXT_INSTANCE_BYTES;
                 if quad_count > 0 {
                     push_or_extend_text(&mut steps, start..end);
+                }
+                if let Some(command) = caret_rect {
+                    let start = rects.len();
+                    let rect = command.rect;
+                    let color = command.color;
+                    rects.extend_from_slice(bytemuck::bytes_of(&[
+                        rect.x,
+                        rect.y,
+                        rect.width,
+                        rect.height,
+                        color.r,
+                        color.g,
+                        color.b,
+                        color.a,
+                    ]));
+                    push_or_extend_rects(&mut steps, start..rects.len());
                 }
             }
         }
@@ -2030,8 +2057,9 @@ fn build_text_frame(
     let mut builder = TextAtlasBuilder::new(TEXT_ATLAS_WIDTH);
     // 各 Text コマンドが生成した quad 数を記録し、描画ステップへ分割できるようにする。
     let mut command_quad_counts = Vec::new();
+    let mut command_caret_rects = Vec::new();
     for command in &plan.commands {
-        let DrawCommand::Text { origin, text, style } = command else {
+        let DrawCommand::Text { origin, text, style, caret } = command else {
             continue;
         };
         let quads_before = builder.quads.len();
@@ -2039,6 +2067,9 @@ fn build_text_frame(
             style.font_id.as_ref().and_then(|font_id| bitmap_fonts.get(font_id))
         {
             builder.push_bitmap_text(origin, text, style.clone(), bitmap_font, surface);
+            command_caret_rects.push(caret.and_then(|caret| {
+                bitmap_text_caret_rect(origin, text, style, bitmap_font, surface, caret)
+            }));
         } else {
             let font = style
                 .font_id
@@ -2046,11 +2077,15 @@ fn build_text_frame(
                 .and_then(|font_id| fonts.get(font_id))
                 .unwrap_or(default_font);
             builder.push_text(origin, text, style.clone(), font, surface);
+            command_caret_rects.push(caret.and_then(|caret| {
+                vector_text_caret_rect(origin, text, style, font, surface, caret)
+            }));
         }
         command_quad_counts.push(builder.quads.len() - quads_before);
     }
     let mut frame = builder.finish();
     frame.command_quad_counts = command_quad_counts;
+    frame.command_caret_rects = command_caret_rects;
     frame
 }
 
@@ -2069,8 +2104,9 @@ fn build_text_frame_with_cache(
     atlas.begin_frame();
     let mut builder = CachedTextFrameBuilder::new(atlas);
     let mut command_quad_counts = Vec::new();
+    let mut command_caret_rects = Vec::new();
     for command in &plan.commands {
-        let DrawCommand::Text { origin, text, style } = command else {
+        let DrawCommand::Text { origin, text, style, caret } = command else {
             continue;
         };
         let quads_before = builder.quads.len();
@@ -2078,6 +2114,9 @@ fn build_text_frame_with_cache(
             && let Some(bitmap_font) = bitmap_fonts.get(font_id)
         {
             builder.push_bitmap_text(origin, text, style.clone(), font_id, bitmap_font, surface);
+            command_caret_rects.push(caret.and_then(|caret| {
+                bitmap_text_caret_rect(origin, text, style, bitmap_font, surface, caret)
+            }));
         } else {
             let font_id = style.font_id.as_deref().unwrap_or(DEFAULT_TEXT_FONT_ID);
             let font = style
@@ -2086,10 +2125,13 @@ fn build_text_frame_with_cache(
                 .and_then(|font_id| fonts.get(font_id))
                 .unwrap_or(default_font);
             builder.push_text(origin, text, style.clone(), font_id, font, surface);
+            command_caret_rects.push(caret.and_then(|caret| {
+                vector_text_caret_rect(origin, text, style, font, surface, caret)
+            }));
         }
         command_quad_counts.push(builder.quads.len() - quads_before);
     }
-    builder.finish(command_quad_counts)
+    builder.finish(command_quad_counts, command_caret_rects)
 }
 
 const DEFAULT_TEXT_FONT_ID: &str = "<default>";
@@ -2605,7 +2647,11 @@ impl<'a> CachedTextFrameBuilder<'a> {
         }
     }
 
-    fn finish(self, command_quad_counts: Vec<usize>) -> TextFrame {
+    fn finish(
+        self,
+        command_quad_counts: Vec<usize>,
+        command_caret_rects: Vec<Option<RectCommand>>,
+    ) -> TextFrame {
         let size = self.atlas.size();
         let instances = encode_text_quads(&self.quads, size.width, size.height);
         TextFrame {
@@ -2615,6 +2661,7 @@ impl<'a> CachedTextFrameBuilder<'a> {
             dirty_regions: self.atlas.dirty_regions.clone(),
             instances,
             command_quad_counts,
+            command_caret_rects,
         }
     }
 }
@@ -2995,6 +3042,7 @@ impl TextAtlasBuilder {
             dirty_regions: Vec::new(),
             instances,
             command_quad_counts: Vec::new(),
+            command_caret_rects: Vec::new(),
         }
     }
 }
@@ -3008,6 +3056,137 @@ fn bitmap_text_width_px(text: &str, font: &BitmapFont, scale: f32) -> f32 {
         .filter_map(|ch| font.glyphs.get(&ch))
         .map(|glyph| glyph.xadvance as f32 * scale)
         .sum()
+}
+
+fn vector_text_caret_rect(
+    origin: &Point,
+    text: &str,
+    style: &TextStyle,
+    font: &FontArc,
+    surface: SurfaceSize,
+    caret: TextCaret,
+) -> Option<RectCommand> {
+    if style.wrapping || !surface.is_drawable() {
+        return None;
+    }
+    let mut px_size = (style.size * surface.height as f32).max(1.0);
+    let original_px_size = px_size;
+    let max_width = style.max_width.max(0.0) * surface.width as f32;
+    let mut visible = Cow::Borrowed(text);
+    let mut scale = PxScale::from(px_size);
+    let mut scaled_font = font.as_scaled(scale);
+    let mut text_width = text_width_px(&visible, font, &scaled_font);
+    if max_width > 0.0 && text_width > max_width {
+        match style.overflow {
+            TextOverflow::Overflow => {}
+            TextOverflow::Shrink => {
+                px_size = (px_size * max_width / text_width).max(1.0);
+                scale = PxScale::from(px_size);
+                scaled_font = font.as_scaled(scale);
+                text_width = text_width_px(&visible, font, &scaled_font);
+            }
+            TextOverflow::Truncate => {
+                visible =
+                    Cow::Owned(truncate_text_to_width(&visible, font, &scaled_font, max_width));
+                text_width = text_width_px(&visible, font, &scaled_font);
+            }
+        }
+    }
+    let align_offset = match style.align {
+        TextAlign::Left => 0.0,
+        TextAlign::Center if max_width > 0.0 => (max_width - text_width) / 2.0,
+        TextAlign::Right if max_width > 0.0 => max_width - text_width,
+        _ => 0.0,
+    };
+    let cursor = clamp_text_byte_index(&visible, caret.byte_index);
+    let prefix_width = text_width_px(&visible[..cursor], font, &scaled_font);
+    let shrink_offset_y =
+        if matches!(style.overflow, TextOverflow::Shrink) && px_size < original_px_size {
+            (original_px_size - px_size) / 2.0
+        } else {
+            0.0
+        };
+    let x = (origin.x * surface.width as f32 + align_offset.max(0.0) + prefix_width)
+        / surface.width as f32;
+    let y = (origin.y * surface.height as f32 + shrink_offset_y) / surface.height as f32;
+    Some(RectCommand {
+        rect: Rect {
+            x,
+            y,
+            width: (2.0 / surface.width as f32).max(0.001),
+            height: (px_size / surface.height as f32).max(0.001),
+        },
+        color: caret.color,
+    })
+}
+
+fn bitmap_text_caret_rect(
+    origin: &Point,
+    text: &str,
+    style: &TextStyle,
+    font: &BitmapFont,
+    surface: SurfaceSize,
+    caret: TextCaret,
+) -> Option<RectCommand> {
+    if style.wrapping || !surface.is_drawable() {
+        return None;
+    }
+    let design_size = if font.size > 0 { font.size } else { font.line_height.max(1) };
+    let bitmap_size = style.bitmap_size.unwrap_or(style.size);
+    let mut scale = (bitmap_size * surface.height as f32 / design_size as f32).max(0.01);
+    let original_scale = scale;
+    let max_width = style.max_width.max(0.0) * surface.width as f32;
+    let mut text_width = bitmap_text_width_px(text, font, scale);
+    let visible = if max_width > 0.0 && text_width > max_width {
+        match style.overflow {
+            TextOverflow::Overflow => Cow::Borrowed(text),
+            TextOverflow::Shrink => {
+                scale = (scale * max_width / text_width).max(0.01);
+                Cow::Borrowed(text)
+            }
+            TextOverflow::Truncate => {
+                Cow::Owned(truncate_bitmap_text_to_width(text, font, max_width, scale))
+            }
+        }
+    } else {
+        Cow::Borrowed(text)
+    };
+    text_width = bitmap_text_width_px(&visible, font, scale);
+    let align_offset = match style.align {
+        TextAlign::Left => 0.0,
+        TextAlign::Center if max_width > 0.0 => (max_width - text_width) / 2.0,
+        TextAlign::Right if max_width > 0.0 => max_width - text_width,
+        _ => 0.0,
+    };
+    let cursor = clamp_text_byte_index(&visible, caret.byte_index);
+    let prefix_width = bitmap_text_width_px(&visible[..cursor], font, scale);
+    let shrink_offset_y =
+        if matches!(style.overflow, TextOverflow::Shrink) && scale < original_scale {
+            (design_size as f32 * (original_scale - scale)) / 2.0
+        } else {
+            0.0
+        };
+    let caret_height = design_size as f32 * scale;
+    let x = (origin.x * surface.width as f32 + align_offset.max(0.0) + prefix_width)
+        / surface.width as f32;
+    let y = (origin.y * surface.height as f32 + shrink_offset_y) / surface.height as f32;
+    Some(RectCommand {
+        rect: Rect {
+            x,
+            y,
+            width: (2.0 / surface.width as f32).max(0.001),
+            height: (caret_height / surface.height as f32).max(0.001),
+        },
+        color: caret.color,
+    })
+}
+
+fn clamp_text_byte_index(text: &str, byte_index: usize) -> usize {
+    let mut byte_index = byte_index.min(text.len());
+    while byte_index > 0 && !text.is_char_boundary(byte_index) {
+        byte_index -= 1;
+    }
+    byte_index
 }
 
 fn truncate_bitmap_text_to_width(
@@ -4025,6 +4204,7 @@ mod tests {
             commands: vec![DrawCommand::Text {
                 origin: Point { x: 0.1, y: 0.1 },
                 text: "A".to_string(),
+                caret: None,
                 style: TextStyle {
                     font_id: None,
                     size: 0.1,
@@ -4057,6 +4237,7 @@ mod tests {
             commands: vec![DrawCommand::Text {
                 origin: Point { x: 0.1, y: 0.1 },
                 text: "FPS 20".to_string(),
+                caret: None,
                 style: TextStyle {
                     font_id: None,
                     size: 0.1,
@@ -4126,6 +4307,7 @@ mod tests {
             commands: vec![DrawCommand::Text {
                 origin: Point { x: 0.1, y: 0.1 },
                 text: "A".to_string(),
+                caret: None,
                 style: TextStyle {
                     font_id: None,
                     size: 0.1,
@@ -4171,6 +4353,7 @@ mod tests {
             commands: vec![DrawCommand::Text {
                 origin: Point { x: 0.1, y: 0.1 },
                 text: "日本語と記号★♪".to_string(),
+                caret: None,
                 style: TextStyle {
                     font_id: None,
                     size: 0.1,
@@ -4243,6 +4426,7 @@ mod tests {
             commands: vec![DrawCommand::Text {
                 origin: Point { x: 0.1, y: 0.1 },
                 text: "A".to_string(),
+                caret: None,
                 style: TextStyle {
                     font_id: Some("bitmap".to_string()),
                     size: 0.1,
@@ -4316,6 +4500,7 @@ mod tests {
             commands: vec![DrawCommand::Text {
                 origin: Point { x: 0.1, y: 0.1 },
                 text: "A".to_string(),
+                caret: None,
                 style: TextStyle {
                     font_id: Some("bitmap".to_string()),
                     size: 0.3,
@@ -4389,6 +4574,7 @@ mod tests {
             commands: vec![DrawCommand::Text {
                 origin: Point { x: 0.1, y: 0.1 },
                 text: "AAAA".to_string(),
+                caret: None,
                 style: TextStyle {
                     font_id: Some("bitmap".to_string()),
                     size: 0.2,
@@ -4462,6 +4648,7 @@ mod tests {
             commands: vec![DrawCommand::Text {
                 origin: Point { x: 0.1, y: 0.1 },
                 text: "A".to_string(),
+                caret: None,
                 style: TextStyle {
                     font_id: Some("bitmap".to_string()),
                     size: 0.3,
@@ -4526,6 +4713,7 @@ mod tests {
         DrawCommand::Text {
             origin: Point { x: 0.1, y: 0.1 },
             text: "x".to_string(),
+            caret: None,
             style: TextStyle {
                 font_id: None,
                 size: 0.1,
@@ -4540,6 +4728,65 @@ mod tests {
                 shadow: None,
             },
         }
+    }
+
+    #[test]
+    fn vector_text_caret_rect_uses_font_advance_without_changing_text() {
+        let Some(font) = load_default_font() else { return };
+        let surface = SurfaceSize { width: 1000, height: 100 };
+        let style = TextStyle {
+            font_id: None,
+            size: 0.1,
+            bitmap_size: None,
+            color: Color::rgb(1.0, 1.0, 1.0),
+            layer: crate::plan::TextLayer::Skin,
+            align: TextAlign::Left,
+            max_width: 0.0,
+            overflow: TextOverflow::Overflow,
+            wrapping: false,
+            outline: None,
+            shadow: None,
+        };
+        let caret = TextCaret { byte_index: "A".len(), color: Color::rgb(0.8, 0.9, 1.0) };
+
+        let rect =
+            vector_text_caret_rect(&Point { x: 0.1, y: 0.2 }, "AB", &style, &font, surface, caret)
+                .expect("caret rect");
+
+        let scaled = font.as_scaled(PxScale::from(10.0));
+        let expected_x = (100.0 + text_width_px("A", &font, &scaled)) / 1000.0;
+        assert_approx(rect.rect.x, expected_x);
+        assert_approx(rect.rect.y, 0.2);
+        assert_approx(rect.rect.height, 0.1);
+        assert_eq!(rect.color, caret.color);
+    }
+
+    #[test]
+    fn plan_geometry_draws_text_caret_after_text() {
+        let mut plan = DrawPlan { clear: Color::rgb(0.0, 0.0, 0.0), commands: vec![sample_text()] };
+        let DrawCommand::Text { caret, .. } = &mut plan.commands[0] else {
+            unreachable!();
+        };
+        *caret = Some(TextCaret { byte_index: 1, color: Color::rgb(1.0, 1.0, 1.0) });
+        let text_frame = TextFrame {
+            command_quad_counts: vec![1],
+            command_caret_rects: vec![Some(RectCommand {
+                rect: Rect { x: 0.2, y: 0.3, width: 0.01, height: 0.1 },
+                color: Color::rgb(1.0, 1.0, 1.0),
+            })],
+            ..TextFrame::default()
+        };
+
+        let geometry = encode_plan_geometry(&plan, &text_frame, test_surface_size());
+
+        assert_eq!(
+            geometry.steps,
+            vec![
+                DrawStep::Text { range: 0..TEXT_INSTANCE_BYTES },
+                DrawStep::Rects { range: 0..RECT_INSTANCE_BYTES },
+            ]
+        );
+        assert_eq!(geometry.rects.len(), RECT_INSTANCE_BYTES);
     }
 
     #[test]

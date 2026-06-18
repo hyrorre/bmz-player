@@ -108,12 +108,14 @@ pub struct SelectSnapshot {
     /// 設定項目の編集モード中。
     pub settings_editing: bool,
     /// 楽曲検索バー (beatoraja `STRING_SEARCHWORD`, ref=30) に表示する文字列。
-    /// 検索モード中は入力中クエリ (+ カーソル記号)、非モード中は空 or 直前の
-    /// メッセージ ("no song found" 等)。
+    /// 検索モード中は入力中クエリ、非モード中は空 or 直前のメッセージ
+    /// ("no song found" 等)。
     pub search_word: String,
     /// `search_word` に乗せる不透明度倍率 (0.0..=1.0)。placeholder /
     /// メッセージ表示時は薄く (< 1.0)、実入力中は 1.0。
     pub search_word_alpha: f32,
+    /// `search_word` 内に重ねる検索 caret の UTF-8 byte index。
+    pub search_caret_byte_index: Option<usize>,
     /// Select skin mouse position in normalized screen coordinates.
     pub mouse_position: Option<(f32, f32)>,
     /// 選曲カーソル譜面の IR ランキング状態 (NUMBER_IR_* / OPTION_IR_*)。
@@ -183,6 +185,7 @@ impl Default for SelectSnapshot {
             settings_editing: false,
             search_word: String::new(),
             search_word_alpha: 1.0,
+            search_caret_byte_index: None,
             mouse_position: None,
             ir: ResultIrSnapshot::default(),
             rival: None,

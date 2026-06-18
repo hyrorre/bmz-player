@@ -91,6 +91,7 @@ pub enum DrawCommand {
         origin: Point,
         text: String,
         style: TextStyle,
+        caret: Option<TextCaret>,
     },
 }
 
@@ -133,6 +134,12 @@ pub struct UvRect {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TextureId(pub u32);
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextCaret {
+    pub byte_index: usize,
+    pub color: Color,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextStyle {
@@ -1475,6 +1482,7 @@ fn push_scene_overlay_text_aligned(
     commands.push(DrawCommand::Text {
         origin: Point { x: origin_x, y: origin_y },
         text: overlay.to_string(),
+        caret: None,
         style: TextStyle {
             font_id: None,
             size: OVERLAY_FONT_SIZE_RATIO,

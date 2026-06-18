@@ -2044,7 +2044,7 @@ impl WinitApp {
                 .unwrap_or("")
                 .to_string(),
         };
-        let (search_word, search_word_alpha) = self.display_search_word();
+        let (search_word, search_word_alpha, search_caret_byte_index) = self.display_search_word();
         self.ensure_visible_select_chart_distributions(25);
         let chart_distributions = self.select_distribution_cache.borrow();
         let note_display_duration_ms =
@@ -2123,6 +2123,7 @@ impl WinitApp {
             settings_editing: self.settings_edit.is_some() || self.key_config_edit.is_some(),
             search_word,
             search_word_alpha,
+            search_caret_byte_index,
             mouse_position: self.cursor_position_normalized(),
             ir: self
                 .select_ir
@@ -2193,31 +2194,25 @@ impl WinitApp {
     /// `TextField` uses `messageFontColor=GRAY` for placeholder; we approximate
     /// that by multiplying skin-resolved alpha by `< 1.0` for placeholder /
     /// feedback states.
-    fn display_search_word(&self) -> (String, f32) {
+    fn display_search_word(&self) -> (String, f32, Option<usize>) {
         const PLACEHOLDER_ALPHA: f32 = 0.45;
         const MESSAGE_ALPHA: f32 = 0.6;
         let blink_on = (self.select_time().0 / 500_000) % 2 == 0;
-        let caret = if blink_on { "_" } else { " " };
         if self.search_mode {
             if self.search_query.is_empty()
                 && self.search_preedit.is_empty()
                 && let Some(message) = &self.search_message
             {
-                return (message.clone(), MESSAGE_ALPHA);
+                return (message.clone(), MESSAGE_ALPHA, None);
             }
-            (
-                search_display_text(
-                    &self.search_query,
-                    self.search_cursor,
-                    &self.search_preedit,
-                    caret,
-                ),
-                1.0,
-            )
+            let cursor = clamp_search_cursor(&self.search_query, self.search_cursor);
+            let text = search_display_text(&self.search_query, cursor, &self.search_preedit);
+            let caret = blink_on.then_some(cursor + self.search_preedit.len());
+            (text, 1.0, caret)
         } else if let Some(message) = &self.search_message {
-            (message.clone(), MESSAGE_ALPHA)
+            (message.clone(), MESSAGE_ALPHA, None)
         } else {
-            ("type / to search song".to_string(), PLACEHOLDER_ALPHA)
+            ("type / to search song".to_string(), PLACEHOLDER_ALPHA, None)
         }
     }
 
@@ -12365,12 +12360,11 @@ fn select_control_with_lane_fallback(
     configured.into_iter().next().or_else(|| lane_fallback.into_iter().next())
 }
 
-fn search_display_text(query: &str, cursor: usize, preedit: &str, caret: &str) -> String {
+fn search_display_text(query: &str, cursor: usize, preedit: &str) -> String {
     let cursor = clamp_search_cursor(query, cursor);
-    let mut text = String::with_capacity(query.len() + preedit.len() + caret.len());
+    let mut text = String::with_capacity(query.len() + preedit.len());
     text.push_str(&query[..cursor]);
     text.push_str(preedit);
-    text.push_str(caret);
     text.push_str(&query[cursor..]);
     text
 }
@@ -12969,9 +12963,9 @@ mod tests {
     }
 
     #[test]
-    fn search_display_places_caret_and_preedit_at_cursor() {
-        assert_eq!(search_display_text("ab cd", 2, "変換", "_"), "ab変換_ cd");
-        assert_eq!(search_display_text("a楽b", 2, "", "_"), "a_楽b");
+    fn search_display_inserts_preedit_without_caret_character() {
+        assert_eq!(search_display_text("ab cd", 2, "変換"), "ab変換 cd");
+        assert_eq!(search_display_text("a楽b", 2, ""), "a楽b");
     }
 
     #[test]

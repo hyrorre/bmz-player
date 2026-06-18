@@ -85,6 +85,7 @@ pub fn sample_select_scene() -> AppSceneSnapshot {
         settings_editing: false,
         search_word: String::new(),
         search_word_alpha: 1.0,
+        search_caret_byte_index: None,
         mouse_position: None,
         ir: crate::scene::ResultIrSnapshot::default(),
         rival: None,

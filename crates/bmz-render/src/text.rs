@@ -28,6 +28,7 @@ pub fn push_text_command(commands: &mut Vec<DrawCommand>, text: &str, style: Bit
     commands.push(DrawCommand::Text {
         origin: Point { x: style.x, y: style.y },
         text: text.to_string(),
+        caret: None,
         style: TextStyle {
             font_id: None,
             size: style.cell * GLYPH_HEIGHT as f32,

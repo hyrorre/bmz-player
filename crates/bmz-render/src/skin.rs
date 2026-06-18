@@ -16,8 +16,8 @@ use serde_json::{Map as JsonMap, Value as JsonValue};
 use crate::assets::load_png_rgba;
 use crate::plan::{
     Color, DrawCommand, PLAY_BACKBMP_TEXTURE, Point, Rect, RectBatchCache, RectBatchCacheKey,
-    RectCommand, SELECT_BANNER_TEXTURE, SELECT_STAGE_TEXTURE, TextAlign, TextLayer, TextOutline,
-    TextOverflow, TextShadow, TextStyle, TextureId, UvRect,
+    RectCommand, SELECT_BANNER_TEXTURE, SELECT_STAGE_TEXTURE, TextAlign, TextCaret, TextLayer,
+    TextOutline, TextOverflow, TextShadow, TextStyle, TextureId, UvRect,
 };
 use crate::scene::{
     CourseConstraintFlags, PlayerStatsSnapshot, ResultGradeDiffDisplay, SelectRowKind,
@@ -2353,6 +2353,8 @@ pub struct SkinTextState<'a> {
     /// `1.0` keeps the skin-defined alpha unchanged; values < 1.0 are used for
     /// placeholder / inactive states (beatoraja `messageFontColor=GRAY` 相当).
     pub search_word_alpha: f32,
+    /// Optional caret position for `search_word`, expressed as a UTF-8 byte index.
+    pub search_caret_byte_index: Option<usize>,
     pub ir_ranking: &'a crate::scene::ResultIrSnapshot,
 }
 
@@ -2379,6 +2381,7 @@ impl<'a> Default for SkinTextState<'a> {
             search_word: "",
             rival: "",
             search_word_alpha: 1.0,
+            search_caret_byte_index: None,
             ir_ranking: &DEFAULT_RESULT_IR_SNAPSHOT,
         }
     }
@@ -2620,6 +2623,7 @@ pub enum SkinRenderItem {
         origin: Point,
         text: String,
         style: TextStyle,
+        caret: Option<TextCaret>,
         blend: BlendMode,
     },
     Rect {
@@ -2662,12 +2666,14 @@ impl SkinObject {
                         origin: Point { x: resolved.rect.x, y: resolved.rect.y },
                         text: text(*slot),
                         style: style.clone().with_alpha(resolved.alpha),
+                        caret: None,
                         blend: resolved.blend,
                     },
                     SkinSource::Number { slot, style, digits } => SkinRenderItem::Text {
                         origin: Point { x: resolved.rect.x, y: resolved.rect.y },
                         text: format_number(number(*slot), *digits),
                         style: style.clone().with_alpha(resolved.alpha),
+                        caret: None,
                         blend: resolved.blend,
                     },
                     SkinSource::Rect { color } => SkinRenderItem::Rect {
@@ -3665,6 +3671,7 @@ impl SkinDocument {
                 .unwrap_or_default(),
             search_word: &snapshot.search_word,
             search_word_alpha: snapshot.search_word_alpha,
+            search_caret_byte_index: snapshot.search_caret_byte_index,
             rival: snapshot.rival.as_ref().map(|rival| rival.display_name.as_str()).unwrap_or(""),
             ir_ranking: &snapshot.ir,
             ..SkinTextState::default()
@@ -5420,6 +5427,17 @@ impl SkinDocument {
         if text.ref_id == 30 {
             alpha *= state.search_word_alpha.clamp(0.0, 1.0);
         }
+        let color = Color::rgba(
+            frame.r as f32 / 255.0,
+            frame.g as f32 / 255.0,
+            frame.b as f32 / 255.0,
+            alpha,
+        );
+        let caret = if text.ref_id == 30 {
+            state.search_caret_byte_index.map(|byte_index| TextCaret { byte_index, color })
+        } else {
+            None
+        };
         Some(SkinRenderItem::Text {
             origin: Point { x: origin_x, y: rect.y },
             text: content,
@@ -5427,12 +5445,7 @@ impl SkinDocument {
                 font_id: (!text.font.is_empty()).then(|| text.font.clone()),
                 size: frame.h.abs().max(text.size).max(1) as f32 / self.h.max(1) as f32,
                 bitmap_size: skin_text_bitmap_size(text, &self.font, self.h),
-                color: Color::rgba(
-                    frame.r as f32 / 255.0,
-                    frame.g as f32 / 255.0,
-                    frame.b as f32 / 255.0,
-                    alpha,
-                ),
+                color,
                 layer: TextLayer::Ui,
                 align: skin_text_align(text.align),
                 max_width: frame.w.abs() as f32 / self.w.max(1) as f32,
@@ -5441,6 +5454,7 @@ impl SkinDocument {
                 outline: skin_text_outline(text, self.h),
                 shadow: skin_text_shadow(text, self.w, self.h),
             },
+            caret,
             blend: BlendMode::Normal,
         })
     }
@@ -7316,11 +7330,12 @@ pub fn append_skin_render_items(commands: &mut Vec<DrawCommand>, items: &[SkinRe
                         .push(DrawCommand::RectBatch { rects: Arc::clone(rects), cache: *cache });
                 }
             }
-            SkinRenderItem::Text { origin, text, style, .. } => {
+            SkinRenderItem::Text { origin, text, style, caret, .. } => {
                 if !text.is_empty() {
                     commands.push(DrawCommand::Text {
                         origin: *origin,
                         text: text.clone(),
+                        caret: *caret,
                         style: style.clone(),
                     });
                 }
@@ -11233,10 +11248,11 @@ fn apply_all_offset_to_render_item(item: SkinRenderItem, state: &SkinDrawState) 
             angle_deg,
             center: apply_all_offset_to_point(center, scale_x, scale_y, translate_x, translate_y),
         },
-        SkinRenderItem::Text { origin, text, style, blend } => SkinRenderItem::Text {
+        SkinRenderItem::Text { origin, text, style, caret, blend } => SkinRenderItem::Text {
             origin: apply_all_offset_to_point(origin, scale_x, scale_y, translate_x, translate_y),
             text,
             style,
+            caret,
             blend,
         },
         SkinRenderItem::Rect { rect, color, blend } => SkinRenderItem::Rect {
