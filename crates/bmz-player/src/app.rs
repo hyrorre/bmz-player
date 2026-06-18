@@ -458,6 +458,8 @@ struct WinitApp {
     search_query: String,
     /// `search_query` 内のカーソル位置 (UTF-8 byte index)。常に char boundary に補正する。
     search_cursor: usize,
+    /// 検索 caret の点滅周期開始時刻。カーソル移動時にリセットし、直後は表示する。
+    search_caret_blink_started_at: Instant,
     /// 直近のマウスカーソル位置。select skin のクリック hit-test に使う。
     last_cursor_position: Option<PhysicalPosition<f64>>,
     /// ドラッグ中の select skin slider type。
@@ -1621,6 +1623,7 @@ impl WinitApp {
             search_mode: false,
             search_query: String::new(),
             search_cursor: 0,
+            search_caret_blink_started_at: now,
             last_cursor_position: None,
             select_slider_dragging_type: None,
             search_preedit: String::new(),
@@ -2197,7 +2200,7 @@ impl WinitApp {
     fn display_search_word(&self) -> (String, f32, Option<usize>) {
         const PLACEHOLDER_ALPHA: f32 = 0.45;
         const MESSAGE_ALPHA: f32 = 0.6;
-        let blink_on = (self.select_time().0 / 500_000) % 2 == 0;
+        let blink_on = search_caret_visible(self.search_caret_blink_started_at.elapsed());
         if self.search_mode {
             if self.search_query.is_empty()
                 && self.search_preedit.is_empty()
@@ -3955,7 +3958,6 @@ impl WinitApp {
                 tracing::info!("entered song search mode from mouse click");
             } else {
                 self.search_cursor_to_end();
-                self.update_search_ime_cursor_area();
             }
             return;
         }
@@ -4014,6 +4016,21 @@ impl WinitApp {
 
     fn search_cursor_to_end(&mut self) {
         self.search_cursor = self.search_query.len();
+        self.reset_search_caret_blink();
+        self.update_search_ime_cursor_area();
+    }
+
+    fn set_search_cursor(&mut self, cursor: usize) {
+        let cursor = clamp_search_cursor(&self.search_query, cursor);
+        if self.search_cursor != cursor {
+            self.search_cursor = cursor;
+            self.reset_search_caret_blink();
+            self.update_search_ime_cursor_area();
+        }
+    }
+
+    fn reset_search_caret_blink(&mut self) {
+        self.search_caret_blink_started_at = Instant::now();
     }
 
     fn apply_select_slider_hit(&mut self, hit: SkinSliderHit) {
@@ -4398,6 +4415,7 @@ impl WinitApp {
             }
             Ime::Commit(text) => {
                 search_insert_text(&mut self.search_query, &mut self.search_cursor, text);
+                self.reset_search_caret_blink();
                 self.search_preedit.clear();
                 self.search_message = None;
             }
@@ -4411,6 +4429,7 @@ impl WinitApp {
         self.search_mode = enabled;
         self.search_query.clear();
         self.search_cursor = 0;
+        self.reset_search_caret_blink();
         self.search_preedit.clear();
         if !enabled {
             self.search_message = None;
@@ -4494,27 +4513,34 @@ impl WinitApp {
                     return true;
                 }
                 search_delete_backward(&mut self.search_query, &mut self.search_cursor);
+                self.reset_search_caret_blink();
             }
             PhysicalKey::Code(KeyCode::Delete) => {
                 if !self.search_preedit.is_empty() {
                     return true;
                 }
                 search_delete_forward(&mut self.search_query, &mut self.search_cursor);
+                self.reset_search_caret_blink();
             }
             PhysicalKey::Code(KeyCode::ArrowLeft) => {
                 if self.search_preedit.is_empty() {
-                    self.search_cursor =
-                        previous_search_cursor(&self.search_query, self.search_cursor);
+                    self.set_search_cursor(previous_search_cursor(
+                        &self.search_query,
+                        self.search_cursor,
+                    ));
                 }
             }
             PhysicalKey::Code(KeyCode::ArrowRight) => {
                 if self.search_preedit.is_empty() {
-                    self.search_cursor = next_search_cursor(&self.search_query, self.search_cursor);
+                    self.set_search_cursor(next_search_cursor(
+                        &self.search_query,
+                        self.search_cursor,
+                    ));
                 }
             }
             PhysicalKey::Code(KeyCode::Home) => {
                 if self.search_preedit.is_empty() {
-                    self.search_cursor = 0;
+                    self.set_search_cursor(0);
                 }
             }
             PhysicalKey::Code(KeyCode::End) => {
@@ -4540,6 +4566,7 @@ impl WinitApp {
                     for ch in text.chars() {
                         if !ch.is_control() {
                             search_insert_char(&mut self.search_query, &mut self.search_cursor, ch);
+                            self.reset_search_caret_blink();
                             self.search_message = None;
                         }
                     }
@@ -4570,6 +4597,7 @@ impl WinitApp {
             // メッセージ有りの組み合わせで "no song found" を流す。
             self.search_query.clear();
             self.search_cursor = 0;
+            self.reset_search_caret_blink();
             self.search_message = Some("no song found".to_string());
             tracing::info!(%query, "song search returned no results");
             return;
@@ -12369,6 +12397,10 @@ fn search_display_text(query: &str, cursor: usize, preedit: &str) -> String {
     text
 }
 
+fn search_caret_visible(elapsed: Duration) -> bool {
+    (elapsed.as_micros() / 500_000).is_multiple_of(2)
+}
+
 fn search_insert_char(query: &mut String, cursor: &mut usize, ch: char) {
     let index = clamp_search_cursor(query, *cursor);
     query.insert(index, ch);
@@ -12966,6 +12998,14 @@ mod tests {
     fn search_display_inserts_preedit_without_caret_character() {
         assert_eq!(search_display_text("ab cd", 2, "変換"), "ab変換 cd");
         assert_eq!(search_display_text("a楽b", 2, ""), "a楽b");
+    }
+
+    #[test]
+    fn search_caret_blink_starts_visible_after_reset() {
+        assert!(search_caret_visible(Duration::ZERO));
+        assert!(search_caret_visible(Duration::from_millis(499)));
+        assert!(!search_caret_visible(Duration::from_millis(500)));
+        assert!(search_caret_visible(Duration::from_millis(1_000)));
     }
 
     #[test]
