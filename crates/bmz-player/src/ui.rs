@@ -308,9 +308,32 @@ struct IrLoginUiState {
     email: String,
     password: String,
     busy: bool,
-    /// (成功か, 表示メッセージ)
-    message: Option<(bool, String)>,
+    busy_target: Option<IrProviderUiTarget>,
+    message: Option<IrProviderUiMessage>,
     receiver: Option<std::sync::mpsc::Receiver<Result<IrLoginOutcome, String>>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct IrProviderUiTarget {
+    provider: String,
+    base_url: String,
+}
+
+impl IrProviderUiTarget {
+    fn new(provider: String, base_url: String) -> Self {
+        Self { provider, base_url }
+    }
+
+    fn matches(&self, provider: &str, base_url: &str) -> bool {
+        self.provider == provider && self.base_url == base_url
+    }
+}
+
+#[derive(Debug, Clone)]
+struct IrProviderUiMessage {
+    target: IrProviderUiTarget,
+    ok: bool,
+    text: String,
 }
 
 /// ログインタスクから UI スレッドへ返す結果。
@@ -326,13 +349,14 @@ struct IrLoginOutcome {
 #[derive(Default)]
 struct IrDeviceKeyUiState {
     busy_provider: Option<String>,
-    /// (成功か, 表示メッセージ)
-    message: Option<(bool, String)>,
+    busy_target: Option<IrProviderUiTarget>,
+    message: Option<IrProviderUiMessage>,
     receiver: Option<std::sync::mpsc::Receiver<Result<IrDeviceKeyOutcome, String>>>,
 }
 
 struct IrDeviceKeyOutcome {
     provider: String,
+    base_url: String,
     public_key: String,
     key_id: String,
 }
@@ -346,19 +370,23 @@ impl IrDeviceKeyUiState {
             return;
         };
         self.receiver = None;
+        let target = self.busy_target.take();
         self.busy_provider = None;
-        self.message = Some(match result {
-            Ok(outcome) => (
-                true,
-                format!(
+        self.message = match result {
+            Ok(outcome) => Some(IrProviderUiMessage {
+                target: IrProviderUiTarget::new(outcome.provider.clone(), outcome.base_url),
+                ok: true,
+                text: format!(
                     "{} の署名鍵を再生成しました: {} ({})",
                     outcome.provider,
                     short_public_key(&outcome.public_key),
                     outcome.key_id
                 ),
-            ),
-            Err(error) => (false, error),
-        });
+            }),
+            Err(error) => {
+                target.map(|target| IrProviderUiMessage { target, ok: false, text: error })
+            }
+        };
     }
 
     fn start_rotate(
@@ -371,6 +399,7 @@ impl IrDeviceKeyUiState {
         let (sender, receiver) = std::sync::mpsc::channel();
         self.receiver = Some(receiver);
         self.busy_provider = Some(provider_key.clone());
+        self.busy_target = Some(IrProviderUiTarget::new(provider.clone(), base_url.clone()));
         self.message = None;
         tokio::spawn(async move {
             let outcome = async {
@@ -393,6 +422,7 @@ impl IrDeviceKeyUiState {
                 .await?;
                 anyhow::Ok(IrDeviceKeyOutcome {
                     provider,
+                    base_url,
                     public_key: key.public_key,
                     key_id: key.key_id.unwrap_or_default(),
                 })
@@ -416,11 +446,18 @@ impl IrLoginUiState {
         };
         self.receiver = None;
         self.busy = false;
+        let target = self.busy_target.take();
         match result {
             Ok(outcome) => {
                 self.password.clear();
-                self.message =
-                    Some((true, format!("{} としてログインしました", outcome.display_name)));
+                self.message = Some(IrProviderUiMessage {
+                    target: IrProviderUiTarget::new(
+                        outcome.provider.clone(),
+                        outcome.base_url.clone(),
+                    ),
+                    ok: true,
+                    text: format!("{} としてログインしました", outcome.display_name),
+                });
                 if let Some(entry) = profile.ir.providers.iter_mut().find(|entry| {
                     entry.provider == outcome.provider && entry.base_url == outcome.base_url
                 }) {
@@ -438,7 +475,8 @@ impl IrLoginUiState {
                 false
             }
             Err(error) => {
-                self.message = Some((false, error));
+                self.message =
+                    target.map(|target| IrProviderUiMessage { target, ok: false, text: error });
                 false
             }
         }
@@ -454,6 +492,7 @@ impl IrLoginUiState {
         let (sender, receiver) = std::sync::mpsc::channel();
         self.receiver = Some(receiver);
         self.busy = true;
+        self.busy_target = Some(IrProviderUiTarget::new(provider.clone(), base_url.clone()));
         self.message = None;
         let email = self.email.clone();
         let password = self.password.clone();
@@ -2638,6 +2677,10 @@ fn build_profile_settings_panel(
                                 }
                             });
                             ir_provider_text_row(ui, "Base URL", &mut provider.base_url);
+                            let row_target = IrProviderUiTarget::new(
+                                provider.provider.clone(),
+                                provider.base_url.clone(),
+                            );
                             let provider_key =
                                 crate::ir::provider_key::configured_provider_key(provider)
                                     .map(str::to_string);
@@ -2673,7 +2716,11 @@ fn build_profile_settings_panel(
                                         provider.base_url.clone(),
                                     );
                                 }
-                                if ir_login.busy {
+                                let login_busy =
+                                    ir_login.busy_target.as_ref().is_some_and(|target| {
+                                        target.matches(&provider.provider, &provider.base_url)
+                                    });
+                                if login_busy {
                                     ui.spinner();
                                 }
                                 if ui.button("ログアウト").clicked() {
@@ -2689,12 +2736,19 @@ fn build_profile_settings_panel(
                                     match result {
                                         Ok(_) => {
                                             provider.enabled = false;
-                                            ir_login.message =
-                                                Some((true, "ログアウトしました".to_string()));
+                                            ir_login.message = Some(IrProviderUiMessage {
+                                                target: row_target.clone(),
+                                                ok: true,
+                                                text: "ログアウトしました".to_string(),
+                                            });
                                             save_clicked = true;
                                         }
                                         Err(error) => {
-                                            ir_login.message = Some((false, format!("{error:#}")));
+                                            ir_login.message = Some(IrProviderUiMessage {
+                                                target: row_target.clone(),
+                                                ok: false,
+                                                text: format!("{error:#}"),
+                                            });
                                         }
                                     }
                                 }
@@ -2720,21 +2774,25 @@ fn build_profile_settings_panel(
                                     ui.spinner();
                                 }
                             });
-                            if let Some((ok, message)) = &ir_login.message {
-                                let color = if *ok {
+                            if let Some(message) = &ir_login.message
+                                && message.target.matches(&provider.provider, &provider.base_url)
+                            {
+                                let color = if message.ok {
                                     egui::Color32::LIGHT_GREEN
                                 } else {
                                     egui::Color32::LIGHT_RED
                                 };
-                                ui.colored_label(color, message.clone());
+                                ui.colored_label(color, message.text.clone());
                             }
-                            if let Some((ok, message)) = &ir_device_key.message {
-                                let color = if *ok {
+                            if let Some(message) = &ir_device_key.message
+                                && message.target.matches(&provider.provider, &provider.base_url)
+                            {
+                                let color = if message.ok {
                                     egui::Color32::LIGHT_GREEN
                                 } else {
                                     egui::Color32::LIGHT_RED
                                 };
-                                ui.colored_label(color, message.clone());
+                                ui.colored_label(color, message.text.clone());
                             }
                             egui::ComboBox::from_label("送信方針")
                                 .selected_text(ir_send_policy_label(provider.send_policy))
