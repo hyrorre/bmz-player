@@ -456,6 +456,8 @@ struct WinitApp {
     search_mode: bool,
     /// 現在入力中の検索クエリ。検索モード中はそのまま skin の search_word に渡る。
     search_query: String,
+    /// `search_query` 内のカーソル位置 (UTF-8 byte index)。常に char boundary に補正する。
+    search_cursor: usize,
     /// 直近のマウスカーソル位置。select skin のクリック hit-test に使う。
     last_cursor_position: Option<PhysicalPosition<f64>>,
     /// ドラッグ中の select skin slider type。
@@ -1618,6 +1620,7 @@ impl WinitApp {
             deferred_boot: deferred_boot_action(boot_chart_id, &options),
             search_mode: false,
             search_query: String::new(),
+            search_cursor: 0,
             last_cursor_position: None,
             select_slider_dragging_type: None,
             search_preedit: String::new(),
@@ -2202,7 +2205,15 @@ impl WinitApp {
             {
                 return (message.clone(), MESSAGE_ALPHA);
             }
-            (format!("{}{}{}", self.search_query, self.search_preedit, caret), 1.0)
+            (
+                search_display_text(
+                    &self.search_query,
+                    self.search_cursor,
+                    &self.search_preedit,
+                    caret,
+                ),
+                1.0,
+            )
         } else if let Some(message) = &self.search_message {
             (message.clone(), MESSAGE_ALPHA)
         } else {
@@ -3943,6 +3954,16 @@ impl WinitApp {
         let Some((x, y)) = self.cursor_position_normalized() else {
             return;
         };
+        if button == MouseButton::Left && self.select_search_word_hit(x, y) {
+            if !self.search_mode {
+                self.set_search_mode(true);
+                tracing::info!("entered song search mode from mouse click");
+            } else {
+                self.search_cursor_to_end();
+                self.update_search_ime_cursor_area();
+            }
+            return;
+        }
         let snapshot = self.select_snapshot();
         if button == MouseButton::Left
             && let Some(hit) = self.renderer.select_skin_slider_hit(&snapshot, x, y)
@@ -3983,6 +4004,21 @@ impl WinitApp {
             (position.x as f32 / size.width as f32).clamp(0.0, 1.0),
             (position.y as f32 / size.height as f32).clamp(0.0, 1.0),
         ))
+    }
+
+    fn select_search_word_hit(&self, x: f32, y: f32) -> bool {
+        let Some(document) = self.renderer.select_skin_document() else {
+            return false;
+        };
+        let Some((rect_x, rect_y, rect_w, rect_h)) = document.text_destination_rect_for_ref(30)
+        else {
+            return false;
+        };
+        x >= rect_x && x <= rect_x + rect_w && y >= rect_y && y <= rect_y + rect_h
+    }
+
+    fn search_cursor_to_end(&mut self) {
+        self.search_cursor = self.search_query.len();
     }
 
     fn apply_select_slider_hit(&mut self, hit: SkinSliderHit) {
@@ -4366,7 +4402,7 @@ impl WinitApp {
                 self.search_preedit = text.clone();
             }
             Ime::Commit(text) => {
-                self.search_query.push_str(text);
+                search_insert_text(&mut self.search_query, &mut self.search_cursor, text);
                 self.search_preedit.clear();
                 self.search_message = None;
             }
@@ -4379,6 +4415,7 @@ impl WinitApp {
     fn set_search_mode(&mut self, enabled: bool) {
         self.search_mode = enabled;
         self.search_query.clear();
+        self.search_cursor = 0;
         self.search_preedit.clear();
         if !enabled {
             self.search_message = None;
@@ -4461,12 +4498,39 @@ impl WinitApp {
                 if !self.search_preedit.is_empty() {
                     return true;
                 }
-                self.search_query.pop();
+                search_delete_backward(&mut self.search_query, &mut self.search_cursor);
+            }
+            PhysicalKey::Code(KeyCode::Delete) => {
+                if !self.search_preedit.is_empty() {
+                    return true;
+                }
+                search_delete_forward(&mut self.search_query, &mut self.search_cursor);
+            }
+            PhysicalKey::Code(KeyCode::ArrowLeft) => {
+                if self.search_preedit.is_empty() {
+                    self.search_cursor =
+                        previous_search_cursor(&self.search_query, self.search_cursor);
+                }
+            }
+            PhysicalKey::Code(KeyCode::ArrowRight) => {
+                if self.search_preedit.is_empty() {
+                    self.search_cursor = next_search_cursor(&self.search_query, self.search_cursor);
+                }
+            }
+            PhysicalKey::Code(KeyCode::Home) => {
+                if self.search_preedit.is_empty() {
+                    self.search_cursor = 0;
+                }
+            }
+            PhysicalKey::Code(KeyCode::End) => {
+                if self.search_preedit.is_empty() {
+                    self.search_cursor_to_end();
+                }
             }
             _ => {
                 // テキスト入力: winit が解決した text (キーレイアウト適用後) を採用。
                 // 制御文字 (\r, \t, \x08 等) は除外する。IME 入力は WindowEvent::Ime
-                // 経由で別途必要だが v1 では未対応。
+                // 経由で別途処理する。
                 if let Some(text) = event.text.as_ref() {
                     // メッセージ表示中 ("no song found" 等) に `/` (検索モード
                     // 起動キー) を押した場合は、メッセージのみクリアして文字
@@ -4480,7 +4544,7 @@ impl WinitApp {
                     }
                     for ch in text.chars() {
                         if !ch.is_control() {
-                            self.search_query.push(ch);
+                            search_insert_char(&mut self.search_query, &mut self.search_cursor, ch);
                             self.search_message = None;
                         }
                     }
@@ -4510,6 +4574,7 @@ impl WinitApp {
             // クエリをクリアして次入力を待つ。display_search_word はクエリ空 +
             // メッセージ有りの組み合わせで "no song found" を流す。
             self.search_query.clear();
+            self.search_cursor = 0;
             self.search_message = Some("no song found".to_string());
             tracing::info!(%query, "song search returned no results");
             return;
@@ -12300,6 +12365,71 @@ fn select_control_with_lane_fallback(
     configured.into_iter().next().or_else(|| lane_fallback.into_iter().next())
 }
 
+fn search_display_text(query: &str, cursor: usize, preedit: &str, caret: &str) -> String {
+    let cursor = clamp_search_cursor(query, cursor);
+    let mut text = String::with_capacity(query.len() + preedit.len() + caret.len());
+    text.push_str(&query[..cursor]);
+    text.push_str(preedit);
+    text.push_str(caret);
+    text.push_str(&query[cursor..]);
+    text
+}
+
+fn search_insert_char(query: &mut String, cursor: &mut usize, ch: char) {
+    let index = clamp_search_cursor(query, *cursor);
+    query.insert(index, ch);
+    *cursor = index + ch.len_utf8();
+}
+
+fn search_insert_text(query: &mut String, cursor: &mut usize, text: &str) {
+    let index = clamp_search_cursor(query, *cursor);
+    query.insert_str(index, text);
+    *cursor = index + text.len();
+}
+
+fn search_delete_backward(query: &mut String, cursor: &mut usize) {
+    let index = clamp_search_cursor(query, *cursor);
+    if index == 0 {
+        *cursor = 0;
+        return;
+    }
+    let previous = previous_search_cursor(query, index);
+    query.drain(previous..index);
+    *cursor = previous;
+}
+
+fn search_delete_forward(query: &mut String, cursor: &mut usize) {
+    let index = clamp_search_cursor(query, *cursor);
+    if index >= query.len() {
+        *cursor = query.len();
+        return;
+    }
+    let next = next_search_cursor(query, index);
+    query.drain(index..next);
+    *cursor = index;
+}
+
+fn previous_search_cursor(query: &str, cursor: usize) -> usize {
+    let cursor = clamp_search_cursor(query, cursor);
+    query[..cursor].char_indices().last().map(|(index, _)| index).unwrap_or(0)
+}
+
+fn next_search_cursor(query: &str, cursor: usize) -> usize {
+    let cursor = clamp_search_cursor(query, cursor);
+    if cursor >= query.len() {
+        return query.len();
+    }
+    query[cursor..].char_indices().nth(1).map(|(offset, _)| cursor + offset).unwrap_or(query.len())
+}
+
+fn clamp_search_cursor(query: &str, cursor: usize) -> usize {
+    let mut cursor = cursor.min(query.len());
+    while cursor > 0 && !query.is_char_boundary(cursor) {
+        cursor -= 1;
+    }
+    cursor
+}
+
 #[cfg(test)]
 mod tests {
     use bmz_render::scene::SelectRowKind;
@@ -12800,6 +12930,48 @@ mod tests {
             Some(SelectRowClickAction::ExitFolder)
         );
         assert_eq!(select_row_click_action(2, MouseButton::Middle, 2, 4), None);
+    }
+
+    #[test]
+    fn search_input_inserts_and_deletes_at_cursor() {
+        let mut query = "abcd".to_string();
+        let mut cursor = 2;
+
+        search_insert_char(&mut query, &mut cursor, 'X');
+        assert_eq!(query, "abXcd");
+        assert_eq!(cursor, 3);
+
+        search_delete_backward(&mut query, &mut cursor);
+        assert_eq!(query, "abcd");
+        assert_eq!(cursor, 2);
+
+        search_delete_forward(&mut query, &mut cursor);
+        assert_eq!(query, "abd");
+        assert_eq!(cursor, 2);
+    }
+
+    #[test]
+    fn search_input_moves_by_utf8_char_boundaries() {
+        let query = "a楽b".to_string();
+        let mut cursor = query.len();
+
+        cursor = previous_search_cursor(&query, cursor);
+        assert_eq!(cursor, "a楽".len());
+        cursor = previous_search_cursor(&query, cursor);
+        assert_eq!(cursor, "a".len());
+        cursor = next_search_cursor(&query, cursor);
+        assert_eq!(cursor, "a楽".len());
+
+        let mut edited = query;
+        search_delete_backward(&mut edited, &mut cursor);
+        assert_eq!(edited, "ab");
+        assert_eq!(cursor, "a".len());
+    }
+
+    #[test]
+    fn search_display_places_caret_and_preedit_at_cursor() {
+        assert_eq!(search_display_text("ab cd", 2, "変換", "_"), "ab変換_ cd");
+        assert_eq!(search_display_text("a楽b", 2, "", "_"), "a_楽b");
     }
 
     #[test]
