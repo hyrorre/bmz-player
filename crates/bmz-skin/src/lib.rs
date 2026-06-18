@@ -2110,4 +2110,28 @@ mod tests {
         assert_eq!(note.note.len(), 6);
         assert_eq!(note.dst.len(), 6);
     }
+
+    #[test]
+    fn rmz_skin_play6_enlarge_uses_wide_note_lanes_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/Rmz-skin/play6main.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let options = BTreeMap::from([("Notes 6Key Align".to_string(), "Enlarge".to_string())]);
+        let loaded = load_lua_skin(&skin_path, SkinKind::Play, &options, &BTreeMap::new())
+            .expect("Rmz-skin play6 enlarge should decode");
+        let note = loaded.document.note.expect("play6 note definition");
+        let widths: Vec<_> = note
+            .dst
+            .iter()
+            .filter_map(|entry| match entry {
+                bmz_render::skin::SkinDstEntry::Frame(frame) => frame.w,
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(widths, vec![132; 6]);
+    }
 }
