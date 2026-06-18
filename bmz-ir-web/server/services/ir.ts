@@ -69,6 +69,11 @@ interface BestScoreRow extends BestScoreCandidate {
   player_id: string
   chart_sha256: string
   score_id: string
+  best_ex_score_id: string
+  best_clear_score_id: string
+  best_max_combo_score_id: string
+  best_min_bp_score_id: string
+  best_min_cb_score_id: string
   clear_type: string
   gauge: string
   ln_policy: LnScorePolicy
@@ -295,9 +300,10 @@ export async function getRanking(
   requireHex(sha256, 64, 'sha256')
   const bestRows = await fetchRankingBestRows(sha256, query)
   const rivalIds = user ? await getRivalIds(user.id) : new Set<string>()
-  const playerIds = [...new Set(bestRows.map((row) => row.player_id))]
+  const rankingRows = dedupeBestRowsByPlayer(bestRows)
+  const playerIds = [...new Set(rankingRows.map((row) => row.player_id))]
   const names = await getPlayerNames(playerIds)
-  const ranked = rankRows(bestRows, user?.id ?? null, rivalIds, names)
+  const ranked = rankRows(rankingRows, user?.id ?? null, rivalIds, names)
   const scoped = applyScope(ranked, query.scope, user?.id ?? null, rivalIds)
   const entries = scoped.slice(query.offset, query.offset + query.limit).map((entry, index) => ({
     ...entry,
@@ -311,7 +317,7 @@ export async function getRanking(
       scoring: query.scoring,
       ln_policy: query.lnPolicy,
       effective_ln_mode: query.lnPolicy
-        ? bestRows.find((row) => row.ln_policy === query.lnPolicy)?.effective_ln_mode
+        ? rankingRows.find((row) => row.ln_policy === query.lnPolicy)?.effective_ln_mode
         : undefined,
       double_option: query.doubleOption,
       rule_mode: query.ruleMode,
@@ -321,9 +327,9 @@ export async function getRanking(
       sort: 'ex_score_desc',
       // 全プレイヤー中のクリア率 (%)。NoPlay/Failed を除いた割合。
       clear_rate:
-        bestRows.length > 0
+        rankingRows.length > 0
           ? Math.round(
-              (bestRows.filter((row) => row.clear_rank > 1).length / bestRows.length) * 100,
+              (rankingRows.filter((row) => row.clear_rank > 1).length / rankingRows.length) * 100,
             )
           : null,
       entries,
@@ -334,6 +340,7 @@ export async function getRanking(
             included_in_entries: entries.some(
               (entry) => entry.score.score_id === selfEntry.score.score_id,
             ),
+            entry: selfEntry,
           }
         : undefined,
       pagination: {
@@ -362,6 +369,11 @@ async function fetchRankingBestRows(sha256: string, query: RankingQuery): Promis
       player_id: schema.bestScores.playerId,
       chart_sha256: schema.bestScores.chartSha256,
       score_id: schema.bestScores.scoreId,
+      best_ex_score_id: schema.bestScores.bestExScoreId,
+      best_clear_score_id: schema.bestScores.bestClearScoreId,
+      best_max_combo_score_id: schema.bestScores.bestMaxComboScoreId,
+      best_min_bp_score_id: schema.bestScores.bestMinBpScoreId,
+      best_min_cb_score_id: schema.bestScores.bestMinCbScoreId,
       ex_score: schema.bestScores.exScore,
       clear_type: schema.bestScores.clearType,
       clear_rank: schema.bestScores.clearRank,
@@ -440,6 +452,11 @@ function rowToBestScoreRow(row: {
   player_id: string
   chart_sha256: string
   score_id: string
+  best_ex_score_id?: string | null
+  best_clear_score_id?: string | null
+  best_max_combo_score_id?: string | null
+  best_min_bp_score_id?: string | null
+  best_min_cb_score_id?: string | null
   ex_score: number
   clear_type: string
   clear_rank: number
@@ -458,6 +475,11 @@ function rowToBestScoreRow(row: {
 }): BestScoreRow {
   return {
     ...row,
+    best_ex_score_id: row.best_ex_score_id ?? row.score_id,
+    best_clear_score_id: row.best_clear_score_id ?? row.score_id,
+    best_max_combo_score_id: row.best_max_combo_score_id ?? row.score_id,
+    best_min_bp_score_id: row.best_min_bp_score_id ?? row.score_id,
+    best_min_cb_score_id: row.best_min_cb_score_id ?? row.score_id,
     scoring: 'bms_ex_score_v1',
     ln_policy: row.ln_policy as LnScorePolicy,
     effective_ln_mode: row.effective_ln_mode as 'ln' | 'cn' | 'hcn',
@@ -474,7 +496,9 @@ function bestRowsFromHistory(rows: ScoreHistoryRankingRow[]): BestScoreRow[] {
     const candidate = historyRowToBestRow(row)
     const key = bestRowKey(candidate)
     const current = bestByRule.get(key)
-    if (!current || bestRowWins(candidate, current)) {
+    if (current) {
+      bestByRule.set(key, mergeBestRows(current, candidate))
+    } else {
       bestByRule.set(key, candidate)
     }
   }
@@ -503,6 +527,48 @@ function bestRowWins(next: BestScoreRow, current: BestScoreRow): boolean {
   }
   if (bestCandidateWins(current, next)) {
     return false
+  }
+  return (
+    String(next.played_at ?? next.server_received_at).localeCompare(
+      String(current.played_at ?? current.server_received_at),
+    ) < 0
+  )
+}
+
+function dedupeBestRowsByPlayer(rows: BestScoreRow[]): BestScoreRow[] {
+  const bestByPlayer = new Map<string, BestScoreRow>()
+  for (const row of rows) {
+    const current = bestByPlayer.get(row.player_id)
+    bestByPlayer.set(row.player_id, current ? mergeBestRows(current, row) : row)
+  }
+  return [...bestByPlayer.values()]
+}
+
+function mergeBestRows(current: BestScoreRow, next: BestScoreRow): BestScoreRow {
+  const ranking = bestRowWins(next, current) ? next : current
+  const clear = bestClearWins(next, current) ? next : current
+  const combo = next.max_combo > current.max_combo ? next : current
+  const bp = next.min_bp < current.min_bp ? next : current
+  const cb = next.min_cb < current.min_cb ? next : current
+
+  return {
+    ...ranking,
+    clear_type: clear.clear_type,
+    clear_rank: clear.clear_rank,
+    max_combo: combo.max_combo,
+    min_bp: bp.min_bp,
+    min_cb: cb.min_cb,
+    best_ex_score_id: ranking.best_ex_score_id,
+    best_clear_score_id: clear.best_clear_score_id,
+    best_max_combo_score_id: combo.best_max_combo_score_id,
+    best_min_bp_score_id: bp.best_min_bp_score_id,
+    best_min_cb_score_id: cb.best_min_cb_score_id,
+  }
+}
+
+function bestClearWins(next: BestScoreRow, current: BestScoreRow): boolean {
+  if (next.clear_rank !== current.clear_rank) {
+    return next.clear_rank > current.clear_rank
   }
   return (
     String(next.played_at ?? next.server_received_at).localeCompare(
@@ -597,12 +663,24 @@ async function upsertBestScore(
 ) {
   const current = await db.query.bestScores.findFirst({
     columns: {
+      scoreId: true,
       exScore: true,
+      clearType: true,
       clearRank: true,
       maxCombo: true,
       minBp: true,
       minCb: true,
+      deviceType: true,
+      gauge: true,
+      effectiveLnMode: true,
+      playedAt: true,
       serverReceivedAt: true,
+      verification: true,
+      bestExScoreId: true,
+      bestClearScoreId: true,
+      bestMaxComboScoreId: true,
+      bestMinBpScoreId: true,
+      bestMinCbScoreId: true,
     },
     where: and(
       eq(schema.bestScores.playerId, playerId),
@@ -631,33 +709,69 @@ async function upsertBestScore(
     min_bp: !currentCandidate || candidate.min_bp < currentCandidate.min_bp,
     min_cb: !currentCandidate || candidate.min_cb < currentCandidate.min_cb,
   }
-  const shouldUpdate = !currentCandidate || bestCandidateWins(candidate, currentCandidate)
+  const rankingUpdated = !currentCandidate || bestCandidateWins(candidate, currentCandidate)
+  const shouldUpdate =
+    rankingUpdated ||
+    updatedFields.clear ||
+    updatedFields.max_combo ||
+    updatedFields.min_bp ||
+    updatedFields.min_cb
   if (!shouldUpdate) {
     return { bestUpdated: false, updatedFields }
   }
 
   const verificationStatus = verification as 'unverified' | 'signed' | 'invalid' | 'trusted'
+  const playedAt = playedAtDate(payload.result.played_at)
   const values = {
     id: randomUUID(),
     playerId,
     chartSha256: payload.chart.sha256,
-    scoreId,
-    exScore: candidate.ex_score,
-    clearType: payload.result.clear,
-    clearRank: candidate.clear_rank,
-    maxCombo: candidate.max_combo,
-    minBp: candidate.min_bp,
-    minCb: candidate.min_cb,
-    deviceType: payload.play_options.device_type,
+    scoreId: rankingUpdated ? scoreId : (current?.scoreId ?? scoreId),
+    bestExScoreId: rankingUpdated
+      ? scoreId
+      : (current?.bestExScoreId ?? current?.scoreId ?? scoreId),
+    bestClearScoreId: updatedFields.clear
+      ? scoreId
+      : (current?.bestClearScoreId ?? current?.scoreId ?? scoreId),
+    bestMaxComboScoreId: updatedFields.max_combo
+      ? scoreId
+      : (current?.bestMaxComboScoreId ?? current?.scoreId ?? scoreId),
+    bestMinBpScoreId: updatedFields.min_bp
+      ? scoreId
+      : (current?.bestMinBpScoreId ?? current?.scoreId ?? scoreId),
+    bestMinCbScoreId: updatedFields.min_cb
+      ? scoreId
+      : (current?.bestMinCbScoreId ?? current?.scoreId ?? scoreId),
+    exScore: rankingUpdated ? candidate.ex_score : (current?.exScore ?? candidate.ex_score),
+    clearType: updatedFields.clear
+      ? payload.result.clear
+      : (current?.clearType ?? payload.result.clear),
+    clearRank: updatedFields.clear
+      ? candidate.clear_rank
+      : (current?.clearRank ?? candidate.clear_rank),
+    maxCombo: updatedFields.max_combo
+      ? candidate.max_combo
+      : (current?.maxCombo ?? candidate.max_combo),
+    minBp: updatedFields.min_bp ? candidate.min_bp : (current?.minBp ?? candidate.min_bp),
+    minCb: updatedFields.min_cb ? candidate.min_cb : (current?.minCb ?? candidate.min_cb),
+    deviceType: rankingUpdated
+      ? payload.play_options.device_type
+      : (current?.deviceType ?? payload.play_options.device_type),
     doubleOption: normalizeDoubleOption(payload.play_options.double_option),
-    gauge: payload.rule.gauge,
+    gauge: rankingUpdated ? payload.rule.gauge : (current?.gauge ?? payload.rule.gauge),
     lnPolicy: payload.rule.ln_policy,
-    effectiveLnMode: payload.rule.effective_ln_mode,
+    effectiveLnMode: rankingUpdated
+      ? payload.rule.effective_ln_mode
+      : (current?.effectiveLnMode ?? payload.rule.effective_ln_mode),
     ruleMode: payload.rule.rule_mode,
     scoring: payload.rule.scoring,
-    playedAt: playedAtDate(payload.result.played_at),
-    serverReceivedAt: candidate.server_received_at,
-    verification: verificationStatus,
+    playedAt: rankingUpdated ? playedAt : (current?.playedAt ?? playedAt),
+    serverReceivedAt: rankingUpdated
+      ? candidate.server_received_at
+      : (current?.serverReceivedAt ?? candidate.server_received_at),
+    verification: rankingUpdated
+      ? verificationStatus
+      : (current?.verification ?? verificationStatus),
   }
   await db
     .insert(schema.bestScores)
@@ -673,6 +787,11 @@ async function upsertBestScore(
       ],
       set: {
         scoreId: values.scoreId,
+        bestExScoreId: values.bestExScoreId,
+        bestClearScoreId: values.bestClearScoreId,
+        bestMaxComboScoreId: values.bestMaxComboScoreId,
+        bestMinBpScoreId: values.bestMinBpScoreId,
+        bestMinCbScoreId: values.bestMinCbScoreId,
         exScore: values.exScore,
         clearType: values.clearType,
         clearRank: values.clearRank,
@@ -776,6 +895,13 @@ function rankRows(
         device_type: row.device_type,
         played_at: row.played_at,
         verification: row.verification,
+        source_score_ids: {
+          ex_score: row.best_ex_score_id,
+          clear: row.best_clear_score_id,
+          max_combo: row.best_max_combo_score_id,
+          min_bp: row.best_min_bp_score_id,
+          min_cb: row.best_min_cb_score_id,
+        },
       },
       relation: {
         is_self: row.player_id === selfId,
@@ -1063,4 +1189,9 @@ export function normalizeGaugeName(value: string): string {
     default:
       return value
   }
+}
+
+export const __test = {
+  dedupeBestRowsByPlayer,
+  bestRowsFromHistory,
 }

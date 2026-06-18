@@ -1,0 +1,85 @@
+import { and, desc, eq, sql } from 'drizzle-orm'
+import { getQuery } from 'h3'
+import { db, schema } from 'hub:db'
+import type { IrScoreHistoryResult } from '../../../../../shared/types/ir'
+import { parseRankingQuery, requireHex } from '../../../../services/ir'
+import { requireIrUser } from '../../../../utils/auth'
+
+export default defineEventHandler(async (event): Promise<IrScoreHistoryResult> => {
+  const sha256 = getRouterParam(event, 'sha256')
+  if (!sha256) {
+    throw createError({ statusCode: 400, statusMessage: 'chart sha256 is required' })
+  }
+  requireHex(sha256, 64, 'sha256')
+
+  const user = await requireIrUser(event)
+  const query = parseRankingQuery(getQuery(event))
+  const conditions = [
+    eq(schema.scores.playerId, user.id),
+    eq(schema.scores.chartSha256, sha256),
+    eq(schema.scores.scoring, query.scoring),
+    eq(schema.scores.doubleOption, query.doubleOption),
+    eq(schema.scores.ruleMode, query.ruleMode),
+    eq(schema.scores.accepted, true),
+  ]
+  if (query.lnPolicy) {
+    conditions.push(eq(schema.scores.lnPolicy, query.lnPolicy))
+  }
+
+  const [countRows, rows] = await Promise.all([
+    db
+      .select({ total: sql<number>`count(*)` })
+      .from(schema.scores)
+      .where(and(...conditions)),
+    db
+      .select({
+        score_id: schema.scores.id,
+        clear: schema.scores.clearType,
+        ex_score: schema.scores.exScore,
+        max_combo: schema.scores.maxCombo,
+        min_bp: schema.scores.minBp,
+        min_cb: schema.scores.minCb,
+        bp: schema.scores.bp,
+        cb: schema.scores.cb,
+        gauge: schema.scores.gauge,
+        ln_policy: schema.scores.lnPolicy,
+        double_option: schema.scores.doubleOption,
+        rule_mode: schema.scores.ruleMode,
+        device_type: schema.scores.deviceType,
+        played_at: schema.scores.playedAt,
+        server_received_at: schema.scores.serverReceivedAt,
+        verification: schema.scores.verification,
+      })
+      .from(schema.scores)
+      .where(and(...conditions))
+      .orderBy(desc(schema.scores.serverReceivedAt))
+      .limit(query.limit)
+      .offset(query.offset),
+  ])
+  const total = Number(countRows[0]?.total ?? 0)
+
+  return {
+    chart: { sha256 },
+    rule: {
+      scoring: query.scoring,
+      ln_policy: query.lnPolicy,
+      double_option: query.doubleOption,
+      rule_mode: query.ruleMode,
+    },
+    scores: rows.map((row) => ({
+      ...row,
+      ln_policy: row.ln_policy as IrScoreHistoryResult['scores'][number]['ln_policy'],
+      double_option: row.double_option as IrScoreHistoryResult['scores'][number]['double_option'],
+      rule_mode: row.rule_mode as IrScoreHistoryResult['scores'][number]['rule_mode'],
+      device_type: row.device_type as IrScoreHistoryResult['scores'][number]['device_type'],
+      played_at: row.played_at?.toISOString() ?? null,
+      server_received_at: row.server_received_at.toISOString(),
+    })),
+    pagination: {
+      limit: query.limit,
+      offset: query.offset,
+      total,
+      has_more: query.offset + query.limit < total,
+    },
+  }
+})

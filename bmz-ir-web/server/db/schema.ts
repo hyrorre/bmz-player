@@ -224,6 +224,19 @@ export const bestScores = sqliteTable(
     scoreId: text('score_id')
       .notNull()
       .references(() => scores.id, { onDelete: 'cascade' }),
+    bestExScoreId: text('best_ex_score_id').references(() => scores.id, { onDelete: 'cascade' }),
+    bestClearScoreId: text('best_clear_score_id').references(() => scores.id, {
+      onDelete: 'cascade',
+    }),
+    bestMaxComboScoreId: text('best_max_combo_score_id').references(() => scores.id, {
+      onDelete: 'cascade',
+    }),
+    bestMinBpScoreId: text('best_min_bp_score_id').references(() => scores.id, {
+      onDelete: 'cascade',
+    }),
+    bestMinCbScoreId: text('best_min_cb_score_id').references(() => scores.id, {
+      onDelete: 'cascade',
+    }),
     exScore: integer('ex_score').notNull(),
     clearType: text('clear_type').notNull(),
     clearRank: integer('clear_rank').notNull(),

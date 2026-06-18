@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { stableStringify } from './ir'
+import { __test, stableStringify } from './ir'
 
 describe('stableStringify', () => {
   test('matches JCS number formatting used by Rust IR evidence', () => {
@@ -34,3 +34,111 @@ describe('stableStringify', () => {
     expect(() => stableStringify(Number.POSITIVE_INFINITY)).toThrow()
   })
 })
+
+describe('ranking best row aggregation', () => {
+  test('deduplicates users and keeps independent display bests', () => {
+    const rows = [
+      rankingRow({
+        player_id: 'player-1',
+        score_id: 'hard-score',
+        ex_score: 2000,
+        clear_type: 'Hard',
+        clear_rank: 5,
+        max_combo: 900,
+        min_bp: 20,
+      }),
+      rankingRow({
+        player_id: 'player-1',
+        score_id: 'fc-score',
+        ex_score: 1900,
+        clear_type: 'FullCombo',
+        clear_rank: 7,
+        max_combo: 1000,
+        min_bp: 0,
+      }),
+      rankingRow({
+        player_id: 'player-2',
+        score_id: 'other-score',
+        ex_score: 1950,
+      }),
+    ]
+
+    const deduped = __test.dedupeBestRowsByPlayer(rows)
+
+    expect(deduped).toHaveLength(2)
+    const player = deduped.find((row) => row.player_id === 'player-1')
+    expect(player?.score_id).toBe('hard-score')
+    expect(player?.ex_score).toBe(2000)
+    expect(player?.clear_type).toBe('FullCombo')
+    expect(player?.best_clear_score_id).toBe('fc-score')
+    expect(player?.max_combo).toBe(1000)
+    expect(player?.min_bp).toBe(0)
+  })
+
+  test('rebuilds aggregate best rows from score history', () => {
+    const rebuilt = __test.bestRowsFromHistory([
+      {
+        ...rankingRow({ score_id: 'hard-score', ex_score: 2000, clear_type: 'Hard' }),
+        id: 'hard-score',
+      },
+      {
+        ...rankingRow({
+          score_id: 'fc-score',
+          ex_score: 1900,
+          clear_type: 'FullCombo',
+          clear_rank: 7,
+          max_combo: 1000,
+          min_bp: 0,
+        }),
+        id: 'fc-score',
+      },
+    ])
+
+    expect(rebuilt).toHaveLength(1)
+    expect(rebuilt[0]?.score_id).toBe('hard-score')
+    expect(rebuilt[0]?.clear_type).toBe('FullCombo')
+    expect(rebuilt[0]?.best_clear_score_id).toBe('fc-score')
+  })
+})
+
+function rankingRow(overrides: Partial<ReturnType<typeof baseRankingRow>> = {}) {
+  const scoreId = overrides.score_id ?? 'score-1'
+  return {
+    ...baseRankingRow(),
+    best_ex_score_id: scoreId,
+    best_clear_score_id: scoreId,
+    best_max_combo_score_id: scoreId,
+    best_min_bp_score_id: scoreId,
+    best_min_cb_score_id: scoreId,
+    ...overrides,
+  }
+}
+
+function baseRankingRow() {
+  return {
+    player_id: 'player-1',
+    chart_sha256: 'a'.repeat(64),
+    score_id: 'score-1',
+    best_ex_score_id: 'score-1',
+    best_clear_score_id: 'score-1',
+    best_max_combo_score_id: 'score-1',
+    best_min_bp_score_id: 'score-1',
+    best_min_cb_score_id: 'score-1',
+    ex_score: 1000,
+    clear_type: 'Normal',
+    clear_rank: 4,
+    max_combo: 500,
+    min_bp: 30,
+    min_cb: 25,
+    server_received_at: new Date('2026-01-01T00:00:00Z'),
+    gauge: 'Normal',
+    ln_policy: 'AutoLn' as const,
+    effective_ln_mode: 'ln' as const,
+    double_option: 'off' as const,
+    rule_mode: 'Beatoraja' as const,
+    scoring: 'bms_ex_score_v1' as const,
+    device_type: 'keyboard' as const,
+    played_at: '2026-01-01T00:00:00.000Z',
+    verification: 'unverified' as const,
+  }
+}

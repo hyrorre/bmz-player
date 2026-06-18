@@ -1,5 +1,11 @@
 <script setup lang="ts">
-import type { IrRanking, IrRuleMode, LnScorePolicy } from '~~/bmz-ir-web/shared/types/ir'
+import type {
+  IrRanking,
+  IrRankingEntry,
+  IrRuleMode,
+  IrScoreHistoryResult,
+  LnScorePolicy,
+} from '~~/bmz-ir-web/shared/types/ir'
 
 interface ChartDetail {
   chart: {
@@ -100,6 +106,59 @@ const {
   })),
 })
 
+const selfBestEntry = computed<IrRankingEntry | null>(
+  () =>
+    ranking.value?.ranking.self?.entry ??
+    ranking.value?.ranking.entries.find((entry) => entry.relation.is_self) ??
+    null,
+)
+const historyOpen = ref(false)
+const historyPage = ref(1)
+const historyLimit = 50
+const historyOffset = computed(() => (historyPage.value - 1) * historyLimit)
+const historyQuery = computed(() => ({
+  scope: 'self',
+  limit: historyLimit,
+  offset: historyOffset.value,
+  rule_mode: ruleMode.value,
+  ...(lnPolicy.value === 'ALL' ? {} : { ln_policy: lnPolicy.value }),
+}))
+const {
+  data: selfHistory,
+  pending: selfHistoryPending,
+  error: selfHistoryError,
+  refresh: refreshSelfHistory,
+} = await useFetch<IrScoreHistoryResult>(() => `/api/v1/charts/${sha256.value}/self-scores`, {
+  immediate: false,
+  watch: false,
+  query: historyQuery,
+})
+
+const canShowSelfArea = computed(() => Boolean(selfBestEntry.value || detail.value?.stats.self))
+
+async function openHistory() {
+  historyOpen.value = true
+  await refreshSelfHistory()
+}
+
+watch([lnPolicy, ruleMode, sha256], () => {
+  if (!historyOpen.value) {
+    historyPage.value = 1
+    return
+  }
+  if (historyPage.value === 1) {
+    refreshSelfHistory()
+  } else {
+    historyPage.value = 1
+  }
+})
+
+watch(historyPage, () => {
+  if (historyOpen.value) {
+    refreshSelfHistory()
+  }
+})
+
 const copyMd5 = async () => {
   if (detail.value) {
     await navigator.clipboard.writeText(detail.value.chart.md5)
@@ -110,6 +169,10 @@ const copySha256 = async () => {
   if (detail.value) {
     await navigator.clipboard.writeText(detail.value.chart.sha256)
   }
+}
+
+function formatScoreDate(value: string | null) {
+  return value ? new Date(value).toLocaleString() : '-'
 }
 </script>
 
@@ -163,6 +226,49 @@ const copySha256 = async () => {
           <USelect v-model="ruleMode" :items="ruleModes" class="w-40" />
         </div>
 
+        <div
+          v-if="canShowSelfArea"
+          class="mb-4 flex flex-col gap-3 rounded-lg border border-neutral-800 p-4 sm:flex-row sm:items-center sm:justify-between"
+        >
+          <div v-if="selfBestEntry" class="min-w-0">
+            <p class="text-xs text-neutral-500">自己ベスト</p>
+            <div class="mt-1 flex flex-wrap items-baseline gap-x-4 gap-y-1">
+              <p class="text-sm text-neutral-300">#{{ selfBestEntry.rank }}</p>
+              <p class="text-xl font-semibold">
+                EX
+                <NuxtLink :to="`/scores/${selfBestEntry.score.score_id}`" class="hover:underline">
+                  {{ selfBestEntry.score.ex_score }}
+                </NuxtLink>
+              </p>
+              <p class="text-sm">
+                CLEAR
+                <NuxtLink
+                  :to="`/scores/${selfBestEntry.score.source_score_ids?.clear ?? selfBestEntry.score.score_id}`"
+                  class="hover:underline"
+                >
+                  {{ selfBestEntry.score.clear }}
+                </NuxtLink>
+              </p>
+              <p class="text-sm">COMBO {{ selfBestEntry.score.max_combo }}</p>
+              <p class="text-sm">BP {{ selfBestEntry.score.min_bp }}</p>
+            </div>
+            <p class="mt-1 text-xs text-neutral-500">
+              {{ selfBestEntry.score.gauge }} / {{ selfBestEntry.score.ln_policy }} /
+              {{ selfBestEntry.score.rule_mode }}
+            </p>
+          </div>
+          <p v-else class="text-sm text-neutral-400">この条件の自己ベストはまだありません。</p>
+          <UButton
+            icon="i-lucide-list"
+            color="neutral"
+            variant="subtle"
+            class="shrink-0"
+            @click="openHistory"
+          >
+            自己スコア履歴
+          </UButton>
+        </div>
+
         <UAlert v-if="rankingError" color="error" :description="rankingError.message" />
         <p v-else-if="rankingPending" class="text-sm text-neutral-400">ランキング読み込み中...</p>
         <p v-else-if="!ranking?.ranking.entries.length" class="text-sm text-neutral-400">
@@ -203,7 +309,14 @@ const copySha256 = async () => {
                     {{ entry.score.ex_score }}
                   </NuxtLink>
                 </td>
-                <td class="px-3 py-2">{{ entry.score.clear }}</td>
+                <td class="px-3 py-2">
+                  <NuxtLink
+                    :to="`/scores/${entry.score.source_score_ids?.clear ?? entry.score.score_id}`"
+                    class="hover:underline"
+                  >
+                    {{ entry.score.clear }}
+                  </NuxtLink>
+                </td>
                 <td class="px-3 py-2 text-neutral-400">
                   {{ entry.score.gauge }} / {{ entry.score.ln_policy }} /
                   {{ entry.score.rule_mode }}
@@ -212,14 +325,73 @@ const copySha256 = async () => {
                 <td class="px-3 py-2 text-right">{{ entry.score.min_bp }}</td>
                 <td class="px-3 py-2 text-neutral-400">{{ entry.score.device_type }}</td>
                 <td class="px-3 py-2 text-neutral-400">
-                  {{
-                    entry.score.played_at ? new Date(entry.score.played_at).toLocaleString() : '-'
-                  }}
+                  {{ formatScoreDate(entry.score.played_at) }}
                 </td>
               </tr>
             </tbody>
           </table>
         </div>
+
+        <UModal v-model:open="historyOpen" title="自己スコア履歴">
+          <template #body>
+            <UAlert
+              v-if="selfHistoryError"
+              color="error"
+              :description="selfHistoryError.message"
+              class="mb-4"
+            />
+            <p v-else-if="selfHistoryPending" class="text-sm text-neutral-400">読み込み中...</p>
+            <p v-else-if="!selfHistory?.scores.length" class="text-sm text-neutral-400">
+              この条件の自己スコア履歴はまだありません。
+            </p>
+            <div v-else class="overflow-x-auto rounded-lg border border-neutral-800">
+              <table class="w-full text-sm">
+                <thead class="bg-neutral-900 text-left text-neutral-300">
+                  <tr>
+                    <th class="px-3 py-2">日時</th>
+                    <th class="px-3 py-2 text-right">EX</th>
+                    <th class="px-3 py-2">クリア</th>
+                    <th class="px-3 py-2 text-right">COMBO</th>
+                    <th class="px-3 py-2 text-right">BP</th>
+                    <th class="px-3 py-2">条件</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr
+                    v-for="score in selfHistory.scores"
+                    :key="score.score_id"
+                    class="border-t border-neutral-800"
+                  >
+                    <td class="px-3 py-2 text-neutral-400">
+                      {{ formatScoreDate(score.played_at ?? score.server_received_at) }}
+                    </td>
+                    <td class="px-3 py-2 text-right font-medium">
+                      <NuxtLink :to="`/scores/${score.score_id}`" class="hover:underline">
+                        {{ score.ex_score }}
+                      </NuxtLink>
+                    </td>
+                    <td class="px-3 py-2">{{ score.clear }}</td>
+                    <td class="px-3 py-2 text-right">{{ score.max_combo }}</td>
+                    <td class="px-3 py-2 text-right">{{ score.min_bp }}</td>
+                    <td class="px-3 py-2 text-neutral-400">
+                      {{ score.gauge }} / {{ score.ln_policy }} / {{ score.rule_mode }}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div
+              v-if="selfHistory && selfHistory.pagination.total > historyLimit"
+              class="mt-4 flex justify-end"
+            >
+              <UPagination
+                v-model:page="historyPage"
+                :items-per-page="historyLimit"
+                :total="selfHistory.pagination.total"
+              />
+            </div>
+          </template>
+        </UModal>
       </template>
     </section>
   </main>

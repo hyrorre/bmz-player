@@ -158,6 +158,7 @@ export interface IrRanking {
       rank: number
       score_id: string
       included_in_entries: boolean
+      entry?: IrRankingEntry
     }
     pagination: {
       limit: number
@@ -190,6 +191,13 @@ export interface IrRankingEntry {
     device_type: IrDeviceType
     played_at: string | null
     verification: IrVerificationStatus
+    source_score_ids?: {
+      ex_score: string
+      clear: string
+      max_combo: string
+      min_bp: string
+      min_cb: string
+    }
   }
   stats?: {
     play_count: number
@@ -199,4 +207,42 @@ export interface IrRankingEntry {
     is_self: boolean
     is_rival: boolean
   }
+}
+
+export interface IrScoreHistoryResult {
+  chart: {
+    sha256: string
+  }
+  rule: {
+    scoring: string
+    ln_policy?: LnScorePolicy
+    double_option?: IrDoubleOption
+    rule_mode?: IrRuleMode
+  }
+  scores: IrScoreHistoryEntry[]
+  pagination: {
+    limit: number
+    offset: number
+    total: number
+    has_more: boolean
+  }
+}
+
+export interface IrScoreHistoryEntry {
+  score_id: string
+  clear: string
+  ex_score: number
+  max_combo: number
+  min_bp: number
+  min_cb: number
+  bp: number
+  cb: number
+  gauge: string
+  ln_policy: LnScorePolicy
+  double_option: IrDoubleOption
+  rule_mode: IrRuleMode
+  device_type: IrDeviceType
+  played_at: string | null
+  server_received_at: string
+  verification: IrVerificationStatus
 }
