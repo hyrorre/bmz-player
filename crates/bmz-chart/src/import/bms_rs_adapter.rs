@@ -406,7 +406,7 @@ pub(crate) fn build_intermediate_from_bms<T: KeyLayoutMapper>(
 }
 
 fn normalize_qwilight_lanes(objects: &mut [IntermediateObject], key_mode: KeyMode) {
-    if key_mode != KeyMode::K6 {
+    if !matches!(key_mode, KeyMode::K4 | KeyMode::K6) {
         return;
     }
 
@@ -418,11 +418,19 @@ fn normalize_qwilight_lanes(objects: &mut [IntermediateObject], key_mode: KeyMod
             | IntermediateObjectKind::MineNote { lane, .. } => lane,
             _ => continue,
         };
-        *lane = match *lane {
-            Lane::Key5 => Lane::Key4,
-            Lane::Key6 => Lane::Key5,
-            Lane::Key7 => Lane::Key6,
-            lane => lane,
+        *lane = match key_mode {
+            KeyMode::K4 => match *lane {
+                Lane::Key4 => Lane::Key3,
+                Lane::Key5 => Lane::Key4,
+                lane => lane,
+            },
+            KeyMode::K6 => match *lane {
+                Lane::Key5 => Lane::Key4,
+                Lane::Key6 => Lane::Key5,
+                Lane::Key7 => Lane::Key6,
+                lane => lane,
+            },
+            _ => *lane,
         };
     }
 }
@@ -1633,6 +1641,21 @@ mod tests {
     }
 
     #[test]
+    fn bms_4k_header_maps_ue_channels_to_four_key_lanes() {
+        let mut text = String::from(BMS_HEADER);
+        text.push_str("#4K\n");
+        for (i, channel) in ["11", "12", "14", "15"].into_iter().enumerate() {
+            let measure = i + 1;
+            text.push_str(&format!("#{measure:03}{channel}:01\n"));
+        }
+
+        let chart = import_bms_text(&text);
+
+        assert_eq!(chart.metadata.key_mode, KeyMode::K4);
+        assert_eq!(note_lanes(&chart), vec![Lane::Key1, Lane::Key2, Lane::Key3, Lane::Key4],);
+    }
+
+    #[test]
     fn bms_6k_header_maps_ue_channels_to_six_key_lanes() {
         let mut text = String::from(BMS_HEADER);
         text.push_str("#6K\n");
@@ -1668,6 +1691,25 @@ mod tests {
         }
         assert_eq!(counts[Lane::Scratch.index()], 0);
         assert_eq!(counts[Lane::Key7.index()], 0);
+    }
+
+    #[test]
+    #[ignore = "requires local 4K U_E FULL PACK sample data"]
+    fn bms_4k_full_pack_sample_uses_four_active_lanes() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/songs/4K U_E FULL PACK 2.1/[kozato] Marion/_Marion_4Pursuit.bml");
+        assert!(path.exists(), "missing sample chart: {}", path.display());
+
+        let mut warnings = Vec::new();
+        let chart = import_bms_to_intermediate(&path, None, &mut warnings).unwrap();
+        let counts = playable_lane_counts(&chart);
+
+        assert_eq!(chart.metadata.key_mode, KeyMode::K4);
+        for lane in [Lane::Key1, Lane::Key2, Lane::Key3, Lane::Key4] {
+            assert!(counts[lane.index()] > 0, "{lane:?} has no playable objects");
+        }
+        assert_eq!(counts[Lane::Scratch.index()], 0);
+        assert_eq!(counts[Lane::Key5.index()], 0);
     }
 
     #[test]
