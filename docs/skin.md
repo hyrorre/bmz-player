@@ -28,17 +28,18 @@ BMZ 独自拡張:
 | 19 | reserved | 未使用 |
 | 20 | reserved | 未使用 |
 | 21 | 2KEYS | 予約のみ |
-| 22 | 4KEYS | 予約のみ |
-| 23 | 6KEYS | 実装中 |
+| 22 | 4KEYS | 実装済み |
+| 23 | 6KEYS | 実装済み |
 | 24 | 8KEYS | 予約のみ |
 
-`23=6KEYS` は Qwilight-style の Scratch なし `Key1..Key6` 用 play skin type。
+`22=4KEYS` と `23=6KEYS` は Scratch なしの `Key1..KeyN` 用 play skin type。
 beatoraja には対応する skin type が無いため、BMZ 専用 skin として扱う。
 
 ## Profile Slots
 
 profile の `[skin]` は key mode ごとに play skin path と設定を持つ。
+4K は `play4`, `play4_options`, `play4_files` を使う。
 6K は `play6`, `play6_options`, `play6_files` を使う。
 
-未実装の 4K / 8K は当面 `play7` にフォールバックする。2K は skin type のみ予約し、
+未実装の 8K は当面 `play7` にフォールバックする。2K は skin type のみ予約し、
 BMZ 本体の key mode としてはまだ扱わない。

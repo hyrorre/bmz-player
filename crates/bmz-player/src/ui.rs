@@ -47,6 +47,7 @@ pub struct SkinReloadRequest {
     pub decide: bool,
     pub result: bool,
     pub course_result: bool,
+    pub play4: bool,
     pub play5: bool,
     pub play6: bool,
     pub play7: bool,
@@ -62,6 +63,7 @@ impl SkinReloadRequest {
             || self.decide
             || self.result
             || self.course_result
+            || self.play4
             || self.play5
             || self.play6
             || self.play7
@@ -79,6 +81,7 @@ impl SkinReloadRequest {
         self.decide |= other.decide;
         self.result |= other.result;
         self.course_result |= other.course_result;
+        self.play4 |= other.play4;
         self.play5 |= other.play5;
         self.play6 |= other.play6;
         self.play7 |= other.play7;
@@ -201,6 +204,7 @@ fn beatoraja_play_common_offsets() -> [SkinOffsetDef; 5] {
 pub struct SkinConfigMeta {
     pub select: SceneSkinDefs,
     pub decide: SceneSkinDefs,
+    pub play4: SceneSkinDefs,
     pub play5: SceneSkinDefs,
     pub play6: SceneSkinDefs,
     pub play7: SceneSkinDefs,
@@ -215,6 +219,7 @@ pub struct SkinConfigMeta {
 pub struct SkinCatalog {
     pub select: Vec<SkinCandidate>,
     pub decide: Vec<SkinCandidate>,
+    pub play4: Vec<SkinCandidate>,
     pub play5: Vec<SkinCandidate>,
     pub play6: Vec<SkinCandidate>,
     pub play7: Vec<SkinCandidate>,
@@ -3393,6 +3398,7 @@ struct SkinPanelActions {
 enum SkinSlot {
     Select,
     Decide,
+    Play4,
     Play5,
     Play6,
     Play7,
@@ -3416,6 +3422,12 @@ fn skin_reload_request_from_diff(before: &SkinConfig, after: &SkinConfig) -> Ski
         || before.decide_files != after.decide_files
     {
         request.decide = true;
+    }
+    if before.play4 != after.play4
+        || before.play4_options != after.play4_options
+        || before.play4_files != after.play4_files
+    {
+        request.play4 = true;
     }
     if before.play5 != after.play5
         || before.play5_options != after.play5_options
@@ -3532,6 +3544,7 @@ fn skin_slot_path(skin: &SkinConfig, slot: SkinSlot) -> &str {
     match slot {
         SkinSlot::Select => &skin.select,
         SkinSlot::Decide => &skin.decide,
+        SkinSlot::Play4 => &skin.play4,
         SkinSlot::Play5 => &skin.play5,
         SkinSlot::Play6 => &skin.play6,
         SkinSlot::Play7 => &skin.play7,
@@ -3547,6 +3560,7 @@ fn skin_slot_path_mut(skin: &mut SkinConfig, slot: SkinSlot) -> &mut String {
     match slot {
         SkinSlot::Select => &mut skin.select,
         SkinSlot::Decide => &mut skin.decide,
+        SkinSlot::Play4 => &mut skin.play4,
         SkinSlot::Play5 => &mut skin.play5,
         SkinSlot::Play6 => &mut skin.play6,
         SkinSlot::Play7 => &mut skin.play7,
@@ -3562,6 +3576,7 @@ fn skin_slot_options_mut(skin: &mut SkinConfig, slot: SkinSlot) -> &mut BTreeMap
     match slot {
         SkinSlot::Select => &mut skin.select_options,
         SkinSlot::Decide => &mut skin.decide_options,
+        SkinSlot::Play4 => &mut skin.play4_options,
         SkinSlot::Play5 => &mut skin.play5_options,
         SkinSlot::Play6 => &mut skin.play6_options,
         SkinSlot::Play7 => &mut skin.play7_options,
@@ -3577,6 +3592,7 @@ fn skin_slot_files_mut(skin: &mut SkinConfig, slot: SkinSlot) -> &mut BTreeMap<S
     match slot {
         SkinSlot::Select => &mut skin.select_files,
         SkinSlot::Decide => &mut skin.decide_files,
+        SkinSlot::Play4 => &mut skin.play4_files,
         SkinSlot::Play5 => &mut skin.play5_files,
         SkinSlot::Play6 => &mut skin.play6_files,
         SkinSlot::Play7 => &mut skin.play7_files,
@@ -3637,6 +3653,9 @@ fn build_skin_panel(
                     skin_path_combo(ui, skin, SkinSlot::Decide, "決定", &skin_catalog.decide);
                 ui.end_row();
                 changed |=
+                    skin_path_combo(ui, skin, SkinSlot::Play4, "プレイ (4K)", &skin_catalog.play4);
+                ui.end_row();
+                changed |=
                     skin_path_combo(ui, skin, SkinSlot::Play5, "プレイ (5K)", &skin_catalog.play5);
                 ui.end_row();
                 changed |=
@@ -3680,6 +3699,7 @@ fn build_skin_panel(
             ui.label("読み込み済みスキンが宣言する設定可能項目:");
             let select_root = skin_root_path(&skin.select);
             let decide_root = skin_root_path(&skin.decide);
+            let play4_root = skin_root_path(&skin.play4);
             let play5_root = skin_root_path(&skin.play5);
             let play6_root = skin_root_path(&skin.play6);
             let play7_root = skin_root_path(&skin.play7);
@@ -3704,6 +3724,15 @@ fn build_skin_panel(
                 decide_root.as_deref(),
                 &mut skin.decide_options,
                 &mut skin.decide_files,
+                &mut skin.offsets,
+            );
+            changed |= build_scene_skin_defs(
+                ui,
+                "プレイスキン (4K)",
+                &skin_meta.play4,
+                play4_root.as_deref(),
+                &mut skin.play4_options,
+                &mut skin.play4_files,
                 &mut skin.offsets,
             );
             changed |= build_scene_skin_defs(

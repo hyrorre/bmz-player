@@ -2134,4 +2134,45 @@ mod tests {
 
         assert_eq!(widths, vec![132; 6]);
     }
+
+    #[test]
+    fn rmz_skin_play4_decodes_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/Rmz-skin/play4main.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let loaded = load_lua_skin(&skin_path, SkinKind::Play, &BTreeMap::new(), &BTreeMap::new())
+            .expect("Rmz-skin play4 should decode");
+        assert_eq!(loaded.document.skin_type, 22);
+        assert!(!loaded.document.destination.is_empty());
+        let note = loaded.document.note.expect("play4 note definition");
+        assert_eq!(note.note, vec!["note-Wh", "note-Bl", "note-Bl", "note-Wh"]);
+        assert_eq!(note.dst.len(), 4);
+    }
+
+    #[test]
+    fn rmz_skin_play4_enlarge_uses_wide_note_lanes_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/Rmz-skin/play4main.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let options = BTreeMap::from([("Notes 4Key Align".to_string(), "Enlarge".to_string())]);
+        let loaded = load_lua_skin(&skin_path, SkinKind::Play, &options, &BTreeMap::new())
+            .expect("Rmz-skin play4 enlarge should decode");
+        let note = loaded.document.note.expect("play4 note definition");
+        let widths: Vec<_> = note
+            .dst
+            .iter()
+            .filter_map(|entry| match entry {
+                bmz_render::skin::SkinDstEntry::Frame(frame) => frame.w,
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(widths, vec![132; 4]);
+    }
 }

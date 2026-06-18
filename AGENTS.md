@@ -311,7 +311,7 @@ config:
 
 - serde + TOML 方針です。
 - UI / theme / volume / play 表示設定は profile 側に寄せます。
-- プレイスキンは key_mode 別に分かれ、profile の `[skin]` セクションで `play5` / `play6` / `play7` / `play9` / `play10` / `play14` のフィールド (+ それぞれ `play{N}_options` / `play{N}_files`) を持ちます。決定画面でチャートの `key_mode` に応じて該当する 1 本だけを decode して install します。
+- プレイスキンは key_mode 別に分かれ、profile の `[skin]` セクションで `play4` / `play5` / `play6` / `play7` / `play9` / `play10` / `play14` のフィールド (+ それぞれ `play{N}_options` / `play{N}_files`) を持ちます。決定画面でチャートの `key_mode` に応じて該当する 1 本だけを decode して install します。
 - 曲 root は app config の `[songs]`、difficulty table source は app config の `[tables]` です。
 
 database:
@@ -338,7 +338,7 @@ database:
 
 - beatoraja JSON skin と Lua skin 互換を進めます。
 - `bmz-skin` は decode 専用 crate とし、GPU texture upload や renderer 操作は持たせません。
-- `bmz-player` は `.json` / `.luaskin` / `.lua` を profile の `[skin]` の `select` / `play5` / `play7` / `play10` / `play14` / `result` (および decide) から同じように受け付けます。プレイスキンは決定画面でチャートの `key_mode` から該当 1 本を選び、起動時には decode しません。
+- `bmz-player` は `.json` / `.luaskin` / `.lua` を profile の `[skin]` の `select` / `play4` / `play5` / `play6` / `play7` / `play10` / `play14` / `result` (および decide) から同じように受け付けます。プレイスキンは決定画面でチャートの `key_mode` から該当 1 本を選び、起動時には decode しません。
 - Lua skin はロード時のみ sandbox 実行し、返された table を `SkinDocument` 相当へ変換します。
 - 描画中の Lua function 評価は v1 では行いません。`value` / `draw` function は推論できるものだけ `ref` / `expr` / `draw` 条件へ変換し、未対応 function は warning として drop します。
 - LR2 csvskin は将来検討です。
@@ -408,7 +408,7 @@ database:
 - beatoraja JSON skin の Mine 専用 sprite。現状は `DEFAULT_MINE_NOTE_TEXTURE` をフォールバックで使用。
 - SPEED チャネルの線形補間 (現状は階段関数で代用)
 - `SkinGauge` の `type=0` (RANDOM) 向け `animation` 更新、`prepare` 時の `parts` 再計算（モード差し替え時のボーダー割り切り）、Lua 側の `P1_grooveflash` 等の固定座標フラッシュが beatoraja と完全一致していない可能性（要ソース照合・エンジン側実装）
-- bmz TOML スキン (`data/skins/default/skin.toml`) はまだ mode 共通の `[play.*]` セクションだけを持ち、mode 別 note 配置の差分は持てません。`play5` / `play7` / `play10` / `play14` の切り替えで別ディレクトリを指定することで対応します。
+- bmz TOML スキン (`data/skins/default/skin.toml`) はまだ mode 共通の `[play.*]` セクションだけを持ち、mode 別 note 配置の差分は持てません。`play4` / `play5` / `play6` / `play7` / `play10` / `play14` の切り替えで別ディレクトリを指定することで対応します。
 
 実装の入口:
 

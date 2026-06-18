@@ -7704,6 +7704,7 @@ impl WinitApp {
         };
         let size = window.inner_size();
         let info = DebugInfo { scene, width: size.width, height: size.height };
+        let play4_path = self.boot.profile_config.skin.play4.clone();
         let play5_path = self.boot.profile_config.skin.play5.clone();
         let play6_path = self.boot.profile_config.skin.play6.clone();
         let play7_path = self.boot.profile_config.skin.play7.clone();
@@ -7711,6 +7712,7 @@ impl WinitApp {
         let play10_path = self.boot.profile_config.skin.play10.clone();
         let play14_path = self.boot.profile_config.skin.play14.clone();
         let course_result_path = self.boot.profile_config.skin.course_result.clone();
+        let play4_defs = self.play_skin_defs_for_path(&play4_path);
         let play5_defs = self.play_skin_defs_for_path(&play5_path);
         let play6_defs = self.play_skin_defs_for_path(&play6_path);
         let play7_defs = self.play_skin_defs_for_path(&play7_path);
@@ -7721,6 +7723,7 @@ impl WinitApp {
         let skin_meta = SkinConfigMeta {
             select: SceneSkinDefs::from_document(self.renderer.select_skin_document()),
             decide: SceneSkinDefs::from_document(self.renderer.decide_skin_document()),
+            play4: play4_defs,
             play5: play5_defs,
             play6: play6_defs,
             play7: play7_defs,
@@ -7970,6 +7973,7 @@ impl WinitApp {
                     decide: true,
                     result: true,
                     course_result: true,
+                    play4: true,
                     play5: true,
                     play6: true,
                     play7: true,
@@ -9158,8 +9162,9 @@ fn push_skin_candidate(catalog: &mut SkinCatalog, skin_type: i32, candidate: Ski
         6 => catalog.decide.push(candidate),
         7 => catalog.result.push(candidate),
         15 => catalog.course_result.push(candidate),
+        BMZ_SKIN_TYPE_PLAY_4KEYS => catalog.play4.push(candidate),
         BMZ_SKIN_TYPE_PLAY_6KEYS => catalog.play6.push(candidate),
-        BMZ_SKIN_TYPE_PLAY_2KEYS | BMZ_SKIN_TYPE_PLAY_4KEYS | BMZ_SKIN_TYPE_PLAY_8KEYS => {}
+        BMZ_SKIN_TYPE_PLAY_2KEYS | BMZ_SKIN_TYPE_PLAY_8KEYS => {}
         _ => {}
     }
 }
@@ -9168,6 +9173,7 @@ fn sort_skin_catalog(catalog: &mut SkinCatalog) {
     for candidates in [
         &mut catalog.select,
         &mut catalog.decide,
+        &mut catalog.play4,
         &mut catalog.play5,
         &mut catalog.play6,
         &mut catalog.play7,
@@ -10374,6 +10380,7 @@ fn play_skin_key_mode_for_options(chart_key_mode: KeyMode, double_option: Double
 
 fn skin_reload_request_key_modes(request: SkinReloadRequest) -> impl Iterator<Item = KeyMode> {
     [
+        (request.play4, KeyMode::K4),
         (request.play5, KeyMode::K5),
         (request.play6, KeyMode::K6),
         (request.play7, KeyMode::K7),
@@ -10387,13 +10394,14 @@ fn skin_reload_request_key_modes(request: SkinReloadRequest) -> impl Iterator<It
 
 fn skin_reload_request_includes_key_mode(request: SkinReloadRequest, key_mode: KeyMode) -> bool {
     match key_mode {
+        KeyMode::K4 => request.play4,
         KeyMode::K5 => request.play5,
         KeyMode::K6 => request.play6,
         KeyMode::K7 => request.play7,
         KeyMode::K9 => request.play9,
         KeyMode::K10 => request.play10,
         KeyMode::K14 => request.play14,
-        KeyMode::K4 | KeyMode::K8 => request.play7,
+        KeyMode::K8 => request.play7,
     }
 }
 
@@ -12651,6 +12659,7 @@ mod tests {
         let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let root = repo_root.join("data/skins/Rmz-skin");
         let cases = [
+            ("play4main.luaskin", BMZ_SKIN_TYPE_PLAY_4KEYS),
             ("play5main.luaskin", 1),
             ("play6main.luaskin", BMZ_SKIN_TYPE_PLAY_6KEYS),
             ("play7main.luaskin", 0),
@@ -12689,6 +12698,14 @@ mod tests {
             SkinCandidate {
                 name: "Five".to_string(),
                 path: "data/skins/example/play5.luaskin".to_string(),
+            },
+        );
+        push_skin_candidate(
+            &mut catalog,
+            BMZ_SKIN_TYPE_PLAY_4KEYS,
+            SkinCandidate {
+                name: "Four".to_string(),
+                path: "data/skins/example/play4.luaskin".to_string(),
             },
         );
         push_skin_candidate(
@@ -12732,6 +12749,7 @@ mod tests {
             },
         );
 
+        assert_eq!(catalog.play4.len(), 1);
         assert_eq!(catalog.play5.len(), 1);
         assert_eq!(catalog.play6.len(), 1);
         assert_eq!(catalog.play7.len(), 1);
@@ -12740,6 +12758,7 @@ mod tests {
         assert_eq!(catalog.play14.len(), 1);
         assert_eq!(catalog.result.len(), 0);
         assert_eq!(catalog.course_result.len(), 1);
+        assert_eq!(catalog.play4[0].path, "data/skins/example/play4.luaskin");
         assert_eq!(catalog.play5[0].path, "data/skins/example/play5.luaskin");
         assert_eq!(catalog.play6[0].path, "data/skins/example/play6.luaskin");
         assert_eq!(catalog.play7[0].path, "data/skins/example/play7.luaskin");

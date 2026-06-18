@@ -645,6 +645,9 @@ pub struct SkinConfig {
     /// `skin.toml` を含む bmz スキンディレクトリとして扱う。
     #[serde(default)]
     pub play5: String,
+    /// 4K プレイ画面スキンのパス。フォーマットは [`play5`] と同じ。
+    #[serde(default)]
+    pub play4: String,
     /// 6K プレイ画面スキンのパス。フォーマットは [`play5`] と同じ。
     #[serde(default)]
     pub play6: String,
@@ -682,6 +685,9 @@ pub struct SkinConfig {
     /// 5K プレイスキンのカスタマイズオプション選択。
     #[serde(default)]
     pub play5_options: BTreeMap<String, String>,
+    /// 4K プレイスキンのカスタマイズオプション選択。
+    #[serde(default)]
+    pub play4_options: BTreeMap<String, String>,
     /// 6K プレイスキンのカスタマイズオプション選択。
     #[serde(default)]
     pub play6_options: BTreeMap<String, String>,
@@ -712,6 +718,9 @@ pub struct SkinConfig {
     /// 5K プレイスキンのファイル選択。
     #[serde(default)]
     pub play5_files: BTreeMap<String, String>,
+    /// 4K プレイスキンのファイル選択。
+    #[serde(default)]
+    pub play4_files: BTreeMap<String, String>,
     /// 6K プレイスキンのファイル選択。
     #[serde(default)]
     pub play6_files: BTreeMap<String, String>,
