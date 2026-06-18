@@ -121,6 +121,7 @@ pub fn play_session_options_from_start(
         judge_constraint: start_options.judge_constraint,
         ln_mode_override: start_options.ln_mode_override,
         ln_policy_setting: Default::default(),
+        rule_mode: Default::default(),
         gauge_property: start_options.course_gauge_property_override,
     }
 }

@@ -10,6 +10,8 @@ export type IrDeviceType = 'keyboard' | 'controller'
 
 export type IrDoubleOption = 'off' | 'battle' | 'battle_auto_scratch'
 
+export type IrRuleMode = 'Beatoraja' | 'Lr2Oraja' | 'Dx'
+
 export interface IrChartLnProfile {
   has_undefined_ln: boolean
   has_defined_ln: boolean
@@ -60,6 +62,7 @@ export interface IrScoreSubmission {
     gauge: string
     ln_policy: LnScorePolicy
     effective_ln_mode: EffectiveLnMode
+    rule_mode: IrRuleMode
     judge_algorithm: string
     scoring: 'bms_ex_score_v1'
   }
@@ -142,6 +145,7 @@ export interface IrRanking {
     ln_policy?: LnScorePolicy
     effective_ln_mode?: EffectiveLnMode
     double_option?: IrDoubleOption
+    rule_mode?: IrRuleMode
   }
   ranking: {
     scope: IrRankingScope
@@ -181,6 +185,7 @@ export interface IrRankingEntry {
     gauge: string
     ln_policy: LnScorePolicy
     double_option: IrDoubleOption
+    rule_mode: IrRuleMode
     device_type: IrDeviceType
     played_at: string | null
     verification: IrVerificationStatus

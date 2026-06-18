@@ -21,6 +21,7 @@ interface ScoreDetail {
     cb: number
     gauge: string
     ln_policy: string
+    rule_mode: string
     judges: { fast: JudgeCounts; slow: JudgeCounts }
     device_type: string
     platform: string
@@ -119,7 +120,8 @@ const verificationBadge = computed(() => {
             </NuxtLink>
           </h1>
           <p class="mt-2 text-sm text-neutral-400">
-            {{ data.score.gauge }} / {{ data.score.ln_policy }} ・ {{ data.score.device_type }} ・
+            {{ data.score.gauge }} / {{ data.score.ln_policy }} / {{ data.score.rule_mode }} ・
+            {{ data.score.device_type }} ・
             {{ new Date(data.score.played_at ?? data.score.server_received_at).toLocaleString() }}
             <UBadge :color="verificationBadge.color" size="sm" variant="subtle">
               {{ verificationBadge.label }}

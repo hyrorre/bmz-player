@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, bail};
+use bmz_gameplay::rule::RuleMode;
 use reqwest::Url;
 
 use crate::select_options::DoubleOptionScoreBucket;
@@ -19,9 +20,9 @@ pub struct BmzOfficialIrClient {
 #[derive(Debug, Clone)]
 pub struct IrRankingRequest {
     pub scope: IrRankingScope,
-    pub gauge: String,
     pub ln_policy: String,
     pub double_option: DoubleOptionScoreBucket,
+    pub rule_mode: RuleMode,
     pub limit: u32,
     pub offset: u32,
 }
@@ -210,8 +211,8 @@ impl BmzOfficialIrClient {
         let mut url = self.base_url.join(&format!("/api/v1/charts/{chart_sha256_hex}/ranking"))?;
         url.query_pairs_mut()
             .append_pair("scope", scope_query_value(&request.scope))
-            .append_pair("gauge", &request.gauge)
             .append_pair("ln_policy", &request.ln_policy)
+            .append_pair("rule_mode", request.rule_mode.as_str())
             .append_pair("limit", &request.limit.to_string())
             .append_pair("offset", &request.offset.to_string());
         if let Some(double_option) = request.double_option.ir_query_value() {

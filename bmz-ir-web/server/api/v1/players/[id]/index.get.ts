@@ -38,6 +38,7 @@ export default defineEventHandler(async (event) => {
       device_type: schema.bestScores.deviceType,
       gauge: schema.bestScores.gauge,
       ln_policy: schema.bestScores.lnPolicy,
+      rule_mode: schema.bestScores.ruleMode,
       scoring: schema.bestScores.scoring,
       played_at: schema.bestScores.playedAt,
       server_received_at: schema.bestScores.serverReceivedAt,

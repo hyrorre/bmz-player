@@ -146,6 +146,9 @@ export const scores = sqliteTable(
     gauge: text('gauge').notNull(),
     lnPolicy: text('ln_policy').notNull(),
     effectiveLnMode: text('effective_ln_mode').notNull(),
+    ruleMode: text('rule_mode', { enum: ['Beatoraja', 'Lr2Oraja', 'Dx'] })
+      .notNull()
+      .default('Beatoraja'),
     judgeAlgorithm: text('judge_algorithm').notNull(),
     scoring: text('scoring').notNull(),
     clearType: text('clear_type').notNull(),
@@ -191,17 +194,17 @@ export const scores = sqliteTable(
     index('idx_scores_player_chart_rule').on(
       table.playerId,
       table.chartSha256,
-      table.gauge,
       table.lnPolicy,
-      table.scoring,
       table.doubleOption,
+      table.ruleMode,
+      table.scoring,
     ),
     index('idx_scores_chart_rule').on(
       table.chartSha256,
-      table.gauge,
       table.lnPolicy,
-      table.scoring,
       table.doubleOption,
+      table.ruleMode,
+      table.scoring,
     ),
     index('idx_scores_received_at').on(table.serverReceivedAt),
   ],
@@ -235,6 +238,9 @@ export const bestScores = sqliteTable(
     gauge: text('gauge').notNull(),
     lnPolicy: text('ln_policy').notNull(),
     effectiveLnMode: text('effective_ln_mode').notNull(),
+    ruleMode: text('rule_mode', { enum: ['Beatoraja', 'Lr2Oraja', 'Dx'] })
+      .notNull()
+      .default('Beatoraja'),
     scoring: text('scoring').notNull(),
     playedAt: integer('played_at', { mode: 'timestamp_ms' }),
     serverReceivedAt: integer('server_received_at', { mode: 'timestamp_ms' }).notNull(),
@@ -249,17 +255,17 @@ export const bestScores = sqliteTable(
     uniqueIndex('idx_best_scores_player_chart_rule').on(
       table.playerId,
       table.chartSha256,
-      table.gauge,
       table.lnPolicy,
-      table.scoring,
       table.doubleOption,
+      table.ruleMode,
+      table.scoring,
     ),
     index('idx_best_scores_chart_rule_rank').on(
       table.chartSha256,
-      table.gauge,
       table.lnPolicy,
-      table.scoring,
       table.doubleOption,
+      table.ruleMode,
+      table.scoring,
       table.exScore,
     ),
     index('idx_best_scores_player').on(table.playerId),

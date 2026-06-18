@@ -260,6 +260,7 @@ mod tests {
                         applied_arrange: crate::screens::play_session::AppliedArrange::default(),
                         ln_policy: crate::ln_policy::LnScorePolicy::ForceLn,
                         double_option: crate::select_options::DoubleOptionScoreBucket::Off,
+                        rule_mode: bmz_gameplay::rule::RuleMode::Beatoraja,
                     },
                 }
             })
@@ -374,6 +375,7 @@ mod tests {
                         applied_arrange: crate::screens::play_session::AppliedArrange::default(),
                         ln_policy: crate::ln_policy::LnScorePolicy::ForceLn,
                         double_option: crate::select_options::DoubleOptionScoreBucket::Off,
+                        rule_mode: bmz_gameplay::rule::RuleMode::Beatoraja,
                     },
                 }
             })

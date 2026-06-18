@@ -93,10 +93,11 @@ use crate::screens::result_model::{ResultFastSlowJudgeCounts, ResultSummary};
 use crate::screens::select_model::{
     COURSE_ROOT_PATH, MAX_SEARCH_HISTORY, SEARCH_PATH_PREFIX, SelectFolderSummary, SelectItem,
     TABLE_ROOT_PATH, TablePath, course_root_item, load_select_items_for_courses,
-    load_select_items_for_search, load_select_items_in_folder, load_select_items_in_table_level,
-    parse_search_query, parse_table_path, root_folder_items, search_history_folder_items,
-    select_folder_summary, song_scan_path_from_context, table_folder_items,
-    table_level_folder_items, table_source_url_from_context,
+    load_select_items_for_search_for_rule_mode, load_select_items_in_folder_for_rule_mode,
+    load_select_items_in_table_level_for_rule_mode, parse_search_query, parse_table_path,
+    root_folder_items, search_history_folder_items, select_folder_summary_for_rule_mode,
+    song_scan_path_from_context, table_folder_items, table_level_folder_items,
+    table_source_url_from_context,
 };
 use crate::screens::settings_edit::{SettingsBindings, SettingsEditSession, adjust_settings_draft};
 use crate::screens::settings_model::{
@@ -1115,6 +1116,7 @@ fn debug_boot_finished_play_session() -> FinishedPlaySession {
         applied_arrange: AppliedArrange::default(),
         ln_policy: crate::ln_policy::LnScorePolicy::ForceLn,
         double_option: crate::select_options::DoubleOptionScoreBucket::Off,
+        rule_mode: bmz_gameplay::rule::RuleMode::Beatoraja,
     }
 }
 
@@ -5519,6 +5521,7 @@ impl WinitApp {
         let library_db_path = self.boot.app_paths.library_db.clone();
         let app_config = self.play_session_app_config();
         let ln_policy_setting = self.boot.profile_config.play.ln_mode_policy;
+        let rule_mode = self.boot.profile_config.play.rule_mode;
         let normalize_chart_volume = self.boot.profile_config.audio_mix.normalize_chart_volume;
         thread::Builder::new()
             .name(format!("play-preload-{chart_id}"))
@@ -5533,6 +5536,7 @@ impl WinitApp {
                             options,
                         );
                     session_options.ln_policy_setting = ln_policy_setting;
+                    session_options.rule_mode = rule_mode;
                     let preloaded = crate::screens::play_session::preload_play_session_for_chart(
                         &library_db,
                         chart_id,
@@ -6107,13 +6111,14 @@ impl WinitApp {
         };
         let sha = chart.sha256;
         let key_mode = KeyMode::from_str_opt(&chart.mode).unwrap_or_default();
-        let key = crate::storage::score_db::ScoreKey::with_double_option(
+        let key = crate::storage::score_db::ScoreKey::with_options(
             sha,
             crate::ln_policy::score_ln_policy(
                 self.boot.profile_config.play.ln_mode_policy,
                 chart.ln_profile,
             ),
             self.double_option.normalize_for_key_mode(key_mode).score_bucket(),
+            self.boot.profile_config.play.rule_mode,
         );
         let Some(slot_record) = self.boot.score_db.replay_slot(key, slot).ok().flatten() else {
             tracing::info!(slot, "no replay saved for slot");
@@ -6966,6 +6971,7 @@ impl WinitApp {
         let library_db_path = self.boot.app_paths.library_db.clone();
         let score_db_path = self.boot.profile_paths.score_db.clone();
         let ln_policy_setting = self.boot.profile_config.play.ln_mode_policy;
+        let rule_mode = self.boot.profile_config.play.rule_mode;
         let tx = self.select_folder_summary_tx.clone();
         thread::Builder::new()
             .name("select-folder-lamp".to_string())
@@ -6975,7 +6981,14 @@ impl WinitApp {
                     migrate_score_db(&score_db_path)?;
                     let library_db = LibraryDatabase::open(&library_db_path)?;
                     let score_db = ScoreDatabase::open(&score_db_path)?;
-                    select_folder_summary(&library_db, &score_db, &path, kind, ln_policy_setting)
+                    select_folder_summary_for_rule_mode(
+                        &library_db,
+                        &score_db,
+                        &path,
+                        kind,
+                        ln_policy_setting,
+                        rule_mode,
+                    )
                 })()
                 .map_err(|error| error.to_string());
                 let _ = tx.send(SelectFolderSummaryResult { key, result });
@@ -7579,9 +7592,9 @@ impl WinitApp {
                     self.boot.profile_paths.score_db.clone(),
                     &self.boot.profile_config.ir,
                     crate::storage::common::hash_to_hex(&finished.result.chart_sha256),
-                    finished.result.gauge_type.as_str().to_string(),
                     finished.ln_policy,
                     finished.double_option,
+                    finished.rule_mode,
                 );
             }
             if let Some(state) = &mut self.result_ir {
@@ -7609,28 +7622,25 @@ impl WinitApp {
                 ),
                 _ => (None, crate::ln_policy::ChartLnProfile::default(), KeyMode::default()),
             };
-            let gauge =
-                crate::config::play::gauge_type_from_config(self.boot.profile_config.play.gauge)
-                    .as_str()
-                    .to_string();
             let ln_policy = crate::ln_policy::score_ln_policy(
                 self.boot.profile_config.play.ln_mode_policy,
                 ln_profile,
             );
             let double_option = self.double_option.normalize_for_key_mode(key_mode).score_bucket();
             let context = format!(
-                "{gauge}:{:?}:{}",
+                "{:?}:{}:{}",
                 self.boot.profile_config.play.ln_mode_policy,
-                double_option.as_str()
+                double_option.as_str(),
+                self.boot.profile_config.play.rule_mode.as_str()
             );
             let ir_config = self.boot.profile_config.ir.clone();
             self.select_ir.update(
                 &ir_config,
                 &self.boot.profile_paths.root_dir,
                 &context,
-                &gauge,
                 ln_policy,
                 double_option,
+                self.boot.profile_config.play.rule_mode,
                 selected,
             );
         }
@@ -9581,11 +9591,12 @@ fn build_select_items_for_stack(
         }
         Some(path) if path.starts_with(SEARCH_PATH_PREFIX) => match parse_search_query(path) {
             Some(query) => {
-                match load_select_items_for_search(
+                match load_select_items_for_search_for_rule_mode(
                     &boot.library_db,
                     &boot.score_db,
                     query,
                     boot.profile_config.play.ln_mode_policy,
+                    boot.profile_config.play.rule_mode,
                 ) {
                     Ok(items) => items,
                     Err(error) => {
@@ -9616,12 +9627,13 @@ fn build_select_items_for_stack(
                 }
             }
             Some(TablePath::Level { source_url, level }) => {
-                match load_select_items_in_table_level(
+                match load_select_items_in_table_level_for_rule_mode(
                     &boot.library_db,
                     &boot.score_db,
                     source_url,
                     level,
                     boot.profile_config.play.ln_mode_policy,
+                    boot.profile_config.play.rule_mode,
                 ) {
                     Ok(items) => items,
                     Err(error) => {
@@ -9633,11 +9645,12 @@ fn build_select_items_for_stack(
             None => Vec::new(),
         },
         Some(folder) => {
-            match load_select_items_in_folder(
+            match load_select_items_in_folder_for_rule_mode(
                 &boot.library_db,
                 &boot.score_db,
                 folder,
                 boot.profile_config.play.ln_mode_policy,
+                boot.profile_config.play.rule_mode,
             ) {
                 Ok(items) => items,
                 Err(error) => {
@@ -14378,6 +14391,7 @@ mod tests {
             chart_sha256: [0; 32],
             ln_policy: crate::ln_policy::LnScorePolicy::ForceLn,
             double_option: crate::select_options::DoubleOptionScoreBucket::Off,
+            rule_mode: bmz_gameplay::rule::RuleMode::Beatoraja,
             clear_type: "Normal".to_string(),
             gauge_type: "Normal".to_string(),
             gauge_value: 80.0,

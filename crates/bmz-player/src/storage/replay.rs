@@ -4,6 +4,7 @@ use std::path::Path;
 use anyhow::{Result, bail};
 use bmz_core::replay::ReplayEvent;
 use bmz_gameplay::replay::ReplayPlayer;
+use bmz_gameplay::rule::RuleMode;
 use serde::{Deserialize, Serialize};
 
 use crate::ln_policy::LnScorePolicy;
@@ -230,13 +231,24 @@ pub fn replay_slot_file_name(
     chart_sha256: [u8; 32],
     ln_policy: LnScorePolicy,
     double_option: DoubleOptionScoreBucket,
+    rule_mode: RuleMode,
     slot: u8,
 ) -> String {
     let double_suffix = match double_option {
         DoubleOptionScoreBucket::Off => String::new(),
         other => format!("-{}", other.as_str()),
     };
-    format!("{}-{}{}-slot{slot}.toml", hex_encode(&chart_sha256), ln_policy.as_str(), double_suffix)
+    let rule_suffix = match rule_mode {
+        RuleMode::Beatoraja => String::new(),
+        other => format!("-{}", other.as_str()),
+    };
+    format!(
+        "{}-{}{}{}-slot{slot}.toml",
+        hex_encode(&chart_sha256),
+        ln_policy.as_str(),
+        double_suffix,
+        rule_suffix
+    )
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
@@ -335,6 +347,7 @@ mod tests {
                 [0xab; 32],
                 LnScorePolicy::ForceCn,
                 DoubleOptionScoreBucket::Off,
+                RuleMode::Beatoraja,
                 2
             ),
             "abababababababababababababababababababababababababababababababab-ForceCn-slot2.toml"
@@ -344,9 +357,20 @@ mod tests {
                 [0xab; 32],
                 LnScorePolicy::ForceCn,
                 DoubleOptionScoreBucket::Battle,
+                RuleMode::Beatoraja,
                 2
             ),
             "abababababababababababababababababababababababababababababababab-ForceCn-Battle-slot2.toml"
+        );
+        assert_eq!(
+            replay_slot_file_name(
+                [0xab; 32],
+                LnScorePolicy::ForceCn,
+                DoubleOptionScoreBucket::Battle,
+                RuleMode::Dx,
+                2
+            ),
+            "abababababababababababababababababababababababababababababababab-ForceCn-Battle-Dx-slot2.toml"
         );
     }
 

@@ -26,6 +26,7 @@ export default defineEventHandler(async (event) => {
       gauge: schema.scores.gauge,
       ln_policy: schema.scores.lnPolicy,
       effective_ln_mode: schema.scores.effectiveLnMode,
+      rule_mode: schema.scores.ruleMode,
       scoring: schema.scores.scoring,
       judges: schema.scores.judges,
       device_type: schema.scores.deviceType,

@@ -21,6 +21,7 @@ use bmz_gameplay::judge::window::{
     judge_percent_at_time, judge_window_for_rule_mode, note_judge_window_for_rule_mode,
 };
 use bmz_gameplay::replay::{ReplayPlayer, ReplayRecorder};
+use bmz_gameplay::rule::RuleMode;
 use bmz_gameplay::score::ScoreState;
 use bmz_gameplay::session::{
     BgmScheduler, GameSession, HispeedMode, InputOffsetAutoAdjustState, PlaySkinOffset, PlayState,
@@ -75,6 +76,7 @@ pub struct PlaySessionOptions {
     /// declared mode.
     pub ln_mode_override: Option<bmz_chart::model::LongNoteMode>,
     pub ln_policy_setting: LnPolicySetting,
+    pub rule_mode: RuleMode,
     /// 段位ゲージ用の `GaugeProperty` 上書き。コース時に
     /// `apply_course_constraints` が `CourseGaugeConstraint::Lr2/Keys5/...` を
     /// 解釈して設定する。`None` の場合はチャートの `KeyMode` から自動推定する。
@@ -131,6 +133,7 @@ impl Default for PlaySessionOptions {
             judge_constraint: bmz_core::course::CourseJudgeConstraint::Normal,
             ln_mode_override: None,
             ln_policy_setting: LnPolicySetting::AutoLn,
+            rule_mode: RuleMode::Beatoraja,
             gauge_property: None,
         }
     }
@@ -590,7 +593,7 @@ pub fn load_prepared_play_session_for_chart_with_input_backend(
     let preloaded = preload_play_session_for_chart(
         library_db,
         chart_id,
-        options.clone(),
+        PlaySessionOptions { rule_mode: profile.play.rule_mode, ..options.clone() },
         profile.audio_mix.normalize_chart_volume,
     )?;
     Ok(build_prepared_play_session_from_preloaded(preloaded, profile, options, input_backend))
@@ -611,10 +614,11 @@ pub fn preload_play_session_for_chart(
     let mut chart = import.chart;
     let applied_double_option =
         options.double_option.normalize_for_key_mode(chart.metadata.key_mode);
-    let score_key = ScoreKey::with_double_option(
+    let score_key = ScoreKey::with_options(
         chart.identity.file_sha256,
         score_ln_policy_for_chart(options.ln_policy_setting, &chart),
         applied_double_option.score_bucket(),
+        options.rule_mode,
     );
     apply_ln_policy_to_chart(options.ln_policy_setting, &mut chart);
     // Course constraint may force a specific LN mode (Ln/Cn/Hcn) regardless of

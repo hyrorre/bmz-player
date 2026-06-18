@@ -118,7 +118,8 @@ pub fn advance_play_screen_until_result(
                     crate::ln_policy::LnPolicySetting::AutoLn,
                     crate::ln_policy::ChartLnProfile::from_chart(&session.chart),
                 ),
-            ),
+            )
+            .with_rule_mode(session.rule_mode),
             false,
         )?;
         let mut result_graph = crate::screens::result_model::ResultGraphCollector::default();

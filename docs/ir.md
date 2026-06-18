@@ -24,7 +24,7 @@ POST   /api/v1/scores                          # include=rankings&ranking_scopes
 GET    /api/v1/scores/{id}                     # スコア詳細 (公開)
 GET    /api/v1/charts                          # 譜面一覧 (?q= タイトル検索)
 GET    /api/v1/charts/{sha256}                 # 詳細 + play_count/clear_count 集計
-GET    /api/v1/charts/{sha256}/ranking         # scope/gauge/ln_policy/limit/offset
+GET    /api/v1/charts/{sha256}/ranking         # scope/ln_policy/rule_mode/limit/offset
 GET    /api/v1/rivals
 POST   /api/v1/rivals                          # { target_player_id, action: add|remove }
 GET    /api/v1/players/{id}                    # プロフィール + best scores
@@ -118,7 +118,7 @@ bun run dev                            # http://localhost:3000
 bmz ir login --email <EMAIL> --base-url http://localhost:3000
 bmz ir status                          # connection: OK を確認
 # 1 曲プレイするとリザルトで送信 + リプレイ自動アップロード
-bmz ir ranking <SHA256> --gauge Normal --ln-policy ForceLn
+bmz ir ranking <SHA256> --ln-policy ForceLn
 ```
 
 ---
@@ -143,7 +143,8 @@ bmz ir ranking <SHA256> --gauge Normal --ln-policy ForceLn
 - MD5 は beatoraja 系互換・外部IR連携用に保持する。
 - ランキングの主軸は EX score 固定。
 - LN / CN / HCN は `docs/ln.md` の `LnScorePolicy` に従って区別する。
-- IR の score identity は chart SHA256 単独ではなく、少なくとも `chart_sha256` / `gauge` / `ln_policy` / `scoring` を含む。
+- IR の score identity は chart SHA256 単独ではなく、`chart_sha256` / `ln_policy` / `double_option` / `rule_mode` / `scoring` を含む。
+  `gauge` は投稿時のプレイ設定・表示 metadata として保存するが、ランキング分離キーにはしない。
 - replay は将来アップロードする可能性があるため、初期設計から hash / format / status を持たせる。
 
 ### 設計ゴール
@@ -769,6 +770,7 @@ scope=global
 limit=100
 offset=0
 scoring=bms_ex_score_v1
+rule_mode=Beatoraja
 ```
 
 | parameter | type | description |
@@ -776,8 +778,8 @@ scoring=bms_ex_score_v1
 | `scope` | string | `global`, `self_and_rivals`, `rivals`, `self`, `around_self` |
 | `limit` | integer | 最大件数 |
 | `offset` | integer | pagination 用 |
-| `gauge` | string | 任意。指定した場合だけ gauge 種別で絞り込む |
 | `ln_policy` | string | 任意。指定した場合だけ `AutoLn` / `AutoCn` / `AutoHcn` / `ForceLn` / `ForceCn` / `ForceHcn` で絞り込む |
+| `rule_mode` | string | 必須。`Beatoraja` / `Lr2Oraja` / `Dx` |
 | `scoring` | string | 初期は `bms_ex_score_v1` |
 
 ### Ranking scope
@@ -811,9 +813,10 @@ rival_only=true&include_self=false -> scope=rivals
   },
   "rule": {
     "scoring": "bms_ex_score_v1",
-    "gauge": "Normal",
     "ln_policy": "ForceLn",
-    "effective_ln_mode": "ln"
+    "effective_ln_mode": "ln",
+    "double_option": "Off",
+    "rule_mode": "Beatoraja"
   },
   "ranking": {
     "scope": "self_and_rivals",
@@ -925,7 +928,7 @@ play_count  = 対象 player + chart + rule の accepted score 投稿数
 clear_count = そのうち clear_type が Failed / NoPlay 以外の投稿数
 ```
 
-集計単位は ranking query と同じ `chart_sha256` / `gauge` / `ln_policy` / `scoring` を基本にする。
+集計単位は ranking query と同じ `chart_sha256` / `ln_policy` / `double_option` / `rule_mode` / `scoring` を基本にする。
 `play_count` / `clear_count` が不要な画面では response から省略してよい。
 
 ### Device type
@@ -934,7 +937,7 @@ Ranking API / Chart detail API は score 表示に `device_type` を含める。
 `device_type` は `keyboard` / `controller` の2値で、`mixed` は返さない。
 
 集計・順位の key には含めない。
-同じ player / chart / gauge / ln_policy / scoring の best score が更新された場合、`best_scores.device_type` は
+同じ player / chart / ln_policy / double_option / rule_mode / scoring の best score が更新された場合、`best_scores.device_type` は
 その best score を記録した投稿の値で上書きする。
 
 ### EX score 同点順位
@@ -1412,8 +1415,9 @@ device_keys
 ```txt
 player_id
 chart_sha256
-gauge
 ln_policy
+double_option
+rule_mode
 scoring
 accepted = true
 ```
@@ -1451,13 +1455,15 @@ CREATE TABLE best_scores (
 
     gauge text NOT NULL,
     ln_policy text NOT NULL,
+    double_option text NOT NULL,
+    rule_mode text NOT NULL,
     effective_ln_mode text NOT NULL,
     scoring text NOT NULL,
 
     played_at timestamptz NOT NULL,
     updated_at timestamptz NOT NULL DEFAULT now(),
 
-    UNIQUE (player_id, chart_sha256, gauge, ln_policy, scoring)
+    UNIQUE (player_id, chart_sha256, ln_policy, double_option, rule_mode, scoring)
 );
 ```
 
@@ -1532,8 +1538,9 @@ WITH ranked AS (
     FROM best_scores bs
     JOIN players p ON p.id = bs.player_id
     WHERE bs.chart_sha256 = $1
-      AND bs.gauge = $2
-      AND bs.ln_policy = $3
+      AND bs.ln_policy = $2
+      AND bs.double_option = $3
+      AND bs.rule_mode = $4
       AND bs.scoring = 'bms_ex_score_v1'
 )
 SELECT *
@@ -1563,8 +1570,9 @@ WITH ranked AS (
     FROM best_scores bs
     JOIN players p ON p.id = bs.player_id
     WHERE bs.chart_sha256 = $1
-      AND bs.gauge = $2
-      AND bs.ln_policy = $3
+      AND bs.ln_policy = $2
+      AND bs.double_option = $3
+      AND bs.rule_mode = $4
       AND bs.scoring = 'bms_ex_score_v1'
 ),
 targets AS (
@@ -2379,8 +2387,8 @@ POST /api/v1/scores?include=rankings&ranking_scopes=global,self_and_rivals&ranki
 Recommended lazy fetch variants:
 
 ```http
-GET /api/v1/charts/{sha256}/ranking?scope=global&limit=100
-GET /api/v1/charts/{sha256}/ranking?scope=self_and_rivals&limit=100
+GET /api/v1/charts/{sha256}/ranking?scope=global&limit=100&rule_mode=Beatoraja
+GET /api/v1/charts/{sha256}/ranking?scope=self_and_rivals&limit=100&rule_mode=Beatoraja
 ```
 
 ## note

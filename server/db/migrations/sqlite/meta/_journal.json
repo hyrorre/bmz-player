@@ -36,6 +36,13 @@
       "when": 1781355800422,
       "tag": "0004_bizarre_junta",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1781817600000,
+      "tag": "0005_rule_mode_score_identity",
+      "breakpoints": true
     }
   ]
 }

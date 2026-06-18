@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
 use bmz_core::course::CourseKind;
+use bmz_gameplay::rule::RuleMode;
 use bmz_render::scene::SelectRowKind;
 
 use crate::ln_policy::{LnPolicySetting, LnScorePolicy, score_ln_policy};
@@ -517,7 +518,30 @@ pub fn load_select_items_in_table(
     source_url: &str,
     ln_policy_setting: LnPolicySetting,
 ) -> Result<Vec<SelectItem>> {
-    load_select_items_in_table_filtered(library_db, score_db, source_url, None, ln_policy_setting)
+    load_select_items_in_table_for_rule_mode(
+        library_db,
+        score_db,
+        source_url,
+        ln_policy_setting,
+        RuleMode::Beatoraja,
+    )
+}
+
+pub fn load_select_items_in_table_for_rule_mode(
+    library_db: &LibraryDatabase,
+    score_db: &ScoreDatabase,
+    source_url: &str,
+    ln_policy_setting: LnPolicySetting,
+    rule_mode: RuleMode,
+) -> Result<Vec<SelectItem>> {
+    load_select_items_in_table_filtered(
+        library_db,
+        score_db,
+        source_url,
+        None,
+        ln_policy_setting,
+        rule_mode,
+    )
 }
 
 /// Loads the charts of a single level of the difficulty table.
@@ -528,12 +552,31 @@ pub fn load_select_items_in_table_level(
     level: &str,
     ln_policy_setting: LnPolicySetting,
 ) -> Result<Vec<SelectItem>> {
+    load_select_items_in_table_level_for_rule_mode(
+        library_db,
+        score_db,
+        source_url,
+        level,
+        ln_policy_setting,
+        RuleMode::Beatoraja,
+    )
+}
+
+pub fn load_select_items_in_table_level_for_rule_mode(
+    library_db: &LibraryDatabase,
+    score_db: &ScoreDatabase,
+    source_url: &str,
+    level: &str,
+    ln_policy_setting: LnPolicySetting,
+    rule_mode: RuleMode,
+) -> Result<Vec<SelectItem>> {
     load_select_items_in_table_filtered(
         library_db,
         score_db,
         source_url,
         Some(level),
         ln_policy_setting,
+        rule_mode,
     )
 }
 
@@ -543,6 +586,7 @@ fn load_select_items_in_table_filtered(
     source_url: &str,
     level_filter: Option<&str>,
     ln_policy_setting: LnPolicySetting,
+    rule_mode: RuleMode,
 ) -> Result<Vec<SelectItem>> {
     // Fetch table metadata for symbol and level ordering.
     let (symbol, level_order) = library_db
@@ -569,12 +613,16 @@ fn load_select_items_in_table_filtered(
     });
 
     // Batch score lookup.
-    let keys: Vec<ScoreKey> =
-        entries.iter().filter_map(|entry| entry_score_key(entry, ln_policy_setting)).collect();
+    let keys: Vec<ScoreKey> = entries
+        .iter()
+        .filter_map(|entry| entry_score_key(entry, ln_policy_setting, rule_mode))
+        .collect();
     let mut score_map: HashMap<ScoreKey, BestScoreSummary> = score_db
         .best_scores_for_charts(&keys)?
         .into_iter()
-        .map(|s| (ScoreKey::new(s.chart_sha256, s.ln_policy), s))
+        .map(|s| {
+            (ScoreKey::with_options(s.chart_sha256, s.ln_policy, s.double_option, s.rule_mode), s)
+        })
         .collect();
     let mut replay_slot_map = replay_slot_map(score_db, &keys)?;
     let chart_ids: Vec<i64> = entries
@@ -587,7 +635,7 @@ fn load_select_items_in_table_filtered(
         .into_iter()
         .map(|entry| {
             let table_level = format!("{symbol}{}", entry.level);
-            let score_key = entry_score_key(&entry, ln_policy_setting);
+            let score_key = entry_score_key(&entry, ln_policy_setting, rule_mode);
             let best_score = score_key.and_then(|key| score_map.remove(&key));
             let replay_slots =
                 score_key.and_then(|key| replay_slot_map.remove(&key)).unwrap_or([false; 4]);
@@ -712,11 +760,13 @@ fn entry_score_sha256(entry: &TableEntryListItem) -> Option<[u8; 32]> {
 fn entry_score_key(
     entry: &TableEntryListItem,
     ln_policy_setting: LnPolicySetting,
+    rule_mode: RuleMode,
 ) -> Option<ScoreKey> {
     if let Some(chart) = &entry.chart {
-        return Some(score_key_for_chart(chart, ln_policy_setting));
+        return Some(score_key_for_chart(chart, ln_policy_setting, rule_mode));
     }
-    entry_score_sha256(entry).map(|sha256| ScoreKey::new(sha256, LnScorePolicy::ForceLn))
+    entry_score_sha256(entry)
+        .map(|sha256| ScoreKey::new(sha256, LnScorePolicy::ForceLn).with_rule_mode(rule_mode))
 }
 
 fn select_chart_row_from_table_entry(
@@ -752,6 +802,22 @@ pub fn load_select_items_in_folder(
     score_db: &ScoreDatabase,
     folder_path: &str,
     ln_policy_setting: LnPolicySetting,
+) -> Result<Vec<SelectItem>> {
+    load_select_items_in_folder_for_rule_mode(
+        library_db,
+        score_db,
+        folder_path,
+        ln_policy_setting,
+        RuleMode::Beatoraja,
+    )
+}
+
+pub fn load_select_items_in_folder_for_rule_mode(
+    library_db: &LibraryDatabase,
+    score_db: &ScoreDatabase,
+    folder_path: &str,
+    ln_policy_setting: LnPolicySetting,
+    rule_mode: RuleMode,
 ) -> Result<Vec<SelectItem>> {
     // 子孫 folder_path を 1 回だけ引き、直下の子と各子が leaf かどうかを
     // Rust 側で集計する。`/` 区切り後の最初のセグメントが「直下の子の名前」、
@@ -799,8 +865,13 @@ pub fn load_select_items_in_folder(
     fetch_paths.extend(leaf_folder_paths.iter().map(String::as_str));
     let all_charts = library_db.list_charts_in_folders(&fetch_paths)?;
 
-    let chart_items =
-        chart_items_with_enrichment(library_db, score_db, all_charts, ln_policy_setting)?;
+    let chart_items = chart_items_with_enrichment(
+        library_db,
+        score_db,
+        all_charts,
+        ln_policy_setting,
+        rule_mode,
+    )?;
 
     let mut items = Vec::with_capacity(non_leaf_folders.len() + chart_items.len());
     for (path, name) in non_leaf_folders {
@@ -820,8 +891,24 @@ pub fn load_select_items_for_search(
     query: &str,
     ln_policy_setting: LnPolicySetting,
 ) -> Result<Vec<SelectItem>> {
+    load_select_items_for_search_for_rule_mode(
+        library_db,
+        score_db,
+        query,
+        ln_policy_setting,
+        RuleMode::Beatoraja,
+    )
+}
+
+pub fn load_select_items_for_search_for_rule_mode(
+    library_db: &LibraryDatabase,
+    score_db: &ScoreDatabase,
+    query: &str,
+    ln_policy_setting: LnPolicySetting,
+    rule_mode: RuleMode,
+) -> Result<Vec<SelectItem>> {
     let charts = library_db.search_charts(query)?;
-    chart_items_with_enrichment(library_db, score_db, charts, ln_policy_setting)
+    chart_items_with_enrichment(library_db, score_db, charts, ln_policy_setting, rule_mode)
 }
 
 /// Wraps a `ChartListItem` set into `SelectItem::Chart` entries with best-score,
@@ -831,13 +918,16 @@ fn chart_items_with_enrichment(
     score_db: &ScoreDatabase,
     all_charts: Vec<ChartListItem>,
     ln_policy_setting: LnPolicySetting,
+    rule_mode: RuleMode,
 ) -> Result<Vec<SelectItem>> {
     let keys: Vec<ScoreKey> =
-        all_charts.iter().map(|c| score_key_for_chart(c, ln_policy_setting)).collect();
+        all_charts.iter().map(|c| score_key_for_chart(c, ln_policy_setting, rule_mode)).collect();
     let mut score_map: HashMap<ScoreKey, BestScoreSummary> = score_db
         .best_scores_for_charts(&keys)?
         .into_iter()
-        .map(|s| (ScoreKey::new(s.chart_sha256, s.ln_policy), s))
+        .map(|s| {
+            (ScoreKey::with_options(s.chart_sha256, s.ln_policy, s.double_option, s.rule_mode), s)
+        })
         .collect();
     let mut replay_slot_map = replay_slot_map(score_db, &keys)?;
     let chart_ids: Vec<i64> = all_charts.iter().map(|c| c.chart_id).collect();
@@ -867,7 +957,7 @@ fn chart_items_with_enrichment(
 
     let mut items = Vec::with_capacity(all_charts.len());
     for chart in all_charts {
-        let score_key = score_key_for_chart(&chart, ln_policy_setting);
+        let score_key = score_key_for_chart(&chart, ln_policy_setting, rule_mode);
         let best_score = score_map.remove(&score_key);
         let replay_slots = replay_slot_map.remove(&score_key).unwrap_or([false; 4]);
         let table_level = md5_level_map
@@ -896,9 +986,28 @@ pub fn select_folder_summary(
     kind: SelectRowKind,
     ln_policy_setting: LnPolicySetting,
 ) -> Result<Option<SelectFolderSummary>> {
+    select_folder_summary_for_rule_mode(
+        library_db,
+        score_db,
+        path,
+        kind,
+        ln_policy_setting,
+        RuleMode::Beatoraja,
+    )
+}
+
+pub fn select_folder_summary_for_rule_mode(
+    library_db: &LibraryDatabase,
+    score_db: &ScoreDatabase,
+    path: &str,
+    kind: SelectRowKind,
+    ln_policy_setting: LnPolicySetting,
+    rule_mode: RuleMode,
+) -> Result<Option<SelectFolderSummary>> {
     match kind {
         SelectRowKind::Folder => {
-            folder_summary_for_song_folder(library_db, score_db, path, ln_policy_setting).map(Some)
+            folder_summary_for_song_folder(library_db, score_db, path, ln_policy_setting, rule_mode)
+                .map(Some)
         }
         SelectRowKind::SearchFolder => {
             if let Some(query) = parse_search_query(path) {
@@ -906,22 +1015,29 @@ pub fn select_folder_summary(
                     score_db,
                     library_db.search_charts(query)?,
                     ln_policy_setting,
+                    rule_mode,
                 )
                 .map(Some);
             }
             Ok(None)
         }
         SelectRowKind::TableFolder => match parse_table_path(path) {
-            Some(TablePath::Table { source_url }) => {
-                folder_summary_for_table(library_db, score_db, source_url, None, ln_policy_setting)
-                    .map(Some)
-            }
+            Some(TablePath::Table { source_url }) => folder_summary_for_table(
+                library_db,
+                score_db,
+                source_url,
+                None,
+                ln_policy_setting,
+                rule_mode,
+            )
+            .map(Some),
             Some(TablePath::Level { source_url, level }) => folder_summary_for_table(
                 library_db,
                 score_db,
                 source_url,
                 Some(level),
                 ln_policy_setting,
+                rule_mode,
             )
             .map(Some),
             Some(TablePath::Root) | None => Ok(None),
@@ -938,6 +1054,7 @@ fn folder_summary_for_song_folder(
     score_db: &ScoreDatabase,
     folder_path: &str,
     ln_policy_setting: LnPolicySetting,
+    rule_mode: RuleMode,
 ) -> Result<SelectFolderSummary> {
     let folder_key = folder_path.replace('\\', "/");
     let mut paths = Vec::new();
@@ -948,6 +1065,7 @@ fn folder_summary_for_song_folder(
         score_db,
         library_db.list_charts_in_folders(&path_refs)?,
         ln_policy_setting,
+        rule_mode,
     )
 }
 
@@ -957,6 +1075,7 @@ fn folder_summary_for_table(
     source_url: &str,
     level_filter: Option<&str>,
     ln_policy_setting: LnPolicySetting,
+    rule_mode: RuleMode,
 ) -> Result<SelectFolderSummary> {
     let mut entries = library_db.list_table_entries_with_chart(source_url)?;
     if let Some(level) = level_filter {
@@ -964,19 +1083,20 @@ fn folder_summary_for_table(
     }
     entries = dedupe_table_entries(entries);
     let charts = entries.into_iter().filter_map(|entry| entry.chart).collect();
-    folder_summary_for_charts(score_db, charts, ln_policy_setting)
+    folder_summary_for_charts(score_db, charts, ln_policy_setting, rule_mode)
 }
 
 fn folder_summary_for_charts(
     score_db: &ScoreDatabase,
     charts: Vec<ChartListItem>,
     ln_policy_setting: LnPolicySetting,
+    rule_mode: RuleMode,
 ) -> Result<SelectFolderSummary> {
     let mut seen = HashSet::new();
     let keys: Vec<ScoreKey> = charts
         .iter()
         .filter_map(|chart| {
-            let key = score_key_for_chart(chart, ln_policy_setting);
+            let key = score_key_for_chart(chart, ln_policy_setting, rule_mode);
             seen.insert(key).then_some(key)
         })
         .collect();
@@ -989,7 +1109,8 @@ fn folder_summary_for_charts(
                     score.chart_sha256,
                     score.ln_policy,
                     score.double_option,
-                ),
+                )
+                .with_rule_mode(score.rule_mode),
                 score,
             )
         })
@@ -1013,14 +1134,30 @@ fn replay_slot_map(
     Ok(score_db
         .replay_slots_for_charts(keys)?
         .into_iter()
-        .map(|ReplaySlotSummary { chart_sha256, ln_policy, double_option, replay_slots }| {
-            (ScoreKey::with_double_option(chart_sha256, ln_policy, double_option), replay_slots)
-        })
+        .map(
+            |ReplaySlotSummary {
+                 chart_sha256,
+                 ln_policy,
+                 double_option,
+                 rule_mode,
+                 replay_slots,
+             }| {
+                (
+                    ScoreKey::with_options(chart_sha256, ln_policy, double_option, rule_mode),
+                    replay_slots,
+                )
+            },
+        )
         .collect())
 }
 
-fn score_key_for_chart(chart: &ChartListItem, ln_policy_setting: LnPolicySetting) -> ScoreKey {
+fn score_key_for_chart(
+    chart: &ChartListItem,
+    ln_policy_setting: LnPolicySetting,
+    rule_mode: RuleMode,
+) -> ScoreKey {
     ScoreKey::new(chart.sha256, score_ln_policy(ln_policy_setting, chart.ln_profile))
+        .with_rule_mode(rule_mode)
 }
 
 #[cfg(test)]
@@ -1079,6 +1216,7 @@ mod tests {
                     chart_sha256: alpha.identity.file_sha256,
                     ln_policy: LnScorePolicy::ForceLn,
                     double_option: crate::select_options::DoubleOptionScoreBucket::Off,
+                    rule_mode: RuleMode::Beatoraja,
                     slot,
                     rule: crate::config::profile_config::ReplaySlotRule::Always,
                     replay_path: format!("replay/{slot}.toml"),

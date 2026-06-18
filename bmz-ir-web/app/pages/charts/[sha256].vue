@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { IrRanking, LnScorePolicy } from '~~/bmz-ir-web/shared/types/ir'
+import type { IrRanking, IrRuleMode, LnScorePolicy } from '~~/bmz-ir-web/shared/types/ir'
 
 interface ChartDetail {
   chart: {
@@ -79,6 +79,8 @@ const lnPolicies: LnPolicyFilter[] = [
   'ForceCn',
   'ForceHcn',
 ]
+const ruleMode = ref<IrRuleMode>('Beatoraja')
+const ruleModes: IrRuleMode[] = ['Beatoraja', 'Lr2Oraja', 'Dx']
 
 const { data: detail, error: detailError } = await useFetch<ChartDetail>(
   () => `/api/v1/charts/${sha256.value}`,
@@ -90,9 +92,10 @@ const {
   error: rankingError,
 } = await useFetch<IrRanking>(() => `/api/v1/charts/${sha256.value}/ranking`, {
   immediate: canLoadChart.value,
-  watch: [sha256, lnPolicy],
+  watch: [sha256, lnPolicy, ruleMode],
   query: computed(() => ({
     scope: 'global',
+    rule_mode: ruleMode.value,
     ...(lnPolicy.value === 'ALL' ? {} : { ln_policy: lnPolicy.value }),
   })),
 })
@@ -156,7 +159,8 @@ const copySha256 = async () => {
         </div>
 
         <div class="mb-4 flex flex-wrap items-center gap-3">
-          LN <USelect v-model="lnPolicy" :items="lnPolicies" class="w-40" />
+          LN <USelect v-model="lnPolicy" :items="lnPolicies" class="w-40" /> RULE
+          <USelect v-model="ruleMode" :items="ruleModes" class="w-40" />
         </div>
 
         <UAlert v-if="rankingError" color="error" :description="rankingError.message" />
@@ -201,7 +205,8 @@ const copySha256 = async () => {
                 </td>
                 <td class="px-3 py-2">{{ entry.score.clear }}</td>
                 <td class="px-3 py-2 text-neutral-400">
-                  {{ entry.score.gauge }} / {{ entry.score.ln_policy }}
+                  {{ entry.score.gauge }} / {{ entry.score.ln_policy }} /
+                  {{ entry.score.rule_mode }}
                 </td>
                 <td class="px-3 py-2 text-right">{{ entry.score.max_combo }}</td>
                 <td class="px-3 py-2 text-right">{{ entry.score.min_bp }}</td>

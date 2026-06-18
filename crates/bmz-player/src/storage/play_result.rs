@@ -57,6 +57,8 @@ pub fn store_play_result(
     let arrange_seed = request.arrange_seed;
     let arrange_pattern = request.arrange_pattern.clone();
     let replay_events = request.replay_events.clone();
+    let rule_mode = bmz_gameplay::rule::RuleMode::from_str_opt(&request.rule_mode)
+        .unwrap_or(bmz_gameplay::rule::RuleMode::Beatoraja);
     let device_type = classify_replay_device_type(&replay_events);
 
     let replay_path = if should_save_replay(replay_config, result) {
@@ -89,7 +91,7 @@ pub fn store_play_result(
             request.random_seed,
             arrange.to_persistent_str(),
             request.gauge_option,
-            request.rule_mode,
+            request.rule_mode.clone(),
             request.assist_mask,
             device_type,
             replay_path.clone(),
@@ -103,10 +105,11 @@ pub fn store_play_result(
         let candidate = candidate_metrics(result);
         for (slot_index, &rule) in replay_config.slot_rules.iter().enumerate() {
             let slot = slot_index as u8;
-            let key = super::score_db::ScoreKey::with_double_option(
+            let key = super::score_db::ScoreKey::with_options(
                 result.chart_sha256,
                 request.ln_policy,
                 request.double_option,
+                rule_mode,
             );
             let prev = score_db.replay_slot(key, slot)?;
             if !evaluate_slot_update(rule, prev.as_ref(), &candidate) {
@@ -116,6 +119,7 @@ pub fn store_play_result(
                 result.chart_sha256,
                 request.ln_policy,
                 request.double_option,
+                rule_mode,
                 slot,
             );
             let path = profile_paths.replay_dir.join(&file_name);
@@ -137,6 +141,7 @@ pub fn store_play_result(
                 chart_sha256: result.chart_sha256,
                 ln_policy: request.ln_policy,
                 double_option: request.double_option,
+                rule_mode,
                 slot,
                 rule,
                 replay_path: rel_path.clone(),
@@ -539,6 +544,7 @@ mod tests {
             replay_path: String::new(),
             ln_policy: LnScorePolicy::ForceLn,
             double_option: DoubleOptionScoreBucket::Off,
+            rule_mode: bmz_gameplay::rule::RuleMode::Beatoraja,
             played_at: 0,
             ex_score: 100,
             bp: 10,
@@ -598,6 +604,7 @@ mod tests {
             replay_path: String::new(),
             ln_policy: LnScorePolicy::ForceLn,
             double_option: DoubleOptionScoreBucket::Off,
+            rule_mode: bmz_gameplay::rule::RuleMode::Beatoraja,
             played_at: 0,
             ex_score: 100,
             bp: 10,
@@ -627,6 +634,7 @@ mod tests {
             replay_path: String::new(),
             ln_policy: LnScorePolicy::ForceLn,
             double_option: DoubleOptionScoreBucket::Off,
+            rule_mode: bmz_gameplay::rule::RuleMode::Beatoraja,
             played_at: 0,
             ex_score: 100,
             bp: 10,
@@ -668,6 +676,7 @@ mod tests {
             replay_path: String::new(),
             ln_policy: LnScorePolicy::ForceLn,
             double_option: DoubleOptionScoreBucket::Off,
+            rule_mode: bmz_gameplay::rule::RuleMode::Beatoraja,
             played_at: 0,
             ex_score: 10_000,
             bp: 0,

@@ -764,6 +764,7 @@ mod tests {
     use crate::storage::library_db::{ChartImportRecord, LibraryDatabase};
     use crate::storage::migration::{LIBRARY_MIGRATIONS, SCORE_MIGRATIONS, run_migrations};
     use crate::storage::score_db::ScoreKey;
+    use bmz_gameplay::rule::RuleMode;
 
     #[test]
     fn lr2_import_maps_md5_and_clear_type() {
@@ -782,7 +783,9 @@ mod tests {
 
         assert_eq!(report.imported, 1);
         let best = score_db
-            .best_scores_for_charts(&[ScoreKey::new(sha256, LnScorePolicy::ForceLn)])
+            .best_scores_for_charts(&[
+                ScoreKey::new(sha256, LnScorePolicy::ForceLn).with_rule_mode(RuleMode::Lr2Oraja)
+            ])
             .unwrap();
         assert_eq!(best[0].clear_type, "Hard");
         assert_eq!(best[0].ex_score, 221);

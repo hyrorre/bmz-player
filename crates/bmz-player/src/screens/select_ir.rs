@@ -9,6 +9,7 @@ use std::path::Path;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
+use bmz_gameplay::rule::RuleMode;
 use bmz_render::scene::{ResultIrSnapshot, ResultIrState as SkinIrState, SelectRivalSnapshot};
 
 use crate::config::profile_config::IrConfig;
@@ -40,7 +41,7 @@ pub struct SelectIrRanking {
     cache: HashMap<[u8; 32], CachedChartIr>,
     in_flight: Option<(String, [u8; 32])>,
     pending: Option<([u8; 32], Instant)>,
-    /// キャッシュが前提とするランキング条件 (gauge / LN ポリシー設定)。
+    /// キャッシュが前提とするランキング条件 (rule mode / LN ポリシー設定)。
     /// 変わったらキャッシュごと破棄する。
     context: String,
     sender: Sender<FetchResult>,
@@ -63,7 +64,7 @@ impl Default for SelectIrRanking {
 
 impl SelectIrRanking {
     /// 毎フレーム呼ぶ。取得完了の取り込みと、カーソル譜面の取得予約を行う。
-    /// `context` は gauge / LN ポリシー設定など「ランキング条件を決める
+    /// `context` は rule mode / LN ポリシー設定など「ランキング条件を決める
     /// プロファイル設定」を表す文字列。変わったらキャッシュを破棄する。
     /// (譜面ごとに解決される `ln_policy` 自体は含めないこと)
     pub fn update(
@@ -71,9 +72,9 @@ impl SelectIrRanking {
         ir_config: &IrConfig,
         profile_root: &Path,
         context: &str,
-        gauge: &str,
         ln_policy: LnScorePolicy,
         double_option: DoubleOptionScoreBucket,
+        rule_mode: RuleMode,
         selected: Option<[u8; 32]>,
     ) {
         if self.context != context {
@@ -141,9 +142,9 @@ impl SelectIrRanking {
                             provider: provider.0,
                             base_url: provider.1,
                             chart_sha256_hex: hash_to_hex(&sha256),
-                            gauge: gauge.to_string(),
                             ln_policy,
                             double_option,
+                            rule_mode,
                         },
                         self.context.clone(),
                         sha256,
@@ -387,9 +388,9 @@ mod tests {
             &config,
             &root,
             "ctx",
-            "Normal",
             LnScorePolicy::ForceLn,
             DoubleOptionScoreBucket::Off,
+            RuleMode::Beatoraja,
             Some(sha),
         );
         assert!(select_ir.in_flight.is_none());
@@ -400,9 +401,9 @@ mod tests {
             &config,
             &root,
             "ctx",
-            "Normal",
             LnScorePolicy::ForceLn,
             DoubleOptionScoreBucket::Off,
+            RuleMode::Beatoraja,
             None,
         );
         assert!(select_ir.pending.is_none());
@@ -423,9 +424,9 @@ mod tests {
             &config,
             &root,
             "new",
-            "Normal",
             LnScorePolicy::ForceLn,
             DoubleOptionScoreBucket::Off,
+            RuleMode::Beatoraja,
             Some(sha),
         );
         assert!(!select_ir.cache.contains_key(&sha));

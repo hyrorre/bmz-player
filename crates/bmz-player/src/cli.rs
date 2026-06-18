@@ -35,8 +35,8 @@ pub enum IrCommand {
     Logout { provider: String },
     /// `ir status`
     Status,
-    /// `ir ranking <SHA256> [--gauge G] [--ln-policy P] [--scope S] [--limit N]`
-    Ranking { sha256: String, gauge: String, ln_policy: String, scope: String, limit: u32 },
+    /// `ir ranking <SHA256> [--ln-policy P] [--scope S] [--limit N]`
+    Ranking { sha256: String, ln_policy: String, scope: String, limit: u32 },
     /// `ir sync` — pending のスコアジョブを送信する。
     Sync,
     /// `ir rivals [add <PLAYER_ID> | remove <PLAYER_ID>]`
@@ -223,7 +223,6 @@ fn parse_ir_command(rest: &[String]) -> Result<Command> {
                 .filter(|s| !s.starts_with('-'))
                 .ok_or_else(|| anyhow::anyhow!("ir ranking requires a chart SHA256"))?
                 .clone();
-            let mut gauge = "normal".to_string();
             let mut ln_policy = "ForceLn".to_string();
             let mut scope = "global".to_string();
             let mut limit = 20u32;
@@ -233,7 +232,6 @@ fn parse_ir_command(rest: &[String]) -> Result<Command> {
                     iter.next().cloned().ok_or_else(|| anyhow::anyhow!("{flag} requires a value"))
                 };
                 match flag.as_str() {
-                    "--gauge" => gauge = value(&mut iter)?,
                     "--ln-policy" => ln_policy = value(&mut iter)?,
                     "--scope" => scope = value(&mut iter)?,
                     "--limit" => {
@@ -244,7 +242,7 @@ fn parse_ir_command(rest: &[String]) -> Result<Command> {
                     other => bail!("unknown flag for ir ranking: {other}"),
                 }
             }
-            Ok(Command::Ir(IrCommand::Ranking { sha256, gauge, ln_policy, scope, limit }))
+            Ok(Command::Ir(IrCommand::Ranking { sha256, ln_policy, scope, limit }))
         }
         Some("sync") => Ok(Command::Ir(IrCommand::Sync)),
         Some("rivals") => {

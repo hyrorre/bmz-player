@@ -8,6 +8,7 @@ import type {
   IrRanking,
   IrRankingEntry,
   IrRankingScope,
+  IrRuleMode,
   IrScoreSubmission,
   IrSubmitResponse,
   LnScorePolicy,
@@ -16,6 +17,7 @@ import type {
 const LN_POLICIES = new Set(['AutoLn', 'AutoCn', 'AutoHcn', 'ForceLn', 'ForceCn', 'ForceHcn'])
 const EFFECTIVE_LN_MODES = new Set(['ln', 'cn', 'hcn'])
 const DEVICE_TYPES = new Set(['keyboard', 'controller'])
+const RULE_MODES = new Set(['Beatoraja', 'Lr2Oraja', 'Dx'])
 const RANKING_SCOPES = new Set(['global', 'self_and_rivals', 'rivals', 'self', 'around_self'])
 export const CLEAR_RANK: Record<string, number> = {
   no_play: 0,
@@ -48,9 +50,9 @@ export interface RankingQuery {
   scope: IrRankingScope
   limit: number
   offset: number
-  gauge?: string
   lnPolicy?: LnScorePolicy
   doubleOption: IrDoubleOption
+  ruleMode: IrRuleMode
   scoring: 'bms_ex_score_v1'
 }
 
@@ -72,6 +74,7 @@ interface BestScoreRow extends BestScoreCandidate {
   ln_policy: LnScorePolicy
   effective_ln_mode: 'ln' | 'cn' | 'hcn'
   double_option: IrDoubleOption
+  rule_mode: IrRuleMode
   scoring: 'bms_ex_score_v1'
   device_type: IrDeviceType
   played_at: string | null
@@ -86,16 +89,19 @@ export function parseRankingQuery(query: Record<string, unknown>): RankingQuery 
   const scope = asScope(String(query.scope ?? 'global'))
   const limit = clampInteger(query.limit, 100, 1, 200)
   const offset = clampInteger(query.offset, 0, 0, 100_000)
-  const gauge =
-    typeof query.gauge === 'string' && query.gauge ? normalizeGaugeName(query.gauge) : undefined
   const lnPolicy =
     typeof query.ln_policy === 'string' && query.ln_policy ? asLnPolicy(query.ln_policy) : undefined
   const doubleOption = normalizeDoubleOption(query.double_option)
+  const ruleMode = asRuleMode(query.rule_mode)
   const scoring = String(query.scoring ?? 'bms_ex_score_v1')
   if (scoring !== 'bms_ex_score_v1') {
     throw new Error('unsupported scoring')
   }
-  return { scope, limit, offset, gauge, lnPolicy, doubleOption, scoring }
+  return { scope, limit, offset, lnPolicy, doubleOption, ruleMode, scoring }
+}
+
+export function parseRankingScope(value: string): IrRankingScope {
+  return asScope(value)
 }
 
 export function validateScoreSubmission(value: unknown): IrScoreSubmission {
@@ -114,6 +120,7 @@ export function validateScoreSubmission(value: unknown): IrScoreSubmission {
     requireHex(payload.chart.md5, 32, 'chart.md5')
   }
   asLnPolicy(payload.rule.ln_policy)
+  asRuleMode(payload.rule.rule_mode)
   if (!EFFECTIVE_LN_MODES.has(payload.rule.effective_ln_mode)) {
     throw new Error('rule.effective_ln_mode is invalid')
   }
@@ -180,6 +187,7 @@ export async function submitScore(
     gauge: payload.rule.gauge,
     lnPolicy: payload.rule.ln_policy,
     effectiveLnMode: payload.rule.effective_ln_mode,
+    ruleMode: payload.rule.rule_mode,
     judgeAlgorithm: payload.rule.judge_algorithm,
     scoring: payload.rule.scoring,
     clearType: payload.result.clear,
@@ -251,9 +259,9 @@ export async function submitScore(
           scope,
           limit: rankingLimit,
           offset: 0,
-          gauge: payload.rule.gauge,
           lnPolicy: payload.rule.ln_policy,
           doubleOption,
+          ruleMode: payload.rule.rule_mode,
           scoring: payload.rule.scoring,
         }),
       }
@@ -298,12 +306,12 @@ export async function getRanking(
     chart: { sha256 },
     rule: {
       scoring: query.scoring,
-      gauge: query.gauge,
       ln_policy: query.lnPolicy,
       effective_ln_mode: query.lnPolicy
         ? bestRows.find((row) => row.ln_policy === query.lnPolicy)?.effective_ln_mode
         : undefined,
       double_option: query.doubleOption,
+      rule_mode: query.ruleMode,
     },
     ranking: {
       scope: query.scope,
@@ -340,10 +348,8 @@ async function fetchRankingBestRows(sha256: string, query: RankingQuery): Promis
     eq(schema.bestScores.chartSha256, sha256),
     eq(schema.bestScores.scoring, query.scoring),
     eq(schema.bestScores.doubleOption, query.doubleOption),
+    eq(schema.bestScores.ruleMode, query.ruleMode),
   ]
-  if (query.gauge) {
-    conditions.push(eq(schema.bestScores.gauge, query.gauge))
-  }
   if (query.lnPolicy) {
     conditions.push(eq(schema.bestScores.lnPolicy, query.lnPolicy))
   }
@@ -364,6 +370,7 @@ async function fetchRankingBestRows(sha256: string, query: RankingQuery): Promis
       ln_policy: schema.bestScores.lnPolicy,
       effective_ln_mode: schema.bestScores.effectiveLnMode,
       double_option: schema.bestScores.doubleOption,
+      rule_mode: schema.bestScores.ruleMode,
       scoring: schema.bestScores.scoring,
       played_at: schema.bestScores.playedAt,
       server_received_at: schema.bestScores.serverReceivedAt,
@@ -388,11 +395,9 @@ async function fetchRankingBestRowsFromHistory(
     eq(schema.scores.chartSha256, sha256),
     eq(schema.scores.scoring, query.scoring),
     eq(schema.scores.doubleOption, query.doubleOption),
+    eq(schema.scores.ruleMode, query.ruleMode),
     eq(schema.scores.accepted, true),
   ]
-  if (query.gauge) {
-    conditions.push(eq(schema.scores.gauge, query.gauge))
-  }
   if (query.lnPolicy) {
     conditions.push(eq(schema.scores.lnPolicy, query.lnPolicy))
   }
@@ -413,6 +418,7 @@ async function fetchRankingBestRowsFromHistory(
       ln_policy: schema.scores.lnPolicy,
       effective_ln_mode: schema.scores.effectiveLnMode,
       double_option: schema.scores.doubleOption,
+      rule_mode: schema.scores.ruleMode,
       scoring: schema.scores.scoring,
       played_at: schema.scores.playedAt,
       server_received_at: schema.scores.serverReceivedAt,
@@ -442,6 +448,7 @@ function rowToBestScoreRow(row: {
   ln_policy: string
   effective_ln_mode: string
   double_option: string
+  rule_mode: string
   played_at: Date | null
   server_received_at: Date
   verification: BestScoreRow['verification']
@@ -452,6 +459,7 @@ function rowToBestScoreRow(row: {
     ln_policy: row.ln_policy as LnScorePolicy,
     effective_ln_mode: row.effective_ln_mode as 'ln' | 'cn' | 'hcn',
     double_option: row.double_option as IrDoubleOption,
+    rule_mode: row.rule_mode as IrRuleMode,
     device_type: row.device_type as IrDeviceType,
     played_at: row.played_at?.toISOString() ?? null,
   }
@@ -479,10 +487,10 @@ function bestRowKey(row: BestScoreRow): string {
   return [
     row.player_id,
     row.chart_sha256,
-    row.gauge,
     row.ln_policy,
     row.scoring,
     row.double_option,
+    row.rule_mode,
   ].join('\0')
 }
 
@@ -558,10 +566,10 @@ async function fetchPreviousBest(
     where: and(
       eq(schema.bestScores.playerId, playerId),
       eq(schema.bestScores.chartSha256, payload.chart.sha256),
-      eq(schema.bestScores.gauge, payload.rule.gauge),
       eq(schema.bestScores.lnPolicy, payload.rule.ln_policy),
       eq(schema.bestScores.scoring, payload.rule.scoring),
       eq(schema.bestScores.doubleOption, normalizeDoubleOption(payload.play_options.double_option)),
+      eq(schema.bestScores.ruleMode, payload.rule.rule_mode),
     ),
   })
   if (!current) {
@@ -595,10 +603,10 @@ async function upsertBestScore(
     where: and(
       eq(schema.bestScores.playerId, playerId),
       eq(schema.bestScores.chartSha256, payload.chart.sha256),
-      eq(schema.bestScores.gauge, payload.rule.gauge),
       eq(schema.bestScores.lnPolicy, payload.rule.ln_policy),
       eq(schema.bestScores.scoring, payload.rule.scoring),
       eq(schema.bestScores.doubleOption, normalizeDoubleOption(payload.play_options.double_option)),
+      eq(schema.bestScores.ruleMode, payload.rule.rule_mode),
     ),
   })
   const currentCandidate = current
@@ -641,6 +649,7 @@ async function upsertBestScore(
     gauge: payload.rule.gauge,
     lnPolicy: payload.rule.ln_policy,
     effectiveLnMode: payload.rule.effective_ln_mode,
+    ruleMode: payload.rule.rule_mode,
     scoring: payload.rule.scoring,
     playedAt: playedAtDate(payload.result.played_at),
     serverReceivedAt: candidate.server_received_at,
@@ -653,10 +662,10 @@ async function upsertBestScore(
       target: [
         schema.bestScores.playerId,
         schema.bestScores.chartSha256,
-        schema.bestScores.gauge,
         schema.bestScores.lnPolicy,
         schema.bestScores.scoring,
         schema.bestScores.doubleOption,
+        schema.bestScores.ruleMode,
       ],
       set: {
         scoreId: values.scoreId,
@@ -759,6 +768,7 @@ function rankRows(
         gauge: row.gauge,
         ln_policy: row.ln_policy,
         double_option: row.double_option,
+        rule_mode: row.rule_mode,
         device_type: row.device_type,
         played_at: row.played_at,
         verification: row.verification,
@@ -950,6 +960,13 @@ function asLnPolicy(value: string): LnScorePolicy {
     throw new Error('ln_policy is invalid')
   }
   return value as LnScorePolicy
+}
+
+function asRuleMode(value: unknown): IrRuleMode {
+  if (typeof value !== 'string' || !RULE_MODES.has(value)) {
+    throw new Error('rule_mode is invalid')
+  }
+  return value as IrRuleMode
 }
 
 function asScope(value: string): IrRankingScope {

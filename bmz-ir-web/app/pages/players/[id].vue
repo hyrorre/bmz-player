@@ -16,6 +16,7 @@ interface PlayerDetail {
     device_type: string
     gauge: string
     ln_policy: string
+    rule_mode: string
     played_at: string | null
     server_received_at: string
     chart: {
@@ -71,7 +72,7 @@ const { data, pending, error } = await useFetch<PlayerDetail>(
             <tbody>
               <tr
                 v-for="score in data.best_scores"
-                :key="`${score.chart_sha256}-${score.gauge}-${score.ln_policy}`"
+                :key="`${score.chart_sha256}-${score.ln_policy}-${score.rule_mode}`"
                 class="border-t border-neutral-800"
               >
                 <td class="max-w-64 px-3 py-2">
@@ -91,7 +92,7 @@ const { data, pending, error } = await useFetch<PlayerDetail>(
                 <td class="px-3 py-2 text-right">{{ score.max_combo }}</td>
                 <td class="px-3 py-2 text-right">{{ score.min_bp }}</td>
                 <td class="px-3 py-2 text-neutral-400">
-                  {{ score.gauge }} / {{ score.ln_policy }}
+                  {{ score.gauge }} / {{ score.ln_policy }} / {{ score.rule_mode }}
                 </td>
                 <td class="px-3 py-2 text-neutral-400">
                   {{ new Date(score.played_at ?? score.server_received_at).toLocaleString() }}

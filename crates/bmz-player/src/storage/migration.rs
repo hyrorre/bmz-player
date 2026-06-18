@@ -929,4 +929,95 @@ pub const SCORE_MIGRATIONS: &[Migration] = &[
         version: 14,
         statements: &["ALTER TABLE player_stats ADD COLUMN playtime_seconds INTEGER NOT NULL DEFAULT 0;"],
     },
+    Migration {
+        version: 15,
+        statements: &[
+            "ALTER TABLE score_best RENAME TO score_best_old;",
+            "CREATE TABLE score_best (
+                chart_sha256 TEXT NOT NULL,
+                ln_policy TEXT NOT NULL,
+                double_option TEXT NOT NULL DEFAULT 'Off',
+                rule_mode TEXT NOT NULL DEFAULT 'Beatoraja',
+                clear_type TEXT NOT NULL,
+                gauge_type TEXT NOT NULL,
+                gauge_value REAL NOT NULL,
+                ex_score INTEGER NOT NULL,
+                bp INTEGER NOT NULL,
+                cb INTEGER NOT NULL,
+                max_combo INTEGER NOT NULL,
+                fast_pgreat INTEGER NOT NULL,
+                slow_pgreat INTEGER NOT NULL,
+                fast_great INTEGER NOT NULL,
+                slow_great INTEGER NOT NULL,
+                fast_good INTEGER NOT NULL,
+                slow_good INTEGER NOT NULL,
+                fast_bad INTEGER NOT NULL,
+                slow_bad INTEGER NOT NULL,
+                fast_poor INTEGER NOT NULL,
+                slow_poor INTEGER NOT NULL,
+                fast_empty_poor INTEGER NOT NULL,
+                slow_empty_poor INTEGER NOT NULL,
+                played_at INTEGER NOT NULL,
+                replay_path TEXT NOT NULL,
+                ghost TEXT NOT NULL DEFAULT '',
+                play_count INTEGER NOT NULL DEFAULT 0,
+                clear_count INTEGER NOT NULL DEFAULT 0,
+                device_type TEXT NOT NULL DEFAULT 'keyboard',
+                PRIMARY KEY(chart_sha256, ln_policy, double_option, rule_mode)
+            );",
+            "INSERT INTO score_best (
+                chart_sha256, ln_policy, double_option, rule_mode, clear_type,
+                gauge_type, gauge_value, ex_score, bp, cb, max_combo,
+                fast_pgreat, slow_pgreat, fast_great, slow_great, fast_good,
+                slow_good, fast_bad, slow_bad, fast_poor, slow_poor,
+                fast_empty_poor, slow_empty_poor, played_at, replay_path,
+                ghost, play_count, clear_count, device_type
+            )
+            SELECT
+                chart_sha256, ln_policy, double_option, 'Beatoraja', clear_type,
+                gauge_type, gauge_value, ex_score, bp, cb, max_combo,
+                fast_pgreat, slow_pgreat, fast_great, slow_great, fast_good,
+                slow_good, fast_bad, slow_bad, fast_poor, slow_poor,
+                fast_empty_poor, slow_empty_poor, played_at, replay_path,
+                ghost, play_count, clear_count, device_type
+            FROM score_best_old;",
+            "DROP TABLE score_best_old;",
+            "DROP INDEX IF EXISTS idx_score_best_chart;",
+            "DROP INDEX IF EXISTS idx_score_best_clear_type;",
+            "DROP INDEX IF EXISTS idx_score_best_ex_score;",
+            "CREATE INDEX idx_score_best_chart
+                ON score_best(chart_sha256, ln_policy, double_option, rule_mode);",
+            "CREATE INDEX idx_score_best_clear_type ON score_best(clear_type);",
+            "CREATE INDEX idx_score_best_ex_score ON score_best(ex_score DESC);",
+            "ALTER TABLE replay_slots RENAME TO replay_slots_old;",
+            "CREATE TABLE replay_slots (
+                chart_sha256 TEXT NOT NULL,
+                ln_policy   TEXT NOT NULL,
+                double_option TEXT NOT NULL DEFAULT 'Off',
+                rule_mode TEXT NOT NULL DEFAULT 'Beatoraja',
+                slot        INTEGER NOT NULL CHECK (slot BETWEEN 0 AND 3),
+                rule        TEXT NOT NULL,
+                replay_path TEXT NOT NULL,
+                played_at   INTEGER NOT NULL,
+                ex_score    INTEGER NOT NULL,
+                bp          INTEGER NOT NULL,
+                cb          INTEGER NOT NULL,
+                max_combo   INTEGER NOT NULL,
+                clear_rank  INTEGER NOT NULL,
+                PRIMARY KEY(chart_sha256, ln_policy, double_option, rule_mode, slot)
+            );",
+            "INSERT INTO replay_slots (
+                chart_sha256, ln_policy, double_option, rule_mode, slot, rule,
+                replay_path, played_at, ex_score, bp, cb, max_combo, clear_rank
+            )
+            SELECT
+                chart_sha256, ln_policy, double_option, 'Beatoraja', slot, rule,
+                replay_path, played_at, ex_score, bp, cb, max_combo, clear_rank
+            FROM replay_slots_old;",
+            "DROP TABLE replay_slots_old;",
+            "DROP INDEX IF EXISTS idx_replay_slots_chart;",
+            "CREATE INDEX idx_replay_slots_chart
+                ON replay_slots(chart_sha256, ln_policy, double_option, rule_mode);",
+        ],
+    },
 ];

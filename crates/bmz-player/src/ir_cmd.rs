@@ -25,8 +25,8 @@ pub async fn run_ir_command(cmd: IrCommand) -> Result<()> {
         }
         IrCommand::Logout { provider } => logout(&profile_paths, &mut profile, &provider).await,
         IrCommand::Status => status(&profile_paths, &profile).await,
-        IrCommand::Ranking { sha256, gauge, ln_policy, scope, limit } => {
-            ranking(&profile_paths, &profile, &sha256, &gauge, &ln_policy, &scope, limit).await
+        IrCommand::Ranking { sha256, ln_policy, scope, limit } => {
+            ranking(&profile_paths, &profile, &sha256, &ln_policy, &scope, limit).await
         }
         IrCommand::Sync => sync(&profile_paths, &profile).await,
         IrCommand::Rivals { action } => rivals(&profile_paths, &mut profile, action).await,
@@ -368,7 +368,6 @@ async fn ranking(
     profile_paths: &ProfilePaths,
     profile: &ProfileConfig,
     sha256: &str,
-    gauge: &str,
     ln_policy: &str,
     scope: &str,
     limit: u32,
@@ -393,9 +392,9 @@ async fn ranking(
             sha256,
             &IrRankingRequest {
                 scope,
-                gauge: gauge.to_string(),
                 ln_policy: ln_policy.to_string(),
                 double_option: crate::select_options::DoubleOptionScoreBucket::Off,
+                rule_mode: profile.play.rule_mode,
                 limit,
                 offset: 0,
             },
@@ -404,7 +403,10 @@ async fn ranking(
 
     println!("chart: {}", result.chart.sha256);
     if result.ranking.entries.is_empty() {
-        println!("no scores for gauge={gauge} ln_policy={ln_policy}");
+        println!(
+            "no scores for ln_policy={ln_policy} rule_mode={}",
+            profile.play.rule_mode.as_str()
+        );
         return Ok(());
     }
     println!("{:>4}  {:<24} {:>7} {:<16} {:>6} {:>5}", "#", "player", "EX", "clear", "combo", "bp");

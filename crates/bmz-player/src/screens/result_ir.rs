@@ -8,6 +8,8 @@
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
+use bmz_gameplay::rule::RuleMode;
+
 use crate::config::profile_config::IrConfig;
 use crate::ir::bmz_official::{BmzOfficialIrClient, IrRankingRequest};
 use crate::ir::sync::{ensure_fresh_credentials, sync_pending_ir_jobs};
@@ -48,9 +50,9 @@ pub struct ResultIrQuery {
     pub provider: String,
     pub base_url: String,
     pub chart_sha256_hex: String,
-    pub gauge: String,
     pub ln_policy: LnScorePolicy,
     pub double_option: DoubleOptionScoreBucket,
+    pub rule_mode: RuleMode,
 }
 
 pub struct ResultIrState {
@@ -180,9 +182,9 @@ pub fn spawn_result_ir_task(
     score_db_path: PathBuf,
     ir_config: &IrConfig,
     chart_sha256_hex: String,
-    gauge: String,
     ln_policy: LnScorePolicy,
     double_option: DoubleOptionScoreBucket,
+    rule_mode: RuleMode,
 ) -> Option<ResultIrState> {
     let provider = ir_config
         .providers
@@ -193,9 +195,9 @@ pub fn spawn_result_ir_task(
         provider: provider.provider.clone(),
         base_url: provider.base_url.clone(),
         chart_sha256_hex,
-        gauge,
         ln_policy,
         double_option,
+        rule_mode,
     };
     let (sender, receiver) = channel();
 
@@ -293,9 +295,9 @@ pub(crate) async fn fetch_ranking(
             &query.chart_sha256_hex,
             &IrRankingRequest {
                 scope,
-                gauge: query.gauge.clone(),
                 ln_policy: query.ln_policy.as_str().to_string(),
                 double_option: query.double_option,
+                rule_mode: query.rule_mode,
                 limit: 20,
                 offset: 0,
             },

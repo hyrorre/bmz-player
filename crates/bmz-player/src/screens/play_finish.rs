@@ -25,6 +25,7 @@ pub struct FinishedPlaySession {
     /// IR ランキング照会に使うスコア分離キー。
     pub ln_policy: crate::ln_policy::LnScorePolicy,
     pub double_option: crate::select_options::DoubleOptionScoreBucket,
+    pub rule_mode: bmz_gameplay::rule::RuleMode,
 }
 
 pub fn play_result_from_session(session: &GameSession) -> PlayResult {
@@ -169,6 +170,7 @@ pub fn finish_session_result(
         applied_arrange: applied_arrange.clone(),
         ln_policy: score_key.ln_policy,
         double_option: score_key.double_option,
+        rule_mode: score_key.rule_mode,
     })
 }
 
@@ -409,6 +411,7 @@ mod tests {
             chart_sha256: [0; 32],
             ln_policy: crate::ln_policy::LnScorePolicy::ForceLn,
             double_option: crate::select_options::DoubleOptionScoreBucket::Off,
+            rule_mode: bmz_gameplay::rule::RuleMode::Beatoraja,
             clear_type: "Hard".to_string(),
             gauge_type: "Normal".to_string(),
             gauge_value: 100.0,
@@ -905,6 +908,7 @@ mod tests {
 
     fn score_key(session: &GameSession) -> ScoreKey {
         ScoreKey::new(session.chart.identity.file_sha256, crate::ln_policy::LnScorePolicy::ForceLn)
+            .with_rule_mode(session.rule_mode)
     }
 
     fn make_temp_dir(label: &str) -> std::path::PathBuf {

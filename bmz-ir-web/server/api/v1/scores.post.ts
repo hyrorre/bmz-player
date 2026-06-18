@@ -1,5 +1,5 @@
 import { getQuery, readBody } from 'h3'
-import { parseRankingQuery, submitScore, validateScoreSubmission } from '../../services/ir'
+import { parseRankingScope, submitScore, validateScoreSubmission } from '../../services/ir'
 import { requireIrUser } from '../../utils/auth'
 import type { IrRankingScope } from '../../../shared/types/ir'
 
@@ -23,5 +23,5 @@ function parseRankingScopes(value: string): IrRankingScope[] {
     .split(',')
     .map((scope) => scope.trim())
     .filter(Boolean)
-  return scopes.map((scope) => parseRankingQuery({ scope }).scope)
+  return scopes.map((scope) => parseRankingScope(scope))
 }
