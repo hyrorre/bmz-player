@@ -6669,10 +6669,10 @@ impl WinitApp {
         let action = exit.action.clone();
         let fadeout = Duration::from_millis(self.renderer.result_skin_fadeout_ms().max(0) as u64);
         let elapsed = started_at.elapsed();
-        // スキンの終了アニメーション時間に合わせて、プレイ残響(draining_audio)を
-        // 1.0 → 0.0 へ絞る。遷移時に音量が 0 付近まで落ちているので、
-        // draining_audio を破棄しても唐突な音切れにならない。
-        self.fade_draining_audio_for_result_exit(elapsed, fadeout);
+        // スキンの終了アニメーション時間に合わせて、プレイ残響(draining_audio)と
+        // リザルトSEを 1.0 → 0.0 へ絞る。遷移時に音量が 0 付近まで落ちているので、
+        // 音声を破棄しても唐突な音切れにならない。
+        self.fade_audio_for_result_exit(elapsed, fadeout);
         if elapsed < fadeout {
             return;
         }
@@ -6691,24 +6691,24 @@ impl WinitApp {
         }
     }
 
-    /// リザルト終了アニメ中、プレイ残響(draining_audio)のマスターゲインを
-    /// 1.0 → 0.0 へランプする。毎フレーム呼ぶ。
+    /// リザルト終了アニメ中、プレイ残響(draining_audio)とシステムSEの
+    /// マスターゲインを 1.0 → 0.0 へランプする。毎フレーム呼ぶ。
     /// フェード時間は `RESULT_EXIT_AUDIO_FADE` を上限とし、スキンの終了アニメ時間
     /// (`fadeout`) がそれより短ければ遷移前に絞り切れるよう短い方を採用する。
     /// 見た目の遷移タイミング自体は `fadeout` のまま変えない。
-    /// ResultClose SE 等のシステム音は別エンジンなので影響を受けない。
-    fn fade_draining_audio_for_result_exit(&mut self, elapsed: Duration, fadeout: Duration) {
-        let Some(audio) = &self.draining_audio else {
-            return;
-        };
-        let audio_fade = fadeout.min(RESULT_EXIT_AUDIO_FADE);
-        let gain = if audio_fade.is_zero() {
-            0.0
-        } else {
-            (1.0 - elapsed.as_secs_f32() / audio_fade.as_secs_f32()).clamp(0.0, 1.0)
-        };
-        if let Ok(mut engine) = audio.engine.lock() {
+    fn fade_audio_for_result_exit(&mut self, elapsed: Duration, fadeout: Duration) {
+        let gain = result_exit_audio_gain(elapsed, fadeout);
+        if let Some(audio) = &self.draining_audio
+            && let Ok(mut engine) = audio.engine.lock()
+        {
             engine.set_master_gain(gain);
+        }
+        self.set_system_sound_master_gain(gain);
+    }
+
+    fn set_system_sound_master_gain(&self, gain: f32) {
+        if let Some(manager) = &self.system_sound {
+            manager.set_master_gain(gain);
         }
     }
 
@@ -8492,6 +8492,7 @@ impl WinitApp {
     /// ボリュームは AudioEngine 側で 0.0..=1.0 にクランプされる。
     fn play_system_sound(&self, sound_type: crate::system_sound::SoundType) {
         if let Some(manager) = &self.system_sound {
+            manager.set_master_gain(1.0);
             manager.play(
                 sound_type,
                 system_sound_volume_from_mix(&self.boot.profile_config.audio_mix, sound_type),
@@ -8563,6 +8564,15 @@ fn fade_progress(started_at: Instant, now: Instant, duration: Duration) -> f32 {
         return 1.0;
     }
     now.saturating_duration_since(started_at).as_secs_f32() / duration.as_secs_f32()
+}
+
+fn result_exit_audio_gain(elapsed: Duration, fadeout: Duration) -> f32 {
+    let audio_fade = fadeout.min(RESULT_EXIT_AUDIO_FADE);
+    if audio_fade.is_zero() {
+        0.0
+    } else {
+        (1.0 - elapsed.as_secs_f32() / audio_fade.as_secs_f32()).clamp(0.0, 1.0)
+    }
 }
 
 fn should_route_settings_key_event(
@@ -14185,6 +14195,28 @@ mod tests {
             select_preview_fade_factor(SelectPreviewFade::FadingOut { started_at }, done),
             0.0
         );
+    }
+
+    #[test]
+    fn result_exit_audio_gain_uses_shorter_skin_fadeout() {
+        let fadeout = Duration::from_millis(600);
+
+        assert_eq!(result_exit_audio_gain(Duration::ZERO, fadeout), 1.0);
+        assert!((result_exit_audio_gain(Duration::from_millis(300), fadeout) - 0.5).abs() < 0.001);
+        assert_eq!(result_exit_audio_gain(fadeout, fadeout), 0.0);
+    }
+
+    #[test]
+    fn result_exit_audio_gain_caps_long_skin_fadeout() {
+        let fadeout = Duration::from_millis(3_000);
+
+        assert!((result_exit_audio_gain(Duration::from_millis(750), fadeout) - 0.5).abs() < 0.001);
+        assert_eq!(result_exit_audio_gain(RESULT_EXIT_AUDIO_FADE, fadeout), 0.0);
+    }
+
+    #[test]
+    fn result_exit_audio_gain_is_zero_for_zero_fadeout() {
+        assert_eq!(result_exit_audio_gain(Duration::ZERO, Duration::ZERO), 0.0);
     }
 
     #[test]

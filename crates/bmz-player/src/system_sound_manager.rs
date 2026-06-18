@@ -120,6 +120,15 @@ impl SystemSoundManager {
         }
     }
 
+    /// システム音 engine 全体のマスターゲインを更新する。
+    /// リザルト退出時の `ResultClose` など、複数のシステム音をまとめて
+    /// フェードアウトさせる用途で使う。
+    pub fn set_master_gain(&self, gain: f32) {
+        if let Ok(mut engine) = self.engine.lock() {
+            engine.set_master_gain(gain);
+        }
+    }
+
     /// 指定 SoundType を停止する。鳴っていなくても害は無い。
     pub fn stop(&self, sound_type: SoundType) {
         let Some(&id) = self.id_map.get(&sound_type) else {
@@ -280,6 +289,30 @@ mod tests {
         engine.lock().unwrap().render_stereo(1, &mut output);
 
         assert_eq!(output, vec![0.4, 0.4]);
+    }
+
+    #[test]
+    fn set_master_gain_scales_all_system_sound_output() {
+        use bmz_audio::sample::DecodedSample;
+
+        let engine: SharedAudioEngine = Arc::new(Mutex::new(AudioEngine::default()));
+        let mut id_map = HashMap::new();
+        id_map.insert(SoundType::ResultClose, SoundId(SYSTEM_SOUND_BASE));
+        {
+            let mut guard = engine.lock().unwrap();
+            guard.insert_sample(
+                SoundId(SYSTEM_SOUND_BASE),
+                DecodedSample { channels: 1, sample_rate: 48_000, frames: vec![1.0, 1.0] },
+            );
+        }
+        let manager = SystemSoundManager { engine: Arc::clone(&engine), id_map };
+
+        manager.set_master_gain(0.25);
+        manager.play(SoundType::ResultClose, 1.0);
+        let mut output = vec![0.0; 2];
+        engine.lock().unwrap().render_stereo(0, &mut output);
+
+        assert_eq!(output, vec![0.25, 0.25]);
     }
 
     #[test]
