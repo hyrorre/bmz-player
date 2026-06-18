@@ -33,6 +33,12 @@ pub fn play_skin_selection_for(skin: &SkinConfig, key_mode: KeyMode) -> PlaySkin
             options: &skin.play5_options,
             files: &skin.play5_files,
         },
+        KeyMode::K6 => PlaySkinSelection {
+            key_mode,
+            path: skin.play6.as_str(),
+            options: &skin.play6_options,
+            files: &skin.play6_files,
+        },
         KeyMode::K7 => PlaySkinSelection {
             key_mode,
             path: skin.play7.as_str(),
@@ -57,8 +63,8 @@ pub fn play_skin_selection_for(skin: &SkinConfig, key_mode: KeyMode) -> PlaySkin
             options: &skin.play9_options,
             files: &skin.play9_files,
         },
-        // Qwilight 系未実装の間は 7K プレイスキンへフォールバック。
-        KeyMode::K4 | KeyMode::K6 | KeyMode::K8 => PlaySkinSelection {
+        // Qwilight 系 4K/8K 未実装の間は 7K プレイスキンへフォールバック。
+        KeyMode::K4 | KeyMode::K8 => PlaySkinSelection {
             key_mode,
             path: skin.play7.as_str(),
             options: &skin.play7_options,
@@ -2047,6 +2053,7 @@ mod tests {
     fn play_skin_selection_for_returns_per_mode_fields() {
         let mut skin = SkinConfig {
             play5: "skin5.json".to_string(),
+            play6: "skin6.json".to_string(),
             play7: "skin7.json".to_string(),
             play9: "skin9.json".to_string(),
             play10: "skin10.json".to_string(),
@@ -2054,6 +2061,7 @@ mod tests {
             ..SkinConfig::default()
         };
         skin.play5_options.insert("a".to_string(), "x".to_string());
+        skin.play6_options.insert("f".to_string(), "q".to_string());
         skin.play7_options.insert("b".to_string(), "y".to_string());
         skin.play9_options.insert("e".to_string(), "p".to_string());
         skin.play10_files.insert("c".to_string(), "z.png".to_string());
@@ -2062,6 +2070,10 @@ mod tests {
         let s5 = play_skin_selection_for(&skin, KeyMode::K5);
         assert_eq!(s5.path, "skin5.json");
         assert!(s5.options.contains_key("a"));
+
+        let s6 = play_skin_selection_for(&skin, KeyMode::K6);
+        assert_eq!(s6.path, "skin6.json");
+        assert!(s6.options.contains_key("f"));
 
         let s7 = play_skin_selection_for(&skin, KeyMode::K7);
         assert_eq!(s7.path, "skin7.json");

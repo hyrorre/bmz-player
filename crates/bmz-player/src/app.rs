@@ -7705,12 +7705,14 @@ impl WinitApp {
         let size = window.inner_size();
         let info = DebugInfo { scene, width: size.width, height: size.height };
         let play5_path = self.boot.profile_config.skin.play5.clone();
+        let play6_path = self.boot.profile_config.skin.play6.clone();
         let play7_path = self.boot.profile_config.skin.play7.clone();
         let play9_path = self.boot.profile_config.skin.play9.clone();
         let play10_path = self.boot.profile_config.skin.play10.clone();
         let play14_path = self.boot.profile_config.skin.play14.clone();
         let course_result_path = self.boot.profile_config.skin.course_result.clone();
         let play5_defs = self.play_skin_defs_for_path(&play5_path);
+        let play6_defs = self.play_skin_defs_for_path(&play6_path);
         let play7_defs = self.play_skin_defs_for_path(&play7_path);
         let play9_defs = self.play_skin_defs_for_path(&play9_path);
         let play10_defs = self.play_skin_defs_for_path(&play10_path);
@@ -7720,6 +7722,7 @@ impl WinitApp {
             select: SceneSkinDefs::from_document(self.renderer.select_skin_document()),
             decide: SceneSkinDefs::from_document(self.renderer.decide_skin_document()),
             play5: play5_defs,
+            play6: play6_defs,
             play7: play7_defs,
             play9: play9_defs,
             play10: play10_defs,
@@ -7968,6 +7971,7 @@ impl WinitApp {
                     result: true,
                     course_result: true,
                     play5: true,
+                    play6: true,
                     play7: true,
                     play9: true,
                     play10: true,
@@ -9138,6 +9142,11 @@ fn load_skin_candidate(repo_root: &Path, path: &Path) -> Option<(i32, SkinCandid
     ))
 }
 
+const BMZ_SKIN_TYPE_PLAY_2KEYS: i32 = 21;
+const BMZ_SKIN_TYPE_PLAY_4KEYS: i32 = 22;
+const BMZ_SKIN_TYPE_PLAY_6KEYS: i32 = 23;
+const BMZ_SKIN_TYPE_PLAY_8KEYS: i32 = 24;
+
 fn push_skin_candidate(catalog: &mut SkinCatalog, skin_type: i32, candidate: SkinCandidate) {
     match skin_type {
         0 => catalog.play7.push(candidate),
@@ -9149,6 +9158,8 @@ fn push_skin_candidate(catalog: &mut SkinCatalog, skin_type: i32, candidate: Ski
         6 => catalog.decide.push(candidate),
         7 => catalog.result.push(candidate),
         15 => catalog.course_result.push(candidate),
+        BMZ_SKIN_TYPE_PLAY_6KEYS => catalog.play6.push(candidate),
+        BMZ_SKIN_TYPE_PLAY_2KEYS | BMZ_SKIN_TYPE_PLAY_4KEYS | BMZ_SKIN_TYPE_PLAY_8KEYS => {}
         _ => {}
     }
 }
@@ -9158,6 +9169,7 @@ fn sort_skin_catalog(catalog: &mut SkinCatalog) {
         &mut catalog.select,
         &mut catalog.decide,
         &mut catalog.play5,
+        &mut catalog.play6,
         &mut catalog.play7,
         &mut catalog.play9,
         &mut catalog.play10,
@@ -10363,6 +10375,7 @@ fn play_skin_key_mode_for_options(chart_key_mode: KeyMode, double_option: Double
 fn skin_reload_request_key_modes(request: SkinReloadRequest) -> impl Iterator<Item = KeyMode> {
     [
         (request.play5, KeyMode::K5),
+        (request.play6, KeyMode::K6),
         (request.play7, KeyMode::K7),
         (request.play9, KeyMode::K9),
         (request.play10, KeyMode::K10),
@@ -10375,11 +10388,12 @@ fn skin_reload_request_key_modes(request: SkinReloadRequest) -> impl Iterator<It
 fn skin_reload_request_includes_key_mode(request: SkinReloadRequest, key_mode: KeyMode) -> bool {
     match key_mode {
         KeyMode::K5 => request.play5,
+        KeyMode::K6 => request.play6,
         KeyMode::K7 => request.play7,
         KeyMode::K9 => request.play9,
         KeyMode::K10 => request.play10,
         KeyMode::K14 => request.play14,
-        KeyMode::K4 | KeyMode::K6 | KeyMode::K8 => request.play7,
+        KeyMode::K4 | KeyMode::K8 => request.play7,
     }
 }
 
@@ -12635,8 +12649,13 @@ mod tests {
     #[test]
     fn skin_catalog_loads_rm_skin_lua_headers_when_available() {
         let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let root = repo_root.join("data/skins/Rm-skin");
-        let cases = [("play5main.luaskin", 1), ("play7main.luaskin", 0), ("play9main.luaskin", 4)];
+        let root = repo_root.join("data/skins/Rmz-skin");
+        let cases = [
+            ("play5main.luaskin", 1),
+            ("play6main.luaskin", BMZ_SKIN_TYPE_PLAY_6KEYS),
+            ("play7main.luaskin", 0),
+            ("play9main.luaskin", 4),
+        ];
 
         for (file_name, expected_type) in cases {
             let path = root.join(file_name);
@@ -12648,7 +12667,7 @@ mod tests {
                 load_skin_candidate(&repo_root, &path).expect("load Rm-skin catalog candidate");
 
             assert_eq!(skin_type, expected_type, "{}", path.display());
-            assert_eq!(candidate.path, format!("data/skins/Rm-skin/{file_name}"));
+            assert_eq!(candidate.path, format!("data/skins/Rmz-skin/{file_name}"));
             assert!(candidate.name.contains("Rm-skin"), "candidate name: {}", candidate.name);
         }
     }
@@ -12670,6 +12689,14 @@ mod tests {
             SkinCandidate {
                 name: "Five".to_string(),
                 path: "data/skins/example/play5.luaskin".to_string(),
+            },
+        );
+        push_skin_candidate(
+            &mut catalog,
+            BMZ_SKIN_TYPE_PLAY_6KEYS,
+            SkinCandidate {
+                name: "Six".to_string(),
+                path: "data/skins/example/play6.luaskin".to_string(),
             },
         );
         push_skin_candidate(
@@ -12706,6 +12733,7 @@ mod tests {
         );
 
         assert_eq!(catalog.play5.len(), 1);
+        assert_eq!(catalog.play6.len(), 1);
         assert_eq!(catalog.play7.len(), 1);
         assert_eq!(catalog.play9.len(), 1);
         assert_eq!(catalog.play10.len(), 1);
@@ -12713,6 +12741,7 @@ mod tests {
         assert_eq!(catalog.result.len(), 0);
         assert_eq!(catalog.course_result.len(), 1);
         assert_eq!(catalog.play5[0].path, "data/skins/example/play5.luaskin");
+        assert_eq!(catalog.play6[0].path, "data/skins/example/play6.luaskin");
         assert_eq!(catalog.play7[0].path, "data/skins/example/play7.luaskin");
         assert_eq!(catalog.play9[0].path, "data/skins/example/play9.luaskin");
         assert_eq!(catalog.play10[0].path, "data/skins/example/play10.luaskin");

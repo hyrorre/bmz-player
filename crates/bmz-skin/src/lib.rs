@@ -2093,4 +2093,21 @@ mod tests {
             "Rm-skin end-of-note layers should all use timer 143: {eon_timers:?}"
         );
     }
+
+    #[test]
+    fn rmz_skin_play6_decodes_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/Rmz-skin/play6main.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let loaded = load_lua_skin(&skin_path, SkinKind::Play, &BTreeMap::new(), &BTreeMap::new())
+            .expect("Rmz-skin play6 should decode");
+        assert_eq!(loaded.document.skin_type, 23);
+        assert!(!loaded.document.destination.is_empty());
+        let note = loaded.document.note.expect("play6 note definition");
+        assert_eq!(note.note.len(), 6);
+        assert_eq!(note.dst.len(), 6);
+    }
 }

@@ -6389,6 +6389,15 @@ fn beatoraja_note_index(lane: Lane, key_mode: KeyMode) -> usize {
             Lane::Key7 => 6,
             _ => 7, // Scratch
         },
+        KeyMode::K6 => match lane {
+            Lane::Key1 => 0,
+            Lane::Key2 => 1,
+            Lane::Key3 => 2,
+            Lane::Key4 => 3,
+            Lane::Key5 => 4,
+            Lane::Key6 => 5,
+            _ => 5,
+        },
         KeyMode::K10 => match lane {
             Lane::Key1 => 0,
             Lane::Key2 => 1,
@@ -6433,8 +6442,8 @@ fn beatoraja_note_index(lane: Lane, key_mode: KeyMode) -> usize {
             Lane::Key9 => 8,
             _ => 8,
         },
-        // Qwilight 系は 7K スキンへフォールバック描画。
-        KeyMode::K4 | KeyMode::K6 | KeyMode::K8 => beatoraja_note_index(lane, KeyMode::K7),
+        // Qwilight 系 4K/8K は 7K スキンへフォールバック描画。
+        KeyMode::K4 | KeyMode::K8 => beatoraja_note_index(lane, KeyMode::K7),
     }
 }
 
@@ -22149,6 +22158,17 @@ mod tests {
         assert!(approx_eq(rect.3, 0.05));
 
         assert!(document.text_destination_rect_for_ref(999).is_none());
+    }
+
+    #[test]
+    fn beatoraja_note_index_maps_6k_lanes_without_scratch() {
+        assert_eq!(beatoraja_note_index(Lane::Key1, KeyMode::K6), 0);
+        assert_eq!(beatoraja_note_index(Lane::Key2, KeyMode::K6), 1);
+        assert_eq!(beatoraja_note_index(Lane::Key3, KeyMode::K6), 2);
+        assert_eq!(beatoraja_note_index(Lane::Key4, KeyMode::K6), 3);
+        assert_eq!(beatoraja_note_index(Lane::Key5, KeyMode::K6), 4);
+        assert_eq!(beatoraja_note_index(Lane::Key6, KeyMode::K6), 5);
+        assert_eq!(beatoraja_note_index(Lane::Scratch, KeyMode::K6), 5);
     }
 
     fn unique_test_dir(name: &str) -> PathBuf {
