@@ -23,7 +23,7 @@ use crate::config::app_config::{
 use crate::config::profile_config::{
     AssistOptionConfig, BgaExpandConfig, BgaModeConfig, BottomShiftableGaugeConfig,
     DoubleOptionConfig, FastSlowDisplayScope, GaugeAutoShiftConfig, GaugeTypeConfig,
-    HispeedModeConfig, HsFixConfig, IrCredentialStoreConfig, IrProviderConfig,
+    HispeedModeConfig, HsFixConfig, IrConfig, IrCredentialStoreConfig, IrProviderConfig,
     IrProviderRoleConfig, IrSendPolicyConfig, JudgeAlgorithmConfig, LaneEffectConfig,
     ProfileConfig, RandomOptionConfig, ReplaySlotRule, ScratchInputMode, SkinConfig,
     SkinHistoryEntryConfig, SkinOffsetConfig, TargetOptionConfig,
@@ -470,6 +470,7 @@ impl IrLoginUiState {
                         profile.ir.primary_provider = outcome.provider_key;
                         entry.role = IrProviderRoleConfig::Primary;
                     }
+                    sync_ir_provider_roles(&mut profile.ir);
                     return true;
                 }
                 false
@@ -2636,10 +2637,50 @@ fn build_profile_settings_panel(
                 });
 
                 egui::CollapsingHeader::new("IR").show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("主 provider");
-                        ui.text_edit_singleline(&mut profile.ir.primary_provider);
-                    });
+                    sync_ir_provider_roles(&mut profile.ir);
+                    let primary_options: Vec<_> = profile
+                        .ir
+                        .providers
+                        .iter()
+                        .filter_map(|provider| {
+                            crate::ir::provider_key::configured_provider_key(provider).map(
+                                |provider_key| {
+                                    (
+                                        provider_key.to_string(),
+                                        ir_primary_provider_label(provider, provider_key),
+                                    )
+                                },
+                            )
+                        })
+                        .collect();
+                    let mut selected_primary = profile.ir.primary_provider.clone();
+                    let selected_primary_text = primary_options
+                        .iter()
+                        .find(|(provider_key, _)| provider_key == &profile.ir.primary_provider)
+                        .map(|(_, label)| label.clone())
+                        .unwrap_or_else(|| {
+                            if profile.ir.primary_provider.is_empty() {
+                                "未設定".to_string()
+                            } else {
+                                profile.ir.primary_provider.clone()
+                            }
+                        });
+                    egui::ComboBox::from_label("Primary IR")
+                        .selected_text(selected_primary_text)
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut selected_primary, String::new(), "未設定");
+                            for (provider_key, label) in &primary_options {
+                                ui.selectable_value(
+                                    &mut selected_primary,
+                                    provider_key.clone(),
+                                    label,
+                                );
+                            }
+                        });
+                    if selected_primary != profile.ir.primary_provider {
+                        profile.ir.primary_provider = selected_primary;
+                        sync_ir_provider_roles(&mut profile.ir);
+                    }
                     ui.checkbox(
                         &mut profile.ir.prefetch_global_ranking_on_score_submit,
                         "スコア送信後に全体順位を取得",
@@ -2806,20 +2847,6 @@ fn build_profile_settings_panel(
                                             &mut provider.send_policy,
                                             value,
                                             ir_send_policy_label(value),
-                                        );
-                                    }
-                                });
-                            egui::ComboBox::from_label("役割")
-                                .selected_text(ir_provider_role_label(provider.role))
-                                .show_ui(ui, |ui| {
-                                    for value in [
-                                        IrProviderRoleConfig::SubmitOnly,
-                                        IrProviderRoleConfig::Primary,
-                                    ] {
-                                        ui.selectable_value(
-                                            &mut provider.role,
-                                            value,
-                                            ir_provider_role_label(value),
                                         );
                                     }
                                 });
@@ -3106,11 +3133,33 @@ fn ir_send_policy_label(value: IrSendPolicyConfig) -> &'static str {
     }
 }
 
-fn ir_provider_role_label(value: IrProviderRoleConfig) -> &'static str {
-    match value {
-        IrProviderRoleConfig::SubmitOnly => "SUBMIT ONLY",
-        IrProviderRoleConfig::Primary => "PRIMARY",
+fn ir_primary_provider_label(provider: &IrProviderConfig, provider_key: &str) -> String {
+    let account = provider.account_display_name.trim();
+    if account.is_empty() {
+        format!("{provider_key} ({})", provider.base_url)
+    } else {
+        format!("{provider_key} - {account} ({})", provider.base_url)
     }
+}
+
+fn sync_ir_provider_roles(ir_config: &mut IrConfig) -> bool {
+    let primary_provider = ir_config.primary_provider.trim();
+    let mut changed = false;
+    for provider in &mut ir_config.providers {
+        let next_role = if !primary_provider.is_empty()
+            && crate::ir::provider_key::configured_provider_key(provider)
+                .is_some_and(|provider_key| provider_key == primary_provider)
+        {
+            IrProviderRoleConfig::Primary
+        } else {
+            IrProviderRoleConfig::SubmitOnly
+        };
+        if provider.role != next_role {
+            provider.role = next_role;
+            changed = true;
+        }
+    }
+    changed
 }
 
 fn format_optional_timestamp(value: Option<i64>) -> String {
@@ -3827,6 +3876,49 @@ mod tests {
         let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
         let counter = TEST_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
         std::env::temp_dir().join(format!("{name}-{nanos}-{counter}"))
+    }
+
+    #[test]
+    fn sync_ir_provider_roles_keeps_only_primary_role() {
+        let mut ir_config = IrConfig {
+            primary_provider: "bmz-dev".to_string(),
+            providers: vec![
+                IrProviderConfig {
+                    provider: "bmz".to_string(),
+                    provider_key: "bmz".to_string(),
+                    base_url: "https://bmz-player.hyrorre.workers.dev".to_string(),
+                    enabled: true,
+                    account_display_name: String::new(),
+                    account_id: String::new(),
+                    send_policy: IrSendPolicyConfig::default(),
+                    role: IrProviderRoleConfig::Primary,
+                    last_login_at: None,
+                    last_success_at: None,
+                },
+                IrProviderConfig {
+                    provider: "bmz".to_string(),
+                    provider_key: "bmz-dev".to_string(),
+                    base_url: "http://localhost:3000".to_string(),
+                    enabled: true,
+                    account_display_name: String::new(),
+                    account_id: String::new(),
+                    send_policy: IrSendPolicyConfig::default(),
+                    role: IrProviderRoleConfig::SubmitOnly,
+                    last_login_at: None,
+                    last_success_at: None,
+                },
+            ],
+            ..IrConfig::default()
+        };
+
+        assert!(sync_ir_provider_roles(&mut ir_config));
+        assert_eq!(ir_config.providers[0].role, IrProviderRoleConfig::SubmitOnly);
+        assert_eq!(ir_config.providers[1].role, IrProviderRoleConfig::Primary);
+
+        ir_config.primary_provider.clear();
+        assert!(sync_ir_provider_roles(&mut ir_config));
+        assert_eq!(ir_config.providers[0].role, IrProviderRoleConfig::SubmitOnly);
+        assert_eq!(ir_config.providers[1].role, IrProviderRoleConfig::SubmitOnly);
     }
 
     #[test]
