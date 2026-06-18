@@ -230,7 +230,7 @@ primary_provider = "bmz-official"
 provider = "bmz-official"
 enabled = true
 account_display_name = "Hyrorre"
-send_policy = "update_score"
+send_policy = "always"
 role = "primary"
 
 [[ir.providers]]
@@ -361,7 +361,7 @@ pub enum IrSendPolicy {
 
 ```txt
 Always:
-  更新スコアなら常に送る
+  リザルト確定時に常に送る
 
 CompleteSong:
   最終ゲージが 0 より大きい場合だけ送る

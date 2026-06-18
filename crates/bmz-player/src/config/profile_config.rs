@@ -817,8 +817,8 @@ pub struct IrProviderConfig {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum IrSendPolicyConfig {
-    #[default]
     UpdateScore,
+    #[default]
     Always,
     CompleteSong,
 }
@@ -1171,6 +1171,23 @@ mod tests {
         assert_eq!(profile.audio_mix.system_se_volume, 50);
         assert!(profile.ir.prefetch_global_ranking_on_score_submit);
         assert!(profile.ir.prefetch_rival_ranking_on_score_submit);
+    }
+
+    #[test]
+    fn ir_provider_defaults_to_always_send_policy() {
+        let ir: IrConfig = toml::from_str(
+            r#"
+            primary_provider = "bmz-official"
+
+            [[providers]]
+            provider = "bmz-official"
+            enabled = true
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(IrSendPolicyConfig::default(), IrSendPolicyConfig::Always);
+        assert_eq!(ir.providers[0].send_policy, IrSendPolicyConfig::Always);
     }
 
     #[test]
