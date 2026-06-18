@@ -2297,10 +2297,6 @@ fn build_profile_settings_panel(
                         ui.text_edit_singleline(&mut profile.display_name);
                     });
                     ui.horizontal(|ui| {
-                        ui.label("プレイヤー名");
-                        ui.text_edit_singleline(&mut profile.player_name);
-                    });
-                    ui.horizontal(|ui| {
                         ui.label("ID");
                         ui.monospace(&profile.id);
                     });
@@ -2992,7 +2988,7 @@ fn build_profile_manager_section(
         ui.label("新規作成");
         ui.horizontal(|ui| {
             ui.label("ID");
-            ui.text_edit_singleline(&mut state.create_id);
+            profile_id_text_edit(ui, &mut state.create_id);
         });
         ui.horizontal(|ui| {
             ui.label("表示名");
@@ -3038,7 +3034,7 @@ fn build_profile_manager_section(
         });
         ui.horizontal(|ui| {
             ui.label("新ID");
-            ui.text_edit_singleline(&mut state.copy_target_id);
+            profile_id_text_edit(ui, &mut state.copy_target_id);
         });
         ui.horizontal(|ui| {
             ui.label("表示名");
@@ -3097,6 +3093,23 @@ fn profile_selection_label(
 fn trimmed_non_empty(value: &str) -> Option<&str> {
     let value = value.trim();
     (!value.is_empty()).then_some(value)
+}
+
+fn profile_id_text_edit(ui: &mut egui::Ui, value: &mut String) {
+    if ui.text_edit_singleline(value).changed() {
+        sanitize_profile_id_input(value);
+    }
+}
+
+fn sanitize_profile_id_input(value: &mut String) {
+    value.retain(is_profile_id_char);
+    if value.len() > 64 {
+        value.truncate(64);
+    }
+}
+
+fn is_profile_id_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || ch == '_' || ch == '-'
 }
 
 fn volume_slider(ui: &mut egui::Ui, value: &mut u32, label: &str) {
@@ -4100,6 +4113,24 @@ mod tests {
         let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
         let counter = TEST_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
         std::env::temp_dir().join(format!("{name}-{nanos}-{counter}"))
+    }
+
+    #[test]
+    fn sanitize_profile_id_input_keeps_portable_path_chars_only() {
+        let mut value = "abc_日本語-_.012/\\: xyz".to_string();
+
+        sanitize_profile_id_input(&mut value);
+
+        assert_eq!(value, "abc_-_012xyz");
+    }
+
+    #[test]
+    fn sanitize_profile_id_input_truncates_to_profile_id_limit() {
+        let mut value = "a".repeat(80);
+
+        sanitize_profile_id_input(&mut value);
+
+        assert_eq!(value.len(), 64);
     }
 
     #[test]
