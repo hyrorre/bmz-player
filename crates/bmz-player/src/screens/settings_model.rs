@@ -307,8 +307,16 @@ mod tests {
         assert!(matches!(
             &items[2],
             SelectItem::Folder { name, path, .. }
-                if name == "5K" && path == "bmz-settings:keys:5k"
+                if name == "4K" && path == "bmz-settings:keys:4k"
         ));
+        for key_mode in [KeyMode::K4, KeyMode::K6, KeyMode::K8, KeyMode::K9] {
+            let expected_path = format!("bmz-settings:keys:{}", key_mode.play_map_key());
+            assert!(items.iter().any(|item| matches!(
+                item,
+                SelectItem::Folder { name, path, .. }
+                    if name == key_mode.as_str() && path == &expected_path
+            )));
+        }
     }
 
     #[test]
@@ -386,6 +394,22 @@ mod tests {
         let items = load_settings_items("bmz-settings:keys:14k");
         assert_eq!(items.len(), 18 * KEY_BINDING_SLOTS.len() + 1);
         assert!(matches!(items.first(), Some(SelectItem::Back)));
+    }
+
+    #[test]
+    fn settings_keys_extension_modes_list_lanes() {
+        for (key_mode, rows_per_slot) in
+            [(KeyMode::K4, 4), (KeyMode::K6, 6), (KeyMode::K8, 9), (KeyMode::K9, 9)]
+        {
+            let items =
+                load_settings_items(&format!("bmz-settings:keys:{}", key_mode.play_map_key()));
+            assert_eq!(items.len(), rows_per_slot * KEY_BINDING_SLOTS.len() + 1);
+            assert!(matches!(items.first(), Some(SelectItem::Back)));
+            assert!(items.iter().any(|item| matches!(
+                item,
+                SelectItem::KeyBinding(row) if row.key_mode == key_mode
+            )));
+        }
     }
 
     #[test]

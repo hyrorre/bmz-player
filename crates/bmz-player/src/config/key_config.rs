@@ -11,7 +11,16 @@ use super::profile_config::{
 };
 
 /// 選曲画面のキー設定で編集対象とする KEY モード。
-pub const KEY_CONFIG_MODES: &[KeyMode] = &[KeyMode::K5, KeyMode::K7, KeyMode::K10, KeyMode::K14];
+pub const KEY_CONFIG_MODES: &[KeyMode] = &[
+    KeyMode::K4,
+    KeyMode::K5,
+    KeyMode::K6,
+    KeyMode::K7,
+    KeyMode::K8,
+    KeyMode::K9,
+    KeyMode::K10,
+    KeyMode::K14,
+];
 
 /// 1 レーンあたりの割り当てスロット。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
