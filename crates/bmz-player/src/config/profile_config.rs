@@ -795,6 +795,9 @@ pub enum IrCredentialStoreConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IrProviderConfig {
     pub provider: String,
+    /// IR サーバーが返す provider key。credentials / device key / queued job の識別に使う。
+    #[serde(default)]
+    pub provider_key: String,
     /// IR サーバーの base URL (例: `https://ir.example.com`)。
     #[serde(default)]
     pub base_url: String,

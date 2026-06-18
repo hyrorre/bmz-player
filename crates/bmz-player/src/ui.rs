@@ -316,6 +316,8 @@ struct IrLoginUiState {
 /// ログインタスクから UI スレッドへ返す結果。
 struct IrLoginOutcome {
     provider: String,
+    provider_key: String,
+    base_url: String,
     account_id: String,
     display_name: String,
 }
@@ -363,17 +365,18 @@ impl IrDeviceKeyUiState {
         &mut self,
         profile_root: std::path::PathBuf,
         provider: String,
+        provider_key: String,
         base_url: String,
     ) {
         let (sender, receiver) = std::sync::mpsc::channel();
         self.receiver = Some(receiver);
-        self.busy_provider = Some(provider.clone());
+        self.busy_provider = Some(provider_key.clone());
         self.message = None;
         tokio::spawn(async move {
             let outcome = async {
                 let credentials = crate::ir::sync::ensure_fresh_credentials(
                     &profile_root,
-                    &provider,
+                    &provider_key,
                     &base_url,
                     now_unix_seconds(),
                 )
@@ -384,7 +387,7 @@ impl IrDeviceKeyUiState {
                 )?;
                 let key = crate::ir::device_key::rotate_registered_device_key(
                     &profile_root,
-                    &provider,
+                    &provider_key,
                     &client,
                 )
                 .await?;
@@ -418,15 +421,16 @@ impl IrLoginUiState {
                 self.password.clear();
                 self.message =
                     Some((true, format!("{} としてログインしました", outcome.display_name)));
-                if let Some(entry) =
-                    profile.ir.providers.iter_mut().find(|entry| entry.provider == outcome.provider)
-                {
+                if let Some(entry) = profile.ir.providers.iter_mut().find(|entry| {
+                    entry.provider == outcome.provider && entry.base_url == outcome.base_url
+                }) {
                     entry.enabled = true;
+                    entry.provider_key = outcome.provider_key.clone();
                     entry.account_id = outcome.account_id;
                     entry.account_display_name = outcome.display_name;
                     entry.last_login_at = Some(now_unix_seconds());
                     if profile.ir.primary_provider.is_empty() {
-                        profile.ir.primary_provider = outcome.provider;
+                        profile.ir.primary_provider = outcome.provider_key;
                         entry.role = IrProviderRoleConfig::Primary;
                     }
                     return true;
@@ -457,12 +461,13 @@ impl IrLoginUiState {
             let outcome = async {
                 let client = crate::ir::bmz_official::BmzOfficialIrClient::anonymous(&base_url)?;
                 let tokens = client.login(&email, &password).await?;
+                let provider_key = tokens.provider_key.clone();
                 let display_name =
                     tokens.player.display_name.clone().unwrap_or_else(|| email.clone());
                 crate::ir::credentials::save_credentials(
                     &profile_root,
                     &crate::ir::credentials::IrStoredCredentials {
-                        provider: provider.clone(),
+                        provider: provider_key.clone(),
                         account_id: tokens.player.id.clone(),
                         display_name: display_name.clone(),
                         access_token: tokens.access_token,
@@ -470,7 +475,13 @@ impl IrLoginUiState {
                         expires_at: tokens.expires_at,
                     },
                 )?;
-                anyhow::Ok(IrLoginOutcome { provider, account_id: tokens.player.id, display_name })
+                anyhow::Ok(IrLoginOutcome {
+                    provider,
+                    provider_key,
+                    base_url,
+                    account_id: tokens.player.id,
+                    display_name,
+                })
             }
             .await
             .map_err(|error| format!("{error:#}"));
@@ -2627,6 +2638,15 @@ fn build_profile_settings_panel(
                                 }
                             });
                             ir_provider_text_row(ui, "Base URL", &mut provider.base_url);
+                            let provider_key =
+                                crate::ir::provider_key::configured_provider_key(provider)
+                                    .map(str::to_string);
+                            ui.horizontal(|ui| {
+                                ui.label("Key");
+                                ui.monospace(
+                                    provider_key.as_deref().unwrap_or("(ログイン後に取得)"),
+                                );
+                            });
                             ui.horizontal(|ui| {
                                 ui.label("メール");
                                 ui.text_edit_singleline(&mut ir_login.email);
@@ -2657,10 +2677,16 @@ fn build_profile_settings_panel(
                                     ui.spinner();
                                 }
                                 if ui.button("ログアウト").clicked() {
-                                    match crate::ir::credentials::delete_credentials(
-                                        profile_root,
-                                        &provider.provider,
-                                    ) {
+                                    let result = provider_key
+                                        .as_deref()
+                                        .map(|provider_key| {
+                                            crate::ir::credentials::delete_credentials(
+                                                profile_root,
+                                                provider_key,
+                                            )
+                                        })
+                                        .transpose();
+                                    match result {
                                         Ok(_) => {
                                             provider.enabled = false;
                                             ir_login.message =
@@ -2675,8 +2701,10 @@ fn build_profile_settings_panel(
                             });
                             ui.horizontal(|ui| {
                                 let busy = ir_device_key.busy_provider.as_deref()
-                                    == Some(provider.provider.as_str());
-                                let can_rotate = !busy && !provider.base_url.is_empty();
+                                    == provider_key.as_deref();
+                                let can_rotate = !busy
+                                    && !provider.base_url.is_empty()
+                                    && provider_key.is_some();
                                 if ui
                                     .add_enabled(can_rotate, egui::Button::new("署名鍵を再生成"))
                                     .clicked()
@@ -2684,6 +2712,7 @@ fn build_profile_settings_panel(
                                     ir_device_key.start_rotate(
                                         profile_root.to_path_buf(),
                                         provider.provider.clone(),
+                                        provider_key.clone().unwrap_or_default(),
                                         provider.base_url.clone(),
                                     );
                                 }
@@ -2752,6 +2781,7 @@ fn build_profile_settings_panel(
                     if ui.button("provider を追加").clicked() {
                         profile.ir.providers.push(IrProviderConfig {
                             provider: "bmz".to_string(),
+                            provider_key: String::new(),
                             base_url: String::new(),
                             enabled: false,
                             account_display_name: String::new(),

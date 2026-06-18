@@ -205,6 +205,7 @@ pub fn default_ranking_limit() -> u32 {
 /// `/api/v1/auth/login` / `/api/v1/auth/refresh` のレスポンス。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IrAuthTokens {
+    pub provider_key: String,
     pub access_token: String,
     pub refresh_token: String,
     #[serde(default)]

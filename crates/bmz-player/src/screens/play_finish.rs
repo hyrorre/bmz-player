@@ -245,8 +245,15 @@ fn enqueue_ir_jobs(
         return;
     };
     for provider in enabled {
+        let Some(provider_key) = crate::ir::provider_key::configured_provider_key(provider) else {
+            summary.ir_last_error = Some(format!(
+                "IR provider '{}' is missing provider_key; log in again",
+                provider.provider
+            ));
+            continue;
+        };
         match score_db.enqueue_ir_score_job(&NewIrScoreJob {
-            provider: provider.provider.clone(),
+            provider: provider_key.to_string(),
             account_id: provider.account_id.clone(),
             kind: crate::storage::score_db::IrJobKind::Score,
             local_score_id: stored.score_history_id,
@@ -258,7 +265,7 @@ fn enqueue_ir_jobs(
             Ok(_) => summary.ir_queued_jobs += 1,
             Err(error) => {
                 summary.ir_last_error = Some(error.to_string());
-                tracing::warn!(provider = provider.provider, %error, "failed to enqueue IR score job");
+                tracing::warn!(provider = provider.provider, provider_key, %error, "failed to enqueue IR score job");
             }
         }
     }
@@ -569,6 +576,7 @@ mod tests {
             primary_provider: "bmz-official".to_string(),
             providers: vec![IrProviderConfig {
                 provider: "bmz-official".to_string(),
+                provider_key: "bmz-official".to_string(),
                 base_url: String::new(),
                 enabled: true,
                 account_display_name: "Player".to_string(),

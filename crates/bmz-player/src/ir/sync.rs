@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
+use tokio::sync::Mutex;
 
 use crate::config::profile_config::{IrConfig, IrProviderConfig};
 use crate::storage::score_db::{IrScoreJobStatus, NewIrScoreSubmission, ScoreDatabase};
@@ -8,6 +9,8 @@ use crate::storage::score_db::{IrScoreJobStatus, NewIrScoreSubmission, ScoreData
 use super::bmz_official::BmzOfficialIrClient;
 use super::credentials::{IrStoredCredentials, load_credentials, save_credentials};
 use super::types::{IrScoreSubmission, IrSubmitOptions};
+
+static CREDENTIAL_REFRESH_LOCK: Mutex<()> = Mutex::const_new(());
 
 #[derive(Debug, Default, Clone)]
 pub struct IrSyncReport {
@@ -19,12 +22,13 @@ pub struct IrSyncReport {
 /// 保存済み credentials を読み、失効が近ければ refresh して保存し直す。
 pub async fn ensure_fresh_credentials(
     profile_root: &Path,
-    provider: &str,
+    provider_key: &str,
     base_url: &str,
     now: i64,
 ) -> Result<IrStoredCredentials> {
-    let Some(credentials) = load_credentials(profile_root, provider)? else {
-        bail!("not signed in to IR provider '{provider}'; run `bmz ir login` first");
+    let _guard = CREDENTIAL_REFRESH_LOCK.lock().await;
+    let Some(credentials) = load_credentials(profile_root, provider_key)? else {
+        bail!("not signed in to IR provider '{provider_key}'; run `bmz ir login` first");
     };
     if !credentials.needs_refresh(now) {
         return Ok(credentials);
@@ -33,9 +37,9 @@ pub async fn ensure_fresh_credentials(
     let tokens = client
         .refresh(&credentials.refresh_token)
         .await
-        .with_context(|| format!("failed to refresh IR token for '{provider}'"))?;
+        .with_context(|| format!("failed to refresh IR token for '{provider_key}'"))?;
     let refreshed = IrStoredCredentials {
-        provider: credentials.provider,
+        provider: tokens.provider_key,
         account_id: tokens.player.id,
         display_name: tokens.player.display_name.unwrap_or(credentials.display_name),
         access_token: tokens.access_token,
@@ -168,9 +172,10 @@ async fn upload_replay_if_declared(
     let result = async {
         let bytes =
             std::fs::read(profile_root.join(&replay_path)).context("failed to read replay file")?;
+        let provider_key = crate::ir::provider_key::configured_provider_key(provider)
+            .context("IR provider key is not set; log in again")?;
         let credentials =
-            ensure_fresh_credentials(profile_root, &provider.provider, &provider.base_url, now)
-                .await?;
+            ensure_fresh_credentials(profile_root, provider_key, &provider.base_url, now).await?;
         let client = BmzOfficialIrClient::new(&provider.base_url, credentials.access_token)?;
         let target = client.replay_upload_url(remote_score_id).await?;
         client.upload_replay(&target.upload_url, bytes).await?;
@@ -188,11 +193,11 @@ async fn upload_replay_if_declared(
     }
 }
 
-fn provider_config<'a>(ir_config: &'a IrConfig, provider: &str) -> Option<&'a IrProviderConfig> {
-    ir_config
-        .providers
-        .iter()
-        .find(|entry| entry.provider == provider && entry.enabled && !entry.base_url.is_empty())
+fn provider_config<'a>(
+    ir_config: &'a IrConfig,
+    provider_key: &str,
+) -> Option<&'a IrProviderConfig> {
+    crate::ir::provider_key::provider_config_for_key(ir_config, provider_key)
 }
 
 async fn submit_job_payload(
@@ -203,8 +208,10 @@ async fn submit_job_payload(
 ) -> Result<String> {
     let mut payload: IrScoreSubmission =
         serde_json::from_str(payload_json).context("failed to parse stored IR payload")?;
+    let provider_key = crate::ir::provider_key::configured_provider_key(provider)
+        .context("IR provider key is not set; log in again")?;
     let credentials =
-        ensure_fresh_credentials(profile_root, &provider.provider, &provider.base_url, now).await?;
+        ensure_fresh_credentials(profile_root, provider_key, &provider.base_url, now).await?;
     let client = BmzOfficialIrClient::new(&provider.base_url, credentials.access_token)?;
     attach_evidence(profile_root, provider, &client, &mut payload).await;
     let options = IrSubmitOptions { ranking_scopes: Vec::new(), ranking_limit: 0 };
@@ -222,16 +229,15 @@ async fn submit_course_job_payload(
 ) -> Result<String> {
     let mut payload: serde_json::Value =
         serde_json::from_str(payload_json).context("failed to parse stored IR course payload")?;
+    let provider_key = crate::ir::provider_key::configured_provider_key(provider)
+        .context("IR provider key is not set; log in again")?;
     let credentials =
-        ensure_fresh_credentials(profile_root, &provider.provider, &provider.base_url, now).await?;
+        ensure_fresh_credentials(profile_root, provider_key, &provider.base_url, now).await?;
     let client = BmzOfficialIrClient::new(&provider.base_url, credentials.access_token)?;
     let evidence = async {
-        let key = super::device_key::ensure_registered_device_key(
-            profile_root,
-            &provider.provider,
-            &client,
-        )
-        .await?;
+        let key =
+            super::device_key::ensure_registered_device_key(profile_root, provider_key, &client)
+                .await?;
         super::device_key::build_evidence_for_value(&key, &payload, "bmz-course-score-evidence-v1")
     }
     .await;
@@ -260,12 +266,11 @@ async fn attach_evidence(
     payload: &mut IrScoreSubmission,
 ) {
     let result = async {
-        let key = super::device_key::ensure_registered_device_key(
-            profile_root,
-            &provider.provider,
-            client,
-        )
-        .await?;
+        let provider_key = crate::ir::provider_key::configured_provider_key(provider)
+            .context("IR provider key is not set; log in again")?;
+        let key =
+            super::device_key::ensure_registered_device_key(profile_root, provider_key, client)
+                .await?;
         super::device_key::build_evidence(&key, payload)
     }
     .await;

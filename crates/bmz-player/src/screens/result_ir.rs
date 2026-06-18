@@ -186,13 +186,15 @@ pub fn spawn_result_ir_task(
     double_option: DoubleOptionScoreBucket,
     rule_mode: RuleMode,
 ) -> Option<ResultIrState> {
-    let provider = ir_config
-        .providers
-        .iter()
-        .find(|provider| provider.enabled && !provider.base_url.is_empty())?;
+    let provider = ir_config.providers.iter().find(|provider| {
+        provider.enabled
+            && !provider.base_url.is_empty()
+            && crate::ir::provider_key::configured_provider_key(provider).is_some()
+    })?;
+    let provider_key = crate::ir::provider_key::configured_provider_key(provider)?;
     let query = ResultIrQuery {
         profile_root,
-        provider: provider.provider.clone(),
+        provider: provider_key.to_string(),
         base_url: provider.base_url.clone(),
         chart_sha256_hex,
         ln_policy,

@@ -4,6 +4,7 @@ import { db, schema } from 'hub:db'
 import { normalizeEmail, readPassword } from '../../../utils/auth_input'
 import { checkAuthRateLimit } from '../../../utils/auth_rate_limit'
 import { createAuthTokens } from '../../../utils/auth_tokens'
+import { irProviderKeyForEvent } from '../../../utils/provider_key'
 
 interface LoginBody {
   client_type?: 'web' | 'desktop'
@@ -46,6 +47,7 @@ export default defineEventHandler(async (event) => {
   })
 
   return {
+    provider_key: irProviderKeyForEvent(event),
     access_token: tokens.accessToken,
     refresh_token: tokens.refreshToken,
     expires_at: tokens.accessExpiresAt,

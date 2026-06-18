@@ -1,5 +1,6 @@
 import { readBody, createError } from 'h3'
 import { rotateRefreshToken } from '../../../utils/auth_tokens'
+import { irProviderKeyForEvent } from '../../../utils/provider_key'
 
 interface RefreshBody {
   refresh_token?: string
@@ -20,6 +21,7 @@ export default defineEventHandler(async (event) => {
   }
 
   return {
+    provider_key: irProviderKeyForEvent(event),
     access_token: refreshed.tokens.accessToken,
     refresh_token: refreshed.tokens.refreshToken,
     expires_at: refreshed.tokens.accessExpiresAt,

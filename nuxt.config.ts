@@ -19,6 +19,9 @@ export default defineNuxtConfig({
     blob: true,
   },
   runtimeConfig: {
+    ir: {
+      providerKey: process.env.NUXT_IR_PROVIDER_KEY || '',
+    },
     session: {
       name: 'bmz-session',
       password: process.env.NUXT_SESSION_PASSWORD || '',

@@ -116,4 +116,24 @@ mod tests {
         assert!(credentials.needs_refresh(940));
         assert!(credentials.needs_refresh(1_001));
     }
+
+    #[test]
+    fn credentials_are_loaded_by_exact_provider_key_only() {
+        let root = temp_root("exact-provider-key");
+        let credentials = IrStoredCredentials {
+            provider: "bmz".to_string(),
+            account_id: "prod".to_string(),
+            display_name: "Prod".to_string(),
+            access_token: "access".to_string(),
+            refresh_token: "refresh".to_string(),
+            expires_at: Some(1_700_000_000),
+        };
+
+        save_credentials(&root, &credentials).unwrap();
+
+        assert_eq!(load_credentials(&root, "bmz-dev").unwrap(), None);
+        assert_eq!(load_credentials(&root, "bmz").unwrap(), Some(credentials));
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

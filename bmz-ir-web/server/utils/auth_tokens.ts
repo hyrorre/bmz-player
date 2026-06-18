@@ -1,12 +1,13 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { and, eq, gt, isNull, or } from 'drizzle-orm'
 import { db, schema } from 'hub:db'
+import { isRecentRotatedRefreshRetry, type SessionRevocationReason } from './auth_token_policy'
 
 const ACCESS_TOKEN_TTL_SECONDS = 60 * 60
 const REFRESH_TOKEN_TTL_SECONDS = 60 * 60 * 24 * 30
 type SessionKind = 'access' | 'refresh'
 type ClientType = 'web' | 'desktop'
-type RevocationReason = 'logout' | 'rotated' | 'password_changed' | 'reuse_detected' | 'admin'
+type RevocationReason = SessionRevocationReason
 
 export interface AuthTokenPair {
   accessToken: string
@@ -108,6 +109,7 @@ export async function rotateRefreshToken(token: string, now = Date.now()) {
       clientType: true,
       expiresAt: true,
       revokedAt: true,
+      revokedReason: true,
     },
     where: and(
       eq(schema.sessions.tokenHash, hashToken(token)),
@@ -120,6 +122,9 @@ export async function rotateRefreshToken(token: string, now = Date.now()) {
   }
 
   if (session.revokedAt) {
+    if (isRecentRotatedRefreshRetry(session.revokedAt, session.revokedReason, now)) {
+      return null
+    }
     await revokeUserSessions(session.userId, 'reuse_detected', now)
     return { reuseDetected: true as const }
   }

@@ -5416,9 +5416,17 @@ impl WinitApp {
             crate::ln_policy::ChartLnProfile::default(),
         );
         for provider in enabled {
+            let Some(provider_key) = crate::ir::provider_key::configured_provider_key(&provider)
+            else {
+                tracing::warn!(
+                    provider = provider.provider,
+                    "skipping IR course job because provider_key is missing; log in again"
+                );
+                continue;
+            };
             if let Err(error) =
                 self.boot.score_db.enqueue_ir_score_job(&crate::storage::score_db::NewIrScoreJob {
-                    provider: provider.provider.clone(),
+                    provider: provider_key.to_string(),
                     account_id: provider.account_id.clone(),
                     kind: crate::storage::score_db::IrJobKind::Course,
                     local_score_id: course_score_id,
@@ -5428,7 +5436,7 @@ impl WinitApp {
                     now: played_at,
                 })
             {
-                tracing::warn!(provider = provider.provider, %error, "failed to enqueue IR course job");
+                tracing::warn!(provider = provider.provider, provider_key, %error, "failed to enqueue IR course job");
             }
         }
     }

@@ -72,25 +72,29 @@ async fn device_key(
     use crate::ir::device_key::{load_or_create_device_key, rotate_registered_device_key};
 
     let provider = primary_provider(profile)?;
+    let provider_key = crate::ir::provider_key::configured_provider_key(provider)
+        .context("IR provider key is not set; log in again")?;
     let root = profile_paths.root_dir.as_path();
-    let key = load_or_create_device_key(root, &provider.provider)?;
+    let key = load_or_create_device_key(root, provider_key)?;
 
     if !rotate {
         println!("provider: {}", provider.provider);
+        println!("endpoint key: {provider_key}");
         println!("public key: {}", key.public_key);
         println!("server key id: {}", key.key_id.as_deref().unwrap_or("(not registered)"));
         return Ok(());
     }
 
     let credentials =
-        ensure_fresh_credentials(root, &provider.provider, &provider.base_url, now_unix_seconds())
+        ensure_fresh_credentials(root, provider_key, &provider.base_url, now_unix_seconds())
             .await?;
     let client = BmzOfficialIrClient::new(&provider.base_url, credentials.access_token)?;
 
-    let new_key = rotate_registered_device_key(root, &provider.provider, &client).await?;
+    let new_key = rotate_registered_device_key(root, provider_key, &client).await?;
     let key_id = new_key.key_id.as_deref().unwrap_or("(not registered)");
 
     println!("rotated device key for {}", provider.provider);
+    println!("endpoint key: {provider_key}");
     println!("public key: {}", new_key.public_key);
     println!("server key id: {key_id}");
     Ok(())
@@ -102,9 +106,12 @@ async fn rivals(
     action: Option<RivalAction>,
 ) -> Result<()> {
     let provider = primary_provider(profile)?.clone();
+    let provider_key = crate::ir::provider_key::configured_provider_key(&provider)
+        .context("IR provider key is not set; log in again")?
+        .to_string();
     let credentials = ensure_fresh_credentials(
         profile_paths.root_dir.as_path(),
-        &provider.provider,
+        &provider_key,
         &provider.base_url,
         now_unix_seconds(),
     )
@@ -124,7 +131,7 @@ async fn rivals(
     }
 
     let response = client.get_rivals().await?;
-    if sync_ir_rivals_into_profile(profile, &provider.provider, &response.rivals) {
+    if sync_ir_rivals_into_profile(profile, &provider_key, &response.rivals) {
         profile.updated_at = now_unix_seconds();
         save_profile_config(&profile_paths.profile_toml, profile)?;
     }
@@ -222,11 +229,15 @@ async fn login(
     password: Option<String>,
     base_url: Option<String>,
 ) -> Result<()> {
+    let requested_base_url = base_url.clone();
     let existing_base_url = profile
         .ir
         .providers
         .iter()
-        .find(|entry| entry.provider == provider)
+        .find(|entry| {
+            entry.provider == provider
+                && requested_base_url.as_ref().is_none_or(|url| entry.base_url == *url)
+        })
         .map(|entry| entry.base_url.clone())
         .filter(|url| !url.is_empty());
     let Some(base_url) = base_url.or(existing_base_url) else {
@@ -240,13 +251,14 @@ async fn login(
 
     let client = BmzOfficialIrClient::anonymous(&base_url)?;
     let tokens = client.login(email, &password).await?;
+    let provider_key = tokens.provider_key.clone();
     let display_name = tokens.player.display_name.clone().unwrap_or_default();
     let now = now_unix_seconds();
 
     save_credentials(
         profile_paths.root_dir.as_path(),
         &IrStoredCredentials {
-            provider: provider.to_string(),
+            provider: provider_key.clone(),
             account_id: tokens.player.id.clone(),
             display_name: display_name.clone(),
             access_token: tokens.access_token,
@@ -255,11 +267,24 @@ async fn login(
         },
     )?;
 
-    let entry = match profile.ir.providers.iter_mut().find(|entry| entry.provider == provider) {
-        Some(entry) => entry,
+    let entry_index = profile
+        .ir
+        .providers
+        .iter()
+        .position(|entry| entry.provider == provider && entry.base_url == base_url)
+        .or_else(|| {
+            profile
+                .ir
+                .providers
+                .iter()
+                .position(|entry| entry.provider == provider && entry.base_url.is_empty())
+        });
+    let entry = match entry_index {
+        Some(index) => &mut profile.ir.providers[index],
         None => {
             profile.ir.providers.push(IrProviderConfig {
                 provider: provider.to_string(),
+                provider_key: String::new(),
                 base_url: String::new(),
                 enabled: false,
                 account_display_name: String::new(),
@@ -273,12 +298,13 @@ async fn login(
         }
     };
     entry.base_url = base_url;
+    entry.provider_key = provider_key.clone();
     entry.enabled = true;
     entry.account_id = tokens.player.id;
     entry.account_display_name = display_name.clone();
     entry.last_login_at = Some(now);
     if profile.ir.primary_provider.is_empty() {
-        profile.ir.primary_provider = provider.to_string();
+        profile.ir.primary_provider = provider_key;
         entry.role = IrProviderRoleConfig::Primary;
     }
     profile.updated_at = now;
@@ -296,9 +322,20 @@ async fn logout(
     profile: &mut ProfileConfig,
     provider: &str,
 ) -> Result<()> {
-    let credentials = load_credentials(profile_paths.root_dir.as_path(), provider)?;
+    let entry_index = profile.ir.providers.iter().position(|entry| {
+        crate::ir::provider_key::configured_provider_key(entry) == Some(provider)
+            || entry.provider == provider
+    });
+    let entry = entry_index.and_then(|index| profile.ir.providers.get(index));
+    let credentials = match entry {
+        Some(entry) => crate::ir::provider_key::configured_provider_key(entry)
+            .map(|provider_key| load_credentials(profile_paths.root_dir.as_path(), provider_key))
+            .transpose()?
+            .flatten(),
+        None => None,
+    };
     if let Some(credentials) = &credentials
-        && let Some(entry) = profile.ir.providers.iter().find(|entry| entry.provider == provider)
+        && let Some(entry) = entry
     {
         let client = BmzOfficialIrClient::new(&entry.base_url, credentials.access_token.clone())?;
         if let Err(error) = client.logout(&credentials.refresh_token).await {
@@ -306,8 +343,16 @@ async fn logout(
         }
     }
 
-    let removed = delete_credentials(profile_paths.root_dir.as_path(), provider)?;
-    if let Some(entry) = profile.ir.providers.iter_mut().find(|entry| entry.provider == provider) {
+    let removed = match entry {
+        Some(entry) => crate::ir::provider_key::configured_provider_key(entry)
+            .map(|provider_key| delete_credentials(profile_paths.root_dir.as_path(), provider_key))
+            .transpose()?
+            .unwrap_or(false),
+        None => false,
+    };
+    if let Some(index) = entry_index
+        && let Some(entry) = profile.ir.providers.get_mut(index)
+    {
         entry.enabled = false;
         profile.updated_at = now_unix_seconds();
         save_profile_config(&profile_paths.profile_toml, profile)?;
@@ -329,15 +374,26 @@ async fn status(profile_paths: &ProfilePaths, profile: &ProfileConfig) -> Result
     }
     println!("primary provider: {}", profile.ir.primary_provider);
     for entry in &profile.ir.providers {
-        println!("- {} (enabled: {}, base_url: {})", entry.provider, entry.enabled, entry.base_url);
-        match load_credentials(profile_paths.root_dir.as_path(), &entry.provider)? {
+        let provider_key = crate::ir::provider_key::configured_provider_key(entry);
+        println!(
+            "- {} (key: {}, enabled: {}, base_url: {})",
+            entry.provider,
+            provider_key.unwrap_or("(not signed in)"),
+            entry.enabled,
+            entry.base_url
+        );
+        match provider_key
+            .map(|provider_key| load_credentials(profile_paths.root_dir.as_path(), provider_key))
+            .transpose()?
+            .flatten()
+        {
             Some(credentials) => {
                 println!("  account: {} ({})", credentials.display_name, credentials.account_id);
                 if entry.enabled && !entry.base_url.is_empty() {
                     let now = now_unix_seconds();
                     match ensure_fresh_credentials(
                         profile_paths.root_dir.as_path(),
-                        &entry.provider,
+                        provider_key.unwrap_or(""),
                         &entry.base_url,
                         now,
                     )
@@ -376,13 +432,14 @@ async fn ranking(
     let scope = parse_scope(scope)?;
     let now = now_unix_seconds();
     let mut client = BmzOfficialIrClient::anonymous(&provider.base_url)?;
-    if let Ok(credentials) = ensure_fresh_credentials(
-        profile_paths.root_dir.as_path(),
-        &provider.provider,
-        &provider.base_url,
-        now,
-    )
-    .await
+    if let Some(provider_key) = crate::ir::provider_key::configured_provider_key(provider)
+        && let Ok(credentials) = ensure_fresh_credentials(
+            profile_paths.root_dir.as_path(),
+            provider_key,
+            &provider.base_url,
+            now,
+        )
+        .await
     {
         client.set_access_token(credentials.access_token);
     }
@@ -451,8 +508,11 @@ fn primary_provider(profile: &ProfileConfig) -> Result<&IrProviderConfig> {
             .ir
             .providers
             .iter()
-            .find(|entry| entry.enabled)
-            .map(|entry| entry.provider.clone())
+            .find(|entry| {
+                entry.enabled && crate::ir::provider_key::configured_provider_key(entry).is_some()
+            })
+            .and_then(crate::ir::provider_key::configured_provider_key)
+            .map(str::to_string)
             .unwrap_or_default()
     } else {
         profile.ir.primary_provider.clone()
@@ -461,7 +521,11 @@ fn primary_provider(profile: &ProfileConfig) -> Result<&IrProviderConfig> {
         .ir
         .providers
         .iter()
-        .find(|entry| entry.provider == provider_name && !entry.base_url.is_empty())
+        .find(|entry| {
+            !entry.base_url.is_empty()
+                && crate::ir::provider_key::configured_provider_key(entry)
+                    .is_some_and(|provider_key| provider_key == provider_name)
+        })
         .context("no IR provider configured; run `bmz ir login` first")
 }
 

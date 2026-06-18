@@ -221,8 +221,17 @@ fn enabled_provider(ir_config: &IrConfig) -> Option<(String, String)> {
     ir_config
         .providers
         .iter()
-        .find(|provider| provider.enabled && !provider.base_url.is_empty())
-        .map(|provider| (provider.provider.clone(), provider.base_url.clone()))
+        .find(|provider| {
+            provider.enabled
+                && !provider.base_url.is_empty()
+                && crate::ir::provider_key::configured_provider_key(provider).is_some()
+        })
+        .map(|provider| {
+            (
+                crate::ir::provider_key::configured_provider_key(provider).unwrap().to_string(),
+                provider.base_url.clone(),
+            )
+        })
 }
 
 fn spawn_fetch(
@@ -287,6 +296,7 @@ mod tests {
             primary_provider: "bmz-official".to_string(),
             providers: vec![IrProviderConfig {
                 provider: "bmz-official".to_string(),
+                provider_key: "bmz-official".to_string(),
                 base_url: "http://localhost:0".to_string(),
                 enabled,
                 account_display_name: String::new(),
