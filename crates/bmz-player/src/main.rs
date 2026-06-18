@@ -19,5 +19,6 @@ async fn main() -> Result<()> {
         Command::Songs(cmd) => bmz_player::songs_cmd::run_songs_command(cmd),
         Command::Course(cmd) => bmz_player::course_cmd::run_course_command(cmd),
         Command::Ir(cmd) => bmz_player::ir_cmd::run_ir_command(cmd).await,
+        Command::Profile(cmd) => bmz_player::profile_cmd::run_profile_command(cmd),
     }
 }

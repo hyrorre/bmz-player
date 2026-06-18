@@ -25,6 +25,7 @@ pub enum Command {
     Songs(SongsCommand),
     Course(CourseCommand),
     Ir(IrCommand),
+    Profile(ProfileCommand),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,6 +84,15 @@ pub enum CourseCommand {
     Attempt {
         score_id: i64,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProfileCommand {
+    List,
+    Current,
+    Use { id: String },
+    Create { id: String, display_name: Option<String>, activate: bool },
+    Copy { source_id: String, target_id: String, display_name: Option<String>, activate: bool },
 }
 
 pub fn parse_command<I, S>(args: I) -> Result<Command>
@@ -174,9 +184,83 @@ where
                 None => bail!("course requires a subcommand: import, list, history, attempt"),
             }
         }
+        Some("profile") => parse_profile_command(&args[1..]),
         Some("ir") => parse_ir_command(&args[1..]),
         _ => Ok(Command::Run(AppOptions::parse_args(args)?)),
     }
+}
+
+fn parse_profile_command(rest: &[String]) -> Result<Command> {
+    match rest.first().map(|s| s.as_str()) {
+        Some("list") => Ok(Command::Profile(ProfileCommand::List)),
+        Some("current") => Ok(Command::Profile(ProfileCommand::Current)),
+        Some("use") => {
+            let id = rest
+                .get(1)
+                .filter(|value| !value.starts_with('-'))
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("profile use requires a PROFILE_ID"))?;
+            if rest.len() > 2 {
+                bail!("unknown flag for profile use: {}", rest[2]);
+            }
+            Ok(Command::Profile(ProfileCommand::Use { id }))
+        }
+        Some("create") => {
+            let id = rest
+                .get(1)
+                .filter(|value| !value.starts_with('-'))
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("profile create requires a PROFILE_ID"))?;
+            let (display_name, activate) = parse_profile_name_and_activate_flags(&rest[2..])?;
+            Ok(Command::Profile(ProfileCommand::Create { id, display_name, activate }))
+        }
+        Some("copy") => {
+            let source_id = rest
+                .get(1)
+                .filter(|value| !value.starts_with('-'))
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("profile copy requires a SOURCE_PROFILE_ID"))?;
+            let target_id = rest
+                .get(2)
+                .filter(|value| !value.starts_with('-'))
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("profile copy requires a TARGET_PROFILE_ID"))?;
+            let (display_name, activate) = parse_profile_name_and_activate_flags(&rest[3..])?;
+            Ok(Command::Profile(ProfileCommand::Copy {
+                source_id,
+                target_id,
+                display_name,
+                activate,
+            }))
+        }
+        Some(sub) => {
+            bail!("unknown profile subcommand: {sub}. Use: list, current, use, create, copy")
+        }
+        None => bail!("profile requires a subcommand: list, current, use, create, copy"),
+    }
+}
+
+fn parse_profile_name_and_activate_flags(flags: &[String]) -> Result<(Option<String>, bool)> {
+    let mut display_name = None;
+    let mut activate = false;
+    let mut iter = flags.iter();
+    while let Some(flag) = iter.next() {
+        match flag.as_str() {
+            "--display-name" | "--name" => {
+                let value = iter
+                    .next()
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("{flag} requires a value"))?;
+                if value.trim().is_empty() {
+                    bail!("{flag} requires a non-empty value");
+                }
+                display_name = Some(value);
+            }
+            "--activate" => activate = true,
+            other => bail!("unknown profile flag: {other}"),
+        }
+    }
+    Ok((display_name, activate))
 }
 
 fn parse_ir_command(rest: &[String]) -> Result<Command> {
@@ -473,7 +557,7 @@ where
 }
 
 pub fn app_help_text() -> &'static str {
-    "bmz-player\n\nUsage:\n  bmz-player [OPTIONS] [PATH]\n  bmz-player table <SUBCOMMAND>\n  bmz-player songs <SUBCOMMAND>\n  bmz-player course <SUBCOMMAND>\n\nOptions:\n  [PATH]                                 Start the chart at PATH (beatoraja-style alias)\n  -p | --practice                        Start boot chart in practice mode (CLI only)\n  --practice-start-ms <MS>               Initial practice section start (milliseconds)\n  --practice-end-ms <MS>                 Initial practice section end (milliseconds)\n  -a                                     Enable autoplay for the boot chart (alias of --autoplay-on-start)\n  -r1 | -r2 | -r3 | -r4                  Start replay slot 1..4 for the boot chart\n  --boot-play-sample                     Start the bundled sample chart on boot\n  --boot-result-sample                   Start directly on a synthetic result screen (debug)\n  --autoplay-on-start                    Enable autoplay for started charts\n  --boot-replay <1..4>                   Start replay slot N for the boot chart\n  --boot-course <ID>                     Start course ID fresh on boot\n  --boot-course-replay <ID>              Replay the latest attempt of course ID on boot\n  --smoke-exit-after-frames <N>          Exit after N rendered frames, clamped to 1 or more\n  --smoke-exit-after-result-frames <N>   Exit after N rendered result frames, clamped to 1 or more\n  --smoke-exit-on-result                 Exit when the app reaches the result screen\n  --smoke-screenshot <PATH>              Save a PNG screenshot on smoke exit (defaults to 3 frames)\n  --renderer <backend>                   wgpu renderer backend (vulkan, metal, dx12, gl, auto)\n  -h, --help                             Print this help\n\nTable subcommands:\n  table add <URL>       Add a difficulty table source and fetch it\n  table list            List all stored difficulty tables\n  table fetch [URL]     Fetch/update configured tables, or a single URL\n\nSongs subcommands:\n  songs add <PATH> [--no-recursive] [--disabled]   Add a song root directory\n  songs list                                        List configured song roots\n  songs load [PATH|NAME]                            Scan song roots (incremental)\n  songs reload [PATH|NAME]                          Force rescan song roots\n\nCourse subcommands:\n  course import <PATH>             Import beatoraja course JSON from a file or directory\n  course list                      List stored courses\n  course history <ID> [--limit N]  Show recent attempts of course ID (default limit 10)\n  course attempt <SCORE_ID>        Show per-chart breakdown of a single course attempt\n\nExamples:\n  cargo run -p bmz-player -- /path/to/chart.bms\n  cargo run -p bmz-player -- -a /path/to/chart.bms\n  cargo run -p bmz-player -- -r2 /path/to/chart.bms\n  cargo run -p bmz-player -- --boot-play-sample --smoke-exit-after-frames 3\n  cargo run -p bmz-player -- --boot-result-sample --smoke-exit-after-result-frames 3\n  cargo run -p bmz-player -- --boot-play-sample --smoke-screenshot /tmp/bmz-play.png\n  cargo run -p bmz-player -- --boot-play-sample --boot-replay 1 --smoke-exit-on-result\n  cargo run -p bmz-player -- table add https://example.com/table.html\n  cargo run -p bmz-player -- table list\n  cargo run -p bmz-player -- table fetch https://example.com/table.html\n  cargo run -p bmz-player -- songs add /path/to/bms\n  cargo run -p bmz-player -- songs list\n  cargo run -p bmz-player -- songs load\n  cargo run -p bmz-player -- songs reload my-bms-folder\n  cargo run -p bmz-player -- course import /path/to/course.json\n  cargo run -p bmz-player -- course list"
+    "bmz-player\n\nUsage:\n  bmz-player [OPTIONS] [PATH]\n  bmz-player table <SUBCOMMAND>\n  bmz-player songs <SUBCOMMAND>\n  bmz-player course <SUBCOMMAND>\n  bmz-player profile <SUBCOMMAND>\n\nOptions:\n  [PATH]                                 Start the chart at PATH (beatoraja-style alias)\n  -p | --practice                        Start boot chart in practice mode (CLI only)\n  --practice-start-ms <MS>               Initial practice section start (milliseconds)\n  --practice-end-ms <MS>                 Initial practice section end (milliseconds)\n  -a                                     Enable autoplay for the boot chart (alias of --autoplay-on-start)\n  -r1 | -r2 | -r3 | -r4                  Start replay slot 1..4 for the boot chart\n  --boot-play-sample                     Start the bundled sample chart on boot\n  --boot-result-sample                   Start directly on a synthetic result screen (debug)\n  --autoplay-on-start                    Enable autoplay for started charts\n  --boot-replay <1..4>                   Start replay slot N for the boot chart\n  --boot-course <ID>                     Start course ID fresh on boot\n  --boot-course-replay <ID>              Replay the latest attempt of course ID on boot\n  --smoke-exit-after-frames <N>          Exit after N rendered frames, clamped to 1 or more\n  --smoke-exit-after-result-frames <N>   Exit after N rendered result frames, clamped to 1 or more\n  --smoke-exit-on-result                 Exit when the app reaches the result screen\n  --smoke-screenshot <PATH>              Save a PNG screenshot on smoke exit (defaults to 3 frames)\n  --renderer <backend>                   wgpu renderer backend (vulkan, metal, dx12, gl, auto)\n  -h, --help                             Print this help\n\nTable subcommands:\n  table add <URL>       Add a difficulty table source and fetch it\n  table list            List all stored difficulty tables\n  table fetch [URL]     Fetch/update configured tables, or a single URL\n\nSongs subcommands:\n  songs add <PATH> [--no-recursive] [--disabled]   Add a song root directory\n  songs list                                        List configured song roots\n  songs load [PATH|NAME]                            Scan song roots (incremental)\n  songs reload [PATH|NAME]                          Force rescan song roots\n\nCourse subcommands:\n  course import <PATH>             Import beatoraja course JSON from a file or directory\n  course list                      List stored courses\n  course history <ID> [--limit N]  Show recent attempts of course ID (default limit 10)\n  course attempt <SCORE_ID>        Show per-chart breakdown of a single course attempt\n\nProfile subcommands:\n  profile list                                      List profiles under data/profiles\n  profile current                                   Show the active profile id\n  profile use <ID>                                  Set active_profile in data/config.toml\n  profile create <ID> [--name NAME] [--activate]    Create a new empty profile\n  profile copy <SRC> <ID> [--name NAME] [--activate] Copy an existing profile directory\n\nExamples:\n  cargo run -p bmz-player -- /path/to/chart.bms\n  cargo run -p bmz-player -- -a /path/to/chart.bms\n  cargo run -p bmz-player -- -r2 /path/to/chart.bms\n  cargo run -p bmz-player -- --boot-play-sample --smoke-exit-after-frames 3\n  cargo run -p bmz-player -- --boot-result-sample --smoke-exit-after-result-frames 3\n  cargo run -p bmz-player -- --boot-play-sample --smoke-screenshot /tmp/bmz-play.png\n  cargo run -p bmz-player -- --boot-play-sample --boot-replay 1 --smoke-exit-on-result\n  cargo run -p bmz-player -- table add https://example.com/table.html\n  cargo run -p bmz-player -- table list\n  cargo run -p bmz-player -- table fetch https://example.com/table.html\n  cargo run -p bmz-player -- songs add /path/to/bms\n  cargo run -p bmz-player -- songs list\n  cargo run -p bmz-player -- songs load\n  cargo run -p bmz-player -- songs reload my-bms-folder\n  cargo run -p bmz-player -- course import /path/to/course.json\n  cargo run -p bmz-player -- course list\n  cargo run -p bmz-player -- profile create alt --name Alt --activate"
 }
 
 fn parse_practice_ms(value: &str, arg: &str) -> Result<u32> {
@@ -801,6 +885,8 @@ mod tests {
         assert!(help.contains("table fetch"));
         assert!(help.contains("course import"));
         assert!(help.contains("course list"));
+        assert!(help.contains("profile create"));
+        assert!(help.contains("profile copy"));
     }
 
     #[test]
@@ -887,6 +973,49 @@ mod tests {
             parse_command(["course", "list"]).unwrap(),
             Command::Course(CourseCommand::List)
         );
+    }
+
+    #[test]
+    fn parse_command_routes_profile_subcommands() {
+        assert_eq!(
+            parse_command(["profile", "list"]).unwrap(),
+            Command::Profile(ProfileCommand::List)
+        );
+        assert_eq!(
+            parse_command(["profile", "current"]).unwrap(),
+            Command::Profile(ProfileCommand::Current)
+        );
+        assert_eq!(
+            parse_command(["profile", "use", "alt"]).unwrap(),
+            Command::Profile(ProfileCommand::Use { id: "alt".to_string() })
+        );
+        assert_eq!(
+            parse_command(["profile", "create", "alt", "--name", "Alt", "--activate"]).unwrap(),
+            Command::Profile(ProfileCommand::Create {
+                id: "alt".to_string(),
+                display_name: Some("Alt".to_string()),
+                activate: true,
+            })
+        );
+        assert_eq!(
+            parse_command(["profile", "copy", "default", "alt", "--display-name", "Alt Copy",])
+                .unwrap(),
+            Command::Profile(ProfileCommand::Copy {
+                source_id: "default".to_string(),
+                target_id: "alt".to_string(),
+                display_name: Some("Alt Copy".to_string()),
+                activate: false,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_command_rejects_invalid_profile_subcommands() {
+        assert!(parse_command(["profile"]).is_err());
+        assert!(parse_command(["profile", "create"]).is_err());
+        assert!(parse_command(["profile", "copy", "default"]).is_err());
+        assert!(parse_command(["profile", "use"]).is_err());
+        assert!(parse_command(["profile", "delete", "default"]).is_err());
     }
 
     #[test]

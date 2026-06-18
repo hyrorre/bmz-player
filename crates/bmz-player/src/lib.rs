@@ -14,6 +14,7 @@ pub mod ir_cmd;
 pub mod ln_policy;
 pub mod paths;
 pub mod practice_ui;
+pub mod profile_cmd;
 pub mod screens;
 pub mod select_options;
 pub mod skin_loader;
