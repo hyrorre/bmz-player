@@ -63,6 +63,8 @@ pub struct IrChartPayload {
     pub mode: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub level: Option<i32>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub difficulty: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

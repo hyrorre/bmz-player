@@ -1015,6 +1015,7 @@ pub struct IrChartIdentity {
     pub mode: BmsMode,
 
     pub level: Option<f32>,
+    pub difficulty: Option<String>,
     pub total: Option<f32>,
     pub judge_rank: Option<f32>,
 
@@ -1041,7 +1042,7 @@ pub struct IrChartIdentity {
     pub source_url: Option<String>,
     pub append_url: Option<String>,
 
-    pub header: BTreeMap<String, String>,
+    pub headers: BTreeMap<String, String>,
 }
 ```
 
@@ -1058,6 +1059,7 @@ pub struct IrChartIdentity {
   "subartists": [],
   "mode": "7K",
   "level": 12,
+  "difficulty": "ANOTHER",
   "total": 350.0,
   "judge": 100,
   "bpm": {
@@ -1086,10 +1088,6 @@ pub struct IrChartIdentity {
   "urls": {
     "source": null,
     "append": null
-  },
-  "headers": {
-    "TITLE": "song title",
-    "ARTIST": "artist"
   }
 }
 ```

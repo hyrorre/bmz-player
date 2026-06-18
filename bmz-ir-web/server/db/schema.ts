@@ -96,6 +96,7 @@ export const charts = sqliteTable(
     subartists: jsonText<string[]>('subartists', '[]'),
     mode: text('mode').notNull(),
     level: integer('level'),
+    difficulty: text('difficulty'),
     total: integer('total'),
     judgeRank: integer('judge_rank'),
     minBpm: integer('min_bpm'),

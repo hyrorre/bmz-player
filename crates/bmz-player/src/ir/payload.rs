@@ -151,6 +151,7 @@ pub fn build_ir_chart_payload(chart: &PlayableChart) -> IrChartPayload {
         subartists: subartists(&chart.metadata.subartist),
         mode: chart.metadata.key_mode.as_str().to_string(),
         level: parse_play_level(&chart.metadata.play_level),
+        difficulty: chart.metadata.difficulty_name.clone(),
         total: Some(gauge_total),
         judge: chart.metadata.judge_rank,
         bpm: Some(IrChartBpm { min: Some(min_bpm), max: Some(max_bpm) }),
@@ -173,7 +174,7 @@ pub fn build_ir_chart_payload(chart: &PlayableChart) -> IrChartPayload {
             mine: has_mine,
         },
         urls: chart_registry_urls(chart),
-        headers: chart.metadata.bms_headers.clone(),
+        headers: Default::default(),
     }
 }
 
@@ -351,6 +352,7 @@ mod tests {
             metadata: ChartMetadata {
                 title: "Song".to_string(),
                 play_level: "12".to_string(),
+                difficulty_name: "ANOTHER".to_string(),
                 judge_rank: Some(3),
                 total: Some(400.0),
                 initial_bpm: 180.0,
@@ -392,6 +394,7 @@ mod tests {
         assert_eq!(payload.mode, "7K");
         assert_eq!(payload.md5.as_deref(), Some("abababababababababababababababab"));
         assert_eq!(payload.level, Some(12));
+        assert_eq!(payload.difficulty, "ANOTHER");
         assert_eq!(payload.judge, Some(3));
         assert_eq!(payload.total, Some(400.0));
         assert!(payload.features.random);
@@ -405,6 +408,6 @@ mod tests {
             payload.urls.as_ref().and_then(|urls| urls.append.as_deref()),
             Some("http://example.com/append")
         );
-        assert_eq!(payload.headers.get("TITLE"), Some(&"Song".to_string()));
+        assert!(payload.headers.is_empty());
     }
 }

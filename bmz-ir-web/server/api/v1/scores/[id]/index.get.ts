@@ -60,6 +60,7 @@ export default defineEventHandler(async (event) => {
         artist: schema.charts.artist,
         mode: schema.charts.mode,
         level: schema.charts.level,
+        difficulty: schema.charts.difficulty,
         notes: schema.charts.notes,
       })
       .from(schema.charts)

@@ -36,6 +36,7 @@ export interface IrScoreSubmission {
     subartists?: string[]
     mode?: string
     level?: number | null
+    difficulty?: string | null
     total?: number | null
     judge?: number | null
     bpm?: {

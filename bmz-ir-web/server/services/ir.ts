@@ -119,6 +119,9 @@ export function validateScoreSubmission(value: unknown): IrScoreSubmission {
   if (payload.chart.md5 != null) {
     requireHex(payload.chart.md5, 32, 'chart.md5')
   }
+  if (payload.chart.difficulty != null && typeof payload.chart.difficulty !== 'string') {
+    throw new Error('chart.difficulty must be a string')
+  }
   asLnPolicy(payload.rule.ln_policy)
   asRuleMode(payload.rule.rule_mode)
   if (!EFFECTIVE_LN_MODES.has(payload.rule.effective_ln_mode)) {
@@ -522,6 +525,7 @@ async function upsertChart(payload: IrScoreSubmission, allowUpdate: boolean) {
     subartists: payload.chart.subartists ?? [],
     mode: payload.chart.mode ?? payload.rule.key_mode ?? 'unknown',
     level: payload.chart.level ?? null,
+    difficulty: payload.chart.difficulty ?? null,
     total: payload.chart.total ?? null,
     judgeRank: payload.chart.judge ?? null,
     minBpm: payload.chart.bpm?.min ?? null,
@@ -543,7 +547,7 @@ async function upsertChart(payload: IrScoreSubmission, allowUpdate: boolean) {
     hasMine: features.mine ?? false,
     sourceUrl: payload.chart.urls?.source ?? null,
     appendUrl: payload.chart.urls?.append ?? null,
-    headers: payload.chart.headers ?? {},
+    headers: {},
     updatedAt: new Date(),
   }
 

@@ -58,6 +58,7 @@ export default defineEventHandler(async (event) => {
             artist: schema.charts.artist,
             mode: schema.charts.mode,
             level: schema.charts.level,
+            difficulty: schema.charts.difficulty,
           })
           .from(schema.charts)
           .where(inArray(schema.charts.sha256, shaList))

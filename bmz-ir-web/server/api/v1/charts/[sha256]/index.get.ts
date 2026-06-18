@@ -62,6 +62,7 @@ function chartToResponse(chart: typeof schema.charts.$inferSelect) {
     subartists: chart.subartists,
     mode: chart.mode,
     level: chart.level,
+    difficulty: chart.difficulty,
     total: chart.total,
     judge_rank: chart.judgeRank,
     min_bpm: chart.minBpm,
