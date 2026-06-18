@@ -5,6 +5,8 @@
 /data/skins/*
 !/data/skins/default/
 !/data/skins/default/**
+!/data/skins/Rmz-skin/
+!/data/skins/Rmz-skin/**
 !/data/songs/
 /data/songs/*
 !/data/songs/sample-playable/

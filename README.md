@@ -26,6 +26,22 @@ Features
 
 **Don't use this application for playing copyrighted contents.**
 
+## Clone
+
+Bundled skin assets are managed as Git submodules. Clone with submodules, or initialize them after cloning.
+
+```sh
+git clone --recurse-submodules https://github.com/hyrorre/bmz-player.git
+```
+
+```sh
+git submodule update --init --recursive
+```
+
+Currently bundled submodules:
+
+- `data/skins/Rmz-skin` — BMZ bundled fork of Rm-skin. See the skin repository's README and `_license/` directory for license details.
+
 ## System Requirements
 
 - Windows: Windows 10 or higher is natively supported via DirectX 12. Older versions of Windows may require Vulkan drivers.
