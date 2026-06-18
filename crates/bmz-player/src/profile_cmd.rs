@@ -1,5 +1,4 @@
 use std::fs;
-use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
@@ -17,19 +16,33 @@ pub fn run_profile_command(cmd: ProfileCommand) -> Result<()> {
     app_paths.ensure_dirs()?;
 
     match cmd {
-        ProfileCommand::List => list_profiles(&app_paths),
-        ProfileCommand::Current => show_current_profile(&app_paths),
-        ProfileCommand::Use { id } => activate_profile(&app_paths, &id),
+        ProfileCommand::List => print_profiles(&app_paths),
+        ProfileCommand::Current => print_current_profile(&app_paths),
+        ProfileCommand::Use { id } => {
+            activate_profile(&app_paths, &id)?;
+            println!("Active profile: {id}");
+            Ok(())
+        }
         ProfileCommand::Create { id, display_name, activate } => {
-            create_profile(&app_paths, &id, display_name.as_deref(), activate)
+            create_profile(&app_paths, &id, display_name.as_deref(), activate)?;
+            println!("Created profile: {id}");
+            if activate {
+                println!("Active profile: {id}");
+            }
+            Ok(())
         }
         ProfileCommand::Copy { source_id, target_id, display_name, activate } => {
-            copy_profile(&app_paths, &source_id, &target_id, display_name.as_deref(), activate)
+            copy_profile(&app_paths, &source_id, &target_id, display_name.as_deref(), activate)?;
+            println!("Copied profile: {source_id} -> {target_id}");
+            if activate {
+                println!("Active profile: {target_id}");
+            }
+            Ok(())
         }
     }
 }
 
-fn list_profiles(app_paths: &AppPaths) -> Result<()> {
+fn print_profiles(app_paths: &AppPaths) -> Result<()> {
     let app_config = load_or_default_app_config(app_paths)?;
     let profiles = profile_summaries(app_paths)?;
 
@@ -45,13 +58,13 @@ fn list_profiles(app_paths: &AppPaths) -> Result<()> {
     Ok(())
 }
 
-fn show_current_profile(app_paths: &AppPaths) -> Result<()> {
+fn print_current_profile(app_paths: &AppPaths) -> Result<()> {
     let app_config = load_or_default_app_config(app_paths)?;
     println!("{}", app_config.active_profile);
     Ok(())
 }
 
-fn activate_profile(app_paths: &AppPaths, id: &str) -> Result<()> {
+pub fn activate_profile(app_paths: &AppPaths, id: &str) -> Result<()> {
     let profile_paths = resolve_profile_paths(app_paths, id)?;
     ensure_profile_exists(&profile_paths, id)?;
 
@@ -59,11 +72,10 @@ fn activate_profile(app_paths: &AppPaths, id: &str) -> Result<()> {
     app_config.active_profile = id.to_string();
     save_app_config(&app_paths.config_toml, &app_config)?;
 
-    println!("Active profile: {id}");
     Ok(())
 }
 
-fn create_profile(
+pub fn create_profile(
     app_paths: &AppPaths,
     id: &str,
     display_name: Option<&str>,
@@ -82,14 +94,10 @@ fn create_profile(
         set_active_profile(app_paths, id)?;
     }
 
-    println!("Created profile: {id}");
-    if activate {
-        println!("Active profile: {id}");
-    }
     Ok(())
 }
 
-fn copy_profile(
+pub fn copy_profile(
     app_paths: &AppPaths,
     source_id: &str,
     target_id: &str,
@@ -106,15 +114,7 @@ fn copy_profile(
     let target_paths = resolve_profile_paths(app_paths, target_id)?;
     ensure_profile_can_be_created(&target_paths, target_id)?;
 
-    copy_dir_recursive(&source_paths.root_dir, &target_paths.root_dir).with_context(|| {
-        format!(
-            "failed to copy profile directory {} to {}",
-            source_paths.root_dir.display(),
-            target_paths.root_dir.display()
-        )
-    })?;
-
-    let mut profile = load_profile_config(&target_paths.profile_toml)?;
+    let mut profile = load_profile_config(&source_paths.profile_toml)?;
     let now = now_unix_seconds();
     profile.id = target_id.to_string();
     if let Some(display_name) = display_name {
@@ -122,20 +122,19 @@ fn copy_profile(
     }
     profile.created_at = now;
     profile.updated_at = now;
+    fs::create_dir_all(&target_paths.root_dir)?;
     save_profile_config(&target_paths.profile_toml, &profile)?;
 
     if activate {
         set_active_profile(app_paths, target_id)?;
     }
 
-    println!("Copied profile: {source_id} -> {target_id}");
-    if activate {
-        println!("Active profile: {target_id}");
-    }
     Ok(())
 }
 
-fn profile_summaries(app_paths: &AppPaths) -> Result<Vec<crate::storage::profile::ProfileSummary>> {
+pub fn profile_summaries(
+    app_paths: &AppPaths,
+) -> Result<Vec<crate::storage::profile::ProfileSummary>> {
     let mut profiles = Vec::new();
     if !app_paths.profiles_dir.exists() {
         return Ok(profiles);
@@ -193,24 +192,6 @@ fn load_or_default_app_config(app_paths: &AppPaths) -> Result<AppConfig> {
     }
 }
 
-fn copy_dir_recursive(source: &Path, target: &Path) -> Result<()> {
-    fs::create_dir_all(target)?;
-    for entry in fs::read_dir(source)? {
-        let entry = entry?;
-        let source_path = entry.path();
-        let target_path = target.join(entry.file_name());
-        let file_type = entry.file_type()?;
-        if file_type.is_dir() {
-            copy_dir_recursive(&source_path, &target_path)?;
-        } else if file_type.is_file() {
-            fs::copy(&source_path, &target_path).with_context(|| {
-                format!("failed to copy {} to {}", source_path.display(), target_path.display())
-            })?;
-        }
-    }
-    Ok(())
-}
-
 fn now_unix_seconds() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -257,7 +238,7 @@ mod tests {
     }
 
     #[test]
-    fn copy_profile_copies_files_and_rewrites_identity() {
+    fn copy_profile_copies_only_profile_toml_and_rewrites_identity() {
         let app_paths = test_app_paths("copy");
         app_paths.ensure_dirs().unwrap();
         create_profile(&app_paths, "default", Some("Default"), false).unwrap();
@@ -276,11 +257,9 @@ mod tests {
         assert_eq!(profile.id, "alt");
         assert_eq!(profile.display_name, "Alt");
         assert_eq!(app_config.active_profile, "alt");
-        assert_eq!(fs::read_to_string(target_paths.root_dir.join("note.txt")).unwrap(), "kept");
-        assert_eq!(
-            fs::read_to_string(target_paths.replay_dir.join("nested").join("replay.toml")).unwrap(),
-            "replay"
-        );
+        assert!(!target_paths.root_dir.join("note.txt").exists());
+        assert!(!target_paths.replay_dir.exists());
+        assert!(!target_paths.score_db.exists());
 
         let _ = fs::remove_dir_all(&app_paths.data_dir);
     }

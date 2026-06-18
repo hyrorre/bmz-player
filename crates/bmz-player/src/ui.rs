@@ -29,7 +29,9 @@ use crate::config::profile_config::{
     SkinHistoryEntryConfig, SkinOffsetConfig, TargetOptionConfig,
 };
 use crate::ln_policy::LnPolicySetting;
+use crate::paths::resolve_app_paths;
 use crate::practice_ui::{PracticePanelContext, build_practice_panel};
+use crate::profile_cmd;
 use crate::screens::course_session::CourseResultSummary;
 use crate::screens::select_model::SelectCourseRow;
 use crate::skin_loader::RANDOM_FILE_SELECTION;
@@ -302,6 +304,8 @@ pub struct EguiLayer {
     ir_login: IrLoginUiState,
     /// プロファイル設定パネル: IR device key 操作用の状態。
     ir_device_key: IrDeviceKeyUiState,
+    /// プロファイル設定パネル: profile 作成 / 複製フォームの状態。
+    profile_manager: ProfileManagerUiState,
 }
 
 /// プロファイル設定パネルの IR ログインフォーム状態。
@@ -316,6 +320,19 @@ struct IrLoginUiState {
     busy_target: Option<IrProviderUiTarget>,
     message: Option<IrProviderUiMessage>,
     receiver: Option<std::sync::mpsc::Receiver<Result<IrLoginOutcome, String>>>,
+}
+
+#[derive(Default)]
+struct ProfileManagerUiState {
+    create_id: String,
+    create_display_name: String,
+    create_activate: bool,
+    copy_source_id: String,
+    copy_target_id: String,
+    copy_display_name: String,
+    copy_activate: bool,
+    message: String,
+    error: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -591,6 +608,7 @@ impl EguiLayer {
             audio_device_picker: AudioDevicePickerState::default(),
             ir_login: IrLoginUiState::default(),
             ir_device_key: IrDeviceKeyUiState::default(),
+            profile_manager: ProfileManagerUiState::default(),
         }
     }
 
@@ -717,12 +735,15 @@ impl EguiLayer {
                     ctx,
                     show_profile_settings,
                     profile_config,
+                    app_config,
                     show_debug,
                     ir_login,
                     &mut self.ir_device_key,
+                    &mut self.profile_manager,
                     profile_root,
                 );
                 save_profile_config |= profile_settings_actions.save;
+                save_app_config |= profile_settings_actions.save_app_config;
                 let skin_actions = build_skin_panel(
                     ctx,
                     show_skin,
@@ -2247,18 +2268,22 @@ fn add_difficulty_table_source(
 
 struct ProfileSettingsPanelActions {
     save: bool,
+    save_app_config: bool,
 }
 
 fn build_profile_settings_panel(
     ctx: &egui::Context,
     open: &mut bool,
     profile: &mut ProfileConfig,
+    app_config: &mut AppConfig,
     show_debug: &mut bool,
     ir_login: &mut IrLoginUiState,
     ir_device_key: &mut IrDeviceKeyUiState,
+    profile_manager: &mut ProfileManagerUiState,
     profile_root: &std::path::Path,
 ) -> ProfileSettingsPanelActions {
     let mut save_clicked = false;
+    let mut save_app_config = false;
     // ログインタスクの完了を反映。provider 設定が更新されたら保存する。
     save_clicked |= ir_login.poll(profile);
     ir_device_key.poll();
@@ -2280,6 +2305,9 @@ fn build_profile_settings_panel(
                         ui.monospace(&profile.id);
                     });
                 });
+
+                save_app_config |=
+                    build_profile_manager_section(ui, app_config, profile, profile_manager);
 
                 egui::CollapsingHeader::new("音量").default_open(true).show(ui, |ui| {
                     ui.checkbox(&mut profile.audio_mix.normalize_chart_volume, "譜面音量正規化");
@@ -2906,7 +2934,169 @@ fn build_profile_settings_panel(
             });
         },
     );
-    ProfileSettingsPanelActions { save: save_clicked }
+    ProfileSettingsPanelActions { save: save_clicked, save_app_config }
+}
+
+fn build_profile_manager_section(
+    ui: &mut egui::Ui,
+    app_config: &mut AppConfig,
+    profile: &ProfileConfig,
+    state: &mut ProfileManagerUiState,
+) -> bool {
+    let mut save_app_config = false;
+    egui::CollapsingHeader::new("プロファイル管理").default_open(false).show(ui, |ui| {
+        let app_paths = match resolve_app_paths() {
+            Ok(paths) => paths,
+            Err(error) => {
+                ui.colored_label(egui::Color32::RED, format!("{error:#}"));
+                return;
+            }
+        };
+        let profiles = match profile_cmd::profile_summaries(&app_paths) {
+            Ok(profiles) => profiles,
+            Err(error) => {
+                ui.colored_label(egui::Color32::RED, format!("{error:#}"));
+                return;
+            }
+        };
+
+        if state.copy_source_id.is_empty() {
+            state.copy_source_id = profile.id.clone();
+        }
+
+        ui.horizontal(|ui| {
+            ui.label("実行中");
+            ui.monospace(&profile.id);
+        });
+        ui.horizontal(|ui| {
+            ui.label("次回起動");
+            egui::ComboBox::from_id_salt("profile_active_next")
+                .selected_text(profile_selection_label(&profiles, &app_config.active_profile))
+                .show_ui(ui, |ui| {
+                    let active_profile = app_config.active_profile.clone();
+                    for summary in &profiles {
+                        let selected = summary.id == active_profile;
+                        let label = profile_selection_label(&profiles, &summary.id);
+                        if ui.selectable_label(selected, label).clicked() && !selected {
+                            app_config.active_profile = summary.id.clone();
+                            state.message =
+                                format!("次回起動 profile を {} に変更しました。", summary.id);
+                            state.error.clear();
+                            save_app_config = true;
+                        }
+                    }
+                });
+        });
+
+        ui.separator();
+        ui.label("新規作成");
+        ui.horizontal(|ui| {
+            ui.label("ID");
+            ui.text_edit_singleline(&mut state.create_id);
+        });
+        ui.horizontal(|ui| {
+            ui.label("表示名");
+            ui.text_edit_singleline(&mut state.create_display_name);
+        });
+        ui.checkbox(&mut state.create_activate, "次回起動 profile にする");
+        if ui.button("作成").clicked() {
+            let id = state.create_id.trim().to_string();
+            let display_name = trimmed_non_empty(&state.create_display_name).map(str::to_string);
+            match profile_cmd::create_profile(&app_paths, &id, display_name.as_deref(), false) {
+                Ok(()) => {
+                    if state.create_activate {
+                        app_config.active_profile = id.clone();
+                        save_app_config = true;
+                    }
+                    state.message = format!("profile を作成しました: {id}");
+                    state.error.clear();
+                    state.create_id.clear();
+                    state.create_display_name.clear();
+                }
+                Err(error) => {
+                    state.error = format!("{error:#}");
+                    state.message.clear();
+                }
+            }
+        }
+
+        ui.separator();
+        ui.label("複製");
+        ui.horizontal(|ui| {
+            ui.label("複製元");
+            egui::ComboBox::from_id_salt("profile_copy_source")
+                .selected_text(profile_selection_label(&profiles, &state.copy_source_id))
+                .show_ui(ui, |ui| {
+                    for summary in &profiles {
+                        let selected = summary.id == state.copy_source_id;
+                        let label = profile_selection_label(&profiles, &summary.id);
+                        if ui.selectable_label(selected, label).clicked() {
+                            state.copy_source_id = summary.id.clone();
+                        }
+                    }
+                });
+        });
+        ui.horizontal(|ui| {
+            ui.label("新ID");
+            ui.text_edit_singleline(&mut state.copy_target_id);
+        });
+        ui.horizontal(|ui| {
+            ui.label("表示名");
+            ui.text_edit_singleline(&mut state.copy_display_name);
+        });
+        ui.checkbox(&mut state.copy_activate, "次回起動 profile にする");
+        if ui.button("複製").clicked() {
+            let source_id = state.copy_source_id.trim().to_string();
+            let target_id = state.copy_target_id.trim().to_string();
+            let display_name = trimmed_non_empty(&state.copy_display_name).map(str::to_string);
+            match profile_cmd::copy_profile(
+                &app_paths,
+                &source_id,
+                &target_id,
+                display_name.as_deref(),
+                false,
+            ) {
+                Ok(()) => {
+                    if state.copy_activate {
+                        app_config.active_profile = target_id.clone();
+                        save_app_config = true;
+                    }
+                    state.message = format!("profile を複製しました: {source_id} -> {target_id}");
+                    state.error.clear();
+                    state.copy_target_id.clear();
+                    state.copy_display_name.clear();
+                }
+                Err(error) => {
+                    state.error = format!("{error:#}");
+                    state.message.clear();
+                }
+            }
+        }
+
+        if !state.message.is_empty() {
+            ui.colored_label(egui::Color32::LIGHT_GREEN, state.message.as_str());
+        }
+        if !state.error.is_empty() {
+            ui.colored_label(egui::Color32::RED, state.error.as_str());
+        }
+    });
+    save_app_config
+}
+
+fn profile_selection_label(
+    profiles: &[crate::storage::profile::ProfileSummary],
+    profile_id: &str,
+) -> String {
+    profiles
+        .iter()
+        .find(|profile| profile.id == profile_id)
+        .map(|profile| format!("{} ({})", profile.id, profile.display_name))
+        .unwrap_or_else(|| profile_id.to_string())
+}
+
+fn trimmed_non_empty(value: &str) -> Option<&str> {
+    let value = value.trim();
+    (!value.is_empty()).then_some(value)
 }
 
 fn volume_slider(ui: &mut egui::Ui, value: &mut u32, label: &str) {
