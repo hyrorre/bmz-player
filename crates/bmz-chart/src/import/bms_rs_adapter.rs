@@ -400,8 +400,31 @@ pub(crate) fn build_intermediate_from_bms<T: KeyLayoutMapper>(
     );
     intermediate.metadata.key_mode =
         detect_key_mode_from_bms_headers(bms, layout).unwrap_or(lane_key_mode);
+    normalize_qwilight_lanes(&mut intermediate.objects, intermediate.metadata.key_mode);
 
     Ok(intermediate)
+}
+
+fn normalize_qwilight_lanes(objects: &mut [IntermediateObject], key_mode: KeyMode) {
+    if key_mode != KeyMode::K6 {
+        return;
+    }
+
+    for object in objects {
+        let lane = match &mut object.kind {
+            IntermediateObjectKind::VisibleNote { lane, .. }
+            | IntermediateObjectKind::InvisibleNote { lane, .. }
+            | IntermediateObjectKind::LongChannelNote { lane, .. }
+            | IntermediateObjectKind::MineNote { lane, .. } => lane,
+            _ => continue,
+        };
+        *lane = match *lane {
+            Lane::Key5 => Lane::Key4,
+            Lane::Key6 => Lane::Key5,
+            Lane::Key7 => Lane::Key6,
+            lane => lane,
+        };
+    }
 }
 
 /// Qwilight / BMSE 拡張ヘッダ (`#4K`, `#6K`, `#8K`) からキーモードを読む。
@@ -1368,6 +1391,8 @@ fn map_bms_warning(w: &BmsWarning) -> Option<ImportWarning> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use bmz_core::lane::KeyMode;
 
     use super::*;
@@ -1419,6 +1444,21 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    fn playable_lane_counts(chart: &IntermediateChart) -> [usize; bmz_core::lane::LANE_COUNT] {
+        let mut counts = [0; bmz_core::lane::LANE_COUNT];
+        for object in &chart.objects {
+            let lane = match object.kind {
+                IntermediateObjectKind::VisibleNote { lane, .. }
+                | IntermediateObjectKind::InvisibleNote { lane, .. }
+                | IntermediateObjectKind::LongChannelNote { lane, .. }
+                | IntermediateObjectKind::MineNote { lane, .. } => lane,
+                _ => continue,
+            };
+            counts[lane.index()] += 1;
+        }
+        counts
     }
 
     #[test]
@@ -1590,6 +1630,44 @@ mod tests {
         let mut text = ue_8k_note_lines();
         text.push_str("#6K\n");
         assert_eq!(import_bms_text(&text).metadata.key_mode, KeyMode::K6);
+    }
+
+    #[test]
+    fn bms_6k_header_maps_ue_channels_to_six_key_lanes() {
+        let mut text = String::from(BMS_HEADER);
+        text.push_str("#6K\n");
+        for (i, channel) in ["11", "12", "13", "15", "18", "19"].into_iter().enumerate() {
+            let measure = i + 1;
+            text.push_str(&format!("#{measure:03}{channel}:01\n"));
+        }
+
+        let chart = import_bms_text(&text);
+
+        assert_eq!(chart.metadata.key_mode, KeyMode::K6);
+        assert_eq!(
+            note_lanes(&chart),
+            vec![Lane::Key1, Lane::Key2, Lane::Key3, Lane::Key4, Lane::Key5, Lane::Key6],
+        );
+    }
+
+    #[test]
+    #[ignore = "requires local 6K U_E FULL PACK sample data"]
+    fn bms_6k_full_pack_sample_uses_six_active_lanes() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(
+            "../../data/songs/6K U_E FULL PACK 3.1/234 [HAPPY HARDCORE] Blue-White Crazybits/crazybits6bit.bms",
+        );
+        assert!(path.exists(), "missing sample chart: {}", path.display());
+
+        let mut warnings = Vec::new();
+        let chart = import_bms_to_intermediate(&path, None, &mut warnings).unwrap();
+        let counts = playable_lane_counts(&chart);
+
+        assert_eq!(chart.metadata.key_mode, KeyMode::K6);
+        for lane in [Lane::Key1, Lane::Key2, Lane::Key3, Lane::Key4, Lane::Key5, Lane::Key6] {
+            assert!(counts[lane.index()] > 0, "{lane:?} has no playable objects");
+        }
+        assert_eq!(counts[Lane::Scratch.index()], 0);
+        assert_eq!(counts[Lane::Key7.index()], 0);
     }
 
     #[test]
