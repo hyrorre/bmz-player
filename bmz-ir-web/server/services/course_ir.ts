@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { and, eq } from 'drizzle-orm'
 import { db, schema } from 'hub:db'
+import { isUniqueConstraintError } from '../utils/db_errors'
 import {
   CLEAR_RANK,
   isRecord,
@@ -313,13 +314,6 @@ async function insertCourseScore(values: typeof schema.courseScores.$inferInsert
     }
     throw error
   }
-}
-
-function isUniqueConstraintError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    /unique constraint|constraint failed|SQLITE_CONSTRAINT/i.test(error.message)
-  )
 }
 
 function playedAtDate(value: unknown): Date | null {

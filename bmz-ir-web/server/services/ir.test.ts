@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { isUniqueConstraintError } from '../utils/db_errors'
 import { __test, stableStringify } from './ir'
 
 describe('stableStringify', () => {
@@ -98,6 +99,24 @@ describe('ranking best row aggregation', () => {
     expect(rebuilt[0]?.score_id).toBe('hard-score')
     expect(rebuilt[0]?.clear_type).toBe('FullCombo')
     expect(rebuilt[0]?.best_clear_score_id).toBe('fc-score')
+  })
+})
+
+describe('database error classification', () => {
+  test('detects D1 unique constraint errors wrapped by drizzle', () => {
+    const cause = new Error(
+      'D1_ERROR: UNIQUE constraint failed: scores.player_id, scores.idempotency_key: SQLITE_CONSTRAINT',
+    )
+    const error = new Error('Failed query: insert into "scores" ...', { cause })
+
+    expect(isUniqueConstraintError(error)).toBe(true)
+  })
+
+  test('ignores non-constraint query errors', () => {
+    const cause = new Error('D1_ERROR: database is locked')
+    const error = new Error('Failed query: select * from scores', { cause })
+
+    expect(isUniqueConstraintError(error)).toBe(false)
   })
 })
 

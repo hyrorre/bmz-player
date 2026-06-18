@@ -1,6 +1,7 @@
 import { createHash, createPublicKey, randomUUID, verify as cryptoVerify } from 'node:crypto'
 import { and, desc, eq, inArray, isNull } from 'drizzle-orm'
 import { db, schema } from 'hub:db'
+import { isUniqueConstraintError } from '../utils/db_errors'
 import type {
   IrChartLnProfile,
   IrDeviceType,
@@ -822,13 +823,6 @@ async function insertScore(values: typeof schema.scores.$inferInsert) {
     }
     throw error
   }
-}
-
-function isUniqueConstraintError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    /unique constraint|constraint failed|SQLITE_CONSTRAINT/i.test(error.message)
-  )
 }
 
 function bestCandidateWins(next: BestScoreCandidate, current: BestScoreCandidate): boolean {
