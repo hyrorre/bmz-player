@@ -5407,9 +5407,6 @@ impl SkinDocument {
         state: &SkinTextState<'_>,
     ) -> Option<SkinRenderItem> {
         let content = skin_state_text(text, state);
-        if content.is_empty() {
-            return None;
-        }
         let rect = normalize_skin_frame_rect(frame, self.w, self.h);
         // beatoraja は dst.x を align 基準点として扱う（align=1=center なら
         // dst.x がテキストの中央, align=2=right なら dst.x がテキストの右端）。
@@ -5438,6 +5435,9 @@ impl SkinDocument {
         } else {
             None
         };
+        if content.is_empty() && caret.is_none() {
+            return None;
+        }
         Some(SkinRenderItem::Text {
             origin: Point { x: origin_x, y: rect.y },
             text: content,
@@ -7331,7 +7331,7 @@ pub fn append_skin_render_items(commands: &mut Vec<DrawCommand>, items: &[SkinRe
                 }
             }
             SkinRenderItem::Text { origin, text, style, caret, .. } => {
-                if !text.is_empty() {
+                if !text.is_empty() || caret.is_some() {
                     commands.push(DrawCommand::Text {
                         origin: *origin,
                         text: text.clone(),
@@ -12608,6 +12608,40 @@ mod tests {
         assert!(matches!(
             commands[1],
             DrawCommand::Image { texture: TextureId(1), blend: BlendMode::Add, .. }
+        ));
+    }
+
+    #[test]
+    fn append_skin_render_items_keeps_empty_text_with_caret() {
+        let mut commands = Vec::new();
+        append_skin_render_items(
+            &mut commands,
+            &[SkinRenderItem::Text {
+                origin: Point { x: 0.25, y: 0.5 },
+                text: String::new(),
+                style: TextStyle {
+                    font_id: None,
+                    size: 0.04,
+                    bitmap_size: None,
+                    color: Color::rgb(1.0, 1.0, 1.0),
+                    layer: TextLayer::Skin,
+                    align: TextAlign::Left,
+                    max_width: 0.0,
+                    overflow: TextOverflow::Overflow,
+                    wrapping: false,
+                    outline: None,
+                    shadow: None,
+                },
+                caret: Some(TextCaret { byte_index: 0, color: Color::rgb(1.0, 1.0, 1.0) }),
+                blend: BlendMode::Normal,
+            }],
+        );
+
+        assert_eq!(commands.len(), 1);
+        assert!(matches!(
+            &commands[0],
+            DrawCommand::Text { text, caret: Some(TextCaret { byte_index: 0, .. }), .. }
+                if text.is_empty()
         ));
     }
 
@@ -21700,6 +21734,27 @@ mod tests {
             }
             other => panic!("expected SkinRenderItem::Text, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn text_render_item_keeps_empty_search_word_with_caret() {
+        let document: SkinDocument =
+            serde_json::from_value(serde_json::json!({ "w": 1920, "h": 1080 })).unwrap();
+        let text = SkinTextDef { id: "search".to_string(), ref_id: 30, ..SkinTextDef::default() };
+        let frame = ResolvedSkinFrame { w: 100, h: 24, ..ResolvedSkinFrame::default() };
+        let state = SkinTextState {
+            search_word: "",
+            search_caret_byte_index: Some(0),
+            ..SkinTextState::default()
+        };
+
+        let item = document.text_render_item(&text, frame, &state).unwrap();
+
+        assert!(matches!(
+            item,
+            SkinRenderItem::Text { text, caret: Some(TextCaret { byte_index: 0, .. }), .. }
+                if text.is_empty()
+        ));
     }
 
     #[test]
