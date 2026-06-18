@@ -44,6 +44,7 @@ pub struct SkinReloadRequest {
     pub select: bool,
     pub decide: bool,
     pub result: bool,
+    pub course_result: bool,
     pub play5: bool,
     pub play7: bool,
     pub play9: bool,
@@ -57,6 +58,7 @@ impl SkinReloadRequest {
         self.select
             || self.decide
             || self.result
+            || self.course_result
             || self.play5
             || self.play7
             || self.play9
@@ -72,6 +74,7 @@ impl SkinReloadRequest {
         self.select |= other.select;
         self.decide |= other.decide;
         self.result |= other.result;
+        self.course_result |= other.course_result;
         self.play5 |= other.play5;
         self.play7 |= other.play7;
         self.play9 |= other.play9;
@@ -199,6 +202,7 @@ pub struct SkinConfigMeta {
     pub play10: SceneSkinDefs,
     pub play14: SceneSkinDefs,
     pub result: SceneSkinDefs,
+    pub course_result: SceneSkinDefs,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -211,6 +215,7 @@ pub struct SkinCatalog {
     pub play10: Vec<SkinCandidate>,
     pub play14: Vec<SkinCandidate>,
     pub result: Vec<SkinCandidate>,
+    pub course_result: Vec<SkinCandidate>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3186,6 +3191,7 @@ enum SkinSlot {
     Play10,
     Play14,
     Result,
+    CourseResult,
 }
 
 fn skin_reload_request_from_diff(before: &SkinConfig, after: &SkinConfig) -> SkinReloadRequest {
@@ -3237,6 +3243,12 @@ fn skin_reload_request_from_diff(before: &SkinConfig, after: &SkinConfig) -> Ski
         || before.result_files != after.result_files
     {
         request.result = true;
+    }
+    if before.course_result != after.course_result
+        || before.course_result_options != after.course_result_options
+        || before.course_result_files != after.course_result_files
+    {
+        request.course_result = true;
     }
     request.offsets = before.offsets != after.offsets;
     request
@@ -3311,6 +3323,7 @@ fn skin_slot_path(skin: &SkinConfig, slot: SkinSlot) -> &str {
         SkinSlot::Play10 => &skin.play10,
         SkinSlot::Play14 => &skin.play14,
         SkinSlot::Result => &skin.result,
+        SkinSlot::CourseResult => &skin.course_result,
     }
 }
 
@@ -3324,6 +3337,7 @@ fn skin_slot_path_mut(skin: &mut SkinConfig, slot: SkinSlot) -> &mut String {
         SkinSlot::Play10 => &mut skin.play10,
         SkinSlot::Play14 => &mut skin.play14,
         SkinSlot::Result => &mut skin.result,
+        SkinSlot::CourseResult => &mut skin.course_result,
     }
 }
 
@@ -3337,6 +3351,7 @@ fn skin_slot_options_mut(skin: &mut SkinConfig, slot: SkinSlot) -> &mut BTreeMap
         SkinSlot::Play10 => &mut skin.play10_options,
         SkinSlot::Play14 => &mut skin.play14_options,
         SkinSlot::Result => &mut skin.result_options,
+        SkinSlot::CourseResult => &mut skin.course_result_options,
     }
 }
 
@@ -3350,6 +3365,7 @@ fn skin_slot_files_mut(skin: &mut SkinConfig, slot: SkinSlot) -> &mut BTreeMap<S
         SkinSlot::Play10 => &mut skin.play10_files,
         SkinSlot::Play14 => &mut skin.play14_files,
         SkinSlot::Result => &mut skin.result_files,
+        SkinSlot::CourseResult => &mut skin.course_result_files,
     }
 }
 
@@ -3429,6 +3445,14 @@ fn build_skin_panel(
                 changed |=
                     skin_path_combo(ui, skin, SkinSlot::Result, "リザルト", &skin_catalog.result);
                 ui.end_row();
+                changed |= skin_path_combo(
+                    ui,
+                    skin,
+                    SkinSlot::CourseResult,
+                    "コースリザルト",
+                    &skin_catalog.course_result,
+                );
+                ui.end_row();
             });
             ui.separator();
             ui.label("読み込み済みスキンが宣言する設定可能項目:");
@@ -3440,6 +3464,7 @@ fn build_skin_panel(
             let play10_root = skin_root_path(&skin.play10);
             let play14_root = skin_root_path(&skin.play14);
             let result_root = skin_root_path(&skin.result);
+            let course_result_root = skin_root_path(&skin.course_result);
             changed |= build_scene_skin_defs(
                 ui,
                 "選曲スキン",
@@ -3510,6 +3535,15 @@ fn build_skin_panel(
                 result_root.as_deref(),
                 &mut skin.result_options,
                 &mut skin.result_files,
+                &mut skin.offsets,
+            );
+            changed |= build_scene_skin_defs(
+                ui,
+                "コースリザルトスキン",
+                &skin_meta.course_result,
+                course_result_root.as_deref(),
+                &mut skin.course_result_options,
+                &mut skin.course_result_files,
                 &mut skin.offsets,
             );
             ui.separator();
@@ -4323,6 +4357,27 @@ mod tests {
         assert!(!request.play5);
         assert!(!request.result);
         assert!(request.any_reload());
+    }
+
+    #[test]
+    fn skin_reload_diff_separates_result_and_course_result_slots() {
+        let before = SkinConfig::default();
+        let mut after = before.clone();
+        after.course_result = "data/skins/course/result.luaskin".to_string();
+        after.course_result_options.insert("Layout".to_string(), "Course".to_string());
+
+        let request = skin_reload_request_from_diff(&before, &after);
+
+        assert!(request.course_result);
+        assert!(!request.result);
+
+        let mut after = before.clone();
+        after.result_files.insert("Background".to_string(), "normal.png".to_string());
+
+        let request = skin_reload_request_from_diff(&before, &after);
+
+        assert!(request.result);
+        assert!(!request.course_result);
     }
 
     #[test]

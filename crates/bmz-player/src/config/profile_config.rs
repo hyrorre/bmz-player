@@ -664,6 +664,11 @@ pub struct SkinConfig {
     /// `.json` / `.lr2skin` で終わるパスは beatoraja スキンとして扱う。
     #[serde(default)]
     pub result: String,
+    /// コース最終リザルト画面スキンのパス。
+    /// 空文字列なら bmz の固定描画を使用。
+    /// `.json` / `.lr2skin` で終わるパスは beatoraja スキンとして扱う。
+    #[serde(default)]
+    pub course_result: String,
     #[serde(default)]
     pub offsets: Vec<SkinOffsetConfig>,
     /// 選曲スキンのカスタマイズオプション選択 (オプション名 -> 選択肢名)。
@@ -690,6 +695,9 @@ pub struct SkinConfig {
     /// リザルトスキンのカスタマイズオプション選択。
     #[serde(default)]
     pub result_options: BTreeMap<String, String>,
+    /// コースリザルトスキンのカスタマイズオプション選択。
+    #[serde(default)]
+    pub course_result_options: BTreeMap<String, String>,
     /// 選曲スキンのファイル選択 (filepath 定義名 -> 選択ファイルの相対パス)。
     #[serde(default)]
     pub select_files: BTreeMap<String, String>,
@@ -714,6 +722,9 @@ pub struct SkinConfig {
     /// リザルトスキンのファイル選択。
     #[serde(default)]
     pub result_files: BTreeMap<String, String>,
+    /// コースリザルトスキンのファイル選択。
+    #[serde(default)]
+    pub course_result_files: BTreeMap<String, String>,
     /// スキンファイル path ごとのカスタマイズ履歴。
     ///
     /// beatoraja の `skinHistory` 相当。スキンを切り替えても、各スキンの
@@ -1146,6 +1157,37 @@ mod tests {
 
         assert_eq!(parsed.mode_filter, "7K");
         assert_eq!(parsed.sort, "LEVEL");
+    }
+
+    #[test]
+    fn skin_config_separates_result_and_course_result_slots() {
+        let skin: SkinConfig = toml::from_str(
+            r#"
+            result = "data/skins/result/result.luaskin"
+
+            [result_options]
+            Layout = "A"
+
+            [result_files]
+            Background = "normal.png"
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(skin.result, "data/skins/result/result.luaskin");
+        assert!(skin.course_result.is_empty());
+        assert_eq!(skin.result_options.get("Layout").map(String::as_str), Some("A"));
+        assert!(skin.course_result_options.is_empty());
+
+        let mut skin = skin;
+        skin.course_result = "data/skins/result/course_result.luaskin".to_string();
+        skin.course_result_options.insert("Layout".to_string(), "Course".to_string());
+        skin.course_result_files.insert("Background".to_string(), "course.png".to_string());
+        let toml = toml::to_string(&skin).unwrap();
+
+        assert!(toml.contains("course_result = \"data/skins/result/course_result.luaskin\""));
+        assert!(toml.contains("[course_result_options]"));
+        assert!(toml.contains("[course_result_files]"));
     }
 
     #[test]

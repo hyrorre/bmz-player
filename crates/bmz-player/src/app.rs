@@ -123,8 +123,9 @@ use crate::ui::{
     SkinConfigMeta, SkinReloadRequest,
 };
 use bmz_render::skin::{
-    DestinationListEntry, SkinAnimationDef, SkinClickHit, SkinClickTarget, SkinDestinationDef,
-    SkinDocument, SkinDocumentTexture, SkinDstEntry, SkinManifest, SkinSliderHit,
+    DestinationListEntry, SkinAnimationDef, SkinClickHit, SkinClickTarget, SkinContext,
+    SkinDestinationDef, SkinDocument, SkinDocumentTexture, SkinDstEntry, SkinManifest,
+    SkinSliderHit,
 };
 const SAMPLE_PLAYABLE_TITLE: &str = "BMZ Sample Playable";
 
@@ -374,6 +375,9 @@ struct WinitApp {
     /// 直近 install をリクエストしたプレイスキンの key_mode と設定 fingerprint。
     /// 同じ mode かつ同じ path/options/files なら再 decode をスキップする。
     last_play_skin_signature: Option<PlaySkinSignature>,
+    /// 直近 install をリクエストした Result context の用途と設定 fingerprint。
+    /// Renderer の Result context は 1 本だけなので、通常/コース最終結果で差し替える。
+    last_result_skin_signature: Option<ResultSkinSignature>,
     /// システム SE / BGM を再生する cpal ストリーム。
     /// 開けない環境では `None` で、システム音はサイレント。
     #[allow(dead_code)]
@@ -661,6 +665,14 @@ fn fmt_profile_ms(total_us: u128, frames: u128) -> String {
 }
 
 type PlaySkinSignature = (KeyMode, String, BTreeMap<String, String>, BTreeMap<String, String>);
+type ResultSkinSignature =
+    (ResultSkinSlot, String, BTreeMap<String, String>, BTreeMap<String, String>);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResultSkinSlot {
+    Normal,
+    Course,
+}
 
 #[derive(Debug, Clone, Copy, Default)]
 struct SkinReloadGenerations {
@@ -1463,6 +1475,8 @@ impl WinitApp {
             system_audio.as_ref().map(|audio| SelectChartPreview::new(audio.engine()));
         let audio_output_open_attempted = audio_runtime.is_some();
         let player_stats = player_stats_snapshot(&boot.score_db);
+        let initial_result_skin_signature =
+            result_skin_signature_for_config(&boot.profile_config.skin, ResultSkinSlot::Normal);
 
         let mut app = Self {
             boot,
@@ -1556,6 +1570,7 @@ impl WinitApp {
             pending_play_skin,
             pending_result_skin,
             last_play_skin_signature: None,
+            last_result_skin_signature: Some(initial_result_skin_signature),
             skin_reload_generations: SkinReloadGenerations::default(),
             pending_skin_reload_at: None,
             pending_skin_reload_request: SkinReloadRequest::default(),
@@ -4994,7 +5009,7 @@ impl WinitApp {
         self.result_key5_held = false;
         self.result_key7_held = false;
         self.result_scene_started_at = Instant::now();
-        self.ensure_skin_ready(SkinKind::Result);
+        self.ensure_result_skin_ready(ResultSkinSlot::Normal);
     }
 
     /// 中間リザルトを閉じて次の曲へ進む。finished_play をクリアして中間リザルト
@@ -5319,7 +5334,7 @@ impl WinitApp {
             self.result_key5_held = false;
             self.result_key7_held = false;
             self.result_scene_started_at = Instant::now();
-            self.ensure_skin_ready(SkinKind::Result);
+            self.ensure_result_skin_ready(ResultSkinSlot::Course);
         }
     }
 
@@ -6536,7 +6551,7 @@ impl WinitApp {
         self.result_key5_held = false;
         self.result_key7_held = false;
         self.result_scene_started_at = Instant::now();
-        self.ensure_skin_ready(SkinKind::Result);
+        self.ensure_result_skin_ready(ResultSkinSlot::Normal);
     }
 
     /// 終了フェードアウトの経過を監視し、スキンのフェードアウト時間を過ぎたら
@@ -7053,6 +7068,64 @@ impl WinitApp {
         }
     }
 
+    fn ensure_result_skin_ready(&mut self, slot: ResultSkinSlot) {
+        self.spawn_result_skin_decode_for(slot);
+        self.ensure_skin_ready(SkinKind::Result);
+    }
+
+    fn current_result_skin_slot(&self) -> ResultSkinSlot {
+        if self.finished_course.is_some() { ResultSkinSlot::Course } else { ResultSkinSlot::Normal }
+    }
+
+    fn spawn_result_skin_decode_for(&mut self, slot: ResultSkinSlot) {
+        let skin = &self.boot.profile_config.skin;
+        let signature = result_skin_signature_for_config(skin, slot);
+        if !self.pending_result_skin && self.last_result_skin_signature.as_ref() == Some(&signature)
+        {
+            tracing::debug!(?slot, "result skin reuse (signature unchanged)");
+            return;
+        }
+
+        let (_, trimmed, options, files) = signature.clone();
+        self.last_result_skin_signature = Some(signature);
+        self.pending_result_skin = false;
+        let generation = self.skin_reload_generations.bump(SkinKind::Result);
+
+        if trimmed.is_empty() {
+            self.set_empty_result_skin_context();
+            tracing::debug!(?slot, "result skin path empty; using fallback result drawing");
+            return;
+        }
+        let path = Path::new(&trimmed);
+        if !is_decodable_skin_path(path) {
+            self.set_empty_result_skin_context();
+            tracing::warn!(
+                ?slot,
+                path = %path.display(),
+                "result skin path is not a supported beatoraja skin file; using fallback result drawing"
+            );
+            return;
+        }
+
+        spawn_skin_decode(
+            self.skin_decode_tx.clone(),
+            generation,
+            path.to_path_buf(),
+            SkinKind::Result,
+            options,
+            files,
+        );
+        self.pending_result_skin = true;
+        tracing::info!(?slot, path = trimmed, generation, "result skin decode queued");
+    }
+
+    fn set_empty_result_skin_context(&mut self) {
+        let context =
+            self.default_skin_manifest.clone().map(SkinContext::from_manifest).unwrap_or_default();
+        self.renderer.set_result_skin_context(context);
+        self.skin_video_sources.remove(&SkinKind::Result);
+    }
+
     fn is_kind_pending_decode(&self, kind: SkinKind) -> bool {
         match kind {
             SkinKind::Select => self.pending_select_skin,
@@ -7548,11 +7621,13 @@ impl WinitApp {
         let play9_path = self.boot.profile_config.skin.play9.clone();
         let play10_path = self.boot.profile_config.skin.play10.clone();
         let play14_path = self.boot.profile_config.skin.play14.clone();
+        let course_result_path = self.boot.profile_config.skin.course_result.clone();
         let play5_defs = self.play_skin_defs_for_path(&play5_path);
         let play7_defs = self.play_skin_defs_for_path(&play7_path);
         let play9_defs = self.play_skin_defs_for_path(&play9_path);
         let play10_defs = self.play_skin_defs_for_path(&play10_path);
         let play14_defs = self.play_skin_defs_for_path(&play14_path);
+        let course_result_defs = self.play_skin_defs_for_path(&course_result_path);
         let skin_meta = SkinConfigMeta {
             select: SceneSkinDefs::from_document(self.renderer.select_skin_document()),
             decide: SceneSkinDefs::from_document(self.renderer.decide_skin_document()),
@@ -7562,6 +7637,7 @@ impl WinitApp {
             play10: play10_defs,
             play14: play14_defs,
             result: SceneSkinDefs::from_document(self.renderer.result_skin_document()),
+            course_result: course_result_defs,
         };
         // Clone the course summary so the egui closure can borrow it while
         // `self.egui` is uniquely borrowed.  CourseResultSummary is small —
@@ -7802,6 +7878,7 @@ impl WinitApp {
                     select: true,
                     decide: true,
                     result: true,
+                    course_result: true,
                     play5: true,
                     play7: true,
                     play9: true,
@@ -7849,11 +7926,12 @@ impl WinitApp {
     /// バックグラウンド decode + 段階 install パイプラインへ流す。
     fn reload_skins(&mut self, request: SkinReloadRequest) {
         let skin = self.boot.profile_config.skin.clone();
-        let (pending_select, pending_decide, pending_result) = reload_skin_textures(
+        let texture_request = SkinReloadRequest { result: false, course_result: false, ..request };
+        let (pending_select, pending_decide, _pending_result) = reload_skin_textures(
             &mut self.renderer,
             &self.skin_decode_tx,
             &mut self.skin_reload_generations,
-            request,
+            texture_request,
             &skin.select,
             &skin.decide,
             &skin.result,
@@ -7870,8 +7948,17 @@ impl WinitApp {
         if request.decide {
             self.pending_decide_skin = pending_decide;
         }
-        if request.result {
-            self.pending_result_skin = pending_result;
+        if request.result || request.course_result {
+            self.last_result_skin_signature = None;
+            if matches!(self.current_scene_kind(), AppSceneKind::Result) {
+                let slot = self.current_result_skin_slot();
+                if matches!(
+                    (slot, request.result, request.course_result),
+                    (ResultSkinSlot::Normal, true, _) | (ResultSkinSlot::Course, _, true)
+                ) {
+                    self.spawn_result_skin_decode_for(slot);
+                }
+            }
         }
         self.invalidate_skin_defs_cache_for_request(request);
         // 旧 generation 分の upload 結果は apply_uploaded_skin の generation
@@ -7932,7 +8019,7 @@ impl WinitApp {
     }
 
     fn invalidate_skin_defs_cache_for_request(&mut self, request: SkinReloadRequest) {
-        if request.select || request.decide || request.result {
+        if request.select || request.decide || request.result || request.course_result {
             self.skin_defs_cache.clear();
             return;
         }
@@ -8962,7 +9049,8 @@ fn push_skin_candidate(catalog: &mut SkinCatalog, skin_type: i32, candidate: Ski
         4 => catalog.play9.push(candidate),
         5 => catalog.select.push(candidate),
         6 => catalog.decide.push(candidate),
-        7 | 15 => catalog.result.push(candidate),
+        7 => catalog.result.push(candidate),
+        15 => catalog.course_result.push(candidate),
         _ => {}
     }
 }
@@ -8977,6 +9065,7 @@ fn sort_skin_catalog(catalog: &mut SkinCatalog) {
         &mut catalog.play10,
         &mut catalog.play14,
         &mut catalog.result,
+        &mut catalog.course_result,
     ] {
         candidates.sort_by(|a, b| {
             a.name
@@ -9264,7 +9353,7 @@ impl ApplicationHandler for WinitApp {
                     self.ensure_audio_output();
                     self.start_deferred_boot();
                     if self.current_scene_kind() == AppSceneKind::Result {
-                        self.ensure_skin_ready(SkinKind::Result);
+                        self.ensure_result_skin_ready(self.current_result_skin_slot());
                     }
                     self.last_scene_kind = None;
                 }
@@ -10023,6 +10112,26 @@ fn is_course_intermediate_result(
     finished_play: bool,
 ) -> bool {
     active_course && finished_play && !finished_course
+}
+
+fn result_skin_signature_for_config(
+    skin: &crate::config::profile_config::SkinConfig,
+    slot: ResultSkinSlot,
+) -> ResultSkinSignature {
+    match slot {
+        ResultSkinSlot::Normal => (
+            slot,
+            skin.result.trim().to_string(),
+            skin.result_options.clone(),
+            skin.result_files.clone(),
+        ),
+        ResultSkinSlot::Course => (
+            slot,
+            skin.course_result.trim().to_string(),
+            skin.course_result_options.clone(),
+            skin.course_result_files.clone(),
+        ),
+    }
 }
 
 /// リザルト画面で押すと終了アニメーションを開始するレーン。
@@ -12435,13 +12544,14 @@ mod tests {
         assert_eq!(catalog.play9.len(), 1);
         assert_eq!(catalog.play10.len(), 1);
         assert_eq!(catalog.play14.len(), 1);
-        assert_eq!(catalog.result.len(), 1);
+        assert_eq!(catalog.result.len(), 0);
+        assert_eq!(catalog.course_result.len(), 1);
         assert_eq!(catalog.play5[0].path, "data/skins/example/play5.luaskin");
         assert_eq!(catalog.play7[0].path, "data/skins/example/play7.luaskin");
         assert_eq!(catalog.play9[0].path, "data/skins/example/play9.luaskin");
         assert_eq!(catalog.play10[0].path, "data/skins/example/play10.luaskin");
         assert_eq!(catalog.play14[0].path, "data/skins/example/play14.luaskin");
-        assert_eq!(catalog.result[0].path, "data/skins/example/course-result.luaskin");
+        assert_eq!(catalog.course_result[0].path, "data/skins/example/course-result.luaskin");
     }
 
     #[test]
