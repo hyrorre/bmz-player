@@ -15,6 +15,7 @@ use bms_rs::bmson::{Bmson, parse_bmson};
 use bmz_core::lane::ChartKeyLayout;
 
 use crate::hash::compute_chart_identity;
+use crate::model::{JudgeRankKind, JudgeRankSpec};
 
 use super::bms_rs_adapter::build_intermediate_from_bms;
 use super::bmson_timing::{
@@ -76,6 +77,10 @@ pub fn import_bmson_to_intermediate(
     )?;
     intermediate.identity = identity;
     intermediate.metadata.suppress_bar_lines = suppress_bar_lines;
+    intermediate.metadata.judge_rank_spec = Some(JudgeRankSpec {
+        value: bmson.info.judge_rank.as_f64() as i32,
+        kind: JudgeRankKind::BmsonJudgeRank,
+    });
     Ok(intermediate)
 }
 

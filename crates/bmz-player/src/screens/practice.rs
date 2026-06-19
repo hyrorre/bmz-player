@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use bmz_chart::model::PlayableChart;
+use bmz_chart::model::{JudgeRankKind, JudgeRankSpec, PlayableChart};
 use bmz_chart::practice::apply_practice_section;
 use bmz_core::time::TimeUs;
 use bmz_gameplay::gauge::GaugeState;
@@ -134,6 +134,8 @@ pub fn apply_practice_property(
     let end_us = TimeUs(i64::from(end_ms) * 1000);
     apply_practice_section(chart, start_us, end_us);
     chart.metadata.judge_rank = Some(property.judgerank);
+    chart.metadata.judge_rank_spec =
+        Some(JudgeRankSpec { value: property.judgerank, kind: JudgeRankKind::BmsonJudgeRank });
     if let Some(total) = property.total {
         chart.metadata.total = Some(total);
     }

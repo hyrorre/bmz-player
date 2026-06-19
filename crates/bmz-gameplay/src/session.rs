@@ -806,7 +806,7 @@ pub fn apply_hcn_gauge(session: &mut GameSession, audio_now: TimeUs) {
 
 pub fn sync_judge_windows(session: &mut GameSession, now: TimeUs) {
     let percent = judge_percent_at_time(
-        session.chart.metadata.judge_rank,
+        session.chart.metadata.judge_rank_spec,
         &session.chart.judge_rank_events,
         now,
         session.rule_mode,

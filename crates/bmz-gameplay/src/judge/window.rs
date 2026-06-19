@@ -1,3 +1,4 @@
+use bmz_chart::model::{JudgeRankEvent, JudgeRankKind, JudgeRankSpec};
 use bmz_core::lane::KeyMode;
 
 use crate::rule::RuleMode;
@@ -37,6 +38,18 @@ pub fn judge_rank_to_percent_optional_for_rule_mode(rank: Option<i32>, rule_mode
     }
 }
 
+pub fn judge_rank_spec_to_percent_optional_for_rule_mode(
+    spec: Option<JudgeRankSpec>,
+    rule_mode: RuleMode,
+) -> i32 {
+    match rule_mode {
+        RuleMode::Lr2Oraja => lr2oraja_judge_rank_spec_to_percent(spec),
+        RuleMode::Beatoraja | RuleMode::Dx => {
+            judge_rank_to_percent_optional(spec.map(|spec| spec.value))
+        }
+    }
+}
+
 fn lr2oraja_judge_rank_to_percent(rank: i32) -> i32 {
     match rank {
         0 => 25,
@@ -47,6 +60,29 @@ fn lr2oraja_judge_rank_to_percent(rank: i32) -> i32 {
         4 => 75,
         r if r >= 10 => r,
         _ => 75,
+    }
+}
+
+fn lr2oraja_judge_rank_spec_to_percent(spec: Option<JudgeRankSpec>) -> i32 {
+    match spec {
+        None => 75,
+        Some(JudgeRankSpec { value, kind: JudgeRankKind::BmsRank }) => {
+            lr2oraja_judge_rank_to_percent(value)
+        }
+        Some(JudgeRankSpec { value, kind: JudgeRankKind::DefExRank }) => {
+            if value > 0 {
+                value * 75 / 100
+            } else {
+                75
+            }
+        }
+        Some(JudgeRankSpec { value, kind: JudgeRankKind::BmsonJudgeRank }) => {
+            if value > 0 {
+                value
+            } else {
+                100
+            }
+        }
     }
 }
 
@@ -335,27 +371,24 @@ pub const fn dx_note_judge_window() -> JudgeWindow {
 
 /// 譜面ヘッダ `#RANK` と `#EXRANK` イベントから、指定時刻の判定倍率 (%) を求める。
 pub fn judge_percent_at_time(
-    header_rank: Option<i32>,
-    events: &[bmz_chart::model::JudgeRankEvent],
+    header_rank: Option<JudgeRankSpec>,
+    events: &[JudgeRankEvent],
     now: bmz_core::time::TimeUs,
     rule_mode: RuleMode,
 ) -> i32 {
-    let mut percent = judge_rank_to_percent_optional_for_rule_mode(header_rank, rule_mode);
+    let mut percent = judge_rank_spec_to_percent_optional_for_rule_mode(header_rank, rule_mode);
+    if rule_mode == RuleMode::Lr2Oraja {
+        // LR2oraja's jbms-parser based play flow keeps #EXRANK/A0 out of the runtime rank path.
+        return percent;
+    }
     for event in events {
         if event.time <= now {
-            percent = judge_event_percent_for_rule_mode(event.rank_percent, rule_mode);
+            percent = event.rank_percent;
         } else {
             break;
         }
     }
     percent
-}
-
-fn judge_event_percent_for_rule_mode(percent: i32, rule_mode: RuleMode) -> i32 {
-    match rule_mode {
-        RuleMode::Lr2Oraja if percent == 125 => 75,
-        _ => percent,
-    }
 }
 
 fn scale_window_us(value: i64, percent: i32) -> i64 {
@@ -444,6 +477,10 @@ mod tests {
         JudgeWindow::symmetric(16_000, 40_000, 80_000, 120_000, 500_000, 200_000, 16_000)
     }
 
+    fn rank_spec(value: i32, kind: JudgeRankKind) -> JudgeRankSpec {
+        JudgeRankSpec { value, kind }
+    }
+
     #[test]
     fn maps_bms_rank_levels_to_percent() {
         assert_eq!(judge_rank_to_percent(0), 25);
@@ -469,6 +506,49 @@ mod tests {
         assert_eq!(judge_rank_to_percent_for_rule_mode(2, RuleMode::Lr2Oraja), 75);
         assert_eq!(judge_rank_to_percent_for_rule_mode(3, RuleMode::Lr2Oraja), 100);
         assert_eq!(judge_rank_to_percent_for_rule_mode(4, RuleMode::Lr2Oraja), 75);
+    }
+
+    #[test]
+    fn lr2oraja_defexrank_scales_against_normal_rank() {
+        assert_eq!(
+            judge_rank_spec_to_percent_optional_for_rule_mode(
+                Some(rank_spec(100, JudgeRankKind::DefExRank)),
+                RuleMode::Lr2Oraja,
+            ),
+            75
+        );
+        assert_eq!(
+            judge_rank_spec_to_percent_optional_for_rule_mode(
+                Some(rank_spec(125, JudgeRankKind::DefExRank)),
+                RuleMode::Lr2Oraja,
+            ),
+            93
+        );
+        assert_eq!(
+            judge_rank_spec_to_percent_optional_for_rule_mode(
+                Some(rank_spec(0, JudgeRankKind::DefExRank)),
+                RuleMode::Lr2Oraja,
+            ),
+            75
+        );
+    }
+
+    #[test]
+    fn lr2oraja_bmson_rank_uses_raw_percent() {
+        assert_eq!(
+            judge_rank_spec_to_percent_optional_for_rule_mode(
+                Some(rank_spec(100, JudgeRankKind::BmsonJudgeRank)),
+                RuleMode::Lr2Oraja,
+            ),
+            100
+        );
+        assert_eq!(
+            judge_rank_spec_to_percent_optional_for_rule_mode(
+                Some(rank_spec(0, JudgeRankKind::BmsonJudgeRank)),
+                RuleMode::Lr2Oraja,
+            ),
+            100
+        );
     }
 
     #[test]
@@ -593,13 +673,14 @@ mod tests {
             JudgeRankEvent { tick: Default::default(), time: TimeUs(1_000), rank_percent: 50 },
             JudgeRankEvent { tick: Default::default(), time: TimeUs(2_000), rank_percent: 25 },
         ];
-        assert_eq!(judge_percent_at_time(Some(3), &events, TimeUs(0), RuleMode::Beatoraja), 100);
-        assert_eq!(judge_percent_at_time(Some(3), &events, TimeUs(1_500), RuleMode::Beatoraja), 50);
-        assert_eq!(judge_percent_at_time(Some(3), &events, TimeUs(2_500), RuleMode::Beatoraja), 25);
+        let header = Some(rank_spec(3, JudgeRankKind::BmsRank));
+        assert_eq!(judge_percent_at_time(header, &events, TimeUs(0), RuleMode::Beatoraja), 100);
+        assert_eq!(judge_percent_at_time(header, &events, TimeUs(1_500), RuleMode::Beatoraja), 50);
+        assert_eq!(judge_percent_at_time(header, &events, TimeUs(2_500), RuleMode::Beatoraja), 25);
     }
 
     #[test]
-    fn lr2oraja_exrank_very_easy_falls_back_to_normal() {
+    fn lr2oraja_ignores_exrank_events() {
         use bmz_chart::model::JudgeRankEvent;
         use bmz_core::time::TimeUs;
 
@@ -608,7 +689,8 @@ mod tests {
             time: TimeUs(1_000),
             rank_percent: 125,
         }];
-        assert_eq!(judge_percent_at_time(None, &events, TimeUs(0), RuleMode::Lr2Oraja), 75);
-        assert_eq!(judge_percent_at_time(None, &events, TimeUs(1_500), RuleMode::Lr2Oraja), 75);
+        let header = Some(rank_spec(3, JudgeRankKind::BmsRank));
+        assert_eq!(judge_percent_at_time(header, &events, TimeUs(0), RuleMode::Lr2Oraja), 100);
+        assert_eq!(judge_percent_at_time(header, &events, TimeUs(1_500), RuleMode::Lr2Oraja), 100);
     }
 }

@@ -384,7 +384,7 @@ pub fn build_game_session_with_input_backend(
             judge_windows_for_rule_mode(
                 base_judge_windows,
                 judge_percent_at_time(
-                    chart.metadata.judge_rank,
+                    chart.metadata.judge_rank_spec,
                     &chart.judge_rank_events,
                     TimeUs(0),
                     rule_mode,

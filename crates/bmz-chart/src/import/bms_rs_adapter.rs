@@ -61,7 +61,7 @@ use super::intermediate::{
     WavDef,
 };
 
-use crate::model::LongNoteMode;
+use crate::model::{JudgeRankKind, JudgeRankSpec, LongNoteMode};
 
 pub(crate) const MAX_SUPPORTED_MEASURE: u32 = 100_000;
 const SPARSE_BMS_MESSAGE_OBJECT_THRESHOLD: usize = 8_192;
@@ -157,6 +157,7 @@ fn import_with_layout<T: KeyLayoutMapper>(
     let bms_headers = extract_bms_headers_from_text(&raw_text);
     intermediate.metadata.has_bms_random = has_bms_random;
     intermediate.metadata.bms_headers = bms_headers.clone();
+    apply_raw_judge_rank_headers(&mut intermediate, &bms_headers);
     intermediate.metadata.source_url = bms
         .metadata
         .url
@@ -803,6 +804,8 @@ fn build_metadata(bms: &Bms) -> IntermediateMetadata {
         .unwrap_or(130.0);
     let total = bms.judge.total.as_ref().and_then(|sv| sv.value().as_ref().ok().map(|v| v.get()));
     let judge_rank = bms.judge.rank.map(judge_level_to_int);
+    let judge_rank_spec =
+        judge_rank.map(|value| JudgeRankSpec { value, kind: JudgeRankKind::BmsRank });
 
     IntermediateMetadata {
         title: bms.music_info.title.clone().unwrap_or_default(),
@@ -813,6 +816,7 @@ fn build_metadata(bms: &Bms) -> IntermediateMetadata {
         play_level: bms.metadata.play_level.map(|v| v.to_string()).unwrap_or_default(),
         difficulty_name: bms.metadata.difficulty.map(|v| v.to_string()).unwrap_or_default(),
         judge_rank,
+        judge_rank_spec,
         initial_bpm,
         total,
         stage_file: bms
@@ -871,6 +875,22 @@ fn extract_bms_headers_from_text(text: &str) -> BTreeMap<String, String> {
         headers.insert(name.to_ascii_uppercase(), value);
     }
     headers
+}
+
+fn apply_raw_judge_rank_headers(
+    intermediate: &mut IntermediateChart,
+    bms_headers: &BTreeMap<String, String>,
+) {
+    let Some(value) = bms_headers.get("DEFEXRANK").and_then(|value| parse_header_i32(value)) else {
+        return;
+    };
+    intermediate.metadata.judge_rank = Some(value);
+    intermediate.metadata.judge_rank_spec =
+        Some(JudgeRankSpec { value, kind: JudgeRankKind::DefExRank });
+}
+
+fn parse_header_i32(value: &str) -> Option<i32> {
+    value.split_whitespace().next()?.parse().ok()
 }
 
 fn split_bms_header_command(body: &str) -> (String, String) {

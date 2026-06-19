@@ -75,7 +75,7 @@ mod tests {
     use bmz_core::lane::Lane;
 
     use crate::hash::compute_chart_identity;
-    use crate::model::{BgaEventKind, NoteKind, TimingEventKind};
+    use crate::model::{BgaEventKind, JudgeRankKind, NoteKind, TimingEventKind};
 
     use super::*;
 
@@ -302,6 +302,41 @@ mod tests {
         assert_eq!(result.chart.judge_rank_events.len(), 2);
         assert_eq!(result.chart.judge_rank_events[0].rank_percent, 50);
         assert_eq!(result.chart.judge_rank_events[1].rank_percent, 25);
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn imports_rank_as_bms_rank_source() {
+        let text = "\
+#TITLE Rank Song
+#BPM 120
+#RANK 4
+#00111:01
+";
+        let path = write_temp_bms(text);
+        let result = import_bms_chart(&path, None, false).unwrap();
+        assert_eq!(result.chart.metadata.judge_rank, Some(4));
+        let spec = result.chart.metadata.judge_rank_spec.unwrap();
+        assert_eq!(spec.value, 4);
+        assert_eq!(spec.kind, JudgeRankKind::BmsRank);
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn imports_defexrank_as_judge_rank_source() {
+        let text = "\
+#TITLE Defexrank Song
+#BPM 120
+#RANK 3
+#DEFEXRANK 125
+#00111:01
+";
+        let path = write_temp_bms(text);
+        let result = import_bms_chart(&path, None, false).unwrap();
+        assert_eq!(result.chart.metadata.judge_rank, Some(125));
+        let spec = result.chart.metadata.judge_rank_spec.unwrap();
+        assert_eq!(spec.value, 125);
+        assert_eq!(spec.kind, JudgeRankKind::DefExRank);
         std::fs::remove_file(&path).unwrap();
     }
 

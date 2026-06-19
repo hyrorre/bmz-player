@@ -45,6 +45,7 @@ pub struct ChartMetadata {
     pub genre: String,
     pub difficulty_name: String,
     pub judge_rank: Option<i32>,
+    pub judge_rank_spec: Option<JudgeRankSpec>,
     pub play_level: String,
     pub initial_bpm: f64,
     pub total: Option<f64>,
@@ -72,6 +73,22 @@ pub struct ChartMetadata {
     pub long_note_mode_defined: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JudgeRankSpec {
+    pub value: i32,
+    pub kind: JudgeRankKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JudgeRankKind {
+    /// BMS `#RANK` index.
+    BmsRank,
+    /// BMS `#DEFEXRANK` percent, scaled against the mode's normal rank.
+    DefExRank,
+    /// BMSON `judge_rank` raw percent.
+    BmsonJudgeRank,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LongNoteMode {
     /// 始点のみ判定。終点まで押し続ければ離さなくてよい。
@@ -93,6 +110,7 @@ impl Default for ChartMetadata {
             genre: String::new(),
             difficulty_name: String::new(),
             judge_rank: None,
+            judge_rank_spec: None,
             play_level: String::new(),
             initial_bpm: 0.0,
             total: None,

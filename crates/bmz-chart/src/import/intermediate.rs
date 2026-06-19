@@ -5,7 +5,7 @@ use bmz_core::chart::ChartIdentity;
 use bmz_core::lane::{KeyMode, Lane};
 use bmz_core::time::{ChartTick, TimeUs};
 
-use crate::model::{LongNoteMode, LongNoteStyle};
+use crate::model::{JudgeRankSpec, LongNoteMode, LongNoteStyle};
 
 #[derive(Debug, Clone)]
 pub struct IntermediateChart {
@@ -27,6 +27,7 @@ pub struct IntermediateMetadata {
     pub play_level: String,
     pub difficulty_name: String,
     pub judge_rank: Option<i32>,
+    pub judge_rank_spec: Option<JudgeRankSpec>,
     pub initial_bpm: f64,
     pub total: Option<f64>,
     pub stage_file: String,
