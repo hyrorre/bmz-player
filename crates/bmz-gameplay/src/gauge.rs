@@ -519,25 +519,29 @@ fn apply_modifier(value: f32, modifier: GaugeModifier, total: f64, total_notes: 
 }
 
 fn modify_damage_scale(total: f64, total_notes: u32) -> f32 {
-    const FIX1_TOTAL: [f64; 10] =
-        [240.0, 230.0, 210.0, 200.0, 180.0, 160.0, 150.0, 130.0, 120.0, 0.0];
-    const FIX1_TABLE: [f32; 10] = [1.0, 1.11, 1.25, 1.5, 1.666, 2.0, 2.5, 3.333, 5.0, 10.0];
+    let fix1_divisor = ((total / 16.0).floor() - 5.0).clamp(1.0, 10.0);
+    let fix1 = (10.0 / fix1_divisor) as f32;
 
-    let mut i = 0;
-    while i < FIX1_TOTAL.len() - 1 && total < FIX1_TOTAL[i] {
-        i += 1;
-    }
+    let notes = total_notes as f32;
+    let fix2 = if total_notes <= 20 {
+        10.0
+    } else if total_notes < 30 {
+        8.0 + 0.2 * (30.0 - notes)
+    } else if total_notes < 60 {
+        5.0 + 0.2 * (60.0 - notes) / 3.0
+    } else if total_notes < 125 {
+        4.0 + (125.0 - notes) / 65.0
+    } else if total_notes < 250 {
+        3.0 + 0.008 * (250.0 - notes)
+    } else if total_notes < 500 {
+        2.0 + 0.004 * (500.0 - notes)
+    } else if total_notes < 1000 {
+        1.0 + 0.002 * (1000.0 - notes)
+    } else {
+        1.0
+    };
 
-    let mut fix2 = 1.0;
-    let mut note = 1000_u32;
-    let mut modifier = 0.002;
-    while note > total_notes || note > 1 {
-        fix2 += modifier * note.saturating_sub(total_notes.max(note / 2)) as f32;
-        note /= 2;
-        modifier *= 2.0;
-    }
-
-    FIX1_TABLE[i].max(fix2)
+    fix1.max(fix2)
 }
 
 fn iidx_total_value(total_notes: u32) -> f32 {
@@ -1235,8 +1239,8 @@ fn def(
 const HARD_GUTS: &[(f32, f32)] = &[(10.0, 0.4), (20.0, 0.5), (30.0, 0.6), (40.0, 0.7), (50.0, 0.8)];
 // beatoraja CLASS guts テーブル（7keys / PMS / KB 共通）。
 const CLASS_GUTS: &[(f32, f32)] = &[(5.0, 0.4), (10.0, 0.5), (15.0, 0.6), (20.0, 0.7), (25.0, 0.8)];
-// beatoraja LR2 CLASS / EXCLASS の guts。30 以下で減衰量を 60% に弱める。
-const LR2_CLASS_GUTS: &[(f32, f32)] = &[(30.0, 0.6)];
+// beatoraja LR2 CLASS / EXCLASS の guts。32% 未満で減衰量を 60% に弱める。
+const LR2_CLASS_GUTS: &[(f32, f32)] = &[(32.0, 0.6)];
 // LR2oraja 0.8.3+ の LR2 HARD 系 guts。32% 未満で減衰量を 60% に弱める。
 const LR2_HARD_GUTS: &[(f32, f32)] = &[(32.0, 0.6)];
 const DX_HARD_GUTS: &[(f32, f32)] = &[(30.0, 0.5)];
@@ -1250,9 +1254,28 @@ pub fn default_gauge_total(total_notes: u32) -> f64 {
     260.0_f64.max(7.605 * notes / (0.01 * notes + 6.5))
 }
 
+/// LR2oraja endlessdream `BMSPlayerRule.calculateDefaultTotal` 相当。
+pub fn lr2oraja_default_gauge_total(total_notes: u32) -> f64 {
+    let notes = total_notes as f64;
+    let extra = total_notes.saturating_sub(400).min(200) as f64;
+    160.0 + (notes + extra) * 0.16
+}
+
 /// 譜面メタの `#TOTAL` が未指定または 0 以下のとき beatoraja 既定式へフォールバックする。
 pub fn gauge_total_for_chart(metadata_total: Option<f64>, total_notes: u32) -> f64 {
     metadata_total.filter(|total| *total > 0.0).unwrap_or_else(|| default_gauge_total(total_notes))
+}
+
+/// rule mode 別に、譜面メタの `#TOTAL` 未指定時の既定 TOTAL を返す。
+pub fn gauge_total_for_chart_and_rule_mode(
+    metadata_total: Option<f64>,
+    total_notes: u32,
+    rule_mode: RuleMode,
+) -> f64 {
+    metadata_total.filter(|total| *total > 0.0).unwrap_or_else(|| match rule_mode {
+        RuleMode::Beatoraja | RuleMode::Dx => default_gauge_total(total_notes),
+        RuleMode::Lr2Oraja => lr2oraja_default_gauge_total(total_notes),
+    })
 }
 
 #[cfg(test)]
@@ -1268,10 +1291,49 @@ mod tests {
     }
 
     #[test]
+    fn lr2oraja_default_gauge_total_matches_endlessdream_formula() {
+        assert_eq!(lr2oraja_default_gauge_total(0), 160.0);
+        assert_eq!(lr2oraja_default_gauge_total(400), 224.0);
+        assert_eq!(lr2oraja_default_gauge_total(500), 256.0);
+        assert_eq!(lr2oraja_default_gauge_total(600), 288.0);
+        assert_eq!(lr2oraja_default_gauge_total(1000), 352.0);
+    }
+
+    #[test]
     fn gauge_total_for_chart_uses_metadata_when_positive() {
         assert_eq!(gauge_total_for_chart(Some(320.0), 500), 320.0);
         assert_eq!(gauge_total_for_chart(Some(0.0), 500), default_gauge_total(500));
         assert_eq!(gauge_total_for_chart(None, 500), default_gauge_total(500));
+    }
+
+    #[test]
+    fn gauge_total_for_chart_and_rule_mode_uses_lr2oraja_default() {
+        assert_eq!(
+            gauge_total_for_chart_and_rule_mode(None, 500, RuleMode::Beatoraja),
+            default_gauge_total(500)
+        );
+        assert_eq!(
+            gauge_total_for_chart_and_rule_mode(None, 500, RuleMode::Dx),
+            default_gauge_total(500)
+        );
+        assert_eq!(
+            gauge_total_for_chart_and_rule_mode(None, 500, RuleMode::Lr2Oraja),
+            lr2oraja_default_gauge_total(500)
+        );
+        assert_eq!(
+            gauge_total_for_chart_and_rule_mode(Some(320.0), 500, RuleMode::Lr2Oraja),
+            320.0
+        );
+    }
+
+    #[test]
+    fn modify_damage_scale_matches_lr2oraja_formula() {
+        assert!((modify_damage_scale(225.0, 1000) - 10.0 / 9.0).abs() < 0.000_1);
+        assert!((modify_damage_scale(205.0, 1000) - 10.0 / 7.0).abs() < 0.000_1);
+        assert!((modify_damage_scale(115.0, 1000) - 5.0).abs() < 0.000_1);
+        assert!((modify_damage_scale(260.0, 20) - 10.0).abs() < 0.000_1);
+        assert!((modify_damage_scale(260.0, 25) - 9.0).abs() < 0.000_1);
+        assert!((modify_damage_scale(260.0, 45) - 6.0).abs() < 0.000_1);
     }
 
     #[test]
@@ -1459,6 +1521,8 @@ mod tests {
         // LR2 EXHARDCLASS は突き抜けて重い (-12 BAD)。
         let exhardclass_lr2 = definition_for_property(GaugeType::ExHardClass, GaugeProperty::Lr2);
         assert_eq!(exhardclass_lr2.values[3], -12.0);
+        let class_lr2 = definition_for_property(GaugeType::Class, GaugeProperty::Lr2);
+        assert_eq!(class_lr2.guts, LR2_CLASS_GUTS);
 
         // KEYBOARD CLASS は PG/GR 回復が 0.20 と高い。
         let class_kb = definition_for_property(GaugeType::Class, GaugeProperty::Keyboard);

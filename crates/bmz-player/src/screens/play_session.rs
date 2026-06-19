@@ -11,7 +11,9 @@ use bmz_core::ids::NoteId;
 use bmz_core::lane::{KeyMode, LANE_COUNT, Lane};
 use bmz_core::time::TimeUs;
 use bmz_gameplay::autoplay::AutoplayController;
-use bmz_gameplay::gauge::{GaugeAutoShiftMode, GaugeProperty, GaugeState, gauge_total_for_chart};
+use bmz_gameplay::gauge::{
+    GaugeAutoShiftMode, GaugeProperty, GaugeState, gauge_total_for_chart_and_rule_mode,
+};
 use bmz_gameplay::hit_error::HitErrorRing;
 use bmz_gameplay::input::backend::{InputBackend, NullInputBackend};
 use bmz_gameplay::input::system::InputSystem;
@@ -170,8 +172,8 @@ pub fn apply_placeholder_session_visuals(
         options.gauge_property.unwrap_or_else(|| GaugeProperty::from_keymode(key_mode));
     // TOTAL は譜面パース前で不明だが、init/max/border は TOTAL 非依存なので
     // ノーツ数由来のデフォルト TOTAL で代用して問題ない。
-    let gauge_total = gauge_total_for_chart(None, snapshot.total_notes);
     let rule_mode = profile.play.rule_mode;
+    let gauge_total = gauge_total_for_chart_and_rule_mode(None, snapshot.total_notes, rule_mode);
     let mut gauge = if gauge_auto_shift != GaugeAutoShiftMode::Off {
         GaugeState::new_with_auto_shift_property_and_rule_mode(
             gauge_type,
@@ -342,7 +344,8 @@ pub fn build_game_session_with_input_backend(
     let base_judge_window = base_judge_windows.note;
 
     let mut gauge = {
-        let gauge_total = gauge_total_for_chart(chart.metadata.total, chart.total_notes);
+        let gauge_total =
+            gauge_total_for_chart_and_rule_mode(chart.metadata.total, chart.total_notes, rule_mode);
         // 単曲時はチャートのキーモードから GaugeProperty を導出、コース時は
         // `apply_course_constraints` が CourseGaugeConstraint から決めた値を使う。
         let gauge_property = options
