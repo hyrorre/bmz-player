@@ -30,16 +30,30 @@ BMZ 独自拡張:
 | 21 | 2KEYS | 予約のみ |
 | 22 | 4KEYS | 実装済み |
 | 23 | 6KEYS | 実装済み |
-| 24 | 8KEYS | 予約のみ |
+| 24 | 8KEYS | 実装済み |
 
-`22=4KEYS` と `23=6KEYS` は Scratch なしの `Key1..KeyN` 用 play skin type。
+`22=4KEYS`, `23=6KEYS`, `24=8KEYS` は Scratch なしの `Key1..KeyN` 用 play skin type。
 beatoraja には対応する skin type が無いため、BMZ 専用 skin として扱う。
+
+`#8K` BMS の U_E/BMSE 系 channel は、7K の表示順 `S1234567` を 8K の
+`Key1..Key8` として扱う。つまり `Scratch -> Key1`, `Key1 -> Key2`, ...,
+`Key7 -> Key8` に正規化してから skin へ渡す。
 
 ## Profile Slots
 
 profile の `[skin]` は key mode ごとに play skin path と設定を持つ。
 4K は `play4`, `play4_options`, `play4_files` を使う。
 6K は `play6`, `play6_options`, `play6_files` を使う。
+8K は `play8`, `play8_options`, `play8_files` を使う。
 
-未実装の 8K は当面 `play7` にフォールバックする。2K は skin type のみ予約し、
-BMZ 本体の key mode としてはまだ扱わない。
+2K は skin type のみ予約し、BMZ 本体の key mode としてはまだ扱わない。
+
+## Bundled Rmz-skin Extensions
+
+`data/skins/Rmz-skin` の BMZ 同梱版は、BMZ 独自 play skin type として
+`play4main.luaskin` (`type=22`), `play6main.luaskin` (`type=23`),
+`play8main.luaskin` (`type=24`) を提供する。
+
+8K 版はレーンごとのノーツ色を property で選択できる。property 名は
+`8Key Lane 1 Color` から `8Key Lane 8 Color` までで、選択肢は
+`White`, `Blue`, `Yellow`, `Scratch`。既定値は `Yellow, White, Blue, White, White, Blue, White, Yellow`。

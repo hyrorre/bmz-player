@@ -64,9 +64,9 @@ const REMAP_6K: [(Lane, Lane); 6] = [
 
 fn implicit_inherit(child: KeyMode) -> Option<KeyMode> {
     match child {
-        KeyMode::K5 | KeyMode::K4 | KeyMode::K6 | KeyMode::K8 => Some(KeyMode::K7),
+        KeyMode::K5 | KeyMode::K4 | KeyMode::K6 => Some(KeyMode::K7),
         KeyMode::K10 => Some(KeyMode::K14),
-        KeyMode::K7 | KeyMode::K14 | KeyMode::K9 => None,
+        KeyMode::K7 | KeyMode::K8 | KeyMode::K14 | KeyMode::K9 => None,
     }
 }
 
@@ -340,7 +340,8 @@ fn control_from_config(device: &str, control: &str) -> PhysicalControl {
 
 pub fn default_play_bindings(key_mode: KeyMode) -> Vec<BindingConfigEntry> {
     match key_mode {
-        KeyMode::K7 | KeyMode::K8 => default_play_7k_bindings(),
+        KeyMode::K7 => default_play_7k_bindings(),
+        KeyMode::K8 => default_play_8k_bindings(),
         KeyMode::K14 => default_play_14k_bindings(),
         KeyMode::K9 => default_play_9k_bindings(),
         KeyMode::K5 | KeyMode::K4 | KeyMode::K6 | KeyMode::K10 => Vec::new(),
@@ -458,6 +459,19 @@ pub fn default_play_9k_bindings() -> Vec<BindingConfigEntry> {
         play_binding("V", LaneConfig::Key7),
         play_binding("G", LaneConfig::Key8),
         play_binding("B", LaneConfig::Key9),
+    ]
+}
+
+pub fn default_play_8k_bindings() -> Vec<BindingConfigEntry> {
+    vec![
+        play_binding("Z", LaneConfig::Key1),
+        play_binding("S", LaneConfig::Key2),
+        play_binding("X", LaneConfig::Key3),
+        play_binding("D", LaneConfig::Key4),
+        play_binding("C", LaneConfig::Key5),
+        play_binding("F", LaneConfig::Key6),
+        play_binding("V", LaneConfig::Key7),
+        play_binding("G", LaneConfig::Key8),
     ]
 }
 
@@ -698,11 +712,12 @@ mod tests {
     }
 
     #[test]
-    fn eight_k_matches_seven_k_lanes() {
+    fn eight_k_uses_scratchless_default_lanes() {
         let input = sample_7k_input();
         let bindings = resolve_play_bindings(&input, KeyMode::K8).unwrap();
-        assert!(bindings.iter().any(|e| e.lane == Some(LaneConfig::Scratch)));
-        assert!(bindings.iter().any(|e| e.lane == Some(LaneConfig::Key7)));
+        assert!(!bindings.iter().any(|e| e.lane == Some(LaneConfig::Scratch)));
+        assert!(bindings.iter().any(|e| e.lane == Some(LaneConfig::Key1)));
+        assert!(bindings.iter().any(|e| e.lane == Some(LaneConfig::Key8)));
     }
 
     #[test]

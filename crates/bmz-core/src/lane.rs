@@ -76,7 +76,7 @@ pub enum KeyMode {
     K7,
     /// Qwilight-style 6K (Scratch なし)
     K6,
-    /// Qwilight-style 8K (Scratch + Key1-7)
+    /// Qwilight-style 8K (Scratch なし)
     K8,
     /// PMS 9K (Pop'n)。Scratch なし。PMS 5K もスキン/入力は K9 に寄せる。
     K9,
@@ -141,6 +141,18 @@ const ACTIVE_K7: [Lane; 8] = [
     Lane::Key7,
 ];
 
+/// 8K Qwilight 表示順 (Key1-8, Scratch なし)
+const ACTIVE_K8: [Lane; 8] = [
+    Lane::Key1,
+    Lane::Key2,
+    Lane::Key3,
+    Lane::Key4,
+    Lane::Key5,
+    Lane::Key6,
+    Lane::Key7,
+    Lane::Key8,
+];
+
 /// 9K PMS 表示順 (Scratch なし, Key1-9)
 const ACTIVE_K9: [Lane; 9] = [
     Lane::Key1,
@@ -184,7 +196,7 @@ impl KeyMode {
             KeyMode::K5 => &ACTIVE_K5,
             KeyMode::K6 => &ACTIVE_K6,
             KeyMode::K7 => &ACTIVE_K7,
-            KeyMode::K8 => &ACTIVE_K7, // 8K = Scratch + Key1-7
+            KeyMode::K8 => &ACTIVE_K8,
             KeyMode::K9 => &ACTIVE_K9,
             KeyMode::K10 => &ACTIVE_K10,
             KeyMode::K14 => &ACTIVE_K14,
@@ -296,6 +308,14 @@ mod tests {
         assert_eq!(KeyMode::K9.active_lanes(), &ACTIVE_K9);
         assert_eq!(KeyMode::K9.as_str(), "9K");
         assert_eq!(KeyMode::from_str_opt("9k"), Some(KeyMode::K9));
+    }
+
+    #[test]
+    fn k8_active_lanes_are_eight_keys_without_scratch() {
+        assert_eq!(KeyMode::K8.lane_count(), 8);
+        assert_eq!(KeyMode::K8.active_lanes(), &ACTIVE_K8);
+        assert_eq!(KeyMode::K8.as_str(), "8K");
+        assert_eq!(KeyMode::from_str_opt("8k"), Some(KeyMode::K8));
     }
 
     #[test]

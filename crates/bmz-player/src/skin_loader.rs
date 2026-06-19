@@ -51,6 +51,12 @@ pub fn play_skin_selection_for(skin: &SkinConfig, key_mode: KeyMode) -> PlaySkin
             options: &skin.play7_options,
             files: &skin.play7_files,
         },
+        KeyMode::K8 => PlaySkinSelection {
+            key_mode,
+            path: skin.play8.as_str(),
+            options: &skin.play8_options,
+            files: &skin.play8_files,
+        },
         KeyMode::K10 => PlaySkinSelection {
             key_mode,
             path: skin.play10.as_str(),
@@ -68,13 +74,6 @@ pub fn play_skin_selection_for(skin: &SkinConfig, key_mode: KeyMode) -> PlaySkin
             path: skin.play9.as_str(),
             options: &skin.play9_options,
             files: &skin.play9_files,
-        },
-        // Qwilight 系 8K 未実装の間は 7K プレイスキンへフォールバック。
-        KeyMode::K8 => PlaySkinSelection {
-            key_mode,
-            path: skin.play7.as_str(),
-            options: &skin.play7_options,
-            files: &skin.play7_files,
         },
     }
 }
@@ -2062,6 +2061,7 @@ mod tests {
             play5: "skin5.json".to_string(),
             play6: "skin6.json".to_string(),
             play7: "skin7.json".to_string(),
+            play8: "skin8.json".to_string(),
             play9: "skin9.json".to_string(),
             play10: "skin10.json".to_string(),
             play14: "skin14.json".to_string(),
@@ -2071,6 +2071,7 @@ mod tests {
         skin.play5_options.insert("a".to_string(), "x".to_string());
         skin.play6_options.insert("f".to_string(), "q".to_string());
         skin.play7_options.insert("b".to_string(), "y".to_string());
+        skin.play8_options.insert("h".to_string(), "n".to_string());
         skin.play9_options.insert("e".to_string(), "p".to_string());
         skin.play10_files.insert("c".to_string(), "z.png".to_string());
         skin.play14_files.insert("d".to_string(), "w.png".to_string());
@@ -2090,6 +2091,10 @@ mod tests {
         let s7 = play_skin_selection_for(&skin, KeyMode::K7);
         assert_eq!(s7.path, "skin7.json");
         assert!(s7.options.contains_key("b"));
+
+        let s8 = play_skin_selection_for(&skin, KeyMode::K8);
+        assert_eq!(s8.path, "skin8.json");
+        assert!(s8.options.contains_key("h"));
 
         let s9 = play_skin_selection_for(&skin, KeyMode::K9);
         assert_eq!(s9.path, "skin9.json");
@@ -2133,6 +2138,22 @@ mod tests {
         let mut renderer = Renderer::default();
 
         apply_skin_from_config(&mut renderer, skin_path.to_str().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn rmz_play8_lua_skin_decodes_when_available() {
+        let skin_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/skins/Rmz-skin/play8main.luaskin");
+        if !skin_path.is_file() {
+            return;
+        }
+
+        let decoded = decode_beatoraja_skin(&skin_path, SkinKind::Play).unwrap();
+
+        assert_eq!(decoded.document.skin_type, 24);
+        let note = decoded.document.note.as_ref().expect("play8 skin should define notes");
+        assert_eq!(note.note.len(), 8);
+        assert_eq!(note.dst.len(), 8);
     }
 
     #[test]

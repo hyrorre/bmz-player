@@ -399,7 +399,7 @@ mod tests {
     #[test]
     fn settings_keys_extension_modes_list_lanes() {
         for (key_mode, rows_per_slot) in
-            [(KeyMode::K4, 4), (KeyMode::K6, 6), (KeyMode::K8, 9), (KeyMode::K9, 9)]
+            [(KeyMode::K4, 4), (KeyMode::K6, 6), (KeyMode::K8, 8), (KeyMode::K9, 9)]
         {
             let items =
                 load_settings_items(&format!("bmz-settings:keys:{}", key_mode.play_map_key()));

@@ -51,6 +51,7 @@ pub struct SkinReloadRequest {
     pub play5: bool,
     pub play6: bool,
     pub play7: bool,
+    pub play8: bool,
     pub play9: bool,
     pub play10: bool,
     pub play14: bool,
@@ -67,6 +68,7 @@ impl SkinReloadRequest {
             || self.play5
             || self.play6
             || self.play7
+            || self.play8
             || self.play9
             || self.play10
             || self.play14
@@ -85,6 +87,7 @@ impl SkinReloadRequest {
         self.play5 |= other.play5;
         self.play6 |= other.play6;
         self.play7 |= other.play7;
+        self.play8 |= other.play8;
         self.play9 |= other.play9;
         self.play10 |= other.play10;
         self.play14 |= other.play14;
@@ -208,6 +211,7 @@ pub struct SkinConfigMeta {
     pub play5: SceneSkinDefs,
     pub play6: SceneSkinDefs,
     pub play7: SceneSkinDefs,
+    pub play8: SceneSkinDefs,
     pub play9: SceneSkinDefs,
     pub play10: SceneSkinDefs,
     pub play14: SceneSkinDefs,
@@ -223,6 +227,7 @@ pub struct SkinCatalog {
     pub play5: Vec<SkinCandidate>,
     pub play6: Vec<SkinCandidate>,
     pub play7: Vec<SkinCandidate>,
+    pub play8: Vec<SkinCandidate>,
     pub play9: Vec<SkinCandidate>,
     pub play10: Vec<SkinCandidate>,
     pub play14: Vec<SkinCandidate>,
@@ -3402,6 +3407,7 @@ enum SkinSlot {
     Play5,
     Play6,
     Play7,
+    Play8,
     Play9,
     Play10,
     Play14,
@@ -3446,6 +3452,12 @@ fn skin_reload_request_from_diff(before: &SkinConfig, after: &SkinConfig) -> Ski
         || before.play7_files != after.play7_files
     {
         request.play7 = true;
+    }
+    if before.play8 != after.play8
+        || before.play8_options != after.play8_options
+        || before.play8_files != after.play8_files
+    {
+        request.play8 = true;
     }
     if before.play9 != after.play9
         || before.play9_options != after.play9_options
@@ -3548,6 +3560,7 @@ fn skin_slot_path(skin: &SkinConfig, slot: SkinSlot) -> &str {
         SkinSlot::Play5 => &skin.play5,
         SkinSlot::Play6 => &skin.play6,
         SkinSlot::Play7 => &skin.play7,
+        SkinSlot::Play8 => &skin.play8,
         SkinSlot::Play9 => &skin.play9,
         SkinSlot::Play10 => &skin.play10,
         SkinSlot::Play14 => &skin.play14,
@@ -3564,6 +3577,7 @@ fn skin_slot_path_mut(skin: &mut SkinConfig, slot: SkinSlot) -> &mut String {
         SkinSlot::Play5 => &mut skin.play5,
         SkinSlot::Play6 => &mut skin.play6,
         SkinSlot::Play7 => &mut skin.play7,
+        SkinSlot::Play8 => &mut skin.play8,
         SkinSlot::Play9 => &mut skin.play9,
         SkinSlot::Play10 => &mut skin.play10,
         SkinSlot::Play14 => &mut skin.play14,
@@ -3580,6 +3594,7 @@ fn skin_slot_options_mut(skin: &mut SkinConfig, slot: SkinSlot) -> &mut BTreeMap
         SkinSlot::Play5 => &mut skin.play5_options,
         SkinSlot::Play6 => &mut skin.play6_options,
         SkinSlot::Play7 => &mut skin.play7_options,
+        SkinSlot::Play8 => &mut skin.play8_options,
         SkinSlot::Play9 => &mut skin.play9_options,
         SkinSlot::Play10 => &mut skin.play10_options,
         SkinSlot::Play14 => &mut skin.play14_options,
@@ -3596,6 +3611,7 @@ fn skin_slot_files_mut(skin: &mut SkinConfig, slot: SkinSlot) -> &mut BTreeMap<S
         SkinSlot::Play5 => &mut skin.play5_files,
         SkinSlot::Play6 => &mut skin.play6_files,
         SkinSlot::Play7 => &mut skin.play7_files,
+        SkinSlot::Play8 => &mut skin.play8_files,
         SkinSlot::Play9 => &mut skin.play9_files,
         SkinSlot::Play10 => &mut skin.play10_files,
         SkinSlot::Play14 => &mut skin.play14_files,
@@ -3665,6 +3681,9 @@ fn build_skin_panel(
                     skin_path_combo(ui, skin, SkinSlot::Play7, "プレイ (7K)", &skin_catalog.play7);
                 ui.end_row();
                 changed |=
+                    skin_path_combo(ui, skin, SkinSlot::Play8, "プレイ (8K)", &skin_catalog.play8);
+                ui.end_row();
+                changed |=
                     skin_path_combo(ui, skin, SkinSlot::Play9, "プレイ (9K)", &skin_catalog.play9);
                 ui.end_row();
                 changed |= skin_path_combo(
@@ -3703,6 +3722,7 @@ fn build_skin_panel(
             let play5_root = skin_root_path(&skin.play5);
             let play6_root = skin_root_path(&skin.play6);
             let play7_root = skin_root_path(&skin.play7);
+            let play8_root = skin_root_path(&skin.play8);
             let play9_root = skin_root_path(&skin.play9);
             let play10_root = skin_root_path(&skin.play10);
             let play14_root = skin_root_path(&skin.play14);
@@ -3760,6 +3780,15 @@ fn build_skin_panel(
                 play7_root.as_deref(),
                 &mut skin.play7_options,
                 &mut skin.play7_files,
+                &mut skin.offsets,
+            );
+            changed |= build_scene_skin_defs(
+                ui,
+                "プレイスキン (8K)",
+                &skin_meta.play8,
+                play8_root.as_deref(),
+                &mut skin.play8_options,
+                &mut skin.play8_files,
                 &mut skin.offsets,
             );
             changed |= build_scene_skin_defs(

@@ -406,7 +406,7 @@ pub(crate) fn build_intermediate_from_bms<T: KeyLayoutMapper>(
 }
 
 fn normalize_qwilight_lanes(objects: &mut [IntermediateObject], key_mode: KeyMode) {
-    if !matches!(key_mode, KeyMode::K4 | KeyMode::K6) {
+    if !matches!(key_mode, KeyMode::K4 | KeyMode::K6 | KeyMode::K8) {
         return;
     }
 
@@ -428,6 +428,17 @@ fn normalize_qwilight_lanes(objects: &mut [IntermediateObject], key_mode: KeyMod
                 Lane::Key5 => Lane::Key4,
                 Lane::Key6 => Lane::Key5,
                 Lane::Key7 => Lane::Key6,
+                lane => lane,
+            },
+            KeyMode::K8 => match *lane {
+                Lane::Scratch => Lane::Key1,
+                Lane::Key1 => Lane::Key2,
+                Lane::Key2 => Lane::Key3,
+                Lane::Key3 => Lane::Key4,
+                Lane::Key4 => Lane::Key5,
+                Lane::Key5 => Lane::Key6,
+                Lane::Key6 => Lane::Key7,
+                Lane::Key7 => Lane::Key8,
                 lane => lane,
             },
             _ => *lane,
@@ -1567,7 +1578,7 @@ mod tests {
 
     fn ue_8k_note_lines() -> String {
         let mut lines = String::from(BMS_HEADER);
-        for (i, channel) in ["11", "12", "13", "14", "15", "16", "18", "19"].into_iter().enumerate()
+        for (i, channel) in ["16", "11", "12", "13", "14", "15", "18", "19"].into_iter().enumerate()
         {
             let measure = i + 1;
             lines.push_str(&format!("#{measure:03}{channel}:01\n"));
@@ -1621,6 +1632,29 @@ mod tests {
         text.push_str("#8K\n");
         let chart = import_bms_text(&text);
         assert_eq!(chart.metadata.key_mode, KeyMode::K8);
+    }
+
+    #[test]
+    fn bms_8k_header_maps_ue_channels_to_eight_key_lanes() {
+        let mut text = ue_8k_note_lines();
+        text.push_str("#8K\n");
+
+        let chart = import_bms_text(&text);
+
+        assert_eq!(chart.metadata.key_mode, KeyMode::K8);
+        assert_eq!(
+            note_lanes(&chart),
+            vec![
+                Lane::Key1,
+                Lane::Key2,
+                Lane::Key3,
+                Lane::Key4,
+                Lane::Key5,
+                Lane::Key6,
+                Lane::Key7,
+                Lane::Key8,
+            ],
+        );
     }
 
     #[test]
@@ -1891,7 +1925,21 @@ mod tests {
         }
         let mut warnings = Vec::new();
         let chart = import_bms_to_intermediate(path, None, &mut warnings).unwrap();
+        let counts = playable_lane_counts(&chart);
         assert_eq!(chart.metadata.key_mode, KeyMode::K8);
+        for lane in [
+            Lane::Key1,
+            Lane::Key2,
+            Lane::Key3,
+            Lane::Key4,
+            Lane::Key5,
+            Lane::Key6,
+            Lane::Key7,
+            Lane::Key8,
+        ] {
+            assert!(counts[lane.index()] > 0, "{lane:?} has no playable objects");
+        }
+        assert_eq!(counts[Lane::Scratch.index()], 0);
     }
 
     #[test]

@@ -654,6 +654,9 @@ pub struct SkinConfig {
     /// 7K プレイ画面スキンのパス。フォーマットは [`play5`] と同じ。
     #[serde(default)]
     pub play7: String,
+    /// 8K プレイ画面スキンのパス。フォーマットは [`play5`] と同じ。
+    #[serde(default)]
+    pub play8: String,
     /// 10K プレイ画面スキンのパス。フォーマットは [`play5`] と同じ。
     #[serde(default)]
     pub play10: String,
@@ -694,6 +697,9 @@ pub struct SkinConfig {
     /// 7K プレイスキンのカスタマイズオプション選択。
     #[serde(default)]
     pub play7_options: BTreeMap<String, String>,
+    /// 8K プレイスキンのカスタマイズオプション選択。
+    #[serde(default)]
+    pub play8_options: BTreeMap<String, String>,
     /// 10K プレイスキンのカスタマイズオプション選択。
     #[serde(default)]
     pub play10_options: BTreeMap<String, String>,
@@ -727,6 +733,9 @@ pub struct SkinConfig {
     /// 7K プレイスキンのファイル選択。
     #[serde(default)]
     pub play7_files: BTreeMap<String, String>,
+    /// 8K プレイスキンのファイル選択。
+    #[serde(default)]
+    pub play8_files: BTreeMap<String, String>,
     /// 10K プレイスキンのファイル選択。
     #[serde(default)]
     pub play10_files: BTreeMap<String, String>,

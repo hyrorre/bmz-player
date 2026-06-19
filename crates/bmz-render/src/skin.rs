@@ -6450,8 +6450,17 @@ fn beatoraja_note_index(lane: Lane, key_mode: KeyMode) -> usize {
             Lane::Key9 => 8,
             _ => 8,
         },
-        // Qwilight 系 8K は 7K スキンへフォールバック描画。
-        KeyMode::K8 => beatoraja_note_index(lane, KeyMode::K7),
+        KeyMode::K8 => match lane {
+            Lane::Key1 => 0,
+            Lane::Key2 => 1,
+            Lane::Key3 => 2,
+            Lane::Key4 => 3,
+            Lane::Key5 => 4,
+            Lane::Key6 => 5,
+            Lane::Key7 => 6,
+            Lane::Key8 => 7,
+            _ => 0,
+        },
     }
 }
 
@@ -9102,25 +9111,32 @@ fn skin_timer_elapsed_ms(timer: Option<i32>, state: &SkinDrawState) -> Option<i3
         Some(48 | 49) => state.full_combo_ms,
         Some(908) => state.music_end_ms,
         Some(50..=57) => state.bomb_ms[(timer.unwrap() - 50) as usize],
+        Some(58..=59) => state.bomb_ms[Lane::Key8.index() + (timer.unwrap() - 58) as usize],
         // 2P bomb: timer 60=Scratch2, 61-67=Key8-14
         Some(60) => state.bomb_ms[Lane::Scratch2.index()],
         Some(61..=67) => state.bomb_ms[Lane::Key8.index() + (timer.unwrap() - 61) as usize],
         // 1P hold: timer 70=Scratch, 71-77=Key1-7
         Some(70..=77) => state.hold_ms[(timer.unwrap() - 70) as usize],
+        Some(78..=79) => state.hold_ms[Lane::Key8.index() + (timer.unwrap() - 78) as usize],
         // 2P hold: timer 80=Scratch2, 81-87=Key8-14
         Some(80) => state.hold_ms[Lane::Scratch2.index()],
         Some(81..=87) => state.hold_ms[Lane::Key8.index() + (timer.unwrap() - 81) as usize],
         Some(100..=107) => state.keyon_ms[(timer.unwrap() - 100) as usize],
+        Some(108..=109) => state.keyon_ms[Lane::Key8.index() + (timer.unwrap() - 108) as usize],
         // 2P keyon: timer 110=Scratch2, 111-117=Key8-14
         Some(110) => state.keyon_ms[Lane::Scratch2.index()],
         Some(111..=117) => state.keyon_ms[Lane::Key8.index() + (timer.unwrap() - 111) as usize],
         Some(120..=127) => state.keyoff_ms[(timer.unwrap() - 120) as usize],
+        Some(128..=129) => state.keyoff_ms[Lane::Key8.index() + (timer.unwrap() - 128) as usize],
         // 2P keyoff: timer 130=Scratch2, 131-137=Key8-14
         Some(130) => state.keyoff_ms[Lane::Scratch2.index()],
         Some(131..=137) => state.keyoff_ms[Lane::Key8.index() + (timer.unwrap() - 131) as usize],
         Some(143 | 144) => state.end_of_note_ms,
         // 1P HCN active: timer 250=Scratch, 251-257=Key1-7
         Some(250..=257) => state.hcn_active_ms[(timer.unwrap() - 250) as usize],
+        Some(258..=259) => {
+            state.hcn_active_ms[Lane::Key8.index() + (timer.unwrap() - 258) as usize]
+        }
         // 2P HCN active: timer 260=Scratch2, 261-267=Key8-14
         Some(260) => state.hcn_active_ms[Lane::Scratch2.index()],
         Some(261..=267) => {
@@ -9128,6 +9144,9 @@ fn skin_timer_elapsed_ms(timer: Option<i32>, state: &SkinDrawState) -> Option<i3
         }
         // 1P HCN damage: timer 270=Scratch, 271-277=Key1-7
         Some(270..=277) => state.hcn_damage_ms[(timer.unwrap() - 270) as usize],
+        Some(278..=279) => {
+            state.hcn_damage_ms[Lane::Key8.index() + (timer.unwrap() - 278) as usize]
+        }
         // 2P HCN damage: timer 280=Scratch2, 281-287=Key8-14
         Some(280) => state.hcn_damage_ms[Lane::Scratch2.index()],
         Some(281..=287) => {
@@ -22252,6 +22271,37 @@ mod tests {
         assert_eq!(beatoraja_note_index(Lane::Key3, KeyMode::K4), 2);
         assert_eq!(beatoraja_note_index(Lane::Key4, KeyMode::K4), 3);
         assert_eq!(beatoraja_note_index(Lane::Scratch, KeyMode::K4), 3);
+    }
+
+    #[test]
+    fn beatoraja_note_index_maps_8k_lanes_without_scratch() {
+        assert_eq!(beatoraja_note_index(Lane::Key1, KeyMode::K8), 0);
+        assert_eq!(beatoraja_note_index(Lane::Key2, KeyMode::K8), 1);
+        assert_eq!(beatoraja_note_index(Lane::Key3, KeyMode::K8), 2);
+        assert_eq!(beatoraja_note_index(Lane::Key4, KeyMode::K8), 3);
+        assert_eq!(beatoraja_note_index(Lane::Key5, KeyMode::K8), 4);
+        assert_eq!(beatoraja_note_index(Lane::Key6, KeyMode::K8), 5);
+        assert_eq!(beatoraja_note_index(Lane::Key7, KeyMode::K8), 6);
+        assert_eq!(beatoraja_note_index(Lane::Key8, KeyMode::K8), 7);
+        assert_eq!(beatoraja_note_index(Lane::Scratch, KeyMode::K8), 0);
+    }
+
+    #[test]
+    fn skin_timer_maps_upper_scratchless_key_lanes() {
+        let mut state = SkinDrawState::default();
+        state.bomb_ms[Lane::Key8.index()] = Some(58);
+        state.hold_ms[Lane::Key8.index()] = Some(78);
+        state.keyon_ms[Lane::Key8.index()] = Some(108);
+        state.keyoff_ms[Lane::Key8.index()] = Some(128);
+        state.hcn_active_ms[Lane::Key8.index()] = Some(258);
+        state.hcn_damage_ms[Lane::Key8.index()] = Some(278);
+
+        assert_eq!(skin_timer_elapsed_ms(Some(58), &state), Some(58));
+        assert_eq!(skin_timer_elapsed_ms(Some(78), &state), Some(78));
+        assert_eq!(skin_timer_elapsed_ms(Some(108), &state), Some(108));
+        assert_eq!(skin_timer_elapsed_ms(Some(128), &state), Some(128));
+        assert_eq!(skin_timer_elapsed_ms(Some(258), &state), Some(258));
+        assert_eq!(skin_timer_elapsed_ms(Some(278), &state), Some(278));
     }
 
     fn unique_test_dir(name: &str) -> PathBuf {
