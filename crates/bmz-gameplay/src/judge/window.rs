@@ -172,7 +172,7 @@ pub const fn judge_windows_for_keymode_and_rule_mode(
     match rule_mode {
         RuleMode::Beatoraja => beatoraja_judge_windows_for_keymode(key_mode),
         RuleMode::Lr2Oraja => lr2oraja_judge_windows(),
-        RuleMode::Dx => JudgeWindows::uniform(dx_note_judge_window()),
+        RuleMode::Dx => dx_judge_windows(),
     }
 }
 
@@ -369,6 +369,28 @@ pub const fn dx_note_judge_window() -> JudgeWindow {
     }
 }
 
+pub const fn dx_long_note_end_judge_window() -> JudgeWindow {
+    JudgeWindow {
+        pgreat_us: 116_666,
+        great_us: 116_666,
+        good_us: 116_666,
+        bad_fast_us: 200_000,
+        bad_slow_us: 200_000,
+        empty_poor_fast_us: 0,
+        empty_poor_slow_us: 0,
+        mine_hit_us: 16_000,
+    }
+}
+
+pub const fn dx_judge_windows() -> JudgeWindows {
+    JudgeWindows {
+        note: dx_note_judge_window(),
+        scratch: dx_note_judge_window(),
+        long_note_end: dx_long_note_end_judge_window(),
+        long_scratch_end: dx_long_note_end_judge_window(),
+    }
+}
+
 /// 譜面ヘッダ `#RANK` と `#EXRANK` イベントから、指定時刻の判定倍率 (%) を求める。
 pub fn judge_percent_at_time(
     header_rank: Option<JudgeRankSpec>,
@@ -377,9 +399,13 @@ pub fn judge_percent_at_time(
     rule_mode: RuleMode,
 ) -> i32 {
     let mut percent = judge_rank_spec_to_percent_optional_for_rule_mode(header_rank, rule_mode);
+    if rule_mode == RuleMode::Dx {
+        // DX MODE uses JudgeProperty.IIDX with fixed windows; rank headers/events are ignored.
+        return 100;
+    }
     if matches!(rule_mode, RuleMode::Beatoraja | RuleMode::Lr2Oraja) {
         // Compatibility: beatoraja/LR2oraja keep #EXRANK/A0 out of the runtime rank path.
-        // BMZ still imports those events, but only DX mode applies them for now.
+        // BMZ still imports those events, but does not apply them to compatible modes.
         return percent;
     }
     for event in events {
@@ -666,7 +692,23 @@ mod tests {
     }
 
     #[test]
-    fn dx_exrank_events_override_header_rank() {
+    fn dx_mode_uses_iidx_long_note_end_window() {
+        let windows = judge_windows_for_keymode_and_rule_mode(KeyMode::K7, RuleMode::Dx);
+
+        assert_eq!(windows.note.pgreat_us, 16_666);
+        assert_eq!(windows.note.great_us, 33_333);
+        assert_eq!(windows.note.good_us, 116_666);
+        assert_eq!(windows.scratch, windows.note);
+        assert_eq!(windows.long_note_end.pgreat_us, 116_666);
+        assert_eq!(windows.long_note_end.great_us, 116_666);
+        assert_eq!(windows.long_note_end.good_us, 116_666);
+        assert_eq!(windows.long_note_end.bad_fast_us, 200_000);
+        assert_eq!(windows.long_note_end.empty_poor_fast_us, 0);
+        assert_eq!(windows.long_scratch_end, windows.long_note_end);
+    }
+
+    #[test]
+    fn dx_ignores_rank_and_exrank_events() {
         use bmz_chart::model::JudgeRankEvent;
         use bmz_core::time::TimeUs;
 
@@ -674,10 +716,10 @@ mod tests {
             JudgeRankEvent { tick: Default::default(), time: TimeUs(1_000), rank_percent: 50 },
             JudgeRankEvent { tick: Default::default(), time: TimeUs(2_000), rank_percent: 25 },
         ];
-        let header = Some(rank_spec(3, JudgeRankKind::BmsRank));
+        let header = Some(rank_spec(0, JudgeRankKind::BmsRank));
         assert_eq!(judge_percent_at_time(header, &events, TimeUs(0), RuleMode::Dx), 100);
-        assert_eq!(judge_percent_at_time(header, &events, TimeUs(1_500), RuleMode::Dx), 50);
-        assert_eq!(judge_percent_at_time(header, &events, TimeUs(2_500), RuleMode::Dx), 25);
+        assert_eq!(judge_percent_at_time(header, &events, TimeUs(1_500), RuleMode::Dx), 100);
+        assert_eq!(judge_percent_at_time(header, &events, TimeUs(2_500), RuleMode::Dx), 100);
     }
 
     #[test]

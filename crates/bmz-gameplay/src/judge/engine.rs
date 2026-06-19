@@ -225,7 +225,7 @@ impl JudgeEngine {
         if candidate.consumes_note {
             let note_id = candidate.note_id.expect("normal candidate must have note id");
             let note = chart.note_by_id(note_id).expect("candidate note exists");
-            let multi_bad_candidates = if rule_mode == RuleMode::Lr2Oraja {
+            let multi_bad_candidates = if matches!(rule_mode, RuleMode::Lr2Oraja | RuleMode::Dx) {
                 lr2oraja_multi_bad_candidates(
                     chart,
                     input.lane,
@@ -1125,6 +1125,25 @@ mod tests {
             outcome.keysounds,
             vec![KeySoundEvent { note_id: NoteId(2), time: TimeUs(1_150_000) }]
         );
+        assert_eq!(engine.lanes[Lane::Key1.index()].next_note_index, 2);
+    }
+
+    #[test]
+    fn dx_mode_adds_lr2oraja_multi_bad() {
+        let chart = chart_with_two_taps(TimeUs(1_000_000), TimeUs(1_090_000));
+        let mut engine = JudgeEngine::new_with_rule_mode(
+            crate::judge::window::dx_note_judge_window(),
+            RuleMode::Dx,
+        );
+
+        let outcome = engine.process_input(&chart, press_at(TimeUs(1_150_000)));
+
+        assert!(outcome.consumed_input);
+        assert_eq!(outcome.events.len(), 2);
+        assert_eq!(outcome.events[0].note_id, Some(NoteId(1)));
+        assert_eq!(outcome.events[0].judge, Judge::Bad);
+        assert_eq!(outcome.events[1].note_id, Some(NoteId(2)));
+        assert_eq!(outcome.events[1].judge, Judge::Good);
         assert_eq!(engine.lanes[Lane::Key1.index()].next_note_index, 2);
     }
 
