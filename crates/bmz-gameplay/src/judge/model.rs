@@ -46,6 +46,34 @@ impl JudgeWindow {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JudgeWindows {
+    pub note: JudgeWindow,
+    pub scratch: JudgeWindow,
+    pub long_note_end: JudgeWindow,
+    pub long_scratch_end: JudgeWindow,
+}
+
+impl JudgeWindows {
+    pub const fn uniform(window: JudgeWindow) -> Self {
+        Self { note: window, scratch: window, long_note_end: window, long_scratch_end: window }
+    }
+
+    pub const fn press_window(self, lane: Lane) -> JudgeWindow {
+        match lane {
+            Lane::Scratch | Lane::Scratch2 => self.scratch,
+            _ => self.note,
+        }
+    }
+
+    pub const fn long_end_window(self, lane: Lane) -> JudgeWindow {
+        match lane {
+            Lane::Scratch | Lane::Scratch2 => self.long_scratch_end,
+            _ => self.long_note_end,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct JudgementEvent {
     pub note_id: Option<NoteId>,

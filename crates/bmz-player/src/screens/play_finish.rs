@@ -2,6 +2,8 @@ use anyhow::{Result, bail};
 use bmz_chart::model::LongNoteMode;
 use bmz_core::clear::ClearType;
 use bmz_core::input::InputDeviceKind;
+#[cfg(test)]
+use bmz_gameplay::judge::model::JudgeWindows;
 use bmz_gameplay::result::PlayResult;
 use bmz_gameplay::session::{GameSession, PlayState};
 
@@ -814,6 +816,7 @@ mod tests {
             },
             judge: JudgeEngine::new(DEFAULT_JUDGE_WINDOW),
             base_judge_window: DEFAULT_JUDGE_WINDOW,
+            base_judge_windows: JudgeWindows::uniform(DEFAULT_JUDGE_WINDOW),
             rule_mode: bmz_gameplay::rule::RuleMode::Beatoraja,
             score: Default::default(),
             gauge: bmz_gameplay::gauge::GaugeState::new(

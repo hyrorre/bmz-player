@@ -2,7 +2,7 @@ use bmz_core::lane::KeyMode;
 
 use crate::rule::RuleMode;
 
-use super::model::JudgeWindow;
+use super::model::{JudgeWindow, JudgeWindows};
 
 /// BMS `#RANK` 値を beatoraja 準拠の判定窓倍率 (%) に変換する。
 pub fn judge_rank_to_percent(rank: i32) -> i32 {
@@ -37,6 +37,15 @@ pub fn judge_window_for_rank(base: JudgeWindow, percent: i32) -> JudgeWindow {
     }
 }
 
+pub fn judge_windows_for_rank(base: JudgeWindows, percent: i32) -> JudgeWindows {
+    JudgeWindows {
+        note: judge_window_for_rank(base.note, percent),
+        scratch: judge_window_for_rank(base.scratch, percent),
+        long_note_end: judge_window_for_rank(base.long_note_end, percent),
+        long_scratch_end: judge_window_for_rank(base.long_scratch_end, percent),
+    }
+}
+
 pub fn judge_window_for_rule_mode(
     base: JudgeWindow,
     percent: i32,
@@ -45,6 +54,23 @@ pub fn judge_window_for_rule_mode(
     match rule_mode {
         RuleMode::Beatoraja => judge_window_for_rank(base, percent),
         RuleMode::Lr2Oraja => lr2oraja_judge_window_for_rank(base, percent),
+        RuleMode::Dx => base,
+    }
+}
+
+pub fn judge_windows_for_rule_mode(
+    base: JudgeWindows,
+    percent: i32,
+    rule_mode: RuleMode,
+) -> JudgeWindows {
+    match rule_mode {
+        RuleMode::Beatoraja => judge_windows_for_rank(base, percent),
+        RuleMode::Lr2Oraja => JudgeWindows {
+            note: lr2oraja_judge_window_for_rank(base.note, percent),
+            scratch: lr2oraja_judge_window_for_rank(base.scratch, percent),
+            long_note_end: lr2oraja_judge_window_for_rank(base.long_note_end, percent),
+            long_scratch_end: lr2oraja_judge_window_for_rank(base.long_scratch_end, percent),
+        },
         RuleMode::Dx => base,
     }
 }
@@ -69,6 +95,17 @@ pub const fn note_judge_window_for_rule_mode(
         RuleMode::Beatoraja => beatoraja_note_judge_window_for_keymode(key_mode),
         RuleMode::Lr2Oraja => lr2oraja_note_judge_window(),
         RuleMode::Dx => dx_note_judge_window(),
+    }
+}
+
+pub const fn judge_windows_for_keymode_and_rule_mode(
+    key_mode: KeyMode,
+    rule_mode: RuleMode,
+) -> JudgeWindows {
+    match rule_mode {
+        RuleMode::Beatoraja => beatoraja_judge_windows_for_keymode(key_mode),
+        RuleMode::Lr2Oraja => JudgeWindows::uniform(lr2oraja_note_judge_window()),
+        RuleMode::Dx => JudgeWindows::uniform(dx_note_judge_window()),
     }
 }
 
@@ -116,6 +153,102 @@ pub const fn beatoraja_note_judge_window_for_keymode(key_mode: KeyMode) -> Judge
             empty_poor_slow_us: 150_000,
             mine_hit_us: 16_000,
         },
+    }
+}
+
+pub const fn beatoraja_scratch_judge_window_for_keymode(key_mode: KeyMode) -> JudgeWindow {
+    match key_mode {
+        KeyMode::K5 | KeyMode::K10 => JudgeWindow {
+            pgreat_us: 30_000,
+            great_us: 60_000,
+            good_us: 110_000,
+            bad_fast_us: 160_000,
+            bad_slow_us: 160_000,
+            empty_poor_fast_us: 500_000,
+            empty_poor_slow_us: 160_000,
+            mine_hit_us: 16_000,
+        },
+        KeyMode::K9 => beatoraja_note_judge_window_for_keymode(key_mode),
+        KeyMode::K7 | KeyMode::K14 | KeyMode::K4 | KeyMode::K6 | KeyMode::K8 => JudgeWindow {
+            pgreat_us: 30_000,
+            great_us: 70_000,
+            good_us: 160_000,
+            bad_fast_us: 290_000,
+            bad_slow_us: 230_000,
+            empty_poor_fast_us: 500_000,
+            empty_poor_slow_us: 160_000,
+            mine_hit_us: 16_000,
+        },
+    }
+}
+
+pub const fn beatoraja_long_note_end_judge_window_for_keymode(key_mode: KeyMode) -> JudgeWindow {
+    match key_mode {
+        KeyMode::K5 | KeyMode::K10 => JudgeWindow {
+            pgreat_us: 120_000,
+            great_us: 150_000,
+            good_us: 200_000,
+            bad_fast_us: 250_000,
+            bad_slow_us: 250_000,
+            empty_poor_fast_us: 0,
+            empty_poor_slow_us: 0,
+            mine_hit_us: 16_000,
+        },
+        KeyMode::K9 => JudgeWindow {
+            pgreat_us: 120_000,
+            great_us: 150_000,
+            good_us: 217_000,
+            bad_fast_us: 283_000,
+            bad_slow_us: 283_000,
+            empty_poor_fast_us: 0,
+            empty_poor_slow_us: 0,
+            mine_hit_us: 16_000,
+        },
+        KeyMode::K7 | KeyMode::K14 | KeyMode::K4 | KeyMode::K6 | KeyMode::K8 => JudgeWindow {
+            pgreat_us: 120_000,
+            great_us: 160_000,
+            good_us: 200_000,
+            bad_fast_us: 280_000,
+            bad_slow_us: 220_000,
+            empty_poor_fast_us: 0,
+            empty_poor_slow_us: 0,
+            mine_hit_us: 16_000,
+        },
+    }
+}
+
+pub const fn beatoraja_long_scratch_end_judge_window_for_keymode(key_mode: KeyMode) -> JudgeWindow {
+    match key_mode {
+        KeyMode::K5 | KeyMode::K10 => JudgeWindow {
+            pgreat_us: 130_000,
+            great_us: 160_000,
+            good_us: 110_000,
+            bad_fast_us: 260_000,
+            bad_slow_us: 260_000,
+            empty_poor_fast_us: 0,
+            empty_poor_slow_us: 0,
+            mine_hit_us: 16_000,
+        },
+        KeyMode::K9 => beatoraja_long_note_end_judge_window_for_keymode(key_mode),
+        KeyMode::K7 | KeyMode::K14 | KeyMode::K4 | KeyMode::K6 | KeyMode::K8 => JudgeWindow {
+            pgreat_us: 130_000,
+            great_us: 170_000,
+            good_us: 210_000,
+            bad_fast_us: 290_000,
+            bad_slow_us: 230_000,
+            empty_poor_fast_us: 0,
+            empty_poor_slow_us: 0,
+            mine_hit_us: 16_000,
+        },
+    }
+}
+
+pub const fn beatoraja_judge_windows_for_keymode(key_mode: KeyMode) -> JudgeWindows {
+    JudgeWindows {
+        note: beatoraja_note_judge_window_for_keymode(key_mode),
+        scratch: beatoraja_scratch_judge_window_for_keymode(key_mode),
+        long_note_end: beatoraja_long_note_end_judge_window_for_keymode(key_mode),
+        long_scratch_end: beatoraja_long_scratch_end_judge_window_for_keymode(key_mode),
     }
 }
 
@@ -277,6 +410,36 @@ mod tests {
         assert_eq!(beatoraja_note_judge_window_for_keymode(KeyMode::K4), seven);
         assert_eq!(beatoraja_note_judge_window_for_keymode(KeyMode::K6), seven);
         assert_eq!(beatoraja_note_judge_window_for_keymode(KeyMode::K8), seven);
+    }
+
+    #[test]
+    fn beatoraja_7k_scratch_window_uses_scratch_table() {
+        let window = beatoraja_scratch_judge_window_for_keymode(KeyMode::K7);
+
+        assert_eq!(window.pgreat_us, 30_000);
+        assert_eq!(window.great_us, 70_000);
+        assert_eq!(window.good_us, 160_000);
+        assert_eq!(window.bad_fast_us, 290_000);
+        assert_eq!(window.bad_slow_us, 230_000);
+        assert_eq!(window.empty_poor_fast_us, 500_000);
+        assert_eq!(window.empty_poor_slow_us, 160_000);
+    }
+
+    #[test]
+    fn beatoraja_long_note_end_windows_use_long_tables() {
+        let five = beatoraja_long_note_end_judge_window_for_keymode(KeyMode::K5);
+        assert_eq!(five.pgreat_us, 120_000);
+        assert_eq!(five.great_us, 150_000);
+        assert_eq!(five.good_us, 200_000);
+        assert_eq!(five.bad_fast_us, 250_000);
+        assert_eq!(five.bad_slow_us, 250_000);
+
+        let seven_scratch = beatoraja_long_scratch_end_judge_window_for_keymode(KeyMode::K7);
+        assert_eq!(seven_scratch.pgreat_us, 130_000);
+        assert_eq!(seven_scratch.great_us, 170_000);
+        assert_eq!(seven_scratch.good_us, 210_000);
+        assert_eq!(seven_scratch.bad_fast_us, 290_000);
+        assert_eq!(seven_scratch.bad_slow_us, 230_000);
     }
 
     #[test]

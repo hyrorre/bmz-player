@@ -17,8 +17,9 @@ use bmz_gameplay::input::backend::{InputBackend, NullInputBackend};
 use bmz_gameplay::input::system::InputSystem;
 use bmz_gameplay::input::translator::DefaultInputTranslator;
 use bmz_gameplay::judge::engine::JudgeEngine;
+use bmz_gameplay::judge::model::{JudgeWindow, JudgeWindows};
 use bmz_gameplay::judge::window::{
-    judge_percent_at_time, judge_window_for_rule_mode, note_judge_window_for_rule_mode,
+    judge_percent_at_time, judge_windows_for_keymode_and_rule_mode, judge_windows_for_rule_mode,
 };
 use bmz_gameplay::replay::{ReplayPlayer, ReplayRecorder};
 use bmz_gameplay::rule::RuleMode;
@@ -333,20 +334,11 @@ pub fn build_game_session_with_input_backend(
     // judge band is unreachable: NoGood zeroes good_us, NoGreat zeroes both
     // great_us and good_us.  Mirrors beatoraja JudgeManager's *JudgeWindowRate
     // = 0 path.
-    let base_judge_window = {
-        let mut w = note_judge_window_for_rule_mode(chart.metadata.key_mode, rule_mode);
-        match options.judge_constraint {
-            bmz_core::course::CourseJudgeConstraint::Normal => {}
-            bmz_core::course::CourseJudgeConstraint::NoGood => {
-                w.good_us = 0;
-            }
-            bmz_core::course::CourseJudgeConstraint::NoGreat => {
-                w.great_us = 0;
-                w.good_us = 0;
-            }
-        }
-        w
-    };
+    let base_judge_windows = apply_judge_constraint_to_windows(
+        judge_windows_for_keymode_and_rule_mode(chart.metadata.key_mode, rule_mode),
+        options.judge_constraint,
+    );
+    let base_judge_window = base_judge_windows.note;
 
     let mut gauge = {
         let gauge_total = gauge_total_for_chart(chart.metadata.total, chart.total_notes);
@@ -384,9 +376,9 @@ pub fn build_game_session_with_input_backend(
 
     GameSession {
         gauge,
-        judge: JudgeEngine::new_with_rule_mode(
-            judge_window_for_rule_mode(
-                base_judge_window,
+        judge: JudgeEngine::new_with_window_set(
+            judge_windows_for_rule_mode(
+                base_judge_windows,
                 judge_percent_at_time(
                     chart.metadata.judge_rank,
                     &chart.judge_rank_events,
@@ -397,6 +389,7 @@ pub fn build_game_session_with_input_backend(
             rule_mode,
         ),
         base_judge_window,
+        base_judge_windows,
         rule_mode,
         audio_clock: AudioClock::stopped(options.sample_rate),
         chart,
@@ -451,6 +444,35 @@ pub fn build_game_session_with_input_backend(
 
 fn clamp_hispeed(hispeed: f32) -> f32 {
     hispeed.clamp(0.5, 10.0)
+}
+
+fn apply_judge_constraint_to_windows(
+    windows: JudgeWindows,
+    constraint: bmz_core::course::CourseJudgeConstraint,
+) -> JudgeWindows {
+    JudgeWindows {
+        note: apply_judge_constraint_to_window(windows.note, constraint),
+        scratch: apply_judge_constraint_to_window(windows.scratch, constraint),
+        long_note_end: apply_judge_constraint_to_window(windows.long_note_end, constraint),
+        long_scratch_end: apply_judge_constraint_to_window(windows.long_scratch_end, constraint),
+    }
+}
+
+fn apply_judge_constraint_to_window(
+    mut window: JudgeWindow,
+    constraint: bmz_core::course::CourseJudgeConstraint,
+) -> JudgeWindow {
+    match constraint {
+        bmz_core::course::CourseJudgeConstraint::Normal => {}
+        bmz_core::course::CourseJudgeConstraint::NoGood => {
+            window.good_us = 0;
+        }
+        bmz_core::course::CourseJudgeConstraint::NoGreat => {
+            window.great_us = 0;
+            window.good_us = 0;
+        }
+    }
+    window
 }
 
 fn hispeed_mode_from_profile(mode: HispeedModeConfig) -> HispeedMode {

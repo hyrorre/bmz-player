@@ -8,14 +8,15 @@ use bmz_core::lane::{LANE_COUNT, Lane};
 use bmz_core::time::TimeUs;
 
 use super::model::{
-    ActiveLongNote, JudgeOutcome, JudgeWindow, JudgementEvent, LaneJudgeState, LongNoteEndRef,
-    MineHitEvent,
+    ActiveLongNote, JudgeOutcome, JudgeWindow, JudgeWindows, JudgementEvent, LaneJudgeState,
+    LongNoteEndRef, MineHitEvent,
 };
 use crate::rule::RuleMode;
 
 #[derive(Debug, Clone)]
 pub struct JudgeEngine {
     pub windows: JudgeWindow,
+    pub window_set: JudgeWindows,
     pub rule_mode: RuleMode,
     pub lanes: [LaneJudgeState; LANE_COUNT],
     pub judged_notes: HashMap<NoteId, Judge>,
@@ -27,12 +28,22 @@ impl JudgeEngine {
     }
 
     pub fn new_with_rule_mode(windows: JudgeWindow, rule_mode: RuleMode) -> Self {
+        Self::new_with_window_set(JudgeWindows::uniform(windows), rule_mode)
+    }
+
+    pub fn new_with_window_set(window_set: JudgeWindows, rule_mode: RuleMode) -> Self {
         Self {
-            windows,
+            windows: window_set.note,
+            window_set,
             rule_mode,
             lanes: [LaneJudgeState::default(); LANE_COUNT],
             judged_notes: HashMap::new(),
         }
+    }
+
+    pub fn set_window_set(&mut self, window_set: JudgeWindows) {
+        self.windows = window_set.note;
+        self.window_set = window_set;
     }
 
     pub fn process_input(&mut self, chart: &PlayableChart, input: InputEvent) -> JudgeOutcome {
@@ -51,7 +62,8 @@ impl JudgeEngine {
             while let Some((idx, note)) =
                 next_press_reference_note(chart, lane, lane_state.next_note_index)
             {
-                if now.0 <= note.time.0 + self.windows.bad_slow_us {
+                let windows = self.window_set.press_window(lane);
+                if now.0 <= note.time.0 + windows.bad_slow_us {
                     break;
                 }
 
@@ -75,7 +87,8 @@ impl JudgeEngine {
                         }
                     }
                     LongNoteMode::Cn | LongNoteMode::Hcn => {
-                        if now.0 > active.end.end_time.0 + self.windows.bad_slow_us {
+                        let windows = self.window_set.long_end_window(lane);
+                        if now.0 > active.end.end_time.0 + windows.bad_slow_us {
                             lane_state.active_long = None;
                             outcome.events.push(JudgementEvent {
                                 note_id: Some(active.end.end_note_id),
@@ -110,7 +123,7 @@ impl JudgeEngine {
             chart,
             input.lane,
             input.time,
-            self.windows.mine_hit_us,
+            self.window_set.press_window(input.lane).mine_hit_us,
             &self.lanes[input.lane.index()],
         ) {
             self.lanes[input.lane.index()].last_mine_hit_time = Some(hit.time);
@@ -118,17 +131,14 @@ impl JudgeEngine {
         }
 
         let rule_mode = self.rule_mode;
-        let windows = self.windows;
+        let windows = self.window_set.press_window(input.lane);
         let lane_state = &mut self.lanes[input.lane.index()];
         let Some((idx, note)) =
             next_press_reference_note(chart, input.lane, lane_state.next_note_index)
         else {
-            let mut outcome = classify_empty_poor_from_last_press(
-                lane_state.last_press_time,
-                input,
-                self.windows,
-            )
-            .unwrap_or_default();
+            let mut outcome =
+                classify_empty_poor_from_last_press(lane_state.last_press_time, input, windows)
+                    .unwrap_or_default();
             outcome.mine_hits = mine_hits;
             return outcome;
         };
@@ -163,12 +173,12 @@ impl JudgeEngine {
         }
 
         let mut outcome = if let Some(outcome) =
-            classify_empty_poor_from_last_press(lane_state.last_press_time, input, self.windows)
+            classify_empty_poor_from_last_press(lane_state.last_press_time, input, windows)
         {
             outcome
-        } else if delta > self.windows.bad_slow_us && delta <= self.windows.empty_poor_slow_us {
+        } else if delta > windows.bad_slow_us && delta <= windows.empty_poor_slow_us {
             empty_poor(input.lane, TimingSide::Slow, TimeUs(delta), input.time)
-        } else if delta < -self.windows.bad_fast_us && (-delta) <= self.windows.empty_poor_fast_us {
+        } else if delta < -windows.bad_fast_us && (-delta) <= windows.empty_poor_fast_us {
             empty_poor(input.lane, TimingSide::Fast, TimeUs(delta), input.time)
         } else {
             JudgeOutcome::default()
@@ -206,7 +216,8 @@ impl JudgeEngine {
             LongNoteMode::Cn | LongNoteMode::Hcn => {
                 let delta = input.time.0 - active.end.end_time.0;
                 let side = side_from_delta(delta);
-                let judge = classify_normal_delta(delta, self.windows).unwrap_or(Judge::Poor);
+                let windows = self.window_set.long_end_window(input.lane);
+                let judge = classify_normal_delta(delta, windows).unwrap_or(Judge::Poor);
                 lane_state.active_long = None;
                 self.judged_notes.insert(active.end.end_note_id, judge);
 
@@ -369,7 +380,10 @@ mod tests {
     }
 
     fn chart_with_tap(time: TimeUs) -> PlayableChart {
-        let lane = Lane::Key1;
+        chart_with_lane_tap(Lane::Key1, time)
+    }
+
+    fn chart_with_lane_tap(lane: Lane, time: TimeUs) -> PlayableChart {
         let note = NoteEvent {
             id: NoteId(1),
             lane,
@@ -410,7 +424,10 @@ mod tests {
     }
 
     fn chart_with_long_start(time: TimeUs, end_time: TimeUs) -> PlayableChart {
-        let lane = Lane::Key1;
+        chart_with_lane_long_start(Lane::Key1, time, end_time)
+    }
+
+    fn chart_with_lane_long_start(lane: Lane, time: TimeUs, end_time: TimeUs) -> PlayableChart {
         let start = NoteEvent {
             id: NoteId(1),
             lane,
@@ -448,9 +465,13 @@ mod tests {
     }
 
     fn press_at(time: TimeUs) -> InputEvent {
+        press_lane_at(Lane::Key1, time)
+    }
+
+    fn press_lane_at(lane: Lane, time: TimeUs) -> InputEvent {
         InputEvent {
             source: InputSource::Human,
-            lane: Lane::Key1,
+            lane,
             kind: InputKind::Press,
             time,
             device_kind: bmz_core::input::InputDeviceKind::Keyboard,
@@ -459,9 +480,13 @@ mod tests {
     }
 
     fn release_at(time: TimeUs) -> InputEvent {
+        release_lane_at(Lane::Key1, time)
+    }
+
+    fn release_lane_at(lane: Lane, time: TimeUs) -> InputEvent {
         InputEvent {
             source: InputSource::Human,
-            lane: Lane::Key1,
+            lane,
             kind: InputKind::Release,
             time,
             device_kind: bmz_core::input::InputDeviceKind::Keyboard,
@@ -561,6 +586,36 @@ mod tests {
         assert_eq!(first.events[0].judge, Judge::PGreat);
         assert!(second.events.is_empty());
         assert!(!second.consumed_input);
+    }
+
+    #[test]
+    fn scratch_press_uses_scratch_window() {
+        let chart = chart_with_lane_tap(Lane::Scratch, TimeUs(1_000_000));
+        let mut engine = JudgeEngine::new_with_window_set(
+            crate::judge::window::beatoraja_judge_windows_for_keymode(bmz_core::lane::KeyMode::K7),
+            RuleMode::Beatoraja,
+        );
+
+        let outcome = engine.process_input(&chart, press_lane_at(Lane::Scratch, TimeUs(1_065_000)));
+
+        assert_eq!(outcome.events[0].judge, Judge::Great);
+        assert_eq!(outcome.events[0].side, TimingSide::Slow);
+    }
+
+    #[test]
+    fn cn_release_uses_long_note_end_window() {
+        let mut window_set = JudgeWindows::uniform(windows());
+        window_set.long_note_end =
+            JudgeWindow::symmetric(120_000, 160_000, 200_000, 220_000, 0, 0, 16_000);
+        let mut chart = chart_with_long_start(TimeUs(1_000_000), TimeUs(2_000_000));
+        chart.long_notes[0].mode = Some(LongNoteMode::Cn);
+        let mut engine = JudgeEngine::new_with_window_set(window_set, RuleMode::Beatoraja);
+
+        let press = engine.process_input(&chart, press_at(TimeUs(1_000_000)));
+        let release = engine.process_input(&chart, release_at(TimeUs(2_150_000)));
+
+        assert_eq!(press.events[0].judge, Judge::PGreat);
+        assert_eq!(release.events[0].judge, Judge::Great);
     }
 
     #[test]
