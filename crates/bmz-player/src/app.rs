@@ -8369,24 +8369,30 @@ impl WinitApp {
     }
 
     /// 動画ソースの実行時可視判定に使う `SkinDrawState` を、現在のシーン用に構築する。
-    /// 現状はランク別 BG を持つリザルト画面だけ対応し、他シーンは静的な `active`
-    /// 判定に委ねるため `None` を返す。
     fn current_skin_video_draw_state(
         &self,
         kind: SkinKind,
     ) -> Option<bmz_render::skin::SkinDrawState> {
-        if kind != SkinKind::Result {
-            return None;
+        match kind {
+            SkinKind::Play => {
+                let AppSceneSnapshot::Play(snapshot) = self.scene_snapshot() else {
+                    return None;
+                };
+                Some(play_skin_video_draw_state(&snapshot))
+            }
+            SkinKind::Result => {
+                let AppSceneSnapshot::Result(snapshot) = self.scene_snapshot() else {
+                    return None;
+                };
+                let ranktime = self
+                    .skin_video_sources
+                    .get(&SkinKind::Result)
+                    .and_then(|sources| sources.first())
+                    .map_or(0, |source| source.result_ranktime_ms);
+                Some(bmz_render::plan::result_skin_draw_state(&snapshot, ranktime))
+            }
+            _ => None,
         }
-        let AppSceneSnapshot::Result(snapshot) = self.scene_snapshot() else {
-            return None;
-        };
-        let ranktime = self
-            .skin_video_sources
-            .get(&SkinKind::Result)
-            .and_then(|sources| sources.first())
-            .map_or(0, |source| source.result_ranktime_ms);
-        Some(bmz_render::plan::result_skin_draw_state(&snapshot, ranktime))
     }
 
     fn render_current_scene(&mut self) {
@@ -9071,6 +9077,110 @@ fn skin_video_sources_from_decoded(decoded: &DecodedSkin) -> Vec<ActiveSkinVideo
             }
         })
         .collect()
+}
+
+fn play_skin_video_draw_state(snapshot: &RenderSnapshot) -> bmz_render::skin::SkinDrawState {
+    let play_elapsed_ms = time_us_to_skin_ms(snapshot.play_elapsed_time);
+    bmz_render::skin::SkinDrawState {
+        elapsed_ms: play_elapsed_ms,
+        ready_timer_ms: snapshot.ready_elapsed_time.map(time_us_to_skin_ms),
+        play_timer_ms: (snapshot.time.0 >= 0).then_some(time_us_to_skin_ms(snapshot.time)),
+        key_mode: snapshot.key_mode,
+        combo: snapshot.combo,
+        max_combo: snapshot.max_combo,
+        ex_score: snapshot.ex_score,
+        total_notes: snapshot.total_notes,
+        past_notes: snapshot.past_notes,
+        judge_counts: snapshot.judge_counts,
+        fast_slow_counts: Some(snapshot.fast_slow_counts),
+        gauge: snapshot.gauge,
+        gauge_type: snapshot.gauge_type,
+        gauge_auto_shift: snapshot.gauge_auto_shift,
+        gauge_max: snapshot.gauge_max,
+        gauge_border: snapshot.gauge_border,
+        play_progress: play_skin_video_progress(snapshot),
+        end_of_note: play_skin_video_end_of_note(snapshot),
+        end_of_note_ms: snapshot.end_of_note_elapsed_ms,
+        fadeout_ms: snapshot.fadeout_elapsed_ms,
+        failed_ms: snapshot.failed_elapsed_ms,
+        music_end_ms: snapshot.music_end_elapsed_ms,
+        skin_offsets: snapshot.skin_offsets,
+        hispeed: snapshot.hispeed,
+        timeleft_ms: play_skin_video_timeleft_ms(snapshot),
+        total_duration_ms: snapshot.note_display_duration_ms,
+        lane_cover: snapshot.lane_cover,
+        lift: snapshot.lift,
+        lane_cover_changing: snapshot.lane_cover_changing,
+        lanecover_enabled: snapshot.lanecover_enabled,
+        lift_enabled: snapshot.lift_enabled,
+        hidden_enabled: snapshot.hidden_enabled,
+        hidden_cover: snapshot.hidden_cover,
+        play_level: skin_video_play_level_number(&snapshot.play_level),
+        difficulty: skin_video_difficulty_code(&snapshot.difficulty_name),
+        judge_rank: snapshot.judge_rank,
+        now_bpm: snapshot.now_bpm,
+        min_bpm: snapshot.min_bpm,
+        max_bpm: snapshot.max_bpm,
+        has_bga: snapshot.has_bga,
+        has_bpm_stop: snapshot.has_bpm_stop,
+        bga_enabled: snapshot.bga_enabled,
+        has_backbmp: snapshot.backbmp_background,
+        bga_stretch: snapshot.bga_stretch,
+        best_ex_score: snapshot.best_ex_score,
+        projected_best_ex_score: snapshot.projected_best_ex_score,
+        target_ex_score: snapshot.target_ex_score,
+        judge_timing_offset_ms: snapshot.judge_timing_offset_ms,
+        judge_timing_auto_adjust: snapshot.judge_timing_auto_adjust,
+        main_bpm: snapshot.main_bpm,
+        hsfix_index: snapshot.hsfix_index,
+        fs_threshold_ms: snapshot.fs_threshold_ms,
+        adjusted_cover_progress: snapshot.adjusted_cover_progress,
+        adjusted_rate: snapshot.adjusted_rate,
+        adjusted_rate_adot: snapshot.adjusted_rate_adot,
+        autoplay: snapshot.autoplay,
+        course_stage: snapshot.course_stage,
+        hit_error_ring: snapshot.hit_error_ring.values,
+        hit_error_ring_index: snapshot.hit_error_ring.index,
+        skin_loaded: snapshot.resources_loaded,
+        ..bmz_render::skin::SkinDrawState::default()
+    }
+}
+
+fn time_us_to_skin_ms(time: TimeUs) -> i32 {
+    (time.0 / 1_000).clamp(i32::MIN as i64, i32::MAX as i64) as i32
+}
+
+fn play_skin_video_progress(snapshot: &RenderSnapshot) -> f32 {
+    if snapshot.duration.0 <= 0 {
+        0.0
+    } else {
+        (snapshot.time.0 as f32 / snapshot.duration.0 as f32).clamp(0.0, 1.0)
+    }
+}
+
+fn play_skin_video_end_of_note(snapshot: &RenderSnapshot) -> bool {
+    snapshot.duration.0 > 0 && snapshot.time.0 >= snapshot.duration.0
+}
+
+fn play_skin_video_timeleft_ms(snapshot: &RenderSnapshot) -> i32 {
+    (snapshot.duration.0.saturating_sub(snapshot.time.0) / 1_000)
+        .saturating_add(1_000)
+        .clamp(0, i32::MAX as i64) as i32
+}
+
+fn skin_video_play_level_number(label: &str) -> i64 {
+    label.chars().filter(|ch| ch.is_ascii_digit()).collect::<String>().parse().unwrap_or(0)
+}
+
+fn skin_video_difficulty_code(label: &str) -> i64 {
+    match label.trim().to_ascii_uppercase().as_str() {
+        "1" | "BEGINNER" => 1,
+        "2" | "NORMAL" => 2,
+        "3" | "HYPER" => 3,
+        "4" | "ANOTHER" => 4,
+        "5" | "INSANE" => 5,
+        _ => 0,
+    }
 }
 
 /// 動画ソースの可視判定に必要なゲーティング情報。
@@ -13348,6 +13458,83 @@ mod tests {
         };
         assert!(skin_video_source_runtime_visible(&bg_a, &a_state));
         assert!(!skin_video_source_runtime_visible(&bg_aaa, &a_state));
+    }
+
+    #[test]
+    fn play_skin_video_source_runtime_visibility_follows_bga_ops() {
+        // ECFN の generic BGA 相当。beatoraja では BGA ON かつ曲BGAなしの時だけ
+        // destination が有効になり、動画フレーム取得も走る。
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 5,
+                "property": [
+                    {
+                        "name": "Generic BGA",
+                        "def": "P1",
+                        "item": [
+                            { "name": "P1", "op": 924 },
+                            { "name": "P2", "op": 925 }
+                        ]
+                    }
+                ],
+                "source": [{ "id": "mv", "path": "generic.mp4" }],
+                "image": [{ "id": "generic-BGA", "src": "mv", "x": 0, "y": 0, "w": 10, "h": 10 }],
+                "destination": [
+                    { "id": "generic-BGA", "op": [41, 170, 924], "dst": [{ "x": 0, "y": 0, "w": 10, "h": 10 }] }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        let gating = skin_video_source_gating(&document, "mv");
+        assert!(gating.active);
+        assert_eq!(gating.op_sets, vec![vec![41, 170, 924]]);
+        let source = ActiveSkinVideoSource {
+            texture: SkinTextureId(0),
+            path: PathBuf::new(),
+            decoder: None,
+            last_pts: None,
+            loop_start_us: 0,
+            active: gating.active,
+            gating_op_sets: gating.op_sets,
+            enabled_options: document.enabled_options(),
+            result_ranktime_ms: document.ranktime,
+            failed: false,
+        };
+
+        let visible_state = play_skin_video_draw_state(&RenderSnapshot {
+            has_bga: false,
+            bga_enabled: true,
+            resources_loaded: true,
+            ..RenderSnapshot::default()
+        });
+        assert!(skin_video_source_runtime_visible(&source, &visible_state));
+
+        let song_bga_state = play_skin_video_draw_state(&RenderSnapshot {
+            has_bga: true,
+            bga_enabled: true,
+            resources_loaded: true,
+            ..RenderSnapshot::default()
+        });
+        assert!(!skin_video_source_runtime_visible(&source, &song_bga_state));
+
+        let bga_off_state = play_skin_video_draw_state(&RenderSnapshot {
+            has_bga: false,
+            bga_enabled: false,
+            resources_loaded: true,
+            ..RenderSnapshot::default()
+        });
+        assert!(!skin_video_source_runtime_visible(&source, &bga_off_state));
+
+        let song_bga_off_state = play_skin_video_draw_state(&RenderSnapshot {
+            has_bga: true,
+            bga_enabled: false,
+            resources_loaded: true,
+            ..RenderSnapshot::default()
+        });
+        assert!(!skin_video_source_runtime_visible(&source, &song_bga_off_state));
     }
 
     #[test]

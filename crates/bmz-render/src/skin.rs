@@ -7162,8 +7162,8 @@ fn test_skin_op(op: i32, enabled_options: &[i32], state: &SkinDrawState) -> bool
             .is_some_and(|positive| !test_skin_op(positive, enabled_options, state));
     }
     match op {
-        40 => false,
-        41 => true,
+        40 => !state.bga_enabled,
+        41 => state.bga_enabled,
         1 => matches!(
             state.select_row_kind,
             SelectRowKind::Folder
@@ -13142,16 +13142,20 @@ mod tests {
 
     #[test]
     fn bga_option_conditions_still_reflect_song_bga_when_disabled() {
-        assert!(!test_skin_op(
-            170,
-            &[],
-            &SkinDrawState { has_bga: true, bga_enabled: false, ..SkinDrawState::default() }
-        ));
-        assert!(test_skin_op(
-            171,
-            &[],
-            &SkinDrawState { has_bga: true, bga_enabled: false, ..SkinDrawState::default() }
-        ));
+        let disabled =
+            SkinDrawState { has_bga: true, bga_enabled: false, ..SkinDrawState::default() };
+
+        assert!(test_skin_op(40, &[], &disabled));
+        assert!(!test_skin_op(41, &[], &disabled));
+        assert!(!test_skin_op(170, &[], &disabled));
+        assert!(test_skin_op(171, &[], &disabled));
+
+        let enabled_no_song_bga =
+            SkinDrawState { has_bga: false, bga_enabled: true, ..SkinDrawState::default() };
+        assert!(!test_skin_op(40, &[], &enabled_no_song_bga));
+        assert!(test_skin_op(41, &[], &enabled_no_song_bga));
+        assert!(test_skin_op(170, &[], &enabled_no_song_bga));
+        assert!(!test_skin_op(171, &[], &enabled_no_song_bga));
     }
 
     #[test]
