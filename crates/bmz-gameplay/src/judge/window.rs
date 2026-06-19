@@ -377,8 +377,9 @@ pub fn judge_percent_at_time(
     rule_mode: RuleMode,
 ) -> i32 {
     let mut percent = judge_rank_spec_to_percent_optional_for_rule_mode(header_rank, rule_mode);
-    if rule_mode == RuleMode::Lr2Oraja {
-        // LR2oraja's jbms-parser based play flow keeps #EXRANK/A0 out of the runtime rank path.
+    if matches!(rule_mode, RuleMode::Beatoraja | RuleMode::Lr2Oraja) {
+        // Compatibility: beatoraja/LR2oraja keep #EXRANK/A0 out of the runtime rank path.
+        // BMZ still imports those events, but only DX mode applies them for now.
         return percent;
     }
     for event in events {
@@ -665,7 +666,7 @@ mod tests {
     }
 
     #[test]
-    fn exrank_events_override_header_rank() {
+    fn dx_exrank_events_override_header_rank() {
         use bmz_chart::model::JudgeRankEvent;
         use bmz_core::time::TimeUs;
 
@@ -674,9 +675,24 @@ mod tests {
             JudgeRankEvent { tick: Default::default(), time: TimeUs(2_000), rank_percent: 25 },
         ];
         let header = Some(rank_spec(3, JudgeRankKind::BmsRank));
+        assert_eq!(judge_percent_at_time(header, &events, TimeUs(0), RuleMode::Dx), 100);
+        assert_eq!(judge_percent_at_time(header, &events, TimeUs(1_500), RuleMode::Dx), 50);
+        assert_eq!(judge_percent_at_time(header, &events, TimeUs(2_500), RuleMode::Dx), 25);
+    }
+
+    #[test]
+    fn beatoraja_ignores_exrank_events() {
+        use bmz_chart::model::JudgeRankEvent;
+        use bmz_core::time::TimeUs;
+
+        let events = vec![JudgeRankEvent {
+            tick: Default::default(),
+            time: TimeUs(1_000),
+            rank_percent: 25,
+        }];
+        let header = Some(rank_spec(3, JudgeRankKind::BmsRank));
         assert_eq!(judge_percent_at_time(header, &events, TimeUs(0), RuleMode::Beatoraja), 100);
-        assert_eq!(judge_percent_at_time(header, &events, TimeUs(1_500), RuleMode::Beatoraja), 50);
-        assert_eq!(judge_percent_at_time(header, &events, TimeUs(2_500), RuleMode::Beatoraja), 25);
+        assert_eq!(judge_percent_at_time(header, &events, TimeUs(1_500), RuleMode::Beatoraja), 100);
     }
 
     #[test]
