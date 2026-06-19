@@ -303,6 +303,8 @@ struct WgpuRenderer {
     image_sampler_linear: wgpu::Sampler,
     image_textures: HashMap<TextureId, PreparedTexture>,
     image_bind_group_cache: HashMap<(TextureId, bool), wgpu::BindGroup>,
+    image_bind_group_scratch: Vec<wgpu::BindGroup>,
+    geometry_scratch: PlanGeometry,
     offscreen_rect_batches: HashMap<OffscreenRectBatchTextureKey, TextureId>,
     next_offscreen_rect_batch_texture_id: u32,
     image_buffer: Option<wgpu::Buffer>,
@@ -1071,6 +1073,8 @@ impl WgpuRenderer {
             image_sampler_linear,
             image_textures,
             image_bind_group_cache: HashMap::new(),
+            image_bind_group_scratch: Vec::new(),
+            geometry_scratch: PlanGeometry::default(),
             offscreen_rect_batches: HashMap::new(),
             next_offscreen_rect_batch_texture_id: OFFSCREEN_RECT_BATCH_TEXTURE_BASE,
             image_buffer: None,
@@ -1241,12 +1245,14 @@ impl WgpuRenderer {
         canvas_viewport.transform_text_caret_rects(&mut text_frame.command_caret_rects);
         timings.text_us = text_start.elapsed().as_micros();
         let geometry_start = Instant::now();
-        let geometry = encode_plan_geometry_with_rect_batch_resolver(
+        let mut geometry = std::mem::take(&mut self.geometry_scratch);
+        encode_plan_geometry_into(
             plan,
             &text_frame,
             surface_size,
             canvas_viewport,
             &mut |rects, cache| self.offscreen_rect_batch_texture(rects, cache, surface_size),
+            &mut geometry,
         );
         let geometry_stats = geometry.stats();
         timings.steps = geometry_stats.steps;
@@ -1283,18 +1289,21 @@ impl WgpuRenderer {
                 timings.surface_us = surface_start.elapsed().as_micros();
                 timings.submit_us = submit_start.elapsed().as_micros();
                 timings.draw_us = draw_start.elapsed().as_micros();
+                self.geometry_scratch = geometry;
                 return Ok((RenderSurfaceStatus::Reconfigured, timings));
             }
             wgpu::CurrentSurfaceTexture::Timeout => {
                 timings.surface_us = surface_start.elapsed().as_micros();
                 timings.submit_us = submit_start.elapsed().as_micros();
                 timings.draw_us = draw_start.elapsed().as_micros();
+                self.geometry_scratch = geometry;
                 return Ok((RenderSurfaceStatus::TimedOut, timings));
             }
             wgpu::CurrentSurfaceTexture::Occluded | wgpu::CurrentSurfaceTexture::Validation => {
                 timings.surface_us = surface_start.elapsed().as_micros();
                 timings.submit_us = submit_start.elapsed().as_micros();
                 timings.draw_us = draw_start.elapsed().as_micros();
+                self.geometry_scratch = geometry;
                 return Ok((RenderSurfaceStatus::TimedOut, timings));
             }
         };
@@ -1303,16 +1312,14 @@ impl WgpuRenderer {
         // image ステップごとの bind group を、レンダーパスが encoder を借りる前に作る。
         // steps 内の image ステップと同じ順序で並ぶ。
         let bind_start = Instant::now();
-        let image_bind_groups: Vec<wgpu::BindGroup> = geometry
-            .steps
-            .iter()
-            .filter_map(|step| match step {
-                DrawStep::Image { texture, linear, .. } => {
-                    Some(self.image_bind_group(*texture, *linear))
-                }
-                _ => None,
-            })
-            .collect();
+        let mut image_bind_groups = std::mem::take(&mut self.image_bind_group_scratch);
+        image_bind_groups.clear();
+        image_bind_groups.reserve(geometry_stats.image_steps);
+        for step in &geometry.steps {
+            if let DrawStep::Image { texture, linear, .. } = step {
+                image_bind_groups.push(self.image_bind_group(*texture, *linear));
+            }
+        }
         let text_bind_group = self.text_bind_group();
         timings.bind_us = bind_start.elapsed().as_micros();
         let encode_start = Instant::now();
@@ -1435,6 +1442,8 @@ impl WgpuRenderer {
         if let Some(frame) = egui {
             self.egui.free_textures(frame);
         }
+        self.image_bind_group_scratch = image_bind_groups;
+        self.geometry_scratch = geometry;
         let present_start = Instant::now();
         output.present();
         timings.present_us = present_start.elapsed().as_micros();
@@ -1886,6 +1895,7 @@ enum DrawStep {
 }
 
 /// `DrawPlan` を GPU 描画用のバッファ列と順序付きステップ列へ変換した結果。
+#[derive(Default)]
 struct PlanGeometry {
     rects: Vec<u8>,
     images: Vec<u8>,
@@ -1939,15 +1949,19 @@ fn encode_plan_geometry(
     surface_size: SurfaceSize,
 ) -> PlanGeometry {
     let viewport = CanvasViewport::from_policy(surface_size, CanvasRenderPolicy::default());
-    encode_plan_geometry_with_rect_batch_resolver(
+    let mut geometry = PlanGeometry::default();
+    encode_plan_geometry_into(
         plan,
         text_frame,
         surface_size,
         viewport,
         &mut |_, _| None,
-    )
+        &mut geometry,
+    );
+    geometry
 }
 
+#[cfg(test)]
 fn encode_plan_geometry_with_rect_batch_resolver(
     plan: &DrawPlan,
     text_frame: &TextFrame,
@@ -1955,10 +1969,36 @@ fn encode_plan_geometry_with_rect_batch_resolver(
     canvas_viewport: CanvasViewport,
     resolve_rect_batch_texture: &mut impl FnMut(&[RectCommand], RectBatchCache) -> Option<TextureId>,
 ) -> PlanGeometry {
+    let mut geometry = PlanGeometry::default();
+    encode_plan_geometry_into(
+        plan,
+        text_frame,
+        surface_size,
+        canvas_viewport,
+        resolve_rect_batch_texture,
+        &mut geometry,
+    );
+    geometry
+}
+
+fn encode_plan_geometry_into(
+    plan: &DrawPlan,
+    text_frame: &TextFrame,
+    surface_size: SurfaceSize,
+    canvas_viewport: CanvasViewport,
+    resolve_rect_batch_texture: &mut impl FnMut(&[RectCommand], RectBatchCache) -> Option<TextureId>,
+    geometry: &mut PlanGeometry,
+) {
     let command_count = plan.commands.len();
-    let mut rects = Vec::with_capacity(command_count.saturating_mul(RECT_INSTANCE_BYTES));
-    let mut images = Vec::new();
-    let mut steps: Vec<DrawStep> = Vec::with_capacity(command_count);
+    geometry.rects.clear();
+    geometry.images.clear();
+    geometry.steps.clear();
+    geometry.rects.reserve(command_count.saturating_mul(RECT_INSTANCE_BYTES));
+    geometry.images.reserve(command_count.saturating_mul(IMAGE_INSTANCE_BYTES));
+    geometry.steps.reserve(command_count);
+    let rects = &mut geometry.rects;
+    let images = &mut geometry.images;
+    let steps = &mut geometry.steps;
     let image_rotation_aspect = if surface_size.height == 0 {
         1.0
     } else {
@@ -1983,7 +2023,7 @@ fn encode_plan_geometry_with_rect_batch_resolver(
                     color.b,
                     color.a,
                 ]));
-                push_or_extend_rects(&mut steps, start..rects.len());
+                push_or_extend_rects(steps, start..rects.len());
             }
             DrawCommand::RectBatch { rects: batch, cache } => {
                 let transformed_batch: Vec<_> = batch
@@ -1999,7 +2039,7 @@ fn encode_plan_geometry_with_rect_batch_resolver(
                     let start = images.len();
                     let bounds = canvas_viewport.transform_rect(cache.bounds);
                     encode_image_instance(
-                        &mut images,
+                        images,
                         &bounds,
                         &UvRect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
                         &Color::rgb(1.0, 1.0, 1.0),
@@ -2008,7 +2048,7 @@ fn encode_plan_geometry_with_rect_batch_resolver(
                         image_rotation_aspect,
                     );
                     push_or_extend_image(
-                        &mut steps,
+                        steps,
                         texture,
                         BlendMode::Normal,
                         false,
@@ -2031,7 +2071,7 @@ fn encode_plan_geometry_with_rect_batch_resolver(
                         ]));
                     }
                     if rects.len() > start {
-                        push_or_extend_rects(&mut steps, start..rects.len());
+                        push_or_extend_rects(steps, start..rects.len());
                     }
                 }
             }
@@ -2040,7 +2080,7 @@ fn encode_plan_geometry_with_rect_batch_resolver(
                 let rect = canvas_viewport.transform_rect(*rect);
                 let sampling_uv = sampling_uv_with_half_texel_inset(*uv, *source_size);
                 encode_image_instance(
-                    &mut images,
+                    images,
                     &rect,
                     &sampling_uv,
                     tint,
@@ -2048,13 +2088,7 @@ fn encode_plan_geometry_with_rect_batch_resolver(
                     Point { x: 0.5, y: 0.5 },
                     image_rotation_aspect,
                 );
-                push_or_extend_image(
-                    &mut steps,
-                    *texture,
-                    *blend,
-                    *linear_filter,
-                    start..images.len(),
-                );
+                push_or_extend_image(steps, *texture, *blend, *linear_filter, start..images.len());
             }
             DrawCommand::RotatedImage {
                 rect,
@@ -2071,7 +2105,7 @@ fn encode_plan_geometry_with_rect_batch_resolver(
                 let rect = canvas_viewport.transform_rect(*rect);
                 let sampling_uv = sampling_uv_with_half_texel_inset(*uv, *source_size);
                 encode_image_instance(
-                    &mut images,
+                    images,
                     &rect,
                     &sampling_uv,
                     tint,
@@ -2079,13 +2113,7 @@ fn encode_plan_geometry_with_rect_batch_resolver(
                     *center,
                     image_rotation_aspect,
                 );
-                push_or_extend_image(
-                    &mut steps,
-                    *texture,
-                    *blend,
-                    *linear_filter,
-                    start..images.len(),
-                );
+                push_or_extend_image(steps, *texture, *blend, *linear_filter, start..images.len());
             }
             DrawCommand::Text { .. } => {
                 let quad_count =
@@ -2097,7 +2125,7 @@ fn encode_plan_geometry_with_rect_batch_resolver(
                 text_quad_cursor += quad_count;
                 let end = text_quad_cursor * TEXT_INSTANCE_BYTES;
                 if quad_count > 0 {
-                    push_or_extend_text(&mut steps, start..end);
+                    push_or_extend_text(steps, start..end);
                 }
                 if let Some(command) = caret_rect {
                     let start = rects.len();
@@ -2113,13 +2141,11 @@ fn encode_plan_geometry_with_rect_batch_resolver(
                         color.b,
                         color.a,
                     ]));
-                    push_or_extend_rects(&mut steps, start..rects.len());
+                    push_or_extend_rects(steps, start..rects.len());
                 }
             }
         }
     }
-
-    PlanGeometry { rects, images, steps }
 }
 
 fn sampling_uv_with_half_texel_inset(uv: UvRect, source_size: Option<SkinImageSize>) -> UvRect {

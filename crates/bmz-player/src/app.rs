@@ -503,10 +503,26 @@ struct ActiveSkinVideoSource {
     failed: bool,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct SkinVideoFrameProfile {
+    poll_us: u128,
+    upload_us: u128,
+    opened: u32,
+    active_sources: u32,
+    visible_sources: u32,
+    uploaded_frames: u32,
+}
+
 #[derive(Debug, Default)]
 struct SceneFrameProfiler {
     frames: u32,
     video_us: u128,
+    video_poll_us: u128,
+    video_upload_us: u128,
+    video_opened: u128,
+    video_active_sources: u128,
+    video_visible_sources: u128,
+    video_uploaded_frames: u128,
     snapshot_us: u128,
     render_us: u128,
     plan_us: u128,
@@ -537,12 +553,19 @@ impl SceneFrameProfiler {
         &mut self,
         profile: FrameProfileKind,
         video_us: u128,
+        video_profile: SkinVideoFrameProfile,
         snapshot_us: u128,
         render_us: u128,
         timings: Option<RenderFrameTimings>,
     ) {
         self.frames += 1;
         self.video_us += video_us;
+        self.video_poll_us += video_profile.poll_us;
+        self.video_upload_us += video_profile.upload_us;
+        self.video_opened += video_profile.opened as u128;
+        self.video_active_sources += video_profile.active_sources as u128;
+        self.video_visible_sources += video_profile.visible_sources as u128;
+        self.video_uploaded_frames += video_profile.uploaded_frames as u128;
         self.snapshot_us += snapshot_us;
         self.render_us += render_us;
         if let Some(timings) = timings {
@@ -582,6 +605,14 @@ impl SceneFrameProfiler {
         let image_instances = (self.image_instances / frames) as u64;
         let text_instances = (self.text_instances / frames) as u64;
         let video_ms = fmt_profile_ms(self.video_us, frames);
+        let video_poll_ms = fmt_profile_ms(self.video_poll_us, frames);
+        let video_upload_ms = fmt_profile_ms(self.video_upload_us, frames);
+        let video_opened = self.video_opened as u64;
+        let video_active_sources = (self.video_active_sources / frames) as u64;
+        let video_visible_sources = (self.video_visible_sources / frames) as u64;
+        let video_uploaded_frames = self.video_uploaded_frames as u64;
+        let video_upload_frame_ms =
+            fmt_profile_ms(self.video_upload_us, self.video_uploaded_frames.max(1));
         let snapshot_ms = fmt_profile_ms(self.snapshot_us, frames);
         let render_ms = fmt_profile_ms(self.render_us, frames);
         let plan_ms = fmt_profile_ms(self.plan_us, frames);
@@ -601,6 +632,13 @@ impl SceneFrameProfiler {
                     target: "bmz_player::select_profile",
                     frames = self.frames,
                     video_ms,
+                    video_poll_ms,
+                    video_upload_ms,
+                    video_upload_frame_ms,
+                    video_opened,
+                    video_active_sources,
+                    video_visible_sources,
+                    video_uploaded_frames,
                     snapshot_ms,
                     render_ms,
                     plan_ms,
@@ -630,6 +668,13 @@ impl SceneFrameProfiler {
                     target: "bmz_player::play_profile",
                     frames = self.frames,
                     video_ms,
+                    video_poll_ms,
+                    video_upload_ms,
+                    video_upload_frame_ms,
+                    video_opened,
+                    video_active_sources,
+                    video_visible_sources,
+                    video_uploaded_frames,
                     snapshot_ms,
                     render_ms,
                     plan_ms,
@@ -659,6 +704,13 @@ impl SceneFrameProfiler {
                     target: "bmz_player::result_profile",
                     frames = self.frames,
                     video_ms,
+                    video_poll_ms,
+                    video_upload_ms,
+                    video_upload_frame_ms,
+                    video_opened,
+                    video_active_sources,
+                    video_visible_sources,
+                    video_uploaded_frames,
                     snapshot_ms,
                     render_ms,
                     plan_ms,
@@ -8202,20 +8254,22 @@ impl WinitApp {
         }
     }
 
-    fn update_current_skin_video_sources(&mut self) {
+    fn update_current_skin_video_sources(&mut self, profiling: bool) -> SkinVideoFrameProfile {
+        let mut profile = SkinVideoFrameProfile::default();
         let Some((kind, elapsed_us)) = self.current_skin_video_context() else {
-            return;
+            return profile;
         };
         // 実行時 op 条件 (例: リザルトのランク別 BG) で実際に表示されるソースだけを
         // デコードする。state を作れないシーンでは静的な `active` 判定に従う。
         let runtime_state = self.current_skin_video_draw_state(kind);
         let Some(sources) = self.skin_video_sources.get_mut(&kind) else {
-            return;
+            return profile;
         };
         for source in sources {
             if source.failed || !source.active {
                 continue;
             }
+            profile.active_sources += 1;
             if let Some(state) = runtime_state.as_ref()
                 && !skin_video_source_runtime_visible(source, state)
             {
@@ -8226,6 +8280,7 @@ impl WinitApp {
                 }
                 continue;
             }
+            profile.visible_sources += 1;
             if source.decoder.is_none() {
                 match VideoBgaDecoder::open(&source.path) {
                     Ok(decoder) => {
@@ -8236,6 +8291,7 @@ impl WinitApp {
                             "opened skin video source decoder"
                         );
                         source.decoder = Some(decoder);
+                        profile.opened += 1;
                     }
                     Err(error) => {
                         tracing::warn!(
@@ -8255,10 +8311,16 @@ impl WinitApp {
                 continue;
             };
             let video_offset_us = elapsed_us.saturating_sub(source.loop_start_us);
-            if let Some(frame) = decoder.poll_frame(video_offset_us)
+            let poll_start = profiling.then(Instant::now);
+            let frame = decoder.poll_frame(video_offset_us);
+            if let Some(start) = poll_start {
+                profile.poll_us += start.elapsed().as_micros();
+            }
+            if let Some(frame) = frame
                 && source.last_pts != Some(frame.pts_us)
             {
                 let pts = frame.pts_us;
+                let upload_start = profiling.then(Instant::now);
                 match self.renderer.upsert_rgba_texture_ref(
                     TextureId(source.texture.0),
                     frame.width,
@@ -8267,6 +8329,7 @@ impl WinitApp {
                 ) {
                     Ok(()) => {
                         source.last_pts = Some(pts);
+                        profile.uploaded_frames += 1;
                     }
                     Err(error) => {
                         tracing::warn!(
@@ -8278,6 +8341,9 @@ impl WinitApp {
                         );
                     }
                 }
+                if let Some(start) = upload_start {
+                    profile.upload_us += start.elapsed().as_micros();
+                }
             }
             if source.decoder.as_ref().is_some_and(VideoBgaDecoder::is_finished) {
                 source.decoder = None;
@@ -8285,6 +8351,7 @@ impl WinitApp {
                 source.loop_start_us = elapsed_us;
             }
         }
+        profile
     }
 
     fn current_skin_video_context(&self) -> Option<(SkinKind, i64)> {
@@ -8343,7 +8410,9 @@ impl WinitApp {
         }
         self.start_scene_timers_before_snapshot(select_view, result_view);
         let video_start = Instant::now();
-        self.update_current_skin_video_sources();
+        let video_profile = self.update_current_skin_video_sources(
+            profiling_select || profiling_play || profiling_result,
+        );
         let video_us = video_start.elapsed().as_micros();
         let snapshot_start = Instant::now();
         let scene = self.scene_snapshot();
@@ -8363,6 +8432,7 @@ impl WinitApp {
             self.select_frame_profiler.record(
                 FrameProfileKind::Select,
                 video_us,
+                video_profile,
                 snapshot_us,
                 render_us,
                 self.renderer.last_frame_timings(),
@@ -8372,6 +8442,7 @@ impl WinitApp {
             self.play_frame_profiler.record(
                 FrameProfileKind::Play,
                 video_us,
+                video_profile,
                 snapshot_us,
                 render_us,
                 self.renderer.last_frame_timings(),
@@ -8381,6 +8452,7 @@ impl WinitApp {
             self.result_frame_profiler.record(
                 FrameProfileKind::Result,
                 video_us,
+                video_profile,
                 snapshot_us,
                 render_us,
                 self.renderer.last_frame_timings(),
