@@ -21564,7 +21564,7 @@ mod tests {
         assert_eq!(areas[1], TimingJudgeArea { late_ms: -60.0, early_ms: 60.0 });
         assert_eq!(areas[2], TimingJudgeArea { late_ms: -150.0, early_ms: 150.0 });
         assert_eq!(areas[3], TimingJudgeArea { late_ms: -280.0, early_ms: 220.0 });
-        assert_eq!(areas[4], TimingJudgeArea { late_ms: -150.0, early_ms: 500.0 });
+        assert_eq!(areas[4], TimingJudgeArea { late_ms: -500.0, early_ms: 150.0 });
     }
 
     #[test]
@@ -21579,7 +21579,7 @@ mod tests {
         assert_eq!(areas[1], TimingJudgeArea { late_ms: -20.0, early_ms: 20.0 });
         assert_eq!(areas[2], TimingJudgeArea { late_ms: -38.61, early_ms: 38.61 });
         assert_eq!(areas[3], TimingJudgeArea { late_ms: -183.0, early_ms: 183.0 });
-        assert_eq!(areas[4], TimingJudgeArea { late_ms: -175.0, early_ms: 500.0 });
+        assert_eq!(areas[4], TimingJudgeArea { late_ms: -500.0, early_ms: 175.0 });
     }
 
     #[test]

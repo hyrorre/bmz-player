@@ -312,6 +312,7 @@ struct WgpuRenderer {
     text_sampler: wgpu::Sampler,
     text_texture: Option<wgpu::Texture>,
     text_texture_view: Option<wgpu::TextureView>,
+    text_bind_group: Option<wgpu::BindGroup>,
     text_texture_size: AtlasSize,
     text_atlas: TextAtlasCache,
     text_buffer: Option<wgpu::Buffer>,
@@ -541,6 +542,8 @@ struct PendingTexture {
 pub struct PreparedTexture {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
+    width: u32,
+    height: u32,
 }
 
 impl Renderer {
@@ -1077,6 +1080,7 @@ impl WgpuRenderer {
             text_sampler,
             text_texture: None,
             text_texture_view: None,
+            text_bind_group: None,
             text_texture_size: AtlasSize::default(),
             text_atlas: TextAtlasCache::new(TEXT_ATLAS_WIDTH),
             text_buffer: None,
@@ -1559,7 +1563,7 @@ impl WgpuRenderer {
             }
             self.queue.submit(std::iter::once(encoder.finish()));
         }
-        self.image_textures.insert(texture_id, PreparedTexture { texture, view });
+        self.image_textures.insert(texture_id, PreparedTexture { texture, view, width, height });
         self.image_bind_group_cache
             .retain(|(cached_texture_id, _), _| *cached_texture_id != texture_id);
     }
@@ -1680,6 +1684,7 @@ impl WgpuRenderer {
         self.text_atlas = TextAtlasCache::new(TEXT_ATLAS_WIDTH);
         self.text_texture = None;
         self.text_texture_view = None;
+        self.text_bind_group = None;
         self.text_texture_size = AtlasSize::default();
     }
 
@@ -1720,12 +1725,16 @@ impl WgpuRenderer {
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         self.text_texture = Some(texture);
         self.text_texture_view = Some(view);
+        self.text_bind_group = None;
         self.text_texture_size = size;
     }
 
-    fn text_bind_group(&self) -> Option<wgpu::BindGroup> {
+    fn text_bind_group(&mut self) -> Option<wgpu::BindGroup> {
+        if let Some(bind_group) = &self.text_bind_group {
+            return Some(bind_group.clone());
+        }
         let view = self.text_texture_view.as_ref()?;
-        Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("bmz-render text bind group"),
             layout: &self.text_bind_group_layout,
             entries: &[
@@ -1738,10 +1747,19 @@ impl WgpuRenderer {
                     resource: wgpu::BindingResource::Sampler(&self.text_sampler),
                 },
             ],
-        }))
+        });
+        self.text_bind_group = Some(bind_group.clone());
+        Some(bind_group)
     }
 
     fn upsert_rgba_texture(&mut self, id: TextureId, width: u32, height: u32, rgba: &[u8]) {
+        if let Some(texture) = self.image_textures.get(&id)
+            && texture.width == width
+            && texture.height == height
+        {
+            write_rgba_texture(&self.queue, &texture.texture, width, height, rgba);
+            return;
+        }
         let texture = create_rgba_texture(&self.device, &self.queue, id, width, height, rgba);
         self.image_textures.insert(id, texture);
         self.image_bind_group_cache.retain(|(texture_id, _), _| *texture_id != id);
@@ -3605,9 +3623,22 @@ fn create_rgba_texture(
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
+    write_rgba_texture(queue, &texture, width, height, rgba);
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    tracing::debug!(texture_id = id.0, width, height, "registered render image texture");
+    PreparedTexture { texture, view, width, height }
+}
+
+fn write_rgba_texture(
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    width: u32,
+    height: u32,
+    rgba: &[u8],
+) {
     queue.write_texture(
         wgpu::TexelCopyTextureInfo {
-            texture: &texture,
+            texture,
             mip_level: 0,
             origin: wgpu::Origin3d::ZERO,
             aspect: wgpu::TextureAspect::All,
@@ -3620,9 +3651,6 @@ fn create_rgba_texture(
         },
         wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
     );
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-    tracing::debug!(texture_id = id.0, width, height, "registered render image texture");
-    PreparedTexture { texture, view }
 }
 
 fn create_image_pipeline(

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use bmz_chart::model::{BgaAssetId, BgaAssetKind, BgaEventKind};
 use bmz_core::judge::Judge;
@@ -7,7 +7,7 @@ use bmz_render::plan::TextureId;
 use bmz_video::VideoBgaDecoder;
 
 use crate::audio::RunningPlaySession;
-use crate::screens::play_snapshot::{bga_texture_id, display_video_bga_frame};
+use crate::screens::play_snapshot::{BgaFrameCatalog, bga_texture_id, display_video_bga_frame};
 
 pub struct ActiveVideoBgaDecoder {
     pub event_start_time: TimeUs,
@@ -26,7 +26,9 @@ pub fn update_video_bga_frames(
         return;
     }
 
-    let chart = running.session.chart.clone();
+    let RunningPlaySession { session, video_bga_decoders, failed_video_bga, bga_frames, .. } =
+        running;
+    let chart = &session.chart;
 
     // Base と Layer は BGA イベント時刻をビデオ開始時刻とする
     for kind in [BgaEventKind::Base, BgaEventKind::Layer, BgaEventKind::Layer2] {
@@ -44,13 +46,22 @@ pub fn update_video_bga_frames(
         }
 
         let video_offset_us = render_now.0 - event.time.0;
-        update_single_video(renderer, running, asset.id, &asset.path, event.time, video_offset_us);
+        update_single_video(
+            renderer,
+            video_bga_decoders,
+            failed_video_bga,
+            bga_frames,
+            asset.id,
+            &asset.path,
+            event.time,
+            video_offset_us,
+        );
     }
 
     // Poor は直近の Bad/Poor 判定時刻をビデオ開始時刻とする
-    let poor_duration_us = running.session.poor_bga_duration_us;
+    let poor_duration_us = session.poor_bga_duration_us;
     if poor_duration_us > 0 {
-        let judgement = running.session.recent_judgements.iter().rev().find(|j| {
+        let judgement = session.recent_judgements.iter().rev().find(|j| {
             matches!(j.judge, Judge::Bad | Judge::Poor)
                 && render_now.0 >= j.time.0
                 && render_now.0 < j.time.0 + poor_duration_us
@@ -72,7 +83,9 @@ pub fn update_video_bga_frames(
                     let video_offset_us = render_now.0 - judge_time.0;
                     update_single_video(
                         renderer,
-                        running,
+                        video_bga_decoders,
+                        failed_video_bga,
+                        bga_frames,
                         asset.id,
                         &asset.path,
                         judge_time,
@@ -86,18 +99,20 @@ pub fn update_video_bga_frames(
 
 fn update_single_video(
     renderer: &mut bmz_render::renderer::Renderer,
-    running: &mut RunningPlaySession,
+    video_bga_decoders: &mut VideoBgaDecoderMap,
+    failed_video_bga: &mut HashSet<BgaAssetId>,
+    bga_frames: &mut BgaFrameCatalog,
     asset_id: BgaAssetId,
     path: &std::path::Path,
     event_start_time: TimeUs,
     video_offset_us: i64,
 ) {
-    if running.failed_video_bga.contains(&asset_id) {
+    if failed_video_bga.contains(&asset_id) {
         return;
     }
 
     // デコーダが未作成またはイベント開始時刻が変わっていたら新規作成
-    let needs_new = match running.video_bga_decoders.get(&asset_id) {
+    let needs_new = match video_bga_decoders.get(&asset_id) {
         Some(active) => active.event_start_time != event_start_time,
         None => true,
     };
@@ -105,7 +120,7 @@ fn update_single_video(
     if needs_new {
         match VideoBgaDecoder::open(path) {
             Ok(decoder) => {
-                running.video_bga_decoders.insert(
+                video_bga_decoders.insert(
                     asset_id,
                     ActiveVideoBgaDecoder { event_start_time, decoder, last_pts: None },
                 );
@@ -113,13 +128,13 @@ fn update_single_video(
             }
             Err(e) => {
                 tracing::warn!(asset_id = asset_id.0, %e, "failed to open video BGA; skipping");
-                running.failed_video_bga.insert(asset_id);
+                failed_video_bga.insert(asset_id);
                 return;
             }
         }
     }
 
-    let active = running.video_bga_decoders.get_mut(&asset_id).unwrap();
+    let active = video_bga_decoders.get_mut(&asset_id).unwrap();
     if let Some(frame) = active.decoder.poll_frame(video_offset_us)
         && active.last_pts != Some(frame.pts_us)
     {
@@ -130,9 +145,7 @@ fn update_single_video(
         match renderer.upsert_rgba_texture_ref(texture_id, width, height, &frame.rgba) {
             Ok(()) => {
                 active.last_pts = Some(pts);
-                running
-                    .bga_frames
-                    .insert(asset_id, display_video_bga_frame(asset_id, width, height));
+                bga_frames.insert(asset_id, display_video_bga_frame(asset_id, width, height));
             }
             Err(e) => {
                 tracing::warn!(asset_id = asset_id.0, %e, "failed to upload video BGA frame");
