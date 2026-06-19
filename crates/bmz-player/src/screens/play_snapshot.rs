@@ -1069,6 +1069,30 @@ mod tests {
     }
 
     #[test]
+    fn build_render_snapshot_moves_bar_lines_with_visual_note_position() {
+        use bmz_chart::model::BarLine;
+
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut chart = chart();
+        chart.bar_lines.push(BarLine { measure: 1, tick: ChartTick(0), time: TimeUs(1_000_000) });
+        let mut session =
+            build_game_session(Arc::new(chart), &profile, PlaySessionOptions::default());
+        session.hispeed = 1.0;
+
+        let early = build_render_snapshot(&session, TimeUs(0), &[], None);
+        let later = build_render_snapshot(&session, TimeUs(250_000), &[], None);
+
+        let early_note_y = early.visible_notes[Lane::Key1.index()][0].y;
+        let early_bar_y = early.bar_lines[0].y;
+        let later_note_y = later.visible_notes[Lane::Key1.index()][0].y;
+        let later_bar_y = later.bar_lines[0].y;
+
+        assert_eq!(early_note_y, early_bar_y);
+        assert_eq!(later_note_y, later_bar_y);
+        assert_eq!(early_note_y - later_note_y, early_bar_y - later_bar_y);
+    }
+
+    #[test]
     fn build_render_snapshot_keeps_notes_under_lane_cover() {
         let profile = ProfileConfig::new_default("default", "Default", 1);
         let mut session =

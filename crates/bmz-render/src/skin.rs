@@ -1620,12 +1620,13 @@ impl SkinContext {
     pub fn document_bar_line_items(
         &self,
         note_y: f32,
+        key_mode: KeyMode,
         state: &SkinDrawState,
     ) -> Vec<SkinRenderItem> {
         let Some(document) = self.document.as_ref() else {
             return Vec::new();
         };
-        document.note_group_render_items(note_y, state, &self.document_sources)
+        document.note_group_render_items(note_y, key_mode, state, &self.document_sources)
     }
 
     pub fn document_gauge_items(&self, gauge: f32, elapsed_ms: i32) -> Option<Vec<SkinRenderItem>> {
@@ -4813,6 +4814,7 @@ impl SkinDocument {
     pub fn note_group_render_items(
         &self,
         note_y: f32,
+        key_mode: KeyMode,
         state: &SkinDrawState,
         sources: &HashMap<String, SkinDocumentTexture>,
     ) -> Vec<SkinRenderItem> {
@@ -4821,13 +4823,12 @@ impl SkinDocument {
         };
         let images = self.image_map();
         let enabled_options = self.enabled_options();
-        // Key1 はすべてのキーモードでインデックス 0 なので KeyMode::K7 で代用。
-        let Some(area) = self.note_lane_area(Lane::Key1, KeyMode::K7, &enabled_options) else {
+        let Some(area) = self.note_lane_area(Lane::Key1, key_mode, &enabled_options) else {
             return Vec::new();
         };
         let canvas_h = self.h.max(1) as f32;
         let bottom_y = note_progress_to_y(area, note_y, state, canvas_h);
-        let lane_bottom_px = canvas_h * (1.0 - (area.y + area.height));
+        let judge_bottom_px = canvas_h * (1.0 - note_judge_bottom_y(area, state, canvas_h));
         let timeline_bottom_px = canvas_h * (1.0 - bottom_y);
         let mut items = Vec::new();
         for destination in &note.group {
@@ -4844,7 +4845,7 @@ impl SkinDocument {
             else {
                 continue;
             };
-            frame.y += (timeline_bottom_px - lane_bottom_px).round() as i32;
+            frame.y += (timeline_bottom_px - judge_bottom_px).round() as i32;
             apply_bar_line_skin_offsets_to_frame(destination, &mut frame, state);
             let Some(image) = images.get(destination.id.as_str()) else {
                 continue;
@@ -11171,11 +11172,15 @@ fn apply_skin_offset_ids_to_frame(
 /// `note_y` progress (0=判定ライン, 1=最奥) を `note.dst` エリア内の正規化 Y に変換する。
 /// LIFT (`offset_lift_px`) により判定ラインを上げ、スクロール範囲を縮める。
 fn note_progress_to_y(area: Rect, progress: f32, state: &SkinDrawState, canvas_h: f32) -> f32 {
+    let judge_bottom = note_judge_bottom_y(area, state, canvas_h);
+    let progress = progress.clamp(0.0, 1.0);
+    judge_bottom - progress * (judge_bottom - area.y)
+}
+
+fn note_judge_bottom_y(area: Rect, state: &SkinDrawState, canvas_h: f32) -> f32 {
     let lift_norm = state.offset_lift_px as f32 / canvas_h.max(1.0);
     let scroll_top = area.y;
-    let judge_bottom = (area.y + area.height - lift_norm).max(scroll_top);
-    let progress = progress.clamp(0.0, 1.0);
-    judge_bottom - progress * (judge_bottom - scroll_top)
+    (area.y + area.height - lift_norm).max(scroll_top)
 }
 
 /// 小節線 (`note.group`) 向けオフセット適用。Notes offset (30) はノーツ専用のため除外する。
@@ -20671,6 +20676,68 @@ mod tests {
             "expected lifted note higher on screen, got no_lift={} lifted={}",
             rect_no_lift.y,
             rect_lifted.y
+        );
+    }
+
+    #[test]
+    fn note_group_lift_offset_matches_note_lift_once() {
+        let document: SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "w": 100, "h": 100,
+                "source": [{ "id": 1, "path": "line.png" }],
+                "image": [
+                    { "id": "n1", "src": 1, "x": 0, "y": 0, "w": 10, "h": 1 },
+                    { "id": "section-line", "src": 1, "x": 0, "y": 0, "w": 10, "h": 1 }
+                ],
+                "note": {
+                    "id": "notes",
+                    "note": ["n1"],
+                    "dst": [{ "time": 0, "x": 10, "y": 20, "w": 40, "h": 60 }],
+                    "group": [{
+                        "id": "section-line",
+                        "offset": 3,
+                        "dst": [{ "time": 0, "x": 10, "y": 20, "w": 40, "h": 2 }]
+                    }]
+                }
+            }
+            "#,
+        )
+        .unwrap();
+        let source_texture = SkinDocumentTexture {
+            source_id: "1".to_string(),
+            texture: SkinTextureId(1),
+            source_size: SkinImageSize { width: 10.0, height: 1.0 },
+        };
+        let skin = SkinContext::from_manifest_and_document(
+            default_skin_manifest(),
+            document,
+            [source_texture],
+        );
+        let note_height = skin.document_note_height(Lane::Key1, KeyMode::K7).unwrap();
+        let state_no_lift = SkinDrawState { offset_lift_px: 0, ..SkinDrawState::default() };
+        let state_lifted = SkinDrawState { offset_lift_px: 10, ..SkinDrawState::default() };
+
+        let note_no_lift = skin
+            .note_rect_for_progress(Lane::Key1, KeyMode::K7, 0.0, note_height, &state_no_lift)
+            .unwrap();
+        let note_lifted = skin
+            .note_rect_for_progress(Lane::Key1, KeyMode::K7, 0.0, note_height, &state_lifted)
+            .unwrap();
+
+        let bar_bottom_y = |state: &SkinDrawState| {
+            let items = skin.document_bar_line_items(0.0, KeyMode::K7, state);
+            let Some(SkinRenderItem::Image { rect, .. }) = items.first() else { panic!() };
+            rect.y + rect.height
+        };
+        let note_shift =
+            (note_lifted.y + note_lifted.height) - (note_no_lift.y + note_no_lift.height);
+        let bar_shift = bar_bottom_y(&state_lifted) - bar_bottom_y(&state_no_lift);
+
+        assert!(approx_eq(note_shift, -0.1), "expected note to lift once, got {note_shift}");
+        assert!(
+            approx_eq(bar_shift, note_shift),
+            "bar line shift {bar_shift} should match note shift {note_shift}"
         );
     }
 

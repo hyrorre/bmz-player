@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use bmz_chart::model::LongNoteMode;
-use bmz_core::lane::{LANE_COUNT, Lane};
+use bmz_core::lane::{KeyMode, LANE_COUNT, Lane};
 use bmz_core::time::TimeUs;
 
 use crate::scene::{AppSceneSnapshot, SelectRowKind, SelectRowSnapshot, SelectSnapshot};
@@ -867,7 +867,7 @@ fn plan_play(
         .map(|document| document.loadstart.max(0).saturating_add(document.loadend.max(0)))
         .unwrap_or(0);
     let skin_canvas_h = skin.document().map_or(720, |d| d.h) as f32;
-    let skin_lane_h = skin_lane_height_px(skin, skin_canvas_h);
+    let skin_lane_h = skin_lane_height_px(skin, key_mode, skin_canvas_h);
 
     let mut skin_state = crate::skin::SkinDrawState {
         elapsed_ms: play_elapsed_ms,
@@ -1119,6 +1119,7 @@ fn plan_play(
                 &mut commands,
                 skin,
                 &skin_state,
+                key_mode,
                 board,
                 snapshot.lift,
                 bar,
@@ -1160,6 +1161,7 @@ fn plan_play(
                 &mut commands,
                 skin,
                 &skin_state,
+                key_mode,
                 board,
                 snapshot.lift,
                 bar,
@@ -1366,12 +1368,11 @@ fn plan_decide(
     plan_play(snapshot, &SkinContext::default(), dynamic_timers)
 }
 
-fn skin_lane_height_px(skin: &SkinContext, fallback_canvas_h: f32) -> f32 {
+fn skin_lane_height_px(skin: &SkinContext, key_mode: KeyMode, fallback_canvas_h: f32) -> f32 {
     skin.document()
         .and_then(|document| {
             let enabled_options = document.enabled_options();
-            // Key1 はすべてのキーモードでインデックス 0 なので K7 で代用。
-            document.note_lane_area(Lane::Key1, bmz_core::lane::KeyMode::K7, &enabled_options)
+            document.note_lane_area(Lane::Key1, key_mode, &enabled_options)
         })
         .map_or(fallback_canvas_h, |rect| rect.height * fallback_canvas_h)
 }
@@ -2064,13 +2065,14 @@ fn push_play_bar_line(
     commands: &mut Vec<DrawCommand>,
     skin: &SkinContext,
     skin_state: &crate::skin::SkinDrawState,
+    key_mode: KeyMode,
     board: Rect,
     lift: f32,
     bar: &crate::snapshot::VisibleBarLine,
     skin_offsets: &SkinOffsetValues,
 ) {
     let start = commands.len();
-    let items = skin.document_bar_line_items(bar.y, skin_state);
+    let items = skin.document_bar_line_items(bar.y, key_mode, skin_state);
     if items.is_empty() {
         push_bar_line_rect_geometry(commands, board, lift, bar.y, skin_offsets);
     } else {
@@ -3489,6 +3491,59 @@ mod tests {
     }
 
     #[test]
+    fn play_skin_document_moves_bar_lines_in_same_direction_as_notes() {
+        let document: crate::skin::SkinDocument = serde_json::from_str(
+            r#"
+            {
+                "type": 0,
+                "w": 100,
+                "h": 100,
+                "source": [{"id": 1, "path": "line.png"}],
+                "image": [
+                    {"id": "note", "src": 1, "x": 0, "y": 0, "w": 1, "h": 1},
+                    {"id": "section-line", "src": 1, "x": 0, "y": 0, "w": 1, "h": 1}
+                ],
+                "note": {
+                    "id": "notes",
+                    "note": ["note", "note", "note", "note", "note", "note", "note", "note"],
+                    "dst": [{ "x": 10, "y": 20, "w": 40, "h": 60 }],
+                    "group": [{
+                        "id": "section-line",
+                        "dst": [{ "x": 10, "y": 20, "w": 40, "h": 2 }]
+                    }]
+                }
+            }
+            "#,
+        )
+        .unwrap();
+        let manifest: SkinManifest = toml::from_str("").unwrap();
+        let source_texture = crate::skin::SkinDocumentTexture {
+            source_id: "1".to_string(),
+            texture: SkinTextureId(77),
+            source_size: crate::skin::SkinImageSize { width: 1.0, height: 1.0 },
+        };
+        let skin = SkinContext::from_manifest_and_document(manifest, document, [source_texture]);
+        let note_height = skin.document_note_height(Lane::Key1, KeyMode::K7).unwrap();
+        let state = crate::skin::SkinDrawState::default();
+        let early_note =
+            skin.note_rect_for_progress(Lane::Key1, KeyMode::K7, 0.5, note_height, &state).unwrap();
+        let later_note = skin
+            .note_rect_for_progress(Lane::Key1, KeyMode::K7, 0.25, note_height, &state)
+            .unwrap();
+
+        let bar_y = |progress| {
+            let items = skin.document_bar_line_items(progress, KeyMode::K7, &state);
+            let Some(SkinRenderItem::Image { rect, .. }) = items.first() else { panic!() };
+            rect.y
+        };
+        let early_bar_y = bar_y(0.5);
+        let later_bar_y = bar_y(0.25);
+
+        assert!(later_note.y > early_note.y);
+        assert!(later_bar_y > early_bar_y);
+    }
+
+    #[test]
     fn play_skin_document_applies_bar_line_offset_height_and_alpha() {
         let document: crate::skin::SkinDocument = serde_json::from_str(
             r#"
@@ -3778,7 +3833,7 @@ mod tests {
         let manifest: SkinManifest = toml::from_str("").unwrap();
         let skin = SkinContext::from_manifest_and_document(manifest, document, []);
 
-        assert!(approx_eq(skin_lane_height_px(&skin, 1080.0), 723.0));
+        assert!(approx_eq(skin_lane_height_px(&skin, KeyMode::K7, 1080.0), 723.0));
     }
 
     #[test]
