@@ -8374,11 +8374,18 @@ impl WinitApp {
         }
     }
 
+    fn flush_pending_screenshots(&mut self, reason: &'static str) {
+        if let Err(error) = self.renderer.flush_pending_screenshots() {
+            tracing::warn!(%error, reason, "failed to flush pending screenshots");
+        }
+    }
+
     fn handle_smoke_exit_after_redraw(&mut self, event_loop: &ActiveEventLoop) {
         if self.smoke_exit_on_result && self.finished_play.is_some() {
             self.smoke_exit_on_result = false;
             tracing::info!("smoke result reached; leaving event loop");
             self.save_current_play_options(None, "game exit");
+            self.flush_pending_screenshots("smoke result exit");
             event_loop.exit();
             return;
         }
@@ -8394,6 +8401,7 @@ impl WinitApp {
                     "smoke result frame count reached; leaving event loop"
                 );
                 self.save_current_play_options(None, "game exit");
+                self.flush_pending_screenshots("smoke result frame exit");
                 event_loop.exit();
                 return;
             }
@@ -8411,6 +8419,7 @@ impl WinitApp {
                 "smoke exit frame count reached; leaving event loop"
             );
             self.save_current_play_options(self.active_hispeed(), "game exit");
+            self.flush_pending_screenshots("smoke frame exit");
             event_loop.exit();
         }
     }
@@ -9534,6 +9543,7 @@ impl ApplicationHandler for WinitApp {
     }
 
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        self.flush_pending_screenshots("app exit");
         self.save_current_play_options(self.active_hispeed(), "game exit");
         // プロセス終了前に音声出力を確実に Drop し、ASIO の停止・後処理を走らせる。
         self.draining_audio = None;

@@ -318,6 +318,8 @@ struct WgpuRenderer {
     text_buffer_capacity: usize,
     font: Option<FontArc>,
     egui: EguiPainter,
+    pending_screenshot_readbacks: Vec<ScreenshotReadback>,
+    screenshot_save_jobs: Vec<ScreenshotSaveJob>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -342,6 +344,22 @@ struct ScreenshotCapture {
 struct ScreenshotRequest {
     path: PathBuf,
     copy_to_clipboard: bool,
+}
+
+struct ScreenshotReadback {
+    request: ScreenshotRequest,
+    capture: ScreenshotCapture,
+    rx: mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>,
+}
+
+struct ScreenshotSaveJob {
+    path: PathBuf,
+    handle: thread::JoinHandle<Result<ScreenshotSaveOutcome>>,
+}
+
+struct ScreenshotSaveOutcome {
+    path: PathBuf,
+    clipboard_result: Option<Result<()>>,
 }
 
 impl ScreenshotCapture {
@@ -380,69 +398,132 @@ impl ScreenshotCapture {
         );
     }
 
-    fn read_rgba(&self, device: &wgpu::Device) -> Result<Vec<u8>> {
+    fn start_readback(&self) -> mpsc::Receiver<Result<(), wgpu::BufferAsyncError>> {
         let slice = self.buffer.slice(..);
         let (tx, rx) = mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |result| {
             let _ = tx.send(result);
         });
-        device.poll(wgpu::PollType::wait_indefinitely())?;
-        rx.recv()
-            .context("screenshot readback callback dropped")?
-            .context("failed to map screenshot buffer")?;
-
-        let mapped = slice.get_mapped_range();
-        let mut rgba = vec![0; self.width as usize * self.height as usize * 4];
-        let row_bytes = self.width as usize * 4;
-        let padded_row_bytes = self.padded_bytes_per_row as usize;
-        for y in 0..self.height as usize {
-            let src_offset = y * padded_row_bytes;
-            let dst_offset = y * row_bytes;
-            rgba[dst_offset..dst_offset + row_bytes]
-                .copy_from_slice(&mapped[src_offset..src_offset + row_bytes]);
-        }
-        drop(mapped);
-        self.buffer.unmap();
-
-        if matches!(
-            self.format,
-            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
-        ) {
-            for pixel in rgba.chunks_exact_mut(4) {
-                pixel.swap(0, 2);
-            }
-        }
-
-        Ok(rgba)
+        rx
     }
 
-    fn save_png(&self, path: &Path, rgba: &[u8]) -> Result<()> {
-        if let Some(parent) = path.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("failed to create {}", parent.display()))?;
-        }
-        image::save_buffer_with_format(
-            path,
-            rgba,
+    fn mapped_rgba(&self) -> Vec<u8> {
+        let slice = self.buffer.slice(..);
+        let mapped = slice.get_mapped_range();
+        let rgba = unpack_screenshot_rgba(
+            &mapped,
             self.width,
             self.height,
-            image::ColorType::Rgba8,
-            image::ImageFormat::Png,
-        )
-        .with_context(|| format!("failed to save screenshot {}", path.display()))
+            self.padded_bytes_per_row,
+            self.format,
+        );
+        drop(mapped);
+        self.buffer.unmap();
+        rgba
+    }
+}
+
+fn unpack_screenshot_rgba(
+    mapped: &[u8],
+    width: u32,
+    height: u32,
+    padded_bytes_per_row: u32,
+    format: wgpu::TextureFormat,
+) -> Vec<u8> {
+    let mut rgba = vec![0; width as usize * height as usize * 4];
+    let row_bytes = width as usize * 4;
+    let padded_row_bytes = padded_bytes_per_row as usize;
+    for y in 0..height as usize {
+        let src_offset = y * padded_row_bytes;
+        let dst_offset = y * row_bytes;
+        rgba[dst_offset..dst_offset + row_bytes]
+            .copy_from_slice(&mapped[src_offset..src_offset + row_bytes]);
     }
 
-    fn copy_to_clipboard(&self, rgba: &[u8]) -> Result<()> {
-        let mut clipboard = arboard::Clipboard::new().context("failed to open clipboard")?;
-        clipboard
-            .set_image(arboard::ImageData {
-                width: self.width as usize,
-                height: self.height as usize,
-                bytes: Cow::Borrowed(rgba),
-            })
-            .context("failed to copy screenshot to clipboard")
+    if matches!(format, wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb) {
+        for pixel in rgba.chunks_exact_mut(4) {
+            pixel.swap(0, 2);
+        }
+    }
+
+    rgba
+}
+
+fn save_screenshot_png(path: &Path, width: u32, height: u32, rgba: &[u8]) -> Result<()> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    image::save_buffer_with_format(
+        path,
+        rgba,
+        width,
+        height,
+        image::ColorType::Rgba8,
+        image::ImageFormat::Png,
+    )
+    .with_context(|| format!("failed to save screenshot {}", path.display()))
+}
+
+fn copy_screenshot_to_clipboard(width: u32, height: u32, rgba: &[u8]) -> Result<()> {
+    let mut clipboard = arboard::Clipboard::new().context("failed to open clipboard")?;
+    clipboard
+        .set_image(arboard::ImageData {
+            width: width as usize,
+            height: height as usize,
+            bytes: Cow::Borrowed(rgba),
+        })
+        .context("failed to copy screenshot to clipboard")
+}
+
+fn spawn_screenshot_save_job(
+    request: ScreenshotRequest,
+    width: u32,
+    height: u32,
+    rgba: Vec<u8>,
+) -> Result<ScreenshotSaveJob> {
+    let path = request.path.clone();
+    let thread_path = path.clone();
+    let handle = thread::Builder::new()
+        .name("bmz-screenshot-save".to_string())
+        .spawn(move || {
+            save_screenshot_png(&request.path, width, height, &rgba)?;
+            let clipboard_result = request
+                .copy_to_clipboard
+                .then(|| copy_screenshot_to_clipboard(width, height, &rgba));
+            Ok(ScreenshotSaveOutcome { path: request.path, clipboard_result })
+        })
+        .with_context(|| {
+            format!("failed to spawn screenshot save thread for {}", thread_path.display())
+        })?;
+    Ok(ScreenshotSaveJob { path, handle })
+}
+
+fn finish_screenshot_save_job(job: ScreenshotSaveJob) {
+    match job.handle.join() {
+        Ok(Ok(outcome)) => match outcome.clipboard_result {
+            Some(Ok(())) => tracing::info!(
+                path = %outcome.path.display(),
+                "screenshot saved and copied to clipboard"
+            ),
+            Some(Err(error)) => tracing::warn!(
+                %error,
+                path = %outcome.path.display(),
+                "screenshot saved but clipboard copy failed"
+            ),
+            None => tracing::info!(path = %outcome.path.display(), "screenshot saved"),
+        },
+        Ok(Err(error)) => tracing::warn!(
+            %error,
+            path = %job.path.display(),
+            "failed to save screenshot"
+        ),
+        Err(_) => tracing::warn!(
+            path = %job.path.display(),
+            "screenshot save thread panicked"
+        ),
     }
 }
 
@@ -812,6 +893,13 @@ impl Renderer {
             Some(ScreenshotRequest { path: path.into(), copy_to_clipboard: true });
     }
 
+    pub fn flush_pending_screenshots(&mut self) -> Result<()> {
+        let Some(gpu) = &mut self.gpu else {
+            return Ok(());
+        };
+        gpu.flush_pending_screenshots()
+    }
+
     pub fn last_scene(&self) -> Option<&AppSceneSnapshot> {
         self.last_scene.as_ref()
     }
@@ -995,6 +1083,8 @@ impl WgpuRenderer {
             text_buffer_capacity: 0,
             font: load_default_font(),
             egui,
+            pending_screenshot_readbacks: Vec::new(),
+            screenshot_save_jobs: Vec::new(),
         })
     }
 
@@ -1013,6 +1103,107 @@ impl WgpuRenderer {
         SurfaceSize { width: self.config.width, height: self.config.height }
     }
 
+    fn poll_screenshot_work(&mut self) {
+        if !self.pending_screenshot_readbacks.is_empty()
+            && let Err(error) = self.device.poll(wgpu::PollType::Poll)
+        {
+            tracing::warn!(%error, "failed to poll screenshot readback work");
+        }
+        self.drain_ready_screenshot_readbacks();
+        self.join_finished_screenshot_save_jobs();
+    }
+
+    fn enqueue_screenshot_readback(
+        &mut self,
+        request: ScreenshotRequest,
+        capture: ScreenshotCapture,
+    ) {
+        let rx = capture.start_readback();
+        tracing::debug!(
+            path = %request.path.display(),
+            width = capture.width,
+            height = capture.height,
+            "screenshot readback queued"
+        );
+        self.pending_screenshot_readbacks.push(ScreenshotReadback { request, capture, rx });
+    }
+
+    fn drain_ready_screenshot_readbacks(&mut self) {
+        let mut index = 0;
+        while index < self.pending_screenshot_readbacks.len() {
+            match self.pending_screenshot_readbacks[index].rx.try_recv() {
+                Ok(result) => {
+                    let readback = self.pending_screenshot_readbacks.swap_remove(index);
+                    self.finish_screenshot_readback(readback, result);
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    index += 1;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    let readback = self.pending_screenshot_readbacks.swap_remove(index);
+                    tracing::warn!(
+                        path = %readback.request.path.display(),
+                        "screenshot readback callback dropped"
+                    );
+                }
+            }
+        }
+    }
+
+    fn finish_screenshot_readback(
+        &mut self,
+        readback: ScreenshotReadback,
+        result: Result<(), wgpu::BufferAsyncError>,
+    ) {
+        if let Err(error) = result {
+            tracing::warn!(
+                %error,
+                path = %readback.request.path.display(),
+                "failed to map screenshot buffer"
+            );
+            return;
+        }
+
+        let width = readback.capture.width;
+        let height = readback.capture.height;
+        let rgba = readback.capture.mapped_rgba();
+        tracing::debug!(
+            path = %readback.request.path.display(),
+            width,
+            height,
+            "screenshot readback completed"
+        );
+        match spawn_screenshot_save_job(readback.request, width, height, rgba) {
+            Ok(job) => self.screenshot_save_jobs.push(job),
+            Err(error) => {
+                tracing::warn!(%error, "failed to start screenshot save job");
+            }
+        }
+    }
+
+    fn join_finished_screenshot_save_jobs(&mut self) {
+        let mut index = 0;
+        while index < self.screenshot_save_jobs.len() {
+            if self.screenshot_save_jobs[index].handle.is_finished() {
+                let job = self.screenshot_save_jobs.swap_remove(index);
+                finish_screenshot_save_job(job);
+            } else {
+                index += 1;
+            }
+        }
+    }
+
+    fn flush_pending_screenshots(&mut self) -> Result<()> {
+        while !self.pending_screenshot_readbacks.is_empty() {
+            self.device.poll(wgpu::PollType::wait_indefinitely())?;
+            self.drain_ready_screenshot_readbacks();
+        }
+        while let Some(job) = self.screenshot_save_jobs.pop() {
+            finish_screenshot_save_job(job);
+        }
+        Ok(())
+    }
+
     fn render_plan(
         &mut self,
         plan: &DrawPlan,
@@ -1024,6 +1215,7 @@ impl WgpuRenderer {
     ) -> Result<(RenderSurfaceStatus, GpuRenderTimings)> {
         let draw_start = Instant::now();
         let mut timings = GpuRenderTimings::default();
+        self.poll_screenshot_work();
         // egui のテクスチャ更新は、描画をスキップするフレームでも必ず適用する。
         // TexturesDelta は累積ストリームのため、取りこぼすと後続フレームの
         // 部分更新が未確保テクスチャを参照して panic する。
@@ -1234,23 +1426,7 @@ impl WgpuRenderer {
         self.queue.submit(egui_staging.into_iter().chain(std::iter::once(command_buffer)));
         timings.queue_us = queue_start.elapsed().as_micros();
         if let Some((request, capture)) = screenshot {
-            let rgba = capture.read_rgba(&self.device)?;
-            capture.save_png(&request.path, &rgba)?;
-            if request.copy_to_clipboard {
-                match capture.copy_to_clipboard(&rgba) {
-                    Ok(()) => tracing::info!(
-                        path = %request.path.display(),
-                        "screenshot saved and copied to clipboard"
-                    ),
-                    Err(error) => tracing::warn!(
-                        %error,
-                        path = %request.path.display(),
-                        "screenshot saved but clipboard copy failed"
-                    ),
-                }
-            } else {
-                tracing::info!(path = %request.path.display(), "screenshot saved");
-            }
+            self.enqueue_screenshot_readback(request, capture);
         }
         if let Some(frame) = egui {
             self.egui.free_textures(frame);
@@ -3953,6 +4129,25 @@ mod tests {
 
     fn font_supports_japanese<F: Font>(font: &F) -> bool {
         font.glyph_id('あ').0 != 0 && font.glyph_id('日').0 != 0
+    }
+
+    #[test]
+    fn screenshot_unpack_removes_row_padding() {
+        let mapped =
+            [1, 2, 3, 4, 5, 6, 7, 8, 0, 0, 0, 0, 9, 10, 11, 12, 13, 14, 15, 16, 0, 0, 0, 0];
+
+        let rgba = unpack_screenshot_rgba(&mapped, 2, 2, 12, wgpu::TextureFormat::Rgba8Unorm);
+
+        assert_eq!(rgba, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+    }
+
+    #[test]
+    fn screenshot_unpack_converts_bgra_to_rgba() {
+        let mapped = [10, 20, 30, 40];
+
+        let rgba = unpack_screenshot_rgba(&mapped, 1, 1, 4, wgpu::TextureFormat::Bgra8Unorm);
+
+        assert_eq!(rgba, vec![30, 20, 10, 40]);
     }
 
     #[test]
