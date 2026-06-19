@@ -3004,6 +3004,13 @@ impl WinitApp {
     fn route_settings_control(&mut self, control: &str) -> bool {
         let bindings = SettingsBindings::from_profile(&self.boot.profile_config.input);
 
+        if control.starts_with("Axis")
+            && (self.select_keys.is_select_scratch_up(control)
+                || self.select_keys.is_select_scratch_down(control))
+        {
+            return true;
+        }
+
         if self.key_config_edit.is_some() {
             if bindings.is_back(control) {
                 self.cancel_key_config_edit();
@@ -3037,6 +3044,7 @@ impl WinitApp {
         }
         if let Some(select_move) = settings_browse_move_control(control, &bindings) {
             self.move_selection(select_move);
+            self.start_select_hold_move(select_move, control.to_string());
             return true;
         }
         if bindings.is_confirm(control) {
@@ -3473,6 +3481,12 @@ impl WinitApp {
         }
 
         if in_settings_stack(&self.folder_stack) {
+            if event.state == ElementState::Released
+                && let Some(control_name) = physical_key_name(event.physical_key)
+            {
+                self.clear_select_hold_control(&control_name);
+                return;
+            }
             if self.key_config_edit.is_some()
                 && event.state == ElementState::Pressed
                 && !event.repeat
@@ -3637,22 +3651,17 @@ impl WinitApp {
                                     | SelectMove::PageNext
                             ) {
                                 let control_name = physical_key_name(event.physical_key);
-                                self.select_hold_move = Some(select_move);
-                                self.select_hold_started_at = Some(Instant::now());
-                                self.select_hold_last_trigger_at = Some(Instant::now());
-                                self.select_hold_control = control_name;
+                                if let Some(control_name) = control_name {
+                                    self.start_select_hold_move(select_move, control_name);
+                                }
                             }
                         }
                     }
                 }
             } else if event.state == ElementState::Released
                 && let Some(control_name) = physical_key_name(event.physical_key)
-                && self.select_hold_control.as_ref() == Some(&control_name)
             {
-                self.select_hold_move = None;
-                self.select_hold_started_at = None;
-                self.select_hold_last_trigger_at = None;
-                self.select_hold_control = None;
+                self.clear_select_hold_control(&control_name);
             }
         }
     }
@@ -3772,6 +3781,7 @@ impl WinitApp {
         }
         if !pressed {
             if in_settings_stack(&self.folder_stack) {
+                self.clear_select_hold_control(button);
                 return;
             }
             if self.select_keys.is_start(button) {
@@ -3875,7 +3885,9 @@ impl WinitApp {
                 }
                 return;
             }
-            let _ = self.route_settings_control(button);
+            if pressed {
+                let _ = self.route_settings_control(button);
+            }
             return;
         }
 
@@ -3984,21 +3996,13 @@ impl WinitApp {
                                     | SelectMove::PagePrevious
                                     | SelectMove::PageNext
                             ) {
-                                self.select_hold_move = Some(select_move);
-                                self.select_hold_started_at = Some(Instant::now());
-                                self.select_hold_last_trigger_at = Some(Instant::now());
-                                self.select_hold_control = Some(button.to_string());
+                                self.start_select_hold_move(select_move, button.to_string());
                             }
                         }
                     }
                 }
             } else {
-                if self.select_hold_control.as_deref() == Some(button) {
-                    self.select_hold_move = None;
-                    self.select_hold_started_at = None;
-                    self.select_hold_last_trigger_at = None;
-                    self.select_hold_control = None;
-                }
+                self.clear_select_hold_control(button);
             }
         }
     }
@@ -4416,10 +4420,7 @@ impl WinitApp {
 
     fn advance_select_hold_move(&mut self) {
         if !matches!(self.view_state(), AppViewState::Select) {
-            self.select_hold_move = None;
-            self.select_hold_started_at = None;
-            self.select_hold_last_trigger_at = None;
-            self.select_hold_control = None;
+            self.clear_select_hold();
             return;
         }
         let (Some(select_move), Some(started_at), Some(last_trigger_at)) =
@@ -4437,6 +4438,26 @@ impl WinitApp {
             self.select_hold_last_trigger_at = Some(now);
             self.move_selection_with_duration(select_move, self.select_scroll_duration_high());
         }
+    }
+
+    fn start_select_hold_move(&mut self, select_move: SelectMove, control: String) {
+        self.select_hold_move = Some(select_move);
+        self.select_hold_started_at = Some(Instant::now());
+        self.select_hold_last_trigger_at = Some(Instant::now());
+        self.select_hold_control = Some(control);
+    }
+
+    fn clear_select_hold_control(&mut self, control: &str) {
+        if self.select_hold_control.as_deref() == Some(control) {
+            self.clear_select_hold();
+        }
+    }
+
+    fn clear_select_hold(&mut self) {
+        self.select_hold_move = None;
+        self.select_hold_started_at = None;
+        self.select_hold_last_trigger_at = None;
+        self.select_hold_control = None;
     }
 
     fn open_advanced_settings_from_select(&mut self) {
