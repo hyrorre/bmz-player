@@ -1,8 +1,10 @@
 use bmz_core::clear::ClearType;
 use bmz_core::judge::{Judge, TimingSide};
+use bmz_core::lane::KeyMode;
 
 use crate::gauge::GaugeState;
 use crate::judge::model::JudgementEvent;
+use crate::rule::RuleMode;
 
 #[derive(Debug, Clone, Default)]
 pub struct JudgeCounts {
@@ -28,9 +30,17 @@ pub struct ScoreState {
     pub past_notes: u32,
     /// beatoraja 互換 ghost。各スコア対象ノーツの判定 bucket を 1 byte で保持する。
     pub ghost: Vec<u8>,
+    pub empty_poor_breaks_combo: bool,
 }
 
 impl ScoreState {
+    pub fn for_rule_mode(key_mode: KeyMode, rule_mode: RuleMode) -> Self {
+        Self {
+            empty_poor_breaks_combo: empty_poor_breaks_combo_for_rule_mode(key_mode, rule_mode),
+            ..Default::default()
+        }
+    }
+
     pub fn apply(&mut self, event: &JudgementEvent) {
         self.increment_judge(event.judge, event.side);
 
@@ -45,6 +55,9 @@ impl ScoreState {
                 self.max_combo = self.max_combo.max(self.combo);
             }
             Judge::Bad | Judge::Poor => {
+                self.combo = 0;
+            }
+            Judge::EmptyPoor if self.empty_poor_breaks_combo => {
                 self.combo = 0;
             }
             Judge::EmptyPoor => {}
@@ -103,6 +116,13 @@ impl ScoreState {
     }
 }
 
+pub fn empty_poor_breaks_combo_for_rule_mode(key_mode: KeyMode, rule_mode: RuleMode) -> bool {
+    match rule_mode {
+        RuleMode::Beatoraja => matches!(key_mode, KeyMode::K5 | KeyMode::K10 | KeyMode::K9),
+        RuleMode::Lr2Oraja | RuleMode::Dx => false,
+    }
+}
+
 fn ghost_judge_code(judge: Judge) -> u8 {
     match judge {
         Judge::PGreat => 0,
@@ -136,7 +156,7 @@ pub fn compute_clear_type(failed_state: bool, score: &ScoreState, gauge: &GaugeS
 mod tests {
     use bmz_core::ids::NoteId;
     use bmz_core::judge::{Judge, TimingSide};
-    use bmz_core::lane::Lane;
+    use bmz_core::lane::{KeyMode, Lane};
     use bmz_core::time::TimeUs;
 
     use super::*;
@@ -168,5 +188,35 @@ mod tests {
         assert_eq!(score.past_notes, 2);
         assert_eq!(score.cb_with_unprocessed_notes(10), 9);
         assert_eq!(score.bp_with_unprocessed_notes(10), 10);
+    }
+
+    #[test]
+    fn default_empty_poor_keeps_combo() {
+        let mut score = ScoreState::default();
+
+        score.apply(&event(Judge::PGreat, TimingSide::Slow, Some(NoteId(1))));
+        score.apply(&event(Judge::EmptyPoor, TimingSide::Slow, None));
+
+        assert_eq!(score.combo, 1);
+    }
+
+    #[test]
+    fn fivekey_empty_poor_breaks_combo() {
+        let mut score = ScoreState::for_rule_mode(KeyMode::K5, RuleMode::Beatoraja);
+
+        score.apply(&event(Judge::PGreat, TimingSide::Slow, Some(NoteId(1))));
+        score.apply(&event(Judge::EmptyPoor, TimingSide::Slow, None));
+
+        assert_eq!(score.combo, 0);
+    }
+
+    #[test]
+    fn beatoraja_empty_poor_combo_policy_matches_keymode() {
+        assert!(empty_poor_breaks_combo_for_rule_mode(KeyMode::K5, RuleMode::Beatoraja));
+        assert!(empty_poor_breaks_combo_for_rule_mode(KeyMode::K10, RuleMode::Beatoraja));
+        assert!(empty_poor_breaks_combo_for_rule_mode(KeyMode::K9, RuleMode::Beatoraja));
+        assert!(!empty_poor_breaks_combo_for_rule_mode(KeyMode::K7, RuleMode::Beatoraja));
+        assert!(!empty_poor_breaks_combo_for_rule_mode(KeyMode::K6, RuleMode::Beatoraja));
+        assert!(!empty_poor_breaks_combo_for_rule_mode(KeyMode::K5, RuleMode::Lr2Oraja));
     }
 }

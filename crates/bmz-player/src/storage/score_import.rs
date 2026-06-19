@@ -516,6 +516,7 @@ fn score_state_from_lr2(row: &Lr2ScoreRow) -> ScoreState {
         max_combo: row.max_combo,
         past_notes: row.total_notes,
         ghost,
+        empty_poor_breaks_combo: false,
     }
 }
 
@@ -541,6 +542,7 @@ fn score_state_from_beatoraja(row: &BeatorajaScoreRow) -> ScoreState {
         max_combo: row.max_combo,
         past_notes: row.total_notes,
         ghost,
+        empty_poor_breaks_combo: false,
     }
 }
 

@@ -395,7 +395,7 @@ pub fn build_game_session_with_input_backend(
         chart,
         timing_map,
         input_system,
-        score: ScoreState::default(),
+        score: ScoreState::for_rule_mode(key_mode, rule_mode),
         replay_recorder: ReplayRecorder::default(),
         replay_player,
         autoplay,
@@ -1760,6 +1760,23 @@ mod tests {
             .find(|g| g.definition.gauge_type == GaugeType::Hard)
             .expect("Hard gauge present");
         assert_eq!(hard.definition.values, [0.16, 0.16, 0.0, -4.5, -9.0, -4.5]);
+    }
+
+    #[test]
+    fn build_game_session_sets_empty_poor_combo_policy_from_keymode() {
+        let profile = ProfileConfig::new_default("default", "Default", 1);
+        let mut chart_k5 = chart();
+        chart_k5.metadata.key_mode = KeyMode::K5;
+        let mut chart_k7 = chart();
+        chart_k7.metadata.key_mode = KeyMode::K7;
+
+        let session_k5 =
+            build_game_session(Arc::new(chart_k5), &profile, PlaySessionOptions::default());
+        let session_k7 =
+            build_game_session(Arc::new(chart_k7), &profile, PlaySessionOptions::default());
+
+        assert!(session_k5.score.empty_poor_breaks_combo);
+        assert!(!session_k7.score.empty_poor_breaks_combo);
     }
 
     #[test]

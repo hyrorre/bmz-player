@@ -1115,6 +1115,7 @@ fn debug_boot_finished_play_session() -> FinishedPlaySession {
             max_combo: summary.max_combo,
             past_notes: summary.total_notes,
             ghost: Vec::new(),
+            empty_poor_breaks_combo: false,
         },
         autoplay: false,
     };
