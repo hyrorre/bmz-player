@@ -2013,6 +2013,9 @@ fn encode_plan_geometry_into(
             DrawCommand::Rect { rect, color } => {
                 let start = rects.len();
                 let rect = canvas_viewport.transform_rect(*rect);
+                if !visible_rect(rect) || !visible_alpha(color.a) {
+                    continue;
+                }
                 rects.extend_from_slice(bytemuck::bytes_of(&[
                     rect.x,
                     rect.y,
@@ -2029,7 +2032,11 @@ fn encode_plan_geometry_into(
                 let transformed_batch: Vec<_> = batch
                     .iter()
                     .map(|command| canvas_viewport.transform_rect_command(*command))
+                    .filter(|command| visible_rect(command.rect) && visible_alpha(command.color.a))
                     .collect();
+                if transformed_batch.is_empty() {
+                    continue;
+                }
                 if let Some(cache) = *cache
                     && let Some(texture) = resolve_rect_batch_texture(
                         &transformed_batch,
@@ -2078,6 +2085,9 @@ fn encode_plan_geometry_into(
             DrawCommand::Image { rect, uv, source_size, texture, tint, blend, linear_filter } => {
                 let start = images.len();
                 let rect = canvas_viewport.transform_rect(*rect);
+                if !visible_rect(rect) || !visible_alpha(tint.a) {
+                    continue;
+                }
                 let sampling_uv = sampling_uv_with_half_texel_inset(*uv, *source_size);
                 encode_image_instance(
                     images,
@@ -2103,6 +2113,9 @@ fn encode_plan_geometry_into(
             } => {
                 let start = images.len();
                 let rect = canvas_viewport.transform_rect(*rect);
+                if !visible_rect(rect) || !visible_alpha(tint.a) {
+                    continue;
+                }
                 let sampling_uv = sampling_uv_with_half_texel_inset(*uv, *source_size);
                 encode_image_instance(
                     images,
@@ -2131,6 +2144,9 @@ fn encode_plan_geometry_into(
                     let start = rects.len();
                     let rect = command.rect;
                     let color = command.color;
+                    if !visible_rect(rect) || !visible_alpha(color.a) {
+                        continue;
+                    }
                     rects.extend_from_slice(bytemuck::bytes_of(&[
                         rect.x,
                         rect.y,
@@ -2146,6 +2162,19 @@ fn encode_plan_geometry_into(
             }
         }
     }
+}
+
+fn visible_rect(rect: Rect) -> bool {
+    rect.x.is_finite()
+        && rect.y.is_finite()
+        && rect.width.is_finite()
+        && rect.height.is_finite()
+        && rect.width.abs() > f32::EPSILON
+        && rect.height.abs() > f32::EPSILON
+}
+
+fn visible_alpha(alpha: f32) -> bool {
+    alpha.is_finite() && alpha > 0.0
 }
 
 fn sampling_uv_with_half_texel_inset(uv: UvRect, source_size: Option<SkinImageSize>) -> UvRect {
@@ -5076,6 +5105,48 @@ mod tests {
             geometry.stats(),
             DrawStepStats { steps: 1, rect_steps: 1, rect_instances: 2, ..Default::default() }
         );
+    }
+
+    #[test]
+    fn plan_geometry_skips_invisible_rects_and_images() {
+        let visible_rect = crate::plan::Rect { x: 0.1, y: 0.2, width: 0.3, height: 0.4 };
+        let zero_width_rect = crate::plan::Rect { width: 0.0, ..visible_rect };
+        let mut transparent_image = sample_image(0, BlendMode::Normal);
+        let DrawCommand::Image { tint, .. } = &mut transparent_image else { panic!() };
+        *tint = Color::rgba(1.0, 1.0, 1.0, 0.0);
+        let mut zero_size_image = sample_image(1, BlendMode::Normal);
+        let DrawCommand::Image { rect, .. } = &mut zero_size_image else { panic!() };
+        rect.height = 0.0;
+
+        let plan = DrawPlan {
+            clear: Color::rgb(0.0, 0.0, 0.0),
+            commands: vec![
+                DrawCommand::Rect { rect: visible_rect, color: Color::rgba(1.0, 0.0, 0.0, 0.0) },
+                DrawCommand::Rect { rect: zero_width_rect, color: Color::rgb(0.0, 1.0, 0.0) },
+                DrawCommand::RectBatch {
+                    rects: std::sync::Arc::from([
+                        crate::plan::RectCommand {
+                            rect: visible_rect,
+                            color: Color::rgba(1.0, 1.0, 1.0, 0.0),
+                        },
+                        crate::plan::RectCommand {
+                            rect: zero_width_rect,
+                            color: Color::rgb(1.0, 1.0, 1.0),
+                        },
+                    ]),
+                    cache: None,
+                },
+                transparent_image,
+                zero_size_image,
+            ],
+        };
+
+        let geometry = encode_plan_geometry(&plan, &TextFrame::default(), test_surface_size());
+
+        assert!(geometry.rects.is_empty());
+        assert!(geometry.images.is_empty());
+        assert_eq!(geometry.steps, Vec::new());
+        assert_eq!(geometry.stats(), DrawStepStats::default());
     }
 
     #[test]
