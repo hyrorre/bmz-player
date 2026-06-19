@@ -59,9 +59,12 @@ impl JudgeEngine {
         for lane in Lane::ALL {
             let lane_state = &mut self.lanes[lane.index()];
 
-            while let Some((idx, note)) =
-                next_press_reference_note(chart, lane, lane_state.next_note_index)
-            {
+            while let Some((idx, note)) = next_unjudged_press_reference_note(
+                chart,
+                lane,
+                lane_state.next_note_index,
+                &self.judged_notes,
+            ) {
                 let windows = self.window_set.press_window(lane);
                 if now.0 <= note.time.0 + windows.bad_slow_us {
                     break;
@@ -78,6 +81,7 @@ impl JudgeEngine {
                     time: now,
                 });
             }
+            advance_press_cursor(chart, lane, &mut lane_state.next_note_index, &self.judged_notes);
 
             if let Some(active) = lane_state.active_long {
                 match active.mode {
@@ -151,7 +155,13 @@ impl JudgeEngine {
         Lane::ALL.iter().copied().all(|lane| {
             let state = &self.lanes[lane.index()];
             state.active_long.is_none()
-                && next_press_reference_note(chart, lane, state.next_note_index).is_none()
+                && next_unjudged_press_reference_note(
+                    chart,
+                    lane,
+                    state.next_note_index,
+                    &self.judged_notes,
+                )
+                .is_none()
         })
     }
 
@@ -172,39 +182,46 @@ impl JudgeEngine {
 
         let rule_mode = self.rule_mode;
         let windows = self.window_set.press_window(input.lane);
-        let lane_state = &mut self.lanes[input.lane.index()];
-        let Some((idx, note)) =
-            next_press_reference_note(chart, input.lane, lane_state.next_note_index)
-        else {
-            let mut outcome =
-                classify_empty_poor_from_last_press(lane_state.last_press_time, input, windows)
-                    .unwrap_or_default();
+        let candidate = select_press_candidate(
+            chart,
+            input.lane,
+            input.time,
+            windows,
+            rule_mode,
+            &self.judged_notes,
+        );
+        let Some(candidate) = candidate else {
+            let mut outcome = JudgeOutcome::default();
             outcome.mine_hits = mine_hits;
             return outcome;
         };
 
-        let delta = input.time.0 - note.time.0;
-
-        if let Some(judge) = classify_normal_delta(delta, windows).filter(|judge| {
-            !suppresses_long_start_late_bad(rule_mode, windows, note, delta, *judge)
-        }) {
-            lane_state.next_note_index = idx + 1;
+        if candidate.consumes_note {
+            let lane_state = &mut self.lanes[input.lane.index()];
+            let note_id = candidate.note_id.expect("normal candidate must have note id");
+            let note = chart.note_by_id(note_id).expect("candidate note exists");
             lane_state.last_press_time = Some(note.time);
-            self.judged_notes.insert(note.id, judge);
+            self.judged_notes.insert(note.id, candidate.judge);
 
             if note.kind == NoteKind::LongStart
                 && let Some(active) = make_active_long(chart, note.id, input.time)
             {
                 lane_state.active_long = Some(active);
             }
+            advance_press_cursor(
+                chart,
+                input.lane,
+                &mut lane_state.next_note_index,
+                &self.judged_notes,
+            );
 
             return JudgeOutcome {
                 events: vec![JudgementEvent {
-                    note_id: Some(note.id),
+                    note_id: Some(note_id),
                     lane: input.lane,
-                    judge,
-                    side: side_from_delta(delta),
-                    delta: TimeUs(delta),
+                    judge: candidate.judge,
+                    side: candidate.side,
+                    delta: candidate.delta,
                     time: input.time,
                 }],
                 mine_hits,
@@ -212,17 +229,7 @@ impl JudgeEngine {
             };
         }
 
-        let mut outcome = if let Some(outcome) =
-            classify_empty_poor_from_last_press(lane_state.last_press_time, input, windows)
-        {
-            outcome
-        } else if delta > windows.bad_slow_us && delta <= windows.empty_poor_slow_us {
-            empty_poor(input.lane, TimingSide::Slow, TimeUs(delta), input.time)
-        } else if delta < -windows.bad_fast_us && (-delta) <= windows.empty_poor_fast_us {
-            empty_poor(input.lane, TimingSide::Fast, TimeUs(delta), input.time)
-        } else {
-            JudgeOutcome::default()
-        };
+        let mut outcome = empty_poor(input.lane, candidate.side, candidate.delta, input.time);
         outcome.mine_hits = mine_hits;
         outcome
     }
@@ -291,17 +298,155 @@ fn suppresses_long_start_late_bad(
         && delta > windows.good_us
 }
 
-fn next_press_reference_note(
+#[derive(Debug, Clone, Copy)]
+struct PressCandidate {
+    note_id: Option<NoteId>,
+    judge: Judge,
+    side: TimingSide,
+    delta: TimeUs,
+    consumes_note: bool,
+}
+
+fn select_press_candidate(
     chart: &PlayableChart,
     lane: Lane,
+    input_time: TimeUs,
+    windows: JudgeWindow,
+    rule_mode: RuleMode,
+    judged_notes: &HashMap<NoteId, Judge>,
+) -> Option<PressCandidate> {
+    let mut normal: Option<PressCandidate> = None;
+    let mut slow_empty_poor: Option<PressCandidate> = None;
+    let mut fast_empty_poor: Option<PressCandidate> = None;
+
+    for note in chart.notes_for_lane(lane) {
+        if note.time.0 - input_time.0 > windows.empty_poor_fast_us {
+            break;
+        }
+        if input_time.0 - note.time.0 > windows.empty_poor_slow_us || !is_press_reference_note(note)
+        {
+            continue;
+        }
+
+        let delta = input_time.0 - note.time.0;
+        let already_judged = judged_notes.contains_key(&note.id);
+        if !already_judged
+            && let Some(judge) = classify_normal_delta(delta, windows).filter(|judge| {
+                !suppresses_long_start_late_bad(rule_mode, windows, note, delta, *judge)
+            })
+        {
+            let candidate = PressCandidate {
+                note_id: Some(note.id),
+                judge,
+                side: side_from_delta(delta),
+                delta: TimeUs(delta),
+                consumes_note: true,
+            };
+            if normal.as_ref().is_none_or(|current| {
+                combo_algorithm_prefers_new_candidate(*current, candidate, windows)
+            }) {
+                normal = Some(candidate);
+            }
+            continue;
+        }
+
+        let empty_poor_candidate = if already_judged {
+            if delta >= 0 && delta <= windows.empty_poor_slow_us {
+                Some(PressCandidate {
+                    note_id: None,
+                    judge: Judge::EmptyPoor,
+                    side: TimingSide::Slow,
+                    delta: TimeUs(delta),
+                    consumes_note: false,
+                })
+            } else if delta < 0 && -delta <= windows.empty_poor_fast_us {
+                Some(PressCandidate {
+                    note_id: None,
+                    judge: Judge::EmptyPoor,
+                    side: TimingSide::Fast,
+                    delta: TimeUs(delta),
+                    consumes_note: false,
+                })
+            } else {
+                None
+            }
+        } else if delta > windows.bad_slow_us && delta <= windows.empty_poor_slow_us {
+            Some(PressCandidate {
+                note_id: None,
+                judge: Judge::EmptyPoor,
+                side: TimingSide::Slow,
+                delta: TimeUs(delta),
+                consumes_note: false,
+            })
+        } else if delta < -windows.bad_fast_us && -delta <= windows.empty_poor_fast_us {
+            Some(PressCandidate {
+                note_id: None,
+                judge: Judge::EmptyPoor,
+                side: TimingSide::Fast,
+                delta: TimeUs(delta),
+                consumes_note: false,
+            })
+        } else {
+            None
+        };
+
+        let Some(candidate) = empty_poor_candidate else {
+            continue;
+        };
+        match candidate.side {
+            TimingSide::Slow => choose_closest_empty_poor(&mut slow_empty_poor, candidate),
+            TimingSide::Fast => choose_closest_empty_poor(&mut fast_empty_poor, candidate),
+        }
+    }
+
+    normal.or(slow_empty_poor).or(fast_empty_poor)
+}
+
+fn combo_algorithm_prefers_new_candidate(
+    current: PressCandidate,
+    candidate: PressCandidate,
+    windows: JudgeWindow,
+) -> bool {
+    current.delta.0 > windows.good_us && candidate.delta.0 >= -windows.good_us
+}
+
+fn choose_closest_empty_poor(slot: &mut Option<PressCandidate>, candidate: PressCandidate) {
+    if slot.as_ref().is_none_or(|current| candidate.delta.0.abs() < current.delta.0.abs()) {
+        *slot = Some(candidate);
+    }
+}
+
+fn next_unjudged_press_reference_note<'a>(
+    chart: &'a PlayableChart,
+    lane: Lane,
     start_index: usize,
-) -> Option<(usize, &NoteEvent)> {
+    judged_notes: &HashMap<NoteId, Judge>,
+) -> Option<(usize, &'a NoteEvent)> {
     chart
         .notes_for_lane(lane)
         .iter()
         .enumerate()
         .skip(start_index)
-        .find(|(_, note)| matches!(note.kind, NoteKind::Tap | NoteKind::LongStart))
+        .find(|(_, note)| is_press_reference_note(note) && !judged_notes.contains_key(&note.id))
+}
+
+fn advance_press_cursor(
+    chart: &PlayableChart,
+    lane: Lane,
+    next_note_index: &mut usize,
+    judged_notes: &HashMap<NoteId, Judge>,
+) {
+    let notes = chart.notes_for_lane(lane);
+    while let Some(note) = notes.get(*next_note_index) {
+        if is_press_reference_note(note) && !judged_notes.contains_key(&note.id) {
+            break;
+        }
+        *next_note_index += 1;
+    }
+}
+
+fn is_press_reference_note(note: &NoteEvent) -> bool {
+    matches!(note.kind, NoteKind::Tap | NoteKind::LongStart)
 }
 
 /// 指定レーンに置かれた Mine の中から、入力時刻と `window_us` 以内に一致するものを探す。
@@ -388,25 +533,6 @@ fn empty_poor(lane: Lane, side: TimingSide, delta: TimeUs, time: TimeUs) -> Judg
     }
 }
 
-fn classify_empty_poor_from_last_press(
-    last_press_time: Option<TimeUs>,
-    input: InputEvent,
-    windows: JudgeWindow,
-) -> Option<JudgeOutcome> {
-    let note_time = last_press_time?;
-    let delta = input.time.0 - note_time.0;
-
-    if delta >= 0 && delta <= windows.empty_poor_slow_us {
-        return Some(empty_poor(input.lane, TimingSide::Slow, TimeUs(delta), input.time));
-    }
-
-    if delta < 0 && (-delta) <= windows.empty_poor_fast_us {
-        return Some(empty_poor(input.lane, TimingSide::Fast, TimeUs(delta), input.time));
-    }
-
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use bmz_chart::model::{ChartMetadata, LongNotePair, LongNoteStyle, SoundAssetRef, SoundEvent};
@@ -461,6 +587,33 @@ mod tests {
             total_notes: 1,
             end_time: time,
         }
+    }
+
+    fn chart_with_two_taps(first_time: TimeUs, second_time: TimeUs) -> PlayableChart {
+        let lane = Lane::Key1;
+        let first = NoteEvent {
+            id: NoteId(1),
+            lane,
+            kind: NoteKind::Tap,
+            tick: Default::default(),
+            time: first_time,
+            sound: None,
+            damage: None,
+        };
+        let second = NoteEvent {
+            id: NoteId(2),
+            lane,
+            kind: NoteKind::Tap,
+            tick: Default::default(),
+            time: second_time,
+            sound: None,
+            damage: None,
+        };
+        let mut chart = chart_with_tap(first_time);
+        chart.lane_notes[lane.index()] = vec![first, second];
+        chart.total_notes = 2;
+        chart.end_time = second_time;
+        chart
     }
 
     fn chart_with_long_start(time: TimeUs, end_time: TimeUs) -> PlayableChart {
@@ -629,6 +782,20 @@ mod tests {
     }
 
     #[test]
+    fn combo_candidate_prefers_later_combo_note_over_slow_bad() {
+        let chart = chart_with_two_taps(TimeUs(1_000_000), TimeUs(1_100_000));
+        let mut engine = JudgeEngine::new(windows());
+
+        let outcome = engine.process_input(&chart, press_at(TimeUs(1_100_000)));
+        let missed = engine.process_misses(&chart, TimeUs(1_130_000));
+
+        assert_eq!(outcome.events[0].note_id, Some(NoteId(2)));
+        assert_eq!(outcome.events[0].judge, Judge::PGreat);
+        assert_eq!(missed.events[0].note_id, Some(NoteId(1)));
+        assert_eq!(missed.events[0].judge, Judge::Poor);
+    }
+
+    #[test]
     fn scratch_press_uses_scratch_window() {
         let chart = chart_with_lane_tap(Lane::Scratch, TimeUs(1_000_000));
         let mut engine = JudgeEngine::new_with_window_set(
@@ -666,7 +833,7 @@ mod tests {
         let mut beatoraja = JudgeEngine::new(windows());
         let beatoraja_outcome = beatoraja.process_input(&chart, input);
         assert_eq!(beatoraja_outcome.events[0].judge, Judge::Bad);
-        assert_eq!(beatoraja.lanes[Lane::Key1.index()].next_note_index, 1);
+        assert_eq!(beatoraja.lanes[Lane::Key1.index()].next_note_index, 2);
 
         let mut lr2oraja = JudgeEngine::new_with_rule_mode(windows(), RuleMode::Lr2Oraja);
         let lr2oraja_outcome = lr2oraja.process_input(&chart, input);
