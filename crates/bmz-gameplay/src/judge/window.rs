@@ -203,8 +203,8 @@ pub const fn beatoraja_note_judge_window_for_keymode(key_mode: KeyMode) -> Judge
             pgreat_us: 20_000,
             great_us: 60_000,
             good_us: 150_000,
-            bad_fast_us: 280_000,
-            bad_slow_us: 220_000,
+            bad_fast_us: 220_000,
+            bad_slow_us: 280_000,
             empty_poor_fast_us: 500_000,
             empty_poor_slow_us: 150_000,
             mine_hit_us: 16_000,
@@ -214,8 +214,8 @@ pub const fn beatoraja_note_judge_window_for_keymode(key_mode: KeyMode) -> Judge
             pgreat_us: 20_000,
             great_us: 60_000,
             good_us: 150_000,
-            bad_fast_us: 280_000,
-            bad_slow_us: 220_000,
+            bad_fast_us: 220_000,
+            bad_slow_us: 280_000,
             empty_poor_fast_us: 500_000,
             empty_poor_slow_us: 150_000,
             mine_hit_us: 16_000,
@@ -240,8 +240,8 @@ pub const fn beatoraja_scratch_judge_window_for_keymode(key_mode: KeyMode) -> Ju
             pgreat_us: 30_000,
             great_us: 70_000,
             good_us: 160_000,
-            bad_fast_us: 290_000,
-            bad_slow_us: 230_000,
+            bad_fast_us: 230_000,
+            bad_slow_us: 290_000,
             empty_poor_fast_us: 500_000,
             empty_poor_slow_us: 160_000,
             mine_hit_us: 16_000,
@@ -275,8 +275,8 @@ pub const fn beatoraja_long_note_end_judge_window_for_keymode(key_mode: KeyMode)
             pgreat_us: 120_000,
             great_us: 160_000,
             good_us: 200_000,
-            bad_fast_us: 280_000,
-            bad_slow_us: 220_000,
+            bad_fast_us: 220_000,
+            bad_slow_us: 280_000,
             empty_poor_fast_us: 0,
             empty_poor_slow_us: 0,
             mine_hit_us: 16_000,
@@ -301,8 +301,8 @@ pub const fn beatoraja_long_scratch_end_judge_window_for_keymode(key_mode: KeyMo
             pgreat_us: 130_000,
             great_us: 170_000,
             good_us: 210_000,
-            bad_fast_us: 290_000,
-            bad_slow_us: 230_000,
+            bad_fast_us: 230_000,
+            bad_slow_us: 290_000,
             empty_poor_fast_us: 0,
             empty_poor_slow_us: 0,
             mine_hit_us: 16_000,
@@ -603,8 +603,8 @@ mod tests {
         assert_eq!(window.pgreat_us, 20_000);
         assert_eq!(window.great_us, 60_000);
         assert_eq!(window.good_us, 150_000);
-        assert_eq!(window.bad_fast_us, 280_000);
-        assert_eq!(window.bad_slow_us, 220_000);
+        assert_eq!(window.bad_fast_us, 220_000);
+        assert_eq!(window.bad_slow_us, 280_000);
         assert_eq!(window.empty_poor_fast_us, 500_000);
         assert_eq!(window.empty_poor_slow_us, 150_000);
     }
@@ -624,8 +624,8 @@ mod tests {
         assert_eq!(window.pgreat_us, 30_000);
         assert_eq!(window.great_us, 70_000);
         assert_eq!(window.good_us, 160_000);
-        assert_eq!(window.bad_fast_us, 290_000);
-        assert_eq!(window.bad_slow_us, 230_000);
+        assert_eq!(window.bad_fast_us, 230_000);
+        assert_eq!(window.bad_slow_us, 290_000);
         assert_eq!(window.empty_poor_fast_us, 500_000);
         assert_eq!(window.empty_poor_slow_us, 160_000);
     }
@@ -643,8 +643,8 @@ mod tests {
         assert_eq!(seven_scratch.pgreat_us, 130_000);
         assert_eq!(seven_scratch.great_us, 170_000);
         assert_eq!(seven_scratch.good_us, 210_000);
-        assert_eq!(seven_scratch.bad_fast_us, 290_000);
-        assert_eq!(seven_scratch.bad_slow_us, 230_000);
+        assert_eq!(seven_scratch.bad_fast_us, 230_000);
+        assert_eq!(seven_scratch.bad_slow_us, 290_000);
     }
 
     #[test]

@@ -1042,6 +1042,40 @@ mod tests {
     }
 
     #[test]
+    fn beatoraja_7k_late_bad_is_not_missed_before_late_bad_end() {
+        let chart = chart_with_tap(TimeUs(1_000_000));
+        let mut engine =
+            JudgeEngine::new(crate::judge::window::beatoraja_note_judge_window_for_keymode(
+                bmz_core::lane::KeyMode::K7,
+            ));
+
+        let missed = engine.process_misses(&chart, TimeUs(1_260_000));
+        let outcome = engine.process_input(&chart, press_at(TimeUs(1_260_000)));
+
+        assert!(missed.events.is_empty());
+        assert!(outcome.consumed_input);
+        assert_eq!(outcome.events[0].judge, Judge::Bad);
+        assert_eq!(outcome.events[0].side, TimingSide::Slow);
+        assert_eq!(outcome.events[0].delta, TimeUs(260_000));
+    }
+
+    #[test]
+    fn beatoraja_7k_early_beyond_bad_is_fast_empty_poor() {
+        let chart = chart_with_tap(TimeUs(1_000_000));
+        let mut engine =
+            JudgeEngine::new(crate::judge::window::beatoraja_note_judge_window_for_keymode(
+                bmz_core::lane::KeyMode::K7,
+            ));
+
+        let outcome = engine.process_input(&chart, press_at(TimeUs(740_000)));
+
+        assert!(!outcome.consumed_input);
+        assert_eq!(outcome.events[0].judge, Judge::EmptyPoor);
+        assert_eq!(outcome.events[0].side, TimingSide::Fast);
+        assert_eq!(outcome.events[0].delta, TimeUs(-260_000));
+    }
+
+    #[test]
     fn combo_candidate_prefers_later_combo_note_over_slow_bad() {
         let chart = chart_with_two_taps(TimeUs(1_000_000), TimeUs(1_100_000));
         let mut engine = JudgeEngine::new(windows());
