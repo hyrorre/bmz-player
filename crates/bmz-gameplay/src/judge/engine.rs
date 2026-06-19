@@ -363,7 +363,7 @@ fn suppresses_long_start_late_bad(
     delta: i64,
     judge: Judge,
 ) -> bool {
-    rule_mode == RuleMode::Lr2Oraja
+    matches!(rule_mode, RuleMode::Lr2Oraja | RuleMode::Dx)
         && note.kind == NoteKind::LongStart
         && judge == Judge::Bad
         && delta > windows.good_us
@@ -1046,7 +1046,7 @@ mod tests {
     }
 
     #[test]
-    fn lr2oraja_suppresses_late_bad_on_long_note_start() {
+    fn lr2oraja_derived_modes_suppress_late_bad_on_long_note_start() {
         let chart = chart_with_long_start(TimeUs(1_000_000), TimeUs(2_000_000));
         let input = press_at(TimeUs(1_100_000));
 
@@ -1060,6 +1060,12 @@ mod tests {
         assert!(lr2oraja_outcome.events.is_empty());
         assert!(!lr2oraja_outcome.consumed_input);
         assert_eq!(lr2oraja.lanes[Lane::Key1.index()].next_note_index, 0);
+
+        let mut dx = JudgeEngine::new_with_rule_mode(windows(), RuleMode::Dx);
+        let dx_outcome = dx.process_input(&chart, input);
+        assert!(dx_outcome.events.is_empty());
+        assert!(!dx_outcome.consumed_input);
+        assert_eq!(dx.lanes[Lane::Key1.index()].next_note_index, 0);
     }
 
     #[test]
