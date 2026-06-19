@@ -316,6 +316,7 @@ struct WinitApp {
     last_scene_kind: Option<AppSceneKind>,
     start_held: bool,
     select_held: bool,
+    select_e_action_holds: HashSet<InputActionConfig>,
     arrange_option: ArrangeOption,
     arrange_option_2p: ArrangeOption,
     target_option: TargetOption,
@@ -1611,6 +1612,7 @@ impl WinitApp {
             last_scene_kind: None,
             start_held: false,
             select_held: false,
+            select_e_action_holds: HashSet::new(),
             arrange_option,
             arrange_option_2p,
             target_option,
@@ -2292,6 +2294,9 @@ impl WinitApp {
     fn display_search_word(&self) -> (String, f32, Option<usize>) {
         const PLACEHOLDER_ALPHA: f32 = 0.45;
         const MESSAGE_ALPHA: f32 = 0.6;
+        if in_settings_stack(&self.folder_stack) {
+            return (String::new(), 0.0, None);
+        }
         let blink_on = search_caret_visible(self.search_caret_blink_started_at.elapsed());
         if self.search_mode {
             if self.search_query.is_empty()
@@ -2794,6 +2799,21 @@ impl WinitApp {
             self.select_held = held;
             self.update_select_option_panel();
         }
+    }
+
+    fn update_select_e_action_hold(&mut self, control: &str, held: bool) {
+        let Some(action) = self.select_keys.e_action_for_control(control) else {
+            return;
+        };
+        if held {
+            self.select_e_action_holds.insert(action);
+        } else {
+            self.select_e_action_holds.remove(&action);
+        }
+    }
+
+    fn select_e_action_held(&self) -> bool {
+        !self.select_e_action_holds.is_empty()
     }
 
     fn update_select_option_panel(&mut self) {
@@ -3446,9 +3466,19 @@ impl WinitApp {
             return;
         }
 
+        if matches!(self.view_state(), AppViewState::Select)
+            && event.state == ElementState::Released
+            && let Some(control) = physical_key_name(event.physical_key)
+        {
+            self.update_select_e_action_hold(&control, false);
+        }
+
         // 検索モード中はテキスト入力を最優先で処理し、通常ナビゲーションは抑制する。
         // モード入りトリガ (`/`) も同じ select 画面チェックの直後に処理する。
-        if matches!(self.view_state(), AppViewState::Select) && self.handle_search_key(event) {
+        if matches!(self.view_state(), AppViewState::Select)
+            && !in_settings_stack(&self.folder_stack)
+            && self.handle_search_key(event)
+        {
             return;
         }
 
@@ -3544,6 +3574,10 @@ impl WinitApp {
                 }
             }
             return;
+        }
+
+        if let Some(control) = physical_key_name(event.physical_key) {
+            self.update_select_e_action_hold(&control, event.state == ElementState::Pressed);
         }
 
         if is_select_start_key(event.physical_key, &self.select_keys) {
@@ -3784,6 +3818,7 @@ impl WinitApp {
                 self.clear_select_hold_control(button);
                 return;
             }
+            self.update_select_e_action_hold(button, false);
             if self.select_keys.is_start(button) {
                 self.set_start_held(false);
             } else if self.select_keys.is_e2_action(button) || matches!(button, "Select") {
@@ -3791,6 +3826,8 @@ impl WinitApp {
             }
             return;
         }
+
+        self.update_select_e_action_hold(button, true);
 
         // プレイ中: プレイ入力は push_shared_event で処理済み
         if self.active_play.is_some() {
@@ -4048,7 +4085,10 @@ impl WinitApp {
         let Some((x, y)) = self.cursor_position_normalized() else {
             return;
         };
-        if button == MouseButton::Left && self.select_search_word_hit(x, y) {
+        if button == MouseButton::Left
+            && !in_settings_stack(&self.folder_stack)
+            && self.select_search_word_hit(x, y)
+        {
             if !self.search_mode {
                 self.set_search_mode(true);
                 tracing::info!("entered song search mode from mouse click");
@@ -4555,6 +4595,9 @@ impl WinitApp {
     /// IME is only enabled while search mode is active to avoid macOS / Linux
     /// IMEs swallowing gameplay keypresses.
     fn set_search_mode(&mut self, enabled: bool) {
+        if enabled && in_settings_stack(&self.folder_stack) {
+            return;
+        }
         self.search_mode = enabled;
         self.search_query.clear();
         self.search_cursor = 0;
@@ -4605,10 +4648,13 @@ impl WinitApp {
     fn handle_search_key(&mut self, event: &winit::event::KeyEvent) -> bool {
         // 起動トリガ: 検索モードでない時に `/` 押下 → モード ON、クエリリセット。
         if !self.search_mode {
-            if event.physical_key == PhysicalKey::Code(KeyCode::Slash)
-                && event.state == ElementState::Pressed
-                && !event.repeat
-            {
+            if should_start_search_mode(
+                event.physical_key,
+                event.state,
+                event.repeat,
+                self.select_e_action_held(),
+                in_settings_stack(&self.folder_stack),
+            ) {
                 self.set_search_mode(true);
                 tracing::info!("entered song search mode");
                 return true;
@@ -12216,6 +12262,7 @@ fn target_cycle_from_control(control: &str, bindings: &SelectKeyBindings) -> Opt
 
 struct SelectKeyBindings {
     start: Vec<String>,
+    e_action_controls: Vec<(InputActionConfig, String)>,
     e2_action_controls: Vec<String>,
     e3_action_controls: Vec<String>,
     enter: Vec<String>,
@@ -12333,6 +12380,15 @@ impl SelectKeyBindings {
         let lane_back = merge_select_controls(lane_back_1p, lane_back_2p);
         let enter = merge_select_controls(actions_for(InputActionConfig::SelectEnter), lane_enter);
         let back = merge_select_controls(actions_for(InputActionConfig::E2), lane_back);
+        let e_action_controls: Vec<(InputActionConfig, String)> = [
+            InputActionConfig::E1,
+            InputActionConfig::E2,
+            InputActionConfig::E3,
+            InputActionConfig::E4,
+        ]
+        .into_iter()
+        .flat_map(|action| actions_for(action).into_iter().map(move |control| (action, control)))
+        .collect();
         let e2_action_controls = actions_for(InputActionConfig::E2);
         let e3_action_controls = actions_for(InputActionConfig::E3);
         let hispeed_down_controls: Vec<String> =
@@ -12435,6 +12491,7 @@ impl SelectKeyBindings {
 
         Self {
             start,
+            e_action_controls,
             e2_action_controls,
             e3_action_controls,
             enter,
@@ -12476,6 +12533,10 @@ impl SelectKeyBindings {
 
     fn is_start(&self, control: &str) -> bool {
         self.start.iter().any(|k| k == control)
+    }
+
+    fn e_action_for_control(&self, control: &str) -> Option<InputActionConfig> {
+        self.e_action_controls.iter().find_map(|(action, key)| (key == control).then_some(*action))
     }
 
     fn is_key2(&self, control: &str) -> bool {
@@ -12714,6 +12775,20 @@ fn select_control_with_lane_fallback(
     lane_fallback: Vec<String>,
 ) -> Option<String> {
     configured.into_iter().next().or_else(|| lane_fallback.into_iter().next())
+}
+
+fn should_start_search_mode(
+    physical_key: PhysicalKey,
+    state: ElementState,
+    repeat: bool,
+    e_action_held: bool,
+    in_settings: bool,
+) -> bool {
+    physical_key == PhysicalKey::Code(KeyCode::Slash)
+        && state == ElementState::Pressed
+        && !repeat
+        && !e_action_held
+        && !in_settings
 }
 
 fn search_display_text(query: &str, cursor: usize, preedit: &str) -> String {
@@ -13339,6 +13414,49 @@ mod tests {
         search_delete_forward(&mut query, &mut cursor);
         assert_eq!(query, "abd");
         assert_eq!(cursor, 2);
+    }
+
+    #[test]
+    fn search_mode_start_respects_settings_and_e_action_holds() {
+        assert!(should_start_search_mode(
+            PhysicalKey::Code(KeyCode::Slash),
+            ElementState::Pressed,
+            false,
+            false,
+            false,
+        ));
+        assert!(!should_start_search_mode(
+            PhysicalKey::Code(KeyCode::Slash),
+            ElementState::Pressed,
+            false,
+            true,
+            false,
+        ));
+        assert!(!should_start_search_mode(
+            PhysicalKey::Code(KeyCode::Slash),
+            ElementState::Pressed,
+            false,
+            false,
+            true,
+        ));
+        assert!(!should_start_search_mode(
+            PhysicalKey::Code(KeyCode::Slash),
+            ElementState::Pressed,
+            true,
+            false,
+            false,
+        ));
+    }
+
+    #[test]
+    fn select_key_bindings_identify_e_action_controls() {
+        let keys = default_select_keys();
+
+        assert_eq!(keys.e_action_for_control("Q"), Some(InputActionConfig::E1));
+        assert_eq!(keys.e_action_for_control("W"), Some(InputActionConfig::E2));
+        assert_eq!(keys.e_action_for_control("E"), Some(InputActionConfig::E3));
+        assert_eq!(keys.e_action_for_control("R"), Some(InputActionConfig::E4));
+        assert_eq!(keys.e_action_for_control("Slash"), None);
     }
 
     #[test]
