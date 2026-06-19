@@ -9,7 +9,7 @@ use crate::config::profile_config::{
     DoubleOptionConfig, GaugeAutoShiftConfig, GaugeTypeConfig, HispeedModeConfig, HsFixConfig,
     InputActionConfig, JudgeAlgorithmConfig, LaneConfig, LaneEffectConfig, ProfileConfig,
     ProfileInputConfig, RandomOptionConfig, ReplaySlotRule, ScratchDirectionConfig,
-    ScratchInputMode, TargetOptionConfig,
+    ScratchInputMode, SelectInputModeConfig, TargetOptionConfig,
 };
 use crate::config::settings_registry::{
     SettingsEntryId, adjust_settings_value, format_settings_value,
@@ -34,24 +34,44 @@ impl SettingsBindings {
         let mut increase = HashSet::new();
         let mut decrease = HashSet::new();
 
-        collect_play_settings_bindings(
-            input,
-            KeyMode::K7,
-            &mut confirm,
-            &mut back,
-            &mut increase,
-            &mut decrease,
-        );
-        collect_play_settings_bindings(
-            input,
-            KeyMode::K14,
-            &mut confirm,
-            &mut back,
-            &mut increase,
-            &mut decrease,
-        );
+        let mut play_controls = HashSet::new();
+        match input.select_input_mode {
+            SelectInputModeConfig::Key7Key14 => {
+                collect_play_settings_bindings(
+                    input,
+                    KeyMode::K7,
+                    &mut confirm,
+                    &mut back,
+                    &mut increase,
+                    &mut decrease,
+                );
+                collect_play_settings_bindings(
+                    input,
+                    KeyMode::K14,
+                    &mut confirm,
+                    &mut back,
+                    &mut increase,
+                    &mut decrease,
+                );
+            }
+            SelectInputModeConfig::Key9 => {
+                collect_play_9k_settings_bindings(
+                    input,
+                    &mut confirm,
+                    &mut back,
+                    &mut increase,
+                    &mut decrease,
+                    &mut play_controls,
+                );
+            }
+        }
 
         for entry in &input.ui.bindings {
+            if input.select_input_mode == SelectInputModeConfig::Key9
+                && play_controls.contains(&entry.control)
+            {
+                continue;
+            }
             match entry.action {
                 Some(InputActionConfig::SelectEnter) => {
                     confirm.insert(entry.control.clone());
@@ -95,6 +115,38 @@ impl SettingsBindings {
 
     pub fn is_decrease(&self, control: &str) -> bool {
         self.decrease.contains(control)
+    }
+}
+
+fn collect_play_9k_settings_bindings(
+    input: &ProfileInputConfig,
+    confirm: &mut HashSet<String>,
+    back: &mut HashSet<String>,
+    increase: &mut HashSet<String>,
+    decrease: &mut HashSet<String>,
+    play_controls: &mut HashSet<String>,
+) {
+    let Ok(play) = resolve_play_bindings(input, KeyMode::K9) else {
+        return;
+    };
+    for entry in play {
+        play_controls.insert(entry.control.clone());
+        let Some(lane) = entry.lane else { continue };
+        match lane {
+            LaneConfig::Key3 => {
+                back.insert(entry.control.clone());
+            }
+            LaneConfig::Key4 => {
+                increase.insert(entry.control.clone());
+            }
+            LaneConfig::Key5 | LaneConfig::Key7 => {
+                confirm.insert(entry.control.clone());
+            }
+            LaneConfig::Key6 => {
+                decrease.insert(entry.control.clone());
+            }
+            _ => {}
+        }
     }
 }
 
@@ -193,6 +245,7 @@ enum SettingsBaseline {
     BgaMode(BgaModeConfig),
     BgaExpand(BgaExpandConfig),
     HispeedMode(HispeedModeConfig),
+    SelectInputMode(SelectInputModeConfig),
     ScratchInputMode(ScratchInputMode),
     ReplaySlotRule(ReplaySlotRule),
 }
@@ -275,6 +328,9 @@ impl SettingsEditSession {
             SettingsEntryId::Hidden => SettingsBaseline::U32(profile.lane.hidden),
             SettingsEntryId::TargetGreenNumber => {
                 SettingsBaseline::U32(profile.lane.target_green_number)
+            }
+            SettingsEntryId::SelectInputMode => {
+                SettingsBaseline::SelectInputMode(profile.input.select_input_mode)
             }
             SettingsEntryId::ScratchInputMode => {
                 SettingsBaseline::ScratchInputMode(profile.input.scratch_mode)
@@ -415,6 +471,9 @@ impl SettingsEditSession {
             (SettingsEntryId::TargetGreenNumber, SettingsBaseline::U32(value)) => {
                 profile.lane.target_green_number = *value;
             }
+            (SettingsEntryId::SelectInputMode, SettingsBaseline::SelectInputMode(value)) => {
+                profile.input.select_input_mode = *value;
+            }
             (SettingsEntryId::ScratchInputMode, SettingsBaseline::ScratchInputMode(value)) => {
                 profile.input.scratch_mode = *value;
             }
@@ -500,6 +559,21 @@ mod tests {
         assert!(!bindings.is_decrease("ArrowUp"));
         assert!(bindings.is_decrease("ArrowDown"));
         assert!(!bindings.is_increase("ArrowDown"));
+    }
+
+    #[test]
+    fn key9_select_input_maps_settings_navigation_keys() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 0);
+        profile.input.select_input_mode = SelectInputModeConfig::Key9;
+        let bindings = SettingsBindings::from_profile(&profile.input);
+
+        assert!(bindings.is_confirm("C"));
+        assert!(bindings.is_confirm("V"));
+        assert!(bindings.is_back("X"));
+        assert!(bindings.is_increase("D"));
+        assert!(bindings.is_decrease("F"));
+        assert!(!bindings.is_confirm("Z"));
+        assert!(!bindings.is_back("S"));
     }
 
     #[test]

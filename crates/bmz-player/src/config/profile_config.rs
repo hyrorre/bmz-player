@@ -394,6 +394,8 @@ pub struct PlayModeInputConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProfileInputConfig {
     pub scratch_mode: ScratchInputMode,
+    #[serde(default)]
+    pub select_input_mode: SelectInputModeConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start_key: Option<String>,
     #[serde(default)]
@@ -470,6 +472,24 @@ pub enum InputActionConfig {
 pub enum ScratchInputMode {
     Normal,
     AnyDirection,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum SelectInputModeConfig {
+    #[default]
+    #[serde(rename = "7K14K")]
+    Key7Key14,
+    #[serde(rename = "9K")]
+    Key9,
+}
+
+impl SelectInputModeConfig {
+    pub const fn display_label(self) -> &'static str {
+        match self {
+            Self::Key7Key14 => "7K/14K",
+            Self::Key9 => "9K",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

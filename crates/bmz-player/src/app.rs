@@ -60,7 +60,7 @@ use crate::config::profile_config::{
     AssistOptionConfig, BgaExpandConfig, BgaModeConfig, BottomShiftableGaugeConfig,
     DoubleOptionConfig, GaugeAutoShiftConfig, GaugeTypeConfig, HispeedModeConfig, HsFixConfig,
     InputActionConfig, JudgeAlgorithmConfig, LaneConfig, ProfileConfig, ProfileInputConfig,
-    RandomOptionConfig, ScratchDirectionConfig, TargetOptionConfig,
+    RandomOptionConfig, ScratchDirectionConfig, SelectInputModeConfig, TargetOptionConfig,
 };
 use crate::config::save::{save_app_config, save_profile_config};
 use crate::config::settings_registry::SettingsEntryId;
@@ -11544,13 +11544,13 @@ fn select_action(
         Some(SelectAction::EnterOrPlay)
     } else if bindings.is_back(&control) {
         Some(SelectAction::ExitFolder)
-    } else if bindings.is_select_scratch_up(&control) {
-        if bindings.is_select_scratch_down(&control) {
+    } else if bindings.is_select_previous(&control) {
+        if bindings.is_select_next(&control) {
             Some(SelectAction::Move(SelectMove::Next))
         } else {
             Some(SelectAction::Move(SelectMove::Previous))
         }
-    } else if bindings.is_select_scratch_down(&control) {
+    } else if bindings.is_select_next(&control) {
         Some(SelectAction::Move(SelectMove::Next))
     } else {
         None
@@ -12246,14 +12246,9 @@ fn target_cycle_from_key(physical_key: PhysicalKey) -> Option<TargetCycle> {
 }
 
 fn target_cycle_from_control(control: &str, bindings: &SelectKeyBindings) -> Option<TargetCycle> {
-    match control {
-        "ScratchUp" => return Some(TargetCycle::Previous),
-        "ScratchDown" => return Some(TargetCycle::Next),
-        _ => {}
-    }
-    if bindings.is_select_scratch_up(control) {
+    if control == "ScratchUp" || bindings.is_target_previous(control) {
         Some(TargetCycle::Previous)
-    } else if bindings.is_select_scratch_down(control) {
+    } else if control == "ScratchDown" || bindings.is_target_next(control) {
         Some(TargetCycle::Next)
     } else {
         None
@@ -12287,6 +12282,10 @@ struct SelectKeyBindings {
     scratch_down_controls: Vec<String>,
     select_scratch_up_controls: Vec<String>,
     select_scratch_down_controls: Vec<String>,
+    select_previous_controls: Vec<String>,
+    select_next_controls: Vec<String>,
+    target_previous_controls: Vec<String>,
+    target_next_controls: Vec<String>,
     cycle_assist: Option<String>,
     cycle_bga: Option<String>,
     key_hint: String,
@@ -12296,6 +12295,10 @@ struct SelectKeyBindings {
 impl SelectKeyBindings {
     fn from_profile(input: &ProfileInputConfig) -> Self {
         use crate::config::play_input::{is_gamepad_device, resolve_play_bindings};
+
+        if input.select_input_mode == SelectInputModeConfig::Key9 {
+            return Self::from_profile_9k(input);
+        }
 
         let play_7k = resolve_play_bindings(input, KeyMode::K7).unwrap_or_default();
         let play_14k = resolve_play_bindings(input, KeyMode::K14).unwrap_or_default();
@@ -12516,6 +12519,181 @@ impl SelectKeyBindings {
             scratch_down_controls,
             select_scratch_up_controls,
             select_scratch_down_controls,
+            select_previous_controls: Vec::new(),
+            select_next_controls: Vec::new(),
+            target_previous_controls: Vec::new(),
+            target_next_controls: Vec::new(),
+            cycle_assist,
+            cycle_bga,
+            key_hint,
+            option_hint,
+        }
+    }
+
+    fn from_profile_9k(input: &ProfileInputConfig) -> Self {
+        use crate::config::play_input::{is_gamepad_device, resolve_play_bindings};
+
+        let play_9k = resolve_play_bindings(input, KeyMode::K9).unwrap_or_default();
+        let kb: Vec<_> = input.ui.bindings.iter().filter(|e| e.device == "keyboard").collect();
+        let play_kb: Vec<_> = play_9k.iter().filter(|e| e.device == "keyboard").collect();
+        let all_input: Vec<_> = input
+            .ui
+            .bindings
+            .iter()
+            .filter(|e| e.device == "keyboard" || is_gamepad_device(&e.device))
+            .collect();
+        let play_all: Vec<_> = play_9k
+            .iter()
+            .filter(|e| e.device == "keyboard" || is_gamepad_device(&e.device))
+            .collect();
+        let play_control_set: HashSet<String> =
+            play_all.iter().map(|entry| entry.control.clone()).collect();
+
+        let kb_keys_for = |lane: LaneConfig| -> Vec<String> {
+            play_kb.iter().filter(|e| e.lane == Some(lane)).map(|e| e.control.clone()).collect()
+        };
+        let keys_for = |lane: LaneConfig| -> Vec<String> {
+            play_all.iter().filter(|e| e.lane == Some(lane)).map(|e| e.control.clone()).collect()
+        };
+        let kb_actions_for = |action: InputActionConfig| -> Vec<String> {
+            kb.iter().filter(|e| e.action == Some(action)).map(|e| e.control.clone()).collect()
+        };
+        let actions_for = |action: InputActionConfig| -> Vec<String> {
+            all_input
+                .iter()
+                .filter(|e| e.action == Some(action))
+                .filter(|e| !play_control_set.contains(&e.control))
+                .map(|e| e.control.clone())
+                .collect()
+        };
+
+        let key1_controls = keys_for(LaneConfig::Key1);
+        let key2_controls = keys_for(LaneConfig::Key2);
+        let key3_controls = keys_for(LaneConfig::Key3);
+        let key4_controls = keys_for(LaneConfig::Key4);
+        let key5_controls = keys_for(LaneConfig::Key5);
+        let key6_controls = keys_for(LaneConfig::Key6);
+        let key7_controls = keys_for(LaneConfig::Key7);
+        let key8_controls = keys_for(LaneConfig::Key8);
+        let key9_controls = keys_for(LaneConfig::Key9);
+
+        let enter = merge_select_controls(
+            actions_for(InputActionConfig::SelectEnter),
+            merge_select_controls(key5_controls.clone(), key7_controls.clone()),
+        );
+        let back = merge_select_controls(actions_for(InputActionConfig::E2), key3_controls.clone());
+        let select_previous_controls = key6_controls.clone();
+        let select_next_controls = key4_controls.clone();
+        let target_previous_controls = key8_controls.clone();
+        let target_next_controls = key9_controls.clone();
+        let e_action_controls: Vec<(InputActionConfig, String)> = [
+            InputActionConfig::E1,
+            InputActionConfig::E2,
+            InputActionConfig::E3,
+            InputActionConfig::E4,
+        ]
+        .into_iter()
+        .flat_map(|action| actions_for(action).into_iter().map(move |control| (action, control)))
+        .collect();
+        let e2_action_controls = actions_for(InputActionConfig::E2);
+        let e3_action_controls = actions_for(InputActionConfig::E3);
+        let cycle_assist = select_control_with_lane_fallback(
+            actions_for(InputActionConfig::SelectOptionAssist),
+            key3_controls.clone(),
+        );
+        let cycle_bga = select_control_with_lane_fallback(
+            actions_for(InputActionConfig::SelectOptionBga),
+            key1_controls.clone(),
+        );
+        let mut start = actions_for(InputActionConfig::E1);
+        if let Some(legacy_start) = input.start_key.clone()
+            && !start.iter().any(|control| control == &legacy_start)
+        {
+            start.push(legacy_start);
+        }
+        if start.is_empty() {
+            start.push("Q".to_string());
+        }
+
+        let start_str = kb_actions_for(InputActionConfig::E1)
+            .into_iter()
+            .next()
+            .or_else(|| input.start_key.clone())
+            .unwrap_or_else(|| start.first().cloned().unwrap_or_else(|| "Q".to_string()));
+        let up_str =
+            kb_keys_for(LaneConfig::Key6).into_iter().next().unwrap_or_else(|| "KEY6".to_string());
+        let down_str =
+            kb_keys_for(LaneConfig::Key4).into_iter().next().unwrap_or_else(|| "KEY4".to_string());
+        let enter_str = merge_select_controls(
+            kb_actions_for(InputActionConfig::SelectEnter),
+            merge_select_controls(kb_keys_for(LaneConfig::Key5), kb_keys_for(LaneConfig::Key7)),
+        );
+        let enter_str =
+            if enter_str.is_empty() { String::new() } else { format!("/{}", enter_str.join("/")) };
+        let back_str = kb_keys_for(LaneConfig::Key3)
+            .into_iter()
+            .next()
+            .or_else(|| kb_actions_for(InputActionConfig::E2).into_iter().next())
+            .unwrap_or_else(|| "KEY3".to_string());
+        let key_hint = format!(
+            "UP {up_str}  DOWN {down_str}  RIGHT{enter_str}:ENTER  LEFT/{back_str}:BACK  ENTER {start_str}"
+        );
+        let assist_str = select_control_with_lane_fallback(
+            kb_actions_for(InputActionConfig::SelectOptionAssist),
+            kb_keys_for(LaneConfig::Key3),
+        )
+        .unwrap_or_else(|| "?".to_string());
+        let bga_str = select_control_with_lane_fallback(
+            kb_actions_for(InputActionConfig::SelectOptionBga),
+            kb_keys_for(LaneConfig::Key1),
+        )
+        .unwrap_or_else(|| "?".to_string());
+        let option_hint = format!(
+            "F1 MENU  F5 RELOAD   \
+             {start_str}:PLAY OPT  BACK:ASSIST OPT  {start_str}+BACK:DETAIL OPT  \
+             {start_str}+K1/K2:1P ARR  {start_str}+K3:GAUGE  {start_str}+K5:HS-FIX  \
+             {start_str}+K8/K9:TARGET  {start_str}+{assist_str}:ASSIST  {start_str}+{bga_str}:BGA  {start_str}+1..4:REPLAY"
+        );
+        let hispeed_down_controls = merge_select_controls(
+            key1_controls.clone(),
+            merge_select_controls(key3_controls.clone(), key5_controls.clone()),
+        );
+        let hispeed_up_controls = merge_select_controls(
+            key2_controls.clone(),
+            merge_select_controls(key4_controls.clone(), key6_controls.clone()),
+        );
+
+        Self {
+            start,
+            e_action_controls,
+            e2_action_controls,
+            e3_action_controls,
+            enter,
+            back,
+            key1_controls,
+            key2_controls,
+            key3_controls,
+            key4_controls,
+            key5_controls,
+            key6_controls,
+            key7_controls,
+            key8_controls,
+            key9_controls,
+            key10_controls: Vec::new(),
+            key11_controls: Vec::new(),
+            key12_controls: Vec::new(),
+            key13_controls: Vec::new(),
+            key14_controls: Vec::new(),
+            hispeed_down_controls,
+            hispeed_up_controls,
+            scratch_up_controls: Vec::new(),
+            scratch_down_controls: Vec::new(),
+            select_scratch_up_controls: Vec::new(),
+            select_scratch_down_controls: Vec::new(),
+            select_previous_controls,
+            select_next_controls,
+            target_previous_controls,
+            target_next_controls,
             cycle_assist,
             cycle_bga,
             key_hint,
@@ -12673,6 +12851,26 @@ impl SelectKeyBindings {
 
     fn is_select_scratch_down(&self, control: &str) -> bool {
         self.select_scratch_down_controls.iter().any(|k| k == control)
+    }
+
+    fn is_select_previous(&self, control: &str) -> bool {
+        self.select_previous_controls.iter().any(|k| k == control)
+            || self.is_select_scratch_up(control)
+    }
+
+    fn is_select_next(&self, control: &str) -> bool {
+        self.select_next_controls.iter().any(|k| k == control)
+            || self.is_select_scratch_down(control)
+    }
+
+    fn is_target_previous(&self, control: &str) -> bool {
+        self.target_previous_controls.iter().any(|k| k == control)
+            || self.is_select_scratch_up(control)
+    }
+
+    fn is_target_next(&self, control: &str) -> bool {
+        self.target_next_controls.iter().any(|k| k == control)
+            || self.is_select_scratch_down(control)
     }
 }
 
@@ -13306,6 +13504,12 @@ mod tests {
         SelectKeyBindings::from_profile(&crate::config::play_input::default_profile_input())
     }
 
+    fn select_keys_9k() -> SelectKeyBindings {
+        let mut input = crate::config::play_input::default_profile_input();
+        input.select_input_mode = SelectInputModeConfig::Key9;
+        SelectKeyBindings::from_profile(&input)
+    }
+
     fn select_keys_with_full_2p_bindings() -> SelectKeyBindings {
         let mut input = crate::config::play_input::default_profile_input();
         let key = KeyMode::K14.play_map_key().to_string();
@@ -13806,6 +14010,34 @@ mod tests {
             select_action(PhysicalKey::Code(KeyCode::KeyW), ElementState::Pressed, false, &keys),
             Some(SelectAction::ExitFolder)
         );
+    }
+
+    #[test]
+    fn key9_select_input_maps_configured_lane_keys() {
+        let keys = select_keys_9k();
+
+        assert_eq!(
+            select_action(PhysicalKey::Code(KeyCode::KeyF), ElementState::Pressed, false, &keys),
+            Some(SelectAction::Move(SelectMove::Previous))
+        );
+        assert_eq!(
+            select_action(PhysicalKey::Code(KeyCode::KeyD), ElementState::Pressed, false, &keys),
+            Some(SelectAction::Move(SelectMove::Next))
+        );
+        assert_eq!(
+            select_action(PhysicalKey::Code(KeyCode::KeyC), ElementState::Pressed, false, &keys),
+            Some(SelectAction::EnterOrPlay)
+        );
+        assert_eq!(
+            select_action(PhysicalKey::Code(KeyCode::KeyV), ElementState::Pressed, false, &keys),
+            Some(SelectAction::EnterOrPlay)
+        );
+        assert_eq!(
+            select_action(PhysicalKey::Code(KeyCode::KeyX), ElementState::Pressed, false, &keys),
+            Some(SelectAction::ExitFolder)
+        );
+        assert_eq!(target_cycle_from_control("G", &keys), Some(TargetCycle::Previous));
+        assert_eq!(target_cycle_from_control("B", &keys), Some(TargetCycle::Next));
     }
 
     #[test]

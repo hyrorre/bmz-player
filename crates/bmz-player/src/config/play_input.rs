@@ -549,6 +549,7 @@ pub fn default_profile_input() -> ProfileInputConfig {
     );
     ProfileInputConfig {
         scratch_mode: super::profile_config::ScratchInputMode::Normal,
+        select_input_mode: super::profile_config::SelectInputModeConfig::Key7Key14,
         start_key: None,
         ui: super::profile_config::UiInputConfig {
             bindings: super::profile_config::default_ui_bindings(),
@@ -624,7 +625,9 @@ pub fn migrate_legacy_bindings(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::profile_config::{ProfileInputConfig, UiInputConfig, default_ui_bindings};
+    use crate::config::profile_config::{
+        ProfileInputConfig, SelectInputModeConfig, UiInputConfig, default_ui_bindings,
+    };
 
     fn sample_7k_input() -> ProfileInputConfig {
         let mut play = BTreeMap::new();
@@ -634,6 +637,7 @@ mod tests {
         );
         ProfileInputConfig {
             scratch_mode: crate::config::profile_config::ScratchInputMode::Normal,
+            select_input_mode: SelectInputModeConfig::Key7Key14,
             start_key: None,
             ui: UiInputConfig { bindings: default_ui_bindings() },
             play,
@@ -663,6 +667,7 @@ mod tests {
         );
         let input = ProfileInputConfig {
             scratch_mode: crate::config::profile_config::ScratchInputMode::Normal,
+            select_input_mode: SelectInputModeConfig::Key7Key14,
             start_key: None,
             ui: UiInputConfig::default(),
             play,
@@ -759,6 +764,7 @@ mod tests {
         );
         let input = ProfileInputConfig {
             scratch_mode: crate::config::profile_config::ScratchInputMode::Normal,
+            select_input_mode: SelectInputModeConfig::Key7Key14,
             start_key: None,
             ui: UiInputConfig::default(),
             play,

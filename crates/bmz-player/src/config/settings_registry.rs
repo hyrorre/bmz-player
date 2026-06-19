@@ -2,7 +2,7 @@ use super::profile_config::{
     AssistOptionConfig, BgaExpandConfig, BgaModeConfig, BottomShiftableGaugeConfig,
     DoubleOptionConfig, GaugeAutoShiftConfig, GaugeTypeConfig, HispeedModeConfig, HsFixConfig,
     JudgeAlgorithmConfig, LaneEffectConfig, ProfileConfig, RandomOptionConfig, ReplaySlotRule,
-    ScratchInputMode, TargetOptionConfig,
+    ScratchInputMode, SelectInputModeConfig, TargetOptionConfig,
 };
 use bmz_gameplay::rule::RuleMode;
 use bmz_render::scene::ResultGradeDiffDisplay;
@@ -47,6 +47,7 @@ pub enum SettingsEntryId {
     Lift,
     Hidden,
     TargetGreenNumber,
+    SelectInputMode,
     ScratchInputMode,
     AnalogScratchSensitivity,
     AnalogScratchTimeoutMs,
@@ -107,6 +108,7 @@ impl SettingsEntryId {
     ];
 
     pub const INPUT_ENTRIES: &'static [Self] = &[
+        Self::SelectInputMode,
         Self::ScratchInputMode,
         Self::AnalogScratchSensitivity,
         Self::AnalogScratchTimeoutMs,
@@ -158,6 +160,7 @@ impl SettingsEntryId {
             Self::Lift => "LIFT",
             Self::Hidden => "HIDDEN",
             Self::TargetGreenNumber => "GREEN NO.",
+            Self::SelectInputMode => "SELECT INPUT",
             Self::ScratchInputMode => "SCRATCH",
             Self::AnalogScratchSensitivity => "ANALOG SENS",
             Self::AnalogScratchTimeoutMs => "ANALOG TIME",
@@ -233,6 +236,9 @@ pub fn format_settings_value(profile: &ProfileConfig, id: SettingsEntryId) -> St
         SettingsEntryId::Lift => format_lane_unit(profile.lane.lift),
         SettingsEntryId::Hidden => format_lane_unit(profile.lane.hidden),
         SettingsEntryId::TargetGreenNumber => format!("{}", profile.lane.target_green_number),
+        SettingsEntryId::SelectInputMode => {
+            profile.input.select_input_mode.display_label().to_string()
+        }
         SettingsEntryId::ScratchInputMode => format_scratch_input_mode(profile.input.scratch_mode),
         SettingsEntryId::AnalogScratchSensitivity => {
             format!("{:.1}", profile.input.analog_scratch_sensitivity)
@@ -377,6 +383,11 @@ pub fn adjust_settings_value(profile: &mut ProfileConfig, id: SettingsEntryId, d
         SettingsEntryId::Hidden => adjust_u32(&mut profile.lane.hidden, delta, 0, 1000),
         SettingsEntryId::TargetGreenNumber => {
             adjust_u32(&mut profile.lane.target_green_number, delta, 1, 999)
+        }
+        SettingsEntryId::SelectInputMode => {
+            cycle_enum(delta, profile.input.select_input_mode, cycle_select_input_mode)
+                .map(|next| profile.input.select_input_mode = next)
+                .is_some()
         }
         SettingsEntryId::ScratchInputMode => {
             cycle_enum(delta, profile.input.scratch_mode, cycle_scratch_input_mode)
@@ -786,6 +797,12 @@ fn cycle_scratch_input_mode(current: ScratchInputMode, forward: bool) -> Scratch
     cycle_in_slice(&VALUES, current, forward)
 }
 
+fn cycle_select_input_mode(current: SelectInputModeConfig, forward: bool) -> SelectInputModeConfig {
+    const VALUES: [SelectInputModeConfig; 2] =
+        [SelectInputModeConfig::Key7Key14, SelectInputModeConfig::Key9];
+    cycle_in_slice(&VALUES, current, forward)
+}
+
 fn cycle_replay_slot_rule(current: ReplaySlotRule, forward: bool) -> ReplaySlotRule {
     const VALUES: [ReplaySlotRule; 6] = [
         ReplaySlotRule::Disabled,
@@ -936,6 +953,13 @@ mod tests {
     #[test]
     fn cycle_input_and_replay_settings() {
         let mut profile = ProfileConfig::new_default("default", "Default", 0);
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::SelectInputMode), "7K/14K");
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::SelectInputMode, 1));
+        assert_eq!(
+            profile.input.select_input_mode,
+            crate::config::profile_config::SelectInputModeConfig::Key9
+        );
+
         assert_eq!(format_settings_value(&profile, SettingsEntryId::ScratchInputMode), "NORMAL");
         assert!(adjust_settings_value(&mut profile, SettingsEntryId::ScratchInputMode, 1));
         assert_eq!(
