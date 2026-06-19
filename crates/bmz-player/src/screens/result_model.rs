@@ -199,8 +199,12 @@ impl ResultGraphCollector {
     pub fn record_frame(&mut self, frame: &FrameOutput<RenderSnapshot>) {
         let snapshot = &frame.render_snapshot;
         self.record_gauge(snapshot);
-        self.graph.judge_graph_density = snapshot.judge_graph_density.clone();
-        self.graph.bpm_graph_segments = snapshot.bpm_graph_segments.clone();
+        if self.graph.judge_graph_density.is_empty() {
+            self.graph.judge_graph_density = snapshot.judge_graph_density.to_vec();
+        }
+        if self.graph.bpm_graph_segments.is_empty() {
+            self.graph.bpm_graph_segments = snapshot.bpm_graph_segments.to_vec();
+        }
         self.graph.hit_error_ring = snapshot.hit_error_ring;
 
         for event in &frame.judgements {
@@ -521,13 +525,14 @@ mod tests {
             gauge: 72.5,
             gauge_type: GaugeType::Hard as i32,
             gauge_border: 30.0,
-            judge_graph_density: vec![1, 3, 2],
+            judge_graph_density: vec![1, 3, 2].into(),
             bpm_graph_segments: vec![BpmGraphSegment {
                 start_ratio: 0.0,
                 end_ratio: 1.0,
                 bpm: 180.0,
                 is_stop: false,
-            }],
+            }]
+            .into(),
             hit_error_ring,
             ..RenderSnapshot::default()
         };

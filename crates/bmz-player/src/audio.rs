@@ -19,7 +19,7 @@ use crate::config::app_config::{
 };
 use crate::screens::play_finish::FinishedPlaySession;
 use crate::screens::play_session::{AppliedArrange, PreparedPlaySession};
-use crate::screens::play_snapshot::BgaFrameCatalog;
+use crate::screens::play_snapshot::{BgaFrameCatalog, PlayRenderSnapshotCache};
 use crate::screens::result_model::ResultGraphCollector;
 use crate::storage::score_db::ScoreKey;
 use crate::video_bga::ActiveVideoBgaDecoder;
@@ -52,6 +52,7 @@ pub struct RunningPlaySession {
     pub applied_arrange: AppliedArrange,
     pub practice_mode: bool,
     pub bga_frames: BgaFrameCatalog,
+    pub render_snapshot_cache: PlayRenderSnapshotCache,
     pub video_bga_decoders: HashMap<BgaAssetId, ActiveVideoBgaDecoder>,
     pub failed_video_bga: HashSet<BgaAssetId>,
 }
@@ -162,6 +163,7 @@ pub fn open_prepared_play_audio(
     session.audio_clock = audio.clock();
 
     RunningPlaySession {
+        render_snapshot_cache: PlayRenderSnapshotCache::from_chart(&session.chart),
         session,
         audio,
         pending_audio: ScheduledSoundQueue::new(),

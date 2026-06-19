@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use bmz_chart::model::LongNoteMode;
 use bmz_core::judge::{Judge, TimingSide};
 use bmz_core::lane::{KeyMode, LANE_COUNT, Lane};
@@ -221,9 +223,9 @@ pub struct RenderSnapshot {
     /// HSFIX 連動の BPM 比率 ×100 整数部。
     pub adjusted_rate_adot: Option<i32>,
     /// プレイ用 judgegraph (1 秒単位ノーツ密度)。
-    pub judge_graph_density: Vec<u8>,
+    pub judge_graph_density: Arc<[u8]>,
     /// プレイ用 bpmgraph 線分。
-    pub bpm_graph_segments: Vec<BpmGraphSegment>,
+    pub bpm_graph_segments: Arc<[BpmGraphSegment]>,
     /// OPTION_AUTOPLAYON (33) / OPTION_AUTOPLAYOFF (32) 用。
     pub autoplay: bool,
     /// OPTION_MODE_COURSE (290) とステージ別 op (280..283 / 289) 用。未対応時は None。

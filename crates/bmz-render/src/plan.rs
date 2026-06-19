@@ -963,10 +963,6 @@ fn plan_play(
         skin_loaded: snapshot.resources_loaded && play_elapsed_ms >= skin_load_delay_ms,
         ..crate::skin::SkinDrawState::default()
     };
-    let play_skin = skin.with_play_graphs(
-        snapshot.judge_graph_density.clone(),
-        snapshot.bpm_graph_segments.clone(),
-    );
     advance_skin_dynamic_timers(skin, dynamic_timers, &mut skin_state, play_elapsed_ms);
     let skin_text = SkinTextState {
         title: &snapshot.title,
@@ -986,8 +982,13 @@ fn plan_play(
     };
     // `{"id":"notes"}` マーカーと `timer: 3` (FAILED) で3分割。
     // 描画順: 背面skin → ロング/ノーツ → 前面skin → 暗転/閉店オーバーレイ
-    let (behind_notes_items, front_notes_items, failed_overlay_items) =
-        play_skin.static_document_items_split_for_state_and_text(&skin_state, &skin_text);
+    let (behind_notes_items, front_notes_items, failed_overlay_items) = skin
+        .static_document_play_items_split_for_state_and_text(
+            &skin_state,
+            &skin_text,
+            &snapshot.judge_graph_density,
+            &snapshot.bpm_graph_segments,
+        );
     let behind_notes_items = skin.apply_play_skin_global_offset(behind_notes_items, &skin_state);
     append_skin_render_items(&mut commands, &behind_notes_items);
 

@@ -1,7 +1,10 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use bmz_chart::model::LongNoteMode;
-use bmz_chart::model::{BgaAssetId, BgaEventKind, NoteKind, PlayableChart, TimingEventKind};
+use bmz_chart::model::{
+    BarLine, BgaAssetId, BgaEventKind, NoteEvent, NoteKind, PlayableChart, TimingEventKind,
+};
 use bmz_chart::timing::{TICKS_PER_BEAT, TimingMap};
 use bmz_core::judge::{Judge, TimingSide};
 use bmz_core::lane::{LANE_COUNT, Lane};
@@ -26,6 +29,55 @@ const SCRATCH_ANGLE_OFFSET_2P: i32 = 2;
 const SCRATCH_ANGLE_PERIOD_MS: i64 = 2_160;
 const SCRATCH_ANGLE_DEGREES_DIVISOR: i64 = 6;
 pub type BgaFrameCatalog = HashMap<BgaAssetId, DisplayBgaFrame>;
+
+#[derive(Debug, Clone)]
+pub struct PlayRenderSnapshotCache {
+    judge_graph_density: Arc<[u8]>,
+    bpm_graph_segments: Arc<[bmz_render::chart_graph::BpmGraphSegment]>,
+    min_bpm: f32,
+    max_bpm: f32,
+    has_bpm_stop: bool,
+    scroll_segments: Arc<[(f64, f64)]>,
+    speed_segments: Arc<[(f64, f64)]>,
+}
+
+impl PlayRenderSnapshotCache {
+    pub fn from_chart(chart: &PlayableChart) -> Self {
+        let judge_graph_density = Arc::from(build_judge_graph_density(chart).into_boxed_slice());
+        let bpm_graph_segments = Arc::from(build_bpm_graph_segments(chart).into_boxed_slice());
+        let min_bpm = chart_min_bpm(chart) as f32;
+        let max_bpm = chart_max_bpm(chart) as f32;
+        let has_bpm_stop = chart
+            .timing_events
+            .iter()
+            .any(|event| matches!(event.kind, TimingEventKind::Stop { .. }));
+        let scroll_segments = Arc::from(
+            chart
+                .scroll_events
+                .iter()
+                .map(|event| (event.tick.0 as f64, event.factor))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        );
+        let speed_segments = Arc::from(
+            chart
+                .speed_events
+                .iter()
+                .map(|event| (event.tick.0 as f64, event.factor))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        );
+        Self {
+            judge_graph_density,
+            bpm_graph_segments,
+            min_bpm,
+            max_bpm,
+            has_bpm_stop,
+            scroll_segments,
+            speed_segments,
+        }
+    }
+}
 
 /// Turntable offset is driven by scene elapsed time, like beatoraja's scratch angle offset.
 pub fn skin_visual_time(_chart_time: TimeUs, play_elapsed: TimeUs) -> TimeUs {
@@ -133,10 +185,34 @@ pub fn build_render_snapshot_with_target_and_bga_frames(
     target_ex_score: Option<u32>,
     bga_frames: &BgaFrameCatalog,
 ) -> RenderSnapshot {
+    let cache = PlayRenderSnapshotCache::from_chart(&session.chart);
+    build_render_snapshot_with_target_and_bga_frames_cached(
+        session,
+        render_now,
+        recent_judgements,
+        best_ex_score,
+        best_ghost,
+        target_ex_score,
+        bga_frames,
+        &cache,
+    )
+}
+
+pub fn build_render_snapshot_with_target_and_bga_frames_cached(
+    session: &GameSession,
+    render_now: TimeUs,
+    recent_judgements: &[JudgementEvent],
+    best_ex_score: Option<u32>,
+    best_ghost: Option<&[u8]>,
+    target_ex_score: Option<u32>,
+    bga_frames: &BgaFrameCatalog,
+    cache: &PlayRenderSnapshotCache,
+) -> RenderSnapshot {
     let projected_best_ex_score =
         best_ghost.map(|ghost| ghost_ex_score_at_progress(ghost, session.score.past_notes));
     let play_elapsed_time = if render_now.0 < 0 { TimeUs(0) } else { render_now };
     let gauge_graph_time_ms = (render_now.0.max(0) / 1_000).clamp(0, i32::MAX as i64) as i32;
+    let now_bpm = session.timing_map.bpm_at_time(render_now) as f32;
     let gauge_graph_points = session
         .gauge
         .gauges
@@ -188,15 +264,11 @@ pub fn build_render_snapshot_with_target_and_bga_frames(
         note_display_duration_ms: note_display_duration_ms(session, render_now),
         hidden_cover: session.hidden_cover,
         skin_offsets: skin_offsets_from_session(session, render_now, play_elapsed_time),
-        now_bpm: current_bpm(&session.chart, render_now) as f32,
-        min_bpm: chart_min_bpm(&session.chart) as f32,
-        max_bpm: chart_max_bpm(&session.chart) as f32,
+        now_bpm,
+        min_bpm: cache.min_bpm,
+        max_bpm: cache.max_bpm,
         has_bga: session.chart.metadata.has_bga,
-        has_bpm_stop: session
-            .chart
-            .timing_events
-            .iter()
-            .any(|e| matches!(e.kind, bmz_chart::model::TimingEventKind::Stop { .. })),
+        has_bpm_stop: cache.has_bpm_stop,
         bga_enabled: session.bga_enabled,
         bga_base: session
             .bga_enabled
@@ -245,29 +317,29 @@ pub fn build_render_snapshot_with_target_and_bga_frames(
             if session.lane_cover_visible { session.lane_cover } else { 0.0 },
             session.lift,
             session.hsfix_index,
-            current_bpm(&session.chart, render_now) as f32,
-            chart_max_bpm(&session.chart) as f32,
+            now_bpm,
+            cache.max_bpm,
             session.chart.metadata.initial_bpm as f32,
         ),
         adjusted_rate: compute_adjusted_rate(
             session.hidden_enabled,
             session.lanecover_enabled,
             session.hsfix_index,
-            current_bpm(&session.chart, render_now) as f32,
-            chart_max_bpm(&session.chart) as f32,
+            now_bpm,
+            cache.max_bpm,
             session.chart.metadata.initial_bpm as f32,
         ),
         adjusted_rate_adot: compute_adjusted_rate(
             session.hidden_enabled,
             session.lanecover_enabled,
             session.hsfix_index,
-            current_bpm(&session.chart, render_now) as f32,
-            chart_max_bpm(&session.chart) as f32,
+            now_bpm,
+            cache.max_bpm,
             session.chart.metadata.initial_bpm as f32,
         )
         .map(|rate| (rate * 100.0).floor() as i32),
-        judge_graph_density: build_judge_graph_density(&session.chart),
-        bpm_graph_segments: build_bpm_graph_segments(&session.chart),
+        judge_graph_density: Arc::clone(&cache.judge_graph_density),
+        bpm_graph_segments: Arc::clone(&cache.bpm_graph_segments),
         autoplay: session.autoplay.as_ref().is_some_and(|autoplay| autoplay.is_full()),
         course_stage: None,
         course_titles: Default::default(),
@@ -334,11 +406,14 @@ pub fn build_render_snapshot_with_target_and_bga_frames(
     // TIMER_PLAY 開始前と同じ)。
     let scroll_time = scroll_render_time(render_now);
     if render_now.0 >= 0 {
-        let scroll = ScrollContext::new(session);
+        let scroll = ScrollContext::new(session, cache);
         let cursor_tick = scroll.cursor_tick(scroll_time);
+        let simple_tick_upper_bound = scroll.simple_tick_upper_bound(cursor_tick);
 
         for lane in Lane::ALL {
-            for note in session.chart.notes_for_lane(lane) {
+            for note in
+                visible_lane_notes(session.chart.notes_for_lane(lane), simple_tick_upper_bound)
+            {
                 match note.kind {
                     NoteKind::Invisible => continue,
                     NoteKind::Mine => {
@@ -369,13 +444,18 @@ pub fn build_render_snapshot_with_target_and_bga_frames(
             }
         }
 
-        for bar in &session.chart.bar_lines {
+        for bar in visible_bar_lines(&session.chart.bar_lines, simple_tick_upper_bound) {
             if let Some(y) = scroll.note_y(bar.time, cursor_tick) {
                 snapshot.bar_lines.push(VisibleBarLine { time: bar.time, y });
             }
         }
 
         for (pair_index, long) in session.chart.long_notes.iter().enumerate() {
+            if let Some(upper_tick) = simple_tick_upper_bound
+                && (long.start_tick.0 as f64) > upper_tick
+            {
+                continue;
+            }
             let head = scroll.note_progress(long.start_time, cursor_tick);
             let tail = scroll.note_progress(long.end_time, cursor_tick);
             // 終端が判定ラインを過ぎた、または始端が画面上端より奥なら非表示。
@@ -615,32 +695,36 @@ struct ScrollContext<'a> {
     lookahead_ticks: f64,
     /// SCROLL イベント (tick 昇順)。`(tick, factor)`。
     /// 区間ごとに factor を掛けて scroll 位置を畳む。空なら factor 1.0 固定。
-    scroll_segments: Vec<(f64, f64)>,
+    scroll_segments: &'a [(f64, f64)],
     /// SPEED イベント (tick 昇順)。beatoraja は線形補間だが、まずは SCROLL と同じ
     /// 階段関数で扱い、note 位置時点での値を倍率として掛ける。
-    speed_segments: Vec<(f64, f64)>,
+    speed_segments: &'a [(f64, f64)],
 }
 
 impl<'a> ScrollContext<'a> {
-    fn new(session: &'a GameSession) -> Self {
+    fn new(session: &'a GameSession, cache: &'a PlayRenderSnapshotCache) -> Self {
         let initial_bpm = session.chart.metadata.initial_bpm.max(1.0);
         let lookahead_ticks =
             initial_bpm * DEFAULT_LOOKAHEAD_US as f64 * TICKS_PER_BEAT as f64 / 60_000_000.0;
-        let scroll_segments =
-            session.chart.scroll_events.iter().map(|e| (e.tick.0 as f64, e.factor)).collect();
-        let speed_segments =
-            session.chart.speed_events.iter().map(|e| (e.tick.0 as f64, e.factor)).collect();
         Self {
             timing_map: &session.timing_map,
             hispeed: session.hispeed,
             lookahead_ticks,
-            scroll_segments,
-            speed_segments,
+            scroll_segments: &cache.scroll_segments,
+            speed_segments: &cache.speed_segments,
         }
     }
 
     fn cursor_tick(&self, render_now: TimeUs) -> f64 {
         self.timing_map.time_to_tick_f64(render_now)
+    }
+
+    fn simple_tick_upper_bound(&self, cursor_tick: f64) -> Option<f64> {
+        if !self.scroll_segments.is_empty() || !self.speed_segments.is_empty() {
+            return None;
+        }
+        let hispeed = self.hispeed.max(0.01) as f64;
+        Some(cursor_tick + self.lookahead_ticks / hispeed + f64::EPSILON)
     }
 
     /// ノートの正規化進捗（0.0=判定ライン, 1.0=画面上端）。判定ラインより手前 (delta<0)
@@ -666,9 +750,25 @@ impl<'a> ScrollContext<'a> {
     /// SPEED 倍率を掛けた「見かけの距離」を返す。factor が負だと delta も負になり、
     /// note_y は `None` に倒れる(= 逆スクロール時は画面外として描画対象外)。
     fn scroll_delta(&self, from_tick: f64, to_tick: f64) -> f64 {
-        accumulate_scroll(&self.scroll_segments, from_tick, to_tick)
-            * speed_at(&self.speed_segments, to_tick)
+        accumulate_scroll(self.scroll_segments, from_tick, to_tick)
+            * speed_at(self.speed_segments, to_tick)
     }
+}
+
+fn visible_lane_notes(notes: &[NoteEvent], upper_tick: Option<f64>) -> &[NoteEvent] {
+    let Some(upper_tick) = upper_tick else {
+        return notes;
+    };
+    let end = notes.partition_point(|note| (note.tick.0 as f64) <= upper_tick);
+    &notes[..end]
+}
+
+fn visible_bar_lines(bar_lines: &[BarLine], upper_tick: Option<f64>) -> &[BarLine] {
+    let Some(upper_tick) = upper_tick else {
+        return bar_lines;
+    };
+    let end = bar_lines.partition_point(|bar| (bar.tick.0 as f64) <= upper_tick);
+    &bar_lines[..end]
 }
 
 /// `segments` を階段関数として `from..to` の区間積分を返す。factor は次のイベントまで

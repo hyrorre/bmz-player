@@ -77,7 +77,7 @@ use crate::screens::play_session::AppliedArrange;
 use crate::screens::play_session::build_practice_prepared_from_preloaded;
 use crate::screens::play_snapshot::{
     BgaFrameCatalog, apply_fast_slow_display_filter, bga_texture_id,
-    build_render_snapshot_with_target_and_bga_frames, display_bga_frame,
+    build_render_snapshot_with_target_and_bga_frames_cached, display_bga_frame,
 };
 use crate::screens::play_start::{
     PlayStartOptions, PreloadedWinitPlaySession, PreparedWinitPlaySession, StartedWinitPlaySession,
@@ -476,6 +476,7 @@ struct WinitApp {
     /// 次の `RunningPlaySession::start` で使う chart zero（区間先頭の 1 秒前）。
     practice_chart_zero_time: Option<TimeUs>,
     select_frame_profiler: SceneFrameProfiler,
+    play_frame_profiler: SceneFrameProfiler,
     result_frame_profiler: SceneFrameProfiler,
     /// 直近のマウスカーソル移動 / 操作時刻。カーソル非表示判定に使う。
     last_cursor_action_at: Instant,
@@ -624,6 +625,35 @@ impl SceneFrameProfiler {
                     "select frame profile"
                 );
             }
+            FrameProfileKind::Play => {
+                tracing::debug!(
+                    target: "bmz_player::play_profile",
+                    frames = self.frames,
+                    video_ms,
+                    snapshot_ms,
+                    render_ms,
+                    plan_ms,
+                    draw_ms,
+                    text_ms,
+                    geometry_ms,
+                    upload_ms,
+                    submit_ms,
+                    surface_ms,
+                    bind_ms,
+                    encode_ms,
+                    queue_ms,
+                    present_ms,
+                    commands,
+                    steps,
+                    rect_steps,
+                    image_steps,
+                    text_steps,
+                    rect_instances,
+                    image_instances,
+                    text_instances,
+                    "play frame profile"
+                );
+            }
             FrameProfileKind::Result => {
                 tracing::debug!(
                     target: "bmz_player::result_profile",
@@ -661,6 +691,7 @@ impl SceneFrameProfiler {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FrameProfileKind {
     Select,
+    Play,
     Result,
 }
 
@@ -1633,6 +1664,7 @@ impl WinitApp {
             practice_session: None,
             practice_chart_zero_time: None,
             select_frame_profiler: SceneFrameProfiler::default(),
+            play_frame_profiler: SceneFrameProfiler::default(),
             result_frame_profiler: SceneFrameProfiler::default(),
             last_cursor_action_at: now,
             cursor_visible: true,
@@ -5983,7 +6015,7 @@ impl WinitApp {
             );
         }
         let render_now = self.play_skin_playstart_offset();
-        let mut snapshot = build_render_snapshot_with_target_and_bga_frames(
+        let mut snapshot = build_render_snapshot_with_target_and_bga_frames_cached(
             &active_play.running.session,
             render_now,
             &active_play.running.session.recent_judgements,
@@ -5991,6 +6023,7 @@ impl WinitApp {
             active_play.running.best_ghost.as_deref(),
             active_play.running.target_ex_score,
             &active_play.running.bga_frames,
+            &active_play.running.render_snapshot_cache,
         );
         self.apply_profile_fast_slow_filter(&mut snapshot);
         snapshot.arrange = active_play.running.applied_arrange.arrange.as_str().to_string();
@@ -8291,9 +8324,12 @@ impl WinitApp {
 
     fn render_current_scene(&mut self) {
         let select_view = matches!(self.view_state(), AppViewState::Select);
+        let play_view = matches!(self.view_state(), AppViewState::Play);
         let result_view = matches!(self.view_state(), AppViewState::Result(_));
         let profiling_select = select_view
             && tracing::enabled!(target: "bmz_player::select_profile", tracing::Level::DEBUG);
+        let profiling_play = play_view
+            && tracing::enabled!(target: "bmz_player::play_profile", tracing::Level::DEBUG);
         let profiling_result = result_view
             && tracing::enabled!(target: "bmz_player::result_profile", tracing::Level::DEBUG);
         if select_view {
@@ -8326,6 +8362,15 @@ impl WinitApp {
         if profiling_select {
             self.select_frame_profiler.record(
                 FrameProfileKind::Select,
+                video_us,
+                snapshot_us,
+                render_us,
+                self.renderer.last_frame_timings(),
+            );
+        }
+        if profiling_play {
+            self.play_frame_profiler.record(
+                FrameProfileKind::Play,
                 video_us,
                 snapshot_us,
                 render_us,

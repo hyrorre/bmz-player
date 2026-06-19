@@ -19,7 +19,8 @@ use crate::screens::play_finish::{
 };
 use crate::screens::play_session::AppliedArrange;
 use crate::screens::play_snapshot::{
-    BgaFrameCatalog, build_render_snapshot_with_target_and_bga_frames,
+    BgaFrameCatalog, PlayRenderSnapshotCache, build_render_snapshot_with_target_and_bga_frames,
+    build_render_snapshot_with_target_and_bga_frames_cached,
 };
 use crate::storage::score_db::ScoreDatabase;
 
@@ -160,7 +161,28 @@ fn frame_output_from_session_frame(
     target_ex_score: Option<u32>,
     bga_frames: &BgaFrameCatalog,
 ) -> FrameOutput<RenderSnapshot> {
-    let render_snapshot = build_render_snapshot_with_target_and_bga_frames(
+    let cache = PlayRenderSnapshotCache::from_chart(&session.chart);
+    frame_output_from_session_frame_cached(
+        session,
+        frame,
+        best_ex_score,
+        best_ghost,
+        target_ex_score,
+        bga_frames,
+        &cache,
+    )
+}
+
+fn frame_output_from_session_frame_cached(
+    session: &GameSession,
+    frame: SessionFrame,
+    best_ex_score: Option<u32>,
+    best_ghost: Option<&[u8]>,
+    target_ex_score: Option<u32>,
+    bga_frames: &BgaFrameCatalog,
+    cache: &PlayRenderSnapshotCache,
+) -> FrameOutput<RenderSnapshot> {
+    let render_snapshot = build_render_snapshot_with_target_and_bga_frames_cached(
         session,
         frame.times.render_now,
         &session.recent_judgements,
@@ -168,6 +190,7 @@ fn frame_output_from_session_frame(
         best_ghost,
         target_ex_score,
         bga_frames,
+        cache,
     );
     FrameOutput {
         render_snapshot,
@@ -229,13 +252,14 @@ pub fn advance_running_play_session(
     let frame = advance_session_frame(&mut running.session, &mut running.pending_audio);
     flush_scheduled_audio_nonblocking(&running.audio.engine, &mut running.pending_audio)?;
     apply_keysound_volumes(&running.audio.engine, &frame.keysound_volumes)?;
-    let mut output = frame_output_from_session_frame(
+    let mut output = frame_output_from_session_frame_cached(
         &running.session,
         frame,
         running.best_ex_score,
         running.best_ghost.as_deref(),
         running.target_ex_score,
         &running.bga_frames,
+        &running.render_snapshot_cache,
     );
     apply_play_arrange_to_snapshot(&mut output.render_snapshot, running.applied_arrange.arrange);
     Ok(output)
@@ -252,13 +276,14 @@ pub fn advance_running_play_session_until_result(
     let session_frame = advance_session_frame(&mut running.session, &mut running.pending_audio);
     flush_scheduled_audio_nonblocking(&running.audio.engine, &mut running.pending_audio)?;
     apply_keysound_volumes(&running.audio.engine, &session_frame.keysound_volumes)?;
-    let mut frame = frame_output_from_session_frame(
+    let mut frame = frame_output_from_session_frame_cached(
         &running.session,
         session_frame,
         running.best_ex_score,
         running.best_ghost.as_deref(),
         running.target_ex_score,
         &running.bga_frames,
+        &running.render_snapshot_cache,
     );
     apply_play_arrange_to_snapshot(&mut frame.render_snapshot, running.applied_arrange.arrange);
     running.result_graph.record_frame(&frame);
@@ -306,13 +331,14 @@ pub fn refresh_play_ending_snapshot(
     timers: PlayEndingSkinTimers,
 ) -> RenderSnapshot {
     let _ = flush_scheduled_audio_nonblocking(&running.audio.engine, &mut running.pending_audio);
-    let mut snapshot = refresh_play_ending_snapshot_with_session(
+    let mut snapshot = refresh_play_ending_snapshot_with_session_cached(
         &mut running.session,
         running.best_ex_score,
         running.best_ghost.as_deref(),
         running.target_ex_score,
         &running.bga_frames,
         timers,
+        &running.render_snapshot_cache,
     );
     apply_play_arrange_to_snapshot(&mut snapshot, running.applied_arrange.arrange);
     snapshot
@@ -333,12 +359,33 @@ pub fn refresh_play_ending_snapshot_with_session(
     bga_frames: &BgaFrameCatalog,
     timers: PlayEndingSkinTimers,
 ) -> RenderSnapshot {
+    let cache = PlayRenderSnapshotCache::from_chart(&session.chart);
+    refresh_play_ending_snapshot_with_session_cached(
+        session,
+        best_ex_score,
+        best_ghost,
+        target_ex_score,
+        bga_frames,
+        timers,
+        &cache,
+    )
+}
+
+pub fn refresh_play_ending_snapshot_with_session_cached(
+    session: &mut GameSession,
+    best_ex_score: Option<u32>,
+    best_ghost: Option<&[u8]>,
+    target_ex_score: Option<u32>,
+    bga_frames: &BgaFrameCatalog,
+    timers: PlayEndingSkinTimers,
+    cache: &PlayRenderSnapshotCache,
+) -> RenderSnapshot {
     let times = compute_frame_times(session);
     apply_auto_key_release(session, times.audio_now);
     update_recent_judgements(session, &[], times.render_now);
     update_recent_inputs(session, &[], times.render_now);
 
-    let mut snapshot = build_render_snapshot_with_target_and_bga_frames(
+    let mut snapshot = build_render_snapshot_with_target_and_bga_frames_cached(
         session,
         times.render_now,
         &session.recent_judgements,
@@ -346,6 +393,7 @@ pub fn refresh_play_ending_snapshot_with_session(
         best_ghost,
         target_ex_score,
         bga_frames,
+        cache,
     );
     snapshot.play_elapsed_time = timers.play_elapsed_time;
     snapshot.ready_elapsed_time = timers.ready_elapsed_time;

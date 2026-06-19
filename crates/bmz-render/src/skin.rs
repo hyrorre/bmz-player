@@ -190,6 +190,22 @@ impl<'a> SkinRuntimeGraphs<'a> {
         }
     }
 
+    fn from_document_with_play_graphs(
+        document: &'a SkinDocument,
+        play_judge_graph_density: &'a [u8],
+        play_bpm_graph_segments: &'a [crate::chart_graph::BpmGraphSegment],
+    ) -> Self {
+        Self {
+            play_judge_graph_density,
+            play_bpm_graph_segments,
+            result_gauge_graph_points: &document.result_gauge_graph_points,
+            result_timing_points: &document.result_timing_points,
+            result_judge_graph_buckets: &document.result_judge_graph_buckets,
+            result_early_late_graph_buckets: &document.result_early_late_graph_buckets,
+            result_timing_distribution: &document.result_timing_distribution,
+        }
+    }
+
     fn from_result_graph(graph: &'a crate::snapshot::ResultGraphSnapshot) -> Self {
         Self {
             play_judge_graph_density: &graph.judge_graph_density,
@@ -1545,6 +1561,29 @@ impl SkinContext {
             return (Vec::new(), Vec::new(), Vec::new());
         };
         document.static_render_items_split(&self.document_sources, state, text)
+    }
+
+    pub fn static_document_play_items_split_for_state_and_text(
+        &self,
+        state: &SkinDrawState,
+        text: &SkinTextState<'_>,
+        play_judge_graph_density: &[u8],
+        play_bpm_graph_segments: &[crate::chart_graph::BpmGraphSegment],
+    ) -> (Vec<SkinRenderItem>, Vec<SkinRenderItem>, Vec<SkinRenderItem>) {
+        let Some(document) = &self.document else {
+            return (Vec::new(), Vec::new(), Vec::new());
+        };
+        document.static_render_items_split_with_graphs(
+            &self.document_sources,
+            state,
+            text,
+            SkinRuntimeGraphs::from_document_with_play_graphs(
+                document,
+                play_judge_graph_density,
+                play_bpm_graph_segments,
+            ),
+            None,
+        )
     }
 
     pub fn document_note_item(
