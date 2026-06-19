@@ -809,6 +809,7 @@ pub fn sync_judge_windows(session: &mut GameSession, now: TimeUs) {
         session.chart.metadata.judge_rank,
         &session.chart.judge_rank_events,
         now,
+        session.rule_mode,
     );
     session.judge.set_window_set(judge_windows_for_rule_mode(
         session.base_judge_windows,

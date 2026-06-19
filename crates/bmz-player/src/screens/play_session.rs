@@ -387,6 +387,7 @@ pub fn build_game_session_with_input_backend(
                     chart.metadata.judge_rank,
                     &chart.judge_rank_events,
                     TimeUs(0),
+                    rule_mode,
                 ),
                 rule_mode,
             ),

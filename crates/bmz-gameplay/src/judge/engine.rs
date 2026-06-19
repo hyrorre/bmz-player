@@ -223,10 +223,27 @@ impl JudgeEngine {
         };
 
         if candidate.consumes_note {
-            let lane_state = &mut self.lanes[input.lane.index()];
             let note_id = candidate.note_id.expect("normal candidate must have note id");
             let note = chart.note_by_id(note_id).expect("candidate note exists");
+            let multi_bad_candidates = if rule_mode == RuleMode::Lr2Oraja {
+                lr2oraja_multi_bad_candidates(
+                    chart,
+                    input.lane,
+                    input.time,
+                    windows,
+                    note,
+                    candidate,
+                    &self.judged_notes,
+                )
+            } else {
+                Vec::new()
+            };
+
+            let lane_state = &mut self.lanes[input.lane.index()];
             lane_state.last_press_time = Some(note.time);
+            for multi_bad in &multi_bad_candidates {
+                self.judged_notes.insert(multi_bad.note_id, Judge::Bad);
+            }
             self.judged_notes.insert(note.id, candidate.judge);
 
             if note.kind == NoteKind::LongStart
@@ -242,17 +259,29 @@ impl JudgeEngine {
                 &self.judged_notes,
             );
 
+            let mut events = Vec::with_capacity(multi_bad_candidates.len() + 1);
+            events.extend(multi_bad_candidates.into_iter().map(|multi_bad| JudgementEvent {
+                note_id: Some(multi_bad.note_id),
+                lane: input.lane,
+                judge: Judge::Bad,
+                side: side_from_delta(multi_bad.delta.0),
+                delta: multi_bad.delta,
+                time: input.time,
+                affects_score: true,
+            }));
+            events.push(JudgementEvent {
+                note_id: Some(note_id),
+                lane: input.lane,
+                judge: candidate.judge,
+                side: candidate.side,
+                delta: candidate.delta,
+                time: input.time,
+                affects_score: note.kind != NoteKind::LongStart
+                    || active_long_scores_on_start(chart, note.id),
+            });
+
             return JudgeOutcome {
-                events: vec![JudgementEvent {
-                    note_id: Some(note_id),
-                    lane: input.lane,
-                    judge: candidate.judge,
-                    side: candidate.side,
-                    delta: candidate.delta,
-                    time: input.time,
-                    affects_score: note.kind != NoteKind::LongStart
-                        || active_long_scores_on_start(chart, note.id),
-                }],
+                events,
                 keysounds: vec![KeySoundEvent { note_id, time: input.time }],
                 mine_hits,
                 consumed_input: true,
@@ -379,6 +408,13 @@ struct PressCandidate {
     consumes_note: bool,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct MultiBadCandidate {
+    note_id: NoteId,
+    note_kind: NoteKind,
+    delta: TimeUs,
+}
+
 fn select_press_candidate(
     chart: &PlayableChart,
     lane: Lane,
@@ -391,13 +427,14 @@ fn select_press_candidate(
     let mut normal: Option<PressCandidate> = None;
     let mut slow_empty_poor: Option<PressCandidate> = None;
     let mut fast_empty_poor: Option<PressCandidate> = None;
+    let scan_fast_us = windows.bad_fast_us.max(windows.empty_poor_fast_us);
+    let scan_slow_us = windows.bad_slow_us.max(windows.empty_poor_slow_us);
 
     for note in chart.notes_for_lane(lane) {
-        if note.time.0 - input_time.0 > windows.empty_poor_fast_us {
+        if note.time.0 - input_time.0 > scan_fast_us {
             break;
         }
-        if input_time.0 - note.time.0 > windows.empty_poor_slow_us || !is_press_reference_note(note)
-        {
+        if input_time.0 - note.time.0 > scan_slow_us || !is_press_reference_note(note) {
             continue;
         }
 
@@ -504,6 +541,48 @@ fn choose_closest_empty_poor(slot: &mut Option<PressCandidate>, candidate: Press
     }
 }
 
+fn lr2oraja_multi_bad_candidates(
+    chart: &PlayableChart,
+    lane: Lane,
+    input_time: TimeUs,
+    windows: JudgeWindow,
+    selected_note: &NoteEvent,
+    selected_candidate: PressCandidate,
+    judged_notes: &HashMap<NoteId, Judge>,
+) -> Vec<MultiBadCandidate> {
+    let selected_dmtime = -selected_candidate.delta.0;
+    let mut candidates = chart
+        .notes_for_lane(lane)
+        .iter()
+        .take_while(|note| note.time.0 - input_time.0 <= windows.bad_fast_us)
+        .filter(|note| {
+            is_press_reference_note(note)
+                && note.id != selected_note.id
+                && !judged_notes.contains_key(&note.id)
+        })
+        .filter_map(|note| {
+            let delta = input_time.0 - note.time.0;
+            (in_bad_range(delta, windows) && !in_good_range(delta, windows)).then_some(
+                MultiBadCandidate { note_id: note.id, note_kind: note.kind, delta: TimeUs(delta) },
+            )
+        })
+        .collect::<Vec<_>>();
+
+    candidates.sort_by_key(|candidate| -candidate.delta.0);
+
+    if selected_candidate.judge != Judge::Bad || selected_note.kind == NoteKind::LongStart {
+        candidates.retain(|candidate| -candidate.delta.0 < selected_dmtime);
+    }
+
+    let array_start = candidates
+        .iter()
+        .position(|candidate| {
+            -candidate.delta.0 >= selected_dmtime || candidate.note_kind != NoteKind::LongStart
+        })
+        .unwrap_or(candidates.len());
+    candidates.into_iter().skip(array_start).collect()
+}
+
 fn combine_ln_judgement(
     active: ActiveLongNote,
     end_judge: Judge,
@@ -608,6 +687,15 @@ fn classify_normal_delta(delta_us: i64, windows: JudgeWindow) -> Option<Judge> {
     } else {
         None
     }
+}
+
+fn in_good_range(delta_us: i64, windows: JudgeWindow) -> bool {
+    delta_us.abs() <= windows.good_us
+}
+
+fn in_bad_range(delta_us: i64, windows: JudgeWindow) -> bool {
+    (delta_us < 0 && -delta_us <= windows.bad_fast_us)
+        || (delta_us >= 0 && delta_us <= windows.bad_slow_us)
 }
 
 fn side_from_delta(delta_us: i64) -> TimingSide {
@@ -1013,6 +1101,72 @@ mod tests {
         assert_eq!(outcome.events[0].note_id, Some(NoteId(1)));
         assert_eq!(outcome.events[0].judge, Judge::Bad);
         assert_eq!(outcome.events[0].delta, TimeUs(100_000));
+    }
+
+    #[test]
+    fn lr2oraja_multi_bad_adds_preceding_bad_before_selected_note() {
+        let chart = chart_with_two_taps(TimeUs(1_000_000), TimeUs(1_090_000));
+        let mut engine = JudgeEngine::new_with_rule_mode(
+            crate::judge::window::lr2oraja_note_judge_window(),
+            RuleMode::Lr2Oraja,
+        );
+
+        let outcome = engine.process_input(&chart, press_at(TimeUs(1_150_000)));
+
+        assert!(outcome.consumed_input);
+        assert_eq!(outcome.events.len(), 2);
+        assert_eq!(outcome.events[0].note_id, Some(NoteId(1)));
+        assert_eq!(outcome.events[0].judge, Judge::Bad);
+        assert_eq!(outcome.events[0].delta, TimeUs(150_000));
+        assert_eq!(outcome.events[1].note_id, Some(NoteId(2)));
+        assert_eq!(outcome.events[1].judge, Judge::Great);
+        assert_eq!(outcome.events[1].delta, TimeUs(60_000));
+        assert_eq!(
+            outcome.keysounds,
+            vec![KeySoundEvent { note_id: NoteId(2), time: TimeUs(1_150_000) }]
+        );
+        assert_eq!(engine.lanes[Lane::Key1.index()].next_note_index, 2);
+    }
+
+    #[test]
+    fn beatoraja_mode_does_not_add_lr2oraja_multi_bad() {
+        let chart = chart_with_two_taps(TimeUs(1_000_000), TimeUs(1_090_000));
+        let mut engine = JudgeEngine::new_with_rule_mode(
+            crate::judge::window::lr2oraja_note_judge_window(),
+            RuleMode::Beatoraja,
+        );
+
+        let outcome = engine.process_input(&chart, press_at(TimeUs(1_150_000)));
+
+        assert_eq!(outcome.events.len(), 1);
+        assert_eq!(outcome.events[0].note_id, Some(NoteId(2)));
+        assert_eq!(outcome.events[0].judge, Judge::Great);
+        assert_eq!(engine.lanes[Lane::Key1.index()].next_note_index, 0);
+    }
+
+    #[test]
+    fn lr2oraja_multi_bad_keeps_following_bad_when_selected_note_is_bad() {
+        let chart = chart_with_two_taps(TimeUs(1_000_000), TimeUs(1_260_000));
+        let mut engine = JudgeEngine::new_with_rule_mode(
+            crate::judge::window::lr2oraja_note_judge_window(),
+            RuleMode::Lr2Oraja,
+        );
+
+        let outcome = engine.process_input(&chart, press_at(TimeUs(1_130_000)));
+
+        assert!(outcome.consumed_input);
+        assert_eq!(outcome.events.len(), 2);
+        assert_eq!(outcome.events[0].note_id, Some(NoteId(2)));
+        assert_eq!(outcome.events[0].judge, Judge::Bad);
+        assert_eq!(outcome.events[0].delta, TimeUs(-130_000));
+        assert_eq!(outcome.events[1].note_id, Some(NoteId(1)));
+        assert_eq!(outcome.events[1].judge, Judge::Bad);
+        assert_eq!(outcome.events[1].delta, TimeUs(130_000));
+        assert_eq!(
+            outcome.keysounds,
+            vec![KeySoundEvent { note_id: NoteId(1), time: TimeUs(1_130_000) }]
+        );
+        assert_eq!(engine.lanes[Lane::Key1.index()].next_note_index, 2);
     }
 
     #[test]
