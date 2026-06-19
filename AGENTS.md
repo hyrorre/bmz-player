@@ -208,6 +208,10 @@ cargo run -p bmz-player -- songs list
 - `LShift`: Scratch
 - `Z S X D C F V`: Key1..Key7
 
+ゲーム操作方法:
+
+- 選曲画面 / プレイ画面 / リザルト画面などの操作方法やキー割り当てを変更する場合は、必ず `docs/controls.md` の内容を確認し、実装後に必要な更新を行います。
+
 ## Coding Rules and Conventions
 
 - コミットメッセージは Conventional Commits にします。
