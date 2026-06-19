@@ -335,6 +335,7 @@ pub enum JudgeAlgorithmConfig {
     Combo,
     Duration,
     Lowest,
+    Score,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

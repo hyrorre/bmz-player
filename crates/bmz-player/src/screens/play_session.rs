@@ -17,7 +17,7 @@ use bmz_gameplay::input::backend::{InputBackend, NullInputBackend};
 use bmz_gameplay::input::system::InputSystem;
 use bmz_gameplay::input::translator::DefaultInputTranslator;
 use bmz_gameplay::judge::engine::JudgeEngine;
-use bmz_gameplay::judge::model::{JudgeWindow, JudgeWindows};
+use bmz_gameplay::judge::model::{JudgeAlgorithm, JudgeWindow, JudgeWindows};
 use bmz_gameplay::judge::window::{
     judge_percent_at_time, judge_windows_for_keymode_and_rule_mode, judge_windows_for_rule_mode,
 };
@@ -35,7 +35,8 @@ use crate::config::play::{
     gauge_type_from_config, lane_binding_for_chart, lane_unit_to_f32, play_offsets_from_profile,
 };
 use crate::config::profile_config::{
-    BgaExpandConfig, BgaModeConfig, HispeedModeConfig, LaneEffectConfig, ProfileConfig,
+    BgaExpandConfig, BgaModeConfig, HispeedModeConfig, JudgeAlgorithmConfig, LaneEffectConfig,
+    ProfileConfig,
 };
 use crate::ln_policy::{
     LnPolicySetting, apply_ln_policy_to_chart, force_ln_mode_for_chart, score_ln_policy_for_chart,
@@ -376,7 +377,7 @@ pub fn build_game_session_with_input_backend(
 
     GameSession {
         gauge,
-        judge: JudgeEngine::new_with_window_set(
+        judge: JudgeEngine::new_with_window_set_and_algorithm(
             judge_windows_for_rule_mode(
                 base_judge_windows,
                 judge_percent_at_time(
@@ -387,6 +388,7 @@ pub fn build_game_session_with_input_backend(
                 rule_mode,
             ),
             rule_mode,
+            judge_algorithm_from_config(profile.judge.judge_algorithm),
         ),
         base_judge_window,
         base_judge_windows,
@@ -480,6 +482,15 @@ fn hispeed_mode_from_profile(mode: HispeedModeConfig) -> HispeedMode {
     match mode {
         HispeedModeConfig::Normal => HispeedMode::Normal,
         HispeedModeConfig::Floating => HispeedMode::Floating,
+    }
+}
+
+fn judge_algorithm_from_config(value: JudgeAlgorithmConfig) -> JudgeAlgorithm {
+    match value {
+        JudgeAlgorithmConfig::Combo => JudgeAlgorithm::Combo,
+        JudgeAlgorithmConfig::Duration => JudgeAlgorithm::Duration,
+        JudgeAlgorithmConfig::Lowest => JudgeAlgorithm::Lowest,
+        JudgeAlgorithmConfig::Score => JudgeAlgorithm::Score,
     }
 }
 
@@ -1662,6 +1673,20 @@ mod tests {
 
         assert!(session.input_offset_auto_adjust_enabled);
         assert!(session.input_offset_auto_adjust.is_some());
+    }
+
+    #[test]
+    fn build_game_session_applies_judge_algorithm_from_profile() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 1);
+        profile.judge.judge_algorithm = JudgeAlgorithmConfig::Duration;
+
+        let duration =
+            build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+        assert_eq!(duration.judge.algorithm, JudgeAlgorithm::Duration);
+
+        profile.judge.judge_algorithm = JudgeAlgorithmConfig::Score;
+        let score = build_game_session(Arc::new(chart()), &profile, PlaySessionOptions::default());
+        assert_eq!(score.judge.algorithm, JudgeAlgorithm::Score);
     }
 
     #[test]

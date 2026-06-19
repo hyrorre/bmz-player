@@ -592,6 +592,7 @@ fn format_judge_algorithm(value: JudgeAlgorithmConfig) -> String {
         JudgeAlgorithmConfig::Combo => "COMBO".to_string(),
         JudgeAlgorithmConfig::Duration => "DURATION".to_string(),
         JudgeAlgorithmConfig::Lowest => "LOWEST".to_string(),
+        JudgeAlgorithmConfig::Score => "SCORE".to_string(),
     }
 }
 
@@ -629,8 +630,12 @@ fn cycle_enum<T: Copy + PartialEq>(delta: i32, current: T, cycle: fn(T, bool) ->
 }
 
 fn cycle_judge_algorithm(current: JudgeAlgorithmConfig, forward: bool) -> JudgeAlgorithmConfig {
-    const VALUES: [JudgeAlgorithmConfig; 3] =
-        [JudgeAlgorithmConfig::Combo, JudgeAlgorithmConfig::Duration, JudgeAlgorithmConfig::Lowest];
+    const VALUES: [JudgeAlgorithmConfig; 4] = [
+        JudgeAlgorithmConfig::Combo,
+        JudgeAlgorithmConfig::Duration,
+        JudgeAlgorithmConfig::Lowest,
+        JudgeAlgorithmConfig::Score,
+    ];
     cycle_in_slice(&VALUES, current, forward)
 }
 
@@ -841,6 +846,20 @@ mod tests {
         assert!(adjust_settings_value(&mut profile, SettingsEntryId::VisualOffsetAutoAdjust, 1));
         assert!(profile.judge.visual_offset_auto_adjust);
         assert_eq!(format_settings_value(&profile, SettingsEntryId::VisualOffsetAutoAdjust), "ON");
+    }
+
+    #[test]
+    fn cycle_judge_algorithm_includes_score() {
+        let mut profile = ProfileConfig::new_default("default", "Default", 0);
+
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::JudgeAlgorithm), "COMBO");
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::JudgeAlgorithm, 1));
+        assert_eq!(profile.judge.judge_algorithm, JudgeAlgorithmConfig::Duration);
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::JudgeAlgorithm, 1));
+        assert_eq!(profile.judge.judge_algorithm, JudgeAlgorithmConfig::Lowest);
+        assert!(adjust_settings_value(&mut profile, SettingsEntryId::JudgeAlgorithm, 1));
+        assert_eq!(profile.judge.judge_algorithm, JudgeAlgorithmConfig::Score);
+        assert_eq!(format_settings_value(&profile, SettingsEntryId::JudgeAlgorithm), "SCORE");
     }
 
     #[test]

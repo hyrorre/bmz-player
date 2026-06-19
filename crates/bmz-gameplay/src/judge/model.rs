@@ -4,6 +4,15 @@ use bmz_core::judge::{Judge, TimingSide};
 use bmz_core::lane::Lane;
 use bmz_core::time::{ChartTick, TimeUs};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum JudgeAlgorithm {
+    #[default]
+    Combo,
+    Duration,
+    Lowest,
+    Score,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct JudgeWindow {
     pub pgreat_us: i64,

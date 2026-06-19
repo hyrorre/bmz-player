@@ -2353,6 +2353,11 @@ fn build_profile_settings_panel(
                                 JudgeAlgorithmConfig::Lowest,
                                 judge_algorithm_label(JudgeAlgorithmConfig::Lowest),
                             );
+                            ui.selectable_value(
+                                &mut profile.judge.judge_algorithm,
+                                JudgeAlgorithmConfig::Score,
+                                judge_algorithm_label(JudgeAlgorithmConfig::Score),
+                            );
                         });
                     egui::ComboBox::from_label("FAST/SLOW 表示モード")
                         .selected_text(fast_slow_scope_label(profile.judge.fast_slow_display_scope))
@@ -3148,6 +3153,7 @@ fn judge_algorithm_label(value: JudgeAlgorithmConfig) -> &'static str {
         JudgeAlgorithmConfig::Combo => "COMBO",
         JudgeAlgorithmConfig::Duration => "DURATION",
         JudgeAlgorithmConfig::Lowest => "LOWEST",
+        JudgeAlgorithmConfig::Score => "SCORE",
     }
 }
 

@@ -8,8 +8,8 @@ use bmz_core::lane::{LANE_COUNT, Lane};
 use bmz_core::time::TimeUs;
 
 use super::model::{
-    ActiveLongNote, JudgeOutcome, JudgeWindow, JudgeWindows, JudgementEvent, KeySoundEvent,
-    LaneJudgeState, LongNoteEndRef, MineHitEvent,
+    ActiveLongNote, JudgeAlgorithm, JudgeOutcome, JudgeWindow, JudgeWindows, JudgementEvent,
+    KeySoundEvent, LaneJudgeState, LongNoteEndRef, MineHitEvent,
 };
 use crate::rule::RuleMode;
 
@@ -18,6 +18,7 @@ pub struct JudgeEngine {
     pub windows: JudgeWindow,
     pub window_set: JudgeWindows,
     pub rule_mode: RuleMode,
+    pub algorithm: JudgeAlgorithm,
     pub lanes: [LaneJudgeState; LANE_COUNT],
     pub judged_notes: HashMap<NoteId, Judge>,
 }
@@ -32,10 +33,19 @@ impl JudgeEngine {
     }
 
     pub fn new_with_window_set(window_set: JudgeWindows, rule_mode: RuleMode) -> Self {
+        Self::new_with_window_set_and_algorithm(window_set, rule_mode, JudgeAlgorithm::Combo)
+    }
+
+    pub fn new_with_window_set_and_algorithm(
+        window_set: JudgeWindows,
+        rule_mode: RuleMode,
+        algorithm: JudgeAlgorithm,
+    ) -> Self {
         Self {
             windows: window_set.note,
             window_set,
             rule_mode,
+            algorithm,
             lanes: [LaneJudgeState::default(); LANE_COUNT],
             judged_notes: HashMap::new(),
         }
@@ -205,6 +215,7 @@ impl JudgeEngine {
             input.time,
             windows,
             rule_mode,
+            self.algorithm,
             &self.judged_notes,
         );
         let Some(candidate) = candidate else {
@@ -374,6 +385,7 @@ fn select_press_candidate(
     input_time: TimeUs,
     windows: JudgeWindow,
     rule_mode: RuleMode,
+    algorithm: JudgeAlgorithm,
     judged_notes: &HashMap<NoteId, Judge>,
 ) -> Option<PressCandidate> {
     let mut normal: Option<PressCandidate> = None;
@@ -405,7 +417,7 @@ fn select_press_candidate(
                 consumes_note: true,
             };
             if normal.as_ref().is_none_or(|current| {
-                combo_algorithm_prefers_new_candidate(*current, candidate, windows)
+                judge_algorithm_prefers_new_candidate(algorithm, *current, candidate, windows)
             }) {
                 normal = Some(candidate);
             }
@@ -468,12 +480,22 @@ fn select_press_candidate(
     normal.or(slow_empty_poor).or(fast_empty_poor)
 }
 
-fn combo_algorithm_prefers_new_candidate(
+fn judge_algorithm_prefers_new_candidate(
+    algorithm: JudgeAlgorithm,
     current: PressCandidate,
     candidate: PressCandidate,
     windows: JudgeWindow,
 ) -> bool {
-    current.delta.0 > windows.good_us && candidate.delta.0 >= -windows.good_us
+    match algorithm {
+        JudgeAlgorithm::Combo => {
+            current.delta.0 > windows.good_us && candidate.delta.0 >= -windows.good_us
+        }
+        JudgeAlgorithm::Duration => candidate.delta.0.abs() < current.delta.0.abs(),
+        JudgeAlgorithm::Lowest => false,
+        JudgeAlgorithm::Score => {
+            current.delta.0 > windows.great_us && candidate.delta.0 >= -windows.great_us
+        }
+    }
 }
 
 fn choose_closest_empty_poor(slot: &mut Option<PressCandidate>, candidate: PressCandidate) {
@@ -943,6 +965,54 @@ mod tests {
         assert_eq!(outcome.events[0].judge, Judge::PGreat);
         assert_eq!(missed.events[0].note_id, Some(NoteId(1)));
         assert_eq!(missed.events[0].judge, Judge::Poor);
+    }
+
+    #[test]
+    fn duration_candidate_prefers_closest_note() {
+        let chart = chart_with_two_taps(TimeUs(1_000_000), TimeUs(1_040_000));
+        let mut engine = JudgeEngine::new_with_window_set_and_algorithm(
+            JudgeWindows::uniform(windows()),
+            RuleMode::Beatoraja,
+            JudgeAlgorithm::Duration,
+        );
+
+        let outcome = engine.process_input(&chart, press_at(TimeUs(1_030_000)));
+
+        assert_eq!(outcome.events[0].note_id, Some(NoteId(2)));
+        assert_eq!(outcome.events[0].judge, Judge::PGreat);
+        assert_eq!(outcome.events[0].delta, TimeUs(-10_000));
+    }
+
+    #[test]
+    fn lowest_candidate_keeps_first_note() {
+        let chart = chart_with_two_taps(TimeUs(1_000_000), TimeUs(1_040_000));
+        let mut engine = JudgeEngine::new_with_window_set_and_algorithm(
+            JudgeWindows::uniform(windows()),
+            RuleMode::Beatoraja,
+            JudgeAlgorithm::Lowest,
+        );
+
+        let outcome = engine.process_input(&chart, press_at(TimeUs(1_030_000)));
+
+        assert_eq!(outcome.events[0].note_id, Some(NoteId(1)));
+        assert_eq!(outcome.events[0].judge, Judge::Great);
+        assert_eq!(outcome.events[0].delta, TimeUs(30_000));
+    }
+
+    #[test]
+    fn score_candidate_uses_great_threshold_instead_of_duration() {
+        let chart = chart_with_two_taps(TimeUs(1_000_000), TimeUs(1_150_000));
+        let mut engine = JudgeEngine::new_with_window_set_and_algorithm(
+            JudgeWindows::uniform(windows()),
+            RuleMode::Beatoraja,
+            JudgeAlgorithm::Score,
+        );
+
+        let outcome = engine.process_input(&chart, press_at(TimeUs(1_100_000)));
+
+        assert_eq!(outcome.events[0].note_id, Some(NoteId(1)));
+        assert_eq!(outcome.events[0].judge, Judge::Bad);
+        assert_eq!(outcome.events[0].delta, TimeUs(100_000));
     }
 
     #[test]
