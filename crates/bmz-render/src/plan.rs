@@ -9,7 +9,7 @@ use crate::skin::{
     Animation, BlendMode, NumberSlot, SkinContext, SkinDefinition, SkinImageManifest,
     SkinImageSize, SkinManifest, SkinObject, SkinObjectId, SkinPhase, SkinPlacement,
     SkinRenderContext, SkinRenderItem, SkinSource, SkinTextState, SkinTextureId, TextSlot,
-    append_skin_render_items, judge_image_index,
+    append_skin_render_item, append_skin_render_items, judge_image_index,
 };
 use crate::skin_offset::{SKIN_OFFSET_BAR_LINE, SkinOffsetValues};
 use crate::snapshot::{
@@ -1181,7 +1181,7 @@ fn plan_play(
                 )
             {
                 let item = skin.apply_play_skin_global_offset_to_item(item, &skin_state);
-                append_skin_render_items(&mut commands, &[item]);
+                append_skin_render_item(&mut commands, &item);
             }
             // beatoraja の drawLongNote 同様、キャップは胴体の上に重ねて描画する。
             // head キャップは押下中も判定ライン (head_y=0) に留まり描画され続ける。
@@ -1198,7 +1198,7 @@ fn plan_play(
                 skin.document_ln_start_item(body.lane, key_mode, rect, body.mode)
             {
                 let item = skin.apply_play_skin_global_offset_to_item(item, &skin_state);
-                append_skin_render_items(&mut commands, &[item]);
+                append_skin_render_item(&mut commands, &item);
             }
             if (body.mode != LongNoteMode::Ln || snapshot.show_ln_tail_cap)
                 && body.tail_y < 1.0
@@ -1212,7 +1212,7 @@ fn plan_play(
                 && let Some(item) = skin.document_ln_end_item(body.lane, key_mode, rect, body.mode)
             {
                 let item = skin.apply_play_skin_global_offset_to_item(item, &skin_state);
-                append_skin_render_items(&mut commands, &[item]);
+                append_skin_render_item(&mut commands, &item);
             }
         }
         for &lane in active_lanes {
@@ -1233,7 +1233,7 @@ fn plan_play(
                     };
                     if let Some(item) = item {
                         let item = skin.apply_play_skin_global_offset_to_item(item, &skin_state);
-                        append_skin_render_items(&mut commands, &[item]);
+                        append_skin_render_item(&mut commands, &item);
                     }
                 }
             }
@@ -1245,7 +1245,7 @@ fn plan_play(
                 {
                     if let Some(item) = skin.document_mine_item(lane, key_mode, rect) {
                         let item = skin.apply_play_skin_global_offset_to_item(item, &skin_state);
-                        append_skin_render_items(&mut commands, &[item]);
+                        append_skin_render_item(&mut commands, &item);
                     } else {
                         commands.push(DrawCommand::Image {
                             rect,

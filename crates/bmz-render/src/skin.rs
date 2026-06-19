@@ -7389,73 +7389,76 @@ fn fill_image_source_size(
 pub fn append_skin_render_items(commands: &mut Vec<DrawCommand>, items: &[SkinRenderItem]) {
     commands.reserve(items.len());
     for item in items {
-        match item {
-            SkinRenderItem::Rect { rect, color, .. } => {
-                commands.push(DrawCommand::Rect { rect: *rect, color: *color });
+        append_skin_render_item(commands, item);
+    }
+}
+
+pub fn append_skin_render_item(commands: &mut Vec<DrawCommand>, item: &SkinRenderItem) {
+    match item {
+        SkinRenderItem::Rect { rect, color, .. } => {
+            commands.push(DrawCommand::Rect { rect: *rect, color: *color });
+        }
+        SkinRenderItem::RectBatch { rects, cache } => {
+            if !rects.is_empty() {
+                commands.push(DrawCommand::RectBatch { rects: Arc::clone(rects), cache: *cache });
             }
-            SkinRenderItem::RectBatch { rects, cache } => {
-                if !rects.is_empty() {
-                    commands
-                        .push(DrawCommand::RectBatch { rects: Arc::clone(rects), cache: *cache });
-                }
-            }
-            SkinRenderItem::Text { origin, text, style, caret, .. } => {
-                if !text.is_empty() || caret.is_some() {
-                    commands.push(DrawCommand::Text {
-                        origin: *origin,
-                        text: text.clone(),
-                        caret: *caret,
-                        style: style.clone(),
-                    });
-                }
-            }
-            SkinRenderItem::Image {
-                texture,
-                rect,
-                uv,
-                tint,
-                blend,
-                scale,
-                border,
-                source_size,
-                linear_filter,
-            } => {
-                append_skin_image_command(
-                    commands,
-                    *texture,
-                    *rect,
-                    *uv,
-                    *tint,
-                    *blend,
-                    *scale,
-                    *border,
-                    *source_size,
-                    *linear_filter,
-                );
-            }
-            SkinRenderItem::RotatedImage {
-                texture,
-                rect,
-                uv,
-                tint,
-                blend,
-                source_size,
-                linear_filter,
-                angle_deg,
-                center,
-            } => {
-                commands.push(DrawCommand::RotatedImage {
-                    rect: *rect,
-                    uv: UvRect { x: uv.x, y: uv.y, width: uv.width, height: uv.height },
-                    source_size: *source_size,
-                    texture: TextureId(texture.0),
-                    tint: *tint,
-                    blend: *blend,
-                    linear_filter: *linear_filter,
-                    angle_rad: angle_deg.to_radians(),
-                    center: *center,
+        }
+        SkinRenderItem::Text { origin, text, style, caret, .. } => {
+            if !text.is_empty() || caret.is_some() {
+                commands.push(DrawCommand::Text {
+                    origin: *origin,
+                    text: text.clone(),
+                    caret: *caret,
+                    style: style.clone(),
                 });
             }
+        }
+        SkinRenderItem::Image {
+            texture,
+            rect,
+            uv,
+            tint,
+            blend,
+            scale,
+            border,
+            source_size,
+            linear_filter,
+        } => {
+            append_skin_image_command(
+                commands,
+                *texture,
+                *rect,
+                *uv,
+                *tint,
+                *blend,
+                *scale,
+                *border,
+                *source_size,
+                *linear_filter,
+            );
+        }
+        SkinRenderItem::RotatedImage {
+            texture,
+            rect,
+            uv,
+            tint,
+            blend,
+            source_size,
+            linear_filter,
+            angle_deg,
+            center,
+        } => {
+            commands.push(DrawCommand::RotatedImage {
+                rect: *rect,
+                uv: UvRect { x: uv.x, y: uv.y, width: uv.width, height: uv.height },
+                source_size: *source_size,
+                texture: TextureId(texture.0),
+                tint: *tint,
+                blend: *blend,
+                linear_filter: *linear_filter,
+                angle_rad: angle_deg.to_radians(),
+                center: *center,
+            });
         }
     }
 }
