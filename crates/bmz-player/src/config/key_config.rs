@@ -129,17 +129,25 @@ pub fn lane_label(lane: LaneConfig) -> &'static str {
     }
 }
 
-pub fn binding_row_label(target: KeyBindingTarget) -> String {
+pub fn lane_label_for_key_mode(key_mode: KeyMode, lane: LaneConfig) -> &'static str {
+    match (key_mode, lane) {
+        (KeyMode::K8 | KeyMode::K9, LaneConfig::Key8) => "KEY 8",
+        (KeyMode::K9, LaneConfig::Key9) => "KEY 9",
+        _ => lane_label(lane),
+    }
+}
+
+pub fn binding_row_label(key_mode: KeyMode, target: KeyBindingTarget) -> String {
     match target {
         KeyBindingTarget::Key { lane, slot } => {
-            format!("{} ({})", lane_label(lane), slot.suffix())
+            format!("{} ({})", lane_label_for_key_mode(key_mode, lane), slot.suffix())
         }
         KeyBindingTarget::Scratch { lane, direction, slot } => {
             let dir = match direction {
                 ScratchDirection::Up => "UP",
                 ScratchDirection::Down => "DOWN",
             };
-            format!("{} {} ({})", lane_label(lane), dir, slot.suffix())
+            format!("{} {} ({})", lane_label_for_key_mode(key_mode, lane), dir, slot.suffix())
         }
         KeyBindingTarget::Action { action, slot } => {
             format!("{} ({})", action_label(action), slot.suffix())
@@ -835,6 +843,14 @@ mod tests {
         assert_eq!(lane_label(LaneConfig::Key7), "KEY 7");
         assert_eq!(lane_label(LaneConfig::Key8), "2P KEY 1");
         assert_eq!(lane_label(LaneConfig::Key14), "2P KEY 7");
+    }
+
+    #[test]
+    fn lane_label_for_key_mode_names_pms_extra_keys() {
+        assert_eq!(lane_label_for_key_mode(KeyMode::K8, LaneConfig::Key8), "KEY 8");
+        assert_eq!(lane_label_for_key_mode(KeyMode::K9, LaneConfig::Key8), "KEY 8");
+        assert_eq!(lane_label_for_key_mode(KeyMode::K9, LaneConfig::Key9), "KEY 9");
+        assert_eq!(lane_label_for_key_mode(KeyMode::K14, LaneConfig::Key8), "2P KEY 1");
     }
 
     #[test]

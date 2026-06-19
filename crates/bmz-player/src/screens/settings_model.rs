@@ -99,7 +99,7 @@ pub struct KeyBindingSelectRow {
 
 impl KeyBindingSelectRow {
     pub fn label(self) -> String {
-        binding_row_label(self.target)
+        binding_row_label(self.key_mode, self.target)
     }
 
     pub fn value_text(self, profile: &ProfileConfig) -> String {
