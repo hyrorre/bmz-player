@@ -18,7 +18,7 @@ use bmz_render::scene::ResultGradeDiffDisplay;
 
 use crate::ln_policy::LnPolicySetting;
 
-/// 7KEY + スクラッチ向けの設定画面入力マッピング。
+/// 7KEY / 14KEY + スクラッチ向けの設定画面入力マッピング。
 #[derive(Debug, Clone)]
 pub struct SettingsBindings {
     confirm: HashSet<String>,
@@ -34,31 +34,22 @@ impl SettingsBindings {
         let mut increase = HashSet::new();
         let mut decrease = HashSet::new();
 
-        if let Ok(play) = resolve_play_bindings(input, KeyMode::K7) {
-            for entry in play {
-                let Some(lane) = entry.lane else { continue };
-                match lane {
-                    LaneConfig::Key1 | LaneConfig::Key3 | LaneConfig::Key5 | LaneConfig::Key7 => {
-                        confirm.insert(entry.control.clone());
-                    }
-                    LaneConfig::Key2 | LaneConfig::Key4 | LaneConfig::Key6 => {
-                        back.insert(entry.control.clone());
-                    }
-                    LaneConfig::Scratch => match entry.scratch {
-                        Some(ScratchDirectionConfig::Down) => {
-                            increase.insert(entry.control.clone());
-                        }
-                        Some(ScratchDirectionConfig::Up) => {
-                            decrease.insert(entry.control.clone());
-                        }
-                        None => {
-                            classify_scratch_control(&entry.control, &mut increase, &mut decrease);
-                        }
-                    },
-                    _ => {}
-                }
-            }
-        }
+        collect_play_settings_bindings(
+            input,
+            KeyMode::K7,
+            &mut confirm,
+            &mut back,
+            &mut increase,
+            &mut decrease,
+        );
+        collect_play_settings_bindings(
+            input,
+            KeyMode::K14,
+            &mut confirm,
+            &mut back,
+            &mut increase,
+            &mut decrease,
+        );
 
         for entry in &input.ui.bindings {
             match entry.action {
@@ -104,6 +95,53 @@ impl SettingsBindings {
 
     pub fn is_decrease(&self, control: &str) -> bool {
         self.decrease.contains(control)
+    }
+}
+
+fn collect_play_settings_bindings(
+    input: &ProfileInputConfig,
+    key_mode: KeyMode,
+    confirm: &mut HashSet<String>,
+    back: &mut HashSet<String>,
+    increase: &mut HashSet<String>,
+    decrease: &mut HashSet<String>,
+) {
+    let Ok(play) = resolve_play_bindings(input, key_mode) else {
+        return;
+    };
+    for entry in play {
+        let Some(lane) = entry.lane else { continue };
+        match lane {
+            LaneConfig::Key1
+            | LaneConfig::Key3
+            | LaneConfig::Key5
+            | LaneConfig::Key7
+            | LaneConfig::Key8
+            | LaneConfig::Key10
+            | LaneConfig::Key12
+            | LaneConfig::Key14 => {
+                confirm.insert(entry.control.clone());
+            }
+            LaneConfig::Key2
+            | LaneConfig::Key4
+            | LaneConfig::Key6
+            | LaneConfig::Key9
+            | LaneConfig::Key11
+            | LaneConfig::Key13 => {
+                back.insert(entry.control.clone());
+            }
+            LaneConfig::Scratch | LaneConfig::Scratch2 => match entry.scratch {
+                Some(ScratchDirectionConfig::Down) => {
+                    increase.insert(entry.control.clone());
+                }
+                Some(ScratchDirectionConfig::Up) => {
+                    decrease.insert(entry.control.clone());
+                }
+                None => {
+                    classify_scratch_control(&entry.control, increase, decrease);
+                }
+            },
+        }
     }
 }
 
@@ -436,6 +474,21 @@ mod tests {
         assert!(bindings.is_back("S"));
         assert!(bindings.is_back("D"));
         assert!(bindings.is_increase("AxisLeftX+") || bindings.is_increase("LShift"));
+    }
+
+    #[test]
+    fn default_14k_2p_bindings_map_scratch_and_keys() {
+        let profile = ProfileConfig::new_default("default", "Default", 0);
+        let bindings = SettingsBindings::from_profile(&profile.input);
+
+        assert!(bindings.is_confirm("M"));
+        assert!(bindings.is_confirm("Period"));
+        assert!(bindings.is_confirm("Slash"));
+        assert!(bindings.is_back("K"));
+        assert!(bindings.is_back("L"));
+        assert!(bindings.is_back("Semicolon"));
+        assert!(bindings.is_decrease("RShift"));
+        assert!(bindings.is_increase("RControl"));
     }
 
     #[test]
