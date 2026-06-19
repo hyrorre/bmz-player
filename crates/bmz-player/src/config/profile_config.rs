@@ -338,6 +338,20 @@ pub enum JudgeAlgorithmConfig {
     Score,
 }
 
+impl JudgeAlgorithmConfig {
+    /// beatoraja `JudgeAlgorithm.values()` order.
+    pub const ORDER: [Self; 4] = [Self::Combo, Self::Duration, Self::Lowest, Self::Score];
+
+    pub const fn beatoraja_name(self) -> &'static str {
+        match self {
+            Self::Combo => "Combo",
+            Self::Duration => "Duration",
+            Self::Lowest => "Lowest",
+            Self::Score => "Score",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LaneViewConfig {
     pub hispeed: f32,

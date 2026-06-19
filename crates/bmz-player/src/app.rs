@@ -59,8 +59,8 @@ use crate::config::load::load_profile_config;
 use crate::config::profile_config::{
     AssistOptionConfig, BgaExpandConfig, BgaModeConfig, BottomShiftableGaugeConfig,
     DoubleOptionConfig, GaugeAutoShiftConfig, GaugeTypeConfig, HispeedModeConfig, HsFixConfig,
-    InputActionConfig, LaneConfig, ProfileConfig, ProfileInputConfig, RandomOptionConfig,
-    ScratchDirectionConfig, TargetOptionConfig,
+    InputActionConfig, JudgeAlgorithmConfig, LaneConfig, ProfileConfig, ProfileInputConfig,
+    RandomOptionConfig, ScratchDirectionConfig, TargetOptionConfig,
 };
 use crate::config::save::{save_app_config, save_profile_config};
 use crate::config::settings_registry::SettingsEntryId;
@@ -2097,6 +2097,13 @@ impl WinitApp {
                 .play
                 .ln_mode_policy
                 .display_label()
+                .to_string(),
+            judge_algorithm: self
+                .boot
+                .profile_config
+                .judge
+                .judge_algorithm
+                .beatoraja_name()
                 .to_string(),
             bga: bga_mode_as_str(self.boot.profile_config.play.bga).to_string(),
             grade_diff_display: self.boot.profile_config.play.grade_diff_display,
@@ -4152,6 +4159,7 @@ impl WinitApp {
             77 => self.cycle_select_target(arg),
             78 => self.cycle_select_gauge_auto_shift(arg),
             341 => self.cycle_select_bottom_shiftable_gauge(arg),
+            340 => self.cycle_select_judge_algorithm(arg),
             308 => self.cycle_select_ln_mode(arg),
             312 => {
                 // BMZ only exposes beatoraja's default sorter set for now.
@@ -4255,6 +4263,21 @@ impl WinitApp {
             bottom_shiftable_gauge =
                 bottom_shiftable_gauge_as_str(self.bottom_shiftable_gauge_option),
             "bottom shiftable gauge changed"
+        );
+        self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+    }
+
+    fn cycle_select_judge_algorithm(&mut self, arg: i32) {
+        self.boot.profile_config.judge.judge_algorithm = cycle_judge_algorithm_with_direction(
+            self.boot.profile_config.judge.judge_algorithm,
+            arg,
+        );
+        self.boot.profile_config.updated_at = now_unix_seconds();
+        self.sync_realtime_profile_settings();
+        self.invalidate_play_preload();
+        tracing::info!(
+            judge_algorithm = self.boot.profile_config.judge.judge_algorithm.beatoraja_name(),
+            "judge algorithm changed"
         );
         self.play_system_sound(crate::system_sound::SoundType::OptionChange);
     }
@@ -10165,6 +10188,13 @@ fn cycle_bottom_shiftable_gauge_with_direction(
     cycle_enum(VALUES, current, direction)
 }
 
+fn cycle_judge_algorithm_with_direction(
+    current: JudgeAlgorithmConfig,
+    direction: i32,
+) -> JudgeAlgorithmConfig {
+    cycle_enum(JudgeAlgorithmConfig::ORDER, current, direction)
+}
+
 fn bottom_shiftable_gauge_as_str(gauge: BottomShiftableGaugeConfig) -> &'static str {
     match gauge {
         BottomShiftableGaugeConfig::AssistEasy => "A-EASY",
@@ -14550,6 +14580,14 @@ mod tests {
         assert_eq!(
             cycle_gauge_auto_shift_option_with_direction(GaugeAutoShiftConfig::Off, -1),
             GaugeAutoShiftConfig::SelectToUnder
+        );
+        assert_eq!(
+            cycle_judge_algorithm_with_direction(JudgeAlgorithmConfig::Combo, 1),
+            JudgeAlgorithmConfig::Duration
+        );
+        assert_eq!(
+            cycle_judge_algorithm_with_direction(JudgeAlgorithmConfig::Combo, -1),
+            JudgeAlgorithmConfig::Score
         );
     }
 

@@ -1849,6 +1849,7 @@ pub struct SkinDrawState {
     pub select_mode_index: usize,
     pub select_sort_index: usize,
     pub select_ln_mode_index: usize,
+    pub select_judge_algorithm_index: usize,
     pub mouse_x: Option<f32>,
     pub mouse_y: Option<f32>,
     pub combo: u32,
@@ -2137,6 +2138,7 @@ impl Default for SkinDrawState {
             select_mode_index: 0,
             select_sort_index: 0,
             select_ln_mode_index: 0,
+            select_judge_algorithm_index: 0,
             mouse_x: None,
             mouse_y: None,
             combo: 0,
@@ -3817,6 +3819,7 @@ impl SkinDocument {
             select_mode_index: select_mode_index(&snapshot.select_mode),
             select_sort_index: select_sort_index(&snapshot.select_sort),
             select_ln_mode_index: select_ln_mode_index(&snapshot.select_ln_mode),
+            select_judge_algorithm_index: select_judge_algorithm_index(&snapshot.judge_algorithm),
             hispeed: snapshot.hispeed,
             total_duration_ms: snapshot.note_display_duration_ms.unwrap_or(0),
             result_grade_diff_display: snapshot.grade_diff_display,
@@ -6498,6 +6501,7 @@ fn skin_state_imageset_index(ref_id: i32, state: &SkinDrawState) -> Option<usize
         12 => Some(state.select_sort_index),
         301..=307 => Some(0),
         308 => Some(state.select_ln_mode_index),
+        340 => Some(state.select_judge_algorithm_index),
         _ => None,
     }
 }
@@ -7868,6 +7872,7 @@ fn skin_state_event_index(event_id: i32, state: &SkinDrawState) -> i32 {
         54 => state.select_double_option_index as i32,
         55 if state.select_screen => state.select_hs_fix_index as i32,
         75 => i32::from(state.judge_timing_auto_adjust),
+        340 => state.select_judge_algorithm_index as i32,
         SKIN_EVENT_HSFIX => state.hsfix_index,
         _ => 0,
     }
@@ -8283,6 +8288,7 @@ fn skin_state_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
             Some(((state.total_duration_ms as i64) * 3 + 2) / 5)
         }
         308 if state.select_screen => Some(state.select_ln_mode_index as i64),
+        340 if state.select_screen => Some(state.select_judge_algorithm_index as i64),
         // BPM 系: NUMBER_MAXBPM=90, NUMBER_MINBPM=91, NUMBER_NOWBPM=160
         90 => {
             if !select_chart_metadata_available(state) {
@@ -8742,6 +8748,7 @@ fn skin_image_ref_number(ref_id: i32, state: &SkinDrawState) -> Option<i64> {
         54 => Some(state.select_double_option_index as i64),
         55 => Some(state.select_hs_fix_index as i64),
         75 => Some(i64::from(state.judge_timing_auto_adjust)),
+        340 => Some(state.select_judge_algorithm_index as i64),
         ref_id if random_lane_ref_slot(ref_id).is_some() => {
             skin_random_lane_ref_number(ref_id, state)
         }
@@ -11009,6 +11016,15 @@ fn select_ln_mode_index(mode: &str) -> usize {
     match mode {
         "CN" | "AUTO(CN)" | "FORCE(CN)" => 1,
         "HCN" | "AUTO(HCN)" | "FORCE(HCN)" => 2,
+        _ => 0,
+    }
+}
+
+fn select_judge_algorithm_index(algorithm: &str) -> usize {
+    match algorithm {
+        "Duration" | "DURATION" => 1,
+        "Lowest" | "LOWEST" => 2,
+        "Score" | "SCORE" => 3,
         _ => 0,
     }
 }
@@ -19909,6 +19925,7 @@ mod tests {
             select_target_index: 3,
             select_bga_index: 1,
             judge_timing_auto_adjust: true,
+            select_judge_algorithm_index: 2,
             ..SkinDrawState::default()
         };
 
@@ -19920,6 +19937,7 @@ mod tests {
         assert_eq!(skin_state_imageset_index(41, &state), Some(3));
         assert_eq!(skin_state_imageset_index(75, &state), Some(1));
         assert_eq!(skin_state_imageset_index(72, &state), Some(1));
+        assert_eq!(skin_state_imageset_index(340, &state), Some(2));
         assert_eq!(skin_state_imageset_index(301, &state), Some(0));
         assert_eq!(skin_state_imageset_index(500, &state), None);
     }
@@ -19940,6 +19958,15 @@ mod tests {
     }
 
     #[test]
+    fn select_judge_algorithm_index_maps_beatoraja_order() {
+        assert_eq!(select_judge_algorithm_index("Combo"), 0);
+        assert_eq!(select_judge_algorithm_index("Duration"), 1);
+        assert_eq!(select_judge_algorithm_index("Lowest"), 2);
+        assert_eq!(select_judge_algorithm_index("Score"), 3);
+        assert_eq!(select_judge_algorithm_index("unknown"), 0);
+    }
+
+    #[test]
     fn skin_image_ref_number_maps_extended_select_arrange() {
         let state = SkinDrawState {
             select_screen: true,
@@ -19948,6 +19975,7 @@ mod tests {
             select_double_option_index: 2,
             select_hs_fix_index: 3,
             judge_timing_auto_adjust: true,
+            select_judge_algorithm_index: 3,
             ..SkinDrawState::default()
         };
 
@@ -19956,15 +19984,18 @@ mod tests {
         assert_eq!(skin_image_ref_number(54, &state), Some(2));
         assert_eq!(skin_image_ref_number(55, &state), Some(3));
         assert_eq!(skin_image_ref_number(75, &state), Some(1));
+        assert_eq!(skin_image_ref_number(340, &state), Some(3));
         assert_eq!(skin_state_number(42, &state), Some(9));
         assert_eq!(skin_state_number(43, &state), Some(6));
         assert_eq!(skin_state_number(54, &state), Some(2));
         assert_eq!(skin_state_number(55, &state), Some(3));
+        assert_eq!(skin_state_number(340, &state), Some(3));
         assert_eq!(skin_state_event_index(42, &state), 9);
         assert_eq!(skin_state_event_index(43, &state), 6);
         assert_eq!(skin_state_event_index(54, &state), 2);
         assert_eq!(skin_state_event_index(55, &state), 3);
         assert_eq!(skin_state_event_index(75, &state), 1);
+        assert_eq!(skin_state_event_index(340, &state), 3);
     }
 
     #[test]

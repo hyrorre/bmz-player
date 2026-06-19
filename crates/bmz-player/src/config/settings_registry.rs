@@ -630,13 +630,7 @@ fn cycle_enum<T: Copy + PartialEq>(delta: i32, current: T, cycle: fn(T, bool) ->
 }
 
 fn cycle_judge_algorithm(current: JudgeAlgorithmConfig, forward: bool) -> JudgeAlgorithmConfig {
-    const VALUES: [JudgeAlgorithmConfig; 4] = [
-        JudgeAlgorithmConfig::Combo,
-        JudgeAlgorithmConfig::Duration,
-        JudgeAlgorithmConfig::Lowest,
-        JudgeAlgorithmConfig::Score,
-    ];
-    cycle_in_slice(&VALUES, current, forward)
+    cycle_in_slice(&JudgeAlgorithmConfig::ORDER, current, forward)
 }
 
 fn cycle_rule_mode(current: RuleMode, forward: bool) -> RuleMode {

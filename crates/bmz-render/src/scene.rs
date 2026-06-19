@@ -76,6 +76,7 @@ pub struct SelectSnapshot {
     pub select_mode: String,
     pub select_sort: String,
     pub select_ln_mode: String,
+    pub judge_algorithm: String,
     pub bga: String,
     pub grade_diff_display: ResultGradeDiffDisplay,
     /// Select detail option panelで表示する判定表示オフセット(ms)。
@@ -163,6 +164,7 @@ impl Default for SelectSnapshot {
             select_mode: String::new(),
             select_sort: String::new(),
             select_ln_mode: String::new(),
+            judge_algorithm: String::new(),
             bga: String::new(),
             grade_diff_display: ResultGradeDiffDisplay::default(),
             judge_timing_offset_ms: 0,
