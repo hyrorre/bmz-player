@@ -201,9 +201,7 @@ impl JudgeEngine {
             &self.judged_notes,
         );
         let Some(candidate) = candidate else {
-            let mut outcome = JudgeOutcome::default();
-            outcome.mine_hits = mine_hits;
-            return outcome;
+            return JudgeOutcome { mine_hits, ..Default::default() };
         };
 
         if candidate.consumes_note {
