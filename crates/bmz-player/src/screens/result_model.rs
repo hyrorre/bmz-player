@@ -479,6 +479,7 @@ mod tests {
     fn stored_result() -> StoredPlayResult {
         StoredPlayResult {
             score_history_id: 9,
+            played_at: 0,
             replay_path: "replay/test.toml".to_string(),
             slot_paths: [None, None, None, None],
             device_type: bmz_core::input::InputDeviceKind::Keyboard,

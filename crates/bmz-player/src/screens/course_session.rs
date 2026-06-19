@@ -30,6 +30,8 @@ pub struct CourseEntryResult {
 #[derive(Debug, Clone)]
 pub struct CourseResultSummary {
     pub course_id: i64,
+    pub course_score_id: Option<i64>,
+    pub course_played_at: Option<i64>,
     pub title: String,
     pub kind: CourseKind,
     pub entry_summaries: Vec<ResultSummary>,
@@ -125,6 +127,8 @@ impl ActiveCourseSession {
 
         CourseResultSummary {
             course_id: self.course_id,
+            course_score_id: None,
+            course_played_at: None,
             title: self.definition.title,
             kind: self.definition.kind,
             entry_summaries,
@@ -241,6 +245,7 @@ mod tests {
                         result,
                         stored: StoredPlayResult {
                             score_history_id: 0,
+                            played_at: 0,
                             replay_path: String::new(),
                             slot_paths: [None, None, None, None],
                             device_type: bmz_core::input::InputDeviceKind::Keyboard,
@@ -249,6 +254,7 @@ mod tests {
                             &make_play_result(ScoreState::default(), total_notes),
                             &StoredPlayResult {
                                 score_history_id: 0,
+                                played_at: 0,
                                 replay_path: String::new(),
                                 slot_paths: [None, None, None, None],
                                 device_type: bmz_core::input::InputDeviceKind::Keyboard,
@@ -356,6 +362,7 @@ mod tests {
                         result,
                         stored: StoredPlayResult {
                             score_history_id: 0,
+                            played_at: 0,
                             replay_path: String::new(),
                             slot_paths: [None, None, None, None],
                             device_type: bmz_core::input::InputDeviceKind::Keyboard,
@@ -364,6 +371,7 @@ mod tests {
                             &make_play_result(ScoreState::default(), total_notes),
                             &StoredPlayResult {
                                 score_history_id: 0,
+                                played_at: 0,
                                 replay_path: String::new(),
                                 slot_paths: [None, None, None, None],
                                 device_type: bmz_core::input::InputDeviceKind::Keyboard,

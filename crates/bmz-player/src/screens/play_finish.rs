@@ -89,6 +89,7 @@ pub fn finish_session_result(
     let stored = if full_autoplay || replay_playback || practice_mode {
         StoredPlayResult {
             score_history_id: 0,
+            played_at,
             replay_path: String::new(),
             slot_paths: [None, None, None, None],
             device_type: InputDeviceKind::Keyboard,

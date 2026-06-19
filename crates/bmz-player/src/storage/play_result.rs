@@ -14,6 +14,7 @@ use super::score_db::{ReplaySlotRecord, ScoreDatabase, ScoreRecord, ScoreRecordM
 #[derive(Debug, Clone)]
 pub struct StoredPlayResult {
     pub score_history_id: i64,
+    pub played_at: i64,
     pub replay_path: String,
     pub slot_paths: [Option<String>; 4],
     pub device_type: InputDeviceKind,
@@ -156,10 +157,58 @@ pub fn store_play_result(
         }
     }
 
-    Ok(StoredPlayResult { score_history_id, replay_path, slot_paths, device_type })
+    Ok(StoredPlayResult {
+        score_history_id,
+        played_at: request.played_at,
+        replay_path,
+        slot_paths,
+        device_type,
+    })
 }
 
-fn candidate_metrics(result: &PlayResult) -> CandidateMetrics {
+pub fn save_existing_replay_to_slot(
+    score_db: &mut ScoreDatabase,
+    profile_paths: &ProfilePaths,
+    result: &PlayResult,
+    stored: &StoredPlayResult,
+    ln_policy: LnScorePolicy,
+    double_option: DoubleOptionScoreBucket,
+    rule_mode: bmz_gameplay::rule::RuleMode,
+    slot: u8,
+) -> Result<Option<String>> {
+    if slot > 3 || stored.replay_path.is_empty() || result.autoplay {
+        return Ok(None);
+    }
+    let source = profile_paths.root_dir.join(&stored.replay_path);
+    if !source.is_file() {
+        return Ok(None);
+    }
+    std::fs::create_dir_all(&profile_paths.replay_dir)?;
+    let file_name =
+        replay_slot_file_name(result.chart_sha256, ln_policy, double_option, rule_mode, slot);
+    let path = profile_paths.replay_dir.join(&file_name);
+    std::fs::copy(&source, &path)?;
+    let rel_path = format!("replay/{file_name}");
+    let candidate = candidate_metrics(result);
+    score_db.upsert_replay_slot(&ReplaySlotRecord {
+        chart_sha256: result.chart_sha256,
+        ln_policy,
+        double_option,
+        rule_mode,
+        slot,
+        rule: ReplaySlotRule::Always,
+        replay_path: rel_path.clone(),
+        played_at: stored.played_at,
+        ex_score: candidate.ex_score,
+        bp: candidate.bp,
+        cb: candidate.cb,
+        max_combo: candidate.max_combo,
+        clear_rank: candidate.clear_rank,
+    })?;
+    Ok(Some(rel_path))
+}
+
+pub fn candidate_metrics(result: &PlayResult) -> CandidateMetrics {
     CandidateMetrics {
         ex_score: result.score.ex_score(),
         bp: result.record_bp(),
@@ -347,6 +396,76 @@ mod tests {
 
         assert_eq!(stored.replay_path, "");
         assert!(!paths.replay_dir.exists());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn save_existing_replay_to_slot_overwrites_requested_slot() {
+        let root = make_temp_dir("manual-replay-slot");
+        let paths = ProfilePaths {
+            root_dir: root.clone(),
+            profile_toml: root.join("profile.toml"),
+            score_db: root.join("score.db"),
+            replay_dir: root.join("replay"),
+        };
+        let mut conn = Connection::open_in_memory().unwrap();
+        configure_connection(&conn).unwrap();
+        run_migrations(&mut conn, SCORE_MIGRATIONS).unwrap();
+        let mut score_db = ScoreDatabase::from_connection(conn);
+        let config = ReplayConfig {
+            auto_save: true,
+            compress: false,
+            slot_rules: [ReplaySlotRule::Disabled; 4],
+        };
+        let result = play_result(false);
+        let stored = store_play_result(
+            &mut score_db,
+            &paths,
+            &config,
+            &result,
+            StorePlayResultRequest {
+                ln_policy: LnScorePolicy::ForceLn,
+                double_option: DoubleOptionScoreBucket::Off,
+                played_at: 1_700_000_070,
+                playtime_seconds: 0,
+                random_seed: Some(7),
+                gauge_option: String::new(),
+                rule_mode: String::new(),
+                assist_mask: 0,
+                replay_events: vec![ReplayEvent {
+                    lane: Lane::Key1,
+                    kind: InputKind::Press,
+                    time: TimeUs(10),
+                    device_kind: InputDeviceKind::Keyboard,
+                }],
+                arrange: ArrangeOption::Normal,
+                arrange_2p: ArrangeOption::Normal,
+                arrange_seed: None,
+                arrange_pattern: None,
+            },
+        )
+        .unwrap();
+
+        let saved = save_existing_replay_to_slot(
+            &mut score_db,
+            &paths,
+            &result,
+            &stored,
+            LnScorePolicy::ForceLn,
+            DoubleOptionScoreBucket::Off,
+            bmz_gameplay::rule::RuleMode::Beatoraja,
+            2,
+        )
+        .unwrap()
+        .expect("manual slot path");
+
+        assert!(root.join(&saved).exists());
+        let key = super::super::score_db::ScoreKey::new([4; 32], LnScorePolicy::ForceLn);
+        let slot = score_db.replay_slot(key, 2).unwrap().expect("slot record");
+        assert_eq!(slot.rule, ReplaySlotRule::Always);
+        assert_eq!(slot.replay_path, saved);
+        assert_eq!(slot.played_at, 1_700_000_070);
 
         std::fs::remove_dir_all(root).unwrap();
     }

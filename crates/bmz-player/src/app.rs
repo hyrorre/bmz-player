@@ -919,6 +919,8 @@ enum ResultExitAction {
     HeldLanes,
     /// コース（段位）リザルトから、コース全体を同配置で再プレイする。
     RetryCourseSameArrange,
+    /// コース（段位）リザルトから、Key5/Key7 の押下状態で arrange を決める。
+    HeldCourseLanes,
     /// コース曲間の中間リザルトを閉じて、コースの次の曲を開始する。
     /// リトライは発生させず次譜面へ進むだけ (beatoraja の MusicResult コース分岐相当)。
     AdvanceCourse,
@@ -1207,6 +1209,7 @@ fn debug_boot_finished_play_session() -> FinishedPlaySession {
         result,
         stored: StoredPlayResult {
             score_history_id: 0,
+            played_at: 0,
             replay_path: String::new(),
             slot_paths: [None, None, None, None],
             device_type: InputDeviceKind::Keyboard,
@@ -3400,6 +3403,15 @@ impl WinitApp {
             }
             if self.result_exit.is_none()
                 && self.result_input_ready()
+                && event.state == ElementState::Pressed
+                && !event.repeat
+                && let Some(slot) = digit_to_replay_slot(event.physical_key)
+            {
+                self.save_finished_play_replay_slot(slot);
+                return;
+            }
+            if self.result_exit.is_none()
+                && self.result_input_ready()
                 && result_action(event.physical_key, event.state, event.repeat).is_some()
             {
                 // R / Enter / Escape いずれも次の曲へ進むだけ (retry/leave 区別なし)。
@@ -3424,6 +3436,15 @@ impl WinitApp {
             }
             if self.result_exit.is_none()
                 && self.result_input_ready()
+                && event.state == ElementState::Pressed
+                && !event.repeat
+                && let Some(slot) = digit_to_replay_slot(event.physical_key)
+            {
+                self.save_finished_play_replay_slot(slot);
+                return;
+            }
+            if self.result_exit.is_none()
+                && self.result_input_ready()
                 && let Some(action) = result_action(event.physical_key, event.state, event.repeat)
             {
                 match action {
@@ -3435,23 +3456,36 @@ impl WinitApp {
             return;
         }
 
-        // コース（段位）リザルト: コース全体を同配置で再プレイ、または選曲へ戻る。
-        // 同配置リトライ: R / Key5 / Key7。退出: Enter / Escape / Key1-4。
+        // コース（段位）リザルト: Key5/Key7 はフェードアウト後の hold 状態で
+        // retry arrange を決める。Key6 はゲージグラフ切替。
         if self.finished_course.is_some() {
-            if self.result_exit.is_none() && self.result_input_ready() {
-                let action = result_action(event.physical_key, event.state, event.repeat);
-                let lane = (event.state == ElementState::Pressed && !event.repeat)
-                    .then(|| physical_key_to_control(event.physical_key))
-                    .flatten()
-                    .and_then(|control| self.result_lane_for_control(&control));
-                if matches!(action, Some(ResultAction::Retry))
-                    || matches!(lane, Some(Lane::Key5 | Lane::Key7))
+            let pressed = event.state == ElementState::Pressed;
+            if let Some(control) = physical_key_to_control(event.physical_key) {
+                self.track_result_lane_hold(&control, pressed);
+                if self.result_exit.is_none()
+                    && self.handle_course_result_control(&control, pressed, event.repeat)
                 {
-                    self.begin_result_exit(ResultExitAction::RetryCourseSameArrange);
-                } else if matches!(action, Some(ResultAction::Leave))
-                    || matches!(lane, Some(Lane::Key1 | Lane::Key2 | Lane::Key3 | Lane::Key4))
-                {
-                    self.begin_result_exit(ResultExitAction::Leave);
+                    return;
+                }
+            }
+            if self.result_exit.is_none()
+                && self.result_input_ready()
+                && event.state == ElementState::Pressed
+                && !event.repeat
+                && let Some(slot) = digit_to_replay_slot(event.physical_key)
+            {
+                self.save_finished_course_replay_slot(slot);
+                return;
+            }
+            if self.result_exit.is_none()
+                && self.result_input_ready()
+                && let Some(action) = result_action(event.physical_key, event.state, event.repeat)
+            {
+                match action {
+                    ResultAction::Retry => {
+                        self.begin_result_exit(ResultExitAction::RetryCourseSameArrange)
+                    }
+                    ResultAction::Leave => self.begin_result_exit(ResultExitAction::Leave),
                 }
             }
             return;
@@ -3637,6 +3671,14 @@ impl WinitApp {
                             return;
                         }
                         if let Some(cycle) = target_cycle_from_key(event.physical_key) {
+                            self.apply_target_option_cycle(cycle);
+                            self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+                            return;
+                        }
+                        if let Some(control) = physical_key_name(event.physical_key)
+                            && let Some(cycle) =
+                                target_cycle_from_control(&control, &self.select_keys)
+                        {
                             self.apply_target_option_cycle(cycle);
                             self.play_system_sound(crate::system_sound::SoundType::OptionChange);
                             return;
@@ -3896,20 +3938,21 @@ impl WinitApp {
             return;
         }
 
-        // コース（段位）リザルト: コース全体を同配置で再プレイ、または選曲へ戻る。
-        // 同配置リトライ: Start/Button1 / Key5 / Key7。退出: Button2/Select / Key1-4。
+        // コース（段位）リザルト: Key5/Key7 はフェードアウト後の hold 状態で
+        // retry arrange を決める。Button1/Start は同配置リトライ。
         if self.finished_course.is_some() {
-            if pressed && self.result_exit.is_none() && self.result_input_ready() {
-                let control = PhysicalControl::GamepadButton(button.to_string());
-                let lane = self.result_lane_for_control(&control);
-                if matches!(button, "Button1" | "Start")
-                    || matches!(lane, Some(Lane::Key5 | Lane::Key7))
-                {
-                    self.begin_result_exit(ResultExitAction::RetryCourseSameArrange);
-                } else if matches!(button, "Button2" | "Select")
-                    || matches!(lane, Some(Lane::Key1 | Lane::Key2 | Lane::Key3 | Lane::Key4))
-                {
-                    self.begin_result_exit(ResultExitAction::Leave);
+            let control = PhysicalControl::GamepadButton(button.to_string());
+            self.track_result_lane_hold(&control, pressed);
+            if self.result_exit.is_none() {
+                if self.handle_course_result_control(&control, pressed, false) {
+                    return;
+                }
+                if pressed && self.result_input_ready() {
+                    if matches!(button, "Button1" | "Start") {
+                        self.begin_result_exit(ResultExitAction::RetryCourseSameArrange);
+                    } else if matches!(button, "Button2" | "Select") {
+                        self.begin_result_exit(ResultExitAction::Leave);
+                    }
                 }
             }
             return;
@@ -3967,12 +4010,6 @@ impl WinitApp {
         }
 
         if self.select_option_panel != 0 {
-            let option_changed = match self.select_option_panel {
-                1 => self.apply_play_option_control(button),
-                2 => self.apply_assist_option_control(button),
-                3 => self.apply_detail_option_control(button),
-                _ => false,
-            };
             if self.select_option_panel == 1
                 && let Some(cycle) = target_cycle_from_control(button, &self.select_keys)
             {
@@ -3980,6 +4017,12 @@ impl WinitApp {
                 self.play_system_sound(crate::system_sound::SoundType::OptionChange);
                 return;
             }
+            let option_changed = match self.select_option_panel {
+                1 => self.apply_play_option_control(button),
+                2 => self.apply_assist_option_control(button),
+                3 => self.apply_detail_option_control(button),
+                _ => false,
+            };
             if option_changed {
                 self.play_system_sound(crate::system_sound::SoundType::OptionChange);
             }
@@ -5543,6 +5586,8 @@ impl WinitApp {
                         course_result.entry_arranges.first().and_then(|arrange| arrange.seed),
                     );
 
+                    course_result.course_score_id = Some(course_score_id);
+                    course_result.course_played_at = Some(played_at);
                     // Update the four course replay slots that pass their
                     // configured rule.  Reuses the per-chart slot_rule_passes
                     // helper for identical semantics (Always overwrites
@@ -6535,17 +6580,24 @@ impl WinitApp {
     /// recorded arrange.  Reads the just-finished course result for the course
     /// id and per-entry arranges, then re-enters the course in PLAY mode.
     fn retry_course_same_arrange(&mut self) {
+        self.retry_course_with_mode(ResultRetryMode::SameArrange);
+    }
+
+    fn retry_course_different_arrange(&mut self) {
+        self.retry_course_with_mode(ResultRetryMode::DifferentArrange);
+    }
+
+    fn retry_course_with_mode(&mut self, mode: ResultRetryMode) {
         let Some(course) = self.finished_course.as_ref() else {
             tracing::warn!("no finished course is available to retry");
             return;
         };
         let course_id = course.course_id;
-        let arrange_overrides = course.entry_arranges.clone();
-        tracing::info!(
-            course_id,
-            entries = arrange_overrides.len(),
-            "retrying course (same arrange)"
-        );
+        let arrange_overrides = match mode {
+            ResultRetryMode::SameArrange => course.entry_arranges.clone(),
+            ResultRetryMode::DifferentArrange => Vec::new(),
+        };
+        tracing::info!(course_id, entries = arrange_overrides.len(), ?mode, "retrying course");
         // Drop the finished-course/result state before re-entering the course;
         // start_course_with_arrange installs a fresh active_course session.
         self.finished_course = None;
@@ -6614,6 +6666,116 @@ impl WinitApp {
                 true
             }
             _ => false,
+        }
+    }
+
+    fn handle_course_result_control(
+        &mut self,
+        control: &PhysicalControl,
+        pressed: bool,
+        repeat: bool,
+    ) -> bool {
+        let Some(lane) = self.result_lane_for_control(control) else {
+            return false;
+        };
+        match lane {
+            Lane::Key6 => {
+                if pressed && !repeat && self.result_input_ready() {
+                    self.cycle_result_gauge_graph_type();
+                }
+                true
+            }
+            lane if lane_starts_result_exit(lane) => {
+                if pressed && self.result_input_ready() {
+                    self.begin_result_exit(ResultExitAction::HeldCourseLanes);
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn save_finished_play_replay_slot(&mut self, slot: u8) -> bool {
+        let Some(finished) = self.finished_play.as_mut() else {
+            return false;
+        };
+        let saved = match crate::storage::play_result::save_existing_replay_to_slot(
+            &mut self.boot.score_db,
+            &self.boot.profile_paths,
+            &finished.result,
+            &finished.stored,
+            finished.ln_policy,
+            finished.double_option,
+            finished.rule_mode,
+            slot,
+        ) {
+            Ok(Some(path)) => {
+                finished.stored.slot_paths[slot as usize] = Some(path);
+                finished.summary.saved_replay_slots[slot as usize] = true;
+                finished.summary.replay_slots[slot as usize] = true;
+                true
+            }
+            Ok(None) => false,
+            Err(error) => {
+                tracing::warn!(%error, slot, "failed to save replay slot from result");
+                false
+            }
+        };
+        if saved {
+            self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+            tracing::info!(slot, "saved result replay slot");
+        } else {
+            tracing::info!(slot, "result replay slot was not saved");
+        }
+        saved
+    }
+
+    fn save_finished_course_replay_slot(&mut self, slot: u8) -> bool {
+        let Some(course) = self.finished_course.as_mut() else {
+            return false;
+        };
+        let Some(course_score_id) = course.course_score_id else {
+            tracing::info!(slot, "course replay slot unavailable without persisted course score");
+            return false;
+        };
+        if slot > 3 {
+            return false;
+        }
+        let bp =
+            course.judge_counts.bad + course.judge_counts.poor + course.judge_counts.empty_poor;
+        let max_combo =
+            course.entry_summaries.iter().map(|entry| entry.max_combo).max().unwrap_or(0);
+        let clear_rank = if course.course_clear {
+            bmz_core::clear::ClearType::Normal as u8
+        } else if course.course_failed {
+            bmz_core::clear::ClearType::Failed as u8
+        } else {
+            bmz_core::clear::ClearType::NoPlay as u8
+        };
+        let played_at = course.course_played_at.unwrap_or(0);
+        let record = crate::storage::library_db::CourseReplaySlotRecord {
+            course_id: course.course_id,
+            slot,
+            rule: crate::config::profile_config::ReplaySlotRule::Always.as_str().to_string(),
+            course_score_id,
+            played_at,
+            ex_score: course.total_ex_score,
+            bp,
+            max_combo,
+            clear_rank,
+        };
+        match self.boot.library_db.upsert_course_replay_slot(&record) {
+            Ok(()) => {
+                course.saved_replay_slots[slot as usize] = true;
+                course.replay_slots[slot as usize] = true;
+                self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+                tracing::info!(slot, "saved course replay slot");
+                true
+            }
+            Err(error) => {
+                tracing::warn!(%error, slot, "failed to save course replay slot from result");
+                false
+            }
         }
     }
 
@@ -6863,6 +7025,15 @@ impl WinitApp {
                 }
             }
             ResultExitAction::RetryCourseSameArrange => self.retry_course_same_arrange(),
+            ResultExitAction::HeldCourseLanes => {
+                match result_action_for_held_lanes(self.result_key5_held, self.result_key7_held) {
+                    Some(ResultRetryMode::SameArrange) => self.retry_course_same_arrange(),
+                    Some(ResultRetryMode::DifferentArrange) => {
+                        self.retry_course_different_arrange()
+                    }
+                    None => self.leave_result(),
+                }
+            }
             ResultExitAction::AdvanceCourse => self.advance_to_next_course_chart(),
         }
     }
@@ -13435,6 +13606,8 @@ mod tests {
 
         let course = CourseResultSummary {
             course_id: 1,
+            course_score_id: None,
+            course_played_at: None,
             title: "Course Title".to_string(),
             kind: bmz_core::course::CourseKind::Dan,
             entry_summaries: vec![
