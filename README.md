@@ -129,8 +129,13 @@ cargo run
 - [x] 同梱スキンに4K / 6K / 8Kを追加
 - [x] 判定調整に応じて小節線の位置も調整
 - [x] スクリーンショットの非同期化
+- [x] 8K / 9K のキーコンフィグ項目が2P KEY1 / 2P KEY2になっているのでKEY8 / KEY9に変更
+- [x] /入力で検索モードに入る条件の調整
+- [x] クイックリトライの操作方法検討と実装
+- [ ] /deletescoreコマンドの実装
 - [ ] 難易度表のデフォルトを追加
-- [ ] m-selectとWMIIの互換強化
+- [ ] ln_policyをAUTO/FORCEとLN/CN/HCNに分けることでselect skinのLN変更機能を有効化
+- [ ] IR側でln_policyが見やすくなるよう表示を調整
 - [ ] `Noto Sans CJK JP` or `Noto Sans JP` 同梱
 - [ ] アシストオプション、詳細オプション実装
 - [ ] Select画面の操作変更とスキン側の不一致について考える
@@ -146,11 +151,13 @@ cargo run
 - [x] score database migration from LR2 / beatoraja
 - [x] auto-adjust (自動判定調整)
 - [x] normalizing volume per-chart
+- [x] UE-style BMS (4K / 6K / 8K)
+- [x] new IR (bmz-ir)
+- [ ] IR score import (IRからスコアをダウンロードしてscore.dbに保存する機能)
 - [ ] random select
 - [ ] battle mode
-- [ ] UE-style BMS (4K / 6K / 8K)
+- [ ] rec mode (譜面動画作成モード)
 - [ ] practice mode
-- [ ] new IR (bmz-ir)
 - [ ] read-only IR (LR2IR, Mocha, MinIR)
 - [ ] OBS WebSocket control integration
 - [ ] Discord Rich Presence
