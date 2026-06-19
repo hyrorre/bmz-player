@@ -107,6 +107,46 @@ impl JudgeEngine {
         outcome
     }
 
+    pub fn process_mine_passes(
+        &mut self,
+        chart: &PlayableChart,
+        now: TimeUs,
+        lane_keyon_started_at: &[Option<TimeUs>; LANE_COUNT],
+    ) -> JudgeOutcome {
+        let mut outcome = JudgeOutcome::default();
+
+        for lane in Lane::ALL {
+            let lane_index = lane.index();
+            let lane_state = &mut self.lanes[lane.index()];
+            let notes = chart.notes_for_lane(lane);
+            while let Some(note) = notes.get(lane_state.next_mine_index) {
+                if note.time > now {
+                    break;
+                }
+                lane_state.next_mine_index += 1;
+                let Some(keyon_started_at) = lane_keyon_started_at[lane_index] else {
+                    continue;
+                };
+                if note.kind != NoteKind::Mine
+                    || keyon_started_at > note.time
+                    || Some(note.time) == lane_state.last_mine_hit_time
+                {
+                    continue;
+                }
+
+                lane_state.last_mine_hit_time = Some(note.time);
+                outcome.mine_hits.push(MineHitEvent {
+                    note_id: note.id,
+                    lane,
+                    damage: note.damage.unwrap_or(0),
+                    time: note.time,
+                });
+            }
+        }
+
+        outcome
+    }
+
     pub fn is_exhausted(&self, chart: &PlayableChart) -> bool {
         Lane::ALL.iter().copied().all(|lane| {
             let state = &self.lanes[lane.index()];
@@ -744,6 +784,55 @@ mod tests {
 
         assert_eq!(first.mine_hits.len(), 1);
         assert!(second.mine_hits.is_empty(), "same Mine must not fire twice");
+    }
+
+    #[test]
+    fn mine_pass_hits_when_lane_is_held() {
+        let chart = chart_with_mine(TimeUs(1_000_000), 8);
+        let mut engine = JudgeEngine::new(windows());
+        let mut lane_keyon_started_at = [None; LANE_COUNT];
+        lane_keyon_started_at[Lane::Key1.index()] = Some(TimeUs(900_000));
+
+        let outcome = engine.process_mine_passes(&chart, TimeUs(1_000_000), &lane_keyon_started_at);
+
+        assert_eq!(outcome.mine_hits.len(), 1);
+        assert_eq!(outcome.mine_hits[0].note_id, NoteId(7));
+        assert_eq!(outcome.mine_hits[0].damage, 8);
+    }
+
+    #[test]
+    fn mine_pass_without_pressed_lane_is_skipped() {
+        let chart = chart_with_mine(TimeUs(1_000_000), 8);
+        let mut engine = JudgeEngine::new(windows());
+        let lane_keyon_started_at = [None; LANE_COUNT];
+
+        let outcome = engine.process_mine_passes(&chart, TimeUs(1_000_000), &lane_keyon_started_at);
+
+        assert!(outcome.mine_hits.is_empty());
+    }
+
+    #[test]
+    fn mine_pass_ignores_key_pressed_after_mine_time() {
+        let chart = chart_with_mine(TimeUs(1_000_000), 8);
+        let mut engine = JudgeEngine::new(windows());
+        let mut lane_keyon_started_at = [None; LANE_COUNT];
+        lane_keyon_started_at[Lane::Key1.index()] = Some(TimeUs(1_050_000));
+
+        let outcome = engine.process_mine_passes(&chart, TimeUs(1_100_000), &lane_keyon_started_at);
+
+        assert!(outcome.mine_hits.is_empty());
+    }
+
+    #[test]
+    fn mine_does_not_hit_after_it_already_passed_unpressed() {
+        let chart = chart_with_mine(TimeUs(1_000_000), 8);
+        let mut engine = JudgeEngine::new(windows());
+        let lane_keyon_started_at = [None; LANE_COUNT];
+        engine.process_mine_passes(&chart, TimeUs(1_000_000), &lane_keyon_started_at);
+
+        let outcome = engine.process_input(&chart, press_at(TimeUs(1_100_000)));
+
+        assert!(outcome.mine_hits.is_empty());
     }
 
     #[test]

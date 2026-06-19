@@ -8,7 +8,7 @@ use bmz_chart::timing::TimingMap;
 use bmz_core::ids::{NoteId, SoundId};
 use bmz_core::input::{InputEvent, InputKind, InputSource, ScratchDirection};
 use bmz_core::judge::{Judge, TimingSide};
-use bmz_core::lane::LANE_COUNT;
+use bmz_core::lane::{LANE_COUNT, Lane};
 use bmz_core::time::TimeUs;
 
 use crate::autoplay::AutoplayController;
@@ -594,6 +594,24 @@ pub fn process_autoplay_inputs(
     judgements
 }
 
+pub fn process_mine_passes(session: &mut GameSession, audio_now: TimeUs) -> Vec<JudgementEvent> {
+    let mut lane_keyon_started_at = [None; LANE_COUNT];
+    for lane in Lane::ALL {
+        let idx = lane.index();
+        let Some(keyon_started_at) = session.lane_keyon_started_at[idx] else {
+            continue;
+        };
+        if session.autoplay.as_ref().is_some_and(|autoplay| autoplay.is_lane_enabled(lane)) {
+            continue;
+        }
+        lane_keyon_started_at[idx] = Some(keyon_started_at);
+    }
+
+    let outcome =
+        session.judge.process_mine_passes(&session.chart, audio_now, &lane_keyon_started_at);
+    apply_judge_outcome(session, outcome)
+}
+
 pub fn process_misses(session: &mut GameSession, audio_now: TimeUs) -> Vec<JudgementEvent> {
     let outcome = session.judge.process_misses(&session.chart, audio_now);
     apply_judge_outcome(session, outcome)
@@ -774,6 +792,7 @@ pub fn advance_session_frame(
                 apply_auto_key_release(session, times.audio_now);
             }
         }
+        judgements.extend(process_mine_passes(session, times.audio_now));
         judgements.extend(process_misses(session, times.audio_now));
         update_hcn_lane_timers(session, times.audio_now);
         apply_hcn_gauge(session, times.audio_now);
@@ -1056,6 +1075,49 @@ mod tests {
         // 終端未判定で離していても音量は触らない (beatoraja: pair state > 3 のみ)。
         update_hcn_lane_timers(&mut session, TimeUs(500_000));
         assert!(session.pending_keysound_volumes.is_empty());
+    }
+
+    fn chart_with_mine(time: TimeUs, damage: u16) -> PlayableChart {
+        let mut chart = chart_with_keysound();
+        chart.lane_notes = std::array::from_fn(|_| Vec::new());
+        chart.lane_notes[Lane::Key1.index()].push(NoteEvent {
+            id: NoteId(7),
+            lane: Lane::Key1,
+            kind: NoteKind::Mine,
+            tick: ChartTick(0),
+            time,
+            sound: None,
+            damage: Some(damage),
+        });
+        chart.total_notes = 0;
+        chart.end_time = time;
+        chart
+    }
+
+    #[test]
+    fn process_mine_passes_applies_damage_for_held_human_lane() {
+        let mut session = session_with_autoplay(chart_with_mine(TimeUs(1_000_000), 8));
+        session.autoplay = None;
+        session.gauge.set_initial_value(50.0);
+        session.lane_keyon_started_at[Lane::Key1.index()] = Some(TimeUs(900_000));
+
+        let events = process_mine_passes(&mut session, TimeUs(1_000_000));
+
+        assert!(events.is_empty());
+        assert_eq!(session.pending_mine_hits.len(), 1);
+        assert_eq!(session.pending_mine_hits[0].note_id, NoteId(7));
+        assert!((session.gauge.current().value - 42.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn process_mine_passes_ignores_autoplay_lane() {
+        let mut session = session_with_autoplay(chart_with_mine(TimeUs(1_000_000), 8));
+        session.lane_keyon_started_at[Lane::Key1.index()] = Some(TimeUs(900_000));
+
+        process_mine_passes(&mut session, TimeUs(1_000_000));
+
+        assert!(session.pending_mine_hits.is_empty());
+        assert!((session.gauge.current().value - 20.0).abs() < f32::EPSILON);
     }
 
     #[test]

@@ -124,6 +124,7 @@ pub struct LaneJudgeState {
     pub next_note_index: usize,
     pub active_long: Option<ActiveLongNote>,
     pub last_press_time: Option<TimeUs>,
+    pub next_mine_index: usize,
     /// 直近にヒットした Mine の time。同一 Mine への二重ヒットを防ぐ簡易ガード。
     /// Mine は密集しないという前提で「直近1個」だけ覚えておけば十分。
     pub last_mine_hit_time: Option<TimeUs>,
