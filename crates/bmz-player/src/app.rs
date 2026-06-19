@@ -8603,14 +8603,18 @@ impl WinitApp {
         }
     }
 
-    fn update_current_skin_video_sources(&mut self, profiling: bool) -> SkinVideoFrameProfile {
+    fn update_current_skin_video_sources(
+        &mut self,
+        scene: &AppSceneSnapshot,
+        profiling: bool,
+    ) -> SkinVideoFrameProfile {
         let mut profile = SkinVideoFrameProfile::default();
         let Some((kind, elapsed_us)) = self.current_skin_video_context() else {
             return profile;
         };
         // 実行時 op 条件 (例: リザルトのランク別 BG) で実際に表示されるソースだけを
         // デコードする。state を作れないシーンでは静的な `active` 判定に従う。
-        let runtime_state = self.current_skin_video_draw_state(kind);
+        let runtime_state = self.current_skin_video_draw_state_for_scene(kind, scene);
         let Some(sources) = self.skin_video_sources.get_mut(&kind) else {
             return profile;
         };
@@ -8718,19 +8722,20 @@ impl WinitApp {
     }
 
     /// 動画ソースの実行時可視判定に使う `SkinDrawState` を、現在のシーン用に構築する。
-    fn current_skin_video_draw_state(
+    fn current_skin_video_draw_state_for_scene(
         &self,
         kind: SkinKind,
+        scene: &AppSceneSnapshot,
     ) -> Option<bmz_render::skin::SkinDrawState> {
         match kind {
             SkinKind::Play => {
-                let AppSceneSnapshot::Play(snapshot) = self.scene_snapshot() else {
+                let AppSceneSnapshot::Play(snapshot) = scene else {
                     return None;
                 };
-                Some(play_skin_video_draw_state(&snapshot))
+                Some(play_skin_video_draw_state(snapshot))
             }
             SkinKind::Result => {
-                let AppSceneSnapshot::Result(snapshot) = self.scene_snapshot() else {
+                let AppSceneSnapshot::Result(snapshot) = scene else {
                     return None;
                 };
                 let ranktime = self
@@ -8738,7 +8743,7 @@ impl WinitApp {
                     .get(&SkinKind::Result)
                     .and_then(|sources| sources.first())
                     .map_or(0, |source| source.result_ranktime_ms);
-                Some(bmz_render::plan::result_skin_draw_state(&snapshot, ranktime))
+                Some(bmz_render::plan::result_skin_draw_state(snapshot, ranktime))
             }
             _ => None,
         }
@@ -8764,14 +8769,15 @@ impl WinitApp {
             self.update_select_preview_fade();
         }
         self.start_scene_timers_before_snapshot(select_view, result_view);
-        let video_start = Instant::now();
-        let video_profile = self.update_current_skin_video_sources(
-            profiling_select || profiling_play || profiling_result,
-        );
-        let video_us = video_start.elapsed().as_micros();
         let snapshot_start = Instant::now();
         let scene = self.scene_snapshot();
         let snapshot_us = snapshot_start.elapsed().as_micros();
+        let video_start = Instant::now();
+        let video_profile = self.update_current_skin_video_sources(
+            &scene,
+            profiling_select || profiling_play || profiling_result,
+        );
+        let video_us = video_start.elapsed().as_micros();
         let scene_kind = scene_kind(&scene);
         self.update_window_title_for_scene(scene_kind);
         if let (Some(path), Some(exit_after_frames)) =
