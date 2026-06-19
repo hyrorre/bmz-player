@@ -100,7 +100,20 @@ pub struct MineHitEvent {
 pub struct JudgeOutcome {
     pub events: Vec<JudgementEvent>,
     pub mine_hits: Vec<MineHitEvent>,
+    /// Input-triggered key sounds.  This is intentionally separate from
+    /// `JudgementEvent::note_id`: EmptyPoor does not consume a note, and LN mode
+    /// scores the start note at the end while beatoraja plays the end note sound.
+    pub keysounds: Vec<KeySoundEvent>,
+    /// Per-sound volume changes emitted by judgement side effects.  beatoraja
+    /// mutes the held start sound when an LN/CN is released early badly.
+    pub keysound_volumes: Vec<(bmz_core::ids::SoundId, f32)>,
     pub consumed_input: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeySoundEvent {
+    pub note_id: NoteId,
+    pub time: TimeUs,
 }
 
 #[derive(Debug, Clone, Copy)]

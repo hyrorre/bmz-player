@@ -466,6 +466,7 @@ fn emit_resolved_lane_events(
                 let start_note_id = alloc_note_id(next_note_id);
                 let end_note_id = alloc_note_id(next_note_id);
                 let sound = resolve_sound_id(pair.wav_key, sound_table, warnings);
+                let end_sound = resolve_sound_id(pair.end_wav_key, sound_table, warnings);
 
                 draft.lane_notes[lane.index()].push(NoteEvent {
                     id: start_note_id,
@@ -482,7 +483,7 @@ fn emit_resolved_lane_events(
                     kind: NoteKind::LongEnd,
                     tick: pair.end_tick,
                     time: pair.end_time,
-                    sound: None,
+                    sound: end_sound,
                     damage: None,
                 });
                 draft.long_notes.push(LongNotePair {

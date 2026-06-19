@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use bmz_audio::clock::AudioClock;
 use bmz_audio::queue::{AudioScheduler, ScheduledSound};
-use bmz_chart::model::{LongNoteMode, PlayableChart};
+use bmz_chart::model::{LongNoteMode, NoteEvent, NoteKind, PlayableChart};
 use bmz_chart::timing::TimingMap;
 use bmz_core::ids::{NoteId, SoundId};
 use bmz_core::input::{InputEvent, InputKind, InputSource, ScratchDirection};
@@ -17,7 +17,9 @@ use crate::hit_error::HitErrorRing;
 use crate::input::system::InputSystem;
 use crate::input::translator::{InputTimestampAnchor, InputTimingContext};
 use crate::judge::engine::JudgeEngine;
-use crate::judge::model::{JudgeOutcome, JudgeWindow, JudgeWindows, JudgementEvent, MineHitEvent};
+use crate::judge::model::{
+    JudgeOutcome, JudgeWindow, JudgeWindows, JudgementEvent, KeySoundEvent, MineHitEvent,
+};
 use crate::judge::window::{judge_percent_at_time, judge_windows_for_rule_mode};
 use crate::replay::{ReplayPlayer, ReplayRecorder};
 use crate::rule::RuleMode;
@@ -169,6 +171,9 @@ pub struct GameSession {
     pub lane_hcn_timer: [Option<HcnLaneTimer>; LANE_COUNT],
     /// HCN キー音のミュート状態。終端を BAD 以下で判定済みの passing HCN のみ Some。
     pub lane_hcn_keysound_muted: [Option<bool>; LANE_COUNT],
+    /// 判定処理で発火したキー音。EmptyPoor や LN 終端のように、スコア対象
+    /// note_id とキー音対象 note_id が一致しないケースがあるため別に持つ。
+    pub pending_keysounds: Vec<KeySoundEvent>,
     /// 当該フレームで適用するキー音音量変更。`advance_session_frame` の終端で
     /// `SessionFrame.keysound_volumes` に吸い出される (app 層が audio engine に反映)。
     pub pending_keysound_volumes: Vec<(SoundId, f32)>,
@@ -290,6 +295,8 @@ pub fn apply_judge_outcome(
         session.gauge.apply_mine(hit.damage);
         session.pending_mine_hits.push(hit);
     }
+    session.pending_keysounds.extend(outcome.keysounds);
+    session.pending_keysound_volumes.extend(outcome.keysound_volumes);
     update_failed_state_from_gauge(session);
     events
 }
@@ -300,18 +307,9 @@ fn update_failed_state_from_gauge(session: &mut GameSession) {
     }
 }
 
-pub fn schedule_keysounds(
-    session: &GameSession,
-    judgements: &[JudgementEvent],
-    audio: &mut dyn AudioScheduler,
-) {
-    for event in judgements {
-        if !plays_keysound(event.judge) {
-            continue;
-        }
-        let Some(note_id) = event.note_id else {
-            continue;
-        };
+pub fn schedule_keysounds(session: &mut GameSession, audio: &mut dyn AudioScheduler) {
+    for event in std::mem::take(&mut session.pending_keysounds) {
+        let note_id = event.note_id;
         let Some(sound_id) = session.chart.note_by_id(note_id).and_then(|note| note.sound) else {
             continue;
         };
@@ -460,8 +458,7 @@ pub fn process_human_inputs(session: &mut GameSession) -> Vec<JudgementEvent> {
     let mut judgements = Vec::new();
     for input in inputs {
         session.replay_recorder.record(input);
-        let outcome = session.judge.process_input(&session.chart, input);
-        let events = apply_judge_outcome(session, outcome);
+        let events = process_session_input(session, input);
         apply_input_offset_auto_adjust(session, &events);
         judgements.extend(events);
     }
@@ -575,8 +572,7 @@ pub fn process_replay_inputs(session: &mut GameSession, audio_now: TimeUs) -> Ve
     update_lane_key_states(session, &inputs);
     let mut judgements = Vec::new();
     for input in inputs {
-        let outcome = session.judge.process_input(&session.chart, input);
-        judgements.extend(apply_judge_outcome(session, outcome));
+        judgements.extend(process_session_input(session, input));
     }
     judgements
 }
@@ -596,10 +592,74 @@ pub fn process_autoplay_inputs(
 
     let mut judgements = Vec::new();
     for input in inputs {
-        let outcome = session.judge.process_input(&session.chart, input);
-        judgements.extend(apply_judge_outcome(session, outcome));
+        judgements.extend(process_session_input(session, input));
     }
     judgements
+}
+
+fn process_session_input(session: &mut GameSession, input: InputEvent) -> Vec<JudgementEvent> {
+    let mut outcome = session.judge.process_input(&session.chart, input);
+    if input.kind == InputKind::Press {
+        let hcn_passing = hcn_passing_at(session, input.lane, input.time);
+        if hcn_passing && outcome.events.iter().all(|event| event.judge == Judge::EmptyPoor) {
+            outcome.events.clear();
+            outcome.keysounds.clear();
+            outcome.consumed_input = false;
+        }
+        if outcome.events.is_empty()
+            && outcome.keysounds.is_empty()
+            && !hcn_passing
+            && let Some(note_id) = fallback_keysound_note_id(session, input.lane, input.time)
+        {
+            outcome.keysounds.push(KeySoundEvent { note_id, time: input.time });
+        }
+    }
+    apply_judge_outcome(session, outcome)
+}
+
+fn hcn_passing_at(session: &GameSession, lane: Lane, time: TimeUs) -> bool {
+    session.chart.long_notes.iter().any(|pair| {
+        pair.lane == lane
+            && pair.mode.unwrap_or(session.chart.metadata.long_note_mode) == LongNoteMode::Hcn
+            && time.0 >= pair.start_time.0
+            && time.0 < pair.end_time.0
+    })
+}
+
+fn fallback_keysound_note_id(session: &GameSession, lane: Lane, time: TimeUs) -> Option<NoteId> {
+    if session.judge.lanes[lane.index()].active_long.is_some() {
+        return None;
+    }
+
+    let notes = session.chart.notes_for_lane(lane);
+    let mut candidate = notes
+        .iter()
+        .find(|note| is_fallback_playable_note(note) && !is_processed_long_start(session, note));
+
+    for note in notes {
+        if note.time.0 >= time.0 {
+            break;
+        }
+        match note.kind {
+            NoteKind::Invisible => candidate = Some(note),
+            NoteKind::Tap | NoteKind::LongStart if !is_processed_long_start(session, note) => {
+                if candidate.is_none_or(|current| current.time.0 <= note.time.0) {
+                    candidate = Some(note);
+                }
+            }
+            NoteKind::Tap | NoteKind::LongEnd | NoteKind::Mine | NoteKind::LongStart => {}
+        }
+    }
+
+    candidate.map(|note| note.id)
+}
+
+fn is_fallback_playable_note(note: &NoteEvent) -> bool {
+    matches!(note.kind, NoteKind::Tap | NoteKind::LongStart)
+}
+
+fn is_processed_long_start(session: &GameSession, note: &NoteEvent) -> bool {
+    note.kind == NoteKind::LongStart && session.judge.judged_notes.contains_key(&note.id)
 }
 
 pub fn process_mine_passes(session: &mut GameSession, audio_now: TimeUs) -> Vec<JudgementEvent> {
@@ -805,7 +865,7 @@ pub fn advance_session_frame(
         update_hcn_lane_timers(session, times.audio_now);
         apply_hcn_gauge(session, times.audio_now);
         update_failed_state_from_gauge(session);
-        schedule_keysounds(session, &judgements, audio);
+        schedule_keysounds(session, audio);
         update_recent_judgements(session, &judgements, times.render_now);
         update_full_combo_timer(session, &judgements);
 
@@ -889,6 +949,102 @@ mod tests {
         assert_eq!(audio.scheduled[0].start_frame, 0);
         assert_eq!(audio.scheduled[0].volume, 0.0625);
         assert_eq!(session.recent_judgements.len(), 1);
+    }
+
+    #[test]
+    fn empty_poor_schedules_target_note_keysound() {
+        let mut session = session_with_autoplay(chart_with_keysound());
+        session.autoplay = None;
+        let mut audio = TestAudio::default();
+
+        let judgements = process_session_input(&mut session, human_press(TimeUs(150_000)));
+        schedule_keysounds(&mut session, &mut audio);
+
+        assert_eq!(judgements.len(), 1);
+        assert_eq!(judgements[0].judge, Judge::EmptyPoor);
+        assert_eq!(judgements[0].note_id, None);
+        assert_eq!(audio.scheduled.len(), 1);
+        assert_eq!(audio.scheduled[0].sound_id, SoundId(7));
+    }
+
+    #[test]
+    fn unjudged_press_after_empty_poor_window_uses_previous_playable_keysound() {
+        let mut session = session_with_autoplay(chart_with_keysound());
+        session.autoplay = None;
+        let mut audio = TestAudio::default();
+
+        let judgements = process_session_input(&mut session, human_press(TimeUs(800_000)));
+        schedule_keysounds(&mut session, &mut audio);
+
+        assert!(judgements.is_empty());
+        assert_eq!(audio.scheduled.len(), 1);
+        assert_eq!(audio.scheduled[0].sound_id, SoundId(7));
+    }
+
+    #[test]
+    fn unjudged_press_after_empty_poor_window_prefers_previous_invisible_keysound() {
+        let mut session = session_with_autoplay(chart_with_invisible_keysound());
+        session.autoplay = None;
+        let mut audio = TestAudio::default();
+
+        let judgements = process_session_input(&mut session, human_press(TimeUs(800_000)));
+        schedule_keysounds(&mut session, &mut audio);
+
+        assert!(judgements.is_empty());
+        assert_eq!(audio.scheduled.len(), 1);
+        assert_eq!(audio.scheduled[0].sound_id, SoundId(8));
+    }
+
+    #[test]
+    fn ln_release_does_not_replay_start_keysound_when_end_has_no_sound() {
+        let mut session = session_with_autoplay(ln_chart_with_start_sound_and_end_sound(None));
+        session.autoplay = None;
+        let mut audio = TestAudio::default();
+
+        process_session_input(&mut session, human_press(TimeUs(0)));
+        schedule_keysounds(&mut session, &mut audio);
+        assert_eq!(audio.scheduled.len(), 1);
+        assert_eq!(audio.scheduled[0].sound_id, SoundId(7));
+        audio.scheduled.clear();
+
+        process_session_input(&mut session, human_release(TimeUs(1_000_000)));
+        schedule_keysounds(&mut session, &mut audio);
+
+        assert!(audio.scheduled.is_empty());
+    }
+
+    #[test]
+    fn ln_release_plays_end_keysound_when_end_has_sound() {
+        let mut session =
+            session_with_autoplay(ln_chart_with_start_sound_and_end_sound(Some(SoundId(9))));
+        session.autoplay = None;
+        let mut audio = TestAudio::default();
+
+        process_session_input(&mut session, human_press(TimeUs(0)));
+        schedule_keysounds(&mut session, &mut audio);
+        audio.scheduled.clear();
+
+        process_session_input(&mut session, human_release(TimeUs(1_000_000)));
+        schedule_keysounds(&mut session, &mut audio);
+
+        assert_eq!(audio.scheduled.len(), 1);
+        assert_eq!(audio.scheduled[0].sound_id, SoundId(9));
+    }
+
+    #[test]
+    fn early_bad_ln_release_mutes_held_start_keysound() {
+        let mut session = session_with_autoplay(ln_chart_with_start_sound_and_end_sound(None));
+        session.autoplay = None;
+
+        process_session_input(&mut session, human_press(TimeUs(0)));
+        session.pending_keysounds.clear();
+        session.pending_keysound_volumes.clear();
+
+        let judgements = process_session_input(&mut session, human_release(TimeUs(700_000)));
+
+        assert_eq!(judgements.len(), 1);
+        assert_eq!(judgements[0].judge, Judge::Bad);
+        assert_eq!(session.pending_keysound_volumes, vec![(SoundId(7), 0.0)]);
     }
 
     #[test]
@@ -1005,6 +1161,58 @@ mod tests {
             end_time: TimeUs(1_000_000),
             sound: Some(SoundId(7)),
         });
+        chart
+    }
+
+    fn human_press(time: TimeUs) -> InputEvent {
+        InputEvent {
+            lane: Lane::Key1,
+            kind: InputKind::Press,
+            time,
+            source: InputSource::Human,
+            device_kind: InputDeviceKind::Keyboard,
+            scratch_direction: None,
+        }
+    }
+
+    fn human_release(time: TimeUs) -> InputEvent {
+        InputEvent {
+            lane: Lane::Key1,
+            kind: InputKind::Release,
+            time,
+            source: InputSource::Human,
+            device_kind: InputDeviceKind::Keyboard,
+            scratch_direction: None,
+        }
+    }
+
+    fn chart_with_invisible_keysound() -> PlayableChart {
+        let mut chart = chart_with_keysound();
+        chart.lane_notes[Lane::Key1.index()].push(NoteEvent {
+            id: NoteId(2),
+            lane: Lane::Key1,
+            kind: NoteKind::Invisible,
+            tick: ChartTick(96),
+            time: TimeUs(500_000),
+            sound: Some(SoundId(8)),
+            damage: None,
+        });
+        chart.sounds.push(SoundAssetRef { id: SoundId(8), path: "hidden.wav".into() });
+        chart.end_time = TimeUs(500_000);
+        chart
+    }
+
+    fn ln_chart_with_start_sound_and_end_sound(end_sound: Option<SoundId>) -> PlayableChart {
+        let mut chart = chart_with_hcn_long_note();
+        chart.metadata.long_note_mode = LongNoteMode::Ln;
+        chart.long_notes[0].mode = Some(LongNoteMode::Ln);
+        chart.lane_notes[Lane::Key1.index()][1].sound = end_sound;
+        if let Some(sound_id) = end_sound {
+            chart.sounds.push(SoundAssetRef {
+                id: sound_id,
+                path: format!("sound-{}.wav", sound_id.0).into(),
+            });
+        }
         chart
     }
 
@@ -1631,6 +1839,7 @@ mod tests {
             show_ln_tail_cap: false,
             lane_hcn_timer: [None; LANE_COUNT],
             lane_hcn_keysound_muted: [None; LANE_COUNT],
+            pending_keysounds: Vec::new(),
             pending_keysound_volumes: Vec::new(),
             hsfix_index: 0,
             input_timestamp_anchor: None,

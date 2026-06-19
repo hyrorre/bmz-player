@@ -8,8 +8,8 @@ use bmz_core::lane::{LANE_COUNT, Lane};
 use bmz_core::time::TimeUs;
 
 use super::model::{
-    ActiveLongNote, JudgeOutcome, JudgeWindow, JudgeWindows, JudgementEvent, LaneJudgeState,
-    LongNoteEndRef, MineHitEvent,
+    ActiveLongNote, JudgeOutcome, JudgeWindow, JudgeWindows, JudgementEvent, KeySoundEvent,
+    LaneJudgeState, LongNoteEndRef, MineHitEvent,
 };
 use crate::rule::RuleMode;
 
@@ -97,6 +97,9 @@ impl JudgeEngine {
                                 active.start_delta,
                                 now,
                             ));
+                            outcome
+                                .keysounds
+                                .push(KeySoundEvent { note_id: active.end.end_note_id, time: now });
                         }
                     }
                     LongNoteMode::Cn | LongNoteMode::Hcn => {
@@ -190,6 +193,10 @@ impl JudgeEngine {
             mine_hits.push(hit);
         }
 
+        if self.lanes[input.lane.index()].active_long.is_some() {
+            return JudgeOutcome { mine_hits, ..Default::default() };
+        }
+
         let rule_mode = self.rule_mode;
         let windows = self.window_set.press_window(input.lane);
         let candidate = select_press_candidate(
@@ -235,17 +242,22 @@ impl JudgeEngine {
                     affects_score: note.kind != NoteKind::LongStart
                         || active_long_scores_on_start(chart, note.id),
                 }],
+                keysounds: vec![KeySoundEvent { note_id, time: input.time }],
                 mine_hits,
                 consumed_input: true,
+                ..Default::default()
             };
         }
 
-        let mut outcome = empty_poor(input.lane, candidate.side, candidate.delta, input.time);
+        let keysound_note_id =
+            candidate.keysound_note_id.expect("empty poor candidate must have key sound note id");
+        let mut outcome =
+            empty_poor(input.lane, candidate.side, candidate.delta, input.time, keysound_note_id);
         outcome.mine_hits = mine_hits;
         outcome
     }
 
-    fn process_release(&mut self, _chart: &PlayableChart, input: InputEvent) -> JudgeOutcome {
+    fn process_release(&mut self, chart: &PlayableChart, input: InputEvent) -> JudgeOutcome {
         let lane_state = &mut self.lanes[input.lane.index()];
         let Some(active) = lane_state.active_long else {
             return JudgeOutcome::default();
@@ -254,21 +266,28 @@ impl JudgeEngine {
         match active.mode {
             LongNoteMode::Ln => {
                 lane_state.active_long = None;
-                let (judge, delta) = if input.time.0 >= active.end.end_time.0 {
+                let end_delta = TimeUs(input.time.0 - active.end.end_time.0);
+                let (judge, delta) = if end_delta.0 >= 0 {
                     (active.start_judge, active.start_delta)
                 } else {
-                    let end_delta = TimeUs(input.time.0 - active.end.end_time.0);
                     let windows = self.window_set.long_end_window(input.lane);
                     let end_judge =
                         classify_normal_delta(end_delta.0, windows).unwrap_or(Judge::Poor);
                     combine_ln_judgement(active, end_judge, end_delta)
                 };
                 self.judged_notes.insert(active.start_note_id, judge);
-                JudgeOutcome {
+                let mut outcome = JudgeOutcome {
                     events: vec![ln_final_event(input.lane, active, judge, delta, input.time)],
+                    keysounds: vec![KeySoundEvent {
+                        note_id: active.end.end_note_id,
+                        time: input.time,
+                    }],
                     mine_hits: Vec::new(),
                     consumed_input: true,
-                }
+                    ..Default::default()
+                };
+                push_early_bad_long_start_mute(chart, active, judge, end_delta, &mut outcome);
+                outcome
             }
             LongNoteMode::Cn | LongNoteMode::Hcn => {
                 let delta = input.time.0 - active.end.end_time.0;
@@ -278,7 +297,7 @@ impl JudgeEngine {
                 lane_state.active_long = None;
                 self.judged_notes.insert(active.end.end_note_id, judge);
 
-                JudgeOutcome {
+                let mut outcome = JudgeOutcome {
                     events: vec![JudgementEvent {
                         note_id: Some(active.end.end_note_id),
                         lane: input.lane,
@@ -288,11 +307,41 @@ impl JudgeEngine {
                         time: input.time,
                         affects_score: true,
                     }],
+                    keysounds: vec![KeySoundEvent {
+                        note_id: active.end.end_note_id,
+                        time: input.time,
+                    }],
                     mine_hits: Vec::new(),
                     consumed_input: true,
+                    ..Default::default()
+                };
+                if active.mode == LongNoteMode::Cn {
+                    push_early_bad_long_start_mute(
+                        chart,
+                        active,
+                        judge,
+                        TimeUs(delta),
+                        &mut outcome,
+                    );
                 }
+                outcome
             }
         }
+    }
+}
+
+fn push_early_bad_long_start_mute(
+    chart: &PlayableChart,
+    active: ActiveLongNote,
+    judge: Judge,
+    end_delta: TimeUs,
+    outcome: &mut JudgeOutcome,
+) {
+    if end_delta.0 < 0
+        && matches!(judge, Judge::Bad | Judge::Poor)
+        && let Some(sound_id) = chart.long_notes.get(active.pair_index).and_then(|pair| pair.sound)
+    {
+        outcome.keysound_volumes.push((sound_id, 0.0));
     }
 }
 
@@ -312,6 +361,7 @@ fn suppresses_long_start_late_bad(
 #[derive(Debug, Clone, Copy)]
 struct PressCandidate {
     note_id: Option<NoteId>,
+    keysound_note_id: Option<NoteId>,
     judge: Judge,
     side: TimingSide,
     delta: TimeUs,
@@ -348,6 +398,7 @@ fn select_press_candidate(
         {
             let candidate = PressCandidate {
                 note_id: Some(note.id),
+                keysound_note_id: Some(note.id),
                 judge,
                 side: side_from_delta(delta),
                 delta: TimeUs(delta),
@@ -365,6 +416,7 @@ fn select_press_candidate(
             if delta >= 0 && delta <= windows.empty_poor_slow_us {
                 Some(PressCandidate {
                     note_id: None,
+                    keysound_note_id: Some(note.id),
                     judge: Judge::EmptyPoor,
                     side: TimingSide::Slow,
                     delta: TimeUs(delta),
@@ -373,6 +425,7 @@ fn select_press_candidate(
             } else if delta < 0 && -delta <= windows.empty_poor_fast_us {
                 Some(PressCandidate {
                     note_id: None,
+                    keysound_note_id: Some(note.id),
                     judge: Judge::EmptyPoor,
                     side: TimingSide::Fast,
                     delta: TimeUs(delta),
@@ -384,6 +437,7 @@ fn select_press_candidate(
         } else if delta > windows.bad_slow_us && delta <= windows.empty_poor_slow_us {
             Some(PressCandidate {
                 note_id: None,
+                keysound_note_id: Some(note.id),
                 judge: Judge::EmptyPoor,
                 side: TimingSide::Slow,
                 delta: TimeUs(delta),
@@ -392,6 +446,7 @@ fn select_press_candidate(
         } else if delta < -windows.bad_fast_us && -delta <= windows.empty_poor_fast_us {
             Some(PressCandidate {
                 note_id: None,
+                keysound_note_id: Some(note.id),
                 judge: Judge::EmptyPoor,
                 side: TimingSide::Fast,
                 delta: TimeUs(delta),
@@ -592,7 +647,13 @@ fn ln_final_event(
     }
 }
 
-fn empty_poor(lane: Lane, side: TimingSide, delta: TimeUs, time: TimeUs) -> JudgeOutcome {
+fn empty_poor(
+    lane: Lane,
+    side: TimingSide,
+    delta: TimeUs,
+    time: TimeUs,
+    keysound_note_id: NoteId,
+) -> JudgeOutcome {
     JudgeOutcome {
         events: vec![JudgementEvent {
             note_id: None,
@@ -603,8 +664,10 @@ fn empty_poor(lane: Lane, side: TimingSide, delta: TimeUs, time: TimeUs) -> Judg
             time,
             affects_score: true,
         }],
+        keysounds: vec![KeySoundEvent { note_id: keysound_note_id, time }],
         mine_hits: Vec::new(),
         consumed_input: false,
+        ..Default::default()
     }
 }
 
@@ -789,6 +852,10 @@ mod tests {
         assert_eq!(outcome.events[0].judge, Judge::EmptyPoor);
         assert_eq!(outcome.events[0].side, TimingSide::Slow);
         assert_eq!(outcome.events[0].note_id, None);
+        assert_eq!(
+            outcome.keysounds,
+            vec![KeySoundEvent { note_id: NoteId(1), time: TimeUs(1_150_000) }]
+        );
         assert_eq!(engine.lanes[Lane::Key1.index()].next_note_index, 0);
     }
 
@@ -804,6 +871,10 @@ mod tests {
         assert_eq!(outcome.events[0].judge, Judge::EmptyPoor);
         assert_eq!(outcome.events[0].side, TimingSide::Fast);
         assert_eq!(outcome.events[0].note_id, None);
+        assert_eq!(
+            outcome.keysounds,
+            vec![KeySoundEvent { note_id: NoteId(1), time: TimeUs(700_000) }]
+        );
         assert_eq!(engine.lanes[Lane::Key1.index()].next_note_index, 0);
     }
 
@@ -837,6 +908,10 @@ mod tests {
         assert_eq!(second.events[0].judge, Judge::EmptyPoor);
         assert_eq!(second.events[0].side, TimingSide::Slow);
         assert_eq!(second.events[0].note_id, None);
+        assert_eq!(
+            second.keysounds,
+            vec![KeySoundEvent { note_id: NoteId(1), time: TimeUs(1_005_000) }]
+        );
         assert_eq!(engine.lanes[Lane::Key1.index()].next_note_index, 1);
     }
 

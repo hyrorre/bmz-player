@@ -74,6 +74,7 @@ pub fn resolve_long_channel_lane(
                     end_tick: object.tick,
                     start_time: start.time,
                     end_time: object.time,
+                    end_wav_key: object.wav_key,
                     wav_key: start.wav_key,
                 },
             }),
@@ -107,6 +108,7 @@ pub fn resolve_lnobj_lane(
                         end_tick: object.tick,
                         start_time: start.time,
                         end_time: object.time,
+                        end_wav_key: None,
                         wav_key: start.wav_key,
                     },
                 });
@@ -133,4 +135,66 @@ pub fn resolve_lnobj_lane(
     }
 
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use bmz_core::time::{ChartTick, TimeUs};
+
+    use super::*;
+
+    fn long_object(tick: u64, wav_key: u16) -> LaneObject {
+        LaneObject {
+            lane: Lane::Key1,
+            tick: ChartTick(tick),
+            time: TimeUs(tick as i64 * 1_000),
+            wav_key: Some(wav_key),
+            source: LaneObjectSource::LongChannel,
+        }
+    }
+
+    fn visible_object(tick: u64, wav_key: u16) -> LaneObject {
+        LaneObject {
+            lane: Lane::Key1,
+            tick: ChartTick(tick),
+            time: TimeUs(tick as i64 * 1_000),
+            wav_key: Some(wav_key),
+            source: LaneObjectSource::Visible,
+        }
+    }
+
+    #[test]
+    fn long_channel_pair_keeps_end_wav_key() {
+        let mut warnings = Vec::new();
+        let events = resolve_long_channel_lane(
+            Lane::Key1,
+            &[long_object(0, 7), long_object(96, 8)],
+            &mut warnings,
+        );
+
+        let ResolvedLaneEvent::Long { pair } = &events[0] else {
+            panic!("expected long note event");
+        };
+        assert_eq!(pair.wav_key, Some(7));
+        assert_eq!(pair.end_wav_key, Some(8));
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn lnobj_pair_does_not_use_marker_wav_as_end_keysound() {
+        let mut warnings = Vec::new();
+        let events = resolve_lnobj_lane(
+            Lane::Key1,
+            &[visible_object(0, 7), visible_object(96, 99)],
+            99,
+            &mut warnings,
+        );
+
+        let ResolvedLaneEvent::Long { pair } = &events[0] else {
+            panic!("expected long note event");
+        };
+        assert_eq!(pair.wav_key, Some(7));
+        assert_eq!(pair.end_wav_key, None);
+        assert!(warnings.is_empty());
+    }
 }

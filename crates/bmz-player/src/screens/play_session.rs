@@ -433,6 +433,7 @@ pub fn build_game_session_with_input_backend(
         show_ln_tail_cap: profile.play.show_ln_tail_cap,
         lane_hcn_timer: [None; bmz_core::lane::LANE_COUNT],
         lane_hcn_keysound_muted: [None; bmz_core::lane::LANE_COUNT],
+        pending_keysounds: Vec::new(),
         pending_keysound_volumes: Vec::new(),
         hsfix_index: 0,
         input_timestamp_anchor: None,

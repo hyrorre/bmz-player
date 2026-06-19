@@ -235,5 +235,6 @@ pub struct LongNotePairDraft {
     pub end_tick: ChartTick,
     pub start_time: TimeUs,
     pub end_time: TimeUs,
+    pub end_wav_key: Option<u16>,
     pub wav_key: Option<u16>,
 }
