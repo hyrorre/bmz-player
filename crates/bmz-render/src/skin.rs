@@ -5316,8 +5316,7 @@ impl SkinDocument {
         let padding = number_padding(value);
         let max_digits = value.digit.max(0) as usize;
         let digits = if signed {
-            display_signed_number_digits_for_value(
-                value,
+            display_signed_number_digits(
                 number,
                 max_digits,
                 signed_value_zero_pad(value, padding),
@@ -7724,38 +7723,10 @@ fn display_signed_number_digits(
     zero_pad: bool,
     divx: u32,
 ) -> Vec<u8> {
-    display_signed_number_digits_with_row_order(value, max_digits, zero_pad, divx, false)
-}
-
-fn display_signed_number_digits_for_value(
-    value_def: &SkinValueDef,
-    value: i64,
-    max_digits: usize,
-    zero_pad: bool,
-    divx: u32,
-) -> Vec<u8> {
-    display_signed_number_digits_with_row_order(
-        value,
-        max_digits,
-        zero_pad,
-        divx,
-        value_uses_negative_first_signed_rows(value_def),
-    )
-}
-
-fn display_signed_number_digits_with_row_order(
-    value: i64,
-    max_digits: usize,
-    zero_pad: bool,
-    divx: u32,
-    negative_first: bool,
-) -> Vec<u8> {
     if max_digits == 0 {
         return Vec::new();
     }
-    let negative_row = if negative_first { 0 } else { divx as u8 };
-    let positive_row = if negative_first { divx as u8 } else { 0 };
-    let row_offset = if value < 0 { negative_row } else { positive_row };
+    let row_offset = if value < 0 { divx as u8 } else { 0 };
     let inner_width = max_digits;
     let abs = value.unsigned_abs();
     let abs_text = if zero_pad && inner_width > 0 {
@@ -7777,10 +7748,6 @@ fn display_signed_number_digits_with_row_order(
         }
     }
     digits
-}
-
-fn value_uses_negative_first_signed_rows(value: &SkinValueDef) -> bool {
-    value.ref_id == 154 && value.id == "RANK_Diff_Exscore" && value.divx >= 12 && value.divy >= 2
 }
 
 /// `ref_id` が符号付き表示を要求する Result 系 ref か。
@@ -13959,7 +13926,7 @@ mod tests {
             _ => None,
         });
 
-        assert_eq!(first_digit_uv.map(|uv| uv.y), Some(0.0));
+        assert_eq!(first_digit_uv.map(|uv| uv.y), Some(0.5));
     }
 
     #[test]
@@ -14043,7 +14010,7 @@ mod tests {
             _ => None,
         });
 
-        assert_eq!(first_digit_uv.map(|uv| uv.y), Some(0.0));
+        assert_eq!(first_digit_uv.map(|uv| uv.y), Some(0.5));
         assert!(
             items.iter().any(|item| matches!(
                 item,
@@ -14135,7 +14102,7 @@ mod tests {
 
         let (state, _) = document.select_draw_state(&snapshot, None);
         assert_eq!(skin_state_number(154, &state), Some(-501));
-        assert_eq!(first_digit_uv.map(|uv| uv.y), Some(0.0));
+        assert_eq!(first_digit_uv.map(|uv| uv.y), Some(0.5));
         assert!(
             items.iter().any(|item| matches!(
                 item,
@@ -19275,35 +19242,8 @@ mod tests {
         // NUMBER_DIFF_NEXTRANK (154) も同じ符号セル付き mimage レイアウトを使う。
         assert_eq!(display_signed_number_digits(-34, 4, false, 12), vec![23, 15, 16]);
         assert!(ref_id_is_signed(154));
-        let rank_diff_value = SkinValueDef {
-            id: "RANK_Diff_Exscore".to_string(),
-            src: "num".to_string(),
-            x: 0,
-            y: 0,
-            w: 0,
-            h: 0,
-            divx: 12,
-            divy: 2,
-            timer: None,
-            cycle: 0,
-            align: 0,
-            digit: 4,
-            padding: 0,
-            zeropadding: 0,
-            space: 0,
-            ref_id: 154,
-            expr: String::new(),
-            value_expr: String::new(),
-            offset: Vec::new(),
-        };
-        assert_eq!(
-            display_signed_number_digits_for_value(&rank_diff_value, -34, 4, false, 12),
-            vec![11, 3, 4]
-        );
-        assert_eq!(
-            display_signed_number_digits_for_value(&rank_diff_value, 34, 4, false, 12),
-            vec![23, 15, 16]
-        );
+        assert_eq!(display_signed_number_digits(34, 4, false, 12), vec![11, 3, 4]);
+        assert_eq!(display_signed_number_digits(0, 4, false, 12), vec![11, 0]);
 
         let score_diff_value = SkinValueDef {
             id: "score_diff_mybest".to_string(),
@@ -19329,10 +19269,7 @@ mod tests {
         let score_diff_padding = number_padding(&score_diff_value);
         assert!(score_diff_padding.is_zero_padding());
         assert!(!signed_value_zero_pad(&score_diff_value, score_diff_padding));
-        assert_eq!(
-            display_signed_number_digits_for_value(&score_diff_value, 16, 5, false, 12),
-            vec![11, 1, 6]
-        );
+        assert_eq!(display_signed_number_digits(16, 5, false, 12), vec![11, 1, 6]);
 
         let select_detail =
             SkinDrawState { select_screen: true, select_option_panel: 3, ..Default::default() };
