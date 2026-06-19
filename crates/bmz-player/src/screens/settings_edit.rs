@@ -204,7 +204,7 @@ fn classify_scratch_control(
 ) {
     if control.contains("ScratchDown")
         || control.ends_with('+')
-        || control == "AxisLeftX+"
+        || control == "Axis1+"
         || control == "Button8"
     {
         increase.insert(control.to_string());
@@ -212,7 +212,7 @@ fn classify_scratch_control(
     }
     if control.contains("ScratchUp")
         || control.ends_with('-')
-        || control == "AxisLeftX-"
+        || control == "Axis1-"
         || control == "Button9"
     {
         decrease.insert(control.to_string());
@@ -532,7 +532,7 @@ mod tests {
         assert!(bindings.is_confirm("C"));
         assert!(bindings.is_back("S"));
         assert!(bindings.is_back("D"));
-        assert!(bindings.is_increase("AxisLeftX+") || bindings.is_increase("LShift"));
+        assert!(bindings.is_increase("Axis1+") || bindings.is_increase("LShift"));
     }
 
     #[test]

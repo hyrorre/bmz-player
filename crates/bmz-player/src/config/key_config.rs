@@ -172,16 +172,16 @@ pub fn action_label(action: InputActionConfig) -> &'static str {
 pub fn is_scratch_up_control(control: &str) -> bool {
     control.contains("ScratchUp")
         || control.ends_with('-')
-        || control == "AxisLeftX-"
-        || control == "AxisRightX-"
+        || control == "Axis1-"
+        || control == "Axis2-"
         || control == "Button9"
 }
 
 pub fn is_scratch_down_control(control: &str) -> bool {
     control.contains("ScratchDown")
         || control.ends_with('+')
-        || control == "AxisLeftX+"
-        || control == "AxisRightX+"
+        || control == "Axis1+"
+        || control == "Axis2+"
         || control == "Button8"
 }
 
@@ -1153,14 +1153,14 @@ mod tests {
             &mut profile.input,
             KeyMode::K7,
             scratch_target(LaneConfig::Scratch, ScratchDirection::Up, KeyBindingSlot::Controller),
-            "AxisLeftX-",
+            "Axis1-",
         )
         .unwrap();
         apply_play_binding(
             &mut profile.input,
             KeyMode::K7,
             scratch_target(LaneConfig::Scratch, ScratchDirection::Down, KeyBindingSlot::Controller),
-            "AxisLeftX+",
+            "Axis1+",
         )
         .unwrap();
         assert_eq!(
@@ -1173,7 +1173,7 @@ mod tests {
                     KeyBindingSlot::Controller,
                 ),
             ),
-            "AxisLeftX-"
+            "Axis1-"
         );
         assert_eq!(
             format_play_binding(
@@ -1185,7 +1185,7 @@ mod tests {
                     KeyBindingSlot::Controller,
                 ),
             ),
-            "AxisLeftX+"
+            "Axis1+"
         );
     }
 
@@ -1198,14 +1198,14 @@ mod tests {
             &mut profile.input,
             KeyMode::K7,
             scratch_target(LaneConfig::Scratch, ScratchDirection::Up, KeyBindingSlot::Controller),
-            "AxisLeftZ+",
+            "Axis5+",
         )
         .unwrap();
         apply_play_binding(
             &mut profile.input,
             KeyMode::K7,
             scratch_target(LaneConfig::Scratch, ScratchDirection::Down, KeyBindingSlot::Controller),
-            "AxisLeftZ-",
+            "Axis5-",
         )
         .unwrap();
         assert_eq!(
@@ -1218,7 +1218,7 @@ mod tests {
                     KeyBindingSlot::Controller,
                 ),
             ),
-            "AxisLeftZ+"
+            "Axis5+"
         );
         assert_eq!(
             format_play_binding(
@@ -1230,7 +1230,7 @@ mod tests {
                     KeyBindingSlot::Controller,
                 ),
             ),
-            "AxisLeftZ-"
+            "Axis5-"
         );
     }
 

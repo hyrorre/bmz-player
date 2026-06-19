@@ -1031,8 +1031,8 @@ pub fn default_keyboard_bindings() -> Vec<BindingConfigEntry> {
 
 pub fn default_gamepad_bindings() -> Vec<BindingConfigEntry> {
     vec![
-        gamepad_binding("AxisLeftX+", LaneConfig::Scratch),
-        gamepad_binding("AxisLeftX-", LaneConfig::Scratch),
+        gamepad_binding("Axis1+", LaneConfig::Scratch),
+        gamepad_binding("Axis1-", LaneConfig::Scratch),
         gamepad_binding("Button1", LaneConfig::Key1),
         gamepad_binding("Button2", LaneConfig::Key2),
         gamepad_binding("Button3", LaneConfig::Key3),

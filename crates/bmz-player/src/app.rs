@@ -338,6 +338,8 @@ struct WinitApp {
     select_analog_last_tick_at: Option<Instant>,
     /// キーコンフィグ確定/キャンセル直後、スクラッチが止まるまでアナログスクロールを抑止する。
     select_analog_suppress_until_idle: bool,
+    play_analog_scroll_buffer: i32,
+    play_analog_last_tick_at: Option<Instant>,
     smoke_exit_after_frames: Option<u32>,
     smoke_exit_after_result_frames: Option<u32>,
     smoke_exit_on_result: bool,
@@ -1636,6 +1638,8 @@ impl WinitApp {
             select_analog_scroll_buffer: 0,
             select_analog_last_tick_at: None,
             select_analog_suppress_until_idle: false,
+            play_analog_scroll_buffer: 0,
+            play_analog_last_tick_at: None,
             smoke_exit_after_frames: options.smoke_exit_after_frames,
             smoke_exit_after_result_frames: options.smoke_exit_after_result_frames,
             smoke_exit_on_result: options.smoke_exit_on_result,
@@ -2827,6 +2831,7 @@ impl WinitApp {
         if self.select_option_panel != panel {
             self.select_option_panel = panel;
             self.option_panel_started_at = Instant::now();
+            self.reset_select_analog_scroll();
         }
     }
 
@@ -3751,6 +3756,11 @@ impl WinitApp {
     fn poll_gamepad_events(&mut self) {
         let Some(gilrs) = &mut self.gilrs else { return };
         let output = gilrs.poll();
+        if self.should_log_gamepad_key_config_raw_input() {
+            for event in &output.raw_events {
+                log_gilrs_key_config_raw_event(event);
+            }
+        }
         for event in &output.buttons {
             let device_event = crate::input::gilrs::to_device_input_event(event);
             if let Some(active_play) = &self.active_play {
@@ -3766,8 +3776,69 @@ impl WinitApp {
                 self.apply_key_config_gamepad(&control);
                 continue;
             }
-            self.accumulate_select_analog_ticks(tick.name, tick.ticks);
+            self.route_gamepad_axis_ticks(&tick.name, tick.ticks);
         }
+    }
+
+    fn should_log_gamepad_key_config_raw_input(&self) -> bool {
+        self.key_config_edit.as_ref().is_some_and(|session| {
+            session.listening && session.target.slot() == KeyBindingSlot::Controller
+        })
+    }
+
+    fn route_gamepad_axis_ticks(&mut self, axis: &str, ticks: i32) {
+        if self.apply_play_analog_option_ticks(axis, ticks) {
+            return;
+        }
+        self.accumulate_select_analog_ticks(axis, ticks);
+    }
+
+    fn apply_play_analog_option_ticks(&mut self, axis: &str, ticks: i32) -> bool {
+        let Some(delta) = play_analog_lane_cover_delta(axis, ticks, &self.select_keys) else {
+            return false;
+        };
+        if !self
+            .active_play
+            .as_ref()
+            .is_some_and(|active_play| active_play.running.session.lane_cover_changing)
+        {
+            self.reset_play_analog_scroll();
+            return false;
+        }
+
+        let now = Instant::now();
+        let idle = self.play_analog_last_tick_at.is_none_or(|t| {
+            now.duration_since(t) > Duration::from_millis(SELECT_ANALOG_SCROLL_TOLERANCE_MS)
+        });
+        self.play_analog_last_tick_at = Some(now);
+        if idle {
+            self.play_analog_scroll_buffer = 0;
+        }
+        self.play_analog_scroll_buffer += delta;
+
+        let ticks_per_scroll = self.boot.profile_config.input.analog_ticks_per_scroll.max(1) as i32;
+        let steps = take_analog_scroll_steps(&mut self.play_analog_scroll_buffer, ticks_per_scroll);
+        if steps == 0 {
+            return true;
+        }
+
+        let speed_locked = self.active_course.as_ref().is_some_and(|c| {
+            c.definition.constraints.speed == bmz_core::course::CourseSpeedConstraint::NoSpeed
+        });
+        let change = if steps > 0 { LaneCoverChange::Down } else { LaneCoverChange::Up };
+        let delta = lane_cover_change_step(change) * steps.abs() as f32;
+        if let Some(active_play) = &mut self.active_play {
+            let session = &mut active_play.running.session;
+            apply_lane_cover_step_to_session(session, delta, speed_locked);
+            tracing::info!(
+                lane_cover = session.lane_cover,
+                lift = session.lift,
+                hispeed = session.hispeed,
+                "adjusted lane cover from analog scratch"
+            );
+        }
+        self.update_pre_ready_play_snapshot_options();
+        true
     }
 
     /// 選曲画面のアナログスクラッチ tick を蓄積する。回転量比例スクロール用。
@@ -3776,7 +3847,7 @@ impl WinitApp {
             || self.active_play.is_some()
             || self.pending_decide.is_some()
             || self.pending_play_start.is_some()
-            || self.select_option_panel != 0
+            || self.select_option_panel > 1
             || self.key_config_edit.is_some()
             || self.settings_edit.is_some()
         {
@@ -3807,21 +3878,49 @@ impl WinitApp {
         self.select_analog_last_tick_at = Some(Instant::now());
     }
 
+    fn reset_select_analog_scroll(&mut self) {
+        self.select_analog_scroll_buffer = 0;
+        self.select_analog_last_tick_at = None;
+        self.select_analog_suppress_until_idle = false;
+    }
+
+    fn reset_play_analog_scroll(&mut self) {
+        self.play_analog_scroll_buffer = 0;
+        self.play_analog_last_tick_at = None;
+    }
+
     /// 蓄積したアナログ tick を analog_ticks_per_scroll ごとに 1 移動へ変換する。
     /// beatoraja MusicSelectInputProcessor の analogScrollBuffer と同じ仕組み。
     fn advance_select_analog_scroll(&mut self) {
         if !matches!(self.view_state(), AppViewState::Select) {
-            self.select_analog_scroll_buffer = 0;
-            self.select_analog_last_tick_at = None;
+            self.reset_select_analog_scroll();
+            return;
+        }
+        if self.select_option_panel > 1
+            || self.key_config_edit.is_some()
+            || self.settings_edit.is_some()
+        {
+            self.reset_select_analog_scroll();
             return;
         }
         let ticks_per_scroll = self.boot.profile_config.input.analog_ticks_per_scroll.max(1) as i32;
         let mov = take_analog_scroll_steps(&mut self.select_analog_scroll_buffer, ticks_per_scroll);
-        for _ in 0..mov.abs() {
-            self.move_selection_with_duration(
-                if mov > 0 { SelectMove::Next } else { SelectMove::Previous },
-                select_analog_scroll_duration(mov),
-            );
+        if mov == 0 {
+            return;
+        }
+        if self.select_option_panel == 1 {
+            let cycle = if mov > 0 { TargetCycle::Next } else { TargetCycle::Previous };
+            for _ in 0..mov.abs() {
+                self.apply_target_option_cycle(cycle);
+            }
+            self.play_system_sound(crate::system_sound::SoundType::OptionChange);
+        } else {
+            for _ in 0..mov.abs() {
+                self.move_selection_with_duration(
+                    if mov > 0 { SelectMove::Next } else { SelectMove::Previous },
+                    select_analog_scroll_duration(mov),
+                );
+            }
         }
     }
 
@@ -3845,6 +3944,9 @@ impl WinitApp {
                 && active_play.running.session.lane_cover_changing
                 && let Some(action) = play_option_control(button, &self.select_keys)
             {
+                if button.starts_with("Axis") && matches!(action, PlayOptionControl::LaneCover(_)) {
+                    return;
+                }
                 if apply_play_option_control_to_session(
                     &mut active_play.running.session,
                     action,
@@ -4022,6 +4124,9 @@ impl WinitApp {
             if self.select_option_panel == 1
                 && let Some(cycle) = target_cycle_from_control(button, &self.select_keys)
             {
+                if button.starts_with("Axis") {
+                    return;
+                }
                 self.apply_target_option_cycle(cycle);
                 self.play_system_sound(crate::system_sound::SoundType::OptionChange);
                 return;
@@ -4048,30 +4153,7 @@ impl WinitApp {
                 return;
             }
             if pressed {
-                let action = match button {
-                    "DPadUp" => Some(SelectAction::Move(SelectMove::Previous)),
-                    "DPadDown" => Some(SelectAction::Move(SelectMove::Next)),
-                    "Select" => Some(SelectAction::ExitFolder),
-                    "Button1" => Some(SelectAction::EnterOrPlay),
-                    _ => {
-                        if self.select_keys.is_select_scratch_up(button) {
-                            if self.select_keys.is_select_scratch_down(button) {
-                                Some(SelectAction::Move(SelectMove::Next))
-                            } else {
-                                Some(SelectAction::Move(SelectMove::Previous))
-                            }
-                        } else if self.select_keys.is_select_scratch_down(button) {
-                            Some(SelectAction::Move(SelectMove::Next))
-                        } else if self.select_keys.is_enter(button) {
-                            Some(SelectAction::EnterOrPlay)
-                        } else if self.select_keys.is_back(button) {
-                            Some(SelectAction::ExitFolder)
-                        } else {
-                            None
-                        }
-                    }
-                };
-
+                let action = select_control_action(button, &self.select_keys);
                 if let Some(action) = action {
                     match action {
                         SelectAction::EnterOrPlay => self.enter_or_play_selected(),
@@ -8021,6 +8103,9 @@ impl WinitApp {
         if !self.select_keys.is_start(control) {
             return false;
         }
+        if self.play_e1_held != pressed {
+            self.reset_play_analog_scroll();
+        }
         self.play_e1_held = pressed;
         if let Some(active_play) = &mut self.active_play {
             active_play.running.session.lane_cover_changing = pressed;
@@ -11793,6 +11878,48 @@ fn select_analog_scroll_duration(mov: i32) -> Duration {
     Duration::from_millis((120 / remaining / remaining) as u64)
 }
 
+fn log_gilrs_key_config_raw_event(event: &crate::input::gilrs::GilrsRawEvent) {
+    let mapped_control = event.mapped_control.as_deref().unwrap_or("<unmapped>");
+    tracing::info!(
+        device_id = event.device_id.0,
+        kind = event.kind.as_str(),
+        logical = %event.logical,
+        raw_code = event.raw_code.value,
+        raw_code_label = %event.raw_code.label,
+        mapped_control = %mapped_control,
+        pressed = ?event.pressed,
+        value = ?event.value,
+        ticks = ?event.ticks,
+        "gilrs key config input"
+    );
+}
+
+fn select_control_action(control: &str, bindings: &SelectKeyBindings) -> Option<SelectAction> {
+    match control {
+        "DPadUp" => Some(SelectAction::Move(SelectMove::Previous)),
+        "DPadDown" => Some(SelectAction::Move(SelectMove::Next)),
+        "Select" => Some(SelectAction::ExitFolder),
+        "Button1" => Some(SelectAction::EnterOrPlay),
+        _ => {
+            if bindings.is_select_scratch_up(control) {
+                if bindings.is_select_scratch_down(control) {
+                    Some(SelectAction::Move(SelectMove::Next))
+                } else {
+                    Some(SelectAction::Move(SelectMove::Previous))
+                }
+            } else if bindings.is_select_scratch_down(control) {
+                Some(SelectAction::Move(SelectMove::Next))
+            } else if bindings.is_enter(control) {
+                Some(SelectAction::EnterOrPlay)
+            } else if bindings.is_back(control) {
+                Some(SelectAction::ExitFolder)
+            } else {
+                None
+            }
+        }
+    }
+}
+
 fn select_action(
     physical_key: PhysicalKey,
     state: ElementState,
@@ -13178,6 +13305,24 @@ fn select_analog_scroll_delta(axis: &str, ticks: i32, bindings: &SelectKeyBindin
     }
 }
 
+fn play_analog_lane_cover_delta(
+    axis: &str,
+    ticks: i32,
+    bindings: &SelectKeyBindings,
+) -> Option<i32> {
+    if ticks == 0 {
+        return None;
+    }
+    let control = format!("{}{}", axis, if ticks > 0 { "+" } else { "-" });
+    if bindings.is_scratch_down(&control) {
+        Some(ticks.abs())
+    } else if bindings.is_scratch_up(&control) {
+        Some(-ticks.abs())
+    } else {
+        None
+    }
+}
+
 /// アナログスクロールバッファへ delta を蓄積する。
 /// suppress 中は idle (200ms 以上の tick 途切れ) を観測するまで delta を捨てる。
 /// idle 後の最初の delta から通常蓄積に戻る。
@@ -14303,6 +14448,32 @@ mod tests {
     }
 
     #[test]
+    fn select_control_action_uses_key2_binding_for_controller_back() {
+        let input = crate::config::play_input::default_profile_input();
+        let keys = SelectKeyBindings::from_profile(&input);
+
+        assert!(keys.is_back("Button2"));
+        assert_eq!(select_control_action("Button2", &keys), Some(SelectAction::ExitFolder));
+        assert_eq!(select_control_action("Button1", &keys), Some(SelectAction::EnterOrPlay));
+    }
+
+    #[test]
+    fn select_control_action_does_not_hardcode_button2_as_back() {
+        let mut input = crate::config::play_input::default_profile_input();
+        let play7 = input.play.get_mut(KeyMode::K7.play_map_key()).expect("7K bindings");
+        for entry in &mut play7.bindings {
+            if entry.device == "gamepad" && entry.control == "Button2" {
+                entry.lane = Some(LaneConfig::Key3);
+            }
+        }
+        let keys = SelectKeyBindings::from_profile(&input);
+
+        assert!(keys.is_enter("Button2"));
+        assert_eq!(select_control_action("Button2", &keys), Some(SelectAction::EnterOrPlay));
+        assert_eq!(select_control_action("Button1", &keys), Some(SelectAction::EnterOrPlay));
+    }
+
+    #[test]
     fn key9_select_input_maps_configured_lane_keys() {
         let keys = select_keys_9k();
 
@@ -14475,12 +14646,24 @@ mod tests {
         let gamepad_keys = SelectKeyBindings::from_profile(
             &ProfileConfig::new_default("default", "Default", 1).input,
         );
-        // AxisLeftX- = scratch up (Previous = 負), AxisLeftX+ = scratch down (Next = 正)
-        assert_eq!(select_analog_scroll_delta("AxisLeftX", -4, &gamepad_keys), Some(-4));
-        assert_eq!(select_analog_scroll_delta("AxisLeftX", 4, &gamepad_keys), Some(4));
-        assert_eq!(select_analog_scroll_delta("AxisRightX", -4, &gamepad_keys), None);
-        assert_eq!(select_analog_scroll_delta("AxisLeftX", 0, &gamepad_keys), None);
-        assert_eq!(select_analog_scroll_delta("AxisRightY", 4, &gamepad_keys), None);
+        // Axis1- = scratch up (Previous = 負), Axis1+ = scratch down (Next = 正)
+        assert_eq!(select_analog_scroll_delta("Axis1", -4, &gamepad_keys), Some(-4));
+        assert_eq!(select_analog_scroll_delta("Axis1", 4, &gamepad_keys), Some(4));
+        assert_eq!(select_analog_scroll_delta("Axis2", -4, &gamepad_keys), None);
+        assert_eq!(select_analog_scroll_delta("Axis1", 0, &gamepad_keys), None);
+        assert_eq!(select_analog_scroll_delta("Axis3", 4, &gamepad_keys), None);
+    }
+
+    #[test]
+    fn play_analog_lane_cover_delta_maps_scratch_bindings() {
+        let gamepad_keys = SelectKeyBindings::from_profile(
+            &ProfileConfig::new_default("default", "Default", 1).input,
+        );
+
+        assert_eq!(play_analog_lane_cover_delta("Axis1", -4, &gamepad_keys), Some(-4));
+        assert_eq!(play_analog_lane_cover_delta("Axis1", 4, &gamepad_keys), Some(4));
+        assert_eq!(play_analog_lane_cover_delta("Axis2", -4, &gamepad_keys), None);
+        assert_eq!(play_analog_lane_cover_delta("Axis1", 0, &gamepad_keys), None);
     }
 
     #[test]
@@ -14534,13 +14717,10 @@ mod tests {
         );
         assert_eq!(target_cycle_from_control("ScratchUp", &keys), Some(TargetCycle::Previous));
         assert_eq!(target_cycle_from_control("ScratchDown", &keys), Some(TargetCycle::Next));
-        assert_eq!(
-            target_cycle_from_control("AxisLeftX-", &gamepad_keys),
-            Some(TargetCycle::Previous)
-        );
-        assert_eq!(target_cycle_from_control("AxisLeftX+", &gamepad_keys), Some(TargetCycle::Next));
-        assert_eq!(target_cycle_from_control("AxisRightX-", &gamepad_keys), None);
-        assert_eq!(target_cycle_from_control("AxisRightX+", &gamepad_keys), None);
+        assert_eq!(target_cycle_from_control("Axis1-", &gamepad_keys), Some(TargetCycle::Previous));
+        assert_eq!(target_cycle_from_control("Axis1+", &gamepad_keys), Some(TargetCycle::Next));
+        assert_eq!(target_cycle_from_control("Axis2-", &gamepad_keys), None);
+        assert_eq!(target_cycle_from_control("Axis2+", &gamepad_keys), None);
     }
 
     #[test]
@@ -14980,15 +15160,15 @@ mod tests {
             Some(PlayOptionControl::Hispeed(HispeedChange::Up))
         );
         assert_eq!(
-            play_option_control("AxisLeftX-", &keys),
+            play_option_control("Axis1-", &keys),
             Some(PlayOptionControl::LaneCover(LaneCoverChange::Up))
         );
         assert_eq!(
-            play_option_control("AxisLeftX+", &keys),
+            play_option_control("Axis1+", &keys),
             Some(PlayOptionControl::LaneCover(LaneCoverChange::Down))
         );
-        assert_eq!(play_option_control("AxisRightX-", &keys), None);
-        assert_eq!(play_option_control("AxisRightX+", &keys), None);
+        assert_eq!(play_option_control("Axis2-", &keys), None);
+        assert_eq!(play_option_control("Axis2+", &keys), None);
     }
 
     #[test]
