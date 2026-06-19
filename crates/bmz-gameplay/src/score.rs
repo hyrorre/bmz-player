@@ -42,6 +42,10 @@ impl ScoreState {
     }
 
     pub fn apply(&mut self, event: &JudgementEvent) {
+        if !event.affects_score {
+            return;
+        }
+
         self.increment_judge(event.judge, event.side);
 
         if event.note_id.is_some() {
@@ -162,7 +166,15 @@ mod tests {
     use super::*;
 
     fn event(judge: Judge, side: TimingSide, note_id: Option<NoteId>) -> JudgementEvent {
-        JudgementEvent { note_id, lane: Lane::Key1, judge, side, delta: TimeUs(0), time: TimeUs(0) }
+        JudgementEvent {
+            note_id,
+            lane: Lane::Key1,
+            judge,
+            side,
+            delta: TimeUs(0),
+            time: TimeUs(0),
+            affects_score: true,
+        }
     }
 
     #[test]
@@ -198,6 +210,19 @@ mod tests {
         score.apply(&event(Judge::EmptyPoor, TimingSide::Slow, None));
 
         assert_eq!(score.combo, 1);
+    }
+
+    #[test]
+    fn non_scoring_event_does_not_change_score_state() {
+        let mut score = ScoreState::default();
+        let mut event = event(Judge::PGreat, TimingSide::Slow, Some(NoteId(1)));
+        event.affects_score = false;
+
+        score.apply(&event);
+
+        assert_eq!(score.past_notes, 0);
+        assert_eq!(score.combo, 0);
+        assert_eq!(score.ex_score(), 0);
     }
 
     #[test]

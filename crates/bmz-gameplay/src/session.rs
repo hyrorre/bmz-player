@@ -267,18 +267,20 @@ pub fn apply_judge_outcome(
 ) -> Vec<JudgementEvent> {
     let mut events = Vec::with_capacity(outcome.events.len());
     for event in outcome.events {
-        session.score.apply(&event);
-        session.gauge.apply_judge(event.judge, 1.0);
-        if let Some(note_id) = event.note_id {
-            session.result_judgements.insert(
-                note_id,
-                ResultJudgementDetail {
-                    judge: event.judge,
-                    side: event.side,
-                    delta: event.delta,
-                    time: event.time,
-                },
-            );
+        if event.affects_score {
+            session.score.apply(&event);
+            session.gauge.apply_judge(event.judge, 1.0);
+            if let Some(note_id) = event.note_id {
+                session.result_judgements.insert(
+                    note_id,
+                    ResultJudgementDetail {
+                        judge: event.judge,
+                        side: event.side,
+                        delta: event.delta,
+                        time: event.time,
+                    },
+                );
+            }
         }
         events.push(event);
     }
@@ -348,7 +350,10 @@ pub fn apply_input_offset_auto_adjust(session: &mut GameSession, events: &[Judge
     // beatoraja/LR2-style judge timing adjustment shifts the note display timing.
     // The low-level input offset remains a separate BMZ-only calibration knob.
     for event in events {
-        if event.note_id.is_none() || !counts_for_input_offset_auto_adjust(event.judge) {
+        if !event.affects_score
+            || event.note_id.is_none()
+            || !counts_for_input_offset_auto_adjust(event.judge)
+        {
             continue;
         }
         state.sum_delta_us = state.sum_delta_us.saturating_add(event.delta.0);
@@ -375,9 +380,12 @@ pub fn apply_input_offset_auto_adjust(session: &mut GameSession, events: &[Judge
 
 pub fn update_recent_judgements(session: &mut GameSession, events: &[JudgementEvent], now: TimeUs) {
     for event in events {
+        if !event.affects_score {
+            continue;
+        }
         session.hit_error_ring.push_judgement(event.judge, event.delta.0);
     }
-    session.recent_judgements.extend(events.iter().cloned());
+    session.recent_judgements.extend(events.iter().filter(|event| event.affects_score).cloned());
     session.recent_judgements.retain(|event| now.0 <= event.time.0 + JUDGEMENT_DISPLAY_US);
 }
 
@@ -822,7 +830,7 @@ fn update_full_combo_timer(session: &mut GameSession, judgements: &[JudgementEve
     session.full_combo_started_at = judgements
         .iter()
         .rev()
-        .find(|event| event.note_id.is_some())
+        .find(|event| event.affects_score && event.note_id.is_some())
         .map(|event| event.time)
         .or_else(|| Some(session.audio_clock.now()));
 }
@@ -1077,6 +1085,37 @@ mod tests {
         assert!(session.pending_keysound_volumes.is_empty());
     }
 
+    #[test]
+    fn ln_mode_scores_once_at_long_note_end() {
+        let mut chart = chart_with_hcn_long_note();
+        chart.metadata.long_note_mode = LongNoteMode::Ln;
+        chart.long_notes[0].mode = Some(LongNoteMode::Ln);
+        let mut session = session_with_autoplay(chart);
+        session.autoplay = None;
+
+        let press = session.judge.process_input(
+            &session.chart,
+            InputEvent {
+                lane: Lane::Key1,
+                kind: InputKind::Press,
+                time: TimeUs(0),
+                source: InputSource::Human,
+                device_kind: InputDeviceKind::Keyboard,
+                scratch_direction: None,
+            },
+        );
+        apply_judge_outcome(&mut session, press);
+        assert_eq!(session.score.past_notes, 0);
+        assert_eq!(session.score.combo, 0);
+
+        let end = session.judge.process_misses(&session.chart, TimeUs(1_000_001));
+        apply_judge_outcome(&mut session, end);
+
+        assert_eq!(session.score.past_notes, 1);
+        assert_eq!(session.score.combo, 1);
+        assert_eq!(session.score.ex_score(), 2);
+    }
+
     fn chart_with_mine(time: TimeUs, damage: u16) -> PlayableChart {
         let mut chart = chart_with_keysound();
         chart.lane_notes = std::array::from_fn(|_| Vec::new());
@@ -1180,6 +1219,7 @@ mod tests {
             side: TimingSide::Slow,
             delta: TimeUs(0),
             time: TimeUs(0),
+            affects_score: true,
         };
 
         update_recent_judgements(&mut session, &[event], TimeUs(0));
@@ -1676,6 +1716,7 @@ mod tests {
             side: if delta_us < 0 { TimingSide::Fast } else { TimingSide::Slow },
             delta: TimeUs(delta_us),
             time: TimeUs(0),
+            affects_score: true,
         }
     }
 }

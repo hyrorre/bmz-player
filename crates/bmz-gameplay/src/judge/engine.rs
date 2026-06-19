@@ -79,6 +79,7 @@ impl JudgeEngine {
                     side: TimingSide::Slow,
                     delta: TimeUs(now.0 - note.time.0),
                     time: now,
+                    affects_score: true,
                 });
             }
             advance_press_cursor(chart, lane, &mut lane_state.next_note_index, &self.judged_notes);
@@ -86,8 +87,16 @@ impl JudgeEngine {
             if let Some(active) = lane_state.active_long {
                 match active.mode {
                     LongNoteMode::Ln => {
-                        if now.0 >= active.end.end_time.0 {
+                        if now.0 > active.end.end_time.0 {
                             lane_state.active_long = None;
+                            self.judged_notes.insert(active.start_note_id, active.start_judge);
+                            outcome.events.push(ln_final_event(
+                                lane,
+                                active,
+                                active.start_judge,
+                                active.start_delta,
+                                now,
+                            ));
                         }
                     }
                     LongNoteMode::Cn | LongNoteMode::Hcn => {
@@ -101,6 +110,7 @@ impl JudgeEngine {
                                 side: TimingSide::Slow,
                                 delta: TimeUs(now.0 - active.end.end_time.0),
                                 time: now,
+                                affects_score: true,
                             });
                         }
                     }
@@ -204,7 +214,8 @@ impl JudgeEngine {
             self.judged_notes.insert(note.id, candidate.judge);
 
             if note.kind == NoteKind::LongStart
-                && let Some(active) = make_active_long(chart, note.id, input.time)
+                && let Some(active) =
+                    make_active_long(chart, note.id, candidate.judge, candidate.delta, input.time)
             {
                 lane_state.active_long = Some(active);
             }
@@ -223,6 +234,8 @@ impl JudgeEngine {
                     side: candidate.side,
                     delta: candidate.delta,
                     time: input.time,
+                    affects_score: note.kind != NoteKind::LongStart
+                        || active_long_scores_on_start(chart, note.id),
                 }],
                 mine_hits,
                 consumed_input: true,
@@ -243,19 +256,18 @@ impl JudgeEngine {
         match active.mode {
             LongNoteMode::Ln => {
                 lane_state.active_long = None;
-                if input.time.0 >= active.end.end_time.0 {
-                    return JudgeOutcome::default();
-                }
-                self.judged_notes.insert(active.start_note_id, Judge::Poor);
+                let (judge, delta) = if input.time.0 >= active.end.end_time.0 {
+                    (active.start_judge, active.start_delta)
+                } else {
+                    let end_delta = TimeUs(input.time.0 - active.end.end_time.0);
+                    let windows = self.window_set.long_end_window(input.lane);
+                    let end_judge =
+                        classify_normal_delta(end_delta.0, windows).unwrap_or(Judge::Poor);
+                    combine_ln_judgement(active, end_judge, end_delta)
+                };
+                self.judged_notes.insert(active.start_note_id, judge);
                 JudgeOutcome {
-                    events: vec![JudgementEvent {
-                        note_id: Some(active.start_note_id),
-                        lane: input.lane,
-                        judge: Judge::Poor,
-                        side: TimingSide::Fast,
-                        delta: TimeUs(input.time.0 - active.end.end_time.0),
-                        time: input.time,
-                    }],
+                    events: vec![ln_final_event(input.lane, active, judge, delta, input.time)],
                     mine_hits: Vec::new(),
                     consumed_input: true,
                 }
@@ -276,6 +288,7 @@ impl JudgeEngine {
                         side,
                         delta: TimeUs(delta),
                         time: input.time,
+                        affects_score: true,
                     }],
                     mine_hits: Vec::new(),
                     consumed_input: true,
@@ -416,6 +429,38 @@ fn choose_closest_empty_poor(slot: &mut Option<PressCandidate>, candidate: Press
     }
 }
 
+fn combine_ln_judgement(
+    active: ActiveLongNote,
+    end_judge: Judge,
+    end_delta: TimeUs,
+) -> (Judge, TimeUs) {
+    let mut judge = worse_judge(active.start_judge, end_judge);
+    let mut delta =
+        if active.start_delta.0.abs() > end_delta.0.abs() { active.start_delta } else { end_delta };
+
+    if end_delta.0 < 0 && matches!(judge, Judge::Bad | Judge::Poor) {
+        judge = Judge::Bad;
+        delta = end_delta;
+    }
+
+    (judge, delta)
+}
+
+fn worse_judge(left: Judge, right: Judge) -> Judge {
+    if judge_order(left) >= judge_order(right) { left } else { right }
+}
+
+fn judge_order(judge: Judge) -> u8 {
+    match judge {
+        Judge::PGreat => 0,
+        Judge::Great => 1,
+        Judge::Good => 2,
+        Judge::Bad => 3,
+        Judge::Poor => 4,
+        Judge::EmptyPoor => 5,
+    }
+}
+
 fn next_unjudged_press_reference_note<'a>(
     chart: &'a PlayableChart,
     lane: Lane,
@@ -497,6 +542,8 @@ fn side_from_delta(delta_us: i64) -> TimingSide {
 fn make_active_long(
     chart: &PlayableChart,
     start_note_id: NoteId,
+    start_judge: Judge,
+    start_delta: TimeUs,
     started_at: TimeUs,
 ) -> Option<ActiveLongNote> {
     let (pair_index, pair) = chart
@@ -509,6 +556,8 @@ fn make_active_long(
         pair_index,
         mode: pair.mode.unwrap_or(chart.metadata.long_note_mode),
         start_note_id,
+        start_judge,
+        start_delta,
         end: LongNoteEndRef {
             end_note_id: pair.end_note_id,
             end_tick: pair.end_tick,
@@ -516,6 +565,33 @@ fn make_active_long(
         },
         started_at,
     })
+}
+
+fn active_long_scores_on_start(chart: &PlayableChart, start_note_id: NoteId) -> bool {
+    chart
+        .long_notes
+        .iter()
+        .find(|pair| pair.start_note_id == start_note_id)
+        .map(|pair| pair.mode.unwrap_or(chart.metadata.long_note_mode) != LongNoteMode::Ln)
+        .unwrap_or(true)
+}
+
+fn ln_final_event(
+    lane: Lane,
+    active: ActiveLongNote,
+    judge: Judge,
+    delta: TimeUs,
+    time: TimeUs,
+) -> JudgementEvent {
+    JudgementEvent {
+        note_id: Some(active.start_note_id),
+        lane,
+        judge,
+        side: side_from_delta(delta.0),
+        delta,
+        time,
+        affects_score: true,
+    }
 }
 
 fn empty_poor(lane: Lane, side: TimingSide, delta: TimeUs, time: TimeUs) -> JudgeOutcome {
@@ -527,6 +603,7 @@ fn empty_poor(lane: Lane, side: TimingSide, delta: TimeUs, time: TimeUs) -> Judg
             side,
             delta,
             time,
+            affects_score: true,
         }],
         mine_hits: Vec::new(),
         consumed_input: false,
@@ -856,6 +933,38 @@ mod tests {
         assert_eq!(release.events.len(), 1);
         assert_eq!(release.events[0].note_id, Some(NoteId(2)));
         assert_eq!(release.events[0].judge, Judge::PGreat);
+    }
+
+    #[test]
+    fn ln_start_defers_scoring_until_end() {
+        let chart = chart_with_long_start(TimeUs(1_000_000), TimeUs(2_000_000));
+        let mut engine = JudgeEngine::new(windows());
+
+        let press = engine.process_input(&chart, press_at(TimeUs(1_000_000)));
+        let end = engine.process_misses(&chart, TimeUs(2_000_001));
+
+        assert_eq!(press.events[0].note_id, Some(NoteId(1)));
+        assert_eq!(press.events[0].judge, Judge::PGreat);
+        assert!(!press.events[0].affects_score);
+        assert_eq!(end.events[0].note_id, Some(NoteId(1)));
+        assert_eq!(end.events[0].judge, Judge::PGreat);
+        assert!(end.events[0].affects_score);
+    }
+
+    #[test]
+    fn ln_early_release_scores_once_with_combined_judge() {
+        let chart = chart_with_long_start(TimeUs(1_000_000), TimeUs(2_000_000));
+        let mut engine = JudgeEngine::new(windows());
+
+        let press = engine.process_input(&chart, press_at(TimeUs(1_000_000)));
+        let release = engine.process_input(&chart, release_at(TimeUs(1_900_000)));
+
+        assert!(!press.events[0].affects_score);
+        assert_eq!(release.events[0].note_id, Some(NoteId(1)));
+        assert_eq!(release.events[0].judge, Judge::Bad);
+        assert_eq!(release.events[0].side, TimingSide::Fast);
+        assert_eq!(release.events[0].delta, TimeUs(-100_000));
+        assert!(release.events[0].affects_score);
     }
 
     #[test]

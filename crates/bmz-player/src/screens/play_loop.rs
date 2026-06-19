@@ -557,6 +557,7 @@ mod tests {
             delta: TimeUs(0),
             time: TimeUs(0),
             note_id: Some(NoteId(1)),
+            affects_score: true,
         });
         session.audio_clock = test_running_audio_clock(0);
 

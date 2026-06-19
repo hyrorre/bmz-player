@@ -2095,6 +2095,7 @@ mod tests {
             side: TimingSide::Slow,
             delta: TimeUs(0),
             time: TimeUs(0),
+            affects_score: true,
         });
 
         ScoreRecord {

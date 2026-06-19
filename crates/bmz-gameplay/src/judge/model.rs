@@ -82,6 +82,7 @@ pub struct JudgementEvent {
     pub side: TimingSide,
     pub delta: TimeUs,
     pub time: TimeUs,
+    pub affects_score: bool,
 }
 
 /// Mine ノーツがプレイヤーの押下によってヒットしたイベント。
@@ -114,6 +115,8 @@ pub struct ActiveLongNote {
     pub pair_index: usize,
     pub mode: LongNoteMode,
     pub start_note_id: NoteId,
+    pub start_judge: Judge,
+    pub start_delta: TimeUs,
     pub end: LongNoteEndRef,
     /// HEAD が判定されてホールドが始まった時刻。beatoraja の TIMER_HOLD 相当の起点。
     pub started_at: TimeUs,

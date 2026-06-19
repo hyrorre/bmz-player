@@ -911,6 +911,7 @@ mod tests {
                     side: TimingSide::Fast,
                     delta: TimeUs(delta_us),
                     time: TimeUs(1_000),
+                    affects_score: true,
                 },
                 1,
             )
@@ -970,6 +971,7 @@ mod tests {
             side: TimingSide::Slow,
             delta: TimeUs(5_000),
             time: TimeUs(1_000),
+            affects_score: true,
         }];
 
         let snapshot = build_render_snapshot(&session, TimeUs(0), &judgements, None);
@@ -1418,6 +1420,7 @@ mod tests {
             side: TimingSide::Fast,
             delta: TimeUs(-1_000),
             time: TimeUs(1_000),
+            affects_score: true,
         });
         session.score.apply(&JudgementEvent {
             note_id: None,
@@ -1426,6 +1429,7 @@ mod tests {
             side: TimingSide::Slow,
             delta: TimeUs(40_000),
             time: TimeUs(2_000),
+            affects_score: true,
         });
 
         let snapshot = build_render_snapshot(&session, TimeUs(0), &[], None);
@@ -1733,6 +1737,7 @@ mod tests {
             side: TimingSide::Slow,
             delta: TimeUs(0),
             time: TimeUs(400_000),
+            affects_score: true,
         }];
 
         let early = build_render_snapshot_with_bga_frames(

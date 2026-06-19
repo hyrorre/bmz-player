@@ -1587,6 +1587,7 @@ mod tests {
                 side: TimingSide::Slow,
                 delta: TimeUs(0),
                 time: TimeUs(index as i64),
+                affects_score: true,
             });
         }
         score

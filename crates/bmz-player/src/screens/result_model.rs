@@ -204,6 +204,9 @@ impl ResultGraphCollector {
         self.graph.hit_error_ring = snapshot.hit_error_ring;
 
         for event in &frame.judgements {
+            if !event.affects_score {
+                continue;
+            }
             let delta_us = -event.delta.0;
             self.graph.timing_points.push(ResultTimingPoint {
                 time_ms: clamp_us_to_ms(event.time.0 - event.delta.0),
@@ -537,6 +540,7 @@ mod tests {
                 side: TimingSide::Fast,
                 delta: TimeUs(-12_000),
                 time: TimeUs(1_200_000),
+                affects_score: true,
             }],
             mine_hits: Vec::new(),
             keysound_volumes: Vec::new(),
